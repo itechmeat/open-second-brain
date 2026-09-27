@@ -365,6 +365,19 @@ it. Every use goes through `runDecision` (`run.ts`), which owns the modes
 `decision-model` (`src/core/search/rerank/decision-model.ts`). See
 [`docs/decision-models.md`](decision-models.md).
 
+Decision adapters, all behind `makeDecisionProvider` (`provider.ts`, `null`
+unless active, loaded lazily) and the shared transport rules in
+`transport.ts`: `systemone.ts` (TypeSafe, OpenRouter, Vercel compatible
+route, OpenCode Zen, any compatible server, and the self-hosted `laya` and
+`openjev` presets on loopback), `vercel-evaluate.ts` (the Vercel AI Gateway
+`/v1/evaluate` variant, a field mapping over `systemone.ts`), and
+`llm-emulation.ts` (an OpenAI-compatible chat model asked for probabilities
+only, registry id `decision-model-llm-emulation`: the one uncalibrated,
+generative route, used only when named explicitly and refused in `enforce`
+without `decision_model_allow_uncalibrated`). Threshold profiles per model
+family live in `questions.ts`; see
+[`docs/decision-models/providers.md`](decision-models/providers.md).
+
 Ownership is a boundary only where something writes it. With
 `integrity.owner_scope_delivery` on, every production preference writer stamps
 the server-resolved agent identity onto a NEW record; a rewrite never re-owns,

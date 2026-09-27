@@ -9,6 +9,7 @@
  * names the variable and says whether it is set.
  */
 
+import { CHOICE_MAX_OPTIONS } from "./answers.ts";
 import { DECISION_MODEL_USES, type DecisionModelUse } from "./contract.ts";
 import { resolveDecisionModelConfig, type ResolvedDecisionModelConfig } from "./config.ts";
 import { makeDecisionProvider } from "./provider.ts";
@@ -44,11 +45,26 @@ export interface DecisionModelCheckReport {
   readonly enabled: boolean;
   readonly status: ResolvedDecisionModelConfig["status"];
   readonly provider: string | null;
+  /** The adapter the preset names (`systemone`, `vercel-evaluate`, `llm-emulation`). */
+  readonly adapter: string;
   readonly base_url: string | null;
   readonly model: string | null;
   /** NAME of the key variable, never its value. */
   readonly env_key: string | null;
   readonly key_set: boolean;
+  /** False only for a loopback self-hosted server, which may run without a key. */
+  readonly key_required: boolean;
+  /** Whether the provider's probabilities are calibrated. */
+  readonly calibrated: boolean;
+  /** The threshold profile answers are held to; null when unknown (no use enforces). */
+  readonly threshold_profile: string | null;
+  /** Uses configured `enforce` that run as `shadow` for want of tuned thresholds. */
+  readonly shadow_only_uses: ReadonlyArray<DecisionModelUse>;
+  /** Most options one `choice` question may carry on this route. */
+  readonly max_choice_options: number;
+  readonly output_price_usd_per_mtok: number | null;
+  /** A model licence restriction, when the route's licence has one. */
+  readonly licence_note: string | null;
   /**
    * The uses as configured. While the feature is not active every use
    * runs `off` whatever this says; `status` tells which applies.
@@ -132,6 +148,7 @@ export async function buildDecisionModelCheck(
   const env = opts.env ?? process.env;
   const cfg = resolveDecisionModelConfig({ env, config: opts.config, vault: opts.vault });
   const warnings: string[] = [];
+  const notes: string[] = [];
   const sendsData = DECISION_MODEL_USES.some((use) => cfg.uses[use] !== "off");
   if (cfg.enabled && sendsData) {
     warnings.push(
@@ -154,7 +171,30 @@ export async function buildDecisionModelCheck(
       todaySpend = null;
     }
   }
-  if (cfg.enabled && cfg.inputPriceUsdPerMtok === null) {
+  // The one place an enforce that runs as shadow is reported: hot paths
+  // stay silent. Printed once per check.
+  const shadowOnly = cfg.shadowOnlyUses ?? [];
+  if (cfg.enabled && shadowOnly.length > 0) {
+    warnings.push(
+      `enforce runs as shadow for ${shadowOnly.join(", ")}: threshold profile ` +
+        `'${cfg.thresholdProfile ?? "unknown"}' has no tuned thresholds for ` +
+        (shadowOnly.length === 1 ? "it" : "them") +
+        (cfg.thresholdProfile === null || cfg.thresholdProfile === undefined
+          ? "; for a compatible server of a known family set decision_model_threshold_profile"
+          : ""),
+    );
+  }
+  if (cfg.enabled && !cfg.calibrated) {
+    warnings.push(
+      `provider '${cfg.provider ?? "?"}' is uncalibrated: a generative model reports its own ` +
+        "probabilities, every record carries calibrated: false, and each request costs far " +
+        "more than a decision model; use it for shadow evaluation only",
+    );
+  }
+  if (cfg.enabled && cfg.keyRequired === false && !cfg.keyPresent) {
+    notes.push("no key is set; requests to this loopback server carry no authorization header");
+  }
+  if (cfg.enabled && cfg.inputPriceUsdPerMtok === null && cfg.adapter !== "llm-emulation") {
     warnings.push(
       "no input price is known for this provider, so the daily cost gate applies only to " +
         "routes that report cost; set decision_model_input_price_usd_per_mtok",
@@ -174,10 +214,18 @@ export async function buildDecisionModelCheck(
     enabled: cfg.enabled,
     status: cfg.status,
     provider: cfg.provider,
+    adapter: cfg.adapter,
     base_url: cfg.baseUrl,
     model: cfg.model,
     env_key: cfg.envKey,
     key_set: cfg.keyPresent,
+    key_required: cfg.keyRequired !== false,
+    calibrated: cfg.calibrated,
+    threshold_profile: cfg.thresholdProfile ?? null,
+    shadow_only_uses: shadowOnly,
+    max_choice_options: cfg.maxChoiceOptions ?? CHOICE_MAX_OPTIONS,
+    output_price_usd_per_mtok: cfg.outputPriceUsdPerMtok ?? null,
+    licence_note: cfg.licenceNote ?? null,
     uses: cfg.configuredUses,
     sends_data: cfg.status === "active" && sendsData,
     vault: opts.vault,
@@ -190,7 +238,7 @@ export async function buildDecisionModelCheck(
     processor: cfg.processor,
     rerank: { kind_configured: kindConfigured, ignored_keys: ignored },
     errors: cfg.errors,
-    notes: cfg.notes,
+    notes: [...cfg.notes, ...notes],
     warnings,
     hint: hintFor(cfg),
   };
@@ -213,6 +261,9 @@ export async function buildDecisionModelCheck(
     candidateCount: 0,
     ...(pong.usage !== undefined ? { usage: pong.usage } : {}),
     inputPriceUsdPerMtok: cfg.inputPriceUsdPerMtok,
+    ...(cfg.outputPriceUsdPerMtok !== undefined && cfg.outputPriceUsdPerMtok !== null
+      ? { outputPriceUsdPerMtok: cfg.outputPriceUsdPerMtok }
+      : {}),
     latencyMs: pong.latencyMs ?? 0,
     outcome: pong.ok ? "ok" : (pong.reason ?? "network"),
     origin: "ping",
@@ -240,23 +291,32 @@ export function renderDecisionModelCheck(report: DecisionModelCheckReport): stri
   const lines: string[] = [];
   lines.push(`decision model: ${report.status}`);
   lines.push(`  enabled: ${report.enabled}`);
-  lines.push(`  provider: ${report.provider ?? "(not set)"}`);
+  lines.push(
+    `  provider: ${report.provider ?? "(not set)"} (adapter ${report.adapter}` +
+      `${report.calibrated ? "" : ", uncalibrated"})`,
+  );
   lines.push(`  base url: ${report.base_url ?? "(not set)"}`);
   lines.push(`  model: ${report.model ?? "(not set)"}`);
+  const optional = report.key_required ? "" : ", optional on this loopback server";
   lines.push(
     report.env_key === null
-      ? "  key variable: (not named)"
-      : `  key variable: ${report.env_key} (${report.key_set ? "set" : "not set"})`,
+      ? `  key variable: (not named${optional})`
+      : `  key variable: ${report.env_key} (${report.key_set ? "set" : "not set"}${optional})`,
   );
   const uses = DECISION_MODEL_USES.map((use) => `${use}:${report.uses[use]}`).join(", ");
   lines.push(`  uses: ${uses}`);
   lines.push(`  vault opt-out: ${report.vault_opt_out ? "yes" : "no"}`);
   lines.push(`  timeout: ${report.timeout_ms}ms, max state: ${report.max_state_tokens} tokens`);
+  lines.push(
+    `  threshold profile: ${report.threshold_profile ?? "(unknown: no use enforces)"}; ` +
+      `max choice options: ${report.max_choice_options}`,
+  );
   const spend =
     report.today_spend_usd === null ? "unknown" : `$${report.today_spend_usd.toFixed(6)}`;
   const gate = report.cost_gate_usd > 0 ? `$${report.cost_gate_usd}` : "off";
   lines.push(`  daily cost gate: ${gate}; today (UTC): ${spend}`);
   if (report.processor !== null) lines.push(`  processor: ${report.processor}`);
+  if (report.licence_note !== null) lines.push(`  licence: ${report.licence_note}`);
   if (report.rerank.kind_configured) {
     lines.push(
       "  rerank: search_rerank_kind is decision-model and uses this config " +

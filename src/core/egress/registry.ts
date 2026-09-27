@@ -277,8 +277,27 @@ export const EGRESS_SITES = Object.freeze({
       "paths it IS scanned: a judgment over a redacted passage is still a usable judgment, " +
       "so the whole body passes the shared guard and a refusal sends nothing. Pages whose " +
       "visibility carries the reserved `private` token, or cannot be resolved, never enter " +
-      "the state, and `<private>` regions are stripped first. Off unless the operator " +
-      "enables it in machine config AND the named key variable is set; a vault can opt out.",
+      "the state, and `<private>` regions are stripped first. The same module sends the " +
+      "Vercel AI Gateway `/v1/evaluate` variant (`vercel-evaluate.ts` only renames fields) " +
+      "and the self-hosted `laya` / `openjev` presets, which default to a loopback base URL " +
+      "where nothing leaves the machine. Off unless the operator enables it in machine " +
+      "config AND the named key variable is set (a loopback self-hosted server needs no " +
+      "key); a vault can opt out.",
+  },
+  "decision-model-llm-emulation": {
+    id: "decision-model-llm-emulation",
+    verb: "decision_model_uses with decision_model_provider: llm-emulation",
+    module: "src/core/decision-model/llm-emulation.ts",
+    redaction: R.sharedRedactor,
+    reason:
+      "the optional, uncalibrated decision emulation: the same masked, clipped state and " +
+      "question texts as the `/v1/systemone` route, POSTed as a chat completion to the " +
+      "operator's OpenAI-compatible endpoint, which asks a GENERATIVE model for " +
+      "probabilities only. The state and questions pass the shared guard before the body " +
+      "is built and a refusal sends nothing; the state is fenced as untrusted content. " +
+      "Never selected implicitly and never a fallback: it runs only when the operator names " +
+      "this provider, every record is `calibrated: false`, and `enforce` is refused unless " +
+      "`decision_model_allow_uncalibrated` is true.",
   },
   "brain-telegram-capture": {
     id: "brain-telegram-capture",

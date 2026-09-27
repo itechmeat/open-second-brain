@@ -86,7 +86,10 @@ The feature is active only when **both** of these hold:
 1. `decision_model_enabled: "true"` is set in your machine config (or
    `OPEN_SECOND_BRAIN_DECISION_MODEL_ENABLED=true`), and
 2. the environment variable named by `decision_model_env_key` (or the preset's
-   default name) is set to a non-empty value.
+   default name) is set to a non-empty value. The one exception is a
+   self-hosted `laya` or `openjev` server on a loopback address, which needs
+   no key because nothing leaves the machine
+   ([providers](decision-models/providers.md)).
 
 Everything else is off. A missing key is a normal state, not an error: it is
 reported only by `o2b decision-model check` and the `o2b doctor --readiness`
@@ -117,7 +120,9 @@ All keys live in the machine config file outside the vault. Each has an
 | `decision_model_uses` | `use:mode` comma list, mode `off`, `shadow` or `enforce` | every use `off` |
 | `decision_model_cost_gate_usd` | stop sending once today's (UTC) spend reaches this; `0` turns the gate off. Named like `embedding_cost_gate_usd` | `0.50` |
 | `decision_model_input_price_usd_per_mtok` | price for routes that do not report cost | from preset |
+| `decision_model_output_price_usd_per_mtok` | output price, read only for `llm-emulation`, whose cost is `unknown` unless both prices are set | none |
 | `decision_model_allow_uncalibrated` | allow an uncalibrated provider in `enforce` | `false` |
+| `decision_model_threshold_profile` | the model family a `compatible` server serves (`jev-1.13`, `laya`, `openjev`, `llm-emulation`), so its uses may enforce; ignored for every other preset | from preset (none for `compatible`) |
 
 Uses: `rerank`, `answerable`, `skills`, `extract_prefilter`, `dedup`,
 `tension`, `labels`, `recall_inject`. This release implements `rerank` (and
@@ -132,7 +137,10 @@ Modes:
   is returned unchanged. Shadow mode sends data.
 - `enforce`: the use applies the answer within its own limits.
 
-Presets (all speak `POST <base>/v1/systemone` and are calibrated):
+Presets (the hosted and `compatible` ones speak `POST <base>/v1/systemone`
+and are calibrated; `vercel-evaluate`, the self-hosted `laya` and `openjev`
+and the uncalibrated `llm-emulation` are described with every route's limits,
+licence and data handling in [providers](decision-models/providers.md)):
 
 | Preset | Base URL | Model id | Default key variable | Input price (USD / M tokens) |
 |---|---|---|---|---|
@@ -141,13 +149,20 @@ Presets (all speak `POST <base>/v1/systemone` and are calibrated):
 | `vercel` | `https://ai-gateway.vercel.sh/typesafe` | `typesafe-ai/jev` | `AI_GATEWAY_API_KEY` | 0.042 (estimate) |
 | `opencode-zen` | `https://opencode.ai/zen` | `jev-1.13` | `OPENCODE_API_KEY` | 0.042 |
 | `compatible` | must be set | must be set | must be set | unknown |
+| `vercel-evaluate` | `https://ai-gateway.vercel.sh` (`/v1/evaluate`) | `typesafe-ai/jev` | `AI_GATEWAY_API_KEY` | 0.042 (estimate) |
+| `laya` | `http://127.0.0.1:8000` | `english` | none needed on loopback | 0 |
+| `openjev` | `http://127.0.0.1:3000` | `openjev` | none needed on loopback | 0 |
+| `llm-emulation` | must be set | must be set | must be set | unknown |
 
 `decision_model_base_url` must not carry `user:password@` credentials: the key
 travels in a header, and a URL with credentials is an invalid config.
 
-Threshold profiles per preset are not in this release: every preset,
-`compatible` included, is held to the same thresholds (tuned against Jev).
-Measure a `compatible` model with the eval gate before `enforce`.
+Each preset names a threshold profile. Every threshold is tuned against the
+Jev 1.13 family (`jev-1.13`), which the hosted presets use; on any other
+profile, and on a `compatible` server without
+`decision_model_threshold_profile`, a use set to `enforce` runs as `shadow`,
+and `check` says so. Measure a `compatible` model with the eval gate before
+naming its family.
 
 Example, a hosted route with the reranker in shadow:
 

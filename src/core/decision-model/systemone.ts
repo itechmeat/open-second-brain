@@ -17,13 +17,17 @@
  *     anywhere the operator did not configure;
  *   - the whole body passes `redactForEgress` before it is sent, and a
  *     refusal degrades with `egress_refused` rather than sending part;
- *   - one retry at most, only on 408, 409, 429 and any 5xx (529
- *     included), honouring `retry-after`, and only within the remaining
- *     timeout. Never after a network error or an aborted request: that
- *     call may already be billed. A wait the timeout cuts short reports
- *     `timeout`;
- *   - the reply body is read up to {@link MAX_REPLY_BYTES}; a larger one
- *     is an `invalid_reply` and is not read further.
+ *   - the bearer header is sent only when a key is set (a self-hosted
+ *     loopback server may need none);
+ *   - the route's own `choice` limit (52 options for OpenJev, for
+ *     example) is checked before sending, and a larger question degrades
+ *     with `budget`;
+ *   - retries, the reply size cap and error handling follow
+ *     `transport.ts`.
+ *
+ * The Vercel AI Gateway `/v1/evaluate` variant (`vercel-evaluate.ts`)
+ * extends this class and only renames fields, so both routes send through
+ * this module's single `fetch` and its egress guard call.
  *
  * Errors name the env var that holds the key, never its value, and no
  * response body is ever logged or put into an error message.
@@ -31,66 +35,34 @@
 
 import { sha256Hex } from "../integrity/digest.ts";
 import { redactForEgress } from "../egress/guard.ts";
-import { assertHttpEgressEndpoint, parseRetryAfterMs } from "../search/embeddings/http-util.ts";
-import { questionLimitViolation, validateAnswer } from "./answers.ts";
+import { assertHttpEgressEndpoint } from "../search/embeddings/http-util.ts";
+import { CHOICE_MAX_OPTIONS, questionLimitViolation, validateAnswer } from "./answers.ts";
 import {
   DecisionProviderError,
   type DecideOptions,
   type DecisionAnswer,
   type DecisionPingResult,
   type DecisionProvider,
+  type DecisionQuestion,
   type DecisionRequest,
   type DecisionResponse,
   type DecisionUsage,
 } from "./contract.ts";
+import {
+  answeringModel,
+  decisionHttpError,
+  fetchFailure,
+  finiteNonNegative,
+  isRecord,
+  readAttempt,
+  withOneRetry,
+  type DecisionAttempt,
+} from "./transport.ts";
+
+export { MAX_REPLY_BYTES } from "./transport.ts";
 
 /** The registry id this module is declared under in `EGRESS_SITES`. */
 export const SYSTEMONE_EGRESS_SITE = "decision-model-systemone";
-
-/** 408, 409 and 429 are retried; so is every 5xx (see {@link isRetryable}). */
-const RETRYABLE_STATUSES: ReadonlySet<number> = new Set([408, 409, 429]);
-
-function isRetryable(status: number): boolean {
-  return RETRYABLE_STATUSES.has(status) || (status >= 500 && status <= 599);
-}
-
-/** Largest reply body accepted, in bytes. A real reply is a few KiB. */
-export const MAX_REPLY_BYTES = 1024 * 1024;
-
-/**
- * Read a body up to `limit` bytes. Returns null when it is larger; the
- * rest is cancelled unread.
- */
-async function readCapped(response: Response, limit: number): Promise<string | null> {
-  const declared = Number(response.headers.get("content-length") ?? "");
-  if (Number.isFinite(declared) && declared > limit) {
-    await response.body?.cancel().catch(() => undefined);
-    return null;
-  }
-  if (response.body === null) return "";
-  const reader = response.body.getReader();
-  const parts: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    // eslint-disable-next-line no-await-in-loop -- a stream is read chunk by chunk
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > limit) {
-      // eslint-disable-next-line no-await-in-loop -- leaves the loop right after
-      await reader.cancel().catch(() => undefined);
-      return null;
-    }
-    parts.push(value);
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const part of parts) {
-    bytes.set(part, offset);
-    offset += part.byteLength;
-  }
-  return new TextDecoder().decode(bytes);
-}
 
 export interface SystemOneEndpoint {
   readonly name: string;
@@ -103,17 +75,11 @@ export interface SystemOneEndpoint {
   readonly allowInsecureHttp?: boolean;
   readonly calibrated: boolean;
   readonly timeoutMs: number;
+  /** The route's own `choice` limit; defaults to the wire maximum (255). */
+  readonly maxChoiceOptions?: number;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function finiteNonNegative(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
-
-function readUsage(raw: unknown): DecisionUsage {
+function readSnakeUsage(raw: unknown): DecisionUsage {
   if (!isRecord(raw)) return {};
   const inputTokens = finiteNonNegative(raw["input_tokens"]);
   const outputTokens = finiteNonNegative(raw["output_tokens"]);
@@ -123,19 +89,6 @@ function readUsage(raw: unknown): DecisionUsage {
     ...(outputTokens !== undefined ? { outputTokens } : {}),
     ...(costUsd !== undefined ? { costUsd } : {}),
   };
-}
-
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) return resolve();
-    const timer = setTimeout(done, ms);
-    function done(): void {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", done);
-      resolve();
-    }
-    signal.addEventListener("abort", done, { once: true });
-  });
 }
 
 export class SystemOneDecisionProvider implements DecisionProvider {
@@ -154,11 +107,35 @@ export class SystemOneDecisionProvider implements DecisionProvider {
       allowInsecureHttp: endpoint.allowInsecureHttp === true,
       key: "decision_model_allow_insecure_http",
     });
-    this.url = `${base.replace(/\/+$/, "")}/v1/systemone`;
+    this.url = `${base.replace(/\/+$/, "")}${this.path()}`;
+  }
+
+  /** The route's path below the base URL. */
+  protected path(): string {
+    return "/v1/systemone";
+  }
+
+  /** The questions as this route names them on the wire. */
+  protected wireQuestions(
+    questions: Readonly<Record<string, DecisionQuestion>>,
+  ): Readonly<Record<string, unknown>> {
+    return questions;
+  }
+
+  /** One reply item in the `systemone` answer shape `validateAnswer` reads. */
+  protected canonicalAnswer(raw: unknown): unknown {
+    return raw;
+  }
+
+  protected readUsage(json: Record<string, unknown>): DecisionUsage {
+    return readSnakeUsage(json["usage"]);
   }
 
   async decide(req: DecisionRequest, opts: DecideOptions): Promise<DecisionResponse> {
-    const limit = questionLimitViolation(req.questions);
+    const limit = questionLimitViolation(
+      req.questions,
+      this.endpoint.maxChoiceOptions ?? CHOICE_MAX_OPTIONS,
+    );
     if (limit !== null) throw new DecisionProviderError("budget", limit);
 
     const verdict = redactForEgress(SYSTEMONE_EGRESS_SITE, {
@@ -174,57 +151,16 @@ export class SystemOneDecisionProvider implements DecisionProvider {
     const body = JSON.stringify({
       model: this.model,
       state: verdict.payload.state,
-      questions: verdict.payload.questions,
+      questions: this.wireQuestions(verdict.payload.questions),
     });
     const stateHash = sha256Hex(JSON.stringify(verdict.payload.state));
 
-    const json = await this.post(body, opts);
-    return this.parse(json, req, stateHash);
-  }
-
-  private async post(body: string, opts: DecideOptions): Promise<unknown> {
-    const deadline = Date.now() + opts.timeoutMs;
-    const controller = new AbortController();
-    const onOuterAbort = (): void => controller.abort();
-    opts.signal?.addEventListener("abort", onOuterAbort, { once: true });
-    const timer = setTimeout(() => controller.abort(), opts.timeoutMs);
-    try {
-      const first = await this.send(body, controller.signal, opts.timeoutMs);
-      if (first.kind === "ok") return first.json;
-      if (isRetryable(first.status)) {
-        const wait = parseRetryAfterMs(first.retryAfter) ?? 0;
-        // Retry once, and only when the wait plus a request still fits.
-        if (Date.now() + wait < deadline - 50) {
-          await sleep(wait, controller.signal);
-          if (controller.signal.aborted) {
-            // The timeout (or the caller) cut the wait short: the request
-            // ran out of time, whatever the first status was.
-            throw new DecisionProviderError(
-              "timeout",
-              `decision request timed out after ${opts.timeoutMs}ms`,
-            );
-          }
-          const second = await this.send(body, controller.signal, opts.timeoutMs);
-          if (second.kind === "ok") return second.json;
-          throw this.httpError(second.status);
-        }
-      }
-      throw this.httpError(first.status);
-    } finally {
-      clearTimeout(timer);
-      opts.signal?.removeEventListener("abort", onOuterAbort);
-    }
-  }
-
-  private httpError(status: number): DecisionProviderError {
-    const keyHint =
-      status === 401 && this.endpoint.envKey !== null
-        ? `; check the key in ${this.endpoint.envKey}`
-        : "";
-    return new DecisionProviderError(
-      `http_${status}`,
-      `decision provider answered HTTP ${status}${keyHint}`,
+    const json = await withOneRetry(
+      (signal) => this.send(body, signal, opts.timeoutMs),
+      opts,
+      (status) => decisionHttpError(status, this.endpoint.envKey),
     );
+    return this.parse(json, req, stateHash);
   }
 
   /** One HTTP attempt. Throws on transport failure; returns the status otherwise. */
@@ -232,16 +168,11 @@ export class SystemOneDecisionProvider implements DecisionProvider {
     body: string,
     signal: AbortSignal,
     timeoutMs: number,
-  ): Promise<
-    | { readonly kind: "ok"; readonly json: unknown }
-    | { readonly kind: "status"; readonly status: number; readonly retryAfter: string | null }
-  > {
+  ): Promise<DecisionAttempt> {
     const headers: Record<string, string> = { "content-type": "application/json" };
     if (this.endpoint.apiKey !== null && this.endpoint.apiKey !== "") {
       headers["authorization"] = `Bearer ${this.endpoint.apiKey}`;
     }
-    const timedOut = (): DecisionProviderError =>
-      new DecisionProviderError("timeout", `decision request timed out after ${timeoutMs}ms`);
     let response: Response;
     try {
       response = await fetch(this.url, {
@@ -253,39 +184,11 @@ export class SystemOneDecisionProvider implements DecisionProvider {
         signal,
       });
     } catch (e) {
-      if (signal.aborted) throw timedOut();
       // A reset or refused connection, or a refused redirect. Never
       // retried: the provider may already have billed the call.
-      const name = e instanceof Error ? e.name : "Error";
-      throw new DecisionProviderError("network", `decision request failed (${name})`);
+      throw fetchFailure(e, signal, timeoutMs);
     }
-    if (response.ok) {
-      let text: string | null;
-      try {
-        text = await readCapped(response, MAX_REPLY_BYTES);
-      } catch {
-        if (signal.aborted) throw timedOut();
-        throw new DecisionProviderError("network", "decision reply could not be read");
-      }
-      if (text === null) {
-        throw new DecisionProviderError(
-          "invalid_reply",
-          `decision reply is larger than ${MAX_REPLY_BYTES} bytes`,
-        );
-      }
-      try {
-        return { kind: "ok", json: JSON.parse(text) as unknown };
-      } catch {
-        throw new DecisionProviderError("invalid_reply", "decision reply is not JSON");
-      }
-    }
-    // Drain without reading the body into any message.
-    await response.body?.cancel().catch(() => undefined);
-    return {
-      kind: "status",
-      status: response.status,
-      retryAfter: response.headers.get("retry-after"),
-    };
+    return readAttempt(response, signal, timeoutMs);
   }
 
   private parse(json: unknown, req: DecisionRequest, stateHash: string): DecisionResponse {
@@ -295,14 +198,13 @@ export class SystemOneDecisionProvider implements DecisionProvider {
     const rawAnswers = json["answers"];
     const answers: Record<string, DecisionAnswer> = {};
     for (const [id, question] of Object.entries(req.questions)) {
-      answers[id] = validateAnswer(question, rawAnswers[id]);
+      answers[id] = validateAnswer(question, this.canonicalAnswer(rawAnswers[id]));
     }
-    const model =
-      typeof json["model"] === "string" && json["model"] !== "" ? json["model"] : this.model;
+    const model = answeringModel(json["model"], this.model);
     return Object.freeze({
       model,
       answers: Object.freeze(answers),
-      usage: Object.freeze(readUsage(json["usage"])),
+      usage: Object.freeze(this.readUsage(json)),
       calibrated: this.calibrated,
       stateHash,
     });

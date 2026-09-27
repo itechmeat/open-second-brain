@@ -49,6 +49,11 @@ export interface DecisionCallRecordInput {
   readonly candidateCount: number;
   readonly usage?: DecisionUsage;
   readonly inputPriceUsdPerMtok: number | null;
+  /**
+   * Output price, set only for `llm-emulation` (the one route that bills
+   * output); its cost is estimated from both prices or unknown.
+   */
+  readonly outputPriceUsdPerMtok?: number | null;
   readonly latencyMs: number;
   /** `ok` or a degrade reason. */
   readonly outcome: string;
@@ -59,13 +64,28 @@ export interface DecisionCallRecordInput {
   readonly createdAt?: string;
 }
 
+/**
+ * The cost of one request. A reported cost wins. Otherwise it is estimated
+ * from the input price, plus the output price when one is given (only
+ * `llm-emulation` bills output; without its output tokens the cost is
+ * unknown rather than understated).
+ */
 export function decisionCost(
   usage: DecisionUsage | undefined,
   inputPriceUsdPerMtok: number | null,
+  outputPriceUsdPerMtok: number | null = null,
 ): { readonly costUsd: number | null; readonly source: DecisionCostSource } {
   if (usage?.costUsd !== undefined) return { costUsd: usage.costUsd, source: "reported" };
   if (usage?.inputTokens !== undefined && inputPriceUsdPerMtok !== null) {
-    return { costUsd: (usage.inputTokens * inputPriceUsdPerMtok) / 1_000_000, source: "estimated" };
+    const input = usage.inputTokens * inputPriceUsdPerMtok;
+    if (outputPriceUsdPerMtok === null) {
+      return { costUsd: input / 1_000_000, source: "estimated" };
+    }
+    if (usage.outputTokens === undefined) return { costUsd: null, source: "unknown" };
+    return {
+      costUsd: (input + usage.outputTokens * outputPriceUsdPerMtok) / 1_000_000,
+      source: "estimated",
+    };
   }
   return { costUsd: null, source: "unknown" };
 }
@@ -76,7 +96,11 @@ export function emitDecisionModelCall(
   input: DecisionCallRecordInput,
 ): ContinuityRecord | null {
   return emitGatedTelemetry(vault, (v) => {
-    const cost = decisionCost(input.usage, input.inputPriceUsdPerMtok);
+    const cost = decisionCost(
+      input.usage,
+      input.inputPriceUsdPerMtok,
+      input.outputPriceUsdPerMtok ?? null,
+    );
     // Per-use details go first so they can never overwrite an accounting
     // field (the cost gate sums `cost_usd`).
     const payload: Record<string, unknown> = {

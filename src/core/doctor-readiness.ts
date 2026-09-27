@@ -401,7 +401,10 @@ async function decisionModelVerdict(opts: ReadinessOptions): Promise<ReadinessVe
     case "active":
       return {
         status: READINESS_STATUS.pass,
-        detail: `key present in ${cfg.envKey ?? "?"}, endpoint accepted (${cfg.provider ?? "?"} ${cfg.baseUrl ?? ""})`,
+        detail:
+          cfg.keyPresent || cfg.keyRequired !== false
+            ? `key present in ${cfg.envKey ?? "?"}, endpoint accepted (${cfg.provider ?? "?"} ${cfg.baseUrl ?? ""})`
+            : `no key needed for this loopback server, endpoint accepted (${cfg.provider ?? "?"} ${cfg.baseUrl ?? ""})`,
       };
   }
 }
