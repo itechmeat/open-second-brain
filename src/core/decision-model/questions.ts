@@ -283,3 +283,44 @@ export const LABELS_QUESTIONS = Object.freeze({
     };
   },
 });
+
+// ----- recall_inject (the UserPromptSubmit recall-inject hook) ----------------
+
+/** `inject_any` below this abstains in enforce (`decision_model_abstain`). */
+export const RECALL_INJECT_ANY_MIN = 0.2;
+
+/** A note whose `helps_<k>` is below this is dropped from the brief in enforce. */
+export const RECALL_INJECT_NOTE_MIN = 0.2;
+
+export const RECALL_INJECT_QUESTIONS = Object.freeze({
+  /** Mask prefix for recalled notes. */
+  prefix: "N",
+  clipChars: DEFAULT_CANDIDATE_CLIP_CHARS,
+  /** The prompt is clipped to this many characters before it is sent. */
+  promptClipChars: 2000,
+  anyMin: RECALL_INJECT_ANY_MIN,
+  noteMin: RECALL_INJECT_NOTE_MIN,
+  helpsId: (k: number): string => `helps_${k}`,
+  injectAnyId: "inject_any",
+  helps(k: number): DecisionNoulQuestion {
+    return {
+      type: "noul",
+      instructions: `Is note \`notes.N${k}\` useful context for answering or acting on \`prompt\`?`,
+      criteria: {
+        true: "The note contains information the assistant would use for this prompt.",
+        false:
+          "The note is off-topic for the prompt, or only shares words with it without being useful.",
+      },
+    };
+  },
+  injectAny(): DecisionNoulQuestion {
+    return {
+      type: "noul",
+      instructions: "Is any of the notes in `notes` useful context for `prompt`?",
+      criteria: {
+        true: "At least one note contains information the assistant would use for this prompt.",
+        false: "None of the notes would help with this prompt.",
+      },
+    };
+  },
+});
