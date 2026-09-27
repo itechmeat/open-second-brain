@@ -63,3 +63,39 @@ export const RERANK_QUESTIONS = Object.freeze({
     };
   },
 });
+
+// ----- extract_prefilter (turn pre-filter before brain_extract_signals) -------
+
+/**
+ * A mined turn whose signal probability is below this is dropped from the
+ * envelope in `enforce`. A dropped turn is a lost signal, so this starts
+ * low: published measurements of a similar filter hid about 5% of content
+ * with zero regret at 0.1, and far more regret at 0.3. Raise it only on a
+ * vault's own shadow evidence (`report`, regret zero).
+ */
+export const EXTRACT_PREFILTER_DROP_BELOW = 0.1;
+
+export const EXTRACT_PREFILTER_QUESTIONS = Object.freeze({
+  /** Mask prefix for mined turns. */
+  prefix: "T",
+  /** Same per-turn clip as the envelope itself. */
+  clipChars: 2000,
+  dropBelow: EXTRACT_PREFILTER_DROP_BELOW,
+  signalId: (k: number): string => `sig_${k}`,
+  signal(k: number): DecisionNoulQuestion {
+    return {
+      type: "noul",
+      instructions:
+        `Does user turn \`turns.T${k}\` state a durable taste signal: a rule the operator ` +
+        "stated about how work should be done?",
+      criteria: {
+        true:
+          "The turn states a rule about how work should be done - a preference, a " +
+          "correction or a prohibition - that should outlive this session.",
+        false:
+          "The turn is only a fact, a task, a question, or a one-off instruction about " +
+          "this session, with no rule about how work should be done.",
+      },
+    };
+  },
+});

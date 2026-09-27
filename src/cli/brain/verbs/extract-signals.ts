@@ -17,8 +17,13 @@ import { readFileSync } from "node:fs";
 import {
   commitExtractedSignals,
   ExtractSignalsError,
-  planExtractSignals,
 } from "../../../core/brain/extract-signals.ts";
+import {
+  planExtractSignalsPrefiltered,
+  recordExtractPrefilterCommit,
+  resolveExtractPrefilterConfig,
+} from "../../../core/brain/extract-signals-prefilter.ts";
+import { resolveTokenImpactLedgerEnabled } from "../../../core/config.ts";
 import { ResponseCheckError } from "../../../core/brain/response-checks.ts";
 import { ResponseShapeError } from "../../../core/brain/response-shape.ts";
 import {
@@ -63,8 +68,13 @@ export async function cmdBrainExtractSignals(argv: string[]): Promise<number> {
           ? readFileSync(flags["payload-file"] as string, "utf8")
           : null;
 
+    const decisionModel = resolveExtractPrefilterConfig(vault, config);
     if (rawPayload === null) {
-      const plan = planExtractSignals(vault, sessionRef, { now: new Date() });
+      const plan = await planExtractSignalsPrefiltered(vault, sessionRef, {
+        now: new Date(),
+        decisionModel,
+        tokenImpactEnabled: decisionModel !== null && resolveTokenImpactLedgerEnabled(config),
+      });
       if (asJson) {
         okJson({
           ok: true,
@@ -76,13 +86,38 @@ export async function cmdBrainExtractSignals(argv: string[]): Promise<number> {
           cap: plan.cap,
           confidence_floor: plan.confidenceFloor,
           llm_step: plan.llmStep,
+          // Present only while the decision-model turn pre-filter is on.
+          ...(plan.turnsDropped !== undefined ? { turns_dropped: plan.turnsDropped } : {}),
+          ...(plan.skipped !== undefined
+            ? {
+                skipped: {
+                  reason: plan.skipped.reason,
+                  turns_dropped: plan.skipped.turnsDropped,
+                },
+              }
+            : {}),
+          ...(plan.decisionModel !== undefined
+            ? { decision_model: { degraded: plan.decisionModel.degraded } }
+            : {}),
         });
         return 0;
       }
       ok(`session: ${plan.sessionId} (${plan.turnsScanned} imported turn(s))`);
+      if (plan.skipped !== undefined) {
+        ok(
+          `nothing to mine: the decision-model pre-filter dropped all ` +
+            `${plan.skipped.turnsDropped} user turn(s)`,
+        );
+        return 0;
+      }
       ok(`mining ${plan.turnsMined.length} user turn(s)`);
+      if (plan.turnsDropped !== undefined && plan.turnsDropped.length > 0) {
+        ok(`dropped by the decision-model pre-filter: ${plan.turnsDropped.length} turn(s)`);
+      }
       ok(`limits: at most ${plan.cap} items, confidence >= ${plan.confidenceFloor}`);
-      ok(`needs-llm-step: ${plan.llmStep.step} -> ${plan.llmStep.target_path}`);
+      if (plan.llmStep !== null) {
+        ok(`needs-llm-step: ${plan.llmStep.step} -> ${plan.llmStep.target_path}`);
+      }
       return 0;
     }
 
@@ -98,10 +133,12 @@ export async function cmdBrainExtractSignals(argv: string[]): Promise<number> {
       okJson({ ok: false, message });
       return 1;
     }
+    const now = new Date();
     const res = commitExtractedSignals(vault, sessionRef, payload, {
       agent: resolveBrainAgent(flags, config),
-      now: new Date(),
+      now,
     });
+    recordExtractPrefilterCommit(vault, decisionModel, res, now);
     if (asJson) {
       okJson({
         ok: true,

@@ -1510,3 +1510,13 @@ log line is machine-composed rather than authored.
   skipped create (`if_exists: "skip"`) authored no bytes, so it carries no
   `write_id` at all. `brain_writes` reads the record back. One new tool - the
   surface moves from 113 to 114.
+- With the optional decision-model turn pre-filter (`extract_prefilter`, see
+  [`decision-models/extract-prefilter.md`](decision-models/extract-prefilter.md)),
+  the `brain_extract_signals` plan may additively carry `turns_dropped` (turn
+  ids left out of the envelope; `turns_mined` then lists the kept turns),
+  `skipped: { reason: "decision_model_prefilter", turns_dropped }` with
+  `llm_step: null` when every turn scored below the threshold (nothing to
+  mine, distinct from the no-user-turns refusal), and
+  `decision_model: { degraded }` when a request failed and every turn was
+  sent. With the use `off` none of these fields appears. Commit items accept
+  an optional string `source_turn` naming the plan turn a rule came from.

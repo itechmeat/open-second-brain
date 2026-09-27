@@ -111,6 +111,23 @@ export function emitDecisionModelCall(
   });
 }
 
+/**
+ * Commit-side records of the extract-signals turn pre-filter (Part 4):
+ * which written items cited a plan turn. Session and turn ids only.
+ */
+export const DECISION_MODEL_EXTRACT_COMMIT_KIND = "decision_model_extract_commit";
+
+/** Extract pre-filter commit records, oldest first, optionally since an instant. */
+export function listDecisionModelExtractCommits(
+  vault: string,
+  since?: string,
+): ReadonlyArray<ContinuityRecord> {
+  return listContinuityRecords(vault, {
+    kind: DECISION_MODEL_EXTRACT_COMMIT_KIND,
+    ...(since !== undefined ? { since } : {}),
+  });
+}
+
 /** Start of the current UTC day, canonical ISO form. */
 export function utcDayStart(now: Date = new Date()): string {
   return `${now.toISOString().slice(0, 10)}T00:00:00.000Z`;

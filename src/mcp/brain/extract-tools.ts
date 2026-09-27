@@ -9,14 +9,15 @@
  * model on either path.
  */
 
+import { commitExtractedSignals, ExtractSignalsError } from "../../core/brain/extract-signals.ts";
 import {
-  commitExtractedSignals,
-  ExtractSignalsError,
-  planExtractSignals,
-} from "../../core/brain/extract-signals.ts";
+  planExtractSignalsPrefiltered,
+  recordExtractPrefilterCommit,
+  resolveExtractPrefilterConfig,
+} from "../../core/brain/extract-signals-prefilter.ts";
 import { ResponseCheckError } from "../../core/brain/response-checks.ts";
 import { ResponseShapeError } from "../../core/brain/response-shape.ts";
-import { resolveAgentName } from "../../core/config.ts";
+import { resolveAgentName, resolveTokenImpactLedgerEnabled } from "../../core/config.ts";
 import { coerceStr } from "../coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
@@ -42,8 +43,14 @@ async function toolBrainExtractSignals(
     // Absent `items` is the plan phase. An empty array is NOT: it is an
     // answer claiming the session states nothing, and it goes through the
     // validators like any other so the caller gets one contract.
+    const decisionModel = resolveExtractPrefilterConfig(ctx.vault, ctx.configPath ?? undefined);
     if (args["items"] === undefined) {
-      const plan = planExtractSignals(ctx.vault, session, { now: new Date() });
+      const plan = await planExtractSignalsPrefiltered(ctx.vault, session, {
+        now: new Date(),
+        decisionModel,
+        tokenImpactEnabled:
+          decisionModel !== null && resolveTokenImpactLedgerEnabled(ctx.configPath ?? undefined),
+      });
       return {
         phase: "plan",
         session_id: plan.sessionId,
@@ -54,14 +61,30 @@ async function toolBrainExtractSignals(
         cap: plan.cap,
         confidence_floor: plan.confidenceFloor,
         llm_step: plan.llmStep,
+        // Optional fields, present only while the decision-model turn
+        // pre-filter is on (never with the use `off`).
+        ...(plan.turnsDropped !== undefined ? { turns_dropped: plan.turnsDropped } : {}),
+        ...(plan.skipped !== undefined
+          ? {
+              skipped: {
+                reason: plan.skipped.reason,
+                turns_dropped: plan.skipped.turnsDropped,
+              },
+            }
+          : {}),
+        ...(plan.decisionModel !== undefined
+          ? { decision_model: { degraded: plan.decisionModel.degraded } }
+          : {}),
       };
     }
+    const now = new Date();
     const res = commitExtractedSignals(
       ctx.vault,
       session,
       { items: args["items"] },
-      { agent, now: new Date() },
+      { agent, now },
     );
+    recordExtractPrefilterCommit(ctx.vault, decisionModel, res, now);
     return {
       phase: "commit",
       session_id: res.sessionId,
@@ -116,6 +139,10 @@ export const EXTRACT_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
               scope: {
                 type: "string",
                 description: "Optional soft category, e.g. `writing`, `coding`.",
+              },
+              source_turn: {
+                type: "string",
+                description: "Optional id of the plan turn the rule was stated in.",
               },
             },
             required: ["topic", "signal", "principle", "confidence"],
