@@ -8,5 +8,16 @@
   "license": "MIT",
   "homepage": "https://github.com/itechmeat/open-second-brain",
   "repository": "https://github.com/itechmeat/open-second-brain",
-  "keywords": ["second-brain", "obsidian", "agents", "skills", "event-log", "mcp"]
+  "keywords": ["second-brain", "obsidian", "agents", "skills", "event-log", "mcp"],
+  "mcpServers": {
+    "open-second-brain": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/o2b",
+      "args": ["mcp"]
+    },
+    "open-second-brain-writer": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/o2b",
+      "args": ["mcp", "--scope", "writer"],
+      "alwaysLoad": true
+    }
+  }
 }

@@ -1,8 +1,9 @@
 # Claude Code
 
 Claude Code installs OSB through its marketplace subsystem. The
-bundled `.mcp.json` auto-registers the MCP server so there is no
-explicit `claude mcp add` step.
+`mcpServers` block in the bundled `.claude-plugin/plugin.json`
+auto-registers both MCP servers, so there is no explicit
+`claude mcp add` step.
 
 ## 1. Install the plugin
 
@@ -31,7 +32,7 @@ o2b brain init --vault /path/to/vault
 
 `o2b init` persists `vault`, `agent_name`, and `timezone` into
 `~/.config/open-second-brain/config.yaml`. The auto-registered
-`.mcp.json` calls `o2b mcp` with no flags; the server reads the
+servers call `o2b mcp` with no vault flags; the server reads the
 persisted config at spawn time.
 
 ## 4. Verify

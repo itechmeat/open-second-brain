@@ -1031,7 +1031,7 @@ server to your Codex MCP config the same way as Hermes.
 
 ## Writer split (Claude Code 2.1.121+)
 
-The plugin's `.mcp.json` ships **two** MCP-server entries:
+The plugin manifest `.claude-plugin/plugin.json` declares **two** MCP-server entries inline under `mcpServers` (there is deliberately no `.mcp.json` at the repository root: Claude Code would also load it as a project config for sessions started in a checkout, where `${CLAUDE_PLUGIN_ROOT}` is unset and both servers fail to spawn):
 
 - `open-second-brain` - the full surface, whose advertised tool count is stated once under "Tool Highlights" above (including the consolidated `brain_brief`, `brain_analytics`, and `schema_inspect`, plus `brain_health`, `brain_mcp_landscape`, `brain_agent_query`, `brain_agent_diff`, `brain_recall_gate`, `brain_pinned_context`, `brain_memory_bridge`, `brain_pre_compress_pack`, `brain_audit`, `brain_sources`, and `brain_switch_vault`) and 18 hidden deprecated aliases listed under "Consolidated views and deprecated aliases" above; subject to Claude Code's `MCPSearch` tool-search deferral when MCP definitions push the system prompt past 10% of the context window.
 - `open-second-brain-writer` - a minimal always-loaded surface of five tools: `brain_feedback`, `brain_apply_evidence`, `brain_note`, `brain_pinned_context` (writers) and `brain_context` (read-only pull-bootstrap of `Brain/active.md` plus pinned context, v0.16.0). The agent records taste signals, evidence events, milestone notes, and current-task pinned facts - and fetches the active rule digest at session start in runtimes without a SessionStart hook - without a ToolSearch round-trip on every session boot.

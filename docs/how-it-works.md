@@ -900,7 +900,7 @@ differs:
 ```mermaid
 graph LR
     Hermes -- "mcp_servers.yaml" --> Stdio["o2b mcp (stdio)"]
-    ClaudeCode["Claude Code"] -- "bundled .mcp.json" --> Stdio
+    ClaudeCode["Claude Code"] -- "plugin.json mcpServers" --> Stdio
     Codex -- "codex mcp add" --> Stdio
     GrokBuild["Grok Build"] -- "config.toml [mcp_servers]" --> Stdio
     OpenClaw -- "native JS plugin" --> InProc["in-process tools"]
@@ -913,7 +913,8 @@ graph LR
   `brain-memory` skill enabled in the active profile (via
   `hermes-skills-sync enable <profile> brain-memory`) so the LLM
   recognises preference triggers in conversation.
-- **Claude Code** picks up the bundled `.mcp.json` and the
+- **Claude Code** picks up the `mcpServers` declared in the bundled
+  `.claude-plugin/plugin.json` and the
   plugin-shipped `brain-memory/SKILL.md` automatically.
 - **Codex** registers the MCP server with `codex mcp add`; the same
   skill bundle is loaded automatically.

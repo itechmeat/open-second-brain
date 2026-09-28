@@ -65,8 +65,8 @@ carries the host.
   `bun run <plugin>\src\cli\main.ts mcp`, without a console window, and reads
   the config from `%LOCALAPPDATA%\open-second-brain\config.yaml`.
 - **Claude Code** (`claude.exe`) - install the plugin as in
-  [`claudecode.md`](claudecode.md). Claude Code starts the `.mcp.json`
-  command through `cmd.exe /d /s /c`, which resolves the extensionless
+  [`claudecode.md`](claudecode.md). Claude Code starts the plugin's MCP
+  server command through `cmd.exe /d /s /c`, which resolves the extensionless
   `scripts/o2b` to its `scripts\o2b.cmd` sibling via PATHEXT - no
   Windows-specific plugin config is needed. The lifecycle hooks are POSIX
   shell commands and run under Git Bash, which Claude Code finds through

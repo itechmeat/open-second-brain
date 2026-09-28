@@ -104,7 +104,7 @@ Enable Open Second Brain as the memory provider in `~/.hermes/config.yaml` (`mem
 
 | Runtime                                                          | Install                                                                                             |
 | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| Claude Code                                                      | Marketplace plugin (bundled `.mcp.json` + hooks) - [`install/claudecode.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/claudecode.md) |
+| Claude Code                                                      | Marketplace plugin (bundled MCP servers + hooks) - [`install/claudecode.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/claudecode.md) |
 | OpenAI Codex                                                     | `codex plugin marketplace add ...` then `o2b install --target codex --apply` (MCP servers via `codex mcp add`, or a `config.toml` merge without the binary) - [`install/codex.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/codex.md) |
 | OpenClaw                                                         | Native JS plugin, no MCP needed - [`install/openclaw.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/openclaw.md)                      |
 | opencode                                                         | `o2b install --target opencode --apply` (MCP servers + native plugin) - [`install/opencode.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/opencode.md) |
