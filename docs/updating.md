@@ -324,7 +324,14 @@ hook), `ensureVaultCurrent` brings an already-initialised vault current,
 hands-off:
 
 - a stale `_brain.yaml` / `_BRAIN.md` is migrated (snapshot-backed, additive;
-  user content untouched);
+  user content untouched) by a detached worker, so the server answers its
+  first request and the hook returns without waiting for the planning, the
+  pre-apply snapshot or the rewrite. One worker runs per vault per machine:
+  the caller claims a lock file before the spawn and the worker releases it.
+  A failed attempt is recorded (`o2b doctor` check `self_heal_upgrade`,
+  `o2b brain status`, `o2b brain upgrade --dry-run`) and the next automatic
+  attempt waits a cooldown (one hour, doubling per consecutive failure, at
+  most 24 hours) instead of running again on every start;
 - a stale-schema or missing search index is rebuilt in the **background** (a
   detached reindex), so startup never blocks; and as a safety net the search
   read path self-heals a stale/missing index on first query;
@@ -355,7 +362,10 @@ written into the vault would let one device mark the work done and make another
 skip its own per-device step (the search index is per-device). State checks are
 cheap reads on every start; only a real migration does work, and the approach
 also handles interrupted migrations and downgrades. Any per-device version note
-lives outside the vault and is for logging only, never for gating.
+lives outside the vault and is for logging only, never for gating. The one
+per-device record that does gate, the failed-upgrade marker under
+`.open-second-brain/`, only ever delays a retry after a failure; it never marks
+an upgrade done.
 
 The manual `o2b search reindex` / `o2b brain upgrade` commands still exist for
 explicit use; auto-migration just reuses their logic.

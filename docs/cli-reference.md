@@ -114,6 +114,25 @@ passed, so a caller reads the same three-way answer the exit code carries;
 `ok` is read off that exit code, and being two-valued it means only "not
 established as healthy" when false.
 
+### The automatic Brain upgrade check
+
+`o2b doctor` reports `self_heal_upgrade`. After a plugin update the
+full-scope `o2b mcp` server and the `SessionStart` hook bring a stale
+`_brain.yaml` / `_BRAIN.md` current in a detached worker
+(`o2b brain upgrade --self-heal`, not an operator flag). A failed attempt
+is recorded per device in `.open-second-brain/self-heal-upgrade.json`, and
+the check then fails with the error, the time of the last attempt, the
+number of consecutive failures and the time from which the next automatic
+attempt is due; its fix is `o2b brain upgrade --dry-run`. The same record
+appears in `o2b brain status` as the `self-heal-upgrade-failed` problem
+and at the end of `o2b brain upgrade --dry-run` / `--check` output (JSON:
+`self_heal_failure`).
+
+The next automatic attempt waits a cooldown of one hour, doubling with
+each consecutive failure up to 24 hours, instead of repeating the same
+failing upgrade on every start. `o2b brain upgrade --apply --yes` ignores
+the cooldown and clears the record once nothing is pending.
+
 ### The codegraph partner check
 
 `o2b doctor` consults the optional [codegraph](https://github.com/colbymchenry/codegraph)
@@ -354,7 +373,7 @@ o2b brain unprotect           (CLI-only) Remove the Open-Second-Brain-managed de
 o2b brain snapshot log        (CLI-only) Newest-first listing of every recovery point: run id, created_at, typed reason, size, manifest presence, derived-store coverage; --reason filters (unregistered value exits 2), --limit caps, --json
 o2b brain snapshot diff       (CLI-only) Read-only diff between two snapshots, or snapshot vs live Brain/
 o2b brain rollback            (CLI-only) Restore Brain/ from a snapshot (--dry-run previews; drift abort vs --force-rollback); --list, the prompt and --json name the snapshot reason ('unknown' when the sidecar records none)
-o2b brain upgrade             (CLI-only) Migrate release-owned files forward (_brain.yaml, _BRAIN.md, _OPEN_SECOND_BRAIN.md); --dry-run / --check / --apply --yes
+o2b brain upgrade             (CLI-only) Migrate release-owned files forward (_brain.yaml, _BRAIN.md, _OPEN_SECOND_BRAIN.md); --dry-run / --check / --apply --yes; --dry-run and --check also print the last failed automatic upgrade
 o2b brain export              Read-only dump of active preferences, or (since v1.50.0) a session-transcript dataset: --format json|llms-txt|transcripts-jsonl [--out <path>] [--force]; the transcript form takes --transcripts <file|dir> and reads no vault at all (see "The transcript corpus" below). Since v1.49.0 the preference bytes pass the shared egress redactor (stderr carries a notice when anything was removed), and a `pref-*.md` the parser cannot read is REFUSED, not skipped: exit 1 naming every unreadable file in one run rather than exit 0 over a shorter list. `o2b brain doctor` reports the same files
 o2b brain bank-export         (CLI-only) One-file backup bundle: preferences, the page graph, page contracts, the sources dashboard. Redacted on the way out; refuses with exit 1 on an unreadable `pref-*.md` (since v1.49.0)
 o2b brain bank-import         (CLI-only) Restore a bank bundle (--mode skip|overwrite|merge) [--trusted-restore]. Preference rows restore UNTRUSTED by default: every row lands `unconfirmed`, unpinned, at low confidence, on a fresh trial window dated from the restore - including a row the bundle already marked unconfirmed - and the run names each row it reset; `--trusted-restore` keeps the carried status, confidence, pin and window verbatim, for a backup you vouch for. A malformed preference already in the DESTINATION does not abort the import: the rows restore and the run prints `topic-key check incomplete: <path>` for each rule the topic-collision scan could not read, because that list is then a partial answer (since v1.49.0)

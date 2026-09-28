@@ -114,6 +114,7 @@ export const STATE_SURFACE_ID = Object.freeze({
   maintenanceJournal: "maintenance_journal",
   hookAudit: "hook_audit",
   hookSessionState: "hook_session_state",
+  selfHealUpgradeMarker: "self_heal_upgrade_marker",
   watchdogAudit: "watchdog_audit",
   injectFailopenCache: "inject_failopen_cache",
   aiderContext: "aider_context_artifact",
@@ -267,6 +268,7 @@ const PROTECT_MANIFEST_FILE = "protect.lock.json";
 const MAINTENANCE_LEASE_FILE = "maintenance.sqlite";
 const MAINTENANCE_JOURNAL_FILE = "maintenance-runs.jsonl";
 const HOOK_STATE_DIR = "hook-state";
+const SELF_HEAL_UPGRADE_MARKER_FILE = "self-heal-upgrade.json";
 const WATCHDOG_AUDIT_DIR = "watchdog-audit";
 const INJECT_CACHE_DIR = "inject-cache";
 const AIDER_CONTEXT_FILE = "aider-context.md";
@@ -557,6 +559,20 @@ export const STATE_SURFACES: ReadonlyArray<StateSurface> = Object.freeze([
       "is scoped to a session by construction, so deleting it re-runs at most one session's " +
       "worth of once-per-session work.",
     sources: ["hooks/lib/session-state.ts"],
+  },
+  {
+    id: STATE_SURFACE_ID.selfHealUpgradeMarker,
+    label: "failed automatic upgrade marker",
+    tier: STATE_TIER.derived,
+    derive: derivedStore(SELF_HEAL_UPGRADE_MARKER_FILE),
+    override_env: null,
+    override_config_key: null,
+    carries_memory: false,
+    reason:
+      "Present only after the automatic Brain upgrade failed on this device: the error, when, " +
+      "and when the next automatic attempt is due. Deleting it ends the cooldown early and " +
+      "drops the failure from `o2b doctor`; the next start simply tries again.",
+    sources: ["src/core/maintenance/self-heal-upgrade-state.ts"],
   },
   {
     id: STATE_SURFACE_ID.watchdogAudit,

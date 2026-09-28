@@ -24,6 +24,7 @@ import { EGRESS_OUTCOME, redactForEgress } from "../core/egress/guard.ts";
 import { listSecretReferences } from "../core/secret-ref.ts";
 import { BRAIN_INDEX_REL } from "../core/brain/paths.ts";
 import { ensureVaultCurrent } from "../core/maintenance/ensure-current.ts";
+import { checkSelfHealUpgrade } from "../core/maintenance/self-heal-upgrade-state.ts";
 import { doctor } from "../core/doctor.ts";
 import { checkHermesResolverParity } from "../core/doctor-hermes-parity.ts";
 import { runReadinessProbes, type ReadinessReport } from "../core/doctor-readiness.ts";
@@ -357,6 +358,8 @@ async function cmdDoctor(argv: string[]): Promise<number> {
     // meaningless there, and this verb is the surface that owns the question.
     const parity = checkHermesResolverParity({ config, repoRoot });
     if (parity) results.push(parity);
+    // Also outside `doctor()`, which is bundled into the OpenClaw artifact.
+    results.push(checkSelfHealUpgrade(vault));
   } catch (exc) {
     process.stderr.write(`error: doctor failed: ${(exc as Error).message ?? exc}\n`);
     return DOCTOR_EXIT.failed;

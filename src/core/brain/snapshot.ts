@@ -92,6 +92,7 @@ import {
   statSync,
   unlinkSync,
   writeFileSync,
+  writeSync,
   type Dirent,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -812,12 +813,13 @@ export function createSnapshot(
       "-T",
       tarPathArg(listPath),
     ];
-    compressInto(
-      { kind: "buffer", bytes: runArchiveProducer("tar", tarArgs, runId) },
-      outPath,
-      tools,
-      runId,
-    );
+    // tar writes into a staging file beside the member list rather than
+    // into a captured pipe, and the compressor reads that file: neither
+    // the tar stream nor the compressed archive ever sits in this
+    // process's memory, so the size of `Brain/` sets no ceiling here.
+    const tarPath = join(listDir, "brain.tar");
+    runArchiveProducer("tar", tarArgs, tarPath, runId);
+    compressInto({ kind: "file", path: tarPath }, outPath, tools, runId);
     if (!existsSync(outPath)) {
       throw new BrainSnapshotError(
         `archive write reported success but ${outPath} is absent`,
@@ -1192,19 +1194,84 @@ function compressInto(
   }
   if (tools.zstd) {
     // `zstd -o` opens the destination itself and refuses an existing one.
-    const args =
-      payload.kind === "file"
-        ? ["-19", "-q", "-o", outPath, payload.path]
-        : ["-19", "-q", "-o", outPath, "-"];
-    runCompressor("zstd", args, payload, runId, null);
+    runCompressor("zstd", ["-19", "-q", "-o", outPath, payload.path], runId, null);
     return;
   }
   // No zstd: gzip in-process. `node:zlib` ships with every runtime this
   // tool supports, so a snapshot never depends on a `gzip` binary - which
   // native Windows does not have. Level 9 matches the `gzip -9` this
   // replaced, byte format included, so older readers restore it unchanged.
-  const raw = payload.kind === "buffer" ? payload.bytes : readFileSync(payload.path);
-  writeArchiveExclusive(outPath, gzipSync(raw, { level: 9 }), runId);
+  gzipFileExclusive(payload.path, outPath, runId);
+}
+
+/**
+ * Input read per gzip member by {@link gzipFileExclusive}. Bounds the
+ * memory the gzip fallback holds at once, whatever the archive's size.
+ */
+const GZIP_MEMBER_INPUT_BYTES = 8 * 1024 * 1024;
+
+/**
+ * gzip `source` into `outPath` one bounded chunk at a time.
+ *
+ * `node:zlib` has no synchronous streaming API, and the snapshot path is
+ * synchronous by contract (the destructive gate runs it inline before the
+ * mutation it protects). So each chunk is compressed on its own and the
+ * results are written back to back: a multi-member gzip file (RFC 1952,
+ * section 2.2), which `gunzip`, `node:zlib` and every `tar -z` read as the
+ * concatenation of the members. The restore path reads it unchanged.
+ *
+ * The destination is opened `wx`, so the exclusivity {@link compressInto}
+ * relies on holds here exactly as it did for the single-buffer write. A
+ * file this call created and could not finish is removed: it is ours, and
+ * left behind it would read as a recovery point.
+ */
+function gzipFileExclusive(source: string, outPath: string, runId: string): void {
+  let out: number;
+  try {
+    out = openSync(outPath, "wx");
+  } catch (err) {
+    throw new BrainSnapshotError(
+      `failed to write ${outPath}: ${(err as Error).message ?? String(err)}`,
+      runId,
+      { cause: err },
+    );
+  }
+  let finished = false;
+  try {
+    const input = openSync(source, "r");
+    try {
+      const chunk = Buffer.allocUnsafe(GZIP_MEMBER_INPUT_BYTES);
+      let wroteMember = false;
+      for (;;) {
+        const read = readSync(input, chunk, 0, chunk.length, null);
+        if (read === 0) break;
+        writeFully(out, gzipSync(chunk.subarray(0, read), { level: 9 }));
+        wroteMember = true;
+      }
+      // An empty source still produces a valid (one-member) gzip file.
+      if (!wroteMember) writeFully(out, gzipSync(Buffer.alloc(0), { level: 9 }));
+    } finally {
+      closeSync(input);
+    }
+    finished = true;
+  } catch (err) {
+    throw new BrainSnapshotError(
+      `failed to write ${outPath}: ${(err as Error).message ?? String(err)}`,
+      runId,
+      { cause: err },
+    );
+  } finally {
+    closeSync(out);
+    if (!finished) rmSync(outPath, { force: true });
+  }
+}
+
+/** `writeSync` until every byte of `bytes` is on `fd`. */
+function writeFully(fd: number, bytes: Buffer): void {
+  let offset = 0;
+  while (offset < bytes.length) {
+    offset += writeSync(fd, bytes, offset, bytes.length - offset);
+  }
 }
 
 /**
@@ -1229,15 +1296,17 @@ function writeArchiveExclusive(outPath: string, bytes: Buffer, runId: string): v
 }
 
 /**
- * What a compressor reads. A `buffer` is the tar stream we already hold;
- * a `file` is the vacuumed store copy, handed over by path so a
- * multi-hundred-megabyte database never round-trips through memory.
+ * What a compressor reads: a file, handed over by path - the staged tar
+ * stream or the vacuumed store copy - so a multi-hundred-megabyte payload
+ * never round-trips through memory.
  */
-type CompressionSource =
-  | { readonly kind: "buffer"; readonly bytes: Buffer }
-  | { readonly kind: "file"; readonly path: string };
+type CompressionSource = { readonly kind: "file"; readonly path: string };
 
-/** Hard ceiling on any single captured subprocess stream. */
+/**
+ * Hard ceiling on any single CAPTURED subprocess stream. Only diagnostic
+ * output (stderr) is captured on the archive path; archive bytes go
+ * through files, so this never bounds the size of a snapshot.
+ */
 const SUBPROCESS_MAX_BUFFER_BYTES = 256 * 1024 * 1024;
 
 /**
@@ -1260,17 +1329,11 @@ function destinationOf(args: ReadonlyArray<string>): string {
 function runCompressor(
   cmd: string,
   args: ReadonlyArray<string>,
-  payload: CompressionSource,
   runId: string,
   outPath: string | null,
 ): void {
   const r = spawnSync(cmd, [...args], {
-    ...(payload.kind === "buffer" ? { input: payload.bytes } : {}),
-    stdio: [
-      payload.kind === "buffer" ? "pipe" : "ignore",
-      outPath === null ? "inherit" : "pipe",
-      "pipe",
-    ],
+    stdio: ["ignore", outPath === null ? "inherit" : "pipe", "pipe"],
     maxBuffer: SUBPROCESS_MAX_BUFFER_BYTES,
   });
   if (r.error) {
@@ -1303,37 +1366,53 @@ function runCompressor(
 }
 
 /**
- * Run the archive producer and capture its stdout.
+ * Run the archive producer with its stdout on `outFile`.
  *
- * We avoid a shell pipe entirely: spawn `tar`, capture its stdout into a
- * Buffer (acceptable: Brain trees are Markdown and stay small), then
- * feed the compressor synchronously. The previous approach used
- * `sh -c "tar ... | zstd ..."` and broke on quoting of paths with
- * whitespace; buffering through Node is simpler and verifiably correct.
+ * No shell pipe (the old `sh -c "tar ... | zstd ..."` broke on quoting of
+ * paths with whitespace, and native Windows has no `sh`), and no captured
+ * pipe either: tar's stdout is a file descriptor opened here, so the
+ * stream goes straight to disk. It used to be captured through
+ * `spawnSync` with a 256 MB `maxBuffer`, which a `Brain/` tree past that
+ * size overran with `ENOBUFS` after tar had already done all of its work.
+ * Only stderr is captured, for the error message.
+ *
+ * `outFile` is opened `wx`: it lives in a private temp directory, so an
+ * existing file there is a bug to surface rather than a file to reuse.
  *
  * Argument quoting: we deliberately do NOT shell-escape paths, because
  * `tar -C <vault>` already roots everything relative to the vault, and
  * the only user-supplied bytes in `tarArgs` are the run id (which
- * `validateRunId` constrains to `[A-Za-z0-9._-]`) and the top-level
- * `Brain/` entries (`inbox`, `preferences`, …) which are themselves
- * filesystem names produced by our own writers.
+ * `validateRunId` constrains to `[A-Za-z0-9._-]`) and the member list,
+ * which travels through a file.
  */
-function runArchiveProducer(cmd: string, args: ReadonlyArray<string>, runId: string): Buffer {
-  const r = spawnSync(cmd, [...args], {
-    maxBuffer: SUBPROCESS_MAX_BUFFER_BYTES,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+function runArchiveProducer(
+  cmd: string,
+  args: ReadonlyArray<string>,
+  outFile: string,
+  runId: string,
+): void {
+  const fd = openSync(outFile, "wx");
+  let r: ReturnType<typeof spawnSync>;
+  try {
+    r = spawnSync(cmd, [...args], {
+      maxBuffer: SUBPROCESS_MAX_BUFFER_BYTES,
+      stdio: ["ignore", fd, "pipe"],
+    });
+  } finally {
+    closeSync(fd);
+  }
   if (r.error) {
     throw new BrainSnapshotError(`${cmd} failed to start: ${r.error.message}`, runId);
   }
   if (r.status !== 0) {
-    const stderr = (r.stderr ?? Buffer.from("")).toString("utf8").trim();
+    const stderr = Buffer.from(r.stderr ?? "")
+      .toString("utf8")
+      .trim();
     throw new BrainSnapshotError(`${cmd} exited with status ${r.status}: ${stderr}`, runId);
   }
-  if (!r.stdout) {
+  if (statSync(outFile).size === 0) {
     throw new BrainSnapshotError(`${cmd} produced no stdout`, runId);
   }
-  return r.stdout;
 }
 
 // ----- listSnapshots / pruneSnapshots --------------------------------------
@@ -1609,27 +1688,38 @@ export function extractSnapshotToTemp(vault: string, runId: string): ExtractSnap
     }
 
     if (decompressor === "zstd") {
-      const zstd = spawnSync("zstd", ["-d", "-c", archive], {
-        maxBuffer: 256 * 1024 * 1024,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      if (zstd.error || zstd.status !== 0) {
-        const stderr = (zstd.stderr ?? Buffer.from("")).toString("utf8").trim();
-        throw new BrainSnapshotError(
-          `zstd decompress failed: ${zstd.error?.message ?? stderr}`,
-          runId,
-        );
-      }
-      // `-f -` is explicit stdin: GNU tar defaults to stdin without
-      // it, but BSD tar and busybox tar do not, so passing the flag
-      // keeps the extraction portable across hosts.
-      const tar = spawnSync("tar", ["-x", "-f", "-", "-C", tarPathArg(tmp)], {
-        input: zstd.stdout,
-        stdio: ["pipe", "inherit", "pipe"],
-      });
-      if (tar.error || tar.status !== 0) {
-        const stderr = (tar.stderr ?? Buffer.from("")).toString("utf8").trim();
-        throw new BrainSnapshotError(`tar extract failed: ${tar.error?.message ?? stderr}`, runId);
+      // Decompressed to a staging file OUTSIDE the extraction root, then
+      // handed to tar as its stdin descriptor: neither stream is captured
+      // in memory, so an archive whose tar stream is larger than any
+      // capture buffer restores as well as a small one. Captured through
+      // a 256 MB `maxBuffer` before, which such an archive overran.
+      const staging = mkdtempSync(join(tmpdir(), `o2b-brain-extract-tar-${runId}-`));
+      try {
+        const tarball = join(staging, "brain.tar");
+        runCompressor("zstd", ["-d", "-q", "-o", tarball, archive], runId, null);
+        const input = openSync(tarball, "r");
+        let tar: ReturnType<typeof spawnSync>;
+        try {
+          // `-f -` is explicit stdin: GNU tar defaults to stdin without
+          // it, but BSD tar and busybox tar do not, so passing the flag
+          // keeps the extraction portable across hosts.
+          tar = spawnSync("tar", ["-x", "-f", "-", "-C", tarPathArg(tmp)], {
+            stdio: [input, "inherit", "pipe"],
+          });
+        } finally {
+          closeSync(input);
+        }
+        if (tar.error || tar.status !== 0) {
+          const stderr = Buffer.from(tar.stderr ?? "")
+            .toString("utf8")
+            .trim();
+          throw new BrainSnapshotError(
+            `tar extract failed: ${tar.error?.message ?? stderr}`,
+            runId,
+          );
+        }
+      } finally {
+        rmSync(staging, { recursive: true, force: true });
       }
     } else {
       // gzip is inflated in-process and piped to `tar -f -`, like the zstd
@@ -2080,13 +2170,7 @@ function decompressArchiveTo(archive: string, outPath: string, runId: string): v
   }
   if (compressor === "zstd") {
     // `zstd -o` opens the destination itself and refuses an existing one.
-    runCompressor(
-      "zstd",
-      ["-d", "-q", "-o", outPath, archive],
-      { kind: "file", path: archive },
-      runId,
-      null,
-    );
+    runCompressor("zstd", ["-d", "-q", "-o", outPath, archive], runId, null);
     return;
   }
   // gzip is inflated in-process (no `gzip` binary on native Windows);

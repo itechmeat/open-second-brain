@@ -13,6 +13,7 @@ Open Second Brain records what it did - learning events, recall decisions, serve
 | Session lineage ledger | `Brain/.state/session-lineage[.<device-id>].jsonl` (+ `session-lineage-gaps[.<device-id>].jsonl`) | `recordLineageObservation()` in `src/core/brain/lineage/ledger.ts` | one JSON record per line, sequence-numbered and hash-chained per file |
 | Session lifecycle audit | `Brain/log/session-lifecycle/` | `captureSessionLifecycleEvent()` in `src/core/brain/session-lifecycle.ts` | JSONL audit rows |
 | Bench runs | `<runs-dir>/<run-id>/` (default `.open-second-brain/bench-runs/`, gitignored) | `runMemoryBench()` in `src/core/bench/phases.ts` | `checkpoint.json`, per-question results, `report.json` |
+| Failed automatic upgrade | `.open-second-brain/self-heal-upgrade.json` (per device, not synced with `Brain/`) | `recordSelfHealUpgradeFailure()` in `src/core/maintenance/self-heal-upgrade-state.ts` | one JSON object: `failed_at`, `error`, `consecutive_failures`, `pending`, `retry_after`; read by `o2b doctor` (`self_heal_upgrade`), `o2b brain status` and `o2b brain upgrade --dry-run` |
 | Metrics | `Brain/metrics/<surface>[.<device-id>].jsonl` | `appendMetric()` in `src/core/brain/metrics.ts` | one run-level JSON record per line (see `docs/metrics.md`) |
 
 ### The per-device shard rule

@@ -9,7 +9,7 @@
  * rendered file rather than disappearing silently.
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -122,6 +122,59 @@ export function renderBrainManual(
     readTemplate(BRAIN_MANUAL_TEMPLATE_PATH),
     buildSubstitutions(vault, config),
   );
+}
+
+/**
+ * Render the manual for `vault`, keeping the `vault_name` spelling an
+ * existing manual already carries when that spelling names the SAME
+ * directory as `vault`.
+ *
+ * The display name is the basename as the caller spelled the path. On a
+ * case-insensitive filesystem (macOS, Windows) `.../vault` and `.../Vault`
+ * open one directory, so two runtimes configured with the two spellings
+ * rendered two different manuals for one vault. Each saw the other's as a
+ * pending upgrade, and the start-up self-heal re-ran that upgrade, snapshot
+ * included, on every start.
+ *
+ * The filesystem decides, not a platform guess: the existing spelling is
+ * kept only when it differs from ours by case alone AND a `stat` of the
+ * path under that spelling reaches the same file (device and inode, read as
+ * bigints so Windows file ids compare exactly). On a case-sensitive
+ * filesystem where `vault` and `Vault` are two directories the probe says
+ * so, and the manual is re-rendered as before.
+ */
+export function renderBrainManualFor(
+  vault: string,
+  existing: string | null,
+  config: BrainConfig = DEFAULT_BRAIN_CONFIG,
+): string {
+  const rendered = renderBrainManual(vault, config);
+  if (existing === null) return rendered;
+  const ours = vaultDisplayName(vault);
+  const theirs = recordedVaultName(existing);
+  if (theirs === null || theirs === ours) return rendered;
+  if (theirs.toLowerCase() !== ours.toLowerCase()) return rendered;
+  if (!sameDirectory(vault, join(dirname(resolve(vault)), theirs))) return rendered;
+  const substitutions = new Map(buildSubstitutions(vault, config));
+  substitutions.set("vault_name", theirs);
+  return renderTemplate(readTemplate(BRAIN_MANUAL_TEMPLATE_PATH), substitutions);
+}
+
+/** The `vault_name:` value a rendered manual carries, or null. */
+function recordedVaultName(manual: string): string | null {
+  const match = /^vault_name: (.+)$/m.exec(manual);
+  return match === null ? null : match[1]!.trim();
+}
+
+/** Whether two paths open the same file, by device and inode. */
+function sameDirectory(a: string, b: string): boolean {
+  try {
+    const sa = statSync(a, { bigint: true });
+    const sb = statSync(b, { bigint: true });
+    return sa.dev === sb.dev && sa.ino === sb.ino;
+  } catch {
+    return false;
+  }
 }
 
 /**

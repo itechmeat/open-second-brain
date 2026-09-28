@@ -27,7 +27,7 @@ import { brainConfigPath, brainManualPath, vaultRelative } from "./paths.ts";
 import { BrainConfigError, loadBrainConfig } from "./policy.ts";
 import { DEFAULT_BRAIN_CONFIG_YAML } from "./config-template.ts";
 import { createSnapshot } from "./snapshot.ts";
-import { renderBrainManual } from "./templates.ts";
+import { renderBrainManualFor } from "./templates.ts";
 import { isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_SNAPSHOT_REASON } from "./types.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
@@ -98,7 +98,7 @@ export function planUpgrade(vault: string): UpgradePlan {
       vault,
       brainManualPath(vault),
       vaultRelative(brainManualPath(vault), vault),
-      () => renderBrainManual(vault),
+      (existing) => renderBrainManualFor(vault, existing),
     ),
     ...planCorruptedPreferences(vault),
   ];
@@ -249,13 +249,12 @@ function planManagedPath(
   _vault: string,
   absolutePath: string,
   relPath: string,
-  renderTarget: () => string,
+  renderTarget: (existing: string | null) => string,
 ): UpgradeFilePlan {
-  const after = renderTarget();
   if (!existsSync(absolutePath)) {
     // File missing entirely: an upgrade should restore it. Treat as
     // update with empty `before` so the diff shows the full body.
-    return makeUpdate(relPath, "", after);
+    return makeUpdate(relPath, "", renderTarget(null));
   }
   let before: string;
   try {
@@ -263,6 +262,10 @@ function planManagedPath(
   } catch (err) {
     return makeError(relPath, `read failed: ${(err as Error).message}`);
   }
+  // The target is rendered against what is on disk, so a rendering that
+  // may legitimately keep an existing spelling (the vault name on a
+  // case-insensitive filesystem) can.
+  const after = renderTarget(before);
   if (before === after) {
     return makeNoop(relPath);
   }

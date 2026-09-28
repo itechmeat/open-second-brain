@@ -23,7 +23,6 @@ import { Database } from "bun:sqlite";
 
 import { defaultConfigPath } from "../config.ts";
 import { brainConfigPath } from "../brain/paths.ts";
-import { planUpgrade, applyUpgrade } from "../brain/upgrade.ts";
 import { resolveSearchConfig } from "../search/index.ts";
 import { reindexVault } from "../search/indexer.ts";
 import { CHUNKER_VERSION } from "../search/chunker.ts";
@@ -38,6 +37,17 @@ import {
   type SelfHealSpawnDecision,
 } from "./self-heal-reindex.ts";
 import { closeDatabase } from "../sqlite-close.ts";
+import {
+  runSelfHealUpgrade,
+  SELF_HEAL_UPGRADE_OUTCOME,
+  type SelfHealUpgradeOutcome,
+} from "./self-heal-upgrade.ts";
+import {
+  claimSelfHealUpgradeLock,
+  readSelfHealUpgradeFailure,
+  releaseSelfHealUpgradeLock,
+  selfHealUpgradeBackoffActive,
+} from "./self-heal-upgrade-state.ts";
 
 /**
  * The flag that tells the child to record its own terminal outcome. It
@@ -46,9 +56,36 @@ import { closeDatabase } from "../sqlite-close.ts";
  */
 const SELF_HEAL_FLAG = "--self-heal";
 
+/**
+ * What a background run did about the Brain managed-file upgrade. The
+ * worker's own outcome is recorded by the worker; see
+ * `self-heal-upgrade.ts`.
+ */
+export const SELF_HEAL_UPGRADE_SPAWN = Object.freeze({
+  /** A detached `o2b brain upgrade --self-heal` worker was started. */
+  spawned: "spawned",
+  /** A recorded failure's cooldown has not run out; nothing was started. */
+  skippedBackoff: "skipped_backoff",
+  /** Another worker holds this vault's lock; nothing was started. */
+  skippedRunning: "skipped_running",
+} as const);
+
+export type SelfHealUpgradeSpawnDecision =
+  (typeof SELF_HEAL_UPGRADE_SPAWN)[keyof typeof SELF_HEAL_UPGRADE_SPAWN];
+
 export interface EnsureCurrentResult {
-  /** Vault-relative paths of Brain managed files migrated this run. */
+  /**
+   * Vault-relative paths of Brain managed files migrated this run. Always
+   * empty in `background` mode: the upgrade runs in a detached worker.
+   */
   readonly brainUpgraded: ReadonlyArray<string>;
+  /**
+   * In `background` mode, what was done about the managed-file upgrade;
+   * `null` in the foreground, where {@link brainUpgradeOutcome} answers.
+   */
+  readonly brainUpgradeSpawn: SelfHealUpgradeSpawnDecision | null;
+  /** In the foreground, how the upgrade attempt ended; `null` in `background` mode. */
+  readonly brainUpgradeOutcome: SelfHealUpgradeOutcome | null;
   /** A search reindex was started (background) or completed (foreground). */
   readonly reindexTriggered: boolean;
   /**
@@ -128,6 +165,58 @@ function o2bCommand(): string[] {
     return [process.execPath, "run", join(repo, "src", "cli", "main.ts")];
   }
   return [join(repo, "scripts", "o2b")];
+}
+
+/**
+ * Start the managed-file upgrade in a detached worker, unless a recorded
+ * failure is cooling down or another worker has the vault.
+ *
+ * The lock is CLAIMED here, before the spawn, and the claim token handed
+ * to the worker, which releases it when it ends: N sessions starting at
+ * once make N exclusive creates, and only the one that wins spawns. The
+ * worker plans on its own (planning alone reads every preference file,
+ * hundreds of milliseconds on a large vault), so nothing here reads more
+ * than the failure marker.
+ *
+ * Streams are ignored and the child is `unref`ed, as for the reindex; its
+ * outcome goes to the failure marker and the `self_heal_upgrade` metrics
+ * surface.
+ */
+function startSelfHealUpgrade(
+  vault: string,
+  configPath: string | undefined,
+  now: Date,
+): SelfHealUpgradeSpawnDecision {
+  if (selfHealUpgradeBackoffActive(readSelfHealUpgradeFailure(vault), now)) {
+    return SELF_HEAL_UPGRADE_SPAWN.skippedBackoff;
+  }
+  const token = claimSelfHealUpgradeLock(vault, now);
+  if (token === null) return SELF_HEAL_UPGRADE_SPAWN.skippedRunning;
+  try {
+    const proc = Bun.spawn(
+      [...o2bCommand(), "brain", "upgrade", "--vault", vault, SELF_HEAL_FLAG, token],
+      {
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "ignore",
+        windowsHide: true,
+        detached: process.platform === "win32",
+        // The live environment, for the reason given in
+        // `startSelfHealReindex`; the config path travels the way every
+        // brain verb reads it.
+        env: {
+          ...process.env,
+          ...(configPath !== undefined ? { OPEN_SECOND_BRAIN_CONFIG: configPath } : {}),
+        },
+      },
+    );
+    proc.unref();
+  } catch (e) {
+    // Nothing was started, so nothing else will release the claim.
+    releaseSelfHealUpgradeLock(vault, token);
+    throw e;
+  }
+  return SELF_HEAL_UPGRADE_SPAWN.spawned;
 }
 
 /**
@@ -244,8 +333,16 @@ export async function ensureVaultCurrent(
   opts: EnsureCurrentOptions = {},
 ): Promise<EnsureCurrentResult> {
   const background = opts.background ?? true;
+  if (background) {
+    // Yield first: callers start this and go straight on to serving
+    // (`void ensureVaultCurrent(...)`), and everything below up to the
+    // first `await` would otherwise run before they do.
+    await new Promise<void>((resolveYield) => setImmediate(resolveYield));
+  }
   const errors: string[] = [];
   let brainUpgraded: ReadonlyArray<string> = [];
+  let brainUpgradeSpawn: SelfHealUpgradeSpawnDecision | null = null;
+  let brainUpgradeOutcome: SelfHealUpgradeOutcome | null = null;
   let reindexTriggered = false;
   let reindexSpawn: SelfHealSpawnDecision | null = null;
 
@@ -254,6 +351,8 @@ export async function ensureVaultCurrent(
   if (!existsSync(brainConfigPath(vault))) {
     return {
       brainUpgraded: [],
+      brainUpgradeSpawn: null,
+      brainUpgradeOutcome: null,
       reindexTriggered: false,
       reindexSpawn: null,
       skipped: "not-initialized",
@@ -263,10 +362,18 @@ export async function ensureVaultCurrent(
 
   // 1. Brain managed-file upgrade - idempotent; only when changes are pending
   //    and the plan is clean (a half-mergeable plan is left for the operator).
+  //    In the background it runs in a detached worker; a failure is recorded
+  //    by the worker and backs off the next automatic attempt.
   try {
-    const plan = planUpgrade(vault);
-    if (plan.errors === 0 && plan.pending > 0) {
-      brainUpgraded = applyUpgrade(vault).files_updated;
+    if (background) {
+      brainUpgradeSpawn = startSelfHealUpgrade(vault, opts.configPath, new Date());
+    } else {
+      const upgrade = runSelfHealUpgrade(vault);
+      brainUpgradeOutcome = upgrade.outcome;
+      brainUpgraded = upgrade.filesUpdated;
+      if (upgrade.outcome === SELF_HEAL_UPGRADE_OUTCOME.failed) {
+        errors.push(`brain-upgrade: ${upgrade.error ?? "failed"}`);
+      }
     }
   } catch (e) {
     errors.push(`brain-upgrade: ${message(e)}`);
@@ -292,5 +399,13 @@ export async function ensureVaultCurrent(
     errors.push(`search-reindex: ${message(e)}`);
   }
 
-  return { brainUpgraded, reindexTriggered, reindexSpawn, skipped: "", errors };
+  return {
+    brainUpgraded,
+    brainUpgradeSpawn,
+    brainUpgradeOutcome,
+    reindexTriggered,
+    reindexSpawn,
+    skipped: "",
+    errors,
+  };
 }

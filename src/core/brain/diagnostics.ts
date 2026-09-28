@@ -272,6 +272,14 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
+        // GitHub #216. The automatic managed-file upgrade failed and is
+        // backing off; the dry run shows the pending change and the error.
+        code: "self-heal-upgrade-failed",
+        issueClass: "automatic Brain upgrade failed",
+        nextCommand: "o2b brain upgrade --dry-run",
+        autoRepairable: false,
+      },
+      {
         code: "doctor-warnings",
         issueClass: "doctor warnings",
         nextCommand: "o2b brain doctor",

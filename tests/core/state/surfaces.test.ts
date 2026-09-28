@@ -29,6 +29,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { selfHealUpgradeMarkerPath } from "../../../src/core/maintenance/self-heal-upgrade-state.ts";
 import { existsSync, mkdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 
@@ -258,6 +259,7 @@ const RESOLVER_BINDINGS: ReadonlyArray<readonly [StateSurfaceId, (vault: string)
     ["install_manifest", (v) => installManifestPath(v)],
     ["hook_audit", (v) => hookAuditDir(v)],
     ["hook_session_state", (v) => dirname(hookStateFilePath(v, null))],
+    ["self_heal_upgrade_marker", (v) => selfHealUpgradeMarkerPath(v)],
     ["aider_context_artifact", (v) => resolveAiderSidecarPath({ vault: v } as InstallEnv, {})],
     // --- Under `<vault>/Brain/` --------------------------------------------
     ["brain_log", (v) => brainDirs(v).log],

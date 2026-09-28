@@ -22,6 +22,11 @@ import { resolveSearchConfig } from "../search/index.ts";
 import { FREEZE_NEXT_COMMAND, readFreezeMarker, type FreezeMarker } from "./freeze-marker.ts";
 import { runDoctor } from "./doctor.ts";
 import { resolveSignal } from "./diagnostics.ts";
+import {
+  describeSelfHealUpgradeFailure,
+  readSelfHealUpgradeFailure,
+  type SelfHealUpgradeFailure,
+} from "../maintenance/self-heal-upgrade-state.ts";
 import { runHygieneScan } from "./hygiene/scan.ts";
 import { brainConfigPath, brainDirs } from "./paths.ts";
 import { loadTemporalConfigSafe } from "./policy.ts";
@@ -80,6 +85,12 @@ export interface OperatorSnapshot {
    * condition belongs.
    */
   readonly frozen: FreezeMarker | null;
+  /**
+   * The last failure of the automatic managed-file upgrade on this device,
+   * or `null` when none is recorded. It is also a problem line: a failed
+   * self-heal leaves a pending upgrade behind and nothing else says so.
+   */
+  readonly selfHealUpgradeFailure: SelfHealUpgradeFailure | null;
 }
 
 export interface BuildOperatorSnapshotOptions {
@@ -115,6 +126,12 @@ export async function buildOperatorSnapshot(
   const searchIndexPresent = searchDbPath !== null && existsSync(searchDbPath);
   if (!configPresent) {
     problem("state-file", "Brain config `_brain.yaml` is missing");
+  }
+
+  // --- Automatic upgrade ---
+  const selfHealUpgradeFailure = readSelfHealUpgradeFailure(vault);
+  if (selfHealUpgradeFailure !== null) {
+    problem("self-heal-upgrade-failed", describeSelfHealUpgradeFailure(selfHealUpgradeFailure));
   }
 
   // --- Doctor + semantic health ---
@@ -204,6 +221,7 @@ export async function buildOperatorSnapshot(
     problems: Object.freeze(problems),
     healthy: problems.length === 0,
     frozen: readFreezeMarker(vault),
+    selfHealUpgradeFailure,
   });
 }
 

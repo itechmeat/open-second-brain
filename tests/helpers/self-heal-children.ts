@@ -1,5 +1,5 @@
 /**
- * Wait for the detached self-heal reindex children a test started.
+ * Wait for the detached self-heal children a test started: search reindex children and the managed-file upgrade worker.
  *
  * A `SessionStart` hook (or a full-scope server start) on an initialised
  * vault with no search index spawns a detached `o2b search reindex` and
@@ -15,10 +15,13 @@
  * recording, and is reported when it is spent.
  */
 
+import { existsSync } from "node:fs";
+
 import {
   readSelfHealReindexRows,
   SELF_HEAL_SPAWN,
 } from "../../src/core/maintenance/self-heal-reindex.ts";
+import { selfHealUpgradeLockPath } from "../../src/core/maintenance/self-heal-upgrade-state.ts";
 
 /** A cold Bun start plus a rebuild of a near-empty vault, with headroom for a slow runner. */
 const CHILD_BUDGET_MS = 60_000;
@@ -49,4 +52,13 @@ export async function waitForSelfHealChildren(
   if (pending.length > 0) {
     throw new Error(`self-heal reindex children never finished: ${pending.join(", ")}`);
   }
+  // The detached managed-file upgrade worker (#216) holds a lock its parent
+  // claimed before the spawn and releases it when it ends, so the lock's
+  // absence is that worker's completion event.
+  const lock = selfHealUpgradeLockPath(vault);
+  while (existsSync(lock) && Date.now() < deadline) {
+    // eslint-disable-next-line no-await-in-loop
+    await Bun.sleep(POLL_INTERVAL_MS);
+  }
+  if (existsSync(lock)) throw new Error("self-heal upgrade worker never finished");
 }
