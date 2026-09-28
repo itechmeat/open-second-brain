@@ -1215,6 +1215,22 @@ Which emitters those verbs actually have is not taken on trust. `tests/cli/progr
 
 For the two verbs that do hold a handle, a second interrupt is not intercepted and falls through to the default handler, so a wedged run is always killable by pressing the key twice. And an interrupt that arrives while such a verb is in a region with no checkpoint - opening a store, writing a report - is not swallowed: the verb prints `interrupted: SIGINT arrived while … stopping now` and ends with the signal's code rather than returning 0. A run the operator stopped never exits 0.
 
+## Lock and cache overrides (since v1.61.0)
+
+Three environment variables tune how long a writer waits for a shared lock
+and where the machine-local dedup cache lives. None of them has a
+`_brain.yaml` key: they describe the host, not the vault.
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `OPEN_SECOND_BRAIN_LOCK_WAIT_MS` | `5000` | How long a write to shared ingest state (content manifest, plan checkpoint, session ledger, git record store) waits for its lock before it is refused with `ELOCKED`. A whole number of milliseconds; `0` means one attempt; anything else is an error. The one-second interactive wait is not affected. See [Source pipeline integrity](#source-pipeline-integrity-and-operator-tooling-since-v1340). |
+| `OPEN_SECOND_BRAIN_DEDUP_CACHE_DIR` | the user cache directory, `open-second-brain/dedup-index/` | Where the signal dedup index cache is kept, one `<vault-digest>.json` per vault, outside the vault. |
+| `OPEN_SECOND_BRAIN_DEDUP_CACHE` | on | `0` turns the dedup index cache off; every capture then walks the inbox, `processed/` and `archived/` in full. |
+
+The automatic Brain upgrade worker takes no override: its lock is
+`.open-second-brain/self-heal-upgrade.lock` in the vault, so a hook, the MCP
+server and the worker agree on it whatever their temp directories are.
+
 ## Vault scope
 
 Single scope policy for every vault walker: `vault.ignore_paths` excludes, and the optional `vault.include_paths` allowlist narrows. A path is in scope when it is not excluded AND, if an allowlist is declared, under one of its roots. Absent, the allowlist changes nothing; an empty one is refused at parse time, because a list admitting no path is an off switch on indexing rather than a boundary. A dead include root is an error-severity `vault-include-missing-path` doctor finding — unlike a dead exclusion, it can leave the index empty.
@@ -1289,7 +1305,7 @@ hand-written copies.
 
 ### The catalogue and the two tiers
 
-**40 declared surfaces**, printed whole. A row says what this build CAN keep
+**45 declared surfaces**, printed whole. A row says what this build CAN keep
 at that location, never that this machine has it; presence is the measured
 half. They are grouped by what losing one costs, which is the first thing a
 migration needs:
@@ -1303,7 +1319,7 @@ The tier is a RECOVERY story, not a location: `Brain/.state/anticipatory/`
 sits inside the Markdown tree and is `derived` because deleting it costs one
 recomputation, and the search index sits outside it and is `derived` for the
 same reason. Whether a surface can hold memory CONTENT is a separate axis,
-reported per row and counted in the summary line - 15 of the 40 can.
+reported per row and counted in the summary line - 17 of the 45 can.
 
 Only two overrides move anything: `OPEN_SECOND_BRAIN_SEARCH_DB` /
 `search_db_path` relocate the search store and everything that follows it,

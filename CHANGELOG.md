@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.61.0] - 2026-09-28
+
+MCP server start-up off the Brain upgrade path, fair ingest locks, the Claude Code MCP manifest inside `plugin.json`, and an inbox archive (issues #216, #198, #196, #195).
+
+### Fixed
+
+- **The full MCP server answers `initialize` without waiting for a Brain upgrade (#216).** After a plugin update, `ensureVaultCurrent` planned and applied a pending `_brain.yaml` / `_BRAIN.md` upgrade, snapshot included, synchronously inside `o2b mcp` and the `SessionStart` hook, before the server read its first request; on a large vault that took 7 to 35 s and could miss the host's 30 s connect timeout. The upgrade now runs in a detached `o2b brain upgrade --self-heal` worker behind a per-vault lock (`.open-second-brain/self-heal-upgrade.lock`, handed to the worker and held until it exits). Measured on a vault with a 315 MB `Brain/` tar: a full `initialize` took 823 to 1037 ms and hit ENOBUFS on every start before, and 223 to 259 ms once the worker had applied the upgrade.
+- **Brain snapshots stream through files instead of a 256 MB buffer (#216).** tar writes a staging file that the compressor reads, the in-process gzip fallback compresses in bounded chunks (a multi-member gzip file every reader accepts), and the zstd restore path decompresses to a staging file, so a `Brain/` tree of any size no longer fails with `ENOBUFS`.
+- **A snapshot archive appears under its final name only once it is complete.** Both compressors write a partial file in `.snapshots/`, and the archive is published by an exclusive hard link (a checked rename where the filesystem has no hard links); the manifest is written after it. A process killed during compression, or a failed compressor, no longer leaves a truncated `<run_id>.tar.zst` without a manifest that listing, retention and rollback would treat as a recovery point.
+- **One vault directory keeps one `vault_name` spelling (#216).** On a case-insensitive filesystem two spellings of the same vault path rendered two different `_BRAIN.md` files, so each runtime saw the other's manual as a pending upgrade. A `vault_name` that differs only by case and names the same directory (same device and inode) is kept.
+- **Contended ingest locks are handed over to their waiters (#198).** A writer that released a sync lock and came straight back for it could win every draw while a waiter slept, so a healthy four-process ingest race was refused on the Windows runner. Waiters now mark the held lock, a holder that releases a marked lock steps back before re-acquiring, and a long-waiting waiter polls more often; the exclusive create still grants the lock and an expired budget is still a named `ELOCKED`. At the Windows runner's pace (emulated on Linux) the race's longest wait fell from 5017 ms with 4 refusals to 753 ms with none, and the race tests no longer retry refused writes.
+- **Starting Claude Code in a checkout of this repository no longer shows two failed MCP servers (#196).** The plugin's servers are declared inline in `.claude-plugin/plugin.json` (`mcpServers`, same commands and arguments, `alwaysLoad` on the writer server), and the repository-root `.mcp.json`, which Claude Code also loaded as a project config with an empty `CLAUDE_PLUGIN_ROOT`, is removed.
+- **Session capture stays well under the hook timeout on a large inbox on a slow mount (#195).** The signal dedup index is revalidated against a machine-local cache (per directory: listing digest, count and mtime; per file: size and mtime; git's racy-clean window), so a sync tool that replaces a file under the same name is still re-read, and its async callers stat and read in parallel. With 4000 signals on WSL `/mnt/c` the index took 16 s before, 1.9 s cold and 0.17 s warm now; an inline session capture fell from 17 s to 2.9 s.
+- **The session-capture process ceiling reaches the dedup walk (#195).** The hook hands the walk a cooperative deadline equal to its ceiling, checked between files, so a synchronous walk stops before the host timeout instead of running past it.
+
+### Added
+
+- **Inbox archive (#195).** Every dream pass moves inbox signals older than `dream.contradiction_window_days` that it did not consume into `Brain/inbox/archived/`, byte for byte (`archived_signals` in the summary and the `dream` log event, previewed by `--dry-run`, idempotent, never deleted). Such a signal can no longer count toward a candidate, so promotion outcomes inside the window are unchanged. Archived signals stay readable by query, backlinks, sources, expiration, forget and the doctor record checks, a preference evidenced by one keeps its sign, and the dedup index covers them so a re-imported session does not re-create one. `dream.archive_stale_signals: false` keeps the previous behaviour.
+- **`o2b brain doctor` reports `inbox-archivable` (#195)** while inbox signals older than the window wait for a dream pass, with the inbox size, the archivable count and `o2b brain dream` as the next step.
+- **Failed automatic upgrades are visible and back off (#216).** A failed attempt is recorded per device in `.open-second-brain/self-heal-upgrade.json` and on the `self_heal_upgrade` metrics surface; `o2b doctor` gains a `self_heal_upgrade` check, `o2b brain status` a `self-heal-upgrade-failed` problem, and `o2b brain upgrade --dry-run` / `--check` print the last failure (JSON `self_heal_failure`). The next automatic attempt waits one hour, doubling per consecutive failure up to 24 hours; `o2b brain upgrade --apply --yes` ignores the cooldown and clears the record.
+- **Environment variables** `OPEN_SECOND_BRAIN_LOCK_WAIT_MS` (the ingest lock wait, default 5000 ms; the interactive wait is unchanged), `OPEN_SECOND_BRAIN_DEDUP_CACHE_DIR` (where the dedup index cache lives) and `OPEN_SECOND_BRAIN_DEDUP_CACHE=0` (turns the cache off), listed together in `docs/cli-reference.md`. The dedup index cache is listed in the data-ownership statement.
+
+### Changed
+
+- **A refused ingest write says what to do next (#198):** how long it waited, then retry the ingest, run the parallel ingests one at a time, or raise `OPEN_SECOND_BRAIN_LOCK_WAIT_MS`.
+- **Docs:** `docs/how-it-works.md`, `docs/architecture.md`, `docs/observability.md`, `docs/updating.md`, `docs/metrics.md`, `docs/mcp.md`, `docs/cli-reference.md` and `README.md` describe the start-up worker, streaming and atomic snapshots, the inbox archive, the dedup index cache and the inline MCP manifest; the state-surface counts in `docs/cli-reference.md` are current (45 surfaces, 17 memory-bearing).
+
 ## [1.60.0] - 2026-09-27
 
 Optional decision-model support, second part: every remaining use, more routes, threshold profiles and a setup skill (issue #213, Parts 3 to 10).
@@ -7783,6 +7810,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.61.0]: https://github.com/itechmeat/open-second-brain/compare/v1.60.0...v1.61.0
 [1.60.0]: https://github.com/itechmeat/open-second-brain/compare/v1.59.0...v1.60.0
 [1.59.0]: https://github.com/itechmeat/open-second-brain/compare/v1.58.2...v1.59.0
 [1.58.2]: https://github.com/itechmeat/open-second-brain/compare/v1.58.1...v1.58.2
