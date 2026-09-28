@@ -54,6 +54,8 @@
 
 import {
   closeSync,
+  constants as fsConstants,
+  fstatSync,
   lstatSync,
   mkdirSync,
   openSync,
@@ -182,9 +184,10 @@ export function acquireLockSync(target: string): LockHandle {
   // purely diagnostic - the doctor surface reads them when reporting
   // stale locks. Failure to write is non-fatal: the lock semantics
   // come from the exclusive create, not from the body.
+  let stampBytes = 0;
   try {
     const stamp = Buffer.from(`${process.pid}\n${new Date().toISOString()}\n`, "utf8");
-    writeSync(fd, stamp, 0, stamp.byteLength);
+    stampBytes = writeSync(fd, stamp, 0, stamp.byteLength);
   } catch {
     // ignore; diagnostic-only payload
   } finally {
@@ -203,11 +206,21 @@ export function acquireLockSync(target: string): LockHandle {
       if (released) return;
       released = true;
       heldLocks.delete(lockPath);
+      // Anything past our own stamp was appended by a waiter (see
+      // `markWaiting`): someone is queued for this lock, so a re-acquire from
+      // this process steps back first. Best-effort, like the stamp itself.
+      let waitedOn = false;
+      try {
+        waitedOn = lstatSync(lockPath).size > stampBytes;
+      } catch {
+        // gone already; nobody to hand over to
+      }
       try {
         unlinkSync(lockPath);
       } catch {
         // already gone (race with exit hook or manual cleanup); ignore
       }
+      if (waitedOn) contendedReleases.set(lockPath, Date.now());
     },
   };
 }
@@ -246,9 +259,35 @@ export function acquireLockSync(target: string): LockHandle {
  * 400-entry manifest (100 acquisitions), the WAIT distribution is
  * `p50 = 0 ms, p90 = 1 ms, p99 = 732 ms, max = 732 ms`: almost every
  * acquisition is uncontended, and the tail is set by queueing, not by one
- * hold. The tail is long because nothing here is fair - a writer in a loop
- * re-acquires with no backoff at all while every waiter is mid-sleep, so a
- * waiter can lose many draws in a row.
+ * hold. The tail was long because nothing here was fair - a writer in a loop
+ * re-acquired with no backoff at all while every waiter was mid-sleep, so a
+ * waiter could lose many draws in a row. On a host whose hold is slower (the
+ * Windows runner, about 80 ms per checkpoint write) that same unfairness
+ * spent the whole budget: the checkpoint race was refused there, and a local
+ * replay with an 80 ms hold refused 2 of 300 writes at 5 000 ms.
+ *
+ * ## The hand-over, and what it measured
+ *
+ * A waiter now marks the held lock file ({@link markWaiting}); a holder that
+ * releases a marked lock and comes straight back for it steps back for longer
+ * than any waiter sleeps, and a waiter that has already waited a while polls
+ * on a shorter ceiling. The four-process checkpoint race, 100 acquisitions
+ * per run, before and after:
+ *
+ * | host | before p50 / p99 / max | after p50 / p99 / max |
+ * |---|---|---|
+ * | Linux, 8 ms hold | 0 / 395 / 604 ms | 62 / 155 / 185 ms |
+ * | Linux, 80 ms hold | 0 / 4 582 / 5 012 ms, 2 refused | 247 / 508 / 753 ms |
+ * | Linux, 210 ms hold | 1 / 5 016 / 5 017 ms, 4 refused | 427 / 1 905 / 2 124 ms |
+ * | WSL on an NTFS drive, 26 ms hold | 9 / 654 / 881 ms | 97 / 313 / 328 ms |
+ *
+ * The median rises because a waiter now actually waits its turn instead of
+ * the looping writer taking every draw; the tail, which is what the budget
+ * has to cover, falls to a few holds. The cost is idle time at each
+ * hand-over (until the next waiter wakes, at most one sleep ceiling), paid
+ * only when someone is waiting. The default stays at five seconds: after the
+ * hand-over it is more than six times the longest wait at the Windows pace.
+ * A slower host moves it with {@link LOCK_WAIT_BUDGET_ENV}.
  *
  * That tail is why the budget cannot simply be made small: at 1 000 ms the
  * branch's own designed-contention test (`updateManifest - concurrent
@@ -264,6 +303,39 @@ export function acquireLockSync(target: string): LockHandle {
  * {@link LOCK_WAIT_INTERACTIVE_MS} for the callers that refuse to pay it.
  */
 export const LOCK_WAIT_BUDGET_MS = 5_000;
+
+/**
+ * The environment variable that moves {@link LOCK_WAIT_BUDGET_MS} for every
+ * caller that does not pass its own budget - the ingest writers, the session
+ * ledger, the payload store. A host where one critical section is slow (an
+ * antivirus scanning every write, a network or synced folder) can give
+ * parallel ingest a longer wait without a rebuild. It never touches
+ * {@link LOCK_WAIT_INTERACTIVE_MS}: a caller that chose to refuse rather
+ * than freeze keeps that choice.
+ */
+export const LOCK_WAIT_BUDGET_ENV = "OPEN_SECOND_BRAIN_LOCK_WAIT_MS";
+
+/**
+ * The default wait budget this process uses, in milliseconds.
+ *
+ * A value that is not a non-negative integer THROWS rather than falling
+ * back to the default, in the same discipline as `O2B_MCP_DRAIN_MS`: an
+ * operator who set the variable did so to change the wait, and quietly
+ * waiting five seconds because they typed `20s` would hide that.
+ */
+export function resolveLockWaitBudgetMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env[LOCK_WAIT_BUDGET_ENV];
+  if (raw === undefined || raw.trim() === "") return LOCK_WAIT_BUDGET_MS;
+  const text = raw.trim();
+  const parsed = /^\d+$/.test(text) ? Number(text) : Number.NaN;
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(
+      `${LOCK_WAIT_BUDGET_ENV}=${raw} is not a lock wait; set it to a whole number of ` +
+        `milliseconds >= 0 (the default is ${LOCK_WAIT_BUDGET_MS}), or unset it`,
+    );
+  }
+  return parsed;
+}
 
 /**
  * The budget for a caller whose contention is RARE and whose freeze is
@@ -287,6 +359,114 @@ export const LOCK_WAIT_INTERACTIVE_MS = 1_000;
 const RETRY_SLEEP_CEILING_MS = 25;
 
 /**
+ * Lock paths this process released while another process was waiting on
+ * them, with the release time. Read (and cleared) by the next
+ * {@link acquireLockSyncWithRetry} of the same path.
+ */
+const contendedReleases = new Map<string, number>();
+
+/**
+ * How long after a contended release a re-acquire still counts as "coming
+ * straight back". A waiter sleeps at most {@link RETRY_SLEEP_CEILING_MS}
+ * between draws, so past a few ceilings every waiter has had its turn and
+ * stepping back would only slow the returning writer down.
+ */
+const HANDOFF_WINDOW_MS = RETRY_SLEEP_CEILING_MS * 4;
+
+/**
+ * The pause a returning writer takes before it re-acquires a lock it just
+ * released while someone waited: always longer than a waiter's longest
+ * sleep, so at least one waiter wakes and draws inside it, and randomised so
+ * two returning writers do not step back in lockstep.
+ */
+function handoffPauseMs(): number {
+  return RETRY_SLEEP_CEILING_MS * 2 + Math.floor(Math.random() * RETRY_SLEEP_CEILING_MS);
+}
+
+/**
+ * How long an aged waiter's ceiling is. After a hand-over the lock goes to
+ * whichever waiter draws first, so a waiter that has already waited through
+ * several hand-overs polls on a shorter ceiling and wins the next one more
+ * often: an approximation of first come, first served without a queue file
+ * a crash could strand.
+ */
+const AGED_WAITER_AFTER_MS = RETRY_SLEEP_CEILING_MS * 10;
+const AGED_WAITER_CEILING_MS = 5;
+
+function waiterSleepMs(waitedMs: number): number {
+  const ceiling =
+    waitedMs >= AGED_WAITER_AFTER_MS ? AGED_WAITER_CEILING_MS : RETRY_SLEEP_CEILING_MS;
+  return 1 + Math.floor(Math.random() * ceiling);
+}
+
+/** Upper bound on the bytes waiters append to one lock file. */
+const WAITER_MARK_LIMIT = 4_096;
+const WAITER_MARK = Buffer.from("w", "utf8");
+/** Read-write, never create, and never follow a symlink where the platform can refuse one. */
+const MARK_OPEN_FLAGS = fsConstants.O_RDWR | (fsConstants.O_NOFOLLOW ?? 0);
+
+/**
+ * Tell the holder of `lockPath` that someone is waiting, by appending one
+ * byte to its lock file. The file is opened WITHOUT create: a lock
+ * released a moment ago must never be re-created by a waiter, which would be
+ * a lock nobody holds. Every failure is ignored - the mark only buys
+ * fairness, and the exclusive create is still what grants the lock.
+ */
+function markWaiting(lockPath: string): void {
+  let fd = -1;
+  try {
+    fd = openSync(lockPath, MARK_OPEN_FLAGS);
+    const stat = fstatSync(fd);
+    // Only a lock file this module could have created: a regular file with
+    // one name. A symlink or hard link planted at the lock path (a synced
+    // vault can carry one) must not turn the mark into a write elsewhere.
+    if (!stat.isFile() || stat.nlink !== 1) return;
+    if (stat.size < WAITER_MARK_LIMIT) {
+      writeSync(fd, WAITER_MARK, 0, WAITER_MARK.byteLength, stat.size);
+    }
+  } catch {
+    // released, delete-pending or unreadable: nothing to mark
+  } finally {
+    if (fd >= 0) {
+      try {
+        closeSync(fd);
+      } catch {
+        // ignore
+      }
+    }
+  }
+}
+
+/** What an expired wait tells the operator to do next, by who set the budget. */
+const REMEDY_EXPLICIT_BUDGET = "retry once the other writer finishes";
+
+function defaultBudgetRemedy(budgetMs: number): string {
+  return (
+    `retry once the other writer finishes, or allow a longer wait with ` +
+    `${LOCK_WAIT_BUDGET_ENV}=<milliseconds> (now ${budgetMs})`
+  );
+}
+
+/**
+ * The next step a refused INGEST write names. Passed by the writers the
+ * parallel ingest fan-out shares (the content manifest, the plan and session
+ * checkpoints, the git record store, the session ledger), where running the
+ * workers one at a time is the other honest answer.
+ */
+export function ingestLockRemedy(budgetMs: number = resolveLockWaitBudgetMs()): string {
+  return (
+    `another process is writing the same file: retry the ingest, run parallel ingests ` +
+    `one at a time, or allow a longer wait with ${LOCK_WAIT_BUDGET_ENV}=<milliseconds> ` +
+    `(now ${budgetMs})`
+  );
+}
+
+export interface LockWaitOptions {
+  /** What the refusal tells the operator to do next, replacing the generic advice. */
+  readonly remedy?: (budgetMs: number) => string;
+}
+
+/**
  * {@link acquireLockSync} with a bounded wait, for the shared files that
  * PARALLEL processes write by design.
  *
@@ -299,9 +479,12 @@ const RETRY_SLEEP_CEILING_MS = 25;
  * overlap into a failed ingest.
  *
  * Waiting is bounded and still loud: only `ELOCKED` is retried, any other
- * error propagates at once, and an expired budget rethrows the last
- * `ELOCKED` (which names the lock file) rather than proceeding unlocked.
- * Nothing is ever silently skipped.
+ * error propagates at once, and an expired budget throws an `ELOCKED`
+ * (`lock busy: <lock file>`, how long it waited, and what to do next; the
+ * last collision rides along as `cause`) rather than proceeding unlocked.
+ * Nothing is ever silently skipped. `budget` omitted means the default,
+ * moved by {@link LOCK_WAIT_BUDGET_ENV}; `options.remedy` replaces the
+ * generic advice with the caller's own (see {@link ingestLockRemedy}).
  *
  * ## The wait is a FREEZE, and that is the cost
  *
@@ -337,8 +520,10 @@ const RETRY_SLEEP_CEILING_MS = 25;
  */
 export function acquireLockSyncWithRetry(
   target: string,
-  budgetMs: number = LOCK_WAIT_BUDGET_MS,
+  budget?: number,
+  options: LockWaitOptions = {},
 ): LockHandle {
+  const budgetMs = budget ?? resolveLockWaitBudgetMs();
   // A budget this loop cannot honour is named rather than quietly
   // reinterpreted, in the same discipline as `requireCap` and the lease's
   // TTL guard. `NaN` is the reason the guard exists: `Date.now() >= NaN` is
@@ -348,14 +533,40 @@ export function acquireLockSyncWithRetry(
   if (!Number.isInteger(budgetMs) || budgetMs < 0) {
     throw new Error(`lock wait budgetMs must be an integer >= 0, got ${budgetMs}`);
   }
-  const deadline = Date.now() + budgetMs;
+  const lockPath = target + LOCK_SUFFIX;
+  const started = Date.now();
+  const deadline = started + budgetMs;
+  // Fairness: a writer in a loop re-creates the lock file microseconds after
+  // it unlinks it, while every waiter is mid-sleep, so without this a waiter
+  // loses draw after draw until its budget runs out on a healthy race. When
+  // this process released the lock while someone waited, it steps back for
+  // longer than any waiter sleeps, so one of them takes the lock first.
+  const releasedAt = contendedReleases.get(lockPath);
+  if (releasedAt !== undefined) {
+    contendedReleases.delete(lockPath);
+    if (started - releasedAt < HANDOFF_WINDOW_MS && budgetMs > 0) {
+      Bun.sleepSync(Math.min(handoffPauseMs(), budgetMs));
+    }
+  }
   for (;;) {
     try {
       return acquireLockSync(target);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ELOCKED") throw err;
-      if (Date.now() >= deadline) throw err;
-      Bun.sleepSync(1 + Math.floor(Math.random() * RETRY_SLEEP_CEILING_MS));
+      if (Date.now() >= deadline) {
+        const remedy =
+          options.remedy?.(budgetMs) ??
+          (budget === undefined ? defaultBudgetRemedy(budgetMs) : REMEDY_EXPLICIT_BUDGET);
+        const refused: NodeJS.ErrnoException = new Error(
+          `lock busy: ${lockPath}: still held after waiting ${Date.now() - started} ms; ${remedy}`,
+          { cause: err },
+        );
+        refused.code = "ELOCKED";
+        refused.path = lockPath;
+        throw refused;
+      }
+      markWaiting(lockPath);
+      Bun.sleepSync(waiterSleepMs(Date.now() - started));
     }
   }
 }

@@ -27,7 +27,7 @@ import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { isFullSha } from "./reader.ts";
-import { acquireLockSyncWithRetry } from "../sync-lockfile.ts";
+import { acquireLockSyncWithRetry, ingestLockRemedy } from "../sync-lockfile.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 export interface GitCommitRecord {
@@ -190,7 +190,9 @@ export function appendGitRecords(
 ): AppendGitRecordsResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
-  const handle = acquireLockSyncWithRetry(commitsPath(vault, repoKey));
+  const handle = acquireLockSyncWithRetry(commitsPath(vault, repoKey), undefined, {
+    remedy: ingestLockRemedy,
+  });
   try {
     return appendGitRecordsLocked(vault, repoKey, records);
   } finally {

@@ -30,7 +30,7 @@ import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { DERIVED_STORE_DIR } from "./path-constants.ts";
-import { acquireLockSyncWithRetry, type LockHandle } from "./sync-lockfile.ts";
+import { acquireLockSyncWithRetry, ingestLockRemedy, type LockHandle } from "./sync-lockfile.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 /**
@@ -142,7 +142,9 @@ export function removeCheckpointFile(vault: string, path: string): boolean {
  * done work silently turned back into pending work on the next resume.
  */
 export function withCheckpointLock<T>(path: string, fn: () => T): T {
-  const handle: LockHandle = acquireLockSyncWithRetry(path);
+  const handle: LockHandle = acquireLockSyncWithRetry(path, undefined, {
+    remedy: ingestLockRemedy,
+  });
   try {
     return fn();
   } finally {

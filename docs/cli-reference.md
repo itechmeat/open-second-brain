@@ -644,6 +644,20 @@ under `--json`; `line` is 0 for a warning about no single pattern line,
 which covers both a `--src-subpath` warning and an ignore file that could
 not be read.
 
+Parallel ingest workers share the content manifest, the plan checkpoint,
+the session ledger and the git record store, and each write to one of them
+waits for a file lock. The wait is 5 000 ms by default; set
+`OPEN_SECOND_BRAIN_LOCK_WAIT_MS` (a whole number of milliseconds, `0` means
+one attempt) to give a slow host (antivirus scanning, network or synced
+folders) a longer one. A value that is not a whole number is an error, not
+the default. The variable does not change the one-second wait of
+interactive commands such as the architect run. Waiters take turns: a
+writer that releases a lock someone is waiting on hands it over before it
+takes it again. A write that still cannot get the lock is refused with
+`ELOCKED` and `lock busy: <lock file>`, writes nothing, and says what to do
+next: retry the ingest, run the parallel ingests one at a time, or raise
+the wait.
+
 ### Trusted recall and memory write surface (since v1.35.0)
 
 ```text

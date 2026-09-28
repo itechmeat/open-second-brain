@@ -34,7 +34,7 @@ import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { canonicalNotePath } from "../../path-safety.ts";
-import { acquireLockSyncWithRetry } from "../sync-lockfile.ts";
+import { acquireLockSyncWithRetry, ingestLockRemedy } from "../sync-lockfile.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 /** Only schema version currently understood. Unknown versions are refused. */
@@ -234,7 +234,9 @@ export function classifyPaths(
  * overlap is the designed case rather than a rare one.
  */
 export function updateManifest(vault: string, paths: readonly string[]): boolean {
-  const handle = acquireLockSyncWithRetry(manifestPath(vault));
+  const handle = acquireLockSyncWithRetry(manifestPath(vault), undefined, {
+    remedy: ingestLockRemedy,
+  });
   try {
     const entries: Record<string, string> = { ...readManifest(vault).entries };
     for (const path of paths) {

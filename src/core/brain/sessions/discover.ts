@@ -67,7 +67,7 @@ import { hashFile } from "../ingest/content-manifest.ts";
 import { DERIVED_STORE_DIR } from "../path-constants.ts";
 import { progressCounter, type ProgressSink } from "../progress.ts";
 import { OPERATION, type Safeguard } from "../safeguard.ts";
-import { acquireLockSyncWithRetry } from "../sync-lockfile.ts";
+import { acquireLockSyncWithRetry, ingestLockRemedy } from "../sync-lockfile.ts";
 import { isoSecond } from "../time.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
@@ -267,7 +267,7 @@ export function recordSessionImports(
 ): boolean {
   assertVaultIdentityForWrite(vault);
   const path = sessionLedgerPath(vault);
-  const handle = acquireLockSyncWithRetry(path);
+  const handle = acquireLockSyncWithRetry(path, undefined, { remedy: ingestLockRemedy });
   try {
     const entries: Record<string, SessionLedgerEntry> = { ...readSessionLedger(vault).entries };
     const stamp = isoSecond(now);

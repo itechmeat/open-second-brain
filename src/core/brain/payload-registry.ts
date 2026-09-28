@@ -44,7 +44,7 @@ import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { sha256Hex } from "../integrity/digest.ts";
 import { redactRawOutput, stripPrivateRegions } from "../redactor.ts";
 import { payloadPath, payloadsDir } from "./paths.ts";
-import { acquireLockSyncWithRetry, LOCK_WAIT_BUDGET_MS } from "./sync-lockfile.ts";
+import { acquireLockSyncWithRetry } from "./sync-lockfile.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 export interface PayloadRegistryOptions {
@@ -279,13 +279,10 @@ export const PAYLOAD_GC_GRACE_MS = 10 * 60 * 1000;
  * row naming it is appended, and the gc holds it while it re-plans and
  * removes, so a removal can never land between the two halves of an
  * import. `budgetMs` is how long to wait for a holder (see
- * `sync-lockfile.ts`); the operator-run gc passes the interactive budget.
+ * `sync-lockfile.ts`; omitted, the default budget and its environment
+ * override apply); the operator-run gc passes the interactive budget.
  */
-export function withPayloadStoreLock<T>(
-  vault: string,
-  fn: () => T,
-  budgetMs: number = LOCK_WAIT_BUDGET_MS,
-): T {
+export function withPayloadStoreLock<T>(vault: string, fn: () => T, budgetMs?: number): T {
   const handle = acquireLockSyncWithRetry(payloadsDir(vault), budgetMs);
   try {
     return fn();
