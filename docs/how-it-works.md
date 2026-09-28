@@ -297,17 +297,25 @@ Key rules baked into the pipeline:
   toward nothing, and never will again, so a signal the run did not
   consume and that is older than the window moves byte for byte to
   `Brain/inbox/archived/` (`archived_signals` in the summary and the log
-  event; `--dry-run` previews it). Only an unparseable `created_at` keeps a
-  stale signal in the inbox; a past `expiration_date` does not archive a
-  signal still inside the window, because the pass still counts it.
+  event; `--dry-run` previews it). A stale file stays in the inbox only
+  when it is tombstoned, does not parse as a signal (including an
+  unparseable `created_at`), or its name is already taken in `archived/`
+  (a warning names it); a past `expiration_date` does not archive a
+  signal still inside the window, because the pass still counts it. The
+  rule runs against the earlier of `--now` and the real time, so a pass
+  with a future `--now` archives nothing still inside the window today. A
+  staged bundle does not treat newly archivable signals as drift.
   Archived signals stay readable: the pass reads them as history (a
   preference evidenced by one keeps its sign), and query, backlinks,
-  sources, expiration, forget and the doctor record checks include them.
+  sources, expiration, forget, the claim graph and the doctor record
+  checks include them.
   They also stay in the capture dedup index, so re-importing an old
   session does not re-create them. `dream.archive_stale_signals: false`
   keeps them in the inbox; raising `contradiction_window_days` later does
   not bring archived signals back, move them by hand if that is wanted.
-  `o2b brain doctor` reports `inbox-archivable` while a pass is due.
+  `o2b brain doctor` reports `inbox-archivable` while a pass is due,
+  counting the signals the pass selects for the archive (a `--dry-run`
+  archives the same set less any signal it consumes instead).
 - **Intent review is audit data.** Each run computes `intent_reviews`
   before mutation so operators can see topics that are ready, weak, or
   conflicted. The review is exposed by `dream`, `brain_review_candidates`,

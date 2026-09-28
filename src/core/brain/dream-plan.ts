@@ -143,6 +143,13 @@ export interface ScanResult {
   readonly preferences: PreferenceRecord[];
   readonly retired: RetiredRecord[];
   readonly corrupted: CorruptedEntry[];
+  /**
+   * Every entry name in `inbox/archived/`, parseable or not. The archive
+   * step checks a move's destination name against this listing rather than
+   * against the parsed records, so a tombstoned or corrupt file there still
+   * takes its name. Absent on a scan built by hand.
+   */
+  readonly archivedNames?: ReadonlySet<string>;
 }
 
 /**

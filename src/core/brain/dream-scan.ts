@@ -110,10 +110,10 @@ function collectSignals(
 ): void {
   for (const full of files) {
     walk.step();
-    // Belief lifecycle suite (t_7d5a3589): a tombstoned signal is
-    // excluded from the dream pass so it is never re-clustered.
-    if (isTombstoned(parseFrontmatter(full)[0])) continue;
     try {
+      // Belief lifecycle suite (t_7d5a3589): a tombstoned signal is
+      // excluded from the dream pass so it is never re-clustered.
+      if (isTombstoned(parseFrontmatter(full)[0])) continue;
       signals.push({
         path: full,
         signal: parseSignal(full),
@@ -262,5 +262,34 @@ function scanBrainRun(
     collect();
   }
 
-  return { signals, preferences, retired, corrupted };
+  return { signals, preferences, retired, corrupted, archivedNames: entryNamesIn(dirs.archived) };
+}
+
+/** Every entry name directly inside `dir`, or none when it does not exist. */
+function entryNamesIn(dir: string): ReadonlySet<string> {
+  if (!existsSync(dir)) return new Set();
+  return new Set(readdirSync(dir));
+}
+
+/** What the archive rule needs from the inbox, read the way the pass reads it. */
+export interface InboxArchiveScan {
+  /** Markdown files directly in `inbox/`, the files the pass walks. */
+  readonly inboxFiles: number;
+  /** Active inbox signal records: tombstoned and unparseable files left out. */
+  readonly signals: ReadonlyArray<SignalRecord>;
+  /** Every entry name in `inbox/archived/`. */
+  readonly archivedNames: ReadonlySet<string>;
+}
+
+/**
+ * The inbox half of {@link scanBrain}, for the `inbox-archivable` doctor
+ * check: the same walk and the same per-file skips, so the check selects
+ * from exactly the records the pass would.
+ */
+export function scanInboxForArchive(vault: string): InboxArchiveScan {
+  const dirs = brainDirs(vault);
+  const inbox = markdownFilesIn(dirs.inbox);
+  const signals: SignalRecord[] = [];
+  collectSignals(inbox, true, signals, [], { step: () => {} });
+  return { inboxFiles: inbox.length, signals, archivedNames: entryNamesIn(dirs.archived) };
 }

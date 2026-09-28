@@ -49,7 +49,14 @@ export const CLAIM_GRAPH_MAX_NODES = 5000;
 export const CLAIM_GRAPH_VERSION = 1;
 
 /** Brain memory subdirectories the projection scans (relative to `Brain/`). */
-const SCANNED_SUBDIRS = ["preferences", "retired", "inbox", "inbox/processed", "theses"] as const;
+const SCANNED_SUBDIRS = [
+  "preferences",
+  "retired",
+  "inbox",
+  "inbox/processed",
+  "inbox/archived",
+  "theses",
+] as const;
 
 // ----- Errors ---------------------------------------------------------------
 

@@ -13,17 +13,19 @@
  * the archive is switched off (`dream.archive_stale_signals: false`), and
  * when `_brain.yaml` could not be loaded (the config check reports that).
  *
- * The rule is the one the pass applies, imported rather than restated, so
- * the count here is exactly what `o2b brain dream --dry-run` would archive
- * less the signals that pass consumes instead.
+ * The selection is the pass's own (`selectArchivableSignals` over the
+ * records `scanInboxForArchive` reads the way the scan does), so the count
+ * here is exactly what `o2b brain dream --dry-run` would archive less the
+ * signals that pass consumes instead. Tombstoned and unparseable inbox files
+ * and signals whose archive name is taken are never archived, so they are
+ * never counted either, and the warning clears once a pass has run. A file
+ * that cannot be read or parsed is skipped on its own; it does not take the
+ * check down with it.
  */
 
-import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
-
-import { parseFrontmatter } from "../../vault.ts";
 import { brainDirs } from "../paths.ts";
-import { archiveEnabled, isOutsideWindow } from "../signal-archive.ts";
+import { scanInboxForArchive } from "../dream-scan.ts";
+import { archiveEnabled, selectArchivableSignals } from "../signal-archive.ts";
 import type { DoctorIssue } from "../types.ts";
 import type { DoctorCheck, DoctorCheckContext, DoctorFindings } from "./check.ts";
 
@@ -35,24 +37,20 @@ export const inboxArchivableCheck: DoctorCheck = {
   run(ctx: DoctorCheckContext, out: DoctorFindings): void {
     const cfg = ctx.config;
     if (cfg === undefined || !archiveEnabled(cfg)) return;
-    const inbox = brainDirs(ctx.vault).inbox;
-    if (!existsSync(inbox)) return;
     const windowDays = cfg.dream.contradiction_window_days;
-    let total = 0;
-    let archivable = 0;
-    for (const name of readdirSync(inbox)) {
-      if (!name.startsWith("sig-") || !name.endsWith(".md")) continue;
-      total++;
-      const createdAt = parseFrontmatter(join(inbox, name))[0]["created_at"];
-      if (typeof createdAt === "string" && isOutsideWindow(createdAt, windowDays, ctx.now)) {
-        archivable++;
-      }
-    }
+    const scan = scanInboxForArchive(ctx.vault);
+    const archivable = selectArchivableSignals(
+      scan.signals,
+      scan.archivedNames,
+      windowDays,
+      ctx.now,
+    ).archivable.length;
     if (archivable === 0) return;
+    const total = scan.inboxFiles;
     out.issues.push({
       severity: "warning",
       code: INBOX_ARCHIVABLE_CODE,
-      path: inbox,
+      path: brainDirs(ctx.vault).inbox,
       message:
         `Brain/inbox/ holds ${total} signal(s); ${archivable} of them are older than ` +
         `dream.contradiction_window_days (${windowDays}) and can no longer become candidates. ` +

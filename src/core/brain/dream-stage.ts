@@ -67,9 +67,9 @@ export interface DreamStagePlan {
   readonly contradictions: ReadonlyArray<string>;
   readonly moved_to_processed: ReadonlyArray<string>;
   /**
-   * Inbox signals the pass would archive (issue #195). Absent when empty,
-   * so a bundle staged before the archive existed still validates against
-   * a vault with nothing to archive.
+   * Inbox signals the pass would archive (issue #195). Absent when empty.
+   * Shown in the report but left out of the drift comparison: the set
+   * grows with the clock alone (see `HOUSEKEEPING_PLAN_KEYS`).
    */
   readonly archived_signals?: ReadonlyArray<string>;
   readonly suppressed: ReadonlyArray<string>;
@@ -398,6 +398,49 @@ function readManifest(dir: string): Record<string, unknown> | null {
 }
 
 /**
+ * Plan keys the drift comparison leaves out. `archived_signals` is
+ * housekeeping driven by the clock rather than a decision a reviewer
+ * approves: a signal staged inside the contradiction window can cross its
+ * edge before the bundle is applied, and it can no longer count toward any
+ * candidate either way (see `signal-archive.ts`). Comparing it would refuse
+ * every bundle staged a day before such a crossing.
+ */
+const HOUSEKEEPING_PLAN_KEYS: ReadonlySet<string> = new Set(["archived_signals"]);
+
+/**
+ * Every difference between a staged and a recomputed plan, over the keys of
+ * BOTH plans: a key only the staged plan carries is drift as much as one only
+ * the recomputed plan carries. Housekeeping keys are skipped, and so is a
+ * `changed` flip from false to true that the archive step alone explains
+ * (the recomputed plan archives something and nothing else differs).
+ */
+function planDrift(staged: DreamStagePlan, recomputed: DreamStagePlan): string[] {
+  const stagedMap = staged as unknown as Readonly<Record<string, unknown>>;
+  const recomputedMap = recomputed as unknown as Readonly<Record<string, unknown>>;
+  const keys = [...new Set([...Object.keys(recomputedMap), ...Object.keys(stagedMap)])];
+  const drift: string[] = [];
+  let changedDrift: string | null = null;
+  for (const key of keys) {
+    if (HOUSEKEEPING_PLAN_KEYS.has(key)) continue;
+    const before = JSON.stringify(stagedMap[key] ?? null);
+    const after = JSON.stringify(recomputedMap[key] ?? null);
+    if (before === after) continue;
+    const line = `${key}: staged ${before} -> now ${after}`;
+    if (key === "changed") changedDrift = line;
+    else drift.push(line);
+  }
+  if (changedDrift !== null) {
+    const archiveExplains =
+      drift.length === 0 &&
+      staged.changed === false &&
+      recomputed.changed === true &&
+      (recomputed.archived_signals?.length ?? 0) > 0;
+    if (!archiveExplains) drift.unshift(changedDrift);
+  }
+  return drift;
+}
+
+/**
  * Recompute the dry-run plan and compare it to the staged one.
  * `now` should be the clock the eventual apply will run with - the
  * comparison is only meaningful for the run it gates.
@@ -444,13 +487,7 @@ export function validateDreamBundle(
   });
   const recomputed = projectDreamPlan(summary);
 
-  const drift: string[] = [];
-  const keys = Object.keys(recomputed) as Array<keyof DreamStagePlan>;
-  for (const key of keys) {
-    const before = JSON.stringify(staged[key] ?? null);
-    const after = JSON.stringify(recomputed[key]);
-    if (before !== after) drift.push(`${key}: staged ${before} -> now ${after}`);
-  }
+  const drift = planDrift(staged, recomputed);
   return Object.freeze({
     valid: drift.length === 0,
     drift: Object.freeze(drift),
