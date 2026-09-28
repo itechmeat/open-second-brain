@@ -32,6 +32,8 @@ Every use is off by default and stays off unless the operator enables the featur
 - **Rerank kind `decision-model` follow-ups from 1.59.0:** each passage now carries the note `title` and, when declared, its `status` and `updated` values, so an archived copy can be told from the current one; a chunk that holds only frontmatter is not sent and keeps its position; the injection questions are asked only in `enforce`, which saves roughly 15 to 20 percent of input tokens in `shadow`; the query-cache key names the passage shape.
 - A `compatible` provider enforces only once `decision_model_threshold_profile` names its model family; until then its `enforce` uses run as `shadow` (in 1.59.0 every preset enforced with the Jev thresholds).
 - The agent-scope probe covers the new `brain_tension verify` and `brain_labels suggest` calls (233 call recipes).
+- The decision-model state builder also withholds a text slice that starts inside a `<private>` region and continues publicly on the same line (a chunk or sentence boundary inside an inline region), for every use.
+- `llm-emulation` records a cost the route reports, so the daily cost gate counts it without configured prices; `check` warns when neither is available.
 
 ## [1.59.0] - 2026-09-27
 
