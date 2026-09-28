@@ -614,7 +614,10 @@ function renderStatusMarkdown(s: BrainStatusSnapshot): string {
   }
   lines.push("## Counts");
   lines.push("");
-  lines.push(`- inbox: ${s.counts.inbox} (processed: ${s.counts.inbox_processed})`);
+  lines.push(
+    `- inbox: ${s.counts.inbox} (processed: ${s.counts.inbox_processed}, ` +
+      `archived: ${s.counts.inbox_archived})`,
+  );
   lines.push(`- preferences: ${s.counts.preferences}`);
   for (const [status, n] of Object.entries(s.counts.preferences_by_status).toSorted()) {
     lines.push(`  - ${status}: ${n}`);

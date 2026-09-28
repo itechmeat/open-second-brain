@@ -186,6 +186,7 @@ export function collectAllBasenames(vault: string, swept?: SweptPath): ReadonlyS
     dirs.brain,
     dirs.inbox,
     dirs.processed,
+    dirs.archived,
     dirs.preferences,
     dirs.retired,
     dirs.log,

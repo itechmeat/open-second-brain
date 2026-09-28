@@ -102,5 +102,12 @@ export async function cmdBrainInit(argv: string[]): Promise<number> {
  */
 function brainHasNothingRecorded(vault: string): boolean {
   const { counts } = computeBrainStatus(vault);
-  return counts.inbox + counts.inbox_processed + counts.preferences + counts.retired === 0;
+  return (
+    counts.inbox +
+      counts.inbox_processed +
+      counts.inbox_archived +
+      counts.preferences +
+      counts.retired ===
+    0
+  );
 }

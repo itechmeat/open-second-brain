@@ -15,6 +15,8 @@ Open Second Brain records what it did - learning events, recall decisions, serve
 | Bench runs | `<runs-dir>/<run-id>/` (default `.open-second-brain/bench-runs/`, gitignored) | `runMemoryBench()` in `src/core/bench/phases.ts` | `checkpoint.json`, per-question results, `report.json` |
 | Failed automatic upgrade | `.open-second-brain/self-heal-upgrade.json` (per device, not synced with `Brain/`) | `recordSelfHealUpgradeFailure()` in `src/core/maintenance/self-heal-upgrade-state.ts` | one JSON object: `failed_at`, `error`, `consecutive_failures`, `pending`, `retry_after`; read by `o2b doctor` (`self_heal_upgrade`), `o2b brain status` and `o2b brain upgrade --dry-run` |
 | Metrics | `Brain/metrics/<surface>[.<device-id>].jsonl` | `appendMetric()` in `src/core/brain/metrics.ts` | one run-level JSON record per line (see `docs/metrics.md`) |
+| Signal archive | `Brain/inbox/archived/sig-*.md` | the dream pass (`archiveStaleSignals()` in `src/core/brain/dream-apply.ts`, policy in `src/core/brain/signal-archive.ts`) | the inbox signal file, moved byte for byte; the moving run's `dream` log event lists every id under `archived_signals` |
+| Dedup index cache | `$OPEN_SECOND_BRAIN_DEDUP_CACHE_DIR`, else the user cache dir `open-second-brain/dedup-index/<vault-digest>.json` (outside the vault; `OPEN_SECOND_BRAIN_DEDUP_CACHE=0` disables) | `writeDedupIndexCache()` in `src/core/brain/dedup-index-cache.ts` | one JSON file per vault: per directory its listing digest, count and mtime, per signal file its size, mtime, id and `dedup_hash`; derived, safe to delete |
 
 ### The per-device shard rule
 
@@ -36,7 +38,7 @@ The `prompt_prefix` metric surface measures STRUCTURAL prompt-prefix stability (
 
 | Kind | Fires when |
 |---|---|
-| `dream`, `promote`, `retire`, `noted-redundant`, `signal-suppressed`, `skip-corrupted-frontmatter`, `reconcile` | the deterministic learning pass runs |
+| `dream`, `promote`, `retire`, `noted-redundant`, `signal-suppressed`, `skip-corrupted-frontmatter`, `reconcile` | the deterministic learning pass runs. The `dream` event lists signals moved to `inbox/processed/` under `moved_to_processed` and signals moved to `inbox/archived/` (older than `dream.contradiction_window_days`, never consumed) under `archived_signals` |
 | `feedback`, `apply-evidence`, `force-confirmed`, `reject` | a taste signal or evidence event is recorded |
 | `pin`, `unpin`, `rollback`, `merge`, `upgrade` | operator-facing vault maintenance |
 | `freeze`, `unfreeze` | an operator stopped or reopened the content lane for every device that syncs the vault (`o2b brain freeze` / `o2b brain unfreeze`). One event per real transition only - a second freeze, or an unfreeze on an open vault, writes nothing. `freeze` carries the `reason` and the `device_id` it was set from; `unfreeze` carries the `frozen_at`, `by` and `reason` read off the marker before it was removed, which is the only place they survive the file |

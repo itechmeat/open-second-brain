@@ -127,6 +127,8 @@ export interface DreamScanStepResult {
   readonly active_signals: number;
   /** Signals already in `inbox/processed/`. */
   readonly processed_signals: number;
+  /** Signals in `inbox/archived/` (left the contradiction window unconsumed). */
+  readonly archived_signals: number;
   readonly preferences: number;
   readonly retired: number;
   /** Vault-relative paths whose frontmatter would not parse. */
@@ -188,7 +190,8 @@ export function runDreamStep(
         step: DREAM_STEP.scan,
         partial: true,
         active_signals: scan.signals.filter((s) => s.active).length,
-        processed_signals: scan.signals.filter((s) => !s.active).length,
+        processed_signals: scan.signals.filter((s) => !s.active && !s.archived).length,
+        archived_signals: scan.signals.filter((s) => s.archived).length,
         preferences: scan.preferences.length,
         retired: scan.retired.length,
         corrupted: Object.freeze(scan.corrupted.map((c) => vaultRelative(c.path, vault))),

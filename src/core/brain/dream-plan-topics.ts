@@ -65,7 +65,19 @@ export function planTopics(scan: ScanResult, cfg: BrainConfig, now: Date): PlanS
   // signals for the create/rebut decisions; processed signals stay in the
   // global log via `evidenced_by` already.
   const byTopic = new Map<string, TopicGroup>();
+  // Archived signals were inbox signals until a previous pass archived them,
+  // and the sign derivation below treated them as members of the active
+  // group. Kept per key so it still does: archiving must not change which
+  // way a preference points (see `deriveActiveSign`).
+  const archivedByTopic = new Map<string, SignalRecord[]>();
   for (const rec of scan.signals) {
+    if (rec.archived) {
+      const key = topicKey(rec.signal.topic);
+      const arr = archivedByTopic.get(key);
+      if (arr) arr.push(rec);
+      else archivedByTopic.set(key, [rec]);
+      continue;
+    }
     if (!rec.active) continue;
     const raw = rec.signal.topic;
     const key = topicKey(raw);
@@ -104,7 +116,16 @@ export function planTopics(scan: ScanResult, cfg: BrainConfig, now: Date): PlanS
     const sigs = group.sigs;
     const active = prefs.byKey.get(key);
     if (active) {
-      handleSignalsOnActivePref(active, sigs, plan, cfg, now, scan.signals, reservedSlugs);
+      handleSignalsOnActivePref(
+        active,
+        sigs,
+        archivedByTopic.get(key) ?? [],
+        plan,
+        cfg,
+        now,
+        scan.signals,
+        reservedSlugs,
+      );
       continue;
     }
     const candidateSigs = applySignalSuppression(topic, sigs, retiredByTopic.get(key), plan);
@@ -447,13 +468,17 @@ function deriveActiveSign(
 function handleSignalsOnActivePref(
   active: PreferenceRecord,
   sigs: SignalRecord[],
+  archivedOnTopic: ReadonlyArray<SignalRecord>,
   plan: PlanState,
   cfg: BrainConfig,
   now: Date,
   allSignals: ReadonlyArray<SignalRecord>,
   reservedSlugs: Set<string>,
 ): void {
-  const activeSign = deriveActiveSign(active, sigs, allSignals);
+  // The archived signals on this topic join the group for the sign
+  // derivation only: before they were archived they sat in the inbox, and
+  // tiers 2 and 3 below read the group as "the inbox signals on this topic".
+  const activeSign = deriveActiveSign(active, [...sigs, ...archivedOnTopic], allSignals);
   const oppositeSign: BrainSignalSign =
     activeSign === BRAIN_SIGNAL_SIGN.positive
       ? BRAIN_SIGNAL_SIGN.negative

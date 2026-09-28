@@ -74,6 +74,8 @@ import { BRAIN_LOG_EVENT_KIND, BRAIN_PREFERENCE_STATUS } from "./types.ts";
 export interface BrainStatusCounts {
   readonly inbox: number;
   readonly inbox_processed: number;
+  /** Signals in `inbox/archived/` (left the contradiction window unconsumed). */
+  readonly inbox_archived: number;
   readonly preferences: number;
   readonly preferences_by_status: Readonly<Record<string, number>>;
   readonly retired: number;
@@ -149,6 +151,7 @@ export function computeBrainStatus(
       counts: {
         inbox: 0,
         inbox_processed: 0,
+        inbox_archived: 0,
         preferences: 0,
         preferences_by_status: Object.freeze({}),
         retired: 0,
@@ -230,6 +233,7 @@ function countArtifacts(vault: string): BrainStatusCounts {
   const dirs = brainDirs(vault);
   const inbox = countMd(dirs.inbox);
   const inbox_processed = countMd(dirs.processed);
+  const inbox_archived = countMd(dirs.archived);
   const retired = countMd(dirs.retired);
   // Shard-aware: count distinct DAYS, not files (several shards share a day).
   const log_days = listLogDates(vault).length;
@@ -258,6 +262,7 @@ function countArtifacts(vault: string): BrainStatusCounts {
   return {
     inbox,
     inbox_processed,
+    inbox_archived,
     preferences,
     preferences_by_status: Object.freeze(preferences_by_status),
     retired,

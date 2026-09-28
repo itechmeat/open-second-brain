@@ -213,6 +213,7 @@ export function buildBacklinkIndex(vault: string, ownerScope?: string | null): B
   collectPreferences(dirs.retired, "retired", push, fail);
   collectSignals(dirs.inbox, push, fail);
   collectSignals(dirs.processed, push, fail);
+  collectSignals(dirs.archived, push, fail);
   collectLog(vault, dirs.log, push, fail);
 
   // Freeze each entry's array so downstream callers can't mutate the

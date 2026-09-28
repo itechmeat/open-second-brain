@@ -8,6 +8,7 @@
  *     inbox/
  *       sig-<date>-<slug>.md
  *       processed/sig-<date>-<slug>.md
+ *       archived/sig-<date>-<slug>.md
  *     preferences/
  *       pref-<slug>.md
  *     retired/
@@ -33,6 +34,7 @@ import { resolveAppendShardId, shardedFileName } from "./ledger-shards.ts";
 import {
   BRAIN_ARTIFACTS_REL,
   BRAIN_ACTIVE_FILE,
+  BRAIN_ARCHIVED_SIGNALS_REL,
   BRAIN_ATTENTION_REL,
   BRAIN_BASES_REL,
   BRAIN_CAPTURES_PROCESSED_REL,
@@ -130,6 +132,11 @@ export interface BrainDirs {
   readonly inbox: string;
   /** Holding area for signals already folded into a preference. */
   readonly processed: string;
+  /**
+   * Inbox signals that can no longer become candidates (outside the
+   * contradiction window, never consumed). Moved here by dream.
+   */
+  readonly archived: string;
   /** Write-approval staging area for extracted signals awaiting review. */
   readonly pending: string;
   readonly preferences: string;
@@ -154,6 +161,7 @@ export function brainDirs(vault: string): BrainDirs {
     brain,
     inbox: ensureInsideVault(join(vault, BRAIN_INBOX_REL), vault),
     processed: ensureInsideVault(join(vault, BRAIN_PROCESSED_REL), vault),
+    archived: ensureInsideVault(join(vault, BRAIN_ARCHIVED_SIGNALS_REL), vault),
     pending: ensureInsideVault(join(vault, BRAIN_PENDING_REL), vault),
     preferences: ensureInsideVault(join(vault, BRAIN_PREFERENCES_REL), vault),
     retired: ensureInsideVault(join(vault, BRAIN_RETIRED_REL), vault),
@@ -336,6 +344,17 @@ export function signalPath(vault: string, date: string, slug: string): string {
   const d = validateIsoDate(date);
   const s = validateSlug(slug);
   return ensureInsideVault(join(brainDirs(vault).inbox, `sig-${d}-${s}.md`), vault);
+}
+
+/**
+ * Archived-signal path: `Brain/inbox/archived/<basename>`. Takes the file's
+ * own basename rather than an id so the move preserves the name exactly.
+ */
+export function archivedSignalPath(vault: string, basename: string): string {
+  if (!basename.startsWith("sig-") || !basename.endsWith(".md") || /[\\/]/.test(basename)) {
+    throw new Error(`not a signal file name: ${JSON.stringify(basename)}`);
+  }
+  return ensureInsideVault(join(brainDirs(vault).archived, basename), vault);
 }
 
 /** Processed-signal path: `Brain/inbox/processed/sig-<date>-<slug>.md`. */

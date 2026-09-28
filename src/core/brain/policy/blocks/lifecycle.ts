@@ -32,7 +32,19 @@ import { DEFAULT_BRAIN_CONFIG } from "../defaults.ts";
 const RETIRE_OPTIONAL_KEYS = ["confirmed_evidence_min_threshold"] as const;
 
 /** Optional `dream:` sub-key with no default, for the same reason. */
-const DREAM_OPTIONAL_KEYS = ["salience_threshold"] as const;
+const DREAM_OPTIONAL_KEYS = ["salience_threshold", "archive_stale_signals"] as const;
+
+/** A boolean key; anything else is refused rather than coerced. */
+function requireBoolean(field: string, value: unknown, source: string | null): boolean {
+  if (typeof value !== "boolean") {
+    throw new BrainConfigError(
+      `${field} must be true or false; got ${JSON.stringify(value)}`,
+      field,
+      source,
+    );
+  }
+  return value;
+}
 
 /**
  * Merge one lifecycle block onto its slice of {@link DEFAULT_BRAIN_CONFIG}.
@@ -83,6 +95,18 @@ export function parseDreamBlock(ctx: BlockParseContext): BrainDreamConfig {
     // or non-boolean coerces to false so the default install stays
     // byte-identical (the heal phase becomes a checkpoint-only no-op).
     heal_enrich_enabled: dream.heal_enrich_enabled === true,
+    // Inbox archive (issue #195): on unless explicitly `false`. A
+    // non-boolean is refused rather than coerced, so a typo cannot
+    // silently switch the archive off. Absent stays absent.
+    ...(dream.archive_stale_signals !== undefined
+      ? {
+          archive_stale_signals: requireBoolean(
+            "dream.archive_stale_signals",
+            dream.archive_stale_signals,
+            ctx.source,
+          ),
+        }
+      : {}),
     // Absent stays absent: `undefined` is the documented open-gate
     // state `salience-gate.ts` branches on, so spreading the key in
     // unconditionally would change `dream` from omitting it to carrying

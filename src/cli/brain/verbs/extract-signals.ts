@@ -13,6 +13,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { loadDedupIndex } from "../../../core/brain/dedup-hash.ts";
 
 import {
   commitExtractedSignals,
@@ -137,6 +138,9 @@ export async function cmdBrainExtractSignals(argv: string[]): Promise<number> {
     const res = commitExtractedSignals(vault, sessionRef, payload, {
       agent: resolveBrainAgent(flags, config),
       now,
+      // Loaded with parallel I/O here, where the caller can await it; the
+      // commit's own fallback is the synchronous walk.
+      dedup: await loadDedupIndex(vault),
     });
     recordExtractPrefilterCommit(vault, decisionModel, res, now);
     if (asJson) {

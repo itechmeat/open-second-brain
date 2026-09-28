@@ -188,6 +188,13 @@ export const BRAIN_CONFIG_TEMPLATE: ReadonlyArray<BrainTemplateBlock> = Object.f
         "Opt-in heal-phase enrichment. Left off, the heal phase is a",
         "checkpoint-only no-op.",
       ]),
+      example("archive_stale_signals", false, [
+        "Unset by default, which archives: inbox signals older than",
+        "contradiction_window_days that no preference consumed can never",
+        "count toward a candidate again, so dream moves them to",
+        "Brain/inbox/archived/ (never deleted). Set false to keep them in",
+        "the inbox.",
+      ]),
       example("salience_threshold", 0.2, [
         "Unset by default, which leaves the salience gate open: every fact",
         "enters the rollup ladder's fold set. Set a number in [0, 1] to fold",

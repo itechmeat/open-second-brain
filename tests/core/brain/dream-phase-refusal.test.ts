@@ -188,6 +188,7 @@ describe("runDreamStep performs exactly the step requested", () => {
       partial: true,
       active_signals: 3,
       processed_signals: 0,
+      archived_signals: 0,
       preferences: 0,
       retired: 0,
       corrupted: [],

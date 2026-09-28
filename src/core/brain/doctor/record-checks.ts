@@ -28,7 +28,7 @@ export const signalCheck: DoctorCheck = {
   run({ vault, idIndex }, { issues, uncertain }) {
     const dirs = brainDirs(vault);
     const swept = recordSweep("signal", uncertain);
-    for (const dir of [dirs.inbox, dirs.processed]) {
+    for (const dir of [dirs.inbox, dirs.processed, dirs.archived]) {
       forEachBrainFile(dir, "sig-", swept, (path, filename) => {
         try {
           const sig = parseSignal(path);

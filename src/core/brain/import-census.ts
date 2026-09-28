@@ -20,8 +20,10 @@
  * Both lanes read back over the key the lane already keys on:
  *
  *   - sessions: the signal dedup hash ({@link ./dedup-hash.ts}), read back
- *     through the same `buildDedupIndex` walk of `Brain/inbox/` and
- *     `Brain/inbox/processed/` that the import consults before every write.
+ *     through the same `buildDedupIndex` walk of `Brain/inbox/`,
+ *     `Brain/inbox/processed/` and `Brain/inbox/archived/` that the import
+ *     consults before every write (with `fresh: true`, so no cached entry
+ *     answers for a file).
  *     A hash the index cannot find is a signal that is not on disk.
  *   - ingest: the content-hash manifest ({@link ./ingest/content-manifest.ts}),
  *     read back through the same `classifyPaths`. A claimed path counts as
@@ -106,7 +108,7 @@ export function censusSessionSignals(
   claimedHashes: ReadonlyArray<string>,
 ): ImportCensus {
   if (claimedHashes.length === 0) return buildReadBackCensus([], () => true);
-  const index = buildDedupIndex(vault);
+  const index = buildDedupIndex(vault, { fresh: true });
   return buildReadBackCensus(claimedHashes, (hash) => index.has(hash));
 }
 

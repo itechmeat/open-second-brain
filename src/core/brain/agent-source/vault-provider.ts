@@ -29,7 +29,7 @@ export const vaultAgentSourceProvider: AgentSourceProvider = Object.freeze({
 
 function collectVaultContributions(vault: string): ReadonlyArray<AgentSourceContribution> {
   const dirs = brainDirs(vault);
-  const signals = collectSignals(dirs.inbox, dirs.processed);
+  const signals = collectSignals(dirs.inbox, dirs.processed, dirs.archived);
   const signalAgentById = new Map(signals.map((signal) => [signal.id, signal.agent]));
 
   const contributions: AgentSourceContribution[] = [];

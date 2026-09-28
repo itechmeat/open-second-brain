@@ -99,8 +99,13 @@ export function preferenceSlug(id: string): string {
 export interface SignalRecord {
   readonly path: string;
   readonly signal: BrainSignal;
-  /** True iff the file lives in `inbox/` (not `processed/`). */
+  /** True iff the file lives in `inbox/` (not `processed/` or `archived/`). */
   readonly active: boolean;
+  /**
+   * True iff the file lives in `inbox/archived/`: an inbox signal a previous
+   * pass archived because it had left the contradiction window unconsumed.
+   */
+  readonly archived?: true;
 }
 
 export interface PreferenceRecord {
@@ -200,6 +205,18 @@ export interface PlanState {
    * being resolved by directory-enumeration order.
    */
   readonly topicKeyContentions: TopicKeyContention[];
+  /**
+   * Inbox signals this pass archives because they can no longer become
+   * candidates (see `signal-archive.ts`). Keyed by signal id; never
+   * overlaps {@link signalsToMove}.
+   */
+  readonly signalsToArchive: Map<string, SignalArchivePlan>;
+}
+
+export interface SignalArchivePlan {
+  readonly id: string;
+  /** Absolute path of the inbox file. */
+  readonly path: string;
 }
 
 export interface SignalSuppressedPlan {
@@ -283,6 +300,7 @@ export function emptyPlan(): PlanState {
     signalsSuppressed: [],
     quarantined: [],
     topicKeyContentions: [],
+    signalsToArchive: new Map(),
   };
 }
 

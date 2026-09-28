@@ -251,12 +251,13 @@ export function queryByTopic(
   const dirs = brainDirs(vault);
   let signals: BrainSignal[] = [];
 
-  // Collect signals from both inbox/ and inbox/processed/. We do not
-  // recurse — `inbox/processed/` is the only allowed sub-folder of
+  // Collect signals from inbox/, inbox/processed/ and inbox/archived/.
+  // We do not recurse — those two are the only allowed sub-folders of
   // `inbox/` and `readdirSync` with `withFileTypes` lets us pick file
   // vs directory entries deterministically.
   collectSignals(dirs.inbox, want, signals);
   collectSignals(dirs.processed, want, signals);
+  collectSignals(dirs.archived, want, signals);
   signals.sort((a, b) => a.created_at.localeCompare(b.created_at));
   // Expiration filter (C5): drop signals past their expiration_date
   // unless the caller opts into showExpired. The files stay on disk —

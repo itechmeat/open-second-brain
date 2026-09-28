@@ -249,10 +249,18 @@ describe("the dream pass runs behind the gate, not beside it", () => {
     // `dreamOutputRows` is what keeps it a guard rather than a coin
     // flip: `size_bytes` is inside the hashed payload, so without the
     // mask this digest would differ on every run.
+    //
+    // Re-measured a FOURTH time, for the inbox archive (issue #195), and
+    // for two named reasons only: the fixture's signal is 18 days old at
+    // NOW, outside the 14-day contradiction window, so the pass now moves
+    // it to `inbox/archived/` and lists it in the dream event; and the
+    // bootstrapped `_BRAIN.md` names the new directory. Verified before
+    // updating: with `dream.archive_stale_signals: false` and the previous
+    // manual template this branch reproduces the previous literal exactly.
     seedSignal("tidy");
     dream(vault, { now: NOW, agentName: "tester" });
     expect(dreamOutputDigest(join(vault, "Brain"))).toBe(
-      "595e933323e01c1d2d9c15b5c1b8e1bcede298740cf9ef543c8fdc8845048bc0",
+      "cc900f3916b844d2fb04f8156b04a5e0ee6f70115035f790580742e036477f61",
     );
   });
 

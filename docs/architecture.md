@@ -244,6 +244,7 @@ Brain/
   active.md                # derived digest, auto-regenerated
   inbox/                   # raw taste signals, sig-<date>-<slug>.md
     processed/             # signals already folded into a preference
+    archived/              # unconsumed signals older than dream.contradiction_window_days
   preferences/             # active rules: pref-<slug>.md, status unconfirmed | confirmed
   retired/                 # ret-<slug>.md with retired_reason
   log/                     # YYYY-MM-DD.md, append-only event log (dream / apply-evidence / etc.)

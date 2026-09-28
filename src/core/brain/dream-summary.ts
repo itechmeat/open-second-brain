@@ -97,6 +97,8 @@ export interface DreamChangedSummaryInput {
   /** Slugs the evidence gate held back; excluded from `retired`. */
   readonly gatedSlugs: ReadonlySet<string>;
   readonly moved: ReadonlyArray<string>;
+  /** Signal ids archived (or, on a dry run, that would be). */
+  readonly archived: ReadonlyArray<string>;
   readonly healEnriched: number;
   /** Absent on a dry run, which writes no snapshot. */
   readonly snapshotPath: string | undefined;
@@ -118,6 +120,9 @@ export function buildChangedSummary(input: DreamChangedSummaryInput): DreamRunSu
       .map((r) => ({ id: `ret-${r.slug}`, reason: r.reason })),
     contradictions: Array.from(plan.contradictionTopics),
     moved_to_processed: input.moved,
+    // Absent rather than empty, so a run that archived nothing keeps the
+    // summary shape it has always had.
+    ...(input.archived.length > 0 ? { archived_signals: input.archived } : {}),
     suppressed: plan.signalsSuppressed.map((s) =>
       s.signal.replace(/^\[\[/, "").replace(/\]\]$/, ""),
     ),
@@ -161,6 +166,7 @@ function buildPhaseSummaries(input: DreamChangedSummaryInput): ReadonlyArray<Dre
     phaseSummary(DREAM_PHASE.log, {
       moved: input.moved.length,
       suppressed: plan.signalsSuppressed.length,
+      archived: input.archived.length,
     }),
   ]);
 }

@@ -45,7 +45,7 @@ import { readFileSync } from "node:fs";
 import { relative, sep } from "node:path";
 
 import { emitIngestDedupReport, type IngestDedupSourceCount } from "./dedup-telemetry.ts";
-import { buildDedupIndex, computeDedupHash, type DedupIndexEntry } from "./dedup-hash.ts";
+import { computeDedupHash, loadDedupIndex, type DedupIndexEntry } from "./dedup-hash.ts";
 import { discoverMarkersDetailed, isFeedbackMarker } from "./inline.ts";
 import { rewriteMarkers, type RewriteOp } from "./inline-rewrite.ts";
 import { previewCaptureMarker, routeCaptureMarker, ROUTED_MARKER_KINDS } from "./marker-routing.ts";
@@ -148,7 +148,7 @@ export async function scanInline(
   // Build dedup index once per run. Parse failures get surfaced
   // through the per-file errors array so the JSON report exposes
   // them; doctor flags malformed signals separately.
-  const dedupIndex: Map<string, DedupIndexEntry> = buildDedupIndex(vault, {
+  const dedupIndex: Map<string, DedupIndexEntry> = await loadDedupIndex(vault, {
     onError: (path, message) => errors.push({ path, message }),
   });
 

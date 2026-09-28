@@ -28,6 +28,8 @@
  *   - New / updated files in `Brain/preferences/`.
  *   - Moves into `Brain/retired/`.
  *   - Moves from `Brain/inbox/` into `Brain/inbox/processed/`.
+ *   - Moves from `Brain/inbox/` into `Brain/inbox/archived/` for signals
+ *     that left the contradiction window unconsumed (`signal-archive.ts`).
  *   - One appended event in `Brain/log/<today>.md` summarising the
  *     run — **only** if any state actually changed. Idempotent reruns
  *     touch nothing.
@@ -55,6 +57,7 @@ import { regenerateActiveQuiet } from "./active.ts";
 import {
   applyDreamPlan,
   gatedRetireSlugs,
+  plannedSignalArchiveIds,
   plannedSignalMoveIds,
   type DreamApplyResult,
 } from "./dream-apply.ts";
@@ -64,6 +67,7 @@ import type { PlanState } from "./dream-plan.ts";
 import { planRefresh, scanApplyEvidence, type RefreshResult } from "./dream-refresh.ts";
 import { writeDreamLog } from "./dream-report.ts";
 import { scanBrain } from "./dream-scan.ts";
+import { planSignalArchive } from "./signal-archive.ts";
 import { buildChangedSummary, buildNoOpSummary } from "./dream-summary.ts";
 import type { DreamOptions, DreamRunSummary, DreamWarning } from "./dream-types.ts";
 import { openWorkrun, WORKRUN_PHASE, type WorkrunHandle } from "./dream-workrun.ts";
@@ -238,6 +242,11 @@ function dreamRun(
   // one, because a run that decided nothing is exactly the run that must
   // still explain itself.
   warnings.push(...topicKeyContentionWarnings(plan));
+  // Archive step (issue #195): inbox signals the topic plan did not consume
+  // and that have left the contradiction window can never count toward a
+  // candidate again, so they leave the inbox for `inbox/archived/`.
+  // Planned after the topic plan so a consumed signal is never archived.
+  warnings.push(...planSignalArchive(scan, cfg, now, plan));
 
   // 3. Plan refresh: applied / violated / last_evidence / confidence,
   //    and unconfirmed → confirmed promotion. We need the log of all
@@ -336,7 +345,12 @@ function dreamRun(
     // Dry-run still reports the move list so the caller's summary is
     // accurate, but it does not touch disk.
     opts.safeguard?.checkpoint();
-    exec = { moved: plannedSignalMoveIds(plan), gatedRetires: [], healEnriched: 0 };
+    exec = {
+      moved: plannedSignalMoveIds(plan),
+      archived: plannedSignalArchiveIds(plan),
+      gatedRetires: [],
+      healEnriched: 0,
+    };
   } else {
     const baseRunId = runId;
     const gated = withDestructiveSnapshot(
@@ -418,6 +432,7 @@ function dreamRun(
       reconcile,
       rollupPlan,
       moved: exec.moved,
+      archived: exec.archived,
       gatedSlugs,
       isNonPrimary,
       callerAgent,
@@ -470,6 +485,7 @@ function dreamRun(
     gatedRetires: exec.gatedRetires,
     gatedSlugs,
     moved: exec.moved,
+    archived: exec.archived,
     healEnriched: exec.healEnriched,
     snapshotPath: snapshotPathStr,
   });
@@ -505,6 +521,7 @@ function collectWarnings(
  *   - a refreshed pref (counters/confidence/status changed)
  *   - a retire
  *   - a same-sign signal noted on an active pref (move + log)
+ *   - an inbox signal archived because it left the contradiction window
  *   - a corrupted frontmatter (we want the skip event recorded)
  *   - any pinned-rebut-attempt warning
  *   - a fired rollup-ladder rung (S3)
@@ -522,6 +539,7 @@ function hasStateChange(
     plan.retires.length > 0 ||
     plan.notedRedundant.length > 0 ||
     plan.signalsToMove.size > 0 ||
+    plan.signalsToArchive.size > 0 ||
     plan.retainPinned.length > 0 ||
     plan.signalsSuppressed.length > 0 ||
     // v0.10.16: quarantine is a recorded decision (deferred-but-noted),

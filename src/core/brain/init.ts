@@ -208,14 +208,14 @@ export function copyStarterBundle(
     }
     // "Non-empty" means anything the user (or a prior dream pass)
     // could have left here. The only acceptable non-dotfile entry
-    // bootstrap places under a starter target is `inbox/processed/` —
-    // we whitelist that one explicitly so a freshly initialised vault
+    // bootstrap places under a starter target is `inbox/processed/` (and
+    // its sibling `inbox/archived/`) — we whitelist those explicitly so a freshly initialised vault
     // does not trip the guard, but any other subdirectory (e.g. a
     // user-created `preferences/custom/`) counts as content and
     // refuses the starter.
     const hasUserContent = entries.some((e) => {
       if (e.name.startsWith(".")) return false;
-      if (sub === "inbox" && e.isDirectory() && e.name === "processed") {
+      if (sub === "inbox" && e.isDirectory() && (e.name === "processed" || e.name === "archived")) {
         return false;
       }
       return true;

@@ -57,7 +57,7 @@ import { basename, resolve } from "node:path";
 import { delegatedAgentName } from "../../agent-identity.ts";
 import { readSkillOfferId, SKILL_OFFER_ID_KEY } from "../../surface/skill-offer.ts";
 import { checkpointingEnabled } from "../checkpoint-store.ts";
-import { buildDedupIndex, computeDedupHash, type DedupIndexEntry } from "../dedup-hash.ts";
+import { computeDedupHash, loadDedupIndex, type DedupIndexEntry } from "../dedup-hash.ts";
 import { censusSessionSignals, type ImportCensus } from "../import-census.ts";
 import { appendContinuityRecord } from "../continuity/store.ts";
 import { discoverMarkersDetailed, isFeedbackMarker } from "../inline.ts";
@@ -313,7 +313,7 @@ export async function importSession(
   const adapter = await chooseAdapter(path, readHead, opts.format);
   // Reuse the caller-supplied index when present (directory walk lifts
   // the build out of the per-file loop). Otherwise build our own.
-  const dedup = opts.dedupIndex ?? buildDedupIndex(vault);
+  const dedup = opts.dedupIndex ?? (await loadDedupIndex(vault));
 
   const now = opts.now ?? new Date();
   const sinceMs = opts.since ? opts.since.getTime() : undefined;
@@ -825,7 +825,7 @@ export async function importSessionPath(
   // session log is and neither can quietly widen the rule alone.
   const queue = sessionFilesUnder(path);
 
-  const sharedDedup = opts.dedupIndex ?? buildDedupIndex(vault);
+  const sharedDedup = opts.dedupIndex ?? (await loadDedupIndex(vault));
   const perFileOpts: ImportSessionOptions = {
     ...opts,
     dedupIndex: sharedDedup,

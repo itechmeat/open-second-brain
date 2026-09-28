@@ -575,5 +575,7 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
   if (summary.contradictions.length > 0) ok(`contradictions: ${summary.contradictions.join(", ")}`);
   if (summary.moved_to_processed.length > 0)
     ok(`moved_to_processed: ${summary.moved_to_processed.length}`);
+  const archived = summary.archived_signals?.length ?? 0;
+  if (archived > 0) ok(`archived_signals: ${archived}`);
   return 0;
 }

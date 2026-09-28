@@ -40,6 +40,8 @@ export interface DreamReportInput {
   readonly rollupPlan: RollupLadderPlan;
   /** Signal ids that actually reached `processed/`. */
   readonly moved: ReadonlyArray<string>;
+  /** Signal ids moved into `inbox/archived/` by this run. */
+  readonly archived: ReadonlyArray<string>;
   /** Retires the evidence gate declined; excluded from the `retired` row. */
   readonly gatedSlugs: ReadonlySet<string>;
   /** True when the invoking agent differs from the vault's declared primary. */
@@ -208,6 +210,7 @@ function buildSummaryBody(input: DreamReportInput): Record<string, string | Read
   if (confirmedIds.length > 0) body["confirmed"] = confirmedIds;
   if (retiredEntries.length > 0) body["retired"] = retiredEntries;
   if (input.moved.length > 0) body["moved_to_processed"] = input.moved;
+  if (input.archived.length > 0) body["archived_signals"] = input.archived;
   if (plan.contradictionTopics.size > 0) {
     body["contradictions"] = Array.from(plan.contradictionTopics);
   }

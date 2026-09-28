@@ -10,6 +10,7 @@
  */
 
 import { commitExtractedSignals, ExtractSignalsError } from "../../core/brain/extract-signals.ts";
+import { loadDedupIndex } from "../../core/brain/dedup-hash.ts";
 import {
   planExtractSignalsPrefiltered,
   recordExtractPrefilterCommit,
@@ -82,7 +83,8 @@ async function toolBrainExtractSignals(
       ctx.vault,
       session,
       { items: args["items"] },
-      { agent, now },
+      // Loaded with parallel I/O here, where the tool can await it.
+      { agent, now, dedup: await loadDedupIndex(ctx.vault) },
     );
     recordExtractPrefilterCommit(ctx.vault, decisionModel, res, now);
     return {

@@ -8,7 +8,13 @@ import { brainDirsForWrite } from "./paths.ts";
 import { buildCaptureBoundary, type SessionCaptureDecision } from "./capture-boundary.ts";
 import { extractFacts, routeExtractedFacts } from "./fact-extract.ts";
 import { emitIngestDedupReport } from "./dedup-telemetry.ts";
-import { buildDedupIndex, computeDedupHash, type DedupIndexEntry } from "./dedup-hash.ts";
+import {
+  buildDedupIndex,
+  computeDedupHash,
+  loadDedupIndex,
+  type DedupIndexEntry,
+} from "./dedup-hash.ts";
+import type { Safeguard } from "./safeguard.ts";
 import { discoverMarkersDetailed, isFeedbackMarker } from "./inline.ts";
 import { writeSignal } from "./signal.ts";
 import { isoDate, isoSecond } from "./time.ts";
@@ -41,6 +47,12 @@ export interface CaptureSessionLifecycleOptions {
   readonly agent: string;
   readonly now?: Date;
   readonly dryRun?: boolean;
+  /**
+   * Cooperative deadline for the dedup index walk, the one step whose cost
+   * grows with the vault. A hook passes its process ceiling here so a walk
+   * that would outlast the host's timeout stops at a file boundary.
+   */
+  readonly safeguard?: Safeguard;
 }
 
 export interface CaptureSessionLifecycleResult {
@@ -177,10 +189,14 @@ export async function captureSessionLifecycleEvent(
   // alone outlasted the UserPromptSubmit hook's host timeout, and it ran
   // for every prompt although almost none carries a marker or a fact.
   // So it is built on first USE - when there is a signal to dedup - and
-  // shared by every capture in this event after that.
+  // shared by every capture in this event after that. An event that may
+  // need it (see `lifecycleEventNeedsDedup`) loads it up front with
+  // parallel I/O below; the synchronous build here is the fallback for
+  // anything that approximation missed.
+  const dedupOpts = opts.safeguard !== undefined ? { safeguard: opts.safeguard } : {};
   let dedup: Map<string, DedupIndexEntry> | undefined;
   const ensureDedup: DedupSource = () => {
-    dedup ??= buildDedupIndex(vault);
+    dedup ??= buildDedupIndex(vault, dedupOpts);
     return dedup;
   };
   const counters = {
@@ -200,6 +216,9 @@ export async function captureSessionLifecycleEvent(
   const boundary = buildCaptureBoundary(vault);
   const decision = boundary.sessionDecision(normalized.sessionId, normalized.transcriptPath);
   const mayWrite = decision === "capture";
+  if ((mayWrite || opts.dryRun === true) && lifecycleEventNeedsDedup(payload)) {
+    dedup = await loadDedupIndex(vault, dedupOpts);
+  }
 
   // Delegation boundary (t_0c6f31ee): `SubagentStop` is the one event that
   // names a sub-agent, and a sub-agent reuses its parent's session id - so

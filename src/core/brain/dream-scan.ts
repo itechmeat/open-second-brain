@@ -97,8 +97,8 @@ function markdownFilesIn(dir: string): string[] {
 }
 
 /**
- * Signals from one directory. `inbox/` and `processed/` differ only in
- * the `active` flag they stamp on each record, so they share this walk.
+ * Signals from one directory. `inbox/`, `processed/` and `archived/` differ
+ * only in the flags they stamp on each record, so they share this walk.
  */
 function collectSignals(
   files: ReadonlyArray<string>,
@@ -106,6 +106,7 @@ function collectSignals(
   signals: SignalRecord[],
   corrupted: CorruptedEntry[],
   walk: DirectoryWalk,
+  archived = false,
 ): void {
   for (const full of files) {
     walk.step();
@@ -113,7 +114,12 @@ function collectSignals(
     // excluded from the dream pass so it is never re-clustered.
     if (isTombstoned(parseFrontmatter(full)[0])) continue;
     try {
-      signals.push({ path: full, signal: parseSignal(full), active });
+      signals.push({
+        path: full,
+        signal: parseSignal(full),
+        active,
+        ...(archived ? { archived: true as const } : {}),
+      });
     } catch {
       corrupted.push({ path: full });
     }
@@ -208,11 +214,19 @@ function scanBrainRun(
   // so an already-elapsed guard leaves a stream that spoke once.
   const inbox = markdownFilesIn(dirs.inbox);
   const processed = markdownFilesIn(dirs.processed);
+  // Archived signals are read as inactive history: the plan never counts
+  // them, but a preference whose evidence link resolves to one still
+  // derives its sign from it (see `deriveActiveSign`).
+  const archived = markdownFilesIn(dirs.archived);
   const preferenceFiles = markdownFilesIn(dirs.preferences);
   const retiredFiles = markdownFilesIn(dirs.retired);
   progress.start(
     SCAN_STAGE,
-    inbox.length + processed.length + preferenceFiles.length + retiredFiles.length,
+    inbox.length +
+      processed.length +
+      archived.length +
+      preferenceFiles.length +
+      retiredFiles.length,
   );
   const signals: SignalRecord[] = [];
   const preferences: PreferenceRecord[] = [];
@@ -239,6 +253,7 @@ function scanBrainRun(
   const collectors: ReadonlyArray<() => void> = [
     () => collectSignals(inbox, true, signals, corrupted, walk),
     () => collectSignals(processed, false, signals, corrupted, walk),
+    () => collectSignals(archived, false, signals, corrupted, walk, true),
     () => collectPreferences(preferenceFiles, preferences, corrupted, walk),
     () => collectRetired(retiredFiles, retired, corrupted, walk),
   ];

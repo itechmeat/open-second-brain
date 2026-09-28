@@ -80,6 +80,13 @@ export interface DreamRunSummary {
   /** Signal ids moved from inbox/ into inbox/processed/. */
   readonly moved_to_processed: ReadonlyArray<string>;
   /**
+   * Signal ids moved from inbox/ into inbox/archived/ because they had left
+   * the contradiction window unconsumed and can no longer become candidates
+   * (issue #195). On a dry run, the ids the pass would archive. Absent when
+   * the pass archived nothing.
+   */
+  readonly archived_signals?: ReadonlyArray<string>;
+  /**
    * Signal ids dropped by §6 signal-suppression — a user-rejected
    * retired pref with the same topic blocked them from re-promotion.
    * Each entry is just the signal id (the retired wikilink + reason

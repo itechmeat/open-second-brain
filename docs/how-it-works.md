@@ -36,7 +36,8 @@ caller names and can move a note to a second top-level directory,
 │   ├── active.md                   # derived: confirmed + quarantine + recently retired
 │   ├── inbox/                      # raw taste signals
 │   │   ├── sig-<date>-<slug>.md
-│   │   └── processed/              # signals already folded into rules
+│   │   ├── processed/              # signals already folded into rules
+│   │   └── archived/               # unconsumed signals past the contradiction window
 │   ├── preferences/                # active rules
 │   │   └── pref-<slug>.md          # status: unconfirmed | confirmed | quarantine
 │   ├── retired/                    # archived rules
@@ -277,6 +278,7 @@ flowchart TD
         A12 --> A14
         A13 --> A14
         A14[Move consumed signals to processed/]
+        A14 --> A15[Archive unconsumed signals older than the window to archived/]
     end
 
     Apply --> LogEvent["Append dream event to log/today.md"]
@@ -291,6 +293,21 @@ Key rules baked into the pipeline:
   created only when `candidate_threshold` (default 3) **same-sign**
   signals on one topic appear within `contradiction_window_days`.
   Mixed signals cancel and the rule does not form.
+- **Inbox archive.** A signal outside `contradiction_window_days` counts
+  toward nothing, and never will again, so a signal the run did not
+  consume and that is older than the window moves byte for byte to
+  `Brain/inbox/archived/` (`archived_signals` in the summary and the log
+  event; `--dry-run` previews it). Only an unparseable `created_at` keeps a
+  stale signal in the inbox; a past `expiration_date` does not archive a
+  signal still inside the window, because the pass still counts it.
+  Archived signals stay readable: the pass reads them as history (a
+  preference evidenced by one keeps its sign), and query, backlinks,
+  sources, expiration, forget and the doctor record checks include them.
+  They also stay in the capture dedup index, so re-importing an old
+  session does not re-create them. `dream.archive_stale_signals: false`
+  keeps them in the inbox; raising `contradiction_window_days` later does
+  not bring archived signals back, move them by hand if that is wanted.
+  `o2b brain doctor` reports `inbox-archivable` while a pass is due.
 - **Intent review is audit data.** Each run computes `intent_reviews`
   before mutation so operators can see topics that are ready, weak, or
   conflicted. The review is exposed by `dream`, `brain_review_candidates`,

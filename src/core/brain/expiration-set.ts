@@ -171,12 +171,13 @@ function candidatePaths(vault: string, id: string): { kind: ExpirationTargetKind
   const dirs = brainDirsForWrite(vault);
   if (SIGNAL_ID_RE.test(id)) {
     // A signal outlives the inbox: the dream pass moves consumed signals
-    // to `inbox/processed/` and `retireSignal` moves retired ones to
-    // `Brain/retired/`. All three are still readable memories, so all
-    // three can carry a lifetime.
+    // to `inbox/processed/`, archives unconsumed ones that left the
+    // contradiction window to `inbox/archived/`, and `retireSignal` moves
+    // retired ones to `Brain/retired/`. All four are still readable
+    // memories, so all four can carry a lifetime.
     return {
       kind: EXPIRATION_TARGET_KIND.signal,
-      dirs: [dirs.inbox, dirs.processed, dirs.retired],
+      dirs: [dirs.inbox, dirs.processed, dirs.archived, dirs.retired],
     };
   }
   if (PREFERENCE_ID_RE.test(id)) {

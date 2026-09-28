@@ -90,6 +90,7 @@ export function computeTokenFootprint(
     ["retired", dirs.retired],
     ["inbox", dirs.inbox],
     ["processed", dirs.processed],
+    ["archived", dirs.archived],
     ["log", dirs.log],
   ];
 

@@ -524,6 +524,17 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
+        // Inbox signals that left the contradiction window unconsumed
+        // (issue #195). Spelled as a literal for the same reason
+        // `vault-frozen` above is. The exit is the pass that archives
+        // them; `autoRepairable` stays false because the doctor's repair
+        // planner does not run dream, the operator does.
+        code: "inbox-archivable",
+        issueClass: "inbox signals that can no longer become candidates",
+        nextCommand: "o2b brain dream",
+        autoRepairable: false,
+      },
+      {
         code: "recovery-point-stale",
         issueClass: "newest recovery point older than the liveness window",
         nextCommand: "o2b brain snapshot log",

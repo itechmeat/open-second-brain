@@ -8,7 +8,7 @@ import { brainDirs, vaultRelative } from "../paths.ts";
 export interface ForgetPlanEntry {
   readonly id: string;
   readonly path: string;
-  readonly kind: "inbox" | "processed" | "preference" | "retired" | "log" | "other";
+  readonly kind: "inbox" | "processed" | "archived" | "preference" | "retired" | "log" | "other";
   readonly action: "would-remove-source-support";
   readonly sha256: string;
 }
@@ -109,6 +109,7 @@ function readId(path: string): string {
 function classify(vault: string, path: string): ForgetPlanEntry["kind"] {
   const dirs = brainDirs(vault);
   if (insideDir(path, dirs.processed)) return "processed";
+  if (insideDir(path, dirs.archived)) return "archived";
   if (insideDir(path, dirs.inbox)) return "inbox";
   if (insideDir(path, dirs.preferences)) return "preference";
   if (insideDir(path, dirs.retired)) return "retired";

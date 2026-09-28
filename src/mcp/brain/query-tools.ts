@@ -585,6 +585,7 @@ async function toolBrainSources(
     sources: report.sources,
     total_active: report.total_active,
     total_processed: report.total_processed,
+    total_archived: report.total_archived,
   };
 }
 

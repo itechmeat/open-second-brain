@@ -23,7 +23,8 @@
  * knows where that point is.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
+import { basename } from "node:path";
 
 import { appendDecisionChangeReceipt } from "./decisions/receipts.ts";
 import { preferenceSlug, type PlanState } from "./dream-plan.ts";
@@ -35,7 +36,7 @@ import { collectEvidenceForSlug } from "./evidence.ts";
 import { runHealEnrichment } from "./heal-run.ts";
 import { CHAIN_DECAY_STALE_DAYS } from "./inject-governor.ts";
 import { appendLogEvent } from "./log.ts";
-import { preferencePath, processedSignalPath } from "./paths.ts";
+import { archivedSignalPath, brainDirs, preferencePath, processedSignalPath } from "./paths.ts";
 import { moveToRetired, parsePreference } from "./preference.ts";
 import { writePreferenceTxn } from "./preference-txn.ts";
 import { isoSecond } from "./time.ts";
@@ -81,6 +82,8 @@ export interface DreamApplyInput {
 export interface DreamApplyResult {
   /** Signal ids actually moved into `processed/`. */
   readonly moved: string[];
+  /** Signal ids actually moved into `inbox/archived/`. */
+  readonly archived: string[];
   /** Retires the destructive-from-confirmed gate declined. */
   readonly gatedRetires: DreamGatedRetireEntry[];
   /** User pages the opt-in heal phase enriched. */
@@ -93,6 +96,11 @@ export interface DreamApplyResult {
  */
 export function plannedSignalMoveIds(plan: PlanState): string[] {
   return Array.from(plan.signalsToMove.values(), (sig) => sig.id);
+}
+
+/** Signal ids a dry run WOULD archive; the archive step's dry-run count. */
+export function plannedSignalArchiveIds(plan: PlanState): string[] {
+  return Array.from(plan.signalsToArchive.values(), (sig) => sig.id);
 }
 
 export function applyDreamPlan(input: DreamApplyInput): DreamApplyResult {
@@ -122,6 +130,7 @@ export function applyDreamPlan(input: DreamApplyInput): DreamApplyResult {
   workrun?.checkpoint(WORKRUN_PHASE.retireComplete);
 
   const moved = moveConsumedSignals(vault, plan);
+  const archived = archiveStaleSignals(vault, plan);
   const healEnriched = input.healEnrichEnabled
     ? runHealEnrichmentSafely(vault, input.safeguard)
     : 0;
@@ -131,7 +140,7 @@ export function applyDreamPlan(input: DreamApplyInput): DreamApplyResult {
   // of the two, so it is never a claim about work still to come.
   workrun?.checkpoint(WORKRUN_PHASE.healComplete);
 
-  return { moved, gatedRetires, healEnriched };
+  return { moved, archived, gatedRetires, healEnriched };
 }
 
 /**
@@ -353,6 +362,44 @@ function moveConsumedSignals(vault: string, plan: PlanState): string[] {
     }
   }
   return moved;
+}
+
+/**
+ * Step 4b: move every signal the archive policy selected (see
+ * `signal-archive.ts`) from `inbox/` to `inbox/archived/`, byte for byte.
+ *
+ * Never overwrites: a destination that exists is left alone and the signal
+ * stays in the inbox (the planner already skips names it saw in the
+ * archive; this covers a file that appeared since the scan). A failed move
+ * is reported and the signal stays where it was, so a rerun picks it up.
+ *
+ * No deadline checkpoint inside the loop, like the processed/ move above: a
+ * pass stopped half way would leave archived files the run's log never
+ * names. The pass's own post-mutation checkpoint follows immediately.
+ */
+function archiveStaleSignals(vault: string, plan: PlanState): string[] {
+  const archived: string[] = [];
+  if (plan.signalsToArchive.size === 0) return archived;
+  mkdirSync(brainDirs(vault).archived, { recursive: true });
+  for (const sig of plan.signalsToArchive.values()) {
+    try {
+      const dest = archivedSignalPath(vault, basename(sig.path));
+      if (existsSync(dest)) {
+        process.stderr.write(
+          `warning: archive signal ${sig.id}: ${basename(dest)} already exists in ` +
+            `inbox/archived/; left in the inbox\n`,
+        );
+        continue;
+      }
+      renameWithRetry(sig.path, dest);
+      archived.push(sig.id);
+    } catch (err) {
+      process.stderr.write(
+        `warning: archive signal ${sig.id} to inbox/archived/ failed: ${(err as Error).message}\n`,
+      );
+    }
+  }
+  return archived;
 }
 
 /**

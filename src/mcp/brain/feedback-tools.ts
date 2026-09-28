@@ -677,6 +677,10 @@ async function toolBrainDream(
     changed_count: dryRun ? 0 : changeList.length,
     dry_run: dryRun,
     ...scopedDreamRows(dreamView, summary),
+    // Inbox archive (issue #195): a count, not the ids. A first pass over a
+    // long-lived vault archives thousands of signals; the run's log event
+    // names every one of them.
+    archived_signals_count: summary.archived_signals?.length ?? 0,
     contradictions: [...summary.contradictions],
     warnings: summary.warnings.map((w) => ({
       code: w.code,

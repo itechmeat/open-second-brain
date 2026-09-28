@@ -1390,6 +1390,14 @@ export interface BrainDreamConfig {
    */
   readonly heal_enrich_enabled?: boolean;
   /**
+   * Inbox archive policy (issue #195). When not `false`, the dream pass
+   * moves inbox signals that are older than `contradiction_window_days`
+   * and were never consumed into `Brain/inbox/archived/`, because they can
+   * no longer contribute to a candidate. `false` keeps them in the inbox
+   * (the behaviour before the archive existed). Absent means enabled.
+   */
+  readonly archive_stale_signals?: boolean;
+  /**
    * Salience-lifecycle-enrichment (unit 1). Minimum combined salience
    * score, in `[0, 1]`, a fact must reach to enter the rollup ladder's
    * fold set. See `salience-gate.ts` for the formula. Absent (the

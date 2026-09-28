@@ -27,10 +27,14 @@ export async function cmdBrainSources(argv: string[]): Promise<number> {
     process.stdout.write("no signals\n");
     return 0;
   }
-  const lines = [`sources (${report.total_active} active, ${report.total_processed} processed)`];
+  const lines = [
+    `sources (${report.total_active} active, ${report.total_processed} processed, ` +
+      `${report.total_archived} archived)`,
+  ];
   for (const s of report.sources) {
     lines.push(
-      `  ${s.agent} [${s.source_type}]  active=${s.active} processed=${s.processed} topics=${s.distinct_topics}`,
+      `  ${s.agent} [${s.source_type}]  active=${s.active} processed=${s.processed} ` +
+        `archived=${s.archived} topics=${s.distinct_topics}`,
     );
   }
   process.stdout.write(lines.join("\n") + "\n");

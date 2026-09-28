@@ -24,6 +24,12 @@ export const BRAIN_ROOT_REL = "Brain";
 /** Vault-relative Brain subdirectory names. */
 export const BRAIN_INBOX_REL = posix.join(BRAIN_ROOT_REL, "inbox");
 export const BRAIN_PROCESSED_REL = posix.join(BRAIN_INBOX_REL, "processed");
+/**
+ * Archive of inbox signals that can no longer become candidates: older than
+ * `dream.contradiction_window_days` and never consumed by a preference. The
+ * dream pass moves them here byte for byte; nothing is ever deleted.
+ */
+export const BRAIN_ARCHIVED_SIGNALS_REL = posix.join(BRAIN_INBOX_REL, "archived");
 /** Write-approval staging area: `Brain/pending/sig-*.md` (A3, t_e540b093). */
 export const BRAIN_PENDING_REL = posix.join(BRAIN_ROOT_REL, "pending");
 export const BRAIN_PREFERENCES_REL = posix.join(BRAIN_ROOT_REL, "preferences");

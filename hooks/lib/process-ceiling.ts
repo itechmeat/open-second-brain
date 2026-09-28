@@ -20,6 +20,15 @@
  * the host's own per-hook timeout is the OUTER bound and this ceiling sits
  * inside it: the host can kill a wedged process this timer cannot reach.
  *
+ * Long synchronous work that the hook itself runs - the signal dedup walk
+ * reads every signal file with blocking I/O - is the one case the timer
+ * cannot reach AND the hook can do something about. {@link ceilingSafeguard}
+ * hands such work the same deadline as a cooperative `Safeguard`: the walk
+ * checks it between files and throws `SafeguardTimeoutError` at the first
+ * boundary past the ceiling, so the hook unwinds, audits and exits before
+ * the host kills it. Under budget the checkpoints cost a clock read each and
+ * change nothing.
+ *
  * ## Which deadline is authoritative
  *
  * The host's is. It is enforced from outside the process, it survives a
@@ -37,6 +46,8 @@
  * rather than either number - so changing one without the other fails there
  * instead of silently disarming the watchdog again.
  */
+
+import { createSafeguard, type Safeguard } from "../../src/core/brain/safeguard.ts";
 
 /**
  * The per-hook timeout every entry in `hooks/hooks.json` declares, in
@@ -72,6 +83,18 @@ export function resolveHookCeilingMs(
   const value = Number(raw);
   if (!Number.isFinite(value) || value < MIN_HOOK_CEILING_MS) return DEFAULT_HOOK_CEILING_MS;
   return Math.floor(value);
+}
+
+/** Operation name the cooperative ceiling reports on a timeout. */
+export const HOOK_CEILING_OPERATION = "hook";
+
+/**
+ * A cooperative deadline equal to the ceiling, for synchronous work inside
+ * the hook (see the module docblock). Created at the same moment as
+ * {@link armProcessCeiling} so both measure from the same start.
+ */
+export function ceilingSafeguard(ceilingMs: number, now: () => number = Date.now): Safeguard {
+  return createSafeguard({ operation: HOOK_CEILING_OPERATION, timeoutMs: ceilingMs, now });
 }
 
 export interface ProcessCeilingOptions {

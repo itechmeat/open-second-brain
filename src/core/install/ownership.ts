@@ -176,6 +176,23 @@ export const OUT_OF_VAULT_STATE: ReadonlyArray<OutOfVaultState> = Object.freeze(
     sources: ["hooks/session-capture.ts"],
   },
   {
+    id: "dedup_index_cache",
+    label: "signal dedup index cache",
+    location: WINDOWS
+      ? `%OPEN_SECOND_BRAIN_DEDUP_CACHE_DIR%, else (${describeBaseDir("cache", "win32")})\\open-second-brain\\dedup-index\\<vault-digest>.json`
+      : "$OPEN_SECOND_BRAIN_DEDUP_CACHE_DIR, else ${XDG_CACHE_HOME:-~/.cache}/open-second-brain/dedup-index/<vault-digest>.json",
+    carries_memory: true,
+    created_by:
+      "any capture that deduplicates signals (session import, inline scan, session capture, " +
+      "signal extraction), once per vault; OPEN_SECOND_BRAIN_DEDUP_CACHE=0 turns it off",
+    removed_by: "deleting that file; the next capture rebuilds it from the vault",
+    note:
+      "Per signal file: its name, size, modification time, id and dedup hash. No principle " +
+      "text, but every signal id embeds its topic slug. Stat data is per machine, which is why " +
+      "it is not kept in the vault a sync tool shares.",
+    sources: ["src/core/brain/dedup-index-cache.ts"],
+  },
+  {
     id: "machine_config",
     label: "machine-local plugin config",
     location: WINDOWS
@@ -469,6 +486,12 @@ export const OUT_OF_VAULT_SWEEP_EXCLUSIONS: ReadonlyMap<string, string> = new Ma
  * claim about a census.
  */
 export const SOURCES_INVISIBLE_TO_THE_SWEEP: ReadonlyMap<string, string> = new Map([
+  [
+    "src/core/brain/dedup-index-cache.ts",
+    "the cache root comes from `cacheBaseDir()` in `core/platform-dirs.ts`, or from " +
+      "OPEN_SECOND_BRAIN_DEDUP_CACHE_DIR, so there is no home or XDG token in this file for the " +
+      "sweep to match on",
+  ],
   [
     "src/cli/install-cli.ts",
     "it still writes the launchers, but the bin directory it writes into now comes from " +

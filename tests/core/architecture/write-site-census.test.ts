@@ -1238,10 +1238,6 @@ const DIRECT_WRITE_ROWS = 75;
  * sits in both classes - the delete arm unlinks directly and carries its
  * own written exclusion.
  *
- * 104 -> 105: `src/core/maintenance/self-heal-upgrade-state.ts` writes the
- * failed-upgrade marker through `atomicWriteFileSync`; its lock and marker
- * removal are direct and carry their own exclusion.
- *
  * Attribution note: `src/core/brain/payload-registry.ts` holds one of
  * these sites (the `atomicWriteFileSync` in `put()`, which externalizes an
  * oversized payload into `Brain/.payloads/`). `src/core/brain/packs/pack.ts`
@@ -1252,8 +1248,16 @@ const DIRECT_WRITE_ROWS = 75;
  * 103 -> 104: `src/core/brain/portability/knowledge-pack.ts` records each
  * staged page's install fingerprint through `atomicWriteFileSync`. Its
  * uninstall removal keeps its direct-class exclusion.
+ *
+ * 104 -> 105: `src/core/maintenance/self-heal-upgrade-state.ts` writes the
+ * failed-upgrade marker through `atomicWriteFileSync`; its lock and marker
+ * removal are direct and carry their own exclusion.
+ *
+ * 105 -> 106: `src/core/brain/dedup-index-cache.ts` persists the
+ * machine-local dedup index cache through `atomicWriteFileSync`, outside
+ * the vault (issue #195).
  */
-const SHARED_HELPER_ROWS = 105;
+const SHARED_HELPER_ROWS = 106;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1333,9 +1337,10 @@ const UNSTAMPED_DIRECT_ROWS = 74;
  * `writeFrontmatterAtomic` - are the ones missing from this count.
  * The payload registry's `put()` is one of the unstamped sites counted, and
  * so is the knowledge-pack install fingerprint (100 -> 101), and the
- * failed-upgrade marker `self-heal-upgrade-state.ts` writes (101 -> 102).
+ * failed-upgrade marker `self-heal-upgrade-state.ts` writes (101 -> 102),
+ * and the dedup index cache, a derived file outside the vault (102 -> 103).
  */
-const UNSTAMPED_SHARED_ROWS = 102;
+const UNSTAMPED_SHARED_ROWS = 103;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {

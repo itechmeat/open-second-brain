@@ -22,6 +22,7 @@ Brain/
   _BRAIN.md            # this file
   inbox/               # raw signals captured during work
     processed/        # signals already folded into a preference
+    archived/         # signals that left the contradiction window unconsumed
   preferences/         # active rules (unconfirmed or confirmed)
   retired/             # superseded / expired / rebutted / rejected rules
   log/                 # daily ledger of every state change
@@ -102,6 +103,9 @@ and `--now`. It:
 - flips first-applied unconfirmed prefs to confirmed;
 - retires expired, stale, rebutted, or user-rejected prefs;
 - moves consumed signals into `inbox/processed/`;
+- moves signals older than `contradiction_window_days` that nothing
+  consumed into `inbox/archived/` (they can no longer count toward a
+  candidate; nothing is deleted);
 - archives Brain into `.snapshots/<run_id>.tar.zst` before mutating;
 - appends one summary entry to `log/<today>.md` if anything changed.
 

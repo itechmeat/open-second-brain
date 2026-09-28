@@ -212,7 +212,7 @@ function scanSignals(
   findings: SchemaReportFinding[],
 ): void {
   const dirs = brainDirs(vault);
-  for (const dir of [dirs.inbox, dirs.processed]) {
+  for (const dir of [dirs.inbox, dirs.processed, dirs.archived]) {
     for (const path of listMarkdown(dir, "sig-")) {
       const signal = readArtifact(vault, path, "signal_types", findings, parseSignal);
       if (signal === undefined) continue;

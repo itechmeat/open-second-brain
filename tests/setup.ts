@@ -93,6 +93,16 @@ if (process.platform === "win32") {
   }
 }
 
+// The signal dedup index keeps a machine-local cache under the user cache
+// directory (`src/core/brain/dedup-index-cache.ts`). Every capture test
+// would otherwise leave one file per throwaway vault in the developer's
+// real cache, so the suite points it at a root of its own.
+if (process.env["OPEN_SECOND_BRAIN_DEDUP_CACHE_DIR"] === undefined) {
+  const cacheRoot = mkdtempSync(join(tmpdir(), "osb-test-dedup-cache-"));
+  afterAll(() => rmSync(cacheRoot, REMOVE_TREE));
+  process.env["OPEN_SECOND_BRAIN_DEDUP_CACHE_DIR"] = cacheRoot;
+}
+
 // Every temp entry a test mints lands under ONE per-run root, and the run
 // fails if any of them is still there after the last file (issue #194).
 //

@@ -66,6 +66,12 @@ export interface DreamStagePlan {
   readonly retired: ReadonlyArray<{ id: string; reason: string }>;
   readonly contradictions: ReadonlyArray<string>;
   readonly moved_to_processed: ReadonlyArray<string>;
+  /**
+   * Inbox signals the pass would archive (issue #195). Absent when empty,
+   * so a bundle staged before the archive existed still validates against
+   * a vault with nothing to archive.
+   */
+  readonly archived_signals?: ReadonlyArray<string>;
   readonly suppressed: ReadonlyArray<string>;
   readonly quarantined: ReadonlyArray<{ topic: string; failed_gates: ReadonlyArray<string> }>;
   readonly gated_retires: ReadonlyArray<{ pref_id: string; attempted_reason: string }>;
@@ -171,6 +177,9 @@ export function projectDreamPlan(summary: DreamRunSummary): DreamStagePlan {
     ),
     contradictions: Object.freeze([...summary.contradictions].toSorted()),
     moved_to_processed: Object.freeze([...summary.moved_to_processed].toSorted()),
+    ...(summary.archived_signals !== undefined && summary.archived_signals.length > 0
+      ? { archived_signals: Object.freeze([...summary.archived_signals].toSorted()) }
+      : {}),
     suppressed: Object.freeze([...summary.suppressed].toSorted()),
     quarantined: Object.freeze(
       sorted(
@@ -238,6 +247,7 @@ function planToProposals(plan: DreamStagePlan): Array<Record<string, unknown>> {
   for (const r of plan.retired)
     rows.push({ type: "retire_preference", id: r.id, reason: r.reason });
   for (const id of plan.moved_to_processed) rows.push({ type: "process_signal", id });
+  for (const id of plan.archived_signals ?? []) rows.push({ type: "archive_signal", id });
   for (const id of plan.suppressed) rows.push({ type: "suppress_signal", id });
   for (const q of plan.quarantined) {
     rows.push({ type: "quarantine_cluster", topic: q.topic, failed_gates: q.failed_gates });
@@ -282,6 +292,7 @@ function renderReport(
       plan.retired.map((r) => `${r.id} (${r.reason})`),
     ),
     ...section("Would move to processed", plan.moved_to_processed),
+    ...section("Would archive (outside the contradiction window)", plan.archived_signals ?? []),
     ...section("Would suppress", plan.suppressed),
     ...section(
       "Quarantined clusters",

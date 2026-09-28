@@ -336,7 +336,7 @@ interface BrainArtifactFile {
  */
 function artifactDirs(vault: string): ReadonlyArray<string> {
   const dirs = brainDirs(vault);
-  return [dirs.brain, dirs.preferences, dirs.retired, dirs.inbox, dirs.processed];
+  return [dirs.brain, dirs.preferences, dirs.retired, dirs.inbox, dirs.processed, dirs.archived];
 }
 
 /**

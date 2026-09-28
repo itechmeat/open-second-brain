@@ -10,9 +10,12 @@
  *     capture may need the signal dedup index (see
  *     `lifecycleEventNeedsDedup`) is handed to a detached worker and the
  *     hook returns at once; every other event is captured inline. The
- *     dedup walk reads every `sig-*.md` and on a slow mount (WSL 9p) takes
- *     longer than the host's 10 s timeout - synchronously, so the
- *     in-process ceiling below could never cut it short.
+ *     dedup walk reads every `sig-*.md`, which on a slow mount (WSL 9p)
+ *     could take longer than the host's 10 s timeout. When it does run
+ *     inline (hand-off disabled or failed) it runs under a cooperative
+ *     deadline equal to the ceiling (`ceilingSafeguard`), checked between
+ *     files, so it stops and the hook exits cleanly before the host kills
+ *     it.
  *   - WORKER (`--deferred <spool>`): reads the spooled payload, deletes the
  *     spool, and captures with no host deadline. Workers for one vault run
  *     one at a time, so two deferred events cannot both miss each other's
@@ -34,7 +37,12 @@ import {
   lifecycleEventNeedsDedup,
 } from "../src/core/brain/session-lifecycle.ts";
 import { hookAuditDir } from "../src/core/brain/paths.ts";
-import { armProcessCeiling, resolveHookCeilingMs } from "./lib/process-ceiling.ts";
+import { SafeguardTimeoutError, type Safeguard } from "../src/core/brain/safeguard.ts";
+import {
+  armProcessCeiling,
+  ceilingSafeguard,
+  resolveHookCeilingMs,
+} from "./lib/process-ceiling.ts";
 import { appendAuditRecord } from "../src/core/reliability/audit.ts";
 import { normalizeHookPayload, readHookInput } from "./lib/stdin.ts";
 
@@ -129,12 +137,24 @@ async function acquireWorkerLock(vault: string): Promise<(() => void) | null> {
   }
 }
 
-async function capture(vault: string, payload: unknown): Promise<void> {
+async function capture(vault: string, payload: unknown, safeguard: Safeguard): Promise<void> {
   // Normalize grok's camelCase payload to the internal snake_case shape so the
   // lifecycle capture reads the same fields it does for Claude Code and Codex.
-  await captureSessionLifecycleEvent(vault, normalizeHookPayload(payload), {
-    agent: resolveAgentName(),
-  });
+  try {
+    await captureSessionLifecycleEvent(vault, normalizeHookPayload(payload), {
+      agent: resolveAgentName(),
+      safeguard,
+    });
+  } catch (err) {
+    // The cooperative deadline tripped inside synchronous work (the dedup
+    // walk): the same verdict the ceiling timer records, reached from the
+    // inside. Nothing was written past the checkpoint.
+    if (err instanceof SafeguardTimeoutError) {
+      audit(vault, "hook_ceiling_exceeded", { cooperative: true });
+      return;
+    }
+    throw err;
+  }
 }
 
 async function runWorker(spool: string): Promise<void> {
@@ -156,9 +176,10 @@ async function runWorker(spool: string): Promise<void> {
     ceilingMs: WORKER_CEILING_MS,
     onExpire: () => audit(vault, "hook_ceiling_exceeded", { mode: "deferred" }),
   });
+  const safeguard = ceilingSafeguard(WORKER_CEILING_MS);
   const release = await acquireWorkerLock(vault);
   try {
-    await capture(vault, payload);
+    await capture(vault, payload, safeguard);
   } finally {
     release?.();
     disarm();
@@ -170,10 +191,12 @@ async function runHook(): Promise<void> {
   // continuity append) self-terminates at the ceiling instead of orphaning
   // the hook process or blocking the host agent.
   let auditVault: string | null = null;
+  const ceilingMs = resolveHookCeilingMs();
   const disarm = armProcessCeiling({
-    ceilingMs: resolveHookCeilingMs(),
+    ceilingMs,
     onExpire: () => audit(auditVault, "hook_ceiling_exceeded", {}),
   });
+  const safeguard = ceilingSafeguard(ceilingMs);
   try {
     const vault = resolveVault();
     if (vault === null) return;
@@ -186,7 +209,7 @@ async function runHook(): Promise<void> {
     }
     const normalized = normalizeHookPayload(payload);
     if (deferEnabled() && lifecycleEventNeedsDedup(normalized) && handOff(normalized)) return;
-    await capture(vault, normalized);
+    await capture(vault, normalized, safeguard);
   } finally {
     disarm();
   }

@@ -67,14 +67,14 @@ interface SignalSignRecord {
 }
 
 /**
- * Read every `sig-*.md` across `inbox/` and `processed/`, projecting
+ * Read every `sig-*.md` across `inbox/`, `processed/` and `archived/`, projecting
  * each to its id, sign, and principle. Files that fail to parse are
  * skipped (their schema errors surface through the signal record check).
  */
 function readAllSignalRecords(vault: string): ReadonlyArray<SignalSignRecord> {
   const dirs = brainDirs(vault);
   const out: SignalSignRecord[] = [];
-  for (const dir of [dirs.inbox, dirs.processed]) {
+  for (const dir of [dirs.inbox, dirs.processed, dirs.archived]) {
     if (!existsSync(dir)) continue;
     for (const name of readdirSync(dir)) {
       if (!name.endsWith(".md") || !name.startsWith("sig-")) continue;

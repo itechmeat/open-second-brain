@@ -154,6 +154,7 @@ function artifactPath(vault: string, id: string): string | null {
     dirs.retired,
     dirs.inbox,
     dirs.processed,
+    dirs.archived,
     dirs.pending,
     join(vault, BRAIN_SOURCES_REL),
     dirs.entities,
