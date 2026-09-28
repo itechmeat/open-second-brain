@@ -47,18 +47,6 @@ export interface DedupIndexEntry {
   readonly path: string;
 }
 
-/** What one build did; reported through {@link DedupIndexOptions.onStats}. */
-export interface DedupIndexStats {
-  /** Signal files across the three directories. */
-  readonly files: number;
-  /** Files whose frontmatter was read in this build. */
-  readonly parsed: number;
-  /** Directories served whole from the cache, without a per-file stat. */
-  readonly fast_dirs: number;
-  /** Wall time of the build, in milliseconds. */
-  readonly elapsed_ms: number;
-}
-
 export interface DedupIndexOptions {
   /**
    * Sink for per-file read or parse failures. By default they are skipped
@@ -72,8 +60,6 @@ export interface DedupIndexOptions {
    * short; this is how a hook with a host deadline stops it in time.
    */
   readonly safeguard?: Safeguard;
-  /** Observer for what the build did (files read, cache reuse, time). */
-  readonly onStats?: (stats: DedupIndexStats) => void;
   /**
    * Read every file, trusting nothing from the cache. For a read-back that
    * must measure the disk rather than a record of it (the import census).
@@ -123,7 +109,7 @@ export function buildDedupIndex(
     opts.safeguard?.checkpoint();
     parseOne(file, () => readFileSync(file.path, "utf8"), opts.onError);
   }
-  return finishWalk(vault, plan, started, opts.onStats);
+  return finishWalk(vault, plan, started);
 }
 
 /**
@@ -159,7 +145,7 @@ export async function loadDedupIndex(
     }
     parseOne(file, () => text!, opts.onError);
   });
-  return finishWalk(vault, plan, started, opts.onStats);
+  return finishWalk(vault, plan, started);
 }
 
 // ----- walk internals ------------------------------------------------------
@@ -172,8 +158,6 @@ interface WalkFile {
   size?: number;
   mtimeMs?: number;
   statFailed?: boolean;
-  /** True when this build read the file. */
-  parsed?: boolean;
   /** Set once the file's fields are known (from the cache or a parse). */
   entry?: CachedFileEntry;
 }
@@ -268,7 +252,6 @@ function parseOne(file: WalkFile, read: () => string, onError: DedupIndexOptions
     const [meta] = parseFrontmatterText(read());
     const hash = meta["dedup_hash"];
     const id = meta["id"];
-    file.parsed = true;
     // A file whose stat failed gets -1, which is never cached (see
     // `finishWalk`), so the next build reads it again.
     file.entry = {
@@ -282,23 +265,14 @@ function parseOne(file: WalkFile, read: () => string, onError: DedupIndexOptions
   }
 }
 
-function finishWalk(
-  vault: string,
-  plan: WalkPlan,
-  started: number,
-  onStats: DedupIndexOptions["onStats"],
-): Map<string, DedupIndexEntry> {
+function finishWalk(vault: string, plan: WalkPlan, started: number): Map<string, DedupIndexEntry> {
   const out = new Map<string, DedupIndexEntry>();
   const nextDirs: Record<string, CachedDirEntry> = {};
   const racyFloor = started - RACY_WINDOW_MS;
-  let files = 0;
-  let parsed = 0;
   let changed = false;
   for (const d of plan.dirs) {
     const cachedFiles: Record<string, CachedFileEntry> = {};
     for (const f of d.files) {
-      files++;
-      if (f.parsed === true) parsed++;
       const e = f.entry;
       if (e === undefined) continue;
       if (e.hash !== null && e.id !== null && !out.has(e.hash)) {
@@ -319,12 +293,6 @@ function finishWalk(
     };
   }
   if (changed) writeDedupIndexCache(vault, nextDirs);
-  onStats?.({
-    files,
-    parsed,
-    fast_dirs: plan.dirs.filter((d) => d.fast).length,
-    elapsed_ms: Date.now() - started,
-  });
   return out;
 }
 

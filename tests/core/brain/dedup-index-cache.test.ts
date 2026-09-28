@@ -31,7 +31,6 @@ import {
   buildDedupIndex,
   loadDedupIndex,
   type DedupIndexEntry,
-  type DedupIndexStats,
 } from "../../../src/core/brain/dedup-hash.ts";
 import { dedupIndexCachePath } from "../../../src/core/brain/dedup-index-cache.ts";
 import { createSafeguard, SafeguardTimeoutError } from "../../../src/core/brain/safeguard.ts";
@@ -120,6 +119,24 @@ function uncached(): Map<string, DedupIndexEntry> {
   }
 }
 
+/**
+ * Rewrite a signal's `dedup_hash` in place with a value of the same length,
+ * then put back the file's and its directory's modification times (or give
+ * the file `mtimeS` instead). No sync tool or writer in this repository does
+ * this; the tests use it because an index built from the cache still
+ * reports the OLD hash, which proves the file was not re-read.
+ */
+function rewriteInPlace(path: string, id: string, hash: string, mtimeS?: number): void {
+  const parent = join(path, "..");
+  const before = statSync(path);
+  const parentBefore = statSync(parent);
+  writeFileSync(path, signalText(id, hash));
+  expect(statSync(path).size).toBe(before.size);
+  const fileTime = mtimeS ?? before.mtimeMs / 1000;
+  utimesSync(path, fileTime, fileTime);
+  utimesSync(parent, parentBefore.atimeMs / 1000, parentBefore.mtimeMs / 1000);
+}
+
 function seed(): void {
   put("", "sig-2026-05-01-a", "h-a");
   put("", "sig-2026-05-01-nohash", null);
@@ -139,28 +156,30 @@ describe("buildDedupIndex", () => {
     expect(index.size).toBe(3);
   });
 
-  test("a warm cache reuses every entry and equals a fresh walk", () => {
+  test("a quiet directory is served from the cache without a per-file stat", () => {
     seed();
     settle();
-    const first: DedupIndexStats[] = [];
-    buildDedupIndex(vault, { onStats: (s) => first.push(s) });
-    expect(first[0]!.parsed).toBe(5);
+    buildDedupIndex(vault);
     expect(existsSync(dedupIndexCachePath(vault)!)).toBe(true);
+    // A new file mtime is what the per-file tier would notice; the directory
+    // tier never stats the file, so it still serves the cached hash.
+    const a = join(dir(""), "sig-2026-05-01-a.md");
+    rewriteInPlace(a, "sig-2026-05-01-a", "h-X", Date.now() / 1000 - HOUR_S / 2);
 
-    const second: DedupIndexStats[] = [];
-    const warm = buildDedupIndex(vault, { onStats: (s) => second.push(s) });
-    expect(second[0]!.parsed).toBe(0);
-    expect(second[0]!.fast_dirs).toBe(3);
-    expect(plain(warm)).toEqual(plain(uncached()));
+    const warm = buildDedupIndex(vault);
+    expect(warm.get("h-a")?.path).toBe(a);
+    expect(warm.has("h-X")).toBe(false);
+    expect(uncached().get("h-X")?.path).toBe(a);
   });
 
   test("files written inside the racy window are never trusted from the cache", () => {
     seed();
     buildDedupIndex(vault);
-    const stats: DedupIndexStats[] = [];
-    buildDedupIndex(vault, { onStats: (s) => stats.push(s) });
-    expect(stats[0]!.fast_dirs).toBe(0);
-    expect(stats[0]!.parsed).toBe(5);
+    const a = join(dir(""), "sig-2026-05-01-a.md");
+    rewriteInPlace(a, "sig-2026-05-01-a", "h-X");
+    const index = buildDedupIndex(vault);
+    expect(index.get("h-X")?.path).toBe(a);
+    expect(plain(index)).toEqual(plain(uncached()));
   });
 
   test("a file replaced under the same name by rename is re-read", () => {
@@ -197,12 +216,12 @@ describe("buildDedupIndex", () => {
     seed();
     settle();
     buildDedupIndex(vault);
+    rewriteInPlace(join(dir(""), "sig-2026-05-01-a.md"), "sig-2026-05-01-a", "h-X");
     renameSync(join(dir(""), "sig-2026-05-01-a.md"), join(dir("archived"), "sig-2026-05-01-a.md"));
-    const stats: DedupIndexStats[] = [];
-    const index = buildDedupIndex(vault, { onStats: (s) => stats.push(s) });
-    expect(stats[0]!.parsed).toBe(0);
+    const index = buildDedupIndex(vault);
     expect(index.get("h-a")?.path).toBe(join(dir("archived"), "sig-2026-05-01-a.md"));
-    expect(plain(index)).toEqual(plain(uncached()));
+    expect(index.has("h-X")).toBe(false);
+    expect(uncached().has("h-X")).toBe(true);
   });
 
   test("a corrupt cache file is ignored and replaced", () => {
@@ -212,9 +231,9 @@ describe("buildDedupIndex", () => {
     mkdirSync(cacheDir, { recursive: true });
     writeFileSync(cachePath, "{not json");
     expect(plain(buildDedupIndex(vault))).toEqual(plain(uncached()));
-    const stats: DedupIndexStats[] = [];
-    buildDedupIndex(vault, { onStats: (s) => stats.push(s) });
-    expect(stats[0]!.parsed).toBe(0);
+    // The rebuilt cache is in use: an in-place rewrite is not re-read.
+    rewriteInPlace(join(dir(""), "sig-2026-05-01-a.md"), "sig-2026-05-01-a", "h-X");
+    expect(buildDedupIndex(vault).has("h-X")).toBe(false);
   });
 
   test("OPEN_SECOND_BRAIN_DEDUP_CACHE=0 writes no cache", () => {
@@ -231,11 +250,12 @@ describe("buildDedupIndex", () => {
     const cold = await loadDedupIndex(vault);
     expect(plain(cold)).toEqual(plain(uncached()));
     settle();
-    await loadDedupIndex(vault);
-    const stats: DedupIndexStats[] = [];
-    const warm = await loadDedupIndex(vault, { onStats: (s) => stats.push(s) });
-    expect(stats[0]!.parsed).toBe(0);
-    expect(plain(warm)).toEqual(plain(uncached()));
+    const settled = await loadDedupIndex(vault);
+    expect(plain(settled)).toEqual(plain(uncached()));
+    rewriteInPlace(join(dir(""), "sig-2026-05-01-a.md"), "sig-2026-05-01-a", "h-X");
+    const warm = await loadDedupIndex(vault);
+    expect(warm.get("h-a")?.id).toBe("sig-2026-05-01-a");
+    expect(warm.has("h-X")).toBe(false);
   });
 });
 
