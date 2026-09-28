@@ -266,6 +266,37 @@ describe("suggestNoteLabels", () => {
     expect(provider.requests).toHaveLength(1);
   });
 
+  test("a declared value `none` stays apart from the none-of-these option", async () => {
+    const pack = parseSchemaPack(`${SCHEMA}\n    - status=none\n    - status=done\n`);
+    const provider = new FakeChoiceProvider((_id, options) =>
+      options.includes("_none") ? { choice: "none", p: 0.9 } : undefined,
+    );
+    const out = await suggestNoteLabels(vault, NOTE, {
+      pack,
+      dimensions: ["status"],
+      config: enforce(),
+      provider,
+    });
+    if (!out.available) throw new Error("expected available");
+    const status = out.dimensions[0]!;
+    expect(status.suggestion).toBe("none");
+    expect(Object.keys(status.probabilities ?? {}).toSorted()).toEqual(["_none", "done", "none"]);
+    expect(status.probabilities?.["none"]).toBeCloseTo(0.9);
+  });
+
+  for (const reason of ["timeout", "network", "http_503", "invalid_reply"] as const) {
+    test(`a ${reason} failure answers available: false with the reason, nothing written`, async () => {
+      const provider = new FakeChoiceProvider(() => ({ choice: "low", p: 0.9 }), { fail: reason });
+      const out = await suggestNoteLabels(vault, NOTE, {
+        pack: parseSchemaPack(`${SCHEMA}\n`),
+        config: enforce(),
+        provider,
+      });
+      expect(out).toMatchObject({ available: false, reason });
+      expect(listDecisionModelCalls(vault).map((r) => r.payload["outcome"])).toEqual([reason]);
+    });
+  }
+
   test("a state over max_state_tokens degrades with budget and sends nothing", async () => {
     const provider = new FakeChoiceProvider(() => ({ choice: "low", p: 0.9 }));
     const out = await suggestNoteLabels(vault, NOTE, {

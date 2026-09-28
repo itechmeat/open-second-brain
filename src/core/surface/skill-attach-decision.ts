@@ -66,7 +66,7 @@ import {
   SKILLS_TURN_CLIP_CHARS,
 } from "../decision-model/questions.ts";
 import { runDecision, type DecisionRunResult } from "../decision-model/run.ts";
-import { buildCandidateState } from "../decision-model/state.ts";
+import { buildCandidateState, mayLeaveMachine } from "../decision-model/state.ts";
 import { pageVisibility } from "../graph/visibility.ts";
 import { privateRegionTexts, stripPrivateRegions } from "../redactor.ts";
 import { parseFrontmatterText } from "../vault.ts";
@@ -227,7 +227,10 @@ function planStage2(response: DecisionResponse, context: Stage2Context, maxSkill
     valid++;
     if (p >= SKILLS_FINAL_MIN) scored.push({ index: shortlistIndex, p });
   });
-  if (valid === 0) return { kind: "fallback", reason: "invalid_reply" };
+  // All or nothing: a finalist without a valid answer, or one dropped to
+  // fit the state budget, was never judged, so no partial offer is made.
+  if (valid !== context.included.length) return { kind: "fallback", reason: "invalid_reply" };
+  if (context.dropped.length > 0) return { kind: "fallback", reason: "budget" };
   scored.sort((a, b) => b.p - a.p || a.index - b.index);
   return { kind: "final", offered: scored.slice(0, maxSkills).map((s) => s.index) };
 }
@@ -265,7 +268,13 @@ export async function buildSkillAttachmentWithDecision(
       ? { fullText: "", visibility: null, privateRegions: null }
       : readSkillForEgress(skill);
   });
+  // Names that may not appear in a record, known before any request so a
+  // record written early (cost gate, budget) masks them too.
   const withheldNames = new Set<string>();
+  shortlist.forEach((item, i) => {
+    const e = egress[i]!;
+    if (!mayLeaveMachine(e.visibility) || e.privateRegions === null) withheldNames.add(item.name);
+  });
   const correlationId = randomUUID();
   const turn = clipChars(stripPrivateRegions(opts.query), SKILLS_TURN_CLIP_CHARS);
   const offeredNames = (items: ReadonlyArray<SkillAttachItem>): string[] =>

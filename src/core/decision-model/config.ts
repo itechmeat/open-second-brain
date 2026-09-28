@@ -422,7 +422,7 @@ export function resolveDecisionModelConfig(
   const outputPriceUsdPerMtok = emulated ? outputPriceRaw : null;
   if (emulated && inputPriceUsdPerMtok === null) {
     notes.push(
-      "llm-emulation cost is unknown (cost_source: unknown) unless both " +
+      "llm-emulation cost is unknown (cost_source: unknown) unless the route reports it or both " +
         "decision_model_input_price_usd_per_mtok and decision_model_output_price_usd_per_mtok are set",
     );
   }

@@ -17,7 +17,8 @@ One request per note. The state is the note's title (frontmatter `title`, else
 the file name, clipped to 200 characters) and body (private regions stripped,
 clipped to 4000 characters); the adapter redacts the whole body. Each
 requested dimension is one `choice` question `dim_<i>` over its declared
-values plus `none`. The schema pack declares values without descriptions, so
+values plus `none` (named `_none` when the vocabulary itself declares a value
+`none`, so the two stay apart in `probabilities`). The schema pack declares values without descriptions, so
 the options carry the value names only.
 
 - A note whose visibility carries `private` is refused with an error and

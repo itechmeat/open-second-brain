@@ -358,6 +358,31 @@ describe("state builder", () => {
     expect(text).not.toContain("page not readable");
   });
 
+  test("a slice that starts inside an inline region is withheld, though its line continues publicly", () => {
+    // A long line cut mid-region by the chunker, or a sentence span cut
+    // after the region opened: only the closing tag is in the slice.
+    const region = "<private>Salary is 9000. Deploy uses kafka.</private>";
+    const res = buildCandidateState({
+      candidates: [
+        {
+          text: "Deploy uses kafka.</private> We never use kafka again.",
+          visibility: [],
+          privateRegions: [region],
+        },
+        { text: "Deploy uses kafka.</private> tail", visibility: [], privateRegions: [] },
+        { text: "a public paragraph", visibility: [], privateRegions: [region] },
+      ],
+      prefix: "P",
+      clipChars: 900,
+      maxStateTokens: 32_000,
+      frame,
+    });
+    if (res.kind !== "ok") throw new Error("expected ok");
+    expect(res.included).toEqual([2]);
+    expect(res.withheld).toEqual([0, 1]);
+    expect(JSON.stringify(res.state)).not.toContain("kafka");
+  });
+
   test("every candidate private gives empty", () => {
     const res = buildCandidateState({
       candidates: [{ text: "x", visibility: ["private"], privateRegions: [] }],

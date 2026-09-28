@@ -48,7 +48,10 @@ function emulationConfig(extra: Record<string, string> = {}): Record<string, str
   };
 }
 
-function chatReply(content: unknown, usage = { prompt_tokens: 1000, completion_tokens: 200 }) {
+function chatReply(
+  content: unknown,
+  usage: Record<string, number> = { prompt_tokens: 1000, completion_tokens: 200 },
+) {
   return {
     json: {
       model: "fake-chat-1-2026",
@@ -272,7 +275,9 @@ describe("llm-emulation config", () => {
       config: { ...emulationConfig(), decision_model_provider: "compatible" },
       vault: null,
     });
-    expect(makeDecisionProvider(cfg, ENV)).not.toBeInstanceOf(LlmEmulationDecisionProvider);
+    const provider = makeDecisionProvider(cfg, ENV);
+    expect(provider).not.toBeNull();
+    expect(provider).not.toBeInstanceOf(LlmEmulationDecisionProvider);
   });
 
   test("without the key variable it is off, like every other route", () => {
@@ -323,8 +328,11 @@ describe("llm-emulation records", () => {
   });
   afterEach(() => cleanup());
 
-  async function runOnce(extra: Record<string, string>): Promise<Record<string, unknown>> {
-    server.setReply(() => chatReply({ yes: { p: 0.9 } }));
+  async function runOnce(
+    extra: Record<string, string>,
+    usage?: Parameters<typeof chatReply>[1],
+  ): Promise<Record<string, unknown>> {
+    server.setReply(() => chatReply({ yes: { p: 0.9 } }, usage));
     const cfg = resolveDecisionModelConfig({ env: ENV, config: emulationConfig(extra), vault });
     const result = await runDecision(
       "rerank",
@@ -345,6 +353,15 @@ describe("llm-emulation records", () => {
     expect(payload["cost_source"]).toBe("unknown");
     expect(payload["cost_usd"]).toBeUndefined();
     expect(JSON.stringify(payload)).not.toContain("alpha");
+  });
+
+  test("a cost the route reports counts toward the daily gate without prices", async () => {
+    const payload = await runOnce(
+      {},
+      { prompt_tokens: 1000, completion_tokens: 200, cost: 0.0021 },
+    );
+    expect(payload["cost_source"]).toBe("reported");
+    expect(payload["cost_usd"]).toBe(0.0021);
   });
 
   test("with both prices the cost is estimated from input and output tokens", async () => {

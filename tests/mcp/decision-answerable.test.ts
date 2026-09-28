@@ -203,7 +203,11 @@ describe("brain_recall_gate decision_answerable", () => {
     });
     await gate(SUFFICIENT);
     await gate({ ...SUFFICIENT, decision_answerable: 0.1 });
-    const [annotated, plain] = listGateTelemetry(vault);
+    // Two records in the same millisecond list by id, not append order.
+    const records = listGateTelemetry(vault);
+    expect(records).toHaveLength(2);
+    const annotated = records.find((r) => r.payload["decision_answerable"] !== undefined);
+    const plain = records.find((r) => r.payload["decision_answerable"] === undefined);
     expect(annotated!.payload).toMatchObject({
       adequacy_level: "sufficient",
       decision_answerable: { probability: 0.1, disagrees: true },

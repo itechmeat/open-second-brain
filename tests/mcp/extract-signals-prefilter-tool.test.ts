@@ -18,7 +18,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { importSessionRecall } from "../../src/core/brain/session-recall.ts";
-import { resetDecisionSpendCache } from "../../src/core/decision-model/record.ts";
+import {
+  listDecisionModelExtractCommits,
+  resetDecisionSpendCache,
+} from "../../src/core/decision-model/record.ts";
 import { buildToolTable, findTool } from "../../src/mcp/tools.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 import { FAKE_DECISION_KEY } from "../helpers/fake-credentials.ts";
@@ -158,7 +161,7 @@ test("a server failure returns every turn and names the reason", async () => {
   expect(res["turns_dropped"]).toBeUndefined();
 });
 
-test("shadow commit accepts source_turn through the input schema", async () => {
+test("shadow commit: source_turn reaches the commit record through the tool", async () => {
   enable("shadow");
   scoreByText(0.9, 0.01);
   const planned = await plan();
@@ -176,6 +179,13 @@ test("shadow commit accepts source_turn through the input schema", async () => {
     ],
   })) as { written: unknown[] };
   expect(res.written).toHaveLength(1);
+  const commits = listDecisionModelExtractCommits(vault);
+  expect(commits).toHaveLength(1);
+  expect(commits[0]!.payload).toMatchObject({
+    written_count: 1,
+    source_turns: ["t1"],
+    without_source_turn_count: 0,
+  });
   const schema = findTool(buildToolTable("full"), TOOL).inputSchema as {
     properties: { items: { items: { properties: Record<string, unknown> } } };
   };

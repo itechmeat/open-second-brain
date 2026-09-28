@@ -230,9 +230,13 @@ function readChatUsage(json: unknown): DecisionUsage {
   if (!isRecord(json) || !isRecord(json["usage"])) return {};
   const inputTokens = finiteNonNegative(json["usage"]["prompt_tokens"]);
   const outputTokens = finiteNonNegative(json["usage"]["completion_tokens"]);
+  // Some gateways report the request's cost; it wins over any estimate,
+  // so the daily cost gate can count this route even without prices.
+  const costUsd = finiteNonNegative(json["usage"]["cost"]);
   return {
     ...(inputTokens !== undefined ? { inputTokens } : {}),
     ...(outputTokens !== undefined ? { outputTokens } : {}),
+    ...(costUsd !== undefined ? { costUsd } : {}),
   };
 }
 

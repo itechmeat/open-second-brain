@@ -38,6 +38,10 @@ import type { ResolvedDecisionModelConfig } from "../../../src/core/decision-mod
 import type { DecisionDegradeReason } from "../../../src/core/decision-model/contract.ts";
 import { EXTRACT_PREFILTER_DROP_BELOW } from "../../../src/core/decision-model/questions.ts";
 import {
+  estimateTokens,
+  QUESTION_TOKEN_ALLOWANCE,
+} from "../../../src/core/decision-model/state.ts";
+import {
   listDecisionModelCalls,
   resetDecisionSpendCache,
 } from "../../../src/core/decision-model/record.ts";
@@ -305,7 +309,7 @@ describe("budget split", () => {
     expect(provider.requests.length).toBeGreaterThan(1);
     expect(provider.requests.length).toBeLessThan(4);
     for (const req of provider.requests) {
-      expect(Math.ceil(JSON.stringify(req.state).length / 2) + 256).toBeLessThanOrEqual(
+      expect(estimateTokens(req.state) + QUESTION_TOKEN_ALLOWANCE).toBeLessThanOrEqual(
         maxStateTokens,
       );
     }

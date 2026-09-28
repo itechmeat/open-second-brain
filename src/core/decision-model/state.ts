@@ -115,6 +115,8 @@ export function mayLeaveMachine(visibility: ReadonlyArray<string> | null): boole
   return visibility !== null && !visibility.includes(REMOTE_DENY_VISIBILITY_TOKEN);
 }
 
+const ORPHAN_PRIVATE_CLOSE_RE = /<\/private\s*>/i;
+
 /**
  * Whether `text` (already stripped of whole regions) still carries a line
  * of one of the page's private regions: the chunk boundary fell inside a
@@ -123,6 +125,11 @@ export function mayLeaveMachine(visibility: ReadonlyArray<string> | null): boole
  * withholding a public line that repeats private text.
  */
 function carriesPrivateText(text: string, regions: ReadonlyArray<string>): boolean {
+  // A close tag left after stripping has no matching open tag in this
+  // slice: the slice starts inside a region (a chunk or sentence boundary
+  // fell there), so the text before the tag is private, even when a public
+  // tail on the same line keeps the line from matching a region.
+  if (ORPHAN_PRIVATE_CLOSE_RE.test(text)) return true;
   if (regions.length === 0) return false;
   for (const raw of text.split("\n")) {
     const line = raw.split(PRIVATE_REGION_PLACEHOLDER).join("").trim();

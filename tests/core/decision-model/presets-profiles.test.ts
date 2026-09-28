@@ -170,7 +170,7 @@ describe("self-hosted presets", () => {
 });
 
 describe("threshold profiles", () => {
-  test("the Jev family enforces every use; untuned profiles enforce none", () => {
+  test("the Jev family enforces every use", () => {
     const allEnforce = DECISION_MODEL_USES.map((u) => `${u}:enforce`).join(",");
     const jev = resolveDecisionModelConfig({
       env: { O2B_TEST_TS_KEY: FAKE_DECISION_KEY },
@@ -184,16 +184,6 @@ describe("threshold profiles", () => {
     expect(DECISION_MODEL_USES.filter((u) => decisionModelModeFor(jev, u) !== "enforce")).toEqual(
       [],
     );
-    for (const name of ["laya", "openjev"]) {
-      const cfg = resolveDecisionModelConfig({
-        env: {},
-        config: preset(name, { decision_model_uses: allEnforce }),
-        vault: null,
-      });
-      expect(`${name}: ${cfg.shadowOnlyUses!.length}`).toBe(
-        `${name}: ${DECISION_MODEL_USES.length}`,
-      );
-    }
   });
 
   test("enforce on a profile without tuned thresholds runs as shadow", () => {

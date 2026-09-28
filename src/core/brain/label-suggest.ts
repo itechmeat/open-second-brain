@@ -144,14 +144,15 @@ function readAnswer(
   const probabilities: Record<string, number> = {};
   for (const [key, p] of Object.entries(answer.probabilities ?? {})) {
     if (typeof p !== "number" || !Number.isFinite(p)) continue;
-    if (key === asked.noneKey) probabilities[LABELS_QUESTIONS.noneOption] = p;
-    else if (asked.values.includes(key)) probabilities[key] = p;
+    // The none option keeps its own key: renamed (`_none`) when the
+    // vocabulary declares a real value `none`, so the two never merge.
+    if (key === asked.noneKey || asked.values.includes(key)) probabilities[key] = p;
   }
   const confidence =
     typeof answer.confidence === "number" && Number.isFinite(answer.confidence)
       ? answer.confidence
       : null;
-  const chosen = chosenKey === asked.noneKey ? LABELS_QUESTIONS.noneOption : chosenKey;
+  const chosen = chosenKey;
   const suggestion =
     chosenKey !== asked.noneKey && confidence !== null && confidence >= LABELS_QUESTIONS.suggestMin
       ? chosenKey

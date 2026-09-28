@@ -12,7 +12,11 @@ import { join } from "node:path";
 import type { NoteContradictionFinding } from "../../../src/core/brain/health/contradiction.ts";
 import { listTensions, persistTension } from "../../../src/core/brain/tensions.ts";
 import { verifyTensions } from "../../../src/core/brain/tension-verdicts.ts";
-import { listDecisionModelCalls } from "../../../src/core/decision-model/record.ts";
+import {
+  emitDecisionModelCall,
+  listDecisionModelCalls,
+  resetDecisionSpendCache,
+} from "../../../src/core/decision-model/record.ts";
 import {
   activeDecisionConfig,
   startFakeSystemOne,
@@ -226,6 +230,42 @@ describe("tension verify privacy and writes", () => {
     expect(out.rows.find((r) => r.item.slug === twin)!.verdict).toBeNull();
     expect(out.rows.find((r) => r.item.slug === solo)!.verdict?.verdict).toBe("contradicts");
     expect(JSON.stringify(provider.requests)).not.toContain("Use tabs here.");
+  });
+
+  for (const reason of ["timeout", "network", "http_529", "invalid_reply", "budget"] as const) {
+    test(`a ${reason} failure: unavailable with the reason, no verdicts`, async () => {
+      const provider = new FakeChoiceProvider(() => ({ choice: "contradicts", p: 0.9 }), {
+        fail: reason,
+      });
+      const out = await verifyTensions(vault, listTensions(vault), { config: enforce(), provider });
+      expect(out).toMatchObject({ available: false, reason });
+      expect(out.rows.every((r) => r.verdict === null)).toBe(true);
+    });
+  }
+
+  test("the cost gate: unavailable with cost_gate, nothing sent", async () => {
+    // Today's recorded spend is already over the gate.
+    emitDecisionModelCall(vault, {
+      use: "tension",
+      mode: "enforce",
+      provider: "fake",
+      model: "fake-choice-1",
+      calibrated: true,
+      questionCount: 1,
+      candidateCount: 1,
+      usage: { costUsd: 1 },
+      inputPriceUsdPerMtok: null,
+      latencyMs: 1,
+      outcome: "ok",
+    });
+    resetDecisionSpendCache();
+    const provider = new FakeChoiceProvider(() => ({ choice: "contradicts", p: 0.9 }));
+    const out = await verifyTensions(vault, listTensions(vault), {
+      config: { ...enforce(), dailyCostGateUsd: 0.5 },
+      provider,
+    });
+    expect(out).toMatchObject({ available: false, reason: "cost_gate" });
+    expect(provider.requests).toHaveLength(0);
   });
 
   test("the vault tree is unchanged apart from the accounting log", async () => {

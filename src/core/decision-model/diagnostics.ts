@@ -195,6 +195,13 @@ export async function buildDecisionModelCheck(
   if (cfg.enabled && cfg.keyRequired === false && !cfg.keyPresent) {
     notes.push("no key is set; requests to this loopback server carry no authorization header");
   }
+  if (cfg.enabled && cfg.inputPriceUsdPerMtok === null && cfg.adapter === "llm-emulation") {
+    warnings.push(
+      "no prices are set for llm-emulation, so the daily cost gate counts only requests whose " +
+        "route reports a cost; set decision_model_input_price_usd_per_mtok and " +
+        "decision_model_output_price_usd_per_mtok",
+    );
+  }
   if (cfg.enabled && cfg.inputPriceUsdPerMtok === null && cfg.adapter !== "llm-emulation") {
     warnings.push(
       "no input price is known for this provider, so the daily cost gate applies only to " +

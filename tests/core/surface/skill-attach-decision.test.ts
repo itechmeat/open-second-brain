@@ -482,6 +482,44 @@ test("a private skill is never sent and never offered", async () => {
   expect(result.items.map((i) => i.name)).toEqual(["release-notes"]);
 });
 
+test("a record written before any request still masks a private skill", async () => {
+  const query = "private release checklist";
+  expect(buildSkillAttachment({ query, skills }).items.map((i) => i.name)).toContain(
+    "secret-release",
+  );
+  const provider = new ScriptedProvider(preferring("release-notes", {}));
+  const result = await buildSkillAttachmentWithDecision({
+    query,
+    skills,
+    config: config("enforce", { maxStateTokens: 10 }),
+    provider,
+  });
+  expect(result.decisionModel?.degraded).toBe("budget");
+  expect(provider.requests).toHaveLength(0);
+  const raw = JSON.stringify(skillRecords());
+  expect(raw).toContain("(withheld)");
+  expect(raw).not.toContain("secret-release");
+});
+
+test("enforce: a finalist without a valid stage-2 answer returns today's block", async () => {
+  const scripted = preferring("release-notes", {
+    "release-notes": 0.95,
+    "changelog-writer": 0.9,
+  });
+  const provider = new ScriptedProvider((id, req) =>
+    id === "applies_1" ? { valid: false, value: Number.NaN } : scripted(id, req),
+  );
+  const result = await buildSkillAttachmentWithDecision({
+    query: QUERY,
+    skills,
+    config: config("enforce"),
+    provider,
+  });
+  expect(provider.requests).toHaveLength(2);
+  expect(result.block).toBe(baseline().block);
+  expect(result.decisionModel).toMatchObject({ applied: false, degraded: "invalid_reply" });
+});
+
 test("the shortlist is capped and stays inside the choice limit", async () => {
   const root = join(tmp, "many");
   for (let i = 0; i < 60; i++) writeSkill(root, `release-${i}`, `Release helper number ${i}.`);
