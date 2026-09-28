@@ -877,7 +877,15 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
   },
   "src/core/brain/snapshot.ts": {
     categories: [C.archiveTransfer, C.retentionDelete],
-    calls: ["cpSync", "renameSync", "rmSync", "unlinkSync", "writeFileSync", "writeSync"],
+    calls: [
+      "cpSync",
+      "linkSync",
+      "renameSync",
+      "rmSync",
+      "unlinkSync",
+      "writeFileSync",
+      "writeSync",
+    ],
     reason:
       "writes the compressed archive BYTES into `.snapshots/`, prunes archives past " +
       "the retention count, and restores by recursive copy. A torn archive fails on " +
@@ -888,7 +896,10 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "uses, and the reason a partial decompression can never be observed as the live " +
       "store. The unlink removes a partial store archive whose snapshot was refused. " +
       "The gzip fallback writes the archive one compressed member at a time (`writeSync` " +
-      "on a descriptor opened `wx`) so a Brain tree of any size never sits in memory.",
+      "on a descriptor opened `wx`) so a Brain tree of any size never sits in memory. " +
+      "Both compressors write a partial name, and the archive is published under its " +
+      "final name by an exclusive hard link (`linkSync`, or a checked rename where the " +
+      "filesystem has no links), so a killed compression never leaves a torn archive.",
   },
   "src/core/maintenance/self-heal-upgrade-state.ts": {
     categories: [C.lockPrimitive, C.retentionDelete],
