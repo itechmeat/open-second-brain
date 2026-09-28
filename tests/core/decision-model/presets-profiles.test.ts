@@ -180,7 +180,7 @@ describe("threshold profiles", () => {
       }),
       vault: null,
     });
-    // Every use, including ones later parts implement, inherits the baseline.
+    // Every use inherits the baseline.
     expect(DECISION_MODEL_USES.filter((u) => decisionModelModeFor(jev, u) !== "enforce")).toEqual(
       [],
     );

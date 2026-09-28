@@ -48,10 +48,11 @@ import {
   decisionModelModeFor,
   type ResolvedDecisionModelConfig,
 } from "../decision-model/config.ts";
-import type {
-  DecisionModelMode,
-  DecisionProvider,
-  DecisionResponse,
+import {
+  decisionTokenImpactSource,
+  type DecisionModelMode,
+  type DecisionProvider,
+  type DecisionResponse,
 } from "../decision-model/contract.ts";
 import {
   SKILLS_FINAL_MIN,
@@ -67,7 +68,7 @@ import {
 import { runDecision, type DecisionRunResult } from "../decision-model/run.ts";
 import { buildCandidateState } from "../decision-model/state.ts";
 import { pageVisibility } from "../graph/visibility.ts";
-import { privateRegionTexts } from "../redactor.ts";
+import { privateRegionTexts, stripPrivateRegions } from "../redactor.ts";
 import { parseFrontmatterText } from "../vault.ts";
 import {
   buildSkillAttachment,
@@ -85,7 +86,7 @@ import type { SkillEntry } from "./skills.ts";
 const WITHHELD_NAME = "(withheld)";
 
 /** Attribution of `token_impact` samples written by this use. */
-export const SKILLS_TOKEN_IMPACT_SOURCE = "decision_model:skills";
+export const SKILLS_TOKEN_IMPACT_SOURCE = decisionTokenImpactSource("skills");
 
 /** The optional `decision_model` field of a `skills_attach` result. */
 export interface SkillDecisionInfo {
@@ -145,11 +146,14 @@ interface Stage1Context {
   /** `included[k]` is the shortlist index of mask `S<k>`. */
   readonly included: ReadonlyArray<number>;
   readonly withheld: ReadonlyArray<number>;
+  readonly dropped: ReadonlyArray<number>;
 }
 
 interface Stage2Context {
   /** `included[k]` is the shortlist index of mask `F<k>`. */
   readonly included: ReadonlyArray<number>;
+  readonly withheld: ReadonlyArray<number>;
+  readonly dropped: ReadonlyArray<number>;
 }
 
 /** What the answers imply; computed once per stage and reused. */
@@ -263,7 +267,7 @@ export async function buildSkillAttachmentWithDecision(
   });
   const withheldNames = new Set<string>();
   const correlationId = randomUUID();
-  const turn = clipChars(opts.query, SKILLS_TURN_CLIP_CHARS);
+  const turn = clipChars(stripPrivateRegions(opts.query), SKILLS_TURN_CLIP_CHARS);
   const offeredNames = (items: ReadonlyArray<SkillAttachItem>): string[] =>
     items.map((i) => (withheldNames.has(i.name) ? WITHHELD_NAME : i.name));
   const decisionAttachment = (offered: ReadonlyArray<number>): SkillAttachment =>
@@ -336,7 +340,7 @@ export async function buildSkillAttachmentWithDecision(
         kind: "ok",
         state: built.state,
         candidateCount: built.included.length,
-        context: { included: built.included, withheld: built.withheld },
+        context: { included: built.included, withheld: built.withheld, dropped: built.dropped },
       };
     },
     (built) => ({
@@ -351,7 +355,11 @@ export async function buildSkillAttachmentWithDecision(
       ...(opts.provider !== undefined ? { provider: opts.provider } : {}),
       ...(opts.env !== undefined ? { env: opts.env } : {}),
       recordDetails: (response, context) => {
-        const details = { ...recordBase(1), withheld_count: context?.withheld.length ?? 0 };
+        const details = {
+          ...recordBase(1),
+          withheld_count: context?.withheld.length ?? 0,
+          budget_dropped_count: context?.dropped.length ?? 0,
+        };
         if (response === null || context === null) {
           return { ...details, final: true, applied: false, offer_id: baseline.offerId };
         }
@@ -366,11 +374,12 @@ export async function buildSkillAttachmentWithDecision(
   );
 
   const finish = (result: DecisionSkillAttachment): DecisionSkillAttachment => {
-    if (opts.tokenImpact === true && cfg.vault !== null) {
+    // A sample only when the host received something other than the BM25
+    // block, as the other uses do: shadow and fallbacks change nothing.
+    if (opts.tokenImpact === true && cfg.vault !== null && result.decisionModel?.applied === true) {
       emitTokenImpact(
         cfg.vault,
         {
-          packId: correlationId,
           source: SKILLS_TOKEN_IMPACT_SOURCE,
           baselineTokens: estimateTokens(baseline.block),
           packedTokens: estimateTokens(result.block),
@@ -434,7 +443,11 @@ export async function buildSkillAttachmentWithDecision(
         kind: "ok",
         state: built.state,
         candidateCount: built.included.length,
-        context: { included: built.included.map((k) => finalists[k]!) },
+        context: {
+          included: built.included.map((k) => finalists[k]!),
+          withheld: built.withheld,
+          dropped: built.dropped,
+        },
       };
     },
     (built) => {
@@ -453,6 +466,8 @@ export async function buildSkillAttachmentWithDecision(
         const details = {
           ...recordBase(2),
           finalist_count: finalists.length,
+          withheld_count: context?.withheld.length ?? 0,
+          budget_dropped_count: context?.dropped.length ?? 0,
           ...(needsAny !== null ? { needs_any_skill: needsAny } : {}),
         };
         if (response === null || context === null) {

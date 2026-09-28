@@ -127,7 +127,7 @@ export function createRecallInjectDecisionFilter(
       const notes = input.notes;
       const n = notes.length;
       const budgetMs = Math.max(0, Math.min(cfg.hookBudgetMs, input.remainingMs));
-      if (budgetMs <= 0) return { status: "degraded", mode, reason: "budget", latencyMs: 0 };
+      if (budgetMs <= 0) return { status: "degraded", mode, reason: "timeout", latencyMs: 0 };
       const pages = notes.map((note) =>
         note.content === undefined ? { visibility: null, privateRegions: null } : resolvePage(note),
       );

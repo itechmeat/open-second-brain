@@ -252,4 +252,29 @@ describe("suggestNoteLabels", () => {
       "priority",
     ]);
   });
+
+  test("a dimension above the route's option limit is skipped, the others are asked", async () => {
+    const many = Array.from({ length: 52 }, (_, i) => `    - big=v${i}`);
+    const pack = parseSchemaPack(`${SCHEMA}\n${many.join("\n")}\n`);
+    const provider = new FakeChoiceProvider(() => ({ choice: "low", p: 0.9 }));
+    const out = await suggestNoteLabels(vault, NOTE, {
+      pack,
+      config: { ...enforce(), maxChoiceOptions: 52 },
+      provider,
+    });
+    expect(out.available && out.skipped).toEqual([{ dimension: "big", reason: "too_many_values" }]);
+    expect(provider.requests).toHaveLength(1);
+  });
+
+  test("a state over max_state_tokens degrades with budget and sends nothing", async () => {
+    const provider = new FakeChoiceProvider(() => ({ choice: "low", p: 0.9 }));
+    const out = await suggestNoteLabels(vault, NOTE, {
+      pack: parseSchemaPack(`${SCHEMA}\n`),
+      config: { ...enforce(), maxStateTokens: 20 },
+      provider,
+    });
+    expect(out).toMatchObject({ available: false, reason: "budget" });
+    expect(provider.requests).toHaveLength(0);
+    expect(listDecisionModelCalls(vault).map((r) => r.payload["outcome"])).toEqual(["budget"]);
+  });
 });

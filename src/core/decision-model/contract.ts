@@ -22,9 +22,8 @@
  */
 
 /**
- * Every place a decision model may be used, declared in full so later
- * uses add behaviour without widening the union. Each use has its own
- * mode in `decision_model_uses`.
+ * Every place a decision model may be used. Each use has its own mode in
+ * `decision_model_uses`.
  */
 export const DECISION_MODEL_USES = Object.freeze([
   "rerank",
@@ -43,6 +42,14 @@ export function isDecisionModelUse(value: unknown): value is DecisionModelUse {
   return (
     typeof value === "string" && (DECISION_MODEL_USES as ReadonlyArray<string>).includes(value)
   );
+}
+
+/**
+ * The `token_impact.source` attribution of a use's host-side savings,
+ * `decision_model:<use>`. An identifier, never text.
+ */
+export function decisionTokenImpactSource(use: DecisionModelUse): string {
+  return `decision_model:${use}`;
 }
 
 /**

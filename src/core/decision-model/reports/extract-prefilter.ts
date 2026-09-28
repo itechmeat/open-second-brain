@@ -90,7 +90,7 @@ export function buildExtractPrefilterReport(
   const plans = new Map<string, PlanAgg>();
   for (const record of calls) {
     const p = record.payload;
-    const planId = typeof p["plan_id"] === "string" ? p["plan_id"] : null;
+    const planId = typeof p["correlation_id"] === "string" ? p["correlation_id"] : null;
     const sessionId = typeof p["session_id"] === "string" ? p["session_id"] : null;
     const ids = strings(p["turn_ids"]);
     const probs = numbers(p["probabilities"]);

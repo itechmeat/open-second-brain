@@ -42,10 +42,11 @@ import {
   resolveDecisionModelConfig,
   type ResolvedDecisionModelConfig,
 } from "../decision-model/config.ts";
-import type {
-  DecisionDegradeReason,
-  DecisionProvider,
-  DecisionQuestion,
+import {
+  decisionTokenImpactSource,
+  type DecisionDegradeReason,
+  type DecisionProvider,
+  type DecisionQuestion,
 } from "../decision-model/contract.ts";
 import { makeDecisionProvider } from "../decision-model/provider.ts";
 import { DECISION_MODEL_EXTRACT_COMMIT_KIND } from "../decision-model/record.ts";
@@ -81,7 +82,7 @@ const USE = "extract_prefilter" as const;
 export const EXTRACT_PREFILTER_SKIP_REASON = "decision_model_prefilter";
 
 /** `token_impact.source` for this use's samples. */
-export const EXTRACT_PREFILTER_TOKEN_SOURCE = "decision_model:extract_prefilter";
+export const EXTRACT_PREFILTER_TOKEN_SOURCE = decisionTokenImpactSource("extract_prefilter");
 
 /** A plan the pre-filter path returns. Equal to {@link SignalExtractionPlan} when nothing applied. */
 export interface PrefilteredSignalExtractionPlan extends Omit<SignalExtractionPlan, "llmStep"> {
@@ -232,7 +233,7 @@ export async function planExtractSignalsPrefiltered(
 
   const full = planExtractSignals(vault, sessionId, { now: opts.now, sourceTurnHint: true });
   const mined = full.turnsMined;
-  const planId = randomUUID();
+  const correlationId = randomUUID();
   const chunks = planPrefilterChunks(mined, cfg!.maxStateTokens);
   const probability = new Map<number, number>();
   let mode: "shadow" | "enforce" | null = null;
@@ -240,9 +241,9 @@ export async function planExtractSignalsPrefiltered(
   for (const [chunkIndex, chunk] of chunks.entries()) {
     const details = (probs: ReadonlyArray<number | null>): Record<string, unknown> => ({
       session_id: full.sessionId,
-      plan_id: planId,
-      chunk_index: chunkIndex,
-      chunk_count: chunks.length,
+      correlation_id: correlationId,
+      request_index: chunkIndex,
+      request_count: chunks.length,
       plan_turn_count: mined.length,
       turn_ids: chunk.turns.map((i) => mined[i]!.turnId),
       turn_chars: chunk.turns.map((i) =>
@@ -397,9 +398,9 @@ export function recordExtractPrefilterCommit(
       payload: {
         session_id: result.sessionId,
         mode: decisionModelModeFor(cfg, USE),
-        written: result.written.length,
+        written_count: result.written.length,
         source_turns: cited,
-        without_source_turn: result.written.length - cited.length,
+        without_source_turn_count: result.written.length - cited.length,
       },
     });
   });

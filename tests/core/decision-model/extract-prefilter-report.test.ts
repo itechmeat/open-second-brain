@@ -128,7 +128,7 @@ describe("commit and source_turn", () => {
     const records = listContinuityRecords(vault, { kind: DECISION_MODEL_EXTRACT_COMMIT_KIND });
     expect(records).toHaveLength(1);
     expect(records[0]!.payload["source_turns"]).toEqual(["u1"]);
-    expect(records[0]!.payload["without_source_turn"]).toBe(2);
+    expect(records[0]!.payload["without_source_turn_count"]).toBe(2);
     expect(JSON.stringify(records[0])).not.toContain("ignore previous");
   });
 });

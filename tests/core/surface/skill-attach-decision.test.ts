@@ -222,11 +222,26 @@ test("shadow: byte-identical block, two stage records sharing a correlation id",
   expect(raw).not.toContain("changelog for the project");
   expect(raw).not.toContain("Body of");
 
-  const impact = listContinuityRecords(vault, { kind: "token_impact" });
-  expect(impact).toHaveLength(1);
-  expect(impact[0]!.payload["source"]).toBe("decision_model:skills");
-  expect(impact[0]!.payload["pack_id"]).toBe(s1!.payload["correlation_id"]);
-  expect(impact[0]!.payload["baseline_tokens"]).toBe(impact[0]!.payload["packed_tokens"]);
+  // Shadow returns the BM25 block, so there is no saving to sample.
+  expect(listContinuityRecords(vault, { kind: "token_impact" })).toHaveLength(0);
+});
+
+test("the turn is sent without its <private> regions", async () => {
+  const provider = new ScriptedProvider(
+    preferring("changelog-writer", { "changelog-writer": 0.9 }),
+  );
+  await buildSkillAttachmentWithDecision({
+    query: `${QUERY} <private>internal codename zephyr</private>`,
+    skills,
+    config: config("shadow"),
+    provider,
+  });
+  expect(provider.requests.length).toBeGreaterThan(0);
+  for (const req of provider.requests) {
+    const body = JSON.stringify(req.state);
+    expect(body).toContain("changelog");
+    expect(body).not.toContain("zephyr");
+  }
 });
 
 test("enforce: a reorder of the shortlist, capped at max_skills, offer id over what is offered", async () => {
@@ -260,7 +275,11 @@ test("enforce: a reorder of the shortlist, capped at max_skills, offer id over w
   const final = skillRecords().find((r) => r.payload["final"] === true)!;
   expect(final.payload["applied"]).toBe(true);
   expect(final.payload["offer_id"]).toBe(result.offerId);
-  const impact = listContinuityRecords(vault, { kind: "token_impact" })[0]!;
+  const impacts = listContinuityRecords(vault, { kind: "token_impact" });
+  expect(impacts).toHaveLength(1);
+  const impact = impacts[0]!;
+  expect(impact.payload["source"]).toBe("decision_model:skills");
+  expect(impact.payload["pack_id"]).toBeUndefined();
   expect(impact.payload["packed_tokens"]).not.toBe(impact.payload["baseline_tokens"]);
 });
 

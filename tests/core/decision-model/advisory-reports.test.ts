@@ -19,8 +19,8 @@ import {
   resolveTension,
 } from "../../../src/core/brain/tensions.ts";
 import { emitDecisionModelCall } from "../../../src/core/decision-model/record.ts";
-import { labelsReport } from "../../../src/core/decision-model/reports/labels.ts";
-import { pairVerdictReport } from "../../../src/core/decision-model/reports/pair-verdict.ts";
+import { buildLabelsReport } from "../../../src/core/decision-model/reports/labels.ts";
+import { buildPairVerdictReport } from "../../../src/core/decision-model/reports/pair-verdict.ts";
 import { activeDecisionConfig } from "../../helpers/fake-decision-provider.ts";
 import { FakeChoiceProvider } from "../../helpers/fake-choice-decision.ts";
 
@@ -66,7 +66,7 @@ function tension(aId: string, bId: string): string {
   return persistTension(vault, finding, { agent: "t" }).record.slug;
 }
 
-describe("pairVerdictReport", () => {
+describe("buildPairVerdictReport", () => {
   test("tension bands count what the operator did later", () => {
     const resolved = tension("n/a.md", "n/b.md");
     const dismissed = tension("n/c.md", "n/d.md");
@@ -88,7 +88,7 @@ describe("pairVerdictReport", () => {
     );
     resolveTension(vault, resolved, { agent: "t" });
     dismissTension(vault, dismissed, { agent: "t" });
-    const report = pairVerdictReport(vault, "tension");
+    const report = buildPairVerdictReport(vault, "tension");
     expect(report.pairs).toBe(4);
     const band = (name: string) => report.bands.find((b) => b.band === name)!;
     expect(band("contradicts:high").outcomes.resolved).toBe(1);
@@ -117,7 +117,7 @@ describe("pairVerdictReport", () => {
       ],
       { createdAt: "2026-06-02T00:00:00.000Z" },
     );
-    const report = pairVerdictReport(vault, "dedup");
+    const report = buildPairVerdictReport(vault, "dedup");
     expect(report.pairs).toBe(2);
     expect(report.bands).toEqual([
       {
@@ -134,7 +134,7 @@ describe("pairVerdictReport", () => {
   });
 });
 
-describe("labelsReport", () => {
+describe("buildLabelsReport", () => {
   const PACK = parseSchemaPack(
     [
       "schema_version: 1",
@@ -176,7 +176,7 @@ describe("labelsReport", () => {
       agent: "t",
       now,
     });
-    const report = labelsReport(vault);
+    const report = buildLabelsReport(vault);
     expect(report.suggestions).toBe(4);
     const enforce = report.by_mode.find((m) => m.mode === "enforce")!;
     expect(enforce.outcomes).toEqual({

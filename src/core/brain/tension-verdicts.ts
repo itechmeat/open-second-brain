@@ -33,6 +33,7 @@ import {
   type AdvisoryDecisionOptions,
   type PageEgressFacts,
 } from "../decision-model/advisory.ts";
+import { decisionModelModeFor } from "../decision-model/config.ts";
 import {
   orderByVerdicts,
   runPairVerdicts,
@@ -130,7 +131,7 @@ export async function verifyTensions(
   if (!advisoryUseActive(cfg, "tension")) {
     return { available: false, reason: "decision_model_off", rows: plain(records) };
   }
-  const mode = cfg!.uses.tension as "shadow" | "enforce";
+  const mode = decisionModelModeFor(cfg, "tension") as "shadow" | "enforce";
   if (records.length === 0) return { available: true, mode, rows: [] };
 
   const subjects = resolveSubjects(

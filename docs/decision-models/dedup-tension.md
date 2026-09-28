@@ -68,9 +68,13 @@ Merges, dismissals and resolutions stay explicit operator actions.
 ## Accounting and evaluation
 
 Every request writes one `decision_model_call` record with `pair_kind`
-(`preference`, `entity`, `tension`) and, per pair, its identifier (finding id,
-entity pair id, tension slug), the two side identifiers, the verdict and its
-probability. No principle, name or quote is recorded.
+(`preference`, `entity`, `tension`), a `correlation_id` shared by the
+requests of one listing with `request_index` and `request_count`,
+`withheld_count` (pairs not sent for privacy), `budget_dropped_count` (pairs
+that did not fit `decision_model_max_state_tokens` or the request cap) and,
+per sent pair, its identifier (finding id, entity pair id, tension slug), the
+two side identifiers, the verdict and its probability. A withheld pair is not
+named. No principle, name or quote is recorded.
 
 The report (`reports/pair-verdict.ts`) joins each pair's latest verdict to
 what the operator did afterwards, read from the vault: a preference pair is

@@ -29,10 +29,12 @@ import {
   advisoryUseActive,
   type AdvisoryDecisionOptions,
 } from "../decision-model/advisory.ts";
+import { CHOICE_MAX_OPTIONS } from "../decision-model/answers.ts";
+import { decisionModelModeFor } from "../decision-model/config.ts";
 import type { DecisionAnswer, DecisionChoiceQuestion } from "../decision-model/contract.ts";
 import { LABELS_QUESTIONS } from "../decision-model/questions.ts";
 import { runDecision } from "../decision-model/run.ts";
-import { mayLeaveMachine } from "../decision-model/state.ts";
+import { estimateTokens, mayLeaveMachine } from "../decision-model/state.ts";
 import { pageVisibility } from "../graph/visibility.ts";
 import { stripPrivateRegions } from "../redactor.ts";
 import { parseFrontmatter } from "../vault.ts";
@@ -172,7 +174,7 @@ export async function suggestNoteLabels(
   if (!advisoryUseActive(cfg, "labels")) {
     return { available: false, reason: "decision_model_off", path: relPath };
   }
-  const mode = cfg!.uses.labels as "shadow" | "enforce";
+  const mode = decisionModelModeFor(cfg, "labels") as "shadow" | "enforce";
 
   const dimensions = requestedDimensions(opts.pack, opts.dimensions);
   if (!mayLeaveMachine(pageVisibility(meta))) throw new LabelSuggestPrivateNoteError(relPath);
@@ -186,7 +188,11 @@ export async function suggestNoteLabels(
       skipped.push({ dimension, reason: "no_values" });
       continue;
     }
-    if (values.length > LABELS_QUESTIONS.maxValues) {
+    // `none` is one more option; the route's own limit may be lower.
+    if (
+      values.length > LABELS_QUESTIONS.maxValues ||
+      values.length + 1 > (cfg!.maxChoiceOptions ?? CHOICE_MAX_OPTIONS)
+    ) {
       skipped.push({ dimension, reason: "too_many_values" });
       continue;
     }
@@ -220,7 +226,10 @@ export async function suggestNoteLabels(
 
   const result = await runDecision<null>(
     "labels",
-    () => ({ kind: "ok", state, candidateCount: asked.length, context: null }),
+    () =>
+      estimateTokens({ state, questions }) > cfg!.maxStateTokens
+        ? { kind: "budget" }
+        : { kind: "ok", state, candidateCount: asked.length, context: null },
     () => questions,
     {
       config: cfg,

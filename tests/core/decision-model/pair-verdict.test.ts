@@ -87,7 +87,7 @@ describe("batching", () => {
     ]);
     const records = listDecisionModelCalls(vault);
     expect(records).toHaveLength(provider.requests.length);
-    expect(records.every((r) => r.payload["unfit_count"] === 1)).toBe(true);
+    expect(records.every((r) => r.payload["budget_dropped_count"] === 1)).toBe(true);
   });
 
   test("caps pairs per request and requests per call", async () => {

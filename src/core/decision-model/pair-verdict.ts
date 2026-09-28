@@ -28,7 +28,9 @@
  * limited to annotating and, in enforce, reordering its own listing.
  */
 
-import type { ResolvedDecisionModelConfig } from "./config.ts";
+import { randomUUID } from "node:crypto";
+
+import { decisionModelModeFor, type ResolvedDecisionModelConfig } from "./config.ts";
 import type {
   DecisionChoiceQuestion,
   DecisionModelMode,
@@ -206,9 +208,10 @@ export async function runPairVerdicts(
   opts: PairVerdictRunOptions,
 ): Promise<PairVerdictRun> {
   const cfg = opts.config;
-  if (cfg === null || cfg === undefined || cfg.status !== "active" || cfg.uses[spec.use] === "off")
-    return { status: "off" };
-  const mode = cfg.uses[spec.use] as Exclude<DecisionModelMode, "off">;
+  const configured = decisionModelModeFor(cfg, spec.use);
+  if (configured === "off" || cfg === null || cfg === undefined) return { status: "off" };
+  const mode: Exclude<DecisionModelMode, "off"> = configured;
+  const correlationId = randomUUID();
   const verdicts: (PairVerdict | null)[] = pairs.map(() => null);
 
   const prepared: Prepared[] = [];
@@ -246,10 +249,11 @@ export async function runPairVerdicts(
         ...(opts.env !== undefined ? { env: opts.env } : {}),
         recordDetails: (response) => ({
           pair_kind: spec.pairKind,
-          batch_index: n,
-          batch_count: batches.length,
+          correlation_id: correlationId,
+          request_index: n,
+          request_count: batches.length,
           withheld_count: withheld,
-          unfit_count: unfit,
+          budget_dropped_count: unfit,
           pairs: batch.pairs.map((p, k) => {
             const pair = pairs[p.index]!;
             const v = response === null ? null : verdictOf(response, k, spec.options);

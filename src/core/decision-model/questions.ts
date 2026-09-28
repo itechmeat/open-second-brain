@@ -98,8 +98,8 @@ export const RERANK_QUESTIONS = Object.freeze({
  * warn.
  *
  * `baseline` marks the profile every threshold in this file was set
- * against: all uses are tuned for it, including uses later parts add, so
- * no use needs to be registered here twice. Any other profile lists the
+ * against: every use is tuned for it, so no use needs to be registered
+ * here twice. Any other profile lists the
  * uses tuned for it explicitly, from its own shadow data.
  */
 export interface DecisionThresholdProfile {

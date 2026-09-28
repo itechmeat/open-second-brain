@@ -14,8 +14,8 @@
 import type { DecisionModelUse } from "../contract.ts";
 import { buildAnswerableReport, renderAnswerableReport } from "./answerable.ts";
 import { buildExtractPrefilterReport, renderExtractPrefilterReport } from "./extract-prefilter.ts";
-import { labelsReport, renderLabelsReport } from "./labels.ts";
-import { pairVerdictReport, renderPairVerdictReport } from "./pair-verdict.ts";
+import { buildLabelsReport, renderLabelsReport } from "./labels.ts";
+import { buildPairVerdictReport, renderPairVerdictReport } from "./pair-verdict.ts";
 import { buildRecallInjectUseReport, renderRecallInjectUseReport } from "./recall-inject.ts";
 import { buildSkillsDecisionReport, renderSkillsDecisionReport } from "./skills.ts";
 
@@ -49,12 +49,15 @@ export const USE_REPORTS: Readonly<Record<DecisionModelUse, UseReportEntry | nul
     rerank: null,
     skills: entry(buildSkillsDecisionReport, renderSkillsDecisionReport),
     extract_prefilter: entry(buildExtractPrefilterReport, renderExtractPrefilterReport),
-    dedup: entry((vault, opts) => pairVerdictReport(vault, "dedup", opts), renderPairVerdictReport),
-    tension: entry(
-      (vault, opts) => pairVerdictReport(vault, "tension", opts),
+    dedup: entry(
+      (vault, opts) => buildPairVerdictReport(vault, "dedup", opts),
       renderPairVerdictReport,
     ),
-    labels: entry(labelsReport, renderLabelsReport),
+    tension: entry(
+      (vault, opts) => buildPairVerdictReport(vault, "tension", opts),
+      renderPairVerdictReport,
+    ),
+    labels: entry(buildLabelsReport, renderLabelsReport),
     answerable: entry(buildAnswerableReport, renderAnswerableReport),
     recall_inject: entry(buildRecallInjectUseReport, renderRecallInjectUseReport),
   },

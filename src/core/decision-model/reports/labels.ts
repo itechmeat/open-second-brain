@@ -79,7 +79,10 @@ function nowValue(
   return { value: token === undefined ? null : token.slice(dimension.length + 1) };
 }
 
-export function labelsReport(vault: string, opts: { readonly since?: string } = {}): LabelsReport {
+export function buildLabelsReport(
+  vault: string,
+  opts: { readonly since?: string } = {},
+): LabelsReport {
   const latest = new Map<string, Suggested>();
   for (const record of listDecisionModelCalls(vault, opts.since)) {
     const p = record.payload;

@@ -45,6 +45,7 @@ import {
   resolveDecisionModelConfig,
 } from "../src/core/decision-model/config.ts";
 import { emitTokenImpact, TOKEN_COUNT_METHOD } from "../src/core/brain/token-impact.ts";
+import { decisionTokenImpactSource } from "../src/core/decision-model/contract.ts";
 import { appendAuditRecord } from "../src/core/reliability/audit.ts";
 import { emitGatedTelemetry } from "../src/core/brain/continuity/emit.ts";
 import { hookAuditDir } from "../src/core/brain/paths.ts";
@@ -190,7 +191,7 @@ function recordTokenImpact(
       vault,
       {
         host: HOOK_TELEMETRY_HOST,
-        source: "decision_model:recall_inject",
+        source: decisionTokenImpactSource("recall_inject"),
         baselineTokens: info.tokensBefore,
         packedTokens: info.tokensAfter,
         method: TOKEN_COUNT_METHOD.heuristic,

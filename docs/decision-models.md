@@ -433,4 +433,5 @@ timeout. A reply body larger than 1 MiB is an `invalid_reply`.
 ## Turning it off
 
 Remove the use from `decision_model_uses`, set `decision_model_enabled:
-"false"`, unset the key variable, or add the vault opt-out above.
+"false"`, unset the key variable (a keyless loopback `laya` or `openjev`
+server needs one of the other ways), or add the vault opt-out above.

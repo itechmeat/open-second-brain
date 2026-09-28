@@ -73,13 +73,18 @@ Each stage writes one `decision_model_call` record; the records of one
 selection share a `correlation_id`. The record with `final: true` carries the
 BM25 offered names (`deterministic_offered`), the decision offered names
 (`decision_offered`, absent when the selection fell back), the returned
-`offer_id`, `needs_any_skill` and `applied`. Records carry names, ids and
-numbers only, never the turn or skill text.
+`offer_id`, `needs_any_skill` and `applied`. Each record also carries
+`withheld_count` (skills not sent for privacy) and `budget_dropped_count`
+(skills dropped to fit `decision_model_max_state_tokens`). Records carry
+names, ids and numbers only, never the turn or skill text; a withheld skill
+is named `(withheld)`.
 
-When the `token_impact` ledger is enabled, each selection also writes one
+When the `token_impact` ledger is enabled, each selection whose decision
+offer was returned (`enforce`, `applied: true`) also writes one
 `token_impact` sample with `source: decision_model:skills`: the baseline is
 the estimated tokens of the block BM25 would have rendered, the packed count
-is the block actually returned.
+is the block actually returned. Shadow selections and fallbacks return the
+BM25 block and write no sample.
 
 ## Evaluation
 

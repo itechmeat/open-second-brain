@@ -461,7 +461,7 @@ describe("recall_inject failures keep today's decision", () => {
     });
   });
 
-  test("a throwing filter is an internal error, never a thrown decision", async () => {
+  test("a throwing filter degrades like a failed request, never a thrown decision", async () => {
     const decision = await decide(THREE, {
       mode: "enforce",
       run: async () => {
@@ -470,7 +470,7 @@ describe("recall_inject failures keep today's decision", () => {
     });
     expect(decision.kind).toBe("inject");
     expect(recallInjectAuditDetails(decision)["decision_model"]).toMatchObject({
-      degrade_reason: "internal_error",
+      degrade_reason: "network",
     });
   });
 

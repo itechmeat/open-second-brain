@@ -2,9 +2,8 @@
  * Question texts and thresholds for the `skills` use (two-stage skill
  * selection for `skills_attach`, issue #213 Part 3).
  *
- * Kept in their own file so parallel uses do not edit one list; re-exported
- * from `questions.ts`, which stays the one place to review every question
- * a model is asked. Thresholds are conservative starting points, to be
+ * Re-exported from `questions.ts`, which stays the one place to review
+ * every question a model is asked. Thresholds are conservative starting points, to be
  * tuned per provider profile from shadow data.
  */
 

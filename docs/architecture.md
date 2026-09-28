@@ -358,7 +358,8 @@ embedding and rerank calls do: a decision model returns probabilities over
 candidates this code produced and never text, the deterministic result stays
 canonical and is returned on every failure, and no decision writes to the
 vault. It is active only when the operator enables it in machine config AND
-the named key variable is set; otherwise every code path is the one without
+the named key variable is set (a self-hosted `laya` or `openjev` server on
+loopback needs no key); otherwise every code path is the one without
 it. Every use goes through `runDecision` (`run.ts`), which owns the modes
 (`off`, `shadow`, `enforce`), the daily cost gate and the
 `decision_model_call` accounting record. The uses are the rerank kind

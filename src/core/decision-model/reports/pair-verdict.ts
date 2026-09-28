@@ -144,7 +144,7 @@ function emptyOutcomes(): Record<PairOutcome, number> {
 }
 
 /** Per-band operator outcomes for the `dedup` or `tension` use. */
-export function pairVerdictReport(
+export function buildPairVerdictReport(
   vault: string,
   use: "dedup" | "tension",
   opts: { readonly since?: string } = {},

@@ -29,7 +29,7 @@ definition of a taste signal.
 | Mode | What the plan returns |
 |---|---|
 | `off` (default) | Exactly today's plan. No request, no record. |
-| `shadow` | The full envelope and every mined turn, as today. The per-turn probabilities are recorded. |
+| `shadow` | The full envelope and every mined turn, as today, plus one optional `source_turn` line in the envelope's schema hints (it feeds the regret metric). The per-turn probabilities are recorded. |
 | `enforce` | Turns whose probability is below the drop threshold (initially 0.1) are left out of the envelope. When every turn is below it, there is no envelope at all. |
 
 The threshold starts low on purpose. Published community measurements of a
@@ -73,11 +73,13 @@ too.
 ## Accounting
 
 - One `decision_model_call` record per request: the session id, the turn ids
-  and the probabilities, a plan correlation id, the clipped character count of
-  each turn and the threshold. Never turn text.
+  and the probabilities, a `correlation_id` shared by the requests of one
+  plan with `request_index` and `request_count`, the clipped character count
+  of each turn and the threshold. Never turn text.
 - One `decision_model_extract_commit` record per commit while the use is not
-  `off`: the session id and the `source_turn` values of the written items that
-  name a real turn of the session.
+  `off`: the session id, the mode, `written_count`, the `source_turn` values
+  of the written items that name a real turn of the session, and
+  `without_source_turn_count`.
 - With the `token_impact` ledger on, one sample per enforced plan
   (`source: decision_model:extract_prefilter`): baseline is the envelope with
   every turn, packed is the envelope returned (0 when skipped), and a skipped

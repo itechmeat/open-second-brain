@@ -1,6 +1,5 @@
 /**
- * What a decision-model rerank passage carries (issue #213, PR #214
- * follow-ups): the note title and its declared `status` / `updated` beside
+ * What a decision-model rerank passage carries: the note title and its declared `status` / `updated` beside
  * the clipped chunk text, frontmatter-only chunks left out, and injection
  * questions asked only where the tag is surfaced (`enforce`).
  */

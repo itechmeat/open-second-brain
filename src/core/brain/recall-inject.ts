@@ -448,7 +448,7 @@ async function applyDecisionFilter(
         charsRemoved: 0,
       }),
     });
-  if (ctx.remainingMs <= 0) return degraded("budget");
+  if (ctx.remainingMs <= 0) return degraded("timeout");
 
   let verdict: RecallInjectFilterVerdict;
   try {
@@ -457,7 +457,7 @@ async function applyDecisionFilter(
       ctx.remainingMs,
     );
   } catch (exc) {
-    return degraded(exc instanceof RecallInjectTimeoutError ? "timeout" : "internal_error");
+    return degraded(exc instanceof RecallInjectTimeoutError ? "timeout" : "network");
   }
   if (verdict.status === "off") return today;
   if (verdict.status === "degraded") {
