@@ -620,7 +620,7 @@ final `<run_id>.tar.zst` name only once it is complete, published by an
 exclusive hard link that refuses a name already taken; the manifest is
 written after that. A snapshot interrupted during compression therefore
 leaves no recovery point behind, only a `<run_id>.tar.zst.partial-*` file
-that nothing lists and that can be removed by hand.
+that nothing lists; retention removes it once it is a day old.
 
 From v0.10.6 every snapshot ships with a SHA-256 sidecar manifest
 (`Brain/.snapshots/<run_id>.manifest.json`) listing every regular

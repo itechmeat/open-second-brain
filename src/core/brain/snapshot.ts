@@ -92,7 +92,6 @@ import {
   realpathSync,
   rmSync,
   statSync,
-  unlinkSync,
   writeFileSync,
   writeSync,
   type Dirent,
@@ -100,7 +99,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
-import { FileAlreadyExistsError, renameWithRetry } from "../fs-atomic.ts";
+import { FileAlreadyExistsError, renameWithRetry, unlinkWithRetry } from "../fs-atomic.ts";
 import { classifyRecoverability, type RecoverabilityVerdict } from "./gates/recoverability.ts";
 import { sha256Hex } from "../integrity/digest.ts";
 import { resolveConfiguredIndexPath } from "../search/paths.ts";
@@ -1094,12 +1093,6 @@ function writeStoreArchive(
 ): void {
   const tmp = mkdtempSync(join(tmpdir(), `o2b-store-vacuum-${runId}-`));
   const vacuumed = join(tmp, DERIVED_STORE_VACUUM_FILE);
-  // Whether the destination was ALREADY taken when this call began. It
-  // decides whether the cleanup below may touch it: an archive a racing
-  // process wrote is the very thing the overwrite refusal protects, and
-  // removing it in the name of cleaning up after that refusal would
-  // reintroduce the data-loss path by the back door.
-  const preexisting = existsSync(archivePath);
   try {
     const db = new Database(sourcePath, { readonly: true });
     try {
@@ -1109,16 +1102,10 @@ function writeStoreArchive(
     }
     compressInto({ kind: "file", path: vacuumed }, archivePath, tools, runId);
   } catch (err) {
-    // A failed compression may have left a partial archive of OUR making;
-    // the snapshot is about to be refused, so nothing may survive that a
-    // later read could mistake for a recovery point.
-    if (!preexisting) {
-      try {
-        unlinkSync(archivePath);
-      } catch {
-        // Nothing was written, or it is already gone. Either is fine.
-      }
-    }
+    // Nothing to remove here: the compressor wrote a partial file that
+    // `compressInto` discards, and the archive name is only ever created by
+    // a successful publish. A failure on that name is a peer's archive,
+    // which must survive the refusal.
     if (err instanceof BrainSnapshotError) throw err;
     throw new BrainSnapshotError(
       `failed to archive the derived store: ${(err as Error).message ?? String(err)}`,
@@ -1194,7 +1181,7 @@ function compressInto(
   // truncated `<run_id>.tar.zst` with no manifest, which the listing,
   // retention and rollback all treat as a recovery point. A partial file
   // never ends in the archive suffix, so nothing lists it.
-  const partial = `${outPath}.partial-${process.pid}-${randomBytes(4).toString("hex")}`;
+  const partial = `${outPath}${PARTIAL_ARCHIVE_INFIX}${process.pid}-${randomBytes(4).toString("hex")}`;
   try {
     if (tools.zstd) {
       runCompressor("zstd", ["-19", "-q", "-o", partial, payload.path], runId);
@@ -1208,7 +1195,61 @@ function compressInto(
     }
     publishArchive(partial, outPath, runId);
   } finally {
-    rmSync(partial, { force: true });
+    discardPartial(partial);
+  }
+}
+
+/**
+ * Remove a partial archive this process wrote. Best-effort and never
+ * throwing: it runs in a `finally`, where a throw would replace the real
+ * outcome - turning a published archive into a failed snapshot, or hiding
+ * the typed collision the run-id allocator ladders on. A partial left
+ * behind is never listed, and {@link pruneSnapshots} removes stale ones.
+ */
+function discardPartial(partial: string): void {
+  try {
+    unlinkWithRetry(partial);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+    process.stderr.write(
+      `warning: could not remove the partial snapshot archive ${partial}: ` +
+        `${(err as Error).message ?? String(err)}\n`,
+    );
+  }
+}
+
+/** Infix of a partial archive's name: `<archive>.partial-<pid>-<hex>`. */
+const PARTIAL_ARCHIVE_INFIX = ".partial-";
+
+/**
+ * A partial archive older than this is left over from a process that was
+ * killed during compression. Generous against the longest compression a
+ * live snapshot could still be running.
+ */
+const STALE_PARTIAL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Remove partial archives a killed snapshot left in `.snapshots/`. They are
+ * this tool's own unfinished output, never a recovery point (nothing lists
+ * them), and each can be as large as the whole Brain tar. Best-effort.
+ */
+function removeStalePartials(snapshotsDirPath: string, now: number): void {
+  let names: string[];
+  try {
+    names = readdirSync(snapshotsDirPath);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!name.includes(PARTIAL_ARCHIVE_INFIX)) continue;
+    const full = join(snapshotsDirPath, name);
+    try {
+      const st = lstatSync(full);
+      if (!st.isFile() || now - st.mtimeMs < STALE_PARTIAL_MS) continue;
+      unlinkWithRetry(full);
+    } catch {
+      // gone already, or not ours to remove right now; the next prune retries
+    }
   }
 }
 
@@ -1226,16 +1267,13 @@ function archiveCollision(outPath: string, runId: string): BrainSnapshotError {
 }
 
 /**
- * errno values with which a filesystem declines hard links altogether
- * (FAT and exFAT volumes, some network shares), as opposed to refusing
- * this particular link.
+ * errno values from the hard link that rule out the rename fallback too: the
+ * partial file or the directory is gone, the volume is full or read-only.
+ * Every other failure (a filesystem without hard links reports EPERM,
+ * ENOTSUP, or on Windows FAT and exFAT an `ERROR_INVALID_FUNCTION` that
+ * libuv maps to EISDIR) falls through to the checked rename.
  */
-const LINK_UNSUPPORTED_CODES: ReadonlySet<string> = new Set([
-  "EPERM",
-  "ENOTSUP",
-  "EOPNOTSUPP",
-  "ENOSYS",
-]);
+const LINK_FATAL_CODES: ReadonlySet<string> = new Set(["ENOENT", "ENOSPC", "EROFS"]);
 
 /**
  * Give the finished `partial` file its final archive name, refusing a name
@@ -1244,8 +1282,9 @@ const LINK_UNSUPPORTED_CODES: ReadonlySet<string> = new Set([
  * A hard link is an exclusive create of the name with the content already
  * in place: it fails with EEXIST when a peer published first and never
  * replaces anything, on POSIX and on NTFS alike. `rename` would replace an
- * existing archive silently, so it is used only where the filesystem has
- * no hard links, behind an existence check. That leaves a window between
+ * existing archive silently, so it is used only when the link fails for
+ * another reason (typically a filesystem without hard links), behind an
+ * existence check. That leaves a window between
  * the check and the rename on such a volume; the run id already carries
  * the second it was taken in, and the allocator probes the name first.
  * The partial file itself is removed by the caller.
@@ -1257,7 +1296,7 @@ function publishArchive(partial: string, outPath: string, runId: string): void {
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code ?? "";
     if (code === "EEXIST") throw archiveCollision(outPath, runId);
-    if (!LINK_UNSUPPORTED_CODES.has(code)) {
+    if (LINK_FATAL_CODES.has(code)) {
       throw new BrainSnapshotError(
         `failed to publish ${outPath}: ${(err as Error).message ?? String(err)}`,
         runId,
@@ -1589,6 +1628,7 @@ export function pruneSnapshots(
   if (!Number.isInteger(retentionCount)) {
     throw new Error(`pruneSnapshots: retentionCount must be an integer; got ${retentionCount}`);
   }
+  removeStalePartials(brainDirs(vault).snapshots, Date.now());
   if (retentionCount < SNAPSHOT_RETENTION_FLOOR) {
     // Refused, not obeyed, and not thrown: see the docblock.
     return Object.freeze({

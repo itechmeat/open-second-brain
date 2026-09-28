@@ -23,6 +23,7 @@ import {
   readFileSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -31,7 +32,7 @@ import { join } from "node:path";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { manifestSidecarPath } from "../../../src/core/brain/manifest.ts";
 import { snapshotPath, snapshotsDir } from "../../../src/core/brain/paths.ts";
-import { createSnapshot, listSnapshots } from "../../../src/core/brain/snapshot.ts";
+import { createSnapshot, listSnapshots, pruneSnapshots } from "../../../src/core/brain/snapshot.ts";
 import { BRAIN_SNAPSHOT_REASON } from "../../../src/core/brain/types.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 
@@ -161,5 +162,20 @@ describe.skipIf(process.platform === "win32")("publishing a zstd snapshot", () =
 
     expect(readFileSync(final, "utf8")).toBe("someone-else");
     expect(snapshotEntries()).toEqual([`${RUN_ID}.tar.zst`]);
+  });
+
+  test("retention removes a partial a killed snapshot left behind, once it is stale", () => {
+    mkdirSync(snapshotsDir(vault), { recursive: true });
+    const stale = join(snapshotsDir(vault), `${RUN_ID}.tar.zst.partial-4242-0a0b0c0d`);
+    const fresh = join(snapshotsDir(vault), "upgrade-live.tar.zst.partial-4343-01020304");
+    writeFileSync(stale, "torn");
+    writeFileSync(fresh, "still being written");
+    const twoDaysAgo = Date.now() / 1000 - 2 * 24 * 3600;
+    utimesSync(stale, twoDaysAgo, twoDaysAgo);
+
+    pruneSnapshots(vault, 10);
+
+    expect(existsSync(stale)).toBe(false);
+    expect(existsSync(fresh)).toBe(true);
   });
 });
