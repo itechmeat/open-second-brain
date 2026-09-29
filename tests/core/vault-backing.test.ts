@@ -116,6 +116,34 @@ describe("the remoteness axis, beside durability", () => {
   });
 });
 
+describe("an injected statfs carries its own meaning", () => {
+  test("it is honoured without an explicit platform, on any host", () => {
+    // The platform veto exists because the DEFAULT statfsSync means
+    // something else off Linux. A caller who injects a statfs vouches for
+    // what it returns - the index open does exactly that to simulate a
+    // network backing - so the injection implies the probeable platform.
+    // This is the contract the Windows CI run turned on: there the veto
+    // ran first, the injected nfs never applied, and the index opened
+    // under WAL with no warning.
+    const verdict = probeVaultBacking("/vault", { statfs: withFsType(NFS) });
+    expect(verdict.filesystem).toBe("nfs");
+    expect(verdict.remoteness).toBe(VAULT_BACKING_REMOTENESS.remote);
+    expect(verdict.reason).toBeNull();
+  });
+
+  test("an explicitly pinned non-probeable platform still vetoes the injection", () => {
+    // The guard on the rule above: an explicit `platform` is the caller
+    // speaking about the host, and that word outranks any injection.
+    const verdict = probeVaultBacking("/vault", {
+      platform: "win32",
+      statfs: withFsType(NFS),
+    });
+    expect(verdict.state).toBe(VAULT_BACKING.undetermined);
+    expect(verdict.reason).toBe(VAULT_BACKING_UNDETERMINED_REASON.probeUnsupported);
+    expect(verdict.remoteness).toBe(VAULT_BACKING_REMOTENESS.nonRemote);
+  });
+});
+
 describe("everything the probe cannot establish says so, with a reason", () => {
   test("an unrecognised magic number is undetermined, NOT durable", () => {
     const verdict = probeVaultBacking("/vault", {

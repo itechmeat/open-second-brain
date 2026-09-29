@@ -44,10 +44,15 @@
  * and SILENT: the absence of a network finding is never rendered as a
  * finding that the storage is local.
  *
- * The probe is Linux-only by construction. `statfs(2)`'s `f_type` is a
- * Linux filesystem magic number; the same field on macOS and the BSDs
- * means something else, so every other platform answers
- * `probe_unsupported` rather than being handed a number to misread.
+ * The DEFAULT probe is Linux-only by construction. `statfs(2)`'s `f_type`
+ * is a Linux filesystem magic number; the same field on macOS and the BSDs
+ * means something else, so a call that relies on the default `statfsSync`
+ * answers `probe_unsupported` on every other platform rather than being
+ * handed a number to misread. That veto guards the default facility's
+ * meaning, not the probe itself: an explicitly injected `statfs` carries
+ * its own meaning - the caller vouches for what it returns - so an
+ * injection implies the probeable platform unless the caller pins
+ * `platform` explicitly.
  *
  * Pure and injectable: the platform and the `statfs` call are parameters,
  * so every state below is reachable in a unit test on any host.
@@ -201,7 +206,11 @@ export interface VaultBackingVerdict {
 export type StatfsProbe = (path: string) => { readonly type: number | bigint };
 
 export interface VaultBackingOptions {
-  /** Defaults to `process.platform`, following the house injection style. */
+  /**
+   * Defaults to `process.platform` - or to the one probeable platform when
+   * `statfs` is injected, since an injected probe carries its own meaning
+   * wherever it runs. An explicit value always wins.
+   */
   readonly platform?: string;
   /** Defaults to `node:fs`'s `statfsSync`. */
   readonly statfs?: StatfsProbe;
@@ -326,7 +335,14 @@ export function probeVaultBacking(
   path: string,
   opts: VaultBackingOptions = {},
 ): VaultBackingVerdict {
-  const platform = opts.platform ?? process.platform;
+  // The veto below guards the DEFAULT facility's meaning, not the probe
+  // itself: `statfsSync`'s f_type is a Linux magic number only on Linux, so
+  // a call that relies on it answers probe_unsupported elsewhere rather than
+  // being handed a number to misread. An injected statfs carries its own
+  // meaning - the caller vouches for what it returns - so an injection
+  // implies the probeable platform unless the caller pins `platform`.
+  const platform =
+    opts.platform ?? (opts.statfs !== undefined ? PROBEABLE_PLATFORM : process.platform);
   if (platform !== PROBEABLE_PLATFORM) {
     return undetermined(
       VAULT_BACKING_UNDETERMINED_REASON.probeUnsupported,
