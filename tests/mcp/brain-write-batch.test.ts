@@ -366,6 +366,22 @@ describe("brain_write_batch - the lint attached to the receipt", () => {
     expect(res.applied).toBe(1);
     expect(PAGE_LINT_KEY in res).toBe(false);
   });
+
+  test("a byte-identical rewrite that skipped names no page for the lint", async () => {
+    // The write that happened carries its finding; the re-apply that
+    // skipped carries the receipt but no lint, the same rule the
+    // single-write receipts follow - nothing was committed, so the
+    // envelope names no page as one the batch wrote.
+    seedNote("Notes/SkipLint.md", "v1");
+    const body = "see [[pref-ghost]]";
+    const first = await runBatch([{ op: "update_note", path: "Notes/SkipLint.md", content: body }]);
+    expect(PAGE_LINT_KEY in first).toBe(true);
+    const second = await runBatch([
+      { op: "update_note", path: "Notes/SkipLint.md", content: body },
+    ]);
+    expect(second.results[0]).toMatchObject({ kind: "update_note", updated: false });
+    expect(PAGE_LINT_KEY in second).toBe(false);
+  });
 });
 
 /**

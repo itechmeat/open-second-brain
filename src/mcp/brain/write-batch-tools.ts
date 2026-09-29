@@ -166,6 +166,22 @@ function serializeResult(
   return { ...result };
 }
 
+/**
+ * The note ops that actually put bytes on disk: a create always wrote,
+ * while an update or append whose flag says `false` skipped a
+ * byte-identical target and carries a path but no commit. The receipt's
+ * lint reads only the committed half.
+ */
+function committedNotePage(
+  result: WriteBatchResult["results"][number],
+): result is Extract<WriteBatchResult["results"][number], { readonly path: string }> {
+  return (
+    (result.kind === "create_note" && result.created) ||
+    (result.kind === "update_note" && result.updated) ||
+    (result.kind === "append_note" && result.appended)
+  );
+}
+
 async function toolBrainWriteBatch(
   ctx: ServerContext,
   args: Record<string, unknown>,
@@ -188,11 +204,13 @@ async function toolBrainWriteBatch(
   } catch (err) {
     throw writeBatchErrorToMcp(err, "brain_write_batch");
   }
-  // The pages this batch authored, in commit order. Log-writing ops name
+  // The pages this batch committed, in commit order. Log-writing ops name
   // no note path: their line is machine-composed, not authored, so there
-  // is nothing for the page lint to judge. One report covers the whole
-  // batch, with the basename index and schema pack built ONCE.
-  const writtenPages = batch.results.filter((r) => "path" in r).map((r) => r.path);
+  // is nothing for the page lint to judge. A byte-identical rewrite that
+  // skipped wrote nothing either, so it names no page - the same rule the
+  // single-write receipts follow. One report covers the whole batch, with
+  // the basename index and schema pack built ONCE.
+  const writtenPages = batch.results.filter(committedNotePage).map((r) => r.path);
   return noteWriteResult(ctx, writtenPages, {
     applied: batch.applied,
     results: batch.results.map((r) => serializeResult(ctx, r)),
