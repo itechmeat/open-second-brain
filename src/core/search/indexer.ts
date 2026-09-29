@@ -1702,8 +1702,12 @@ export async function indexCheck(
  * outcomes folded into the report's two. Both non-`read` outcomes are
  * UNRECORDED - they differ in their reason, not in what they prove -
  * and neither is a count of zero.
+ *
+ * Exported for the brain doctor's embeddings-health check, which
+ * consolidates this census beside the index counts instead of deriving
+ * a private copy whose unrecorded contract could drift from this one.
  */
-function readPendingVectorCensus(dbPath: string): PendingVectorCensus {
+export function readPendingVectorCensus(dbPath: string): PendingVectorCensus {
   const peek = peekPendingVectorsSync(dbPath);
   if (peek.kind === "read") {
     return Object.freeze({

@@ -556,6 +556,19 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
+        // The index behind its embedding configuration: chunks with no
+        // vector, or stored vectors under a retired model/dimension. The
+        // registry carries the backfill verb because it is the
+        // condition's cheapest first act; the warning prose names the
+        // re-embed remedy the stale half needs beside it, since a
+        // backfill finds stale rows fully vectorised and leaves them
+        // where they are.
+        code: "embeddings-backlog",
+        issueClass: "indexed chunks with no vector or vectors stale against the configured model",
+        nextCommand: "o2b search vector-backfill",
+        autoRepairable: false,
+      },
+      {
         code: "git-history-absent",
         issueClass: "no ingested git history",
         nextCommand: "o2b brain git ingest <repo-path>",

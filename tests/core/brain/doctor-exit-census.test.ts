@@ -185,6 +185,7 @@ const DOCTOR_REGISTERED_CODES: ReadonlyArray<string> = [
   "dangling-workrun",
   "duplicate-preferences",
   "embedding-model-sunset-announced",
+  "embeddings-backlog",
   "entity-label-malformed",
   "entity-quote-variant-collision",
   "inbox-archivable",

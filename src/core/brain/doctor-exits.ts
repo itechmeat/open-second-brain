@@ -222,6 +222,25 @@ const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
       "the other two are defects in this build rather than in the vault being examined",
   },
   {
+    code: "embeddings-census-unrecorded",
+    reason:
+      "the pending-vector count could not be taken: the index file is absent or would not open, " +
+      "and the finding says which. What restores it depends on which - an absent index is a " +
+      "first-run state an operator reaches deliberately, while a file that will not open is " +
+      "replaced, not repaired in place, and replacing it is a decision about the derived copy " +
+      "rather than about the vault it indexes. Reporting a count of zero here would read as a " +
+      "fully embedded index, which is precisely the failed-read-as-healthy the check refuses",
+  },
+  {
+    code: "embeddings-health-unmeasured",
+    reason:
+      "the check ran and could observe too little to say anything: the search configuration " +
+      "would not resolve, the index probe threw, or the count half of the read failed after the " +
+      "census half succeeded. Which half failed changes what restores it, and the finding names " +
+      "the one that did - so the honest exit is the reason rather than a command guessed for a " +
+      "state nobody observed",
+  },
+  {
     code: "payload-missing",
     reason:
       "the exact bytes a placeholder stands for are gone from the payload store. Nothing in this " +
