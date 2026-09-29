@@ -91,6 +91,9 @@ const DIRECT_STORE_READERS: Readonly<Record<string, string>> = Object.freeze({
   "src/core/brain/generation-reports.ts": "reads `generation_report` for list, summary and show.",
   "src/core/brain/idea-lineage.ts":
     "reads the WHOLE store to build id / turn-id / session-turn indexes.",
+  "src/core/brain/doctor/orphan-session-check.ts":
+    "reads the WHOLE store to collect every known session id, so a " +
+    "session_ref resolves against the same universe the writers stamp.",
   "src/core/brain/link-graph/repair-lane.ts":
     "reads the WHOLE store to harvest `sourceRefs` paths for link repair.",
   "src/core/brain/mcp-route-metrics.ts": "reads `mcp_route_latency` for per-route rollups.",
@@ -125,8 +128,8 @@ const DIRECT_STORE_READERS: Readonly<Record<string, string>> = Object.freeze({
  * these say how far the counts may fall before the split stops describing
  * anything.
  *
- * Four modules read through the read-model and twenty-two read the store
- * directly. Both numbers are EQUALITIES, not floors.
+ * Four modules read through the read-model and twenty-three read the
+ * store directly. Both numbers are EQUALITIES, not floors.
  *
  * The direct floor used to sit at twenty against a reality of
  * twenty-one, on the reasoning that an exact pin would fail on another
@@ -139,7 +142,7 @@ const DIRECT_STORE_READERS: Readonly<Record<string, string>> = Object.freeze({
  * nothing extra to keep true.
  */
 const READ_MODEL_READER_COUNT = 4;
-const DIRECT_STORE_READER_COUNT = 22;
+const DIRECT_STORE_READER_COUNT = 23;
 
 /** A file the classifier must see, and that `grep` alone does not. */
 
