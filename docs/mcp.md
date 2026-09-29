@@ -1560,3 +1560,18 @@ log line is machine-composed rather than authored.
   confidence threshold; `{ available: false, reason: "decision_model_off" }`
   while the use is off, and a private note is refused. None of these writes to
   the vault, and `suggest` never assigns.
+- Since v1.62.0 the ingest plan accounts for what it sets aside. Every
+  skipped file carries a `reason` from a closed, typed set (the legacy
+  free-text sentence still parses as input), the plan adds
+  `skip_reason_counts` per reason, and extensionless regular files nothing
+  can classify are counted in an `unclassifiable` object (`total`,
+  `by_extension`); both keys are absent while empty, so a plan with nothing
+  set aside serializes exactly as before. Note receipts gain an optional
+  `path_advisory` when authored content mentions an absolute host path -
+  absent when the content is clean, and never present for log-line
+  operations; the advisory never blocks the write. `brain_doctor` reports
+  `orphan-session-ref` warnings whose `fix` field names
+  `o2b brain orphan-repair`, and an embeddings-health verdict
+  (`embeddings-backlog`, `embeddings-census-unrecorded`,
+  `embeddings-health-unmeasured`) that is fail-soft: an unrecorded census
+  lands in `uncertain`, never in healthy.
