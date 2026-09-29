@@ -13,7 +13,10 @@ import { tmpdir } from "node:os";
 
 import {
   extractableAllowlist,
+  isSkippedPageReason,
   partitionExtractable,
+  SKIPPED_PAGE_REASON,
+  SKIPPED_PAGE_REASONS,
 } from "../../../../src/core/brain/ingest/extractable-gate.ts";
 
 let vault: string;
@@ -41,7 +44,7 @@ describe("partitionExtractable", () => {
     const part = partitionExtractable(vault, paths, new Set(["paper"]));
     expect(part.extractable).toEqual(["a.md", "c.md"]);
     expect(part.skipped.map((s) => s.path)).toEqual(["b.md"]);
-    expect(part.skipped[0]!.reason).toContain("memo");
+    expect(part.skipped[0]!.detail).toBe("memo");
   });
 
   test("a page with no declared type stays ungated (kept)", () => {
@@ -56,6 +59,29 @@ describe("partitionExtractable", () => {
     const part = partitionExtractable(vault, paths, new Set());
     expect(part.extractable).toEqual(["a.md", "b.md"]);
     expect(part.skipped).toEqual([]);
+  });
+});
+
+describe("typed skip reasons (P4)", () => {
+  test("a skipped page carries a typed reason token from the closed list, plus the schema_type as detail", () => {
+    const paths = [page("a.md", "paper"), page("b.md", "memo")];
+    const part = partitionExtractable(vault, paths, new Set(["paper"]));
+    expect(part.skipped).toHaveLength(1);
+    const skip = part.skipped[0]!;
+    expect(SKIPPED_PAGE_REASONS).toContain(skip.reason);
+    expect(skip.reason).toBe(SKIPPED_PAGE_REASON.notExtractable);
+    expect(skip.detail).toBe("memo");
+  });
+
+  test("isSkippedPageReason accepts the token and the legacy sentence, rejects an unknown string", () => {
+    expect(isSkippedPageReason(SKIPPED_PAGE_REASON.notExtractable)).toBe(true);
+    expect(
+      isSkippedPageReason('schema_type "memo" is not in the schema extractable allowlist'),
+    ).toBe(true);
+    expect(isSkippedPageReason("schema_type was rejected for some other reason")).toBe(false);
+    expect(isSkippedPageReason("")).toBe(false);
+    expect(isSkippedPageReason(42)).toBe(false);
+    expect(isSkippedPageReason(null)).toBe(false);
   });
 });
 

@@ -227,14 +227,21 @@ export function serializeBatchPlan(plan: BatchPlan): Record<string, unknown> {
     total_bytes: plan.totalBytes,
     skipped: [...plan.skipped],
     // Only emitted when the extractable gate skipped something, so a plan with
-    // no extractable declaration serializes byte-identically to before.
+    // no extractable declaration serializes byte-identically to before. The
+    // reason is the typed token (P4) and `detail` carries the schema_type
+    // value behind it, so a reader can check the skip without re-reading.
     ...(plan.skippedNonExtractable.length > 0
       ? {
           skipped_non_extractable: plan.skippedNonExtractable.map((s) => ({
             path: s.path,
             reason: s.reason,
+            detail: s.detail,
           })),
         }
+      : {}),
+    // Per-reason counts (P4), emitted only when something was skipped.
+    ...(Object.keys(plan.skipReasonCounts).length > 0
+      ? { skip_reason_counts: plan.skipReasonCounts }
       : {}),
     // Only emitted when the repository's own ignore files carried a malformed
     // pattern (t_4b2bd8f7), so a tree that declares none - or declares only

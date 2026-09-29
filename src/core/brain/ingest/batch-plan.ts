@@ -64,7 +64,9 @@ import { classifyPaths, readManifest } from "./content-manifest.ts";
 import {
   extractableAllowlist,
   partitionExtractable,
+  SKIPPED_PAGE_REASONS,
   type SkippedPage,
+  type SkippedPageReason,
 } from "./extractable-gate.ts";
 
 /**
@@ -154,6 +156,12 @@ export interface BatchPlan {
    * unset (the gate is off), keeping the plan byte-identical to before.
    */
   readonly skippedNonExtractable: readonly SkippedPage[];
+  /**
+   * {@link BatchPlan.skippedNonExtractable} counted per typed reason token
+   * (P4). Only non-zero reasons appear, in membership order; empty when
+   * nothing was skipped (absent on the wire, byte-identical-when-absent).
+   */
+  readonly skipReasonCounts: Readonly<Partial<Record<SkippedPageReason, number>>>;
   /** Total number of files across all batches (`new` + `modified`). */
   readonly totalFiles: number;
   /** Total bytes across all batches. */
@@ -317,6 +325,7 @@ export function planBatches(vault: string, sourceDir: string, opts: BatchPlanOpt
     batches,
     skipped,
     skippedNonExtractable,
+    skipReasonCounts: countSkipReasons(skippedNonExtractable),
     totalFiles: planned.length,
     totalBytes: planned.reduce((sum, f) => sum + f.bytes, 0),
     planId,
@@ -331,6 +340,21 @@ export function planBatches(vault: string, sourceDir: string, opts: BatchPlanOpt
 function compareIgnoreWarnings(a: IgnoreWarning, b: IgnoreWarning): number {
   if (a.source !== b.source) return a.source < b.source ? -1 : 1;
   return a.line - b.line;
+}
+
+/**
+ * Count the plan's skipped pages per typed reason token, in membership order
+ * so the aggregate (and the wire record built from it) is deterministic.
+ */
+function countSkipReasons(
+  skipped: readonly SkippedPage[],
+): Partial<Record<SkippedPageReason, number>> {
+  const counts: Partial<Record<SkippedPageReason, number>> = {};
+  for (const reason of SKIPPED_PAGE_REASONS) {
+    const n = skipped.filter((s) => s.reason === reason).length;
+    if (n > 0) counts[reason] = n;
+  }
+  return counts;
 }
 
 /**

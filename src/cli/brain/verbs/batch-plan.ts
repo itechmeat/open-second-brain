@@ -105,7 +105,14 @@ export async function cmdBrainBatchPlan(argv: string[]): Promise<number> {
     }
     if (plan.skippedNonExtractable.length > 0) {
       info(`  ${plan.skippedNonExtractable.length} non-extractable page(s) skipped:`);
-      for (const s of plan.skippedNonExtractable) info(`    - ${s.path} (${s.reason})`);
+      for (const s of plan.skippedNonExtractable) {
+        info(`    - ${s.path} (${s.reason}: ${s.detail})`);
+      }
+      // Per-reason aggregate (P4): the taxonomy counted, not just listed.
+      const reasonCounts = Object.entries(plan.skipReasonCounts);
+      if (reasonCounts.length > 0) {
+        info(`    by reason: ${reasonCounts.map(([r, n]) => `${r}=${n}`).join(", ")}`);
+      }
     }
     if (plan.ignoreWarnings.length > 0) {
       info(`  ${plan.ignoreWarnings.length} ignore warning(s):`);

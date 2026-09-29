@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import { SKIPPED_PAGE_REASON } from "../../src/core/brain/ingest/extractable-gate.ts";
 import { INGEST_TOOLS } from "../../src/mcp/brain/ingest-tools.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
@@ -82,5 +83,29 @@ describe("brain_ingest_batch_plan ignore_warnings (t_4b2bd8f7 follow-through)", 
 
     expect("ignore_warnings" in res).toBe(false);
     expect(res).not.toHaveProperty("ignore_warnings");
+  });
+
+  test("skipped_non_extractable crosses the wire as the typed reason token plus detail (P4)", async () => {
+    write("Docs/a.md", "---\nschema_type: paper\n---\nbody\n");
+    write("Docs/b.md", "---\nschema_type: memo\n---\nbody\n");
+    write(
+      "Brain/_brain.yaml",
+      "schema_version: 1\nschema:\n  page_types:\n    - paper\n    - memo\n  extractable:\n    - paper\n",
+    );
+    const res = (await batchPlan(ctx, { source_dir: "Docs" })) as Record<string, unknown>;
+
+    expect(res["skipped_non_extractable"]).toEqual([
+      { path: "Docs/b.md", reason: SKIPPED_PAGE_REASON.notExtractable, detail: "memo" },
+    ]);
+    expect(res["skip_reason_counts"]).toEqual({ [SKIPPED_PAGE_REASON.notExtractable]: 1 });
+  });
+
+  test("a plan with no skips carries no skip_reason_counts key (byte-identical when absent)", async () => {
+    write("Docs/a.md", "---\nschema_type: memo\n---\nbody\n");
+
+    const res = (await batchPlan(ctx, { source_dir: "Docs" })) as Record<string, unknown>;
+
+    expect("skip_reason_counts" in res).toBe(false);
+    expect("skipped_non_extractable" in res).toBe(false);
   });
 });

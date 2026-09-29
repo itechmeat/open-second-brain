@@ -62,7 +62,8 @@ describe("extractable gate in planBatches", () => {
     const plan = planBatches(vault, "Sources", CAPS);
     expect(plannedPaths(plan)).toEqual(["Sources/a.md", "Sources/c.md"]);
     expect(plan.skippedNonExtractable.map((s) => s.path)).toEqual(["Sources/b.md"]);
-    expect(plan.skippedNonExtractable[0]!.reason).toContain("memo");
+    expect(plan.skippedNonExtractable[0]!.reason).toBe("schema-type-not-extractable");
+    expect(plan.skippedNonExtractable[0]!.detail).toBe("memo");
   });
 
   test("with no allowlist the plan is byte-identical (empty gate report)", () => {
