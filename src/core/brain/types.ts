@@ -2260,6 +2260,16 @@ export interface DoctorIssue {
    * per-state limit while the message carries the true total.
    */
   readonly sources?: ReadonlyArray<string>;
+  /**
+   * The exact command that repairs this finding, when one mechanical
+   * repair exists and the general doctor's `CheckResult.fix` shape
+   * already models it (`orphan-session-ref`). Optional and additive:
+   * every issue that does not carry one is byte-identical to what it
+   * was, so JSON consumers and the drift censuses see no change. The
+   * command is a structural CLI string - the verb that owns the repair,
+   * never prose - and the doctor never runs it.
+   */
+  readonly fix?: string;
 }
 
 /**

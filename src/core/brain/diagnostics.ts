@@ -208,6 +208,17 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
+        // An observation signal whose session_ref resolves to no session
+        // or continuity record. The exit is the detach verb, which is
+        // dry-run by default and confirm-gated; `autoRepairable` stays
+        // false because the doctor's repair planner has no fixer for it -
+        // the repair lives behind the verb the issue's `fix` field names.
+        code: "orphan-session-ref",
+        issueClass: "observation whose session_ref resolves to no session",
+        nextCommand: "o2b brain orphan-repair",
+        autoRepairable: false,
+      },
+      {
         code: "broken-backlinks",
         issueClass: "broken Brain backlink",
         nextCommand: "o2b brain backlinks",

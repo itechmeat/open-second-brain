@@ -144,6 +144,7 @@ Brain verbs (observing memory):
   telegram-capture    Inbound Telegram capture bot: run (long-poll) | catchup
   inbox-drain         Classify and route staged captures (dry-run; --apply to route)
   repair-lane         Propose memory-graph edges (dry-run; --apply --confirm to write, holdout-gated)
+  orphan-repair       Detach dangling session references from observations (dry-run; --apply --confirm)
   session-grep        Search imported session recall turns and summaries
   session-describe    Describe an imported session recall DAG
   session-expand      Expand a session recall node to source turns
@@ -1054,6 +1055,17 @@ export const VERB_HELP: Record<string, string> = {
     "the default and writes nothing; --apply routes each capture and archives\n" +
     "it, so a rerun is a no-op. Unroutable items are reported and left in\n" +
     "place. Each item names its action and reason.\n",
+  "orphan-repair":
+    'usage: o2b brain orphan-repair [--apply --confirm "apply orphan repair"] [--vault <path>] [--json]\n' +
+    "Detach dangling session references from observation signals. A signal whose\n" +
+    "session_ref resolves to no session or continuity record is reported by the\n" +
+    "doctor under orphan-session-ref with this verb as its fix. Dry-run is the\n" +
+    "default and writes nothing; --apply removes ONLY the session_ref key from\n" +
+    "each signal's frontmatter and requires the exact confirmation phrase via\n" +
+    "--confirm. The observation body, topic and every other field are kept, and\n" +
+    "the detached value is quoted in the report. A hard per-run cap bounds the\n" +
+    "writes, and a rerun after apply converges to zero writes. The doctor pass\n" +
+    "never repairs - it reports and names this verb.\n",
   "repair-lane":
     'usage: o2b brain repair-lane [--apply --confirm "apply repair"] [--include-inferred] [--vault <path>] [--json]\n' +
     "Deterministic memory-graph repair lane. Collects candidate edges from\n" +

@@ -648,6 +648,11 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
             flag("include-inferred", "boolean"),
           ],
         ),
+        command(
+          "orphan-repair",
+          "Detach dangling session references from observations (dry-run by default)",
+          [flag("vault", "string"), flag("apply", "boolean"), flag("confirm", "string")],
+        ),
         command("session-grep", "Search imported session recall turns and summaries"),
         command("session-describe", "Describe an imported session recall DAG"),
         command("session-expand", "Expand a session recall node to its source turns"),

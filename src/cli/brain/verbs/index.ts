@@ -128,6 +128,7 @@ export { cmdBrainExpire } from "./expire.ts";
 export { cmdBrainTelegramCapture } from "./telegram-capture.ts";
 export { cmdBrainInboxDrain } from "./inbox-drain.ts";
 export { cmdBrainRepairLane } from "./repair-lane.ts";
+export { cmdBrainOrphanRepair } from "./orphan-repair.ts";
 export { cmdBrainSignal } from "./signal.ts";
 export {
   cmdBrainSessionDescribe,
