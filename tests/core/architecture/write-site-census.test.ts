@@ -1267,8 +1267,11 @@ const DIRECT_WRITE_ROWS = 75;
  * 105 -> 106: `src/core/brain/dedup-index-cache.ts` persists the
  * machine-local dedup index cache through `atomicWriteFileSync`, outside
  * the vault (issue #195).
+ *
+ * 106 -> 107: `src/core/brain/link-graph/orphan-repair.ts` detaches a
+ * signal's `session_ref` through `writeFrontmatterAtomic`.
  */
-const SHARED_HELPER_ROWS = 106;
+const SHARED_HELPER_ROWS = 107;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1349,9 +1352,10 @@ const UNSTAMPED_DIRECT_ROWS = 74;
  * The payload registry's `put()` is one of the unstamped sites counted, and
  * so is the knowledge-pack install fingerprint (100 -> 101), and the
  * failed-upgrade marker `self-heal-upgrade-state.ts` writes (101 -> 102),
- * and the dedup index cache, a derived file outside the vault (102 -> 103).
+ * and the dedup index cache, a derived file outside the vault (102 -> 103),
+ * and the orphan-repair detach (103 -> 104).
  */
-const UNSTAMPED_SHARED_ROWS = 103;
+const UNSTAMPED_SHARED_ROWS = 104;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {
