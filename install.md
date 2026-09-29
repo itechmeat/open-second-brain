@@ -20,8 +20,7 @@ pattern that every install path ends with. On native Windows, read
 
 ## Quick install
 
-For MCP-aware runtimes the v0.10.11 orchestrator handles install
-in one command:
+For these runtimes one `o2b install` command writes the integration:
 
 | Runtime              | Command                                            | Notes                                                                 |
 |----------------------|----------------------------------------------------|-----------------------------------------------------------------------|
@@ -34,6 +33,9 @@ in one command:
 | Google Gemini CLI    | `o2b install --target gemini-cli --apply`          | `install/gemini-cli.md` — JSON-merge in `~/.gemini/settings.json`     |
 | Pi (pi.dev)          | `o2b install --target pi --apply`                  | `install/pi.md` — skill symlink, not MCP                              |
 | Generic / other      | `o2b install --target generic --apply --out -`     | `install/generic.md` — prints payload; never edits external config    |
+
+ZCode has no install target yet: add the printed servers to its config
+by hand, see `install/zcode.md`.
 
 For runtimes that ship their own plugin/MCP install pipeline, OSB
 hooks into that pipeline instead of `o2b install --target`:
@@ -107,7 +109,7 @@ Universal:
       stamps `@<chosen-agent-name>` in `Daily/`, not `@agent`.
 
 MCP-driven runtimes only (Cursor, opencode, Grok Build, kiro,
-Copilot CLI, Gemini CLI, Claude Code, Codex, Hermes — not `aider`,
+Copilot CLI, Gemini CLI, Claude Code, Codex, Hermes, ZCode; not `aider`,
 `pi`, or `generic`):
 
 - [ ] all OSB tools advertised by the runtime's MCP listing.

@@ -13,6 +13,22 @@ If you cannot install Bun (locked-down environment, unsupported
 architecture), the plugin will not function on that host. No Python
 fallback exists.
 
+## Get the `o2b` CLI
+
+Plugin hosts (Claude Code, Codex, Hermes, OpenClaw) ship the launcher
+with the plugin; their install page shows how to publish it. For every
+other client, clone the repository and publish the launcher from the
+clone:
+
+```bash
+git clone https://github.com/itechmeat/open-second-brain ~/open-second-brain
+~/open-second-brain/scripts/o2b install-cli
+o2b version
+```
+
+`install-cli` links `o2b`, `vault-log` and `o2b-hook` into `~/.local/bin`.
+On native Windows, follow [`windows.md`](windows.md) instead.
+
 ## Supported platforms
 
 Linux, macOS and the other POSIX hosts Bun runs on, plus native
@@ -73,7 +89,7 @@ o2b doctor --vault /path/to/vault --repo .
 o2b install --check
 ```
 
-`o2b install --check` is the v0.10.11 runtime-install health check
+`o2b install --check` is the runtime-install health check
 (per-target managed-block / MCP-ping verification). `o2b doctor`
 covers vault invariants — they are complementary, not substitutes.
 

@@ -72,6 +72,7 @@ const PIPELINE_HOSTED_DOCS: Readonly<Record<string, string>> = Object.freeze({
   "openclaw.md": "plugin-hosted; verified with `openclaw plugins inspect`, not an OSB adapter",
   "prerequisites.md": "shared setup, not a runtime document",
   "windows.md": "shared setup for native Windows, not a runtime document",
+  "zcode.md": "manual MCP config in ZCode's own file; no install adapter yet",
 });
 
 interface Harness {
