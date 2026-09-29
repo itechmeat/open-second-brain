@@ -408,6 +408,8 @@ edges:
 - { from: choose_scope, to: workspace, condition: { type: review_status, equals: option-3 } }
 - { from: workspace, to: design }
 - { from: choose_scope, to: scope_scan, condition: { type: review_status, equals: revise }, max_traversals: 3 }
+# A fourth revise request: stop instead of leaving the run without a next node.
+- { from: choose_scope, to: abandoned, fallback: true }
 - { from: design, to: implement }
 - { from: implement, to: pr_prepare }
 - { from: pr_prepare, to: merge_gate, condition: { type: node_status, node: pr_prepare, equals: success } }
