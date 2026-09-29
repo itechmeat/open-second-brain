@@ -255,6 +255,39 @@ describe("URL credentials whose password carries a slash", () => {
   });
 });
 
+describe("URL credentials with an empty username", () => {
+  // The `user:pass@` spelling requires a username, so the sibling spelling
+  // connection strings actually use for password-only authorities -
+  // `scheme://:pass@host` - matched nothing: the password rode past the
+  // pass verbatim. The user half is optional; the colon and `@` anchors
+  // stay, so a URL whose path carries an `@` but no userinfo colon is
+  // still untouched.
+  const EMPTY_USER_URL = "postgres://:s3cr3t@db.internal:5432/prod";
+  const EMPTY_USER_SLASH_PASSWORD_URL = "redis://:s3cr3t/Tr4p@cache.internal:6379/0";
+
+  test("the export-boundary default options redact a password-only userinfo section", () => {
+    const verdict = redactForEgress("brain-bank-export", { dsn: EMPTY_USER_URL });
+    expect(verdict.outcome).toBe(EGRESS_OUTCOME.released);
+    if (verdict.outcome !== EGRESS_OUTCOME.released) throw new Error("unreachable");
+    expect(verdict.payload.dsn).toBe("postgres://***REDACTED***@db.internal:5432/prod");
+    expect(verdict.redacted).toBe(true);
+  });
+
+  test("redactUrlCredentials alone redacts an empty username with a slash password", () => {
+    const out = redactRawOutput(`connect ${EMPTY_USER_SLASH_PASSWORD_URL} now`, {
+      redactUrlCredentials: true,
+    });
+    expect(out).toBe("connect redis://***REDACTED***@cache.internal:6379/0 now");
+  });
+
+  test("a path-only `@` without a userinfo colon is not rewritten", () => {
+    const out = redactRawOutput("see https://mastodon.social/@someone for the thread", {
+      redactUrlCredentials: true,
+    });
+    expect(out).toBe("see https://mastodon.social/@someone for the thread");
+  });
+});
+
 describe("bare JWT (three base64url segments)", () => {
   // A JWT's header is compact JSON, so it always base64s to the `eyJ`
   // prefix; the 20-character canonical header slips the 24-character

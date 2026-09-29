@@ -266,12 +266,16 @@ const IPV4 = `${IPV4_OCTET}(?:\\.${IPV4_OCTET}){3}`;
 // The password class is `[^\s@]+`, not `[^\s/@]+`: a generated database
 // password routinely carries `/`, and with the old class the regex failed
 // the match ENTIRELY - both the user and the password left verbatim, a
-// wider leak than if the pass had never run. The class still cannot cross
-// whitespace, the `://` scheme anchor and the `@` anchor are kept, and the
-// run is bounded by those anchors (a `[^\s@]+` run ends at the first
-// whitespace or `@`, deterministically), so the documented linear /
-// no-ReDoS property above holds.
-const BASIC_AUTH_URL_RE = /\b([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^\s/:@]+):([^\s@]+)@/g;
+// wider leak than if the pass had never run. The username may be EMPTY -
+// a password-only authority is a spelling connection strings really use
+// (`scheme://:pass@host`) - while the colon between the halves stays
+// mandatory and adjacent, so a URL whose path carries an `@` but no
+// userinfo colon is untouched. Every class still cannot cross whitespace,
+// the `://` scheme anchor and the `@` anchor are kept, and each run is
+// bounded by those anchors (a `[^\s@]+` run ends at the first whitespace
+// or `@`, deterministically), so the documented linear / no-ReDoS
+// property above holds.
+const BASIC_AUTH_URL_RE = /\b([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^\s/:@]*):([^\s@]+)@/g;
 
 // `ipv4:port` — a reachable service endpoint. Redacted whole regardless of
 // whether the address is public or private (the port is what leaks the
