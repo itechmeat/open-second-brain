@@ -211,6 +211,11 @@ import {
   PAGE_LINT_SKIP_REASONS,
 } from "../../../src/core/brain/page-lint.ts";
 import {
+  isSkippedPageReason,
+  SKIPPED_PAGE_REASON,
+  SKIPPED_PAGE_REASONS,
+} from "../../../src/core/brain/ingest/extractable-gate.ts";
+import {
   EGRESS_REDACTION,
   EGRESS_REDACTION_STATUSES,
   isEgressRedactionStatus,
@@ -698,6 +703,16 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: PAGE_LINT_SKIP_REASON,
     members: PAGE_LINT_SKIP_REASONS,
     guard: isPageLintSkipReason,
+  },
+  {
+    // What the extractable gate names a skipped page. Registered for the
+    // same reason the page-lint vocabulary is: the token crosses the MCP
+    // wire and the CLI JSON verbatim, so a value added here and forgotten
+    // in the membership list is a reason no reader can narrow.
+    name: "SKIPPED_PAGE_REASON",
+    values: SKIPPED_PAGE_REASON,
+    members: SKIPPED_PAGE_REASONS,
+    guard: isSkippedPageReason,
   },
   {
     // C1. What a given export path does about secrets on the way out.
@@ -1547,7 +1562,7 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
  * How many four-piece vocabularies `src/` currently holds. Measured, and
  * kept as an equality rather than a floor - see the population test.
  */
-const VOCABULARY_POPULATION = 76;
+const VOCABULARY_POPULATION = 77;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {
