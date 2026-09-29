@@ -3,3 +3,8 @@ runs/
 trash/
 tmp/
 secrets.env
+cache/
+backup-*/
+workdir.lock
+locks/
+decisions.jsonl

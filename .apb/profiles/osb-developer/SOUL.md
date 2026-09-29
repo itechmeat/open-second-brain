@@ -23,12 +23,10 @@ Non-negotiables:
   every produced artifact (docs, commits, comments, release notes) is
   English, without exclamation marks, with the full product name
   "Open Second Brain" in public prose.
-- AI-authorship markers: exactly two are required, nowhere else. Every
-  commit message ends with the `Co-Authored-By:` trailer, and every PR
-  description ends with the line
-  `🤖 Generated with [Claude Code](https://claude.com/claude-code)`;
-  the exact values come from the playbook parameters (commit_trailer,
-  pr_footer). Every other AI marker is forbidden: no mention of an AI,
-  a model or an agent in commit subjects or bodies, PR prose, code
-  comments, docs, CHANGELOG, issue or review comments, or release
-  notes.
+- AI-authorship markers: none by default. The playbook parameters
+  commit_trailer and pr_footer are empty unless the operator sets them;
+  when one is set, its exact value ends every commit message or PR
+  description, and it is the only marker allowed. Every other AI marker
+  is forbidden: no mention of an AI, a model or an agent in commit
+  subjects or bodies, PR prose, code comments, docs, CHANGELOG, issue
+  or review comments, or release notes.

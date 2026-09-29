@@ -1,0 +1,8 @@
+name: osb-reviewer
+description: Code reviewer for Open Second Brain pull requests; runs OpenCodeReview in delegation mode on a fixed model, verifies each finding against the source and fixes the confirmed ones.
+executor:
+  agent: claude
+  model: claude-opus-5-5
+soul: any
+skills: []
+environment: full
