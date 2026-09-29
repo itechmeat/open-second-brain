@@ -449,6 +449,16 @@ export interface WriteFrontmatterAtomicOptions {
  *     (CLI + MCP server, multiple agents) → exclusive `link(2)` instead
  *     of the TOCTOU-prone `existsSync` + `writeFileSync` pair.
  *
+ * Returns whether bytes were written. The overwrite branch skips a
+ * byte-identical target: the rename pipeline lands a fresh inode on every
+ * call, so a re-render that produced the exact bytes already on disk used
+ * to bump the file's mtime anyway, and every mtime consumer downstream
+ * (recency ranking, validity windows, vault-delta counts) read that
+ * phantom bump as a change. Callers that ignore the return keep working
+ * unchanged; the exclusive-create branch always writes or throws, so it
+ * reports `true` and gains no compare step - a target that exists is a
+ * refusal, never a skip.
+ *
  * On a collision the function always throws a {@link FileAlreadyExistsError}
  * carrying `code === "EEXIST"`, the absolute path, and the `kind` when one
  * was supplied. Only the message differs between the two call shapes:
@@ -471,14 +481,14 @@ export function writeFrontmatterAtomic(
   metadata: FrontmatterMap,
   body: string,
   opts: WriteFrontmatterAtomicOptions = {},
-): void {
+): boolean {
   const contents = formatFrontmatter(metadata, body);
   if (opts.overwrite) {
-    atomicWriteFileSync(path, contents);
-    return;
+    return atomicWriteFileSync(path, contents, { skipIfUnchanged: true });
   }
   try {
     atomicCreateFileSyncExclusive(path, contents);
+    return true;
   } catch (err) {
     if (opts.existsErrorKind && isFileAlreadyExists(err)) {
       // `vaultRelative` rather than a hand-rolled `startsWith(vault + "/")`

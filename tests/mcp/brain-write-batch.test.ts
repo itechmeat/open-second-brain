@@ -16,13 +16,25 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import { readLogDay } from "../../src/core/brain/log-jsonl.ts";
+import { writeImagesDir } from "../../src/core/brain/paths.ts";
+import { BRAIN_LOG_EVENT_KIND } from "../../src/core/brain/types.ts";
 import { WRITE_BATCH_TOOLS } from "../../src/mcp/brain/write-batch-tools.ts";
 import { NOTES_TOOLS } from "../../src/mcp/brain/notes-tools.ts";
 import { MAX_BATCH_OPERATIONS } from "../../src/core/brain/write-batch.ts";
@@ -445,5 +457,82 @@ describe("brain_write_batch - the absolute-path advisory on the receipt", () => 
     })) as Record<string, unknown>;
     expect(Object.keys(res)).toEqual(["appended", "path", "write_id"]);
     expect("path_advisory" in res).toBe(false);
+  });
+});
+
+/**
+ * mtime stability on byte-identical rewrites (p4-silent-failure-hardening,
+ * Task 6). The atomic write pipeline lands a fresh inode on every call,
+ * so re-applying a byte-identical update used to bump the note's mtime -
+ * poisoning recency ranking, validity windows and vault-delta counts -
+ * while storing a before-image and recording a note-write event for a
+ * write that never happened. The commit now skips unchanged targets, and
+ * the receipt says what actually occurred.
+ */
+describe("brain_write_batch - mtime stability on byte-identical rewrites", () => {
+  /** Note-write events recorded in today's log shard. */
+  function noteWriteEvents(): number {
+    const day = readLogDay(vault, new Date().toISOString().slice(0, 10));
+    return day.entries.filter((e) => e.eventType === BRAIN_LOG_EVENT_KIND.noteWrite).length;
+  }
+
+  function writeImages(): number {
+    const dir = writeImagesDir(vault);
+    return existsSync(dir) ? readdirSync(dir).length : 0;
+  }
+
+  /** Stamp a note's mtime one minute into the past, measurably. */
+  function ageMtime(abs: string): number {
+    const past = Date.now() / 1000 - 60;
+    utimesSync(abs, past, past);
+    return statSync(abs).mtimeMs;
+  }
+
+  test("a byte-identical update re-applied writes nothing and says updated: false", async () => {
+    seedNote("Notes/Stable.md", "v1");
+    const first = await runBatch([{ op: "update_note", path: "Notes/Stable.md", content: "v2" }]);
+    expect(first.results[0]).toMatchObject({ kind: "update_note", updated: true });
+
+    const abs = join(vault, "Notes/Stable.md");
+    const mtime = ageMtime(abs);
+    const events = noteWriteEvents();
+    const images = writeImages();
+
+    const second = await runBatch([{ op: "update_note", path: "Notes/Stable.md", content: "v2" }]);
+    const only = second.results[0]!;
+    expect(only).toMatchObject({ kind: "update_note", path: "Notes/Stable.md", updated: false });
+    // The mtime is untouched: no temp file, no rename, no fresh inode.
+    expect(statSync(abs).mtimeMs).toBe(mtime);
+    // No audit line exists for a write that did not happen - no note-write
+    // event, no before-image, and no null write_id that could be mistaken
+    // for a lost one.
+    expect(noteWriteEvents()).toBe(events);
+    expect(writeImages()).toBe(images);
+    expect("write_id" in only).toBe(false);
+    expect("audit_reason" in only).toBe(false);
+  });
+
+  test("a real change still bumps the mtime and reports updated: true", async () => {
+    seedNote("Notes/Real.md", "v1");
+    const abs = join(vault, "Notes/Real.md");
+    const mtime = ageMtime(abs);
+    const res = await runBatch([{ op: "update_note", path: "Notes/Real.md", content: "v2" }]);
+    const only = res.results[0]!;
+    expect(only).toMatchObject({ kind: "update_note", path: "Notes/Real.md", updated: true });
+    expect(statSync(abs).mtimeMs).toBeGreaterThan(mtime);
+    // A write that happened stays attributed.
+    expect("write_id" in only).toBe(true);
+  });
+
+  test("an append with a fresh body reports appended: true", async () => {
+    seedNote("Notes/Appended.md", "base", "title: Appended");
+    const res = await runBatch([{ op: "append_note", path: "Notes/Appended.md", content: "more" }]);
+    expect(res.results[0]).toMatchObject({
+      kind: "append_note",
+      path: "Notes/Appended.md",
+      appended: true,
+    });
+    expect(readFileSync(join(vault, "Notes/Appended.md"), "utf8")).toContain("base");
+    expect(readFileSync(join(vault, "Notes/Appended.md"), "utf8")).toContain("more");
   });
 });

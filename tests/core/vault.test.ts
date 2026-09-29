@@ -6,6 +6,8 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -23,6 +25,7 @@ import {
   parseFrontmatterWithNotices,
   slugify,
   writeFrontmatter,
+  writeFrontmatterAtomic,
 } from "../../src/core/vault.ts";
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
@@ -490,5 +493,57 @@ describe("formatFrontmatter refuses a key the parser could not read back", () =>
     const path = join(tmp, "note.md");
     expect(() => writeFrontmatter(path, { "a\nb: c": "v" }, "body")).toThrow(FrontmatterKeyError);
     expect(existsSync(path)).toBe(false);
+  });
+});
+
+/**
+ * mtime stability on the overwrite branch (p4-silent-failure-hardening,
+ * Task 6). `writeFrontmatterAtomic` goes through the atomic rename
+ * pipeline, which lands a fresh inode on every call: a re-render that
+ * produced the exact bytes already on disk still bumped the file's
+ * mtime, and every mtime consumer downstream (recency ranking, validity
+ * windows, vault-delta counts) read that phantom bump as a change. The
+ * overwrite branch now skips byte-identical targets and reports whether
+ * it wrote.
+ */
+describe("writeFrontmatterAtomic mtime stability", () => {
+  function ageMtime(path: string): number {
+    const past = Date.now() / 1000 - 60;
+    utimesSync(path, past, past);
+    return statSync(path).mtimeMs;
+  }
+
+  test("an overwrite of identical content leaves the mtime alone and reports no write", () => {
+    const path = join(tmp, "note.md");
+    writeFrontmatterAtomic(path, { title: "T" }, "body", { overwrite: true });
+    const mtime = ageMtime(path);
+
+    const wrote = writeFrontmatterAtomic(path, { title: "T" }, "body", { overwrite: true });
+
+    expect(wrote).toBe(false);
+    expect(statSync(path).mtimeMs).toBe(mtime);
+    expect(readFileSync(path, "utf8")).toContain("body");
+  });
+
+  test("an overwrite of changed content still rewrites and reports the write", () => {
+    const path = join(tmp, "note.md");
+    writeFrontmatterAtomic(path, { title: "T" }, "body", { overwrite: true });
+    const mtime = ageMtime(path);
+
+    const wrote = writeFrontmatterAtomic(path, { title: "T" }, "body2", { overwrite: true });
+
+    expect(wrote).toBe(true);
+    expect(statSync(path).mtimeMs).toBeGreaterThan(mtime);
+    expect(readFileSync(path, "utf8")).toContain("body2");
+  });
+
+  test("the exclusive create is untouched by the gate and reports its write", () => {
+    const path = join(tmp, "fresh.md");
+    const wrote = writeFrontmatterAtomic(path, { title: "T" }, "body");
+    expect(wrote).toBe(true);
+    expect(existsSync(path)).toBe(true);
+    // The no-overwrite branch keeps its collision semantics: it refuses,
+    // it does not compare and skip.
+    expect(() => writeFrontmatterAtomic(path, { title: "T" }, "other")).toThrow();
   });
 });

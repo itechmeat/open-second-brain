@@ -354,11 +354,13 @@ async function toolBrainUpdateNote(
   };
   const result = runSingleWrite(ctx, op, "brain_update_note");
   // The flag comes off the kernel result rather than being restated here:
-  // one fact, one source.
-  return noteWriteResult(ctx, [result.path], {
+  // one fact, one source. A skipped update wrote no bytes, so it names no
+  // page for the lint and carries no audit half - the same shape a
+  // skipped create spells.
+  return noteWriteResult(ctx, result.updated ? [result.path] : [], {
     updated: result.updated,
     path: result.path,
-    ...auditFields(result),
+    ...(result.updated ? auditFields(result) : {}),
     ...pathAdvisoryFields(result),
   });
 }
@@ -375,10 +377,12 @@ async function toolBrainAppendNote(
   const content = coerceStr(args, "content", true)!;
   const op: AppendNoteOperation = { kind: "append_note", path, content };
   const result = runSingleWrite(ctx, op, "brain_append_note");
-  return noteWriteResult(ctx, [result.path], {
+  // Skipped-append receipts follow the skipped-update shape: no bytes
+  // landed, so no page to lint and no audit half to mistake.
+  return noteWriteResult(ctx, result.appended ? [result.path] : [], {
     appended: result.appended,
     path: result.path,
-    ...auditFields(result),
+    ...(result.appended ? auditFields(result) : {}),
     ...pathAdvisoryFields(result),
   });
 }
