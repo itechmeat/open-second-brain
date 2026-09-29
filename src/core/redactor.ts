@@ -1122,7 +1122,7 @@ export function redactStructured(
     }
     if (typeof value === "object" && value !== null) {
       if (!isPlainContainer(value)) return value;
-      return walkEntries(value, location, isSecretKeyName);
+      return walkEntries(value as Record<string, unknown>, location, isSecretKeyName);
     }
     return value;
   };
