@@ -17,7 +17,13 @@ import { join } from "node:path";
 import { runCli } from "../helpers/run-cli.ts";
 import { ORPHAN_SESSION_REPAIR_COMMAND } from "../../src/core/brain/doctor/orphan-session-check.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
+import { signalPath as brainSignalPath } from "../../src/core/brain/paths.ts";
 import { writeSignal } from "../../src/core/brain/signal.ts";
+
+/** Event date and slug of the single fixture signal; the production
+ * path builder composes the same file name from them. */
+const FIXTURE_DATE = "2026-06-01";
+const FIXTURE_SLUG = "orphan";
 
 let tmp: string;
 let vault: string;
@@ -37,22 +43,25 @@ afterEach(() => {
 });
 
 function signalPath(): string {
-  // The verb tests address the file by walking the inbox; there is
-  // exactly one signal in this vault per test.
-  return join(vault, "Brain", "inbox", readdirSync(join(vault, "Brain", "inbox"))[0]!);
+  // The production path builder derives the exact file name from the
+  // date and slug the fixture writes with. Walking the inbox would be
+  // fragile: readdirSync order is filesystem-defined, and the bootstrap
+  // also places the `archived/` and `processed/` sibling directories
+  // there, so on some filesystems the first entry is a directory.
+  return brainSignalPath(vault, FIXTURE_DATE, FIXTURE_SLUG);
 }
 
 function writeOrphan(): void {
   // The canonical writer, so the doctor's own record check parses the
   // fixture cleanly and the only finding in play is the orphan itself.
   writeSignal(vault, {
-    topic: "orphan",
+    topic: FIXTURE_SLUG,
     signal: "positive",
     agent: "tester",
     principle: "observations keep their provenance",
     created_at: "2026-06-01T00:00:00Z",
-    date: "2026-06-01",
-    slug: "orphan",
+    date: FIXTURE_DATE,
+    slug: FIXTURE_SLUG,
     source_type: "session",
     source: ["[[session:sess-gone#turn-1]]"],
     session_ref: "session:sess-gone#turn-1",
