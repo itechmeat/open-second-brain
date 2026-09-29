@@ -355,3 +355,95 @@ describe("brain_write_batch - the lint attached to the receipt", () => {
     expect(PAGE_LINT_KEY in res).toBe(false);
   });
 });
+
+/**
+ * The absolute-path advisory (p4-silent-failure-hardening, Task 3). A
+ * note body embedding an absolute home path used to land with no word
+ * about it. The advisory rides each note result like page-lint rides the
+ * envelope: non-blocking, and absent entirely when there is nothing to
+ * say. Path fragments are composed so this file stays clean under the
+ * repo hygiene gate's grammar.
+ */
+describe("brain_write_batch - the absolute-path advisory on the receipt", () => {
+  const HOME = "/home/";
+  const leaky = `see ${HOME}alice-dev/notes/x.md for details`;
+
+  test("an update authoring a home path carries the advisory and still applies", async () => {
+    seedNote("Notes/Leaky.md", "old", "title: Leaky");
+    const res = await runBatch([{ op: "update_note", path: "Notes/Leaky.md", content: leaky }]);
+    // Non-blocking: the batch applies and the bytes land.
+    expect(res.applied).toBe(1);
+    expect(readFileSync(join(vault, "Notes/Leaky.md"), "utf8")).toContain("alice-dev");
+    const only = res.results[0]!;
+    const advisory = only["path_advisory"] as
+      | { total: number; findings: ReadonlyArray<Record<string, unknown>> }
+      | undefined;
+    expect(advisory).toBeDefined();
+    expect(advisory!.total).toBe(1);
+    expect(advisory!.findings).toEqual([
+      { page: "Notes/Leaky.md", line: 1, detector: "unix-home" },
+    ]);
+    // The advisory echoes identifiers and integers, never the path itself.
+    expect(JSON.stringify(res)).not.toContain(`${HOME}alice-dev`);
+  });
+
+  test("a clean update carries no advisory key at all", async () => {
+    seedNote("Notes/Clean.md", "old", "title: Clean");
+    const res = await runBatch([{ op: "update_note", path: "Notes/Clean.md", content: "new" }]);
+    const only = res.results[0]!;
+    expect(Object.keys(only)).toEqual(["kind", "path", "updated", "write_id"]);
+    expect("path_advisory" in only).toBe(false);
+  });
+
+  test("a frontmatter-only update authors no body and carries no advisory", async () => {
+    seedNote("Notes/Fm.md", "prose with no leak", "title: Fm");
+    const res = await runBatch([
+      { op: "update_note", path: "Notes/Fm.md", frontmatter: { title: "Fm2" } },
+    ]);
+    expect(res.applied).toBe(1);
+    expect("path_advisory" in res.results[0]!).toBe(false);
+  });
+
+  test("create and append ops carry the advisory; log-line ops do not", async () => {
+    seedNote("Notes/AppTarget.md", "base", "title: AppTarget");
+    const res = await runBatch([
+      { op: "create_note", path: "Notes/Created.md", content: leaky },
+      { op: "append_note", path: "Notes/AppTarget.md", content: leaky },
+      { op: "append_log_line", text: "batch landed" },
+    ]);
+    expect(res.applied).toBe(3);
+    const [created, appended, logLine] = res.results;
+    expect("path_advisory" in created!).toBe(true);
+    expect("path_advisory" in appended!).toBe(true);
+    expect("path_advisory" in logLine!).toBe(false);
+  });
+
+  test("brain_update_note passes the advisory through on its receipt", async () => {
+    seedNote("Notes/Single.md", "old", "title: Single");
+    const updateTool = NOTES_TOOLS.find((t) => t.name === "brain_update_note")!;
+    const leaky = `body with ${HOME}alice-dev/leak.md inside`;
+    const res = (await updateTool.handler(ctx, {
+      path: "Notes/Single.md",
+      content: leaky,
+    })) as Record<string, unknown>;
+    expect(res["updated"]).toBe(true);
+    const advisory = res["path_advisory"] as {
+      total: number;
+      findings: ReadonlyArray<Record<string, unknown>>;
+    };
+    expect(advisory.total).toBe(1);
+    expect(advisory.findings[0]).toMatchObject({ page: "Notes/Single.md", line: 1 });
+    expect(JSON.stringify(res)).not.toContain(`${HOME}alice-dev`);
+  });
+
+  test("brain_append_note carries no advisory key on a clean receipt", async () => {
+    seedNote("Notes/App.md", "base", "title: App");
+    const appendTool = NOTES_TOOLS.find((t) => t.name === "brain_append_note")!;
+    const res = (await appendTool.handler(ctx, {
+      path: "Notes/App.md",
+      content: "clean addition",
+    })) as Record<string, unknown>;
+    expect(Object.keys(res)).toEqual(["appended", "path", "write_id"]);
+    expect("path_advisory" in res).toBe(false);
+  });
+});

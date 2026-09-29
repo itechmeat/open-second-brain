@@ -41,6 +41,7 @@ import {
 } from "./notes/write-record.ts";
 import { formatFrontmatter, parseFrontmatterWithNotices } from "../vault.ts";
 import { DEGRADATION_CODE } from "../integrity/degradation.ts";
+import { writePathAdvisoryField, type WritePathAdvisoryField } from "./write-path-advisory.ts";
 import {
   appendApplyEvidence,
   type AppendApplyEvidenceInput,
@@ -237,23 +238,36 @@ export interface NoteWriteAudit {
   readonly audit_reason?: string;
 }
 
+/**
+ * The advisory half every note-write result MAY carry (p4
+ * silent-failure-hardening, Task 3): the absolute home paths the call's
+ * authored content embeds. Byte-identical-when-absent - the key is simply
+ * not there for a clean write - and never a refusal: the write lands and
+ * the receipt says what it embeds. Log-line and evidence ops author no
+ * note content and never carry it.
+ */
+export type NoteWriteAdvisory = WritePathAdvisoryField;
+
 /** Per-operation outcome, discriminated by `kind`. */
 export type WriteBatchOpResult =
   | ({
       readonly kind: "create_note";
       readonly path: string;
       readonly created: true;
-    } & NoteWriteAudit)
+    } & NoteWriteAudit &
+      NoteWriteAdvisory)
   | ({
       readonly kind: "update_note";
       readonly path: string;
       readonly updated: true;
-    } & NoteWriteAudit)
+    } & NoteWriteAudit &
+      NoteWriteAdvisory)
   | ({
       readonly kind: "append_note";
       readonly path: string;
       readonly appended: true;
-    } & NoteWriteAudit)
+    } & NoteWriteAudit &
+      NoteWriteAdvisory)
   | { readonly kind: "apply_evidence"; readonly logged_at: string; readonly log_path: string }
   | { readonly kind: "append_log_line"; readonly logged_at: string; readonly log_path: string };
 
@@ -432,13 +446,16 @@ function projectCreateNote(
           );
         }
         // The create writer records its own event, so the batch carries
-        // its receipt through rather than appending a second one.
+        // its receipt through rather than appending a second one. The
+        // advisory was computed in the projection from the authored
+        // content; it advises, it never refuses.
         return {
           kind: "create_note",
           path: res.path,
           created: true,
           write_id: res.write_id,
           ...(res.audit_reason !== undefined ? { audit_reason: res.audit_reason } : {}),
+          ...writePathAdvisoryField(op.content, res.path),
         };
       } catch (err) {
         throw envelopeError(err, index);
@@ -532,7 +549,15 @@ function projectUpdateNote(
         NOTE_WRITE_OP.update,
         opts,
       );
-      return { kind: "update_note", path: target.relPath, updated: true, ...audit };
+      return {
+        kind: "update_note",
+        path: target.relPath,
+        updated: true,
+        ...audit,
+        // The caller's authored body, not the note's whole content: a
+        // path already on disk was not this call's authorship.
+        ...writePathAdvisoryField(op.body, target.relPath),
+      };
     },
   };
 }
@@ -566,7 +591,15 @@ function projectAppendNote(
         NOTE_WRITE_OP.append,
         opts,
       );
-      return { kind: "append_note", path: target.relPath, appended: true, ...audit };
+      return {
+        kind: "append_note",
+        path: target.relPath,
+        appended: true,
+        ...audit,
+        // The appended text is the call's authorship; the body it joined
+        // is not.
+        ...writePathAdvisoryField(op.content, target.relPath),
+      };
     },
   };
 }

@@ -42,6 +42,10 @@ import {
 } from "../../core/brain/write-batch.ts";
 import { nextCommandField } from "../../core/brain/next-step.ts";
 import { lintWrittenPages, pageLintField, type PageLintField } from "../../core/brain/page-lint.ts";
+import {
+  WRITE_PATH_ADVISORY_KEY,
+  type WritePathAdvisoryField,
+} from "../../core/brain/write-path-advisory.ts";
 import { WRITE_BINDING_REFUSED_CODE } from "../../core/write-binding/index.ts";
 import { isFrontmatterKey } from "../../core/vault.ts";
 import { rethrowVaultFrozen } from "../frozen-refusal.ts";
@@ -355,6 +359,7 @@ async function toolBrainUpdateNote(
     updated: result.updated,
     path: result.path,
     ...auditFields(result),
+    ...pathAdvisoryFields(result),
   });
 }
 
@@ -374,6 +379,7 @@ async function toolBrainAppendNote(
     appended: result.appended,
     path: result.path,
     ...auditFields(result),
+    ...pathAdvisoryFields(result),
   });
 }
 
@@ -392,6 +398,18 @@ function auditFields(audit: NoteWriteAudit): Record<string, unknown> {
     write_id: audit.write_id,
     ...(audit.audit_reason !== undefined ? { audit_reason: audit.audit_reason } : {}),
   };
+}
+
+/**
+ * The absolute-path advisory a kernel result computed over the call's
+ * authored content, passed through under its own key. Byte-identical-
+ * when-absent: a clean write contributes nothing, exactly as the page
+ * lint does at the envelope level. The kernel already advises - this
+ * only lets the receipt say it.
+ */
+function pathAdvisoryFields(result: NoteOpResult): WritePathAdvisoryField {
+  const report = result[WRITE_PATH_ADVISORY_KEY];
+  return report === undefined ? {} : { [WRITE_PATH_ADVISORY_KEY]: report };
 }
 
 /** The kernel results that name a note file: exactly the three note ops. */
