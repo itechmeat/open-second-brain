@@ -682,7 +682,8 @@ integrity scanner and refuses a condemned store rather than archiving
 it over a good snapshot, checks the ceiling, then `VACUUM INTO`s a
 temporary file and compresses it to
 `Brain/.snapshots/<run_id>.store.sqlite.zst`. `VACUUM INTO` rather than
-a file copy because the store runs in WAL mode and the runtime exposes
+a file copy because the store is a live SQLite database - WAL mode on a
+local backing, DELETE on a remote-backed file - and the runtime exposes
 no online-backup API. The archive sits **beside** the tar rather than
 inside it: the extractor requires a `Brain/` root and the restore is
 defined as "live `Brain/` equals archive `Brain/` minus the excluded
@@ -1010,7 +1011,9 @@ Key behaviours, all driven from `Brain/_brain.yaml`-free `search_*` /
   alongside the body.
 - **Store boundary.** `src/core/search/store.ts` is the single SQL
   home; every other module talks to it through a typed surface. WAL
-  mode for concurrent reads, `proper-lockfile` on the index path for
+  mode for concurrent reads - journal mode DELETE instead, announced
+  once on the write open, when the index file sits on a remote
+  filesystem - `proper-lockfile` on the index path for
   writer exclusivity (three attempts, 1 s backoff, then
   `INDEX_LOCKED`).
 - **Embedding providers (v0.36.0).** `embedding_provider` selects
