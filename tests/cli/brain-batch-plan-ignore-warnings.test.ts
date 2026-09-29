@@ -204,3 +204,41 @@ describe("o2b brain batch-plan skip-reason counts (P4)", () => {
     expect(plan.skip_reason_counts).toEqual({ "schema-type-not-extractable": 1 });
   });
 });
+
+describe("o2b brain batch-plan unclassifiable counts (P4)", () => {
+  test("the human surface renders the per-extension counts", async () => {
+    write("mono/a.md");
+    write("mono/pic.png", "binary");
+    write("mono/data.csv", "a,b\n");
+
+    const res = await runCli(["brain", "batch-plan", "mono"], { env: ENV() });
+    expect(res.returncode).toBe(0);
+    expect(res.stdout).toContain("2 unclassifiable file(s)");
+    expect(res.stdout).toContain(".png: 1");
+    expect(res.stdout).toContain(".csv: 1");
+  });
+
+  test("a tree with no unclassifiable files renders no count and carries no key on the wire", async () => {
+    write("mono/a.md");
+
+    const human = await runCli(["brain", "batch-plan", "mono"], { env: ENV() });
+    expect(human.returncode).toBe(0);
+    expect(human.stdout).not.toContain("unclassifiable");
+
+    const json = await runCli(["brain", "batch-plan", "mono", "--json"], { env: ENV() });
+    expect(json.returncode).toBe(0);
+    const plan = JSON.parse(json.stdout);
+    expect("unclassifiable" in plan).toBe(false);
+  });
+
+  test("the --json payload carries the total and per-extension counts", async () => {
+    write("mono/a.md");
+    write("mono/pic.png", "binary");
+    write("mono/data.csv", "a,b\n");
+
+    const res = await runCli(["brain", "batch-plan", "mono", "--json"], { env: ENV() });
+    expect(res.returncode).toBe(0);
+    const plan = JSON.parse(res.stdout);
+    expect(plan.unclassifiable).toEqual({ total: 2, by_extension: { ".png": 1, ".csv": 1 } });
+  });
+});

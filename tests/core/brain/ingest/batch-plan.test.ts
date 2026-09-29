@@ -285,3 +285,47 @@ describe("planBatches — typed skip reasons + per-reason counts (P4)", () => {
     ]);
   });
 });
+
+describe("planBatches — unclassifiable files (P4)", () => {
+  test("counts files dropped for a non-ingestible extension, per extension", () => {
+    writeSized("Docs/a.md", 50);
+    writeSized("Docs/pic.png", 50);
+    writeSized("Docs/data.csv", 50);
+
+    const plan = planBatches(vault, "Docs", CAPS);
+    expect(plan.unclassifiable.total).toBe(2);
+    expect(plan.unclassifiable.byExtension).toEqual({ ".png": 1, ".csv": 1 });
+
+    // Counting must not alter the discovered set: the plan id (derived from
+    // the ingestible set) is the same with and without the foreign files.
+    rmSync(join(vault, "Docs", "pic.png"));
+    rmSync(join(vault, "Docs", "data.csv"));
+    expect(planBatches(vault, "Docs", CAPS).planId).toBe(plan.planId);
+  });
+
+  test("hidden entries and ignore-rule matches are excluded by declaration, not counted", () => {
+    writeSized("Docs/a.md", 50);
+    writeSized("Docs/.hidden.png", 50);
+    writeSized("Docs/.hid/x.png", 50);
+    writeSized("Docs/node_modules/lib/x.png", 50);
+    writeFileSync(join(vault, "Docs", ".gitignore"), "node_modules/\n", "utf8");
+
+    const plan = planBatches(vault, "Docs", CAPS);
+    expect(plan.unclassifiable.total).toBe(0);
+    expect(allPlannedPaths(plan)).toEqual(["Docs/a.md"]);
+  });
+
+  test("serializeBatchPlan emits the aggregate only when non-empty", () => {
+    writeSized("Docs/a.md", 50);
+    const clean = planBatches(vault, "Docs", CAPS);
+    expect("unclassifiable" in serializeBatchPlan(clean)).toBe(false);
+
+    writeSized("Docs/pic.png", 50);
+    writeSized("Docs/data.csv", 50);
+    const withDrops = planBatches(vault, "Docs", CAPS);
+    expect(serializeBatchPlan(withDrops)["unclassifiable"]).toEqual({
+      total: 2,
+      by_extension: { ".png": 1, ".csv": 1 },
+    });
+  });
+});

@@ -141,6 +141,20 @@ export interface IngestBatch {
   readonly totalBytes: number;
 }
 
+/**
+ * Files the discovery walk dropped because their extension is not ingestible,
+ * aggregated per extension (P4). Hidden entries and ignore-rule matches are
+ * excluded by declaration, not unclassifiable, and never counted; a file with
+ * no extension counts under the empty string. A `total` of 0 means every
+ * walked file was ingestible (the aggregate is absent on the wire).
+ */
+export interface UnclassifiableFiles {
+  /** How many files the walk dropped as non-ingestible. */
+  readonly total: number;
+  /** Per-extension counts, sorted by extension. "" keys extensionless files. */
+  readonly byExtension: Readonly<Record<string, number>>;
+}
+
 export interface BatchPlan {
   /** Canonical vault-relative POSIX path of the planned source directory. */
   readonly sourceDir: string;
@@ -162,6 +176,13 @@ export interface BatchPlan {
    * nothing was skipped (absent on the wire, byte-identical-when-absent).
    */
   readonly skipReasonCounts: Readonly<Partial<Record<SkippedPageReason, number>>>;
+  /**
+   * Files dropped during discovery because no ingestible extension matched
+   * (P4), aggregated per extension. Exclusion by declaration (hidden entries,
+   * ignore-rule matches) is not counted, and the counting never alters the
+   * discovered set - hence not {@link BatchPlan.planId} either.
+   */
+  readonly unclassifiable: UnclassifiableFiles;
   /** Total number of files across all batches (`new` + `modified`). */
   readonly totalFiles: number;
   /** Total bytes across all batches. */
@@ -265,6 +286,7 @@ export function planBatches(vault: string, sourceDir: string, opts: BatchPlanOpt
   // Discover ingestible files as canonical vault-relative paths, sorted. A walk
   // root inside an ignored subtree discovers nothing and says why on the plan.
   const discovered: string[] = [];
+  const unclassifiable = new Map<string, number>();
   if (prunedWarning === null) {
     collectIngestible(walkRoot, walkScope, {
       vault,
@@ -272,6 +294,7 @@ export function planBatches(vault: string, sourceDir: string, opts: BatchPlanOpt
       excludeLayer,
       out: discovered,
       warnings: ignoreWarnings,
+      unclassifiable,
     });
   }
   const discoveredRel = discovered
@@ -326,6 +349,7 @@ export function planBatches(vault: string, sourceDir: string, opts: BatchPlanOpt
     skipped,
     skippedNonExtractable,
     skipReasonCounts: countSkipReasons(skippedNonExtractable),
+    unclassifiable: aggregateUnclassifiable(unclassifiable),
     totalFiles: planned.length,
     totalBytes: planned.reduce((sum, f) => sum + f.bytes, 0),
     planId,
@@ -355,6 +379,19 @@ function countSkipReasons(
     if (n > 0) counts[reason] = n;
   }
   return counts;
+}
+
+/**
+ * Aggregate the walk's per-extension drop counts into the plan's shape,
+ * sorted by extension so the record (and the wire object built from it) is
+ * deterministic.
+ */
+function aggregateUnclassifiable(counts: ReadonlyMap<string, number>): UnclassifiableFiles {
+  const entries = [...counts.entries()].toSorted(([a], [b]) => (a < b ? -1 : 1));
+  return {
+    total: entries.reduce((sum, [, n]) => sum + n, 0),
+    byExtension: Object.fromEntries(entries),
+  };
 }
 
 /**
@@ -510,6 +547,8 @@ interface WalkContext {
   readonly out: string[];
   /** Accumulates malformed patterns found in the repository's own ignore files. */
   readonly warnings: IgnoreWarning[];
+  /** Counts files dropped for a non-ingestible extension, per extension. */
+  readonly unclassifiable: Map<string, number>;
 }
 
 /**
@@ -522,6 +561,10 @@ interface WalkContext {
  * only what it governs and a nearer `!` re-include wins. The operator's
  * `--exclude` is applied on top for every match, keeping it above the whole
  * repository-declared stack no matter how deep the walk goes.
+ *
+ * A regular file the scope lets through whose extension is not ingestible is
+ * counted on {@link WalkContext.unclassifiable} (P4) instead of vanishing:
+ * the discovery outcome is unchanged, but the drop is no longer silent.
  */
 function collectIngestible(dir: string, scope: IgnoreScope, ctx: WalkContext): void {
   const effective = ctx.excludeLayer === null ? scope : scope.extend(ctx.excludeLayer);
@@ -538,8 +581,16 @@ function collectIngestible(dir: string, scope: IgnoreScope, ctx: WalkContext): v
       const child = extendWithDirectoryIgnore(scope, abs, rel);
       ctx.warnings.push(...child.warnings);
       collectIngestible(abs, child.scope, ctx);
-    } else if (entry.isFile() && ctx.extensions.has(extname(entry.name).toLowerCase())) {
+    } else if (entry.isFile()) {
+      // An ignore-rule match is exclusion by DECLARATION - checked before the
+      // extension test so an ignored binary never inflates the unclassifiable
+      // count. The discovered set is untouched either way.
       if (effective.isIgnored(rel, false)) continue;
+      const ext = extname(entry.name).toLowerCase();
+      if (!ctx.extensions.has(ext)) {
+        ctx.unclassifiable.set(ext, (ctx.unclassifiable.get(ext) ?? 0) + 1);
+        continue;
+      }
       ctx.out.push(abs);
     }
   }

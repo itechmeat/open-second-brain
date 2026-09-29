@@ -114,6 +114,12 @@ export async function cmdBrainBatchPlan(argv: string[]): Promise<number> {
         info(`    by reason: ${reasonCounts.map(([r, n]) => `${r}=${n}`).join(", ")}`);
       }
     }
+    if (plan.unclassifiable.total > 0) {
+      info(`  ${plan.unclassifiable.total} unclassifiable file(s) not planned, by extension:`);
+      for (const [ext, n] of Object.entries(plan.unclassifiable.byExtension)) {
+        info(`    - ${ext === "" ? "(no extension)" : ext}: ${n}`);
+      }
+    }
     if (plan.ignoreWarnings.length > 0) {
       info(`  ${plan.ignoreWarnings.length} ignore warning(s):`);
       // Same wording as the hygiene scan's stderr sink: one formatter.

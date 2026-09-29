@@ -243,6 +243,17 @@ export function serializeBatchPlan(plan: BatchPlan): Record<string, unknown> {
     ...(Object.keys(plan.skipReasonCounts).length > 0
       ? { skip_reason_counts: plan.skipReasonCounts }
       : {}),
+    // Per-extension unclassifiable counts (P4), emitted only when the walk
+    // dropped at least one non-ingestible file, so a tree that is all
+    // ingestible serializes byte-identically to before.
+    ...(plan.unclassifiable.total > 0
+      ? {
+          unclassifiable: {
+            total: plan.unclassifiable.total,
+            by_extension: plan.unclassifiable.byExtension,
+          },
+        }
+      : {}),
     // Only emitted when the repository's own ignore files carried a malformed
     // pattern (t_4b2bd8f7), so a tree that declares none - or declares only
     // well-formed patterns - serializes byte-identically to before.
