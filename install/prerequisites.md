@@ -23,10 +23,15 @@ clone:
 ```bash
 git clone https://github.com/itechmeat/open-second-brain ~/open-second-brain
 ~/open-second-brain/scripts/o2b install-cli
+export PATH="$HOME/.local/bin:$PATH"
 o2b version
 ```
 
 `install-cli` links `o2b`, `vault-log` and `o2b-hook` into `~/.local/bin`.
+Add that directory to `PATH` in your shell profile. A client that starts
+MCP servers with a bare `o2b` command needs it on the `PATH` it runs with;
+if it does not have it, use the absolute path `~/.local/bin/o2b` (expanded)
+as the command.
 On native Windows, follow [`windows.md`](windows.md) instead.
 
 ## Supported platforms

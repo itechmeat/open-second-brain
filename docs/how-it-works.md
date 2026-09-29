@@ -1401,8 +1401,10 @@ These are invariants of the system, not configuration to enable.
   see [mcp.md](mcp.md#shutdown-and-draining-since-v1500).
 - **Guarded injected context.** Automatically surfaced Brain context
   passes a prompt-injection guard. With `guardrails.untrusted_source_delimiting`
-  enabled in `_brain.yaml`, untrusted spans are wrapped in a
-  provenance-carrying delimiter instead of filtered by a word list.
+  enabled in `_brain.yaml`, the context pack (`brain_context_pack`) wraps
+  untrusted spans in a provenance-carrying delimiter instead of filtering
+  them by a word list. The pre-compress pack (`brain_pre_compress_pack`)
+  does not apply the delimiter yet and uses the guard only.
 - **No LLM inside the algorithm.** Semantic merging of similar but
   differently-slugged topics is left to external agents who can call
   the CLI / MCP surface directly — the dream pass itself only does

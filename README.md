@@ -22,7 +22,7 @@ flowchart LR
     end
     subgraph Vault["Your vault"]
         Brain["Brain/<br/>Markdown the agent writes"]
-        Notes["Your notes<br/>read-only"]
+        Notes["Your notes"]
         Index[(".open-second-brain/brain.sqlite<br/>rebuildable search index")]
     end
     Plug --> Srv
@@ -35,10 +35,10 @@ flowchart LR
     Cli --> Core
     Core --> Brain
     Core --> Index
-    Core -. reads .-> Notes
+    Core -. reads, writes a named note on request .-> Notes
 ```
 
-Each client reaches the same core through a plugin, an MCP registration or the CLI. The core writes only under `Brain/`, reads the note folders you list, and keeps a search index it can rebuild from the files.
+Each client reaches the same core through a plugin, an MCP registration or the CLI. The core keeps its own records under `Brain/` and a generated search index under `.open-second-brain/` that it can rebuild from the files. Your notes are read; the note tools write one only at a path the caller names.
 
 ```mermaid
 flowchart LR

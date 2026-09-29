@@ -46,7 +46,9 @@ Merge the entries into the existing file; keep its other keys:
 ```
 
 The `env` block from the printout (`VAULT_AGENT_NAME`, `VAULT_TIMEZONE`)
-can be kept as is. Start a new ZCode session to load the servers.
+can be kept as is. If ZCode cannot find `o2b`, set `command` to the
+absolute launcher path (for example `/home/<user>/.local/bin/o2b`). Start a
+new ZCode session to load the servers.
 
 ## 3. Verify
 
@@ -62,10 +64,10 @@ The answer names the vault from step 2. ZCode exposes the tools as
 
 ## Plugin marketplace
 
-ZCode can also install this repository as a plugin from its marketplace,
-but with ZCode 0.16.9 the bundled MCP servers do not start: the plugin
-cache copy of `scripts/o2b` loses its executable bit and the spawn fails
-with `EACCES`. Use the config above instead.
+ZCode can also install this repository as a plugin from its marketplace.
+With ZCode 0.16.9 on Linux the bundled MCP servers do not start: the
+plugin cache copy of `scripts/o2b` loses its executable bit and the spawn
+fails with `EACCES`. On Linux, use the config above instead.
 
 ## Uninstall
 
