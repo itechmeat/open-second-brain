@@ -297,9 +297,12 @@ import {
   isEmbeddingSunsetUndeterminedReason,
 } from "../../../src/core/search/embeddings/sunset.ts";
 import {
+  isVaultBackingRemoteness,
   isVaultBackingState,
   isVaultBackingUndeterminedReason,
   VAULT_BACKING,
+  VAULT_BACKING_REMOTENESS,
+  VAULT_BACKING_REMOTENESS_STATES,
   VAULT_BACKING_STATES,
   VAULT_BACKING_UNDETERMINED_REASON,
   VAULT_BACKING_UNDETERMINED_REASONS,
@@ -944,6 +947,17 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     guard: isVaultBackingUndeterminedReason,
   },
   {
+    // A2, second axis. Whether the backing is a NAMED network filesystem,
+    // beside - not inside - the survival verdict: nfs and cifs are both
+    // durable AND remote, and `non_remote` deliberately is not named
+    // `local`, because an unknown or unprobeable backing answers
+    // non-remote too and "no network finding" is not evidence of local.
+    name: "VAULT_BACKING_REMOTENESS",
+    values: VAULT_BACKING_REMOTENESS,
+    members: VAULT_BACKING_REMOTENESS_STATES,
+    guard: isVaultBackingRemoteness,
+  },
+  {
     // U7. The runtimes whose session adapters ship in this tree. It was a
     // hand-written string union with a guard taking `string`, which is a
     // guard that can only be called once the caller has already proved
@@ -1533,7 +1547,7 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
  * How many four-piece vocabularies `src/` currently holds. Measured, and
  * kept as an equality rather than a floor - see the population test.
  */
-const VOCABULARY_POPULATION = 75;
+const VOCABULARY_POPULATION = 76;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {

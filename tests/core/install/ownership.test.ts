@@ -58,6 +58,7 @@ import {
 } from "../../../src/core/install/ownership.ts";
 import {
   VAULT_BACKING,
+  VAULT_BACKING_REMOTENESS,
   VAULT_BACKING_UNDETERMINED_REASON,
 } from "../../../src/core/vault-backing.ts";
 import { lexSource } from "../../helpers/source-lexer.ts";
@@ -90,6 +91,7 @@ function ownership(overrides: Partial<DataOwnershipInput> = {}) {
       state: VAULT_BACKING.durable,
       filesystem: "ext4",
       reason: null,
+      remoteness: VAULT_BACKING_REMOTENESS.nonRemote,
       detail: `${VAULT} is backed by ext4 (0xef53)`,
     },
     ...overrides,
@@ -130,6 +132,7 @@ describe("the statement is built from what was measured", () => {
           state: VAULT_BACKING.undetermined,
           filesystem: null,
           reason: VAULT_BACKING_UNDETERMINED_REASON.probeUnsupported,
+          remoteness: VAULT_BACKING_REMOTENESS.nonRemote,
           detail: "the filesystem backing /tmp/some-vault was not probed",
         },
       }),
@@ -147,6 +150,7 @@ describe("the statement is built from what was measured", () => {
           state: VAULT_BACKING.volatile,
           filesystem: "tmpfs",
           reason: null,
+          remoteness: VAULT_BACKING_REMOTENESS.nonRemote,
           detail: "/tmp/some-vault is backed by tmpfs (0x1021994)",
         },
       }),

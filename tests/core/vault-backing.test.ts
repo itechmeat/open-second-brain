@@ -23,10 +23,13 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  isVaultBackingRemoteness,
   isVaultBackingState,
   isVaultBackingUndeterminedReason,
   probeVaultBacking,
   VAULT_BACKING,
+  VAULT_BACKING_REMOTENESS,
+  VAULT_BACKING_REMOTENESS_STATES,
   VAULT_BACKING_STATES,
   VAULT_BACKING_UNDETERMINED_REASON,
   VAULT_BACKING_UNDETERMINED_REASONS,
@@ -38,6 +41,9 @@ const TMPFS = 0x01021994;
 const OVERLAYFS = 0x794c7630;
 /** A magic number no released filesystem uses; stands for "not in the table". */
 const UNRECOGNISED = 0x0badf00d;
+const NFS = 0x6969;
+const CIFS = 0xff534d42;
+const FUSE = 0x65735546;
 
 function withFsType(type: number) {
   return () => ({ type });
@@ -65,6 +71,48 @@ describe("the filesystem under the vault path decides the state", () => {
     expect(verdict.state).toBe(VAULT_BACKING.layered);
     expect(verdict.state).not.toBe(VAULT_BACKING.durable);
     expect(verdict.state).not.toBe(VAULT_BACKING.volatile);
+  });
+});
+
+describe("the remoteness axis, beside durability", () => {
+  test("named network filesystems classify remote without losing durability", () => {
+    for (const [magic, name] of [
+      [NFS, "nfs"],
+      [CIFS, "cifs"],
+    ] as const) {
+      const verdict = probeVaultBacking("/vault", { platform: "linux", statfs: withFsType(magic) });
+      expect(`${name} reads back as ${verdict.filesystem}`).toBe(`${name} reads back as ${name}`);
+      expect(verdict.remoteness).toBe(VAULT_BACKING_REMOTENESS.remote);
+      // The survival claim is unchanged: the bytes still outlive this
+      // process and this reboot. Remoteness is a second axis answering a
+      // different question (is this storage shared with other hosts), not
+      // a different answer to the first.
+      expect(verdict.state).toBe(VAULT_BACKING.durable);
+    }
+  });
+
+  test("fuse stays non-remote, and so does every disk and memory filesystem", () => {
+    for (const magic of [FUSE, EXT4, TMPFS, OVERLAYFS]) {
+      const verdict = probeVaultBacking("/vault", { platform: "linux", statfs: withFsType(magic) });
+      expect(verdict.remoteness).toBe(VAULT_BACKING_REMOTENESS.nonRemote);
+    }
+  });
+
+  test("probe-unsupported and fs-type-unknown stay silent and non-remote", () => {
+    // Non-remote is the ABSENCE of a network finding, not a finding that
+    // the storage is local: nothing was read, so nothing is claimed, and
+    // a consumer keeps its default behaviour (WAL stays on).
+    const unprobed = probeVaultBacking("/vault", { platform: "darwin", statfs: withFsType(NFS) });
+    expect(unprobed.state).toBe(VAULT_BACKING.undetermined);
+    expect(unprobed.reason).toBe(VAULT_BACKING_UNDETERMINED_REASON.probeUnsupported);
+    expect(unprobed.remoteness).toBe(VAULT_BACKING_REMOTENESS.nonRemote);
+    const unknown = probeVaultBacking("/vault", {
+      platform: "linux",
+      statfs: withFsType(UNRECOGNISED),
+    });
+    expect(unknown.reason).toBe(VAULT_BACKING_UNDETERMINED_REASON.fsTypeUnknown);
+    expect(unknown.filesystem).toBeNull();
+    expect(unknown.remoteness).toBe(VAULT_BACKING_REMOTENESS.nonRemote);
   });
 });
 
@@ -134,6 +182,21 @@ describe("the vocabulary is closed and carries the could-not-tell member", () =>
     for (const state of VAULT_BACKING_STATES) {
       expect(`${state} is a reason: ${isVaultBackingUndeterminedReason(state)}`).toBe(
         `${state} is a reason: false`,
+      );
+    }
+  });
+
+  test("the remoteness vocabulary is closed and unreadable as the other axes", () => {
+    expect(VAULT_BACKING_REMOTENESS_STATES).toContain(VAULT_BACKING_REMOTENESS.remote);
+    expect(VAULT_BACKING_REMOTENESS_STATES).toContain(VAULT_BACKING_REMOTENESS.nonRemote);
+    for (const state of VAULT_BACKING_STATES) {
+      expect(`${state} is a remoteness: ${isVaultBackingRemoteness(state)}`).toBe(
+        `${state} is a remoteness: false`,
+      );
+    }
+    for (const reason of VAULT_BACKING_UNDETERMINED_REASONS) {
+      expect(`${reason} is a remoteness: ${isVaultBackingRemoteness(reason)}`).toBe(
+        `${reason} is a remoteness: false`,
       );
     }
   });

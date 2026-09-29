@@ -35,6 +35,12 @@ import { loadVecExtension } from "./vectors.ts";
 import { acquireWriterLock, acquireWriterLockSync } from "./writer-lock.ts";
 import { closeDatabase } from "../../sqlite-close.ts";
 import { renameWithRetry } from "../../fs-atomic.ts";
+import {
+  probeVaultBacking,
+  VAULT_BACKING_REMOTENESS,
+  type StatfsProbe,
+  type VaultBackingVerdict,
+} from "../../vault-backing.ts";
 
 /** A connection on the index, plus the vec ABI it opened under. */
 export interface OpenedDatabase {
@@ -48,8 +54,52 @@ export interface OpenedWriteDatabase extends OpenedDatabase {
   readonly release: () => Promise<void>;
 }
 
-function applyPragmas(db: Database): void {
-  db.exec("PRAGMA journal_mode = WAL");
+/** The journal modes an index open can set. */
+type JournalMode = "wal" | "delete";
+
+/** The journal-mode decision the backing verdict calls for. */
+export interface JournalModeDecision {
+  readonly journalMode: JournalMode;
+  /**
+   * One stderr line naming the filesystem and the reason WAL is skipped,
+   * or `null` when the default mode stands.
+   */
+  readonly warning: string | null;
+}
+
+/**
+ * The journal mode an index open sets, decided by the backing probe -
+ * pure, so the whole decision is checkable without a real mount.
+ *
+ * WAL is the default everywhere EXCEPT a backing the probe classifies
+ * remote (a named network filesystem): WAL's shared-memory index needs
+ * advisory-lock semantics nfs/cifs do not provide, and a WAL file left on
+ * such a mount is the corruption story, not a performance tradeoff. On
+ * those the open keeps the DELETE mode a fresh sqlite file already has.
+ * This is a skip, never a refusal: the index on someone's NFS server was
+ * a deliberate deployment, and it must keep opening - slower, honest.
+ * Every non-remote answer, including the silent undetermined ones
+ * (unknown type, unreadable path, non-Linux), keeps WAL: the absence of a
+ * network finding is not evidence for changing the default.
+ */
+export function journalModeForBacking(
+  backing: VaultBackingVerdict,
+  dbPath: string,
+): JournalModeDecision {
+  if (backing.remoteness !== VAULT_BACKING_REMOTENESS.remote) {
+    return { journalMode: "wal", warning: null };
+  }
+  return {
+    journalMode: "delete",
+    warning:
+      `search index at ${dbPath} is backed by ${backing.filesystem}, a network filesystem: ` +
+      `WAL journaling is unreliable across hosts, so the index opens with journal mode DELETE ` +
+      `(slower writes; no -wal sibling)`,
+  };
+}
+
+function applyPragmas(db: Database, journalMode: JournalMode): void {
+  db.exec(`PRAGMA journal_mode = ${journalMode}`);
   db.exec("PRAGMA foreign_keys = ON");
   db.exec("PRAGMA synchronous = NORMAL");
   // Wait briefly for a concurrent writer (e.g. an indexer holding the WAL
@@ -342,7 +392,14 @@ export function openReadDatabase(config: ResolvedSearchConfig, loadVec: boolean)
     throw new SearchError("INDEX_UNREADABLE", `cannot open ${config.dbPath}: ${msg}`);
   }
   try {
-    applyPragmas(db);
+    // The same decision the write open makes, and it MUST be the same:
+    // journal_mode is persistent file state, so an unconditional WAL here
+    // would flip a remote-backed index back to WAL behind the write
+    // open's back. Silent by design: read opens happen per query, and the
+    // skip was already announced by the write open that created or
+    // upgraded the index.
+    const backing = probeVaultBacking(dirname(config.dbPath));
+    applyPragmas(db, journalModeForBacking(backing, config.dbPath).journalMode);
     ensureFts5(db);
     assertSchemaIsCurrent(db, config.dbPath);
     assertNoRecordedIntegrityFault(db, config.dbPath);
@@ -360,6 +417,15 @@ export function openReadDatabase(config: ResolvedSearchConfig, loadVec: boolean)
   }
 }
 
+/** Options on the write open, all defaulted; the seam tests need. */
+export interface OpenWriteDatabaseOptions {
+  /**
+   * Injected statfs probe for the remoteness classification. Defaults to
+   * `node:fs`'s `statfsSync`; simulating an NFS backing needs no mount.
+   */
+  readonly statfs?: StatfsProbe;
+}
+
 /**
  * Open the index for writing: create the file if absent, take the
  * exclusive writer lock, then migrate to the current schema. The
@@ -368,8 +434,14 @@ export function openReadDatabase(config: ResolvedSearchConfig, loadVec: boolean)
 export async function openWriteDatabase(
   config: ResolvedSearchConfig,
   loadVec: boolean,
+  opts: OpenWriteDatabaseOptions = {},
 ): Promise<OpenedWriteDatabase> {
   mkdirSync(dirname(config.dbPath), { recursive: true });
+  // The backing decides the journal mode before any connection exists.
+  // The probed path is the directory: the index file itself may not exist
+  // yet, and the mode decision is about the FILESYSTEM under it.
+  const backing = probeVaultBacking(dirname(config.dbPath), { statfs: opts.statfs });
+  const decision = journalModeForBacking(backing, config.dbPath);
   if (!existsSync(config.dbPath)) {
     const seed = new Database(config.dbPath);
     closeDatabase(seed);
@@ -387,7 +459,11 @@ export async function openWriteDatabase(
   }
 
   try {
-    applyPragmas(db);
+    applyPragmas(db, decision.journalMode);
+    if (decision.warning !== null) {
+      // eslint-disable-next-line no-console
+      console.error(decision.warning);
+    }
     applyMigrations(db, { ftsTokenize: config.ftsTokenize });
     runWriteOpenIntegrityGate(db, config.dbPath);
     ensureFts5(db);
