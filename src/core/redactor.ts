@@ -987,6 +987,25 @@ function isPlainContainer(value: object): boolean {
 }
 
 /**
+ * True for the sibling-pair shape configuration formats use for
+ * environment entries: `{ name: "DB_PASSWORD", value: … }`. The credential
+ * NAME sits in a SIBLING member, so the key-name rule - which reads only
+ * the CURRENT key, and here sees `value`, which says nothing - never
+ * fires, and a literal secret rode past the walk untouched.
+ *
+ * The matcher is the same {@link isSecretKeyName} the object branch
+ * applies to a key; no new secret-name vocabulary. An entry without a
+ * literal `value` member - the ECS `valueFrom` reference shape - is not a
+ * literal secret and stays with the normal walk.
+ */
+function siblingPairDeclaresSecret(item: unknown): boolean {
+  if (typeof item !== "object" || item === null) return false;
+  if (!isPlainContainer(item)) return false;
+  const record = item as Record<string, unknown>;
+  return "value" in record && isSecretKeyName(record["name"]);
+}
+
+/**
  * Redact a JSON-shaped value tree: every string leaf through
  * {@link redactRawOutput}, and every value whose KEY NAME declares a
  * credential ({@link isSecretKeyName}) replaced whole.
@@ -1013,6 +1032,31 @@ export function redactStructured(
 
   const record = (location: string): void => {
     if (secretIdentifiers.size < MAX_REPORTED_IDENTIFIERS) secretIdentifiers.add(location);
+  };
+
+  /**
+   * Walk a plain object's entries under `location`, marking each value
+   * secret when `secretKey` says its key declares one. One loop for both
+   * positions that walk an object - the object branch, and the array
+   * branch's sibling `{name, value}` pair - so the key reporting and the
+   * location spelling cannot drift between them.
+   */
+  const walkEntries = (
+    source: Record<string, unknown>,
+    location: string,
+    secretKey: (key: string) => boolean,
+  ): Record<string, unknown> => {
+    const out: Record<string, unknown> = {};
+    let index = 0;
+    for (const [key, child] of Object.entries(source)) {
+      // The key is reported by POSITION, never by name: the name is the
+      // secret in this case.
+      if (keyNameCarriesSecret(key)) record(`${location === "" ? "" : location}#${index}`);
+      const childLocation = location === "" ? key : `${location}.${key}`;
+      out[key] = walk(child, childLocation, secretKey(key), isIdentifierKeyName(key));
+      index += 1;
+    }
+    return out;
   };
 
   const walk = (
@@ -1062,23 +1106,23 @@ export function redactStructured(
       return scan.text;
     }
     if (Array.isArray(value)) {
-      return value.map((item, index) =>
-        walk(item, `${location}[${index}]`, false, underIdentifierKey),
-      );
+      return value.map((item, index) => {
+        const itemLocation = `${location}[${index}]`;
+        if (!siblingPairDeclaresSecret(item)) {
+          return walk(item, itemLocation, false, underIdentifierKey);
+        }
+        // A `{name, value}` pair whose NAME declares a credential: the
+        // literal rides in the sibling `value` member, so that member is
+        // walked under a secret key. Every other member keeps the normal
+        // per-key decision.
+        return walkEntries(item as Record<string, unknown>, itemLocation, (key) =>
+          key === "value" ? true : isSecretKeyName(key),
+        );
+      });
     }
     if (typeof value === "object" && value !== null) {
       if (!isPlainContainer(value)) return value;
-      const out: Record<string, unknown> = {};
-      let index = 0;
-      for (const [key, child] of Object.entries(value)) {
-        // The key is reported by POSITION, never by name: the name is the
-        // secret in this case.
-        if (keyNameCarriesSecret(key)) record(`${location === "" ? "" : location}#${index}`);
-        const childLocation = location === "" ? key : `${location}.${key}`;
-        out[key] = walk(child, childLocation, isSecretKeyName(key), isIdentifierKeyName(key));
-        index += 1;
-      }
-      return out;
+      return walkEntries(value, location, isSecretKeyName);
     }
     return value;
   };
