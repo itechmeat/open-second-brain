@@ -14,7 +14,7 @@ flowchart LR
         Claw["OpenClaw<br/>in-process plugin"]
         Cliu["Aider, Pi<br/>CLI and context file"]
     end
-    subgraph OSB["Open Second Brain"]
+    subgraph Product["Open Second Brain"]
         Srv["MCP servers<br/>open-second-brain, open-second-brain-writer"]
         Hooks["Lifecycle hooks<br/>o2b-hook"]
         Cli["CLI<br/>o2b"]
@@ -110,7 +110,6 @@ The full router with readiness criteria is [`install.md`](install.md); native Wi
 
 - **Semantic search:** an embedding provider plus `sqlite-vec`; the `embeddings-setup` skill walks through it: [`skills/embeddings-setup/SKILL.md`](skills/embeddings-setup/SKILL.md).
 - **Decision models:** a typed judgment model that can rerank search and filter candidates, off by default per use: [`docs/decision-models.md`](docs/decision-models.md).
-- **Scheduled digest on Hermes:** a Brain digest posted by Hermes cron, optionally after a dream pass: [`docs/hermes-cron.md`](docs/hermes-cron.md).
 
 ## What is new
 
@@ -128,6 +127,7 @@ The full router with readiness criteria is [`install.md`](install.md); native Wi
 | Observability events | [`docs/observability.md`](docs/observability.md) |
 | Metrics data contract | [`docs/metrics.md`](docs/metrics.md) |
 | Cross-project pointer | [`docs/cross-project-pointer.md`](docs/cross-project-pointer.md) |
+| Scheduled Brain digest (Hermes cron) | [`docs/hermes-cron.md`](docs/hermes-cron.md) |
 | Stability policy | [`docs/stability.md`](docs/stability.md) |
 | Origin of the idea | [`docs/idea.md`](docs/idea.md) |
 
