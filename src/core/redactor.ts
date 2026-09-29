@@ -230,6 +230,22 @@ const JSON_ENTRY_RE = new RegExp(
 // and only replace the token portion.
 const BEARER_RE = /\b(Bearer\s+)([A-Za-z0-9._\-+/=]+)/gi;
 
+// A bare JSON Web Token: three base64url segments joined by dots. The
+// shape carries no key=value assignment for the passes above and no
+// vendor prefix for the token pass, and the canonical 20-character
+// header slips HIGH_ENTROPY_TOKEN_RE's 24-character gate - so under the
+// token pass the payload and signature were eaten while the header
+// stayed, announcing a credential and naming its algorithm. Default-on:
+// a JWT is a bearer credential wherever it appears, not only where a
+// key names it.
+//
+// The `eyJ` prefix anchors the match: every header is COMPACT JSON, and
+// `{"` always base64-encodes to `eyJ`, while matching any three
+// dot-separated base64url runs would also claim ordinary dotted
+// identifiers. Segments are bounded to the length a header/payload/
+// signature can take, so the pass stays linear on large inputs.
+const JWT_RE = /\beyJ[A-Za-z0-9_-]{4,4096}(?:\.[A-Za-z0-9_-]{4,4096}){2}(?![A-Za-z0-9_-])/g;
+
 // ----- Infra-topology detectors (opt-in via `redactInfra`) ------------------
 //
 // These scrub network coordinates that carry no key=value shape, so the
@@ -246,7 +262,16 @@ const IPV4 = `${IPV4_OCTET}(?:\\.${IPV4_OCTET}){3}`;
 // `scheme://user:pass@host` — strip the embedded credentials but keep the
 // scheme and `@host` for readability. Run first so the host that follows
 // is still available to the host/port passes below.
-const BASIC_AUTH_URL_RE = /\b([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^\s/:@]+):([^\s/@]+)@/g;
+//
+// The password class is `[^\s@]+`, not `[^\s/@]+`: a generated database
+// password routinely carries `/`, and with the old class the regex failed
+// the match ENTIRELY - both the user and the password left verbatim, a
+// wider leak than if the pass had never run. The class still cannot cross
+// whitespace, the `://` scheme anchor and the `@` anchor are kept, and the
+// run is bounded by those anchors (a `[^\s@]+` run ends at the first
+// whitespace or `@`, deterministically), so the documented linear /
+// no-ReDoS property above holds.
+const BASIC_AUTH_URL_RE = /\b([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^\s/:@]+):([^\s@]+)@/g;
 
 // `ipv4:port` — a reachable service endpoint. Redacted whole regardless of
 // whether the address is public or private (the port is what leaks the
@@ -750,6 +775,12 @@ export function scanRawOutput(text: string, opts: RedactRawOutputOptions = {}): 
 
   // Bearer headers BEFORE the generic colon rule.
   out = out.replace(BEARER_RE, (_match, prefix: string) => `${prefix}${PLACEHOLDER}`);
+
+  // Bare JWTs BEFORE the opt-in passes: the token pass would eat only the
+  // payload and signature segments (the header slips the entropy gate) and
+  // leave a half-standing credential, and the URL pass must see a
+  // JWT-in-a-password already collapsed.
+  out = out.replace(JWT_RE, PLACEHOLDER);
 
   // Indented continuations BEFORE the single-line rule: `token: |` has a
   // same-line value the colon rule would consume, leaving its block behind.

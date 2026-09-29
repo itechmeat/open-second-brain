@@ -10,6 +10,8 @@ import {
   stripPrivateRegions,
   wasScanTruncated,
 } from "../../src/core/redactor.ts";
+import { EGRESS_OUTCOME, redactForEgress } from "../../src/core/egress/guard.ts";
+import { fakeCredential } from "../helpers/fake-credentials.ts";
 
 describe("stripPrivateRegions", () => {
   test("strips balanced private regions across lines", () => {
@@ -220,6 +222,74 @@ describe("redactRawOutput infra-topology pass (redactInfra)", () => {
     // Should return promptly; a catastrophic-backtracking regex would hang.
     const out = redactRawOutput(evil, { redactInfra: true });
     expect(typeof out).toBe("string");
+  });
+});
+
+describe("URL credentials whose password carries a slash", () => {
+  // The password class was `[^\s/@]+`, which excluded the one character a
+  // generated database password most often carries. The regex then failed
+  // the match ENTIRELY, so both the user and the password left verbatim -
+  // a wider leak than if the pass had never run.
+  const SLASH_PASSWORD_URL = "postgres://admin:s3cr3t/Tr4p@db.internal:5432/prod";
+
+  test("the export-boundary default options redact user and password, keeping scheme and host", () => {
+    const verdict = redactForEgress("brain-bank-export", { dsn: SLASH_PASSWORD_URL });
+    expect(verdict.outcome).toBe(EGRESS_OUTCOME.released);
+    if (verdict.outcome !== EGRESS_OUTCOME.released) throw new Error("unreachable");
+    expect(verdict.payload.dsn).toBe("postgres://***REDACTED***@db.internal:5432/prod");
+    expect(verdict.redacted).toBe(true);
+  });
+
+  test("redactUrlCredentials alone redacts user and password, keeping scheme and host", () => {
+    const out = redactRawOutput(`connect ${SLASH_PASSWORD_URL} now`, {
+      redactUrlCredentials: true,
+    });
+    expect(out).toBe("connect postgres://***REDACTED***@db.internal:5432/prod now");
+  });
+
+  test("the slash-free control URL redacts as before", () => {
+    const out = redactRawOutput("git clone https://alice:hunter2@github.com/x.git", {
+      redactUrlCredentials: true,
+    });
+    expect(out).toBe("git clone https://***REDACTED***@github.com/x.git");
+  });
+});
+
+describe("bare JWT (three base64url segments)", () => {
+  // A JWT's header is compact JSON, so it always base64s to the `eyJ`
+  // prefix; the 20-character canonical header slips the 24-character
+  // high-entropy gate, and a bare token carries no key=value shape for the
+  // assignment passes. Nothing below default options saw it at all.
+  const JWT = fakeCredential(
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+    ".eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0",
+    ".SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+  );
+
+  test("a bare three-segment JWT is redacted under default options", () => {
+    const out = redactRawOutput(`token ${JWT} end`);
+    expect(out).toBe(`token ${REDACTION_PLACEHOLDER} end`);
+  });
+
+  test("a JWT leaf is redacted at the export boundary by default", () => {
+    const verdict = redactForEgress("brain-bank-export", { pasted: JWT });
+    expect(verdict.outcome).toBe(EGRESS_OUTCOME.released);
+    if (verdict.outcome !== EGRESS_OUTCOME.released) throw new Error("unreachable");
+    expect(verdict.payload.pasted).toBe(REDACTION_PLACEHOLDER);
+    expect(verdict.redacted).toBe(true);
+  });
+
+  test("a JWT is redacted whole under the token pass too, not left half-standing", () => {
+    // The high-entropy pass alone ate the payload and signature segments
+    // and left the header: `eyJ…J9.***REDACTED***.***REDACTED***` still
+    // announces a credential and hands over its algorithm.
+    const out = redactRawOutput(`token ${JWT}`, { redactTokens: true });
+    expect(out).toBe(`token ${REDACTION_PLACEHOLDER}`);
+  });
+
+  test("a Bearer-prefixed JWT keeps the prefix and one placeholder (regression guard)", () => {
+    const out = redactRawOutput(`Authorization: Bearer ${JWT}`);
+    expect(out).toBe("Authorization: Bearer ***REDACTED***");
   });
 });
 
