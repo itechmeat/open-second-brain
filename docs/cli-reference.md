@@ -397,6 +397,8 @@ o2b brain backlinks           List inbound references to a Brain artifact id
 o2b brain semantics-backfill  Dry-run typed preference-edge backfill preview (since v0.24.0): --json returns missing inverse superseded_by proposals; no writes
 o2b brain mcp-landscape       List MCP servers configured across the vault (since v0.19.0): name, source file, packages, required env-var names (values never read)
 o2b brain scan-inline         Capture `@osb` markers from folders listed under `notes.read_paths` in _brain.yaml
+o2b brain today               Read-only today dashboard: due and overdue obligations, open loops (`@osb loop <text>` markers, closed by `@osb loop close id=<id>`), merged recent activity, totals; --lookback-days (default 7), --limit (default 20), --json. Each section derives live; a failing section is reported and the rest still render
+o2b brain apply-markers       Turn `@osb set note=<target> field=<field> value=<value>` markers into schema-validated frontmatter writes. Report mode by default (writes nothing); --apply needs `guardrails.marker_writeback` in _brain.yaml, consumes applied markers so a re-run is idempotent, and leaves unresolvable or refused targets unconsumed; --path <subdir> (repeatable) or notes.read_paths
 o2b brain import-session      Replay signals from a registered agent session .jsonl (or directory); --recall also stores turns in the session recall DAG. Since v1.50.0 the path argument has a machine-wide sibling: --status reports per-runtime coverage, --discover lists what has never been imported, --discover --all imports it (see "Session logs this machine already has" below)
 o2b brain session-hook        Internal hook bridge: read one lifecycle payload from stdin, capture prompt markers / brain_feedback, append lifecycle audit/log rows
 o2b brain context-receipts    List/show opt-in prompt context receipt continuity records (since v0.29.0)
@@ -1503,6 +1505,9 @@ o2b search "<query>"          Hybrid full-text + semantic search across the vaul
                               empty; the human transcript names the cause on the no-results line
                               total is the pre-truncation ranked pool, not the number of rows returned
                               CJK text is expanded for FTS recall without polluting returned content
+                              --profile fast|balanced|thorough picks a recall preset; no profile leaves ranking unchanged
+                              --disclosure cards returns compact cards (path, title, score, snippet, line range) instead of full content; default full
+o2b search expand             Drill one card: --chunk <id> (printed on the card) returns the fuller note and the raw chunk transcript, paged by --cursor; read-only
 o2b search feedback           Record explicit recall feedback for one result
                               (--query Q --result <path> --verdict up|down; one JSON event file
                               under Brain/search/feedback/, learned weights refresh deterministically)
