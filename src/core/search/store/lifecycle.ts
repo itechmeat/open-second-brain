@@ -98,8 +98,40 @@ export function journalModeForBacking(
   };
 }
 
-function applyPragmas(db: Database, journalMode: JournalMode): void {
-  db.exec(`PRAGMA journal_mode = ${journalMode}`);
+/** Whether the journal-mode switch took, or another connection blocked it. */
+type JournalModeSwitch = "set" | "busy";
+
+/**
+ * True for SQLite's "another connection holds the file" refusal. Leaving
+ * WAL needs exclusive access, so `PRAGMA journal_mode = delete` on an
+ * index in WAL fails at once while any other connection has it open -
+ * the busy timeout does not apply to that switch.
+ */
+function isBusyError(e: unknown): boolean {
+  const code = (e as { code?: unknown } | null)?.code;
+  if (
+    typeof code === "string" &&
+    (code.startsWith("SQLITE_BUSY") || code.startsWith("SQLITE_LOCKED"))
+  ) {
+    return true;
+  }
+  const msg = e instanceof Error ? e.message : String(e);
+  return /database is locked|database table is locked/i.test(msg);
+}
+
+/**
+ * Set the journal mode, keeping the current one when another connection
+ * blocks the switch. A blocked switch is a mode the open could not change,
+ * not a broken index: every other error still throws.
+ */
+function applyPragmas(db: Database, journalMode: JournalMode): JournalModeSwitch {
+  let switched: JournalModeSwitch = "set";
+  try {
+    db.exec(`PRAGMA journal_mode = ${journalMode}`);
+  } catch (e) {
+    if (!isBusyError(e)) throw e;
+    switched = "busy";
+  }
   db.exec("PRAGMA foreign_keys = ON");
   db.exec("PRAGMA synchronous = NORMAL");
   // Wait briefly for a concurrent writer (e.g. an indexer holding the WAL
@@ -107,6 +139,18 @@ function applyPragmas(db: Database, journalMode: JournalMode): void {
   // for the opportunistic query-cache writes a read-mode connection makes
   // during search (v0.20.0); search itself also degrades gracefully.
   db.exec("PRAGMA busy_timeout = 5000");
+  return switched;
+}
+
+/** Index paths whose blocked journal-mode switch this process already announced. */
+const busySwitchWarned = new Set<string>();
+
+function busySwitchWarning(dbPath: string, journalMode: JournalMode): string {
+  const current = journalMode === "delete" ? "WAL" : "DELETE";
+  return (
+    `search index at ${dbPath}: journal mode stays ${current} until other connections close ` +
+    `(the switch to ${journalMode.toUpperCase()} needs exclusive access; it is retried on the next write open)`
+  );
 }
 
 /**
@@ -377,7 +421,11 @@ function runWriteOpenIntegrityGate(db: Database, dbPath: string): void {
  * older schema is refused rather than upgraded, because a reader holds
  * no writer lock and must not migrate under a concurrent writer.
  */
-export function openReadDatabase(config: ResolvedSearchConfig, loadVec: boolean): OpenedDatabase {
+export function openReadDatabase(
+  config: ResolvedSearchConfig,
+  loadVec: boolean,
+  opts: OpenWriteDatabaseOptions = {},
+): OpenedDatabase {
   if (!existsSync(config.dbPath)) {
     throw new SearchError(
       "INDEX_MISSING",
@@ -397,8 +445,10 @@ export function openReadDatabase(config: ResolvedSearchConfig, loadVec: boolean)
     // would flip a remote-backed index back to WAL behind the write
     // open's back. Silent by design: read opens happen per query, and the
     // skip was already announced by the write open that created or
-    // upgraded the index.
-    const backing = probeVaultBacking(dirname(config.dbPath));
+    // upgraded the index. A switch another connection blocks keeps the
+    // current mode: a read is correct in either, and the conversion is
+    // the write open's to finish under the writer lock.
+    const backing = probeVaultBacking(dirname(config.dbPath), { statfs: opts.statfs });
     applyPragmas(db, journalModeForBacking(backing, config.dbPath).journalMode);
     ensureFts5(db);
     assertSchemaIsCurrent(db, config.dbPath);
@@ -417,7 +467,7 @@ export function openReadDatabase(config: ResolvedSearchConfig, loadVec: boolean)
   }
 }
 
-/** Options on the write open, all defaulted; the seam tests need. */
+/** Options on the read and write opens, all defaulted; the seam tests need. */
 export interface OpenWriteDatabaseOptions {
   /**
    * Injected statfs probe for the remoteness classification. Defaults to
@@ -459,7 +509,12 @@ export async function openWriteDatabase(
   }
 
   try {
-    applyPragmas(db, decision.journalMode);
+    const switched = applyPragmas(db, decision.journalMode);
+    if (switched === "busy" && !busySwitchWarned.has(config.dbPath)) {
+      busySwitchWarned.add(config.dbPath);
+      // eslint-disable-next-line no-console
+      console.error(busySwitchWarning(config.dbPath, decision.journalMode));
+    }
     if (decision.warning !== null) {
       // eslint-disable-next-line no-console
       console.error(decision.warning);

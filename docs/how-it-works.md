@@ -1013,7 +1013,10 @@ Key behaviours, all driven from `Brain/_brain.yaml`-free `search_*` /
   home; every other module talks to it through a typed surface. WAL
   mode for concurrent reads - journal mode DELETE instead, announced
   once on the write open, when the index file sits on a remote
-  filesystem - `proper-lockfile` on the index path for
+  filesystem (an index already in WAL keeps it while another
+  connection has the file open, since leaving WAL needs exclusive
+  access: the read open stays silent, the write open says so once and
+  retries on its next open) - `proper-lockfile` on the index path for
   writer exclusivity (three attempts, 1 s backoff, then
   `INDEX_LOCKED`).
 - **Embedding providers (v0.36.0).** `embedding_provider` selects

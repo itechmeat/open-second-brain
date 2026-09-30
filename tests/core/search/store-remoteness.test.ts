@@ -19,6 +19,7 @@ import { readFileSync } from "node:fs";
 
 import {
   journalModeForBacking,
+  openReadDatabase,
   openWriteDatabase,
 } from "../../../src/core/search/store/lifecycle.ts";
 import { probeVaultBacking } from "../../../src/core/vault-backing.ts";
@@ -153,6 +154,63 @@ describe("openWriteDatabase on a remote backing", () => {
         opened.db.close(true);
         await opened.release();
       }
+      v.cleanup();
+    }
+  });
+});
+
+describe("a journal-mode switch another connection blocks", () => {
+  // `PRAGMA journal_mode = delete` on an index in WAL fails at once with
+  // "database is locked" while any other connection has the file open,
+  // busy timeout or not. That is a mode the open could not change, not a
+  // broken index: the read open keeps WAL (a read is correct in it), and
+  // the write open keeps it too and says so, instead of a raw error or an
+  // INDEX_UNREADABLE that would trigger a full reindex.
+  async function walIndex(label: string) {
+    const v = createTempVault(label);
+    const config = makeConfig({ vault: v.vault, dbPath: v.dbPath });
+    const seeded = await openWriteDatabase(config, false);
+    seeded.db.close(true);
+    await seeded.release();
+    const holder = new Database(v.dbPath);
+    holder.query("SELECT count(*) FROM sqlite_master").get();
+    return { v, config, holder };
+  }
+
+  test("the read open keeps WAL and opens", async () => {
+    const { v, config, holder } = await walIndex("store-busy-read");
+    try {
+      const opened = openReadDatabase(config, false, { statfs: () => ({ type: NFS }) });
+      try {
+        const mode = opened.db.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get();
+        expect(mode?.journal_mode).toBe("wal");
+      } finally {
+        opened.db.close(true);
+      }
+    } finally {
+      holder.close(true);
+      v.cleanup();
+    }
+  });
+
+  test("the write open keeps WAL, warns, and opens", async () => {
+    const { v, config, holder } = await walIndex("store-busy-write");
+    const stderr = captureStderr();
+    let opened: Awaited<ReturnType<typeof openWriteDatabase>> | null = null;
+    try {
+      opened = await openWriteDatabase(config, false, { statfs: () => ({ type: NFS }) });
+      const mode = opened.db.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get();
+      expect(mode?.journal_mode).toBe("wal");
+      const busy = stderr.lines().filter((line) => line.includes("journal mode stays WAL"));
+      expect(busy).toHaveLength(1);
+      expect(busy[0]).toContain(v.dbPath);
+    } finally {
+      stderr.done();
+      if (opened) {
+        opened.db.close(true);
+        await opened.release();
+      }
+      holder.close(true);
       v.cleanup();
     }
   });
