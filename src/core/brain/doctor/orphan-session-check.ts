@@ -65,10 +65,11 @@ import type { DoctorIssue } from "../types.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
 import type { DoctorCheck, DoctorCheckContext, DoctorFindings } from "./check.ts";
 import type { DoctorUncertainEntry } from "./report.ts";
-import { readAllLogRecords } from "./records.ts";
+import { readLogSnapshot, type UnreadableLogDay } from "./records.ts";
 import {
   readSweptDir,
   reportSweptFailure,
+  reportSweptSkip,
   SWEEP_ORIGIN,
   type SweptPath,
 } from "./unreadable-path.ts";
@@ -148,16 +149,28 @@ export interface SessionUniverse {
 }
 
 /**
+ * The pass's pre-parsed log snapshot, as the doctor context carries it:
+ * the entries it read and the days it could not.
+ */
+export interface SessionLogSnapshot {
+  readonly entries: ReadonlyArray<BrainLogEntry>;
+  readonly unreadableDays: ReadonlyArray<UnreadableLogDay>;
+}
+
+/**
  * Read both resolution surfaces.
  *
- * `logEntries` - the doctor pass's pre-parsed log snapshot - stands in
+ * `logSnapshot` - the doctor pass's pre-parsed log snapshot - stands in
  * for a second log walk when the caller has one. Without it the log is
  * read here, under the same sweep sink, so both paths report an
- * unreadable surface the same way and neither reads it as empty.
+ * unreadable surface the same way and neither reads it as empty. A log
+ * day that could not be read makes the universe partial, exactly like an
+ * unreadable directory: the session whose lifecycle lived in it would
+ * otherwise read as an orphan.
  */
 export function collectKnownSessionIds(
   vault: string,
-  logEntries?: ReadonlyArray<BrainLogEntry>,
+  logSnapshot?: SessionLogSnapshot,
 ): SessionUniverse {
   const uncertain: DoctorUncertainEntry[] = [];
   const swept: SweptPath = {
@@ -192,7 +205,15 @@ export function collectKnownSessionIds(
       );
     }
   }
-  for (const entry of logEntries ?? readLogEntries(vault, swept)) {
+  const log = logSnapshot ?? readLogEntries(vault, swept);
+  for (const day of log.unreadableDays) {
+    reportSweptSkip(
+      join(brainDirs(vault).log, day.date),
+      `log day ${day.date} could not be read: ${day.detail}`,
+      swept,
+    );
+  }
+  for (const entry of log.entries) {
     if (entry.eventType !== BRAIN_LOG_EVENT_KIND.sessionLifecycle) continue;
     const sid = entry.body["session_id"];
     if (typeof sid === "string" && sid.trim().length > 0) ids.add(sid.trim());
@@ -201,8 +222,12 @@ export function collectKnownSessionIds(
   return { ids, complete, uncertain };
 }
 
-function readLogEntries(vault: string, swept: SweptPath): ReadonlyArray<BrainLogEntry> {
-  return readAllLogRecords(vault, swept).flatMap((record) => record.entries);
+function readLogEntries(vault: string, swept: SweptPath): SessionLogSnapshot {
+  const snapshot = readLogSnapshot(vault, swept);
+  return {
+    entries: snapshot.records.flatMap((record) => record.entries),
+    unreadableDays: snapshot.unreadableDays,
+  };
 }
 
 /** One observation whose parent session could not be found. */
@@ -266,10 +291,10 @@ export const orphanSessionCheck: DoctorCheck = {
       consequence: SIGNALS_CONSEQUENCE,
       uncertain: out.uncertain,
     };
-    const universe = collectKnownSessionIds(
-      ctx.vault,
-      ctx.logs.flatMap((r) => r.entries),
-    );
+    const universe = collectKnownSessionIds(ctx.vault, {
+      entries: ctx.logs.flatMap((r) => r.entries),
+      unreadableDays: ctx.unreadableLogDays ?? [],
+    });
     if (!universe.complete) {
       // The id set is partial. Folding the gap into the stream and
       // reporting nothing is the only honest answer: a finding here

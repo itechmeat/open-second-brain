@@ -212,6 +212,36 @@ describe("what the walk could not read is uncertainty", () => {
   );
 });
 
+describe("an unreadable log day is uncertainty, not an orphan", () => {
+  test.skipIf(IS_WINDOWS)(
+    "a session whose lifecycle lives in an unreadable day is never flagged",
+    () => {
+      const dirs = brainDirs(vault);
+      appendLogEvent(vault, {
+        timestamp: "2026-06-01T01:00:00Z",
+        eventType: "session-lifecycle",
+        agent: "tester",
+        body: { event: "end", session_id: "sess-logged" },
+      });
+      writeObservation("session:sess-logged#end");
+      const shards = readdirSync(dirs.log, { recursive: true, withFileTypes: true })
+        .filter((e) => e.isFile() && e.name.includes("2026-06-01"))
+        .map((e) => join(e.parentPath, e.name));
+      expect(shards.length).toBeGreaterThan(0);
+      for (const shard of shards) {
+        chmodSync(shard, 0o000);
+        locked.push(shard);
+      }
+      const result = runDoctor(vault);
+      expect((result.warnings ?? []).filter((i) => i.code === ORPHAN_SESSION_REF_CODE)).toEqual([]);
+      expect((result.uncertain ?? []).some((u) => u.message.includes("2026-06-01"))).toBe(true);
+      const universe = collectKnownSessionIds(vault);
+      expect(universe.complete).toBe(false);
+      expect(universe.uncertain.length).toBeGreaterThan(0);
+    },
+  );
+});
+
 function uncertainFor(
   logs: LogRecords = readAllLogRecords(vault),
 ): ReadonlyArray<DoctorUncertainEntry> {

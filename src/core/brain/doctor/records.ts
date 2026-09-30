@@ -130,22 +130,56 @@ export function readAllRetiredRecords(
   return out;
 }
 
+/** One log day the snapshot could not read, with why. */
+export interface UnreadableLogDay {
+  readonly date: string;
+  readonly detail: string;
+}
+
+/** The pre-parsed log snapshot plus the days it had to leave out. */
+export interface LogSnapshot {
+  readonly records: ReadonlyArray<LogRecord>;
+  /**
+   * Days whose read threw. Empty means the snapshot is complete; a check
+   * that resolves identities against the log must not read a non-empty
+   * list as "those days held nothing".
+   */
+  readonly unreadableDays: ReadonlyArray<UnreadableLogDay>;
+}
+
 /**
- * Build a single pre-parsed snapshot of `Brain/log/` so the two
- * log-walking lints don't each re-parse the directory.
+ * Build a single pre-parsed snapshot of `Brain/log/` so the log-walking
+ * lints don't each re-parse the directory, and name every day that could
+ * not be read so no caller mistakes a partial snapshot for a whole one.
  */
-export function readAllLogRecords(vault: string, swept?: SweptPath): ReadonlyArray<LogRecord> {
+export function readLogSnapshot(vault: string, swept?: SweptPath): LogSnapshot {
   // Shard-aware (Memory Integrity Suite): dates come from the single
   // discovery helper and entries arrive merged across device shards.
-  const out: LogRecord[] = [];
+  const records: LogRecord[] = [];
+  const unreadableDays: UnreadableLogDay[] = [];
   for (const date of listLogDatesSwept(vault, swept)) {
     try {
-      out.push({ date, entries: readLogDay(vault, date).entries });
-    } catch {
-      // parse error — surfaced separately by the log shard check
+      const day = readLogDay(vault, date);
+      records.push({ date, entries: day.entries });
+      // A shard the listing showed but the read could not obtain comes
+      // back as a line-0 warning beside the entries of the other shards:
+      // the day is partial, and a partial day is an unreadable one here.
+      const failed = day.warnings.filter((w) => w.lineNumber === 0);
+      if (failed.length > 0) {
+        unreadableDays.push({ date, detail: failed.map((w) => w.message).join("; ") });
+      }
+    } catch (err) {
+      // The parse error itself is surfaced by the log shard check; the
+      // day is named here so identity resolution knows it is missing.
+      unreadableDays.push({ date, detail: err instanceof Error ? err.message : String(err) });
     }
   }
-  return out;
+  return { records, unreadableDays };
+}
+
+/** {@link readLogSnapshot}'s records alone, for lints that only count what they read. */
+export function readAllLogRecords(vault: string, swept?: SweptPath): ReadonlyArray<LogRecord> {
+  return readLogSnapshot(vault, swept).records;
 }
 
 /**

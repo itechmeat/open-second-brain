@@ -68,7 +68,8 @@ import {
 } from "./doctor/record-checks.ts";
 import {
   collectAllBasenames,
-  readAllLogRecords,
+  readLogSnapshot,
+  type LogSnapshot,
   readAllPreferenceRecords,
 } from "./doctor/records.ts";
 import { embeddingSunsetCheck } from "./doctor/embedding-sunset-check.ts";
@@ -384,6 +385,9 @@ function resolveContext(
   } catch {
     config = undefined;
   }
+  // Read in the literal's own order below, so the uncertainty stream keeps
+  // the order it has always had.
+  let logSnapshot: LogSnapshot;
   return {
     vault,
     now: opts.now ?? new Date(),
@@ -407,13 +411,14 @@ function resolveContext(
         "subset of the store",
       uncertain,
     }),
-    logs: readAllLogRecords(vault, {
+    logs: (logSnapshot = readLogSnapshot(vault, {
       site: CONTEXT_SITE,
       consequence:
         "no log day in it was loaded, so the evidence and orphan lints below report on a subset " +
         "of the store",
       uncertain,
-    }),
+    })).records,
+    unreadableLogDays: logSnapshot.unreadableDays,
   };
 }
 
