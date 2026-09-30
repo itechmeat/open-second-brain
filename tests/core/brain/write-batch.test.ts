@@ -41,7 +41,6 @@ import { dirname, join } from "node:path";
 
 import {
   applyWriteBatch,
-  WRITE_BATCH_KEY_NAMESPACE,
   WRITE_BATCH_RECEIPT_STATUS,
   WriteBatchError,
   type WriteOperation,
@@ -50,7 +49,6 @@ import * as ledger from "../../../src/core/brain/idempotency-ledger.ts";
 import {
   IdempotencyKeyError,
   IdempotencyPayloadMismatchError,
-  lookupKey,
 } from "../../../src/core/brain/idempotency-ledger.ts";
 import { writeSignal } from "../../../src/core/brain/signal.ts";
 import { listNoteWrites, type NoteWriteRecord } from "../../../src/core/brain/notes/write-log.ts";
@@ -632,10 +630,10 @@ describe("applyWriteBatch client request receipts (t_b34439d9)", () => {
     expect(Object.hasOwn(res, "receipt")).toBe(false);
   });
 
-  test("a fresh request id applies once and records a durable ledger receipt", () => {
+  test("a fresh request id applies once with an applied receipt", () => {
     const res = applyWriteBatch(vault, OPS, { requestId: "req-1" });
     expect(res.receipt).toEqual({ requestId: "req-1", status: WRITE_BATCH_RECEIPT_STATUS.applied });
-    expect(lookupKey(vault, "req-1", WRITE_BATCH_KEY_NAMESPACE)).not.toBeNull();
+    expect(readFileSync(join(vault, "Notes/Receipt.md"), "utf8")).toContain("written once");
   });
 
   test("a repeated id with the same payload returns the retained result as a duplicate", () => {

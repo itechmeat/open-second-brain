@@ -79,7 +79,7 @@ export const MAX_BATCH_OPERATIONS = 100;
  * brain_feedback and apply-evidence, so they live in their own namespace:
  * the same string supplied to both tools never collides.
  */
-export const WRITE_BATCH_KEY_NAMESPACE = "write_batch";
+const WRITE_BATCH_KEY_NAMESPACE = "write_batch";
 
 /**
  * What a request receipt says about the call that returned it:
