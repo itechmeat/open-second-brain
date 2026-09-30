@@ -14,6 +14,7 @@ import { planBatches, type BatchPlan } from "../../core/brain/ingest/batch-plan.
 import { clearCheckpoint, PLAN_ID_LABEL } from "../../core/brain/ingest/checkpoint.ts";
 import { assertCheckpointId } from "../../core/brain/checkpoint-store.ts";
 import { ingestSource } from "../../core/brain/ingest/ingest.ts";
+import type { CodeEdgeSeed, PreExtractResult } from "../../core/brain/ingest/pre-extract.ts";
 import { reconcilePlan } from "../../core/brain/ingest/reconcile.ts";
 import { IntakeValidationError } from "../../core/brain/intake/extract-intake.ts";
 import {
@@ -97,9 +98,24 @@ async function toolBrainIngestSource(
       connections: [...res.connections],
       // Only emitted when the pre-extract pass ran, so a call without it is
       // byte-identical to before (P4).
-      ...(res.preExtract !== undefined ? { pre_extract: res.preExtract } : {}),
+      ...(res.preExtract !== undefined ? { pre_extract: serializePreExtract(res.preExtract) } : {}),
     };
   });
+}
+
+/** The pre-extract result with its edge keys in the payload's snake_case. */
+function serializePreExtract(result: PreExtractResult): Record<string, unknown> {
+  if (!result.extracted) return { ...result };
+  return { ...result, edges: result.edges.map(serializeEdgeSeed) };
+}
+
+function serializeEdgeSeed(edge: CodeEdgeSeed): Record<string, unknown> {
+  return {
+    kind: edge.kind,
+    from: edge.from,
+    to: edge.to,
+    ...(edge.resolvedTo !== undefined ? { resolved_to: edge.resolvedTo } : {}),
+  };
 }
 
 function serializeEntry(entry: SourceCleanupEntry): Record<string, unknown> {
@@ -400,7 +416,7 @@ export const INGEST_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         pre_extract: {
           type: "boolean",
           description:
-            "Run the deterministic no-LLM code-structure pass over the source file; returns class/function/import/inheritance seeds under `pre_extract`. Off by default.",
+            "No-LLM code-structure pass: class/function seeds and import/inheritance/uses edges under `pre_extract`, a bound import with `resolved_to`. Off by default.",
         },
       },
       required: ["source_path", "summary", "entities"],

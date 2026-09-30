@@ -29,7 +29,8 @@ export interface CodeEntitySeed {
 /**
  * A structural relationship surfaced as an edge seed. `imports` runs from the
  * source path to a module specifier; `inherits` runs from a subclass to a base
- * class (TS `extends`/`implements`, Python base classes).
+ * class (TS `extends`/`implements`, Python base classes); `uses` runs from a
+ * `.tsx`/`.jsx` source path to a JSX component it renders.
  *
  * `resolvedTo` is present only when the caller supplied the ingested-file set
  * and a relative import specifier probed to exactly one ingested file; it
@@ -61,7 +62,7 @@ export interface PreExtractSuccess {
   readonly language: string;
   /** Class/function seeds, deduped and sorted by (kind, name). */
   readonly entities: readonly CodeEntitySeed[];
-  /** Import/inheritance seeds, deduped and sorted by (kind, from, to). */
+  /** Import/inheritance/uses seeds, deduped and sorted by (kind, from, to). */
   readonly edges: readonly CodeEdgeSeed[];
 }
 

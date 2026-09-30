@@ -134,6 +134,27 @@ describe("brain_ingest_source", () => {
     });
   });
 
+  test("pre_extract names a bound import target in snake_case, like every other key", async () => {
+    mkdirSync(join(vault, "Code"), { recursive: true });
+    writeFileSync(join(vault, "Code", "dom.ts"), "export const h = 1;\n", "utf8");
+    writeFileSync(join(vault, "Code", "widget.ts"), 'import { h } from "./dom";\n', "utf8");
+    // The imported file must already be in the content manifest to bind.
+    await handler(ctx, {
+      source_path: "Code/dom.ts",
+      summary: "A dom module.",
+      entities: [{ category: "concept", name: "Dom" }],
+    });
+    const res = (await handler(ctx, {
+      source_path: "Code/widget.ts",
+      summary: "A widget.",
+      entities: [{ category: "concept", name: "Widget" }],
+      pre_extract: true,
+    })) as Record<string, unknown>;
+    expect((res["pre_extract"] as { edges: unknown[] }).edges).toEqual([
+      { kind: "imports", from: "Code/widget.ts", to: "./dom", resolved_to: "Code/dom.ts" },
+    ]);
+  });
+
   test("without pre_extract the response omits the seeds field (byte-identical)", async () => {
     const res = (await handler(ctx, {
       source_path: "Articles/eth.md",
