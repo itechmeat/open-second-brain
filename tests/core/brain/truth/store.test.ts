@@ -208,3 +208,16 @@ describe("sweepClaimEvents", () => {
     expect(readTruthState(vault)!.events).toBe(0);
   });
 });
+
+test("the claim shard name is claims.jsonl or claims.<deviceId>.jsonl, byte for byte", () => {
+  const saved = process.env["O2B_DEVICE_ID"];
+  try {
+    process.env["O2B_DEVICE_ID"] = "";
+    expect(claimShardPath(vault)).toBe(join(truthDir(vault), "claims.jsonl"));
+    process.env["O2B_DEVICE_ID"] = "laptop-01";
+    expect(claimShardPath(vault)).toBe(join(truthDir(vault), "claims.laptop-01.jsonl"));
+  } finally {
+    if (saved === undefined) delete process.env["O2B_DEVICE_ID"];
+    else process.env["O2B_DEVICE_ID"] = saved;
+  }
+});

@@ -25,6 +25,12 @@ import {
 import { join } from "node:path";
 
 import { resolveDeviceId } from "../../config.ts";
+import {
+  JSONL_LEDGER_EXT,
+  jsonlLedgerGrammar,
+  parseShardedName,
+  shardedFileName,
+} from "../ledger-shards.ts";
 import { normalizeEntityName } from "../entities/canonical.ts";
 import { computeTruthState } from "./fold.ts";
 import type {
@@ -49,8 +55,10 @@ export const CLAIM_EVENT_MAX_COUNT = 10000;
 const ISO_UTC_TS_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 
 // `claims.jsonl` or `claims.<deviceId>.jsonl`; device ids are lowercase
-// slugs, and Syncthing conflict copies are never shards.
-const CLAIM_SHARD_RE = /^claims(?:\.([a-z0-9-]{1,32}))?\.jsonl$/;
+// slugs, and Syncthing conflict copies are never shards (the shared
+// ledger-shard grammar rejects them).
+const CLAIMS_STEM = "claims";
+const CLAIMS_GRAMMAR = jsonlLedgerGrammar(CLAIMS_STEM);
 
 export function truthDir(vault: string): string {
   return join(vault, "Brain", "truth");
@@ -74,7 +82,7 @@ export function truthStatePath(vault: string): string {
  */
 export function claimShardPath(vault: string, configPath?: string): string {
   const deviceId = resolveDeviceId(configPath);
-  const name = deviceId === "" ? "claims.jsonl" : `claims.${deviceId}.jsonl`;
+  const name = shardedFileName(CLAIMS_STEM, deviceId, JSONL_LEDGER_EXT);
   return join(truthDir(vault), name);
 }
 
@@ -158,10 +166,9 @@ export function readClaimEvents(vault: string): ReadClaimEventsResult {
   const warnings: ClaimParseWarning[] = [];
 
   for (const name of names) {
-    const m = CLAIM_SHARD_RE.exec(name);
-    if (!m) continue;
-    const shardId = m[1] ?? "";
-    if (shardId.startsWith("sync-conflict")) continue;
+    const parsed = parseShardedName(name, CLAIMS_GRAMMAR);
+    if (parsed === null) continue;
+    const shardId = parsed.shardId;
     const path = join(dir, name);
     let text: string;
     try {
@@ -392,9 +399,7 @@ export function sweepClaimEvents(vault: string, opts: ClaimSweepOptions): ClaimS
   const shards = new Map<string, string[]>();
   const valid: ShardLine[] = [];
   for (const name of names) {
-    const m = CLAIM_SHARD_RE.exec(name);
-    if (!m) continue;
-    if ((m[1] ?? "").startsWith("sync-conflict")) continue;
+    if (parseShardedName(name, CLAIMS_GRAMMAR) === null) continue;
     let text: string;
     try {
       text = readFileSync(join(dir, name), "utf8");

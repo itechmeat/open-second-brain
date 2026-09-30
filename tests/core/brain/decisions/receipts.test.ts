@@ -10,6 +10,8 @@ import {
   normalizeDecisionSubject,
   queryDecisionChangeHistory,
   readDecisionChangeReceipts,
+  receiptShardPath,
+  receiptsDir,
 } from "../../../../src/core/brain/decisions/receipts.ts";
 
 let vault: string;
@@ -239,4 +241,19 @@ describe("no receipt on reads", () => {
     const files = existsSync(truthDir) ? readdirSync(truthDir) : [];
     expect(files.filter((f) => f.startsWith("decision-change")).length).toBe(0);
   });
+});
+
+test("the receipt shard name is decision-change[.<deviceId>].jsonl, byte for byte", () => {
+  const saved = process.env["O2B_DEVICE_ID"];
+  try {
+    process.env["O2B_DEVICE_ID"] = "";
+    expect(receiptShardPath(vault)).toBe(join(receiptsDir(vault), "decision-change.jsonl"));
+    process.env["O2B_DEVICE_ID"] = "laptop-01";
+    expect(receiptShardPath(vault)).toBe(
+      join(receiptsDir(vault), "decision-change.laptop-01.jsonl"),
+    );
+  } finally {
+    if (saved === undefined) delete process.env["O2B_DEVICE_ID"];
+    else process.env["O2B_DEVICE_ID"] = saved;
+  }
 });

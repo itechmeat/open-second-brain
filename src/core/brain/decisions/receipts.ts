@@ -28,6 +28,12 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 import { resolveDeviceId } from "../../config.ts";
+import {
+  JSONL_LEDGER_EXT,
+  jsonlLedgerGrammar,
+  parseShardedName,
+  shardedFileName,
+} from "../ledger-shards.ts";
 import { appendLogEvent } from "../log.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
@@ -57,8 +63,9 @@ export const DECISION_CHANGE_REASON = Object.freeze({
 /** Same canonical UTC shape the truth ledger and log writer emit. */
 const ISO_UTC_TS_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 
-/** `decision-change.jsonl` or `decision-change.<deviceId>.jsonl`. */
-const RECEIPT_SHARD_RE = /^decision-change(?:\.([a-z0-9-]{1,32}))?\.jsonl$/;
+/** `decision-change.jsonl` or `decision-change.<deviceId>.jsonl`, via the shared ledger-shard grammar. */
+const RECEIPT_STEM = "decision-change";
+const RECEIPT_GRAMMAR = jsonlLedgerGrammar(RECEIPT_STEM);
 
 /** Cap on the length of any single string field (mirrors note-text caps). */
 const FIELD_MAX_LEN = 2000;
@@ -169,7 +176,7 @@ export function receiptsDir(vault: string): string {
  */
 export function receiptShardPath(vault: string, configPath?: string): string {
   const deviceId = resolveDeviceId(configPath);
-  const name = deviceId === "" ? "decision-change.jsonl" : `decision-change.${deviceId}.jsonl`;
+  const name = shardedFileName(RECEIPT_STEM, deviceId, JSONL_LEDGER_EXT);
   return join(receiptsDir(vault), name);
 }
 
@@ -390,10 +397,9 @@ export function readDecisionChangeReceipts(vault: string): ReadReceiptsResult {
   const warnings: ReceiptParseWarning[] = [];
 
   for (const name of names) {
-    const m = RECEIPT_SHARD_RE.exec(name);
-    if (!m) continue;
-    const shardId = m[1] ?? "";
-    if (shardId.startsWith("sync-conflict")) continue;
+    const parsed = parseShardedName(name, RECEIPT_GRAMMAR);
+    if (parsed === null) continue;
+    const shardId = parsed.shardId;
     const path = join(dir, name);
     let text: string;
     try {
