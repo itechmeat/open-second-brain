@@ -4,6 +4,11 @@
 # The checks include CodeRabbit's status, so a green result also means the bot
 # review has finished (or was skipped).
 #
+# The watch runs WITHOUT --fail-fast: the verdict waits until every check has a
+# terminal state. A fast failure (a scan failing in seconds) must not start the
+# fix round while a slow job (windows) is still running, or a late failure of
+# that job needs a second fix round. The red verdict lists every failed check.
+#
 # Before the watch, the script makes sure the CI workflow run for THIS head
 # commit exists. Right after a push, `gh pr checks` can still show the previous
 # commit's finished checks and would return at once with a stale verdict. That
@@ -39,7 +44,7 @@ done
 [ -n "$run_id" ] || die "no $CI_WORKFLOW run registered for $head after $((REGISTRATION_TRIES * REGISTRATION_SLEEP))s"
 
 set +e
-timeout "$WATCH_TIMEOUT" gh pr checks "$OSB_PR_NUMBER" --watch --fail-fast --interval "$WATCH_INTERVAL" >/dev/null 2>&1
+timeout "$WATCH_TIMEOUT" gh pr checks "$OSB_PR_NUMBER" --watch --interval "$WATCH_INTERVAL" >/dev/null 2>&1
 rc=$?
 set -e
 echo "checks for PR #$OSB_PR_NUMBER at $head (CI run $run_id):"
@@ -53,9 +58,10 @@ if [ "$rc" -eq 124 ]; then
   echo "CI-GATE: red (checks still pending after ${WATCH_TIMEOUT}s)"
   exit 1
 fi
-echo "CI-GATE: red"
-# Per failed job, not `--log-failed` on the run: with --fail-fast the run may
-# still be in progress (the windows job), and a run-level log is refused then.
+failed=$(gh pr checks "$OSB_PR_NUMBER" --json name,bucket -q '[.[] | select(.bucket == "fail" or .bucket == "cancel") | .name] | join(", ")' 2>/dev/null || true)
+echo "CI-GATE: red (failed: ${failed:-the check list could not be read, see the checks above})"
+# Per failed job, not `--log-failed` on the run: the job logs stay readable
+# even when another workflow run on the same head is still in progress.
 for job in $(gh run view "$run_id" --json jobs -q '.jobs[] | select(.conclusion == "failure") | .databaseId'); do
   echo "--- failed job $job of run $run_id (log tail) ---"
   gh run view --job "$job" --log 2>&1 | tail -n "$LOG_TAIL" || true

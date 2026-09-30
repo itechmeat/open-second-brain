@@ -1,7 +1,7 @@
 schema: 2
 id: osb-pr-prepare
 name: Open Second Brain PR prepare
-description: 'Turn an Open Second Brain branch whose implementation is done into an open pull request that is ready for the operator to merge. Works for every change kind (feature, fix, refactor, chore, docs, deps). Steps: intake and commit of any uncommitted work, a local zg index, a self-review against the base with zg reconnaissance, a test-audit of the tests the diff adds or changes, a focused security review of the diff, docs plus the version and CHANGELOG decision the change kind drives (CLAUDE.md), then before the push, in this order and each with its fix loop: the CI QA gates run locally exactly as CI runs them, the code-ranker architecture gate against the main baseline (zero new violations, else blocked), an OpenCodeReview review of the branch diff in delegation mode on a fixed model (profile osb-reviewer) that fixes the confirmed findings, and the QA and architecture gates again when that review changed anything; then push, open the PR with a verified mermaid diagram, one blocking CI wait, and a bounded bot-review loop. It never merges and never arms auto-merge. The run input (instruction) carries the change kind, the intent, the related issues or cards and the base branch. The finish answer reports the PR URL, the CI state, a summary and whatever is left for a human.'
+description: 'Turn an Open Second Brain branch whose implementation is done into an open pull request that is ready for the operator to merge. Works for every change kind (feature, fix, refactor, chore, docs, deps). Steps: intake and commit of any uncommitted work, a local zg index, a self-review against the base with zg reconnaissance, a test-audit of the tests the diff adds or changes, a focused security review of the diff, docs plus the version and CHANGELOG decision the change kind drives (CLAUDE.md), then before the push, in this order and each with its fix loop: the CI QA gates run locally exactly as CI runs them, the code-ranker architecture gate against the main baseline (zero new violations, else blocked), an OpenCodeReview review of the branch diff in delegation mode on a fixed model (profile osb-reviewer) that fixes the confirmed findings, and the QA and architecture gates again when that review changed anything; then push, open the PR with a verified mermaid diagram, one blocking CI wait that ends only when every check has finished, and a bounded bot-review loop. It never merges and never arms auto-merge. The run input (instruction) carries the change kind, the intent, the related issues or cards and the base branch. The finish answer reports the PR URL, the CI state, a summary and whatever is left for a human.'
 version: 1.1.0
 params:
 - name: brief
@@ -196,8 +196,12 @@ nodes:
     sweep, no campaign, no deletion outside the diff.
 
     For each added or changed test: the four gate questions, the junk
-    patterns, and the retention bar. Rewrite or remove a test that
-    fails the gate, in the same branch.
+    patterns, and the retention bar, plus one gate question of this
+    project: does the test compare output that embeds a timestamp or a
+    generated id (for example a second-granular run id), so that two
+    runs differ by timing alone? Such a comparison is normalised (the
+    volatile part masked or pinned) or the test is rewritten. Rewrite or
+    remove a test that fails the gate, in the same branch.
 
     Regression tests (kind fix, or any test that pins a bug): prove each
     one fails on the pre-fix code for the intended reason. Take the
@@ -516,12 +520,14 @@ nodes:
        Body: Summary (capability-first), a mermaid diagram of the
        process-level benefit (required when the PR ships a release,
        optional otherwise), What changed, Verification (the gates that
-       ran, with counts), and `Closes #N` / `Refs #N` for the GitHub
-       issues in the context. Kanban card ids stay out of the public
-       text. Security fixes in neutral terms only. When the PR footer
-       above is non-empty, the description ends with it verbatim; when
-       it is empty, the description carries no footer and no
-       AI-authorship marker.
+       ran, with counts; when the diff against origin/<base> exceeds
+       100 files, one line naming the bot review as skipped, since
+       CodeRabbit skips a change set over its 100-file limit), and
+       `Closes #N` / `Refs #N` for the GitHub issues in the context.
+       Kanban card ids stay out of the public text. Security fixes in
+       neutral terms only. When the PR footer above is non-empty, the
+       description ends with it verbatim; when it is empty, the
+       description carries no footer and no AI-authorship marker.
     3. Mermaid: try a local parse first when it runs here
        (`bunx -p @mermaid-js/mermaid-cli mmdc -i <file>.mmd -o <file>.svg`;
        agent-browser's Chrome can serve as PUPPETEER_EXECUTABLE_PATH).
@@ -572,8 +578,12 @@ nodes:
     the Windows notes in install/windows.md and CLAUDE.md). A flaky
     timing failure unrelated to the branch is re-run once with
     `gh run rerun <run-id> --failed` instead of a code change, and
-    named as such. Otherwise fix at the cause, run the affected local
-    gates, commit per the brief and push the same way push_pr did
+    named as such; a rerun is only for failures outside the
+    repository's code. An HTTP 429 or 5xx from an external service
+    inside a repository script is fixed at the cause: a bounded retry
+    in that script (a fixed attempt count and backoff, then the error
+    by name), not a rerun. Otherwise fix at the cause, run the
+    affected local gates, commit per the brief and push the same way push_pr did
     (SSH when .github/workflows/ changed). Do not edit the PR text
     unless the fix changes what it claims.
 
