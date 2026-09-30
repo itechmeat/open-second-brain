@@ -60,6 +60,16 @@ afterEach(() => {
 
 const env = (): Record<string, string> => ({ OPEN_SECOND_BRAIN_CONFIG: configPath });
 
+const RUN_ID_MASK = "<run-id>";
+
+/** The `--json` stdout with every occurrence of its own run id masked. */
+function withoutRunId(stdout: string): string {
+  const runId = (JSON.parse(stdout) as Record<string, unknown>)["run_id"];
+  if (typeof runId !== "string" || runId === "")
+    throw new Error("dream --json stdout has no run_id");
+  return stdout.replaceAll(runId, RUN_ID_MASK);
+}
+
 describe("o2b brain dream --progress", () => {
   test("writes records to stderr and leaves stdout untouched", async () => {
     const plain = await runCli(["brain", "dream", "--dry-run", "--json"], { env: env() });
@@ -71,8 +81,10 @@ describe("o2b brain dream --progress", () => {
     expect(watched.returncode).toBe(0);
     // The payload a caller parses is byte-identical with and without the
     // observer. Progress that changed stdout would be a regression, not a
-    // feature.
-    expect(watched.stdout).toBe(plain.stdout);
+    // feature. The run id is minted per second, so two runs that straddle
+    // a second boundary differ there and nowhere else: it is masked
+    // wherever it appears (target paths embed it too) before the compare.
+    expect(withoutRunId(watched.stdout)).toBe(withoutRunId(plain.stdout));
 
     const records = progressRecords(watched.stderr);
     expect(records.length).toBeGreaterThan(0);
