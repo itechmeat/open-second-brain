@@ -30,6 +30,7 @@ import {
 import type { GitCommitRecord, GitTagRecord } from "../../../../src/core/brain/git/store.ts";
 import { acquireLockSync, LOCK_WAIT_BUDGET_ENV } from "../../../../src/core/brain/sync-lockfile.ts";
 import { withDeviceId } from "../../../helpers/device-id.ts";
+import { CHMOD_CANNOT_DENY } from "../../../helpers/platform.ts";
 
 let tmp: string;
 let vault: string;
@@ -218,7 +219,7 @@ test("listGitRepos skips an entry that vanished, a dangling link", () => {
   expect(listGitRepos(vault).map((r) => r.key)).toEqual([KEY]);
 });
 
-test.skipIf(process.getuid?.() === 0)(
+test.skipIf(CHMOD_CANNOT_DENY)(
   "listGitRepos surfaces an entry it cannot stat by its error code",
   () => {
     appendGitRecords(vault, KEY, [commit("a".repeat(40))]);
