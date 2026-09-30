@@ -288,6 +288,38 @@ describe("URL credentials with an empty username", () => {
   });
 });
 
+describe("URL credentials never swallow a port and a path", () => {
+  // The password class crosses `/`, so without a guard the `host:port`
+  // colon read as the userinfo colon and a later `@` in the path closed
+  // the match: the host, the port and half the path became "credentials".
+  const UNTOUCHED = [
+    "https://example.com:443/a@b",
+    "http://localhost:5173/@vite/client",
+    "https://registry.npmjs.org:443/@types/node",
+    "https://example.com:8443/users/alice@example.org",
+    "see https://example.com:8080/users/@alice now",
+  ];
+
+  for (const url of UNTOUCHED) {
+    test(`${url} stays byte-identical`, () => {
+      expect(redactRawOutput(url, { redactUrlCredentials: true })).toBe(url);
+    });
+  }
+
+  const REDACTED: Array<[string, string]> = [
+    ["https://user:pa/ss@h/x", "https://***REDACTED***@h/x"],
+    ["https://:secret@h", "https://***REDACTED***@h"],
+    ["https://u:p?q@h", "https://***REDACTED***@h"],
+    ["https://user:8080@h/x", "https://***REDACTED***@h/x"],
+  ];
+
+  for (const [input, expected] of REDACTED) {
+    test(`${input} still redacts its userinfo`, () => {
+      expect(redactRawOutput(input, { redactUrlCredentials: true })).toBe(expected);
+    });
+  }
+});
+
 describe("bare JWT (three base64url segments)", () => {
   // A JWT's header is compact JSON, so it always base64s to the `eyJ`
   // prefix; the 20-character canonical header slips the 24-character
@@ -323,6 +355,39 @@ describe("bare JWT (three base64url segments)", () => {
   test("a Bearer-prefixed JWT keeps the prefix and one placeholder (regression guard)", () => {
     const out = redactRawOutput(`Authorization: Bearer ${JWT}`);
     expect(out).toBe("Authorization: Bearer ***REDACTED***");
+  });
+
+  test("a JWT with a payload longer than 4096 characters is redacted whole", () => {
+    const payload = Buffer.from(JSON.stringify({ sub: "x".repeat(3300) })).toString("base64url");
+    expect(payload.length).toBeGreaterThan(4096);
+    const token = fakeCredential(
+      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+      `.${payload}`,
+      ".c2lnbmF0dXJlLXNlZ21lbnQ",
+    );
+    expect(redactRawOutput(`token ${token} end`)).toBe(`token ${REDACTION_PLACEHOLDER} end`);
+  });
+
+  test("a JWT whose header JSON is whitespace-formatted is redacted", () => {
+    for (const header of [
+      '{ "alg": "HS256", "typ": "JWT" }',
+      '{\n  "alg": "HS256"\n}',
+      '{\t"alg":"HS256"}',
+      '{\r\n"alg":"HS256"}',
+    ]) {
+      const encoded = Buffer.from(header).toString("base64url");
+      const token = fakeCredential(
+        encoded,
+        ".eyJzdWIiOiIxMjM0NTY3ODkwIn0",
+        ".c2lnbmF0dXJlLXNlZ21lbnQ",
+      );
+      expect(redactRawOutput(`token ${token} end`)).toBe(`token ${REDACTION_PLACEHOLDER} end`);
+    }
+  });
+
+  test("short dotted words that merely start like a header stay prose", () => {
+    const text = "see ewok.item.list and eyAb.cdef.ghij here";
+    expect(redactRawOutput(text)).toBe(text);
   });
 });
 

@@ -1971,10 +1971,10 @@ var COLON_VALUE_RE = new RegExp(`(?<!")\\b(${KEY_PATTERN})([ \\t]*:[ \\t]*)("[^"
 var YAML_SECRET_BLOCK_RE = new RegExp(`^([ \\t]*)(${KEY_PATTERN})[ \\t]*:[ \\t]*(?:[|>][+-]?\\d{0,2})?[ \\t]*\\r?\\n` + "(?:\\1[ \\t]+[^\\r\\n]*\\r?\\n?)+", "gim");
 var JSON_ENTRY_RE = new RegExp(`("(?:${KEY_PATTERN})"\\s*:\\s*)("(?:[^"\\\\]|\\\\.)*"|true|false|null|-?\\d+(?:\\.\\d+)?)`, "gi");
 var BEARER_RE = /\b(Bearer\s+)([A-Za-z0-9._\-+/=]+)/gi;
-var JWT_RE = /\beyJ[A-Za-z0-9_-]{4,4096}(?:\.[A-Za-z0-9_-]{4,4096}){2}(?![A-Za-z0-9_-])/g;
+var JWT_RE = /\b(?:eyJ|eyA|ewo|ew0|ewk)[A-Za-z0-9_-]{9,65533}(?:\.[A-Za-z0-9_-]{4,65536}){2}(?![A-Za-z0-9_-])/g;
 var IPV4_OCTET = "(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)";
 var IPV4 = `${IPV4_OCTET}(?:\\.${IPV4_OCTET}){3}`;
-var BASIC_AUTH_URL_RE = /\b([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^\s/:@]*):([^\s@]+)@/g;
+var BASIC_AUTH_URL_RE = /\b([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^\s/:@]*):(?!\d{1,5}(?:[/?#]|$))([^\s@]+)@/g;
 var IPV4_PORT_RE = new RegExp(`\\b${IPV4}:\\d{1,5}\\b`, "g");
 var FQDN_PORT_SOURCE_EXTS = "js|ts|tsx|jsx|py|json|rs|go|java|rb|php|c|cc|cpp|cxx|h|hpp|css|scss|sass|less|" + "html|htm|xml|yaml|yml|toml|ini|cfg|md|markdown|sh|bash|sql|vue|svelte|gradle|" + "kt|swift|scala|clj|ex|exs|erl|elm|dart|lua|pl|pm|r|jl|tf|lock|map|txt|csv|log";
 var FQDN_PORT_RE = new RegExp("\\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\\.)+(?!(" + FQDN_PORT_SOURCE_EXTS + "):\\d)[a-zA-Z]{2,63}:\\d{1,5}\\b", "g");

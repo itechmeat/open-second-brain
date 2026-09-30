@@ -239,12 +239,17 @@ const BEARER_RE = /\b(Bearer\s+)([A-Za-z0-9._\-+/=]+)/gi;
 // a JWT is a bearer credential wherever it appears, not only where a
 // key names it.
 //
-// The `eyJ` prefix anchors the match: every header is COMPACT JSON, and
-// `{"` always base64-encodes to `eyJ`, while matching any three
+// The header prefix anchors the match, while matching any three
 // dot-separated base64url runs would also claim ordinary dotted
-// identifiers. Segments are bounded to the length a header/payload/
-// signature can take, so the pass stays linear on large inputs.
-const JWT_RE = /\beyJ[A-Za-z0-9_-]{4,4096}(?:\.[A-Za-z0-9_-]{4,4096}){2}(?![A-Za-z0-9_-])/g;
+// identifiers. A compact header `{"` encodes to `eyJ`; a header written
+// with whitespace after the brace encodes to `eyA` (`{ `), `ewo` (`{\n`),
+// `ew0` (`{\r`) or `ewk` (`{\t`), so all five open the match. The header
+// segment must be at least 12 characters in total (a real header is far
+// longer), which keeps short dotted words such as `ewok.a.b` prose.
+// Segments are bounded (64 KiB each, room for a large claims payload),
+// so the pass stays linear on large inputs.
+const JWT_RE =
+  /\b(?:eyJ|eyA|ewo|ew0|ewk)[A-Za-z0-9_-]{9,65533}(?:\.[A-Za-z0-9_-]{4,65536}){2}(?![A-Za-z0-9_-])/g;
 
 // ----- Infra-topology detectors (opt-in via `redactInfra`) ------------------
 //
@@ -275,7 +280,15 @@ const IPV4 = `${IPV4_OCTET}(?:\\.${IPV4_OCTET}){3}`;
 // bounded by those anchors (a `[^\s@]+` run ends at the first whitespace
 // or `@`, deterministically), so the documented linear / no-ReDoS
 // property above holds.
-const BASIC_AUTH_URL_RE = /\b([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^\s/:@]*):([^\s@]+)@/g;
+//
+// Because the password class crosses `/`, a `host:port/path@x` URL would
+// read the port colon as the userinfo colon and swallow the host, the port
+// and half the path (`http://localhost:5173/@vite/client`). The lookahead
+// rejects a colon followed by 1-5 digits and then `/`, `?`, `#` or the end
+// of the text: that is a port, not a password. Known trade-off: a password
+// that begins with 1-5 digits followed by `/`, `?` or `#` is missed.
+const BASIC_AUTH_URL_RE =
+  /\b([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^\s/:@]*):(?!\d{1,5}(?:[/?#]|$))([^\s@]+)@/g;
 
 // `ipv4:port` — a reachable service endpoint. Redacted whole regardless of
 // whether the address is public or private (the port is what leaks the
