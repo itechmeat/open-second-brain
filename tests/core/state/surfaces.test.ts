@@ -30,7 +30,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { selfHealUpgradeMarkerPath } from "../../../src/core/maintenance/self-heal-upgrade-state.ts";
-import { existsSync, mkdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 
 import {
@@ -646,4 +646,81 @@ describe("one value, two renderings", () => {
     expect(text).toContain("EACCES");
     expect(text).not.toContain("nothing has created it");
   });
+});
+
+function logDir(vault: string): string {
+  return join(vault, "Brain", "log");
+}
+
+describe("sharded ledger surfaces (t_774dea61)", () => {
+  test("a fixed-name ledger surface is present when only a device shard exists", () => {
+    const vault = tempVault();
+    mkdirSync(logDir(vault), { recursive: true });
+    const shard = join(logDir(vault), "query-demand.device-x.jsonl");
+    writeFileSync(shard, "{}\n", "utf8");
+
+    const report = reportFor(vault, STATE_SURFACE_ID.queryDemandLedger);
+
+    expect(report.reachability.state).toBe(STATE_REACHABILITY.present);
+    expect(report.reachability.path).toBe(shard);
+  });
+
+  test("the legacy name alone still reads present at its own path; neither reads absent", () => {
+    const vault = tempVault();
+    mkdirSync(logDir(vault), { recursive: true });
+    const legacy = join(logDir(vault), "query-demand.jsonl");
+    writeFileSync(legacy, "{}\n", "utf8");
+    const present = reportFor(vault, STATE_SURFACE_ID.queryDemandLedger).reachability;
+    expect(present.state).toBe(STATE_REACHABILITY.present);
+    expect(present.path).toBe(legacy);
+
+    const empty = tempVault();
+    mkdirSync(logDir(empty), { recursive: true });
+    expect(reportFor(empty, STATE_SURFACE_ID.queryDemandLedger).reachability.state).toBe(
+      STATE_REACHABILITY.absent,
+    );
+    expect(reportFor(tempVault(), STATE_SURFACE_ID.queryDemandLedger).reachability.state).toBe(
+      STATE_REACHABILITY.absent,
+    );
+  });
+
+  test("a conflict copy alone is not a shard and does not make the surface present", () => {
+    const vault = tempVault();
+    mkdirSync(logDir(vault), { recursive: true });
+    writeFileSync(join(logDir(vault), "recurrence-support.sync-conflict-x.jsonl"), "{}\n", "utf8");
+    expect(reportFor(vault, STATE_SURFACE_ID.recurrenceLedger).reachability.state).toBe(
+      STATE_REACHABILITY.absent,
+    );
+  });
+
+  test("the maintenance journal and the lineage ledger read their device shards too", () => {
+    const vault = tempVault();
+    const journal = join(vault, ".open-second-brain", "maintenance-runs.device-x.jsonl");
+    const lineage = join(vault, "Brain", ".state", "session-lineage.device-x.jsonl");
+    for (const path of [journal, lineage]) {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, "{}\n", "utf8");
+    }
+
+    expect(reportFor(vault, STATE_SURFACE_ID.maintenanceJournal).reachability.path).toBe(journal);
+    expect(reportFor(vault, STATE_SURFACE_ID.lineageLedger).reachability.path).toBe(lineage);
+  });
+
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "a ledger directory that cannot be listed is unchecked by its code, never absent",
+    () => {
+      const vault = tempVault();
+      mkdirSync(logDir(vault), { recursive: true });
+      // Traversable but not listable: the legacy stat answers ENOENT, the
+      // shard listing answers EACCES.
+      chmodSync(logDir(vault), 0o300);
+      try {
+        const verdict = reportFor(vault, STATE_SURFACE_ID.captureDecisionLog).reachability;
+        expect(verdict.state).toBe(STATE_REACHABILITY.unchecked);
+        expect(verdict.reason).toContain("EACCES");
+      } finally {
+        chmodSync(logDir(vault), 0o700);
+      }
+    },
+  );
 });
