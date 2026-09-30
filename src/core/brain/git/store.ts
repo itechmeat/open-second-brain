@@ -7,7 +7,8 @@
  *   - `commits[.<deviceId>].jsonl` - one append-only shard per device of
  *     mixed-kind records (`commit` | `tag`), merged on read by record time,
  *     snake_case on disk like the continuity shards, deduplicated by
- *     commit sha / tag name on append. Typed edges (touched files,
+ *     commit sha / tag (name, target) on append and again on the merged
+ *     read. Typed edges (touched files,
  *     author, carrying release) are STRUCTURED FIELDS here; wikilinks in
  *     rendered notes are always derived from these records, never
  *     hand-maintained (design decision: contain dual-representation drift).
@@ -202,6 +203,12 @@ function recordTime(record: GitRecord): number {
  * the latest-tag view see one timeline whatever the shard names are. The
  * dedup on append reads the same merge, so it also sees commits a synced
  * peer ingested.
+ *
+ * The merge also keeps only the first occurrence of each record identity
+ * (see {@link recordIdentity}). The append dedup cannot see a shard that
+ * has not synced yet, so two devices ingesting the same history before
+ * Syncthing delivers both write it; without this, every commit they share
+ * would list twice and a `limit` would count the copies.
  */
 function readRecords(vault: string, repoKey: string): ReadonlyArray<GitRecord> {
   const shards = readShardLinesByShard(gitStoreDir(vault, repoKey), COMMITS_GRAMMAR).map(
@@ -210,7 +217,25 @@ function readRecords(vault: string, repoKey: string): ReadonlyArray<GitRecord> {
       rows: shard.rows.map(parseRecord).filter((record) => record !== null),
     }),
   );
-  return interleaveShardRows(shards, recordTime);
+  const seen = new Set<string>();
+  return interleaveShardRows(shards, recordTime).filter((record) => {
+    const identity = recordIdentity(record);
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
+}
+
+/**
+ * What makes two records the same record: a commit's sha, a tag's
+ * (name, target). A retargeted tag (same name, new target) is a new
+ * record; listGitTags surfaces the latest per name. The kind prefix keeps
+ * the two key spaces apart.
+ */
+function recordIdentity(record: GitRecord): string {
+  return record.kind === "commit"
+    ? `commit\x00${record.sha}`
+    : `tag\x00${record.name}\x00${record.targetSha}`;
 }
 
 /**
@@ -247,23 +272,16 @@ function appendGitRecordsLocked(
   repoKey: string,
   records: ReadonlyArray<GitRecord>,
 ): AppendGitRecordsResult {
-  const existing = readRecords(vault, repoKey);
-  const seenShas = new Set<string>();
   // Tag identity is (name, target): a RETARGETED tag (same name, new
   // commit after a force-move) appends a fresh record instead of being
   // silently dropped; listGitTags surfaces the latest record per name.
-  const seenTags = new Set<string>();
-  for (const record of existing) {
-    if (record.kind === "commit") seenShas.add(record.sha);
-    else seenTags.add(`${record.name}\x00${record.targetSha}`);
-  }
+  const seen = new Set(readRecords(vault, repoKey).map(recordIdentity));
   const lines: string[] = [];
   let skipped = 0;
   let appendedCommits = 0;
   let appendedTags = 0;
   for (const record of records) {
-    const key = record.kind === "commit" ? record.sha : `${record.name}\x00${record.targetSha}`;
-    const seen = record.kind === "commit" ? seenShas : seenTags;
+    const key = recordIdentity(record);
     if (seen.has(key)) {
       skipped += 1;
       continue;

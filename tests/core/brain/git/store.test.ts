@@ -307,3 +307,23 @@ test("commits from two devices list oldest-first by commit time (t_774dea61)", (
   ]);
   expect(listGitCommits(vault, KEY, { limit: 1 }).map((c) => c.subject)).toEqual(["a-new-2"]);
 });
+
+test("a commit two devices both ingested before their shards synced lists once (t_774dea61)", () => {
+  // Both devices found the sha absent and wrote it: device b's shard is a
+  // byte copy of device a's, the state a pre-sync race leaves behind.
+  withDeviceId("a", () =>
+    appendGitRecords(vault, KEY, [
+      commit("5".repeat(40), { subject: "both", committedAt: "2026-06-01T10:00:00+00:00" }),
+      commit("6".repeat(40), { subject: "only-a", committedAt: "2026-06-02T10:00:00+00:00" }),
+    ]),
+  );
+  const dir = gitStoreDir(vault, KEY);
+  const firstLine = readFileSync(join(dir, "commits.a.jsonl"), "utf8").split("\n")[0]!;
+  writeFileSync(join(dir, "commits.b.jsonl"), `${firstLine}\n`);
+
+  expect(listGitCommits(vault, KEY).map((c) => c.subject)).toEqual(["both", "only-a"]);
+  expect(listGitCommits(vault, KEY, { limit: 2 }).map((c) => c.subject)).toEqual([
+    "both",
+    "only-a",
+  ]);
+});
