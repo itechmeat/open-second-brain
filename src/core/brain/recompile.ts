@@ -16,6 +16,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { basename, isAbsolute, join } from "node:path";
 
 import { appendAuditRecord } from "../reliability/audit.ts";
+import { HYGIENE_AUDIT_DIR } from "./audit-dirs.ts";
 import { scanFreshness } from "./freshness.ts";
 import { writeHandoffNote } from "./handoff.ts";
 import { brainDirsForWrite, BRAIN_SNAPSHOTS_REL } from "./paths.ts";
@@ -206,7 +207,7 @@ export async function executeRecompile(
     !dryRun &&
     (rederived.length > 0 || archived.length > 0 || manual.length > 0 || errors.length > 0)
   ) {
-    appendAuditRecord(join(brainDirsForWrite(vault).log, "hygiene"), {
+    appendAuditRecord(join(brainDirsForWrite(vault).log, HYGIENE_AUDIT_DIR), {
       timestamp: opts.now.toISOString(),
       actor: opts.agent,
       action: "targeted_recompile",

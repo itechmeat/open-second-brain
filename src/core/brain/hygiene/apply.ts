@@ -20,6 +20,7 @@
 import { join } from "node:path";
 
 import { appendAuditRecord } from "../../reliability/audit.ts";
+import { HYGIENE_AUDIT_DIR } from "../audit-dirs.ts";
 import { mergePreferences } from "../merge.ts";
 import { brainDirsForWrite } from "../paths.ts";
 import { archivePage, executeRecompile, planRecompile } from "../recompile.ts";
@@ -172,7 +173,7 @@ export async function applyHygienePlan(
   }
 
   if (applied.length > 0 || errors.length > 0) {
-    appendAuditRecord(join(brainDirsForWrite(vault).log, "hygiene"), {
+    appendAuditRecord(join(brainDirsForWrite(vault).log, HYGIENE_AUDIT_DIR), {
       timestamp: opts.now.toISOString(),
       actor: opts.agent,
       action: "hygiene_apply",

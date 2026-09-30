@@ -3,6 +3,8 @@ import { join } from "node:path";
 
 import { appendAuditRecord, type AuditRecord } from "../reliability/audit.ts";
 import { buildProbeReport, type ProbeCheck, type ProbeReport } from "../reliability/probe.ts";
+import { WATCHDOG_AUDIT_DIR, WATCHDOG_FALLBACK_AUDIT_DIR } from "./audit-dirs.ts";
+import { DERIVED_STORE_DIR } from "./path-constants.ts";
 import { resolveIndexPath } from "../search/paths.ts";
 import {
   BRAIN_CONFIG_FILE,
@@ -247,11 +249,20 @@ function pathKind(path: string): "file" | "directory" | "other" | "missing" {
   }
 }
 
+/**
+ * Where a watchdog record lands when its `Brain/log/` directory refuses
+ * the write: `.open-second-brain/watchdog-audit/`. Exported so the
+ * doctor's sync-conflict sweep visits the directory this module writes.
+ */
+export function watchdogFallbackAuditDir(vault: string): string {
+  return join(vault, DERIVED_STORE_DIR, WATCHDOG_FALLBACK_AUDIT_DIR);
+}
+
 function appendWatchdogAudit(vault: string, logDir: string, record: AuditRecord): string {
   try {
-    return appendAuditRecord(join(logDir, "watchdog"), record);
+    return appendAuditRecord(join(logDir, WATCHDOG_AUDIT_DIR), record);
   } catch (error) {
-    return appendAuditRecord(join(vault, ".open-second-brain", "watchdog-audit"), {
+    return appendAuditRecord(watchdogFallbackAuditDir(vault), {
       ...record,
       ok: false,
       details: {

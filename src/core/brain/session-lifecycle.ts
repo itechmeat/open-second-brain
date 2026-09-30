@@ -4,6 +4,7 @@ import { basename, join } from "node:path";
 import { delegatedAgentName } from "../agent-identity.ts";
 import { appendAuditRecord } from "../reliability/audit.ts";
 import { appendLogEvent } from "./log.ts";
+import { SESSION_LIFECYCLE_AUDIT_DIR } from "./audit-dirs.ts";
 import { brainDirsForWrite } from "./paths.ts";
 import { buildCaptureBoundary, type SessionCaptureDecision } from "./capture-boundary.ts";
 import { extractFacts, routeExtractedFacts } from "./fact-extract.ts";
@@ -499,44 +500,47 @@ export async function captureSessionLifecycleEvent(
     });
   }
 
-  const auditPath = appendAuditRecord(join(brainDirsForWrite(vault).log, "session-lifecycle"), {
-    timestamp: now.toISOString(),
-    actor: capturingAgent,
-    action: "session_lifecycle_capture",
-    target: "Brain/session-lifecycle",
-    ok: true,
-    details: {
-      event: normalized.event,
-      ...(normalized.sessionId ? { session_id: normalized.sessionId } : {}),
-      ...(normalized.agentId ? { agent_id: normalized.agentId } : {}),
-      ...(toolCallsFailed > 0 ? { tool_calls_failed: toolCallsFailed } : {}),
-      dry_run: opts.dryRun === true,
-      boundary_decision: decision,
-      ...(normalized.interrupted === true ? { interrupted: true } : {}),
-      ...(transcriptConsumed !== undefined ? { transcript_consumed: transcriptConsumed } : {}),
-      ...(chainLineage !== undefined
-        ? {
-            lineage_root: chainLineage.rootId,
-            ...(chainLineage.parentId !== null ? { lineage_parent: chainLineage.parentId } : {}),
-            lineage_depth: chainLineage.depth,
-            lineage_source: chainLineage.source,
-          }
-        : {}),
-      // Unit C: a continuation that was AVAILABLE and refused. Absent
-      // on the ordinary flat path, so a session with nothing to link to
-      // keeps its previous audit shape exactly.
-      ...(lineageNotices.length > 0
-        ? { lineage_abstained: lineageNotices.map(formatDegradationNotice) }
-        : {}),
-      // Block C: the observation this event tried to record and could
-      // not. Absent on every successful append, so the ordinary audit
-      // shape is unchanged.
-      ...(lineageDrops.length > 0
-        ? { lineage_dropped: lineageDrops.map(formatDegradationNotice) }
-        : {}),
-      ...counters,
+  const auditPath = appendAuditRecord(
+    join(brainDirsForWrite(vault).log, SESSION_LIFECYCLE_AUDIT_DIR),
+    {
+      timestamp: now.toISOString(),
+      actor: capturingAgent,
+      action: "session_lifecycle_capture",
+      target: "Brain/session-lifecycle",
+      ok: true,
+      details: {
+        event: normalized.event,
+        ...(normalized.sessionId ? { session_id: normalized.sessionId } : {}),
+        ...(normalized.agentId ? { agent_id: normalized.agentId } : {}),
+        ...(toolCallsFailed > 0 ? { tool_calls_failed: toolCallsFailed } : {}),
+        dry_run: opts.dryRun === true,
+        boundary_decision: decision,
+        ...(normalized.interrupted === true ? { interrupted: true } : {}),
+        ...(transcriptConsumed !== undefined ? { transcript_consumed: transcriptConsumed } : {}),
+        ...(chainLineage !== undefined
+          ? {
+              lineage_root: chainLineage.rootId,
+              ...(chainLineage.parentId !== null ? { lineage_parent: chainLineage.parentId } : {}),
+              lineage_depth: chainLineage.depth,
+              lineage_source: chainLineage.source,
+            }
+          : {}),
+        // Unit C: a continuation that was AVAILABLE and refused. Absent
+        // on the ordinary flat path, so a session with nothing to link to
+        // keeps its previous audit shape exactly.
+        ...(lineageNotices.length > 0
+          ? { lineage_abstained: lineageNotices.map(formatDegradationNotice) }
+          : {}),
+        // Block C: the observation this event tried to record and could
+        // not. Absent on every successful append, so the ordinary audit
+        // shape is unchanged.
+        ...(lineageDrops.length > 0
+          ? { lineage_dropped: lineageDrops.map(formatDegradationNotice) }
+          : {}),
+        ...counters,
+      },
     },
-  });
+  );
 
   return {
     event: normalized.event,

@@ -19,6 +19,7 @@ import lockfile from "proper-lockfile";
 
 import { renameWithRetry } from "../../fs-atomic.ts";
 import { appendAuditRecord } from "../../reliability/audit.ts";
+import { SECRET_CUSTODY_AUDIT_DIR } from "../audit-dirs.ts";
 import { brainDirsForWrite } from "../paths.ts";
 import { isoSecond } from "../time.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
@@ -356,7 +357,7 @@ function audit(
   name: string,
   details: Record<string, unknown>,
 ): void {
-  appendAuditRecord(join(brainDirsForWrite(vault).log, "secret-custody"), {
+  appendAuditRecord(join(brainDirsForWrite(vault).log, SECRET_CUSTODY_AUDIT_DIR), {
     timestamp: ctx.now.toISOString(),
     actor: ctx.agent,
     action,

@@ -12,6 +12,7 @@
 import { redactRawOutput } from "../../redactor.ts";
 import { appendAuditRecord } from "../../reliability/audit.ts";
 import { escapeRegex } from "../../strings.ts";
+import { SECRET_CUSTODY_AUDIT_DIR } from "../audit-dirs.ts";
 import { brainDirsForWrite } from "../paths.ts";
 import { join } from "node:path";
 import { resolveSecretForExec, type SecretAuditContext } from "./store.ts";
@@ -134,7 +135,7 @@ export async function runWithSecret(
   });
   const resolved = resolveSecretForExec(vault, name, ctx);
   if (!matchesAllowlist(resolved.allow, argv)) {
-    appendAuditRecord(join(brainDirsForWrite(vault).log, "secret-custody"), {
+    appendAuditRecord(join(brainDirsForWrite(vault).log, SECRET_CUSTODY_AUDIT_DIR), {
       timestamp: ctx.now.toISOString(),
       actor: ctx.agent,
       action: "secret_exec_denied",
@@ -145,7 +146,7 @@ export async function runWithSecret(
     throw new SecretExecDeniedError(resolved.name, command, resolved.allow);
   }
 
-  appendAuditRecord(join(brainDirsForWrite(vault).log, "secret-custody"), {
+  appendAuditRecord(join(brainDirsForWrite(vault).log, SECRET_CUSTODY_AUDIT_DIR), {
     timestamp: ctx.now.toISOString(),
     actor: ctx.agent,
     action: "secret_exec_started",
