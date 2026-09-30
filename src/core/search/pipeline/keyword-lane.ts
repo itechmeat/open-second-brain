@@ -5,7 +5,8 @@
  * synonym step is what folds derived terms into it.
  */
 
-import { runFtsQueryDetailed, type FtsMatchMode } from "../fts.ts";
+import { runFtsQueryDetailed } from "../fts.ts";
+import type { FtsMatchMode } from "../fts-match-mode.ts";
 import { buildQueryPlan } from "../query-plan.ts";
 import type { RetrievalDegradationSink } from "../retrieval-trail.ts";
 import { DEFAULT_EXPANSION, deriveExpansionTerms, tokenizeForExpansion } from "../synonyms.ts";

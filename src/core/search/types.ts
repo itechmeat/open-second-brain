@@ -22,7 +22,7 @@ import type { ReconciliationOutcome, ReconciliationReport } from "../reconciliat
 import type { VaultPathRule, VaultScopeRules } from "../vault-scope/defaults.ts";
 import type { DegreePredicate } from "./property-filter.ts";
 import type { TemporalIntent } from "./temporal-intent.ts";
-import type { FtsMatchMode } from "./fts.ts";
+import type { FtsMatchMode } from "./fts-match-mode.ts";
 import type { BrainSearchResult, ScoreBreakdown, TrustMetadata } from "./search-result.ts";
 import type {
   MemoryTrustAssessment,

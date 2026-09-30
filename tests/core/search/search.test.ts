@@ -5,7 +5,7 @@ import { indexVault } from "../../../src/core/search/indexer.ts";
 import { search } from "../../../src/core/search/search.ts";
 import { parseStructuredRecallQueryDocument } from "../../../src/core/search/structured-query.ts";
 import { SearchError } from "../../../src/core/search/types.ts";
-import { FTS_MATCH_MODE, type FtsMatchMode } from "../../../src/core/search/fts.ts";
+import { FTS_MATCH_MODE, type FtsMatchMode } from "../../../src/core/search/fts-match-mode.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 import { startFakeHttp, type FakeHttp } from "../../helpers/fake-http.ts";
 import { sqliteVecLoadable } from "../../helpers/sqlite-vec.ts";

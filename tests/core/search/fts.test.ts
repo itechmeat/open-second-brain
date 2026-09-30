@@ -1,14 +1,12 @@
 import { test, expect, beforeEach, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
 
+import { buildExpandedFtsMatch, buildFtsMatch, runFtsQuery } from "../../../src/core/search/fts.ts";
 import {
-  buildExpandedFtsMatch,
-  buildFtsMatch,
   FTS_MATCH_MODE,
   FTS_MATCH_MODES,
   isFtsMatchMode,
-  runFtsQuery,
-} from "../../../src/core/search/fts.ts";
+} from "../../../src/core/search/fts-match-mode.ts";
 import { Store } from "../../../src/core/search/store.ts";
 import { createTempVault, makeConfig } from "../../helpers/search-fixtures.ts";
 

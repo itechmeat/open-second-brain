@@ -29,7 +29,7 @@ import {
   VAULT_FLAGS,
 } from "../helpers.ts";
 import { CLI_TRANSPORT_REACH } from "../../transport-reach.ts";
-import { FTS_MATCH_MODES, isFtsMatchMode } from "../../../core/search/fts.ts";
+import { FTS_MATCH_MODES, isFtsMatchMode } from "../../../core/search/fts-match-mode.ts";
 
 /** Both malformed `--property` shapes report the same way. */
 function propertyFormatError(entry: string): CliError {

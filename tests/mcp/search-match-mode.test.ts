@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { indexVault } from "../../src/core/search/indexer.ts";
-import { FTS_MATCH_MODE, FTS_MATCH_MODES } from "../../src/core/search/fts.ts";
+import { FTS_MATCH_MODE, FTS_MATCH_MODES } from "../../src/core/search/fts-match-mode.ts";
 import { resolveSearchConfig } from "../../src/core/search/index.ts";
 import { SEARCH_TOOLS } from "../../src/mcp/search-tools.ts";
 import { MCPError } from "../../src/mcp/protocol.ts";

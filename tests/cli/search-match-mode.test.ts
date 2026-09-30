@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runCli } from "../helpers/run-cli.ts";
-import { FTS_MATCH_MODE, FTS_MATCH_MODES } from "../../src/core/search/fts.ts";
+import { FTS_MATCH_MODE, FTS_MATCH_MODES } from "../../src/core/search/fts-match-mode.ts";
 
 let tmp: string;
 let vault: string;

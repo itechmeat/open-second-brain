@@ -73,7 +73,7 @@ import { decisionModelSearchEnvelope } from "../core/decision-model/answerable.t
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 import { explainEnvelope } from "../core/search/explain-envelope.ts";
 import { deriveRecallHint } from "../core/search/recall-hint.ts";
-import { FTS_MATCH_MODES, isFtsMatchMode } from "../core/search/fts.ts";
+import { FTS_MATCH_MODES, isFtsMatchMode } from "../core/search/fts-match-mode.ts";
 import {
   ELLIPSIS,
   HEAD_WINDOW_START,

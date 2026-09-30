@@ -13,7 +13,7 @@ import {
   FTS_MATCH_MODES,
   isFtsMatchMode,
   type FtsMatchMode,
-} from "../fts.ts";
+} from "../fts-match-mode.ts";
 import { resolveSemanticPolicy, type SemanticPolicy } from "../semantic-phase.ts";
 import { readActiveSessionFocus } from "../session-focus.ts";
 import {
