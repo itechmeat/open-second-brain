@@ -15,7 +15,9 @@
  *
  * Collisions (two artifacts claim the same alias) resolve
  * first-wins by sorted canonical id - deterministic without an
- * extra timestamp lookup. A follow-up `brain_doctor` lint can
+ * extra timestamp lookup. A caller that must refuse a colliding
+ * alias instead of guessing reads `listAliasClaims`, which keeps
+ * every claimant. A follow-up `brain_doctor` lint can
  * later surface colliding aliases for operator attention; this
  * helper is intentionally tolerant so the index keeps building.
  *
@@ -45,8 +47,39 @@ export type AliasIndex = ReadonlyMap<string, string>;
  * incremental update path on purpose.
  */
 export function buildAliasIndex(vault: string): AliasIndex {
-  const dirs = brainDirs(vault);
   const map = new Map<string, string>();
+  // First-wins: only set when the key isn't taken yet.
+  forEachAliasClaim(vault, (key, canonicalId) => {
+    if (!map.has(key)) map.set(key, canonicalId);
+  });
+  return Object.freeze(map) as AliasIndex;
+}
+
+/**
+ * Frozen `aliasLowerNFC → canonicalIds` multimap: every artifact that
+ * claims each alias, in the same sorted order whose first entry
+ * `buildAliasIndex` keeps. An artifact listing one alias twice is one
+ * claimant.
+ */
+export type AliasClaims = ReadonlyMap<string, ReadonlyArray<string>>;
+
+/**
+ * Every claimant of every alias, under the same normalisation and
+ * shadowing rules as `buildAliasIndex`, without resolving collisions.
+ */
+export function listAliasClaims(vault: string): AliasClaims {
+  const map = new Map<string, string[]>();
+  forEachAliasClaim(vault, (key, canonicalId) => {
+    const claimants = map.get(key);
+    if (claimants === undefined) map.set(key, [canonicalId]);
+    else if (!claimants.includes(canonicalId)) claimants.push(canonicalId);
+  });
+  return Object.freeze(map) as AliasClaims;
+}
+
+/** Visit every (alias key, canonical id) claim in deterministic order. */
+function forEachAliasClaim(vault: string, visit: (key: string, canonicalId: string) => void): void {
+  const dirs = brainDirs(vault);
 
   // Collect every on-disk canonical id (lower-cased + NFC) in one
   // pass so the alias-collection phase can skip any alias that
@@ -56,14 +89,11 @@ export function buildAliasIndex(vault: string): AliasIndex {
   collectCanonicalNames(dirs.preferences, reservedCanonical);
   collectCanonicalNames(dirs.retired, reservedCanonical);
 
-  // Single sorted pass yields deterministic first-wins resolution
-  // when two artifacts claim the same alias. Sorting by `(kind,
-  // basename)` puts `pref-*` before `ret-*`; within each kind,
-  // alphabetical basename order wins.
-  collect(dirs.preferences, reservedCanonical, map);
-  collect(dirs.retired, reservedCanonical, map);
-
-  return Object.freeze(map) as AliasIndex;
+  // A single sorted pass yields a deterministic claim order. Sorting
+  // by `(kind, basename)` puts `pref-*` before `ret-*`; within each
+  // kind, alphabetical basename order comes first.
+  collect(dirs.preferences, reservedCanonical, visit);
+  collect(dirs.retired, reservedCanonical, visit);
 }
 
 function collectCanonicalNames(dir: string, into: Set<string>): void {
@@ -78,12 +108,11 @@ function collectCanonicalNames(dir: string, into: Set<string>): void {
 function collect(
   dir: string,
   reservedCanonical: ReadonlySet<string>,
-  into: Map<string, string>,
+  visit: (key: string, canonicalId: string) => void,
 ): void {
   if (!existsSync(dir)) return;
-  // Sort the directory listing so the first-wins rule is
-  // deterministic across filesystems that don't enumerate in
-  // stable order.
+  // Sort the directory listing so the claim order is deterministic
+  // across filesystems that don't enumerate in stable order.
   const entries = readdirSync(dir).toSorted();
   for (const name of entries) {
     if (!name.endsWith(".md")) continue;
@@ -107,8 +136,7 @@ function collect(
       // to avoid hijacking its backlinks. A follow-up brain_doctor
       // lint surfaces these collisions for operator attention.
       if (reservedCanonical.has(key)) continue;
-      // First-wins: only set when the key isn't taken yet.
-      if (!into.has(key)) into.set(key, canonicalId);
+      visit(key, canonicalId);
     }
   }
 }

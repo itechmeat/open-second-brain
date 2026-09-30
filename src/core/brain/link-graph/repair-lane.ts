@@ -36,7 +36,7 @@ import {
 import { listContinuityRecords } from "../continuity/store.ts";
 import { ENTITY_STATUS_SCOPE, vaultPageInStatusScope } from "../entities/page-scope.ts";
 import { canonicalCoOccurrenceKey, computeCoOccurrenceSuggestions } from "./co-occurrence.ts";
-import { buildAliasIndex } from "./alias-index.ts";
+import { listAliasClaims } from "./alias-index.ts";
 import { resolveUniqueMatch } from "../../graph/unique-match.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { scaffoldStub } from "../notes/scaffold-stub.ts";
@@ -472,9 +472,11 @@ function termNeedle(value: string): string {
 
 /**
  * Pool the mention terms every corpus page carries: each page's title, plus
- * every alias `buildAliasIndex` resolves to a page. Titles register first,
- * so a term spelled as a title keeps the title as its display form; an alias
- * whose canonical id matches no corpus page contributes nothing.
+ * every page claiming each alias (`listAliasClaims`, never the first-wins
+ * index, so a colliding alias reaches the exactly-one rule with all its
+ * carriers). Titles register first, so a term spelled as a title keeps the
+ * title as its display form; a claimant matching no corpus page contributes
+ * nothing.
  */
 function collectMentionTerms(pages: ReadonlyArray<CollectedPage>, vault: string): MentionTerm[] {
   // Carriers pool by path while terms register, so a page reached through
@@ -503,18 +505,20 @@ function collectMentionTerms(pages: ReadonlyArray<CollectedPage>, vault: string)
     if (bucket === undefined) byKey.set(page.key, [page]);
     else bucket.push(page);
   }
-  for (const [aliasKey, canonicalId] of buildAliasIndex(vault)) {
-    const bucket = byKey.get(canonicalId.normalize("NFC").toLowerCase().trim());
-    if (bucket === undefined) continue;
-    const existing = terms.get(aliasKey);
-    if (existing === undefined) {
-      terms.set(aliasKey, {
-        needle: aliasKey,
-        display: aliasKey,
-        carriers: new Map(bucket.map((page) => [page.rel, page])),
-      });
-    } else {
-      for (const page of bucket) existing.carriers.set(page.rel, page);
+  for (const [aliasKey, canonicalIds] of listAliasClaims(vault)) {
+    for (const canonicalId of canonicalIds) {
+      const bucket = byKey.get(canonicalId.normalize("NFC").toLowerCase().trim());
+      if (bucket === undefined) continue;
+      const existing = terms.get(aliasKey);
+      if (existing === undefined) {
+        terms.set(aliasKey, {
+          needle: aliasKey,
+          display: aliasKey,
+          carriers: new Map(bucket.map((page) => [page.rel, page])),
+        });
+      } else {
+        for (const page of bucket) existing.carriers.set(page.rel, page);
+      }
     }
   }
   return [...terms.values()]

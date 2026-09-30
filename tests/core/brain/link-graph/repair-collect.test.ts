@@ -179,20 +179,7 @@ describe("collectRepairCandidatesWithRefusals - corpus-wide unique-match binding
   });
 
   test("an alias mention proposes the same explicit candidate a title mention would", () => {
-    writePref(
-      "pref-second-order.md",
-      [
-        "---",
-        "kind: preference",
-        "topic: second-order",
-        "status: confirmed",
-        "principle: thinking ahead",
-        "aliases: [downstream]",
-        "---",
-        "",
-        "Body.",
-      ].join("\n"),
-    );
+    writePref("pref-second-order.md", aliasedPref("second-order"));
     writeNote("Notes/report.md", "Quarterly", "We follow the downstream effect.");
 
     const { candidates, refusals } = collectRepairCandidatesWithRefusals(vault);
@@ -206,39 +193,25 @@ describe("collectRepairCandidatesWithRefusals - corpus-wide unique-match binding
     expect(refusals).toEqual([]);
   });
 
-  test("an alias claimed by two pages binds to the alias index's first-wins page", () => {
-    // buildAliasIndex resolves a colliding alias first-wins by sorted
-    // canonical id (its documented contract), so the collector receives
-    // exactly one carrier and binds to it.
+  test("an alias claimed by two pages refuses the mention instead of binding to one", () => {
     writePref("pref-left.md", aliasedPref("left"));
     writePref("pref-right.md", aliasedPref("right"));
     writeNote("Notes/report.md", "Quarterly", "We follow the downstream effect.");
 
     const { candidates, refusals } = collectRepairCandidatesWithRefusals(vault);
-    expect(refusals).toEqual([]);
     const bound = candidates.filter(
       (c) => c.strength === IDENTITY_STRENGTH.explicitReference && c.source.includes("report"),
     );
-    expect(bound).toHaveLength(1);
-    expect(bound[0]!.target).toContain("pref-left");
-    expect(bound[0]!.confidence).toBe(EXPLICIT_REFERENCE_CONFIDENCE);
+    expect(bound).toEqual([]);
+    expect(refusals.map((r) => [r.source, r.target, r.action])).toEqual([
+      [expect.stringContaining("report"), expect.stringContaining("pref-left"), "skip-ambiguous"],
+      [expect.stringContaining("report"), expect.stringContaining("pref-right"), "skip-ambiguous"],
+    ]);
+    expect(refusals.every((r) => r.reason.includes("downstream"))).toBe(true);
   });
 
   test("an alias colliding with a page title refuses the mention", () => {
-    writePref(
-      "pref-second-order.md",
-      [
-        "---",
-        "kind: preference",
-        "topic: second-order",
-        "status: confirmed",
-        "principle: thinking ahead",
-        "aliases: [downstream]",
-        "---",
-        "",
-        "Body.",
-      ].join("\n"),
-    );
+    writePref("pref-second-order.md", aliasedPref("second-order"));
     writeNote("Notes/glossary.md", "Downstream", "The downstream page collects the effects.");
     writeNote("Notes/report.md", "Quarterly", "We follow the downstream effect.");
 
