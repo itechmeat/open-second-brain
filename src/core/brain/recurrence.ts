@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { jsonlLedgerGrammar, readShardedLines } from "./ledger-shards.ts";
+import { interleaveShardRows, jsonlLedgerGrammar, readShardLinesByShard } from "./ledger-shards.ts";
 import { BRAIN_LOG_REL } from "./path-constants.ts";
 import { proceduralRecurrencePath, RECURRENCE_LEDGER_STEM } from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
@@ -244,18 +244,37 @@ function appendEvent(vault: string, event: RecurrenceEvent): void {
   appendFileSync(path, `${JSON.stringify(event)}\n`, { encoding: "utf8" });
 }
 
-function readEvents(vault: string): RecurrenceEvent[] {
-  // Merged read over every device's shard (t_774dea61); the absent
-  // directory lists nothing, which is the same empty result as before.
-  const lines = readShardedLines(join(vault, BRAIN_LOG_REL), RECURRENCE_LEDGER_GRAMMAR);
-  const out: RecurrenceEvent[] = [];
-  for (const line of lines) {
-    if (!line.trim()) continue;
-    try {
-      out.push(JSON.parse(line) as RecurrenceEvent);
-    } catch {
-      continue;
-    }
+/**
+ * When an event happened, as the cross-device merge orders it. An event
+ * whose stamp does not parse sorts as early as possible, which in the
+ * merge means straight after the event its own shard holds before it.
+ */
+function eventTime(event: RecurrenceEvent): number {
+  const time = Date.parse(event.at);
+  return Number.isFinite(time) ? time : Number.NEGATIVE_INFINITY;
+}
+
+/** One ledger line as an event, or `null` for a torn line. */
+function parseEvent(line: string): RecurrenceEvent | null {
+  try {
+    return JSON.parse(line) as RecurrenceEvent;
+  } catch {
+    return null;
   }
-  return out;
+}
+
+function readEvents(vault: string): RecurrenceEvent[] {
+  // Merged read over every device's shard (t_774dea61), interleaved by
+  // event time with each shard keeping its own file order. The fold is
+  // order-sensitive (`purge-source` deletes, `forget` decrements), so a
+  // shard-name order would replay one device's purge before another
+  // device's earlier learn and bring the purged source back. The absent
+  // directory lists nothing, which is the same empty result as before.
+  const shards = readShardLinesByShard(join(vault, BRAIN_LOG_REL), RECURRENCE_LEDGER_GRAMMAR).map(
+    (shard) => ({
+      shardId: shard.shardId,
+      rows: shard.rows.map(parseEvent).filter((event) => event !== null),
+    }),
+  );
+  return interleaveShardRows(shards, eventTime);
 }

@@ -141,4 +141,22 @@ describe("recurrence-support per-device shards (t_774dea61)", () => {
     expect(entry).not.toBeNull();
     expect(entry!.supportCount).toBe(2);
   });
+
+  test("a purge on one device removes support learned earlier on another, whatever the shard names", () => {
+    // Device b learns from src-shared first; device a purges it a day
+    // later. Shard `.a` sorts before `.b`, so a name-order replay ran the
+    // purge before the learn and brought the purged source back.
+    withDeviceId("b", () =>
+      applyRecurrenceEvidence(vault, {
+        contentHash: "h1",
+        scope: "project-a",
+        sourceId: "src-shared",
+        action: "learn",
+        at: "2026-09-01T10:00:00Z",
+      }),
+    );
+    withDeviceId("a", () => purgeRecurrenceSource(vault, "src-shared", "2026-09-02T10:00:00Z"));
+
+    expect(listRecurrenceEntries(vault)).toEqual([]);
+  });
 });
