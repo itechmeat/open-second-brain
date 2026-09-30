@@ -241,6 +241,46 @@ describe("assessSchemaPackIntegrity", () => {
     expect(assessSchemaPackIntegrity(vault).status).toBe(SCHEMA_PACK_INTEGRITY.ok);
   });
 
+  test("device shards merge and the newest apply still wins (t_774dea61)", async () => {
+    await seal();
+    const shard = soleShardPath();
+    const sealed = JSON.parse(readFileSync(shard, "utf8").trim()) as {
+      timestamp: string;
+      details: Record<string, unknown>;
+    };
+    const stale = {
+      ...sealed,
+      timestamp: "2020-01-01T00:00:00.000Z",
+      details: { ...sealed.details, [SCHEMA_PACK_DIGEST_FIELD]: "deadbeef" },
+    };
+    // Another device's shard carries an older apply; sorting by name alone
+    // would let the stale record win once the local file sorts later.
+    writeFileSync(shard.replace(".jsonl", ".other.jsonl"), JSON.stringify(stale) + "\n", "utf8");
+
+    const recorded = readRecordedSchemaPackDigest(vault);
+
+    expect(recorded.found).toBe(true);
+    expect(recorded.found && recorded.recorded_at).toBe(sealed.timestamp);
+    expect(assessSchemaPackIntegrity(vault).status).toBe(SCHEMA_PACK_INTEGRITY.ok);
+  });
+
+  test("a sync-conflict copy of an audit week is never parsed as a shard", async () => {
+    await seal();
+    const shard = soleShardPath();
+    // An unreadable copy: if the reader treated conflict copies as shards,
+    // this would flip the whole read to audit-unreadable.
+    writeFileSync(
+      shard.replace(".jsonl", ".sync-conflict-20260930-armadillo.jsonl"),
+      "{ torn\n",
+      "utf8",
+    );
+
+    const recorded = readRecordedSchemaPackDigest(vault);
+
+    expect(recorded.found).toBe(true);
+    expect(assessSchemaPackIntegrity(vault).status).toBe(SCHEMA_PACK_INTEGRITY.ok);
+  });
+
   test("a deleted config file is unverified with the config-absent reason", async () => {
     await seal();
     rmSync(configPath());
