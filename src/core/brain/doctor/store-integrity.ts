@@ -8,17 +8,22 @@
  * all of them are conditions only a walk of the tree can see.
  */
 
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
-import { realpathInsideVault, vaultRelative } from "../../path-safety.ts";
+import { ensureInsideVault, realpathInsideVault, vaultRelative } from "../../path-safety.ts";
+import { BRAIN_LOG_AUDIT_DIRS } from "../audit-dirs.ts";
 import { continuityLogDir } from "../continuity/store.ts";
 import { scanDanglingWorkruns } from "../dream-workrun.ts";
 import { readTierDriftCount } from "../frontmatter-tiers.ts";
+import { gitStoreDir } from "../git/store.ts";
 import { idempotencyLogDir } from "../idempotency-ledger.ts";
 import { listSyncConflictFiles } from "../ledger-shards.ts";
 import { brainStateDirPath } from "../lineage/ledger.ts";
 import { metricsDir } from "../metrics.ts";
-import { brainDirs, prefAuditDir } from "../paths.ts";
+import { BRAIN_SKILL_PROPOSALS_REL } from "../path-constants.ts";
+import { brainDirs, hookAuditDir, prefAuditDir } from "../paths.ts";
+import { schemaMutationAuditDir } from "../schema-integrity.ts";
+import { watchdogFallbackAuditDir } from "../watchdog.ts";
 import type { DoctorCheck } from "./check.ts";
 import type { DoctorUncertainEntry } from "./report.ts";
 import {
@@ -80,19 +85,32 @@ export const danglingWorkrunCheck: DoctorCheck = {
  * Every append-only ledger directory in the vault, each named by the
  * module that owns it rather than by a path spelled a second time here.
  *
- * All six shard per device (who-wrote-what, Task B), which is what makes
- * one finding cover all of them: the shard layout prevents NEW conflicts
- * everywhere, so a `*.sync-conflict-*` copy under any of these means the
- * same thing - a file that exists and that no reader merges.
+ * All of them shard per device (who-wrote-what, Task B; t_774dea61),
+ * which is what makes one finding cover all of them: the shard layout
+ * prevents NEW conflicts everywhere, so a `*.sync-conflict-*` copy under
+ * any of these means the same thing - a file that exists and that no
+ * reader merges.
  */
 const LEDGER_DIRS: ReadonlyArray<(vault: string, uncertain: DoctorUncertainEntry[]) => string[]> =
   Object.freeze([
     (vault: string) => [brainDirs(vault).log],
+    (vault: string) => BRAIN_LOG_AUDIT_DIRS.map((name) => join(brainDirs(vault).log, name)),
+    (vault: string) => [schemaMutationAuditDir(vault)],
+    (vault: string) => [watchdogFallbackAuditDir(vault)],
+    (vault: string) => [hookAuditDir(vault)],
     (vault: string) => [continuityLogDir(vault)],
     (vault: string) => [idempotencyLogDir(vault)],
     prefAuditSweepDirs,
     (vault: string) => [metricsDir(vault)],
     (vault: string) => [brainStateDirPath(vault)],
+    // The verifier-rejection ledger sits at the proposals root. Named
+    // through the path constant rather than `verifierRejectionLedgerPath`:
+    // `skill-proposals.ts` reaches the doctor, so importing it here closes
+    // an import cycle.
+    (vault: string) => [ensureInsideVault(join(vault, BRAIN_SKILL_PROPOSALS_REL), vault)],
+    // Preference edit-history shards sit next to the preference notes.
+    (vault: string) => [brainDirs(vault).preferences],
+    gitStoreSweepDirs,
   ]);
 
 /**
@@ -100,27 +118,49 @@ const LEDGER_DIRS: ReadonlyArray<(vault: string, uncertain: DoctorUncertainEntry
  * (`pref-audit/<pref-id>/`), so its shards - and therefore any conflict
  * copy of one - live a level below the others. Sweeping only the parent
  * would report a clean ledger while a copy nobody merges sat inside it.
- *
- * A parent that cannot be listed is reported by name through the shared
- * swept-path reporter rather than read as "no preferences": the whole
- * point of this check is to keep "nothing found" and "nothing looked at"
- * apart.
  */
 function prefAuditSweepDirs(vault: string, uncertain: DoctorUncertainEntry[]): string[] {
   const parent = prefAuditDir(vault);
+  return [parent, ...subdirectories(parent, uncertain, "per-preference")];
+}
+
+/**
+ * The git store keeps one directory per repository
+ * (`Brain/projects/git/<repo>/`), each holding its own `commits` shards,
+ * so the repositories are discovered from the tree on every pass. The
+ * root itself holds no ledger. Its path is derived from the store's own
+ * per-repo builder, whose parent it is by definition, rather than
+ * spelled a second time here.
+ */
+function gitStoreSweepDirs(vault: string, uncertain: DoctorUncertainEntry[]): string[] {
+  const root = dirname(gitStoreDir(vault, GIT_STORE_ROOT_PROBE_KEY));
+  return subdirectories(root, uncertain, "per-repository");
+}
+
+/** Any valid repo key: only the parent of its store directory is used. */
+const GIT_STORE_ROOT_PROBE_KEY = "probe";
+
+/**
+ * The immediate subdirectories of `parent`. A parent that cannot be
+ * listed is reported by name through the shared swept-path reporter
+ * rather than read as "no subdirectories": the whole point of this check
+ * is to keep "nothing found" and "nothing looked at" apart. An absent
+ * parent is simply empty.
+ */
+function subdirectories(parent: string, uncertain: DoctorUncertainEntry[], kind: string): string[] {
   const entries = readSweptDir(
     parent,
     {
       site: SYNC_CONFLICT_SITE,
       consequence:
-        "its per-preference subdirectories were not listed for Syncthing conflict copies, so a " +
+        `its ${kind} subdirectories were not listed for Syncthing conflict copies, so a ` +
         "leftover copy waiting to be merged is missing from this report",
       uncertain,
     },
     SWEEP_ORIGIN.root,
   );
-  if (entries === null) return [parent];
-  return [parent, ...entries.filter((e) => e.isDirectory()).map((e) => join(parent, e.name))];
+  if (entries === null) return [];
+  return entries.filter((e) => e.isDirectory()).map((e) => join(parent, e.name));
 }
 
 /**
@@ -174,7 +214,7 @@ const SYNC_CONFLICT_SITE = "brain.doctor.syncConflictLog";
  * a throw. Swallowed by the pass's fail-soft arm it produced no finding
  * at all, which reads as "no conflict copies" - the answer this check
  * exists to distinguish from "the directory was not read". Reported per
- * directory, so one unreadable ledger does not silence the other five.
+ * directory, so one unreadable ledger does not silence the others.
  */
 function listSyncConflicts(dir: string, uncertain: DoctorUncertainEntry[]): string[] {
   try {

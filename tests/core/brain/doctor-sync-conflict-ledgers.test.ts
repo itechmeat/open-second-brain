@@ -1,13 +1,13 @@
 /**
  * `sync-conflict-log` covers every ledger directory (who-wrote-what,
- * Task B / t_1814b9bf).
+ * Task B / t_1814b9bf; extended by t_774dea61).
  *
  * The per-device shard layout means no reader merges a Syncthing
- * conflict copy - not under `Brain/log/`, and not under any of the five
- * other append-only ledger directories that now shard the same way. One
- * exit, one meaning: "a sync conflict copy exists that no reader
- * merges", with the directory named in the detail so an operator knows
- * where to do the union+dedup merge.
+ * conflict copy - not under `Brain/log/`, not under its audit
+ * subdirectories, and not under any other append-only ledger directory
+ * that now shards the same way. One exit, one meaning: "a sync conflict
+ * copy exists that no reader merges", with the directory named in the
+ * detail so an operator knows where to do the union+dedup merge.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -15,13 +15,23 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import {
+  HYGIENE_AUDIT_DIR,
+  SECRET_CUSTODY_AUDIT_DIR,
+  SESSION_LIFECYCLE_AUDIT_DIR,
+  WATCHDOG_AUDIT_DIR,
+} from "../../../src/core/brain/audit-dirs.ts";
 import { continuityLogDir } from "../../../src/core/brain/continuity/store.ts";
 import { runDoctor } from "../../../src/core/brain/doctor.ts";
 import { idempotencyLogDir } from "../../../src/core/brain/idempotency-ledger.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
+import { gitStoreDir } from "../../../src/core/brain/git/store.ts";
 import { brainStateDirPath } from "../../../src/core/brain/lineage/ledger.ts";
 import { metricsDir } from "../../../src/core/brain/metrics.ts";
-import { brainDirs, prefAuditDir } from "../../../src/core/brain/paths.ts";
+import { BRAIN_SKILL_PROPOSALS_REL } from "../../../src/core/brain/path-constants.ts";
+import { brainDirs, hookAuditDir, prefAuditDir } from "../../../src/core/brain/paths.ts";
+import { schemaMutationAuditDir } from "../../../src/core/brain/schema-integrity.ts";
+import { watchdogFallbackAuditDir } from "../../../src/core/brain/watchdog.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 
 let vault: string;
@@ -64,6 +74,19 @@ describe("sync-conflict sweep across every ledger directory", () => {
     ["preference audit", prefAuditDir, "pref-alpha"],
     ["metrics", metricsDir, "index"],
     ["Brain state", brainStateDirPath, "session-lineage"],
+    [
+      "session-lifecycle audit",
+      (v) => join(brainDirs(v).log, SESSION_LIFECYCLE_AUDIT_DIR),
+      "2026-W24",
+    ],
+    ["hygiene audit", (v) => join(brainDirs(v).log, HYGIENE_AUDIT_DIR), "2026-W24"],
+    ["schema-mutation audit", schemaMutationAuditDir, "2026-W24"],
+    ["secret-custody audit", (v) => join(brainDirs(v).log, SECRET_CUSTODY_AUDIT_DIR), "2026-W24"],
+    ["watchdog audit", (v) => join(brainDirs(v).log, WATCHDOG_AUDIT_DIR), "2026-W24"],
+    ["watchdog audit fallback", watchdogFallbackAuditDir, "2026-W24"],
+    ["hook audit", hookAuditDir, "2026-W24"],
+    ["skill-proposal ledger", (v) => join(v, BRAIN_SKILL_PROPOSALS_REL), "verifier-rejections"],
+    ["preferences", (v) => brainDirs(v).preferences, "pref-alpha.history"],
   ];
 
   test.each(LEDGERS)("%s: a conflict copy is reported with its directory", (_label, dir, stem) => {
@@ -83,7 +106,7 @@ describe("sync-conflict sweep across every ledger directory", () => {
     expect(conflictFindings()).toHaveLength(LEDGERS.length);
   });
 
-  test("the six directories are distinct, so no one of them is swept twice", () => {
+  test("the swept directories are distinct, so no one of them is swept twice", () => {
     const dirs = LEDGERS.map(([, dir]) => dir(vault));
     expect(new Set(dirs).size).toBe(LEDGERS.length);
   });
@@ -98,5 +121,16 @@ describe("sync-conflict sweep across every ledger directory", () => {
     const findings = conflictFindings();
     expect(findings).toHaveLength(1);
     expect(findings[0]!.path).toBe(path);
+  });
+
+  /**
+   * The git store keeps one directory per repository
+   * (`Brain/projects/git/<repo>/`), so the sweep discovers them from the
+   * tree rather than from a fixed list.
+   */
+  test("a conflict copy inside every per-repo git store directory is reported", () => {
+    const planted = ["alpha", "beta"].map((repo) => plant(gitStoreDir(vault, repo), "commits"));
+    const findings = conflictFindings();
+    expect(findings.map((f) => f.path).toSorted()).toEqual(planted.toSorted());
   });
 });
