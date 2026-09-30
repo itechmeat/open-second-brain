@@ -361,7 +361,7 @@ describe("preExtractCodeStructure - JSX component usage (t_998aa4e6)", () => {
   test("generic type arguments produce nothing", () => {
     const res = asSuccess(
       preExtractCodeStructure(
-        "src/app/View.ts",
+        "src/app/View.tsx",
         "const names: Array<Foo> = [];\nconst pair: Pair<Bar, Baz> = pairOf();\n",
       ),
     );
@@ -372,6 +372,8 @@ describe("preExtractCodeStructure - JSX component usage (t_998aa4e6)", () => {
     ["a trailing-comma arrow generic", "const id = <T,>(x: T) => x;\n"],
     ["a constrained arrow generic", "const key = <K extends string>(k: K) => k;\n"],
     ["a generic call after a closing paren", "const v = make()<Foo>(arg);\n"],
+    ["a generic call-signature type alias", "type Fn = <T>(value: T) => T;\n"],
+    ["a generic call-signature annotation", "const id: <U>(x: U) => U = (x) => x;\n"],
   ])("%s in a .tsx source produces no uses edge", (_label, source) => {
     const res = asSuccess(preExtractCodeStructure("src/app/View.tsx", source));
     expect(res.edges).toEqual([]);

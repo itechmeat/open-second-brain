@@ -192,17 +192,21 @@ const PY_RELATIVE_IMPORT: RelativeImportRule = {
  *   line (attributes continue below), `>`, `/>`, or whitespace and then an
  *   attribute start (a name or a `{...spread}`). That refuses a dotted
  *   member-expression tag (`<Nav.Item>`) and a type-parameter list, whose
- *   name is followed by `,` (`<T,>`) or by `extends` (`<K extends string>`).
+ *   name is followed by `,` (`<T,>`) or by `extends` (`<K extends string>`);
+ * - a bare `>` is not followed by `(`: that is a generic call signature
+ *   (`type Fn = <T>(value: T) => T`, `const id: <U>(x: U) => U`), not an
+ *   element.
  *
  * No per-language tag vocabulary that could fall out of date. Known limits of
  * a line grammar, accepted on purpose: a capitalized comparison operand
  * written without a space (`a <Foo b`) can misfire, a generic component
- * (`<Foo<T> />`) is missed, and a closing tag never matches. False edges are
+ * (`<Foo<T> />`) is missed, an element whose text child opens with `(`
+ * (`<Foo>(note)</Foo>`) is missed, and a closing tag never matches. False edges are
  * bounded by the uppercase-initial rule; missed usages only thin the `uses`
  * tier.
  */
 const JSX_COMPONENT_TAG =
-  /(^|[^A-Za-z0-9_$.)])<([A-Z_$][A-Za-z0-9_$]*)(?=$|\s*\/?>|\s+(?!extends\b)[A-Za-z_${])/g;
+  /(^|[^A-Za-z0-9_$.)])<([A-Z_$][A-Za-z0-9_$]*)(?=$|\s*(?:\/>|>(?!\s*\())|\s+(?!extends\b)[A-Za-z_${])/g;
 
 /** Extensions whose line grammar carries JSX (the `uses` tier). */
 const JSX_EXTENSIONS: ReadonlySet<string> = new Set([".tsx", ".jsx"]);
