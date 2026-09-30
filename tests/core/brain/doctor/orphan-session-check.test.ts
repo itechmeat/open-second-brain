@@ -115,14 +115,16 @@ describe("an imported transcript ref is never judged", () => {
     expect(issuesFor().filter((i) => i.code === ORPHAN_SESSION_REF_CODE)).toEqual([]);
   });
 
-  test("an imported ref whose recall records exist raises no finding either", () => {
-    appendContinuityRecord(vault, {
-      kind: "session_turn",
-      createdAt: "2026-06-01T00:00:00Z",
-      payload: { session_id: "transcript.jsonl" },
-    });
+  test("the import form is skipped before resolution, so the same identity in another form is judged", () => {
+    // `transcript.jsonl` resolves against nothing. Under the import form the
+    // ref is never judged; the same identity spelled in the extract-signals
+    // form is, and is flagged - so the silence above is the form's skip,
+    // not a resolution.
     writeObservation("transcript.jsonl#t-9");
-    expect(issuesFor().filter((i) => i.code === ORPHAN_SESSION_REF_CODE)).toEqual([]);
+    const bare = writeObservation("transcript.jsonl");
+    const issues = issuesFor().filter((i) => i.code === ORPHAN_SESSION_REF_CODE);
+    expect(issues.map((i) => i.path)).toEqual([bare]);
+    expect(issues[0]!.message).toContain("'transcript.jsonl'");
   });
 
   test("isImportedTranscriptRef tells the three writer forms apart", () => {
