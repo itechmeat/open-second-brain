@@ -41,7 +41,7 @@ IFS=$'\t' read -r is_draft name target url names <<<"$info"
 [ "$is_draft" = true ] || die "the staged release is not a draft"
 [ "$name" = "$title" ] || die "the draft title is '$name', expected '$title'"
 [ "$target" = "$OSB_TARGET_SHA" ] || die "the draft targets '$target', expected $OSB_TARGET_SHA"
-expected=$(printf '%s\n' "${assets[@]##*/}" | sort | paste -sd, -)
+expected=$(printf '%s\n' "${assets[@]##*/}" | LC_ALL=C sort | paste -sd, -)
 [ "$names" = "$expected" ] || die "the draft assets are '$names', expected '$expected'"
 if git ls-remote --exit-code --tags origin "refs/tags/$OSB_TAG" >/dev/null 2>&1; then
   die "tag $OSB_TAG appeared on origin while staging; stop and inspect"
