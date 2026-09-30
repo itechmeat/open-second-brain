@@ -11,7 +11,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -25,6 +25,7 @@ import {
 import { parseFrontmatter } from "../../../../src/core/vault.ts";
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 import { writeSignal } from "../../../../src/core/brain/signal.ts";
+import { acquireLockSync } from "../../../../src/core/brain/sync-lockfile.ts";
 
 let vault: string;
 
@@ -170,5 +171,28 @@ describe("a reference that changed after the scan is not detached", () => {
     expect(readFileSync(path, "utf8")).toBe(before);
     expect(detachSessionRef(path, "session:sess-new#turn-2")).toBe("detached");
     expect(parseFrontmatter(path)[0]["session_ref"]).toBeUndefined();
+  });
+});
+
+describe("the detach runs under the signal's per-file lock", () => {
+  test("a held lock leaves the file untouched and is reported skip-locked", () => {
+    const path = writeOrphan();
+    const before = readFileSync(path, "utf8");
+    const held = acquireLockSync(path);
+    try {
+      expect(detachSessionRef(path, "session:sess-gone#turn-1")).toBe("skip-locked");
+      const report = runOrphanRepair(vault, {
+        apply: true,
+        confirm: ORPHAN_REPAIR_CONFIRM_PHRASE,
+      });
+      expect(report.detached).toBe(0);
+      expect(report.decisions.map((d) => d.action)).toEqual(["skip-locked"]);
+      expect(readFileSync(path, "utf8")).toBe(before);
+    } finally {
+      held.release();
+    }
+    // Released, the same run detaches and leaves no lock behind.
+    expect(detachSessionRef(path, "session:sess-gone#turn-1")).toBe("detached");
+    expect(existsSync(`${path}.lock`)).toBe(false);
   });
 });

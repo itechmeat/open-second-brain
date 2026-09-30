@@ -39,6 +39,7 @@
  * (`scanOrphanedSessionRefs`), never the invocation.
  */
 
+import { acquireLockSync } from "../sync-lockfile.ts";
 import { parseFrontmatter, writeFrontmatterAtomic } from "../../vault.ts";
 import type { FrontmatterMap } from "../../types.ts";
 import { vaultRelative } from "../../path-safety.ts";
@@ -77,7 +78,7 @@ export class OrphanRepairStoreUnreadableError extends Error {
 }
 
 /** What the lane decided about one finding. */
-export type OrphanRepairAction = "detach" | "skip-cap" | "skip-changed";
+export type OrphanRepairAction = "detach" | "skip-cap" | "skip-changed" | "skip-locked";
 
 export interface OrphanRepairDecision {
   /** Vault-relative path of the signal file. */
@@ -157,8 +158,9 @@ export function runOrphanRepair(vault: string, opts: OrphanRepairOptions = {}): 
       decisions.push({ ...decision, action: "skip-cap" });
       continue;
     }
-    if (apply && detachSessionRef(finding.path, finding.session_ref) === "skip-changed") {
-      decisions.push({ ...decision, action: "skip-changed" });
+    const outcome = apply ? detachSessionRef(finding.path, finding.session_ref) : "detached";
+    if (outcome !== "detached") {
+      decisions.push({ ...decision, action: outcome });
       continue;
     }
     detached += 1;
@@ -176,17 +178,33 @@ export function runOrphanRepair(vault: string, opts: OrphanRepairOptions = {}): 
  * Remove the `session_ref` key from a signal's frontmatter, atomically,
  * keeping the body and every other field - but only while the key still
  * holds `expected`, the value the scan resolved and the decision quotes.
- * A reference rewritten between the scan and the write was never judged,
- * so it is left alone and reported as `skip-changed`; a key already gone
- * (a concurrent repair did the work) is not a write either.
+ * The read, the compare and the write run under the signal's per-file
+ * lock, the one every other repair of a Brain record takes, so no writer
+ * can change the file in between. A contended lock is `skip-locked`
+ * (left for a later run); a reference rewritten since the scan was never
+ * judged, so it is `skip-changed`; a key already gone (a concurrent
+ * repair did the work) is not a write either.
  */
-export function detachSessionRef(absPath: string, expected: string): "detached" | "skip-changed" {
-  const [meta, body] = parseFrontmatter(absPath);
-  const current = meta["session_ref"];
-  if (current === undefined) return "detached";
-  if (current !== expected) return "skip-changed";
-  const next: FrontmatterMap = { ...meta };
-  delete next["session_ref"];
-  writeFrontmatterAtomic(absPath, next, body, { overwrite: true });
-  return "detached";
+export function detachSessionRef(
+  absPath: string,
+  expected: string,
+): "detached" | "skip-changed" | "skip-locked" {
+  let handle: ReturnType<typeof acquireLockSync>;
+  try {
+    handle = acquireLockSync(absPath);
+  } catch {
+    return "skip-locked";
+  }
+  try {
+    const [meta, body] = parseFrontmatter(absPath);
+    const current = meta["session_ref"];
+    if (current === undefined) return "detached";
+    if (current !== expected) return "skip-changed";
+    const next: FrontmatterMap = { ...meta };
+    delete next["session_ref"];
+    writeFrontmatterAtomic(absPath, next, body, { overwrite: true });
+    return "detached";
+  } finally {
+    handle.release();
+  }
 }
