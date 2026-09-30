@@ -203,6 +203,22 @@ describe("preExtractCodeStructure - relative-import binding (t_2356dace)", () =>
     expect(res.edges).toEqual([{ kind: "imports", from: "src/lib/widget.ts", to: "react" }]);
   });
 
+  test.each([
+    [
+      "a TS/JS specifier",
+      "src/a.ts",
+      'import { x } from "../../lib/x";\n',
+      "../../lib/x",
+      "lib/x.ts",
+    ],
+    ["a python specifier", "src/a.py", "from ...util import thing\n", "...util", "util.py"],
+  ])("%s climbing above the vault root never binds", (_label, from, source, to, rootFile) => {
+    const res = asSuccess(
+      preExtractCodeStructure(from, source, { ingestedFiles: new Set([rootFile]) }),
+    );
+    expect(res.edges).toEqual([{ kind: "imports", from, to }]);
+  });
+
   test("a python leading-dot from-import binds to the ingested module file", () => {
     const res = asSuccess(
       preExtractCodeStructure("pkg/mod.py", "from .helpers import thing\n", {

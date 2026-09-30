@@ -378,6 +378,8 @@ function resolveRelativeImport(
   rule: RelativeImportRule,
 ): string | undefined {
   const joined = posixJoin(path, rule.toRelative(to));
+  // A specifier climbing above the vault root names nothing the vault holds.
+  if (joined === undefined) return undefined;
   for (const tier of rule.probeTiers(joined, to)) {
     const verdict = resolveUniqueMatch(tier.filter((candidate) => ingestedFiles.has(candidate)));
     if (verdict.status === "unique") return verdict.target;
@@ -391,13 +393,16 @@ function childPath(dir: string, name: string): string {
   return dir.length === 0 ? name : `${dir}/${name}`;
 }
 
-/** `/`-joined normalization of `specifier` relative to the directory of `path`. */
-function posixJoin(path: string, specifier: string): string {
+/**
+ * `/`-joined normalization of `specifier` relative to the directory of
+ * `path`, or `undefined` when a `..` would climb above the vault root.
+ */
+function posixJoin(path: string, specifier: string): string | undefined {
   const segments = path.replaceAll("\\", "/").split("/").slice(0, -1);
   for (const segment of specifier.replaceAll("\\", "/").split("/")) {
     if (segment === "" || segment === ".") continue;
-    if (segment === "..") segments.pop();
-    else segments.push(segment);
+    if (segment !== "..") segments.push(segment);
+    else if (segments.pop() === undefined) return undefined;
   }
   return segments.join("/");
 }
