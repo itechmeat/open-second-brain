@@ -414,6 +414,11 @@ import {
   NOTE_WRITE_OP,
   NOTE_WRITE_OPS,
 } from "../../../src/core/brain/notes/write-record.ts";
+import {
+  FTS_MATCH_MODE,
+  FTS_MATCH_MODES,
+  isFtsMatchMode,
+} from "../../../src/core/search/fts-match-mode.ts";
 import { lexCode } from "../../helpers/source-lexer.ts";
 import {
   TRANSPORT_REACH,
@@ -1298,6 +1303,17 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     members: NOTE_WRITE_OPS,
     guard: isNoteWriteOp,
   },
+  {
+    // t_c5326ece. The keyword-lane match breadth a caller selects. The
+    // same list is copied OUT of TypeScript into the brain_search MCP
+    // enum and every refusal message, so a mode added to the object and
+    // missed in the list would be refused by the guard the CLI and the
+    // MCP argument check both call.
+    name: "FTS_MATCH_MODE",
+    values: FTS_MATCH_MODE,
+    members: FTS_MATCH_MODES,
+    guard: isFtsMatchMode,
+  },
 ]);
 
 // ---------------------------------------------------------------------------
@@ -1562,7 +1578,7 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
  * How many four-piece vocabularies `src/` currently holds. Measured, and
  * kept as an equality rather than a floor - see the population test.
  */
-const VOCABULARY_POPULATION = 77;
+const VOCABULARY_POPULATION = 78;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {
