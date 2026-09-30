@@ -9,6 +9,7 @@ import {
   listRecurrenceEntries,
   purgeRecurrenceSource,
 } from "../../../src/core/brain/recurrence.ts";
+import { withDeviceId } from "../../helpers/device-id.ts";
 
 let vault: string;
 
@@ -114,34 +115,30 @@ describe("recurrence support ledger", () => {
 
 describe("recurrence-support per-device shards (t_774dea61)", () => {
   test("two devices write two shard files and the reader merges both", () => {
-    const previous = process.env["O2B_DEVICE_ID"];
-    try {
-      process.env["O2B_DEVICE_ID"] = "a";
+    withDeviceId("a", () =>
       applyRecurrenceEvidence(vault, {
         contentHash: "h-shared",
         scope: "project-a",
         sourceId: "src-a",
         action: "learn",
         at: "2026-06-01T10:00:00Z",
-      });
-      process.env["O2B_DEVICE_ID"] = "b";
+      }),
+    );
+    withDeviceId("b", () =>
       applyRecurrenceEvidence(vault, {
         contentHash: "h-shared",
         scope: "project-b",
         sourceId: "src-b",
         action: "learn",
         at: "2026-06-01T10:01:00Z",
-      });
-      expect(existsSync(join(vault, "Brain", "log", "recurrence-support.a.jsonl"))).toBe(true);
-      expect(existsSync(join(vault, "Brain", "log", "recurrence-support.b.jsonl"))).toBe(true);
-      expect(existsSync(join(vault, "Brain", "log", "recurrence-support.jsonl"))).toBe(false);
+      }),
+    );
+    expect(existsSync(join(vault, "Brain", "log", "recurrence-support.a.jsonl"))).toBe(true);
+    expect(existsSync(join(vault, "Brain", "log", "recurrence-support.b.jsonl"))).toBe(true);
+    expect(existsSync(join(vault, "Brain", "log", "recurrence-support.jsonl"))).toBe(false);
 
-      const entry = getRecurrenceEntry(vault, "h-shared");
-      expect(entry).not.toBeNull();
-      expect(entry!.supportCount).toBe(2);
-    } finally {
-      if (previous === undefined) delete process.env["O2B_DEVICE_ID"];
-      else process.env["O2B_DEVICE_ID"] = previous;
-    }
+    const entry = getRecurrenceEntry(vault, "h-shared");
+    expect(entry).not.toBeNull();
+    expect(entry!.supportCount).toBe(2);
   });
 });

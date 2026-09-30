@@ -27,6 +27,7 @@ import {
   readCatchupWatermark,
 } from "../../../../src/core/brain/capture/capture-note.ts";
 import { captureDecisionLogPath } from "../../../../src/core/brain/paths.ts";
+import { withDeviceId } from "../../../helpers/device-id.ts";
 
 const NOW = new Date("2026-07-19T12:00:00Z");
 const ALLOW = new Set(["100"]);
@@ -302,18 +303,10 @@ test("every handled update writes exactly one decision to the ledger", () => {
 });
 
 test("two capture hosts append to their own decision shards (t_774dea61)", () => {
-  const previous = process.env["O2B_DEVICE_ID"];
-  try {
-    process.env["O2B_DEVICE_ID"] = "a";
-    handleCaptureUpdate(vault, textUpdate(1, "100", "host a"), baseOpts());
-    process.env["O2B_DEVICE_ID"] = "b";
-    handleCaptureUpdate(vault, textUpdate(2, "200", "host b"), baseOpts());
-    const logDir = join(vault, "Brain", "log");
-    expect(existsSync(join(logDir, "capture-decisions.a.jsonl"))).toBe(true);
-    expect(existsSync(join(logDir, "capture-decisions.b.jsonl"))).toBe(true);
-    expect(existsSync(join(logDir, "capture-decisions.jsonl"))).toBe(false);
-  } finally {
-    if (previous === undefined) delete process.env["O2B_DEVICE_ID"];
-    else process.env["O2B_DEVICE_ID"] = previous;
-  }
+  withDeviceId("a", () => handleCaptureUpdate(vault, textUpdate(1, "100", "host a"), baseOpts()));
+  withDeviceId("b", () => handleCaptureUpdate(vault, textUpdate(2, "200", "host b"), baseOpts()));
+  const logDir = join(vault, "Brain", "log");
+  expect(existsSync(join(logDir, "capture-decisions.a.jsonl"))).toBe(true);
+  expect(existsSync(join(logDir, "capture-decisions.b.jsonl"))).toBe(true);
+  expect(existsSync(join(logDir, "capture-decisions.jsonl"))).toBe(false);
 });

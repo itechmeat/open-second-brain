@@ -13,6 +13,7 @@ import {
   receiptShardPath,
   receiptsDir,
 } from "../../../../src/core/brain/decisions/receipts.ts";
+import { withDeviceId } from "../../../helpers/device-id.ts";
 
 let vault: string;
 
@@ -244,16 +245,10 @@ describe("no receipt on reads", () => {
 });
 
 test("the receipt shard name is decision-change[.<deviceId>].jsonl, byte for byte", () => {
-  const saved = process.env["O2B_DEVICE_ID"];
-  try {
-    process.env["O2B_DEVICE_ID"] = "";
-    expect(receiptShardPath(vault)).toBe(join(receiptsDir(vault), "decision-change.jsonl"));
-    process.env["O2B_DEVICE_ID"] = "laptop-01";
-    expect(receiptShardPath(vault)).toBe(
-      join(receiptsDir(vault), "decision-change.laptop-01.jsonl"),
-    );
-  } finally {
-    if (saved === undefined) delete process.env["O2B_DEVICE_ID"];
-    else process.env["O2B_DEVICE_ID"] = saved;
-  }
+  expect(withDeviceId("", () => receiptShardPath(vault))).toBe(
+    join(receiptsDir(vault), "decision-change.jsonl"),
+  );
+  expect(withDeviceId("laptop-01", () => receiptShardPath(vault))).toBe(
+    join(receiptsDir(vault), "decision-change.laptop-01.jsonl"),
+  );
 });

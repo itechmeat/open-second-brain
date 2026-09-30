@@ -7,6 +7,7 @@ import { appendAuditRecord } from "../../src/core/reliability/audit.ts";
 import { withFileLock } from "../../src/core/reliability/lock.ts";
 import { buildProbeReport } from "../../src/core/reliability/probe.ts";
 import { fakeCredential } from "../helpers/fake-credentials.ts";
+import { withDeviceId } from "../helpers/device-id.ts";
 
 const RESEARCH_TYPE = "research";
 const LOGGED_KEY = fakeCredential("secret-", "value");
@@ -100,28 +101,25 @@ describe("appendAuditRecord", () => {
       target: "Brain/x",
       ok: true,
     };
-    const previous = process.env["O2B_DEVICE_ID"];
-    try {
-      process.env["O2B_DEVICE_ID"] = "a";
-      const onA = appendAuditRecord(auditRoot, { ...record, action: "from-a" });
-      process.env["O2B_DEVICE_ID"] = "b";
-      const onB = appendAuditRecord(auditRoot, { ...record, action: "from-b" });
-      expect(onA.endsWith("2026-W22.a.jsonl")).toBe(true);
-      expect(onB.endsWith("2026-W22.b.jsonl")).toBe(true);
-      expect(existsSync(join(auditRoot, "2026-W22.a.jsonl"))).toBe(true);
-      expect(existsSync(join(auditRoot, "2026-W22.b.jsonl"))).toBe(true);
-      expect(existsSync(join(auditRoot, "2026-W22.jsonl"))).toBe(false);
+    const onA = withDeviceId("a", () =>
+      appendAuditRecord(auditRoot, { ...record, action: "from-a" }),
+    );
+    const onB = withDeviceId("b", () =>
+      appendAuditRecord(auditRoot, { ...record, action: "from-b" }),
+    );
+    expect(onA.endsWith("2026-W22.a.jsonl")).toBe(true);
+    expect(onB.endsWith("2026-W22.b.jsonl")).toBe(true);
+    expect(existsSync(join(auditRoot, "2026-W22.a.jsonl"))).toBe(true);
+    expect(existsSync(join(auditRoot, "2026-W22.b.jsonl"))).toBe(true);
+    expect(existsSync(join(auditRoot, "2026-W22.jsonl"))).toBe(false);
 
-      // The empty device id is the legacy un-sharded file: names and bytes
-      // unchanged, no migration.
-      process.env["O2B_DEVICE_ID"] = "";
-      const legacy = appendAuditRecord(auditRoot, { ...record, action: "legacy" });
-      expect(legacy.endsWith("2026-W22.jsonl")).toBe(true);
-      expect(existsSync(join(auditRoot, "2026-W22.jsonl"))).toBe(true);
-    } finally {
-      if (previous === undefined) delete process.env["O2B_DEVICE_ID"];
-      else process.env["O2B_DEVICE_ID"] = previous;
-    }
+    // The empty device id is the legacy un-sharded file: names and bytes
+    // unchanged, no migration.
+    const legacy = withDeviceId("", () =>
+      appendAuditRecord(auditRoot, { ...record, action: "legacy" }),
+    );
+    expect(legacy.endsWith("2026-W22.jsonl")).toBe(true);
+    expect(existsSync(join(auditRoot, "2026-W22.jsonl"))).toBe(true);
   });
 
   test("rejects invalid timestamps before week bucketing", () => {

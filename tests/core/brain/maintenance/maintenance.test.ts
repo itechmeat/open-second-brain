@@ -44,6 +44,7 @@ import {
 } from "../../../../src/core/brain/recall-telemetry.ts";
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
+import { withDeviceId } from "../../../helpers/device-id.ts";
 
 const NOW = new Date("2026-06-05T03:30:00Z");
 
@@ -501,65 +502,39 @@ describe("the consecutive-failure streak", () => {
 
 describe("maintenance journal per-device shards (t_774dea61)", () => {
   test("two devices write their own shards; lists merge and the sweep trims only the local shard", () => {
-    const previous = process.env["O2B_DEVICE_ID"];
-    try {
-      process.env["O2B_DEVICE_ID"] = "a";
-      appendJournal(vault, {
-        ts: "2026-06-01T10:00:00Z",
-        holder: "host-a",
-        verdict: MAINTENANCE_VERDICT.run,
-        task: LANE_TASK.dream,
-        ok: false,
-      });
-      process.env["O2B_DEVICE_ID"] = "b";
-      appendJournal(vault, {
-        ts: "2026-06-01T10:01:00Z",
-        holder: "host-b",
-        verdict: MAINTENANCE_VERDICT.run,
-        task: LANE_TASK.dream,
-        ok: true,
-      });
-      const derived = join(vault, ".open-second-brain");
-      expect(existsSync(join(derived, "maintenance-runs.a.jsonl"))).toBe(true);
-      expect(existsSync(join(derived, "maintenance-runs.b.jsonl"))).toBe(true);
-      expect(existsSync(join(derived, "maintenance-runs.jsonl"))).toBe(false);
+    appendAs("a", "2026-06-01T10:00:00Z", false);
+    appendAs("b", "2026-06-01T10:01:00Z", true);
+    const derived = join(vault, ".open-second-brain");
+    expect(existsSync(join(derived, "maintenance-runs.a.jsonl"))).toBe(true);
+    expect(existsSync(join(derived, "maintenance-runs.b.jsonl"))).toBe(true);
+    expect(existsSync(join(derived, "maintenance-runs.jsonl"))).toBe(false);
 
-      expect(listJournal(vault)).toHaveLength(2);
+    expect(listJournal(vault)).toHaveLength(2);
 
-      // The cap sweep rewrites only the local device's shard: host b's
-      // shard is trimmed to the cap, host a's rows stay on disk.
-      process.env["O2B_DEVICE_ID"] = "b";
-      sweepJournal(vault, 1);
-      expect(listJournal(vault)).toHaveLength(2);
-      const bShard = readFileSync(join(derived, "maintenance-runs.b.jsonl"), "utf8")
-        .trim()
-        .split("\n");
-      expect(bShard).toHaveLength(1);
-      expect(readFileSync(join(derived, "maintenance-runs.a.jsonl"), "utf8").trim()).toContain(
-        "host-a",
-      );
-    } finally {
-      if (previous === undefined) delete process.env["O2B_DEVICE_ID"];
-      else process.env["O2B_DEVICE_ID"] = previous;
-    }
+    // The cap sweep rewrites only the local device's shard: host b's
+    // shard is trimmed to the cap, host a's rows stay on disk.
+    withDeviceId("b", () => sweepJournal(vault, 1));
+    expect(listJournal(vault)).toHaveLength(2);
+    const bShard = readFileSync(join(derived, "maintenance-runs.b.jsonl"), "utf8")
+      .trim()
+      .split("\n");
+    expect(bShard).toHaveLength(1);
+    expect(readFileSync(join(derived, "maintenance-runs.a.jsonl"), "utf8").trim()).toContain(
+      "host-a",
+    );
   });
 });
 
 function appendAs(device: string, ts: string, ok: boolean): void {
-  const previous = process.env["O2B_DEVICE_ID"];
-  process.env["O2B_DEVICE_ID"] = device;
-  try {
+  withDeviceId(device, () =>
     appendJournal(vault, {
       ts,
       holder: `host-${device}`,
       verdict: MAINTENANCE_VERDICT.run,
       task: LANE_TASK.dream,
       ok,
-    });
-  } finally {
-    if (previous === undefined) delete process.env["O2B_DEVICE_ID"];
-    else process.env["O2B_DEVICE_ID"] = previous;
-  }
+    }),
+  );
 }
 
 describe("maintenance journal merged order across devices (t_774dea61)", () => {

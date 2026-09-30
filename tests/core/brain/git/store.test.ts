@@ -29,6 +29,7 @@ import {
 } from "../../../../src/core/brain/git/store.ts";
 import type { GitCommitRecord, GitTagRecord } from "../../../../src/core/brain/git/store.ts";
 import { acquireLockSync, LOCK_WAIT_BUDGET_ENV } from "../../../../src/core/brain/sync-lockfile.ts";
+import { withDeviceId } from "../../../helpers/device-id.ts";
 
 let tmp: string;
 let vault: string;
@@ -233,44 +234,25 @@ test.skipIf(process.getuid?.() === 0)(
 );
 
 test("two devices write their own commits shards and reads merge both (t_774dea61)", () => {
-  const previous = process.env["O2B_DEVICE_ID"];
-  try {
-    const a = commit("c".repeat(40), { subject: "feat: from host a" });
-    const b = commit("d".repeat(40), { subject: "fix: from host b" });
-    process.env["O2B_DEVICE_ID"] = "a";
-    appendGitRecords(vault, KEY, [a]);
-    process.env["O2B_DEVICE_ID"] = "b";
-    appendGitRecords(vault, KEY, [b]);
-    const dir = gitStoreDir(vault, KEY);
-    expect(existsSync(join(dir, "commits.a.jsonl"))).toBe(true);
-    expect(existsSync(join(dir, "commits.b.jsonl"))).toBe(true);
-    expect(existsSync(join(dir, "commits.jsonl"))).toBe(false);
+  const a = commit("c".repeat(40), { subject: "feat: from host a" });
+  const b = commit("d".repeat(40), { subject: "fix: from host b" });
+  withDeviceId("a", () => appendGitRecords(vault, KEY, [a]));
+  withDeviceId("b", () => appendGitRecords(vault, KEY, [b]));
+  const dir = gitStoreDir(vault, KEY);
+  expect(existsSync(join(dir, "commits.a.jsonl"))).toBe(true);
+  expect(existsSync(join(dir, "commits.b.jsonl"))).toBe(true);
+  expect(existsSync(join(dir, "commits.jsonl"))).toBe(false);
 
-    // Cross-device dedup: replaying host a's commit under host b is a no-op
-    // because the dedup read spans every shard.
-    const replay = appendGitRecords(vault, KEY, [a]);
-    expect(replay.appended).toBe(0);
-    expect(
-      listGitCommits(vault, KEY)
-        .map((c) => c.subject)
-        .toSorted(),
-    ).toEqual(["feat: from host a", "fix: from host b"]);
-  } finally {
-    if (previous === undefined) delete process.env["O2B_DEVICE_ID"];
-    else process.env["O2B_DEVICE_ID"] = previous;
-  }
+  // Cross-device dedup: replaying host a's commit under host b is a no-op
+  // because the dedup read spans every shard.
+  const replay = withDeviceId("b", () => appendGitRecords(vault, KEY, [a]));
+  expect(replay.appended).toBe(0);
+  expect(
+    listGitCommits(vault, KEY)
+      .map((c) => c.subject)
+      .toSorted(),
+  ).toEqual(["feat: from host a", "fix: from host b"]);
 });
-
-function withDevice<T>(device: string, run: () => T): T {
-  const previous = process.env["O2B_DEVICE_ID"];
-  process.env["O2B_DEVICE_ID"] = device;
-  try {
-    return run();
-  } finally {
-    if (previous === undefined) delete process.env["O2B_DEVICE_ID"];
-    else process.env["O2B_DEVICE_ID"] = previous;
-  }
-}
 
 test("the append lock is the device's own shard, not the legacy name (t_774dea61)", () => {
   const dir = gitStoreDir(vault, KEY);
@@ -281,13 +263,13 @@ test("the append lock is the device's own shard, not the legacy name (t_774dea61
   const legacy = acquireLockSync(join(dir, "commits.jsonl"));
   const other = acquireLockSync(join(dir, "commits.b.jsonl"));
   try {
-    const result = withDevice("a", () => appendGitRecords(vault, KEY, [commit("e".repeat(40))]));
+    const result = withDeviceId("a", () => appendGitRecords(vault, KEY, [commit("e".repeat(40))]));
     expect(result.appended).toBe(1);
 
     const own = acquireLockSync(join(dir, "commits.a.jsonl"));
     try {
       expect(() =>
-        withDevice("a", () => appendGitRecords(vault, KEY, [commit("f".repeat(40))])),
+        withDeviceId("a", () => appendGitRecords(vault, KEY, [commit("f".repeat(40))])),
       ).toThrow(/lock busy: .*commits\.a\.jsonl\.lock/);
     } finally {
       own.release();
@@ -304,13 +286,13 @@ test("commits from two devices list oldest-first by commit time (t_774dea61)", (
   // Device a ingested the newer range, device b the older one; a sorts
   // first by shard name, so a name-order merge listed b's old commits last
   // and a `limit` kept them as the "newest".
-  withDevice("a", () =>
+  withDeviceId("a", () =>
     appendGitRecords(vault, KEY, [
       commit("1".repeat(40), { subject: "a-new-1", committedAt: "2026-06-03T10:00:00+00:00" }),
       commit("2".repeat(40), { subject: "a-new-2", committedAt: "2026-06-04T10:00:00+00:00" }),
     ]),
   );
-  withDevice("b", () =>
+  withDeviceId("b", () =>
     appendGitRecords(vault, KEY, [
       commit("3".repeat(40), { subject: "b-old-1", committedAt: "2026-06-01T10:00:00+00:00" }),
       commit("4".repeat(40), { subject: "b-old-2", committedAt: "2026-06-02T10:00:00+00:00" }),

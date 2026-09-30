@@ -22,6 +22,7 @@ import {
   recordQueryDemand,
 } from "../../../src/core/brain/query-demand.ts";
 import { fakeCredential } from "../../helpers/fake-credentials.ts";
+import { withDeviceId } from "../../helpers/device-id.ts";
 
 const SECRET_SHAPED_TERM = fakeCredential("sk-", "abcdef0123456789abcdef0123456789");
 
@@ -305,35 +306,20 @@ describe("query-demand per-device shards (t_774dea61)", () => {
   };
 
   test("two devices write two shard files and reads merge both", () => {
-    const previous = process.env["O2B_DEVICE_ID"];
-    try {
-      process.env["O2B_DEVICE_ID"] = "a";
-      recordQueryDemand(vault, INPUT);
-      process.env["O2B_DEVICE_ID"] = "b";
-      recordQueryDemand(vault, INPUT);
-      expect(existsSync(join(vault, "Brain", "log", "query-demand.a.jsonl"))).toBe(true);
-      expect(existsSync(join(vault, "Brain", "log", "query-demand.b.jsonl"))).toBe(true);
-      expect(existsSync(join(vault, "Brain", "log", "query-demand.jsonl"))).toBe(false);
+    withDeviceId("a", () => recordQueryDemand(vault, INPUT));
+    withDeviceId("b", () => recordQueryDemand(vault, INPUT));
+    expect(existsSync(join(vault, "Brain", "log", "query-demand.a.jsonl"))).toBe(true);
+    expect(existsSync(join(vault, "Brain", "log", "query-demand.b.jsonl"))).toBe(true);
+    expect(existsSync(join(vault, "Brain", "log", "query-demand.jsonl"))).toBe(false);
 
-      const records = readQueryDemand(vault);
-      expect(records).toHaveLength(2);
-    } finally {
-      if (previous === undefined) delete process.env["O2B_DEVICE_ID"];
-      else process.env["O2B_DEVICE_ID"] = previous;
-    }
+    const records = readQueryDemand(vault);
+    expect(records).toHaveLength(2);
   });
 
   test("the empty device id keeps the legacy un-sharded file", () => {
-    const previous = process.env["O2B_DEVICE_ID"];
-    try {
-      process.env["O2B_DEVICE_ID"] = "";
-      recordQueryDemand(vault, INPUT);
-      expect(existsSync(join(vault, "Brain", "log", "query-demand.jsonl"))).toBe(true);
-      expect(readQueryDemand(vault)).toHaveLength(1);
-    } finally {
-      if (previous === undefined) delete process.env["O2B_DEVICE_ID"];
-      else process.env["O2B_DEVICE_ID"] = previous;
-    }
+    withDeviceId("", () => recordQueryDemand(vault, INPUT));
+    expect(existsSync(join(vault, "Brain", "log", "query-demand.jsonl"))).toBe(true);
+    expect(readQueryDemand(vault)).toHaveLength(1);
   });
 
   test("compaction after a write on one device caps only that device's shard", () => {
@@ -350,15 +336,10 @@ describe("query-demand per-device shards (t_774dea61)", () => {
     writeFileSync(ownShard, overBudget, "utf8");
     writeFileSync(peerShard, overBudget, "utf8");
 
-    const previous = process.env["O2B_DEVICE_ID"];
-    try {
-      process.env["O2B_DEVICE_ID"] = "a";
+    withDeviceId("a", () => {
       expect(queryDemandLogPath(vault)).toBe(ownShard);
       recordQueryDemand(vault, INPUT);
-    } finally {
-      if (previous === undefined) delete process.env["O2B_DEVICE_ID"];
-      else process.env["O2B_DEVICE_ID"] = previous;
-    }
+    });
 
     expect(statSync(ownShard).size).toBeLessThanOrEqual(DEMAND_LOG_MAX_BYTES);
     expect(readFileSync(peerShard, "utf8")).toBe(overBudget);

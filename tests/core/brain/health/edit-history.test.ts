@@ -20,6 +20,7 @@ import {
   type EditHistoryEntry,
 } from "../../../../src/core/brain/health/edit-history.ts";
 import { preferenceHistoryPath } from "../../../../src/core/brain/paths.ts";
+import { withDeviceId } from "../../../helpers/device-id.ts";
 
 let vault: string;
 
@@ -113,29 +114,27 @@ describe("renderEditHistory", () => {
 
 describe("edit-history per-device shards (t_774dea61)", () => {
   test("two devices write two shard files and reads merge both, dedupe included", () => {
-    const previous = process.env["O2B_DEVICE_ID"];
-    try {
-      process.env["O2B_DEVICE_ID"] = "a";
-      appendEditHistory(vault, "alpha", [entry({ revision: 1, after: "spaces" })]);
-      process.env["O2B_DEVICE_ID"] = "b";
-      appendEditHistory(vault, "alpha", [entry({ revision: 2, after: "tabs again" })]);
-      // A shard of one device carries no revision 2; a plain read of it
-      // would not dedupe a cross-device replay, so the merged read must
-      // see both files before the dedupe.
-      expect(existsSync(join(vault, "Brain", "preferences", "pref-alpha.history.a.jsonl"))).toBe(
-        true,
-      );
-      expect(existsSync(join(vault, "Brain", "preferences", "pref-alpha.history.b.jsonl"))).toBe(
-        true,
-      );
+    withDeviceId("a", () =>
+      appendEditHistory(vault, "alpha", [entry({ revision: 1, after: "spaces" })]),
+    );
+    withDeviceId("b", () =>
+      appendEditHistory(vault, "alpha", [entry({ revision: 2, after: "tabs again" })]),
+    );
+    // A shard of one device carries no revision 2; a plain read of it
+    // would not dedupe a cross-device replay, so the merged read must
+    // see both files before the dedupe.
+    expect(existsSync(join(vault, "Brain", "preferences", "pref-alpha.history.a.jsonl"))).toBe(
+      true,
+    );
+    expect(existsSync(join(vault, "Brain", "preferences", "pref-alpha.history.b.jsonl"))).toBe(
+      true,
+    );
 
-      const replay = appendEditHistory(vault, "alpha", [entry({ revision: 1, after: "spaces" })]);
-      expect(replay).toBe(0);
-      const merged = readEditHistory(vault, "alpha");
-      expect(merged.map((e) => e.revision).toSorted()).toEqual([1, 2]);
-    } finally {
-      if (previous === undefined) delete process.env["O2B_DEVICE_ID"];
-      else process.env["O2B_DEVICE_ID"] = previous;
-    }
+    const replay = withDeviceId("b", () =>
+      appendEditHistory(vault, "alpha", [entry({ revision: 1, after: "spaces" })]),
+    );
+    expect(replay).toBe(0);
+    const merged = readEditHistory(vault, "alpha");
+    expect(merged.map((e) => e.revision).toSorted()).toEqual([1, 2]);
   });
 });

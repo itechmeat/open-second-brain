@@ -19,6 +19,7 @@ import {
   previewDeclaredSkillProposal,
   rejectSkillProposal,
 } from "../../../src/core/brain/skill-proposals.ts";
+import { withDeviceId } from "../../helpers/device-id.ts";
 
 let vault: string;
 
@@ -347,20 +348,11 @@ describe("a declared proposal refuses a taken slug by name", () => {
 
 describe("verifier-rejection ledger shards (t_774dea61)", () => {
   test("each device names its own rejection shard; the empty id keeps the legacy name", () => {
-    const previous = process.env["O2B_DEVICE_ID"];
-    try {
-      process.env["O2B_DEVICE_ID"] = "a";
-      const onA = verifierRejectionLedgerPath(vault);
-      process.env["O2B_DEVICE_ID"] = "b";
-      const onB = verifierRejectionLedgerPath(vault);
-      process.env["O2B_DEVICE_ID"] = "";
-      const legacy = verifierRejectionLedgerPath(vault);
-      expect(onA.endsWith("verifier-rejections.a.jsonl")).toBe(true);
-      expect(onB.endsWith("verifier-rejections.b.jsonl")).toBe(true);
-      expect(legacy.endsWith("verifier-rejections.jsonl")).toBe(true);
-    } finally {
-      if (previous === undefined) delete process.env["O2B_DEVICE_ID"];
-      else process.env["O2B_DEVICE_ID"] = previous;
-    }
+    const onA = withDeviceId("a", () => verifierRejectionLedgerPath(vault));
+    const onB = withDeviceId("b", () => verifierRejectionLedgerPath(vault));
+    const legacy = withDeviceId("", () => verifierRejectionLedgerPath(vault));
+    expect(onA.endsWith("verifier-rejections.a.jsonl")).toBe(true);
+    expect(onB.endsWith("verifier-rejections.b.jsonl")).toBe(true);
+    expect(legacy.endsWith("verifier-rejections.jsonl")).toBe(true);
   });
 });
