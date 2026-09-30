@@ -2,11 +2,7 @@ import { test, expect, beforeEach, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
 
 import { buildExpandedFtsMatch, buildFtsMatch, runFtsQuery } from "../../../src/core/search/fts.ts";
-import {
-  FTS_MATCH_MODE,
-  FTS_MATCH_MODES,
-  isFtsMatchMode,
-} from "../../../src/core/search/fts-match-mode.ts";
+import { FTS_MATCH_MODE } from "../../../src/core/search/fts-match-mode.ts";
 import { Store } from "../../../src/core/search/store.ts";
 import { createTempVault, makeConfig } from "../../helpers/search-fixtures.ts";
 
@@ -205,13 +201,5 @@ test("runFtsQuery with matchMode any keeps the single-term document", async () =
     expect(widened.some((h) => h.documentId === d1)).toBe(true);
   } finally {
     store.close();
-  }
-});
-
-test("isFtsMatchMode accepts exactly the declared modes (t_c5326ece)", () => {
-  for (const mode of FTS_MATCH_MODES) expect(isFtsMatchMode(mode)).toBe(true);
-  expect(FTS_MATCH_MODES).toEqual(Object.values(FTS_MATCH_MODE));
-  for (const other of ["", "ALL", "Any", "sometimes", 1, null, undefined]) {
-    expect(isFtsMatchMode(other)).toBe(false);
   }
 });

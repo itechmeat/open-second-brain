@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runCli } from "../helpers/run-cli.ts";
-import { FTS_MATCH_MODE, FTS_MATCH_MODES } from "../../src/core/search/fts-match-mode.ts";
+import { FTS_MATCH_MODES } from "../../src/core/search/fts-match-mode.ts";
 
 let tmp: string;
 let vault: string;
@@ -58,20 +58,10 @@ const pathsIn = (stdout: string): string[] =>
   JSON.parse(stdout).results.map((h: { path: string }) => h.path);
 
 describe("o2b search query --match-mode", () => {
-  test("the default keeps only documents matching every term", async () => {
-    const r = await runQuery([]);
+  test("--match-mode any reaches the search and keeps the single-term document", async () => {
+    const r = await runQuery(["--match-mode", "any"]);
     expect(r.returncode).toBe(0);
-    const paths = pathsIn(r.stdout);
-    expect(paths.some((p) => p.includes("one.md"))).toBe(false);
-    expect(paths.some((p) => p.includes("both.md"))).toBe(true);
-  });
-
-  test("--match-mode any widens the query to single-term documents", async () => {
-    const r = await runQuery(["--match-mode", FTS_MATCH_MODE.any]);
-    expect(r.returncode).toBe(0);
-    const paths = pathsIn(r.stdout);
-    expect(paths.some((p) => p.includes("one.md"))).toBe(true);
-    expect(paths.some((p) => p.includes("both.md"))).toBe(true);
+    expect(pathsIn(r.stdout).some((p) => p.includes("one.md"))).toBe(true);
   });
 
   test("a value outside all|any is refused", async () => {

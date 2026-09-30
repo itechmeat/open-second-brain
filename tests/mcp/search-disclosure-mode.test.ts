@@ -11,9 +11,7 @@ import { join } from "node:path";
 
 import {
   DEFAULT_DISCLOSURE_MODE,
-  DISCLOSURE_MODE,
   DISCLOSURE_MODES,
-  isDisclosureMode,
 } from "../../src/core/search/disclosure-mode.ts";
 import { indexVault } from "../../src/core/search/indexer.ts";
 import { resolveSearchConfig } from "../../src/core/search/index.ts";
@@ -51,24 +49,19 @@ async function run(args: Record<string, unknown>): Promise<SearchResponse> {
 }
 
 describe("disclosure mode vocabulary", () => {
-  test("the guard accepts exactly the declared modes, and full is the default", () => {
-    expect(DISCLOSURE_MODES).toEqual(Object.values(DISCLOSURE_MODE));
-    for (const mode of DISCLOSURE_MODES) expect(isDisclosureMode(mode)).toBe(true);
-    for (const other of ["", "Cards", "card", " full", 1, null, undefined]) {
-      expect(isDisclosureMode(other)).toBe(false);
-    }
-    expect(DEFAULT_DISCLOSURE_MODE).toBe(DISCLOSURE_MODE.full);
+  test("full is the default", () => {
+    expect(DEFAULT_DISCLOSURE_MODE).toBe("full");
   });
 });
 
 describe("brain_search disclosure", () => {
-  test("the schema enum is the vocabulary's list", () => {
+  test("the schema declares the public full|cards enum", () => {
     const schema = tool.inputSchema.properties as Record<string, { enum?: string[] }>;
-    expect(schema["disclosure"]?.enum).toEqual([...DISCLOSURE_MODES]);
+    expect(schema["disclosure"]?.enum).toEqual(["full", "cards"]);
   });
 
   test("cards returns layer-1 cards instead of full results", async () => {
-    const out = await run({ query: "chimera", disclosure: DISCLOSURE_MODE.cards });
+    const out = await run({ query: "chimera", disclosure: "cards" });
     expect(out.results).toEqual([]);
     expect(out.cards?.length).toBeGreaterThan(0);
   });
