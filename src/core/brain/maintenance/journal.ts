@@ -82,10 +82,10 @@ export interface MaintenanceJournalEntry {
 }
 
 /** The journal's shard stem: `maintenance-runs[.<deviceId>].jsonl`. */
-const JOURNAL_STEM = "maintenance-runs";
+export const MAINTENANCE_JOURNAL_STEM = "maintenance-runs";
 
 /** The journal's file-name layout, handed to the shared shard grammar. */
-const JOURNAL_GRAMMAR = jsonlLedgerGrammar(JOURNAL_STEM);
+const JOURNAL_GRAMMAR = jsonlLedgerGrammar(MAINTENANCE_JOURNAL_STEM);
 
 /**
  * The journal file THIS device appends to, and the only shard the cap
@@ -96,7 +96,7 @@ function journalPath(vault: string): string {
   return join(
     vault,
     DERIVED_STORE_DIR,
-    shardedFileName(JOURNAL_STEM, resolveAppendShardId(), JSONL_LEDGER_EXT),
+    shardedFileName(MAINTENANCE_JOURNAL_STEM, resolveAppendShardId(), JSONL_LEDGER_EXT),
   );
 }
 

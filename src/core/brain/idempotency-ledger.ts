@@ -41,6 +41,7 @@ import { join } from "node:path";
 
 import { canonicalJson, sha256Hex } from "../integrity/digest.ts";
 import {
+  JSONL_LEDGER_EXT,
   listShardedFiles,
   resolveAppendShardId,
   shardedFileName,
@@ -55,13 +56,13 @@ import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 const IDEMPOTENCY_REL = `${BRAIN_ROOT_REL}/logs/idempotency`;
 
 /** Shard base: one file per UTC month, per device. */
-const MONTH_RE = /^\d{4}-\d{2}$/;
-const IDEMPOTENCY_EXT = "jsonl";
+const MONTH_BASE = "\\d{4}-\\d{2}";
+const MONTH_RE = new RegExp(`^${MONTH_BASE}$`);
 
 /** The ledger's file-name layout, handed to the shared shard grammar. */
 const IDEMPOTENCY_GRAMMAR: LedgerShardGrammar = Object.freeze({
-  base: "\\d{4}-\\d{2}",
-  extensions: Object.freeze([IDEMPOTENCY_EXT]),
+  base: MONTH_BASE,
+  extensions: Object.freeze([JSONL_LEDGER_EXT]),
 });
 
 /** Hard cap on a client key. Long enough for `<session-id>:<slug>` joins. */
@@ -187,7 +188,7 @@ export function idempotencyLogPath(
 ): string {
   if (!MONTH_RE.test(month)) throw new Error(`invalid idempotency month: ${month}`);
   return ensureInsideVault(
-    join(vault, IDEMPOTENCY_REL, shardedFileName(month, shardId, IDEMPOTENCY_EXT)),
+    join(vault, IDEMPOTENCY_REL, shardedFileName(month, shardId, JSONL_LEDGER_EXT)),
     vault,
   );
 }
@@ -283,7 +284,7 @@ function requireHash(hash: unknown): string {
 
 function monthOf(createdAt: string): string {
   const month = createdAt.slice(0, 7);
-  if (!/^\d{4}-\d{2}$/.test(month)) {
+  if (!MONTH_RE.test(month)) {
     throw new Error(
       `idempotency createdAt must start with YYYY-MM; got ${JSON.stringify(createdAt)}`,
     );

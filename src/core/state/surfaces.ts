@@ -87,7 +87,13 @@ import {
   HOOK_AUDIT_DIR,
 } from "../brain/path-constants.ts";
 import { WATCHDOG_FALLBACK_AUDIT_DIR } from "../brain/audit-dirs.ts";
-import { literalBase, parseShardedName, type LedgerShardGrammar } from "../brain/ledger-shards.ts";
+import { JSONL_LEDGER_EXT, jsonlLedgerGrammar, parseShardedName } from "../brain/ledger-shards.ts";
+import { MAINTENANCE_JOURNAL_STEM } from "../brain/maintenance/journal.ts";
+import {
+  CAPTURE_DECISION_LEDGER_STEM,
+  QUERY_DEMAND_LEDGER_STEM,
+  RECURRENCE_LEDGER_STEM,
+} from "../brain/paths.ts";
 import { CONFIG_ORIGIN, resolveWithOrigin, type ConfigOrigin } from "../validate.ts";
 
 // ----- Vocabularies ---------------------------------------------------------
@@ -275,7 +281,7 @@ const SESSION_LEDGER_FILE = "session-import-ledger.json";
 const INSTALL_MANIFEST_FILE = "install.lock.json";
 const PROTECT_MANIFEST_FILE = "protect.lock.json";
 const MAINTENANCE_LEASE_FILE = "maintenance.sqlite";
-const MAINTENANCE_JOURNAL_FILE = "maintenance-runs.jsonl";
+const MAINTENANCE_JOURNAL_FILE = `${MAINTENANCE_JOURNAL_STEM}.${JSONL_LEDGER_EXT}`;
 const HOOK_STATE_DIR = "hook-state";
 const SELF_HEAL_UPGRADE_MARKER_FILE = "self-heal-upgrade.json";
 const INJECT_CACHE_DIR = "inject-cache";
@@ -283,9 +289,9 @@ const AIDER_CONTEXT_FILE = "aider-context.md";
 const DREAM_RUNS_DIR = "dream-runs";
 const PREF_AUDIT_DIR = "pref-audit";
 const CONTINUITY_DIR = "continuity";
-const RECURRENCE_FILE = "recurrence-support.jsonl";
-const QUERY_DEMAND_FILE = "query-demand.jsonl";
-const CAPTURE_DECISIONS_FILE = "capture-decisions.jsonl";
+const RECURRENCE_FILE = `${RECURRENCE_LEDGER_STEM}.${JSONL_LEDGER_EXT}`;
+const QUERY_DEMAND_FILE = `${QUERY_DEMAND_LEDGER_STEM}.${JSONL_LEDGER_EXT}`;
+const CAPTURE_DECISIONS_FILE = `${CAPTURE_DECISION_LEDGER_STEM}.${JSONL_LEDGER_EXT}`;
 const CAPTURE_WATERMARK_FILE = ".catchup-watermark.json";
 const PROPOSAL_WATERMARK_FILE = "proposal-watermark.json";
 const TRUTH_DIR = "truth";
@@ -1126,9 +1132,6 @@ function statOrAbsent(path: string): StatLike | undefined {
 /** What an absent surface says. Absent is a state, not a failure. */
 const ABSENT_REASON = "nothing has created it in this vault yet";
 
-/** The extension every sharded fixed-name ledger writes. */
-const SHARDED_LEDGER_EXT = "jsonl";
-
 /**
  * The first shard of the sharded ledger whose legacy (empty-shard) file is
  * `legacyPath`, or `undefined` when its directory holds none.
@@ -1141,16 +1144,13 @@ const SHARDED_LEDGER_EXT = "jsonl";
  */
 function firstLedgerShard(legacyPath: string): string | undefined {
   const name = basename(legacyPath);
-  const suffix = `.${SHARDED_LEDGER_EXT}`;
+  const suffix = `.${JSONL_LEDGER_EXT}`;
   if (!name.endsWith(suffix)) {
     throw new Error(
       `sharded ledger surface ${JSON.stringify(legacyPath)} does not end in ${suffix}`,
     );
   }
-  const grammar: LedgerShardGrammar = {
-    base: literalBase(name.slice(0, -suffix.length)),
-    extensions: [SHARDED_LEDGER_EXT],
-  };
+  const grammar = jsonlLedgerGrammar(name.slice(0, -suffix.length));
   const dir = dirname(legacyPath);
   let names: string[];
   try {

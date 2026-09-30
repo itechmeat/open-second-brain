@@ -3,7 +3,16 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { appendAuditRecord } from "../../src/core/reliability/audit.ts";
+import {
+  appendAuditRecord,
+  AUDIT_WEEK_SHARD_GRAMMAR,
+  isoWeekLabel,
+} from "../../src/core/reliability/audit.ts";
+import {
+  JSONL_LEDGER_EXT,
+  parseShardedName,
+  shardedFileName,
+} from "../../src/core/brain/ledger-shards.ts";
 import { withFileLock } from "../../src/core/reliability/lock.ts";
 import { buildProbeReport } from "../../src/core/reliability/probe.ts";
 import { fakeCredential } from "../helpers/fake-credentials.ts";
@@ -159,5 +168,20 @@ describe("buildProbeReport", () => {
       "search_index",
       "snapshot_restore",
     ]);
+  });
+});
+
+describe("audit week shard grammar", () => {
+  test("the reader grammar parses every name the writer composes, and nothing else", () => {
+    const week = isoWeekLabel(new Date("2026-01-01T12:00:00Z"));
+    for (const shardId of ["", "laptop-01"]) {
+      const name = shardedFileName(week, shardId, JSONL_LEDGER_EXT);
+      expect(parseShardedName(name, AUDIT_WEEK_SHARD_GRAMMAR)).toMatchObject({
+        base: week,
+        shardId,
+      });
+    }
+    expect(parseShardedName(`${week}.md`, AUDIT_WEEK_SHARD_GRAMMAR)).toBeNull();
+    expect(parseShardedName("2026-01.jsonl", AUDIT_WEEK_SHARD_GRAMMAR)).toBeNull();
   });
 });

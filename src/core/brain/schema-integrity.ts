@@ -55,7 +55,8 @@ import { join } from "node:path";
 
 import { sha256Hex } from "../integrity/digest.ts";
 import { compareStamps, type StampMismatch } from "../integrity/stamp.ts";
-import { listShardedFiles, type LedgerShardGrammar } from "./ledger-shards.ts";
+import { AUDIT_WEEK_SHARD_GRAMMAR } from "../reliability/audit.ts";
+import { listShardedFiles } from "./ledger-shards.ts";
 import { brainDirs } from "./paths.ts";
 import { readSchemaPackSource, renderSchemaBlock, type SchemaPack } from "./schema-pack.ts";
 
@@ -146,17 +147,6 @@ export const SCHEMA_MUTATION_AUDIT_ACTION = "schema_apply_mutations";
 export const SCHEMA_PACK_DIGEST_FIELD = "pack_digest";
 
 /**
- * The audit weeks' file-name layout, handed to the shared shard grammar
- * (t_774dea61): the writer names each device's file `<ISO-week>[.<deviceId>].jsonl`
- * and a `*.sync-conflict-*` copy is never a shard, so the digest reader can
- * no more parse a conflict copy than it can parse a torn one.
- */
-const AUDIT_SHARD_GRAMMAR: LedgerShardGrammar = Object.freeze({
-  base: "\\d{4}-W\\d{2}",
-  extensions: Object.freeze(["jsonl"]),
-});
-
-/**
  * The shape of a digest this project writes: lowercase hex, nothing else.
  * The length is deliberately not asserted - the algorithm belongs to
  * `../integrity/digest.ts` and a future migration there must not have to
@@ -244,7 +234,7 @@ export function readRecordedSchemaPackDigest(vault: string): RecordedSchemaPackD
   try {
     // Grammar-parsed, name-sorted: device shards and the legacy week file
     // in one deterministic order; `*.sync-conflict-*` copies excluded.
-    shards = listShardedFiles(dir, AUDIT_SHARD_GRAMMAR).map((shard) => shard.path);
+    shards = listShardedFiles(dir, AUDIT_WEEK_SHARD_GRAMMAR).map((shard) => shard.path);
   } catch {
     return notFound(SCHEMA_PACK_UNVERIFIED_REASON.auditUnreadable);
   }

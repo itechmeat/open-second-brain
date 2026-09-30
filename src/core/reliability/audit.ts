@@ -2,7 +2,24 @@ import { closeSync, fsyncSync, mkdirSync, openSync, writeFileSync } from "node:f
 import { join } from "node:path";
 
 import { redactRawOutput } from "../redactor.ts";
-import { resolveAppendShardId, shardedFileName } from "../brain/ledger-shards.ts";
+import {
+  JSONL_LEDGER_EXT,
+  resolveAppendShardId,
+  shardedFileName,
+  type LedgerShardGrammar,
+} from "../brain/ledger-shards.ts";
+
+/**
+ * The file-name layout of every per-device ISO-week audit directory:
+ * `<YYYY-Www>[.<deviceId>].jsonl`, the base being what {@link isoWeekLabel}
+ * produces. The writer below and every reader that lists the week files
+ * share this one grammar, so the two cannot disagree on what a week shard
+ * is, and a `*.sync-conflict-*` copy is never one.
+ */
+export const AUDIT_WEEK_SHARD_GRAMMAR: LedgerShardGrammar = Object.freeze({
+  base: "\\d{4}-W\\d{2}",
+  extensions: Object.freeze([JSONL_LEDGER_EXT]),
+});
 
 export interface AuditRecord {
   readonly timestamp: string;
@@ -26,7 +43,7 @@ export function appendAuditRecord(auditRoot: string, record: AuditRecord): strin
   // legacy un-sharded name, so existing vaults need no migration.
   const path = join(
     auditRoot,
-    shardedFileName(isoWeekLabel(timestamp), resolveAppendShardId(), "jsonl"),
+    shardedFileName(isoWeekLabel(timestamp), resolveAppendShardId(), JSONL_LEDGER_EXT),
   );
   const line = redactRawOutput(JSON.stringify(record), {
     maxInput: Number.POSITIVE_INFINITY,
