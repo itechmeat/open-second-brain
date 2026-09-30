@@ -11,6 +11,7 @@
 
 import { ACCESS_EVENT_PATHS_CAP, recordAccessEvent } from "../activation/store.ts";
 import { toSearchCard } from "../cards.ts";
+import { DEFAULT_DISCLOSURE_MODE, DISCLOSURE_MODE } from "../disclosure-mode.ts";
 import { classifyNegativeRecall } from "../../brain/negative-recall.ts";
 import { buildEvidencePack, downrankTerminalEvidenceResults } from "../evidence-pack.ts";
 import { buildRetrievalTrail, corpusStatementFor } from "../retrieval-trail.ts";
@@ -223,7 +224,7 @@ export function buildSearchOutcome(input: OutcomeInput): SearchOutcome {
   // filtering, and evidence pack are computed identically to full mode -
   // only the surfaced depth differs - so the contract stays
   // deterministic and the default `full` path is byte-identical.
-  if ((opts.disclosure ?? "full") === "cards") {
+  if ((opts.disclosure ?? DEFAULT_DISCLOSURE_MODE) === DISCLOSURE_MODE.cards) {
     // The residual query text anchors each card's snippet window on the
     // match instead of the head of the chunk (task E).
     const cards = resultsOut.map((result) => toSearchCard(result, query));

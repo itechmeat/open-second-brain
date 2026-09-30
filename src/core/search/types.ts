@@ -23,6 +23,7 @@ import type { VaultPathRule, VaultScopeRules } from "../vault-scope/defaults.ts"
 import type { DegreePredicate } from "./property-filter.ts";
 import type { TemporalIntent } from "./temporal-intent.ts";
 import type { FtsMatchMode } from "./fts-match-mode.ts";
+import type { DisclosureMode } from "./disclosure-mode.ts";
 import type { BrainSearchResult, ScoreBreakdown, TrustMetadata } from "./search-result.ts";
 import type {
   MemoryTrustAssessment,
@@ -587,18 +588,12 @@ export interface IndexCheckReport {
 }
 
 /**
- * Result-depth disclosure mode (progressive 3-layer recall). `full`
- * (default) is the historical flat search: every hit carries its full
- * chunk content. `cards` returns compact layer-1 {@link SearchCard}s
- * instead — path/title/score/reasons/snippet/pointer, no full content —
- * so recall stays token-cheap and the agent pays for depth only by
- * calling `expandHit` (layer 2 fuller note, layer 3 raw transcript).
- *
- * This is NOT the query-lane `expand` flag on {@link SearchOptions}:
- * that broadens the candidate query, this shapes how much of each
- * surfaced result is disclosed.
+ * Result-depth disclosure mode; the vocabulary lives in
+ * `disclosure-mode.ts`. This is NOT the query-lane `expand` flag on
+ * {@link SearchOptions}: that broadens the candidate query, this shapes how
+ * much of each surfaced result is disclosed.
  */
-export type DisclosureMode = "full" | "cards";
+export type { DisclosureMode };
 
 /**
  * Layer-1 compact card (progressive disclosure). The token-cheap

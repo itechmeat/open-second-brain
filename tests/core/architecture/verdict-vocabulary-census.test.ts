@@ -415,6 +415,11 @@ import {
   NOTE_WRITE_OPS,
 } from "../../../src/core/brain/notes/write-record.ts";
 import {
+  DISCLOSURE_MODE,
+  DISCLOSURE_MODES,
+  isDisclosureMode,
+} from "../../../src/core/search/disclosure-mode.ts";
+import {
   FTS_MATCH_MODE,
   FTS_MATCH_MODES,
   isFtsMatchMode,
@@ -1314,6 +1319,14 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     members: FTS_MATCH_MODES,
     guard: isFtsMatchMode,
   },
+  {
+    // The brain_search result depth. Like the match mode it is copied
+    // out of TypeScript into the MCP enum and both refusal messages.
+    name: "DISCLOSURE_MODE",
+    values: DISCLOSURE_MODE,
+    members: DISCLOSURE_MODES,
+    guard: isDisclosureMode,
+  },
 ]);
 
 // ---------------------------------------------------------------------------
@@ -1578,7 +1591,7 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
  * How many four-piece vocabularies `src/` currently holds. Measured, and
  * kept as an equality rather than a floor - see the population test.
  */
-const VOCABULARY_POPULATION = 78;
+const VOCABULARY_POPULATION = 79;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {

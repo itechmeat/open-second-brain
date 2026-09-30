@@ -30,6 +30,11 @@ import {
 } from "../helpers.ts";
 import { CLI_TRANSPORT_REACH } from "../../transport-reach.ts";
 import { FTS_MATCH_MODES, isFtsMatchMode } from "../../../core/search/fts-match-mode.ts";
+import {
+  DISCLOSURE_MODE,
+  DISCLOSURE_MODES,
+  isDisclosureMode,
+} from "../../../core/search/disclosure-mode.ts";
 
 /** Both malformed `--property` shapes report the same way. */
 function propertyFormatError(entry: string): CliError {
@@ -88,8 +93,8 @@ export async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<numbe
     throw new CliError(`--limit must be an integer in ${SEARCH_LIMIT_MIN}..${SEARCH_LIMIT_MAX}`);
   }
   const disclosureRaw = flagString(flags, "disclosure");
-  if (disclosureRaw !== undefined && disclosureRaw !== "full" && disclosureRaw !== "cards") {
-    throw new CliError("--disclosure must be 'full' or 'cards'");
+  if (disclosureRaw !== undefined && !isDisclosureMode(disclosureRaw)) {
+    throw new CliError(`--disclosure must be one of ${DISCLOSURE_MODES.join(", ")}`);
   }
   const matchModeRaw = flagString(flags, "match-mode");
   if (matchModeRaw !== undefined && !isFtsMatchMode(matchModeRaw)) {
@@ -146,7 +151,7 @@ export async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<numbe
     ...(agentScope !== undefined ? { agentScope } : {}),
     ...(structuredQuery !== undefined ? { structuredQuery } : {}),
     ...(flagBoolean(flags, "expand") ? { expand: true } : {}),
-    ...(disclosureRaw === "cards" ? { disclosure: "cards" as const } : {}),
+    ...(disclosureRaw === DISCLOSURE_MODE.cards ? { disclosure: disclosureRaw } : {}),
     ...(profile !== undefined ? { profile } : {}),
     ...(flagBoolean(flags, "evidence-pack") ? { evidencePack: true } : {}),
     ...(flagBoolean(flags, "include-superseded") ? { includeSuperseded: true } : {}),

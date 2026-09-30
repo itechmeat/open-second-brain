@@ -75,6 +75,11 @@ import { explainEnvelope } from "../core/search/explain-envelope.ts";
 import { deriveRecallHint } from "../core/search/recall-hint.ts";
 import { FTS_MATCH_MODES, isFtsMatchMode } from "../core/search/fts-match-mode.ts";
 import {
+  DISCLOSURE_MODE,
+  DISCLOSURE_MODES,
+  isDisclosureMode,
+} from "../core/search/disclosure-mode.ts";
+import {
   ELLIPSIS,
   HEAD_WINDOW_START,
   alignToCodePointStart,
@@ -186,7 +191,7 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
     },
     disclosure: {
       type: "string",
-      enum: ["full", "cards"],
+      enum: [...DISCLOSURE_MODES],
       description:
         "Result depth: 'full' (default) returns full chunk content; 'cards' returns token-cheap layer-1 cards — drill a hit with brain_search_expand.",
     },
@@ -907,13 +912,16 @@ async function toolBrainSearch(
 
   const semantic = coerceBoolOptional(args, "semantic");
   const keywordOnly = coerceBoolOptional(args, "keyword_only") ?? false;
-  const disclosure = coerceStringOptional(args, "disclosure", 16);
-  if (disclosure !== undefined && disclosure !== "full" && disclosure !== "cards") {
-    throw new MCPError(INVALID_PARAMS, "argument 'disclosure' must be 'full' or 'cards'");
-  }
-  // The enum check alone bounds the value, so no separate length cap: any
-  // present value outside the modes, whatever its type or length, is
+  // The enum checks alone bound these values, so no separate length cap:
+  // any present value outside the modes, whatever its type or length, is
   // refused with the accepted list.
+  const disclosure = args["disclosure"] ?? undefined;
+  if (disclosure !== undefined && !isDisclosureMode(disclosure)) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `argument 'disclosure' must be one of ${DISCLOSURE_MODES.join(", ")}`,
+    );
+  }
   const matchModeRaw = args["match_mode"] ?? undefined;
   if (matchModeRaw !== undefined && !isFtsMatchMode(matchModeRaw)) {
     throw new MCPError(
@@ -1011,7 +1019,7 @@ async function toolBrainSearch(
     pathPrefix,
     ...(matchMode !== undefined ? { matchMode } : {}),
     ...(profile !== undefined ? { profile } : {}),
-    ...(disclosure === "cards" ? { disclosure: "cards" as const } : {}),
+    ...(disclosure === DISCLOSURE_MODE.cards ? { disclosure } : {}),
     ...(properties !== undefined ? { properties } : {}),
     ...(degreeFilters !== undefined ? { degreeFilters } : {}),
     ...(visibility !== undefined ? { visibility } : {}),
