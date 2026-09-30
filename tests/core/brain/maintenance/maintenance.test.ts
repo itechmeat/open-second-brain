@@ -7,7 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -496,5 +496,51 @@ describe("the consecutive-failure streak", () => {
     const forced = await laneRun(true, true);
     expect(forced.tasks[0]!.ok).toBe(true);
     expect(consecutiveTaskFailures(vault, TASK)).toBe(0);
+  });
+});
+
+describe("maintenance journal per-device shards (t_774dea61)", () => {
+  test("two devices write their own shards; lists merge and the sweep trims only the local shard", () => {
+    const previous = process.env["O2B_DEVICE_ID"];
+    try {
+      process.env["O2B_DEVICE_ID"] = "a";
+      appendJournal(vault, {
+        ts: "2026-06-01T10:00:00Z",
+        holder: "host-a",
+        verdict: MAINTENANCE_VERDICT.run,
+        task: LANE_TASK.dream,
+        ok: false,
+      });
+      process.env["O2B_DEVICE_ID"] = "b";
+      appendJournal(vault, {
+        ts: "2026-06-01T10:01:00Z",
+        holder: "host-b",
+        verdict: MAINTENANCE_VERDICT.run,
+        task: LANE_TASK.dream,
+        ok: true,
+      });
+      const derived = join(vault, ".open-second-brain");
+      expect(existsSync(join(derived, "maintenance-runs.a.jsonl"))).toBe(true);
+      expect(existsSync(join(derived, "maintenance-runs.b.jsonl"))).toBe(true);
+      expect(existsSync(join(derived, "maintenance-runs.jsonl"))).toBe(false);
+
+      expect(listJournal(vault)).toHaveLength(2);
+
+      // The cap sweep rewrites only the local device's shard: host b's
+      // shard is trimmed to the cap, host a's rows stay on disk.
+      process.env["O2B_DEVICE_ID"] = "b";
+      sweepJournal(vault, 1);
+      expect(listJournal(vault)).toHaveLength(2);
+      const bShard = readFileSync(join(derived, "maintenance-runs.b.jsonl"), "utf8")
+        .trim()
+        .split("\n");
+      expect(bShard).toHaveLength(1);
+      expect(readFileSync(join(derived, "maintenance-runs.a.jsonl"), "utf8").trim()).toContain(
+        "host-a",
+      );
+    } finally {
+      if (previous === undefined) delete process.env["O2B_DEVICE_ID"];
+      else process.env["O2B_DEVICE_ID"] = previous;
+    }
   });
 });

@@ -10,6 +10,12 @@
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
+import {
+  readShardedLines,
+  resolveAppendShardId,
+  shardedFileName,
+  type LedgerShardGrammar,
+} from "../ledger-shards.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import type { HostPressureUnmeasurableReason } from "./host-pressure.ts";
 import { renameWithRetry } from "../../fs-atomic.ts";
@@ -72,9 +78,24 @@ export interface MaintenanceJournalEntry {
   readonly streak?: number;
 }
 
+/**
+ * The journal file THIS device appends to, and the only shard the cap
+ * sweep rewrites: `maintenance-runs[.<deviceId>].jsonl` (t_774dea61). The
+ * empty device id yields the legacy un-sharded name.
+ */
 function journalPath(vault: string): string {
-  return join(vault, ".open-second-brain", "maintenance-runs.jsonl");
+  return join(
+    vault,
+    ".open-second-brain",
+    shardedFileName("maintenance-runs", resolveAppendShardId(), "jsonl"),
+  );
 }
+
+/** The journal's file-name layout, handed to the shared shard grammar. */
+const JOURNAL_GRAMMAR: LedgerShardGrammar = Object.freeze({
+  base: "maintenance-runs",
+  extensions: Object.freeze(["jsonl"]),
+});
 
 export function appendJournal(vault: string, entry: MaintenanceJournalEntry): void {
   // Vault-identity write guard (context-integrity-gates, Unit J).
@@ -102,9 +123,13 @@ export function sweepJournal(vault: string, cap: number = MAINTENANCE_JOURNAL_CA
   renameWithRetry(tmp, path);
 }
 
-/** Journal entries, newest first. Unparseable lines are skipped. */
+/**
+ * Journal entries, newest first. The read merges every device's shard
+ * (t_774dea61) in the deterministic shard order; unparseable lines are
+ * skipped.
+ */
 export function listJournal(vault: string, limit?: number): MaintenanceJournalEntry[] {
-  const lines = readLines(journalPath(vault));
+  const lines = readShardedLines(dirname(journalPath(vault)), JOURNAL_GRAMMAR);
   const out: MaintenanceJournalEntry[] = [];
   for (const line of lines) {
     try {

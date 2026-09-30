@@ -11,10 +11,11 @@
  * files.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
-import { preferenceHistoryPath } from "../paths.ts";
+import { literalBase, readShardedLines, type LedgerShardGrammar } from "../ledger-shards.ts";
+import { preferenceHistoryPath, validateSlug } from "../paths.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 export interface EditHistoryEntry {
@@ -49,16 +50,25 @@ function isEntry(value: unknown): value is EditHistoryEntry {
   );
 }
 
-/** Read the sidecar, skipping malformed lines. Missing file -> `[]`. */
+/**
+ * The sidecar shard family's layout for one slug. The base is the slug's
+ * own `pref-<slug>.history` stem, escaped, so a slug containing a dot can
+ * never be read as a device shard of a shorter slug.
+ */
+function historyGrammar(slug: string): LedgerShardGrammar {
+  return Object.freeze({
+    base: literalBase(`pref-${validateSlug(slug)}.history`),
+    extensions: Object.freeze(["jsonl"]),
+  });
+}
+
+/** Read every device's shard, skipping malformed lines. No shards -> `[]`. */
 export function readEditHistory(vault: string, slug: string): EditHistoryEntry[] {
-  const path = preferenceHistoryPath(vault, slug);
-  if (!existsSync(path)) return [];
+  const dir = dirname(preferenceHistoryPath(vault, slug));
   const out: EditHistoryEntry[] = [];
-  for (const line of readFileSync(path, "utf8").split("\n")) {
-    const trimmed = line.trim();
-    if (trimmed.length === 0) continue;
+  for (const line of readShardedLines(dir, historyGrammar(slug))) {
     try {
-      const parsed: unknown = JSON.parse(trimmed);
+      const parsed: unknown = JSON.parse(line);
       if (isEntry(parsed)) out.push(parsed);
     } catch {
       // malformed line - skip, do not throw

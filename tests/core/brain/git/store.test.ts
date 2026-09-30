@@ -194,3 +194,32 @@ test("listGitRepos enumerates per-repo stores with their states", () => {
   expect(repos[1]!.state!.repoPath).toBe("/work/other");
   expect(existsSync(join(vault, "Brain", "projects", "git", KEY, "commits.jsonl"))).toBe(true);
 });
+
+test("two devices write their own commits shards and reads merge both (t_774dea61)", () => {
+  const previous = process.env["O2B_DEVICE_ID"];
+  try {
+    const a = commit("c".repeat(40), { subject: "feat: from host a" });
+    const b = commit("d".repeat(40), { subject: "fix: from host b" });
+    process.env["O2B_DEVICE_ID"] = "a";
+    appendGitRecords(vault, KEY, [a]);
+    process.env["O2B_DEVICE_ID"] = "b";
+    appendGitRecords(vault, KEY, [b]);
+    const dir = gitStoreDir(vault, KEY);
+    expect(existsSync(join(dir, "commits.a.jsonl"))).toBe(true);
+    expect(existsSync(join(dir, "commits.b.jsonl"))).toBe(true);
+    expect(existsSync(join(dir, "commits.jsonl"))).toBe(false);
+
+    // Cross-device dedup: replaying host a's commit under host b is a no-op
+    // because the dedup read spans every shard.
+    const replay = appendGitRecords(vault, KEY, [a]);
+    expect(replay.appended).toBe(0);
+    expect(
+      listGitCommits(vault, KEY)
+        .map((c) => c.subject)
+        .toSorted(),
+    ).toEqual(["feat: from host a", "fix: from host b"]);
+  } finally {
+    if (previous === undefined) delete process.env["O2B_DEVICE_ID"];
+    else process.env["O2B_DEVICE_ID"] = previous;
+  }
+});

@@ -22,6 +22,12 @@
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  readShardedLines,
+  resolveAppendShardId,
+  shardedFileName,
+  type LedgerShardGrammar,
+} from "../ledger-shards.ts";
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -84,13 +90,24 @@ export interface AppendGitRecordsResult {
   readonly skipped: number;
 }
 
+/** The commits ledger's file-name layout, handed to the shared shard grammar. */
+const COMMITS_GRAMMAR: LedgerShardGrammar = Object.freeze({
+  base: "commits",
+  extensions: Object.freeze(["jsonl"]),
+});
+
 /** Per-repo store directory inside the vault. */
 export function gitStoreDir(vault: string, repoKey: string): string {
   return join(vault, "Brain", "projects", "git", repoKey);
 }
 
 function commitsPath(vault: string, repoKey: string): string {
-  return join(gitStoreDir(vault, repoKey), "commits.jsonl");
+  // Per-device shard (t_774dea61): each machine appends to - and locks -
+  // its own file; the empty device id keeps the legacy un-sharded name.
+  return join(
+    gitStoreDir(vault, repoKey),
+    shardedFileName("commits", resolveAppendShardId(), "jsonl"),
+  );
 }
 
 function statePath(vault: string, repoKey: string): string {
@@ -160,11 +177,10 @@ function parseRecord(line: string): GitRecord | null {
 }
 
 function readRecords(vault: string, repoKey: string): ReadonlyArray<GitRecord> {
-  const path = commitsPath(vault, repoKey);
-  if (!existsSync(path)) return [];
+  // Merged read over every device's shard (t_774dea61), so the dedup on
+  // append sees commits ingested by a synced peer as well.
   const records: GitRecord[] = [];
-  for (const line of readFileSync(path, "utf8").split("\n")) {
-    if (line.trim() === "") continue;
+  for (const line of readShardedLines(gitStoreDir(vault, repoKey), COMMITS_GRAMMAR)) {
     const record = parseRecord(line);
     if (record !== null) records.push(record);
   }

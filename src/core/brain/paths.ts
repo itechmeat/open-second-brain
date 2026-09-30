@@ -396,7 +396,15 @@ export function reportPagePath(vault: string, date: string, slug: string): strin
  */
 export function preferenceHistoryPath(vault: string, slug: string): string {
   const s = validateSlug(slug);
-  return ensureInsideVault(join(brainDirs(vault).preferences, `pref-${s}.history.jsonl`), vault);
+  // Per-device shard (t_774dea61): each machine appends to its own
+  // history file; the empty device id keeps the legacy un-sharded name.
+  return ensureInsideVault(
+    join(
+      brainDirs(vault).preferences,
+      shardedFileName(`pref-${s}.history`, resolveAppendShardId(), "jsonl"),
+    ),
+    vault,
+  );
 }
 
 /** Retired-preference path: `Brain/retired/ret-<slug>.md`. */
