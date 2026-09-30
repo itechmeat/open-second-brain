@@ -5,8 +5,8 @@
  *
  * This is the agent-facing form of the pre-ingest pass: an agent runs it before
  * extracting from a code source so the structural seeds (classes, functions,
- * imports, inheritance) are available as pre-extracted facts. Read-only and
- * deterministic - the kernel runs no model. An unsupported extension is
+ * imports, inheritance, JSX component usages) are available as pre-extracted
+ * facts. Read-only and deterministic - the kernel runs no model. An unsupported extension is
  * reported as unextracted with a reason, never a fake empty success.
  */
 

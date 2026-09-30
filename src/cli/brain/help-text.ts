@@ -1075,6 +1075,9 @@ export const VERB_HELP: Record<string, string> = {
     "phrase via --confirm. A confidence threshold and a hard per-run write cap\n" +
     "bound the writes; existing edges are skipped, so a rerun converges to zero\n" +
     "writes. Inferred candidates are opt-in behind --include-inferred.\n" +
+    "An explicit reference is a mention of a page title or alias that exactly\n" +
+    "one page carries; a term several pages carry binds to none of them and is\n" +
+    "reported as a skip-ambiguous decision naming each carrier.\n" +
     "--apply is gated by the paired graph-efficacy holdout harness: every\n" +
     "proposed edge is checked as an (anchor, target) holdout, graph lift is\n" +
     "counted apart from direct recall, and the apply is refused without writing\n" +
