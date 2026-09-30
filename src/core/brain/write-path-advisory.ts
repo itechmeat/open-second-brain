@@ -20,9 +20,9 @@
  *
  * Scope: the AUTHORED content of one call (a create's body, an update's
  * replacement body, an append's text) - the bytes this caller is asking
- * to put into the vault. Frontmatter the caller did not name and bytes
- * already on disk are not this call's authorship, so they are not
- * scanned. Log-line and evidence ops are machine-composed, not authored,
+ * to put into the vault. Body only: frontmatter values are never
+ * scanned, whether or not the caller named them, and bytes already on
+ * disk are not this call's authorship either. Log-line and evidence ops are machine-composed, not authored,
  * and never reach this module.
  *
  * Shape, and the two rules the receipt inherits from page-lint:

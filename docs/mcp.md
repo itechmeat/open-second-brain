@@ -1561,9 +1561,10 @@ log line is machine-composed rather than authored.
   while the use is off, and a private note is refused. None of these writes to
   the vault, and `suggest` never assigns.
 - Since v1.62.0 the ingest plan accounts for what it sets aside. Every
-  skipped file carries a `reason` from a closed, typed set (the legacy
-  free-text sentence still parses as input), the plan adds
-  `skip_reason_counts` per reason, and extensionless regular files nothing
+  `skipped_non_extractable` entry carries a `reason` from a closed, typed
+  set and a `detail` naming the value behind it (the legacy free-text
+  sentence still parses as input); `skipped` stays a list of path strings
+  for unchanged files. The plan adds `skip_reason_counts` per reason, and extensionless regular files nothing
   can classify are counted in an `unclassifiable` object (`total`,
   `by_extension`); both keys are absent while empty, so a plan with nothing
   set aside serializes exactly as before. Note receipts gain an optional
