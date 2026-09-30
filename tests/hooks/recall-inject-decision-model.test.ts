@@ -154,6 +154,11 @@ async function runHook(env: Record<string, string> = {}): Promise<HookRun> {
       VAULT_DIR: vault,
       OPEN_SECOND_BRAIN_CONFIG: configPath,
       OPEN_SECOND_BRAIN_RECALL_INJECT_ENABLED: "true",
+      // The spawned hook does not run the test preload, so without this it
+      // would mint a device id into each rewritten config and spread its
+      // audit records over several week shards; "last record" below needs
+      // the single legacy week file the preload pins in-process.
+      O2B_DEVICE_ID: "",
       ...env,
     },
   });
