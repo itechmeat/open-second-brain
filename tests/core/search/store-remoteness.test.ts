@@ -179,8 +179,9 @@ describe("a journal-mode switch another connection blocks", () => {
   // the write open keeps it too and says so, instead of a raw error or an
   // INDEX_UNREADABLE that would trigger a full reindex.
 
-  test("the read open keeps WAL and opens", async () => {
+  test("the read open keeps WAL, opens, and says nothing", async () => {
     const { v, config, holder } = await walIndex("store-busy-read");
+    const stderr = captureStderr();
     try {
       const opened = openReadDatabase(config, false, { statfs: () => ({ type: NFS }) });
       try {
@@ -189,13 +190,16 @@ describe("a journal-mode switch another connection blocks", () => {
       } finally {
         opened.db.close(true);
       }
+      // Read opens happen per query: a blocked switch there is silent.
+      expect(stderr.lines()).toEqual([]);
     } finally {
+      stderr.done();
       holder.close(true);
       v.cleanup();
     }
   });
 
-  test("the write open keeps WAL, warns, and opens", async () => {
+  test("the write open keeps WAL, opens, and warns once per path across opens", async () => {
     const { v, config, holder } = await walIndex("store-busy-write");
     const stderr = captureStderr();
     let opened: Awaited<ReturnType<typeof openWriteDatabase>> | null = null;
@@ -203,6 +207,12 @@ describe("a journal-mode switch another connection blocks", () => {
       opened = await openWriteDatabase(config, false, { statfs: () => ({ type: NFS }) });
       const mode = opened.db.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get();
       expect(mode?.journal_mode).toBe("wal");
+      opened.db.close(true);
+      await opened.release();
+      // The second write open meets the same blocked switch and stays quiet.
+      opened = await openWriteDatabase(config, false, { statfs: () => ({ type: NFS }) });
+      const again = opened.db.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get();
+      expect(again?.journal_mode).toBe("wal");
       const busy = stderr.lines().filter((line) => line.includes("journal mode stays WAL"));
       expect(busy).toHaveLength(1);
       expect(busy[0]).toContain(v.dbPath);
