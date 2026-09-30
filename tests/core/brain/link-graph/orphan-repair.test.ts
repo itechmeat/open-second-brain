@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  detachSessionRef,
   ORPHAN_REPAIR_CONFIRM_PHRASE,
   OrphanRepairConfirmationError,
   ORPHAN_REPAIR_WRITE_CAP,
@@ -161,5 +162,17 @@ describe("a rescan after apply is idempotent", () => {
     expect(again.detached).toBe(0);
     expect(again.decisions).toEqual([]);
     expect(readFileSync(path, "utf8")).toBe(afterFirst);
+  });
+});
+
+describe("a reference that changed after the scan is not detached", () => {
+  test("detachSessionRef removes only the value the scan quoted", () => {
+    const path = writeOrphan("session:sess-new#turn-2");
+    const before = readFileSync(path, "utf8");
+    // The scan quoted an older value; the file now carries another one.
+    expect(detachSessionRef(path, "session:sess-gone#turn-1")).toBe("skip-changed");
+    expect(readFileSync(path, "utf8")).toBe(before);
+    expect(detachSessionRef(path, "session:sess-new#turn-2")).toBe("detached");
+    expect(parseFrontmatter(path)[0]["session_ref"]).toBeUndefined();
   });
 });

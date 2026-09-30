@@ -77,7 +77,7 @@ export class OrphanRepairStoreUnreadableError extends Error {
 }
 
 /** What the lane decided about one finding. */
-export type OrphanRepairAction = "detach" | "skip-cap";
+export type OrphanRepairAction = "detach" | "skip-cap" | "skip-changed";
 
 export interface OrphanRepairDecision {
   /** Vault-relative path of the signal file. */
@@ -157,7 +157,10 @@ export function runOrphanRepair(vault: string, opts: OrphanRepairOptions = {}): 
       decisions.push({ ...decision, action: "skip-cap" });
       continue;
     }
-    if (apply) detachSessionRef(finding.path);
+    if (apply && detachSessionRef(finding.path, finding.session_ref) === "skip-changed") {
+      decisions.push({ ...decision, action: "skip-changed" });
+      continue;
+    }
     detached += 1;
     decisions.push({ ...decision, action: "detach" });
   }
@@ -171,17 +174,19 @@ export function runOrphanRepair(vault: string, opts: OrphanRepairOptions = {}): 
 
 /**
  * Remove the `session_ref` key from a signal's frontmatter, atomically,
- * keeping the body and every other field. The reference that was removed
- * is the caller's to report - the decision carries it verbatim.
+ * keeping the body and every other field - but only while the key still
+ * holds `expected`, the value the scan resolved and the decision quotes.
+ * A reference rewritten between the scan and the write was never judged,
+ * so it is left alone and reported as `skip-changed`; a key already gone
+ * (a concurrent repair did the work) is not a write either.
  */
-function detachSessionRef(absPath: string): void {
+export function detachSessionRef(absPath: string, expected: string): "detached" | "skip-changed" {
   const [meta, body] = parseFrontmatter(absPath);
-  if (meta["session_ref"] === undefined) {
-    // Gone between the scan and the write - a concurrent repair already
-    // did the work. Removing a key that is not there is not a write.
-    return;
-  }
+  const current = meta["session_ref"];
+  if (current === undefined) return "detached";
+  if (current !== expected) return "skip-changed";
   const next: FrontmatterMap = { ...meta };
   delete next["session_ref"];
   writeFrontmatterAtomic(absPath, next, body, { overwrite: true });
+  return "detached";
 }
