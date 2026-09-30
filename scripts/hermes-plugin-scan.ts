@@ -15,7 +15,9 @@
  * commit and checked against pinned SHA-256 digests before it runs. It is
  * three stdlib-only Python modules; nothing else from Hermes is needed. To
  * move the pin: change HERMES_COMMIT, run with `--print-digests`, paste the
- * new digests, and re-check the verdict.
+ * new digests, and re-check the verdict. A rate-limited (HTTP 429) or server-error
+ * response is retried a bounded number of times with backoff; the last status
+ * is reported by name once the attempts run out.
  *
  * Scanned trees (the tracked files only, exported to a temp dir, as a clone
  * would have them):
@@ -70,7 +72,41 @@ function sha256(data: Uint8Array): string {
   return createHash("sha256").update(data).digest("hex");
 }
 
-async function fetchGuardFile(path: string): Promise<Uint8Array> {
+/** Attempts per scanner file before a rate limit or server error is final. */
+export const GUARD_FETCH_ATTEMPTS = 5;
+/** Wait before the first retry; each later retry doubles it. */
+export const GUARD_FETCH_BASE_DELAY_MS = 2000;
+const HTTP_TOO_MANY_REQUESTS = 429;
+const HTTP_SERVER_ERROR_MIN = 500;
+const MS_PER_SECOND = 1000;
+
+/** The network and clock a fetch uses; tests pass stubs. */
+export interface GuardFetchDeps {
+  fetch: (url: string, init: RequestInit) => Promise<Response>;
+  sleep: (ms: number) => Promise<void>;
+}
+
+const defaultDeps: GuardFetchDeps = {
+  fetch: (url, init) => fetch(url, init),
+  sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
+};
+
+/** A shared runner can hit the API rate limit or a transient server error. */
+function isRetryable(status: number): boolean {
+  return status === HTTP_TOO_MANY_REQUESTS || status >= HTTP_SERVER_ERROR_MIN;
+}
+
+/** The wait the server asked for (`Retry-After` in seconds), else exponential backoff. */
+function retryDelayMs(res: Response, retry: number): number {
+  const seconds = Number(res.headers.get("Retry-After"));
+  if (Number.isFinite(seconds) && seconds > 0) return seconds * MS_PER_SECOND;
+  return GUARD_FETCH_BASE_DELAY_MS * 2 ** retry;
+}
+
+export async function fetchGuardFile(
+  path: string,
+  deps: GuardFetchDeps = defaultDeps,
+): Promise<Uint8Array> {
   const url = `https://api.github.com/repos/${HERMES_REPO}/contents/${path}?ref=${HERMES_COMMIT}`;
   const token = process.env["GITHUB_TOKEN"] ?? process.env["GH_TOKEN"];
   const headers: Record<string, string> = {
@@ -78,9 +114,19 @@ async function fetchGuardFile(path: string): Promise<Uint8Array> {
     "User-Agent": "open-second-brain-hermes-plugin-scan",
   };
   if (token) headers["Authorization"] = `Bearer ${token}`;
-  const res = await fetch(url, { headers });
-  if (!res.ok) throw new Error(`fetch ${path}@${HERMES_COMMIT}: HTTP ${res.status}`);
-  return new Uint8Array(await res.arrayBuffer());
+  // Retries are sequential by design: each waits on the previous response.
+  for (let attempt = 1; ; attempt++) {
+    // oxlint-disable-next-line no-await-in-loop
+    const res = await deps.fetch(url, { headers });
+    // oxlint-disable-next-line no-await-in-loop
+    if (res.ok) return new Uint8Array(await res.arrayBuffer());
+    if (!isRetryable(res.status) || attempt === GUARD_FETCH_ATTEMPTS) {
+      const tries = `${attempt} attempt${attempt === 1 ? "" : "s"}`;
+      throw new Error(`fetch ${path}@${HERMES_COMMIT}: HTTP ${res.status} after ${tries}`);
+    }
+    // oxlint-disable-next-line no-await-in-loop
+    await deps.sleep(retryDelayMs(res, attempt - 1));
+  }
 }
 
 /** Write the scanner modules at the pinned commit, digest-checked, under `dir`. */
@@ -109,7 +155,10 @@ async function writeGuard(dir: string): Promise<void> {
 
 /** Copy the tracked files (working-tree content) under `out`: what a clone holds. */
 function exportTrackedTree(out: string): string {
-  const ls = spawnSync("git", ["ls-files", "-z", "--cached"], { cwd: ROOT, encoding: "utf8" });
+  const ls = spawnSync("git", ["ls-files", "-z", "--cached"], {
+    cwd: ROOT,
+    encoding: "utf8",
+  });
   if (ls.status !== 0) throw new Error(`git ls-files failed: ${ls.stderr}`);
   const tree = join(out, "open-second-brain");
   for (const rel of ls.stdout.split("\0")) {
@@ -209,4 +258,6 @@ async function main(): Promise<number> {
   }
 }
 
-process.exit(await main());
+if (import.meta.main) {
+  process.exit(await main());
+}
