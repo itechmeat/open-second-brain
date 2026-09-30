@@ -21,6 +21,7 @@ import {
   RepairConfirmationError,
   runRepairLane,
   type RepairCandidate,
+  type RepairDecision,
 } from "../../../../src/core/brain/link-graph/repair-lane.ts";
 
 let vault: string;
@@ -189,5 +190,48 @@ describe("runRepairLane dry-run vs apply", () => {
     });
     expect(second.written).toBe(0);
     expect(second.decisions[0]!.action).toBe("skip-existing");
+  });
+});
+
+describe("runRepairLane collected refusals", () => {
+  test("refusals are reported verbatim, never re-decided, never counted as writes", () => {
+    writeNote("Notes/a.md", "A", "body");
+    writeNote("Notes/b.md", "B", "body");
+    const refusal: RepairDecision = {
+      ...candidate({ source: "Notes/src.md", target: "Notes/x.md", reason: "ambiguous: Alpha" }),
+      action: "skip-ambiguous",
+    };
+    const report = runRepairLane(vault, [candidate({})], { collectedRefusals: [refusal] });
+    expect(report.decisions[0]).toEqual(refusal);
+    expect(report.written).toBe(1);
+    expect(report.decisions.filter((d) => d.action === "skip-ambiguous")).toHaveLength(1);
+  });
+
+  test("refusals do not consume the write cap", () => {
+    writeNote("Notes/a.md", "A", "body");
+    writeNote("Notes/b.md", "B", "body");
+    const refusal: RepairDecision = {
+      ...candidate({ source: "Notes/src.md", target: "Notes/x.md", reason: "ambiguous: Alpha" }),
+      action: "skip-ambiguous",
+    };
+    const report = runRepairLane(vault, [candidate({})], {
+      writeCap: 1,
+      collectedRefusals: [refusal],
+    });
+    expect(report.written).toBe(1);
+  });
+
+  test("refusals are ordered by the candidate order, deterministically", () => {
+    const second: RepairDecision = {
+      ...candidate({ source: "Notes/z.md", target: "Notes/x.md", reason: "ambiguous: Alpha" }),
+      action: "skip-ambiguous",
+    };
+    const first: RepairDecision = {
+      ...candidate({ source: "Notes/a.md", target: "Notes/x.md", reason: "ambiguous: Alpha" }),
+      action: "skip-ambiguous",
+    };
+    const report = runRepairLane(vault, [], { collectedRefusals: [second, first] });
+    expect(report.decisions.map((d) => d.source)).toEqual(["Notes/a.md", "Notes/z.md"]);
+    expect(report.written).toBe(0);
   });
 });

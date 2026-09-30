@@ -36,7 +36,7 @@
 import {
   REPAIR_CONFIRM_PHRASE,
   RepairConfirmationError,
-  collectRepairCandidates,
+  collectRepairCandidatesWithRefusals,
   runRepairLane,
   type RepairDecision,
   type RepairReport,
@@ -78,9 +78,13 @@ function decisionJson(decision: RepairDecision): Record<string, unknown> {
   };
 }
 
-/** Every edge the lane proposes, as an (anchor, target) holdout pair. */
+/** Every edge the lane proposes, as an (anchor, target) holdout pair.
+ * A `skip-ambiguous` refusal proposes no edge - it records why nothing was
+ * proposed - so it is not a holdout. */
 function holdoutsFor(decisions: readonly RepairDecision[]): GraphHoldout[] {
-  return decisions.map((decision) => ({ anchor: decision.source, target: decision.target }));
+  return decisions
+    .filter((decision) => decision.action !== "skip-ambiguous")
+    .map((decision) => ({ anchor: decision.source, target: decision.target }));
 }
 
 function holdoutJson(gate: HoldoutGateResult): Record<string, unknown> {
@@ -189,11 +193,15 @@ export async function cmdBrainRepairLane(argv: string[]): Promise<number> {
     return refuse(message);
   }
 
-  const candidates = collectRepairCandidates(vault);
+  const collected = collectRepairCandidatesWithRefusals(vault);
 
   // Plan first, always as a dry run: the gate must see the proposed edges
   // before any of them reaches disk.
-  const plan = runRepairLane(vault, candidates, { apply: false, ...laneOptions });
+  const plan = runRepairLane(vault, collected.candidates, {
+    apply: false,
+    collectedRefusals: collected.refusals,
+    ...laneOptions,
+  });
   if (!apply) {
     if (asJson) okJson(reportJson(plan, null));
     else renderReport(plan, null, false);
@@ -208,9 +216,10 @@ export async function cmdBrainRepairLane(argv: string[]): Promise<number> {
     });
   }
 
-  const report = runRepairLane(vault, candidates, {
+  const report = runRepairLane(vault, collected.candidates, {
     apply: true,
     confirm: REPAIR_CONFIRM_PHRASE,
+    collectedRefusals: collected.refusals,
     ...laneOptions,
   });
   if (asJson) okJson(reportJson(report, gate));

@@ -36,6 +36,8 @@ import {
 import { listContinuityRecords } from "../continuity/store.ts";
 import { ENTITY_STATUS_SCOPE, vaultPageInStatusScope } from "../entities/page-scope.ts";
 import { canonicalCoOccurrenceKey, computeCoOccurrenceSuggestions } from "./co-occurrence.ts";
+import { buildAliasIndex } from "./alias-index.ts";
+import { resolveUniqueMatch } from "../../graph/unique-match.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { scaffoldStub } from "../notes/scaffold-stub.ts";
 import { MAINTENANCE_LANE_REACH } from "../../graph/transport-reach.ts";
@@ -91,7 +93,8 @@ export type RepairAction =
   | "skip-missing-source"
   | "skip-missing-target"
   | "skip-unsafe-path"
-  | "skip-null-endpoint-key";
+  | "skip-null-endpoint-key"
+  | "skip-ambiguous";
 
 export interface RepairDecision extends RepairCandidate {
   readonly action: RepairAction;
@@ -134,6 +137,16 @@ export interface RepairLaneOptions {
    * repair pass.
    */
   readonly scaffoldMissingTargets?: boolean;
+  /**
+   * Named refusals collected upstream - today, the explicit-reference
+   * collector's `skip-ambiguous` decisions for a mention term carried by
+   * more than one corpus page. They are reported verbatim in `decisions`
+   * (ordered by the candidate order) and nothing else: never re-decided
+   * by the loop below, never counted in `written`, never capped. A
+   * refusal proposes no edge, so it is the caller's job to keep it out
+   * of any downstream population that reasoning over proposed edges.
+   */
+  readonly collectedRefusals?: ReadonlyArray<RepairDecision>;
 }
 
 /** Raised when an apply is requested without the exact confirmation phrase. */
@@ -146,7 +159,7 @@ export class RepairConfirmationError extends Error {
   }
 }
 
-function orderCandidates(candidates: readonly RepairCandidate[]): RepairCandidate[] {
+function orderCandidates<T extends RepairCandidate>(candidates: readonly T[]): T[] {
   return [...candidates].toSorted((a, b) => {
     const rank = STRENGTH_RANK[a.strength] - STRENGTH_RANK[b.strength];
     if (rank !== 0) return rank;
@@ -302,7 +315,7 @@ export function runRepairLane(
   return {
     mode: apply ? "apply" : "dry-run",
     written,
-    decisions: Object.freeze(decisions),
+    decisions: Object.freeze([...orderCandidates(opts.collectedRefusals ?? []), ...decisions]),
     scaffolded: Object.freeze(scaffolded.toSorted()),
   };
 }
@@ -375,11 +388,10 @@ function isWordEdge(ch: string | undefined): boolean {
   return ch === undefined || !WORD_CHAR_RE.test(ch);
 }
 
-/** True when `term` occurs in `masked` at a word boundary (case-insensitive). */
-function mentionsTerm(masked: string, term: string): boolean {
-  if (term.length < MIN_EXPLICIT_REFERENCE_TITLE_LENGTH) return false;
-  const lower = masked.toLowerCase();
-  const needle = term.toLowerCase();
+/** True when `needle` occurs in `masked` at a word boundary (case-insensitive).
+ * `lower` is `masked` pre-lowercased, hoisted out of the per-term loop. */
+function mentionsTerm(lower: string, masked: string, needle: string): boolean {
+  if (needle.length < MIN_EXPLICIT_REFERENCE_TITLE_LENGTH) return false;
   let from = 0;
   for (;;) {
     const idx = lower.indexOf(needle, from);
@@ -438,17 +450,90 @@ export interface CollectRepairCandidatesOptions {
   readonly minCoDocuments?: number;
 }
 
+/** One mention term in the corpus pool: its scanned form, its display spelling, and every page carrying it. */
+interface MentionTerm {
+  /** NFC + lowercase form the word-boundary scan matches. */
+  readonly needle: string;
+  /** Spelling the reason strings name (the title, or the alias as indexed). */
+  readonly display: string;
+  /** Vault-relative paths of the corpus pages carrying the term. */
+  readonly carriers: Set<string>;
+}
+
+/** Normalized lookup form of a term, exactly as the alias index keys its side. */
+function termNeedle(value: string): string {
+  return value.normalize("NFC").toLowerCase();
+}
+
 /**
- * Collect deterministic repair candidates from vault structure. Never emits an
- * edge that already exists, and never emits inferred candidates.
+ * Pool the mention terms every corpus page carries: each page's title, plus
+ * every alias `buildAliasIndex` resolves to a page. Titles register first,
+ * so a term spelled as a title keeps the title as its display form; an alias
+ * whose canonical id matches no corpus page contributes nothing.
  */
-export function collectRepairCandidates(
+function collectMentionTerms(pages: ReadonlyArray<CollectedPage>, vault: string): MentionTerm[] {
+  const terms = new Map<string, MentionTerm>();
+  for (const page of pages) {
+    const needle = termNeedle(page.title);
+    if (needle.length === 0) continue;
+    const existing = terms.get(needle);
+    if (existing === undefined) {
+      terms.set(needle, { needle, display: page.title, carriers: new Set([page.rel]) });
+    } else {
+      existing.carriers.add(page.rel);
+    }
+  }
+  const byKey = new Map<string, CollectedPage[]>();
+  for (const page of pages) {
+    const bucket = byKey.get(page.key);
+    if (bucket === undefined) byKey.set(page.key, [page]);
+    else bucket.push(page);
+  }
+  for (const [aliasKey, canonicalId] of buildAliasIndex(vault)) {
+    const bucket = byKey.get(canonicalId.normalize("NFC").toLowerCase().trim());
+    if (bucket === undefined) continue;
+    const existing = terms.get(aliasKey);
+    if (existing === undefined) {
+      terms.set(aliasKey, {
+        needle: aliasKey,
+        display: aliasKey,
+        carriers: new Set(bucket.map((page) => page.rel)),
+      });
+    } else {
+      for (const page of bucket) existing.carriers.add(page.rel);
+    }
+  }
+  return [...terms.values()].toSorted((a, b) =>
+    a.needle < b.needle ? -1 : a.needle > b.needle ? 1 : 0,
+  );
+}
+
+/** Refusal reason for a term the corpus cannot bind to one page. */
+function ambiguousTermReason(display: string, carrierCount: number): string {
+  return (
+    `explicit textual reference to ${JSON.stringify(display)} is ambiguous: ` +
+    `${carrierCount} pages carry it`
+  );
+}
+
+/**
+ * Collect deterministic repair candidates from vault structure, together
+ * with the mention terms the corpus refuses to bind.
+ *
+ * A term (title or alias) that exactly one corpus page carries proposes the
+ * same explicit-reference candidate a title match always has. A term carried
+ * by several pages binds to none of them: every (mentioning page, carrying
+ * page) pair comes back as a `skip-ambiguous` refusal, so the operator sees
+ * why no edge was proposed instead of finding one arbitrary target linked.
+ */
+export function collectRepairCandidatesWithRefusals(
   vault: string,
   opts: CollectRepairCandidatesOptions = {},
-): RepairCandidate[] {
+): RepairCandidateCollection {
   const pages = loadPages(vault);
   const byKey = new Map<string, CollectedPage>();
   for (const page of pages) byKey.set(page.key, page);
+  const byRel = new Map(pages.map((page) => [page.rel, page]));
 
   const best = new Map<string, RepairCandidate>();
   const consider = (candidate: RepairCandidate): void => {
@@ -463,20 +548,43 @@ export function collectRepairCandidates(
     }
   };
 
-  // Explicit references: a note names another note's title but does not link it.
+  // Explicit references: a note names a corpus term but does not link its
+  // page. Terms pool titles and aliases; only an exactly-one carrier binds.
+  const refusals: RepairDecision[] = [];
+  const terms = collectMentionTerms(pages, vault);
   for (const page of pages) {
     const masked = maskSpans(page.body);
-    for (const other of pages) {
-      if (other.key === page.key) continue;
-      if (page.linkedKeys.has(other.key)) continue;
-      if (!mentionsTerm(masked, other.title)) continue;
-      consider({
-        source: page.rel,
-        target: other.rel,
-        strength: IDENTITY_STRENGTH.explicitReference,
-        confidence: EXPLICIT_REFERENCE_CONFIDENCE,
-        reason: `explicit textual reference to ${JSON.stringify(other.title)}`,
-      });
+    const lower = masked.toLowerCase();
+    for (const term of terms) {
+      if (!mentionsTerm(lower, masked, term.needle)) continue;
+      const verdict = resolveUniqueMatch([...term.carriers].toSorted());
+      if (verdict.status === "unique") {
+        const target = byRel.get(verdict.target);
+        if (target === undefined) continue;
+        if (target.key === page.key) continue;
+        if (page.linkedKeys.has(target.key)) continue;
+        consider({
+          source: page.rel,
+          target: target.rel,
+          strength: IDENTITY_STRENGTH.explicitReference,
+          confidence: EXPLICIT_REFERENCE_CONFIDENCE,
+          reason: `explicit textual reference to ${JSON.stringify(term.display)}`,
+        });
+      } else if (verdict.status === "ambiguous") {
+        for (const rel of verdict.matches) {
+          if (rel === page.rel) continue;
+          const target = byRel.get(rel);
+          if (target === undefined) continue;
+          refusals.push({
+            source: page.rel,
+            target: target.rel,
+            strength: IDENTITY_STRENGTH.explicitReference,
+            confidence: EXPLICIT_REFERENCE_CONFIDENCE,
+            action: "skip-ambiguous",
+            reason: ambiguousTermReason(term.display, verdict.matches.length),
+          });
+        }
+      }
     }
   }
 
@@ -531,5 +639,27 @@ export function collectRepairCandidates(
     });
   }
 
-  return orderCandidates([...best.values()]);
+  return {
+    candidates: orderCandidates([...best.values()]),
+    refusals: orderCandidates(refusals),
+  };
+}
+
+/** Candidates plus the named refusals the corpus recorded while collecting. */
+export interface RepairCandidateCollection {
+  readonly candidates: RepairCandidate[];
+  /** `skip-ambiguous` decisions, ordered by the candidate order. */
+  readonly refusals: ReadonlyArray<RepairDecision>;
+}
+
+/**
+ * Collect deterministic repair candidates from vault structure. Never emits an
+ * edge that already exists, and never emits inferred candidates. The named
+ * refusals are available through {@link collectRepairCandidatesWithRefusals}.
+ */
+export function collectRepairCandidates(
+  vault: string,
+  opts: CollectRepairCandidatesOptions = {},
+): RepairCandidate[] {
+  return collectRepairCandidatesWithRefusals(vault, opts).candidates;
 }
