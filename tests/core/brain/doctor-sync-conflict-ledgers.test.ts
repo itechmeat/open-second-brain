@@ -133,4 +133,43 @@ describe("sync-conflict sweep across every ledger directory", () => {
     const findings = conflictFindings();
     expect(findings.map((f) => f.path).toSorted()).toEqual(planted.toSorted());
   });
+
+  /**
+   * Three swept directories also hold files that are not ledgers: the
+   * preference notes, the proposal files at the proposals root and each
+   * repository's state.json. A conflict copy of one of those is still
+   * reported, but never with the row-merge remedy, which is wrong advice
+   * for a note or an atomically replaced JSON file.
+   */
+  const NON_LEDGER: ReadonlyArray<readonly [string, (v: string) => string, string]> = [
+    [
+      "preference note",
+      (v) => brainDirs(v).preferences,
+      "pref-alpha.sync-conflict-20260610-120000-ABCDEFG.md",
+    ],
+    [
+      "proposal file",
+      (v) => join(v, BRAIN_SKILL_PROPOSALS_REL),
+      "proposal-watermark.sync-conflict-20260610-120000-ABCDEFG.json",
+    ],
+    [
+      "git store state",
+      (v) => gitStoreDir(v, "alpha"),
+      "state.sync-conflict-20260610-120000-ABCDEFG.json",
+    ],
+  ];
+
+  test.each(NON_LEDGER)(
+    "%s: a conflict copy is reported without the ledger merge remedy",
+    (_label, dir, name) => {
+      mkdirSync(dir(vault), { recursive: true });
+      const path = join(dir(vault), name);
+      writeFileSync(path, "{}\n", "utf8");
+      const findings = conflictFindings();
+      expect(findings).toHaveLength(1);
+      expect(findings[0]!.path).toBe(path);
+      expect(findings[0]!.message).not.toContain("Merge its rows");
+      expect(findings[0]!.message).toContain("not a ledger shard");
+    },
+  );
 });

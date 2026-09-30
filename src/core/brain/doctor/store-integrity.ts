@@ -17,7 +17,7 @@ import { scanDanglingWorkruns } from "../dream-workrun.ts";
 import { readTierDriftCount } from "../frontmatter-tiers.ts";
 import { gitStoreRootDir } from "../git/store.ts";
 import { idempotencyLogDir } from "../idempotency-ledger.ts";
-import { listSyncConflictFiles } from "../ledger-shards.ts";
+import { JSONL_LEDGER_EXT, listSyncConflictFiles } from "../ledger-shards.ts";
 import { brainStateDirPath } from "../lineage/ledger.ts";
 import { metricsDir } from "../metrics.ts";
 import { BRAIN_SKILL_PROPOSALS_REL } from "../path-constants.ts";
@@ -91,27 +91,55 @@ export const danglingWorkrunCheck: DoctorCheck = {
  * any of these means the same thing - a file that exists and that no
  * reader merges.
  */
-const LEDGER_DIRS: ReadonlyArray<(vault: string, uncertain: DoctorUncertainEntry[]) => string[]> =
-  Object.freeze([
-    (vault: string) => [brainDirs(vault).log],
-    (vault: string) => BRAIN_LOG_AUDIT_DIRS.map((name) => join(brainDirs(vault).log, name)),
-    (vault: string) => [schemaMutationAuditDir(vault)],
-    (vault: string) => [watchdogFallbackAuditDir(vault)],
-    (vault: string) => [hookAuditDir(vault)],
-    (vault: string) => [continuityLogDir(vault)],
-    (vault: string) => [idempotencyLogDir(vault)],
-    prefAuditSweepDirs,
-    (vault: string) => [metricsDir(vault)],
-    (vault: string) => [brainStateDirPath(vault)],
-    // The verifier-rejection ledger sits at the proposals root. Named
-    // through the path constant rather than `verifierRejectionLedgerPath`:
-    // `skill-proposals.ts` reaches the doctor, so importing it here closes
-    // an import cycle.
-    (vault: string) => [ensureInsideVault(join(vault, BRAIN_SKILL_PROPOSALS_REL), vault)],
-    // Preference edit-history shards sit next to the preference notes.
-    (vault: string) => [brainDirs(vault).preferences],
-    gitStoreSweepDirs,
-  ]);
+interface LedgerSweep {
+  readonly resolve: (vault: string, uncertain: DoctorUncertainEntry[]) => string[];
+  /**
+   * The directory also holds files that are not ledger shards (notes,
+   * atomically replaced JSON state). There only a copy carrying the JSON
+   * Lines ledger extension is a split-off shard; any other copy is a
+   * conflict of a whole file and is reported with its own remedy.
+   */
+  readonly mixed: boolean;
+}
+
+const LEDGER_DIRS: ReadonlyArray<LedgerSweep> = Object.freeze([
+  { resolve: (vault: string) => [brainDirs(vault).log], mixed: false },
+  {
+    resolve: (vault: string) =>
+      BRAIN_LOG_AUDIT_DIRS.map((name) => join(brainDirs(vault).log, name)),
+    mixed: false,
+  },
+  { resolve: (vault: string) => [schemaMutationAuditDir(vault)], mixed: false },
+  { resolve: (vault: string) => [watchdogFallbackAuditDir(vault)], mixed: false },
+  { resolve: (vault: string) => [hookAuditDir(vault)], mixed: false },
+  { resolve: (vault: string) => [continuityLogDir(vault)], mixed: false },
+  { resolve: (vault: string) => [idempotencyLogDir(vault)], mixed: false },
+  { resolve: prefAuditSweepDirs, mixed: false },
+  { resolve: (vault: string) => [metricsDir(vault)], mixed: false },
+  { resolve: (vault: string) => [brainStateDirPath(vault)], mixed: false },
+  // The verifier-rejection ledger sits at the proposals root, next to the
+  // proposal files. Named through the path constant rather than
+  // `verifierRejectionLedgerPath`: `skill-proposals.ts` reaches the doctor,
+  // so importing it here closes an import cycle.
+  {
+    resolve: (vault: string) => [ensureInsideVault(join(vault, BRAIN_SKILL_PROPOSALS_REL), vault)],
+    mixed: true,
+  },
+  // Preference edit-history shards sit next to the preference notes.
+  { resolve: (vault: string) => [brainDirs(vault).preferences], mixed: true },
+  // Each repository's commits shards sit next to its state.json.
+  { resolve: gitStoreSweepDirs, mixed: true },
+]);
+
+/** What to do with a conflict copy of a ledger shard. */
+const LEDGER_COPY_REMEDY =
+  "Merge its rows into the shard it was split from (union + dedup by timestamp and " +
+  "content), then delete it.";
+
+/** What to do with a conflict copy of a whole file that is not a ledger shard. */
+const FILE_COPY_REMEDY =
+  "It is not a ledger shard: compare it with the file it was copied from, keep the right " +
+  "version by hand, then delete the copy.";
 
 /**
  * The preference audit keeps one DIRECTORY per preference
@@ -171,10 +199,10 @@ function subdirectories(parent: string, uncertain: DoctorUncertainEntry[], kind:
 export const syncConflictLogCheck: DoctorCheck = {
   failSoft: true,
   run({ vault }, { issues, uncertain }) {
-    for (const resolve of LEDGER_DIRS) {
+    for (const sweep of LEDGER_DIRS) {
       let ledgerDirs: string[];
       try {
-        ledgerDirs = resolve(vault, uncertain);
+        ledgerDirs = sweep.resolve(vault, uncertain);
       } catch {
         // A directory whose own resolver refuses (a vault path that
         // escapes its root) is not a directory this sweep can visit;
@@ -183,14 +211,14 @@ export const syncConflictLogCheck: DoctorCheck = {
       }
       for (const ledgerDir of ledgerDirs) {
         for (const path of listSyncConflicts(ledgerDir, uncertain)) {
+          const ledgerCopy = !sweep.mixed || path.endsWith(`.${JSONL_LEDGER_EXT}`);
           issues.push({
             severity: "warning",
             code: "sync-conflict-log",
             path,
             message:
               `Syncthing sync-conflict copy under ${vaultRelative(ledgerDir, vault)}/: ${path}. ` +
-              "Merge its rows into the shard it was split from (union + dedup by timestamp and " +
-              "content), then delete it.",
+              (ledgerCopy ? LEDGER_COPY_REMEDY : FILE_COPY_REMEDY),
           });
         }
       }
