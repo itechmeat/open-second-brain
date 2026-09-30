@@ -311,7 +311,14 @@ describe("URL credentials never swallow a port and a path", () => {
     ["https://:secret@h", "https://***REDACTED***@h"],
     ["https://u:p?q@h", "https://***REDACTED***@h"],
     ["https://user:8080@h/x", "https://***REDACTED***@h/x"],
+    ["https://alice:123?secret@host.example", "https://***REDACTED***@host.example"],
+    ["https://u:123#x@h", "https://***REDACTED***@h"],
   ];
+
+  test("a slash password that begins with digits is the documented miss, as on main", () => {
+    const url = "https://bob:8080/x@host";
+    expect(redactRawOutput(url, { redactUrlCredentials: true })).toBe(url);
+  });
 
   for (const [input, expected] of REDACTED) {
     test(`${input} still redacts its userinfo`, () => {

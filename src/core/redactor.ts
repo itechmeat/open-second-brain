@@ -284,11 +284,13 @@ const IPV4 = `${IPV4_OCTET}(?:\\.${IPV4_OCTET}){3}`;
 // Because the password class crosses `/`, a `host:port/path@x` URL would
 // read the port colon as the userinfo colon and swallow the host, the port
 // and half the path (`http://localhost:5173/@vite/client`). The lookahead
-// rejects a colon followed by 1-5 digits and then `/`, `?`, `#` or the end
-// of the text: that is a port, not a password. Known trade-off: a password
-// that begins with 1-5 digits followed by `/`, `?` or `#` is missed.
-const BASIC_AUTH_URL_RE =
-  /\b([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^\s/:@]*):(?!\d{1,5}(?:[/?#]|$))([^\s@]+)@/g;
+// rejects a colon followed by 1-5 digits and then `/`: that is a port and a
+// path, not a password. Two accepted trade-offs, both as on main: a slash
+// password that begins with 1-5 digits (`bob:8080/x@host`) is missed, and a
+// query or fragment directly after a port with an `@` in it
+// (`example.com:443?x@y`) is still read as userinfo - far rarer than a
+// password such as `123?secret`, which this keeps redacted.
+const BASIC_AUTH_URL_RE = /\b([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^\s/:@]*):(?!\d{1,5}\/)([^\s@]+)@/g;
 
 // `ipv4:port` — a reachable service endpoint. Redacted whole regardless of
 // whether the address is public or private (the port is what leaks the
