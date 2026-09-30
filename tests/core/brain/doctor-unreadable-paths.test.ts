@@ -55,7 +55,7 @@ import { resolveNextStep } from "../../../src/core/brain/next-step.ts";
 import { brainDirs } from "../../../src/core/brain/paths.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { DEGRADATION_CODE } from "../../../src/core/integrity/degradation.ts";
-import { IS_WINDOWS } from "../../helpers/platform.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 
 const SKIPPED = DEGRADATION_CODE.vaultWalkEntrySkipped;
 
@@ -103,9 +103,8 @@ function skipsFor(path: string): ReadonlyArray<DoctorUncertainEntry> {
 }
 
 describe("the environment can actually deny a read", () => {
-  // Windows chmod only toggles the read-only attribute and cannot deny a read
-  // (root is not skipped: the 0o000 probe fails loudly for it, by design).
-  test.skipIf(IS_WINDOWS)("a 0o000 directory is unreadable to this runner", () => {
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)("a 0o000 directory is unreadable to this runner", () => {
     const dir = join(tmp, "probe");
     mkdirSync(dir, { recursive: true });
     makeUnreadable(dir);
@@ -117,17 +116,19 @@ describe("the environment can actually deny a read", () => {
 });
 
 describe("the symlink-escape walk", () => {
-  // Windows chmod only toggles the read-only attribute and cannot deny a read
-  // (root is not skipped: the 0o000 probe fails loudly for it, by design).
-  test.skipIf(IS_WINDOWS)("an unreadable directory under Brain/ is named, with the reason", () => {
-    const dir = join(brainDirs(vault).inbox, "vaulted");
-    mkdirSync(dir, { recursive: true });
-    makeUnreadable(dir);
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "an unreadable directory under Brain/ is named, with the reason",
+    () => {
+      const dir = join(brainDirs(vault).inbox, "vaulted");
+      mkdirSync(dir, { recursive: true });
+      makeUnreadable(dir);
 
-    const entry = skipsFor(dir).find((u) => u.message.includes("symlink"));
-    expect(entry).toBeDefined();
-    expect(entry!.message).toContain("EACCES");
-  });
+      const entry = skipsFor(dir).find((u) => u.message.includes("symlink"));
+      expect(entry).toBeDefined();
+      expect(entry!.message).toContain("EACCES");
+    },
+  );
 
   test("it still reports the escaping symlinks it COULD see", () => {
     const dir = join(brainDirs(vault).inbox, "vaulted");
@@ -157,9 +158,8 @@ describe("the removed-tool scan", () => {
     expect(entry!.message).toContain("ENOTDIR");
   });
 
-  // Windows chmod only toggles the read-only attribute and cannot deny a read
-  // (root is not skipped: the 0o000 probe fails loudly for it, by design).
-  test.skipIf(IS_WINDOWS)("an unreadable skills subdirectory is named", () => {
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)("an unreadable skills subdirectory is named", () => {
     const dir = join(vault, ".claude", "skills", "private");
     mkdirSync(dir, { recursive: true });
     makeUnreadable(dir);
@@ -168,23 +168,24 @@ describe("the removed-tool scan", () => {
     expect(entry).toBeDefined();
   });
 
-  // Windows chmod only toggles the read-only attribute and cannot deny a read
-  // (root is not skipped: the 0o000 probe fails loudly for it, by design).
-  test.skipIf(IS_WINDOWS)("a Markdown file it cannot open is named rather than skipped", () => {
-    const file = join(brainDirs(vault).brain, "notes.md");
-    writeFileSync(file, "brain_digest\n", "utf8");
-    makeUnreadable(file);
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "a Markdown file it cannot open is named rather than skipped",
+    () => {
+      const file = join(brainDirs(vault).brain, "notes.md");
+      writeFileSync(file, "brain_digest\n", "utf8");
+      makeUnreadable(file);
 
-    const entry = uncertain().find((u) => u.path === file && u.message.includes("removed"));
-    expect(entry).toBeDefined();
-    expect(entry!.message).toContain("EACCES");
-  });
+      const entry = uncertain().find((u) => u.path === file && u.message.includes("removed"));
+      expect(entry).toBeDefined();
+      expect(entry!.message).toContain("EACCES");
+    },
+  );
 });
 
 describe("the orphan-evidence basename sweep", () => {
-  // Windows chmod only toggles the read-only attribute and cannot deny a read
-  // (root is not skipped: the 0o000 probe fails loudly for it, by design).
-  test.skipIf(IS_WINDOWS)(
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
     "an unreadable directory makes the basename universe incomplete, and says so",
     () => {
       const dir = join(vault, "notes");
@@ -236,21 +237,22 @@ describe("the code an [UNSURE] line carries is not itself a dead end", () => {
     expect(step!.nextCommand.startsWith("o2b ")).toBe(true);
   });
 
-  // Windows chmod only toggles the read-only attribute and cannot deny a read
-  // (root is not skipped: the 0o000 probe fails loudly for it, by design).
-  test.skipIf(IS_WINDOWS)("the doctor emits exactly that code on an unreadable subtree", () => {
-    const dir = join(brainDirs(vault).inbox, "vaulted");
-    mkdirSync(dir, { recursive: true });
-    makeUnreadable(dir);
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "the doctor emits exactly that code on an unreadable subtree",
+    () => {
+      const dir = join(brainDirs(vault).inbox, "vaulted");
+      mkdirSync(dir, { recursive: true });
+      makeUnreadable(dir);
 
-    expect(uncertain().map((u) => u.code)).toContain(SKIPPED);
-  });
+      expect(uncertain().map((u) => u.code)).toContain(SKIPPED);
+    },
+  );
 });
 
 describe("one unread path is one entry", () => {
-  // Windows chmod only toggles the read-only attribute and cannot deny a read
-  // (root is not skipped: the 0o000 probe fails loudly for it, by design).
-  test.skipIf(IS_WINDOWS)("four sweeps over the same directory report it once", () => {
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)("four sweeps over the same directory report it once", () => {
     const dir = join(brainDirs(vault).inbox, "vaulted");
     mkdirSync(dir, { recursive: true });
     makeUnreadable(dir);
@@ -260,38 +262,41 @@ describe("one unread path is one entry", () => {
     expect(skipsFor(dir).length).toBe(1);
   });
 
-  // Windows chmod only toggles the read-only attribute and cannot deny a read
-  // (root is not skipped: the 0o000 probe fails loudly for it, by design).
-  test.skipIf(IS_WINDOWS)("the surviving entry keeps the most informative consequence", () => {
-    const dir = join(brainDirs(vault).inbox, "vaulted");
-    mkdirSync(dir, { recursive: true });
-    makeUnreadable(dir);
-
-    // Of the four clauses written for this path, the basename sweep's is
-    // the one that states most about what went unanswered; first-wins
-    // would have kept whichever check the registry happens to run first.
-    expect(skipsFor(dir)[0]!.message).toContain("basename universe");
-    expect(skipsFor(dir)[0]!.message).toContain("EACCES");
-  });
-
-  // Windows chmod only toggles the read-only attribute and cannot deny a read
-  // (root is not skipped: the 0o000 probe fails loudly for it, by design).
-  test.skipIf(IS_WINDOWS)("the stream is capped, so a synced tree cannot flood the payload", () => {
-    const parent = brainDirs(vault).inbox;
-    for (let i = 0; i < UNCERTAIN_MAX_PER_CODE + 10; i += 1) {
-      const dir = join(parent, `locked-${i}`);
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "the surviving entry keeps the most informative consequence",
+    () => {
+      const dir = join(brainDirs(vault).inbox, "vaulted");
       mkdirSync(dir, { recursive: true });
       makeUnreadable(dir);
-    }
 
-    expect(uncertain().filter((u) => u.code === SKIPPED).length).toBe(UNCERTAIN_MAX_PER_CODE);
-  });
+      // Of the four clauses written for this path, the basename sweep's is
+      // the one that states most about what went unanswered; first-wins
+      // would have kept whichever check the registry happens to run first.
+      expect(skipsFor(dir)[0]!.message).toContain("basename universe");
+      expect(skipsFor(dir)[0]!.message).toContain("EACCES");
+    },
+  );
+
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "the stream is capped, so a synced tree cannot flood the payload",
+    () => {
+      const parent = brainDirs(vault).inbox;
+      for (let i = 0; i < UNCERTAIN_MAX_PER_CODE + 10; i += 1) {
+        const dir = join(parent, `locked-${i}`);
+        mkdirSync(dir, { recursive: true });
+        makeUnreadable(dir);
+      }
+
+      expect(uncertain().filter((u) => u.code === SKIPPED).length).toBe(UNCERTAIN_MAX_PER_CODE);
+    },
+  );
 });
 
 describe("a failure on a parent path component", () => {
-  // Windows chmod only toggles the read-only attribute and cannot deny a read
-  // (root is not skipped: the 0o000 probe fails loudly for it, by design).
-  test.skipIf(IS_WINDOWS)(
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
     "an unreadable .claude/ does not read as an absent skills directory",
     () => {
       const claude = join(vault, ".claude");
@@ -321,9 +326,8 @@ describe("a failure on a parent path component", () => {
     expect(entry!.message).toMatch(process.platform === "win32" ? /ENOTDIR|ELOOP/ : /ELOOP/);
   });
 
-  // Windows chmod only toggles the read-only attribute and cannot deny a read
-  // (root is not skipped: the 0o000 probe fails loudly for it, by design).
-  test.skipIf(IS_WINDOWS)(
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
     "an unreadable vault root is not reported as an un-initialized one",
     () => {
       makeUnreadable(vault);
@@ -407,9 +411,8 @@ describe("the doctor never dies on an odd path", () => {
     expect(runDoctor(vault).trust_verdict).toBeDefined();
   });
 
-  // Windows chmod only toggles the read-only attribute and cannot deny a read
-  // (root is not skipped: the 0o000 probe fails loudly for it, by design).
-  test.skipIf(IS_WINDOWS)(
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
     "an unreadable Brain/ still produces findings rather than a throw",
     () => {
       makeUnreadable(brainDirs(vault).brain);
@@ -423,9 +426,8 @@ describe("the doctor never dies on an odd path", () => {
     },
   );
 
-  // Windows chmod only toggles the read-only attribute and cannot deny a read
-  // (root is not skipped: the 0o000 probe fails loudly for it, by design).
-  test.skipIf(IS_WINDOWS)(
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
     "an unreadable Brain/preferences still produces findings rather than a throw",
     () => {
       const prefs = brainDirs(vault).preferences;

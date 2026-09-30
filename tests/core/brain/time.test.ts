@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { fileAgeMs, msToWholeDays, MS_PER_DAY } from "../../../src/core/brain/time.ts";
-import { IS_WINDOWS } from "../../helpers/platform.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 
 /** Pinned clock; every expectation below is relative to this instant. */
 const NOW_MS = Date.parse("2026-05-29T12:00:00Z");
@@ -85,36 +85,29 @@ describe("fileAgeMs", () => {
     }
   });
 
-  // Windows has no traversal bit for chmod to remove, so the unstattable
-  // child cannot be built there.
-  test.skipIf(IS_WINDOWS)("returns null for a file that exists but cannot be stat'ed", () => {
-    const dir = makeTempDir();
-    // A file is unstattable when its PARENT denies traversal, which is the
-    // portable POSIX construction: removing every mode bit from the
-    // directory makes `statSync` on a child fail EACCES while the child
-    // itself still exists and is a different condition from absence.
-    const denied = mkdtempSync(join(dir, "denied-"));
-    const victim = join(denied, "victim.md");
-    try {
-      writeFileSync(victim, "x");
-      chmodSync(denied, 0o000);
-      let reachable = true;
+  // Windows has no traversal bit for chmod to remove, and root stats
+  // through any mode, so the unstattable child cannot be built on either
+  // (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "returns null for a file that exists but cannot be stat'ed",
+    () => {
+      const dir = makeTempDir();
+      // A file is unstattable when its PARENT denies traversal, which is the
+      // portable POSIX construction: removing every mode bit from the
+      // directory makes `statSync` on a child fail EACCES while the child
+      // itself still exists and is a different condition from absence.
+      const denied = mkdtempSync(join(dir, "denied-"));
+      const victim = join(denied, "victim.md");
       try {
-        statSync(victim);
-      } catch {
-        reachable = false;
-      }
-      // Root ignores the mode bits, so the construction only bites for an
-      // unprivileged uid. Assert the real thing when it holds and say
-      // plainly why it does not when it cannot, rather than faking it.
-      if (reachable) {
-        expect(process.getuid?.()).toBe(0);
-      } else {
+        writeFileSync(victim, "x");
+        chmodSync(denied, 0o000);
+        // The fixture has to bite before the product is asked about it.
+        expect(() => statSync(victim)).toThrow();
         expect(fileAgeMs(victim, NOW_MS)).toBeNull();
+      } finally {
+        chmodSync(denied, 0o700);
+        rmSync(dir, { recursive: true, force: true });
       }
-    } finally {
-      chmodSync(denied, 0o700);
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 });

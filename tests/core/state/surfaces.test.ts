@@ -96,6 +96,7 @@ import {
   STATE_TIERS,
   type StateSurfaceId,
 } from "../../../src/core/state/surfaces.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 import { tempDirs } from "../../helpers/temp-dir.ts";
 
 const mkTemp = tempDirs();
@@ -706,7 +707,7 @@ describe("sharded ledger surfaces (t_774dea61)", () => {
     expect(reportFor(vault, STATE_SURFACE_ID.lineageLedger).reachability.path).toBe(lineage);
   });
 
-  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+  test.skipIf(CHMOD_CANNOT_DENY)(
     "a ledger directory that cannot be listed is unchecked by its code, never absent",
     () => {
       const vault = tempVault();

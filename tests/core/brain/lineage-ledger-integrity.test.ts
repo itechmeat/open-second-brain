@@ -45,6 +45,7 @@ import {
 } from "../../../src/core/brain/lineage/ledger.ts";
 import { verifyLineageLedger } from "../../../src/core/brain/lineage/verify.ts";
 import { acquireLockSync } from "../../../src/core/brain/sync-lockfile.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 
 let tmp: string;
 
@@ -207,22 +208,24 @@ describe("verifyLineageLedger — reports, never refuses", () => {
     expect(verifyLineageLedger(join(tmp, "elsewhere")).exists).toBe(false);
   });
 
-  test("an unreadable ledger is reported rather than counted as clean", () => {
-    const path = sessionLineageLedgerPath(tmp);
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, `${JSON.stringify({ sid: "s", at: "x", event: "Stop" })}\n`, "utf8");
-    chmodSync(path, 0o000);
-    try {
-      const report = verifyLineageLedger(tmp);
-      // Running as root defeats the mode bits; skip rather than assert
-      // a permission the environment does not enforce.
-      if (report.readable) return;
-      expect(report.ok).toBe(false);
-      expect(report.notices.some((n) => n.detail.includes("could not be read"))).toBe(true);
-    } finally {
-      chmodSync(path, 0o644);
-    }
-  });
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "an unreadable ledger is reported rather than counted as clean",
+    () => {
+      const path = sessionLineageLedgerPath(tmp);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, `${JSON.stringify({ sid: "s", at: "x", event: "Stop" })}\n`, "utf8");
+      chmodSync(path, 0o000);
+      try {
+        const report = verifyLineageLedger(tmp);
+        expect(report.readable).toBe(false);
+        expect(report.ok).toBe(false);
+        expect(report.notices.some((n) => n.detail.includes("could not be read"))).toBe(true);
+      } finally {
+        chmodSync(path, 0o644);
+      }
+    },
+  );
 
   test("a line stripped of its chain fields is reported once chained lines exist", () => {
     record("s-1", T0);

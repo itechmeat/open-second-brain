@@ -17,7 +17,7 @@ import { join } from "node:path";
 
 import { redactErrorForCaller } from "../../src/mcp/error-redaction.ts";
 import { JSONRPC_VERSION, MCPServer } from "../../src/mcp/index.ts";
-import { IS_WINDOWS } from "../helpers/platform.ts";
+import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 
 describe("redactErrorForCaller", () => {
   const vault = join(homedir(), "vaults", "main");
@@ -79,7 +79,7 @@ describe("the server's error channels", () => {
     expect(response.error!.message).not.toContain(tmp);
   });
 
-  test.skipIf(IS_WINDOWS)(
+  test.skipIf(CHMOD_CANNOT_DENY)(
     "a tool error at remote reach redacts a path outside the vault; at local it does not",
     async () => {
       // An unreadable o2b config makes the write tool throw a plain Error

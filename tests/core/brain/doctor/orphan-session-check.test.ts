@@ -30,7 +30,7 @@ import {
   parseSessionRef,
 } from "../../../../src/core/brain/doctor/orphan-session-check.ts";
 import type { DoctorUncertainEntry } from "../../../../src/core/brain/doctor/report.ts";
-import { IS_WINDOWS } from "../../../helpers/platform.ts";
+import { CHMOD_CANNOT_DENY } from "../../../helpers/platform.ts";
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 import { brainDirs } from "../../../../src/core/brain/paths.ts";
 import { readAllLogRecords } from "../../../../src/core/brain/doctor/records.ts";
@@ -175,7 +175,7 @@ describe("what the walk could not read is uncertainty", () => {
   // Windows chmod only toggles the read-only attribute and cannot deny a
   // read; the rest of this file passes there vacuously, so only this
   // subtree is skipped rather than guarded.
-  test.skipIf(IS_WINDOWS)(
+  test.skipIf(CHMOD_CANNOT_DENY)(
     "an unreadable signals directory reaches the uncertain stream, never silence",
     () => {
       const dirs = brainDirs(vault);
@@ -191,7 +191,7 @@ describe("what the walk could not read is uncertainty", () => {
     },
   );
 
-  test.skipIf(IS_WINDOWS)(
+  test.skipIf(CHMOD_CANNOT_DENY)(
     "a continuity ledger that cannot be read is uncertainty, not an orphan flood",
     () => {
       const dirs = brainDirs(vault);
@@ -215,7 +215,7 @@ describe("what the walk could not read is uncertainty", () => {
 });
 
 describe("an unreadable log day is uncertainty, not an orphan", () => {
-  test.skipIf(IS_WINDOWS)(
+  test.skipIf(CHMOD_CANNOT_DENY)(
     "a session whose lifecycle lives in an unreadable day is never flagged",
     () => {
       const dirs = brainDirs(vault);

@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { buildTimelineIndex } from "../../../../src/core/brain/temporal/build-index.ts";
 import { findStaleEntries } from "../../../../src/core/brain/temporal/stale-watch.ts";
 import { BRAIN_TEMPORAL_DEFAULTS } from "../../../../src/core/brain/policy.ts";
-import { IS_WINDOWS } from "../../../helpers/platform.ts";
+import { CHMOD_CANNOT_DENY } from "../../../helpers/platform.ts";
 import { tempDirs } from "../../../helpers/temp-dir.ts";
 
 const mkTemp = tempDirs();
@@ -111,9 +111,10 @@ describe("findStaleEntries", () => {
     expect(out.staleLogFiles[0]!.path).toContain("2025-08-01.jsonl");
   });
 
-  // Windows has no directory execute bit for chmod to drop, so the
-  // readable-but-unstattable entry cannot be built there.
-  test.skipIf(IS_WINDOWS)(
+  // Windows has no directory execute bit for chmod to drop, and root
+  // stats through any mode, so the readable-but-unstattable entry cannot
+  // be built on either (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
     "an unstattable log file fails the scan by name rather than vanishing",
     () => {
       // Read without execute on the log directory: `readdir` still
@@ -128,13 +129,9 @@ describe("findStaleEntries", () => {
       const idx = buildTimelineIndex(VAULT, {});
       chmodSync(logDir, 0o400);
       try {
-        // Root ignores the mode bits; only assert the refusal where the
-        // construction actually bites.
-        if (process.getuid?.() !== 0) {
-          expect(() => findStaleEntries(idx, VAULT, BRAIN_TEMPORAL_DEFAULTS, { now: NOW })).toThrow(
-            /findStaleEntries: cannot read the mtime of log file .*d\.jsonl/,
-          );
-        }
+        expect(() => findStaleEntries(idx, VAULT, BRAIN_TEMPORAL_DEFAULTS, { now: NOW })).toThrow(
+          /findStaleEntries: cannot read the mtime of log file .*d\.jsonl/,
+        );
       } finally {
         chmodSync(logDir, 0o700);
       }

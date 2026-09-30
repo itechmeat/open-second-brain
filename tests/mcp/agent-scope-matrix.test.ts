@@ -85,6 +85,7 @@ import {
   probeLabel,
   type ProbeCall,
 } from "../helpers/tool-probe-catalogue.ts";
+import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
 import type { ServerContext, ToolDefinition } from "../../src/mcp/tool-contract.ts";
 
@@ -412,19 +413,23 @@ test("second_brain_query excludes another owner's pages from the listing", async
  * page, so without the walk's diagnostic sink an owner-tagged page becomes
  * shared the moment its file stops being readable.
  */
-test("second_brain_query hides a page it cannot read from a scoped caller", async () => {
-  const target = join(vault, "notes", "owned-a.md");
-  chmodSync(target, 0o000);
-  try {
-    const scoped = JSON.parse(
-      await call("second_brain_query", { limit: 500, agent_scope: OWNER_B }),
-    );
-    expect(pagePaths(scoped)).not.toContain("notes/owned-a.md");
-    expect(pagePaths(scoped)).toContain("notes/shared.md");
-  } finally {
-    chmodSync(target, 0o644);
-  }
-});
+// chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+test.skipIf(CHMOD_CANNOT_DENY)(
+  "second_brain_query hides a page it cannot read from a scoped caller",
+  async () => {
+    const target = join(vault, "notes", "owned-a.md");
+    chmodSync(target, 0o000);
+    try {
+      const scoped = JSON.parse(
+        await call("second_brain_query", { limit: 500, agent_scope: OWNER_B }),
+      );
+      expect(pagePaths(scoped)).not.toContain("notes/owned-a.md");
+      expect(pagePaths(scoped)).toContain("notes/shared.md");
+    } finally {
+      chmodSync(target, 0o644);
+    }
+  },
+);
 
 test("brain_search_by_source excludes another owner's derived pages", async () => {
   const sourceFile = "sources/paper.md";

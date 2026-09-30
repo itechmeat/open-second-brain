@@ -10,6 +10,7 @@ import {
   renderRuntimeNotices,
 } from "../../../src/core/brain/runtime-notices.ts";
 import { writeVaultIdentity } from "../../../src/core/brain/vault-identity.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 
 let vault: string;
 let configPath: string;
@@ -70,25 +71,13 @@ test("a missing search index yields an index notice", () => {
   expect(notices.map((n) => n.code)).toContain("search_index_missing");
 });
 
-test("a read-only vault yields a read-only notice", () => {
+// chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+test.skipIf(CHMOD_CANNOT_DENY)("a read-only vault yields a read-only notice", () => {
   writeConfig("");
   seedIndex();
   chmodSync(vault, 0o500);
   const notices = collectRuntimeNotices(vault, { configPath, env: {} });
-  // Skip the assertion if the platform/user still permits the write probe
-  // (e.g. running as root ignores mode bits); the notice is best-effort.
-  const probe = join(vault, ".probe-write-check");
-  let writable = false;
-  try {
-    writeFileSync(probe, "x");
-    rmSync(probe);
-    writable = true;
-  } catch {
-    /* not writable, as intended */
-  }
-  if (!writable) {
-    expect(notices.map((n) => n.code)).toContain("vault_read_only");
-  }
+  expect(notices.map((n) => n.code)).toContain("vault_read_only");
 });
 
 test("the opt-out env suppresses all notices", () => {

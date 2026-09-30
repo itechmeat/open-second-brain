@@ -23,6 +23,7 @@ import { indexVault, resolveSearchConfig, search } from "../../../src/core/searc
 import { SearchError, type ResolvedSearchConfig } from "../../../src/core/search/types.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 
 const OWNER_A = "agent-a";
 const OWNER_B = "agent-b";
@@ -168,22 +169,26 @@ test("a deleted owner-tagged file is hidden from another owner, not shared", asy
   expect(refused!.message).toBe(`chunk not found: ${foreign}`);
 });
 
-test("an unreadable owner-tagged file is hidden from another owner", async () => {
-  const target = join(vault, "notes", "owned-a.md");
-  const foreign = await chunkIdFor("notes/owned-a.md");
-  chmodSync(target, 0o000);
-  try {
-    const scoped = await search(config, { query: QUERY, limit: 20, agentScope: OWNER_B });
-    expect(scoped.results.map((r) => r.path)).not.toContain("notes/owned-a.md");
-    const refused = await expandHit(config, { chunkId: foreign, agentScope: OWNER_B }).then(
-      () => null,
-      (e: unknown) => e as SearchError,
-    );
-    expect(refused).toBeInstanceOf(SearchError);
-  } finally {
-    chmodSync(target, 0o644);
-  }
-});
+// chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+test.skipIf(CHMOD_CANNOT_DENY)(
+  "an unreadable owner-tagged file is hidden from another owner",
+  async () => {
+    const target = join(vault, "notes", "owned-a.md");
+    const foreign = await chunkIdFor("notes/owned-a.md");
+    chmodSync(target, 0o000);
+    try {
+      const scoped = await search(config, { query: QUERY, limit: 20, agentScope: OWNER_B });
+      expect(scoped.results.map((r) => r.path)).not.toContain("notes/owned-a.md");
+      const refused = await expandHit(config, { chunkId: foreign, agentScope: OWNER_B }).then(
+        () => null,
+        (e: unknown) => e as SearchError,
+      );
+      expect(refused).toBeInstanceOf(SearchError);
+    } finally {
+      chmodSync(target, 0o644);
+    }
+  },
+);
 
 test("an unscoped call still serves a deleted file's indexed chunk", async () => {
   const chunkId = await chunkIdFor("notes/owned-a.md");
