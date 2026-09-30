@@ -211,7 +211,7 @@ flags for a narrower per-process full server.
 | `brain_audit`               | Read-only per-preference mutation trail (create / promote / update / retire / merge) with agent, reason, revision + content-hash before/after. | `pref_id`                                      |
 | `brain_brief`               | Read-only Brain summary for any window: `view: morning \| daily \| weekly \| monthly \| operator \| digest`.                                   | `view`                                         |
 | `brain_analytics`           | Read-only Brain analytics for any lens: `view: timeline \| attention_flows \| belief_evolution \| concept_synthesis \| dedup`. `view=dedup` summarises the persisted exact-hash ingest dedup records into a trend plus a per-source re-ingest ranking; every count is an exact sha-256 drop, never a semantic figure (the semantic detectors nominate merge candidates and never drop). | `view`                                         |
-| `brain_search`              | Read-only vault search with optional structured query lanes, explicit focus hints, time ranges, evidence-pack diagnostics, and a selectable recall `profile` (`fast \| balanced \| thorough`). | `query`                                        |
+| `brain_search`              | Read-only vault search with optional structured query lanes, explicit focus hints, time ranges, evidence-pack diagnostics, a selectable recall `profile` (`fast \| balanced \| thorough`), and an FTS `match_mode` (`all` \| `any`). | `query`                                        |
 | `brain_recall_feedback`     | Record explicit up/down recall feedback for one search result; feeds the deterministic learned-weight fold.                                     | `query`, `result_path`, `verdict`              |
 | `brain_recall_gate`         | Read-only classifier for whether an automatic recall attempt should run; returns `retrieve` plus a stable reason. When the caller passes `scores` AND `match_quality` (the `idf_weighted_coverage` a search outcome reports - the two stand or fall together, and an incomplete pair is refused), also attaches an adequacy verdict (`sufficient` \| `weak` \| `insufficient`), a recommended action (`proceed` \| `re_recall` \| `abstain`), and an optional `escalate` flag. The LEVEL is decided by `match_quality` alone; the scores decide only the usable-result count. Thresholds via `recall_adequacy_sufficient` / `recall_adequacy_weak` / `recall_adequacy_min_results`.                              | `prompt`                                       |
 | `brain_context_pack`        | Budgeted context slice; pass `lanes: true` to return directives, constraints, and consider lanes. Filtered items include `safety.reasons`. Each item carries a structural `epistemic` status (`observed` \| `derived` \| `hypothesis` \| `plan` \| `unknown`) plus `evidence_refs` derived from existing graph metadata; fields are absent when the status is `unknown`. Takes the same adequacy pair as `brain_recall_gate` under its own spelling, `recall_scores` AND `match_quality`: both or neither, an incomplete pair is refused, and the schema states it as `dependentRequired` keyed on this tool's own scores name. | `max_tokens`                                   |
@@ -1576,3 +1576,57 @@ log line is machine-composed rather than authored.
   (`embeddings-backlog`, `embeddings-census-unrecorded`,
   `embeddings-health-unmeasured`) that is fail-soft: an unrecorded census
   lands in `uncertain`, never in healthy.
+- Since v1.63.0 `brain_write_batch` accepts an optional string `request_id`
+  (at most 256 characters after trimming) that makes a retried batch apply
+  once. With it, the result gains `request_id` and `receipt`:
+  - `applied`: this call committed the batch and recorded the ID.
+  - `duplicate`: the same ID with the same operations was already recorded.
+    Every other field is the retained result of the call that committed;
+    nothing is written, re-validated or linted.
+  - `concurrent_duplicate`: this call committed, but a concurrent call
+    recorded the same ID and payload in between. Both writes landed and the
+    fields are this call's own.
+  - `payload_conflict`: this call committed, but a concurrent call recorded
+    the same ID for a different payload in between. The writes landed and
+    this call's receipt is not recorded; a `receipt_note` says so and that
+    the batch must never be resent under a new `request_id`.
+
+  The same ID with different operations, found before any write, is refused
+  with `INVALID_PARAMS` and the idempotency ledger's mismatch message; a
+  blank ID, one over the cap or a non-string value is refused with
+  `INVALID_PARAMS` before any write. The receipt is recorded in the
+  idempotency ledger after the commit, with its log paths vault-relative
+  (a duplicate rebuilds them under the vault serving the retry), under its
+  own `write_batch` key space, so a request ID never collides with a
+  `brain_feedback` or `brain_apply_evidence` `idempotency_key` of the same
+  text. The one exception is a peer still running v1.62.0, which ignores the
+  key space: there a feedback key equal to a synced batch request ID is
+  refused with the named idempotency mismatch error, never silently
+  deduplicated, until that peer is upgraded. Without `request_id` none of
+  these keys appears and the payload is unchanged.
+- Since v1.63.0 `brain_search` accepts `match_mode`: `all` (the default)
+  requires every term, `any` matches a document carrying any one term.
+  Caller-typed `AND` / `OR` / `NOT` / `NEAR` tokens are dropped in both
+  modes, and an `any` search is cached apart from an `all` one. `match_mode`
+  (`all` | `any`) and `disclosure` (`full` | `cards`) are literal enums; any
+  other value is refused with `INVALID_PARAMS` naming the accepted values.
+  The `brain_search` description now ends with a when-to-search cue: when a
+  query misses, consult `brain_recall_gate` before widening recall.
+- Since v1.63.0 `brain_ingest_source` with `pre_extract` adds `uses` edges
+  from `.tsx` / `.jsx` sources to the components their opening tags name,
+  and an `imports` seed whose relative specifier (`./` or `../` in
+  TypeScript and JavaScript, leading-dot in Python) names exactly one
+  ingested file carries `resolved_to`, that file's vault-relative path. A
+  specifier that climbs above the vault root, or matches no file or several,
+  binds nothing; `to` always keeps the raw specifier.
+- Since v1.63.0 the `brain_doctor` `sync-conflict-log` finding also sweeps
+  the audit week directories (`Brain/log/session-lifecycle/`, `hygiene/`,
+  `secret-custody/`, `watchdog/`, `schema-mutations/`), the hook-audit and
+  watchdog-audit directories under `.open-second-brain/`,
+  `Brain/skill-proposals/`, `Brain/preferences/` and each repository
+  directory under `Brain/projects/git/`; a directory it cannot list lands in
+  `uncertain`. In the directories that also hold whole files, a conflict copy
+  that is not a `.jsonl` shard (a proposal file, a preference note, a git
+  `state.json`) keeps the same code with the whole-file remedy: compare it
+  with the original, keep the right version by hand, then delete the copy.
+  The maintenance journal's `.open-second-brain/` root is not swept.
