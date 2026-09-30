@@ -29,7 +29,7 @@ import {
   VAULT_FLAGS,
 } from "../helpers.ts";
 import { CLI_TRANSPORT_REACH } from "../../transport-reach.ts";
-import type { FtsMatchMode } from "../../../core/search/fts.ts";
+import { FTS_MATCH_MODES, isFtsMatchMode } from "../../../core/search/fts.ts";
 
 /** Both malformed `--property` shapes report the same way. */
 function propertyFormatError(entry: string): CliError {
@@ -92,10 +92,10 @@ export async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<numbe
     throw new CliError("--disclosure must be 'full' or 'cards'");
   }
   const matchModeRaw = flagString(flags, "match-mode");
-  if (matchModeRaw !== undefined && matchModeRaw !== "all" && matchModeRaw !== "any") {
-    throw new CliError("--match-mode must be 'all' or 'any'");
+  if (matchModeRaw !== undefined && !isFtsMatchMode(matchModeRaw)) {
+    throw new CliError(`--match-mode must be one of ${FTS_MATCH_MODES.join(", ")}`);
   }
-  const matchMode: FtsMatchMode | undefined = matchModeRaw;
+  const matchMode = matchModeRaw;
 
   const cfg = resolveConfig(flags);
 

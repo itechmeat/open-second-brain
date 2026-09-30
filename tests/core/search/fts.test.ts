@@ -1,7 +1,14 @@
 import { test, expect, beforeEach, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
 
-import { buildExpandedFtsMatch, buildFtsMatch, runFtsQuery } from "../../../src/core/search/fts.ts";
+import {
+  buildExpandedFtsMatch,
+  buildFtsMatch,
+  FTS_MATCH_MODE,
+  FTS_MATCH_MODES,
+  isFtsMatchMode,
+  runFtsQuery,
+} from "../../../src/core/search/fts.ts";
 import { Store } from "../../../src/core/search/store.ts";
 import { createTempVault, makeConfig } from "../../helpers/search-fixtures.ts";
 
@@ -165,12 +172,14 @@ test("runFtsQuery rebuilds an empty desynced FTS table once", async () => {
 });
 
 test("match mode any OR-joins the quoted tokens (t_c5326ece)", () => {
-  expect(buildFtsMatch("alpha beta", { matchMode: "any" })).toBe('"alpha" OR "beta"');
+  expect(buildFtsMatch("alpha beta", { matchMode: FTS_MATCH_MODE.any })).toBe('"alpha" OR "beta"');
 });
 
 test("caller-typed operator tokens stay dropped in both modes", () => {
   expect(buildFtsMatch("alpha AND beta")).toBe('"alpha" "beta"');
-  expect(buildFtsMatch("alpha AND beta", { matchMode: "any" })).toBe('"alpha" OR "beta"');
+  expect(buildFtsMatch("alpha AND beta", { matchMode: FTS_MATCH_MODE.any })).toBe(
+    '"alpha" OR "beta"',
+  );
 });
 
 test("the default mode is byte-identical, including empty and single-token cases", () => {
@@ -180,7 +189,7 @@ test("the default mode is byte-identical, including empty and single-token cases
 });
 
 test("expanded composition in any mode ORs the flat group with the expansion terms", () => {
-  expect(buildExpandedFtsMatch("alpha beta", ["gamma"], { matchMode: "any" })).toBe(
+  expect(buildExpandedFtsMatch("alpha beta", ["gamma"], { matchMode: FTS_MATCH_MODE.any })).toBe(
     '("alpha" OR "beta") OR "gamma"',
   );
   expect(buildExpandedFtsMatch("alpha beta", ["gamma"])).toBe('("alpha" "beta") OR "gamma"');
@@ -192,11 +201,19 @@ test("runFtsQuery with matchMode any keeps the single-term document", async () =
   const { store, d1, d2 } = await fixture();
   try {
     const strict = runFtsQuery(store, "fox nights", { limit: 10 });
-    const widened = runFtsQuery(store, "fox nights", { limit: 10, matchMode: "any" });
+    const widened = runFtsQuery(store, "fox nights", { limit: 10, matchMode: FTS_MATCH_MODE.any });
     expect(strict.some((h) => h.documentId === d2)).toBe(false);
     expect(widened.some((h) => h.documentId === d2)).toBe(true);
     expect(widened.some((h) => h.documentId === d1)).toBe(true);
   } finally {
     store.close();
+  }
+});
+
+test("isFtsMatchMode accepts exactly the declared modes (t_c5326ece)", () => {
+  for (const mode of FTS_MATCH_MODES) expect(isFtsMatchMode(mode)).toBe(true);
+  expect(FTS_MATCH_MODES).toEqual(Object.values(FTS_MATCH_MODE));
+  for (const other of ["", "ALL", "Any", "sometimes", 1, null, undefined]) {
+    expect(isFtsMatchMode(other)).toBe(false);
   }
 });

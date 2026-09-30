@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runCli } from "../helpers/run-cli.ts";
+import { FTS_MATCH_MODE, FTS_MATCH_MODES } from "../../src/core/search/fts.ts";
 
 let tmp: string;
 let vault: string;
@@ -66,7 +67,7 @@ describe("o2b search query --match-mode", () => {
   });
 
   test("--match-mode any widens the query to single-term documents", async () => {
-    const r = await runQuery(["--match-mode", "any"]);
+    const r = await runQuery(["--match-mode", FTS_MATCH_MODE.any]);
     expect(r.returncode).toBe(0);
     const paths = pathsIn(r.stdout);
     expect(paths.some((p) => p.includes("one.md"))).toBe(true);
@@ -76,6 +77,6 @@ describe("o2b search query --match-mode", () => {
   test("a value outside all|any is refused", async () => {
     const r = await runQuery(["--match-mode", "sometimes"]);
     expect(r.returncode).not.toBe(0);
-    expect(r.stderr).toContain("--match-mode");
+    expect(r.stderr).toContain(`--match-mode must be one of ${FTS_MATCH_MODES.join(", ")}`);
   });
 });

@@ -25,8 +25,25 @@ const FTS5_OPERATOR_TOKENS = new Set(["AND", "OR", "NOT", "NEAR"]);
  * same cleaned tokens so a document matching any one term is a hit. Both
  * modes drop caller-typed FTS5 operator tokens first.
  */
-export const FTS_MATCH_MODES = ["all", "any"] as const;
-export type FtsMatchMode = (typeof FTS_MATCH_MODES)[number];
+export const FTS_MATCH_MODE = Object.freeze({ all: "all", any: "any" } as const);
+export type FtsMatchMode = (typeof FTS_MATCH_MODE)[keyof typeof FTS_MATCH_MODE];
+
+/** Every accepted mode, in declaration order: the MCP enum and every refusal message. */
+export const FTS_MATCH_MODES: ReadonlyArray<FtsMatchMode> = Object.freeze(
+  Object.values(FTS_MATCH_MODE),
+);
+
+/** The mode an absent `matchMode` resolves to: today's implicit AND. */
+export const DEFAULT_FTS_MATCH_MODE: FtsMatchMode = FTS_MATCH_MODE.all;
+
+/**
+ * The one enum check every entry point (CLI flag, MCP argument, request
+ * resolution) applies; each layer raises its own error type naming
+ * {@link FTS_MATCH_MODES} when it answers false.
+ */
+export function isFtsMatchMode(value: unknown): value is FtsMatchMode {
+  return typeof value === "string" && (FTS_MATCH_MODES as ReadonlyArray<string>).includes(value);
+}
 
 export interface FtsMatchOptions {
   readonly matchMode?: FtsMatchMode;
@@ -46,7 +63,7 @@ export function buildFtsMatch(rawQuery: string, opts: FtsMatchOptions = {}): str
   const cleaned = tokens.map((t) => t.trim()).filter((t) => t.length > 0);
   if (cleaned.length === 0) return "";
   const kept = dropStandaloneOperators(cleaned).map(quoteToken);
-  return opts.matchMode === "any" ? kept.join(" OR ") : kept.join(" ");
+  return opts.matchMode === FTS_MATCH_MODE.any ? kept.join(" OR ") : kept.join(" ");
 }
 
 /**

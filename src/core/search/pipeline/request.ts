@@ -8,7 +8,12 @@
  */
 
 import { resolveRecallProfile } from "../profiles.ts";
-import { FTS_MATCH_MODES, type FtsMatchMode } from "../fts.ts";
+import {
+  DEFAULT_FTS_MATCH_MODE,
+  FTS_MATCH_MODES,
+  isFtsMatchMode,
+  type FtsMatchMode,
+} from "../fts.ts";
 import { resolveSemanticPolicy, type SemanticPolicy } from "../semantic-phase.ts";
 import { readActiveSessionFocus } from "../session-focus.ts";
 import {
@@ -136,8 +141,8 @@ export function resolveSearchRequest(
     );
   }
 
-  const matchMode = opts.matchMode ?? "all";
-  if (!(FTS_MATCH_MODES as ReadonlyArray<string>).includes(matchMode)) {
+  const matchMode = opts.matchMode ?? DEFAULT_FTS_MATCH_MODE;
+  if (!isFtsMatchMode(matchMode)) {
     throw new SearchError(
       "INVALID_INPUT",
       `match_mode must be one of ${FTS_MATCH_MODES.join(", ")}`,

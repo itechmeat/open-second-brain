@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { indexVault } from "../../src/core/search/indexer.ts";
+import { FTS_MATCH_MODE, FTS_MATCH_MODES } from "../../src/core/search/fts.ts";
 import { resolveSearchConfig } from "../../src/core/search/index.ts";
 import { SEARCH_TOOLS } from "../../src/mcp/search-tools.ts";
 import { MCPError } from "../../src/mcp/protocol.ts";
@@ -49,19 +50,28 @@ async function run(args: Record<string, unknown>): Promise<SearchResponse> {
 describe("brain_search match_mode", () => {
   test("the schema declares the all|any enum", () => {
     const schema = tool.inputSchema.properties as Record<string, { enum?: string[] }>;
-    expect(schema["match_mode"]?.enum).toEqual(["all", "any"]);
+    expect(schema["match_mode"]?.enum).toEqual([...FTS_MATCH_MODES]);
   });
 
   test("any widens the keyword lane; the default stays exact", async () => {
     const args = { query: "chimera basilisk", limit: 10 };
     const strict = await run(args);
     expect(strict.results.some((h) => h.path.includes("one.md"))).toBe(false);
-    const widened = await run({ ...args, match_mode: "any" });
+    const widened = await run({ ...args, match_mode: FTS_MATCH_MODE.any });
     expect(widened.results.some((h) => h.path.includes("one.md"))).toBe(true);
     expect(widened.results.some((h) => h.path.includes("both.md"))).toBe(true);
   });
 
   test("a value outside the enum is INVALID_PARAMS", async () => {
     await expect(run({ query: "chimera", match_mode: "sometimes" })).rejects.toThrow(MCPError);
+  });
+
+  test("any refused value, however long or typed, names the accepted modes", async () => {
+    const refusal = `must be one of ${FTS_MATCH_MODES.join(", ")}`;
+    await Promise.all(
+      ["x".repeat(40), 7].map((bad) =>
+        expect(run({ query: "chimera", match_mode: bad })).rejects.toThrow(refusal),
+      ),
+    );
   });
 });

@@ -5,6 +5,7 @@ import { indexVault } from "../../../src/core/search/indexer.ts";
 import { search } from "../../../src/core/search/search.ts";
 import { parseStructuredRecallQueryDocument } from "../../../src/core/search/structured-query.ts";
 import { SearchError } from "../../../src/core/search/types.ts";
+import { FTS_MATCH_MODE, type FtsMatchMode } from "../../../src/core/search/fts.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 import { startFakeHttp, type FakeHttp } from "../../helpers/fake-http.ts";
 import { sqliteVecLoadable } from "../../helpers/sqlite-vec.ts";
@@ -387,7 +388,11 @@ test("matchMode any widens the keyword lane; the default all stays exact (t_c532
   const cfg = makeConfig({ vault, dbPath });
   await indexVault(cfg);
   const strict = await search(cfg, { query: "chimera basilisk", limit: 10 });
-  const widened = await search(cfg, { query: "chimera basilisk", limit: 10, matchMode: "any" });
+  const widened = await search(cfg, {
+    query: "chimera basilisk",
+    limit: 10,
+    matchMode: FTS_MATCH_MODE.any,
+  });
   expect(strict.results.some((h) => h.path.includes("one.md"))).toBe(false);
   expect(widened.results.some((h) => h.path.includes("one.md"))).toBe(true);
   expect(widened.results.some((h) => h.path.includes("both.md"))).toBe(true);
@@ -398,6 +403,6 @@ test("an unknown matchMode is refused, not treated as the default", async () => 
   const cfg = makeConfig({ vault, dbPath });
   await indexVault(cfg);
   expect(
-    search(cfg, { query: "chimera", matchMode: "sometimes" as unknown as "all" }),
+    search(cfg, { query: "chimera", matchMode: "sometimes" as unknown as FtsMatchMode }),
   ).rejects.toThrow(SearchError);
 });

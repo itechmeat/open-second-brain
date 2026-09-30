@@ -73,7 +73,7 @@ import { decisionModelSearchEnvelope } from "../core/decision-model/answerable.t
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 import { explainEnvelope } from "../core/search/explain-envelope.ts";
 import { deriveRecallHint } from "../core/search/recall-hint.ts";
-import type { FtsMatchMode } from "../core/search/fts.ts";
+import { FTS_MATCH_MODES, isFtsMatchMode } from "../core/search/fts.ts";
 import {
   ELLIPSIS,
   HEAD_WINDOW_START,
@@ -180,7 +180,7 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
     },
     match_mode: {
       type: "string",
-      enum: ["all", "any"],
+      enum: [...FTS_MATCH_MODES],
       description:
         "FTS match breadth: 'all' (default) requires every term; 'any' matches a document carrying any one term. Absent leaves the implicit AND.",
     },
@@ -911,11 +911,17 @@ async function toolBrainSearch(
   if (disclosure !== undefined && disclosure !== "full" && disclosure !== "cards") {
     throw new MCPError(INVALID_PARAMS, "argument 'disclosure' must be 'full' or 'cards'");
   }
-  const matchModeRaw = coerceStringOptional(args, "match_mode", 16);
-  if (matchModeRaw !== undefined && matchModeRaw !== "all" && matchModeRaw !== "any") {
-    throw new MCPError(INVALID_PARAMS, "argument 'match_mode' must be 'all' or 'any'");
+  // The enum check alone bounds the value, so no separate length cap: any
+  // present value outside the modes, whatever its type or length, is
+  // refused with the accepted list.
+  const matchModeRaw = args["match_mode"] ?? undefined;
+  if (matchModeRaw !== undefined && !isFtsMatchMode(matchModeRaw)) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `argument 'match_mode' must be one of ${FTS_MATCH_MODES.join(", ")}`,
+    );
   }
-  const matchMode: FtsMatchMode | undefined = matchModeRaw;
+  const matchMode = matchModeRaw;
   const explain = coerceBoolOptional(args, "explain") ?? false;
   const trust = coerceBoolOptional(args, "trust") ?? false;
   const rerank = coerceBoolOptional(args, "rerank") ?? false;
