@@ -188,6 +188,26 @@ function committedNotePage(
   );
 }
 
+/**
+ * The receipt half of the response. A `payload_conflict` also says in
+ * words what the status means for the caller: the writes landed, so the
+ * batch must not be sent again under a new ID.
+ */
+function receiptFields(receipt: WriteBatchReceipt): Record<string, unknown> {
+  return {
+    request_id: receipt.requestId,
+    receipt: receipt.status,
+    ...(receipt.status === WRITE_BATCH_RECEIPT_STATUS.payload_conflict
+      ? {
+          receipt_note:
+            `The writes of this call landed (see results). request_id '${receipt.requestId}' ` +
+            "was recorded concurrently for a different payload, so this call's receipt was not " +
+            "recorded; do not resend this batch under a new request_id.",
+        }
+      : {}),
+  };
+}
+
 async function toolBrainWriteBatch(
   ctx: ServerContext,
   args: Record<string, unknown>,
@@ -230,12 +250,18 @@ async function toolBrainWriteBatch(
   // skipped wrote nothing either, so it names no page - the same rule the
   // single-write receipts follow. One report covers the whole batch, with
   // the basename index and schema pack built ONCE.
-  const writtenPages = batch.results.filter(committedNotePage).map((r) => r.path);
+  // A duplicate wrote nothing: its results are the retained receipt of the
+  // call that committed, read back from the synced ledger, so it names no
+  // page as one this call wrote and nothing is linted.
+  const writtenPages =
+    receipt?.status === WRITE_BATCH_RECEIPT_STATUS.duplicate
+      ? []
+      : batch.results.filter(committedNotePage).map((r) => r.path);
   return noteWriteResult(ctx, writtenPages, {
     applied: batch.applied,
     results: batch.results.map((r) => serializeResult(ctx, r)),
     done: true,
-    ...(receipt !== undefined ? { request_id: receipt.requestId, receipt: receipt.status } : {}),
+    ...(receipt !== undefined ? receiptFields(receipt) : {}),
   });
 }
 

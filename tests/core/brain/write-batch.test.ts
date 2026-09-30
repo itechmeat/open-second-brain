@@ -677,20 +677,37 @@ describe("applyWriteBatch request receipt integrity (t_b34439d9 audit)", () => {
     { kind: "append_log_line", input: { text: "receipt race line" } },
   ];
 
-  test("a rival that records the same id with a different payload mid-batch surfaces the mismatch", () => {
+  test("a rival that records the same id with a different payload mid-batch: this call's writes landed and the receipt says so", () => {
     applyWriteBatch(vault, LOG_OP, { requestId: "race-1" });
     // The unlocked pre-write consult misses the rival's record, as it does
     // when a concurrent process records between the consult and the commit.
     const spy = spyOn(ledger, "lookupKey").mockReturnValueOnce(null);
     try {
-      expect(() =>
-        applyWriteBatch(vault, [{ kind: "append_log_line", input: { text: "a different line" } }], {
-          requestId: "race-1",
-        }),
-      ).toThrow(IdempotencyPayloadMismatchError);
+      const res = applyWriteBatch(
+        vault,
+        [{ kind: "append_log_line", input: { text: "a different line" } }],
+        { requestId: "race-1" },
+      );
+      expect(res.receipt).toEqual({
+        requestId: "race-1",
+        status: WRITE_BATCH_RECEIPT_STATUS.payload_conflict,
+      });
+      expect(res.applied).toBe(1);
+      expect(res.done).toBe(true);
+      const [only] = res.results;
+      expect(only?.kind).toBe("append_log_line");
+      const logged = readFileSync(join(vault, (only as { log_path: string }).log_path), "utf8");
+      expect(logged).toContain("a different line");
     } finally {
       spy.mockRestore();
     }
+    // The id stays bound to the rival's payload: a retry of this call's
+    // operations under it is refused, and writes nothing more.
+    expect(() =>
+      applyWriteBatch(vault, [{ kind: "append_log_line", input: { text: "a different line" } }], {
+        requestId: "race-1",
+      }),
+    ).toThrow(IdempotencyPayloadMismatchError);
   });
 
   test("a rival that records the same id and payload mid-batch is named, never reported as applied", () => {

@@ -58,6 +58,7 @@ import {
   lookupKey,
   REMEMBER_KEY_STATUS,
   rememberKey,
+  type RememberKeyStatus,
 } from "./idempotency-ledger.ts";
 
 /** Separator inserted between the existing body and appended text. */
@@ -90,11 +91,19 @@ export const WRITE_BATCH_KEY_NAMESPACE = "write_batch";
  *   call recorded the same ID with the same payload between this call's
  *   consult and its record. Both calls' writes landed; the result fields
  *   are this call's own.
+ * - `payload_conflict`: this call committed the batch - its writes landed
+ *   and the result fields are this call's own - but a concurrent call
+ *   recorded the same ID with a DIFFERENT payload between this call's
+ *   consult and its record. The ID stays bound to that other payload, so
+ *   this call's receipt was not recorded and a retry under the same ID is
+ *   refused as a mismatch. Never retry this batch under a new ID: it is
+ *   already applied.
  */
 export const WRITE_BATCH_RECEIPT_STATUS = Object.freeze({
   applied: "applied",
   duplicate: "duplicate",
   concurrent_duplicate: "concurrent_duplicate",
+  payload_conflict: "payload_conflict",
 } as const);
 
 export type WriteBatchReceiptStatus =
@@ -374,10 +383,12 @@ export interface ApplyWriteBatchOptions {
    * `duplicate`; the same ID with a different payload throws the ledger's
    * own {@link IdempotencyPayloadMismatchError}; an unseen ID proceeds and
    * records the receipt after the commit - the sequencing
-   * {@link import('./signal.ts').writeSignal} already ships. Absent,
-   * behavior is byte-identical. Validation of the ID itself is the ledger's
-   * (non-empty, bounded length), so an invalid ID surfaces the ledger's
-   * named {@link import('./idempotency-ledger.ts').IdempotencyKeyError}
+   * {@link import('./signal.ts').writeSignal} already ships. A concurrent
+   * record of the same ID found only after the commit becomes a receipt
+   * status on the committed result (see {@link WRITE_BATCH_RECEIPT_STATUS}).
+   * Absent, behavior is byte-identical. Validation of the ID itself is the
+   * ledger's (non-empty, bounded length), so an invalid ID surfaces the
+   * ledger's named {@link import('./idempotency-ledger.ts').IdempotencyKeyError}
    * before any write.
    */
   readonly requestId?: string;
@@ -455,25 +466,22 @@ export function applyWriteBatch(
       ref: stored,
     });
     // The unlocked consult above can miss a concurrent call's record; the
-    // locked re-check's verdict is acted on, never dropped. A different
-    // payload under the same ID is the ledger's named mismatch - the
-    // sequencing apply-evidence ships - and the same payload is named as a
-    // concurrent duplicate rather than reported as a plain application.
-    if (remembered.status === REMEMBER_KEY_STATUS.payload_mismatch) {
-      throw new IdempotencyPayloadMismatchError(
-        requestId,
-        remembered.record.contentHash,
-        idempotency.contentHash,
-      );
-    }
-    const status =
-      remembered.status === REMEMBER_KEY_STATUS.duplicate_match
-        ? WRITE_BATCH_RECEIPT_STATUS.concurrent_duplicate
-        : WRITE_BATCH_RECEIPT_STATUS.applied;
-    return { ...result, receipt: { requestId, status } };
+    // locked re-check's verdict is acted on, never dropped. Either way this
+    // call's writes have landed, so the verdict is a receipt status on the
+    // committed result, never an error that would read as "nothing
+    // written" and invite a second application under a fresh ID.
+    return { ...result, receipt: { requestId, status: RECEIPT_STATUS_FOR[remembered.status] } };
   }
   return result;
 }
+
+/** The receipt status of a committed batch, by the locked re-check's verdict. */
+const RECEIPT_STATUS_FOR: Readonly<Record<RememberKeyStatus, WriteBatchReceiptStatus>> =
+  Object.freeze({
+    [REMEMBER_KEY_STATUS.inserted]: WRITE_BATCH_RECEIPT_STATUS.applied,
+    [REMEMBER_KEY_STATUS.duplicate_match]: WRITE_BATCH_RECEIPT_STATUS.concurrent_duplicate,
+    [REMEMBER_KEY_STATUS.payload_mismatch]: WRITE_BATCH_RECEIPT_STATUS.payload_conflict,
+  });
 
 /**
  * The pre-write consult for a caller-supplied request ID. Returns the hash
