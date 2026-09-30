@@ -58,3 +58,15 @@ test("a local outcome cannot be served to a caller that established nothing", ()
     buildCacheKey(opts({ transportReach: "local" }), "p", "fp"),
   );
 });
+
+test("an any-mode search keys apart from the strict default", () => {
+  expect(buildCacheKey(opts({ query: "alpha beta", matchMode: "any" }), "p", "fp")).not.toBe(
+    buildCacheKey(opts({ query: "alpha beta" }), "p", "fp"),
+  );
+});
+
+test("an explicit all mode keys identically to an absent mode", () => {
+  expect(buildCacheKey(opts({ query: "alpha beta", matchMode: "all" }), "p", "fp")).toBe(
+    buildCacheKey(opts({ query: "alpha beta" }), "p", "fp"),
+  );
+});

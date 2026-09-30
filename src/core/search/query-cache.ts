@@ -17,6 +17,8 @@
 
 import { normalizeScopeFilter } from "../scope-key.ts";
 import { resolvedTransportReach } from "../graph/transport-reach.ts";
+import { DISCLOSURE_MODE } from "./disclosure-mode.ts";
+import { FTS_MATCH_MODE } from "./fts-match-mode.ts";
 import type { Store } from "./store.ts";
 import type { SearchOptions, SearchOutcome } from "./types.ts";
 
@@ -119,7 +121,12 @@ export function buildCacheKey(
     // Disclosure depth (D3) partitions the cache: a `cards` outcome and a
     // `full` outcome must not collide. Folded in only for `cards`, so the
     // default `full` key (and every pre-D3 cached row) stays byte-identical.
-    disclosure: opts.disclosure === "cards" ? "cards" : undefined,
+    disclosure: opts.disclosure === DISCLOSURE_MODE.cards ? DISCLOSURE_MODE.cards : undefined,
+    // Match mode partitions the cache: an `any` (OR) outcome holds rows
+    // the strict `all` default drops. Folded in only for `any`, so the
+    // default key (and every row cached before the mode existed) stays
+    // byte-identical.
+    matchMode: opts.matchMode === FTS_MATCH_MODE.any ? FTS_MATCH_MODE.any : undefined,
     structuredQuery: canonicalStructuredQuery(opts),
     sessionFocus: canonicalSessionFocus(opts),
     plan: planHash,
