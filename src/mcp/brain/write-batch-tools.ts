@@ -301,7 +301,7 @@ export const WRITE_BATCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         request_id: {
           type: "string",
-          description: `Optional client request ID for durable exactly-once behavior. A repeat of the same ID with the same operations returns the retained original receipt (receipt: "${WRITE_BATCH_RECEIPT_STATUS.duplicate}") and writes nothing; the same ID with different operations is refused.`,
+          description: `Optional request ID for exactly-once writes: a repeat with the same operations returns receipt "${WRITE_BATCH_RECEIPT_STATUS.duplicate}" and writes nothing; other operations are refused.`,
         },
       },
       required: ["operations"],
