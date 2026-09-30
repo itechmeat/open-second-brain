@@ -37,7 +37,7 @@ export interface CodeEntitySeed {
  * probe leaves the seed with its raw specifier and no field.
  */
 export interface CodeEdgeSeed {
-  readonly kind: "imports" | "inherits";
+  readonly kind: "imports" | "inherits" | "uses";
   readonly from: string;
   readonly to: string;
   readonly resolvedTo?: string;
@@ -126,6 +126,24 @@ const TS_RELATIVE_SPECIFIER = /^\.{1,2}\//;
 const PY_RELATIVE_SPECIFIER = /^\./;
 
 /**
+ * A JSX opening tag whose name is a component: the name sits immediately
+ * after `<`, the character before `<` is not an identifier character or a
+ * dot, and the name starts uppercase (or `_`/`$`).
+ *
+ * The two structural skips are the point: a lowercase-initial name is a
+ * DOM/intrinsic tag, and a dotted name is a member expression - both without
+ * any per-language tag vocabulary that could fall out of date. Known limits
+ * of a line grammar, accepted on purpose: a capitalized comparison operand
+ * (`x < Foo`) and a JSX open spanning lines can misfire or be missed, and a
+ * closing tag never matches. False edges are bounded by requiring an
+ * uppercase-initial name; missed usages only thin the `uses` tier.
+ */
+const JSX_COMPONENT_TAG = /(^|[^A-Za-z0-9_$.])<([A-Z_$][A-Za-z0-9_$]*)(?![\w$.])/g;
+
+/** Extensions whose line grammar carries JSX (the `uses` tier). */
+const JSX_EXTENSIONS: ReadonlySet<string> = new Set([".tsx", ".jsx"]);
+
+/**
  * Extract code structure from `content` addressed by `path`. Returns
  * `extracted: false` with a reason when the extension is unsupported, otherwise
  * the deduped, sorted entity/edge seeds for the recognized language.
@@ -198,6 +216,12 @@ function parseTsJs(
     if (from) edges.push(importSeed(path, from[1]!, ingestedFiles, TS_RELATIVE_SPECIFIER));
     const req = TS_REQUIRE.exec(line);
     if (req) edges.push(importSeed(path, req[1]!, ingestedFiles, TS_RELATIVE_SPECIFIER));
+
+    if (JSX_EXTENSIONS.has(extensionOf(path))) {
+      for (const match of line.matchAll(JSX_COMPONENT_TAG)) {
+        edges.push({ kind: "uses", from: path, to: match[2]! });
+      }
+    }
   }
 }
 

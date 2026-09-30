@@ -241,3 +241,68 @@ describe("preExtractCodeStructure - relative-import binding (t_2356dace)", () =>
     );
   });
 });
+
+describe("preExtractCodeStructure - JSX component usage (t_998aa4e6)", () => {
+  test("a capitalized opening tag in a .tsx source yields a uses edge", () => {
+    const res = asSuccess(
+      preExtractCodeStructure(
+        "src/app/View.tsx",
+        "export function View() {\n  return (\n    <Widget size={3} />\n  );\n}\n",
+      ),
+    );
+    expect(res.edges).toContainEqual({ kind: "uses", from: "src/app/View.tsx", to: "Widget" });
+  });
+
+  test("lowercase-initial DOM and intrinsic tags produce nothing", () => {
+    const res = asSuccess(
+      preExtractCodeStructure(
+        "src/app/View.tsx",
+        "const view = (\n  <div><nav><span>hi</span></nav></div>\n);\n",
+      ),
+    );
+    expect(res.edges).toEqual([]);
+  });
+
+  test("member-expression tags produce nothing", () => {
+    const res = asSuccess(
+      preExtractCodeStructure("src/app/View.tsx", "const view = <Nav.Item active />;\n"),
+    );
+    expect(res.edges).toEqual([]);
+  });
+
+  test("generic type arguments produce nothing", () => {
+    const res = asSuccess(
+      preExtractCodeStructure(
+        "src/app/View.ts",
+        "const names: Array<Foo> = [];\nconst pair: Pair<Bar, Baz> = pairOf();\n",
+      ),
+    );
+    expect(res.edges).toEqual([]);
+  });
+
+  test("closing tags and fragments produce nothing; a repeated component dedupes", () => {
+    const res = asSuccess(
+      preExtractCodeStructure("src/app/View.tsx", "const view = (<><Widget /><Widget /></>);\n"),
+    );
+    expect(res.edges).toEqual([{ kind: "uses", from: "src/app/View.tsx", to: "Widget" }]);
+  });
+
+  test("a .ts source yields no uses edges even with tag-shaped lines", () => {
+    const res = asSuccess(preExtractCodeStructure("src/app/util.ts", "const el = <Widget />;\n"));
+    expect(res.edges).toEqual([]);
+  });
+
+  test("several components on one line each yield their own edge, sorted", () => {
+    const res = asSuccess(
+      preExtractCodeStructure(
+        "src/app/View.tsx",
+        "const view = <Layout><Header /><Footer /></Layout>;\n",
+      ),
+    );
+    expect(res.edges).toEqual([
+      { kind: "uses", from: "src/app/View.tsx", to: "Footer" },
+      { kind: "uses", from: "src/app/View.tsx", to: "Header" },
+      { kind: "uses", from: "src/app/View.tsx", to: "Layout" },
+    ]);
+  });
+});
