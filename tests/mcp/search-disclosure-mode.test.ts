@@ -75,11 +75,15 @@ describe("brain_search disclosure", () => {
 
   test("any refused value, however long or typed, names the accepted modes", async () => {
     const refusal = `argument 'disclosure' must be one of ${DISCLOSURE_MODES.join(", ")}`;
-    for (const bad of ["x".repeat(40), "sometimes", 7]) {
-      const error = await run({ query: "chimera", disclosure: bad }).then(
-        () => null,
-        (exc: unknown) => exc,
-      );
+    const errors = await Promise.all(
+      ["x".repeat(40), "sometimes", 7].map((bad) =>
+        run({ query: "chimera", disclosure: bad }).then(
+          () => null,
+          (exc: unknown) => exc,
+        ),
+      ),
+    );
+    for (const error of errors) {
       expect(error).toBeInstanceOf(MCPError);
       expect((error as Error).message).toContain(refusal);
     }

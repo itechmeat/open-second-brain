@@ -397,9 +397,9 @@ export function readDecisionChangeReceipts(vault: string): ReadReceiptsResult {
   const warnings: ReceiptParseWarning[] = [];
 
   for (const name of names) {
-    const parsed = parseShardedName(name, RECEIPT_GRAMMAR);
-    if (parsed === null) continue;
-    const shardId = parsed.shardId;
+    const shard = parseShardedName(name, RECEIPT_GRAMMAR);
+    if (shard === null) continue;
+    const shardId = shard.shardId;
     const path = join(dir, name);
     let text: string;
     try {

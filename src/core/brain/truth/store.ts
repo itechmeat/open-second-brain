@@ -166,9 +166,9 @@ export function readClaimEvents(vault: string): ReadClaimEventsResult {
   const warnings: ClaimParseWarning[] = [];
 
   for (const name of names) {
-    const parsed = parseShardedName(name, CLAIMS_GRAMMAR);
-    if (parsed === null) continue;
-    const shardId = parsed.shardId;
+    const shard = parseShardedName(name, CLAIMS_GRAMMAR);
+    if (shard === null) continue;
+    const shardId = shard.shardId;
     const path = join(dir, name);
     let text: string;
     try {
