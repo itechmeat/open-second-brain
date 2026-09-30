@@ -200,6 +200,6 @@ test("runFtsQuery with matchMode any keeps the single-term document", async () =
     expect(widened.some((h) => h.documentId === d2)).toBe(true);
     expect(widened.some((h) => h.documentId === d1)).toBe(true);
   } finally {
-    store.close();
+    await store.close();
   }
 });
