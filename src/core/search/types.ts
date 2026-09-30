@@ -22,6 +22,7 @@ import type { ReconciliationOutcome, ReconciliationReport } from "../reconciliat
 import type { VaultPathRule, VaultScopeRules } from "../vault-scope/defaults.ts";
 import type { DegreePredicate } from "./property-filter.ts";
 import type { TemporalIntent } from "./temporal-intent.ts";
+import type { FtsMatchMode } from "./fts.ts";
 import type { BrainSearchResult, ScoreBreakdown, TrustMetadata } from "./search-result.ts";
 import type {
   MemoryTrustAssessment,
@@ -815,6 +816,13 @@ export interface SearchOptions {
   readonly pathPrefix?: string;
   readonly keywordWeight?: number;
   readonly semanticWeight?: number;
+  /**
+   * Caller-selectable FTS match breadth (t_c5326ece). `all` (default)
+   * keeps the implicit AND the keyword lane always ran; `any` OR-joins the
+   * cleaned query tokens, so a document matching any one term is a keyword
+   * candidate. Absent = `all`, byte-identical to prior behaviour.
+   */
+  readonly matchMode?: FtsMatchMode;
   /**
    * Property filter map (v0.10.17). Each key maps to one or more
    * accepted scalar values. Within one key the match is OR; across

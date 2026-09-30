@@ -728,6 +728,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           flag("limit", "string"),
           flag("semantic", "boolean"),
           flag("keyword-only", "boolean"),
+          flag("match-mode", "string"),
           flag("path", "string"),
           flag("keyword-weight", "string"),
           flag("semantic-weight", "string"),

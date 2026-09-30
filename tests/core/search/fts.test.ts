@@ -1,7 +1,7 @@
 import { test, expect, beforeEach, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
 
-import { buildFtsMatch, runFtsQuery } from "../../../src/core/search/fts.ts";
+import { buildExpandedFtsMatch, buildFtsMatch, runFtsQuery } from "../../../src/core/search/fts.ts";
 import { Store } from "../../../src/core/search/store.ts";
 import { createTempVault, makeConfig } from "../../helpers/search-fixtures.ts";
 
@@ -162,4 +162,41 @@ test("runFtsQuery rebuilds an empty desynced FTS table once", async () => {
   expect(hits.length).toBeGreaterThanOrEqual(2);
   expect(hits[0]?.documentId).toBe(d2);
   await readStore.close();
+});
+
+test("match mode any OR-joins the quoted tokens (t_c5326ece)", () => {
+  expect(buildFtsMatch("alpha beta", { matchMode: "any" })).toBe('"alpha" OR "beta"');
+});
+
+test("caller-typed operator tokens stay dropped in both modes", () => {
+  expect(buildFtsMatch("alpha AND beta")).toBe('"alpha" "beta"');
+  expect(buildFtsMatch("alpha AND beta", { matchMode: "any" })).toBe('"alpha" OR "beta"');
+});
+
+test("the default mode is byte-identical, including empty and single-token cases", () => {
+  expect(buildFtsMatch("alpha")).toBe('"alpha"');
+  expect(buildFtsMatch("")).toBe("");
+  expect(buildFtsMatch("alpha beta")).toBe('"alpha" "beta"');
+});
+
+test("expanded composition in any mode ORs the flat group with the expansion terms", () => {
+  expect(buildExpandedFtsMatch("alpha beta", ["gamma"], { matchMode: "any" })).toBe(
+    '("alpha" OR "beta") OR "gamma"',
+  );
+  expect(buildExpandedFtsMatch("alpha beta", ["gamma"])).toBe('("alpha" "beta") OR "gamma"');
+});
+
+test("runFtsQuery with matchMode any keeps the single-term document", async () => {
+  // Only Notes/alpha.md (d1) carries both terms ("fox" and "nights"); in
+  // the default all-mode it is the only hit, and any-mode keeps Other/beta.md (d2).
+  const { store, d1, d2 } = await fixture();
+  try {
+    const strict = runFtsQuery(store, "fox nights", { limit: 10 });
+    const widened = runFtsQuery(store, "fox nights", { limit: 10, matchMode: "any" });
+    expect(strict.some((h) => h.documentId === d2)).toBe(false);
+    expect(widened.some((h) => h.documentId === d2)).toBe(true);
+    expect(widened.some((h) => h.documentId === d1)).toBe(true);
+  } finally {
+    store.close();
+  }
 });

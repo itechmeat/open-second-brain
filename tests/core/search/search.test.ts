@@ -380,3 +380,24 @@ test("limit truncates results", async () => {
   const out = await search(cfg, { query: "repeated", limit: 5 });
   expect(out.results.length).toBe(5);
 });
+
+test("matchMode any widens the keyword lane; the default all stays exact (t_c5326ece)", async () => {
+  writeMd(vault, "Notes/both.md", "# Both\n\nchimera basilisk together in one lair.");
+  writeMd(vault, "Notes/one.md", "# One\n\nA lone chimera wanders here.");
+  const cfg = makeConfig({ vault, dbPath });
+  await indexVault(cfg);
+  const strict = await search(cfg, { query: "chimera basilisk", limit: 10 });
+  const widened = await search(cfg, { query: "chimera basilisk", limit: 10, matchMode: "any" });
+  expect(strict.results.some((h) => h.path.includes("one.md"))).toBe(false);
+  expect(widened.results.some((h) => h.path.includes("one.md"))).toBe(true);
+  expect(widened.results.some((h) => h.path.includes("both.md"))).toBe(true);
+});
+
+test("an unknown matchMode is refused, not treated as the default", async () => {
+  writeMd(vault, "Notes/both.md", "# Both\n\nchimera basilisk together in one lair.");
+  const cfg = makeConfig({ vault, dbPath });
+  await indexVault(cfg);
+  expect(
+    search(cfg, { query: "chimera", matchMode: "sometimes" as unknown as "all" }),
+  ).rejects.toThrow(SearchError);
+});

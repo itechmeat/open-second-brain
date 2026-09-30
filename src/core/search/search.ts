@@ -134,6 +134,7 @@ export async function search(
       basePlan: shape.basePlan,
       limit,
       pathPrefix,
+      matchMode: request.matchMode,
     });
     let keywordHits = keywordLane.hits;
     for (const w of keywordLane.warnings) warnings.push(w);

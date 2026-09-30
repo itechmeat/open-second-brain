@@ -29,6 +29,7 @@ import {
   VAULT_FLAGS,
 } from "../helpers.ts";
 import { CLI_TRANSPORT_REACH } from "../../transport-reach.ts";
+import type { FtsMatchMode } from "../../../core/search/fts.ts";
 
 /** Both malformed `--property` shapes report the same way. */
 function propertyFormatError(entry: string): CliError {
@@ -41,6 +42,7 @@ export async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<numbe
     limit: { type: "string", default: "10" },
     semantic: { type: "boolean" },
     "keyword-only": { type: "boolean" },
+    "match-mode": { type: "string" },
     path: { type: "string" },
     "keyword-weight": { type: "string" },
     "semantic-weight": { type: "string" },
@@ -89,6 +91,11 @@ export async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<numbe
   if (disclosureRaw !== undefined && disclosureRaw !== "full" && disclosureRaw !== "cards") {
     throw new CliError("--disclosure must be 'full' or 'cards'");
   }
+  const matchModeRaw = flagString(flags, "match-mode");
+  if (matchModeRaw !== undefined && matchModeRaw !== "all" && matchModeRaw !== "any") {
+    throw new CliError("--match-mode must be 'all' or 'any'");
+  }
+  const matchMode: FtsMatchMode | undefined = matchModeRaw;
 
   const cfg = resolveConfig(flags);
 
@@ -125,6 +132,7 @@ export async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<numbe
     semantic: semanticOverride,
     keywordOnly: flagBoolean(flags, "keyword-only"),
     pathPrefix: flagString(flags, "path"),
+    ...(matchMode !== undefined ? { matchMode } : {}),
     ...(properties !== undefined ? { properties } : {}),
     ...(degreeFilters !== undefined ? { degreeFilters } : {}),
     ...(visibility !== undefined && visibility.length > 0 ? { visibility } : {}),

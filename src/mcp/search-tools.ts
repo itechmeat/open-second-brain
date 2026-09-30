@@ -73,6 +73,7 @@ import { decisionModelSearchEnvelope } from "../core/decision-model/answerable.t
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 import { explainEnvelope } from "../core/search/explain-envelope.ts";
 import { deriveRecallHint } from "../core/search/recall-hint.ts";
+import type { FtsMatchMode } from "../core/search/fts.ts";
 import {
   ELLIPSIS,
   HEAD_WINDOW_START,
@@ -176,6 +177,12 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
     keyword_only: {
       type: "boolean",
       description: "Skip the semantic lane entirely, so no embedding is needed. Default false.",
+    },
+    match_mode: {
+      type: "string",
+      enum: ["all", "any"],
+      description:
+        "FTS match breadth: 'all' (default) requires every term; 'any' matches a document carrying any one term. Absent leaves the implicit AND.",
     },
     disclosure: {
       type: "string",
@@ -904,6 +911,11 @@ async function toolBrainSearch(
   if (disclosure !== undefined && disclosure !== "full" && disclosure !== "cards") {
     throw new MCPError(INVALID_PARAMS, "argument 'disclosure' must be 'full' or 'cards'");
   }
+  const matchModeRaw = coerceStringOptional(args, "match_mode", 16);
+  if (matchModeRaw !== undefined && matchModeRaw !== "all" && matchModeRaw !== "any") {
+    throw new MCPError(INVALID_PARAMS, "argument 'match_mode' must be 'all' or 'any'");
+  }
+  const matchMode: FtsMatchMode | undefined = matchModeRaw;
   const explain = coerceBoolOptional(args, "explain") ?? false;
   const trust = coerceBoolOptional(args, "trust") ?? false;
   const rerank = coerceBoolOptional(args, "rerank") ?? false;
@@ -991,6 +1003,7 @@ async function toolBrainSearch(
     semantic: semantic ?? null,
     keywordOnly,
     pathPrefix,
+    ...(matchMode !== undefined ? { matchMode } : {}),
     ...(profile !== undefined ? { profile } : {}),
     ...(disclosure === "cards" ? { disclosure: "cards" as const } : {}),
     ...(properties !== undefined ? { properties } : {}),
