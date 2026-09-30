@@ -23,6 +23,17 @@
  *   - the Brain log's `session-lifecycle` events, whose body carries the
  *     session id of a captured host session.
  *
+ * An imported transcript ref (`<transcript basename>#<turn>`, the only
+ * writer form with a turn half and no `session:` prefix) is NOT judged.
+ * Its parent is a transcript file outside the vault, and the import
+ * leaves no record it is guaranteed to keep: the resume checkpoint is
+ * cleared when the file drains, and the recall, skill-invocation and
+ * dedup records are each conditional. A missing record therefore proves
+ * nothing about such a ref, and a repair run on that report would strip
+ * valid provenance. The capture form (`session:<id>#<event>`) and the
+ * extract-signals form (the bare raw-turn session id, whose turns live
+ * in the continuity ledger) are judged.
+ *
  * `session:unknown` is the capture writer's stand-in for a payload that
  * named no session at all. It is a statement that there was no session,
  * not a pointer to a missing one, so it resolves by vocabulary: detaching
@@ -109,6 +120,16 @@ export function parseSessionRef(ref: string): ParsedSessionRef {
     identityRaw.startsWith("session:") ? identityRaw.slice("session:".length) : identityRaw
   ).trim();
   return { identity, turn: turn !== null && turn.trim().length > 0 ? turn.trim() : null };
+}
+
+/**
+ * True for the import writer's `<transcript basename>#<turn>` form: a
+ * turn half and no `session:` prefix. See the module docblock for why
+ * such a ref is never judged.
+ */
+export function isImportedTranscriptRef(ref: string): boolean {
+  const trimmed = ref.trim();
+  return !trimmed.startsWith("session:") && parseSessionRef(trimmed).turn !== null;
 }
 
 /**
@@ -223,6 +244,7 @@ export function scanOrphanedSessionRefs(
       }
       const ref = sig.session_ref;
       if (ref === undefined) continue;
+      if (isImportedTranscriptRef(ref)) continue;
       const { identity } = parseSessionRef(ref);
       if (universe.ids.has(identity)) continue;
       findings.push({ path, session_ref: ref, identity });

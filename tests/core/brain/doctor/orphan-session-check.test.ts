@@ -26,6 +26,7 @@ import {
   ORPHAN_SESSION_REF_CODE,
   ORPHAN_SESSION_REPAIR_COMMAND,
   orphanSessionCheck,
+  isImportedTranscriptRef,
   parseSessionRef,
 } from "../../../../src/core/brain/doctor/orphan-session-check.ts";
 import type { DoctorUncertainEntry } from "../../../../src/core/brain/doctor/report.ts";
@@ -95,10 +96,39 @@ describe("a session_ref that resolves to nothing is an orphan", () => {
     expect(issues[0]!.message).toContain("session:sess-gone#turn-1");
   });
 
-  test("the imported form (bare basename identity) is checked the same way", () => {
-    writeObservation("transcript.jsonl#t-9");
+  test("a bare session id (the extract-signals form) with no raw turns is an orphan", () => {
+    writeObservation("raw-sess-gone");
     const issues = issuesFor().filter((i) => i.code === ORPHAN_SESSION_REF_CODE);
     expect(issues.length).toBe(1);
+  });
+});
+
+describe("an imported transcript ref is never judged", () => {
+  // `o2b brain sessions import` stamps `<transcript basename>#<turn>`: the
+  // parent is a transcript file outside the vault, and the import leaves
+  // no record it is guaranteed to keep (the checkpoint is cleared, recall,
+  // skill and dedup records are conditional). A missing record proves
+  // nothing, and a repair run on such a finding would strip valid
+  // provenance.
+  test("an imported ref with no vault record raises no finding", () => {
+    writeObservation("transcript.jsonl#t-9");
+    expect(issuesFor().filter((i) => i.code === ORPHAN_SESSION_REF_CODE)).toEqual([]);
+  });
+
+  test("an imported ref whose recall records exist raises no finding either", () => {
+    appendContinuityRecord(vault, {
+      kind: "session_turn",
+      createdAt: "2026-06-01T00:00:00Z",
+      payload: { session_id: "transcript.jsonl" },
+    });
+    writeObservation("transcript.jsonl#t-9");
+    expect(issuesFor().filter((i) => i.code === ORPHAN_SESSION_REF_CODE)).toEqual([]);
+  });
+
+  test("isImportedTranscriptRef tells the three writer forms apart", () => {
+    expect(isImportedTranscriptRef("transcript.jsonl#t-9")).toBe(true);
+    expect(isImportedTranscriptRef("session:abc#turn-1")).toBe(false);
+    expect(isImportedTranscriptRef("raw-session-id")).toBe(false);
   });
 });
 
