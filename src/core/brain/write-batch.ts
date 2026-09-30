@@ -27,7 +27,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join, relative } from "node:path";
 
 import type { FrontmatterMap } from "../types.ts";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
@@ -456,7 +456,7 @@ export function applyWriteBatch(
     // ledger documents for every writer that follows this pattern.
     const stored: Readonly<Record<string, unknown>> = {
       applied: result.applied,
-      results: result.results,
+      results: result.results.map((opResult) => storedOpResult(vault, opResult)),
       done: result.done,
     };
     const remembered = rememberKey(vault, {
@@ -482,6 +482,24 @@ const RECEIPT_STATUS_FOR: Readonly<Record<RememberKeyStatus, WriteBatchReceiptSt
     [REMEMBER_KEY_STATUS.duplicate_match]: WRITE_BATCH_RECEIPT_STATUS.concurrent_duplicate,
     [REMEMBER_KEY_STATUS.payload_mismatch]: WRITE_BATCH_RECEIPT_STATUS.payload_conflict,
   });
+
+/**
+ * One op result as the durable receipt stores it. The ledger is vault
+ * content that syncs to every device, so a log path is stored
+ * vault-relative - the form apply-evidence keeps for its own receipt -
+ * and never as this machine's absolute path. Note results already name
+ * vault-relative paths.
+ */
+function storedOpResult(vault: string, opResult: WriteBatchOpResult): WriteBatchOpResult {
+  if (opResult.kind !== "apply_evidence") return opResult;
+  return { ...opResult, log_path: relative(vault, opResult.log_path) };
+}
+
+/** Inverse of {@link storedOpResult}: the log path rebuilt under the vault serving the retry. */
+function retainedOpResult(vault: string, opResult: WriteBatchOpResult): WriteBatchOpResult {
+  if (opResult.kind !== "apply_evidence") return opResult;
+  return { ...opResult, log_path: join(vault, opResult.log_path) };
+}
 
 /**
  * The pre-write consult for a caller-supplied request ID. Returns the hash
@@ -522,7 +540,7 @@ function consultBatchKey(
     contentHash,
     retained: {
       ...ref,
-      results: [...ref.results],
+      results: ref.results.map((opResult) => retainedOpResult(vault, opResult)),
       receipt: { requestId, status: WRITE_BATCH_RECEIPT_STATUS.duplicate },
     },
   };

@@ -7,7 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -154,5 +154,30 @@ describe("applyWriteBatch mixed all-or-nothing", () => {
     ).toThrow(WriteBatchError);
     // Op 0's note must NOT have been created because op 1 failed validation.
     expect(existsSync(join(vault, "Notes/First.md"))).toBe(false);
+  });
+});
+
+describe("applyWriteBatch request receipts for log-writing operations (t_b34439d9)", () => {
+  const EVIDENCE_OP = {
+    kind: "apply_evidence",
+    input: { pref_id: "test-first", artifact: "[[src/x.ts]]", result: "applied", agent: "claude" },
+  } as const;
+
+  test("the stored receipt holds a vault-relative log path and a retry rebuilds it under the vault", () => {
+    writePref("test-first");
+    const first = applyWriteBatch(vault, [EVIDENCE_OP], { requestId: "evidence-1" });
+    const firstPath = (first.results[0] as { log_path: string }).log_path;
+    expect(firstPath.startsWith(vault)).toBe(true);
+
+    const ledgerDir = join(vault, "Brain", "logs", "idempotency");
+    const stored = readdirSync(ledgerDir)
+      .map((name) => readFileSync(join(ledgerDir, name), "utf8"))
+      .join("");
+    expect(stored).toContain("evidence-1");
+    expect(stored).not.toContain(vault);
+
+    const retry = applyWriteBatch(vault, [EVIDENCE_OP], { requestId: "evidence-1" });
+    expect(retry.receipt.status).toBe("duplicate");
+    expect((retry.results[0] as { log_path: string }).log_path).toBe(firstPath);
   });
 });
