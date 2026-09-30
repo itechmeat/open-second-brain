@@ -54,10 +54,10 @@
 
 import { resolveSearchConfig } from "../../search/index.ts";
 import { readPendingVectorCensus } from "../../search/indexer.ts";
-import { LOCAL_EMBEDDING_MODEL } from "../../search/embeddings/signature.ts";
+import { staleBaseline } from "../../search/store/counts.ts";
 import { LAST_INDEXED_AT_STATE_KEY, withReadonlyIndex } from "../../search/store/state.ts";
 import { staleEmbeddings } from "../../search/store/vectors.ts";
-import type { PendingVectorCensus } from "../../search/types.ts";
+import type { PendingVectorCensus, ResolvedEmbeddingConfig } from "../../search/types.ts";
 import type { DoctorIssue } from "../types.ts";
 import type { DoctorCheck, DoctorCheckContext, DoctorFindings } from "./check.ts";
 import { pushUncertain } from "./uncertain-stream.ts";
@@ -89,18 +89,24 @@ export interface EmbeddingsHealthProbeSnapshot {
   readonly lastIndexedAt: string | null;
 }
 
+/** The slice of the embedding configuration the stale count is resolved from. */
+export type EmbeddingsHealthSemantic = Pick<
+  ResolvedEmbeddingConfig,
+  "provider" | "model" | "dimension"
+>;
+
 /**
  * The seam the check reads its facts through.
  *
- * Receives the resolved index path and the active embedding pair so the
- * default probe below can compare stored vectors against the
- * configuration; a test injects any snapshot it wants without building
- * an index.
+ * Receives the resolved index path and the embedding configuration so
+ * the default probe below can resolve the pair stored vectors are
+ * compared against (`staleBaseline`: an unset dimension falls back to
+ * the stored one, and with none the comparison is by model alone); a
+ * test injects any snapshot it wants without building an index.
  */
 export type EmbeddingsHealthProbe = (
   dbPath: string,
-  model: string | null,
-  dimension: number | null,
+  semantic: EmbeddingsHealthSemantic,
 ) => EmbeddingsHealthProbeSnapshot;
 
 /**
@@ -115,17 +121,19 @@ export type EmbeddingsHealthProbe = (
  */
 function indexProbe(
   dbPath: string,
-  model: string | null,
-  dimension: number | null,
+  semantic: EmbeddingsHealthSemantic,
 ): EmbeddingsHealthProbeSnapshot {
   const census = readPendingVectorCensus(dbPath);
   if (census.verdict !== "measured") {
     return { census, staleEmbeddings: null, lastIndexedAt: null };
   }
-  const counts = withReadonlyIndex(dbPath, (read, db) => ({
-    stale: staleEmbeddings(db, model, dimension),
-    last: read(LAST_INDEXED_AT_STATE_KEY),
-  }));
+  const counts = withReadonlyIndex(dbPath, (read, db) => {
+    const baseline = staleBaseline(db, semantic);
+    return {
+      stale: staleEmbeddings(db, baseline.model, baseline.dimension),
+      last: read(LAST_INDEXED_AT_STATE_KEY),
+    };
+  });
   return {
     census,
     staleEmbeddings: counts?.stale ?? null,
@@ -211,18 +219,34 @@ export function makeEmbeddingsHealthCheck(probe: EmbeddingsHealthProbe = indexPr
       // here would meet an operator with two findings for one condition.
       if (!search.semantic.enabled || search.semantic.provider === "disabled") return;
 
+      // The index the pass was pointed at wins over the one the search
+      // configuration names, so every probe and every finding speak about
+      // the same file the rest of the doctor pass reads.
+      const dbPath = ctx.dbPath ?? search.dbPath;
+
       // The local embedder ships inside this build and carries no model
-      // string in the configuration, so it is named the way the index
-      // names it - the same handling `embedding-sunset-check` applies.
-      const model =
-        search.semantic.provider === "local" ? LOCAL_EMBEDDING_MODEL : search.semantic.model;
+      // string in the configuration (`staleBaseline` names it the way the
+      // index does). Any other provider with no configured model leaves
+      // stored vectors nothing to be compared against, and a stale count
+      // of zero from no baseline would read as healthy.
+      if (search.semantic.provider !== "local" && !search.semantic.model) {
+        pushUncertain(out.uncertain, {
+          code: EMBEDDINGS_HEALTH_UNMEASURED_CODE,
+          path: dbPath,
+          message: unmeasurable(
+            "no embedding model is configured, so stored vectors have no baseline to be " +
+              "compared against",
+          ),
+        });
+        return;
+      }
       let snap;
       try {
-        snap = probe(search.dbPath, model ?? null, search.semantic.dimension);
+        snap = probe(dbPath, search.semantic);
       } catch (err) {
         pushUncertain(out.uncertain, {
           code: EMBEDDINGS_HEALTH_UNMEASURED_CODE,
-          path: search.dbPath,
+          path: dbPath,
           message: unmeasurable(
             `the index probe failed: ${err instanceof Error ? err.message : String(err)}`,
           ),
@@ -233,7 +257,7 @@ export function makeEmbeddingsHealthCheck(probe: EmbeddingsHealthProbe = indexPr
       if (snap.census.verdict === "unrecorded") {
         pushUncertain(out.uncertain, {
           code: EMBEDDINGS_CENSUS_UNRECORDED_CODE,
-          path: search.dbPath,
+          path: dbPath,
           message: unrecordedMessage(snap.census.reason),
         });
         return;
@@ -246,7 +270,7 @@ export function makeEmbeddingsHealthCheck(probe: EmbeddingsHealthProbe = indexPr
         // to refuse.
         pushUncertain(out.uncertain, {
           code: EMBEDDINGS_HEALTH_UNMEASURED_CODE,
-          path: search.dbPath,
+          path: dbPath,
           message: unmeasurable(
             "the index opened for the pending-vector census but its embedding counts could " +
               "not be read",
@@ -259,7 +283,7 @@ export function makeEmbeddingsHealthCheck(probe: EmbeddingsHealthProbe = indexPr
       out.issues.push({
         severity: "warning",
         code: EMBEDDINGS_BACKLOG_CODE,
-        path: search.dbPath,
+        path: dbPath,
         message: backlogMessage(pending, chunks, stale, snap.lastIndexedAt, ctx.now),
       } satisfies DoctorIssue);
     },

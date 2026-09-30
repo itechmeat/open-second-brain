@@ -9,14 +9,22 @@ import { Database } from "bun:sqlite";
 import { SearchError } from "../search-error.ts";
 import { countChunks, countChunksWithoutEmbeddings } from "./chunks.ts";
 import { countDocuments } from "./documents.ts";
-import { peekReadonlyIndex, type IndexPeek } from "./state.ts";
+import {
+  EMBEDDING_DIMENSION_STATE_KEY,
+  getState,
+  peekReadonlyIndex,
+  type IndexPeek,
+} from "./state.ts";
 import { countEmbeddings, staleEmbeddings } from "./vectors.ts";
 import {
   charLengthOverTokenBudget,
   NON_ASCII_CEILING_COEFFICIENT,
   textExtent,
   utf8ByteFloorUnderTokenBudget,
+  LOCAL_EMBEDDING_MODEL,
 } from "../embeddings/signature.ts";
+import { LOCAL_DEFAULT_DIMENSION } from "../embeddings/local-provider.ts";
+import type { ResolvedEmbeddingConfig } from "../types.ts";
 
 export interface StoreCounts {
   readonly documents: number;
@@ -24,6 +32,38 @@ export interface StoreCounts {
   readonly embeddings: number;
   /** Embeddings whose `model`/`dimension` no longer match the current config. */
   readonly staleEmbeddings: number;
+}
+
+/** The embedding pair stored vectors are compared against. */
+export interface StaleBaseline {
+  readonly model: string | null;
+  readonly dimension: number | null;
+}
+
+/**
+ * Resolve the pair {@link staleEmbeddings} compares against, the way the
+ * indexer resolves the active signature: the local embedder is named by
+ * its built-in model and default dimension; otherwise the configured
+ * dimension wins and the stored one fills in when none is configured.
+ * `embedding_dimension` is null unless configured, so reading the
+ * configuration alone left the stale count at zero on a default setup.
+ */
+export function staleBaseline(
+  db: Database,
+  semantic: Pick<ResolvedEmbeddingConfig, "provider" | "model" | "dimension">,
+): StaleBaseline {
+  const local = semantic.provider === "local";
+  const model = local ? LOCAL_EMBEDDING_MODEL : (semantic.model ?? null);
+  if (semantic.dimension !== null && semantic.dimension !== undefined) {
+    return { model, dimension: semantic.dimension };
+  }
+  if (local) return { model, dimension: LOCAL_DEFAULT_DIMENSION };
+  const raw = getState(db, EMBEDDING_DIMENSION_STATE_KEY);
+  const stored = raw === null ? null : Number(raw);
+  return {
+    model,
+    dimension: stored !== null && Number.isFinite(stored) && stored > 0 ? stored : null,
+  };
 }
 
 export function counts(

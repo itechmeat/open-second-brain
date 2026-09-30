@@ -236,15 +236,27 @@ export function countEmbeddings(db: Database): number {
   return db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM embeddings").get()?.n ?? 0;
 }
 
-/** Embeddings whose `model`/`dimension` no longer match the current config. */
+/**
+ * Embeddings whose `model`/`dimension` no longer match the current config.
+ *
+ * With no model there is no baseline, and the count is 0 by convention -
+ * a caller that must not read that as healthy checks the model first.
+ * With a model but no dimension (none configured, none stored), the
+ * vectors are compared by model alone: a model switch on a default
+ * configuration is exactly the case a dimension-gated zero used to hide.
+ */
 export function staleEmbeddings(
   db: Database,
   model: string | null,
   dimension: number | null,
 ): number {
-  if (!model || !dimension) {
-    // No baseline to compare against: 0 stale by convention.
-    return 0;
+  if (!model) return 0;
+  if (!dimension) {
+    return (
+      db
+        .query<{ c: number }, [string]>("SELECT count(*) AS c FROM embeddings WHERE model != ?")
+        .get(model)?.c ?? 0
+    );
   }
   const row = db
     .query<{ c: number }, [string, number]>(

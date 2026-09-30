@@ -810,7 +810,8 @@ export class Store {
   // ── counts ─────────────────────────────────────────────────────────────────
 
   counts(): census.StoreCounts {
-    return census.counts(this.db, this.config.semantic.model, this.config.semantic.dimension);
+    const baseline = census.staleBaseline(this.db, this.config.semantic);
+    return census.counts(this.db, baseline.model, baseline.dimension);
   }
 
   /**

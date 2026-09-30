@@ -228,6 +228,64 @@ describe("a search configuration that will not resolve is uncertain", () => {
   });
 });
 
+describe("the probe reads the index the context names", () => {
+  test("ctx.dbPath is the index probed and the path every finding names", () => {
+    const seen: string[] = [];
+    const issues: DoctorIssue[] = [];
+    const uncertain: DoctorUncertainEntry[] = [];
+    makeEmbeddingsHealthCheck((dbPath) => {
+      seen.push(dbPath);
+      return snapshot({ staleEmbeddings: 2 });
+    }).run(
+      {
+        vault,
+        now: NOW,
+        configPath,
+        dbPath: "/elsewhere/index.db",
+      } as unknown as DoctorCheckContext,
+      { issues, uncertain },
+    );
+    expect(seen).toEqual(["/elsewhere/index.db"]);
+    expect(backlog({ issues, uncertain })[0]!.path).toBe("/elsewhere/index.db");
+  });
+
+  test("the probe is handed the configured embedding pair, dimension unset included", () => {
+    writeFileSync(
+      configPath,
+      [
+        `vault: ${vault}`,
+        `search_semantic_enabled: "true"`,
+        `embedding_provider: "openai-compat"`,
+        `embedding_base_url: "https://example.invalid/v1"`,
+        `embedding_model: "vendor-x/embed-v2"`,
+      ].join("\n") + "\n",
+    );
+    const seen: unknown[] = [];
+    run((_dbPath, semantic) => {
+      seen.push({ model: semantic.model, dimension: semantic.dimension });
+      return snapshot();
+    });
+    expect(seen).toEqual([{ model: "vendor-x/embed-v2", dimension: null }]);
+  });
+});
+
+describe("no embedding model to compare against is uncertain, never healthy", () => {
+  test("a remote provider with no configured model is unmeasured", () => {
+    writeFileSync(
+      configPath,
+      [
+        `vault: ${vault}`,
+        `search_semantic_enabled: "true"`,
+        `embedding_provider: "openai-compat"`,
+        `embedding_base_url: "https://example.invalid/v1"`,
+      ].join("\n") + "\n",
+    );
+    const result = run(() => snapshot());
+    expect(result.issues).toEqual([]);
+    expect(result.uncertain.some((e) => e.code === EMBEDDINGS_HEALTH_UNMEASURED_CODE)).toBe(true);
+  });
+});
+
 describe("the check runs from runDoctor itself", () => {
   test("a semantic-enabled vault with no index reports its unrecorded census", () => {
     const result = runDoctor(vault, { now: NOW, configPath });
