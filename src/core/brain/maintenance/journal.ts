@@ -29,7 +29,7 @@ export const MAINTENANCE_JOURNAL_CAP = 500;
  * What one journal row records.
  *
  * A closed vocabulary rather than a bare union because these values are
- * persisted to `.open-second-brain/maintenance-runs.jsonl` and read back
+ * persisted to `.open-second-brain/maintenance-runs[.<deviceId>].jsonl` and read back
  * by whichever build runs next - across an upgrade, that is not the build
  * that wrote them. The guard is the boundary for a row this build does
  * not understand.

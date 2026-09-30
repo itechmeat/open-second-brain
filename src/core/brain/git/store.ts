@@ -2,9 +2,10 @@
  * Per-repo git record store (Project History Suite, t_c812752c).
  *
  * Canonical source of truth for ingested history. Each linked repo owns
- * `Brain/projects/git/<repo-key>/` with two files:
+ * `Brain/projects/git/<repo-key>/` with two kinds of file:
  *
- *   - `commits.jsonl` - append-only mixed-kind records (`commit` | `tag`),
+ *   - `commits[.<deviceId>].jsonl` - one append-only shard per device of
+ *     mixed-kind records (`commit` | `tag`), merged on read by record time,
  *     snake_case on disk like the continuity shards, deduplicated by
  *     commit sha / tag name on append. Typed edges (touched files,
  *     author, carrying release) are STRUCTURED FIELDS here; wikilinks in

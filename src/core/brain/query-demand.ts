@@ -22,8 +22,11 @@
  * (never the raw query), each run through the secret redactor, so a
  * query carrying a token or path cannot leak into the log.
  *
- * Storage: `Brain/log/query-demand.jsonl`, one JSON record per line,
- * rolling and byte-budget-capped (see {@link DEMAND_LOG_MAX_BYTES}).
+ * Storage: one shard per device, `Brain/log/query-demand[.<deviceId>].jsonl`
+ * (the empty device id keeps the legacy un-sharded name), one JSON record
+ * per line. Each device appends to and compacts only its own shard, within
+ * the byte budget (see {@link DEMAND_LOG_MAX_BYTES}); reads merge every
+ * shard.
  */
 
 import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
