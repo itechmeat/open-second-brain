@@ -828,8 +828,23 @@ place. The differ used to carry a pattern of its own, which is how it
 came to predate sharding and classify both the per-device markdown and
 the machine-primary JSONL as `other`, mislabelling the surface a
 `rollback --dry-run` is most likely to be showing. Ledgers and
-subdirectories under `log/` (`capture-decisions.jsonl`, `dream-runs/`,
+subdirectories under `log/` (`capture-decisions[.<deviceId>].jsonl`, `dream-runs/`,
 `pref-audit/`) are not days of the log and stay in the catch-all class.
+
+Every append-only ledger that several synced machines write keeps one
+file per device, named `<stem>[.<deviceId>].jsonl`: the fixed-name
+`Brain/log/` ledgers (`query-demand`, `recurrence-support`,
+`capture-decisions`), the verifier-rejection ledger under
+`Brain/skill-proposals/`, each preference's `pref-<slug>.history`, each
+repository's git `commits` and the maintenance journal
+`.open-second-brain/maintenance-runs` (merged by row time on read). The
+ISO-week audit directories (`session-lifecycle/`, `hygiene/`,
+`secret-custody/`, `schema-mutations/`, `watchdog/` and the hook and
+watchdog audit roots under `.open-second-brain/`) write
+`<YYYY-Www>[.<deviceId>].jsonl`. `O2B_DEVICE_ID` / `device_id` select the
+shard; the empty device id writes the legacy un-suffixed name, and a
+legacy file stays readable without any migration. The full contract is in
+[`observability.md`](observability.md#the-per-device-shard-rule).
 
 ## Primary agent declaration
 
@@ -1242,7 +1257,9 @@ present. `o2b brain git ingest <repo-path>` walks a worktree with a
 sanitized read-only reader (fixed argv, full-40-hex sha validation on
 everything a caller could supply) and lands commits, tags, and
 release ranges as structured records in
-`Brain/projects/git/<repo-key>/commits.jsonl`. Typed edges are record
+`Brain/projects/git/<repo-key>/commits[.<deviceId>].jsonl` (one shard per
+device, merged by record time on read, one copy of each commit and of
+each tag even when two devices ingested the same history). Typed edges are record
 fields - touched files, author, the carrying release attributed by
 chronological tag ranges - and a watermark bounds every later run to
 `<last>..HEAD`, so incremental ingest is duplicate-free by
