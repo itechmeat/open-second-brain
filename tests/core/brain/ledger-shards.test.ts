@@ -27,6 +27,7 @@ import {
   shardedFileName,
   type LedgerShardGrammar,
 } from "../../../src/core/brain/ledger-shards.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 
 const MONTH_GRAMMAR: LedgerShardGrammar = Object.freeze({
   base: "\\d{4}-\\d{2}",
@@ -278,16 +279,20 @@ describe("readShardedLines", () => {
     expect(lines).toEqual(['["a1"]', '["b1"]', '["b2"]', '["legacy"]']);
   });
 
-  test("an absent directory lists nothing; an unreadable one throws", () => {
+  test("an absent directory lists nothing", () => {
     expect(
       readShardedLines(join(dir, "missing-x"), { base: "led", extensions: ["jsonl"] }),
     ).toEqual([]);
+  });
+
+  test.skipIf(CHMOD_CANNOT_DENY)("an unreadable directory throws its own error by code", () => {
     const locked = join(dir, "unreadable-x");
     mkdirSync(locked, { recursive: true });
     chmodSync(locked, 0o000);
     try {
-      if (process.platform === "win32") return;
-      expect(() => readShardedLines(locked, { base: "led", extensions: ["jsonl"] })).toThrow();
+      expect(() => readShardedLines(locked, { base: "led", extensions: ["jsonl"] })).toThrow(
+        /EACCES/,
+      );
     } finally {
       chmodSync(locked, 0o755);
     }
