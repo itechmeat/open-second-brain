@@ -11,6 +11,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { idempotencyLogDir } from "../../../src/core/brain/idempotency-ledger.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { applyWriteBatch, WriteBatchError } from "../../../src/core/brain/write-batch.ts";
 
@@ -169,7 +170,7 @@ describe("applyWriteBatch request receipts for log-writing operations (t_b34439d
     const firstPath = (first.results[0] as { log_path: string }).log_path;
     expect(firstPath.startsWith(vault)).toBe(true);
 
-    const ledgerDir = join(vault, "Brain", "logs", "idempotency");
+    const ledgerDir = idempotencyLogDir(vault);
     const stored = readdirSync(ledgerDir)
       .map((name) => readFileSync(join(ledgerDir, name), "utf8"))
       .join("");
