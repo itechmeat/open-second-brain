@@ -1870,7 +1870,7 @@ export const SEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_search",
     description:
-      "Full-text search across the vault. Optional semantic layer when configured. Read-only.",
+      "Full-text search across the vault. Optional semantic layer when configured. Read-only. When a query misses, consult brain_recall_gate before widening recall: it classifies whether widening is warranted.",
     inputSchema: SEARCH_INPUT_SCHEMA,
     outputSchema: SEARCH_OUTPUT_SCHEMA,
     previewBudget: MCP_PREVIEW_BUDGET,
