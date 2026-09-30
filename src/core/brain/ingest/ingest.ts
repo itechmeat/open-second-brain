@@ -43,7 +43,7 @@ import {
   type Provenance,
 } from "../provenance/provenance.ts";
 import { PLAN_ID_LABEL, recordCompleted } from "./checkpoint.ts";
-import { updateManifest } from "./content-manifest.ts";
+import { readManifest, updateManifest } from "./content-manifest.ts";
 import { preExtractCodeStructure, type PreExtractResult } from "./pre-extract.ts";
 
 /** Frontmatter `kind:` marker of an ingested source summary page. */
@@ -256,7 +256,14 @@ function runPreExtract(vault: string, canonicalSource: string): PreExtractResult
   }
   const abs = join(vault, canonicalSource);
   try {
-    return preExtractCodeStructure(canonicalSource, readFileSync(abs, "utf8"));
+    // The manifest's canonical path set is what a relative import specifier
+    // may bind to: a specifier probes it and fills the seed's `resolvedTo`
+    // only on an exactly-one match. The source's OWN entry is not in the set
+    // yet - the manifest is updated after this pass - which is the correct
+    // incremental reality: a module cannot have been ingested before it was.
+    return preExtractCodeStructure(canonicalSource, readFileSync(abs, "utf8"), {
+      ingestedFiles: new Set(Object.keys(readManifest(vault).entries)),
+    });
   } catch {
     // A source with no readable file bytes - a URL/identity-only source, a
     // directory, a permission failure, or a deletion race - cannot be parsed,

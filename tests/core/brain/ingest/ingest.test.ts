@@ -180,6 +180,34 @@ describe("ingestSource pre-extract pass (P4, t_ef786747)", () => {
     }
   });
 
+  test("a relative import binds to a sibling already in the content manifest", () => {
+    writeCode();
+    mkdirSync(join(vault, "Code"), { recursive: true });
+    writeFileSync(join(vault, "Code", "dom.ts"), "export const h = 1;\n", "utf8");
+    // The sibling lands in the manifest first; the importer's own pass runs
+    // before its own manifest entry is written, so binding needs a prior
+    // ingest of the imported file - exactly the incremental reality.
+    ingestSource(
+      vault,
+      {
+        sourcePath: "Code/dom.ts",
+        summary: "A dom module.",
+        extraction: { entities: [{ category: "concept", name: "Dom" }], relations: [] },
+      },
+      { agent: "claude", now: NOW },
+    );
+    const res = ingestSource(vault, CODE_INPUT, { agent: "claude", now: NOW, preExtract: true });
+    expect(res.preExtract?.extracted).toBe(true);
+    if (res.preExtract?.extracted) {
+      expect(res.preExtract.edges[0]).toEqual({
+        kind: "imports",
+        from: "Code/widget.ts",
+        to: "./dom",
+        resolvedTo: "Code/dom.ts",
+      });
+    }
+  });
+
   test("with the pass off the result carries no seeds and the page is byte-identical", () => {
     writeCode();
     // First ingest creates the entity + page; a second (idempotent) re-ingest

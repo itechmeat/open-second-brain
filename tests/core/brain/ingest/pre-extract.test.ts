@@ -121,3 +121,123 @@ describe("preExtractCodeStructure - unknown languages", () => {
     expect(res.edges).toEqual([]);
   });
 });
+
+describe("preExtractCodeStructure - relative-import binding (t_2356dace)", () => {
+  const INGESTED = new Set([
+    "src/lib/dom.ts",
+    "src/lib/widget.ts",
+    "src/lib/loader.ts",
+    "src/feature/index.ts",
+    "pkg/helpers.py",
+    "pkg/util.py",
+  ]);
+
+  test("a ./ specifier resolving to exactly one ingested file fills resolvedTo", () => {
+    const res = asSuccess(
+      preExtractCodeStructure("src/lib/widget.ts", 'import { h } from "./dom";\n', {
+        ingestedFiles: INGESTED,
+      }),
+    );
+    expect(res.edges).toEqual([
+      { kind: "imports", from: "src/lib/widget.ts", to: "./dom", resolvedTo: "src/lib/dom.ts" },
+    ]);
+  });
+
+  test("a ../ specifier binds through extension and index probing", () => {
+    const res = asSuccess(
+      preExtractCodeStructure("src/lib/widget.ts", 'import { f } from "../feature";\n', {
+        ingestedFiles: INGESTED,
+      }),
+    );
+    expect(res.edges).toEqual([
+      {
+        kind: "imports",
+        from: "src/lib/widget.ts",
+        to: "../feature",
+        resolvedTo: "src/feature/index.ts",
+      },
+    ]);
+  });
+
+  test("a require of a relative specifier binds the same way", () => {
+    const res = asSuccess(
+      preExtractCodeStructure("src/lib/widget.ts", 'const load = require("./loader");\n', {
+        ingestedFiles: INGESTED,
+      }),
+    );
+    expect(res.edges).toEqual([
+      {
+        kind: "imports",
+        from: "src/lib/widget.ts",
+        to: "./loader",
+        resolvedTo: "src/lib/loader.ts",
+      },
+    ]);
+  });
+
+  test("a specifier matching no ingested file leaves the seed raw", () => {
+    const res = asSuccess(
+      preExtractCodeStructure("src/lib/widget.ts", 'import { g } from "./ghost";\n', {
+        ingestedFiles: INGESTED,
+      }),
+    );
+    expect(res.edges).toEqual([{ kind: "imports", from: "src/lib/widget.ts", to: "./ghost" }]);
+    expect(Object.hasOwn(res.edges[0]!, "resolvedTo")).toBe(false);
+  });
+
+  test("a specifier matching several ingested files leaves the seed raw", () => {
+    const res = asSuccess(
+      preExtractCodeStructure("src/lib/widget.ts", 'import { d } from "./dom";\n', {
+        ingestedFiles: new Set(["src/lib/dom.ts", "src/lib/dom.tsx", "src/lib/dom.js"]),
+      }),
+    );
+    expect(res.edges).toEqual([{ kind: "imports", from: "src/lib/widget.ts", to: "./dom" }]);
+  });
+
+  test("a bare package specifier never binds", () => {
+    const res = asSuccess(
+      preExtractCodeStructure("src/lib/widget.ts", 'import { x } from "react";\n', {
+        ingestedFiles: INGESTED,
+      }),
+    );
+    expect(res.edges).toEqual([{ kind: "imports", from: "src/lib/widget.ts", to: "react" }]);
+  });
+
+  test("a python leading-dot from-import binds to the ingested module file", () => {
+    const res = asSuccess(
+      preExtractCodeStructure("pkg/mod.py", "from .helpers import thing\n", {
+        ingestedFiles: INGESTED,
+      }),
+    );
+    expect(res.edges).toEqual([
+      { kind: "imports", from: "pkg/mod.py", to: ".helpers", resolvedTo: "pkg/helpers.py" },
+    ]);
+  });
+
+  test("a python two-dot from-import resolves against the parent directory", () => {
+    const res = asSuccess(
+      preExtractCodeStructure("pkg/sub/mod.py", "from ..util import thing\n", {
+        ingestedFiles: INGESTED,
+      }),
+    );
+    expect(res.edges).toEqual([
+      { kind: "imports", from: "pkg/sub/mod.py", to: "..util", resolvedTo: "pkg/util.py" },
+    ]);
+  });
+
+  test("a call without ingestedFiles leaves every seed byte-identical to today", () => {
+    const withOpt = asSuccess(
+      preExtractCodeStructure("src/lib/widget.ts", 'import { h } from "./dom";\n', {
+        ingestedFiles: INGESTED,
+      }),
+    );
+    const withoutOpt = asSuccess(
+      preExtractCodeStructure("src/lib/widget.ts", 'import { h } from "./dom";\n'),
+    );
+    expect(withoutOpt.edges).toEqual([{ kind: "imports", from: "src/lib/widget.ts", to: "./dom" }]);
+    expect(Object.hasOwn(withoutOpt.edges[0]!, "resolvedTo")).toBe(false);
+    expect(JSON.stringify(withoutOpt)).toBe(
+      JSON.stringify({ ...withOpt, edges: withoutOpt.edges }),
+    );
+  });
+});

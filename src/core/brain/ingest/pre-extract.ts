@@ -18,6 +18,8 @@
  * has no declarations returns an empty-but-`extracted: true` result.
  */
 
+import { resolveUniqueMatch } from "../../graph/unique-match.ts";
+
 /** A class/function declaration surfaced as an entity seed. */
 export interface CodeEntitySeed {
   readonly kind: "class" | "function";
@@ -28,11 +30,28 @@ export interface CodeEntitySeed {
  * A structural relationship surfaced as an edge seed. `imports` runs from the
  * source path to a module specifier; `inherits` runs from a subclass to a base
  * class (TS `extends`/`implements`, Python base classes).
+ *
+ * `resolvedTo` is present only when the caller supplied the ingested-file set
+ * and a relative import specifier probed to exactly one ingested file; it
+ * carries that file's canonical vault-relative path. An ambiguous or unmet
+ * probe leaves the seed with its raw specifier and no field.
  */
 export interface CodeEdgeSeed {
   readonly kind: "imports" | "inherits";
   readonly from: string;
   readonly to: string;
+  readonly resolvedTo?: string;
+}
+
+/** Options for the pre-extract pass. Absent, every default is byte-identical. */
+export interface PreExtractOptions {
+  /**
+   * Canonical vault-relative paths of the files already ingested - the
+   * content manifest's key set. Supplied, a relative import specifier
+   * (`./`/`../` for TS/JS, leading-dot for Python) that probes to exactly
+   * one member fills the seed's `resolvedTo`.
+   */
+  readonly ingestedFiles?: ReadonlySet<string>;
 }
 
 /** A source whose language family was recognized and parsed. */
@@ -71,6 +90,9 @@ const LANGUAGE_BY_EXTENSION: ReadonlyMap<string, Language> = new Map([
   [".pyi", "python"],
 ]);
 
+/** The supported extensions in declaration order: the relative-specifier probe set. */
+const SUPPORTED_EXTENSIONS: ReadonlyArray<string> = [...LANGUAGE_BY_EXTENSION.keys()];
+
 /** TS/JS class declaration head, capturing the class name. */
 const TS_CLASS = /^(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/;
 /** TS/JS function declaration head, capturing the function name. */
@@ -98,12 +120,25 @@ const PY_FROM = /^from\s+(\.*[\w.]*)\s+import\b/;
 /** A bare Python identifier or dotted name (used to filter base-class args). */
 const PY_DOTTED_NAME = /^[A-Za-z_][\w.]*$/;
 
+/** A TS/JS specifier relative to the importing file (`./x`, `../x`). */
+const TS_RELATIVE_SPECIFIER = /^\.{1,2}\//;
+/** A Python specifier at least one dot above or below the importing module. */
+const PY_RELATIVE_SPECIFIER = /^\./;
+
 /**
  * Extract code structure from `content` addressed by `path`. Returns
  * `extracted: false` with a reason when the extension is unsupported, otherwise
  * the deduped, sorted entity/edge seeds for the recognized language.
+ *
+ * With `opts.ingestedFiles`, every relative import specifier is probed
+ * against that set (joined path, each supported extension, `/index` + each
+ * supported extension); exactly one member fills the seed's `resolvedTo`.
  */
-export function preExtractCodeStructure(path: string, content: string): PreExtractResult {
+export function preExtractCodeStructure(
+  path: string,
+  content: string,
+  opts: PreExtractOptions = {},
+): PreExtractResult {
   const ext = extensionOf(path);
   const language = ext ? LANGUAGE_BY_EXTENSION.get(ext) : undefined;
   if (language === undefined) {
@@ -117,9 +152,9 @@ export function preExtractCodeStructure(path: string, content: string): PreExtra
   const entities: CodeEntitySeed[] = [];
   const edges: CodeEdgeSeed[] = [];
   if (language === "python") {
-    parsePython(path, content, entities, edges);
+    parsePython(path, content, entities, edges, opts.ingestedFiles);
   } else {
-    parseTsJs(path, content, entities, edges);
+    parseTsJs(path, content, entities, edges, opts.ingestedFiles);
   }
 
   return {
@@ -136,6 +171,7 @@ function parseTsJs(
   content: string,
   entities: CodeEntitySeed[],
   edges: CodeEdgeSeed[],
+  ingestedFiles?: ReadonlySet<string>,
 ): void {
   for (const raw of content.split("\n")) {
     const line = raw.trim();
@@ -159,9 +195,9 @@ function parseTsJs(
     if (fnMatch) entities.push({ kind: "function", name: fnMatch[1]! });
 
     const from = TS_FROM.exec(line) ?? TS_BARE_IMPORT.exec(line);
-    if (from) edges.push({ kind: "imports", from: path, to: from[1]! });
+    if (from) edges.push(importSeed(path, from[1]!, ingestedFiles, TS_RELATIVE_SPECIFIER));
     const req = TS_REQUIRE.exec(line);
-    if (req) edges.push({ kind: "imports", from: path, to: req[1]! });
+    if (req) edges.push(importSeed(path, req[1]!, ingestedFiles, TS_RELATIVE_SPECIFIER));
   }
 }
 
@@ -171,6 +207,7 @@ function parsePython(
   content: string,
   entities: CodeEntitySeed[],
   edges: CodeEdgeSeed[],
+  ingestedFiles?: ReadonlySet<string>,
 ): void {
   for (const raw of content.split("\n")) {
     const line = raw.trim();
@@ -200,7 +237,10 @@ function parsePython(
     const fromMatch = PY_FROM.exec(line);
     if (fromMatch) {
       const mod = fromMatch[1]!;
-      if (mod.length > 0) edges.push({ kind: "imports", from: path, to: mod });
+      if (mod.length > 0)
+        edges.push(
+          importSeed(path, mod, ingestedFiles, PY_RELATIVE_SPECIFIER, pythonSpecifierToRelative),
+        );
       continue;
     }
     const importMatch = PY_IMPORT.exec(line);
@@ -211,6 +251,64 @@ function parsePython(
       }
     }
   }
+}
+
+/** Build an `imports` seed, binding a relative specifier to its ingested file. */
+function importSeed(
+  path: string,
+  to: string,
+  ingestedFiles: ReadonlySet<string> | undefined,
+  relative: RegExp,
+  toRelative: (specifier: string) => string = (specifier) => specifier,
+): CodeEdgeSeed {
+  if (ingestedFiles === undefined || !relative.test(to)) {
+    return { kind: "imports", from: path, to };
+  }
+  const resolvedTo = resolveRelativeImport(path, toRelative(to), ingestedFiles);
+  return resolvedTo === undefined
+    ? { kind: "imports", from: path, to }
+    : { kind: "imports", from: path, to, resolvedTo };
+}
+
+/**
+ * Probe one relative specifier against the ingested-file set: the specifier
+ * joined to the source's directory (a Python leading-dot specifier first
+ * becomes `./`/`../` form, one `..` per extra dot, module dots as slashes),
+ * then each supported extension and each `/index` + extension form. Exactly
+ * one member of the set names the bound file; zero or several bind nothing.
+ */
+function resolveRelativeImport(
+  path: string,
+  to: string,
+  ingestedFiles: ReadonlySet<string>,
+): string | undefined {
+  const joined = posixJoin(path, to);
+  const candidates =
+    extensionOf(joined) !== "" && LANGUAGE_BY_EXTENSION.has(extensionOf(joined))
+      ? [joined]
+      : [...SUPPORTED_EXTENSIONS].flatMap((ext) => [`${joined}${ext}`, `${joined}/index${ext}`]);
+  const verdict = resolveUniqueMatch(
+    candidates.filter((candidate) => ingestedFiles.has(candidate)),
+  );
+  return verdict.status === "unique" ? verdict.target : undefined;
+}
+
+/** `/`-joined normalization of `specifier` relative to the directory of `path`. */
+function posixJoin(path: string, specifier: string): string {
+  const segments = path.replaceAll("\\", "/").split("/").slice(0, -1);
+  for (const segment of specifier.replaceAll("\\", "/").split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") segments.pop();
+    else segments.push(segment);
+  }
+  return segments.join("/");
+}
+
+/** A Python leading-dot specifier (`..util`) as a `./`-form relative path. */
+function pythonSpecifierToRelative(specifier: string): string {
+  const dots = /^\.+/.exec(specifier)?.[0].length ?? 0;
+  const rest = specifier.slice(dots).replace(/\./g, "/");
+  return "../".repeat(Math.max(0, dots - 1)) + rest;
 }
 
 /** Whether a TS/JS line is a comment (line, block-open, or JSDoc continuation). */
