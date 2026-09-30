@@ -2,6 +2,7 @@ import { closeSync, fsyncSync, mkdirSync, openSync, writeFileSync } from "node:f
 import { join } from "node:path";
 
 import { redactRawOutput } from "../redactor.ts";
+import { resolveAppendShardId, shardedFileName } from "../brain/ledger-shards.ts";
 
 export interface AuditRecord {
   readonly timestamp: string;
@@ -18,7 +19,15 @@ export function appendAuditRecord(auditRoot: string, record: AuditRecord): strin
     throw new Error(`invalid audit timestamp: ${record.timestamp}`);
   }
   mkdirSync(auditRoot, { recursive: true });
-  const path = join(auditRoot, `${isoWeekLabel(timestamp)}.jsonl`);
+  // Per-device week shard (t_774dea61): two synced machines appending to
+  // one `<week>.jsonl` produce `*.sync-conflict-*` copies no reader
+  // merges. Each device now appends to its own `<week>[.<deviceId>].jsonl`
+  // through the shared ledger-shard grammar; the empty device id keeps the
+  // legacy un-sharded name, so existing vaults need no migration.
+  const path = join(
+    auditRoot,
+    shardedFileName(isoWeekLabel(timestamp), resolveAppendShardId(), "jsonl"),
+  );
   const line = redactRawOutput(JSON.stringify(record), {
     maxInput: Number.POSITIVE_INFINITY,
   });
