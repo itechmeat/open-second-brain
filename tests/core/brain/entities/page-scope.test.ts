@@ -27,7 +27,7 @@ import {
 import { BRAIN_ENTITY_KIND } from "../../../../src/core/brain/entities/types.ts";
 import {
   IDENTITY_STRENGTH,
-  collectRepairCandidates,
+  collectRepairCandidatesWithRefusals,
 } from "../../../../src/core/brain/link-graph/repair-lane.ts";
 
 /** A title long enough to clear the repair lane's explicit-reference floor. */
@@ -134,7 +134,7 @@ describe("a quarantined entity page stays out of the link graph", () => {
   }
 
   function candidatesNamingTheEntity(): number {
-    return collectRepairCandidates(vault).filter(
+    return collectRepairCandidatesWithRefusals(vault).candidates.filter(
       (candidate) =>
         candidate.strength === IDENTITY_STRENGTH.explicitReference &&
         candidate.target.includes("shadowbroker-ledger"),

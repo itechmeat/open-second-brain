@@ -536,7 +536,8 @@ function ambiguousTermReason(display: string, carrierCount: number): string {
 
 /**
  * Collect deterministic repair candidates from vault structure, together
- * with the mention terms the corpus refuses to bind.
+ * with the mention terms the corpus refuses to bind. Never emits an edge that
+ * already exists, and never emits inferred candidates.
  *
  * A term (title or alias) that exactly one corpus page carries proposes the
  * same explicit-reference candidate a title match always has. A term carried
@@ -668,16 +669,4 @@ export interface RepairCandidateCollection {
   readonly candidates: RepairCandidate[];
   /** `skip-ambiguous` decisions, ordered by the candidate order. */
   readonly refusals: ReadonlyArray<RepairDecision>;
-}
-
-/**
- * Collect deterministic repair candidates from vault structure. Never emits an
- * edge that already exists, and never emits inferred candidates. The named
- * refusals are available through {@link collectRepairCandidatesWithRefusals}.
- */
-export function collectRepairCandidates(
-  vault: string,
-  opts: CollectRepairCandidatesOptions = {},
-): RepairCandidate[] {
-  return collectRepairCandidatesWithRefusals(vault, opts).candidates;
 }
