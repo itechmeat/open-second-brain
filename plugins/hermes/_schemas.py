@@ -237,7 +237,8 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                      'additionalProperties': False}},
     {'name': 'brain_search',
      'description': 'Full-text search across the vault. Optional semantic layer when configured. '
-                    'Read-only.',
+                    'Read-only. When a query misses, consult brain_recall_gate before widening '
+                    'recall: it classifies whether widening is warranted.',
      'inputSchema': {'type': 'object',
                      'properties': {'query': {'type': 'string',
                                               'minLength': 1,
@@ -263,7 +264,10 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                     'focus_path_prefix': {'type': 'string',
                                                           'minLength': 1,
                                                           'maxLength': 256,
-                                                          'description': 'Steer this one call towards a vault subtree, paired with focus_query as a transient focus.'},
+                                                          'description': 'Steer this one call '
+                                                                         'towards a vault subtree, '
+                                                                         'paired with focus_query '
+                                                                         'as a transient focus.'},
                                     'focus_session': {'type': 'string',
                                                       'minLength': 1,
                                                       'maxLength': 128,
@@ -277,7 +281,13 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                                      'and the false-absence guard. '
                                                                      'Default false.'},
                                     'include_superseded': {'type': 'boolean',
-                                                           'description': 'History mode for relation polarity: keep matched superseded predecessors undemoted and skip successor pull-in. Default false.'},
+                                                           'description': 'History mode for '
+                                                                          'relation polarity: keep '
+                                                                          'matched superseded '
+                                                                          'predecessors undemoted '
+                                                                          'and skip successor '
+                                                                          'pull-in. Default '
+                                                                          'false.'},
                                     'since': {'type': 'string',
                                               'maxLength': 64,
                                               'description': 'Hard filter on event time (validity, '
@@ -303,6 +313,13 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                      'description': 'Skip the semantic lane '
                                                                     'entirely, so no embedding is '
                                                                     'needed. Default false.'},
+                                    'match_mode': {'type': 'string',
+                                                   'enum': ['all', 'any'],
+                                                   'description': "FTS match breadth: 'all' "
+                                                                  '(default) requires every term; '
+                                                                  "'any' matches a document "
+                                                                  'carrying any one term. Absent '
+                                                                  'leaves the implicit AND.'},
                                     'disclosure': {'type': 'string',
                                                    'enum': ['full', 'cards'],
                                                    'description': "Result depth: 'full' (default) "
