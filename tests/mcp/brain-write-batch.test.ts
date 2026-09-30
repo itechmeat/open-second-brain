@@ -43,7 +43,7 @@ import {
 } from "../../src/core/brain/write-batch.ts";
 import * as ledger from "../../src/core/brain/idempotency-ledger.ts";
 import { PAGE_LINT_KEY } from "../../src/core/brain/page-lint.ts";
-import { MCPError } from "../../src/mcp/protocol.ts";
+import { INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
 /**
@@ -603,8 +603,21 @@ describe("brain_write_batch request receipts (t_b34439d9)", () => {
     }
   });
 
-  test("a non-string request_id is refused before any write", async () => {
-    await expect(tool.handler(ctx, { operations: OPS, request_id: 7 })).rejects.toThrow(MCPError);
+  test.each([
+    ["a number", 7],
+    ["an empty string", ""],
+    ["whitespace", "   "],
+    ["an over-long id", "x".repeat(300)],
+  ])("request_id as %s is INVALID_PARAMS before any write", async (_label, requestId) => {
+    let thrown: unknown = null;
+    try {
+      await tool.handler(ctx, { operations: OPS, request_id: requestId });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(MCPError);
+    expect((thrown as MCPError).code).toBe(INVALID_PARAMS);
+    expect((thrown as MCPError).message).toMatch(/request_id|idempotency key/);
     expect(existsSync(join(vault, "Notes/Receipted.md"))).toBe(false);
   });
 });

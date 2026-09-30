@@ -27,7 +27,10 @@ import {
   type WriteBatchResult,
   type WriteOperation,
 } from "../../core/brain/write-batch.ts";
-import { IdempotencyPayloadMismatchError } from "../../core/brain/idempotency-ledger.ts";
+import {
+  IdempotencyKeyError,
+  IdempotencyPayloadMismatchError,
+} from "../../core/brain/idempotency-ledger.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { noteWriteResult, parseFrontmatterArg, writeBatchErrorToMcp } from "./notes-tools.ts";
@@ -212,11 +215,12 @@ async function toolBrainWriteBatch(
       receipt = receipted.receipt;
     }
   } catch (err) {
-    // A reused request ID with a different payload is the caller's
-    // mistake, not the server's: INVALID_PARAMS with the ledger's own
-    // explanation, the same mapping the checkpoint tools use.
-    if (err instanceof IdempotencyPayloadMismatchError) {
-      throw new MCPError(INVALID_PARAMS, `brain_write_batch: ${err.message}`);
+    // A reused request ID with a different payload, or an ID the ledger
+    // cannot store (blank, over-long), is the caller's mistake, not the
+    // server's: INVALID_PARAMS with the ledger's own explanation, the same
+    // mapping the checkpoint tools use. Both are raised before any write.
+    if (err instanceof IdempotencyPayloadMismatchError || err instanceof IdempotencyKeyError) {
+      throw new MCPError(INVALID_PARAMS, `brain_write_batch: request_id: ${err.message}`);
     }
     throw writeBatchErrorToMcp(err, "brain_write_batch");
   }

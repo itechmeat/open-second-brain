@@ -48,6 +48,7 @@ import {
 } from "../../../src/core/brain/write-batch.ts";
 import * as ledger from "../../../src/core/brain/idempotency-ledger.ts";
 import {
+  IdempotencyKeyError,
   IdempotencyPayloadMismatchError,
   lookupKey,
 } from "../../../src/core/brain/idempotency-ledger.ts";
@@ -663,9 +664,9 @@ describe("applyWriteBatch client request receipts (t_b34439d9)", () => {
     expect(readFileSync(join(vault, "Notes/Receipt.md"), "utf8")).toBe(before);
   });
 
-  test("an invalid request id surfaces the ledger error before any write", () => {
+  test("an invalid request id surfaces the ledger's named key error before any write", () => {
     for (const bad of ["", "   ", "x".repeat(257)]) {
-      expect(() => applyWriteBatch(vault, OPS, { requestId: bad })).toThrow(/idempotency key/);
+      expect(() => applyWriteBatch(vault, OPS, { requestId: bad })).toThrow(IdempotencyKeyError);
     }
     expect(existsSync(join(vault, "Notes/Receipt.md"))).toBe(false);
   });

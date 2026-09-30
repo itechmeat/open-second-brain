@@ -115,6 +115,19 @@ export interface RememberKeyResult {
 }
 
 /**
+ * Thrown for a client key the ledger cannot store: not a string, blank
+ * after trimming, or longer than the cap. A caller-side mistake, so a
+ * transport maps it to its invalid-parameters error rather than to a
+ * server fault.
+ */
+export class IdempotencyKeyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "IdempotencyKeyError";
+  }
+}
+
+/**
  * Thrown by the writers ({@link import('./signal.ts').writeSignal} et al.)
  * when a supplied idempotency key was already used with a DIFFERENT
  * payload. Carries both hashes so the caller can explain the conflict.
@@ -252,11 +265,11 @@ export function rememberKey(vault: string, input: RememberKeyInput): RememberKey
 
 function normaliseKey(key: unknown): string {
   if (typeof key !== "string" || key.trim() === "") {
-    throw new Error("idempotency key must be a non-empty string");
+    throw new IdempotencyKeyError("idempotency key must be a non-empty string");
   }
   const trimmed = key.trim();
   if (trimmed.length > KEY_MAX_LEN) {
-    throw new Error(`idempotency key too long (max ${KEY_MAX_LEN} chars)`);
+    throw new IdempotencyKeyError(`idempotency key too long (max ${KEY_MAX_LEN} chars)`);
   }
   return trimmed;
 }

@@ -377,7 +377,8 @@ export interface ApplyWriteBatchOptions {
    * {@link import('./signal.ts').writeSignal} already ships. Absent,
    * behavior is byte-identical. Validation of the ID itself is the ledger's
    * (non-empty, bounded length), so an invalid ID surfaces the ledger's
-   * named error before any write.
+   * named {@link import('./idempotency-ledger.ts').IdempotencyKeyError}
+   * before any write.
    */
   readonly requestId?: string;
 }
