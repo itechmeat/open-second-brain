@@ -181,19 +181,28 @@ const PY_RELATIVE_IMPORT: RelativeImportRule = {
 };
 
 /**
- * A JSX opening tag whose name is a component: the name sits immediately
- * after `<`, the character before `<` is not an identifier character or a
- * dot, and the name starts uppercase (or `_`/`$`).
+ * A JSX opening tag whose name is a component, decided by structure alone:
  *
- * The two structural skips are the point: a lowercase-initial name is a
- * DOM/intrinsic tag, and a dotted name is a member expression - both without
- * any per-language tag vocabulary that could fall out of date. Known limits
- * of a line grammar, accepted on purpose: a capitalized comparison operand
- * (`x < Foo`) and a JSX open spanning lines can misfire or be missed, and a
- * closing tag never matches. False edges are bounded by requiring an
- * uppercase-initial name; missed usages only thin the `uses` tier.
+ * - the name sits immediately after `<`, and it starts uppercase (or
+ *   `_`/`$`): a lowercase-initial name is a DOM/intrinsic tag;
+ * - the character before `<` is not an identifier character, a `.`, or a
+ *   `)`: those make the `<` a type-argument list (`Array<Foo>`,
+ *   `make()<Foo>`) or a comparison, not an element;
+ * - the name is followed by what only an opening tag allows: the end of the
+ *   line (attributes continue below), `>`, `/>`, or whitespace and then an
+ *   attribute start (a name or a `{...spread}`). That refuses a dotted
+ *   member-expression tag (`<Nav.Item>`) and a type-parameter list, whose
+ *   name is followed by `,` (`<T,>`) or by `extends` (`<K extends string>`).
+ *
+ * No per-language tag vocabulary that could fall out of date. Known limits of
+ * a line grammar, accepted on purpose: a capitalized comparison operand
+ * written without a space (`a <Foo b`) can misfire, a generic component
+ * (`<Foo<T> />`) is missed, and a closing tag never matches. False edges are
+ * bounded by the uppercase-initial rule; missed usages only thin the `uses`
+ * tier.
  */
-const JSX_COMPONENT_TAG = /(^|[^A-Za-z0-9_$.])<([A-Z_$][A-Za-z0-9_$]*)(?![\w$.])/g;
+const JSX_COMPONENT_TAG =
+  /(^|[^A-Za-z0-9_$.)])<([A-Z_$][A-Za-z0-9_$]*)(?=$|\s*\/?>|\s+(?!extends\b)[A-Za-z_${])/g;
 
 /** Extensions whose line grammar carries JSX (the `uses` tier). */
 const JSX_EXTENSIONS: ReadonlySet<string> = new Set([".tsx", ".jsx"]);

@@ -352,6 +352,29 @@ describe("preExtractCodeStructure - JSX component usage (t_998aa4e6)", () => {
     expect(res.edges).toEqual([]);
   });
 
+  test.each([
+    ["a trailing-comma arrow generic", "const id = <T,>(x: T) => x;\n"],
+    ["a constrained arrow generic", "const key = <K extends string>(k: K) => k;\n"],
+    ["a generic call after a closing paren", "const v = make()<Foo>(arg);\n"],
+  ])("%s in a .tsx source produces no uses edge", (_label, source) => {
+    const res = asSuccess(preExtractCodeStructure("src/app/View.tsx", source));
+    expect(res.edges).toEqual([]);
+  });
+
+  test.each([
+    ["a bare opening tag", "return <Foo>child</Foo>;\n", "Foo"],
+    ["a self-closing tag with an attribute", "const el = <Foo prop={1} />;\n", "Foo"],
+    [
+      "a tag whose attributes continue on the next line",
+      "return (\n  <Foo\n    prop={1}\n  />\n);\n",
+      "Foo",
+    ],
+    ["a tag opening with a spread attribute", "const el = <Foo {...props} />;\n", "Foo"],
+  ])("%s in a .tsx source still yields its uses edge", (_label, source, name) => {
+    const res = asSuccess(preExtractCodeStructure("src/app/View.tsx", source));
+    expect(res.edges).toEqual([{ kind: "uses", from: "src/app/View.tsx", to: name }]);
+  });
+
   test("closing tags and fragments produce nothing; a repeated component dedupes", () => {
     const res = asSuccess(
       preExtractCodeStructure("src/app/View.tsx", "const view = (<><Widget /><Widget /></>);\n"),
