@@ -23,13 +23,15 @@ describe("resolveUniqueMatch", () => {
     });
   });
 
-  test("two distinct candidates resolve to ambiguous, first-occurrence order kept", () => {
-    const match = resolveUniqueMatch(["Notes/b.md", "Notes/a.md", "Notes/b.md"]);
-    expect(match).toEqual({
-      status: "ambiguous",
-      matches: ["Notes/b.md", "Notes/a.md"],
-    });
-  });
+  test.each([
+    ["two", ["Notes/b.md", "Notes/a.md", "Notes/b.md"], ["Notes/b.md", "Notes/a.md"]],
+    ["three", ["a", "b", "a", "c", "b", "a"], ["a", "b", "c"]],
+  ])(
+    "%s distinct candidates resolve to ambiguous, each once in first-occurrence order",
+    (_count, candidates, matches) => {
+      expect(resolveUniqueMatch(candidates)).toEqual({ status: "ambiguous", matches });
+    },
+  );
 
   test("a repeated identical candidate is deduped before the decision", () => {
     // One page naming a term twice must never read as two pages naming it.
@@ -37,10 +39,5 @@ describe("resolveUniqueMatch", () => {
       status: "unique",
       target: "Notes/same.md",
     });
-  });
-
-  test("every candidate survives into the ambiguous list exactly once", () => {
-    const match = resolveUniqueMatch(["a", "b", "a", "c", "b", "a"]);
-    expect(match).toEqual({ status: "ambiguous", matches: ["a", "b", "c"] });
   });
 });
