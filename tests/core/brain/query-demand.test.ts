@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -326,5 +334,33 @@ describe("query-demand per-device shards (t_774dea61)", () => {
       if (previous === undefined) delete process.env["O2B_DEVICE_ID"];
       else process.env["O2B_DEVICE_ID"] = previous;
     }
+  });
+
+  test("compaction after a write on one device caps only that device's shard", () => {
+    const logDir = join(vault, "Brain", "log");
+    mkdirSync(logDir, { recursive: true });
+    const line =
+      JSON.stringify({ ts: INPUT.at, terms: ["auth", "flow"], results: 3, coverage: 0.5 }) + "\n";
+    // Both shards already sit over the byte budget. Only the shard the
+    // write lands on may be rewritten; the peer's file is not this
+    // device's to touch, however large it is.
+    const overBudget = line.repeat(Math.ceil(DEMAND_LOG_MAX_BYTES / line.length) + 1);
+    const ownShard = join(logDir, "query-demand.a.jsonl");
+    const peerShard = join(logDir, "query-demand.b.jsonl");
+    writeFileSync(ownShard, overBudget, "utf8");
+    writeFileSync(peerShard, overBudget, "utf8");
+
+    const previous = process.env["O2B_DEVICE_ID"];
+    try {
+      process.env["O2B_DEVICE_ID"] = "a";
+      expect(queryDemandLogPath(vault)).toBe(ownShard);
+      recordQueryDemand(vault, INPUT);
+    } finally {
+      if (previous === undefined) delete process.env["O2B_DEVICE_ID"];
+      else process.env["O2B_DEVICE_ID"] = previous;
+    }
+
+    expect(statSync(ownShard).size).toBeLessThanOrEqual(DEMAND_LOG_MAX_BYTES);
+    expect(readFileSync(peerShard, "utf8")).toBe(overBudget);
   });
 });

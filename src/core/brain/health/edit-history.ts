@@ -14,8 +14,8 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
-import { literalBase, readShardedLines, type LedgerShardGrammar } from "../ledger-shards.ts";
-import { preferenceHistoryPath, validateSlug } from "../paths.ts";
+import { jsonlLedgerGrammar, readShardedLines } from "../ledger-shards.ts";
+import { preferenceHistoryPath, preferenceHistoryStem } from "../paths.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 export interface EditHistoryEntry {
@@ -55,11 +55,8 @@ function isEntry(value: unknown): value is EditHistoryEntry {
  * own `pref-<slug>.history` stem, escaped, so a slug containing a dot can
  * never be read as a device shard of a shorter slug.
  */
-function historyGrammar(slug: string): LedgerShardGrammar {
-  return Object.freeze({
-    base: literalBase(`pref-${validateSlug(slug)}.history`),
-    extensions: Object.freeze(["jsonl"]),
-  });
+function historyGrammar(slug: string) {
+  return jsonlLedgerGrammar(preferenceHistoryStem(slug));
 }
 
 /** Read every device's shard, skipping malformed lines. No shards -> `[]`. */

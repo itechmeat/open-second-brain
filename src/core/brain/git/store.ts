@@ -23,10 +23,12 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import {
-  readShardedLines,
+  interleaveShardRows,
+  JSONL_LEDGER_EXT,
+  jsonlLedgerGrammar,
+  readShardLinesByShard,
   resolveAppendShardId,
   shardedFileName,
-  type LedgerShardGrammar,
 } from "../ledger-shards.ts";
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";
@@ -90,11 +92,11 @@ export interface AppendGitRecordsResult {
   readonly skipped: number;
 }
 
+/** The commits ledger's shard stem: `commits[.<deviceId>].jsonl`. */
+const COMMITS_STEM = "commits";
+
 /** The commits ledger's file-name layout, handed to the shared shard grammar. */
-const COMMITS_GRAMMAR: LedgerShardGrammar = Object.freeze({
-  base: "commits",
-  extensions: Object.freeze(["jsonl"]),
-});
+const COMMITS_GRAMMAR = jsonlLedgerGrammar(COMMITS_STEM);
 
 /** Per-repo store directory inside the vault. */
 export function gitStoreDir(vault: string, repoKey: string): string {
@@ -106,7 +108,7 @@ function commitsPath(vault: string, repoKey: string): string {
   // its own file; the empty device id keeps the legacy un-sharded name.
   return join(
     gitStoreDir(vault, repoKey),
-    shardedFileName("commits", resolveAppendShardId(), "jsonl"),
+    shardedFileName(COMMITS_STEM, resolveAppendShardId(), JSONL_LEDGER_EXT),
   );
 }
 
@@ -176,15 +178,33 @@ function parseRecord(line: string): GitRecord | null {
   return null;
 }
 
+/**
+ * When a record happened, as the cross-device merge orders it. A record
+ * without a readable time (a tag with no `createdAt`) sorts as early as
+ * possible, which in the merge means straight after the record its own
+ * shard holds before it.
+ */
+function recordTime(record: GitRecord): number {
+  const time = Date.parse(record.kind === "commit" ? record.committedAt : (record.createdAt ?? ""));
+  return Number.isFinite(time) ? time : Number.NEGATIVE_INFINITY;
+}
+
+/**
+ * Every record across every device's shard (t_774dea61), oldest first:
+ * shards are interleaved by record time, each shard keeping its own file
+ * order, so a single-shard store reads exactly as before and `limit` and
+ * the latest-tag view see one timeline whatever the shard names are. The
+ * dedup on append reads the same merge, so it also sees commits a synced
+ * peer ingested.
+ */
 function readRecords(vault: string, repoKey: string): ReadonlyArray<GitRecord> {
-  // Merged read over every device's shard (t_774dea61), so the dedup on
-  // append sees commits ingested by a synced peer as well.
-  const records: GitRecord[] = [];
-  for (const line of readShardedLines(gitStoreDir(vault, repoKey), COMMITS_GRAMMAR)) {
-    const record = parseRecord(line);
-    if (record !== null) records.push(record);
-  }
-  return records;
+  const shards = readShardLinesByShard(gitStoreDir(vault, repoKey), COMMITS_GRAMMAR).map(
+    (shard) => ({
+      shardId: shard.shardId,
+      rows: shard.rows.map(parseRecord).filter((record) => record !== null),
+    }),
+  );
+  return interleaveShardRows(shards, recordTime);
 }
 
 /**
@@ -254,7 +274,7 @@ function appendGitRecordsLocked(
   return { appended: lines.length, appendedCommits, appendedTags, skipped };
 }
 
-/** Commits oldest-first (file order), optionally filtered. */
+/** Commits oldest-first (file order, devices merged by commit time), optionally filtered. */
 export function listGitCommits(
   vault: string,
   repoKey: string,

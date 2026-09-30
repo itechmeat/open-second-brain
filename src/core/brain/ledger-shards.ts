@@ -79,6 +79,22 @@ export interface LedgerShardGrammar {
   readonly extensions: ReadonlyArray<string>;
 }
 
+/** The extension every JSON Lines ledger writes, without the leading dot. */
+export const JSONL_LEDGER_EXT = "jsonl";
+
+/**
+ * The grammar of a JSON Lines ledger whose base is one fixed file stem
+ * (`<stem>[.<shardId>].jsonl`). The stem is escaped through
+ * {@link literalBase}, so the writer can hand the same stem to
+ * {@link shardedFileName} and the two can never disagree on the name.
+ */
+export function jsonlLedgerGrammar(stem: string): LedgerShardGrammar {
+  return Object.freeze({
+    base: literalBase(stem),
+    extensions: Object.freeze([JSONL_LEDGER_EXT]),
+  });
+}
+
 /** The shape of one recognised ledger file name. */
 export interface ParsedShardedName {
   readonly base: string;
@@ -201,21 +217,26 @@ export function listSyncConflictFiles(dir: string): string[] {
     .toSorted();
 }
 
+/** One shard's rows, in the order the shard itself holds them. */
+export interface ShardRows<T> {
+  /** Empty string for the legacy un-sharded file. */
+  readonly shardId: string;
+  readonly rows: ReadonlyArray<T>;
+}
+
 /**
- * Every non-blank line of every shard of one ledger, shards in ascending
- * name order (the legacy name sorts among the device shards by the shared
- * stem) and lines in append order.
+ * Every non-blank line of every shard of one ledger, grouped by shard:
+ * shards in ascending name order, lines in append order.
  *
- * This is the merged read for ledgers whose rows carry no sort key of their
- * own: a single-shard vault reads back in exactly the order it always did,
- * and a multi-device one gets the deterministic shard-id order instead of
- * Syncthing's arrival order. Conflict copies are never listed. A shard
- * listed but vanished before the read is skipped (a concurrent compactor
- * won); any other read failure propagates - "could not tell" must never
- * resolve to "no rows".
+ * A shard listed but vanished before the read is skipped (a concurrent
+ * compactor won); any other read failure propagates - "could not tell"
+ * must never resolve to "no rows". Conflict copies are never listed.
  */
-export function readShardedLines(dir: string, grammar: LedgerShardGrammar): string[] {
-  const out: string[] = [];
+export function readShardLinesByShard(
+  dir: string,
+  grammar: LedgerShardGrammar,
+): Array<ShardRows<string>> {
+  const out: Array<ShardRows<string>> = [];
   for (const shard of listShardedFiles(dir, grammar)) {
     let text: string;
     try {
@@ -224,11 +245,65 @@ export function readShardedLines(dir: string, grammar: LedgerShardGrammar): stri
       if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
       throw err;
     }
-    for (const line of text.split("\n")) {
-      if (line.trim() !== "") out.push(line);
-    }
+    out.push({
+      shardId: shard.shardId,
+      rows: text.split("\n").filter((line) => line.trim() !== ""),
+    });
   }
   return out;
+}
+
+/**
+ * Every non-blank line of every shard of one ledger, shards in ascending
+ * name order (the legacy name sorts among the device shards by the shared
+ * stem) and lines in append order.
+ *
+ * This is the merged read for ledgers whose rows carry no sort key of their
+ * own: a single-shard vault reads back in exactly the order it always did,
+ * and a multi-device one gets the deterministic shard-id order instead of
+ * Syncthing's arrival order. Failure handling is
+ * {@link readShardLinesByShard}'s.
+ */
+export function readShardedLines(dir: string, grammar: LedgerShardGrammar): string[] {
+  return readShardLinesByShard(dir, grammar).flatMap((shard) => shard.rows);
+}
+
+/**
+ * Interleave shards into one ascending sequence by each row's time `at`,
+ * WITHOUT ever reordering the rows of one shard.
+ *
+ * This is the merge for a ledger whose own file order is authoritative -
+ * an append-only journal read newest-first, where a clock stepped back on
+ * one device must not reshuffle that device's history. Each step takes the
+ * earliest head among the shards; equal heads go to the lower shard id, so
+ * every device sees the same sequence. A single shard reads back in
+ * exactly its file order. `at` must return a comparable number for every
+ * row (map an unreadable time to a fixed sentinel, not NaN).
+ */
+export function interleaveShardRows<T>(
+  shards: ReadonlyArray<ShardRows<T>>,
+  at: (value: T) => number,
+): T[] {
+  const cursors = shards.map(() => 0);
+  const out: T[] = [];
+  for (;;) {
+    let pick = -1;
+    let pickAt = 0;
+    for (const [index, shard] of shards.entries()) {
+      const head = shard.rows[cursors[index]!];
+      if (head === undefined) continue;
+      const time = at(head);
+      const earlier =
+        pick === -1 || time < pickAt || (time === pickAt && shard.shardId < shards[pick]!.shardId);
+      if (earlier) {
+        pick = index;
+        pickAt = time;
+      }
+    }
+    if (pick === -1) return out;
+    out.push(shards[pick]!.rows[cursors[pick]!]!);
+    cursors[pick] = cursors[pick]! + 1;
+  }
 }
 
 /** One row read out of one shard, tagged with where it came from. */

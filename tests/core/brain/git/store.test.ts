@@ -18,6 +18,7 @@ import {
   writeGitState,
 } from "../../../../src/core/brain/git/store.ts";
 import type { GitCommitRecord, GitTagRecord } from "../../../../src/core/brain/git/store.ts";
+import { acquireLockSync, LOCK_WAIT_BUDGET_ENV } from "../../../../src/core/brain/sync-lockfile.ts";
 
 let tmp: string;
 let vault: string;
@@ -222,4 +223,69 @@ test("two devices write their own commits shards and reads merge both (t_774dea6
     if (previous === undefined) delete process.env["O2B_DEVICE_ID"];
     else process.env["O2B_DEVICE_ID"] = previous;
   }
+});
+
+function withDevice<T>(device: string, run: () => T): T {
+  const previous = process.env["O2B_DEVICE_ID"];
+  process.env["O2B_DEVICE_ID"] = device;
+  try {
+    return run();
+  } finally {
+    if (previous === undefined) delete process.env["O2B_DEVICE_ID"];
+    else process.env["O2B_DEVICE_ID"] = previous;
+  }
+}
+
+test("the append lock is the device's own shard, not the legacy name (t_774dea61)", () => {
+  const dir = gitStoreDir(vault, KEY);
+  mkdirSync(dir, { recursive: true });
+  const previousBudget = process.env[LOCK_WAIT_BUDGET_ENV];
+  process.env[LOCK_WAIT_BUDGET_ENV] = "0";
+  // Another writer holds the legacy file and device b's shard.
+  const legacy = acquireLockSync(join(dir, "commits.jsonl"));
+  const other = acquireLockSync(join(dir, "commits.b.jsonl"));
+  try {
+    const result = withDevice("a", () => appendGitRecords(vault, KEY, [commit("e".repeat(40))]));
+    expect(result.appended).toBe(1);
+
+    const own = acquireLockSync(join(dir, "commits.a.jsonl"));
+    try {
+      expect(() =>
+        withDevice("a", () => appendGitRecords(vault, KEY, [commit("f".repeat(40))])),
+      ).toThrow(/lock busy: .*commits\.a\.jsonl\.lock/);
+    } finally {
+      own.release();
+    }
+  } finally {
+    legacy.release();
+    other.release();
+    if (previousBudget === undefined) delete process.env[LOCK_WAIT_BUDGET_ENV];
+    else process.env[LOCK_WAIT_BUDGET_ENV] = previousBudget;
+  }
+});
+
+test("commits from two devices list oldest-first by commit time (t_774dea61)", () => {
+  // Device a ingested the newer range, device b the older one; a sorts
+  // first by shard name, so a name-order merge listed b's old commits last
+  // and a `limit` kept them as the "newest".
+  withDevice("a", () =>
+    appendGitRecords(vault, KEY, [
+      commit("1".repeat(40), { subject: "a-new-1", committedAt: "2026-06-03T10:00:00+00:00" }),
+      commit("2".repeat(40), { subject: "a-new-2", committedAt: "2026-06-04T10:00:00+00:00" }),
+    ]),
+  );
+  withDevice("b", () =>
+    appendGitRecords(vault, KEY, [
+      commit("3".repeat(40), { subject: "b-old-1", committedAt: "2026-06-01T10:00:00+00:00" }),
+      commit("4".repeat(40), { subject: "b-old-2", committedAt: "2026-06-02T10:00:00+00:00" }),
+    ]),
+  );
+
+  expect(listGitCommits(vault, KEY).map((c) => c.subject)).toEqual([
+    "b-old-1",
+    "b-old-2",
+    "a-new-1",
+    "a-new-2",
+  ]);
+  expect(listGitCommits(vault, KEY, { limit: 1 }).map((c) => c.subject)).toEqual(["a-new-2"]);
 });

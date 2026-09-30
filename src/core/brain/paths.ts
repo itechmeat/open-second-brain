@@ -30,7 +30,7 @@ import { join } from "node:path";
 import { isFileAlreadyExists } from "../fs-atomic.ts";
 import { ensureInsideVault, vaultRelative } from "../path-safety.ts";
 import type { DegradationNotice } from "../integrity/degradation.ts";
-import { resolveAppendShardId, shardedFileName } from "./ledger-shards.ts";
+import { JSONL_LEDGER_EXT, resolveAppendShardId, shardedFileName } from "./ledger-shards.ts";
 import {
   BRAIN_ARTIFACTS_REL,
   BRAIN_ACTIVE_FILE,
@@ -395,16 +395,23 @@ export function reportPagePath(vault: string, date: string, slug: string): strin
  * because the walker only yields `.md` files.
  */
 export function preferenceHistoryPath(vault: string, slug: string): string {
-  const s = validateSlug(slug);
   // Per-device shard (t_774dea61): each machine appends to its own
   // history file; the empty device id keeps the legacy un-sharded name.
   return ensureInsideVault(
     join(
       brainDirs(vault).preferences,
-      shardedFileName(`pref-${s}.history`, resolveAppendShardId(), "jsonl"),
+      shardedFileName(preferenceHistoryStem(slug), resolveAppendShardId(), JSONL_LEDGER_EXT),
     ),
     vault,
   );
+}
+
+/**
+ * The shard stem of one preference's edit history, `pref-<slug>.history`:
+ * the writer names its shard from it and the reader's grammar escapes it.
+ */
+export function preferenceHistoryStem(slug: string): string {
+  return `pref-${validateSlug(slug)}.history`;
 }
 
 /** Retired-preference path: `Brain/retired/ret-<slug>.md`. */
@@ -524,19 +531,45 @@ export function proposalWatermarkPath(vault: string): string {
   );
 }
 
-/** Recurrence support ledger path: `Brain/log/recurrence-support.jsonl`. */
-export function proceduralRecurrencePath(vault: string): string {
-  return ensureInsideVault(join(vault, BRAIN_LOG_REL, "recurrence-support.jsonl"), vault);
+/** Shard stem of the recurrence support ledger under `Brain/log/`. */
+export const RECURRENCE_LEDGER_STEM = "recurrence-support";
+
+/** Shard stem of the cross-query demand ledger under `Brain/log/`. */
+export const QUERY_DEMAND_LEDGER_STEM = "query-demand";
+
+/** Shard stem of the capture-decision ledger under `Brain/log/`. */
+export const CAPTURE_DECISION_LEDGER_STEM = "capture-decisions";
+
+/**
+ * The `Brain/log/` ledger file THIS device appends to for `stem`:
+ * `<stem>[.<deviceId>].jsonl` (t_774dea61). The empty device id yields the
+ * legacy un-sharded name, so a vault without a device id writes the same
+ * file it always did.
+ */
+function brainLogLedgerPath(vault: string, stem: string): string {
+  return ensureInsideVault(
+    join(vault, BRAIN_LOG_REL, shardedFileName(stem, resolveAppendShardId(), JSONL_LEDGER_EXT)),
+    vault,
+  );
 }
 
 /**
- * Cross-query demand ledger path: `Brain/log/query-demand.jsonl`. A
- * rolling, byte-budget-capped append-only log of normalized recall
- * queries with their result count and IDF-weighted coverage, aggregated
- * to surface recurring queries the vault answers poorly (unmet demand).
+ * Recurrence support ledger, this device's shard:
+ * `Brain/log/recurrence-support[.<deviceId>].jsonl`.
+ */
+export function proceduralRecurrencePath(vault: string): string {
+  return brainLogLedgerPath(vault, RECURRENCE_LEDGER_STEM);
+}
+
+/**
+ * Cross-query demand ledger, this device's shard:
+ * `Brain/log/query-demand[.<deviceId>].jsonl`. A rolling,
+ * byte-budget-capped append-only log of normalized recall queries with
+ * their result count and IDF-weighted coverage, aggregated to surface
+ * recurring queries the vault answers poorly (unmet demand).
  */
 export function queryDemandLogPath(vault: string): string {
-  return ensureInsideVault(join(vault, BRAIN_LOG_REL, "query-demand.jsonl"), vault);
+  return brainLogLedgerPath(vault, QUERY_DEMAND_LEDGER_STEM);
 }
 
 /** Inbound-capture staging dir: `Brain/captures/` (seam 1, t_f8f5ef6a). */
@@ -569,21 +602,15 @@ export function captureWatermarkPath(vault: string): string {
 }
 
 /**
- * Capture-decision ledger: `Brain/log/capture-decisions.jsonl` (seam 1).
+ * Capture-decision ledger, this device's shard:
+ * `Brain/log/capture-decisions[.<deviceId>].jsonl` (seam 1).
  * One JSON line per inbound update the bot handled - accepted, rejected, or
  * malformed - so no update is ever silently dropped.
  */
 export function captureDecisionLogPath(vault: string): string {
   // Per-device shard (t_774dea61): the capture host on each machine appends
   // to its own file; the empty device id keeps the legacy name.
-  return ensureInsideVault(
-    join(
-      vault,
-      BRAIN_LOG_REL,
-      shardedFileName("capture-decisions", resolveAppendShardId(), "jsonl"),
-    ),
-    vault,
-  );
+  return brainLogLedgerPath(vault, CAPTURE_DECISION_LEDGER_STEM);
 }
 
 /** Log file for the given UTC date: `Brain/log/<YYYY-MM-DD>.md`. */

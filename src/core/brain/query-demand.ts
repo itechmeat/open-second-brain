@@ -31,15 +31,10 @@ import { dirname, join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { clamp01 } from "../math.ts";
-import { ensureInsideVault } from "../path-safety.ts";
 import { redactRawOutput } from "../redactor.ts";
 import { BRAIN_LOG_REL } from "./path-constants.ts";
-import {
-  readShardedLines,
-  resolveAppendShardId,
-  shardedFileName,
-  type LedgerShardGrammar,
-} from "./ledger-shards.ts";
+import { jsonlLedgerGrammar, readShardedLines } from "./ledger-shards.ts";
+import { QUERY_DEMAND_LEDGER_STEM, queryDemandLogPath } from "./paths.ts";
 import { acquireLockSync } from "./sync-lockfile.ts";
 import {
   COMPLETENESS_COMPLETE_THRESHOLD,
@@ -229,22 +224,7 @@ function isSecretShapedTerm(term: string): boolean {
 }
 
 /** The demand ledger's file-name layout, handed to the shared shard grammar. */
-const DEMAND_LEDGER_GRAMMAR: LedgerShardGrammar = Object.freeze({
-  base: "query-demand",
-  extensions: Object.freeze(["jsonl"]),
-});
-
-/**
- * The file THIS device appends to: `<base>[.<deviceId>].jsonl` under
- * `Brain/log/`. The empty device id yields the legacy un-sharded name.
- */
-function demandLedgerWritePath(vault: string): string {
-  return join(
-    vault,
-    BRAIN_LOG_REL,
-    shardedFileName("query-demand", resolveAppendShardId(), "jsonl"),
-  );
-}
+const DEMAND_LEDGER_GRAMMAR = jsonlLedgerGrammar(QUERY_DEMAND_LEDGER_STEM);
 
 /**
  * Append one recall observation to the demand log. Terms are derived
@@ -274,8 +254,8 @@ export function recordQueryDemand(
   // Per-device shard (t_774dea61): this device appends to a file no other
   // device writes, and the per-file lock plus the in-place compaction are
   // scoped to that one shard.
-  const path = demandLedgerWritePath(vault);
-  mkdirSync(ensureInsideVault(dirname(path), vault), { recursive: true });
+  const path = queryDemandLogPath(vault);
+  mkdirSync(dirname(path), { recursive: true });
   const handle = acquireLockSync(path);
   try {
     appendFileSync(path, `${JSON.stringify(record)}\n`, { encoding: "utf8" });
@@ -549,13 +529,10 @@ function coerceRecord(line: string): QueryDemandRecord | null {
  * O(1) until the rare compaction.
  */
 function compactIfNeeded(path: string): void {
-  let size: number;
-  try {
-    size = statSync(path).size;
-  } catch {
-    return;
-  }
-  if (size <= DEMAND_LOG_MAX_BYTES) return;
+  // Only a vanished shard is "nothing to compact"; any other stat failure
+  // (EACCES, EIO) propagates by its code instead of leaving the cap unchecked.
+  const size = statSync(path, { throwIfNoEntry: false })?.size;
+  if (size === undefined || size <= DEMAND_LOG_MAX_BYTES) return;
   const lines = readFileSync(path, "utf8")
     .split("\n")
     .filter((line) => line.trim().length > 0);

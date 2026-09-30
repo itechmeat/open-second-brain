@@ -544,3 +544,50 @@ describe("maintenance journal per-device shards (t_774dea61)", () => {
     }
   });
 });
+
+function appendAs(device: string, ts: string, ok: boolean): void {
+  const previous = process.env["O2B_DEVICE_ID"];
+  process.env["O2B_DEVICE_ID"] = device;
+  try {
+    appendJournal(vault, {
+      ts,
+      holder: `host-${device}`,
+      verdict: MAINTENANCE_VERDICT.run,
+      task: LANE_TASK.dream,
+      ok,
+    });
+  } finally {
+    if (previous === undefined) delete process.env["O2B_DEVICE_ID"];
+    else process.env["O2B_DEVICE_ID"] = previous;
+  }
+}
+
+describe("maintenance journal merged order across devices (t_774dea61)", () => {
+  test("the merged list is newest-first by timestamp, and the streak walks that order", () => {
+    // Device a's newest failure is newer than device b's success, but a's
+    // shard sorts first by name: a name-order merge put b's success on top
+    // and read the live streak as zero.
+    appendAs("a", "2026-06-01T10:00:00.000Z", false);
+    appendAs("a", "2026-06-01T10:04:00.000Z", false);
+    appendAs("b", "2026-06-01T10:02:00.000Z", true);
+
+    expect(listJournal(vault).map((entry) => entry.ts)).toEqual([
+      "2026-06-01T10:04:00.000Z",
+      "2026-06-01T10:02:00.000Z",
+      "2026-06-01T10:00:00.000Z",
+    ]);
+    expect(consecutiveTaskFailures(vault, LANE_TASK.dream)).toBe(1);
+  });
+
+  test("one shard keeps its own file order even when its timestamps are not monotonic", () => {
+    appendAs("a", "2026-06-01T10:05:00.000Z", true);
+    // A clock stepped back: the row appended later carries the older stamp.
+    appendAs("a", "2026-06-01T10:01:00.000Z", false);
+
+    expect(listJournal(vault).map((entry) => entry.ts)).toEqual([
+      "2026-06-01T10:01:00.000Z",
+      "2026-06-01T10:05:00.000Z",
+    ]);
+    expect(consecutiveTaskFailures(vault, LANE_TASK.dream)).toBe(1);
+  });
+});

@@ -11,11 +11,14 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
-  readShardedLines,
+  interleaveShardRows,
+  JSONL_LEDGER_EXT,
+  jsonlLedgerGrammar,
+  readShardLinesByShard,
   resolveAppendShardId,
   shardedFileName,
-  type LedgerShardGrammar,
 } from "../ledger-shards.ts";
+import { DERIVED_STORE_DIR } from "../path-constants.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import type { HostPressureUnmeasurableReason } from "./host-pressure.ts";
 import { renameWithRetry } from "../../fs-atomic.ts";
@@ -78,6 +81,12 @@ export interface MaintenanceJournalEntry {
   readonly streak?: number;
 }
 
+/** The journal's shard stem: `maintenance-runs[.<deviceId>].jsonl`. */
+const JOURNAL_STEM = "maintenance-runs";
+
+/** The journal's file-name layout, handed to the shared shard grammar. */
+const JOURNAL_GRAMMAR = jsonlLedgerGrammar(JOURNAL_STEM);
+
 /**
  * The journal file THIS device appends to, and the only shard the cap
  * sweep rewrites: `maintenance-runs[.<deviceId>].jsonl` (t_774dea61). The
@@ -86,16 +95,10 @@ export interface MaintenanceJournalEntry {
 function journalPath(vault: string): string {
   return join(
     vault,
-    ".open-second-brain",
-    shardedFileName("maintenance-runs", resolveAppendShardId(), "jsonl"),
+    DERIVED_STORE_DIR,
+    shardedFileName(JOURNAL_STEM, resolveAppendShardId(), JSONL_LEDGER_EXT),
   );
 }
-
-/** The journal's file-name layout, handed to the shared shard grammar. */
-const JOURNAL_GRAMMAR: LedgerShardGrammar = Object.freeze({
-  base: "maintenance-runs",
-  extensions: Object.freeze(["jsonl"]),
-});
 
 export function appendJournal(vault: string, entry: MaintenanceJournalEntry): void {
   // Vault-identity write guard (context-integrity-gates, Unit J).
@@ -124,24 +127,46 @@ export function sweepJournal(vault: string, cap: number = MAINTENANCE_JOURNAL_CA
 }
 
 /**
- * Journal entries, newest first. The read merges every device's shard
- * (t_774dea61) in the deterministic shard order; unparseable lines are
- * skipped.
+ * When a row was written, as the merge orders it. A row whose stamp does
+ * not parse sorts as the oldest, so it can never displace a readable row
+ * from the head of the newest-first list.
+ */
+function entryTime(entry: MaintenanceJournalEntry): number {
+  const time = Date.parse(entry.ts);
+  return Number.isFinite(time) ? time : Number.NEGATIVE_INFINITY;
+}
+
+/** One journal line as an entry, or `null` for a torn or non-object line. */
+function parseEntry(line: string): MaintenanceJournalEntry | null {
+  try {
+    const parsed: unknown = JSON.parse(line);
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as MaintenanceJournalEntry)
+      : null;
+  } catch {
+    // Fail-soft: a torn line never breaks the journal read.
+    return null;
+  }
+}
+
+/**
+ * Journal entries, newest first - the one order both this list and
+ * {@link consecutiveTaskFailures} walk.
+ *
+ * Every device's shard (t_774dea61) is interleaved by row timestamp, so a
+ * failure on one device that is newer than a success on another reads as
+ * newer whatever the shard names are; each shard's own append order is
+ * never changed, so a single-shard vault reads exactly as before.
+ * Unparseable lines are skipped.
  */
 export function listJournal(vault: string, limit?: number): MaintenanceJournalEntry[] {
-  const lines = readShardedLines(dirname(journalPath(vault)), JOURNAL_GRAMMAR);
-  const out: MaintenanceJournalEntry[] = [];
-  for (const line of lines) {
-    try {
-      const parsed: unknown = JSON.parse(line);
-      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-        out.push(parsed as MaintenanceJournalEntry);
-      }
-    } catch {
-      // Fail-soft: a torn line never breaks the journal read.
-    }
-  }
-  out.reverse();
+  const shards = readShardLinesByShard(dirname(journalPath(vault)), JOURNAL_GRAMMAR).map(
+    (shard) => ({
+      shardId: shard.shardId,
+      rows: shard.rows.map(parseEntry).filter((entry) => entry !== null),
+    }),
+  );
+  const out = interleaveShardRows(shards, entryTime).toReversed();
   return limit !== undefined ? out.slice(0, Math.max(0, limit)) : out;
 }
 

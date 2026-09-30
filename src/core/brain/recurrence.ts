@@ -1,21 +1,13 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { ensureInsideVault } from "../path-safety.ts";
-import {
-  readShardedLines,
-  resolveAppendShardId,
-  shardedFileName,
-  type LedgerShardGrammar,
-} from "./ledger-shards.ts";
+import { jsonlLedgerGrammar, readShardedLines } from "./ledger-shards.ts";
 import { BRAIN_LOG_REL } from "./path-constants.ts";
+import { proceduralRecurrencePath, RECURRENCE_LEDGER_STEM } from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 /** The recurrence ledger's file-name layout, handed to the shared shard grammar. */
-const RECURRENCE_LEDGER_GRAMMAR: LedgerShardGrammar = Object.freeze({
-  base: "recurrence-support",
-  extensions: Object.freeze(["jsonl"]),
-});
+const RECURRENCE_LEDGER_GRAMMAR = jsonlLedgerGrammar(RECURRENCE_LEDGER_STEM);
 
 export type RecurrenceCommitment = "exploring" | "leaning" | "decided" | "locked";
 export type RecurrenceAction = "learn" | "forget";
@@ -243,24 +235,12 @@ function commitmentForSupport(
   return "exploring";
 }
 
-/**
- * The file THIS device appends to: `recurrence-support[.<deviceId>].jsonl`
- * under `Brain/log/` (t_774dea61). The empty device id yields the legacy
- * un-sharded name.
- */
-function recurrenceWritePath(vault: string): string {
-  return join(
-    vault,
-    BRAIN_LOG_REL,
-    shardedFileName("recurrence-support", resolveAppendShardId(), "jsonl"),
-  );
-}
-
 function appendEvent(vault: string, event: RecurrenceEvent): void {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
-  const path = recurrenceWritePath(vault);
-  mkdirSync(ensureInsideVault(dirname(path), vault), { recursive: true });
+  // This device's shard (t_774dea61); the path helper confines it to the vault.
+  const path = proceduralRecurrencePath(vault);
+  mkdirSync(dirname(path), { recursive: true });
   appendFileSync(path, `${JSON.stringify(event)}\n`, { encoding: "utf8" });
 }
 

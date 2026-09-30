@@ -44,7 +44,7 @@ import {
   skillProposalPendingPath,
   skillProposalRejectedPath,
 } from "./paths.ts";
-import { resolveAppendShardId, shardedFileName } from "./ledger-shards.ts";
+import { JSONL_LEDGER_EXT, resolveAppendShardId, shardedFileName } from "./ledger-shards.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { listContinuityRecords, type ContinuityRecord } from "./continuity/store.ts";
 
@@ -245,8 +245,8 @@ const SUGGESTED_BODY_HEADING = "## Suggested skill body";
 /** Lock basename guarding the accept sequence, inside the proposals root. */
 const ACCEPT_LOCK_NAME = "accept";
 
-/** JSONL ledger of verifier rejections, relative to the vault. */
-const VERIFIER_REJECTION_LEDGER_REL = join(BRAIN_SKILL_PROPOSALS_REL, "verifier-rejections.jsonl");
+/** Shard stem of the verifier-rejection JSONL ledger inside the proposals root. */
+const VERIFIER_REJECTION_LEDGER_STEM = "verifier-rejections";
 
 export function learnSkillProposals(
   vault: string,
@@ -1440,8 +1440,8 @@ export function verifierRejectionLedgerPath(vault: string): string {
   return ensureInsideVault(
     join(
       vault,
-      dirname(VERIFIER_REJECTION_LEDGER_REL),
-      shardedFileName("verifier-rejections", resolveAppendShardId(), "jsonl"),
+      BRAIN_SKILL_PROPOSALS_REL,
+      shardedFileName(VERIFIER_REJECTION_LEDGER_STEM, resolveAppendShardId(), JSONL_LEDGER_EXT),
     ),
     vault,
   );
