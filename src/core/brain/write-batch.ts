@@ -665,8 +665,8 @@ function projectAppendNote(
 type CommittedNoteRewrite = ({ readonly wrote: true } & NoteWriteAudit) | { readonly wrote: false };
 
 /**
- * Commit one note rewrite and attribute it: write, and only for a write
- * that happened, keep the bytes it replaced and record the event.
+ * Commit one note rewrite and attribute it: for a rewrite that changes
+ * the bytes, keep the bytes it replaces, write, and record the event.
  *
  * The write runs with `skipIfUnchanged`, so a byte-identical re-apply
  * leaves the target untouched - no temp file, no rename, no mtime bump
@@ -677,14 +677,14 @@ type CommittedNoteRewrite = ({ readonly wrote: true } & NoteWriteAudit) | { read
  * note-write event (no audit line exists for a write that did not
  * happen).
  *
- * For a write that DID happen the order is the design's: image, then
- * record. The gate needs the write's own verdict before it can decide
- * whether an image is owed, so the image now follows the rename instead
- * of preceding it - the narrowed cost is that a process dying between
- * rename and image loses the prior bytes, where the old order always had
- * them. That window contains one small atomic write and no caller code,
- * and a missing image is a named degradation (the revert plan reports
- * its absence), not a silent one.
+ * The order is the design's: image, then write, then record. Whether an
+ * image is owed is decided up front (`before !== contents`), so the image
+ * lands BEFORE the rename and a crash or a failed store never leaves the
+ * prior bytes replaced without their copy - a retry would otherwise see
+ * the new bytes, skip as unchanged and never reach the ledger. The store
+ * is content-addressed and idempotent, so an image stored for a write
+ * that `skipIfUnchanged` then skips (the target changed underneath to
+ * the new bytes) is harmless.
  */
 function commitNoteRewrite(
   vault: string,
@@ -694,10 +694,11 @@ function commitNoteRewrite(
   op: NoteWriteOp,
   opts: ApplyWriteBatchOptions,
 ): CommittedNoteRewrite {
+  if (before === contents) return { wrote: false };
+  storeBeforeImage(vault, before);
   mkdirSync(dirname(target.abs), { recursive: true });
   const wrote = atomicWriteFileSync(target.abs, contents, { skipIfUnchanged: true });
   if (!wrote) return { wrote: false };
-  storeBeforeImage(vault, before);
   const audit = recordNoteWrite(vault, {
     op,
     target: target.relPath,

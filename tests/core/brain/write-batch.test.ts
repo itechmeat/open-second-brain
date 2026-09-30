@@ -37,7 +37,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { applyWriteBatch, WriteBatchError } from "../../../src/core/brain/write-batch.ts";
 import { listNoteWrites, type NoteWriteRecord } from "../../../src/core/brain/notes/write-log.ts";
@@ -571,6 +571,24 @@ describe("applyWriteBatch note-write attribution", () => {
     expect(noteWrites()).toHaveLength(3);
     const stored = pruneWriteImages(vault, { olderThanDays: 0, dryRun: true }).removed;
     expect(stored.toSorted()).toEqual([sha256Hex(first), sha256Hex(second)].toSorted());
+  });
+
+  test("the before-image is stored before the rewrite, so a failed store leaves the note as it was", () => {
+    const abs = seedNote("Notes/Doc.md", "original body", "title: Doc");
+    const before = readFileSync(abs, "utf8");
+    // A file where the image directory belongs makes the store throw, the
+    // way ENOSPC or EACCES under the images directory would.
+    const imagesDir = dirname(writeImagePath(vault, sha256Hex(before)));
+    mkdirSync(dirname(imagesDir), { recursive: true });
+    writeFileSync(imagesDir, "not a directory");
+
+    expect(() =>
+      applyWriteBatch(vault, [{ kind: "update_note", path: "Notes/Doc.md", body: "next body" }]),
+    ).toThrow();
+    // The prior bytes were never replaced without their image, so a retry
+    // is not mistaken for a byte-identical re-apply.
+    expect(readFileSync(abs, "utf8")).toBe(before);
+    expect(noteWrites()).toEqual([]);
   });
 
   test("a refused batch records nothing, because no bytes were written", () => {
