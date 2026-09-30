@@ -32,7 +32,7 @@
  *     Syncthing delivered the files in.
  */
 
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { resolveDeviceId } from "../config.ts";
@@ -199,6 +199,36 @@ export function listSyncConflictFiles(dir: string): string[] {
     .filter((e) => e.isFile() && isSyncConflictName(e.name))
     .map((e) => join(dir, e.name))
     .toSorted();
+}
+
+/**
+ * Every non-blank line of every shard of one ledger, shards in ascending
+ * name order (the legacy name sorts among the device shards by the shared
+ * stem) and lines in append order.
+ *
+ * This is the merged read for ledgers whose rows carry no sort key of their
+ * own: a single-shard vault reads back in exactly the order it always did,
+ * and a multi-device one gets the deterministic shard-id order instead of
+ * Syncthing's arrival order. Conflict copies are never listed. A shard
+ * listed but vanished before the read is skipped (a concurrent compactor
+ * won); any other read failure propagates - "could not tell" must never
+ * resolve to "no rows".
+ */
+export function readShardedLines(dir: string, grammar: LedgerShardGrammar): string[] {
+  const out: string[] = [];
+  for (const shard of listShardedFiles(dir, grammar)) {
+    let text: string;
+    try {
+      text = readFileSync(shard.path, "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw err;
+    }
+    for (const line of text.split("\n")) {
+      if (line.trim() !== "") out.push(line);
+    }
+  }
+  return out;
 }
 
 /** One row read out of one shard, tagged with where it came from. */

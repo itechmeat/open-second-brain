@@ -14,6 +14,7 @@ import {
   acceptSkillProposal,
   draftDeclaredSkillProposal,
   learnSkillProposals,
+  verifierRejectionLedgerPath,
   listPendingSkillProposals,
   previewDeclaredSkillProposal,
   rejectSkillProposal,
@@ -341,5 +342,25 @@ describe("a declared proposal refuses a taken slug by name", () => {
 
     rejectSkillProposal(vault, listPendingSkillProposals(vault)[0]!.slug, { note: "no" });
     expect(previewDeclaredSkillProposal(vault, declaration).outcome).toBe("suppressed");
+  });
+});
+
+describe("verifier-rejection ledger shards (t_774dea61)", () => {
+  test("each device names its own rejection shard; the empty id keeps the legacy name", () => {
+    const previous = process.env["O2B_DEVICE_ID"];
+    try {
+      process.env["O2B_DEVICE_ID"] = "a";
+      const onA = verifierRejectionLedgerPath(vault);
+      process.env["O2B_DEVICE_ID"] = "b";
+      const onB = verifierRejectionLedgerPath(vault);
+      process.env["O2B_DEVICE_ID"] = "";
+      const legacy = verifierRejectionLedgerPath(vault);
+      expect(onA.endsWith("verifier-rejections.a.jsonl")).toBe(true);
+      expect(onB.endsWith("verifier-rejections.b.jsonl")).toBe(true);
+      expect(legacy.endsWith("verifier-rejections.jsonl")).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env["O2B_DEVICE_ID"];
+      else process.env["O2B_DEVICE_ID"] = previous;
+    }
   });
 });

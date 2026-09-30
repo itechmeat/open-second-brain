@@ -44,6 +44,7 @@ import {
   skillProposalPendingPath,
   skillProposalRejectedPath,
 } from "./paths.ts";
+import { resolveAppendShardId, shardedFileName } from "./ledger-shards.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { listContinuityRecords, type ContinuityRecord } from "./continuity/store.ts";
 
@@ -1430,12 +1431,28 @@ function evolveAcceptedProposal(
   }
 }
 
+/**
+ * The verifier-rejection ledger file THIS device appends to:
+ * `verifier-rejections[.<deviceId>].jsonl` (t_774dea61). The empty device
+ * id yields the legacy un-sharded name.
+ */
+export function verifierRejectionLedgerPath(vault: string): string {
+  return ensureInsideVault(
+    join(
+      vault,
+      dirname(VERIFIER_REJECTION_LEDGER_REL),
+      shardedFileName("verifier-rejections", resolveAppendShardId(), "jsonl"),
+    ),
+    vault,
+  );
+}
+
 /** Append one verifier-rejection record to the JSONL ledger. */
 function appendVerifierRejection(
   vault: string,
   entry: { id: string; name_key: string; reason: string; at: string },
 ): void {
-  const path = ensureInsideVault(join(vault, VERIFIER_REJECTION_LEDGER_REL), vault);
+  const path = verifierRejectionLedgerPath(vault);
   mkdirSync(dirname(path), { recursive: true });
   appendFileSync(path, `${JSON.stringify(entry)}\n`, { encoding: "utf8" });
 }

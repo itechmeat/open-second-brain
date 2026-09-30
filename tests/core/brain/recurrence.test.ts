@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -109,5 +109,39 @@ describe("recurrence support ledger", () => {
     });
     entry = getRecurrenceEntry(vault, "h-gamma");
     expect(entry).toBeNull();
+  });
+});
+
+describe("recurrence-support per-device shards (t_774dea61)", () => {
+  test("two devices write two shard files and the reader merges both", () => {
+    const previous = process.env["O2B_DEVICE_ID"];
+    try {
+      process.env["O2B_DEVICE_ID"] = "a";
+      applyRecurrenceEvidence(vault, {
+        contentHash: "h-shared",
+        scope: "project-a",
+        sourceId: "src-a",
+        action: "learn",
+        at: "2026-06-01T10:00:00Z",
+      });
+      process.env["O2B_DEVICE_ID"] = "b";
+      applyRecurrenceEvidence(vault, {
+        contentHash: "h-shared",
+        scope: "project-b",
+        sourceId: "src-b",
+        action: "learn",
+        at: "2026-06-01T10:01:00Z",
+      });
+      expect(existsSync(join(vault, "Brain", "log", "recurrence-support.a.jsonl"))).toBe(true);
+      expect(existsSync(join(vault, "Brain", "log", "recurrence-support.b.jsonl"))).toBe(true);
+      expect(existsSync(join(vault, "Brain", "log", "recurrence-support.jsonl"))).toBe(false);
+
+      const entry = getRecurrenceEntry(vault, "h-shared");
+      expect(entry).not.toBeNull();
+      expect(entry!.supportCount).toBe(2);
+    } finally {
+      if (previous === undefined) delete process.env["O2B_DEVICE_ID"];
+      else process.env["O2B_DEVICE_ID"] = previous;
+    }
   });
 });

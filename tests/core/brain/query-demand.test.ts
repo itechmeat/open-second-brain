@@ -288,3 +288,43 @@ describe("rolling cap", () => {
     expect(records.every((r) => r.terms.join(" ") === bucketKey)).toBe(true);
   });
 });
+
+describe("query-demand per-device shards (t_774dea61)", () => {
+  const INPUT = {
+    query: "how does the auth flow work",
+    at: "2026-07-01T00:00:00.000Z",
+    resultCount: 3,
+  };
+
+  test("two devices write two shard files and reads merge both", () => {
+    const previous = process.env["O2B_DEVICE_ID"];
+    try {
+      process.env["O2B_DEVICE_ID"] = "a";
+      recordQueryDemand(vault, INPUT);
+      process.env["O2B_DEVICE_ID"] = "b";
+      recordQueryDemand(vault, INPUT);
+      expect(existsSync(join(vault, "Brain", "log", "query-demand.a.jsonl"))).toBe(true);
+      expect(existsSync(join(vault, "Brain", "log", "query-demand.b.jsonl"))).toBe(true);
+      expect(existsSync(join(vault, "Brain", "log", "query-demand.jsonl"))).toBe(false);
+
+      const records = readQueryDemand(vault);
+      expect(records).toHaveLength(2);
+    } finally {
+      if (previous === undefined) delete process.env["O2B_DEVICE_ID"];
+      else process.env["O2B_DEVICE_ID"] = previous;
+    }
+  });
+
+  test("the empty device id keeps the legacy un-sharded file", () => {
+    const previous = process.env["O2B_DEVICE_ID"];
+    try {
+      process.env["O2B_DEVICE_ID"] = "";
+      recordQueryDemand(vault, INPUT);
+      expect(existsSync(join(vault, "Brain", "log", "query-demand.jsonl"))).toBe(true);
+      expect(readQueryDemand(vault)).toHaveLength(1);
+    } finally {
+      if (previous === undefined) delete process.env["O2B_DEVICE_ID"];
+      else process.env["O2B_DEVICE_ID"] = previous;
+    }
+  });
+});

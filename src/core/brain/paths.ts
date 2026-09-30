@@ -566,7 +566,16 @@ export function captureWatermarkPath(vault: string): string {
  * malformed - so no update is ever silently dropped.
  */
 export function captureDecisionLogPath(vault: string): string {
-  return ensureInsideVault(join(vault, BRAIN_LOG_REL, "capture-decisions.jsonl"), vault);
+  // Per-device shard (t_774dea61): the capture host on each machine appends
+  // to its own file; the empty device id keeps the legacy name.
+  return ensureInsideVault(
+    join(
+      vault,
+      BRAIN_LOG_REL,
+      shardedFileName("capture-decisions", resolveAppendShardId(), "jsonl"),
+    ),
+    vault,
+  );
 }
 
 /** Log file for the given UTC date: `Brain/log/<YYYY-MM-DD>.md`. */

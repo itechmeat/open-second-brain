@@ -26,14 +26,20 @@
  * rolling and byte-budget-capped (see {@link DEMAND_LOG_MAX_BYTES}).
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
-import { dirname } from "node:path";
+import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { clamp01 } from "../math.ts";
 import { ensureInsideVault } from "../path-safety.ts";
 import { redactRawOutput } from "../redactor.ts";
-import { queryDemandLogPath } from "./paths.ts";
+import { BRAIN_LOG_REL } from "./path-constants.ts";
+import {
+  readShardedLines,
+  resolveAppendShardId,
+  shardedFileName,
+  type LedgerShardGrammar,
+} from "./ledger-shards.ts";
 import { acquireLockSync } from "./sync-lockfile.ts";
 import {
   COMPLETENESS_COMPLETE_THRESHOLD,
@@ -222,6 +228,24 @@ function isSecretShapedTerm(term: string): boolean {
   return /[a-z]/.test(term) && /[0-9]/.test(term);
 }
 
+/** The demand ledger's file-name layout, handed to the shared shard grammar. */
+const DEMAND_LEDGER_GRAMMAR: LedgerShardGrammar = Object.freeze({
+  base: "query-demand",
+  extensions: Object.freeze(["jsonl"]),
+});
+
+/**
+ * The file THIS device appends to: `<base>[.<deviceId>].jsonl` under
+ * `Brain/log/`. The empty device id yields the legacy un-sharded name.
+ */
+function demandLedgerWritePath(vault: string): string {
+  return join(
+    vault,
+    BRAIN_LOG_REL,
+    shardedFileName("query-demand", resolveAppendShardId(), "jsonl"),
+  );
+}
+
 /**
  * Append one recall observation to the demand log. Terms are derived
  * from `terms` (redacted) or `query` (normalized+redacted); a query with
@@ -247,7 +271,10 @@ export function recordQueryDemand(
   };
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
-  const path = queryDemandLogPath(vault);
+  // Per-device shard (t_774dea61): this device appends to a file no other
+  // device writes, and the per-file lock plus the in-place compaction are
+  // scoped to that one shard.
+  const path = demandLedgerWritePath(vault);
   mkdirSync(ensureInsideVault(dirname(path), vault), { recursive: true });
   const handle = acquireLockSync(path);
   try {
@@ -327,8 +354,9 @@ export function readQueryDemand(
   vault: string,
   filter: QueryDemandFilter = {},
 ): ReadonlyArray<QueryDemandRecord> {
-  const path = queryDemandLogPath(vault);
-  if (!existsSync(path)) return Object.freeze([]);
+  // Merged read over every device's shard (t_774dea61); the absent
+  // directory lists nothing, which is the same empty result as before.
+  const lines = readShardedLines(join(vault, BRAIN_LOG_REL), DEMAND_LEDGER_GRAMMAR);
   // Normalize the filter bounds to the same millisecond-precision form the
   // stored `ts` already uses (records are normalized at write time). The
   // comparison below is lexical, so a second-precision `--since
@@ -338,8 +366,7 @@ export function readQueryDemand(
   const since = filter.since !== undefined ? normalizeDemandTimestamp(filter.since) : undefined;
   const until = filter.until !== undefined ? normalizeDemandTimestamp(filter.until) : undefined;
   const out: QueryDemandRecord[] = [];
-  for (const line of readFileSync(path, "utf8").split("\n")) {
-    if (!line.trim()) continue;
+  for (const line of lines) {
     const record = coerceRecord(line);
     if (record === null) continue;
     if (since !== undefined && record.ts < since) continue;
