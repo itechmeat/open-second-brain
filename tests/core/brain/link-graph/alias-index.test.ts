@@ -1,5 +1,5 @@
 /**
- * Unit tests for `buildAliasIndex`. The helper walks Brain
+ * Unit tests for `buildAliasIndex` and `listAliasClaims`. The helper walks Brain
  * preferences + retired artifacts, reads their frontmatter
  * `aliases:` arrays, and returns a frozen Map keyed by NFC-normalised
  * lowercase alias text, valued at the canonical artifact id.
@@ -14,7 +14,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { buildAliasIndex } from "../../../../src/core/brain/link-graph/alias-index.ts";
+import {
+  buildAliasIndex,
+  listAliasClaims,
+} from "../../../../src/core/brain/link-graph/alias-index.ts";
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 
 let vault: string;
@@ -231,6 +234,36 @@ describe("buildAliasIndex - collision handling", () => {
     );
     const idx = buildAliasIndex(vault);
     expect(idx.get("pref-bar")).toBeUndefined();
+  });
+});
+
+describe("listAliasClaims", () => {
+  function claimant(topic: string, aliases: string): string {
+    return [
+      "---",
+      "kind: preference",
+      `topic: ${topic}`,
+      "status: confirmed",
+      "principle: x",
+      `aliases: ${aliases}`,
+      "---",
+    ].join("\n");
+  }
+
+  test("keeps every claimant of a colliding alias in the index's order, each once", () => {
+    writePref("pref-bbb", claimant("b", "[shared, Shared]"));
+    writePref("pref-aaa", claimant("a", "[shared]"));
+    writeRetired("ret-ccc", claimant("c", "[shared]"));
+
+    expect(listAliasClaims(vault).get("shared")).toEqual(["pref-aaa", "pref-bbb", "ret-ccc"]);
+    expect(buildAliasIndex(vault).get("shared")).toBe("pref-aaa");
+  });
+
+  test("an alias shadowing an existing canonical id has no claimant", () => {
+    writePref("pref-foo", claimant("foo", "[pref-bar]"));
+    writePref("pref-bar", claimant("bar", "[]"));
+
+    expect(listAliasClaims(vault).has("pref-bar")).toBe(false);
   });
 });
 
