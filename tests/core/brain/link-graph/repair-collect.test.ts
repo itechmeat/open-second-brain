@@ -15,7 +15,6 @@ import { appendContinuityRecord } from "../../../../src/core/brain/continuity/st
 import {
   EXPLICIT_REFERENCE_CONFIDENCE,
   IDENTITY_STRENGTH,
-  collectRepairCandidates,
   collectRepairCandidatesWithRefusals,
 } from "../../../../src/core/brain/link-graph/repair-lane.ts";
 
@@ -62,12 +61,12 @@ function writeNote(rel: string, title: string, body: string): void {
   );
 }
 
-describe("collectRepairCandidates explicit references", () => {
+describe("collectRepairCandidatesWithRefusals explicit references", () => {
   test("a note that names another note's title without linking it yields an explicit candidate", () => {
     writeNote("Notes/alpha.md", "Alpha", "This note discusses Beta in depth.");
     writeNote("Notes/beta.md", "Beta", "standalone");
 
-    const candidates = collectRepairCandidates(vault);
+    const { candidates } = collectRepairCandidatesWithRefusals(vault);
     const explicit = candidates.find(
       (c) => c.strength === IDENTITY_STRENGTH.explicitReference && c.target.includes("beta"),
     );
@@ -81,7 +80,7 @@ describe("collectRepairCandidates explicit references", () => {
     writeNote("Notes/essay.md", "Essay", "This whole essay is about AI and its many uses.");
     writeNote("Notes/ai.md", "AI", "standalone");
 
-    const candidates = collectRepairCandidates(vault);
+    const { candidates } = collectRepairCandidatesWithRefusals(vault);
     expect(
       candidates.some(
         (c) => c.strength === IDENTITY_STRENGTH.explicitReference && c.target.includes("ai"),
@@ -93,14 +92,14 @@ describe("collectRepairCandidates explicit references", () => {
     writeNote("Notes/alpha.md", "Alpha", "See [[Notes/beta.md]] and Beta again.");
     writeNote("Notes/beta.md", "Beta", "standalone");
 
-    const candidates = collectRepairCandidates(vault);
+    const { candidates } = collectRepairCandidatesWithRefusals(vault);
     expect(candidates.some((c) => c.source.includes("alpha") && c.target.includes("beta"))).toBe(
       false,
     );
   });
 });
 
-describe("collectRepairCandidates session continuity", () => {
+describe("collectRepairCandidatesWithRefusals session continuity", () => {
   test("two notes co-referenced in one session event yield a continuity candidate", () => {
     writeNote("Notes/gamma.md", "Gamma", "standalone");
     writeNote("Notes/delta.md", "Delta", "standalone");
@@ -114,7 +113,7 @@ describe("collectRepairCandidates session continuity", () => {
       payload: { host: "test" },
     });
 
-    const candidates = collectRepairCandidates(vault);
+    const { candidates } = collectRepairCandidatesWithRefusals(vault);
     const continuity = candidates.find((c) => c.strength === IDENTITY_STRENGTH.sessionContinuity);
     expect(continuity).toBeDefined();
     expect(
@@ -152,6 +151,17 @@ describe("collectRepairCandidatesWithRefusals - corpus-wide unique-match binding
     expect(refusals.map((r) => [r.source, r.target])).toEqual([
       [expect.stringContaining("one"), expect.stringContaining("two")],
     ]);
+  });
+
+  test("a page already linking one carrier of an ambiguous term is not refused", () => {
+    // The unique path never re-proposes an edge the page already has; the
+    // ambiguous path must not refuse a mention the author already resolved.
+    writeNote("Notes/one.md", "Alpha", "Platform notes");
+    writeNote("Notes/two.md", "Alpha", "More platform notes");
+    writeNote("Notes/three.md", "Reader", "Reads Alpha, see [[Notes/one.md]].");
+
+    const { refusals } = collectRepairCandidatesWithRefusals(vault);
+    expect(refusals.filter((r) => r.source.includes("three"))).toEqual([]);
   });
 
   test("a uniquely carried title still binds exactly one page", () => {

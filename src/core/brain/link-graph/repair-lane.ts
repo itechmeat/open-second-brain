@@ -456,8 +456,13 @@ interface MentionTerm {
   readonly needle: string;
   /** Spelling the reason strings name (the title, or the alias as indexed). */
   readonly display: string;
-  /** Vault-relative paths of the corpus pages carrying the term. */
-  readonly carriers: Set<string>;
+  /** The corpus pages carrying the term, one per path, ordered by path. */
+  readonly carriers: ReadonlyArray<CollectedPage>;
+}
+
+/** Code-point order of two strings, for deterministic sorts. */
+function compareStrings(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 /** Normalized lookup form of a term, exactly as the alias index keys its side. */
@@ -472,15 +477,24 @@ function termNeedle(value: string): string {
  * whose canonical id matches no corpus page contributes nothing.
  */
 function collectMentionTerms(pages: ReadonlyArray<CollectedPage>, vault: string): MentionTerm[] {
-  const terms = new Map<string, MentionTerm>();
+  // Carriers pool by path while terms register, so a page reached through
+  // both its title and an alias carries a term once.
+  const terms = new Map<
+    string,
+    {
+      readonly needle: string;
+      readonly display: string;
+      readonly carriers: Map<string, CollectedPage>;
+    }
+  >();
   for (const page of pages) {
     const needle = termNeedle(page.title);
     if (needle.length === 0) continue;
     const existing = terms.get(needle);
     if (existing === undefined) {
-      terms.set(needle, { needle, display: page.title, carriers: new Set([page.rel]) });
+      terms.set(needle, { needle, display: page.title, carriers: new Map([[page.rel, page]]) });
     } else {
-      existing.carriers.add(page.rel);
+      existing.carriers.set(page.rel, page);
     }
   }
   const byKey = new Map<string, CollectedPage[]>();
@@ -497,15 +511,19 @@ function collectMentionTerms(pages: ReadonlyArray<CollectedPage>, vault: string)
       terms.set(aliasKey, {
         needle: aliasKey,
         display: aliasKey,
-        carriers: new Set(bucket.map((page) => page.rel)),
+        carriers: new Map(bucket.map((page) => [page.rel, page])),
       });
     } else {
-      for (const page of bucket) existing.carriers.add(page.rel);
+      for (const page of bucket) existing.carriers.set(page.rel, page);
     }
   }
-  return [...terms.values()].toSorted((a, b) =>
-    a.needle < b.needle ? -1 : a.needle > b.needle ? 1 : 0,
-  );
+  return [...terms.values()]
+    .map((term) => ({
+      needle: term.needle,
+      display: term.display,
+      carriers: [...term.carriers.values()].toSorted((a, b) => compareStrings(a.rel, b.rel)),
+    }))
+    .toSorted((a, b) => compareStrings(a.needle, b.needle));
 }
 
 /** Refusal reason for a term the corpus cannot bind to one page. */
@@ -533,7 +551,6 @@ export function collectRepairCandidatesWithRefusals(
   const pages = loadPages(vault);
   const byKey = new Map<string, CollectedPage>();
   for (const page of pages) byKey.set(page.key, page);
-  const byRel = new Map(pages.map((page) => [page.rel, page]));
 
   const best = new Map<string, RepairCandidate>();
   const consider = (candidate: RepairCandidate): void => {
@@ -557,10 +574,9 @@ export function collectRepairCandidatesWithRefusals(
     const lower = masked.toLowerCase();
     for (const term of terms) {
       if (!mentionsTerm(lower, masked, term.needle)) continue;
-      const verdict = resolveUniqueMatch([...term.carriers].toSorted());
+      const verdict = resolveUniqueMatch(term.carriers);
       if (verdict.status === "unique") {
-        const target = byRel.get(verdict.target);
-        if (target === undefined) continue;
+        const target = verdict.target;
         if (target.key === page.key) continue;
         if (page.linkedKeys.has(target.key)) continue;
         consider({
@@ -571,10 +587,12 @@ export function collectRepairCandidatesWithRefusals(
           reason: `explicit textual reference to ${JSON.stringify(term.display)}`,
         });
       } else if (verdict.status === "ambiguous") {
-        for (const rel of verdict.matches) {
-          if (rel === page.rel) continue;
-          const target = byRel.get(rel);
-          if (target === undefined) continue;
+        // A page that already links one carrier has resolved the mention
+        // itself, exactly as the unique path skips an existing edge: there
+        // is nothing left to refuse.
+        if (verdict.matches.some((carrier) => page.linkedKeys.has(carrier.key))) continue;
+        for (const target of verdict.matches) {
+          if (target.rel === page.rel) continue;
           refusals.push({
             source: page.rel,
             target: target.rel,
