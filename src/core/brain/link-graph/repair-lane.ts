@@ -596,8 +596,10 @@ export function collectRepairCandidatesWithRefusals(
         // itself, exactly as the unique path skips an existing edge: there
         // is nothing left to refuse.
         if (verdict.matches.some((carrier) => page.linkedKeys.has(carrier.key))) continue;
+        // A carrier naming the term names itself, the same self-reference
+        // the unique path skips: refusing it would point at the others.
+        if (verdict.matches.includes(page)) continue;
         for (const target of verdict.matches) {
-          if (target.rel === page.rel) continue;
           refusals.push({
             source: page.rel,
             target: target.rel,

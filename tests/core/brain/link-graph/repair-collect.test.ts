@@ -142,15 +142,16 @@ describe("collectRepairCandidatesWithRefusals - corpus-wide unique-match binding
     expect(refusals.every((r) => r.reason.includes("Alpha"))).toBe(true);
   });
 
-  test("a source sharing the ambiguous title refuses only the other carrier, never itself", () => {
+  test("a carrier mentioning its own ambiguous title is a self-reference, not a refusal", () => {
+    // The unique path reads a page naming its own title as self-reference;
+    // the ambiguous path must not turn the same mention into refusals
+    // pointing at the other carriers.
     writeNote("Notes/one.md", "Alpha", "Alpha is also documented elsewhere.");
     writeNote("Notes/two.md", "Alpha", "standalone");
 
     const { candidates, refusals } = collectRepairCandidatesWithRefusals(vault);
     expect(candidates).toEqual([]);
-    expect(refusals.map((r) => [r.source, r.target])).toEqual([
-      [expect.stringContaining("one"), expect.stringContaining("two")],
-    ]);
+    expect(refusals).toEqual([]);
   });
 
   test("a page already linking one carrier of an ambiguous term is not refused", () => {
@@ -220,14 +221,13 @@ describe("collectRepairCandidatesWithRefusals - corpus-wide unique-match binding
       (c) => c.strength === IDENTITY_STRENGTH.explicitReference && c.source.includes("report"),
     );
     expect(bound).toEqual([]);
-    // The glossary page mentions the term in its own body too, so three
-    // (mentioning page, carrying page) pairs are refused in total.
-    expect(refusals).toHaveLength(3);
+    // The glossary page naming its own title is a self-reference, so only
+    // the report's (mentioning page, carrying page) pairs are refused.
     expect(refusals.every((r) => r.action === "skip-ambiguous")).toBe(true);
     expect(refusals.every((r) => r.reason.includes("Downstream"))).toBe(true);
-    const targets = refusals.map((r) => r.target).toSorted();
-    expect(targets[0]).toContain("pref-second-order");
-    expect(targets[1]).toContain("pref-second-order");
-    expect(targets[2]).toContain("glossary");
+    expect(refusals.map((r) => [r.source, r.target])).toEqual([
+      [expect.stringContaining("report"), expect.stringContaining("pref-second-order")],
+      [expect.stringContaining("report"), expect.stringContaining("glossary")],
+    ]);
   });
 });
