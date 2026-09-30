@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import {
   extractableAllowlist,
   isSkippedPageReason,
+  parseSkippedPageReason,
   partitionExtractable,
   SKIPPED_PAGE_REASON,
   SKIPPED_PAGE_REASONS,
@@ -73,15 +74,30 @@ describe("typed skip reasons (P4)", () => {
     expect(skip.detail).toBe("memo");
   });
 
-  test("isSkippedPageReason accepts the token and the legacy sentence, rejects an unknown string", () => {
+  test("isSkippedPageReason accepts only members of the closed union", () => {
     expect(isSkippedPageReason(SKIPPED_PAGE_REASON.notExtractable)).toBe(true);
+    // The legacy sentence is not a member: a guard that accepted it would
+    // narrow a string to a type it does not hold.
     expect(
       isSkippedPageReason('schema_type "memo" is not in the schema extractable allowlist'),
-    ).toBe(true);
+    ).toBe(false);
     expect(isSkippedPageReason("schema_type was rejected for some other reason")).toBe(false);
     expect(isSkippedPageReason("")).toBe(false);
     expect(isSkippedPageReason(42)).toBe(false);
     expect(isSkippedPageReason(null)).toBe(false);
+  });
+
+  test("parseSkippedPageReason maps the legacy sentence to its token and rejects the rest", () => {
+    expect(parseSkippedPageReason(SKIPPED_PAGE_REASON.notExtractable)).toBe(
+      SKIPPED_PAGE_REASON.notExtractable,
+    );
+    expect(
+      parseSkippedPageReason('schema_type "memo" is not in the schema extractable allowlist'),
+    ).toBe(SKIPPED_PAGE_REASON.notExtractable);
+    expect(parseSkippedPageReason("schema_type was rejected for some other reason")).toBeNull();
+    expect(parseSkippedPageReason("")).toBeNull();
+    expect(parseSkippedPageReason(42)).toBeNull();
+    expect(parseSkippedPageReason(null)).toBeNull();
   });
 });
 

@@ -48,15 +48,30 @@ export const SKIPPED_PAGE_REASONS: ReadonlyArray<SkippedPageReason> = Object.fre
 const LEGACY_REASON_RE = /^schema_type "[^"]*" is not in the schema extractable allowlist$/;
 
 /**
- * Narrow a string read back across a tool boundary. Accepts the typed token
- * and the legacy free-text sentence pre-taxonomy builds serialized - that
- * sentence was the only reason this gate ever emitted - and rejects anything
- * else, so a caller never misreads a value it does not understand.
+ * Membership guard of the closed union: true only for a token this build
+ * emits. The legacy free-text sentence is NOT a member, so it is rejected
+ * here; a reader of persisted or wire values uses
+ * {@link parseSkippedPageReason}, which maps it to its token.
  */
 export function isSkippedPageReason(value: unknown): value is SkippedPageReason {
-  if (typeof value !== "string") return false;
-  if ((SKIPPED_PAGE_REASONS as ReadonlyArray<string>).includes(value)) return true;
-  return LEGACY_REASON_RE.test(value);
+  return (
+    typeof value === "string" && (SKIPPED_PAGE_REASONS as ReadonlyArray<string>).includes(value)
+  );
+}
+
+/**
+ * Parse a reason read back across a tool boundary. Accepts the typed token
+ * and the legacy free-text sentence pre-taxonomy builds serialized - that
+ * sentence was the only reason this gate ever emitted, so it maps to
+ * {@link SKIPPED_PAGE_REASON.notExtractable} - and returns null for
+ * anything else, so a caller never misreads a value it does not understand.
+ */
+export function parseSkippedPageReason(value: unknown): SkippedPageReason | null {
+  if (isSkippedPageReason(value)) return value;
+  if (typeof value === "string" && LEGACY_REASON_RE.test(value)) {
+    return SKIPPED_PAGE_REASON.notExtractable;
+  }
+  return null;
 }
 
 /** One page skipped by the gate, with the reason it was excluded. */
