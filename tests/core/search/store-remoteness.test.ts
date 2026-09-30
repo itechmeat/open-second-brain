@@ -159,6 +159,18 @@ describe("openWriteDatabase on a remote backing", () => {
   });
 });
 
+/** A migrated index left in WAL, with a second connection holding it open. */
+async function walIndex(label: string) {
+  const v = createTempVault(label);
+  const config = makeConfig({ vault: v.vault, dbPath: v.dbPath });
+  const seeded = await openWriteDatabase(config, false);
+  seeded.db.close(true);
+  await seeded.release();
+  const holder = new Database(v.dbPath);
+  holder.query("SELECT count(*) FROM sqlite_master").get();
+  return { v, config, holder };
+}
+
 describe("a journal-mode switch another connection blocks", () => {
   // `PRAGMA journal_mode = delete` on an index in WAL fails at once with
   // "database is locked" while any other connection has the file open,
@@ -166,16 +178,6 @@ describe("a journal-mode switch another connection blocks", () => {
   // broken index: the read open keeps WAL (a read is correct in it), and
   // the write open keeps it too and says so, instead of a raw error or an
   // INDEX_UNREADABLE that would trigger a full reindex.
-  async function walIndex(label: string) {
-    const v = createTempVault(label);
-    const config = makeConfig({ vault: v.vault, dbPath: v.dbPath });
-    const seeded = await openWriteDatabase(config, false);
-    seeded.db.close(true);
-    await seeded.release();
-    const holder = new Database(v.dbPath);
-    holder.query("SELECT count(*) FROM sqlite_master").get();
-    return { v, config, holder };
-  }
 
   test("the read open keeps WAL and opens", async () => {
     const { v, config, holder } = await walIndex("store-busy-read");

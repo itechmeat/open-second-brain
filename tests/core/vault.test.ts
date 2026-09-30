@@ -496,6 +496,12 @@ describe("formatFrontmatter refuses a key the parser could not read back", () =>
   });
 });
 
+function ageMtime(path: string): number {
+  const past = Date.now() / 1000 - 60;
+  utimesSync(path, past, past);
+  return statSync(path).mtimeMs;
+}
+
 /**
  * mtime stability on the overwrite branch (p4-silent-failure-hardening,
  * Task 6). `writeFrontmatterAtomic` goes through the atomic rename
@@ -507,12 +513,6 @@ describe("formatFrontmatter refuses a key the parser could not read back", () =>
  * it wrote.
  */
 describe("writeFrontmatterAtomic mtime stability", () => {
-  function ageMtime(path: string): number {
-    const past = Date.now() / 1000 - 60;
-    utimesSync(path, past, past);
-    return statSync(path).mtimeMs;
-  }
-
   test("an overwrite of identical content leaves the mtime alone and reports no write", () => {
     const path = join(tmp, "note.md");
     writeFrontmatterAtomic(path, { title: "T" }, "body", { overwrite: true });

@@ -168,17 +168,17 @@ describe("the CLI and MCP batch-plan payloads come from one serializer", () => {
   });
 });
 
-describe("o2b brain batch-plan skip-reason counts (P4)", () => {
-  /** A vault whose schema pack gates ingest to `paper` pages only. */
-  function gateToPaper(): void {
-    mkdirSync(join(vault, "Brain"), { recursive: true });
-    writeFileSync(
-      join(vault, "Brain", "_brain.yaml"),
-      "schema_version: 1\nschema:\n  page_types:\n    - paper\n    - memo\n  extractable:\n    - paper\n",
-      "utf8",
-    );
-  }
+/** A vault whose schema pack gates ingest to `paper` pages only. */
+function gateToPaper(): void {
+  mkdirSync(join(vault, "Brain"), { recursive: true });
+  writeFileSync(
+    join(vault, "Brain", "_brain.yaml"),
+    "schema_version: 1\nschema:\n  page_types:\n    - paper\n    - memo\n  extractable:\n    - paper\n",
+    "utf8",
+  );
+}
 
+describe("o2b brain batch-plan skip-reason counts (P4)", () => {
   test("the human surface renders the per-reason counts", async () => {
     write("mono/a.md", "---\nschema_type: paper\n---\nbody\n");
     write("mono/b.md", "---\nschema_type: memo\n---\nbody\n");

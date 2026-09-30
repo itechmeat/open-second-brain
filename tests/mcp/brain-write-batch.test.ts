@@ -449,10 +449,10 @@ describe("brain_write_batch - the absolute-path advisory on the receipt", () => 
   test("brain_update_note passes the advisory through on its receipt", async () => {
     seedNote("Notes/Single.md", "old", "title: Single");
     const updateTool = NOTES_TOOLS.find((t) => t.name === "brain_update_note")!;
-    const leaky = `body with ${HOME}alice-dev/leak.md inside`;
+    const leakyBody = `body with ${HOME}alice-dev/leak.md inside`;
     const res = (await updateTool.handler(ctx, {
       path: "Notes/Single.md",
-      content: leaky,
+      content: leakyBody,
     })) as Record<string, unknown>;
     expect(res["updated"]).toBe(true);
     const advisory = res["path_advisory"] as {
@@ -476,6 +476,24 @@ describe("brain_write_batch - the absolute-path advisory on the receipt", () => 
   });
 });
 
+/** Note-write events recorded in today's log shard. */
+function noteWriteEvents(): number {
+  const day = readLogDay(vault, new Date().toISOString().slice(0, 10));
+  return day.entries.filter((e) => e.eventType === BRAIN_LOG_EVENT_KIND.noteWrite).length;
+}
+
+function writeImages(): number {
+  const dir = writeImagesDir(vault);
+  return existsSync(dir) ? readdirSync(dir).length : 0;
+}
+
+/** Stamp a note's mtime one minute into the past, measurably. */
+function ageMtime(abs: string): number {
+  const past = Date.now() / 1000 - 60;
+  utimesSync(abs, past, past);
+  return statSync(abs).mtimeMs;
+}
+
 /**
  * mtime stability on byte-identical rewrites (p4-silent-failure-hardening,
  * Task 6). The atomic write pipeline lands a fresh inode on every call,
@@ -486,24 +504,6 @@ describe("brain_write_batch - the absolute-path advisory on the receipt", () => 
  * the receipt says what actually occurred.
  */
 describe("brain_write_batch - mtime stability on byte-identical rewrites", () => {
-  /** Note-write events recorded in today's log shard. */
-  function noteWriteEvents(): number {
-    const day = readLogDay(vault, new Date().toISOString().slice(0, 10));
-    return day.entries.filter((e) => e.eventType === BRAIN_LOG_EVENT_KIND.noteWrite).length;
-  }
-
-  function writeImages(): number {
-    const dir = writeImagesDir(vault);
-    return existsSync(dir) ? readdirSync(dir).length : 0;
-  }
-
-  /** Stamp a note's mtime one minute into the past, measurably. */
-  function ageMtime(abs: string): number {
-    const past = Date.now() / 1000 - 60;
-    utimesSync(abs, past, past);
-    return statSync(abs).mtimeMs;
-  }
-
   test("a byte-identical update re-applied writes nothing and says updated: false", async () => {
     seedNote("Notes/Stable.md", "v1");
     const first = await runBatch([{ op: "update_note", path: "Notes/Stable.md", content: "v2" }]);

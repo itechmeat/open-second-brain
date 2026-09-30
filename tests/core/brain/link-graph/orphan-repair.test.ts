@@ -37,9 +37,6 @@ afterEach(() => {
   rmSync(vault, { recursive: true, force: true });
 });
 
-/** Absolute path of the one signal `writeOrphan` wrote. */
-let orphanPath: string;
-
 function writeOrphan(sessionRef = "session:sess-gone#turn-1"): string {
   const result = writeSignal(vault, {
     topic: "orphan-repair",
@@ -53,7 +50,6 @@ function writeOrphan(sessionRef = "session:sess-gone#turn-1"): string {
     session_ref: sessionRef,
     raw: "the observation body",
   });
-  orphanPath = result.path;
   return result.path;
 }
 
