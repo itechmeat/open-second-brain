@@ -25,6 +25,7 @@ import {
   type WriteBatchResult,
   type WriteOperation,
 } from "../../core/brain/write-batch.ts";
+import { IdempotencyPayloadMismatchError } from "../../core/brain/idempotency-ledger.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { noteWriteResult, parseFrontmatterArg, writeBatchErrorToMcp } from "./notes-tools.ts";
@@ -193,15 +194,21 @@ async function toolBrainWriteBatch(
   const resolveAgent = (override?: string): string =>
     normalizeAgentArgument(override ?? null) ?? resolveAgentName(ctx.configPath ?? undefined);
   const operations = rawOps.map((raw, index) => mapOperation(raw, index, resolveAgent));
+  const requestId = optionalStr(args, "request_id");
 
   let batch: WriteBatchResult;
   try {
-    batch = applyWriteBatch(
-      ctx.vault,
-      operations,
-      ctx.configPath !== null ? { configPath: ctx.configPath } : {},
-    );
+    batch = applyWriteBatch(ctx.vault, operations, {
+      ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
+      ...(requestId !== undefined ? { requestId } : {}),
+    });
   } catch (err) {
+    // A reused request ID with a different payload is the caller's
+    // mistake, not the server's: INVALID_PARAMS with the ledger's own
+    // explanation, the same mapping the checkpoint tools use.
+    if (err instanceof IdempotencyPayloadMismatchError) {
+      throw new MCPError(INVALID_PARAMS, `brain_write_batch: ${err.message}`);
+    }
     throw writeBatchErrorToMcp(err, "brain_write_batch");
   }
   // The pages this batch committed, in commit order. Log-writing ops name
@@ -215,6 +222,9 @@ async function toolBrainWriteBatch(
     applied: batch.applied,
     results: batch.results.map((r) => serializeResult(ctx, r)),
     done: true,
+    ...(requestId !== undefined
+      ? { request_id: requestId, receipt: batch.receipt?.status ?? "applied" }
+      : {}),
   });
 }
 
@@ -281,6 +291,11 @@ export const WRITE_BATCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
             required: ["op"],
             additionalProperties: false,
           },
+        },
+        request_id: {
+          type: "string",
+          description:
+            'Optional client request ID for durable exactly-once behavior. A repeat of the same ID with the same operations returns the retained original receipt (receipt: "duplicate") and writes nothing; the same ID with different operations is refused.',
         },
       },
       required: ["operations"],

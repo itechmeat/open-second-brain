@@ -39,7 +39,15 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { applyWriteBatch, WriteBatchError } from "../../../src/core/brain/write-batch.ts";
+import {
+  applyWriteBatch,
+  WriteBatchError,
+  type WriteOperation,
+} from "../../../src/core/brain/write-batch.ts";
+import {
+  IdempotencyPayloadMismatchError,
+  lookupKey,
+} from "../../../src/core/brain/idempotency-ledger.ts";
 import { listNoteWrites, type NoteWriteRecord } from "../../../src/core/brain/notes/write-log.ts";
 import {
   NOTE_WRITE_NO_PRIOR,
@@ -600,5 +608,58 @@ describe("applyWriteBatch note-write attribution", () => {
       ]),
     ).toThrow(WriteBatchError);
     expect(noteWrites()).toEqual([]);
+  });
+});
+
+describe("applyWriteBatch client request receipts (t_b34439d9)", () => {
+  const OPS: ReadonlyArray<WriteOperation> = [
+    {
+      kind: "create_note",
+      path: "Notes/Receipt.md",
+      frontmatter: { title: "Receipt" },
+      content: "written once",
+    },
+  ];
+
+  test("without a request id the result carries no receipt and behavior is unchanged", () => {
+    const res = applyWriteBatch(vault, OPS);
+    expect(res.applied).toBe(1);
+    expect(Object.hasOwn(res, "receipt")).toBe(false);
+  });
+
+  test("a fresh request id applies once and records a durable ledger receipt", () => {
+    const res = applyWriteBatch(vault, OPS, { requestId: "req-1" });
+    expect(res.receipt).toEqual({ requestId: "req-1", status: "applied" });
+    expect(lookupKey(vault, "req-1")).not.toBeNull();
+  });
+
+  test("a repeated id with the same payload returns the retained result as a duplicate", () => {
+    applyWriteBatch(vault, OPS, { requestId: "req-2" });
+    const before = readFileSync(join(vault, "Notes/Receipt.md"), "utf8");
+    const retry = applyWriteBatch(vault, OPS, { requestId: "req-2" });
+    expect(retry.receipt).toEqual({ requestId: "req-2", status: "duplicate" });
+    // The retained original receipt, not a fresh application.
+    expect(retry.applied).toBe(1);
+    expect(retry.done).toBe(true);
+    expect(readFileSync(join(vault, "Notes/Receipt.md"), "utf8")).toBe(before);
+  });
+
+  test("a repeated id with a different payload throws and writes nothing", () => {
+    applyWriteBatch(vault, OPS, { requestId: "req-3" });
+    const before = readFileSync(join(vault, "Notes/Receipt.md"), "utf8");
+    expect(() =>
+      applyWriteBatch(vault, [{ kind: "create_note", path: "Notes/Other.md", content: "x" }], {
+        requestId: "req-3",
+      }),
+    ).toThrow(IdempotencyPayloadMismatchError);
+    expect(existsSync(join(vault, "Notes/Other.md"))).toBe(false);
+    expect(readFileSync(join(vault, "Notes/Receipt.md"), "utf8")).toBe(before);
+  });
+
+  test("an invalid request id surfaces the ledger error before any write", () => {
+    for (const bad of ["", "   ", "x".repeat(257)]) {
+      expect(() => applyWriteBatch(vault, OPS, { requestId: bad })).toThrow(/idempotency key/);
+    }
+    expect(existsSync(join(vault, "Notes/Receipt.md"))).toBe(false);
   });
 });

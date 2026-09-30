@@ -552,3 +552,39 @@ describe("brain_write_batch - mtime stability on byte-identical rewrites", () =>
     expect(readFileSync(join(vault, "Notes/Appended.md"), "utf8")).toContain("more");
   });
 });
+
+describe("brain_write_batch request receipts (t_b34439d9)", () => {
+  const OPS = [{ op: "create_note", path: "Notes/Receipted.md", content: "written once" }];
+
+  test("a request_id returns a receipt, and a retry returns the retained duplicate", async () => {
+    const first = (await tool.handler(ctx, {
+      operations: OPS,
+      request_id: "req-42",
+    })) as Record<string, unknown>;
+    expect(first["request_id"]).toBe("req-42");
+    expect(first["receipt"]).toBe("applied");
+    expect(first["applied"]).toBe(1);
+
+    const retry = (await tool.handler(ctx, {
+      operations: OPS,
+      request_id: "req-42",
+    })) as Record<string, unknown>;
+    expect(retry["request_id"]).toBe("req-42");
+    expect(retry["receipt"]).toBe("duplicate");
+    // The retained original receipt: the batch reports what the FIRST call
+    // applied, and nothing new lands.
+    expect(retry["applied"]).toBe(1);
+    expect(existsSync(join(vault, "Notes/Receipted.md"))).toBe(true);
+  });
+
+  test("a request_id omitted leaves the payload without receipt fields", async () => {
+    const res = (await tool.handler(ctx, { operations: OPS })) as Record<string, unknown>;
+    expect(Object.hasOwn(res, "request_id")).toBe(false);
+    expect(Object.hasOwn(res, "receipt")).toBe(false);
+  });
+
+  test("a non-string request_id is refused before any write", async () => {
+    await expect(tool.handler(ctx, { operations: OPS, request_id: 7 })).rejects.toThrow(MCPError);
+    expect(existsSync(join(vault, "Notes/Receipted.md"))).toBe(false);
+  });
+});
