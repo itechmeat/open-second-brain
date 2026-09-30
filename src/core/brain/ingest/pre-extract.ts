@@ -90,8 +90,22 @@ const LANGUAGE_BY_EXTENSION: ReadonlyMap<string, Language> = new Map([
   [".pyi", "python"],
 ]);
 
-/** The supported extensions in declaration order: the relative-specifier probe set. */
-const SUPPORTED_EXTENSIONS: ReadonlyArray<string> = [...LANGUAGE_BY_EXTENSION.keys()];
+/**
+ * The TS/JS-family extensions in declaration order: what a `./`/`../`
+ * specifier may resolve to. A Python file is never a TS/JS module target.
+ */
+const JS_FAMILY_EXTENSIONS: ReadonlyArray<string> = [...LANGUAGE_BY_EXTENSION]
+  .filter(([, language]) => language !== "python")
+  .map(([ext]) => ext);
+
+/** Directory entry file a TS/JS specifier naming a directory resolves to, minus extension. */
+const JS_INDEX_BASENAME = "index";
+/** Extension a Python relative module specifier resolves to. */
+const PY_MODULE_EXTENSION = ".py";
+/** File a Python relative specifier naming a package resolves to. */
+const PY_PACKAGE_INIT = "__init__.py";
+/** A Python specifier of dots only (`.`, `..`): it names a package, never a module file. */
+const PY_PACKAGE_ONLY_SPECIFIER = /^\.+$/;
 
 /** TS/JS class declaration head, capturing the class name. */
 const TS_CLASS = /^(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/;
@@ -120,10 +134,51 @@ const PY_FROM = /^from\s+(\.*[\w.]*)\s+import\b/;
 /** A bare Python identifier or dotted name (used to filter base-class args). */
 const PY_DOTTED_NAME = /^[A-Za-z_][\w.]*$/;
 
-/** A TS/JS specifier relative to the importing file (`./x`, `../x`). */
-const TS_RELATIVE_SPECIFIER = /^\.{1,2}\//;
-/** A Python specifier at least one dot above or below the importing module. */
-const PY_RELATIVE_SPECIFIER = /^\./;
+/**
+ * How one language family binds a relative import specifier: which
+ * specifiers are relative, how one becomes a `/`-relative path, and the
+ * candidate files it may name, in probe tiers. The first tier holding any
+ * ingested file decides; a later tier is consulted only when every earlier
+ * one is empty.
+ */
+interface RelativeImportRule {
+  readonly relative: RegExp;
+  readonly toRelative: (specifier: string) => string;
+  readonly probeTiers: (joined: string, specifier: string) => ReadonlyArray<ReadonlyArray<string>>;
+}
+
+/**
+ * TS/JS: a `./`/`../` specifier. The joined path is probed alone first, as a
+ * module resolver does for a specifier that already names its file
+ * (`./widget.css`, `./view.js`); then every TS/JS-family extension and the
+ * `/index` form of each.
+ */
+const TS_RELATIVE_IMPORT: RelativeImportRule = {
+  relative: /^\.{1,2}\//,
+  toRelative: (specifier) => specifier,
+  probeTiers: (joined) => [
+    [joined],
+    [
+      ...JS_FAMILY_EXTENSIONS.map((ext) => `${joined}${ext}`),
+      ...JS_FAMILY_EXTENSIONS.map((ext) => childPath(joined, `${JS_INDEX_BASENAME}${ext}`)),
+    ],
+  ],
+};
+
+/**
+ * Python: a leading-dot `from .x import` specifier names the module file
+ * `x.py` or the package `x/__init__.py`. A bare-dot specifier (`from .
+ * import y`) names the enclosing package, so only its `__init__.py`.
+ */
+const PY_RELATIVE_IMPORT: RelativeImportRule = {
+  relative: /^\./,
+  toRelative: pythonSpecifierToRelative,
+  probeTiers: (joined, specifier) => [
+    PY_PACKAGE_ONLY_SPECIFIER.test(specifier)
+      ? [childPath(joined, PY_PACKAGE_INIT)]
+      : [`${joined}${PY_MODULE_EXTENSION}`, childPath(joined, PY_PACKAGE_INIT)],
+  ],
+};
 
 /**
  * A JSX opening tag whose name is a component: the name sits immediately
@@ -144,13 +199,23 @@ const JSX_COMPONENT_TAG = /(^|[^A-Za-z0-9_$.])<([A-Z_$][A-Za-z0-9_$]*)(?![\w$.])
 const JSX_EXTENSIONS: ReadonlySet<string> = new Set([".tsx", ".jsx"]);
 
 /**
+ * Whether `path` carries an extension the pass parses. A caller that must
+ * gather inputs before parsing (file bytes, the ingested-file set) asks this
+ * first, so an unsupported source costs no read.
+ */
+export function isCodeStructureSource(path: string): boolean {
+  return LANGUAGE_BY_EXTENSION.has(extensionOf(path));
+}
+
+/**
  * Extract code structure from `content` addressed by `path`. Returns
  * `extracted: false` with a reason when the extension is unsupported, otherwise
  * the deduped, sorted entity/edge seeds for the recognized language.
  *
  * With `opts.ingestedFiles`, every relative import specifier is probed
- * against that set (joined path, each supported extension, `/index` + each
- * supported extension); exactly one member fills the seed's `resolvedTo`.
+ * against that set in its own language's forms - TS/JS: the joined path, then
+ * each TS/JS-family extension and `/index` + each; Python: `<name>.py` and
+ * `<name>/__init__.py` - and exactly one member fills the seed's `resolvedTo`.
  */
 export function preExtractCodeStructure(
   path: string,
@@ -213,9 +278,9 @@ function parseTsJs(
     if (fnMatch) entities.push({ kind: "function", name: fnMatch[1]! });
 
     const from = TS_FROM.exec(line) ?? TS_BARE_IMPORT.exec(line);
-    if (from) edges.push(importSeed(path, from[1]!, ingestedFiles, TS_RELATIVE_SPECIFIER));
+    if (from) edges.push(importSeed(path, from[1]!, ingestedFiles, TS_RELATIVE_IMPORT));
     const req = TS_REQUIRE.exec(line);
-    if (req) edges.push(importSeed(path, req[1]!, ingestedFiles, TS_RELATIVE_SPECIFIER));
+    if (req) edges.push(importSeed(path, req[1]!, ingestedFiles, TS_RELATIVE_IMPORT));
 
     if (JSX_EXTENSIONS.has(extensionOf(path))) {
       for (const match of line.matchAll(JSX_COMPONENT_TAG)) {
@@ -261,10 +326,7 @@ function parsePython(
     const fromMatch = PY_FROM.exec(line);
     if (fromMatch) {
       const mod = fromMatch[1]!;
-      if (mod.length > 0)
-        edges.push(
-          importSeed(path, mod, ingestedFiles, PY_RELATIVE_SPECIFIER, pythonSpecifierToRelative),
-        );
+      if (mod.length > 0) edges.push(importSeed(path, mod, ingestedFiles, PY_RELATIVE_IMPORT));
       continue;
     }
     const importMatch = PY_IMPORT.exec(line);
@@ -282,13 +344,12 @@ function importSeed(
   path: string,
   to: string,
   ingestedFiles: ReadonlySet<string> | undefined,
-  relative: RegExp,
-  toRelative: (specifier: string) => string = (specifier) => specifier,
+  rule: RelativeImportRule,
 ): CodeEdgeSeed {
-  if (ingestedFiles === undefined || !relative.test(to)) {
+  if (ingestedFiles === undefined || !rule.relative.test(to)) {
     return { kind: "imports", from: path, to };
   }
-  const resolvedTo = resolveRelativeImport(path, toRelative(to), ingestedFiles);
+  const resolvedTo = resolveRelativeImport(path, to, ingestedFiles, rule);
   return resolvedTo === undefined
     ? { kind: "imports", from: path, to }
     : { kind: "imports", from: path, to, resolvedTo };
@@ -298,23 +359,27 @@ function importSeed(
  * Probe one relative specifier against the ingested-file set: the specifier
  * joined to the source's directory (a Python leading-dot specifier first
  * becomes `./`/`../` form, one `..` per extra dot, module dots as slashes),
- * then each supported extension and each `/index` + extension form. Exactly
- * one member of the set names the bound file; zero or several bind nothing.
+ * then the language's probe tiers in order. The first tier with any ingested
+ * member decides: exactly one names the bound file; several bind nothing.
  */
 function resolveRelativeImport(
   path: string,
   to: string,
   ingestedFiles: ReadonlySet<string>,
+  rule: RelativeImportRule,
 ): string | undefined {
-  const joined = posixJoin(path, to);
-  const candidates =
-    extensionOf(joined) !== "" && LANGUAGE_BY_EXTENSION.has(extensionOf(joined))
-      ? [joined]
-      : [...SUPPORTED_EXTENSIONS].flatMap((ext) => [`${joined}${ext}`, `${joined}/index${ext}`]);
-  const verdict = resolveUniqueMatch(
-    candidates.filter((candidate) => ingestedFiles.has(candidate)),
-  );
-  return verdict.status === "unique" ? verdict.target : undefined;
+  const joined = posixJoin(path, rule.toRelative(to));
+  for (const tier of rule.probeTiers(joined, to)) {
+    const verdict = resolveUniqueMatch(tier.filter((candidate) => ingestedFiles.has(candidate)));
+    if (verdict.status === "unique") return verdict.target;
+    if (verdict.status === "ambiguous") return undefined;
+  }
+  return undefined;
+}
+
+/** `name` inside directory `dir`, where an empty `dir` is the vault root. */
+function childPath(dir: string, name: string): string {
+  return dir.length === 0 ? name : `${dir}/${name}`;
 }
 
 /** `/`-joined normalization of `specifier` relative to the directory of `path`. */

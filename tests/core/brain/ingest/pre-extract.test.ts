@@ -225,6 +225,78 @@ describe("preExtractCodeStructure - relative-import binding (t_2356dace)", () =>
     ]);
   });
 
+  test("a python relative import never binds to a TS/JS file of the same name", () => {
+    const res = asSuccess(
+      preExtractCodeStructure("pkg/mod.py", "from .util import thing\n", {
+        ingestedFiles: new Set(["pkg/util.ts"]),
+      }),
+    );
+    expect(res.edges).toEqual([{ kind: "imports", from: "pkg/mod.py", to: ".util" }]);
+  });
+
+  test("a TS/JS relative import never binds to a python file of the same name", () => {
+    const res = asSuccess(
+      preExtractCodeStructure("src/lib/widget.ts", 'import { h } from "./helpers";\n', {
+        ingestedFiles: new Set(["src/lib/helpers.py", "src/lib/helpers/__init__.py"]),
+      }),
+    );
+    expect(res.edges).toEqual([{ kind: "imports", from: "src/lib/widget.ts", to: "./helpers" }]);
+  });
+
+  test("a python relative import binds to a package through its __init__.py", () => {
+    const res = asSuccess(
+      preExtractCodeStructure("pkg/mod.py", "from .sub import thing\n", {
+        ingestedFiles: new Set(["pkg/sub/__init__.py", "pkg/sub/index.py"]),
+      }),
+    );
+    expect(res.edges).toEqual([
+      { kind: "imports", from: "pkg/mod.py", to: ".sub", resolvedTo: "pkg/sub/__init__.py" },
+    ]);
+  });
+
+  test("a python bare-dot import binds to the enclosing package's __init__.py", () => {
+    const res = asSuccess(
+      preExtractCodeStructure("pkg/mod.py", "from . import thing\n", {
+        ingestedFiles: new Set(["pkg/__init__.py", "pkg.py"]),
+      }),
+    );
+    expect(res.edges).toEqual([
+      { kind: "imports", from: "pkg/mod.py", to: ".", resolvedTo: "pkg/__init__.py" },
+    ]);
+  });
+
+  test("a specifier that already carries an extension binds the joined path first", () => {
+    const res = asSuccess(
+      preExtractCodeStructure("src/lib/widget.tsx", 'import "./widget.css";\n', {
+        ingestedFiles: new Set(["src/lib/widget.css"]),
+      }),
+    );
+    expect(res.edges).toEqual([
+      {
+        kind: "imports",
+        from: "src/lib/widget.tsx",
+        to: "./widget.css",
+        resolvedTo: "src/lib/widget.css",
+      },
+    ]);
+  });
+
+  test("an exact joined-path hit wins over the extension probes", () => {
+    const res = asSuccess(
+      preExtractCodeStructure("src/lib/widget.ts", 'import { v } from "./view.js";\n', {
+        ingestedFiles: new Set(["src/lib/view.js", "src/lib/view.js.ts"]),
+      }),
+    );
+    expect(res.edges).toEqual([
+      {
+        kind: "imports",
+        from: "src/lib/widget.ts",
+        to: "./view.js",
+        resolvedTo: "src/lib/view.js",
+      },
+    ]);
+  });
+
   test("a call without ingestedFiles leaves every seed byte-identical to today", () => {
     const withOpt = asSuccess(
       preExtractCodeStructure("src/lib/widget.ts", 'import { h } from "./dom";\n', {

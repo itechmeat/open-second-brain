@@ -19,6 +19,7 @@ import {
   upsertEntity,
 } from "../../../../src/core/brain/entities/registry.ts";
 import { ingestSource } from "../../../../src/core/brain/ingest/ingest.ts";
+import { manifestPath } from "../../../../src/core/brain/ingest/content-manifest.ts";
 import { computePlanId, readCheckpoint } from "../../../../src/core/brain/ingest/checkpoint.ts";
 
 let vault: string;
@@ -50,6 +51,13 @@ function seedSourceFile(rel = INPUT.sourcePath): void {
   const abs = join(vault, rel);
   mkdirSync(join(abs, ".."), { recursive: true });
   writeFileSync(abs, "the source bytes\n", "utf8");
+}
+
+/** Write raw bytes as the content manifest, for the corrupted-manifest cases. */
+function writeManifestBytes(bytes: string): void {
+  const path = manifestPath(vault);
+  mkdirSync(join(path, ".."), { recursive: true });
+  writeFileSync(path, bytes, "utf8");
 }
 
 const INPUT = {
@@ -205,6 +213,47 @@ describe("ingestSource pre-extract pass (P4, t_ef786747)", () => {
         to: "./dom",
         resolvedTo: "Code/dom.ts",
       });
+    }
+  });
+
+  test.each([
+    ["corrupted JSON", "{ not json", /ingest manifest is corrupted JSON/],
+    [
+      "an unsupported schema_version",
+      JSON.stringify({ schema_version: 999, entries: {} }),
+      /ingest manifest schema_version 999 not supported/,
+    ],
+  ])(
+    "a manifest with %s surfaces its own error before anything is written",
+    (_label, bytes, error) => {
+      writeCode();
+      writeManifestBytes(bytes);
+      expect(() =>
+        ingestSource(vault, CODE_INPUT, { agent: "claude", now: NOW, preExtract: true }),
+      ).toThrow(error);
+      // The named manifest error must stop the ingest at the pre-extract read,
+      // not get reported as unreadable source bytes while the page is written.
+      expect(existsSync(join(vault, "Brain", "sources"))).toBe(false);
+    },
+  );
+
+  test("a non-code source never reads the manifest", () => {
+    // Deliberately unseeded, so the ingest itself never reaches the manifest
+    // update either: a corrupted manifest is then visible only to the pass.
+    writeManifestBytes("{ not json");
+    const res = ingestSource(vault, INPUT, { agent: "claude", now: NOW, preExtract: true });
+    expect(res.preExtract?.extracted).toBe(false);
+    if (res.preExtract !== undefined && res.preExtract.extracted === false) {
+      expect(res.preExtract.reason).toContain("unsupported source extension");
+    }
+  });
+
+  test("a code source with no bytes on disk never reads the manifest", () => {
+    writeManifestBytes("{ not json");
+    const res = ingestSource(vault, CODE_INPUT, { agent: "claude", now: NOW, preExtract: true });
+    expect(res.preExtract?.extracted).toBe(false);
+    if (res.preExtract !== undefined && res.preExtract.extracted === false) {
+      expect(res.preExtract.reason).toContain("no readable file bytes");
     }
   });
 
