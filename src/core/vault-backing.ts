@@ -34,8 +34,9 @@
  *
  * Beside survival the probe answers one more axis, REMOTENESS: whether the
  * backing is a NAMED network filesystem. It is narrow by the same
- * discipline. Only nfs and cifs classify remote, because those are the
- * types whose storage is provably shared with another host and whose
+ * discipline. Only the named network filesystems (nfs, cifs/smb2/smbfs,
+ * ceph, afs, 9p) and, on Windows, a UNC path classify remote, because
+ * those are the backings whose storage is provably shared with another host and whose
  * locking semantics SQLite's WAL journal mode depends on and does not
  * get. Fuse stays non-remote: what backs a fuse mount is unknowable from
  * its type, and failing safe there would warn every user-space mount.
@@ -233,7 +234,7 @@ const PROBEABLE_PLATFORM = "linux";
  * on someone else's server is an availability question, not a survival
  * one: the bytes outlive this process and this reboot, which is the whole
  * claim the state makes. Sharing that server with other hosts is a
- * DIFFERENT question, answered by the second axis: nfs and cifs carry
+ * DIFFERENT question, answered by the second axis: the network filesystems carry
  * `remote` because their storage is provably cross-host and their locking
  * semantics are the ones SQLite's WAL journal mode cannot rely on. Fuse
  * carries `nonRemote` deliberately too: what backs a fuse mount is
@@ -293,6 +294,33 @@ const FS_MAGIC: ReadonlyMap<
     0xff534d42,
     { name: "cifs", state: VAULT_BACKING.durable, remote: VAULT_BACKING_REMOTENESS.remote },
   ],
+  // What a modern `mount -t cifs` (SMB2/SMB3) share reports.
+  [
+    0xfe534d42,
+    { name: "smb2", state: VAULT_BACKING.durable, remote: VAULT_BACKING_REMOTENESS.remote },
+  ],
+  [
+    0x517b,
+    { name: "smbfs", state: VAULT_BACKING.durable, remote: VAULT_BACKING_REMOTENESS.remote },
+  ],
+  [
+    0x00c36400,
+    { name: "ceph", state: VAULT_BACKING.durable, remote: VAULT_BACKING_REMOTENESS.remote },
+  ],
+  // AFS_SUPER_MAGIC and kAFS's AFS_FS_MAGIC.
+  [
+    0x5346414f,
+    { name: "afs", state: VAULT_BACKING.durable, remote: VAULT_BACKING_REMOTENESS.remote },
+  ],
+  [
+    0x6b414653,
+    { name: "afs", state: VAULT_BACKING.durable, remote: VAULT_BACKING_REMOTENESS.remote },
+  ],
+  // 9p/v9fs, which also backs WSL2's drvfs mounts of the Windows drives.
+  [
+    0x01021997,
+    { name: "9p", state: VAULT_BACKING.durable, remote: VAULT_BACKING_REMOTENESS.remote },
+  ],
   // Backing unknowable from the type; non-remote rather than every
   // user-space mount being warned about.
   [
@@ -324,6 +352,20 @@ function undetermined(reason: VaultBackingUndeterminedReason, detail: string): V
   };
 }
 
+/** The platform whose UNC paths name a network share by their spelling. */
+const WINDOWS_PLATFORM = "win32";
+
+/**
+ * A Windows UNC path: `\\server\share\...`, `//server/share/...` or the
+ * extended-length `\\?\UNC\server\share\...`. The local
+ * extended-length and device forms (`\\?\C:\...`, `\\.\C:\...`) are
+ * not shares.
+ */
+function isUncPath(path: string): boolean {
+  if (/^[\\/]{2}\?[\\/]UNC[\\/][^\\/]+[\\/][^\\/]+/i.test(path)) return true;
+  return /^[\\/]{2}(?![?.][\\/])[^\\/]+[\\/][^\\/]+/.test(path);
+}
+
 /**
  * Probe the filesystem backing `path`.
  *
@@ -343,6 +385,20 @@ export function probeVaultBacking(
   // implies the probeable platform unless the caller pins `platform`.
   const platform =
     opts.platform ?? (opts.statfs !== undefined ? PROBEABLE_PLATFORM : process.platform);
+  // Windows exposes no filesystem-type facility this build reads, but a
+  // UNC path names a network share by its spelling alone: the one cheap,
+  // certain remoteness signal there. Every other Windows path, and every
+  // path on macOS (no stable `f_type`, no `f_fstypename` in Node), stays
+  // probe_unsupported.
+  if (platform === WINDOWS_PLATFORM && isUncPath(path)) {
+    return {
+      state: VAULT_BACKING.durable,
+      filesystem: "unc-share",
+      reason: null,
+      remoteness: VAULT_BACKING_REMOTENESS.remote,
+      detail: `${path} is a UNC path, which names a network share`,
+    };
+  }
   if (platform !== PROBEABLE_PLATFORM) {
     return undetermined(
       VAULT_BACKING_UNDETERMINED_REASON.probeUnsupported,

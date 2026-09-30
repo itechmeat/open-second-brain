@@ -91,6 +91,51 @@ describe("the remoteness axis, beside durability", () => {
     }
   });
 
+  test("the other Linux network filesystems classify remote too", () => {
+    // A modern `mount -t cifs` share reports SMB2_SUPER_MAGIC, not
+    // CIFS_SUPER_MAGIC; ceph, afs, the legacy smbfs and 9p (WSL2 drvfs)
+    // are cross-host storage in the same sense.
+    for (const [magic, name] of [
+      [0xfe534d42, "smb2"],
+      [0x00c36400, "ceph"],
+      [0x5346414f, "afs"],
+      [0x6b414653, "afs"],
+      [0x517b, "smbfs"],
+      [0x01021997, "9p"],
+    ] as const) {
+      const verdict = probeVaultBacking("/vault", { platform: "linux", statfs: withFsType(magic) });
+      expect(`${magic.toString(16)}: ${verdict.filesystem} ${verdict.remoteness}`).toBe(
+        `${magic.toString(16)}: ${name} ${VAULT_BACKING_REMOTENESS.remote}`,
+      );
+      expect(verdict.state).toBe(VAULT_BACKING.durable);
+    }
+  });
+
+  test("a Windows UNC path is remote without a statfs probe", () => {
+    for (const path of [
+      "\\\\server\\share\\vault\\.open-second-brain",
+      "//server/share/vault",
+      "\\\\?\\UNC\\server\\share\\vault",
+    ]) {
+      const verdict = probeVaultBacking(path, { platform: "win32" });
+      expect(`${path}: ${verdict.remoteness}`).toBe(`${path}: ${VAULT_BACKING_REMOTENESS.remote}`);
+      expect(verdict.filesystem).toBe("unc-share");
+    }
+    // A drive path and the extended-length local forms stay unprobed.
+    for (const path of ["C:\\vault", "\\\\?\\C:\\vault", "\\\\.\\C:\\vault"]) {
+      const verdict = probeVaultBacking(path, { platform: "win32" });
+      expect(`${path}: ${verdict.reason}`).toBe(
+        `${path}: ${VAULT_BACKING_UNDETERMINED_REASON.probeUnsupported}`,
+      );
+      expect(verdict.remoteness).toBe(VAULT_BACKING_REMOTENESS.nonRemote);
+    }
+    // A double slash on Linux is not a share.
+    expect(
+      probeVaultBacking("//server/share", { platform: "linux", statfs: withFsType(EXT4) })
+        .remoteness,
+    ).toBe(VAULT_BACKING_REMOTENESS.nonRemote);
+  });
+
   test("fuse stays non-remote, and so does every disk and memory filesystem", () => {
     for (const magic of [FUSE, EXT4, TMPFS, OVERLAYFS]) {
       const verdict = probeVaultBacking("/vault", { platform: "linux", statfs: withFsType(magic) });
