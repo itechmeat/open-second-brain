@@ -113,7 +113,7 @@ The full router with readiness criteria is [`install.md`](https://github.com/ite
 
 ## What is new
 
-1.61.0 moves MCP server start-up off the Brain upgrade path, makes ingest locks fair, puts the Claude Code MCP manifest inside `plugin.json`, and adds an inbox archive. Every release is described in the [CHANGELOG](https://github.com/itechmeat/open-second-brain/blob/main/CHANGELOG.md).
+1.63.0 binds a prose mention to a page only when exactly one page carries the term, turns relative imports and JSX component usage into code-structure edges, lets a `brain_write_batch` retry apply once through a request ID, adds a keyword match breadth to search, and gives every append-only Brain ledger one file per synced device. Every release is described in the [CHANGELOG](https://github.com/itechmeat/open-second-brain/blob/main/CHANGELOG.md).
 
 ## Documentation
 
