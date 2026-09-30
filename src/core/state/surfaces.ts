@@ -86,6 +86,7 @@ import {
   DERIVED_STORE_FILE,
   HOOK_AUDIT_DIR,
 } from "../brain/path-constants.ts";
+import { WATCHDOG_FALLBACK_AUDIT_DIR } from "../brain/audit-dirs.ts";
 import { literalBase, parseShardedName, type LedgerShardGrammar } from "../brain/ledger-shards.ts";
 import { CONFIG_ORIGIN, resolveWithOrigin, type ConfigOrigin } from "../validate.ts";
 
@@ -277,7 +278,6 @@ const MAINTENANCE_LEASE_FILE = "maintenance.sqlite";
 const MAINTENANCE_JOURNAL_FILE = "maintenance-runs.jsonl";
 const HOOK_STATE_DIR = "hook-state";
 const SELF_HEAL_UPGRADE_MARKER_FILE = "self-heal-upgrade.json";
-const WATCHDOG_AUDIT_DIR = "watchdog-audit";
 const INJECT_CACHE_DIR = "inject-cache";
 const AIDER_CONTEXT_FILE = "aider-context.md";
 const DREAM_RUNS_DIR = "dream-runs";
@@ -587,7 +587,7 @@ export const STATE_SURFACES: ReadonlyArray<StateSurface> = Object.freeze([
     id: STATE_SURFACE_ID.watchdogAudit,
     label: "watchdog audit fallback",
     tier: STATE_TIER.derived,
-    derive: derivedStore(WATCHDOG_AUDIT_DIR),
+    derive: derivedStore(WATCHDOG_FALLBACK_AUDIT_DIR),
     override_env: null,
     override_config_key: null,
     carries_memory: false,
