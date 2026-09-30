@@ -15,7 +15,7 @@
  * any operation commits.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import {
   existsSync,
   mkdirSync,
@@ -37,7 +37,11 @@ import { writeImagesDir } from "../../src/core/brain/paths.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../src/core/brain/types.ts";
 import { WRITE_BATCH_TOOLS } from "../../src/mcp/brain/write-batch-tools.ts";
 import { NOTES_TOOLS } from "../../src/mcp/brain/notes-tools.ts";
-import { MAX_BATCH_OPERATIONS } from "../../src/core/brain/write-batch.ts";
+import {
+  MAX_BATCH_OPERATIONS,
+  WRITE_BATCH_RECEIPT_STATUS,
+} from "../../src/core/brain/write-batch.ts";
+import * as ledger from "../../src/core/brain/idempotency-ledger.ts";
 import { PAGE_LINT_KEY } from "../../src/core/brain/page-lint.ts";
 import { MCPError } from "../../src/mcp/protocol.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
@@ -562,7 +566,7 @@ describe("brain_write_batch request receipts (t_b34439d9)", () => {
       request_id: "req-42",
     })) as Record<string, unknown>;
     expect(first["request_id"]).toBe("req-42");
-    expect(first["receipt"]).toBe("applied");
+    expect(first["receipt"]).toBe(WRITE_BATCH_RECEIPT_STATUS.applied);
     expect(first["applied"]).toBe(1);
 
     const retry = (await tool.handler(ctx, {
@@ -570,7 +574,7 @@ describe("brain_write_batch request receipts (t_b34439d9)", () => {
       request_id: "req-42",
     })) as Record<string, unknown>;
     expect(retry["request_id"]).toBe("req-42");
-    expect(retry["receipt"]).toBe("duplicate");
+    expect(retry["receipt"]).toBe(WRITE_BATCH_RECEIPT_STATUS.duplicate);
     // The retained original receipt: the batch reports what the FIRST call
     // applied, and nothing new lands.
     expect(retry["applied"]).toBe(1);
@@ -581,6 +585,22 @@ describe("brain_write_batch request receipts (t_b34439d9)", () => {
     const res = (await tool.handler(ctx, { operations: OPS })) as Record<string, unknown>;
     expect(Object.hasOwn(res, "request_id")).toBe(false);
     expect(Object.hasOwn(res, "receipt")).toBe(false);
+  });
+
+  test("a concurrent duplicate recorded mid-batch reaches the caller by its own status", async () => {
+    const LOG_OPS = [{ op: "append_log_line", text: "concurrent receipt line" }];
+    await tool.handler(ctx, { operations: LOG_OPS, request_id: "req-race" });
+    // The unlocked consult misses the rival's record, as under a concurrent call.
+    const spy = spyOn(ledger, "lookupKey").mockReturnValueOnce(null);
+    try {
+      const res = (await tool.handler(ctx, {
+        operations: LOG_OPS,
+        request_id: "req-race",
+      })) as Record<string, unknown>;
+      expect(res["receipt"]).toBe(WRITE_BATCH_RECEIPT_STATUS.concurrent_duplicate);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   test("a non-string request_id is refused before any write", async () => {

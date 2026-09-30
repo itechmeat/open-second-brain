@@ -80,6 +80,14 @@ export type RememberKeyStatus = (typeof REMEMBER_KEY_STATUS)[keyof typeof REMEMB
  * original write's identity (e.g. `{ id, path }`). */
 export interface IdempotencyRecord {
   readonly key: string;
+  /**
+   * The key space the record belongs to. Absent is the shared key space of
+   * the historical writers (signal, apply-evidence, preference, session
+   * checkpoint), whose records never carry the field. A writer whose keys
+   * come from a different client vocabulary names its own namespace, so a
+   * string reused across tools never collides.
+   */
+  readonly namespace?: string;
   readonly contentHash: string;
   readonly createdAt: string;
   readonly ref?: Readonly<Record<string, unknown>>;
@@ -87,6 +95,8 @@ export interface IdempotencyRecord {
 
 export interface RememberKeyInput {
   readonly key: string;
+  /** See {@link IdempotencyRecord.namespace}. Absent keeps the shared key space. */
+  readonly namespace?: string;
   readonly contentHash: string;
   /** Canonical UTC ISO-8601; defaults to `isoSecond(new Date())`. Drives the
    * month shard, so a backfilled write lands in its real month. */
@@ -173,16 +183,22 @@ export function idempotencyLogPath(
  * Look up the stored record for a client key across EVERY shard of every
  * month. Returns the first-written record for the key (shards read in
  * ascending file-name order, lines in append order) or `null` when the
- * key is unseen.
+ * key is unseen. `namespace` selects the key space (see
+ * {@link IdempotencyRecord.namespace}); absent matches only records of the
+ * shared key space, so the historical callers read exactly what they wrote.
  *
  * The scan spans devices on purpose: a key remembered on one machine has
  * to be honoured on another once Syncthing has delivered its shard, or
  * the retry this ledger exists to dedupe would go through twice.
  */
-export function lookupKey(vault: string, key: string): IdempotencyRecord | null {
+export function lookupKey(
+  vault: string,
+  key: string,
+  namespace?: string,
+): IdempotencyRecord | null {
   const normalised = normaliseKey(key);
   for (const record of readAllRecords(vault)) {
-    if (record.key === normalised) return record;
+    if (record.key === normalised && record.namespace === namespace) return record;
   }
   return null;
 }
@@ -208,7 +224,7 @@ export function rememberKey(vault: string, input: RememberKeyInput): RememberKey
     // The lock is on THIS device's shard - the only file this call can
     // append to - while the scan still spans every shard, so a key a
     // synced peer already remembered is honoured here too.
-    const existing = lookupKey(vault, key);
+    const existing = lookupKey(vault, key, input.namespace);
     if (existing) {
       return {
         status:
@@ -220,6 +236,7 @@ export function rememberKey(vault: string, input: RememberKeyInput): RememberKey
     }
     const record: IdempotencyRecord = Object.freeze({
       key,
+      ...(input.namespace !== undefined ? { namespace: input.namespace } : {}),
       contentHash,
       createdAt,
       ...(input.ref !== undefined ? { ref: input.ref } : {}),

@@ -22,6 +22,8 @@ import type { BrainApplyOutcome, BrainApplyResult } from "../../core/brain/types
 import {
   applyWriteBatch,
   MAX_BATCH_OPERATIONS,
+  WRITE_BATCH_RECEIPT_STATUS,
+  type WriteBatchReceipt,
   type WriteBatchResult,
   type WriteOperation,
 } from "../../core/brain/write-batch.ts";
@@ -196,12 +198,19 @@ async function toolBrainWriteBatch(
   const operations = rawOps.map((raw, index) => mapOperation(raw, index, resolveAgent));
   const requestId = optionalStr(args, "request_id");
 
+  const baseOpts = ctx.configPath !== null ? { configPath: ctx.configPath } : {};
   let batch: WriteBatchResult;
+  // Set exactly when a request ID was supplied: the core's receipted
+  // overload always carries the status, so nothing here invents one.
+  let receipt: WriteBatchReceipt | undefined;
   try {
-    batch = applyWriteBatch(ctx.vault, operations, {
-      ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
-      ...(requestId !== undefined ? { requestId } : {}),
-    });
+    if (requestId === undefined) {
+      batch = applyWriteBatch(ctx.vault, operations, baseOpts);
+    } else {
+      const receipted = applyWriteBatch(ctx.vault, operations, { ...baseOpts, requestId });
+      batch = receipted;
+      receipt = receipted.receipt;
+    }
   } catch (err) {
     // A reused request ID with a different payload is the caller's
     // mistake, not the server's: INVALID_PARAMS with the ledger's own
@@ -222,9 +231,7 @@ async function toolBrainWriteBatch(
     applied: batch.applied,
     results: batch.results.map((r) => serializeResult(ctx, r)),
     done: true,
-    ...(requestId !== undefined
-      ? { request_id: requestId, receipt: batch.receipt?.status ?? "applied" }
-      : {}),
+    ...(receipt !== undefined ? { request_id: receipt.requestId, receipt: receipt.status } : {}),
   });
 }
 
@@ -294,8 +301,7 @@ export const WRITE_BATCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         request_id: {
           type: "string",
-          description:
-            'Optional client request ID for durable exactly-once behavior. A repeat of the same ID with the same operations returns the retained original receipt (receipt: "duplicate") and writes nothing; the same ID with different operations is refused.',
+          description: `Optional client request ID for durable exactly-once behavior. A repeat of the same ID with the same operations returns the retained original receipt (receipt: "${WRITE_BATCH_RECEIPT_STATUS.duplicate}") and writes nothing; the same ID with different operations is refused.`,
         },
       },
       required: ["operations"],
