@@ -8,14 +8,14 @@
  * all of them are conditions only a walk of the tree can see.
  */
 
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
 import { ensureInsideVault, realpathInsideVault, vaultRelative } from "../../path-safety.ts";
 import { BRAIN_LOG_AUDIT_DIRS } from "../audit-dirs.ts";
 import { continuityLogDir } from "../continuity/store.ts";
 import { scanDanglingWorkruns } from "../dream-workrun.ts";
 import { readTierDriftCount } from "../frontmatter-tiers.ts";
-import { gitStoreDir } from "../git/store.ts";
+import { gitStoreRootDir } from "../git/store.ts";
 import { idempotencyLogDir } from "../idempotency-ledger.ts";
 import { listSyncConflictFiles } from "../ledger-shards.ts";
 import { brainStateDirPath } from "../lineage/ledger.ts";
@@ -128,17 +128,12 @@ function prefAuditSweepDirs(vault: string, uncertain: DoctorUncertainEntry[]): s
  * The git store keeps one directory per repository
  * (`Brain/projects/git/<repo>/`), each holding its own `commits` shards,
  * so the repositories are discovered from the tree on every pass. The
- * root itself holds no ledger. Its path is derived from the store's own
- * per-repo builder, whose parent it is by definition, rather than
- * spelled a second time here.
+ * root itself holds no ledger. Its path comes from the store's own
+ * root builder rather than being spelled a second time here.
  */
 function gitStoreSweepDirs(vault: string, uncertain: DoctorUncertainEntry[]): string[] {
-  const root = dirname(gitStoreDir(vault, GIT_STORE_ROOT_PROBE_KEY));
-  return subdirectories(root, uncertain, "per-repository");
+  return subdirectories(gitStoreRootDir(vault), uncertain, "per-repository");
 }
-
-/** Any valid repo key: only the parent of its store directory is used. */
-const GIT_STORE_ROOT_PROBE_KEY = "probe";
 
 /**
  * The immediate subdirectories of `parent`. A parent that cannot be

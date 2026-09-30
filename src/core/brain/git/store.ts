@@ -98,9 +98,14 @@ const COMMITS_STEM = "commits";
 /** The commits ledger's file-name layout, handed to the shared shard grammar. */
 const COMMITS_GRAMMAR = jsonlLedgerGrammar(COMMITS_STEM);
 
+/** `Brain/projects/git/`: the root that holds one store directory per repository. */
+export function gitStoreRootDir(vault: string): string {
+  return join(vault, "Brain", "projects", "git");
+}
+
 /** Per-repo store directory inside the vault. */
 export function gitStoreDir(vault: string, repoKey: string): string {
-  return join(vault, "Brain", "projects", "git", repoKey);
+  return join(gitStoreRootDir(vault), repoKey);
 }
 
 function commitsPath(vault: string, repoKey: string): string {
@@ -393,17 +398,33 @@ export interface GitRepoEntry {
   readonly stateError: string | null;
 }
 
-/** Every per-repo store under Brain/projects/git/, sorted by key. */
+/**
+ * Stat errors that mean the entry is simply not there any more (removed
+ * between the listing and the stat, or a dangling link), so skipping it
+ * is the honest answer. Any other code is a store that could not be read.
+ */
+const VANISHED_ENTRY_CODES: ReadonlySet<string> = new Set(["ENOENT", "ENOTDIR"]);
+
+/**
+ * Every per-repo store under Brain/projects/git/, sorted by key. An entry
+ * that vanished is skipped; one that exists but cannot be stat'ed throws
+ * an error naming the path and its code instead of disappearing from the
+ * list.
+ */
 export function listGitRepos(vault: string): ReadonlyArray<GitRepoEntry> {
-  const root = join(vault, "Brain", "projects", "git");
+  const root = gitStoreRootDir(vault);
   if (!existsSync(root)) return [];
   const entries: GitRepoEntry[] = [];
   for (const name of readdirSync(root).toSorted()) {
     const dir = join(root, name);
     try {
       if (!statSync(dir).isDirectory()) continue;
-    } catch {
-      continue;
+    } catch (exc) {
+      const code = (exc as NodeJS.ErrnoException).code;
+      if (code !== undefined && VANISHED_ENTRY_CODES.has(code)) continue;
+      throw new Error(`git store entry ${dir} could not be read: ${code ?? String(exc)}`, {
+        cause: exc,
+      });
     }
     const probe = readGitState(vault, name);
     entries.push(Object.freeze({ key: name, state: probe.state, stateError: probe.error }));

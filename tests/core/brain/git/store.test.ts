@@ -4,13 +4,23 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
   appendGitRecords,
   gitStoreDir,
+  gitStoreRootDir,
   listGitCommits,
   listGitRepos,
   listGitTags,
@@ -56,6 +66,11 @@ afterEach(() => {
 
 test("gitStoreDir nests under Brain/projects/git/<repo-key>", () => {
   expect(gitStoreDir(vault, KEY)).toBe(join(vault, "Brain", "projects", "git", KEY));
+});
+
+test("gitStoreRootDir is Brain/projects/git and the parent of every repo store", () => {
+  expect(gitStoreRootDir(vault)).toBe(join(vault, "Brain", "projects", "git"));
+  expect(gitStoreDir(vault, KEY)).toBe(join(gitStoreRootDir(vault), KEY));
 });
 
 test("append + list round-trips commits and tags, oldest-first", () => {
@@ -195,6 +210,27 @@ test("listGitRepos enumerates per-repo stores with their states", () => {
   expect(repos[1]!.state!.repoPath).toBe("/work/other");
   expect(existsSync(join(vault, "Brain", "projects", "git", KEY, "commits.jsonl"))).toBe(true);
 });
+
+test("listGitRepos skips an entry that vanished, a dangling link", () => {
+  appendGitRecords(vault, KEY, [commit("a".repeat(40))]);
+  symlinkSync(join(tmp, "nowhere"), join(gitStoreRootDir(vault), "dangling"));
+  expect(listGitRepos(vault).map((r) => r.key)).toEqual([KEY]);
+});
+
+test.skipIf(process.getuid?.() === 0)(
+  "listGitRepos surfaces an entry it cannot stat by its error code",
+  () => {
+    appendGitRecords(vault, KEY, [commit("a".repeat(40))]);
+    const root = gitStoreRootDir(vault);
+    // Readable but not searchable: the names list, every stat is refused.
+    chmodSync(root, 0o444);
+    try {
+      expect(() => listGitRepos(vault)).toThrow(/EACCES/);
+    } finally {
+      chmodSync(root, 0o755);
+    }
+  },
+);
 
 test("two devices write their own commits shards and reads merge both (t_774dea61)", () => {
   const previous = process.env["O2B_DEVICE_ID"];
