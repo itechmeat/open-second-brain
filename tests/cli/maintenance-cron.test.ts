@@ -14,7 +14,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -23,8 +23,10 @@ import {
   DEFAULT_MAINTENANCE_INTERVAL,
   MAINTENANCE_CRON_NAME,
   MAINTENANCE_RECIPE,
+  parseWindowBounds,
   renderMaintenanceCronTemplate,
 } from "../../src/cli/maintenance-cron.ts";
+import { IS_WINDOWS } from "../helpers/platform.ts";
 
 /** The heredoc body: the script exactly as the operator's host will run it. */
 function scriptBody(out: string): string {
@@ -78,41 +80,78 @@ describe("renderMaintenanceCronTemplate", () => {
         CronTemplateError,
       );
     }
+    for (const tz of ["$(id)", "--force"]) {
+      expect(() => renderMaintenanceCronTemplate("1h", { vault: "/v", window: "3-5", tz })).toThrow(
+        CronTemplateError,
+      );
+    }
+  });
+
+  test("a zone the runtime does not know is refused by name", () => {
     expect(() =>
-      renderMaintenanceCronTemplate("1h", { vault: "/v", window: "3-5", tz: "$(id)" }),
-    ).toThrow(CronTemplateError);
+      renderMaintenanceCronTemplate("1h", { vault: "/v", window: "3-5", tz: "Mars/Base" }),
+    ).toThrow(/unknown time zone: "Mars\/Base"/u);
+    for (const tz of ["Europe/Berlin", "Etc/GMT+3", "UTC"]) {
+      expect(renderMaintenanceCronTemplate("1h", { vault: "/v", window: "3-5", tz })).toContain(
+        `--tz ${tz} --json`,
+      );
+    }
   });
 
-  test("the script is silent on exit 0 and passes any other exit through with its JSON", () => {
-    const body = scriptBody(renderMaintenanceCronTemplate("1h", { vault: "/v" }));
-    expect(body).toContain("status=0");
-    expect(body).toContain("--json) || status=$?");
-    expect(body).toContain('if [ "$status" -ne 0 ]; then');
-    expect(body).toContain('  printf "%s\\n" "$out"');
-    expect(body).toContain('  exit "$status"');
-    // Nothing prints on the success path.
-    const success = body.slice(body.indexOf("fi\n", body.indexOf('if [ "$status"')));
-    expect(success).not.toContain("printf");
+  test("a vault path with a line break is refused by name in both formats", () => {
+    for (const vault of ["/v\nOSBEOF", "/v\rx"]) {
+      for (const format of ["cron", "systemd"] as const) {
+        expect(() => renderMaintenanceCronTemplate("1h", { vault, format })).toThrow(
+          /vault path must not contain a line break/u,
+        );
+      }
+    }
   });
 
-  test("the script survives a non-zero exit under set -e", () => {
-    // Under `set -e` a bare `out=$(...)` that exits non-zero ends the script
-    // before the exit can be reported; the `|| status=$?` form is what keeps
-    // the verdict readable.
-    const body = scriptBody(renderMaintenanceCronTemplate("1h", { vault: "/v" }));
-    expect(body).toContain("set -euo pipefail");
-    expect(body).not.toMatch(/^out=\$\([^)]*\)$/mu);
-  });
+  test.skipIf(IS_WINDOWS)(
+    "the script is silent on exit 0 and passes any other exit through with its JSON",
+    () => {
+      // Run the rendered script for real against a stub o2b that prints a
+      // verdict and exits with the code the case asks for.
+      const dir = mkdtempSync(join(tmpdir(), "o2b-maint-cron-run-"));
+      try {
+        const stub = join(dir, "o2b-stub");
+        writeFileSync(stub, '#!/bin/sh\nprintf \'{"x":1}\\n\'\nexit "$STUB_EXIT"\n');
+        chmodSync(stub, 0o755);
+        const script = join(dir, "run.sh");
+        writeFileSync(
+          script,
+          scriptBody(renderMaintenanceCronTemplate("1h", { vault: "/v", o2bBin: stub })),
+        );
+        const run = (code: string) =>
+          Bun.spawnSync(["bash", script], {
+            env: { PATH: process.env["PATH"] ?? "", HOME: dir, STUB_EXIT: code },
+          });
+        const quiet = run("0");
+        expect(quiet.exitCode).toBe(0);
+        expect(quiet.stdout.toString()).toBe("");
+        const failed = run("3");
+        expect(failed.exitCode).toBe(3);
+        expect(failed.stdout.toString()).toBe('{"x":1}\n');
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 
-  test("the verify footer points at the lane status", () => {
-    const out = renderMaintenanceCronTemplate("1h", { vault: "/v" });
-    expect(out).toContain("# After install, verify with: o2b brain maintenance status");
+  test("the verify footer points at the lane status of the baked-in vault", () => {
+    const out = renderMaintenanceCronTemplate("1h", { vault: "/srv/it's vault" });
+    expect(out).toContain(
+      "# After install, verify with: o2b brain maintenance status --vault '/srv/it'\\''s vault'",
+    );
   });
 
   test("the binary override reaches the script and the footer", () => {
     const out = renderMaintenanceCronTemplate("1h", { vault: "/v", o2bBin: "/opt/o2b" });
     expect(out).toContain("/opt/o2b brain maintenance run --vault '/v' --json");
-    expect(out).toContain("# After install, verify with: /opt/o2b brain maintenance status");
+    expect(out).toContain(
+      "# After install, verify with: /opt/o2b brain maintenance status --vault '/v'",
+    );
   });
 
   test("the cron format is the shared kernel's rendering of this spec", () => {
@@ -154,6 +193,16 @@ function listTree(root: string): string[] {
   walk(root, "");
   return out.toSorted();
 }
+
+describe("parseWindowBounds", () => {
+  test("reads H-H bounds and refuses any other shape or an hour above 23", () => {
+    expect(parseWindowBounds("22-6")).toEqual({ startHour: 22, endHour: 6 });
+    expect(parseWindowBounds("0-23")).toEqual({ startHour: 0, endHour: 23 });
+    for (const raw of ["24-3", "3-24", "3", "3-5x", " 3-5", "a-b"]) {
+      expect(parseWindowBounds(raw)).toBeNull();
+    }
+  });
+});
 
 describe("rendering writes nothing", () => {
   let tmp: string;

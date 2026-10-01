@@ -29,6 +29,8 @@ import {
   parseRecipeFormat,
   renderCronRecipe,
   renderSystemdTimer,
+  shellQuote,
+  singleLinePath,
   type CronRecipeOptions,
   type CronRecipeSpec,
   type RecipeFormat,
@@ -58,34 +60,45 @@ export interface MaintenanceCronOptions extends CronRecipeOptions {
 const RUN_COMMAND = "brain maintenance run";
 const STATUS_COMMAND = "brain maintenance status";
 
-/** `H-H` with hours 0..23: the same shape the lane's `--window` accepts. */
-const WINDOW_PATTERN = /^(\d{1,2})-(\d{1,2})$/u;
+/**
+ * `H-H` with hours 0..23: the one shape of a quiet window, shared by the
+ * lane's own `--window` parser and this recipe so the two cannot drift.
+ */
+export const MAINTENANCE_WINDOW_PATTERN = /^(\d{1,2})-(\d{1,2})$/u;
 
 /** Highest hour a window bound may name. */
-const MAX_WINDOW_HOUR = 23;
+export const MAX_WINDOW_HOUR = 23;
+
+/** The two bounds of a quiet window, in hours. */
+export interface WindowBounds {
+  readonly startHour: number;
+  readonly endHour: number;
+}
+
+/**
+ * Parse an `H-H` window into its bounds, or null when the value is not
+ * that shape or names an hour above {@link MAX_WINDOW_HOUR}. Callers
+ * word their own refusal.
+ */
+export function parseWindowBounds(raw: string): WindowBounds | null {
+  const match = MAINTENANCE_WINDOW_PATTERN.exec(raw);
+  if (!match) return null;
+  const startHour = Number(match[1]);
+  const endHour = Number(match[2]);
+  if (startHour > MAX_WINDOW_HOUR || endHour > MAX_WINDOW_HOUR) return null;
+  return { startHour, endHour };
+}
 
 /**
  * Characters an IANA zone name (`Europe/Berlin`, `Etc/GMT+3`, `UTC`) is
- * made of, none of which a shell treats specially.
+ * made of, none of which a shell treats specially. The first character
+ * is a letter, so a zone can never look like a flag (`--force`).
  */
-const TZ_PATTERN = /^[A-Za-z0-9_+\-/]+$/u;
-
-/**
- * Single-quote a value for bash, the way `discipline-install.ts` quotes
- * the vault it bakes into its job: a quote inside the value closes the
- * string, emits an escaped quote and reopens it. Inside single quotes a
- * backslash is literal, so nothing else needs escaping.
- */
-function shellQuote(value: string): string {
-  return "'" + value.replace(/'/gu, "'\\''") + "'";
-}
+const TZ_PATTERN = /^[A-Za-z][A-Za-z0-9_+\-/]*$/u;
 
 /** The window as given, after proving it is a plain `H-H` token. */
 function checkedWindow(raw: string): string {
-  const match = WINDOW_PATTERN.exec(raw);
-  const start = match ? Number(match[1]) : Number.NaN;
-  const end = match ? Number(match[2]) : Number.NaN;
-  if (!match || start > MAX_WINDOW_HOUR || end > MAX_WINDOW_HOUR) {
+  if (parseWindowBounds(raw) === null) {
     throw new CronTemplateError(
       "--window must be H-H with hours 0.." + MAX_WINDOW_HOUR + ", got: " + JSON.stringify(raw),
     );
@@ -93,19 +106,45 @@ function checkedWindow(raw: string): string {
   return raw;
 }
 
-/** The zone as given, after proving it is a plain zone-name token. */
+/** Whether the runtime knows the zone, the same check the lane makes. */
+function isKnownTimeZone(zone: string): boolean {
+  try {
+    new Intl.DateTimeFormat(undefined, { timeZone: zone });
+    return true;
+  } catch (err) {
+    if (err instanceof RangeError) return false;
+    throw err;
+  }
+}
+
+/**
+ * The zone as given, after proving it is a plain zone-name token AND a
+ * zone the runtime resolves: the lane formats the window through `Intl`
+ * on every firing, so a recipe must not bake in a zone it would refuse.
+ */
 function checkedTz(raw: string): string {
   if (!TZ_PATTERN.test(raw)) {
     throw new CronTemplateError(
       "--tz must be a time zone name such as Europe/Berlin or UTC, got: " + JSON.stringify(raw),
     );
   }
+  if (!isKnownTimeZone(raw)) {
+    throw new CronTemplateError("--tz names an unknown time zone: " + JSON.stringify(raw));
+  }
   return raw;
 }
 
+/** Label the line-break refusal names the vault with. */
+const VAULT_LABEL = "vault";
+
 /** The lane invocation the script runs, every input already checked. */
 function laneCommand(o2bBin: string, opts: MaintenanceCronOptions): string {
-  const parts = [o2bBin, RUN_COMMAND, "--vault", shellQuote(opts.vault)];
+  const parts = [
+    o2bBin,
+    RUN_COMMAND,
+    "--vault",
+    shellQuote(singleLinePath(VAULT_LABEL, opts.vault)),
+  ];
   if (opts.window !== undefined) parts.push("--window", checkedWindow(opts.window));
   if (opts.tz !== undefined) parts.push("--tz", checkedTz(opts.tz));
   parts.push("--json");
@@ -154,15 +193,16 @@ export const MAINTENANCE_RECIPE: CronRecipeSpec<MaintenanceCronOptions> = Object
   ]),
   schedulerNote: "(when Hermes owns the schedule)",
   buildScriptBody: (opts) => renderMaintenanceBody(opts.o2bBin, opts),
-  buildVerifyCommand: ({ o2bBin }) => o2bBin + " " + STATUS_COMMAND,
+  buildVerifyCommand: ({ o2bBin, vault }) =>
+    o2bBin + " " + STATUS_COMMAND + " --vault " + shellQuote(singleLinePath(VAULT_LABEL, vault)),
 });
 
 /**
  * Render the maintenance lane recipe in the requested format (cron when
  * omitted). Pure text: nothing is created, spawned or scheduled. Throws
  * {@link CronTemplateError} for an interval the scheduler cannot express,
- * a window that is not `H-H` with hours 0..23, or a zone that is not a
- * plain zone name.
+ * a window that is not `H-H` with hours 0..23, a zone that is not a
+ * plain zone name the runtime knows, or a vault path with a line break.
  */
 export function renderMaintenanceCronTemplate(
   interval: string,
