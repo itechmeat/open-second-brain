@@ -37,6 +37,7 @@ import {
   type ToolErrorCode,
 } from "./tool-error-codes.ts";
 import {
+  META_MEMBER,
   progressRefusal,
   progressSink,
   readProgressToken,
@@ -600,7 +601,7 @@ function toolError(message: string, code: ToolErrorCode): Record<string, unknown
   return {
     content: [{ type: "text", text: message }],
     isError: true,
-    _meta: { [TOOL_ERROR_META_KEY]: toolErrorMeta(code) },
+    [META_MEMBER]: { [TOOL_ERROR_META_KEY]: toolErrorMeta(code) },
   };
 }
 

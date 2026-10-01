@@ -56,7 +56,7 @@ export const PROGRESS_META_KEY = "open-second-brain/progress";
  * The member of a `tools/call` request's params and of its result that
  * namespaced extensions ride on.
  */
-const META_MEMBER = "_meta";
+export const META_MEMBER = "_meta";
 
 /**
  * What the MCP specification allows a progress token to be: a string or
