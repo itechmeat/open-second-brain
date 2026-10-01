@@ -32,6 +32,7 @@ import { buildHygienePlan } from "../../core/brain/hygiene/plan.ts";
 import { resolveConflictFindings } from "../../core/brain/hygiene/resolve-conflicts.ts";
 import { runHygieneScan } from "../../core/brain/hygiene/scan.ts";
 import {
+  DEFAULT_SCAN_IDS,
   HYGIENE_DETECTOR_IDS,
   isHygieneDetectorId,
   type HygieneDetectorId,
@@ -341,8 +342,7 @@ export const HYGIENE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         detectors: {
           type: "array",
           items: { type: "string", enum: [...HYGIENE_DETECTOR_IDS] },
-          description:
-            "Detector subset for scan/apply. Default: the DEFAULT_SCAN_IDS sweep - every registered detector except the opt-in ones.",
+          description: `Detector subset for scan/apply. Default: ${DEFAULT_SCAN_IDS.join(", ")} (every registered detector except the opt-in ones).`,
         },
         ids: {
           type: "array",
