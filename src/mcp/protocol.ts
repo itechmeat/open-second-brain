@@ -20,6 +20,18 @@ export const INVALID_PARAMS = -32602;
 export const INTERNAL_ERROR = -32603;
 
 /**
+ * The closed set of JSON-RPC error codes this server answers with. Every
+ * error response is built from one of these, so the boundary registry can
+ * map each to a stable string code with a total table and no fallback.
+ */
+export type JsonRpcErrorCode =
+  | typeof PARSE_ERROR
+  | typeof INVALID_REQUEST
+  | typeof METHOD_NOT_FOUND
+  | typeof INVALID_PARAMS
+  | typeof INTERNAL_ERROR;
+
+/**
  * A frame the server writes without having been asked for it, addressed
  * to no request id.
  *
