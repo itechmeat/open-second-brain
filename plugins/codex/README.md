@@ -113,7 +113,7 @@ The full router with readiness criteria is [`install.md`](https://github.com/ite
 
 ## What is new
 
-1.65.0 makes the maintenance lane something an unattended host can schedule and extend (a cron recipe of its own, a systemd user timer for every recipe, install-owned `custom:<name>` upkeep tasks under the lane's gates) and keeps a served `o2b mcp` alive through a stray promise rejection, naming and counting it on stderr and in `/health`, while an uncaught exception still exits through the hooks that checkpoint the index and release the locks. Every release is described in the [CHANGELOG](https://github.com/itechmeat/open-second-brain/blob/main/CHANGELOG.md).
+1.66.0 puts a stable error code on every failed MCP call, `error.data.code` on a JSON-RPC error and `_meta["open-second-brain/error"].code` on an `isError` result, drawn from one closed registry with the error prose unchanged, so a client branches on a token instead of matching English text. The optional cross-encoder rerank names why it stepped aside on the retrieval trail (`rerank-provider-unavailable` with a typed category, never cached, and `rerank-model-sunset` for a model past its announced decommission date), and `o2b brain doctor` checks the rerank configuration without sending a request. Every release is described in the [CHANGELOG](https://github.com/itechmeat/open-second-brain/blob/main/CHANGELOG.md).
 
 ## Documentation
 
