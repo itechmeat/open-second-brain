@@ -19,6 +19,7 @@ import {
   REJECTION_LOG_BURST,
   REJECTION_LOG_WINDOW_MS,
 } from "../../src/cli/mcp-fault-guard.ts";
+import { fakeCredential } from "../helpers/fake-credentials.ts";
 
 interface Harness {
   readonly lines: string[];
@@ -154,7 +155,7 @@ describe("installMcpFaultGuard: unhandled rejections", () => {
 
   test("a credential in a fault message is redacted before it reaches stderr", () => {
     const h = harness();
-    const secret = "s3cr3t-pass-value";
+    const secret = fakeCredential("s3cr3t", "-pass-value");
     try {
       emitRejection(new Error(`fetch failed for https://op:${secret}@example.invalid/v1`));
       process.emit("uncaughtException", new Error(`provider said token=${secret}`));
