@@ -53,14 +53,31 @@ import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 export const DEFAULT_RETRY_CAP = 3;
 export const DEFAULT_TTL_MS = 24 * 3600 * 1000;
 
+/**
+ * Why a request named a session that cannot take it, for the two refusals
+ * a caller can act on without reading prose: the id names no session, or
+ * the session already ended. Every other request failure carries none.
+ */
+export type WriteSessionRequestReason = "unknown-session" | "terminal-session";
+
+export interface WriteSessionRequestErrorOptions {
+  readonly reason?: WriteSessionRequestReason;
+}
+
 /** Structured request failure - carries the machine-readable errors. */
 export class WriteSessionRequestError extends Error {
   readonly errors: ReadonlyArray<WriteSessionError>;
+  readonly reason?: WriteSessionRequestReason;
 
-  constructor(message: string, errors: ReadonlyArray<WriteSessionError> = []) {
+  constructor(
+    message: string,
+    errors: ReadonlyArray<WriteSessionError> = [],
+    options: WriteSessionRequestErrorOptions = {},
+  ) {
     super(message);
     this.name = "WriteSessionRequestError";
     this.errors = errors;
+    if (options.reason !== undefined) this.reason = options.reason;
   }
 }
 
@@ -270,7 +287,9 @@ export function loadLiveSession(vault: string, id: string, now: string): WriteSe
     throw new WriteSessionRequestError(probe.error);
   }
   if (probe.session === null) {
-    throw new WriteSessionRequestError(`unknown write-session: ${id}`);
+    throw new WriteSessionRequestError(`unknown write-session: ${id}`, [], {
+      reason: "unknown-session",
+    });
   }
   const session = probe.session;
   if (isTerminalWriteSessionStatus(session.status)) {
@@ -285,6 +304,8 @@ export function loadLiveSession(vault: string, id: string, now: string): WriteSe
       `write-session ${id} is terminal (${session.status}${
         session.failReason ? `/${session.failReason}` : ""
       })`,
+      [],
+      { reason: "terminal-session" },
     );
   }
   return session;

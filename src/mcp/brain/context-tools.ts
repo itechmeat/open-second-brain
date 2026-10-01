@@ -29,6 +29,7 @@ import { readVaultInstructionFile } from "../../core/brain/vault-instruction-fil
 import { normalizeAgentArgument } from "../../core/agent-identity.ts";
 import {
   WriteSessionRequestError,
+  type WriteSessionRequestReason,
   abandonSession,
   approveSession,
   openArtifactSession,
@@ -49,6 +50,7 @@ import {
   type PinnedOperation,
 } from "../../core/brain/pinned.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
+import { TOOL_ERROR_CODE, type ToolErrorCode } from "../tool-error-codes.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { VAULT_PATH_OUTPUT_SCHEMA, vaultPathField } from "../vault-path-field.ts";
 import { coerceStr, coerceInt } from "../coerce.ts";
@@ -70,7 +72,9 @@ async function toolBrainWriteSession(
   const sessionId = coerceStr(args, "session_id", false);
   const requireSessionId = (): string => {
     if (!sessionId) {
-      throw new MCPError(INVALID_PARAMS, `brain_write_session: op '${op}' requires session_id`);
+      throw new MCPError(INVALID_PARAMS, `brain_write_session: op '${op}' requires session_id`, {
+        code: TOOL_ERROR_CODE.sessionIdRequired,
+      });
     }
     return sessionId;
   };
@@ -142,7 +146,9 @@ async function toolBrainWriteSession(
         const probe = readWriteSession(ctx.vault, id, new Date().toISOString());
         if (probe.error !== null) throw new MCPError(INVALID_PARAMS, probe.error);
         if (probe.session === null) {
-          throw new MCPError(INVALID_PARAMS, `unknown write-session: ${id}`);
+          throw new MCPError(INVALID_PARAMS, `unknown write-session: ${id}`, {
+            code: WRITE_SESSION_REASON_CODE["unknown-session"],
+          });
         }
         return asRecord(sessionEnvelope(probe.session));
       }
@@ -165,14 +171,35 @@ async function toolBrainWriteSession(
       // Preserve the {code, path, message} boundary contract: the
       // structured list rides MCPError's data slot, the message stays
       // human-readable prose.
-      throw new MCPError(
-        INVALID_PARAMS,
-        err.message,
-        err.errors.length > 0 ? { errors: err.errors } : undefined,
-      );
+      throw new MCPError(INVALID_PARAMS, err.message, writeSessionErrorData(err));
     }
     throw err;
   }
+}
+
+/**
+ * The wire code for each session refusal the engine names. Total over the
+ * core union, so a new reason fails the type check until it is mapped.
+ */
+const WRITE_SESSION_REASON_CODE: Readonly<Record<WriteSessionRequestReason, ToolErrorCode>> =
+  Object.freeze({
+    "unknown-session": TOOL_ERROR_CODE.writeSessionUnknown,
+    "terminal-session": TOOL_ERROR_CODE.writeSessionTerminal,
+  });
+
+/**
+ * `data` for a request failure: the structured error list when there is
+ * one, the precise code when the engine named a reason, nothing otherwise
+ * - an absent code is filled by the boundary's `invalid_params` default.
+ */
+function writeSessionErrorData(
+  err: WriteSessionRequestError,
+): Readonly<Record<string, unknown>> | undefined {
+  const data = {
+    ...(err.errors.length > 0 ? { errors: err.errors } : {}),
+    ...(err.reason !== undefined ? { code: WRITE_SESSION_REASON_CODE[err.reason] } : {}),
+  };
+  return Object.keys(data).length > 0 ? data : undefined;
 }
 
 function asRecord(envelope: WriteSessionEnvelope): Record<string, unknown> {

@@ -22,6 +22,7 @@ import type { InsightCandidate } from "../../src/core/brain/triggers/types.ts";
 import { BRAIN_CONFIDENCE, BRAIN_PREFERENCE_STATUS } from "../../src/core/brain/types.ts";
 import { GATE_MODE } from "../../src/core/integrity/stamp.ts";
 import { INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
+import { MCPServer } from "../../src/mcp/server.ts";
 import { SKILL_TOOLS } from "../../src/mcp/skill-tools.ts";
 import type { ServerContext, ToolDefinition } from "../../src/mcp/tool-contract.ts";
 import { isToolErrorCode } from "../../src/mcp/tool-error-codes.ts";
@@ -195,5 +196,84 @@ describe("workspace refusals", () => {
     expect(codeOf(absent)).toBe("trigger_transition_refused");
     expect(hidden.message.replace(hiddenId, "<id>")).toBe(absent.message.replace(absentId, "<id>"));
     expect(hidden.data).toEqual(absent.data);
+  });
+});
+
+// ----- write session ----------------------------------------------------------
+
+const writeSession = (): ToolDefinition => findTool(TOOLS, "brain_write_session");
+const sessionCtx = (): ServerContext => ({ vault, configPath, repoRoot: null });
+
+describe("write-session codes", () => {
+  test("an op that needs a session but names none answers session_id_required", async () => {
+    const err = await raised(() => writeSession().handler(sessionCtx(), { op: "approve" }));
+    expect(err.message).toBe("brain_write_session: op 'approve' requires session_id");
+    expect(codeOf(err)).toBe("session_id_required");
+  });
+
+  test("an unknown session id answers write_session_unknown on every op", async () => {
+    const errors = await Promise.all(
+      ["approve", "abandon", "status"].map((op) =>
+        raised(() => writeSession().handler(sessionCtx(), { op, session_id: "ws-does-not-exist" })),
+      ),
+    );
+    for (const err of errors) {
+      expect(err.message).toBe("unknown write-session: ws-does-not-exist");
+      expect(codeOf(err)).toBe("write_session_unknown");
+    }
+  });
+
+  test("a terminal session answers write_session_terminal", async () => {
+    const opened = (await writeSession().handler(sessionCtx(), {
+      op: "open",
+      kind: "artifact",
+      target: "Brain/notes/terminal.md",
+      agent: "mcp-agent",
+    })) as Record<string, unknown>;
+    const id = opened["session_id"] as string;
+    await writeSession().handler(sessionCtx(), { op: "abandon", session_id: id });
+
+    const err = await raised(() =>
+      writeSession().handler(sessionCtx(), { op: "approve", session_id: id }),
+    );
+    expect(err.message).toStartWith(`write-session ${id} is terminal (`);
+    expect(codeOf(err)).toBe("write_session_terminal");
+  });
+
+  test("a structured request failure keeps data.errors and no precise code", async () => {
+    const err = await raised(() =>
+      writeSession().handler(sessionCtx(), {
+        op: "open",
+        kind: "artifact",
+        target: "../outside.md",
+        agent: "mcp-agent",
+      }),
+    );
+    expect(err.code).toBe(INVALID_PARAMS);
+    expect(err.message).toStartWith("target rejected: ");
+    const data = err.data as { readonly errors: ReadonlyArray<unknown> };
+    // Byte-identical to v1.65.0: the list alone, so the boundary seam adds
+    // its `invalid_params` default after it.
+    expect(Object.keys(data)).toEqual(["errors"]);
+    expect(data.errors.length).toBeGreaterThan(0);
+  });
+});
+
+describe("write-session codes at the boundary", () => {
+  test("a structured request failure gains the invalid_params default after its errors", async () => {
+    const server = new MCPServer({ vault });
+    const response = await server.handleRequest({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "brain_write_session",
+        arguments: { op: "open", kind: "artifact", target: "../outside.md", agent: "mcp-agent" },
+      },
+    });
+    expect(response?.error?.code).toBe(INVALID_PARAMS);
+    const data = response?.error?.data as Record<string, unknown>;
+    expect(Object.keys(data)).toEqual(["errors", "code"]);
+    expect(data["code"]).toBe("invalid_params");
   });
 });
