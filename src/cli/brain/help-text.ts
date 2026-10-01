@@ -29,6 +29,16 @@ const RECALL_MODE_CHOICES = RECALL_TELEMETRY_MODES.join("|");
 const RECALL_STATUS_CHOICES = RECALL_TELEMETRY_STATUSES.join("|");
 const RECALL_CHANNEL_CHOICES = RECALL_CHANNELS.join("|");
 
+/**
+ * `o2b brain maintenance` usage line, defined once: the verb prints it on
+ * a usage error and its `--help` text below opens with it.
+ */
+export const MAINTENANCE_USAGE =
+  "usage: o2b brain maintenance run [--force] [--retry <task|custom:name>] [--window H-H] [--tz ZONE] " +
+  "[--busy-minutes N] [--busy-threshold N] [--force-cost] [--progress] " +
+  "| run --cron-template [--interval N] [--format cron|systemd] [--window H-H --tz ZONE] " +
+  "| status [--limit N]  [--vault <path>] [--json]";
+
 export const BRAIN_HELP = `usage: o2b brain <verb> [args...]
 
 Brain verbs (observing memory):
@@ -599,10 +609,8 @@ export const VERB_HELP: Record<string, string> = {
     "no-values record in Brain/log/secret-custody/. Protects against\n" +
     "context leakage and vault sync exposure - not against root.\n",
   maintenance:
-    "usage: o2b brain maintenance run [--force] [--retry <task|custom:name>] [--window H-H] [--tz ZONE] " +
-    "[--busy-minutes N] [--busy-threshold N] [--force-cost] [--progress] " +
-    "| run --cron-template [--interval N] [--format cron|systemd] [--window H-H --tz ZONE] " +
-    "| status [--limit N]  [--vault <path>] [--json]\n" +
+    MAINTENANCE_USAGE +
+    "\n" +
     "Quiet-window, lease-guarded lane for heavy passes. run gates on the\n" +
     "local-time window (unset = always open), recent interactive query-rate\n" +
     "from recall telemetry, and an expiring SQLite lease no second worker\n" +

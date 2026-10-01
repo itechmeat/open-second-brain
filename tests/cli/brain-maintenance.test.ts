@@ -9,10 +9,9 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { VERB_HELP } from "../../src/cli/brain/help-text.ts";
+import { MAINTENANCE_USAGE, VERB_HELP } from "../../src/cli/brain/help-text.ts";
 import {
   MAINTENANCE_EXIT,
-  MAINTENANCE_USAGE,
   formatSpendBanner,
   maintenanceExitCode,
   renderTaskLine,

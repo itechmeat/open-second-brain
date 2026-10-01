@@ -110,7 +110,7 @@ export function usageError(message: string): number {
 export { ISO_8601_RE, parseOptionalIsoDate } from "../coerce.ts";
 export { NO_VAULT_ERROR, normalizeFlagString } from "../helpers.ts";
 
-export { BRAIN_HELP, VERB_HELP } from "./help-text.ts";
+export { BRAIN_HELP, MAINTENANCE_USAGE, VERB_HELP } from "./help-text.ts";
 export {
   renderUpgradePlanJson,
   printUpgradePlanText,

@@ -57,14 +57,7 @@ import type { EmbeddingSpendPreview } from "../../../core/search/indexer.ts";
 import { resolveSearchConfig } from "../../../core/search/index.ts";
 import { onInterrupt } from "../../interrupt.ts";
 import { attachProgress, reportProgressRefusal } from "../../progress-rail.ts";
-import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
-
-/** The verb's usage line; `o2b brain maintenance --help` opens with it. */
-export const MAINTENANCE_USAGE =
-  "usage: o2b brain maintenance run [--force] [--retry <task|custom:name>] [--window H-H] [--tz ZONE] " +
-  "[--busy-minutes N] [--busy-threshold N] [--force-cost] [--progress] " +
-  "| run --cron-template [--interval N] [--format cron|systemd] [--window H-H --tz ZONE] " +
-  "| status [--limit N]  [--vault <path>] [--json]";
+import { MAINTENANCE_USAGE, brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
 /**
  * What this verb's exit code says, and why a refusal has its own number.
