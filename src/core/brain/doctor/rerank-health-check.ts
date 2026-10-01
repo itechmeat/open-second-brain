@@ -135,8 +135,10 @@ function endpointGaps(rerank: ResolvedRerankConfig, ctx: DoctorCheckContext): st
   }
   // An unregistered provider name matters only when it is why a field is
   // empty: the explicit search_rerank_* values win over a profile, so with
-  // all of them set search works and the name is no endpoint gap.
-  if (gaps.length === 0) return gaps;
+  // all of them set search works and the name is no endpoint gap. A
+  // profile carries the base URL, the model and the key variable, never
+  // the key itself, so an unset key value is not the name's doing.
+  if (!blank(rerank.baseUrl) && !blank(rerank.model) && !blank(rerank.envKey)) return gaps;
   const provider = configuredProviderName(ctx.configPath);
   if (provider !== null && !loadRerankRegistry(ctx.vault).some((p) => p.name === provider)) {
     gaps.unshift(

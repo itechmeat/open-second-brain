@@ -175,6 +175,16 @@ describe("an enabled remote rerank that cannot resolve its endpoint is one error
     expect(codes(run())).toEqual([]);
   });
 
+  test("an unregistered provider name is not blamed for an unset key value", () => {
+    // A profile supplies the key variable's name, never its value.
+    configure({ provider: "nobody-registered-this" });
+    delete process.env[KEY_VAR];
+    const { issues } = run();
+    expect(issues.map((i) => i.code)).toEqual([RERANK_ENDPOINT_UNCONFIGURED_CODE]);
+    expect(issues[0]!.message).toContain(KEY_VAR);
+    expect(issues[0]!.message).not.toContain("nobody-registered-this");
+  });
+
   test("a key variable set to blank is the error the runtime would raise", () => {
     process.env[KEY_VAR] = "  ";
     const { issues } = run();
