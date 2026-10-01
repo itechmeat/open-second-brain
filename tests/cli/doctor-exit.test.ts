@@ -125,7 +125,9 @@ describe("o2b doctor --readiness end to end", () => {
     const r = await runCli(["doctor", "--vault", tmp, "--readiness", "--json"], { env: env() });
     expect(r.returncode).toBe(DOCTOR_EXIT.probeIncomplete);
     const parsed = JSON.parse(r.stdout);
-    expect(parsed.readiness_summary.unknown).toBe(1);
+    // Both readiness probes honestly report unknown for the same
+    // unreadable manifest: installed_runtimes and registered_commands.
+    expect(parsed.readiness_summary.unknown).toBe(2);
     expect(parsed.readiness_summary.failed).toBe(0);
     expect(
       parsed.readiness.some(

@@ -56,7 +56,16 @@
  * `needs-llm-step` envelopes). The only model-inference credential the
  * system itself resolves is the embedding provider's API key, so the
  * "LLM key" probe resolves that.
+ *
+ * The `registered_commands` probe (t_3477c9e8) re-reads what the install
+ * manifest recorded and asks one question per registered client config:
+ * does the Open Second Brain command it registered still resolve to an
+ * executable? It is read-only - a registration that stopped resolving is
+ * reported with the `o2b install <target> --apply` recovery line, never
+ * rewritten.
  */
+
+import { readFileSync } from "node:fs";
 
 import { discoverConfig } from "./config.ts";
 import { resolveDecisionModelConfig } from "./decision-model/config.ts";
@@ -70,10 +79,19 @@ import {
 import { providerProducesVectors } from "./search/embeddings/contract.ts";
 import { makeProvider } from "./search/embeddings/provider.ts";
 import { resolveSearchConfig } from "./search/index.ts";
+import {
+  COMMAND_PROBE_VERDICT,
+  CommandProbeError,
+  probeCommandResolvability,
+  type CommandProbeContext,
+  type CommandProbeOutcome,
+} from "./install/command-probe.ts";
+import { OSB_KEY_FULL, OSB_KEY_WRITER } from "./install/json-merge.ts";
+import { readManifest } from "./install/manifest.ts";
 import { buildPayload } from "./install/payload.ts";
 import { defaultRegistry } from "./install/registry.ts";
 import { registerAllAdapters } from "./install/adapters/all.ts";
-import type { InstallEnv } from "./install/types.ts";
+import type { InstallEnv, ManifestEntry } from "./install/types.ts";
 
 // ----- Constants ------------------------------------------------------------
 
@@ -86,6 +104,7 @@ export const READINESS_PROBE = {
   embeddingProvider: "embedding_provider",
   runtimeAdapterWiring: "runtime_adapter_wiring",
   installedRuntimes: "installed_runtimes",
+  registeredCommands: "registered_commands",
   decisionModel: "decision_model",
 } as const;
 
@@ -596,6 +615,397 @@ function flattenReason(message: string): string {
   return message.replace(/\s+/g, " ").trim();
 }
 
+// ----- Registered-command probe (t_3477c9e8) --------------------------------
+
+/**
+ * Top-level JSON objects an OSB MCP registration may live under: the
+ * json-merge default (`mcpServers` - cursor, kiro, gemini-cli and the
+ * generic printout) and opencode's `mcp`.
+ */
+const JSON_MCP_TOP_LEVEL_KEYS: ReadonlyArray<string> = ["mcpServers", "mcp"];
+
+/** The OSB entry names, as JSON keys and as `[mcp_servers.<name>]` tables. */
+const OSB_ENTRY_KEYS: ReadonlySet<string> = new Set([OSB_KEY_FULL, OSB_KEY_WRITER]);
+
+/** Matches exactly the `[mcp_servers.<name>]` table header grok/codex write. */
+const TOML_MCP_SERVER_HEADER = /^\[mcp_servers\.([^[\]]+)\]$/;
+
+/**
+ * One registered command extracted from a client config: the OSB entry
+ * name plus the `command`/`args` exactly as the config records them.
+ */
+interface RegisteredCommandEntry {
+  readonly key: string;
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+}
+
+/**
+ * What one recorded config file yielded. `none` and `malformed` are
+ * distinct on purpose: a config with no OSB command entry has nothing to
+ * probe (and registration drift is the installed-runtimes probe's
+ * finding), while OSB entries that exist but carry no usable command stop
+ * the measurement - which is the `unknown` vocabulary, not a skip.
+ */
+type CommandExtraction =
+  | { readonly kind: "entries"; readonly entries: ReadonlyArray<RegisteredCommandEntry> }
+  | { readonly kind: "none" }
+  | { readonly kind: "malformed"; readonly reason: string };
+
+/** Worst-first severity order over the readiness statuses. */
+const READINESS_SEVERITY: ReadonlyArray<ReadinessStatus> = [
+  READINESS_STATUS.fail,
+  READINESS_STATUS.unknown,
+  READINESS_STATUS.skipped,
+  READINESS_STATUS.pass,
+];
+
+function readinessRank(status: ReadinessStatus): number {
+  return READINESS_SEVERITY.indexOf(status);
+}
+
+function countByStatus(statuses: ReadonlyArray<ReadinessStatus>): Record<ReadinessStatus, number> {
+  const counts: Record<ReadinessStatus, number> = { pass: 0, fail: 0, unknown: 0, skipped: 0 };
+  for (const status of statuses) counts[status] += 1;
+  return counts;
+}
+
+function statusForProbeOutcome(outcome: CommandProbeOutcome): ReadinessStatus {
+  switch (outcome.verdict) {
+    case COMMAND_PROBE_VERDICT.resolves:
+      return READINESS_STATUS.pass;
+    case COMMAND_PROBE_VERDICT.absent:
+      return READINESS_STATUS.fail;
+    case COMMAND_PROBE_VERDICT.unresolved:
+      return READINESS_STATUS.unknown;
+  }
+}
+
+/**
+ * What is registered, and does it still resolve? Reads the install
+ * manifest, re-reads every recorded client config, extracts the OSB
+ * `command`/`args` the install wrote (JSON `mcpServers`/`mcp` keys, or the
+ * `[mcp_servers.*]` TOML tables grok and codex write), and probes each
+ * command word via `command-probe.ts`.
+ *
+ * The verdict is worst-of per entry, then worst-of overall
+ * (`fail` > `unknown` > `skipped` > `pass`), with the full per-target
+ * table in the detail and the counts travelling with the winning bucket -
+ * the same shape {@link probeInstalledRuntimes} reports in. Every row is
+ * read-only: the only command printed is the recovery line
+ * `o2b install <target> --apply`.
+ *
+ * Grading follows the false-alarm bound the design settles. A
+ * proved-absent path-form command is a `fail` carrying the recovery line.
+ * A bare name this process's PATH does not carry is `unknown` - the host
+ * client spawns with its own PATH, which may still resolve it. A recorded
+ * config that is gone, or that cannot be read into a command, is
+ * `unknown` (unmeasured, not broken); a config with no OSB command entry
+ * at all is `skipped` by name - nothing-to-probe is a verdict, not
+ * silence.
+ */
+export async function probeRegisteredCommands(opts: ReadinessOptions): Promise<ReadinessVerdict> {
+  let manifest;
+  try {
+    manifest = readManifest(opts.vault);
+  } catch (err) {
+    return {
+      status: READINESS_STATUS.unknown,
+      detail:
+        "install manifest could not be read, so no registered command could be probed: " +
+        flattenReason((err as Error).message),
+    };
+  }
+  const installs = Object.values(manifest.installs);
+  if (installs.length === 0) {
+    return {
+      status: READINESS_STATUS.skipped,
+      detail: "install manifest records no installs; nothing to probe",
+    };
+  }
+  const env = installEnvFor(opts);
+  const context: CommandProbeContext = { env: env.env, cwd: env.cwd };
+  const rows = installs.map((entry) => registeredCommandRow(entry, context));
+  const counts = countByStatus(rows.map((row) => row.status));
+  // Worst rows lead the detail; toSorted is stable, so within one bucket
+  // the manifest's own order stands.
+  const ordered = rows.toSorted((a, b) => readinessRank(a.status) - readinessRank(b.status));
+  const rowText = ordered.map((row) => `${row.target}: ${row.detail}`).join("; ");
+  const census =
+    `(${counts.pass} pass, ${counts.fail} fail, ` +
+    `${counts.unknown} unknown, ${counts.skipped} skipped)`;
+  if (counts.fail > 0) {
+    return {
+      status: READINESS_STATUS.fail,
+      detail: `${counts.fail} registered command(s) proved unresolvable ${census}: ${rowText}`,
+    };
+  }
+  if (counts.unknown > 0) {
+    return {
+      status: READINESS_STATUS.unknown,
+      detail: `could not confirm ${counts.unknown} registered command(s) ${census}: ${rowText}`,
+    };
+  }
+  if (counts.skipped > 0) {
+    return {
+      status: READINESS_STATUS.skipped,
+      detail:
+        `nothing to probe for ${counts.skipped} of ${rows.length} registered target(s) ` +
+        `${census}: ${rowText}`,
+    };
+  }
+  return {
+    status: READINESS_STATUS.pass,
+    detail: `${counts.pass} registered command(s) resolve ${census}: ${rowText}`,
+  };
+}
+
+/** One manifest entry's answer: what was registered and whether it resolves. */
+interface RegisteredCommandRow {
+  readonly target: string;
+  readonly status: ReadinessStatus;
+  readonly detail: string;
+}
+
+function registeredCommandRow(
+  entry: ManifestEntry,
+  context: CommandProbeContext,
+): RegisteredCommandRow {
+  const target = entry.target;
+  if (entry.config_path === null) {
+    return {
+      target,
+      status: READINESS_STATUS.skipped,
+      detail: "no config_path recorded - nothing to probe",
+    };
+  }
+  const configPath = entry.config_path;
+  let raw: string;
+  try {
+    raw = readFileSync(configPath, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return {
+        target,
+        status: READINESS_STATUS.unknown,
+        detail:
+          `recorded config ${configPath} does not exist; ` +
+          `'o2b install ${target} --check' answers whether the registration is gone`,
+      };
+    }
+    return {
+      target,
+      status: READINESS_STATUS.unknown,
+      detail:
+        `recorded config ${configPath} could not be read: ` + flattenReason((err as Error).message),
+    };
+  }
+  const extraction = extractRegisteredCommands(raw);
+  switch (extraction.kind) {
+    case "none":
+      return {
+        target,
+        status: READINESS_STATUS.skipped,
+        detail: `no OSB command entry found in ${configPath} - nothing to probe`,
+      };
+    case "malformed":
+      return {
+        target,
+        status: READINESS_STATUS.unknown,
+        detail:
+          `registered OSB entry in ${configPath} is not a usable command: ` +
+          flattenReason(extraction.reason),
+      };
+    case "entries":
+      return probeRegisteredEntries(target, configPath, extraction.entries, context);
+  }
+}
+
+function probeRegisteredEntries(
+  target: string,
+  configPath: string,
+  entries: ReadonlyArray<RegisteredCommandEntry>,
+  context: CommandProbeContext,
+): RegisteredCommandRow {
+  const summaries: string[] = [];
+  let worst: ReadinessStatus = READINESS_STATUS.pass;
+  for (const entry of entries) {
+    let outcome: CommandProbeOutcome;
+    try {
+      outcome = probeCommandResolvability(entry.command, entry.args, context);
+    } catch (err) {
+      if (err instanceof CommandProbeError) {
+        return {
+          target,
+          status: READINESS_STATUS.unknown,
+          detail:
+            `registered command in ${configPath} could not be probed: ` +
+            flattenReason(err.message),
+        };
+      }
+      throw err;
+    }
+    const status = statusForProbeOutcome(outcome);
+    // The recovery line rides exactly the rows that proved their fault.
+    const summary =
+      `command '${entry.command}': ${outcome.detail}` +
+      (outcome.verdict === COMMAND_PROBE_VERDICT.absent
+        ? ` - fix: o2b install ${target} --apply`
+        : "");
+    if (!summaries.includes(summary)) summaries.push(summary);
+    if (readinessRank(status) < readinessRank(worst)) worst = status;
+  }
+  return { target, status: worst, detail: summaries.join("; ") };
+}
+
+function extractRegisteredCommands(raw: string): CommandExtraction {
+  const fromJson = extractFromJsonConfig(raw);
+  if (fromJson !== null) return fromJson;
+  return extractFromTomlConfig(raw);
+}
+
+/**
+ * Read the OSB entries out of a JSON client config. Returns `null` when
+ * the text is not JSON at all, so the TOML reader gets its turn - grok
+ * and codex record the very same OSB names as `[mcp_servers.*]` tables.
+ */
+function extractFromJsonConfig(raw: string): CommandExtraction | null {
+  // Editors may save a BOM at the head; JSON.parse refuses it (the same
+  // tolerance json-merge applies when writing these files).
+  const stripped = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stripped);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { kind: "none" };
+  }
+  const root = parsed as Record<string, unknown>;
+  const entries: RegisteredCommandEntry[] = [];
+  const malformed: string[] = [];
+  for (const topKey of JSON_MCP_TOP_LEVEL_KEYS) {
+    const block = root[topKey];
+    if (block === null || typeof block !== "object" || Array.isArray(block)) continue;
+    for (const [key, value] of Object.entries(block as Record<string, unknown>)) {
+      if (!OSB_ENTRY_KEYS.has(key)) continue;
+      const normalized = normalizeOnDiskEntry(value);
+      if (normalized === null) malformed.push(`${topKey}.${key}`);
+      else entries.push({ key, ...normalized });
+    }
+  }
+  if (entries.length > 0) return { kind: "entries", entries };
+  if (malformed.length > 0) {
+    return {
+      kind: "malformed",
+      reason: `OSB entries ${malformed.join(", ")} carry no usable command/args`,
+    };
+  }
+  return { kind: "none" };
+}
+
+/**
+ * The two on-disk entry shapes this repo writes: `{command, args}` and
+ * opencode's whole-argv form `{command: [bin, ...args]}`. Anything else
+ * is not a command this probe can judge.
+ */
+function normalizeOnDiskEntry(
+  value: unknown,
+): { command: string; args: ReadonlyArray<string> } | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record["command"] === "string" && record["command"].length > 0) {
+    const args = stringArgsOrEmpty(record["args"]);
+    return args === null ? null : { command: record["command"], args };
+  }
+  const argv = stringArgsOrEmpty(record["command"]);
+  if (argv !== null && argv.length > 0 && argv[0]!.length > 0) {
+    return { command: argv[0]!, args: argv.slice(1) };
+  }
+  return null;
+}
+
+/** A string array as stored, `[]` when absent, `null` when malformed. */
+function stringArgsOrEmpty(candidate: unknown): ReadonlyArray<string> | null {
+  if (candidate === undefined) return [];
+  if (!Array.isArray(candidate) || !candidate.every((a) => typeof a === "string")) return null;
+  return candidate as string[];
+}
+
+/**
+ * Read the OSB entries out of a grok/codex-style TOML config, by
+ * line-section and only for the value shapes `grok-config.ts` writes: a
+ * quoted-string `command` and a single-line string-array `args`. Codex's
+ * CLI-serialized layout has no published grammar and is not guessed at -
+ * a table whose values do not parse reports `malformed`, naming it.
+ */
+function extractFromTomlConfig(raw: string): CommandExtraction {
+  const tables = new Map<string, { command: string | null; args: ReadonlyArray<string> | null }>();
+  let current: string | null = null;
+  for (const rawLine of raw.split("\n")) {
+    const line = rawLine.trim();
+    if (line.startsWith("[")) {
+      const header = TOML_MCP_SERVER_HEADER.exec(line);
+      current = header !== null && OSB_ENTRY_KEYS.has(header[1]!) ? header[1]! : null;
+      continue;
+    }
+    if (current === null || line.length === 0 || line.startsWith("#")) continue;
+    const eq = line.indexOf("=");
+    if (eq <= 0) continue;
+    const field = line.slice(0, eq).trim();
+    const value = line.slice(eq + 1).trim();
+    const table = tables.get(current) ?? { command: null, args: null };
+    tables.set(current, table);
+    if (field === "command") table.command = parseTomlBasicString(value);
+    else if (field === "args") table.args = parseTomlStringArray(value);
+  }
+  const entries: RegisteredCommandEntry[] = [];
+  const malformed: string[] = [];
+  for (const [name, table] of tables) {
+    if (typeof table.command === "string" && table.command.length > 0) {
+      entries.push({ key: name, command: table.command, args: table.args ?? [] });
+    } else {
+      malformed.push(name);
+    }
+  }
+  if (entries.length > 0) return { kind: "entries", entries };
+  if (malformed.length > 0) {
+    return {
+      kind: "malformed",
+      reason: `OSB tables ${malformed.join(", ")} declare no parseable command`,
+    };
+  }
+  return { kind: "none" };
+}
+
+/** TOML basic string, or a literal string (no escapes) between single quotes. */
+function parseTomlBasicString(value: string): string | null {
+  if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      return typeof parsed === "string" ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+  if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) {
+    return value.slice(1, -1);
+  }
+  return null;
+}
+
+function parseTomlStringArray(value: string): ReadonlyArray<string> | null {
+  if (value.length < 2 || !value.startsWith("[") || !value.endsWith("]")) return null;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === "string")) return null;
+    return parsed as ReadonlyArray<string>;
+  } catch {
+    return null;
+  }
+}
+
 // ----- Runner ---------------------------------------------------------------
 
 export interface NamedProbe {
@@ -609,6 +1019,7 @@ export const DEFAULT_PROBES: ReadonlyArray<NamedProbe> = [
   { name: READINESS_PROBE.embeddingProvider, fn: probeEmbeddingProvider },
   { name: READINESS_PROBE.runtimeAdapterWiring, fn: probeRuntimeAdapterWiring },
   { name: READINESS_PROBE.installedRuntimes, fn: probeInstalledRuntimes },
+  { name: READINESS_PROBE.registeredCommands, fn: probeRegisteredCommands },
   { name: READINESS_PROBE.decisionModel, fn: probeDecisionModel },
 ];
 
