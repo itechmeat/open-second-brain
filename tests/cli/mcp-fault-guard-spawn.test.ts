@@ -18,11 +18,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { EXIT_INTERNAL_FAULT, FAULT_KIND } from "../../src/cli/mcp-fault-guard.ts";
-import { homeEnv } from "../helpers/platform.ts";
+import { IS_WINDOWS, homeEnv } from "../helpers/platform.ts";
 
 const REPO_ROOT = join(import.meta.dir, "../..");
 const FIXTURES = join(import.meta.dir, "../fixtures/mcp-fault-guard");
 const CLI = join(REPO_ROOT, "src/cli/main.ts");
+/** The runtime running this suite, so children never pick another Bun from PATH. */
+const BUN = process.execPath;
 /** A generous ceiling: each child starts and finishes in well under a second. */
 const SPAWN_TIMEOUT_MS = 30_000;
 
@@ -43,6 +45,8 @@ function sandbox(): { vault: string; env: Record<string, string> } {
     vault,
     env: {
       PATH: process.env["PATH"] ?? "",
+      // Without it a Windows child cannot initialise Winsock.
+      ...(process.env["SYSTEMROOT"] ? { SYSTEMROOT: process.env["SYSTEMROOT"] } : {}),
       ...homeEnv(home),
       TMPDIR: tmp,
       TMP: tmp,
@@ -118,7 +122,7 @@ describe("mcp fault guard in a spawned process", () => {
     "a detached rejection is named and the server keeps answering",
     async () => {
       const { vault, env } = sandbox();
-      const proc = Bun.spawn(["bun", join(FIXTURES, "serve-with-rejection.ts"), vault], {
+      const proc = Bun.spawn([BUN, join(FIXTURES, "serve-with-rejection.ts"), vault], {
         cwd: REPO_ROOT,
         env,
         stdin: "pipe",
@@ -161,7 +165,7 @@ describe("mcp fault guard in a spawned process", () => {
     "an uncaught exception exits 70 through the exit hooks",
     async () => {
       const { vault, env } = sandbox();
-      const proc = Bun.spawn(["bun", join(FIXTURES, "serve-with-throw.ts"), vault], {
+      const proc = Bun.spawn([BUN, join(FIXTURES, "serve-with-throw.ts"), vault], {
         cwd: REPO_ROOT,
         env,
         stdin: "ignore",
@@ -190,7 +194,7 @@ describe("mcp fault guard in a spawned process", () => {
     async () => {
       const { vault, env } = sandbox();
       const proc = Bun.spawn(
-        ["bun", CLI, "mcp", "--transport", "http", "--port", "0", "--vault", vault],
+        [BUN, CLI, "mcp", "--transport", "http", "--port", "0", "--vault", vault],
         { cwd: REPO_ROOT, env, stdin: "ignore", stdout: "ignore", stderr: "pipe" },
       );
       try {
@@ -207,6 +211,54 @@ describe("mcp fault guard in a spawned process", () => {
       } finally {
         proc.kill();
         await proc.exited;
+      }
+    },
+    SPAWN_TIMEOUT_MS,
+  );
+  test(
+    "a rejection inside o2b mcp over HTTP raises the /health count, and the guard is released",
+    async () => {
+      const { vault, env } = sandbox();
+      const proc = Bun.spawn(
+        [
+          BUN,
+          "--preload",
+          join(FIXTURES, "reject-once-guarded.ts"),
+          CLI,
+          "mcp",
+          "--transport",
+          "http",
+          "--port",
+          "0",
+          "--vault",
+          vault,
+        ],
+        { cwd: REPO_ROOT, env, stdin: "ignore", stdout: "ignore", stderr: "pipe" },
+      );
+      const err = lineReader(proc.stderr);
+      try {
+        const named = err.waitFor((line) =>
+          line.includes(`[mcp] ${FAULT_KIND.unhandledRejection} #1: Error: fixture rejection`),
+        );
+        const listening = await err.waitFor((line) => line.includes(" listening on http://"));
+        const url = /listening on (http:\/\/\S+)/.exec(listening)?.[1];
+        expect(url).toBeDefined();
+        await named;
+        const body = (await (await fetch(`${url}/health`)).json()) as {
+          faults?: { unhandled_rejection: number; last_fault_at: string | null };
+        };
+        expect(body.faults?.unhandled_rejection).toBe(1);
+        expect(Number.isNaN(Date.parse(body.faults?.last_fault_at ?? ""))).toBe(false);
+        expect(proc.exitCode).toBeNull();
+      } finally {
+        proc.kill("SIGTERM");
+      }
+      await proc.exited;
+      // A Windows kill ends the child without running its exit hooks, so
+      // only POSIX can watch the verb release the guard on the way out.
+      if (!IS_WINDOWS) {
+        const exitLine = await err.waitFor((line) => line.includes("listeners at exit: "));
+        expect(exitLine).toEndWith("listeners at exit: 0");
       }
     },
     SPAWN_TIMEOUT_MS,
