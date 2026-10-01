@@ -71,12 +71,21 @@ const ZEROENTROPY_NOTE =
   "not a sunset of the model";
 
 /**
- * The checkpoint names read on the day of review: `zerank-2` as the
- * announcement names it, and the three repository ids the model cards
- * carry. Listed rather than matched by prefix, as every survey row is.
+ * The checkpoint names read on the day of review: `zerank-2`, `zerank-1`
+ * and `zerank-1-small` as the announcement page names them (the hosted
+ * API ids an operator typed for the endpoint now gone), and the three
+ * repository ids the model cards carry. Listed rather than matched by
+ * prefix, as every survey row is.
+ *
+ * `zerank-2-small` and `zerank-2-nano` are deliberately left unsurveyed:
+ * the page lists them as products, but no open checkpoint for either was
+ * found on review day, so no claim is made about them and the doctor
+ * reports them as `rerank-model-sunset-unsurveyed`.
  */
 const ZEROENTROPY_CHECKPOINTS: ReadonlyArray<string> = Object.freeze([
   "zerank-2",
+  "zerank-1",
+  "zerank-1-small",
   "zeroentropy/zerank-2-reranker",
   "zeroentropy/zerank-1-reranker",
   "zeroentropy/zerank-1-small-reranker",

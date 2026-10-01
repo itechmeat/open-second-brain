@@ -114,6 +114,15 @@ describe("the shipped survey", () => {
     expect(classifyRerankSunset(NEGATIVE_SHIPPED_MODEL, NOW_MS).state).toBe("none_announced");
   });
 
+  test("the hosted ZeroEntropy ids are negatives; the two without a checkpoint stay unsurveyed", () => {
+    for (const model of ["zerank-1", "zerank-1-small"]) {
+      expect(classifyRerankSunset(model, NOW_MS).state).toBe("none_announced");
+    }
+    for (const model of ["zerank-2-small", "zerank-2-nano"]) {
+      expect(classifyRerankSunset(model, NOW_MS).state).toBe("unsurveyed");
+    }
+  });
+
   test("only a passed announced date skips", () => {
     expect(rerankSunsetHasPassed(classifyRerankSunset(MODEL, NOW_MS, surveyWith(PAST)))).toBe(true);
     expect(rerankSunsetHasPassed(classifyRerankSunset(MODEL, NOW_MS, surveyWith(FUTURE)))).toBe(
