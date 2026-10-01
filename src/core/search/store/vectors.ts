@@ -50,6 +50,18 @@ export interface ModelChangeOutcome {
   readonly previousDimension: number | null;
   readonly currentModel: string | null;
   readonly currentDimension: number | null;
+  /**
+   * Present when the verify-before-replace gate refused a clear: the
+   * stored vectors and the recorded model were kept, and the store opened
+   * anyway so keyword indexing goes on. The same sentence is logged.
+   */
+  readonly refusal?: EmbeddingRebuildRefusal;
+}
+
+/** A refused clear, named by the blocked tier's error code. */
+export interface EmbeddingRebuildRefusal {
+  readonly code: SearchErrorCode;
+  readonly message: string;
 }
 
 /** What an open connection knows about sqlite-vec. */
@@ -348,12 +360,14 @@ function hasChunkRows(db: Database): boolean {
  *
  * The verdict is the capability tier: a `disabled` or
  * `credential-missing` configuration cannot recompute the vectors, so
- * the clear would be destruction without a recovery path. Refusal throws
- * the tier's named error BEFORE any mutation - the old vectors and the
- * old recorded model both survive, and every later open re-raises until
- * the operator restores a rebuilding configuration or reverts the model.
+ * the clear would be destruction without a recovery path. The refusal
+ * is returned, named by the tier's error code, BEFORE any mutation: the
+ * old vectors and the old recorded model both survive, the store still
+ * opens (keyword indexing does not depend on vectors), and every later
+ * open names it again until the operator restores a rebuilding
+ * configuration or reverts the model.
  */
-function assertRebuildableBeforeClear(
+function rebuildRefusalBeforeClear(
   db: Database,
   gate: EmbeddingRebuildGate | undefined,
   context: {
@@ -362,20 +376,22 @@ function assertRebuildableBeforeClear(
     readonly model: string | null;
     readonly dimension: number | null;
   },
-): void {
-  if (gate === undefined) return;
+): EmbeddingRebuildRefusal | null {
+  if (gate === undefined) return null;
   const stored = countEmbeddings(db);
-  if (stored === 0) return;
+  if (stored === 0) return null;
   const capability = resolveSemanticCapability(gate.semantic);
-  if (capability.tier === SEMANTIC_CAPABILITY_TIER.configured) return;
+  if (capability.tier === SEMANTIC_CAPABILITY_TIER.configured) return null;
   const material = hasChunkRows(db) ? "" : "; no chunk material remains to rebuild from";
-  throw new SearchError(
-    BLOCKED_TIER_ERROR_CODE[capability.tier],
-    `embedding model change from ${context.previousModel}/${context.previousDimension} to ` +
+  return {
+    code: BLOCKED_TIER_ERROR_CODE[capability.tier],
+    message:
+      `embedding model change from ${context.previousModel}/${context.previousDimension} to ` +
       `${context.model}/${context.dimension} refused: ${stored} stored embedding(s) cannot be ` +
-      `rebuilt while the semantic capability is ${capability.tier}${material}; restore the ` +
-      `previous model or the provider credential, then reindex`,
-  );
+      `rebuilt while the semantic capability is ${capability.tier}${material}; the stored ` +
+      `embeddings and the recorded model are kept; restore the previous model or the provider ` +
+      `credential, then reindex`,
+  };
 }
 
 /**
@@ -387,8 +403,9 @@ function assertRebuildableBeforeClear(
  * Two guarded edges (t_2fbdaf70):
  * - The clear is gated on rebuildability when the caller passes an
  *   {@link EmbeddingRebuildGate}: with stored vectors present and a
- *   capability tier that cannot recompute them, the clear is refused
- *   with a named error and nothing is mutated.
+ *   capability tier that cannot recompute them, the clear is refused:
+ *   nothing is mutated, the refusal is logged and returned on the
+ *   outcome under the tier's error code, and the caller's open goes on.
  * - A named-model -> null-model transition is not a detected change
  *   (the ladder requires both sides non-null), but under the gate's own
  *   logic it must not clear either - rebuildability cannot be verified
@@ -435,13 +452,30 @@ export function ensureEmbeddingModel(
     (effectivePrevQueryPrefix !== prefixes.query ||
       effectivePrevPassagePrefix !== prefixes.passage);
 
-  if (modelChanged || dimChanged) {
-    assertRebuildableBeforeClear(db, gate, {
+  const refusalContext = {
+    previousModel: prevModel,
+    previousDimension: prevDim,
+    model,
+    dimension,
+  };
+  const refusal =
+    modelChanged || dimChanged || (!modelRemoved && prefixChanged)
+      ? rebuildRefusalBeforeClear(db, gate, refusalContext)
+      : null;
+  if (refusal !== null) {
+    // eslint-disable-next-line no-console
+    console.error(`${refusal.code}: ${refusal.message}`);
+    return Object.freeze({
+      wasChanged: false,
       previousModel: prevModel,
       previousDimension: prevDim,
-      model,
-      dimension,
+      currentModel: prevModel,
+      currentDimension: prevDim,
+      refusal,
     });
+  }
+
+  if (modelChanged || dimChanged) {
     clearEmbeddings(db, vec.loaded);
     // eslint-disable-next-line no-console
     console.error(
@@ -465,12 +499,6 @@ export function ensureEmbeddingModel(
     );
   } else if (prefixChanged) {
     // Model/dimension unchanged: the prefix change alone triggers the clear.
-    assertRebuildableBeforeClear(db, gate, {
-      previousModel: prevModel,
-      previousDimension: prevDim,
-      model,
-      dimension,
-    });
     clearEmbeddings(db, vec.loaded);
     // eslint-disable-next-line no-console
     console.error(

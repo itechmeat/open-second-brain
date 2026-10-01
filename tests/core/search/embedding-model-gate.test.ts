@@ -39,8 +39,13 @@ import {
   ensureEmbeddingModel,
   type EmbeddingRebuildGate,
 } from "../../../src/core/search/store/vectors.ts";
-import { SearchError } from "../../../src/core/search/types.ts";
 import type { ResolvedEmbeddingConfig } from "../../../src/core/search/types.ts";
+import { indexVault } from "../../../src/core/search/indexer.ts";
+import { Store } from "../../../src/core/search/store.ts";
+import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
+import { startFakeHttp } from "../../helpers/fake-http.ts";
+import { sqliteVecLoadable } from "../../helpers/sqlite-vec.ts";
+import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
 
 const FIXED_STAMP = "2026-01-01T00:00:00.000Z";
 
@@ -126,21 +131,30 @@ function embeddingCount(): number {
   return db.query<{ c: number }, []>("SELECT count(*) AS c FROM embeddings").get()?.c ?? 0;
 }
 
+/** Run `fn` with console.error captured; returns its result and the lines. */
+function captureErrors<T>(fn: () => T): { result: T; errors: string[] } {
+  const errors: string[] = [];
+  const original = console.error;
+  console.error = (msg: string) => errors.push(msg);
+  try {
+    return { result: fn(), errors };
+  } finally {
+    console.error = original;
+  }
+}
+
 test("a model change with a blocked capability tier refuses the clear and keeps the old vectors", () => {
   seedStoredEmbedding("m1", 4);
   ensureEmbeddingModel(db, NO_VEC, "m1", 4);
 
-  expect(() =>
+  const { result: outcome, errors } = captureErrors(() =>
     ensureEmbeddingModel(db, NO_VEC, "m2", 8, undefined, CREDENTIAL_MISSING_GATE),
-  ).toThrow(SearchError);
-  try {
-    ensureEmbeddingModel(db, NO_VEC, "m2", 8, undefined, CREDENTIAL_MISSING_GATE);
-    throw new Error("expected the gate to refuse the clear");
-  } catch (e) {
-    expect(e).toBeInstanceOf(SearchError);
-    expect((e as SearchError).code).toBe("EMBEDDING_KEY_MISSING");
-    expect((e as SearchError).message).toMatch(/rebuilt/i);
-  }
+  );
+  expect(outcome.wasChanged).toBe(false);
+  expect(outcome.refusal?.code).toBe("EMBEDDING_KEY_MISSING");
+  expect(outcome.refusal?.message).toMatch(/rebuilt/i);
+  // The refusal is logged under its code, not swallowed.
+  expect(errors.some((m) => m.startsWith("EMBEDDING_KEY_MISSING:"))).toBe(true);
   // Nothing was destroyed and nothing was re-stamped: the old vectors
   // and the old recorded model both survive the refusal.
   expect(embeddingCount()).toBe(1);
@@ -152,15 +166,10 @@ test("a disabled capability tier refuses with the disabled code", () => {
   seedStoredEmbedding("m1", 4);
   ensureEmbeddingModel(db, NO_VEC, "m1", 4);
 
-  expect(() => ensureEmbeddingModel(db, NO_VEC, "m2", 8, undefined, DISABLED_GATE)).toThrow(
-    SearchError,
+  const { result: outcome } = captureErrors(() =>
+    ensureEmbeddingModel(db, NO_VEC, "m2", 8, undefined, DISABLED_GATE),
   );
-  try {
-    ensureEmbeddingModel(db, NO_VEC, "m2", 8, undefined, DISABLED_GATE);
-    throw new Error("expected the gate to refuse the clear");
-  } catch (e) {
-    expect((e as SearchError).code).toBe("EMBEDDING_DISABLED");
-  }
+  expect(outcome.refusal?.code).toBe("EMBEDDING_DISABLED");
   expect(embeddingCount()).toBe(1);
 });
 
@@ -208,14 +217,11 @@ test("the loss-bearing trigger is the embeddings row, not the chunk count", () =
   );
   ensureEmbeddingModel(db, NO_VEC, "m1", 4);
 
-  try {
-    ensureEmbeddingModel(db, NO_VEC, "m2", 8, undefined, CREDENTIAL_MISSING_GATE);
-    throw new Error("expected the gate to refuse the clear");
-  } catch (e) {
-    expect(e).toBeInstanceOf(SearchError);
-    expect((e as SearchError).code).toBe("EMBEDDING_KEY_MISSING");
-    expect((e as SearchError).message).toMatch(/no chunk material|rebuild/i);
-  }
+  const { result: outcome } = captureErrors(() =>
+    ensureEmbeddingModel(db, NO_VEC, "m2", 8, undefined, CREDENTIAL_MISSING_GATE),
+  );
+  expect(outcome.refusal?.code).toBe("EMBEDDING_KEY_MISSING");
+  expect(outcome.refusal?.message).toMatch(/no chunk material/i);
   expect(embeddingCount()).toBe(1);
 });
 
@@ -248,9 +254,10 @@ test("a prefix change with a blocked capability tier refuses the clear", () => {
   setState(db, EMBEDDING_PREFIX_PASSAGE_STATE_KEY, "p1");
   ensureEmbeddingModel(db, NO_VEC, "m1", 4, { query: "q1", passage: "p1" });
 
-  expect(() =>
+  const { result: outcome } = captureErrors(() =>
     ensureEmbeddingModel(db, NO_VEC, "m1", 4, { query: "q2", passage: "p2" }, DISABLED_GATE),
-  ).toThrow(SearchError);
+  );
+  expect(outcome.refusal?.code).toBe("EMBEDDING_DISABLED");
   expect(embeddingCount()).toBe(1);
   expect(getState(db, EMBEDDING_PREFIX_QUERY_STATE_KEY)).toBe("q1");
 });
@@ -273,3 +280,60 @@ test("a prefix change with a configured provider clears as today", () => {
   expect(embeddingCount()).toBe(0);
   expect(getState(db, EMBEDDING_PREFIX_QUERY_STATE_KEY)).toBe("q2");
 });
+
+test("a write open under a blocked tier opens anyway, keeps the vectors and names the refusal", async () => {
+  if (!sqliteVecLoadable()) return;
+  const v = createTempVault("emb-gate-open");
+  const server = await startFakeHttp();
+  try {
+    writeMd(v.vault, "a.md", "# A\n\nalpha body");
+    const remote = (model: string, apiKey: string | null) =>
+      makeConfig({
+        vault: v.vault,
+        dbPath: v.dbPath,
+        semantic: {
+          enabled: true,
+          provider: "openai-compat",
+          baseUrl: server.url,
+          model,
+          apiKey,
+          dimension: 4,
+          timeoutMs: 5_000,
+          concurrency: 1,
+          batchSize: 8,
+          costGateUsd: 0,
+          maxRetries: 1,
+        },
+      });
+    await indexVault(remote("m1", FAKE_PROVIDER_KEY), { embeddings: true });
+
+    // The model is bumped in an environment without the key: keyword
+    // indexing must still open the store.
+    const { result: opened, errors } = await captureErrorsAsync(() =>
+      Store.open(remote("m2", null), { mode: "write" }),
+    );
+    try {
+      expect(opened.counts().embeddings).toBeGreaterThan(0);
+      expect(opened.getState(EMBEDDING_MODEL_STATE_KEY)).toBe("m1");
+    } finally {
+      await opened.close();
+    }
+    expect(errors.some((m) => m.startsWith("EMBEDDING_KEY_MISSING:"))).toBe(true);
+  } finally {
+    await server.close();
+    v.cleanup();
+  }
+});
+
+async function captureErrorsAsync<T>(
+  fn: () => Promise<T>,
+): Promise<{ result: T; errors: string[] }> {
+  const errors: string[] = [];
+  const original = console.error;
+  console.error = (msg: string) => errors.push(msg);
+  try {
+    return { result: await fn(), errors };
+  } finally {
+    console.error = original;
+  }
+}
