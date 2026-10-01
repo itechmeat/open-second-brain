@@ -432,11 +432,15 @@ describe("decision-model rerank under the hybrid deadline", () => {
     // The abandoned request was cut by the deadline's abort, not left to
     // run out its own 10 s budget: its record lands right after, with a
     // latency far below that budget.
-    let records = listDecisionModelCalls(vault);
-    for (let i = 0; i < 40 && records.length === 0; i++) {
+    const pollRecords = async (
+      attemptsLeft: number,
+    ): Promise<ReturnType<typeof listDecisionModelCalls>> => {
+      const found = listDecisionModelCalls(vault);
+      if (found.length > 0 || attemptsLeft === 0) return found;
       await new Promise((r) => setTimeout(r, 50));
-      records = listDecisionModelCalls(vault);
-    }
+      return pollRecords(attemptsLeft - 1);
+    };
+    const records = await pollRecords(40);
     expect(records).toHaveLength(1);
     const latency = records[0]!.payload["latency_ms"] as number;
     expect(latency).toBeLessThan(DECISION_TIMEOUT_MS / 2);

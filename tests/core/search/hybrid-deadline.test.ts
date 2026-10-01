@@ -345,10 +345,7 @@ test("a stalled rerank past the deadline still applies exclusions and the trust 
 
 test("the deadline aborts the abandoned rerank request instead of leaving it running", async () => {
   seedGatedCorpus();
-  let aborted: () => void = () => {};
-  const requestAborted = new Promise<void>((resolve) => {
-    aborted = resolve;
-  });
+  const { promise: requestAborted, resolve: aborted } = Promise.withResolvers<void>();
   // A local server that watches the client side of the stalled request:
   // the abort reaches it only if the deadline cancels the fetch.
   const watcher = Bun.serve({
