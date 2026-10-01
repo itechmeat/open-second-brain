@@ -1507,6 +1507,21 @@ export interface ResolvedSearchConfig {
    */
   readonly shutdownGraceMs: number;
   /**
+   * Wall-clock budget (ms) over the whole composite hybrid path - embed ->
+   * semanticTopK -> rerank -> second pass (t_bdc24171). Resolved from
+   * `search_hybrid_deadline_ms` /
+   * `OPEN_SECOND_BRAIN_SEARCH_HYBRID_DEADLINE`; the default is the sum of
+   * the two named lane budgets (the 10s embedding timeout and the 5s
+   * rerank timeout), so normal operations never reach it and the deadline
+   * bounds exactly the phases with no budget of their own. On expiry the
+   * search completes keyword-only and reports
+   * `RETRIEVAL_DEGRADATION.hybridDeadlineExceeded`. `0` disables the
+   * deadline. Optional so configs written before the knob (test fixtures
+   * construct this shape literally) keep compiling; the request resolver
+   * applies the shipped default when absent.
+   */
+  readonly hybridDeadlineMs?: number;
+  /**
    * When true, an interrupted full `reindexVault` rebuild resumes a
    * compatible `brain.sqlite.new` staging build instead of discarding
    * it. Opt-in; default false keeps the always-fresh rebuild. Resume is

@@ -110,6 +110,16 @@ export const RETRIEVAL_DEGRADATION = Object.freeze({
    */
   hybridDegraded: "hybrid-degraded",
   /**
+   * The composite hybrid path (embed -> semanticTopK -> rerank -> second
+   * pass) outlived its single wall-clock budget (t_bdc24171), so the
+   * phases past the budget were cut and the answer is keyword-only. The
+   * per-lane timeouts keep firing first on their own lanes; this code
+   * names the one clock they cannot account for, their sum.
+   * `detail.budgetMs` is the deadline, `detail.elapsedMs` the moment it
+   * fired.
+   */
+  hybridDeadlineExceeded: "hybrid-deadline-exceeded",
+  /**
    * The rank cap truncated the candidate pool: matches existed below the
    * cut and were never ranked. `detail.cap` is the cap that bit.
    */
@@ -155,6 +165,7 @@ export const RETRIEVAL_DEGRADATION_CODES: ReadonlyArray<RetrievalDegradationCode
   RETRIEVAL_DEGRADATION.semanticStructuredLanesSkipped,
   RETRIEVAL_DEGRADATION.semanticEmbeddingAbiDrift,
   RETRIEVAL_DEGRADATION.hybridDegraded,
+  RETRIEVAL_DEGRADATION.hybridDeadlineExceeded,
   RETRIEVAL_DEGRADATION.rankCapTruncatedPool,
   RETRIEVAL_DEGRADATION.relevanceFloorDroppedRows,
   RETRIEVAL_DEGRADATION.scopeFiltersDroppedRows,
@@ -283,6 +294,8 @@ export function describeRetrievalDegradation(code: RetrievalDegradationCode): st
       return "the index carries embeddings written by another build, so its neighbours may not be comparable";
     case RETRIEVAL_DEGRADATION.hybridDegraded:
       return "the semantic lane did not run, so this answer is keyword-only";
+    case RETRIEVAL_DEGRADATION.hybridDeadlineExceeded:
+      return "the composite search outlived its wall-clock deadline, so the phases past the budget were cut and this answer is keyword-only";
     case RETRIEVAL_DEGRADATION.rankCapTruncatedPool:
       return "the rank cap truncated the candidate pool, so lower-ranked matches were never considered";
     case RETRIEVAL_DEGRADATION.relevanceFloorDroppedRows:

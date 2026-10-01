@@ -11,6 +11,7 @@ import {
   parseInteger as parseIntegerShared,
 } from "../validate.ts";
 import { resolveVaultScope } from "../vault-scope/index.ts";
+import { DEFAULT_HYBRID_DEADLINE_MS } from "./pipeline/request.ts";
 import { resolveIndexPath, SEARCH_DB_CONFIG_KEY, SEARCH_DB_ENV } from "./paths.ts";
 import { buildFtsTokenize } from "./schema.ts";
 import { isFusionMode, DEFAULT_RRF_K } from "./fusion.ts";
@@ -149,6 +150,7 @@ export {
   type IndexProgressEvent,
 } from "./indexer.ts";
 export { search, SEARCH_LIMIT_MIN, SEARCH_LIMIT_MAX } from "./search.ts";
+export { DEFAULT_HYBRID_DEADLINE_MS } from "./pipeline/request.ts";
 export { expandHit } from "./cards.ts";
 export { planReadShortlist, planRead } from "./graph-prepass.ts";
 export type { GraphPrepassOptions, GraphPrepassResult, ShouldReadEntry } from "./graph-prepass.ts";
@@ -403,6 +405,15 @@ function validateResolvedConfig(config: ResolvedSearchConfig): void {
   validateIntegerRange(config.semantic.timeoutMs, "embedding_timeout_ms", {
     min: 1,
   });
+  // Optional (configs written before the knob construct this shape
+  // literally); a present value validates exactly like the per-lane
+  // timeouts, except `0` is legal because it is the documented off
+  // switch, not a misconfiguration (t_bdc24171).
+  if (config.hybridDeadlineMs !== undefined) {
+    validateIntegerRange(config.hybridDeadlineMs, "search_hybrid_deadline_ms", {
+      min: 0,
+    });
+  }
   validateIntegerRange(config.semantic.concurrency, "embedding_concurrency", {
     min: 1,
   });
@@ -586,6 +597,22 @@ export function resolveSearchConfig(opts: {
     DEFAULTS.timeoutMs,
     "embedding_timeout_ms",
     { min: 1 },
+  );
+  // Composite hybrid deadline (t_bdc24171): one wall-clock budget over
+  // embed -> semanticTopK -> rerank -> second pass, defaulting to the sum
+  // of the two lane budgets above/below. The range starts at 0, unlike the
+  // per-lane timeouts, because 0 is the documented off switch - a budget
+  // of zero is not "expire immediately", it is "no composite deadline".
+  const hybridDeadlineMs = parseInteger(
+    envOrConfig(
+      env,
+      config,
+      "OPEN_SECOND_BRAIN_SEARCH_HYBRID_DEADLINE",
+      "search_hybrid_deadline_ms",
+    ),
+    DEFAULT_HYBRID_DEADLINE_MS,
+    "search_hybrid_deadline_ms",
+    { min: 0 },
   );
   const concurrency = parseInteger(
     envOrConfig(env, config, "OPEN_SECOND_BRAIN_EMBEDDING_CONCURRENCY", "embedding_concurrency"),
@@ -1035,6 +1062,7 @@ export function resolveSearchConfig(opts: {
     rerank,
     shutdownGraceMs: shutdownGraceSeconds * 1000,
     resumeReindex,
+    hybridDeadlineMs,
     ftsTokenize,
   });
 

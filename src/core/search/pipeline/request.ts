@@ -42,6 +42,19 @@ export const SEARCH_LIMIT_MAX = 100;
 
 const DEFAULT_LIMIT = 10;
 
+/**
+ * The default composite hybrid deadline (t_bdc24171): the sum of the two
+ * named lane budgets - the 10s embedding timeout (`DEFAULTS.timeoutMs` in
+ * `../index.ts`, resolved into `embedding_timeout_ms`) and the 5s rerank
+ * timeout (`DEFAULT_RERANK_TIMEOUT_MS`, `../rerank/cross-encoder.ts`).
+ * Written as a number rather than derived by import because the embedding
+ * half is private to the config resolver this module cannot import back
+ * from; the composition is pinned numerically by
+ * `tests/core/search/hybrid-deadline.test.ts`, which fails when either
+ * lane budget moves without this constant moving with it.
+ */
+export const DEFAULT_HYBRID_DEADLINE_MS = 15_000;
+
 export interface ResolvedSearchRequest {
   /** The config with the resolved profile / tuning knobs already applied. */
   readonly config: ResolvedSearchConfig;
@@ -61,6 +74,15 @@ export interface ResolvedSearchRequest {
   readonly matchMode: FtsMatchMode;
   /** The applied knob tuple, or null when neither profile nor tuning fired. */
   readonly tuned: TunedParameters | null;
+  /**
+   * The composite wall-clock budget for this call (t_bdc24171), in ms, or
+   * null when the deadline is off. Null covers both spellings of off: the
+   * configured `0` and a config written before the knob, where the absent
+   * field means the shipped default rather than disabled - so the default
+   * is applied first and only a value that cannot bound anything
+   * (`<= 0`, non-finite) resolves to null.
+   */
+  readonly hybridDeadlineMs: number | null;
 }
 
 function assertSafePathPrefix(prefix: string | undefined): string | undefined {
@@ -148,6 +170,17 @@ export function resolveSearchRequest(
       `match_mode must be one of ${FTS_MATCH_MODES.join(", ")}`,
     );
   }
+  // Composite hybrid deadline (t_bdc24171). Absent config field = the
+  // shipped default (the sum of the two lane budgets); a configured 0 is
+  // the explicit off switch; anything else that cannot bound a duration
+  // is off too - hand-built configs do not pass the resolver's validation,
+  // so the read site never guesses between "default" and "disabled".
+  const hybridDeadlineMs =
+    resolvedConfig.hybridDeadlineMs !== undefined &&
+    Number.isFinite(resolvedConfig.hybridDeadlineMs) &&
+    resolvedConfig.hybridDeadlineMs > 0
+      ? resolvedConfig.hybridDeadlineMs
+      : null;
   return {
     config: resolvedConfig,
     query,
@@ -161,5 +194,6 @@ export function resolveSearchRequest(
     expandActive,
     matchMode,
     tuned,
+    hybridDeadlineMs,
   };
 }

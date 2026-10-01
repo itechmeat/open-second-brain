@@ -32,11 +32,13 @@ import {
 } from "./pipeline/relational-arm.ts";
 import { resolveSearchRequest } from "./pipeline/request.ts";
 import { noSecondPass, runSecondPassRecall } from "./pipeline/second-pass.ts";
-import { runSemanticLane } from "./pipeline/semantic-lane.ts";
+import { runSemanticLane, type SemanticLaneOutcome } from "./pipeline/semantic-lane.ts";
 import { openReadOrSelfHeal } from "./pipeline/store-open.ts";
 import { resolveEffectiveWeights } from "./pipeline/weights.ts";
+import { detectHybridDegrade } from "./enrich.ts";
 import type { CacheProbe } from "./pipeline/cache-slot.ts";
 import type { RetrievalDegradationSink } from "./retrieval-trail.ts";
+import { RETRIEVAL_DEGRADATION, noteDegradation } from "./retrieval-trail.ts";
 import type { FrontmatterCache } from "./result-filters.ts";
 import { Store } from "./store.ts";
 import type { ResolvedSearchConfig, SearchOptions, SearchOutcome } from "./types.ts";
@@ -44,6 +46,117 @@ import type { ResolvedSearchConfig, SearchOptions, SearchOutcome } from "./types
 export { SEARCH_LIMIT_MAX, SEARCH_LIMIT_MIN } from "./pipeline/request.ts";
 
 const CACHE_BYPASSED: CacheProbe = { slot: null, hit: null };
+
+/**
+ * The composite hybrid deadline (t_bdc24171): ONE wall-clock budget over
+ * the whole hybrid path - embed -> semanticTopK -> rerank -> second pass.
+ * The per-lane budgets (the embedding timeout, the rerank timeout) keep
+ * firing first on their own lanes; what no lane budget can account for is
+ * their SUM and the phases with no budget of their own, and that is what
+ * this clock bounds.
+ *
+ * Enforcement lives here, at the composite entry, because the budget is a
+ * property of the whole path and not of any stage: the two async lanes the
+ * caller actually waits on (the semantic lane, the post-rank rerank) race
+ * the clock and are abandoned past it, and the sync checkpoints between
+ * phases skip the budgeted work that has not started yet. When the clock
+ * fires, the search completes keyword-only and names it with
+ * `RETRIEVAL_DEGRADATION.hybridDeadlineExceeded` - never a stall, never a
+ * silent partial.
+ */
+interface CompositeDeadline {
+  /** The configured budget, as resolved onto the request. */
+  readonly budgetMs: number;
+  /** Absolute fire time, on the request's clock so one clock rules the call. */
+  readonly expiresAt: number;
+  /**
+   * Note the expiry once: the human warning sentence and the typed
+   * degradation (with the elapsed/budget detail), plus the same
+   * hybrid-degrade umbrella the semantic lane raises when the caller
+   * wanted hybrid recall and the lane did not run. Idempotent - several
+   * checkpoints can observe one expiry, and the answer names it once.
+   */
+  fire(): void;
+}
+
+function deadlineExpired(deadline: CompositeDeadline | null): boolean {
+  return deadline !== null && Date.now() >= deadline.expiresAt;
+}
+
+function createCompositeDeadline(input: {
+  readonly budgetMs: number | null;
+  /** The request's clock: the one `nowMs` every timed decision shares. */
+  readonly startMs: number;
+  readonly warnings: string[];
+  readonly degraded: RetrievalDegradationSink;
+  readonly wantSemantic: boolean;
+  /** Live keyword-lane size, read when the deadline fires. */
+  readonly keywordHitCount: () => number;
+}): CompositeDeadline | null {
+  if (input.budgetMs === null) return null;
+  const budgetMs = input.budgetMs;
+  let fired = false;
+  const fire = (): void => {
+    if (fired) return;
+    fired = true;
+    const elapsedMs = Date.now() - input.startMs;
+    input.warnings.push(
+      `hybrid deadline ${budgetMs}ms exceeded after ${elapsedMs}ms; returning keyword-only results`,
+    );
+    noteDegradation(input.degraded, RETRIEVAL_DEGRADATION.hybridDeadlineExceeded, {
+      elapsedMs,
+      budgetMs,
+    });
+    const degrade = detectHybridDegrade({
+      wantSemantic: input.wantSemantic,
+      semanticAttempted: false,
+      keywordHitCount: input.keywordHitCount(),
+    });
+    if (degrade !== null) {
+      input.warnings.push(degrade);
+      noteDegradation(input.degraded, RETRIEVAL_DEGRADATION.hybridDegraded);
+    }
+  };
+  return { budgetMs, expiresAt: input.startMs + budgetMs, fire };
+}
+
+/**
+ * Run one async lane under the deadline. A lane that loses the race is
+ * abandoned, not awaited - its own lane timeouts settle it in the
+ * background - and the deadline's fallback answer is served instead. The
+ * attached catch keeps a late rejection from surfacing as unhandled: the
+ * degradation already named why the answer is partial, and the abandoned
+ * lane's own error is moot past the fire.
+ */
+async function awaitWithinDeadline<T>(
+  work: Promise<T>,
+  deadline: CompositeDeadline,
+  fallback: () => T,
+): Promise<T> {
+  void work.catch(() => {});
+  const remainingMs = deadline.expiresAt - Date.now();
+  if (remainingMs <= 0) {
+    deadline.fire();
+    return fallback();
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadlineWon = new Promise<T>((resolve) => {
+    timer = setTimeout(() => {
+      deadline.fire();
+      resolve(fallback());
+    }, remainingMs);
+  });
+  try {
+    return await Promise.race([work, deadlineWon]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** The semantic-lane outcome when the deadline consumed the lane. */
+function emptySemanticLane(): SemanticLaneOutcome {
+  return { hits: [], attempted: false, warnings: [], degraded: [] };
+}
 
 export async function search(
   config: ResolvedSearchConfig,
@@ -63,6 +176,7 @@ export async function search(
     nowMs,
     timeRange,
     temporalIntent,
+    hybridDeadlineMs,
   } = request;
 
   // Read-only origins (cross-vault search) disable self-healing: a
@@ -83,6 +197,18 @@ export async function search(
     // so a candidate path already read by one stage is not re-read
     // and re-parsed by the next.
     const frontmatterCache: FrontmatterCache = new Map();
+
+    // The composite deadline starts on the request's clock and rides the
+    // mutable warning/degradation sinks created just above, so its fire
+    // note lands in the same envelope as every lane's own sentence.
+    const deadline = createCompositeDeadline({
+      budgetMs: hybridDeadlineMs,
+      startMs: nowMs,
+      warnings,
+      degraded,
+      wantSemantic: policy.wantSemantic,
+      keywordHitCount: () => keywordHits.length,
+    });
 
     const shape = resolveQueryShape({
       store,
@@ -145,8 +271,10 @@ export async function search(
       keywordLane.plan,
     );
 
-    // Semantic candidates (may be skipped).
-    const semanticLane = await runSemanticLane({
+    // Semantic candidates (may be skipped). Under the composite deadline
+    // the lane races the clock and is abandoned past it, serving the empty
+    // lane outcome - the fire note explains the keyword-only answer.
+    const semanticLaneInput = {
       store,
       config: effectiveConfig,
       policy,
@@ -155,10 +283,27 @@ export async function search(
       limit,
       pathPrefix,
       keywordHitCount: keywordHits.length,
-    });
+    };
+    const semanticLane =
+      deadline === null
+        ? await runSemanticLane(semanticLaneInput)
+        : await awaitWithinDeadline(
+            runSemanticLane(semanticLaneInput),
+            deadline,
+            emptySemanticLane,
+          );
     let semanticHits = semanticLane.hits;
+    let semanticAttempted = semanticLane.attempted;
     for (const w of semanticLane.warnings) warnings.push(w);
     for (const d of semanticLane.degraded) degraded.push(d);
+    // A deadline that fired at (or just past) this boundary voids whatever
+    // the lane squeezed in before it: the answer is keyword-only by
+    // contract, and the fire note (idempotent) is already in the sinks.
+    if (deadlineExpired(deadline)) {
+      deadline?.fire();
+      semanticHits = [];
+      semanticAttempted = false;
+    }
 
     // Typed-edge relational arm (t_09b7ccea): a fourth RRF arm, engaged
     // only for a relationship-shaped query under rrf fusion.
@@ -180,8 +325,14 @@ export async function search(
     );
 
     // Second-pass recall (t_ef92dfdc, t_8eb5ca32): evidence-pack mode only,
-    // at most one retry, merged into the pool before ranking.
-    const twoPassActive = opts.evidencePack === true && effectiveConfig.recall.twoPassEnabled;
+    // at most one retry, merged into the pool before ranking. The retry is
+    // one of the phases the composite deadline bounds (it has no budget of
+    // its own), so an expired clock skips it.
+    if (deadlineExpired(deadline)) deadline?.fire();
+    const twoPassActive =
+      opts.evidencePack === true &&
+      effectiveConfig.recall.twoPassEnabled &&
+      !deadlineExpired(deadline);
     const retry = twoPassActive
       ? runSecondPassRecall({
           store,
@@ -256,7 +407,7 @@ export async function search(
       degraded,
       weightProfile,
       sessionFocus,
-      semanticEnabled: policy.wantSemantic && semanticLane.attempted,
+      semanticEnabled: policy.wantSemantic && semanticAttempted,
       structured: shape.structured,
       frontmatterCache,
       timeRange,
@@ -266,7 +417,11 @@ export async function search(
       nowMs,
     });
 
-    const postRank = await applyPostRankPhases({
+    // Post-rank phases, under the composite deadline: the rerank lane is
+    // the last budgeted caller wait on the composite path, so it races the
+    // same clock and, past the deadline, the pool is served in the
+    // heuristic order it already had - a named partial, not a stall.
+    const postRankInput = {
       store,
       config: effectiveConfig,
       opts,
@@ -274,7 +429,15 @@ export async function search(
       pool,
       structured: shape.structured,
       frontmatterCache,
-    });
+    };
+    const postRank =
+      deadline === null
+        ? await applyPostRankPhases(postRankInput)
+        : await awaitWithinDeadline(applyPostRankPhases(postRankInput), deadline, () => ({
+            results: pool,
+            trustReceipts: null,
+            warnings: [],
+          }));
     for (const w of postRank.warnings) warnings.push(w);
 
     // The pool the window is cut from (task F). `postRank.results` is the
