@@ -33,6 +33,8 @@ type JsonObject = Record<string, any>;
 
 const UNCLASSIFIED_LINE = "warning: unclassified tool error mapped to internal_error: Error\n";
 const TOOL = "envelope_probe";
+/** The prefix, a code capped at 120 characters, and the newline. */
+const UNREGISTERED_LINE_MAX = "warning: unregistered error code on the wire: ".length + 120 + 1;
 
 let tmp: string;
 let stderr: Mock<typeof process.stderr.write>;
@@ -122,8 +124,27 @@ describe("channel A: error.data.code on every JSON-RPC error", () => {
     );
     expect(res["error"]["data"]).toEqual({ code: "not_a_registered_code" });
     expect(lines).toEqual([
-      "warning: unregistered error code on the wire: not_a_registered_code\n",
+      'warning: unregistered error code on the wire: "not_a_registered_code"\n',
     ]);
+  });
+
+  test("an unregistered code is quoted and capped, so it cannot forge stderr lines", async () => {
+    const forged = `x\nwarning: forged line${"y".repeat(200)}`;
+    const res = await call(
+      serverWith(() => {
+        throw new MCPError(INVALID_PARAMS, "refused", { code: forged });
+      }),
+    );
+    expect(res["error"]["data"]).toEqual({ code: forged });
+    // One line, the newline escaped inside the quoted code, and a bound
+    // on the length however long the code is.
+    expect(lines).toHaveLength(1);
+    const [line] = lines;
+    expect(line!.indexOf("\n")).toBe(line!.length - 1);
+    expect(line).toStartWith(
+      'warning: unregistered error code on the wire: "x\\nwarning: forged line',
+    );
+    expect(line!.length).toBeLessThanOrEqual(UNREGISTERED_LINE_MAX);
   });
 
   test("a record without a code keeps every member and gains code last", async () => {

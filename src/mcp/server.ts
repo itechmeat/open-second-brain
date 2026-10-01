@@ -619,6 +619,9 @@ const ERROR_DATA_CODE_KEY = "code";
 /** The stderr line a thrower-supplied code outside the registry is named on. */
 const UNREGISTERED_CODE_WARNING = "warning: unregistered error code on the wire: ";
 
+/** The longest quoted code that warning line repeats. */
+const UNREGISTERED_CODE_LOG_MAX = 120;
+
 /**
  * `data` with its stable string code. A thrower-supplied string code
  * always wins; otherwise the default derived from the numeric JSON-RPC
@@ -627,8 +630,9 @@ const UNREGISTERED_CODE_WARNING = "warning: unregistered error code on the wire:
  *
  * A supplied code outside {@link isToolErrorCode} is still sent as it
  * is - replacing it would hide which producer chose it - and is named on
- * stderr. Every producer passes a constant token, never prose, so the
- * line is safe to log.
+ * stderr. Every producer passes a constant token, never prose, but the
+ * line exists to catch one that breaks that rule, so the code is written
+ * JSON-quoted and capped: a newline in it cannot forge a second line.
  */
 function withDefaultCode(code: JsonRpcErrorCode, data: MCPErrorData | undefined): JsonRpcErrorData {
   const supplied: unknown = (data as { readonly [ERROR_DATA_CODE_KEY]?: unknown } | undefined)?.[
@@ -636,7 +640,8 @@ function withDefaultCode(code: JsonRpcErrorCode, data: MCPErrorData | undefined)
   ];
   if (data !== undefined && typeof supplied === "string") {
     if (!isToolErrorCode(supplied)) {
-      process.stderr.write(`${UNREGISTERED_CODE_WARNING}${supplied}\n`);
+      const quoted = JSON.stringify(supplied).slice(0, UNREGISTERED_CODE_LOG_MAX);
+      process.stderr.write(`${UNREGISTERED_CODE_WARNING}${quoted}\n`);
     }
     return data as JsonRpcErrorData;
   }
