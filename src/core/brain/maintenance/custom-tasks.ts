@@ -145,7 +145,7 @@ export function resolveCustomTasks(configPath?: string): CustomTaskResolution {
     declarations.set(name, entry);
   }
   const declared = declarations.size;
-  const { enabled, source: switchSource } = resolveMaintenanceCustomTasksSwitch(configPath);
+  const { enabled, source: switchSource } = resolveMaintenanceCustomTasksSwitch(configPath, data);
   if (!enabled) return { enabled, switchSource, specs: [], errors: [], declared };
 
   const budget = CUSTOM_TASK_TOTAL_TIMEOUT_BUDGET_SECONDS;

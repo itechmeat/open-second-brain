@@ -668,7 +668,11 @@ export function resolveSkillsDir(configPath?: string): string | null {
  */
 function resolveConfigFlag(envKey: string, configKey: string, configPath?: string): boolean {
   const env = process.env[envKey]?.trim();
-  const raw = env || discoverConfig(configPath).data[configKey]?.trim();
+  return isFlagOn(env || discoverConfig(configPath).data[configKey]?.trim());
+}
+
+/** The one parse every boolean switch in this file shares. */
+function isFlagOn(raw: string | undefined): boolean {
   return raw === "true" || raw === "1";
 }
 
@@ -1138,25 +1142,21 @@ export type MaintenanceSwitchSource = "env" | "config" | "unset";
  * opt-in, and `..._CUSTOM_TASKS=0` in the env turns it off on one host
  * without editing the shared file. The commands themselves are read from
  * this machine config only, never from the vault. Same parse as every
- * other flag in this file.
+ * other flag in this file. A caller that already parsed the config passes
+ * its `data`, so the switch and the declarations come from one snapshot.
  */
-export function resolveMaintenanceCustomTasksSwitch(configPath?: string): {
+export function resolveMaintenanceCustomTasksSwitch(
+  configPath?: string,
+  data: Readonly<Record<string, string>> = discoverConfig(configPath).data,
+): {
   readonly enabled: boolean;
   readonly source: MaintenanceSwitchSource;
 } {
   const env = process.env[MAINTENANCE_CUSTOM_TASKS_ENV]?.trim();
-  const source: MaintenanceSwitchSource = env
-    ? "env"
-    : discoverConfig(configPath).data[MAINTENANCE_CUSTOM_TASKS_CONFIG_KEY]?.trim()
-      ? "config"
-      : "unset";
+  const fromConfig = data[MAINTENANCE_CUSTOM_TASKS_CONFIG_KEY]?.trim();
   return {
-    enabled: resolveConfigFlag(
-      MAINTENANCE_CUSTOM_TASKS_ENV,
-      MAINTENANCE_CUSTOM_TASKS_CONFIG_KEY,
-      configPath,
-    ),
-    source,
+    enabled: isFlagOn(env || fromConfig),
+    source: env ? "env" : fromConfig ? "config" : "unset",
   };
 }
 
