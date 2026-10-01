@@ -44,6 +44,7 @@ import {
   customTasksOffNotice,
   resolveCustomTasks,
 } from "../../../core/brain/maintenance/custom-tasks.ts";
+import { isCustomLaneTask } from "../../../core/brain/maintenance/custom-task-id.ts";
 import { buildLaneTasks } from "../../../core/brain/maintenance/lane-tasks.ts";
 import { resolveAgentName } from "../../../core/config.ts";
 import { CronTemplateError, parseRecipeFormat } from "../../cron-recipe.ts";
@@ -87,6 +88,9 @@ import { MAINTENANCE_USAGE, brainVerbContext, fail, ok, okJson, parse } from "..
  * spend 6 on. Collapsing it into 1 told a nightly cron that a pass is
  * broken when the only proved fact is that the pass did not finish; the
  * timeout already names itself (and its budget) in the row's error.
+ * A `custom:<name>` task is the exception: its timeout is the command
+ * hanging, which the failure streak already counts as a failure, so it
+ * exits 1 and the exit code reads the row the way the journal does.
  *
  * Precedence follows `exitCodeForCheck` and `doctorExitCode`: a proved
  * failure keeps the generic code even when another task timed out or was
@@ -104,6 +108,11 @@ export const MAINTENANCE_EXIT = Object.freeze({
 
 export type MaintenanceExit = (typeof MAINTENANCE_EXIT)[keyof typeof MAINTENANCE_EXIT];
 
+/** A built-in task's safeguard timeout: the one row whose outcome is unmeasured. */
+function builtInTimeout(t: MaintenanceTaskResult): boolean {
+  return t.timed_out === true && !isCustomLaneTask(t.name);
+}
+
 /**
  * The run's exit code from the lane's task rows, keyed ONLY on rows the
  * lane itself distinguished: `timed_out` (safeguard deadline, outcome
@@ -113,10 +122,10 @@ export type MaintenanceExit = (typeof MAINTENANCE_EXIT)[keyof typeof MAINTENANCE
  * would make the exit 6 impossible to reach.
  */
 export function maintenanceExitCode(tasks: ReadonlyArray<MaintenanceTaskResult>): MaintenanceExit {
-  if (tasks.some((t) => !t.ok && t.refused !== true && t.timed_out !== true)) {
+  if (tasks.some((t) => !t.ok && t.refused !== true && !builtInTimeout(t))) {
     return MAINTENANCE_EXIT.failed;
   }
-  if (tasks.some((t) => t.timed_out === true)) return MAINTENANCE_EXIT.probeIncomplete;
+  if (tasks.some(builtInTimeout)) return MAINTENANCE_EXIT.probeIncomplete;
   return tasks.some((t) => t.refused === true) ? MAINTENANCE_EXIT.refused : MAINTENANCE_EXIT.ok;
 }
 

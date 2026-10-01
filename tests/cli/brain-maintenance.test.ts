@@ -437,6 +437,13 @@ describe("maintenanceExitCode", () => {
     );
   });
 
+  test("a timed-out custom task exits 1: the streak counts its hang as a failure", () => {
+    expect(maintenanceExitCode([timedOutRow("custom:tidy")])).toBe(MAINTENANCE_EXIT.failed);
+    expect(maintenanceExitCode([timedOutRow("custom:tidy"), timedOutRow(LANE_TASK.bridges)])).toBe(
+      MAINTENANCE_EXIT.failed,
+    );
+  });
+
   test("a refusal-only run still exits 7", () => {
     expect(maintenanceExitCode([refusedRow(LANE_TASK.dream), okRow(LANE_TASK.reindex)])).toBe(
       MAINTENANCE_EXIT.refused,
