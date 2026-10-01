@@ -49,6 +49,8 @@ import { resolveAgentName } from "../../../core/config.ts";
 import { CronTemplateError, parseRecipeFormat } from "../../cron-recipe.ts";
 import {
   DEFAULT_MAINTENANCE_INTERVAL,
+  MAX_WINDOW_HOUR,
+  parseWindowBounds,
   renderMaintenanceCronTemplate,
 } from "../../maintenance-cron.ts";
 import type { EmbeddingSpendPreview } from "../../../core/search/indexer.ts";
@@ -213,16 +215,16 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
     let window: DailyWindow | undefined;
     const windowRaw = flags["window"] as string | undefined;
     if (windowRaw !== undefined) {
-      const match = /^(\d{1,2})-(\d{1,2})$/.exec(windowRaw.trim());
-      const startHour = match ? Number(match[1]) : Number.NaN;
-      const endHour = match ? Number(match[2]) : Number.NaN;
-      if (!match || startHour > 23 || endHour > 23) {
+      // The recipe renderer's own parser, so the lane and the recipe it
+      // prints cannot disagree on what a window is.
+      const bounds = parseWindowBounds(windowRaw.trim());
+      if (bounds === null) {
         process.stderr.write(
-          `brain maintenance run: --window must be H-H with hours 0..23, got: ${windowRaw}\n`,
+          `brain maintenance run: --window must be H-H with hours 0..${MAX_WINDOW_HOUR}, got: ${windowRaw}\n`,
         );
         return MAINTENANCE_EXIT.usage;
       }
-      window = { startHour, endHour, tz: (flags["tz"] as string | undefined) ?? "UTC" };
+      window = { ...bounds, tz: (flags["tz"] as string | undefined) ?? "UTC" };
     }
     if (cronTemplate) {
       // Before the busy flags, the lease and every gate: printing the
