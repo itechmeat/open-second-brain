@@ -63,9 +63,13 @@ import {
   MAINTENANCE_VERDICT,
   sweepJournal,
   type MaintenanceJournalEntry,
+  type MaintenanceSpendReceipt,
   type MaintenanceVerdict,
 } from "./journal.ts";
 import { HOST_PRESSURE, measureHostPressure, type HostPressureReading } from "./host-pressure.ts";
+
+/** The persisted model-spend receipt; defined beside the row it rides. */
+export type { MaintenanceSpendReceipt } from "./journal.ts";
 
 /** Default lease TTL: generous enough for a full reindex + dream. */
 export const MAINTENANCE_LEASE_TTL_MS = 30 * 60 * 1000;
@@ -197,7 +201,19 @@ export function isLaneTask(value: unknown): value is LaneTask {
 
 export interface MaintenanceTask {
   readonly name: LaneTask;
-  readonly run: () => Promise<void>;
+  /**
+   * Run the pass. A pass that spent model budget returns the
+   * {@link MaintenanceSpendReceipt} the cost kernel priced for it, and
+   * the lane carries the receipt on the attempt's row and its journal
+   * line (t_9d155d0e) - per RUN, not per task, because one embedding
+   * pass rides one reindex task and the journal row is the audit unit
+   * this lane already renders. Returning nothing records no receipt: a
+   * pass that spent nothing has nothing to account for. A pass that
+   * THROWS records no receipt either, even if it was killed mid-spend -
+   * its row carries the named failure, and the receipt's numbers are the
+   * kernel's estimate, which only a completed pass can vouch for.
+   */
+  readonly run: () => Promise<MaintenanceSpendReceipt | void>;
 }
 
 export interface RunMaintenanceOptions extends EvaluateGatesOptions {
@@ -228,6 +244,8 @@ export interface MaintenanceTaskResult {
   readonly refused?: true;
   /** Consecutive journaled failures behind a refusal. */
   readonly failure_streak?: number;
+  /** Model spend the task accounted for, when its run returned a receipt. */
+  readonly receipt?: MaintenanceSpendReceipt;
 }
 
 export interface RunMaintenanceResult {
@@ -364,10 +382,14 @@ export async function runMaintenance(
       let ok = true;
       let error: string | undefined;
       let timedOut = false;
+      let receipt: MaintenanceSpendReceipt | undefined;
       try {
         // Sequential by design: the lane exists to serialize heavy work.
         // eslint-disable-next-line no-await-in-loop
-        await task.run();
+        const produced = await task.run();
+        // A `void`-returning task records no receipt; truthiness narrows
+        // it - a receipt is always an object.
+        if (produced) receipt = produced;
       } catch (exc) {
         ok = false;
         timedOut = exc instanceof SafeguardTimeoutError;
@@ -385,6 +407,7 @@ export async function runMaintenance(
         duration_ms: duration,
         ...(error ? { error } : {}),
         ...(timedOut ? { timed_out: true } : {}),
+        ...(receipt ? { receipt } : {}),
       });
       appendJournal(vault, {
         ts: nowIso,
@@ -394,6 +417,7 @@ export async function runMaintenance(
         ok,
         duration_ms: duration,
         ...(error ? { error } : {}),
+        ...(receipt ? { receipt } : {}),
       });
     }
     // The cap rewrite happens only here, while the lease is held -

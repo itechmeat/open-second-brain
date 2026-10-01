@@ -12,6 +12,10 @@ import { relative } from "node:path";
 import { toPosix } from "../../core/path-safety.ts";
 import { reachView } from "../../core/brain/reach-view.ts";
 import { resolveAgentName } from "../../core/config.ts";
+import {
+  resolveSemanticCapability,
+  semanticCapabilityIsBlocked,
+} from "../../core/search/capability-tier.ts";
 import { indexVault, resolveSearchConfig } from "../../core/search/index.ts";
 import { Store } from "../../core/search/store.ts";
 import {
@@ -450,6 +454,16 @@ async function toolBrainMaintenance(
   // tasks itself: every event names the operation that emitted it, which
   // is what tells a reader which of the four the lane is currently in.
   const laneProgress = onProgress ? { onProgress } : {};
+  // Spend parity with the CLI lane (t_9d155d0e): the reindex pass asks
+  // for the embedding phase exactly when the resolved config can reach a
+  // provider - the same resolver `vector-backfill` consults - and
+  // `force_cost` bypasses a positive embedding cost gate for this run,
+  // recorded on the receipt when it did. An offline vault never reaches
+  // a provider, exactly as before.
+  const forceCost = args["force_cost"] === true;
+  const semanticUsable = !semanticCapabilityIsBlocked(
+    resolveSemanticCapability(searchConfig.semantic),
+  );
   const result = await runMaintenance(ctx.vault, {
     now,
     holder: `${agent}@${process.pid}`,
@@ -468,6 +482,8 @@ async function toolBrainMaintenance(
         name: LANE_TASK.reindex,
         run: async () => {
           await indexVault(searchConfig, {
+            embeddings: semanticUsable,
+            forceCost,
             safeguard: laneSafeguard(LANE_TASK.reindex),
             ...laneProgress,
           });
@@ -620,7 +636,7 @@ export const ADMIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_maintenance",
     description:
-      "Quiet-window, lease-guarded heavy maintenance lane: run executes dream, reindex, bridges and clusters stale-first behind the window, busy, host-pressure and streak gates and an expiring lease (force bypasses all of those but the lease); status renders the lease holder and recent journal.",
+      "Quiet-window, lease-guarded heavy maintenance lane: run executes dream, reindex, bridges and clusters stale-first behind the window, busy, host-pressure and streak gates and an expiring lease (force bypasses all of those but the lease); status renders the lease holder and recent journal. The reindex pass embeds when the configured semantic search can reach a provider: its predicted spend is announced and its actual spend is receipted (task row field `receipt`), leashed by the embedding cost gate unless force_cost is set.",
     inputSchema: {
       type: "object",
       properties: {
@@ -639,6 +655,11 @@ export const ADMIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           items: { type: "string" },
           maxItems: MAX_RETRY_TASKS,
           description: `Tasks to retry past their streak refusal, this run only; gates still apply. Known: ${LANE_TASKS.join(", ")}. An unknown name is refused.`,
+        },
+        force_cost: {
+          type: "boolean",
+          description:
+            "Bypass a positive embedding cost gate for this run's reindex (run); recorded on the spend receipt when it overrode a gate that would have refused.",
         },
         busy_minutes: {
           type: "integer",

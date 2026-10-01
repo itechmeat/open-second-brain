@@ -38,6 +38,7 @@ import {
 } from "../../../../src/core/brain/maintenance/host-pressure.ts";
 import { MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT } from "../../../../src/core/brain/policy/blocks/maintenance.ts";
 import { brainConfigPath } from "../../../../src/core/brain/paths.ts";
+import { SafeguardTimeoutError } from "../../../../src/core/brain/safeguard.ts";
 import {
   emitRecallTelemetry,
   RECALL_CHANNEL,
@@ -237,6 +238,61 @@ describe("runMaintenance", () => {
     });
     expect(failing.tasks[0]!.ok).toBe(false);
     expect(listJournal(vault).some((e) => e.task === "reindex" && e.ok === false)).toBe(true);
+  });
+
+  test("a safeguard deadline marks the row timed_out; the lane still runs the rest", async () => {
+    const result = await runMaintenance(vault, {
+      now: NOW,
+      holder: "worker-a",
+      tasks: [
+        {
+          name: LANE_TASK.dream,
+          run: async () => {
+            throw new SafeguardTimeoutError(LANE_TASK.dream, 120_000);
+          },
+        },
+        { name: LANE_TASK.clusters, run: async () => {} },
+      ],
+    });
+    const dream = result.tasks.find((t) => t.name === LANE_TASK.dream);
+    expect(dream?.ok).toBe(false);
+    expect(dream?.timed_out).toBe(true);
+    expect(dream?.error).toContain("safeguard timeout");
+    // The lane deliberately runs every task regardless of prior failures:
+    // the unmeasured pass must not stop the measured ones.
+    expect(result.tasks.find((t) => t.name === LANE_TASK.clusters)?.ok).toBe(true);
+  });
+
+  test("a task that returns a spend receipt has it carried on the row and the journal line", async () => {
+    const receipt = {
+      model: "text-embedding-3-small",
+      tokens: 38_110,
+      estimatedUsd: 0.0076,
+      forced: false,
+    };
+    const result = await runMaintenance(vault, {
+      now: NOW,
+      holder: "worker-a",
+      tasks: [{ name: LANE_TASK.reindex, run: async () => receipt }],
+    });
+    expect(result.tasks[0]?.ok).toBe(true);
+    expect(result.tasks[0]?.receipt).toEqual(receipt);
+
+    const row = listJournal(vault).find((e) => e.task === LANE_TASK.reindex);
+    expect(row?.ok).toBe(true);
+    expect(row?.receipt).toEqual(receipt);
+  });
+
+  test("a task that returns nothing records no receipt", async () => {
+    const result = await runMaintenance(vault, {
+      now: NOW,
+      holder: "worker-a",
+      tasks: [{ name: LANE_TASK.dream, run: async () => {} }],
+    });
+    expect(result.tasks[0]?.receipt).toBeUndefined();
+    const rows = listJournal(vault).filter((e) => e.task === LANE_TASK.dream);
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) expect(row.receipt).toBeUndefined();
   });
 
   test("gate refusals are journaled; --force bypasses window but never the lease", async () => {

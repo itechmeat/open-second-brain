@@ -4,14 +4,35 @@
  * must not alarm on a quiet hour), status renders lease + journal.
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { MAINTENANCE_EXIT } from "../../src/cli/brain/verbs/maintenance.ts";
+import {
+  MAINTENANCE_EXIT,
+  formatSpendBanner,
+  maintenanceExitCode,
+  renderTaskLine,
+} from "../../src/cli/brain/verbs/maintenance.ts";
+import {
+  LANE_TASK,
+  type MaintenanceSpendReceipt,
+  type MaintenanceTaskResult,
+} from "../../src/core/brain/maintenance/lane.ts";
 import { MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT } from "../../src/core/brain/policy/blocks/maintenance.ts";
+import { sqliteVecLoadable } from "../helpers/sqlite-vec.ts";
+import { startFakeHttp, type FakeHttp } from "../helpers/fake-http.ts";
+import { FAKE_PROVIDER_KEY } from "../helpers/fake-credentials.ts";
 import { runCli } from "../helpers/run-cli.ts";
+
+/**
+ * Whether `sqlite-vec` loaded in THIS process: the spend-surface tests
+ * need a vector index, so an unloadable extension skips them rather than
+ * failing on an environment fact (same guard the vector-backfill CLI
+ * tests declare).
+ */
+const VEC_LOADABLE = sqliteVecLoadable();
 
 let tmp: string;
 let vault: string;
@@ -90,6 +111,20 @@ test("a malformed window is a usage error", async () => {
   expect(result.returncode).toBe(2);
 });
 
+/** The per-test config, which alone names the test vault. */
+function baseEnv(): Record<string, string> {
+  return { OPEN_SECOND_BRAIN_CONFIG: configPath };
+}
+
+/** The local provider is configured, model-free and price-free. */
+function localSemanticEnv(): Record<string, string> {
+  return {
+    OPEN_SECOND_BRAIN_CONFIG: configPath,
+    OPEN_SECOND_BRAIN_SEARCH_SEMANTIC: "true",
+    OPEN_SECOND_BRAIN_EMBEDDING_PROVIDER: "local",
+  };
+}
+
 /** Seed `task`'s journal with the failures that trip the streak refusal. */
 function seedFailureStreak(task: string, count: number): void {
   const path = join(vault, ".open-second-brain", "maintenance-runs.jsonl");
@@ -154,4 +189,275 @@ test("--retry runs the refused task and names an unknown task as a usage error",
   const dream = payload.tasks.find((t) => t.name === "dream");
   expect(dream?.refused).toBeUndefined();
   expect(dream?.ok).toBe(true);
+});
+
+/** A clean task row, as the lane produces it. */
+function okRow(name: MaintenanceTaskResult["name"]): MaintenanceTaskResult {
+  return { name, ok: true, duration_ms: 1 };
+}
+
+/** A deterministic task fault: the pass ran and failed for a named reason. */
+function errorRow(name: MaintenanceTaskResult["name"]): MaintenanceTaskResult {
+  return { name, ok: false, duration_ms: 5, error: "deterministic fault" };
+}
+
+/** A safeguard-deadline row: the pass was killed mid-run, its outcome unmeasured. */
+function timedOutRow(name: MaintenanceTaskResult["name"]): MaintenanceTaskResult {
+  return {
+    name,
+    ok: false,
+    duration_ms: 120_001,
+    error: `${name} exceeded its safeguard timeout of 120000ms - aborted at a checkpoint`,
+    timed_out: true,
+  };
+}
+
+/** A streak-refusal row: the task never ran. */
+function refusedRow(name: MaintenanceTaskResult["name"]): MaintenanceTaskResult {
+  return {
+    name,
+    ok: false,
+    duration_ms: 0,
+    error: "refused: 3 consecutive journaled failures",
+    refused: true,
+    failure_streak: 3,
+  };
+}
+
+describe("maintenanceExitCode", () => {
+  test("a clean run exits 0 and a deterministic task fault exits 1", () => {
+    expect(maintenanceExitCode([okRow(LANE_TASK.dream), okRow(LANE_TASK.reindex)])).toBe(
+      MAINTENANCE_EXIT.ok,
+    );
+    expect(maintenanceExitCode([errorRow(LANE_TASK.reindex)])).toBe(MAINTENANCE_EXIT.failed);
+  });
+
+  test("a timed-out pass exits 6: the run could not find out", () => {
+    // The safeguard killed the task mid-run, so its outcome is unmeasured -
+    // the same "could not find out" `SEARCH_CHECK_EXIT` and `DOCTOR_EXIT`
+    // already spend 6 on, not the proved failure 1 names.
+    expect(maintenanceExitCode([timedOutRow(LANE_TASK.bridges)])).toBe(
+      MAINTENANCE_EXIT.probeIncomplete,
+    );
+    // The healthy tasks around it do not make the run clean.
+    expect(maintenanceExitCode([timedOutRow(LANE_TASK.bridges), okRow(LANE_TASK.clusters)])).toBe(
+      MAINTENANCE_EXIT.probeIncomplete,
+    );
+  });
+
+  test("a refusal-only run still exits 7", () => {
+    expect(maintenanceExitCode([refusedRow(LANE_TASK.dream), okRow(LANE_TASK.reindex)])).toBe(
+      MAINTENANCE_EXIT.refused,
+    );
+  });
+
+  test("a proved failure outranks an unmeasured pass; an unmeasured pass outranks a refusal", () => {
+    // error + timeout -> 1: the specific proved failure must not be masked.
+    expect(maintenanceExitCode([errorRow(LANE_TASK.dream), timedOutRow(LANE_TASK.reindex)])).toBe(
+      MAINTENANCE_EXIT.failed,
+    );
+    // timeout + refusal -> 6: something ran, so the run outranks a refusal
+    // (which records that nothing did).
+    expect(maintenanceExitCode([timedOutRow(LANE_TASK.reindex), refusedRow(LANE_TASK.dream)])).toBe(
+      MAINTENANCE_EXIT.probeIncomplete,
+    );
+  });
+
+  test("the table is a table and agrees with the 6 the other surfaces already spend", () => {
+    const codes = Object.values(MAINTENANCE_EXIT);
+    expect(new Set(codes).size).toBe(codes.length);
+    expect(MAINTENANCE_EXIT.probeIncomplete).toBe(6);
+  });
+});
+
+describe("renderTaskLine", () => {
+  test("a timed-out pass is TIMED OUT, not FAILED: the safeguard killed it mid-run", () => {
+    const line = renderTaskLine(timedOutRow(LANE_TASK.bridges));
+    expect(line).toContain("bridges: TIMED OUT");
+    expect(line).not.toContain("FAILED");
+    // The error names the safeguard and its budget; the line carries it.
+    expect(line).toContain("120000ms");
+    expect(line).toContain("in 120001ms");
+  });
+
+  test("a refusal, a deterministic failure and a pass keep their existing renderings", () => {
+    expect(renderTaskLine(refusedRow(LANE_TASK.dream))).toContain("dream: REFUSED");
+    expect(renderTaskLine(errorRow(LANE_TASK.reindex))).toContain("reindex: FAILED");
+    expect(renderTaskLine(okRow(LANE_TASK.clusters))).toContain("clusters: ok in 1ms");
+  });
+
+  test("a receipt rides the line as a parenthetical", () => {
+    const receipt: MaintenanceSpendReceipt = {
+      model: "text-embedding-3-small",
+      tokens: 38110,
+      estimatedUsd: 0.0076,
+      forced: false,
+    };
+    const line = renderTaskLine({ ...okRow(LANE_TASK.reindex), receipt });
+    expect(line).toContain("reindex: ok in 1ms");
+    expect(line).toContain("(tokens=38110, estimatedUsd=0.0076, model=text-embedding-3-small)");
+  });
+});
+
+describe("formatSpendBanner", () => {
+  test("names the model, the pending census and the gate - including a zero gate", () => {
+    expect(
+      formatSpendBanner(
+        {
+          model: "text-embedding-3-small",
+          pendingChunks: 214,
+          tokens: 1,
+          estimatedUsd: 0.011,
+          blocked: false,
+        },
+        0,
+      ),
+    ).toBe(
+      "embedding spend: model text-embedding-3-small, 214 chunks pending, " +
+        "estimated $0.0110 (gate: off)",
+    );
+    expect(
+      formatSpendBanner(
+        { model: null, pendingChunks: 1, tokens: 0, estimatedUsd: 0, blocked: false },
+        0.5,
+      ),
+    ).toBe("embedding spend: model unknown, 1 chunks pending, estimated $0.0000 (gate: $0.5000)");
+  });
+});
+
+/** Initialize the vault, drop one note in, and index it keyword-only. */
+async function seedPendingChunks(): Promise<void> {
+  const init = await runCli(["brain", "init", "--vault", vault], { env: baseEnv() });
+  expect(init.returncode).toBe(0);
+  writeFileSync(
+    join(vault, "Brain", "note.md"),
+    "# note\n\nprose long enough to cut at least one chunk for the index.\n",
+  );
+  const indexed = await runCli(["search", "index", "--vault", vault], { env: baseEnv() });
+  expect(indexed.returncode).toBe(0);
+}
+
+describe("the spend surface end to end", () => {
+  test.skipIf(!VEC_LOADABLE)(
+    "a semantic lane announces spend before the pass and receipts it after",
+    async () => {
+      await seedPendingChunks();
+
+      const run = await runCli(["brain", "maintenance", "run", "--vault", vault], {
+        env: localSemanticEnv(),
+      });
+      expect(run.returncode).toBe(0);
+      expect(run.stdout).toContain("embedding spend: model hashing-ngram-v1");
+      expect(run.stdout).toContain("chunks pending");
+      expect(run.stdout).toContain("(gate: off)");
+      expect(run.stdout).toMatch(
+        /reindex: ok in \d+ms \(tokens=\d+, estimatedUsd=0\.0000, model=hashing-ngram-v1\)/,
+      );
+    },
+  );
+
+  test.skipIf(!VEC_LOADABLE)(
+    "--json carries banner and receipt; a run with nothing pending reports neither",
+    async () => {
+      await seedPendingChunks();
+
+      const first = await runCli(["brain", "maintenance", "run", "--vault", vault, "--json"], {
+        env: localSemanticEnv(),
+      });
+      expect(first.returncode).toBe(0);
+      const payload = JSON.parse(first.stdout) as {
+        spend?: {
+          banner: { model: string; pendingChunks: number; estimatedUsd: number; gateUsd: number };
+          receipt: MaintenanceSpendReceipt;
+        };
+        tasks: Array<{ name: string; ok: boolean; receipt?: MaintenanceSpendReceipt }>;
+      };
+      expect(payload.spend?.banner.model).toBe("hashing-ngram-v1");
+      expect(payload.spend?.banner.pendingChunks).toBeGreaterThan(0);
+      expect(payload.spend?.banner.gateUsd).toBe(0);
+      const reindex = payload.tasks.find((t) => t.name === "reindex");
+      expect(reindex?.ok).toBe(true);
+      expect(payload.spend?.receipt).toEqual(reindex?.receipt);
+      expect(payload.spend?.receipt.tokens).toBeGreaterThan(0);
+      expect(payload.spend?.receipt.forced).toBe(false);
+
+      // The receipt the lane journaled agrees with the row it reported.
+      const status = await runCli(["brain", "maintenance", "status", "--vault", vault, "--json"], {
+        env: baseEnv(),
+      });
+      expect(status.returncode).toBe(0);
+      const state = JSON.parse(status.stdout) as {
+        journal: Array<{ task?: string; receipt?: MaintenanceSpendReceipt }>;
+      };
+      expect(state.journal.find((e) => e.task === "reindex")?.receipt).toEqual(
+        payload.spend?.receipt,
+      );
+
+      // The next run's census is over the index BEFORE its walk, and
+      // every embedded chunk the first pass left cannot spend again: the
+      // banner is absent. (The receipt may still be present - the lane's
+      // dream writes pages this run's walk then indexes, and the phase
+      // prices what ITS census finds - which is exactly why the receipt
+      // is the phase's own number and not the banner's.)
+      const second = await runCli(["brain", "maintenance", "run", "--vault", vault, "--json"], {
+        env: localSemanticEnv(),
+      });
+      expect(second.returncode).toBe(0);
+      const secondPayload = JSON.parse(second.stdout) as {
+        spend?: { banner?: unknown };
+        tasks: Array<{ name: string; receipt?: unknown }>;
+      };
+      expect(secondPayload.spend?.banner).toBeUndefined();
+    },
+  );
+
+  test.skipIf(!VEC_LOADABLE)(
+    "a positive gate refuses the pass unforced; --force-cost flags the receipt",
+    async () => {
+      let server: FakeHttp | null = null;
+      try {
+        server = await startFakeHttp();
+        await seedPendingChunks();
+        const pricedEnv = () => ({
+          OPEN_SECOND_BRAIN_CONFIG: configPath,
+          OPEN_SECOND_BRAIN_SEARCH_SEMANTIC: "true",
+          OPEN_SECOND_BRAIN_EMBEDDING_PROVIDER: "openai-compat",
+          OPEN_SECOND_BRAIN_EMBEDDING_BASE_URL: server!.url,
+          OPEN_SECOND_BRAIN_EMBEDDING_MODEL: "text-embedding-3-small",
+          OPEN_SECOND_BRAIN_EMBEDDING_KEY: FAKE_PROVIDER_KEY,
+          OPEN_SECOND_BRAIN_EMBEDDING_COST_GATE: "0.000001",
+        });
+
+        const blocked = await runCli(["brain", "maintenance", "run", "--vault", vault], {
+          env: pricedEnv(),
+        });
+        expect(blocked.returncode).toBe(MAINTENANCE_EXIT.failed);
+        expect(blocked.stdout).toContain("embedding spend: model text-embedding-3-small");
+        expect(blocked.stdout).toContain("reindex: FAILED");
+        // The refusal is the cost gate's own message, naming the ceiling
+        // and the remedy; a failed pass receipts nothing.
+        expect(blocked.stdout).toContain("exceeds embedding_cost_gate_usd");
+        expect(blocked.stdout).toContain("Re-run with --force-cost");
+        // Refused BEFORE the provider was contacted: the gate spends nothing.
+        expect(server.callCount()).toBe(0);
+
+        const forced = await runCli(
+          ["brain", "maintenance", "run", "--vault", vault, "--force-cost", "--json"],
+          { env: pricedEnv() },
+        );
+        expect(forced.returncode).toBe(0);
+        const payload = JSON.parse(forced.stdout) as {
+          spend?: { receipt?: MaintenanceSpendReceipt };
+          tasks: Array<{ name: string; ok: boolean; receipt?: MaintenanceSpendReceipt }>;
+        };
+        const reindex = payload.tasks.find((t) => t.name === "reindex");
+        expect(reindex?.ok).toBe(true);
+        expect(reindex?.receipt?.forced).toBe(true);
+        expect(payload.spend?.receipt?.forced).toBe(true);
+        expect(server.callCount()).toBeGreaterThan(0);
+      } finally {
+        await server?.close();
+      }
+    },
+  );
 });

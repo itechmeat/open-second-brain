@@ -5,9 +5,14 @@
  * Indexing does not compute vectors unless it is asked to: no automatic
  * `indexVault` call site requests embeddings, and only the explicit
  * `--embeddings` flag on `search index` / `search reindex` reaches a
- * provider. A vault therefore accumulates chunks with no `embeddings`
- * row perfectly normally, and until now the only way to fill them was to
- * re-index the whole vault. This verb fills them and nothing else.
+ * provider - with ONE deliberate exception: the quiet-window maintenance
+ * lane asks for the embedding phase whenever the resolved config can
+ * reach a provider (t_9d155d0e), announcing the predicted spend before
+ * the pass and receipting the actual spend after it, leashed by the
+ * embedding cost gate unless force is set. A vault therefore still
+ * accumulates chunks with no `embeddings` row perfectly normally outside
+ * that lane, and the only way to fill them without re-indexing the whole
+ * vault is this verb. It fills them and nothing else.
  *
  * Dry-run is the DEFAULT; `--apply` is the only path that contacts a
  * provider or writes a vector. The shape follows

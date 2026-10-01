@@ -20,6 +20,7 @@ import type { DegradationNotice } from "../integrity/degradation.ts";
 import type { StampMismatch } from "../integrity/stamp.ts";
 import type { ReconciliationOutcome, ReconciliationReport } from "../reconciliation-report.ts";
 import type { VaultPathRule, VaultScopeRules } from "../vault-scope/defaults.ts";
+import type { MaintenanceSpendReceipt } from "../brain/maintenance/journal.ts";
 import type { DegreePredicate } from "./property-filter.ts";
 import type { TemporalIntent } from "./temporal-intent.ts";
 import type { FtsMatchMode } from "./fts-match-mode.ts";
@@ -333,6 +334,18 @@ export interface IndexStats {
    * it emitted before this field existed.
    */
   readonly chunkWindow?: ChunkWindowCensus;
+  /**
+   * The embedding phase's own cost-gate result for this run
+   * (t_9d155d0e), priced by the cost kernel over the census the phase
+   * actually embedded. Present only when a phase ran over a non-empty
+   * pending census and the run COMPLETED - a run that threw has no stats
+   * to read, and a caller journaling the receipt must not price a pass
+   * it cannot vouch for. `forced` is true only when a force bypass
+   * overrode a gate that would have refused the spend. Absent on every
+   * run whose embedding phase did not engage, so a run that could not
+   * spend emits the shape it always emitted.
+   */
+  readonly spend?: MaintenanceSpendReceipt;
   readonly durationMs: number;
 }
 

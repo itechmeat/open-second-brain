@@ -85,6 +85,7 @@ const MIN_REASON_LENGTH = 40;
 const CLI_TO_MCP: Readonly<Record<string, ReadonlyArray<string>>> = Object.freeze({
   retry: ["retry_tasks"],
   window: ["window_start_hour", "window_end_hour"],
+  "force-cost": ["force_cost"],
 });
 
 /** CLI flags with no MCP property, and why. */

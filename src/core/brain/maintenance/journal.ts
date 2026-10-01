@@ -79,6 +79,32 @@ export interface MaintenanceJournalEntry {
   readonly pressure_reason?: HostPressureUnmeasurableReason;
   /** Consecutive journaled failures behind a `refused:streak` row. */
   readonly streak?: number;
+  /**
+   * Model spend the task's run accounted for, on a row whose pass
+   * completed and returned a receipt (t_9d155d0e). Priced by the cost
+   * kernel before the provider was called; `forced` is true only when a
+   * `--force-cost` bypass overrode a positive gate that would have
+   * blocked the run. A failed attempt records no receipt: the spend of a
+   * pass killed mid-flight is unmeasured, and the row says so by
+   * carrying the failure without one.
+   */
+  readonly receipt?: MaintenanceSpendReceipt;
+}
+
+/**
+ * What one model-spending pass spent, as the cost kernel priced it
+ * before the provider was called. Lives beside the journal entry it
+ * persists on, because the row is the audit unit the lane renders - and
+ * journal.ts is the lower layer both the lane and its surfaces already
+ * read, so the shape cannot grow a second definition.
+ */
+export interface MaintenanceSpendReceipt {
+  /** The model the pass named; null when the config leaves it unset. */
+  readonly model: string | null;
+  readonly tokens: number;
+  readonly estimatedUsd: number;
+  /** True when `--force-cost` overrode a positive gate that would have blocked the run. */
+  readonly forced: boolean;
 }
 
 /** The journal's shard stem: `maintenance-runs[.<deviceId>].jsonl`. */
