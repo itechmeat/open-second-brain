@@ -654,6 +654,8 @@ top-level error handling applies again once it has:
   `[mcp] unhandled_rejection #N: <reason> (server keeps serving)` plus the
   first stack frame, and a non-Error reason is named as
   `non-error reason: <value>` - counted, and the server goes on answering.
+  Each line is redacted before it is written, so a credential in an error
+  message (a token, or a password in a URL) does not reach the host's log.
 - **The log is rate-limited, the count is not.** Five full lines per 60
   seconds, then one summary line (`[mcp] unhandled_rejection: N more
   suppressed in the last 60000ms`). The summary is printed when the window
@@ -1733,4 +1735,12 @@ log line is machine-composed rather than authored.
   the built-ins plus the custom-task cap of 8. A refused declaration comes
   back in `custom_task_errors` while the valid tasks still run. No argument
   can add, edit or read a command: commands live only in the machine
-  config, never in the vault.
+  config, never in the vault. Once the switch is on, a caller with
+  `force: true` and `retry_tasks` can run the declared commands whenever
+  it calls, past the window and busy gates; leave the switch off on a
+  server whose callers should not. A task runs from the home directory
+  unless it declares a `_cwd`, without the variables whose names declare
+  a credential, and its background processes are killed with its process
+  group at its timeout or when the server exits. A duplicated
+  `retry_tasks` entry counts once, and the `status` notice names the env
+  override when that turned the tasks off.

@@ -58,8 +58,14 @@ its own upkeep commands in the machine config file
 `_timeout_seconds` keys); they run only once `maintenance_custom_tasks: true`
 (env `OPEN_SECOND_BRAIN_MAINTENANCE_CUSTOM_TASKS`) is set, after the four
 built-in tasks and under the same gates. Without the switch nothing runs,
-and `o2b brain maintenance status` says so when keys are declared. See the
-maintenance lane in [`cli-reference.md`](cli-reference.md).
+and `o2b brain maintenance status` says so when keys are declared. A task
+runs from the running user's home directory unless it declares `_cwd`
+(the vault only when named), its environment drops every variable whose
+name declares a credential (`*_API_KEY`, `*_TOKEN`, `*_SECRET` and the
+like) while keeping `PATH`, `HOME`, `LANG`, `LC_*`, `TZ`, `TMPDIR` and
+`O2B_VAULT`, and the declared timeouts (default 120 s each) together stay
+within 1200 s of the 30-minute lease. See the maintenance lane in
+[`cli-reference.md`](cli-reference.md).
 
 **The lane can print its own schedule.** `o2b brain maintenance run
 --cron-template` prints a cron recipe, or a systemd user timer with
