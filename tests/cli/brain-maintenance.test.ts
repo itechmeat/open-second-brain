@@ -21,6 +21,8 @@ import {
   type MaintenanceSpendReceipt,
   type MaintenanceTaskResult,
 } from "../../src/core/brain/maintenance/lane.ts";
+import { listJournal, MAINTENANCE_JOURNAL_CAP } from "../../src/core/brain/maintenance/journal.ts";
+import { currentLease, MAINTENANCE_LEASE_NAME } from "../../src/core/brain/maintenance/lease.ts";
 import { MAINTENANCE_EMBEDDINGS_ENV } from "../../src/core/config.ts";
 import { MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT } from "../../src/core/brain/policy/blocks/maintenance.ts";
 import { sqliteVecLoadable } from "../helpers/sqlite-vec.ts";
@@ -190,6 +192,67 @@ test("--retry runs the refused task and names an unknown task as a usage error",
   const dream = payload.tasks.find((t) => t.name === "dream");
   expect(dream?.refused).toBeUndefined();
   expect(dream?.ok).toBe(true);
+});
+
+/** `run --cron-template` with `extra` flags against the test vault. */
+function recipe(extra: ReadonlyArray<string>) {
+  return runCli(["brain", "maintenance", "run", "--cron-template", "--vault", vault, ...extra], {
+    env: baseEnv(),
+  });
+}
+
+describe("run --cron-template prints the lane recipe and writes nothing", () => {
+  test("prints a recipe naming the job and the vault; no lease, no journal", async () => {
+    const printed = await recipe([]);
+    expect(printed.returncode).toBe(MAINTENANCE_EXIT.ok);
+    expect(printed.stdout).toContain("osb-maintenance");
+    expect(printed.stdout).toContain(`o2b brain maintenance run --vault '${vault}' --json`);
+    expect(printed.stdout).toContain("0 */1 * * *");
+    // Returned before the lease and the journal: printing a recipe is not
+    // a lane pass, so it must leave no trace a later status would read.
+    expect(currentLease(vault, { name: MAINTENANCE_LEASE_NAME, now: new Date() })).toBeNull();
+    expect(listJournal(vault, MAINTENANCE_JOURNAL_CAP)).toEqual([]);
+    expect(existsSync(join(vault, ".open-second-brain", "maintenance-runs.jsonl"))).toBe(false);
+  });
+
+  test("a bad interval or format is the lane's usage code, with the kernel's message", async () => {
+    const seconds = await recipe(["--interval", "30s"]);
+    expect(seconds.returncode).toBe(MAINTENANCE_EXIT.usage);
+    expect(seconds.stderr).toContain("second-level intervals are not supported");
+    const months = await recipe(["--interval", "90d"]);
+    expect(months.returncode).toBe(MAINTENANCE_EXIT.usage);
+    expect(months.stderr).toContain("90");
+    const launchd = await recipe(["--format", "launchd"]);
+    expect(launchd.returncode).toBe(MAINTENANCE_EXIT.usage);
+    expect(launchd.stderr).toContain("systemd");
+  });
+
+  test("the window is validated and carried into the printed body", async () => {
+    const bad = await recipe(["--window", "25-3"]);
+    expect(bad.returncode).toBe(MAINTENANCE_EXIT.usage);
+    const windowed = await recipe(["--window", "3-5", "--tz", "Europe/Berlin"]);
+    expect(windowed.returncode).toBe(MAINTENANCE_EXIT.ok);
+    expect(windowed.stdout).toContain("--window 3-5");
+    expect(windowed.stdout).toContain("--tz Europe/Berlin");
+    const unwindowed = await recipe([]);
+    expect(unwindowed.stdout).not.toContain("--window");
+  });
+
+  test("status refuses --cron-template", async () => {
+    const status = await runCli(
+      ["brain", "maintenance", "status", "--cron-template", "--vault", vault],
+      { env: baseEnv() },
+    );
+    expect(status.returncode).toBe(MAINTENANCE_EXIT.usage);
+    expect(status.stderr).toContain("--cron-template");
+  });
+
+  test("--format systemd prints a user timer at the default interval", async () => {
+    const timer = await recipe(["--format", "systemd"]);
+    expect(timer.returncode).toBe(MAINTENANCE_EXIT.ok);
+    expect(timer.stdout).toContain("OnUnitActiveSec=1h");
+    expect(timer.stdout).toContain(`o2b brain maintenance run --vault '${vault}' --json`);
+  });
 });
 
 /** A clean task row, as the lane produces it. */

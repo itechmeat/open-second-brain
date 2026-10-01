@@ -15,6 +15,9 @@
  * `status` renders the lease holder and recent journal. Designed as
  * the cron entry point: a dead dashboard hour surfaces as
  * skipped:window in the journal instead of a contended vault.
+ * `run --cron-template [--interval N] [--format cron|systemd]` prints
+ * the recipe that schedules this very verb and returns before the
+ * lease, the gates, the journal and the metrics: it installs nothing.
  *
  * Exit codes: see {@link MAINTENANCE_EXIT}.
  */
@@ -54,6 +57,11 @@ import {
 import { listJournal, MAINTENANCE_JOURNAL_CAP } from "../../../core/brain/maintenance/journal.ts";
 import { createLaneReindex } from "../../../core/brain/maintenance/reindex-task.ts";
 import { resolveAgentName } from "../../../core/config.ts";
+import { CronTemplateError, parseRecipeFormat } from "../../cron-recipe.ts";
+import {
+  DEFAULT_MAINTENANCE_INTERVAL,
+  renderMaintenanceCronTemplate,
+} from "../../maintenance-cron.ts";
 import type { EmbeddingSpendPreview } from "../../../core/search/indexer.ts";
 import { resolveSearchConfig } from "../../../core/search/index.ts";
 import { onInterrupt } from "../../interrupt.ts";
@@ -62,8 +70,9 @@ import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
 const USAGE =
   "usage: o2b brain maintenance run [--force] [--retry <task>] [--window H-H] [--tz ZONE] " +
-  "[--busy-minutes N] [--busy-threshold N] [--force-cost] [--progress] | status [--limit N]  " +
-  "[--vault <path>] [--json]";
+  "[--busy-minutes N] [--busy-threshold N] [--force-cost] [--progress] " +
+  "| run --cron-template [--interval N] [--format cron|systemd] [--window H-H --tz ZONE] " +
+  "| status [--limit N]  [--vault <path>] [--json]";
 
 /**
  * What this verb's exit code says, and why a refusal has its own number.
@@ -140,11 +149,35 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
     progress: { type: "boolean" },
     json: { type: "boolean" },
     "force-cost": { type: "boolean" },
+    "cron-template": { type: "boolean" },
+    interval: { type: "string" },
+    format: { type: "string" },
   });
   const op = positional[0];
   const asJson = flags["json"] === true;
   if (op !== "run" && op !== "status") {
     process.stderr.write(`${USAGE}\n`);
+    return MAINTENANCE_EXIT.usage;
+  }
+
+  const cronTemplate = flags["cron-template"] === true;
+  const intervalRaw = flags["interval"] as string | undefined;
+  const formatRaw = flags["format"] as string | undefined;
+  // Named, not ignored: a recipe flag on a verb that is not printing a
+  // recipe would otherwise be accepted and do nothing, and `status
+  // --cron-template` would render the journal to someone who asked for a
+  // schedule.
+  if (cronTemplate && op === "status") {
+    process.stderr.write(
+      "brain maintenance status: --cron-template applies to run only " +
+        "(o2b brain maintenance run --cron-template)\n",
+    );
+    return MAINTENANCE_EXIT.usage;
+  }
+  if (!cronTemplate && (intervalRaw !== undefined || formatRaw !== undefined)) {
+    process.stderr.write(
+      `brain maintenance ${op}: --interval and --format apply only with --cron-template\n`,
+    );
     return MAINTENANCE_EXIT.usage;
   }
 
@@ -196,6 +229,13 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
         return MAINTENANCE_EXIT.usage;
       }
       window = { startHour, endHour, tz: (flags["tz"] as string | undefined) ?? "UTC" };
+    }
+    if (cronTemplate) {
+      // Before the busy flags, the lease and every gate: printing the
+      // recipe is not a lane pass, so it must leave no lease, no journal
+      // row and no metric behind. The window was validated above so a
+      // recipe never embeds a window the lane would refuse at 3 a.m.
+      return printMaintenanceRecipe(vault, intervalRaw, formatRaw, windowRaw, flags["tz"]);
     }
     // Same ceilings the MCP tool's schema declares and its handler
     // enforces, read from the same constants beside the defaults: one
@@ -439,6 +479,37 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
       return MAINTENANCE_EXIT.failed;
     }
     return fail(message);
+  }
+}
+
+/**
+ * Print the lane's cron or systemd recipe for `vault`. A bad interval or
+ * format is the lane's usage code 2, not the 1 the two older recipe
+ * surfaces return: in this verb's vocabulary 1 means "attempted and
+ * failed" (see {@link MAINTENANCE_EXIT}).
+ */
+function printMaintenanceRecipe(
+  vault: string,
+  intervalRaw: string | undefined,
+  formatRaw: string | undefined,
+  windowRaw: string | undefined,
+  tzRaw: unknown,
+): MaintenanceExit {
+  try {
+    const body = renderMaintenanceCronTemplate(intervalRaw ?? DEFAULT_MAINTENANCE_INTERVAL, {
+      vault,
+      format: parseRecipeFormat(formatRaw),
+      ...(windowRaw !== undefined ? { window: windowRaw.trim() } : {}),
+      ...(typeof tzRaw === "string" ? { tz: tzRaw } : {}),
+    });
+    process.stdout.write(body.endsWith("\n") ? body : `${body}\n`);
+    return MAINTENANCE_EXIT.ok;
+  } catch (err) {
+    if (err instanceof CronTemplateError) {
+      process.stderr.write(`brain maintenance run: ${err.message}\n`);
+      return MAINTENANCE_EXIT.usage;
+    }
+    throw err;
   }
 }
 

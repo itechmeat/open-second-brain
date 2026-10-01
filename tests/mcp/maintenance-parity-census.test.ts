@@ -99,6 +99,15 @@ const CLI_ONLY: Readonly<Record<string, string>> = Object.freeze({
   progress:
     "a client asks for progress with a _meta progressToken on the request, which the transport " +
     "turns into the handler's onProgress sink; a boolean argument would be a second way to ask.",
+  "cron-template":
+    "a recipe is shell an operator pastes into the scheduler of the machine they are on; an MCP " +
+    "caller has no crontab or systemd user session to paste it into, and the tool runs the lane.",
+  interval:
+    "the schedule interval exists only for the printed recipe (--cron-template), which has no " +
+    "MCP counterpart; the lane itself has no interval, its gates decide when work happens.",
+  format:
+    "cron or systemd selects the renderer of the printed recipe (--cron-template), which has no " +
+    "MCP counterpart; a format argument on the tool would select nothing.",
 });
 
 /**
