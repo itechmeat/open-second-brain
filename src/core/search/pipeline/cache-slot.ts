@@ -12,6 +12,7 @@ import { activationStateFingerprint } from "../activation/store.ts";
 import { learnedWeightsFingerprint } from "../feedback.ts";
 import { buildCacheKey, getCachedOutcome, putCachedOutcome } from "../query-cache.ts";
 import { reinforceFingerprint } from "../reinforce.ts";
+import { RERANK_SUNSET_SURVEY } from "../rerank/sunset.ts";
 import type { Store } from "../store.ts";
 import type { SemanticPolicy } from "../semantic-phase.ts";
 import type { TemporalIntent } from "../temporal-intent.ts";
@@ -71,6 +72,14 @@ function configFingerprint(config: ResolvedSearchConfig): string {
     rrkModel: config.rerank.model,
     rrkTopK: config.rerank.topK,
     rrkMin: config.rerank.minScore,
+    // An enabled openai-compat rerank skips a model once its surveyed
+    // shutdown date has passed, and that skip answer is cached. The
+    // survey's review date re-keys it, so a build that corrects a survey
+    // row stops replaying the old verdict. Present only for that kind, so
+    // every other key is unchanged.
+    ...(config.rerank.enabled && config.rerank.kind === "openai-compat"
+      ? { rrkSunset: RERANK_SUNSET_SURVEY.reviewedAt }
+      : {}),
     // The decision-model kind: its mode decides whether the order changes.
     // Present only for that kind, so every other key is unchanged.
     ...(config.rerank.kind === "decision-model"
