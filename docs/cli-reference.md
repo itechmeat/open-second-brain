@@ -1762,7 +1762,7 @@ from the provider's message:
 | `gone` | the endpoint answered 404 or 410, the usual sign of a retired endpoint |
 | `rejected` | the endpoint answered any other 4xx |
 | `transient` | the endpoint answered 408, 429 or a 5xx. Some vendors also answer 429 for exhausted quota; the category is computed from the status alone |
-| `timeout` | the request outlived its timeout |
+| `timeout` | the request outlived its timeout, including a 2xx body that stalled after the headers arrived |
 | `network` | the request never reached a complete answer: refused connection, DNS, TLS, a redirect, or a body that broke while it was read |
 | `malformed` | the endpoint answered, but the body was not JSON, carried the wrong number of scores, or an out-of-range or duplicate index |
 | `unclassified` | the rerank provider threw an error the cross-encoder did not type; it is named rather than folded into another category |

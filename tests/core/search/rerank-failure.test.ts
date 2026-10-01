@@ -153,6 +153,29 @@ describe("RerankEndpointError", () => {
   });
 });
 
+/** A loopback endpoint that sends 200 headers, then never finishes the body. */
+function stalledBodyServer(): { url: string; stop: () => Promise<void> } {
+  const server = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    fetch: () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('{"results":['));
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+  });
+  return { url: `http://127.0.0.1:${server.port}/v1`, stop: () => server.stop(true) };
+}
+
+/** Settles with `p`, or with "unbounded" when `p` outlives a bounded wait. */
+function bounded<T>(p: Promise<T>): Promise<T | "unbounded"> {
+  return Promise.race([p, Bun.sleep(2_000).then(() => "unbounded" as const)]);
+}
+
 describe("the category reaches the telemetry event", () => {
   let fake: FakeHttp;
   beforeEach(async () => {
@@ -243,6 +266,41 @@ describe("the category reaches the telemetry event", () => {
       expectEndpointError(await thrownBy(fake.url), "network", /^network error: /);
     } finally {
       globalThis.fetch = realFetch;
+    }
+  });
+
+  test("a 2xx body that stalls is timeout, within the per-request timeout", async () => {
+    const stalled = stalledBodyServer();
+    try {
+      expectEndpointError(
+        await bounded(thrownBy(stalled.url, SHORT_TIMEOUT_MS)),
+        "timeout",
+        `rerank request timed out after ${SHORT_TIMEOUT_MS}ms`,
+      );
+    } finally {
+      await stalled.stop();
+    }
+  });
+
+  test("a caller abort during a stalled body throws the caller's reason", async () => {
+    const stalled = stalledBodyServer();
+    const caller = new AbortController();
+    const reason = new Error("caller cancelled");
+    const provider = new CrossEncoderRerankProvider(
+      { baseUrl: stalled.url, model: "rerank-test", apiKey: API_KEY },
+      { timeoutMs: 60_000 },
+    );
+    try {
+      setTimeout(() => caller.abort(reason), SHORT_TIMEOUT_MS);
+      const outcome = await bounded(
+        provider.rerank("q", ["a", "b"], { signal: caller.signal }).then(
+          () => "resolved",
+          (e: unknown) => e,
+        ),
+      );
+      expect(outcome).toBe(reason);
+    } finally {
+      await stalled.stop();
     }
   });
 

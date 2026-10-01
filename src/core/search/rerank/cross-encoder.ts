@@ -97,62 +97,74 @@ export class CrossEncoderRerankProvider implements RerankProvider {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     const unlink = linkAbortSignal(opts?.signal, controller);
-    let response: Response;
+    // The timeout and the caller's signal cover the body read as well as
+    // the fetch, so the timer is cleared only once the body is in.
+    let text: string;
     try {
-      response = await fetch(this.url, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${this.endpoint.apiKey}`,
-        },
-        body: JSON.stringify({
-          model: this.model,
-          query,
-          documents: [...documents],
-        }),
-        // No cross-host redirect may take the bearer key - or the query -
-        // somewhere the operator did not configure.
-        redirect: "error",
-        signal: controller.signal,
-      });
-    } catch (e) {
-      const cause = e instanceof Error ? e : new Error(String(e));
-      // The caller cancelled: its own abort reason travels up unchanged,
-      // so the caller recognises its cancellation by name.
-      if (opts?.signal?.aborted === true) throw opts.signal.reason;
-      if (cause.name === "AbortError") {
-        throw new RerankEndpointError(`rerank request timed out after ${this.timeoutMs}ms`, {
-          category: RERANK_FAILURE_CATEGORY.timeout,
+      let response: Response;
+      try {
+        response = await fetch(this.url, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${this.endpoint.apiKey}`,
+          },
+          body: JSON.stringify({
+            model: this.model,
+            query,
+            documents: [...documents],
+          }),
+          // No cross-host redirect may take the bearer key - or the query -
+          // somewhere the operator did not configure.
+          redirect: "error",
+          signal: controller.signal,
+        });
+      } catch (e) {
+        const cause = e instanceof Error ? e : new Error(String(e));
+        // The caller cancelled: its own abort reason travels up unchanged,
+        // so the caller recognises its cancellation by name.
+        if (opts?.signal?.aborted === true) throw opts.signal.reason;
+        if (cause.name === "AbortError") {
+          throw new RerankEndpointError(`rerank request timed out after ${this.timeoutMs}ms`, {
+            category: RERANK_FAILURE_CATEGORY.timeout,
+          });
+        }
+        throw new RerankEndpointError(`network error: ${cause.message}`, {
+          category: RERANK_FAILURE_CATEGORY.network,
         });
       }
-      throw new RerankEndpointError(`network error: ${cause.message}`, {
-        category: RERANK_FAILURE_CATEGORY.network,
-      });
+
+      if (!response.ok) {
+        const body = await response.text().catch(() => "");
+        const head = body.slice(0, 300);
+        throw new RerankEndpointError(
+          `rerank HTTP ${response.status}: ${head || response.statusText}`,
+          { category: rerankCategoryForStatus(response.status), status: response.status },
+        );
+      }
+
+      // Read and parse apart: a stream that breaks while the 2xx body is
+      // read is the path failing (`network`), while a body that arrived
+      // whole and is not JSON is the endpoint's answer (`malformed`).
+      try {
+        text = await response.text();
+      } catch (e) {
+        // The timer and the caller's signal abort a stalled body too, and
+        // read the same way they do for the fetch.
+        if (opts?.signal?.aborted === true) throw opts.signal.reason;
+        if (controller.signal.aborted) {
+          throw new RerankEndpointError(`rerank request timed out after ${this.timeoutMs}ms`, {
+            category: RERANK_FAILURE_CATEGORY.timeout,
+          });
+        }
+        const msg = e instanceof Error ? e.message : String(e);
+        throw new RerankEndpointError(`network error: ${msg}`, {
+          category: RERANK_FAILURE_CATEGORY.network,
+        });
+      }
     } finally {
       clearTimeout(timer);
       unlink();
-    }
-
-    if (!response.ok) {
-      const body = await response.text().catch(() => "");
-      const head = body.slice(0, 300);
-      throw new RerankEndpointError(
-        `rerank HTTP ${response.status}: ${head || response.statusText}`,
-        { category: rerankCategoryForStatus(response.status), status: response.status },
-      );
-    }
-
-    // Read and parse apart: a stream that breaks while the 2xx body is
-    // read is the path failing (`network`), while a body that arrived
-    // whole and is not JSON is the endpoint's answer (`malformed`).
-    let text: string;
-    try {
-      text = await response.text();
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      throw new RerankEndpointError(`network error: ${msg}`, {
-        category: RERANK_FAILURE_CATEGORY.network,
-      });
     }
     let json: unknown;
     try {
