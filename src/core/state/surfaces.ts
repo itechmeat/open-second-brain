@@ -1012,6 +1012,12 @@ export const STATE_SURFACES: ReadonlyArray<StateSurface> = Object.freeze([
  */
 export const STATE_SURFACE_SWEEP_EXCLUSIONS: ReadonlyMap<string, string> = new Map([
   [
+    "src/core/doctor-selftest.ts",
+    "the doctor self-test drives a THROWAWAY store end to end: it pins its database inside the " +
+      "temp vault it creates and always removes, so the derived-store name resolves against " +
+      "scratch storage only and the operator's store is never opened by it",
+  ],
+  [
     "src/core/brain/path-constants.ts",
     "it DECLARES the directory name and every other vault-relative name in this project. It " +
       "builds no path at all - each constant is a name, and the resolvers that join them are " +

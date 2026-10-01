@@ -28,9 +28,16 @@ import { checkSelfHealUpgrade } from "../core/maintenance/self-heal-upgrade-stat
 import { doctor } from "../core/doctor.ts";
 import { checkHermesResolverParity } from "../core/doctor-hermes-parity.ts";
 import { runReadinessProbes, type ReadinessReport } from "../core/doctor-readiness.ts";
+import {
+  runDoctorSelftest,
+  selftestJsonPayload,
+  SELFTEST_STAGE_NAMES,
+  type SelftestReport,
+} from "../core/doctor-selftest.ts";
 import { listVaultPages, writeFrontmatter } from "../core/vault.ts";
 import { pathIsInside, vaultRelative } from "../core/path-safety.ts";
 import { CliError, parseFlags } from "./argparse.ts";
+import { describeErrorChain } from "./output.ts";
 import { installStdoutEpipeGuard, isEpipeError } from "./stdout-guard.ts";
 import { handleAiderSubcommand } from "./aider.ts";
 import { handleBrainSubcommand, isBrainImportVerb } from "./brain.ts";
@@ -337,13 +344,26 @@ export function doctorExitCode(
 }
 
 async function cmdDoctor(argv: string[]): Promise<number> {
-  const { flags } = parseFlags(argv, {
+  const { flags, positional } = parseFlags(argv, {
     vault: { type: "string" },
     config: { type: "string" },
     repo: { type: "string" },
     json: { type: "boolean" },
     readiness: { type: "boolean" },
   });
+  // Sub-verbs: `o2b doctor selftest` and nothing else (yet). A positional
+  // the doctor grammar does not know is a usage error, not something to
+  // silently ignore - plain `doctor` with no positional is untouched.
+  if (positional.length > 0) {
+    const verb = positional[0]!;
+    if (verb !== DOCTOR_SELFTEST_VERB) {
+      throw new CliError(`unknown doctor verb: ${verb} (expected "${DOCTOR_SELFTEST_VERB}")`);
+    }
+    if (positional.length > 1) {
+      throw new CliError(`unexpected argument after "${DOCTOR_SELFTEST_VERB}": ${positional[1]}`);
+    }
+    return cmdDoctorSelftest(flags["json"] === true);
+  }
   const config = (flags["config"] as string | undefined) ?? defaultConfigPath();
   const vault = requireVault(flags["vault"] as string | undefined, config);
 
@@ -457,6 +477,94 @@ async function cmdDoctor(argv: string[]): Promise<number> {
     }
   }
   return exitCode;
+}
+
+/** The one sub-verb the `doctor` command carries today. */
+const DOCTOR_SELFTEST_VERB = "selftest";
+
+/** Column width for the stage-name column of the human rendering. */
+const SELFTEST_STAGE_NAME_WIDTH = Math.max(...SELFTEST_STAGE_NAMES.map((name) => name.length));
+
+/**
+ * `o2b doctor selftest` - the functional self-test harness (t_c00cc548).
+ *
+ * Drives a real throwaway store end to end (open + migrate, index pass,
+ * direct document roundtrip, keyword/trigram query, concurrent writers
+ * through the writer lock, delete, orderly close) and reports one
+ * CheckResult-shaped entry per stage. This is a VERB, not a `doctor()`
+ * check, for two reasons: a full store roundtrip is the heaviest probe
+ * imaginable and would defeat the readiness registry's per-probe budget,
+ * and `core/doctor.ts` is bundled into the OpenClaw artifact under import
+ * policing, so the harness module is standalone and only this verb imports
+ * it.
+ *
+ * Exit codes reuse {@link DOCTOR_EXIT} - the wave-wide vocabulary, no new
+ * numbers: 0 every stage passed; 1 a stage failed (the entry names the
+ * fault and the fix); 6 the harness itself could not run (temp storage
+ * unavailable), because it then established nothing about the store.
+ *
+ * The `--json` payload is the harness module's stable projection: no
+ * timestamps, no paths, no durations - two healthy runs on one machine
+ * stringify byte-identically. Wall-clock timings render in the human
+ * surface only.
+ */
+async function cmdDoctorSelftest(json: boolean): Promise<number> {
+  let report: SelftestReport;
+  try {
+    report = await runDoctorSelftest();
+  } catch (exc) {
+    // Stage faults are caught inside the harness; a throw here means the
+    // harness could not even assemble a report, which is the run-incomplete
+    // case, not a proved store fault.
+    process.stderr.write(`error: doctor selftest could not run: ${describeErrorChain(exc)}\n`);
+    return DOCTOR_EXIT.probeIncomplete;
+  }
+  const exit: DoctorExit = !report.harnessRan
+    ? DOCTOR_EXIT.probeIncomplete
+    : report.ok
+      ? DOCTOR_EXIT.ok
+      : DOCTOR_EXIT.failed;
+
+  if (json) {
+    process.stdout.write(JSON.stringify(selftestJsonPayload(report), sortedReplacer, 2) + "\n");
+    return exit;
+  }
+
+  const tempState =
+    report.tempRoot === null ? "not created" : report.tempRemoved ? "removed" : "NOT removed";
+  process.stdout.write(
+    `doctor selftest: temp vault ${report.tempRoot ?? "(none)"} (${tempState})\n`,
+  );
+  for (const stage of report.stages) {
+    const tag = stage.ok ? "ok" : "FAIL";
+    const timing = stage.timingMs
+      ? `; p50 ${stage.timingMs.p50Ms}ms / p100 ${stage.timingMs.p100Ms}ms`
+      : "";
+    process.stdout.write(
+      `  ${stage.name.padEnd(SELFTEST_STAGE_NAME_WIDTH)}  ${tag.padEnd(4)}  ` +
+        `${stage.message} (${stage.durationMs}ms${timing})\n`,
+    );
+    for (const warning of stage.warnings) {
+      process.stdout.write(`       warning: ${warning}\n`);
+    }
+    if (!stage.ok && stage.fix) {
+      process.stdout.write(`       fix: ${stage.fix}\n`);
+    }
+  }
+  const warnings = report.warnings;
+  const warningCount = `${warnings} warning${warnings === 1 ? "" : "s"}`;
+  if (!report.harnessRan) {
+    const firstFault = report.stages.find((stage) => !stage.ok)?.message ?? "unknown fault";
+    process.stdout.write(`doctor selftest: could not run (${firstFault})\n`);
+  } else if (report.ok) {
+    process.stdout.write(`doctor selftest: ok (${report.stages.length} stages, ${warningCount})\n`);
+  } else {
+    const failed = report.stages.filter((stage) => !stage.ok).length;
+    process.stdout.write(
+      `doctor selftest: FAILED (${failed} of ${report.stages.length} stages failed, ${warningCount})\n`,
+    );
+  }
+  return exit;
 }
 
 /**

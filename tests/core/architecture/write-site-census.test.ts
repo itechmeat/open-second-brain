@@ -970,6 +970,15 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
   },
 
   // --- Fixture materialisation: a vault-shaped disposable directory ------
+  "src/core/doctor-selftest.ts": {
+    categories: [C.fixtureMaterialisation, C.retentionDelete],
+    calls: ["rmSync", "writeFileSync"],
+    reason:
+      "drives the doctor self-test against a THROWAWAY store: the writes seed and journal a " +
+      "scratch vault the harness creates under the system temp dir, and the rmSync removes that " +
+      "same tree when the run ends, on success and on failure alike. Nothing is written beside " +
+      "the operator's vault, so there is no durability guarantee for an atomic writer to add.",
+  },
   "src/core/bench/fixture.ts": {
     categories: [C.fixtureMaterialisation],
     calls: ["writeFileSync"],
@@ -1210,8 +1219,10 @@ const DIRECT_ROWS = ROWS.filter((row) => row.directCalls.length > 0);
  * 74 -> 75: `src/core/maintenance/self-heal-upgrade-state.ts` claims and
  * releases the automatic-upgrade worker lock (an exclusive create) and
  * removes the failed-upgrade marker once nothing is pending.
+ * 75 -> 76: the doctor self-test seeds and journals a throwaway store in
+ * temp storage and removes the tree when the run ends.
  */
-const DIRECT_WRITE_ROWS = 75;
+const DIRECT_WRITE_ROWS = 76;
 
 /**
  * Measured modules reaching a write through a shared helper. An equality.
@@ -1270,8 +1281,10 @@ const DIRECT_WRITE_ROWS = 75;
  *
  * 106 -> 107: `src/core/brain/link-graph/orphan-repair.ts` detaches a
  * signal's `session_ref` through `writeFrontmatterAtomic`.
+ * 107 -> 108: `src/core/brain/link-graph/repair-lane.ts` stages hub
+ * candidates through the shared atomic JSONL writer.
  */
-const SHARED_HELPER_ROWS = 107;
+const SHARED_HELPER_ROWS = 108;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1341,8 +1354,9 @@ const STAMPED_PATHS: ReadonlySet<string> = new Set(
  * 71 -> 72: the payload gc's removal (a delete stamps nothing).
  * 72 -> 73: the payload registry's touch (metadata only).
  * 73 -> 74: the automatic-upgrade lock and marker removal (state, not notes).
+ * 74 -> 75: the doctor self-test's throwaway-store writes (temp storage).
  */
-const UNSTAMPED_DIRECT_ROWS = 74;
+const UNSTAMPED_DIRECT_ROWS = 75;
 
 /**
  * Shared-helper write sites the stamp does not reach, measured the same
@@ -1353,9 +1367,10 @@ const UNSTAMPED_DIRECT_ROWS = 74;
  * so is the knowledge-pack install fingerprint (100 -> 101), and the
  * failed-upgrade marker `self-heal-upgrade-state.ts` writes (101 -> 102),
  * and the dedup index cache, a derived file outside the vault (102 -> 103),
- * and the orphan-repair detach (103 -> 104).
+ * and the orphan-repair detach (103 -> 104). 104 -> 105: the repair lane
+ * stages hub candidates through the shared atomic JSONL writer.
  */
-const UNSTAMPED_SHARED_ROWS = 104;
+const UNSTAMPED_SHARED_ROWS = 105;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {
