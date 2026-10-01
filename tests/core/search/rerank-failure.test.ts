@@ -24,11 +24,12 @@ import {
 import type { RerankProvider } from "../../../src/core/search/rerank/contract.ts";
 import { SearchError } from "../../../src/core/search/types.ts";
 import type { BrainSearchResult, ResolvedRerankConfig } from "../../../src/core/search/types.ts";
+import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
 import { startFakeHttp, type FakeHttp } from "../../helpers/fake-http.ts";
 
 const SHORT_TIMEOUT_MS = 50;
 const SLOW_ANSWER_MS = 400;
-const API_KEY = "test-key";
+const API_KEY = FAKE_PROVIDER_KEY;
 
 function result(id: number): BrainSearchResult {
   return Object.freeze({
