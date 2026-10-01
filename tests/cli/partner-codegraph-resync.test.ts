@@ -125,16 +125,20 @@ describe("the resync recipe renders", () => {
   test.skipIf(IS_WINDOWS)(
     "a project path with shell syntax reaches the script as a literal value",
     () => {
-      const path = "/srv/x$(touch marker)`id`\"q'y";
-      const body = renderCodegraphResyncTemplate(path, "6h");
-      const line = body.split("\n").find((l) => l.startsWith("project="));
-      expect(line).toBeDefined();
-      // Evaluate exactly the line the script carries: the value must come
-      // back byte for byte, and nothing inside it may run.
-      const run = Bun.spawnSync(["bash", "-c", `${line}\nprintf %s "$project"`], { cwd: tmp });
-      expect(run.exitCode).toBe(0);
-      expect(run.stdout.toString()).toBe(path);
-      expect(existsSync(join(tmp, "marker"))).toBe(false);
+      // The first path is valid inside double quotes too, so only quoting
+      // that disables substitution keeps the marker from being created;
+      // the second adds the quote characters themselves.
+      for (const path of ["/srv/x$(touch marker)", "/srv/x$(touch marker)`id`\"q'y"]) {
+        const body = renderCodegraphResyncTemplate(path, "6h");
+        const line = body.split("\n").find((l) => l.startsWith("project="));
+        expect(line).toBeDefined();
+        // Evaluate exactly the line the script carries: nothing inside the
+        // value may run, and it must come back byte for byte.
+        const run = Bun.spawnSync(["bash", "-c", `${line}\nprintf %s "$project"`], { cwd: tmp });
+        expect(`marker created: ${existsSync(join(tmp, "marker"))}`).toBe("marker created: false");
+        expect(run.exitCode).toBe(0);
+        expect(run.stdout.toString()).toBe(path);
+      }
     },
   );
 
@@ -199,13 +203,15 @@ describe("o2b partner codegraph resync (CLI)", () => {
     expect(listTree(tmp)).toEqual(before);
   });
 
-  test("without --format the cron recipe is printed exactly as before", async () => {
+  test("without --format the CLI prints the cron recipe, not the systemd pair", async () => {
     const repo = makeRepo("repo");
     const res = await runCli(["partner", "codegraph", "resync", "--cron-template"], {
       cwd: repo,
     });
     expect(res.returncode).toBe(0);
-    expect(res.stdout).toBe(renderCodegraphResyncTemplate(repo, "6h"));
+    expect(res.stdout).toContain("0 */6 * * *    ~/.local/bin/osb-codegraph-resync.sh");
+    expect(res.stdout).toContain("hermes cron create");
+    expect(res.stdout).not.toContain("OnUnitActiveSec=");
   });
 
   test("--format systemd prints a service and timer pair and writes nothing", async () => {

@@ -116,9 +116,8 @@ test("a malformed window is a usage error", async () => {
   expect(result.returncode).toBe(2);
 });
 
-/** The per-test config, which alone names the test vault. */
 /**
- * The lane mints per-device state and runs custom tasks from the home
+ * The per-test config, which alone names the test vault. The lane mints per-device state and runs custom tasks from the home
  * directory, so every lane-running child gets a home of its own under
  * the test's temp dir rather than the runner's.
  */

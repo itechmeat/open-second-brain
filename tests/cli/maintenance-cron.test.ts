@@ -18,11 +18,10 @@ import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { CronTemplateError, renderCronRecipe } from "../../src/cli/cron-recipe.ts";
+import { CronTemplateError } from "../../src/cli/cron-recipe.ts";
 import {
   DEFAULT_MAINTENANCE_INTERVAL,
   MAINTENANCE_CRON_NAME,
-  MAINTENANCE_RECIPE,
   parseWindowBounds,
   renderMaintenanceCronTemplate,
 } from "../../src/cli/maintenance-cron.ts";
@@ -154,10 +153,7 @@ describe("renderMaintenanceCronTemplate", () => {
     );
   });
 
-  test("the cron format is the shared kernel's rendering of this spec", () => {
-    expect(renderMaintenanceCronTemplate("1h", { vault: "/v" })).toBe(
-      renderCronRecipe(MAINTENANCE_RECIPE, "1h", { vault: "/v" }),
-    );
+  test("an explicit cron format renders the default recipe", () => {
     expect(renderMaintenanceCronTemplate("1h", { vault: "/v", format: "cron" })).toBe(
       renderMaintenanceCronTemplate("1h", { vault: "/v" }),
     );

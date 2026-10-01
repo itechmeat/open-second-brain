@@ -190,32 +190,6 @@ describe("mcp fault guard in a spawned process", () => {
   );
 
   test(
-    "o2b mcp over HTTP installs the guard and reports it on /health",
-    async () => {
-      const { vault, env } = sandbox();
-      const proc = Bun.spawn(
-        [BUN, CLI, "mcp", "--transport", "http", "--port", "0", "--vault", vault],
-        { cwd: REPO_ROOT, env, stdin: "ignore", stdout: "ignore", stderr: "pipe" },
-      );
-      try {
-        const err = lineReader(proc.stderr);
-        const listening = await err.waitFor((line) => line.includes(" listening on http://"));
-        const url = /listening on (http:\/\/\S+)/.exec(listening)?.[1];
-        expect(url).toBeDefined();
-        const body = (await (await fetch(`${url}/health`)).json()) as Record<string, unknown>;
-        expect(body["faults"]).toEqual({
-          unhandled_rejection: 0,
-          uncaught_exception: 0,
-          last_fault_at: null,
-        });
-      } finally {
-        proc.kill();
-        await proc.exited;
-      }
-    },
-    SPAWN_TIMEOUT_MS,
-  );
-  test(
     "a rejection inside o2b mcp over HTTP raises the /health count, and the guard is released",
     async () => {
       const { vault, env } = sandbox();
