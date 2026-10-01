@@ -288,9 +288,11 @@ const SYSTEMD_USER_UNIT_DIR = "~/.config/systemd/user/";
 const SYSTEMD_HOME_PREFIX = "%h/";
 
 /**
- * Delay after boot before the first run. Without an `OnBootSec=` a
- * monotonic `OnUnitActiveSec=` timer has no first activation after a
- * reboot and never fires again.
+ * Delay after boot before the first run. The timer is monotonic
+ * (`OnBootSec=` plus `OnUnitActiveSec=`), not calendar based: without an
+ * `OnBootSec=` it has no first activation after a reboot and never fires
+ * again. `Persistent=` applies to `OnCalendar=` timers only, so the unit
+ * carries none; the boot delay is what catches up after downtime.
  */
 const SYSTEMD_BOOT_DELAY = "5m";
 
@@ -511,7 +513,6 @@ export function renderSystemdTimer<TOptions extends CronRecipeOptions>(
     "OnUnitActiveSec=" +
     parsed.systemdSpan +
     "\n" +
-    "Persistent=true\n" +
     "\n" +
     "[Install]\n" +
     "WantedBy=timers.target\n" +

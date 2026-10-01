@@ -173,7 +173,6 @@ describe("renderSystemdTimer", () => {
       `${UNIT_DIR}${SENTINEL.cronName}.timer`,
       "OnUnitActiveSec=30m",
       "OnBootSec=",
-      "Persistent=true",
       "systemctl --user daemon-reload",
       `systemctl --user enable --now ${SENTINEL.cronName}.timer`,
       "loginctl enable-linger",
@@ -181,6 +180,13 @@ describe("renderSystemdTimer", () => {
     ]) {
       expect(`${needle} present: ${out.includes(needle)}`).toBe(`${needle} present: true`);
     }
+  });
+
+  test("the monotonic timer carries no Persistent= line", () => {
+    // systemd honours Persistent= on OnCalendar= timers only; on this
+    // OnBootSec=/OnUnitActiveSec= timer it would claim a catch-up that
+    // never happens.
+    expect(renderSystemdTimer(SPEC, "30m", {})).not.toContain("Persistent=");
   });
 
   test("the service runs the script through the systemd home specifier", () => {
