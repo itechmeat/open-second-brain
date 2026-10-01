@@ -43,7 +43,7 @@ import {
 } from "../../core/brain/notes/create-note.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
-import { COUNT_GUARD_WIRE_CODE } from "../tool-error-codes.ts";
+import { COUNT_GUARD_WIRE_CODE, TOOL_ERROR_CODE } from "../tool-error-codes.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceBoolOptional, coerceStr } from "../coerce.ts";
 import { coerceNonNegativeInteger, readCountGuardArgs } from "./shared.ts";
@@ -220,9 +220,6 @@ const STUB_ACTION_ARGUMENTS: Readonly<Record<StubScaffoldAction, ReadonlyArray<s
     ]),
   });
 
-/** The `data.code` an action-incompatible argument is refused under. */
-const ARGUMENT_FORBIDDEN_CODE = "argument_forbidden";
-
 /**
  * Refuse every argument that belongs to the OTHER action. `action`
  * itself is the dispatch key and belongs to both; anything the schema
@@ -245,7 +242,7 @@ function assertArgumentsMatchAction(
     INVALID_PARAMS,
     `${STUB_TOOL}: action=${action} takes none of ${foreign.join(", ")}; ` +
       `it reads ${mine.join(", ")}`,
-    { code: ARGUMENT_FORBIDDEN_CODE, action, forbidden: foreign, accepted: [...mine] },
+    { code: TOOL_ERROR_CODE.argumentForbidden, action, forbidden: foreign, accepted: [...mine] },
   );
 }
 

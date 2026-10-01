@@ -15,6 +15,11 @@ import type { Mock } from "bun:test";
 
 import { BrainPreferenceNotFoundError } from "../../src/core/brain/apply-evidence.ts";
 import { CountGuardError } from "../../src/core/brain/count-guard.ts";
+import {
+  ExpirationTargetNotFoundError,
+  ExpirationValueError,
+  InvalidExpirationTargetError,
+} from "../../src/core/brain/expiration-set.ts";
 import { BrainParseError } from "../../src/core/brain/parse-error.ts";
 import { BrainStatusFolderMismatchError } from "../../src/core/brain/preference.ts";
 import { PinnedBatchError } from "../../src/core/brain/pinned.ts";
@@ -51,7 +56,8 @@ import {
 } from "../../src/mcp/tool-error-codes.ts";
 
 /**
- * Decision 5 of the design plus `brain_artifact_unparseable`: the generic
+ * Decision 5 of the design plus `brain_artifact_unparseable` and
+ * `argument_forbidden` (on the wire before the registry existed): the generic
  * tokens this release adds.
  */
 const NEW_TOKENS = [
@@ -75,6 +81,7 @@ const NEW_TOKENS = [
   "session_id_required",
   "unknown_argument",
   "brain_artifact_unparseable",
+  "argument_forbidden",
 ] as const;
 
 /**
@@ -139,6 +146,10 @@ const TYPE_ONLY_MEMBERS = [
   "empty_content",
   // count guard, as the lifecycle tool reports it
   "count_guard",
+  // the brain_expire refusals, reported under their class names
+  "ExpirationValueError",
+  "ExpirationTargetNotFoundError",
+  "InvalidExpirationTargetError",
 ] as const;
 
 const UNCLASSIFIED_PREFIX = "warning: unclassified tool error mapped to internal_error: ";
@@ -164,7 +175,7 @@ describe("TOOL_ERROR_CODES", () => {
     for (const token of imported) expect(registered).toContain(token);
   });
 
-  test("is exactly the imported vocabularies plus the 20 new tokens", () => {
+  test("is exactly the imported vocabularies plus the 21 new tokens", () => {
     const expected = new Set<string>([
       ...NEW_TOKENS,
       ...SEARCH_ERROR_CODES,
@@ -258,6 +269,17 @@ describe("codeForError", () => {
     expect(codeForError(new CountGuardError("mismatch", 2, 1, ["a", "b"]))).toBe("count_guard");
     expect(codeForError(new OutputContractError("probe", ["$.ok: expected boolean"]))).toBe(
       "output_contract_failed",
+    );
+    expect(lines).toEqual([]);
+  });
+
+  test("an expiration refusal keeps its class name as its code", () => {
+    expect(codeForError(new ExpirationValueError("soon", "bad date"))).toBe("ExpirationValueError");
+    expect(codeForError(new ExpirationTargetNotFoundError("sig-x", ["Brain/inbox"]))).toBe(
+      "ExpirationTargetNotFoundError",
+    );
+    expect(codeForError(new InvalidExpirationTargetError("x"))).toBe(
+      "InvalidExpirationTargetError",
     );
     expect(lines).toEqual([]);
   });

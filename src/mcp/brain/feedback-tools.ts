@@ -77,6 +77,7 @@ import {
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
+import { codeForError } from "../tool-error-codes.ts";
 import {
   emitObservedUse,
   isObservedUseVerdict,
@@ -925,13 +926,16 @@ async function toolBrainExpire(
   } catch (err) {
     // Each of the three is the caller's fault and each has a different
     // next move: fix the date, fix the id, or use a surface that takes a
-    // path. They keep their own class name as the reported code.
+    // path. They keep their own class name as the reported code, read
+    // from the boundary registry's classification rather than `err.name`.
     if (
       err instanceof ExpirationValueError ||
       err instanceof ExpirationTargetNotFoundError ||
       err instanceof InvalidExpirationTargetError
     ) {
-      throw new MCPError(INVALID_PARAMS, `${EXPIRE_TOOL}: ${err.message}`, { code: err.name });
+      throw new MCPError(INVALID_PARAMS, `${EXPIRE_TOOL}: ${err.message}`, {
+        code: codeForError(err),
+      });
     }
     if (err instanceof MCPError) throw err;
     throw new MCPError(

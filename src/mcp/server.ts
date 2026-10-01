@@ -30,6 +30,7 @@ import {
 import type { JsonRpcErrorCode, JsonRpcNotification, MCPErrorData } from "./protocol.ts";
 import {
   codeForError,
+  isToolErrorCode,
   defaultCodeForRpc,
   TOOL_ERROR_META_KEY,
   toolErrorMeta,
@@ -600,17 +601,30 @@ function sortedReplacer(_key: string, value: unknown): unknown {
 /** The member of `error.data` every JSON-RPC error answer carries. */
 const ERROR_DATA_CODE_KEY = "code";
 
+/** The stderr line a thrower-supplied code outside the registry is named on. */
+const UNREGISTERED_CODE_WARNING = "warning: unregistered error code on the wire: ";
+
 /**
  * `data` with its stable string code. A thrower-supplied string code
  * always wins; otherwise the default derived from the numeric JSON-RPC
  * code is added after the thrower's own members, so a record such as the
  * argument guard's keeps its shape and gains one key.
+ *
+ * A supplied code outside {@link isToolErrorCode} is still sent as it
+ * is - replacing it would hide which producer chose it - and is named on
+ * stderr. Every producer passes a constant token, never prose, so the
+ * line is safe to log.
  */
 function withDefaultCode(code: JsonRpcErrorCode, data: MCPErrorData | undefined): MCPErrorData {
   const supplied: unknown = (data as { readonly [ERROR_DATA_CODE_KEY]?: unknown } | undefined)?.[
     ERROR_DATA_CODE_KEY
   ];
-  if (data !== undefined && typeof supplied === "string") return data;
+  if (data !== undefined && typeof supplied === "string") {
+    if (!isToolErrorCode(supplied)) {
+      process.stderr.write(`${UNREGISTERED_CODE_WARNING}${supplied}\n`);
+    }
+    return data;
+  }
   return { ...data, [ERROR_DATA_CODE_KEY]: defaultCodeForRpc(code) };
 }
 

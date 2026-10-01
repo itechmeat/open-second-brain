@@ -104,6 +104,21 @@ describe("channel A: error.data.code on every JSON-RPC error", () => {
     );
     expect(res["error"]["data"]).toEqual(data);
     expect(Object.keys(res["error"]["data"])).toEqual(["code", "limit", "size"]);
+    expect(lines).toEqual([]);
+  });
+
+  test("a thrower-supplied code outside the registry is kept and named on stderr", async () => {
+    // Kept, not replaced: a replaced code would hide which producer sent
+    // it, and the stderr line is what points a maintainer at that site.
+    const res = await call(
+      serverWith(() => {
+        throw new MCPError(INVALID_PARAMS, "refused", { code: "not_a_registered_code" });
+      }),
+    );
+    expect(res["error"]["data"]).toEqual({ code: "not_a_registered_code" });
+    expect(lines).toEqual([
+      "warning: unregistered error code on the wire: not_a_registered_code\n",
+    ]);
   });
 
   test("a record without a code keeps every member and gains code last", async () => {

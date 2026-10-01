@@ -267,6 +267,7 @@ generic tokens:
 | `write_session_unknown`, `write_session_terminal`, `session_id_required` | a write-session call named no session, an unknown one, or one that has already ended |
 | `unknown_argument` | the call carried an argument the tool does not declare (see "Argument contract" above) |
 | `brain_artifact_unparseable` | a Brain artifact file (a preference or a retired rule, for example) could not be parsed |
+| `argument_forbidden` | `brain_scaffold_stub` was given an argument that belongs to its other action |
 
 plus every member of the vocabularies the core already defines, passed
 through unchanged:
@@ -284,14 +285,18 @@ through unchanged:
   stub scaffolding, note title resolution, note templates, pinned
   context, exact state, host memory writes, the count guard
   (`count_guard`), and the shared `config_invalid` and
-  `preference_not_found`.
+  `preference_not_found`;
+- the `brain_expire` refusals, sent under their error class names:
+  `ExpirationValueError` (the date is not one the server can compare),
+  `ExpirationTargetNotFoundError` (no signal or preference has that id)
+  and `InvalidExpirationTargetError` (the id has no addressable shape).
 
 The canonical list is `TOOL_ERROR_CODES` in `src/mcp/tool-error-codes.ts`.
 
 **Casing follows the vocabulary.** New tokens are lower snake_case. A
 code that was already on the wire keeps its spelling: search codes stay
-UPPER_SNAKE, and the write-binding, reach and owner-scope refusals stay
-kebab-case. Nothing was
+UPPER_SNAKE, the write-binding, reach and owner-scope refusals stay
+kebab-case, and the `brain_expire` refusals keep their class names. Nothing was
 renamed, so a client that already matched `vault_frozen` or
 `budget_exceeded` keeps working.
 

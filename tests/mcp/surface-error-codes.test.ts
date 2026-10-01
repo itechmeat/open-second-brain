@@ -15,6 +15,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { brainConfigPath } from "../../src/core/brain/paths.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
 import { createTriggers } from "../../src/core/brain/triggers/store.ts";
@@ -22,6 +23,8 @@ import type { InsightCandidate } from "../../src/core/brain/triggers/types.ts";
 import { BRAIN_CONFIDENCE, BRAIN_PREFERENCE_STATUS } from "../../src/core/brain/types.ts";
 import { GATE_MODE } from "../../src/core/integrity/stamp.ts";
 import { assertKnownArguments } from "../../src/mcp/argument-guard.ts";
+import { FEEDBACK_TOOLS } from "../../src/mcp/brain/feedback-tools.ts";
+import { LIFECYCLE_FILE_TOOLS } from "../../src/mcp/brain/lifecycle-file-tools.ts";
 import { AGENT_SCOPE_ARG_NAME, coerceAgentScope } from "../../src/mcp/coerce.ts";
 import { OWNER_SCOPE_REFUSAL } from "../../src/mcp/owner-scope-refusal.ts";
 import { INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
@@ -336,5 +339,39 @@ describe("refusal codes", () => {
     );
     expect(unresolved.message).toContain(OWNER_SCOPE_REFUSAL.unresolvedIdentity);
     expect(codeOf(unresolved)).toBe(OWNER_SCOPE_REFUSAL.unresolvedIdentity);
+  });
+});
+
+// ----- codes a refusing site supplies itself ------------------------------------
+
+const expireTool = (): ToolDefinition => FEEDBACK_TOOLS.find((t) => t.name === "brain_expire")!;
+const stubTool = (): ToolDefinition =>
+  LIFECYCLE_FILE_TOOLS.find((t) => t.name === "brain_scaffold_stub")!;
+
+describe("thrower-supplied codes are registry members", () => {
+  // The boundary keeps a code the refusing site chose, so each of these
+  // producers has to name a registered token itself: a client narrowing
+  // `error.data.code` with `isToolErrorCode` would reject anything else.
+  test("each brain_expire refusal answers a registered code", async () => {
+    bootstrapBrain(vault, { configPath });
+    const ctx: ServerContext = { vault, configPath, repoRoot: null };
+    const refusal = (args: Record<string, unknown>) =>
+      raised(() => expireTool().handler(ctx, args));
+    const [badDate, missing, unaddressable] = await Promise.all([
+      refusal({ id: "sig-2026-01-01-demo", expires: "soon" }),
+      refusal({ id: "sig-2026-01-01-demo", expires: "2026-12-31" }),
+      refusal({ id: "not-an-id", expires: "2026-12-31" }),
+    ]);
+    expect(codeOf(badDate)).toBe("ExpirationValueError");
+    expect(codeOf(missing)).toBe("ExpirationTargetNotFoundError");
+    expect(codeOf(unaddressable)).toBe("InvalidExpirationTargetError");
+  });
+
+  test("an argument of the other brain_scaffold_stub action answers a registered code", async () => {
+    const ctx: ServerContext = { vault, configPath, repoRoot: null };
+    const err = await raised(() =>
+      stubTool().handler(ctx, { action: "list", target: "Foo", apply: true }),
+    );
+    expect(codeOf(err)).toBe("argument_forbidden");
   });
 });

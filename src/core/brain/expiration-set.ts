@@ -69,6 +69,21 @@ export type ExpirationTargetKind =
   (typeof EXPIRATION_TARGET_KIND)[keyof typeof EXPIRATION_TARGET_KIND];
 
 /**
+ * The codes the three refusals below are reported under on the MCP wire:
+ * each class's own name, which `brain_expire` has always sent as
+ * `error.data.code`. One definition, so the class names and the boundary
+ * registry cannot drift apart.
+ */
+export const EXPIRATION_REFUSAL_CODE = Object.freeze({
+  invalidTarget: "InvalidExpirationTargetError",
+  targetNotFound: "ExpirationTargetNotFoundError",
+  invalidValue: "ExpirationValueError",
+} as const);
+
+/** Membership list over {@link EXPIRATION_REFUSAL_CODE}. */
+export const EXPIRATION_REFUSAL_CODES = Object.freeze(Object.values(EXPIRATION_REFUSAL_CODE));
+
+/**
  * An id shape that could never name an artifact, so no filesystem path is
  * formed from it. The regexes also close path traversal: no separator
  * survives either of them.
@@ -84,7 +99,7 @@ export class InvalidExpirationTargetError extends Error {
       `invalid expiration target ${JSON.stringify(id)} - expected sig-<date>-<slug>, ` +
         "pref-<slug> or ret-<slug>",
     );
-    this.name = "InvalidExpirationTargetError";
+    this.name = EXPIRATION_REFUSAL_CODE.invalidTarget;
     this.id = id;
   }
 }
@@ -95,7 +110,7 @@ export class ExpirationTargetNotFoundError extends Error {
   readonly searched: ReadonlyArray<string>;
   constructor(id: string, searched: ReadonlyArray<string>) {
     super(`no signal or preference with id ${JSON.stringify(id)}; searched ${searched.join(", ")}`);
-    this.name = "ExpirationTargetNotFoundError";
+    this.name = EXPIRATION_REFUSAL_CODE.targetNotFound;
     this.id = id;
     this.searched = Object.freeze([...searched]);
   }
@@ -112,7 +127,7 @@ export class ExpirationValueError extends Error {
   readonly value: string;
   constructor(value: string, reason: string) {
     super(reason);
-    this.name = "ExpirationValueError";
+    this.name = EXPIRATION_REFUSAL_CODE.invalidValue;
     this.value = value;
   }
 }

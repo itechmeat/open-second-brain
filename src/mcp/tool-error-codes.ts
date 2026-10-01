@@ -29,6 +29,13 @@ import { BrainPreferenceNotFoundError } from "../core/brain/apply-evidence.ts";
 import { CountGuardError } from "../core/brain/count-guard.ts";
 import type { ExactStateErrorCode } from "../core/brain/exact-state.ts";
 import { ExactStateError } from "../core/brain/exact-state.ts";
+import {
+  EXPIRATION_REFUSAL_CODE,
+  EXPIRATION_REFUSAL_CODES,
+  ExpirationTargetNotFoundError,
+  ExpirationValueError,
+  InvalidExpirationTargetError,
+} from "../core/brain/expiration-set.ts";
 import { VaultFrozenError } from "../core/brain/freeze-marker.ts";
 import type { HostMemoryWriteErrorCode } from "../core/brain/host-memory-write.ts";
 import { HostMemoryWriteError } from "../core/brain/host-memory-write.ts";
@@ -116,6 +123,8 @@ export const TOOL_ERROR_CODE = Object.freeze({
   unknownArgument: "unknown_argument",
   /** A Brain artifact file could not be parsed (`BrainParseError`). */
   brainArtifactUnparseable: "brain_artifact_unparseable",
+  /** An argument that belongs to another action of the same tool. */
+  argumentForbidden: "argument_forbidden",
 } as const);
 
 /** Closed union over {@link TOOL_ERROR_CODE}. */
@@ -269,6 +278,7 @@ export const TOOL_ERROR_CODES = Object.freeze([
     ...EXACT_STATE_CODES,
     ...HOST_MEMORY_WRITE_CODES,
     COUNT_GUARD_WIRE_CODE,
+    ...EXPIRATION_REFUSAL_CODES,
   ] as const),
 ]);
 
@@ -353,6 +363,9 @@ const CLASSIFICATION: ReadonlyArray<ClassificationRule> = Object.freeze([
   fixed(BrainConfigError, "config_invalid"),
   fixed(BrainPreferenceNotFoundError, "preference_not_found"),
   fixed(BrainParseError, TOOL_ERROR_CODE.brainArtifactUnparseable),
+  fixed(ExpirationValueError, EXPIRATION_REFUSAL_CODE.invalidValue),
+  fixed(ExpirationTargetNotFoundError, EXPIRATION_REFUSAL_CODE.targetNotFound),
+  fixed(InvalidExpirationTargetError, EXPIRATION_REFUSAL_CODE.invalidTarget),
 ]);
 
 /**
