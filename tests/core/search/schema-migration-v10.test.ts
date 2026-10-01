@@ -37,8 +37,8 @@ function hasColumn(db: Database, table: string, name: string): boolean {
     .some((c) => c.name === name);
 }
 
-test("latest schema version is 12", () => {
-  expect(LATEST_SCHEMA_VERSION).toBe(12);
+test("latest schema version is 13", () => {
+  expect(LATEST_SCHEMA_VERSION).toBe(13);
 });
 
 test("fresh migration reaches latest with the authored_at column", () => {

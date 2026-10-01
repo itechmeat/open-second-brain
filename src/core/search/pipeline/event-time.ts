@@ -59,6 +59,48 @@ interface ResolvedEventTime {
 /** The answer for a page that states nothing this layer can use. */
 const NO_EVENT_TIME: ResolvedEventTime = Object.freeze({ window: null, anchorSource: null });
 
+/**
+ * The shared rung order, spelled ONCE: a document's frontmatter
+ * validity window wins whenever it declares one - even a broken one,
+ * which the query side warns on and falls back to mtime, because
+ * quietly substituting the anchor's answer would hide the break;
+ * otherwise the materialised event anchor supplies the window, but only
+ * for the rungs `anchorIsEventTime` admits; otherwise null, and the
+ * caller falls back to storage mtime.
+ *
+ * This is the one definition both the query-side resolver (below) and
+ * the index-time persistence (the indexer's document loop, via
+ * {@link resolveDocumentEventTimeWindow}) consume, so index time and
+ * query time cannot drift about what a document's event time is.
+ */
+function resolveEventTimeRung(
+  frontmatter: Record<string, unknown>,
+  anchor: EventAnchor | null,
+): ResolvedEventTime {
+  const declared = parseValidityWindow(frontmatter);
+  if (declared !== null) return { window: declared, anchorSource: null };
+  return anchorEventTime(anchor);
+}
+
+/**
+ * The pure per-document event-time window: the WINDOW half of the
+ * shared rung order - frontmatter validity window > event anchor
+ * (admitted rungs only) > null - without the query-side provenance.
+ *
+ * Index-time persistence calls this with a document's already-parsed
+ * frontmatter and its materialised anchor. A null answer means the
+ * document declares nothing the layer can use and is judged by storage
+ * mtime - exactly the answer the query side reaches for the same
+ * document, because both spell the rung order through
+ * {@link resolveEventTimeRung}.
+ */
+export function resolveDocumentEventTimeWindow(
+  frontmatter: Record<string, unknown>,
+  anchor: EventAnchor | null,
+): ValidityWindow | null {
+  return resolveEventTimeRung(frontmatter, anchor).window;
+}
+
 export function createEventTimeResolver(
   vault: string,
   frontmatterCache: FrontmatterCache,
@@ -68,26 +110,23 @@ export function createEventTimeResolver(
   const resolve = (path: string): ResolvedEventTime => {
     const cached = cache.get(path);
     if (cached !== undefined) return cached;
-    let declared: ValidityWindow | null = null;
+    let frontmatter: Record<string, unknown> = {};
     try {
-      const meta = readCachedFrontmatter(frontmatterCache, vault, path);
-      declared = parseValidityWindow(meta as Record<string, unknown>);
+      frontmatter = readCachedFrontmatter(frontmatterCache, vault, path) as Record<string, unknown>;
     } catch {
-      declared = null;
+      frontmatter = {};
     }
     // No validity fields at all is an ABSENCE, so the note's other
-    // statements about its own event time get their turn. The anchor
-    // lookup sits OUTSIDE the catch above on purpose: that catch answers
+    // statements about its own event time get their turn - which is what
+    // the shared rung order below decides. The anchor lookup sits
+    // OUTSIDE the catch above on purpose: that catch answers
     // "the page could not be examined" with a fallback to mtime, and an
     // index row this binary cannot interpret is a different failure that
     // must reach the caller. Answering it from here would report "no
     // declared event time" for a document whose declaration was simply
     // unreadable - and, because the result is memoised, would do so for
     // every candidate in the call.
-    const resolved =
-      declared !== null
-        ? { window: declared, anchorSource: null }
-        : anchorEventTime(eventAnchorFor(path));
+    const resolved = resolveEventTimeRung(frontmatter, eventAnchorFor(path));
     cache.set(path, resolved);
     return resolved;
   };

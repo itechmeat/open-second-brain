@@ -19,7 +19,7 @@ import { closeDatabase } from "../sqlite-close.ts";
  * this raises `SCHEMA_MISMATCH` on open — the operator must reindex
  * with a newer binary.
  */
-export const LATEST_SCHEMA_VERSION = 12;
+export const LATEST_SCHEMA_VERSION = 13;
 
 /**
  * The one command that rebuilds an index this binary cannot read. Every
@@ -596,6 +596,54 @@ export const MIGRATIONS: ReadonlyArray<Migration> = Object.freeze([
       backfillDocumentVisibility(db);
     },
   },
+  {
+    // v13 (persisted, countable event-time bounds + pinned, t_9e1a4b3f /
+    // t_f7bef96a schema half) - three nullable columns on `documents`:
+    //
+    //   - `event_time_min` / `event_time_max`: the document's RESOLVED
+    //     event-time window in unix ms, as the shared rung order
+    //     (frontmatter validity window > event anchor - admitted rungs
+    //     only) resolves it at index time via
+    //     `resolveDocumentEventTimeWindow`. Distinct from the
+    //     `event_anchor_*` columns beside them: those are the raw
+    //     materialised anchor (which rungs are recorded but never
+    //     judged), these are the bounds a time-ranged query actually
+    //     judges by, persisted so the store can aggregate them instead
+    //     of the query side re-deriving them per query.
+    //
+    //     One side NULL is a DECLARED open window (open start / open
+    //     end). Both NULL is the unmeasured state, and it is deliberately
+    //     ambiguous: either the row predates this migration and the lazy
+    //     backfill has not refreshed it, or the document declares nothing
+    //     the resolver can use. Both fall back to storage mtime at query
+    //     time, and the window census names that bucket by count rather
+    //     than pretending it is zero - unlike v11/v12, no examined-marker
+    //     column is spent on separating the two, because nothing reads
+    //     them differently.
+    //
+    //   - `pinned`: the page's per-note `pinned` frontmatter flag,
+    //     persisted at index time so ranking can consume it without
+    //     re-reading files. 1 = pinned, 0 = not pinned, NULL = not yet
+    //     persisted (same lazy story as the bounds).
+    //
+    // Additive and reindex-safe: existing rows keep NULLs until their
+    // next content change refreshes them through the indexer's document
+    // loop, so a vault whose notes declare no dates and pin nothing
+    // behaves byte-identically.
+    version: 13,
+    up(db) {
+      const docCols = db.query<{ name: string }, []>("PRAGMA table_info(documents)").all();
+      if (!docCols.some((c) => c.name === EVENT_TIME_MIN_COLUMN)) {
+        db.exec(`ALTER TABLE documents ADD COLUMN ${EVENT_TIME_MIN_COLUMN} INTEGER`);
+      }
+      if (!docCols.some((c) => c.name === EVENT_TIME_MAX_COLUMN)) {
+        db.exec(`ALTER TABLE documents ADD COLUMN ${EVENT_TIME_MAX_COLUMN} INTEGER`);
+      }
+      if (!docCols.some((c) => c.name === PINNED_COLUMN)) {
+        db.exec(`ALTER TABLE documents ADD COLUMN ${PINNED_COLUMN} INTEGER`);
+      }
+    },
+  },
 ]);
 
 /**
@@ -607,6 +655,22 @@ export const DOCUMENT_VISIBILITY_COLUMN = "visibility";
 
 /** The measured-and-empty value, so `[]` is never written as a literal. */
 export const DOCUMENT_VISIBILITY_NONE = "[]";
+
+/**
+ * The `documents` columns holding a document's RESOLVED event-time
+ * window bounds (v13, t_9e1a4b3f), and the flag holding its per-note
+ * `pinned` frontmatter state (schema half of t_f7bef96a). Named once:
+ * the migration, the store and the window census all spell them from
+ * here.
+ *
+ * The `_ms` suffix is load-bearing, as it is on `event_anchor_*`: mtime
+ * and `authored_at` on this same table are unix SECONDS, and a window
+ * bound read as seconds would move every interval comparison by three
+ * orders of magnitude.
+ */
+export const EVENT_TIME_MIN_COLUMN = "event_time_min";
+export const EVENT_TIME_MAX_COLUMN = "event_time_max";
+export const PINNED_COLUMN = "pinned";
 
 /** The `chunk_index` a page's frontmatter block lands at, when it has one. */
 const FRONTMATTER_CHUNK_INDEX = 0;

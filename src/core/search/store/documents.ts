@@ -9,6 +9,9 @@ import { Database } from "bun:sqlite";
 import { isEventAnchorSource, type EventAnchor } from "../event-anchor.ts";
 import {
   DOCUMENT_VISIBILITY_COLUMN,
+  EVENT_TIME_MAX_COLUMN,
+  EVENT_TIME_MIN_COLUMN,
+  PINNED_COLUMN,
   documentBasename,
   encodeDocumentVisibility,
 } from "../schema.ts";
@@ -24,6 +27,15 @@ import { purgeVecRowsForDocument } from "./vectors.ts";
  */
 const EXAMINED_YES = 1;
 const EXAMINED_NO = 0;
+
+/**
+ * `documents.pinned`: the per-note `pinned` frontmatter flag (v13,
+ * schema half of t_f7bef96a), named once for the same reason - SQLite
+ * has no boolean, and a bare 0/1 at each write site invites a third
+ * value nobody registered.
+ */
+const PINNED_YES = 1;
+const PINNED_NO = 0;
 
 export interface DocumentInput {
   readonly path: string; // vault-relative POSIX
@@ -62,6 +74,29 @@ export interface DocumentInput {
    *     because a hard time filter now depends on the difference.
    */
   readonly eventAnchor?: EventAnchor | null;
+  /**
+   * The document's RESOLVED event-time window bounds in unix ms (v13),
+   * resolved by `resolveDocumentEventTimeWindow` under the shared rung
+   * order (frontmatter validity window > event anchor - admitted rungs
+   * only). At least one side is non-null for a declared window; a null
+   * side is a declared open one.
+   *
+   * Absent or null on both keeps the columns NULL - the unmeasured
+   * state the query side judges by storage mtime, exactly as before
+   * these columns existed.
+   */
+  readonly eventTimeMinMs?: number | null;
+  readonly eventTimeMaxMs?: number | null;
+  /**
+   * The page's per-note `pinned` frontmatter flag (schema half of
+   * t_f7bef96a), persisted so ranking can consume it without re-reading
+   * files.
+   *
+   * ABSENT means the caller did not look, and the column is left NULL -
+   * "not pinned" and "nobody looked" are different statements, and only
+   * the first is something the page said.
+   */
+  readonly pinned?: boolean;
   /**
    * The page's normalised `visibility:` tokens, as {@link pageVisibility}
    * reads them - an empty array for a page that declares none (v12).
@@ -178,6 +213,9 @@ export function upsertDocument(db: Database, doc: DocumentInput): number {
         string | null,
         number,
         string | null,
+        number | null,
+        number | null,
+        number | null,
         string,
         string,
         string,
@@ -186,8 +224,9 @@ export function upsertDocument(db: Database, doc: DocumentInput): number {
       "INSERT INTO documents(path, basename, title, content_hash, mtime, size, page_type, authored_at, " +
         "  event_anchor_start_ms, event_anchor_end_ms, event_anchor_source, event_anchor_examined, " +
         `  ${DOCUMENT_VISIBILITY_COLUMN}, ` +
+        `  ${EVENT_TIME_MIN_COLUMN}, ${EVENT_TIME_MAX_COLUMN}, ${PINNED_COLUMN}, ` +
         "  created_at, updated_at, indexed_at) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
         "ON CONFLICT(path) DO UPDATE SET " +
         "  basename = excluded.basename, " +
         "  title = excluded.title, " +
@@ -201,6 +240,9 @@ export function upsertDocument(db: Database, doc: DocumentInput): number {
         "  event_anchor_source = excluded.event_anchor_source, " +
         "  event_anchor_examined = excluded.event_anchor_examined, " +
         `  ${DOCUMENT_VISIBILITY_COLUMN} = excluded.${DOCUMENT_VISIBILITY_COLUMN}, ` +
+        `  ${EVENT_TIME_MIN_COLUMN} = excluded.${EVENT_TIME_MIN_COLUMN}, ` +
+        `  ${EVENT_TIME_MAX_COLUMN} = excluded.${EVENT_TIME_MAX_COLUMN}, ` +
+        `  ${PINNED_COLUMN} = excluded.${PINNED_COLUMN}, ` +
         "  updated_at = excluded.updated_at, " +
         "  indexed_at = excluded.indexed_at " +
         "RETURNING id",
@@ -222,6 +264,9 @@ export function upsertDocument(db: Database, doc: DocumentInput): number {
       doc.eventAnchor === undefined ? EXAMINED_NO : EXAMINED_YES,
       // Absent means unmeasured, which is NULL - see `DocumentInput`.
       doc.visibility === undefined ? null : encodeDocumentVisibility(doc.visibility),
+      doc.eventTimeMinMs ?? null,
+      doc.eventTimeMaxMs ?? null,
+      doc.pinned === undefined ? null : doc.pinned ? PINNED_YES : PINNED_NO,
       now,
       now,
       now,

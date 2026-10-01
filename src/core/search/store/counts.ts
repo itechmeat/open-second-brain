@@ -7,6 +7,7 @@
 import { Database } from "bun:sqlite";
 
 import { SearchError } from "../search-error.ts";
+import { EVENT_TIME_MAX_COLUMN, EVENT_TIME_MIN_COLUMN } from "../schema.ts";
 import { countChunks, countChunksWithoutEmbeddings } from "./chunks.ts";
 import { countDocuments } from "./documents.ts";
 import {
@@ -76,6 +77,94 @@ export function counts(
     chunks: countChunks(db),
     embeddings: countEmbeddings(db),
     staleEmbeddings: staleEmbeddings(db, configuredModel, configuredDimension),
+  });
+}
+
+/**
+ * The event-time window census (t_9e1a4b3f): how many documents fall in
+ * a `[sinceMs, untilMs]` window, answered from the persisted
+ * `documents.event_time_min` / `event_time_max` bounds as ONE SQL
+ * aggregate instead of a full hydration pass. Deliberately a function
+ * beside {@link StoreCounts}, not a field on it: `StoreCounts` has no
+ * window to be relative to, and its consumers keep their shape.
+ */
+export interface EventTimeWindowCensus {
+  /** Every indexed document - the denominator of the other buckets. */
+  readonly documents: number;
+  /** Documents whose resolved event-time window is persisted (at least one bound non-null). */
+  readonly declared: number;
+  /**
+   * Declared documents whose window intersects the query window, under
+   * exactly the rule `eventTimeInRange` applies at query time: a window
+   * is out only when a non-null bound proves it (`event_time_min >
+   * until`, or `event_time_max < since`), with open window sides and
+   * open query edges handled symmetrically.
+   */
+  readonly intersecting: number;
+  /**
+   * Documents with no persisted window - the unmeasured bucket: rows
+   * that predate the lazy backfill and rows that declare nothing the
+   * resolver can use. The query side judges these by storage mtime,
+   * which is what the bucket is named for. They are deliberately NOT
+   * counted by their mtime here - that would re-import storage time
+   * into an event-time census - so `declared + mtimeFallback` always
+   * equals {@link documents}.
+   */
+  readonly mtimeFallback: number;
+}
+
+/**
+ * Take the census. `sinceMs` / `untilMs` are unix ms and mirror
+ * `ResolvedTimeRange`: a null edge is an OPEN one, never zero.
+ */
+export function eventTimeWindowCensus(
+  db: Database,
+  sinceMs: number | null,
+  untilMs: number | null,
+): EventTimeWindowCensus {
+  const row = db
+    .query<
+      {
+        documents: number;
+        declared: number;
+        intersecting: number;
+        mtime_fallback: number;
+      },
+      { $since: number | null; $until: number | null }
+    >(
+      `SELECT
+         COUNT(*) AS documents,
+         COUNT(*) FILTER (
+           WHERE ${EVENT_TIME_MIN_COLUMN} IS NOT NULL OR ${EVENT_TIME_MAX_COLUMN} IS NOT NULL
+         ) AS declared,
+         COUNT(*) FILTER (
+           WHERE (${EVENT_TIME_MIN_COLUMN} IS NOT NULL OR ${EVENT_TIME_MAX_COLUMN} IS NOT NULL)
+             AND (${EVENT_TIME_MIN_COLUMN} IS NULL OR $until IS NULL
+                  OR ${EVENT_TIME_MIN_COLUMN} <= $until)
+             AND (${EVENT_TIME_MAX_COLUMN} IS NULL OR $since IS NULL
+                  OR ${EVENT_TIME_MAX_COLUMN} >= $since)
+         ) AS intersecting,
+         COUNT(*) FILTER (
+           WHERE ${EVENT_TIME_MIN_COLUMN} IS NULL AND ${EVENT_TIME_MAX_COLUMN} IS NULL
+         ) AS mtime_fallback
+       FROM documents`,
+    )
+    .get({ $since: sinceMs, $until: untilMs });
+  if (row === null) {
+    // Unreachable while the query is an unfiltered aggregate, and
+    // therefore exactly the shape that must not degrade to a zero count:
+    // a zero here would be a clean census nobody took.
+    throw new SearchError(
+      "INDEX_UNREADABLE",
+      "event-time window census: the aggregate over `documents` returned no row, so no census " +
+        "was taken. Run: o2b search check",
+    );
+  }
+  return Object.freeze({
+    documents: row.documents,
+    declared: row.declared,
+    intersecting: row.intersecting,
+    mtimeFallback: row.mtime_fallback,
   });
 }
 
