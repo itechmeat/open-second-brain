@@ -235,9 +235,10 @@ const HOST_MEMORY_WRITE_CODES = exhaustiveMembers<HostMemoryWriteErrorCode>()([
  * The token a count-guard refusal is reported under on the wire. The core
  * `CountGuardError` carries `COUNT_GUARD`; `brain_note_lifecycle` has
  * always answered it as this lower-case token, and this registry keeps the
- * wire spelling rather than the class field.
+ * wire spelling rather than the class field. `brain_note_lifecycle` imports
+ * it, so the spelling has one definition.
  */
-const COUNT_GUARD_WIRE_CODE = "count_guard";
+export const COUNT_GUARD_WIRE_CODE = "count_guard";
 
 /**
  * Every code the MCP boundary may answer with: the generic tokens plus

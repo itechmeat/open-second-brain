@@ -43,14 +43,12 @@ import {
 } from "../../core/brain/notes/create-note.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
+import { COUNT_GUARD_WIRE_CODE } from "../tool-error-codes.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceBoolOptional, coerceStr } from "../coerce.ts";
 import { coerceNonNegativeInteger, readCountGuardArgs } from "./shared.ts";
 
 const TOOL = "brain_note_lifecycle";
-
-/** The `data.code` a count-guard refusal reports itself under. */
-const COUNT_GUARD_CODE = "count_guard";
 
 /** Project the frozen core result into the tool's snake_cased response. */
 function renderResult(res: NoteLifecycleResult): Record<string, unknown> {
@@ -150,7 +148,7 @@ async function toolBrainNoteLifecycle(
     }
     if (err instanceof CountGuardError) {
       throw new MCPError(INVALID_PARAMS, `${TOOL}: ${err.message}`, {
-        code: COUNT_GUARD_CODE,
+        code: COUNT_GUARD_WIRE_CODE,
         matched: err.matched,
         expected: err.expected,
       });
