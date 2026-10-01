@@ -445,12 +445,13 @@ describe("the two surfaces refuse the same values, not only the same names", () 
   test("retry_tasks longer than the lane has tasks is refused, not merely advertised", async () => {
     // The schema advertises the widest list any install can need (the
     // built-ins plus the custom-task cap); the handler refuses against
-    // the tasks THIS install declared, which is the number in the message.
-    // `maxItems` on the schema is advertisement: no JSON-Schema validator
-    // runs on the request path, and the unknown-argument guard checks
-    // names rather than shapes. So the handler owes the check itself -
-    // without it a thousand-entry array was accepted while the schema
-    // said it could not be.
+    // the tasks THIS install declared. `maxItems` on the schema is
+    // advertisement: no JSON-Schema validator runs on the request path,
+    // and the unknown-argument guard checks names rather than shapes. So
+    // the handler owes the check itself - without it a thousand-entry
+    // array was accepted while the schema said it could not be. After
+    // deduplication a longer list always names an unknown task, so it is
+    // refused by name, in the same words the CLI uses.
     const server = new MCPServer({ vault, configPath });
     await server.handleRequest({
       jsonrpc: JSONRPC_VERSION,
@@ -480,7 +481,7 @@ describe("the two surfaces refuse the same values, not only the same names", () 
       },
     })) as { error?: { code: number; message: string } };
     expect(res.error?.code).toBe(INVALID_PARAMS);
-    expect(res.error?.message).toContain(`at most ${declared}`);
+    expect(res.error?.message).toContain("retry_tasks names no lane task: task-0");
   });
 });
 

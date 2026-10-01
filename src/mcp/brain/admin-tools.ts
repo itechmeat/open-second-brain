@@ -438,18 +438,11 @@ async function toolBrainMaintenance(
   // Refused BY NAME, exactly as the CLI refuses a `--retry` typo: a name
   // this lane does not dispatch retries nothing, and silently accepting
   // it would leave the caller reading a refusal it believed it had just
-  // asked past. The bound is the tasks this install registered.
-  // Deduplicated before the bound: naming one task twice is one retry,
-  // not a request over the limit.
+  // asked past. The bound is the tasks this install registered: once the
+  // names are deduplicated, a list longer than that always names an
+  // unknown task, so the one refusal below covers it with the CLI's words.
   const requestedRetries = [...new Set(coerceStrList(args, "retry_tasks"))];
   const registered = new Set<string>(lane.taskNames);
-  if (requestedRetries.length > registered.size) {
-    throw new MCPError(
-      INVALID_PARAMS,
-      `brain_maintenance run: retry_tasks accepts at most ${registered.size} entries ` +
-        `(one per registered task: ${lane.taskNames.join(", ")}), got ${requestedRetries.length}`,
-    );
-  }
   const unknownRetries = requestedRetries.filter((name) => !registered.has(name));
   if (unknownRetries.length > 0) {
     throw new MCPError(
