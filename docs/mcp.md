@@ -266,7 +266,7 @@ generic tokens:
 | `output_contract_failed` | the tool produced a payload that does not satisfy its own `outputSchema` |
 | `config_unreadable` | the configuration file could not be read |
 | `skill_not_found`, `skill_invalid_path`, `unknown_skill` | a skill tool could not resolve the named skill, refused its path, or does not know it |
-| `unknown_operation` | a tool that dispatches on an `operation`, `op` or `action` argument (or a `brain_write_batch` operation's `op`) was asked for one it does not have; every operation-dispatching tool shares this code |
+| `unknown_operation` | a tool that dispatches on an `operation`, `op` or `action` argument (or a `brain_write_batch` operation's `op`) was asked for one it does not have; every operation-dispatching tool shares this code, except that a `brain_memory_bridge` host write keeps its pinned `invalid_action` |
 | `invalid_status` | `brain_trigger` was given a status outside its vocabulary |
 | `trigger_transition_refused` | a trigger transition was refused; an absent trigger and one the caller may not see answer with the same code and the same message |
 | `write_session_unknown`, `write_session_terminal`, `session_id_required` | a write-session call named no session, an unknown one, or one that has already ended |
