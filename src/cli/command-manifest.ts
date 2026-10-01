@@ -303,7 +303,41 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("attr", "Assign, remove, or show typed-page attribute fields"),
         command("tiers", "Check, restore, or accept identity-field drift"),
         command("secret", "Capability-gated secret custody: set, list, rm, run"),
-        command("maintenance", "Quiet-window, lease-guarded heavy maintenance lane"),
+        command(
+          "maintenance",
+          "Quiet-window, lease-guarded heavy maintenance lane",
+          [],
+          [
+            // The whole `run` schema: the lane is the cron entry point, and
+            // `--cron-template` is the only way to reach its recipe, so a
+            // flag missing here would be missing from help and completions.
+            command(
+              "run",
+              "Run the lane tasks behind its gates, or print a cron or systemd recipe with --cron-template (writes nothing)",
+              [
+                flag("vault", "string"),
+                flag("force", "boolean"),
+                flag("retry", "string-array"),
+                flag("window", "string"),
+                flag("tz", "string"),
+                flag("busy-minutes", "string"),
+                flag("busy-threshold", "string"),
+                flag("agent", "string"),
+                flag("progress", "boolean"),
+                flag("json", "boolean"),
+                flag("force-cost", "boolean"),
+                flag("cron-template", "boolean"),
+                flag("interval", "string"),
+                flag("format", "string"),
+              ],
+            ),
+            command("status", "Render the lane lease holder and recent journal", [
+              flag("vault", "string"),
+              flag("limit", "string"),
+              flag("json", "boolean"),
+            ]),
+          ],
+        ),
         command("audit", "Render mutation audit trail"),
         command(
           "generation-reports",

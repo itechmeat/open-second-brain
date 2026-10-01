@@ -34,6 +34,7 @@ import { join } from "node:path";
 
 import {
   CLI_COMMAND_MANIFEST,
+  nestedCommand,
   nestedCommandNames,
   type CliCommandManifest,
 } from "../../src/cli/command-manifest.ts";
@@ -273,9 +274,42 @@ describe("the repaired manifest reaches its two consumers", () => {
     // Completion flag lists are built by walking the whole manifest, so a
     // declared flag at any depth reaches every shell.
     const zsh = renderCompletions("zsh", CLI_COMMAND_MANIFEST);
-    for (const token of ["--cron-template", "--interval", "--fail-on-health", "--project"]) {
+    for (const token of [
+      "--cron-template",
+      "--interval",
+      "--format",
+      "--fail-on-health",
+      "--project",
+    ]) {
       expect(`${token}: ${zsh.includes(token)}`).toBe(`${token}: true`);
     }
+  });
+
+  test("brain maintenance models run and status, with the recipe flags on run", () => {
+    // The lane is the cron entry point, and `run --cron-template` is the
+    // only way to reach its recipe; a flag the manifest does not declare
+    // completes nowhere and is invisible to `o2b help --json`.
+    const maintenance = nestedCommand("brain", "maintenance");
+    expect((maintenance?.commands ?? []).map((c) => c.name).toSorted()).toEqual(["run", "status"]);
+    const run = maintenance?.commands?.find((c) => c.name === "run");
+    const runFlags = new Set((run?.flags ?? []).map((f) => f.name));
+    for (const name of [
+      "cron-template",
+      "interval",
+      "format",
+      "window",
+      "tz",
+      "retry",
+      "force",
+      "force-cost",
+    ]) {
+      expect(`run --${name}: ${runFlags.has(name)}`).toBe(`run --${name}: true`);
+    }
+    const status = maintenance?.commands?.find((c) => c.name === "status");
+    const statusFlags = new Set((status?.flags ?? []).map((f) => f.name));
+    expect(`status --cron-template: ${statusFlags.has("cron-template")}`).toBe(
+      "status --cron-template: false",
+    );
   });
 
   test("help --json carries the partner codegraph verbs", async () => {
