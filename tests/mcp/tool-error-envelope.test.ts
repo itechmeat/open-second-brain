@@ -18,7 +18,12 @@ import { join } from "node:path";
 
 import { SafeguardTimeoutError } from "../../src/core/brain/safeguard.ts";
 import { PROGRESS_META_KEY } from "../../src/mcp/progress.ts";
-import { INVALID_PARAMS, JSONRPC_VERSION, MCPError } from "../../src/mcp/protocol.ts";
+import {
+  INVALID_PARAMS,
+  JSONRPC_VERSION,
+  MCPError,
+  MCPErrorDataArrayError,
+} from "../../src/mcp/protocol.ts";
 import { MCPServer } from "../../src/mcp/server.ts";
 import { serveStdioFromString } from "../../src/mcp/stdio.ts";
 import { TOOL_ERROR_META_KEY, TOOL_ERROR_SCHEMA } from "../../src/mcp/tool-error-codes.ts";
@@ -135,6 +140,22 @@ describe("channel A: error.data.code on every JSON-RPC error", () => {
       "declared_arguments",
       "code",
     ]);
+  });
+
+  test("a non-string code member is replaced by the default", async () => {
+    const res = await call(
+      serverWith(() => {
+        throw new MCPError(INVALID_PARAMS, "refused", { code: 42, limit: 3 });
+      }),
+    );
+    expect(res["error"]["data"]).toEqual({ code: "invalid_params", limit: 3 });
+  });
+
+  test("an array is refused as data by name, never merged into", () => {
+    // `{ ...[a, b], code }` would go out as `{"0":a,"1":b,"code":...}`.
+    expect(() => new MCPError(INVALID_PARAMS, "refused", ["a", "b"])).toThrow(
+      MCPErrorDataArrayError,
+    );
   });
 
   test("a plain throw outside tools/call is internal_error and is logged", async () => {

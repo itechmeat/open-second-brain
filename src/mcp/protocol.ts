@@ -54,8 +54,20 @@ export interface JsonRpcNotification {
  * `object` rather than a `Record` so the named payload interfaces the
  * refusal modules declare (argument guard, reach refusal, frozen vault)
  * are accepted without an index signature; every site passes a record.
+ *
+ * `object` also admits an array, which the merge would turn into numbered
+ * keys, so the {@link MCPError} constructor refuses one by name. A `code`
+ * member that is not a string is replaced by the JSON-RPC default.
  */
 export type MCPErrorData = object;
+
+/** An {@link MCPError} was built with an array as its `data`. */
+export class MCPErrorDataArrayError extends TypeError {
+  constructor() {
+    super("MCPError data must be a record, not an array: wrap the list in a named member");
+    this.name = "MCPErrorDataArrayError";
+  }
+}
 
 /** A JSON-RPC error a handler throws, answered through `errorResponse`. */
 export class MCPError extends Error {
@@ -63,6 +75,7 @@ export class MCPError extends Error {
   readonly data: MCPErrorData | undefined;
 
   constructor(code: JsonRpcErrorCode, message: string, data?: MCPErrorData) {
+    if (Array.isArray(data)) throw new MCPErrorDataArrayError();
     super(message);
     this.name = "MCPError";
     this.code = code;

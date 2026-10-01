@@ -207,6 +207,8 @@ in the default for the numeric JSON-RPC code: `parse_error` (-32700),
 `tool`, `unknown_arguments` or `errors` are kept as they were, with
 `code` added after them. A refusing site's code is itself a registry
 member; the server checks it and names an unregistered one on stderr.
+A `code` member that is not a string is replaced by the default, and
+`data` is always an object, never an array.
 
 ```json
 {
