@@ -1,7 +1,7 @@
 # Stable error codes at the MCP boundary - every tool failure and every rerank skip carries a closed, enumerated code
 
 **Status:** draft (phase 1 spec review applied)
-**Author:** @claude-devbox-agent (via feature-release-playbook)
+**Author:** release orchestrator (via feature-release-playbook)
 **Audience:** implementation
 **Cards:** t_40f13576 (stable machine-readable error codes on every MCP tool error), t_c4b85802 (reranker liveness as a typed degradation code, a doctor check, a rerank sunset table)
 **Base:** origin/main a1ecfe7b (v1.65.0), branch `feat/mcp-error-codes`
