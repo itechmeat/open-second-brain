@@ -24,6 +24,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { applyMigrations } from "../../../src/core/search/schema.ts";
+import { closeDatabase } from "../../../src/core/sqlite-close.ts";
 import { upsertDocument } from "../../../src/core/search/store/documents.ts";
 import { replaceChunks } from "../../../src/core/search/store/chunks.ts";
 import {
@@ -43,6 +44,13 @@ import type { ResolvedEmbeddingConfig } from "../../../src/core/search/types.ts"
 
 const FIXED_STAMP = "2026-01-01T00:00:00.000Z";
 
+/**
+ * Recursive removal that rides out a transient Windows refusal (EBUSY,
+ * EPERM, ENOTEMPTY while a handle is still closing) - the same posture
+ * tests/setup.ts and tests/helpers/temp-dir.ts use for every temp tree.
+ */
+const REMOVE_TREE = { recursive: true, force: true, maxRetries: 5, retryDelay: 100 } as const;
+
 let tmp: string;
 let db: Database;
 
@@ -53,8 +61,14 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  db.close();
-  rmSync(tmp, { recursive: true, force: true });
+  // `db.close()` is the lazy sqlite3_close_v2: with the unfinalized cached
+  // statements `db.query()` leaves behind, the connection turns into a
+  // zombie that keeps brain.sqlite open until GC. Invisible on POSIX, but
+  // on Windows the still-open file makes the rm below fail with EBUSY, so
+  // close the way the product does - finalizing statements NOW
+  // (src/core/sqlite-close.ts).
+  closeDatabase(db);
+  rmSync(tmp, REMOVE_TREE);
 });
 
 function semantic(overrides: Partial<ResolvedEmbeddingConfig>): ResolvedEmbeddingConfig {
