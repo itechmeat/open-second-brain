@@ -113,7 +113,7 @@ The full router with readiness criteria is [`install.md`](https://github.com/ite
 
 ## What is new
 
-1.63.0 binds a prose mention to a page only when exactly one page carries the term, turns relative imports and JSX component usage into code-structure edges, lets a `brain_write_batch` retry apply once through a request ID, adds a keyword match breadth to search, and gives every append-only Brain ledger one file per synced device. Every release is described in the [CHANGELOG](https://github.com/itechmeat/open-second-brain/blob/main/CHANGELOG.md).
+1.64.0 teaches search what the operator marked and when things happened (persisted per-document event-time windows, a bounded pinned boost, opt-in rerank and metadata-boost guards, one hybrid-path deadline), teaches diagnostics to prove function instead of only inspecting state (`o2b doctor selftest`, probes for the installer's registered commands and the workspace write-back contract, honest maintenance timeouts with announced and receipted embedding spend), and names residue where it lands (near-duplicate write advisories, slug-collision and inline-tag hygiene findings, hub candidates staged at inbox drain). Every release is described in the [CHANGELOG](https://github.com/itechmeat/open-second-brain/blob/main/CHANGELOG.md).
 
 ## Documentation
 
