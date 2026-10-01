@@ -634,20 +634,20 @@ function flattenReason(message: string): string {
 // ----- Registered-command probe (t_3477c9e8) --------------------------------
 
 /**
- * Top-level JSON objects an OSB MCP registration may live under: the
+ * Top-level JSON objects an Open Second Brain MCP registration may live under: the
  * json-merge default (`mcpServers` - cursor, kiro, gemini-cli and the
  * generic printout) and opencode's `mcp`.
  */
 const JSON_MCP_TOP_LEVEL_KEYS: ReadonlyArray<string> = ["mcpServers", "mcp"];
 
-/** The OSB entry names, as JSON keys and as `[mcp_servers.<name>]` tables. */
+/** The Open Second Brain entry names, as JSON keys and as `[mcp_servers.<name>]` tables. */
 const OSB_ENTRY_KEYS: ReadonlySet<string> = new Set([OSB_KEY_FULL, OSB_KEY_WRITER]);
 
 /** Matches exactly the `[mcp_servers.<name>]` table header grok/codex write. */
 const TOML_MCP_SERVER_HEADER = /^\[mcp_servers\.([^[\]]+)\]$/;
 
 /**
- * One registered command extracted from a client config: the OSB entry
+ * One registered command extracted from a client config: the Open Second Brain entry
  * name plus the `command`/`args` exactly as the config records them.
  */
 interface RegisteredCommandEntry {
@@ -658,9 +658,9 @@ interface RegisteredCommandEntry {
 
 /**
  * What one recorded config file yielded. `none` and `malformed` are
- * distinct on purpose: a config with no OSB command entry has nothing to
+ * distinct on purpose: a config with no Open Second Brain command entry has nothing to
  * probe (and registration drift is the installed-runtimes probe's
- * finding), while OSB entries that exist but carry no usable command stop
+ * finding), while Open Second Brain entries that exist but carry no usable command stop
  * the measurement - which is the `unknown` vocabulary, not a skip.
  */
 type CommandExtraction =
@@ -699,7 +699,7 @@ function statusForProbeOutcome(outcome: CommandProbeOutcome): ReadinessStatus {
 
 /**
  * What is registered, and does it still resolve? Reads the install
- * manifest, re-reads every recorded client config, extracts the OSB
+ * manifest, re-reads every recorded client config, extracts the Open Second Brain
  * `command`/`args` the install wrote (JSON `mcpServers`/`mcp` keys, or the
  * `[mcp_servers.*]` TOML tables grok and codex write), and probes each
  * command word via `command-probe.ts`.
@@ -716,7 +716,7 @@ function statusForProbeOutcome(outcome: CommandProbeOutcome): ReadinessStatus {
  * A bare name this process's PATH does not carry is `unknown` - the host
  * client spawns with its own PATH, which may still resolve it. A recorded
  * config that is gone, or that cannot be read into a command, is
- * `unknown` (unmeasured, not broken); a config with no OSB command entry
+ * `unknown` (unmeasured, not broken); a config with no Open Second Brain command entry
  * at all is `skipped` by name - nothing-to-probe is a verdict, not
  * silence.
  */
@@ -822,14 +822,14 @@ function registeredCommandRow(
       return {
         target,
         status: READINESS_STATUS.skipped,
-        detail: `no OSB command entry found in ${configPath} - nothing to probe`,
+        detail: `no Open Second Brain command entry found in ${configPath} - nothing to probe`,
       };
     case "malformed":
       return {
         target,
         status: READINESS_STATUS.unknown,
         detail:
-          `registered OSB entry in ${configPath} is not a usable command: ` +
+          `registered Open Second Brain entry in ${configPath} is not a usable command: ` +
           flattenReason(extraction.reason),
       };
     case "entries":
@@ -881,9 +881,9 @@ function extractRegisteredCommands(raw: string): CommandExtraction {
 }
 
 /**
- * Read the OSB entries out of a JSON client config. Returns `null` when
+ * Read the Open Second Brain entries out of a JSON client config. Returns `null` when
  * the text is not JSON at all, so the TOML reader gets its turn - grok
- * and codex record the very same OSB names as `[mcp_servers.*]` tables.
+ * and codex record the very same Open Second Brain names as `[mcp_servers.*]` tables.
  */
 function extractFromJsonConfig(raw: string): CommandExtraction | null {
   // Editors may save a BOM at the head; JSON.parse refuses it (the same
@@ -915,7 +915,7 @@ function extractFromJsonConfig(raw: string): CommandExtraction | null {
   if (malformed.length > 0) {
     return {
       kind: "malformed",
-      reason: `OSB entries ${malformed.join(", ")} carry no usable command/args`,
+      reason: `Open Second Brain entries ${malformed.join(", ")} carry no usable command/args`,
     };
   }
   return { kind: "none" };
@@ -950,7 +950,7 @@ function stringArgsOrEmpty(candidate: unknown): ReadonlyArray<string> | null {
 }
 
 /**
- * Read the OSB entries out of a grok/codex-style TOML config, by
+ * Read the Open Second Brain entries out of a grok/codex-style TOML config, by
  * line-section and only for the value shapes `grok-config.ts` writes: a
  * quoted-string `command` and a single-line string-array `args`. Codex's
  * CLI-serialized layout has no published grammar and is not guessed at -
@@ -989,7 +989,7 @@ function extractFromTomlConfig(raw: string): CommandExtraction {
   if (malformed.length > 0) {
     return {
       kind: "malformed",
-      reason: `OSB tables ${malformed.join(", ")} declare no parseable command`,
+      reason: `Open Second Brain tables ${malformed.join(", ")} declare no parseable command`,
     };
   }
   return { kind: "none" };

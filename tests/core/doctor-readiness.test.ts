@@ -78,7 +78,7 @@ function writeInstallManifest(body: string): void {
   writeFileSync(path, body);
 }
 
-/** A client config whose OSB entries carry the given command word. */
+/** A client config whose Open Second Brain entries carry the given command word. */
 function clientConfig(
   path: string,
   command: unknown,
@@ -506,7 +506,7 @@ describe("probeRegisteredCommands", () => {
     expect(v.detail).toContain(missing);
   });
 
-  test("a config without an OSB command entry is skipped per-entry, naming the file", async () => {
+  test("a config without an Open Second Brain command entry is skipped per-entry, naming the file", async () => {
     writeConfig("");
     const aiderConf = join(home, ".aider.conf.yml");
     mkdirSync(dirname(aiderConf), { recursive: true });

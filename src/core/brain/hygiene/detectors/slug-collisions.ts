@@ -17,7 +17,7 @@
  * (`paths.ts`): attempt 1 is the bare base, attempts 2..n append
  * `-2`, `-3`, … as canonical decimals, so only unpadded numbers >= 2
  * count as ladder suffixes (`topic-1` and `topic-02` are distinct
- * intended slugs). Cross-directory same-stem is NOT a collision - OSB
+ * intended slugs). Cross-directory same-stem is NOT a collision - Open Second Brain
  * never flattens paths on write. Brain-prefix allocations (pref-,
  * sig-, cap-, ret-) enter via their final basenames, without parsing
  * the prefix off. Lost-race `-2` pairs are reported deliberately: a
