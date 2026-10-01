@@ -136,6 +136,7 @@ export const STATE_SURFACE_ID = Object.freeze({
   decisionReceipts: "decision_receipts",
   lineageLedger: "lineage_ledger",
   freezeMarker: "freeze_marker",
+  repairCandidates: "repair_candidates",
   writeImages: "write_images",
   anticipatoryCache: "anticipatory_cache",
   exactState: "exact_state",
@@ -298,6 +299,7 @@ const TRUTH_DIR = "truth";
 const BRAIN_INTERNAL_STATE_DIR = ".state";
 const LINEAGE_LEDGER_FILE = "session-lineage.jsonl";
 const FROZEN_MARKER_FILE = "frozen.json";
+const REPAIR_CANDIDATES_FILE = "repair-candidates.jsonl";
 const WRITE_IMAGES_DIR = "write-images";
 const ANTICIPATORY_DIR = "anticipatory";
 const SEARCH_STATE_DIR = "search";
@@ -777,6 +779,20 @@ export const STATE_SURFACES: ReadonlyArray<StateSurface> = Object.freeze([
       "by hand is the same act as `o2b brain unfreeze` minus the log event that would have " +
       "recorded who lifted the stop.",
     sources: ["src/core/brain/freeze-marker.ts"],
+  },
+  {
+    id: STATE_SURFACE_ID.repairCandidates,
+    label: "staged hub candidates",
+    tier: STATE_TIER.vaultContent,
+    derive: brainTree(BRAIN_INTERNAL_STATE_DIR, REPAIR_CANDIDATES_FILE),
+    override_env: null,
+    override_config_key: null,
+    carries_memory: false,
+    reason:
+      "The area-hub decision an inbox drain made for each captured idea page, one record per " +
+      "page, waiting for `o2b brain repair-lane` to propose or refuse the edge. Deleting it " +
+      "loses only those pending proposals; the next drain of a capture stages its record again.",
+    sources: ["src/core/brain/link-graph/hub-candidates.ts"],
   },
   {
     id: STATE_SURFACE_ID.writeImages,

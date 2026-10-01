@@ -62,6 +62,7 @@ import { receiptsDir } from "../../../src/core/brain/decisions/receipts.ts";
 import { anticipatoryCachePath } from "../../../src/core/brain/anticipatory-cache.ts";
 import { continuityLogPath } from "../../../src/core/brain/continuity/store.ts";
 import { frozenMarkerPath } from "../../../src/core/brain/freeze-marker.ts";
+import { repairCandidatesStorePath } from "../../../src/core/brain/link-graph/hub-candidates.ts";
 import { sessionLineageLedgerPath } from "../../../src/core/brain/lineage/ledger.ts";
 import { appendJournal, MAINTENANCE_VERDICT } from "../../../src/core/brain/maintenance/journal.ts";
 import { acquireLease, MAINTENANCE_LEASE_NAME } from "../../../src/core/brain/maintenance/lease.ts";
@@ -275,6 +276,7 @@ const RESOLVER_BINDINGS: ReadonlyArray<readonly [StateSurfaceId, (vault: string)
     ["decision_receipts", (v) => receiptsDir(v)],
     ["lineage_ledger", (v) => sessionLineageLedgerPath(v)],
     ["freeze_marker", (v) => frozenMarkerPath(v)],
+    ["repair_candidates", (v) => repairCandidatesStorePath(v)],
     ["write_images", (v) => writeImagesDir(v)],
     ["anticipatory_cache", (v) => dirname(anticipatoryCachePath(v, "root-session"))],
     ["exact_state", (v) => brainStateDir(v)],

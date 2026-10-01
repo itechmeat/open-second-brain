@@ -24,12 +24,20 @@
  *
  * The staged records land in ONE JSONL file under `Brain/.state/` that
  * `o2b brain repair-lane` merges with its graph-collected candidates. The
- * store is logically append-only - a record is only ever added, never
- * re-decided or removed - and an identical record is not staged twice, so a
- * re-routed capture (route ok, archive failed, rerun) converges to one
- * record. Zero new write paths: the only artifact is this internal-state
+ * store holds at most one record per routed page - the newest decision -
+ * so a re-routed capture (route ok, archive failed, rerun) converges to one
+ * record, and a record whose routed page no longer exists is pruned on the
+ * next stage, so the file stays bounded by the pages it describes. A
+ * corrupt line is dropped on that rewrite and counted, never thrown at the
+ * drain. Zero new write paths: the only artifact is this internal-state
  * file, written through the shared atomic writer, and the edge lands
  * exclusively through the lane's apply + confirm phrase + holdout gate.
+ *
+ * Locking, stated rather than hidden: the drain runs under no lease, so two
+ * concurrent drains can race this read-modify-write and the later rename
+ * wins. The losing record is not lost for good - the next drain of that
+ * capture or the next stage re-derives it - and the atomic writer never
+ * lands a torn file.
  */
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
@@ -120,7 +128,26 @@ function ambiguousHubReason(hubs: ReadonlyArray<string>, bucket: string): string
  * escapes the vault - a caller that names no routed page gets a named
  * refusal, not a silent structural answer about nothing.
  */
-export function selectHubCandidate(vault: string, routedRelPath: string): HubSelection {
+/**
+ * The pages and thresholds hub selection reads. Load it once per drain and
+ * pass it to every {@link selectHubCandidate} call: it is a full-vault
+ * parse, and the routed page is excluded by path, so a pool loaded before
+ * the drain's own writes answers every idea of that drain.
+ */
+export interface HubPagePool {
+  readonly pages: ReturnType<typeof loadPages>;
+  readonly thresholds: ReturnType<typeof resolveHubThresholds>;
+}
+
+export function loadHubPagePool(vault: string): HubPagePool {
+  return { pages: loadPages(vault), thresholds: resolveHubThresholds(vault) };
+}
+
+export function selectHubCandidate(
+  vault: string,
+  routedRelPath: string,
+  pool: HubPagePool = loadHubPagePool(vault),
+): HubSelection {
   const routedRel = canonicalNotePath(routedRelPath);
   let routedAbs: string;
   try {
@@ -137,12 +164,11 @@ export function selectHubCandidate(vault: string, routedRelPath: string): HubSel
   const routedBucket = compositeScopeKey(routedScope);
   const bucketDisplay = displayScopeBucket(routedScope);
 
-  const thresholds = resolveHubThresholds(vault);
   const hubs: string[] = [];
-  for (const page of loadPages(vault)) {
+  for (const page of pool.pages) {
     if (page.rel === routedRel) continue;
     if (compositeScopeKey(scopeFromFrontmatter(page.meta)) !== routedBucket) continue;
-    if (!isHubBody(page.body, thresholds, { selfTarget: selfTargetFor(page.rel) })) continue;
+    if (!isHubBody(page.body, pool.thresholds, { selfTarget: selfTargetFor(page.rel) })) continue;
     hubs.push(page.rel);
   }
 
@@ -232,12 +258,8 @@ function refusalRecord(refusal: HubRefusal): RefusalRecord {
   };
 }
 
-/** Canonical dedup key of a record; field order is fixed by the builders. */
-function recordKey(record: StagedRecord): string {
-  return JSON.stringify(record);
-}
-
-function storePath(vault: string): string {
+/** Absolute path of the staged store; the state-surface catalogue binds to it. */
+export function repairCandidatesStorePath(vault: string): string {
   return join(vault, BRAIN_INTERNAL_STATE_REL, REPAIR_CANDIDATES_STORE_FILE);
 }
 
@@ -308,43 +330,73 @@ function parseRecordLine(line: string, lineNumber: number): StagedRecord {
   return { kind, source, target, strength, confidence, action, reason };
 }
 
-function parseStore(path: string): StagedRecord[] {
-  if (!existsSync(path)) return [];
+interface ParsedStore {
+  readonly records: StagedRecord[];
+  /** One named reason per line that failed validation. */
+  readonly corrupt: string[];
+}
+
+function parseStore(path: string): ParsedStore {
   const records: StagedRecord[] = [];
+  const corrupt: string[] = [];
+  if (!existsSync(path)) return { records, corrupt };
   const lines = readFileSync(path, "utf8").split("\n");
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!.trim();
     if (line.length === 0) continue;
-    records.push(parseRecordLine(line, i + 1));
+    try {
+      records.push(parseRecordLine(line, i + 1));
+    } catch (err) {
+      if (!(err instanceof HubCandidateError)) throw err;
+      corrupt.push(err.message);
+    }
   }
-  return records;
+  return { records, corrupt };
+}
+
+/** What one stage did to the store besides adding its record. */
+export interface HubStageResult {
+  /** Corrupt lines dropped by this rewrite, each counted once. */
+  readonly skippedCorrupt: number;
+  /** Records dropped because their routed page no longer exists. */
+  readonly pruned: number;
 }
 
 /**
- * Stage the selection's record in the store. Identical records are not
- * staged twice, so re-routing the same capture converges; a refusal already
- * staged stays - the store is history, never re-decided.
+ * Stage the selection's record in the store, replacing any earlier record
+ * for the same routed page, so re-routing the same capture converges to
+ * its newest decision. Earlier records whose routed page no longer exists
+ * are pruned, and corrupt lines are dropped; both are counted in the
+ * result rather than thrown, so one bad line cannot fail a whole drain.
  *
- * The write goes through the shared atomic writer, not a raw append: the
- * store is read back before every stage (the dedup), so staging is
- * read-merge-write over the whole record set, and a rename-based write can
- * never land the torn line a crash mid-append could - a line this store's
- * strict reader would refuse.
+ * The write goes through the shared atomic writer, not a raw append:
+ * staging is read-merge-write over the whole record set, and a
+ * rename-based write can never land the torn line a crash mid-append
+ * could - a line this store's strict reader would refuse.
  */
-export function stageHubSelection(vault: string, selection: HubSelection): void {
+export function stageHubSelection(vault: string, selection: HubSelection): HubStageResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
-  const path = storePath(vault);
+  const path = repairCandidatesStorePath(vault);
   const record =
     selection.outcome === "candidate"
       ? candidateRecord(selection.candidate)
       : refusalRecord(selection.refusal);
-  const records = parseStore(path);
-  const staged = new Set(records.map(recordKey));
-  if (staged.has(recordKey(record))) return;
-  records.push(record);
+  const { records, corrupt } = parseStore(path);
+  const kept: StagedRecord[] = [];
+  let pruned = 0;
+  for (const existing of records) {
+    if (existing.source === record.source) continue;
+    if (!existsSync(join(vault, existing.source))) {
+      pruned += 1;
+      continue;
+    }
+    kept.push(existing);
+  }
+  kept.push(record);
   mkdirSync(dirname(path), { recursive: true });
-  atomicWriteFileSync(path, `${records.map((r) => JSON.stringify(r)).join("\n")}\n`);
+  atomicWriteFileSync(path, `${kept.map((r) => JSON.stringify(r)).join("\n")}\n`);
+  return { skippedCorrupt: corrupt.length, pruned };
 }
 
 /** The staged candidates and refusals, ready to merge into a lane run. */
@@ -355,12 +407,15 @@ export interface StagedHubRecords {
 
 /**
  * Read the staged store back. A missing file is an empty store, not an
- * error; a corrupt or foreign record is a named {@link HubCandidateError}.
+ * error; a corrupt or foreign record is a named {@link HubCandidateError}
+ * (the next stage drops and counts it).
  */
 export function loadStagedHubRecords(vault: string): StagedHubRecords {
   const candidates: RepairCandidate[] = [];
   const refusals: RepairDecision[] = [];
-  for (const record of parseStore(storePath(vault))) {
+  const { records, corrupt } = parseStore(repairCandidatesStorePath(vault));
+  if (corrupt.length > 0) throw new HubCandidateError(corrupt[0]!);
+  for (const record of records) {
     const strength = record.strength as IdentityStrength;
     if (record.kind === "candidate") {
       candidates.push({

@@ -218,12 +218,47 @@ describe("staged store", () => {
   });
 
   test("distinct selections append separately", () => {
+    writePage("captured/idea.md", { kind: "captured-idea" }, "idea");
+    writePage("captured/other.md", { kind: "captured-idea" }, "other");
     stageHubSelection(vault, { outcome: "candidate", candidate: stagedCandidate({}) });
     stageHubSelection(vault, {
       outcome: "candidate",
       candidate: stagedCandidate({ source: "captured/other.md" }),
     });
     expect(loadStagedHubRecords(vault).candidates).toHaveLength(2);
+  });
+
+  test("a newer decision for the same page replaces the older one", () => {
+    stageHubSelection(vault, { outcome: "refusal", refusal: stagedRefusal({}) });
+    stageHubSelection(vault, { outcome: "candidate", candidate: stagedCandidate({}) });
+    const staged = loadStagedHubRecords(vault);
+    expect(staged.refusals).toHaveLength(0);
+    expect(staged.candidates).toEqual([stagedCandidate({})]);
+  });
+
+  test("a record whose routed page no longer exists is pruned and counted", () => {
+    stageHubSelection(vault, {
+      outcome: "candidate",
+      candidate: stagedCandidate({ source: "captured/gone.md" }),
+    });
+    const result = stageHubSelection(vault, {
+      outcome: "candidate",
+      candidate: stagedCandidate({}),
+    });
+    expect(result.pruned).toBe(1);
+    expect(loadStagedHubRecords(vault).candidates.map((c) => c.source)).toEqual([
+      "captured/idea.md",
+    ]);
+  });
+
+  test("staging over a corrupt line drops it and counts it instead of throwing", () => {
+    writeStore("not json\n");
+    const result = stageHubSelection(vault, {
+      outcome: "candidate",
+      candidate: stagedCandidate({}),
+    });
+    expect(result.skippedCorrupt).toBe(1);
+    expect(loadStagedHubRecords(vault).candidates).toHaveLength(1);
   });
 
   test("no staged file reads as empty, not as an error", () => {

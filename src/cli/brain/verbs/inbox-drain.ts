@@ -36,6 +36,7 @@ function reportJson(report: DrainReport): Record<string, unknown> {
     routed: report.routed,
     unroutable: report.unroutable,
     archive_failed: report.archiveFailed,
+    skipped_corrupt: report.skippedCorrupt,
     items: report.items.map(itemJson),
   };
 }
@@ -69,7 +70,10 @@ export async function cmdBrainInboxDrain(argv: string[]): Promise<number> {
     ok(`  [${item.classification}] ${item.action}${targetLabel}: ${item.reason}`);
   }
   ok(
-    `  routed ${report.routed}, unroutable ${report.unroutable}, archive-failed ${report.archiveFailed}`,
+    `  routed ${report.routed}, unroutable ${report.unroutable}, archive-failed ${report.archiveFailed}` +
+      (report.skippedCorrupt > 0
+        ? `, corrupt hub-store lines dropped ${report.skippedCorrupt}`
+        : ""),
   );
   if (pending) {
     // no-dead-ends, task 7: the terminal-state census found this

@@ -9,7 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 
 import {
@@ -110,6 +110,17 @@ describe("drainInbox hub candidates", () => {
     expect(refusal.action).toBe("skip-ambiguous-hub");
     expect(refusal.reason).toContain("Brain/areas/alpha-hub.md");
     expect(refusal.reason).toContain("Brain/areas/beta-hub.md");
+  });
+
+  test("a corrupt store line is a counted skip, and the drain completes", () => {
+    writeHub("Brain/areas/ops.md", "Ops Hub");
+    mkdirSync(dirname(storePath()), { recursive: true });
+    writeFileSync(storePath(), "not json\n", "utf8");
+    writeCaptureNote(vault, { body: IDEA_BODY, provenance: prov(1) });
+    const report = drainInbox(vault, { apply: true, agent: "tester", now: NOW });
+    expect(report.routed).toBe(1);
+    expect(report.skippedCorrupt).toBe(1);
+    expect(loadStagedHubRecords(vault).candidates).toHaveLength(1);
   });
 
   test("obligation and source-reference routes stage nothing", () => {

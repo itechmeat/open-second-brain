@@ -40,7 +40,12 @@ import { formatFrontmatter, parseFrontmatter, slugify } from "../../vault.ts";
 import { addObligation, obligationExists, parseCadence, ObligationError } from "../obligations.ts";
 import { ingestSource } from "../ingest/ingest.ts";
 import { isoSecond } from "../time.ts";
-import { selectHubCandidate, stageHubSelection } from "../link-graph/hub-candidates.ts";
+import {
+  loadHubPagePool,
+  selectHubCandidate,
+  stageHubSelection,
+  type HubPagePool,
+} from "../link-graph/hub-candidates.ts";
 import { archiveCapture, listStagedCaptures, type CaptureNote } from "./capture-note.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
@@ -87,6 +92,8 @@ export interface DrainReport {
    * write is idempotent so a re-run converges instead of duplicating.
    */
   readonly archiveFailed: number;
+  /** Corrupt staged hub-store lines this drain dropped, counted rather than thrown. */
+  readonly skippedCorrupt: number;
 }
 
 export interface DrainOptions {
@@ -241,6 +248,9 @@ export function drainInbox(vault: string, opts: DrainOptions): DrainReport {
   let routed = 0;
   let unroutable = 0;
   let archiveFailed = 0;
+  let skippedCorrupt = 0;
+  // The hub page pool is a full-vault parse: loaded once, on the first idea.
+  let hubPool: HubPagePool | undefined;
 
   for (const note of listStagedCaptures(vault)) {
     const plan = classify(vault, note, opts);
@@ -300,7 +310,11 @@ export function drainInbox(vault: string, opts: DrainOptions): DrainReport {
     // its hub outcome - a candidate or a named refusal - for the repair lane.
     // Only the idea route lands a page; the other routes stage nothing.
     if (plan.classification === "idea") {
-      stageHubSelection(vault, selectHubCandidate(vault, target));
+      hubPool ??= loadHubPagePool(vault);
+      skippedCorrupt += stageHubSelection(
+        vault,
+        selectHubCandidate(vault, target, hubPool),
+      ).skippedCorrupt;
     }
 
     try {
@@ -339,5 +353,6 @@ export function drainInbox(vault: string, opts: DrainOptions): DrainReport {
     routed,
     unroutable,
     archiveFailed,
+    skippedCorrupt,
   };
 }
