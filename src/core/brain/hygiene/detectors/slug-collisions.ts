@@ -24,13 +24,20 @@
  * lost race and an accidental duplicate look identical from disk, and
  * the evidence mtimes let the operator decide.
  *
+ * A group is reported only when its bare-base member (attempt 1) is
+ * present: the ladder cannot produce `-2` without first finding the bare
+ * base occupied, so `chapter-2.md` beside `chapter-3.md` is a numbered
+ * series, not a collision. Date-named notes (`2026-09-10.md`) are whole
+ * slugs, never a `2026-09` stem with a `-10` attempt, so a month of
+ * daily notes reports nothing.
+ *
  * Accepted imprecision: a file whose slug ends in bare digits (e.g. an
  * `unnamed-<hash>` fallback with an all-digit hash, or a note literally
  * named `report-42`) is grouped with the file named by its stripped
- * stem. Distinguishing those from real ladder continuations would mean
- * re-running allocation logic here - the one thing this detector
- * refuses to do - so the group is reported at `info` and the operator
- * decides.
+ * stem when that file exists. Distinguishing those from real ladder
+ * continuations would mean re-running allocation logic here - the one
+ * thing this detector refuses to do - so the group is reported at `info`
+ * and the operator decides.
  */
 
 import { statSync } from "node:fs";
@@ -49,6 +56,12 @@ export const COLLISION_GROUP_MIN_SIZE = 2;
  * bare base at attempt 1 and appends `-2`, `-3`, … from attempt 2 on.
  */
 const LADDER_MIN_ATTEMPT = 2;
+
+/** The bare-base attempt: the ladder's first try, with no suffix. */
+const LADDER_BASE_ATTEMPT = 1;
+
+/** A calendar-date slug (`YYYY-MM-DD`): a whole name, never stem plus attempt. */
+const DATE_SLUG_RE = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
 
 /** Suffix run the ladder appends: `-<attempt>`. */
 const LADDER_SUFFIX_RE = /-([0-9]+)$/;
@@ -69,12 +82,14 @@ interface SlugLadderParts {
 }
 
 function splitLadderSuffix(slug: string): SlugLadderParts {
+  const whole = { stem: slug, attempt: LADDER_BASE_ATTEMPT };
+  if (DATE_SLUG_RE.test(slug)) return whole;
   const match = LADDER_SUFFIX_RE.exec(slug);
-  if (match === null) return { stem: slug, attempt: 1 };
+  if (match === null) return whole;
   const suffix = match[1]!;
   const attempt = Number.parseInt(suffix, 10);
-  if (attempt < LADDER_MIN_ATTEMPT) return { stem: slug, attempt: 1 };
-  if (suffix.length > 1 && suffix.startsWith("0")) return { stem: slug, attempt: 1 };
+  if (attempt < LADDER_MIN_ATTEMPT) return whole;
+  if (suffix.length > 1 && suffix.startsWith("0")) return whole;
   return { stem: slug.slice(0, match.index) || slug, attempt };
 }
 
@@ -121,7 +136,8 @@ function collectStemGroups(notes: ReadonlyArray<string>): SlugStemGroup[] {
 }
 
 /**
- * One finding per same-stem group of >= 2 pages within a directory.
+ * One finding per same-stem group of >= 2 pages within a directory that
+ * includes the bare base.
  * Targets run in ladder order - the bare base first, then `-2`, `-3`,
  * …, ties broken by path - the order the allocation ladder produced
  * them in. Evidence carries the stem, the directory, and one mtime per
@@ -131,6 +147,7 @@ export function detectSlugCollisions(vault: string): ReadonlyArray<HygieneFindin
   const findings: HygieneFinding[] = [];
   for (const group of collectStemGroups(listVaultNotePaths(vault))) {
     if (group.members.length < COLLISION_GROUP_MIN_SIZE) continue;
+    if (!group.members.some((member) => member.attempt === LADDER_BASE_ATTEMPT)) continue;
     const targets = group.members
       .toSorted((a, b) => a.attempt - b.attempt || compareStrings(a.path, b.path))
       .map((member) => member.path);

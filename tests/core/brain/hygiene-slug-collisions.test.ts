@@ -110,6 +110,18 @@ describe("slug-collisions detector", () => {
     expect(collisions()).toHaveLength(0);
   });
 
+  test("a month of date-named notes is not a collision", () => {
+    for (const day of ["01", "02", "10", "11", "30", "31"])
+      writeNote(`Brain/log/2026-09-${day}.md`);
+    expect(collisions()).toHaveLength(0);
+  });
+
+  test("a numbered series without its bare base is not a collision", () => {
+    writeNote("Brain/notes/chapter-2.md");
+    writeNote("Brain/notes/chapter-3.md");
+    expect(collisions()).toHaveLength(0);
+  });
+
   test("a lone suffixed stem is not a collision", () => {
     writeNote("Brain/captures/topic-2.md");
     expect(collisions()).toHaveLength(0);
