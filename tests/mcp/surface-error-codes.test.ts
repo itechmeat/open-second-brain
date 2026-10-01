@@ -465,6 +465,11 @@ describe("every operation-dispatching tool answers unknown_operation", () => {
     ],
     ["brain_dead_ends", { operation: BOGUS }, "brain_dead_ends: operation must be record|list"],
     [
+      "brain_claims",
+      { operation: BOGUS },
+      "brain_claims: 'operation' must be one of current, at, history, replaced, contests, rebuild",
+    ],
+    [
       "brain_generation_reports",
       { action: BOGUS },
       "brain_generation_reports: action must be record, list, or summary",

@@ -805,8 +805,7 @@ function toolBrainClaims(
       return { operation, count: rows.length, claims: rows.map(renderClaimNode) };
     }
     default:
-      throw new MCPError(
-        INVALID_PARAMS,
+      throw unknownOperationError(
         "brain_claims: 'operation' must be one of current, at, history, replaced, contests, rebuild",
       );
   }
