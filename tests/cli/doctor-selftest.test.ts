@@ -172,14 +172,17 @@ test("a deliberately broken stage fails with name and fix, and the temp vault is
 });
 
 test("the harness could not run when temp storage is unavailable", async () => {
-  // A FILE sitting where TMPDIR points makes every mkdtemp under it fail
-  // with ENOTDIR, regardless of process privileges. A real subprocess is
-  // required: os.tmpdir() is resolved from the environment the process
-  // starts with, so an in-process env swap cannot redirect it.
+  // A FILE sitting where os.tmpdir() points makes every mkdtemp under it
+  // fail with ENOTDIR (ENOENT on Windows), regardless of process
+  // privileges. A real subprocess is required: os.tmpdir() is resolved from
+  // the environment the process starts with, so an in-process env swap
+  // cannot redirect it. The block must name every variable os.tmpdir()
+  // consults on each platform - TMPDIR on POSIX, TEMP then TMP on Windows -
+  // so the canary denies the child a usable temp root either way.
   const blocked = join(sandbox, "not-a-directory");
   writeFileSync(blocked, "in the way");
   const res = await runCli(["doctor", "selftest", "--json"], {
-    env: { ...canaryEnv(), TMPDIR: blocked },
+    env: { ...canaryEnv(), TMPDIR: blocked, TEMP: blocked, TMP: blocked },
     subprocess: true,
   });
   expect(res.returncode).toBe(6);
