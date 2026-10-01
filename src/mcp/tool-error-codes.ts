@@ -64,6 +64,7 @@ import {
   METHOD_NOT_FOUND,
   PARSE_ERROR,
 } from "./protocol.ts";
+import { OutputContractError } from "./output-contract.ts";
 import { REACH_REFUSAL } from "./reach-refusal.ts";
 
 /** The `_meta` key an `isError` result carries its code under. */
@@ -344,6 +345,7 @@ const CLASSIFICATION: ReadonlyArray<ClassificationRule> = Object.freeze([
   fixed(SafeguardTimeoutError, TOOL_ERROR_CODE.safeguardTimeout),
   fixed(SafeguardAbortError, TOOL_ERROR_CODE.safeguardAborted),
   fixed(ConfigReadError, TOOL_ERROR_CODE.configUnreadable),
+  fixed(OutputContractError, TOOL_ERROR_CODE.outputContractFailed),
   fixed(BrainConfigError, "config_invalid"),
   fixed(BrainPreferenceNotFoundError, "preference_not_found"),
 ]);

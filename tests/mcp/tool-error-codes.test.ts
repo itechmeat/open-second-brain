@@ -25,6 +25,7 @@ import { ConfigReadError } from "../../src/core/config.ts";
 import { SEARCH_ERROR_CODES, SearchError } from "../../src/core/search/search-error.ts";
 import { WRITE_BINDING_REFUSED_CODE } from "../../src/core/write-binding/index.ts";
 import { VAULT_FROZEN_REFUSAL } from "../../src/mcp/frozen-refusal.ts";
+import { OutputContractError } from "../../src/mcp/output-contract.ts";
 import { OWNER_SCOPE_REFUSALS } from "../../src/mcp/owner-scope-refusal.ts";
 import {
   INTERNAL_ERROR,
@@ -249,6 +250,9 @@ describe("codeForError", () => {
       "config_invalid",
     );
     expect(codeForError(new CountGuardError("mismatch", 2, 1, ["a", "b"]))).toBe("count_guard");
+    expect(codeForError(new OutputContractError("probe", ["$.ok: expected boolean"]))).toBe(
+      "output_contract_failed",
+    );
     expect(lines).toEqual([]);
   });
 

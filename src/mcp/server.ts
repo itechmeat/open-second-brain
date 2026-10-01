@@ -28,7 +28,13 @@ import {
   SERVER_VERSION,
 } from "./protocol.ts";
 import type { JsonRpcErrorCode, JsonRpcNotification, MCPErrorData } from "./protocol.ts";
-import { codeForError, defaultCodeForRpc } from "./tool-error-codes.ts";
+import {
+  codeForError,
+  defaultCodeForRpc,
+  TOOL_ERROR_META_KEY,
+  toolErrorMeta,
+  type ToolErrorCode,
+} from "./tool-error-codes.ts";
 import {
   progressRefusal,
   progressSink,
@@ -478,7 +484,7 @@ export class MCPServer {
       // ValueError/TypeError semantics in Python → tool-level error envelope.
       // OSError in Python → "filesystem error" prefix. We collapse both to a
       // single tool-level error since JS doesn't distinguish.
-      return withProgressRefusal(toolError(message), refusal);
+      return withProgressRefusal(toolError(message, codeForError(exc)), refusal);
     }
   }
 }
@@ -570,10 +576,16 @@ export function buildMcpToolResult(
   };
 }
 
-function toolError(message: string): Record<string, unknown> {
+/**
+ * An `isError` tool result. The text is the message alone, as it always
+ * was; the stable code rides on `_meta` because strict clients validate
+ * `structuredContent` against the tool's output schema even on an error.
+ */
+function toolError(message: string, code: ToolErrorCode): Record<string, unknown> {
   return {
     content: [{ type: "text", text: message }],
     isError: true,
+    _meta: { [TOOL_ERROR_META_KEY]: toolErrorMeta(code) },
   };
 }
 

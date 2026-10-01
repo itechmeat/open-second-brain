@@ -53,6 +53,12 @@ export const PROGRESS_NOTIFICATION_METHOD = "notifications/progress";
 export const PROGRESS_META_KEY = "open-second-brain/progress";
 
 /**
+ * The member of a `tools/call` request's params and of its result that
+ * namespaced extensions ride on.
+ */
+const META_MEMBER = "_meta";
+
+/**
  * What the MCP specification allows a progress token to be: a string or
  * an integer. Deliberately not `number` - a fractional token is a client
  * defect, and coercing it would hand back a value the client cannot match
@@ -95,7 +101,7 @@ function describeValue(value: unknown): string {
  * not errors.
  */
 export function readProgressToken(params: Record<string, unknown>): ProgressToken | undefined {
-  const meta = params["_meta"];
+  const meta = params[META_MEMBER];
   if (meta === undefined) return undefined;
   if (typeof meta !== "object" || meta === null || Array.isArray(meta)) {
     throw new MCPError(
@@ -165,7 +171,8 @@ export function progressRefusal(token: ProgressToken, reason: ProgressReason): P
 }
 
 /**
- * Attach a refusal to a `tools/call` result. With no refusal the result
+ * Attach a refusal to a `tools/call` result, merged into any `_meta` the
+ * result already carries (an error result's code, for one). With no refusal the result
  * is returned untouched - not cloned with an empty `_meta` - so a call
  * that asked for no progress is byte-identical to the one the previous
  * release answered.
@@ -175,5 +182,6 @@ export function withProgressRefusal(
   refusal: ProgressRefusal | undefined,
 ): Record<string, unknown> {
   if (refusal === undefined) return result;
-  return { ...result, _meta: { [PROGRESS_META_KEY]: refusal } };
+  const existing = result[META_MEMBER] as Readonly<Record<string, unknown>> | undefined;
+  return { ...result, [META_MEMBER]: { ...existing, [PROGRESS_META_KEY]: refusal } };
 }

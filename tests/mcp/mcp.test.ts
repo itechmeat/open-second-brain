@@ -13,6 +13,7 @@ import {
   slugify,
 } from "../../src/mcp/index.ts";
 import { createPluginRepo, createSandboxVault } from "../helpers/fixtures.ts";
+import { readToolErrorCode } from "../helpers/tool-error-envelope.ts";
 import { REDACTION_PLACEHOLDER } from "../../src/core/redactor.ts";
 import { PARTNER_CODEGRAPH_DISABLED_ENV } from "../../src/core/config.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
@@ -641,6 +642,9 @@ describe("tool calls", () => {
     expect(r.result.isError).toBe(true);
     expect(r.result.structuredContent).toBeUndefined();
     expect(r.result.content[0].text).toContain("bad_contract output contract failed");
+    // The code rides on `_meta`, never on `structuredContent`, which a
+    // strict client would validate against the very schema that failed.
+    expect(readToolErrorCode(r.result)).toBe("output_contract_failed");
   });
 });
 

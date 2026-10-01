@@ -31,7 +31,12 @@ import {
   serveStdioFromString,
   startHttp,
 } from "../../src/mcp/index.ts";
-import { PROGRESS_META_KEY, PROGRESS_NOTIFICATION_METHOD } from "../../src/mcp/progress.ts";
+import {
+  PROGRESS_META_KEY,
+  PROGRESS_NOTIFICATION_METHOD,
+  progressRefusal,
+  withProgressRefusal,
+} from "../../src/mcp/progress.ts";
 import {
   isProgressKind,
   PROGRESS_KIND,
@@ -352,5 +357,27 @@ describe("HTTP refuses a progress token by name", () => {
     } finally {
       await handle.close();
     }
+  });
+});
+
+describe("a refusal merges into the _meta a result already carries", () => {
+  const ERROR_META_KEY = "open-second-brain/error";
+  const errorMeta = { schema: "o2b.error.v1", code: "internal_error" };
+
+  test("an error result keeps its code beside the refusal", () => {
+    const failed = {
+      content: [{ type: "text", text: "boom" }],
+      isError: true,
+      _meta: { [ERROR_META_KEY]: errorMeta },
+    };
+    const refusal = progressRefusal("tok-merge", PROGRESS_REASON.transportSingleResponse);
+    const merged = withProgressRefusal(failed, refusal);
+    expect(merged["_meta"]).toEqual({ [ERROR_META_KEY]: errorMeta, [PROGRESS_META_KEY]: refusal });
+    expect(merged["content"]).toEqual(failed.content);
+  });
+
+  test("no refusal returns the very same result object", () => {
+    const ok = { content: [], isError: false };
+    expect(withProgressRefusal(ok, undefined)).toBe(ok);
   });
 });

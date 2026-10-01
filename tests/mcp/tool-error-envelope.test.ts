@@ -16,9 +16,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { SafeguardTimeoutError } from "../../src/core/brain/safeguard.ts";
+import { PROGRESS_META_KEY } from "../../src/mcp/progress.ts";
 import { INVALID_PARAMS, JSONRPC_VERSION, MCPError } from "../../src/mcp/protocol.ts";
 import { MCPServer } from "../../src/mcp/server.ts";
 import { serveStdioFromString } from "../../src/mcp/stdio.ts";
+import { TOOL_ERROR_META_KEY, TOOL_ERROR_SCHEMA } from "../../src/mcp/tool-error-codes.ts";
+import { readRpcErrorCode, readToolErrorCode } from "../helpers/tool-error-envelope.ts";
 
 type JsonObject = Record<string, any>;
 
@@ -86,6 +90,7 @@ describe("channel A: error.data.code on every JSON-RPC error", () => {
       }),
     );
     expect(res["error"]["code"]).toBe(INVALID_PARAMS);
+    expect(readRpcErrorCode(res)).toBe("invalid_params");
     expect(res["error"]["message"]).toBe("limit must be positive");
     expect(res["error"]["data"]).toEqual({ code: "invalid_params" });
   });
@@ -138,5 +143,62 @@ describe("channel A: error.data.code on every JSON-RPC error", () => {
     const res = JSON.parse(out.trim()) as JsonObject;
     expect(res["error"]["code"]).toBe(-32700);
     expect(res["error"]["data"]).toEqual({ code: "parse_error" });
+  });
+});
+
+describe("channel B: _meta code on every isError result", () => {
+  test("a safeguard timeout carries safeguard_timeout, text unchanged", async () => {
+    const thrown = new SafeguardTimeoutError("probe", 5);
+    const res = await call(
+      serverWith(() => {
+        throw thrown;
+      }),
+    );
+    const result = res["result"];
+    expect(result["isError"]).toBe(true);
+    expect(result["content"]).toEqual([{ type: "text", text: thrown.message }]);
+    expect(result["structuredContent"]).toBeUndefined();
+    expect(result["_meta"]).toEqual({
+      [TOOL_ERROR_META_KEY]: { schema: TOOL_ERROR_SCHEMA, code: "safeguard_timeout" },
+    });
+    expect(lines).toEqual([]);
+  });
+
+  test("a failed call with a refused progress token carries both _meta keys", async () => {
+    const res = await call(
+      serverWith(() => {
+        throw new SafeguardTimeoutError("probe", 5);
+      }),
+      { progressToken: "tok-1" },
+    );
+    const meta = res["result"]["_meta"] as JsonObject;
+    expect(Object.keys(meta).toSorted()).toEqual(
+      [PROGRESS_META_KEY, TOOL_ERROR_META_KEY].toSorted(),
+    );
+    expect(meta[TOOL_ERROR_META_KEY]).toEqual({
+      schema: TOOL_ERROR_SCHEMA,
+      code: "safeguard_timeout",
+    });
+    expect(meta[PROGRESS_META_KEY]["progressToken"]).toBe("tok-1");
+  });
+
+  test("a successful call with no progress token has no _meta key at all", async () => {
+    const res = await call(serverWith(() => ({ ok: true })));
+    expect(Object.keys(res["result"]).toSorted()).toEqual([
+      "content",
+      "isError",
+      "structuredContent",
+    ]);
+  });
+
+  test("an unclassified throw carries internal_error and is logged once", async () => {
+    const res = await call(
+      serverWith(() => {
+        throw new Error("something private");
+      }),
+    );
+    expect(res["result"]["content"]).toEqual([{ type: "text", text: "something private" }]);
+    expect(readToolErrorCode(res["result"])).toBe("internal_error");
+    expect(lines).toEqual([UNCLASSIFIED_LINE]);
   });
 });
