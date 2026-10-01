@@ -234,6 +234,26 @@ describe("o2b search reindex --cron-template (CLI)", () => {
     expect(r.stdout).toBe("");
   });
 
+  test("--format or --interval without --cron-template exits 2 and runs no reindex", async () => {
+    await bootstrap();
+    const before = readdirSync(tmp, { recursive: true }).toSorted();
+    for (const extra of [
+      ["--format", "systemd"],
+      ["--interval", "6h"],
+    ]) {
+      // oxlint-disable-next-line no-await-in-loop -- each spawn must finish before the tree is compared.
+      const r = await runCli(["search", "reindex", ...extra, "--vault", vault], {
+        env: { OPEN_SECOND_BRAIN_CONFIG: config },
+      });
+      expect(r.returncode).toBe(2);
+      expect(r.stderr).toContain(
+        "search reindex: --interval and --format apply only with --cron-template",
+      );
+      expect(r.stdout).toBe("");
+    }
+    expect(readdirSync(tmp, { recursive: true }).toSorted()).toEqual(before);
+  });
+
   test("--interval garbage exits 1 with the parser error", async () => {
     await bootstrap();
     const r = await runCli(

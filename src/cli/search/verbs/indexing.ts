@@ -239,7 +239,19 @@ export async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<num
     format: { type: "string" },
     "self-heal": { type: "string" },
   });
-  if (flagBoolean(flags, "cron-template")) {
+  const cronTemplate = flagBoolean(flags, "cron-template");
+  if (
+    !cronTemplate &&
+    (flagString(flags, "interval") !== undefined || flagString(flags, "format") !== undefined)
+  ) {
+    // Named, not ignored: without the template these flags would fall
+    // through to a full reindex the caller never asked for.
+    process.stderr.write(
+      "search reindex: --interval and --format apply only with --cron-template\n",
+    );
+    return 2;
+  }
+  if (cronTemplate) {
     const intervalRaw = flagString(flags, "interval") ?? DEFAULT_CRON_INTERVAL;
     try {
       const format = parseRecipeFormat(flagString(flags, "format"));
