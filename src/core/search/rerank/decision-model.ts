@@ -111,6 +111,8 @@ export interface DecisionModelRerankProviderOptions {
   /** The eval gate measures `enforce` whatever the configured mode. */
   readonly modeOverride?: Exclude<DecisionModelMode, "off">;
   readonly minScore?: number;
+  /** The caller's cancellation, handed to the decision request. */
+  readonly signal?: AbortSignal;
 }
 
 /**
@@ -235,6 +237,7 @@ export class DecisionModelRerankProvider implements RerankProvider {
         ...(this.opts.provider !== undefined ? { provider: this.opts.provider } : {}),
         ...(this.opts.env !== undefined ? { env: this.opts.env } : {}),
         ...(this.opts.modeOverride !== undefined ? { modeOverride: this.opts.modeOverride } : {}),
+        ...(this.opts.signal !== undefined ? { signal: this.opts.signal } : {}),
         recordDetails: (response, context) => {
           const details: Record<string, unknown> = { head_size: n };
           if (response === null || context === null) return details;
@@ -332,6 +335,12 @@ export interface ApplyDecisionModelRerankOptions {
    * heuristic one, which must not be cached as the enforced result.
    */
   readonly onFallback?: () => void;
+  /**
+   * The caller's cancellation (the composite hybrid deadline). An aborted
+   * request rejects with the signal's reason instead of falling back,
+   * because nobody is waiting for the order.
+   */
+  readonly signal?: AbortSignal;
 }
 
 function formatProbability(p: number): string {
@@ -401,6 +410,7 @@ export async function applyDecisionModelRerank(
     ...(opts.provider !== undefined ? { provider: opts.provider } : {}),
     ...(opts.env !== undefined ? { env: opts.env } : {}),
     ...(opts.modeOverride !== undefined ? { modeOverride: opts.modeOverride } : {}),
+    ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
   });
   try {
     await provider.rerank(
@@ -408,9 +418,13 @@ export async function applyDecisionModelRerank(
       head.map((r) => r.content),
     );
   } catch {
+    if (opts.signal?.aborted === true) throw opts.signal.reason;
     opts.onFallback?.();
     return results;
   }
+  // A cut request degrades inside the run rather than throwing; the
+  // caller's own abort still travels up by its reason.
+  if (opts.signal?.aborted === true) throw opts.signal.reason;
   const answers = provider.lastAnswers;
   if (answers === null) {
     opts.onFallback?.();

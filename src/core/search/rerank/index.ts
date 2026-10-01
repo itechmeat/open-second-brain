@@ -173,6 +173,7 @@ export async function applyCrossEncoderRerank(
       ...(opts.decisionModeOverride !== undefined
         ? { modeOverride: opts.decisionModeOverride }
         : {}),
+      ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
     });
   }
 

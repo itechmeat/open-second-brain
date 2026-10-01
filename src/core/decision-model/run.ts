@@ -89,6 +89,12 @@ export interface RunDecisionOptions<C> {
   readonly env?: Readonly<Record<string, string | undefined>>;
   /** Overrides `decision_model_timeout_ms` (e.g. a hook sub-budget). */
   readonly timeoutMs?: number;
+  /**
+   * The caller's cancellation (the search's composite hybrid deadline).
+   * Handed to the provider, whose transport stops the request when it
+   * aborts; the run then degrades and records it like any cut request.
+   */
+  readonly signal?: AbortSignal;
   /** Forces a mode (the eval gate measures `enforce` regardless of config). */
   readonly modeOverride?: Exclude<DecisionModelMode, "off">;
   readonly now?: () => Date;
@@ -203,7 +209,10 @@ export async function runDecision<C>(
     try {
       response = await provider.decide(
         { use, state: ready.state, questions: qs },
-        { timeoutMs: opts.timeoutMs ?? cfg.timeoutMs },
+        {
+          timeoutMs: opts.timeoutMs ?? cfg.timeoutMs,
+          ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+        },
       );
     } catch (e) {
       const latencyMs = Date.now() - started;

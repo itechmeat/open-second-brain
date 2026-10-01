@@ -30,6 +30,8 @@ import {
   type FakeSystemOne,
 } from "../../helpers/fake-decision-provider.ts";
 import { createTempVault, writeMd } from "../../helpers/search-fixtures.ts";
+import { parseStructuredRecallQueryDocument } from "../../../src/core/search/structured-query.ts";
+import { RETRIEVAL_DEGRADATION } from "../../../src/core/search/retrieval-trail.ts";
 
 const KEY_VAR = "O2B_TEST_DECISION_RERANK_KEY";
 
@@ -390,4 +392,53 @@ test("an inactive config writes nothing to the vault", async () => {
     ? readdirSync(join(vault, "Brain")).toSorted()
     : [];
   expect(after).toEqual(before);
+});
+
+describe("decision-model rerank under the hybrid deadline", () => {
+  /** The decision request's own budget, far past the search deadline. */
+  const DECISION_TIMEOUT_MS = 10_000;
+  const DEADLINE_MS = 300;
+
+  test("a stalled decision rerank is aborted at the deadline and the post-rank phases still run", async () => {
+    process.env[KEY_VAR] = FAKE_DECISION_KEY;
+    writeMd(vault, "draft.md", "# Draft\n\nA draft fox note.");
+    writeMd(vault, "quarantined.md", "---\nstatus: quarantine\n---\n\n# Bad\n\nfox fox unsafe.");
+    const cfg = resolve({
+      ...RERANK,
+      ...withServer(),
+      decision_model_uses: "rerank:enforce",
+      decision_model_timeout_ms: String(DECISION_TIMEOUT_MS),
+      search_hybrid_deadline_ms: String(DEADLINE_MS),
+      search_trust_gate_enabled: "true",
+    });
+    await indexVault(cfg);
+    server.setReply(() => ({ hang: true }));
+
+    const started = Date.now();
+    const out = await search(cfg, {
+      query: "fox",
+      structuredQuery: parseStructuredRecallQueryDocument("lex: fox -draft"),
+      limit: 10,
+    });
+    expect(Date.now() - started).toBeLessThan(3_000);
+    const paths = out.results.map((r) => r.path);
+    expect(paths.length).toBeGreaterThan(0);
+    expect(paths).not.toContain("draft.md");
+    expect(paths).not.toContain("quarantined.md");
+    expect(out.retrievalTrail?.degraded.map((d) => d.code)).toContain(
+      RETRIEVAL_DEGRADATION.hybridDeadlineExceeded,
+    );
+
+    // The abandoned request was cut by the deadline's abort, not left to
+    // run out its own 10 s budget: its record lands right after, with a
+    // latency far below that budget.
+    let records = listDecisionModelCalls(vault);
+    for (let i = 0; i < 40 && records.length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      records = listDecisionModelCalls(vault);
+    }
+    expect(records).toHaveLength(1);
+    const latency = records[0]!.payload["latency_ms"] as number;
+    expect(latency).toBeLessThan(DECISION_TIMEOUT_MS / 2);
+  });
 });
