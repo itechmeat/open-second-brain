@@ -23,6 +23,9 @@
  * Hermes job surfaces it.
  */
 
+import { createHash } from "node:crypto";
+import { resolve } from "node:path";
+
 import {
   CronTemplateError,
   operatorScriptPath,
@@ -36,8 +39,29 @@ import {
   type RecipeFormat,
 } from "./cron-recipe.ts";
 
-/** Cron job name, and the stem of the script path derived from it. */
+/**
+ * Stem of the per-vault job name. The full name appends a vault suffix
+ * ({@link maintenanceCronName}), because the script bakes in its vault.
+ */
 export const MAINTENANCE_CRON_NAME = "osb-maintenance";
+
+/** Hex characters of the vault hash the job name carries. */
+const VAULT_SUFFIX_LENGTH = 8;
+
+/**
+ * The job name for one vault: the stem plus the first hex characters of
+ * `sha256(resolve(vault))`, the same scheme `discipline install` uses for
+ * its job id. The script, the Hermes job and the systemd units all take
+ * this name, so a second vault's recipe never overwrites the first's, and
+ * re-rendering for the same vault yields the same name.
+ */
+export function maintenanceCronName(vault: string): string {
+  const suffix = createHash("sha256")
+    .update(resolve(vault))
+    .digest("hex")
+    .slice(0, VAULT_SUFFIX_LENGTH);
+  return MAINTENANCE_CRON_NAME + "-" + suffix;
+}
 
 /**
  * Cadence when the caller names none. Hourly is cheap because the lane's
@@ -180,22 +204,23 @@ function renderMaintenanceBody(o2bBin: string, opts: MaintenanceCronOptions): st
   return lines.join("\n") + "\n";
 }
 
-/** The maintenance recipe: the lane-specific half of the shared layout. */
-export const MAINTENANCE_RECIPE: CronRecipeSpec<MaintenanceCronOptions> = Object.freeze<
-  CronRecipeSpec<MaintenanceCronOptions>
->({
-  title: "Open Second Brain - maintenance lane template",
-  cronName: MAINTENANCE_CRON_NAME,
-  scriptPath: operatorScriptPath(MAINTENANCE_CRON_NAME),
-  scriptNotes: Object.freeze([
-    "(then chmod +x). Silent when the lane exits 0, including a gate",
-    "skip; any other exit prints the lane's JSON and keeps its code.",
-  ]),
-  schedulerNote: "(when Hermes owns the schedule)",
-  buildScriptBody: (opts) => renderMaintenanceBody(opts.o2bBin, opts),
-  buildVerifyCommand: ({ o2bBin, vault }) =>
-    o2bBin + " " + STATUS_COMMAND + " --vault " + shellQuote(singleLinePath(VAULT_LABEL, vault)),
-});
+/** The maintenance recipe for one vault: the lane-specific half of the shared layout. */
+export function maintenanceRecipe(vault: string): CronRecipeSpec<MaintenanceCronOptions> {
+  const cronName = maintenanceCronName(vault);
+  return Object.freeze<CronRecipeSpec<MaintenanceCronOptions>>({
+    title: "Open Second Brain - maintenance lane template",
+    cronName,
+    scriptPath: operatorScriptPath(cronName),
+    scriptNotes: Object.freeze([
+      "(then chmod +x). Silent when the lane exits 0, including a gate",
+      "skip; any other exit prints the lane's JSON and keeps its code.",
+    ]),
+    schedulerNote: "(when Hermes owns the schedule)",
+    buildScriptBody: (opts) => renderMaintenanceBody(opts.o2bBin, opts),
+    buildVerifyCommand: ({ o2bBin, vault: target }) =>
+      o2bBin + " " + STATUS_COMMAND + " --vault " + shellQuote(singleLinePath(VAULT_LABEL, target)),
+  });
+}
 
 /**
  * Render the maintenance lane recipe in the requested format (cron when
@@ -210,7 +235,8 @@ export function renderMaintenanceCronTemplate(
 ): string {
   const { format, ...recipeOpts } = opts;
   const render: RecipeFormat = parseRecipeFormat(format);
+  const spec = maintenanceRecipe(recipeOpts.vault);
   return render === "systemd"
-    ? renderSystemdTimer(MAINTENANCE_RECIPE, interval, recipeOpts)
-    : renderCronRecipe(MAINTENANCE_RECIPE, interval, recipeOpts);
+    ? renderSystemdTimer(spec, interval, recipeOpts)
+    : renderCronRecipe(spec, interval, recipeOpts);
 }

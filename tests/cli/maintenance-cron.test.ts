@@ -22,6 +22,7 @@ import { CronTemplateError } from "../../src/cli/cron-recipe.ts";
 import {
   DEFAULT_MAINTENANCE_INTERVAL,
   MAINTENANCE_CRON_NAME,
+  maintenanceCronName,
   parseWindowBounds,
   renderMaintenanceCronTemplate,
 } from "../../src/cli/maintenance-cron.ts";
@@ -36,15 +37,29 @@ function scriptBody(out: string): string {
   return out.slice(open + "<<'OSBEOF'\n".length, close + 1);
 }
 
+/** The job name for `vault`, after proving every recipe section carries it. */
+function namesIn(vault: string): string {
+  const name = maintenanceCronName(vault);
+  const cron = renderMaintenanceCronTemplate("1h", { vault });
+  const systemd = renderMaintenanceCronTemplate("1h", { vault, format: "systemd" });
+  expect(cron).toContain(`cat >~/.local/bin/${name}.sh <<'OSBEOF'`);
+  expect(cron).toContain(`  --name ${name} \\`);
+  expect(systemd).toContain(`${name}.service`);
+  expect(systemd).toContain(`${name}.timer`);
+  return name;
+}
+
 describe("renderMaintenanceCronTemplate", () => {
   test("names the lane job and renders the hourly default", () => {
     expect(MAINTENANCE_CRON_NAME).toBe("osb-maintenance");
     expect(DEFAULT_MAINTENANCE_INTERVAL).toBe("1h");
+    const name = maintenanceCronName("/v");
+    expect(name).toMatch(/^osb-maintenance-[0-9a-f]{8}$/u);
     const out = renderMaintenanceCronTemplate("1h", { vault: "/v" });
     expect(out).toContain("# interval: 1 hours");
-    expect(out).toContain("0 */1 * * *    ~/.local/bin/osb-maintenance.sh");
-    expect(out).toContain("cat >~/.local/bin/osb-maintenance.sh <<'OSBEOF'");
-    expect(out).toContain("  --name osb-maintenance \\");
+    expect(out).toContain(`0 */1 * * *    ~/.local/bin/${name}.sh`);
+    expect(out).toContain(`cat >~/.local/bin/${name}.sh <<'OSBEOF'`);
+    expect(out).toContain(`  --name ${name} \\`);
     expect(out).toContain("(when Hermes owns the schedule)");
   });
 
@@ -153,6 +168,14 @@ describe("renderMaintenanceCronTemplate", () => {
     );
   });
 
+  test("two vaults get different job names; the same vault always gets the same one", () => {
+    expect(namesIn("/a")).not.toBe(namesIn("/b"));
+    expect(namesIn("/a")).toBe(namesIn("/a"));
+    expect(renderMaintenanceCronTemplate("1h", { vault: "/a" })).toBe(
+      renderMaintenanceCronTemplate("1h", { vault: "/a" }),
+    );
+  });
+
   test("an explicit cron format renders the default recipe", () => {
     expect(renderMaintenanceCronTemplate("1h", { vault: "/v", format: "cron" })).toBe(
       renderMaintenanceCronTemplate("1h", { vault: "/v" }),
@@ -163,7 +186,7 @@ describe("renderMaintenanceCronTemplate", () => {
     const cron = renderMaintenanceCronTemplate("1h", { vault: "/v" });
     const systemd = renderMaintenanceCronTemplate("1h", { vault: "/v", format: "systemd" });
     expect(systemd).toContain("OnUnitActiveSec=1h");
-    expect(systemd).toContain("systemctl --user enable --now osb-maintenance.timer");
+    expect(systemd).toContain(`systemctl --user enable --now ${maintenanceCronName("/v")}.timer`);
     expect(systemd).not.toContain("hermes cron create");
     expect(scriptBody(systemd)).toBe(scriptBody(cron));
   });
