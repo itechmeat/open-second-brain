@@ -334,3 +334,38 @@ test("search query --json surfaces the summary-surface verdict for a source-targ
   const plainObj = JSON.parse(plain.stdout);
   expect("surface" in plainObj).toBe(false);
 });
+
+test("search status reports the persisted event-time windows in text and JSON", async () => {
+  const day = 24 * 60 * 60 * 1000;
+  const recent = new Date(Date.now() - 2 * day).toISOString().slice(0, 10);
+  writeVaultFile(
+    "old.md",
+    "---\nvalid_from: 2026-01-01\nvalid_until: 2026-02-01\n---\n\n# Old\n\nbody",
+  );
+  writeVaultFile("recent.md", `---\nvalid_from: ${recent}\n---\n\n# Recent\n\nbody`);
+  writeVaultFile("plain.md", "# Plain\n\nbody");
+  await runCli(["search", "index"], { env: { OPEN_SECOND_BRAIN_CONFIG: config } });
+
+  const json = await runCli(["search", "status", "--json"], {
+    env: { OPEN_SECOND_BRAIN_CONFIG: config },
+  });
+  expect(json.returncode).toBe(0);
+  const eventTime = JSON.parse(json.stdout).event_time;
+  expect(eventTime.documents).toBe(3);
+  expect(eventTime.with_event_time).toBe(2);
+  expect(eventTime.earliest).toBe("2026-01-01T00:00:00.000Z");
+  expect(eventTime.recent_window_days).toBe(30);
+  expect(eventTime.in_recent_window).toBe(1);
+
+  const text = await runCli(["search", "status"], { env: { OPEN_SECOND_BRAIN_CONFIG: config } });
+  expect(text.stdout).toMatch(
+    /event_time: +2\/3 documents \(earliest 2026-01-01T00:00:00\.000Z, latest .+, 1 in the last 30 days\)/,
+  );
+});
+
+test("search status without an index carries no event-time block", async () => {
+  const out = await runCli(["search", "status", "--json"], {
+    env: { OPEN_SECOND_BRAIN_CONFIG: config },
+  });
+  expect(JSON.parse(out.stdout)).not.toHaveProperty("event_time");
+});

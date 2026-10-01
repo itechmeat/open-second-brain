@@ -3,8 +3,14 @@
  * indexer named as the exit when there is no index at all.
  */
 
-import { indexStatus, serializeIndexStatus } from "../../../core/search/index.ts";
-import type { IndexStatusSnapshot } from "../../../core/search/index.ts";
+import {
+  eventTimeStatus,
+  indexStatus,
+  renderEventTimeStatus,
+  serializeEventTimeStatus,
+  serializeIndexStatus,
+} from "../../../core/search/index.ts";
+import type { EventTimeStatus, IndexStatusSnapshot } from "../../../core/search/index.ts";
 import { nextCommandField } from "../../../core/brain/next-step.ts";
 import { emitNextStep } from "../../advisory-rail.ts";
 import {
@@ -22,10 +28,13 @@ export async function cmdSearchStatus(argv: ReadonlyArray<string>): Promise<numb
   });
   const cfg = resolveConfig(flags);
   const status = await indexStatus(cfg);
+  // The event-time summary reads the index, so it exists only with one.
+  const eventTime = status.exists ? await eventTimeStatus(cfg) : null;
   if (flagBoolean(flags, "json")) {
     process.stdout.write(
       JSON.stringify({
         ...(serializeIndexStatus(status) as Record<string, unknown>),
+        ...(eventTime !== null ? { event_time: serializeEventTimeStatus(eventTime) } : {}),
         // Same polarity as the human twin below, so the two conditions
         // read as one rule rather than as each other's negation.
         ...(!status.exists ? nextCommandField("search-index-missing") : {}),
@@ -33,7 +42,7 @@ export async function cmdSearchStatus(argv: ReadonlyArray<string>): Promise<numb
     );
     return 0;
   }
-  process.stdout.write(renderStatusHuman(status));
+  process.stdout.write(renderStatusHuman(status, eventTime));
   // no-dead-ends, phase 3: the pointer used to be spliced into the
   // renderer's first line, which is a second emission mechanism AND
   // beyond the reach of a scan over writer call sites. The rail decides
@@ -46,7 +55,7 @@ export async function cmdSearchStatus(argv: ReadonlyArray<string>): Promise<numb
   return 0;
 }
 
-function renderStatusHuman(s: IndexStatusSnapshot): string {
+function renderStatusHuman(s: IndexStatusSnapshot, eventTime: EventTimeStatus | null): string {
   if (!s.exists) {
     return `index: not initialised\n  path: ${s.indexPath}\n`;
   }
@@ -67,6 +76,7 @@ function renderStatusHuman(s: IndexStatusSnapshot): string {
   lines.push(`embedding_key:       ${s.embeddingKeyPresent ? "present" : "missing"}`);
   lines.push(`last_indexed_at:     ${s.lastIndexedAt ?? "(never)"}`);
   lines.push(`last_full_index_at:  ${s.lastFullIndexAt ?? "(never)"}`);
+  if (eventTime !== null) lines.push(`event_time:          ${renderEventTimeStatus(eventTime)}`);
   // The oversize-chunk census when it could NOT run. Above the warnings
   // and not among them, deliberately: this line reports a check that did
   // not happen, and there is no command an operator runs about it. Its

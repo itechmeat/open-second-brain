@@ -211,12 +211,16 @@ test(
     try {
       const since = dayStart("2026-03-01");
       const until = dayStart("2026-04-01") - 1;
-      expect(eventTimeWindowCensus(db, since, until)).toEqual({
+      const census = eventTimeWindowCensus(db, since, until);
+      expect(census).toMatchObject({
         documents: 3,
         declared: 2,
         intersecting: 2,
         mtimeFallback: 1,
       });
+      // The span opens on the validity window's start, the earliest bound.
+      expect(census.earliestMs).toBe(since);
+      expect(census.latestMs).toBeGreaterThan(since);
     } finally {
       db.close();
     }

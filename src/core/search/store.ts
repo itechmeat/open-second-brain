@@ -826,6 +826,18 @@ export class Store {
   }
 
   /**
+   * How many documents carry a persisted event-time window, the instants
+   * those windows span, and how many intersect `[sinceMs, untilMs]` (a
+   * null edge is open). One aggregate; see `store/counts.ts`.
+   */
+  eventTimeWindowCensus(
+    sinceMs: number | null,
+    untilMs: number | null,
+  ): census.EventTimeWindowCensus {
+    return census.eventTimeWindowCensus(this.db, sinceMs, untilMs);
+  }
+
+  /**
    * Indexed chunks split by what the oversize-chunk census can decide
    * about them against a model's declared input window: provably over,
    * and undecided by the estimate. One aggregate pass, no chunk bodies

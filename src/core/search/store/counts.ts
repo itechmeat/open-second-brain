@@ -111,6 +111,14 @@ export interface EventTimeWindowCensus {
    * equals {@link documents}.
    */
   readonly mtimeFallback: number;
+  /**
+   * The earliest instant any persisted window names (its lower bound, or
+   * the upper one for an open-start window), unix ms. Null when no
+   * document has a persisted window.
+   */
+  readonly earliestMs: number | null;
+  /** The latest instant any persisted window names, unix ms; null as above. */
+  readonly latestMs: number | null;
 }
 
 /**
@@ -129,6 +137,8 @@ export function eventTimeWindowCensus(
         declared: number;
         intersecting: number;
         mtime_fallback: number;
+        earliest: number | null;
+        latest: number | null;
       },
       { $since: number | null; $until: number | null }
     >(
@@ -146,7 +156,9 @@ export function eventTimeWindowCensus(
          ) AS intersecting,
          COUNT(*) FILTER (
            WHERE ${EVENT_TIME_MIN_COLUMN} IS NULL AND ${EVENT_TIME_MAX_COLUMN} IS NULL
-         ) AS mtime_fallback
+         ) AS mtime_fallback,
+         MIN(COALESCE(${EVENT_TIME_MIN_COLUMN}, ${EVENT_TIME_MAX_COLUMN})) AS earliest,
+         MAX(COALESCE(${EVENT_TIME_MAX_COLUMN}, ${EVENT_TIME_MIN_COLUMN})) AS latest
        FROM documents`,
     )
     .get({ $since: sinceMs, $until: untilMs });
@@ -165,6 +177,8 @@ export function eventTimeWindowCensus(
     declared: row.declared,
     intersecting: row.intersecting,
     mtimeFallback: row.mtime_fallback,
+    earliestMs: row.earliest,
+    latestMs: row.latest,
   });
 }
 

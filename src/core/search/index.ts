@@ -149,6 +149,13 @@ export {
   type IndexVaultOptions,
   type IndexProgressEvent,
 } from "./indexer.ts";
+export {
+  EVENT_TIME_RECENT_WINDOW_DAYS,
+  eventTimeStatus,
+  renderEventTimeStatus,
+  serializeEventTimeStatus,
+  type EventTimeStatus,
+} from "./event-time-status.ts";
 export { search, SEARCH_LIMIT_MIN, SEARCH_LIMIT_MAX } from "./search.ts";
 export { DEFAULT_HYBRID_DEADLINE_MS } from "./pipeline/request.ts";
 export { expandHit } from "./cards.ts";

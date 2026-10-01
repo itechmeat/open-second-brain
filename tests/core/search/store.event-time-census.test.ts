@@ -229,11 +229,15 @@ test("census counts closed, open-start and open-end windows over a closed range"
   seedCensusDocs(db);
   // Intersecting: closed-inside, open-start-ends-at-since (max == since
   // is inclusive), open-end-starts-at-until (min == until is inclusive).
+  // The span is the earliest and latest bound any window names, whichever
+  // side of an open window carries it.
   expect(eventTimeWindowCensus(db, JAN, FEB)).toEqual({
     documents: 8,
     declared: 7,
     intersecting: 3,
     mtimeFallback: 1,
+    earliestMs: DEC,
+    latestMs: MAR,
   });
   db.close(true);
 });
@@ -247,6 +251,8 @@ test("census open query edges exclude only on the bound that can decide", () => 
     declared: 7,
     intersecting: 7,
     mtimeFallback: 1,
+    earliestMs: DEC,
+    latestMs: MAR,
   });
   // since open: only `event_time_min > until` excludes.
   expect(eventTimeWindowCensus(db, null, FEB)).toEqual({
@@ -254,6 +260,8 @@ test("census open query edges exclude only on the bound that can decide", () => 
     declared: 7,
     intersecting: 5,
     mtimeFallback: 1,
+    earliestMs: DEC,
+    latestMs: MAR,
   });
   // until open: only `event_time_max < since` excludes.
   expect(eventTimeWindowCensus(db, JAN, null)).toEqual({
@@ -261,6 +269,8 @@ test("census open query edges exclude only on the bound that can decide", () => 
     declared: 7,
     intersecting: 5,
     mtimeFallback: 1,
+    earliestMs: DEC,
+    latestMs: MAR,
   });
   db.close(true);
 });
@@ -287,6 +297,8 @@ test("census on an empty index reports zero across the board", () => {
     declared: 0,
     intersecting: 0,
     mtimeFallback: 0,
+    earliestMs: null,
+    latestMs: null,
   });
   db.close(true);
 });
