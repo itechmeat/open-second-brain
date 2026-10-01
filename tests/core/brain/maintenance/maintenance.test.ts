@@ -446,6 +446,55 @@ describe("the consecutive-failure streak", () => {
     expect(consecutiveTaskFailures(vault, TASK)).toBe(MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT);
   });
 
+  test("journaled timeouts are reported but never refuse the task", async () => {
+    let ran = 0;
+    const timingOut = () =>
+      runMaintenance(vault, {
+        now: NOW,
+        holder: "worker-a",
+        tasks: [
+          {
+            name: TASK,
+            run: async () => {
+              ran += 1;
+              throw new SafeguardTimeoutError(TASK, 600_000);
+            },
+          },
+        ],
+      });
+    for (let i = 0; i < MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT; i++) {
+      // eslint-disable-next-line no-await-in-loop
+      const run = await timingOut();
+      expect(run.tasks[0]!.timed_out).toBe(true);
+    }
+    const timeouts = listJournal(vault).filter((e) => e.task === TASK);
+    expect(timeouts.length).toBe(MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT);
+    expect(timeouts.every((e) => e.ok === false && e.timed_out === true)).toBe(true);
+    expect(consecutiveTaskFailures(vault, TASK)).toBe(0);
+
+    const next = await timingOut();
+    expect(next.tasks[0]!.refused).toBeUndefined();
+    expect(ran).toBe(MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT + 1);
+  });
+
+  test("a timeout between failures neither counts nor resets the streak", async () => {
+    await laneRun(false);
+    await runMaintenance(vault, {
+      now: NOW,
+      holder: "worker-a",
+      tasks: [
+        {
+          name: TASK,
+          run: async () => {
+            throw new SafeguardTimeoutError(TASK, 600_000);
+          },
+        },
+      ],
+    });
+    await laneRun(false);
+    expect(consecutiveTaskFailures(vault, TASK)).toBe(2);
+  });
+
   test("a single success resets the streak", async () => {
     for (let i = 0; i < MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT; i++) {
       // eslint-disable-next-line no-await-in-loop

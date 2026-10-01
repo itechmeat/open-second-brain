@@ -417,6 +417,7 @@ export async function runMaintenance(
         ok,
         duration_ms: duration,
         ...(error ? { error } : {}),
+        ...(timedOut ? { timed_out: true } : {}),
         ...(receipt ? { receipt } : {}),
       });
     }

@@ -73,6 +73,13 @@ export interface MaintenanceJournalEntry {
   readonly ok?: boolean;
   readonly duration_ms?: number;
   readonly error?: string;
+  /**
+   * True on a failed row whose task hit its safeguard deadline. Journaled
+   * and reported like any failure, but not counted toward the streak that
+   * refuses the task: a pass that ran out of time is not a broken pass,
+   * and refusing it would stop the keyword index from refreshing at all.
+   */
+  readonly timed_out?: boolean;
   /** Host pressure the gate read, on a `skipped:pressure` row. */
   readonly pressure_percent?: number;
   /** Why the gate could not read one, on a `pressure:unmeasurable` row. */
@@ -218,6 +225,9 @@ export function listJournal(vault: string, limit?: number): MaintenanceJournalEn
  *   - only rows that record a completed ATTEMPT are counted. A gate
  *     refusal and a lease skip are not attempts, so they cannot deepen a
  *     streak.
+ *   - a failure that is a safeguard TIMEOUT (`timed_out`) is skipped: it
+ *     neither deepens the streak nor ends it, so a long pass that keeps
+ *     running out of budget is reported every night but never refused.
  *
  * A row that ran but recorded no outcome stops the walk as well: refusing
  * work on evidence this build cannot read is the wrong direction to err.
@@ -258,6 +268,8 @@ export function consecutiveTaskFailures(vault: string, task: string): number {
     }
     if (entry.verdict !== MAINTENANCE_VERDICT.run) continue;
     if (entry.ok !== false) break;
+    // A timeout neither counts nor ends the streak: see `timed_out`.
+    if (entry.timed_out === true) continue;
     streak += 1;
   }
   return streak;
