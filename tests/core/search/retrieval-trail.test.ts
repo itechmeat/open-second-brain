@@ -70,6 +70,16 @@ test("every degradation code renders its own sentence", () => {
   expect(new Set(sentences).size).toBe(RETRIEVAL_DEGRADATION_CODES.length);
 });
 
+/** Names no rerank vendor may appear under in a trail sentence. */
+const RERANK_VENDOR_NAMES = /cohere|jina|voyage|zeroentropy|zerank|mixedbread|openai/iu;
+
+test("the rerank liveness code is kebab-case and its sentence names no provider", () => {
+  expect(RETRIEVAL_DEGRADATION.rerankProviderUnavailable).toBe("rerank-provider-unavailable");
+  expect(isRetrievalDegradationCode("rerank-provider-unavailable")).toBe(true);
+  const sentence = describeRetrievalDegradation(RETRIEVAL_DEGRADATION.rerankProviderUnavailable);
+  expect(sentence).not.toMatch(RERANK_VENDOR_NAMES);
+});
+
 test("the guard rejects a near miss", () => {
   expect(isRetrievalDegradationCode(RETRIEVAL_DEGRADATION.hybridDegraded)).toBe(true);
   expect(isRetrievalDegradationCode("hybrid_degraded")).toBe(false);

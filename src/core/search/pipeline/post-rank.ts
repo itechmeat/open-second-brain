@@ -38,6 +38,11 @@ import {
   type FrontmatterCache,
 } from "../result-filters.ts";
 import { applyStructuredExclusions } from "../structured-lanes.ts";
+import {
+  RETRIEVAL_DEGRADATION,
+  noteDegradation,
+  type RetrievalDegradationSink,
+} from "../retrieval-trail.ts";
 import type { Store } from "../store.ts";
 import type {
   BrainSearchResult,
@@ -83,6 +88,12 @@ export interface PostRankOutcome {
   readonly trustReceipts: TrustReceipts | null;
   readonly warnings: string[];
   /**
+   * The typed codes beside {@link warnings}, merged into the search's own
+   * sink like every lane's. A failed cross-encoder request records
+   * `rerank-provider-unavailable` with its failure category here.
+   */
+  readonly degraded: RetrievalDegradationSink;
+  /**
    * Extra decision-model answers carried by the rerank request (issue
    * #213, Part 2). Present only when rerank kind `decision-model` ran,
    * the `answerable` use is not `off` and a valid answer arrived; absent
@@ -115,6 +126,7 @@ function decisionMetaFields(meta: FrontmatterMap): Readonly<Record<string, strin
 export async function applyPostRankPhases(input: PostRankInput): Promise<PostRankOutcome> {
   const { store, config, opts, frontmatterCache } = input;
   const warnings: string[] = [];
+  const degraded: RetrievalDegradationSink = [];
 
   const excluded = applyStructuredExclusions(input.pool, input.structured);
   // Relation polarity (recall-trust-suite): typed relation edges adjust
@@ -173,10 +185,17 @@ export async function applyPostRankPhases(input: PostRankInput): Promise<PostRan
   const runRerank = (): Promise<ReadonlyArray<BrainSearchResult>> =>
     applyCrossEncoderRerank(reinforced, input.query, config.rerank, {
       ...(input.signal !== undefined ? { signal: input.signal } : {}),
-      onTelemetry: (event) =>
-        emitGatedTelemetry(event.status === "error" ? event : null, (failure) => {
+      onTelemetry: (event) => {
+        if (event.status !== "error") return;
+        // The code is the answer's own record, not telemetry: it is
+        // written outside the fail-open gate so it cannot be swallowed.
+        noteDegradation(degraded, RETRIEVAL_DEGRADATION.rerankProviderUnavailable, {
+          category: event.category,
+        });
+        emitGatedTelemetry(event, (failure) => {
           warnings.push(`rerank_degraded: ${failure.reason}`);
-        }),
+        });
+      },
       // Decision-model kind only: a candidate leaves the machine only when
       // its page's visibility resolves and does not carry `private`.
       resolveVisibility: (path) => {
@@ -269,6 +288,7 @@ export async function applyPostRankPhases(input: PostRankInput): Promise<PostRan
     results: adjusted.results,
     trustReceipts,
     warnings,
+    degraded,
     ...(decisionExtras !== undefined ? { decisionModel: decisionExtras } : {}),
     ...(decisionFallback ? { decisionFallback: true } : {}),
   };

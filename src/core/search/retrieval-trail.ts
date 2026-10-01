@@ -125,6 +125,15 @@ export const RETRIEVAL_DEGRADATION = Object.freeze({
    */
   rankCapTruncatedPool: "rank-cap-truncated-pool",
   /**
+   * The configured cross-encoder rerank endpoint could not answer, so the
+   * heuristic order was served. `detail.category` carries the closed
+   * `RERANK_FAILURE_CATEGORY` the failure was typed with (`auth`, `gone`,
+   * `transient`, ...); the provider's own message stays in the
+   * `rerank_degraded:` warning. Never cached: the next identical query
+   * asks the endpoint again.
+   */
+  rerankProviderUnavailable: "rerank-provider-unavailable",
+  /**
    * The caller's relevance floor dropped ranked rows. `detail.dropped`
    * counts them - which is how a floor that removed every hit stops
    * looking like a vault with no match.
@@ -167,6 +176,7 @@ export const RETRIEVAL_DEGRADATION_CODES: ReadonlyArray<RetrievalDegradationCode
   RETRIEVAL_DEGRADATION.hybridDegraded,
   RETRIEVAL_DEGRADATION.hybridDeadlineExceeded,
   RETRIEVAL_DEGRADATION.rankCapTruncatedPool,
+  RETRIEVAL_DEGRADATION.rerankProviderUnavailable,
   RETRIEVAL_DEGRADATION.relevanceFloorDroppedRows,
   RETRIEVAL_DEGRADATION.scopeFiltersDroppedRows,
   RETRIEVAL_DEGRADATION.crossVaultOriginFailed,
@@ -298,6 +308,8 @@ export function describeRetrievalDegradation(code: RetrievalDegradationCode): st
       return "the composite search outlived its wall-clock deadline, so the phases past the budget were cut and this answer is keyword-only";
     case RETRIEVAL_DEGRADATION.rankCapTruncatedPool:
       return "the rank cap truncated the candidate pool, so lower-ranked matches were never considered";
+    case RETRIEVAL_DEGRADATION.rerankProviderUnavailable:
+      return "the configured rerank endpoint could not answer, so this answer keeps the heuristic order";
     case RETRIEVAL_DEGRADATION.relevanceFloorDroppedRows:
       return "the requested relevance floor dropped every ranked row it judged, so matches below it are not in this answer";
     case RETRIEVAL_DEGRADATION.scopeFiltersDroppedRows:

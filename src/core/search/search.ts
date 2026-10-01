@@ -483,6 +483,7 @@ export async function search(
         : {}),
     });
     for (const w of postRank.warnings) warnings.push(w);
+    for (const d of postRank.degraded) degraded.push(d);
 
     // The pool the window is cut from (task F). `postRank.results` is the
     // last stage that can still add, drop or re-order a candidate, so its
@@ -511,10 +512,16 @@ export async function search(
       degraded,
     );
 
-    // A decision-model fallback (degraded, inactive or skipped) is the
-    // heuristic order under a key that promises the configured one: serve
-    // it, but never cache it (the deadline case is `finalize`'s own rule).
-    const emit = postRank.decisionFallback === true ? (o: SearchOutcome) => o : finalize;
+    // A decision-model fallback (degraded, inactive or skipped) and a
+    // failed cross-encoder request are both the heuristic order under a
+    // key that promises the reranked one: serve them, but never cache
+    // them, so a transient endpoint failure is retried by the next
+    // identical query (the deadline case is `finalize`'s own rule).
+    const rerankUnavailable = postRank.degraded.some(
+      (d) => d.code === RETRIEVAL_DEGRADATION.rerankProviderUnavailable,
+    );
+    const emit =
+      postRank.decisionFallback === true || rerankUnavailable ? (o: SearchOutcome) => o : finalize;
     return emit(
       buildSearchOutcome({
         store,
