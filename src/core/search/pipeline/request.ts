@@ -76,11 +76,14 @@ export interface ResolvedSearchRequest {
   readonly tuned: TunedParameters | null;
   /**
    * The composite wall-clock budget for this call (t_bdc24171), in ms, or
-   * null when the deadline is off. Null covers both spellings of off: the
-   * configured `0` and a config written before the knob, where the absent
-   * field means the shipped default rather than disabled - so the default
-   * is applied first and only a value that cannot bound anything
-   * (`<= 0`, non-finite) resolves to null.
+   * null when the deadline is off. Null covers the documented off switch
+   * (a configured `0`) and any value that cannot bound a duration (`<= 0`,
+   * non-finite) - and the ABSENT field, because the shipped default is
+   * applied by the CONFIG resolver (`resolveSearchConfig`): a config that
+   * still reaches this site without the field is hand-built, and a
+   * hand-built config that names no deadline runs without one, which is
+   * what keeps the plain keyword path clock-clean for the rank-clock
+   * census (`tests/core/search/rank-clock-determinism.test.ts`).
    */
   readonly hybridDeadlineMs: number | null;
 }
@@ -170,11 +173,14 @@ export function resolveSearchRequest(
       `match_mode must be one of ${FTS_MATCH_MODES.join(", ")}`,
     );
   }
-  // Composite hybrid deadline (t_bdc24171). Absent config field = the
-  // shipped default (the sum of the two lane budgets); a configured 0 is
-  // the explicit off switch; anything else that cannot bound a duration
-  // is off too - hand-built configs do not pass the resolver's validation,
-  // so the read site never guesses between "default" and "disabled".
+  // Composite hybrid deadline (t_bdc24171). The shipped default lives in
+  // the config resolver; a config reaching this site WITHOUT the field is
+  // hand-built, and runs with no deadline rather than with the default -
+  // which is what keeps the plain keyword path clock-clean for the
+  // rank-clock census. A configured 0 is the explicit off switch; anything
+  // else that cannot bound a duration is off too - hand-built configs do
+  // not pass the resolver's validation, so the read site never guesses
+  // between "default" and "disabled".
   const hybridDeadlineMs =
     resolvedConfig.hybridDeadlineMs !== undefined &&
     Number.isFinite(resolvedConfig.hybridDeadlineMs) &&

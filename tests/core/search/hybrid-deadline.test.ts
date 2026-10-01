@@ -15,7 +15,10 @@ import { join } from "node:path";
 
 import { resolveSearchConfig } from "../../../src/core/search/index.ts";
 import { search } from "../../../src/core/search/search.ts";
-import { DEFAULT_HYBRID_DEADLINE_MS } from "../../../src/core/search/pipeline/request.ts";
+import {
+  DEFAULT_HYBRID_DEADLINE_MS,
+  resolveSearchRequest,
+} from "../../../src/core/search/pipeline/request.ts";
 import {
   RETRIEVAL_DEGRADATION,
   describeRetrievalDegradation,
@@ -110,6 +113,24 @@ test("the resolved deadline defaults to the sum of the two named lane budgets", 
   expect(DEFAULT_HYBRID_DEADLINE_MS).toBe(15_000);
   expect(cfg.hybridDeadlineMs).toBe(cfg.semantic.timeoutMs + DEFAULT_RERANK_TIMEOUT_MS);
   expect(cfg.hybridDeadlineMs).toBe(15_000);
+});
+
+test("a hand-built config without the field runs with no deadline, not with the default", () => {
+  // The default is the CONFIG resolver's doing; a config constructed
+  // literally opts out by omission, which is what keeps the plain keyword
+  // path clock-clean for the rank-clock census. Pinned here so the request
+  // resolver never quietly starts applying the default to fixtures.
+  const request = resolveSearchRequest(semanticConfig(), { query: "fox", limit: 5 });
+  expect(request.hybridDeadlineMs).toBeNull();
+  expect(
+    resolveSearchRequest(configWithDeadline(DEFAULT_HYBRID_DEADLINE_MS), {
+      query: "fox",
+      limit: 5,
+    }).hybridDeadlineMs,
+  ).toBe(DEFAULT_HYBRID_DEADLINE_MS);
+  expect(
+    resolveSearchRequest(configWithDeadline(0), { query: "fox", limit: 5 }).hybridDeadlineMs,
+  ).toBeNull();
 });
 
 test("the env variable resolves the deadline over the default", () => {

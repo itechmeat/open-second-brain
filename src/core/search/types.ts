@@ -1550,8 +1550,10 @@ export interface ResolvedSearchConfig {
    * search completes keyword-only and reports
    * `RETRIEVAL_DEGRADATION.hybridDeadlineExceeded`. `0` disables the
    * deadline. Optional so configs written before the knob (test fixtures
-   * construct this shape literally) keep compiling; the request resolver
-   * applies the shipped default when absent.
+   * construct this shape literally) keep compiling; the default is applied
+   * by `resolveSearchConfig`, so a config constructed WITHOUT the field
+   * runs with no composite deadline - a hand-built config that names no
+   * deadline opts out by omission.
    */
   readonly hybridDeadlineMs?: number;
   /**
