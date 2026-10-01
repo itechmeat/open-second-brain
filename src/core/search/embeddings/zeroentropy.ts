@@ -24,12 +24,13 @@
 
 import { isRequestTimeout, SearchError } from "../types.ts";
 import type { ResolvedEmbeddingConfig } from "../types.ts";
-import type { EmbeddingProvider, PingResult } from "./contract.ts";
+import type { EmbedCallOptions, EmbeddingProvider, EmbedKind, PingResult } from "./contract.ts";
 import {
   RETRYABLE_STATUSES,
   assertHttpEgressEndpoint,
   chunkArrayByTokenBudget,
   jittered,
+  linkAbortSignal,
   sleep,
   unitNormaliseInPlace,
 } from "./http-util.ts";
@@ -108,7 +109,11 @@ export class ZeroEntropyProvider implements EmbeddingProvider {
     return n;
   }
 
-  async embed(texts: ReadonlyArray<string>): Promise<number[][]> {
+  async embed(
+    texts: ReadonlyArray<string>,
+    _kind?: EmbedKind,
+    opts?: EmbedCallOptions,
+  ): Promise<number[][]> {
     if (texts.length === 0) return [];
     const batches = chunkArrayByTokenBudget(
       texts.map((t, i) => ({ text: t, originalIndex: i })),
@@ -119,6 +124,7 @@ export class ZeroEntropyProvider implements EmbeddingProvider {
     const sem = providerSemaphore(this.ceilingKey, this.config.concurrency);
     const out: number[][] = new Array(texts.length);
     const cancel = new AbortController();
+    const unlink = linkAbortSignal(opts?.signal, cancel);
 
     const tasks = batches.map(async (batch) => {
       const permit = await sem.acquire();
@@ -147,6 +153,7 @@ export class ZeroEntropyProvider implements EmbeddingProvider {
       }
     } finally {
       cancel.abort();
+      unlink();
     }
     return out;
   }

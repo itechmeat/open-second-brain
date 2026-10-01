@@ -23,7 +23,7 @@
 
 import { EMBEDDING_QUOTA_MESSAGE, isRequestTimeout, SearchError } from "../types.ts";
 import type { EmbeddingErrorCategory, ResolvedEmbeddingConfig } from "../types.ts";
-import type { EmbeddingProvider, EmbedKind, PingResult } from "./contract.ts";
+import type { EmbedCallOptions, EmbeddingProvider, EmbedKind, PingResult } from "./contract.ts";
 import {
   AUTH_STATUSES,
   PAYMENT_REQUIRED_STATUS,
@@ -32,6 +32,7 @@ import {
   assertHttpEgressEndpoint,
   chunkArrayByTokenBudget,
   jittered,
+  linkAbortSignal,
   parseRetryAfterMs,
   sleep,
   unitNormaliseInPlace,
@@ -277,7 +278,11 @@ export class OpenAICompatProvider implements EmbeddingProvider {
     return "";
   }
 
-  async embed(texts: ReadonlyArray<string>, kind?: EmbedKind): Promise<number[][]> {
+  async embed(
+    texts: ReadonlyArray<string>,
+    kind?: EmbedKind,
+    opts?: EmbedCallOptions,
+  ): Promise<number[][]> {
     if (texts.length === 0) return [];
     const prefix = this.prefixFor(kind);
     const prepared = prefix === "" ? texts : texts.map((t) => prefix + t);
@@ -297,6 +302,9 @@ export class OpenAICompatProvider implements EmbeddingProvider {
     // batch #1 still bills the remaining N-1 batches that were already
     // scheduled by Promise.all.
     const cancel = new AbortController();
+    // The caller's cancellation reaches every batch through the same
+    // controller a failed sibling uses.
+    const unlink = linkAbortSignal(opts?.signal, cancel);
 
     const tasks = batches.map(async (batch) => {
       const permit = await sem.acquire();
@@ -332,6 +340,7 @@ export class OpenAICompatProvider implements EmbeddingProvider {
     } finally {
       // No-op if already settled; keeps semaphore + listeners cleaned up.
       cancel.abort();
+      unlink();
     }
     return out;
   }

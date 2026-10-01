@@ -19,9 +19,9 @@
  */
 
 import { SearchError } from "../types.ts";
-import { assertHttpEgressEndpoint } from "../embeddings/http-util.ts";
+import { assertHttpEgressEndpoint, linkAbortSignal } from "../embeddings/http-util.ts";
 import type { OpenAiCompatEndpoint } from "../embeddings/provider-resolve.ts";
-import type { RerankProvider } from "./contract.ts";
+import type { RerankCallOptions, RerankProvider } from "./contract.ts";
 
 /** Default per-request timeout when the caller does not override it. */
 export const DEFAULT_RERANK_TIMEOUT_MS = 5000;
@@ -82,11 +82,16 @@ export class CrossEncoderRerankProvider implements RerankProvider {
     this.timeoutMs = opts?.timeoutMs ?? DEFAULT_RERANK_TIMEOUT_MS;
   }
 
-  async rerank(query: string, documents: ReadonlyArray<string>): Promise<number[]> {
+  async rerank(
+    query: string,
+    documents: ReadonlyArray<string>,
+    opts?: RerankCallOptions,
+  ): Promise<number[]> {
     if (documents.length === 0) return [];
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const unlink = linkAbortSignal(opts?.signal, controller);
     let response: Response;
     try {
       response = await fetch(this.url, {
@@ -107,6 +112,9 @@ export class CrossEncoderRerankProvider implements RerankProvider {
       });
     } catch (e) {
       const cause = e instanceof Error ? e : new Error(String(e));
+      // The caller cancelled: its own abort reason travels up unchanged,
+      // so the caller recognises its cancellation by name.
+      if (opts?.signal?.aborted === true) throw opts.signal.reason;
       if (cause.name === "AbortError") {
         throw new SearchError(
           "RERANK_PROVIDER_HTTP",
@@ -116,6 +124,7 @@ export class CrossEncoderRerankProvider implements RerankProvider {
       throw new SearchError("RERANK_PROVIDER_HTTP", `network error: ${cause.message}`);
     } finally {
       clearTimeout(timer);
+      unlink();
     }
 
     if (!response.ok) {

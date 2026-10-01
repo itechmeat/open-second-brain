@@ -134,6 +134,37 @@ export function parseRetryAfterMs(
   return delta > 0 ? delta : 0;
 }
 
+/** The `name` every cancelled fetch and `AbortController.abort()` reason carries. */
+export const ABORT_ERROR_NAME = "AbortError";
+
+/** True when `error` is an abort, recognised by its standard name. */
+export function isAbortError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { readonly name?: unknown }).name === ABORT_ERROR_NAME
+  );
+}
+
+/**
+ * Forward a caller's abort into a controller the callee owns, so one
+ * cancellation reaches every request it started. Returns the unlink
+ * function; an absent signal links nothing.
+ */
+export function linkAbortSignal(
+  source: AbortSignal | undefined,
+  target: AbortController,
+): () => void {
+  if (source === undefined) return () => {};
+  if (source.aborted) {
+    target.abort();
+    return () => {};
+  }
+  const onAbort = (): void => target.abort();
+  source.addEventListener("abort", onAbort, { once: true });
+  return () => source.removeEventListener("abort", onAbort);
+}
+
 /**
  * Delay for `ms`, resolving early (never rejecting) if `signal` aborts. An
  * abort-aware sleep lets a retry backoff react to cancellation immediately

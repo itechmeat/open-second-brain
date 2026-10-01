@@ -27,6 +27,7 @@ import {
 import { DEFAULT_RERANK_TIMEOUT_MS } from "../../../src/core/search/rerank/cross-encoder.ts";
 import { SearchError } from "../../../src/core/search/types.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
+import { parseStructuredRecallQueryDocument } from "../../../src/core/search/structured-query.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 import { startFakeHttp, type FakeHttp, type FakeResponseSpec } from "../../helpers/fake-http.ts";
 import { sqliteVecLoadable } from "../../helpers/sqlite-vec.ts";
@@ -290,4 +291,109 @@ test("the new code rides the closed vocabulary and its sentence names the deadli
   expect(isRetrievalDegradationCode("hybrid-deadline-exceeded")).toBe(true);
   const sentence = describeRetrievalDegradation(RETRIEVAL_DEGRADATION.hybridDeadlineExceeded);
   expect(sentence.toLowerCase()).toContain("deadline");
+});
+
+/** Keyword-only config, trust gate on, remote rerank at `rerankBaseUrl`. */
+function stalledRerankConfig(opts: { cacheEnabled?: boolean; rerankBaseUrl?: string } = {}) {
+  return {
+    ...makeConfig({
+      vault,
+      dbPath,
+      retrievalTrustGateEnabled: true,
+      cacheEnabled: opts.cacheEnabled ?? false,
+      rerank: {
+        enabled: true,
+        kind: "openai-compat",
+        baseUrl: opts.rerankBaseUrl ?? server.url,
+        model: "rerank-fake",
+        apiKey: FAKE_PROVIDER_KEY,
+      },
+    }),
+    hybridDeadlineMs: 300,
+  };
+}
+
+function seedGatedCorpus(): void {
+  writeMd(vault, "clean.md", "# Clean\n\nThe widget calibration routine runs every morning.");
+  writeMd(
+    vault,
+    "quarantined.md",
+    "---\nstatus: quarantine\n---\n\n# Bad\n\nThe widget calibration is unsafe.",
+  );
+  writeMd(vault, "draft.md", "# Draft\n\nA draft of the widget calibration routine.");
+}
+
+test("a stalled rerank past the deadline still applies exclusions and the trust gate", async () => {
+  seedGatedCorpus();
+  const cfg = stalledRerankConfig();
+  await indexVault(cfg);
+  server.setHandler(stallHandler());
+
+  const out = await search(cfg, {
+    query: "widget calibration",
+    structuredQuery: parseStructuredRecallQueryDocument('lex: "widget calibration" -draft'),
+    limit: 5,
+  });
+
+  const paths = out.results.map((r) => r.path);
+  expect(paths).toEqual(["clean.md"]);
+  // The gate ran on the degraded order, so its receipt is on the outcome.
+  expect(out.retrievalDecisionTrace).toBeDefined();
+  const codes = out.retrievalTrail?.degraded.map((d) => d.code) ?? [];
+  expect(codes).toContain(RETRIEVAL_DEGRADATION.hybridDeadlineExceeded);
+});
+
+test("the deadline aborts the abandoned rerank request instead of leaving it running", async () => {
+  seedGatedCorpus();
+  let aborted: () => void = () => {};
+  const requestAborted = new Promise<void>((resolve) => {
+    aborted = resolve;
+  });
+  // A local server that watches the client side of the stalled request:
+  // the abort reaches it only if the deadline cancels the fetch.
+  const watcher = Bun.serve({
+    port: 0,
+    fetch: (req) => {
+      req.signal.addEventListener("abort", () => aborted(), { once: true });
+      return new Promise<Response>(() => {});
+    },
+  });
+  try {
+    const cfg = stalledRerankConfig({ rerankBaseUrl: `http://127.0.0.1:${watcher.port}/v1` });
+    await indexVault(cfg);
+    await search(cfg, { query: "widget calibration", limit: 5 });
+    const outcome = await Promise.race([
+      requestAborted.then(() => "aborted"),
+      new Promise<string>((resolve) => setTimeout(() => resolve("still running"), 2_000)),
+    ]);
+    expect(outcome).toBe("aborted");
+  } finally {
+    watcher.stop(true);
+  }
+});
+
+test("a deadline-degraded answer is never written to the query cache", async () => {
+  seedGatedCorpus();
+  const cfg = stalledRerankConfig({ cacheEnabled: true });
+  await indexVault(cfg);
+
+  server.setHandler(stallHandler());
+  const degraded = await search(cfg, { query: "widget calibration", limit: 5 });
+  expect(degraded.retrievalTrail?.degraded.map((d) => d.code)).toContain(
+    RETRIEVAL_DEGRADATION.hybridDeadlineExceeded,
+  );
+
+  // A fast endpoint now: a cached degraded answer would still name the
+  // deadline; a fresh compute does not.
+  server.setHandler((req) => {
+    const docs = ((req.body ?? {}) as { documents?: string[] }).documents ?? [];
+    return {
+      status: 200,
+      body: { results: docs.map((_, index) => ({ index, relevance_score: 1 - index / 10 })) },
+    };
+  });
+  const fresh = await search(cfg, { query: "widget calibration", limit: 5 });
+  expect(fresh.retrievalTrail?.degraded.map((d) => d.code) ?? []).not.toContain(
+    RETRIEVAL_DEGRADATION.hybridDeadlineExceeded,
+  );
 });

@@ -15,6 +15,12 @@
  */
 export type EmbedKind = "query" | "passage";
 
+/** Per-call options a provider may honour. */
+export interface EmbedCallOptions {
+  /** The caller's cancellation: an aborted call stops its requests. */
+  readonly signal?: AbortSignal;
+}
+
 /**
  * What a `ping` learned when it did not get a vector back.
  *
@@ -43,7 +49,11 @@ export interface EmbeddingProvider {
   readonly name: string;
   readonly model: string;
   readonly dimension: number | null;
-  embed(texts: ReadonlyArray<string>, kind?: EmbedKind): Promise<number[][]>;
+  embed(
+    texts: ReadonlyArray<string>,
+    kind?: EmbedKind,
+    opts?: EmbedCallOptions,
+  ): Promise<number[][]>;
   ping(): Promise<PingResult>;
   /**
    * Optional read-and-reset of provider-internal retry tally. The

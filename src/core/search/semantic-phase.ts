@@ -105,7 +105,17 @@ export async function runSemanticPhase(
   store: Store,
   config: ResolvedSearchConfig,
   query: string,
-  opts: { limit: number; pathPrefix: string | undefined; explicit: boolean },
+  opts: {
+    limit: number;
+    pathPrefix: string | undefined;
+    explicit: boolean;
+    /**
+     * The caller's cancellation (the composite hybrid deadline). Once it
+     * aborts, the query embed stops and the phase rejects with the
+     * signal's reason, so an abandoned lane never reaches the store.
+     */
+    signal?: AbortSignal;
+  },
 ): Promise<SemanticPhaseOutcome> {
   const warnings: string[] = [];
   const degraded: RetrievalDegradationSink = [];
@@ -159,9 +169,14 @@ export async function runSemanticPhase(
   let queryVec: number[];
   try {
     const provider = makeProvider(config.semantic);
-    const vectors = await provider.embed([query], "query");
+    const vectors = await provider.embed(
+      [query],
+      "query",
+      opts.signal !== undefined ? { signal: opts.signal } : undefined,
+    );
     queryVec = vectors[0] ?? [];
   } catch (e) {
+    if (opts.signal?.aborted === true) throw opts.signal.reason;
     if (opts.explicit) {
       // Defensive: provider methods are expected to throw SearchError,
       // but wrap anything else (e.g. an unexpected runtime failure)
@@ -190,6 +205,10 @@ export async function runSemanticPhase(
     });
     return { attempted: false, hits: [], warnings, degraded };
   }
+
+  // The caller may have abandoned the lane while the embed was in flight;
+  // past that point the store it would read can already be closed.
+  if (opts.signal?.aborted === true) throw opts.signal.reason;
 
   if (queryVec.length === 0) {
     warnings.push("embedding provider returned an empty vector; semantic skipped");

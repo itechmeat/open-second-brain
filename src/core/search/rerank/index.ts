@@ -90,6 +90,12 @@ export interface ApplyCrossEncoderRerankOptions {
   readonly resolveMeta?: (path: string) => Readonly<Record<string, string>> | null;
   /** The eval gate measures `enforce` whatever the configured mode. */
   readonly decisionModeOverride?: "shadow" | "enforce";
+  /**
+   * The caller's cancellation (the composite hybrid deadline). An aborted
+   * call stops its provider request and rejects with the signal's reason
+   * instead of degrading, because nobody is waiting for the order.
+   */
+  readonly signal?: AbortSignal;
 }
 
 interface Scored {
@@ -210,11 +216,18 @@ export async function applyCrossEncoderRerank(
 
   let scores: number[];
   try {
-    scores = await provider.rerank(query, documents);
+    scores = await provider.rerank(
+      query,
+      documents,
+      opts.signal !== undefined ? { signal: opts.signal } : undefined,
+    );
     if (scores.length !== documents.length) {
       throw new Error(`expected ${documents.length} scores, got ${scores.length}`);
     }
   } catch (e) {
+    // A cancelled call is not an endpoint failure: no telemetry, and the
+    // caller's own abort reason travels up.
+    if (opts.signal?.aborted === true) throw opts.signal.reason;
     // Invariant 3: request-time degrade. Return the heuristic ordering
     // untouched and emit one fail-open telemetry event.
     opts.onTelemetry?.({

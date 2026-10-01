@@ -9,6 +9,12 @@
  * relevance score per document, aligned to the input order.
  */
 
+/** Per-call options a provider may honour. */
+export interface RerankCallOptions {
+  /** The caller's cancellation: an aborted call stops its request. */
+  readonly signal?: AbortSignal;
+}
+
 export interface RerankProvider {
   readonly name: string;
   readonly model: string;
@@ -18,5 +24,9 @@ export interface RerankProvider {
    * Throws on any provider/transport failure — the caller
    * ({@link applyCrossEncoderRerank}) is responsible for the fail-open.
    */
-  rerank(query: string, documents: ReadonlyArray<string>): Promise<number[]>;
+  rerank(
+    query: string,
+    documents: ReadonlyArray<string>,
+    opts?: RerankCallOptions,
+  ): Promise<number[]>;
 }

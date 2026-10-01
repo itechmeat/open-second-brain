@@ -36,6 +36,7 @@ import { runSemanticLane, type SemanticLaneOutcome } from "./pipeline/semantic-l
 import { openReadOrSelfHeal } from "./pipeline/store-open.ts";
 import { resolveEffectiveWeights } from "./pipeline/weights.ts";
 import { detectHybridDegrade } from "./enrich.ts";
+import { isAbortError } from "./embeddings/http-util.ts";
 import type { CacheProbe } from "./pipeline/cache-slot.ts";
 import type { RetrievalDegradationSink } from "./retrieval-trail.ts";
 import { RETRIEVAL_DEGRADATION, noteDegradation } from "./retrieval-trail.ts";
@@ -47,13 +48,18 @@ export { SEARCH_LIMIT_MAX, SEARCH_LIMIT_MIN } from "./pipeline/request.ts";
 
 const CACHE_BYPASSED: CacheProbe = { slot: null, hit: null };
 
+/** Lead of the warning that names an abandoned lane's late, non-abort failure. */
+const ABANDONED_LANE_FAILURE_PREFIX = "hybrid deadline: an abandoned lane failed after the answer:";
+
 /**
  * The composite hybrid deadline (t_bdc24171): ONE wall-clock budget over
  * the whole hybrid path - embed -> semanticTopK -> rerank -> second pass.
  * The per-lane budgets (the embedding timeout, the rerank timeout) keep
  * firing first on their own lanes; what no lane budget can account for is
  * their SUM and the phases with no budget of their own, and that is what
- * this clock bounds.
+ * this clock bounds. When it fires it also aborts its signal, which the
+ * semantic lane's query embed and the cross-encoder request carry, so an
+ * abandoned lane stops its provider request instead of running on.
  *
  * Enforcement lives here, at the composite entry, because the budget is a
  * property of the whole path and not of any stage: the two async lanes the
@@ -75,8 +81,20 @@ interface CompositeDeadline {
    * hybrid-degrade umbrella the semantic lane raises when the caller
    * wanted hybrid recall and the lane did not run. Idempotent - several
    * checkpoints can observe one expiry, and the answer names it once.
+   * Aborts {@link signal}.
    */
   fire(): void;
+  /** True once {@link fire} ran: the answer is a degraded one. */
+  hasFired(): boolean;
+  /** Aborted on fire; handed to every provider request the clock bounds. */
+  readonly signal: AbortSignal;
+  /**
+   * Name a failure an abandoned lane raised after the answer was served.
+   * The deadline's own abort is recognised by name and needs no note (the
+   * degradation already says the lane was cut); any other error is
+   * appended to the warnings, never dropped.
+   */
+  noteAbandonedFailure(error: unknown): void;
 }
 
 function deadlineExpired(deadline: CompositeDeadline | null): boolean {
@@ -95,10 +113,12 @@ function createCompositeDeadline(input: {
 }): CompositeDeadline | null {
   if (input.budgetMs === null) return null;
   const budgetMs = input.budgetMs;
+  const controller = new AbortController();
   let fired = false;
   const fire = (): void => {
     if (fired) return;
     fired = true;
+    controller.abort();
     const elapsedMs = Date.now() - input.startMs;
     input.warnings.push(
       `hybrid deadline ${budgetMs}ms exceeded after ${elapsedMs}ms; returning keyword-only results`,
@@ -117,31 +137,51 @@ function createCompositeDeadline(input: {
       noteDegradation(input.degraded, RETRIEVAL_DEGRADATION.hybridDegraded);
     }
   };
-  return { budgetMs, expiresAt: input.startMs + budgetMs, fire };
+  const noteAbandonedFailure = (error: unknown): void => {
+    if (isAbortError(error)) return;
+    const name = error instanceof Error ? error.name : typeof error;
+    const message = error instanceof Error ? error.message : String(error);
+    input.warnings.push(`${ABANDONED_LANE_FAILURE_PREFIX} ${name}: ${message}`);
+  };
+  return {
+    budgetMs,
+    expiresAt: input.startMs + budgetMs,
+    fire,
+    hasFired: () => fired,
+    signal: controller.signal,
+    noteAbandonedFailure,
+  };
 }
 
 /**
- * Run one async lane under the deadline. A lane that loses the race is
- * abandoned, not awaited - its own lane timeouts settle it in the
- * background - and the deadline's fallback answer is served instead. The
- * attached catch keeps a late rejection from surfacing as unhandled: the
- * degradation already named why the answer is partial, and the abandoned
- * lane's own error is moot past the fire.
+ * Run one async lane under the deadline. A lane whose clock has already
+ * run out is never started. A lane that loses the race is abandoned, not
+ * awaited: the fire aborts the signal its provider request carries, and
+ * the deadline's fallback answer is served instead. A rejection that
+ * arrives after that is handed to the deadline, which recognises its own
+ * abort by name and names any other failure in the warnings.
  */
 async function awaitWithinDeadline<T>(
-  work: Promise<T>,
+  start: () => Promise<T>,
   deadline: CompositeDeadline,
   fallback: () => T,
 ): Promise<T> {
-  void work.catch(() => {});
   const remainingMs = deadline.expiresAt - Date.now();
   if (remainingMs <= 0) {
     deadline.fire();
     return fallback();
   }
+  const work = start();
+  let abandoned = false;
+  // Before the fire the race below rethrows the rejection to the caller;
+  // only an abandoned lane's rejection is the deadline's to name.
+  void work.catch((error: unknown) => {
+    if (abandoned) deadline.noteAbandonedFailure(error);
+  });
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadlineWon = new Promise<T>((resolve) => {
     timer = setTimeout(() => {
+      abandoned = true;
       deadline.fire();
       resolve(fallback());
     }, remainingMs);
@@ -242,8 +282,12 @@ export async function search(
         })
       : CACHE_BYPASSED;
     if (cache.hit !== null) return cache.hit;
+    // A deadline-degraded answer is keyword-only under a key that promises
+    // the hybrid one: serve it, but never cache it.
     const finalize = (outcome: SearchOutcome): SearchOutcome => {
-      if (cache.slot !== null) persistCachedOutcome(store, cache.slot, outcome);
+      if (cache.slot !== null && deadline?.hasFired() !== true) {
+        persistCachedOutcome(store, cache.slot, outcome);
+      }
       return outcome;
     };
 
@@ -288,7 +332,7 @@ export async function search(
       deadline === null
         ? await runSemanticLane(semanticLaneInput)
         : await awaitWithinDeadline(
-            runSemanticLane(semanticLaneInput),
+            () => runSemanticLane({ ...semanticLaneInput, signal: deadline.signal }),
             deadline,
             emptySemanticLane,
           );
@@ -417,11 +461,13 @@ export async function search(
       nowMs,
     });
 
-    // Post-rank phases, under the composite deadline: the rerank lane is
-    // the last budgeted caller wait on the composite path, so it races the
-    // same clock and, past the deadline, the pool is served in the
-    // heuristic order it already had - a named partial, not a stall.
-    const postRankInput = {
+    // Post-rank phases, under the composite deadline: the cross-encoder
+    // call is the last budgeted caller wait on the composite path, so it
+    // alone races the same clock. Past the deadline the reader step serves
+    // the order it was handed - a named partial, not a stall - and the
+    // exclusions, reach filter, trust gate, supersede fade, relation
+    // polarity and reinforce still run on it.
+    const postRank = await applyPostRankPhases({
       store,
       config: effectiveConfig,
       opts,
@@ -429,15 +475,13 @@ export async function search(
       pool,
       structured: shape.structured,
       frontmatterCache,
-    };
-    const postRank =
-      deadline === null
-        ? await applyPostRankPhases(postRankInput)
-        : await awaitWithinDeadline(applyPostRankPhases(postRankInput), deadline, () => ({
-            results: pool,
-            trustReceipts: null,
-            warnings: [],
-          }));
+      ...(deadline !== null
+        ? {
+            signal: deadline.signal,
+            raceRerank: (work, fallback) => awaitWithinDeadline(work, deadline, fallback),
+          }
+        : {}),
+    });
     for (const w of postRank.warnings) warnings.push(w);
 
     // The pool the window is cut from (task F). `postRank.results` is the
@@ -469,7 +513,7 @@ export async function search(
 
     // A decision-model fallback (degraded, inactive or skipped) is the
     // heuristic order under a key that promises the configured one: serve
-    // it, but never cache it.
+    // it, but never cache it (the deadline case is `finalize`'s own rule).
     const emit = postRank.decisionFallback === true ? (o: SearchOutcome) => o : finalize;
     return emit(
       buildSearchOutcome({

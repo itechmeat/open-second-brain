@@ -24,6 +24,8 @@ export interface SemanticLaneInput {
   readonly pathPrefix: string | undefined;
   /** Keyword pool size, the other half of the hybrid-degrade signal. */
   readonly keywordHitCount: number;
+  /** The composite deadline's cancellation; absent when no deadline runs. */
+  readonly signal?: AbortSignal;
 }
 
 export interface SemanticLaneOutcome {
@@ -50,6 +52,7 @@ export async function runSemanticLane(input: SemanticLaneInput): Promise<Semanti
       limit: semanticPoolSize(limit),
       pathPrefix,
       explicit: policy.explicit,
+      ...(input.signal !== undefined ? { signal: input.signal } : {}),
     });
     attempted = semOutcome.attempted;
     hits = semOutcome.hits;
