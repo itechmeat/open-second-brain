@@ -14,7 +14,6 @@ import {
   RERANK_FAILURE_CATEGORIES,
   RERANK_FAILURE_CATEGORY,
   RerankEndpointError,
-  isRerankFailureCategory,
   rerankCategoryForStatus,
 } from "../../../src/core/search/rerank/failure.ts";
 import { CrossEncoderRerankProvider } from "../../../src/core/search/rerank/cross-encoder.ts";
@@ -102,13 +101,9 @@ function expectEndpointError(err: unknown, category: string, message: RegExp | s
 }
 
 describe("RERANK_FAILURE_CATEGORY vocabulary", () => {
-  test("the object is frozen and the list names every member exactly once", () => {
-    expect(Object.isFrozen(RERANK_FAILURE_CATEGORY)).toBe(true);
-    expect(Object.isFrozen(RERANK_FAILURE_CATEGORIES)).toBe(true);
-    expect(RERANK_FAILURE_CATEGORIES.toSorted()).toEqual(
-      Object.values(RERANK_FAILURE_CATEGORY).toSorted(),
-    );
-    expect(new Set(RERANK_FAILURE_CATEGORIES).size).toBe(RERANK_FAILURE_CATEGORIES.length);
+  // Frozen object, membership list and guard are the census's to check;
+  // this pins the members, which ride `detail.category` on the wire.
+  test("names exactly the nine wire categories", () => {
     expect(RERANK_FAILURE_CATEGORIES.toSorted()).toEqual([
       "auth",
       "gone",
@@ -120,15 +115,6 @@ describe("RERANK_FAILURE_CATEGORY vocabulary", () => {
       "transient",
       "unclassified",
     ]);
-  });
-
-  test("the guard accepts every member and nothing else", () => {
-    for (const member of RERANK_FAILURE_CATEGORIES)
-      expect(isRerankFailureCategory(member)).toBe(true);
-    expect(isRerankFailureCategory("AUTH")).toBe(false);
-    expect(isRerankFailureCategory("")).toBe(false);
-    expect(isRerankFailureCategory(401)).toBe(false);
-    expect(isRerankFailureCategory(undefined)).toBe(false);
   });
 });
 
@@ -230,7 +216,31 @@ describe("the category reaches the telemetry event", () => {
         status: "error",
         category: "malformed",
       });
-      expectEndpointError(await thrownBy(fake.url), "malformed", /^rerank response not JSON: /);
+      expectEndpointError(
+        await thrownBy(fake.url),
+        "malformed",
+        "rerank response not JSON: Failed to parse JSON",
+      );
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  test("a 2xx body that breaks while it is read is network, not malformed", async () => {
+    // The connection dropped mid-body: nothing is wrong with the body's
+    // shape, so the category points at the path, not at the endpoint.
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"results":['));
+          controller.error(new Error("connection reset"));
+        },
+      });
+      return new Response(body, { status: 200 });
+    }) as unknown as typeof fetch;
+    try {
+      expectEndpointError(await thrownBy(fake.url), "network", /^network error: /);
     } finally {
       globalThis.fetch = realFetch;
     }

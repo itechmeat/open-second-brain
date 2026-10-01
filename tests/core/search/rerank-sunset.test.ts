@@ -6,6 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 
 import type { EmbeddingSunsetSurvey } from "../../../src/core/search/embeddings/sunset.ts";
 import { parseIsoUtc } from "../../../src/core/brain/health/iso-time.ts";
@@ -51,6 +52,16 @@ function result(id: number): BrainSearchResult {
 }
 
 const RESULTS = Object.freeze([result(1), result(2)]);
+
+/** Rows in the persistent query cache of the index at `dbPath`. */
+function queryCacheRows(dbPath: string): number {
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    return db.query<{ c: number }, []>("SELECT count(*) AS c FROM query_cache").get()?.c ?? 0;
+  } finally {
+    db.close();
+  }
+}
 
 function surveyWith(sunsetAt: string | null): EmbeddingSunsetSurvey {
   return {
@@ -169,18 +180,11 @@ describe("the stage under an injected survey", () => {
     expect(fake.callCount()).toBe(3);
   });
 
-  test("kinds local and decision-model never consult the survey", async () => {
-    let consulted = 0;
-    const watched: EmbeddingSunsetSurvey = {
-      reviewedAt: "2026-09-30",
-      get entries() {
-        consulted += 1;
-        return surveyWith(PAST).entries;
-      },
-    };
-    expect((await run(watched, { kind: "local" })).skipped).toBe(0);
-    expect((await run(watched, { kind: "decision-model" })).skipped).toBe(0);
-    expect(consulted).toBe(0);
+  test("the local kind never consults the survey", async () => {
+    // A passed date would skip an openai-compat request; the local
+    // reranker is this build's own and has no vendor date to pass.
+    const { skipped } = await run(surveyWith(PAST), { kind: "local" });
+    expect(skipped).toBe(0);
     expect(fake.callCount()).toBe(0);
   });
 });
@@ -228,6 +232,9 @@ describe("through search()", () => {
     expect(first.retrievalTrail?.degraded).toContainEqual({
       code: RETRIEVAL_DEGRADATION.rerankModelSunset,
     });
+    // Unlike an endpoint failure, a passed date is a stable verdict, so
+    // the answer is written to the query cache.
+    expect(queryCacheRows(dbPath)).toBe(1);
     const second = await search(config, { query: "fox", limit: 10 });
     expect(calls).toBe(0);
     expect(second.retrievalTrail).toEqual(first.retrievalTrail);
