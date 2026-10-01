@@ -31,6 +31,7 @@ import { SKILL_TOOLS } from "../../src/mcp/skill-tools.ts";
 import type { ServerContext, ToolDefinition } from "../../src/mcp/tool-contract.ts";
 import { isToolErrorCode } from "../../src/mcp/tool-error-codes.ts";
 import { buildToolTable, findTool } from "../../src/mcp/tools.ts";
+import { readRpcErrorCode } from "../helpers/tool-error-envelope.ts";
 
 const TOOLS = buildToolTable("full");
 
@@ -278,7 +279,7 @@ describe("write-session codes at the boundary", () => {
     expect(response?.error?.code).toBe(INVALID_PARAMS);
     const data = response?.error?.data as Record<string, unknown>;
     expect(Object.keys(data)).toEqual(["errors", "code"]);
-    expect(data["code"]).toBe("invalid_params");
+    expect(readRpcErrorCode(response)).toBe("invalid_params");
   });
 });
 
