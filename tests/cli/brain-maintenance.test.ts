@@ -30,6 +30,7 @@ import { MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT } from "../../src/core/brain/p
 import { sqliteVecLoadable } from "../helpers/sqlite-vec.ts";
 import { startFakeHttp, type FakeHttp } from "../helpers/fake-http.ts";
 import { FAKE_PROVIDER_KEY } from "../helpers/fake-credentials.ts";
+import { homeEnv } from "../helpers/platform.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
 /**
@@ -116,8 +117,15 @@ test("a malformed window is a usage error", async () => {
 });
 
 /** The per-test config, which alone names the test vault. */
+/**
+ * The lane mints per-device state and runs custom tasks from the home
+ * directory, so every lane-running child gets a home of its own under
+ * the test's temp dir rather than the runner's.
+ */
 function baseEnv(): Record<string, string> {
-  return { OPEN_SECOND_BRAIN_CONFIG: configPath };
+  const home = join(tmp, "home");
+  mkdirSync(home, { recursive: true });
+  return { OPEN_SECOND_BRAIN_CONFIG: configPath, ...homeEnv(home) };
 }
 
 /** The local provider is configured, model-free and price-free, and the lane is opted in. */
