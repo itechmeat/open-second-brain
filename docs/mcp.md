@@ -188,7 +188,11 @@ Every failed call now carries a stable, machine-readable code, so a
 client can branch on the failure without matching English prose. The
 prose itself is unchanged: every error message and every error text
 block reads byte for byte as it did before, and a successful result
-never gains the envelope.
+never gains the envelope. The one message that changed is the HTTP
+transport's answer to a throw that escapes its dispatch: it used to be
+the raw error message, and it is now `internal error: <message>` with the
+message redacted for the bind's reach, the same answer the dispatcher
+gives an internal error.
 
 A failure reaches the client on one of two channels, and the code rides
 in a different place on each:
@@ -206,7 +210,9 @@ in the default for the numeric JSON-RPC code: `parse_error` (-32700),
 (-32602), `internal_error` (-32603). Existing `data` members such as
 `tool`, `unknown_arguments` or `errors` are kept as they were, with
 `code` added after them. A refusing site's code is itself a registry
-member; the server checks it and names an unregistered one on stderr.
+member; the server checks it, still sends an unregistered one as it is,
+and names it on stderr, JSON-quoted and capped at 120 characters
+(`warning: unregistered error code on the wire: "<code>"`).
 A `code` member that is not a string is replaced by the default, and
 `data` is always an object, never an array.
 
@@ -318,6 +324,12 @@ warning: unclassified tool error mapped to internal_error: <error name>
 
 Codes are fixed tokens; none is ever built from a path, a note name or
 a query.
+
+The Hermes bridge surfaces the JSON-RPC channel's code as `BridgeError.code`
+(the string `error.data.code`, or `None` for a transport failure and for a
+response whose code is missing or not a string), so a Hermes caller
+branches on the token without parsing the rendered message; `str(err)` is
+unchanged.
 
 ## Tool Highlights
 
