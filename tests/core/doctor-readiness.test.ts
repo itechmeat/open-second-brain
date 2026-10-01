@@ -21,6 +21,7 @@ import {
   withReadinessTimeout,
 } from "../../src/core/doctor-readiness.ts";
 import { buildPayload } from "../../src/core/install/payload.ts";
+import { serializeMcpServerTable } from "../../src/core/install/grok-config.ts";
 import { registerAllAdapters } from "../../src/core/install/adapters/all.ts";
 import { manifestPath } from "../../src/core/install/manifest.ts";
 
@@ -549,10 +550,20 @@ describe("probeRegisteredCommands", () => {
     mkdirSync(dirname(toml), { recursive: true });
     writeFileSync(
       toml,
-      `[mcp_servers.open-second-brain]\ncommand = "${bun}"\n` +
-        `args = ["run", "${script}", "mcp", "--vault", "${tmp}"]\n` +
-        `[mcp_servers.open-second-brain-writer]\ncommand = "${bun}"\n` +
-        `args = ["run", "${script}", "mcp", "--writer-only", "--vault", "${tmp}"]\n`,
+      // Serialize through the product's own TOML writer - byte for byte
+      // what `o2b install grok --apply` records. A template that inlines
+      // the raw platform paths is NOT valid TOML on Windows: a basic
+      // string's backslash is an escape sequence, so `C:\Users\...` fails
+      // the value parse and the probe can only answer "malformed"
+      // (unknown) - it never reaches the command it was meant to judge.
+      serializeMcpServerTable("open-second-brain", {
+        command: bun,
+        args: ["run", script, "mcp", "--vault", tmp],
+      }) +
+        serializeMcpServerTable("open-second-brain-writer", {
+          command: bun,
+          args: ["run", script, "mcp", "--writer-only", "--vault", tmp],
+        }),
     );
     writeManifestEntries({ grok: manifestEntry("grok", toml, "managed-block") });
     const v = await probeRegisteredCommands(installedRuntimeOpts());
