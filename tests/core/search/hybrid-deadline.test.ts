@@ -277,7 +277,9 @@ test("the deadline bounds the composite path with rerank enabled and every lane 
   expect(codes).toContain(RETRIEVAL_DEGRADATION.hybridDeadlineExceeded);
 });
 
-test("the new code rides the closed vocabulary and its sentence is unique", () => {
+test("the new code rides the closed vocabulary and its sentence names the deadline", () => {
+  // Sentence UNIQUENESS across the whole vocabulary is owned by
+  // retrieval-trail.test.ts; this test owns this code's value and sentence.
   expect(RETRIEVAL_DEGRADATION.hybridDeadlineExceeded).toBe("hybrid-deadline-exceeded");
   expect(isRetrievalDegradationCode("hybrid-deadline-exceeded")).toBe(true);
   const sentence = describeRetrievalDegradation(RETRIEVAL_DEGRADATION.hybridDeadlineExceeded);

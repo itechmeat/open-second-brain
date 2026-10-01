@@ -38,6 +38,7 @@ import { join } from "node:path";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { DREAM_STEP } from "../../src/core/brain/dream-step.ts";
 import type { MaintenanceSpendReceipt } from "../../src/core/brain/maintenance/journal.ts";
+import { LANE_TASKS } from "../../src/core/brain/maintenance/lane.ts";
 import { indexVault } from "../../src/core/search/indexer.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { makeConfig } from "../helpers/search-fixtures.ts";
@@ -520,8 +521,10 @@ test("brain_maintenance forwards the sink to every task it dispatches", async ()
     (await callWithToken(server, "brain_maintenance", { operation: "run", force: true })).isError,
   ).toBe(false);
   // The lane is a dispatcher, so it speaks with its tasks' voices: each
-  // event names the operation that emitted it, never the lane.
-  expect(operationsIn(frames)).toEqual(new Set(["dream", "reindex", "bridges", "clusters"]));
+  // event names the operation that emitted it, never the lane. The
+  // population comes from LANE_TASKS, not a hand-copied list - a fifth
+  // lane task must emit under its own name or this fails with it.
+  expect(operationsIn(frames)).toEqual(new Set(LANE_TASKS));
 });
 
 test("no token leaves every one of them silent", async () => {

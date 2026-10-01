@@ -90,14 +90,15 @@ const BASE_OPTS: RankerOptions = {
   nowMs: NOW,
 };
 
-test("gate off (default) keeps today's vector-only behavior byte-identical", () => {
-  const withOption = rankResults(vectorOnlyInputs(), BASE_OPTS);
-  const withoutOption = rankResults(vectorOnlyInputs(), { ...BASE_OPTS });
-  expect(withOption.map((r) => r.score)).toEqual(withoutOption.map((r) => r.score));
-  expect(withOption[0]!.breakdown!.gate).toBeUndefined();
-  // The metadata layers actually fired: the run below has something to gate.
-  expect(withOption[0]!.breakdown!.recency).toBeGreaterThan(0);
-  expect(withOption[0]!.breakdown!.entity).toBeGreaterThan(0);
+test("gate off (default) leaves every boost intact and writes no gate receipt", () => {
+  // The option ABSENT is the off state: the layers fire at full amplitude
+  // and no gate breakdown appears. The gate's byte-identity when a vote IS
+  // cast is owned by the one-keyword-hit test below.
+  const ungated = rankResults(vectorOnlyInputs(), BASE_OPTS);
+  expect(ungated[0]!.breakdown!.gate).toBeUndefined();
+  // The metadata layers actually fired: the gated runs have something to gate.
+  expect(ungated[0]!.breakdown!.recency).toBeGreaterThan(0);
+  expect(ungated[0]!.breakdown!.entity).toBeGreaterThan(0);
 });
 
 test("gate on + no lexical vote: every gated layer contributes exactly zero", () => {

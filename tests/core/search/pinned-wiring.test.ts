@@ -13,6 +13,7 @@
  */
 
 import { test, expect, beforeEach, afterEach } from "bun:test";
+import { utimesSync } from "node:fs";
 
 import { PINNED_BOOST_CAP } from "../../../src/core/search/ranker.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
@@ -37,16 +38,23 @@ afterEach(() => {
 
 async function build(): Promise<void> {
   // Byte-identical bodies: the pin is the only ranking difference.
-  writeMd(
+  const pinnedPath = writeMd(
     vault,
     "notes/pinned.md",
     ["---", "pinned: true", "---", "", "robin finch body."].join("\n"),
   );
-  writeMd(
+  const plainPath = writeMd(
     vault,
     "notes/plain.md",
     ["---", "pinned: false", "---", "", "robin finch body."].join("\n"),
   );
+  // One shared mtime. The indexer records whole seconds and the Weibull
+  // recency layer decays continuously from there, so two writes that
+  // straddle a second boundary would perturb the exact-cap difference the
+  // assertion below demands - a wall-clock artifact, not the pin.
+  const shared = new Date(1_750_000_000_000);
+  utimesSync(pinnedPath, shared, shared);
+  utimesSync(plainPath, shared, shared);
   await indexVault(makeConfig({ vault, dbPath }));
 }
 

@@ -17,6 +17,7 @@ import {
 } from "../../src/cli/brain/verbs/maintenance.ts";
 import {
   LANE_TASK,
+  LANE_TASKS,
   type MaintenanceSpendReceipt,
   type MaintenanceTaskResult,
 } from "../../src/core/brain/maintenance/lane.ts";
@@ -65,12 +66,10 @@ test("run executes dream and reindex; status shows the journal", async () => {
     tasks: Array<{ name: string; ok: boolean }>;
   };
   expect(ran.verdict).toBe("run");
-  expect(ran.tasks.map((t) => t.name).toSorted()).toEqual([
-    "bridges",
-    "clusters",
-    "dream",
-    "reindex",
-  ]);
+  // The lane's population, not a hand-copied list: a fifth task is added
+  // to LANE_TASKS in one place or not at all (the drift the surface-parity
+  // census exists for).
+  expect(ran.tasks.map((t) => t.name).toSorted()).toEqual([...LANE_TASKS].toSorted());
   expect(ran.tasks.every((t) => t.ok)).toBe(true);
   expect(existsSync(join(vault, ".open-second-brain", "maintenance-runs.jsonl"))).toBe(true);
 
