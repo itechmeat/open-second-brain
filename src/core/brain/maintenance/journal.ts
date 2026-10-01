@@ -21,6 +21,7 @@ import {
 import { DERIVED_STORE_DIR } from "../path-constants.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import type { HostPressureUnmeasurableReason } from "./host-pressure.ts";
+import { isCustomLaneTask } from "./custom-tasks.ts";
 import { renameWithRetry } from "../../fs-atomic.ts";
 
 export const MAINTENANCE_JOURNAL_CAP = 500;
@@ -75,9 +76,11 @@ export interface MaintenanceJournalEntry {
   readonly error?: string;
   /**
    * True on a failed row whose task hit its safeguard deadline. Journaled
-   * and reported like any failure, but not counted toward the streak that
-   * refuses the task: a pass that ran out of time is not a broken pass,
-   * and refusing it would stop the keyword index from refreshing at all.
+   * and reported like any failure. For a built-in task it is not counted
+   * toward the streak that refuses the task: a pass that ran out of time
+   * is not a broken pass, and refusing it would stop the keyword index
+   * from refreshing at all. For a `custom:<name>` task it IS counted: see
+   * {@link consecutiveTaskFailures}.
    */
   readonly timed_out?: boolean;
   /** Host pressure the gate read, on a `skipped:pressure` row. */
@@ -225,9 +228,13 @@ export function listJournal(vault: string, limit?: number): MaintenanceJournalEn
  *   - only rows that record a completed ATTEMPT are counted. A gate
  *     refusal and a lease skip are not attempts, so they cannot deepen a
  *     streak.
- *   - a failure that is a safeguard TIMEOUT (`timed_out`) is skipped: it
- *     neither deepens the streak nor ends it, so a long pass that keeps
- *     running out of budget is reported every night but never refused.
+ *   - a failure of a BUILT-IN task that is a safeguard TIMEOUT
+ *     (`timed_out`) is skipped: it neither deepens the streak nor ends it,
+ *     so a long pass that keeps running out of budget is reported every
+ *     night but never refused. A custom (`custom:<name>`) task's timeout
+ *     COUNTS: its budget is the operator's own `_timeout_seconds`, so a
+ *     timeout there is the command hanging, not a slow vault, and a
+ *     command that always hangs must reach the refusal like any failure.
  *
  * A row that ran but recorded no outcome stops the walk as well: refusing
  * work on evidence this build cannot read is the wrong direction to err.
@@ -268,8 +275,12 @@ export function consecutiveTaskFailures(vault: string, task: string): number {
     }
     if (entry.verdict !== MAINTENANCE_VERDICT.run) continue;
     if (entry.ok !== false) break;
-    // A timeout neither counts nor ends the streak: see `timed_out`.
-    if (entry.timed_out === true) continue;
+    // A built-in timeout neither counts nor ends the streak: see
+    // `timed_out`. A custom task's timeout counts like any failure: the
+    // operator chose its budget, so running out of it is the command
+    // hanging, and a command that always hangs would otherwise never be
+    // refused while costing its full timeout of lease time every pass.
+    if (entry.timed_out === true && !isCustomLaneTask(entry.task)) continue;
     streak += 1;
   }
   return streak;

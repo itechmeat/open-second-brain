@@ -19,6 +19,7 @@ import {
 import {
   dailyWindowContains,
   evaluateGates,
+  isLaneTaskId,
   LANE_TASK,
   runMaintenance,
   type MaintenanceTask,
@@ -602,6 +603,97 @@ describe("the consecutive-failure streak", () => {
     const forced = await laneRun(true, true);
     expect(forced.tasks[0]!.ok).toBe(true);
     expect(consecutiveTaskFailures(vault, TASK)).toBe(0);
+  });
+});
+
+describe("custom task identities and the custom timeout streak rule", () => {
+  const CUSTOM = "custom:x" as const;
+
+  function customRun(
+    run: () => Promise<void>,
+    extra: { retryTasks?: ReadonlyArray<typeof CUSTOM> } = {},
+  ) {
+    return runMaintenance(vault, {
+      now: NOW,
+      holder: "worker-a",
+      ...extra,
+      tasks: [
+        { name: CUSTOM, run },
+        { name: LANE_TASK.dream, run: async () => void 0 },
+      ],
+    });
+  }
+
+  test("isLaneTaskId accepts the built-ins and well-formed custom identities only", () => {
+    expect(isLaneTaskId(LANE_TASK.reindex)).toBe(true);
+    expect(isLaneTaskId(CUSTOM)).toBe(true);
+    expect(isLaneTaskId("custom:Bad")).toBe(false);
+    expect(isLaneTaskId("tidy")).toBe(false);
+    expect(isLaneTaskId(undefined)).toBe(false);
+  });
+
+  test("a failing custom task is refused by name at the limit while the built-ins still run", async () => {
+    const failing = async () => {
+      throw new Error("exit 3: broken");
+    };
+    for (let i = 0; i < MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT; i++) {
+      // eslint-disable-next-line no-await-in-loop
+      await customRun(failing);
+    }
+    const refused = await customRun(failing);
+    const custom = refused.tasks.find((t) => t.name === CUSTOM)!;
+    expect(custom.refused).toBe(true);
+    expect(custom.error).toContain(`--retry ${CUSTOM}`);
+    expect(refused.tasks.find((t) => t.name === LANE_TASK.dream)?.ok).toBe(true);
+  });
+
+  test("a custom task that keeps timing out is refused: its timeouts count", async () => {
+    const timingOut = async () => {
+      throw new SafeguardTimeoutError(CUSTOM, 1000);
+    };
+    for (let i = 0; i < MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT; i++) {
+      // eslint-disable-next-line no-await-in-loop
+      const run = await customRun(timingOut);
+      expect(run.tasks.find((t) => t.name === CUSTOM)?.timed_out).toBe(true);
+    }
+    expect(consecutiveTaskFailures(vault, CUSTOM)).toBe(MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT);
+    const refused = await customRun(timingOut);
+    expect(refused.tasks.find((t) => t.name === CUSTOM)?.refused).toBe(true);
+  });
+
+  test("a built-in task timing out as often is still not refused", async () => {
+    for (let i = 0; i <= MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT; i++) {
+      // eslint-disable-next-line no-await-in-loop
+      const run = await runMaintenance(vault, {
+        now: NOW,
+        holder: "worker-a",
+        tasks: [
+          {
+            name: LANE_TASK.reindex,
+            run: async () => {
+              throw new SafeguardTimeoutError(LANE_TASK.reindex, 1000);
+            },
+          },
+        ],
+      });
+      expect(run.tasks[0]!.refused).toBeUndefined();
+    }
+    expect(consecutiveTaskFailures(vault, LANE_TASK.reindex)).toBe(0);
+  });
+
+  test("retryTasks names a custom identity past its refusal, and stale-first orders it", async () => {
+    const failing = async () => {
+      throw new Error("exit 1: still broken");
+    };
+    for (let i = 0; i < MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT; i++) {
+      // eslint-disable-next-line no-await-in-loop
+      await customRun(failing);
+    }
+    // dream has succeeded on every pass, the custom task never: it runs first.
+    const retried = await customRun(async () => void 0, { retryTasks: [CUSTOM] });
+    expect(retried.tasks.map((t) => t.name)).toEqual([CUSTOM, LANE_TASK.dream]);
+    expect(retried.tasks[0]!.ok).toBe(true);
+    expect(consecutiveTaskFailures(vault, CUSTOM)).toBe(0);
   });
 });
 

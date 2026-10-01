@@ -67,6 +67,7 @@ import {
   type MaintenanceVerdict,
 } from "./journal.ts";
 import { HOST_PRESSURE, measureHostPressure, type HostPressureReading } from "./host-pressure.ts";
+import { isCustomLaneTask, type CustomLaneTask } from "./custom-tasks.ts";
 
 /** The persisted model-spend receipt; defined beside the row it rides. */
 export type { MaintenanceSpendReceipt } from "./journal.ts";
@@ -199,8 +200,26 @@ export function isLaneTask(value: unknown): value is LaneTask {
   return typeof value === "string" && (LANE_TASKS as ReadonlyArray<string>).includes(value);
 }
 
+/**
+ * Every identity the lane can run, journal and retry: a built-in
+ * {@link LaneTask} or an install-owned `custom:<name>` task declared in
+ * the machine config. The built-in vocabulary above is unchanged; a
+ * custom identity carries a colon, which no `OPERATION` value does, so
+ * the two populations cannot collide.
+ */
+export type LaneTaskId = LaneTask | CustomLaneTask;
+
+/**
+ * Whether `value` is a built-in lane task or a well-formed custom
+ * identity. Shape only: whether a custom identity is DECLARED on this
+ * install is the caller's to check against the tasks it registered.
+ */
+export function isLaneTaskId(value: unknown): value is LaneTaskId {
+  return isLaneTask(value) || isCustomLaneTask(value);
+}
+
 export interface MaintenanceTask {
-  readonly name: LaneTask;
+  readonly name: LaneTaskId;
   /**
    * Run the pass. A pass that spent model budget returns the
    * {@link MaintenanceSpendReceipt} the cost kernel priced for it, and
@@ -229,12 +248,12 @@ export interface RunMaintenanceOptions extends EvaluateGatesOptions {
    * gate still applies; a name that is not a registered task is the
    * caller's to reject, because only the caller knows what it registered.
    */
-  readonly retryTasks?: ReadonlyArray<LaneTask>;
+  readonly retryTasks?: ReadonlyArray<LaneTaskId>;
   readonly leaseTtlMs?: number;
 }
 
 export interface MaintenanceTaskResult {
-  readonly name: LaneTask;
+  readonly name: LaneTaskId;
   readonly ok: boolean;
   readonly duration_ms: number;
   readonly error?: string;
@@ -447,7 +466,7 @@ function resolvePressureGate(
 /** The task-result and journal rows of a streak refusal, or `undefined` to run. */
 function refuseOnStreak(
   vault: string,
-  task: LaneTask,
+  task: LaneTaskId,
   limit: number,
 ):
   | { result: MaintenanceTaskResult; entry: Omit<MaintenanceJournalEntry, "ts" | "holder"> }
