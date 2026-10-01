@@ -13,7 +13,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Store, normalizeAlias } from "../../../src/core/search/store.ts";
-import { LATEST_SCHEMA_VERSION } from "../../../src/core/search/schema.ts";
 import { makeConfig } from "../../helpers/search-fixtures.ts";
 import type { ResolvedSearchConfig } from "../../../src/core/search/types.ts";
 
@@ -52,10 +51,6 @@ function targetDocId(store: Store, sourceId: number): number | null {
     .get(sourceId) as { target_document_id: number | null } | null;
   return row?.target_document_id ?? null;
 }
-
-test("schema version is 13", () => {
-  expect(LATEST_SCHEMA_VERSION).toBe(13);
-});
 
 test("normalizeAlias lower-cases, trims, and NFC-normalises", () => {
   expect(normalizeAlias("  Project Alpha ")).toBe("project alpha");

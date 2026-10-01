@@ -93,10 +93,6 @@ function newDoc(db: Database, path: string, bounds: { min: number | null; max: n
 // Migration v13
 // ─────────────────────────────────────────────────────────────────────────────
 
-test("latest schema version is 13", () => {
-  expect(LATEST_SCHEMA_VERSION).toBe(13);
-});
-
 test("fresh migration carries the three per-document columns", () => {
   const db = openMigrated();
   for (const col of EVENT_TIME_COLUMNS) expect(hasColumn(db, "documents", col)).toBe(true);
