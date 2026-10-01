@@ -215,6 +215,18 @@ describe("an enabled remote rerank that cannot resolve its endpoint is one error
     expect(issues[0]!.message).toContain("search_rerank_base_url must be an https endpoint");
   });
 
+  test("a base URL carrying credentials is refused without repeating them", () => {
+    // The key travels in a header; a user:password@ part never belongs in
+    // the URL, and doctor output is pasted into issues, so it is not echoed.
+    configure({ baseUrl: "http://user:s3cret@lan-host.invalid:8080/v1" });
+    const { issues } = run();
+    expect(issues.map((i) => i.code)).toEqual([RERANK_ENDPOINT_UNCONFIGURED_CODE]);
+    expect(issues[0]!.message).toContain(
+      "search_rerank_base_url must not carry user:password@ credentials",
+    );
+    expect(issues[0]!.message).not.toContain("s3cret");
+  });
+
   test("a base URL that is not a URL is the same error", () => {
     configure({ baseUrl: "not a url" });
     const { issues } = run();

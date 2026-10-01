@@ -17,10 +17,11 @@
  * doctor probe would spend provider budget on every run, send a request
  * an operator did not ask for, and report a state that is stale the
  * moment the pass ends. So the check proves configuration only: the
- * three endpoint fields resolve to non-blank values, the base URL passes
- * the endpoint rule the provider applies (shape only), the key variable
- * is set and not blank, a provider name that left a field empty is named,
- * and the survey's answer for the model.
+ * three endpoint fields resolve to non-blank values, the base URL carries
+ * no `user:password@` part and passes the endpoint rule the provider
+ * applies (shape only), the key variable is set and not blank, a provider
+ * name that left a field empty is named, and the survey's answer for the
+ * model.
  *
  * ## Scope
  *
@@ -102,6 +103,28 @@ function blank(value: string | null): boolean {
 }
 
 /**
+ * The fixed finding for a base URL that carries `user:password@`. The key
+ * travels in a header from {@link ENV_KEY_KEY}, and the endpoint rule's
+ * own refusal repeats the raw URL, so the URL is never echoed here.
+ */
+const CREDENTIALED_BASE_URL =
+  `${BASE_URL_KEY} must not carry user:password@ credentials; the key is sent in a header ` +
+  `from ${ENV_KEY_KEY}`;
+
+/** Whether `baseUrl` parses and names a username or a password. */
+function carriesCredentials(baseUrl: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    // Not a URL at all: the endpoint rule names that itself, and a string
+    // it cannot parse has no userinfo part to strip.
+    return false;
+  }
+  return parsed.username !== "" || parsed.password !== "";
+}
+
+/**
  * Why `baseUrl` would be refused by the endpoint rule the rerank provider
  * applies at construction (`assertHttpEgressEndpoint`), or null when it is
  * accepted. No request is sent; the rule reads the URL's shape only.
@@ -123,6 +146,8 @@ function endpointGaps(rerank: ResolvedRerankConfig, ctx: DoctorCheckContext): st
   const gaps: string[] = [];
   if (rerank.baseUrl === null || blank(rerank.baseUrl)) {
     gaps.push(`${BASE_URL_KEY} is not set`);
+  } else if (carriesCredentials(rerank.baseUrl)) {
+    gaps.push(CREDENTIALED_BASE_URL);
   } else {
     const refusal = baseUrlRefusal(rerank, rerank.baseUrl);
     if (refusal !== null) gaps.push(refusal);
