@@ -317,6 +317,12 @@ export const OUT_OF_VAULT_STATE: ReadonlyArray<OutOfVaultState> = Object.freeze(
  */
 export const OUT_OF_VAULT_SWEEP_EXCLUSIONS: ReadonlyMap<string, string> = new Map([
   [
+    "src/core/doctor-selftest.ts",
+    "the doctor self-test builds one temp-rooted scratch vault per run (its store database is " +
+      "pinned inside it) and removes the whole tree on every exit path, so nothing it creates " +
+      "outlives the run outside the vault",
+  ],
+  [
     "src/mcp/error-redaction.ts",
     "it reads the home and temp roots only to REDACT them out of error prose sent to a remote " +
       "MCP caller; it builds no path to write, read or create, so it leaves nothing on the " +

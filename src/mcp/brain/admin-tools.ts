@@ -636,7 +636,7 @@ export const ADMIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_maintenance",
     description:
-      "Quiet-window, lease-guarded heavy maintenance lane: run executes dream, reindex, bridges and clusters stale-first behind the window, busy, host-pressure and streak gates and an expiring lease (force bypasses all of those but the lease); status renders the lease holder and recent journal. The reindex pass embeds when the configured semantic search can reach a provider: its predicted spend is announced and its actual spend is receipted (task row field `receipt`), leashed by the embedding cost gate unless force_cost is set.",
+      "Quiet-window, lease-guarded maintenance lane: run executes dream, reindex, bridges, clusters behind window, busy, pressure and streak gates and a lease; status renders lease and journal. Reindex embeds when a provider is reachable: spend announced, receipted, leashed by the cost gate unless forced.",
     inputSchema: {
       type: "object",
       properties: {
