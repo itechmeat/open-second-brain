@@ -17,6 +17,7 @@
  */
 
 import { BRAIN_MANIFEST_SIDECAR_SINCE_VERSION } from "../../core/brain/manifest.ts";
+import { HYGIENE_DETECTOR_IDS } from "../../core/brain/hygiene/types.ts";
 import {
   RECALL_CHANNELS,
   RECALL_TELEMETRY_MODES,
@@ -427,7 +428,7 @@ export const VERB_HELP: Record<string, string> = {
     "Together with rollback, the family is log / diff / revert.\n",
   hygiene:
     "usage: o2b brain hygiene <scan|apply> [--vault <path>] [--json]\n" +
-    "                          [--detectors conflicts,dedup,freshness,usefulness]\n" +
+    `                          [--detectors ${HYGIENE_DETECTOR_IDS.join(",")}]\n` +
     "                          [--ids <finding-id,...>] [--dry-run]\n" +
     "Scan is read-only: contested truth slots, near-duplicate preferences,\n" +
     "stale/orphaned derived pages, low-usefulness candidates. Apply executes\n" +

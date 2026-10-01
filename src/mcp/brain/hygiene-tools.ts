@@ -341,7 +341,8 @@ export const HYGIENE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         detectors: {
           type: "array",
           items: { type: "string", enum: [...HYGIENE_DETECTOR_IDS] },
-          description: "Detector subset for scan/apply. Default: all detectors.",
+          description:
+            "Detector subset for scan/apply. Default: the DEFAULT_SCAN_IDS sweep - every registered detector except the opt-in ones.",
         },
         ids: {
           type: "array",
