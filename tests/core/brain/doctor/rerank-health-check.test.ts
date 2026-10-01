@@ -185,6 +185,15 @@ describe("an enabled remote rerank that cannot resolve its endpoint is one error
     expect(issues[0]!.message).not.toContain("nobody-registered-this");
   });
 
+  test("an unregistered provider name is not blamed for a refused base URL", () => {
+    // A profile could have supplied a base URL, but not repaired this one.
+    configure({ provider: "nobody-registered-this", baseUrl: "http://example.invalid/v1" });
+    const { issues } = run();
+    expect(issues.map((i) => i.code)).toEqual([RERANK_ENDPOINT_UNCONFIGURED_CODE]);
+    expect(issues[0]!.message).toContain("search_rerank_base_url must be an https endpoint");
+    expect(issues[0]!.message).not.toContain("nobody-registered-this");
+  });
+
   test("a key variable set to blank is the error the runtime would raise", () => {
     process.env[KEY_VAR] = "  ";
     const { issues } = run();
