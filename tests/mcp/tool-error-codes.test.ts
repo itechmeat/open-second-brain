@@ -294,19 +294,19 @@ describe("codeForError", () => {
   });
 
   test("an unknown error is internal_error, logged once by name only", () => {
-    const secret = "/home/someone/vault/private.md";
+    const privatePath = "/home/someone/vault/private.md";
     const cases: ReadonlyArray<readonly [unknown, string]> = [
-      [new Error(`boom at ${secret}`), "Error"],
-      [Object.assign(new Error(`ENOENT: ${secret}`), { code: "ENOENT" }), "Error"],
-      [`thrown string ${secret}`, "string"],
+      [new Error(`boom at ${privatePath}`), "Error"],
+      [Object.assign(new Error(`ENOENT: ${privatePath}`), { code: "ENOENT" }), "Error"],
+      [`thrown string ${privatePath}`, "string"],
       // A class that never sets `this.name` is still named by its class.
-      [new Nameless(`boom at ${secret}`), "Nameless"],
+      [new Nameless(`boom at ${privatePath}`), "Nameless"],
     ];
     for (const [thrown, name] of cases) {
       lines = [];
       expect(codeForError(thrown)).toBe("internal_error");
       expect(lines).toEqual([`${UNCLASSIFIED_PREFIX}${name}\n`]);
-      expect(lines[0]).not.toContain(secret);
+      expect(lines[0]).not.toContain(privatePath);
     }
   });
 });
