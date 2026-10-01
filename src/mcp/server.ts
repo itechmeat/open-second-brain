@@ -38,6 +38,7 @@ import {
 } from "./tool-error-codes.ts";
 import {
   META_MEMBER,
+  PROGRESS_META_KEY,
   progressRefusal,
   progressSink,
   readProgressToken,
@@ -477,8 +478,8 @@ export class MCPServer {
     const token = readProgressToken(params);
     const onProgress = progressSink(token, this.sendNotification);
     // A token this transport cannot honour is refused by name on the way
-    // out - on the error envelope too, because a call that asked for
-    // progress and then failed still never got any.
+    // out - on an isError result and on a JSON-RPC error too, because a
+    // call that asked for progress and then failed still never got any.
     const refusal: ProgressRefusal | undefined =
       token !== undefined && onProgress === undefined
         ? progressRefusal(token, PROGRESS_REASON.transportSingleResponse)
@@ -487,7 +488,10 @@ export class MCPServer {
       const structured = await this.invokeToolHandler(tool, args, onProgress);
       return withProgressRefusal(buildMcpToolResult(tool, structured, this.artifactStore), refusal);
     } catch (exc) {
-      if (exc instanceof MCPError) throw exc;
+      if (exc instanceof MCPError) {
+        if (refusal === undefined) throw exc;
+        throw new MCPError(exc.code, exc.message, { ...exc.data, [PROGRESS_META_KEY]: refusal });
+      }
       // The tool-level twin of the INTERNAL_ERROR channel: the same raw
       // exception prose, so the same host-path redaction at remote reach.
       // A local caller already holds the filesystem, and these messages

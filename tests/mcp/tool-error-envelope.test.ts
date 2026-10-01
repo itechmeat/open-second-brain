@@ -142,6 +142,22 @@ describe("channel A: error.data.code on every JSON-RPC error", () => {
     ]);
   });
 
+  test("a JSON-RPC refusal of a call with a refused progress token carries the refusal", async () => {
+    // The refusal is not only for isError results: a call that asked for
+    // progress and was refused as a protocol error never got any either.
+    const res = await call(
+      serverWith(() => {
+        throw new MCPError(INVALID_PARAMS, "limit must be positive", { limit: -1 });
+      }),
+      { progressToken: "tok-2" },
+    );
+    expect(res["error"]["message"]).toBe("limit must be positive");
+    const data = res["error"]["data"] as JsonObject;
+    expect(Object.keys(data)).toEqual(["limit", PROGRESS_META_KEY, "code"]);
+    expect(data[PROGRESS_META_KEY]["progressToken"]).toBe("tok-2");
+    expect(data["code"]).toBe("invalid_params");
+  });
+
   test("a non-string code member is replaced by the default", async () => {
     const res = await call(
       serverWith(() => {

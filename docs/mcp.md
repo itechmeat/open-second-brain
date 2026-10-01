@@ -249,7 +249,9 @@ It is not placed in `structuredContent`: a strict client validates
 `structuredContent` against the tool's `outputSchema` even on an error
 result, and an error object there would fail that check. When the same
 call also carries a progress refusal, both keys sit side by side on the
-one `_meta` object.
+one `_meta` object. A call refused on the JSON-RPC channel carries its
+progress refusal in `error.data`, under the same
+`open-second-brain/progress` key, beside `code`.
 
 **The code list is closed.** Every code the server can send is a member
 of one registry, so a client can treat an unknown value as a newer
