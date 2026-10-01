@@ -32,6 +32,7 @@ import { buildHygienePlan } from "../../core/brain/hygiene/plan.ts";
 import { resolveConflictFindings } from "../../core/brain/hygiene/resolve-conflicts.ts";
 import { runHygieneScan } from "../../core/brain/hygiene/scan.ts";
 import {
+  HYGIENE_DETECTOR_IDS,
   isHygieneDetectorId,
   type HygieneDetectorId,
   type HygieneFinding,
@@ -339,7 +340,7 @@ export const HYGIENE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         detectors: {
           type: "array",
-          items: { type: "string", enum: ["conflicts", "dedup", "freshness", "usefulness"] },
+          items: { type: "string", enum: [...HYGIENE_DETECTOR_IDS] },
           description: "Detector subset for scan/apply. Default: all detectors.",
         },
         ids: {

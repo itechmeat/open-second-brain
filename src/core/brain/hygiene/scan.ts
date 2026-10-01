@@ -2,17 +2,21 @@
  * Hygiene scan - read-only composition over the detector registry
  * (continuity-hygiene-freshness suite; kanban t_698db8f7).
  *
- * Runs the requested detectors (default: all), folds their findings
- * into one frozen digest with per-detector counts, and converts a
- * thrown detector into an `errors` entry instead of failing the scan.
- * The scan never mutates the vault; remediation lives in `apply.ts`.
+ * Runs the requested detectors (default: the `DEFAULT_SCAN_IDS` sweep -
+ * NOT necessarily every registered detector; an explicit subset filters
+ * over all registered ids), folds their findings into one frozen digest
+ * with per-detector counts, and converts a thrown detector into an
+ * `errors` entry instead of failing the scan. The scan never mutates
+ * the vault; remediation lives in `apply.ts`.
  */
 
 import { detectConflicts } from "./detectors/conflicts.ts";
 import { detectDedup } from "./detectors/dedup.ts";
 import { detectFreshness } from "./detectors/freshness.ts";
+import { detectSlugCollisions } from "./detectors/slug-collisions.ts";
 import { detectUsefulness } from "./detectors/usefulness.ts";
 import {
+  DEFAULT_SCAN_IDS,
   HYGIENE_DETECTOR_IDS,
   type HygieneDetector,
   type HygieneDetectorId,
@@ -26,10 +30,15 @@ const DETECTORS: Readonly<Record<HygieneDetectorId, HygieneDetector>> = Object.f
   dedup: (vault, ctx) => detectDedup(vault, ctx),
   freshness: (vault) => detectFreshness(vault),
   usefulness: (vault, ctx) => detectUsefulness(vault, ctx),
+  "slug-collisions": (vault) => detectSlugCollisions(vault),
 });
 
 export interface RunHygieneScanOptions {
-  /** Detector subset to run; defaults to every registered detector. */
+  /**
+   * Detector subset to run; defaults to the `DEFAULT_SCAN_IDS` sweep. An
+   * explicit subset filters over ALL registered ids, so a registered
+   * detector excluded from the default sweep still runs when named here.
+   */
   readonly detectors?: ReadonlyArray<HygieneDetectorId>;
   /** Injected clock. */
   readonly now: Date;
@@ -39,7 +48,7 @@ export function runHygieneScan(vault: string, opts: RunHygieneScanOptions): Hygi
   const requested =
     opts.detectors !== undefined && opts.detectors.length > 0
       ? HYGIENE_DETECTOR_IDS.filter((id) => opts.detectors!.includes(id))
-      : HYGIENE_DETECTOR_IDS;
+      : DEFAULT_SCAN_IDS;
 
   const findings: HygieneFinding[] = [];
   const errors: HygieneScanError[] = [];

@@ -18,6 +18,7 @@ import { assertExpectedCount } from "../../../core/brain/count-guard.ts";
 import { resolveConflictFindings } from "../../../core/brain/hygiene/resolve-conflicts.ts";
 import { runHygieneScan } from "../../../core/brain/hygiene/scan.ts";
 import {
+  HYGIENE_DETECTOR_IDS,
   isHygieneDetectorId,
   type HygieneDetectorId,
   type HygieneScanReport,
@@ -30,7 +31,7 @@ function parseDetectors(raw: string | undefined): HygieneDetectorId[] | undefine
   const parts = raw.split(",").map((part) => part.trim());
   const detectors = parts.filter(isHygieneDetectorId);
   if (detectors.length !== parts.length) {
-    throw new Error("--detectors entries must be: conflicts, dedup, freshness, usefulness");
+    throw new Error(`--detectors entries must be: ${HYGIENE_DETECTOR_IDS.join(", ")}`);
   }
   return detectors;
 }

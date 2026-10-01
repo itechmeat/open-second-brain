@@ -64,15 +64,16 @@ async function scan(): Promise<any> {
   return r.result.structuredContent;
 }
 
-test("the detector tuple and its input-schema enum are untouched", () => {
-  expect(HYGIENE_DETECTOR_IDS).toEqual(["conflicts", "dedup", "freshness", "usefulness"]);
-  const schema = HYGIENE_TOOLS[0]!.inputSchema as any;
-  expect(schema.properties.detectors.items.enum).toEqual([
+test("the detector tuple and its input-schema enum stay in lockstep", () => {
+  expect(HYGIENE_DETECTOR_IDS).toEqual([
     "conflicts",
     "dedup",
     "freshness",
     "usefulness",
+    "slug-collisions",
   ]);
+  const schema = HYGIENE_TOOLS[0]!.inputSchema as any;
+  expect(schema.properties.detectors.items.enum).toEqual([...HYGIENE_DETECTOR_IDS]);
 });
 
 test("scan keeps every existing key and adds exactly one", async () => {

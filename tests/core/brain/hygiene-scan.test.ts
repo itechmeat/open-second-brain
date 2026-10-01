@@ -142,7 +142,13 @@ describe("freshness detector", () => {
 describe("scan composition", () => {
   test("runs every requested detector, freezes the digest, reports counts", () => {
     const report = runHygieneScan(vault, { now: NOW });
-    expect(report.detectors_run).toEqual(["conflicts", "dedup", "freshness", "usefulness"]);
+    expect(report.detectors_run).toEqual([
+      "conflicts",
+      "dedup",
+      "freshness",
+      "usefulness",
+      "slug-collisions",
+    ]);
     expect(Object.isFrozen(report)).toBe(true);
     expect(Object.isFrozen(report.findings)).toBe(true);
     expect(report.errors).toHaveLength(0);
