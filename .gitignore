@@ -42,3 +42,6 @@ sandbox-vault/
 # Local zg (zvec-grep) index. Listed here, not in .git/info/exclude, because
 # oxfmt reads .gitignore only and would otherwise format its manifest.
 .zvec-grep/
+
+# Personal editor ignore files (ZCode and similar): per-machine, never committed.
+.zcodeignore
