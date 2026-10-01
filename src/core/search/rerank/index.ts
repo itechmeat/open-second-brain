@@ -120,8 +120,8 @@ export interface ApplyCrossEncoderRerankOptions {
   /**
    * `openai-compat` kind only: consult the rerank sunset survey for the
    * configured model, and skip the request once its announced shutdown
-   * date has passed. Absent: the survey is not consulted (a direct caller
-   * such as the eval gate, which measures the endpoint it is pointed at).
+   * date has passed. Absent: the survey is not consulted (direct callers
+   * and tests that measure the endpoint they are pointed at).
    */
   readonly sunset?: RerankSunsetOptions;
 }

@@ -26,7 +26,11 @@ export const RERANK_FAILURE_CATEGORY = Object.freeze({
   gone: "gone",
   /** Any other HTTP 4xx: the endpoint refused this request as sent. */
   rejected: "rejected",
-  /** HTTP 408, 429 or 5xx: the endpoint may answer the same request later. */
+  /**
+   * HTTP 408, 429 or 5xx: the endpoint may answer later. Some vendors also
+   * answer 429 for exhausted quota; the category is computed from the
+   * status alone.
+   */
   transient: "transient",
   /** The request outlived this build's own per-request timeout. */
   timeout: "timeout",

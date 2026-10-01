@@ -1684,8 +1684,8 @@ check reads configuration only and sends no request:
 
 | Code | Stream | When | Next command |
 | ---- | ------ | ---- | ------------ |
-| `rerank-endpoint-unconfigured` | error | the base URL, the model or the key is missing, or `search_rerank_provider` names no registered profile, so every rerank-enabled search would fail | `o2b search rerank-provider list` |
-| `rerank-model-sunset-announced` | warning | the configured model has an announced decommission date that is less than 90 days away or already past | `o2b search rerank-provider add` |
+| `rerank-endpoint-unconfigured` | error | the base URL is missing or not an accepted endpoint, the model or the key is missing or blank, or `search_rerank_provider` names no registered profile and so left one of them empty, so every rerank-enabled search would fail | `o2b search rerank-provider list` |
+| `rerank-model-sunset-announced` | warning | the configured model has an announced decommission date that is 90 days away or fewer, or already past | `o2b search rerank-provider add` |
 | `rerank-model-sunset-unsurveyed` | uncertain | the configured model is outside the shipped rerank decommission survey, so no statement was made about it | none, with the reason printed |
 | `rerank-model-sunset-undetermined` | uncertain | the check ran and reached no verdict, for example because the survey is older than its horizon | none, with the reason printed |
 
@@ -1761,7 +1761,7 @@ from the provider's message:
 | `quota` | the endpoint answered 402 |
 | `gone` | the endpoint answered 404 or 410, the usual sign of a retired endpoint |
 | `rejected` | the endpoint answered any other 4xx |
-| `transient` | the endpoint answered 408, 429 or a 5xx |
+| `transient` | the endpoint answered 408, 429 or a 5xx. Some vendors also answer 429 for exhausted quota; the category is computed from the status alone |
 | `timeout` | the request outlived its timeout |
 | `network` | the request never reached an answer: refused connection, DNS, TLS or a redirect |
 | `malformed` | the endpoint answered, but the body was not JSON, carried the wrong number of scores, or an out-of-range or duplicate index |
@@ -1771,7 +1771,8 @@ An answer carrying `rerank-provider-unavailable` is served but never
 written to the query cache, so the next identical query asks the
 endpoint again instead of replaying the failure. An answer carrying
 `rerank-model-sunset` depends only on the build and the date, and is
-cached as usual. The sunset skip applies to the `openai-compat` kind
+cached as usual; the cache key carries the survey's review date, so a
+build with a corrected survey does not replay the old answer. The sunset skip applies to the `openai-compat` kind
 only: the `local` and `decision-model` kinds carry no model string to
 look up.
 
