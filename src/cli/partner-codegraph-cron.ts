@@ -32,9 +32,12 @@
 
 import {
   operatorScriptPath,
+  parseRecipeFormat,
   renderCronRecipe,
+  renderSystemdTimer,
   type CronRecipeOptions,
   type CronRecipeSpec,
+  type RecipeFormat,
 } from "./cron-recipe.ts";
 import { CODEGRAPH_CLI } from "../core/partner/codegraph.ts";
 import { GRAPH_HEALTH_CODES } from "../core/partner/codegraph-health.ts";
@@ -202,14 +205,25 @@ export const CODEGRAPH_RESYNC_RECIPE: CronRecipeSpec<CodegraphResyncOptions> = O
   buildVerifyCommand: ({ o2bBin }) => `${o2bBin} ${REPORT_COMMAND} ${FAIL_ON_HEALTH_FLAG}`,
 });
 
+/** Options for {@link renderCodegraphResyncTemplate}. */
+export interface RenderCodegraphResyncOptions extends CronRecipeOptions {
+  /** Recipe format; cron when omitted. */
+  readonly format?: RecipeFormat;
+}
+
 /**
- * Render the resync recipe for one repository. Pure text: nothing is
+ * Render the resync recipe for one repository, as a crontab and Hermes
+ * recipe (the default) or as a systemd user timer. Pure text: nothing is
  * created, spawned or scheduled here.
  */
 export function renderCodegraphResyncTemplate(
   projectPath: string,
   interval: string,
-  opts: CronRecipeOptions = {},
+  opts: RenderCodegraphResyncOptions = {},
 ): string {
-  return renderCronRecipe(CODEGRAPH_RESYNC_RECIPE, interval, { ...opts, projectPath });
+  const { format, ...rest } = opts;
+  const recipeOpts: CodegraphResyncOptions = { ...rest, projectPath };
+  return parseRecipeFormat(format) === "systemd"
+    ? renderSystemdTimer(CODEGRAPH_RESYNC_RECIPE, interval, recipeOpts)
+    : renderCronRecipe(CODEGRAPH_RESYNC_RECIPE, interval, recipeOpts);
 }

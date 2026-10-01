@@ -13,7 +13,7 @@
 import { resolve } from "node:path";
 
 import { CliError, parseFlags } from "./argparse.ts";
-import { CronTemplateError } from "./cron-recipe.ts";
+import { CronTemplateError, parseRecipeFormat } from "./cron-recipe.ts";
 import { renderCodegraphResyncTemplate } from "./partner-codegraph-cron.ts";
 import { defaultConfigPath, resolveVault } from "../core/config.ts";
 import { isDir } from "../core/fs-utils.ts";
@@ -25,7 +25,7 @@ import { buildCodegraphReport, type CodegraphReport } from "../core/partner/code
 const PARTNER_USAGE =
   "usage: o2b partner codegraph report [--vault <path>] [--fail-on-health] [--json]\n" +
   "       o2b partner codegraph resync --cron-template [--interval <N>] " +
-  "[--project <path>] [--vault <path>]\n";
+  "[--format cron|systemd] [--project <path>] [--vault <path>]\n";
 
 /** Cadence the resync recipe uses when the caller names none. */
 const DEFAULT_RESYNC_INTERVAL = "6h";
@@ -38,7 +38,10 @@ const DEFAULT_RESYNC_INTERVAL = "6h";
  */
 const EXIT_HEALTH_REFUSED = 1;
 
-/** Exit for an interval cron cannot express - the input is a value, not a flag error. */
+/**
+ * Exit for an interval cron cannot express, or a recipe format this CLI
+ * does not render - the input is a value, not a flag error.
+ */
 const EXIT_INTERVAL_REFUSED = 1;
 
 function resolveScopeVault(flagVal: string | undefined): string {
@@ -168,6 +171,7 @@ function codegraphResyncVerb(argv: ReadonlyArray<string>): number {
     vault: { type: "string" },
     project: { type: "string" },
     interval: { type: "string" },
+    format: { type: "string" },
     "cron-template": { type: "boolean" },
   });
   if (positional.length > 0) {
@@ -187,7 +191,8 @@ function codegraphResyncVerb(argv: ReadonlyArray<string>): number {
   );
   const interval = (flags["interval"] as string | undefined) ?? DEFAULT_RESYNC_INTERVAL;
   try {
-    process.stdout.write(renderCodegraphResyncTemplate(projectPath, interval));
+    const format = parseRecipeFormat(flags["format"] as string | undefined);
+    process.stdout.write(renderCodegraphResyncTemplate(projectPath, interval, { format }));
   } catch (err) {
     if (err instanceof CronTemplateError) {
       process.stderr.write(`error: ${err.message}\n`);

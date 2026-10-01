@@ -2,8 +2,9 @@
  * §E.3 -- 'o2b search reindex --cron-template' renderer.
  *
  * Prints a watchdog script body, a native crontab line, and an
- * optional 'hermes cron create' invocation. Pure stdout, writes
- * nothing. The operator (or agent in the user's name) copies what
+ * optional 'hermes cron create' invocation - or, with
+ * `--format systemd`, the same script as a systemd user timer. Pure
+ * stdout, writes nothing. The operator (or agent in the user's name) copies what
  * fits their host into the cron infrastructure of choice.
  *
  * The layout, the interval parser and the heredoc mechanics live in
@@ -22,17 +23,23 @@
 import {
   CronTemplateError,
   operatorScriptPath,
-  renderCronRecipe,
   parseInterval,
+  parseRecipeFormat,
+  renderCronRecipe,
+  renderSystemdTimer,
   type CronRecipeOptions,
   type CronRecipeSpec,
   type ParsedInterval,
+  type RecipeFormat,
 } from "./cron-recipe.ts";
 
 export { CronTemplateError, parseInterval };
 export type { ParsedInterval };
 
-export type RenderCronTemplateOptions = CronRecipeOptions;
+export interface RenderCronTemplateOptions extends CronRecipeOptions {
+  /** Recipe format; cron (the byte-pinned output) when omitted. */
+  readonly format?: RecipeFormat;
+}
 
 /** Cron job name, and the stem of the script path derived from it. */
 const SEARCH_REINDEX_CRON_NAME = "osb-reindex";
@@ -51,8 +58,15 @@ export const SEARCH_REINDEX_RECIPE: CronRecipeSpec = Object.freeze<CronRecipeSpe
   buildVerifyCommand: ({ o2bBin }) => o2bBin + " search status",
 });
 
+/**
+ * Render the reindex recipe. The cron format is the byte-pinned output;
+ * `format: "systemd"` prints the same script as a systemd user timer.
+ */
 export function renderCronTemplate(interval: string, opts: RenderCronTemplateOptions = {}): string {
-  return renderCronRecipe(SEARCH_REINDEX_RECIPE, interval, opts);
+  const { format, ...recipeOpts } = opts;
+  return parseRecipeFormat(format) === "systemd"
+    ? renderSystemdTimer(SEARCH_REINDEX_RECIPE, interval, recipeOpts)
+    : renderCronRecipe(SEARCH_REINDEX_RECIPE, interval, recipeOpts);
 }
 
 function renderWatchdogBody(o2bBin: string): string {

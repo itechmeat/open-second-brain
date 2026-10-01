@@ -151,6 +151,20 @@ describe("renderCronTemplate", () => {
     const body = renderCronTemplate("6h");
     expect(body).toContain("0 */6 * * *");
   });
+
+  test("the cron format is the default and renders the pinned fixture", () => {
+    expect(renderCronTemplate("30m", { format: "cron" })).toBe(
+      readFileSync(PINNED_FIXTURE, "utf8"),
+    );
+  });
+
+  test("the systemd format renders a timer on the same cadence", () => {
+    const body = renderCronTemplate("30m", { format: "systemd" });
+    expect(body).toContain("OnUnitActiveSec=30m");
+    expect(body).toContain("~/.config/systemd/user/osb-reindex.timer");
+    expect(body).toContain("search reindex --embeddings");
+    expect(body).not.toContain("hermes cron create");
+  });
 });
 
 let tmp: string;
@@ -166,14 +180,14 @@ afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
-describe("o2b search reindex --cron-template (CLI)", () => {
-  async function bootstrap(): Promise<void> {
-    const init = await runCli(["init", "--vault", vault, "--name", "Test"], {
-      env: { OPEN_SECOND_BRAIN_CONFIG: config },
-    });
-    expect(init.returncode).toBe(0);
-  }
+async function bootstrap(): Promise<void> {
+  const init = await runCli(["init", "--vault", vault, "--name", "Test"], {
+    env: { OPEN_SECOND_BRAIN_CONFIG: config },
+  });
+  expect(init.returncode).toBe(0);
+}
 
+describe("o2b search reindex --cron-template (CLI)", () => {
   test("default 30m prints the template and writes nothing under tmp", async () => {
     await bootstrap();
     const before = readdirSync(tmp);
@@ -195,6 +209,29 @@ describe("o2b search reindex --cron-template (CLI)", () => {
     );
     expect(r.returncode).toBe(0);
     expect(r.stdout).toContain("0 */6 * * *");
+  });
+
+  test("--format systemd prints a systemd user timer", async () => {
+    await bootstrap();
+    const r = await runCli(
+      ["search", "reindex", "--cron-template", "--format", "systemd", "--vault", vault],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("OnUnitActiveSec=30m");
+    expect(r.stdout).toContain("systemctl --user enable --now osb-reindex.timer");
+    expect(r.stdout).not.toContain("*/30 * * * *");
+  });
+
+  test("--format launchd exits 1 naming the formats it knows", async () => {
+    await bootstrap();
+    const r = await runCli(
+      ["search", "reindex", "--cron-template", "--format", "launchd", "--vault", vault],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(1);
+    expect(r.stderr).toContain('unknown recipe format "launchd": expected cron or systemd');
+    expect(r.stdout).toBe("");
   });
 
   test("--interval garbage exits 1 with the parser error", async () => {

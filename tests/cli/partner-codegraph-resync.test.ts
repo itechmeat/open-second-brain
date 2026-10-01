@@ -113,6 +113,13 @@ describe("the resync recipe renders", () => {
     expect(body).toContain("${XDG_STATE_HOME:-$HOME/.local/state}/open-second-brain");
   });
 
+  test("the systemd format carries the same script on the same cadence", () => {
+    const body = renderCodegraphResyncTemplate("/srv/projects/demo", "6h", { format: "systemd" });
+    expect(body).toContain("OnUnitActiveSec=6h");
+    expect(body).toContain('codegraph init "$project"');
+    expect(body).not.toContain("0 */6 * * *");
+  });
+
   test("two repositories get two stamp files", () => {
     const a = renderCodegraphResyncTemplate("/srv/projects/alpha", "6h");
     const b = renderCodegraphResyncTemplate("/srv/projects/beta", "6h");
@@ -163,6 +170,42 @@ describe("o2b partner codegraph resync (CLI)", () => {
     expect(res.stdout).toBe("");
     expect(existsSync(join(repo, ".codegraph"))).toBe(false);
     expect(listTree(tmp)).toEqual(before);
+  });
+
+  test("without --format the cron recipe is printed exactly as before", async () => {
+    const repo = makeRepo("repo");
+    const res = await runCli(["partner", "codegraph", "resync", "--cron-template"], {
+      cwd: repo,
+    });
+    expect(res.returncode).toBe(0);
+    expect(res.stdout).toBe(renderCodegraphResyncTemplate(repo, "6h"));
+  });
+
+  test("--format systemd prints a service and timer pair and writes nothing", async () => {
+    const repo = makeRepo("repo");
+    const before = listTree(tmp);
+    const res = await runCli(
+      ["partner", "codegraph", "resync", "--cron-template", "--format", "systemd"],
+      { cwd: repo },
+    );
+    expect(res.returncode).toBe(0);
+    expect(res.stdout).toContain("~/.config/systemd/user/osb-codegraph-resync.service");
+    expect(res.stdout).toContain("~/.config/systemd/user/osb-codegraph-resync.timer");
+    expect(res.stdout).toContain("OnUnitActiveSec=6h");
+    expect(res.stdout).toContain(`project="${repo}"`);
+    expect(res.stdout).not.toContain("hermes cron create");
+    expect(listTree(tmp)).toEqual(before);
+  });
+
+  test("--format launchd exits 1 naming the formats it knows", async () => {
+    const repo = makeRepo("repo");
+    const res = await runCli(
+      ["partner", "codegraph", "resync", "--cron-template", "--format", "launchd"],
+      { cwd: repo },
+    );
+    expect(res.returncode).toBe(1);
+    expect(res.stderr).toContain('unknown recipe format "launchd": expected cron or systemd');
+    expect(res.stdout).toBe("");
   });
 
   test("an interval cron cannot express exits 1 with the inherited parser error", async () => {

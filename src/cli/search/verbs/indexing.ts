@@ -33,6 +33,7 @@ import {
   reportProgressRefusal,
   type ProgressAttachment,
 } from "../../progress-rail.ts";
+import { parseRecipeFormat } from "../../cron-recipe.ts";
 import { CronTemplateError, renderCronTemplate } from "../../search-cron-template.ts";
 import {
   flagBoolean,
@@ -235,12 +236,14 @@ export async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<num
     progress: { type: "boolean" },
     "cron-template": { type: "boolean" },
     interval: { type: "string" },
+    format: { type: "string" },
     "self-heal": { type: "string" },
   });
   if (flagBoolean(flags, "cron-template")) {
     const intervalRaw = flagString(flags, "interval") ?? DEFAULT_CRON_INTERVAL;
     try {
-      const body = renderCronTemplate(intervalRaw);
+      const format = parseRecipeFormat(flagString(flags, "format"));
+      const body = renderCronTemplate(intervalRaw, { format });
       process.stdout.write(body);
       return 0;
     } catch (err) {
