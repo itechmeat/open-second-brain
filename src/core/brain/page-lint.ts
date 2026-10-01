@@ -130,6 +130,15 @@ export const NEAR_DUPLICATE_JACCARD = 0.8;
 /** Code the near-duplicate detector reports under. */
 export const NEAR_DUPLICATE_CODE = "near-duplicate";
 
+/**
+ * Most sibling pages one directory contributes as near-duplicate
+ * candidates: the newest by mtime. Every sibling is stat'ed (cheap), but
+ * only these are read and tokenised, so a write into a folder of
+ * thousands of notes costs a bounded read. Siblings past the cap are
+ * counted on the report as `candidates_skipped`, never dropped silently.
+ */
+export const NEAR_DUPLICATE_MAX_CANDIDATES = 200;
+
 /** Extension every candidate page on disk carries. */
 const MARKDOWN_EXT = ".md";
 
@@ -254,6 +263,26 @@ export interface PageLintReport {
   readonly skipped: ReadonlyArray<PageLintSkip>;
   /** Present iff the lint could not run; the counters above are then zero. */
   readonly unavailable?: PageLintUnavailable;
+  /**
+   * Sibling pages the near-duplicate check did not compare against
+   * because their directory exceeded {@link NEAR_DUPLICATE_MAX_CANDIDATES}.
+   * Present only when the cap applied.
+   */
+  readonly candidates_skipped?: number;
+  /** Sibling pages the near-duplicate check could not read, each named. Present only when any. */
+  readonly candidates_unreadable?: ReadonlyArray<PageLintCandidateSkip>;
+}
+
+/** A sibling page the near-duplicate check could not read, and the errno code why. */
+export interface PageLintCandidateSkip {
+  readonly page: string;
+  readonly detail: string;
+}
+
+/** What building the near-duplicate candidate index left out, by count and by name. */
+export interface NearDuplicateCensus {
+  readonly candidatesSkipped: number;
+  readonly unreadable: ReadonlyArray<PageLintCandidateSkip>;
 }
 
 /**
@@ -345,6 +374,8 @@ export interface LintContext {
    * same scope bucket) needs nothing vault-wide.
    */
   readonly nearDuplicateCandidates: ReadonlyMap<string, ReadonlyArray<NearDuplicateCandidate>>;
+  /** What the candidate index left out; absent means nothing was. */
+  readonly nearDuplicateCensus?: NearDuplicateCensus;
 }
 
 /**
@@ -467,10 +498,11 @@ function canonicalPage(vault: string, page: string): string {
  * exactly the directories the written pages landed in, keyed by that
  * directory, each carrying its composite scope bucket and body tokens.
  *
- * A candidate that cannot be read is not a candidate - it cannot provide
- * evidence, and one unreadable sibling is the doctor's concern, not the
- * write path's (the same posture `adviseIncomingFeedback` takes toward a
- * corrupt preference file). A candidate over the artifact byte cap is
+ * Only the newest {@link NEAR_DUPLICATE_MAX_CANDIDATES} siblings per
+ * directory are read; the rest are counted in the census. A candidate
+ * that cannot be read is not a candidate - it cannot provide evidence -
+ * but it is NAMED in the census with its errno code, never skipped
+ * silently. A candidate over the artifact byte cap is
  * skipped for the same cost reason a written page over the cap is skipped
  * rather than validated. The directory enumerations themselves are NOT
  * guarded: the write just committed into them, so a failure to list one
@@ -482,7 +514,10 @@ function canonicalPage(vault: string, page: string): string {
 function collectNearDuplicateCandidates(
   vault: string,
   pages: ReadonlyArray<string>,
-): ReadonlyMap<string, ReadonlyArray<NearDuplicateCandidate>> {
+): {
+  readonly index: ReadonlyMap<string, ReadonlyArray<NearDuplicateCandidate>>;
+  readonly census: NearDuplicateCensus;
+} {
   const directories = new Set<string>();
   for (const named of pages) {
     const canonical = canonicalPage(vault, named);
@@ -490,28 +525,42 @@ function collectNearDuplicateCandidates(
     directories.add(posix.dirname(canonical));
   }
   const index = new Map<string, NearDuplicateCandidate[]>();
+  const unreadable: PageLintCandidateSkip[] = [];
+  let candidatesSkipped = 0;
   for (const directory of directories) {
-    const candidates: NearDuplicateCandidate[] = [];
+    // Stat every sibling (cheap), then read only the newest few.
+    const siblings: Array<{ absolute: string; size: number; mtimeMs: number }> = [];
     for (const name of readdirSync(resolve(vault, directory))) {
       if (!name.endsWith(MARKDOWN_EXT)) continue;
       const absolute = resolve(vault, directory, name);
       try {
-        // Size first, from the inode: reading an over-cap page to find
-        // that out is the cost the cap exists to avoid.
-        if (statSync(absolute).size > ARTIFACT_MAX_BYTES) continue;
-        const [meta, body] = parseFrontmatterText(readFileSync(absolute, "utf8"));
+        const stat = statSync(absolute);
+        siblings.push({ absolute, size: stat.size, mtimeMs: stat.mtimeMs });
+      } catch (err) {
+        unreadable.push({ page: canonicalPage(vault, absolute), detail: failureCode(err) });
+      }
+    }
+    const newest = siblings.toSorted((a, b) => b.mtimeMs - a.mtimeMs);
+    candidatesSkipped += Math.max(0, newest.length - NEAR_DUPLICATE_MAX_CANDIDATES);
+    const candidates: NearDuplicateCandidate[] = [];
+    for (const sibling of newest.slice(0, NEAR_DUPLICATE_MAX_CANDIDATES)) {
+      // Size from the inode: reading an over-cap page to find that out is
+      // the cost the cap exists to avoid.
+      if (sibling.size > ARTIFACT_MAX_BYTES) continue;
+      try {
+        const [meta, body] = parseFrontmatterText(readFileSync(sibling.absolute, "utf8"));
         candidates.push({
-          page: canonicalPage(vault, absolute),
+          page: canonicalPage(vault, sibling.absolute),
           scopeKey: compositeScopeKey(scopeFromFrontmatter(meta)),
           tokens: tokenise(body),
         });
-      } catch {
-        continue;
+      } catch (err) {
+        unreadable.push({ page: canonicalPage(vault, sibling.absolute), detail: failureCode(err) });
       }
     }
     index.set(directory, candidates);
   }
-  return index;
+  return { index, census: { candidatesSkipped, unreadable } };
 }
 
 /**
@@ -535,11 +584,13 @@ export function lintWrittenPages(vault: string, pages: ReadonlyArray<string>): P
   if (pages.length === 0) return emptyReport();
   let ctx: LintContext;
   try {
+    const nearDuplicates = collectNearDuplicateCandidates(vault, pages);
     ctx = {
       basenames: collectAllBasenames(vault),
       vocabulary: loadSchemaPack(vault).vocabulary,
       mergedLinks: createMergedLinkResolver(vault),
-      nearDuplicateCandidates: collectNearDuplicateCandidates(vault, pages),
+      nearDuplicateCandidates: nearDuplicates.index,
+      nearDuplicateCensus: nearDuplicates.census,
     };
   } catch (err) {
     return emptyReport({
@@ -605,12 +656,19 @@ export function lintPagesWithContext(
 
   const ranked = detected.toSorted(comparePageLintFindings);
   const returned = ranked.slice(0, PAGE_LINT_MAX_FINDINGS);
+  const census = ctx.nearDuplicateCensus;
   return Object.freeze({
     findings: Object.freeze(returned),
     total: ranked.length,
     returned: returned.length,
     truncated: ranked.length > returned.length,
     skipped: Object.freeze(skipped),
+    ...(census !== undefined && census.candidatesSkipped > 0
+      ? { candidates_skipped: census.candidatesSkipped }
+      : {}),
+    ...(census !== undefined && census.unreadable.length > 0
+      ? { candidates_unreadable: Object.freeze([...census.unreadable]) }
+      : {}),
   });
 }
 
@@ -621,7 +679,13 @@ const NO_PAGE_LINT: PageLintField = Object.freeze({});
 
 /** Whether a report carries anything a caller needs to see. */
 function hasSomethingToSay(report: PageLintReport): boolean {
-  return report.total > 0 || report.skipped.length > 0 || report.unavailable !== undefined;
+  return (
+    report.total > 0 ||
+    report.skipped.length > 0 ||
+    report.unavailable !== undefined ||
+    report.candidates_skipped !== undefined ||
+    report.candidates_unreadable !== undefined
+  );
 }
 
 /**

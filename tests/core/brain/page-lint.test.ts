@@ -11,13 +11,14 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
   NEAR_DUPLICATE_CODE,
   NEAR_DUPLICATE_JACCARD,
+  NEAR_DUPLICATE_MAX_CANDIDATES,
   PAGE_LINT_KEY,
   PAGE_LINT_MAX_FINDINGS,
   PAGE_LINT_SKIP_REASON,
@@ -404,6 +405,21 @@ describe("lintWrittenPages - near-duplicate findings", () => {
     expect(report.findings).toEqual([]);
   });
 
+  test("a directory over the candidate cap reads only the newest siblings and counts the rest", () => {
+    const extra = 3;
+    const oldest = Date.parse("2026-01-01T00:00:00Z");
+    for (let i = 0; i < NEAR_DUPLICATE_MAX_CANDIDATES + extra; i++) {
+      const rel = writeNote(`Notes/Filler-${i}.md`, `---\ntitle: F${i}\n---\n\nfiller ${i}\n`);
+      const at = new Date(oldest + i * 1000);
+      utimesSync(join(vault, rel), at, at);
+    }
+    const rel = writeNote("Notes/Beta.md", alphaNote("Beta"));
+    const report = lintWrittenPages(vault, [rel]);
+    // The written page is the newest sibling, so the cap leaves out the oldest fillers.
+    expect(report.candidates_skipped).toBe(extra + 1);
+    expect(pageLintField(report)).toHaveProperty("lint");
+  });
+
   test("the written page never resembles itself", () => {
     const rel = writeNote("Notes/Alpha.md", alphaNote("Alpha"));
     const report = lintWrittenPages(vault, [rel]);
@@ -420,7 +436,7 @@ describe("lintWrittenPages - near-duplicate findings", () => {
     expect(pairs).toEqual([`${first} -> ${second}`, `${second} -> ${first}`]);
   });
 
-  test("a candidate that cannot be read is excluded, not a lint failure", () => {
+  test("a candidate that cannot be read is excluded by name, not a lint failure", () => {
     // A DIRECTORY named like a page: reading it throws EISDIR. It cannot
     // provide evidence, so it is not a candidate - the same posture the
     // write-conflict advisory takes toward corrupt preference files.
@@ -429,6 +445,8 @@ describe("lintWrittenPages - near-duplicate findings", () => {
     const report = lintWrittenPages(vault, [rel]);
     expect(report.unavailable).toBeUndefined();
     expect(report.findings).toEqual([]);
+    // Excluded by name, with the errno code, never silently.
+    expect(report.candidates_unreadable).toEqual([{ page: "Notes/Stuck.md", detail: "EISDIR" }]);
   });
 
   test("a candidate over the artifact byte cap is not read as a candidate", () => {
