@@ -19,7 +19,10 @@ import { describe, expect, test } from "bun:test";
 import {
   CronTemplateError,
   operatorScriptPath,
+  parseRecipeFormat,
+  RECIPE_FORMATS,
   renderCronRecipe,
+  renderSystemdTimer,
   type CronRecipeSpec,
 } from "../../src/cli/cron-recipe.ts";
 
@@ -116,5 +119,119 @@ describe("renderCronRecipe", () => {
   test("an interval cron cannot express is refused, not rounded", () => {
     expect(() => renderCronRecipe(SPEC, "90m", {})).toThrow(CronTemplateError);
     expect(() => renderCronRecipe(SPEC, "nonsense", {})).toThrow(CronTemplateError);
+  });
+});
+
+/**
+ * The synthetic spec rendered at 30m, captured BEFORE the header and the
+ * script section were extracted into a helper shared with the systemd
+ * renderer. The extraction is only correct if the cron path changed by
+ * zero bytes, and only a pinned string can say so.
+ */
+const PINNED_CRON_30M =
+  "# ----------------------------------------------------------------------\n# Synthetic Suite - probe recipe\n# interval: 30 minutes\n#\n# Pick ONE of the three paths below. The watchdog script is the\n# common piece; both crontab and Hermes-cron rely on it.\n# ----------------------------------------------------------------------\n\n\n## 1. Watchdog script - save to ~/.local/bin/probe-runner.sh\n##    probe note line\n\ncat >~/.local/bin/probe-runner.sh <<'OSBEOF'\n#!/usr/bin/env bash\nprobe_body_marker o2b\nOSBEOF\nchmod +x ~/.local/bin/probe-runner.sh\n\n\n## 2. Native crontab - open 'crontab -e' and append:\n\n*/30 * * * *    ~/.local/bin/probe-runner.sh\n\n\n## 3. Hermes cron (probe scheduler note):\n\nhermes cron create \\\n  --name probe-job \\\n  --schedule '*/30 * * * *' \\\n  --command \"$HOME/.local/bin/probe-runner.sh\" \\\n  --no-agent\n\n\n# ----------------------------------------------------------------------\n# After install, verify with: o2b probe-verify --now\n# ----------------------------------------------------------------------\n";
+
+/** The watchdog section: from its heading through the chmod that closes it. */
+function scriptSection(out: string): string {
+  const start = out.indexOf("## 1. Watchdog script - save to ");
+  const chmod = out.indexOf("chmod +x ", start);
+  const end = out.indexOf("\n", chmod) + 1;
+  expect(start).toBeGreaterThan(-1);
+  expect(chmod).toBeGreaterThan(start);
+  return out.slice(start, end);
+}
+
+/** The message a throwing render produced, so two renderers can be compared. */
+function refusal(render: () => string): string {
+  try {
+    render();
+  } catch (err) {
+    expect(err).toBeInstanceOf(CronTemplateError);
+    return (err as Error).message;
+  }
+  throw new Error("expected a CronTemplateError, got a rendered recipe");
+}
+
+describe("renderCronRecipe is unchanged by the systemd sibling", () => {
+  test("the synthetic spec renders byte for byte as before the extraction", () => {
+    expect(renderCronRecipe(SPEC, "30m", {})).toBe(PINNED_CRON_30M);
+  });
+});
+
+describe("renderSystemdTimer", () => {
+  const UNIT_DIR = "~/.config/systemd/user/";
+
+  test("carries the same script section as the cron recipe", () => {
+    const systemd = renderSystemdTimer(SPEC, "30m", {});
+    expect(scriptSection(systemd)).toBe(scriptSection(renderCronRecipe(SPEC, "30m", {})));
+  });
+
+  test("names the service and timer pair and the commands that enable it", () => {
+    const out = renderSystemdTimer(SPEC, "30m", {});
+    for (const needle of [
+      `${UNIT_DIR}${SENTINEL.cronName}.service`,
+      `${UNIT_DIR}${SENTINEL.cronName}.timer`,
+      "OnUnitActiveSec=30m",
+      "OnBootSec=",
+      "Persistent=true",
+      "systemctl --user daemon-reload",
+      `systemctl --user enable --now ${SENTINEL.cronName}.timer`,
+      "loginctl enable-linger",
+      `# After install, verify with: o2b ${SENTINEL.verify}`,
+    ]) {
+      expect(`${needle} present: ${out.includes(needle)}`).toBe(`${needle} present: true`);
+    }
+  });
+
+  test("the service runs the script through the systemd home specifier", () => {
+    // ExecStart= does not expand a tilde, so the path must reach systemd in
+    // the %h form it resolves itself.
+    const out = renderSystemdTimer(SPEC, "30m", {});
+    expect(out).toContain(`ExecStart=%h/.local/bin/${SENTINEL.scriptStem}.sh`);
+    expect(out).not.toContain("ExecStart=~/");
+  });
+
+  test("prints no crontab line and no Hermes scheduler", () => {
+    const out = renderSystemdTimer(SPEC, "30m", {});
+    expect(out).not.toContain("*/30 * * * *");
+    expect(out).not.toContain("crontab -e");
+    expect(out).not.toContain("hermes cron create");
+  });
+
+  test("the interval reaches the timer in the unit systemd reads natively", () => {
+    expect(renderSystemdTimer(SPEC, "6h", {})).toContain("OnUnitActiveSec=6h\n");
+    expect(renderSystemdTimer(SPEC, "1d", {})).toContain("OnUnitActiveSec=1d\n");
+    expect(renderSystemdTimer(SPEC, " 15 m ", {})).toContain("OnUnitActiveSec=15m\n");
+  });
+
+  test("refuses every interval the cron renderer refuses, with the same message", () => {
+    for (const interval of ["90m", "30s", "24h", "28d", "nonsense"]) {
+      expect(refusal(() => renderSystemdTimer(SPEC, interval, {}))).toBe(
+        refusal(() => renderCronRecipe(SPEC, interval, {})),
+      );
+    }
+  });
+
+  test("the binary override reaches both builders", () => {
+    const out = renderSystemdTimer(SPEC, "30m", { o2bBin: "/opt/probe/o2b" });
+    expect(out).toContain(`${SENTINEL.bodyMarker} /opt/probe/o2b`);
+    expect(out).toContain(`# After install, verify with: /opt/probe/o2b ${SENTINEL.verify}`);
+  });
+});
+
+describe("parseRecipeFormat", () => {
+  test("the formats are cron and systemd, cron first", () => {
+    expect([...RECIPE_FORMATS]).toEqual(["cron", "systemd"]);
+  });
+
+  test("no flag means cron; systemd passes through", () => {
+    expect(parseRecipeFormat(undefined)).toBe("cron");
+    expect(parseRecipeFormat("cron")).toBe("cron");
+    expect(parseRecipeFormat("systemd")).toBe("systemd");
+  });
+
+  test("an unknown format is refused by name, naming both formats", () => {
+    const message = refusal(() => parseRecipeFormat("launchd"));
+    expect(message).toBe('unknown recipe format "launchd": expected cron or systemd');
   });
 });

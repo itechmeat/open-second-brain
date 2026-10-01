@@ -31,6 +31,21 @@ import { DRAIN_STATE, RequestDrain, resolveDrainDeadlineMs, type DrainOutcome } 
 import { ORIGIN_CHANNEL, setOriginChannel } from "../core/origin-channel.ts";
 import { TRANSPORT_REACH, type TransportReach } from "../core/graph/transport-reach.ts";
 
+/**
+ * The process-level fault counts a served transport reports on `/health`.
+ *
+ * Typed here and filled by a getter the CLI injects
+ * ({@link ServeHttpOptions.faultCounts}): the guard that counts them is
+ * process-global and lives in `src/cli/mcp-fault-guard.ts`, and this
+ * module imports nothing from the CLI.
+ */
+export interface McpFaultCounts {
+  readonly unhandled_rejection: number;
+  readonly uncaught_exception: number;
+  /** ISO time of the latest fault of either kind, `null` before any. */
+  readonly last_fault_at: string | null;
+}
+
 export interface ServeHttpOptions {
   readonly host?: string;
   readonly port?: number;

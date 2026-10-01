@@ -1119,6 +1119,30 @@ export function resolveMaintenanceEmbeddings(configPath?: string): boolean {
 }
 
 /**
+ * Env var and config key of the maintenance lane's custom-task master
+ * switch. Named because the lane quotes them back: `status` says which
+ * switch is off when custom tasks are declared but not run.
+ */
+export const MAINTENANCE_CUSTOM_TASKS_ENV = "OPEN_SECOND_BRAIN_MAINTENANCE_CUSTOM_TASKS";
+export const MAINTENANCE_CUSTOM_TASKS_CONFIG_KEY = "maintenance_custom_tasks";
+
+/**
+ * Whether the maintenance lane may run the install-owned custom tasks
+ * declared as `maintenance_custom_<name>` keys in this config file.
+ * Default OFF: a declared command is operator-authored shell, so it runs
+ * only behind an explicit opt-in, and `..._CUSTOM_TASKS=0` in the env
+ * turns it off on one host without editing the shared file. The commands
+ * themselves are read from this machine config only, never from the vault.
+ */
+export function resolveMaintenanceCustomTasks(configPath?: string): boolean {
+  return resolveConfigFlag(
+    MAINTENANCE_CUSTOM_TASKS_ENV,
+    MAINTENANCE_CUSTOM_TASKS_CONFIG_KEY,
+    configPath,
+  );
+}
+
+/**
  * Env var and config key of the codegraph partner-check switch. Named
  * rather than inlined because the doctor QUOTES them: the line it prints
  * for a check it did not run has to tell the operator which switch turned
