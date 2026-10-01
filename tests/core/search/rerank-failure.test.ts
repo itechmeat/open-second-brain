@@ -220,6 +220,27 @@ describe("the category reaches the telemetry event", () => {
     );
   });
 
+  test("a timed-out fetch rejected under another error name is still timeout", async () => {
+    // Runtimes differ in the name of the error an aborted fetch rejects
+    // with; the category follows the request's own abort state, not it.
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = ((_url: string, init: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () =>
+          reject(new DOMException("the operation timed out", "TimeoutError")),
+        );
+      })) as unknown as typeof fetch;
+    try {
+      expectEndpointError(
+        await thrownBy(fake.url, SHORT_TIMEOUT_MS),
+        "timeout",
+        `rerank request timed out after ${SHORT_TIMEOUT_MS}ms`,
+      );
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   test("a refused connection is network", async () => {
     const dead = await startFakeHttp();
     const deadUrl = dead.url;

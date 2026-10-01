@@ -124,7 +124,7 @@ export class CrossEncoderRerankProvider implements RerankProvider {
         // The caller cancelled: its own abort reason travels up unchanged,
         // so the caller recognises its cancellation by name.
         if (opts?.signal?.aborted === true) throw opts.signal.reason;
-        if (cause.name === "AbortError") {
+        if (controller.signal.aborted) {
           throw new RerankEndpointError(`rerank request timed out after ${this.timeoutMs}ms`, {
             category: RERANK_FAILURE_CATEGORY.timeout,
           });
