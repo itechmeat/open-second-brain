@@ -52,17 +52,18 @@ reference it finds (`removed-tool-reference`).
 No step below is required. Two changes are visible to a nightly cron, and
 one is an on-disk migration that applies itself.
 
-**The maintenance lane's reindex can now spend embedding budget.** The
-quiet-window reindex requests the embedding phase whenever the resolved
-semantic config can reach a provider, where it previously indexed without
-one. The spend is announced before the pass (the pending-spend estimate),
-receipted after it (the `maintenance_spend` metrics surface and the task
+**The maintenance lane's reindex can spend embedding budget, but only
+when you opt in.** By default the quiet-window reindex stays keyword-only
+and contacts no provider, exactly as before. Set `maintenance_embeddings:
+true` (env `OPEN_SECOND_BRAIN_MAINTENANCE_EMBEDDINGS`) and the reindex
+requests the embedding phase whenever the resolved semantic config can
+reach a provider. The spend is announced before the pass (the
+pending-spend estimate), receipted after it (the `maintenance_spend` metrics surface and the task
 row), and a positive `embedding_cost_gate_usd` refuses the phase unless
 `--force-cost` (MCP `force_cost`) is set for that run. The gate's default
 is 0, which means OFF - a vault that wants the leash must set a positive
-value. To keep the old behaviour outright, make the semantic capability
-blocked for that config (no provider key, or `embedding_provider:
-disabled`): an offline vault never reaches a provider, exactly as before.
+value. Leaving `maintenance_embeddings` unset (or `false`) keeps the old
+behaviour outright, whatever provider the config can reach.
 
 **A maintenance task killed at its safeguard deadline exits 6, not 1.** A
 cron script that treated every non-zero exit as a broken pass now sees 6

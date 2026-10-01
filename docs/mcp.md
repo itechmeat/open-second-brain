@@ -154,7 +154,7 @@ release because nothing checked it; its replacement is checked.
 | `brain_dream` (`step`) | one step (`scan` or `heal-enrich`), not a pass | `dream` — a step is part of a dream pass, so it draws on that budget. Checked per file and per directory in `scan`, and per page in each of `heal-enrich`'s two loops, plus around the two phases that cross no boundary of their own — the vault listing (checkpoint after it only) and the one-shot title/alias phrase build (before and after). So it stops within one page **plus** whichever of those two is running, not within one page flat | yes, under the step's own stage (`scan` / `heal-enrich`) |
 | `brain_bridges` (`discover`) | `bridges` | `bridges` | yes |
 | `brain_clusters` (`run`) | `clusters` | `clusters` | yes |
-| `brain_maintenance` (`run`) | all four, sequentially; since v1.64.0 the reindex task also requests the embedding phase when the resolved semantic config can reach a provider, announcing the predicted spend and receipting the completed pass (additive `spend` block: `banner` estimate, `receipt` with model, tokens, `estimated_usd` and whether `force_cost` overrode a refusing gate) | one fresh guard per task; a tripped task is a `timed_out` row, not an aborted call | yes, in its tasks' voices |
+| `brain_maintenance` (`run`) | all four, sequentially; since v1.64.0 the reindex task stays keyword-only unless config `maintenance_embeddings` is `true`; then it requests the embedding phase when the resolved semantic config can reach a provider, announcing the predicted spend and receipting the completed pass (additive `spend` block: `banner` estimate, `receipt` with model, tokens, `estimated_usd` and whether `force_cost` overrode a refusing gate) | one fresh guard per task; a tripped task is a `timed_out` row, not an aborted call | yes, in its tasks' voices |
 | `brain_brief` (`view: "operator"`) | `dream`, dry run | `dream` | yes |
 | `brain_review_candidates` | `dream`, dry run | `dream` | yes |
 
@@ -1640,9 +1640,12 @@ log line is machine-composed rather than authored.
   The maintenance journal's `.open-second-brain/` root is not swept.
 - Since v1.64.0 `brain_maintenance` (`run`) takes `force_cost`, which
   bypasses a positive embedding cost gate for this run's reindex and is
-  recorded on the spend receipt when it did. The reindex task requests the
-  embedding phase whenever the resolved semantic config can reach a
-  provider; the result gains an additive `spend` block - the `banner`
+  recorded on the spend receipt when it did. The reindex task stays
+  keyword-only unless config `maintenance_embeddings` is `true` (env
+  `OPEN_SECOND_BRAIN_MAINTENANCE_EMBEDDINGS`); with it, the task requests
+  the embedding phase whenever the resolved semantic config can reach a
+  provider, and the spend preview is computed inside the task, so a run a
+  gate skips carries no `spend` block. The result gains an additive `spend` block - the `banner`
   estimate announced before the pass, and the `receipt` (model, tokens,
   `estimated_usd`, `forced`) the completed pass priced, also carried on its
   task row and journaled on the `maintenance_spend` metrics surface. A run

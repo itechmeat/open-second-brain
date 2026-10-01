@@ -16,8 +16,8 @@ readiness:
     aider      ~/.aider.conf.yml       managed block            present
     grok       ~/.grok/settings.json   command "bun"            `bun` resolved; script /home/me/old/osb/src/cli/main.ts does not exist
     pi         (no config_path)        nothing to probe         skill-symlink entry
-  writeback-contract         fail      AGENTS.md has no Open Second Brain managed block
-    detail: present file without the same-turn atomic-fact write gate; recovery: install the managed block (t_af5e252f surface)
+  writeback-contract         skipped   AGENTS.md has no Open Second Brain managed block
+    detail: the ambient write-back managed block is not installed, so the write gate is not graded; recovery: add the ambient write-back managed block between the begin and end marker lines, stating the marker_writeback same-turn atomic-fact write gate
 ```
 
 A proved-absent absolute path renders `fail` for the probe with the recovery line `o2b install <target> --apply` in the entry detail; a bare name that does not resolve is never a `fail` (the spawn-PATH caveat is printed verbatim). Exit semantics are unchanged: any `fail` drives `DOCTOR_EXIT.failed`, any `unknown` drives `probeIncomplete` (6).
