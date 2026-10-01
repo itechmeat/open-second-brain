@@ -82,6 +82,7 @@ import {
 } from "../../core/brain/payload-registry.ts";
 import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
+import { searchErrorData } from "../search-tools.ts";
 import { contextReach } from "../tool-contract.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { vaultPathField } from "../vault-path-field.ts";
@@ -956,7 +957,9 @@ function resolveSessionGrepBounds(
       Date.now(),
     );
   } catch (exc) {
-    if (exc instanceof SearchError) throw new MCPError(INVALID_PARAMS, exc.message);
+    if (exc instanceof SearchError) {
+      throw new MCPError(INVALID_PARAMS, exc.message, searchErrorData(exc));
+    }
     throw exc;
   }
 }

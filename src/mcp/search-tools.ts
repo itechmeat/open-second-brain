@@ -50,6 +50,7 @@ import {
 } from "../core/search/retrieval-trail.ts";
 import { probeRetrievalCorpus } from "../core/search/pipeline/outcome.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
+import type { ToolErrorCode } from "./tool-error-codes.ts";
 import { contextReach } from "./tool-contract.ts";
 import type { ServerContext, ToolDefinition } from "./tool-contract.ts";
 import {
@@ -860,30 +861,48 @@ function windowContent(c: string, query: string, max: number): string {
   return markWindow(body, start, hasMore, ELLIPSIS);
 }
 
+/**
+ * The structured `data` every mapped {@link SearchError} carries: its own
+ * code, verbatim. `SEARCH_ERROR_CODES` is imported into the boundary
+ * registry unchanged, so the UPPER token is already a registered wire code
+ * and no second spelling is minted for it.
+ */
+export function searchErrorData(e: SearchError): { readonly code: ToolErrorCode } {
+  return { code: e.code };
+}
+
 export function searchErrorToMcp(e: SearchError): MCPError {
-  if (e.code === "INVALID_INPUT") return new MCPError(INVALID_PARAMS, e.message);
+  const data = searchErrorData(e);
+  if (e.code === "INVALID_INPUT") return new MCPError(INVALID_PARAMS, e.message, data);
   if (e.code === "EMBEDDING_QUOTA_EXHAUSTED") {
-    return new MCPError(INTERNAL_ERROR, EMBEDDING_QUOTA_MESSAGE);
+    return new MCPError(INTERNAL_ERROR, EMBEDDING_QUOTA_MESSAGE, data);
   }
   if (e.code === "INDEX_MISSING") {
-    return new MCPError(INTERNAL_ERROR, "search index not initialised. Run: o2b search index");
+    return new MCPError(
+      INTERNAL_ERROR,
+      "search index not initialised. Run: o2b search index",
+      data,
+    );
   }
   if (e.code === "INDEX_UNREADABLE") {
-    return new MCPError(INTERNAL_ERROR, `search index unreadable: ${e.message}`);
+    return new MCPError(INTERNAL_ERROR, `search index unreadable: ${e.message}`, data);
   }
   if (e.code === "VEC_EXTENSION_UNAVAILABLE") {
     return new MCPError(
       INTERNAL_ERROR,
       "semantic search unavailable: sqlite-vec extension not loaded",
+      data,
     );
   }
   if (e.code === "EMBEDDING_KEY_MISSING") {
-    return new MCPError(INTERNAL_ERROR, "embedding key not configured");
+    return new MCPError(INTERNAL_ERROR, "embedding key not configured", data);
   }
   if (e.code === "EMBEDDING_PROVIDER_HTTP" || e.code === "EMBEDDING_PROVIDER_TIMEOUT") {
-    return new MCPError(INTERNAL_ERROR, `embedding provider unavailable: ${e.message}`);
+    return new MCPError(INTERNAL_ERROR, `embedding provider unavailable: ${e.message}`, data);
   }
-  return new MCPError(INTERNAL_ERROR, `${e.message} [${e.code}]`);
+  // The `[CODE]` suffix predates `data.code` and stays as legacy text:
+  // callers that parsed it before this release keep working.
+  return new MCPError(INTERNAL_ERROR, `${e.message} [${e.code}]`, data);
 }
 
 async function toolBrainSearch(
