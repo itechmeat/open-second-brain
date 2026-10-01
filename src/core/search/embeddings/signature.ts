@@ -32,13 +32,40 @@ function canonicalToken(raw: string): string {
  * Canonical signature `<provider>:<model>:<dimension>`. Provider and
  * model are NFC-normalised, trimmed, and lowercased; a null model or
  * dimension renders as the stable `?` sentinel. Two configurations that
- * produce the same signature yield comparable vectors.
+ * produce the same signature yield comparable vectors UNLESS that
+ * signature carries an unknown identity - see
+ * {@link signatureIdentityKnown} and {@link isStaleSignature}: the
+ * rendering must stay process-stable, so unknown identity is resolved at
+ * the EQUALITY layer, never by the rendering.
  */
 export function embeddingSignature(id: EmbeddingIdentity): string {
   const provider = canonicalToken(id.provider);
   const model = id.model === null ? NULL_FIELD : canonicalToken(id.model);
   const dimension = id.dimension === null ? NULL_FIELD : String(id.dimension);
   return `${provider}:${model}:${dimension}`;
+}
+
+/**
+ * Whether a signature carries a KNOWN embedding identity: a parseable
+ * `<provider>:<model>:<dimension>` triple in which neither the model nor
+ * the dimension field is the `?` sentinel. Parsed from the end, so a
+ * provider or model whose canonical token contains a colon still reads.
+ *
+ * The `?` rendering is deliberately stable across processes - staging
+ * markers and index_state outlive one run - so it cannot carry a
+ * per-instance discriminator. Instead the equality layer treats an
+ * unknown identity as compatible with NOTHING, not even another unknown
+ * identity ({@link isStaleSignature}); this predicate is that rule's one
+ * definition. A string that is not a renderable triple is not a known
+ * identity either: only a well-formed rendering with no sentinel field
+ * counts as known.
+ */
+export function signatureIdentityKnown(signature: string): boolean {
+  const parts = signature.split(":");
+  if (parts.length < 3) return false;
+  const dimension = parts[parts.length - 1]!;
+  const model = parts[parts.length - 2]!;
+  return model !== NULL_FIELD && dimension !== NULL_FIELD;
 }
 
 /**
@@ -223,8 +250,18 @@ export function estimateCostUsd(tokens: number, model: string | null): number {
   return (tokens / 1_000_000) * rate;
 }
 
-/** True when the active signature differs from the stored one. */
+/**
+ * True when the active signature must NOT be treated as the stored one.
+ *
+ * Plain string difference, PLUS the unknown-identity rule: a signature
+ * whose model or dimension field is the `?` sentinel is stale against
+ * EVERYTHING, including an identical copy of itself, because an unknown
+ * identity is compatible with nothing. Callers decide warn vs refuse per
+ * the `embedding_abi` gate; this predicate only stops the equality from
+ * lying.
+ */
 export function isStaleSignature(active: string, stored: string): boolean {
+  if (!signatureIdentityKnown(active) || !signatureIdentityKnown(stored)) return true;
   return active !== stored;
 }
 

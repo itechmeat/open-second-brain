@@ -37,6 +37,7 @@ import {
   estimateTokens,
   evaluateCostGate,
   pricePerMillionTokens,
+  signatureIdentityKnown,
   LOCAL_EMBEDDING_MODEL,
 } from "./embeddings/signature.ts";
 import { resolveEventAnchor } from "./event-anchor.ts";
@@ -1106,14 +1107,19 @@ async function reindexInto(
     let resume = false;
     if (config.resumeReindex) {
       const signature = reindexStagingSignature(config, opts?.embeddings === true);
-      if (existsSync(newPath)) {
-        resume = await stagingSignatureMatches(tempConfig, signature);
+      // An unknown-identity embedding component is compatible with nothing,
+      // including a staging build stamped under the same unknown identity
+      // (t_2fbdaf70): such a build always rebuilds, never resumes.
+      if (signature.resumable && existsSync(newPath)) {
+        resume = await stagingSignatureMatches(tempConfig, signature.value);
       }
       if (!resume) tryUnlink(newPath);
       // Stamp the signature so an interruption leaves a build a later run
-      // can recognise and resume.
+      // can recognise and resume. A non-resumable signature is stamped too:
+      // it documents why the build must rebuild, and no known-identity
+      // signature can ever equal it.
       await withStagingStore(tempConfig, (store) =>
-        store.setState(REINDEX_SIGNATURE_KEY, signature),
+        store.setState(REINDEX_SIGNATURE_KEY, signature.value),
       );
     } else {
       tryUnlink(newPath);
@@ -1162,22 +1168,76 @@ async function reindexInto(
 /** index_state key carrying the staging-build compatibility signature. */
 const REINDEX_SIGNATURE_KEY = "reindex_signature";
 
+/** Embedding component of the staging signature when no embeddings are computed. */
+const STAGING_EMBEDDING_OFF = "off";
+
+/**
+ * Embedding component when the active signature cannot be resolved at
+ * all (semantic search off while embeddings were requested). Carried
+ * over from the pre-suite fallback rendering.
+ */
+const STAGING_EMBEDDING_UNRESOLVED = "active";
+
+/**
+ * Embedding component when the active signature carries an UNKNOWN
+ * identity - a `?` sentinel model or dimension field (t_2fbdaf70).
+ *
+ * The `?` rendering is process-stable, so two staging builds under
+ * unknown identity would string-match and resume as "compatible" while
+ * their vectors are not comparable. Rendering this distinct marker AND
+ * refusing to resume on it (see {@link reindexStagingSignature}) makes an
+ * unknown-identity staging build always rebuild; the marker can never
+ * equal a known-identity signature, so nothing resumable is lost.
+ */
+const STAGING_EMBEDDING_UNKNOWN_IDENTITY = "unknown-identity";
+
+/** The rendered staging signature and whether a build under it may resume. */
+interface StagingSignature {
+  readonly value: string;
+  readonly resumable: boolean;
+}
+
+/**
+ * The embedding component of the staging compatibility signature: a
+ * known-identity signature, or one of the named non-signature markers
+ * above.
+ */
+function stagingEmbeddingComponent(config: ResolvedSearchConfig, embeddings: boolean): string {
+  if (!embeddings) return STAGING_EMBEDDING_OFF;
+  const signature = activeEmbeddingSignature(config);
+  if (signature === null) return STAGING_EMBEDDING_UNRESOLVED;
+  if (!signatureIdentityKnown(signature)) return STAGING_EMBEDDING_UNKNOWN_IDENTITY;
+  return signature;
+}
+
 /**
  * Compatibility signature for a staging rebuild: a resume is safe only
  * when the schema version, chunker rules, chunk parameters, and (when embeddings are
  * computed) the active embedding signature all match the partial build.
  * Any drift invalidates the staging DB and forces a fresh rebuild.
+ *
+ * An unknown-identity embedding component (`?` sentinel model/dimension)
+ * renders as {@link STAGING_EMBEDDING_UNKNOWN_IDENTITY} and is marked
+ * non-resumable: unknown identity never compares equal to anything,
+ * including another unknown identity, so a staging build under unknown
+ * identity always rebuilds rather than resumes.
  */
-function reindexStagingSignature(config: ResolvedSearchConfig, embeddings: boolean): string {
-  const embedding = embeddings ? (activeEmbeddingSignature(config) ?? "active") : "off";
-  return JSON.stringify({
-    schema: LATEST_SCHEMA_VERSION,
-    chunker: CHUNKER_VERSION,
-    chunkSize: config.chunkSize,
-    chunkOverlap: config.chunkOverlap,
-    chunkMinSize: config.chunkMinSize,
-    embedding,
-  });
+function reindexStagingSignature(
+  config: ResolvedSearchConfig,
+  embeddings: boolean,
+): StagingSignature {
+  const embedding = stagingEmbeddingComponent(config, embeddings);
+  return {
+    value: JSON.stringify({
+      schema: LATEST_SCHEMA_VERSION,
+      chunker: CHUNKER_VERSION,
+      chunkSize: config.chunkSize,
+      chunkOverlap: config.chunkOverlap,
+      chunkMinSize: config.chunkMinSize,
+      embedding,
+    }),
+    resumable: embedding !== STAGING_EMBEDDING_UNKNOWN_IDENTITY,
+  };
 }
 
 /** Read the staging signature from an existing `.new`; false on any

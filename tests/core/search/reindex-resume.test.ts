@@ -16,10 +16,15 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { SafeguardAbortError } from "../../../src/core/brain/safeguard.ts";
+import { LOCAL_DEFAULT_DIMENSION } from "../../../src/core/search/embeddings/local-provider.ts";
 import { indexVault, reindexVault } from "../../../src/core/search/indexer.ts";
 import { Store } from "../../../src/core/search/store.ts";
-import type { ResolvedSearchConfig } from "../../../src/core/search/types.ts";
+import type {
+  ResolvedEmbeddingConfig,
+  ResolvedSearchConfig,
+} from "../../../src/core/search/types.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
+import { sqliteVecLoadable } from "../../helpers/sqlite-vec.ts";
 
 let vault: string;
 let dbPath: string;
@@ -50,7 +55,10 @@ async function docCount(cfg: ResolvedSearchConfig): Promise<number> {
 
 /** Drive a reindex that aborts after the first committed file, leaving
  * a partial staging .new behind. */
-async function partialReindex(cfg: ResolvedSearchConfig): Promise<void> {
+async function partialReindex(
+  cfg: ResolvedSearchConfig,
+  opts: { embeddings?: boolean } = {},
+): Promise<void> {
   const ac = new AbortController();
   let processed = 0;
   await expect(
@@ -59,6 +67,7 @@ async function partialReindex(cfg: ResolvedSearchConfig): Promise<void> {
       onFile: () => {
         if (++processed === 1) ac.abort();
       },
+      ...opts,
     }),
   ).rejects.toBeInstanceOf(SafeguardAbortError);
   expect(existsSync(`${dbPath}.new`)).toBe(true);
@@ -112,5 +121,52 @@ test("flag on with no prior staging behaves like a normal full reindex", async (
   await indexVault(cfg); // seed a live index first
   const stats = await reindexVault(cfg);
   expect(stats.added).toBe(6);
+  expect(await docCount(cfg)).toBe(6);
+});
+
+/** The offline local embedder with (or without) a declared dimension. */
+function localSemantic(dimension: number | null): ResolvedEmbeddingConfig {
+  return Object.freeze({
+    enabled: true,
+    provider: "local",
+    baseUrl: null,
+    model: null,
+    apiKey: null,
+    dimension,
+    timeoutMs: 10_000,
+    concurrency: 1,
+    batchSize: 8,
+    costGateUsd: 0,
+    maxRetries: 3,
+  });
+}
+
+test("flag on with embeddings under an unknown identity never resumes staging", async () => {
+  if (!sqliteVecLoadable()) return;
+  // No declared dimension: the active embedding signature renders with a
+  // `?` sentinel field, i.e. an UNKNOWN identity. Two such signatures are
+  // string-equal, so only the identity-aware rule can keep the staged
+  // build from being resumed as compatible with itself.
+  const cfg = cfgWith({ resumeReindex: true, semantic: localSemantic(null) });
+  await partialReindex(cfg, { embeddings: true });
+
+  const stats = await reindexVault(cfg, { embeddings: true });
+  // No resume: every file is processed fresh.
+  expect(stats.added).toBe(6);
+  expect(stats.unchanged).toBe(0);
+  expect(await docCount(cfg)).toBe(6);
+});
+
+test("flag on with embeddings under a known identity still resumes", async () => {
+  if (!sqliteVecLoadable()) return;
+  const cfg = cfgWith({
+    resumeReindex: true,
+    semantic: localSemantic(LOCAL_DEFAULT_DIMENSION),
+  });
+  await partialReindex(cfg, { embeddings: true });
+
+  const stats = await reindexVault(cfg, { embeddings: true });
+  expect(stats.unchanged).toBeGreaterThanOrEqual(1);
+  expect(stats.added + stats.unchanged).toBe(6);
   expect(await docCount(cfg)).toBe(6);
 });

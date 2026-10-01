@@ -6,6 +6,7 @@ import {
   estimateTokens,
   estimateCostUsd,
   isStaleSignature,
+  signatureIdentityKnown,
   EMBEDDING_PRICING,
   LOCAL_EMBEDDING_MODEL,
 } from "../../../src/core/search/embeddings/signature.ts";
@@ -81,4 +82,39 @@ test("isStaleSignature is true only when active and stored differ", () => {
   expect(isStaleSignature("local:m:256", "local:m:256")).toBe(false);
   expect(isStaleSignature("local:m:256", "local:m:512")).toBe(true);
   expect(isStaleSignature("openai-compat:a:1536", "local:m:256")).toBe(true);
+});
+
+test("signatureIdentityKnown is true only for a parseable triple with no sentinel field", () => {
+  expect(signatureIdentityKnown("local:hashing-ngram-v1:256")).toBe(true);
+  // A provider whose name carries a colon still parses from the end.
+  expect(signatureIdentityKnown("scoped:provider:m:256")).toBe(true);
+  expect(signatureIdentityKnown("local:?:256")).toBe(false);
+  expect(signatureIdentityKnown("local:hashing-ngram-v1:?")).toBe(false);
+  expect(signatureIdentityKnown("local:?:?")).toBe(false);
+  // Not a renderable triple at all: not a known identity either.
+  expect(signatureIdentityKnown("garbage")).toBe(false);
+});
+
+test("an unknown-identity signature is stale against itself: unknown never compares equal", () => {
+  // The `?` sentinel renders identically across processes, so two
+  // unknown-identity configs share a signature string; the equality
+  // layer must still refuse to call them compatible.
+  expect(isStaleSignature("local:?:?", "local:?:?")).toBe(true);
+  expect(isStaleSignature("openai-compat:?:1536", "openai-compat:?:1536")).toBe(true);
+});
+
+test("a known identity is never compatible with an unknown one, in either direction", () => {
+  expect(isStaleSignature("local:m:256", "local:?:?")).toBe(true);
+  expect(isStaleSignature("local:?:?", "local:m:256")).toBe(true);
+  expect(isStaleSignature("local:m:256", "local:m:?")).toBe(true);
+  expect(isStaleSignature("local:m:?", "local:m:256")).toBe(true);
+});
+
+test("signatures rendered from null-field identities stay parseable and stable", () => {
+  // The sentinel rendering itself is unchanged - only the equality
+  // decision learned that it means "unknown", never "compatible".
+  const a = embeddingSignature({ provider: "openai-compat", model: null, dimension: 1536 });
+  const b = embeddingSignature({ provider: "openai-compat", model: null, dimension: 1536 });
+  expect(a).toBe("openai-compat:?:1536");
+  expect(b).toBe(a);
 });

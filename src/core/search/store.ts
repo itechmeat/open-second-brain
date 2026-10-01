@@ -521,6 +521,7 @@ export class Store {
       model,
       dimension,
       prefixes,
+      { semantic: this.config.semantic },
     );
   }
 
