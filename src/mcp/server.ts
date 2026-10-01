@@ -389,11 +389,7 @@ export class MCPServer {
       // through the redactor - at remote reach with the vault, home and
       // temp roots replaced too: a caller probing with traversal paths
       // learns that a file is missing, not the host layout behind it.
-      const raw = (exc as Error).message ?? String(exc);
-      const message = redactErrorForCaller(raw, this.vault, this.reach);
-      return errorResponse(requestId, INTERNAL_ERROR, `internal error: ${message}`, {
-        code: codeForError(exc),
-      });
+      return internalErrorResponse(requestId, exc, this.vault, this.reach);
     }
   }
 
@@ -663,6 +659,28 @@ export function errorResponse(
     id: requestId ?? null,
     error: { code, message, data: withDefaultCode(code, data) },
   };
+}
+
+/** The prefix every INTERNAL_ERROR answer's message starts with. */
+const INTERNAL_ERROR_PREFIX = "internal error: ";
+
+/**
+ * The INTERNAL_ERROR answer for a throw no handler mapped: the raw prose
+ * through the redactor for the bind's reach, the code from the
+ * classifier, which names an unknown class on stderr. One builder for the
+ * dispatcher and the HTTP catch-all, so the two channels cannot drift.
+ */
+export function internalErrorResponse(
+  requestId: unknown,
+  exc: unknown,
+  vault: string,
+  reach: TransportReach,
+): JsonRpcResponse {
+  const raw = (exc as Error).message ?? String(exc);
+  const message = redactErrorForCaller(raw, vault, reach);
+  return errorResponse(requestId, INTERNAL_ERROR, `${INTERNAL_ERROR_PREFIX}${message}`, {
+    code: codeForError(exc),
+  });
 }
 
 // Re-exports so callers that previously imported these names from
