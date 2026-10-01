@@ -28,11 +28,29 @@ import {
   type SkillDecisionInfo,
 } from "../core/surface/skill-attach-decision.ts";
 import { isSkillOfferId, SKILL_OFFER_ID_KEY } from "../core/surface/skill-offer.ts";
-import { discoverSkills, readSkillFile, skillRoots, SkillError } from "../core/surface/skills.ts";
+import {
+  discoverSkills,
+  readSkillFile,
+  skillRoots,
+  SkillError,
+  type SkillErrorCode,
+} from "../core/surface/skills.ts";
 import { coerceInt, coerceStr } from "./coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 import { INVALID_PARAMS, MCPError } from "./protocol.ts";
 import type { ServerContext, ToolDefinition } from "./tool-contract.ts";
+import { TOOL_ERROR_CODE, type ToolErrorCode } from "./tool-error-codes.ts";
+
+/**
+ * The wire code for each `SkillError` kind. Total over the core union, so
+ * a new kind fails the type check until it is mapped here. The core's
+ * bare `NOT_FOUND` / `INVALID_PATH` never reached the wire and would be
+ * ambiguous in a cross-tool registry, so they are spelled per surface.
+ */
+const SKILL_ERROR_WIRE_CODE: Readonly<Record<SkillErrorCode, ToolErrorCode>> = Object.freeze({
+  NOT_FOUND: TOOL_ERROR_CODE.skillNotFound,
+  INVALID_PATH: TOOL_ERROR_CODE.skillInvalidPath,
+});
 
 function rootsFor(ctx: ServerContext): string[] {
   const skillsDir = resolveSkillsDir(ctx.configPath ?? undefined);
@@ -81,13 +99,17 @@ function toolGetSkill(ctx: ServerContext, args: Record<string, unknown>): Record
   const skill = skills.find((s) => s.name === name);
   if (skill === undefined) {
     const known = skills.map((s) => s.name).join(", ") || "(none)";
-    throw new MCPError(INVALID_PARAMS, `unknown skill: ${name}. Known skills: ${known}`);
+    throw new MCPError(INVALID_PARAMS, `unknown skill: ${name}. Known skills: ${known}`, {
+      code: TOOL_ERROR_CODE.unknownSkill,
+    });
   }
   let content: string;
   try {
     content = readSkillFile(skill, filePath);
   } catch (err) {
-    if (err instanceof SkillError) throw new MCPError(INVALID_PARAMS, err.message);
+    if (err instanceof SkillError) {
+      throw new MCPError(INVALID_PARAMS, err.message, { code: SKILL_ERROR_WIRE_CODE[err.code] });
+    }
     throw err;
   }
   return {
