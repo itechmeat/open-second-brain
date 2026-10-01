@@ -39,7 +39,7 @@ import {
 import {
   MAINTENANCE_CUSTOM_TASKS_CONFIG_KEY,
   MAINTENANCE_CUSTOM_TASKS_ENV,
-  resolveMaintenanceCustomTasks,
+  resolveMaintenanceCustomTasksSwitch,
 } from "../../../../src/core/config.ts";
 import {
   SafeguardAbortError,
@@ -96,11 +96,11 @@ describe("the master switch", () => {
     expect(MAINTENANCE_CUSTOM_TASKS_CONFIG_KEY).toBe("maintenance_custom_tasks");
     expect(MAINTENANCE_CUSTOM_TASKS_ENV).toBe("OPEN_SECOND_BRAIN_MAINTENANCE_CUSTOM_TASKS");
     writeConfig(["vault: /nowhere"]);
-    expect(resolveMaintenanceCustomTasks(configPath)).toBe(false);
+    expect(resolveMaintenanceCustomTasksSwitch(configPath).enabled).toBe(false);
     writeConfig(["maintenance_custom_tasks: true"]);
-    expect(resolveMaintenanceCustomTasks(configPath)).toBe(true);
+    expect(resolveMaintenanceCustomTasksSwitch(configPath).enabled).toBe(true);
     process.env[MAINTENANCE_CUSTOM_TASKS_ENV] = "0";
-    expect(resolveMaintenanceCustomTasks(configPath)).toBe(false);
+    expect(resolveMaintenanceCustomTasksSwitch(configPath).enabled).toBe(false);
   });
 });
 

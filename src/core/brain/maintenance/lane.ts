@@ -67,7 +67,7 @@ import {
   type MaintenanceVerdict,
 } from "./journal.ts";
 import { HOST_PRESSURE, measureHostPressure, type HostPressureReading } from "./host-pressure.ts";
-import { isCustomLaneTask, type CustomLaneTask } from "./custom-task-id.ts";
+import type { CustomLaneTask } from "./custom-task-id.ts";
 
 /** The persisted model-spend receipt; defined beside the row it rides. */
 export type { MaintenanceSpendReceipt } from "./journal.ts";
@@ -208,15 +208,6 @@ export function isLaneTask(value: unknown): value is LaneTask {
  * the two populations cannot collide.
  */
 export type LaneTaskId = LaneTask | CustomLaneTask;
-
-/**
- * Whether `value` is a built-in lane task or a well-formed custom
- * identity. Shape only: whether a custom identity is DECLARED on this
- * install is the caller's to check against the tasks it registered.
- */
-export function isLaneTaskId(value: unknown): value is LaneTaskId {
-  return isLaneTask(value) || isCustomLaneTask(value);
-}
 
 export interface MaintenanceTask {
   readonly name: LaneTaskId;

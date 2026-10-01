@@ -1126,25 +1126,19 @@ export function resolveMaintenanceEmbeddings(configPath?: string): boolean {
 export const MAINTENANCE_CUSTOM_TASKS_ENV = "OPEN_SECOND_BRAIN_MAINTENANCE_CUSTOM_TASKS";
 export const MAINTENANCE_CUSTOM_TASKS_CONFIG_KEY = "maintenance_custom_tasks";
 
-/**
- * Whether the maintenance lane may run the install-owned custom tasks
- * declared as `maintenance_custom_<name>` keys in this config file.
- * Default OFF: a declared command is operator-authored shell, so it runs
- * only behind an explicit opt-in, and `..._CUSTOM_TASKS=0` in the env
- * turns it off on one host without editing the shared file. The commands
- * themselves are read from this machine config only, never from the vault.
- */
-export function resolveMaintenanceCustomTasks(configPath?: string): boolean {
-  return resolveMaintenanceCustomTasksSwitch(configPath).enabled;
-}
-
 /** Which source decided a boolean switch: the env override, the config key, or neither. */
 export type MaintenanceSwitchSource = "env" | "config" | "unset";
 
 /**
- * {@link resolveMaintenanceCustomTasks} with the source that decided it,
- * so `status` can name the env override when that is what turned the
- * declared tasks off. Same parse as every other flag in this file.
+ * Whether the maintenance lane may run the install-owned custom tasks
+ * declared as `maintenance_custom_<name>` keys in this config file, and
+ * the source that decided it, so `status` can name the env override when
+ * that is what turned the declared tasks off. Default OFF: a declared
+ * command is operator-authored shell, so it runs only behind an explicit
+ * opt-in, and `..._CUSTOM_TASKS=0` in the env turns it off on one host
+ * without editing the shared file. The commands themselves are read from
+ * this machine config only, never from the vault. Same parse as every
+ * other flag in this file.
  */
 export function resolveMaintenanceCustomTasksSwitch(configPath?: string): {
   readonly enabled: boolean;

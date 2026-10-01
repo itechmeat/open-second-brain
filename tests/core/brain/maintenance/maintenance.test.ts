@@ -19,7 +19,6 @@ import {
 import {
   dailyWindowContains,
   evaluateGates,
-  isLaneTaskId,
   LANE_TASK,
   runMaintenance,
   type MaintenanceTask,
@@ -626,14 +625,6 @@ describe("custom task identities and the custom timeout streak rule", () => {
       tasks: extra.dreamFirst === true ? [dreamTask, custom] : [custom, dreamTask],
     });
   }
-
-  test("isLaneTaskId accepts the built-ins and well-formed custom identities only", () => {
-    expect(isLaneTaskId(LANE_TASK.reindex)).toBe(true);
-    expect(isLaneTaskId(CUSTOM)).toBe(true);
-    expect(isLaneTaskId("custom:Bad")).toBe(false);
-    expect(isLaneTaskId("tidy")).toBe(false);
-    expect(isLaneTaskId(undefined)).toBe(false);
-  });
 
   test("a failing custom task is refused by name at the limit while the built-ins still run", async () => {
     for (let i = 0; i < MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT; i++) {
