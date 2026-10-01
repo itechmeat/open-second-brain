@@ -247,24 +247,6 @@ describe("write-session codes", () => {
     expect(err.message).toStartWith(`write-session ${id} is terminal (`);
     expect(codeOf(err)).toBe("write_session_terminal");
   });
-
-  test("a structured request failure keeps data.errors and no precise code", async () => {
-    const err = await raised(() =>
-      writeSession().handler(sessionCtx(), {
-        op: "open",
-        kind: "artifact",
-        target: "../outside.md",
-        agent: "mcp-agent",
-      }),
-    );
-    expect(err.code).toBe(INVALID_PARAMS);
-    expect(err.message).toStartWith("target rejected: ");
-    const data = err.data as { readonly errors: ReadonlyArray<unknown> };
-    // Byte-identical to v1.65.0: the list alone, so the boundary seam adds
-    // its `invalid_params` default after it.
-    expect(Object.keys(data)).toEqual(["errors"]);
-    expect(data.errors.length).toBeGreaterThan(0);
-  });
 });
 
 describe("write-session codes at the boundary", () => {
@@ -280,8 +262,12 @@ describe("write-session codes at the boundary", () => {
       },
     });
     expect(response?.error?.code).toBe(INVALID_PARAMS);
-    const data = response?.error?.data as Record<string, unknown>;
+    expect(response?.error?.message).toStartWith("target rejected: ");
+    // Byte-identical to v1.65.0 up to the default: the handler hands over
+    // the list alone, and the boundary seam adds `invalid_params` after it.
+    const data = response?.error?.data as { readonly errors: ReadonlyArray<unknown> };
     expect(Object.keys(data)).toEqual(["errors", "code"]);
+    expect(data.errors.length).toBeGreaterThan(0);
     expect(readRpcErrorCode(response)).toBe("invalid_params");
   });
 });
