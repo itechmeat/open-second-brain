@@ -275,11 +275,14 @@ export const OUT_OF_VAULT_STATE: ReadonlyArray<OutOfVaultState> = Object.freeze(
     label: "cron recipe scripts and their stamps",
     location:
       "~/.local/bin/<job>.sh, plus ${XDG_STATE_HOME:-~/.local/state}/open-second-brain/ for the " +
-      "codegraph resync stamp",
+      "codegraph resync stamp, and ~/.config/systemd/user/<job>.service and <job>.timer when the " +
+      "recipe was printed with `--format systemd`",
     carries_memory: false,
     created_by:
       "you, following a recipe printed by a `--cron-template` verb - this tool installs none of it",
-    removed_by: "deleting the script and the stamp, and removing the crontab line yourself",
+    removed_by:
+      "deleting the script and the stamp, and removing the crontab line yourself, or for a " +
+      "systemd recipe `systemctl --user disable --now <job>.timer` and deleting both unit files",
     note:
       "The recipes are text on stdout: every write in them is a shell command your own crontab " +
       "runs on your own host. Nothing in this tool creates, updates or removes them.",
@@ -287,7 +290,22 @@ export const OUT_OF_VAULT_STATE: ReadonlyArray<OutOfVaultState> = Object.freeze(
       "src/cli/cron-recipe.ts",
       "src/cli/partner-codegraph-cron.ts",
       "src/cli/search-cron-template.ts",
+      "src/cli/maintenance-cron.ts",
     ],
+  },
+  {
+    id: "hermes_discipline_jobs",
+    label: "Hermes cron jobs for the discipline report",
+    location:
+      "~/.hermes/cron/jobs.json of the user running the verb, or the file OSB_HERMES_JOBS names",
+    carries_memory: false,
+    created_by: "`o2b discipline install`, which adds or updates one job per vault in that file",
+    removed_by:
+      "`o2b discipline uninstall`, which removes this tool's jobs and leaves every other job in the file alone",
+    note:
+      "The jobs file belongs to Hermes; this tool edits only the entries whose ids it derives from the " +
+      "vault path. Each job names the vault, the report script and the delivery target, not memory content.",
+    sources: ["src/cli/discipline-install.ts"],
   },
   {
     id: "bench_run_artifacts",
@@ -492,6 +510,12 @@ export const OUT_OF_VAULT_SWEEP_EXCLUSIONS: ReadonlyMap<string, string> = new Ma
  * claim about a census.
  */
 export const SOURCES_INVISIBLE_TO_THE_SWEEP: ReadonlyMap<string, string> = new Map([
+  [
+    "src/cli/maintenance-cron.ts",
+    "the maintenance lane recipe takes its script path from `operatorScriptPath()` in " +
+      "`cli/cron-recipe.ts` and its systemd unit paths from the shared renderer there, so there " +
+      "is no home or XDG token in this file for the sweep to match on",
+  ],
   [
     "src/core/brain/dedup-index-cache.ts",
     "the cache root comes from `cacheBaseDir()` in `core/platform-dirs.ts`, or from " +
