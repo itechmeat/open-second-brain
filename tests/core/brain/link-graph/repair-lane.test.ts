@@ -193,6 +193,79 @@ describe("runRepairLane dry-run vs apply", () => {
   });
 });
 
+describe("runRepairLane areaMembership tier (t_23bd347d)", () => {
+  test("area_membership orders between same_topic_evidence and inferred", () => {
+    writeNote("Notes/a.md", "A", "body");
+    const candidates: RepairCandidate[] = [
+      candidate({ target: "Notes/inf.md", strength: IDENTITY_STRENGTH.inferred }),
+      candidate({ target: "Notes/area.md", strength: IDENTITY_STRENGTH.areaMembership }),
+      candidate({ target: "Notes/topic.md", strength: IDENTITY_STRENGTH.sameTopicEvidence }),
+      candidate({ target: "Notes/cont.md", strength: IDENTITY_STRENGTH.sessionContinuity }),
+      candidate({ target: "Notes/exp.md", strength: IDENTITY_STRENGTH.explicitReference }),
+    ];
+    const report = runRepairLane(vault, candidates, { includeInferred: true });
+    expect(report.decisions.map((d) => d.strength)).toEqual([
+      IDENTITY_STRENGTH.explicitReference,
+      IDENTITY_STRENGTH.sessionContinuity,
+      IDENTITY_STRENGTH.sameTopicEvidence,
+      IDENTITY_STRENGTH.areaMembership,
+      IDENTITY_STRENGTH.inferred,
+    ]);
+  });
+
+  test("an area_membership candidate passes the confidence threshold at full confidence", () => {
+    writeNote("Notes/a.md", "A", "body");
+    writeNote("Notes/b.md", "B", "body");
+    const report = runRepairLane(
+      vault,
+      [candidate({ strength: IDENTITY_STRENGTH.areaMembership, confidence: 1 })],
+      {},
+    );
+    expect(report.decisions[0]!.action).toBe("write");
+  });
+});
+
+describe("runRepairLane hub refusals (t_23bd347d)", () => {
+  test("skip-no-hub and skip-ambiguous-hub ride collectedRefusals verbatim and never count as writes", () => {
+    writeNote("Notes/a.md", "A", "body");
+    writeNote("Notes/b.md", "B", "body");
+    const noHub: RepairDecision = {
+      ...candidate({ source: "captured/x.md", target: "", reason: "no hub page in scope bucket" }),
+      action: "skip-no-hub",
+    };
+    const ambiguous: RepairDecision = {
+      ...candidate({
+        source: "captured/y.md",
+        target: "",
+        reason: "2 hub pages in scope bucket (unscoped): a.md, b.md",
+      }),
+      action: "skip-ambiguous-hub",
+    };
+    const report = runRepairLane(vault, [candidate({})], {
+      collectedRefusals: [noHub, ambiguous],
+    });
+    expect(report.decisions).toContainEqual(noHub);
+    expect(report.decisions).toContainEqual(ambiguous);
+    expect(report.written).toBe(1);
+    expect(report.decisions.filter((d) => d.action === "skip-no-hub")).toHaveLength(1);
+    expect(report.decisions.filter((d) => d.action === "skip-ambiguous-hub")).toHaveLength(1);
+  });
+
+  test("hub refusals do not consume the write cap", () => {
+    writeNote("Notes/a.md", "A", "body");
+    writeNote("Notes/b.md", "B", "body");
+    const noHub: RepairDecision = {
+      ...candidate({ source: "captured/x.md", target: "", reason: "no hub page in scope bucket" }),
+      action: "skip-no-hub",
+    };
+    const report = runRepairLane(vault, [candidate({})], {
+      writeCap: 1,
+      collectedRefusals: [noHub],
+    });
+    expect(report.written).toBe(1);
+  });
+});
+
 describe("runRepairLane collected refusals", () => {
   test("refusals are reported verbatim, never re-decided, never counted as writes", () => {
     writeNote("Notes/a.md", "A", "body");

@@ -4,12 +4,21 @@
  * written; a rerun after apply converges to zero writes.
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runCli } from "../helpers/run-cli.ts";
+import {
+  stageHubSelection,
+  type HubRefusal,
+} from "../../src/core/brain/link-graph/hub-candidates.ts";
+import {
+  IDENTITY_STRENGTH,
+  type RepairCandidate,
+} from "../../src/core/brain/link-graph/repair-lane.ts";
 
 let tmp: string;
 let vault: string;
@@ -31,14 +40,41 @@ afterEach(() => {
 });
 
 function writeNote(rel: string, title: string, body: string): void {
+  const abs = join(vault, rel);
+  // The hub fixtures land in directories the shared beforeEach does not
+  // create; recursive mkdir is a no-op where the parent already exists.
+  mkdirSync(dirname(abs), { recursive: true });
   writeFileSync(
-    join(vault, rel),
+    abs,
     ["---", "kind: brain-note", `title: ${title}`, "---", "", body, ""].join("\n"),
     "utf8",
   );
 }
 
 const env = () => ({ OPEN_SECOND_BRAIN_CONFIG: config });
+
+/** Stage one area-membership candidate and one skip-no-hub refusal for the lane. */
+function stageHubFixtures(): void {
+  writeNote("captured/idea.md", "Idea", "an atomic idea note");
+  writeNote("Brain/areas/ops.md", "Ops Hub", "[[a]] [[b]] [[c]] [[d]] [[e]]");
+  const candidate: RepairCandidate = {
+    source: "captured/idea.md",
+    target: "Brain/areas/ops.md",
+    strength: IDENTITY_STRENGTH.areaMembership,
+    confidence: 1,
+    reason: "area hub Brain/areas/ops.md for scope bucket (unscoped)",
+  };
+  const refusal: HubRefusal = {
+    source: "captured/grocery.md",
+    target: "",
+    strength: IDENTITY_STRENGTH.areaMembership,
+    confidence: 1,
+    action: "skip-no-hub",
+    reason: "no hub page in scope bucket (unscoped)",
+  };
+  stageHubSelection(vault, { outcome: "candidate", candidate });
+  stageHubSelection(vault, { outcome: "refusal", refusal });
+}
 
 test("dry-run reports a candidate and writes nothing", async () => {
   const before = readFileSync(join(vault, "Notes/alpha.md"), "utf8");
@@ -84,4 +120,64 @@ test("apply with the exact phrase writes the edge, and a rerun is a no-op", asyn
   );
   const second = JSON.parse(rerun.stdout) as { written: number };
   expect(second.written).toBe(0);
+});
+
+describe("staged hub records (t_23bd347d)", () => {
+  test("a dry-run merges the staged candidate and refusal into its decisions", async () => {
+    stageHubFixtures();
+    const res = await runCli(["brain", "repair-lane", "--json"], { env: env() });
+    expect(res.returncode).toBe(0);
+    const report = JSON.parse(res.stdout) as {
+      mode: string;
+      written: number;
+      decisions: Array<{ source: string; target: string; action: string; strength: string }>;
+    };
+    expect(report.mode).toBe("dry-run");
+    const candidate = report.decisions.find((d) => d.source === "captured/idea.md");
+    expect(candidate).toBeDefined();
+    expect(candidate!.action).toBe("write");
+    expect(candidate!.strength).toBe("area_membership");
+    expect(candidate!.target).toBe("Brain/areas/ops.md");
+    const refusal = report.decisions.find((d) => d.source === "captured/grocery.md");
+    expect(refusal).toBeDefined();
+    expect(refusal!.action).toBe("skip-no-hub");
+    expect(refusal!.target).toBe("");
+  });
+
+  test("an apply writes the staged candidate through the gate; the refusal is never written", async () => {
+    stageHubFixtures();
+    const res = await runCli(
+      ["brain", "repair-lane", "--apply", "--confirm", "apply repair", "--json"],
+      { env: env() },
+    );
+    expect(res.returncode).toBe(0);
+    const report = JSON.parse(res.stdout) as {
+      written: number;
+      decisions: Array<{ source: string; target: string; action: string }>;
+    };
+    expect(report.written).toBeGreaterThan(0);
+    // The edge landed through the lane's own apply path, under the section
+    // heading the lane owns.
+    const idea = readFileSync(join(vault, "captured/idea.md"), "utf8");
+    expect(idea).toContain("[[Brain/areas/ops.md]]");
+    expect(idea).toContain("## Related (repair-lane)");
+    // The refusal proposed no edge and named no target, so no note changed.
+    expect(report.decisions.find((d) => d.source === "captured/grocery.md")!.action).toBe(
+      "skip-no-hub",
+    );
+    expect(existsSync(join(vault, "captured/grocery.md"))).toBe(false);
+  });
+
+  test("a rerun after the apply converges to zero writes (forward-scan idempotence)", async () => {
+    stageHubFixtures();
+    await runCli(["brain", "repair-lane", "--apply", "--confirm", "apply repair", "--json"], {
+      env: env(),
+    });
+    const rerun = await runCli(
+      ["brain", "repair-lane", "--apply", "--confirm", "apply repair", "--json"],
+      { env: env() },
+    );
+    const second = JSON.parse(rerun.stdout) as { written: number };
+    expect(second.written).toBe(0);
+  });
 });

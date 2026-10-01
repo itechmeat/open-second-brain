@@ -18,6 +18,16 @@
  * archives the capture through the contract, so a rerun after apply finds no
  * staged captures and is a no-op (the processed marker is the idempotency
  * key). Unroutable items are reported with a reason and left in place.
+ *
+ * ## The hub hook (t_23bd347d)
+ *
+ * An apply-mode idea route that succeeds stages its routed page's area-hub
+ * candidate through `hub-candidates.ts` - a record in the repair lane's
+ * staged store, never an edge: the edge lands exclusively through the lane's
+ * apply + confirm + holdout gate. Obligation and source-reference routes
+ * stage nothing. A store failure aborts the drain loudly before the archive:
+ * a hub proposal nobody saw is the silence this hook exists to prevent, and
+ * the still-staged capture makes a rerun recover it.
  */
 
 import { existsSync, mkdirSync } from "node:fs";
@@ -30,6 +40,7 @@ import { formatFrontmatter, parseFrontmatter, slugify } from "../../vault.ts";
 import { addObligation, obligationExists, parseCadence, ObligationError } from "../obligations.ts";
 import { ingestSource } from "../ingest/ingest.ts";
 import { isoSecond } from "../time.ts";
+import { selectHubCandidate, stageHubSelection } from "../link-graph/hub-candidates.ts";
 import { archiveCapture, listStagedCaptures, type CaptureNote } from "./capture-note.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
@@ -283,6 +294,13 @@ export function drainInbox(vault: string, opts: DrainOptions): DrainReport {
         routed: false,
       });
       continue;
+    }
+
+    // Hub hook (t_23bd347d): the moment the idea became a corpus page, stage
+    // its hub outcome - a candidate or a named refusal - for the repair lane.
+    // Only the idea route lands a page; the other routes stage nothing.
+    if (plan.classification === "idea") {
+      stageHubSelection(vault, selectHubCandidate(vault, target));
     }
 
     try {

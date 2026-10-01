@@ -13,7 +13,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { auditMoc, MocAuditError } from "../../../../src/core/brain/link-graph/moc-audit.ts";
+import {
+  auditMoc,
+  isHubBody,
+  resolveHubThresholds,
+  MocAuditError,
+} from "../../../../src/core/brain/link-graph/moc-audit.ts";
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 
 let vault: string;
@@ -203,5 +208,57 @@ describe("auditMoc - shape", () => {
     expect(Object.isFrozen(r.wellCovered)).toBe(true);
     expect(Object.isFrozen(r.fragile)).toBe(true);
     expect(Object.isFrozen(r.candidateMissing)).toBe(true);
+  });
+});
+
+describe("isHubBody - the shared structural hub predicate (t_23bd347d)", () => {
+  const THRESHOLDS = { minOutbound: 5, minRatio: 0.3 };
+
+  test("a body crossing both thresholds is a hub", () => {
+    expect(isHubBody("[[a]] [[b]] [[c]] [[d]] [[e]]", THRESHOLDS)).toBe(true);
+  });
+
+  test("a body below the outbound floor is not a hub", () => {
+    expect(isHubBody("[[a]] [[b]] [[c]] [[d]]", THRESHOLDS)).toBe(false);
+  });
+
+  test("a body below the link ratio is not a hub even with enough targets", () => {
+    const prose = `${"plain prose. ".repeat(40)}[[a]] [[b]] [[c]] [[d]] [[e]]`;
+    expect(isHubBody(prose, THRESHOLDS)).toBe(false);
+  });
+
+  test("duplicate and self targets count once", () => {
+    const body = "[[a]] [[a]] [[b]] [[b]] [[c]] [[c]] [[d]] [[e]]";
+    // Without the self-exclusion the unique count is 5 (a..e); with it, e is
+    // the page itself and the count is 4.
+    expect(isHubBody(body, THRESHOLDS)).toBe(true);
+    expect(isHubBody(body, THRESHOLDS, { selfTarget: "e" })).toBe(false);
+  });
+
+  test("an empty body is not a hub", () => {
+    expect(isHubBody("", THRESHOLDS)).toBe(false);
+  });
+
+  test("resolveHubThresholds falls back to the shipped link_graph defaults", () => {
+    const thresholds = resolveHubThresholds(vault);
+    expect(thresholds.minOutbound).toBe(5);
+    expect(thresholds.minRatio).toBe(0.3);
+  });
+
+  test("auditMoc refusal messages stay byte-identical through the shared predicate", () => {
+    writePref(
+      "pref-not-moc",
+      { kind: "preference", topic: "n", status: "confirmed", principle: "p" },
+      "Just [[pref-a]] and [[pref-b]] here.",
+    );
+    expect(() => auditMoc(vault, "pref-not-moc")).toThrow(
+      "not a MOC: outbound link count 2 < threshold 5",
+    );
+    writePref(
+      "pref-thin-links",
+      { kind: "preference", topic: "t", status: "confirmed", principle: "p" },
+      `${"prose. ".repeat(30)}[[pref-a]] [[pref-b]] [[pref-c]] [[pref-d]] [[pref-e]]`,
+    );
+    expect(() => auditMoc(vault, "pref-thin-links")).toThrow(/link ratio .* < threshold 0.3/);
   });
 });

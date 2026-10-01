@@ -15,6 +15,11 @@
  * of link characters to non-whitespace body characters must cross
  * the thresholds in `link_graph` config. No vocabulary detection
  * of "this looks like a MOC because the title says so".
+ *
+ * That structural predicate lives in ONE exported place,
+ * {@link isHubBody} / {@link evaluateHubBody}: the audit and the
+ * inbox-drain hub selection (t_23bd347d) decide through the same
+ * function, so there is exactly one definition of "hub".
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -23,7 +28,7 @@ import { join } from "node:path";
 import { buildBacklinkIndex } from "../backlinks.ts";
 import { ownerScopeView } from "../owner-scope-view.ts";
 import { brainDirs } from "../paths.ts";
-import { loadBrainConfig, resolveLinkGraph } from "../policy.ts";
+import { BRAIN_LINK_GRAPH_DEFAULTS, loadBrainConfig, resolveLinkGraph } from "../policy.ts";
 import { normaliseWikilinkTarget } from "../wikilink.ts";
 import { extractWikilinkRichBodies, parseWikilinkRich } from "./parse-wikilink.ts";
 
@@ -83,6 +88,99 @@ export interface AuditMocOptions {
   readonly ownerScope?: string | null;
 }
 
+/** The structural hub thresholds (from `link_graph` config unless overridden). */
+export interface HubBodyThresholds {
+  /** Inclusive minimum of unique non-self outbound wikilink targets. */
+  readonly minOutbound: number;
+  /** Inclusive minimum of link characters over non-whitespace body characters. */
+  readonly minRatio: number;
+}
+
+/** Options of the shared hub-body predicate. */
+export interface HubBodyOptions {
+  /**
+   * Normalized wikilink id of the page the body belongs to; links to it are
+   * not counted toward its own hubness, exactly as {@link auditMoc} never
+   * counted a hub's link to itself. Absent / null excludes nothing.
+   */
+  readonly selfTarget?: string | null;
+}
+
+/** The outcome of the shared structural check over one page body. */
+export interface HubBodyVerdict {
+  /** True when the body crosses both thresholds. */
+  readonly isHub: boolean;
+  /** Unique non-self outbound wikilink targets, first-occurrence order. */
+  readonly outboundTargets: ReadonlyArray<string>;
+  /** Link characters over non-whitespace body characters. */
+  readonly linkRatio: number;
+}
+
+/**
+ * Evaluate the structural hub predicate over one page body: unique non-self
+ * outbound wikilink targets >= `minOutbound` AND link ratio >= `minRatio`.
+ *
+ * This is THE definition of "hub" - `auditMoc` and the inbox-drain hub
+ * selection (t_23bd347d) both decide through it, so the two can never drift
+ * into two spellings of the same question.
+ */
+export function evaluateHubBody(
+  body: string,
+  thresholds: HubBodyThresholds,
+  opts: HubBodyOptions = {},
+): HubBodyVerdict {
+  const selfTarget = opts.selfTarget ?? null;
+  const outboundBodies = extractWikilinkRichBodies(body);
+  const outboundTargets = uniq(
+    outboundBodies
+      .map((b) => parseWikilinkRich(b).target)
+      .filter((t) => t.length > 0 && t !== selfTarget),
+  );
+
+  // Link-ratio: total characters inside `[[…]]` over non-whitespace
+  // body characters. Whitespace is excluded from the denominator so
+  // a heavily-indented link list isn't penalised against a compact
+  // one. Numerator includes the four bracket characters (`[[]]`)
+  // per link so a bracket-heavy body counts proportionally.
+  const linkChars = outboundBodies.reduce((sum, b) => sum + b.length + 4, 0);
+  const bodyChars = body.replace(/\s+/g, "").length;
+  const ratio = bodyChars > 0 ? linkChars / bodyChars : 0;
+
+  return {
+    isHub: outboundTargets.length >= thresholds.minOutbound && ratio >= thresholds.minRatio,
+    outboundTargets,
+    linkRatio: ratio,
+  };
+}
+
+/** Boolean form of {@link evaluateHubBody} for callers that need only the verdict. */
+export function isHubBody(
+  body: string,
+  thresholds: HubBodyThresholds,
+  opts: HubBodyOptions = {},
+): boolean {
+  return evaluateHubBody(body, thresholds, opts).isHub;
+}
+
+/**
+ * The hub thresholds this vault's `link_graph` config resolves to, falling
+ * back to the shipped defaults when the config cannot be read - the same
+ * resolution `auditMoc` performs for its own audit.
+ */
+export function resolveHubThresholds(vault: string): HubBodyThresholds {
+  let cfg;
+  try {
+    cfg = loadBrainConfig(vault);
+  } catch {
+    cfg = null;
+  }
+  const lg = cfg ? resolveLinkGraph(cfg) : null;
+  return {
+    minOutbound: lg ? lg.moc_min_outbound_links : BRAIN_LINK_GRAPH_DEFAULTS.moc_min_outbound_links,
+    minRatio: lg ? lg.moc_min_link_ratio : BRAIN_LINK_GRAPH_DEFAULTS.moc_min_link_ratio,
+  };
+}
+
 export function auditMoc(vault: string, hubId: string, opts: AuditMocOptions = {}): MocAuditReport {
   const hubCanonical = normaliseWikilinkTarget(hubId);
   const view = ownerScopeView(vault, opts.ownerScope ?? null);
@@ -94,31 +192,22 @@ export function auditMoc(vault: string, hubId: string, opts: AuditMocOptions = {
   }
 
   const hubBody = stripFrontmatter(readFileSync(hubPath, "utf8"));
-  const outboundBodies = extractWikilinkRichBodies(hubBody);
-  const outboundTargets = uniq(
-    outboundBodies
-      .map((b) => parseWikilinkRich(b).target)
-      .filter((t) => t.length > 0 && t !== hubCanonical),
-  );
 
-  const { minOutbound, minRatio } = resolveThresholds(vault, opts);
-  if (outboundTargets.length < minOutbound) {
+  const thresholds = resolveThresholds(vault, opts);
+  const verdict = evaluateHubBody(hubBody, thresholds, { selfTarget: hubCanonical });
+  if (!verdict.isHub) {
+    // The count is named first, exactly as the two checks were ordered when
+    // they lived inline: a body below both thresholds reports the count.
+    if (verdict.outboundTargets.length < thresholds.minOutbound) {
+      throw new MocAuditError(
+        `not a MOC: outbound link count ${verdict.outboundTargets.length} < threshold ${thresholds.minOutbound}`,
+      );
+    }
     throw new MocAuditError(
-      `not a MOC: outbound link count ${outboundTargets.length} < threshold ${minOutbound}`,
+      `not a MOC: link ratio ${verdict.linkRatio.toFixed(2)} < threshold ${thresholds.minRatio}`,
     );
   }
-
-  // Link-ratio: total characters inside `[[…]]` over non-whitespace
-  // body characters. Whitespace is excluded from the denominator so
-  // a heavily-indented link list isn't penalised against a compact
-  // one. Numerator includes the four bracket characters (`[[]]`)
-  // per link so a bracket-heavy body counts proportionally.
-  const linkChars = outboundBodies.reduce((sum, b) => sum + b.length + 4, 0);
-  const bodyChars = hubBody.replace(/\s+/g, "").length;
-  const ratio = bodyChars > 0 ? linkChars / bodyChars : 0;
-  if (ratio < minRatio) {
-    throw new MocAuditError(`not a MOC: link ratio ${ratio.toFixed(2)} < threshold ${minRatio}`);
-  }
+  const outboundTargets = verdict.outboundTargets;
 
   // Backlink index + cluster member metadata.
   const index = buildBacklinkIndex(vault, view.scope);
@@ -221,25 +310,16 @@ function uniq<T>(values: ReadonlyArray<T>): T[] {
   return out;
 }
 
-function resolveThresholds(
-  vault: string,
-  opts: AuditMocOptions,
-): { minOutbound: number; minRatio: number } {
+function resolveThresholds(vault: string, opts: AuditMocOptions): HubBodyThresholds {
   if (opts.minOutboundLinks !== undefined && opts.minLinkRatio !== undefined) {
     return {
       minOutbound: opts.minOutboundLinks,
       minRatio: opts.minLinkRatio,
     };
   }
-  let cfg;
-  try {
-    cfg = loadBrainConfig(vault);
-  } catch {
-    cfg = null;
-  }
-  const lg = cfg ? resolveLinkGraph(cfg) : null;
+  const resolved = resolveHubThresholds(vault);
   return {
-    minOutbound: opts.minOutboundLinks ?? (lg ? lg.moc_min_outbound_links : 5),
-    minRatio: opts.minLinkRatio ?? (lg ? lg.moc_min_link_ratio : 0.3),
+    minOutbound: opts.minOutboundLinks ?? resolved.minOutbound,
+    minRatio: opts.minLinkRatio ?? resolved.minRatio,
   };
 }

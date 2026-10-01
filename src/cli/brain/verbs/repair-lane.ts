@@ -30,17 +30,31 @@
  * evidence base points at absent memory is exactly what the harness exists to
  * catch. Restricting the population to accepted writes would also make the
  * dangling half of the gate unreachable by construction, since the lane
- * already existence-checks every endpoint it writes.
+ * already existence-checks every endpoint it writes. Refusals are the
+ * exception: they propose no edge - they record why nothing was proposed - so
+ * they are never holdouts.
+ *
+ * ## The staged hub records (t_23bd347d)
+ *
+ * The inbox-drain idea route stages the routed page's area-hub outcome (an
+ * `area_membership` candidate, or a `skip-no-hub` / `skip-ambiguous-hub`
+ * refusal) into `Brain/.state/repair-candidates.jsonl`. This verb merges
+ * those staged candidates and refusals with the graph-collected ones before
+ * planning, so a hub proposal made at intake reaches the lane's own apply +
+ * confirm + holdout gate. Nothing else changes: dry-run is the default,
+ * refusals are reported verbatim and never written.
  */
 
 import {
   REPAIR_CONFIRM_PHRASE,
   RepairConfirmationError,
   collectRepairCandidatesWithRefusals,
+  isRepairRefusalAction,
   runRepairLane,
   type RepairDecision,
   type RepairReport,
 } from "../../../core/brain/link-graph/repair-lane.ts";
+import { loadStagedHubRecords } from "../../../core/brain/link-graph/hub-candidates.ts";
 import {
   evaluateGraphHoldouts,
   type GraphHoldout,
@@ -79,11 +93,11 @@ function decisionJson(decision: RepairDecision): Record<string, unknown> {
 }
 
 /** Every edge the lane proposes, as an (anchor, target) holdout pair.
- * A `skip-ambiguous` refusal proposes no edge - it records why nothing was
- * proposed - so it is not a holdout. */
+ * A refusal proposes no edge - it records why nothing was proposed - so it
+ * is not a holdout. */
 function holdoutsFor(decisions: readonly RepairDecision[]): GraphHoldout[] {
   return decisions
-    .filter((decision) => decision.action !== "skip-ambiguous")
+    .filter((decision) => !isRepairRefusalAction(decision.action))
     .map((decision) => ({ anchor: decision.source, target: decision.target }));
 }
 
@@ -149,8 +163,12 @@ function renderReport(
     `repair-lane (${report.mode}): ${report.decisions.length} candidate(s), ${report.written} edge(s) written`,
   );
   for (const decision of report.decisions) {
+    // A refusal may name no target (skip-no-hub): the reason carries the
+    // explanation, so refusals render it and empty targets stay silent.
+    const targetLabel = decision.target.length > 0 ? ` -> ${decision.target}` : "";
+    const reasonLabel = isRepairRefusalAction(decision.action) ? ` (${decision.reason})` : "";
     ok(
-      `  [${decision.strength} ${decision.confidence.toFixed(2)}] ${decision.action}: ${decision.source} -> ${decision.target}`,
+      `  [${decision.strength} ${decision.confidence.toFixed(2)}] ${decision.action}: ${decision.source}${targetLabel}${reasonLabel}`,
     );
   }
   if (gate !== null) {
@@ -193,13 +211,19 @@ export async function cmdBrainRepairLane(argv: string[]): Promise<number> {
     return refuse(message);
   }
 
+  // Graph-collected candidates and refusals, merged with the hub records the
+  // inbox-drain staged (t_23bd347d). The lane orders and gates them as one
+  // population; the refusals ride `collectedRefusals` verbatim.
   const collected = collectRepairCandidatesWithRefusals(vault);
+  const staged = loadStagedHubRecords(vault);
+  const candidates = [...collected.candidates, ...staged.candidates];
+  const refusals = [...collected.refusals, ...staged.refusals];
 
   // Plan first, always as a dry run: the gate must see the proposed edges
   // before any of them reaches disk.
-  const plan = runRepairLane(vault, collected.candidates, {
+  const plan = runRepairLane(vault, candidates, {
     apply: false,
-    collectedRefusals: collected.refusals,
+    collectedRefusals: refusals,
     ...laneOptions,
   });
   if (!apply) {
@@ -216,10 +240,10 @@ export async function cmdBrainRepairLane(argv: string[]): Promise<number> {
     });
   }
 
-  const report = runRepairLane(vault, collected.candidates, {
+  const report = runRepairLane(vault, candidates, {
     apply: true,
     confirm: REPAIR_CONFIRM_PHRASE,
-    collectedRefusals: collected.refusals,
+    collectedRefusals: refusals,
     ...laneOptions,
   });
   if (asJson) okJson(reportJson(report, gate));

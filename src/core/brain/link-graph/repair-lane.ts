@@ -8,8 +8,9 @@
  *
  * Determinism and safety invariants:
  *   - candidates are ordered by identity strength (explicit references, then
- *     session continuity, then same-topic evidence, then opt-in inferred),
- *     with confidence and the edge endpoints breaking ties;
+ *     session continuity, then same-topic evidence, then structural area
+ *     membership, then opt-in inferred), with confidence and the edge
+ *     endpoints breaking ties;
  *   - a confidence threshold and a hard per-run write cap are named constants;
  *   - the lane never creates a dangling edge: a candidate whose endpoint does
  *     not resolve to a durable-memory note is skipped, so the graph-efficacy
@@ -25,6 +26,7 @@
 import { existsSync } from "node:fs";
 import { join, relative } from "node:path";
 
+import type { FrontmatterMap } from "../../types.ts";
 import { canonicalNotePath, ensureInsideVault } from "../../path-safety.ts";
 import {
   EXCLUDED_DIRS,
@@ -47,6 +49,7 @@ export const IDENTITY_STRENGTH = Object.freeze({
   explicitReference: "explicit_reference",
   sessionContinuity: "session_continuity",
   sameTopicEvidence: "same_topic_evidence",
+  areaMembership: "area_membership",
   inferred: "inferred",
 } as const);
 
@@ -57,7 +60,8 @@ const STRENGTH_RANK: Readonly<Record<IdentityStrength, number>> = Object.freeze(
   explicit_reference: 0,
   session_continuity: 1,
   same_topic_evidence: 2,
-  inferred: 3,
+  area_membership: 3,
+  inferred: 4,
 });
 
 /** Minimum confidence for a candidate to be written. */
@@ -94,10 +98,36 @@ export type RepairAction =
   | "skip-missing-target"
   | "skip-unsafe-path"
   | "skip-null-endpoint-key"
-  | "skip-ambiguous";
+  | "skip-ambiguous"
+  /**
+   * Hub refusals staged by the inbox-drain hub selection (t_23bd347d). The
+   * lane never decides them - they ride {@link RepairLaneOptions.collectedRefusals}
+   * verbatim - and they propose no edge: a refusal whose target is the empty
+   * string records that no hub existed (`skip-no-hub`), and one whose reason
+   * lists every hub path records that the choice was ambiguous
+   * (`skip-ambiguous-hub`).
+   */
+  | "skip-no-hub"
+  | "skip-ambiguous-hub";
 
 export interface RepairDecision extends RepairCandidate {
   readonly action: RepairAction;
+}
+
+/**
+ * Actions that propose no edge: they record why nothing was proposed. They
+ * are reported verbatim, never re-decided by the lane loop, never counted in
+ * `written`, never capped, and never holdouts in the graph-efficacy gate.
+ */
+const REPAIR_REFUSAL_ACTIONS: ReadonlySet<RepairAction> = new Set([
+  "skip-ambiguous",
+  "skip-no-hub",
+  "skip-ambiguous-hub",
+]);
+
+/** True when `action` is a refusal that proposes no edge. */
+export function isRepairRefusalAction(action: RepairAction): boolean {
+  return REPAIR_REFUSAL_ACTIONS.has(action);
 }
 
 export interface RepairReport {
@@ -364,6 +394,12 @@ export const MIN_EXPLICIT_REFERENCE_TITLE_LENGTH = 4;
 export const SESSION_CONTINUITY_BASE_CONFIDENCE = 0.6;
 /** Ceiling for scaled confidences below the explicit tier. */
 const CONFIDENCE_CEILING = 0.85;
+/**
+ * Confidence of a structural area-membership candidate (t_23bd347d): the
+ * exactly-one rule over a deterministic structural pool leaves no judgement
+ * to damp, so the candidate carries full confidence.
+ */
+export const HUB_CANDIDATE_CONFIDENCE = 1.0;
 
 const CODE_SPAN_RE = /```[\s\S]*?```|`[^`]+`/g;
 const WIKILINK_SPAN_RE = /\[\[[^\]\n]+\]\]/g;
@@ -403,10 +439,21 @@ function mentionsTerm(lower: string, masked: string, needle: string): boolean {
   }
 }
 
-interface CollectedPage {
+/**
+ * One page of the corpus pool the lane reasons over: its canonical
+ * vault-relative path, its co-occurrence key, its title, its parsed
+ * frontmatter and body, and the canonical keys of its current wikilinks.
+ *
+ * Exported because the pool is shared, not private: the inbox-drain hub
+ * selection (t_23bd347d) draws its hub candidates from the SAME population
+ * this collector reads, so there is one definition of "the durable-memory
+ * corpus pages".
+ */
+export interface CollectedPage {
   readonly rel: string;
   readonly key: string;
   readonly title: string;
+  readonly meta: FrontmatterMap;
   readonly body: string;
   readonly linkedKeys: ReadonlySet<string>;
 }
@@ -419,7 +466,7 @@ interface CollectedPage {
  * repairs that cite them would put that source's text in front of the
  * operator as a suggestion.
  */
-function loadPages(vault: string): CollectedPage[] {
+export function loadPages(vault: string): CollectedPage[] {
   const out: CollectedPage[] = [];
   for (const page of listVaultPages(vault, {
     skipDirs: [...EXCLUDED_DIRS],
@@ -429,9 +476,10 @@ function loadPages(vault: string): CollectedPage[] {
     const rel = canonicalNotePath(relative(vault, page.path));
     const key = canonicalCoOccurrenceKey(rel);
     if (key === null) continue;
+    let meta: FrontmatterMap = {};
     let body = "";
     try {
-      [, body] = parseFrontmatter(page.path);
+      [meta, body] = parseFrontmatter(page.path);
     } catch {
       body = "";
     }
@@ -440,7 +488,7 @@ function loadPages(vault: string): CollectedPage[] {
       const k = canonicalCoOccurrenceKey(raw);
       if (k !== null) linkedKeys.add(k);
     }
-    out.push({ rel, key, title: page.title, body, linkedKeys });
+    out.push({ rel, key, title: page.title, meta, body, linkedKeys });
   }
   return out;
 }
