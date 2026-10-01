@@ -80,7 +80,24 @@ def resolve_request_timeout() -> float | None:
 
 
 class BridgeError(RuntimeError):
-    """Base error: a JSON-RPC error response or a transport failure."""
+    """Base error: a JSON-RPC error response or a transport failure.
+
+    ``code`` is the stable string code of a JSON-RPC error response
+    (``error.data.code``, for example ``unknown_argument``), so a caller
+    branches on a token instead of parsing the rendered message. It is
+    ``None`` for a transport failure and for a response that names none.
+    """
+
+    def __init__(self, message: str, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def _error_code(error: Any) -> str | None:
+    """The string ``error.data.code`` of a JSON-RPC error, or ``None``."""
+    data = error.get("data") if isinstance(error, dict) else None
+    code = data.get("code") if isinstance(data, dict) else None
+    return code if isinstance(code, str) else None
 
 
 class BridgeTransportError(BridgeError):
@@ -218,7 +235,8 @@ class JsonRpcStdioClient:
             if not isinstance(message, dict) or message.get("id") != rid:
                 continue
             if "error" in message:
-                raise BridgeError(str(message["error"]))
+                error = message["error"]
+                raise BridgeError(str(error), code=_error_code(error))
             return message.get("result")
 
 

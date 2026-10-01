@@ -1639,6 +1639,26 @@ class JsonRpcStdioClientTests(unittest.TestCase):
         with self.assertRaises(BridgeError):
             client.request("missing", {})
 
+    def test_error_response_exposes_the_stable_code(self):
+        # Every JSON-RPC error carries error.data.code; the bridge hands it
+        # over as an attribute so Hermes need not parse the rendered dict.
+        error = {"code": -32601, "message": "nope", "data": {"code": "method_not_found"}}
+        reader = _ScriptedReader([{"jsonrpc": "2.0", "id": 1, "error": error}])
+        client = JsonRpcStdioClient(io.BytesIO(), reader)
+        with self.assertRaises(BridgeError) as caught:
+            client.request("missing", {})
+        self.assertEqual(caught.exception.code, "method_not_found")
+        self.assertEqual(str(caught.exception), str(error))
+
+    def test_error_response_without_data_has_no_code(self):
+        reader = _ScriptedReader(
+            [{"jsonrpc": "2.0", "id": 1, "error": {"code": -32601, "message": "nope"}}]
+        )
+        client = JsonRpcStdioClient(io.BytesIO(), reader)
+        with self.assertRaises(BridgeError) as caught:
+            client.request("missing", {})
+        self.assertIsNone(caught.exception.code)
+
     def test_eof_raises(self):
         client = JsonRpcStdioClient(io.BytesIO(), _ScriptedReader([]))
         with self.assertRaises(BridgeError):
