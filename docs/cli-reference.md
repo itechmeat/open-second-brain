@@ -114,6 +114,25 @@ passed, so a caller reads the same three-way answer the exit code carries;
 `ok` is read off that exit code, and being two-valued it means only "not
 established as healthy" when false.
 
+### `o2b doctor selftest` (since v1.64.0)
+
+Plain `o2b doctor` proves configuration, and two of its checks write probe
+files, but none opens the search store - so a machine can pass every check
+and still be unable to init, migrate, index, search or survive concurrent
+writes. The selftest verb drives a real throwaway store end to end on
+temporary storage only: open and migrate, an index pass, a document upsert,
+keyword and trigram search, a concurrent-write roundtrip through the real
+writer lock, delete, close - stopping at the first failure, each stage
+reported as a doctor-check-shaped entry that names the fault and the fix.
+The harness never opens the configured vault (its store is pinned inside
+the temp tree it removes on every exit path) and never reaches a provider
+(the semantic lane is forced off; `o2b search check` answers that
+question). `--json` carries no timestamps, paths or durations, so two
+healthy runs on one machine stringify byte-identically. Exit codes reuse
+the doctor table above: `0` every stage passed, `1` a stage failed, `6`
+the harness itself could not run (temp storage unavailable), because it
+then established nothing about the store.
+
 ### The automatic Brain upgrade check
 
 `o2b doctor` reports `self_heal_upgrade`. After a plugin update the
@@ -435,6 +454,7 @@ o2b brain monthly             Monthly synthesis: event count, status transitions
 o2b brain actions             Ranked next-step list combining doctor / dream warnings and lint candidates
 o2b brain summary             Operator dashboard - trust verdict (clean | watch | investigate), doctor / dream counts, verification delta, instruction-file ceiling warnings, top maintenance actions
 o2b brain page-dedup          Page-level duplicate detector (by content hash + frontmatter similarity)
+o2b brain doctor              gains the `merge-chain-dangling` warning (since v1.64.0): a `merged_into:` pointer whose canonical resolves to no file - the page silently dropped out of dedup candidacy forever; chains crossing Brain/retired/ are walked, and cycle, depth and malformed intermediates stay with `o2b brain lint --consolidate`'s unresolved list; the repair is a content judgement (re-point at a surviving canonical, remove the pointer to un-merge, or restore the file), so the finding names the judgement instead of a next command
 o2b brain lint                Self-healing structural drift fixer; --consolidate folds multi-source duplicates
 o2b brain token-footprint     Token-budget monitor across instruction files and active.md
 o2b brain context-pack        Bounded-token vault slice for priming an agent's context window (--max-tokens N, --lanes for directives/constraints/consider; v0.29.0 adds opt-in --receipt, --telemetry, --cache-stable, --dedup-repeated)
@@ -470,7 +490,7 @@ o2b brain session-grep        --query <text> [--session-id <id>] [--limit <n>] [
 o2b brain session-describe    --session-id <id> [--json]
 o2b brain session-expand      <record-id> [--raw-limit <n>] [--cursor <offset>] [--json]
 o2b brain handoff             <session-file> [--session-id <id>] [--format auto|claude|codex|hermes] [--json] - write Brain/handoffs/<date>-<scope>.md (since v0.37.0)
-o2b brain hygiene             scan | apply --ids <id,...> [--detectors conflicts,dedup,freshness,usefulness] [--dry-run] [--json] - hygiene findings pipeline; review findings never execute (since v1.3.0)
+o2b brain hygiene             scan | apply --ids <id,...> [--detectors conflicts,dedup,freshness,usefulness,slug-collisions,tags] [--dry-run] [--json] - hygiene findings pipeline; review findings never execute (since v1.3.0); the default sweep runs every detector except the opt-in ones (since v1.64.0: `slug-collisions` is default-on and reports same-stem groups such as topic.md beside topic-2.md as info findings, `tags` is opt-in and audits inline body tags only - frontmatter tags arrays are out of scope)
 o2b brain hygiene             scan: with the optional `dedup` decision-model use in enforce, dedup findings carry an advisory `decision_model` verdict and a confident `different` is listed last; `o2b brain doctor` annotates `entity-alias-candidate` warnings the same way; `apply` ignores verdicts
 o2b brain refresh             --stale [--dry-run] [--json] - targeted recompile of stale derived pages; orphans archive into Brain/.snapshots (since v1.3.0)
 o2b brain anticipate          --session <id> [--refresh] [--signal <text>] [--json] - read or warm the anticipatory context cache for the session's lineage root (since v1.3.0)
@@ -581,12 +601,14 @@ o2b brain label               <path> --suggest [--dimensions a,b] - read-only ad
 o2b brain attr                <path> <field>=<value> | --remove <field> | --show - per-type attribute fields; an undeclared field error lists the declared fields WITH descriptions
 o2b brain tiers               check | restore <path> [--field F] --apply | accept <path> [--field F] - staged repair for identity-tier frontmatter hand-edits
 o2b brain secret              set <name> [--env-var V] [--allow PATTERN]... [--from-env SRC] | list | rm <name> | run <name> -- <command...> - capability-gated custody; the value enters via stdin, never argv
-o2b brain maintenance         run [--force] [--retry <task>] [--window H-H] [--tz ZONE] [--busy-minutes N] [--busy-threshold N] [--progress] | status [--limit N] - quiet-window lease-guarded lane for dream + reindex
+o2b brain maintenance         run [--force] [--retry <task>] [--force-cost] [--window H-H] [--tz ZONE] [--busy-minutes N] [--busy-threshold N] [--progress] | status [--limit N] - quiet-window lease-guarded lane for dream + reindex
 ```
 
 The schema pack gains four additive ontology fields (`labels`, `link_constraints`, `attributes`, `frontmatter_tiers`) with audited mutations through `o2b brain schema apply`. Link constraints enforce at index materialization: a typed edge whose endpoint page types violate the declared pairs falls back to an untyped link, `o2b brain schema lint` lists each violation, and removing the constraint restores the edges on the next index run. Tier drift detection rides the same index pass - the snapshot keeps the expected value, so reindexes never absorb a hand-edit, and `brain_doctor` warns with the open count. Filter labelled recall with `o2b search <q> --property labels=<dim>/<value>`. Secrets protect against context leakage and vault sync exposure, not against root; every custody operation lands a no-values record in `Brain/log/secret-custody/`. A maintenance gate skip exits 0 so cron never alarms on a quiet hour.
 
 The lane's two vault-side knobs live in `Brain/_brain.yaml` under `maintenance:`, because they answer what the cron line cannot. `host_pressure_percent` adds a fourth gate: skip when the host's one-minute run queue stands at or above that percentage of the CPUs this process may use. Unset by default, which leaves the gate off. Where the metric is degenerate - a platform whose load average is a constant, or a cgroup with a CPU bandwidth quota, where the run queue is the whole host's - the gate stays **open** and the journal carries a separate `pressure:unmeasurable` row naming the reason, so an unreadable host is never reported as a quiet one. `failure_streak_limit` (default 3) refuses a lane task that has failed that many times in a row in the run journal, naming the streak; a single journaled success clears it. The refusal is per task - the other three still run under the same lease - and there are two ways past it: `--retry <task>` (repeatable) attempts just that task with every gate the operator configured still in force, and `--force` runs the whole lane past every soft gate and every refusal. Both escapes exist on the MCP surface too - `brain_maintenance` takes `retry_tasks`, `busy_minutes`, `busy_threshold` and a `status` `limit`, so an agent reading the refusal can act on it without reaching for `force`, which switches off three gates it never meant to touch. A refused task is reported as `REFUSED`, never `FAILED`, and the run exits **7** rather than 1: nothing was attempted, so nothing failed, but a standing refusal is not the quiet hour that exits 0 either. An attempted failure still exits 1 and outranks a refusal in the same run. The `refused:streak` journal row carries the count it refused on, so the streak does not silently reset when its evidence rolls off the journal cap.
+
+Since v1.64.0 the lane's timeouts are honest and its embedding spend is named. A task killed at its safeguard deadline exits **6** (`probeIncomplete`), keyed on `timed_out` rows alone: the only proved fact is that the pass did not finish, which is not the same as a task failing; a proved failure (1) outranks a timeout, a timeout outranks a refusal (7), and the render says TIMED OUT with the safeguard detail. The reindex task requests the embedding phase whenever the resolved semantic config can reach a provider, announces the pending-spend estimate before the pass, and journals the phase's own cost-gate result as the per-run receipt - model, tokens, estimated cost, and whether a bypass fired - on the task row, the journal line and the `maintenance_spend` metrics surface; the preview is an estimate by position, the receipt prices what the completed pass embedded, and a run killed mid-spend receipts nothing. `--force-cost` (MCP `force_cost`) bypasses a positive `embedding_cost_gate_usd` for this run, recorded on the receipt when it overrode a gate that would have refused.
 
 ### Link and recall intelligence (since v0.45.0)
 
@@ -682,7 +704,7 @@ the wait.
 ### Trusted recall and memory write surface (since v1.35.0)
 
 ```text
-o2b doctor                    gains --readiness: four functional probes (model-inference key resolvable, embedding provider loadable with model and dims, runtime-adapter construction, installed runtimes verified off disk through each adapter's own verify) with per-check timeouts and outcomes pass, fail with a reason, skipped-not-configured, or unknown-could-not-measure; a failure and an unmeasured probe exit with different non-zero codes (see "`o2b doctor` exit codes" below); without the flag output stays byte-identical
+o2b doctor                    gains --readiness: six functional probes (model-inference key resolvable, embedding provider loadable with model and dims, runtime-adapter construction, installed runtimes verified off disk through each adapter's own verify; since v1.64.0 every registered client command still resolvable - a proved-absent path form fails naming the client and `o2b install <target> --apply`, an unresolvable bare name is unknown because the host spawns with its own PATH - and the workspace agent-instruction files (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`) carrying the marker write-back contract block, conforming / missing-block / missing-clauses / absent / symlink / unreadable) with per-check timeouts and outcomes pass, fail with a reason, skipped-not-configured, or unknown-could-not-measure; a failure and an unmeasured probe exit with different non-zero codes (see "`o2b doctor` exit codes" below); without the flag output stays byte-identical
 o2b brain morning-brief       renders recalled items as one chronological Recent activity timeline with a per-item structural type marker and a relative age label; the underlying JSON data arrays are unchanged
 ```
 
@@ -714,9 +736,9 @@ byte-identical when unset.
 
 ```text
 o2b brain telegram-capture   run | catchup - explicit inbound capture runner (fetch-based long-poll getUpdates); gated by telegram_bot_token (env TELEGRAM_BOT_TOKEN) and the telegram_chat_allowlist chat-id allowlist (env TELEGRAM_CHAT_ALLOWLIST, empty accepts nothing); each accepted message becomes one staged capture note under Brain/captures/ with provenance; rejected updates log one decision each; catchup replays captures since the last acknowledged one; a missing token is a typed startup error
-o2b brain inbox-drain        [--apply] - walk staged captures, classify each structurally (URL-shaped body -> source reference, explicit obligation marker -> task, otherwise atomic idea), route on apply (source ingest, note in captured/, obligation open), archive processed captures, and report every item with action and reason; dry-run default writes nothing; rerun after apply is a no-op
+o2b brain inbox-drain        [--apply] - walk staged captures, classify each structurally (URL-shaped body -> source reference, explicit obligation marker -> task, otherwise atomic idea), route on apply (source ingest, note in captured/, obligation open), archive processed captures, and report every item with action and reason; dry-run default writes nothing; rerun after apply is a no-op. Since v1.64.0 an applied idea route also stages its page's area-hub outcome in the repair lane's apply-gated store - an `area_membership` candidate for exactly one structurally validated hub, a `skip-no-hub` refusal for none, `skip-ambiguous-hub` listing every candidate for several - and a store failure aborts the drain loudly before the archive, so the still-staged capture makes a rerun recover it
 o2b brain diarize            <entity> [--json] - entity profile skeleton plus one needs-llm-step envelope; the stated-vs-evidenced section is computed deterministically (stated claims versus evidence frequency and recency), every line carrying an evidence identity; unknown entity is a typed error
-o2b brain repair-lane        [--apply --confirm "apply repair"] - propose link-graph edges ordered by identity strength (explicit references, session continuity, same-topic evidence; inferred opt-in) under a confidence threshold and a hard per-run write cap; dry-run default; reruns after apply converge to zero writes. --apply plans first and then runs the paired graph-efficacy holdout harness over every edge that plan proposes, taking anchor and target from the edge itself: it reports graph lift (targets reachable only through the graph) apart from direct recall (targets already a 1-hop neighbour) and refuses the apply, writing nothing, when any target resolves to no durable-memory note or hydrates into no evidence. The refusal names the failing edges with their verdict and resolves its exit through the registered repair-holdout-unresolved diagnostic; --json carries the counts in an additive holdout object beside next_command. Dry-run does not evaluate the gate and its bytes are unchanged - it already names each unresolvable endpoint as a skip-missing-target decision. Explicit references pool page titles and frontmatter aliases; a mentioned term that exactly one page carries proposes an edge, and a term several pages carry proposes none - each (mentioning page, carrying page) pair is reported as a skip-ambiguous decision, never written, never counted against the write cap and never sent to the holdout gate
+o2b brain repair-lane        [--apply --confirm "apply repair"] - propose link-graph edges ordered by identity strength (explicit references, session continuity, same-topic evidence; inferred opt-in) under a confidence threshold and a hard per-run write cap; dry-run default; reruns after apply converge to zero writes. --apply plans first and then runs the paired graph-efficacy holdout harness over every edge that plan proposes, taking anchor and target from the edge itself: it reports graph lift (targets reachable only through the graph) apart from direct recall (targets already a 1-hop neighbour) and refuses the apply, writing nothing, when any target resolves to no durable-memory note or hydrates into no evidence. The refusal names the failing edges with their verdict and resolves its exit through the registered repair-holdout-unresolved diagnostic; --json carries the counts in an additive holdout object beside next_command. Dry-run does not evaluate the gate and its bytes are unchanged - it already names each unresolvable endpoint as a skip-missing-target decision. Explicit references pool page titles and frontmatter aliases; a mentioned term that exactly one page carries proposes an edge, and a term several pages carry proposes none - each (mentioning page, carrying page) pair is reported as a skip-ambiguous decision, never written, never counted against the write cap and never sent to the holdout gate. Since v1.64.0 the lane also merges the hub candidates and refusals `o2b brain inbox-drain` staged at intake (Brain/.state/repair-candidates.jsonl) with the graph-collected ones before planning, so a hub proposal made when a capture was routed reaches the same apply + confirm + holdout gate; refusals propose no edge and are never holdouts
 o2b brain orphan-repair      [--apply --confirm "apply orphan repair"] - detach dangling session references from observation signals (the findings `o2b brain doctor` reports as `orphan-session-ref`, each naming this verb on its `fix` field); --apply removes ONLY the `session_ref` key from each signal's frontmatter, keeping the observation body, topic and every other field, and quotes the detached value in the report; dry-run default writes nothing, the exact confirmation phrase is required for apply, a hard per-run write cap bounds the run, and a rerun after apply converges to zero writes; the doctor pass never repairs
 o2b brain design-note        <topic> [--payload <json> | --payload-file <path>] [--agent <name>] [--json] - the one-shot sibling of `o2b brain panel`. Without a payload it is read-only: it grounds the topic in the vault's tension records, decision records and truth projections and prints the single needs-llm-step envelope the calling agent answers, naming any store the vault holds nothing in (which is not the same as a store that matched nothing). With a payload it validates the written note and commits it as Brain/decisions/design-<date>-<topic>.md. The note must weigh named alternatives and mark EXACTLY ONE recommended: zero and two-plus are both refused, and the refusal states the count. A second note for the same topic on the same day is refused, never overwritten
 o2b brain skill-proposals    page-candidates [--json] - read-only: gate the vault's user pages on the page-meta trio (core tier, non-stale lifecycle, high confidence) and an observed-reuse floor, skip any page an installed skill already covers, and return one needs-llm-step envelope per admitted page plus every skip with its reason
@@ -1815,6 +1837,32 @@ before a context-compression event, with the same safety report shape.
 Entity-boosted retrieval and header-anchored chunking populate on the
 next reindex and need no configuration. Every result carries a
 `why_retrieved` list naming the scoring layers that ranked it.
+
+Since v1.64.0 the index persists each document's resolved event-time
+window (`event_time_min` / `event_time_max`, schema v13 - frontmatter
+validity window, else the event anchor; one NULL side is a declared open
+window) through the one shared rung order the query side also judges by,
+so index time and query time cannot drift, and the store answers a
+window census (declared, intersecting, and the rows still judged by
+storage mtime) as one SQL aggregate over those bounds. The
+migration is additive: existing rows keep NULLs - and a NULL window is
+judged by storage mtime at query time exactly as before - until their
+next content change or a `o2b search reindex` refreshes them. A
+`pinned: true` page earns a bounded ranking boost (capped at 0.05,
+reported as a `pinned` reason and breakdown entry; never an override of
+the keyword lead).
+
+Two opt-in ranking guards and one deadline join the suite:
+
+| Config key                      | Env var                                            | Default | Effect                                                                    |
+| ------------------------------- | -------------------------------------------------- | ------- | ------------------------------------------------------------------------- |
+| `search_relational_rerank_pin`  | `OPEN_SECOND_BRAIN_SEARCH_RELATIONAL_RERANK_PIN`   | `false` | Rerank may promote a relational-origin candidate but never sink it below its pre-rerank order (the relevance floor is untouched) |
+| `search_metadata_boost_gate`    | `OPEN_SECOND_BRAIN_SEARCH_METADATA_BOOST_GATE`     | `false` | A query whose keyword lane returned no hits contributes zero from every additive metadata/structural boost layer |
+| `search_hybrid_deadline_ms`     | `OPEN_SECOND_BRAIN_SEARCH_HYBRID_DEADLINE`         | `15000` | Wall-clock budget over the whole composite hybrid path (embed, semantic top-k, rerank, second pass); on expiry the search completes keyword-only and reports `hybridDeadlineExceeded`; `0` disables |
+
+Both guards are off by default and leave every score byte-identical;
+the deadline is on by default because its lane budgets already summed
+to more, and it bounds exactly the phases with no budget of their own.
 
 ### The reserved visibility token (since v1.54.0)
 

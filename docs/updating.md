@@ -47,6 +47,36 @@ instruction files such as `CLAUDE.md`/`AGENTS.md`, installed
 `.claude/skills/`) and warns with the exact replacement for any stale
 reference it finds (`removed-tool-reference`).
 
+## Upgrading to 1.64.0
+
+No step below is required. Two changes are visible to a nightly cron, and
+one is an on-disk migration that applies itself.
+
+**The maintenance lane's reindex can now spend embedding budget.** The
+quiet-window reindex requests the embedding phase whenever the resolved
+semantic config can reach a provider, where it previously indexed without
+one. The spend is announced before the pass (the pending-spend estimate),
+receipted after it (the `maintenance_spend` metrics surface and the task
+row), and a positive `embedding_cost_gate_usd` refuses the phase unless
+`--force-cost` (MCP `force_cost`) is set for that run. The gate's default
+is 0, which means OFF - a vault that wants the leash must set a positive
+value. To keep the old behaviour outright, make the semantic capability
+blocked for that config (no provider key, or `embedding_provider:
+disabled`): an offline vault never reaches a provider, exactly as before.
+
+**A maintenance task killed at its safeguard deadline exits 6, not 1.** A
+cron script that treated every non-zero exit as a broken pass now sees 6
+for a pass that merely did not finish; 1 still means a task failed and 7
+still means a streak refusal, with a proved failure outranking a timeout
+and a timeout outranking a refusal in the same run.
+
+**The search index migrates to schema v13 on the next open.** Two nullable
+columns (`event_time_min` / `event_time_max`) and a `pinned` flag join the
+`documents` table; the migration is additive and no reindex is required.
+Existing rows keep NULLs until their next content change refreshes them,
+and a `o2b search reindex` fills every row eagerly. A vault that reindexes
+nothing behaves byte-identically.
+
 ## Upgrading to 1.58.0
 
 No step below is required for a vault that uses none of the named

@@ -154,7 +154,7 @@ release because nothing checked it; its replacement is checked.
 | `brain_dream` (`step`) | one step (`scan` or `heal-enrich`), not a pass | `dream` — a step is part of a dream pass, so it draws on that budget. Checked per file and per directory in `scan`, and per page in each of `heal-enrich`'s two loops, plus around the two phases that cross no boundary of their own — the vault listing (checkpoint after it only) and the one-shot title/alias phrase build (before and after). So it stops within one page **plus** whichever of those two is running, not within one page flat | yes, under the step's own stage (`scan` / `heal-enrich`) |
 | `brain_bridges` (`discover`) | `bridges` | `bridges` | yes |
 | `brain_clusters` (`run`) | `clusters` | `clusters` | yes |
-| `brain_maintenance` (`run`) | all four, sequentially | one fresh guard per task; a tripped task is a `timed_out` row, not an aborted call | yes, in its tasks' voices |
+| `brain_maintenance` (`run`) | all four, sequentially; since v1.64.0 the reindex task also requests the embedding phase when the resolved semantic config can reach a provider, announcing the predicted spend and receipting the completed pass (additive `spend` block: `banner` estimate, `receipt` with model, tokens, `estimated_usd` and whether `force_cost` overrode a refusing gate) | one fresh guard per task; a tripped task is a `timed_out` row, not an aborted call | yes, in its tasks' voices |
 | `brain_brief` (`view: "operator"`) | `dream`, dry run | `dream` | yes |
 | `brain_review_candidates` | `dream`, dry run | `dream` | yes |
 
@@ -227,7 +227,7 @@ flags for a narrower per-process full server.
 | `brain_agenda`              | Stateless agenda synthesis over caller-provided calendar events (the host fetches them; the Brain never calls a calendar API): overlap conflicts, free focus blocks (optionally clipped to a workday window), and events organised outside the operator's own email domain(s). No vault writes. | `events`                                       |
 | `brain_context_presets`     | Show, suggest, or diff read-only context budget presets (`tight-context`, `long-context`) without writing config.                              | `operation`                                    |
 | `brain_pre_compact_extract` | Extract decision/commitment/outcome/rule/open-question records from bounded text into continuity storage.                                      | `session_id`, `turn_start`, `turn_end`, `text` |
-| `brain_hygiene`             | Memory hygiene: `scan` findings (conflicts, dedup, freshness, usefulness), `apply` selected ids, `refresh` stale pages. Resolver command comes from `_brain.yaml` only. With the optional `dedup` decision-model use in enforce, `scan` dedup findings carry an advisory `decision_model` verdict; `apply` never reads it. | `mode`                                         |
+| `brain_hygiene`             | Memory hygiene: `scan` findings (conflicts, dedup, freshness, usefulness; since v1.64.0 `slug-collisions` is default-on — same-stem allocation residue such as `topic.md` beside `topic-2.md` — and `tags` is opt-in, auditing inline body tags only, never frontmatter tags arrays; the default is the sweep of every registered detector except the opt-in ones), `apply` selected ids, `refresh` stale pages. Resolver command comes from `_brain.yaml` only. With the optional `dedup` decision-model use in enforce, `scan` dedup findings carry an advisory `decision_model` verdict; `apply` never reads it. | `mode`                                         |
 | `brain_anticipatory_context` | Turn-specific context bundle kept warm by lifecycle hooks, keyed by the session's lineage root; reports `cache_state` warm / stale / miss.   | `session_id`                                   |
 | `brain_session_grep`        | Search imported session recall raw turns and deterministic summary nodes.                                                                      | `query`                                        |
 | `brain_session_describe`    | Describe raw-turn counts and summary depths for one imported session recall DAG.                                                               | `session_id`                                   |
@@ -1082,6 +1082,14 @@ The report's shape:
   rather than vanishing - and one page's failure never discards the
   findings already collected for the others.
 
+Since v1.64.0 the report can also carry a `near-duplicate` finding: the
+authored body scores at least 0.8 Jaccard against an existing page in the
+same directory and scope bucket. Exact duplicates were refused before;
+close ones landed in silence. The score is computed over the body exactly
+as authored, frontmatter is never compared or touched, an unreadable or
+over-cap sibling is excluded as a candidate, and the finding never gates
+the write - the receipt says what landed next to what.
+
 The lint runs AFTER the commit and reads what is on disk. It never gates
 the write, and it never throws. A call that authored no bytes - a
 `brain_create_note` with `if_exists: "skip"` that skipped, a log-only
@@ -1630,3 +1638,23 @@ log line is machine-composed rather than authored.
   `state.json`) keeps the same code with the whole-file remedy: compare it
   with the original, keep the right version by hand, then delete the copy.
   The maintenance journal's `.open-second-brain/` root is not swept.
+- Since v1.64.0 `brain_maintenance` (`run`) takes `force_cost`, which
+  bypasses a positive embedding cost gate for this run's reindex and is
+  recorded on the spend receipt when it did. The reindex task requests the
+  embedding phase whenever the resolved semantic config can reach a
+  provider; the result gains an additive `spend` block - the `banner`
+  estimate announced before the pass, and the `receipt` (model, tokens,
+  `estimated_usd`, `forced`) the completed pass priced, also carried on its
+  task row and journaled on the `maintenance_spend` metrics surface. A run
+  killed mid-spend receipts nothing; a pass killed at its safeguard
+  deadline is a `timed_out` row. `brain_hygiene`'s `detectors` enum
+  widens to `slug-collisions` (default-on; same-stem allocation residue in
+  one directory) and `tags` (opt-in; inline body tags only - malformed,
+  inconsistent and orphan findings, never frontmatter tags arrays), and the
+  default is the sweep of every registered detector except the opt-in ones.
+  The `lint` key on note-write receipts can carry `near-duplicate`
+  findings: an authored body at 0.8 Jaccard or above against an existing
+  page in the same directory and scope bucket, advisory like every lint
+  finding. `brain_doctor` reports `merge-chain-dangling` warnings for a
+  `merged_into:` pointer whose canonical resolves to no file - reporting
+  only, with the repair named as the content judgement it is.

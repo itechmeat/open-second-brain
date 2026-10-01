@@ -82,6 +82,7 @@ writes, and a metric record is a summary, not a report.
 | `vault_vitals` | `o2b brain vitals` | `preferences_scanned`, `domain_diversity`, `connectivity_index`, `orphan_count`, `gap_pressure` |
 | `self_heal_upgrade` | `o2b brain upgrade --self-heal` (the detached worker `ensureVaultCurrent` starts) | `outcome` (`applied` / `failed`), `duration_ms`, `files` (rewritten, or pending on `failed`), `error` (on `failed`). An attempt that finds nothing pending writes no row |
 | `self_heal_reindex` | `ensureVaultCurrent` (parent) and `o2b search reindex --self-heal <run-id>` (child) | parent row: `decision` (`spawned` / `skipped_writer_lock`), `run_id` (on `spawned`). Child row: `outcome` (`completed` / `failed`), `run_id`, `duration_ms`, `error` (on `failed`) |
+| `maintenance_spend` (since v1.64.0) | `o2b brain maintenance run`, MCP `brain_maintenance` (`run`) | `task` (`reindex`), `model` (null when the config names none), `tokens`, `estimated_usd`, `forced` (`force-cost` overrode a positive gate), `lane` (always true: both front doors are the lane) |
 
 Payload fields marked "(lane runs)" appear only on maintenance-lane
 emissions. All fields are additive-optional from a consumer's point
