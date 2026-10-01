@@ -18,6 +18,10 @@ import {
   type RerankTelemetryEvent,
 } from "../../../src/core/search/rerank/index.ts";
 import type { RerankProvider } from "../../../src/core/search/rerank/contract.ts";
+import {
+  RERANK_FAILURE_CATEGORY,
+  RerankEndpointError,
+} from "../../../src/core/search/rerank/failure.ts";
 import { SearchError } from "../../../src/core/search/types.ts";
 import type { BrainSearchResult, ResolvedRerankConfig } from "../../../src/core/search/types.ts";
 
@@ -115,7 +119,10 @@ describe("applyCrossEncoderRerank", () => {
       name: "boom",
       model: "boom-1",
       async rerank() {
-        throw new SearchError("RERANK_PROVIDER_HTTP", "rerank HTTP 503: unavailable");
+        throw new RerankEndpointError("rerank HTTP 503: unavailable", {
+          category: RERANK_FAILURE_CATEGORY.transient,
+          status: 503,
+        });
       },
     };
     const events: RerankTelemetryEvent[] = [];
@@ -125,8 +132,12 @@ describe("applyCrossEncoderRerank", () => {
     });
     expect(out.map((r) => r.documentId)).toEqual([1, 2]); // unchanged order
     expect(events).toHaveLength(1);
-    expect(events[0]!.status).toBe("error");
-    expect(events[0]!.reason).toMatch(/503/);
+    expect(events[0]).toEqual({
+      status: "error",
+      category: "transient",
+      reason: "rerank HTTP 503: unavailable",
+      candidateCount: 2,
+    });
   });
 
   test("minScore floor: a below-floor doc sinks below qualifying ones but is kept", async () => {

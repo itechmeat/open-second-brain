@@ -1,0 +1,341 @@
+/**
+ * The typed rerank failure category: why a cross-encoder request failed,
+ * as a closed vocabulary computed from typed errors and HTTP statuses,
+ * never from the provider's message text.
+ *
+ * The provider's thrown errors keep their `RERANK_PROVIDER_HTTP` code and
+ * their exact messages, so the `rerank_degraded:` warning stays the same
+ * text; the category travels beside it on the telemetry event.
+ */
+
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+
+import {
+  RERANK_FAILURE_CATEGORIES,
+  RERANK_FAILURE_CATEGORY,
+  RerankEndpointError,
+  isRerankFailureCategory,
+  rerankCategoryForStatus,
+} from "../../../src/core/search/rerank/failure.ts";
+import { CrossEncoderRerankProvider } from "../../../src/core/search/rerank/cross-encoder.ts";
+import {
+  applyCrossEncoderRerank,
+  type RerankTelemetryEvent,
+} from "../../../src/core/search/rerank/index.ts";
+import type { RerankProvider } from "../../../src/core/search/rerank/contract.ts";
+import { SearchError } from "../../../src/core/search/types.ts";
+import type { BrainSearchResult, ResolvedRerankConfig } from "../../../src/core/search/types.ts";
+import { startFakeHttp, type FakeHttp } from "../../helpers/fake-http.ts";
+
+const SHORT_TIMEOUT_MS = 50;
+const SLOW_ANSWER_MS = 400;
+const API_KEY = "test-key";
+
+function result(id: number): BrainSearchResult {
+  return Object.freeze({
+    documentId: id,
+    chunkId: id,
+    path: `note-${id}.md`,
+    title: `Note ${id}`,
+    content: `content ${id}`,
+    startLine: 1,
+    endLine: 2,
+    score: 1 - id * 0.1,
+    keywordScore: 0.5,
+    semanticScore: 0.5,
+    linkBoost: 0,
+    recencyBoost: 0,
+    searchType: "hybrid" as const,
+    reasons: Object.freeze(["fts5_bm25: 0.500"]),
+  });
+}
+
+const RESULTS = Object.freeze([result(1), result(2)]);
+
+function enabledConfig(baseUrl: string): ResolvedRerankConfig {
+  return Object.freeze({
+    enabled: true,
+    kind: "openai-compat",
+    baseUrl,
+    model: "rerank-test",
+    envKey: null,
+    apiKey: API_KEY,
+    topK: 20,
+    minScore: 0,
+  });
+}
+
+async function runAgainst(
+  baseUrl: string,
+  timeoutMs?: number,
+): Promise<ReadonlyArray<RerankTelemetryEvent>> {
+  const events: RerankTelemetryEvent[] = [];
+  const out = await applyCrossEncoderRerank(RESULTS, "q", enabledConfig(baseUrl), {
+    onTelemetry: (e) => events.push(e),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+  });
+  // Every failure degrades to the heuristic order.
+  expect(out).toBe(RESULTS);
+  return events;
+}
+
+async function thrownBy(baseUrl: string, timeoutMs?: number): Promise<unknown> {
+  const provider = new CrossEncoderRerankProvider(
+    { baseUrl, model: "rerank-test", apiKey: API_KEY },
+    timeoutMs !== undefined ? { timeoutMs } : undefined,
+  );
+  try {
+    await provider.rerank("q", ["a", "b"]);
+  } catch (e) {
+    return e;
+  }
+  throw new Error("expected the provider to throw");
+}
+
+function expectEndpointError(err: unknown, category: string, message: RegExp | string): void {
+  expect(err).toBeInstanceOf(RerankEndpointError);
+  const typed = err as RerankEndpointError;
+  expect(typed.code).toBe("RERANK_PROVIDER_HTTP");
+  expect(typed.category).toBe(category as RerankEndpointError["category"]);
+  if (typeof message === "string") expect(typed.message).toBe(message);
+  else expect(typed.message).toMatch(message);
+}
+
+describe("RERANK_FAILURE_CATEGORY vocabulary", () => {
+  test("the object is frozen and the list names every member exactly once", () => {
+    expect(Object.isFrozen(RERANK_FAILURE_CATEGORY)).toBe(true);
+    expect(Object.isFrozen(RERANK_FAILURE_CATEGORIES)).toBe(true);
+    expect(RERANK_FAILURE_CATEGORIES.toSorted()).toEqual(
+      Object.values(RERANK_FAILURE_CATEGORY).toSorted(),
+    );
+    expect(new Set(RERANK_FAILURE_CATEGORIES).size).toBe(RERANK_FAILURE_CATEGORIES.length);
+    expect(RERANK_FAILURE_CATEGORIES.toSorted()).toEqual([
+      "auth",
+      "gone",
+      "malformed",
+      "network",
+      "quota",
+      "rejected",
+      "timeout",
+      "transient",
+      "unclassified",
+    ]);
+  });
+
+  test("the guard accepts every member and nothing else", () => {
+    for (const member of RERANK_FAILURE_CATEGORIES)
+      expect(isRerankFailureCategory(member)).toBe(true);
+    expect(isRerankFailureCategory("AUTH")).toBe(false);
+    expect(isRerankFailureCategory("")).toBe(false);
+    expect(isRerankFailureCategory(401)).toBe(false);
+    expect(isRerankFailureCategory(undefined)).toBe(false);
+  });
+});
+
+describe("rerankCategoryForStatus", () => {
+  test.each([
+    [401, "auth"],
+    [403, "auth"],
+    [402, "quota"],
+    [404, "gone"],
+    [410, "gone"],
+    [408, "transient"],
+    [429, "transient"],
+    [500, "transient"],
+    [502, "transient"],
+    [503, "transient"],
+    [599, "transient"],
+    [400, "rejected"],
+    [413, "rejected"],
+    [422, "rejected"],
+  ] as const)("HTTP %d is %s", (status, category) => {
+    expect(rerankCategoryForStatus(status)).toBe(category);
+  });
+});
+
+describe("RerankEndpointError", () => {
+  test("is a SearchError with the unchanged RERANK_PROVIDER_HTTP code", () => {
+    const err = new RerankEndpointError("rerank HTTP 503: down", {
+      category: RERANK_FAILURE_CATEGORY.transient,
+      status: 503,
+    });
+    expect(err).toBeInstanceOf(SearchError);
+    expect(err.code).toBe("RERANK_PROVIDER_HTTP");
+    expect(err.message).toBe("rerank HTTP 503: down");
+    expect(err.category).toBe("transient");
+    expect(err.status).toBe(503);
+  });
+});
+
+describe("the category reaches the telemetry event", () => {
+  let fake: FakeHttp;
+  beforeEach(async () => {
+    fake = await startFakeHttp();
+  });
+  afterEach(async () => {
+    await fake.close();
+  });
+
+  test("HTTP 503 is transient and keeps its v1.65.0 message", async () => {
+    fake.setHandler(() => ({ status: 503, body: { error: "down" } }));
+    const events = await runAgainst(fake.url);
+    expect(events).toEqual([
+      {
+        status: "error",
+        category: "transient",
+        reason: 'rerank HTTP 503: {"error":"down"}',
+        candidateCount: 2,
+      },
+    ]);
+    const err = await thrownBy(fake.url);
+    expectEndpointError(err, "transient", 'rerank HTTP 503: {"error":"down"}');
+    expect((err as RerankEndpointError).status).toBe(503);
+  });
+
+  test("HTTP 401 is auth and HTTP 410 is gone", async () => {
+    fake.setHandler(() => ({ status: 401, body: { error: "no" } }));
+    expect((await runAgainst(fake.url))[0]).toMatchObject({ status: "error", category: "auth" });
+    fake.setHandler(() => ({ status: 410, body: { error: "retired" } }));
+    expect((await runAgainst(fake.url))[0]).toMatchObject({ status: "error", category: "gone" });
+  });
+
+  test("an endpoint that outlives the timeout is timeout", async () => {
+    fake.setHandler(() => ({ status: 200, body: [], delayMs: SLOW_ANSWER_MS }));
+    const events = await runAgainst(fake.url, SHORT_TIMEOUT_MS);
+    expect(events[0]).toMatchObject({ status: "error", category: "timeout" });
+    expectEndpointError(
+      await thrownBy(fake.url, SHORT_TIMEOUT_MS),
+      "timeout",
+      `rerank request timed out after ${SHORT_TIMEOUT_MS}ms`,
+    );
+  });
+
+  test("a refused connection is network", async () => {
+    const dead = await startFakeHttp();
+    const deadUrl = dead.url;
+    await dead.close();
+    const events = await runAgainst(deadUrl);
+    expect(events[0]).toMatchObject({ status: "error", category: "network" });
+    expectEndpointError(await thrownBy(deadUrl), "network", /^network error: /);
+  });
+
+  test("a non-JSON body is malformed", async () => {
+    // The fake server JSON-encodes every body, so this one answer is
+    // stubbed at the fetch seam instead.
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response("<html>not json</html>", { status: 200 })) as unknown as typeof fetch;
+    try {
+      expect((await runAgainst(fake.url))[0]).toMatchObject({
+        status: "error",
+        category: "malformed",
+      });
+      expectEndpointError(await thrownBy(fake.url), "malformed", /^rerank response not JSON: /);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  test("a wrong score count is malformed", async () => {
+    fake.setHandler(() => ({ status: 200, body: { results: [{ index: 0, relevance_score: 1 }] } }));
+    expect((await runAgainst(fake.url))[0]).toMatchObject({
+      status: "error",
+      category: "malformed",
+    });
+    expectEndpointError(
+      await thrownBy(fake.url),
+      "malformed",
+      "rerank response shape: expected 2 scores, got 1",
+    );
+  });
+
+  test("a duplicate index is malformed", async () => {
+    fake.setHandler(() => ({
+      status: 200,
+      body: {
+        results: [
+          { index: 0, relevance_score: 1 },
+          { index: 0, relevance_score: 0.5 },
+        ],
+      },
+    }));
+    expect((await runAgainst(fake.url))[0]).toMatchObject({
+      status: "error",
+      category: "malformed",
+    });
+    expectEndpointError(
+      await thrownBy(fake.url),
+      "malformed",
+      "rerank response: duplicate index 0",
+    );
+  });
+
+  test("an unwrapped object body and a missing score are malformed", async () => {
+    fake.setHandler(() => ({ status: 200, body: { nope: true } }));
+    expectEndpointError(
+      await thrownBy(fake.url),
+      "malformed",
+      "rerank response shape: expected an array or a { results: [...] } object",
+    );
+    fake.setHandler(() => ({ status: 200, body: [{ index: 0 }, { index: 1, score: 1 }] }));
+    expectEndpointError(
+      await thrownBy(fake.url),
+      "malformed",
+      "rerank response: item at index 0 has no finite relevance score",
+    );
+  });
+});
+
+describe("failures outside the cross-encoder", () => {
+  const cfg = enabledConfig("https://rerank.example.test/v1");
+
+  async function eventsFor(provider: RerankProvider): Promise<RerankTelemetryEvent[]> {
+    const events: RerankTelemetryEvent[] = [];
+    const out = await applyCrossEncoderRerank(RESULTS, "q", cfg, {
+      provider,
+      onTelemetry: (e) => events.push(e),
+    });
+    expect(out).toBe(RESULTS);
+    return events;
+  }
+
+  test("a provider throwing a plain Error is unclassified, named rather than hidden", async () => {
+    const events = await eventsFor({
+      name: "plain",
+      model: "plain-1",
+      async rerank() {
+        throw new Error("something odd");
+      },
+    });
+    expect(events).toEqual([
+      { status: "error", category: "unclassified", reason: "something odd", candidateCount: 2 },
+    ]);
+  });
+
+  test("a provider returning the wrong number of scores is malformed", async () => {
+    const events = await eventsFor({
+      name: "short",
+      model: "short-1",
+      async rerank() {
+        return [1];
+      },
+    });
+    expect(events).toEqual([
+      {
+        status: "error",
+        category: "malformed",
+        reason: "expected 2 scores, got 1",
+        candidateCount: 2,
+      },
+    ]);
+  });
+
+  test("a success event carries no category", async () => {
+    const events: RerankTelemetryEvent[] = [];
+    await applyCrossEncoderRerank(RESULTS, "q", cfg, {
+      provider: { name: "ok", model: "ok-1", rerank: async (_q, docs) => docs.map(() => 1) },
+      onTelemetry: (e) => events.push(e),
+    });
+    expect(events).toEqual([{ status: "applied", candidateCount: 2 }]);
+  });
+});

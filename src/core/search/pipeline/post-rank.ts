@@ -174,8 +174,8 @@ export async function applyPostRankPhases(input: PostRankInput): Promise<PostRan
     applyCrossEncoderRerank(reinforced, input.query, config.rerank, {
       ...(input.signal !== undefined ? { signal: input.signal } : {}),
       onTelemetry: (event) =>
-        emitGatedTelemetry(event.status === "error", () => {
-          warnings.push(`rerank_degraded: ${event.reason ?? "endpoint error"}`);
+        emitGatedTelemetry(event.status === "error" ? event : null, (failure) => {
+          warnings.push(`rerank_degraded: ${failure.reason}`);
         }),
       // Decision-model kind only: a candidate leaves the machine only when
       // its page's visibility resolves and does not carry `private`.

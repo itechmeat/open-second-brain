@@ -28,19 +28,38 @@ import { makeRerankProvider } from "./provider.ts";
 import type { RerankProvider } from "./contract.ts";
 import type { DecisionProvider } from "../../decision-model/contract.ts";
 import type { DecisionRerankExtras } from "./decision-model.ts";
+import {
+  RERANK_FAILURE_CATEGORY,
+  RerankEndpointError,
+  rerankCategoryForError,
+  type RerankFailureCategory,
+} from "./failure.ts";
 
 /** Fixed-precision so the reason string is stable for a given score. */
 function fmtScore(x: number): string {
   return x.toFixed(4);
 }
 
-export interface RerankTelemetryEvent {
-  readonly status: "applied" | "error";
-  /** Present on `error`: the provider-shaped failure message. */
-  readonly reason?: string;
+interface RerankTelemetryBase {
   /** Number of top candidates handed to the cross-encoder. */
   readonly candidateCount: number;
 }
+
+/** The rerank re-ordered the top-K block. */
+export interface RerankAppliedEvent extends RerankTelemetryBase {
+  readonly status: "applied";
+}
+
+/** The rerank request failed and the heuristic order was served. */
+export interface RerankErrorEvent extends RerankTelemetryBase {
+  readonly status: "error";
+  /** Why, as a closed category computed from the typed failure. */
+  readonly category: RerankFailureCategory;
+  /** The provider-shaped failure message, for the operator-facing warning. */
+  readonly reason: string;
+}
+
+export type RerankTelemetryEvent = RerankAppliedEvent | RerankErrorEvent;
 
 export interface ApplyCrossEncoderRerankOptions {
   /** Inject a provider (tests / alternate backends). Defaults to the HTTP one. */
@@ -223,7 +242,9 @@ export async function applyCrossEncoderRerank(
       opts.signal !== undefined ? { signal: opts.signal } : undefined,
     );
     if (scores.length !== documents.length) {
-      throw new Error(`expected ${documents.length} scores, got ${scores.length}`);
+      throw new RerankEndpointError(`expected ${documents.length} scores, got ${scores.length}`, {
+        category: RERANK_FAILURE_CATEGORY.malformed,
+      });
     }
   } catch (e) {
     // A cancelled call is not an endpoint failure: no telemetry, and the
@@ -233,6 +254,7 @@ export async function applyCrossEncoderRerank(
     // untouched and emit one fail-open telemetry event.
     opts.onTelemetry?.({
       status: "error",
+      category: rerankCategoryForError(e),
       reason: e instanceof Error ? e.message : String(e),
       candidateCount: topK,
     });
