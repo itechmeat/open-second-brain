@@ -507,6 +507,28 @@ describe("createCustomLaneTask", () => {
     PROCESS_TREE_TEST_TIMEOUT_MS,
   );
 
+  test.skipIf(IS_WINDOWS)(
+    "a shell that exits 0 just before its deadline, a stderr holder left behind, succeeds",
+    async () => {
+      const pidPath = join(dir, "linger.pid");
+      // The shell exits about 150 ms before the 1 s deadline, inside the
+      // stderr drain window the background holder keeps open.
+      const err = await rejection(
+        createCustomLaneTask(
+          spec("linger", {
+            command: `${command("linger", pidPath)} & sleep 0.85; exit 0`,
+            timeoutSeconds: 1,
+          }),
+          { vault },
+        ).run(),
+      );
+      expect(err).toBeUndefined();
+      const pid = Number(await waitForFile(pidPath));
+      await expectGone([pid], 5000);
+    },
+    PROCESS_TREE_TEST_TIMEOUT_MS,
+  );
+
   test("a working directory that does not exist fails by name before the spawn", async () => {
     const missing = join(dir, "missing");
     const err = (await rejection(

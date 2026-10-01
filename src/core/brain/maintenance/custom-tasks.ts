@@ -427,6 +427,7 @@ function runCustomCommand(
     });
 
     let settled = false;
+    let exit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
     let drainTimer: ReturnType<typeof setTimeout> | undefined;
     const timeoutMs = spec.timeoutSeconds * 1000;
     const finish = (error?: Error): void => {
@@ -461,6 +462,12 @@ function runCustomCommand(
     };
     const deadline = setTimeout(() => {
       killGroup();
+      // The shell already exited and only the stderr drain is pending: its
+      // status is the outcome, and the deadline only kills the leftovers.
+      if (exit !== undefined) {
+        settleExit();
+        return;
+      }
       finish(new SafeguardTimeoutError(spec.id, timeoutMs));
     }, timeoutMs);
     const onAbort = (): void => {
@@ -470,7 +477,6 @@ function runCustomCommand(
     };
     ctx.signal?.addEventListener("abort", onAbort, { once: true });
 
-    let exit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
     const settleExit = (): void => {
       if (exit === undefined) return;
       if (exit.code === 0) {
