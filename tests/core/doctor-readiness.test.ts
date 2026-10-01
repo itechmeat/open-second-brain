@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -16,6 +16,7 @@ import {
   probeLlmKey,
   probeRegisteredCommands,
   probeRuntimeAdapterWiring,
+  probeWritebackContract,
   runReadinessProbes,
   withReadinessTimeout,
 } from "../../src/core/doctor-readiness.ts";
@@ -308,7 +309,10 @@ describe("withReadinessTimeout", () => {
 describe("runReadinessProbes", () => {
   test("runs every default probe and reports a failed count and durations", async () => {
     writeConfig("search_semantic_enabled: true\nembedding_provider: local\n");
-    const report = await runReadinessProbes({ vault: tmp, config: configPath, home });
+    // cwd pins the workspace the writeback-contract probe audits: without
+    // it the run would read the checkout's real instruction files and the
+    // fixture's "nothing failed" expectation would depend on the host.
+    const report = await runReadinessProbes({ vault: tmp, config: configPath, home, cwd: tmp });
     expect(report.probes.length).toBe(Object.keys(READINESS_PROBE).length);
     const names = report.probes.map((p) => p.name);
     expect(names).toContain(READINESS_PROBE.llmKey);
@@ -602,6 +606,128 @@ describe("probeRegisteredCommands", () => {
     writeConfig("");
     const report = await runReadinessProbes({ vault: tmp, config: configPath, home });
     const probe = report.probes.find((p) => p.name === READINESS_PROBE.registeredCommands);
+    expect(probe).toBeDefined();
+    expect(probe!.status).toBe(READINESS_STATUS.skipped);
+  });
+});
+
+describe("probeWritebackContract", () => {
+  /**
+   * The probe audits the workspace agent-instruction file(s) at
+   * `opts.cwd`, so each test writes its candidates into `tmp` (which
+   * `installedRuntimeOpts` already passes as cwd). A managed block whose
+   * body carries every contract clause is the conforming fixture.
+   */
+  const CONFORMING_BLOCK = [
+    "# >>> open-second-brain managed >>>",
+    "Memory write gate: write every durable fact you learn to the Open Second",
+    "Brain in the same turn, as an atomic fact, through the note tools;",
+    "@osb set mutations require guardrails.marker_writeback in _brain.yaml.",
+    "# <<< open-second-brain managed <<<",
+  ].join("\n");
+
+  test("no agent-instruction file in the workspace is skipped, naming what was checked", async () => {
+    writeConfig("");
+    const v = await probeWritebackContract(installedRuntimeOpts());
+    expect(v.status).toBe(READINESS_STATUS.skipped);
+    expect(v.detail).toContain("nothing installed");
+    expect(v.detail).toContain("AGENTS.md");
+  });
+
+  test("a present file without the managed block fails, naming file and recovery", async () => {
+    writeConfig("");
+    const agents = join(tmp, "AGENTS.md");
+    writeFileSync(agents, "# Workspace\n\nplain instructions\n");
+    const v = await probeWritebackContract(installedRuntimeOpts());
+    expect(v.status).toBe(READINESS_STATUS.fail);
+    expect(v.detail).toContain(agents);
+    expect(v.detail).toContain("no Open Second Brain managed block");
+    expect(v.detail).toContain("same-turn atomic-fact write gate");
+    expect(v.detail).toContain("install the managed block");
+  });
+
+  test("a managed block without the gate clauses fails naming the missing piece", async () => {
+    writeConfig("");
+    writeFileSync(
+      join(tmp, "AGENTS.md"),
+      [
+        "# >>> open-second-brain managed >>>",
+        "use the open-second-brain note tools",
+        "# <<< open-second-brain managed <<<",
+      ].join("\n"),
+    );
+    const v = await probeWritebackContract(installedRuntimeOpts());
+    expect(v.status).toBe(READINESS_STATUS.fail);
+    expect(v.detail).toContain("missing");
+  });
+
+  test("a conforming file passes", async () => {
+    writeConfig("");
+    writeFileSync(join(tmp, "AGENTS.md"), `# W\n\n${CONFORMING_BLOCK}\n`);
+    const v = await probeWritebackContract(installedRuntimeOpts());
+    expect(v.status).toBe(READINESS_STATUS.pass);
+    expect(v.detail).toContain("AGENTS.md");
+  });
+
+  test("a symlinked instruction file is unknown, never a fail", async () => {
+    writeConfig("");
+    const real = join(tmp, "real-instructions.md");
+    writeFileSync(real, "no block here\n");
+    symlinkSync(real, join(tmp, "AGENTS.md"));
+    const v = await probeWritebackContract(installedRuntimeOpts());
+    expect(v.status).toBe(READINESS_STATUS.unknown);
+    expect(v.status).not.toBe(READINESS_STATUS.fail);
+    expect(v.detail).toContain("symbolic link");
+  });
+
+  test("a candidate path that cannot be read as a file is unknown with the reason", async () => {
+    writeConfig("");
+    mkdirSync(join(tmp, "AGENTS.md"));
+    const v = await probeWritebackContract(installedRuntimeOpts());
+    expect(v.status).toBe(READINESS_STATUS.unknown);
+    expect(v.detail).toContain("could not");
+  });
+
+  test("the aggregate is worst-of fail over unknown and pass, with the census", async () => {
+    writeConfig("");
+    writeFileSync(join(tmp, "AGENTS.md"), "no block\n");
+    const real = join(tmp, "claude-target.md");
+    writeFileSync(real, "irrelevant\n");
+    symlinkSync(real, join(tmp, "CLAUDE.md"));
+    writeFileSync(join(tmp, "GEMINI.md"), `# W\n\n${CONFORMING_BLOCK}\n`);
+    const v = await probeWritebackContract(installedRuntimeOpts());
+    expect(v.status).toBe(READINESS_STATUS.fail);
+    expect(v.detail).toContain("1 pass");
+    expect(v.detail).toContain("1 fail");
+    expect(v.detail).toContain("1 unknown");
+    expect(v.detail).toContain("0 skipped");
+  });
+
+  test("one conforming file among absent peers passes - absent is not a violation", async () => {
+    writeConfig("");
+    writeFileSync(join(tmp, "AGENTS.md"), `# W\n\n${CONFORMING_BLOCK}\n`);
+    const v = await probeWritebackContract(installedRuntimeOpts());
+    expect(v.status).toBe(READINESS_STATUS.pass);
+    expect(v.detail).toContain("2 skipped");
+  });
+
+  test("the probe is registered in DEFAULT_PROBES beside registered_commands", () => {
+    const names = DEFAULT_PROBES.map((p) => p.name);
+    expect(names).toContain(READINESS_PROBE.writebackContract);
+    expect(names.indexOf(READINESS_PROBE.writebackContract)).toBe(
+      names.indexOf(READINESS_PROBE.registeredCommands) + 1,
+    );
+  });
+
+  test("a default readiness run includes the probe verdict", async () => {
+    writeConfig("");
+    const report = await runReadinessProbes({
+      vault: tmp,
+      config: configPath,
+      home,
+      cwd: tmp,
+    });
+    const probe = report.probes.find((p) => p.name === READINESS_PROBE.writebackContract);
     expect(probe).toBeDefined();
     expect(probe!.status).toBe(READINESS_STATUS.skipped);
   });

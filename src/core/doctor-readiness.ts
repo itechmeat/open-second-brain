@@ -63,6 +63,15 @@
  * executable? It is read-only - a registration that stopped resolving is
  * reported with the `o2b install <target> --apply` recovery line, never
  * rewritten.
+ *
+ * The `writeback_contract` probe (t_7c01bb39) is check-only in the same
+ * way: it audits whether the workspace agent-instruction file(s) carry
+ * the same-turn atomic-fact memory write gate. The contract itself - the
+ * managed-block detection, the clause keywords in the marker write-back
+ * guardrail's own vocabulary, and the symlink refusal - lives in
+ * `brain/writeback-contract.ts`, whose docblock is the settled marker
+ * contract the repair lane (t_af5e252f) must satisfy. No repair or
+ * installer is built here.
  */
 
 import { readFileSync } from "node:fs";
@@ -91,6 +100,12 @@ import { readManifest } from "./install/manifest.ts";
 import { buildPayload } from "./install/payload.ts";
 import { defaultRegistry } from "./install/registry.ts";
 import { registerAllAdapters } from "./install/adapters/all.ts";
+import {
+  AGENT_INSTRUCTION_FILES,
+  WRITEBACK_CONTRACT_FINDING,
+  auditWorkspaceWritebackContract,
+  type WritebackContractFinding,
+} from "./brain/writeback-contract.ts";
 import type { InstallEnv, ManifestEntry } from "./install/types.ts";
 
 // ----- Constants ------------------------------------------------------------
@@ -105,6 +120,7 @@ export const READINESS_PROBE = {
   runtimeAdapterWiring: "runtime_adapter_wiring",
   installedRuntimes: "installed_runtimes",
   registeredCommands: "registered_commands",
+  writebackContract: "writeback_contract",
   decisionModel: "decision_model",
 } as const;
 
@@ -1006,6 +1022,99 @@ function parseTomlStringArray(value: string): ReadonlyArray<string> | null {
   }
 }
 
+// ----- Write-back contract probe (t_7c01bb39) -------------------------------
+
+/**
+ * Map one audited instruction file onto the readiness vocabulary. The two
+ * measured contract faults (`missing-block`, `missing-clauses`) are `fail`
+ * - the file EXISTS and was read, so this is a verdict about the surface.
+ * `absent` is `skipped` - nothing installed is not a contract violation.
+ * `symlink` and `unreadable` are `unknown` - the read was refused or
+ * failed, which is evidence about the probe's reach, never about the gate.
+ */
+function statusForContractFinding(finding: WritebackContractFinding): ReadinessStatus {
+  switch (finding) {
+    case WRITEBACK_CONTRACT_FINDING.conforming:
+      return READINESS_STATUS.pass;
+    case WRITEBACK_CONTRACT_FINDING.missingBlock:
+    case WRITEBACK_CONTRACT_FINDING.missingClauses:
+      return READINESS_STATUS.fail;
+    case WRITEBACK_CONTRACT_FINDING.absent:
+      return READINESS_STATUS.skipped;
+    case WRITEBACK_CONTRACT_FINDING.symlink:
+    case WRITEBACK_CONTRACT_FINDING.unreadable:
+      return READINESS_STATUS.unknown;
+  }
+}
+
+/**
+ * Does the vault's workspace agent-instruction file(s) carry the same-turn
+ * atomic-fact memory write gate? Reads the candidates
+ * {@link AGENT_INSTRUCTION_FILES} at the vault root through
+ * `brain/writeback-contract.ts`, which owns the whole contract: the
+ * managed-block detection, the clause keywords, and the symlink refusal.
+ * This probe is only the verdict mapping and aggregation - a second copy
+ * of the contract here is exactly how the check and the runtime would
+ * drift apart.
+ *
+ * The vault root, not the CLI's cwd, is the audited workspace: it is where
+ * this tree already locates instruction files (the instruction-file
+ * ceiling and the removed-tool sweep both read them at `join(vault, ...)`),
+ * and a readiness probe must grade the surface an agent actually reads,
+ * not whichever directory the `o2b` invocation happened to start in.
+ *
+ * Grading per file follows the probe rule: a file that was read and lacks
+ * the gate is a `fail` whose row carries the recovery clause (the repair
+ * is the t_af5e252f surface - nothing is rewritten here). A refused or
+ * unreadable read is `unknown` by name. A vault with NO instruction file
+ * at all is `skipped` - nothing installed is not a contract violation -
+ * while one conforming file among absent peers passes: the absent
+ * candidates did not participate, and the census in the detail says so
+ * rather than hiding them.
+ */
+export async function probeWritebackContract(opts: ReadinessOptions): Promise<ReadinessVerdict> {
+  const workspace = opts.vault;
+  const audits = auditWorkspaceWritebackContract(workspace);
+  const rows = audits.map((audit) => ({
+    path: audit.path,
+    status: statusForContractFinding(audit.finding),
+    detail: audit.detail,
+  }));
+  const counts = countByStatus(rows.map((row) => row.status));
+  // Worst rows lead the detail; toSorted is stable, so within one bucket
+  // the candidate list's priority order stands.
+  const ordered = rows.toSorted((a, b) => readinessRank(a.status) - readinessRank(b.status));
+  const rowText = ordered.map((row) => `${row.path}: ${row.detail}`).join("; ");
+  const census =
+    `(${counts.pass} pass, ${counts.fail} fail, ` +
+    `${counts.unknown} unknown, ${counts.skipped} skipped)`;
+  if (counts.fail > 0) {
+    return {
+      status: READINESS_STATUS.fail,
+      detail: `${counts.fail} agent-instruction file(s) fail the write-back contract ${census}: ${rowText}`,
+    };
+  }
+  if (counts.unknown > 0) {
+    return {
+      status: READINESS_STATUS.unknown,
+      detail: `could not measure ${counts.unknown} agent-instruction file(s) ${census}: ${rowText}`,
+    };
+  }
+  if (counts.pass === 0) {
+    return {
+      status: READINESS_STATUS.skipped,
+      detail:
+        `no agent-instruction file in ${workspace} ` +
+        `(checked ${AGENT_INSTRUCTION_FILES.join(", ")}) - nothing installed is ` +
+        "not a contract violation",
+    };
+  }
+  return {
+    status: READINESS_STATUS.pass,
+    detail: `${counts.pass} agent-instruction file(s) carry the write-back contract ${census}: ${rowText}`,
+  };
+}
+
 // ----- Runner ---------------------------------------------------------------
 
 export interface NamedProbe {
@@ -1020,6 +1129,7 @@ export const DEFAULT_PROBES: ReadonlyArray<NamedProbe> = [
   { name: READINESS_PROBE.runtimeAdapterWiring, fn: probeRuntimeAdapterWiring },
   { name: READINESS_PROBE.installedRuntimes, fn: probeInstalledRuntimes },
   { name: READINESS_PROBE.registeredCommands, fn: probeRegisteredCommands },
+  { name: READINESS_PROBE.writebackContract, fn: probeWritebackContract },
   { name: READINESS_PROBE.decisionModel, fn: probeDecisionModel },
 ];
 
