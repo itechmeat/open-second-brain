@@ -567,6 +567,27 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
+        // An enabled openai-compat rerank whose endpoint cannot resolve:
+        // every search fails closed until it does. The exit lists the
+        // registered rerank profiles, because the usual repair is naming
+        // one of them (or registering one) rather than typing three keys.
+        code: "rerank-endpoint-unconfigured",
+        issueClass: "rerank enabled with an endpoint that cannot resolve",
+        nextCommand: "o2b search rerank-provider list",
+        autoRepairable: false,
+      },
+      {
+        // An announced decommission of the configured rerank model. The
+        // act is choosing another model or endpoint, and registering it
+        // as a profile is the verb this tool has for that; unlike the
+        // embedding case no re-embed follows, because rerank stores
+        // nothing derived from the model.
+        code: "rerank-model-sunset-announced",
+        issueClass: "configured rerank model has an announced decommission date",
+        nextCommand: "o2b search rerank-provider add",
+        autoRepairable: false,
+      },
+      {
         // The index behind its embedding configuration: chunks with no
         // vector, or stored vectors under a retired model/dimension. The
         // registry carries the backfill verb because it is the

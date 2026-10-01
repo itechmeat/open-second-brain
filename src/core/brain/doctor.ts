@@ -75,6 +75,7 @@ import {
 } from "./doctor/records.ts";
 import { embeddingSunsetCheck } from "./doctor/embedding-sunset-check.ts";
 import { embeddingsHealthCheck } from "./doctor/embeddings-health-check.ts";
+import { rerankHealthCheck } from "./doctor/rerank-health-check.ts";
 import { payloadRegistryCheck } from "./doctor/payload-checks.ts";
 import { recallChannelCoverageCheck } from "./doctor/recall-channel-coverage.ts";
 import { recoveryPointLivenessCheck } from "./doctor/recovery-point-liveness.ts";
@@ -183,6 +184,7 @@ const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = Object.freeze([
   recoveryPointLivenessCheck,
   embeddingSunsetCheck,
   embeddingsHealthCheck,
+  rerankHealthCheck,
   payloadRegistryCheck,
 ]);
 

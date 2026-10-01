@@ -197,6 +197,8 @@ const DOCTOR_REGISTERED_CODES: ReadonlyArray<string> = [
   "principle-corrupted",
   "recall-channel-silent",
   "recovery-point-stale",
+  "rerank-endpoint-unconfigured",
+  "rerank-model-sunset-announced",
   "schema-version-unknown",
   "stale-claim",
   "stale-dependency",

@@ -235,6 +235,24 @@ const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
       "the other two are defects in this build rather than in the vault being examined",
   },
   {
+    code: "rerank-model-sunset-unsurveyed",
+    reason:
+      "the configured rerank model is outside the shipped rerank decommission survey, and the " +
+      "repair is for somebody to look up whether its provider has announced anything - a " +
+      "question about the world, answered by reading a vendor's notice rather than by any edit " +
+      "to this vault. The finding says only that no statement was made, which is deliberately " +
+      "not the same as saying no decommission exists",
+  },
+  {
+    code: "rerank-model-sunset-undetermined",
+    reason:
+      "the check reached no sunset verdict for the rerank model, for a reason it names in the " +
+      "finding: the search configuration could not be resolved, the survey is older than its " +
+      "horizon so its record of no announcement has expired, or a shipped survey entry carries " +
+      "an unparseable date. The first is a config file whose intended content only the operator " +
+      "knows, and the other two are defects in this build rather than in the vault examined",
+  },
+  {
     code: "embeddings-census-unrecorded",
     reason:
       "the pending-vector count could not be taken: the index file is absent or would not open, " +
