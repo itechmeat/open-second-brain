@@ -9,6 +9,7 @@ import {
   signatureIdentityKnown,
   EMBEDDING_PRICING,
   LOCAL_EMBEDDING_MODEL,
+  MODEL_NATIVE_DIMENSION,
 } from "../../../src/core/search/embeddings/signature.ts";
 
 test("embeddingSignature canonicalises provider/model/dimension", () => {
@@ -117,4 +118,27 @@ test("signatures rendered from null-field identities stay parseable and stable",
   const b = embeddingSignature({ provider: "openai-compat", model: null, dimension: 1536 });
   expect(a).toBe("openai-compat:?:1536");
   expect(b).toBe(a);
+});
+
+test("a named model at its native dimension is a known identity; an unnamed one is not", () => {
+  const native = embeddingSignature({
+    provider: "openai-compat",
+    model: "m",
+    dimension: MODEL_NATIVE_DIMENSION,
+  });
+  expect(signatureIdentityKnown(native)).toBe(true);
+  expect(isStaleSignature(native, native)).toBe(false);
+  // A declared width is a different identity from the native one.
+  expect(
+    isStaleSignature(
+      native,
+      embeddingSignature({ provider: "openai-compat", model: "m", dimension: 512 }),
+    ),
+  ).toBe(true);
+  const unnamed = embeddingSignature({
+    provider: "openai-compat",
+    model: null,
+    dimension: MODEL_NATIVE_DIMENSION,
+  });
+  expect(isStaleSignature(unnamed, unnamed)).toBe(true);
 });

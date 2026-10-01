@@ -25,6 +25,8 @@ import type {
 } from "../../../src/core/search/types.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 import { sqliteVecLoadable } from "../../helpers/sqlite-vec.ts";
+import { startFakeHttp } from "../../helpers/fake-http.ts";
+import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
 
 let vault: string;
 let dbPath: string;
@@ -141,20 +143,52 @@ function localSemantic(dimension: number | null): ResolvedEmbeddingConfig {
   });
 }
 
-test("flag on with embeddings under an unknown identity never resumes staging", async () => {
+test("flag on with the local embedder and no declared dimension resumes on its fixed default", async () => {
   if (!sqliteVecLoadable()) return;
-  // No declared dimension: the active embedding signature renders with a
-  // `?` sentinel field, i.e. an UNKNOWN identity. Two such signatures are
-  // string-equal, so only the identity-aware rule can keep the staged
-  // build from being resumed as compatible with itself.
+  // The local embedder's dimension is fixed when none is declared, so the
+  // staging identity is known and the partial build is resumed.
   const cfg = cfgWith({ resumeReindex: true, semantic: localSemantic(null) });
   await partialReindex(cfg, { embeddings: true });
 
   const stats = await reindexVault(cfg, { embeddings: true });
-  // No resume: every file is processed fresh.
-  expect(stats.added).toBe(6);
-  expect(stats.unchanged).toBe(0);
+  expect(stats.unchanged).toBeGreaterThanOrEqual(1);
+  expect(stats.added + stats.unchanged).toBe(6);
   expect(await docCount(cfg)).toBe(6);
+});
+
+/** A remote embedder against the fake server, the dimension left to the model. */
+function remoteSemantic(baseUrl: string, model: string | null): ResolvedEmbeddingConfig {
+  return Object.freeze({
+    enabled: true,
+    provider: "openai-compat",
+    baseUrl,
+    model,
+    apiKey: FAKE_PROVIDER_KEY,
+    dimension: null,
+    timeoutMs: 5_000,
+    concurrency: 1,
+    batchSize: 8,
+    costGateUsd: 0,
+    maxRetries: 1,
+  });
+}
+
+test("flag on with a named remote model and no declared dimension resumes", async () => {
+  if (!sqliteVecLoadable()) return;
+  const server = await startFakeHttp();
+  try {
+    const cfg = cfgWith({
+      resumeReindex: true,
+      semantic: remoteSemantic(server.url, "fake-model"),
+    });
+    await partialReindex(cfg, { embeddings: true });
+
+    const stats = await reindexVault(cfg, { embeddings: true });
+    expect(stats.unchanged).toBeGreaterThanOrEqual(1);
+    expect(stats.added + stats.unchanged).toBe(6);
+  } finally {
+    await server.close();
+  }
 });
 
 test("flag on with embeddings under a known identity still resumes", async () => {

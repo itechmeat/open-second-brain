@@ -11,11 +11,19 @@
  * spend, and compare two signatures for staleness.
  */
 
+/**
+ * Dimension field of a NAMED model whose dimension is left to the model
+ * (no `embedding_dimension` configured). The model fixes its own output
+ * width, so two runs of the same named model at its native width produce
+ * comparable vectors: a known identity, unlike the `?` sentinel.
+ */
+export const MODEL_NATIVE_DIMENSION = "native";
+
 /** Identity triple that determines whether two embeddings are comparable. */
 export interface EmbeddingIdentity {
   readonly provider: string;
   readonly model: string | null;
-  readonly dimension: number | null;
+  readonly dimension: number | typeof MODEL_NATIVE_DIMENSION | null;
 }
 
 /** Model name produced by the offline local embedder (priced at 0). */
