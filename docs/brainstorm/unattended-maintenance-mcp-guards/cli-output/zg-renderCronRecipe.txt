@@ -1,0 +1,20 @@
+src/cli/search-cron-template.ts
+  25:	  renderCronRecipe,
+  54-56 [function renderCronTemplate] 55:	  return renderCronRecipe(SEARCH_REINDEX_RECIPE, interval, opts);
+src/cli/cron-recipe.ts
+  161:	 * {@link renderCronRecipe} from a single source.
+  229:	export function renderCronRecipe<TOptions extends CronRecipeOptions>(
+src/cli/partner-codegraph-cron.ts
+  35:	  renderCronRecipe,
+  209-215 [function renderCodegraphResyncTemplate] 214:	  return renderCronRecipe(CODEGRAPH_RESYNC_RECIPE, interval, { ...opts, projectPath });
+tests/cli/cron-recipe.test.ts
+  22:	  renderCronRecipe,
+  53:	describe("renderCronRecipe", () => {
+  55:	    const out = renderCronRecipe(SPEC, "30m", {});
+  70:	    const out = renderCronRecipe(SPEC, "30m", {});
+  81:	    const out = renderCronRecipe(SPEC, "30m", {});
+  96:	    const out = renderCronRecipe(SPEC, "6h", {});
+  105:	    const out = renderCronRecipe(SPEC, "30m", {});
+  111:	    const out = renderCronRecipe(SPEC, "30m", { o2bBin: "/opt/probe/o2b" });
+  117:	    expect(() => renderCronRecipe(SPEC, "90m", {})).toThrow(CronTemplateError);
+  118:	    expect(() => renderCronRecipe(SPEC, "nonsense", {})).toThrow(CronTemplateError);

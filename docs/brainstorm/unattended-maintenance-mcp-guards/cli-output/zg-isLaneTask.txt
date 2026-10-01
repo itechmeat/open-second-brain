@@ -1,0 +1,17 @@
+src/mcp/brain/admin-tools.ts
+  46:	  isLaneTask,
+  355-468 [function toolBrainMaintenance]
+    423:	  const unknownRetries = requestedRetries.filter((name) => !isLaneTask(name));
+    431:	  const retryTasks: ReadonlyArray<LaneTask> = requestedRetries.filter(isLaneTask);
+tests/mcp/maintenance-parity-census.test.ts
+  55:	  isLaneTask,
+  225:	      expect(`${task} is a lane task: ${isLaneTask(task)}`).toBe(`${task} is a lane task: true`);
+  232:	      expect(`${outsider} is a lane task: ${isLaneTask(outsider)}`).toBe(
+src/cli/brain/verbs/maintenance.ts
+  42:	  isLaneTask,
+  331-417 [function cmdBrainMaintenance]
+    379:	      const unknownRetries = requested.filter((name) => !isLaneTask(name));
+    390:	      const retryTasks = requested.filter(isLaneTask);
+src/core/brain/maintenance/lane.ts
+  182:	 * Membership list for {@link isLaneTask}, in the order the surfaces
+  198:	export function isLaneTask(value: unknown): value is LaneTask {

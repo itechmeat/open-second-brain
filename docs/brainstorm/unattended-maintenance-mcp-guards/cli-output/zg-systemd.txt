@@ -1,0 +1,15 @@
+Scanning files...
+Preparing local/potion-code-16m-v2
+query groups (1):
+Q1 [primary]: systemd timer unit OnUnitActiveSec render
+hits: 10
+
+#1 matchedBy=fts+vector docs/brainstorm/release-1-0-stability-trust/cli-output/claude.md:1-11
+heading: Variant 1: Independent vertical slices
+heading_level: 3
+1	### Variant 1: Independent vertical slices
+
+#2 matchedBy=fts+vector docs/brainstorm/release-1-0-stability-trust/variants.md:7-18
+heading: Variant 1: Independent vertical slices (consultant verbatim)
+heading_level: 2
+scope: Release 1.0.0 - Stability & Trust - variant audit trail
