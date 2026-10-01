@@ -10,7 +10,7 @@
  * so a run with `fetch` replaced by a thrower must still complete.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -53,6 +53,7 @@ interface RerankConfig {
   readonly model?: string | null;
   readonly envKey?: string | null;
   readonly provider?: string;
+  readonly allowInsecureHttp?: boolean;
 }
 
 /** Write the `o2b` config; every field defaults to a complete remote rerank. */
@@ -66,6 +67,9 @@ function configure(c: RerankConfig = {}): void {
   if (model !== null) lines.push(`search_rerank_model: "${model}"`);
   if (envKey !== null) lines.push(`search_rerank_env_key: "${envKey}"`);
   if (c.provider !== undefined) lines.push(`search_rerank_provider: "${c.provider}"`);
+  if (c.allowInsecureHttp !== undefined) {
+    lines.push(`search_rerank_allow_insecure_http: "${c.allowInsecureHttp}"`);
+  }
   writeFileSync(configPath, lines.join("\n") + "\n");
 }
 
@@ -213,6 +217,21 @@ describe("an enabled remote rerank that cannot resolve its endpoint is one error
     const { issues } = run();
     expect(issues.map((i) => i.code)).toEqual([RERANK_ENDPOINT_UNCONFIGURED_CODE]);
     expect(issues[0]!.message).toContain("search_rerank_base_url must be an https endpoint");
+  });
+
+  test("a plain-http base URL under the opt-out is accepted without the runtime warning", () => {
+    // The once-per-process plain-http warning belongs to the search that
+    // sends vault text; doctor must not print it or spend it.
+    configure({ baseUrl: "http://rerank-doctor-optout.lan:8080/v1", allowInsecureHttp: true });
+    const stderr = spyOn(process.stderr, "write");
+    try {
+      const { issues } = run();
+      expect(issues.map((i) => i.code)).not.toContain(RERANK_ENDPOINT_UNCONFIGURED_CODE);
+      const written = stderr.mock.calls.map((call) => String(call[0]));
+      expect(written.filter((line) => line.includes("plain http"))).toEqual([]);
+    } finally {
+      stderr.mockRestore();
+    }
   });
 
   test("a base URL carrying credentials is refused without repeating them", () => {

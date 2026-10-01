@@ -137,6 +137,15 @@ const BASE_URL_PLACEHOLDER = `<${BASE_URL_KEY}>`;
  * replaced with {@link BASE_URL_PLACEHOLDER} and the rest of the message kept.
  */
 function baseUrlRefusal(rerank: ResolvedRerankConfig, baseUrl: string): string | null {
+  // The opt-out admits any parseable http URL; answer that here so the
+  // runtime's once-per-process plain-http warning is not spent by doctor.
+  if (rerank.allowInsecureHttp === true) {
+    try {
+      if (new URL(baseUrl).protocol === "http:") return null;
+    } catch {
+      // Not a URL: fall through, the rule names it.
+    }
+  }
   try {
     assertHttpEgressEndpoint(baseUrl, BASE_URL_KEY, {
       allowInsecureHttp: rerank.allowInsecureHttp === true,
