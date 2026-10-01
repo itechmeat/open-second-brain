@@ -48,6 +48,7 @@ import { handleSearchSubcommand } from "./search.ts";
 import { handleDecisionModelSubcommand } from "./decision-model.ts";
 import { handleStateSubcommand } from "./state.ts";
 import { installMcpSignalDrain, type McpSignalDrainHandle } from "./mcp-drain.ts";
+import { installMcpFaultGuard } from "./mcp-fault-guard.ts";
 import { handleVaultSubcommand } from "./vault.ts";
 import {
   NoVaultConfiguredError,
@@ -849,65 +850,78 @@ async function cmdMcp(argv: string[]): Promise<number> {
   const vault = requireVault(flags["vault"] as string | undefined, config);
   const repoRoot = (flags["repo"] as string | undefined) ?? null;
 
-  // Hands-off post-upgrade maintenance: if the vault's on-disk state lags the
-  // running version (stale Brain managed files, stale/missing search index),
-  // bring it current with no user action. Fire-and-forget, full scope only
-  // (the writer server skips it), never blocks or fails server start; a needed
-  // reindex runs detached in the background.
-  if (scope === "full") {
-    void ensureVaultCurrent(vault, { background: true, configPath: config }).catch(() => {
-      // best-effort; the server must come up regardless
-    });
-  }
-
-  if (transport === "http") {
-    const handle = await startHttp(
-      { vault, configPath: config, repoRoot },
-      { host, port, apiKey },
-      { scope, serverName, capabilityWindow, hostTarget },
-    );
-    // Log the actually-bound endpoint. With the default --port 0 the OS
-    // assigns an ephemeral port, so the requested `port` value ("0") would
-    // advertise the wrong URL. handle.url carries the real bound port.
-    process.stderr.write(
-      `[mcp] ${serverName} ${SERVER_VERSION} listening on ${handle.url} (vault=${vault})\n`,
-    );
-    // A served transport outlives every other verb in this CLI, so it is
-    // the one place a shutdown signal has work to do: stop accepting,
-    // finish what is running, then let the registered `exit` hooks
-    // checkpoint the index and release the locks. Released in a `finally`
-    // because the listeners are process-global.
-    const signals = installMcpSignalDrain({ close: () => handle.close() });
-    try {
-      // `closed` rather than `resolve`: this module imports `resolve` from
-      // `node:path`, and shadowing it here hid that import inside the closure.
-      await new Promise<void>((closed) => handle.server.once("close", closed));
-    } finally {
-      signals.release();
-    }
-    return signals.exitCode() ?? 0;
-  }
-
-  process.stderr.write(
-    `[mcp] ${serverName} ${SERVER_VERSION} listening on stdio (vault=${vault})\n`,
-  );
-  // A holder rather than a `let`, because the assignment happens inside a
-  // callback: the compiler cannot see that it ran and would narrow a bare
-  // binding to `null` at both reads below.
-  const stdio: { signals: McpSignalDrainHandle | null } = { signals: null };
+  // A served transport outlives every other verb, so it is the one place
+  // a stray rejection from core can end the process mid-session, and
+  // Claude Code and Codex never restart a dead MCP server. Installed
+  // before the background vault refresh (its detached work is the first
+  // that could reject) and released before the verb returns, so the
+  // top-level `main().catch` still fails loudly once the server stops.
+  // The probe above returns before this point: a one-shot check should
+  // crash loudly. See `mcp-fault-guard.ts`.
+  const faults = installMcpFaultGuard();
   try {
-    const code = await serveStdio(
-      { vault, configPath: config, repoRoot },
-      {
-        onStart: (transport) => {
-          stdio.signals = installMcpSignalDrain({ close: () => transport.close() });
-        },
-      },
-      { scope, serverName, capabilityWindow, hostTarget },
+    // Hands-off post-upgrade maintenance: if the vault's on-disk state lags the
+    // running version (stale Brain managed files, stale/missing search index),
+    // bring it current with no user action. Fire-and-forget, full scope only
+    // (the writer server skips it), never blocks or fails server start; a needed
+    // reindex runs detached in the background.
+    if (scope === "full") {
+      void ensureVaultCurrent(vault, { background: true, configPath: config }).catch(() => {
+        // best-effort; the server must come up regardless
+      });
+    }
+
+    if (transport === "http") {
+      const handle = await startHttp(
+        { vault, configPath: config, repoRoot },
+        { host, port, apiKey, faultCounts: () => faults.counts() },
+        { scope, serverName, capabilityWindow, hostTarget },
+      );
+      // Log the actually-bound endpoint. With the default --port 0 the OS
+      // assigns an ephemeral port, so the requested `port` value ("0") would
+      // advertise the wrong URL. handle.url carries the real bound port.
+      process.stderr.write(
+        `[mcp] ${serverName} ${SERVER_VERSION} listening on ${handle.url} (vault=${vault})\n`,
+      );
+      // A served transport outlives every other verb in this CLI, so it is
+      // the one place a shutdown signal has work to do: stop accepting,
+      // finish what is running, then let the registered `exit` hooks
+      // checkpoint the index and release the locks. Released in a `finally`
+      // because the listeners are process-global.
+      const signals = installMcpSignalDrain({ close: () => handle.close() });
+      try {
+        // `closed` rather than `resolve`: this module imports `resolve` from
+        // `node:path`, and shadowing it here hid that import inside the closure.
+        await new Promise<void>((closed) => handle.server.once("close", closed));
+      } finally {
+        signals.release();
+      }
+      return signals.exitCode() ?? 0;
+    }
+
+    process.stderr.write(
+      `[mcp] ${serverName} ${SERVER_VERSION} listening on stdio (vault=${vault})\n`,
     );
-    return stdio.signals?.exitCode() ?? code;
+    // A holder rather than a `let`, because the assignment happens inside a
+    // callback: the compiler cannot see that it ran and would narrow a bare
+    // binding to `null` at both reads below.
+    const stdio: { signals: McpSignalDrainHandle | null } = { signals: null };
+    try {
+      const code = await serveStdio(
+        { vault, configPath: config, repoRoot },
+        {
+          onStart: (live) => {
+            stdio.signals = installMcpSignalDrain({ close: () => live.close() });
+          },
+        },
+        { scope, serverName, capabilityWindow, hostTarget },
+      );
+      return stdio.signals?.exitCode() ?? code;
+    } finally {
+      stdio.signals?.release();
+    }
   } finally {
-    stdio.signals?.release();
+    faults.release();
   }
 }
 
