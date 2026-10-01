@@ -97,7 +97,7 @@ const PRICED_MODEL = {
   embedding_provider: "openai-compat",
   embedding_base_url: "https://x/v1",
   embedding_model: "text-embedding-3-small",
-  embedding_api_key: "test-key",
+  embedding_api_key: FAKE_PROVIDER_KEY,
 };
 
 test("a vault with no index cannot spend: null", async () => {
