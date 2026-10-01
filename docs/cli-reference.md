@@ -1678,6 +1678,22 @@ o2b search rerank-eval        Rerank eval gate over a labelled dataset: runs the
 decision model and its `decision_model_*` config; see
 [`docs/decision-models.md`](decision-models.md).
 
+`o2b brain doctor` checks the rerank configuration (since v1.66.0)
+whenever `search_rerank_enabled` is on with the `openai-compat` kind. The
+check reads configuration only and sends no request:
+
+| Code | Stream | When | Next command |
+| ---- | ------ | ---- | ------------ |
+| `rerank-endpoint-unconfigured` | error | the base URL, the model or the key is missing, or `search_rerank_provider` names no registered profile, so every rerank-enabled search would fail | `o2b search rerank-provider list` |
+| `rerank-model-sunset-announced` | warning | the configured model has an announced decommission date that is less than 90 days away or already past | `o2b search rerank-provider add` |
+| `rerank-model-sunset-unsurveyed` | uncertain | the configured model is outside the shipped rerank decommission survey, so no statement was made about it | none, with the reason printed |
+| `rerank-model-sunset-undetermined` | uncertain | the check ran and reached no verdict, for example because the survey is older than its horizon | none, with the reason printed |
+
+The survey records model strings and the published notice each entry
+rests on, never an endpoint: a hosted service shutting down while its
+open checkpoints keep running elsewhere is not a model sunset, and is
+reported at query time as `rerank-provider-unavailable` instead.
+
 ### The retrieval trail (since v1.46.0)
 
 A search that came back with nothing used to say only `(no results)`,
@@ -1718,7 +1734,10 @@ so there is no separate lane field that could drift from it:
 | `semantic-structured-lanes-skipped` | a structured semantic lane was requested while semantic search is off |
 | `semantic-embedding-abi-drift` | the index carries embeddings written by another build; `detail.fields` counts the contradicted ABI fields |
 | `hybrid-degraded` | hybrid recall was asked for and the semantic lane did not run, so this answer is keyword-only |
+| `hybrid-deadline-exceeded` | the composite hybrid path (embed, semantic top-k, rerank, second pass) outlived `search_hybrid_deadline_ms`, so the phases past the budget were cut; `detail.budgetMs` is the deadline, `detail.elapsedMs` the moment it fired |
 | `rank-cap-truncated-pool` | the rank cap truncated the candidate pool; `detail.cap` is the cap that bit |
+| `rerank-provider-unavailable` | the cross-encoder rerank endpoint could not answer, so the answer keeps the heuristic order; `detail.category` is one of `auth`, `quota`, `gone`, `rejected`, `transient`, `timeout`, `network`, `malformed`, `unclassified` |
+| `rerank-model-sunset` | the configured rerank model's announced decommission date has passed, so no rerank request was sent and the answer keeps the heuristic order |
 | `relevance-floor-dropped-rows` | the relevance floor dropped ranked rows; `detail.dropped` counts them |
 | `scope-filters-dropped-rows` | visibility, ownership, or session / project scope dropped ranked rows; `detail.dropped` against `detail.before` |
 | `cross-vault-origin-failed` | a cross-vault origin could not be searched; `detail.origin` is the origin label |
@@ -1728,6 +1747,33 @@ Members are not invented for conditions nothing reports, so every code
 above has a producer on the search path today. `hybrid-degraded` is the
 umbrella over the five `semantic-*` codes: they say why the lane did not
 run, it says what the caller received.
+
+The two `rerank-*` codes report the optional cross-encoder rerank (since
+v1.66.0). Neither turns a search into an error: the answer keeps the
+heuristic order, and the existing `rerank_degraded:` warning stays the
+human signal for a failed endpoint. `detail.category` on
+`rerank-provider-unavailable` is computed from the typed failure, never
+from the provider's message:
+
+| Category | The failure it names |
+| -------- | -------------------- |
+| `auth` | the endpoint answered 401 or 403 |
+| `quota` | the endpoint answered 402 |
+| `gone` | the endpoint answered 404 or 410, the usual sign of a retired endpoint |
+| `rejected` | the endpoint answered any other 4xx |
+| `transient` | the endpoint answered 408, 429 or a 5xx |
+| `timeout` | the request outlived its timeout |
+| `network` | the request never reached an answer: refused connection, DNS, TLS or a redirect |
+| `malformed` | the endpoint answered, but the body was not JSON, carried the wrong number of scores, or an out-of-range or duplicate index |
+| `unclassified` | the rerank provider threw an error the cross-encoder did not type; it is named rather than folded into another category |
+
+An answer carrying `rerank-provider-unavailable` is served but never
+written to the query cache, so the next identical query asks the
+endpoint again instead of replaying the failure. An answer carrying
+`rerank-model-sunset` depends only on the build and the date, and is
+cached as usual. The sunset skip applies to the `openai-compat` kind
+only: the `local` and `decision-model` kinds carry no model string to
+look up.
 
 The human transcript names the cause instead of printing a bare
 no-results line. The first degradation wins, because the lanes push in

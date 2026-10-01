@@ -182,6 +182,132 @@ stating rather than rounding to "both sides":
 Either way a call that has already entered one of them runs it to the end.
 `src/core/brain/heal-run.ts` names the same two and the same asymmetry.
 
+### Tool errors (since v1.66.0)
+
+Every failed call now carries a stable, machine-readable code, so a
+client can branch on the failure without matching English prose. The
+prose itself is unchanged: every error message and every error text
+block reads byte for byte as it did before, and a successful result
+never gains the envelope.
+
+A failure reaches the client on one of two channels, and the code rides
+in a different place on each:
+
+| Channel | When | Where the code is |
+| --- | --- | --- |
+| JSON-RPC error | the request was refused before or around the tool: an unknown method, invalid params, an undeclared argument, a refusal the tool raises as a protocol error, a transport parse error | `error.data.code` |
+| tool error result | the tool ran and failed: `isError: true` with one text block | `result._meta["open-second-brain/error"].code` |
+
+On the JSON-RPC channel every error response carries `error.data.code`.
+A code the refusing site chose (`vault_frozen`, `budget_exceeded`,
+`unknown_argument`, a search error code) wins. Otherwise the server fills
+in the default for the numeric JSON-RPC code: `parse_error` (-32700),
+`invalid_request` (-32600), `method_not_found` (-32601), `invalid_params`
+(-32602), `internal_error` (-32603). Existing `data` members such as
+`tool`, `unknown_arguments` or `errors` are kept as they were, with
+`code` added after them.
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 7,
+  "error": {
+    "code": -32602,
+    "message": "brain_search: unknown argument 'quiery' (did you mean 'query'?). ...",
+    "data": {
+      "tool": "brain_search",
+      "unknown_arguments": [{ "name": "quiery", "suggestion": "query" }],
+      "declared_arguments": ["query", "..."],
+      "code": "unknown_argument"
+    }
+  }
+}
+```
+
+On the tool-result channel the code rides on `_meta` under a namespaced
+key, with a schema tag like the progress envelope's:
+
+```json
+{
+  "result": {
+    "content": [{ "type": "text", "text": "<the error message, unchanged>" }],
+    "isError": true,
+    "_meta": {
+      "open-second-brain/error": {
+        "schema": "o2b.error.v1",
+        "code": "safeguard_timeout"
+      }
+    }
+  }
+}
+```
+
+It is not placed in `structuredContent`: a strict client validates
+`structuredContent` against the tool's `outputSchema` even on an error
+result, and an error object there would fail that check. When the same
+call also carries a progress refusal, both keys sit side by side on the
+one `_meta` object.
+
+**The code list is closed.** Every code the server can send is a member
+of one registry, so a client can treat an unknown value as a newer
+server rather than as a malformed reply. It is the union of these
+generic tokens:
+
+| Code | Meaning |
+| --- | --- |
+| `parse_error`, `invalid_request`, `method_not_found`, `invalid_params`, `internal_error` | the default for each JSON-RPC error code, used when nothing more precise applies |
+| `safeguard_timeout` | the operation outlived its cooperative deadline (see "Which tools are bounded" above) |
+| `safeguard_aborted` | the operation's abort signal fired and it stopped at a checkpoint |
+| `output_contract_failed` | the tool produced a payload that does not satisfy its own `outputSchema` |
+| `config_unreadable` | the configuration file could not be read |
+| `skill_not_found`, `skill_invalid_path`, `unknown_skill` | a skill tool could not resolve the named skill, refused its path, or does not know it |
+| `unknown_operation` | `brain_intention` or `brain_trigger` was asked for an operation it does not have |
+| `invalid_status` | `brain_trigger` was given a status outside its vocabulary |
+| `trigger_transition_refused` | a trigger transition was refused; an absent trigger and one the caller may not see answer with the same code and the same message |
+| `write_session_unknown`, `write_session_terminal`, `session_id_required` | a write-session call named no session, an unknown one, or one that has already ended |
+| `unknown_argument` | the call carried an argument the tool does not declare (see "Argument contract" above) |
+
+plus every member of the vocabularies the core already defines, passed
+through unchanged:
+
+- search errors (`SEARCH_ERROR_CODES`, for example `INDEX_MISSING`,
+  `EMBEDDING_QUOTA_EXHAUSTED`); the bracketed `[CODE]` suffix some search
+  messages already carried stays in the text;
+- response-shape and semantic response violations
+  (`SHAPE_VIOLATION_CODES`, `SEMANTIC_VIOLATION_CODES`);
+- the frozen-vault refusal `vault_frozen`, the write-binding refusal
+  `write-binding-refused`, the reach refusal `caller-supplied-reach`, and
+  the owner-scope refusals `foreign-owner` and `unresolved-identity`;
+- the codes of write batches (`budget_exceeded`, `invalid_action`,
+  `invalid_target`, ...), note creation, note lifecycle, note revert,
+  stub scaffolding, note title resolution, note templates, pinned
+  context, exact state, host memory writes, the count guard
+  (`count_guard`), and the shared `config_invalid` and
+  `preference_not_found`.
+
+The canonical list is `TOOL_ERROR_CODES` in `src/mcp/tool-error-codes.ts`.
+
+**Casing follows the vocabulary.** New tokens are lower snake_case. A
+code that was already on the wire keeps its spelling: search codes stay
+UPPER_SNAKE, and the write-binding, reach and owner-scope refusals stay
+kebab-case. Nothing was
+renamed, so a client that already matched `vault_frozen` or
+`budget_exceeded` keeps working.
+
+**No blank code and no guess.** The server classifies a failure by its
+error class, never by reading an arbitrary `.code` property, so an
+operating-system code such as `ENOENT` never leaks onto the wire. A
+failure the registry does not recognise is reported as `internal_error`
+and the server writes one stderr line naming the error class (never its
+message):
+
+```text
+warning: unclassified tool error mapped to internal_error: <error name>
+```
+
+Codes are fixed tokens; none is ever built from a path, a note name or
+a query.
+
 ## Tool Highlights
 
 The full server currently advertises 115 tools; the 18 deprecated predecessor

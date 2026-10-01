@@ -1093,8 +1093,13 @@ semantic_weight·cosine + link_boost + recency_boost + entity_boost)`
   candidates by the returned relevance, promoting a genuinely-relevant hit
   the heuristic ranker placed deep. Zero HTTP cost and byte-identical
   ordering when disabled; a request-time endpoint error degrades to the
-  heuristic ordering (a `rerank_degraded:` warning, never a throw). Most
-  valuable on the `thorough` profile.
+  heuristic ordering (a `rerank_degraded:` warning, never a throw). Since
+  v1.66.0 the same failure is also recorded in the retrieval trail as
+  `rerank-provider-unavailable` with a typed `detail.category`, and such
+  an answer is never written to the query cache, so a transient endpoint
+  failure is retried on the next identical query. A configured model
+  whose announced decommission date has passed is not called at all
+  (`rerank-model-sunset`). Most valuable on the `thorough` profile.
 - **Query plan + recall economy (v0.20.0).** A pure structural pass
   classifies each query's intent (neutral / exact / entity / broad) from
   its shape - quoted phrases, FTS wildcards, wikilinks, entity-token
