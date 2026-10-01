@@ -523,6 +523,26 @@ describe("every operation-dispatching tool answers unknown_operation", () => {
     });
   }
 
+  test("the table covers every tool whose schema declares a dispatch enum", () => {
+    // Derived from the catalog, so a new dispatcher that forgets the shared
+    // code fails here instead of shipping (brain_claims was found by hand).
+    const covered = new Set<string>([
+      ...CASES.map(([tool]) => tool),
+      // pinned by the workspace refusal tests above
+      "brain_intention",
+      "brain_trigger",
+    ]);
+    // A host write whose `action` refusal keeps the pinned `invalid_action`.
+    const exempt = new Set<string>(["brain_memory_bridge"]);
+    const declared = TOOLS.filter((tool) => {
+      const props =
+        (tool.inputSchema as { readonly properties?: Record<string, { readonly enum?: unknown }> })
+          .properties ?? {};
+      return ["operation", "op", "action"].some((arg) => Array.isArray(props[arg]?.enum));
+    }).map((tool) => tool.name);
+    expect(declared.filter((name) => !covered.has(name) && !exempt.has(name))).toEqual([]);
+  });
+
   test("a write batch operation of an unknown kind answers unknown_operation", async () => {
     const err = await raised(() =>
       findTool(TOOLS, "brain_write_batch").handler(workspaceCtx(), {
