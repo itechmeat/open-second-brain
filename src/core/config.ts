@@ -1121,7 +1121,7 @@ export function resolveMaintenanceEmbeddings(configPath?: string): boolean {
 /**
  * Env var and config key of the maintenance lane's custom-task master
  * switch. Named because the lane quotes them back: `status` says which
- * switch is off when custom tasks are declared but not run.
+ * of the two turned declared custom tasks off.
  */
 export const MAINTENANCE_CUSTOM_TASKS_ENV = "OPEN_SECOND_BRAIN_MAINTENANCE_CUSTOM_TASKS";
 export const MAINTENANCE_CUSTOM_TASKS_CONFIG_KEY = "maintenance_custom_tasks";
@@ -1135,11 +1135,35 @@ export const MAINTENANCE_CUSTOM_TASKS_CONFIG_KEY = "maintenance_custom_tasks";
  * themselves are read from this machine config only, never from the vault.
  */
 export function resolveMaintenanceCustomTasks(configPath?: string): boolean {
-  return resolveConfigFlag(
-    MAINTENANCE_CUSTOM_TASKS_ENV,
-    MAINTENANCE_CUSTOM_TASKS_CONFIG_KEY,
-    configPath,
-  );
+  return resolveMaintenanceCustomTasksSwitch(configPath).enabled;
+}
+
+/** Which source decided a boolean switch: the env override, the config key, or neither. */
+export type MaintenanceSwitchSource = "env" | "config" | "unset";
+
+/**
+ * {@link resolveMaintenanceCustomTasks} with the source that decided it,
+ * so `status` can name the env override when that is what turned the
+ * declared tasks off. Same parse as every other flag in this file.
+ */
+export function resolveMaintenanceCustomTasksSwitch(configPath?: string): {
+  readonly enabled: boolean;
+  readonly source: MaintenanceSwitchSource;
+} {
+  const env = process.env[MAINTENANCE_CUSTOM_TASKS_ENV]?.trim();
+  const source: MaintenanceSwitchSource = env
+    ? "env"
+    : discoverConfig(configPath).data[MAINTENANCE_CUSTOM_TASKS_CONFIG_KEY]?.trim()
+      ? "config"
+      : "unset";
+  return {
+    enabled: resolveConfigFlag(
+      MAINTENANCE_CUSTOM_TASKS_ENV,
+      MAINTENANCE_CUSTOM_TASKS_CONFIG_KEY,
+      configPath,
+    ),
+    source,
+  };
 }
 
 /**

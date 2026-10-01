@@ -145,7 +145,7 @@ export interface MaintenanceGateDecision {
 }
 
 /** Cap for persisted per-task error strings (journal + results). */
-const LANE_ERROR_MAX_BYTES = 4096;
+export const LANE_ERROR_MAX_BYTES = 4096;
 
 /**
  * The heavy passes this lane dispatches.

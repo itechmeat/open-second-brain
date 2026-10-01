@@ -40,7 +40,10 @@ import {
   type MaintenanceTaskResult,
 } from "../../../core/brain/maintenance/lane.ts";
 import { listJournal, MAINTENANCE_JOURNAL_CAP } from "../../../core/brain/maintenance/journal.ts";
-import { resolveCustomTasks } from "../../../core/brain/maintenance/custom-tasks.ts";
+import {
+  customTasksOffNotice,
+  resolveCustomTasks,
+} from "../../../core/brain/maintenance/custom-tasks.ts";
 import { buildLaneTasks } from "../../../core/brain/maintenance/lane-tasks.ts";
 import { resolveAgentName } from "../../../core/config.ts";
 import { CronTemplateError, parseRecipeFormat } from "../../cron-recipe.ts";
@@ -54,7 +57,8 @@ import { onInterrupt } from "../../interrupt.ts";
 import { attachProgress, reportProgressRefusal } from "../../progress-rail.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
-const USAGE =
+/** The verb's usage line; `o2b brain maintenance --help` opens with it. */
+export const MAINTENANCE_USAGE =
   "usage: o2b brain maintenance run [--force] [--retry <task|custom:name>] [--window H-H] [--tz ZONE] " +
   "[--busy-minutes N] [--busy-threshold N] [--force-cost] [--progress] " +
   "| run --cron-template [--interval N] [--format cron|systemd] [--window H-H --tz ZONE] " +
@@ -105,9 +109,6 @@ export const MAINTENANCE_EXIT = Object.freeze({
 
 export type MaintenanceExit = (typeof MAINTENANCE_EXIT)[keyof typeof MAINTENANCE_EXIT];
 
-/** What `status` says when custom tasks are declared but the switch is off. */
-export const CUSTOM_TASKS_OFF_NOTICE = "custom tasks declared but maintenance_custom_tasks is off";
-
 /**
  * The run's exit code from the lane's task rows, keyed ONLY on rows the
  * lane itself distinguished: `timed_out` (safeguard deadline, outcome
@@ -145,7 +146,7 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
   const op = positional[0];
   const asJson = flags["json"] === true;
   if (op !== "run" && op !== "status") {
-    process.stderr.write(`${USAGE}\n`);
+    process.stderr.write(`${MAINTENANCE_USAGE}\n`);
     return MAINTENANCE_EXIT.usage;
   }
 
@@ -192,8 +193,7 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
       const journal = listJournal(vault, limit);
       // Declared and switched off is said once, here, rather than left to
       // look like a lane that forgot the operator's tasks.
-      const custom = resolveCustomTasks(config ?? undefined);
-      const customOff = !custom.enabled && custom.declared > 0 ? CUSTOM_TASKS_OFF_NOTICE : null;
+      const customOff = customTasksOffNotice(resolveCustomTasks(config ?? undefined));
       if (asJson) okJson({ lease, journal, ...(customOff !== null ? { notice: customOff } : {}) });
       else {
         if (customOff !== null) ok(customOff);
@@ -342,7 +342,8 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
         process.stderr.write(`custom task refused: ${reason}\n`);
       }
       const registered = new Set<string>(lane.taskNames);
-      const requested = stringArrayFlag(flags["retry"]);
+      // Deduplicated, as the MCP tool does: naming a task twice retries it once.
+      const requested = [...new Set(stringArrayFlag(flags["retry"]))];
       const unknownRetries = requested.filter((name) => !registered.has(name));
       if (unknownRetries.length > 0) {
         // Named, not ignored: a typo that silently retried nothing would

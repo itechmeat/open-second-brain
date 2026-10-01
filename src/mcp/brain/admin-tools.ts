@@ -31,7 +31,11 @@ import type { ProgressSink } from "../../core/brain/progress.ts";
 import { requiredStringArg, toolSafeguard } from "./shared.ts";
 import { currentLease } from "../../core/brain/maintenance/lease.ts";
 import { listJournal, MAINTENANCE_JOURNAL_CAP } from "../../core/brain/maintenance/journal.ts";
-import { CUSTOM_TASK_MAX, resolveCustomTasks } from "../../core/brain/maintenance/custom-tasks.ts";
+import {
+  CUSTOM_TASK_MAX,
+  customTasksOffNotice,
+  resolveCustomTasks,
+} from "../../core/brain/maintenance/custom-tasks.ts";
 import { buildLaneTasks } from "../../core/brain/maintenance/lane-tasks.ts";
 import {
   LANE_TASKS,
@@ -336,9 +340,6 @@ async function toolBrainSecrets(
  */
 const MAX_RETRY_TASKS = LANE_TASKS.length + CUSTOM_TASK_MAX;
 
-/** What `status` says when custom tasks are declared but the switch is off. */
-const CUSTOM_TASKS_OFF_NOTICE = "custom tasks declared but maintenance_custom_tasks is off";
-
 /** Quiet-window, lease-guarded heavy maintenance lane. */
 async function toolBrainMaintenance(
   ctx: ServerContext,
@@ -355,11 +356,11 @@ async function toolBrainMaintenance(
     // hardcoded at ten here, so an agent reading a lane that had refused
     // a task days ago could not see far enough back to find the failures
     // behind the streak - the one thing the journal is kept for.
-    const custom = resolveCustomTasks(ctx.configPath ?? undefined);
+    const notice = customTasksOffNotice(resolveCustomTasks(ctx.configPath ?? undefined));
     return {
       lease: currentLease(ctx.vault, { now }),
       journal: listJournal(ctx.vault, coerceInt(args, "limit", 10, 1, MAINTENANCE_JOURNAL_CAP)),
-      ...(!custom.enabled && custom.declared > 0 ? { notice: CUSTOM_TASKS_OFF_NOTICE } : {}),
+      ...(notice !== null ? { notice } : {}),
     };
   }
   let window: DailyWindow | undefined;
@@ -438,7 +439,9 @@ async function toolBrainMaintenance(
   // this lane does not dispatch retries nothing, and silently accepting
   // it would leave the caller reading a refusal it believed it had just
   // asked past. The bound is the tasks this install registered.
-  const requestedRetries = coerceStrList(args, "retry_tasks");
+  // Deduplicated before the bound: naming one task twice is one retry,
+  // not a request over the limit.
+  const requestedRetries = [...new Set(coerceStrList(args, "retry_tasks"))];
   const registered = new Set<string>(lane.taskNames);
   if (requestedRetries.length > registered.size) {
     throw new MCPError(

@@ -17,7 +17,7 @@ import {
   type LaneTask,
 } from "../../../../src/core/brain/maintenance/lane.ts";
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
-import { createSafeguard } from "../../../../src/core/brain/safeguard.ts";
+import { createSafeguard, SafeguardAbortError } from "../../../../src/core/brain/safeguard.ts";
 import { MAINTENANCE_CUSTOM_TASKS_ENV } from "../../../../src/core/config.ts";
 import { resolveSearchConfig } from "../../../../src/core/search/index.ts";
 
@@ -49,13 +49,14 @@ function writeConfig(lines: ReadonlyArray<string>): void {
   writeFileSync(configPath, `${[`vault: ${vault}`, ...lines].join("\n")}\n`);
 }
 
-function build(calls: LaneTask[] = []) {
+function build(calls: LaneTask[] = [], signal?: AbortSignal) {
   return buildLaneTasks({
     vault,
     configPath,
     searchConfig: resolveSearchConfig({ vault, configPath }),
     now: NOW,
     forceCost: false,
+    ...(signal !== undefined ? { signal } : {}),
     safeguardFor: (operation) => {
       calls.push(operation);
       return createSafeguard({ operation, timeoutMs: null });
@@ -63,9 +64,15 @@ function build(calls: LaneTask[] = []) {
   });
 }
 
-/** A command that touches a marker file in its cwd (the vault), portably. */
+/**
+ * A config value for a command that writes the marker file at the absolute
+ * path `marker`, portably: the Bun path quoted (it may hold a space), the
+ * whole value wrapped in single quotes so the config reader does not strip
+ * the double quotes the command starts and ends with.
+ */
 function touchCommand(marker: string): string {
-  return `${process.execPath} -e "require('node:fs').writeFileSync('${marker}', 'ran')"`;
+  const target = marker.replaceAll("\\", "/");
+  return `'"${process.execPath}" -e "require('node:fs').writeFileSync('${target}', 'ran')"'`;
 }
 
 describe("buildLaneTasks", () => {
@@ -100,20 +107,38 @@ describe("buildLaneTasks", () => {
     const dream = set.tasks.find((t) => t.name === LANE_TASK.dream)!;
     await dream.run();
     expect(calls).toEqual([LANE_TASK.dream]);
+    await dream.run();
+    expect(calls).toEqual([LANE_TASK.dream, LANE_TASK.dream]);
   });
 
   test("a built custom task runs its command and returns no spend receipt", async () => {
     writeConfig([
       "maintenance_custom_tasks: true",
-      `maintenance_custom_a: ${touchCommand("a.txt")}`,
+      `maintenance_custom_a: ${touchCommand(join(dir, "a.txt"))}`,
     ]);
     const set = build();
     const custom = set.tasks.find((t) => t.name === "custom:a")!;
     const receipt = await custom.run();
     expect(receipt).toBeUndefined();
-    expect(existsSync(join(vault, "a.txt"))).toBe(true);
+    expect(existsSync(join(dir, "a.txt"))).toBe(true);
     expect(
       set.reindex.spendBlock([{ name: "custom:a", ok: true, duration_ms: 1 }]),
     ).toBeUndefined();
+  });
+
+  test("the lane's abort signal reaches the custom tasks it builds", async () => {
+    writeConfig([
+      "maintenance_custom_tasks: true",
+      `maintenance_custom_a: ${touchCommand(join(dir, "aborted.txt"))}`,
+    ]);
+    const controller = new AbortController();
+    controller.abort();
+    const custom = build([], controller.signal).tasks.find((t) => t.name === "custom:a")!;
+    const err = await custom.run().then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(SafeguardAbortError);
+    expect(existsSync(join(dir, "aborted.txt"))).toBe(false);
   });
 });

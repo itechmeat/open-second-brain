@@ -59,11 +59,15 @@ import {
   MAINTENANCE_BUSY_THRESHOLD_MAX,
 } from "../../src/core/brain/maintenance/lane.ts";
 import { MAINTENANCE_JOURNAL_CAP } from "../../src/core/brain/maintenance/journal.ts";
-import { CUSTOM_TASK_MAX } from "../../src/core/brain/maintenance/custom-tasks.ts";
+import {
+  CUSTOM_TASK_MAX,
+  CUSTOM_TASKS_OFF_NOTICE,
+} from "../../src/core/brain/maintenance/custom-tasks.ts";
 import { isOperation } from "../../src/core/brain/safeguard.ts";
 import { ADMIN_TOOLS } from "../../src/mcp/brain/admin-tools.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { INVALID_PARAMS } from "../../src/mcp/protocol.ts";
+import { homeEnv } from "../helpers/platform.ts";
 import { runCli } from "../helpers/run-cli.ts";
 import { lexSource } from "../helpers/source-lexer.ts";
 
@@ -469,9 +473,9 @@ describe("the two surfaces refuse the same values, not only the same names", () 
         name: TOOL_NAME,
         arguments: {
           operation: "run",
-          // Every entry a REAL lane task, so the only thing wrong with
-          // the request is its length.
-          retry_tasks: Array.from({ length: declared + 1 }, () => LANE_TASK.dream),
+          // Distinct entries: duplicates collapse before the bound, so
+          // only more distinct names than the lane has can exceed it.
+          retry_tasks: Array.from({ length: declared + 1 }, (_, i) => `task-${i}`),
         },
       },
     })) as { error?: { code: number; message: string } };
@@ -628,20 +632,59 @@ describe("declared custom tasks are retried and refused the same way on both sur
     expect(res.error?.message ?? "").toContain("custom:tidy");
   });
 
-  test("a declared custom name is accepted, and config errors come back by name", async () => {
+  test("a declared custom name, even named twice, runs on both surfaces, and config errors come back by name", async () => {
+    const home = join(tmp, "home");
+    mkdirSync(home);
     const cli = await runCli(
-      ["brain", "maintenance", "run", "--retry", "custom:tidy", "--vault", vault, "--json"],
-      { env: { OPEN_SECOND_BRAIN_CONFIG: configPath } },
+      [
+        "brain",
+        "maintenance",
+        "run",
+        "--force",
+        "--retry",
+        "custom:tidy",
+        "--retry",
+        "custom:tidy",
+        "--vault",
+        vault,
+        "--json",
+      ],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: configPath, ...homeEnv(home) } },
     );
     expect(cli.returncode).toBe(0);
     expect(cli.stderr).toContain("custom task refused:");
+    const cliTasks = (JSON.parse(cli.stdout) as { tasks: Array<{ name: string; ok?: boolean }> })
+      .tasks;
+    expect(cliTasks.find((t) => t.name === "custom:tidy")?.ok).toBe(true);
 
-    const res = await callTool({ operation: "run", retry_tasks: ["custom:tidy"], force: true });
+    const res = await callTool({
+      operation: "run",
+      retry_tasks: ["custom:tidy", "custom:tidy"],
+      force: true,
+    });
     expect(res.error).toBeUndefined();
     const payload = toolPayload(res);
     const tasks = payload["tasks"] as Array<{ name: string; ok?: boolean }>;
     expect(tasks.find((t) => t.name === "custom:tidy")?.ok).toBe(true);
     const errors = payload["custom_task_errors"] as ReadonlyArray<string>;
     expect(errors.some((e) => e.includes("Bad"))).toBe(true);
+  });
+
+  test("status gives the shared off notice while the switch is off, and none while it is on", async () => {
+    const on = toolPayload(await callTool({ operation: "status" }));
+    expect(on["notice"]).toBeUndefined();
+    writeFileSync(
+      configPath,
+      readFileSync(configPath, "utf8").replace(
+        "maintenance_custom_tasks: true",
+        "maintenance_custom_tasks: false",
+      ),
+    );
+    const off = toolPayload(await callTool({ operation: "status" }));
+    expect(off["notice"]).toBe(CUSTOM_TASKS_OFF_NOTICE);
+    const cli = await runCli(["brain", "maintenance", "status", "--vault", vault, "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
+    });
+    expect((JSON.parse(cli.stdout) as { notice?: string }).notice).toBe(CUSTOM_TASKS_OFF_NOTICE);
   });
 });

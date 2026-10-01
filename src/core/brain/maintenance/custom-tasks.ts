@@ -7,8 +7,8 @@
  *
  *   maintenance_custom_tasks: true                  # master switch, default off
  *   maintenance_custom_<name>: <command>
- *   maintenance_custom_<name>_cwd: /absolute/dir    # optional, default the vault
- *   maintenance_custom_<name>_timeout_seconds: 120  # optional, default 600
+ *   maintenance_custom_<name>_cwd: /absolute/dir    # optional, default the home directory
+ *   maintenance_custom_<name>_timeout_seconds: 300  # optional, default 120
  *
  * Never the vault: the vault syncs between devices and is writable through
  * the MCP write tools, so a command stored there would let a synced edit or
@@ -28,13 +28,21 @@
  */
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { statSync } from "node:fs";
+import { homedir } from "node:os";
 import { isAbsolute } from "node:path";
 
-import { discoverConfig, resolveMaintenanceCustomTasks } from "../../config.ts";
-import { redactRawOutput } from "../../redactor.ts";
+import {
+  discoverConfig,
+  MAINTENANCE_CUSTOM_TASKS_CONFIG_KEY,
+  MAINTENANCE_CUSTOM_TASKS_ENV,
+  resolveMaintenanceCustomTasksSwitch,
+  type MaintenanceSwitchSource,
+} from "../../config.ts";
+import { isSecretKeyName, redactRawOutput } from "../../redactor.ts";
 import { shellArgv } from "../../reliability/command-bridge.ts";
 import { SafeguardAbortError, SafeguardTimeoutError } from "../safeguard.ts";
-import { MAINTENANCE_LEASE_TTL_MS, type MaintenanceTask } from "./lane.ts";
+import { LANE_ERROR_MAX_BYTES, MAINTENANCE_LEASE_TTL_MS, type MaintenanceTask } from "./lane.ts";
 import {
   CUSTOM_TASK_NAME_PATTERN,
   CUSTOM_TASK_PREFIX,
@@ -50,13 +58,38 @@ export {
 
 /** Each declared task adds a journal row per pass against the 500-row cap. */
 export const CUSTOM_TASK_MAX = 8;
-export const CUSTOM_TASK_TIMEOUT_DEFAULT_SECONDS = 600;
+
+/**
+ * Time the maintenance lease keeps for the four built-in tasks. The lease
+ * is acquired once per pass and not renewed, so whatever the custom tasks
+ * may spend comes out of the same 1800 s.
+ */
+export const BUILT_IN_TASKS_LEASE_MARGIN_SECONDS = 600;
+
+/**
+ * The most the declared custom timeouts may add up to: the lease length
+ * minus {@link BUILT_IN_TASKS_LEASE_MARGIN_SECONDS}, 1200 s. A per-task
+ * bound alone does not keep the lease: eight tasks just under it would
+ * hold the lane for hours after the lease expired, and a second pass
+ * would start beside the first.
+ */
+export const CUSTOM_TASK_TOTAL_TIMEOUT_BUDGET_SECONDS =
+  MAINTENANCE_LEASE_TTL_MS / 1000 - BUILT_IN_TASKS_LEASE_MARGIN_SECONDS;
+
+/** Sized so the full {@link CUSTOM_TASK_MAX} tasks fit the budget at their default. */
+export const CUSTOM_TASK_TIMEOUT_DEFAULT_SECONDS = 120;
+
+/** What `status` says when custom tasks are declared but the config switch is off. */
+export const CUSTOM_TASKS_OFF_NOTICE = `custom tasks declared but ${MAINTENANCE_CUSTOM_TASKS_CONFIG_KEY} is off`;
+
+/** What `status` says when the env override turned declared custom tasks off. */
+export const CUSTOM_TASKS_ENV_OFF_NOTICE = `custom tasks declared but ${MAINTENANCE_CUSTOM_TASKS_ENV} turns them off`;
 
 export interface CustomTaskSpec {
   readonly name: string;
   readonly id: CustomLaneTask;
   readonly command: string;
-  /** Absent = the vault. */
+  /** Absent = the running user's home directory. */
   readonly cwd?: string;
   readonly timeoutSeconds: number;
 }
@@ -64,6 +97,8 @@ export interface CustomTaskSpec {
 export interface CustomTaskResolution {
   /** The master switch, as resolved (env over config). */
   readonly enabled: boolean;
+  /** Which source decided {@link enabled}: the env override, the config key, or neither. */
+  readonly switchSource: MaintenanceSwitchSource;
   /** Valid declarations, sorted by name; empty while the switch is off. */
   readonly specs: ReadonlyArray<CustomTaskSpec>;
   /** One named reason per refused declaration; empty while the switch is off. */
@@ -94,7 +129,7 @@ export function resolveCustomTasks(configPath?: string): CustomTaskResolution {
   for (const [key, value] of Object.entries(data)) {
     if (!key.startsWith(KEY_PREFIX)) continue;
     // The master switch shares the prefix; it is not a task named "tasks".
-    if (key === "maintenance_custom_tasks") continue;
+    if (key === MAINTENANCE_CUSTOM_TASKS_CONFIG_KEY) continue;
     const rest = key.slice(KEY_PREFIX.length);
     let name = rest;
     let field: keyof Declaration = "command";
@@ -110,10 +145,11 @@ export function resolveCustomTasks(configPath?: string): CustomTaskResolution {
     declarations.set(name, entry);
   }
   const declared = declarations.size;
-  const enabled = resolveMaintenanceCustomTasks(configPath);
-  if (!enabled) return { enabled, specs: [], errors: [], declared };
+  const { enabled, source: switchSource } = resolveMaintenanceCustomTasksSwitch(configPath);
+  if (!enabled) return { enabled, switchSource, specs: [], errors: [], declared };
 
-  const timeoutCap = MAINTENANCE_LEASE_TTL_MS / 1000;
+  const budget = CUSTOM_TASK_TOTAL_TIMEOUT_BUDGET_SECONDS;
+  let committed = 0;
   const specs: CustomTaskSpec[] = [];
   const errors: string[] = [];
   for (const name of [...declarations.keys()].toSorted()) {
@@ -121,9 +157,13 @@ export function resolveCustomTasks(configPath?: string): CustomTaskResolution {
     const key = `${KEY_PREFIX}${name}`;
     if (decl.command === undefined) {
       // A `_cwd`/`_timeout_seconds` key whose command is missing: either a
-      // typo in the command key or a leftover after removing it.
-      const dangling = decl.cwd !== undefined ? `${key}${CWD_SUFFIX}` : `${key}${TIMEOUT_SUFFIX}`;
-      errors.push(`${dangling}: no ${key} command is declared for it`);
+      // typo in the command key or a leftover after removing it. Each
+      // dangling key is named, not only the first.
+      if (decl.cwd !== undefined)
+        errors.push(`${key}${CWD_SUFFIX}: no ${key} command is declared for it`);
+      if (decl.timeout !== undefined) {
+        errors.push(`${key}${TIMEOUT_SUFFIX}: no ${key} command is declared for it`);
+      }
       continue;
     }
     if (!CUSTOM_TASK_NAME_PATTERN.test(name)) {
@@ -140,10 +180,11 @@ export function resolveCustomTasks(configPath?: string): CustomTaskResolution {
     let timeoutSeconds = CUSTOM_TASK_TIMEOUT_DEFAULT_SECONDS;
     if (decl.timeout !== undefined) {
       const parsed = /^\d+$/.test(decl.timeout) ? Number(decl.timeout) : Number.NaN;
-      if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed >= timeoutCap) {
+      if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > budget) {
         errors.push(
           `${key}${TIMEOUT_SUFFIX}: "${decl.timeout}" is not a whole number of seconds ` +
-            `from 1 to ${timeoutCap - 1} (it must stay below the ${timeoutCap} s maintenance lease)`,
+            `from 1 to ${budget} (the custom timeouts together stay within ${budget} s ` +
+            `of the ${MAINTENANCE_LEASE_TTL_MS / 1000} s maintenance lease)`,
         );
         continue;
       }
@@ -159,6 +200,15 @@ export function resolveCustomTasks(configPath?: string): CustomTaskResolution {
       );
       continue;
     }
+    if (committed + timeoutSeconds > budget) {
+      errors.push(
+        `${key}: its ${timeoutSeconds} s timeout takes the custom timeouts to ` +
+          `${committed + timeoutSeconds} s, over the ${budget} s budget of the ` +
+          `${MAINTENANCE_LEASE_TTL_MS / 1000} s maintenance lease; this one is not run`,
+      );
+      continue;
+    }
+    committed += timeoutSeconds;
     specs.push({
       name,
       id: `${CUSTOM_TASK_PREFIX}${name}`,
@@ -167,32 +217,136 @@ export function resolveCustomTasks(configPath?: string): CustomTaskResolution {
       timeoutSeconds,
     });
   }
-  return { enabled, specs, errors, declared };
+  return { enabled, switchSource, specs, errors, declared };
 }
 
-/** Cap of the persisted failure message, matching the lane's own error cap. */
-const CUSTOM_TASK_ERROR_MAX_BYTES = 4096;
+/**
+ * The notice `status` gives when custom tasks are declared but not run,
+ * naming the switch that turned them off; `null` when there is nothing to
+ * say. One definition for the CLI verb and the MCP tool.
+ */
+export function customTasksOffNotice(resolution: CustomTaskResolution): string | null {
+  if (resolution.enabled || resolution.declared === 0) return null;
+  return resolution.switchSource === "env" ? CUSTOM_TASKS_ENV_OFF_NOTICE : CUSTOM_TASKS_OFF_NOTICE;
+}
+
 /** How much stderr is held in memory; only the tail is ever reported. */
 const STDERR_HOLD_BYTES = 64 * 1024;
+/**
+ * How long the stderr pipe may stay open after the shell exited. A process
+ * the command left in the background can hold the pipe for as long as it
+ * lives; the task's outcome is the shell's exit status, so the runner
+ * reads what arrived in this window and stops waiting.
+ */
+const STDERR_DRAIN_MS = 200;
+/** Between SIGTERM and SIGKILL to a timed-out or aborted process group. */
+const KILL_GRACE_MS = 1000;
+
+/**
+ * Variables the child always keeps, even if a secret-name check matched
+ * them. Compared upper-cased, because Windows env names are
+ * case-insensitive (`Path`).
+ */
+const CHILD_ENV_KEEP: ReadonlySet<string> = new Set([
+  "PATH",
+  "HOME",
+  "LANG",
+  "TZ",
+  "TMPDIR",
+  "O2B_VAULT",
+]);
+const CHILD_ENV_KEEP_PREFIX = "LC_";
+
+/**
+ * The child's environment: this process's variables minus every one whose
+ * NAME declares a credential ({@link isSecretKeyName}: `*_API_KEY`,
+ * `*_TOKEN`, `*_SECRET`, `*PASSWORD*`, ...), plus `O2B_VAULT`. The
+ * provider keys the lane itself holds are not the operator command's to
+ * read; a command that needs one reads it from its own configuration.
+ */
+export function customTaskEnv(
+  vault: string,
+  source: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [name, value] of Object.entries(source)) {
+    if (value === undefined) continue;
+    const upper = name.toUpperCase();
+    const kept = CHILD_ENV_KEEP.has(upper) || upper.startsWith(CHILD_ENV_KEEP_PREFIX);
+    if (!kept && isSecretKeyName(name)) continue;
+    env[name] = value;
+  }
+  env["O2B_VAULT"] = vault;
+  return env;
+}
+
+/**
+ * POSIX process groups of custom children that may still have members.
+ * The lane does not wait for what a command left in the background, but
+ * it does not leave it behind either: every group still listed when this
+ * process exits is killed then.
+ */
+const liveGroups = new Set<number>();
+let exitHookInstalled = false;
+
+function trackGroup(pgid: number): void {
+  liveGroups.add(pgid);
+  if (exitHookInstalled) return;
+  exitHookInstalled = true;
+  process.on("exit", () => {
+    for (const group of liveGroups) signalGroup(group, "SIGKILL");
+    liveGroups.clear();
+  });
+}
+
+/** Signal a whole POSIX process group. ESRCH (the group is gone) is not an error. */
+function signalGroup(pgid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(-pgid, signal);
+  } catch {
+    // ESRCH: no member of the group is left.
+  }
+}
+
+/** Whether any member of a POSIX process group is still running. */
+function groupAlive(pgid: number): boolean {
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * The lane task that runs one declared command.
  *
  * The command runs through the shared platform shell form
  * ({@link shellArgv}) with stdin closed, stdout discarded (the lane's own
- * stdout may be the JSON a caller parses), `O2B_VAULT` set, and the vault
- * as the working directory unless the declaration names one. Exit 0
- * resolves with no receipt: a custom task never calls a model on the
- * lane's behalf and has no spend to account for. A non-zero exit throws
- * `exit <N>: <stderr tail>`, the tail redacted BEFORE it is capped so a
- * secret cannot straddle the cut, at most 4096 bytes in all.
+ * stdout may be the JSON a caller parses), the environment of
+ * {@link customTaskEnv}, and the running user's home directory as the
+ * working directory unless the declaration names one. Never the vault by
+ * default: it syncs and is writable through the MCP write tools, and a
+ * shell resolves a bare command name in the working directory first on
+ * Windows. Exit 0 resolves with no receipt: a custom task never calls a
+ * model on the lane's behalf and has no spend to account for. A non-zero
+ * exit throws `exit <N>: <stderr tail>`, the tail redacted BEFORE it is
+ * capped so a secret cannot straddle the cut, at most
+ * {@link LANE_ERROR_MAX_BYTES} in all.
+ *
+ * The outcome is the shell's exit status: the task does not wait for
+ * processes the command left in the background. Those still belong to the
+ * task. On POSIX the command runs in its own process group, and that group
+ * is killed when the task's timeout elapses or when this process exits,
+ * whichever comes first, also after the shell itself has exited.
  *
  * The timeout is enforced here, not by the `OPERATION`-keyed safeguard (a
- * custom identity is not an operation): past `timeoutSeconds` the child's
- * process tree is killed and the task throws {@link SafeguardTimeoutError},
- * so the journal row carries `timed_out: true` exactly as a built-in's does
- * - and, for a custom identity, that row counts toward the failure streak.
- * An aborted `signal` kills the tree the same way and throws
+ * custom identity is not an operation): past `timeoutSeconds` the process
+ * group gets SIGTERM, then SIGKILL after a short grace (`taskkill /T /F`
+ * on Windows), and the task throws {@link SafeguardTimeoutError}, so the
+ * journal row carries `timed_out: true` exactly as a built-in's does -
+ * and, for a custom identity, that row counts toward the failure streak.
+ * An aborted `signal` kills the group the same way and throws
  * {@link SafeguardAbortError}.
  */
 export function createCustomLaneTask(
@@ -205,6 +359,19 @@ export function createCustomLaneTask(
   };
 }
 
+/** The directory a task runs in: its declared `_cwd`, else the running user's home. */
+function customTaskCwd(spec: CustomTaskSpec): string {
+  if (spec.cwd !== undefined) return spec.cwd;
+  const home = homedir();
+  if (home === "") {
+    throw new Error(
+      `custom task ${spec.name}: the home directory, its default working directory, ` +
+        `cannot be resolved; set ${KEY_PREFIX}${spec.name}${CWD_SUFFIX}`,
+    );
+  }
+  return home;
+}
+
 function runCustomCommand(
   spec: CustomTaskSpec,
   ctx: { readonly vault: string; readonly signal?: AbortSignal },
@@ -214,23 +381,44 @@ function runCustomCommand(
       reject(new SafeguardAbortError(spec.id));
       return;
     }
+    let cwd: string;
+    try {
+      cwd = customTaskCwd(spec);
+    } catch (err) {
+      reject(err as Error);
+      return;
+    }
+    // Named before the spawn: a missing directory otherwise surfaces as
+    // `ENOENT ... posix_spawn 'sh'`, which names the shell, not the path.
+    const stat = statSync(cwd, { throwIfNoEntry: false });
+    if (stat === undefined || !stat.isDirectory()) {
+      reject(
+        new Error(
+          `custom task ${spec.name}: cwd ${stat === undefined ? "does not exist" : "is not a directory"}: ${cwd}`,
+        ),
+      );
+      return;
+    }
     const [shell, argv] = shellArgv(spec.command);
+    const posix = process.platform !== "win32";
     let child: ChildProcess;
     try {
       child = spawn(shell, argv, {
-        cwd: spec.cwd ?? ctx.vault,
-        env: { ...process.env, O2B_VAULT: ctx.vault },
+        cwd,
+        env: customTaskEnv(ctx.vault),
         stdio: ["ignore", "ignore", "pipe"],
-        windowsVerbatimArguments: process.platform === "win32",
+        windowsVerbatimArguments: !posix,
         // Its own process group on POSIX, so a kill reaches whatever the
         // shell started, not only the shell.
-        detached: process.platform !== "win32",
+        detached: posix,
         windowsHide: true,
       });
     } catch (err) {
       reject(new Error(`${spec.id}: could not start: ${(err as Error).message ?? String(err)}`));
       return;
     }
+    const pgid = posix ? child.pid : undefined;
+    if (pgid !== undefined) trackGroup(pgid);
 
     let stderr = Buffer.alloc(0);
     child.stderr?.on("data", (chunk: Buffer) => {
@@ -239,41 +427,78 @@ function runCustomCommand(
     });
 
     let settled = false;
+    let drainTimer: ReturnType<typeof setTimeout> | undefined;
     const timeoutMs = spec.timeoutSeconds * 1000;
     const finish = (error?: Error): void => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      clearTimeout(drainTimer);
       ctx.signal?.removeEventListener("abort", onAbort);
+      // A background holder of the pipe must not keep this process alive.
+      child.stderr?.destroy();
+      if (pgid !== undefined && groupAlive(pgid)) {
+        // The deadline outlives the outcome while the group still has
+        // members: it then only kills what the command left behind.
+        deadline.unref();
+      } else {
+        clearTimeout(deadline);
+        if (pgid !== undefined) liveGroups.delete(pgid);
+      }
       if (error === undefined) resolve();
       else reject(error);
     };
-    const timer = setTimeout(() => {
-      killTree(child);
+    const killGroup = (): void => {
+      if (pgid === undefined) {
+        killWindowsTree(child);
+        return;
+      }
+      signalGroup(pgid, "SIGTERM");
+      const hard = setTimeout(() => {
+        signalGroup(pgid, "SIGKILL");
+        liveGroups.delete(pgid);
+      }, KILL_GRACE_MS);
+      hard.unref();
+    };
+    const deadline = setTimeout(() => {
+      killGroup();
       finish(new SafeguardTimeoutError(spec.id, timeoutMs));
     }, timeoutMs);
     const onAbort = (): void => {
-      killTree(child);
+      clearTimeout(deadline);
+      killGroup();
       finish(new SafeguardAbortError(spec.id));
     };
     ctx.signal?.addEventListener("abort", onAbort, { once: true });
 
-    child.on("error", (err) => {
-      killTree(child);
-      finish(new Error(`${spec.id}: could not run: ${err.message}`));
-    });
-    child.on("close", (code, signal) => {
-      if (code === 0) {
+    let exit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
+    const settleExit = (): void => {
+      if (exit === undefined) return;
+      if (exit.code === 0) {
         finish();
         return;
       }
-      const head = code !== null ? `exit ${code}` : `killed by ${signal ?? "an unknown signal"}`;
+      const head =
+        exit.code !== null
+          ? `exit ${exit.code}`
+          : `killed by ${exit.signal ?? "an unknown signal"}`;
       finish(new Error(failureMessage(head, stderr.toString("utf8"))));
+    };
+    child.on("error", (err) => {
+      killGroup();
+      finish(new Error(`${spec.id}: could not run: ${err.message}`));
+    });
+    child.on("exit", (code, signal) => {
+      exit = { code, signal };
+      drainTimer = setTimeout(settleExit, STDERR_DRAIN_MS);
+    });
+    child.on("close", (code, signal) => {
+      exit ??= { code, signal };
+      settleExit();
     });
   });
 }
 
-/** `<head>: <redacted stderr tail>`, at most {@link CUSTOM_TASK_ERROR_MAX_BYTES}. */
+/** `<head>: <redacted stderr tail>`, at most {@link LANE_ERROR_MAX_BYTES}. */
 function failureMessage(head: string, stderr: string): string {
   const redacted = redactRawOutput(stderr, {
     redactTokens: true,
@@ -281,7 +506,7 @@ function failureMessage(head: string, stderr: string): string {
   }).trim();
   if (redacted === "") return `${head}: (no stderr)`;
   const prefix = `${head}: `;
-  const budget = CUSTOM_TASK_ERROR_MAX_BYTES - Buffer.byteLength(prefix, "utf8");
+  const budget = LANE_ERROR_MAX_BYTES - Buffer.byteLength(prefix, "utf8");
   if (Buffer.byteLength(redacted, "utf8") <= budget) return `${prefix}${redacted}`;
   const marker = "[stderr truncated, tail follows]\n";
   return `${prefix}${marker}${utf8Tail(redacted, budget - Buffer.byteLength(marker, "utf8"))}`;
@@ -301,15 +526,15 @@ function utf8Tail(text: string, maxBytes: number): string {
   return chars.slice(start).join("");
 }
 
-/** Kill the child and everything it started. Never throws. */
-function killTree(child: ChildProcess): void {
+/**
+ * Windows: kill the shell and the tree it started. `taskkill /T` walks the
+ * tree from a live parent, so once the shell has exited there is no tree
+ * left to walk. Never throws.
+ */
+function killWindowsTree(child: ChildProcess): void {
   if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
   try {
-    if (process.platform === "win32") {
-      spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true });
-    } else {
-      process.kill(-child.pid, "SIGKILL");
-    }
+    spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true });
   } catch {
     try {
       child.kill("SIGKILL");
