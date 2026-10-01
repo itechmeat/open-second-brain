@@ -15,6 +15,8 @@ import type { Mock } from "bun:test";
 
 import { BrainPreferenceNotFoundError } from "../../src/core/brain/apply-evidence.ts";
 import { CountGuardError } from "../../src/core/brain/count-guard.ts";
+import { BrainParseError } from "../../src/core/brain/parse-error.ts";
+import { BrainStatusFolderMismatchError } from "../../src/core/brain/preference.ts";
 import { PinnedBatchError } from "../../src/core/brain/pinned.ts";
 import { BrainConfigError } from "../../src/core/brain/policy/errors.ts";
 import { SHAPE_VIOLATION_CODES } from "../../src/core/brain/response-shape.ts";
@@ -48,7 +50,10 @@ import {
   toolErrorMeta,
 } from "../../src/mcp/tool-error-codes.ts";
 
-/** Decision 5 of the design, verbatim: the generic tokens this release adds. */
+/**
+ * Decision 5 of the design plus `brain_artifact_unparseable`: the generic
+ * tokens this release adds.
+ */
 const NEW_TOKENS = [
   "parse_error",
   "invalid_request",
@@ -69,6 +74,7 @@ const NEW_TOKENS = [
   "write_session_terminal",
   "session_id_required",
   "unknown_argument",
+  "brain_artifact_unparseable",
 ] as const;
 
 /**
@@ -158,7 +164,7 @@ describe("TOOL_ERROR_CODES", () => {
     for (const token of imported) expect(registered).toContain(token);
   });
 
-  test("is exactly the imported vocabularies plus the 19 new tokens", () => {
+  test("is exactly the imported vocabularies plus the 20 new tokens", () => {
     const expected = new Set<string>([
       ...NEW_TOKENS,
       ...SEARCH_ERROR_CODES,
@@ -253,6 +259,24 @@ describe("codeForError", () => {
     expect(codeForError(new OutputContractError("probe", ["$.ok: expected boolean"]))).toBe(
       "output_contract_failed",
     );
+    expect(lines).toEqual([]);
+  });
+
+  test("a Brain artifact parse failure is brain_artifact_unparseable, subclasses included", () => {
+    const path = "/vault/Brain/retired/ret-broken.md";
+    expect(codeForError(new BrainParseError("missing retired_at", path))).toBe(
+      "brain_artifact_unparseable",
+    );
+    expect(
+      codeForError(
+        new BrainStatusFolderMismatchError(
+          "status disagrees with folder",
+          path,
+          "retired",
+          "preferences",
+        ),
+      ),
+    ).toBe("brain_artifact_unparseable");
     expect(lines).toEqual([]);
   });
 

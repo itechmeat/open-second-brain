@@ -266,6 +266,7 @@ generic tokens:
 | `trigger_transition_refused` | a trigger transition was refused; an absent trigger and one the caller may not see answer with the same code and the same message |
 | `write_session_unknown`, `write_session_terminal`, `session_id_required` | a write-session call named no session, an unknown one, or one that has already ended |
 | `unknown_argument` | the call carried an argument the tool does not declare (see "Argument contract" above) |
+| `brain_artifact_unparseable` | a Brain artifact file (a preference or a retired rule, for example) could not be parsed |
 
 plus every member of the vocabularies the core already defines, passed
 through unchanged:

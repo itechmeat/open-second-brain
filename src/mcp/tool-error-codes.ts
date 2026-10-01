@@ -43,6 +43,7 @@ import { NoteTitleResolutionError } from "../core/brain/notes/note-title-resolve
 import { NOTE_REVERT_ERROR, NoteRevertError } from "../core/brain/notes/revert.ts";
 import type { ScaffoldStubErrorCode } from "../core/brain/notes/scaffold-stub.ts";
 import { ScaffoldStubError } from "../core/brain/notes/scaffold-stub.ts";
+import { BrainParseError } from "../core/brain/parse-error.ts";
 import type { PinnedBatchErrorCode } from "../core/brain/pinned.ts";
 import { PinnedBatchError } from "../core/brain/pinned.ts";
 import { BrainConfigError } from "../core/brain/policy/errors.ts";
@@ -113,6 +114,8 @@ export const TOOL_ERROR_CODE = Object.freeze({
   sessionIdRequired: "session_id_required",
   /** An argument the tool's input schema does not declare. */
   unknownArgument: "unknown_argument",
+  /** A Brain artifact file could not be parsed (`BrainParseError`). */
+  brainArtifactUnparseable: "brain_artifact_unparseable",
 } as const);
 
 /** Closed union over {@link TOOL_ERROR_CODE}. */
@@ -349,6 +352,7 @@ const CLASSIFICATION: ReadonlyArray<ClassificationRule> = Object.freeze([
   fixed(OutputContractError, TOOL_ERROR_CODE.outputContractFailed),
   fixed(BrainConfigError, "config_invalid"),
   fixed(BrainPreferenceNotFoundError, "preference_not_found"),
+  fixed(BrainParseError, TOOL_ERROR_CODE.brainArtifactUnparseable),
 ]);
 
 /**
