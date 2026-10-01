@@ -73,6 +73,13 @@ let instances = 0;
 export async function startFakeHttp(): Promise<FakeHttp> {
   let handler: Handler = defaultHandler;
   let count = 0;
+  // Bun 1.4.0's Server.stop(true) waits for in-flight fetch handlers to
+  // return, and a stalled-lane test holds one until its (never) answer, so
+  // teardown under the CI toolchain waited out the stall and the hook
+  // timeout fired first. The closer therefore settles every in-flight
+  // handler with a synthetic response before stopping, which costs nothing
+  // on the newer Bun and keeps "never answers" a legitimate handler shape.
+  const pending = new Set<(response: FakeResponseSpec) => void>();
   const server = Bun.serve({
     port: 0,
     fetch: async (req) => {
@@ -91,7 +98,16 @@ export async function startFakeHttp(): Promise<FakeHttp> {
         headers[k] = v;
       });
       const idx = count++;
-      const resp = await handler({ method: req.method, path: url.pathname, headers, body }, idx);
+      const resp = await new Promise<FakeResponseSpec>((resolve) => {
+        const settle = (value: FakeResponseSpec) => {
+          pending.delete(settle);
+          resolve(value);
+        };
+        pending.add(settle);
+        Promise.resolve(
+          handler({ method: req.method, path: url.pathname, headers, body }, idx),
+        ).then(settle);
+      });
       if (resp.delayMs && resp.delayMs > 0) {
         await new Promise<void>((r) => setTimeout(r, resp.delayMs));
       }
@@ -105,7 +121,11 @@ export async function startFakeHttp(): Promise<FakeHttp> {
   const url = `http://127.0.0.1:${server.port}/i${++instances}/v1`;
   return {
     url,
-    close: () => server.stop(true) as unknown as Promise<void>,
+    close: () => {
+      for (const settle of pending) settle({ status: 503, body: { error: "server-closing" } });
+      server.stop(true);
+      return Promise.resolve();
+    },
     setHandler: (h: Handler) => {
       handler = h;
     },

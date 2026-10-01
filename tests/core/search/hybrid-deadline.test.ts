@@ -91,16 +91,11 @@ async function seedCorpus() {
   writeMd(vault, "Other/bar.md", "# Bar\n\nA different note about cats and turtles.");
 }
 
-/** A handler that answers long after the deadline: the stalled-lane case
- * the deadline exists for. Late rather than never - a never-resolving
- * handler kept a Bun.serve request context pending across the teardown,
- * which under full-suite load surfaced as hook timeouts - while an answer
- * an hour late is indistinguishable to a 300ms budget. */
+/** A handler that never answers: the stalled-lane case the deadline exists
+ * for. The fake-http closer settles in-flight handlers at teardown, so the
+ * never-answer shape costs the suite nothing under either Bun toolchain. */
 function stallHandler() {
-  return () =>
-    new Promise<FakeResponseSpec>((resolve) =>
-      setTimeout(() => resolve({ status: 200, body: { data: [] } }), 60_000),
-    );
+  return () => new Promise<FakeResponseSpec>(() => {});
 }
 
 type SearchRun = Awaited<ReturnType<typeof search>>;
