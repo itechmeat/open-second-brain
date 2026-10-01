@@ -34,6 +34,8 @@ import {
   rerankCategoryForError,
   type RerankFailureCategory,
 } from "./failure.ts";
+import { classifyRerankSunset, rerankSunsetHasPassed } from "./sunset.ts";
+import type { EmbeddingSunsetSurvey } from "../embeddings/sunset.ts";
 
 /** Fixed-precision so the reason string is stable for a given score. */
 function fmtScore(x: number): string {
@@ -115,6 +117,24 @@ export interface ApplyCrossEncoderRerankOptions {
    * instead of degrading, because nobody is waiting for the order.
    */
   readonly signal?: AbortSignal;
+  /**
+   * `openai-compat` kind only: consult the rerank sunset survey for the
+   * configured model, and skip the request once its announced shutdown
+   * date has passed. Absent: the survey is not consulted (a direct caller
+   * such as the eval gate, which measures the endpoint it is pointed at).
+   */
+  readonly sunset?: RerankSunsetOptions;
+}
+
+/**
+ * The sunset skip's inputs. The clock is the caller's own, so this stage
+ * reads no wall clock; the survey defaults to the shipped one.
+ */
+export interface RerankSunsetOptions {
+  readonly nowMs: number;
+  readonly survey?: EmbeddingSunsetSurvey;
+  /** Called once when the configured model is past its announced date. */
+  readonly onSkip: () => void;
 }
 
 interface Scored {
@@ -228,6 +248,17 @@ export async function applyCrossEncoderRerank(
   }
 
   if (results.length === 0) return results;
+
+  // A model past its announced shutdown can only refuse the request, so
+  // none is made. Only the remote kind keys on a model string a vendor
+  // can retire; `local` is this build's own reranker.
+  if (config.kind === "openai-compat" && opts.sunset !== undefined) {
+    const verdict = classifyRerankSunset(config.model, opts.sunset.nowMs, opts.sunset.survey);
+    if (rerankSunsetHasPassed(verdict)) {
+      opts.sunset.onSkip();
+      return results;
+    }
+  }
 
   const topK = Math.min(Math.max(1, config.topK), results.length);
   const head = results.slice(0, topK);

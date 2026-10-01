@@ -134,6 +134,14 @@ export const RETRIEVAL_DEGRADATION = Object.freeze({
    */
   rerankProviderUnavailable: "rerank-provider-unavailable",
   /**
+   * The configured rerank model is past the shutdown date the rerank
+   * sunset survey records for it, so no request was made and the
+   * heuristic order was served. No `detail`: the model name is
+   * configuration, not an identifier the results carry, and the doctor
+   * check names it. Deterministic for the build and the date, so cached.
+   */
+  rerankModelSunset: "rerank-model-sunset",
+  /**
    * The caller's relevance floor dropped ranked rows. `detail.dropped`
    * counts them - which is how a floor that removed every hit stops
    * looking like a vault with no match.
@@ -177,6 +185,7 @@ export const RETRIEVAL_DEGRADATION_CODES: ReadonlyArray<RetrievalDegradationCode
   RETRIEVAL_DEGRADATION.hybridDeadlineExceeded,
   RETRIEVAL_DEGRADATION.rankCapTruncatedPool,
   RETRIEVAL_DEGRADATION.rerankProviderUnavailable,
+  RETRIEVAL_DEGRADATION.rerankModelSunset,
   RETRIEVAL_DEGRADATION.relevanceFloorDroppedRows,
   RETRIEVAL_DEGRADATION.scopeFiltersDroppedRows,
   RETRIEVAL_DEGRADATION.crossVaultOriginFailed,
@@ -310,6 +319,8 @@ export function describeRetrievalDegradation(code: RetrievalDegradationCode): st
       return "the rank cap truncated the candidate pool, so lower-ranked matches were never considered";
     case RETRIEVAL_DEGRADATION.rerankProviderUnavailable:
       return "the configured rerank endpoint could not answer, so this answer keeps the heuristic order";
+    case RETRIEVAL_DEGRADATION.rerankModelSunset:
+      return "the configured rerank model is past its announced shutdown date, so no rerank request was made and this answer keeps the heuristic order";
     case RETRIEVAL_DEGRADATION.relevanceFloorDroppedRows:
       return "the requested relevance floor dropped every ranked row it judged, so matches below it are not in this answer";
     case RETRIEVAL_DEGRADATION.scopeFiltersDroppedRows:

@@ -475,6 +475,7 @@ export async function search(
       pool,
       structured: shape.structured,
       frontmatterCache,
+      nowMs,
       ...(deadline !== null
         ? {
             signal: deadline.signal,

@@ -69,6 +69,8 @@ export interface PostRankInput {
   readonly raceRerank?: RerankRace;
   /** The deadline's cancellation, handed to the rerank provider request. */
   readonly signal?: AbortSignal;
+  /** The request's clock, for the rerank sunset decision. */
+  readonly nowMs: number;
 }
 
 /** Start `work` under a budget; serve `fallback()` when the budget wins. */
@@ -90,7 +92,8 @@ export interface PostRankOutcome {
   /**
    * The typed codes beside {@link warnings}, merged into the search's own
    * sink like every lane's. A failed cross-encoder request records
-   * `rerank-provider-unavailable` with its failure category here.
+   * `rerank-provider-unavailable` with its failure category here, and a
+   * request skipped for a retired model records `rerank-model-sunset`.
    */
   readonly degraded: RetrievalDegradationSink;
   /**
@@ -185,6 +188,10 @@ export async function applyPostRankPhases(input: PostRankInput): Promise<PostRan
   const runRerank = (): Promise<ReadonlyArray<BrainSearchResult>> =>
     applyCrossEncoderRerank(reinforced, input.query, config.rerank, {
       ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      sunset: {
+        nowMs: input.nowMs,
+        onSkip: () => noteDegradation(degraded, RETRIEVAL_DEGRADATION.rerankModelSunset),
+      },
       onTelemetry: (event) => {
         if (event.status !== "error") return;
         // The code is the answer's own record, not telemetry: it is
