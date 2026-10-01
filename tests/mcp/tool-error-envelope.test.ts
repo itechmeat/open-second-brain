@@ -1,0 +1,142 @@
+/**
+ * Every MCP error answer carries a stable code, on both channels.
+ *
+ * Channel A is the JSON-RPC error: `error.data.code`, defaulted inside the
+ * single builder `errorResponse` from the numeric JSON-RPC code, a
+ * thrower-supplied code always winning. Channel B is the `isError` tool
+ * result: `_meta["open-second-brain/error"] = { schema, code }`, with the
+ * text body byte-identical to the previous release and no
+ * `structuredContent`, because strict clients validate that against the
+ * tool's output schema even on an error.
+ */
+
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import type { Mock } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { INVALID_PARAMS, JSONRPC_VERSION, MCPError } from "../../src/mcp/protocol.ts";
+import { MCPServer } from "../../src/mcp/server.ts";
+import { serveStdioFromString } from "../../src/mcp/stdio.ts";
+
+type JsonObject = Record<string, any>;
+
+const UNCLASSIFIED_LINE = "warning: unclassified tool error mapped to internal_error: Error\n";
+const TOOL = "envelope_probe";
+
+let tmp: string;
+let stderr: Mock<typeof process.stderr.write>;
+let lines: string[];
+
+beforeEach(() => {
+  tmp = mkdtempSync(join(tmpdir(), "o2b-mcp-envelope-"));
+  lines = [];
+  stderr = spyOn(process.stderr, "write").mockImplementation((chunk) => {
+    lines.push(String(chunk));
+    return true;
+  });
+});
+
+afterEach(() => {
+  stderr.mockRestore();
+  rmSync(tmp, { recursive: true, force: true });
+});
+
+/** A server whose whole tool table is one probe running `handler`. */
+function serverWith(handler: () => unknown): MCPServer {
+  const server = new MCPServer({ vault: tmp });
+  (server as any).tools = [
+    {
+      name: TOOL,
+      description: "test tool",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      handler,
+    },
+  ];
+  return server;
+}
+
+async function call(server: MCPServer, meta?: JsonObject): Promise<JsonObject> {
+  const res = await server.handleRequest({
+    jsonrpc: JSONRPC_VERSION,
+    id: 7,
+    method: "tools/call",
+    params: { name: TOOL, arguments: {}, ...(meta === undefined ? {} : { _meta: meta }) },
+  });
+  return res as JsonObject;
+}
+
+describe("channel A: error.data.code on every JSON-RPC error", () => {
+  test("an unknown method answers method_not_found", async () => {
+    const res = (await new MCPServer({ vault: tmp }).handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 1,
+      method: "no/such/method",
+    })) as JsonObject;
+    expect(res["error"]["code"]).toBe(-32601);
+    expect(res["error"]["message"]).toBe("unknown method: no/such/method");
+    expect(res["error"]["data"]).toEqual({ code: "method_not_found" });
+  });
+
+  test("an MCPError with no data gains the default code, message unchanged", async () => {
+    const res = await call(
+      serverWith(() => {
+        throw new MCPError(INVALID_PARAMS, "limit must be positive");
+      }),
+    );
+    expect(res["error"]["code"]).toBe(INVALID_PARAMS);
+    expect(res["error"]["message"]).toBe("limit must be positive");
+    expect(res["error"]["data"]).toEqual({ code: "invalid_params" });
+  });
+
+  test("a thrower-supplied code is untouched", async () => {
+    const data = { code: "budget_exceeded", limit: 10, size: 12 };
+    const res = await call(
+      serverWith(() => {
+        throw new MCPError(INVALID_PARAMS, "over budget", data);
+      }),
+    );
+    expect(res["error"]["data"]).toEqual(data);
+    expect(Object.keys(res["error"]["data"])).toEqual(["code", "limit", "size"]);
+  });
+
+  test("a record without a code keeps every member and gains code last", async () => {
+    const data = { tool: TOOL, unknown_arguments: ["x"], declared_arguments: [] };
+    const res = await call(
+      serverWith(() => {
+        throw new MCPError(INVALID_PARAMS, "unknown argument", data);
+      }),
+    );
+    expect(res["error"]["data"]).toEqual({ ...data, code: "invalid_params" });
+    expect(Object.keys(res["error"]["data"])).toEqual([
+      "tool",
+      "unknown_arguments",
+      "declared_arguments",
+      "code",
+    ]);
+  });
+
+  test("a plain throw outside tools/call is internal_error and is logged", async () => {
+    const server = new MCPServer({ vault: tmp });
+    (server as any).handleResourcesList = () => {
+      throw new Error("boom");
+    };
+    const res = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 2,
+      method: "resources/list",
+    })) as JsonObject;
+    expect(res["error"]["code"]).toBe(-32603);
+    expect(res["error"]["message"]).toBe("internal error: boom");
+    expect(res["error"]["data"]).toEqual({ code: "internal_error" });
+    expect(lines).toEqual([UNCLASSIFIED_LINE]);
+  });
+
+  test("a stdio parse error answers parse_error", async () => {
+    const out = await serveStdioFromString({ vault: tmp }, "{not json}\n");
+    const res = JSON.parse(out.trim()) as JsonObject;
+    expect(res["error"]["code"]).toBe(-32700);
+    expect(res["error"]["data"]).toEqual({ code: "parse_error" });
+  });
+});

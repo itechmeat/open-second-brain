@@ -47,11 +47,22 @@ export interface JsonRpcNotification {
   readonly params?: unknown;
 }
 
-export class MCPError extends Error {
-  readonly code: number;
-  readonly data: unknown;
+/**
+ * What an {@link MCPError} may carry as `data`: an object or nothing. The
+ * single builder `errorResponse` merges the stable string code into it,
+ * and a primitive payload would leave it no member to merge into. It is
+ * `object` rather than a `Record` so the named payload interfaces the
+ * refusal modules declare (argument guard, reach refusal, frozen vault)
+ * are accepted without an index signature; every site passes a record.
+ */
+export type MCPErrorData = object;
 
-  constructor(code: number, message: string, data?: unknown) {
+/** A JSON-RPC error a handler throws, answered through `errorResponse`. */
+export class MCPError extends Error {
+  readonly code: JsonRpcErrorCode;
+  readonly data: MCPErrorData | undefined;
+
+  constructor(code: JsonRpcErrorCode, message: string, data?: MCPErrorData) {
     super(message);
     this.name = "MCPError";
     this.code = code;

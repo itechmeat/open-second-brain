@@ -49,7 +49,7 @@ import {
 import { WRITE_BINDING_REFUSED_CODE } from "../../core/write-binding/index.ts";
 import { isFrontmatterKey } from "../../core/vault.ts";
 import { rethrowVaultFrozen } from "../frozen-refusal.ts";
-import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
+import { INTERNAL_ERROR, INVALID_PARAMS, type JsonRpcErrorCode, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceBoolOptional, coerceStr, coerceStringOptional } from "../coerce.ts";
 
@@ -111,7 +111,7 @@ const OPERATOR_FAULT_CODES: ReadonlySet<string> = new Set([
 ]);
 
 /** JSON-RPC code for a refusal, split on whose fault the refusal is. */
-function rpcCodeFor(surfaceCode: string): number {
+function rpcCodeFor(surfaceCode: string): JsonRpcErrorCode {
   return OPERATOR_FAULT_CODES.has(surfaceCode) ? INTERNAL_ERROR : INVALID_PARAMS;
 }
 

@@ -27,7 +27,8 @@ import {
   SERVER_NAME,
   SERVER_VERSION,
 } from "./protocol.ts";
-import type { JsonRpcNotification } from "./protocol.ts";
+import type { JsonRpcErrorCode, JsonRpcNotification, MCPErrorData } from "./protocol.ts";
+import { codeForError, defaultCodeForRpc } from "./tool-error-codes.ts";
 import {
   progressRefusal,
   progressSink,
@@ -367,7 +368,9 @@ export class MCPServer {
       // learns that a file is missing, not the host layout behind it.
       const raw = (exc as Error).message ?? String(exc);
       const message = redactErrorForCaller(raw, this.vault, this.reach);
-      return errorResponse(requestId, INTERNAL_ERROR, `internal error: ${message}`);
+      return errorResponse(requestId, INTERNAL_ERROR, `internal error: ${message}`, {
+        code: codeForError(exc),
+      });
     }
   }
 
@@ -582,18 +585,39 @@ function sortedReplacer(_key: string, value: unknown): unknown {
   return value;
 }
 
+/** The member of `error.data` every JSON-RPC error answer carries. */
+const ERROR_DATA_CODE_KEY = "code";
+
+/**
+ * `data` with its stable string code. A thrower-supplied string code
+ * always wins; otherwise the default derived from the numeric JSON-RPC
+ * code is added after the thrower's own members, so a record such as the
+ * argument guard's keeps its shape and gains one key.
+ */
+function withDefaultCode(code: JsonRpcErrorCode, data: MCPErrorData | undefined): MCPErrorData {
+  const supplied: unknown = (data as { readonly [ERROR_DATA_CODE_KEY]?: unknown } | undefined)?.[
+    ERROR_DATA_CODE_KEY
+  ];
+  if (data !== undefined && typeof supplied === "string") return data;
+  return { ...data, [ERROR_DATA_CODE_KEY]: defaultCodeForRpc(code) };
+}
+
+/**
+ * The one builder every JSON-RPC error answer passes through, including
+ * the transport errors of `stdio.ts` and `http.ts`, so "every error
+ * response carries `error.data.code`" holds by construction.
+ */
 export function errorResponse(
   requestId: unknown,
-  code: number,
+  code: JsonRpcErrorCode,
   message: string,
-  data?: unknown,
+  data?: MCPErrorData,
 ): JsonRpcResponse {
-  const error: { code: number; message: string; data?: unknown } = {
-    code,
-    message,
+  return {
+    jsonrpc: JSONRPC_VERSION,
+    id: requestId ?? null,
+    error: { code, message, data: withDefaultCode(code, data) },
   };
-  if (data !== undefined) error.data = data;
-  return { jsonrpc: JSONRPC_VERSION, id: requestId ?? null, error };
 }
 
 // Re-exports so callers that previously imported these names from
