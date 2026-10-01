@@ -15,10 +15,19 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { brainConfigPath } from "../../src/core/brain/paths.ts";
+import { writePreference } from "../../src/core/brain/preference.ts";
+import { createTriggers } from "../../src/core/brain/triggers/store.ts";
+import type { InsightCandidate } from "../../src/core/brain/triggers/types.ts";
+import { BRAIN_CONFIDENCE, BRAIN_PREFERENCE_STATUS } from "../../src/core/brain/types.ts";
+import { GATE_MODE } from "../../src/core/integrity/stamp.ts";
 import { INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
 import { SKILL_TOOLS } from "../../src/mcp/skill-tools.ts";
 import type { ServerContext, ToolDefinition } from "../../src/mcp/tool-contract.ts";
 import { isToolErrorCode } from "../../src/mcp/tool-error-codes.ts";
+import { buildToolTable, findTool } from "../../src/mcp/tools.ts";
+
+const TOOLS = buildToolTable("full");
 
 /** The `MCPError` a call raised; fails the test when it answered instead. */
 async function raised(run: () => unknown): Promise<MCPError> {
@@ -92,5 +101,99 @@ describe("skill errors", () => {
     );
     expect(err.message).toBe("skill file path must stay inside the skill directory");
     expect(codeOf(err)).toBe("skill_invalid_path");
+  });
+});
+
+// ----- workspace refusals ------------------------------------------------------
+
+const OWNER_A = "agent-a";
+const OWNER_B = "agent-b";
+const TRIGGER_NOW = new Date("2099-06-03T10:00:00Z");
+
+function candidate(source: string): InsightCandidate {
+  return {
+    kind: "contradiction",
+    urgency: "high",
+    reason: `${source} contradicts pref-other`,
+    suggestedAction: "Review the pair",
+    sourceArtifacts: [`[[${source}]]`],
+    contextSnippets: [],
+    cooldownKey: `contradiction:${source}:pref-other`,
+  };
+}
+
+function workspaceCtx(agentName?: string): ServerContext {
+  return { vault, configPath, repoRoot: null, ...(agentName ? { agentName } : {}) };
+}
+
+describe("workspace refusals", () => {
+  test("an unknown brain_intention operation answers unknown_operation", async () => {
+    const err = await raised(() =>
+      findTool(TOOLS, "brain_intention").handler(workspaceCtx(), {
+        operation: "rename",
+        scope: "w",
+      }),
+    );
+    expect(err.message).toBe("brain_intention operation must be one of: set, show, list, move");
+    expect(codeOf(err)).toBe("unknown_operation");
+  });
+
+  test("an unknown brain_trigger operation answers unknown_operation", async () => {
+    const err = await raised(() =>
+      findTool(TOOLS, "brain_trigger").handler(workspaceCtx(), { operation: "rename" }),
+    );
+    expect(err.message).toStartWith("brain_trigger operation must be one of: ");
+    expect(codeOf(err)).toBe("unknown_operation");
+  });
+
+  test("an unknown trigger status answers invalid_status", async () => {
+    const err = await raised(() =>
+      findTool(TOOLS, "brain_trigger").handler(workspaceCtx(), {
+        operation: "list",
+        status: "bogus",
+      }),
+    );
+    expect(err.message).toBe("brain_trigger: unknown status 'bogus'");
+    expect(codeOf(err)).toBe("invalid_status");
+  });
+
+  test("an absent id and an id the caller may not see answer the same code and message", async () => {
+    mkdirSync(join(vault, "Brain", "preferences"), { recursive: true });
+    writePreference(vault, {
+      slug: "owned-by-a",
+      topic: "owned-by-a",
+      principle: "principle for owned-by-a",
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-08T00:00:00Z",
+      status: BRAIN_PREFERENCE_STATUS.confirmed,
+      evidenced_by: ["[[sig-2026-05-01-owned-by-a]]"],
+      confirmed_at: "2026-05-02T00:00:00Z",
+      applied_count: 1,
+      violated_count: 0,
+      last_evidence_at: "2026-05-02T00:00:00Z",
+      confidence: BRAIN_CONFIDENCE.high,
+      confidence_value: 0.8,
+      owner: OWNER_A,
+    });
+    const { created } = createTriggers(vault, [candidate("pref-owned-by-a")], { now: TRIGGER_NOW });
+    const hiddenId = created[0]!.id;
+    writeFileSync(
+      brainConfigPath(vault),
+      `schema_version: 1\nintegrity:\n  owner_scope_delivery: ${GATE_MODE.fail}\n`,
+    );
+    const absentId = `${hiddenId.slice(0, -4)}zzzz`;
+    const trigger = findTool(TOOLS, "brain_trigger");
+
+    const hidden = await raised(() =>
+      trigger.handler(workspaceCtx(OWNER_B), { operation: "acknowledge", id: hiddenId }),
+    );
+    const absent = await raised(() =>
+      trigger.handler(workspaceCtx(OWNER_B), { operation: "acknowledge", id: absentId }),
+    );
+
+    expect(codeOf(hidden)).toBe("trigger_transition_refused");
+    expect(codeOf(absent)).toBe("trigger_transition_refused");
+    expect(hidden.message.replace(hiddenId, "<id>")).toBe(absent.message.replace(absentId, "<id>"));
+    expect(hidden.data).toEqual(absent.data);
   });
 });

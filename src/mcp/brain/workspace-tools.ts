@@ -32,6 +32,7 @@ import {
   showIntention,
 } from "../../core/brain/intentions.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
+import { TOOL_ERROR_CODE } from "../tool-error-codes.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { coerceStr } from "../coerce.ts";
@@ -82,6 +83,7 @@ function toolBrainIntention(
   throw new MCPError(
     INVALID_PARAMS,
     "brain_intention operation must be one of: set, show, list, move",
+    { code: TOOL_ERROR_CODE.unknownOperation },
   );
 }
 
@@ -187,7 +189,9 @@ function toolBrainTrigger(
   if (operation === "list" || operation === "history") {
     const statusRaw = coerceStr(args, "status", false);
     if (statusRaw !== null && statusRaw !== undefined && !isTriggerStatus(statusRaw)) {
-      throw new MCPError(INVALID_PARAMS, `brain_trigger: unknown status '${statusRaw}'`);
+      throw new MCPError(INVALID_PARAMS, `brain_trigger: unknown status '${statusRaw}'`, {
+        code: TOOL_ERROR_CODE.invalidStatus,
+      });
     }
     const scan = readTriggers(ctx.vault, {
       now,
@@ -225,12 +229,17 @@ function toolBrainTrigger(
         trigger: triggerToJson(transitionTrigger(ctx.vault, id, operation, { now })),
       };
     } catch (err) {
-      throw new MCPError(INVALID_PARAMS, `brain_trigger: ${(err as Error).message}`);
+      // One code for the whole transition refusal: a separate code for
+      // "absent" would split exactly what the shared message keeps together.
+      throw new MCPError(INVALID_PARAMS, `brain_trigger: ${(err as Error).message}`, {
+        code: TOOL_ERROR_CODE.triggerTransitionRefused,
+      });
     }
   }
   throw new MCPError(
     INVALID_PARAMS,
     `brain_trigger operation must be one of: ${TRIGGER_OPERATIONS.join(", ")}`,
+    { code: TOOL_ERROR_CODE.unknownOperation },
   );
 }
 
