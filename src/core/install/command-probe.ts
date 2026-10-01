@@ -10,13 +10,16 @@
  * the design settles:
  *
  *   - `resolves` - the command word was found.
- *   - `absent`   - a path-form command word (or a resolved runner's script
- *     argument) is PROVED not to exist on disk. Never a guess.
- *   - `unresolved` - a BARE name that this process's PATH does not carry.
- *     This is deliberately not `absent`: the probe runs on the doctor's
- *     PATH, while the host client spawns the command with ITS OWN PATH,
- *     which may differ. An unresolved bare name therefore claims "could
- *     not confirm here", never "broken".
+ *   - `absent`   - an ABSOLUTE path-form command word (or a resolved
+ *     runner's absolute script argument) is PROVED not to exist on disk.
+ *     Never a guess.
+ *   - `unresolved` - a BARE name that this process's PATH does not carry,
+ *     or a RELATIVE path form. This is deliberately not `absent`: the
+ *     probe runs on the doctor's PATH and cwd, while the host client
+ *     spawns the command with ITS OWN PATH and working directory, which
+ *     may differ. An unresolved word therefore claims "could not confirm
+ *     here", never "broken"; a relative word's detail still says what the
+ *     doctor's own cwd holds.
  *
  * Windows bare names are probed through PATHEXT (the documented default
  * list when the variable is unset), because that is what the `cmd /d /c`
@@ -93,7 +96,7 @@ export interface CommandProbeContext {
    * Only `PATH` and `PATHEXT` are read.
    */
   readonly env?: Readonly<Record<string, string | undefined>>;
-  /** cwd for relative path-form words; defaults to `process.cwd()`. */
+  /** cwd a relative path-form word is reported against; defaults to `process.cwd()`. */
   readonly cwd?: string;
 }
 
@@ -158,6 +161,12 @@ function probeLauncherWord(
   if (leg.verdict !== COMMAND_PROBE_VERDICT.resolves) return leg;
   const script = runnerScriptArgument(args, ctx);
   if (script === null) return leg;
+  if (!isAbsoluteWord(script, ctx.platform)) {
+    return {
+      verdict: COMMAND_PROBE_VERDICT.unresolved,
+      detail: `${leg.detail}; ${relativePathDetail(script, ctx)}`,
+    };
+  }
   if (existsSync(script)) {
     return {
       verdict: COMMAND_PROBE_VERDICT.resolves,
@@ -172,19 +181,34 @@ function probeLauncherWord(
 
 function probeWord(word: string, ctx: ResolvedContext): CommandProbeOutcome {
   if (isPathForm(word, ctx.platform)) {
-    const checked = isAbsoluteWord(word, ctx.platform) ? word : join(ctx.cwd, word);
-    if (existsSync(checked)) {
+    if (!isAbsoluteWord(word, ctx.platform)) {
+      return { verdict: COMMAND_PROBE_VERDICT.unresolved, detail: relativePathDetail(word, ctx) };
+    }
+    if (existsSync(word)) {
       return {
         verdict: COMMAND_PROBE_VERDICT.resolves,
-        detail: `path '${checked}' exists`,
+        detail: `path '${word}' exists`,
       };
     }
     return {
       verdict: COMMAND_PROBE_VERDICT.absent,
-      detail: `path '${word}' does not exist (checked '${checked}')`,
+      detail: `path '${word}' does not exist`,
     };
   }
   return probeBareName(word, ctx);
+}
+
+/**
+ * The detail of a relative path form: the client resolves it from its own
+ * working directory, which the probe cannot see, so what the doctor's cwd
+ * holds is reported as context, never as the verdict.
+ */
+function relativePathDetail(word: string, ctx: ResolvedContext): string {
+  const here = join(ctx.cwd, word);
+  return (
+    `relative path '${word}' resolves from the client's own working directory; ` +
+    `under the probe cwd '${here}' ${existsSync(here) ? "exists" : "does not exist"}`
+  );
 }
 
 /**
@@ -259,5 +283,5 @@ function runnerScriptArgument(args: ReadonlyArray<string>, ctx: ResolvedContext)
   const second = args[1];
   if (args[0] !== RUNNER_RUN_WORD || typeof second !== "string") return null;
   if (!isPathForm(second, ctx.platform)) return null;
-  return isAbsoluteWord(second, ctx.platform) ? second : join(ctx.cwd, second);
+  return second;
 }

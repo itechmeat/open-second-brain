@@ -44,12 +44,16 @@ describe("probeCommandResolvability - path-form commands", () => {
     expect(out.detail).not.toContain("spawn PATH");
   });
 
-  test("a relative path resolves against the probe cwd", () => {
+  test("a relative path is unresolved, never absent, and reports the probe cwd", () => {
+    // The client resolves a relative word from its own working directory,
+    // so neither a hit nor a miss under the doctor's cwd is a verdict.
     writeFileSync(join(binDir, "..", "rel-launcher"), "");
     const out = probeCommandResolvability("./rel-launcher", [], ctx());
-    expect(out.verdict).toBe(COMMAND_PROBE_VERDICT.resolves);
+    expect(out.verdict).toBe(COMMAND_PROBE_VERDICT.unresolved);
+    expect(out.detail).toContain("exists");
     const missing = probeCommandResolvability("./no-such-launcher", [], ctx());
-    expect(missing.verdict).toBe(COMMAND_PROBE_VERDICT.absent);
+    expect(missing.verdict).toBe(COMMAND_PROBE_VERDICT.unresolved);
+    expect(missing.detail).toContain("does not exist");
   });
 });
 
@@ -101,6 +105,13 @@ describe("probeCommandResolvability - runner script arguments", () => {
     const out = probeCommandResolvability("bun", ["run", script], ctx());
     expect(out.verdict).toBe(COMMAND_PROBE_VERDICT.resolves);
     expect(out.detail).toContain(script);
+  });
+
+  test("a relative runner script argument is unresolved, never absent", () => {
+    writeFileSync(join(binDir, "bun"), "");
+    const out = probeCommandResolvability("bun", ["run", "./src/cli/missing.ts"], ctx());
+    expect(out.verdict).toBe(COMMAND_PROBE_VERDICT.unresolved);
+    expect(out.detail).toContain("relative path");
   });
 
   test("a bare runner script word is a package alias, not a file to check", () => {
