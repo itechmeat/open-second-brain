@@ -1763,7 +1763,7 @@ from the provider's message:
 | `rejected` | the endpoint answered any other 4xx |
 | `transient` | the endpoint answered 408, 429 or a 5xx. Some vendors also answer 429 for exhausted quota; the category is computed from the status alone |
 | `timeout` | the request outlived its timeout |
-| `network` | the request never reached an answer: refused connection, DNS, TLS or a redirect |
+| `network` | the request never reached a complete answer: refused connection, DNS, TLS, a redirect, or a body that broke while it was read |
 | `malformed` | the endpoint answered, but the body was not JSON, carried the wrong number of scores, or an out-of-range or duplicate index |
 | `unclassified` | the rerank provider threw an error the cross-encoder did not type; it is named rather than folded into another category |
 
