@@ -15,7 +15,7 @@ const temps: string[] = [];
 const handles: HttpServerHandle[] = [];
 
 afterEach(async () => {
-  while (handles.length > 0) await handles.pop()!.close();
+  await Promise.all(handles.splice(0).map((handle) => handle.close()));
   while (temps.length > 0) rmSync(temps.pop()!, { recursive: true, force: true });
 });
 
@@ -62,6 +62,6 @@ describe("/health fault counts", () => {
   test("without a getter the body has no faults field", async () => {
     const handle = await serve();
     const body = await health(handle);
-    expect(Object.keys(body).sort()).toEqual(["in_flight", "status", "transport"]);
+    expect(Object.keys(body).toSorted()).toEqual(["in_flight", "status", "transport"]);
   });
 });
