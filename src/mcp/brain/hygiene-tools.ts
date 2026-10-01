@@ -226,7 +226,7 @@ async function toolBrainHygiene(
   if (detectorsRaw !== undefined && detectors!.length !== detectorsRaw.length) {
     throw new MCPError(
       INVALID_PARAMS,
-      "'detectors' entries must be: conflicts, dedup, freshness, usefulness",
+      `'detectors' entries must be: ${HYGIENE_DETECTOR_IDS.join(", ")}`,
     );
   }
   const scanned = scanWithResolver(ctx.vault, detectors, now);

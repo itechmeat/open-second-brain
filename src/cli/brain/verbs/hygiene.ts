@@ -120,6 +120,11 @@ export async function cmdBrainHygiene(argv: string[]): Promise<number> {
     for (const [detector, count] of Object.entries(report.counts)) {
       process.stdout.write(`  ${detector}: ${count} finding(s)\n`);
     }
+    if (report.counts["tags"] !== undefined) {
+      process.stdout.write(
+        "  scope: inline body tags only; frontmatter tags: arrays are not audited\n",
+      );
+    }
     for (const finding of report.findings) {
       process.stdout.write(
         `- [${finding.detector}] ${finding.id} -> ${finding.proposed_action}\n    ${finding.title}\n`,

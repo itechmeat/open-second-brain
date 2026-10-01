@@ -15,6 +15,7 @@ export const HYGIENE_DETECTOR_IDS = [
   "freshness",
   "usefulness",
   "slug-collisions",
+  "tags",
 ] as const;
 
 export type HygieneDetectorId = (typeof HYGIENE_DETECTOR_IDS)[number];
@@ -25,8 +26,9 @@ export type HygieneDetectorId = (typeof HYGIENE_DETECTOR_IDS)[number];
  * can be registered (valid subset member, wired into the scan) yet kept
  * OUT of the default sweep when it is too noisy to run uninvited. One
  * mechanism, two explicit policies: `slug-collisions` is default-on
- * (fires only on actual same-stem groups), future noisy detectors
- * register as opt-in by staying out of this list.
+ * (fires only on actual same-stem groups), `tags` is opt-in (noisy on
+ * vaults that tag loosely), and further noisy detectors register as
+ * opt-in by staying out of this list.
  *
  * Members are compile-checked against the registered tuple; a registered
  * id missing here is simply default-off, never an error.

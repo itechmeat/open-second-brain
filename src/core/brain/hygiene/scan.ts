@@ -14,6 +14,7 @@ import { detectConflicts } from "./detectors/conflicts.ts";
 import { detectDedup } from "./detectors/dedup.ts";
 import { detectFreshness } from "./detectors/freshness.ts";
 import { detectSlugCollisions } from "./detectors/slug-collisions.ts";
+import { detectTags } from "./detectors/tags.ts";
 import { detectUsefulness } from "./detectors/usefulness.ts";
 import {
   DEFAULT_SCAN_IDS,
@@ -31,6 +32,7 @@ const DETECTORS: Readonly<Record<HygieneDetectorId, HygieneDetector>> = Object.f
   freshness: (vault) => detectFreshness(vault),
   usefulness: (vault, ctx) => detectUsefulness(vault, ctx),
   "slug-collisions": (vault) => detectSlugCollisions(vault),
+  tags: (vault) => detectTags(vault),
 });
 
 export interface RunHygieneScanOptions {

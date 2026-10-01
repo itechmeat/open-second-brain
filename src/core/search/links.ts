@@ -23,6 +23,7 @@
 
 import { hasUriScheme } from "../path-safety.ts";
 import { WIKILINK_ALIAS_RE } from "../brain/wikilink.ts";
+import { extractTagValues, stripCode } from "../tags.ts";
 
 export type LinkType = "wikilink" | "markdown_link" | "tag";
 
@@ -32,14 +33,9 @@ export interface ExtractedLink {
   readonly linkType: LinkType;
 }
 
-const CODE_FENCE_RE = /(^|\n)(```|~~~)[^\n]*\n[\s\S]*?(?:\n(?:```|~~~)[^\n]*|$)/g;
-const INLINE_CODE_RE = /`[^`\n]*`/g;
 // Negative lookbehind so `![alt](url)` image embeds are NOT captured as
 // markdown_link. CodeRabbit caught this regression on PR #15.
 const MD_LINK_RE = /(?<!!)\[([^\]\n]*)\]\(([^)\n\s]+)(?:\s+"[^"\n]*")?\)/g;
-// Obsidian-style tag: #word where word starts with a letter/_ and may contain
-// letters, digits, dashes, underscores, and '/' for hierarchy.
-const TAG_RE = /(^|[^\w/])#([A-Za-z_][\w\-/]*)/g;
 // Reference-link definition: `[label]: target` with up to 3 leading spaces
 // (4+ would be an indented code block in CommonMark). The target is a bare
 // token or an `<...>` form; an optional title (quoted or parenthesised)
@@ -53,12 +49,6 @@ const REF_DEF_RE =
 // re-read as a shortcut reference. The link text / label may not contain
 // unescaped brackets or newlines.
 const REF_LINK_RE = /(!?)\[([^\]\n]+)\](?:\[([^\]\n]*)\])?/g;
-
-function stripCode(text: string): string {
-  let out = text.replace(CODE_FENCE_RE, "\n");
-  out = out.replace(INLINE_CODE_RE, " ");
-  return out;
-}
 
 /** An external address rather than a note path - see {@link hasUriScheme}. */
 const isUrl = hasUriScheme;
@@ -185,9 +175,7 @@ export function extractLinks(content: string): ExtractedLink[] {
 
   extractReferenceLinks(cleaned, out);
 
-  for (const m of cleaned.matchAll(TAG_RE)) {
-    const tag = (m[2] ?? "").trim();
-    if (tag === "") continue;
+  for (const tag of extractTagValues(cleaned)) {
     out.push({
       targetPath: null,
       linkText: tag,
