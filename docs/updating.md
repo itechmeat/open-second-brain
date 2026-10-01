@@ -47,6 +47,36 @@ instruction files such as `CLAUDE.md`/`AGENTS.md`, installed
 `.claude/skills/`) and warns with the exact replacement for any stale
 reference it finds (`removed-tool-reference`).
 
+## Upgrading to 1.66.0
+
+No step below is required. Three changes are visible to a client or an
+operator.
+
+**Every JSON-RPC error answer now carries `error.data`.** It is always an
+object with a string `code` (for example `unknown_argument`,
+`vault_frozen` or the default `invalid_params`), and an `isError` tool
+result carries its code on `_meta["open-second-brain/error"].code`. The
+error messages and text blocks are unchanged, so a client that matched
+prose keeps working; a client that asserted `"data" not in error` sees the
+new member. The Hermes bridge exposes the code as `BridgeError.code`. See
+"Tool errors" in [`mcp.md`](mcp.md).
+
+**An install with an enabled `openai-compat` rerank sees one query-cache
+miss per query.** The cache key now carries the rerank sunset survey's
+review date, and an answer whose rerank endpoint failed is no longer
+cached, so the next identical query asks the endpoint again. Every other
+install keeps its cache keys.
+
+**`o2b brain doctor` checks the rerank configuration.** With
+`search_rerank_enabled` on and the `openai-compat` kind, a missing or blank
+base URL, model or key now fails the doctor as
+`rerank-endpoint-unconfigured`, and a model with an announced
+decommission date warns. A model outside the shipped survey is reported
+as uncertain (`rerank-model-sunset-unsurveyed`), which says only that no
+statement was made about it. The check reads configuration only and sends
+no request. See the rerank doctor table in
+[`cli-reference.md`](cli-reference.md).
+
 ## Upgrading to 1.65.0
 
 No step below is required, and an existing install sees no change in what
