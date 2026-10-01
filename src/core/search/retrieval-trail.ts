@@ -125,12 +125,13 @@ export const RETRIEVAL_DEGRADATION = Object.freeze({
    */
   rankCapTruncatedPool: "rank-cap-truncated-pool",
   /**
-   * The configured cross-encoder rerank endpoint could not answer, so the
-   * heuristic order was served. `detail.category` carries the closed
-   * `RERANK_FAILURE_CATEGORY` the failure was typed with (`auth`, `gone`,
-   * `transient`, ...); the provider's own message stays in the
+   * The configured cross-encoder rerank (remote endpoint or local model)
+   * could not answer, so the heuristic order was served. `detail.category`
+   * carries the closed `RERANK_FAILURE_CATEGORY` the failure was typed
+   * with (`auth`, `gone`, `transient`, ...; a local model's failure is
+   * `unclassified`); the provider's own message stays in the
    * `rerank_degraded:` warning. Never cached: the next identical query
-   * asks the endpoint again.
+   * asks the reranker again.
    */
   rerankProviderUnavailable: "rerank-provider-unavailable",
   /**
@@ -318,7 +319,7 @@ export function describeRetrievalDegradation(code: RetrievalDegradationCode): st
     case RETRIEVAL_DEGRADATION.rankCapTruncatedPool:
       return "the rank cap truncated the candidate pool, so lower-ranked matches were never considered";
     case RETRIEVAL_DEGRADATION.rerankProviderUnavailable:
-      return "the configured rerank endpoint could not answer, so this answer keeps the heuristic order";
+      return "the configured reranker could not answer, so this answer keeps the heuristic order";
     case RETRIEVAL_DEGRADATION.rerankModelSunset:
       return "the configured rerank model is past its announced shutdown date, so no rerank request was made and this answer keeps the heuristic order";
     case RETRIEVAL_DEGRADATION.relevanceFloorDroppedRows:

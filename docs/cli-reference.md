@@ -1736,7 +1736,7 @@ so there is no separate lane field that could drift from it:
 | `hybrid-degraded` | hybrid recall was asked for and the semantic lane did not run, so this answer is keyword-only |
 | `hybrid-deadline-exceeded` | the composite hybrid path (embed, semantic top-k, rerank, second pass) outlived `search_hybrid_deadline_ms`, so the phases past the budget were cut; `detail.budgetMs` is the deadline, `detail.elapsedMs` the moment it fired |
 | `rank-cap-truncated-pool` | the rank cap truncated the candidate pool; `detail.cap` is the cap that bit |
-| `rerank-provider-unavailable` | the cross-encoder rerank endpoint could not answer, so the answer keeps the heuristic order; `detail.category` is one of `auth`, `quota`, `gone`, `rejected`, `transient`, `timeout`, `network`, `malformed`, `unclassified` |
+| `rerank-provider-unavailable` | the configured cross-encoder reranker (remote endpoint or local model) could not answer, so the answer keeps the heuristic order; `detail.category` is one of `auth`, `quota`, `gone`, `rejected`, `transient`, `timeout`, `network`, `malformed`, `unclassified` |
 | `rerank-model-sunset` | the configured rerank model's announced decommission date has passed, so no rerank request was sent and the answer keeps the heuristic order |
 | `relevance-floor-dropped-rows` | the relevance floor dropped ranked rows; `detail.dropped` counts them |
 | `scope-filters-dropped-rows` | visibility, ownership, or session / project scope dropped ranked rows; `detail.dropped` against `detail.before` |

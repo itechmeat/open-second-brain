@@ -8,10 +8,14 @@
  * fails closed; an endpoint error degrades gracefully with a warning.
  */
 
-import { test, expect, beforeEach, afterEach } from "bun:test";
+import { test, expect, beforeEach, afterEach, spyOn } from "bun:test";
 
 import { indexVault } from "../../../src/core/search/indexer.ts";
-import { RETRIEVAL_DEGRADATION } from "../../../src/core/search/retrieval-trail.ts";
+import { LocalRerankProvider } from "../../../src/core/search/rerank/local.ts";
+import {
+  describeRetrievalDegradation,
+  RETRIEVAL_DEGRADATION,
+} from "../../../src/core/search/retrieval-trail.ts";
 import { search } from "../../../src/core/search/search.ts";
 import { SearchError } from "../../../src/core/search/types.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
@@ -156,4 +160,32 @@ test("a healthy rerank and a disabled rerank carry no trail", async () => {
   expect((await search(enabled, { query: "fox", limit: 10 })).retrievalTrail).toBeUndefined();
   const disabled = makeConfig({ vault, dbPath });
   expect((await search(disabled, { query: "fox", limit: 10 })).retrievalTrail).toBeUndefined();
+});
+
+test("a failed local reranker records the same code, unclassified and uncached", async () => {
+  const cfg = makeConfig({
+    vault,
+    dbPath,
+    rerank: { enabled: true, kind: "local", topK: 10 },
+    cacheEnabled: true,
+  });
+  await indexVault(cfg);
+  const failing = spyOn(LocalRerankProvider.prototype, "rerank").mockImplementation(() =>
+    Promise.reject(new Error("model failed to load")),
+  );
+  try {
+    await search(cfg, { query: "fox", limit: 10 });
+    const second = await search(cfg, { query: "fox", limit: 10 });
+    expect(failing).toHaveBeenCalledTimes(2);
+    expect(second.retrievalTrail?.degraded).toContainEqual({
+      code: RETRIEVAL_DEGRADATION.rerankProviderUnavailable,
+      detail: { category: "unclassified" },
+    });
+  } finally {
+    failing.mockRestore();
+  }
+  // The local reranker has no endpoint, so the sentence must not name one.
+  expect(describeRetrievalDegradation(RETRIEVAL_DEGRADATION.rerankProviderUnavailable)).not.toMatch(
+    /endpoint/u,
+  );
 });
