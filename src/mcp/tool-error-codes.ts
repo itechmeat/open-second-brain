@@ -387,9 +387,13 @@ function classifyOne(exc: unknown): ToolErrorCode | undefined {
   return undefined;
 }
 
-/** The name an unclassified throw is logged under; never its message. */
+/**
+ * The name an unclassified throw is logged under; never its message. The
+ * constructor's name comes first because several core error classes never
+ * set `this.name`, and would all be logged as `Error`.
+ */
 function unclassifiedName(exc: unknown): string {
-  return exc instanceof Error ? exc.name : typeof exc;
+  return exc instanceof Error ? exc.constructor?.name || exc.name : typeof exc;
 }
 
 /**

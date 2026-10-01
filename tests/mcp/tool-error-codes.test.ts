@@ -152,6 +152,9 @@ const TYPE_ONLY_MEMBERS = [
   "InvalidExpirationTargetError",
 ] as const;
 
+/** A core-style error class that, like several real ones, never sets `this.name`. */
+class Nameless extends Error {}
+
 const UNCLASSIFIED_PREFIX = "warning: unclassified tool error mapped to internal_error: ";
 
 describe("TOOL_ERROR_CODES", () => {
@@ -315,6 +318,8 @@ describe("codeForError", () => {
       [new Error(`boom at ${secret}`), "Error"],
       [Object.assign(new Error(`ENOENT: ${secret}`), { code: "ENOENT" }), "Error"],
       [`thrown string ${secret}`, "string"],
+      // A class that never sets `this.name` is still named by its class.
+      [new Nameless(`boom at ${secret}`), "Nameless"],
     ];
     for (const [thrown, name] of cases) {
       lines = [];
