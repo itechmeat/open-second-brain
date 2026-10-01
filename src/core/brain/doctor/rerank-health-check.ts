@@ -124,10 +124,17 @@ function carriesCredentials(baseUrl: string): boolean {
   return parsed.username !== "" || parsed.password !== "";
 }
 
+/** Stands in for the configured base URL wherever a refusal would repeat it. */
+const BASE_URL_PLACEHOLDER = `<${BASE_URL_KEY}>`;
+
 /**
  * Why `baseUrl` would be refused by the endpoint rule the rerank provider
  * applies at construction (`assertHttpEgressEndpoint`), or null when it is
- * accepted. No request is sent; the rule reads the URL's shape only.
+ * accepted. No request is sent; the rule reads the URL's shape only. The
+ * rule's message repeats the raw value, and a string the URL parser rejects
+ * (or one without a scheme) can still carry `user:password@` that
+ * {@link carriesCredentials} cannot see, so every occurrence of the value is
+ * replaced with {@link BASE_URL_PLACEHOLDER} and the rest of the message kept.
  */
 function baseUrlRefusal(rerank: ResolvedRerankConfig, baseUrl: string): string | null {
   try {
@@ -137,7 +144,8 @@ function baseUrlRefusal(rerank: ResolvedRerankConfig, baseUrl: string): string |
     });
     return null;
   } catch (err) {
-    return err instanceof Error ? err.message : String(err);
+    const message = err instanceof Error ? err.message : String(err);
+    return message.split(baseUrl).join(BASE_URL_PLACEHOLDER);
   }
 }
 

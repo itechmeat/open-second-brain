@@ -227,6 +227,24 @@ describe("an enabled remote rerank that cannot resolve its endpoint is one error
     expect(issues[0]!.message).not.toContain("s3cret");
   });
 
+  test("an unparseable base URL that carries credentials is refused without repeating it", () => {
+    // The URL parser rejects the port, so no userinfo is detected; the
+    // endpoint rule's own message must not echo the configured value.
+    configure({ baseUrl: "http://u:secretpw@h:abc/v1" });
+    const { issues } = run();
+    expect(issues.map((i) => i.code)).toEqual([RERANK_ENDPOINT_UNCONFIGURED_CODE]);
+    expect(issues[0]!.message).toContain("<search_rerank_base_url>");
+    expect(issues[0]!.message).not.toContain("secretpw");
+  });
+
+  test("a scheme-less base URL that carries credentials is refused without repeating it", () => {
+    configure({ baseUrl: "u:secretpw@h/v1" });
+    const { issues } = run();
+    expect(issues.map((i) => i.code)).toEqual([RERANK_ENDPOINT_UNCONFIGURED_CODE]);
+    expect(issues[0]!.message).toContain("<search_rerank_base_url>");
+    expect(issues[0]!.message).not.toContain("secretpw");
+  });
+
   test("a base URL that is not a URL is the same error", () => {
     configure({ baseUrl: "not a url" });
     const { issues } = run();
