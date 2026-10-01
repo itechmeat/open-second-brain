@@ -255,6 +255,107 @@ describe("run --cron-template prints the lane recipe and writes nothing", () => 
   });
 });
 
+/** Rewrite the per-test config with `lines` after the vault key. */
+function writeConfig(lines: ReadonlyArray<string>): void {
+  writeFileSync(configPath, [`vault: ${vault}`, ...lines].join("\n") + "\n");
+}
+
+async function initVault(): Promise<void> {
+  const init = await runCli(["brain", "init", "--vault", vault], { env: baseEnv() });
+  expect(init.returncode).toBe(0);
+}
+
+describe("declared custom tasks ride the lane", () => {
+  test("with the switch on, run reports the custom row after the built-ins", async () => {
+    writeConfig(["maintenance_custom_tasks: true", "maintenance_custom_tidy: exit 0"]);
+    await initVault();
+    const run = await runCli(["brain", "maintenance", "run", "--vault", vault, "--json"], {
+      env: baseEnv(),
+    });
+    expect(run.returncode).toBe(MAINTENANCE_EXIT.ok);
+    const payload = JSON.parse(run.stdout) as { tasks: Array<{ name: string; ok: boolean }> };
+    const tidy = payload.tasks.find((t) => t.name === "custom:tidy");
+    expect(tidy?.ok).toBe(true);
+    expect(payload.tasks.map((t) => t.name).toSorted()).toEqual(
+      [...LANE_TASKS, "custom:tidy"].toSorted(),
+    );
+  });
+
+  test("--retry accepts a declared custom task and names an undeclared one", async () => {
+    writeConfig(["maintenance_custom_tasks: true", "maintenance_custom_tidy: exit 0"]);
+    await initVault();
+    seedFailureStreak("custom:tidy", MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT);
+
+    const refused = await runCli(["brain", "maintenance", "run", "--vault", vault], {
+      env: baseEnv(),
+    });
+    expect(refused.returncode).toBe(MAINTENANCE_EXIT.refused);
+    expect(refused.stdout).toContain("custom:tidy: REFUSED");
+
+    const unknown = await runCli(
+      ["brain", "maintenance", "run", "--retry", "custom:nope", "--vault", vault],
+      { env: baseEnv() },
+    );
+    expect(unknown.returncode).toBe(MAINTENANCE_EXIT.usage);
+    expect(unknown.stderr).toContain("custom:nope");
+    expect(unknown.stderr).toContain("custom:tidy");
+
+    const retried = await runCli(
+      ["brain", "maintenance", "run", "--retry", "custom:tidy", "--vault", vault, "--json"],
+      { env: baseEnv() },
+    );
+    expect(retried.returncode).toBe(MAINTENANCE_EXIT.ok);
+    const payload = JSON.parse(retried.stdout) as {
+      tasks: Array<{ name: string; ok: boolean; refused?: boolean }>;
+    };
+    const tidy = payload.tasks.find((t) => t.name === "custom:tidy");
+    expect(tidy?.refused).toBeUndefined();
+    expect(tidy?.ok).toBe(true);
+  });
+
+  test("a bad declaration is named on stderr and the valid tasks still run", async () => {
+    writeConfig([
+      "maintenance_custom_tasks: true",
+      "maintenance_custom_tidy: exit 0",
+      "maintenance_custom_Bad: exit 0",
+    ]);
+    await initVault();
+    const run = await runCli(["brain", "maintenance", "run", "--vault", vault, "--json"], {
+      env: baseEnv(),
+    });
+    expect(run.stderr).toContain("custom task refused:");
+    expect(run.stderr).toContain("Bad");
+    const payload = JSON.parse(run.stdout) as {
+      tasks: MaintenanceTaskResult[];
+    };
+    // The verdict code of the rows that ran: a refused declaration journals
+    // nothing and is not a failed attempt.
+    expect(run.returncode).toBe(maintenanceExitCode(payload.tasks));
+    expect(payload.tasks.find((t) => t.name === "custom:tidy")?.ok).toBe(true);
+  });
+
+  test("status shows custom rows, and says when declared tasks are switched off", async () => {
+    writeConfig(["maintenance_custom_tasks: true", "maintenance_custom_tidy: exit 0"]);
+    await initVault();
+    const run = await runCli(["brain", "maintenance", "run", "--vault", vault], {
+      env: baseEnv(),
+    });
+    expect(run.returncode).toBe(MAINTENANCE_EXIT.ok);
+    const on = await runCli(["brain", "maintenance", "status", "--vault", vault], {
+      env: baseEnv(),
+    });
+    expect(on.stdout).toContain("custom:tidy ok");
+    expect(on.stdout).not.toContain("custom tasks declared but maintenance_custom_tasks is off");
+
+    writeConfig(["maintenance_custom_tidy: exit 0"]);
+    const off = await runCli(["brain", "maintenance", "status", "--vault", vault], {
+      env: baseEnv(),
+    });
+    expect(off.returncode).toBe(MAINTENANCE_EXIT.ok);
+    expect(off.stdout).toContain("custom tasks declared but maintenance_custom_tasks is off");
+  });
+});
+
 /** A clean task row, as the lane produces it. */
 function okRow(name: MaintenanceTaskResult["name"]): MaintenanceTaskResult {
   return { name, ok: true, duration_ms: 1 };

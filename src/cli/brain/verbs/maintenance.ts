@@ -22,28 +22,13 @@
  * Exit codes: see {@link MAINTENANCE_EXIT}.
  */
 
-import { dream } from "../../../core/brain/dream.ts";
-import {
-  discoverBridges,
-  readDismissedBridges,
-  writeBridgeProposals,
-} from "../../../core/brain/link-graph/bridge-discovery.ts";
-import {
-  detectCommunities,
-  materializeClusterNotes,
-} from "../../../core/brain/link-graph/communities.ts";
-import { appendMetric } from "../../../core/brain/metrics.ts";
 import {
   createSafeguard,
   OPERATION,
   resolveSafeguardTimeoutMs,
 } from "../../../core/brain/safeguard.ts";
-import { isoSecond } from "../../../core/brain/time.ts";
-import { Store } from "../../../core/search/store.ts";
 import { currentLease, MAINTENANCE_LEASE_NAME } from "../../../core/brain/maintenance/lease.ts";
 import {
-  isLaneTask,
-  LANE_TASK,
   MAINTENANCE_BUSY_MINUTES,
   MAINTENANCE_BUSY_MINUTES_MAX,
   MAINTENANCE_BUSY_THRESHOLD,
@@ -51,11 +36,12 @@ import {
   runMaintenance,
   type DailyWindow,
   type LaneTask,
-  type MaintenanceTask,
+  type LaneTaskId,
   type MaintenanceTaskResult,
 } from "../../../core/brain/maintenance/lane.ts";
 import { listJournal, MAINTENANCE_JOURNAL_CAP } from "../../../core/brain/maintenance/journal.ts";
-import { createLaneReindex } from "../../../core/brain/maintenance/reindex-task.ts";
+import { resolveCustomTasks } from "../../../core/brain/maintenance/custom-tasks.ts";
+import { buildLaneTasks } from "../../../core/brain/maintenance/lane-tasks.ts";
 import { resolveAgentName } from "../../../core/config.ts";
 import { CronTemplateError, parseRecipeFormat } from "../../cron-recipe.ts";
 import {
@@ -69,7 +55,7 @@ import { attachProgress, reportProgressRefusal } from "../../progress-rail.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
 const USAGE =
-  "usage: o2b brain maintenance run [--force] [--retry <task>] [--window H-H] [--tz ZONE] " +
+  "usage: o2b brain maintenance run [--force] [--retry <task|custom:name>] [--window H-H] [--tz ZONE] " +
   "[--busy-minutes N] [--busy-threshold N] [--force-cost] [--progress] " +
   "| run --cron-template [--interval N] [--format cron|systemd] [--window H-H --tz ZONE] " +
   "| status [--limit N]  [--vault <path>] [--json]";
@@ -118,6 +104,9 @@ export const MAINTENANCE_EXIT = Object.freeze({
 } as const);
 
 export type MaintenanceExit = (typeof MAINTENANCE_EXIT)[keyof typeof MAINTENANCE_EXIT];
+
+/** What `status` says when custom tasks are declared but the switch is off. */
+export const CUSTOM_TASKS_OFF_NOTICE = "custom tasks declared but maintenance_custom_tasks is off";
 
 /**
  * The run's exit code from the lane's task rows, keyed ONLY on rows the
@@ -201,8 +190,13 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
       }
       const lease = currentLease(vault, { name: MAINTENANCE_LEASE_NAME, now });
       const journal = listJournal(vault, limit);
-      if (asJson) okJson({ lease, journal });
+      // Declared and switched off is said once, here, rather than left to
+      // look like a lane that forgot the operator's tasks.
+      const custom = resolveCustomTasks(config ?? undefined);
+      const customOff = !custom.enabled && custom.declared > 0 ? CUSTOM_TASKS_OFF_NOTICE : null;
+      if (asJson) okJson({ lease, journal, ...(customOff !== null ? { notice: customOff } : {}) });
       else {
+        if (customOff !== null) ok(customOff);
         ok(lease === null ? "lease: free" : `lease: ${lease.holder} until ${lease.expiresAt}`);
         ok(`journal (${journal.length} recent):`);
         for (const e of journal) {
@@ -272,12 +266,12 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
     // and then say nothing for the length of a full reindex, which is
     // the silence this release exists to remove - and it would ALSO
     // double-count, because each of the four already reports its own
-    // stages. Forwarding needs no change to `MaintenanceTask`: the tasks
-    // are built here, so the sink reaches them by closure, and every
+    // stages. Forwarding needs no change to `MaintenanceTask`: the shared
+    // builder hands the sink to each built-in task by closure, and every
     // record names the operation that emitted it, which is exactly what
     // tells a reader which task the lane is currently inside. The MCP
-    // lane took the same decision for the same reason; a second shape
-    // here would make the two surfaces disagree about one mechanism.
+    // lane passes its sink to the same builder; a second shape would
+    // make the two surfaces disagree about one mechanism.
     const observation =
       flags["progress"] === true
         ? attachProgress({ command: "brain", argv: ["maintenance"], jsonRequested: asJson })
@@ -311,29 +305,28 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
     let result: Awaited<ReturnType<typeof runMaintenance>>;
     try {
       // Built once and read twice - the lane runs these, and `--retry` is
-      // checked against their names. That intent is unchanged; what
-      // changed is where the names come from. They were four literals
-      // here and four more in `admin-tools.ts`, and the two lists drifted
-      // apart twice, so both are now built from `LANE_TASK` and `--retry`
-      // validates against the vocabulary rather than against whichever
-      // list happens to be nearest.
+      // checked against their names. The task bodies live in one shared
+      // builder that the MCP tool calls too: the two surfaces carried
+      // inline copies of the four built-ins and the copies drifted, so
+      // neither surface spells a task any more. `taskNames` is the
+      // vocabulary THIS install registered - the built-ins plus any
+      // declared custom tasks - which is what `--retry` validates against.
       //
       // Inside the `try`, because the check below can return: a return
       // between `onInterrupt()` and the `try` would skip `release`.
       //
-      // Spend is opt-in (`maintenance_embeddings`): the shared builder
-      // decides whether the pass may embed, announces the predicted spend
-      // inside the task and receipts what the phase priced. An offline or
-      // un-opted vault stays keyword-only and reaches no provider.
-      // `--force-cost` bypasses a positive gate for this run and is
-      // recorded on the receipt when it did override one.
-      const reindexTask = createLaneReindex({
+      // Spend is opt-in (`maintenance_embeddings`): the builder decides
+      // whether the reindex pass may embed, announces the predicted spend
+      // inside the task and receipts what the phase priced. `--force-cost`
+      // bypasses a positive gate for this run and is recorded on the
+      // receipt when it did override one.
+      const lane = buildLaneTasks({
         vault,
         ...(config ? { configPath: config } : {}),
         searchConfig,
         now,
         forceCost: flags["force-cost"] === true,
-        safeguard: () => laneSafeguard(OPERATION.reindex),
+        safeguardFor: laneSafeguard,
         signal: interrupt.signal,
         ...laneProgress,
         ...(asJson
@@ -343,91 +336,25 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
                 ok(formatSpendBanner(preview, searchConfig.semantic.costGateUsd)),
             }),
       });
-      const laneTasks: ReadonlyArray<MaintenanceTask> = [
-        {
-          name: LANE_TASK.dream,
-          run: async () => {
-            dream(vault, { now, safeguard: laneSafeguard(OPERATION.dream), ...laneProgress });
-          },
-        },
-        reindexTask.task,
-        // Link-recall-intelligence passes ride the same lease, after
-        // reindex so they see fresh edges. Both are fail-soft inside:
-        // a vault without embeddings simply proposes nothing.
-        {
-          name: LANE_TASK.bridges,
-          run: async () => {
-            const store = await Store.open(searchConfig, { mode: "read" });
-            try {
-              const report = discoverBridges(store, {
-                dismissed: readDismissedBridges(vault),
-                safeguard: laneSafeguard(OPERATION.bridges),
-                ...laneProgress,
-              });
-              writeBridgeProposals(vault, report, { now });
-              try {
-                appendMetric(vault, {
-                  surface: "bridge_discovery",
-                  runAt: isoSecond(now),
-                  payload: {
-                    proposals: report.proposals.length,
-                    scanned_candidates: report.scannedCandidates,
-                    vec_available: report.vecAvailable,
-                    lane: true,
-                  },
-                });
-              } catch {
-                // Metrics are observability, not correctness.
-              }
-            } finally {
-              await store.close();
-            }
-          },
-        },
-        {
-          name: LANE_TASK.clusters,
-          run: async () => {
-            const store = await Store.open(searchConfig, { mode: "read" });
-            try {
-              const communities = detectCommunities(store, {
-                safeguard: laneSafeguard(OPERATION.clusters),
-                ...laneProgress,
-              });
-              const materialized = materializeClusterNotes(vault, communities, { store, now });
-              try {
-                appendMetric(vault, {
-                  surface: "communities",
-                  runAt: isoSecond(now),
-                  payload: {
-                    communities: communities.length,
-                    sizes: communities.map((c) => c.size),
-                    written: materialized.written.length,
-                    removed: materialized.removed.length,
-                    lane: true,
-                  },
-                });
-              } catch {
-                // Metrics are observability, not correctness.
-              }
-            } finally {
-              await store.close();
-            }
-          },
-        },
-      ];
+      // Named, never dropped: a refused declaration journals nothing, and
+      // the valid tasks still run.
+      for (const reason of lane.custom.errors) {
+        process.stderr.write(`custom task refused: ${reason}\n`);
+      }
+      const registered = new Set<string>(lane.taskNames);
       const requested = stringArrayFlag(flags["retry"]);
-      const unknownRetries = requested.filter((name) => !isLaneTask(name));
+      const unknownRetries = requested.filter((name) => !registered.has(name));
       if (unknownRetries.length > 0) {
         // Named, not ignored: a typo that silently retried nothing would
         // leave the operator reading a refusal they thought they had just
         // asked past.
         process.stderr.write(
           `brain maintenance run: --retry names no lane task: ${unknownRetries.join(", ")} ` +
-            `(tasks: ${laneTasks.map((task) => task.name).join(", ")})\n`,
+            `(tasks: ${lane.taskNames.join(", ")})\n`,
         );
         return MAINTENANCE_EXIT.usage;
       }
-      const retryTasks = requested.filter(isLaneTask);
+      const retryTasks = requested as LaneTaskId[];
       result = await runMaintenance(vault, {
         now,
         holder,
@@ -435,12 +362,12 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
         ...(window !== undefined ? { window } : {}),
         busy: { minutes: busyMinutes, threshold: busyThreshold },
         ...(retryTasks.length > 0 ? { retryTasks } : {}),
-        tasks: laneTasks,
+        tasks: lane.tasks,
       });
 
       // The run-level spend block: the banner this run announced and the
       // receipt its reindex pass returned, both absent when nothing spent.
-      const spend = reindexTask.spendBlock(result.tasks);
+      const spend = lane.reindex.spendBlock(result.tasks);
       if (asJson) {
         okJson({
           verdict: result.verdict,
