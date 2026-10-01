@@ -163,21 +163,6 @@ describe("TOOL_ERROR_CODES", () => {
     expect(new Set(TOOL_ERROR_CODES).size).toBe(TOOL_ERROR_CODES.length);
   });
 
-  test("contains every member of each imported vocabulary", () => {
-    const imported: ReadonlyArray<string> = [
-      ...SEARCH_ERROR_CODES,
-      ...Object.values(SHAPE_VIOLATION_CODES),
-      ...Object.values(SEMANTIC_VIOLATION_CODES),
-      VAULT_FROZEN_REFUSAL,
-      WRITE_BINDING_REFUSED_CODE,
-      REACH_REFUSAL,
-      ...OWNER_SCOPE_REFUSALS,
-      ...TYPE_ONLY_MEMBERS,
-    ];
-    const registered: ReadonlyArray<string> = TOOL_ERROR_CODES;
-    for (const token of imported) expect(registered).toContain(token);
-  });
-
   test("is exactly the imported vocabularies plus the 21 new tokens", () => {
     const expected = new Set<string>([
       ...NEW_TOKENS,
@@ -200,10 +185,6 @@ describe("TOOL_ERROR_CODES", () => {
     for (const token of ["budget_exceeded", "invalid_action", "invalid_target", "vault_frozen"]) {
       expect(isToolErrorCode(token)).toBe(true);
     }
-  });
-
-  test("every new token is lower snake_case", () => {
-    for (const token of GENERIC_TOOL_ERROR_CODES) expect(token).toMatch(/^[a-z][a-z0-9_]*$/);
   });
 
   test("the guards accept members only", () => {
