@@ -73,7 +73,7 @@ describe("buildLaneTasks", () => {
     writeConfig(["maintenance_custom_a: echo a"]);
     const set = build();
     expect(set.taskNames).toEqual(LANE_TASKS);
-    expect(set.tasks.map((t) => t.name)).toEqual(LANE_TASKS);
+    expect(set.tasks.map((t) => t.name)).toEqual([...LANE_TASKS]);
     expect(set.custom.enabled).toBe(false);
     expect(set.custom.declared).toBe(1);
     expect(set.reindex.task.name).toBe(LANE_TASK.reindex);
@@ -88,7 +88,7 @@ describe("buildLaneTasks", () => {
     ]);
     const set = build();
     expect(set.taskNames).toEqual([...LANE_TASKS, "custom:a", "custom:b"]);
-    expect(set.tasks.map((t) => t.name)).toEqual(set.taskNames);
+    expect(set.tasks.map((t) => t.name)).toEqual([...set.taskNames]);
     expect(set.custom.errors.length).toBe(1);
     expect(set.custom.errors[0]).toContain("maintenance_custom_Bad");
   });
