@@ -35,6 +35,8 @@ import {
   parseRecipeFormat,
   renderCronRecipe,
   renderSystemdTimer,
+  shellQuote,
+  singleLinePath,
   type CronRecipeOptions,
   type CronRecipeSpec,
   type RecipeFormat,
@@ -74,6 +76,9 @@ const FAIL_ON_HEALTH_FLAG = "--fail-on-health";
 /** Flag that makes the report machine-readable. */
 const JSON_FLAG = "--json";
 
+/** Label the line-break refusal names the repository path with. */
+const PROJECT_LABEL = "project";
+
 /** The JSON parser the health gate requires. */
 const JSON_PARSER = "jq";
 
@@ -101,7 +106,7 @@ function renderResyncBody(o2bBin: string, projectPath: string): string {
     "",
     "# The repository this recipe keeps indexed, baked in when the recipe",
     "# was rendered. Re-render for a different repository.",
-    'project="' + projectPath + '"',
+    "project=" + shellQuote(singleLinePath(PROJECT_LABEL, projectPath)),
     'stamp_dir="' + STAMP_DIR_EXPRESSION + '"',
     'stamp_file="$stamp_dir/' + stampFileName(projectPath) + '"',
     "",

@@ -19,7 +19,9 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { CronTemplateError } from "../../src/cli/cron-recipe.ts";
 import { renderCodegraphResyncTemplate } from "../../src/cli/partner-codegraph-cron.ts";
+import { IS_WINDOWS } from "../helpers/platform.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
 let tmp: string;
@@ -62,7 +64,7 @@ describe("the resync recipe renders", () => {
     expect(body).toContain("--name osb-codegraph-resync");
     expect(body).toContain("hermes cron create");
     expect(body).toContain('codegraph init "$project"');
-    expect(body).toContain('project="/srv/projects/demo"');
+    expect(body).toContain("project='/srv/projects/demo'");
   });
 
   test("the wrong-root guard precedes the indexer invocation", () => {
@@ -120,6 +122,31 @@ describe("the resync recipe renders", () => {
     expect(body).not.toContain("0 */6 * * *");
   });
 
+  test.skipIf(IS_WINDOWS)(
+    "a project path with shell syntax reaches the script as a literal value",
+    () => {
+      const path = "/srv/x$(touch marker)`id`\"q'y";
+      const body = renderCodegraphResyncTemplate(path, "6h");
+      const line = body.split("\n").find((l) => l.startsWith("project="));
+      expect(line).toBeDefined();
+      // Evaluate exactly the line the script carries: the value must come
+      // back byte for byte, and nothing inside it may run.
+      const run = Bun.spawnSync(["bash", "-c", `${line}\nprintf %s "$project"`], { cwd: tmp });
+      expect(run.exitCode).toBe(0);
+      expect(run.stdout.toString()).toBe(path);
+      expect(existsSync(join(tmp, "marker"))).toBe(false);
+    },
+  );
+
+  test("a project path with a line break is refused by name", () => {
+    for (const path of ["/srv/a\nOSBEOF", "/srv/a\rb"]) {
+      expect(() => renderCodegraphResyncTemplate(path, "6h")).toThrow(CronTemplateError);
+      expect(() => renderCodegraphResyncTemplate(path, "6h", { format: "systemd" })).toThrow(
+        /project path must not contain a line break/,
+      );
+    }
+  });
+
   test("two repositories get two stamp files", () => {
     const a = renderCodegraphResyncTemplate("/srv/projects/alpha", "6h");
     const b = renderCodegraphResyncTemplate("/srv/projects/beta", "6h");
@@ -135,7 +162,7 @@ describe("o2b partner codegraph resync (CLI)", () => {
     const res = await runCli(["partner", "codegraph", "resync", "--cron-template"], { cwd: repo });
     expect(res.returncode).toBe(0);
     expect(res.stdout).toContain("cat >~/.local/bin/osb-codegraph-resync.sh");
-    expect(res.stdout).toContain(`project="${repo}"`);
+    expect(res.stdout).toContain(`project='${repo}'`);
     expect(listTree(tmp)).toEqual(before);
   });
 
@@ -147,7 +174,7 @@ describe("o2b partner codegraph resync (CLI)", () => {
       { cwd: tmp },
     );
     expect(res.returncode).toBe(0);
-    expect(res.stdout).toContain(`project="${repo}"`);
+    expect(res.stdout).toContain(`project='${repo}'`);
     expect(listTree(tmp)).toEqual(before);
   });
 
@@ -192,7 +219,7 @@ describe("o2b partner codegraph resync (CLI)", () => {
     expect(res.stdout).toContain("~/.config/systemd/user/osb-codegraph-resync.service");
     expect(res.stdout).toContain("~/.config/systemd/user/osb-codegraph-resync.timer");
     expect(res.stdout).toContain("OnUnitActiveSec=6h");
-    expect(res.stdout).toContain(`project="${repo}"`);
+    expect(res.stdout).toContain(`project='${repo}'`);
     expect(res.stdout).not.toContain("hermes cron create");
     expect(listTree(tmp)).toEqual(before);
   });

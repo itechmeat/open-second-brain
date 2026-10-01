@@ -57,6 +57,36 @@ export class CronTemplateError extends Error {
   }
 }
 
+/**
+ * Single-quote a value for bash, the way `discipline-install.ts` quotes
+ * the vault it bakes into its job: a quote inside the value closes the
+ * string, emits an escaped quote and reopens it. Inside single quotes a
+ * backslash, a `$` and a backtick are literal, so nothing else needs
+ * escaping. Every operator path a recipe bakes into its script goes
+ * through here.
+ */
+export function shellQuote(value: string): string {
+  return "'" + value.replace(/'/gu, "'\\''") + "'";
+}
+
+/** A line feed or a carriage return anywhere in a value. */
+const LINE_BREAK_PATTERN = /[\n\r]/u;
+
+/**
+ * Refuse a path that would not survive being baked into a recipe. The
+ * script travels inside a heredoc, so a line break in a baked value
+ * could end that heredoc early; no real vault or repository path needs
+ * one. Returns the value unchanged when it is a single line.
+ */
+export function singleLinePath(label: string, value: string): string {
+  if (LINE_BREAK_PATTERN.test(value)) {
+    throw new CronTemplateError(
+      label + " path must not contain a line break, got: " + JSON.stringify(value),
+    );
+  }
+  return value;
+}
+
 /** Every recipe format a `--format` flag can select; the first is the default. */
 export const RECIPE_FORMATS = Object.freeze(["cron", "systemd"] as const);
 
