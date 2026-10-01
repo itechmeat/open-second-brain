@@ -58,13 +58,13 @@ async function build(): Promise<void> {
   await indexVault(makeConfig({ vault, dbPath }));
 }
 
-test("the store facade serves the measured pinned map", async () => {
+test("the store facade serves only the pinned candidates", async () => {
   await build();
   const store = await Store.open(makeConfig({ vault, dbPath }), { mode: "read", loadVec: false });
   try {
-    const pinned = store.pinnedDocuments();
-    expect(pinned.size).toBe(2);
-    expect([...pinned.values()].toSorted()).toEqual([false, true]);
+    const pinnedId = store.getDocumentIdByPath("notes/pinned.md")!;
+    const plainId = store.getDocumentIdByPath("notes/plain.md")!;
+    expect(store.pinnedDocumentIds([pinnedId, plainId])).toEqual(new Set([pinnedId]));
   } finally {
     await store.close();
   }
@@ -79,6 +79,7 @@ test("a pinned note outranks its unpinned twin by exactly the cap, and says why"
   expect(first!.reasons).toContain(`pinned: ${PINNED_BOOST_CAP.toFixed(3)}`);
   expect(first!.breakdown!.pinned).toBe(PINNED_BOOST_CAP);
   expect(second!.path).toBe("notes/plain.md");
-  expect(second!.breakdown!.pinned).toBe(0);
+  // The unpinned result keeps its pre-feature shape: no pinned key.
+  expect(second!.breakdown).not.toHaveProperty("pinned");
   expect(first!.score - second!.score).toBeCloseTo(PINNED_BOOST_CAP, 9);
 });

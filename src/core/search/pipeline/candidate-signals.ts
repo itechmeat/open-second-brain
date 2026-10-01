@@ -59,14 +59,13 @@ export interface CandidateSignals {
   readonly reuseRateByChunk: ReadonlyMap<number, number> | undefined;
   readonly eventTimeMsByChunk: ReadonlyMap<number, number> | undefined;
   /**
-   * The pinned flag the index MEASURED per document (t_f7bef96a), read
-   * through the store's pinned-documents lookup - one SQL pass, no
-   * query-time file reads. Undefined when no row has been measured yet (a
-   * pre-column index), so the ranker's pinned layer stays unwired and
-   * every score byte-identical; "not pinned" and "nobody looked" remain
-   * different statements end to end.
+   * The candidate documents the index MEASURED as pinned (t_f7bef96a),
+   * read through the store's pinned lookup - one SQL pass over the
+   * candidates' pinned rows, no query-time file reads. Undefined when no
+   * candidate is pinned, so the ranker's pinned layer stays unwired and
+   * every score and breakdown shape is byte-identical.
    */
-  readonly pinnedByDoc: ReadonlyMap<number, boolean> | undefined;
+  readonly pinnedDocIds: ReadonlySet<number> | undefined;
 }
 
 export function collectCandidateSignals(input: CandidateSignalsInput): CandidateSignals {
@@ -97,10 +96,15 @@ export function collectCandidateSignals(input: CandidateSignalsInput): Candidate
     : { activationByChunk: undefined, coAccessByChunk: undefined };
 
   // The pinned layer is always-on (a bounded signal over explicit operator
-  // state), so the lookup is not config-gated; an index with no measured
-  // rows yields an empty map, reported as `undefined` by the module-wide
-  // omit-when-empty rule.
-  const pinnedByDoc = store.pinnedDocuments();
+  // state), so the lookup is not config-gated; a candidate set with no
+  // pinned document yields an empty set, reported as `undefined` by the
+  // module-wide omit-when-empty rule.
+  const candidateDocIds: number[] = [];
+  for (const id of ids) {
+    const chunk = input.hydrated.get(id);
+    if (chunk !== undefined) candidateDocIds.push(chunk.documentId);
+  }
+  const pinnedDocIds = store.pinnedDocumentIds(candidateDocIds);
 
   return {
     inboundLinkSources,
@@ -114,7 +118,7 @@ export function collectCandidateSignals(input: CandidateSignalsInput): Candidate
     tierByDoc: collectPageTier(input),
     reuseRateByChunk: collectReuseRates(input),
     eventTimeMsByChunk: input.temporalIntentActive ? collectDeclaredEventTimes(input) : undefined,
-    pinnedByDoc: pinnedByDoc.size > 0 ? pinnedByDoc : undefined,
+    pinnedDocIds: pinnedDocIds.size > 0 ? pinnedDocIds : undefined,
   };
 }
 

@@ -110,14 +110,14 @@ export interface RankerInputs {
    * `pinned` frontmatter state the indexer persisted into
    * `documents.pinned`, read through the store's pinned-documents lookup.
    *
-   * The three column states survive the trip: `true` earns the capped
-   * boost, `false` is a measured not-pinned, and a missing entry - a row
-   * the index has not re-examined since the column existed - is no
-   * statement at all and contributes nothing, reporting by absence in the
-   * breakdown exactly like an unwired layer. The absent map leaves every
-   * score and the breakdown shape byte-identical to pre-feature ranking.
+   * A document in the set earns the capped boost; every other one - a
+   * measured not-pinned row or one the index has not re-examined since
+   * the column existed - contributes nothing and reports by absence in
+   * the breakdown exactly like an unwired layer. An absent or empty set
+   * leaves every score and the breakdown shape byte-identical to
+   * pre-feature ranking.
    */
-  readonly pinnedByDoc?: ReadonlyMap<number, boolean>;
+  readonly pinnedDocIds?: ReadonlySet<number>;
 }
 
 /**
@@ -676,13 +676,11 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
     const reuseRate = clamp01(inputs.reuseRateByChunk?.get(c.chunkId) ?? 0);
     const reuseBoost = Math.min(REUSE_BOOST_CAP, reuseRate * REUSE_BOOST_CAP);
     // Pinned boost (t_f7bef96a): the operator/agent pin the indexer
-    // persisted. True earns the full cap, measured-false earns zero, and
-    // an unmeasured row is no statement at all - undefined, not zero, so
-    // the layer stays absent from `reasons` and `breakdown` exactly like
-    // an unwired one and a pre-column index ranks byte-identically.
-    const pinnedState = inputs.pinnedByDoc?.get(c.documentId);
+    // persisted. A pinned document earns the full cap; any other is
+    // undefined, not zero, so the layer stays absent from `reasons` and
+    // `breakdown` and an unpinned result keeps its pre-feature shape.
     const pinnedBoost =
-      pinnedState === true ? PINNED_BOOST_CAP : pinnedState === false ? 0 : undefined;
+      inputs.pinnedDocIds?.has(c.documentId) === true ? PINNED_BOOST_CAP : undefined;
     // Query-side temporal intent (t_58fc4720): proximity of the
     // candidate's EVENT time (declared validity start, else storage
     // mtime) to the window the query named, scaled into a capped

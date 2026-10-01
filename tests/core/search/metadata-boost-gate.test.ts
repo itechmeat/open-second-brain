@@ -172,7 +172,7 @@ test("a gated vector-only query ranks identically to boost-free ranking", () => 
 test("the pinned layer is not gated", () => {
   const inputs = {
     ...vectorOnlyInputs(),
-    pinnedByDoc: new Map<number, boolean>([[10, true]]),
+    pinnedDocIds: new Set<number>([10]),
   };
   const gated = rankResults(inputs, { ...BASE_OPTS, metadataBoostGate: true });
   const b = gated[0]!.breakdown!;

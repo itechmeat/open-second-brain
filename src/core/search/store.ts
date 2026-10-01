@@ -331,15 +331,13 @@ export class Store {
   }
 
   /**
-   * The pinned flag the index MEASURED for each document (v13), keyed by
-   * document id; see `documents.pinnedDocuments` for the three-state
-   * reasoning. This facade is the reader the ranking path consumes: the
-   * query-side signal collector hands the map to the ranker's pinned boost
-   * layer (t_f7bef96a), which reads an unmeasured row as no statement
-   * rather than as "not pinned".
+   * The candidate documents the index measured as pinned (v13); see
+   * `documents.pinnedDocumentIds`. This facade is the reader the ranking
+   * path consumes: the query-side signal collector hands the set to the
+   * ranker's pinned boost layer (t_f7bef96a).
    */
-  pinnedDocuments(): Map<number, boolean> {
-    return documents.pinnedDocuments(this.db);
+  pinnedDocumentIds(documentIds: ReadonlyArray<number>): Set<number> {
+    return documents.pinnedDocumentIds(this.db, documentIds);
   }
 
   /**

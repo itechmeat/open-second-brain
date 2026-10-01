@@ -432,7 +432,7 @@ function rankCandidates(input: AssemblyInput, rankCap: number): BrainSearchResul
       ...(signals.eventTimeMsByChunk !== undefined
         ? { eventTimeMsByChunk: signals.eventTimeMsByChunk }
         : {}),
-      ...(signals.pinnedByDoc !== undefined ? { pinnedByDoc: signals.pinnedByDoc } : {}),
+      ...(signals.pinnedDocIds !== undefined ? { pinnedDocIds: signals.pinnedDocIds } : {}),
     },
     {
       keywordWeight: opts.keywordWeight ?? config.keywordWeight,

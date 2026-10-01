@@ -28,7 +28,7 @@ import {
   LATEST_SCHEMA_VERSION,
   PINNED_COLUMN,
 } from "../../../src/core/search/schema.ts";
-import { pinnedDocuments, upsertDocument } from "../../../src/core/search/store/documents.ts";
+import { pinnedDocumentIds, upsertDocument } from "../../../src/core/search/store/documents.ts";
 import type { KeywordHit, SemanticHit, HydratedChunk } from "../../../src/core/search/store.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -77,7 +77,7 @@ test("the pinned cap is the reinforce-scale 0.05", () => {
 });
 
 test("a pinned document outranks its unpinned twin by exactly the cap", () => {
-  const boosted = rankResults({ ...twinInputs(), pinnedByDoc: new Map([[11, true]]) }, OPTS);
+  const boosted = rankResults({ ...twinInputs(), pinnedDocIds: new Set([11]) }, OPTS);
   expect(boosted[0]!.chunkId).toBe(2);
   const unpinned = boosted.find((r) => r.chunkId === 1)!;
   const pinned = boosted.find((r) => r.chunkId === 2)!;
@@ -93,7 +93,7 @@ test("the boost never overrides BM25's lead", () => {
       { chunkId: 1, documentId: 10, bm25: -5 },
       { chunkId: 2, documentId: 11, bm25: -1 },
     ] as KeywordHit[],
-    pinnedByDoc: new Map([[11, true]]),
+    pinnedDocIds: new Set([11]),
   };
   const ranked = rankResults(inputs, OPTS);
   expect(ranked[0]!.chunkId).toBe(1);
@@ -106,19 +106,16 @@ test("reasons and breakdown name the layer", () => {
   const boosted = rankResults(
     {
       ...twinInputs(),
-      pinnedByDoc: new Map([
-        [10, false],
-        [11, true],
-      ]),
+      pinnedDocIds: new Set([11]),
     },
     OPTS,
   );
   const pinned = boosted.find((r) => r.chunkId === 2)!;
   expect(pinned.reasons).toContain(`pinned: ${PINNED_BOOST_CAP.toFixed(3)}`);
   expect(pinned.breakdown!.pinned).toBe(PINNED_BOOST_CAP);
-  // The measured-unpinned twin reports a zero and no reason entry.
+  // The unpinned twin reports the layer by absence: no key, no reason.
   const unpinned = boosted.find((r) => r.chunkId === 1)!;
-  expect(unpinned.breakdown!.pinned).toBe(0);
+  expect(unpinned.breakdown!.pinned).toBeUndefined();
   expect(unpinned.reasons.some((r) => r.startsWith("pinned:"))).toBe(false);
   expect(unpinned.score).toBeCloseTo(
     rankResults(twinInputs(), OPTS).find((r) => r.chunkId === 1)!.score,
@@ -126,11 +123,11 @@ test("reasons and breakdown name the layer", () => {
   );
 });
 
-test("an unmeasured document contributes nothing and reports by absence", () => {
-  // A map that does not carry this document - a row the index has not
-  // re-examined since v13 - must rank byte-identically to no lookup at
-  // all, including the breakdown shape.
-  const withMap = rankResults({ ...twinInputs(), pinnedByDoc: new Map() }, OPTS);
+test("a document outside the pinned set contributes nothing and reports by absence", () => {
+  // A set that does not carry this document - measured unpinned, or a row
+  // the index has not re-examined since v13 - must rank byte-identically
+  // to no lookup at all, including the breakdown shape.
+  const withMap = rankResults({ ...twinInputs(), pinnedDocIds: new Set() }, OPTS);
   const withoutMap = rankResults(twinInputs(), OPTS);
   expect(withMap.map((r) => r.score)).toEqual(withoutMap.map((r) => r.score));
   for (const r of withMap) expect(r.breakdown!.pinned).toBeUndefined();
@@ -170,24 +167,25 @@ function doc(db: Database, path: string, pinned?: boolean): number {
   });
 }
 
-test("pinnedDocuments returns only measured rows, keyed by document id", () => {
+test("pinnedDocumentIds returns only the pinned rows among the candidates", () => {
   const db = openMigrated();
   const pinnedId = doc(db, "pinned.md", true);
+  const otherPinnedId = doc(db, "other-pinned.md", true);
   const unpinnedId = doc(db, "unpinned.md", false);
-  doc(db, "unmeasured.md");
-  expect(pinnedDocuments(db)).toEqual(
-    new Map([
-      [pinnedId, true],
-      [unpinnedId, false],
-    ]),
+  const unmeasuredId = doc(db, "unmeasured.md");
+  // A pinned document outside the candidate set is not read.
+  expect(pinnedDocumentIds(db, [pinnedId, unpinnedId, unmeasuredId, pinnedId])).toEqual(
+    new Set([pinnedId]),
   );
+  expect(pinnedDocumentIds(db, [otherPinnedId])).toEqual(new Set([otherPinnedId]));
   db.close(true);
 });
 
-test("pinnedDocuments on an index without measured rows is an empty map", () => {
+test("pinnedDocumentIds with no candidates or no pinned rows is an empty set", () => {
   const db = openMigrated();
-  doc(db, "lazy-backfill.md");
-  expect(pinnedDocuments(db)).toEqual(new Map());
+  const id = doc(db, "lazy-backfill.md");
+  expect(pinnedDocumentIds(db, [])).toEqual(new Set());
+  expect(pinnedDocumentIds(db, [id])).toEqual(new Set());
   db.close(true);
 });
 

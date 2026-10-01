@@ -278,25 +278,26 @@ export function upsertDocument(db: Database, doc: DocumentInput): number {
 }
 
 /**
- * The pinned flag the index MEASURED for each document, keyed by
- * document id (`documents.pinned`, v13; t_f7bef96a).
+ * The documents among `documentIds` the index MEASURED as pinned
+ * (`documents.pinned = 1`, v13; t_f7bef96a).
  *
- * A row whose column is NULL - one the v13 migration carried over and no
- * index run has re-examined yet - is absent from the map, for the same
- * rule `indexedVisibilityByPaths` states: only a measurement is a
- * statement the page made, and the ranker must not read an unmeasured
- * row as "not pinned". This is the reader the ranking path consumes; the
- * "nobody looked" state therefore survives the whole trip from column to
- * score.
+ * Scoped to the caller's candidates and to pinned rows only, so a search
+ * reads the handful of rows that can earn the boost rather than every
+ * measured row of the corpus. A measured-unpinned row and a row the v13
+ * migration carried over unmeasured both answer "not in the set": neither
+ * earns a boost, and neither is reported, so an unpinned result's shape
+ * is unchanged by the feature.
  */
-export function pinnedDocuments(db: Database): Map<number, boolean> {
+export function pinnedDocumentIds(db: Database, documentIds: ReadonlyArray<number>): Set<number> {
+  const out = new Set<number>();
+  if (documentIds.length === 0) return out;
   const rows = db
-    .query<{ id: number; pinned: number }, []>(
-      `SELECT id, ${PINNED_COLUMN} AS pinned FROM documents WHERE ${PINNED_COLUMN} IS NOT NULL`,
+    .query<{ id: number }, [number, string]>(
+      `SELECT id FROM documents WHERE ${PINNED_COLUMN} = ? ` +
+        `AND id IN (SELECT value FROM json_each(?))`,
     )
-    .all();
-  const out = new Map<number, boolean>();
-  for (const r of rows) out.set(r.id, r.pinned === PINNED_YES);
+    .all(PINNED_YES, JSON.stringify([...new Set(documentIds)]));
+  for (const r of rows) out.add(r.id);
   return out;
 }
 
