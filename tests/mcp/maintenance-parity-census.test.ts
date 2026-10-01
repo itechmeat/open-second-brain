@@ -59,6 +59,7 @@ import {
   MAINTENANCE_BUSY_THRESHOLD_MAX,
 } from "../../src/core/brain/maintenance/lane.ts";
 import { MAINTENANCE_JOURNAL_CAP } from "../../src/core/brain/maintenance/journal.ts";
+import { CUSTOM_TASK_MAX } from "../../src/core/brain/maintenance/custom-tasks.ts";
 import { isOperation } from "../../src/core/brain/safeguard.ts";
 import { ADMIN_TOOLS } from "../../src/mcp/brain/admin-tools.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
@@ -438,6 +439,9 @@ describe("the two surfaces refuse the same values, not only the same names", () 
   }
 
   test("retry_tasks longer than the lane has tasks is refused, not merely advertised", async () => {
+    // The schema advertises the widest list any install can need (the
+    // built-ins plus the custom-task cap); the handler refuses against
+    // the tasks THIS install declared, which is the number in the message.
     // `maxItems` on the schema is advertisement: no JSON-Schema validator
     // runs on the request path, and the unknown-argument guard checks
     // names rather than shapes. So the handler owes the check itself -
@@ -455,7 +459,8 @@ describe("the two surfaces refuse the same values, not only the same names", () 
       properties: { retry_tasks: { maxItems?: number } };
     };
     const advertised = schema.properties.retry_tasks.maxItems;
-    expect(advertised).toBe(LANE_TASKS.length);
+    expect(advertised).toBe(LANE_TASKS.length + CUSTOM_TASK_MAX);
+    const declared = LANE_TASKS.length;
     const res = (await server.handleRequest({
       jsonrpc: JSONRPC_VERSION,
       id: 2,
@@ -466,12 +471,12 @@ describe("the two surfaces refuse the same values, not only the same names", () 
           operation: "run",
           // Every entry a REAL lane task, so the only thing wrong with
           // the request is its length.
-          retry_tasks: Array.from({ length: advertised! + 1 }, () => LANE_TASK.dream),
+          retry_tasks: Array.from({ length: declared + 1 }, () => LANE_TASK.dream),
         },
       },
     })) as { error?: { code: number; message: string } };
     expect(res.error?.code).toBe(INVALID_PARAMS);
-    expect(res.error?.message).toContain(String(advertised));
+    expect(res.error?.message).toContain(`at most ${declared}`);
   });
 });
 
@@ -530,5 +535,113 @@ describe("an unknown retry name is refused by name on both surfaces", () => {
     expect(res.error?.code).toBe(INVALID_PARAMS);
     expect(message).toContain("dreams");
     for (const task of LANE_TASKS) expect(message).toContain(task);
+  });
+});
+
+/** Measured caps on the tool's text: the registry keeps every description short. */
+const TOOL_DESCRIPTION_MAX = 300;
+const RETRY_PROPERTY_DESCRIPTION_MAX = 160;
+
+describe("the tool's text stays inside its budget", () => {
+  test("description and retry_tasks property are measured, and name no configured task", () => {
+    const tool = ADMIN_TOOLS.find((t) => t.name === TOOL_NAME)!;
+    const schema = tool.inputSchema as {
+      properties: { retry_tasks: { description: string } };
+    };
+    const retry = schema.properties.retry_tasks.description;
+    expect(tool.description.length).toBeLessThan(TOOL_DESCRIPTION_MAX);
+    expect(retry.length).toBeLessThan(RETRY_PROPERTY_DESCRIPTION_MAX);
+    expect(tool.description).toContain("custom:<name>");
+    expect(retry).toContain("custom:<name>");
+    // Configured names vary per install; the schema is the same for all.
+    expect(/custom:(?!<name>)/.test(`${tool.description} ${retry}`)).toBe(false);
+  });
+});
+
+describe("declared custom tasks are retried and refused the same way on both surfaces", () => {
+  let tmp: string;
+  let vault: string;
+  let configPath: string;
+
+  beforeEach(async () => {
+    tmp = mkdtempSync(join(tmpdir(), "o2b-maint-custom-"));
+    vault = join(tmp, "vault");
+    mkdirSync(vault, { recursive: true });
+    configPath = join(tmp, "config.yaml");
+    writeFileSync(
+      configPath,
+      [
+        `vault: ${vault}`,
+        "agent_name: claude",
+        "maintenance_custom_tasks: true",
+        "maintenance_custom_tidy: exit 0",
+        "maintenance_custom_Bad: exit 0",
+      ].join("\n") + "\n",
+    );
+    const init = await runCli(["brain", "init", "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
+    });
+    expect(init.returncode).toBe(0);
+  });
+
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  async function callTool(args: Record<string, unknown>) {
+    const server = new MCPServer({ vault, configPath });
+    await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: PROTOCOL_VERSION },
+    });
+    return (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 2,
+      method: "tools/call",
+      params: { name: TOOL_NAME, arguments: args },
+    })) as {
+      error?: { code: number; message: string };
+      result?: { structuredContent?: Record<string, unknown>; content?: Array<{ text: string }> };
+    };
+  }
+
+  /** The tool's result object, from structured content or the text block. */
+  function toolPayload(res: Awaited<ReturnType<typeof callTool>>): Record<string, unknown> {
+    if (res.result?.structuredContent) return res.result.structuredContent;
+    return JSON.parse(res.result?.content?.[0]?.text ?? "{}") as Record<string, unknown>;
+  }
+
+  test("an undeclared custom name is refused by name on both surfaces", async () => {
+    const cli = await runCli(
+      ["brain", "maintenance", "run", "--retry", "custom:nope", "--vault", vault],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: configPath } },
+    );
+    expect(cli.returncode).toBe(2);
+    expect(cli.stderr).toContain("custom:nope");
+    expect(cli.stderr).toContain("custom:tidy");
+
+    const res = await callTool({ operation: "run", retry_tasks: ["custom:nope"] });
+    expect(res.error?.code).toBe(INVALID_PARAMS);
+    expect(res.error?.message ?? "").toContain("custom:nope");
+    expect(res.error?.message ?? "").toContain("custom:tidy");
+  });
+
+  test("a declared custom name is accepted, and config errors come back by name", async () => {
+    const cli = await runCli(
+      ["brain", "maintenance", "run", "--retry", "custom:tidy", "--vault", vault, "--json"],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: configPath } },
+    );
+    expect(cli.returncode).toBe(0);
+    expect(cli.stderr).toContain("custom task refused:");
+
+    const res = await callTool({ operation: "run", retry_tasks: ["custom:tidy"], force: true });
+    expect(res.error).toBeUndefined();
+    const payload = toolPayload(res);
+    const tasks = payload["tasks"] as Array<{ name: string; ok?: boolean }>;
+    expect(tasks.find((t) => t.name === "custom:tidy")?.ok).toBe(true);
+    const errors = payload["custom_task_errors"] as ReadonlyArray<string>;
+    expect(errors.some((e) => e.includes("Bad"))).toBe(true);
   });
 });

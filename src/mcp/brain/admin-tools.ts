@@ -27,24 +27,13 @@ import { assertVaultIdentityForWrite } from "../../core/brain/vault-identity.ts"
 import { loadSchemaPack } from "../../core/brain/schema-pack.ts";
 import { listSecrets } from "../../core/brain/secrets/store.ts";
 import { runWithSecret, SecretExecDeniedError } from "../../core/brain/secrets/exec.ts";
-import {
-  discoverBridges,
-  readDismissedBridges,
-  writeBridgeProposals,
-} from "../../core/brain/link-graph/bridge-discovery.ts";
-import {
-  detectCommunities,
-  materializeClusterNotes,
-} from "../../core/brain/link-graph/communities.ts";
-import { appendMetric } from "../../core/brain/metrics.ts";
 import type { ProgressSink } from "../../core/brain/progress.ts";
 import { requiredStringArg, toolSafeguard } from "./shared.ts";
 import { currentLease } from "../../core/brain/maintenance/lease.ts";
 import { listJournal, MAINTENANCE_JOURNAL_CAP } from "../../core/brain/maintenance/journal.ts";
-import { createLaneReindex } from "../../core/brain/maintenance/reindex-task.ts";
+import { CUSTOM_TASK_MAX, resolveCustomTasks } from "../../core/brain/maintenance/custom-tasks.ts";
+import { buildLaneTasks } from "../../core/brain/maintenance/lane-tasks.ts";
 import {
-  isLaneTask,
-  LANE_TASK,
   LANE_TASKS,
   MAINTENANCE_BUSY_MINUTES,
   MAINTENANCE_BUSY_MINUTES_MAX,
@@ -53,13 +42,12 @@ import {
   runMaintenance,
   type DailyWindow,
   type LaneTask,
+  type LaneTaskId,
 } from "../../core/brain/maintenance/lane.ts";
 import { writeFrontmatterAtomic } from "../../core/vault.ts";
 import { resolveNotePath } from "../../core/brain/note-path.ts";
 import type { FrontmatterMap } from "../../core/types.ts";
 import { parseFrontmatter } from "../../core/vault.ts";
-import { dream } from "../../core/brain/dream.ts";
-import { isoSecond } from "../../core/brain/time.ts";
 import { normalizeAgentArgument } from "../../core/agent-identity.ts";
 import { coerceInt, coerceStrList } from "../coerce.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
@@ -333,8 +321,10 @@ async function toolBrainSecrets(
 // ----- brain_maintenance (t_166d1226) ------------------------------------------
 
 /**
- * Bound for `retry_tasks`: naming more tasks than the lane dispatches is
- * a mistake, not a request.
+ * Advertised bound for `retry_tasks`: the widest list any install can
+ * need, the built-ins plus the custom-task cap. The handler refuses
+ * against the tasks THIS install registered, which can be fewer; naming
+ * more tasks than the lane dispatches is a mistake, not a request.
  *
  * The `maxItems` this feeds into the schema is ADVERTISEMENT, not
  * enforcement - nothing in the request path validates a JSON Schema.
@@ -344,7 +334,10 @@ async function toolBrainSecrets(
  * itself for that reason; the schema keeps the number so a client that
  * does validate refuses before spending a round trip.
  */
-const MAX_RETRY_TASKS = LANE_TASKS.length;
+const MAX_RETRY_TASKS = LANE_TASKS.length + CUSTOM_TASK_MAX;
+
+/** What `status` says when custom tasks are declared but the switch is off. */
+const CUSTOM_TASKS_OFF_NOTICE = "custom tasks declared but maintenance_custom_tasks is off";
 
 /** Quiet-window, lease-guarded heavy maintenance lane. */
 async function toolBrainMaintenance(
@@ -362,9 +355,11 @@ async function toolBrainMaintenance(
     // hardcoded at ten here, so an agent reading a lane that had refused
     // a task days ago could not see far enough back to find the failures
     // behind the streak - the one thing the journal is kept for.
+    const custom = resolveCustomTasks(ctx.configPath ?? undefined);
     return {
       lease: currentLease(ctx.vault, { now }),
       journal: listJournal(ctx.vault, coerceInt(args, "limit", 10, 1, MAINTENANCE_JOURNAL_CAP)),
+      ...(!custom.enabled && custom.declared > 0 ? { notice: CUSTOM_TASKS_OFF_NOTICE } : {}),
     };
   }
   let window: DailyWindow | undefined;
@@ -408,27 +403,6 @@ async function toolBrainMaintenance(
       MAINTENANCE_BUSY_THRESHOLD_MAX,
     ),
   };
-  // Refused BY NAME, exactly as the CLI refuses a `--retry` typo: a name
-  // this lane does not dispatch retries nothing, and silently accepting
-  // it would leave the caller reading a refusal it believed it had just
-  // asked past.
-  const requestedRetries = coerceStrList(args, "retry_tasks");
-  if (requestedRetries.length > MAX_RETRY_TASKS) {
-    throw new MCPError(
-      INVALID_PARAMS,
-      `brain_maintenance run: retry_tasks accepts at most ${MAX_RETRY_TASKS} entries ` +
-        `(one per lane task: ${LANE_TASKS.join(", ")}), got ${requestedRetries.length}`,
-    );
-  }
-  const unknownRetries = requestedRetries.filter((name) => !isLaneTask(name));
-  if (unknownRetries.length > 0) {
-    throw new MCPError(
-      INVALID_PARAMS,
-      `brain_maintenance run: retry_tasks names no lane task: ${unknownRetries.join(", ")} ` +
-        `(tasks: ${LANE_TASKS.join(", ")})`,
-    );
-  }
-  const retryTasks: ReadonlyArray<LaneTask> = requestedRetries.filter(isLaneTask);
   const agentArg = args["agent"];
   const agent =
     normalizeAgentArgument(typeof agentArg === "string" ? agentArg : null) ??
@@ -439,33 +413,49 @@ async function toolBrainMaintenance(
   });
   // Same per-task deadlines as the CLI lane (t_06784b8d): one fresh
   // cooperative safeguard per task, budget resolved per-op -> global
-  // -> default. The lane is the only surface that wants a guard PER
-  // TASK rather than per call, so it names the shared factory four
-  // times instead of holding one guard.
-  // A lane task IS one of the guarded operations, so the task name is the
-  // budget key. The union that used to be retyped here is gone: both
-  // surfaces read `LANE_TASK`, whose values come from `OPERATION`.
+  // -> default. A lane task IS one of the guarded operations, so the task
+  // name is the budget key.
   const laneSafeguard = (operation: LaneTask) => toolSafeguard(ctx, operation);
-  // The lane is a dispatcher over four long operations, not a fifth one,
-  // so it forwards the caller's sink to each task rather than counting
-  // tasks itself: every event names the operation that emitted it, which
-  // is what tells a reader which of the four the lane is currently in.
-  const laneProgress = onProgress ? { onProgress } : {};
-  // Spend parity with the CLI lane: the same builder decides whether the
-  // pass may embed (`maintenance_embeddings` opt-in plus a reachable
-  // provider), computes the preview inside the task - so a run a gate
-  // skips reads nothing and reports no banner - and receipts what the
-  // phase priced. `force_cost` bypasses a positive gate for this run and
-  // is recorded on the receipt when it did.
-  const reindexTask = createLaneReindex({
+  // The lane is a dispatcher over its tasks, not one more operation, so
+  // it forwards the caller's sink to each task rather than counting tasks
+  // itself: every event names the operation that emitted it.
+  //
+  // One shared builder serves this tool and the CLI verb, so the task
+  // bodies - and the spend rules of the reindex task: `maintenance_embeddings`
+  // opt-in, the preview computed inside the task so a gated-out run reports
+  // no banner, `force_cost` recorded on the receipt - cannot drift between
+  // the two surfaces. Declared custom tasks ride after the built-ins.
+  const lane = buildLaneTasks({
     vault: ctx.vault,
     ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
     searchConfig,
     now,
     forceCost: args["force_cost"] === true,
-    safeguard: () => laneSafeguard(LANE_TASK.reindex),
-    ...laneProgress,
+    safeguardFor: laneSafeguard,
+    ...(onProgress ? { onProgress } : {}),
   });
+  // Refused BY NAME, exactly as the CLI refuses a `--retry` typo: a name
+  // this lane does not dispatch retries nothing, and silently accepting
+  // it would leave the caller reading a refusal it believed it had just
+  // asked past. The bound is the tasks this install registered.
+  const requestedRetries = coerceStrList(args, "retry_tasks");
+  const registered = new Set<string>(lane.taskNames);
+  if (requestedRetries.length > registered.size) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `brain_maintenance run: retry_tasks accepts at most ${registered.size} entries ` +
+        `(one per registered task: ${lane.taskNames.join(", ")}), got ${requestedRetries.length}`,
+    );
+  }
+  const unknownRetries = requestedRetries.filter((name) => !registered.has(name));
+  if (unknownRetries.length > 0) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `brain_maintenance run: retry_tasks names no lane task: ${unknownRetries.join(", ")} ` +
+        `(tasks: ${lane.taskNames.join(", ")})`,
+    );
+  }
+  const retryTasks = requestedRetries as LaneTaskId[];
   const result = await runMaintenance(ctx.vault, {
     now,
     holder: `${agent}@${process.pid}`,
@@ -473,86 +463,17 @@ async function toolBrainMaintenance(
     busy,
     ...(retryTasks.length > 0 ? { retryTasks } : {}),
     ...(window !== undefined ? { window } : {}),
-    tasks: [
-      {
-        name: LANE_TASK.dream,
-        run: async () => {
-          dream(ctx.vault, { now, safeguard: laneSafeguard(LANE_TASK.dream), ...laneProgress });
-        },
-      },
-      reindexTask.task,
-      // Same lane contract as the CLI verb (link-recall-intelligence):
-      // bridges and clusters run after reindex so they see fresh
-      // edges; both are fail-soft without embeddings, and a metrics
-      // write failure never fails the task.
-      {
-        name: LANE_TASK.bridges,
-        run: async () => {
-          const store = await Store.open(searchConfig, { mode: "read" });
-          try {
-            const report = discoverBridges(store, {
-              dismissed: readDismissedBridges(ctx.vault),
-              safeguard: laneSafeguard(LANE_TASK.bridges),
-              ...laneProgress,
-            });
-            writeBridgeProposals(ctx.vault, report, { now });
-            try {
-              appendMetric(ctx.vault, {
-                surface: "bridge_discovery",
-                runAt: isoSecond(now),
-                payload: {
-                  proposals: report.proposals.length,
-                  scanned_candidates: report.scannedCandidates,
-                  vec_available: report.vecAvailable,
-                  lane: true,
-                },
-              });
-            } catch {
-              // Metrics are observability, not correctness.
-            }
-          } finally {
-            await store.close();
-          }
-        },
-      },
-      {
-        name: LANE_TASK.clusters,
-        run: async () => {
-          const store = await Store.open(searchConfig, { mode: "read" });
-          try {
-            const communities = detectCommunities(store, {
-              safeguard: laneSafeguard(LANE_TASK.clusters),
-              ...laneProgress,
-            });
-            const materialized = materializeClusterNotes(ctx.vault, communities, { store, now });
-            try {
-              appendMetric(ctx.vault, {
-                surface: "communities",
-                runAt: isoSecond(now),
-                payload: {
-                  communities: communities.length,
-                  sizes: communities.map((c) => c.size),
-                  written: materialized.written.length,
-                  removed: materialized.removed.length,
-                  lane: true,
-                },
-              });
-            } catch {
-              // Metrics are observability, not correctness.
-            }
-          } finally {
-            await store.close();
-          }
-        },
-      },
-    ],
+    tasks: lane.tasks,
   });
   // The run-level spend block, the CLI JSON payload's shape.
-  const spend = reindexTask.spendBlock(result.tasks);
+  const spend = lane.reindex.spendBlock(result.tasks);
   return {
     verdict: result.verdict,
     tasks: result.tasks,
     ...(spend !== undefined ? { spend } : {}),
+    // Named, never dropped: a refused declaration journals nothing, and
+    // the valid tasks still ran.
+    ...(lane.custom.errors.length > 0 ? { custom_task_errors: lane.custom.errors } : {}),
   };
 }
 
@@ -634,7 +555,7 @@ export const ADMIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_maintenance",
     description:
-      "Quiet-window, lease-guarded maintenance lane: run executes dream, reindex, bridges, clusters behind window, busy, pressure and streak gates; status renders lease and journal. Reindex is keyword-only unless config maintenance_embeddings is true; then spend is announced, receipted and cost-gated.",
+      "Quiet-window, lease-guarded maintenance lane: run executes dream, reindex, bridges, clusters and declared custom:<name> tasks behind window, busy, pressure and streak gates; status renders lease and journal. Reindex embeds only with config maintenance_embeddings.",
     inputSchema: {
       type: "object",
       properties: {
@@ -652,7 +573,7 @@ export const ADMIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "array",
           items: { type: "string" },
           maxItems: MAX_RETRY_TASKS,
-          description: `Tasks to retry past their streak refusal, this run only; gates still apply. Known: ${LANE_TASKS.join(", ")}. An unknown name is refused.`,
+          description: `Tasks to retry past their streak refusal, this run only; gates still apply. Known: ${LANE_TASKS.join(", ")}, custom:<name>. Unknown names are refused.`,
         },
         force_cost: {
           type: "boolean",
