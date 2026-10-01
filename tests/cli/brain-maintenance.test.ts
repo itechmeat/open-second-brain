@@ -235,6 +235,20 @@ describe("run --cron-template prints the lane recipe and writes nothing", () => 
     expect(launchd.stderr).toContain("systemd");
   });
 
+  test("a lane-run flag beside --cron-template is the usage code, named, and writes nothing", async () => {
+    const forced = await recipe(["--force"]);
+    expect(forced.returncode).toBe(MAINTENANCE_EXIT.usage);
+    expect(forced.stderr).toContain(
+      "--cron-template prints the recipe only and does not take --force (a lane-run flag)",
+    );
+    expect(forced.stdout).toBe("");
+    const several = await recipe(["--json", "--retry", "dream"]);
+    expect(several.returncode).toBe(MAINTENANCE_EXIT.usage);
+    expect(several.stderr).toContain("--retry, --json");
+    expect(currentLease(vault, { name: MAINTENANCE_LEASE_NAME, now: new Date() })).toBeNull();
+    expect(listJournal(vault, MAINTENANCE_JOURNAL_CAP)).toEqual([]);
+  });
+
   test("the window is validated and carried into the printed body", async () => {
     const bad = await recipe(["--window", "25-3"]);
     expect(bad.returncode).toBe(MAINTENANCE_EXIT.usage);

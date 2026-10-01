@@ -108,6 +108,18 @@ export const MAINTENANCE_EXIT = Object.freeze({
 
 export type MaintenanceExit = (typeof MAINTENANCE_EXIT)[keyof typeof MAINTENANCE_EXIT];
 
+/** Flags that shape a lane run and have no place in the printed recipe. */
+const RUN_ONLY_FLAGS = [
+  "force",
+  "retry",
+  "force-cost",
+  "busy-minutes",
+  "busy-threshold",
+  "agent",
+  "progress",
+  "json",
+] as const;
+
 /** A built-in task's safeguard timeout: the one row whose outcome is unmeasured. */
 function builtInTimeout(t: MaintenanceTaskResult): boolean {
   return t.timed_out === true && !isCustomLaneTask(t.name);
@@ -171,6 +183,24 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
   if (!cronTemplate && (intervalRaw !== undefined || formatRaw !== undefined)) {
     process.stderr.write(
       `brain maintenance ${op}: --interval and --format apply only with --cron-template\n`,
+    );
+    return MAINTENANCE_EXIT.usage;
+  }
+  // The reverse rule: the recipe has no place for a lane-run flag, so
+  // printing it with one would schedule something other than was asked.
+  const runOnly = cronTemplate
+    ? RUN_ONLY_FLAGS.filter((name) => {
+        const value = flags[name];
+        return (
+          value !== undefined && value !== false && !(Array.isArray(value) && value.length === 0)
+        );
+      })
+    : [];
+  if (runOnly.length > 0) {
+    process.stderr.write(
+      "brain maintenance run: --cron-template prints the recipe only and does not take " +
+        runOnly.map((name) => `--${name}`).join(", ") +
+        " (a lane-run flag)\n",
     );
     return MAINTENANCE_EXIT.usage;
   }
