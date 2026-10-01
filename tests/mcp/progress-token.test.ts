@@ -34,7 +34,6 @@ import {
 import {
   PROGRESS_META_KEY,
   PROGRESS_NOTIFICATION_METHOD,
-  progressRefusal,
   withProgressRefusal,
 } from "../../src/mcp/progress.ts";
 import {
@@ -360,22 +359,10 @@ describe("HTTP refuses a progress token by name", () => {
   });
 });
 
-describe("a refusal merges into the _meta a result already carries", () => {
-  const ERROR_META_KEY = "open-second-brain/error";
-  const errorMeta = { schema: "o2b.error.v1", code: "internal_error" };
-
-  test("an error result keeps its code beside the refusal", () => {
-    const failed = {
-      content: [{ type: "text", text: "boom" }],
-      isError: true,
-      _meta: { [ERROR_META_KEY]: errorMeta },
-    };
-    const refusal = progressRefusal("tok-merge", PROGRESS_REASON.transportSingleResponse);
-    const merged = withProgressRefusal(failed, refusal);
-    expect(merged["_meta"]).toEqual({ [ERROR_META_KEY]: errorMeta, [PROGRESS_META_KEY]: refusal });
-    expect(merged["content"]).toEqual(failed.content);
-  });
-
+describe("withProgressRefusal", () => {
+  // The merge beside an error code is covered end to end by
+  // tool-error-envelope.test.ts; this pins the no-refusal identity, which
+  // keeps a call that asked for no progress byte-identical.
   test("no refusal returns the very same result object", () => {
     const ok = { content: [], isError: false };
     expect(withProgressRefusal(ok, undefined)).toBe(ok);
