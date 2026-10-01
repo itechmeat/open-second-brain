@@ -35,23 +35,22 @@ import { redactRawOutput } from "../../redactor.ts";
 import { shellArgv } from "../../reliability/command-bridge.ts";
 import { SafeguardAbortError, SafeguardTimeoutError } from "../safeguard.ts";
 import { MAINTENANCE_LEASE_TTL_MS, type MaintenanceTask } from "./lane.ts";
+import {
+  CUSTOM_TASK_NAME_PATTERN,
+  CUSTOM_TASK_PREFIX,
+  type CustomLaneTask,
+} from "./custom-task-id.ts";
 
-export const CUSTOM_TASK_PREFIX = "custom:";
-export const CUSTOM_TASK_NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
+export {
+  CUSTOM_TASK_NAME_PATTERN,
+  CUSTOM_TASK_PREFIX,
+  type CustomLaneTask,
+  isCustomLaneTask,
+} from "./custom-task-id.ts";
+
 /** Each declared task adds a journal row per pass against the 500-row cap. */
 export const CUSTOM_TASK_MAX = 8;
 export const CUSTOM_TASK_TIMEOUT_DEFAULT_SECONDS = 600;
-
-export type CustomLaneTask = `custom:${string}`;
-
-/** Whether `value` is a well-formed custom identity (not whether it is declared). */
-export function isCustomLaneTask(value: unknown): value is CustomLaneTask {
-  return (
-    typeof value === "string" &&
-    value.startsWith(CUSTOM_TASK_PREFIX) &&
-    CUSTOM_TASK_NAME_PATTERN.test(value.slice(CUSTOM_TASK_PREFIX.length))
-  );
-}
 
 export interface CustomTaskSpec {
   readonly name: string;

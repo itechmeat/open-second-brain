@@ -67,7 +67,7 @@ import {
   type MaintenanceVerdict,
 } from "./journal.ts";
 import { HOST_PRESSURE, measureHostPressure, type HostPressureReading } from "./host-pressure.ts";
-import { isCustomLaneTask, type CustomLaneTask } from "./custom-tasks.ts";
+import { isCustomLaneTask, type CustomLaneTask } from "./custom-task-id.ts";
 
 /** The persisted model-spend receipt; defined beside the row it rides. */
 export type { MaintenanceSpendReceipt } from "./journal.ts";

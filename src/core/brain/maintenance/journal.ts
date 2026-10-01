@@ -21,7 +21,7 @@ import {
 import { DERIVED_STORE_DIR } from "../path-constants.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import type { HostPressureUnmeasurableReason } from "./host-pressure.ts";
-import { isCustomLaneTask } from "./custom-tasks.ts";
+import { isCustomLaneTask } from "./custom-task-id.ts";
 import { renameWithRetry } from "../../fs-atomic.ts";
 
 export const MAINTENANCE_JOURNAL_CAP = 500;
