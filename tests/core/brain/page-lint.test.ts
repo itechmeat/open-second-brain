@@ -16,6 +16,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  NEAR_DUPLICATE_CODE,
+  NEAR_DUPLICATE_JACCARD,
   PAGE_LINT_KEY,
   PAGE_LINT_MAX_FINDINGS,
   PAGE_LINT_SKIP_REASON,
@@ -25,6 +27,7 @@ import {
   lintWrittenPages,
   pageLintField,
   type LintContext,
+  type NearDuplicateCandidate,
 } from "../../../src/core/brain/page-lint.ts";
 import { LINT_CONSOLIDATE_KIND } from "../../../src/core/brain/lint-consolidate.ts";
 import { loadSchemaPack } from "../../../src/core/brain/schema-pack.ts";
@@ -49,6 +52,11 @@ function writeNote(rel: string, text: string): string {
   mkdirSync(join(abs, ".."), { recursive: true });
   writeFileSync(abs, text, "utf8");
   return rel;
+}
+
+/** The report's near-duplicate findings, filtered by the one detector code. */
+function nearDuplicateFindings(report: ReturnType<typeof lintWrittenPages>) {
+  return report.findings.filter((f) => f.code === NEAR_DUPLICATE_CODE);
 }
 
 function writePref(slug: string, fields: Record<string, string> = {}): void {
@@ -212,6 +220,7 @@ describe("lintPagesWithContext - one page's failure is not the report's", () => 
     return {
       basenames: new Set<string>(),
       vocabulary: loadSchemaPack(vault).vocabulary,
+      nearDuplicateCandidates: new Map<string, ReadonlyArray<NearDuplicateCandidate>>(),
       mergedLinks: {
         resolve() {
           throw reason;
@@ -296,5 +305,211 @@ describe("pageLintField", () => {
   test("null contributes no key whatsoever", () => {
     expect(pageLintField(null)).toEqual({});
     expect(PAGE_LINT_KEY in pageLintField(null)).toBe(false);
+  });
+});
+
+/**
+ * The near-duplicate detector (t_d30c0548). A write that closely matches an
+ * existing page in the SAME directory and the SAME composite scope bucket is
+ * reported on the receipt as a `near-duplicate` finding - never gating the
+ * write, never touching frontmatter, and never normalizing the body. The
+ * comparison reuses the shared `tokenise`/`jaccard` primitives against the
+ * named NEAR_DUPLICATE_JACCARD constant.
+ */
+describe("lintWrittenPages - near-duplicate findings", () => {
+  const ALPHA_BODY = "alpha beta gamma delta epsilon";
+
+  function alphaNote(title: string, frontmatterLines: string[] = []): string {
+    const lines = ["---", `title: ${title}`, ...frontmatterLines, "---", "", ALPHA_BODY, ""];
+    return lines.join("\n");
+  }
+
+  test("NEAR_DUPLICATE_JACCARD is the designed threshold, a named constant", () => {
+    expect(NEAR_DUPLICATE_JACCARD).toBe(0.8);
+  });
+
+  test("a write closely matching a same-directory same-scope page yields the finding", () => {
+    const first = writeNote("Notes/Alpha.md", alphaNote("Alpha"));
+    const rel = writeNote("Notes/Beta.md", alphaNote("Beta"));
+    const report = lintWrittenPages(vault, [rel]);
+    const findings = nearDuplicateFindings(report);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      severity: "warning",
+      page: rel,
+      path: first,
+    });
+    // Evidence is in the message: the pair and the exact score.
+    expect(findings[0]!.message).toContain(first);
+    expect(findings[0]!.message).toContain("jaccard=1.000");
+    // An advisory with a content-judgement repair carries no registered exit.
+    expect(findings[0]!.next_command).toBeUndefined();
+  });
+
+  test("a resemblance at exactly the threshold is reported, carrying its score", () => {
+    // 4 shared tokens over a 5-token union is exactly 4/5 = 0.8.
+    writeNote("Notes/Alpha.md", `---\ntitle: Alpha\n---\n\n${ALPHA_BODY}\n`);
+    const rel = writeNote("Notes/Beta.md", "---\ntitle: Beta\n---\n\nalpha beta gamma delta\n");
+    const report = lintWrittenPages(vault, [rel]);
+    const findings = nearDuplicateFindings(report);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.message).toContain("jaccard=0.800");
+  });
+
+  test("a below-threshold resemblance yields nothing", () => {
+    writeNote("Notes/Alpha.md", alphaNote("Alpha"));
+    const rel = writeNote("Notes/Beta.md", "---\ntitle: Beta\n---\n\nalpha zeta eta theta iota\n");
+    const report = lintWrittenPages(vault, [rel]);
+    expect(report.findings).toEqual([]);
+    expect(pageLintField(report)).toEqual({});
+  });
+
+  test("a same-body page in a different directory is not a candidate", () => {
+    writeNote("Elsewhere/Alpha.md", alphaNote("Alpha"));
+    const rel = writeNote("Notes/Beta.md", alphaNote("Beta"));
+    const report = lintWrittenPages(vault, [rel]);
+    expect(report.findings).toEqual([]);
+  });
+
+  test("a same-body page in a different scope bucket is not a candidate", () => {
+    writeNote("Notes/Alpha.md", alphaNote("Alpha", ["session: atlas"]));
+    const rel = writeNote("Notes/Beta.md", alphaNote("Beta"));
+    const report = lintWrittenPages(vault, [rel]);
+    expect(report.findings).toEqual([]);
+  });
+
+  test("a same-body page in the SAME scope bucket is a candidate", () => {
+    writeNote("Notes/Alpha.md", alphaNote("Alpha", ["session: atlas"]));
+    const rel = writeNote("Notes/Beta.md", alphaNote("Beta", ["session: atlas"]));
+    const report = lintWrittenPages(vault, [rel]);
+    expect(nearDuplicateFindings(report)).toHaveLength(1);
+  });
+
+  test("frontmatter is never compared: differing frontmatter does not suppress the finding", () => {
+    // Same authored body, different non-scope frontmatter. (`owner` would
+    // be a REAL difference - it is a scope axis - so it must not appear here.)
+    writeNote("Notes/Alpha.md", `---\ntitle: Alpha\ntype: note\n---\n\n${ALPHA_BODY}\n`);
+    const rel = writeNote("Notes/Beta.md", alphaNote("Beta"));
+    const report = lintWrittenPages(vault, [rel]);
+    expect(nearDuplicateFindings(report)).toHaveLength(1);
+  });
+
+  test("frontmatter is never compared: identical frontmatter alone creates no finding", () => {
+    writeNote("Notes/Alpha.md", "---\ntitle: Same\ntype: note\n---\n\none kind of prose\n");
+    const rel = writeNote(
+      "Notes/Beta.md",
+      "---\ntitle: Same\ntype: note\n---\n\nanother kind entirely\n",
+    );
+    const report = lintWrittenPages(vault, [rel]);
+    expect(report.findings).toEqual([]);
+  });
+
+  test("the written page never resembles itself", () => {
+    const rel = writeNote("Notes/Alpha.md", alphaNote("Alpha"));
+    const report = lintWrittenPages(vault, [rel]);
+    expect(report.findings).toEqual([]);
+  });
+
+  test("two near-identical pages written in one call report each other", () => {
+    const first = writeNote("Notes/Alpha.md", alphaNote("Alpha"));
+    const second = writeNote("Notes/Beta.md", alphaNote("Beta"));
+    const report = lintWrittenPages(vault, [first, second]);
+    const pairs = nearDuplicateFindings(report)
+      .map((f) => `${f.page} -> ${f.path}`)
+      .toSorted();
+    expect(pairs).toEqual([`${first} -> ${second}`, `${second} -> ${first}`]);
+  });
+
+  test("a candidate that cannot be read is excluded, not a lint failure", () => {
+    // A DIRECTORY named like a page: reading it throws EISDIR. It cannot
+    // provide evidence, so it is not a candidate - the same posture the
+    // write-conflict advisory takes toward corrupt preference files.
+    mkdirSync(join(vault, "Notes", "Stuck.md"), { recursive: true });
+    const rel = writeNote("Notes/Beta.md", alphaNote("Beta"));
+    const report = lintWrittenPages(vault, [rel]);
+    expect(report.unavailable).toBeUndefined();
+    expect(report.findings).toEqual([]);
+  });
+
+  test("a candidate over the artifact byte cap is not read as a candidate", () => {
+    const filler = `${ALPHA_BODY} `.repeat(ARTIFACT_MAX_BYTES / ALPHA_BODY.length + 1);
+    writeNote("Notes/Alpha.md", `---\ntitle: Alpha\n---\n\n${filler}\n`);
+    const rel = writeNote("Notes/Beta.md", alphaNote("Beta"));
+    const report = lintWrittenPages(vault, [rel]);
+    expect(report.unavailable).toBeUndefined();
+    expect(report.findings).toEqual([]);
+    // The skip list stays reserved for WRITTEN pages.
+    expect(report.skipped).toEqual([]);
+  });
+
+  test("a page spelled outside the vault collects no candidates from outside it", () => {
+    // The write kernel refuses traversal, so this spelling can only reach
+    // the lint from a caller; the candidate walk must still stop at the
+    // vault boundary instead of reading the vault's parent directory.
+    const outside = mkdtempSync(join(tmpdir(), "o2b-page-lint-out-"));
+    try {
+      const alphaNoteText = alphaNote("Sibling");
+      writeFileSync(join(outside, "Sibling.md"), alphaNoteText, "utf8");
+      writeFileSync(join(outside, "Escaped.md"), alphaNoteText, "utf8");
+      // vault/../Escaped.md IS the file written above - the same bytes as
+      // its neighbor, yet no near-duplicate may be reported about them.
+      const report = lintWrittenPages(vault, ["../Escaped.md"]);
+      expect(report.unavailable).toBeUndefined();
+      expect(report.findings.filter((f) => f.code === NEAR_DUPLICATE_CODE)).toEqual([]);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * A caller already holding the indexes can lint with them - including the
+ * near-duplicate candidate index, so the seam stays honest about what is
+ * precomputed per call versus read per page.
+ */
+describe("lintPagesWithContext - caller-supplied near-duplicate candidates", () => {
+  test("a candidate in the index drives the same finding", () => {
+    const rel = writeNote(
+      "Notes/Beta.md",
+      "---\ntitle: Beta\n---\n\nalpha beta gamma delta epsilon\n",
+    );
+    const candidates: ReadonlyArray<NearDuplicateCandidate> = [
+      {
+        page: "Notes/Alpha.md",
+        scopeKey: "",
+        tokens: new Set(["alpha", "beta", "gamma", "delta", "epsilon"]),
+      },
+    ];
+    const ctx: LintContext = {
+      basenames: new Set<string>(),
+      vocabulary: loadSchemaPack(vault).vocabulary,
+      nearDuplicateCandidates: new Map([["Notes", candidates]]),
+      mergedLinks: { resolve: () => ({ canonical: null, unresolvable: null }) },
+    };
+    const report = lintPagesWithContext(vault, ctx, [rel]);
+    const findings = report.findings.filter((f) => f.code === NEAR_DUPLICATE_CODE);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ page: rel, path: "Notes/Alpha.md" });
+  });
+
+  test("a written page is never its own candidate, even when indexed", () => {
+    const rel = writeNote(
+      "Notes/Beta.md",
+      "---\ntitle: Beta\n---\n\nalpha beta gamma delta epsilon\n",
+    );
+    const candidates: ReadonlyArray<NearDuplicateCandidate> = [
+      {
+        page: rel,
+        scopeKey: "",
+        tokens: new Set(["alpha", "beta", "gamma", "delta", "epsilon"]),
+      },
+    ];
+    const ctx: LintContext = {
+      basenames: new Set<string>(),
+      vocabulary: loadSchemaPack(vault).vocabulary,
+      nearDuplicateCandidates: new Map([["Notes", candidates]]),
+      mergedLinks: { resolve: () => ({ canonical: null, unresolvable: null }) },
+    };
+    expect(lintPagesWithContext(vault, ctx, [rel]).findings).toEqual([]);
   });
 });
