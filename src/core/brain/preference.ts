@@ -1692,8 +1692,13 @@ function parseConfidenceValue(meta: Record<string, unknown>, path: string): numb
  * Coerce `pinned` to boolean with a hard default of `false`. Accepts
  * the literal string forms ("true"/"false") emitted by the simple
  * formatter and the native boolean if a richer parser ever lands.
+ *
+ * Exported (t_f7bef96a) so the search indexer persists the SAME coercion
+ * into `documents.pinned` instead of duplicating it: one rule, one
+ * spelling, so the ranking signal and the preference flows can never
+ * disagree about what a note's `pinned` frontmatter says.
  */
-function parsePinned(meta: Record<string, unknown>): boolean {
+export function parsePinned(meta: Record<string, unknown>): boolean {
   const v = meta["pinned"];
   if (v === undefined || v === null || v === "") return false;
   if (typeof v === "boolean") return v;

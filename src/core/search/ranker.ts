@@ -105,6 +105,19 @@ export interface RankerInputs {
    * mtime" rule `temporal-bridge.ts` applies.
    */
   readonly eventTimeMsByChunk?: ReadonlyMap<number, number>;
+  /**
+   * Optional pinned flag per documentId (t_f7bef96a): the per-note
+   * `pinned` frontmatter state the indexer persisted into
+   * `documents.pinned`, read through the store's pinned-documents lookup.
+   *
+   * The three column states survive the trip: `true` earns the capped
+   * boost, `false` is a measured not-pinned, and a missing entry - a row
+   * the index has not re-examined since the column existed - is no
+   * statement at all and contributes nothing, reporting by absence in the
+   * breakdown exactly like an unwired layer. The absent map leaves every
+   * score and the breakdown shape byte-identical to pre-feature ranking.
+   */
+  readonly pinnedByDoc?: ReadonlyMap<number, boolean>;
 }
 
 /**
@@ -136,6 +149,17 @@ export const REUSE_BOOST_CAP = 0.06;
  * offset, and the layer would be decorative.
  */
 export const TEMPORAL_INTENT_BOOST_CAP = 0.06;
+/**
+ * Explicit operator/agent pin (t_f7bef96a): a document whose frontmatter
+ * carries `pinned: true`, persisted by the indexer into
+ * `documents.pinned`. Set level with the link cap - the reinforce scale -
+ * because it is the same kind of signal: a bounded nudge over an
+ * already-relevant candidate set, never an override of the relevance term
+ * (BM25's lead is an order of magnitude above it). Always-on rather than
+ * config-gated: it is a bounded signal over explicit operator state, not
+ * a behaviour mode, and it is inspectable through the reason strings.
+ */
+export const PINNED_BOOST_CAP = 0.05;
 
 /** Freshness-trend multipliers on the relevance portion. */
 const TREND_MULTIPLIERS: ReadonlyMap<string, number> = new Map([
@@ -298,6 +322,7 @@ function buildReasons(parts: {
   activationBoost?: number;
   coAccessBoost?: number;
   reuseBoost?: number;
+  pinnedBoost?: number;
   trend?: string;
   trendMul?: number;
   sessionFocus?: number;
@@ -320,6 +345,9 @@ function buildReasons(parts: {
   }
   if (parts.reuseBoost && parts.reuseBoost > 0) {
     reasons.push(`observed_reuse: ${fmt(parts.reuseBoost)}`);
+  }
+  if (parts.pinnedBoost && parts.pinnedBoost > 0) {
+    reasons.push(`pinned: ${fmt(parts.pinnedBoost)}`);
   }
   if (parts.trend !== undefined && parts.trendMul !== undefined && parts.trendMul !== 1) {
     reasons.push(`freshness_trend: ${parts.trend} x${fmt(parts.trendMul)}`);
@@ -363,6 +391,7 @@ function buildBreakdown(parts: {
   activationBoost?: number;
   coAccessBoost?: number;
   reuseBoost?: number;
+  pinnedBoost?: number;
   trendMul?: number;
   sessionFocus?: number;
   rrf?: number;
@@ -376,6 +405,7 @@ function buildBreakdown(parts: {
     activation: parts.activationBoost ?? 0,
     coAccess: parts.coAccessBoost ?? 0,
     reuse: parts.reuseBoost ?? 0,
+    ...(parts.pinnedBoost !== undefined ? { pinned: parts.pinnedBoost } : {}),
     link: parts.linkBoost,
     recency: parts.recency,
     tier: parts.tierMul,
@@ -608,6 +638,14 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
     // observed-use verdicts exist.
     const reuseRate = clamp01(inputs.reuseRateByChunk?.get(c.chunkId) ?? 0);
     const reuseBoost = Math.min(REUSE_BOOST_CAP, reuseRate * REUSE_BOOST_CAP);
+    // Pinned boost (t_f7bef96a): the operator/agent pin the indexer
+    // persisted. True earns the full cap, measured-false earns zero, and
+    // an unmeasured row is no statement at all - undefined, not zero, so
+    // the layer stays absent from `reasons` and `breakdown` exactly like
+    // an unwired one and a pre-column index ranks byte-identically.
+    const pinnedState = inputs.pinnedByDoc?.get(c.documentId);
+    const pinnedBoost =
+      pinnedState === true ? PINNED_BOOST_CAP : pinnedState === false ? 0 : undefined;
     // Query-side temporal intent (t_58fc4720): proximity of the
     // candidate's EVENT time (declared validity start, else storage
     // mtime) to the window the query named, scaled into a capped
@@ -628,6 +666,7 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
         activationBoost +
         coAccessBoost +
         reuseBoost +
+        (pinnedBoost ?? 0) +
         (temporalBoost ?? 0) +
         sessionFocus,
     );
@@ -655,6 +694,7 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
         searchType: c.searchType,
         reasons: buildReasons({
           reuseBoost,
+          pinnedBoost,
           keywordScore: c.keywordScore,
           semanticScore: semanticEnabled ? c.semanticScore : 0,
           linkBoost,
@@ -670,6 +710,7 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
         }),
         breakdown: buildBreakdown({
           reuseBoost,
+          pinnedBoost,
           keywordScore: c.keywordScore,
           semanticScore: semanticEnabled ? c.semanticScore : 0,
           linkBoost,

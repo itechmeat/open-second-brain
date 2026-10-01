@@ -31,6 +31,14 @@ export interface ScoreBreakdown {
   readonly coAccess: number;
   /** Observed-reuse boost (t_65588d8b); 0 when no verdicts apply. */
   readonly reuse: number;
+  /**
+   * Pinned-document boost (t_f7bef96a): the capped layer over the
+   * `documents.pinned` flag. 0 for a measured not-pinned document;
+   * absent - not zero - when the row was never measured (a pre-column
+   * index) or the layer was not wired, so "not pinned" and "nobody
+   * looked" stay distinguishable here exactly as they are in the store.
+   */
+  readonly pinned?: number;
   readonly link: number;
   readonly recency: number;
   readonly tier: number;

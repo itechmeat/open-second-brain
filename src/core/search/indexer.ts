@@ -42,6 +42,7 @@ import {
 } from "./embeddings/signature.ts";
 import { resolveEventAnchor } from "./event-anchor.ts";
 import { extractLinks } from "./links.ts";
+import { resolveDocumentEventTimeWindow } from "./pipeline/event-time.ts";
 import {
   probeProvider,
   PROVIDER_PROBE,
@@ -52,6 +53,7 @@ import {
 import { extractFrontmatterRelations } from "../graph/frontmatter-relations.ts";
 import { loadSchemaPack, type SchemaPack } from "../brain/schema-pack.ts";
 import { tieredFieldsForKind } from "../brain/frontmatter-tiers.ts";
+import { parsePinned } from "../brain/preference.ts";
 import { normalizeSchemaToken } from "../brain/schema-vocab.ts";
 import type { DegradationNotice } from "../integrity/degradation.ts";
 import { parseFrontmatterTextWithNotices } from "../vault.ts";
@@ -103,6 +105,7 @@ import type {
   ResolvedSearchConfig,
   VisibilityHonestyFinding,
 } from "./types.ts";
+import type { ValidityWindow } from "./validity.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN, pageVisibility } from "../graph/visibility.ts";
 import { closeDatabase } from "../sqlite-close.ts";
 import { renameWithRetry, unlinkWithRetry } from "../fs-atomic.ts";
@@ -278,6 +281,30 @@ function aliasesFromFrontmatter(frontmatter: Record<string, unknown>): string[] 
   const raw = frontmatter["aliases"];
   if (!Array.isArray(raw)) return [];
   return raw.filter((v): v is string => typeof v === "string");
+}
+
+/**
+ * The persisted half of the shared event-time resolution (v13,
+ * t_9e1a4b3f): the two column bounds for the window
+ * `resolveDocumentEventTimeWindow` resolved under the rung order the
+ * query side applies.
+ *
+ * A null window (nothing declared anywhere) and an INVALID declared
+ * window (a `valid_from`/`valid_until` that failed to parse) both persist
+ * null/null - the unmeasured state, because that is exactly how
+ * `eventTimeInRange` judges both: by storage mtime. Persisting anything
+ * else for a broken declaration would make the census disagree with what
+ * queries actually apply. A null SIDE on a valid window is a declared
+ * open one, and is persisted as the null it is.
+ */
+function persistedEventTimeBounds(window: ValidityWindow | null): {
+  eventTimeMinMs: number | null;
+  eventTimeMaxMs: number | null;
+} {
+  if (window === null || window.invalid) {
+    return { eventTimeMinMs: null, eventTimeMaxMs: null };
+  }
+  return { eventTimeMinMs: window.validFromMs, eventTimeMaxMs: window.validUntilMs };
 }
 
 /**
@@ -467,6 +494,10 @@ async function indexIntoRun(
           path: file.relPath,
         });
         for (const n of fmNotices) stats.frontmatterNotices.push(n);
+        // Resolved once, consumed twice: the materialised anchor column
+        // and the resolved event-time window below must come from the
+        // same anchor answer.
+        const eventAnchor = resolveEventAnchor(frontmatter, body);
         const docId = store.upsertDocument({
           path: file.relPath,
           title: chunkResult.title,
@@ -486,7 +517,24 @@ async function indexIntoRun(
           // it safe to store behind the two content-identity fastpaths
           // above: unchanged content can only ever resolve to the same
           // anchor, so declining to recompute it cannot stale it.
-          eventAnchor: resolveEventAnchor(frontmatter, body),
+          eventAnchor,
+          // The document's RESOLVED event-time window (v13,
+          // t_9e1a4b3f), resolved from the already-parsed frontmatter
+          // and the materialised anchor above through the SHARED
+          // per-document resolver - the query side's own rung order, so
+          // the persisted bounds and the filter that consumes them
+          // cannot drift. Like the anchor, a pure function of this
+          // file's content, safe behind the same fastpaths; bounds
+          // refresh on each document's next content change, which is
+          // the lazy backfill the migration plans for.
+          ...persistedEventTimeBounds(resolveDocumentEventTimeWindow(frontmatter, eventAnchor)),
+          // What this run MEASURED of the page's `pinned` frontmatter
+          // flag (t_f7bef96a), coerced by the preference parser's own
+          // rule so ranking and the preference flows read one
+          // spelling. Every upserted document is measured; the column's
+          // NULL state is reserved for rows the v13 migration carried
+          // over and no run has re-examined yet.
+          pinned: parsePinned(frontmatter),
           // What this run MEASURED of the page's visibility declaration,
           // from the frontmatter already parsed above (v12). The indexer
           // marks; it never skips. A `continue` here would be a live

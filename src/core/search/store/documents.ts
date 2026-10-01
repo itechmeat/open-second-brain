@@ -278,6 +278,29 @@ export function upsertDocument(db: Database, doc: DocumentInput): number {
 }
 
 /**
+ * The pinned flag the index MEASURED for each document, keyed by
+ * document id (`documents.pinned`, v13; t_f7bef96a).
+ *
+ * A row whose column is NULL - one the v13 migration carried over and no
+ * index run has re-examined yet - is absent from the map, for the same
+ * rule `indexedVisibilityByPaths` states: only a measurement is a
+ * statement the page made, and the ranker must not read an unmeasured
+ * row as "not pinned". This is the reader the ranking path consumes; the
+ * "nobody looked" state therefore survives the whole trip from column to
+ * score.
+ */
+export function pinnedDocuments(db: Database): Map<number, boolean> {
+  const rows = db
+    .query<{ id: number; pinned: number }, []>(
+      `SELECT id, ${PINNED_COLUMN} AS pinned FROM documents WHERE ${PINNED_COLUMN} IS NOT NULL`,
+    )
+    .all();
+  const out = new Map<number, boolean>();
+  for (const r of rows) out.set(r.id, r.pinned === PINNED_YES);
+  return out;
+}
+
+/**
  * The materialised event anchor of one path, or null when the document is
  * absent from the index or declared no readable date (v11).
  *
