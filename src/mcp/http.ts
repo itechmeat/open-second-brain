@@ -27,6 +27,8 @@ import type { Writable } from "node:stream";
 import { MCPServer, type MCPServerOptions, type MCPServerRuntimeOptions } from "./server.ts";
 import { errorResponse, type JsonRpcResponse } from "./server.ts";
 import { INTERNAL_ERROR, INVALID_REQUEST, PARSE_ERROR } from "./protocol.ts";
+import { redactErrorForCaller } from "./error-redaction.ts";
+import { codeForError } from "./tool-error-codes.ts";
 import { DRAIN_STATE, RequestDrain, resolveDrainDeadlineMs, type DrainOutcome } from "./drain.ts";
 import { ORIGIN_CHANNEL, setOriginChannel } from "../core/origin-channel.ts";
 import { TRANSPORT_REACH, type TransportReach } from "../core/graph/transport-reach.ts";
@@ -141,8 +143,19 @@ export async function startHttp(
       // the socket open with no response on it and no record anywhere;
       // the client waited until its own timeout for a request the server
       // had already given up on.
+      // The same handling as the dispatcher's own INTERNAL_ERROR channel:
+      // the prose goes through the redactor for this bind's reach, and
+      // the code comes from the classifier, which names the class on
+      // stderr when it does not know it.
       if (!res.headersSent) {
-        writeJson(res, errorResponse(null, INTERNAL_ERROR, (exc as Error).message));
+        const raw = (exc as Error).message ?? String(exc);
+        const message = redactErrorForCaller(raw, mcp.vault, mcp.reach);
+        writeJson(
+          res,
+          errorResponse(null, INTERNAL_ERROR, `internal error: ${message}`, {
+            code: codeForError(exc),
+          }),
+        );
       } else {
         res.end();
       }

@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { JSONRPC_VERSION, PROTOCOL_VERSION, startHttp } from "../../src/mcp/index.ts";
+import { MCPServer } from "../../src/mcp/server.ts";
 
 interface RawResponse {
   readonly status: number;
@@ -265,6 +266,33 @@ describe("Streamable HTTP MCP transport", () => {
       expect(body.error.code).toBe(-32600);
       expect(body.error.message).toContain("batch requests are not supported");
     } finally {
+      await handle.close();
+    }
+  });
+
+  test("a throw that escapes the dispatch is classified, redacted and named", async () => {
+    // The catch-all behind `handleHttpRequest`: the one path where raw
+    // exception prose could leave without the redactor or a code.
+    const dispatch = spyOn(MCPServer.prototype, "handleRequest").mockImplementation(() => {
+      throw new Error(`boom at ${join(vault, "private.md")}`);
+    });
+    const lines: string[] = [];
+    const stderr = spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      lines.push(String(chunk));
+      return true;
+    });
+    const handle = await startHttp({ vault }, { apiKey: "secret", host: "127.0.0.1", port: 0 });
+    try {
+      const res = await post(handle.url, rpc("ping", 4), { key: "secret" });
+      const body = await responseJson(res);
+      expect(body.error.code).toBe(-32603);
+      expect(body.error.data).toEqual({ code: "internal_error" });
+      expect(body.error.message).toStartWith("internal error: boom at ");
+      expect(body.error.message).not.toContain(vault);
+      expect(lines).toEqual(["warning: unclassified tool error mapped to internal_error: Error\n"]);
+    } finally {
+      stderr.mockRestore();
+      dispatch.mockRestore();
       await handle.close();
     }
   });
