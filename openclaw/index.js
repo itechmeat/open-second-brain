@@ -1913,7 +1913,9 @@ function vaultStoreReference(vaultPath, configPath) {
 }
 function resolveConfigFlag(envKey, configKey, configPath) {
   const env = process.env[envKey]?.trim();
-  const raw = env || discoverConfig(configPath).data[configKey]?.trim();
+  return isFlagOn(env || discoverConfig(configPath).data[configKey]?.trim());
+}
+function isFlagOn(raw) {
   return raw === "true" || raw === "1";
 }
 var PARTNER_CODEGRAPH_DISABLED_ENV = "OPEN_SECOND_BRAIN_PARTNER_CODEGRAPH_DISABLED";
