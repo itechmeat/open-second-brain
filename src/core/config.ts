@@ -1095,6 +1095,30 @@ export function resolveHookStrictEnabled(configPath?: string): boolean {
 }
 
 /**
+ * Env var and config key of the maintenance lane's embedding opt-in.
+ * Named because the lane quotes them back: a run that skipped the
+ * embedding phase says which switch would turn it on.
+ */
+export const MAINTENANCE_EMBEDDINGS_ENV = "OPEN_SECOND_BRAIN_MAINTENANCE_EMBEDDINGS";
+export const MAINTENANCE_EMBEDDINGS_CONFIG_KEY = "maintenance_embeddings";
+
+/**
+ * Whether the unattended maintenance lane (`o2b brain maintenance run`
+ * and `brain_maintenance`) may run the embedding phase of its reindex
+ * pass. Default OFF: a cron that runs the lane stays keyword-only and
+ * contacts no provider unless the operator opts in, because provider
+ * spend only happens behind an explicit gate. When on, the embedding
+ * cost gate (`embedding_cost_gate_usd`) still applies to every pass.
+ */
+export function resolveMaintenanceEmbeddings(configPath?: string): boolean {
+  return resolveConfigFlag(
+    MAINTENANCE_EMBEDDINGS_ENV,
+    MAINTENANCE_EMBEDDINGS_CONFIG_KEY,
+    configPath,
+  );
+}
+
+/**
  * Env var and config key of the codegraph partner-check switch. Named
  * rather than inlined because the doctor QUOTES them: the line it prints
  * for a check it did not run has to tell the operator which switch turned

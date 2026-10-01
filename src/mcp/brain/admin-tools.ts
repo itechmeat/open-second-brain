@@ -12,16 +12,7 @@ import { relative } from "node:path";
 import { toPosix } from "../../core/path-safety.ts";
 import { reachView } from "../../core/brain/reach-view.ts";
 import { resolveAgentName } from "../../core/config.ts";
-import {
-  resolveSemanticCapability,
-  semanticCapabilityIsBlocked,
-} from "../../core/search/capability-tier.ts";
-import { indexVault, resolveSearchConfig } from "../../core/search/index.ts";
-import {
-  embeddingSpendOf,
-  estimatePendingEmbeddingSpend,
-  type EmbeddingSpendPreview,
-} from "../../core/search/indexer.ts";
+import { resolveSearchConfig } from "../../core/search/index.ts";
 import { Store } from "../../core/search/store.ts";
 import {
   assignNoteLabel,
@@ -49,11 +40,8 @@ import { appendMetric } from "../../core/brain/metrics.ts";
 import type { ProgressSink } from "../../core/brain/progress.ts";
 import { requiredStringArg, toolSafeguard } from "./shared.ts";
 import { currentLease } from "../../core/brain/maintenance/lease.ts";
-import {
-  listJournal,
-  MAINTENANCE_JOURNAL_CAP,
-  MAINTENANCE_SPEND_METRIC,
-} from "../../core/brain/maintenance/journal.ts";
+import { listJournal, MAINTENANCE_JOURNAL_CAP } from "../../core/brain/maintenance/journal.ts";
+import { createLaneReindex } from "../../core/brain/maintenance/reindex-task.ts";
 import {
   isLaneTask,
   LANE_TASK,
@@ -463,27 +451,21 @@ async function toolBrainMaintenance(
   // tasks itself: every event names the operation that emitted it, which
   // is what tells a reader which of the four the lane is currently in.
   const laneProgress = onProgress ? { onProgress } : {};
-  // Spend parity with the CLI lane (t_9d155d0e): the reindex pass asks
-  // for the embedding phase exactly when the resolved config can reach a
-  // provider - the same resolver `vector-backfill` consults - and
-  // `force_cost` bypasses a positive embedding cost gate for this run,
-  // recorded on the receipt when it did. The pass announces its predicted
-  // spend before it runs and receipts what it actually priced after, on
-  // the same preview helper, the same receipt reader and the same metrics
-  // surface the CLI verb uses - a receipt the schema promises is a receipt
-  // the tool produces. An offline vault never reaches a provider, exactly
-  // as before.
-  const forceCost = args["force_cost"] === true;
-  const semanticUsable = !semanticCapabilityIsBlocked(
-    resolveSemanticCapability(searchConfig.semantic),
-  );
-  // One preview per run, read BEFORE the pass, so the `spend.banner` block
-  // can report what the phase is predicted to spend. Like the CLI's, it is
-  // an estimate by position; the receipt below prices the completed pass.
-  // A null preview (nothing pending, no index yet) announces nothing.
-  const spendBanner: EmbeddingSpendPreview | undefined = semanticUsable
-    ? ((await estimatePendingEmbeddingSpend(searchConfig)) ?? undefined)
-    : undefined;
+  // Spend parity with the CLI lane: the same builder decides whether the
+  // pass may embed (`maintenance_embeddings` opt-in plus a reachable
+  // provider), computes the preview inside the task - so a run a gate
+  // skips reads nothing and reports no banner - and receipts what the
+  // phase priced. `force_cost` bypasses a positive gate for this run and
+  // is recorded on the receipt when it did.
+  const reindexTask = createLaneReindex({
+    vault: ctx.vault,
+    ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
+    searchConfig,
+    now,
+    forceCost: args["force_cost"] === true,
+    safeguard: () => laneSafeguard(LANE_TASK.reindex),
+    ...laneProgress,
+  });
   const result = await runMaintenance(ctx.vault, {
     now,
     holder: `${agent}@${process.pid}`,
@@ -498,39 +480,7 @@ async function toolBrainMaintenance(
           dream(ctx.vault, { now, safeguard: laneSafeguard(LANE_TASK.dream), ...laneProgress });
         },
       },
-      {
-        name: LANE_TASK.reindex,
-        run: async () => {
-          const stats = await indexVault(searchConfig, {
-            embeddings: semanticUsable,
-            forceCost,
-            safeguard: laneSafeguard(LANE_TASK.reindex),
-            ...laneProgress,
-          });
-          // The phase's own cost-gate result, read only off a completed
-          // pass; the lane carries it on the task row and its journal line.
-          const receipt = embeddingSpendOf(stats);
-          if (receipt !== undefined) {
-            try {
-              appendMetric(ctx.vault, {
-                surface: MAINTENANCE_SPEND_METRIC,
-                runAt: isoSecond(now),
-                payload: {
-                  task: LANE_TASK.reindex,
-                  model: receipt.model,
-                  tokens: receipt.tokens,
-                  estimated_usd: receipt.estimatedUsd,
-                  forced: receipt.forced,
-                  lane: true,
-                },
-              });
-            } catch {
-              // Metrics are observability, not correctness.
-            }
-          }
-          return receipt;
-        },
-      },
+      reindexTask.task,
       // Same lane contract as the CLI verb (link-recall-intelligence):
       // bridges and clusters run after reindex so they see fresh
       // edges; both are fail-soft without embeddings, and a metrics
@@ -597,33 +547,12 @@ async function toolBrainMaintenance(
       },
     ],
   });
-  // The run-level spend block, the CLI JSON payload's shape: the banner
-  // this run announced and the receipt its reindex pass returned. Either
-  // half may be absent - a run that could not spend announces and receipts
-  // nothing, and a refused pass receipts nothing - so both are additive.
-  const spendReceipt = result.tasks.find(
-    (t) => t.name === LANE_TASK.reindex && t.receipt !== undefined,
-  )?.receipt;
+  // The run-level spend block, the CLI JSON payload's shape.
+  const spend = reindexTask.spendBlock(result.tasks);
   return {
     verdict: result.verdict,
     tasks: result.tasks,
-    ...(spendBanner !== undefined || spendReceipt !== undefined
-      ? {
-          spend: {
-            ...(spendBanner !== undefined
-              ? {
-                  banner: {
-                    model: spendBanner.model,
-                    pendingChunks: spendBanner.pendingChunks,
-                    estimatedUsd: spendBanner.estimatedUsd,
-                    gateUsd: searchConfig.semantic.costGateUsd,
-                  },
-                }
-              : {}),
-            ...(spendReceipt !== undefined ? { receipt: spendReceipt } : {}),
-          },
-        }
-      : {}),
+    ...(spend !== undefined ? { spend } : {}),
   };
 }
 
@@ -705,7 +634,7 @@ export const ADMIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_maintenance",
     description:
-      "Quiet-window, lease-guarded maintenance lane: run executes dream, reindex, bridges, clusters behind window, busy, pressure and streak gates and a lease; status renders lease and journal. Reindex embeds when a provider is reachable: spend announced, receipted, leashed by the cost gate unless forced.",
+      "Quiet-window, lease-guarded maintenance lane: run executes dream, reindex, bridges, clusters behind window, busy, pressure and streak gates and a lease; status renders lease and journal. Reindex stays keyword-only unless config maintenance_embeddings is true and a provider is reachable; then spend is announced, receipted and leashed by the cost gate unless forced.",
     inputSchema: {
       type: "object",
       properties: {

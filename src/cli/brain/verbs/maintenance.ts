@@ -6,12 +6,12 @@
  * bridges, and clusters stale-first; --force bypasses the soft gates
  * and every streak refusal but never the lease, while --retry <task>
  * (repeatable) bypasses the streak refusal for that task alone and
- * leaves every gate in force. The reindex pass asks for the embedding
- * phase whenever the resolved config can reach a provider (t_9d155d0e):
- * the pass announces its predicted spend before it runs, receipts what
- * the phase actually priced after it, and --force-cost bypasses a
- * positive embedding cost gate for this run alone - recorded on the
- * receipt when it did.
+ * leaves every gate in force. The reindex pass stays keyword-only
+ * unless `maintenance_embeddings` opts the lane into the embedding phase
+ * and the resolved config can reach a provider: then the pass announces
+ * its predicted spend before it runs, receipts what the phase actually
+ * priced after it, and --force-cost bypasses a positive embedding cost
+ * gate for this run alone - recorded on the receipt when it did.
  * `status` renders the lease holder and recent journal. Designed as
  * the cron entry point: a dead dashboard hour surfaces as
  * skipped:window in the journal instead of a contended vault.
@@ -51,22 +51,11 @@ import {
   type MaintenanceTask,
   type MaintenanceTaskResult,
 } from "../../../core/brain/maintenance/lane.ts";
-import {
-  listJournal,
-  MAINTENANCE_JOURNAL_CAP,
-  MAINTENANCE_SPEND_METRIC,
-} from "../../../core/brain/maintenance/journal.ts";
+import { listJournal, MAINTENANCE_JOURNAL_CAP } from "../../../core/brain/maintenance/journal.ts";
+import { createLaneReindex } from "../../../core/brain/maintenance/reindex-task.ts";
 import { resolveAgentName } from "../../../core/config.ts";
-import {
-  resolveSemanticCapability,
-  semanticCapabilityIsBlocked,
-} from "../../../core/search/capability-tier.ts";
-import {
-  embeddingSpendOf,
-  estimatePendingEmbeddingSpend,
-  type EmbeddingSpendPreview,
-} from "../../../core/search/indexer.ts";
-import { indexVault, resolveSearchConfig } from "../../../core/search/index.ts";
+import type { EmbeddingSpendPreview } from "../../../core/search/indexer.ts";
+import { resolveSearchConfig } from "../../../core/search/index.ts";
 import { onInterrupt } from "../../interrupt.ts";
 import { attachProgress, reportProgressRefusal } from "../../progress-rail.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
@@ -292,24 +281,28 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
       // Inside the `try`, because the check below can return: a return
       // between `onInterrupt()` and the `try` would skip `release`.
       //
-      // Spend honesty (t_9d155d0e): the reindex pass asks for the
-      // embedding phase exactly when the resolved config can reach a
-      // provider - the same resolver `vector-backfill` consults - so a
-      // configured vault's embeddings stop silently drifting stale
-      // overnight, and the spend stops being silent too: the pass is
-      // announced before it runs and receipted after it, keyed on the
-      // ONE preview helper that reads the phase's own census and cost
-      // kernel. An offline vault never reaches a provider, exactly as
-      // before. `--force-cost` bypasses a positive gate for this run and
-      // is recorded on the receipt when it did override one.
-      const forceCost = flags["force-cost"] === true;
-      const semanticUsable = !semanticCapabilityIsBlocked(
-        resolveSemanticCapability(searchConfig.semantic),
-      );
-      // The banner and the receipt are captured here, outside the lane's
-      // result type, because they describe the RUN: `--json` reports them
-      // as one `spend` block beside the task rows.
-      let spendBanner: EmbeddingSpendPreview | undefined;
+      // Spend is opt-in (`maintenance_embeddings`): the shared builder
+      // decides whether the pass may embed, announces the predicted spend
+      // inside the task and receipts what the phase priced. An offline or
+      // un-opted vault stays keyword-only and reaches no provider.
+      // `--force-cost` bypasses a positive gate for this run and is
+      // recorded on the receipt when it did override one.
+      const reindexTask = createLaneReindex({
+        vault,
+        ...(config ? { configPath: config } : {}),
+        searchConfig,
+        now,
+        forceCost: flags["force-cost"] === true,
+        safeguard: () => laneSafeguard(OPERATION.reindex),
+        signal: interrupt.signal,
+        ...laneProgress,
+        ...(asJson
+          ? {}
+          : {
+              onBanner: (preview: EmbeddingSpendPreview) =>
+                ok(formatSpendBanner(preview, searchConfig.semantic.costGateUsd)),
+            }),
+      });
       const laneTasks: ReadonlyArray<MaintenanceTask> = [
         {
           name: LANE_TASK.dream,
@@ -317,55 +310,7 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
             dream(vault, { now, safeguard: laneSafeguard(OPERATION.dream), ...laneProgress });
           },
         },
-        {
-          name: LANE_TASK.reindex,
-          run: async () => {
-            // One preview per run, read BEFORE the pass, so the banner can
-            // announce what the phase is predicted to spend. It is an
-            // estimate by position: the walk inside the pass may still add
-            // chunks (a dream or an agent wrote since the last index), so
-            // the receipt below is deliberately NOT this number - it is
-            // the phase's own census, priced by the same kernel.
-            const preview = semanticUsable
-              ? await estimatePendingEmbeddingSpend(searchConfig)
-              : null;
-            if (preview !== null) {
-              if (asJson) spendBanner = preview;
-              else ok(formatSpendBanner(preview, searchConfig.semantic.costGateUsd));
-            }
-            const stats = await indexVault(searchConfig, {
-              embeddings: semanticUsable,
-              forceCost,
-              safeguard: laneSafeguard(OPERATION.reindex),
-              signal: interrupt.signal,
-              ...laneProgress,
-            });
-            // The receipt is the phase's own cost-gate result: only a
-            // completed pass returns stats at all, so a run killed
-            // mid-spend receipts nothing, and its row carries the named
-            // failure instead.
-            const receipt = embeddingSpendOf(stats);
-            if (receipt !== undefined) {
-              try {
-                appendMetric(vault, {
-                  surface: MAINTENANCE_SPEND_METRIC,
-                  runAt: isoSecond(now),
-                  payload: {
-                    task: LANE_TASK.reindex,
-                    model: receipt.model,
-                    tokens: receipt.tokens,
-                    estimated_usd: receipt.estimatedUsd,
-                    forced: receipt.forced,
-                    lane: true,
-                  },
-                });
-              } catch {
-                // Metrics are observability, not correctness.
-              }
-            }
-            return receipt;
-          },
-        },
+        reindexTask.task,
         // Link-recall-intelligence passes ride the same lease, after
         // reindex so they see fresh edges. Both are fail-soft inside:
         // a vault without embeddings simply proposes nothing.
@@ -454,33 +399,13 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
       });
 
       // The run-level spend block: the banner this run announced and the
-      // receipt its reindex pass returned. Either half may be absent - a
-      // run that could not spend announces and receipts nothing, and a
-      // refused pass receipts nothing - so both are additive.
-      const spendReceipt = result.tasks.find(
-        (t) => t.name === LANE_TASK.reindex && t.receipt !== undefined,
-      )?.receipt;
+      // receipt its reindex pass returned, both absent when nothing spent.
+      const spend = reindexTask.spendBlock(result.tasks);
       if (asJson) {
         okJson({
           verdict: result.verdict,
           tasks: result.tasks,
-          ...(spendBanner !== undefined || spendReceipt !== undefined
-            ? {
-                spend: {
-                  ...(spendBanner !== undefined
-                    ? {
-                        banner: {
-                          model: spendBanner.model,
-                          pendingChunks: spendBanner.pendingChunks,
-                          estimatedUsd: spendBanner.estimatedUsd,
-                          gateUsd: searchConfig.semantic.costGateUsd,
-                        },
-                      }
-                    : {}),
-                  ...(spendReceipt !== undefined ? { receipt: spendReceipt } : {}),
-                },
-              }
-            : {}),
+          ...(spend !== undefined ? { spend } : {}),
         });
       } else {
         ok(`maintenance: ${result.verdict}`);

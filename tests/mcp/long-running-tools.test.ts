@@ -39,6 +39,7 @@ import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { DREAM_STEP } from "../../src/core/brain/dream-step.ts";
 import type { MaintenanceSpendReceipt } from "../../src/core/brain/maintenance/journal.ts";
 import { LANE_TASKS } from "../../src/core/brain/maintenance/lane.ts";
+import { MAINTENANCE_EMBEDDINGS_CONFIG_KEY } from "../../src/core/config.ts";
 import { indexVault } from "../../src/core/search/indexer.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { makeConfig } from "../helpers/search-fixtures.ts";
@@ -353,7 +354,8 @@ test.skipIf(!VEC_LOADABLE)(
     // semantic lane is usable exactly as the CLI spend tests configure it.
     atomicWriteFileSync(
       configPath,
-      `vault: ${vault}\nagent_name: claude\nsearch_semantic_enabled: true\nembedding_provider: local\n`,
+      `vault: ${vault}\nagent_name: claude\nsearch_semantic_enabled: true\nembedding_provider: local\n` +
+        `${MAINTENANCE_EMBEDDINGS_CONFIG_KEY}: true\n`,
     );
     const server = new MCPServer({ vault, configPath });
     await initialize(server);
@@ -383,6 +385,40 @@ test.skipIf(!VEC_LOADABLE)(
     expect(payload.spend?.receipt.model).toBe("hashing-ngram-v1");
     expect(payload.spend?.receipt.tokens).toBeGreaterThan(0);
     expect(payload.spend?.receipt.forced).toBe(false);
+  },
+);
+
+test.skipIf(!VEC_LOADABLE)(
+  "brain_maintenance outside its window reports no spend block",
+  async () => {
+    writeFileSync(
+      join(vault, "Brain", "note.md"),
+      "# note\n\nprose long enough to cut at least one chunk for the index.\n",
+    );
+    await indexVault(
+      makeConfig({ vault, dbPath: join(vault, ".open-second-brain", "brain.sqlite") }),
+    );
+    atomicWriteFileSync(
+      configPath,
+      `vault: ${vault}\nagent_name: claude\nsearch_semantic_enabled: true\nembedding_provider: local\n` +
+        `${MAINTENANCE_EMBEDDINGS_CONFIG_KEY}: true\n`,
+    );
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    // A one-hour window the current hour cannot fall in.
+    const start = (new Date().getUTCHours() + 2) % 24;
+    const lane = await callRaw(server, "brain_maintenance", {
+      operation: "run",
+      window_start_hour: start,
+      window_end_hour: (start + 1) % 24,
+    });
+    expect(lane.isError).toBe(false);
+    const payload = (lane as { structuredContent?: unknown }).structuredContent as {
+      verdict: string;
+      spend?: unknown;
+    };
+    expect(payload.verdict).toBe("skipped:window");
+    expect(payload.spend).toBeUndefined();
   },
 );
 

@@ -21,6 +21,7 @@ import {
   type MaintenanceSpendReceipt,
   type MaintenanceTaskResult,
 } from "../../src/core/brain/maintenance/lane.ts";
+import { MAINTENANCE_EMBEDDINGS_ENV } from "../../src/core/config.ts";
 import { MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT } from "../../src/core/brain/policy/blocks/maintenance.ts";
 import { sqliteVecLoadable } from "../helpers/sqlite-vec.ts";
 import { startFakeHttp, type FakeHttp } from "../helpers/fake-http.ts";
@@ -115,12 +116,13 @@ function baseEnv(): Record<string, string> {
   return { OPEN_SECOND_BRAIN_CONFIG: configPath };
 }
 
-/** The local provider is configured, model-free and price-free. */
+/** The local provider is configured, model-free and price-free, and the lane is opted in. */
 function localSemanticEnv(): Record<string, string> {
   return {
     OPEN_SECOND_BRAIN_CONFIG: configPath,
     OPEN_SECOND_BRAIN_SEARCH_SEMANTIC: "true",
     OPEN_SECOND_BRAIN_EMBEDDING_PROVIDER: "local",
+    [MAINTENANCE_EMBEDDINGS_ENV]: "true",
   };
 }
 
@@ -411,6 +413,42 @@ describe("the spend surface end to end", () => {
   );
 
   test.skipIf(!VEC_LOADABLE)(
+    "without the opt-in a remote provider and an off gate stay keyword-only and spend nothing",
+    async () => {
+      let server: FakeHttp | null = null;
+      try {
+        server = await startFakeHttp();
+        await seedPendingChunks();
+        const remoteEnv = {
+          OPEN_SECOND_BRAIN_CONFIG: configPath,
+          OPEN_SECOND_BRAIN_SEARCH_SEMANTIC: "true",
+          OPEN_SECOND_BRAIN_EMBEDDING_PROVIDER: "openai-compat",
+          OPEN_SECOND_BRAIN_EMBEDDING_BASE_URL: server.url,
+          OPEN_SECOND_BRAIN_EMBEDDING_MODEL: "text-embedding-3-small",
+          OPEN_SECOND_BRAIN_EMBEDDING_KEY: FAKE_PROVIDER_KEY,
+          OPEN_SECOND_BRAIN_EMBEDDING_COST_GATE: "0",
+        };
+
+        const run = await runCli(["brain", "maintenance", "run", "--vault", vault, "--json"], {
+          env: remoteEnv,
+        });
+        expect(run.returncode).toBe(0);
+        const payload = JSON.parse(run.stdout) as {
+          spend?: unknown;
+          tasks: Array<{ name: string; ok: boolean; receipt?: unknown }>;
+        };
+        const reindex = payload.tasks.find((t) => t.name === LANE_TASK.reindex);
+        expect(reindex?.ok).toBe(true);
+        expect(reindex?.receipt).toBeUndefined();
+        expect(payload.spend).toBeUndefined();
+        expect(server.callCount()).toBe(0);
+      } finally {
+        await server?.close();
+      }
+    },
+  );
+
+  test.skipIf(!VEC_LOADABLE)(
     "a positive gate refuses the pass unforced; --force-cost flags the receipt",
     async () => {
       let server: FakeHttp | null = null;
@@ -425,6 +463,7 @@ describe("the spend surface end to end", () => {
           OPEN_SECOND_BRAIN_EMBEDDING_MODEL: "text-embedding-3-small",
           OPEN_SECOND_BRAIN_EMBEDDING_KEY: FAKE_PROVIDER_KEY,
           OPEN_SECOND_BRAIN_EMBEDDING_COST_GATE: "0.000001",
+          [MAINTENANCE_EMBEDDINGS_ENV]: "true",
         });
 
         const blocked = await runCli(["brain", "maintenance", "run", "--vault", vault], {
