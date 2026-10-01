@@ -34,6 +34,7 @@ import {
   localizeEnvelope,
   requiredStringArg,
 } from "./shared.ts";
+import { unknownOperationError } from "../coerce.ts";
 
 function coerceEventKind(tool: string, raw: unknown): BrainLogEventKind | undefined {
   if (raw === undefined || raw === null) return undefined;
@@ -213,8 +214,7 @@ async function toolBrainAttentionFlows(
       text: renderAttentionFlow(ctx.vault, flowId),
     };
   }
-  throw new MCPError(
-    INVALID_PARAMS,
+  throw unknownOperationError(
     "brain_analytics view=attention_flows: operation must be one of list|evaluate|render",
   );
 }

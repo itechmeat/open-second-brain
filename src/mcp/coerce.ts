@@ -8,6 +8,7 @@
 
 import { refuseOwnerScopeRequest } from "./owner-scope-refusal.ts";
 import { INVALID_PARAMS, MCPError } from "./protocol.ts";
+import { TOOL_ERROR_CODE } from "./tool-error-codes.ts";
 
 export function coerceStr(
   args: Record<string, unknown>,
@@ -357,4 +358,15 @@ export function coerceFormat(args: Record<string, unknown>, key = "format"): "ma
     throw new MCPError(INVALID_PARAMS, `argument '${key}' must be 'markdown' or 'json'`);
   }
   return raw;
+}
+
+/**
+ * The refusal every operation-dispatching tool answers when the argument
+ * that selects its operation (`operation`, `op` or `action`) names none
+ * of the tool's closed set. One builder, so the `unknown_operation` code
+ * is a contract of every such tool rather than of the few that set it;
+ * the message stays the tool's own.
+ */
+export function unknownOperationError(message: string): MCPError {
+  return new MCPError(INVALID_PARAMS, message, { code: TOOL_ERROR_CODE.unknownOperation });
 }

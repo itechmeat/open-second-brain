@@ -53,7 +53,7 @@ import { resolveNotePath } from "../../core/brain/note-path.ts";
 import type { FrontmatterMap } from "../../core/types.ts";
 import { parseFrontmatter } from "../../core/vault.ts";
 import { normalizeAgentArgument } from "../../core/agent-identity.ts";
-import { coerceInt, coerceStrList } from "../coerce.ts";
+import { coerceInt, coerceStrList, unknownOperationError } from "../coerce.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { contextReach } from "../tool-contract.ts";
@@ -98,10 +98,7 @@ function toolBrainLabels(
 ): Record<string, unknown> | Promise<Record<string, unknown>> {
   const op = args["operation"];
   if (op !== "assign" && op !== "remove" && op !== "show" && op !== "suggest") {
-    throw new MCPError(
-      INVALID_PARAMS,
-      "brain_labels: operation must be assign|remove|show|suggest",
-    );
+    throw unknownOperationError("brain_labels: operation must be assign|remove|show|suggest");
   }
   // a-label-is-not-a-boundary, U12: the ARGUMENT is right and the
   // VALIDATOR's message was wrong. `path` is the only name this tool
@@ -176,7 +173,7 @@ async function toolBrainTiers(
 ): Promise<Record<string, unknown>> {
   const op = args["operation"];
   if (op !== "check" && op !== "restore" && op !== "accept") {
-    throw new MCPError(INVALID_PARAMS, "brain_tiers: operation must be check|restore|accept");
+    throw unknownOperationError("brain_tiers: operation must be check|restore|accept");
   }
   const searchConfig = resolveSearchConfig({
     vault: ctx.vault,
@@ -287,7 +284,7 @@ async function toolBrainSecrets(
 ): Promise<Record<string, unknown>> {
   const op = args["operation"];
   if (op !== "list" && op !== "run") {
-    throw new MCPError(INVALID_PARAMS, "brain_secrets: operation must be list|run");
+    throw unknownOperationError("brain_secrets: operation must be list|run");
   }
   if (op === "list") {
     return { secrets: listSecrets(ctx.vault) };
@@ -348,7 +345,7 @@ async function toolBrainMaintenance(
 ): Promise<Record<string, unknown>> {
   const op = args["operation"];
   if (op !== "run" && op !== "status") {
-    throw new MCPError(INVALID_PARAMS, "brain_maintenance: operation must be run|status");
+    throw unknownOperationError("brain_maintenance: operation must be run|status");
   }
   const now = new Date();
   if (op === "status") {

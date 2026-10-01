@@ -53,7 +53,7 @@ import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { TOOL_ERROR_CODE, type ToolErrorCode } from "../tool-error-codes.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { VAULT_PATH_OUTPUT_SCHEMA, vaultPathField } from "../vault-path-field.ts";
-import { coerceStr, coerceInt } from "../coerce.ts";
+import { coerceStr, coerceInt, unknownOperationError } from "../coerce.ts";
 import { vaultRelativeSafe } from "./shared.ts";
 
 /**
@@ -161,8 +161,7 @@ async function toolBrainWriteSession(
         };
       }
       default:
-        throw new MCPError(
-          INVALID_PARAMS,
+        throw unknownOperationError(
           `brain_write_session: op must be open|submit|approve|abandon|status|list, got '${op}'`,
         );
     }
@@ -218,8 +217,7 @@ function coercePinnedContextOperation(args: Record<string, unknown>): PinnedCont
     operation !== "append" &&
     operation !== "clear"
   ) {
-    throw new MCPError(
-      INVALID_PARAMS,
+    throw unknownOperationError(
       "brain_pinned_context operation must be one of: read, write, append, clear",
     );
   }

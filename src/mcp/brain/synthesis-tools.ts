@@ -29,7 +29,7 @@ import {
   type IdeaLineageResult,
 } from "../../core/brain/idea-lineage.ts";
 import { decomposeNoteHistory } from "../../core/brain/note-history.ts";
-import { coerceStringOptional } from "../coerce.ts";
+import { coerceStringOptional, unknownOperationError } from "../coerce.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { contextReach, type ServerContext, type ToolDefinition } from "../tool-contract.ts";
@@ -89,7 +89,7 @@ async function toolBrainSessionSummary(
 ): Promise<Record<string, unknown>> {
   const operation = args["operation"];
   if (operation !== "write" && operation !== "get" && operation !== "list") {
-    throw new MCPError(INVALID_PARAMS, `${SUMMARY_TOOL}: operation must be write|get|list`);
+    throw unknownOperationError(`${SUMMARY_TOOL}: operation must be write|get|list`);
   }
 
   if (operation === "write") {

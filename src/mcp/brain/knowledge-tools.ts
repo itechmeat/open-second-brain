@@ -68,7 +68,13 @@ import { contextReach } from "../tool-contract.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { vaultPathField } from "../vault-path-field.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
-import { AGENT_SCOPE_SCHEMA, coerceAgentScope, coerceStr, coerceBool } from "../coerce.ts";
+import {
+  AGENT_SCOPE_SCHEMA,
+  coerceAgentScope,
+  coerceStr,
+  coerceBool,
+  unknownOperationError,
+} from "../coerce.ts";
 import { coercePositiveInteger, toolSafeguard } from "./shared.ts";
 
 /**
@@ -115,10 +121,7 @@ async function toolBrainBridges(
 ): Promise<Record<string, unknown>> {
   const op = args["operation"];
   if (op !== "discover" && op !== "list" && op !== "accept" && op !== "dismiss") {
-    throw new MCPError(
-      INVALID_PARAMS,
-      "brain_bridges: operation must be discover|list|accept|dismiss",
-    );
+    throw unknownOperationError("brain_bridges: operation must be discover|list|accept|dismiss");
   }
   if (op === "accept" || op === "dismiss") {
     const source = args["source"];
@@ -250,7 +253,7 @@ async function toolBrainClusters(
 ): Promise<Record<string, unknown>> {
   const op = args["operation"];
   if (op !== "run" && op !== "list") {
-    throw new MCPError(INVALID_PARAMS, "brain_clusters: operation must be run|list");
+    throw unknownOperationError("brain_clusters: operation must be run|list");
   }
   if (op === "list") {
     const dir = join(ctx.vault, BRAIN_CLUSTERS_REL);
@@ -580,8 +583,7 @@ function toolBrainTruth(
     op !== "aggregate" &&
     op !== "collisions"
   ) {
-    throw new MCPError(
-      INVALID_PARAMS,
+    throw unknownOperationError(
       "brain_truth: operation must be ingest|slots|conflicts|aggregate|collisions",
     );
   }
@@ -675,7 +677,7 @@ function toolBrainDeadEnds(
 ): Record<string, unknown> {
   const op = args["operation"];
   if (op !== "record" && op !== "list") {
-    throw new MCPError(INVALID_PARAMS, "brain_dead_ends: operation must be record|list");
+    throw unknownOperationError("brain_dead_ends: operation must be record|list");
   }
   if (op === "list") {
     const { entries, warnings } = listDeadEnds(ctx.vault);

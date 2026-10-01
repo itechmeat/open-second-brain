@@ -24,10 +24,15 @@ import {
   updateRating,
   DecisionError,
 } from "../../core/brain/decisions/record.ts";
-import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
-import { coerceBool, coerceInt, coerceStr, coerceStrList } from "../coerce.ts";
+import {
+  coerceBool,
+  coerceInt,
+  coerceStr,
+  coerceStrList,
+  unknownOperationError,
+} from "../coerce.ts";
 import { wrapToolErrors } from "./shared.ts";
 import { DECISION_RATING_MAX, DECISION_RATING_MIN } from "../../core/brain/decisions/record.ts";
 import { BRAIN_COMMITMENT_TIER, type BrainCommitmentTier } from "../../core/brain/types.ts";
@@ -249,8 +254,7 @@ async function toolBrainDecision(
         };
       }
       default:
-        throw new MCPError(
-          INVALID_PARAMS,
+        throw unknownOperationError(
           `${TOOL}: 'action' must be one of record, outcome, rate, show, list, compare, similar, history, recall`,
         );
     }

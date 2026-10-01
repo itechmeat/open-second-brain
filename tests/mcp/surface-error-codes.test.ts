@@ -375,3 +375,167 @@ describe("thrower-supplied codes are registry members", () => {
     expect(codeOf(err)).toBe("argument_forbidden");
   });
 });
+
+// ----- unknown operations ------------------------------------------------------
+
+describe("every operation-dispatching tool answers unknown_operation", () => {
+  // One case per dispatch: the argument that selects the operation, set to
+  // a value outside the tool's closed set, and the message the refusal has
+  // always carried, which stays byte-identical.
+  const BOGUS = "no_such_operation";
+  const CASES: ReadonlyArray<readonly [string, Record<string, unknown>, string]> = [
+    [
+      "brain_skill_proposals",
+      { operation: BOGUS },
+      "brain_skill_proposals: operation must be one of " +
+        "learn|list|accept|reject|recover|usage|evidence|page_candidates|page_draft",
+    ],
+    [
+      "brain_procedural_memory",
+      { operation: BOGUS },
+      "brain_procedural_memory: operation must be one of reconcile|list|mark_used|mark_outcome",
+    ],
+    [
+      "brain_recurrence",
+      { operation: BOGUS },
+      "brain_recurrence: operation must be one of list|show|learn|forget|purge_source",
+    ],
+    [
+      "brain_procedural_graph",
+      { operation: BOGUS },
+      "brain_procedural_graph: operation must be one of rebuild|show|hints",
+    ],
+    [
+      "brain_obligation",
+      // `slug` is read before the last branch, so the refusal needs one.
+      { operation: BOGUS, slug: "demo" },
+      "brain_obligation operation must be one of: add, done, list, show, remove",
+    ],
+    [
+      "brain_context_receipts",
+      { operation: BOGUS },
+      "brain_context_receipts: operation must be list, show, or summary",
+    ],
+    [
+      "brain_context_presets",
+      { operation: BOGUS },
+      "brain_context_presets: operation must be show, suggest, or diff",
+    ],
+    [
+      "brain_write_session",
+      { op: BOGUS },
+      `brain_write_session: op must be open|submit|approve|abandon|status|list, got '${BOGUS}'`,
+    ],
+    [
+      "brain_pinned_context",
+      { operation: BOGUS },
+      "brain_pinned_context operation must be one of: read, write, append, clear",
+    ],
+    [
+      "brain_session_summary",
+      { operation: BOGUS },
+      "brain_session_summary: operation must be write|get|list",
+    ],
+    ["brain_benchmark", { operation: BOGUS }, "brain_benchmark: operation must be run"],
+    ["brain_tune", { operation: BOGUS }, "brain_tune: operation must be run|status|reset"],
+    [
+      "brain_recall_telemetry",
+      { operation: BOGUS },
+      "brain_recall_telemetry: operation must be list, summary, gate_list, gate_summary, observed_reuse, or cost",
+    ],
+    [
+      "brain_route_metrics",
+      { operation: BOGUS },
+      "brain_route_metrics: operation must be list or summary",
+    ],
+    [
+      "brain_token_impact",
+      { operation: BOGUS },
+      "brain_token_impact: operation must be record, outcome, list, or summary",
+    ],
+    [
+      "brain_context_pack_outcome",
+      { operation: BOGUS },
+      "brain_context_pack_outcome: operation must be post, list, or summary",
+    ],
+    [
+      "brain_analytics",
+      { view: "attention_flows", operation: BOGUS },
+      "brain_analytics view=attention_flows: operation must be one of list|evaluate|render",
+    ],
+    [
+      "brain_bridges",
+      { operation: BOGUS },
+      "brain_bridges: operation must be discover|list|accept|dismiss",
+    ],
+    ["brain_clusters", { operation: BOGUS }, "brain_clusters: operation must be run|list"],
+    [
+      "brain_truth",
+      { operation: BOGUS },
+      "brain_truth: operation must be ingest|slots|conflicts|aggregate|collisions",
+    ],
+    ["brain_dead_ends", { operation: BOGUS }, "brain_dead_ends: operation must be record|list"],
+    [
+      "brain_generation_reports",
+      { action: BOGUS },
+      "brain_generation_reports: action must be record, list, or summary",
+    ],
+    [
+      "brain_labels",
+      { operation: BOGUS },
+      "brain_labels: operation must be assign|remove|show|suggest",
+    ],
+    ["brain_tiers", { operation: BOGUS }, "brain_tiers: operation must be check|restore|accept"],
+    ["brain_secrets", { operation: BOGUS }, "brain_secrets: operation must be list|run"],
+    ["brain_maintenance", { operation: BOGUS }, "brain_maintenance: operation must be run|status"],
+    [
+      "brain_dream",
+      { action: BOGUS },
+      "brain_dream: action must be run|stage|validate|apply|retriage|discard|list",
+    ],
+    [
+      "brain_tension",
+      { action: BOGUS },
+      "brain_tension: 'action' must be one of detect, list, show, confirm, dismiss, resolve, verify",
+    ],
+    [
+      "brain_decision",
+      { action: BOGUS },
+      "brain_decision: 'action' must be one of record, outcome, rate, show, list, compare, similar, history, recall",
+    ],
+    [
+      "brain_lifecycle",
+      { action: BOGUS },
+      "brain_lifecycle: 'action' must be one of tombstone, supersede, temporal-replace, tip, curator",
+    ],
+    ["brain_writes", { action: BOGUS }, "brain_writes: 'action' must be one of list, plan_revert"],
+    [
+      "brain_note_lifecycle",
+      { action: BOGUS },
+      "brain_note_lifecycle: 'action' must be one of rename, move, archive, delete",
+    ],
+    [
+      "brain_scaffold_stub",
+      { action: BOGUS },
+      "brain_scaffold_stub: 'action' must be one of list, write",
+    ],
+  ];
+
+  for (const [tool, args, message] of CASES) {
+    test(`${tool} answers unknown_operation with its message unchanged`, async () => {
+      const err = await raised(() => findTool(TOOLS, tool).handler(workspaceCtx(), args));
+      expect(err.message).toBe(message);
+      expect(codeOf(err)).toBe("unknown_operation");
+    });
+  }
+
+  test("a write batch operation of an unknown kind answers unknown_operation", async () => {
+    const err = await raised(() =>
+      findTool(TOOLS, "brain_write_batch").handler(workspaceCtx(), {
+        operations: [{ op: BOGUS, path: "notes/x.md" }],
+      }),
+    );
+    expect(err.message).toStartWith("brain_write_batch: operations[0].op must be one of ");
+    expect(codeOf(err)).toBe("unknown_operation");
+  });
+});

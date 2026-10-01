@@ -24,7 +24,7 @@ import {
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
-import { coerceStr, coerceStrList } from "../coerce.ts";
+import { coerceStr, coerceStrList, unknownOperationError } from "../coerce.ts";
 
 function pageJson(page: ObligationPage): Record<string, unknown> {
   return {
@@ -98,8 +98,7 @@ function toolBrainObligation(
     if (err instanceof MCPError) throw err;
     throw new MCPError(INVALID_PARAMS, `brain_obligation: ${(err as Error).message}`);
   }
-  throw new MCPError(
-    INVALID_PARAMS,
+  throw unknownOperationError(
     "brain_obligation operation must be one of: add, done, list, show, remove",
   );
 }

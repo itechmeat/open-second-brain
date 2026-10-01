@@ -76,6 +76,7 @@ import {
   coerceStrList,
   coerceBool,
   recallAdequacyPairing,
+  unknownOperationError,
 } from "../coerce.ts";
 import { decisionAnswerableFor } from "../decision-answerable.ts";
 import {
@@ -381,10 +382,7 @@ async function toolBrainContextReceipts(
 
   if (operation === "summary") return summarizeReceipts(ctx, args);
 
-  throw new MCPError(
-    INVALID_PARAMS,
-    "brain_context_receipts: operation must be list, show, or summary",
-  );
+  throw unknownOperationError("brain_context_receipts: operation must be list, show, or summary");
 }
 
 /**
@@ -608,10 +606,7 @@ async function toolBrainContextPresets(
       ...diffContextPreset(presetId, contextPresetCurrentConfig(args["current"])),
     };
   }
-  throw new MCPError(
-    INVALID_PARAMS,
-    "brain_context_presets: operation must be show, suggest, or diff",
-  );
+  throw unknownOperationError("brain_context_presets: operation must be show, suggest, or diff");
 }
 
 function contextPresetCurrentConfig(raw: unknown): ContextPresetCurrentConfig {

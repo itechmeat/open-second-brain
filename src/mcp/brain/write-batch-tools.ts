@@ -35,6 +35,7 @@ import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { noteWriteResult, parseFrontmatterArg, writeBatchErrorToMcp } from "./notes-tools.ts";
 import { vaultRelativeSafe } from "./shared.ts";
+import { unknownOperationError } from "../coerce.ts";
 
 /** Recognised batch operation discriminators. */
 const OP_KINDS = [
@@ -147,8 +148,7 @@ function mapOperation(
         },
       };
     default:
-      throw new MCPError(
-        INVALID_PARAMS,
+      throw unknownOperationError(
         `brain_write_batch: operations[${index}].op must be one of ${OP_KINDS.join(", ")}`,
       );
   }

@@ -24,10 +24,9 @@ import {
   tombstone,
   TombstoneError,
 } from "../../core/brain/lifecycle/tombstone.ts";
-import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
-import { coerceStr } from "../coerce.ts";
+import { coerceStr, unknownOperationError } from "../coerce.ts";
 import { coerceNonNegativeInteger, wrapToolErrors } from "./shared.ts";
 
 const TOOL = "brain_lifecycle";
@@ -134,8 +133,7 @@ async function toolBrainLifecycle(
         };
       }
       default:
-        throw new MCPError(
-          INVALID_PARAMS,
+        throw unknownOperationError(
           `${TOOL}: 'action' must be one of tombstone, supersede, temporal-replace, tip, curator`,
         );
     }

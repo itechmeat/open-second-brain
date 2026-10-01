@@ -57,6 +57,7 @@ import {
   coerceFormat,
   coerceInt,
   coerceStringOptional,
+  unknownOperationError,
 } from "../coerce.ts";
 import { emitGatedTelemetry } from "../../core/brain/continuity/emit.ts";
 import {
@@ -330,8 +331,7 @@ async function toolBrainWrites(
     return planRevert(ctx, args);
   }
   if (action !== BRAIN_WRITES_ACTION.list) {
-    throw new MCPError(
-      INVALID_PARAMS,
+    throw unknownOperationError(
       `brain_writes: 'action' must be one of ${BRAIN_WRITES_ACTIONS.join(", ")}`,
     );
   }

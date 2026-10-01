@@ -33,7 +33,7 @@ import { verdictFields } from "../../core/decision-model/pair-verdict.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
-import { coerceBool, coerceStr } from "../coerce.ts";
+import { coerceBool, coerceStr, unknownOperationError } from "../coerce.ts";
 import { wrapToolErrors } from "./shared.ts";
 
 const TOOL = "brain_tension";
@@ -145,8 +145,7 @@ async function toolBrainTension(
         };
       }
       default:
-        throw new MCPError(
-          INVALID_PARAMS,
+        throw unknownOperationError(
           `${TOOL}: 'action' must be one of detect, list, show, confirm, dismiss, resolve, verify`,
         );
     }

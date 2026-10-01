@@ -39,7 +39,7 @@ import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { contextReach } from "../tool-contract.ts";
 import { reachView } from "../../core/brain/reach-view.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
-import { coerceStrList } from "../coerce.ts";
+import { coerceStrList, unknownOperationError } from "../coerce.ts";
 import { coercePositiveInteger, optionalStringArg, requiredStringArg } from "./shared.ts";
 
 async function toolBrainSkillProposals(
@@ -159,8 +159,7 @@ async function toolBrainSkillProposals(
     const usage = deriveSkillUsage(ctx.vault);
     return { total: usage.length, usage };
   }
-  throw new MCPError(
-    INVALID_PARAMS,
+  throw unknownOperationError(
     "brain_skill_proposals: operation must be one of " +
       "learn|list|accept|reject|recover|usage|evidence|page_candidates|page_draft",
   );
@@ -235,8 +234,7 @@ async function toolBrainProceduralMemory(
     }
     return { ...updated };
   }
-  throw new MCPError(
-    INVALID_PARAMS,
+  throw unknownOperationError(
     "brain_procedural_memory: operation must be one of reconcile|list|mark_used|mark_outcome",
   );
 }
@@ -275,8 +273,7 @@ async function toolBrainRecurrence(
     purgeRecurrenceSource(ctx.vault, sourceId);
     return { ok: true, source_id: sourceId };
   }
-  throw new MCPError(
-    INVALID_PARAMS,
+  throw unknownOperationError(
     "brain_recurrence: operation must be one of list|show|learn|forget|purge_source",
   );
 }
@@ -316,8 +313,7 @@ async function toolBrainProceduralGraph(
     }
     return { ...hints };
   }
-  throw new MCPError(
-    INVALID_PARAMS,
+  throw unknownOperationError(
     "brain_procedural_graph: operation must be one of rebuild|show|hints",
   );
 }

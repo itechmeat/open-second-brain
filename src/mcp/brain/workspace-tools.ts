@@ -35,7 +35,7 @@ import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { TOOL_ERROR_CODE } from "../tool-error-codes.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
-import { coerceStr } from "../coerce.ts";
+import { coerceStr, unknownOperationError } from "../coerce.ts";
 
 function toolBrainIntention(
   ctx: ServerContext,
@@ -80,11 +80,7 @@ function toolBrainIntention(
     const moved = moveIntentionToHistory(ctx.vault, { scope });
     return { operation, scope: moved.scope, archive_path: moved.archivePath };
   }
-  throw new MCPError(
-    INVALID_PARAMS,
-    "brain_intention operation must be one of: set, show, list, move",
-    { code: TOOL_ERROR_CODE.unknownOperation },
-  );
+  throw unknownOperationError("brain_intention operation must be one of: set, show, list, move");
 }
 
 // ----- brain_trigger (Workspace Insight Suite) ------------------------------
@@ -236,10 +232,8 @@ function toolBrainTrigger(
       });
     }
   }
-  throw new MCPError(
-    INVALID_PARAMS,
+  throw unknownOperationError(
     `brain_trigger operation must be one of: ${TRIGGER_OPERATIONS.join(", ")}`,
-    { code: TOOL_ERROR_CODE.unknownOperation },
   );
 }
 

@@ -45,7 +45,7 @@ import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { COUNT_GUARD_WIRE_CODE, TOOL_ERROR_CODE } from "../tool-error-codes.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
-import { coerceBoolOptional, coerceStr } from "../coerce.ts";
+import { coerceBoolOptional, coerceStr, unknownOperationError } from "../coerce.ts";
 import { coerceNonNegativeInteger, readCountGuardArgs } from "./shared.ts";
 
 const TOOL = "brain_note_lifecycle";
@@ -111,8 +111,7 @@ async function toolBrainNoteLifecycle(
     // Refused rather than defaulted: a caller that asked for a
     // disposition this tool does not have must never be told its request
     // succeeded under a different one.
-    throw new MCPError(
-      INVALID_PARAMS,
+    throw unknownOperationError(
       `${TOOL}: 'action' must be one of ${NOTE_LIFECYCLE_ACTIONS.join(", ")}`,
     );
   }
@@ -262,8 +261,7 @@ async function toolBrainScaffoldStub(
 ): Promise<Record<string, unknown>> {
   const action = coerceStr(args, "action", true)!;
   if (!isStubScaffoldAction(action)) {
-    throw new MCPError(
-      INVALID_PARAMS,
+    throw unknownOperationError(
       `${STUB_TOOL}: 'action' must be one of ${STUB_SCAFFOLD_ACTIONS.join(", ")}`,
     );
   }

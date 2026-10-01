@@ -33,6 +33,7 @@ import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { vaultPathField } from "../vault-path-field.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { coercePositiveInteger, optionalStringArg, requiredStringArg } from "./shared.ts";
+import { unknownOperationError } from "../coerce.ts";
 
 const TOOL = "brain_generation_reports";
 
@@ -49,7 +50,7 @@ async function toolBrainGenerationReports(
   if (action === "summary") {
     return { ...summarizeGenerationReports(ctx.vault, readFilter(args)) };
   }
-  throw new MCPError(INVALID_PARAMS, `${TOOL}: action must be record, list, or summary`);
+  throw unknownOperationError(`${TOOL}: action must be record, list, or summary`);
 }
 
 function recordAction(ctx: ServerContext, args: Record<string, unknown>): Record<string, unknown> {

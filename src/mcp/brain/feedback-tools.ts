@@ -83,7 +83,7 @@ import {
   isObservedUseVerdict,
   type ObservedUseEntry,
 } from "../../core/brain/observed-use.ts";
-import { coerceStr, coerceBool, coerceIsoDate } from "../coerce.ts";
+import { coerceStr, coerceBool, coerceIsoDate, unknownOperationError } from "../coerce.ts";
 import {
   enforceCountGuard,
   readCountGuardArgs,
@@ -448,8 +448,7 @@ async function toolBrainDream(
     action !== "discard" &&
     action !== "list"
   ) {
-    throw new MCPError(
-      INVALID_PARAMS,
+    throw unknownOperationError(
       "brain_dream: action must be run|stage|validate|apply|retriage|discard|list",
     );
   }
