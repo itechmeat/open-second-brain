@@ -30,6 +30,8 @@ A failed MCP call now says what failed in a token a client can branch on, and th
 
 - **A JSON-RPC refusal keeps the progress-token refusal.** A `tools/call` with a progress token over a single-response transport that failed on the JSON-RPC channel gave no sign that its token was refused; the refusal now rides in `error.data["open-second-brain/progress"]` beside `code`, with the message and the numeric code unchanged.
 - **A throw that escapes the HTTP dispatch is answered like any internal error.** The HTTP catch-all answered with the raw error message; it now answers `internal error: <message>` with the message passed through the redactor for the bind's reach and a classified `data.code`, the same builder the dispatcher's own internal-error answer uses.
+- **The rerank timeout covers the response body.** An endpoint that sent its headers and then stalled the body held the search past the rerank timeout, and a caller's cancellation during the stall was not honoured; the timeout and the cancellation now cover the body read, answering `timeout` or the caller's own reason, with the messages unchanged.
+- **`o2b brain doctor` no longer prints the plain-http rerank warning.** With `search_rerank_allow_insecure_http` set, the rerank check printed the runtime's once-per-process plain-http warning, so a later search in the same process sent vault text without it; the check now answers that case from the configuration alone.
 
 ## [1.65.0] - 2026-10-01
 
