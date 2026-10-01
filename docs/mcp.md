@@ -205,7 +205,8 @@ in the default for the numeric JSON-RPC code: `parse_error` (-32700),
 `invalid_request` (-32600), `method_not_found` (-32601), `invalid_params`
 (-32602), `internal_error` (-32603). Existing `data` members such as
 `tool`, `unknown_arguments` or `errors` are kept as they were, with
-`code` added after them.
+`code` added after them. A refusing site's code is itself a registry
+member; the server checks it and names an unregistered one on stderr.
 
 ```json
 {
