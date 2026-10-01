@@ -206,6 +206,16 @@ import {
   RETRIEVAL_DEGRADATION_CODES,
 } from "../../../src/core/search/retrieval-trail.ts";
 import {
+  isRerankFailureCategory,
+  RERANK_FAILURE_CATEGORIES,
+  RERANK_FAILURE_CATEGORY,
+} from "../../../src/core/search/rerank/failure.ts";
+import {
+  GENERIC_TOOL_ERROR_CODES,
+  isGenericToolErrorCode,
+  TOOL_ERROR_CODE,
+} from "../../../src/mcp/tool-error-codes.ts";
+import {
   isPageLintSkipReason,
   PAGE_LINT_SKIP_REASON,
   PAGE_LINT_SKIP_REASONS,
@@ -684,6 +694,30 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: RETRIEVAL_DEGRADATION,
     members: RETRIEVAL_DEGRADATION_CODES,
     guard: isRetrievalDegradationCode,
+  },
+  {
+    // Why a cross-encoder rerank request failed. Registered because the
+    // value leaves TypeScript: it rides `detail.category` of the
+    // `rerank-provider-unavailable` trail entry in `--json` and MCP
+    // `brain_search`, and it is computed from typed errors, so a member
+    // added to the object and forgotten in the list would be a category
+    // the producer emits and no reader can narrow back.
+    name: "RERANK_FAILURE_CATEGORY",
+    values: RERANK_FAILURE_CATEGORY,
+    members: RERANK_FAILURE_CATEGORIES,
+    guard: isRerankFailureCategory,
+  },
+  {
+    // The generic tokens the MCP boundary adds for failures that reach it
+    // with no code of their own. Registered because every value is a wire
+    // contract: it rides `error.data.code` or
+    // `_meta["open-second-brain/error"].code`, and clients branch on it.
+    // Only the generic object is four-piece; the imported core
+    // vocabularies keep their own registration where they live.
+    name: "TOOL_ERROR_CODE",
+    values: TOOL_ERROR_CODE,
+    members: GENERIC_TOOL_ERROR_CODES,
+    guard: isGenericToolErrorCode,
   },
   {
     // C3. The two vocabularies the schema-completeness audit is built on:
@@ -1591,7 +1625,7 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
  * How many four-piece vocabularies `src/` currently holds. Measured, and
  * kept as an equality rather than a floor - see the population test.
  */
-const VOCABULARY_POPULATION = 79;
+const VOCABULARY_POPULATION = 81;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {
