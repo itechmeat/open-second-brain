@@ -1650,14 +1650,18 @@ class JsonRpcStdioClientTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "method_not_found")
         self.assertEqual(str(caught.exception), str(error))
 
-    def test_error_response_without_data_has_no_code(self):
-        reader = _ScriptedReader(
-            [{"jsonrpc": "2.0", "id": 1, "error": {"code": -32601, "message": "nope"}}]
-        )
-        client = JsonRpcStdioClient(io.BytesIO(), reader)
-        with self.assertRaises(BridgeError) as caught:
-            client.request("missing", {})
-        self.assertIsNone(caught.exception.code)
+    def test_error_response_without_a_string_code_has_none(self):
+        for error in (
+            {"code": -32601, "message": "nope"},
+            {"code": -32601, "message": "nope", "data": ["x"]},
+            {"code": -32601, "message": "nope", "data": {"code": 42}},
+        ):
+            with self.subTest(error=error):
+                reader = _ScriptedReader([{"jsonrpc": "2.0", "id": 1, "error": error}])
+                client = JsonRpcStdioClient(io.BytesIO(), reader)
+                with self.assertRaises(BridgeError) as caught:
+                    client.request("missing", {})
+                self.assertIsNone(caught.exception.code)
 
     def test_eof_raises(self):
         client = JsonRpcStdioClient(io.BytesIO(), _ScriptedReader([]))
