@@ -1,24 +1,77 @@
 /**
  * `o2b discipline install` / `o2b discipline uninstall` verb handlers.
  *
- * Manages the Hermes cron job that delivers the daily OSB discipline report
- * to a Telegram topic. The real cron config lives at DEFAULT_JOBS_FILE;
- * tests override via the OSB_HERMES_JOBS env var to avoid touching the
- * user's live config.
+ * Manages the Hermes cron job that delivers the daily Open Second Brain
+ * discipline report to a Telegram topic. The real cron config is the
+ * Hermes jobs file under the home directory of the user running the verb
+ * (see {@link resolveJobsFilePath}); OSB_HERMES_JOBS names another file,
+ * which is also how tests avoid touching the user's live config.
  */
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { atomicWriteFileSync } from "../core/fs-atomic.ts";
 
-const DEFAULT_JOBS_FILE = "/root/.hermes/cron/jobs.json";
+/** Env var that names the jobs file explicitly. */
+const JOBS_FILE_ENV = "OSB_HERMES_JOBS";
 
-function jobsFilePath(): string {
-  return process.env.OSB_HERMES_JOBS ?? DEFAULT_JOBS_FILE;
+/** Where Hermes keeps its cron jobs, relative to the home directory. */
+const JOBS_FILE_SEGMENTS = Object.freeze([".hermes", "cron", "jobs.json"]);
+
+/** No home directory and no override: there is no jobs file to name. */
+export class HermesJobsPathError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "HermesJobsPathError";
+  }
 }
+
+/**
+ * The Hermes jobs file this verb reads and writes: `OSB_HERMES_JOBS` when
+ * set and non-empty, otherwise `~/.hermes/cron/jobs.json` of the running
+ * user. The default used to be the root user's file whatever the user,
+ * so on a non-root Hermes host install wrote where Hermes never reads (or
+ * failed on permissions). Root hosts resolve to the same path as before.
+ * An empty home with no override is a named error rather than a relative
+ * `.hermes/...` path written into whatever directory the verb ran in.
+ */
+export function resolveJobsFilePath(
+  env: Readonly<Record<string, string | undefined>>,
+  home: string,
+): string {
+  const override = env[JOBS_FILE_ENV];
+  if (override !== undefined && override !== "") return override;
+  if (home === "") {
+    throw new HermesJobsPathError(
+      "o2b discipline: cannot resolve the home directory to find the Hermes jobs file; " +
+        "set " +
+        JOBS_FILE_ENV +
+        " to its path",
+    );
+  }
+  return join(home, ...JOBS_FILE_SEGMENTS);
+}
+
+/**
+ * The jobs file for this process, or `null` after naming on stderr why it
+ * cannot be resolved.
+ */
+function jobsFilePathOrReport(): string | null {
+  try {
+    return resolveJobsFilePath(process.env, homedir());
+  } catch (err) {
+    if (!(err instanceof HermesJobsPathError)) throw err;
+    process.stderr.write(err.message + "\n");
+    return null;
+  }
+}
+
+/** Exit when the jobs file cannot be located: an environment problem, not argv. */
+const EXIT_JOBS_PATH_UNRESOLVED = 1;
 
 /**
  * Resolve the absolute path to `bin/o2b-discipline-report` from this
@@ -138,7 +191,8 @@ export async function disciplineInstallVerb(args: string[], defaultVault: string
     );
     return 2;
   }
-  const file = jobsFilePath();
+  const file = jobsFilePathOrReport();
+  if (file === null) return EXIT_JOBS_PATH_UNRESOLVED;
   const data = loadJobs(file);
   const id = weekly ? weeklyJobId(vault) : jobId(vault);
   const existing = data.jobs.find((j) => j.id === id);
@@ -185,7 +239,8 @@ export async function disciplineUninstallVerb(
     process.stderr.write("o2b discipline uninstall: --vault is required\n");
     return 2;
   }
-  const file = jobsFilePath();
+  const file = jobsFilePathOrReport();
+  if (file === null) return EXIT_JOBS_PATH_UNRESOLVED;
   const data = loadJobs(file);
   const ids = weekly ? [weeklyJobId(vault)] : [jobId(vault), weeklyJobId(vault)];
   const before = data.jobs.length;

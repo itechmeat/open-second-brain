@@ -5,7 +5,9 @@
  * jobs.length transitions: 0 → 1 → 1 → 0 → 0
  *
  * OSB_HERMES_JOBS points at a tmp file so the user's real cron config
- * (/root/.hermes/cron/jobs.json) is never touched.
+ * (~/.hermes/cron/jobs.json of whoever runs the suite) is never touched.
+ * The default path itself is asserted through the pure resolver, which
+ * takes the environment and the home directory as arguments.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -13,6 +15,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { HermesJobsPathError, resolveJobsFilePath } from "../../src/cli/discipline-install.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
 let tmp: string;
@@ -204,5 +207,36 @@ describe("o2b discipline install / uninstall", () => {
     const r = await runCli(["discipline", "uninstall", "--vault", vault], { env });
     expect(r.returncode).toBe(0);
     expect(readJobs().jobs.length).toBe(0);
+  });
+});
+
+describe("resolveJobsFilePath", () => {
+  test("defaults to the Hermes jobs file under the given home", () => {
+    expect(resolveJobsFilePath({}, "/home/op")).toBe("/home/op/.hermes/cron/jobs.json");
+    // Root hosts keep the path they always had.
+    expect(resolveJobsFilePath({}, "/root")).toBe("/root/.hermes/cron/jobs.json");
+  });
+
+  test("OSB_HERMES_JOBS overrides the default, even without a home", () => {
+    expect(resolveJobsFilePath({ OSB_HERMES_JOBS: "/srv/jobs.json" }, "/home/op")).toBe(
+      "/srv/jobs.json",
+    );
+    expect(resolveJobsFilePath({ OSB_HERMES_JOBS: "/srv/jobs.json" }, "")).toBe("/srv/jobs.json");
+  });
+
+  test("an empty OSB_HERMES_JOBS is unset, not a path", () => {
+    expect(resolveJobsFilePath({ OSB_HERMES_JOBS: "" }, "/home/op")).toBe(
+      "/home/op/.hermes/cron/jobs.json",
+    );
+  });
+
+  test("no home and no override is a named error that names the way out", () => {
+    expect(() => resolveJobsFilePath({}, "")).toThrow(HermesJobsPathError);
+    try {
+      resolveJobsFilePath({}, "");
+    } catch (err) {
+      expect((err as Error).message).toContain("OSB_HERMES_JOBS");
+      expect((err as Error).name).toBe("HermesJobsPathError");
+    }
   });
 });
