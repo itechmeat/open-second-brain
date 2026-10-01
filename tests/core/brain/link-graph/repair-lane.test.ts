@@ -63,8 +63,12 @@ function candidate(overrides: Partial<RepairCandidate>): RepairCandidate {
 describe("runRepairLane ordering and gating", () => {
   test("candidates are ordered by identity strength, strongest first", () => {
     writeNote("Notes/a.md", "A", "body");
+    // The full ladder in one table, so the tier order has exactly one owner:
+    // area_membership (t_23bd347d) slots between same_topic_evidence and
+    // inferred rather than carrying a second ordering test.
     const candidates: RepairCandidate[] = [
       candidate({ target: "Notes/inf.md", strength: IDENTITY_STRENGTH.inferred }),
+      candidate({ target: "Notes/area.md", strength: IDENTITY_STRENGTH.areaMembership }),
       candidate({ target: "Notes/topic.md", strength: IDENTITY_STRENGTH.sameTopicEvidence }),
       candidate({ target: "Notes/cont.md", strength: IDENTITY_STRENGTH.sessionContinuity }),
       candidate({ target: "Notes/exp.md", strength: IDENTITY_STRENGTH.explicitReference }),
@@ -75,6 +79,7 @@ describe("runRepairLane ordering and gating", () => {
       IDENTITY_STRENGTH.explicitReference,
       IDENTITY_STRENGTH.sessionContinuity,
       IDENTITY_STRENGTH.sameTopicEvidence,
+      IDENTITY_STRENGTH.areaMembership,
       IDENTITY_STRENGTH.inferred,
     ]);
   });
@@ -194,25 +199,6 @@ describe("runRepairLane dry-run vs apply", () => {
 });
 
 describe("runRepairLane areaMembership tier (t_23bd347d)", () => {
-  test("area_membership orders between same_topic_evidence and inferred", () => {
-    writeNote("Notes/a.md", "A", "body");
-    const candidates: RepairCandidate[] = [
-      candidate({ target: "Notes/inf.md", strength: IDENTITY_STRENGTH.inferred }),
-      candidate({ target: "Notes/area.md", strength: IDENTITY_STRENGTH.areaMembership }),
-      candidate({ target: "Notes/topic.md", strength: IDENTITY_STRENGTH.sameTopicEvidence }),
-      candidate({ target: "Notes/cont.md", strength: IDENTITY_STRENGTH.sessionContinuity }),
-      candidate({ target: "Notes/exp.md", strength: IDENTITY_STRENGTH.explicitReference }),
-    ];
-    const report = runRepairLane(vault, candidates, { includeInferred: true });
-    expect(report.decisions.map((d) => d.strength)).toEqual([
-      IDENTITY_STRENGTH.explicitReference,
-      IDENTITY_STRENGTH.sessionContinuity,
-      IDENTITY_STRENGTH.sameTopicEvidence,
-      IDENTITY_STRENGTH.areaMembership,
-      IDENTITY_STRENGTH.inferred,
-    ]);
-  });
-
   test("an area_membership candidate passes the confidence threshold at full confidence", () => {
     writeNote("Notes/a.md", "A", "body");
     writeNote("Notes/b.md", "B", "body");
@@ -225,72 +211,57 @@ describe("runRepairLane areaMembership tier (t_23bd347d)", () => {
   });
 });
 
-describe("runRepairLane hub refusals (t_23bd347d)", () => {
-  test("skip-no-hub and skip-ambiguous-hub ride collectedRefusals verbatim and never count as writes", () => {
-    writeNote("Notes/a.md", "A", "body");
-    writeNote("Notes/b.md", "B", "body");
-    const noHub: RepairDecision = {
-      ...candidate({ source: "captured/x.md", target: "", reason: "no hub page in scope bucket" }),
-      action: "skip-no-hub",
-    };
-    const ambiguous: RepairDecision = {
-      ...candidate({
-        source: "captured/y.md",
-        target: "",
-        reason: "2 hub pages in scope bucket (unscoped): a.md, b.md",
-      }),
-      action: "skip-ambiguous-hub",
-    };
-    const report = runRepairLane(vault, [candidate({})], {
-      collectedRefusals: [noHub, ambiguous],
-    });
-    expect(report.decisions).toContainEqual(noHub);
-    expect(report.decisions).toContainEqual(ambiguous);
-    expect(report.written).toBe(1);
-    expect(report.decisions.filter((d) => d.action === "skip-no-hub")).toHaveLength(1);
-    expect(report.decisions.filter((d) => d.action === "skip-ambiguous-hub")).toHaveLength(1);
-  });
-
-  test("hub refusals do not consume the write cap", () => {
-    writeNote("Notes/a.md", "A", "body");
-    writeNote("Notes/b.md", "B", "body");
-    const noHub: RepairDecision = {
-      ...candidate({ source: "captured/x.md", target: "", reason: "no hub page in scope bucket" }),
-      action: "skip-no-hub",
-    };
-    const report = runRepairLane(vault, [candidate({})], {
-      writeCap: 1,
-      collectedRefusals: [noHub],
-    });
-    expect(report.written).toBe(1);
-  });
-});
-
+/**
+ * The ride-along contract for EVERY refusal action the upstream collectors
+ * stage today, asserted table-driven over all of them: the inbox-drain hub
+ * selection (t_23bd347d) stages skip-no-hub / skip-ambiguous-hub with an
+ * empty target, the corpus collector stages skip-ambiguous - and the lane
+ * owns ONE contract over the lot. Hub actions get no second, special-cased
+ * test: they are rows in the same table, with their production fixture
+ * shapes (area_membership strength, target "").
+ */
 describe("runRepairLane collected refusals", () => {
-  test("refusals are reported verbatim, never re-decided, never counted as writes", () => {
+  const noHub: RepairDecision = {
+    ...candidate({ source: "captured/x.md", target: "", reason: "no hub page in scope bucket" }),
+    action: "skip-no-hub",
+  };
+  const ambiguousHub: RepairDecision = {
+    ...candidate({
+      source: "captured/y.md",
+      target: "",
+      reason: "2 hub pages in scope bucket (unscoped): a.md, b.md",
+    }),
+    action: "skip-ambiguous-hub",
+  };
+  const ambiguous: RepairDecision = {
+    ...candidate({ source: "Notes/src.md", target: "Notes/x.md", reason: "ambiguous: Alpha" }),
+    action: "skip-ambiguous",
+  };
+  const allRefusals: RepairDecision[] = [noHub, ambiguousHub, ambiguous];
+
+  test("every refusal action rides verbatim, never re-decided, never counted as writes", () => {
     writeNote("Notes/a.md", "A", "body");
     writeNote("Notes/b.md", "B", "body");
-    const refusal: RepairDecision = {
-      ...candidate({ source: "Notes/src.md", target: "Notes/x.md", reason: "ambiguous: Alpha" }),
-      action: "skip-ambiguous",
-    };
-    const report = runRepairLane(vault, [candidate({})], { collectedRefusals: [refusal] });
-    expect(report.decisions[0]).toEqual(refusal);
+    const report = runRepairLane(vault, [candidate({})], { collectedRefusals: allRefusals });
+    // Refusals ride AHEAD of the lane's own decisions: the strongest refusal,
+    // not the lane's same-strength write, opens the report.
+    expect(report.decisions[0]).toEqual(ambiguous);
+    for (const refusal of allRefusals) {
+      expect(report.decisions).toContainEqual(refusal);
+      expect(report.decisions.filter((d) => d.action === refusal.action)).toHaveLength(1);
+    }
     expect(report.written).toBe(1);
-    expect(report.decisions.filter((d) => d.action === "skip-ambiguous")).toHaveLength(1);
   });
 
-  test("refusals do not consume the write cap", () => {
+  test("no refusal action consumes the write cap", () => {
     writeNote("Notes/a.md", "A", "body");
     writeNote("Notes/b.md", "B", "body");
-    const refusal: RepairDecision = {
-      ...candidate({ source: "Notes/src.md", target: "Notes/x.md", reason: "ambiguous: Alpha" }),
-      action: "skip-ambiguous",
-    };
     const report = runRepairLane(vault, [candidate({})], {
       writeCap: 1,
-      collectedRefusals: [refusal],
+      collectedRefusals: allRefusals,
     });
+    // Refusals sort ahead of the candidate: had ANY action been charged to
+    // the cap, the write would not have happened.
     expect(report.written).toBe(1);
   });
 
