@@ -25,6 +25,8 @@ interface Harness {
   readonly exits: number[];
   readonly clock: { ms: number };
   readonly guard: ReturnType<typeof installMcpFaultGuard>;
+  /** Timers the guard armed, in order; `fire()` runs one as if it elapsed. */
+  readonly timers: { delayMs: number; fire: () => void; cancelled: boolean }[];
 }
 
 const START_MS = Date.parse("2026-10-01T03:00:00.000Z");
@@ -33,6 +35,7 @@ function harness(opts: { throwingStderr?: boolean } = {}): Harness {
   const lines: string[] = [];
   const exits: number[] = [];
   const clock = { ms: START_MS };
+  const timers: Harness["timers"] = [];
   const guard = installMcpFaultGuard({
     stderr: {
       write(chunk: string): void {
@@ -42,8 +45,15 @@ function harness(opts: { throwingStderr?: boolean } = {}): Harness {
     },
     exit: (code) => exits.push(code),
     now: () => new Date(clock.ms),
+    schedule: (fire, delayMs) => {
+      const timer = { delayMs, fire, cancelled: false };
+      timers.push(timer);
+      return () => {
+        timer.cancelled = true;
+      };
+    },
   });
-  return { lines, exits, clock, guard };
+  return { lines, exits, clock, guard, timers };
 }
 
 /** The rejection count, checked after each synchronous dispatch. */
@@ -119,6 +129,42 @@ describe("installMcpFaultGuard: unhandled rejections", () => {
     } finally {
       h.guard.release();
     }
+  });
+
+  test("a quiet server reports what it suppressed once the window ends", () => {
+    const h = harness();
+    try {
+      emitRejection(new Error("first"));
+      h.clock.ms += 10_000;
+      for (let i = 0; i < REJECTION_LOG_BURST + 1; i += 1) emitRejection(new Error("x"));
+      // One timer, armed for the rest of the window the first fault opened.
+      expect(h.timers.map((t) => t.delayMs)).toEqual([REJECTION_LOG_WINDOW_MS - 10_000]);
+      expect(h.lines.filter((l) => l.includes("suppressed"))).toEqual([]);
+      h.clock.ms += REJECTION_LOG_WINDOW_MS;
+      h.timers[0]!.fire();
+      expect(h.lines.filter((l) => l.includes("suppressed"))).toEqual([
+        `[mcp] unhandled_rejection: 2 more suppressed in the last ${REJECTION_LOG_WINDOW_MS}ms\n`,
+      ]);
+    } finally {
+      h.guard.release();
+    }
+    // Nothing left to flush: release adds no second summary.
+    expect(h.lines.filter((l) => l.includes("suppressed"))).toHaveLength(1);
+  });
+
+  test("a credential in a fault message is redacted before it reaches stderr", () => {
+    const h = harness();
+    const secret = "s3cr3t-pass-value";
+    try {
+      emitRejection(new Error(`fetch failed for https://op:${secret}@example.invalid/v1`));
+      process.emit("uncaughtException", new Error(`provider said token=${secret}`));
+    } finally {
+      h.guard.release();
+    }
+    const out = h.lines.join("");
+    expect(out).toContain("[mcp] unhandled_rejection #1: Error: fetch failed for https://");
+    expect(out).toContain("[mcp] uncaught_exception: Error: provider said");
+    expect(out).not.toContain(secret);
   });
 
   test("release flushes a pending summary so a suppressed count is never lost", () => {

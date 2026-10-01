@@ -46,6 +46,7 @@
  */
 
 import type { McpFaultCounts } from "../mcp/http.ts";
+import { redactRawOutput } from "../core/redactor.ts";
 import type { DrainReportStream } from "./mcp-drain.ts";
 
 /** sysexits `EX_SOFTWARE`: distinct from 1 (CLI error) and 130/143 (signals). */
@@ -75,7 +76,33 @@ export interface McpFaultGuardOptions {
   readonly exit?: (code: number) => void;
   /** The clock for the rate limit and `last_fault_at`. */
   readonly now?: () => Date;
+  /**
+   * Arms the one-shot timer that flushes the summary of a window once it
+   * ends. Injected only by tests; the product uses an unref'd
+   * `setTimeout`.
+   */
+  readonly schedule?: FaultGuardScheduler;
 }
+
+/** Run `fire` once after `delayMs`; the returned function cancels it. */
+export type FaultGuardScheduler = (fire: () => void, delayMs: number) => () => void;
+
+/**
+ * The product scheduler: unref'd, so the timer never holds a stopping
+ * process open.
+ */
+const unrefTimeout: FaultGuardScheduler = (fire, delayMs) => {
+  const timer = setTimeout(fire, delayMs);
+  timer.unref?.();
+  return () => clearTimeout(timer);
+};
+
+/**
+ * Redaction applied to every line the guard writes: an error message can
+ * carry a credential-bearing URL or a token echoed by a provider, and a
+ * stdio host captures this stderr into its own log files.
+ */
+const FAULT_LINE_REDACTION = Object.freeze({ redactTokens: true, redactUrlCredentials: true });
 
 export interface McpFaultGuardHandle {
   /** A snapshot of the counts, the shape `/health` reports. */
@@ -92,6 +119,7 @@ export function installMcpFaultGuard(opts: McpFaultGuardOptions = {}): McpFaultG
   const stderr = opts.stderr ?? process.stderr;
   const exit = opts.exit ?? ((code: number) => process.exit(code));
   const now = opts.now ?? (() => new Date());
+  const schedule = opts.schedule ?? unrefTimeout;
 
   let rejections = 0;
   let exceptions = 0;
@@ -99,22 +127,22 @@ export function installMcpFaultGuard(opts: McpFaultGuardOptions = {}): McpFaultG
   let windowStartMs = Number.NEGATIVE_INFINITY;
   let loggedInWindow = 0;
   let suppressedInWindow = 0;
-  let summaryTimer: ReturnType<typeof setTimeout> | null = null;
+  let cancelSummary: (() => void) | null = null;
   let exiting = false;
   let released = false;
 
   const write = (chunk: string): void => {
     try {
-      stderr.write(chunk);
+      stderr.write(redactRawOutput(chunk, FAULT_LINE_REDACTION));
     } catch {
       // A closed stderr has nowhere to report to; the count still records it.
     }
   };
 
   const flushSummary = (): void => {
-    if (summaryTimer !== null) {
-      clearTimeout(summaryTimer);
-      summaryTimer = null;
+    if (cancelSummary !== null) {
+      cancelSummary();
+      cancelSummary = null;
     }
     if (suppressedInWindow === 0) return;
     write(
@@ -145,10 +173,9 @@ export function installMcpFaultGuard(opts: McpFaultGuardOptions = {}): McpFaultG
       }
       suppressedInWindow += 1;
       // A quiet server still reports what it suppressed once the window
-      // ends; unref'd so the timer never holds a stopping process open.
-      if (summaryTimer === null) {
-        summaryTimer = setTimeout(flushSummary, windowStartMs + REJECTION_LOG_WINDOW_MS - atMs);
-        summaryTimer.unref?.();
+      // ends.
+      if (cancelSummary === null) {
+        cancelSummary = schedule(flushSummary, windowStartMs + REJECTION_LOG_WINDOW_MS - atMs);
       }
     } catch {
       // The guard must never become the fault it is guarding against.
