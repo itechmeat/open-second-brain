@@ -51,6 +51,7 @@ import { inboxArchivableCheck } from "./doctor/inbox-archive-check.ts";
 import { capturePatternCheck, configCheck, vaultIgnoreCheck } from "./doctor/config-checks.ts";
 import { entityRegistryCheck } from "./doctor/entity-checks.ts";
 import { brokenBacklinkCheck } from "./doctor/link-checks.ts";
+import { mergeChainDanglingCheck } from "./doctor/merge-chain-check.ts";
 import { orphanSessionCheck } from "./doctor/orphan-session-check.ts";
 import { evidenceRangeCheck, logShardCheck, orphanEvidenceCheck } from "./doctor/log-checks.ts";
 import {
@@ -149,6 +150,7 @@ const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = Object.freeze([
   duplicateIdCheck,
   logShardCheck,
   brokenBacklinkCheck,
+  mergeChainDanglingCheck,
   // The one check whose collector is supplied rather than imported: its
   // pure kernel is the leaf both halves share, so this registry - which
   // already reaches every check module and the store beneath them - is

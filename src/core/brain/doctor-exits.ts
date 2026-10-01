@@ -109,6 +109,19 @@ const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
       "which of the two was the typo",
   },
   {
+    // The dangling `merged_into` pointer (t_ff8bb8a8). The pointer is the
+    // record of a merge decision, and the canonical it names is gone; three
+    // different acts restore the page to a resolvable state, and they do
+    // NOT agree on what the vault ends up saying.
+    code: "merge-chain-dangling",
+    reason:
+      "the canonical the pointer names is gone, and three different acts restore the page: " +
+      "re-pointing it at a surviving canonical, removing the pointer to un-merge, or restoring " +
+      "the deleted file. Which of the three is right depends on what the original merge was " +
+      "meant to keep, and a mechanical pick would overwrite the record of a decision it never " +
+      "read",
+  },
+  {
     code: "pinned-without-recent-evidence",
     reason:
       "the pin is doing exactly what a pin does - holding a rule back from automatic retire. " +

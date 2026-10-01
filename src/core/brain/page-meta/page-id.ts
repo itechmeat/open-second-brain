@@ -123,7 +123,15 @@ function isValidPageId(id: string): boolean {
   return PAGE_ID_RE.test(id);
 }
 
-function pageIdToPath(vault: string, id: string): string | null {
+/**
+ * The file a page id lives in, or `null` when the id carries neither
+ * known prefix. The pointer namespace is `pref-`/`ret-`, so this is the
+ * one definition of where a page id exists on disk; exposed so a
+ * read-only consumer (the doctor's dangling-pointer check) names finding
+ * paths through the same mapping the walkers resolve through instead of
+ * re-deriving it.
+ */
+export function pageIdToPath(vault: string, id: string): string | null {
   if (!isValidPageId(id)) return null;
   const dirs = brainDirs(vault);
   if (id.startsWith("pref-")) return join(dirs.preferences, `${id}.md`);
@@ -224,6 +232,58 @@ export function resolveCanonicalId(vault: string, startId: string): string {
     throw new MergeChainError("MALFORMED", walk.at, `page id has no known prefix: ${walk.at}`);
   }
   return walk.at;
+}
+
+/**
+ * Why a {@link reportMergeChain} walk ended where it did, as outcomes
+ * rather than exceptions. The three classes {@link resolveCanonicalId}
+ * raises are named here so a diagnostics check can classify a chain
+ * without try/catch, and the terminal state is split in two because the
+ * halves are different findings: a chain that ends at a page nobody
+ * kept is a defect, a chain that ends at a page with no pointer is a
+ * merge that finished.
+ */
+export type MergeChainReportOutcome = "resolved" | "dangling" | "malformed" | "cycle" | "depth";
+
+/** Where following one page's `merged_into:` chain on disk led. */
+export interface MergeChainReport {
+  /** Ids visited in order, starting with the id the walk began at. */
+  readonly visited: ReadonlyArray<string>;
+  readonly outcome: MergeChainReportOutcome;
+  /**
+   * The id the outcome is about: the terminal page for the terminal
+   * outcomes, the one the walk came back to for `cycle`, and the start
+   * id for `depth`, where no single id is at fault.
+   */
+  readonly at: string;
+}
+
+/**
+ * Follow the `merged_into:` chain from `startId` through the files on
+ * disk and report where it ended, without throwing.
+ *
+ * The terminal classification is the one {@link resolveCanonicalId}
+ * performs, plus the question it never asks: whether the page the walk
+ * stopped at still EXISTS. A dangling terminal is exactly the state
+ * `isMergeResolved` deliberately counts as resolved - the pointer is
+ * there, the canonical was later lost - and resolving it silently is
+ * what left the condition invisible to every reader but lint, which
+ * only sees it when a link happens to resolve through the page.
+ *
+ * The dangling verdict is the file test, not the pointer graph: a
+ * terminal whose frontmatter will not parse still counts as resolved,
+ * because its file is there and the parse failure is the record
+ * checks' finding to report.
+ */
+export function reportMergeChain(vault: string, startId: string): MergeChainReport {
+  const walk = walkMergeChain(startId, filePointerLookup(vault));
+  if (walk.outcome === "cycle" || walk.outcome === "depth") {
+    return { visited: walk.visited, outcome: walk.outcome, at: walk.at };
+  }
+  if (!isValidPageId(walk.at)) return { ...walk, outcome: "malformed" };
+  const path = pageIdToPath(vault, walk.at);
+  if (path === null || !existsSync(path)) return { ...walk, outcome: "dangling" };
+  return { ...walk, outcome: "resolved" };
 }
 
 export interface SetMergedIntoOptions {
