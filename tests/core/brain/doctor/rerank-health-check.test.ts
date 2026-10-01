@@ -24,7 +24,6 @@ import {
   RERANK_MODEL_SUNSET_ANNOUNCED_CODE,
   RERANK_MODEL_SUNSET_UNDETERMINED_CODE,
   RERANK_MODEL_SUNSET_UNSURVEYED_CODE,
-  rerankHealthCheck,
 } from "../../../../src/core/brain/doctor/rerank-health-check.ts";
 import type { DoctorUncertainEntry } from "../../../../src/core/brain/doctor/report.ts";
 import { DOCTOR_EXIT_EXCLUSIONS } from "../../../../src/core/brain/doctor-exits.ts";
@@ -162,11 +161,46 @@ describe("an enabled remote rerank that cannot resolve its endpoint is one error
     expect(issues[0]!.message).toContain(KEY_VAR);
   });
 
-  test("an unregistered provider name is the same error, naming the name", () => {
-    configure({ provider: "nobody-registered-this" });
+  test("an unregistered provider name that leaves a field empty is named in the error", () => {
+    configure({ provider: "nobody-registered-this", baseUrl: null });
     const { issues } = run();
     expect(issues.map((i) => i.code)).toEqual([RERANK_ENDPOINT_UNCONFIGURED_CODE]);
     expect(issues[0]!.message).toContain("nobody-registered-this");
+  });
+
+  test("an unregistered provider name beside a complete explicit endpoint is no finding", () => {
+    // The explicit search_rerank_* values win over a profile, so search
+    // works and a fail-closed error would be false.
+    configure({ provider: "nobody-registered-this" });
+    expect(codes(run())).toEqual([]);
+  });
+
+  test("a key variable set to blank is the error the runtime would raise", () => {
+    process.env[KEY_VAR] = "  ";
+    const { issues } = run();
+    expect(issues.map((i) => i.code)).toEqual([RERANK_ENDPOINT_UNCONFIGURED_CODE]);
+    expect(issues[0]!.message).toContain(KEY_VAR);
+  });
+
+  test("a blank model is the same error as a missing one", () => {
+    configure({ model: " " });
+    const { issues } = run();
+    expect(issues.map((i) => i.code)).toEqual([RERANK_ENDPOINT_UNCONFIGURED_CODE]);
+    expect(issues[0]!.message).toContain("search_rerank_model");
+  });
+
+  test("a base URL the endpoint rule refuses is the same error, naming the rule", () => {
+    configure({ baseUrl: "http://example.invalid/v1" });
+    const { issues } = run();
+    expect(issues.map((i) => i.code)).toEqual([RERANK_ENDPOINT_UNCONFIGURED_CODE]);
+    expect(issues[0]!.message).toContain("search_rerank_base_url must be an https endpoint");
+  });
+
+  test("a base URL that is not a URL is the same error", () => {
+    configure({ baseUrl: "not a url" });
+    const { issues } = run();
+    expect(issues.map((i) => i.code)).toEqual([RERANK_ENDPOINT_UNCONFIGURED_CODE]);
+    expect(issues[0]!.message).toContain("search_rerank_base_url is not a URL");
   });
 
   test("a registered provider name supplies the missing endpoint fields", () => {
@@ -249,8 +283,7 @@ describe("the check is config-only and registered", () => {
     expect(calls).toBe(0);
   });
 
-  test("it is fail-soft and the doctor pass runs it", () => {
-    expect(rerankHealthCheck.failSoft).toBe(true);
+  test("the doctor pass runs it", () => {
     configure({ baseUrl: null });
     const result = runDoctor(vault, { now: NOW, configPath });
     expect(result.errors.map((e) => e.code)).toContain(RERANK_ENDPOINT_UNCONFIGURED_CODE);

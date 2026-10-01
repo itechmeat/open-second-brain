@@ -17,8 +17,10 @@
  * doctor probe would spend provider budget on every run, send a request
  * an operator did not ask for, and report a state that is stale the
  * moment the pass ends. So the check proves configuration only: the
- * three endpoint fields resolve, the key variable is set, the named
- * provider profile exists, and the survey's answer for the model.
+ * three endpoint fields resolve to non-blank values, the base URL passes
+ * the endpoint rule the provider applies (shape only), the key variable
+ * is set and not blank, a provider name that left a field empty is named,
+ * and the survey's answer for the model.
  *
  * ## Scope
  *
@@ -30,6 +32,7 @@
  */
 
 import { discoverConfig } from "../../config.ts";
+import { assertHttpEgressEndpoint } from "../../search/embeddings/http-util.ts";
 import { resolveSearchConfig } from "../../search/index.ts";
 import {
   EMBEDDING_SUNSET,
@@ -67,6 +70,7 @@ const BASE_URL_KEY = "search_rerank_base_url";
 const MODEL_KEY = "search_rerank_model";
 const ENV_KEY_KEY = "search_rerank_env_key";
 const PROVIDER_KEY = "search_rerank_provider";
+const ALLOW_INSECURE_HTTP_KEY = "search_rerank_allow_insecure_http";
 /** The environment override of {@link PROVIDER_KEY}, read the way the resolver reads it. */
 const PROVIDER_ENV = "OPEN_SECOND_BRAIN_SEARCH_RERANK_PROVIDER";
 
@@ -88,22 +92,57 @@ function configuredProviderName(configPath: string | undefined): string | null {
   return envOrConfig(process.env, config, PROVIDER_ENV, PROVIDER_KEY);
 }
 
+/**
+ * Whether `value` is absent for the runtime: null, empty or whitespace.
+ * The endpoint resolver rejects a blank string the same way it rejects a
+ * missing one, so a variable exported as `RERANK_KEY=` is a gap here too.
+ */
+function blank(value: string | null): boolean {
+  return (value ?? "").trim() === "";
+}
+
+/**
+ * Why `baseUrl` would be refused by the endpoint rule the rerank provider
+ * applies at construction (`assertHttpEgressEndpoint`), or null when it is
+ * accepted. No request is sent; the rule reads the URL's shape only.
+ */
+function baseUrlRefusal(rerank: ResolvedRerankConfig, baseUrl: string): string | null {
+  try {
+    assertHttpEgressEndpoint(baseUrl, BASE_URL_KEY, {
+      allowInsecureHttp: rerank.allowInsecureHttp === true,
+      key: ALLOW_INSECURE_HTTP_KEY,
+    });
+    return null;
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+}
+
 /** Every reason the endpoint cannot resolve, in the order an operator fixes them. */
 function endpointGaps(rerank: ResolvedRerankConfig, ctx: DoctorCheckContext): string[] {
   const gaps: string[] = [];
+  if (rerank.baseUrl === null || blank(rerank.baseUrl)) {
+    gaps.push(`${BASE_URL_KEY} is not set`);
+  } else {
+    const refusal = baseUrlRefusal(rerank, rerank.baseUrl);
+    if (refusal !== null) gaps.push(refusal);
+  }
+  if (blank(rerank.model)) gaps.push(`${MODEL_KEY} is not set`);
+  if (blank(rerank.envKey)) {
+    gaps.push(`${ENV_KEY_KEY} is not set, so no API key can be read`);
+  } else if (blank(rerank.apiKey)) {
+    gaps.push(`the environment variable ${rerank.envKey} named by ${ENV_KEY_KEY} is not set`);
+  }
+  // An unregistered provider name matters only when it is why a field is
+  // empty: the explicit search_rerank_* values win over a profile, so with
+  // all of them set search works and the name is no endpoint gap.
+  if (gaps.length === 0) return gaps;
   const provider = configuredProviderName(ctx.configPath);
   if (provider !== null && !loadRerankRegistry(ctx.vault).some((p) => p.name === provider)) {
-    gaps.push(
+    gaps.unshift(
       `${PROVIDER_KEY} names ${provider}, which no registered rerank profile carries, so its ` +
         "base URL, model and key variable were not applied",
     );
-  }
-  if (rerank.baseUrl === null) gaps.push(`${BASE_URL_KEY} is not set`);
-  if (rerank.model === null) gaps.push(`${MODEL_KEY} is not set`);
-  if (rerank.envKey === null) {
-    gaps.push(`${ENV_KEY_KEY} is not set, so no API key can be read`);
-  } else if (rerank.apiKey === null) {
-    gaps.push(`the environment variable ${rerank.envKey} named by ${ENV_KEY_KEY} is not set`);
   }
   return gaps;
 }
@@ -202,7 +241,7 @@ export function makeRerankHealthCheck(
       // A missing model is already the finding above; consulting the
       // survey for it would meet the operator with two findings for one
       // condition.
-      if (rerank.model === null) return;
+      if (rerank.model === null || blank(rerank.model)) return;
 
       const verdict = classifyRerankSunset(rerank.model, ctx.now.getTime(), survey);
       switch (verdict.state) {
