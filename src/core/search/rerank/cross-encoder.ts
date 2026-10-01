@@ -142,9 +142,23 @@ export class CrossEncoderRerankProvider implements RerankProvider {
       );
     }
 
+    // Read and parse apart: a stream that breaks while the 2xx body is
+    // read is the path failing (`network`), while a body that arrived
+    // whole and is not JSON is the endpoint's answer (`malformed`).
+    let text: string;
+    try {
+      text = await response.text();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new RerankEndpointError(`network error: ${msg}`, {
+        category: RERANK_FAILURE_CATEGORY.network,
+      });
+    }
     let json: unknown;
     try {
-      json = await response.json();
+      // Parsed through a Response rather than JSON.parse, so the parse
+      // error, and with it the message, is the one `response.json()` gave.
+      json = await new Response(text).json();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       throw malformed(`rerank response not JSON: ${msg}`);
