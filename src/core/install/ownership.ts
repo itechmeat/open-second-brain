@@ -299,7 +299,8 @@ export const OUT_OF_VAULT_STATE: ReadonlyArray<OutOfVaultState> = Object.freeze(
     location:
       "~/.hermes/cron/jobs.json of the user running the verb, or the file OSB_HERMES_JOBS names",
     carries_memory: false,
-    created_by: "`o2b discipline install`, which adds or updates one job per vault in that file",
+    created_by:
+      "`o2b discipline install`, which adds or updates the daily or the weekly job of each vault in that file, so a vault can own two entries",
     removed_by:
       "`o2b discipline uninstall`, which removes this tool's jobs and leaves every other job in the file alone",
     note:
