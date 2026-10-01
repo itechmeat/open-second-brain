@@ -129,8 +129,22 @@ export interface JsonRpcResponse {
   readonly jsonrpc: string;
   readonly id: unknown;
   readonly result?: unknown;
-  readonly error?: { code: number; message: string; data?: unknown };
+  readonly error?: JsonRpcErrorBody;
 }
+
+/**
+ * The `error` member of a JSON-RPC answer. `data` is always present and
+ * always carries the string code, because {@link errorResponse} is the
+ * one builder and adds it when the thrower did not.
+ */
+export interface JsonRpcErrorBody {
+  readonly code: JsonRpcErrorCode;
+  readonly message: string;
+  readonly data: JsonRpcErrorData;
+}
+
+/** `error.data`: the thrower's record plus the stable string code. */
+export type JsonRpcErrorData = MCPErrorData & { readonly code: string };
 
 export class MCPServer {
   readonly vault: string;
@@ -615,7 +629,7 @@ const UNREGISTERED_CODE_WARNING = "warning: unregistered error code on the wire:
  * stderr. Every producer passes a constant token, never prose, so the
  * line is safe to log.
  */
-function withDefaultCode(code: JsonRpcErrorCode, data: MCPErrorData | undefined): MCPErrorData {
+function withDefaultCode(code: JsonRpcErrorCode, data: MCPErrorData | undefined): JsonRpcErrorData {
   const supplied: unknown = (data as { readonly [ERROR_DATA_CODE_KEY]?: unknown } | undefined)?.[
     ERROR_DATA_CODE_KEY
   ];
@@ -623,7 +637,7 @@ function withDefaultCode(code: JsonRpcErrorCode, data: MCPErrorData | undefined)
     if (!isToolErrorCode(supplied)) {
       process.stderr.write(`${UNREGISTERED_CODE_WARNING}${supplied}\n`);
     }
-    return data;
+    return data as JsonRpcErrorData;
   }
   return { ...data, [ERROR_DATA_CODE_KEY]: defaultCodeForRpc(code) };
 }
