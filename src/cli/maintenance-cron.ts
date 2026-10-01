@@ -109,7 +109,7 @@ function checkedWindow(raw: string): string {
 /** Whether the runtime knows the zone, the same check the lane makes. */
 function isKnownTimeZone(zone: string): boolean {
   try {
-    new Intl.DateTimeFormat(undefined, { timeZone: zone });
+    new Intl.DateTimeFormat(undefined, { timeZone: zone }).resolvedOptions();
     return true;
   } catch (err) {
     if (err instanceof RangeError) return false;
