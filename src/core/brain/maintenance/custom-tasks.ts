@@ -27,10 +27,14 @@
  * effects inside an operator's own command, and it does not pretend to.
  */
 
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { isAbsolute } from "node:path";
 
 import { discoverConfig, resolveMaintenanceCustomTasks } from "../../config.ts";
-import { MAINTENANCE_LEASE_TTL_MS } from "./lane.ts";
+import { redactRawOutput } from "../../redactor.ts";
+import { shellArgv } from "../../reliability/command-bridge.ts";
+import { SafeguardAbortError, SafeguardTimeoutError } from "../safeguard.ts";
+import { MAINTENANCE_LEASE_TTL_MS, type MaintenanceTask } from "./lane.ts";
 
 export const CUSTOM_TASK_PREFIX = "custom:";
 export const CUSTOM_TASK_NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
@@ -165,4 +169,153 @@ export function resolveCustomTasks(configPath?: string): CustomTaskResolution {
     });
   }
   return { enabled, specs, errors, declared };
+}
+
+/** Cap of the persisted failure message, matching the lane's own error cap. */
+const CUSTOM_TASK_ERROR_MAX_BYTES = 4096;
+/** How much stderr is held in memory; only the tail is ever reported. */
+const STDERR_HOLD_BYTES = 64 * 1024;
+
+/**
+ * The lane task that runs one declared command.
+ *
+ * The command runs through the shared platform shell form
+ * ({@link shellArgv}) with stdin closed, stdout discarded (the lane's own
+ * stdout may be the JSON a caller parses), `O2B_VAULT` set, and the vault
+ * as the working directory unless the declaration names one. Exit 0
+ * resolves with no receipt: a custom task never calls a model on the
+ * lane's behalf and has no spend to account for. A non-zero exit throws
+ * `exit <N>: <stderr tail>`, the tail redacted BEFORE it is capped so a
+ * secret cannot straddle the cut, at most 4096 bytes in all.
+ *
+ * The timeout is enforced here, not by the `OPERATION`-keyed safeguard (a
+ * custom identity is not an operation): past `timeoutSeconds` the child's
+ * process tree is killed and the task throws {@link SafeguardTimeoutError},
+ * so the journal row carries `timed_out: true` exactly as a built-in's does
+ * - and, for a custom identity, that row counts toward the failure streak.
+ * An aborted `signal` kills the tree the same way and throws
+ * {@link SafeguardAbortError}.
+ */
+export function createCustomLaneTask(
+  spec: CustomTaskSpec,
+  ctx: { readonly vault: string; readonly signal?: AbortSignal },
+): MaintenanceTask {
+  return {
+    name: spec.id,
+    run: () => runCustomCommand(spec, ctx),
+  };
+}
+
+function runCustomCommand(
+  spec: CustomTaskSpec,
+  ctx: { readonly vault: string; readonly signal?: AbortSignal },
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    if (ctx.signal?.aborted === true) {
+      reject(new SafeguardAbortError(spec.id));
+      return;
+    }
+    const [shell, argv] = shellArgv(spec.command);
+    let child: ChildProcess;
+    try {
+      child = spawn(shell, argv, {
+        cwd: spec.cwd ?? ctx.vault,
+        env: { ...process.env, O2B_VAULT: ctx.vault },
+        stdio: ["ignore", "ignore", "pipe"],
+        windowsVerbatimArguments: process.platform === "win32",
+        // Its own process group on POSIX, so a kill reaches whatever the
+        // shell started, not only the shell.
+        detached: process.platform !== "win32",
+        windowsHide: true,
+      });
+    } catch (err) {
+      reject(new Error(`${spec.id}: could not start: ${(err as Error).message ?? String(err)}`));
+      return;
+    }
+
+    let stderr = Buffer.alloc(0);
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr = Buffer.concat([stderr, chunk]);
+      if (stderr.length > STDERR_HOLD_BYTES) stderr = stderr.subarray(-STDERR_HOLD_BYTES);
+    });
+
+    let settled = false;
+    const timeoutMs = spec.timeoutSeconds * 1000;
+    const finish = (error?: Error): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      ctx.signal?.removeEventListener("abort", onAbort);
+      if (error === undefined) resolve();
+      else reject(error);
+    };
+    const timer = setTimeout(() => {
+      killTree(child);
+      finish(new SafeguardTimeoutError(spec.id, timeoutMs));
+    }, timeoutMs);
+    const onAbort = (): void => {
+      killTree(child);
+      finish(new SafeguardAbortError(spec.id));
+    };
+    ctx.signal?.addEventListener("abort", onAbort, { once: true });
+
+    child.on("error", (err) => {
+      killTree(child);
+      finish(new Error(`${spec.id}: could not run: ${err.message}`));
+    });
+    child.on("close", (code, signal) => {
+      if (code === 0) {
+        finish();
+        return;
+      }
+      const head = code !== null ? `exit ${code}` : `killed by ${signal ?? "an unknown signal"}`;
+      finish(new Error(failureMessage(head, stderr.toString("utf8"))));
+    });
+  });
+}
+
+/** `<head>: <redacted stderr tail>`, at most {@link CUSTOM_TASK_ERROR_MAX_BYTES}. */
+function failureMessage(head: string, stderr: string): string {
+  const redacted = redactRawOutput(stderr, {
+    redactTokens: true,
+    redactUrlCredentials: true,
+  }).trim();
+  if (redacted === "") return `${head}: (no stderr)`;
+  const prefix = `${head}: `;
+  const budget = CUSTOM_TASK_ERROR_MAX_BYTES - Buffer.byteLength(prefix, "utf8");
+  if (Buffer.byteLength(redacted, "utf8") <= budget) return `${prefix}${redacted}`;
+  const marker = "[stderr truncated, tail follows]\n";
+  return `${prefix}${marker}${utf8Tail(redacted, budget - Buffer.byteLength(marker, "utf8"))}`;
+}
+
+/** The last `maxBytes` of `text`, cut on a character boundary. */
+function utf8Tail(text: string, maxBytes: number): string {
+  const chars = [...text];
+  let bytes = 0;
+  let start = chars.length;
+  while (start > 0) {
+    const size = Buffer.byteLength(chars[start - 1]!, "utf8");
+    if (bytes + size > maxBytes) break;
+    bytes += size;
+    start -= 1;
+  }
+  return chars.slice(start).join("");
+}
+
+/** Kill the child and everything it started. Never throws. */
+function killTree(child: ChildProcess): void {
+  if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
+  try {
+    if (process.platform === "win32") {
+      spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true });
+    } else {
+      process.kill(-child.pid, "SIGKILL");
+    }
+  } catch {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // Already gone.
+    }
+  }
 }

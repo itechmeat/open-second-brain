@@ -8,23 +8,30 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  createCustomLaneTask,
   CUSTOM_TASK_MAX,
   CUSTOM_TASK_NAME_PATTERN,
   CUSTOM_TASK_PREFIX,
   CUSTOM_TASK_TIMEOUT_DEFAULT_SECONDS,
   isCustomLaneTask,
   resolveCustomTasks,
+  type CustomTaskSpec,
 } from "../../../../src/core/brain/maintenance/custom-tasks.ts";
 import {
   MAINTENANCE_CUSTOM_TASKS_CONFIG_KEY,
   MAINTENANCE_CUSTOM_TASKS_ENV,
   resolveMaintenanceCustomTasks,
 } from "../../../../src/core/config.ts";
+import {
+  SafeguardAbortError,
+  SafeguardTimeoutError,
+} from "../../../../src/core/brain/safeguard.ts";
+import { shellArgv } from "../../../../src/core/reliability/command-bridge.ts";
 
 let dir: string;
 let configPath: string;
@@ -168,5 +175,135 @@ describe("resolveCustomTasks", () => {
       errors: [],
       declared: 0,
     });
+  });
+});
+
+/**
+ * A portable fixture: the command runs the current Bun binary on a small
+ * script, so the same declaration works under `sh -c` and `cmd.exe /c`.
+ */
+const FIXTURE = String.raw`
+const fs = require("node:fs");
+const mode = process.argv[2];
+if (mode === "ok") {
+  fs.writeFileSync("seen.json", JSON.stringify({
+    vault: process.env.O2B_VAULT ?? null,
+    cwd: process.cwd(),
+    stdin: fs.readFileSync(0, "utf8"),
+  }));
+} else if (mode === "fail") {
+  process.stderr.write("x".repeat(10000) + "\n");
+  process.stderr.write("api_key=abcd1234secretvalue\n");
+  process.exit(3);
+} else if (mode === "sleep") {
+  setTimeout(() => {}, 5000);
+}
+`;
+
+describe("createCustomLaneTask", () => {
+  let vault: string;
+  let script: string;
+
+  beforeEach(() => {
+    vault = join(dir, "vault");
+    mkdirSync(vault);
+    script = join(dir, "fixture.cjs");
+    writeFileSync(script, FIXTURE);
+  });
+
+  function spec(mode: string, extra: Partial<CustomTaskSpec> = {}): CustomTaskSpec {
+    return {
+      name: "fx",
+      id: "custom:fx",
+      command: `"${process.execPath}" "${script}" ${mode}`,
+      timeoutSeconds: 30,
+      ...extra,
+    };
+  }
+
+  test("the task carries its identity and runs through the shared shell form", () => {
+    expect(createCustomLaneTask(spec("ok"), { vault }).name).toBe("custom:fx");
+    if (process.platform !== "win32") expect(shellArgv("a b")).toEqual(["sh", ["-c", "a b"]]);
+  });
+
+  test("exit 0 resolves with no receipt; cwd is the vault, O2B_VAULT is set, stdin is closed", async () => {
+    const receipt = await createCustomLaneTask(spec("ok"), { vault }).run();
+    expect(receipt).toBeUndefined();
+    const seen = JSON.parse(readFileSync(join(vault, "seen.json"), "utf8")) as {
+      vault: string;
+      cwd: string;
+      stdin: string;
+    };
+    expect(seen.vault).toBe(vault);
+    expect(realpathSync(seen.cwd)).toBe(realpathSync(vault));
+    expect(seen.stdin).toBe("");
+  });
+
+  test("a declared cwd replaces the vault as the working directory", async () => {
+    const elsewhere = join(dir, "elsewhere");
+    mkdirSync(elsewhere);
+    await createCustomLaneTask(spec("ok", { cwd: elsewhere }), { vault }).run();
+    const seen = JSON.parse(readFileSync(join(elsewhere, "seen.json"), "utf8")) as { cwd: string };
+    expect(realpathSync(seen.cwd)).toBe(realpathSync(elsewhere));
+  });
+
+  test("a non-zero exit throws exit <N> with the stderr tail, redacted and capped", async () => {
+    const run = createCustomLaneTask(spec("fail"), { vault }).run();
+    const err = (await run.then(
+      () => undefined,
+      (e: unknown) => e,
+    )) as Error;
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message.startsWith("exit 3:")).toBe(true);
+    expect(err.message).toContain("api_key=");
+    expect(err.message).not.toContain("abcd1234secretvalue");
+    expect(Buffer.byteLength(err.message, "utf8")).toBeLessThanOrEqual(4096);
+  });
+
+  test("a command running past its timeout is killed and throws SafeguardTimeoutError", async () => {
+    const started = Date.now();
+    const err = await createCustomLaneTask(spec("sleep", { timeoutSeconds: 1 }), { vault })
+      .run()
+      .then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+    expect(err).toBeInstanceOf(SafeguardTimeoutError);
+    expect((err as SafeguardTimeoutError).operation).toBe("custom:fx");
+    expect(Date.now() - started).toBeLessThan(4000);
+  });
+
+  test("an aborted signal kills the child and rejects", async () => {
+    const controller = new AbortController();
+    const started = Date.now();
+    const pending = createCustomLaneTask(spec("sleep"), { vault, signal: controller.signal }).run();
+    setTimeout(() => controller.abort(), 200);
+    const err = await pending.then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(SafeguardAbortError);
+    expect(Date.now() - started).toBeLessThan(4000);
+
+    const already = new AbortController();
+    already.abort();
+    const early = await createCustomLaneTask(spec("ok"), { vault, signal: already.signal })
+      .run()
+      .then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+    expect(early).toBeInstanceOf(SafeguardAbortError);
+  });
+
+  test("a working directory that does not exist fails by name", async () => {
+    const err = (await createCustomLaneTask(spec("ok", { cwd: join(dir, "missing") }), { vault })
+      .run()
+      .then(
+        () => undefined,
+        (e: unknown) => e,
+      )) as Error;
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toContain("custom:fx");
   });
 });

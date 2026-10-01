@@ -33,9 +33,11 @@ const DEFAULT_TIMEOUT_MS = 60_000;
  * The shell an operator-configured command line runs under: `sh -c` on
  * POSIX, `cmd.exe /d /s /c` on native Windows (the same invocation Node
  * uses for `shell: true`; `/d` skips AutoRun, whose output would corrupt
- * the JSON on stdout).
+ * the JSON on stdout). Exported because the maintenance lane's custom
+ * tasks run an operator-configured command line too, and one invocation
+ * form for both keeps the Windows quoting in one place.
  */
-function shellArgv(cmd: string): [string, string[]] {
+export function shellArgv(cmd: string): [string, string[]] {
   if (process.platform === "win32") {
     return [process.env["ComSpec"] || "cmd.exe", ["/d", "/s", "/c", `"${cmd}"`]];
   }
