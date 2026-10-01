@@ -37,13 +37,18 @@ import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { DREAM_STEP } from "../../src/core/brain/dream-step.ts";
+import type { MaintenanceSpendReceipt } from "../../src/core/brain/maintenance/journal.ts";
 import { indexVault } from "../../src/core/search/indexer.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { makeConfig } from "../helpers/search-fixtures.ts";
+import { sqliteVecLoadable } from "../helpers/sqlite-vec.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { PROGRESS_META_KEY, PROGRESS_NOTIFICATION_METHOD } from "../../src/mcp/progress.ts";
 import type { JsonRpcNotification } from "../../src/mcp/protocol.ts";
 import { PROGRESS_SCHEMA } from "../../src/core/brain/progress.ts";
+
+/** Whether sqlite-vec loaded in THIS process: the spend-surface test needs it. */
+const VEC_LOADABLE = sqliteVecLoadable();
 
 let tmp: string;
 let vault: string;
@@ -331,6 +336,54 @@ test("a live clock leaves all four tools running to completion", async () => {
   const lane = await callRaw(server, "brain_maintenance", { operation: "run", force: true });
   expect(lane.isError).toBe(false);
 });
+
+test.skipIf(!VEC_LOADABLE)(
+  "brain_maintenance announces and receipts the reindex pass's spend",
+  async () => {
+    // Pending vectorless chunks: a keyword-only index over one note.
+    writeFileSync(
+      join(vault, "Brain", "note.md"),
+      "# note\n\nprose long enough to cut at least one chunk for the index.\n",
+    );
+    await indexVault(
+      makeConfig({ vault, dbPath: join(vault, ".open-second-brain", "brain.sqlite") }),
+    );
+    // The local provider can reach no network and prices at zero, so the
+    // semantic lane is usable exactly as the CLI spend tests configure it.
+    atomicWriteFileSync(
+      configPath,
+      `vault: ${vault}\nagent_name: claude\nsearch_semantic_enabled: true\nembedding_provider: local\n`,
+    );
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+
+    const res = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 6,
+      method: "tools/call",
+      params: { name: "brain_maintenance", arguments: { operation: "run", force: true } },
+    })) as { result?: { isError?: boolean; structuredContent?: unknown } };
+    expect(res.result!.isError).toBe(false);
+    const payload = res.result!.structuredContent as {
+      spend?: {
+        banner: { model: string; pendingChunks: number; gateUsd: number };
+        receipt: MaintenanceSpendReceipt;
+      };
+      tasks: Array<{ name: string; ok: boolean; receipt?: MaintenanceSpendReceipt }>;
+    };
+    // The schema promises the spend is announced and receipted; both halves
+    // ride the answer, and the receipt is the row's own.
+    expect(payload.spend?.banner.model).toBe("hashing-ngram-v1");
+    expect(payload.spend?.banner.pendingChunks).toBeGreaterThan(0);
+    expect(payload.spend?.banner.gateUsd).toBe(0);
+    const reindex = payload.tasks.find((t) => t.name === "reindex");
+    expect(reindex?.ok).toBe(true);
+    expect(payload.spend?.receipt).toEqual(reindex?.receipt);
+    expect(payload.spend?.receipt.model).toBe("hashing-ngram-v1");
+    expect(payload.spend?.receipt.tokens).toBeGreaterThan(0);
+    expect(payload.spend?.receipt.forced).toBe(false);
+  },
+);
 
 // ---------------------------------------------------------------------------
 // The same four tools, observed

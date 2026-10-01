@@ -17,6 +17,11 @@ import {
   semanticCapabilityIsBlocked,
 } from "../../core/search/capability-tier.ts";
 import { indexVault, resolveSearchConfig } from "../../core/search/index.ts";
+import {
+  embeddingSpendOf,
+  estimatePendingEmbeddingSpend,
+  type EmbeddingSpendPreview,
+} from "../../core/search/indexer.ts";
 import { Store } from "../../core/search/store.ts";
 import {
   assignNoteLabel,
@@ -44,7 +49,11 @@ import { appendMetric } from "../../core/brain/metrics.ts";
 import type { ProgressSink } from "../../core/brain/progress.ts";
 import { requiredStringArg, toolSafeguard } from "./shared.ts";
 import { currentLease } from "../../core/brain/maintenance/lease.ts";
-import { listJournal, MAINTENANCE_JOURNAL_CAP } from "../../core/brain/maintenance/journal.ts";
+import {
+  listJournal,
+  MAINTENANCE_JOURNAL_CAP,
+  MAINTENANCE_SPEND_METRIC,
+} from "../../core/brain/maintenance/journal.ts";
 import {
   isLaneTask,
   LANE_TASK,
@@ -458,12 +467,23 @@ async function toolBrainMaintenance(
   // for the embedding phase exactly when the resolved config can reach a
   // provider - the same resolver `vector-backfill` consults - and
   // `force_cost` bypasses a positive embedding cost gate for this run,
-  // recorded on the receipt when it did. An offline vault never reaches
-  // a provider, exactly as before.
+  // recorded on the receipt when it did. The pass announces its predicted
+  // spend before it runs and receipts what it actually priced after, on
+  // the same preview helper, the same receipt reader and the same metrics
+  // surface the CLI verb uses - a receipt the schema promises is a receipt
+  // the tool produces. An offline vault never reaches a provider, exactly
+  // as before.
   const forceCost = args["force_cost"] === true;
   const semanticUsable = !semanticCapabilityIsBlocked(
     resolveSemanticCapability(searchConfig.semantic),
   );
+  // One preview per run, read BEFORE the pass, so the `spend.banner` block
+  // can report what the phase is predicted to spend. Like the CLI's, it is
+  // an estimate by position; the receipt below prices the completed pass.
+  // A null preview (nothing pending, no index yet) announces nothing.
+  const spendBanner: EmbeddingSpendPreview | undefined = semanticUsable
+    ? ((await estimatePendingEmbeddingSpend(searchConfig)) ?? undefined)
+    : undefined;
   const result = await runMaintenance(ctx.vault, {
     now,
     holder: `${agent}@${process.pid}`,
@@ -481,12 +501,34 @@ async function toolBrainMaintenance(
       {
         name: LANE_TASK.reindex,
         run: async () => {
-          await indexVault(searchConfig, {
+          const stats = await indexVault(searchConfig, {
             embeddings: semanticUsable,
             forceCost,
             safeguard: laneSafeguard(LANE_TASK.reindex),
             ...laneProgress,
           });
+          // The phase's own cost-gate result, read only off a completed
+          // pass; the lane carries it on the task row and its journal line.
+          const receipt = embeddingSpendOf(stats);
+          if (receipt !== undefined) {
+            try {
+              appendMetric(ctx.vault, {
+                surface: MAINTENANCE_SPEND_METRIC,
+                runAt: isoSecond(now),
+                payload: {
+                  task: LANE_TASK.reindex,
+                  model: receipt.model,
+                  tokens: receipt.tokens,
+                  estimated_usd: receipt.estimatedUsd,
+                  forced: receipt.forced,
+                  lane: true,
+                },
+              });
+            } catch {
+              // Metrics are observability, not correctness.
+            }
+          }
+          return receipt;
         },
       },
       // Same lane contract as the CLI verb (link-recall-intelligence):
@@ -555,7 +597,34 @@ async function toolBrainMaintenance(
       },
     ],
   });
-  return { verdict: result.verdict, tasks: result.tasks };
+  // The run-level spend block, the CLI JSON payload's shape: the banner
+  // this run announced and the receipt its reindex pass returned. Either
+  // half may be absent - a run that could not spend announces and receipts
+  // nothing, and a refused pass receipts nothing - so both are additive.
+  const spendReceipt = result.tasks.find(
+    (t) => t.name === LANE_TASK.reindex && t.receipt !== undefined,
+  )?.receipt;
+  return {
+    verdict: result.verdict,
+    tasks: result.tasks,
+    ...(spendBanner !== undefined || spendReceipt !== undefined
+      ? {
+          spend: {
+            ...(spendBanner !== undefined
+              ? {
+                  banner: {
+                    model: spendBanner.model,
+                    pendingChunks: spendBanner.pendingChunks,
+                    estimatedUsd: spendBanner.estimatedUsd,
+                    gateUsd: searchConfig.semantic.costGateUsd,
+                  },
+                }
+              : {}),
+            ...(spendReceipt !== undefined ? { receipt: spendReceipt } : {}),
+          },
+        }
+      : {}),
+  };
 }
 
 // ----- brain_bridges (t_ab540afe) --------------------------------------------

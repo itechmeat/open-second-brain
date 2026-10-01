@@ -51,7 +51,11 @@ import {
   type MaintenanceTask,
   type MaintenanceTaskResult,
 } from "../../../core/brain/maintenance/lane.ts";
-import { listJournal, MAINTENANCE_JOURNAL_CAP } from "../../../core/brain/maintenance/journal.ts";
+import {
+  listJournal,
+  MAINTENANCE_JOURNAL_CAP,
+  MAINTENANCE_SPEND_METRIC,
+} from "../../../core/brain/maintenance/journal.ts";
 import { resolveAgentName } from "../../../core/config.ts";
 import {
   resolveSemanticCapability,
@@ -71,9 +75,6 @@ const USAGE =
   "usage: o2b brain maintenance run [--force] [--retry <task>] [--window H-H] [--tz ZONE] " +
   "[--busy-minutes N] [--busy-threshold N] [--force-cost] [--progress] | status [--limit N]  " +
   "[--vault <path>] [--json]";
-
-/** Metric surface a reindex pass's spend receipt is recorded under. */
-const MAINTENANCE_SPEND_METRIC = "maintenance_spend";
 
 /**
  * What this verb's exit code says, and why a refusal has its own number.

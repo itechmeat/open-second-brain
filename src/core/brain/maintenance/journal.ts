@@ -107,6 +107,14 @@ export interface MaintenanceSpendReceipt {
   readonly forced: boolean;
 }
 
+/**
+ * The metrics surface a completed reindex pass's spend receipt is
+ * recorded under. Both lane front doors (`o2b brain maintenance` and
+ * `brain_maintenance`) append here, so one surface name covers a run's
+ * spend whatever door ran it.
+ */
+export const MAINTENANCE_SPEND_METRIC = "maintenance_spend";
+
 /** The journal's shard stem: `maintenance-runs[.<deviceId>].jsonl`. */
 export const MAINTENANCE_JOURNAL_STEM = "maintenance-runs";
 
