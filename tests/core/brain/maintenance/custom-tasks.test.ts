@@ -347,6 +347,13 @@ async function expectGone(pids: ReadonlyArray<number>, boundMs = 4000): Promise<
   }
 }
 
+/**
+ * Per-test budget for the process-tree cases: above the task timeout plus
+ * the {@link expectGone} bound, so a surviving child fails on the
+ * "still running" assertion rather than on the runner's 5 s default.
+ */
+const PROCESS_TREE_TEST_TIMEOUT_MS = 15_000;
+
 async function waitForFile(path: string, boundMs = 4000): Promise<string> {
   const until = Date.now() + boundMs;
   while (!existsSync(path) || readFileSync(path, "utf8") === "") {
@@ -437,43 +444,51 @@ describe("createCustomLaneTask", () => {
     expect(Buffer.byteLength(err.message, "utf8")).toBeLessThanOrEqual(4096);
   });
 
-  test("past its timeout the child and its grandchild are killed and it throws SafeguardTimeoutError", async () => {
-    const pidsPath = join(dir, "tree.json");
-    const started = Date.now();
-    const pending = createCustomLaneTask(
-      spec("tree", { command: command("tree", pidsPath), timeoutSeconds: 1 }),
-      { vault },
-    ).run();
-    const err = await rejection(pending);
-    expect(err).toBeInstanceOf(SafeguardTimeoutError);
-    expect((err as SafeguardTimeoutError).operation).toBe("custom:fx");
-    expect(Date.now() - started).toBeLessThan(4000);
-    const pids = JSON.parse(await waitForFile(pidsPath)) as { child: number; grandchild: number };
-    await expectGone([pids.child, pids.grandchild]);
-  });
+  test(
+    "past its timeout the child and its grandchild are killed and it throws SafeguardTimeoutError",
+    async () => {
+      const pidsPath = join(dir, "tree.json");
+      const started = Date.now();
+      const pending = createCustomLaneTask(
+        spec("tree", { command: command("tree", pidsPath), timeoutSeconds: 1 }),
+        { vault },
+      ).run();
+      const err = await rejection(pending);
+      expect(err).toBeInstanceOf(SafeguardTimeoutError);
+      expect((err as SafeguardTimeoutError).operation).toBe("custom:fx");
+      expect(Date.now() - started).toBeLessThan(4000);
+      const pids = JSON.parse(await waitForFile(pidsPath)) as { child: number; grandchild: number };
+      await expectGone([pids.child, pids.grandchild]);
+    },
+    PROCESS_TREE_TEST_TIMEOUT_MS,
+  );
 
-  test("an aborted signal kills the child and its grandchild and rejects", async () => {
-    const pidsPath = join(dir, "tree.json");
-    const controller = new AbortController();
-    const started = Date.now();
-    const pending = createCustomLaneTask(spec("tree", { command: command("tree", pidsPath) }), {
-      vault,
-      signal: controller.signal,
-    }).run();
-    const pids = JSON.parse(await waitForFile(pidsPath)) as { child: number; grandchild: number };
-    controller.abort();
-    const err = await rejection(pending);
-    expect(err).toBeInstanceOf(SafeguardAbortError);
-    expect(Date.now() - started).toBeLessThan(6000);
-    await expectGone([pids.child, pids.grandchild]);
+  test(
+    "an aborted signal kills the child and its grandchild and rejects",
+    async () => {
+      const pidsPath = join(dir, "tree.json");
+      const controller = new AbortController();
+      const started = Date.now();
+      const pending = createCustomLaneTask(spec("tree", { command: command("tree", pidsPath) }), {
+        vault,
+        signal: controller.signal,
+      }).run();
+      const pids = JSON.parse(await waitForFile(pidsPath)) as { child: number; grandchild: number };
+      controller.abort();
+      const err = await rejection(pending);
+      expect(err).toBeInstanceOf(SafeguardAbortError);
+      expect(Date.now() - started).toBeLessThan(6000);
+      await expectGone([pids.child, pids.grandchild]);
 
-    const already = new AbortController();
-    already.abort();
-    const early = await rejection(
-      createCustomLaneTask(spec("ok"), { vault, signal: already.signal }).run(),
-    );
-    expect(early).toBeInstanceOf(SafeguardAbortError);
-  });
+      const already = new AbortController();
+      already.abort();
+      const early = await rejection(
+        createCustomLaneTask(spec("ok"), { vault, signal: already.signal }).run(),
+      );
+      expect(early).toBeInstanceOf(SafeguardAbortError);
+    },
+    PROCESS_TREE_TEST_TIMEOUT_MS,
+  );
 
   test.skipIf(IS_WINDOWS)(
     "a shell that exits 0 succeeds at once; what it left in the background dies at the timeout",
@@ -489,6 +504,7 @@ describe("createCustomLaneTask", () => {
       expect(alive(pid)).toBe(true);
       await expectGone([pid], 5000);
     },
+    PROCESS_TREE_TEST_TIMEOUT_MS,
   );
 
   test("a working directory that does not exist fails by name before the spawn", async () => {
