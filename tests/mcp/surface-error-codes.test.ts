@@ -265,7 +265,10 @@ describe("write-session codes at the boundary", () => {
     expect(response?.error?.message).toStartWith("target rejected: ");
     // Byte-identical to v1.65.0 up to the default: the handler hands over
     // the list alone, and the boundary seam adds `invalid_params` after it.
-    const data = response?.error?.data as { readonly errors: ReadonlyArray<unknown> };
+    const data = response?.error?.data as {
+      readonly errors: ReadonlyArray<unknown>;
+      readonly code: string;
+    };
     expect(Object.keys(data)).toEqual(["errors", "code"]);
     expect(data.errors.length).toBeGreaterThan(0);
     expect(readRpcErrorCode(response)).toBe("invalid_params");
