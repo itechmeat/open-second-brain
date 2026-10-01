@@ -666,7 +666,12 @@ export function errorResponse(
   };
 }
 
-/** The prefix every INTERNAL_ERROR answer's message starts with. */
+/**
+ * The prefix of the INTERNAL_ERROR answer {@link internalErrorResponse}
+ * builds for an unmapped throw. Handlers that throw their own
+ * INTERNAL_ERROR keep their own message; `error.data.code` is the stable
+ * signal, not this prefix.
+ */
 const INTERNAL_ERROR_PREFIX = "internal error: ";
 
 /**
