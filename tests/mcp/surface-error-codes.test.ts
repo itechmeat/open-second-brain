@@ -21,7 +21,11 @@ import { createTriggers } from "../../src/core/brain/triggers/store.ts";
 import type { InsightCandidate } from "../../src/core/brain/triggers/types.ts";
 import { BRAIN_CONFIDENCE, BRAIN_PREFERENCE_STATUS } from "../../src/core/brain/types.ts";
 import { GATE_MODE } from "../../src/core/integrity/stamp.ts";
+import { assertKnownArguments } from "../../src/mcp/argument-guard.ts";
+import { AGENT_SCOPE_ARG_NAME, coerceAgentScope } from "../../src/mcp/coerce.ts";
+import { OWNER_SCOPE_REFUSAL } from "../../src/mcp/owner-scope-refusal.ts";
 import { INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
+import { assertNoCallerSuppliedReach, REACH_REFUSAL } from "../../src/mcp/reach-refusal.ts";
 import { MCPServer } from "../../src/mcp/server.ts";
 import { SKILL_TOOLS } from "../../src/mcp/skill-tools.ts";
 import type { ServerContext, ToolDefinition } from "../../src/mcp/tool-contract.ts";
@@ -275,5 +279,61 @@ describe("write-session codes at the boundary", () => {
     const data = response?.error?.data as Record<string, unknown>;
     expect(Object.keys(data)).toEqual(["errors", "code"]);
     expect(data["code"]).toBe("invalid_params");
+  });
+});
+
+// ----- argument guard, reach refusal, owner-scope refusal -----------------------
+
+describe("refusal codes", () => {
+  const CLOSED_TOOL: ToolDefinition = {
+    name: "demo_tool",
+    description: "A demo tool.",
+    inputSchema: {
+      type: "object",
+      properties: { query: { type: "string", description: "The search text." } },
+      additionalProperties: false,
+    },
+    handler: () => ({}),
+  };
+
+  test("an undeclared argument answers unknown_argument with its data unchanged", async () => {
+    const err = await raised(() => assertKnownArguments(CLOSED_TOOL, { quiery: "x" }));
+    expect(codeOf(err)).toBe("unknown_argument");
+    expect(err.data).toEqual({
+      tool: "demo_tool",
+      unknown_arguments: [{ name: "quiery", suggestion: "query" }],
+      declared_arguments: ["query"],
+      code: "unknown_argument",
+    });
+  });
+
+  test("a caller-supplied reach answers its own refusal token", async () => {
+    const err = await raised(() => assertNoCallerSuppliedReach(CLOSED_TOOL, { reach: "local" }));
+    expect(codeOf(err)).toBe(REACH_REFUSAL);
+    const data = err.data as Record<string, unknown>;
+    expect(data["refused_arguments"]).toEqual(["reach"]);
+    expect(data["tool"]).toBe("demo_tool");
+  });
+
+  test("an owner-scope refusal answers the outcome it names", async () => {
+    writeFileSync(
+      brainConfigPath(vault),
+      `schema_version: 1\nintegrity:\n  owner_scope_delivery: ${GATE_MODE.fail}\n`,
+    );
+    const foreign = await raised(() =>
+      coerceAgentScope(
+        { vault, agentName: "agent-b" },
+        { [AGENT_SCOPE_ARG_NAME]: "agent-a" },
+        false,
+      ),
+    );
+    expect(foreign.message).toContain(OWNER_SCOPE_REFUSAL.foreignOwner);
+    expect(codeOf(foreign)).toBe(OWNER_SCOPE_REFUSAL.foreignOwner);
+
+    const unresolved = await raised(() =>
+      coerceAgentScope({ vault, agentName: "agent" }, { [AGENT_SCOPE_ARG_NAME]: "agent-a" }, false),
+    );
+    expect(unresolved.message).toContain(OWNER_SCOPE_REFUSAL.unresolvedIdentity);
+    expect(codeOf(unresolved)).toBe(OWNER_SCOPE_REFUSAL.unresolvedIdentity);
   });
 });

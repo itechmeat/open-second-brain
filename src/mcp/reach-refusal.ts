@@ -60,6 +60,11 @@ export interface CallerSuppliedReachData {
   /** The caller's own spellings, in the caller's own key order. */
   readonly refused_arguments: ReadonlyArray<string>;
   readonly reserved_argument_names: ReadonlyArray<string>;
+  /**
+   * The boundary error code: the refusal token itself, already named in
+   * the message, so the wire carries one spelling rather than two.
+   */
+  readonly code: typeof REACH_REFUSAL;
 }
 
 /**
@@ -101,6 +106,7 @@ export function assertNoCallerSuppliedReach(
     tool: tool.name,
     refused_arguments: refused,
     reserved_argument_names: RESERVED_REACH_ARGUMENTS,
+    code: REACH_REFUSAL,
   });
   throw new MCPError(INVALID_PARAMS, message, data);
 }

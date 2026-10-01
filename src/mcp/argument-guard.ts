@@ -34,6 +34,7 @@
 import { nearestName } from "../core/text/nearest-name.ts";
 import { INVALID_PARAMS, MCPError } from "./protocol.ts";
 import type { ToolDefinition } from "./tool-contract.ts";
+import { TOOL_ERROR_CODE } from "./tool-error-codes.ts";
 
 /** One argument the caller sent that the tool never declared. */
 export interface UnknownArgument {
@@ -48,6 +49,8 @@ export interface UnknownArgumentData {
   readonly unknown_arguments: ReadonlyArray<UnknownArgument>;
   /** Every argument the tool does declare, sorted, so the fix is in hand. */
   readonly declared_arguments: ReadonlyArray<string>;
+  /** The boundary error code, last, after the members it summarises. */
+  readonly code: typeof TOOL_ERROR_CODE.unknownArgument;
 }
 
 /** What the caller is told when no declared name is near enough to name. */
@@ -123,6 +126,7 @@ export function assertKnownArguments(tool: ToolDefinition, args: Record<string, 
     tool: tool.name,
     unknown_arguments: unknown,
     declared_arguments: Object.freeze(declared.toSorted()),
+    code: TOOL_ERROR_CODE.unknownArgument,
   });
   throw new MCPError(INVALID_PARAMS, message, data);
 }

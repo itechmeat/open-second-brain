@@ -136,7 +136,11 @@ export function coerceAgentScope(
     requested: explicit,
     identity: ctx.agentName,
   });
-  if (refused !== null) throw new MCPError(INVALID_PARAMS, refused.message);
+  // The refusal token is the boundary code: already a registered member,
+  // already named in the message, so the wire carries one spelling.
+  if (refused !== null) {
+    throw new MCPError(INVALID_PARAMS, refused.message, { code: refused.refusal });
+  }
   return explicit;
 }
 
