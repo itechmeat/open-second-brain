@@ -811,6 +811,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           flag("progress", "boolean"),
           flag("cron-template", "boolean"),
           flag("interval", "string"),
+          flag("format", "string"),
           flag("self-heal", "string"),
         ]),
         command("watch", "Watch the vault and incrementally sync the index on .md edits"),
@@ -966,10 +967,11 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
             ]),
             command(
               "resync",
-              "Print a cron recipe that re-indexes the code project when its commit moves (requires --cron-template; writes nothing)",
+              "Print a cron or systemd recipe that re-indexes the code project when its commit moves (requires --cron-template; writes nothing)",
               [
                 flag("cron-template", "boolean"),
                 flag("interval", "string"),
+                flag("format", "string"),
                 flag("project", "string"),
                 flag("vault", "string"),
               ],
