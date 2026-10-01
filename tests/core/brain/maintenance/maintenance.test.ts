@@ -615,16 +615,15 @@ describe("custom task identities and the custom timeout streak rule", () => {
 
   function customRun(
     run: () => Promise<void>,
-    extra: { retryTasks?: ReadonlyArray<typeof CUSTOM> } = {},
+    extra: { retryTasks?: ReadonlyArray<typeof CUSTOM>; dreamFirst?: boolean } = {},
   ) {
+    const custom = { name: CUSTOM, run };
+    const dreamTask = { name: LANE_TASK.dream, run: async () => void 0 };
     return runMaintenance(vault, {
       now: NOW,
       holder: "worker-a",
-      ...extra,
-      tasks: [
-        { name: CUSTOM, run },
-        { name: LANE_TASK.dream, run: async () => void 0 },
-      ],
+      ...(extra.retryTasks !== undefined ? { retryTasks: extra.retryTasks } : {}),
+      tasks: extra.dreamFirst === true ? [dreamTask, custom] : [custom, dreamTask],
     });
   }
 
@@ -687,8 +686,12 @@ describe("custom task identities and the custom timeout streak rule", () => {
       // eslint-disable-next-line no-await-in-loop
       await customRun(failingCustom);
     }
-    // dream has succeeded on every pass, the custom task never: it runs first.
-    const retried = await customRun(async () => void 0, { retryTasks: [CUSTOM] });
+    // dream has succeeded on every pass, the custom task never: it runs
+    // first, although it is registered after dream.
+    const retried = await customRun(async () => void 0, {
+      retryTasks: [CUSTOM],
+      dreamFirst: true,
+    });
     expect(retried.tasks.map((t) => t.name)).toEqual([CUSTOM, LANE_TASK.dream]);
     expect(retried.tasks[0]!.ok).toBe(true);
     expect(consecutiveTaskFailures(vault, CUSTOM)).toBe(0);

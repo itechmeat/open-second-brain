@@ -9,8 +9,10 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
+import { VERB_HELP } from "../../src/cli/brain/help-text.ts";
 import {
   MAINTENANCE_EXIT,
+  MAINTENANCE_USAGE,
   formatSpendBanner,
   maintenanceExitCode,
   renderTaskLine,
@@ -221,7 +223,7 @@ describe("run --cron-template prints the lane recipe and writes nothing", () => 
     expect(seconds.stderr).toContain("second-level intervals are not supported");
     const months = await recipe(["--interval", "90d"]);
     expect(months.returncode).toBe(MAINTENANCE_EXIT.usage);
-    expect(months.stderr).toContain("90");
+    expect(months.stderr).toContain("an interval of 90 days cannot be expressed");
     const launchd = await recipe(["--format", "launchd"]);
     expect(launchd.returncode).toBe(MAINTENANCE_EXIT.usage);
     expect(launchd.stderr).toContain("systemd");
@@ -328,9 +330,10 @@ describe("declared custom tasks ride the lane", () => {
     const payload = JSON.parse(run.stdout) as {
       tasks: MaintenanceTaskResult[];
     };
-    // The verdict code of the rows that ran: a refused declaration journals
-    // nothing and is not a failed attempt.
-    expect(run.returncode).toBe(maintenanceExitCode(payload.tasks));
+    // A refused declaration journals nothing and is not a failed attempt:
+    // the run that only refused it exits 0.
+    expect(run.returncode).toBe(0);
+    expect(payload.tasks.find((t) => t.name === "custom:Bad")).toBeUndefined();
     expect(payload.tasks.find((t) => t.name === "custom:tidy")?.ok).toBe(true);
   });
 
@@ -388,6 +391,24 @@ function refusedRow(name: MaintenanceTaskResult["name"]): MaintenanceTaskResult 
     failure_streak: 3,
   };
 }
+
+describe("brain maintenance --help", () => {
+  test("opens with the verb's own usage line and names custom tasks and the recipe", () => {
+    const help = VERB_HELP["maintenance"]!;
+    expect(help.startsWith(`${MAINTENANCE_USAGE}\n`)).toBe(true);
+    for (const flag of [
+      "--cron-template",
+      "--interval",
+      "--format",
+      "--force-cost",
+      "--progress",
+    ]) {
+      expect(MAINTENANCE_USAGE).toContain(flag);
+    }
+    expect(help).toContain("custom:<name>");
+    expect(help).toContain("maintenance_custom_tasks: true");
+  });
+});
 
 describe("maintenanceExitCode", () => {
   test("a clean run exits 0 and a deterministic task fault exits 1", () => {
