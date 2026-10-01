@@ -40,6 +40,10 @@ let server: FakeHttp;
 const ENV_KEYS = ["OPEN_SECOND_BRAIN_SEARCH_HYBRID_DEADLINE"];
 let origEnv: Record<string, string | undefined>;
 
+// The two stall tests hold real sockets open while the deadline races
+// them; under the full-suite load the temp-vault and server setup can
+// outlast bun's 5s default hook timeout, so both hooks carry an
+// explicit one.
 beforeEach(async () => {
   const v = createTempVault("hybrid-deadline");
   vault = v.vault;
@@ -51,7 +55,7 @@ beforeEach(async () => {
     origEnv[k] = process.env[k];
     delete process.env[k];
   }
-});
+}, 20_000);
 
 afterEach(async () => {
   cleanup();
@@ -60,7 +64,7 @@ afterEach(async () => {
     if (origEnv[k] === undefined) delete process.env[k];
     else process.env[k] = origEnv[k];
   }
-});
+}, 20_000);
 
 function semanticConfig() {
   return makeConfig({
