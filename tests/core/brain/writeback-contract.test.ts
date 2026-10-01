@@ -4,6 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  DEFAULT_BEGIN_MARKER,
+  DEFAULT_END_MARKER,
+} from "../../../src/core/install/managed-block.ts";
+
+import {
   AGENT_INSTRUCTION_FILES,
   WRITEBACK_CONTRACT_FINDING,
   WRITEBACK_CONTRACT_REQUIREMENTS,
@@ -73,14 +78,31 @@ describe("auditWritebackContractFile", () => {
     expect(audit.detail).toContain("atomic-fact");
   });
 
-  test("a file without the block fails naming it, with the recovery line", () => {
+  test("a file without the block names it as not installed, with the recovery line", () => {
     const path = join(tmp, "AGENTS.md");
     writeFileSync(path, "# Workspace\n\nplain instructions, no managed block\n");
     const audit = auditWritebackContractFile(path);
     expect(audit.finding).toBe(WRITEBACK_CONTRACT_FINDING.missingBlock);
     expect(audit.detail).toContain(path);
     expect(audit.detail).toContain("no Open Second Brain managed block");
+    expect(audit.detail).toContain("not installed");
     expect(audit.detail).toContain(WRITEBACK_CONTRACT_RECOVERY);
+  });
+
+  test("a lone marker is a broken block, not a missing one", () => {
+    const path = join(tmp, "AGENTS.md");
+    writeFileSync(path, `# Workspace\n\n${DEFAULT_BEGIN_MARKER}\nhalf a block\n`);
+    const audit = auditWritebackContractFile(path);
+    expect(audit.finding).toBe(WRITEBACK_CONTRACT_FINDING.malformedBlock);
+    expect(audit.detail).toContain(path);
+    expect(audit.detail).toContain(WRITEBACK_CONTRACT_RECOVERY);
+  });
+
+  test("the recovery line names the surface and the markers, never a board id", () => {
+    expect(WRITEBACK_CONTRACT_RECOVERY).toContain("ambient write-back managed block");
+    expect(WRITEBACK_CONTRACT_RECOVERY).toContain(DEFAULT_BEGIN_MARKER);
+    expect(WRITEBACK_CONTRACT_RECOVERY).toContain(DEFAULT_END_MARKER);
+    expect(WRITEBACK_CONTRACT_RECOVERY).not.toMatch(/\bt_[0-9a-f]{8}\b/);
   });
 
   test("a block present but without the gate clauses fails naming the pieces", () => {

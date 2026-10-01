@@ -7,8 +7,8 @@
  * `src/core/install/managed-block.ts`) whose body states the gate. The
  * audit only READS; it never writes, installs or repairs anything.
  *
- * THE SETTLED MARKER CONTRACT - this section is the input the repair lane
- * (t_af5e252f, ambient writeback) must satisfy when it installs the block:
+ * THE SETTLED MARKER CONTRACT - this section is the input the ambient
+ * write-back managed block must satisfy wherever it is installed:
  *
  *   1. Delimiters: the default managed-block markers
  *      (`DEFAULT_BEGIN_MARKER` / `DEFAULT_END_MARKER`,
@@ -26,8 +26,11 @@
  *          fact is learned);
  *        - the atomic-fact rule (memory is written as atomic facts).
  *
- *   t_af5e252f installs a block satisfying all three clauses; this module
- *   is the checker that defines conformance. NO INSTALLER LIVES HERE.
+ *   This module is the checker that defines conformance. NO INSTALLER
+ *   LIVES HERE, which is why a file with no block at all is reported as
+ *   `missing-block` (not installed, graded skipped by the readiness probe)
+ *   while a block that is present but broken is `malformed-block` or
+ *   `missing-clauses` (graded fail).
  *
  * Read posture: every candidate file is lstat'd first and a symbolic link
  * is REFUSED, never followed - the upstream posture is that a reader that
@@ -38,17 +41,23 @@
  * the agent instruction surface does not contain.
  *
  * Findings are the closed {@link WRITEBACK_CONTRACT_FINDING} vocabulary:
- * `conforming`, `missing-block`, `missing-clauses` (the file exists and
- * was measured - pass/fail material), and `absent`, `symlink`,
- * `unreadable` (the file was not measured - skip/unknown material; the
- * doctor-readiness probe maps these). Every finding carries a non-empty
+ * `conforming`, `malformed-block`, `missing-clauses` (a block is present
+ * and was measured - pass/fail material), `missing-block` (the file
+ * exists but the block was never installed - skip material), and
+ * `absent`, `symlink`, `unreadable` (the file was not measured -
+ * skip/unknown material; the doctor-readiness probe maps these). Every finding carries a non-empty
  * detail naming the file and, when the contract fails, the missing piece.
  */
 
 import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { extractManagedBlock, hasManagedBlock } from "../install/managed-block.ts";
+import {
+  DEFAULT_BEGIN_MARKER,
+  DEFAULT_END_MARKER,
+  extractManagedBlock,
+  hasManagedBlock,
+} from "../install/managed-block.ts";
 import { MARKER_WRITEBACK_GUARDRAIL } from "./marker-writeback.ts";
 
 // ----- Constants ------------------------------------------------------------
@@ -67,11 +76,14 @@ export const AGENT_INSTRUCTION_FILES: ReadonlyArray<string> = Object.freeze([
 ]);
 
 /**
- * Recovery clause a failing audit carries, per the wave's CLI examples:
- * the repair is NOT built in this wave - it is the t_af5e252f surface.
+ * Recovery clause an audit carries when the block is missing or broken.
+ * It names the surface to add and the markers that delimit it; nothing
+ * here writes it.
  */
 export const WRITEBACK_CONTRACT_RECOVERY =
-  "recovery: install the managed block (t_af5e252f surface)";
+  "recovery: add the ambient write-back managed block between the " +
+  `"${DEFAULT_BEGIN_MARKER}" and "${DEFAULT_END_MARKER}" lines, stating the ` +
+  `${MARKER_WRITEBACK_GUARDRAIL} same-turn atomic-fact write gate`;
 
 /** One clause of the gate contract: what it is called and how it matches. */
 export interface WritebackContractRequirement {
@@ -110,8 +122,10 @@ export const WRITEBACK_CONTRACT_REQUIREMENTS: ReadonlyArray<WritebackContractReq
 export const WRITEBACK_CONTRACT_FINDING = Object.freeze({
   /** Block present, every contract clause present. */
   conforming: "conforming",
-  /** The file exists but carries no well-formed managed block. */
+  /** The file exists but carries no managed-block marker at all: not installed. */
   missingBlock: "missing-block",
+  /** A managed-block marker is present but not as one well-formed pair. */
+  malformedBlock: "malformed-block",
   /** A managed block is present but the gate contract is not fully met. */
   missingClauses: "missing-clauses",
   /** No file at the candidate path: nothing installed. */
@@ -204,28 +218,28 @@ export function auditWritebackContractFile(path: string): WritebackContractFileA
       missing: [],
     };
   }
-  if (!hasManagedBlock(content)) {
-    return {
-      path,
-      finding: WRITEBACK_CONTRACT_FINDING.missingBlock,
-      detail:
-        `${path} has no Open Second Brain managed block - present file without the ` +
-        `same-turn atomic-fact write gate; ${WRITEBACK_CONTRACT_RECOVERY}`,
-      missing: [],
-    };
-  }
-  const body = extractManagedBlock(content);
+  const body = hasManagedBlock(content) ? extractManagedBlock(content) : null;
   if (body === null) {
-    // Unreachable by construction - `hasManagedBlock` true implies a
-    // well-formed single block to extract - but the null case is a
-    // missing-block verdict rather than a thrown assertion, because the
-    // two helpers reading the same bytes disagreeing is a file fault.
+    if (!carriesMarkerLine(content)) {
+      return {
+        path,
+        finding: WRITEBACK_CONTRACT_FINDING.missingBlock,
+        detail:
+          `${path} has no Open Second Brain managed block - the ambient write-back ` +
+          `managed block is not installed, so the write gate is not graded; ` +
+          WRITEBACK_CONTRACT_RECOVERY,
+        missing: [],
+      };
+    }
+    // A marker is there but not as one ordered pair (a lone, repeated or
+    // reversed marker), or the two helpers disagree on the same bytes:
+    // a block somebody installed and then broke, which is a file fault.
     return {
       path,
-      finding: WRITEBACK_CONTRACT_FINDING.missingBlock,
+      finding: WRITEBACK_CONTRACT_FINDING.malformedBlock,
       detail:
-        `${path} has no extractable Open Second Brain managed block - present file without ` +
-        `the same-turn atomic-fact write gate; ${WRITEBACK_CONTRACT_RECOVERY}`,
+        `${path} carries an Open Second Brain managed-block marker but no well-formed ` +
+        `block - broken same-turn atomic-fact write gate; ${WRITEBACK_CONTRACT_RECOVERY}`,
       missing: [],
     };
   }
@@ -248,6 +262,14 @@ export function auditWritebackContractFile(path: string): WritebackContractFileA
       `(${WRITEBACK_CONTRACT_REQUIREMENTS.length} clauses verified)`,
     missing: [],
   };
+}
+
+/** Whether any line of `content` is a default managed-block marker. */
+function carriesMarkerLine(content: string): boolean {
+  return content
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .some((line) => line === DEFAULT_BEGIN_MARKER || line === DEFAULT_END_MARKER);
 }
 
 // ----- Workspace audit ------------------------------------------------------

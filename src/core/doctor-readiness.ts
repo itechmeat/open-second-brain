@@ -70,8 +70,8 @@
  * managed-block detection, the clause keywords in the marker write-back
  * guardrail's own vocabulary, and the symlink refusal - lives in
  * `brain/writeback-contract.ts`, whose docblock is the settled marker
- * contract the repair lane (t_af5e252f) must satisfy. No repair or
- * installer is built here.
+ * contract an installed block must satisfy. No repair or installer is
+ * built here, so a file without the block is skipped, not failed.
  */
 
 import { readFileSync } from "node:fs";
@@ -1026,9 +1026,11 @@ function parseTomlStringArray(value: string): ReadonlyArray<string> | null {
 
 /**
  * Map one audited instruction file onto the readiness vocabulary. The two
- * measured contract faults (`missing-block`, `missing-clauses`) are `fail`
- * - the file EXISTS and was read, so this is a verdict about the surface.
- * `absent` is `skipped` - nothing installed is not a contract violation.
+ * measured faults of a PRESENT block (`malformed-block`, `missing-clauses`)
+ * are `fail` - the block was installed and read, so this is a verdict
+ * about the surface. `missing-block` and `absent` are `skipped` - an
+ * ordinary instruction file that never had the block installed, or no
+ * file at all, is not a contract violation.
  * `symlink` and `unreadable` are `unknown` - the read was refused or
  * failed, which is evidence about the probe's reach, never about the gate.
  */
@@ -1036,9 +1038,10 @@ function statusForContractFinding(finding: WritebackContractFinding): ReadinessS
   switch (finding) {
     case WRITEBACK_CONTRACT_FINDING.conforming:
       return READINESS_STATUS.pass;
-    case WRITEBACK_CONTRACT_FINDING.missingBlock:
+    case WRITEBACK_CONTRACT_FINDING.malformedBlock:
     case WRITEBACK_CONTRACT_FINDING.missingClauses:
       return READINESS_STATUS.fail;
+    case WRITEBACK_CONTRACT_FINDING.missingBlock:
     case WRITEBACK_CONTRACT_FINDING.absent:
       return READINESS_STATUS.skipped;
     case WRITEBACK_CONTRACT_FINDING.symlink:
@@ -1063,9 +1066,10 @@ function statusForContractFinding(finding: WritebackContractFinding): ReadinessS
  * and a readiness probe must grade the surface an agent actually reads,
  * not whichever directory the `o2b` invocation happened to start in.
  *
- * Grading per file follows the probe rule: a file that was read and lacks
- * the gate is a `fail` whose row carries the recovery clause (the repair
- * is the t_af5e252f surface - nothing is rewritten here). A refused or
+ * Grading per file follows the probe rule: a file whose installed block is
+ * broken or lacks the gate is a `fail` whose row carries the recovery
+ * clause (nothing is rewritten here). A file with no block at all is
+ * `skipped` with the reason that the block is not installed. A refused or
  * unreadable read is `unknown` by name. A vault with NO instruction file
  * at all is `skipped` - nothing installed is not a contract violation -
  * while one conforming file among absent peers passes: the absent
@@ -1098,6 +1102,12 @@ export async function probeWritebackContract(opts: ReadinessOptions): Promise<Re
     return {
       status: READINESS_STATUS.unknown,
       detail: `could not measure ${counts.unknown} agent-instruction file(s) ${census}: ${rowText}`,
+    };
+  }
+  if (counts.pass === 0 && audits.some((a) => a.finding !== WRITEBACK_CONTRACT_FINDING.absent)) {
+    return {
+      status: READINESS_STATUS.skipped,
+      detail: `the ambient write-back managed block is not installed ${census}: ${rowText}`,
     };
   }
   if (counts.pass === 0) {

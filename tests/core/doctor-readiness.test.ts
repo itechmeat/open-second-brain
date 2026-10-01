@@ -645,16 +645,16 @@ describe("probeWritebackContract", () => {
     expect(v.detail).toContain("AGENTS.md");
   });
 
-  test("a present file without the managed block fails, naming file and recovery", async () => {
+  test("a present file without the managed block is skipped, naming file and recovery", async () => {
     writeConfig("");
     const agents = join(tmp, "AGENTS.md");
     writeFileSync(agents, "# Workspace\n\nplain instructions\n");
     const v = await probeWritebackContract(installedRuntimeOpts());
-    expect(v.status).toBe(READINESS_STATUS.fail);
+    expect(v.status).toBe(READINESS_STATUS.skipped);
     expect(v.detail).toContain(agents);
-    expect(v.detail).toContain("no Open Second Brain managed block");
-    expect(v.detail).toContain("same-turn atomic-fact write gate");
-    expect(v.detail).toContain("install the managed block");
+    expect(v.detail).toContain("managed block is not installed");
+    expect(v.detail).toContain("0 fail");
+    expect(v.detail).toContain("ambient write-back managed block");
   });
 
   test("a managed block without the gate clauses fails naming the missing piece", async () => {
@@ -701,7 +701,8 @@ describe("probeWritebackContract", () => {
 
   test("the aggregate is worst-of fail over unknown and pass, with the census", async () => {
     writeConfig("");
-    writeFileSync(join(tmp, "AGENTS.md"), "no block\n");
+    // A lone begin marker: a block that was installed and then broken.
+    writeFileSync(join(tmp, "AGENTS.md"), "# >>> open-second-brain managed >>>\nhalf a block\n");
     const real = join(tmp, "claude-target.md");
     writeFileSync(real, "irrelevant\n");
     symlinkSync(real, join(tmp, "CLAUDE.md"));
