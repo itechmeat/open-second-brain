@@ -606,6 +606,10 @@ describe("the consecutive-failure streak", () => {
   });
 });
 
+async function failingCustom(): Promise<void> {
+  throw new Error("exit 3: broken");
+}
+
 describe("custom task identities and the custom timeout streak rule", () => {
   const CUSTOM = "custom:x" as const;
 
@@ -633,14 +637,11 @@ describe("custom task identities and the custom timeout streak rule", () => {
   });
 
   test("a failing custom task is refused by name at the limit while the built-ins still run", async () => {
-    const failing = async () => {
-      throw new Error("exit 3: broken");
-    };
     for (let i = 0; i < MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT; i++) {
       // eslint-disable-next-line no-await-in-loop
-      await customRun(failing);
+      await customRun(failingCustom);
     }
-    const refused = await customRun(failing);
+    const refused = await customRun(failingCustom);
     const custom = refused.tasks.find((t) => t.name === CUSTOM)!;
     expect(custom.refused).toBe(true);
     expect(custom.error).toContain(`--retry ${CUSTOM}`);
@@ -682,12 +683,9 @@ describe("custom task identities and the custom timeout streak rule", () => {
   });
 
   test("retryTasks names a custom identity past its refusal, and stale-first orders it", async () => {
-    const failing = async () => {
-      throw new Error("exit 1: still broken");
-    };
     for (let i = 0; i < MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT; i++) {
       // eslint-disable-next-line no-await-in-loop
-      await customRun(failing);
+      await customRun(failingCustom);
     }
     // dream has succeeded on every pass, the custom task never: it runs first.
     const retried = await customRun(async () => void 0, { retryTasks: [CUSTOM] });
