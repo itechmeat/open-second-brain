@@ -366,6 +366,12 @@ export const OUT_OF_VAULT_SWEEP_EXCLUSIONS: ReadonlyMap<string, string> = new Ma
       "nothing behind on the machine",
   ],
   [
+    "src/core/brain/maintenance/custom-tasks.ts",
+    "it reads the home directory only to hand it to a declared custom task as its default " +
+      "working directory; it builds no path to write, and whatever the operator's own command " +
+      "does there is that command's state, not this program's",
+  ],
+  [
     "src/core/install/ownership.ts",
     "this module IS the enumeration: the home- and XDG-rooted strings in it are the `location` " +
       "fields the statement prints, and it writes nothing at all - it takes the vault, the " +
