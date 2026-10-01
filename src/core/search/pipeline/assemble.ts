@@ -432,12 +432,16 @@ function rankCandidates(input: AssemblyInput, rankCap: number): BrainSearchResul
       ...(signals.eventTimeMsByChunk !== undefined
         ? { eventTimeMsByChunk: signals.eventTimeMsByChunk }
         : {}),
+      ...(signals.pinnedByDoc !== undefined ? { pinnedByDoc: signals.pinnedByDoc } : {}),
     },
     {
       keywordWeight: opts.keywordWeight ?? config.keywordWeight,
       semanticWeight: opts.semanticWeight ?? config.semanticWeight,
       limit: rankCap,
       semanticEnabled: input.semanticEnabled,
+      // Metadata-boost lexical-vote gate (t_d9f863e9): the resolved
+      // `search_metadata_boost_gate` key, off by default.
+      metadataBoostGate: config.recall.metadataBoostGateEnabled === true,
       // The request's clock, not the ranker's. Ranking is called up to
       // twice per search (the visibility backfill re-assembles from the
       // same candidates), and both passes must judge freshness against

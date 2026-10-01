@@ -10,6 +10,7 @@ import { loadSchemaPack } from "../../brain/schema-pack.ts";
 import { rrfKey } from "../../scope-key.ts";
 import { relationalFanout } from "../relational-fanout.ts";
 import { parseRelationalQuery } from "../relational-query.ts";
+import type { BrainSearchResult } from "../search-result.ts";
 import type { Store } from "../store.ts";
 import type { ResolvedSearchConfig, SearchOptions } from "../types.ts";
 
@@ -113,4 +114,69 @@ function resolveSeedDocumentIds(store: Store, seeds: ReadonlyArray<string>): num
     }
   }
   return out;
+}
+
+/**
+ * Relational rerank pin (t_d9f863e9): the protect rule applied at the
+ * cross-encoder hand-off. Rerank may PROMOTE relational-origin candidates,
+ * never SINK them below their pre-rerank heuristic order.
+ *
+ * This is deliberately NOT a second floor beside the cross-encoder's
+ * `minScore` (the premise warned against a parallel mechanism): `minScore`
+ * keeps applying unchanged, and this rule only constrains ORDER after the
+ * rerank stage has spoken, which makes the pin strictly weaker than
+ * rerank-off - a relational candidate may rise wherever the rerank genuinely
+ * scores it above peers, and never falls below the line the heuristic ranker
+ * gave it.
+ *
+ * Mechanism: every candidate in `preRerank` carrying `relationalOrigin`
+ * (stamped by the ranker from the arm's contribution set) holds the
+ * position it occupied there. Candidates are processed in PRE-rerank order
+ * - the floors are ordered, so honouring an earlier floor can never push a
+ * later candidate past its own, and each pass is a removal plus an
+ * insertion at `min(currentIndex, floor)`. A candidate already at or above
+ * its floor (it rose, or the order did not change) is left untouched and
+ * gains no receipt; a candidate the rule moved gains
+ * `relational_pin: floored at pre-rerank position N` so the explain trail
+ * shows which rows the pin held. Deterministic given the two orders.
+ *
+ * The pin is active only where the arm contributed something, so pools
+ * without relational-origin rows return the rerank order unchanged.
+ */
+export function applyRelationalRerankPin(
+  preRerank: ReadonlyArray<BrainSearchResult>,
+  postRerank: ReadonlyArray<BrainSearchResult>,
+): ReadonlyArray<BrainSearchResult> {
+  // Floor per relational-origin chunk id: its pre-rerank index. First
+  // occurrence wins; the arm's contribution set never repeats a chunk.
+  const floors = new Map<number, number>();
+  for (let i = 0; i < preRerank.length; i++) {
+    const r = preRerank[i]!;
+    if (r.relationalOrigin === true && !floors.has(r.chunkId)) floors.set(r.chunkId, i);
+  }
+  if (floors.size === 0) return postRerank;
+
+  // Walk the protected candidates in PRE-rerank order (floors are strictly
+  // increasing along that walk), lifting each sunk one to its floor.
+  const working: BrainSearchResult[] = [...postRerank];
+  const floored = new Set<number>();
+  for (const [chunkId, floor] of floors) {
+    const at = working.findIndex((r) => r.chunkId === chunkId);
+    if (at === -1 || at <= floor) continue;
+    const [row] = working.splice(at, 1);
+    working.splice(floor, 0, row!);
+    floored.add(chunkId);
+  }
+  if (floored.size === 0) return postRerank;
+  return working.map((r) =>
+    floored.has(r.chunkId)
+      ? Object.freeze({
+          ...r,
+          reasons: Object.freeze([
+            ...r.reasons,
+            `relational_pin: floored at pre-rerank position ${floors.get(r.chunkId)}`,
+          ]),
+        })
+      : r,
+  );
 }

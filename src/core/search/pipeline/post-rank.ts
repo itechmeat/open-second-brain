@@ -23,6 +23,7 @@ import { resolvedTransportReach } from "../../graph/transport-reach.ts";
 import { applyRankAdjusters, type RankAdjuster } from "../rank-adjust.ts";
 import { applyReinforceBoost, loadReinforceStrengths } from "../reinforce.ts";
 import { applyCrossEncoderRerank } from "../rerank/index.ts";
+import { applyRelationalRerankPin } from "./relational-arm.ts";
 import type { DecisionRerankExtras } from "../rerank/decision-model.ts";
 import { RERANK_QUESTIONS } from "../../decision-model/questions.ts";
 import type { FrontmatterMap } from "../../types.ts";
@@ -192,6 +193,17 @@ export async function applyPostRankPhases(input: PostRankInput): Promise<PostRan
       decisionExtras = extras;
     },
   });
+  // Relational rerank pin (t_d9f863e9), `search_relational_rerank_pin`.
+  // Off (default) the rerank order passes through untouched, byte-
+  // identically. On, the rerank may promote relational-origin candidates
+  // but never sinks one below its pre-rerank heuristic position - the
+  // protect rule runs HERE, at the cross-encoder hand-off, over the pool
+  // order `reinforced` carried in, so every rerank kind is covered and the
+  // `minScore` relevance floor inside the stage still applies unchanged.
+  const pinnedReranked =
+    config.rerank.relationalRerankPin === true
+      ? applyRelationalRerankPin(reinforced, reranked)
+      : reranked;
   // Kernel 1 (t_5f61130a): the deterministic rank-adjustment sink between
   // ranking and result emission, mounted on BOTH the semantic and the
   // pure-lexical paths (both flow through this single pre-slice pool).
@@ -209,11 +221,11 @@ export async function applyPostRankPhases(input: PostRankInput): Promise<PostRan
     // Relation-only supersede fade (t_c4a9cef8): fetch the pool's typed
     // relations once and fade any candidate a `superseded_by` edge marks
     // superseded, the same source of truth `attachTrustMetadata` uses.
-    const poolDocIds = Array.from(new Set(reranked.map((r) => r.documentId)));
+    const poolDocIds = Array.from(new Set(pinnedReranked.map((r) => r.documentId)));
     const relByPoolDoc = store.typedRelationsForDocuments(poolDocIds);
     rankAdjusters.push(supersedeFadeAdjuster((documentId) => relByPoolDoc.get(documentId) ?? []));
   }
-  const adjusted = applyRankAdjusters(reranked, rankAdjusters);
+  const adjusted = applyRankAdjusters(pinnedReranked, rankAdjusters);
   // Per-pack retrieval trust receipts (t_5f61130a): compact references
   // consistent with the context-receipt model. Built only when the gate
   // ran, so the outcome shape stays byte-identical on the default path.

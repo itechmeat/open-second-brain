@@ -58,6 +58,15 @@ export interface CandidateSignals {
   readonly tierByDoc: ReadonlyMap<number, PageTier> | undefined;
   readonly reuseRateByChunk: ReadonlyMap<number, number> | undefined;
   readonly eventTimeMsByChunk: ReadonlyMap<number, number> | undefined;
+  /**
+   * The pinned flag the index MEASURED per document (t_f7bef96a), read
+   * through the store's pinned-documents lookup - one SQL pass, no
+   * query-time file reads. Undefined when no row has been measured yet (a
+   * pre-column index), so the ranker's pinned layer stays unwired and
+   * every score byte-identical; "not pinned" and "nobody looked" remain
+   * different statements end to end.
+   */
+  readonly pinnedByDoc: ReadonlyMap<number, boolean> | undefined;
 }
 
 export function collectCandidateSignals(input: CandidateSignalsInput): CandidateSignals {
@@ -87,6 +96,12 @@ export function collectCandidateSignals(input: CandidateSignalsInput): Candidate
     ? collectActivationSignals(input)
     : { activationByChunk: undefined, coAccessByChunk: undefined };
 
+  // The pinned layer is always-on (a bounded signal over explicit operator
+  // state), so the lookup is not config-gated; an index with no measured
+  // rows yields an empty map, reported as `undefined` by the module-wide
+  // omit-when-empty rule.
+  const pinnedByDoc = store.pinnedDocuments();
+
   return {
     inboundLinkSources,
     tagsByDoc,
@@ -99,6 +114,7 @@ export function collectCandidateSignals(input: CandidateSignalsInput): Candidate
     tierByDoc: collectPageTier(input),
     reuseRateByChunk: collectReuseRates(input),
     eventTimeMsByChunk: input.temporalIntentActive ? collectDeclaredEventTimes(input) : undefined,
+    pinnedByDoc: pinnedByDoc.size > 0 ? pinnedByDoc : undefined,
   };
 }
 

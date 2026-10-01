@@ -219,6 +219,21 @@ export interface RankerOptions {
    * then omitted rather than reported as zero.
    */
   readonly temporalIntent?: TemporalIntent | null;
+  /**
+   * Metadata-boost lexical-vote gate (t_d9f863e9), from
+   * `search_metadata_boost_gate`. When true, a query whose keyword lane
+   * returned no hits (no lexical vote - the pre-boost BM25 result set is
+   * empty) contributes exactly ZERO from every additive metadata/structural
+   * boost layer: link (with its tag half), freshness, entity, activation,
+   * co-access, observed reuse, temporal intent and session focus. The
+   * relevance terms (keyword, semantic, rrf), the relevance-portion
+   * multipliers (tier, trend) and the pinned layer - a bounded signal over
+   * explicit operator state, always-on by its own decision - are not
+   * metadata boosts and stay live. Absent or false leaves every layer
+   * byte-identical, and a gated run names its suppressed layers in
+   * `reasons`/`breakdown`.
+   */
+  readonly metadataBoostGate?: boolean;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -305,12 +320,17 @@ function fmt(x: number): string {
   return x.toFixed(3);
 }
 
+/** The structured gate receipt a breakdown carries; see {@link RankerOptions.metadataBoostGate}. */
+type BoostGateReceipt = NonNullable<ScoreBreakdown["gate"]>;
+
 /**
  * Assemble the explainable-recall `reasons` array from the per-layer
  * values the ranker already computed. One entry per layer that fired;
  * a layer contributing exactly zero is omitted so the array stays
  * meaningful. The tier layer is reported only when it is not the
- * neutral 1.0 multiplier.
+ * neutral 1.0 multiplier. The lexical-vote gate appends one entry when it
+ * actually suppressed something, so a gated run says why its metadata
+ * layers are silent.
  */
 function buildReasons(parts: {
   keywordScore: number;
@@ -329,6 +349,7 @@ function buildReasons(parts: {
   rrf?: number;
   temporalBoost?: number;
   temporalDamping?: number;
+  gate?: { readonly suppressed: number };
 }): ReadonlyArray<string> {
   const reasons: string[] = [];
   if (parts.keywordScore > 0) reasons.push(`fts5_bm25: ${fmt(parts.keywordScore)}`);
@@ -371,6 +392,10 @@ function buildReasons(parts: {
   if (parts.sessionFocus && parts.sessionFocus !== 0) {
     reasons.push(`session_focus: ${parts.sessionFocus >= 0 ? "+" : ""}${fmt(parts.sessionFocus)}`);
   }
+  if (parts.gate !== undefined && parts.gate.suppressed > 0) {
+    const noun = parts.gate.suppressed === 1 ? "layer" : "layers";
+    reasons.push(`gated: no lexical vote suppressed ${parts.gate.suppressed} ${noun}`);
+  }
   return Object.freeze(reasons);
 }
 
@@ -396,6 +421,7 @@ function buildBreakdown(parts: {
   sessionFocus?: number;
   rrf?: number;
   temporalBoost?: number;
+  gate?: BoostGateReceipt;
 }): ScoreBreakdown {
   return Object.freeze({
     keyword: parts.keywordScore,
@@ -411,6 +437,10 @@ function buildBreakdown(parts: {
     tier: parts.tierMul,
     trend: parts.trendMul ?? 1,
     sessionFocus: parts.sessionFocus ?? 0,
+    // Present whenever the gate is CONFIGURED on, so an operator can tell
+    // an armed gate that found its vote from one that had none; absent
+    // entirely (byte-identical shape) when the gate is off.
+    ...(parts.gate !== undefined ? { gate: parts.gate } : {}),
     // The one layer reported by ABSENCE rather than by zero: a query
     // that declared no window has no temporal component at all, and a
     // consumer must be able to tell that from a window the candidate
@@ -433,6 +463,13 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
   // the damping neutral and leaves the layer entirely unreported.
   const temporalIntent = opts.temporalIntent ?? null;
   const temporalDamping = temporalIntent?.recencyDamping ?? 1;
+  // Metadata-boost lexical-vote gate (t_d9f863e9): the lexical vote is
+  // "the keyword lane produced at least one hit for this query", read off
+  // the PRE-boost keyword input - the same array every keyword-lane
+  // consumer above reads. Loop-invariant, so the predicate is evaluated
+  // once and every candidate's boosts answer the same question.
+  const lexicalVote = inputs.keyword.length > 0;
+  const gateActive = opts.metadataBoostGate === true && !lexicalVote;
 
   const kwNorm = normalizeBm25(inputs.keyword);
 
@@ -658,17 +695,45 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
       temporalBoost = Math.min(TEMPORAL_INTENT_BOOST_CAP, proximity * TEMPORAL_INTENT_BOOST_CAP);
     }
     const sessionFocus = scoreSessionFocusTarget(hyd, opts.sessionFocus, nowMs);
+    // Metadata-boost lexical-vote gate (t_d9f863e9): when the gate is on
+    // and the keyword lane cast no vote, every additive metadata/structural
+    // layer contributes exactly ZERO - not damped - and each layer whose
+    // contribution was nonzero is named as suppressed. Gate off (or a cast
+    // vote) hands every raw value straight through, byte-identically.
+    const suppressedLayers: string[] = [];
+    const zeroWithoutVote = (layer: string, raw: number): number => {
+      if (!gateActive || raw === 0) return raw;
+      suppressedLayers.push(layer);
+      return 0;
+    };
+    const linkBoostVoted = zeroWithoutVote("link", linkBoost);
+    const recencyVoted = zeroWithoutVote("recency", recency);
+    const entityBoostVoted = zeroWithoutVote("entity", entityBoost);
+    const activationBoostVoted = zeroWithoutVote("activation", activationBoost);
+    const coAccessBoostVoted = zeroWithoutVote("coAccess", coAccessBoost);
+    const reuseBoostVoted = zeroWithoutVote("reuse", reuseBoost);
+    const temporalBoostVoted =
+      temporalBoost === undefined ? undefined : zeroWithoutVote("temporal", temporalBoost);
+    const sessionFocusVoted = zeroWithoutVote("sessionFocus", sessionFocus);
+    const gateReceipt: BoostGateReceipt | undefined =
+      opts.metadataBoostGate === true
+        ? Object.freeze({
+            active: gateActive,
+            lexicalVote,
+            suppressedLayers: Object.freeze([...suppressedLayers]),
+          })
+        : undefined;
     const score = clamp01(
       weighted * tierMul * trendMul +
-        linkBoost +
-        recency +
-        entityBoost +
-        activationBoost +
-        coAccessBoost +
-        reuseBoost +
+        linkBoostVoted +
+        recencyVoted +
+        entityBoostVoted +
+        activationBoostVoted +
+        coAccessBoostVoted +
+        reuseBoostVoted +
         (pinnedBoost ?? 0) +
-        (temporalBoost ?? 0) +
-        sessionFocus,
+        (temporalBoostVoted ?? 0) +
+        sessionFocusVoted,
     );
 
     ranked.push(
@@ -683,8 +748,8 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
         score,
         keywordScore: c.keywordScore,
         semanticScore: c.semanticScore,
-        linkBoost,
-        recencyBoost: recency,
+        linkBoost: linkBoostVoted,
+        recencyBoost: recencyVoted,
         // Conversation chronology (S1): expose the authoring instant only
         // when the note carries a usable one, so a note with no turn instant
         // keeps the byte-identical result shape - and a note whose declared
@@ -692,37 +757,51 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
         // authoring instant, a value the ranking itself would not trust.
         ...(authoredAt !== null ? { authoredAt } : {}),
         searchType: c.searchType,
+        // The typed-edge arm contributed this candidate (t_09b7ccea).
+        // searchType "link" names only the arm-EXCLUSIVE admissions; this
+        // flag carries the arm's full contribution set for the relational
+        // rerank pin (t_d9f863e9) downstream. Absent when the arm did not
+        // run, so an arm-off pipeline emits rows byte-identically.
+        ...(inputs.relationalRankedChunkIds?.includes(c.chunkId) === true
+          ? { relationalOrigin: true }
+          : {}),
         reasons: buildReasons({
-          reuseBoost,
+          reuseBoost: reuseBoostVoted,
           pinnedBoost,
           keywordScore: c.keywordScore,
           semanticScore: semanticEnabled ? c.semanticScore : 0,
-          linkBoost,
-          recency,
+          linkBoost: linkBoostVoted,
+          recency: recencyVoted,
           tierMul,
-          entityBoost,
-          activationBoost,
-          coAccessBoost,
+          entityBoost: entityBoostVoted,
+          activationBoost: activationBoostVoted,
+          coAccessBoost: coAccessBoostVoted,
           ...(trend !== undefined ? { trend, trendMul } : {}),
-          sessionFocus,
+          sessionFocus: sessionFocusVoted,
           rrf: rrfByChunk !== null ? rrf : 0,
-          ...(temporalBoost !== undefined ? { temporalBoost, temporalDamping } : {}),
+          ...(temporalBoostVoted !== undefined
+            ? { temporalBoost: temporalBoostVoted, temporalDamping }
+            : {}),
+          ...(gateReceipt !== undefined
+            ? { gate: { suppressed: gateReceipt.suppressedLayers.length } }
+            : {}),
         }),
         breakdown: buildBreakdown({
-          reuseBoost,
+          reuseBoost: reuseBoostVoted,
           pinnedBoost,
           keywordScore: c.keywordScore,
           semanticScore: semanticEnabled ? c.semanticScore : 0,
-          linkBoost,
-          recency,
+          linkBoost: linkBoostVoted,
+          recency: recencyVoted,
           tierMul,
-          entityBoost,
-          activationBoost,
-          coAccessBoost,
+          entityBoost: entityBoostVoted,
+          activationBoost: activationBoostVoted,
+          coAccessBoost: coAccessBoostVoted,
           trendMul,
-          sessionFocus,
+          sessionFocus: sessionFocusVoted,
           rrf: rrfByChunk !== null ? rrf : 0,
-          ...(temporalBoost !== undefined ? { temporalBoost } : {}),
+          ...(temporalBoostVoted !== undefined ? { temporalBoost: temporalBoostVoted } : {}),
+          ...(gateReceipt !== undefined ? { gate: gateReceipt } : {}),
         }),
       }),
     );

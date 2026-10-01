@@ -331,6 +331,18 @@ export class Store {
   }
 
   /**
+   * The pinned flag the index MEASURED for each document (v13), keyed by
+   * document id; see `documents.pinnedDocuments` for the three-state
+   * reasoning. This facade is the reader the ranking path consumes: the
+   * query-side signal collector hands the map to the ranker's pinned boost
+   * layer (t_f7bef96a), which reads an unmeasured row as no statement
+   * rather than as "not pinned".
+   */
+  pinnedDocuments(): Map<number, boolean> {
+    return documents.pinnedDocuments(this.db);
+  }
+
+  /**
    * The materialised event anchor of one path (v11), or null when the
    * document is absent or declared no readable date. The query-side
    * event-time resolver consults this instead of re-scanning the note's

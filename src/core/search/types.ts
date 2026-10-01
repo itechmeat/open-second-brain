@@ -1285,6 +1285,16 @@ export interface ResolvedRerankConfig {
    */
   readonly minScore: number;
   /**
+   * Relational rerank pin (t_d9f863e9), resolved from
+   * `search_relational_rerank_pin`. Off by default: when true, rerank may
+   * PROMOTE relational-origin candidates but never SINK them below their
+   * pre-rerank heuristic order - a protect rule at the cross-encoder
+   * hand-off, not a second floor beside {@link minScore}, which still
+   * applies unchanged. Absent (configs written before the knob construct
+   * this shape literally) reads as false.
+   */
+  readonly relationalRerankPin?: boolean;
+  /**
    * The resolved decision-model config. Present only when `kind` is
    * "decision-model"; `enabled` is false unless that config is active and
    * its `rerank` use is not `off`.
@@ -1453,6 +1463,16 @@ export interface ResolvedRecallConfig {
    * of the corpus (low selectivity - not worth widening the pool). [0, 1].
    */
   readonly trigramPrefilterMaxSelectivity: number;
+  /**
+   * Metadata-boost lexical-vote gate (t_d9f863e9), resolved from
+   * `search_metadata_boost_gate`. Off by default: when true, a query whose
+   * keyword lane returned no hits (no lexical vote) contributes exactly
+   * zero from every additive metadata/structural boost layer, so a
+   * vector-only answer is never floated by layers calibrated over a
+   * lexical candidate set. Absent (configs written before the knob
+   * construct this shape literally) reads as false.
+   */
+  readonly metadataBoostGateEnabled?: boolean;
 }
 
 export interface ResolvedSearchConfig {

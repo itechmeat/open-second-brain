@@ -750,6 +750,21 @@ export function resolveSearchConfig(opts: {
     DEFAULTS.rerankMinScore,
     "search_rerank_min_score",
   );
+  // Relational rerank pin (t_d9f863e9). Off by default: the cross-encoder
+  // is the last word on ordering as shipped. When true, the rerank may
+  // promote relational-origin candidates but never sink them below their
+  // pre-rerank heuristic order - enforced at the hand-off in the pipeline,
+  // with `search_rerank_min_score` still applying unchanged.
+  const relationalRerankPin = parseBool(
+    envOrConfig(
+      env,
+      config,
+      "OPEN_SECOND_BRAIN_SEARCH_RELATIONAL_RERANK_PIN",
+      "search_relational_rerank_pin",
+    ),
+    false,
+    "search_relational_rerank_pin",
+  );
   const rerankKindRaw = envOrConfig(
     env,
     config,
@@ -793,6 +808,10 @@ export function resolveSearchConfig(opts: {
     ...(rerankAllowInsecureHttp ? { allowInsecureHttp: true } : {}),
     topK: rerankTopK,
     minScore: rerankMinScore,
+    // Absent reads as off, matching this block's other opt-outs: the field
+    // is optional so configs written before the knob stay valid, and the
+    // exact-shape assertions on the resolved config keep holding.
+    ...(relationalRerankPin ? { relationalRerankPin: true } : {}),
     ...(rerankDecisionModel !== null ? { decisionModel: rerankDecisionModel } : {}),
   });
 
@@ -894,6 +913,20 @@ export function resolveSearchConfig(opts: {
     ),
     false,
     "search_relational_arm_enabled",
+  );
+  // Metadata-boost lexical-vote gate (t_d9f863e9). Off by default: additive
+  // metadata/structural boosts apply to every query as shipped. When true,
+  // a query whose keyword lane returned no hits contributes exactly zero
+  // from those layers, with the suppression named in the rank receipts.
+  const metadataBoostGateEnabled = parseBool(
+    envOrConfig(
+      env,
+      config,
+      "OPEN_SECOND_BRAIN_SEARCH_METADATA_BOOST_GATE",
+      "search_metadata_boost_gate",
+    ),
+    false,
+    "search_metadata_boost_gate",
   );
   const retrievalTrustGateEnabled = parseBool(
     envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_TRUST_GATE", "search_trust_gate_enabled"),
@@ -1032,6 +1065,7 @@ export function resolveSearchConfig(opts: {
     cacheTtlSeconds,
     relationPolarityEnabled,
     relationalArmEnabled,
+    metadataBoostGateEnabled,
     retrievalTrustGateEnabled,
     supersedeFadeEnabled,
     learnedWeightsEnabled,
