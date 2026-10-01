@@ -78,11 +78,13 @@ When `--silent-if-empty` is set and the window has no changes, the command write
 
 `dream` is itself idempotent — running it on top of an unchanged Brain is a no-op (no log entry written, no snapshot taken). The chained form is safe at any cadence.
 
+The alternative to a hand-chained dream job is the maintenance lane, which runs dream, reindex, bridges and clusters under one lease and only inside its window: `o2b brain maintenance run --vault /path/to/vault --cron-template` prints a script and the `hermes cron create` line that schedules it (hourly by default; `--interval`, `--window H-H --tz ZONE` narrow it). The script is silent when the lane succeeds or a gate skips, and prints the lane's JSON report when a task failed, timed out or was refused, so Hermes delivers only the runs that need attention. Every recipe this CLI prints - the maintenance lane, `o2b search reindex --cron-template` and `o2b partner codegraph resync --cron-template` - also prints a systemd user timer with `--format systemd`, for a host where Hermes does not own the schedule.
+
 ## Discipline report (daily logging-discipline sanity-check)
 
 `o2b discipline report` renders a deterministic Telegram MarkdownV2 block comparing brain-event counts per agent (parsed from `Brain/log/<yesterday>.md`) against runtime-agnostic activity proxies (git on watched repos + mtime walk on watched non-repo paths + vault delta on `Brain/inbox|preferences|retired/`). Status is binary - `alert` if taste events (`feedback`+`apply_evidence`) are zero while activity is non-zero, `info` for a quiet day, `ok` otherwise. No LLM in the report path.
 
-`o2b discipline install --vault <v> --telegram-target <target>` writes one cron entry into the Hermes scheduler (job id derived from `sha256(vault)` so multiple vaults on one host do not collide). The configuration block lives in `Brain/_brain.yaml`:
+`o2b discipline install --vault <v> --telegram-target <target>` writes one cron entry into the Hermes scheduler (job id derived from `sha256(vault)` so multiple vaults on one host do not collide). The entry goes into `~/.hermes/cron/jobs.json` of the user running the command; set `OSB_HERMES_JOBS` to write another jobs file. The configuration block lives in `Brain/_brain.yaml`:
 
 ```yaml
 discipline_report:

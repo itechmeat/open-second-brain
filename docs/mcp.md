@@ -154,7 +154,7 @@ release because nothing checked it; its replacement is checked.
 | `brain_dream` (`step`) | one step (`scan` or `heal-enrich`), not a pass | `dream` — a step is part of a dream pass, so it draws on that budget. Checked per file and per directory in `scan`, and per page in each of `heal-enrich`'s two loops, plus around the two phases that cross no boundary of their own — the vault listing (checkpoint after it only) and the one-shot title/alias phrase build (before and after). So it stops within one page **plus** whichever of those two is running, not within one page flat | yes, under the step's own stage (`scan` / `heal-enrich`) |
 | `brain_bridges` (`discover`) | `bridges` | `bridges` | yes |
 | `brain_clusters` (`run`) | `clusters` | `clusters` | yes |
-| `brain_maintenance` (`run`) | all four, sequentially; since v1.64.0 the reindex task stays keyword-only unless config `maintenance_embeddings` is `true`; then it requests the embedding phase when the resolved semantic config can reach a provider, announcing the predicted spend and receipting the completed pass (additive `spend` block: `banner` estimate, `receipt` with model, tokens, `estimated_usd` and whether `force_cost` overrode a refusing gate) | one fresh guard per task; a tripped task is a `timed_out` row, not an aborted call | yes, in its tasks' voices |
+| `brain_maintenance` (`run`) | the four built-ins plus declared custom tasks (since v1.65.0), sequentially; since v1.64.0 the reindex task stays keyword-only unless config `maintenance_embeddings` is `true`; then it requests the embedding phase when the resolved semantic config can reach a provider, announcing the predicted spend and receipting the completed pass (additive `spend` block: `banner` estimate, `receipt` with model, tokens, `estimated_usd` and whether `force_cost` overrode a refusing gate) | one fresh guard per task; a tripped task is a `timed_out` row, not an aborted call | yes, in its tasks' voices |
 | `brain_brief` (`view: "operator"`) | `dream`, dry run | `dream` | yes |
 | `brain_review_candidates` | `dream`, dry run | `dream` | yes |
 
@@ -637,6 +637,68 @@ after the drain started is not counted either — it is refused, never
 dispatched, and counting it would let a client retrying in a tight loop hold
 the shutdown open for its whole deadline over work the server had already
 declined.
+
+## Background faults (since v1.65.0)
+
+A promise rejection nobody awaited used to end the server: no process-level
+fault handler was registered, so the runtime default ended the process and one
+stray rejection anywhere in core took the whole tool surface down
+mid-session, with no line on stderr that named it.
+
+`o2b mcp` now installs a fault guard on both served transports (stdio and
+`--transport http`), before the background vault refresh and before the
+transport starts, and releases it when the server stops, so the CLI's own
+top-level error handling applies again once it has:
+
+- **An unhandled rejection is survived.** It is logged on stderr by name -
+  `[mcp] unhandled_rejection #N: <reason> (server keeps serving)` plus the
+  first stack frame, and a non-Error reason is named as
+  `non-error reason: <value>` - counted, and the server goes on answering.
+- **The log is rate-limited, the count is not.** Five full lines per 60
+  seconds, then one summary line (`[mcp] unhandled_rejection: N more
+  suppressed in the last 60000ms`). The summary is printed when the window
+  ends, or when the server stops first, so a suppressed count is never
+  lost; past the window the next rejection is logged in full again. A loop
+  that rejects on every request therefore cannot fill the log, and the
+  count still says how often it happened.
+- **An uncaught exception exits 70.** It is logged by name -
+  `[mcp] uncaught_exception: <reason>; exiting 70 so the exit hooks
+  checkpoint the index and release locks` plus the first stack frame - and
+  the process exits through `process.exit(70)`. A second exception thrown
+  while the process is already exiting goes straight to the exit, without
+  another line. A thrown exception
+  leaves the process in a state nothing measured, so continuing to serve
+  from it would answer requests from unknown state. Exiting rather than
+  dying keeps the two `exit` hooks described under "Shutdown and draining":
+  the search store checkpoints its WAL and the sync lockfile releases every
+  held lock.
+- **No drain on an exception.** A drain keeps serving the requests already
+  begun, which is exactly the unknown state the exit is there to leave. The
+  drain stays the answer to a signal, where the process is healthy and was
+  asked to stop.
+- **A closed stderr does not turn the guard into the crash:** the write is
+  dropped and the fault is still counted.
+
+`GET /health` on the HTTP transport carries the counts beside the drain
+fields:
+
+```json
+{
+  "status": "ok",
+  "transport": "http",
+  "in_flight": 0,
+  "faults": { "unhandled_rejection": 3, "uncaught_exception": 0, "last_fault_at": "2026-10-01T03:12:40.000Z" }
+}
+```
+
+`last_fault_at` is `null` before any fault. A supervisor can see a server
+that is surviving rejections before an operator reads its log.
+
+What happens after an exit 70 depends on the client. The Hermes bridge
+restarts the server once; Claude Code and Codex do not restart it, and the
+tools stay unavailable until the session reconnects the server. The guard is
+installed only on the served transports: `o2b mcp --probe` and every other
+`o2b` verb keep the runtime's default behaviour.
 
 ## Runtime capability window
 
@@ -1661,3 +1723,14 @@ log line is machine-composed rather than authored.
   finding. `brain_doctor` reports `merge-chain-dangling` warnings for a
   `merged_into:` pointer whose canonical resolves to no file - reporting
   only, with the repair named as the content judgement it is.
+- Since v1.65.0 `brain_maintenance` (`run`) also runs the custom lane tasks
+  an install declares in its machine config (`maintenance_custom_<name>`,
+  behind the default-off `maintenance_custom_tasks` switch), after the four
+  built-ins and under the same gates; they appear as `custom:<name>` task
+  rows. `retry_tasks` accepts `custom:<name>` for a declared task, refuses
+  an undeclared one by name with the registered list, and refuses a list
+  longer than the tasks this install registered; the schema `maxItems` is
+  the built-ins plus the custom-task cap of 8. A refused declaration comes
+  back in `custom_task_errors` while the valid tasks still run. No argument
+  can add, edit or read a command: commands live only in the machine
+  config, never in the vault.

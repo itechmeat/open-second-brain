@@ -47,6 +47,36 @@ instruction files such as `CLAUDE.md`/`AGENTS.md`, installed
 `.claude/skills/`) and warns with the exact replacement for any stale
 reference it finds (`removed-tool-reference`).
 
+## Upgrading to 1.65.0
+
+No step below is required, and an existing install sees no change in what
+the maintenance lane runs.
+
+**Custom maintenance lane tasks are a new opt-in.** An install can declare
+its own upkeep commands in the machine config file
+(`maintenance_custom_<name>: <command>`, with optional `_cwd` and
+`_timeout_seconds` keys); they run only once `maintenance_custom_tasks: true`
+(env `OPEN_SECOND_BRAIN_MAINTENANCE_CUSTOM_TASKS`) is set, after the four
+built-in tasks and under the same gates. Without the switch nothing runs,
+and `o2b brain maintenance status` says so when keys are declared. See the
+maintenance lane in [`cli-reference.md`](cli-reference.md).
+
+**The lane can print its own schedule.** `o2b brain maintenance run
+--cron-template` prints a cron recipe, or a systemd user timer with
+`--format systemd`; it installs nothing, so an existing hand-written cron
+line keeps working as it is.
+
+**`o2b discipline install` writes the Hermes jobs file of the running
+user.** The default moved from a fixed path under the root user's home to
+`~/.hermes/cron/jobs.json`. On a host where Hermes runs as root the path is
+the same; on any other host the install used to fail and now works.
+`OSB_HERMES_JOBS` still overrides it.
+
+**A served `o2b mcp` exits 70 on an uncaught exception** and survives an
+unhandled promise rejection, naming it on stderr. A supervisor that treated
+every exit of the server the same way can now tell a fault (70) from a
+signal (130 / 143). See "Background faults" in [`mcp.md`](mcp.md).
+
 ## Upgrading to 1.64.0
 
 No step below is required. Two changes are visible to a nightly cron, and
