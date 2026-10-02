@@ -426,7 +426,11 @@ class ConfigCommandSourceTests(ScopeTestCase):
         with self.no_hermes():
             rc, out, _ = self._run_config()
         self.assertEqual(rc, 0)
-        self.assertEqual(out.splitlines()[0], "settings_source: process environment")
+        self.assertEqual(
+            out.splitlines()[0],
+            "settings_source: process environment (this command; a gateway with "
+            "gateway.multiplex_profiles reads each profile's .env)",
+        )
         self.assertTrue(out.splitlines()[1].startswith("config_path:"))
 
     def test_first_line_names_the_profile_scope(self):
