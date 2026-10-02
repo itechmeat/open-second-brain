@@ -333,7 +333,8 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "issue is filtered answer at the caller's reach too: a withheld page spends no slot of " +
       "the removed-tool warning cap or of the per-code uncertain cap, is neither a state nor a " +
       "consumer in the stale-dependency audit, and adds no principle, topic or preference to " +
-      "the semantic-health detectors behind the concept-gap and contradiction warnings. The " +
+      "the semantic-health detectors behind the concept-gap and contradiction warnings, and a " +
+      "withheld vault-root instruction file raises no ceiling warning. The " +
       "repair branch hands applyRepair the caller's reach, which bounds the findings before the " +
       "plan is derived, so a withheld record is neither planned, counted nor written.",
   },
@@ -473,9 +474,15 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
     kind: K.mcpTool,
     category: C.excluded,
     reason:
-      "show returns a stored receipt's full payload verbatim - the same content a prior " +
-      "brain_context_pack call recorded - with no visibility re-check at read time; only a " +
-      "receipt-level private/redacted flag applies, which is a different axis.",
+      "show returns a stored receipt's payload - the same content a prior brain_context_pack " +
+      "call recorded - with no visibility re-check at read time; only a receipt-level " +
+      "private/redacted flag applies, which is a different axis. Below local reach a " +
+      "SessionStart injection receipt (pack-tools.ts receiptAtReach) drops the standing-rules " +
+      "and scoped-rules items and source references and every figure that counts or measures " +
+      "them (item_count, final_text_hash, final_text_chars, total_bytes, total_tokens, " +
+      "scoped_rules_chars, budgeted_source_count), and summary leaves them out of its item " +
+      "totals; a degraded injection that carried only the rules still counts as a non-empty " +
+      "receipt in summary.",
   },
   {
     surface: "brain_event_trace",
@@ -543,10 +550,13 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "month's events through the same log-event rule before the transition, retirement, " +
       "contradiction and neglected-area counts; view=operator takes its doctor counts over the " +
       "findings the owner view ANDed with reachView keeps (the doctor pass itself handed " +
-      "readableAtContextReach(ctx) for its removed-tool cap and stale-dependency count), its " +
-      "digest counts over the preference, retired and inbox pages the caller may read, its top " +
-      "actions by target before the top-N slice, its verification entries and their counts by " +
-      "the record and page each names, and the trust verdict again over those kept streams. " +
+      "readableAtContextReach(ctx), so the removed-tool and uncertain caps, the " +
+      "stale-dependency states and consumers and the semantic-health detectors count only " +
+      "readable pages), its digest counts over the preference, retired and inbox pages the " +
+      "caller may read, its instruction-file warnings over the vault-root files the caller may " +
+      "read, its top actions by target before the top-N slice, its verification entries and " +
+      "their counts by the record and page each names, and the trust verdict again over those " +
+      "kept streams. " +
       "Residual: the operator view's dream_summary counts (dream warnings, uncertain and " +
       "quarantined entries of the dry-run dream), and the dream warnings the trust verdict " +
       "folds in, are still taken over the whole Brain layer and name no id.",
