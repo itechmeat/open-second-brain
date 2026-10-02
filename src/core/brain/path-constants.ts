@@ -299,6 +299,18 @@ export function isCompiledDigestRel(relPath: string): boolean {
   return [BRAIN_ACTIVE_FILE, BRAIN_LESSONS_FILE].some((file) => foldSegment(file) === name);
 }
 
+/**
+ * Does `relPath` name a file under the Brain log ({@link BRAIN_LOG_REL}),
+ * in any spelling the filesystem resolves to it? The daily log pages name
+ * preference ids, retired ids and evidence artifacts in their event bodies
+ * and carry no visibility of their own, so, like a compiled digest page,
+ * they cannot say that a record they name is reserved. Read with the same
+ * normalization and case-folding as {@link brainRootSegments}.
+ */
+export function isBrainLogRel(relPath: string): boolean {
+  return isInBrainLane(relPath, [BRAIN_LOG_REL]);
+}
+
 /** Does `relPath` land at or under `Brain/`? See {@link brainRootSegments}. */
 export function isUnderBrainRoot(relPath: string): boolean {
   return brainRootSegments(relPath) !== null;

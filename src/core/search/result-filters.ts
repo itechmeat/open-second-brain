@@ -10,7 +10,7 @@ import { join } from "node:path";
 
 import { parseFrontmatterWithNotices } from "../vault.ts";
 import { pathIsInside } from "../path-safety.ts";
-import { BRAIN_STATE_REL, isCompiledDigestRel } from "../brain/paths.ts";
+import { BRAIN_STATE_REL, isBrainLogRel, isCompiledDigestRel } from "../brain/paths.ts";
 import { DEGRADATION_CODE } from "../integrity/degradation.ts";
 import type { FrontmatterMap } from "../types.ts";
 import {
@@ -371,6 +371,12 @@ export function applyVisibilityScope(
  * records that may be reserved, and its own tags cannot say so. Its
  * dedicated readers render it per reader and never ask this predicate
  * about the page itself.
+ *
+ * A Brain log page ({@link isBrainLogRel}) answers `false` below local
+ * reach for the same reason: its event bodies name reserved preference
+ * ids, retired ids and evidence artifacts, and the page carries no
+ * visibility that could say so. The log's dedicated readers render its
+ * events per reader instead.
  */
 export function isPathReadableAtReach(
   vault: string,
@@ -380,7 +386,9 @@ export function isPathReadableAtReach(
   indexedTags: ReadonlyArray<string> = [],
 ): boolean {
   if (!pathIsInside(join(vault, path), vault)) return false;
-  if (reach !== TRANSPORT_REACH.local && isCompiledDigestRel(path)) return false;
+  if (reach !== TRANSPORT_REACH.local && (isCompiledDigestRel(path) || isBrainLogRel(path))) {
+    return false;
+  }
   const entry = readCachedFrontmatterEntry(frontmatterCache, vault, path);
   const tags = entry.unreadable ? UNMEASURABLE_VISIBILITY : pageVisibility(entry.meta);
   return isRemotelyReadable(tags, reach) && isRemotelyReadable(indexedTags, reach);
