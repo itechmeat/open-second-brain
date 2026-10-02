@@ -60,7 +60,7 @@ Consultant variant 2 ("shared provenance module, write-time gate plus lint detec
 ### Quote spans
 
 1. **Delimiters.** A quotation mark is any code point with the Unicode binary property `Quotation_Mark` (`/\p{Quotation_Mark}/u`). No language list. A new constant in the span module; `canonical.ts` is untouched.
-2. **Apostrophe exclusion.** A mark with a letter (`\p{L}`) immediately on both sides is never a delimiter (`don’t`, `l'eau`). U+02BC is not `Quotation_Mark` and needs no rule.
+2. **Apostrophe exclusion.** A mark with a letter (`\p{L}`) immediately on both sides is never a delimiter (`don’t`, `l'eau`). U+02BC is not `Quotation_Mark` and needs no rule. Ps/Pe quotation marks are directional and never apostrophes.
 3. **Pairing by position, not by glyph.** An opener is a mark at the start of the text or after whitespace or opening punctuation (`\p{Ps}`, `\p{Pi}`, another opener), and followed by a non-space. A closer is a mark followed by the end, whitespace or punctuation, and preceded by a non-space. This pairs `"…"`, `“…”`, `„…“`, `»…«`, `«…»`, `「…」` and `『…』` without knowing which language uses which. Pairing is a stack; only outermost spans are checked, an inner quote is part of its outer span's text.
 4. **Unpaired marks** are not spans. They are counted (`unpaired`) in the result and left on the page untouched. An empty or whitespace-only span is not a quote.
 
