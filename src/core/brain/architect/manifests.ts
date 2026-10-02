@@ -160,8 +160,22 @@ function parseManifest(spec: ManifestSpec, text: string): ParsedManifest | null 
       return parsePackageJson(text);
     case MANIFEST_ECOSYSTEM.pypi:
       return parsePyproject(text);
-    default:
+    case MANIFEST_ECOSYSTEM.cargo:
+      return parseCargoToml(text);
+    case MANIFEST_ECOSYSTEM.go:
+      return parseGoMod(text);
+    // Declared not dependency-readable in the shared vocabulary: no XML
+    // reader in the runtime, and Maven, Gradle, Bundler and Composer
+    // semantics cannot be read honestly from one file.
+    case MANIFEST_ECOSYSTEM.maven:
+    case MANIFEST_ECOSYSTEM.gradle:
+    case MANIFEST_ECOSYSTEM.rubygems:
+    case MANIFEST_ECOSYSTEM.composer:
       return null;
+    default: {
+      const unreachable: never = spec.ecosystem;
+      throw new TypeError(`no manifest reader for ecosystem: ${String(unreachable)}`);
+    }
   }
 }
 
@@ -264,6 +278,108 @@ function definedHead(table: Record<string, unknown>): Record<string, unknown> {
     if (typeof table[key] === "string") head[key] = table[key];
   }
   return head;
+}
+
+// --- Cargo.toml ----------------------------------------------------------
+
+/** Cargo's counted groups, by the table that declares each. */
+const CARGO_COUNTED_GROUPS: ReadonlyArray<readonly [string, DependencyGroup]> = Object.freeze([
+  ["dev-dependencies", DEPENDENCY_GROUP.dev],
+  ["build-dependencies", DEPENDENCY_GROUP.build],
+]);
+const CARGO_RUNTIME_TABLE = "dependencies";
+
+function parseCargoToml(text: string): ParsedManifest {
+  const doc = parseToml(text);
+  // The top level and every `[target.'<cfg>']` table declare the same
+  // three dependency tables.
+  const scopes: ReadonlyArray<Record<string, unknown>> = [
+    doc,
+    ...tableValues(doc["target"])
+      .map(asTable)
+      .filter((target): target is Record<string, unknown> => target !== null),
+  ];
+  const runtime: string[] = [];
+  const groups = new GroupCollector(MANIFEST_ECOSYSTEM.cargo);
+  for (const scope of scopes) {
+    runtime.push(...cargoCrateNames(scope[CARGO_RUNTIME_TABLE]));
+    for (const [table, group] of CARGO_COUNTED_GROUPS) {
+      groups.addAll(group, cargoCrateNames(scope[table]));
+    }
+  }
+  return {
+    fact: fact(asTable(doc["package"]) ?? {}, MANIFEST_ECOSYSTEM.cargo, runtime),
+    groups: groups.sets,
+    raw: null,
+  };
+}
+
+/** The real crate names of a dependency table: `package =` resolves a rename. */
+function cargoCrateNames(value: unknown): string[] {
+  return Object.entries(asTable(value) ?? {}).map(([key, entry]) => {
+    const renamed = asTable(entry)?.["package"];
+    return typeof renamed === "string" ? renamed : key;
+  });
+}
+
+// --- go.mod --------------------------------------------------------------
+
+const GO_MODULE_DIRECTIVE = "module";
+const GO_REQUIRE_DIRECTIVE = "require";
+const GO_BLOCK_OPEN = "(";
+const GO_BLOCK_CLOSE = ")";
+const GO_COMMENT = "//";
+/** Go marks an indirect requirement with a comment `// indirect` or `// indirect; ...`. */
+const GO_INDIRECT_COMMENT = /^indirect(?:;|$)/;
+const GO_QUOTED = /^(["`])(.*)\1$/;
+
+/**
+ * A line reader for go.mod. Only `module` and `require` are read; every
+ * other directive (`go`, `toolchain`, `replace`, `exclude`, `retract`
+ * and any later one), single-line or block, is skipped.
+ */
+function parseGoMod(text: string): ParsedManifest {
+  let modulePath: string | null = null;
+  let block: string | null = null;
+  const runtime: string[] = [];
+  const groups = new GroupCollector(MANIFEST_ECOSYSTEM.go);
+  for (const line of text.split(/\r?\n/)) {
+    const commentAt = line.indexOf(GO_COMMENT);
+    const code = commentAt === -1 ? line : line.slice(0, commentAt);
+    const comment = commentAt === -1 ? "" : line.slice(commentAt + GO_COMMENT.length).trim();
+    const tokens = code
+      .trim()
+      .split(/\s+/)
+      .filter((token) => token !== "")
+      .map(unquoteGo);
+    if (tokens.length === 0) continue;
+    let entry: string[] | null = null;
+    if (block !== null) {
+      if (tokens[0] === GO_BLOCK_CLOSE) block = null;
+      else if (block === GO_REQUIRE_DIRECTIVE) entry = tokens;
+    } else if (tokens[1] === GO_BLOCK_OPEN) {
+      block = tokens[0]!;
+    } else if (tokens[0] === GO_MODULE_DIRECTIVE) {
+      modulePath = tokens[1] ?? null;
+    } else if (tokens[0] === GO_REQUIRE_DIRECTIVE) {
+      entry = tokens.slice(1);
+    }
+    if (entry === null) continue;
+    if (entry.length < 2) throw new ManifestShapeError("require entry has no version");
+    if (GO_INDIRECT_COMMENT.test(comment)) groups.addAll(DEPENDENCY_GROUP.indirect, [entry[0]!]);
+    else runtime.push(entry[0]!);
+  }
+  if (block !== null) throw new ManifestShapeError(`unterminated ${block} block`);
+  return {
+    fact: fact({ name: modulePath }, MANIFEST_ECOSYSTEM.go, runtime),
+    groups: groups.sets,
+    raw: null,
+  };
+}
+
+/** A go.mod token without its interpreted or raw string quotes. */
+function unquoteGo(token: string): string {
+  return GO_QUOTED.exec(token)?.[2] ?? token;
 }
 
 // --- shared helpers ------------------------------------------------------
