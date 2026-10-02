@@ -48,7 +48,7 @@ Dependency summary:
 
 ### `src/core/brain/distill/quote-verdict.ts` (lane A, A3)
 
-- `QUOTE_CHECK_OUTCOME = Object.freeze({ verifiedInBlock: "verified-in-block", verifiedInSource: "verified-in-source", notInBlock: "not-in-block", notInSource: "not-in-source", blockNotFound: "block-not-found", blockAmbiguous: "block-ambiguous", sourceNotText: "source-not-text", urlOnly: CAPTURE_SCOPE.urlOnly } as const)`
+- `QUOTE_CHECK_OUTCOME = Object.freeze({ verifiedInBlock: "verified-in-block", verifiedInSource: "verified-in-source", notInBlock: "not-in-block", notInSource: "not-in-source", blockNotFound: "block-not-found", blockAmbiguous: "block-ambiguous", sourceNotText: "source-not-text", urlOnly: "url-only" } as const)`. The `urlOnly` value is written as the literal, not as `CAPTURE_SCOPE.urlOnly`: the verdict-vocabulary census only registers objects whose values are all literals. The one-name rule (decision 13) is kept by a test that asserts `QUOTE_CHECK_OUTCOME.urlOnly === CAPTURE_SCOPE.urlOnly`.
 - `QUOTE_CHECK_OUTCOMES`, `type QuoteCheckOutcome`, `isQuoteCheckOutcome(value: unknown)`
 - `VERIFIED_QUOTE_OUTCOMES: ReadonlySet<QuoteCheckOutcome>` = `{verified-in-block, verified-in-source}`
 - `QUOTE_FINDINGS_MAX = PAGE_LINT_MAX_FINDINGS` (imported from `page-lint.ts`), `QUOTE_SPAN_PREVIEW_MAX_CHARS = 120`
