@@ -145,15 +145,21 @@ const DELIMITER_CHAR: Readonly<Record<TableDelimiter, string>> = Object.freeze({
   tab: "\t",
 });
 
-/** Cell characters escaped so one record stays one line and a cell boundary stays unambiguous. */
+/**
+ * Cell characters escaped so one record stays one line, a cell boundary
+ * stays unambiguous and no rendered line opens with a backtick run (the
+ * chunker closes a fence on any line that starts with three backticks,
+ * whatever the opening fence's length). Reversible: `\` is escaped too.
+ */
 const CELL_ESCAPES: Readonly<Record<string, string>> = Object.freeze({
   "\\": "\\\\",
   "|": "\\|",
+  "`": "\\`",
   "\n": "\\n",
   "\r": "\\r",
   "\t": "\\t",
 });
-const CELL_ESCAPE_RE = /[\\|\n\r\t]/g;
+const CELL_ESCAPE_RE = /[\\|`\n\r\t]/g;
 
 /** Marks a cell cut at {@link TABLE_NOTE_MAX_CELL_CHARS}. */
 const CUT_MARKER = "\u2026";

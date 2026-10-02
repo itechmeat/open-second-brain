@@ -398,10 +398,15 @@ describe("escapes and fences", () => {
     expect(fencedLines(result.section)[1]).toBe("a\\|b | c\\\\d\\te\\r\\nf");
   });
 
-  test("the fence outgrows a backtick run in a cell", () => {
-    const result = rendered(csv("k,v\nx,```js\ny,````\n"));
-    expect(result.section).toContain("\n`````table\n");
-    expect(fencedLines(result.section)).toEqual(["k | v", "x | ```js", "y | ````"]);
+  test("backticks in a cell are escaped, so a table body always takes a three-backtick fence", () => {
+    const result = rendered(csv("k,v\n```js,````\ny,a`b\n"));
+    expect(result.section).toContain("\n```table\n");
+    expect(result.section).not.toContain("````");
+    expect(fencedLines(result.section)).toEqual([
+      "k | v",
+      "\\`\\`\\`js | \\`\\`\\`\\`",
+      "y | a\\`b",
+    ]);
   });
 
   test("links and tags in cells stay inside the fence", () => {

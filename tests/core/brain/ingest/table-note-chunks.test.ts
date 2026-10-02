@@ -20,10 +20,15 @@ import {
 const COLUMNS = 15;
 const ROWS = 400;
 
-function wideCsv(): Uint8Array {
+/** Row 4's first cell opens with a backtick run, the way a pasted code sample would. */
+const FENCE_LIKE_ROW = 4;
+
+function wideCsv(fenceLikeRow?: number): Uint8Array {
   const header = Array.from({ length: COLUMNS }, (_, c) => `field ${c + 1}`);
   const rows = Array.from({ length: ROWS }, (_row, r) =>
-    Array.from({ length: COLUMNS }, (_column, c) => `value ${r + 1} ${c + 1}`),
+    Array.from({ length: COLUMNS }, (_column, c) =>
+      r + 1 === fenceLikeRow && c === 0 ? "```js" : `value ${r + 1} ${c + 1}`,
+    ),
   );
   return new TextEncoder().encode([header, ...rows].map((r) => r.join(",")).join("\n"));
 }
@@ -59,5 +64,20 @@ describe("table note chunks", () => {
     const result = tableNote("Clips/wide.csv", wideCsv());
     if (!result.rendered) throw new Error(`not rendered: ${result.reason}`);
     expect(chunkMarkdown(result.section, "wide")).toEqual(chunkMarkdown(result.section, "wide"));
+  });
+
+  test("a cell that opens with a backtick run keeps one Rows heading path per group", () => {
+    const result = tableNote("Clips/wide.csv", wideCsv(FENCE_LIKE_ROW));
+    if (!result.rendered) throw new Error(`not rendered: ${result.reason}`);
+    const groups = [...result.section.matchAll(/^### (Rows \d+-\d+)$/gm)].map((m) => m[1]);
+    expect(groups.length).toBeGreaterThan(1);
+
+    const { chunks } = chunkMarkdown(`# T\n\n${result.section}\n`, "wide");
+    const paths = new Set(
+      chunks
+        .map((chunk) => /Table > (Rows \d+-\d+)$/.exec(chunk.headingPath)?.[1])
+        .filter((path) => path !== undefined),
+    );
+    expect([...paths]).toEqual(groups);
   });
 });
