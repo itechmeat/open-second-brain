@@ -10,21 +10,11 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  utimesSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
-import { ingestSource } from "../../src/core/brain/ingest/ingest.ts";
 import { hashBytes } from "../../src/core/brain/ingest/content-manifest.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
@@ -34,7 +24,6 @@ const CSV_PATH = "Clips/parts.csv";
 const TSV_PATH = "Clips/parts.tsv";
 const PARTS_CSV = "name,qty\nbolt,4\nnut,7\n";
 const PRIVATE_BODY = "---\nvisibility: private\n---\nname,code\nvault,4711\n";
-const NOW = new Date("2026-10-02T12:00:00Z");
 
 const bases: string[] = [];
 
@@ -187,39 +176,6 @@ describe("brain_ingest_source on a table source", () => {
     expect("table" in result).toBe(false);
     expect("parts" in result).toBe(false);
     expect(pageOf(f, result)).not.toContain("source_format");
-  });
-});
-
-describe("re-ingest", () => {
-  const input = {
-    sourcePath: CSV_PATH,
-    summary: "Parts list.",
-    extraction: { entities: [{ category: "concept", name: "Fasteners" }] },
-  };
-
-  test("an unchanged CSV leaves the page untouched; a changed one rewrites it", () => {
-    const { vault } = fixture({ [CSV_PATH]: PARTS_CSV });
-    // The second ingest finds the entity the first created and adds its
-    // connection, so the page settles after two ingests.
-    ingestSource(vault, input, { agent: "claude", now: NOW });
-    const first = ingestSource(vault, input, { agent: "claude", now: NOW });
-    const abs = join(vault, first.summaryPath);
-    const before = readFileSync(abs, "utf8");
-    const past = new Date("2020-01-01T00:00:00Z");
-    utimesSync(abs, past, past);
-
-    const again = ingestSource(vault, input, { agent: "claude", now: NOW });
-    expect(again.table).toEqual(first.table);
-    expect(readFileSync(abs, "utf8")).toBe(before);
-    expect(statSync(abs).mtimeMs).toBe(past.getTime());
-
-    writeFileSync(join(vault, CSV_PATH), `${PARTS_CSV}washer,12\n`);
-    const changed = ingestSource(vault, input, { agent: "claude", now: NOW });
-    expect(changed.table).toMatchObject({ rendered: true, rows: 3, rowsRendered: 3 });
-    const after = readFileSync(abs, "utf8");
-    expect(after).not.toBe(before);
-    expect(after).toContain("\nwasher | 12\n");
-    expect(after).toContain("\ntable_rows: 3\n");
   });
 });
 

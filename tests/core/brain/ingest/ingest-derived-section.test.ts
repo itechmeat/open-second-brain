@@ -9,7 +9,15 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -177,8 +185,13 @@ describe("a CSV source in the vault", () => {
     ingestSource(vault, input("Clips/parts.csv"), { agent: "claude", now: NOW });
     const first = ingestSource(vault, input("Clips/parts.csv"), { agent: "claude", now: NOW });
     const before = page(vault, first.summaryPath);
+    const abs = join(vault, first.summaryPath);
+    const past = new Date("2020-01-01T00:00:00Z");
+    utimesSync(abs, past, past);
     ingestSource(vault, input("Clips/parts.csv"), { agent: "claude", now: NOW });
     expect(page(vault, first.summaryPath)).toBe(before);
+    // Inert means not rewritten at all: the mtime is the one set above.
+    expect(statSync(abs).mtimeMs).toBe(past.getTime());
 
     seed(vault, "Clips/parts.csv", `${PARTS_CSV}washer,9\n`);
     const changed = ingestSource(vault, input("Clips/parts.csv"), { agent: "claude", now: LATER });
