@@ -63,7 +63,7 @@ import { scanDanglingWorkruns, WORKRUN_PHASE } from "./dream-workrun.ts";
 import { extractWikilinkRichBodies, parseWikilinkRich } from "./link-graph/parse-wikilink.ts";
 import { LINT_CONSOLIDATE_KIND } from "./lint-consolidate.ts";
 import { appendLogEvent } from "./log.ts";
-import { everyArtifactRefView } from "./artifact-ref-view.ts";
+import { everyArtifactRefView, type ArtifactRef } from "./artifact-ref-view.ts";
 import { ownerScopeView } from "./owner-scope-view.ts";
 import { reachView } from "./reach-view.ts";
 import { acquireLockSync } from "./sync-lockfile.ts";
@@ -71,6 +71,7 @@ import { isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND, type DoctorIssue } from "./types.ts";
 import { isBrainArtifactId, normaliseWikilinkTarget } from "./wikilink.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import { recordRefs } from "./log-events-at-reach.ts";
 
 // ----- Diagnostics-signal model --------------------------------------------
 
@@ -1286,17 +1287,21 @@ export interface DoctorIssueNaming {
  * structured target and name their subjects inside the message as
  * `[[pref-x]]`; they are read through the shared wikilink lexer, a
  * structural read of link syntax rather than a match on prose. A finding
- * survives a view only when every reference passes it.
+ * survives a view only when every reference passes it. A record id is
+ * asked under every spelling it answers to ({@link recordRefs}), so a
+ * broken backlink to `pref-x` names the reserved `ret-x` it became.
  */
 export function doctorIssueRefs(
   vault: string,
   issue: DoctorIssueNaming,
-): ReadonlyArray<string | undefined> {
+): ReadonlyArray<ArtifactRef> {
   return [
     issue.path === undefined ? undefined : vaultRelativeOrSelf(vault, issue.path),
-    issue.target,
+    ...recordRefs(issue.target),
     ...(issue.sources ?? []),
-    ...extractWikilinkRichBodies(issue.message).map((b) => parseWikilinkRich(b).target),
+    ...extractWikilinkRichBodies(issue.message).flatMap((b) =>
+      recordRefs(parseWikilinkRich(b).target),
+    ),
   ];
 }
 

@@ -70,6 +70,7 @@ import { loadGuardrailsConfigSafe } from "../../core/brain/policy.ts";
 import { normalizeAgentScope } from "../../core/graph/agent-scope.ts";
 import { isPreferenceVisible } from "../../core/brain/owner-scoped-facts.ts";
 import { reachView } from "../../core/brain/reach-view.ts";
+import { recordRefs } from "../../core/brain/log-events-at-reach.ts";
 import { logEntryArtifactRefs } from "../../core/brain/log.ts";
 
 /** Accepted `at` forms, named in every refusal so the exit is actionable. */
@@ -532,8 +533,12 @@ async function toolBrainBacklinks(
   // one - the empty backlink document - rather than refusing, because an
   // unknown target is a legitimate zero here and a refusal would be the
   // one response shape that proves the page exists.
+  //
+  // The target is asked under every spelling its record answers to, so a
+  // retired record (on disk only as `ret-x`) asked for as `pref-x` is the
+  // reserved page it is, not an absent one whose log backlinks are listed.
   const view = reachView(ctx.vault, contextReach(ctx));
-  const refs = view.visible(target)
+  const refs = view.row(...recordRefs(target))
     ? (index.get(target) ?? []).filter((r) => view.visible(r.source))
     : [];
   const unparsed = index.unparsed

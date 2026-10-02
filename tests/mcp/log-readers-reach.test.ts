@@ -400,3 +400,24 @@ describe("brain_claims answers at the caller's reach", () => {
     });
   }
 });
+
+describe("a retired record is judged under its pref- spelling too", () => {
+  test("brain_backlinks id=pref-bygone answers as an absent page", async () => {
+    await expectAnswersAsAbsent("brain_backlinks", () => ({ id: `pref-${RETIRED_SLUG}` }), [
+      "log-dream",
+    ]);
+  });
+
+  test("brain_doctor names no broken backlink to the retired record", async () => {
+    // Only the broken-backlinks findings are compared: the orphan-evidence
+    // findings name evidence artifacts by basename and are outside this row.
+    const brokenBacklinks = (normalised: string) =>
+      (JSON.parse(normalised) as { warnings: ReadonlyArray<{ code: string }> }).warnings.filter(
+        (w) => w.code === "broken-backlinks",
+      );
+    const row = await abRow("brain_doctor", () => ({}));
+    expect(brokenBacklinks(row.withheld)).toEqual(brokenBacklinks(row.absent));
+    expect(JSON.stringify(brokenBacklinks(row.withheld))).not.toContain(RETIRED_SLUG);
+    expect(JSON.stringify(brokenBacklinks(row.local))).toContain(`[[pref-${RETIRED_SLUG}]]`);
+  });
+});
