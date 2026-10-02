@@ -1318,8 +1318,9 @@ is not a regular file or is larger than 1 MiB, which is not read) or
 `unsupported` - and one bad manifest never aborts the run. The overview's
 `dependencies` region lists every manifest of the root and the modules
 with its status, and the runtime dependencies they declare per
-ecosystem, leaving out a name that is another module's manifest name
-(those edges are drawn in `module-dependencies`), one canonical name
+ecosystem, leaving out a name that is the manifest name of exactly one
+other module (those edges are drawn in `module-dependencies`; a name two
+modules share binds no edge and stays listed), one canonical name
 each (PyPI names
 normalised per PEP 503, a renamed Cargo dependency by its real crate
 name), and counts the dev, build, optional, peer and indirect groups on
