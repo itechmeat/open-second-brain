@@ -113,4 +113,41 @@ describe("writeResearchReport capture scopes", () => {
     // The predicate is asked about the normalised vault path, never the URL.
     expect(asked).toEqual([LOCAL_SOURCE, "Notes/open.md"]);
   });
+
+  test("a source cited without its extension is the note beside it", () => {
+    seed("notes/meeting.md");
+
+    const result = report(["notes/meeting", "[[notes/meeting]]", "notes/absent"]);
+
+    expect(result.captureScopes).toEqual([
+      CAPTURE_SCOPE.fullLocal,
+      CAPTURE_SCOPE.fullLocal,
+      CAPTURE_SCOPE.urlOnly,
+    ]);
+  });
+
+  test("the reach check reads the note an extensionless source resolves to", () => {
+    seed("notes/meeting.md");
+    const asked: string[] = [];
+
+    const result = writeResearchReport(
+      vault,
+      {
+        title: "T",
+        sources: ["notes/meeting"],
+        findings: [{ statement: "S", sources: ["notes/meeting"] }],
+      },
+      {
+        agent: "claude",
+        now: NOW,
+        readable: (rel) => {
+          asked.push(rel);
+          return false;
+        },
+      },
+    );
+
+    expect(asked).toEqual(["notes/meeting.md"]);
+    expect(result.captureScopes).toEqual([CAPTURE_SCOPE.urlOnly]);
+  });
 });
