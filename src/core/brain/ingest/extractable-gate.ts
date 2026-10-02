@@ -32,6 +32,11 @@ const PAGE_TYPE_FIELD = "schema_type";
  * does not understand instead of parsing free text.
  */
 export const SKIPPED_PAGE_REASON = Object.freeze({
+  /**
+   * The file's format is one the source format registry names but has no
+   * extractor for (PDF, Office, EPUB, RTF, images); `detail` is the format.
+   */
+  formatNotExtractable: "format-not-extractable",
   /** The page's `schema_type` is not in the schema `extractable` allowlist. */
   notExtractable: "schema-type-not-extractable",
 } as const);
@@ -41,6 +46,7 @@ export type SkippedPageReason = (typeof SKIPPED_PAGE_REASON)[keyof typeof SKIPPE
 
 /** Membership list of the closed union, in the order a page meets the gates. */
 export const SKIPPED_PAGE_REASONS: ReadonlyArray<SkippedPageReason> = Object.freeze([
+  SKIPPED_PAGE_REASON.formatNotExtractable,
   SKIPPED_PAGE_REASON.notExtractable,
 ]);
 
@@ -80,8 +86,8 @@ export interface SkippedPage {
   /** Typed reason token from the closed {@link SKIPPED_PAGE_REASONS} union. */
   readonly reason: SkippedPageReason;
   /**
-   * The value behind the skip - the page's declared `schema_type` - so the
-   * reason is checkable without re-reading the page (the page-lint `detail`
+   * The value behind the skip - the page's declared `schema_type`, or the
+   * `SourceFormat` token of a format skip - so the reason is checkable without re-reading the page (the page-lint `detail`
    * pattern: identifiers cross the boundary, never prose).
    */
   readonly detail: string;

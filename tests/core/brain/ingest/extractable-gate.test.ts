@@ -87,6 +87,24 @@ describe("typed skip reasons (P4)", () => {
     expect(isSkippedPageReason(null)).toBe(false);
   });
 
+  test("format-not-extractable is the first member: a file meets the format gate before any schema gate", () => {
+    expect([...SKIPPED_PAGE_REASONS]).toEqual([
+      "format-not-extractable",
+      "schema-type-not-extractable",
+    ]);
+    expect(SKIPPED_PAGE_REASON.formatNotExtractable).toBe("format-not-extractable");
+    expect(isSkippedPageReason(SKIPPED_PAGE_REASON.formatNotExtractable)).toBe(true);
+  });
+
+  test("the legacy sentence still maps only to the schema token", () => {
+    expect(
+      parseSkippedPageReason('schema_type "memo" is not in the schema extractable allowlist'),
+    ).toBe("schema-type-not-extractable");
+    expect(parseSkippedPageReason(SKIPPED_PAGE_REASON.formatNotExtractable)).toBe(
+      "format-not-extractable",
+    );
+  });
+
   test("parseSkippedPageReason maps the legacy sentence to its token and rejects the rest", () => {
     expect(parseSkippedPageReason(SKIPPED_PAGE_REASON.notExtractable)).toBe(
       SKIPPED_PAGE_REASON.notExtractable,
