@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 from . import config
 from ._base import MemoryProvider
 from ._schemas import static_tool_schemas
-from .bridge import BrainBridge, BridgeError, McpBrainBridge
+from .bridge import BrainBridge, BridgeError, McpBrainBridge, resolve_request_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +159,10 @@ _PREFETCH_QUERY_MODE = "ranked"
 # configuration in this Python process. Cache eviction deliberately calls
 # AIAgent.release_clients() without shutting down memory providers, so
 # constructing one Bun child per provider leaks a child for every new session.
-_SharedBridgeKey = tuple[str | None, str | None, tuple[str, ...], str | None]
+# The trailing tuple is the identity the child runs under on a multiplexed
+# gateway (agent name, timezone, config path, request deadline); it is empty
+# without multiplexing, where those are constant for the whole process.
+_SharedBridgeKey = tuple[str | None, str | None, tuple[str, ...], str | None, tuple[Any, ...]]
 _SHARED_BRIDGES: dict[_SharedBridgeKey, BrainBridge] = {}
 _SHARED_BRIDGES_LOCK = threading.RLock()
 
@@ -169,6 +172,7 @@ def _shared_bridge_key(
     repo_root: str | None,
     command: tuple[str, ...],
     env: Mapping[str, str] | None = None,
+    identity: tuple[Any, ...] = (),
 ) -> _SharedBridgeKey:
     """Identity of a bridge: what it runs, where, and the ``PATH`` it runs with.
 
@@ -176,8 +180,18 @@ def _shared_bridge_key(
     two children launched with different search paths are different servers -
     sharing one bridge between them would hand the second caller a child that
     resolved its runtime somewhere else.
+
+    ``identity`` carries what a multiplexed gateway's profiles may differ in
+    besides the vault: two profiles sharing a vault under different agent
+    names must not share one child, or one of them writes as the other.
     """
-    return (vault, repo_root, tuple(command), None if env is None else env.get("PATH"))
+    return (
+        vault,
+        repo_root,
+        tuple(command),
+        None if env is None else env.get("PATH"),
+        tuple(identity),
+    )
 
 
 def _get_shared_bridge(
@@ -186,17 +200,25 @@ def _get_shared_bridge(
     repo_root: str | None,
     command: tuple[str, ...],
     env: Mapping[str, str] | None = None,
+    identity: tuple[Any, ...] = (),
+    timeout: float | None = None,
 ) -> BrainBridge:
-    """Return the one bridge for this gateway/configuration key."""
-    key = _shared_bridge_key(vault, repo_root, command, env)
+    """Return the one bridge for this gateway/configuration key.
+
+    ``timeout`` is passed to the bridge only when given (a multiplexed
+    gateway); otherwise the bridge reads its deadline at start, as before.
+    """
+    key = _shared_bridge_key(vault, repo_root, command, env, identity)
     with _SHARED_BRIDGES_LOCK:
         bridge = _SHARED_BRIDGES.get(key)
         if bridge is None:
+            extra: dict[str, Any] = {} if timeout is None else {"timeout": timeout}
             bridge = McpBrainBridge(
                 vault=vault,
                 repo_root=repo_root,
                 command=command,
                 env=env,
+                **extra,
             )
             _SHARED_BRIDGES[key] = bridge
         return bridge
@@ -212,6 +234,30 @@ def _shutdown_shared_bridges() -> None:
             bridge.stop()
         except Exception:  # noqa: BLE001 - shutdown is best-effort
             pass
+
+
+_scope_degrade_warned = False
+_scope_degrade_lock = threading.Lock()
+
+
+def _warn_scope_degrade_once() -> None:
+    """One WARNING per process when ``prefetch`` runs with no profile scope."""
+    global _scope_degrade_warned
+    with _scope_degrade_lock:
+        if _scope_degrade_warned:
+            return
+        _scope_degrade_warned = True
+    logger.warning(
+        "%s: no profile scope bound for this turn; the vault reminder is omitted",
+        OpenSecondBrainMemoryProvider.PROVIDER_NAME,
+    )
+
+
+def _reset_scope_degrade_warning_for_tests() -> None:
+    """Test-only: allow the prefetch degrade warning to fire again."""
+    global _scope_degrade_warned
+    with _scope_degrade_lock:
+        _scope_degrade_warned = False
 
 
 def _reset_shared_bridges_for_tests() -> None:
@@ -387,12 +433,27 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
             vault = config.resolve_vault()
             repo_root = self._repo_root()
             command = self._resolve_command()
-            self._bridge = _get_shared_bridge(
-                vault=vault,
-                repo_root=repo_root,
-                command=command,
-                env=self._resolve_env(),
-            )
+            env = self._resolve_env()
+            if config.is_multiplexed():
+                # Resolved here, once, where Hermes has bound this profile's
+                # scope: the child and every restart of it must not consult
+                # the gateway's environment, which is the launch profile's.
+                env, identity, timeout = self._scoped_child(env)
+                self._bridge = _get_shared_bridge(
+                    vault=vault,
+                    repo_root=repo_root,
+                    command=command,
+                    env=env,
+                    identity=identity,
+                    timeout=timeout,
+                )
+            else:
+                self._bridge = _get_shared_bridge(
+                    vault=vault,
+                    repo_root=repo_root,
+                    command=command,
+                    env=env,
+                )
             self._bridge_shared = True
         try:
             assert self._bridge is not None
@@ -414,6 +475,40 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         without it ``skill_auto_attach`` returns an empty list."""
         root = Path(__file__).resolve().parents[2]
         return str(root) if (root / "skills").is_dir() else None
+
+    @staticmethod
+    def _scoped_child(
+        base: Mapping[str, str] | None,
+    ) -> tuple[dict[str, str], tuple[Any, ...], float]:
+        """Child environment, bridge identity and deadline for this profile.
+
+        Multiplexed gateways only. The child inherits the gateway's
+        environment, and the TypeScript core reads the agent name, timezone
+        and config path from it - so every profile-scoped name is removed and
+        the scope's own non-empty values are set in its place; a name the
+        scope leaves unset is resolved by the child from the config file, as
+        the plugin resolves it. The deadline is fixed here (``0.0`` when
+        disabled) so a restart never reads the scope from a thread that has
+        none.
+
+        :raises config.ProfileScopeError: when no profile scope is bound.
+        """
+        env = dict(os.environ if base is None else base)
+        for name in config.PROFILE_SCOPED_ENV:
+            env.pop(name, None)
+        for name in config.PROFILE_SCOPED_ENV:
+            value = config.env_setting(name)
+            if value:
+                env[name] = value
+        deadline = resolve_request_timeout()
+        timeout = 0.0 if deadline is None else deadline
+        identity = (
+            config.resolve_agent_name(),
+            config.resolve_timezone(),
+            str(config.config_path()),
+            timeout,
+        )
+        return env, identity, timeout
 
     @staticmethod
     def _resolve_env() -> dict[str, str] | None:
@@ -764,7 +859,14 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         skills_block = str(attach.get("block", "") or "")
         if attach.get("enabled") and skills_block:
             parts.append(skills_block)
-        reminder = config.build_reminder()
+        try:
+            reminder = config.build_reminder()
+        except config.ProfileScopeError:
+            # Degrade like `_safe_call`: a turn with no bound profile scope
+            # cannot know whose identity to remind of, and failing the turn
+            # over a reminder would be worse than omitting it.
+            _warn_scope_degrade_once()
+            reminder = None
         if reminder:
             parts.append(reminder)
         return "\n\n".join(parts)

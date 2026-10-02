@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import os
 import sys
 import tempfile
+import threading
 import types
 import unittest
 from pathlib import Path
@@ -27,7 +29,11 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from plugins.hermes import bridge as bridge_module  # noqa: E402
 from plugins.hermes import config as cfg  # noqa: E402
+from plugins.hermes import provider as provider_module  # noqa: E402
+from plugins.hermes.bridge import FakeBrainBridge, McpBrainBridge  # noqa: E402
+from plugins.hermes.provider import OpenSecondBrainMemoryProvider  # noqa: E402
 
 # Process-environment values that belong to the LAUNCH profile. None of them
 # may surface under multiplexing, in a result or in a message.
@@ -360,6 +366,185 @@ class ConfigCommandSourceTests(ScopeTestCase):
         self.assertIn("OPEN_SECOND_BRAIN_CONFIG cannot be resolved", err)
         for value in LAUNCH_VALUES.values():
             self.assertNotIn(value, out + err)
+
+
+class _HandshakeProcess:
+    """A child that answers ``initialize`` and ``tools/list`` and nothing else."""
+
+    def __init__(self):
+        frames = [
+            {"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-06-18"}},
+            {"jsonrpc": "2.0", "id": 2, "result": {"tools": []}},
+        ]
+        self.stdin = io.BytesIO()
+        self.stdout = io.BytesIO(b"".join(json.dumps(f).encode() + b"\n" for f in frames))
+        self.stderr = None
+        self.pid = 4242
+
+    def poll(self):
+        return None
+
+    def terminate(self):
+        pass
+
+    def kill(self):
+        pass
+
+    def wait(self, timeout=None):
+        return 0
+
+
+class ScopedChildEnvironmentTests(ScopeTestCase):
+    """(f) Under multiplexing each profile gets its own MCP child identity."""
+
+    def tearDown(self):
+        provider_module._reset_shared_bridges_for_tests()
+        super().tearDown()
+
+    def _initialize(self, pair, factory, overlay=None):
+        with (
+            self.install(pair),
+            patch("plugins.hermes.provider.McpBrainBridge", side_effect=factory),
+            patch.object(OpenSecondBrainMemoryProvider, "_repo_root", return_value="/repo"),
+            patch.object(
+                OpenSecondBrainMemoryProvider, "_resolve_command", return_value=("o2b", "mcp")
+            ),
+            patch.object(OpenSecondBrainMemoryProvider, "_resolve_env", return_value=overlay),
+        ):
+            OpenSecondBrainMemoryProvider().initialize("session", hermes_home=str(self.tmp))
+
+    def test_child_env_carries_the_scoped_identity_only(self):
+        self.set_launch_env()
+        os.environ[cfg.XDG_CONFIG_HOME_ENV] = str(self.tmp / "absent")
+        built = []
+        pair = make_fake_scope(
+            multiplexed=True,
+            values={"VAULT_DIR": "shared-vault", "VAULT_AGENT_NAME": "scoped-agent"},
+        )
+        self._initialize(pair, lambda **kw: built.append(kw) or FakeBrainBridge())
+        self.assertEqual(len(built), 1)
+        env = built[0]["env"]
+        self.assertEqual(env["VAULT_AGENT_NAME"], "scoped-agent")
+        self.assertEqual(env["VAULT_DIR"], "shared-vault")
+        for name in ("VAULT_TIMEZONE", "OPEN_SECOND_BRAIN_CONFIG", "OPEN_SECOND_BRAIN_MCP_TIMEOUT"):
+            self.assertNotIn(name, env)
+        for value in LAUNCH_VALUES.values():
+            self.assertNotIn(value, env.values())
+        # The bridge never reads the deadline itself on this gateway.
+        self.assertEqual(built[0]["timeout"], bridge_module.DEFAULT_REQUEST_TIMEOUT_SECONDS)
+
+    def test_overlay_path_survives_the_scoping(self):
+        os.environ[cfg.XDG_CONFIG_HOME_ENV] = str(self.tmp / "absent")
+        built = []
+        pair = make_fake_scope(multiplexed=True, values={"VAULT_DIR": "v"})
+        overlay = {"PATH": "/opt/bun/bin", "VAULT_AGENT_NAME": "launch-agent-value"}
+        self._initialize(pair, lambda **kw: built.append(kw) or FakeBrainBridge(), overlay)
+        self.assertEqual(built[0]["env"]["PATH"], "/opt/bun/bin")
+        self.assertNotIn("VAULT_AGENT_NAME", built[0]["env"])
+
+    def test_scoped_timeout_reaches_the_bridge(self):
+        os.environ[cfg.XDG_CONFIG_HOME_ENV] = str(self.tmp / "absent")
+        built = []
+        for raw, expected in (("7", 7.0), ("0", 0.0)):
+            with self.subTest(raw=raw):
+                provider_module._reset_shared_bridges_for_tests()
+                built.clear()
+                pair = make_fake_scope(
+                    multiplexed=True,
+                    values={"VAULT_DIR": "v", "OPEN_SECOND_BRAIN_MCP_TIMEOUT": raw},
+                )
+                self._initialize(pair, lambda **kw: built.append(kw) or FakeBrainBridge())
+                self.assertEqual(built[0]["timeout"], expected)
+
+    def test_same_vault_different_agents_get_two_bridges(self):
+        os.environ[cfg.XDG_CONFIG_HOME_ENV] = str(self.tmp / "absent")
+        built = []
+        for agent in ("agent-one", "agent-two", "agent-one"):
+            pair = make_fake_scope(
+                multiplexed=True,
+                values={"VAULT_DIR": "shared-vault", "VAULT_AGENT_NAME": agent},
+            )
+            self._initialize(pair, lambda **kw: built.append(kw) or FakeBrainBridge())
+        self.assertEqual(
+            [kw["env"]["VAULT_AGENT_NAME"] for kw in built], ["agent-one", "agent-two"]
+        )
+
+    def test_without_multiplexing_env_and_sharing_are_unchanged(self):
+        os.environ["VAULT_DIR"] = "launch-vault"
+        os.environ["VAULT_AGENT_NAME"] = "launch-agent-value"
+        built = []
+        off = make_fake_scope(multiplexed=False)
+        for _ in range(2):
+            self._initialize(off, lambda **kw: built.append(kw) or FakeBrainBridge())
+        self.assertEqual(len(built), 1)
+        self.assertIsNone(built[0]["env"])
+        self.assertNotIn("timeout", built[0])
+        self.assertEqual(off[1].reads, [])
+
+
+class BridgeTimeoutFixedAtConstructionTests(ScopeTestCase):
+    """(h) A restart from a plugin-owned thread never reads the scope."""
+
+    def test_restart_in_a_bare_thread_does_not_read_the_scope(self):
+        pair = make_fake_scope(multiplexed=True, unbound=True)
+        bridge = McpBrainBridge(vault="v", spawn=lambda argv: _HandshakeProcess(), timeout=7.0)
+        errors = []
+
+        def restart():
+            try:
+                bridge.start()
+            except Exception as exc:  # noqa: BLE001 - recorded for the assertion
+                errors.append(exc)
+
+        with self.install(pair):
+            thread = threading.Thread(target=restart)
+            thread.start()
+            thread.join(5)
+        self.assertEqual(errors, [])
+        self.assertEqual(pair[1].reads, [])
+        self.assertEqual(bridge._client._timeout, 7.0)
+
+    def test_non_positive_timeout_disables_the_deadline(self):
+        bridge = McpBrainBridge(vault="v", spawn=lambda argv: _HandshakeProcess(), timeout=0.0)
+        bridge.start()
+        self.assertIsNone(bridge._client._timeout)
+
+    def test_no_timeout_argument_keeps_reading_the_environment(self):
+        os.environ["OPEN_SECOND_BRAIN_MCP_TIMEOUT"] = "45"
+        with self.no_hermes():
+            bridge = McpBrainBridge(vault="v", spawn=lambda argv: _HandshakeProcess())
+            bridge.start()
+        self.assertEqual(bridge._client._timeout, 45.0)
+
+    def test_multiplexed_timeout_reads_the_scope(self):
+        os.environ["OPEN_SECOND_BRAIN_MCP_TIMEOUT"] = "4242"
+        pair = make_fake_scope(multiplexed=True, values={"OPEN_SECOND_BRAIN_MCP_TIMEOUT": "9"})
+        with self.install(pair):
+            self.assertEqual(bridge_module.resolve_request_timeout(), 9.0)
+
+
+class PrefetchDegradeTests(ScopeTestCase):
+    """(h) ``prefetch`` with no scope bound omits the reminder for the turn."""
+
+    def test_prefetch_degrades_and_warns_once(self):
+        provider = OpenSecondBrainMemoryProvider(bridge=FakeBrainBridge())
+        provider.initialize("session", hermes_home=str(self.tmp))
+        provider_module._reset_scope_degrade_warning_for_tests()
+        pair = make_fake_scope(multiplexed=True, unbound=True)
+        with self.install(pair), self.assertLogs("plugins.hermes.provider", "WARNING") as logs:
+            first = provider.prefetch("hello")
+            second = provider.prefetch("hello again")
+        self.assertIsInstance(first, str)
+        self.assertIsInstance(second, str)
+        degraded = [
+            r for r in logs.records if "no profile scope bound for this turn" in r.getMessage()
+        ]
+        self.assertEqual(len(degraded), 1)
+        self.assertEqual(
+            degraded[0].getMessage(),
+            "open-second-brain: no profile scope bound for this turn; the vault reminder is "
+            "omitted",
+        )
 
 
 if __name__ == "__main__":
