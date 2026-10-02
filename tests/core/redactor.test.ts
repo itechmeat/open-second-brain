@@ -5,6 +5,7 @@ import {
   REDACTION_PLACEHOLDER,
   SCAN_TRUNCATED_MARKER,
   normaliseTextField,
+  privateRegionTexts,
   redactRawOutput,
   sanitiseTextField,
   stripPrivateRegions,
@@ -33,6 +34,39 @@ describe("stripPrivateRegions", () => {
   test("strips nested private regions atomically", () => {
     const input = "before <private>a<private>b</private>c</private> after";
     expect(stripPrivateRegions(input)).toBe(`before ${PRIVATE_REGION_PLACEHOLDER} after`);
+  });
+
+  describe("stays linear on adversarial tag runs", () => {
+    const MIB = 1 << 20;
+    const OPEN = "<private>";
+    const CLOSE = "</private>";
+    const runOf = (unit: string): string => unit.repeat(Math.ceil((2 * MIB) / unit.length));
+    const cases: ReadonlyArray<readonly [string, string, string]> = [
+      ["nested opens with one far close", runOf(OPEN) + CLOSE, PRIVATE_REGION_PLACEHOLDER],
+      [
+        "nested opens then as many closes",
+        runOf(OPEN) + CLOSE.repeat(Math.ceil((2 * MIB) / OPEN.length)),
+        PRIVATE_REGION_PLACEHOLDER,
+      ],
+      [
+        "open tags that never end in a bracket",
+        `x ${runOf("<private ")}`,
+        `x ${runOf("<private ")}`,
+      ],
+      ["a region of unended open tags", `${OPEN}${runOf("<private ")}`, PRIVATE_REGION_PLACEHOLDER],
+    ];
+    for (const [name, input, expected] of cases) {
+      test(name, () => {
+        const started = performance.now();
+        const out = stripPrivateRegions(input);
+        const elapsed = performance.now() - started;
+        expect(out).toBe(expected);
+        expect(privateRegionTexts(input).join("").length).toBe(
+          expected === PRIVATE_REGION_PLACEHOLDER ? input.length : 0,
+        );
+        expect(elapsed).toBeLessThan(LINEAR_CEILING_MS);
+      });
+    }
   });
 
   test("runs before assignment redaction in redactRawOutput", () => {

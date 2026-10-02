@@ -104,7 +104,12 @@ export function wasScanTruncated(text: string): boolean {
   return typeof text === "string" && text.includes(SCAN_TRUNCATED_SENTINEL);
 }
 
-const PRIVATE_OPEN_TAG_RE = /<private\b[^>]*>/gi;
+/**
+ * An open tag's attributes stop at the next `<` as well as at `>`: with
+ * `[^>]*` a run of `<private ` with no closing bracket made every attempt
+ * scan to the end of the text, quadratic in its length.
+ */
+const PRIVATE_OPEN_TAG_RE = /<private\b[^<>]*>/gi;
 const PRIVATE_CLOSE_TAG_RE = /<\/private>/gi;
 
 /**
@@ -739,46 +744,65 @@ function quoteRedactedFrontmatter(text: string): string {
   );
 }
 
-export function stripPrivateRegions(text: string): string {
-  if (!text) return text;
+/** One outermost private region: `[start, end)`, tags included. */
+interface PrivateRegionSpan {
+  readonly start: number;
+  readonly end: number;
+}
 
-  let output = "";
+/**
+ * Every outermost `<private>` region of `text`, in order. Nested open tags
+ * deepen the region; an unclosed region runs to the end of the text and
+ * ends the walk. Linear: the next open and the next close are each found
+ * once and reused until the scan passes them, so a run of nested opens
+ * before one far close no longer re-scans to that close per open.
+ */
+function privateRegionSpans(text: string): PrivateRegionSpan[] {
+  const spans: PrivateRegionSpan[] = [];
+  const open = new RegExp(PRIVATE_OPEN_TAG_RE.source, "gi");
+  const close = new RegExp(PRIVATE_CLOSE_TAG_RE.source, "gi");
+  const nextAt = (re: RegExp, from: number): RegExpExecArray | null => {
+    re.lastIndex = from;
+    return re.exec(text);
+  };
   let cursor = 0;
-  PRIVATE_OPEN_TAG_RE.lastIndex = 0;
-  PRIVATE_CLOSE_TAG_RE.lastIndex = 0;
-
   while (cursor < text.length) {
-    PRIVATE_OPEN_TAG_RE.lastIndex = cursor;
-    const openMatch = PRIVATE_OPEN_TAG_RE.exec(text);
-    if (!openMatch) {
-      output += text.slice(cursor);
-      break;
-    }
-
-    output += text.slice(cursor, openMatch.index);
-    output += PRIVATE_REGION_PLACEHOLDER;
-
+    const first = nextAt(open, cursor);
+    if (!first) break;
     let depth = 1;
-    let scan = PRIVATE_OPEN_TAG_RE.lastIndex;
+    let scan = first.index + first[0].length;
+    let nextOpen = nextAt(open, scan);
+    let nextClose = nextAt(close, scan);
     while (depth > 0) {
-      PRIVATE_OPEN_TAG_RE.lastIndex = scan;
-      PRIVATE_CLOSE_TAG_RE.lastIndex = scan;
-      const nextOpen = PRIVATE_OPEN_TAG_RE.exec(text);
-      const nextClose = PRIVATE_CLOSE_TAG_RE.exec(text);
-      if (!nextClose) return output;
-
+      if (!nextClose) {
+        spans.push({ start: first.index, end: text.length });
+        return spans;
+      }
       if (nextOpen && nextOpen.index < nextClose.index) {
         depth += 1;
-        scan = PRIVATE_OPEN_TAG_RE.lastIndex;
+        scan = nextOpen.index + nextOpen[0].length;
       } else {
         depth -= 1;
-        scan = PRIVATE_CLOSE_TAG_RE.lastIndex;
+        scan = nextClose.index + nextClose[0].length;
       }
+      if (nextOpen && nextOpen.index < scan) nextOpen = nextAt(open, scan);
+      if (nextClose.index < scan) nextClose = nextAt(close, scan);
     }
+    spans.push({ start: first.index, end: scan });
     cursor = scan;
   }
+  return spans;
+}
 
-  return output;
+export function stripPrivateRegions(text: string): string {
+  if (!text) return text;
+  let output = "";
+  let cursor = 0;
+  for (const span of privateRegionSpans(text)) {
+    output += text.slice(cursor, span.start) + PRIVATE_REGION_PLACEHOLDER;
+    cursor = span.end;
+  }
+  return output + text.slice(cursor);
 }
 
 /**
@@ -789,39 +813,8 @@ export function stripPrivateRegions(text: string): string {
  * slice carries private text whose tags fell outside the slice.
  */
 export function privateRegionTexts(text: string): string[] {
-  const regions: string[] = [];
-  if (!text) return regions;
-  const open = new RegExp(PRIVATE_OPEN_TAG_RE.source, "gi");
-  const close = new RegExp(PRIVATE_CLOSE_TAG_RE.source, "gi");
-  let cursor = 0;
-  while (cursor < text.length) {
-    open.lastIndex = cursor;
-    const openMatch = open.exec(text);
-    if (!openMatch) break;
-    const start = openMatch.index;
-    let depth = 1;
-    let scan = open.lastIndex;
-    while (depth > 0) {
-      open.lastIndex = scan;
-      close.lastIndex = scan;
-      const nextOpen = open.exec(text);
-      const nextClose = close.exec(text);
-      if (!nextClose) {
-        regions.push(text.slice(start));
-        return regions;
-      }
-      if (nextOpen && nextOpen.index < nextClose.index) {
-        depth += 1;
-        scan = open.lastIndex;
-      } else {
-        depth -= 1;
-        scan = close.lastIndex;
-      }
-    }
-    regions.push(text.slice(start, scan));
-    cursor = scan;
-  }
-  return regions;
+  if (!text) return [];
+  return privateRegionSpans(text).map((span) => text.slice(span.start, span.end));
 }
 
 export interface RedactRawOutputOptions {

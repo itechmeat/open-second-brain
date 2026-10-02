@@ -9,7 +9,10 @@ import { describe, expect, test } from "bun:test";
 
 import { fakeCredential } from "../../../helpers/fake-credentials.ts";
 
-import { REDACTION_PLACEHOLDER } from "../../../../src/core/redactor.ts";
+import {
+  PRIVATE_REGION_PLACEHOLDER,
+  REDACTION_PLACEHOLDER,
+} from "../../../../src/core/redactor.ts";
 import { countChunkTokens } from "../../../../src/core/search/chunker.ts";
 import {
   isTableNoteSkipReason,
@@ -33,6 +36,9 @@ import {
 } from "../../../../src/core/brain/ingest/table-note.ts";
 
 const encoder = new TextEncoder();
+
+/** A cell pass bounded by a window takes milliseconds; a whole-cell pass over megabytes takes seconds. */
+const CELL_PASS_CEILING_MS = 1_000;
 
 function bytesOf(text: string): Uint8Array {
   return encoder.encode(text);
@@ -291,6 +297,22 @@ describe("caps", () => {
     expect(cell).toBe(`${"\u{1F600}".repeat(TABLE_NOTE_MAX_CELL_CHARS - 1)}\u2026`);
     const exact = "x".repeat(TABLE_NOTE_MAX_CELL_CHARS);
     expect(rendered(csv(`k\n${exact}\n`)).truncated).toEqual([]);
+  });
+
+  test("a megabyte-sized cell is redacted in a bounded window, not scanned whole", () => {
+    const MIB = 1 << 20;
+    const nested = "<private>".repeat(MIB / 8);
+    const userinfo = "a://b:".repeat((4 * MIB) / 6);
+    for (const cell of [nested, userinfo]) {
+      const started = performance.now();
+      const result = rendered(csv(`k,v\nrow,${cell}\n`));
+      expect(performance.now() - started).toBeLessThan(CELL_PASS_CEILING_MS);
+      expect(result.truncated).toEqual(["cells"]);
+      const value = fencedLines(result.section)[1]!.split(" | ")[1]!;
+      expect(Array.from(value).length).toBeLessThanOrEqual(TABLE_NOTE_MAX_CELL_CHARS);
+    }
+    const hidden = rendered(csv(`k,v\nrow,${nested}\n`));
+    expect(fencedLines(hidden.section)[1]).toBe(`row | ${PRIVATE_REGION_PLACEHOLDER}`);
   });
 
   test("groups that would pass the byte cap are dropped whole and named", () => {

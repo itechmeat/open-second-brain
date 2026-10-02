@@ -159,9 +159,17 @@ const CELL_ESCAPE_RE = /[\\|\n\r\t]/g;
 const CUT_MARKER = "\u2026";
 
 /**
- * The value pass over a cell: key=value credentials, private regions and
- * URL userinfo, never truncated (the cell cap applies after it, so a
- * credential the cap would split is still seen whole).
+ * Code units of a cell the value pass reads at most. A cell is cut to
+ * {@link TABLE_NOTE_MAX_CELL_CHARS} anyway, so the window only has to be
+ * wide enough that a credential the cap would split is still seen whole;
+ * bounding it keeps one megabyte-sized cell from costing seconds.
+ */
+const CELL_SCAN_MAX_CHARS = 4_096;
+
+/**
+ * The value pass over a cell window: key=value credentials, private
+ * regions and URL userinfo, never truncated by the redactor itself (the
+ * window bounds the input and the cell cap applies after the pass).
  */
 const CELL_REDACTION = Object.freeze({
   redactUrlCredentials: true,
@@ -286,7 +294,9 @@ interface PreparedLine {
 }
 
 /**
- * Cut, redact, cap and escape one record. A cell under a column whose
+ * Cut, redact, cap and escape one record. Only the first
+ * {@link CELL_SCAN_MAX_CHARS} code units of a cell are read, and a cell
+ * longer than that counts as cut. A cell under a column whose
  * header names a credential is replaced whole (the header is kept: names
  * only); every other cell, header cells included (the first record may be
  * data), goes through the value pass. No bare-token pass: it would erase
@@ -300,13 +310,15 @@ function prepareLine(
   let redacted = 0;
   let cellsCut = false;
   const cells = kept.map((raw, column) => {
+    const windowCut = raw.length > CELL_SCAN_MAX_CHARS;
+    const window = windowCut ? raw.slice(0, CELL_SCAN_MAX_CHARS) : raw;
     const clean =
       credentialColumns[column] === true && raw.length > 0
         ? REDACTION_PLACEHOLDER
-        : redactRawOutput(raw, CELL_REDACTION);
-    if (clean !== raw) redacted += 1;
+        : redactRawOutput(window, CELL_REDACTION);
+    if (clean !== window) redacted += 1;
     const capped = capCell(clean);
-    if (capped.cut) cellsCut = true;
+    if (capped.cut || windowCut) cellsCut = true;
     return escapeCell(capped.text);
   });
   const line = cells.join(CELL_SEPARATOR);
