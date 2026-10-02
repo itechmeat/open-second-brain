@@ -1307,7 +1307,8 @@ Since v1.68.0 the scan reads dependency manifests at the project root
 and at each detected module: `package.json`, `pyproject.toml` (PEP 621
 and Poetry), `Cargo.toml` and `go.mod`. `pom.xml`, `build.gradle`,
 `Gemfile` and `composer.json` are detected and reported `unsupported`
-by name. Every manifest gets one status - `read`, `malformed` (with a
+by name. The walk skips symlinks, so a manifest that is a symlink is
+not read. Every manifest gets one status - `read`, `malformed` (with a
 fixed reason such as `invalid JSON` or `invalid TOML`, never the
 manifest's own text), `unreadable` (with the error code, or because it
 is not a regular file or is larger than 1 MiB, which is not read) or

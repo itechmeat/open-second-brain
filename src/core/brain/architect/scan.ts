@@ -9,7 +9,8 @@
  *
  * Manifests are read at the project root and at every detected module
  * path, found in the walk's own path list (`manifests.ts` reads them and
- * records a manifest it cannot read rather than swallowing it). The only
+ * records a manifest it cannot read rather than swallowing it). The walk
+ * skips symlinks, so a manifest that is a symlink is not read. The only
  * module-to-module relation this scan states is one a manifest DECLARES:
  * a module whose manifest names, as a runtime dependency, the manifest
  * name of exactly one other module in the same ecosystem.
