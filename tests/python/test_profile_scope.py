@@ -610,7 +610,7 @@ class ScopedChildEnvironmentTests(ScopeTestCase):
 class BridgeTimeoutFixedAtConstructionTests(ScopeTestCase):
     """(h) A restart from a plugin-owned thread never reads the scope."""
 
-    def test_restart_in_a_bare_thread_does_not_read_the_scope(self):
+    def test_fixed_timeout_restart_never_reads_the_scope(self):
         pair = make_fake_scope(multiplexed=True, unbound=True)
         bridge = McpBrainBridge(vault="v", spawn=lambda argv: _HandshakeProcess(), timeout=7.0)
         errors = []
@@ -709,15 +709,26 @@ class PrefetchDegradeTests(ScopeTestCase):
     """(h) ``prefetch`` with no scope bound omits the reminder for the turn."""
 
     def test_prefetch_degrades_and_warns_once(self):
-        provider = OpenSecondBrainMemoryProvider(bridge=FakeBrainBridge())
+        # Recall the turn can still serve, so "omit the reminder" is told
+        # apart from "drop the whole turn".
+        bridge = FakeBrainBridge(
+            results={
+                "brain_recall_gate": {"structuredContent": {"retrieve": True, "reason": "hit"}},
+                "brain_context_pack": {
+                    "structuredContent": {"generated_at": "2026-08-22"},
+                    "content": [{"type": "text", "text": "SCOPED TURN RECALL"}],
+                },
+            }
+        )
+        provider = OpenSecondBrainMemoryProvider(bridge=bridge)
         provider.initialize("session", hermes_home=str(self.tmp))
         provider_module._reset_scope_degrade_warning_for_tests()
         pair = make_fake_scope(multiplexed=True, unbound=True)
         with self.install(pair), self.assertLogs("plugins.hermes.provider", "WARNING") as logs:
             first = provider.prefetch("hello")
             second = provider.prefetch("hello again")
-        self.assertIsInstance(first, str)
-        self.assertIsInstance(second, str)
+        self.assertIn("SCOPED TURN RECALL", first)
+        self.assertIn("SCOPED TURN RECALL", second)
         degraded = [
             r for r in logs.records if "no profile scope bound for this turn" in r.getMessage()
         ]
