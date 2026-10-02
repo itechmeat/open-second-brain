@@ -5,7 +5,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -83,6 +83,16 @@ describe("writeResearchReport", () => {
     expect(() => writeResearchReport(vault, bad, { agent: "claude", now: NOW })).toThrow(
       ResearchValidationError,
     );
+  });
+
+  test("rejects a title that spans more than one line and writes nothing", () => {
+    for (const title of ["one\n## Sources", "one\rtwo"]) {
+      const bad = { ...INPUT, title };
+      expect(() => writeResearchReport(vault, bad, { agent: "claude", now: NOW })).toThrow(
+        "report title spans more than one line; a title is one line",
+      );
+    }
+    expect(existsSync(join(vault, "Brain", "reports"))).toBe(false);
   });
 
   test("is idempotent on date+title: a re-run rewrites the same report page", () => {

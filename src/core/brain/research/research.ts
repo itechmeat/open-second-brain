@@ -136,6 +136,9 @@ export function parseResearchReportInput(payload: unknown): ResearchReportInput 
   };
 }
 
+/** Line breaks a title may not hold: it is rendered as the page's one heading line. */
+const TITLE_LINE_BREAK_RE = /[\r\n]/;
+
 /** Wrap a bare source identifier in a wikilink; leave an existing one as-is. */
 function asWikilink(source: string): string {
   const trimmed = source.trim();
@@ -145,6 +148,9 @@ function asWikilink(source: string): string {
 function validate(input: ResearchReportInput): void {
   if (input.title.trim().length === 0) {
     throw new ResearchValidationError("report title must not be empty");
+  }
+  if (TITLE_LINE_BREAK_RE.test(input.title)) {
+    throw new ResearchValidationError("report title spans more than one line; a title is one line");
   }
   if (input.sources.length === 0) {
     throw new ResearchValidationError("a report must consult at least one source");
