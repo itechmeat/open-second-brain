@@ -249,6 +249,7 @@ describe("preExtractCodeStructure - Terraform family", () => {
       ["repeated word boundaries", "a.".repeat(LONG / 2)],
       ["repeated scheme and user pairs", "a://b:".repeat(LONG / 6)],
       ["repeated scheme openers", "a+://".repeat(LONG / 5)],
+      ["an empty user before a long password run", "a://:".repeat(LONG / 5)],
     ] as const) {
       test(form, () => {
         const started = performance.now();
