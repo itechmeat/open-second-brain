@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { buildToolTable, findTool } from "../../src/mcp/tools.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
@@ -12,7 +13,9 @@ let ctx: ServerContext;
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "osb-intention-tool-"));
   mkdirSync(join(tmp, "Brain"), { recursive: true });
-  ctx = { vault: tmp, configPath: null, repoRoot: null };
+  // The operator's own shell: a remote caller is answered without the
+  // archive name (tests/mcp/obligation-reach.test.ts, intention-reach).
+  ctx = { vault: tmp, configPath: null, repoRoot: null, reach: TRANSPORT_REACH.local };
 });
 
 afterEach(() => {

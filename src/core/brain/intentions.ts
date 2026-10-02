@@ -11,7 +11,7 @@
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 
 import { atomicWriteFileSync, renameWithRetry } from "../fs-atomic.ts";
 import { parseFrontmatter } from "../vault.ts";
@@ -51,12 +51,25 @@ export interface MoveIntentionResult {
 const HISTORY_HEADER = "## History";
 const HISTORY_SNIPPET_CHARS = 120;
 
+/** Where the active chains live, vault-relative. */
+const INTENTIONS_REL = "Brain/intentions";
+
 function intentionsDir(vault: string): string {
-  return join(vault, "Brain", "intentions");
+  return join(vault, INTENTIONS_REL);
 }
 
 function intentionPath(vault: string, scope: string): string {
   return join(intentionsDir(vault), `${scope}.md`);
+}
+
+/** The vault-relative page a scope label names, after the scope fold. */
+export function intentionRel(scope: string): string {
+  return posix.join(INTENTIONS_REL, `${resolveSessionScope(scope)}.md`);
+}
+
+/** `move` found no active chain for the scope. */
+export function noActiveIntentionError(scope: string): Error {
+  return new Error(`no active intention for scope: ${scope}`);
 }
 
 function renderChain(chain: Omit<IntentionChain, "path">): string {
@@ -171,7 +184,7 @@ export function moveIntentionToHistory(
   const now = input.now ?? new Date();
   const activePath = intentionPath(vault, scope);
   if (!existsSync(activePath)) {
-    throw new Error(`no active intention for scope: ${scope}`);
+    throw noActiveIntentionError(scope);
   }
   const historyDir = join(intentionsDir(vault), "history");
   mkdirSync(historyDir, { recursive: true });

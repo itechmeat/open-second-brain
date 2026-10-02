@@ -769,11 +769,14 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
   {
     surface: "brain_intention",
     kind: K.mcpTool,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "swept in for file-level completeness because workspace-tools.ts also registers " +
-      "brain_trigger: list and show return intention chains - Brain-authored scope records with " +
-      "their text, history and path - and set and move write them, with no visibility check.",
+      "list and show return intention chains - Brain-authored scope records with their text, " +
+      "history and path; the handler asks readableAtContextReach(ctx) about each chain's page, " +
+      "so below local reach a withheld chain is listed by no row, shown as absent and refused " +
+      "by move with the error an absent scope gets. set over a withheld chain is refused rather " +
+      "than read and rewritten (the one answer that cannot match an absent chain's), and move " +
+      "leaves the archive name, which steps past withheld history files, out of the answer.",
   },
   {
     surface: "brain_stale_scan",

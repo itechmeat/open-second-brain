@@ -28,11 +28,14 @@ import {
   type TriggerRecord,
 } from "../../core/brain/triggers/types.ts";
 import {
+  intentionRel,
   listIntentions,
   moveIntentionToHistory,
+  noActiveIntentionError,
   setIntention,
   showIntention,
 } from "../../core/brain/intentions.ts";
+import { resolveSessionScope } from "../../core/brain/session-scope.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { TOOL_ERROR_CODE } from "../tool-error-codes.ts";
 import { contextReach, type ServerContext, type ToolDefinition } from "../tool-contract.ts";
@@ -45,9 +48,18 @@ function toolBrainIntention(
   args: Record<string, unknown>,
 ): Record<string, unknown> {
   const operation = coerceStr(args, "operation", true)!;
+  // Every operation answers at the caller's reach: a chain the caller may
+  // not read is listed, shown and moved exactly as an absent one would be,
+  // so neither its text nor its existence crosses, and it is never
+  // written. `undefined` at local reach with the owner gate off.
+  const readable = readableAtContextReachOrUndefined(ctx);
+  const withheld = (scope: string): boolean =>
+    readable !== undefined && !readable(intentionRel(scope));
   if (operation === "list") {
+    const chains = listIntentions(ctx.vault);
+    const kept = readable === undefined ? chains : chains.filter((c) => !withheld(c.scope));
     return {
-      intentions: listIntentions(ctx.vault).map((chain) => ({
+      intentions: kept.map((chain) => ({
         scope: chain.scope,
         version: chain.version,
         updated_at: chain.updatedAt,
@@ -58,6 +70,15 @@ function toolBrainIntention(
   const scope = coerceStr(args, "scope", true)!;
   if (operation === "set") {
     const text = coerceStr(args, "text", true)!;
+    // Setting folds the prior text into the new version's history, so an
+    // existing withheld chain is refused rather than read and rewritten.
+    // The refusal is the one answer that cannot match an absent chain's.
+    if (withheld(scope) && showIntention(ctx.vault, scope) !== null) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        `brain_intention: cannot set scope: ${resolveSessionScope(scope)}`,
+      );
+    }
     const chain = setIntention(ctx.vault, {
       scope,
       text,
@@ -66,7 +87,7 @@ function toolBrainIntention(
     return { operation, scope: chain.scope, version: chain.version, path: chain.path };
   }
   if (operation === "show") {
-    const chain = showIntention(ctx.vault, scope);
+    const chain = withheld(scope) ? null : showIntention(ctx.vault, scope);
     if (chain === null) return { operation, scope, present: false };
     return {
       operation,
@@ -80,7 +101,11 @@ function toolBrainIntention(
     };
   }
   if (operation === "move") {
+    if (withheld(scope)) throw noActiveIntentionError(resolveSessionScope(scope));
     const moved = moveIntentionToHistory(ctx.vault, { scope });
+    // The archive name steps past every name already taken in history/,
+    // readable or not, so below local reach it is left out of the answer.
+    if (readable !== undefined) return { operation, scope: moved.scope };
     return { operation, scope: moved.scope, archive_path: moved.archivePath };
   }
   throw unknownOperationError("brain_intention operation must be one of: set, show, list, move");

@@ -585,6 +585,7 @@ describe("visibility surface census", () => {
         "brain_hygiene",
         "brain_idea_discovery",
         "brain_intent_review",
+        "brain_intention",
         "brain_obligation",
         "brain_pre_compress_pack",
         "brain_procedural_memory",
