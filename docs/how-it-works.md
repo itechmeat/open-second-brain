@@ -556,7 +556,10 @@ or the packager wrote, never from anything a caller names about itself:
   `o2b brain project link` writes), by its basename. The hook uses the
   payload's `cwd` (else its own working directory), the MCP server the
   directory it was started in.
-  No pointer, or a pointer that cannot be read, matches no project file.
+  Only a pointer that names the vault serving the session counts: a
+  pointer naming another vault, or one that cannot be read, is skipped
+  and the walk continues upward. No such pointer matches no project
+  file.
 - **Harness:** the `--harness <id>` option of `o2b mcp`, falling back to
   `--host-target`. The Claude Code plugin registers both of its servers
   with `--harness claude-code` and the Hermes plugin launches its bridge
@@ -585,7 +588,9 @@ preference, lesson and context pack that follows. Each file gets a
 `### Project: <key>`, `### Harness: <key>` or `### Host: <key>`
 subheading, and its own text follows as written. A file that cannot be
 read is replaced by one line, `UNAVAILABLE: <vault-relative path> could
-not be read (<error code>).`; an empty or missing file is no rule.
+not be read (<error code>).`, and so is a file or an axis folder that is
+a symbolic link leading out of the vault; an empty or missing file is no
+rule.
 
 Where each layer renders:
 
