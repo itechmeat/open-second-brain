@@ -35,7 +35,7 @@ import { captureReportDelta } from "../../core/brain/report-snapshot.ts";
 import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { contextReach, type ServerContext, type ToolDefinition } from "../tool-contract.ts";
-import { readableAtContextReach } from "./reach-readable.ts";
+import { readableAtContextReach, readableAtContextReachOrUndefined } from "./reach-readable.ts";
 import { vaultPathField } from "../vault-path-field.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import {
@@ -75,10 +75,12 @@ async function toolBrainMorningBrief(
   );
   const now = new Date();
   const agentScope = coerceAgentScope(ctx, args, true);
+  const readable = readableAtContextReachOrUndefined(ctx);
   const brief = buildMorningBrief(ctx.vault, {
     now,
     topK,
     ...(agentScope !== undefined ? { agentScope } : {}),
+    ...(readable !== undefined ? { readable } : {}),
     lookbackDays,
     ...(maxCharsPerMemory !== undefined ? { maxCharsPerMemory } : {}),
     ...(maxTotalChars !== undefined ? { maxTotalChars } : {}),

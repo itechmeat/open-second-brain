@@ -2074,9 +2074,8 @@ format characters), when it contains NUL, or when it exceeds the cap.
   same for the activity and lessons digests: such a record, its rows,
   its counts, the log events naming it and their share of the agent
   summary go, and a remote digest neither takes a report snapshot nor
-  shows its delta. Not every preference reader does: `brain_brief`
-  `view="morning"` still lists every confirmed preference, and the
-  status counts cover the whole Brain layer. The resource also follows the owner gate now, as
+  shows its delta. `brain_brief` `view="morning"` leaves such a
+  preference out of its list. The resource also follows the owner gate now, as
   `brain_context` does, so under `integrity.owner_scope_delivery: fail`
   it answers with the caller's own view. `brain_health` drops a finding
   any of whose members the caller cannot read, and `brain_doctor` with

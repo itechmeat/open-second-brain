@@ -246,6 +246,20 @@ describe("the activity and lessons digests treat a withheld record as absent at 
     expect(await deltaAt(TRANSPORT_REACH.local)).toMatchObject({ prior_date: null });
   });
 
+  test("brain_brief view=morning answers identically with and without the reserved records", async () => {
+    const morning = async (f: Fixture, reach: TransportReach): Promise<string> =>
+      normalise(
+        f,
+        JSON.stringify(await server(f, reach).callTool("brain_brief", { view: "morning" })),
+      );
+    const withheld = await morning(fixture(true), TRANSPORT_REACH.remote);
+    const absent = await morning(fixture(false), TRANSPORT_REACH.remote);
+    expect(withheld).not.toContain(MARKER);
+    expect(withheld).toContain(SHARED_PRINCIPLE);
+    expect(withheld).toBe(absent);
+    expect(await morning(fixture(true), TRANSPORT_REACH.local)).toContain(MARKER);
+  });
+
   test("the osb://digest/latest resource answers identically", () => {
     const withheld = resource(fixture(true), TRANSPORT_REACH.remote, DIGEST_URI);
     const absent = resource(fixture(false), TRANSPORT_REACH.remote, DIGEST_URI);
