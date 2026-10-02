@@ -9,25 +9,22 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  chmodSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { getEntity, listEntities } from "../../src/core/brain/entities/registry.ts";
+import {
+  INTAKE_TRUST,
+  SOURCE_CONTENT_HASH_FRONTMATTER_KEY,
+} from "../../src/core/brain/trust/untrusted-provenance.ts";
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { NER_TOOLS } from "../../src/mcp/brain/ner-tools.ts";
 import { MCPError } from "../../src/mcp/protocol.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
+import { brainPageTexts } from "../helpers/brain-pages.ts";
 import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 
 let vault: string;
@@ -172,17 +169,6 @@ describe("brain_intake_entities", () => {
   });
 });
 
-/** Every Markdown page under `Brain/`, as text. */
-function brainPages(root: string): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(join(root, "Brain"), { recursive: true, withFileTypes: true })) {
-    if (entry.isFile() && entry.name.endsWith(".md")) {
-      out.push(readFileSync(join(entry.parentPath, entry.name), "utf8"));
-    }
-  }
-  return out;
-}
-
 /**
  * A page the caller cannot read at its reach is cited exactly like an absent
  * one: the intake commits in the untrusted lane and records no digest of it.
@@ -204,14 +190,17 @@ describe("brain_intake_entities - a page withheld at the caller's reach", () => 
   test("answers like an absent source and writes no digest", async () => {
     const hidden = await intake(SECRET);
     const absent = await intake(ABSENT);
-    expect(hidden.trust).toBe("untrusted");
+    expect(hidden.trust).toBe(INTAKE_TRUST.untrusted);
     expect(hidden.trust).toBe(absent.trust);
-    for (const page of brainPages(vault)) expect(page).not.toContain("source_content_hash");
+    for (const page of brainPageTexts(vault))
+      expect(page).not.toContain(SOURCE_CONTENT_HASH_FRONTMATTER_KEY);
   });
 
   test("at local reach the same page is trusted and digested", async () => {
     const res = await intake(SECRET, { ...ctx, reach: TRANSPORT_REACH.local });
-    expect(res.trust).toBe("trusted");
-    expect(brainPages(vault).some((page) => page.includes("source_content_hash"))).toBe(true);
+    expect(res.trust).toBe(INTAKE_TRUST.trusted);
+    expect(
+      brainPageTexts(vault).some((page) => page.includes(SOURCE_CONTENT_HASH_FRONTMATTER_KEY)),
+    ).toBe(true);
   });
 });

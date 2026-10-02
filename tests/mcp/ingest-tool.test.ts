@@ -15,10 +15,15 @@ import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { CAPTURE_SCOPE } from "../../src/core/brain/provenance/capture-scope.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { listEntities } from "../../src/core/brain/entities/registry.ts";
+import {
+  SOURCE_CONTENT_HASH_FRONTMATTER_KEY,
+  UNTRUSTED_SOURCE_FRONTMATTER_KEY,
+} from "../../src/core/brain/trust/untrusted-provenance.ts";
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { INGEST_TOOLS } from "../../src/mcp/brain/ingest-tools.ts";
 import { INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
+import { brainPageTexts } from "../helpers/brain-pages.ts";
 
 let vault: string;
 let configHome: string;
@@ -265,17 +270,6 @@ describe("brain_ingest_source - capture_scope", () => {
   });
 });
 
-/** Every Markdown page under `Brain/`, as text. */
-function brainPages(root: string): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(join(root, "Brain"), { recursive: true, withFileTypes: true })) {
-    if (entry.isFile() && entry.name.endsWith(".md")) {
-      out.push(readFileSync(join(entry.parentPath, entry.name), "utf8"));
-    }
-  }
-  return out;
-}
-
 /**
  * A page the caller cannot read at its reach is ingested exactly like an
  * absent one: untrusted lane, `url-only`, and no digest on any page.
@@ -301,8 +295,9 @@ describe("brain_ingest_source - a page withheld at the caller's reach", () => {
     expect(hidden.capture_scope).toBe(CAPTURE_SCOPE.urlOnly);
     expect(hidden.capture_scope).toBe(absent.capture_scope);
     const summary = readFileSync(join(vault, hidden.summary_path), "utf8");
-    expect(summary).toContain("untrusted_source");
-    for (const page of brainPages(vault)) expect(page).not.toContain("source_content_hash");
+    expect(summary).toContain(UNTRUSTED_SOURCE_FRONTMATTER_KEY);
+    for (const page of brainPageTexts(vault))
+      expect(page).not.toContain(SOURCE_CONTENT_HASH_FRONTMATTER_KEY);
   });
 
   test("at local reach the same page is full-local", async () => {

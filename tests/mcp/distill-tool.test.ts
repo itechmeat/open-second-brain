@@ -13,6 +13,7 @@ import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { hashFile } from "../../src/core/brain/ingest/content-manifest.ts";
 import {
   INTAKE_TRUST,
+  SOURCE_CONTENT_HASH_FRONTMATTER_KEY,
   UNTRUSTED_SOURCE_FRONTMATTER_KEY,
 } from "../../src/core/brain/trust/untrusted-provenance.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
@@ -254,7 +255,7 @@ describe("brain_distill_source - a page withheld at the caller's reach checks no
     expect("source_hash" in res).toBe(false);
     const md = readFileSync(join(vault, res.distillation_path), "utf8");
     expect(md).not.toContain("source_hash");
-    expect(md).not.toContain("source_content_hash");
+    expect(md).not.toContain(SOURCE_CONTENT_HASH_FRONTMATTER_KEY);
   });
 
   test("strict mode refuses every guess alike, naming url-only only", async () => {
@@ -288,10 +289,10 @@ describe("brain_distill_source - a page withheld at the caller's reach checks no
       unknown
     >;
     expect(shape(hiddenRes)).toEqual(shape(absentRes));
-    expect(hiddenRes["trust"]).toBe("untrusted");
+    expect(hiddenRes["trust"]).toBe(INTAKE_TRUST.untrusted);
     expect(hiddenRes["capture_scope"]).toBe(CAPTURE_SCOPE.urlOnly);
     const md = readFileSync(join(vault, hiddenRes.distillation_path), "utf8");
-    expect(md).toContain("untrusted_source");
+    expect(md).toContain(UNTRUSTED_SOURCE_FRONTMATTER_KEY);
 
     const withExcerpt = (await handler(ctx, {
       source_path: SECRET,
