@@ -41,6 +41,7 @@ import { reachView } from "../../core/brain/reach-view.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceStrList, unknownOperationError } from "../coerce.ts";
 import { coercePositiveInteger, optionalStringArg, requiredStringArg } from "./shared.ts";
+import { readableAtContextReach } from "./reach-readable.ts";
 
 async function toolBrainSkillProposals(
   ctx: ServerContext,
@@ -191,6 +192,15 @@ async function toolBrainProceduralMemory(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const operation = requiredStringArg("brain_procedural_memory", args, "operation");
+  // An entry names its page's path, title and frontmatter lists, so a page
+  // the caller may not read at its reach is answered as an absent one: left
+  // out of every count and list, and an unknown id to the two mark
+  // operations, refused before anything is written.
+  const readable = readableAtContextReach(ctx);
+  const unknownId = (id: string): boolean => {
+    const entry = listProceduralMemory(ctx.vault).find((e) => e.id === id);
+    return entry === undefined || !readable(entry.sourcePath);
+  };
   if (operation === "reconcile") {
     const roots = coerceStrList(args, "roots");
     const effectiveRoots =
@@ -202,18 +212,18 @@ async function toolBrainProceduralMemory(
             join(ctx.vault, "runbooks"),
           ];
     return {
-      ...reconcileProceduralMemory(ctx.vault, { roots: effectiveRoots }),
+      ...reconcileProceduralMemory(ctx.vault, { roots: effectiveRoots, include: readable }),
     };
   }
   if (operation === "list") {
-    const entries = listProceduralMemory(ctx.vault);
+    const entries = listProceduralMemory(ctx.vault).filter((e) => readable(e.sourcePath));
     // Opt-in success-rate ranking (t_703f7b18); default order unchanged.
     const ordered = args["ranked"] === true ? rankProceduralMemory(entries) : entries;
     return { total: ordered.length, entries: ordered };
   }
   if (operation === "mark_used") {
     const id = requiredStringArg("brain_procedural_memory", args, "id");
-    const updated = markProceduralMemoryUsed(ctx.vault, id);
+    const updated = unknownId(id) ? null : markProceduralMemoryUsed(ctx.vault, id);
     if (!updated) {
       throw new MCPError(INVALID_PARAMS, `brain_procedural_memory: unknown entry id: ${id}`);
     }
@@ -228,7 +238,7 @@ async function toolBrainProceduralMemory(
         "brain_procedural_memory: outcome must be 'success' or 'failure'",
       );
     }
-    const updated = recordProceduralOutcome(ctx.vault, id, outcome);
+    const updated = unknownId(id) ? null : recordProceduralOutcome(ctx.vault, id, outcome);
     if (!updated) {
       throw new MCPError(INVALID_PARAMS, `brain_procedural_memory: unknown entry id: ${id}`);
     }

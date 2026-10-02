@@ -20,6 +20,13 @@ interface UsageRecord {
 
 export interface ProceduralReconcileOptions {
   readonly roots: ReadonlyArray<string>;
+  /**
+   * May the caller read the page at this vault-relative path? The index
+   * is written in full either way; only the counts this call reports are
+   * taken over the pages the caller may read, so they match the counts a
+   * vault without the other pages would give. Absent, every page counts.
+   */
+  readonly include?: (rel: string) => boolean;
 }
 
 export interface ProceduralReconcileResult {
@@ -48,10 +55,13 @@ export function reconcileProceduralMemory(
   });
 
   const nextById = new Map(next.map((entry) => [entry.id, entry] as const));
+  const counted = (entry: ProceduralMemoryEntry): boolean =>
+    opts.include?.(entry.sourcePath) ?? true;
   let added = 0;
   let updated = 0;
 
   for (const entry of next) {
+    if (!counted(entry)) continue;
     const old = prev.get(entry.id);
     if (!old) {
       added++;
@@ -63,14 +73,14 @@ export function reconcileProceduralMemory(
   }
 
   let removed = 0;
-  for (const id of prev.keys()) {
-    if (!nextById.has(id)) removed++;
+  for (const [id, old] of prev) {
+    if (!nextById.has(id) && counted(old)) removed++;
   }
 
   writeIndex(vault, next);
   const graph = rebuildProceduralGraph(vault);
   rebuildProceduralHints(vault, { graph });
-  return { total: next.length, added, updated, removed };
+  return { total: next.filter(counted).length, added, updated, removed };
 }
 
 export function listProceduralMemory(vault: string): ReadonlyArray<ProceduralMemoryEntry> {
