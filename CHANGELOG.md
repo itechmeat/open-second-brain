@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.70.0] - 2026-10-03
+
+A setting or a rule meant for one context no longer leaks into another: on a Hermes gateway that multiplexes profiles, the Open Second Brain plugin reads every profile-scoped setting from the turn's profile scope and gives each profile its own MCP child, and the operator can now write standing rules for one project, one harness or one machine under `Brain/standing-rules/`, which the SessionStart hook and `brain_context` render below the operator standing rules at local reach; the today, monthly and operator brief views and two doctor counts now answer at the caller's reach.
+
+### Added
+
+- **Scoped operator rules.** Beside the vault-wide `Brain/standing-rules.md`, the operator can write one file per scope value: `Brain/standing-rules/project/<key>.md`, `Brain/standing-rules/harness/<harness id>.md` and `Brain/standing-rules/host/<device id>.md`. Each session renders the files whose key matches its own project, harness and device, under a `## Scoped operator rules` header that states the precedence (the operator standing rules above take precedence over them, and they take precedence over every recalled preference, lesson and context pack that follows) and one `### Project: <key>`, `### Harness: <key>` or `### Host: <key>` subheading per file. The operator's text is never rewritten. A file that cannot be read is replaced by one `UNAVAILABLE:` line naming its vault-relative path and the error code. The files are read on every render and never cached, and they render only at local reach.
+- **A server-resolved scope identity.** No caller names its own scope. The project is the basename of the directory holding the nearest `.o2b-vault.json` pointer found from the workspace directory (written by `o2b brain project link`); the harness comes from the launch-time `--harness` option, falling back to `--host-target`; the host is the device id. Keys are normalised to lowercase letters, digits and `-` in any script, at most 64 characters. An axis that does not resolve matches no file.
+- **`o2b mcp --harness <id>`.** Names the harness the server runs under, from a closed list (`aider`, `claude-code`, `codex`, `copilot-cli`, `cursor`, `gemini-cli`, `generic`, `grok`, `hermes`, `kiro`, `openclaw`, `opencode`, `pi`); an unknown value exits 2 and lists the accepted ones. The Claude Code plugin registers both of its MCP servers with `--harness claude-code`, and the Hermes plugin launches its bridge with `--harness hermes`.
+- **`scoped_rules` on `brain_context`.** At local reach, when at least one scoped file matched (or the host notice applies), the scoped block follows the standing rules in `content` and the result carries `scoped_rules: {scope: {project, harness, host}, files: [{path, axis, truncated}]}` with vault-relative paths. No input argument is added.
+- **`active.scoped_rules_max_chars`.** Caps the scoped block (default 2000, at least 200); when the cap cuts anything the host file drops first, then the harness file, and a notice states the kept and total characters and the number of dropped files.
+- **Per-profile Hermes settings on a multiplexed gateway.** With `gateway.multiplex_profiles` on, `VAULT_DIR`, `VAULT_AGENT_NAME`, `VAULT_TIMEZONE`, `OPEN_SECOND_BRAIN_CONFIG` and `OPEN_SECOND_BRAIN_MCP_TIMEOUT` are read from the turn's Hermes profile scope (the profile's `.env`), never from the gateway process environment, which belongs to the launch profile. A setting the profile does not hold falls through to the config chain (pointer, active profile, config key, default). Without multiplexing every answer is unchanged.
+- **`settings_source:` in `hermes open-second-brain config`.** The first line names where the settings came from: `profile scope (multiplexed gateway)` or `process environment`.
+
+### Changed
+
+- **The scoped block is charged against the injection budget.** Unlike the operator standing rules, it is a budgeted source of the SessionStart hook: its rendered length is subtracted from `inject_budget_chars` before the active context is assembled, its cap is never larger than that budget, and the receipt's `budget` block records it as `scoped_rules_chars` beside the unchanged `inject_budget_chars`.
+- **The SessionStart hook renders project and host files.** Harness-scoped files render on the MCP surfaces only in this release.
+- **Each Hermes profile gets its own MCP child on a multiplexed gateway.** The child's environment carries the profile's own agent name, timezone, config path and vault instead of the launch profile's, and two profiles that share a vault but differ in any of those no longer share one child. A bridge keeps the timeout it was built with, so a restart never reads the environment.
+- **A Hermes setting ignored from the gateway environment is named once.** Under multiplexing each profile-scoped variable set in the gateway process environment logs one WARNING per process from `plugins.hermes.config`, without its value, saying to set it in the profile's `.env` instead; the shadowing hint names the profile's `.env`.
+- **A turn with no bound profile scope degrades.** When the gateway bound no profile scope, the settings readers raise a named `ProfileScopeError` (a `ConfigReadError`) instead of reading the launch profile's values, and the per-turn vault reminder is omitted with one WARNING instead of failing the turn.
+- **The today, monthly and operator brief views and two doctor counts answer at the caller's reach.** Below local reach `brain_brief` `view="today"` no longer lists an open loop or obligation on a page the caller cannot read and counts only the files it may scan; `view="monthly"` counts events, status transitions, retirements and contradictions from the events the caller may see, like the daily and weekly views; `view="operator"` computes its doctor and digest counts, its top actions and its trust verdict from what the caller may see; and `brain_doctor` fills its removed-tool warning cap and counts the stale-dependency `states_changed` from readable pages and records only. A local caller and the CLI see no change.
+- **Scoped rule files cannot be written by an agent.** Every write path that refuses `Brain/standing-rules.md` now also refuses any path inside `Brain/standing-rules/`, compared as written and after resolving symbolic links, so a not-yet-existing file reached through a linked folder is refused too.
+- **Docs:** `docs/how-it-works.md` gains "Scoped operator rules", `docs/mcp.md` the `scoped_rules` key and `--harness`, `docs/cli-reference.md` the `o2b mcp --harness` line, `docs/observability.md` the `scoped_rules_chars` field, `docs/stability.md` the two new layers, `install/hermes.md` "Multiple Hermes profiles", and `docs/updating.md` "Upgrading to 1.70.0"; the README names this release.
+
+### Fixed
+
+- **The today view no longer lists an open loop from a page the caller cannot read.** Below local reach `view="today"` used to return the text and path of an open loop on a page withheld by visibility.
+
+### Notes
+
+- Other variables the TypeScript core reads from the environment (search settings, the MCP API key, embedding keys, the Telegram settings) still come from the gateway process environment on a multiplexed Hermes gateway.
+- The shared Hermes bridge resolves the gateway's working directory, so it usually matches no project-scoped file.
+- A Hermes gateway that serves a routed profile home without multiplexing keeps reading the process environment.
+- There are no combination scope files (for example project and host together); the matching single-axis files are joined instead.
+- The operator view's `dream_summary` and `verification_delta` are still counted over the whole Brain layer below local reach.
+- Updating the Hermes plugin without updating `o2b` makes the bridge fail to start, because an older `o2b mcp` refuses `--harness`; update both together.
+
 ## [1.69.0] - 2026-10-02
 
 Ingest now reads more than Markdown: one format registry maps a file's extension to a format, CSV, TSV and HTML sources get a derived `## Table` or `## Parts` section and their content hash on the summary page, which carries the source's visibility, PDF, Office, EPUB, RTF and image files are named as format skips instead of counted as unclassifiable, and the read-only `o2b brain extract` previews what ingest derives from a file; the daily log pages, the daily and weekly briefs, the analytics, claims, backlinks, log, topic, preference, MOC audit and doctor readers, the source-cleanup tools and the recall verdict's root coverage now answer at the caller's reach, private regions and table cells are redacted in linear time, and `brain_recall_gate` accepts the `turn_id` the Hermes plugin sends.
@@ -8071,6 +8109,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.70.0]: https://github.com/itechmeat/open-second-brain/compare/v1.69.0...v1.70.0
 [1.69.0]: https://github.com/itechmeat/open-second-brain/compare/v1.68.0...v1.69.0
 [1.68.0]: https://github.com/itechmeat/open-second-brain/compare/v1.67.0...v1.68.0
 [1.67.0]: https://github.com/itechmeat/open-second-brain/compare/v1.66.0...v1.67.0
