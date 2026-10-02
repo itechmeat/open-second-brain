@@ -125,7 +125,7 @@ describe("brain_note_history tool", () => {
       const rel = `../${basename(outside)}/x.md`;
       const escaped = payload(await call({ path: rel }));
       const neverWritten = payload(await call({ path: "notes/never.md" }));
-      expect({ ...escaped, note_path: "notes/never.md" }).toEqual(neverWritten);
+      expect(escaped).toEqual({ ...neverWritten, note_path: escaped["note_path"] });
       expect(escaped["commit_count"]).toBe(0);
     } finally {
       rmSync(outside, { recursive: true, force: true });
