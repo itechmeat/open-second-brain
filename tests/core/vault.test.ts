@@ -411,6 +411,12 @@ describe("extractWikilinks", () => {
     expect(extractWikilinks(`${largestExcerpt}\n[[after]]`)).toEqual(["after"]);
   });
 
+  test("an unclosed backtick run hides no link after it", () => {
+    const content = "Intro ```\nsee [[Alpha]] and [[Beta]]\nthen `x` and [[Gamma]]";
+    expect(extractWikilinks(content)).toEqual(["Alpha", "Beta", "Gamma"]);
+    expect(extractWikilinks("Intro ``\nsee [[Alpha]]\nthen `x`")).toEqual(["Alpha"]);
+  });
+
   test("a tilde fence masks its links like a backtick fence", () => {
     expect(extractWikilinks("~~~\n[[in-tilde-fence]]\n~~~\nReal: [[real-link]]")).toEqual([
       "real-link",

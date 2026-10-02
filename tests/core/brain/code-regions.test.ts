@@ -15,9 +15,13 @@ import { normalizeWikilinks } from "../../../src/core/brain/link-graph/format-wi
 import { extractWikilinks } from "../../../src/core/vault.ts";
 import { LINEAR_CEILING_MS } from "../../helpers/linear-time.ts";
 
-/** The former definition, the reference the scanner is held to. */
+/**
+ * The reference the scanner is held to: the former definition, with an
+ * inline span that closes only on a backtick run of its own length (the
+ * CommonMark rule), so no mark of an unclosed run opens a span.
+ */
 const REFERENCE_RE =
-  /(?<!`)(`{3,})(?!`)[\s\S]*?(?<!`)\1`*(?!`)|(?<!~)(~{3,})(?!~)[\s\S]*?(?<!~)\2~*(?!~)|`[^`]+`/g;
+  /(?<!`)(`{3,})(?!`)[\s\S]*?(?<!`)\1`*(?!`)|(?<!~)(~{3,})(?!~)[\s\S]*?(?<!~)\2~*(?!~)|(?<!`)(`{1,2})(?!`)[\s\S]*?(?<!`)\3(?!`)/g;
 
 const ALPHABET = "`~x\n[]";
 const RANDOM_CASES = 5000;
@@ -72,10 +76,18 @@ describe("codeRegions", () => {
     ["a shorter run inside a longer fence stays masked", "````\n```\n[[in]]\n````\n[[out]]"],
     ["a tilde fence closes on a longer tilde run", "~~~~\n[[a]]\n~~~\n[[b]]\n~~~~ [[out]]"],
     ["an unclosed fence is not a region", "~~~\n[[kept]]"],
-    ["an inline span inside an unclosed run", "```x`[[out]]"],
+    ["no mark of an unclosed run opens an inline span", "```x`[[out]]"],
+    ["a double-backtick span closes on a double run", "``a `b` [[in]]``[[out]]"],
     ["strikethrough is not a fence", "~~strike~~ [[out]]"],
   ])("%s", (_name, text) => {
     expect(codeRegions(text)).toEqual(referenceRegions(text));
+  });
+
+  test("an unclosed backtick run leaves the links after it unmasked", () => {
+    const text = "Intro ```\nsee [[Alpha]]\nthen `x`";
+    const single = text.indexOf("`x`");
+    expect(codeRegions(text)).toEqual([[single, single + 3]]);
+    expect(extractWikilinks(text)).toEqual(["Alpha"]);
   });
 
   test.each([

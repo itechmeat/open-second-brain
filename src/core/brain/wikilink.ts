@@ -119,20 +119,50 @@ function fenceClosers(text: string, ch: string): Map<number, FenceRun> {
 }
 
 /**
+ * Every whole run of one or two backticks, left to right, and for each the
+ * run that closes it as an inline code span: the next run of exactly the
+ * same length (the CommonMark rule). One pass from the right.
+ */
+function inlineClosers(text: string): Map<number, FenceRun> {
+  const runs: FenceRun[] = [];
+  let i = text.indexOf(BACKTICK);
+  while (i !== -1) {
+    let end = i + 1;
+    while (end < text.length && text[end] === BACKTICK) end++;
+    if (end - i < FENCE_MIN_RUN) runs.push({ start: i, len: end - i });
+    i = text.indexOf(BACKTICK, end);
+  }
+  const closers = new Map<number, FenceRun>();
+  const nextOfLength = new Map<number, FenceRun>();
+  for (let r = runs.length - 1; r >= 0; r--) {
+    const run = runs[r]!;
+    const closer = nextOfLength.get(run.len);
+    if (closer !== undefined) closers.set(run.start, closer);
+    nextOfLength.set(run.len, run);
+  }
+  return closers;
+}
+
+/**
  * Code regions a wikilink or mention scan masks out, as `[start, end)`
  * pairs left to right: a fenced block or an inline code span. A fence is a
  * whole run of three or more backticks or tildes, and it closes on the next
  * whole run of the same character at least as long (the CommonMark rule),
- * consumed whole: a longer fence holding a shorter run stays masked. An
- * opener with no closer is not a region. Elsewhere a backtick, some
- * non-backtick text and the next backtick form an inline span.
+ * consumed whole: a longer fence holding a shorter run stays masked.
+ * Elsewhere a run of one or two backticks opens an inline span that closes
+ * on the next run of exactly its length. A run with no closer is not a
+ * region, and none of its marks opens one.
  *
- * One pass over the text plus one stack pass over the fence runs, so the
- * cost is linear whatever the runs look like. Shared by every link and
- * mention reader, so a stored excerpt never contributes links anywhere.
+ * One pass over the text plus one pass over the runs, so the cost is
+ * linear whatever the runs look like. Shared by every link and mention
+ * reader, so a stored excerpt never contributes links anywhere.
  */
 export function codeRegions(text: string): Array<[number, number]> {
-  const closers = new Map([...fenceClosers(text, BACKTICK), ...fenceClosers(text, TILDE)]);
+  const closers = new Map([
+    ...fenceClosers(text, BACKTICK),
+    ...fenceClosers(text, TILDE),
+    ...inlineClosers(text),
+  ]);
   const regions: Array<[number, number]> = [];
   let i = 0;
   while (i < text.length) {
@@ -148,15 +178,9 @@ export function codeRegions(text: string): Array<[number, number]> {
       i = end;
       continue;
     }
-    if (ch === BACKTICK && i + 1 < text.length && text[i + 1] !== BACKTICK) {
-      const close = text.indexOf(BACKTICK, i + 1);
-      if (close !== -1) {
-        regions.push([i, close + 1]);
-        i = close + 1;
-        continue;
-      }
-    }
-    i++;
+    // An unclosed run is literal text as a whole: skipping it keeps its last
+    // mark from opening an inline span against an unrelated later backtick.
+    while (i < text.length && text[i] === ch) i++;
   }
   return regions;
 }
