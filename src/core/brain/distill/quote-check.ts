@@ -33,6 +33,7 @@ import {
   QUOTE_CHECK_OUTCOME,
   QUOTE_FINDINGS_MAX,
   QUOTE_SPAN_PREVIEW_MAX_CHARS,
+  VERIFIED_QUOTE_OUTCOMES,
   type QuoteCheckOutcome,
   type QuoteCheckReport,
   type QuoteFinding,
@@ -161,12 +162,11 @@ export function checkClaimQuotes(input: QuoteCheckInput): QuoteCheckResult {
     for (const span of scan.spans) {
       checked++;
       const outcome = spanOutcome(span, target);
-      if (outcome === QUOTE_CHECK_OUTCOME.verifiedInBlock) verifiedInBlock++;
-      else if (outcome === QUOTE_CHECK_OUTCOME.verifiedInSource) verifiedInSource++;
-      else {
+      if (!VERIFIED_QUOTE_OUTCOMES.has(outcome)) {
         failed.push(span);
         findings.push({ claim: index, outcome, span: preview(span.inner) });
-      }
+      } else if (outcome === QUOTE_CHECK_OUTCOME.verifiedInBlock) verifiedInBlock++;
+      else verifiedInSource++;
     }
     return failed.length === 0 ? claim : { ...claim, text: unquoteSpans(claim.text, failed) };
   });
