@@ -506,9 +506,7 @@ const COVERED_TOOLS: ReadonlySet<string> = new Set(
 const STILL_NAMED_AT_REMOTE: ReadonlySet<string> = new Set([
   "brain_anticipatory_context",
   "brain_context_pack",
-  "brain_retention",
   "brain_scaffold_stub action=list",
-  "brain_stale_scan",
 ]);
 
 /**

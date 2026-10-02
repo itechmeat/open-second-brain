@@ -765,6 +765,49 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "brain_trigger: list and show return intention chains - Brain-authored scope records with " +
       "their text, history and path - and set and move write them, with no visibility check.",
   },
+  {
+    surface: "brain_stale_scan",
+    kind: K.mcpTool,
+    category: C.covered,
+    reason:
+      "findStaleEntries walks the preference and signal records and names each stale one by id, " +
+      "topic and vault-relative path; the handler keeps a row only when its path and id pass the " +
+      "gated owner view ANDed with reachView, so below local reach a withheld record is listed " +
+      "by no row. stale_log_files names Brain/log shards by date, which are shared by " +
+      "construction and carry no page content.",
+  },
+  {
+    surface: "brain_review_candidates",
+    kind: K.mcpTool,
+    category: C.excluded,
+    reason:
+      "the dry-run dream preview names preferences by id: would_create, would_promote, " +
+      "would_retire, would_supersede and gated_retires keep a row only when both the pref- and " +
+      "the ret- spelling of its id pass the gated owner view ANDed with reachView, and " +
+      "signal_novelty asks the same of each signal's path and id. Residual: " +
+      "clusters_below_threshold and intent_reviews are folds over inbox signal clusters keyed " +
+      "by topic, with no visibility check, so a withheld signal's topic still shows there.",
+  },
+  {
+    surface: "brain_retention",
+    kind: K.mcpTool,
+    category: C.covered,
+    reason:
+      "buildRetentionReview names retired preferences and processed signals by id and " +
+      "vault-relative path; the handler keeps a recommendation only when its path and id pass " +
+      "the gated owner view ANDed with reachView, and counts the summary again over the kept " +
+      "rows, so a withheld record moves neither a row nor a count.",
+  },
+  {
+    surface: "brain_intent_review",
+    kind: K.mcpTool,
+    category: C.excluded,
+    reason:
+      "swept in for file-level completeness because review-tools.ts also registers " +
+      "brain_stale_scan: buildIntentReview folds inbox signal clusters into a topic, a decision, " +
+      "a signal count and a risk band, never a note path, title or body, with no visibility " +
+      "check, so a withheld signal's topic still shows.",
+  },
 
   // --- Excluded: CLI verbs, one per MCP tool above that has a CLI mirror ----
   {

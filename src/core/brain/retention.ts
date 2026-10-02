@@ -51,7 +51,7 @@ export function buildRetentionReview(
   return Object.freeze({
     schema_version: 1 as const,
     generated_at: now.toISOString(),
-    summary: Object.freeze(summarize(recommendations)),
+    summary: Object.freeze(summarizeRetention(recommendations)),
     recommendations: Object.freeze(recommendations),
   });
 }
@@ -157,7 +157,14 @@ function recommendProcessedSignal(
   });
 }
 
-function summarize(recommendations: ReadonlyArray<RetentionRecommendation>): RetentionSummary {
+/**
+ * Count recommendations by action. Exported so a reader that keeps only
+ * some recommendations counts the ones it kept rather than shipping a
+ * summary of rows it withheld.
+ */
+export function summarizeRetention(
+  recommendations: ReadonlyArray<RetentionRecommendation>,
+): RetentionSummary {
   const summary = { keep: 0, improve: 0, park: 0, prune: 0 };
   for (const recommendation of recommendations) {
     summary[recommendation.action] += 1;

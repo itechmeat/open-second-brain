@@ -285,6 +285,11 @@ const NOTE_CONTENT_PRODUCERS: ReadonlyArray<ProducerRule> = Object.freeze([
   // The trigger scan folds semantic health and the retention review into
   // queued triggers that name the records they fired on.
   { specifierIncludes: "/brain/triggers/scan.ts", identifiers: ["scanTriggers"] },
+  // The lifecycle review readers name preferences and signals by id and
+  // vault-relative path.
+  { specifierIncludes: "/brain/temporal/stale-watch.ts", identifiers: ["findStaleEntries"] },
+  { specifierIncludes: "/brain/review-candidates.ts", identifiers: ["buildReviewCandidates"] },
+  { specifierIncludes: "/brain/retention.ts", identifiers: ["buildRetentionReview"] },
   {
     specifierIncludes: "/brain/truth/",
     identifiers: ["computeTruthStateWithConflicts", "aggregateQuantities", "detectAgentCollisions"],
@@ -500,8 +505,13 @@ function reasonProblems(entries: ReadonlyArray<VisibilitySurfaceEntry>): {
  * 58 before the vocabulary gained the trigger scan. The two new names
  * are `brain_trigger`, whose scan queued and counted triggers about
  * withheld records, and `brain_intention` on the file-level rule.
+ *
+ * 60 before the vocabulary gained the lifecycle review readers. The four
+ * new names are `brain_stale_scan`, `brain_review_candidates` and
+ * `brain_retention`, which named withheld preferences and signals by id
+ * and path, and `brain_intent_review` on the file-level rule.
  */
-const MCP_TOOL_POPULATION_SIZE = 60;
+const MCP_TOOL_POPULATION_SIZE = 64;
 /** Measured: MCP resources + templates. */
 const MCP_RESOURCE_POPULATION_SIZE = 8;
 /** Measured: hand-enumerated CLI verb mirrors. */
@@ -579,9 +589,11 @@ describe("visibility surface census", () => {
         "brain_procedural_memory",
         "brain_query",
         "brain_recall_feedback",
+        "brain_retention",
         "brain_search",
         "brain_search_expand",
         "brain_skill_proposals",
+        "brain_stale_scan",
         "brain_tiers",
         "brain_trigger",
         "brain_unlinked_mentions",
