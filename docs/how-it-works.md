@@ -1533,12 +1533,15 @@ chunk, so every chunk of the page carries the column names and a
 `Table > Rows a-b` heading path. Rows, columns, cell length and section
 size are capped, and every cut is named. A column whose header names a
 credential has its values replaced, and every other cell goes through
-the output redactor.
+the output redactor. Two limits of the chunk alignment remain, and
+neither loses content: a single row longer than one group's token
+budget forms a group of its own and can still be split across search
+chunks, and a row whose first cell begins with three backticks reads to
+the chunker as a closing fence, which moves a chunk boundary.
 
 A Markdown or text source gets nothing new: its page is byte for byte
 what it was.
 
-## Safety properties
 ## Safety properties
 
 These are invariants of the system, not configuration to enable.
