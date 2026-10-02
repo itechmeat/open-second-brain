@@ -25,6 +25,7 @@ import { fnv1aHex } from "../feedback.ts";
 import {
   attachTrustMetadata,
   buildTerminalPaths,
+  isPathReadableAtReach,
   type FrontmatterCache,
 } from "../result-filters.ts";
 import type {
@@ -289,9 +290,18 @@ const UNRESOLVED_COVERAGE_SCOPE: CoverageScope = Object.freeze({
  * sit above this module in the graph, and the sanctioned cure for that in
  * this tree is an import evaluated at call time. It is called only on the
  * zero-result path, so the cost lands where the answer is owed.
+ *
+ * `reach` decides which indexed pages reach a root: below local reach a
+ * root counts as reached only through a page that caller may read
+ * ({@link isPathReadableAtReach}, honouring the visibility the index
+ * measured), so a root holding nothing that caller can read answers
+ * exactly like an empty one. An absent reach is remote, the convention
+ * {@link corpusVerdictAtReach} keeps. At local reach nothing is read
+ * beyond the index.
  */
 export async function probeRetrievalCorpus(
   resolveConfig: () => ResolvedSearchConfig,
+  reach?: TransportReach,
 ): Promise<NegativeRecallVerdict> {
   let snapshot: CoverageIndexSnapshot | null = null;
   let scope: CoverageScope = UNRESOLVED_COVERAGE_SCOPE;
@@ -305,7 +315,8 @@ export async function probeRetrievalCorpus(
     // index to read, or no note root the operator authorized.
     const indexedRoots =
       status.exists && authorizedRoots.length > 0
-        ? (await indexRootCoverage(config, authorizedRoots)).rootsWithDocuments
+        ? (await indexRootCoverage(config, authorizedRoots, rootAdmitAtReach(config, reach)))
+            .rootsWithDocuments
         : [];
     snapshot = status;
     scope = { authorizedRoots, indexedRoots };
@@ -313,6 +324,22 @@ export async function probeRetrievalCorpus(
     // Deliberately empty: the unresolved defaults above ARE the report.
   }
   return classifyNegativeRecall({ snapshot, scope });
+}
+
+/**
+ * The page filter root coverage applies at `reach`: none at local reach,
+ * otherwise the per-path reach verdict over one frontmatter cache for the
+ * whole probe.
+ */
+function rootAdmitAtReach(
+  config: ResolvedSearchConfig,
+  reach: TransportReach | undefined,
+): ((path: string, indexedTags: ReadonlyArray<string>) => boolean) | undefined {
+  const resolved = resolvedTransportReach(reach);
+  if (resolved === TRANSPORT_REACH.local) return undefined;
+  const cache: FrontmatterCache = new Map();
+  return (path, indexedTags) =>
+    isPathReadableAtReach(config.vault, path, resolved, cache, indexedTags);
 }
 
 /**
@@ -328,7 +355,9 @@ export async function corpusStatementForEmptyWindow(
   reach: TransportReach | undefined,
 ): Promise<RetrievalCorpusStatement | null> {
   if (retrieved > 0 || degraded.length > 0) return null;
-  return corpusStatementFor(corpusVerdictAtReach(await probeRetrievalCorpus(resolveConfig), reach));
+  return corpusStatementFor(
+    corpusVerdictAtReach(await probeRetrievalCorpus(resolveConfig, reach), reach),
+  );
 }
 
 /**

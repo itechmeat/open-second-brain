@@ -1392,10 +1392,12 @@ async function toolBrainRecallGate(
  * that reads no claim graph has no grounds for `did_not_happen`.
  */
 async function assessNegativeRecall(ctx: ServerContext): Promise<NegativeRecallVerdict> {
-  const verdict = await probeRetrievalCorpus(() =>
-    resolveSearchConfig({ vault: ctx.vault, configPath: ctx.configPath ?? undefined }),
+  const reach = contextReach(ctx);
+  const verdict = await probeRetrievalCorpus(
+    () => resolveSearchConfig({ vault: ctx.vault, configPath: ctx.configPath ?? undefined }),
+    reach,
   );
-  return corpusVerdictAtReach(verdict, contextReach(ctx));
+  return corpusVerdictAtReach(verdict, reach);
 }
 
 const RECALL_FEEDBACK_INPUT_SCHEMA: Record<string, unknown> = {

@@ -14,6 +14,12 @@
  * the digest page, the remote search finds neither the page nor the
  * principle, so the remote assertion is not vacuous; an ordinary page is
  * still found remotely, so the remote search is not simply empty.
+ *
+ * The corpus statement of a zero-result answer names the authorized note
+ * roots the index never reached. A second A/B pins that it answers at the
+ * caller's reach: a root holding only a reserved page and the same root
+ * empty give identical remote verdicts, while the local verdict still
+ * counts the root as reached.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -157,4 +163,75 @@ describe("the compiled digest pages in any spelling the filesystem resolves to t
       expect(isPathReadableAtReach(f.vault, spelling, TRANSPORT_REACH.local, new Map())).toBe(true);
     });
   }
+});
+
+/** The note root whose only page is reserved in one vault and absent in the other. */
+const RESERVED_ROOT = "Journal";
+const RESERVED_ROOT_PAGE = `${RESERVED_ROOT}/reserved.md`;
+const NOTES_ROOT = "Notes";
+const ROOTS_CONFIG = `schema_version: 1\nnotes:\n  read_paths:\n    - ${NOTES_ROOT}\n    - ${RESERVED_ROOT}\n`;
+const ISO_INSTANT = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g;
+const GATE_ARGS = Object.freeze({ prompt: ABSENT_QUERY, scores: [], match_quality: 0 });
+
+/** Two vaults alike but for one reserved page that is the only page under a note root. */
+async function rootFixture(withReservedPage: boolean): Promise<Fixture> {
+  const base = mkdtempSync(join(tmpdir(), "o2b-root-coverage-reach-"));
+  bases.push(base);
+  const vault = join(base, "vault");
+  const configPath = join(base, "config.yaml");
+  atomicWriteFileSync(configPath, `vault: ${vault}\nagent_name: claude\n`);
+  bootstrapBrain(vault, { configPath });
+  writeFileSync(join(vault, "Brain", "_brain.yaml"), ROOTS_CONFIG);
+  mkdirSync(join(vault, NOTES_ROOT), { recursive: true });
+  writeFileSync(join(vault, OPEN_PATH), `# Open\n\nThis page mentions ${OPEN_MARKER}.\n`);
+  mkdirSync(join(vault, RESERVED_ROOT), { recursive: true });
+  if (withReservedPage) {
+    writeFileSync(
+      join(vault, RESERVED_ROOT_PAGE),
+      `---\n${RESERVE_LINE}\n---\n# Reserved\n\nA reserved journal entry.\n`,
+    );
+  }
+  await indexVault(resolveSearchConfig({ vault, configPath }), { force: true });
+  return { configPath, vault };
+}
+
+/** A server at the reach given, or with no reach minted at all (remote). */
+function serverAt(f: Fixture, reach?: TransportReach): MCPServer {
+  process.env["OPEN_SECOND_BRAIN_CONFIG"] = f.configPath;
+  const config = { vault: f.vault, configPath: f.configPath };
+  return reach === undefined ? new MCPServer(config) : new MCPServer(config, { reach });
+}
+
+/** The two zero-result answers, with the index build instant normalised. */
+async function zeroResultAnswers(f: Fixture, reach?: TransportReach): Promise<string> {
+  const server = serverAt(f, reach);
+  const searched = await server.callTool("brain_search", { query: ABSENT_QUERY });
+  const gated = await server.callTool("brain_recall_gate", { ...GATE_ARGS });
+  return JSON.stringify({ searched, gated }).replaceAll(ISO_INSTANT, "<instant>");
+}
+
+/** The recall gate's negative verdict for a local caller. */
+async function localGateNegative(f: Fixture): Promise<Record<string, unknown>> {
+  const answer = (await serverAt(f, TRANSPORT_REACH.local).callTool("brain_recall_gate", {
+    ...GATE_ARGS,
+  })) as { structuredContent: { negative: Record<string, unknown> } };
+  return answer.structuredContent.negative;
+}
+
+describe("the corpus statement's root coverage answers at the caller's reach", () => {
+  test("a root holding only a reserved page answers remotely like the same root empty", async () => {
+    const withPage = await zeroResultAnswers(await rootFixture(true));
+    const without = await zeroResultAnswers(await rootFixture(false));
+    expect(withPage).toBe(without);
+    // Not vacuous: the empty root is named as never reached.
+    expect(without).toContain("coverage-divergent");
+    expect(without).toContain(RESERVED_ROOT);
+  });
+
+  test("a local caller still counts the reserved page as reaching its root", async () => {
+    const withPage = await localGateNegative(await rootFixture(true));
+    expect(withPage["state"]).toBe("not_found");
+    const without = await localGateNegative(await rootFixture(false));
+    expect(without["unknown_reason"]).toBe("coverage-divergent");
+  });
 });

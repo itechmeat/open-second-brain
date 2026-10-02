@@ -96,9 +96,11 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "the caller passes no visibility argument at all. A zero-result answer below local " +
       "reach carries no coverage receipt and no index count: a not_found names the index time " +
       "only and an unknown states the fixed reason of its unknown_reason " +
-      "(corpusVerdictAtReach in pipeline/outcome.ts, withoutCorpusCounts). Residual: an " +
-      "authorized note root that holds only pages the caller cannot read is still a reached " +
-      "root, so its presence can still move the verdict to coverage-divergent.",
+      "(corpusVerdictAtReach in pipeline/outcome.ts, withoutCorpusCounts). Its root coverage " +
+      "answers at the caller's reach: below local reach an authorized note root counts as " +
+      "reached only through a page that caller may read (probeRetrievalCorpus threads the " +
+      "reach into indexRootCoverage's admit predicate), so a root holding nothing else answers " +
+      "like an empty one.",
   },
   {
     surface: "brain_file_context",
@@ -534,8 +536,9 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "a diagnostic classifier over caller-supplied scores/match_quality - it runs no search and " +
       "returns no note content; included for completeness of the file-level sweep only. Its " +
       "corpus statement below local reach carries no coverage receipt and no index count, for " +
-      "every state (corpusVerdictAtReach, withoutCorpusCounts); the coverage-divergent residual " +
-      "named on brain_search applies here too.",
+      "every state (corpusVerdictAtReach, withoutCorpusCounts), and its root coverage answers " +
+      "at the caller's reach the same way brain_search's does (probeRetrievalCorpus with " +
+      "contextReach).",
   },
   {
     surface: "brain_recall_feedback",
