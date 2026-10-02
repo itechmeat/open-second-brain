@@ -244,6 +244,9 @@ describe("the active digest treats a withheld preference as absent at remote rea
     const withheld = await context(fixture(true), TRANSPORT_REACH.remote);
     const absent = await context(fixture(false), TRANSPORT_REACH.remote);
     expect(withheld).not.toContain(MARKER);
+    // Positive control: a remote reach that dropped every record would
+    // also answer identically.
+    expect(withheld).toContain("Prefer short sentences.");
     expect(withheld).toBe(absent);
   });
 
@@ -251,6 +254,7 @@ describe("the active digest treats a withheld preference as absent at remote rea
     const withheld = await resource(fixture(true), TRANSPORT_REACH.remote);
     const absent = await resource(fixture(false), TRANSPORT_REACH.remote);
     expect(withheld).not.toContain(MARKER);
+    expect(withheld).toContain("Prefer short sentences.");
     expect(withheld).toBe(absent);
   });
 
@@ -280,6 +284,7 @@ describe("the active digest treats a withheld preference as absent at remote rea
       const stamp = GENERATED_AT_RE.exec(readFileSync(brainActivePath(f.vault), "utf8"))![1]!;
       expect(out.content).toContain(`generated_at: ${stamp}`);
       expect(out.content).not.toContain(MARKER);
+      expect(out.content).toContain("Prefer short sentences.");
     });
   }
 

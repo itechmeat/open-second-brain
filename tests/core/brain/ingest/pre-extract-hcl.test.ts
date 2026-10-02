@@ -164,6 +164,11 @@ describe("preExtractCodeStructure - Terraform family", () => {
         `git::https://${P}@github.com/org/net.git`,
       ],
       [
+        "a token, not a login, as the user of an ssh source",
+        `git::ssh://${value}@example.com/r.git`,
+        `git::ssh://${P}@example.com/r.git`,
+      ],
+      [
         "the git getter's sshkey parameter",
         `git::ssh://git@example.com/r.git?sshkey=${value}`,
         `git::ssh://git@example.com/r.git?sshkey=${P}`,

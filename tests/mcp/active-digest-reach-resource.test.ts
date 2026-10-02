@@ -40,8 +40,13 @@ const PRIVATE_PATH = `Brain/preferences/pref-${PRIVATE_SLUG}.md`;
 const LATE_PRINCIPLE = "Name the late rule.";
 const ACTIVE_URI = "osb://preferences/active";
 const RESERVE_LINE = `visibility: [${REMOTE_DENY_VISIBILITY_TOKEN}]`;
-/** One stamp for every fixture event, so the two vaults log the same instant. */
-const EVENT_AT = "2026-05-02T12:00:00.000Z";
+/**
+ * One stamp for every fixture event, taken once so the two vaults log the
+ * same instant. It is near now because a remote read renders at read time:
+ * an older event falls outside the 30-day most-applied window and the
+ * list the test is about is never drawn.
+ */
+const EVENT_AT = new Date(Date.now() - 60 * 60 * 1000).toISOString();
 /** Generated a day after the event, inside the 30-day most-applied window. */
 const GENERATED_AT = new Date("2026-05-03T00:00:00Z");
 const GENERATED_AT_RE = /generated_at: (\S+)/;
@@ -94,6 +99,19 @@ function staleFixture(withPrivate: boolean): Fixture {
   atomicWriteFileSync(configPath, `vault: ${vault}\nagent_name: claude\n`);
   bootstrapBrain(vault, { configPath });
   confirmed(vault, "shared", "Prefer short sentences.");
+  appendLogEvent(
+    vault,
+    {
+      timestamp: EVENT_AT,
+      eventType: BRAIN_LOG_EVENT_KIND.applyEvidence,
+      body: {
+        path: "Brain/preferences/pref-shared.md",
+        preference: "[[pref-shared]]",
+        result: "applied",
+      },
+    },
+    { deviceId: "" },
+  );
   if (withPrivate) {
     confirmed(vault, PRIVATE_SLUG, `Mention ${MARKER} first.`);
     reserve(vault, PRIVATE_PATH);
@@ -144,6 +162,8 @@ describe("the active digest resource over a stale file", () => {
     expect(withheld).not.toContain(MARKER);
     expect(absent).toContain(LATE_PRINCIPLE);
     expect(absent).toContain("## Confirmed (2)");
+    // The most-applied list is drawn, and counts only the shared record.
+    expect(absent).toContain("## Most-applied (30d) (1)");
     expect(withheld).toBe(absent);
   });
 

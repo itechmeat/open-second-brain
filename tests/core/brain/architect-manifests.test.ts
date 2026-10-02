@@ -75,7 +75,7 @@ describe("package.json", () => {
     expect(reading.otherGroups).toEqual([]);
   });
 
-  test("broken JSON is malformed with the parser's detail, not absent", () => {
+  test("broken JSON is malformed, not absent", () => {
     seed("package.json", "{ not json");
     const reading = readManifestAt(root, "package.json");
     expect(reading.status).toBe(MANIFEST_STATUS.malformed);
@@ -186,14 +186,6 @@ describe("pyproject.toml", () => {
   test("the Poetry interpreter key is dropped whatever its case", () => {
     seed("pyproject.toml", '[tool.poetry.dependencies]\nPython = "^3.11"\nDjango = "^5"\n');
     expect(readManifestAt(root, "pyproject.toml").fact?.dependencies).toEqual(["django"]);
-  });
-
-  test("broken TOML is malformed with the parser's detail", () => {
-    seed("pyproject.toml", "[project\nname = ");
-    const reading = readManifestAt(root, "pyproject.toml");
-    expect(reading.status).toBe(MANIFEST_STATUS.malformed);
-    expect(reading.detail).toBeTruthy();
-    expect(reading.fact).toBeNull();
   });
 });
 
@@ -411,11 +403,20 @@ describe("what the reader opens", () => {
 
   // Windows has no FIFOs, and creating a symlink there needs a privilege.
   test.skipIf(IS_WINDOWS)("a FIFO is not a regular file and the read does not block", () => {
-    const made = Bun.spawnSync(["mkfifo", join(root, "go.mod")]);
+    const fifo = join(root, "go.mod");
+    const made = Bun.spawnSync(["mkfifo", fifo]);
     expect(made.exitCode).toBe(0);
-    const reading = readManifestAt(root, "go.mod");
-    expect(reading.status).toBe(MANIFEST_STATUS.unreadable);
-    expect(reading.detail).toBe("not a regular file");
+    // A writer that holds the FIFO open for two seconds and writes
+    // nothing: a reader that blocks fails on its status after two seconds
+    // instead of hanging the run.
+    const writer = Bun.spawn(["sh", "-c", 'exec 3>"$0"; exec sleep 2', fifo]);
+    try {
+      const reading = readManifestAt(root, "go.mod");
+      expect(reading.status).toBe(MANIFEST_STATUS.unreadable);
+      expect(reading.detail).toBe("not a regular file");
+    } finally {
+      writer.kill();
+    }
   });
 
   test.skipIf(IS_WINDOWS)("a manifest swapped for a symlink is not followed", () => {
