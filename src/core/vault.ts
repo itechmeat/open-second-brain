@@ -91,7 +91,10 @@ const KEY_VALUE_RE = new RegExp(`^(${FRONTMATTER_KEY_PATTERN})\\s*:\\s*(.*?)\\s*
 // list item) is NOT matched. Captures the item text after the whitespace.
 const DASH_ITEM_RE = /^-(?:\s+(.*))?$/;
 const PLAIN_SCALAR_RE = /^[A-Za-z0-9_./-](?:[A-Za-z0-9_./ -]*[A-Za-z0-9_./-])?$/;
-const CODE_BLOCK_RE = /```[\s\S]*?```|`[^`]+`/g;
+// Fenced code (a run of three or more backticks, closed only by a run of
+// the same length that is not followed by another backtick, so a longer
+// fence holding a shorter run stays masked) or an inline code span.
+const CODE_BLOCK_RE = /(`{3,})[\s\S]*?\1(?!`)|`[^`]+`/g;
 const SLUG_INVALID_RE = /[^a-z0-9]+/g;
 const SLUG_MAX_LEN = 64;
 

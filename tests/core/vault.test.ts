@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { renderExcerptSection } from "../../src/core/brain/provenance/capture-scope.ts";
 import { DEGRADATION_CODE, type DegradationNotice } from "../../src/core/integrity/degradation.ts";
 import {
   FrontmatterKeyError,
@@ -384,6 +385,19 @@ describe("extractWikilinks", () => {
 
   test("deduplicates", () => {
     expect(extractWikilinks("[[A]] [[A]] [[B]]")).toEqual(["A", "B"]);
+  });
+
+  test("a longer fence is not closed by a shorter backtick run inside it", () => {
+    const content = "````\nx ```\n[[Hidden/Note.md]]\n````\nReal: [[real-link]]";
+    expect(extractWikilinks(content)).toEqual(["real-link"]);
+  });
+
+  test("a stored excerpt never contributes links, whatever backtick runs it holds", () => {
+    // The excerpt is fetched text; its wikilinks are quoted content, not
+    // edges of the page that stores it.
+    for (const excerpt of ["x ```\n[[Secret/Note.md]]\n", "```` [[A]] ``` [[B]]", "`` [[C]] ```"]) {
+      expect(extractWikilinks(renderExcerptSection(excerpt))).toEqual([]);
+    }
   });
 });
 
