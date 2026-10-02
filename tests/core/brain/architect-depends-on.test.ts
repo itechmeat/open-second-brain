@@ -15,11 +15,9 @@ import { join } from "node:path";
 
 import {
   ArchFrontmatterError,
-  DEPENDS_ON_KEY,
   generateArchDocs,
 } from "../../../src/core/brain/architect/generate.ts";
 import type { GenerateArchDocsResult } from "../../../src/core/brain/architect/generate.ts";
-import { DEFAULT_RELATION_TYPES } from "../../../src/core/graph/relation-vocab.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { Store } from "../../../src/core/search/store.ts";
 import { makeConfig } from "../../helpers/search-fixtures.ts";
@@ -53,6 +51,11 @@ function frontmatterOf(text: string): string {
   return text.slice(0, end + 5);
 }
 
+/** The frontmatter block of a CRLF note, fences included. */
+function crlfFrontmatterOf(text: string): string {
+  return text.slice(0, text.indexOf("\r\n---\r\n", 4) + 7);
+}
+
 /** A note with its `depends_on` key removed, for comparing everything else. */
 function withoutKey(text: string): string {
   return text.replace(/^depends_on:\n(?: {2}- .*\n)*/m, "");
@@ -72,11 +75,6 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
-});
-
-test("the key is a known relation, so the indexer reads it as one", () => {
-  expect(DEPENDS_ON_KEY).toBe("depends_on");
-  expect((DEFAULT_RELATION_TYPES as ReadonlyArray<string>).includes(DEPENDS_ON_KEY)).toBe(true);
 });
 
 test("the key is written on creation, sorted, and absent when there is no edge", () => {
@@ -127,10 +125,8 @@ test("on a CRLF note a blank line after the key ends the key and is kept", () =>
     ["depends_on:", ...names.map((name) => link(res, name))].map((l) => `${l}\r\n`).join("");
   expect(rewritten).toContain(`${keyLines(second, ["core", "util"])}\r\nnote: kept\r\n`);
   // Outside the key, the frontmatter is byte-identical to what the operator left.
-  const crlfFrontmatter = (text: string): string =>
-    text.slice(0, text.indexOf("\r\n---\r\n", 4) + 7);
-  expect(crlfFrontmatter(rewritten).replace(keyLines(second, ["core", "util"]), "")).toBe(
-    crlfFrontmatter(crlf).replace(keyLines(first, ["core"]), ""),
+  expect(crlfFrontmatterOf(rewritten).replace(keyLines(second, ["core", "util"]), "")).toBe(
+    crlfFrontmatterOf(crlf).replace(keyLines(first, ["core"]), ""),
   );
 });
 

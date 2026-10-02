@@ -52,6 +52,8 @@ describe("project manifest vocabulary", () => {
     expect(manifestSpecFor("src/package.json")).toBeUndefined();
   });
 
+  // A cheap tripwire only: it misses a Bun use through an import and fires on
+  // a comment. The real guard is the Node bundle test and the openclaw-bundle gate.
   test("the module stays Node-safe: it is bundled, so it names no Bun API", () => {
     const source = readFileSync(
       join(import.meta.dir, "../../src/core/project-manifests.ts"),

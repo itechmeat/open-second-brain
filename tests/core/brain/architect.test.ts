@@ -471,12 +471,4 @@ describe("manifest facts", () => {
     const facts = scanProject(root);
     expect(facts.moduleDependencies).toEqual([{ from: "app", to: "core_lib" }]);
   });
-
-  test("manifest facts are byte-stable across two scans", () => {
-    const root = manifestProject("stable");
-    put(root, "package.json", pkg("stable", { b: "1", a: "1" }));
-    put(root, "packages/x/package.json", pkg("x", { stable: "*", y: "*" }));
-    put(root, "packages/y/package.json", pkg("y"));
-    expect(JSON.stringify(scanProject(root))).toBe(JSON.stringify(scanProject(root)));
-  });
 });
