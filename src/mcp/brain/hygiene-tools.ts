@@ -25,6 +25,7 @@ import { gatedOwnerScopeView } from "../../core/brain/owner-scope-view.ts";
 import { everyArtifactRefView } from "../../core/brain/artifact-ref-view.ts";
 import { reachView } from "../../core/brain/reach-view.ts";
 import { contextReach } from "../tool-contract.ts";
+import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { applyHygienePlan } from "../../core/brain/hygiene/apply.ts";
 import { annotateDedupFindings } from "../../core/brain/hygiene/dedup-verdicts.ts";
 import { verdictFields } from "../../core/decision-model/pair-verdict.ts";
@@ -139,6 +140,18 @@ function findingView(vault: string, finding: HygieneFinding): Record<string, unk
  * flattened into a zero.
  */
 async function linkIntegrityView(ctx: ServerContext): Promise<Record<string, unknown>> {
+  // The measurement is taken over the whole index, withheld pages
+  // included, so its counts would move when a page the caller may not
+  // read appears or goes. Below local reach the number is not taken at
+  // all, which is the same answer whether such a page exists or not.
+  if (contextReach(ctx) !== TRANSPORT_REACH.local) {
+    return {
+      definition: DANGLING_LINK_DEFINITION,
+      measured: false,
+      reason: "reach",
+      detail: "link integrity is measured over the whole index and is reported at local reach only",
+    };
+  }
   let measurement: LinkRatchetMeasurement;
   try {
     measurement = await measureFromIndex(

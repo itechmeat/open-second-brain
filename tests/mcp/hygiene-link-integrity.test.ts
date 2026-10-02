@@ -19,6 +19,7 @@ import { HYGIENE_DETECTOR_IDS } from "../../src/core/brain/hygiene/types.ts";
 import { indexVault } from "../../src/core/search/indexer.ts";
 import { resolveSearchConfig } from "../../src/core/search/index.ts";
 import { DANGLING_LINK_DEFINITION } from "../../src/core/search/link-ratchet.ts";
+import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
 import { HYGIENE_TOOLS } from "../../src/mcp/brain/hygiene-tools.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 
@@ -42,8 +43,9 @@ afterEach(() => {
   rmSync(vault, { recursive: true, force: true });
 });
 
-async function scan(): Promise<any> {
-  const server = new MCPServer({ vault });
+/** A scan through a server minted at `reach`, or with no reach minted when `null`. */
+async function scan(reach: TransportReach | null = TRANSPORT_REACH.local): Promise<any> {
+  const server = new MCPServer({ vault }, reach !== null ? { reach } : {});
   await server.handleRequest({
     jsonrpc: JSONRPC_VERSION,
     id: 1,
@@ -103,4 +105,21 @@ test("after a full index run the dangling count is reported with its definition"
   expect(s.link_integrity.definition).toBe(DANGLING_LINK_DEFINITION);
   expect(s.link_integrity.dangling).toBeGreaterThanOrEqual(1);
   expect(typeof s.link_integrity.links).toBe("number");
+});
+
+test("at remote reach the count is not measured, so it cannot tell a withheld page from an absent one", async () => {
+  writeFileSync(join(vault, "Brain", "note-a.md"), "# A\n\n[[Brain/secret.md]] and [[gone]]\n");
+  writeFileSync(join(vault, "Brain", "secret.md"), "---\nvisibility: private\n---\n# S\n");
+  await indexVault(resolveSearchConfig({ vault }), { force: true });
+  const withheld = (await scan(null)).link_integrity;
+  expect((await scan()).link_integrity.measured).toBe(true);
+
+  rmSync(join(vault, "Brain", "secret.md"));
+  await indexVault(resolveSearchConfig({ vault }), { force: true });
+  const absent = (await scan(null)).link_integrity;
+
+  expect(withheld).toEqual(absent);
+  expect(withheld.measured).toBe(false);
+  expect(withheld.reason).toBe("reach");
+  expect(withheld.dangling).toBeUndefined();
 });
