@@ -183,6 +183,11 @@ describe("pyproject.toml", () => {
     expect(reading.otherGroups).toEqual([{ group: "dev", count: 2 }]);
   });
 
+  test("the Poetry interpreter key is dropped whatever its case", () => {
+    seed("pyproject.toml", '[tool.poetry.dependencies]\nPython = "^3.11"\nDjango = "^5"\n');
+    expect(readManifestAt(root, "pyproject.toml").fact?.dependencies).toEqual(["django"]);
+  });
+
   test("broken TOML is malformed with the parser's detail", () => {
     seed("pyproject.toml", "[project\nname = ");
     const reading = readManifestAt(root, "pyproject.toml");
@@ -326,6 +331,16 @@ describe("go.mod", () => {
     expect(reading.status).toBe(MANIFEST_STATUS.read);
     expect(reading.fact?.dependencies).toEqual(["github.com/a/b"]);
   });
+
+  test.each(["require ()", "require ( )", "require()"])(
+    "an empty block on one line, %s, is read",
+    (line) => {
+      seed("go.mod", `module example.com/x\n\n${line}\nrequire github.com/a/b v1.0.0\n`);
+      const reading = readManifestAt(root, "go.mod");
+      expect(reading.status).toBe(MANIFEST_STATUS.read);
+      expect(reading.fact?.dependencies).toEqual(["github.com/a/b"]);
+    },
+  );
 
   test("a require entry without a version is malformed", () => {
     seed("go.mod", "module example.com/x\n\nrequire github.com/a/b\n");

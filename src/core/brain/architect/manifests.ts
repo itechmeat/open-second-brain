@@ -325,7 +325,9 @@ function parsePyproject(text: string): ParsedManifest {
   const poetry = asTable(asTable(doc["tool"])?.["poetry"]) ?? {};
   const runtime = [
     ...pep508Names(project["dependencies"]),
-    ...tableKeys(poetry["dependencies"]).filter((name) => name !== POETRY_PYTHON_KEY),
+    ...tableKeys(poetry["dependencies"]).filter(
+      (name) => canonicalDependencyName(MANIFEST_ECOSYSTEM.pypi, name) !== POETRY_PYTHON_KEY,
+    ),
   ];
   const groups = new GroupCollector(MANIFEST_ECOSYSTEM.pypi);
   for (const extra of tableValues(project["optional-dependencies"])) {
@@ -454,7 +456,8 @@ function parseGoMod(text: string): ParsedManifest {
       if (tokens[0] === GO_BLOCK_CLOSE) block = null;
       else if (block === GO_REQUIRE_DIRECTIVE) entry = tokens;
     } else if (tokens[1] === GO_BLOCK_OPEN) {
-      block = tokens[0]!;
+      // `require ()` opens and closes an empty block on one line.
+      block = tokens.length > 2 && tokens.at(-1) === GO_BLOCK_CLOSE ? null : tokens[0]!;
     } else if (tokens[0] === GO_MODULE_DIRECTIVE) {
       modulePath = tokens[1] ?? null;
     } else if (tokens[0] === GO_REQUIRE_DIRECTIVE) {
