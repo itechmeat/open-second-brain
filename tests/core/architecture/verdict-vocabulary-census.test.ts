@@ -440,6 +440,11 @@ import {
   TRANSPORT_REACHES,
   isTransportReach,
 } from "../../../src/core/graph/transport-reach.ts";
+import {
+  CAPTURE_SCOPE,
+  CAPTURE_SCOPES,
+  isCaptureScope,
+} from "../../../src/core/brain/provenance/capture-scope.ts";
 
 interface VocabularyUnderCensus {
   /** Identifies the vocabulary in a failure message. */
@@ -1361,6 +1366,15 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     members: DISCLOSURE_MODES,
     guard: isDisclosureMode,
   },
+  {
+    // How much of its source a page holds. Stamped into page frontmatter
+    // and read back by the capture-scope hygiene detector, so a value the
+    // guard rejected would turn a stamped page into an unstamped one.
+    name: "CAPTURE_SCOPE",
+    values: CAPTURE_SCOPE,
+    members: CAPTURE_SCOPES,
+    guard: isCaptureScope,
+  },
 ]);
 
 // ---------------------------------------------------------------------------
@@ -1625,7 +1639,7 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
  * How many four-piece vocabularies `src/` currently holds. Measured, and
  * kept as an equality rather than a floor - see the population test.
  */
-const VOCABULARY_POPULATION = 81;
+const VOCABULARY_POPULATION = 82;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {
