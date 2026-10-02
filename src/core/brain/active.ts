@@ -327,7 +327,11 @@ export function regenerateActiveQuiet(vault: string, opts: RegenerateActiveOptio
 
 const READ_EVERYTHING = (_rel: string): boolean => true;
 
-function readGeneratedAt(path: string): string | null {
+/**
+ * The `generated_at` stamp of a compiled digest file on disk, or null when
+ * absent or unreadable. Shared by the active and lessons reader renders.
+ */
+export function readGeneratedAt(path: string): string | null {
   if (!existsSync(path)) return null;
   try {
     const [meta] = parseFrontmatter(path);

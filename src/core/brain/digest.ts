@@ -38,11 +38,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join, posix } from "node:path";
 
-import {
-  UNFILTERED_ARTIFACT_REFS,
-  artifactRefView,
-  type ArtifactRefView,
-} from "./artifact-ref-view.ts";
+import { readerRefView, type ArtifactRefView } from "./artifact-ref-view.ts";
 import { buildBacklinkIndex, type BacklinkIndex } from "./backlinks.ts";
 import { computeAgentSummary, type AgentSummaryEntry } from "./digest-agent-summary.ts";
 import { findMergeCandidates } from "./merge-candidates.ts";
@@ -349,7 +345,13 @@ export function renderDigest(vault: string, opts: RenderDigestOptions = {}): Ren
     );
   }
 
-  const data = collectDigestData(vault, since, until, opts.agentScope, readerRefs(vault, opts));
+  const data = collectDigestData(
+    vault,
+    since,
+    until,
+    opts.agentScope,
+    readerRefView(vault, opts.readable),
+  );
   const empty = isEmpty(data);
 
   if (format === "json") {
@@ -425,18 +427,6 @@ function renderTrustSection(
 }
 
 // ----- Data collection ------------------------------------------------------
-
-/**
- * The reader's predicate as a reference view, so a log event, a backlink
- * source or an action target named by id is asked the same question a
- * record path is.
- */
-function readerRefs(vault: string, opts: RenderDigestOptions): ArtifactRefView {
-  const readable = opts.readable;
-  return readable === undefined
-    ? UNFILTERED_ARTIFACT_REFS
-    : artifactRefView(vault, (rel) => readable(rel));
-}
 
 interface DigestData {
   readonly new_unconfirmed: ReadonlyArray<DigestJsonNewUnconfirmed>;

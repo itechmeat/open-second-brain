@@ -36,7 +36,8 @@ import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { parseFrontmatter } from "../vault.ts";
-import { UNFILTERED_ARTIFACT_REFS, artifactRefView } from "./artifact-ref-view.ts";
+import { readGeneratedAt } from "./active.ts";
+import { readerRefView } from "./artifact-ref-view.ts";
 import { decayWeight } from "./continuity/usage-signal.ts";
 import { listDeadEnds, type DeadEndEntry } from "./dead-ends.ts";
 import { listLogDates, readLogDay } from "./log-jsonl.ts";
@@ -399,11 +400,7 @@ export interface LessonsRender {
 }
 
 function renderLessons(vault: string, opts: RenderLessonsOptions): LessonsRender {
-  const readable = opts.readable;
-  const refs =
-    readable === undefined
-      ? UNFILTERED_ARTIFACT_REFS
-      : artifactRefView(vault, (rel) => readable(rel));
+  const refs = readerRefView(vault, opts.readable);
   const preferences = readActivePreferences(vault).filter(({ path }) =>
     refs.visible(vaultRelative(path, vault)),
   );
@@ -632,19 +629,6 @@ function renderDocument(body: string, generatedAt: string): string {
     body.trimEnd(),
     "",
   ].join("\n");
-}
-
-/** The `generated_at` stamp of the file on disk, or null when absent or unreadable. */
-function readGeneratedAt(path: string): string | null {
-  if (!existsSync(path)) return null;
-  try {
-    const [meta] = parseFrontmatter(path);
-    const value = meta["generated_at"];
-    return typeof value === "string" && value.trim().length > 0 ? value : null;
-  } catch {
-    // A torn header has no stamp to reuse; the render then stamps its own.
-    return null;
-  }
 }
 
 function readExistingBody(path: string): string | null {
