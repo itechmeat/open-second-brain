@@ -21,19 +21,8 @@ import {
 } from "../config.ts";
 import type { CheckResult } from "../types.ts";
 import { isDir, statOrAbsent } from "../fs-utils.ts";
+import { CODE_MANIFEST_FILES } from "../project-manifests.ts";
 import { assessGraphHealth, summarizeGraphHealth } from "./codegraph-health.ts";
-
-const CODE_MANIFESTS: ReadonlyArray<string> = [
-  "package.json",
-  "pyproject.toml",
-  "Cargo.toml",
-  "go.mod",
-  "tsconfig.json",
-  "Gemfile",
-  "composer.json",
-  "build.gradle",
-  "pom.xml",
-];
 
 const DEFAULT_LIMIT = 50;
 
@@ -82,7 +71,7 @@ export function isCodeProject(dir: string): boolean {
   try {
     if (!existsSync(dir)) return false;
     if (!isDir(join(dir, ".git"))) return false;
-    return CODE_MANIFESTS.some((m) => existsSync(join(dir, m)));
+    return CODE_MANIFEST_FILES.some((m) => existsSync(join(dir, m)));
   } catch {
     return false;
   }
