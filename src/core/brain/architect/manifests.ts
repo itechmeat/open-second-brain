@@ -120,9 +120,9 @@ const GO_DIRECTIVE_NAME = /^[a-z]+$/;
  * bracket - is not a package name any registry serves.
  */
 const REPRESENTABLE_NAME = /^[A-Za-z0-9@_][A-Za-z0-9@._/~+:-]{0,213}$/;
-/** C0 control characters and DEL: what folds a string onto one line. */
+/** C0 control characters, DEL and C1 control characters: what folds a string onto one line. */
 // oxlint-disable-next-line no-control-regex -- matching control characters is the point
-const CONTROL_RUN = /[\u0000-\u001f\u007f]+/g;
+const CONTROL_RUN = /[\u0000-\u001f\u007f-\u009f]+/g;
 const WIKILINK_OPEN = "[[";
 /** `[[` with its second bracket escaped: reads the same, links nothing. */
 const WIKILINK_OPEN_ESCAPED = "[\\[";

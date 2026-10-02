@@ -106,19 +106,19 @@ test("text mode names the manifests not read, and only when there are some", asy
 });
 
 // A control character cannot be part of a directory name on Windows.
-test.skipIf(process.platform === "win32")(
-  "the line naming manifests not read prints no control character",
-  async () => {
-    const dir = join(project, "src", "x\u001b]0;title\u0007\u001b[2J");
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "package.json"), "{ not json");
-    writeFileSync(join(dir, "index.ts"), "export {};\n");
-    const res = await runCli(["brain", "architect", project, "--vault", vault]);
-    expect(res.returncode).toBe(0);
-    expect(res.stdout).toContain("manifests not read:");
-    expect(res.stdout).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f]/);
-  },
-);
+test.skipIf(process.platform === "win32").each([
+  ["C0", "x\u001b]0;title\u0007\u001b[2J"],
+  ["C1", "x\u009b2J\u009d0;title\u009c"],
+])("the line naming manifests not read prints no %s control character", async (_set, name) => {
+  const dir = join(project, "src", name);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "package.json"), "{ not json");
+  writeFileSync(join(dir, "index.ts"), "export {};\n");
+  const res = await runCli(["brain", "architect", project, "--vault", vault]);
+  expect(res.returncode).toBe(0);
+  expect(res.stdout).toContain("manifests not read:");
+  expect(res.stdout).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/);
+});
 
 test("help names the runtime-only scan and every flag", async () => {
   const res = await runCli(["brain", "architect", "--help"]);
