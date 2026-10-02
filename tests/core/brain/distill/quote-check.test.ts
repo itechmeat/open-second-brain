@@ -4,7 +4,7 @@
  * failed span loses its marks and is named; nothing here touches the disk.
  */
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 
 import type { DistillClaim } from "../../../../src/core/brain/distill/distill-source.ts";
 import {
@@ -16,6 +16,7 @@ import {
   QUOTE_FINDINGS_MAX,
   QUOTE_SPAN_PREVIEW_MAX_CHARS,
 } from "../../../../src/core/brain/distill/quote-verdict.ts";
+import * as blockResolve from "../../../../src/core/brain/distill/block-resolve.ts";
 
 const SOURCE = [
   "# Restaking",
@@ -229,5 +230,23 @@ describe("checkClaimQuotes - the report", () => {
     expect(res.report!.total).toBe(1);
     expect(res.report!.returned).toBe(1);
     expect(res.report!.truncated).toBe(false);
+  });
+});
+
+describe("checkClaimQuotes - one block index per check", () => {
+  test("claims citing several blocks segment the source once", () => {
+    const index = spyOn(blockResolve, "indexBlocks");
+    try {
+      const claims = [
+        { text: `"reuses staked capital"`, block: "abc" },
+        { text: `"stake it"`, block: "said" },
+        { text: `"the second step"`, block: "steps" },
+      ];
+      const res = checkClaimQuotes({ claims, evidence: TEXT });
+      expect(res.report!.unquoted).toBe(0);
+      expect(index).toHaveBeenCalledTimes(1);
+    } finally {
+      index.mockRestore();
+    }
   });
 });

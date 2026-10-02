@@ -268,6 +268,9 @@ describe("brain_distill_source - a page withheld at the caller's reach checks no
     const message = (caught as MCPError).message;
     expect(message).toContain(`claim 0: ${QUOTE_CHECK_OUTCOME.urlOnly}`);
     expect(message).toContain(`claim 1: ${QUOTE_CHECK_OUTCOME.urlOnly}`);
+    for (const outcome of Object.values(QUOTE_CHECK_OUTCOME)) {
+      if (outcome !== QUOTE_CHECK_OUTCOME.urlOnly) expect(message).not.toContain(outcome);
+    }
   });
 
   test("at local reach the same page is checked", async () => {

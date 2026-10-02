@@ -168,12 +168,16 @@ describe("distillSource - one read of the source", () => {
   test("the source file is opened or read exactly once per call", () => {
     const open = spyOn(fs, "openSync");
     const read = spyOn(fs, "readFileSync");
+    const bunRead = spyOn(Bun, "file");
     try {
       distill([VERBATIM]);
-      expect(touches(open.mock.calls) + touches(read.mock.calls)).toBe(1);
+      expect(
+        touches(open.mock.calls) + touches(read.mock.calls) + touches(bunRead.mock.calls),
+      ).toBe(1);
     } finally {
       open.mockRestore();
       read.mockRestore();
+      bunRead.mockRestore();
     }
   });
 });
