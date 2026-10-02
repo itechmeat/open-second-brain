@@ -1571,11 +1571,11 @@ and hashes. Such a value reaches the summary page, full-text search and
 the embeddings, as it already sits in the source file in the vault.
 
 A summary page that carries a derived section is at most as visible as
-its source: the source's own `visibility` tokens are joined with any the
-page already had, so a reader that cannot read the source cannot read
-what was derived from it. A re-ingest never drops a token the page
-already carries, even when the source has since dropped it; an operator
-removes one by editing the page.
+its source: it takes on the source's own `visibility` tokens, so a reader
+that cannot read the source cannot read what was derived from it. When
+the page already had a `visibility`, it gets the audience both the
+operator and the source allow; when they share none, the page is
+withheld below local reach.
 
 A Markdown or text source gets nothing new: its page is byte for byte
 what it was.
