@@ -202,8 +202,9 @@ export const BRAIN_LESSONS_FILE = "lessons.md";
  * against remote reads, yet the page carries no `visibility:` of its own, so
  * a generic page reader cannot measure it. The shared reach predicate
  * (`isPathReadableAtReach`) therefore withholds these pages at remote reach;
- * their dedicated readers (`brain_context`, the `osb://preferences/active`
- * resource, `brain_pre_compress_pack`) render the digest per reader instead.
+ * their dedicated readers (`brain_context`, `brain_pre_compress_pack`, and
+ * the `osb://preferences/active` and `osb://lessons` resources) render the
+ * digest per reader instead.
  */
 export const BRAIN_COMPILED_DIGEST_RELS: ReadonlyArray<string> = Object.freeze([
   posix.join(BRAIN_ROOT_REL, BRAIN_ACTIVE_FILE),
