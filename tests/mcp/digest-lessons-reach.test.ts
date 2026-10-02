@@ -46,6 +46,7 @@ const SHARED_SLUG = "shared";
 const SHARED_PRINCIPLE = "Prefer short sentences.";
 const DIGEST_URI = "osb://digest/latest";
 const LESSONS_URI = "osb://lessons";
+const SNAPSHOTS_ON = "report_snapshots_enabled: true";
 const RESERVE_LINE = `visibility: [${REMOTE_DENY_VISIBILITY_TOKEN}]`;
 const DAY_MS = 24 * 60 * 60 * 1000;
 /**
@@ -231,6 +232,18 @@ describe("the activity and lessons digests treat a withheld record as absent at 
       "json",
     );
     expect(local).not.toBe(absent);
+  });
+
+  test("a remote digest takes no report snapshot and reports no delta", async () => {
+    const f = fixture(true);
+    atomicWriteFileSync(f.configPath, `${readFileSync(f.configPath, "utf8")}${SNAPSHOTS_ON}\n`);
+    const deltaAt = async (reach: TransportReach): Promise<unknown> => {
+      const result = await server(f, reach).callTool("brain_brief", { view: "digest" });
+      return (result.structuredContent as Record<string, unknown> | undefined)?.["delta"];
+    };
+    expect(await deltaAt(TRANSPORT_REACH.remote)).toBeUndefined();
+    // The local run is the first snapshot: the remote run wrote none.
+    expect(await deltaAt(TRANSPORT_REACH.local)).toMatchObject({ prior_date: null });
   });
 
   test("the osb://digest/latest resource answers identically", () => {

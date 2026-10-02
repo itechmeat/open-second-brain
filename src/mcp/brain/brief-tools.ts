@@ -170,14 +170,15 @@ async function toolBrainDigest(
     empty: result.empty,
     content: result.content,
   };
+  // The snapshot is the vault's own run-over-run record, diffed over the
+  // digest every record feeds, so a reader below local reach neither
+  // takes one nor is shown the delta.
+  if (restricted) return envelope;
   // Snapshot the structured summary, not the rendered string: render
   // a JSON digest for the snapshot regardless of the caller's format
   // so the run-over-run diff keys on data.
   const digestDate = isoDate(effectiveUntil);
-  // The snapshot is the vault's own run-over-run record, so it is always
-  // taken from the digest every record feeds, whoever asked.
-  const snapshotSource =
-    format === "json" && !restricted ? result.content : renderFor("json").content;
+  const snapshotSource = format === "json" ? result.content : renderFor("json").content;
   let parsedSnapshot: unknown = null;
   try {
     parsedSnapshot = JSON.parse(snapshotSource);

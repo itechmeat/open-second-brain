@@ -27,6 +27,7 @@ import { createSafeguard, SafeguardTimeoutError } from "../../src/core/brain/saf
 import { writeSignal } from "../../src/core/brain/signal.ts";
 import { indexVault } from "../../src/core/search/indexer.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { makeConfig } from "../helpers/search-fixtures.ts";
 
@@ -66,7 +67,9 @@ afterEach(() => {
 });
 
 async function makeServer(): Promise<MCPServer> {
-  const server = new MCPServer({ vault, configPath });
+  // Local reach: the digest's report delta is the vault's own record,
+  // shown only to a local reader.
+  const server = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
   await server.handleRequest({
     jsonrpc: JSONRPC_VERSION,
     id: 1,

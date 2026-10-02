@@ -498,9 +498,8 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
     reason:
       "view=digest (brief-tools.ts) is rendered for the caller below local reach - renderDigest " +
       "is handed readableAtContextReach(ctx), so a reserved preference or retired record is " +
-      "absent from its rows and counts - but the report delta (when report snapshots are " +
-      "enabled) is diffed over the whole digest, view=morning lists confirmed preferences " +
-      "without asking the reach rule, and the daily, weekly, monthly, operator and today views " +
+      "absent from its rows and counts, and no report snapshot is taken or delta shown - but " +
+      "view=morning lists confirmed preferences without asking the reach rule, and the daily, weekly, monthly, operator and today views " +
       "count over the whole Brain layer.",
   },
   {
