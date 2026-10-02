@@ -100,7 +100,11 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "answers at the caller's reach: below local reach an authorized note root counts as " +
       "reached only through a page that caller may read (probeRetrievalCorpus threads the " +
       "reach into indexRootCoverage's admit predicate), so a root holding nothing else answers " +
-      "like an empty one.",
+      "like an empty one. Its ranking statistics are a stated residual: the bm25 corpus " +
+      "statistics and the diversity rerank are computed over the shared index, which counts " +
+      "pages the caller may not read (reserved pages, the Brain log), so two vaults that " +
+      "return the same paths remotely can return different scores and rerank reasons - a weak " +
+      "count signal across the whole index, not a page or its content.",
   },
   {
     surface: "brain_file_context",
