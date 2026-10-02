@@ -47,6 +47,8 @@ const SHARED_SLUG = "shared";
 const SHARED_PRINCIPLE = "Prefer short sentences.";
 const LATE_SLUG = "late";
 const LATE_PRINCIPLE = "Prefer late rules.";
+/** A contradicted topic with no preference file on disk. */
+const OPEN_SLUG = "commit-style";
 const DIGEST_URI = "osb://digest/latest";
 const LESSONS_URI = "osb://lessons";
 const SNAPSHOTS_ON = "report_snapshots_enabled: true";
@@ -324,6 +326,24 @@ describe("the activity and lessons digests treat a withheld record as absent at 
     );
     // A local caller still sees the open question.
     expect(await morning(withheld, TRANSPORT_REACH.local)).toContain(`"topic":"${PRIVATE_SLUG}"`);
+  });
+
+  test("an open question on a topic with no preference file reaches a remote morning brief", async () => {
+    const f = fixture(false, RECENT_EVIDENCE_AGE_MS);
+    appendLogEvent(
+      f.vault,
+      {
+        timestamp: new Date().toISOString(),
+        eventType: BRAIN_LOG_EVENT_KIND.reconcile,
+        body: { topic: OPEN_SLUG, domain: "general", positives: "1", negatives: "1" },
+      },
+      { deviceId: "" },
+    );
+    const morning = async (reach: TransportReach): Promise<string> =>
+      JSON.stringify(await server(f, reach).callTool("brain_brief", { view: "morning" }));
+    const remote = await morning(TRANSPORT_REACH.remote);
+    expect(remote).toContain(`"topic":"${OPEN_SLUG}"`);
+    expect(remote).toBe(await morning(TRANSPORT_REACH.local));
   });
 
   test("the osb://digest/latest resource answers identically", () => {

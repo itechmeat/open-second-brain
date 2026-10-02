@@ -238,3 +238,16 @@ export function everyArtifactRefView(...views: ReadonlyArray<ArtifactRefView>): 
       rows.filter((r) => refsOf(r).every(visible)),
   });
 }
+
+/**
+ * The reference view a per-reader render asks: unfiltered when the caller
+ * passed no path predicate, the predicate bound to `vault` otherwise.
+ */
+export function readerRefView(
+  vault: string,
+  readable: ((rel: string) => boolean) | undefined,
+): ArtifactRefView {
+  return readable === undefined
+    ? UNFILTERED_ARTIFACT_REFS
+    : artifactRefView(vault, (rel) => readable(rel));
+}

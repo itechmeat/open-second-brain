@@ -15,6 +15,7 @@
 
 import { posix } from "node:path";
 
+import { type ArtifactRefView, readerRefView } from "./artifact-ref-view.ts";
 import { BRAIN_PREFERENCES_REL } from "./path-constants.ts";
 import { brainDirs } from "./paths.ts";
 import { collectPreferences, resolveOwnerScopeDelivery } from "./preferences-collect.ts";
@@ -126,7 +127,7 @@ function scanRecentLog(
   vault: string,
   now: Date,
   lookbackDays: number,
-  readable: ((rel: string) => boolean) | undefined,
+  refs: ArtifactRefView,
 ): LogScan {
   const openQuestions: ScannedOpenQuestion[] = [];
   const notes: ScannedNote[] = [];
@@ -144,15 +145,11 @@ function scanRecentLog(
         // Auto-resolutions carry a `resolution` field; only open
         // questions (no resolution) are surfaced to the operator.
         if (typeof e.body["resolution"] === "string") continue;
-        // An open question is about the preference its topic names.
+        // An open question is about the preference its topic names. The
+        // subject is asked as an id, so a topic with no preference file on
+        // disk names nothing that could be hidden.
         const subject = reconcileTopicPreferenceId(e);
-        if (
-          readable !== undefined &&
-          subject !== undefined &&
-          !readable(posix.join(BRAIN_PREFERENCES_REL, `${subject}.md`))
-        ) {
-          continue;
-        }
+        if (subject !== undefined && !refs.visible(subject)) continue;
         const topic = typeof e.body["topic"] === "string" ? e.body["topic"] : "";
         const domain = typeof e.body["domain"] === "string" ? e.body["domain"] : "";
         if (topic && !seenTopics.has(topic)) {
@@ -193,7 +190,12 @@ export function buildMorningBrief(vault: string, opts: MorningBriefOptions): Mor
   });
   const topPrefs = ranked.slice(0, Math.max(0, opts.topK));
 
-  const { openQuestions, notes } = scanRecentLog(vault, opts.now, lookbackDays, opts.readable);
+  const { openQuestions, notes } = scanRecentLog(
+    vault,
+    opts.now,
+    lookbackDays,
+    readerRefView(vault, opts.readable),
+  );
 
   // Budget all variable-length entries together so one oversized entry
   // cannot crowd out the rest. Items are tagged by kind so the result
