@@ -39,7 +39,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { join, posix } from "node:path";
 
 import { readerRefView, type ArtifactRefView } from "./artifact-ref-view.ts";
-import { dreamEntryAtReach } from "./log-events-at-reach.ts";
+import { logEntriesAtReach, logEntryAtReach } from "./log-events-at-reach.ts";
 import { buildBacklinkIndex, type BacklinkIndex } from "./backlinks.ts";
 import { computeAgentSummary, type AgentSummaryEntry } from "./digest-agent-summary.ts";
 import { findMergeCandidates } from "./merge-candidates.ts";
@@ -56,7 +56,7 @@ import {
   resolveOwnerScopeDelivery,
 } from "./preferences-collect.ts";
 import { isPreferenceVisible } from "./owner-scoped-facts.ts";
-import { logEntryArtifactRefs, type BrainLogEntry } from "./log.ts";
+import type { BrainLogEntry } from "./log.ts";
 import { listLogDates, readLogDay } from "./log-jsonl.ts";
 import {
   BRAIN_APPLY_RESULT,
@@ -517,7 +517,7 @@ function collectDigestData(
   const idToPrinciple = new Map<string, string>();
   for (const { pref } of preferences) idToPrinciple.set(pref.id, pref.principle);
   for (const { ret } of retiredAll) idToPrinciple.set(ret.id, ret.principle);
-  const logEntries = entriesShown(refs, readLogsInWindow(vault, since, until));
+  const logEntries = logEntriesAtReach(refs, readLogsInWindow(vault, since, until));
   // A shift or contradiction line is one string naming its preference
   // inside other text, so the event-level filter above cannot resolve it;
   // the parsed id is asked on its own.
@@ -565,7 +565,7 @@ function collectDigestData(
     vault,
     since,
     until,
-    refs.filtersNothing ? undefined : (e) => entryShown(refs, e) !== null,
+    refs.filtersNothing ? undefined : (e) => logEntryAtReach(refs, e) !== null,
   );
 
   // Most-applied (Nd) — mirrors the section in `Brain/active.md`.
@@ -850,7 +850,7 @@ function findFirstAppliedArtifact(
 ): string | null {
   for (const date of listLogDates(vault)) {
     const { entries } = readLogDay(vault, date);
-    for (const e of entriesShown(refs, entries)) {
+    for (const e of logEntriesAtReach(refs, entries)) {
       if (e.eventType !== BRAIN_LOG_EVENT_KIND.applyEvidence) continue;
       if (e.body["result"] !== BRAIN_APPLY_RESULT.applied) continue;
       const prefPayload = e.body["preference"];
@@ -861,26 +861,6 @@ function findFirstAppliedArtifact(
     }
   }
   return null;
-}
-
-/**
- * A log entry as the reader behind `refs` may see it, or `null`: a dream
- * shared with a withheld record keeps its readable transitions only
- * ({@link dreamEntryAtReach}), and every entry must then name nothing the
- * reader cannot see. Dropping the whole shared dream instead was an
- * oracle: the agent summary's count fell when a reserved preference
- * shared a dream.
- */
-function entryShown(refs: ArtifactRefView, entry: BrainLogEntry): BrainLogEntry | null {
-  const shown = dreamEntryAtReach(refs, entry);
-  return shown !== null && refs.row(...logEntryArtifactRefs(shown)) ? shown : null;
-}
-
-function entriesShown(
-  refs: ArtifactRefView,
-  entries: ReadonlyArray<BrainLogEntry>,
-): ReadonlyArray<BrainLogEntry> {
-  return refs.filtersNothing ? entries : entries.flatMap((e) => entryShown(refs, e) ?? []);
 }
 
 function refersTo(payload: string, prefId: string): boolean {

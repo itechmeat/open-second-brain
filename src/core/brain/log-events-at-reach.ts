@@ -26,7 +26,7 @@
 
 import type { ArtifactRef, ArtifactRefView } from "./artifact-ref-view.ts";
 import { PREF_ID_PREFIX, RETIRED_ID_PREFIX } from "./dream-plan.ts";
-import type { BrainLogEntry, BrainLogEntryPayload } from "./log.ts";
+import { logEntryArtifactRefs, type BrainLogEntry, type BrainLogEntryPayload } from "./log.ts";
 import { isBrainLogRel } from "./paths.ts";
 import { extractId } from "./temporal/period-common.ts";
 import type { DreamSummarySlots, TemporalEvent } from "./temporal/types.ts";
@@ -145,4 +145,31 @@ export function dreamEntryAtReach(
     if (links !== undefined) trimmedBody[key] = links;
   }
   return Object.freeze({ ...entry, body: Object.freeze(trimmedBody) as BrainLogEntryPayload });
+}
+
+/**
+ * A log entry as a reader behind `refs` may see it, or `null`: a dream is
+ * trimmed to its readable transitions ({@link dreamEntryAtReach}), and the
+ * entry must then name nothing the reader cannot read, every id-shaped
+ * reference judged under each spelling its record answers to
+ * ({@link recordRefs}). Without the spellings, `[[pref-x|rule]]` named no
+ * page once `ret-x` was the reserved page on disk, and passed.
+ */
+export function logEntryAtReach(refs: ArtifactRefView, entry: BrainLogEntry): BrainLogEntry | null {
+  if (refs.filtersNothing) return entry;
+  const shown = dreamEntryAtReach(refs, entry);
+  if (shown === null) return null;
+  const named = logEntryArtifactRefs(shown).flatMap((ref) =>
+    ref === undefined ? [] : [ref, ...recordRefs(extractId(ref))],
+  );
+  return refs.row(...named) ? shown : null;
+}
+
+/** The entries a reader behind `refs` may see, each in the form it may see it, in order. */
+export function logEntriesAtReach(
+  refs: ArtifactRefView,
+  entries: ReadonlyArray<BrainLogEntry>,
+): ReadonlyArray<BrainLogEntry> {
+  if (refs.filtersNothing) return entries;
+  return entries.flatMap((entry) => logEntryAtReach(refs, entry) ?? []);
 }

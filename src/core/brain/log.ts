@@ -418,6 +418,15 @@ function renderFileHeader(date: string): string {
   return lines.join("\n") + "\n";
 }
 
+/**
+ * One parsed entry rendered as the markdown block {@link appendLogEvent}
+ * writes for it, so a reader that drops or trims entries can serve the
+ * rest in the shape the shard would have had without them.
+ */
+export function renderLogEntryBlock(entry: BrainLogEntry): string {
+  return renderEventBlock(entry, parseIsoUtc(entry.timestamp).hms);
+}
+
 function renderEventBlock(event: BrainLogEntry, hms: string): string {
   const lines: string[] = [`## ${hms}Z — ${event.eventType}`];
   // Stable iteration order: keys in the order they appear in the

@@ -40,8 +40,9 @@ import { readGeneratedAt } from "./active.ts";
 import { readerRefView } from "./artifact-ref-view.ts";
 import { decayWeight } from "./continuity/usage-signal.ts";
 import { listDeadEnds, type DeadEndEntry } from "./dead-ends.ts";
+import { logEntryAtReach } from "./log-events-at-reach.ts";
 import { listLogDates, readLogDay } from "./log-jsonl.ts";
-import { logEntryArtifactRefs, type BrainLogEntry } from "./log.ts";
+import type { BrainLogEntry } from "./log.ts";
 import { brainDirs, brainDirsForWrite, brainLessonsPath, vaultRelative } from "./paths.ts";
 import { parsePreference } from "./preference.ts";
 import {
@@ -435,7 +436,7 @@ function renderLessons(vault: string, opts: RenderLessonsOptions): LessonsRender
       limit,
       ...(refs.filtersNothing
         ? {}
-        : { keepEvent: (e: BrainLogEntry) => refs.row(...logEntryArtifactRefs(e)) }),
+        : { keepEvent: (e: BrainLogEntry) => logEntryAtReach(refs, e) !== null }),
     },
   );
 

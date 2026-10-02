@@ -70,8 +70,7 @@ import { loadGuardrailsConfigSafe } from "../../core/brain/policy.ts";
 import { normalizeAgentScope } from "../../core/graph/agent-scope.ts";
 import { isPreferenceVisible } from "../../core/brain/owner-scoped-facts.ts";
 import { reachView } from "../../core/brain/reach-view.ts";
-import { recordRefs } from "../../core/brain/log-events-at-reach.ts";
-import { logEntryArtifactRefs } from "../../core/brain/log.ts";
+import { logEntriesAtReach, recordRefs } from "../../core/brain/log-events-at-reach.ts";
 
 /** Accepted `at` forms, named in every refusal so the exit is actionable. */
 const AS_OF_FORMS = "an ISO-8601 instant or YYYY-MM-DD date";
@@ -194,6 +193,12 @@ async function toolBrainQuery(
   try {
     if (preference !== null) {
       try {
+        // Asked before the page is parsed: a withheld page that fails to
+        // parse would otherwise answer with the parser's error, which
+        // names the page an absent id never could.
+        if (!queryView.row(...recordRefs(preference))) {
+          throw new BrainNotFoundError(preference);
+        }
         const res = queryByPreference(ctx.vault, preference);
         // Fail closed: an owner-private fact outside the requested scope is
         // indistinguishable from absent, so it cannot leak across owners.
@@ -245,7 +250,7 @@ async function toolBrainQuery(
       // tells the caller how many rows it was not shown - a count oracle
       // reached through a second tool rather than this one.
       const signals = queryView.keep(res.signals, (sig) => [sig.id]);
-      const logEvents = queryView.keep(res.all_log_events, (e) => logEntryArtifactRefs(e));
+      const logEvents = logEntriesAtReach(queryView, res.all_log_events);
       const resultCount = signals.length + logEvents.length;
       emitQueryTelemetry(resultCount > 0 ? "ok" : "empty", resultCount);
       const topicPrefOwner = res.preference?.owner;
@@ -264,7 +269,7 @@ async function toolBrainQuery(
 
     // since
     const res = queryByLogSince(ctx.vault, since!);
-    const events = queryView.keep(res, (e) => logEntryArtifactRefs(e));
+    const events = logEntriesAtReach(queryView, res);
     emitQueryTelemetry(events.length > 0 ? "ok" : "empty", events.length);
     return {
       mode: "since",

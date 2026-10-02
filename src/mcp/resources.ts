@@ -88,9 +88,9 @@ import {
   resolvedTransportReach,
   type TransportReach,
 } from "../core/graph/transport-reach.ts";
-import { extractWikilinkRichBodies } from "../core/brain/link-graph/parse-wikilink.ts";
 import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
-import { logEntryArtifactRefs } from "../core/brain/log.ts";
+import { logEntriesAtReach, recordRefs } from "../core/brain/log-events-at-reach.ts";
+import { parseLogDayFile, renderLogEntryBlock, type ParseLogDayResult } from "../core/brain/log.ts";
 import type { BrainPreference, BrainRetired } from "../core/brain/types.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
 
@@ -438,6 +438,10 @@ function readPreference(
   }
   const normalized =
     rawId.startsWith("pref-") || rawId.startsWith("ret-") ? rawId : `pref-${rawId}`;
+  // Asked before the page is parsed: a withheld page that fails to parse
+  // would otherwise answer with the parser's error, which names the page
+  // an absent id never could.
+  if (!view.refs.row(...recordRefs(normalized))) throw notFound(normalized);
   let result;
   try {
     result = queryByPreference(ctx.vault, normalized);
@@ -508,7 +512,7 @@ function readTopic(
   const scoped = Object.freeze({
     ...result,
     signals: view.refs.keep(result.signals, (s) => [s.id]),
-    all_log_events: view.refs.keep(result.all_log_events, (e) => logEntryArtifactRefs(e)),
+    all_log_events: logEntriesAtReach(view.refs, result.all_log_events),
   });
   return {
     uri,
@@ -533,7 +537,9 @@ function readLog(
     throw new MCPError(INTERNAL_ERROR, `no log file for date '${rawDate}'`);
   }
   const shard = (f: { path: string }): string =>
-    withVisibleLogEvents(readFileSync(f.path, "utf8"), view.refs);
+    shardAtReach(readFileSync(f.path, "utf8"), view.refs, () =>
+      parseLogDayFile(ctx.vault, rawDate, f.path),
+    );
   // The single-shard read stays verbatim (trailing newline included), so
   // a vault with the gate off is byte-identical to the pre-filter shape.
   if (files.length === 1) return { uri, mimeType: MIME_MARKDOWN, text: shard(files[0]!) };
@@ -543,40 +549,36 @@ function readLog(
 /** Start of one rendered log event: `## <time> — <kind>`. */
 const LOG_EVENT_HEADING = "\n## ";
 
+/** The blank line {@link appendLogEvent} keeps between a shard's blocks. */
+const LOG_BLOCK_SEPARATOR = "\n\n";
+
 /**
- * Drop the rendered log events naming an artifact this caller may not
- * see, keeping the shard's frontmatter and day heading.
+ * One shard as a caller behind `view` may read it: the frontmatter and
+ * day heading verbatim, then the entries the Brain log event rule keeps
+ * ({@link logEntriesAtReach}), each rendered as the appender writes it.
+ * A shared dream keeps its readable transitions, and a retired record is
+ * judged under each of its spellings, so the shard reads as it would in a
+ * vault that never logged the withheld record.
  *
  * A shard is shared by construction - it is named by date and carries no
- * `owner:`, which is why `owner-scope-view.ts` leaves `Brain/log/` out
- * of its id-resolution directories. Its CONTENTS are not: every
- * `apply-evidence`, `promote` and `retire` event names the preference it
- * was about, by id and by vault-relative path, and `brain_event_trace`
- * already filters exactly those rows. Serving the same events as raw
- * markdown was the tool's boundary re-opened one protocol verb along.
+ * `owner:` - but its CONTENTS name preferences by id and by path, which
+ * is why the events are filtered rather than the page.
  *
- * The split is structural - the `## ` heading the log renderer emits per
- * event, and the wikilink / `.md` path tokens inside the section - not a
- * match on any event's prose.
+ * A block the parser cannot read is not served below local reach: what
+ * it names cannot be judged, so it fails closed.
  */
-function withVisibleLogEvents(markdown: string, view: ArtifactRefView): string {
+function shardAtReach(
+  markdown: string,
+  view: ArtifactRefView,
+  parse: () => ParseLogDayResult,
+): string {
   if (view.filtersNothing) return markdown;
-  const parts = markdown.split(LOG_EVENT_HEADING);
-  const head = parts[0]!;
-  const kept = parts
-    .slice(1)
-    .filter((section) => view.row(...logSectionRefs(section)))
-    .map((section) => LOG_EVENT_HEADING + section);
-  return head + kept.join("");
-}
-
-/** Every artifact one rendered log section names, id- or path-shaped. */
-function logSectionRefs(section: string): ReadonlyArray<string> {
-  const refs = [...extractWikilinkRichBodies(section)];
-  for (const token of section.split(/\s+/)) {
-    if (token.endsWith(".md")) refs.push(token);
-  }
-  return refs;
+  const firstEvent = markdown.indexOf(LOG_EVENT_HEADING);
+  const head = firstEvent < 0 ? markdown : markdown.slice(0, firstEvent);
+  const blocks = logEntriesAtReach(view, parse().entries).map((e) =>
+    renderLogEntryBlock(e).trimEnd(),
+  );
+  return [head.trimEnd(), ...blocks].join(LOG_BLOCK_SEPARATOR) + "\n";
 }
 
 function readBacklinks(
@@ -602,7 +604,10 @@ function readBacklinks(
   // refusal here would be the one response shape that proves the page
   // exists. The echoed target is the caller's own argument.
   const index = buildBacklinkIndex(ctx.vault, view.ownerScope);
-  const refs = view.refs.visible(target)
+  // Every spelling the target answers to across its retirement: a
+  // retired reserved record is otherwise asked as `pref-x`, which names
+  // no page once `ret-x` is the one on disk.
+  const refs = view.refs.row(...recordRefs(target))
     ? (index.get(target) ?? []).filter((ref) => view.refs.visible(ref.source))
     : [];
   return {
