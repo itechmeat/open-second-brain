@@ -29,6 +29,7 @@ import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts";
 import { indexVault, resolveSearchConfig } from "../../src/core/search/index.ts";
+import { isPathReadableAtReach } from "../../src/core/search/result-filters.ts";
 import { MCPServer } from "../../src/mcp/server.ts";
 
 const MARKER = "zzderiveddigestprobezz";
@@ -136,4 +137,24 @@ describe("the indexed active digest and remote search", () => {
     expect(await search(f, TRANSPORT_REACH.local)).toContain(ACTIVE_PATH);
     expect(await search(f, TRANSPORT_REACH.remote)).not.toContain(ACTIVE_PATH);
   });
+});
+
+describe("the compiled digest pages in any spelling the filesystem resolves to them", () => {
+  // The leading-slash row is re-rooted inside the vault by a join on every
+  // OS; the case and trailing-dot rows name the same file on a
+  // case-insensitive filesystem.
+  for (const spelling of [
+    "/Brain/active.md",
+    "brain/active.md",
+    "BRAIN/Lessons.md",
+    "Brain/active.md.",
+  ]) {
+    test(`${spelling} is withheld at remote reach and readable at local reach`, async () => {
+      const f = await fixture(false);
+      expect(isPathReadableAtReach(f.vault, spelling, TRANSPORT_REACH.remote, new Map())).toBe(
+        false,
+      );
+      expect(isPathReadableAtReach(f.vault, spelling, TRANSPORT_REACH.local, new Map())).toBe(true);
+    });
+  }
 });

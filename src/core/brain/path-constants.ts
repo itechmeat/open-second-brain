@@ -284,6 +284,20 @@ export function brainRootSegments(relPath: string): ReadonlyArray<string> | null
   return segments.slice(1);
 }
 
+/**
+ * Does `relPath` name a compiled digest page ({@link BRAIN_COMPILED_DIGEST_RELS})
+ * in any spelling the filesystem resolves to it? Read with the same
+ * normalization and case-folding as {@link brainRootSegments}, so a leading
+ * separator, a backslash, dot segments, a case variant or a trailing dot cannot
+ * walk past a check that knew one spelling only.
+ */
+export function isCompiledDigestRel(relPath: string): boolean {
+  const tail = brainRootSegments(relPath);
+  if (tail === null || tail.length !== 1) return false;
+  const name = foldSegment(tail[0]!);
+  return [BRAIN_ACTIVE_FILE, BRAIN_LESSONS_FILE].some((file) => foldSegment(file) === name);
+}
+
 /** Does `relPath` land at or under `Brain/`? See {@link brainRootSegments}. */
 export function isUnderBrainRoot(relPath: string): boolean {
   return brainRootSegments(relPath) !== null;

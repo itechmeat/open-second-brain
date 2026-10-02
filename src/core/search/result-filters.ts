@@ -6,11 +6,11 @@
  */
 
 import { statSync } from "node:fs";
-import { join, posix } from "node:path";
+import { join } from "node:path";
 
 import { parseFrontmatterWithNotices } from "../vault.ts";
 import { pathIsInside } from "../path-safety.ts";
-import { BRAIN_COMPILED_DIGEST_RELS, BRAIN_STATE_REL } from "../brain/paths.ts";
+import { BRAIN_STATE_REL, isCompiledDigestRel } from "../brain/paths.ts";
 import { DEGRADATION_CODE } from "../integrity/degradation.ts";
 import type { FrontmatterMap } from "../types.ts";
 import {
@@ -380,15 +380,10 @@ export function isPathReadableAtReach(
   indexedTags: ReadonlyArray<string> = [],
 ): boolean {
   if (!pathIsInside(join(vault, path), vault)) return false;
-  if (reach !== TRANSPORT_REACH.local && isCompiledDigestPath(path)) return false;
+  if (reach !== TRANSPORT_REACH.local && isCompiledDigestRel(path)) return false;
   const entry = readCachedFrontmatterEntry(frontmatterCache, vault, path);
   const tags = entry.unreadable ? UNMEASURABLE_VISIBILITY : pageVisibility(entry.meta);
   return isRemotelyReadable(tags, reach) && isRemotelyReadable(indexedTags, reach);
-}
-
-/** Is this vault-relative path (either separator) a compiled digest page? */
-function isCompiledDigestPath(path: string): boolean {
-  return BRAIN_COMPILED_DIGEST_RELS.includes(posix.normalize(path.replaceAll("\\", "/")));
 }
 
 /**
