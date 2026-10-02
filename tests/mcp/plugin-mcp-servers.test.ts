@@ -28,16 +28,22 @@ describe("Claude Code plugin MCP servers", () => {
     ]);
   });
 
+  // Both registrations name the harness that launches them, so the
+  // server can match `Brain/standing-rules/harness/claude-code.md`
+  // without trusting anything a caller says about itself.
   test("full server runs o2b mcp from the plugin root without alwaysLoad", () => {
     const f = servers["open-second-brain"]!;
-    expect(f).toEqual({ command: "${CLAUDE_PLUGIN_ROOT}/scripts/o2b", args: ["mcp"] });
+    expect(f).toEqual({
+      command: "${CLAUDE_PLUGIN_ROOT}/scripts/o2b",
+      args: ["mcp", "--harness", "claude-code"],
+    });
     expect(f.alwaysLoad).toBeUndefined();
   });
 
-  test("writer server passes --scope writer and alwaysLoad: true", () => {
+  test("writer server passes --scope writer, the harness and alwaysLoad: true", () => {
     expect(servers["open-second-brain-writer"]).toEqual({
       command: "${CLAUDE_PLUGIN_ROOT}/scripts/o2b",
-      args: ["mcp", "--scope", "writer"],
+      args: ["mcp", "--scope", "writer", "--harness", "claude-code"],
       alwaysLoad: true,
     });
   });
