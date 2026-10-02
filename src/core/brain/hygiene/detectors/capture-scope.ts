@@ -22,7 +22,9 @@
  * excerpt is no longer a capture. A cited source the filesystem refuses to
  * answer for (permission denied, a symlink loop) is not provably url-only,
  * so it counts as backing: one unreadable citation never aborts the sweep
- * and never hides the other pages' findings.
+ * and never hides the other pages' findings. A cited file the caller may not
+ * read at its reach counts as url-only, the answer an absent file gives, so
+ * a finding never tells a narrower caller that a hidden page exists.
  *
  * Cited sources are read with the shared source-link readers: the page's
  * `source_path` plus the targets under its `## Sources` heading.
@@ -49,10 +51,10 @@ import {
   CAPTURE_SCOPE,
   CAPTURE_SCOPE_KEY,
   EXCERPT_HASH_KEY,
-  classifyCaptureScope,
   excerptDigest,
   isCaptureScope,
   readExcerptSection,
+  resolveCaptureScope,
   type CaptureScope,
 } from "../../provenance/capture-scope.ts";
 import { SourceTrustError } from "../../intake/source-trust.ts";
@@ -127,23 +129,31 @@ function excerptIntact(meta: FrontmatterMap, body: string): boolean {
   return excerpt !== null && excerptDigest(excerpt) === digest;
 }
 
-/** Is this cited source url-only now? A refused stat is not proof that it is. */
-function isUrlOnly(vault: string, source: string): boolean {
+/** May the caller read this vault-relative file? Always, without a predicate. */
+type Readable = ((rel: string) => boolean) | undefined;
+
+/**
+ * Is this cited source url-only now, as the caller may know it? A refused
+ * stat is not proof that it is; a backing file the caller may not read is.
+ */
+function isUrlOnly(vault: string, source: string, readable: Readable): boolean {
   try {
-    return classifyCaptureScope(vault, source) === CAPTURE_SCOPE.urlOnly;
+    const { scope, backing } = resolveCaptureScope(vault, source);
+    if (scope === CAPTURE_SCOPE.urlOnly) return true;
+    return backing !== null && readable !== undefined && !readable(backing);
   } catch (err) {
     if (err instanceof SourceTrustError) return false;
     throw err;
   }
 }
 
-function inspectPage(vault: string, page: string): HygieneFinding | null {
+function inspectPage(vault: string, page: string, readable: Readable): HygieneFinding | null {
   const [meta, body] = parseFrontmatter(join(vault, page));
   if (!isRetrievableKnowledge(meta)) return null;
 
   const sources = citedSources(meta, body);
   if (sources.length === 0) return null;
-  const allUrlOnly = sources.every((source) => isUrlOnly(vault, source));
+  const allUrlOnly = sources.every((source) => isUrlOnly(vault, source, readable));
   if (!allUrlOnly) return null;
 
   const stamped = stampedScope(meta);
@@ -161,7 +171,14 @@ function inspectPage(vault: string, page: string): HygieneFinding | null {
   });
 }
 
-export function detectCaptureScope(vault: string): ReadonlyArray<HygieneFinding> {
+/**
+ * Every finding in the vault. `readable` is the caller's reach (see
+ * `HygieneDetectorContext.readable`); a local caller passes nothing.
+ */
+export function detectCaptureScope(
+  vault: string,
+  readable?: (rel: string) => boolean,
+): ReadonlyArray<HygieneFinding> {
   const pages: string[] = [];
   for (const dir of INSPECTED_DIRS) {
     const abs = join(vault, dir);
@@ -170,7 +187,7 @@ export function detectCaptureScope(vault: string): ReadonlyArray<HygieneFinding>
   }
   const findings: HygieneFinding[] = [];
   for (const page of pages.toSorted()) {
-    const finding = inspectPage(vault, page);
+    const finding = inspectPage(vault, page, readable);
     if (finding !== null) findings.push(finding);
   }
   return Object.freeze(findings);

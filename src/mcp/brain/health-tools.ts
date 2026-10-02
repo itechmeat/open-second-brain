@@ -25,6 +25,7 @@ import type { DoctorIssue } from "../../core/brain/types.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceBool, coerceFormat } from "../coerce.ts";
 import { vaultRelativeSafe } from "./shared.ts";
+import { readableAtContextReach } from "./reach-readable.ts";
 
 /**
  * One reported issue, as an MCP caller sees it.
@@ -295,10 +296,11 @@ async function toolBrainStatus(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const format = coerceFormat(args);
-  const snapshot = await buildOperatorSnapshot(
-    ctx.vault,
-    ctx.configPath !== null ? { configPath: ctx.configPath } : {},
-  );
+  const snapshot = await buildOperatorSnapshot(ctx.vault, {
+    ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
+    // A cited page the caller may not read at its reach answers as an absent one.
+    readable: readableAtContextReach(ctx),
+  });
   return { format, ...snapshot };
 }
 

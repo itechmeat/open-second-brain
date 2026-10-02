@@ -98,6 +98,12 @@ export interface BuildOperatorSnapshotOptions {
   readonly configPath?: string;
   /** Wall clock for stale/review scans. Defaults to `new Date()`. */
   readonly now?: Date;
+  /**
+   * May the caller read the vault file at this vault-relative path? Handed
+   * to the hygiene scan (see `HygieneDetectorContext.readable`); a local
+   * caller passes nothing.
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 /**
@@ -161,7 +167,10 @@ export async function buildOperatorSnapshot(
 
   // --- Hygiene ---
   try {
-    const hy = runHygieneScan(vault, { now });
+    const hy = runHygieneScan(vault, {
+      now,
+      ...(opts.readable !== undefined ? { readable: opts.readable } : {}),
+    });
     if (hy.findings.length > 0) {
       problem("hygiene-findings", `${hy.findings.length} hygiene finding(s)`);
     }

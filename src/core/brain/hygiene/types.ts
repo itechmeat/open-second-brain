@@ -82,6 +82,13 @@ export interface HygieneFinding {
 export interface HygieneDetectorContext {
   /** Injected clock - detectors never read the wall clock themselves. */
   readonly now: Date;
+  /**
+   * May the caller read the vault file at this vault-relative path? Supplied
+   * by a surface that answers at a reach narrower than the vault; a local
+   * caller passes nothing. A detector that derives an answer from another
+   * file's presence treats a refused file as absent.
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 export type HygieneDetector = (

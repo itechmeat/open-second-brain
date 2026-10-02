@@ -51,6 +51,7 @@ import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { enforceCountGuard, readCountGuardArgs, vaultRelativeSafe } from "./shared.ts";
+import { readableAtContextReach } from "./reach-readable.ts";
 
 function coerceStringArray(args: Record<string, unknown>, key: string): string[] | undefined {
   const raw = args[key];
@@ -70,13 +71,16 @@ function resolverCmdFromConfig(vault: string): string | undefined {
 }
 
 function scanWithResolver(
-  vault: string,
+  ctx: ServerContext,
   detectors: HygieneDetectorId[] | undefined,
   now: Date,
 ): HygieneScanReport {
+  const vault = ctx.vault;
   const report = runHygieneScan(vault, {
     ...(detectors !== undefined && detectors.length > 0 ? { detectors } : {}),
     now,
+    // A cited page the caller may not read at its reach answers as an absent one.
+    readable: readableAtContextReach(ctx),
   });
   const resolverCmd = resolverCmdFromConfig(vault);
   if (resolverCmd === undefined) return report;
@@ -230,7 +234,7 @@ async function toolBrainHygiene(
       `'detectors' entries must be: ${HYGIENE_DETECTOR_IDS.join(", ")}`,
     );
   }
-  const scanned = scanWithResolver(ctx.vault, detectors, now);
+  const scanned = scanWithResolver(ctx, detectors, now);
 
   // The owner boundary is applied to the REPORT, once, before EITHER mode
   // reads it. `findings[].targets` are artifact ids (or absolute paths
