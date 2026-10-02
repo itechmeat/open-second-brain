@@ -29,6 +29,7 @@ import { scanOpenLoops, type OpenLoopScan } from "./open-loops.ts";
 import { isoSecond } from "./time.ts";
 import { buildActivityTimeline, type ActivityTimeline } from "./temporal/activity-timeline.ts";
 import { buildTimelineIndex } from "./temporal/build-index.ts";
+import type { TemporalEvent, TimelineIndex } from "./temporal/types.ts";
 
 /** Options accepted by {@link buildTodayDashboard}. */
 export interface TodayDashboardOptions {
@@ -38,6 +39,13 @@ export interface TodayDashboardOptions {
   readonly activityLookbackDays?: number;
   /** Max recent-activity entries to keep, newest first. Default 20. */
   readonly activityLimit?: number;
+  /**
+   * The form of one log event the caller may see, or `null` when it may
+   * not see it at all. Applied to the recent-activity events before the
+   * limit and the totals, so a withheld event moves neither. Omitted, every
+   * event is shown as logged (the operator's own shell).
+   */
+  readonly eventAtReach?: (ev: TemporalEvent) => TemporalEvent | null;
 }
 
 /** One obligation row surfaced on the dashboard. */
@@ -176,10 +184,44 @@ function buildRecentActivitySection(
   now: Date,
   lookbackDays: number,
   limit: number,
+  eventAtReach: TodayDashboardOptions["eventAtReach"],
 ): ActivityTimeline {
   const since = isoSecond(new Date(now.getTime() - lookbackDays * DAY_MS));
   const index = buildTimelineIndex(vault, { now, since });
-  return buildActivityTimeline(index, { now, since, limit });
+  const shown = eventAtReach === undefined ? index : indexAtReach(index, eventAtReach);
+  return buildActivityTimeline(shown, { now, since, limit });
+}
+
+/**
+ * The index holding only the events the caller may see, each in its
+ * visible form, regrouped so every lookup the timeline builder may take
+ * agrees with the event list.
+ */
+function indexAtReach(
+  index: TimelineIndex,
+  eventAtReach: (ev: TemporalEvent) => TemporalEvent | null,
+): TimelineIndex {
+  const events = index.events.flatMap((ev) => eventAtReach(ev) ?? []);
+  const group = <K>(
+    key: (ev: TemporalEvent) => K | undefined,
+  ): ReadonlyMap<K, ReadonlyArray<TemporalEvent>> => {
+    const out = new Map<K, TemporalEvent[]>();
+    for (const ev of events) {
+      const k = key(ev);
+      if (k === undefined) continue;
+      const bucket = out.get(k);
+      if (bucket === undefined) out.set(k, [ev]);
+      else bucket.push(ev);
+    }
+    return out;
+  };
+  return Object.freeze({
+    events: Object.freeze(events),
+    eventsByKind: group((ev) => ev.kind),
+    eventsByPrefId: group((ev) => ev.prefId),
+    eventsByTopic: group((ev) => ev.topic),
+    window: index.window,
+  });
 }
 
 function computeTotals(
@@ -289,7 +331,7 @@ export function buildTodayDashboard(vault: string, opts: TodayDashboardOptions):
   const recentActivity = computeSection(
     "recentActivity",
     errors,
-    () => buildRecentActivitySection(vault, opts.now, lookbackDays, limit),
+    () => buildRecentActivitySection(vault, opts.now, lookbackDays, limit, opts.eventAtReach),
     EMPTY_ACTIVITY_TIMELINE,
   );
   const totals = computeSection(

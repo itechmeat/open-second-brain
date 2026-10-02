@@ -216,6 +216,15 @@ const NOTE_CONTENT_PRODUCERS: ReadonlyArray<ProducerRule> = Object.freeze([
     specifierIncludes: "/brain/link-graph/unlinked-mentions.ts",
     identifiers: ["findUnlinkedMentions"],
   },
+  // The concept cluster hands back the backlink index's linkers and the
+  // unlinked mentions through a `src/core/` helper, so the analytics
+  // dispatcher that serves it was outside the population while its
+  // timeline, belief-evolution and concept-synthesis views named reserved
+  // records.
+  {
+    specifierIncludes: "/brain/link-graph/concept-cluster.ts",
+    identifiers: ["buildConceptCluster"],
+  },
   { specifierIncludes: "/brain/portability/sources.ts", identifiers: ["aggregateSources"] },
   { specifierIncludes: "/brain/query.ts", identifiers: ["queryByPreference", "queryByTopic"] },
   { specifierIncludes: "/brain/pref-audit.ts", identifiers: ["readPrefAudit"] },
@@ -470,8 +479,12 @@ function reasonProblems(entries: ReadonlyArray<VisibilitySurfaceEntry>): {
  *
  * 54 before the vocabulary gained the two compiled digests. The one new
  * name is `brain_brief`, whose digest view renders preference records.
+ *
+ * 55 before the vocabulary gained `buildConceptCluster`. The one new name
+ * is `brain_analytics`, whose timeline, belief-evolution and
+ * concept-synthesis views render log events and backlinks.
  */
-const MCP_TOOL_POPULATION_SIZE = 55;
+const MCP_TOOL_POPULATION_SIZE = 56;
 /** Measured: MCP resources + templates. */
 const MCP_RESOURCE_POPULATION_SIZE = 8;
 /** Measured: hand-enumerated CLI verb mirrors. */

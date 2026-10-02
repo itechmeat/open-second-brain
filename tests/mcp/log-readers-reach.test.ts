@@ -256,3 +256,102 @@ describe("brain_search does not serve the daily log below local reach", () => {
     expect(searchPaths(row.local).some((p) => p.startsWith("Brain/log/"))).toBe(true);
   });
 });
+
+/** Every row below: the remote answers agree, and the local control names the record. */
+async function expectAnswersAsAbsent(
+  tool: string,
+  args: (f: Fixture) => Record<string, unknown>,
+  localNames: ReadonlyArray<string>,
+  prepare?: (f: Fixture) => Promise<void>,
+): Promise<{ withheld: string; local: string }> {
+  const row = await abRow(tool, args, prepare);
+  expect(row.withheld).toBe(row.absent);
+  // A row whose own argument names the record echoes it as its target.
+  const named = JSON.stringify(args({ date: "" } as Fixture));
+  for (const slug of [PRIVATE_SLUG, RETIRED_SLUG]) {
+    if (!named.includes(slug)) expect(row.withheld).not.toContain(slug);
+  }
+  for (const name of localNames) expect(row.local).toContain(name);
+  return row;
+}
+
+describe("brain_analytics answers at the caller's reach", () => {
+  test("view=timeline with no filter", async () => {
+    const row = await expectAnswersAsAbsent("brain_analytics", () => ({ view: "timeline" }), [
+      `pref-${PRIVATE_SLUG}`,
+      `ret-${RETIRED_SLUG}`,
+      `Notes/${PRIVATE_SLUG}-violated`,
+    ]);
+    // Not vacuous: the public preference's evidence and the shared dream are listed.
+    expect(row.withheld).toContain(`Notes/${SHARED_SLUG}-applied`);
+    expect(row.withheld).toContain(BRAIN_LOG_EVENT_KIND.dream);
+  });
+
+  test("view=timeline since a date", async () => {
+    await expectAnswersAsAbsent("brain_analytics", (f) => ({ view: "timeline", since: f.date }), [
+      `pref-${PRIVATE_SLUG}`,
+    ]);
+  });
+
+  test("view=timeline for the reserved preference's own id", async () => {
+    await expectAnswersAsAbsent(
+      "brain_analytics",
+      () => ({ view: "timeline", pref_id: `pref-${PRIVATE_SLUG}` }),
+      [`Notes/${PRIVATE_SLUG}-applied`],
+    );
+  });
+
+  for (const args of [
+    { view: "belief_evolution", pref_id: `pref-${PRIVATE_SLUG}` },
+    { view: "belief_evolution", topic: PRIVATE_SLUG },
+  ]) {
+    test(`view=belief_evolution ${JSON.stringify(args)}`, async () => {
+      await expectAnswersAsAbsent("brain_analytics", () => args, [`Notes/${PRIVATE_SLUG}-`]);
+    });
+  }
+
+  test("view=belief_evolution for the retired record under its pref- spelling", async () => {
+    await expectAnswersAsAbsent(
+      "brain_analytics",
+      () => ({ view: "belief_evolution", pref_id: `pref-${RETIRED_SLUG}` }),
+      [`[[pref-${RETIRED_SLUG}|rule]]`],
+    );
+  });
+
+  test("view=belief_evolution for the public preference keeps its rows", async () => {
+    const row = await expectAnswersAsAbsent(
+      "brain_analytics",
+      () => ({ view: "belief_evolution", pref_id: `pref-${SHARED_SLUG}` }),
+      [`Notes/${SHARED_SLUG}-applied`],
+    );
+    expect(row.withheld).toContain(`Notes/${SHARED_SLUG}-applied`);
+  });
+
+  for (const id of [`pref-${PRIVATE_SLUG}`, `pref-${RETIRED_SLUG}`]) {
+    test(`view=concept_synthesis id=${id}`, async () => {
+      const row = await expectAnswersAsAbsent(
+        "brain_analytics",
+        () => ({ view: "concept_synthesis", id, include_unlinked: true }),
+        ["linkers", "log-"],
+      );
+      expect(JSON.parse(row.withheld)).toMatchObject({ linkers: [], unlinked_mentions: [] });
+    });
+  }
+});
+
+describe("brain_brief view=today answers at the caller's reach", () => {
+  test("the recent activity names no reserved record and counts only what it shows", async () => {
+    const row = await expectAnswersAsAbsent("brain_brief", () => ({ view: "today" }), [
+      `pref=pref-${PRIVATE_SLUG}`,
+      "confirmed=2",
+    ]);
+    expect(row.withheld).toContain(`artifact=Notes/${SHARED_SLUG}-applied`);
+    expect(row.withheld).toContain("confirmed=1");
+  });
+
+  test("a limit counts after the filter, not before", async () => {
+    await expectAnswersAsAbsent("brain_brief", () => ({ view: "today", limit: 2 }), [
+      `pref-${PRIVATE_SLUG}`,
+    ]);
+  });
+});

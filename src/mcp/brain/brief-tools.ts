@@ -21,21 +21,18 @@ import {
 import { buildTimelineIndex } from "../../core/brain/temporal/build-index.ts";
 import {
   collectSourcePointers,
-  collectTransitions,
   computeVaultDelta,
   countByKind,
   type PeriodStatusTransition,
 } from "../../core/brain/temporal/period-common.ts";
 import { selectEvents } from "../../core/brain/temporal/select-events.ts";
-import type { TemporalEvent, TimelineIndex } from "../../core/brain/temporal/types.ts";
+import type { TimelineIndex } from "../../core/brain/temporal/types.ts";
 import {
   readerRefView,
   type ArtifactRef,
   type ArtifactRefView,
 } from "../../core/brain/artifact-ref-view.ts";
-import { PREF_ID_PREFIX, RETIRED_ID_PREFIX } from "../../core/brain/dream-plan.ts";
-import { stripBrainIdPrefix } from "../../core/brain/wikilink.ts";
-import { BRAIN_LOG_EVENT_KIND } from "../../core/brain/types.ts";
+import { PREF_ID_PREFIX } from "../../core/brain/dream-plan.ts";
 import { buildTodayDashboard } from "../../core/brain/today-dashboard.ts";
 import { buildDailyBrief } from "../../core/brain/temporal/daily-brief.ts";
 import { buildWeeklySynthesis } from "../../core/brain/temporal/weekly-brief.ts";
@@ -53,6 +50,7 @@ import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { contextReach, type ServerContext, type ToolDefinition } from "../tool-contract.ts";
 import { readableAtContextReach, readableAtContextReachOrUndefined } from "./reach-readable.ts";
+import { eventAtReach, eventsAtReach, recordRefs, requestRefView } from "./reach-events.ts";
 import { vaultPathField } from "../vault-path-field.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import {
@@ -235,19 +233,6 @@ async function toolBrainDigest(
 // ----- brain_query ---------------------------------------------------------
 
 /**
- * Every spelling a preference record answers to across its retirement:
- * `pref-<slug>` before `moveToRetired` renamed it and `ret-<slug>` after.
- * A row naming either must be judged by whichever page is on disk, or a
- * transition logged under `pref-x` would name nothing once `ret-x` is the
- * reserved page, and pass.
- */
-function recordRefs(id: string | undefined): ReadonlyArray<ArtifactRef> {
-  if (id === undefined) return [];
-  const slug = stripBrainIdPrefix(id);
-  return [id, `${PREF_ID_PREFIX}${slug}`, `${RETIRED_ID_PREFIX}${slug}`];
-}
-
-/**
  * The rows of a daily or weekly envelope a reader at this request's
  * reach may see, or `null` at local reach, where the envelope is the
  * builder's own (the digest precedent: a reader below local reach is
@@ -268,31 +253,13 @@ function periodRowsAtReach(
 ): PeriodRowsView | null {
   if (contextReach(ctx) === TRANSPORT_REACH.local) return null;
   const refs = readerRefView(ctx.vault, readableAtContextReach(ctx));
-  const events = selectEvents(index, window).filter((ev) => eventVisible(refs, ev));
+  const events = eventsAtReach(refs, selectEvents(index, window));
   return {
     refs,
     sourcePointers: collectSourcePointers(events),
     eventsByKind: countByKind(events),
     vaultDelta: (transitions) => computeVaultDelta(events, transitions),
   };
-}
-
-/**
- * May a reader see this event, and so have it counted? An evidence event
- * is judged by its artifact and its record; a dream by the transitions
- * it names, kept while one of them survives (a vault that never had the
- * withheld record still logged the dream for the others); any other
- * event by the record it scopes to.
- */
-function eventVisible(refs: ArtifactRefView, ev: TemporalEvent): boolean {
-  if (ev.kind === BRAIN_LOG_EVENT_KIND.applyEvidence) {
-    return refs.row(ev.artifact, ...recordRefs(ev.prefId));
-  }
-  if (ev.kind === BRAIN_LOG_EVENT_KIND.dream) {
-    const transitions = collectTransitions([ev]);
-    return transitions.length === 0 || refs.keep(transitions, transitionRefs).length > 0;
-  }
-  return refs.row(...recordRefs(ev.prefId));
 }
 
 interface PeriodRowsView {
@@ -570,8 +537,13 @@ async function toolBrainToday(
     args["lookback_days"],
   );
   const limit = coerceNonNegativeInteger("brain_brief view=today", "limit", args["limit"]);
+  // The recent-activity section renders log events; below local reach
+  // (or under the ownership gate) it shows them as this caller may see
+  // them, before the limit and the totals.
+  const refs = requestRefView(ctx);
   const dashboard = buildTodayDashboard(ctx.vault, {
     now: new Date(),
+    ...(refs.filtersNothing ? {} : { eventAtReach: (ev) => eventAtReach(refs, ev) }),
     ...(lookbackDays !== undefined ? { activityLookbackDays: lookbackDays } : {}),
     ...(limit !== undefined ? { activityLimit: limit } : {}),
   });

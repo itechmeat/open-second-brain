@@ -35,6 +35,8 @@ import {
   requiredStringArg,
 } from "./shared.ts";
 import { unknownOperationError } from "../coerce.ts";
+import type { ArtifactRef } from "../../core/brain/artifact-ref-view.ts";
+import { eventsAtReach, recordReadable, recordRefs, requestRefView } from "./reach-events.ts";
 
 function coerceEventKind(tool: string, raw: unknown): BrainLogEventKind | undefined {
   if (raw === undefined || raw === null) return undefined;
@@ -79,8 +81,16 @@ async function toolBrainTimeline(
   // U3). Filtered BEFORE the limit and before `total`, so the count is
   // the visible one - a total that still included the hidden rows would
   // leak their number.
+  //
+  // The same holds one rule over at the caller's reach: an event naming a
+  // record the caller cannot read (under its pref- or ret- spelling) is
+  // dropped, and a dream shared with one is kept while a transition it
+  // names is readable.
   const view = gatedOwnerScopeView(ctx.vault, ctx.agentName);
-  const visible = view.keep(events, (ev) => [ev.source.path, ev.prefId, ev.artifact]);
+  const visible = eventsAtReach(
+    requestRefView(ctx),
+    view.keep(events, (ev) => [ev.source.path, ev.prefId, ev.artifact]),
+  );
   const sliced = limit !== undefined ? visible.slice(0, limit) : visible;
   return {
     vault_path: vaultPathField(ctx),
@@ -130,18 +140,41 @@ async function toolBrainBeliefEvolution(
   // transition by `prefId` and by the wikilink the dream summary used,
   // an evidence row by `prefId` and by the `artifact` it was applied to,
   // a retirement by its whole supersession chain.
+  //
+  // At the caller's reach every row is asked under each spelling its
+  // records answer to, and a pref_id target the caller cannot read is
+  // answered as an absent one: no row at all.
   const view = gatedOwnerScopeView(ctx.vault, ctx.agentName);
+  const refs = requestRefView(ctx);
+  const targetShown = !hasPref || recordReadable(refs, (prefIdRaw as string).trim());
+  const shown = <T>(
+    rows: ReadonlyArray<T>,
+    ownerRefs: (row: T) => ReadonlyArray<ArtifactRef>,
+    reachRefs: (row: T) => ReadonlyArray<ArtifactRef>,
+  ): ReadonlyArray<T> => (targetShown ? refs.keep(view.keep(rows, ownerRefs), reachRefs) : []);
   return {
     vault_path: vaultPathField(ctx),
     target: evo.target,
-    transitions: view.keep(evo.transitions, (t) => [t.prefId, t.link]),
-    evidence: view.keep(evo.evidence, (e) => [e.prefId, e.artifact]),
-    retirements: view.keep(evo.retirements, (r) => [
-      r.prefId,
-      r.retiredBy,
-      r.supersededBy,
-      r.supersedes,
-    ]),
+    transitions: shown(
+      evo.transitions,
+      (t) => [t.prefId, t.link],
+      (t) => [t.link, ...recordRefs(t.prefId)],
+    ),
+    evidence: shown(
+      evo.evidence,
+      (e) => [e.prefId, e.artifact],
+      (e) => [e.artifact, ...recordRefs(e.prefId)],
+    ),
+    retirements: shown(
+      evo.retirements,
+      (r) => [r.prefId, r.retiredBy, r.supersededBy, r.supersedes],
+      (r) => [
+        ...recordRefs(r.prefId),
+        ...recordRefs(r.retiredBy),
+        ...recordRefs(r.supersededBy),
+        ...recordRefs(r.supersedes),
+      ],
+    ),
     generated_at: evo.generatedAt,
   };
 }
@@ -181,12 +214,18 @@ async function toolBrainConceptSynthesis(
     includeUnlinked,
     ownerScope: gatedOwnerScopeView(ctx.vault, ctx.agentName).scope,
   });
+  // At the caller's reach a linker or a mention whose source page the
+  // caller cannot read is dropped, and a target it cannot read (under its
+  // pref- or ret- spelling) is answered as an absent one: its own id as
+  // the title and an empty cluster.
+  const refs = requestRefView(ctx);
+  const targetShown = recordReadable(refs, cluster.targetId);
   return {
     vault_path: vaultPathField(ctx),
     target_id: cluster.targetId,
-    target_title: cluster.targetTitle,
-    linkers: cluster.linkers,
-    unlinked_mentions: cluster.unlinkedMentions,
+    target_title: targetShown ? cluster.targetTitle : cluster.targetId,
+    linkers: targetShown ? refs.keep(cluster.linkers, (l) => [l.source]) : [],
+    unlinked_mentions: targetShown ? refs.keep(cluster.unlinkedMentions, (m) => [m.source]) : [],
     generated_at: cluster.generatedAt,
   };
 }

@@ -503,9 +503,6 @@ const COVERED_TOOLS: ReadonlySet<string> = new Set(
  * queued and `brain_trigger operation=terminal` does not.
  */
 const STILL_NAMED_AT_REMOTE: ReadonlySet<string> = new Set([
-  "brain_analytics view=belief_evolution",
-  "brain_analytics view=concept_synthesis",
-  "brain_analytics view=timeline",
   "brain_anticipatory_context",
   "brain_claims operation=at",
   "brain_claims operation=current",
