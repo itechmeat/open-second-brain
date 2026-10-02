@@ -450,6 +450,11 @@ import {
   QUOTE_CHECK_OUTCOME,
   QUOTE_CHECK_OUTCOMES,
 } from "../../../src/core/brain/distill/quote-verdict.ts";
+import {
+  isManifestStatus,
+  MANIFEST_STATUS,
+  MANIFEST_STATUSES,
+} from "../../../src/core/brain/architect/manifests.ts";
 
 interface VocabularyUnderCensus {
   /** Identifies the vocabulary in a failure message. */
@@ -1389,6 +1394,15 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     members: QUOTE_CHECK_OUTCOMES,
     guard: isQuoteCheckOutcome,
   },
+  {
+    // How one project manifest was read by the architecture scanner. It
+    // reaches the `o2b brain architect --json` envelope and the overview
+    // note, so a broken manifest is reported instead of read as absent.
+    name: "MANIFEST_STATUS",
+    values: MANIFEST_STATUS,
+    members: MANIFEST_STATUSES,
+    guard: isManifestStatus,
+  },
 ]);
 
 // ---------------------------------------------------------------------------
@@ -1653,7 +1667,7 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
  * How many four-piece vocabularies `src/` currently holds. Measured, and
  * kept as an equality rather than a floor - see the population test.
  */
-const VOCABULARY_POPULATION = 83;
+const VOCABULARY_POPULATION = 84;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {
