@@ -1321,8 +1321,8 @@ not a plausible package name (one holding a line break, a space or a
 bracket) is not written into a note: it is counted on the same line as
 `unrepresentable`. The project's name, version and description are
 written on one line, with `[[` escaped so they cannot open a link. The project name comes
-from the first root manifest read, in the order `package.json`,
-`pyproject.toml`, `Cargo.toml`, `go.mod`.
+from the first root manifest read that names a project, in the order
+`package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`.
 
 A module whose manifest declares a runtime dependency on the manifest
 name of exactly one other module gets a declared edge; a name two

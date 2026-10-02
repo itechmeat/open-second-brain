@@ -384,6 +384,24 @@ describe("manifest facts", () => {
     expect(facts.manifest!.version).toBe("2.0.0");
   });
 
+  test("a nameless pyproject.toml does not hide the name of a later Cargo.toml", () => {
+    const root = manifestProject("mixed");
+    put(root, "pyproject.toml", "[tool.ruff]\nline-length = 100\n");
+    put(
+      root,
+      "Cargo.toml",
+      '[package]\nname = "crate-x"\nversion = "1.0.0"\ndescription = "A crate"\n',
+    );
+    const facts = scanProject(root);
+    expect(facts.name).toBe("crate-x");
+    expect(facts.manifest).toEqual({
+      name: "crate-x",
+      version: "1.0.0",
+      description: "A crate",
+      dependencies: [],
+    });
+  });
+
   test("a malformed root manifest is a recorded reading and the name falls back", () => {
     const root = manifestProject("broken-app");
     put(root, "package.json", "{ not json");

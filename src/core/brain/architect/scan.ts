@@ -330,9 +330,15 @@ function readManifestsAt(
   return Object.freeze(readings);
 }
 
-/** The first reading that was read, in the order given. */
+/**
+ * The root reading that speaks for the project: the first read one that
+ * names it, in the order given, else the first read one. A manifest that
+ * only configures tools (a `pyproject.toml` with just `[tool.ruff]`) must
+ * not hide the name of a later one.
+ */
 function firstRead(readings: ReadonlyArray<ManifestReading>): ManifestReading | null {
-  return readings.find((reading) => reading.status === MANIFEST_STATUS.read) ?? null;
+  const read = readings.filter((reading) => reading.status === MANIFEST_STATUS.read);
+  return read.find((reading) => reading.fact?.name != null) ?? read[0] ?? null;
 }
 
 /**
