@@ -72,6 +72,7 @@ test("the detector tuple and its input-schema enum stay in lockstep", () => {
     "usefulness",
     "slug-collisions",
     "tags",
+    "capture-scope",
   ]);
   const schema = HYGIENE_TOOLS[0]!.inputSchema as any;
   expect(schema.properties.detectors.items.enum).toEqual([...HYGIENE_DETECTOR_IDS]);

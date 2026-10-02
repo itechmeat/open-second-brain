@@ -148,6 +148,7 @@ describe("scan composition", () => {
       "freshness",
       "usefulness",
       "slug-collisions",
+      "capture-scope",
     ]);
     expect(Object.isFrozen(report)).toBe(true);
     expect(Object.isFrozen(report.findings)).toBe(true);

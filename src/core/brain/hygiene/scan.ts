@@ -10,6 +10,7 @@
  * the vault; remediation lives in `apply.ts`.
  */
 
+import { detectCaptureScope } from "./detectors/capture-scope.ts";
 import { detectConflicts } from "./detectors/conflicts.ts";
 import { detectDedup } from "./detectors/dedup.ts";
 import { detectFreshness } from "./detectors/freshness.ts";
@@ -33,6 +34,7 @@ const DETECTORS: Readonly<Record<HygieneDetectorId, HygieneDetector>> = Object.f
   usefulness: (vault, ctx) => detectUsefulness(vault, ctx),
   "slug-collisions": (vault) => detectSlugCollisions(vault),
   tags: (vault) => detectTags(vault),
+  "capture-scope": (vault) => detectCaptureScope(vault),
 });
 
 export interface RunHygieneScanOptions {
