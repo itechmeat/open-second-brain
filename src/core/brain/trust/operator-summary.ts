@@ -19,12 +19,15 @@
  */
 
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
+
+import { toPosix } from "../../path-safety.ts";
 
 import { runDoctor, type RunDoctorResult } from "../doctor.ts";
 import type { DreamRunSummary } from "../dream.ts";
 import { collectMaintenanceActions } from "../maintenance/collect.ts";
 import type { ActionItem } from "../maintenance/action-scorer.ts";
+import type { DoctorIssueNaming } from "../diagnostics.ts";
 import { brainDirs } from "../paths.ts";
 import { BRAIN_GUARDRAIL_DEFAULTS } from "../policy.ts";
 import type {
@@ -35,6 +38,7 @@ import type {
 } from "../types.ts";
 import {
   computeVerificationDelta,
+  type VerificationDeltaEntry,
   type VerificationDeltaResult,
 } from "./compute-verification-delta.ts";
 import { computeTrustVerdict } from "./compute-trust-verdict.ts";
@@ -83,6 +87,30 @@ export interface BuildOperatorSummaryOptions {
   readonly guardrails?: ResolvedBrainGuardrailConfig;
   /** Top-N cap on the maintenance action list. */
   readonly topActionsN?: number;
+  /**
+   * Whether the caller may see a doctor finding. The doctor counts and
+   * the trust verdict are taken over the findings it keeps. Omitted,
+   * every finding counts (the operator's own shell).
+   */
+  readonly keepIssue?: (issue: DoctorIssueNaming) => boolean;
+  /**
+   * Whether the caller may read a vault-relative path. The digest counts
+   * only the records it may read, and the doctor pass counts its capped
+   * and pre-filter totals over them. Omitted, every record counts.
+   */
+  readonly readable?: (rel: string) => boolean;
+  /**
+   * Whether the caller may see a maintenance action. Applied before the
+   * top-N slice, so a withheld action takes no slot. Omitted, every
+   * action is ranked.
+   */
+  readonly keepAction?: (action: ActionItem) => boolean;
+  /**
+   * Whether the caller may see a verification-delta entry. The entries
+   * and their summary counts - and the trust verdict over them - are
+   * taken over the entries it keeps. Omitted, every entry counts.
+   */
+  readonly keepVerification?: (entry: VerificationDeltaEntry) => boolean;
 }
 
 const DEFAULT_TOP_ACTIONS_N = 5;
@@ -94,16 +122,23 @@ export function buildOperatorSummary(
   const guardrails = opts.guardrails ?? BRAIN_GUARDRAIL_DEFAULTS;
   const dreamSummary = opts.dreamSummary;
 
-  const doctorResult = safeDoctor(vault, guardrails, dreamSummary);
+  const doctorResult = keptDoctorResult(
+    safeDoctor(vault, guardrails, dreamSummary, opts.readable),
+    opts.keepIssue,
+  );
   const dreamCounts = summariseDream(dreamSummary);
-  const digestCounts = collectDigestCounts(vault);
+  const digestCounts = collectDigestCounts(vault, opts.readable);
   const verification = dreamSummary
-    ? computeVerificationDelta(vault, dreamSummary)
+    ? keptVerification(computeVerificationDelta(vault, dreamSummary), opts.keepVerification)
     : zeroVerification();
   const instructionWarnings = checkInstructionFileCeiling(vault, {
     maxLines: guardrails.instruction_file_max_lines,
   });
-  const topActions = safeTopActions(vault, opts.topActionsN ?? DEFAULT_TOP_ACTIONS_N);
+  const topActions = safeTopActions(
+    vault,
+    opts.topActionsN ?? DEFAULT_TOP_ACTIONS_N,
+    opts.keepAction,
+  );
 
   const trust = computeTrustVerdict({
     doctorWarnings: doctorResult.warnings,
@@ -180,15 +215,50 @@ function safeDoctor(
   vault: string,
   guardrails: ResolvedBrainGuardrailConfig,
   dreamSummary: DreamRunSummary | undefined,
+  readable: BuildOperatorSummaryOptions["readable"],
 ): RunDoctorResult {
   try {
     return runDoctor(vault, {
       guardrails,
       ...(dreamSummary ? { dreamSummary } : {}),
+      ...(readable !== undefined ? { readable } : {}),
     });
   } catch {
     return Object.freeze({ warnings: [], errors: [] });
   }
+}
+
+/** The doctor's warnings and errors the caller may see. */
+function keptDoctorResult(
+  result: RunDoctorResult,
+  keepIssue: BuildOperatorSummaryOptions["keepIssue"],
+): RunDoctorResult {
+  if (keepIssue === undefined) return result;
+  return Object.freeze({
+    ...result,
+    warnings: Object.freeze(result.warnings.filter(keepIssue)),
+    errors: Object.freeze(result.errors.filter(keepIssue)),
+  });
+}
+
+/** The verification entries the caller may see, with the counts taken over them. */
+function keptVerification(
+  result: VerificationDeltaResult,
+  keep: BuildOperatorSummaryOptions["keepVerification"],
+): VerificationDeltaResult {
+  if (keep === undefined) return result;
+  const entries = result.entries.filter(keep);
+  const count = (state: VerificationDeltaEntry["state"]): number =>
+    entries.filter((entry) => entry.state === state).length;
+  return Object.freeze({
+    entries: Object.freeze(entries),
+    summary: Object.freeze({
+      confirmed: count("confirmed"),
+      drift: count("drift"),
+      regression: count("regression"),
+      missing_evidence: count("missing_evidence"),
+    }),
+  });
 }
 
 function summariseDream(dream: DreamRunSummary | undefined): DreamSummary {
@@ -206,21 +276,31 @@ function summariseDream(dream: DreamRunSummary | undefined): DreamSummary {
   });
 }
 
-function collectDigestCounts(vault: string): DigestSummary {
+function collectDigestCounts(
+  vault: string,
+  readable: BuildOperatorSummaryOptions["readable"],
+): DigestSummary {
   const dirs = brainDirs(vault);
   return Object.freeze({
-    preference_count: countMarkdownFiles(dirs.preferences),
-    retired_count: countMarkdownFiles(dirs.retired),
-    inbox_count: countMarkdownFiles(dirs.inbox),
+    preference_count: countMarkdownFiles(vault, dirs.preferences, readable),
+    retired_count: countMarkdownFiles(vault, dirs.retired, readable),
+    inbox_count: countMarkdownFiles(vault, dirs.inbox, readable),
   });
 }
 
-function countMarkdownFiles(dir: string): number {
+function countMarkdownFiles(
+  vault: string,
+  dir: string,
+  readable: BuildOperatorSummaryOptions["readable"],
+): number {
   if (!existsSync(dir)) return 0;
   try {
     let n = 0;
     for (const name of readdirSync(dir)) {
       if (!name.endsWith(".md")) continue;
+      if (readable !== undefined && !readable(toPosix(relative(vault, join(dir, name))))) {
+        continue;
+      }
       try {
         const s = statSync(join(dir, name));
         if (s.isFile()) n += 1;
@@ -234,10 +314,15 @@ function countMarkdownFiles(dir: string): number {
   }
 }
 
-function safeTopActions(vault: string, topN: number): ReadonlyArray<ActionItem> {
+function safeTopActions(
+  vault: string,
+  topN: number,
+  keepAction: BuildOperatorSummaryOptions["keepAction"],
+): ReadonlyArray<ActionItem> {
   try {
     const all = collectMaintenanceActions(vault);
-    return Object.freeze(all.slice(0, Math.max(0, topN)));
+    const kept = keepAction === undefined ? all : all.filter(keepAction);
+    return Object.freeze(kept.slice(0, Math.max(0, topN)));
   } catch {
     return Object.freeze([]);
   }

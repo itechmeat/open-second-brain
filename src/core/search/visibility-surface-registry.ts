@@ -329,6 +329,9 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "reachView, over the doctorIssueRefs each issue names (path, target, sources, message " +
       "wikilinks), takes ok and trust_verdict again over the kept issues, and below local reach " +
       "recounts the tier-drift warning over the rows readableAtContextReach(ctx) keeps. The " +
+      "doctor pass is handed the same predicate, so the counts its checks take before any " +
+      "issue is filtered answer at the caller's reach too: a withheld page spends no slot of " +
+      "the removed-tool warning cap and a withheld state moves no stale-dependency count. The " +
       "repair branch hands applyRepair the caller's reach, which bounds the findings before the " +
       "plan is derived, so a withheld record is neither planned, counted nor written.",
   },
@@ -529,10 +532,19 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "not counted), and no report snapshot is taken or delta shown; view=today renders its " +
       "recent activity through the shared log-event rule (log-events-at-reach.ts via " +
       "reach-events.ts) before the limit and the totals, so an event naming a withheld record " +
-      "is absent and a shared dream shows only its readable transitions. Residual: the monthly " +
-      "and operator views still count over the whole Brain layer (summary events, status " +
-      "transitions, retired and contradiction counts; preference, retired and doctor counts " +
-      "and the trust verdict), and name no id.",
+      "is absent and a shared dream shows only its readable transitions, and lists an obligation " +
+      "or an open loop only when readableAtContextReach(ctx) passes its page, tested before the " +
+      "note is read, so neither its text, its path nor the totals move; view=monthly counts the " +
+      "month's events through the same log-event rule before the transition, retirement, " +
+      "contradiction and neglected-area counts; view=operator takes its doctor counts over the " +
+      "findings the owner view ANDed with reachView keeps (the doctor pass itself handed " +
+      "readableAtContextReach(ctx) for its removed-tool cap and stale-dependency count), its " +
+      "digest counts over the preference, retired and inbox pages the caller may read, its top " +
+      "actions by target before the top-N slice, its verification entries and their counts by " +
+      "the record and page each names, and the trust verdict again over those kept streams. " +
+      "Residual: the operator view's dream_summary counts (dream warnings, uncertain and " +
+      "quarantined entries of the dry-run dream), and the dream warnings the trust verdict " +
+      "folds in, are still taken over the whole Brain layer and name no id.",
   },
   {
     surface: "brain_analytics",
