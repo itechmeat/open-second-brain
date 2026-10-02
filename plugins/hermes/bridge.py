@@ -27,6 +27,10 @@ from typing import Any, Protocol, runtime_checkable
 from .config import REQUEST_TIMEOUT_ENV, env_setting
 
 PROTOCOL_VERSION = "2025-06-18"
+# The harness this bridge launches the server for. The server resolves its
+# harness scope (which harness-scoped operator rules apply) from this launch
+# argument alone, never from the name a client gives about itself.
+HARNESS_ARGV: tuple[str, ...] = ("--harness", "hermes")
 CLIENT_NAME = "open-second-brain-hermes-provider"
 logger = logging.getLogger(__name__)
 
@@ -307,6 +311,7 @@ class McpBrainBridge:
         # directory - which silently empties skill_auto_attach.
         if self._repo_root:
             argv += ["--repo", self._repo_root]
+        argv += HARNESS_ARGV
         return argv
 
     _watchdog_absent_warned = False

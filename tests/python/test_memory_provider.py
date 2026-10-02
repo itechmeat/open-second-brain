@@ -1739,6 +1739,27 @@ class McpBrainBridgeTests(unittest.TestCase):
         McpBrainBridge(vault="/v", spawn=spy).start()
         self.assertNotIn("--repo", captured["argv"])
 
+    def test_argv_ends_with_the_hermes_harness(self):
+        # The server resolves its harness scope from this launch argument
+        # alone; it never trusts a name the client gives about itself.
+        cases = (
+            ({"vault": "/v", "repo_root": "/r"}, ["o2b", "mcp", "--vault", "/v", "--repo", "/r"]),
+            ({"vault": "/v"}, ["o2b", "mcp", "--vault", "/v"]),
+            ({"vault": None, "repo_root": "/r"}, ["o2b", "mcp", "--repo", "/r"]),
+            ({"vault": None}, ["o2b", "mcp"]),
+        )
+        self.assertEqual(bridge_module.HARNESS_ARGV, ("--harness", "hermes"))
+        for kwargs, head in cases:
+            with self.subTest(**kwargs):
+                captured = {}
+
+                def spy(argv):
+                    captured["argv"] = argv
+                    return _FakeProcess(self._handshake_frames())
+
+                McpBrainBridge(spawn=spy, **kwargs).start()
+                self.assertEqual(captured["argv"], [*head, "--harness", "hermes"])
+
     def test_stop_terminates_process(self):
         proc = _FakeProcess(self._handshake_frames())
         bridge = McpBrainBridge(vault="/v", spawn=lambda argv: proc)
