@@ -11,10 +11,15 @@ import { SOURCE_HASH_MAX_BYTES } from "../../../../src/core/brain/intake/source-
 import {
   extractHtml,
   HTML_EXTRACT_MAX_SOURCE_BYTES,
+  HTML_HEADING_MAX_CHARS,
+  HTML_PARTS_MAX,
   type HtmlExtraction,
+  renderPartsSection,
 } from "../../../../src/core/brain/ingest/extract-html.ts";
 import { SOURCE_EXTRACT_SKIP_REASON } from "../../../../src/core/brain/ingest/source-formats.ts";
 import { PRIVATE_REGION_PLACEHOLDER } from "../../../../src/core/redactor.ts";
+import { extractTagValues, stripCode } from "../../../../src/core/tags.ts";
+import { extractWikilinks } from "../../../../src/core/vault.ts";
 import { fakeCredential } from "../../../helpers/fake-credentials.ts";
 
 const encoder = new TextEncoder();
@@ -184,5 +189,151 @@ describe("extractHtml - text", () => {
         expect(performance.now() - started).toBeLessThan(2_000);
       }
     }
+  });
+});
+
+/** The release-notes page of the CLI fixture (`cli-output/expected-output.md`). */
+const RELEASE_NOTES =
+  "<html><head><title>Release notes</title></head><body><h1>Overview</h1>" +
+  "<p>Fish &amp; chips</p><h2>Install</h2><p>Run it.</p></body></html>";
+
+describe("extractHtml - parts", () => {
+  test("pins the caps", () => {
+    expect(HTML_PARTS_MAX).toBe(256);
+    expect(HTML_HEADING_MAX_CHARS).toBe(200);
+  });
+
+  test("the fixture page gives two parts with levels, trails, spans and start-tag offsets", () => {
+    const result = extracted(RELEASE_NOTES);
+    expect(result.title).toBe("Release notes");
+    expect(result.text).toBe("Overview\nFish & chips\nInstall\nRun it.");
+    expect(result.parts).toEqual([
+      {
+        index: 0,
+        level: 1,
+        heading: "Overview",
+        trail: "Overview",
+        lineStart: 1,
+        lineEnd: 2,
+        sourceOffset: 53,
+      },
+      {
+        index: 1,
+        level: 2,
+        heading: "Install",
+        trail: "Overview > Install",
+        lineStart: 3,
+        lineEnd: 4,
+        sourceOffset: 93,
+      },
+    ]);
+    expect(result.partsOmitted).toBe(0);
+  });
+
+  test("a heading closes the sections at its level and below", () => {
+    const result = extracted(
+      "<h1>A</h1><h2>B</h2><h3>C</h3><p>c</p><h2>D</h2><h1>E</h1><h3>F</h3>",
+    );
+    expect(result.parts.map((p) => [p.level, p.trail, p.lineStart, p.lineEnd])).toEqual([
+      [1, "A", 1, 1],
+      [2, "A > B", 2, 2],
+      [3, "A > B > C", 3, 4],
+      [2, "A > D", 5, 5],
+      [1, "E", 6, 6],
+      [3, "E > F", 7, 7],
+    ]);
+  });
+
+  test("a source offset counts UTF-8 bytes, a byte-order mark included", () => {
+    const prefix = "<p>\u00e9\u4e2d\u{1F600}</p>"; // 2 + 3 + 4 bytes of text
+    const bytes = new Uint8Array([
+      0xef,
+      0xbb,
+      0xbf,
+      ...encoder.encode(`${prefix}<h2 id="x">T</h2>`),
+    ]);
+    const result = extractHtml(bytes);
+    if (!result.extracted) throw new Error("refused");
+    expect(result.parts.at(-1)?.sourceOffset).toBe(3 + encoder.encode(prefix).length);
+  });
+
+  test("a preamble part exists only when text precedes the first heading", () => {
+    const withPreamble = extracted("<p>intro</p><p>more</p><h1>T</h1><p>body</p>");
+    expect(withPreamble.parts[0]).toEqual({
+      index: 0,
+      level: 0,
+      heading: "",
+      trail: "",
+      lineStart: 1,
+      lineEnd: 2,
+      sourceOffset: 0,
+    });
+    expect(withPreamble.parts[1]).toMatchObject({ index: 1, level: 1, lineStart: 3, lineEnd: 4 });
+    expect(extracted("<h1>T</h1><p>body</p>").parts[0]?.level).toBe(1);
+    expect(extracted("<p>no headings at all</p>").parts).toEqual([]);
+  });
+
+  test("an empty heading is no part and a heading inside a skipped region is none either", () => {
+    const result = extracted(
+      "<h1>A</h1><h2>  </h2><private><h2>secret plan</h2></private><svg><h3>x</h3></svg><p>p</p>",
+    );
+    expect(result.parts.map((p) => p.heading)).toEqual(["A"]);
+  });
+
+  test("a heading is folded onto one line", () => {
+    expect(extracted("<h1>two<br>lines\there</h1>").parts[0]?.heading).toBe("two lines here");
+  });
+
+  test(`${HTML_PARTS_MAX + 1} headings give ${HTML_PARTS_MAX} parts and count the rest`, () => {
+    const html = Array.from({ length: HTML_PARTS_MAX + 1 }, (_, n) => `<h2>H${n}</h2>`).join("");
+    const result = extracted(html);
+    expect(result.parts.length).toBe(HTML_PARTS_MAX);
+    expect(result.partsOmitted).toBe(1);
+    expect(result.parts.at(-1)?.lineEnd).toBe(HTML_PARTS_MAX);
+  });
+
+  test("a 300-character heading is capped", () => {
+    const heading = extracted(`<h1>${"x".repeat(300)}</h1>`).parts[0]?.heading ?? "";
+    expect(Array.from(heading).length).toBe(HTML_HEADING_MAX_CHARS);
+    expect(heading.endsWith("\u2026")).toBe(true);
+  });
+});
+
+describe("renderPartsSection", () => {
+  test("renders one fenced line per part", () => {
+    expect(renderPartsSection(extracted(RELEASE_NOTES))).toBe(
+      [
+        "## Parts",
+        "",
+        "```parts",
+        "h1 Overview | lines 1-2",
+        "h2 Overview > Install | lines 3-4",
+        "```",
+      ].join("\n"),
+    );
+  });
+
+  test("renders the preamble by name", () => {
+    expect(renderPartsSection(extracted("<p>intro</p><h3>T</h3>"))).toBe(
+      ["## Parts", "", "```parts", "preamble | lines 1-1", "h3 T | lines 2-2", "```"].join("\n"),
+    );
+  });
+
+  test("is empty when there are no parts", () => {
+    expect(renderPartsSection(extracted("<p>flat</p>"))).toBe("");
+  });
+
+  test("a fence outgrows a backtick run in a heading", () => {
+    const section = renderPartsSection(extracted("<h1>a ```` b</h1>"));
+    expect(section.split("\n")[2]).toBe("`````parts");
+    expect(section.endsWith("\n`````")).toBe(true);
+  });
+
+  test("a wikilink or a tag in a heading yields no link and no tag", () => {
+    const section = renderPartsSection(extracted("<h1>See [[Target]] and #topic</h1><p>x</p>"));
+    expect(section).toContain("[[Target]]");
+    const cleaned = stripCode(section);
+    expect(extractWikilinks(cleaned)).toEqual([]);
+    expect(extractTagValues(cleaned)).toEqual([]);
   });
 });

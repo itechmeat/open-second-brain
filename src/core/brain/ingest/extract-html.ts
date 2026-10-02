@@ -20,7 +20,9 @@
  * one line break; bytes that are not UTF-8 are refused by name.
  */
 
+import { fenceFor } from "../../markdown-fence.ts";
 import { PRIVATE_REGION_PLACEHOLDER } from "../../redactor.ts";
+import { oneLine } from "../architect/manifests.ts";
 import { SOURCE_HASH_MAX_BYTES } from "../intake/source-trust.ts";
 import { SOURCE_EXTRACT_SKIP_REASON } from "./source-formats.ts";
 
@@ -132,6 +134,26 @@ const BLOCK_ELEMENTS: ReadonlySet<string> = new Set([
   "tr",
   "ul",
 ]);
+/** Heading elements by name, mapped to their level. */
+const HEADING_LEVELS: ReadonlyMap<string, number> = new Map([
+  ["h1", 1],
+  ["h2", 2],
+  ["h3", 3],
+  ["h4", 4],
+  ["h5", 5],
+  ["h6", 6],
+]);
+/** The level of the preamble part, the text before the first heading. */
+const PREAMBLE_LEVEL = 0;
+/** Joins the headings of a part's enclosing sections into its trail. */
+const TRAIL_SEPARATOR = " > ";
+
+/** The `## Parts` section heading and the info string of its fenced block. */
+const PARTS_SECTION_HEADING = "## Parts";
+const PARTS_FENCE_INFO = "parts";
+/** How the preamble part is named in a parts line. */
+const PREAMBLE_LABEL = "preamble";
+
 /** Table cells: a word boundary, not a line break, so a row reads as one line. */
 const CELL_ELEMENTS: ReadonlySet<string> = new Set(["td", "th"]);
 
@@ -335,6 +357,50 @@ function decodeAll(text: string): string {
 }
 
 /**
+ * UTF-8 byte offsets of increasing indices into a string decoded from
+ * valid UTF-8 (surrogates always paired). Each call resumes where the
+ * last stopped, so converting every offset of a scan stays linear.
+ */
+class ByteOffsets {
+  private index = 0;
+  private bytes = 0;
+
+  constructor(private readonly source: string) {}
+
+  at(index: number): number {
+    const s = this.source;
+    while (this.index < index) {
+      const code = s.charCodeAt(this.index);
+      if (code < 0x80) this.bytes += 1;
+      else if (code < 0x800) this.bytes += 2;
+      else if (code >= SURROGATE_FIRST && code < 0xdc00) {
+        this.bytes += 4;
+        this.index++;
+      } else this.bytes += 3;
+      this.index++;
+    }
+    return this.bytes;
+  }
+}
+
+/** A heading as the scan met it, before spans, the cap on parts and indices. */
+interface ScannedPart {
+  readonly level: number;
+  readonly heading: string;
+  readonly trail: string;
+  readonly lineStart: number;
+  readonly sourceOffset: number;
+}
+
+/** A heading whose end tag has not been met yet. */
+interface OpenHeading {
+  readonly level: number;
+  readonly sourceOffset: number;
+  /** The number of lines emitted before the heading's first line. */
+  readonly linesBefore: number;
+}
+
+/**
  * The scanner state. One instance per call; `run` walks the source once.
  */
 class HtmlScanner {
@@ -344,9 +410,15 @@ class HtmlScanner {
   private readonly skipped: string[] = [];
   private preDepth = 0;
   private i: number;
+  private readonly offsets: ByteOffsets;
+  private openHeading: OpenHeading | null = null;
+  /** The enclosing sections of the next heading, outermost first. */
+  private readonly sections: { readonly level: number; readonly heading: string }[] = [];
+  private readonly scanned: ScannedPart[] = [];
 
   constructor(private readonly source: string) {
     this.i = source.charCodeAt(0) === BYTE_ORDER_MARK ? 1 : 0;
+    this.offsets = new ByteOffsets(source);
   }
 
   run(): HtmlExtraction {
@@ -359,13 +431,68 @@ class HtmlScanner {
       if (s.charCodeAt(this.i) === CHAR_AMP) this.readReference();
       else this.readMarkup();
     }
+    this.sink.breakLine();
+    this.closeHeading();
+    const text = this.sink.text();
+    const all = this.partsWithSpans(this.sink.lines.length);
+    const parts = all.slice(0, HTML_PARTS_MAX);
     return {
       extracted: true,
       title: this.title,
-      text: this.sink.text(),
-      parts: [],
-      partsOmitted: 0,
+      text,
+      parts,
+      partsOmitted: all.length - parts.length,
     };
+  }
+
+  /**
+   * Every part, the preamble first when text precedes the first heading,
+   * each spanning to the line before the next part (the last one to the
+   * last line of the text).
+   */
+  private partsWithSpans(totalLines: number): HtmlPart[] {
+    const first = this.scanned[0];
+    const ordered: ScannedPart[] =
+      first !== undefined && first.lineStart > 1
+        ? [
+            {
+              level: PREAMBLE_LEVEL,
+              heading: "",
+              trail: "",
+              lineStart: 1,
+              sourceOffset: 0,
+            },
+            ...this.scanned,
+          ]
+        : this.scanned;
+    return ordered.map((part, index) => ({
+      index,
+      level: part.level,
+      heading: part.heading,
+      trail: part.trail,
+      lineStart: part.lineStart,
+      lineEnd: (ordered[index + 1]?.lineStart ?? totalLines + 1) - 1,
+      sourceOffset: part.sourceOffset,
+    }));
+  }
+
+  /** End the open heading: an empty one is no part. */
+  private closeHeading(): void {
+    const open = this.openHeading;
+    if (open === null) return;
+    this.openHeading = null;
+    const folded = oneLine(this.sink.lines.slice(open.linesBefore).join(SPACE));
+    if (folded.length === 0) return;
+    const heading = capCodePoints(folded, HTML_HEADING_MAX_CHARS);
+    while ((this.sections.at(-1)?.level ?? PREAMBLE_LEVEL) >= open.level) this.sections.pop();
+    this.sections.push({ level: open.level, heading });
+    this.scanned.push({
+      level: open.level,
+      heading,
+      trail: this.sections.map((section) => section.heading).join(TRAIL_SEPARATOR),
+      lineStart: open.linesBefore + 1,
+      sourceOffset: open.sourceOffset,
+    });
   }
 
   /** The index of the next `<` or `&` at or after `from`, or the end. */
@@ -490,7 +617,7 @@ class HtmlScanner {
     }
   }
 
-  private startTag(name: string, _offset: number, selfClosing: boolean): void {
+  private startTag(name: string, offset: number, selfClosing: boolean): void {
     if (RAW_TEXT_ELEMENTS.has(name)) {
       this.readUntilEndTag(name);
       return;
@@ -528,6 +655,15 @@ class HtmlScanner {
       return;
     }
     if (BLOCK_ELEMENTS.has(name)) this.sink.breakLine();
+    const level = HEADING_LEVELS.get(name);
+    if (level !== undefined) {
+      this.closeHeading();
+      this.openHeading = {
+        level,
+        sourceOffset: this.offsets.at(offset),
+        linesBefore: this.sink.lines.length,
+      };
+    }
     if (name === PRE_ELEMENT) {
       this.preDepth++;
       this.skipLeadingLineBreak();
@@ -551,6 +687,7 @@ class HtmlScanner {
       return;
     }
     if (BLOCK_ELEMENTS.has(name)) this.sink.breakLine();
+    if (HEADING_LEVELS.has(name)) this.closeHeading();
     if (name === PRE_ELEMENT && this.preDepth > 0) this.preDepth--;
   }
 }
@@ -568,4 +705,24 @@ export function extractHtml(bytes: Uint8Array): HtmlExtractResult {
     return { extracted: false, reason: SOURCE_EXTRACT_SKIP_REASON.notUtf8 };
   }
   return new HtmlScanner(source).run();
+}
+
+/** One line of the parts list: `h<level> <trail> | lines <a>-<b>`, or `preamble | lines <a>-<b>`. */
+export function formatPartLine(part: HtmlPart): string {
+  const label = part.level === PREAMBLE_LEVEL ? PREAMBLE_LABEL : `h${part.level} ${part.trail}`;
+  return `${label} | lines ${part.lineStart}-${part.lineEnd}`;
+}
+
+/**
+ * The `## Parts` section of a summary page: the heading, a blank line and
+ * one fenced block (info string `parts`) with one line per part. Inside
+ * the fence a `[[link]]` or `#tag` in an untrusted heading stays out of
+ * the link graph while full-text search still reads it. Empty when the
+ * extraction has no parts.
+ */
+export function renderPartsSection(extraction: HtmlExtraction): string {
+  if (extraction.parts.length === 0) return "";
+  const body = extraction.parts.map(formatPartLine).join(LINE_FEED);
+  const fence = fenceFor(body);
+  return [PARTS_SECTION_HEADING, "", `${fence}${PARTS_FENCE_INFO}`, body, fence].join(LINE_FEED);
 }
