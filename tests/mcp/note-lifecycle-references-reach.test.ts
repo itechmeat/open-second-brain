@@ -108,3 +108,25 @@ describe("at local reach the linking page is reported", () => {
     expect(out).toContain(SECRET);
   });
 });
+
+describe("a hidden page at the destination is a known one-bit limitation", () => {
+  // Pinned so a later change to it is deliberate: answering as absent
+  // would mean moving onto the page or reporting a move that did not
+  // happen, so the refusal stays and the page is left untouched.
+  const MOVED_ONTO = "Other/secret.md";
+  for (const args of [
+    { action: "rename", path: TARGET, to: SECRET },
+    { action: "move", path: TARGET, to: MOVED_ONTO, apply: true },
+  ]) {
+    test(JSON.stringify(args), async () => {
+      const hidden = fixture(true);
+      mkdirSync(join(hidden.vault, "Other"), { recursive: true });
+      writeFileSync(join(hidden.vault, MOVED_ONTO), SECRET_BODY);
+      const out = await answer(hidden, args);
+      expect(out).toContain("destination_occupied");
+      expect(out).not.toContain("Builds on");
+      expect(readFileSync(join(hidden.vault, String(args.to)), "utf8")).toBe(SECRET_BODY);
+      expect(readFileSync(join(hidden.vault, TARGET), "utf8")).toBe("# Target\n");
+    });
+  }
+});
