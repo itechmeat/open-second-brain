@@ -273,6 +273,34 @@ describe("brain_distill_source - a page withheld at the caller's reach checks no
     }
   });
 
+  test("the lane, scope and page match an absent source, and an excerpt is admitted", async () => {
+    const ABSENT = "Notes/absent.md";
+    const shape = (res: Record<string, unknown>) => ({
+      trust: res["trust"],
+      capture_scope: res["capture_scope"],
+    });
+    const hiddenRes = (await handler(ctx, { source_path: SECRET, claims })) as Record<
+      string,
+      unknown
+    > & { distillation_path: string };
+    const absentRes = (await handler(ctx, { source_path: ABSENT, claims })) as Record<
+      string,
+      unknown
+    >;
+    expect(shape(hiddenRes)).toEqual(shape(absentRes));
+    expect(hiddenRes["trust"]).toBe("untrusted");
+    expect(hiddenRes["capture_scope"]).toBe(CAPTURE_SCOPE.urlOnly);
+    const md = readFileSync(join(vault, hiddenRes.distillation_path), "utf8");
+    expect(md).toContain("untrusted_source");
+
+    const withExcerpt = (await handler(ctx, {
+      source_path: SECRET,
+      claims,
+      excerpt: "The code is ZX9 today.",
+    })) as Record<string, unknown>;
+    expect(withExcerpt["capture_scope"]).toBe(CAPTURE_SCOPE.boundedLocal);
+  });
+
   test("at local reach the same page is checked", async () => {
     const res = (await handler(
       { ...ctx, reach: TRANSPORT_REACH.local },

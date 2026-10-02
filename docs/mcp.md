@@ -1395,8 +1395,10 @@ The evidence depends on the claim:
   every span. A source with no local bytes gives `url-only`.
 - A vault source the caller may not read at its transport reach (or, with
   `integrity.owner_scope_delivery: fail`, another owner's page) is treated
-  as one with no local bytes: every span gives `url-only`, and no
-  `source_hash` is returned or recorded on the page.
+  exactly as an absent source: every span gives `url-only`, no
+  `source_hash` is returned or recorded on the page, the page lands in the
+  untrusted lane with `capture_scope: url-only`, and an `excerpt` is
+  accepted for it.
 
 The bytes checked are the bytes read once for `source_hash`, so the
 verdict and the digest on the page always describe the same content.
