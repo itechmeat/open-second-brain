@@ -30,6 +30,7 @@ import { compositeScopeKey, scopeFromFrontmatter } from "../scope-key.ts";
 import { matchScope, mayDescend, resolveVaultScope } from "../vault-scope/index.ts";
 import { pathCovers, type VaultScopeRules } from "../vault-scope/defaults.ts";
 import { brainDirs, BRAIN_ROOT_REL } from "./paths.ts";
+import { CODE_SPAN_MASK_RE } from "./wikilink.ts";
 import {
   isMergeResolved,
   mergePointerLookup,
@@ -278,20 +279,6 @@ const RETARGET_SKIP_DIRS: ReadonlySet<string> = new Set([
   "node_modules",
 ]);
 
-/**
- * Fenced blocks (``` / ~~~, closing on the same run length) and inline
- * code spans, as one alternation.
- *
- * A `[[Projects/Old]]` inside either is a QUOTATION of a link - a
- * tutorial showing the syntax, a design note quoting a vault's contents,
- * a README explaining how a rename behaves - and rewriting it edits
- * documentation into describing a vault that never existed. The
- * precedent is `link-graph/format-wikilink.ts`, which has masked code
- * regions since the wikilink formatter shipped; it matters more here now
- * that this walk's root reaches every user note rather than `Brain/`.
- */
-const CODE_REGION_RE = /(`{3,}|~{3,})[\s\S]*?\1|`[^`]+`/g;
-
 /** One stretch of a document, and whether it is code. */
 interface DocumentSegment {
   readonly text: string;
@@ -303,11 +290,19 @@ interface DocumentSegment {
  * every `text` back together reproduces `raw` byte for byte, which is
  * what lets the rewrite below transform the prose halves in place
  * without needing a second opinion about where the code was.
+ *
+ * Code is a fenced block or an inline code span, the regions every link
+ * reader masks ({@link CODE_SPAN_MASK_RE}). A `[[Projects/Old]]` inside
+ * either is a QUOTATION of a link - a tutorial showing the syntax, a
+ * design note quoting a vault's contents, a README explaining how a
+ * rename behaves - and rewriting it edits documentation into describing a
+ * vault that never existed. It matters here because this walk's root
+ * reaches every user note rather than `Brain/`.
  */
 function segmentCode(raw: string): DocumentSegment[] {
   const out: DocumentSegment[] = [];
   let last = 0;
-  for (const m of raw.matchAll(CODE_REGION_RE)) {
+  for (const m of raw.matchAll(CODE_SPAN_MASK_RE)) {
     if (m.index > last) out.push({ text: raw.slice(last, m.index), code: false });
     out.push({ text: m[0], code: true });
     last = m.index + m[0].length;

@@ -9,6 +9,7 @@ import {
   patchWikilinks,
 } from "../../../src/core/brain/page-dedup.ts";
 import { MergeChainError } from "../../../src/core/brain/page-meta/page-id.ts";
+import { LINEAR_CEILING_MS } from "../../helpers/linear-time.ts";
 
 let vault: string;
 
@@ -182,6 +183,16 @@ describe("findDuplicateCandidates skips pages a merge already resolved", () => {
 });
 
 describe("patchWikilinks", () => {
+  test("stays linear on a long backtick run and rewrites the link after it", () => {
+    const log = join(vault, "Brain", "log", "2026-05-25.md");
+    writeFileSync(log, `${"`".repeat(256 * 1024)}\nsee [[pref-old]]\n`);
+    const started = performance.now();
+    const touched = patchWikilinks(vault, "pref-old", "pref-new");
+    expect(performance.now() - started).toBeLessThan(LINEAR_CEILING_MS);
+    expect(touched).toBe(1);
+    expect(readFileSync(log, "utf8")).toContain("[[pref-new]]");
+  });
+
   test("rewrites plain [[oldTarget]] references", () => {
     const log = join(vault, "Brain", "log", "2026-05-25.md");
     writeFileSync(log, "see [[pref-old]] for context\n");
