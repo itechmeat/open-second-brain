@@ -138,9 +138,12 @@ runs without the vault reminder instead of failing.
 
 What stays process-wide on a multiplexed gateway:
 
-- `HOME`, `PATH`, `PATHEXT`, `XDG_CONFIG_HOME` and `LOCALAPPDATA`
-  describe the machine, not the profile, and are read from the process
-  environment in both modes.
+- `HOME`, `PATH` and `PATHEXT` describe the machine, not the profile,
+  and are read from the process environment in both modes.
+- `XDG_CONFIG_HOME` and `LOCALAPPDATA`, which locate the config file,
+  are read from the profile's `.env` first; a profile that does not set
+  one uses the gateway process environment's value, so a value set in
+  the launch profile's `.env` is seen by every profile that sets none.
 - Other variables the `o2b mcp` child reads - the search settings,
   `OPEN_SECOND_BRAIN_MCP_API_KEY`, embedding provider keys and the
   `TELEGRAM_*` settings - are still inherited from the gateway process
