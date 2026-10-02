@@ -43,6 +43,13 @@ export interface DiscoverIdeasOptions {
   readonly lookbackDays?: number;
   /** Injection point for tests; default reads the morning-brief scan. */
   readonly openQuestions?: ReadonlyArray<MorningBriefOpenQuestion>;
+  /**
+   * May the caller read the page at this vault-relative path? A page it
+   * may not read is skipped before it is read or aged: it is neither a
+   * candidate nor a source of inbound links, so the ranking is the one a
+   * vault without that page would give. Absent, every page counts.
+   */
+  readonly include?: (rel: string) => boolean;
 }
 
 interface NoteFile {
@@ -161,8 +168,9 @@ export function discoverIdeas(
   // Two passes: inbound links are collected from the FULL Brain tree
   // (a reference from a handoff or trigger still counts), while orphan
   // CANDIDATES come only from non-machine dirs.
-  const allNotes = listBrainNotes(vault);
-  const notes = listBrainNotes(vault, MACHINE_DIRS);
+  const included = (rel: string): boolean => opts.include?.(rel) ?? true;
+  const allNotes = listBrainNotes(vault).filter((note) => included(note.relPath));
+  const notes = listBrainNotes(vault, MACHINE_DIRS).filter((note) => included(note.relPath));
   const inbound = new Set<string>();
   for (const note of allNotes) {
     let content: string;
@@ -201,6 +209,7 @@ export function discoverIdeas(
   if (existsSync(inbox)) {
     for (const name of readdirSync(inbox)) {
       if (!name.startsWith("sig-") || !name.endsWith(".md")) continue;
+      if (!included(`Brain/inbox/${name}`)) continue;
       const absPath = join(inbox, name);
       const age = ageDays(absPath, opts.now);
       // An unmeasurable age cannot clear the aging threshold and cannot

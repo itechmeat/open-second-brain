@@ -514,7 +514,6 @@ const STILL_NAMED_AT_REMOTE: ReadonlySet<string> = new Set([
   "brain_doctor",
   "brain_doctor #1",
   "brain_doctor #2",
-  "brain_idea_discovery",
   "brain_pre_compress_pack",
   "brain_retention",
   "brain_scaffold_stub action=list",
