@@ -314,9 +314,41 @@ test("a module whose name a link cannot carry is named once and left out of link
     .split("\n")
     .filter((line) => line.includes("-->"));
   expect(edges).toEqual(['  mod3["web"] --> mod1["core"]']);
+  // The dropped edge is named under the diagram, as code spans, never as a link.
+  expect(regionBody(text, "module-dependencies").split("\n")).toContain(
+    'Not drawn (a module name holds a character a link cannot carry): `"web"` -> `"a[b]"`',
+  );
   const web = moduleNote(res, "web");
-  expect(web).not.toContain("a[b]");
+  expect(web).not.toContain("modules/a[b]");
   expect(web).toContain(`- [[Brain/projects/arch/${res.repoKey}/modules/core|core]]`);
+  expect(regionBody(web, "dependencies").split("\n")).toContain('Not linked: `"a[b]"`');
+});
+
+test("only unlinkable edges are named instead of a false no-edge sentence", () => {
+  put("packages/a[b]/package.json", JSON.stringify({ name: "@mono/ab" }));
+  put("packages/a[b]/index.ts", "// x\n");
+  put(
+    "packages/web/package.json",
+    JSON.stringify({ name: "@mono/web", dependencies: { "@mono/ab": "*" } }),
+  );
+  const res = generateArchDocs(vault, project);
+  expect(regionBody(overview(res), "module-dependencies")).toBe(
+    "Every declared module edge touches a module whose name a link cannot carry, " +
+      "so none is drawn:\n" +
+      '- `"web"` -> `"a[b]"`',
+  );
+  const web = regionBody(moduleNote(res, "web"), "dependencies").split("\n");
+  expect(web).toContain('Not linked: `"a[b]"`');
+  expect(web).not.toContain("Depends on: no other module");
+  expect(moduleNote(res, "web")).not.toContain("depends_on:");
+  // A module with no edge at all keeps the no-edge sentence.
+  expect(regionBody(moduleNote(res, "core"), "dependencies").split("\n")).toContain(
+    "Depends on: no other module",
+  );
+
+  const second = generateArchDocs(vault, project);
+  expect(second.updated).toBe(0);
+  expect(second.unchanged).toBe(2 + second.modulePaths.length);
 });
 
 // Windows refuses a control character in a directory name.

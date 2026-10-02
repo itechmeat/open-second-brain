@@ -338,8 +338,23 @@ const MODULE_DEPENDENCIES_CLAIM =
 const NO_MODULE_DEPENDENCY =
   "No module's manifest names exactly one other module's manifest as a runtime dependency.";
 
+/**
+ * What the `module-dependencies` region says, above the list of dropped
+ * edges, when modules declare edges but every one touches a module whose
+ * name a link cannot carry.
+ */
+const ONLY_UNLINKABLE_MODULE_DEPENDENCIES =
+  "Every declared module edge touches a module whose name a link cannot carry, " +
+  "so none is drawn:";
+
+/** What the `module-dependencies` region says under its diagram before the edges it dropped. */
+const UNDRAWN_EDGES_LEAD = "Not drawn (a module name holds a character a link cannot carry):";
+
 /** What a module note says when its module declares no edge. */
 const NO_DEPENDS_ON = "Depends on: no other module";
+
+/** What a module note says before the modules it declares an edge to but cannot link. */
+const NOT_LINKED_LEAD = "Not linked:";
 
 /** One manifest line: its path, ecosystem, status and, when it has one, the detail. */
 function manifestLine(reading: ManifestReading): string {
@@ -418,7 +433,14 @@ function modulesByName(facts: ProjectFacts): ReadonlyArray<ModuleFact> {
  */
 function moduleDependenciesBody(facts: ProjectFacts): string {
   const edges = linkableEdges(facts);
-  if (edges.length === 0) return NO_MODULE_DEPENDENCY;
+  const undrawn = unlinkableEdges(facts);
+  if (edges.length === 0) {
+    if (undrawn.length === 0) return NO_MODULE_DEPENDENCY;
+    return [
+      ONLY_UNLINKABLE_MODULE_DEPENDENCIES,
+      ...undrawn.map((edge) => `- ${edgeSpan(edge)}`),
+    ].join("\n");
+  }
   const ids = new Map(modulesByName(facts).map((module, index) => [module.name, `mod${index}`]));
   const node = (name: string): string => `${ids.get(name)}["${mermaidLabel(name)}"]`;
   return [
@@ -428,6 +450,9 @@ function moduleDependenciesBody(facts: ProjectFacts): string {
     "graph LR",
     ...edges.map((edge) => `  ${node(edge.from)} --> ${node(edge.to)}`),
     "```",
+    ...(undrawn.length === 0
+      ? []
+      : ["", `${UNDRAWN_EDGES_LEAD} ${undrawn.map(edgeSpan).join(", ")}`]),
   ].join("\n");
 }
 
@@ -458,7 +483,21 @@ function codeSpanName(name: string): string {
 
 /** The declared edges between modules a link can name; an edge touching any other is left out. */
 function linkableEdges(facts: ProjectFacts): ReadonlyArray<ModuleDependency> {
-  return facts.moduleDependencies.filter((edge) => isLinkable(edge.from) && isLinkable(edge.to));
+  return facts.moduleDependencies.filter(isLinkableEdge);
+}
+
+function isLinkableEdge(edge: ModuleDependency): boolean {
+  return isLinkable(edge.from) && isLinkable(edge.to);
+}
+
+/** The declared edges `linkableEdges` leaves out: each touches a module a link cannot name. */
+function unlinkableEdges(facts: ProjectFacts): ReadonlyArray<ModuleDependency> {
+  return facts.moduleDependencies.filter((edge) => !isLinkableEdge(edge));
+}
+
+/** One edge as two code spans, so a name no link can carry is still named, never linked. */
+function edgeSpan(edge: ModuleDependency): string {
+  return `${codeSpanName(edge.from)} -> ${codeSpanName(edge.to)}`;
 }
 
 /** The wikilink to one module's note, as the overview's module list writes it. */
@@ -582,18 +621,36 @@ function dependsOn(facts: ProjectFacts, module: ModuleFact): ReadonlyArray<strin
     .map((edge) => edge.to);
 }
 
-/** A module note's `dependencies` region: its manifests and the modules it depends on. */
+/** The modules `module` declares a dependency on whose edge no link can carry, sorted. */
+function notLinkedTargets(facts: ProjectFacts, module: ModuleFact): ReadonlyArray<string> {
+  return unlinkableEdges(facts)
+    .filter((edge) => edge.from === module.name)
+    .map((edge) => edge.to);
+}
+
+/**
+ * A module note's `dependencies` region: its manifests, the modules it
+ * depends on as links, and the ones it depends on that no link can carry
+ * as code spans.
+ */
 function moduleDependenciesRegionBody(
   key: string,
   module: ModuleFact,
   targets: ReadonlyArray<string>,
+  notLinked: ReadonlyArray<string>,
 ): string {
   if (module.manifests.length === 0) return NO_MODULE_MANIFEST;
-  const edges =
-    targets.length === 0
-      ? NO_DEPENDS_ON
-      : ["Depends on:", ...targets.map((name) => `- ${moduleLink(key, name)}`)].join("\n");
-  return `${dependencySections(module.manifests, new Set())}\n\n${edges}`;
+  const lines = [
+    ...(targets.length === 0
+      ? notLinked.length === 0
+        ? [NO_DEPENDS_ON]
+        : []
+      : ["Depends on:", ...targets.map((name) => `- ${moduleLink(key, name)}`)]),
+    ...(notLinked.length === 0
+      ? []
+      : [`${NOT_LINKED_LEAD} ${notLinked.map(codeSpanName).join(", ")}`]),
+  ];
+  return `${dependencySections(module.manifests, new Set())}\n\n${lines.join("\n")}`;
 }
 
 function overviewRegions(
@@ -690,6 +747,7 @@ function moduleRegions(
   key: string,
   module: ModuleFact,
   targets: ReadonlyArray<string>,
+  notLinked: ReadonlyArray<string>,
 ): ReadonlyArray<Region> {
   const facts = [
     `Path: ${oneLine(module.path)}`,
@@ -703,7 +761,7 @@ function moduleRegions(
   return [
     { id: "facts", body: facts },
     { id: "files", body: files },
-    { id: "dependencies", body: moduleDependenciesRegionBody(key, module, targets) },
+    { id: "dependencies", body: moduleDependenciesRegionBody(key, module, targets, notLinked) },
   ];
 }
 
@@ -868,7 +926,7 @@ function renderNotes(
       planNote(
         modulePath(dir, module),
         frontmatter("arch-module", key, [`module: ${yamlName(module.name)}`, ...owned.lines]),
-        moduleRegions(key, module, targets),
+        moduleRegions(key, module, targets, notLinkedTargets(facts, module)),
         owned,
       ),
     );
