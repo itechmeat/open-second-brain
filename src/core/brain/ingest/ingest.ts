@@ -456,13 +456,16 @@ function resolvesInsideVault(vault: string, canonicalSource: string): boolean {
   }
 }
 
-/** Read a stable `created_at` from an existing summary page, else fall back. */
 /** The frontmatter a rewrite keeps from the page it replaces. */
 interface KeptFrontmatter {
   readonly createdAt: string;
   readonly visibility?: FrontmatterMap[string];
 }
 
+/**
+ * Read the stable `created_at` and an operator-set `visibility` from an
+ * existing summary page; `created_at` falls back to `fallback`.
+ */
 function readKeptFrontmatter(absPath: string, fallback: string): KeptFrontmatter {
   const [meta] = parseFrontmatter(absPath);
   const value = meta["created_at"];

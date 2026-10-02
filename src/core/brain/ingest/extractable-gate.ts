@@ -87,8 +87,9 @@ export interface SkippedPage {
   readonly reason: SkippedPageReason;
   /**
    * The value behind the skip - the page's declared `schema_type`, or the
-   * `SourceFormat` token of a format skip - so the reason is checkable without re-reading the page (the page-lint `detail`
-   * pattern: identifiers cross the boundary, never prose).
+   * `SourceFormat` token of a format skip - so the reason is checkable
+   * without re-reading the page (the page-lint `detail` pattern:
+   * identifiers cross the boundary, never prose).
    */
   readonly detail: string;
 }
