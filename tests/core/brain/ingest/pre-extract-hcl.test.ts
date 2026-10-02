@@ -194,11 +194,6 @@ describe("preExtractCodeStructure - Terraform family", () => {
         `bucket.s3.amazonaws.com/vpc.zip?aws_access_key_secret=${P}#frag`,
       ],
       [
-        "a bare token in a git+https userinfo",
-        `git+https://${value}@github.com/org/net.git`,
-        `git+https://${P}@github.com/org/net.git`,
-      ],
-      [
         "a signed GCS URL, the key matched in any case",
         `gcs::https://www.googleapis.com/storage/v1/b/m.zip?X-Goog-Signature=${value}`,
         `gcs::https://www.googleapis.com/storage/v1/b/m.zip?X-Goog-Signature=${P}`,
@@ -215,6 +210,25 @@ describe("preExtractCodeStructure - Terraform family", () => {
         expect(JSON.stringify(res)).not.toContain(value);
       });
     }
+  });
+
+  test("a token shaped like a login in a git+https userinfo is still redacted", () => {
+    // On ssh a lowercase user reads as a login and is kept; git+https, like
+    // https, carries no login in its userinfo, so the same shape is a token.
+    const token = fakeCredential("glpat", "0a9b8c7d6e5f4a3b2c1d");
+    const res = asSuccess(
+      preExtractCodeStructure(
+        "infra/main.tf",
+        lines('module "net" {', `  source = "git+https://${token}@github.com/org/net.git"`, "}"),
+      ),
+    );
+    expect(res.edges).toEqual([
+      {
+        kind: "imports",
+        from: "infra/main.tf",
+        to: `git+https://${REDACTION_PLACEHOLDER}@github.com/org/net.git`,
+      },
+    ]);
   });
 
   test("a module source longer than the specifier limit is carried as the placeholder", () => {
