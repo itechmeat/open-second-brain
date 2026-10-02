@@ -8,8 +8,8 @@
  * extractor, an unknown extension - answers `extracted: false` with the
  * reason by name, without reading the file. So does an HTML or table file
  * the bounded reader refuses (not a regular file, larger than the read
- * limit). "Could not extract" is data: every such
- * answer exits 0. Read-only and deterministic; nothing is written.
+ * limit). "Could not extract" is data: every such answer exits 0. Read-only
+ * and deterministic; nothing is written.
  */
 
 import { statSync } from "node:fs";

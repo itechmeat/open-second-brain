@@ -229,6 +229,21 @@ describe("o2b brain extract", () => {
     });
   });
 
+  test("a file over the read cap is named source-too-large, as data", async () => {
+    const path = fixture("huge.csv", "a,b\n");
+    truncateSync(path, HTML_EXTRACT_MAX_SOURCE_BYTES + 1);
+    expect(await extractJson(path)).toEqual({
+      ok: true,
+      path,
+      extracted: false,
+      format: "csv",
+      reason: "source-too-large",
+    });
+    expect(await extractText(path)).toBe(
+      `extract: ${path} (csv)\n  not extracted: source-too-large\n`,
+    );
+  });
+
   test("a format with no extractor is named before the file is read", async () => {
     const path = fixture("scan.pdf", "%PDF-1.7\n");
     truncateSync(path, HTML_EXTRACT_MAX_SOURCE_BYTES + 1);
