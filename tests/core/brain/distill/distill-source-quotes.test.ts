@@ -5,7 +5,8 @@
  * whole write instead.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import {
   existsSync,
   mkdirSync,
@@ -159,19 +160,38 @@ describe("distillSource - quote check", () => {
   });
 });
 
+/** How many of the recorded fs calls named the source file. */
+const touches = (calls: ReadonlyArray<ReadonlyArray<unknown>>): number =>
+  calls.filter((args) => String(args[0]).endsWith(SOURCE)).length;
+
+describe("distillSource - one read of the source", () => {
+  test("the source file is opened or read exactly once per call", () => {
+    const open = spyOn(fs, "openSync");
+    const read = spyOn(fs, "readFileSync");
+    try {
+      distill([VERBATIM]);
+      expect(touches(open.mock.calls) + touches(read.mock.calls)).toBe(1);
+    } finally {
+      open.mockRestore();
+      read.mockRestore();
+    }
+  });
+});
+
+/** One distillation of the source with a predicate that refuses it. */
+const hidden = (claims: ReadonlyArray<DistillClaim>, strictQuotes = false): DistillSourceResult =>
+  distillSource(
+    vault,
+    { sourcePath: SOURCE, claims },
+    { agent: "claude", now: NOW, strictQuotes, readable: (rel) => rel !== SOURCE },
+  );
+
 /**
  * The caller's reach decides whether the source's bytes may answer the
  * check. A source the predicate refuses is checked as one with no local
  * bytes, and its digest is neither returned nor recorded.
  */
 describe("distillSource - a source the caller may not read", () => {
-  const hidden = (claims: ReadonlyArray<DistillClaim>, strictQuotes = false) =>
-    distillSource(
-      vault,
-      { sourcePath: SOURCE, claims },
-      { agent: "claude", now: NOW, strictQuotes, readable: (rel) => rel !== SOURCE },
-    );
-
   test("every span settles url-only and no digest is returned or written", () => {
     const res = hidden([VERBATIM, PARAPHRASE]);
     expect(res.quotes?.findings.map((f) => f.outcome)).toEqual([

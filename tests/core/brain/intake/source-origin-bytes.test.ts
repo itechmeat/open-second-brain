@@ -7,9 +7,8 @@
  * `readSourceOrigin` returns the bytes the digest was computed over.
  */
 
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import * as fs from "node:fs";
-import { mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,6 +21,7 @@ import {
   SourceTrustError,
 } from "../../../../src/core/brain/intake/source-trust.ts";
 import { INTAKE_TRUST } from "../../../../src/core/brain/trust/untrusted-provenance.ts";
+import { IS_WINDOWS } from "../../../helpers/platform.ts";
 
 const sha256 = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
 
@@ -70,15 +70,34 @@ describe("readSourceOrigin", () => {
     expect(() => readSourceOrigin(vault, "big.md")).toThrow(SourceTrustError);
     expect(() => classifySourceOrigin(vault, "big.md")).toThrow(SourceTrustError);
   });
+});
 
-  test("reads the source exactly once per call", () => {
-    const spy = spyOn(fs, "readFileSync");
-    try {
-      readSourceOrigin(vault, "note.md");
-      expect(spy).toHaveBeenCalledTimes(1);
-    } finally {
-      spy.mockRestore();
-    }
+describe("readSourceOrigin - the one descriptor read", () => {
+  let vault: string;
+
+  beforeEach(() => {
+    vault = mkdtempSync(join(tmpdir(), "source-origin-fd-"));
+    mkdirSync(join(vault, "Notes"));
+    writeFileSync(join(vault, "Notes", "real.md"), "# Real\n\nBody.\n");
+  });
+
+  afterEach(() => {
+    rmSync(vault, { recursive: true, force: true });
+  });
+
+  test.skipIf(IS_WINDOWS)("a symlink to a note inside the vault reads that note's bytes", () => {
+    symlinkSync(join(vault, "Notes", "real.md"), join(vault, "Notes", "link.md"));
+    const origin = readSourceOrigin(vault, "Notes/link.md");
+    expect(origin.trust).toBe(INTAKE_TRUST.trusted);
+    expect(origin.contentHash).toBe(hashFile(join(vault, "Notes", "real.md")));
+  });
+
+  test("an empty file is read as zero bytes with the digest of nothing", () => {
+    writeFileSync(join(vault, "Notes", "empty.md"), "");
+    const origin = readSourceOrigin(vault, "Notes/empty.md");
+    expect(origin.trust).toBe(INTAKE_TRUST.trusted);
+    expect(origin.bytes?.byteLength).toBe(0);
+    expect(origin.contentHash).toBe(sha256(new Uint8Array()));
   });
 });
 
