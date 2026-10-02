@@ -113,7 +113,7 @@ The full router with readiness criteria is [`install.md`](install.md); native Wi
 
 ## What is new
 
-1.66.0 puts a stable error code on every failed MCP call, `error.data.code` on a JSON-RPC error and `_meta["open-second-brain/error"].code` on an `isError` result, drawn from one closed registry with the error prose unchanged, so a client branches on a token instead of matching English text. The optional cross-encoder rerank names why it stepped aside on the retrieval trail (`rerank-provider-unavailable` with a typed category, never cached, and `rerank-model-sunset` for a model past its announced decommission date), and `o2b brain doctor` checks the rerank configuration without sending a request. Every release is described in the [CHANGELOG](CHANGELOG.md).
+1.67.0 makes a distillation page prove what it quotes and say how much of its source the vault holds. Every quoted span in a claim is checked against the block it cites, or the whole source, when the page is written; a span that does not verify loses its quotation marks and is named in the result, or refuses the write with `quote_unverified` under `strict_quotes`. Distillation, ingest summary and research report pages record a `capture_scope` of `full-local`, `bounded-local` (a stored verbatim excerpt with its digest) or `url-only`, and a default-on `capture-scope` hygiene detector warns when active knowledge rests only on `url-only` sources. Every release is described in the [CHANGELOG](CHANGELOG.md).
 
 ## Documentation
 

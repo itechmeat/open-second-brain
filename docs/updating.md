@@ -47,6 +47,46 @@ instruction files such as `CLAUDE.md`/`AGENTS.md`, installed
 `.claude/skills/`) and warns with the exact replacement for any stale
 reference it finds (`removed-tool-reference`).
 
+## Upgrading to 1.67.0
+
+No step below is required. Five changes are visible to an operator or a
+client.
+
+**A distilled quote that does not verify loses its quotation marks.**
+`brain_distill_source` and `o2b brain distill` now check every quoted span
+in a claim against the block it cites, or the whole source. A span the
+source does not hold is written without its two quotation marks and named
+in the result's `quotes` report; the words stay and the write lands. Pass
+`strict_quotes: true` (or `--strict-quotes`) to refuse such a write instead,
+with `error.data.code` `quote_unverified` over MCP and exit 1 on the CLI.
+See "Source distillation" in [`mcp.md`](mcp.md).
+
+**New frontmatter keys appear only on pages that are not `full-local`.**
+`capture_scope`, `capture_scopes` and `excerpt_hash` are written for a
+source that is `bounded-local` or `url-only`, and `quotes_verified` /
+`quotes_unquoted` only when a claim holds a quoted span. A distillation,
+ingest summary or research report over local sources is written
+byte-identical to before.
+
+**A claim or a research title that spans more than one line is refused.**
+A distillation claim holding a line break, or more than 1000 claims in one
+call, is refused, and so is a `brain_research_report` title holding a line
+break. Both used to be written as given.
+
+**Links inside a fenced block are masked up to its own closing fence.**
+Wikilink extraction and search indexing close a fenced block only on a run
+of its own character at least as long. Links inside a tilde fence are no
+longer extracted, and a longer fence holding a shorter backtick run no
+longer leaks the rest of its content as links, so such a vault may show
+fewer backlinks and link hits after its next index pass.
+
+**The `capture-scope` hygiene detector is on by default.** A default
+`brain_hygiene` or `o2b brain hygiene` scan may report new warnings on an
+existing vault where a distillation, ingest summary, research report or
+canonical entity cites only URLs. The findings propose review and never
+change a page. Callers that pin the default detector list see the new id
+at the end. See [`cli-reference.md`](cli-reference.md).
+
 ## Upgrading to 1.66.0
 
 No step below is required. Three changes are visible to a client or an
