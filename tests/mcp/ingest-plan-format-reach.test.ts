@@ -22,11 +22,11 @@ import { MCPServer } from "../../src/mcp/server.ts";
 const PRIVATE_PATH = "Clips/private.md";
 const PRIVATE_BODY = "---\nvisibility: private\n---\n# Private plan\nThe code is 4711.\n";
 /**
- * Hidden pages of every planned format: HTML and CSV are now planned by
- * default and pass the same reach predicate as Markdown.
+ * Hidden pages of the non-Markdown planned formats: HTML and CSV are now
+ * planned by default and pass the same reach predicate as Markdown, whose
+ * A/B is the first test below.
  */
 const PRIVATE_PAGES: ReadonlyArray<readonly [string, string]> = Object.freeze([
-  [PRIVATE_PATH, PRIVATE_BODY],
   ["Clips/private.csv", "---\nvisibility: private\n---\nname,code\nvault,4711\n"],
   ["Clips/private.html", "---\nvisibility: private\n---\n<h1>Private plan</h1><p>4711</p>\n"],
 ]);
