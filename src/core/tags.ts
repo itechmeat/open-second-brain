@@ -28,7 +28,14 @@
  */
 export const TAG_RE = /(^|[^\w/])#([A-Za-z_][\w\-/]*)/g;
 
-const CODE_FENCE_RE = /(^|\n)(```|~~~)[^\n]*\n[\s\S]*?(?:\n(?:```|~~~)[^\n]*|$)/g;
+// A fenced block runs from an opening line of three or more backticks or
+// tildes to the first later line that starts with a run of the SAME
+// character at least as long (or to the end of the text), the CommonMark
+// rule: a shorter run, or a run of the other character, is content. A
+// stored excerpt is fenced one backtick longer than any run it holds, so
+// its lines never close it early.
+const CODE_FENCE_RE =
+  /(^|\n)(?:(`{3,})[^\n]*\n[\s\S]*?(?:\n\2`*[^\n]*|$)|(~{3,})[^\n]*\n[\s\S]*?(?:\n\3~*[^\n]*|$))/g;
 const INLINE_CODE_RE = /`[^`\n]*`/g;
 
 /**

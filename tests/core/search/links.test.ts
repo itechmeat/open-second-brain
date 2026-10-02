@@ -1,4 +1,5 @@
 import { test, expect } from "bun:test";
+import { renderExcerptSection } from "../../../src/core/brain/provenance/capture-scope.ts";
 import { extractLinks } from "../../../src/core/search/links.ts";
 
 test("extracts wikilinks with and without alt text", () => {
@@ -178,4 +179,21 @@ test("reference links inside code fences are ignored", () => {
   const md = links.filter((l) => l.linkType === "markdown_link");
   expect(md.length).toBe(1);
   expect(md[0]?.targetPath).toBe("./design.md");
+});
+
+test("a fence closes only on a run of its own character at least as long", () => {
+  const longer = ["````", "x", "```", "[[inside-longer-fence]]", "````", "After [[real-link]]."];
+  const tilde = ["~~~", "```", "[[inside-tilde-fence]]", "```", "~~~", "After [[real-link]]."];
+  for (const lines of [longer, tilde]) {
+    const targets = extractLinks(lines.join("\n")).map((l) => l.targetPath);
+    expect(targets).toEqual(["real-link"]);
+  }
+});
+
+test("a stored excerpt contributes no links, whatever backtick lines it holds", () => {
+  for (const excerpt of ["x\n```\n[[Secret/Note]]\n", "```\n[[A]]\n```\n[[B]]"]) {
+    const page = `Intro [[real-link]].\n\n${renderExcerptSection(excerpt)}\nTail [[tail-link]].`;
+    const targets = extractLinks(page).map((l) => l.targetPath);
+    expect(targets).toEqual(["real-link", "tail-link"]);
+  }
 });
