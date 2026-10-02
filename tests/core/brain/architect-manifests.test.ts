@@ -85,6 +85,16 @@ describe("package.json", () => {
     expect(reading.otherGroups).toEqual([]);
   });
 
+  test("a package.json that starts with a UTF-8 byte order mark is read", () => {
+    seed(
+      "package.json",
+      `\uFEFF${JSON.stringify({ name: "bomtool", dependencies: { zod: "^3" } })}`,
+    );
+    const reading = readManifestAt(root, "package.json");
+    expect(reading.status).toBe(MANIFEST_STATUS.read);
+    expect(reading.fact?.name).toBe("bomtool");
+  });
+
   test("a JSON value that is not an object is malformed", () => {
     seed("package.json", "[1, 2]");
     const reading = readManifestAt(root, "package.json");

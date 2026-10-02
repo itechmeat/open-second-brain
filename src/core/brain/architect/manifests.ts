@@ -164,6 +164,9 @@ export function canonicalDependencyName(ecosystem: ManifestEcosystem, declared: 
   return declared;
 }
 
+/** A UTF-8 byte order mark, which npm and the TOML and go.mod readers all ignore. */
+const BYTE_ORDER_MARK = "\uFEFF";
+
 /**
  * Read the manifest at `relPath` under `root`. Every outcome of the
  * project's content is a reading; only a caller error throws: a basename
@@ -180,7 +183,9 @@ export function readManifestAt(root: string, relPath: string): ManifestReading {
   try {
     const read = readBounded(join(root, path));
     if (read.text === null) return reading(path, spec, MANIFEST_STATUS.unreadable, read.detail);
-    text = read.text;
+    text = read.text.startsWith(BYTE_ORDER_MARK)
+      ? read.text.slice(BYTE_ORDER_MARK.length)
+      : read.text;
   } catch (error) {
     return reading(path, spec, MANIFEST_STATUS.unreadable, errnoDetail(error));
   }
