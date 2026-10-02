@@ -496,7 +496,7 @@ function renderScopedBlock(
     }
     block = readScopedRules(
       vault,
-      { project: resolveProjectScope(workspaceDir), harness: null, host: host.host },
+      { project: resolveProjectScope(workspaceDir, vault), harness: null, host: host.host },
       { maxChars, hostUnreadable: host.unreadable },
     ).text;
   } catch {

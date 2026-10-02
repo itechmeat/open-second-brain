@@ -34,21 +34,23 @@ describe("resolveProjectScope", () => {
     mkdirSync(vault, { recursive: true });
     mkdirSync(sub, { recursive: true });
     writeVaultPointer(project, vault);
-    expect(resolveProjectScope(sub)).toBe("my-project-v2");
-    expect(resolveProjectScope(project)).toBe("my-project-v2");
+    expect(resolveProjectScope(sub, vault)).toBe("my-project-v2");
+    expect(resolveProjectScope(project, vault)).toBe("my-project-v2");
   });
 
   test("no pointer, a null directory and a malformed pointer give null", () => {
     const root = mkTemp("o2b-scope-none-");
+    const vault = join(root, "vault");
+    mkdirSync(vault, { recursive: true });
     const bare = join(root, "bare");
     mkdirSync(bare, { recursive: true });
-    expect(resolveProjectScope(bare)).toBeNull();
-    expect(resolveProjectScope(null)).toBeNull();
+    expect(resolveProjectScope(bare, vault)).toBeNull();
+    expect(resolveProjectScope(null, vault)).toBeNull();
 
     const broken = join(root, "broken");
     mkdirSync(broken, { recursive: true });
     writeFileSync(join(broken, VAULT_POINTER_FILE), "{not json");
-    expect(resolveProjectScope(broken)).toBeNull();
+    expect(resolveProjectScope(broken, vault)).toBeNull();
   });
 
   test("a project whose name has no Latin character still keys", () => {
@@ -58,7 +60,7 @@ describe("resolveProjectScope", () => {
     mkdirSync(vault, { recursive: true });
     mkdirSync(project, { recursive: true });
     writeVaultPointer(project, vault);
-    expect(resolveProjectScope(project)).toBe("проект-альфа");
+    expect(resolveProjectScope(project, vault)).toBe("проект-альфа");
   });
 
   test("a directory whose name has no letter or digit gives null", () => {
@@ -68,7 +70,45 @@ describe("resolveProjectScope", () => {
     mkdirSync(vault, { recursive: true });
     mkdirSync(project, { recursive: true });
     writeVaultPointer(project, vault);
-    expect(resolveProjectScope(project)).toBeNull();
+    expect(resolveProjectScope(project, vault)).toBeNull();
+  });
+});
+
+describe("resolveProjectScope and the serving vault", () => {
+  function linkedTree(): { root: string; vault: string; project: string } {
+    const root = mkTemp("o2b-scope-serving-");
+    const vault = join(root, "vault");
+    const project = join(root, "client-a");
+    mkdirSync(vault, { recursive: true });
+    mkdirSync(project, { recursive: true });
+    writeVaultPointer(project, vault);
+    return { root, vault, project };
+  }
+
+  test("a pointer naming another vault in a subdirectory is skipped", () => {
+    const { root, vault, project } = linkedTree();
+    const other = join(root, "other-vault");
+    const clone = join(project, "vendor", "evil");
+    mkdirSync(other, { recursive: true });
+    mkdirSync(join(clone, "src"), { recursive: true });
+    writeVaultPointer(clone, other);
+    expect(resolveProjectScope(join(clone, "src"), vault)).toBe("client-a");
+    expect(resolveProjectScope(join(clone, "src"), other)).toBe("evil");
+  });
+
+  test("a malformed pointer in a subdirectory is skipped and the parent pointer wins", () => {
+    const { vault, project } = linkedTree();
+    const broken = join(project, "vendor", "broken");
+    mkdirSync(broken, { recursive: true });
+    writeFileSync(join(broken, VAULT_POINTER_FILE), "{not json");
+    expect(resolveProjectScope(broken, vault)).toBe("client-a");
+  });
+
+  test("only pointers naming another vault give null", () => {
+    const { root, project } = linkedTree();
+    const other = join(root, "other-vault");
+    mkdirSync(other, { recursive: true });
+    expect(resolveProjectScope(project, other)).toBeNull();
   });
 });
 

@@ -60,7 +60,7 @@ The OpenClaw bundle (`openclaw/index.js`) belongs to no lane: the integrator run
 
 ### `src/core/brain/scope-identity.ts` (lane A, A2)
 
-- `export function resolveProjectScope(workspaceDir: string | null): string | null` - `findVaultPointer(workspaceDir)`; `null` for a null dir, no pointer, or `probe.error !== null`; else `scopedRuleKey(basename(probe.dir))`.
+- `export function resolveProjectScope(workspaceDir: string | null, servingVault: string): string | null` - walks `findVaultPointer` up from `workspaceDir`; the first pointer whose vault has the serving vault's real path gives `scopedRuleKey(basename(probe.dir))`; a pointer naming another vault or a malformed one is skipped; `null` for a null dir or when none matches (amended in review, see design.md "Review amendments").
 - `export interface HostScope { readonly host: string | null; readonly unreadable: boolean }`
 - `export function resolveHostScope(configPath: string | undefined): HostScope` - `resolveDeviceId(configPath)`; `""` gives `{host: null, unreadable: false}`; a thrown `ConfigReadError` gives `{host: null, unreadable: true}`; any other throw propagates; a value gives `{host: scopedRuleKey(id), unreadable: false}`.
 - `export function resolveHarnessScope(harness: HarnessId | undefined, hostTarget: InstallTargetId | undefined): HarnessId | null` - `harness ?? hostTarget ?? null`.

@@ -598,7 +598,7 @@ function readScopedBlock(ctx: ServerContext): ScopedRules | null {
     host = { host: null, unreadable: true };
   }
   const identity: ScopedRuleIdentity = {
-    project: resolveProjectScope(ctx.ruleScope?.workspaceDir ?? null),
+    project: resolveProjectScope(ctx.ruleScope?.workspaceDir ?? null, ctx.vault),
     harness: ctx.ruleScope?.harness ?? null,
     host: host.host,
   };
