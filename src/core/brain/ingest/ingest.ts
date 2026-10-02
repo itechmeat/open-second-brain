@@ -32,6 +32,7 @@ import {
 import { dirname, join, relative } from "node:path";
 
 import type { FrontmatterMap } from "../../types.ts";
+import { normToken } from "../../graph/visibility.ts";
 import { canonicalNotePath, ensureInsideVault } from "../../path-safety.ts";
 import { assertCheckpointId } from "../checkpoint-store.ts";
 import {
@@ -247,7 +248,7 @@ export function ingestSource(
     created_at: kept.createdAt,
     updated_at: stamp,
     tags: ["brain", "brain/source"],
-    ...(kept.visibility !== undefined ? { [VISIBILITY_FRONTMATTER_KEY]: kept.visibility } : {}),
+    ...visibilityFrontmatter(kept.visibility, derivation?.visibility),
   };
 
   const body = [
@@ -470,4 +471,27 @@ function readKeptFrontmatter(absPath: string, fallback: string): KeptFrontmatter
   return visibility === undefined || visibility === null
     ? { createdAt }
     : { createdAt, visibility };
+}
+
+/**
+ * The summary page's `visibility`: the kept value as it was when the source
+ * declares none (a page with neither gains none), else the union of the
+ * kept tokens and the source's own, kept ones first. A page that copies
+ * source content is at most as visible as its source, and a re-ingest
+ * never narrows what the operator set.
+ */
+function visibilityFrontmatter(
+  kept: KeptFrontmatter["visibility"],
+  source: readonly string[] | undefined,
+): FrontmatterMap {
+  if (source === undefined || source.length === 0) {
+    return kept !== undefined ? { [VISIBILITY_FRONTMATTER_KEY]: kept } : {};
+  }
+  const keptTokens =
+    kept === undefined ? [] : Array.isArray(kept) ? kept.map(String) : [String(kept)];
+  const union = [...keptTokens];
+  for (const token of source) {
+    if (!keptTokens.some((k) => normToken(k) === token)) union.push(token);
+  }
+  return { [VISIBILITY_FRONTMATTER_KEY]: union };
 }

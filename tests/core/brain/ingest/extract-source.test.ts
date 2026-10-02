@@ -5,9 +5,16 @@
  * and an unregistered extension answers `format-unknown` before the switch.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { extractSource } from "../../../../src/core/brain/ingest/extract-source.ts";
+import {
+  deriveSourceSection,
+  extractSource,
+} from "../../../../src/core/brain/ingest/extract-source.ts";
+import { INTAKE_TRUST } from "../../../../src/core/brain/trust/untrusted-provenance.ts";
 
 const utf8 = (text: string): Uint8Array => new TextEncoder().encode(text);
 
@@ -65,5 +72,69 @@ describe("extractSource", () => {
     const res = extractSource("Clips/page.htm", new Uint8Array([0x3c, 0x70, 0x3e, 0xff, 0xfe]));
     if (!("html" in res)) throw new Error("expected the html arm");
     expect(res.html).toEqual({ extracted: false, reason: "not-utf8" });
+  });
+});
+
+/** A source whose own frontmatter reserves it, ahead of its data. */
+const RESERVED_CSV = "---\nvisibility: private\n---\nname,code\nvault,4711\n";
+const RESERVED_HTML = "---\nvisibility: private\n---\n<h1>Vault plan</h1><p>4711</p>\n";
+
+describe("a leading frontmatter block is not source data", () => {
+  test("a CSV renders the records after the block, the header first", () => {
+    const res = extractSource("Clips/h.csv", utf8(RESERVED_CSV));
+    if (!("table" in res) || !res.table.rendered) throw new Error("expected a rendering");
+    expect([res.table.columns, res.table.rows]).toEqual([2, 1]);
+    expect(res.table.section).toContain("name | code\nvault | 4711\n");
+    expect(res.table.section).not.toContain("---");
+    expect(res.table.section).not.toContain("visibility");
+  });
+
+  test("a byte-order mark and CRLF line ends do not hide the block", () => {
+    const res = extractSource(
+      "Clips/h.csv",
+      utf8(`\uFEFF${RESERVED_CSV.replaceAll("\n", "\r\n")}`),
+    );
+    if (!("table" in res) || !res.table.rendered) throw new Error("expected a rendering");
+    expect([res.table.columns, res.table.rows]).toEqual([2, 1]);
+    expect(res.table.section).not.toContain("visibility");
+  });
+
+  test("an HTML source renders no block text and no preamble part for it", () => {
+    const res = extractSource("Clips/h.html", utf8(RESERVED_HTML));
+    if (!("html" in res) || !res.html.extracted) throw new Error("expected an extraction");
+    expect(res.html.text).not.toContain("visibility");
+    expect(res.html.parts.map((p) => p.heading)).toEqual(["Vault plan"]);
+  });
+
+  test("an unclosed block is data, as the frontmatter reader treats it", () => {
+    const res = extractSource("Clips/h.csv", utf8("---\nname\nbolt\n"));
+    if (!("table" in res) || !res.table.rendered) throw new Error("expected a rendering");
+    expect(res.table.section).toContain("---\nname\nbolt\n");
+  });
+});
+
+describe("deriveSourceSection names the source's own visibility", () => {
+  const vaults: string[] = [];
+  afterEach(() => {
+    for (const vault of vaults.splice(0)) rmSync(vault, { recursive: true, force: true });
+  });
+
+  function derive(rel: string, body: string) {
+    const vault = mkdtempSync(join(tmpdir(), "o2b-derive-visibility-"));
+    vaults.push(vault);
+    mkdirSync(join(vault, "Clips"), { recursive: true });
+    writeFileSync(join(vault, rel), body);
+    return deriveSourceSection(vault, rel, INTAKE_TRUST.trusted, () => true);
+  }
+
+  test("a reserved CSV and a reserved HTML source carry their tokens", () => {
+    expect(derive("Clips/h.csv", RESERVED_CSV)?.visibility).toEqual(["private"]);
+    expect(derive("Clips/h.html", RESERVED_HTML)?.visibility).toEqual(["private"]);
+  });
+
+  test("a source with no visibility carries none", () => {
+    const derived = derive("Clips/parts.csv", "name,qty\nbolt,4\n");
+    expect(derived?.table).toMatchObject({ rendered: true });
+    expect(derived !== undefined && "visibility" in derived).toBe(false);
   });
 });

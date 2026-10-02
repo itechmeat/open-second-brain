@@ -10,8 +10,10 @@
  * section (`## Parts` or `## Table`); for every other source nothing.
  */
 
+import { pageVisibility, REMOTE_DENY_VISIBILITY_TOKEN } from "../../graph/visibility.ts";
+import { readCachedFrontmatterEntry } from "../../search/result-filters.ts";
 import type { FrontmatterMap } from "../../types.ts";
-import { isSourceHidden, readSourceOrigin } from "../intake/source-trust.ts";
+import { isSourceHidden, readSourceOrigin, vaultShapedIdentity } from "../intake/source-trust.ts";
 import {
   INTAKE_TRUST,
   type IntakeTrust,
@@ -80,10 +82,55 @@ export function extractSource(path: string, bytes: Uint8Array): SourceExtraction
         reason: SOURCE_EXTRACT_SKIP_REASON.formatReadVerbatim,
       };
     case SOURCE_EXTRACTOR.html:
-      return { extractor: spec.extractor, format: spec.format, html: extractHtml(bytes) };
+      return {
+        extractor: spec.extractor,
+        format: spec.format,
+        html: extractHtml(withoutLeadingFrontmatter(bytes)),
+      };
     case SOURCE_EXTRACTOR.table:
-      return { extractor: spec.extractor, format: spec.format, table: tableNote(path, bytes) };
+      return {
+        extractor: spec.extractor,
+        format: spec.format,
+        table: tableNote(path, withoutLeadingFrontmatter(bytes)),
+      };
   }
+}
+
+/** The UTF-8 byte-order mark, which may precede a leading frontmatter block. */
+const UTF8_BOM = Object.freeze([0xef, 0xbb, 0xbf]);
+/** The first bytes of a frontmatter block. */
+const FRONTMATTER_FENCE = "---";
+/**
+ * A leading frontmatter block: the same shape the vault's frontmatter
+ * reader (`parseFrontmatterText` in `core/vault.ts`) parses, so the block
+ * the reach predicate reads a source's visibility from is exactly the
+ * block withheld from the extractor.
+ */
+const LEADING_FRONTMATTER_RE = /^---\s*\n[\s\S]*?\n---\s*\n?/;
+const UTF8_STRICT = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+const UTF8_ENCODER = new TextEncoder();
+
+/**
+ * `bytes` without one leading frontmatter block (after an optional
+ * byte-order mark), so the block is never rendered as source data: a CSV
+ * header of `---` or a `visibility: private` row. Bytes that are not UTF-8
+ * or open with no closed block are returned as they are, and the extractor
+ * answers for them.
+ */
+function withoutLeadingFrontmatter(bytes: Uint8Array): Uint8Array {
+  const bom = UTF8_BOM.every((byte, i) => bytes[i] === byte) ? UTF8_BOM.length : 0;
+  for (let i = 0; i < FRONTMATTER_FENCE.length; i++) {
+    if (bytes[bom + i] !== FRONTMATTER_FENCE.charCodeAt(i)) return bytes;
+  }
+  let text: string;
+  try {
+    text = UTF8_STRICT.decode(bytes.subarray(bom));
+  } catch {
+    return bytes;
+  }
+  const block = LEADING_FRONTMATTER_RE.exec(text);
+  if (block === null) return bytes;
+  return bytes.subarray(bom + UTF8_ENCODER.encode(block[0]).length);
 }
 
 /** The HTML outcome on an ingest result: counts only, never the text. */
@@ -103,6 +150,11 @@ export interface SourceDerivation {
   readonly section: string;
   readonly parts?: PartsOutcome;
   readonly table?: TableOutcome;
+  /**
+   * The source's own visibility tokens, present only when it declares some:
+   * a page that copies source content is at most as visible as the source.
+   */
+  readonly visibility?: readonly string[];
 }
 
 /** Frontmatter key naming a derived page's source format. */
@@ -177,10 +229,12 @@ export function deriveSourceSection(
     [SOURCE_FORMAT_FRONTMATTER_KEY]: format,
     ...sourceContentHashFrontmatter(origin.contentHash),
   };
+  const visibility = sourceVisibility(vault, source);
+  const reach = visibility.length > 0 ? { visibility } : {};
   const extraction = extractSource(source, origin.bytes);
   if ("html" in extraction) {
     const { parts, section } = fromHtml(extraction.html);
-    return { format, frontmatter: base, section, parts };
+    return { format, frontmatter: base, section, parts, ...reach };
   }
   if ("table" in extraction) {
     const derived = fromTable(extraction.table);
@@ -189,9 +243,22 @@ export function deriveSourceSection(
       frontmatter: { ...base, ...derived.frontmatter },
       section: derived.section,
       table: derived.table,
+      ...reach,
     };
   }
   // The registry gave this format an html or table extractor above, so the
   // dispatch answered with that arm; anything else is a registry defect.
   throw new Error(`extractor ${extractor} answered without its arm for ${format}`);
+}
+
+/**
+ * The visibility tokens `source` declares, read the way the reach predicate
+ * (`isPathReadableAtReach`) reads them: a source whose frontmatter cannot
+ * be read answers the reserved token, as that predicate does.
+ */
+function sourceVisibility(vault: string, source: string): readonly string[] {
+  const rel = vaultShapedIdentity(vault, source);
+  if (rel === null) return [];
+  const entry = readCachedFrontmatterEntry(new Map(), vault, rel);
+  return entry.unreadable ? [REMOTE_DENY_VISIBILITY_TOKEN] : pageVisibility(entry.meta);
 }

@@ -278,6 +278,24 @@ describe("visibility on a summary page", () => {
     expect(after).toContain('updated_at: "2026-06-14T09:00:00Z"');
   });
 
+  test("a summary page carrying a derived section is at most as visible as its source", () => {
+    seed(vault, "Clips/parts.csv", `---\nvisibility: [private]\n---\n${PARTS_CSV}`);
+    const res = ingestSource(vault, input("Clips/parts.csv"), { agent: "claude", now: NOW });
+    expect(res.table).toMatchObject({ rendered: true, rows: 2 });
+    expect(frontmatterLines(page(vault, res.summaryPath))).toContain("visibility: [private]");
+  });
+
+  test("the source's visibility joins an operator-set one, never narrowing it", () => {
+    seed(vault, "Clips/parts.csv", PARTS_CSV);
+    const res = ingestSource(vault, input("Clips/parts.csv"), { agent: "claude", now: NOW });
+    const abs = join(vault, res.summaryPath);
+    writeFileSync(abs, readFileSync(abs, "utf8").replace("\n---\n", "\nvisibility: team\n---\n"));
+
+    seed(vault, "Clips/parts.csv", `---\nvisibility: private\n---\n${PARTS_CSV}`);
+    ingestSource(vault, input("Clips/parts.csv"), { agent: "claude", now: LATER });
+    expect(frontmatterLines(readFileSync(abs, "utf8"))).toContain("visibility: [team, private]");
+  });
+
   test("a page with no visibility gains none", () => {
     seed(vault, "Notes/a.md", "# A\n");
     const res = ingestSource(vault, input("Notes/a.md"), { agent: "claude", now: NOW });
