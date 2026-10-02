@@ -85,4 +85,32 @@ describe("writeResearchReport capture scopes", () => {
 
     expect(present.captureScopes).toEqual([CAPTURE_SCOPE.fullLocal, CAPTURE_SCOPE.urlOnly]);
   });
+
+  test("a source the caller cannot read is url-only in the result and on the page", () => {
+    seed(LOCAL_SOURCE);
+    seed("Notes/open.md");
+    const asked: string[] = [];
+    const readable = (rel: string): boolean => {
+      asked.push(rel);
+      return rel !== LOCAL_SOURCE;
+    };
+
+    const result = writeResearchReport(
+      vault,
+      {
+        title: "T",
+        sources: [`[[${LOCAL_SOURCE}]]`, "Notes/open.md", URL_SOURCE],
+        findings: [{ statement: "S", sources: [URL_SOURCE] }],
+      },
+      { agent: "claude", now: NOW, readable },
+    );
+
+    // The hidden file answers exactly as an absent one would.
+    const expected = [CAPTURE_SCOPE.urlOnly, CAPTURE_SCOPE.fullLocal, CAPTURE_SCOPE.urlOnly];
+    expect(result.captureScopes).toEqual(expected);
+    const [meta] = parseFrontmatter(join(vault, result.reportPath));
+    expect(meta[CAPTURE_SCOPES_KEY]).toEqual(expected);
+    // The predicate is asked about the normalised vault path, never the URL.
+    expect(asked).toEqual([LOCAL_SOURCE, "Notes/open.md"]);
+  });
 });

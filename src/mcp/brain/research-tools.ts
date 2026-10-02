@@ -17,6 +17,7 @@ import { ResponseShapeError } from "../../core/brain/response-shape.ts";
 import { resolveAgentName } from "../../core/config.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceStr } from "../coerce.ts";
+import { readableAtContextReach } from "./reach-readable.ts";
 import { wrapToolErrors } from "./shared.ts";
 
 const TOOL = "brain_research_report";
@@ -35,7 +36,13 @@ async function toolBrainResearchReport(
     // Shape first: the payload is validated before the citation contract is
     // evaluated, so a malformed finding aborts the report unwritten.
     const input = parseResearchReportInput(args);
-    const res = writeResearchReport(ctx.vault, input, { agent, now: new Date() });
+    // Scopes answer at the caller's reach: a page the caller may not read
+    // is reported exactly as an absent one.
+    const res = writeResearchReport(ctx.vault, input, {
+      agent,
+      now: new Date(),
+      readable: readableAtContextReach(ctx),
+    });
     return {
       report_path: res.reportPath,
       created: res.created,

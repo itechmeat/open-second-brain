@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { CAPTURE_SCOPE } from "../../src/core/brain/provenance/capture-scope.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { RESEARCH_TOOLS } from "../../src/mcp/brain/research-tools.ts";
 import { MCPError } from "../../src/mcp/protocol.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
@@ -82,5 +83,22 @@ describe("brain_research_report - capture_scopes", () => {
       findings: [{ statement: "A point", sources: ["Articles/held.md"] }],
     })) as Record<string, unknown>;
     expect(res["capture_scopes"]).toEqual([CAPTURE_SCOPE.urlOnly, CAPTURE_SCOPE.fullLocal]);
+  });
+
+  test("a vault page withheld at the caller's reach is reported as url-only", async () => {
+    mkdirSync(join(vault, "Notes"), { recursive: true });
+    writeFileSync(join(vault, "Notes", "secret.md"), "---\nvisibility: private\n---\nbody\n");
+    writeFileSync(join(vault, "Notes", "open.md"), "---\ntitle: open\n---\nbody\n");
+    const args = {
+      title: "Reach",
+      sources: ["Notes/secret.md", "Notes/open.md"],
+      findings: [{ statement: "A point", sources: ["Notes/open.md"] }],
+    };
+
+    const remote = await handler({ ...ctx, reach: TRANSPORT_REACH.remote }, args);
+    expect(remote.capture_scopes).toEqual([CAPTURE_SCOPE.urlOnly, CAPTURE_SCOPE.fullLocal]);
+
+    const local = await handler({ ...ctx, reach: TRANSPORT_REACH.local }, args);
+    expect(local.capture_scopes).toEqual([CAPTURE_SCOPE.fullLocal, CAPTURE_SCOPE.fullLocal]);
   });
 });

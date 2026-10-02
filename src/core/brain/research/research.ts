@@ -18,7 +18,7 @@
  */
 
 import { existsSync, mkdirSync } from "node:fs";
-import { dirname, relative } from "node:path";
+import { dirname, extname, join, relative } from "node:path";
 
 import type { FrontmatterMap } from "../../types.ts";
 import { canonicalNotePath } from "../../path-safety.ts";
@@ -33,10 +33,12 @@ import {
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { renderProvenanceSection, type Provenance } from "../provenance/provenance.ts";
 import {
+  CAPTURE_SCOPE,
   captureScopesFrontmatter,
   classifyCaptureScope,
   type CaptureScope,
 } from "../provenance/capture-scope.ts";
+import { normalizeSourceIdentity } from "../intake/source-trust.ts";
 import {
   ExternalFetchError,
   createFetchTransport,
@@ -76,6 +78,14 @@ export interface ResearchReportInput {
 export interface ResearchReportOptions {
   readonly agent: string;
   readonly now: Date;
+  /**
+   * May the caller read this vault-relative path? Supplied by a surface
+   * that answers at a reach narrower than the vault (the MCP tool at remote
+   * reach); a local caller passes nothing. A source backed by a file the
+   * caller cannot read is reported `url-only`, the same answer as an absent
+   * file, in the result and on the page.
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 export interface ResearchReportResult {
@@ -162,6 +172,26 @@ function validate(input: ResearchReportInput): void {
 }
 
 /**
+ * The capture scope of one consulted source as the caller may know it. A
+ * `full-local` source whose backing file the caller cannot read answers
+ * `url-only`, so the scope never tells a narrower caller that a hidden page
+ * exists. The backing file is the identity's own path, or its `.md`
+ * sibling when the identity names no extension and has no file of its own.
+ */
+function captureScopeAtReach(
+  vault: string,
+  source: string,
+  readable: ((rel: string) => boolean) | undefined,
+): CaptureScope {
+  const scope = classifyCaptureScope(vault, source);
+  if (scope !== CAPTURE_SCOPE.fullLocal || readable === undefined) return scope;
+  const target = normalizeSourceIdentity(source);
+  const backing =
+    extname(target) === "" && !existsSync(join(vault, target)) ? `${target}.md` : target;
+  return readable(backing) ? scope : CAPTURE_SCOPE.urlOnly;
+}
+
+/**
  * Write a dated, cited research report. Validates the citation contract first
  * (throwing {@link ResearchValidationError} with no write on failure), then
  * writes the report page idempotently on the date+title path.
@@ -192,7 +222,7 @@ export function writeResearchReport(
   // Classified from the identity alone (no byte read), in the consulted
   // order, so `capture_scopes[i]` always describes `sources[i]`.
   const captureScopes = Object.freeze(
-    input.sources.map((source) => classifyCaptureScope(vault, source)),
+    input.sources.map((source) => captureScopeAtReach(vault, source, opts.readable)),
   );
 
   const body = [
