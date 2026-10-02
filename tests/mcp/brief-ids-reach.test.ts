@@ -150,6 +150,12 @@ function fixture(withPrivate: boolean): Fixture {
     }
     dream(vault, older, [`pref-${PRIVATE_SLUG}`, `pref-${RETIRED_SLUG}`], []);
     dream(vault, recent, [`pref-${RETIRED_SLUG}`], [`ret-${RETIRED_SLUG}`]);
+    // A lifecycle event outside a dream that names the reserved record: it
+    // moves no count at remote reach either.
+    log(vault, recent, BRAIN_LOG_EVENT_KIND.forceConfirmed, {
+      path: PRIVATE_PATH,
+      preference: `[[pref-${PRIVATE_SLUG}]]`,
+    });
     writeFileSync(
       join(brainDirs(vault).retired, `ret-${RETIRED_SLUG}.md`),
       [
