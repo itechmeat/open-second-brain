@@ -1370,8 +1370,9 @@ Each span is compared with the evidence after the same normalisation is
 applied to both sides: Unicode NFC, inline Markdown reduced to its
 display text (paired emphasis and code markers, so `snake_case` and
 `2*3` stay as written, `[text](url)`, `[[target|alias]]`,
-`[[target]]`), line-leading block markers and a trailing ` ^id` removed,
-quotation-mark variants folded, whitespace runs collapsed. Case,
+`[[target]]`), line-leading block markers (on the evidence side only: a
+span's own leading `3. `, `- ` or `> ` is wording) and a trailing ` ^id`
+removed, quotation-mark variants folded, whitespace runs collapsed. Case,
 punctuation and wording are never folded. The normalised span must then
 be an exact substring of the normalised evidence that starts and ends on
 a word boundary, by the Unicode word rules, so `"safe"` does not verify

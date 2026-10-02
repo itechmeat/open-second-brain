@@ -349,3 +349,19 @@ describe("word boundaries at the outer ends of a span", () => {
     expect(spanOccursIn(`the${cp(0x2026)}today unsafe`, haystack)).toBe(false);
   });
 });
+
+describe("line markers on the span side", () => {
+  test("a span's own leading list number is wording, not a marker", () => {
+    expect(spanOccursIn("3. the cat sat", normalizeForQuoteComparison("the cat sat"))).toBe(false);
+    expect(spanOccursIn("1) the cat sat", normalizeForQuoteComparison("the cat sat"))).toBe(false);
+  });
+
+  test("a list marker on the evidence side is still removed", () => {
+    expect(spanOccursIn("the cat sat", normalizeForQuoteComparison("3. the cat sat"))).toBe(true);
+  });
+
+  test("a span's own leading quote or bullet marker is wording, not a marker", () => {
+    expect(spanOccursIn("> the cat sat", normalizeForQuoteComparison("the cat sat"))).toBe(false);
+    expect(spanOccursIn("- the cat sat", normalizeForQuoteComparison("the cat sat"))).toBe(false);
+  });
+});

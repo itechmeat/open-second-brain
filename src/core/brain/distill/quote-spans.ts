@@ -388,17 +388,39 @@ function stripInlineDelimiters(text: string): string {
   return out + text.slice(from);
 }
 
+/** Options of {@link normalizeForQuoteComparison}. */
+export interface QuoteNormalizeOptions {
+  /**
+   * Remove line-leading blockquote and list markers (default `true`). A span
+   * passes `false`: it is one run of the claim's own words, so a leading
+   * `3. ` or `> ` in it is wording to match, not a block marker.
+   */
+  readonly lineMarkers?: boolean;
+}
+
 /**
  * The comparison form of a text, applied identically to a span and to the
- * text it is checked against: NFC; block markers, trailing block ids and
+ * text it is checked against: NFC; block markers (on the evidence side only,
+ * see {@link QuoteNormalizeOptions.lineMarkers}), trailing block ids and
  * paired inline Markdown reduced to display text; quote marks folded to their
  * ASCII width (bracket-type quotation marks to `"`); whitespace collapsed.
  * Case, punctuation and wording are untouched. Comparison only: no page byte
  * is ever rewritten through this function. Linear in the length of `text`.
  */
-export function normalizeForQuoteComparison(text: string): string {
+export function normalizeForQuoteComparison(
+  text: string,
+  opts: QuoteNormalizeOptions = {},
+): string {
+  const nfc = text.normalize("NFC");
+  const lined =
+    opts.lineMarkers === false
+      ? nfc
+          .split("\n")
+          .map((line) => stripTrailingBlockId(line))
+          .join("\n")
+      : stripLineMarkers(nfc);
   const reduced = stripInlineDelimiters(
-    stripLineMarkers(text.normalize("NFC"))
+    lined
       .replace(WIKILINK_ALIASED_RE, "$1")
       .replace(WIKILINK_RE, "$1")
       .replace(MARKDOWN_LINK_RE, "$1"),
@@ -465,7 +487,7 @@ export function spanOccursIn(inner: string, haystack: string | QuoteHaystack): b
   const target = typeof haystack === "string" ? quoteHaystack(haystack) : haystack;
   const text = target.normalized;
   const fragments = splitEllipsisFragments(inner)
-    .map(normalizeForQuoteComparison)
+    .map((fragment) => normalizeForQuoteComparison(fragment, { lineMarkers: false }))
     .filter((fragment) => fragment.length > 0);
   if (fragments.length === 0) return false;
   const openStart = LEADING_ELLIPSIS_RE.test(inner);
