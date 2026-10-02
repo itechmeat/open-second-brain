@@ -630,7 +630,7 @@ class HtmlScanner {
       const content = decodeAll(this.readUntilEndTag(name));
       if (name === TITLE_ELEMENT) {
         if (this.title === null) {
-          const folded = collapseWhitespace(content);
+          const folded = oneLine(collapseWhitespace(content));
           if (folded.length > 0) this.title = capCodePoints(folded, HTML_HEADING_MAX_CHARS);
         }
         return;

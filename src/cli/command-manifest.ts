@@ -448,6 +448,11 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           "Extract deterministic code structure (classes/functions/imports/inheritance, Terraform blocks/references) from a source file as JSON seeds",
           [flag("json", "boolean")],
         ),
+        command(
+          "extract",
+          "Preview what ingest derives from one source file (HTML title, text and parts; CSV or TSV table note), or why it derives nothing",
+          [flag("json", "boolean")],
+        ),
         command("links", "Normalize wikilink path format across Brain notes"),
         command("bridges", "Propose, accept, or dismiss embedding-near bridge links"),
         command("clusters", "Detect link-graph communities and materialize cluster notes"),

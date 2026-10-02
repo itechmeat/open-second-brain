@@ -147,6 +147,10 @@ describe("extractHtml - text", () => {
     expect(result.text).toBe("x");
   });
 
+  test("a title is folded onto one line", () => {
+    expect(extracted("<title>bell\u0007here</title>").title).toBe("bell here");
+  });
+
   test("a document without a title answers null", () => {
     expect(extracted("<p>x</p>").title).toBeNull();
   });
