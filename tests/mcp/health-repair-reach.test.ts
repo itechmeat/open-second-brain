@@ -32,6 +32,9 @@ const PRIVATE_PATH = `Brain/preferences/pref-${PRIVATE_SLUG}.md`;
 const DEAD_SIGNAL = "sig-never-written";
 const RESERVE_LINE = `visibility: [${REMOTE_DENY_VISIBILITY_TOKEN}]`;
 const REPAIR_EVENT = "doctor-repair";
+/** Doctor classes no fixer covers, which the fixture's records raise. */
+const UNUSED_RULE_CODE = "low-evidence-confirmed";
+const BROKEN_BACKLINK_CODE = "broken-backlinks";
 /** Any ISO-8601 instant: the two vaults are built seconds apart. */
 const STAMP_RE = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g;
 
@@ -118,6 +121,15 @@ async function answer(
     .replace(STAMP_RE, "<T>");
 }
 
+/** `unfixable` of a `brain_doctor {repair:true}` answer, as code -> count. */
+function unfixableCounts(answerText: string): Map<string, number> {
+  const envelope = JSON.parse(answerText) as { content: ReadonlyArray<{ text: string }> };
+  const payload = JSON.parse(envelope.content[0]!.text) as {
+    repair: { unfixable: ReadonlyArray<{ code: string; count: number }> };
+  };
+  return new Map(payload.repair.unfixable.map((u) => [u.code, u.count]));
+}
+
 /** Every log day's text: a repair event names the page it fixed. */
 function logText(f: Fixture): string {
   const dir = brainDirs(f.vault).log;
@@ -159,6 +171,52 @@ describe("a reserved preference is absent from health and repair at remote reach
     expect(withheld).toBe(absent);
     expect(readFileSync(join(a.vault, PRIVATE_PATH), "utf8")).toBe(before);
     expect(logText(a)).not.toContain(PRIVATE_SLUG);
+  });
+
+  test("a remote caller is still told about a shared record and still gets it repaired", async () => {
+    // Positive control for the A/B above: vault B alone has no finding and
+    // no fix, so an identical pair also passes if remote reach drops every
+    // finding. A shared record with the same defects must survive remote.
+    const b = fixture(false);
+    const sharedSlug = "zzsharedrulezz";
+    const sharedDead = "sig-shared-never-written";
+    confirmed(b.vault, sharedSlug, "always indent source with tabs not spaces", [
+      signal(b.vault, "tabs-pos-shared", "positive"),
+      sharedDead,
+    ]);
+    const sharedPath = join(b.vault, `Brain/preferences/pref-${sharedSlug}.md`);
+    // Nothing is withheld here, so the remote answer is the local one.
+    const health = await answer(b, "brain_health", {}, TRANSPORT_REACH.remote);
+    expect(health).toContain(sharedSlug);
+    expect(health).toBe(await answer(b, "brain_health", {}, TRANSPORT_REACH.local));
+    const plan = await answer(b, "brain_doctor", { repair: true }, TRANSPORT_REACH.remote);
+    expect(plan).toContain(sharedDead);
+    expect(plan).toBe(await answer(b, "brain_doctor", { repair: true }, TRANSPORT_REACH.local));
+    await answer(b, "brain_doctor", { repair: true, apply: true }, TRANSPORT_REACH.remote);
+    expect(readFileSync(sharedPath, "utf8")).not.toContain(sharedDead);
+  });
+
+  test("the unfixable counts leave the reserved record out at remote and count it locally", async () => {
+    // The reserved record is a confirmed rule with no recorded use, a
+    // class no fixer covers, so it lands in `unfixable[].count`, and it
+    // also breaks a backlink. Locally both are counted; at remote reach
+    // the counts are vault B's.
+    const a = fixture(true);
+    const local = unfixableCounts(
+      await answer(a, "brain_doctor", { repair: true }, TRANSPORT_REACH.local),
+    );
+    expect(local.get(UNUSED_RULE_CODE)).toBe(2);
+    expect(local.get(BROKEN_BACKLINK_CODE)).toBe(1);
+    const remote = unfixableCounts(
+      await answer(a, "brain_doctor", { repair: true }, TRANSPORT_REACH.remote),
+    );
+    expect(remote.get(UNUSED_RULE_CODE)).toBe(1);
+    expect(remote.has(BROKEN_BACKLINK_CODE)).toBe(false);
+    expect(remote).toEqual(
+      unfixableCounts(
+        await answer(fixture(false), "brain_doctor", { repair: true }, TRANSPORT_REACH.remote),
+      ),
+    );
   });
 
   test("a local caller is still told about the record and still gets it repaired", async () => {
