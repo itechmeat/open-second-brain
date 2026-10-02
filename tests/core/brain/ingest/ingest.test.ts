@@ -6,7 +6,8 @@
  * the agent supplies the extraction and the summary prose.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { tmpdir } from "node:os";
@@ -23,6 +24,7 @@ import {
 import {
   ingestSource,
   PRE_EXTRACT_MAX_SOURCE_BYTES,
+  readSourceBounded,
 } from "../../../../src/core/brain/ingest/ingest.ts";
 import { manifestPath } from "../../../../src/core/brain/ingest/content-manifest.ts";
 import { computePlanId, readCheckpoint } from "../../../../src/core/brain/ingest/checkpoint.ts";
@@ -372,5 +374,71 @@ describe("ingestSource pre-extract pass (P4, t_ef786747)", () => {
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
+  });
+});
+
+/** Report `size` from the next fstat, as if the file grew after it. */
+function fstatReportsSize(size: number): { mockRestore(): void; mock: { calls: unknown[] } } {
+  const real = fs.fstatSync;
+  return spyOn(fs, "fstatSync").mockImplementation(((fd: number) => {
+    const stat = real(fd);
+    return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { size });
+  }) as typeof fs.fstatSync);
+}
+
+describe("readSourceBounded", () => {
+  const READ_LIMIT = 64;
+
+  test("a source read whole returns its text and its exact bytes", () => {
+    const abs = join(vault, "small.txt");
+    writeFileSync(abs, "caf\u00e9\n");
+    const read = readSourceBounded(abs, READ_LIMIT);
+    expect(read.text).toBe("caf\u00e9\n");
+    expect(read.unread).toBeUndefined();
+    expect(Buffer.from(read.bytes ?? new Uint8Array()).equals(fs.readFileSync(abs))).toBe(true);
+  });
+
+  test("a source that grows after the fstat but stays under the cap is read whole", () => {
+    const abs = join(vault, "grown.txt");
+    const body = "y".repeat(40);
+    writeFileSync(abs, body);
+    const spy = fstatReportsSize(16);
+    try {
+      const read = readSourceBounded(abs, READ_LIMIT);
+      expect(spy.mock.calls.length).toBe(1);
+      expect(read.text).toBe(body);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test("a source that grows past the cap after the fstat is refused", () => {
+    const abs = join(vault, "big.txt");
+    writeFileSync(abs, "z".repeat(READ_LIMIT + 10));
+    const spy = fstatReportsSize(16);
+    try {
+      const read = readSourceBounded(abs, READ_LIMIT);
+      expect(spy.mock.calls.length).toBe(1);
+      expect(read).toEqual({ text: null, unread: "larger than the read limit" });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test("a source over the cap at the fstat is refused without a read", () => {
+    const abs = join(vault, "over.txt");
+    writeFileSync(abs, "z".repeat(READ_LIMIT + 1));
+    expect(readSourceBounded(abs, READ_LIMIT)).toEqual({
+      text: null,
+      unread: "larger than the read limit",
+    });
+  });
+
+  test("a directory is not a regular file", () => {
+    mkdirSync(join(vault, "dir.txt"));
+    expect(readSourceBounded(join(vault, "dir.txt"), READ_LIMIT)).toEqual({
+      text: null,
+      unread: "not a regular file",
+    });
   });
 });

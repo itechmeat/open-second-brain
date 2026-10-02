@@ -297,7 +297,8 @@ const SOURCE_UNREAD = Object.freeze({
   tooLarge: "larger than the read limit",
 } as const);
 
-type SourceUnread = (typeof SOURCE_UNREAD)[keyof typeof SOURCE_UNREAD];
+/** Why {@link readSourceBounded} read no text. */
+export type SourceUnread = (typeof SOURCE_UNREAD)[keyof typeof SOURCE_UNREAD];
 
 /**
  * How a source is opened: read-only and never blocking, so a FIFO met
@@ -310,32 +311,37 @@ const SOURCE_OPEN_FLAGS = fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0);
 
 /**
  * Read a source through ONE descriptor, so the checks hold for the bytes
- * read: the descriptor must be a regular file, and no more than
- * {@link PRE_EXTRACT_MAX_SOURCE_BYTES} is read however large the file has
- * grown since the `fstat`.
+ * read: the descriptor must be a regular file, and no more than `maxBytes`
+ * is read however large the file has grown since the `fstat`. The buffer is
+ * sized to the file plus one byte, so a small source costs a small buffer;
+ * a file that grew under the cap is read on into one buffer of the cap plus
+ * one byte. `bytes` are exactly the bytes read, for a caller that must judge
+ * their encoding itself.
  */
-function readSourceBounded(
+export function readSourceBounded(
   absolute: string,
+  maxBytes: number,
 ):
-  | { readonly text: string; readonly unread?: undefined }
-  | { readonly text: null; readonly unread: SourceUnread } {
+  | { readonly text: string; readonly bytes: Uint8Array; readonly unread?: undefined }
+  | { readonly text: null; readonly bytes?: undefined; readonly unread: SourceUnread } {
   const fd = openSync(absolute, SOURCE_OPEN_FLAGS);
   try {
     const stat = fstatSync(fd);
     if (!stat.isFile()) return { text: null, unread: SOURCE_UNREAD.notAFile };
-    if (stat.size > PRE_EXTRACT_MAX_SOURCE_BYTES)
-      return { text: null, unread: SOURCE_UNREAD.tooLarge };
-    // One byte past the cap, so growth since the fstat is seen.
-    const buffer = Buffer.allocUnsafe(PRE_EXTRACT_MAX_SOURCE_BYTES + 1);
+    if (stat.size > maxBytes) return { text: null, unread: SOURCE_UNREAD.tooLarge };
+    // One byte past the size, so growth since the fstat is seen.
+    let buffer = Buffer.allocUnsafe(stat.size + 1);
     let filled = 0;
     for (;;) {
+      // A full buffer is under the cap here: past it, the loop has returned.
+      if (filled === buffer.length) buffer = Buffer.concat([buffer], maxBytes + 1);
       const count = readSync(fd, buffer, filled, buffer.length - filled, null);
       if (count === 0) break;
       filled += count;
-      if (filled > PRE_EXTRACT_MAX_SOURCE_BYTES)
-        return { text: null, unread: SOURCE_UNREAD.tooLarge };
+      if (filled > maxBytes) return { text: null, unread: SOURCE_UNREAD.tooLarge };
     }
-    return { text: buffer.toString("utf8", 0, filled) };
+    const bytes = buffer.subarray(0, filled);
+    return { text: bytes.toString("utf8"), bytes };
   } finally {
     closeSync(fd);
   }
@@ -380,7 +386,7 @@ function runPreExtract(
   };
   let content: string;
   try {
-    const read = readSourceBounded(join(vault, canonicalSource));
+    const read = readSourceBounded(join(vault, canonicalSource), PRE_EXTRACT_MAX_SOURCE_BYTES);
     if (read.text === null) return read.unread === SOURCE_UNREAD.tooLarge ? tooLarge : noBytes;
     content = read.text;
   } catch {

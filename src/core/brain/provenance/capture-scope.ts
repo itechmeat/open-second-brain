@@ -31,6 +31,7 @@ import { createHash } from "node:crypto";
 import { posix } from "node:path";
 
 import type { FrontmatterMap } from "../../types.ts";
+import { FENCE_CHAR, fenceFor, MIN_FENCE_LENGTH } from "../../markdown-fence.ts";
 import {
   classifySourceTrust,
   normalizeSourceIdentity,
@@ -89,15 +90,6 @@ export const CAPTURE_EXCERPT_HEADING = "## Excerpt";
  * and keeps wikilink parsing out of them.
  */
 export const CAPTURE_EXCERPT_FENCE_INFO = "excerpt";
-
-/** The fence character; a backtick fence admits any info string. */
-const FENCE_CHAR = "`";
-
-/** The shortest fence CommonMark recognises. */
-const MIN_FENCE_LENGTH = 3;
-
-/** Every run of the fence character, to size a fence that contains them all. */
-const FENCE_CHAR_RUN_RE = /`+/g;
 
 /** Line separator of a rendered section. */
 const NEWLINE = "\n";
@@ -172,13 +164,6 @@ export function captureScopesFrontmatter(scopes: ReadonlyArray<CaptureScope>): F
 /** SHA-256 hex over the UTF-8 bytes of the excerpt exactly as given. */
 export function excerptDigest(excerpt: string): string {
   return createHash("sha256").update(excerpt, "utf8").digest("hex");
-}
-
-/** A backtick fence longer than every backtick run in `text`. */
-function fenceFor(text: string): string {
-  let longest = 0;
-  for (const run of text.matchAll(FENCE_CHAR_RUN_RE)) longest = Math.max(longest, run[0].length);
-  return FENCE_CHAR.repeat(Math.max(MIN_FENCE_LENGTH, longest + 1));
 }
 
 /**
