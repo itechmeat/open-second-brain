@@ -319,6 +319,24 @@ test("a module whose name a link cannot carry is named once and left out of link
   expect(web).toContain(`- [[Brain/projects/arch/${res.repoKey}/modules/core|core]]`);
 });
 
+// Windows refuses a control character in a directory name.
+test.skipIf(IS_WINDOWS)(
+  "a DEL or C1 control character in a module name is left out of links and escaped in YAML",
+  () => {
+    put("packages/mod\u0085x/index.ts", "// x\n");
+    put("packages/del\u007fx/index.ts", "// x\n");
+    const res = generateArchDocs(vault, project);
+    const modules = regionBody(overview(res), "modules").split("\n");
+    expect(modules.some((line) => line.includes("[[") && /[\u007f-\u009f]/.test(line))).toBe(false);
+    const notLinked = modules.find((line) => line.startsWith("Not linked"));
+    expect(notLinked).toContain('`"mod\u0085x"`');
+    expect(notLinked).toContain('`"del\u007fx"`');
+    const note = moduleNote(res, "mod\u0085x");
+    const moduleLine = note.split("\n").find((line) => line.startsWith("module: "));
+    expect(moduleLine).toBe('module: "mod\\x85x"');
+  },
+);
+
 test("a backtick in a module name cannot close the diagram's fence", () => {
   put("packages/x```y/index.ts", "// x\n");
   const body = regionBody(overview(generateArchDocs(vault, project)), "module-map");

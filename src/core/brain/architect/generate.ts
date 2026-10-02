@@ -432,12 +432,12 @@ function moduleDependenciesBody(facts: ProjectFacts): string {
 }
 
 /**
- * A module name a wikilink cannot carry: a control character breaks the
- * line, `[`, `]` and `|` end the link or its alias early, and `#` and `^`
+ * A module name a wikilink cannot carry: a control character (C0, DEL or
+ * C1) breaks the line or the note's YAML, `[`, `]` and `|` end the link or its alias early, and `#` and `^`
  * turn the target into a heading or block reference.
  */
 // oxlint-disable-next-line no-control-regex -- matching control characters is the point
-const UNLINKABLE_MODULE_NAME = /[\u0000-\u001f[\]|#^]/;
+const UNLINKABLE_MODULE_NAME = /[\u0000-\u001f\u007f-\u009f[\]|#^]/;
 
 function isLinkable(name: string): boolean {
   return !UNLINKABLE_MODULE_NAME.test(name);
@@ -486,7 +486,7 @@ function yamlQuoted(text: string): string {
 }
 
 // oxlint-disable-next-line no-control-regex -- matching control characters is the point
-const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/g;
+const CONTROL_CHARACTER = /[\u0000-\u001f\u007f-\u009f]/g;
 /** The short escapes YAML's double-quoted style defines for the common controls. */
 const YAML_ESCAPES: ReadonlyMap<string, string> = new Map([
   ["\n", "\\n"],
