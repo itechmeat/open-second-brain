@@ -70,6 +70,46 @@ export function pushUncertain(
   return message;
 }
 
+/** Whether one entry may enter a stream at all. */
+export type UncertainAdmission = (entry: DoctorUncertainEntry) => boolean;
+
+/**
+ * An uncertainty stream that admits only the entries `admit` passes.
+ *
+ * The per-code cap is counted over what the stream holds, so an entry
+ * the reader may not see has to be turned away at the door: dropped only
+ * after the cap was spent, fifty withheld entries would crowd out the
+ * readable ones, and the number left would say how many were withheld.
+ * Every sink - {@link pushUncertain} and a check's own `push` - reaches
+ * the stream through `push`, so the one override covers them all.
+ */
+class AdmittingUncertainStream extends Array<DoctorUncertainEntry> {
+  /** Derived arrays (`map`, `filter`) are plain ones, with no admission of their own. */
+  static override get [Symbol.species](): ArrayConstructor {
+    return Array;
+  }
+
+  readonly #admit: UncertainAdmission;
+
+  constructor(admit: UncertainAdmission) {
+    super();
+    this.#admit = admit;
+  }
+
+  override push(...entries: DoctorUncertainEntry[]): number {
+    return super.push(...entries.filter(this.#admit));
+  }
+}
+
+/**
+ * A fresh stream: a plain array when nothing is withheld, so an
+ * unfiltered pass is unchanged, otherwise one that admits only what
+ * `admit` passes.
+ */
+export function uncertainStream(admit?: UncertainAdmission): DoctorUncertainEntry[] {
+  return admit === undefined ? [] : new AdmittingUncertainStream(admit);
+}
+
 function countFor(uncertain: ReadonlyArray<DoctorUncertainEntry>, code: string): number {
   let n = 0;
   for (const entry of uncertain) if (entry.code === code) n += 1;

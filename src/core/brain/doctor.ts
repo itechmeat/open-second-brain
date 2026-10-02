@@ -44,6 +44,9 @@
  */
 
 import { statSync } from "node:fs";
+import { relative, resolve } from "node:path";
+
+import { toPosix } from "../path-safety.ts";
 
 import { activeBudgetPressureCheck } from "./doctor/active-budget-check.ts";
 import type { DoctorCheck, DoctorCheckContext, DoctorFindings } from "./doctor/check.ts";
@@ -100,6 +103,7 @@ import {
 } from "./doctor/uncertainty-probes.ts";
 import type { DoctorUncertainEntry, RunDoctorOptions, RunDoctorResult } from "./doctor/report.ts";
 import { reportSweptSkip, sweptFailureReason, sweptPathWarning } from "./doctor/unreadable-path.ts";
+import { uncertainStream, type UncertainAdmission } from "./doctor/uncertain-stream.ts";
 import type { SemanticHealthReport } from "./health/reconcile.ts";
 import { brainDirs } from "./paths.ts";
 import {
@@ -304,7 +308,10 @@ export function runDoctor(vault: string, opts: RunDoctorOptions = {}): RunDoctor
   // its three directory reads have to be able to report. Resolved before
   // any check runs, an unreadable `Brain/preferences` or a `Brain/log`
   // that is a regular file ended the pass with no findings at all.
-  const findings: DoctorFindings = { issues: [], uncertain: [] };
+  const findings: DoctorFindings = {
+    issues: [],
+    uncertain: uncertainStream(uncertainAdmission(vault, opts.readable)),
+  };
   const ctx = resolveContext(vault, opts, findings.uncertain);
   for (const check of DOCTOR_CHECKS) {
     if (!check.failSoft) {
@@ -386,6 +393,29 @@ export function runDoctor(vault: string, opts: RunDoctorOptions = {}): RunDoctor
     ...(findings.uncertain.length > 0 ? { uncertain: Object.freeze(findings.uncertain) } : {}),
     ...(semanticReport !== undefined ? { semantic_health: semanticReport } : {}),
   });
+}
+
+/** The extension of the pages the reference grammar judges by path. */
+const PAGE_EXT = ".md";
+
+/**
+ * Which uncertainty entries a pass handed `readable` may report.
+ *
+ * Judged the way the handlers' reference view judges an issue's path, so
+ * the entries it keeps are the ones the view would keep after the cap: a
+ * page path is admitted only when the reader may read it, and any other
+ * path - a directory, a lock, a file outside the vault - names no page
+ * and is admitted as before. `undefined` when nothing is withheld.
+ */
+function uncertainAdmission(
+  vault: string,
+  readable: ((rel: string) => boolean) | undefined,
+): UncertainAdmission | undefined {
+  if (readable === undefined) return undefined;
+  return (entry) =>
+    entry.path === undefined ||
+    !entry.path.endsWith(PAGE_EXT) ||
+    readable(toPosix(relative(vault, resolve(vault, entry.path))));
 }
 
 /**

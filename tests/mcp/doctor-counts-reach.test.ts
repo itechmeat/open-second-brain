@@ -11,16 +11,30 @@
  * pages naming a removed tool in both and, in vault A only, a withheld
  * Brain page whose validity closed (a state that stopped being current)
  * and 50 withheld pages naming the removed tool: the walk lists them in directory order, so withheld
- * pages are among the first 50 whatever that order is. A server with no
- * reach minted is a remote caller; the local control proves the withheld
- * items are there to count.
+ * pages are among the first 50 whatever that order is. Two more pairs
+ * extend it: a readable closed state cited by a readable preference and,
+ * in vault A only, by a withheld one; and 50 readable Brain pages with a
+ * frontmatter line the scanner drops, plus 50 withheld ones in vault A
+ * only, which sort first. A server with no reach minted is a remote
+ * caller, and its whole masked answer must be the same over both vaults;
+ * the local control proves the withheld items are there to count.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { writePreference } from "../../src/core/brain/preference.ts";
+import { BRAIN_CONFIDENCE, BRAIN_PREFERENCE_STATUS } from "../../src/core/brain/types.ts";
 import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts";
 import {
@@ -37,6 +51,21 @@ const PAGE_DIR = "Brain/memos";
 const PRIVATE_PATH = "PRIVATE_PATH";
 const REMOVED_TOOL_CODE = "removed-tool-reference";
 const STALE_DEPENDENCY_CODE = "stale-dependency";
+const RESERVE_LINE = `visibility: [${REMOTE_DENY_VISIBILITY_TOKEN}]`;
+/** A readable state whose validity closed, cited by the consumers below. */
+const CLOSED_STATE = "pubclosed";
+/** A consumer written before the state closed, so the citation is stale. */
+const CONSUMER_WRITTEN_AT = new Date("2025-06-01T00:00:00Z");
+/** A frontmatter line the line scanner cannot express, so it is dropped. */
+const DROPPED_LINE = "this line is not yaml";
+
+/** Which extra page pairs a fixture carries beside the removed-tool pages. */
+interface Extras {
+  /** The readable closed state and its consumers. */
+  readonly cited?: boolean;
+  /** The pages with a dropped frontmatter line. */
+  readonly dropped?: boolean;
+}
 
 const bases: string[] = [];
 const savedConfig = process.env["OPEN_SECOND_BRAIN_CONFIG"];
@@ -52,7 +81,61 @@ function page(index: number, reserved: boolean): string {
   return `${front}# memo ${index}\n\nCall ${REMOVED_TOOL} for the summary.\n`;
 }
 
-function fixture(withPrivate: boolean): Fixture {
+/** A confirmed preference citing {@link CLOSED_STATE}, written before it closed. */
+function consumer(vault: string, slug: string, principle: string, reserved: boolean): void {
+  writePreference(vault, {
+    slug,
+    topic: slug,
+    // Principles that share no word, so no concept gap rides along.
+    principle,
+    created_at: "2025-05-01T00:00:00Z",
+    unconfirmed_until: "2025-05-08T00:00:00Z",
+    status: BRAIN_PREFERENCE_STATUS.confirmed,
+    evidenced_by: [],
+    confirmed_at: "2025-05-02T00:00:00Z",
+    applied_count: 1,
+    violated_count: 0,
+    last_evidence_at: "2025-05-02T00:00:00Z",
+    confidence: BRAIN_CONFIDENCE.high,
+    confidence_value: 0.8,
+  });
+  const path = join(vault, "Brain", "preferences", `pref-${slug}.md`);
+  appendFileSync(path, `\nSee [[${CLOSED_STATE}]].\n`);
+  if (reserved) {
+    const text = readFileSync(path, "utf8");
+    const close = text.indexOf("\n---\n", "---\n".length);
+    writeFileSync(path, `${text.slice(0, close)}\n${RESERVE_LINE}${text.slice(close)}`);
+  }
+  utimesSync(path, CONSUMER_WRITTEN_AT, CONSUMER_WRITTEN_AT);
+}
+
+function addCited(vault: string, withPrivate: boolean): void {
+  writeFileSync(
+    join(vault, "Brain", `${CLOSED_STATE}.md`),
+    "---\nvalid_until: 2026-01-01T00:00:00Z\n---\n# closed\n",
+  );
+  consumer(vault, "consumer-public", "Keep the ledger tidy.", false);
+  if (withPrivate) {
+    consumer(vault, `${PRIVATE_PATH.toLowerCase()}-consumer`, "Archive weekly snapshots.", true);
+  }
+}
+
+function addDropped(vault: string, withPrivate: boolean): void {
+  const dir = join(vault, "Brain", "drafts");
+  mkdirSync(dir, { recursive: true });
+  for (let i = 0; i < PAGE_COUNT; i++) {
+    const n = String(i).padStart(2, "0");
+    writeFileSync(join(dir, `zz-draft-${n}.md`), `---\ntitle: d\n${DROPPED_LINE}\n---\n# d\n`);
+    if (withPrivate) {
+      writeFileSync(
+        join(dir, `AA-${PRIVATE_PATH}-${n}.md`),
+        `---\n${RESERVE_LINE}\n${DROPPED_LINE}\n---\n# d\n`,
+      );
+    }
+  }
+}
+
+function fixture(withPrivate: boolean, extras: Extras = {}): Fixture {
   const base = mkdtempSync(join(tmpdir(), "o2b-doctor-counts-reach-"));
   bases.push(base);
   const f = buildReachLogFixture(base, withPrivate);
@@ -69,6 +152,8 @@ function fixture(withPrivate: boolean): Fixture {
       `---\nvisibility: [${REMOTE_DENY_VISIBILITY_TOKEN}]\nvalid_until: 2026-01-01T00:00:00Z\n---\n# closed\n`,
     );
   }
+  if (extras.cited) addCited(f.vault, withPrivate);
+  if (extras.dropped) addDropped(f.vault, withPrivate);
   return f;
 }
 
@@ -82,13 +167,34 @@ interface Report {
   readonly uncertain?: ReadonlyArray<Entry>;
 }
 
-/** The doctor's answer with the fixture's paths and instants masked. */
-async function doctor(f: Fixture, reach?: TransportReach): Promise<Report> {
+/** The doctor's whole answer as JSON, with the fixture's paths and instants masked. */
+async function doctorJson(f: Fixture, reach?: TransportReach): Promise<string> {
   const result = (await reachServer(f, reach).callTool("brain_doctor", {})) as Record<
     string,
     unknown
   >;
-  return JSON.parse(maskVolatile(f, result["structuredContent"] ?? result)) as Report;
+  return maskVolatile(f, result["structuredContent"] ?? result);
+}
+
+async function doctor(f: Fixture, reach?: TransportReach): Promise<Report> {
+  return JSON.parse(await doctorJson(f, reach)) as Report;
+}
+
+/** The remote answers over vault A and vault B, whole and masked. */
+async function remotePair(extras: Extras = {}): Promise<readonly [string, string]> {
+  const withheld = await doctorJson(fixture(true, extras));
+  const absent = await doctorJson(fixture(false, extras));
+  return [withheld, absent];
+}
+
+function staleRows(report: Report): ReadonlyArray<string> {
+  return report.warnings.filter((w) => w.code === STALE_DEPENDENCY_CODE).map((w) => w.message);
+}
+
+function droppedLineEntries(report: Report): number {
+  return (report.uncertain ?? []).filter(
+    (u) => u.message.includes(DROPPED_LINE) || u.code === "frontmatter-line-dropped",
+  ).length;
 }
 
 function removedToolWarnings(report: Report): ReadonlyArray<string> {
@@ -106,18 +212,30 @@ function staleNotes(report: Report): ReadonlyArray<string> {
 
 describe("brain_doctor counts at the caller's reach", () => {
   test("remote reach: withheld pages spend no slot of the removed-tool cap", async () => {
-    const withheld = removedToolWarnings(await doctor(fixture(true)));
-    const absent = removedToolWarnings(await doctor(fixture(false)));
-    expect(absent).toHaveLength(PAGE_COUNT);
-    expect(withheld).toEqual(absent);
-    expect(withheld.join("\n")).not.toContain(PRIVATE_PATH);
+    const [withheld, absent] = await remotePair();
+    expect(withheld).toBe(absent);
+    expect(removedToolWarnings(JSON.parse(absent) as Report)).toHaveLength(PAGE_COUNT);
+    expect(withheld).not.toContain(PRIVATE_PATH);
   });
 
   test("remote reach: a withheld closed state moves no stale-dependency count", async () => {
-    const withheld = staleNotes(await doctor(fixture(true)));
-    const absent = staleNotes(await doctor(fixture(false)));
-    expect(withheld).toEqual(absent);
-    expect(withheld).toEqual([]);
+    const [withheld, absent] = await remotePair();
+    expect(withheld).toBe(absent);
+    expect(staleNotes(JSON.parse(withheld) as Report)).toEqual([]);
+  });
+
+  test("remote reach: a withheld consumer neither counts toward nor hides a readable row", async () => {
+    const [withheld, absent] = await remotePair({ cited: true });
+    expect(withheld).toBe(absent);
+    expect(staleRows(JSON.parse(withheld) as Report)).toHaveLength(1);
+    expect(withheld).not.toContain(PRIVATE_PATH.toLowerCase());
+  });
+
+  test("remote reach: withheld pages spend no slot of the uncertain cap", async () => {
+    const [withheld, absent] = await remotePair({ dropped: true });
+    expect(withheld).toBe(absent);
+    expect(droppedLineEntries(JSON.parse(withheld) as Report)).toBe(PAGE_COUNT);
+    expect(withheld).not.toContain(PRIVATE_PATH);
   });
 
   test("local control: the operator's own shell counts the withheld items", async () => {
@@ -128,5 +246,12 @@ describe("brain_doctor counts at the caller's reach", () => {
     expect(local.join("\n")).toContain(PRIVATE_PATH);
     expect(staleNotes(b)).toEqual([]);
     expect(staleNotes(a).join("\n")).toContain("1 state stopped being current");
+  });
+
+  test("local control: the withheld consumer and the withheld dropped lines are counted", async () => {
+    const cited = await doctorJson(fixture(true, { cited: true }), TRANSPORT_REACH.local);
+    expect(cited).toContain(PRIVATE_PATH.toLowerCase());
+    const dropped = await doctorJson(fixture(true, { dropped: true }), TRANSPORT_REACH.local);
+    expect(dropped).toContain(PRIVATE_PATH);
   });
 });

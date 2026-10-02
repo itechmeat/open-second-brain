@@ -190,13 +190,20 @@ export function auditStaleDependencies(
   const windowSince = new Date(now.getTime() - lookbackDays * MS_PER_DAY).toISOString();
   const contextReceipts = readContextReceipts(vault, windowSince);
   const decisionReceipts = readDecisionCitations(vault, windowSince);
-  const artifacts = walkBrainArtifacts(vault);
-  const allStates = collectStates(vault, artifacts, now.getTime());
   const readable = opts.readable;
-  const states =
-    readable === undefined
-      ? allStates
-      : allStates.filter((state) => readable(toPosix(relative(vault, state.path))));
+  const isReadable = (path: string): boolean =>
+    readable === undefined || readable(toPosix(relative(vault, path)));
+  // Bounded once, before both passes: a page the caller may not read is
+  // neither a state nor a consumer, so it adds to no consumer count, takes
+  // no consumer slot, and cannot hide a readable state's row by being
+  // named in it.
+  const allArtifacts = walkBrainArtifacts(vault);
+  const artifacts =
+    readable === undefined ? allArtifacts : allArtifacts.filter((a) => isReadable(a.path));
+  const allStates = collectStates(vault, artifacts, now.getTime());
+  // Retired records are read from their own folder rather than from the
+  // walk, so the states are bounded as well.
+  const states = readable === undefined ? allStates : allStates.filter((s) => isReadable(s.path));
   const stateKeys = new Set(states.map((state) => state.key));
 
   // The artifact arm runs unconditionally, and that is the point. It reads
