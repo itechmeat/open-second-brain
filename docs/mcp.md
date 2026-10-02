@@ -2281,7 +2281,12 @@ format characters), when it contains NUL, or when it exceeds the cap.
   `brain_obligation` lists, shows, completes and removes an obligation
   page the caller cannot read exactly as an absent one (`show` answers
   `present: false`, `done` and `remove` refuse with `no obligation`),
-  and `add` still refuses a slug whose page exists. `brain_health`
+  `remove` leaves `archive_path` out of its answer, and `add` still
+  refuses a slug whose page exists. `brain_intention` treats a chain the
+  caller cannot read the same way (`list` leaves it out, `show` answers
+  `present: false`, `move` refuses with `no active intention`), `move`
+  leaves `archive_path` out, and `set` refuses a scope whose withheld
+  chain exists instead of folding it into a new version. `brain_health`
   computes `concept_gaps`, the `suppressed` counts and the verdict
   over the preferences and signals the caller can read, so a term only
   withheld principles carry is not reported. `brain_trigger`
@@ -2292,9 +2297,10 @@ format characters), when it contains NUL, or when it exceeds the cap.
   `brain_stale_scan`, `brain_review_candidates` and `brain_retention`
   list no preference or signal the caller cannot read, and
   `brain_retention` counts its `summary` over the rows it returns.
-  `brain_review_candidates`' `clusters_below_threshold` and
-  `intent_reviews`, and `brain_intent_review`, still fold inbox signal
-  clusters by topic with no visibility check.
+  `brain_review_candidates` plans its dry run over the signals,
+  preferences and retired records the caller can read, so its
+  `clusters_below_threshold` and `intent_reviews` fold no withheld
+  signal, and `brain_intent_review` folds the same readable records.
 - Since v1.70.0 `brain_context_receipts` answers at the caller's reach
   for the operator rules. Below local reach a SessionStart injection
   receipt leaves out the `standing-rules` and `scoped-rules` items,

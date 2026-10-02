@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.70.0] - 2026-10-03
 
-A setting or a rule meant for one context no longer leaks into another: on a Hermes gateway that multiplexes profiles, the Open Second Brain plugin reads every profile-scoped setting from the turn's profile scope and gives each profile its own MCP child, and the operator can now write standing rules for one project, one harness or one machine under `Brain/standing-rules/`, which the SessionStart hook and `brain_context` render below the operator standing rules at local reach; the today, monthly and operator brief views, the doctor's counts, and the obligation, health, trigger, stale-scan, review-candidates, retention and context-receipts readers now answer at the caller's reach.
+A setting or a rule meant for one context no longer leaks into another: on a Hermes gateway that multiplexes profiles, the Open Second Brain plugin reads every profile-scoped setting from the turn's profile scope and gives each profile its own MCP child, and the operator can now write standing rules for one project, one harness or one machine under `Brain/standing-rules/`, which the SessionStart hook and `brain_context` render below the operator standing rules at local reach; the today, monthly and operator brief views, the doctor's counts, and the obligation, intention, health, trigger, stale-scan, review-candidates, intent-review, retention and context-receipts readers now answer at the caller's reach.
 
 ### Added
 
@@ -38,6 +38,7 @@ A setting or a rule meant for one context no longer leaks into another: on a Her
 - **`brain_health` and `brain_doctor` count concept gaps over readable principles.** Below local reach `concept_gaps` and the doctor's `concept-gap` warnings used to name terms that only withheld preferences carried; the semantic-health detectors now read only the preferences and signals the caller may read.
 - **`brain_trigger` scans answer at the caller's reach.** Below local reach `operation="scan"` used to count, create and list triggers about withheld preferences; its sources now read only readable records, and every trigger row asks the caller's reach as well as the owner scope.
 - **`brain_stale_scan`, `brain_review_candidates` and `brain_retention` answer at the caller's reach.** Below local reach they used to list withheld preferences and signals by id and path; such rows are now left out, and the retention `summary` counts the rows returned.
+- **`brain_intention`, `brain_intent_review` and the dream preview's signal clusters answer at the caller's reach.** Below local reach `brain_intention` used to list and show an intention chain withheld by visibility and fold it into a new version on `set`; such a chain is now treated as absent by `list`, `show` and `move`, and `set` refuses it. `brain_intent_review` and the `clusters_below_threshold` and `intent_reviews` of `brain_review_candidates` used to fold withheld inbox signals into their topics and counts; they now fold only the records the caller may read. `brain_obligation` `remove` and `brain_intention` `move` leave the archive name out of the answer below local reach.
 - **`brain_doctor` and the operator view leave out a withheld instruction file.** Below local reach `instruction_file_warnings` used to name a vault-root `AGENTS.md`, `CLAUDE.md` or `GEMINI.md` withheld by visibility, with its line count.
 - **A withheld page no longer moves a readable stale-dependency row or the `uncertain` cap.** Below local reach a withheld consumer could hide a readable state's row, and withheld pages could fill the per-code cap of the doctor's `uncertain` stream.
 - **`brain_context_receipts` answers at the caller's reach for the operator rules.** Below local reach a SessionStart injection receipt used to carry the standing-rules and scoped-rules items and the figures that measure them; it now leaves them out, and `summary` leaves them out of its item totals.
@@ -50,7 +51,7 @@ A setting or a rule meant for one context no longer leaks into another: on a Her
 - A Hermes gateway that serves a routed profile home without multiplexing keeps reading the process environment.
 - There are no combination scope files (for example project and host together); the matching single-axis files are joined instead.
 - The operator view's `dream_summary` counts (the dry-run dream's warnings, uncertain and quarantined entries), and the dream warnings its trust verdict folds in, are still taken over the whole Brain layer below local reach; they name no record.
-- `brain_review_candidates`' `clusters_below_threshold` and `intent_reviews`, and `brain_intent_review`, fold inbox signal clusters by topic and are not filtered by visibility; `brain_obligation` `add` refuses a slug whose page exists whoever may read it.
+- `brain_obligation` `add` refuses a slug whose page exists, and `brain_intention` `set` refuses a scope whose withheld chain exists, whoever may read them.
 - Updating the Hermes plugin without updating `o2b` makes the bridge fail to start, because an older `o2b mcp` refuses `--harness`; update both together.
 
 ## [1.69.0] - 2026-10-02
