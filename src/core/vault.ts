@@ -72,7 +72,14 @@ import {
 } from "./graph/visibility.ts";
 import type { FrontmatterMap, FrontmatterValue, VaultPage } from "./types.ts";
 
-const FRONTMATTER_RE = /^---\s*\n([\s\S]*?)\n---\s*\n?/;
+/**
+ * A leading frontmatter block, its body captured. The opening fence takes
+ * horizontal whitespace only before its line end: with `\s*` there, a run
+ * of blank lines after an unclosed `---` was re-scanned to the end of the
+ * text once per blank line, quadratic in its length. Blank lines after the
+ * fence still open the block; they are the first lines of its body.
+ */
+export const FRONTMATTER_RE = /^---[^\S\n]*\n([\s\S]*?)\n---\s*\n?/;
 /**
  * The key grammar, written once and used by BOTH directions.
  *

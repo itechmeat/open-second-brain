@@ -14,6 +14,7 @@ import {
   deriveSourceSection,
   extractSource,
 } from "../../../../src/core/brain/ingest/extract-source.ts";
+import { LINEAR_CEILING_MS } from "../../../helpers/linear-time.ts";
 import { SOURCE_HASH_MAX_BYTES } from "../../../../src/core/brain/intake/source-trust.ts";
 import { INTAKE_TRUST } from "../../../../src/core/brain/trust/untrusted-provenance.ts";
 
@@ -105,6 +106,13 @@ describe("a leading frontmatter block is not source data", () => {
     if (!("html" in res) || !res.html.extracted) throw new Error("expected an extraction");
     expect(res.html.text).not.toContain("visibility");
     expect(res.html.parts.map((p) => p.heading)).toEqual(["Vault plan"]);
+  });
+
+  test("a long run of blank lines after an unclosed opener is read in linear time", () => {
+    const text = `---${"\n".repeat(256 * 1024)}name\nbolt\n`;
+    const started = performance.now();
+    extractSource("Clips/h.csv", utf8(text));
+    expect(performance.now() - started).toBeLessThan(LINEAR_CEILING_MS);
   });
 
   test("an unclosed block is data, as the frontmatter reader treats it", () => {

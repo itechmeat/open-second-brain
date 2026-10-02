@@ -21,7 +21,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { parseFrontmatter } from "../../vault.ts";
+import { FRONTMATTER_RE, parseFrontmatter } from "../../vault.ts";
 import { ownerScopeView } from "../owner-scope-view.ts";
 import { UNFILTERED_ARTIFACT_REFS, type ArtifactRefView } from "../artifact-ref-view.ts";
 import { brainDirs } from "../paths.ts";
@@ -179,7 +179,7 @@ function scanDir(
 }
 
 function stripFrontmatter(text: string): string {
-  const m = /^---\s*\n([\s\S]*?)\n---\s*\n?/.exec(text);
+  const m = FRONTMATTER_RE.exec(text);
   if (!m) return text;
   return text.slice(m[0].length);
 }

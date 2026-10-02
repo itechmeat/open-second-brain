@@ -13,6 +13,7 @@
 import { pageVisibility, REMOTE_DENY_VISIBILITY_TOKEN } from "../../graph/visibility.ts";
 import { readCachedFrontmatterEntry } from "../../search/result-filters.ts";
 import type { FrontmatterMap } from "../../types.ts";
+import { FRONTMATTER_RE } from "../../vault.ts";
 import {
   isSourceHidden,
   readSourceOrigin,
@@ -105,13 +106,6 @@ export function extractSource(path: string, bytes: Uint8Array): SourceExtraction
 const UTF8_BOM = Object.freeze([0xef, 0xbb, 0xbf]);
 /** The first bytes of a frontmatter block. */
 const FRONTMATTER_FENCE = "---";
-/**
- * A leading frontmatter block: the same shape the vault's frontmatter
- * reader (`parseFrontmatterText` in `core/vault.ts`) parses, so the block
- * the reach predicate reads a source's visibility from is exactly the
- * block withheld from the extractor.
- */
-const LEADING_FRONTMATTER_RE = /^---\s*\n[\s\S]*?\n---\s*\n?/;
 const UTF8_STRICT = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 const UTF8_ENCODER = new TextEncoder();
 
@@ -133,7 +127,9 @@ function withoutLeadingFrontmatter(bytes: Uint8Array): Uint8Array {
   } catch {
     return bytes;
   }
-  const block = LEADING_FRONTMATTER_RE.exec(text);
+  // The vault's own frontmatter pattern, so the block the reach predicate
+  // reads a source's visibility from is exactly the block withheld here.
+  const block = FRONTMATTER_RE.exec(text);
   if (block === null) return bytes;
   return bytes.subarray(bom + UTF8_ENCODER.encode(block[0]).length);
 }

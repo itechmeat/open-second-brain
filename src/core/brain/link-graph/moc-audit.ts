@@ -25,6 +25,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { FRONTMATTER_RE } from "../../vault.ts";
 import { buildBacklinkIndex } from "../backlinks.ts";
 import { ownerScopeView } from "../owner-scope-view.ts";
 import { brainDirs } from "../paths.ts";
@@ -294,7 +295,7 @@ function locateArtifact(vault: string, id: string): string | null {
 }
 
 function stripFrontmatter(text: string): string {
-  const m = /^---\s*\n([\s\S]*?)\n---\s*\n?/.exec(text);
+  const m = FRONTMATTER_RE.exec(text);
   if (!m) return text;
   return text.slice(m[0].length);
 }

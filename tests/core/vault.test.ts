@@ -135,6 +135,24 @@ describe("parseFrontmatter", () => {
   });
 });
 
+describe("parseFrontmatterText on an unclosed opener", () => {
+  test("stays linear on a long run of blank lines after the opening fence", () => {
+    const text = `---${"\n".repeat(256 * 1024)}name: kept`;
+    const started = performance.now();
+    const [meta, body] = parseFrontmatterText(text);
+    expect(performance.now() - started).toBeLessThan(LINEAR_CEILING_MS);
+    expect(meta).toEqual({});
+    expect(body).toBe(text.trim());
+  });
+
+  test("blank lines after the opening fence still open the block", () => {
+    expect(parseFrontmatterText("---\n\nname: kept\n---\nbody")).toEqual([
+      { name: "kept" },
+      "body",
+    ]);
+  });
+});
+
 describe("parseFrontmatterWithNotices", () => {
   test("a dash-prefixed non-list line yields exactly one notice naming the line", () => {
     // `-foo` is pinned above as "simply ignored as a non-key/value line".
