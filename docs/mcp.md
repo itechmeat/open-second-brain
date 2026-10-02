@@ -2138,8 +2138,10 @@ format characters), when it contains NUL, or when it exceeds the cap.
   for redaction, and a longer cell counts as cut. A `<private>` region
   is hidden before the records are split, so a region spanning records
   hides every row between its tags. Each HTML heading is redacted
-  (`key=value` credentials and URL userinfo) before it is capped, and a
-  `|` in a heading is written as `\|` in the parts list. The page gains
+  (`key=value` credentials and URL userinfo) before it is capped, only
+  its first 4,096 code units are read for that (a longer heading ends in
+  `…`), and in the parts list a backslash in a heading is written as
+  `\\` and a `|` as `\|`. The page gains
   `table_delimiter`, `table_columns`, `table_rows`,
   `table_rows_rendered` and `table_truncated` (absent when nothing was
   cut); the result gains `table` (`{rendered: true, format, delimiter,
@@ -2174,8 +2176,46 @@ format characters), when it contains NUL, or when it exceeds the cap.
   when every evidence event citing it is about such a record, or when
   the pointer names a page the caller cannot read, recompute the
   `events_by_kind` and `vault_delta` counts from the events the caller
-  may see, and take no report snapshot and show no `delta`. The monthly,
-  operator and today views still count over the whole Brain layer. The
+  may see, and take no report snapshot and show no `delta`. The monthly
+  and operator views, and the today view outside its recent activity,
+  still count over the whole Brain layer and name no record. The
   read-only preview of the same
   extraction is the CLI verb `o2b brain extract` (see
   [`cli-reference.md`](cli-reference.md)).
+- Since v1.69.0 more readers treat a page or record the caller cannot
+  read at its reach as absent; a local caller and the CLI see no change.
+  Below local reach the daily log pages (`Brain/log/`, the JSONL
+  sidecars included) are not served by the generic page readers
+  (`brain_search` and every other tool that reads a page by path).
+  `brain_analytics` `view="timeline"`, `view="belief_evolution"` and
+  `view="concept_synthesis"`, `brain_brief` `view="today"`,
+  `view="digest"` and `brain_event_trace`, `brain_claims` (current and
+  history), `brain_backlinks` and `osb://backlinks/{id}`,
+  `osb://log/{date}`, `osb://topic/{topic}`, `osb://preference/{id}`,
+  `brain_query` with `since`, `topic` or `preference`, `brain_moc_audit`
+  and every `brain_doctor` finding answer at the caller's reach: a record
+  is judged under each id it answers to (`pref-` and `ret-`), a log
+  entry naming such a record is dropped before any limit or total, and a
+  dream shared with a readable record is kept with its readable
+  transitions only. `osb://log/{date}` re-renders the day from the kept
+  entries. A refused preference or hub answers as an absent one, and a
+  refused MOC member is neither listed nor sized. The `brain_doctor`
+  findings `orphan-evidence` and `malformed-evidence-range` now carry
+  `sources` (the preference the evidence is about) and
+  `removed-tool-reference` carries `path` (vault-relative on the wire),
+  so each names its record structurally; the messages are unchanged.
+  `brain_search_by_source` and `brain_delete_by_source` honour the reach
+  of a derived summary page: such a page, and the content-manifest entry
+  of a source the caller cannot read, are left out of the answer and
+  left in place. A `brain_ingest_source` below local reach leaves a
+  summary page the caller cannot read untouched and answers as a first
+  ingest would. An entity intake of a source that is reserved against
+  remote reads records no `source_content_hash`. A byte-order mark
+  before a frontmatter block no longer hides that block, so its
+  `visibility` applies to the page. The empty-search coverage verdict no
+  longer counts a root as reached through a page the caller cannot read.
+  Some counts still run over the whole Brain layer and name no record:
+  the monthly and operator views, the status views, the cap on
+  `removed-tool-reference` warnings and the `brain_doctor`
+  stale-dependency note; the ranking statistics of `brain_search` are
+  taken over the shared index.

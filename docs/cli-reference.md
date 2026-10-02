@@ -1213,8 +1213,10 @@ extract: <file> (html)
 byte offset of its start tag), plus `parts_omitted` when more than 256
 headings were found. A leading frontmatter block in the file is left
 out, as ingest leaves it out. Each heading and the title are redacted
-(`key=value` credentials and URL userinfo) before they are capped at 200
-characters, and a `|` in a heading is written as `\|` in the parts list.
+(`key=value` credentials and URL userinfo) over their first 4,096 code
+units before they are capped at 200 characters (a longer one ends in
+`…`), and in the parts list a backslash in a heading is written as `\\`
+and a `|` as `\|`.
 The `text` has every `<private>` region replaced by its placeholder and
 is otherwise not redacted; it is a preview of a file the caller already
 reads, and it never reaches a page. For CSV and TSV it prints the delimiter and the

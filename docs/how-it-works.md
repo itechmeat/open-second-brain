@@ -915,6 +915,12 @@ with a registered next command, `src/core/brain/doctor-exits.ts` for those
 without) and is CI-enforced by `tests/core/brain/doctor-exit-census.test.ts`,
 which fails on a code that appears in neither table.
 
+Since v1.69.0 the `orphan-evidence` and `malformed-evidence-range`
+findings carry `sources` (the preference the evidence is about) and
+`removed-tool-reference` carries `path` (vault-relative on the MCP
+wire), so every finding names its record structurally and `brain_doctor`
+leaves out a finding about a record the caller cannot read at its reach.
+
 With `--strict`, warnings demote `ok` to `false` so CI can gate on
 hygiene. `brain_doctor` itself stays read-only — auto-modifying state on
 a plain doctor run would break the "explicit-driven" invariant. The
@@ -1522,8 +1528,9 @@ span in the extracted text. Only the parts reach the page, under
 `## Parts` inside one fenced block, so a heading that holds `[[...]]` or
 `#word` adds no link and no tag while full-text search still finds it.
 Each heading and the title are redacted (`key=value` credentials and URL
-userinfo) before they are capped, and a `|` in a heading is written as
-`\|` in the parts list, so a heading cannot forge a line span.
+userinfo) before they are capped, over their first 4,096 code units (a
+longer one ends in `…`), and in the parts list a backslash is written
+as `\\` and a `|` as `\|`, so a heading cannot forge a line span.
 The text itself stays out of the page; `o2b brain extract --json`
 returns it.
 
