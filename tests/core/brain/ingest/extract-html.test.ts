@@ -221,6 +221,12 @@ describe("extractHtml - text", () => {
     expect(textOf("<!DOCTYPE html><?xml version='1.0'?><!-- <p>no</p> --><p>yes</p>")).toBe("yes");
   });
 
+  test.each(["<!-->", "<!--->"])("%s is an empty comment, not an open one", (comment) => {
+    const x = extracted(`<p>a</p>${comment}<h1>B</h1>`);
+    expect(x.text).toBe("a\nB");
+    expect(x.parts.filter((part) => part.level === 1).map((part) => part.heading)).toEqual(["B"]);
+  });
+
   test("malformed and unclosed tags never throw and never leak markup", () => {
     expect(textOf("<p>a</p><div class='open")).toBe("a");
     expect(textOf("<p>a</p><!-- never closed <p>b</p>")).toBe("a");

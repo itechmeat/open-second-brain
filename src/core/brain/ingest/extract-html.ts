@@ -193,6 +193,8 @@ const LINE_FEED = "\n";
 const SPACE = " ";
 const COMMENT_OPEN = "<!--";
 const COMMENT_CLOSE = "-->";
+/** What closes an abruptly closed empty comment `<!--->` after its opening. */
+const EMPTY_COMMENT_TAIL = "->";
 const END_TAG_OPEN = "</";
 const TAG_CLOSE = ">";
 
@@ -584,7 +586,11 @@ class HtmlScanner {
     const start = this.i;
     const after = s.charCodeAt(start + 1);
     if (s.startsWith(COMMENT_OPEN, start)) {
-      this.i = this.indexAfter(COMMENT_CLOSE, start + COMMENT_OPEN.length);
+      const body = start + COMMENT_OPEN.length;
+      // `<!-->` and `<!--->` are empty comments (HTML: abrupt closing).
+      if (s.charCodeAt(body) === CHAR_GT) this.i = body + 1;
+      else if (s.startsWith(EMPTY_COMMENT_TAIL, body)) this.i = body + EMPTY_COMMENT_TAIL.length;
+      else this.i = this.indexAfter(COMMENT_CLOSE, body);
     } else if (after === CHAR_BANG || after === CHAR_QUESTION) {
       this.i = this.indexAfter(TAG_CLOSE, start + 2);
     } else if (after === CHAR_SLASH) {
