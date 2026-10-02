@@ -330,9 +330,21 @@ describe("visibility on a summary page", () => {
   });
 });
 
-describe("brain_ingest_source description", () => {
-  test("is unchanged in length: the derived section needs no new argument", () => {
+/** The arguments `brain_ingest_source` took before the derived section existed. */
+const PRE_DERIVATION_ARGUMENTS = Object.freeze([
+  "source_path",
+  "summary",
+  "entities",
+  "relations",
+  "agent",
+  "plan_id",
+  "pre_extract",
+]);
+
+describe("brain_ingest_source arguments", () => {
+  test("are unchanged: the derived section needs no new argument", () => {
     const tool = INGEST_TOOLS.find((t) => t.name === "brain_ingest_source")!;
-    expect(tool.description.length).toBe(299);
+    const schema = tool.inputSchema as { properties: Record<string, unknown> };
+    expect(Object.keys(schema.properties)).toEqual([...PRE_DERIVATION_ARGUMENTS]);
   });
 });
