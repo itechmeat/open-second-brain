@@ -1332,7 +1332,7 @@ Inputs:
 | Argument | Type | Meaning |
 | --- | --- | --- |
 | `source_path` | string, required | the source identity: a vault-relative path or a URL |
-| `claims` | array, required | `{ text, block? }` items; `block` is the source block id (`^abc` or `abc`) |
+| `claims` | array, required | `{ text, block? }` items; `block` is the source block id (`^abc` or `abc`); at most 1000 per call, and a claim's text is one line |
 | `strict_quotes` | boolean, optional | since v1.67.0, refuse the whole write when any quoted span fails the check |
 | `excerpt` | string, optional | since v1.67.0, the verbatim text the caller read from a `url-only` source, stored on the page |
 | `agent` | string, optional | agent identity override |
@@ -1346,22 +1346,30 @@ Result keys: `distillation_path`, `created`, `claim_count`, `source_hash`
 
 Since v1.67.0, every quoted span in a claim is checked before the page is
 written. A quoted span is the text between a pair of quotation marks in a
-claim.
-A quotation mark is any character with the Unicode `Quotation_Mark`
-property, so straight, curly, low-high, guillemet and corner-bracket
-quotes all count without a list of languages. Marks pair by position: an
-opener follows the start of the text, whitespace or opening punctuation,
-a closer is followed by the end, whitespace or punctuation. A mark with a
-letter on both sides (an apostrophe inside a word) is never a delimiter.
-Only the outermost span is checked; a quote inside it is part of its
-text. A mark that finds no partner is counted as `unpaired` and left on
-the page untouched. A mark separated from its text by an ordinary space
-is counted as unpaired, not checked; a single no-break or thin space, as
-in spaced guillemets, is allowed. An empty span is not a quote.
+claim. A quotation mark is any character with the Unicode
+`Quotation_Mark` property, so straight, curly, low-high, guillemet and
+corner-bracket quotes all count without a list of languages. Marks pair
+by position: an opener follows the start of the text, whitespace or
+punctuation other than a mark that just closed, a closer is followed by
+the end, whitespace or punctuation. A mark whose Unicode category is
+opening or closing punctuation (low-9 marks, corner brackets) is
+directional by itself, so corner brackets pair even when glued to CJK
+letters. Any other mark with a letter on both sides (an apostrophe
+inside a word) is never a delimiter. A closer pairs only with an opener
+of its own width (single with single, double with double), so a
+possessive apostrophe never ends a double quote. Only the outermost
+closed span is checked; a quote inside it is part of its text. A mark
+that finds no partner is counted as `unpaired` and left on the page
+untouched, and it hides no later quote. A mark separated from its text by
+an ordinary space is counted as unpaired, not checked; a single no-break
+or thin space, as in spaced guillemets, is allowed. A pair holding fewer
+than two letters or digits (`rock 'n' roll`) is not a quote and counts
+as two unpaired marks. An empty span is not a quote.
 
 Each span is compared with the evidence after the same normalisation is
 applied to both sides: Unicode NFC, inline Markdown reduced to its
-display text (emphasis and code markers, `[text](url)`, `[[target|alias]]`,
+display text (paired emphasis and code markers, so `snake_case` and
+`2*3` stay as written, `[text](url)`, `[[target|alias]]`,
 `[[target]]`), line-leading block markers and a trailing ` ^id` removed,
 quotation-mark variants folded, whitespace runs collapsed. Case,
 punctuation and wording are never folded. The normalised span must then
@@ -1381,6 +1389,10 @@ The evidence depends on the claim:
   as `verified-in-source`, a weaker outcome than `verified-in-block`.
 - A source whose bytes are not valid UTF-8 gives `source-not-text` for
   every span. A source with no local bytes gives `url-only`.
+- A vault source the caller may not read at its transport reach (or, with
+  `integrity.owner_scope_delivery: fail`, another owner's page) is treated
+  as one with no local bytes: every span gives `url-only`, and no
+  `source_hash` is returned or recorded on the page.
 
 The bytes checked are the bytes read once for `source_hash`, so the
 verdict and the digest on the page always describe the same content.
@@ -1433,8 +1445,8 @@ stores it under a `## Excerpt` heading in a fenced block with the info
 string `excerpt`, records its sha256 as `excerpt_hash`, and quotes are
 checked against it. An excerpt is refused with `INVALID_PARAMS`, before
 anything is written, when the source is a file the vault holds (the file
-is the evidence), when it is empty after trimming, or when it exceeds the
-cap.
+is the evidence), when it holds no text (only whitespace, control or
+format characters), when it contains NUL, or when it exceeds the cap.
 
 ## Safety notes
 
@@ -2019,9 +2031,10 @@ cap.
   distillation"). `brain_ingest_source` returns `capture_scope`;
   `brain_research_report` returns `capture_scopes`, one per entry of
   `sources` in the same order, and stamps a `capture_scopes` frontmatter
-  list when any source is not `full-local`; a source backed by a vault
-  file the caller cannot read at its reach is reported `url-only`, the
-  same answer as an absent file. `brain_hygiene` gains the
+  list when any source is not `full-local`; a source written without an
+  extension is matched against its `.md` note, and a source backed by a
+  vault file the caller cannot read at its reach is reported `url-only`,
+  the same answer as an absent file. `brain_hygiene` gains the
   default-on `capture-scope` detector: a retrievable page of active
   knowledge whose every cited source is currently `url-only` gets a
   `warning` finding with `proposed_action: review`. The scope is

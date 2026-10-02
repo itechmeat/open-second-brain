@@ -1149,8 +1149,8 @@ o2b brain distill            <source> (--claims <json> | --claims-file <path>) [
 
 Writes one idempotent distillation page per source from atomic claims the
 calling agent supplies as a JSON array of `{ "text": "...", "block": "^abc" }`
-objects (or an object with a `claims` array). `<source>` is a vault-relative
-path or a URL. Open Second Brain runs no model: it validates the claims,
+objects (or an object with a `claims` array), at most 1000 per call, each
+claim's text on one line. `<source>` is a vault-relative path or a URL. Open Second Brain runs no model: it validates the claims,
 checks every quoted span in them against the source, and writes the page.
 
 Since v1.67.0, every quoted span in a claim is compared with the block the
@@ -1174,7 +1174,7 @@ The full rules are in [the MCP reference](mcp.md#source-distillation).
   page records `capture_scope: bounded-local` and an `excerpt_hash`, keeps
   the text under a `## Excerpt` heading, and checks quotes against it. The excerpt is
   refused, before anything is written, for a source the vault holds, when
-  it is empty, or above 65,536 bytes. A file whose bytes are not valid
+  it holds no text or contains NUL, or above 65,536 bytes. A file whose bytes are not valid
   UTF-8 is a usage error (exit `2`, `distill: excerpt file is not valid
   UTF-8`), so the stored excerpt is always the file's own bytes.
 
