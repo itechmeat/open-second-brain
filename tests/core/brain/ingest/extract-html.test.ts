@@ -43,8 +43,9 @@ const EXTRACT_HTML_MODULE = new URL(
 ).href;
 /**
  * The time a source of huge headings may take. Redacting each heading
- * unwindowed took about 1.3 s per heading; the windowed pass leaves only
- * the scan itself, about 0.2 s for 8 MiB.
+ * unwindowed took 1.1 s for one 8 MiB heading and 2.3 s for a 4 MiB title
+ * and heading; the windowed pass leaves only the scan itself, about 40 ms
+ * for 8 MiB, so the ceiling keeps a margin of more than 20x.
  */
 const HEADING_WINDOW_CEILING_MS = 1_000;
 /** The parts section of one part: heading, blank line, fence, the part line, fence. */
