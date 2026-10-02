@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import { charSpanToLineSpan } from "../search/line-numbering.ts";
 import { caseInsensitiveIndex, NO_MATCH_OFFSET, snippetAround } from "../search/snippet-window.ts";
+import { privateRegionTexts } from "../redactor.ts";
 import {
   appendContinuityRecord,
   clipPayloadToBudget,
@@ -421,9 +422,6 @@ function loadSessionPayloadPolicy(vault: string): ResolvedSessionPayloadPolicy {
   }
 }
 
-/** A `<private>` opening tag, as the continuity sanitiser detects one. */
-const PRIVATE_OPEN_RE = /<private\b[^>]*>/i;
-
 function importRawTurn(
   vault: string,
   sessionId: string,
@@ -473,7 +471,9 @@ function appendTurnRow(
     sourceRefs: sourceRefs(sessionId, turn.turnId),
     // The registry strips `<private>` regions before it writes anything,
     // which leaves the store nothing to detect; the verdict is carried.
-    ...(externalized.payloads.length > 0 && PRIVATE_OPEN_RE.test(original)
+    // It is the redactor's own region detection, so a region the registry
+    // stripped (an unclosed tag included) is the region that flags the row.
+    ...(externalized.payloads.length > 0 && privateRegionTexts(original).length > 0
       ? { private: true }
       : {}),
     payload: {
