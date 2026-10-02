@@ -18,7 +18,10 @@ import {
   listEntities,
   upsertEntity,
 } from "../../../../src/core/brain/entities/registry.ts";
-import { ingestSource } from "../../../../src/core/brain/ingest/ingest.ts";
+import {
+  ingestSource,
+  PRE_EXTRACT_MAX_SOURCE_BYTES,
+} from "../../../../src/core/brain/ingest/ingest.ts";
 import { manifestPath } from "../../../../src/core/brain/ingest/content-manifest.ts";
 import { computePlanId, readCheckpoint } from "../../../../src/core/brain/ingest/checkpoint.ts";
 
@@ -276,6 +279,19 @@ describe("ingestSource pre-extract pass (P4, t_ef786747)", () => {
       readable: () => true,
     });
     expect(allowed.preExtract?.extracted).toBe(true);
+  });
+
+  test("a code source larger than the read limit is skipped by name", () => {
+    writeCode();
+    writeFileSync(
+      join(vault, "Code", "widget.ts"),
+      `export const big = "${"x".repeat(PRE_EXTRACT_MAX_SOURCE_BYTES)}";\n`,
+    );
+    const res = ingestSource(vault, CODE_INPUT, { agent: "claude", now: NOW, preExtract: true });
+    expect(res.preExtract).toEqual({
+      extracted: false,
+      reason: `source is larger than ${PRE_EXTRACT_MAX_SOURCE_BYTES} bytes; code-structure pre-extraction skipped: ${CODE_INPUT.sourcePath}`,
+    });
   });
 
   test("with the pass off the result carries no seeds and the page is byte-identical", () => {

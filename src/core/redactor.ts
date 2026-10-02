@@ -276,10 +276,13 @@ const IPV4 = `${IPV4_OCTET}(?:\\.${IPV4_OCTET}){3}`;
 // (`scheme://:pass@host`) - while the colon between the halves stays
 // mandatory and adjacent, so a URL whose path carries an `@` but no
 // userinfo colon is untouched. Every class still cannot cross whitespace,
-// the `://` scheme anchor and the `@` anchor are kept, and each run is
-// bounded by those anchors (a `[^\s@]+` run ends at the first whitespace
-// or `@`, deterministically), so the documented linear / no-ReDoS
-// property above holds.
+// the `://` scheme anchor and the `@` anchor are kept. The anchors alone do
+// not keep the pass linear: a run that never meets its terminator is
+// rescanned from every word boundary, which is quadratic on a long line of
+// `a://b:` or `a.` repeats. Each run therefore has a length bound (scheme
+// 32, user 256, password 4096 characters), so a start position costs at
+// most a fixed number of steps; a password longer than the bound is not
+// recognised by this pass.
 //
 // Because the password class crosses `/`, a `host:port/path@x` URL would
 // read the port colon as the userinfo colon and swallow the host, the port
@@ -290,7 +293,8 @@ const IPV4 = `${IPV4_OCTET}(?:\\.${IPV4_OCTET}){3}`;
 // query or fragment directly after a port with an `@` in it
 // (`example.com:443?x@y`) is still read as userinfo - far rarer than a
 // password such as `123?secret`, which this keeps redacted.
-const BASIC_AUTH_URL_RE = /\b([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^\s/:@]*):(?!\d{1,5}\/)([^\s@]+)@/g;
+const BASIC_AUTH_URL_RE =
+  /\b([a-zA-Z][a-zA-Z0-9+.-]{0,31}:\/\/)([^\s/:@]{0,256}):(?!\d{1,5}\/)([^\s@]{1,4096})@/g;
 
 // `ipv4:port` — a reachable service endpoint. Redacted whole regardless of
 // whether the address is public or private (the port is what leaks the
@@ -561,7 +565,12 @@ const CREDENTIAL_QUERY_KEY_SET: ReadonlySet<string> = new Set(CREDENTIAL_QUERY_K
 const GETTER_PREFIX_RE = /^[a-z0-9]+::/i;
 
 /** Schemes whose userinfo has no conventional login: a bare user there is a token. */
-const TOKEN_USERINFO_SCHEMES: ReadonlySet<string> = new Set(["http:", "https:"]);
+const TOKEN_USERINFO_SCHEMES: ReadonlySet<string> = new Set([
+  "http:",
+  "https:",
+  "git+http:",
+  "git+https:",
+]);
 
 /**
  * A user name that reads as a login (`git`, `deploy`) rather than a token;
@@ -594,13 +603,31 @@ function redactCredentialQuery(search: string): string | null {
 }
 
 /**
+ * The credential query pass for a specifier the URL parser refuses (the
+ * scp-like `git@host:org/repo?sshkey=...` form, a host without a scheme):
+ * the text between the first `?` and the first `#` after it is read as the
+ * query.
+ */
+function redactUnparsedQuery(specifier: string): string {
+  const start = specifier.indexOf("?");
+  if (start < 0) return specifier;
+  const hash = specifier.indexOf("#", start);
+  const end = hash < 0 ? specifier.length : hash;
+  const search = redactCredentialQuery(specifier.slice(start, end));
+  return search === null
+    ? specifier
+    : `${specifier.slice(0, start)}${search}${specifier.slice(end)}`;
+}
+
+/**
  * The credential pass for a module source or import specifier. Covered:
  * the `user:password@` pair of any scheme ({@link redactUrlCredentials}),
- * a password containing `@`, a bare userinfo of an http(s) URL (a token,
+ * a password containing `@`, a bare userinfo of an http(s) or git+http(s) URL (a token,
  * with or without a go-getter prefix such as `git::`), a userinfo of any
  * other scheme that does not read as a login (`ssh://git@` is kept), and
  * the value of every {@link CREDENTIAL_QUERY_KEYS} parameter. A specifier
- * that does not parse as a URL gets the `user:password@` pass only; a
+ * that does not parse as a URL gets the `user:password@` pass and the
+ * query pass ({@link redactUnparsedQuery}), not the bare-userinfo one; a
  * credential in a path segment, a fragment or an unnamed query key is not
  * recognised. A specifier with nothing to redact is returned
  * byte-identical; a redacted one is re-serialised by the URL parser.
@@ -612,7 +639,7 @@ export function redactSpecifierCredentials(specifier: string): string {
   try {
     url = new URL(basic.slice(prefix.length));
   } catch {
-    return basic;
+    return redactUnparsedQuery(basic);
   }
   let changed = false;
   if (url.password !== "") {

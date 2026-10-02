@@ -7,7 +7,14 @@
  * seed types, so callers keep importing them from there.
  */
 
-import { redactSpecifierCredentials } from "../../redactor.ts";
+import { REDACTION_PLACEHOLDER, redactSpecifierCredentials } from "../../redactor.ts";
+
+/**
+ * The longest specifier an `imports` seed carries. A module specifier or
+ * source is a short path or URL; anything longer is not one a reader can
+ * use, and is carried as the redaction placeholder instead of being parsed.
+ */
+export const SPECIFIER_MAX_CHARS = 2048;
 
 /**
  * A declaration surfaced as an entity seed: a class or function (TS/JS,
@@ -57,8 +64,13 @@ export interface CodeEdgeSeed {
  * signing keys and the rest of `CREDENTIAL_QUERY_KEYS`) become the
  * redaction placeholder. Not covered: a credential in a path segment, a
  * fragment or an unnamed query parameter. A specifier with nothing to
- * redact is kept byte-identical.
+ * redact is kept byte-identical. A specifier longer than
+ * {@link SPECIFIER_MAX_CHARS} becomes the placeholder whole.
  */
 export function specifierSeed(path: string, specifier: string): CodeEdgeSeed {
-  return { kind: "imports", from: path, to: redactSpecifierCredentials(specifier) };
+  const to =
+    specifier.length > SPECIFIER_MAX_CHARS
+      ? REDACTION_PLACEHOLDER
+      : redactSpecifierCredentials(specifier);
+  return { kind: "imports", from: path, to };
 }

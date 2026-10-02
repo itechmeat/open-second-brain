@@ -12,6 +12,7 @@ import {
 } from "../../src/core/redactor.ts";
 import { EGRESS_OUTCOME, redactForEgress } from "../../src/core/egress/guard.ts";
 import { fakeCredential } from "../helpers/fake-credentials.ts";
+import { LINEAR_CEILING_MS } from "../helpers/linear-time.ts";
 
 describe("stripPrivateRegions", () => {
   test("strips balanced private regions across lines", () => {
@@ -286,6 +287,21 @@ describe("URL credentials with an empty username", () => {
     });
     expect(out).toBe("see https://mastodon.social/@someone for the thread");
   });
+});
+
+describe("the URL credential pass stays linear on a long line", () => {
+  const LONG = 256 * 1024;
+  for (const [form, text] of [
+    ["repeated word boundaries", "a.".repeat(LONG / 2)],
+    ["repeated scheme and user pairs", "a://b:".repeat(LONG / 6)],
+    ["repeated scheme openers", "a+://".repeat(LONG / 5)],
+  ] as const) {
+    test(form, () => {
+      const started = performance.now();
+      redactRawOutput(text, { redactUrlCredentials: true });
+      expect(performance.now() - started).toBeLessThan(LINEAR_CEILING_MS);
+    });
+  }
 });
 
 describe("URL credentials never swallow a port and a path", () => {

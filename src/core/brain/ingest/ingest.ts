@@ -19,7 +19,7 @@
  * genuine connection to prior material; a freshly created entity is not.
  */
 
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
 import type { FrontmatterMap } from "../../types.ts";
@@ -282,6 +282,13 @@ export function ingestSource(
  * `readable` refuses is answered the same way, before its bytes are read, so
  * the pass reads no file the intake would treat as having no local bytes.
  */
+/**
+ * The largest source the code-structure pass reads. A hand-written module
+ * is far smaller; a larger file is generated or vendored, and its seeds are
+ * not worth a parse whose cost grows with the file.
+ */
+export const PRE_EXTRACT_MAX_SOURCE_BYTES = 1_048_576;
+
 function runPreExtract(
   vault: string,
   canonicalSource: string,
@@ -310,7 +317,14 @@ function runPreExtract(
   if (readable !== undefined && !readable(canonicalSource)) return noBytes;
   let content: string;
   try {
-    content = readFileSync(join(vault, canonicalSource), "utf8");
+    const absolute = join(vault, canonicalSource);
+    if (statSync(absolute).size > PRE_EXTRACT_MAX_SOURCE_BYTES) {
+      return {
+        extracted: false,
+        reason: `source is larger than ${PRE_EXTRACT_MAX_SOURCE_BYTES} bytes; code-structure pre-extraction skipped: ${canonicalSource}`,
+      };
+    }
+    content = readFileSync(absolute, "utf8");
   } catch {
     // A source with no readable file bytes - a URL/identity-only source, a
     // directory, a permission failure, or a deletion race - cannot be parsed,

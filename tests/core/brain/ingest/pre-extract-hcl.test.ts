@@ -16,8 +16,13 @@ import {
   type PreExtractSuccess,
 } from "../../../../src/core/brain/ingest/pre-extract.ts";
 import { HCL_BLOCK_KIND } from "../../../../src/core/brain/ingest/pre-extract-hcl.ts";
-import { REDACTION_PLACEHOLDER } from "../../../../src/core/redactor.ts";
+import { SPECIFIER_MAX_CHARS } from "../../../../src/core/brain/ingest/pre-extract-seeds.ts";
+import {
+  REDACTION_PLACEHOLDER,
+  redactSpecifierCredentials,
+} from "../../../../src/core/redactor.ts";
 import { fakeCredential } from "../../../helpers/fake-credentials.ts";
+import { LINEAR_CEILING_MS } from "../../../helpers/linear-time.ts";
 
 function asSuccess(res: PreExtractResult): PreExtractSuccess {
   if (!res.extracted) throw new Error(`expected extracted, got: ${res.reason}`);
@@ -174,6 +179,21 @@ describe("preExtractCodeStructure - Terraform family", () => {
         `https://example.com/m.zip?token=${P}`,
       ],
       [
+        "the sshkey parameter of a scp-like source the URL parser refuses",
+        `git::git@github.com:org/net.git?sshkey=${value}&ref=v1`,
+        `git::git@github.com:org/net.git?sshkey=${P}&ref=v1`,
+      ],
+      [
+        "an S3 key parameter on a source without a scheme",
+        `bucket.s3.amazonaws.com/vpc.zip?aws_access_key_secret=${value}#frag`,
+        `bucket.s3.amazonaws.com/vpc.zip?aws_access_key_secret=${P}#frag`,
+      ],
+      [
+        "a bare token in a git+https userinfo",
+        `git+https://${value}@github.com/org/net.git`,
+        `git+https://${P}@github.com/org/net.git`,
+      ],
+      [
         "a signed GCS URL, the key matched in any case",
         `gcs::https://www.googleapis.com/storage/v1/b/m.zip?X-Goog-Signature=${value}`,
         `gcs::https://www.googleapis.com/storage/v1/b/m.zip?X-Goog-Signature=${P}`,
@@ -188,6 +208,33 @@ describe("preExtractCodeStructure - Terraform family", () => {
         );
         expect(res.edges).toEqual([{ kind: "imports", from: "infra/main.tf", to: redacted }]);
         expect(JSON.stringify(res)).not.toContain(value);
+      });
+    }
+  });
+
+  test("a module source longer than the specifier limit is carried as the placeholder", () => {
+    const res = asSuccess(
+      preExtractCodeStructure(
+        "infra/main.tf",
+        lines('module "net" {', `  source = "${"a.".repeat(SPECIFIER_MAX_CHARS)}"`, "}"),
+      ),
+    );
+    expect(res.edges).toEqual([
+      { kind: "imports", from: "infra/main.tf", to: REDACTION_PLACEHOLDER },
+    ]);
+  });
+
+  describe("a long specifier is redacted in linear time", () => {
+    const LONG = 256 * 1024;
+    for (const [form, specifier] of [
+      ["repeated word boundaries", "a.".repeat(LONG / 2)],
+      ["repeated scheme and user pairs", "a://b:".repeat(LONG / 6)],
+      ["repeated scheme openers", "a+://".repeat(LONG / 5)],
+    ] as const) {
+      test(form, () => {
+        const started = performance.now();
+        redactSpecifierCredentials(specifier);
+        expect(performance.now() - started).toBeLessThan(LINEAR_CEILING_MS);
       });
     }
   });
