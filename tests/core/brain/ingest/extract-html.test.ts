@@ -27,6 +27,14 @@ import { fakeCredential } from "../../../helpers/fake-credentials.ts";
 
 const encoder = new TextEncoder();
 
+/** Small headings in the memory-bound probe: about 4 MiB of source. */
+const OMITTED_HEADINGS = 400_000;
+/**
+ * The memory the probe may grow by. Building every omitted part took about
+ * 850 MB on this input; the bounded scan takes about 40 MB.
+ */
+const SCAN_MEMORY_BOUND_BYTES = 256 * 1024 * 1024;
+
 /** The extraction of `html`, failing the test when the scanner refused it. */
 function extracted(html: string): HtmlExtraction {
   const result = extractHtml(encoder.encode(html));
@@ -340,6 +348,31 @@ describe("extractHtml - parts", () => {
     expect(result.title).toContain(REDACTION_PLACEHOLDER);
     expect(result.parts[0]?.heading).toContain(REDACTION_PLACEHOLDER);
     expect(renderPartsSection(result)).not.toContain(password);
+  });
+
+  test.each([
+    ["without a preamble", "", 300],
+    ["with a preamble", "<p>intro</p>", 301],
+  ])("far more headings than the cap count every omitted part (%s)", (_name, lead, partCount) => {
+    const html = lead + Array.from({ length: 300 }, (_, n) => `<h2>H${n}</h2>`).join("");
+    const result = extracted(html);
+    expect(result.parts.length).toBe(HTML_PARTS_MAX);
+    expect(result.partsOmitted).toBe(partCount - HTML_PARTS_MAX);
+    expect(result.parts.at(-1)?.lineEnd).toBe(HTML_PARTS_MAX);
+  });
+
+  test("omitted parts cost no memory: many small headings under long ancestors", () => {
+    // Every omitted h6 would otherwise carry a trail of about 1,000 characters.
+    const ancestors = [1, 2, 3, 4, 5]
+      .map((level) => `<h${level}>${"a".repeat(HTML_HEADING_MAX_CHARS - 1)}</h${level}>`)
+      .join("");
+    const bytes = encoder.encode(ancestors + "<h6>x</h6>".repeat(OMITTED_HEADINGS));
+    Bun.gc(true);
+    const before = process.memoryUsage().rss;
+    const result = extractHtml(bytes);
+    const grown = process.memoryUsage().rss - before;
+    expect(result.extracted && result.partsOmitted).toBe(OMITTED_HEADINGS + 5 - HTML_PARTS_MAX);
+    expect(grown).toBeLessThan(SCAN_MEMORY_BOUND_BYTES);
   });
 
   test("a 300-character heading is capped", () => {

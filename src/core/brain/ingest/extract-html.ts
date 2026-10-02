@@ -34,6 +34,13 @@ import { SOURCE_EXTRACT_SKIP_REASON } from "./source-formats.ts";
 export const HTML_EXTRACT_MAX_SOURCE_BYTES = SOURCE_HASH_MAX_BYTES;
 /** The most parts one extraction reports; the rest are counted in `partsOmitted`. */
 export const HTML_PARTS_MAX = 256;
+/**
+ * The most headings the scan keeps: the parts cap plus one, so the last kept
+ * part still takes its line span from the next heading. A heading past it is
+ * only counted, never built, so a source of many small headings under long
+ * ancestors costs no memory per omitted part.
+ */
+const HTML_SCANNED_MAX = HTML_PARTS_MAX + 1;
 /** The longest heading (and title) kept, in code points; a longer one is cut. */
 export const HTML_HEADING_MAX_CHARS = 200;
 
@@ -435,6 +442,8 @@ class HtmlScanner {
   /** The enclosing sections of the next heading, outermost first. */
   private readonly sections: { readonly level: number; readonly heading: string }[] = [];
   private readonly scanned: ScannedPart[] = [];
+  /** Headings met past {@link HTML_SCANNED_MAX}, counted and never built. */
+  private unscanned = 0;
 
   constructor(private readonly source: string) {
     this.i = source.charCodeAt(0) === BYTE_ORDER_MARK ? 1 : 0;
@@ -461,7 +470,7 @@ class HtmlScanner {
       title: this.title,
       text,
       parts,
-      partsOmitted: all.length - parts.length,
+      partsOmitted: all.length - parts.length + this.unscanned,
     };
   }
 
@@ -503,6 +512,10 @@ class HtmlScanner {
     this.openHeading = null;
     const folded = oneLine(this.sink.lines.slice(open.linesBefore).join(SPACE));
     if (folded.length === 0) return;
+    if (this.scanned.length >= HTML_SCANNED_MAX) {
+      this.unscanned++;
+      return;
+    }
     const heading = keptHeading(folded);
     while ((this.sections.at(-1)?.level ?? PREAMBLE_LEVEL) >= open.level) this.sections.pop();
     this.sections.push({ level: open.level, heading });
