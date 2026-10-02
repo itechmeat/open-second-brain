@@ -1351,6 +1351,14 @@ containment only. On an existing overview or module note the new
 regions are appended at the end of the note, once, so the first run
 after an upgrade reports those notes `updated`.
 
+Since v1.69.0, when modules declare edges but every one of them touches
+such a module, the `module-dependencies` region says so in a fixed
+sentence and lists the dropped edges as code spans instead of claiming
+that no module depends on another; with some edges drawn, one line under
+the diagram names the dropped ones. A module note names the modules it
+depends on but cannot link on a `Not linked:` line, and its
+`depends_on` key still holds only links.
+
 ## The agent write contract (since v0.41.0)
 
 The Brain core stays deterministic - no LLM ever runs inside it. The write-session protocol is how that rule survives contact with agents that need to PROPOSE structured artifacts: schema-typed notes, handoffs, curated summaries, panel deliberations.
@@ -1485,6 +1493,52 @@ pages are skipped: they already carry the `untrusted_source` marker, which
 names the same condition (and which the retrieval trust gate excludes when
 `search_trust_gate_enabled` is on).
 
+## Non-Markdown sources (since v1.69.0)
+
+Ingest used to be text only: a file that was not Markdown or plain text
+was counted per extension and set aside. One format registry now maps a
+file's extension to a format and each format to an extractor. Markdown
+and the lightweight markups are read as they are; CSV, TSV and HTML are
+extracted; PDF, the Office formats, EPUB, RTF and images are named but
+not extracted, so the ingest plan lists each such file with reason
+`format-not-extractable` and its format, the hook a caller that runs
+its own converter or OCR routes on. Open Second Brain adds no parser
+dependency and runs no external program for this.
+
+The calling agent still writes the summary of a source. What the kernel
+adds is structure it can derive without judgement, written onto the
+summary page, because the summary page is what search indexes: the
+source file itself is not a Markdown page. `brain_ingest_source` does
+this by format, for a file in the vault, in the trusted lane, after
+the same reach check every reader applies, and reads the bytes once to
+derive the section and its `source_content_hash`.
+
+For HTML, a linear scanner (no regular expression over unbounded input)
+reduces the page to text: comments, scripts, styles and embedded SVG or
+MathML are dropped, entities are decoded, a `<private>` region becomes
+its placeholder and no attribute value is ever kept. The headings become
+parts, each with its level, its trail of ancestor headings and its line
+span in the extracted text. Only the parts reach the page, under
+`## Parts` inside one fenced block, so a heading that holds `[[...]]` or
+`#word` adds no link and no tag while full-text search still finds it.
+The text itself stays out of the page; `o2b brain extract --json`
+returns it.
+
+For CSV and TSV, the first record is the header. Quoted fields follow
+RFC 4180 leniently, a semicolon export is recognised from its first
+record, and an unterminated quote is refused by name with the record
+number. The rows are rendered as fenced plain text, not a Markdown
+table, in groups that each repeat the header and stay under one search
+chunk, so every chunk of the page carries the column names and a
+`Table > Rows a-b` heading path. Rows, columns, cell length and section
+size are capped, and every cut is named. A column whose header names a
+credential has its values replaced, and every other cell goes through
+the output redactor.
+
+A Markdown or text source gets nothing new: its page is byte for byte
+what it was.
+
+## Safety properties
 ## Safety properties
 
 These are invariants of the system, not configuration to enable.

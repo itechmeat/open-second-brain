@@ -47,6 +47,71 @@ instruction files such as `CLAUDE.md`/`AGENTS.md`, installed
 `.claude/skills/`) and warns with the exact replacement for any stale
 reference it finds (`removed-tool-reference`).
 
+## Upgrading to 1.69.0
+
+No step below is required. Seven changes are visible to an operator or a
+client.
+
+**CSV, TSV and HTML files are planned by default.** `o2b brain
+batch-plan` and `brain_ingest_batch_plan` now discover `.csv`, `.tsv`,
+`.html` and `.htm` files beside the Markdown and plain-text ones, and a
+planned file of one of these formats carries its `format`. The plan id
+of a tree holding such files therefore changes, and a resume checkpoint
+written for that tree before the upgrade no longer matches it; a tree of
+Markdown and plain-text files plans exactly as before. An `extensions`
+override is honoured as before.
+
+**PDF, Office, EPUB, RTF and image files are named, not counted.** A
+`.png`, `.pdf`, `.docx` or another file of a format the registry names
+but does not extract moves from the `unclassifiable` counts to
+`skipped_non_extractable`, one entry per file with reason
+`format-not-extractable` and the format as `detail`. A reader that summed
+`unclassifiable` sees fewer files there and finds them in
+`skipped_non_extractable`.
+
+**Ingesting an HTML, CSV or TSV source adds a derived section.**
+`brain_ingest_source` writes a `## Parts` section (HTML headings and
+their line spans) or a `## Table` section (the rows as fenced plain
+text) onto the summary page of an in-vault source of these formats,
+with `source_format`, `source_content_hash` and, for a table, five
+`table_*` frontmatter keys, and returns `parts` or `table`. The first
+ingest after the upgrade of a source already ingested rewrites its page
+once with the new section and keys. Text and Markdown sources are
+unchanged. Table cells pass two redaction passes; see
+[`mcp.md`](mcp.md) for what they catch and what they do not.
+
+**`visibility` is kept on re-ingest.** An operator-set `visibility` on a
+summary page used to be dropped when the source was ingested again; it
+is now kept, the way `created_at` is, for every source format.
+
+**`brain_recall_gate` accepts `turn_id`.** The optional argument (at most
+512 characters) the Hermes plugin sends was refused by the closed input
+schema; it is now accepted and recorded on the `gate_telemetry` record.
+A `turn_id`, `session_id` or `telemetry_host` longer than its bound (512,
+512 and 200 characters) is now refused with `INVALID_PARAMS` before the
+gate runs; it used to be dropped from the telemetry record without a
+word, and not checked at all with telemetry off.
+
+**Multi-line prompts that start with a command name are now admitted.**
+The recall surfacing gate skipped a prompt whose first word is a command
+name such as `git` or `ls` as a shell command, even when the prompt went
+on over more lines. Such a multi-line prompt now retrieves. A
+single-line prompt that starts with a command name is still skipped as
+`shell_command`.
+
+**Root coverage, the daily and weekly brief and the architecture notes
+answer more exactly.** The root coverage of the `brain_search` and
+`brain_recall_gate` verdicts and the record ids of the daily and weekly
+`brain_brief` views now answer at the caller's reach. Below local reach
+a root counts as reached only through a page the caller can read, and
+the daily and weekly views leave out rows and source pointers that only
+a record the caller cannot read accounts for, take no report snapshot
+and show no `delta`; their counts are unchanged. A local caller and the
+CLI see no change. `o2b brain architect` no longer says that no
+module depends on another when every declared edge touches a module
+whose name a link cannot carry: it lists those edges as code spans, so
+an overview or module note in that state reports `updated` once.
+
 ## Upgrading to 1.68.0
 
 No step below is required. Six changes are visible to an operator or a
