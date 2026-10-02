@@ -82,7 +82,10 @@ test("a turn_id over the declared bound is refused", async () => {
     prompt: PROMPT,
     turn_id: "t".repeat(TURN_ID_MAX_CHARS + 1),
   });
-  await expect(call).rejects.toThrow(/turn_id/);
+  // The bound's own message: a closed schema that does not declare turn_id
+  // also names the argument ("unknown argument 'turn_id'"), so a bare
+  // /turn_id/ passes even where the argument was never accepted.
+  await expect(call).rejects.toThrow(`argument 'turn_id' exceeds ${TURN_ID_MAX_CHARS} characters`);
   expect(listGateTelemetry(vault)).toHaveLength(0);
 });
 
@@ -99,5 +102,7 @@ test("a session_id over the declared bound is refused even with telemetry off", 
     prompt: PROMPT,
     session_id: "s".repeat(TURN_ID_MAX_CHARS + 1),
   });
-  await expect(call).rejects.toThrow(/session_id/);
+  await expect(call).rejects.toThrow(
+    `argument 'session_id' exceeds ${TURN_ID_MAX_CHARS} characters`,
+  );
 });
