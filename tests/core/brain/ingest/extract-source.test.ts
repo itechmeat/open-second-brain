@@ -158,3 +158,47 @@ describe("deriveSourceSection names the source's own visibility", () => {
     expect(derived !== undefined && "visibility" in derived).toBe(false);
   });
 });
+
+describe("deriveSourceSection at the caller's reach", () => {
+  const bases: string[] = [];
+  afterEach(() => {
+    for (const base of bases.splice(0)) rmSync(base, { recursive: true, force: true });
+  });
+
+  /** A vault holding one CSV source the caller's predicate decides on. */
+  function vaultWithCsv(): string {
+    const vault = mkdtempSync(join(tmpdir(), "o2b-derive-reach-"));
+    bases.push(vault);
+    mkdirSync(join(vault, "Clips"), { recursive: true });
+    writeFileSync(join(vault, "Clips/parts.csv"), "name,qty\nbolt,4\n");
+    return vault;
+  }
+
+  // The intake already demotes a hidden source to untrusted, so the ingest
+  // tests cannot reach this guard; it is the derived section's own reach
+  // contract and must hold even for a caller that hands in `trusted`.
+  test("a hidden source is not read even when the lane is trusted", () => {
+    const derived = deriveSourceSection(
+      vaultWithCsv(),
+      "Clips/parts.csv",
+      INTAKE_TRUST.trusted,
+      () => false,
+    );
+    expect(derived).toEqual({
+      format: "csv",
+      frontmatter: {},
+      section: "",
+      table: { rendered: false, format: "csv", reason: "source-not-local" },
+    });
+  });
+
+  test("the same source is read when the caller may read it", () => {
+    const derived = deriveSourceSection(
+      vaultWithCsv(),
+      "Clips/parts.csv",
+      INTAKE_TRUST.trusted,
+      () => true,
+    );
+    expect(derived?.table).toMatchObject({ rendered: true, rows: 1 });
+  });
+});
