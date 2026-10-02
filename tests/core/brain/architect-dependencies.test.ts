@@ -192,6 +192,32 @@ test("a manifest key carrying a region sentinel stays inside its region", () => 
   expect(third.updated).toBe(0);
 });
 
+// A file name holding a line break or a backtick cannot be created on Windows.
+test.skipIf(process.platform === "win32")(
+  "a file name carrying a region sentinel or a backtick stays inside its region",
+  () => {
+    put(
+      "packages/core/z.\n<!-- o2b:end facts -->\ninjected [[pref-x]] text\n<!-- o2b:begin facts -->",
+      "x\n",
+    );
+    put("packages/core/q` [[pref-y]] `.md", "x\n");
+    const first = generateArchDocs(vault, project);
+    const notePath = first.modulePaths.find((p) => p.endsWith("core.md"))!;
+    const written = readFileSync(notePath, "utf8");
+    for (const text of [written, overview(first)]) {
+      expect(text).not.toMatch(/^injected/m);
+      expect(text).not.toContain("` [[pref-y]] `");
+    }
+
+    const prose = "\nOperator prose after the regions.\n";
+    writeFileSync(notePath, written + prose);
+    const second = generateArchDocs(vault, project);
+    expect(readFileSync(notePath, "utf8")).toBe(written + prose);
+    expect(second.updated).toBe(0);
+    expect(generateArchDocs(vault, project).updated).toBe(0);
+  },
+);
+
 test("a manifest nested too deep to parse is malformed and the other modules still render", () => {
   const depth = 100_000;
   put("packages/py/pyproject.toml", `a = ${"[".repeat(depth)}${"]".repeat(depth)}\n`);

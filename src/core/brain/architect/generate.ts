@@ -183,7 +183,7 @@ function languagesLine(languages: Readonly<Record<string, number>>): string {
   if (entries.length === 0) return "none detected";
   return entries
     .slice(0, LANGUAGES_LINE_CAP)
-    .map(([ext, count]) => `${ext} (${count})`)
+    .map(([ext, count]) => `${oneLine(ext)} (${count})`)
     .join(", ");
 }
 
@@ -344,7 +344,7 @@ const NO_DEPENDS_ON = "Depends on: no other module";
 /** One manifest line: its path, ecosystem, status and, when it has one, the detail. */
 function manifestLine(reading: ManifestReading): string {
   const detail = reading.detail === undefined ? "" : ` - ${oneLine(reading.detail)}`;
-  return `- \`${oneLine(reading.path)}\` (${reading.ecosystem}): ${reading.status}${detail}`;
+  return `- ${codeSpanPath(reading.path)} (${reading.ecosystem}): ${reading.status}${detail}`;
 }
 
 /** The groups a manifest counts but does not list, summed per group, zero counts omitted. */
@@ -444,6 +444,11 @@ function isLinkable(name: string): boolean {
 
 /** What the overview's module list says before the modules it cannot link. */
 const UNLINKABLE_MODULES_LEAD = "Not linked (the name holds a character a link cannot carry):";
+
+/** A path on one line inside a code span, with no backtick to end the span. */
+function codeSpanPath(path: string): string {
+  return `\`${oneLine(path).replaceAll("`", "\\u0060")}\``;
+}
 
 /** A name on one line inside a code span: JSON escapes, and no backtick to end the span. */
 function codeSpanName(name: string): string {
@@ -624,7 +629,7 @@ function overviewRegions(
   const entryPoints =
     facts.entryPoints.length === 0
       ? "none detected"
-      : facts.entryPoints.map((entry) => `- \`${oneLine(entry)}\``).join("\n");
+      : facts.entryPoints.map((entry) => `- ${codeSpanPath(entry)}`).join("\n");
 
   return [
     { id: "summary", body: summary },
@@ -693,7 +698,7 @@ function moduleRegions(
   const files =
     module.topFiles.length === 0
       ? "empty module"
-      : module.topFiles.map((file) => `- \`${oneLine(file)}\``).join("\n");
+      : module.topFiles.map((file) => `- ${codeSpanPath(file)}`).join("\n");
   return [
     { id: "facts", body: facts },
     { id: "files", body: files },

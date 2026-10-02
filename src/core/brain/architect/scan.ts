@@ -205,10 +205,17 @@ export function compareStable(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
+/**
+ * What an extension must look like to be counted. A file name is text from
+ * the scanned tree; one whose extension holds a line break, a space or a
+ * bracket names no language, and is counted as having no extension.
+ */
+const COUNTED_EXTENSION = /^\.[a-z0-9_+-]{1,16}$/;
+
 /** Count one file's extension, the single place the mapping is defined. */
 function tallyExtension(languages: Record<string, number>, path: string): void {
   const ext = extname(path).toLowerCase();
-  if (ext !== "") languages[ext] = (languages[ext] ?? 0) + 1;
+  if (COUNTED_EXTENSION.test(ext)) languages[ext] = (languages[ext] ?? 0) + 1;
 }
 
 function walk(
