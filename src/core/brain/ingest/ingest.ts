@@ -107,7 +107,8 @@ export interface IngestSourceOptions {
   /**
    * May the caller read the vault file at this vault-relative path? Handed to
    * the intake: a source the predicate refuses is classified as one with no
-   * local bytes (untrusted lane, no digest, `url-only`). A local caller passes
+   * local bytes (untrusted lane, no digest, `url-only`). A summary page it
+   * refuses is left as it is and answered as absent. A local caller passes
    * nothing.
    */
   readonly readable?: (rel: string) => boolean;
@@ -220,7 +221,13 @@ export function ingestSource(
   // source path always yields the same hash, hence the same file).
   const sourceHash = sourceIdentityHash([canonicalSource]);
   const absPath = sourcePagePath(vault, `${slugify(canonicalSource)}-${sourceHash.slice(0, 12)}`);
-  const existed = existsSync(absPath);
+  // A summary page the caller may not read (it inherited a reserved
+  // source's visibility) is neither read nor rewritten, and the answer is
+  // the one an absent page gets: its path is deterministic, so `created`
+  // would otherwise tell the caller the page exists.
+  const summaryPath = canonicalNotePath(relative(vault, absPath));
+  const withheld = existsSync(absPath) && opts.readable?.(summaryPath) === false;
+  const existed = !withheld && existsSync(absPath);
   const stamp = isoSecond(opts.now);
   // Preserve the original created_at and an operator-set visibility on a
   // re-ingest; bump updated_at.
@@ -267,7 +274,7 @@ export function ingestSource(
   // unchanged source truly inert.
   const nextContents = formatFrontmatter(meta, body);
   const unchanged = existed && readFileSync(absPath, "utf8") === nextContents;
-  if (!unchanged) {
+  if (!withheld && !unchanged) {
     mkdirSync(dirname(absPath), { recursive: true });
     writeFrontmatterAtomic(absPath, meta, body, { overwrite: true });
   }
@@ -283,7 +290,10 @@ export function ingestSource(
   // Only in the trusted lane, which the intake grants only to a file the
   // caller may read at its reach: a source answered as absent records no
   // digest anywhere, the manifest included.
+  // Nor when the page was withheld: the manifest would then record a
+  // summary as current that this call did not write.
   if (
+    !withheld &&
     trust === INTAKE_TRUST.trusted &&
     resolvesInsideVault(vault, canonicalSource) &&
     existsSync(join(vault, canonicalSource))
@@ -307,7 +317,7 @@ export function ingestSource(
   }
 
   return {
-    summaryPath: canonicalNotePath(relative(vault, absPath)),
+    summaryPath,
     created: !existed,
     entitiesCreated: intake.entitiesCreated,
     entitiesUpdated: intake.entitiesUpdated,
