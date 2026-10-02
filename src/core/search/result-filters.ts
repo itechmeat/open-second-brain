@@ -6,11 +6,11 @@
  */
 
 import { statSync } from "node:fs";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 
 import { parseFrontmatterWithNotices } from "../vault.ts";
 import { pathIsInside } from "../path-safety.ts";
-import { BRAIN_STATE_REL } from "../brain/paths.ts";
+import { BRAIN_COMPILED_DIGEST_RELS, BRAIN_STATE_REL } from "../brain/paths.ts";
 import { DEGRADATION_CODE } from "../integrity/degradation.ts";
 import type { FrontmatterMap } from "../types.ts";
 import {
@@ -365,6 +365,12 @@ export function applyVisibilityScope(
  * callers hand this function a path the caller of a tool chose, which
  * must never make the server open a file beside the vault (a named pipe
  * there would block the read for good).
+ *
+ * A compiled digest page ({@link BRAIN_COMPILED_DIGEST_RELS}) answers
+ * `false` at remote reach whatever its frontmatter says: it compiles
+ * records that may be reserved, and its own tags cannot say so. Its
+ * dedicated readers render it per reader and never ask this predicate
+ * about the page itself.
  */
 export function isPathReadableAtReach(
   vault: string,
@@ -374,9 +380,15 @@ export function isPathReadableAtReach(
   indexedTags: ReadonlyArray<string> = [],
 ): boolean {
   if (!pathIsInside(join(vault, path), vault)) return false;
+  if (reach !== TRANSPORT_REACH.local && isCompiledDigestPath(path)) return false;
   const entry = readCachedFrontmatterEntry(frontmatterCache, vault, path);
   const tags = entry.unreadable ? UNMEASURABLE_VISIBILITY : pageVisibility(entry.meta);
   return isRemotelyReadable(tags, reach) && isRemotelyReadable(indexedTags, reach);
+}
+
+/** Is this vault-relative path (either separator) a compiled digest page? */
+function isCompiledDigestPath(path: string): boolean {
+  return BRAIN_COMPILED_DIGEST_RELS.includes(posix.normalize(path.replaceAll("\\", "/")));
 }
 
 /**

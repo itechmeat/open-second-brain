@@ -1,26 +1,18 @@
 /**
- * The derived digest pages and remote search: a recorded finding.
+ * The compiled digest pages and remote search.
  *
  * `Brain/active.md` is an ordinary page to the indexer (the default skip
  * list names only `index.md` and `log.md`), and it carries no
- * `visibility:` of its own, so a remote `brain_search` can return it with
- * the principle of a preference that is itself reserved against remote
- * reads. `brain_context`, the `osb://preferences/active` resource and
- * `brain_pre_compress_pack` now render the digest per reader; the indexed
- * page is not covered by that render, because it is read as a page, not
- * as a digest.
+ * `visibility:` of its own, yet it compiles the principles of preferences
+ * that may reserve themselves against remote reads. `brain_context`, the
+ * `osb://preferences/active` resource and `brain_pre_compress_pack` render
+ * the digest per reader; every generic page reader (search, read,
+ * backlinks and the rest) asks the shared reach predicate instead, which
+ * withholds the compiled digest pages at remote reach.
  *
- * Closing it is not a two-file change that leaves every other surface
- * alone: either the shared reach predicate (`isPathReadableAtReach`,
- * asked by every covered surface) learns that a derived digest is only as
- * readable as its least readable source record, or the indexer keeps the
- * derived digests (`Brain/active.md`, and `Brain/lessons.md`, which also
- * draws from dead-ends) out of the index, which changes local search too.
- * Both move the visibility matrix's measured counts. So the finding is
- * pinned here as measured behaviour in BOTH directions, the convention the
- * matrix uses for a surface that still names a reserved page: the day the
- * remote answer stops naming the principle, this test fails and the fix
- * flips its expectation.
+ * A/B over the same fixture: the local search finds the principle through
+ * the digest page, the remote search finds neither the page nor the
+ * principle, so the remote assertion is not vacuous.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -94,18 +86,17 @@ async function search(f: Fixture, reach: TransportReach): Promise<string> {
   return JSON.stringify(await server.callTool("brain_search", { query: MARKER }));
 }
 
-describe("the indexed active digest and remote search (recorded finding)", () => {
+describe("the indexed active digest and remote search", () => {
   test("a local search finds the principle through the digest page", async () => {
     const local = await search(await fixture(), TRANSPORT_REACH.local);
     expect(local).toContain(ACTIVE_PATH);
     expect(local).toContain(MARKER);
   });
 
-  test("a remote search still finds it there, and never through the reserved page", async () => {
+  test("a remote search finds neither the digest page nor the reserved principle", async () => {
     const remote = await search(await fixture(), TRANSPORT_REACH.remote);
     expect(remote).not.toContain(PRIVATE_PATH);
-    // The recorded residue: the derived page names the reserved principle.
-    expect(remote).toContain(ACTIVE_PATH);
-    expect(remote).toContain(MARKER);
+    expect(remote).not.toContain(ACTIVE_PATH);
+    expect(remote).not.toContain(MARKER);
   });
 });

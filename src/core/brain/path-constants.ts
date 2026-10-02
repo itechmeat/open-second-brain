@@ -197,6 +197,19 @@ export const BRAIN_MANUAL_FILE = "_BRAIN.md";
 export const BRAIN_ACTIVE_FILE = "active.md";
 export const BRAIN_LESSONS_FILE = "lessons.md";
 /**
+ * The compiled digest pages, vault-relative. Each is generated from records
+ * (preferences, retired preferences, dead-ends) that may reserve themselves
+ * against remote reads, yet the page carries no `visibility:` of its own, so
+ * a generic page reader cannot measure it. The shared reach predicate
+ * (`isPathReadableAtReach`) therefore withholds these pages at remote reach;
+ * their dedicated readers (`brain_context`, the `osb://preferences/active`
+ * resource, `brain_pre_compress_pack`) render the digest per reader instead.
+ */
+export const BRAIN_COMPILED_DIGEST_RELS: ReadonlyArray<string> = Object.freeze([
+  posix.join(BRAIN_ROOT_REL, BRAIN_ACTIVE_FILE),
+  posix.join(BRAIN_ROOT_REL, BRAIN_LESSONS_FILE),
+]);
+/**
  * Operator-authored standing rules injected at the head of every session
  * preamble (silence-is-not-an-answer, U8).
  *
