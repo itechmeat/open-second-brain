@@ -785,7 +785,7 @@ function toolBrainClaims(
       n.path,
       ...recordRefs(n.id),
       ...recordRefs(n.superseded_by ?? undefined),
-      ...n.contradicts,
+      ...n.contradicts.flatMap((id) => recordRefs(id)),
     );
   const visible = (rows: ReadonlyArray<ClaimNode>): ReadonlyArray<ClaimNode> => rows.filter(shown);
   switch (operation) {

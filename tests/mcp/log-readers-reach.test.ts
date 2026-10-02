@@ -16,7 +16,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -249,6 +249,25 @@ describe("a dream shared with a reserved record is kept, showing only readable t
   }
 });
 
+/** A readable preference page that contests `contested` by id. */
+function contester(f: Fixture, slug: string, contested: string): void {
+  writeFileSync(
+    join(f.vault, "Brain", "preferences", `pref-${slug}.md`),
+    [
+      "---",
+      "kind: brain-preference",
+      `id: pref-${slug}`,
+      `topic: ${slug}`,
+      `principle: Rule ${slug}.`,
+      `contradicts: [${contested}]`,
+      "---",
+      "",
+      "Contests a rule.",
+      "",
+    ].join("\n"),
+  );
+}
+
 describe("brain_claims answers at the caller's reach", () => {
   for (const operation of ["current", "history"]) {
     test(`operation=${operation} lists no reserved record and counts only what it lists`, async () => {
@@ -258,6 +277,23 @@ describe("brain_claims answers at the caller's reach", () => {
       expect(row.withheld).toContain(`pref-${SHARED_SLUG}`);
     });
   }
+
+  test("a claim contesting a retired reserved record is dropped, as one contesting a reserved record is", async () => {
+    const f = fixture(true);
+    contester(f, "contests-retired", `pref-${RETIRED_SLUG}`);
+    contester(f, "contests-reserved", `pref-${PRIVATE_SLUG}`);
+    const remote = normalise(f, await call(f, "brain_claims", { operation: "history" }));
+    const local = normalise(
+      f,
+      await call(f, "brain_claims", { operation: "history" }, TRANSPORT_REACH.local),
+    );
+    expect(remote).toContain(`pref-${SHARED_SLUG}`);
+    expect(remote).not.toContain("contests-reserved");
+    expect(remote).not.toContain("contests-retired");
+    // Control: a local caller lists both contesting claims.
+    expect(local).toContain("contests-reserved");
+    expect(local).toContain("contests-retired");
+  });
 });
 
 /** The doctor's broken-backlinks findings in one normalised answer. */
