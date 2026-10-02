@@ -570,10 +570,13 @@ or the packager wrote, never from anything a caller names about itself:
   block ends with one sentence saying so and naming `o2b brain doctor`
   for the cause.
 
-A project or device name becomes a key by lowercasing it and turning
-every run of characters that is neither a letter nor a digit, in any
-script, into one `-`, without leading or trailing `-` and at most 64
-characters: a project folder `My_Repo.v2` keys to `my-repo-v2`.
+A project or device name becomes a key by lowercasing it in Unicode
+normal form NFC and turning every run of characters that is not a
+letter, a combining mark or a digit, in any script, into one `-`,
+without leading or trailing `-` and at most 64 characters: a project
+folder `My_Repo.v2` keys to `my-repo-v2`, and a name written with vowel
+signs or accents keeps them, so `Café` and `café` share the key
+`café`.
 
 The matching files are joined under one `## Scoped operator rules`
 header, which states the precedence: the operator standing rules above
@@ -599,13 +602,17 @@ Where each layer renders:
   so neither the block nor the key appears and the device id is not
   read.
 
-The block is capped by `active.scoped_rules_max_chars` (default 2,000,
-at least 200). When the cap cuts anything the host file goes first, then
-the harness file, then the project file, and the block ends with a
-notice of the characters kept and the files dropped. Unlike the
-vault-wide file, the block is charged against the injection budget in
-the SessionStart hook: there its cap is never larger than
-`active.inject_budget_chars`, the rendered block is subtracted from
+The block's sections are capped by `active.scoped_rules_max_chars`
+(default 2,000, at least 200); the cap covers the sections only, not the
+header or the notices. When the cap cuts anything the host file goes
+first, then the harness file, then the project file, and the block ends
+with a notice of the characters kept and the files dropped; a file whose
+rules cannot fit at all is dropped whole rather than left as a bare
+subheading. Unlike the vault-wide file, the block is charged against the
+injection budget in the SessionStart hook: there the header and room for
+the notices ride inside `active.inject_budget_chars`, so the section cap
+is the smaller of `scoped_rules_max_chars` and what the budget leaves
+after them (never below zero), the rendered block is subtracted from
 `inject_budget_chars` before the active body is budgeted, and the
 block's length is recorded as `scoped_rules_chars` on the hook's receipt
 (see [`observability.md`](observability.md)). The files are read on every render and never cached, so one
