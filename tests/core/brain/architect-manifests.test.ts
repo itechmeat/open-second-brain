@@ -316,6 +316,16 @@ describe("go.mod", () => {
     expect(reading.fact).toBeNull();
   });
 
+  test("a block opener written without a space before the parenthesis is still a block", () => {
+    seed(
+      "go.mod",
+      "module example.com/x\n\nrequire(\n\tgithub.com/a/b v1.0.0\n)\n\nreplace(\n\tgithub.com/r/s v1.0.0 => ./s\n)\n",
+    );
+    const reading = readManifestAt(root, "go.mod");
+    expect(reading.status).toBe(MANIFEST_STATUS.read);
+    expect(reading.fact?.dependencies).toEqual(["github.com/a/b"]);
+  });
+
   test("a require entry without a version is malformed", () => {
     seed("go.mod", "module example.com/x\n\nrequire github.com/a/b\n");
     expect(readManifestAt(root, "go.mod").status).toBe(MANIFEST_STATUS.malformed);

@@ -332,11 +332,15 @@ const GO_COMMENT = "//";
 /** Go marks an indirect requirement with a comment `// indirect` or `// indirect; ...`. */
 const GO_INDIRECT_COMMENT = /^indirect(?:;|$)/;
 const GO_QUOTED = /^(["`])(.*)\1$/;
+/** Go's lexer makes each parenthesis a token of its own, so `require(` opens a block. */
+const GO_PAREN = /[()]/g;
 
 /**
  * A line reader for go.mod. Only `module` and `require` are read; every
  * other directive (`go`, `toolchain`, `replace`, `exclude`, `retract`
- * and any later one), single-line or block, is skipped.
+ * and any later one), single-line or block, is skipped. A parenthesis is a
+ * token of its own, as in Go's lexer, so `require (` and `require(` both
+ * open a block (gofmt writes the first; the second is still valid go.mod).
  */
 function parseGoMod(text: string): ParsedManifest {
   let modulePath: string | null = null;
@@ -348,6 +352,7 @@ function parseGoMod(text: string): ParsedManifest {
     const code = commentAt === -1 ? line : line.slice(0, commentAt);
     const comment = commentAt === -1 ? "" : line.slice(commentAt + GO_COMMENT.length).trim();
     const tokens = code
+      .replace(GO_PAREN, " $& ")
       .trim()
       .split(/\s+/)
       .filter((token) => token !== "")
