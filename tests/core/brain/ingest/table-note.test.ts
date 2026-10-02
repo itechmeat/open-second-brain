@@ -370,6 +370,15 @@ describe("caps", () => {
     expect(result.section.endsWith(`Rendered ${result.rowsRendered} of 900 rows.`)).toBe(true);
   });
 
+  test("width and caps count only the rows the byte cap kept", () => {
+    const rows = numberedRows(TABLE_NOTE_MAX_ROWS - 1, 3, () => "w".repeat(250));
+    rows.push(Array.from({ length: 70 }, (_, c) => `x${c}`));
+    const result = rendered(csv(csvOf(["a", "b", "c"], rows)));
+    expect(result.rowsRendered).toBeLessThan(TABLE_NOTE_MAX_ROWS);
+    expect(result.columns).toBe(3);
+    expect(result.truncated).toEqual(["bytes"]);
+  });
+
   test("several caps are named in the vocabulary order", () => {
     const width = TABLE_NOTE_MAX_COLUMNS + 1;
     const header = Array.from({ length: width }, (_, c) => `c${c}`);

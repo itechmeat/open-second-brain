@@ -445,7 +445,6 @@ export function tableNote(path: string, bytes: Uint8Array): TableNoteResult {
   const rows = dataRecords
     .slice(0, TABLE_NOTE_MAX_ROWS)
     .map((record) => prepareLine(record, credentialColumns));
-  const scoped = [header, ...rows];
 
   // Groups are added while the section, with room for the closing line,
   // stays within the byte cap; the last group needs no closing line when
@@ -457,6 +456,9 @@ export function tableNote(path: string, bytes: Uint8Array): TableNoteResult {
   let bytesUsed = utf8Length(TABLE_HEADING);
   let rowsRendered = 0;
   let redactedCells = header.redacted;
+  let columns = header.width;
+  let columnsCut = header.columnsCut;
+  let cellsCut = header.cellsCut;
   let bytesCut = false;
   for (const [index, group] of groups.entries()) {
     const block = renderGroup(
@@ -473,18 +475,21 @@ export function tableNote(path: string, bytes: Uint8Array): TableNoteResult {
     blocks.push(block);
     bytesUsed += size;
     rowsRendered += group.length;
-    for (const row of group) redactedCells += row.redacted;
+    for (const row of group) {
+      redactedCells += row.redacted;
+      columns = Math.max(columns, row.width);
+      columnsCut ||= row.columnsCut;
+      cellsCut ||= row.cellsCut;
+    }
   }
   if (rowsRendered < total) blocks.push(closingLine(rowsRendered, total));
 
   const cuts: Readonly<Record<TableTruncation, boolean>> = {
     rows: total > rows.length,
-    columns: scoped.some((line) => line.columnsCut),
-    cells: scoped.some((line) => line.cellsCut),
+    columns: columnsCut,
+    cells: cellsCut,
     bytes: bytesCut,
   };
-  let columns = 0;
-  for (const line of scoped) columns = Math.max(columns, line.width);
   return {
     rendered: true,
     format,
