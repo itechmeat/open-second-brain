@@ -186,11 +186,9 @@ function validate(input: ResearchReportInput): void {
  * when the identity names no extension (see `resolveCaptureScope`).
  *
  * A source whose `stat` the filesystem refuses is inside this vault but
- * unreadable. The scope is an annotation, so it never aborts the report: a
- * local caller gets `full-local` (the vault does own the file, the same
- * answer the capture-scope hygiene detector gives), and a narrower caller
- * gets `url-only`, because no reach rule can vouch for a file nobody can
- * read.
+ * unreadable. The scope is an annotation, so it never aborts the report, and
+ * it answers `url-only`: the vault can show none of the file's bytes, and the
+ * answer is the same at every reach, so it names nothing about the path.
  */
 function captureScopeAtReach(
   vault: string,
@@ -202,7 +200,7 @@ function captureScopeAtReach(
     resolved = resolveCaptureScope(vault, source);
   } catch (err) {
     if (!(err instanceof SourceTrustError)) throw err;
-    return readable === undefined ? CAPTURE_SCOPE.fullLocal : CAPTURE_SCOPE.urlOnly;
+    return CAPTURE_SCOPE.urlOnly;
   }
   const { scope, backing } = resolved;
   if (backing === null || readable === undefined) return scope;

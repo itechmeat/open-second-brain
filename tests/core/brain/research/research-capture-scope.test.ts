@@ -181,7 +181,7 @@ describe("writeResearchReport capture scopes", () => {
 
 describe("writeResearchReport when the filesystem refuses a source", () => {
   test.skipIf(CHMOD_CANNOT_DENY)(
-    "an unreadable cited source is written as backing locally and hidden at a narrower reach",
+    "an unreadable cited source is url-only at every reach and never aborts the report",
     () => {
       const locked = join(vault, "locked");
       seed("locked/inner/a.md");
@@ -190,7 +190,7 @@ describe("writeResearchReport when the filesystem refuses a source", () => {
       chmodSync(locked, 0o000);
       try {
         const local = writeResearchReport(vault, input, { agent: "claude", now: NOW });
-        expect(local.captureScopes).toEqual([CAPTURE_SCOPE.fullLocal, CAPTURE_SCOPE.urlOnly]);
+        expect(local.captureScopes).toEqual([CAPTURE_SCOPE.urlOnly, CAPTURE_SCOPE.urlOnly]);
 
         const remote = writeResearchReport(
           vault,

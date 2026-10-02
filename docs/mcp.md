@@ -2040,8 +2040,8 @@ format characters), when it contains NUL, or when it exceeds the cap.
   extension is matched against its `.md` note, and a source backed by a
   vault file the caller cannot read at its reach is reported `url-only`,
   the same answer as an absent file; a cited file the filesystem refuses
-  to stat never aborts the report: it reads `full-local` for a local
-  caller and `url-only` at a narrower reach. `brain_hygiene` gains the
+  to stat never aborts the report and reads `url-only`; a title holding a
+  line break is refused. `brain_hygiene` gains the
   default-on `capture-scope` detector: a retrievable page of active
   knowledge whose every cited source is currently `url-only` gets a
   `warning` finding with `proposed_action: review`. The scope is
