@@ -19,14 +19,7 @@ import {
   unquoteSpans,
 } from "../../../../src/core/brain/distill/quote-spans.ts";
 
-/**
- * Ceiling for the guards that prove a pass over 256 KiB stays linear. A
- * quadratic pass at that size takes tens of seconds (the old normaliser:
- * 50 s); linear code takes well under 0.5 s even on a loaded runner, so the
- * ceiling is generous on purpose and still discriminates by an order of
- * magnitude.
- */
-const LINEAR_CEILING_MS = 2000;
+import { LINEAR_CEILING_MS } from "../../../helpers/linear-time.ts";
 
 const cp = (code: number): string => String.fromCodePoint(code);
 

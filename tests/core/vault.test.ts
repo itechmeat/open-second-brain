@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { renderExcerptSection } from "../../src/core/brain/provenance/capture-scope.ts";
+import { LINEAR_CEILING_MS } from "../helpers/linear-time.ts";
 import { DEGRADATION_CODE, type DegradationNotice } from "../../src/core/integrity/degradation.ts";
 import {
   FrontmatterKeyError,
@@ -398,6 +399,22 @@ describe("extractWikilinks", () => {
     for (const excerpt of ["x ```\n[[Secret/Note.md]]\n", "```` [[A]] ``` [[B]]", "`` [[C]] ```"]) {
       expect(extractWikilinks(renderExcerptSection(excerpt))).toEqual([]);
     }
+  });
+
+  test("stays linear on long backtick runs", () => {
+    const largestExcerpt = renderExcerptSection("`".repeat(65_536));
+    for (const content of ["`".repeat(256 * 1024), `${largestExcerpt}\n[[after]]`]) {
+      const started = performance.now();
+      extractWikilinks(content);
+      expect(performance.now() - started).toBeLessThan(LINEAR_CEILING_MS);
+    }
+    expect(extractWikilinks(`${largestExcerpt}\n[[after]]`)).toEqual(["after"]);
+  });
+
+  test("a tilde fence masks its links like a backtick fence", () => {
+    expect(extractWikilinks("~~~\n[[in-tilde-fence]]\n~~~\nReal: [[real-link]]")).toEqual([
+      "real-link",
+    ]);
   });
 });
 
