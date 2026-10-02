@@ -285,13 +285,6 @@ export function ingestSource(
 }
 
 /**
- * Run the code-structure pre-extraction pass over a vault-file source. A source
- * with no readable file bytes (a URL or identity-only source) cannot be parsed,
- * so it is reported as unextracted rather than a fake empty success. A source
- * `readable` refuses is answered the same way, before its bytes are read, so
- * the pass reads no file the intake would treat as having no local bytes.
- */
-/**
  * The largest source the code-structure pass reads. A hand-written module
  * is far smaller; a larger file is generated or vendored, and its seeds are
  * not worth a parse whose cost grows with the file.
@@ -309,7 +302,8 @@ type SourceUnread = (typeof SOURCE_UNREAD)[keyof typeof SOURCE_UNREAD];
 /**
  * How a source is opened: read-only and never blocking, so a FIFO met
  * where a file was expected cannot stall the server. No `O_NOFOLLOW`: an
- * in-vault symlink is admitted by the containment check above. The flag
+ * in-vault symlink is admitted by the containment check in
+ * `runPreExtract` (`resolvesInsideVault`). The flag
  * is POSIX; where the platform lacks it it is simply absent.
  */
 const SOURCE_OPEN_FLAGS = fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0);
@@ -347,6 +341,13 @@ function readSourceBounded(
   }
 }
 
+/**
+ * Run the code-structure pre-extraction pass over a vault-file source. A source
+ * with no readable file bytes (a URL or identity-only source) cannot be parsed,
+ * so it is reported as unextracted rather than a fake empty success. A source
+ * `readable` refuses is answered the same way, before its bytes are read, so
+ * the pass reads no file the intake would treat as having no local bytes.
+ */
 function runPreExtract(
   vault: string,
   canonicalSource: string,
