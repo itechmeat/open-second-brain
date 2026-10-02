@@ -348,6 +348,19 @@ function hashOf(current: CurrentBytes): string {
   return current.kind === "absent" ? NOTE_WRITE_NO_PRIOR : NOTE_REVERT_HASH_UNREADABLE;
 }
 
+/**
+ * The digest that seals one plan: the selector with absent fields dropped
+ * and the entries, canonically serialised. Exported so a surface that
+ * shows only some of a plan's entries can seal exactly what it shows,
+ * spelled the same way the full plan is.
+ */
+export function noteRevertDigest(
+  selector: NoteRevertSelector,
+  entries: ReadonlyArray<NoteRevertEntry>,
+): string {
+  return sha256Hex(canonicalJson({ selector: normaliseSelector(selector), entries }));
+}
+
 /** The selector with absent fields dropped, so the digest is stable. */
 function normaliseSelector(selector: NoteRevertSelector): NoteRevertSelector {
   return {
@@ -578,7 +591,7 @@ export function planNoteRevert(
   return {
     selector: normalised,
     entries,
-    digest: sha256Hex(canonicalJson({ selector: normalised, entries })),
+    digest: noteRevertDigest(normalised, entries),
     planned_at: isoSecond(opts.now ?? new Date()),
     warnings: universeRead.warnings,
   };

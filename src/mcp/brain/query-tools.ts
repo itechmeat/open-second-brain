@@ -23,6 +23,7 @@ import { diffAgentSources, type AgentSourceDiffMode } from "../../core/brain/age
 import { queryAgentSources } from "../../core/brain/agent-source/query.ts";
 import {
   NoteRevertError,
+  noteRevertDigest,
   planNoteRevert,
   type NoteRevertSelector,
 } from "../../core/brain/notes/revert.ts";
@@ -414,21 +415,26 @@ function planRevert(ctx: ServerContext, args: Record<string, unknown>): Record<s
     }
     throw err;
   }
-  // Same reach rule as `list`. The digest still seals the WHOLE plan -
-  // it is applied at the operator's terminal, where the full plan is
-  // shown - so a remote caller sees the entries it may read and a digest
-  // that names none of the others.
+  // Same reach rule as `list`. When an entry is withheld, the digest
+  // seals only the entries shown: the full plan's digest covers each
+  // hidden entry's current-bytes hash, so it would differ between a
+  // withheld page, a deleted one and a path never written, and change
+  // whenever the withheld page did. The CLI apply re-plans in full and
+  // refuses this digest with `digest_mismatch`, the safe outcome for a
+  // plan the caller could not fully see.
   const view = reachView(ctx.vault, contextReach(ctx));
   const entries = view.filtersNothing
     ? plan.entries
     : plan.entries.filter((entry) => view.visible(entry.target));
+  const digest =
+    entries.length === plan.entries.length ? plan.digest : noteRevertDigest(plan.selector, entries);
   return {
     action: BRAIN_WRITES_ACTION.planRevert,
     selector: { ...plan.selector },
     entries: entries.map((entry) => ({ ...entry })),
-    digest: plan.digest,
+    digest,
     planned_at: plan.planned_at,
-    next_command: `o2b brain writes revert --apply ${plan.digest}`,
+    next_command: `o2b brain writes revert --apply ${digest}`,
     warnings: plan.warnings.map((w) => ({
       path: w.path,
       line: w.lineNumber,

@@ -226,3 +226,17 @@ describe("link candidates leave out a withheld page as they leave out an absent 
     expect(await dreamCandidates(false, "local")).toContain('"secret"');
   });
 });
+
+describe("a revert plan over a withheld page seals what an absent page's plan seals", () => {
+  test("brain_writes plan_revert", async () => {
+    const r = await writePair([
+      "brain_writes",
+      { action: "plan_revert", path: "Notes/private-write.md" },
+    ]);
+    expect(r.withheld.replace(/"planned_at":"[^"]*"/, "")).toBe(
+      r.absent.replace(/"planned_at":"[^"]*"/, ""),
+    );
+    expect(r.withheld).toContain('"entries":[]');
+    expect(r.local).toContain('"target":"Notes/private-write.md"');
+  });
+});
