@@ -213,9 +213,12 @@ async function toolBrainDeleteBySource(
   const agent = coerceStr(args, "agent", false) ?? undefined;
   const { expect, strict } = readCountGuardArgs(args);
   const now = new Date();
+  // An original the caller may not read at its reach is planned and
+  // deleted exactly as an absent one: never confirmed, never removed.
   const baseOpts = {
     includeOriginals,
     now,
+    include: readableAtContextReach(ctx),
     ...(agent !== undefined ? { agent } : {}),
   };
 

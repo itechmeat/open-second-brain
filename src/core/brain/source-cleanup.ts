@@ -183,6 +183,13 @@ export interface DeleteBySourceOptions {
   readonly now?: Date;
   /** Agent identity recorded in the audit reason. */
   readonly agent?: string;
+  /**
+   * May the caller read the original at this vault-relative path? Asked
+   * before the original is stat-ed, so one it may not read is planned,
+   * counted and left on disk exactly as an absent one would be. Absent
+   * includes every original (the CLI, which reads the vault directly).
+   */
+  readonly include?: (rel: string) => boolean;
 }
 
 /**
@@ -620,13 +627,21 @@ export function traceNoteDerivations(
  * A source that lives inside `Brain/` (or that has no on-disk file — e.g. a
  * URL identity) contributes no original.
  */
-function findOriginals(vault: string, canonical: string): string[] {
+function findOriginals(
+  vault: string,
+  canonical: string,
+  include: ((rel: string) => boolean) | undefined,
+): string[] {
   let abs: string;
   try {
     abs = ensureInsideVault(join(vault, canonical), vault);
   } catch {
     return [];
   }
+  // Before the stat: an original the caller may not read is answered as
+  // an absent one, so neither its existence nor its removal is decided by
+  // a caller that cannot see it.
+  if (include?.(canonical) === false) return [];
   if (!existsSync(abs)) return [];
   try {
     if (!statSync(abs).isFile()) return [];
@@ -671,7 +686,7 @@ export function deleteBySource(
   if (confirm) assertVaultIdentityForWrite(vault);
 
   const { derived, mentions } = traceReferences(vault, identity);
-  const originals = findOriginals(vault, canonical);
+  const originals = findOriginals(vault, canonical, opts.include);
   const manifestKey = readManifest(vault).entries[canonical] !== undefined ? canonical : null;
   const blastRadius = derived.length + mentions.length + originals.length;
 
