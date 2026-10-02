@@ -2067,8 +2067,16 @@ format characters), when it contains NUL, or when it exceeds the cap.
   resource and `brain_pre_compress_pack` hand a remote caller the active
   digest without such a preference or retired record: its line, its
   count and its most-applied entry go, and the pack's top-K walk skips
-  it. When nothing is withheld the digest is the file's own bytes, as
-  before. The resource also follows the owner gate now, as
+  it. A remote caller always gets that render, stamped with the file's
+  `generated_at`; a local caller with no owner scope still gets the
+  file's own bytes. `brain_brief` `view="digest"`, the
+  `osb://digest/latest` resource and the `osb://lessons` resource do the
+  same for the activity and lessons digests: such a record, its rows,
+  its counts and the log events naming it go. Not every preference
+  reader does: `brain_brief` `view="morning"` still lists every
+  confirmed preference, the digest's agent summary still counts every
+  event in its window, and the status counts cover the whole Brain
+  layer. The resource also follows the owner gate now, as
   `brain_context` does, so under `integrity.owner_scope_delivery: fail`
   it answers with the caller's own view. `brain_health` drops a finding
   any of whose members the caller cannot read, and `brain_doctor` with
@@ -2078,7 +2086,8 @@ format characters), when it contains NUL, or when it exceeds the cap.
   tool that reads a page by path) no longer return the compiled digest
   pages `Brain/active.md` and `Brain/lessons.md` to a remote caller,
   because those pages compile records that may be reserved; a remote
-  client reads the active digest through the three readers above.
+  client reads the active digest through the three readers above and the
+  lessons digest through `osb://lessons`.
   `brain_ingest_source` with `pre_extract` reads Terraform
   (`.tf`, `.tfvars`) and redacts URL credentials in every import
   specifier (see `o2b brain pre-extract` in
