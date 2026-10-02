@@ -22,7 +22,7 @@ import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { MCPServer } from "../../src/mcp/server.ts";
 
-const SECRET = "Notes/secret.md";
+const PRIVATE_PATH = "Notes/secret.md";
 const SECRET_BODY = "---\nvisibility: private\n---\n# Secret plan\nThe PIN is 4711.\n";
 
 const bases: string[] = [];
@@ -50,7 +50,7 @@ function fixture(withSecret: boolean, reach?: typeof TRANSPORT_REACH.local): Fix
   bootstrapBrain(vault, { configPath });
   writeFileSync(join(vault, "Notes/open.md"), "# Open\nSee [[secret]].\n");
   writeFileSync(join(vault, "Notes/other.md"), "# Other\nSee [[Notes/secret]].\n");
-  if (withSecret) writeFileSync(join(vault, SECRET), SECRET_BODY);
+  if (withSecret) writeFileSync(join(vault, PRIVATE_PATH), SECRET_BODY);
   const server = new MCPServer({ vault, configPath }, reach !== undefined ? { reach } : undefined);
   return { vault, server };
 }
@@ -68,18 +68,22 @@ async function answer(f: Fixture, tool: string, args: Record<string, unknown>): 
 }
 
 const CALLS: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
-  ["brain_note_lifecycle", { action: "delete", path: SECRET }],
-  ["brain_note_lifecycle", { action: "delete", path: SECRET, apply: true, confirm: true }],
-  ["brain_note_lifecycle", { action: "move", path: SECRET, to: "Other/secret.md" }],
-  ["brain_note_lifecycle", { action: "rename", path: SECRET, to: "Notes/renamed.md" }],
-  ["brain_note_lifecycle", { action: "archive", path: SECRET, apply: true }],
-  ["brain_append_note", { path: SECRET, content: "appended" }],
-  ["brain_update_note", { path: SECRET, frontmatter: { visibility: "public" } }],
-  ["brain_update_note", { path: SECRET, content: "replaced" }],
-  ["brain_write_batch", { operations: [{ op: "append_note", path: SECRET, content: "x" }] }],
+  ["brain_note_lifecycle", { action: "delete", path: PRIVATE_PATH }],
+  ["brain_note_lifecycle", { action: "delete", path: PRIVATE_PATH, apply: true, confirm: true }],
+  ["brain_note_lifecycle", { action: "move", path: PRIVATE_PATH, to: "Other/secret.md" }],
+  ["brain_note_lifecycle", { action: "rename", path: PRIVATE_PATH, to: "Notes/renamed.md" }],
+  ["brain_note_lifecycle", { action: "archive", path: PRIVATE_PATH, apply: true }],
+  ["brain_append_note", { path: PRIVATE_PATH, content: "appended" }],
+  ["brain_update_note", { path: PRIVATE_PATH, frontmatter: { visibility: "public" } }],
+  ["brain_update_note", { path: PRIVATE_PATH, content: "replaced" }],
+  ["brain_write_batch", { operations: [{ op: "append_note", path: PRIVATE_PATH, content: "x" }] }],
   [
     "brain_write_batch",
-    { operations: [{ op: "update_note", path: SECRET, frontmatter: { visibility: "public" } }] },
+    {
+      operations: [
+        { op: "update_note", path: PRIVATE_PATH, frontmatter: { visibility: "public" } },
+      ],
+    },
   ],
 ];
 
@@ -89,15 +93,15 @@ describe("a page the caller cannot read answers as an absent one", () => {
       const hidden = fixture(true);
       const absent = fixture(false);
       expect(await answer(hidden, tool, args)).toBe(await answer(absent, tool, args));
-      expect(readFileSync(join(hidden.vault, SECRET), "utf8")).toBe(SECRET_BODY);
+      expect(readFileSync(join(hidden.vault, PRIVATE_PATH), "utf8")).toBe(SECRET_BODY);
     });
   }
 
   test("a create onto it is refused and leaves the page as it was", async () => {
     const hidden = fixture(true);
-    const out = await answer(hidden, "brain_create_note", { path: SECRET, content: "mine" });
+    const out = await answer(hidden, "brain_create_note", { path: PRIVATE_PATH, content: "mine" });
     expect(out).toContain("note already exists");
-    expect(readFileSync(join(hidden.vault, SECRET), "utf8")).toBe(SECRET_BODY);
+    expect(readFileSync(join(hidden.vault, PRIVATE_PATH), "utf8")).toBe(SECRET_BODY);
   });
 });
 
@@ -106,10 +110,10 @@ describe("at local reach the page is planned and written", () => {
     const local = fixture(true, TRANSPORT_REACH.local);
     const plan = await local.server.callTool("brain_note_lifecycle", {
       action: "delete",
-      path: SECRET,
+      path: PRIVATE_PATH,
     });
     expect(JSON.stringify(plan)).toContain('"from":"Notes/secret.md"');
-    await local.server.callTool("brain_append_note", { path: SECRET, content: "appended" });
-    expect(readFileSync(join(local.vault, SECRET), "utf8")).toContain("appended");
+    await local.server.callTool("brain_append_note", { path: PRIVATE_PATH, content: "appended" });
+    expect(readFileSync(join(local.vault, PRIVATE_PATH), "utf8")).toContain("appended");
   });
 });

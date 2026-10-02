@@ -179,12 +179,16 @@ describe("brain_intake_entities", () => {
  * one: the intake commits in the untrusted lane and records no digest of it.
  */
 describe("brain_intake_entities - a page withheld at the caller's reach", () => {
-  const SECRET = "Notes/secret.md";
+  const PRIVATE_PATH = "Notes/secret.md";
   const ABSENT = "Notes/absent.md";
 
   beforeEach(() => {
     mkdirSync(join(vault, "Notes"), { recursive: true });
-    writeFileSync(join(vault, SECRET), "---\nvisibility: private\n---\nThe code is ZX8.\n", "utf8");
+    writeFileSync(
+      join(vault, PRIVATE_PATH),
+      "---\nvisibility: private\n---\nThe code is ZX8.\n",
+      "utf8",
+    );
   });
 
   const intake = (source: string, reachCtx: ServerContext = ctx) =>
@@ -193,7 +197,7 @@ describe("brain_intake_entities - a page withheld at the caller's reach", () => 
     }>;
 
   test("answers like an absent source and writes no digest", async () => {
-    const hidden = await intake(SECRET);
+    const hidden = await intake(PRIVATE_PATH);
     const absent = await intake(ABSENT);
     expect(hidden.trust).toBe(INTAKE_TRUST.untrusted);
     expect(hidden.trust).toBe(absent.trust);
@@ -202,7 +206,7 @@ describe("brain_intake_entities - a page withheld at the caller's reach", () => 
   });
 
   test("at local reach the same page is trusted and digested", async () => {
-    const res = await intake(SECRET, { ...ctx, reach: TRANSPORT_REACH.local });
+    const res = await intake(PRIVATE_PATH, { ...ctx, reach: TRANSPORT_REACH.local });
     expect(res.trust).toBe(INTAKE_TRUST.trusted);
     expect(
       brainPageTexts(vault).some((page) => page.includes(SOURCE_CONTENT_HASH_FRONTMATTER_KEY)),

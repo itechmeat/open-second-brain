@@ -99,9 +99,9 @@ describe("brain_note_history tool", () => {
   });
 
   test("a page the caller may not read at its reach answers as a path no commit touches", async () => {
-    const secret = "---\nvisibility: private\n---\nv1\n";
-    commit("notes/secret.md", secret, "secret start", "2026-05-01T10:00:00Z");
-    commit("notes/secret.md", `${secret}v2\n`, "secret later", "2026-05-20T10:00:00Z");
+    const privateBody = "---\nvisibility: private\n---\nv1\n";
+    commit("notes/secret.md", privateBody, "secret start", "2026-05-01T10:00:00Z");
+    commit("notes/secret.md", `${privateBody}v2\n`, "secret later", "2026-05-20T10:00:00Z");
     commit("notes/open.md", "open", "open", "2026-05-21T10:00:00Z");
 
     const withheld = payload(await call({ path: "notes/secret.md" }));

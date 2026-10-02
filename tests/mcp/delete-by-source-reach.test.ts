@@ -21,7 +21,7 @@ import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { MCPServer } from "../../src/mcp/server.ts";
 
-const SECRET = "Notes/secret.md";
+const PRIVATE_PATH = "Notes/secret.md";
 const SECRET_BODY = "---\nvisibility: private\n---\n# Secret plan\nThe PIN is 4711.\n";
 
 const bases: string[] = [];
@@ -49,7 +49,7 @@ function fixture(withSecret: boolean, reach?: typeof TRANSPORT_REACH.local): Fix
   atomicWriteFileSync(configPath, `vault: ${vault}\nagent_name: claude\n`);
   bootstrapBrain(vault, { configPath });
   writeFileSync(join(vault, "Notes/open.md"), "# Open\n");
-  if (withSecret) writeFileSync(join(vault, SECRET), SECRET_BODY);
+  if (withSecret) writeFileSync(join(vault, PRIVATE_PATH), SECRET_BODY);
   const server = new MCPServer({ vault, configPath }, reach !== undefined ? { reach } : undefined);
   return { vault, base, server };
 }
@@ -73,29 +73,31 @@ describe("an original the caller cannot read answers as an absent one", () => {
   test("the dry run does not confirm it", async () => {
     const hidden = fixture(true);
     const absent = fixture(false);
-    const args = { source_file: SECRET };
+    const args = { source_file: PRIVATE_PATH };
     expect(await answer(hidden, args)).toBe(await answer(absent, args));
   });
 
   test("a confirmed run with include_originals leaves it on disk", async () => {
     const hidden = fixture(true);
     const absent = fixture(false);
-    const args = { source_file: SECRET, confirm: true, include_originals: true };
+    const args = { source_file: PRIVATE_PATH, confirm: true, include_originals: true };
     expect(await answer(hidden, args)).toBe(await answer(absent, args));
-    expect(existsSync(join(hidden.vault, SECRET))).toBe(true);
+    expect(existsSync(join(hidden.vault, PRIVATE_PATH))).toBe(true);
   });
 });
 
 describe("at local reach the original is planned and deleted", () => {
   test("dry run and confirmed run", async () => {
     const local = fixture(true, TRANSPORT_REACH.local);
-    const plan = await local.server.callTool("brain_delete_by_source", { source_file: SECRET });
-    expect(JSON.stringify(plan)).toContain(`"originals":["${SECRET}"]`);
+    const plan = await local.server.callTool("brain_delete_by_source", {
+      source_file: PRIVATE_PATH,
+    });
+    expect(JSON.stringify(plan)).toContain(`"originals":["${PRIVATE_PATH}"]`);
     await local.server.callTool("brain_delete_by_source", {
-      source_file: SECRET,
+      source_file: PRIVATE_PATH,
       confirm: true,
       include_originals: true,
     });
-    expect(existsSync(join(local.vault, SECRET))).toBe(false);
+    expect(existsSync(join(local.vault, PRIVATE_PATH))).toBe(false);
   });
 });

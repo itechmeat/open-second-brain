@@ -27,7 +27,7 @@ import { MCPServer } from "../../src/mcp/index.ts";
 import { readableAtContextReach } from "../../src/mcp/brain/reach-readable.ts";
 
 const SECRET_REL = "Notes/secret.md";
-const SECRET =
+const PRIVATE_BODY =
   "---\nvisibility: private\ntitle: Secret plan\n---\n# Secret plan\nThe PIN is 4711. See [[open]].\n";
 const OPEN = "---\ntitle: Open page\n---\n# Open page\nLinks to [[secret]] and [[Notes/secret]].\n";
 
@@ -60,7 +60,7 @@ async function fixture(
   const configPath = join(base, "config.yaml");
   atomicWriteFileSync(configPath, `vault: ${vault}\nagent_name: claude\n`);
   bootstrapBrain(vault, { configPath });
-  writeFileSync(join(vault, SECRET_REL), SECRET);
+  writeFileSync(join(vault, SECRET_REL), PRIVATE_BODY);
   writeFileSync(join(vault, "Notes/open.md"), OPEN);
   const local = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
   // Setup calls build on each other, so they run in order.

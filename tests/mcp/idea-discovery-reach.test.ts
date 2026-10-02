@@ -19,7 +19,7 @@ import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { MCPServer } from "../../src/mcp/server.ts";
 
-const SECRET = "Brain/research/secret-plan.md";
+const PRIVATE_PATH = "Brain/research/secret-plan.md";
 const SECRET_BODY = "---\nvisibility: private\n---\n# Secret plan\nBuilds on [[open-study]].\n";
 
 const bases: string[] = [];
@@ -48,7 +48,7 @@ function fixture(withSecret: boolean, reach?: typeof TRANSPORT_REACH.local): Fix
   bootstrapBrain(vault, { configPath });
   mkdirSync(join(vault, "Brain/research"), { recursive: true });
   writeFileSync(join(vault, "Brain/research/open-study.md"), "# Open study\n");
-  if (withSecret) writeFileSync(join(vault, SECRET), SECRET_BODY);
+  if (withSecret) writeFileSync(join(vault, PRIVATE_PATH), SECRET_BODY);
   const server = new MCPServer({ vault, configPath }, reach !== undefined ? { reach } : undefined);
   return { vault, server };
 }
@@ -72,7 +72,7 @@ describe("a page the caller cannot read is ranked as an absent one", () => {
 describe("at local reach the page is ranked", () => {
   test("it is a candidate and its link counts", async () => {
     const answer = await ideas(fixture(true, TRANSPORT_REACH.local));
-    expect(answer).toContain(SECRET);
+    expect(answer).toContain(PRIVATE_PATH);
     expect(answer).not.toContain("Brain/research/open-study.md");
   });
 });

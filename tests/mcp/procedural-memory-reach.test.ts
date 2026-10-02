@@ -20,10 +20,10 @@ import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { MCPServer } from "../../src/mcp/server.ts";
 
-const SECRET = "Brain/procedures/secret-deploy.md";
+const PRIVATE_PATH = "Brain/procedures/secret-deploy.md";
 const SECRET_BODY =
   "---\nvisibility: private\ntriggers: [deploy]\n---\n# Secret deploy\nUse the PIN 4711.\n";
-const SECRET_ID = proceduralEntryId(SECRET);
+const SECRET_ID = proceduralEntryId(PRIVATE_PATH);
 
 const bases: string[] = [];
 
@@ -51,7 +51,7 @@ async function fixture(withSecret: boolean): Promise<Fixture> {
   atomicWriteFileSync(configPath, `vault: ${vault}\nagent_name: claude\n`);
   bootstrapBrain(vault, { configPath });
   writeFileSync(join(vault, "Brain/procedures/open-release.md"), "# Open release\nTag it.\n");
-  if (withSecret) writeFileSync(join(vault, SECRET), SECRET_BODY);
+  if (withSecret) writeFileSync(join(vault, PRIVATE_PATH), SECRET_BODY);
   const local = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
   await local.callTool("brain_procedural_memory", { operation: "reconcile" });
   return { vault, server: new MCPServer({ vault, configPath }), local };
@@ -85,7 +85,7 @@ describe("a procedure the caller cannot read answers as an absent one", () => {
     const hidden = await fixture(true);
     await answer(hidden.server, { operation: "mark_used", id: SECRET_ID });
     const listed = await answer(hidden.local, { operation: "list" });
-    expect(listed).toContain(SECRET);
+    expect(listed).toContain(PRIVATE_PATH);
     expect(listed).not.toContain('"usedCount":1');
   });
 });
@@ -93,7 +93,7 @@ describe("a procedure the caller cannot read answers as an absent one", () => {
 describe("at local reach the procedure is listed and marked", () => {
   test("list and mark_used", async () => {
     const { local } = await fixture(true);
-    expect(await answer(local, { operation: "list" })).toContain(SECRET);
+    expect(await answer(local, { operation: "list" })).toContain(PRIVATE_PATH);
     expect(await answer(local, { operation: "mark_used", id: SECRET_ID })).toContain(
       '"usedCount":1',
     );

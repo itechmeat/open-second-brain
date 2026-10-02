@@ -276,11 +276,15 @@ describe("brain_ingest_source - capture_scope", () => {
  * absent one: untrusted lane, `url-only`, and no digest on any page.
  */
 describe("brain_ingest_source - a page withheld at the caller's reach", () => {
-  const SECRET = "Notes/secret.md";
+  const PRIVATE_PATH = "Notes/secret.md";
 
   beforeEach(() => {
     mkdirSync(join(vault, "Notes"), { recursive: true });
-    writeFileSync(join(vault, SECRET), "---\nvisibility: private\n---\nThe code is ZX8.\n", "utf8");
+    writeFileSync(
+      join(vault, PRIVATE_PATH),
+      "---\nvisibility: private\n---\nThe code is ZX8.\n",
+      "utf8",
+    );
   });
 
   const ingest = (source: string, reachCtx: ServerContext = ctx) =>
@@ -291,7 +295,7 @@ describe("brain_ingest_source - a page withheld at the caller's reach", () => {
     }) as Promise<{ capture_scope: string; summary_path: string }>;
 
   test("answers like an absent source and writes no digest", async () => {
-    const hidden = await ingest(SECRET);
+    const hidden = await ingest(PRIVATE_PATH);
     const absent = await ingest("Notes/absent.md");
     expect(hidden.capture_scope).toBe(CAPTURE_SCOPE.urlOnly);
     expect(hidden.capture_scope).toBe(absent.capture_scope);
@@ -302,15 +306,15 @@ describe("brain_ingest_source - a page withheld at the caller's reach", () => {
   });
 
   test("at local reach the same page is full-local", async () => {
-    const res = await ingest(SECRET, { ...ctx, reach: TRANSPORT_REACH.local });
+    const res = await ingest(PRIVATE_PATH, { ...ctx, reach: TRANSPORT_REACH.local });
     expect(res.capture_scope).toBe(CAPTURE_SCOPE.fullLocal);
   });
 
   test("records no content manifest entry for it, as for an absent source", async () => {
-    await ingest(SECRET);
-    expect(Object.keys(readManifest(vault).entries)).not.toContain(SECRET);
-    await ingest(SECRET, { ...ctx, reach: TRANSPORT_REACH.local });
-    expect(Object.keys(readManifest(vault).entries)).toContain(SECRET);
+    await ingest(PRIVATE_PATH);
+    expect(Object.keys(readManifest(vault).entries)).not.toContain(PRIVATE_PATH);
+    await ingest(PRIVATE_PATH, { ...ctx, reach: TRANSPORT_REACH.local });
+    expect(Object.keys(readManifest(vault).entries)).toContain(PRIVATE_PATH);
   });
 });
 
@@ -321,11 +325,11 @@ describe("brain_ingest_source - a page withheld at the caller's reach", () => {
 describe("brain_ingest_batch_plan - a page withheld at the caller's reach", () => {
   const batchPlan = INGEST_TOOLS.find((t) => t.name === "brain_ingest_batch_plan")!.handler;
   const OPEN = "Notes/open.md";
-  const SECRET = "Notes/secret.md";
+  const PRIVATE_PATH = "Notes/secret.md";
 
   beforeEach(() => {
     seed(OPEN, "open\n");
-    seed(SECRET, "---\nvisibility: private\n---\nThe code is ZX8.\n");
+    seed(PRIVATE_PATH, "---\nvisibility: private\n---\nThe code is ZX8.\n");
   });
 
   type Plan = {
@@ -344,21 +348,21 @@ describe("brain_ingest_batch_plan - a page withheld at the caller's reach", () =
     expect(planned(remote)).toEqual([OPEN]);
     expect(remote.total_files).toBe(1);
 
-    rmSync(join(vault, SECRET));
+    rmSync(join(vault, PRIVATE_PATH));
     const absent = await plan(ctx);
     expect(remote).toEqual(absent);
   });
 
   test("at local reach the page is planned", async () => {
     const local = await plan({ ...ctx, reach: TRANSPORT_REACH.local });
-    expect(planned(local)).toEqual([OPEN, SECRET]);
+    expect(planned(local)).toEqual([OPEN, PRIVATE_PATH]);
   });
 
   test("a checkpoint entry for the page stays out of the reconcile lists", async () => {
     const localCtx = { ...ctx, reach: TRANSPORT_REACH.local };
     const local = await plan(localCtx);
     await handler(localCtx, {
-      source_path: SECRET,
+      source_path: PRIVATE_PATH,
       summary: "Codes.",
       entities: [{ category: "concept", name: "Codes" }],
       plan_id: local.plan_id,

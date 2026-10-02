@@ -29,7 +29,7 @@ import { NER_TOOLS } from "../../src/mcp/brain/ner-tools.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 
-const SECRET = "Notes/secret.md";
+const PRIVATE_PATH = "Notes/secret.md";
 const ABSENT = "Notes/absent.md";
 const OPEN = "Notes/open.md";
 const PRIVATE_HEAD = "---\nvisibility: private\n---\n";
@@ -74,31 +74,34 @@ async function trustOf(source: string, reachCtx: ServerContext): Promise<unknown
 
 describe("a page withheld at the caller's reach is never stat-ed or read for it", () => {
   test("a page past the size ceiling answers like an absent one", async () => {
-    writeFileSync(join(vault, SECRET), PRIVATE_HEAD + "a".repeat(SOURCE_HASH_MAX_BYTES + 1));
+    writeFileSync(join(vault, PRIVATE_PATH), PRIVATE_HEAD + "a".repeat(SOURCE_HASH_MAX_BYTES + 1));
     const untrusted = [INTAKE_TRUST.untrusted, INTAKE_TRUST.untrusted];
-    expect(await trustOf(SECRET, ctx)).toEqual(untrusted);
+    expect(await trustOf(PRIVATE_PATH, ctx)).toEqual(untrusted);
     expect(await trustOf(ABSENT, ctx)).toEqual(untrusted);
-    await expect(trustOf(SECRET, localCtx())).rejects.toThrow(String(SOURCE_HASH_MAX_BYTES));
+    await expect(trustOf(PRIVATE_PATH, localCtx())).rejects.toThrow(String(SOURCE_HASH_MAX_BYTES));
   });
 
   test.skipIf(CHMOD_CANNOT_DENY)("an unreadable page answers like an absent one", async () => {
-    writeFileSync(join(vault, SECRET), `${PRIVATE_HEAD}body\n`);
-    chmodSync(join(vault, SECRET), 0o000);
+    writeFileSync(join(vault, PRIVATE_PATH), `${PRIVATE_HEAD}body\n`);
+    chmodSync(join(vault, PRIVATE_PATH), 0o000);
     try {
-      expect(await trustOf(SECRET, ctx)).toEqual([INTAKE_TRUST.untrusted, INTAKE_TRUST.untrusted]);
-      await expect(trustOf(SECRET, localCtx())).rejects.toThrow("EACCES");
+      expect(await trustOf(PRIVATE_PATH, ctx)).toEqual([
+        INTAKE_TRUST.untrusted,
+        INTAKE_TRUST.untrusted,
+      ]);
+      await expect(trustOf(PRIVATE_PATH, localCtx())).rejects.toThrow("EACCES");
     } finally {
-      chmodSync(join(vault, SECRET), 0o644);
+      chmodSync(join(vault, PRIVATE_PATH), 0o644);
     }
   });
 });
 
 describe("the predicate is asked about the resolved identity", () => {
   const SPELLINGS = ["Notes/./secret.md", "[[Notes/../Notes/secret.md]]"];
-  const byString = (rel: string): boolean => rel !== SECRET;
+  const byString = (rel: string): boolean => rel !== PRIVATE_PATH;
 
   beforeEach(() => {
-    writeFileSync(join(vault, SECRET), "body\n");
+    writeFileSync(join(vault, PRIVATE_PATH), "body\n");
   });
 
   test("a single-source and a multi-source intake", () => {
@@ -132,7 +135,7 @@ describe("the predicate is asked about the resolved identity", () => {
 
   test("the capture-scope backing file", () => {
     for (const spelling of SPELLINGS) {
-      expect(resolveCaptureScope(vault, spelling).backing).toBe(SECRET);
+      expect(resolveCaptureScope(vault, spelling).backing).toBe(PRIVATE_PATH);
     }
   });
 });

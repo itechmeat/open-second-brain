@@ -22,7 +22,7 @@ import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { MCPServer } from "../../src/mcp/server.ts";
 
 const TARGET = "Notes/target.md";
-const SECRET = "Notes/secret.md";
+const PRIVATE_PATH = "Notes/secret.md";
 const SECRET_BODY = "---\nvisibility: private\n---\n# Secret\nBuilds on [[Notes/target]].\n";
 
 const bases: string[] = [];
@@ -50,7 +50,7 @@ function fixture(withSecret: boolean, reach?: typeof TRANSPORT_REACH.local): Fix
   bootstrapBrain(vault, { configPath });
   writeFileSync(join(vault, TARGET), "# Target\n");
   writeFileSync(join(vault, "Notes/open.md"), "# Open\nSee [[Notes/target]].\n");
-  if (withSecret) writeFileSync(join(vault, SECRET), SECRET_BODY);
+  if (withSecret) writeFileSync(join(vault, PRIVATE_PATH), SECRET_BODY);
   const server = new MCPServer({ vault, configPath }, reach !== undefined ? { reach } : undefined);
   return { vault, server };
 }
@@ -93,7 +93,7 @@ describe("a linking page the caller cannot read is left out of the report", () =
   test("an applied move still rewrites the link inside it", async () => {
     const hidden = fixture(true);
     await answer(hidden, { action: "move", path: TARGET, to: "Other/target.md", apply: true });
-    const secret = readFileSync(join(hidden.vault, SECRET), "utf8");
+    const secret = readFileSync(join(hidden.vault, PRIVATE_PATH), "utf8");
     expect(secret).toContain("[[Other/target]]");
     expect(secret).not.toContain("[[Notes/target]]");
   });
@@ -105,7 +105,7 @@ describe("at local reach the linking page is reported", () => {
       action: "delete",
       path: TARGET,
     });
-    expect(out).toContain(SECRET);
+    expect(out).toContain(PRIVATE_PATH);
   });
 });
 
@@ -115,7 +115,7 @@ describe("a hidden page at the destination is a known one-bit limitation", () =>
   // happen, so the refusal stays and the page is left untouched.
   const MOVED_ONTO = "Other/secret.md";
   for (const args of [
-    { action: "rename", path: TARGET, to: SECRET },
+    { action: "rename", path: TARGET, to: PRIVATE_PATH },
     { action: "move", path: TARGET, to: MOVED_ONTO, apply: true },
   ]) {
     test(JSON.stringify(args), async () => {

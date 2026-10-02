@@ -228,14 +228,14 @@ describe("brain_distill_source - quote check and capture scope", () => {
  * a guessed phrase occurs in a page it may not read.
  */
 describe("brain_distill_source - a page withheld at the caller's reach checks nothing", () => {
-  const SECRET = "Notes/secret.md";
+  const PRIVATE_PATH = "Notes/secret.md";
   const GUESS_RIGHT = "“The code is ZX8”";
   const GUESS_WRONG = "“The code is ZX9”";
 
   beforeEach(() => {
     mkdirSync(join(vault, "Notes"), { recursive: true });
     writeFileSync(
-      join(vault, SECRET),
+      join(vault, PRIVATE_PATH),
       "---\nvisibility: private\n---\nThe code is ZX8 today. ^p1\n",
       "utf8",
     );
@@ -244,7 +244,10 @@ describe("brain_distill_source - a page withheld at the caller's reach checks no
   const claims = [{ text: GUESS_RIGHT }, { text: GUESS_WRONG, block: "p1" }];
 
   test("by default every span is url-only and no digest is returned or written", async () => {
-    const res = (await handler(ctx, { source_path: SECRET, claims })) as Record<string, unknown> & {
+    const res = (await handler(ctx, { source_path: PRIVATE_PATH, claims })) as Record<
+      string,
+      unknown
+    > & {
       quotes: { findings: Array<{ outcome: string }>; verified_in_block: number };
       distillation_path: string;
     };
@@ -261,7 +264,7 @@ describe("brain_distill_source - a page withheld at the caller's reach checks no
   test("strict mode refuses every guess alike, naming url-only only", async () => {
     let caught: unknown;
     try {
-      await handler(ctx, { source_path: SECRET, claims, strict_quotes: true });
+      await handler(ctx, { source_path: PRIVATE_PATH, claims, strict_quotes: true });
     } catch (err) {
       caught = err;
     }
@@ -280,7 +283,7 @@ describe("brain_distill_source - a page withheld at the caller's reach checks no
       trust: res["trust"],
       capture_scope: res["capture_scope"],
     });
-    const hiddenRes = (await handler(ctx, { source_path: SECRET, claims })) as Record<
+    const hiddenRes = (await handler(ctx, { source_path: PRIVATE_PATH, claims })) as Record<
       string,
       unknown
     > & { distillation_path: string };
@@ -295,7 +298,7 @@ describe("brain_distill_source - a page withheld at the caller's reach checks no
     expect(md).toContain(UNTRUSTED_SOURCE_FRONTMATTER_KEY);
 
     const withExcerpt = (await handler(ctx, {
-      source_path: SECRET,
+      source_path: PRIVATE_PATH,
       claims,
       excerpt: "The code is ZX9 today.",
     })) as Record<string, unknown>;
@@ -305,7 +308,7 @@ describe("brain_distill_source - a page withheld at the caller's reach checks no
   test("at local reach the same page is checked", async () => {
     const res = (await handler(
       { ...ctx, reach: TRANSPORT_REACH.local },
-      { source_path: SECRET, claims },
+      { source_path: PRIVATE_PATH, claims },
     )) as { quotes: { verified_in_source: number; findings: Array<{ outcome: string }> } };
     expect(res.quotes.verified_in_source).toBe(1);
     expect(res.quotes.findings.map((f) => f.outcome)).toEqual([QUOTE_CHECK_OUTCOME.notInBlock]);
