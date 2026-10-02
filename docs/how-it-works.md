@@ -1435,7 +1435,9 @@ a canonical entity - whose every cited source is currently `url-only` gets
 a `warning` finding with `proposed_action: review`. A local source that
 was deleted therefore surfaces as `url-only`, a `bounded-local` page counts
 as backed only while its excerpt still matches its digest, and quarantined
-pages are skipped because the trust gate already handles them.
+pages are skipped: they already carry the `untrusted_source` marker, which
+names the same condition (and which the retrieval trust gate excludes when
+`search_trust_gate_enabled` is on).
 
 ## Safety properties
 

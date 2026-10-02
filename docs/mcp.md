@@ -1319,7 +1319,7 @@ and bypass the note-write path entirely. Log appends (`brain_note`,
 `brain_apply_evidence`) name no note path and are not linted, because the
 log line is machine-composed rather than authored.
 
-## Source distillation (since v1.67.0)
+## Source distillation
 
 `brain_distill_source` writes one idempotent distillation page per source
 from atomic claims the calling agent supplies. Open Second Brain runs no
@@ -1333,18 +1333,20 @@ Inputs:
 | --- | --- | --- |
 | `source_path` | string, required | the source identity: a vault-relative path or a URL |
 | `claims` | array, required | `{ text, block? }` items; `block` is the source block id (`^abc` or `abc`) |
-| `strict_quotes` | boolean, optional | refuse the whole write when any quoted span fails the check |
-| `excerpt` | string, optional | the verbatim text the caller read from a `url-only` source, stored on the page |
+| `strict_quotes` | boolean, optional | since v1.67.0, refuse the whole write when any quoted span fails the check |
+| `excerpt` | string, optional | since v1.67.0, the verbatim text the caller read from a `url-only` source, stored on the page |
 | `agent` | string, optional | agent identity override |
 
 Result keys: `distillation_path`, `created`, `claim_count`, `source_hash`
 (absent when the source had no bytes to hash), `trust` (`trusted` or
-`untrusted`), `capture_scope` (always present) and `quotes` (present only
-when at least one claim contains a quoted span).
+`untrusted`), and since v1.67.0 `capture_scope` (always present) and
+`quotes` (present only when at least one claim contains a quoted span).
 
 ### The quote check
 
-A quoted span is the text between a pair of quotation marks in a claim.
+Since v1.67.0, every quoted span in a claim is checked before the page is
+written. A quoted span is the text between a pair of quotation marks in a
+claim.
 A quotation mark is any character with the Unicode `Quotation_Mark`
 property, so straight, curly, low-high, guillemet and corner-bracket
 quotes all count without a list of languages. Marks pair by position: an
@@ -1353,7 +1355,9 @@ a closer is followed by the end, whitespace or punctuation. A mark with a
 letter on both sides (an apostrophe inside a word) is never a delimiter.
 Only the outermost span is checked; a quote inside it is part of its
 text. A mark that finds no partner is counted as `unpaired` and left on
-the page untouched. An empty span is not a quote.
+the page untouched. A mark separated from its text by an ordinary space
+is counted as unpaired, not checked; a single no-break or thin space, as
+in spaced guillemets, is allowed. An empty span is not a quote.
 
 Each span is compared with the evidence after the same normalisation is
 applied to both sides: Unicode NFC, inline Markdown reduced to its
@@ -1412,7 +1416,8 @@ byte-identical to the one earlier releases wrote.
 
 ### Capture scope and the excerpt
 
-`capture_scope` says how much of the source the vault actually holds:
+Since v1.67.0, `capture_scope` says how much of the source the vault
+actually holds:
 
 | Value | Meaning |
 | --- | --- |
@@ -2014,11 +2019,14 @@ cap.
   distillation"). `brain_ingest_source` returns `capture_scope`;
   `brain_research_report` returns `capture_scopes`, one per entry of
   `sources` in the same order, and stamps a `capture_scopes` frontmatter
-  list when any source is not `full-local`. `brain_hygiene` gains the
+  list when any source is not `full-local`; a source backed by a vault
+  file the caller cannot read at its reach is reported `url-only`, the
+  same answer as an absent file. `brain_hygiene` gains the
   default-on `capture-scope` detector: a retrievable page of active
   knowledge whose every cited source is currently `url-only` gets a
   `warning` finding with `proposed_action: review`. The scope is
   re-derived from each source identity at scan time, so a page whose
   local source was deleted reports as `url-only`, and a `bounded-local`
   page counts as backed only while its excerpt still matches
-  `excerpt_hash`. Quarantined pages are skipped.
+  `excerpt_hash`. Quarantined pages (those carrying the untrusted
+  marker) are skipped; the marker already names the condition.
