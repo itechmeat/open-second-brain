@@ -398,6 +398,17 @@ describe("escapes and fences", () => {
     expect(fencedLines(result.section)[1]).toBe("a\\|b | c\\\\d\\te\\r\\nf");
   });
 
+  test("every other C0 control, DEL and C1 control is escaped by code point", () => {
+    const result = rendered(
+      csv('k,v\nterm,"a\u001b]0;title\u0007b"\nmore,"\u007f\u0085\u009f\u0001"\n'),
+    );
+    expect(fencedLines(result.section).slice(1)).toEqual([
+      "term | a\\u{001B}]0;title\\u{0007}b",
+      "more | \\u{007F}\\u{0085}\\u{009F}\\u{0001}",
+    ]);
+    expect(result.section).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/);
+  });
+
   test("backticks in a cell are escaped, so a table body always takes a three-backtick fence", () => {
     const result = rendered(csv("k,v\n```js,````\ny,a`b\n"));
     expect(result.section).toContain("\n```table\n");

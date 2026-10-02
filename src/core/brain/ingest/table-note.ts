@@ -147,9 +147,12 @@ const DELIMITER_CHAR: Readonly<Record<TableDelimiter, string>> = Object.freeze({
 
 /**
  * Cell characters escaped so one record stays one line, a cell boundary
- * stays unambiguous and no rendered line opens with a backtick run (the
+ * stays unambiguous, no rendered line opens with a backtick run (the
  * chunker closes a fence on any line that starts with three backticks,
- * whatever the opening fence's length). Reversible: `\` is escaped too.
+ * whatever the opening fence's length) and no control character reaches a
+ * page or a terminal. Line breaks and TAB keep their short form; every
+ * other C0 control, DEL and C1 control becomes `\u{XXXX}`. Reversible:
+ * `\` is escaped too.
  */
 const CELL_ESCAPES: Readonly<Record<string, string>> = Object.freeze({
   "\\": "\\\\",
@@ -159,7 +162,15 @@ const CELL_ESCAPES: Readonly<Record<string, string>> = Object.freeze({
   "\r": "\\r",
   "\t": "\\t",
 });
-const CELL_ESCAPE_RE = /[\\|`\n\r\t]/g;
+// oxlint-disable-next-line no-control-regex -- matching control characters is the point
+const CELL_ESCAPE_RE = /[\\|`\u0000-\u001f\u007f-\u009f]/g;
+const CODE_POINT_HEX_DIGITS = 4;
+
+/** `\u{XXXX}`: a control character by its code point. */
+function codePointEscape(ch: string): string {
+  const hex = ch.codePointAt(0)!.toString(16).toUpperCase().padStart(CODE_POINT_HEX_DIGITS, "0");
+  return `\\u{${hex}}`;
+}
 
 /** Marks a cell cut at {@link TABLE_NOTE_MAX_CELL_CHARS}. */
 const CUT_MARKER = "\u2026";
@@ -285,7 +296,7 @@ function capCell(cell: string): { readonly text: string; readonly cut: boolean }
 }
 
 function escapeCell(cell: string): string {
-  return cell.replace(CELL_ESCAPE_RE, (ch) => CELL_ESCAPES[ch]!);
+  return cell.replace(CELL_ESCAPE_RE, (ch) => CELL_ESCAPES[ch] ?? codePointEscape(ch));
 }
 
 /** One record as it is rendered: its line and what the caps and redaction did to it. */
