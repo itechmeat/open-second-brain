@@ -42,7 +42,28 @@ import {
 import { brainVerbContext, fail, ok, okJson, parse, resolveBrainAgent } from "../helpers.ts";
 
 const USAGE =
-  "usage: o2b brain distill <source> (--claims <json> | --claims-file <path>) [--strict-quotes] [--excerpt-file <path>] [--vault <path>] [--json]";
+  "usage: o2b brain distill <source> (--claims <json> | --claims-file <path>) [--strict-quotes] [--excerpt-file <path>] [--agent <name>] [--vault <path>] [--json]";
+
+/** Refusal for an excerpt file whose bytes are not UTF-8 text. */
+const EXCERPT_NOT_UTF8_MESSAGE = "distill: excerpt file is not valid UTF-8";
+
+/**
+ * Strict UTF-8 decoder for the excerpt file: an invalid sequence throws
+ * instead of becoming U+FFFD, and a leading byte-order mark is kept, so the
+ * decoded text is exactly the file's bytes.
+ */
+const EXCERPT_DECODER = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+
+/** The excerpt file's text, or `null` when its bytes are not valid UTF-8. */
+function readExcerptFile(path: string): string | null {
+  const bytes = readFileSync(path);
+  try {
+    return EXCERPT_DECODER.decode(bytes);
+  } catch (err) {
+    if (err instanceof TypeError) return null;
+    throw err;
+  }
+}
 
 /** Errors that are the operator's input, reported as `distill: <message>`. */
 const OPERATOR_ERROR_CLASSES: ReadonlyArray<new (...args: never[]) => Error> = [
@@ -161,8 +182,12 @@ export async function cmdBrainDistill(argv: string[]): Promise<number> {
     // taken over exactly these bytes.
     const excerpt =
       typeof flags["excerpt-file"] === "string"
-        ? readFileSync(flags["excerpt-file"] as string, "utf8")
+        ? readExcerptFile(flags["excerpt-file"] as string)
         : undefined;
+    if (excerpt === null) {
+      process.stderr.write(`${EXCERPT_NOT_UTF8_MESSAGE}\n`);
+      return 2;
+    }
     const res = distillSource(
       vault,
       { sourcePath: source, claims, ...(excerpt !== undefined ? { excerpt } : {}) },

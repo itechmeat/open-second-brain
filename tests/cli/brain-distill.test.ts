@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { nestedCommand } from "../../src/cli/command-manifest.ts";
+import { readExcerptSection } from "../../src/core/brain/provenance/capture-scope.ts";
 import { BRAIN_DISTILLATIONS_REL } from "../../src/core/brain/path-constants.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
@@ -215,6 +216,31 @@ describe("o2b brain distill - quote check and capture scope", () => {
     const [page] = distillationPages();
     const md = readFileSync(join(vault, BRAIN_DISTILLATIONS_REL, page!), "utf8");
     expect(md).toContain("capture_scope: bounded-local");
+    expect(readExcerptSection(md)).toBe(readFileSync(excerptPath, "utf8"));
+  });
+
+  test("an --excerpt-file that is not valid UTF-8 is refused before any write", async () => {
+    // Decoding leniently would store U+FFFD in place of the file's bytes,
+    // and the stored excerpt would no longer be the captured text.
+    const excerptPath = join(tmp, "latin1.txt");
+    writeFileSync(excerptPath, Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]));
+    const res = await runCli(
+      [
+        "brain",
+        "distill",
+        "https://example.test/post",
+        "--claims",
+        JSON.stringify([{ text: "A claim." }]),
+        "--excerpt-file",
+        excerptPath,
+        "--vault",
+        vault,
+      ],
+      { env },
+    );
+    expect(res.returncode).toBe(2);
+    expect(res.stderr).toContain("distill: excerpt file is not valid UTF-8");
+    expect(distillationPages()).toEqual([]);
   });
 
   test("a checked quote adds the quotes suffix to the human line", async () => {
