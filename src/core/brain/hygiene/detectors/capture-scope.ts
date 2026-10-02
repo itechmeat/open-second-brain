@@ -11,14 +11,18 @@
  * Inspected: retrievable pages (the retrieval trust gate does not
  * quarantine them) of the four knowledge kinds - distillations, ingest
  * summaries, research reports, and entities in the canonical status scope.
- * A quarantined page is skipped: the gate already keeps it out of recall.
+ * A quarantined page is skipped: its untrusted marker already names the
+ * condition.
  *
  * Stamp at write, re-derive on read. The scope of every cited identity is
  * re-derived on each sweep from its shape and one `stat` (never a byte
  * read), so a full-local page whose file vanished reports as url-only. A
  * stamped `bounded-local` counts as backing only while the page's excerpt
  * block is present and matches its stored digest; an edited or removed
- * excerpt is no longer a capture.
+ * excerpt is no longer a capture. A cited source the filesystem refuses to
+ * answer for (permission denied, a symlink loop) is not provably url-only,
+ * so it counts as backing: one unreadable citation never aborts the sweep
+ * and never hides the other pages' findings.
  *
  * Cited sources are read with the shared source-link readers: the page's
  * `source_path` plus the targets under its `## Sources` heading.
@@ -51,6 +55,7 @@ import {
   readExcerptSection,
   type CaptureScope,
 } from "../../provenance/capture-scope.ts";
+import { SourceTrustError } from "../../intake/source-trust.ts";
 import { sourcesSectionTargets } from "../../source-links.ts";
 import { hygieneFindingId } from "./id.ts";
 import type { HygieneFinding } from "../types.ts";
@@ -122,15 +127,23 @@ function excerptIntact(meta: FrontmatterMap, body: string): boolean {
   return excerpt !== null && excerptDigest(excerpt) === digest;
 }
 
+/** Is this cited source url-only now? A refused stat is not proof that it is. */
+function isUrlOnly(vault: string, source: string): boolean {
+  try {
+    return classifyCaptureScope(vault, source) === CAPTURE_SCOPE.urlOnly;
+  } catch (err) {
+    if (err instanceof SourceTrustError) return false;
+    throw err;
+  }
+}
+
 function inspectPage(vault: string, page: string): HygieneFinding | null {
   const [meta, body] = parseFrontmatter(join(vault, page));
   if (!isRetrievableKnowledge(meta)) return null;
 
   const sources = citedSources(meta, body);
   if (sources.length === 0) return null;
-  const allUrlOnly = sources.every(
-    (source) => classifyCaptureScope(vault, source) === CAPTURE_SCOPE.urlOnly,
-  );
+  const allUrlOnly = sources.every((source) => isUrlOnly(vault, source));
   if (!allUrlOnly) return null;
 
   const stamped = stampedScope(meta);

@@ -5,21 +5,24 @@
  * scope is re-derived from each cited identity on every sweep, so a
  * full-local page whose file vanished reports, and a stamped
  * `bounded-local` counts as backing only while its excerpt block is present
- * and matches its digest. Quarantined pages are skipped: the retrieval gate
- * already keeps them out.
+ * and matches its digest. Quarantined pages are skipped: their untrusted
+ * marker already names the condition.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
-import { formatFrontmatter } from "../../../src/core/vault.ts";
+import { formatFrontmatter, parseFrontmatter } from "../../../src/core/vault.ts";
 import type { FrontmatterMap } from "../../../src/core/types.ts";
 import { ingestSource } from "../../../src/core/brain/ingest/ingest.ts";
-import { writeResearchReport } from "../../../src/core/brain/research/research.ts";
+import {
+  BRAIN_REPORT_KIND,
+  writeResearchReport,
+} from "../../../src/core/brain/research/research.ts";
 import { distillSource } from "../../../src/core/brain/distill/distill-source.ts";
 import {
   CAPTURE_SCOPE,
@@ -31,6 +34,11 @@ import {
   detectCaptureScope,
 } from "../../../src/core/brain/hygiene/detectors/capture-scope.ts";
 import { runHygieneScan } from "../../../src/core/brain/hygiene/scan.ts";
+import {
+  UNTRUSTED_SOURCE_FRONTMATTER_KEY,
+  hasUntrustedSourceMarker,
+} from "../../../src/core/brain/trust/untrusted-provenance.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 import { DEFAULT_SCAN_IDS, HYGIENE_DETECTOR_IDS } from "../../../src/core/brain/hygiene/types.ts";
 
 let vault: string;
@@ -165,6 +173,14 @@ describe("detectCaptureScope", () => {
     );
 
     expect(findingsFor(ingest.summaryPath)).toEqual([]);
+
+    // The cause is the marker, not a page the detector cannot read: the
+    // same page without it is reported.
+    const [meta, body] = parseFrontmatter(join(vault, ingest.summaryPath));
+    expect(hasUntrustedSourceMarker(meta)).toBe(true);
+    const { [UNTRUSTED_SOURCE_FRONTMATTER_KEY]: _marker, ...released } = meta;
+    writePage(ingest.summaryPath, released, body);
+    expect(findingsFor(ingest.summaryPath)).toHaveLength(1);
   });
 
   test("a distillation whose vault source was deleted is re-derived as url-only", () => {
@@ -206,9 +222,36 @@ describe("detectCaptureScope", () => {
   });
 
   test("a page of another kind is never inspected", () => {
-    writePage("Brain/notes/n.md", { kind: "note" }, `## Sources\n\n- [[${URL_A}]]`);
+    // Inside an inspected directory, so only the kind filter can exclude it.
+    writePage("Brain/distillations/n.md", { kind: "note" }, `## Sources\n\n- [[${URL_A}]]`);
     expect(detectCaptureScope(vault)).toEqual([]);
   });
+});
+
+describe("capture-scope when the filesystem refuses a source", () => {
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "an unreadable cited source is treated as backing and does not abort the sweep",
+    () => {
+      const locked = join(vault, "locked");
+      seed("locked/inner/a.md");
+      writePage("Brain/reports/a.md", { kind: BRAIN_REPORT_KIND }, `## Sources\n\n- [[${URL_A}]]`);
+      writePage(
+        "Brain/reports/b.md",
+        { kind: BRAIN_REPORT_KIND },
+        "## Sources\n\n- [[locked/inner/a.md]]",
+      );
+      chmodSync(locked, 0o000);
+      try {
+        const report = runHygieneScan(vault, { now: NOW, detectors: [CAPTURE_SCOPE_DETECTOR_ID] });
+        expect(report.errors).toEqual([]);
+        expect(report.counts[CAPTURE_SCOPE_DETECTOR_ID]).toBe(1);
+        expect(findingsFor("Brain/reports/a.md")).toHaveLength(1);
+        expect(findingsFor("Brain/reports/b.md")).toEqual([]);
+      } finally {
+        chmodSync(locked, 0o755);
+      }
+    },
+  );
 });
 
 describe("capture-scope in the hygiene sweep", () => {
