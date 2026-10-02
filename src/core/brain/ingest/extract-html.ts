@@ -180,7 +180,7 @@ const NAMED_ENTITIES: ReadonlyMap<string, string> = new Map([
   ["gt", ">"],
   ["quot", '"'],
   ["apos", "'"],
-  ["nbsp", " "],
+  ["nbsp", "\u00A0"],
 ]);
 /** What an invalid numeric character reference decodes to. */
 const REPLACEMENT_CHARACTER = "�";
