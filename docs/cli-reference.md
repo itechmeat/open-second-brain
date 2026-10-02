@@ -1210,7 +1210,7 @@ extract: <file> (html)
 
 `--json` adds the extracted `text` and each part's `index`, `level`,
 `heading`, `trail`, `line_start`, `line_end` and `source_offset` (the
-byte offset of its start tag), plus `parts_omitted` when more than 256
+byte offset of its start tag in the source file), plus `parts_omitted` when more than 256
 headings were found. A leading frontmatter block in the file is left
 out, as ingest leaves it out. Each heading and the title are redacted
 (`key=value` credentials and URL userinfo) over their first 4,096 code

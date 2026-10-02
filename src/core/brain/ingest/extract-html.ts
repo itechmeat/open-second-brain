@@ -50,7 +50,8 @@ export const HTML_HEADING_MAX_CHARS = 200;
  * sections and this one with {@link TRAIL_SEPARATOR}. The line span is
  * 1-based and inclusive over the lines of the extracted text; it runs from
  * the heading to the line before the next part. `sourceOffset` is the UTF-8
- * byte offset of the heading's start tag in the source (0 for the preamble).
+ * byte offset of the heading's start tag in the source file (0 for the
+ * preamble).
  */
 export interface HtmlPart {
   readonly index: number;
@@ -474,7 +475,14 @@ class HtmlScanner {
   /** Headings met past {@link HTML_SCANNED_MAX}, counted and never built. */
   private unscanned = 0;
 
-  constructor(private readonly source: string) {
+  /**
+   * @param offsetBase the bytes of the file that precede `source` (a
+   *   leading frontmatter block left out), added to every heading offset.
+   */
+  constructor(
+    private readonly source: string,
+    private readonly offsetBase: number,
+  ) {
     this.i = source.charCodeAt(0) === BYTE_ORDER_MARK ? 1 : 0;
     this.offsets = new ByteOffsets(source);
   }
@@ -727,7 +735,7 @@ class HtmlScanner {
       this.closeHeading();
       this.openHeading = {
         level,
-        sourceOffset: this.offsets.at(offset),
+        sourceOffset: this.offsetBase + this.offsets.at(offset),
         linesBefore: this.sink.lines.length,
       };
     }
@@ -761,17 +769,19 @@ class HtmlScanner {
 
 /**
  * The title, text and parts of an HTML source, or `not-utf8` when its
- * bytes are not UTF-8. Pure: no I/O, no clock, the same bytes give the
- * same answer.
+ * bytes are not UTF-8. `offsetBase` is the number of file bytes that
+ * precede `bytes` (a leading frontmatter block left out), so each part's
+ * `sourceOffset` stays an offset in the source file. Pure: no I/O, no
+ * clock, the same bytes give the same answer.
  */
-export function extractHtml(bytes: Uint8Array): HtmlExtractResult {
+export function extractHtml(bytes: Uint8Array, offsetBase = 0): HtmlExtractResult {
   let source: string;
   try {
     source = STRICT_UTF8.decode(bytes);
   } catch {
     return { extracted: false, reason: SOURCE_EXTRACT_SKIP_REASON.notUtf8 };
   }
-  return new HtmlScanner(source).run();
+  return new HtmlScanner(source, offsetBase).run();
 }
 
 /**

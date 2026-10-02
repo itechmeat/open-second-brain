@@ -108,6 +108,18 @@ describe("a leading frontmatter block is not source data", () => {
     expect(res.html.parts.map((p) => p.heading)).toEqual(["Vault plan"]);
   });
 
+  test.each([
+    ["no mark", "", 25],
+    ["a byte-order mark", "\uFEFF", 28],
+  ])("a part's offset counts the bytes of the left-out block (%s)", (_label, mark, offset) => {
+    const res = extractSource(
+      "Clips/h.html",
+      utf8(`${mark}---\nvisibility: team\n---\n<h1>X</h1>`),
+    );
+    if (!("html" in res) || !res.html.extracted) throw new Error("expected an extraction");
+    expect(res.html.parts.map((p) => p.sourceOffset)).toEqual([offset]);
+  });
+
   test("a long run of blank lines after an unclosed opener is read in linear time", () => {
     const text = `---${"\n".repeat(256 * 1024)}name\nbolt\n`;
     const started = performance.now();

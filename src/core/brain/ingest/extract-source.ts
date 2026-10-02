@@ -85,13 +85,13 @@ export function extractSource(path: string, bytes: Uint8Array): SourceExtraction
       return {
         extractor: spec.extractor,
         format: spec.format,
-        html: extractHtml(withoutLeadingFrontmatter(bytes)),
+        html: extractHtmlAfterFrontmatter(bytes),
       };
     case SOURCE_EXTRACTOR.table:
       return {
         extractor: spec.extractor,
         format: spec.format,
-        table: tableNote(path, withoutLeadingFrontmatter(bytes)),
+        table: tableNote(path, withoutLeadingFrontmatter(bytes).bytes),
       };
   }
 }
@@ -108,26 +108,38 @@ const UTF8_ENCODER = new TextEncoder();
 /**
  * `bytes` without one leading frontmatter block (after an optional
  * byte-order mark), so the block is never rendered as source data: a CSV
- * header of `---` or a `visibility: private` row. Bytes that are not UTF-8
- * or open with no closed block are returned as they are, and the extractor
- * answers for them.
+ * header of `---` or a `visibility: private` row. `skipped` is the number
+ * of bytes left out (the mark and the block), 0 when nothing is. Bytes that
+ * are not UTF-8 or open with no closed block are returned as they are, and
+ * the extractor answers for them.
  */
-function withoutLeadingFrontmatter(bytes: Uint8Array): Uint8Array {
+function withoutLeadingFrontmatter(bytes: Uint8Array): {
+  readonly bytes: Uint8Array;
+  readonly skipped: number;
+} {
+  const whole = { bytes, skipped: 0 };
   const bom = UTF8_BOM.every((byte, i) => bytes[i] === byte) ? UTF8_BOM.length : 0;
   for (let i = 0; i < FRONTMATTER_FENCE.length; i++) {
-    if (bytes[bom + i] !== FRONTMATTER_FENCE.charCodeAt(i)) return bytes;
+    if (bytes[bom + i] !== FRONTMATTER_FENCE.charCodeAt(i)) return whole;
   }
   let text: string;
   try {
     text = UTF8_STRICT.decode(bytes.subarray(bom));
   } catch {
-    return bytes;
+    return whole;
   }
   // The vault's own frontmatter pattern, so the block the reach predicate
   // reads a source's visibility from is exactly the block withheld here.
   const block = FRONTMATTER_RE.exec(text);
-  if (block === null) return bytes;
-  return bytes.subarray(bom + UTF8_ENCODER.encode(block[0]).length);
+  if (block === null) return whole;
+  const skipped = bom + UTF8_ENCODER.encode(block[0]).length;
+  return { bytes: bytes.subarray(skipped), skipped };
+}
+
+/** The HTML extraction of `bytes` after any leading frontmatter block, offsets counted in the whole file. */
+function extractHtmlAfterFrontmatter(bytes: Uint8Array): HtmlExtractResult {
+  const rest = withoutLeadingFrontmatter(bytes);
+  return extractHtml(rest.bytes, rest.skipped);
 }
 
 /** The HTML outcome on an ingest result: counts only, never the text. */
