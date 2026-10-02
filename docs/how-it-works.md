@@ -1332,7 +1332,10 @@ modules carry binds nothing. The edges render in their own
 declared by manifests, not measured from imports), in a `dependencies`
 region on each module note, and as a `depends_on` frontmatter key on
 the module note, a YAML list of wikilinks to the target module notes,
-which the indexer turns into typed `depends_on` links. The generator
+which the indexer turns into typed `depends_on` links. A module whose
+directory name holds a character a link cannot carry (a control
+character, `[`, `]`, `|`, `#` or `^`) is named once on the overview's
+module list and left out of every link and edge. The generator
 owns that one key: it rewrites it on every run, removes it when a
 module has no edge, overwrites any value typed under it, and never
 touches another frontmatter key. The `module-map` region stays

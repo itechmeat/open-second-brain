@@ -259,7 +259,8 @@ function codegraphRegionBody(report: CodegraphReport): string {
  *
  * Line breaks are folded to a space rather than escaped: a directory name
  * may legally contain one, and `<br/>` is the label's own field
- * separator here.
+ * separator here. A backtick becomes its entity too, so a run of three
+ * cannot close the Markdown fence the diagram sits in.
  */
 function mermaidLabel(text: string): string {
   return text
@@ -267,6 +268,7 @@ function mermaidLabel(text: string): string {
     .replaceAll('"', "#quot;")
     .replaceAll("<", "#lt;")
     .replaceAll(">", "#gt;")
+    .replaceAll("`", "#96;")
     .replaceAll(/[\r\n]+/g, " ");
 }
 
@@ -414,7 +416,8 @@ function modulesByName(facts: ProjectFacts): ReadonlyArray<ModuleFact> {
  * is one id across both diagrams.
  */
 function moduleDependenciesBody(facts: ProjectFacts): string {
-  if (facts.moduleDependencies.length === 0) return NO_MODULE_DEPENDENCY;
+  const edges = linkableEdges(facts);
+  if (edges.length === 0) return NO_MODULE_DEPENDENCY;
   const ids = new Map(modulesByName(facts).map((module, index) => [module.name, `mod${index}`]));
   const node = (name: string): string => `${ids.get(name)}["${mermaidLabel(name)}"]`;
   return [
@@ -422,9 +425,34 @@ function moduleDependenciesBody(facts: ProjectFacts): string {
     "",
     "```mermaid",
     "graph LR",
-    ...facts.moduleDependencies.map((edge) => `  ${node(edge.from)} --> ${node(edge.to)}`),
+    ...edges.map((edge) => `  ${node(edge.from)} --> ${node(edge.to)}`),
     "```",
   ].join("\n");
+}
+
+/**
+ * A module name a wikilink cannot carry: a control character breaks the
+ * line, `[`, `]` and `|` end the link or its alias early, and `#` and `^`
+ * turn the target into a heading or block reference.
+ */
+// oxlint-disable-next-line no-control-regex -- matching control characters is the point
+const UNLINKABLE_MODULE_NAME = /[\u0000-\u001f[\]|#^]/;
+
+function isLinkable(name: string): boolean {
+  return !UNLINKABLE_MODULE_NAME.test(name);
+}
+
+/** What the overview's module list says before the modules it cannot link. */
+const UNLINKABLE_MODULES_LEAD = "Not linked (the name holds a character a link cannot carry):";
+
+/** A name on one line inside a code span: JSON escapes, and no backtick to end the span. */
+function codeSpanName(name: string): string {
+  return `\`${JSON.stringify(name).replaceAll("`", "\\u0060")}\``;
+}
+
+/** The declared edges between modules a link can name; an edge touching any other is left out. */
+function linkableEdges(facts: ProjectFacts): ReadonlyArray<ModuleDependency> {
+  return facts.moduleDependencies.filter((edge) => isLinkable(edge.from) && isLinkable(edge.to));
 }
 
 /** The wikilink to one module's note, as the overview's module list writes it. */
@@ -444,7 +472,31 @@ const FRONTMATTER_FENCE = "---";
 
 /** A YAML double-quoted scalar: backslash and quote are the two characters it escapes. */
 function yamlQuoted(text: string): string {
-  return `"${text.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+  const escaped = text
+    .replaceAll("\\", "\\\\")
+    .replaceAll('"', '\\"')
+    .replace(CONTROL_CHARACTER, (c) => YAML_ESCAPES.get(c) ?? yamlHexEscape(c));
+  return `"${escaped}"`;
+}
+
+// oxlint-disable-next-line no-control-regex -- matching control characters is the point
+const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/g;
+/** The short escapes YAML's double-quoted style defines for the common controls. */
+const YAML_ESCAPES: ReadonlyMap<string, string> = new Map([
+  ["\n", "\\n"],
+  ["\t", "\\t"],
+  ["\r", "\\r"],
+]);
+
+function yamlHexEscape(c: string): string {
+  return `\\x${c.charCodeAt(0).toString(16).padStart(2, "0")}`;
+}
+
+/** A name as a plain YAML scalar when it is one, else double-quoted. */
+const PLAIN_YAML_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/;
+
+function yamlName(name: string): string {
+  return PLAIN_YAML_NAME.test(name) ? name : yamlQuoted(name);
 }
 
 /** The `depends_on` key as frontmatter lines, or no lines when the module has no edge. */
@@ -517,10 +569,10 @@ interface OwnedKey {
   readonly lines: ReadonlyArray<string>;
 }
 
-/** The modules `module` declares a dependency on, sorted. */
+/** The modules `module` declares a dependency on that a link can name, sorted. */
 function dependsOn(facts: ProjectFacts, module: ModuleFact): ReadonlyArray<string> {
-  return facts.moduleDependencies
-    .filter((edge: ModuleDependency) => edge.from === module.name)
+  return linkableEdges(facts)
+    .filter((edge) => edge.from === module.name)
     .map((edge) => edge.to);
 }
 
@@ -554,9 +606,20 @@ function overviewRegions(
     ...(facts.testLayout !== null ? [`Test layout: ${facts.testLayout}/`] : []),
   ].join("\n");
 
-  const modules = facts.modules
-    .map((module) => `- ${moduleLink(key, module.name)} (${module.path}, ${module.files} file(s))`)
-    .join("\n");
+  const unlinkable = facts.modules.filter((module) => !isLinkable(module.name));
+  const modules = [
+    ...facts.modules
+      .filter((module) => isLinkable(module.name))
+      .map(
+        (module) =>
+          `- ${moduleLink(key, module.name)} (${oneLine(module.path)}, ${module.files} file(s))`,
+      ),
+    ...(unlinkable.length === 0
+      ? []
+      : [
+          `${UNLINKABLE_MODULES_LEAD} ${unlinkable.map((module) => codeSpanName(module.name)).join(", ")}`,
+        ]),
+  ].join("\n");
 
   const entryPoints =
     facts.entryPoints.length === 0
@@ -623,14 +686,14 @@ function moduleRegions(
   targets: ReadonlyArray<string>,
 ): ReadonlyArray<Region> {
   const facts = [
-    `Path: ${module.path}`,
+    `Path: ${oneLine(module.path)}`,
     `Files: ${module.files}`,
     `Languages: ${languagesLine(module.languages)}`,
   ].join("\n");
   const files =
     module.topFiles.length === 0
       ? "empty module"
-      : module.topFiles.map((file) => `- \`${file}\``).join("\n");
+      : module.topFiles.map((file) => `- \`${oneLine(file)}\``).join("\n");
   return [
     { id: "facts", body: facts },
     { id: "files", body: files },
@@ -798,7 +861,7 @@ function renderNotes(
     plans.push(
       planNote(
         modulePath(dir, module),
-        frontmatter("arch-module", key, [`module: ${module.name}`, ...owned.lines]),
+        frontmatter("arch-module", key, [`module: ${yamlName(module.name)}`, ...owned.lines]),
         moduleRegions(key, module, targets),
         owned,
       ),

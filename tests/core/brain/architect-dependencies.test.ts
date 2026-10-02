@@ -248,3 +248,32 @@ test("notes written before the dependency regions gain them after the operator's
   const third = generateArchDocs(vault, project);
   expect(third.updated).toBe(0);
 });
+
+test("a module whose name a link cannot carry is named once and left out of links and edges", () => {
+  put("packages/a[b]/package.json", JSON.stringify({ name: "@mono/ab" }));
+  put("packages/a[b]/index.ts", "// x\n");
+  put(
+    "packages/web/package.json",
+    JSON.stringify({ name: "@mono/web", dependencies: { "@mono/ab": "*", "@mono/core": "*" } }),
+  );
+  const res = generateArchDocs(vault, project);
+  const text = overview(res);
+  const modules = regionBody(text, "modules").split("\n");
+  expect(modules.some((line) => line.includes("modules/a[b]"))).toBe(false);
+  expect(modules).toContain(
+    'Not linked (the name holds a character a link cannot carry): `"a[b]"`',
+  );
+  const edges = regionBody(text, "module-dependencies")
+    .split("\n")
+    .filter((line) => line.includes("-->"));
+  expect(edges).toEqual(['  mod3["web"] --> mod1["core"]']);
+  const web = moduleNote(res, "web");
+  expect(web).not.toContain("a[b]");
+  expect(web).toContain(`- [[Brain/projects/arch/${res.repoKey}/modules/core|core]]`);
+});
+
+test("a backtick in a module name cannot close the diagram's fence", () => {
+  put("packages/x```y/index.ts", "// x\n");
+  const body = regionBody(overview(generateArchDocs(vault, project)), "module-map");
+  expect(body.split("\n").filter((line) => line.includes("```"))).toEqual(["```mermaid", "```"]);
+});

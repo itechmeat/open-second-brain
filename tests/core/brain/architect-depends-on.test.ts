@@ -23,6 +23,7 @@ import { DEFAULT_RELATION_TYPES } from "../../../src/core/graph/relation-vocab.t
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { Store } from "../../../src/core/search/store.ts";
 import { makeConfig } from "../../helpers/search-fixtures.ts";
+import { IS_WINDOWS } from "../../helpers/platform.ts";
 
 let tmp: string;
 let project: string;
@@ -191,3 +192,14 @@ test("a frontmatter block that never closes is refused before any note is writte
   expect(readFileSync(webPath, "utf8")).toBe(broken);
   expect(readFileSync(first.overviewPath, "utf8")).toBe(overviewBefore);
 });
+
+// Windows refuses a control character in a directory name.
+test.skipIf(IS_WINDOWS)(
+  "a control character in a module name stays inside its quoted scalar",
+  () => {
+    put("packages/tab\tbed/package.json", pkg("tabbed"));
+    const res = generateArchDocs(vault, project);
+    const note = readFileSync(notePath(res, "tab\tbed"), "utf8");
+    expect(frontmatterOf(note)).toContain('module: "tab\\tbed"\n');
+  },
+);
