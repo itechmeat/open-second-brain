@@ -413,6 +413,14 @@ import {
   TOOL_CEILING_KINDS,
 } from "../../../src/core/runtime/host-facts.ts";
 import { CONFIG_ORIGIN, CONFIG_ORIGINS, isConfigOrigin } from "../../../src/core/validate.ts";
+import {
+  HARNESS_ID,
+  HARNESS_IDS,
+  isHarnessId,
+  isScopedRuleAxis,
+  SCOPED_RULE_AXES,
+  SCOPED_RULE_AXIS,
+} from "../../../src/core/brain/scoped-rules.ts";
 import { EXPORT_FORMAT, EXPORT_FORMATS, isExportFormat } from "../../../src/core/brain/export.ts";
 import {
   isStateReachability,
@@ -1457,6 +1465,24 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     members: MANIFEST_STATUSES,
     guard: isManifestStatus,
   },
+  {
+    // The axis a scoped operator rule file is keyed on
+    // (`Brain/standing-rules/<axis>/<key>.md`). It reaches the
+    // `brain_context` output and orders the drop priority under the cap.
+    name: "SCOPED_RULE_AXIS",
+    values: SCOPED_RULE_AXIS,
+    members: SCOPED_RULE_AXES,
+    guard: isScopedRuleAxis,
+  },
+  {
+    // The runtimes `o2b mcp --harness` can name: every install target
+    // plus the three runtimes with no install adapter. Kept apart from
+    // INSTALL_TARGET_ID, which must equal the adapter registry.
+    name: "HARNESS_ID",
+    values: HARNESS_ID,
+    members: HARNESS_IDS,
+    guard: isHarnessId,
+  },
 ]);
 
 // ---------------------------------------------------------------------------
@@ -1721,7 +1747,7 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
  * How many four-piece vocabularies `src/` currently holds. Measured, and
  * kept as an equality rather than a floor - see the population test.
  */
-const VOCABULARY_POPULATION = 88;
+const VOCABULARY_POPULATION = 90;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {

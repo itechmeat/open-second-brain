@@ -67,6 +67,7 @@ import {
   BRAIN_SKILL_PROPOSALS_REJECTED_REL,
   BRAIN_SNAPSHOTS_REL,
   BRAIN_SOURCES_REL,
+  BRAIN_SCOPED_RULES_DIR,
   BRAIN_STANDING_RULES_FILE,
   BRAIN_STATE_REL,
   BRAIN_TENSIONS_REL,
@@ -76,6 +77,7 @@ import {
   HOOK_AUDIT_DIR,
 } from "./path-constants.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import type { ScopedRuleAxis } from "./scoped-rules.ts";
 import type { WriteLane } from "./freeze-marker.ts";
 
 export { ensureInsideVault, vaultRelative } from "../path-safety.ts";
@@ -268,6 +270,24 @@ export function brainLessonsPath(vault: string): string {
  */
 export function brainStandingRulesPath(vault: string): string {
   return ensureInsideVault(join(brainDirs(vault).brain, BRAIN_STANDING_RULES_FILE), vault);
+}
+
+/**
+ * Directory of the operator-authored scoped standing rules
+ * (`Brain/standing-rules/`). Hand-written like the constitution file and
+ * refused to every write path by `assertStandingRulesNotTargeted`.
+ */
+export function brainScopedRulesDir(vault: string): string {
+  return ensureInsideVault(join(brainDirs(vault).brain, BRAIN_SCOPED_RULES_DIR), vault);
+}
+
+/**
+ * Path of one scoped rule file: `Brain/standing-rules/<axis>/<key>.md`.
+ * `key` is expected to come from `scopedRuleKey` (letters, digits and
+ * dashes only); the containment check still runs on the result.
+ */
+export function brainScopedRulePath(vault: string, axis: ScopedRuleAxis, key: string): string {
+  return ensureInsideVault(join(brainScopedRulesDir(vault), axis, `${key}.md`), vault);
 }
 
 /** Path of the transient current-task scratchpad read by `brain_context`. */

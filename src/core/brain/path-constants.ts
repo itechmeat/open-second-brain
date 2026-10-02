@@ -224,6 +224,13 @@ export const BRAIN_COMPILED_DIGEST_RELS: ReadonlyArray<string> = Object.freeze([
  * operator cannot get by editing this file.
  */
 export const BRAIN_STANDING_RULES_FILE = "standing-rules.md";
+/**
+ * Directory of operator-authored SCOPED standing rules, beside the
+ * constitution file: `Brain/standing-rules/<axis>/<key>.md`, one file per
+ * resolved project, harness or host value. Read by `scoped-rules.ts`,
+ * refused to every write path by `assertStandingRulesNotTargeted`.
+ */
+export const BRAIN_SCOPED_RULES_DIR = "standing-rules";
 export const BRAIN_PINNED_FILE = "pinned.md";
 export const BRAIN_INDEX_FILE = "_INDEX.md";
 /** Persisted claim-graph projection artifact (Belief lifecycle suite, A3). */
