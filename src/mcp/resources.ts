@@ -83,7 +83,11 @@ import { BrainNotFoundError, queryByPreference, queryByTopic } from "../core/bra
 import { gatedOwnerScopeView } from "../core/brain/owner-scope-view.ts";
 import { everyArtifactRefView, type ArtifactRefView } from "../core/brain/artifact-ref-view.ts";
 import { reachView } from "../core/brain/reach-view.ts";
-import { resolvedTransportReach, type TransportReach } from "../core/graph/transport-reach.ts";
+import {
+  TRANSPORT_REACH,
+  resolvedTransportReach,
+  type TransportReach,
+} from "../core/graph/transport-reach.ts";
 import { extractWikilinkRichBodies } from "../core/brain/link-graph/parse-wikilink.ts";
 import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
 import { logEntryArtifactRefs } from "../core/brain/log.ts";
@@ -352,12 +356,13 @@ function readActive(ctx: ResourceContext, uri: string, view: RequestView): Resou
       );
     }
   }
-  // The shared file is served as it is unless this request withholds a
-  // record it draws from; then the reader gets the digest without it,
-  // stamped with the generation on disk (see `readActiveForReader`).
+  // The shared file is served as it is to a local reader with no owner
+  // scope; any other reader gets the in-memory render, stamped with the
+  // generation on disk (see `readActiveForReader`).
   const text = readActiveForReader(ctx.vault, {
     ...(view.refs.filtersNothing ? {} : { readable: view.refs.visible }),
     ...(view.ownerScope !== null ? { agentScope: view.ownerScope } : {}),
+    restricted: view.reach !== TRANSPORT_REACH.local,
   });
   return { uri, mimeType: MIME_MARKDOWN, text };
 }

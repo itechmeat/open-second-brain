@@ -401,10 +401,10 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
     kind: K.mcpTool,
     category: C.covered,
     reason:
-      "toolBrainContext (context-tools.ts) serves Brain/active.md's bytes only when " +
-      "readerNarrowsActive finds no preference or retired record withheld by " +
-      "readableAtContextReach(ctx) and no owner scope enforced; otherwise it hands back " +
-      "renderActiveForReader's in-memory render without them, counts included.",
+      "toolBrainContext (context-tools.ts) serves Brain/active.md's bytes only to a local " +
+      "reader with no owner scope enforced; any other reader gets renderActiveForReader's " +
+      "in-memory render without the preference and retired records readableAtContextReach(ctx) " +
+      "withholds, counts included, so the choice never depends on what is withheld.",
   },
   {
     surface: "brain_agent_query",
@@ -510,7 +510,7 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
     reason:
       "buildPreCompressPack (core/brain/pre-compress-pack.ts) is handed " +
       "readableAtContextReach(ctx): the top-K walk skips a preference the caller cannot read, " +
-      "and the active head is the reader render of Brain/active.md whenever a record is withheld.",
+      "and below local reach the active head is always the reader render of Brain/active.md.",
   },
   {
     surface: "brain_pre_compact_extract",
@@ -811,9 +811,11 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
     kind: K.mcpResource,
     category: C.covered,
     reason:
-      "readActive (resources.ts) passes the request view (owner view ANDed with reachView) to " +
-      "readActiveForReader, which serves the shared file only when no preference or retired " +
-      "record is withheld and renders the digest without them otherwise.",
+      "readActive (resources.ts) passes the request view (owner view ANDed with reachView) and " +
+      "whether the request is below local reach to readActiveForReader, which serves the shared " +
+      "file only to a local reader with no owner scope and otherwise renders the digest without " +
+      "the preference and retired records the reader cannot see, stamped with the file's " +
+      "generated_at.",
   },
   {
     surface: "osb://lessons",
