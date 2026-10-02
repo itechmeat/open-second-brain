@@ -26,7 +26,11 @@
  * Unpaired marks are not spans: they are counted and left alone.
  */
 
-import { foldQuoteVariantsByClass } from "../entities/canonical.ts";
+import {
+  foldQuoteVariantsByClass,
+  QUOTE_VARIANT_FOLD_TARGET_DOUBLE,
+} from "../entities/canonical.ts";
+import { listItemLines, LIST_ITEM_RE } from "./block-resolve.ts";
 
 /** A quotation mark, by Unicode property rather than by a list. */
 export const QUOTATION_MARK_RE = /\p{Quotation_Mark}/u;
@@ -49,6 +53,7 @@ export interface QuoteSpanScan {
 
 const LETTER_RE = /\p{L}/u;
 const WHITESPACE_RE = /\s/u;
+const LETTER_OR_DIGIT_RE = /[\p{L}\p{N}]/u;
 const OPENING_PUNCTUATION_RE = /[\p{Ps}\p{Pi}]/u;
 const PUNCTUATION_RE = /\p{P}/u;
 
@@ -150,40 +155,133 @@ export function unquoteSpans(text: string, spans: ReadonlyArray<QuoteSpan>): str
   return out;
 }
 
+// Every pattern below is linear on any input: a character class that cannot
+// hold the bracket that starts a match means a failed attempt never overlaps
+// the next one, and the line-anchored ones run once per line.
+
 /** `[[target|alias]]`, reduced to the alias. */
-const WIKILINK_ALIASED_RE = /\[\[[^\]|]*\|([^\]]*)\]\]/g;
+const WIKILINK_ALIASED_RE = /\[\[[^[\]|]*\|([^[\]]*)\]\]/g;
 /** `[[target]]`, reduced to the target. */
-const WIKILINK_RE = /\[\[([^\]]*)\]\]/g;
+const WIKILINK_RE = /\[\[([^[\]]*)\]\]/g;
 /** `[text](url)`, reduced to the text. */
-const MARKDOWN_LINK_RE = /\[([^\]]*)\]\([^)]*\)/g;
-/** Inline emphasis and code markers. */
-const INLINE_MARKER_RE = /~~|[*_`]/g;
+const MARKDOWN_LINK_RE = /\[([^[\]]*)\]\([^()]*\)/g;
 /** Blockquote markers at the start of a line. */
-const BLOCKQUOTE_PREFIX_RE = /^[ \t]*(?:>[ \t]?)+/gm;
-/** A list bullet or an ordered-list number at the start of a line. */
-const LIST_PREFIX_RE = /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/gm;
-/** An Obsidian block id ending a line, or standing alone on one. */
-const TRAILING_BLOCK_ID_RE = /(?:^|[ \t]+)\^[A-Za-z0-9][A-Za-z0-9-]*[ \t]*$/gm;
+const BLOCKQUOTE_PREFIX_RE = /^[ \t]*(?:>[ \t]?)+/;
+/** An Obsidian block id: what follows the caret. */
+const BLOCK_ID_TAIL_RE = /^\^[A-Za-z0-9][A-Za-z0-9-]*$/;
 const WHITESPACE_RUN_RE = /\s+/gu;
+/** Bracket-type quotation marks (low-9 marks, corner brackets) for the comparison fold. */
+const BRACKET_PUNCTUATION_RE = /[\p{Ps}\p{Pe}]/gu;
+/** The emphasis, strike and code delimiter characters. */
+const INLINE_DELIMITER_CHARS: ReadonlySet<string> = new Set(["*", "_", "~", "`"]);
+const STRIKE_DELIMITER = "~~";
+const LINE_HORIZONTAL_SPACE = new Set([" ", "\t", "\r"]);
+
+/**
+ * `line` without an Obsidian block id ending it or standing alone on it. A
+ * caret glued to a word is text. Scans the line once, with no regex over the
+ * whitespace before the id.
+ */
+function stripTrailingBlockId(line: string): string {
+  let end = line.length;
+  while (end > 0 && LINE_HORIZONTAL_SPACE.has(line[end - 1]!)) end--;
+  const caret = line.lastIndexOf("^", end - 1);
+  if (caret === -1 || !BLOCK_ID_TAIL_RE.test(line.slice(caret, end))) return line;
+  let start = caret;
+  while (start > 0 && LINE_HORIZONTAL_SPACE.has(line[start - 1]!)) start--;
+  return start === caret && caret > 0 ? line : line.slice(0, start);
+}
+
+/**
+ * Block markers removed line by line: blockquote prefixes, list prefixes on
+ * the lines that start an item (the rule `block-resolve.ts` resolves blocks
+ * by), and trailing block ids.
+ */
+function stripLineMarkers(text: string): string {
+  const lines = text.split("\n").map((line) => line.replace(BLOCKQUOTE_PREFIX_RE, ""));
+  const items = listItemLines(lines);
+  return lines
+    .map((line, k) => stripTrailingBlockId(items[k] ? line.replace(LIST_ITEM_RE, "") : line))
+    .join("\n");
+}
+
+/**
+ * Inline emphasis, strike and code delimiters reduced to their content, in
+ * one linear pass. Only a PAIR is removed: a run of `*`, `_` or backticks
+ * (or `~~`) that can open (followed by a non-space) and a later run of the
+ * same characters that can close (preceded by a non-space). An underscore
+ * between two letters or digits never delimits, so `snake_case` and `2*3`
+ * keep their bytes.
+ */
+function stripInlineDelimiters(text: string): string {
+  const drop: Array<readonly [number, number]> = [];
+  const pending = new Map<string, number>();
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i]!;
+    if (!INLINE_DELIMITER_CHARS.has(ch)) {
+      i++;
+      continue;
+    }
+    let end = i + 1;
+    while (end < text.length && text[end] === ch) end++;
+    const run = text.slice(i, end);
+    if (ch === "~" && run !== STRIKE_DELIMITER) {
+      i = end;
+      continue;
+    }
+    const before = text[i - 1];
+    const after = text[end];
+    const intraword = ch === "_";
+    const canClose =
+      before !== undefined &&
+      !isSpace(before) &&
+      !(intraword && after !== undefined && LETTER_OR_DIGIT_RE.test(after));
+    const canOpen =
+      after !== undefined &&
+      !isSpace(after) &&
+      !(intraword && before !== undefined && LETTER_OR_DIGIT_RE.test(before));
+    const open = pending.get(run);
+    if (canClose && open !== undefined) {
+      drop.push([open, open + run.length], [i, end]);
+      pending.delete(run);
+    } else if (canOpen) {
+      pending.set(run, i);
+    }
+    i = end;
+  }
+  if (drop.length === 0) return text;
+  drop.sort((a, b) => a[0] - b[0]);
+  let out = "";
+  let from = 0;
+  for (const [start, stop] of drop) {
+    out += text.slice(from, start);
+    from = stop;
+  }
+  return out + text.slice(from);
+}
 
 /**
  * The comparison form of a text, applied identically to a span and to the
  * text it is checked against: NFC; block markers, trailing block ids and
- * inline Markdown reduced to display text; quote marks folded to their ASCII
- * width; whitespace collapsed. Case, punctuation and wording are untouched.
- * Comparison only: no page byte is ever rewritten through this function.
+ * paired inline Markdown reduced to display text; quote marks folded to their
+ * ASCII width (bracket-type quotation marks to `"`); whitespace collapsed.
+ * Case, punctuation and wording are untouched. Comparison only: no page byte
+ * is ever rewritten through this function. Linear in the length of `text`.
  */
 export function normalizeForQuoteComparison(text: string): string {
-  const reduced = text
-    .normalize("NFC")
-    .replace(BLOCKQUOTE_PREFIX_RE, "")
-    .replace(LIST_PREFIX_RE, "")
-    .replace(TRAILING_BLOCK_ID_RE, "")
-    .replace(WIKILINK_ALIASED_RE, "$1")
-    .replace(WIKILINK_RE, "$1")
-    .replace(MARKDOWN_LINK_RE, "$1")
-    .replace(INLINE_MARKER_RE, "");
-  return foldQuoteVariantsByClass(reduced).replace(WHITESPACE_RUN_RE, " ").trim();
+  const reduced = stripInlineDelimiters(
+    stripLineMarkers(text.normalize("NFC"))
+      .replace(WIKILINK_ALIASED_RE, "$1")
+      .replace(WIKILINK_RE, "$1")
+      .replace(MARKDOWN_LINK_RE, "$1"),
+  );
+  return foldQuoteVariantsByClass(reduced)
+    .replace(BRACKET_PUNCTUATION_RE, (mark) =>
+      QUOTATION_MARK_RE.test(mark) ? QUOTE_VARIANT_FOLD_TARGET_DOUBLE : mark,
+    )
+    .replace(WHITESPACE_RUN_RE, " ")
+    .trim();
 }
 
 /** U+2026 or a run of three or more full stops. */

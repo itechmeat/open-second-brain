@@ -6,7 +6,11 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { resolveBlock } from "../../../../src/core/brain/distill/block-resolve.ts";
+import {
+  indexBlocks,
+  lookupBlock,
+  resolveBlock,
+} from "../../../../src/core/brain/distill/block-resolve.ts";
 
 describe("resolveBlock", () => {
   test("a paragraph whose last line ends in ` ^id` resolves to the whole paragraph without the marker", () => {
@@ -27,6 +31,27 @@ describe("resolveBlock", () => {
   test("a list item ending in ` ^id` resolves to that item only", () => {
     const source = ["- first item", "- second item ^li", "- third item"].join("\n");
     expect(resolveBlock(source, "li")).toEqual({ kind: "found", text: "- second item" });
+  });
+
+  test("a numbered line inside a paragraph does not start a list item", () => {
+    const source = "Intro line\n1999) was a year ^p1";
+    expect(resolveBlock(source, "p1")).toEqual({
+      kind: "found",
+      text: "Intro line\n1999) was a year",
+    });
+  });
+
+  test("a bullet directly under a paragraph line still starts a list", () => {
+    const source = "Key points:\n- first\n- second ^li";
+    expect(resolveBlock(source, "li")).toEqual({ kind: "found", text: "- second" });
+  });
+
+  test("one index answers every id exactly as resolving each id does", () => {
+    const source = "Para one ^a\n\n- x ^b\n- y ^b\n\n| t |\n^c\n\n```\nz ^d\n```";
+    const index = indexBlocks(source);
+    for (const id of ["a", "b", "c", "d", "missing"]) {
+      expect(lookupBlock(index, id)).toEqual(resolveBlock(source, id));
+    }
   });
 
   test("a standalone `^id` line after a table resolves to the table", () => {

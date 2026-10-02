@@ -192,6 +192,23 @@ describe("checkClaimQuotes - the report", () => {
     expect(res.report!.verified_in_block).toBe(1);
   });
 
+  test("a CRLF source verifies a span that crosses its line break", () => {
+    const crlf = { kind: "text", text: SOURCE.replaceAll("\n", "\r\n") } as const;
+    const res = one(
+      { text: "“correlated slashing risk across every service”", block: "risk" },
+      crlf,
+    );
+    expect(res.report!.verified_in_block).toBe(1);
+    const whole = one({ text: "“correlated slashing risk across every service”" }, crlf);
+    expect(whole.report!.verified_in_source).toBe(1);
+  });
+
+  test("the preview cap never splits an astral code point", () => {
+    // An astral LETTER (CJK Extension B): a span must hold letters or digits.
+    const res = one({ text: `“${"\u{20000}".repeat(200)}”` });
+    expect(res.report!.findings[0]!.span).toBe("\u{20000}".repeat(QUOTE_SPAN_PREVIEW_MAX_CHARS));
+  });
+
   test("findings index the claim they came from", () => {
     const res = checkClaimQuotes({
       claims: [{ text: "“reuses staked capital”", block: "abc" }, { text: "“not there”" }],

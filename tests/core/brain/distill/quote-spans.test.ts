@@ -138,6 +138,48 @@ describe("normalizeForQuoteComparison", () => {
     );
   });
 
+  test("removes only paired emphasis delimiters, never an underscore or star inside a word", () => {
+    expect(normalizeForQuoteComparison("snake_case 2*3")).toBe("snake_case 2*3");
+    expect(normalizeForQuoteComparison("a *b* __c__ d_e_f")).toBe("a b c d_e_f");
+  });
+
+  test("a numbered line inside a paragraph is text; a list after a blank line is a list", () => {
+    expect(normalizeForQuoteComparison("Intro line\n1999) was a year")).toBe(
+      "Intro line 1999) was a year",
+    );
+    expect(normalizeForQuoteComparison("Intro line\n\n1999) was a year")).toBe(
+      "Intro line was a year",
+    );
+    expect(normalizeForQuoteComparison("Key points:\n- one\n2. two")).toBe("Key points: one two");
+  });
+
+  test("removes a trailing block id before a CR", () => {
+    expect(normalizeForQuoteComparison("first line ^p1\r\nsecond")).toBe("first line second");
+    expect(normalizeForQuoteComparison("glued^p1")).toBe("glued^p1");
+  });
+
+  test("bracket-type quotation marks fold to the double mark for comparison", () => {
+    const low9 = `Er sagte ${cp(0x201e)}ja${cp(0x201c)} dann`;
+    const curly = `Er sagte ${cp(0x201c)}ja${cp(0x201d)} dann`;
+    expect(normalizeForQuoteComparison(low9)).toBe(normalizeForQuoteComparison(curly));
+    expect(normalizeForQuoteComparison(`${cp(0x300c)}ja${cp(0x300d)} (x)`)).toBe(`"ja" (x)`);
+  });
+
+  test("stays linear on long runs of spaces and brackets", () => {
+    const size = 256 * 1024;
+    for (const text of [
+      `a${" ".repeat(size)}b`,
+      "[[".repeat(size / 2),
+      "[".repeat(size),
+      "*a ".repeat(size / 3),
+      `${"^".repeat(size)} x`,
+    ]) {
+      const started = performance.now();
+      normalizeForQuoteComparison(text);
+      expect(performance.now() - started).toBeLessThan(200);
+    }
+  });
+
   test("collapses whitespace and trims", () => {
     expect(normalizeForQuoteComparison("  a \n\n\t b  ")).toBe("a b");
   });

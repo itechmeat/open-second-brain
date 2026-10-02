@@ -18,7 +18,7 @@
  * claim and source bytes themselves are never normalised.
  */
 
-import { resolveBlock } from "./block-resolve.ts";
+import { indexBlocks, lookupBlock, type BlockIndex } from "./block-resolve.ts";
 import type { DistillClaim } from "./claim.ts";
 import {
   findQuoteSpans,
@@ -75,24 +75,22 @@ type Target =
     }
   | { readonly kind: "settled"; readonly outcome: QuoteCheckOutcome };
 
-/** Builds each claim's target, normalising the whole source at most once. */
+/**
+ * Builds each claim's target. The whole source is normalised at most once,
+ * its blocks are indexed at most once, and each cited block is resolved and
+ * normalised at most once however many claims cite it.
+ */
 function targetResolver(evidence: QuoteEvidence): (claim: DistillClaim) => Target {
   if (evidence.kind !== "text") {
     const settled: Target = { kind: "settled", outcome: TEXTLESS_OUTCOME[evidence.kind] };
     return () => settled;
   }
   let wholeSource: Target | undefined;
-  return (claim) => {
-    if (claim.block === undefined) {
-      wholeSource ??= {
-        kind: "haystack",
-        normalized: normalizeForQuoteComparison(evidence.text),
-        verified: QUOTE_CHECK_OUTCOME.verifiedInSource,
-        failed: QUOTE_CHECK_OUTCOME.notInSource,
-      };
-      return wholeSource;
-    }
-    const block = resolveBlock(evidence.text, claim.block);
+  let blocks: BlockIndex | undefined;
+  const byBlock = new Map<string, Target>();
+  const blockTarget = (blockId: string): Target => {
+    blocks ??= indexBlocks(evidence.text);
+    const block = lookupBlock(blocks, blockId);
     switch (block.kind) {
       case "found":
         return {
@@ -106,6 +104,23 @@ function targetResolver(evidence: QuoteEvidence): (claim: DistillClaim) => Targe
       case "ambiguous":
         return { kind: "settled", outcome: QUOTE_CHECK_OUTCOME.blockAmbiguous };
     }
+  };
+  return (claim) => {
+    if (claim.block === undefined) {
+      wholeSource ??= {
+        kind: "haystack",
+        normalized: normalizeForQuoteComparison(evidence.text),
+        verified: QUOTE_CHECK_OUTCOME.verifiedInSource,
+        failed: QUOTE_CHECK_OUTCOME.notInSource,
+      };
+      return wholeSource;
+    }
+    let target = byBlock.get(claim.block);
+    if (target === undefined) {
+      target = blockTarget(claim.block);
+      byBlock.set(claim.block, target);
+    }
+    return target;
   };
 }
 
