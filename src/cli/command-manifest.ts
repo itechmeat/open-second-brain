@@ -72,6 +72,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
       flag("writer-only", "boolean"),
       flag("tool-profile", "string"),
       flag("host-target", "string"),
+      flag("harness", "string"),
       flag("probe", "boolean"),
       flag("allow-tool", "string-array"),
       flag("disable-tool", "string-array"),

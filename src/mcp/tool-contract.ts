@@ -17,6 +17,7 @@ import type { OutputSchema } from "./output-contract.ts";
 import type { ArtifactStore } from "./artifact-store.ts";
 import type { ProgressSink } from "../core/brain/progress.ts";
 import type { ToolCeilingKind } from "../core/runtime/host-facts.ts";
+import type { HarnessId } from "../core/brain/scoped-rules.ts";
 
 /**
  * The tool surfaces a server process can advertise.
@@ -108,6 +109,23 @@ export interface ToolCapabilityReport {
   readonly withheld: ToolCapabilityEntry[];
 }
 
+/**
+ * The launch-time facts the scoped standing rules resolve their scope
+ * from (`src/core/brain/scope-identity.ts`), fixed per server process.
+ *
+ * Both are owned by whoever STARTED the process - the working directory
+ * it was started in and the `--harness` (or `--host-target`) its packaged
+ * registration names - and neither can be named by a caller: no tool
+ * takes a harness or a workspace argument, and
+ * `tests/core/architecture/harness-identity-census.test.ts` keeps it so.
+ */
+export interface RuleScopeSources {
+  /** The process working directory captured at launch; `null` when none was given. */
+  readonly workspaceDir: string | null;
+  /** `--harness`, else `--host-target`, else `null`. */
+  readonly harness: HarnessId | null;
+}
+
 export interface ServerContext {
   readonly vault: string;
   readonly configPath: string | null;
@@ -149,6 +167,12 @@ export interface ServerContext {
    * Optional so a manually-built context stays valid and unscoped.
    */
   readonly agentName?: string;
+  /**
+   * Where the scoped standing rules look for their scope. Optional so a
+   * manually-built context stays valid; absent resolves no project and
+   * no harness, so a hand-built context matches no scoped file.
+   */
+  readonly ruleScope?: RuleScopeSources;
 }
 
 export interface ToolDefinition {

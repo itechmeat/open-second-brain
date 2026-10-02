@@ -49,6 +49,7 @@ import { PROGRESS_REASON, type ProgressSink } from "../core/brain/progress.ts";
 import { listResources, listResourceTemplates, readResource } from "./resources.ts";
 import { buildToolTable, findTool } from "./tools.ts";
 import type {
+  RuleScopeSources,
   ServerContext,
   ToolCapabilityReport,
   ToolDefinition,
@@ -60,6 +61,8 @@ import { applyPreviewBudget } from "./preview-budget.ts";
 import { evaluateToolCapabilities, type RuntimeCapabilityWindow } from "./capabilities.ts";
 import { redactErrorForCaller } from "./error-redaction.ts";
 import type { InstallTargetId } from "../core/runtime/host-facts.ts";
+import type { HarnessId } from "../core/brain/scoped-rules.ts";
+import { resolveHarnessScope } from "../core/brain/scope-identity.ts";
 import {
   resolvedTransportReach,
   TRANSPORT_REACH,
@@ -86,6 +89,19 @@ export interface MCPServerRuntimeOptions {
    * ceiling; absent means the ceiling is reported as unchecked.
    */
   readonly hostTarget?: InstallTargetId;
+  /**
+   * The harness that launched this process, from `o2b mcp --harness` in a
+   * packaged registration. Only the scoped standing rules read it, to pick
+   * `Brain/standing-rules/harness/<id>.md`; absent falls back to
+   * {@link hostTarget}, since every install target is a harness.
+   */
+  readonly harness?: HarnessId;
+  /**
+   * The working directory this process was launched in, captured once by
+   * the CLI. The scoped standing rules resolve the project from the
+   * nearest vault pointer above it; absent means no project.
+   */
+  readonly workspaceDir?: string;
   /**
    * Run id grouping this process's preview artifacts under
    * `Brain/.artifacts/<run-id>/`. Defaults to a per-process id;
@@ -168,6 +184,8 @@ export class MCPServer {
   private readonly sendNotification: ((notification: JsonRpcNotification) => void) | undefined;
   /** See {@link MCPServerRuntimeOptions.reach}; fail-closed when unminted. */
   readonly reach: TransportReach;
+  /** Launch-time scope sources for the scoped standing rules. */
+  private readonly ruleScope: RuleScopeSources;
 
   constructor(opts: MCPServerOptions, runtimeOpts: MCPServerRuntimeOptions = {}) {
     this.vault = opts.vault;
@@ -186,6 +204,10 @@ export class MCPServer {
     this.routeMetricsEnabled = routeMetricsGate(this.configPath ?? undefined);
     this.sendNotification = runtimeOpts.sendNotification;
     this.reach = resolvedTransportReach(runtimeOpts.reach);
+    this.ruleScope = Object.freeze({
+      workspaceDir: runtimeOpts.workspaceDir ?? null,
+      harness: resolveHarnessScope(runtimeOpts.harness, runtimeOpts.hostTarget),
+    });
     const runId = runtimeOpts.artifactRunId ?? `run-${process.pid}-${Date.now().toString(36)}`;
     this.artifactStore = new ArtifactStore({ vault: this.vault, runId });
     // Best-effort housekeeping: clear prior processes' stale artifacts.
@@ -206,6 +228,7 @@ export class MCPServer {
       capabilityReport: this.capabilityReport,
       artifactStore: this.artifactStore,
       reach: this.reach,
+      ruleScope: this.ruleScope,
       // Owner-scope isolation (context-integrity-gates, Unit A): the
       // only source of identity for `brain_context`, which takes no
       // arguments. Resolved per access, like `resolveAgentName`'s other
