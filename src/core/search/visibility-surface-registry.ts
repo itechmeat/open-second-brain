@@ -835,9 +835,9 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
     reason:
       "readDigestLatest (resources.ts) hands renderDigest the request view below local reach: a " +
       "preference or retired record the caller cannot read is absent from every row and count, " +
-      "with the log events, backlink sources and action targets naming one; the agent summary " +
-      "still counts every event in the window, and the token-footprint action measures the " +
-      "whole vault.",
+      "with the log events, backlink sources and action targets naming one, and the agent " +
+      "summary counts only the events the caller may read; the token-footprint action " +
+      "measures the whole vault.",
   },
   {
     surface: "osb://status",

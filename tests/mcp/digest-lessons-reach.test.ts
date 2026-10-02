@@ -53,6 +53,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * the digest's default 24-hour activity window.
  */
 const EVIDENCE_AGE_MS = 3 * DAY_MS;
+/** Inside the digest's 24-hour activity window, so the agent summary counts the event. */
+const RECENT_EVIDENCE_AGE_MS = DAY_MS / 24;
 /** Any ISO-8601 instant, date or minute stamp: the two vaults are built seconds apart. */
 const STAMP_RE = /\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?Z?)?/g;
 
@@ -114,14 +116,14 @@ function applied(vault: string, slug: string, at: string): void {
   );
 }
 
-function fixture(withPrivate: boolean): Fixture {
+function fixture(withPrivate: boolean, evidenceAgeMs = EVIDENCE_AGE_MS): Fixture {
   const base = mkdtempSync(join(tmpdir(), "o2b-digest-lessons-reach-"));
   bases.push(base);
   const vault = join(base, "vault");
   const configPath = join(base, "config.yaml");
   atomicWriteFileSync(configPath, `vault: ${vault}\nagent_name: claude\n`);
   bootstrapBrain(vault, { configPath });
-  const evidenceAt = new Date(Date.now() - EVIDENCE_AGE_MS).toISOString();
+  const evidenceAt = new Date(Date.now() - evidenceAgeMs).toISOString();
   confirmed(vault, SHARED_SLUG, SHARED_PRINCIPLE);
   applied(vault, SHARED_SLUG, evidenceAt);
   if (withPrivate) {
@@ -209,6 +211,27 @@ describe("the activity and lessons digests treat a withheld record as absent at 
       expect(withheld).toBe(absent);
     });
   }
+
+  test("the agent summary of brain_brief view=digest leaves out an event about a reserved record", async () => {
+    const withheld = await briefDigest(
+      fixture(true, RECENT_EVIDENCE_AGE_MS),
+      TRANSPORT_REACH.remote,
+      "json",
+    );
+    const absent = await briefDigest(
+      fixture(false, RECENT_EVIDENCE_AGE_MS),
+      TRANSPORT_REACH.remote,
+      "json",
+    );
+    expect(withheld).toContain("apply_evidence_count");
+    expect(withheld).toBe(absent);
+    const local = await briefDigest(
+      fixture(true, RECENT_EVIDENCE_AGE_MS),
+      TRANSPORT_REACH.local,
+      "json",
+    );
+    expect(local).not.toBe(absent);
+  });
 
   test("the osb://digest/latest resource answers identically", () => {
     const withheld = resource(fixture(true), TRANSPORT_REACH.remote, DIGEST_URI);

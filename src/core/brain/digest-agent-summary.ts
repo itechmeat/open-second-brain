@@ -34,12 +34,19 @@ interface AgentAccumulator {
   retired_attributed: number;
 }
 
+/**
+ * `keep` answers whether the caller may count an event; an event it
+ * refuses moves no count and attributes no rule. Without it every event
+ * in the window is counted.
+ */
 export function computeAgentSummary(
   vault: string,
   since: Date,
   until: Date,
+  keep?: (entry: BrainLogEntry) => boolean,
 ): ReadonlyArray<AgentSummaryEntry> {
-  const logs = readLogsInWindow(vault, since, until);
+  const windowed = readLogsInWindow(vault, since, until);
+  const logs = keep === undefined ? windowed : windowed.filter(keep);
   const byAgent = new Map<string, AgentAccumulator>();
 
   for (const entry of logs) {

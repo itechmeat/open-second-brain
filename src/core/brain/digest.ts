@@ -570,7 +570,12 @@ function collectDigestData(
     jaccard: c.jaccard,
   }));
 
-  const agent_summary = computeAgentSummary(vault, since, until);
+  const agent_summary = computeAgentSummary(
+    vault,
+    since,
+    until,
+    refs.filtersNothing ? undefined : (e) => refs.row(...logEntryArtifactRefs(e)),
+  );
 
   // Most-applied (Nd) — mirrors the section in `Brain/active.md`.
   // The window length / limit come from `_brain.yaml`. A vault that has
