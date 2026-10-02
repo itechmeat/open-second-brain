@@ -67,7 +67,7 @@ function extractFile(file: string): SourceExtraction {
   }
   const read = readSourceBounded(file, HTML_EXTRACT_MAX_SOURCE_BYTES);
   if (read.unread !== undefined) {
-    return { extractor: null, format: sourceFormatOf(file), reason: UNREAD_REASON[read.unread] };
+    return { extractor: null, format, reason: UNREAD_REASON[read.unread] };
   }
   return extractSource(file, read.bytes);
 }
