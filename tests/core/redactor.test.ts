@@ -31,6 +31,16 @@ describe("stripPrivateRegions", () => {
     expect(stripPrivateRegions(input)).toBe(`keep ${PRIVATE_REGION_PLACEHOLDER}`);
   });
 
+  test("an open tag whose attributes hold a bracket still opens a region", () => {
+    const input = 'a <private note="x<y">hidden</private> b';
+    expect(stripPrivateRegions(input)).not.toContain("hidden");
+    expect(privateRegionTexts(input).join("")).toContain("hidden");
+  });
+
+  test("an open tag cut off by the end of the text opens a region there", () => {
+    expect(stripPrivateRegions("keep <private note=")).toBe(`keep ${PRIVATE_REGION_PLACEHOLDER}`);
+  });
+
   test("strips nested private regions atomically", () => {
     const input = "before <private>a<private>b</private>c</private> after";
     expect(stripPrivateRegions(input)).toBe(`before ${PRIVATE_REGION_PLACEHOLDER} after`);
@@ -51,7 +61,7 @@ describe("stripPrivateRegions", () => {
       [
         "open tags that never end in a bracket",
         `x ${runOf("<private ")}`,
-        `x ${runOf("<private ")}`,
+        `x ${PRIVATE_REGION_PLACEHOLDER}`,
       ],
       ["a region of unended open tags", `${OPEN}${runOf("<private ")}`, PRIVATE_REGION_PLACEHOLDER],
     ];
@@ -61,9 +71,8 @@ describe("stripPrivateRegions", () => {
         const out = stripPrivateRegions(input);
         const elapsed = performance.now() - started;
         expect(out).toBe(expected);
-        expect(privateRegionTexts(input).join("").length).toBe(
-          expected === PRIVATE_REGION_PLACEHOLDER ? input.length : 0,
-        );
+        const kept = expected.replace(PRIVATE_REGION_PLACEHOLDER, "");
+        expect(privateRegionTexts(input).join("").length).toBe(input.length - kept.length);
         expect(elapsed).toBeLessThan(LINEAR_CEILING_MS);
       });
     }

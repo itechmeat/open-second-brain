@@ -107,9 +107,12 @@ export function wasScanTruncated(text: string): boolean {
 /**
  * An open tag's attributes stop at the next `<` as well as at `>`: with
  * `[^>]*` a run of `<private ` with no closing bracket made every attempt
- * scan to the end of the text, quadratic in its length.
+ * scan to the end of the text, quadratic in its length. A tag whose
+ * attributes reach a `<` or the end of the text still opens a region
+ * there, so the bound never narrows what counts as private: the rule
+ * fails closed and stays linear.
  */
-const PRIVATE_OPEN_TAG_RE = /<private\b[^<>]*>/gi;
+const PRIVATE_OPEN_TAG_RE = /<private\b[^<>]*(?:>|(?=<)|$)/gi;
 const PRIVATE_CLOSE_TAG_RE = /<\/private>/gi;
 
 /**
