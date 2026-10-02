@@ -640,16 +640,13 @@ function moduleDependenciesRegionBody(
   notLinked: ReadonlyArray<string>,
 ): string {
   if (module.manifests.length === 0) return NO_MODULE_MANIFEST;
-  const lines = [
-    ...(targets.length === 0
-      ? notLinked.length === 0
-        ? [NO_DEPENDS_ON]
-        : []
-      : ["Depends on:", ...targets.map((name) => `- ${moduleLink(key, name)}`)]),
-    ...(notLinked.length === 0
+  const linked =
+    targets.length === 0
       ? []
-      : [`${NOT_LINKED_LEAD} ${notLinked.map(codeSpanName).join(", ")}`]),
-  ];
+      : ["Depends on:", ...targets.map((name) => `- ${moduleLink(key, name)}`)];
+  const unlinked =
+    notLinked.length === 0 ? [] : [`${NOT_LINKED_LEAD} ${notLinked.map(codeSpanName).join(", ")}`];
+  const lines = linked.length + unlinked.length === 0 ? [NO_DEPENDS_ON] : [...linked, ...unlinked];
   return `${dependencySections(module.manifests, new Set())}\n\n${lines.join("\n")}`;
 }
 
