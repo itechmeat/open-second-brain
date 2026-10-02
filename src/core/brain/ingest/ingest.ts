@@ -38,6 +38,11 @@ import { intakeExtraction, type ExtractionIntake } from "../intake/extract-intak
 import { normalizeSourceIdentity } from "../intake/source-trust.ts";
 import { untrustedSourceFrontmatter } from "../trust/untrusted-provenance.ts";
 import {
+  captureScopeForTrust,
+  captureScopeFrontmatter,
+  type CaptureScope,
+} from "../provenance/capture-scope.ts";
+import {
   renderProvenanceSection,
   sourceIdentityHash,
   type Provenance,
@@ -102,6 +107,14 @@ export interface IngestSourceResult {
   /** Pre-existing entity ids this source connected to (its connections). */
   readonly connections: readonly string[];
   /**
+   * How much of the source this page's knowledge was captured from: the
+   * intake's lane for the cited source, as a capture scope. `full-local` for
+   * a vault file, `url-only` for a source with no local bytes. Ingest never
+   * stores an excerpt, so it never answers `bounded-local`: the summary is a
+   * paraphrase, not a capture.
+   */
+  readonly captureScope: CaptureScope;
+  /**
    * Code-structure pre-extraction seeds (P4), present only when the pass was
    * requested via {@link IngestSourceOptions.preExtract}. `extracted: false`
    * when the source is not a supported code file or has no readable bytes -
@@ -154,6 +167,7 @@ export function ingestSource(
     provenance,
   });
   const trust = intake.trust;
+  const captureScope = captureScopeForTrust(trust);
   const connections = intake.entitiesUpdated;
   const allEntities = [...intake.entitiesCreated, ...intake.entitiesUpdated];
 
@@ -179,6 +193,9 @@ export function ingestSource(
     // reason rather than ranking it beside the operator's own notes. Trusted
     // sources add nothing, keeping their page byte-identical to before.
     ...untrustedSourceFrontmatter(trust),
+    // Says how much of the source was captured when it is less than the
+    // whole file; a full-local source adds nothing, for the same reason.
+    ...captureScopeFrontmatter(captureScope),
     created_at: createdAt,
     updated_at: stamp,
     tags: ["brain", "brain/source"],
@@ -237,6 +254,7 @@ export function ingestSource(
     entitiesCreated: intake.entitiesCreated,
     entitiesUpdated: intake.entitiesUpdated,
     connections,
+    captureScope,
     ...(preExtract !== undefined ? { preExtract } : {}),
   };
 }
