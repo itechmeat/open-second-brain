@@ -499,7 +499,13 @@ async function toolBrainDiarize(
       // filtered through the same gated view every other report surface
       // here uses - an unscoped list would publish another owner's
       // preference ids as citation targets.
-      { now: new Date(), ownerScope: gatedOwnerScopeView(ctx.vault, ctx.agentName).scope },
+      // A page the caller may not read at its reach is withheld from the
+      // candidates exactly as an absent one.
+      {
+        now: new Date(),
+        ownerScope: gatedOwnerScopeView(ctx.vault, ctx.agentName).scope,
+        readable: readableAtContextReach(ctx),
+      },
     );
     return {
       entity_id: report.entityId,

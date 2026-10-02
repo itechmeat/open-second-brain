@@ -288,7 +288,7 @@ function dreamRun(
   // the ladder is planned before the `changed` gate, and the runId
   // collision path below re-plans - so an eager build paid that walk on
   // every dry run that fires nothing, and twice on a collision.
-  const linkCandidates = memoizedLinkCandidates(vault, opts.agentName);
+  const linkCandidates = memoizedLinkCandidates(vault, opts.agentName, opts.readable);
 
   // Count-triggered fact rollup ladder (S3): pure counters over the
   // ADMITTED fact artifacts (preferences) against the persisted per-tier
@@ -581,12 +581,17 @@ function buildRollupPlan(
 function memoizedLinkCandidates(
   vault: string,
   agentName: string | undefined,
+  readable: ((rel: string) => boolean) | undefined,
 ): () => LinkCandidateManifest {
   let manifest: LinkCandidateManifest | null = null;
-  return () =>
-    (manifest ??= buildLinkCandidateManifest(vault, {
-      visible: gatedOwnerScopeView(vault, agentName).visible,
-    }));
+  return () => {
+    if (manifest !== null) return manifest;
+    const ownerView = gatedOwnerScopeView(vault, agentName);
+    manifest = buildLinkCandidateManifest(vault, {
+      visible: (rel) => ownerView.visible(rel) && (readable?.(rel) ?? true),
+    });
+    return manifest;
+  };
 }
 
 function formatRunId(d: Date): string {

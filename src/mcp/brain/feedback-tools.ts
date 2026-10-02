@@ -91,6 +91,7 @@ import {
   vaultRelativeSafe,
 } from "./shared.ts";
 import { OPERATION } from "../../core/brain/safeguard.ts";
+import { readableAtContextReach } from "./reach-readable.ts";
 
 /**
  * Build the slug used in the signal / preference filename. We never let
@@ -461,6 +462,9 @@ async function toolBrainDream(
   // One view for the whole call: every branch below reports preference
   // and signal ids, and the staged lifecycle reports them twice.
   const dreamView = gatedOwnerScopeView(ctx.vault, ctx.agentName);
+  // The rollup step's link candidates leave out a page the caller may not
+  // read at its reach, exactly as an absent page.
+  const readable = readableAtContextReach(ctx);
 
   // Single-step requests (no-dead-ends, Unit E - operator surface).
   // Deliberately checked before any environment work: a step the pass
@@ -530,6 +534,7 @@ async function toolBrainDream(
     const stageOpts = {
       now,
       safeguard: toolSafeguard(ctx, OPERATION.dream),
+      readable,
       ...(agent ? { agentName: agent } : {}),
       ...(onProgress ? { onProgress } : {}),
     };
@@ -635,6 +640,7 @@ async function toolBrainDream(
     const preview = dream(ctx.vault, {
       dryRun: true,
       safeguard,
+      readable,
       ...(nowDate ? { now: nowDate } : {}),
       ...(agent ? { agentName: agent } : {}),
       // Preview the run being guarded, overrides and all.
@@ -658,6 +664,7 @@ async function toolBrainDream(
   const summary = dream(ctx.vault, {
     dryRun,
     safeguard,
+    readable,
     ...(nowDate ? { now: nowDate } : {}),
     ...(agent ? { agentName: agent } : {}),
     ...(gates !== undefined ? { gates } : {}),

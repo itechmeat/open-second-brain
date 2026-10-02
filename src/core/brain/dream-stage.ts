@@ -156,6 +156,8 @@ export interface DreamStageOptions {
    */
   readonly onProgress?: DreamOptions["onProgress"];
   readonly agentName?: string;
+  /** Forwarded to the dream pass's link-candidate filter; see `DreamOptions.readable`. */
+  readonly readable?: DreamOptions["readable"];
 }
 
 /** Sorted-copy helper keeping projections order-insensitive. */
@@ -323,6 +325,7 @@ export function stageDream(vault: string, opts: DreamStageOptions): DreamStageBu
     ...(opts.safeguard !== undefined ? { safeguard: opts.safeguard } : {}),
     ...(opts.onProgress !== undefined ? { onProgress: opts.onProgress } : {}),
     ...(opts.agentName !== undefined ? { agentName: opts.agentName } : {}),
+    ...(opts.readable !== undefined ? { readable: opts.readable } : {}),
   });
   const plan = projectDreamPlan(summary);
   const salience = projectSalienceGate(summary.salience_gate);

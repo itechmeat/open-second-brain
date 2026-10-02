@@ -216,6 +216,15 @@ export interface DreamOptions {
    */
   readonly agentName?: string;
   /**
+   * May the caller read the page at this vault-relative path at its
+   * reach? ANDed into the link-candidate filter beside the owner scope, so
+   * a page withheld from the caller is not offered as a citation target
+   * nor counted in the manifest's total, exactly as an absent page. The
+   * MCP handler binds it to `readableAtContextReach(ctx)`; absent (the
+   * CLI) filters nothing beyond the owner scope.
+   */
+  readonly readable?: (rel: string) => boolean;
+  /**
    * Cooperative deadline (t_06784b8d). Checkpointed at exactly five
    * points, in order: entry, before the pre-run snapshot, before the
    * first mutation, after the mutation writes, and immediately before

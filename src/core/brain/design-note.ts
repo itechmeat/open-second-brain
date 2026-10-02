@@ -206,6 +206,15 @@ export interface PlanDesignNoteOptions {
    * it and leak in silence.
    */
   readonly ownerScope: string | null;
+  /**
+   * May the caller read the page at this vault-relative path at its
+   * reach? ANDed into the link-candidate filter beside the owner scope, so
+   * a page withheld from the caller is not offered as a citation target
+   * nor counted in the manifest's total, exactly as an absent page. The
+   * MCP handler binds it to `readableAtContextReach(ctx)`; absent (the
+   * CLI) filters nothing beyond the owner scope.
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 export interface CommitDesignNoteOptions {
@@ -378,9 +387,10 @@ export function planDesignNote(
   const grounding = designNoteGrounding(vault, trimmed);
   const slug = slugify(trimmed);
   const targetPath = posix.join(DESIGN_NOTE_DIR_REL, noteBasename(slug, opts.now));
+  const ownerView = ownerScopeView(vault, opts.ownerScope);
   const linkCandidates = buildLinkCandidateManifest(vault, {
     query: trimmed,
-    visible: ownerScopeView(vault, opts.ownerScope).visible,
+    visible: (rel) => ownerView.visible(rel) && (opts.readable?.(rel) ?? true),
   });
   return Object.freeze({
     topic: trimmed,

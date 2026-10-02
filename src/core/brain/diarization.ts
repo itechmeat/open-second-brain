@@ -116,6 +116,15 @@ export interface DiarizationOptions {
    * the one failure mode this option exists for.
    */
   readonly ownerScope: string | null;
+  /**
+   * May the caller read the page at this vault-relative path at its
+   * reach? ANDed into the link-candidate filter beside the owner scope, so
+   * a page withheld from the caller is not offered as a citation target
+   * nor counted in the manifest's total, exactly as an absent page. The
+   * MCP handler binds it to `readableAtContextReach(ctx)`; absent (the
+   * CLI) filters nothing beyond the owner scope.
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 function toPosixRel(vault: string, abs: string): string {
@@ -249,9 +258,10 @@ export function diarize(
   // The subject and its aliases are the query: a profile cites the notes
   // that are about its subject, and those are the ones an over-bound
   // vault has to keep when the manifest truncates.
+  const ownerView = ownerScopeView(vault, opts.ownerScope);
   const linkCandidates = buildLinkCandidateManifest(vault, {
     query: [entity.name, ...entity.aliases].join(" "),
-    visible: ownerScopeView(vault, opts.ownerScope).visible,
+    visible: (rel) => ownerView.visible(rel) && (opts.readable?.(rel) ?? true),
   });
   const llmStep: DiarizationLlmStep = buildNeedsLlmStep({
     step: PROFILE_PROSE_STEP,

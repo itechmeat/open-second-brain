@@ -19,6 +19,7 @@ import { coerceStr } from "../coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { vaultRelativeSafe, wrapToolErrors } from "./shared.ts";
+import { readableAtContextReach } from "./reach-readable.ts";
 
 const TOOL = "brain_design_note";
 
@@ -41,6 +42,7 @@ async function toolBrainDesignNote(
       const report = planDesignNote(ctx.vault, topic, {
         now: new Date(),
         ownerScope: gatedOwnerScopeView(ctx.vault, ctx.agentName).scope,
+        readable: readableAtContextReach(ctx),
       });
       const g = report.grounding;
       return {
