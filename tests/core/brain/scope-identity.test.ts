@@ -74,17 +74,18 @@ describe("resolveProjectScope", () => {
   });
 });
 
-describe("resolveProjectScope and the serving vault", () => {
-  function linkedTree(): { root: string; vault: string; project: string } {
-    const root = mkTemp("o2b-scope-serving-");
-    const vault = join(root, "vault");
-    const project = join(root, "client-a");
-    mkdirSync(vault, { recursive: true });
-    mkdirSync(project, { recursive: true });
-    writeVaultPointer(project, vault);
-    return { root, vault, project };
-  }
+/** A vault and a project `client-a` linked to it. */
+function linkedTree(): { root: string; vault: string; project: string } {
+  const root = mkTemp("o2b-scope-serving-");
+  const vault = join(root, "vault");
+  const project = join(root, "client-a");
+  mkdirSync(vault, { recursive: true });
+  mkdirSync(project, { recursive: true });
+  writeVaultPointer(project, vault);
+  return { root, vault, project };
+}
 
+describe("resolveProjectScope and the serving vault", () => {
   test("a pointer naming another vault in a subdirectory is skipped", () => {
     const { root, vault, project } = linkedTree();
     const other = join(root, "other-vault");
