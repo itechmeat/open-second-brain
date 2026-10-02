@@ -46,6 +46,7 @@ import {
   DANGLING_LINK_DEFINITION,
   measureFromIndex,
   type LinkRatchetMeasurement,
+  type LinkRatchetUnmeasurableReason,
 } from "../../core/search/link-ratchet.ts";
 import { coerceBool } from "../coerce.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
@@ -122,6 +123,19 @@ function findingView(vault: string, finding: HygieneFinding): Record<string, unk
 }
 
 /**
+ * The `link_integrity.reason` a scan reports below local reach, where the
+ * count is not taken at all (docs/mcp.md, `brain_hygiene`). It sits beside
+ * the reasons the measurement itself returns, in
+ * {@link LinkIntegrityReason}.
+ */
+export const LINK_INTEGRITY_REACH_REASON = "reach" as const;
+
+/** Every `link_integrity.reason` a scan can report. */
+export type LinkIntegrityReason =
+  | LinkRatchetUnmeasurableReason
+  | typeof LINK_INTEGRITY_REACH_REASON;
+
+/**
  * Vault-wide link integrity, reported beside the detector findings
  * (context-integrity-gates, unit G).
  *
@@ -148,7 +162,7 @@ async function linkIntegrityView(ctx: ServerContext): Promise<Record<string, unk
     return {
       definition: DANGLING_LINK_DEFINITION,
       measured: false,
-      reason: "reach",
+      reason: LINK_INTEGRITY_REACH_REASON satisfies LinkIntegrityReason,
       detail: "link integrity is measured over the whole index and is reported at local reach only",
     };
   }
@@ -165,7 +179,7 @@ async function linkIntegrityView(ctx: ServerContext): Promise<Record<string, unk
     return {
       definition: DANGLING_LINK_DEFINITION,
       measured: false,
-      reason: "index-unreadable",
+      reason: "index-unreadable" satisfies LinkIntegrityReason,
       detail: e instanceof Error ? e.message : String(e),
     };
   }
@@ -173,7 +187,7 @@ async function linkIntegrityView(ctx: ServerContext): Promise<Record<string, unk
     return {
       definition: measurement.definition,
       measured: false,
-      reason: measurement.reason,
+      reason: measurement.reason satisfies LinkIntegrityReason,
       detail: measurement.detail,
     };
   }

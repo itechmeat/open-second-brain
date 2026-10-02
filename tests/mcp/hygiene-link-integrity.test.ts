@@ -20,7 +20,7 @@ import { indexVault } from "../../src/core/search/indexer.ts";
 import { resolveSearchConfig } from "../../src/core/search/index.ts";
 import { DANGLING_LINK_DEFINITION } from "../../src/core/search/link-ratchet.ts";
 import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
-import { HYGIENE_TOOLS } from "../../src/mcp/brain/hygiene-tools.ts";
+import { HYGIENE_TOOLS, LINK_INTEGRITY_REACH_REASON } from "../../src/mcp/brain/hygiene-tools.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 
 const SCAN_KEYS_BEFORE = [
@@ -120,6 +120,6 @@ test("at remote reach the count is not measured, so it cannot tell a withheld pa
 
   expect(withheld).toEqual(absent);
   expect(withheld.measured).toBe(false);
-  expect(withheld.reason).toBe("reach");
+  expect(withheld.reason).toBe(LINK_INTEGRITY_REACH_REASON);
   expect(withheld.dangling).toBeUndefined();
 });
