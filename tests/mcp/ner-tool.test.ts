@@ -205,11 +205,12 @@ describe("brain_intake_entities - a page withheld at the caller's reach", () => 
       expect(page).not.toContain(SOURCE_CONTENT_HASH_FRONTMATTER_KEY);
   });
 
-  test("at local reach the same page is trusted and digested", async () => {
+  test("at local reach the same page is trusted, and no digest of it is recorded", async () => {
+    // The entity pages do not inherit the page's reservation, so its digest
+    // would be readable where the page is not.
     const res = await intake(PRIVATE_PATH, { ...ctx, reach: TRANSPORT_REACH.local });
     expect(res.trust).toBe(INTAKE_TRUST.trusted);
-    expect(
-      brainPageTexts(vault).some((page) => page.includes(SOURCE_CONTENT_HASH_FRONTMATTER_KEY)),
-    ).toBe(true);
+    for (const page of brainPageTexts(vault))
+      expect(page).not.toContain(SOURCE_CONTENT_HASH_FRONTMATTER_KEY);
   });
 });
