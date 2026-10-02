@@ -124,11 +124,11 @@ names. Without multiplexing nothing changes: the plugin reads the
 process environment as before.
 
 When one of these variables is also set in the gateway process
-environment, the gateway log names it once per process, never its
-value:
+environment, the gateway log names it once per process with a WARNING
+from the plugin's config module, never its value:
 
 ```
-WARNING plugins.hermes.config: open-second-brain: ignoring VAULT_AGENT_NAME from the gateway process environment on a multiplexed gateway; set it in the profile's .env instead
+open-second-brain: ignoring VAULT_AGENT_NAME from the gateway process environment on a multiplexed gateway; set it in the profile's .env instead
 ```
 
 If the gateway bound no profile scope for a call, the plugin refuses to
