@@ -47,6 +47,40 @@ instruction files such as `CLAUDE.md`/`AGENTS.md`, installed
 `.claude/skills/`) and warns with the exact replacement for any stale
 reference it finds (`removed-tool-reference`).
 
+## Upgrading to 1.68.0
+
+No step below is required. Four changes are visible to an operator or a
+client.
+
+**Architecture notes gain dependency regions and one owned frontmatter
+key.** `o2b brain architect` now reads dependency manifests at the root
+and at each module. On an existing project the first run appends a
+`module-dependencies` region to the overview and a `dependencies`
+region to each module note, so it reports those notes `updated` once.
+A module note whose manifest depends on another module gets a
+`depends_on` frontmatter key that the generator owns and rewrites on
+every run; a value typed under that key is replaced. `--json` gains a
+`manifests` list. See [`how-it-works.md`](how-it-works.md).
+
+**The pre-extractor reads Terraform.** `o2b brain pre-extract` and
+`brain_ingest_source` with `pre_extract` now return seeds for `.tf` and
+`.tfvars` files, which used to report `extracted: false`.
+
+**URL credentials in import specifiers are redacted.** An import
+specifier such as `https://user:pass@host/m.js` is emitted with its
+credentials replaced in every family's `imports` seeds. Specifiers
+without credentials are unchanged.
+
+**More tools treat a record the caller cannot read at its reach as
+absent.** A remote client now gets, for such a record, exactly the
+answer an absent one gets from `brain_context`, the
+`osb://preferences/active` resource, `brain_pre_compress_pack`,
+`brain_health` and the `brain_doctor` repair plan and apply. The
+resource also follows the owner gate under
+`integrity.owner_scope_delivery: fail`, as `brain_context` does. A local
+caller and the CLI see no change. See the 1.68.0 entry in
+[`CHANGELOG.md`](../CHANGELOG.md).
+
 ## Upgrading to 1.67.0
 
 No step below is required. Six changes are visible to an operator or a

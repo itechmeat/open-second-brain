@@ -2062,3 +2062,19 @@ format characters), when it contains NUL, or when it exceeds the cap.
   plan's `unclassifiable` counts of other files are the same at every
   reach), and `brain_ingest_source` records a source in
   the content manifest only in the trusted lane.
+- Since v1.68.0 more readers treat a record the caller cannot read at its
+  reach as absent. `brain_context`, the `osb://preferences/active`
+  resource and `brain_pre_compress_pack` hand a remote caller the active
+  digest without such a preference or retired record: its line, its
+  count and its most-applied entry go, and the pack's top-K walk skips
+  it. When nothing is withheld the digest is the file's own bytes, as
+  before. The resource also follows the owner gate now, as
+  `brain_context` does, so under `integrity.owner_scope_delivery: fail`
+  it answers with the caller's own view. `brain_health` drops a finding
+  any of whose members the caller cannot read, and `brain_doctor` with
+  `repair` derives its plan only from findings the caller can read: such
+  a record is neither planned, counted under `unfixable`, nor written by
+  `apply`. `brain_ingest_source` with `pre_extract` reads Terraform
+  (`.tf`, `.tfvars`) and redacts URL credentials in every import
+  specifier (see `o2b brain pre-extract` in
+  [`cli-reference.md`](cli-reference.md)).

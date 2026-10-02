@@ -1284,10 +1284,11 @@ an existing file is never touched, so operator curation owns the
 draft from the moment it exists.
 
 Architecture knowledge gets the same treatment via `o2b brain
-architect <project-path>`: a stdlib-only scanner derives structural
-facts (module layout, language mix, entry points, manifests, test
-layout - no LLM, no network) and renders an overview plus per-module
-notes under `Brain/projects/arch/<repo-key>/`. Generated content
+architect <project-path>`: a scanner that uses the built-in runtime
+only, no dependency, derives structural facts (module layout, language
+mix, entry points, manifests, test layout - no LLM, no network) and
+renders an overview plus per-module notes under
+`Brain/projects/arch/<repo-key>/`. Generated content
 lives between paired `<!-- o2b:begin <id> -->` / `<!-- o2b:end <id>
 -->` sentinels: regeneration replaces only generated bodies, operator
 prose outside regions survives byte-for-byte, and corrupted markers
@@ -1300,7 +1301,37 @@ dot-directory and no build or dependency output (`node_modules`,
 state. A run reports its two stages - `walk`, a counter with no
 denominator, and `render`, which knows its note count - through the
 progress spine, and honours a safeguard deadline at each directory
-read. The same release also closes the
+read.
+
+Since v1.68.0 the scan reads dependency manifests at the project root
+and at each detected module: `package.json`, `pyproject.toml` (PEP 621
+and Poetry), `Cargo.toml` and `go.mod`. `pom.xml`, `build.gradle`,
+`Gemfile` and `composer.json` are detected and reported `unsupported`
+by name. Every manifest gets one status - `read`, `malformed` (with the
+parser's message), `unreadable` (with the error code) or `unsupported`
+- and one bad manifest never aborts the run. The overview's
+`dependencies` region lists the manifests with their statuses and the
+runtime dependencies per ecosystem, one canonical name each (PyPI names
+normalised per PEP 503, a renamed Cargo dependency by its real crate
+name), and counts the dev, build, optional, peer and indirect groups on
+one line per ecosystem instead of listing them. The project name comes
+from the first root manifest read, in the order `package.json`,
+`pyproject.toml`, `Cargo.toml`, `go.mod`.
+
+A module whose manifest declares a runtime dependency on the manifest
+name of exactly one other module gets a declared edge; a name two
+modules carry binds nothing. The edges render in their own
+`module-dependencies` region (a Mermaid diagram under its own claim:
+declared by manifests, not measured from imports), in a `dependencies`
+region on each module note, and as a `depends_on` frontmatter key on
+the module note, a YAML list of wikilinks to the target module notes,
+which the indexer turns into typed `depends_on` links. The generator
+owns that one key: it rewrites it on every run, removes it when a
+module has no edge, overwrites any value typed under it, and never
+touches another frontmatter key. The `module-map` region stays
+containment only. On an existing overview or module note the new
+regions are appended at the end of the note, once, so the first run
+after an upgrade reports those notes `updated`. The same release also closes the
 observability gap v0.39.0 left open: `brain_query` now emits opt-in
 recall telemetry with a kind-only payload, so the supplied preference
 id, topic, or timestamp never lands in a continuity record.
