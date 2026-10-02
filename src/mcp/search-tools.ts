@@ -48,7 +48,7 @@ import {
   RETRIEVAL_TRAIL_KEY,
   retrievalTrailEnvelope,
 } from "../core/search/retrieval-trail.ts";
-import { probeRetrievalCorpus } from "../core/search/pipeline/outcome.ts";
+import { corpusVerdictAtReach, probeRetrievalCorpus } from "../core/search/pipeline/outcome.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
 import type { ToolErrorCode } from "./tool-error-codes.ts";
 import { contextReach } from "./tool-contract.ts";
@@ -1392,9 +1392,10 @@ async function toolBrainRecallGate(
  * that reads no claim graph has no grounds for `did_not_happen`.
  */
 async function assessNegativeRecall(ctx: ServerContext): Promise<NegativeRecallVerdict> {
-  return probeRetrievalCorpus(() =>
+  const verdict = await probeRetrievalCorpus(() =>
     resolveSearchConfig({ vault: ctx.vault, configPath: ctx.configPath ?? undefined }),
   );
+  return corpusVerdictAtReach(verdict, contextReach(ctx));
 }
 
 const RECALL_FEEDBACK_INPUT_SCHEMA: Record<string, unknown> = {

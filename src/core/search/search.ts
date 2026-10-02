@@ -397,7 +397,12 @@ export async function search(
     if (idsList.length === 0) {
       // Nothing to rank, so this answer owes an explanation: the lanes
       // either named why, or the corpus statement does.
-      const corpus = await corpusStatementForEmptyWindow(() => effectiveConfig, 0, degraded);
+      const corpus = await corpusStatementForEmptyWindow(
+        () => effectiveConfig,
+        0,
+        degraded,
+        opts.transportReach,
+      );
       return finalize(
         emptyOutcome({
           store,
@@ -511,6 +516,7 @@ export async function search(
       () => effectiveConfig,
       results.length,
       degraded,
+      opts.transportReach,
     );
 
     // A decision-model fallback (degraded, inactive or skipped) and a

@@ -682,6 +682,23 @@ export function classifyNegativeRecall(input: NegativeRecallInput): NegativeReca
   });
 }
 
+/**
+ * The verdict for a reader below local reach. The coverage receipt counts
+ * every indexed document, including pages that reader cannot read, so it
+ * is left out, and a `not_found` reason names the index time only. Every
+ * other field is the verdict's own.
+ */
+export function withoutCorpusCounts(verdict: NegativeRecallVerdict): NegativeRecallVerdict {
+  const { coverage, ...rest } = verdict;
+  if (coverage === undefined) return verdict;
+  return Object.freeze({
+    ...rest,
+    ...(verdict.state === NEGATIVE_RECALL_STATE.notFound
+      ? { reason: `no match in the index as of ${coverage.last_indexed_at ?? "an unknown time"}` }
+      : {}),
+  });
+}
+
 /** Every `unknown` leaves through here, so the shape cannot drift. */
 function unknownVerdict(
   reason: NegativeRecallUnknownReason,

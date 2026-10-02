@@ -12,7 +12,12 @@
 import { ACCESS_EVENT_PATHS_CAP, recordAccessEvent } from "../activation/store.ts";
 import { toSearchCard } from "../cards.ts";
 import { DEFAULT_DISCLOSURE_MODE, DISCLOSURE_MODE } from "../disclosure-mode.ts";
-import { classifyNegativeRecall } from "../../brain/negative-recall.ts";
+import { classifyNegativeRecall, withoutCorpusCounts } from "../../brain/negative-recall.ts";
+import {
+  resolvedTransportReach,
+  TRANSPORT_REACH,
+  type TransportReach,
+} from "../../graph/transport-reach.ts";
 import { buildEvidencePack, downrankTerminalEvidenceResults } from "../evidence-pack.ts";
 import { buildRetrievalTrail, corpusStatementFor } from "../retrieval-trail.ts";
 import { buildEvidenceVerification, coverageOverResults } from "../evidence-verification.ts";
@@ -320,7 +325,22 @@ export async function corpusStatementForEmptyWindow(
   resolveConfig: () => ResolvedSearchConfig,
   retrieved: number,
   degraded: ReadonlyArray<RetrievalDegradation>,
+  reach: TransportReach | undefined,
 ): Promise<RetrievalCorpusStatement | null> {
   if (retrieved > 0 || degraded.length > 0) return null;
-  return corpusStatementFor(await probeRetrievalCorpus(resolveConfig));
+  return corpusStatementFor(corpusVerdictAtReach(await probeRetrievalCorpus(resolveConfig), reach));
+}
+
+/**
+ * The corpus verdict a caller at `reach` is told: below local reach the
+ * index counts are left out ({@link withoutCorpusCounts}), because they
+ * count pages that caller cannot read.
+ */
+export function corpusVerdictAtReach(
+  verdict: NegativeRecallVerdict,
+  reach: TransportReach | undefined,
+): NegativeRecallVerdict {
+  return resolvedTransportReach(reach) === TRANSPORT_REACH.local
+    ? verdict
+    : withoutCorpusCounts(verdict);
 }

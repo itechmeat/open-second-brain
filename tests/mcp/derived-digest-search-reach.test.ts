@@ -37,6 +37,10 @@ const ACTIVE_PATH = "Brain/active.md";
 /** An ordinary page every reach may read: the remote half's positive control. */
 const OPEN_MARKER = "zzopenprobezz";
 const OPEN_PATH = "Notes/open.md";
+/** A query nothing in the fixture matches, so the answer is the corpus statement. */
+const ABSENT_QUERY = "zzabsentprobezz";
+/** How the corpus statement names its document count. */
+const COUNT_WORDING = "document(s)";
 const RESERVE_LINE = `visibility: [${REMOTE_DENY_VISIBILITY_TOKEN}]`;
 
 const bases: string[] = [];
@@ -111,6 +115,17 @@ describe("the indexed active digest and remote search", () => {
   test("a remote search still finds an ordinary page", async () => {
     const remote = await search(await fixture(), TRANSPORT_REACH.remote, OPEN_MARKER);
     expect(remote).toContain(OPEN_PATH);
+  });
+
+  test("a remote search with no match states no index counts", async () => {
+    // The counts cover every indexed page, the reserved one included, so a
+    // remote caller is told only that nothing matched and when the index
+    // was built; the local half proves the counts are there to leave out.
+    const f = await fixture();
+    expect(await search(f, TRANSPORT_REACH.local, ABSENT_QUERY)).toContain(COUNT_WORDING);
+    const remote = await search(f, TRANSPORT_REACH.remote, ABSENT_QUERY);
+    expect(remote).toContain("no match in the index as of");
+    expect(remote).not.toContain(COUNT_WORDING);
   });
 
   test("the digest page is withheld at remote reach even when nothing is reserved", async () => {

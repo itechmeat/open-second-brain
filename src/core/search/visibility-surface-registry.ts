@@ -93,7 +93,9 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "calls core/search/search.ts's search() directly, which runs assembleRankedResults -> " +
       "applyPoolFilters -> applyVisibilityScope (pool-filters.ts:130) on every result before " +
       "returning it, unconditionally - the empty-scope-hides-tagged-pages rule applies even when " +
-      "the caller passes no visibility argument at all.",
+      "the caller passes no visibility argument at all. A zero-result answer below local " +
+      "reach names the index time only: the coverage receipt and its document counts, which " +
+      "count every indexed page, are left out (corpusVerdictAtReach in pipeline/outcome.ts).",
   },
   {
     surface: "brain_file_context",
@@ -526,7 +528,8 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
     category: C.excluded,
     reason:
       "a diagnostic classifier over caller-supplied scores/match_quality - it runs no search and " +
-      "returns no note content; included for completeness of the file-level sweep only.",
+      "returns no note content; included for completeness of the file-level sweep only. Its " +
+      "corpus statement below local reach carries no coverage receipt (corpusVerdictAtReach).",
   },
   {
     surface: "brain_recall_feedback",
