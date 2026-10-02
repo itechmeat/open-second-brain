@@ -338,7 +338,14 @@ export function runDoctor(vault: string, opts: RunDoctorOptions = {}): RunDoctor
   let semanticReport: SemanticHealthReport | undefined;
   try {
     const health = ctx.config ? resolveHealth(ctx.config) : BRAIN_HEALTH_DEFAULTS;
-    semanticReport = checkSemanticHealth(vault, ctx.preferences, findings.issues, health, ctx.now);
+    semanticReport = checkSemanticHealth(
+      vault,
+      ctx.preferences,
+      findings.issues,
+      health,
+      ctx.now,
+      ctx.readable,
+    );
   } catch {
     /* doctor never throws */
   }

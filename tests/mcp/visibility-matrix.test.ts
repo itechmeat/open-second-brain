@@ -498,9 +498,10 @@ const COVERED_TOOLS: ReadonlySet<string> = new Set(
  * should. A surface leaving this list is the wave that covered it; a
  * surface joining it is a regression, and either way the diff says so.
  *
- * The list is per RECIPE rather than per tool because a tool is not one
- * classification: `brain_trigger operation=scan` names the pages it
- * queued and `brain_trigger operation=terminal` does not.
+ * The list is per RECIPE rather than per tool because a tool need not be
+ * one classification: `brain_trigger operation=scan` named the pages it
+ * queued while a transition did not, until the reach view joined its
+ * owner view and its sources ran over the readable records.
  */
 const STILL_NAMED_AT_REMOTE: ReadonlySet<string> = new Set([
   "brain_anticipatory_context",
@@ -508,9 +509,6 @@ const STILL_NAMED_AT_REMOTE: ReadonlySet<string> = new Set([
   "brain_retention",
   "brain_scaffold_stub action=list",
   "brain_stale_scan",
-  "brain_trigger operation=history",
-  "brain_trigger operation=list",
-  "brain_trigger operation=scan",
 ]);
 
 /**

@@ -331,7 +331,9 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "recounts the tier-drift warning over the rows readableAtContextReach(ctx) keeps. The " +
       "doctor pass is handed the same predicate, so the counts its checks take before any " +
       "issue is filtered answer at the caller's reach too: a withheld page spends no slot of " +
-      "the removed-tool warning cap and a withheld state moves no stale-dependency count. The " +
+      "the removed-tool warning cap or of the per-code uncertain cap, is neither a state nor a " +
+      "consumer in the stale-dependency audit, and adds no principle, topic or preference to " +
+      "the semantic-health detectors behind the concept-gap and contradiction warnings. The " +
       "repair branch hands applyRepair the caller's reach, which bounds the findings before the " +
       "plan is derived, so a withheld record is neither planned, counted nor written.",
   },
@@ -359,10 +361,13 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
     kind: K.mcpTool,
     category: C.covered,
     reason:
-      "runs runDoctor's semantic-health pass and names preferences by id in its contradiction, " +
-      "stale-claim and batch-inflation findings; each finding is kept only when every member " +
-      "passes the gated owner view ANDed with reachView, and the verdict is folded again over " +
-      "the kept families.",
+      "runs runDoctor's semantic-health pass handed readableAtContextReach(ctx), so the " +
+      "detectors read only the preferences and signals the caller may read: concept_gaps (a " +
+      "term and its frequency over principle text, which no reference view can judge) and the " +
+      "suppressed counts are taken over those principles and topics, and a withheld preference " +
+      "joins no contradiction, stale claim or batch. Each finding naming preferences by id is " +
+      "then kept only when every member passes the gated owner view ANDed with reachView, and " +
+      "the verdict is folded again over the kept families.",
   },
   {
     surface: "brain_status",
@@ -737,6 +742,28 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "brain_obligation: synthesizeAgenda folds the caller-supplied calendar events into " +
       "conflicts and focus blocks and never reads a vault page, so no note path, title or body " +
       "crosses this surface.",
+  },
+  {
+    surface: "brain_trigger",
+    kind: K.mcpTool,
+    category: C.covered,
+    reason:
+      "scan runs scanTriggers handed readableAtContextReach(ctx), so its semantic-health and " +
+      "retention sources read only the records the caller may read: the candidates total counts " +
+      "none it may not, and a scan from a remote caller writes no trigger about a withheld " +
+      "record. Every trigger row - created, skipped, list, history - is kept only when each " +
+      "artifact it names (source_artifacts, the wikilinks in its reason, the cooldown key " +
+      "segments) passes the gated owner view ANDed with reachView, and a transition on a trigger " +
+      "the caller may not see is refused with the 'unknown trigger' error an absent id gets.",
+  },
+  {
+    surface: "brain_intention",
+    kind: K.mcpTool,
+    category: C.excluded,
+    reason:
+      "swept in for file-level completeness because workspace-tools.ts also registers " +
+      "brain_trigger: list and show return intention chains - Brain-authored scope records with " +
+      "their text, history and path - and set and move write them, with no visibility check.",
   },
 
   // --- Excluded: CLI verbs, one per MCP tool above that has a CLI mirror ----

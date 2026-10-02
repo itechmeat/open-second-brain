@@ -19,6 +19,8 @@ import {
   parseWikilinkRich,
 } from "../../core/brain/link-graph/parse-wikilink.ts";
 import { gatedOwnerScopeView } from "../../core/brain/owner-scope-view.ts";
+import { everyArtifactRefView } from "../../core/brain/artifact-ref-view.ts";
+import { reachView } from "../../core/brain/reach-view.ts";
 import {
   isTriggerStatus,
   TRIGGER_STATUSES,
@@ -33,7 +35,8 @@ import {
 } from "../../core/brain/intentions.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { TOOL_ERROR_CODE } from "../tool-error-codes.ts";
-import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
+import { contextReach, type ServerContext, type ToolDefinition } from "../tool-contract.ts";
+import { readableAtContextReachOrUndefined } from "./reach-readable.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { coerceStr, unknownOperationError } from "../coerce.ts";
 
@@ -158,11 +161,24 @@ function toolBrainTrigger(
   // A trigger row is dropped WHOLE when any artifact it names is
   // withheld: `reason` and `cooldown_key` repeat the same ids the
   // `source_artifacts` list holds, so trimming the list alone would
-  // leave the prose naming what the list no longer does.
-  const view = gatedOwnerScopeView(ctx.vault, ctx.agentName);
+  // leave the prose naming what the list no longer does. The reach view
+  // joins the owner view: below local reach a trigger naming a record
+  // the caller cannot read answers as an absent one.
+  const view = everyArtifactRefView(
+    gatedOwnerScopeView(ctx.vault, ctx.agentName),
+    reachView(ctx.vault, contextReach(ctx)),
+  );
   if (operation === "scan") {
     const cooldownDays = resolveTriggerCooldownDays(ctx.configPath ?? undefined);
-    const result = scanTriggers(ctx.vault, { now, cooldownDays });
+    // The sources run over the records this caller may read, so the
+    // `candidates` total counts none it may not, and a scan from a remote
+    // caller writes no trigger about a withheld record.
+    const readable = readableAtContextReachOrUndefined(ctx);
+    const result = scanTriggers(ctx.vault, {
+      now,
+      cooldownDays,
+      ...(readable !== undefined ? { readable } : {}),
+    });
     return {
       operation,
       candidates: result.candidates,

@@ -282,6 +282,9 @@ const NOTE_CONTENT_PRODUCERS: ReadonlyArray<ProducerRule> = Object.freeze([
     specifierIncludes: "/brain/obligations.ts",
     identifiers: ["listObligations", "showObligation"],
   },
+  // The trigger scan folds semantic health and the retention review into
+  // queued triggers that name the records they fired on.
+  { specifierIncludes: "/brain/triggers/scan.ts", identifiers: ["scanTriggers"] },
   {
     specifierIncludes: "/brain/truth/",
     identifiers: ["computeTruthStateWithConflicts", "aggregateQuantities", "detectAgentCollisions"],
@@ -493,8 +496,12 @@ function reasonProblems(entries: ReadonlyArray<VisibilitySurfaceEntry>): {
  * 56 before the vocabulary gained the obligation readers. The two new
  * names are `brain_obligation`, which listed and showed a withheld
  * obligation page, and `brain_agenda` on the file-level rule.
+ *
+ * 58 before the vocabulary gained the trigger scan. The two new names
+ * are `brain_trigger`, whose scan queued and counted triggers about
+ * withheld records, and `brain_intention` on the file-level rule.
  */
-const MCP_TOOL_POPULATION_SIZE = 58;
+const MCP_TOOL_POPULATION_SIZE = 60;
 /** Measured: MCP resources + templates. */
 const MCP_RESOURCE_POPULATION_SIZE = 8;
 /** Measured: hand-enumerated CLI verb mirrors. */
@@ -576,6 +583,7 @@ describe("visibility surface census", () => {
         "brain_search_expand",
         "brain_skill_proposals",
         "brain_tiers",
+        "brain_trigger",
         "brain_unlinked_mentions",
         "brain_writes",
         "schema_inspect",

@@ -15,6 +15,13 @@ import type { InsightCandidate } from "./types.ts";
 export interface ScanTriggersOptions extends CreateTriggersOptions {
   /** Extra candidates from other producers (synthesis, ideas). */
   readonly extraCandidates?: ReadonlyArray<InsightCandidate>;
+  /**
+   * The vault-relative paths the scanning reader may read. When given,
+   * the semantic-health and retention sources run over those records
+   * only, so a withheld record yields no candidate, is counted in no
+   * total and is written into no trigger. Absent: every record.
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 export interface ScanTriggersResult extends CreateTriggersResult {
@@ -30,7 +37,8 @@ export interface ScanTriggersResult extends CreateTriggersResult {
 export function scanTriggers(vault: string, opts: ScanTriggersOptions): ScanTriggersResult {
   const candidates: InsightCandidate[] = [];
   try {
-    const doctor = runDoctor(vault);
+    const readable = opts.readable;
+    const doctor = runDoctor(vault, readable !== undefined ? { readable } : {});
     if (doctor.semantic_health !== undefined) {
       candidates.push(...candidatesFromHealth(doctor.semantic_health));
     }
@@ -38,7 +46,15 @@ export function scanTriggers(vault: string, opts: ScanTriggersOptions): ScanTrig
     // semantic health unavailable - skip the source
   }
   try {
-    candidates.push(...candidatesFromRetention(buildRetentionReview(vault, { now: opts.now })));
+    const review = buildRetentionReview(vault, { now: opts.now });
+    const readable = opts.readable;
+    candidates.push(
+      ...candidatesFromRetention(
+        readable === undefined
+          ? review
+          : { ...review, recommendations: review.recommendations.filter((r) => readable(r.path)) },
+      ),
+    );
   } catch {
     // retention review unavailable - skip the source
   }

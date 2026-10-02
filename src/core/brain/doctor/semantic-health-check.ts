@@ -9,13 +9,14 @@
  */
 
 import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 
 import {
   reconcileSemanticHealth,
   type PreferenceForHealth,
   type SemanticHealthReport,
 } from "../health/reconcile.ts";
+import { toPosix } from "../../path-safety.ts";
 import { brainDirs } from "../paths.ts";
 import { BRAIN_HEALTH_DEFAULTS, loadBrainConfigDetailed, resolveHealth } from "../policy.ts";
 import { parseSignal } from "../signal.ts";
@@ -60,6 +61,7 @@ export function computeSemanticHealth(
 
 /** Minimal signal projection the semantic-health pass needs. */
 interface SignalSignRecord {
+  readonly path: string;
   readonly id: string;
   readonly sign: import("../types.ts").BrainSignalSign;
   readonly principle: string;
@@ -81,6 +83,7 @@ function readAllSignalRecords(vault: string): ReadonlyArray<SignalSignRecord> {
       try {
         const sig = parseSignal(join(dir, name));
         out.push({
+          path: join(dir, name),
           id: sig.id,
           sign: sig.signal,
           principle: sig.principle,
@@ -99,15 +102,28 @@ function readAllSignalRecords(vault: string): ReadonlyArray<SignalSignRecord> {
  * shared `issues` array as warnings, and return the structured report.
  * Confirmed preferences feed the contradiction and stale-claim passes;
  * signal + preference principles feed the concept-gap pass.
+ *
+ * `readable`, when given, bounds every input to the records the reader
+ * may read: a withheld principle adds no term to the concept gaps, a
+ * withheld topic covers none, and a withheld preference joins no
+ * contradiction, stale claim or batch - so each finding is the one the
+ * same vault without that record would yield.
  */
 export function checkSemanticHealth(
   vault: string,
-  prefRecords: ReadonlyArray<PreferenceRecord>,
+  allPrefRecords: ReadonlyArray<PreferenceRecord>,
   issues: DoctorIssue[],
   health: ResolvedBrainHealthConfig,
   now: Date,
+  readable?: (rel: string) => boolean,
 ): SemanticHealthReport {
-  const signals = readAllSignalRecords(vault);
+  const isReadable = (path: string): boolean =>
+    readable === undefined || readable(toPosix(relative(vault, path)));
+  const allSignals = readAllSignalRecords(vault);
+  const signals =
+    readable === undefined ? allSignals : allSignals.filter((s) => isReadable(s.path));
+  const prefRecords =
+    readable === undefined ? allPrefRecords : allPrefRecords.filter((r) => isReadable(r.path));
   const signSignById = new Map(signals.map((s) => [s.id, s.sign]));
   const preferences: PreferenceForHealth[] = prefRecords.map(({ pref }) => pref);
   const corpusPrinciples = [

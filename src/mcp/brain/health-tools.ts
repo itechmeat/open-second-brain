@@ -284,7 +284,13 @@ async function toolBrainHealth(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const format = coerceFormat(args);
-  const result = runDoctor(ctx.vault);
+  // The detectors run over the records this caller may read: a concept
+  // gap is a term and its frequency taken over principle TEXT, so the
+  // reference view below cannot judge it, and a withheld principle would
+  // otherwise name its own words. `undefined` at local reach with the
+  // owner gate off, so the operator's report is unchanged.
+  const readable = readableAtContextReachOrUndefined(ctx);
+  const result = runDoctor(ctx.vault, readable !== undefined ? { readable } : {});
   const sh = result.semantic_health;
   // Three of the four finding families name preferences by id, and the
   // batch-inflation family names their topics as well
@@ -326,7 +332,8 @@ async function toolBrainHealth(
       a_sign: c.aSign,
       b_sign: c.bSign,
     })),
-    // A term and its frequency; the only family that names no artifact.
+    // A term and its frequency, taken over the principles this caller
+    // may read; the only family that names no artifact.
     concept_gaps: conceptGaps.map((g) => ({
       term: g.term,
       frequency: g.frequency,
