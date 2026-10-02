@@ -2123,9 +2123,18 @@ format characters), when it contains NUL, or when it exceeds the cap.
   reason}`). For CSV and TSV, `## Table` holds fenced plain-text row
   groups under `### Rows <a>-<b>`. The first record is always the header,
   and every group repeats it, so each search chunk of the page carries
-  it; a group holds at most 50 rows and 600 tokens. The caps are 1,000
-  rows, 64 columns, 256 characters per cell and 256 KiB per section, and
-  each cut is named in `table_truncated`. The page gains
+  it, except the later pieces of a single row longer than a group's
+  token budget, which can still be split across chunks; a group holds at
+  most 50 rows and 600 tokens. A `.csv` file is read as
+  semicolon-delimited when its first record has at least two fields on
+  semicolons and more than on commas. Cells are joined by ` | `; inside
+  a cell a backslash, `|`, a backtick, a line feed, a carriage return
+  and a tab are written as `\\`, `\|`, ``\` ``, `\n`, `\r` and `\t`, and
+  every other control character (C0, DEL and C1) as `\u{XXXX}` with its
+  code point in hexadecimal, so no cell can end the fence or reach a
+  terminal raw. The caps are 1,000 rows, 64 columns, 256 characters per
+  cell and 256 KiB per section, and each cut is named in
+  `table_truncated`. The page gains
   `table_delimiter`, `table_columns`, `table_rows`,
   `table_rows_rendered` and `table_truncated` (absent when nothing was
   cut); the result gains `table` (`{rendered: true, format, delimiter,
@@ -2136,9 +2145,13 @@ format characters), when it contains NUL, or when it exceeds the cap.
   is replaced, and every other cell goes through the output redactor
   with URL credentials included; `redacted_cells` counts both. A
   credential no pass recognises stays on the indexed page and in its
-  embeddings, as it already sits in the file in the vault. A URL source,
-  an absent file and a file the caller cannot read at its reach all
-  answer `source-not-local`, with no digest and no section. A Markdown or
+  embeddings, as it already sits in the file in the vault. A summary page
+  that carries a derived section is at most as visible as its source: it
+  takes on the source's own `visibility` tokens, joined with any
+  `visibility` the page already had. A leading frontmatter block in an
+  HTML, CSV or TSV source is not extracted, so it is never read as table
+  data or text. A URL source, an absent file and a file the caller
+  cannot read at its reach all answer `source-not-local`, with no digest and no section. A Markdown or
   text source has no `parts` and no `table` key and its page is
   unchanged. An operator-set `visibility` on a summary page is now kept
   when its source is ingested again. `brain_recall_gate` accepts an
@@ -2152,8 +2165,11 @@ format characters), when it contains NUL, or when it exceeds the cap.
   the daily and weekly views leave out the status transitions,
   retirements and contradictions that name a record the caller cannot
   read (under its `pref-` or its `ret-` id), withhold a source pointer
-  when every evidence event citing it is about such a record, and take
-  no report snapshot and show no `delta`; the `events_by_kind` and
-  `vault_delta` counts are unchanged. The read-only preview of the same
+  when every evidence event citing it is about such a record, or when
+  the pointer names a page the caller cannot read, recompute the
+  `events_by_kind` and `vault_delta` counts from the events the caller
+  may see, and take no report snapshot and show no `delta`. The monthly,
+  operator and today views still count over the whole Brain layer. The
+  read-only preview of the same
   extraction is the CLI verb `o2b brain extract` (see
   [`cli-reference.md`](cli-reference.md)).

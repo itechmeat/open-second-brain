@@ -78,7 +78,10 @@ with `source_format`, `source_content_hash` and, for a table, five
 ingest after the upgrade of a source already ingested rewrites its page
 once with the new section and keys. Text and Markdown sources are
 unchanged. Table cells pass two redaction passes; see
-[`mcp.md`](mcp.md) for what they catch and what they do not.
+[`mcp.md`](mcp.md) for what they catch and what they do not. A summary
+page with a derived section takes on its source's `visibility`, so a
+source an operator reserved yields a summary page reserved the same
+way.
 
 **`visibility` is kept on re-ingest.** An operator-set `visibility` on a
 summary page used to be dropped when the source was ingested again; it
@@ -105,9 +108,9 @@ answer more exactly.** The root coverage of the `brain_search` and
 `brain_brief` views now answer at the caller's reach. Below local reach
 a root counts as reached only through a page the caller can read, and
 the daily and weekly views leave out rows and source pointers that only
-a record the caller cannot read accounts for, take no report snapshot
-and show no `delta`; their counts are unchanged. A local caller and the
-CLI see no change. `o2b brain architect` no longer says that no
+a record the caller cannot read accounts for, count only the events
+the caller may see, take no report snapshot and show no `delta`. A
+local caller and the CLI see no change. `o2b brain architect` no longer says that no
 module depends on another when every declared edge touches a module
 whose name a link cannot carry: it lists those edges as code spans, so
 an overview or module note in that state reports `updated` once.

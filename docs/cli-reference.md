@@ -1229,13 +1229,15 @@ nut | 7
 ````
 
 Any other file prints `not extracted: <reason>`, and `--json` returns
-`{path, extracted: false, format, reason, detail?}`: `format-read-verbatim`
+`{ok: true, path, extracted: false, format, reason, detail?}`:
+`format-read-verbatim`
 for Markdown and plain text, `format-not-extractable` for a named format
 such as PDF, `format-unknown` (with `format: null`) for an extension the
 registry does not know, and `not-a-regular-file`, `source-too-large`,
 `not-utf8` or a table refusal for a file that could not be read or
 parsed. The exit code is `0` in every one of these cases: a file that
-cannot be extracted is a result, not an error.
+cannot be extracted is a result, not an error. A path that does not
+exist or is a symbolic link is an error (exit code `1`).
 
 ### Knowledge packs
 

@@ -1526,18 +1526,40 @@ returns it.
 
 For CSV and TSV, the first record is the header. Quoted fields follow
 RFC 4180 leniently, a semicolon export is recognised from its first
-record, and an unterminated quote is refused by name with the record
-number. The rows are rendered as fenced plain text, not a Markdown
-table, in groups that each repeat the header and stay under one search
-chunk, so every chunk of the page carries the column names and a
-`Table > Rows a-b` heading path. Rows, columns, cell length and section
-size are capped, and every cut is named. A column whose header names a
+record (at least two fields on semicolons and more than on commas, so a
+header such as `name;"price, eur";qty` reads as three columns), and an
+unterminated quote is refused by name with the record number. A leading
+frontmatter block in the source is skipped for HTML and tables alike, so
+it is never read as data. The rows are rendered as fenced plain text,
+not a Markdown table, in groups that each repeat the header and stay
+under one search chunk, so every chunk of the page carries the column
+names and a `Table > Rows a-b` heading path. Rows, columns, cell length
+and section size are capped, and every cut is named. A column whose header names a
 credential has its values replaced, and every other cell goes through
-the output redactor. Two limits of the chunk alignment remain, and
-neither loses content: a single row longer than one group's token
-budget forms a group of its own and can still be split across search
-chunks, and a row whose first cell begins with three backticks reads to
-the chunker as a closing fence, which moves a chunk boundary.
+the output redactor. Inside a cell a backslash, `|`, a backtick, a line
+feed, a carriage return and a tab are escaped (`\\`, `\|`, ``\` ``,
+`\n`, `\r`, `\t`), and every other control character (C0, DEL and C1)
+is written as `\u{XXXX}` with its code point in hexadecimal, so no row
+line can open or close a fence and no escape sequence reaches a
+terminal. One limit of the chunk alignment remains, and it loses no
+content: a single row longer than one group's token budget forms a
+group of its own and can still be split across search chunks.
+
+The redactor does not catch everything in a cell. It replaces whole
+columns under a credential-named header, `key=value` and `key: value`
+pairs, JSON entries, Bearer tokens, JWTs, private regions and URL
+userinfo. It does not redact a bare vendor token (an access key with a
+vendor prefix and nothing naming it), a base64 or other high-entropy
+blob, a PEM block inside a quoted multi-line cell, or a credential-like
+value under a header that does not name a credential. Bare tokens are
+left on purpose, because a token pass would also erase order ids, SKUs
+and hashes. Such a value reaches the summary page, full-text search and
+the embeddings, as it already sits in the source file in the vault.
+
+A summary page that carries a derived section is at most as visible as
+its source: the source's own `visibility` tokens are joined with any the
+page already had, so a reader that cannot read the source cannot read
+what was derived from it.
 
 A Markdown or text source gets nothing new: its page is byte for byte
 what it was.
