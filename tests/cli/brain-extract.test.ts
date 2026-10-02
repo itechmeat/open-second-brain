@@ -8,11 +8,12 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { CLI_COMMAND_MANIFEST, type CliCommandManifest } from "../../src/cli/command-manifest.ts";
+import { HTML_EXTRACT_MAX_SOURCE_BYTES } from "../../src/core/brain/ingest/extract-html.ts";
 import { IS_WINDOWS } from "../helpers/platform.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
@@ -228,11 +229,26 @@ describe("o2b brain extract", () => {
     });
   });
 
-  test("a missing file is an error, not data", async () => {
-    const res = await runCli(["brain", "extract", join(work, "absent.html")]);
-    expect(res.returncode).toBe(1);
-    expect(res.stderr).toContain("absent.html");
+  test("a format with no extractor is named before the file is read", async () => {
+    const path = fixture("scan.pdf", "%PDF-1.7\n");
+    truncateSync(path, HTML_EXTRACT_MAX_SOURCE_BYTES + 1);
+    expect(await extractJson(path)).toEqual({
+      ok: true,
+      path,
+      extracted: false,
+      format: "pdf",
+      reason: "format-not-extractable",
+    });
   });
+
+  test.each(["absent.html", "absent.pdf"])(
+    "a missing file is an error, not data (%s)",
+    async (name) => {
+      const res = await runCli(["brain", "extract", join(work, name)]);
+      expect(res.returncode).toBe(1);
+      expect(res.stderr).toContain(name);
+    },
+  );
 
   test("no file argument is a usage error", async () => {
     const res = await runCli(["brain", "extract"]);

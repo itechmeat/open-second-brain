@@ -6,10 +6,13 @@
  * CSV or TSV file answers its table note (the counts and the rendered
  * section). Every other format - text read as it is, a named format with no
  * extractor, an unknown extension - answers `extracted: false` with the
- * reason by name. So does a file the bounded reader refuses (not a regular
- * file, larger than the read limit). "Could not extract" is data: every such
+ * reason by name, without reading the file. So does an HTML or table file
+ * the bounded reader refuses (not a regular file, larger than the read
+ * limit). "Could not extract" is data: every such
  * answer exits 0. Read-only and deterministic; nothing is written.
  */
+
+import { statSync } from "node:fs";
 
 import { oneLine } from "../../../core/brain/architect/manifests.ts";
 import {
@@ -22,12 +25,16 @@ import { readSourceBounded, type SourceUnread } from "../../../core/brain/ingest
 import {
   SOURCE_EXTRACT_SKIP_REASON,
   SOURCE_EXTRACTOR,
+  type SourceExtractor,
   sourceFormatOf,
+  sourceFormatSpec,
   type SourceExtractSkipReason,
 } from "../../../core/brain/ingest/source-formats.ts";
 import { fail, ok, okJson, parse, usageError } from "../helpers.ts";
 
 const USAGE = "usage: o2b brain extract <file> [--json]";
+/** The bytes handed to the dispatch for a format answered by name. */
+const NO_BYTES = new Uint8Array(0);
 /** How the text output names the format of an unregistered extension. */
 const UNKNOWN_FORMAT_LABEL = "unknown";
 
@@ -37,11 +44,27 @@ const UNREAD_REASON: Readonly<Record<SourceUnread, SourceExtractSkipReason>> = O
   "larger than the read limit": SOURCE_EXTRACT_SKIP_REASON.sourceTooLarge,
 });
 
+/** The extractors that read a source's bytes; every other format is answered by name. */
+const BYTE_READING_EXTRACTORS: ReadonlySet<SourceExtractor> = new Set([
+  SOURCE_EXTRACTOR.html,
+  SOURCE_EXTRACTOR.table,
+]);
+
 /**
- * The dispatch answer for `file`: its bytes through {@link extractSource},
- * or the bounded reader's refusal in the same shape as a format skip.
+ * The dispatch answer for `file`. A format with no byte-reading extractor
+ * (text read as it is, a named format with no extractor, an unknown
+ * extension) is answered by name without reading the file; it is only
+ * stat-ed, so a missing file stays an error. An HTML or table source goes
+ * through the bounded reader, whose refusal answers in the same shape as a
+ * format skip.
  */
 function extractFile(file: string): SourceExtraction {
+  const format = sourceFormatOf(file);
+  const extractor = format === null ? null : sourceFormatSpec(format).extractor;
+  if (extractor === null || !BYTE_READING_EXTRACTORS.has(extractor)) {
+    statSync(file);
+    return extractSource(file, NO_BYTES);
+  }
   const read = readSourceBounded(file, HTML_EXTRACT_MAX_SOURCE_BYTES);
   if (read.unread !== undefined) {
     return { extractor: null, format: sourceFormatOf(file), reason: UNREAD_REASON[read.unread] };
