@@ -9,12 +9,13 @@
  * regenerates byte-identically (the scanner is deterministic and the
  * renderer adds no timestamps).
  *
- * DECLARED EXCEPTIONS to that byte-identity guarantee - two of them, and
- * no others. Both are scoped to their own region: every other region, and
- * every byte of operator prose, still regenerates identically, and each
- * exception carries the whole provenance of what it was stamped from, so
- * a stale stamp describes its own reading rather than passing for a
- * current one.
+ * DECLARED EXCEPTIONS - three of them, and no others. The first two are
+ * exceptions to the byte-identity guarantee, each scoped to its own
+ * region: every other region, and every byte of operator prose, still
+ * regenerates identically, and each carries the whole provenance of what
+ * it was stamped from, so a stale stamp describes its own reading rather
+ * than passing for a current one. The third is an exception to the
+ * write-once frontmatter rule below.
  *
  *   - the overview's `codegraph` region states the codegraph partner's
  *     verdict, which is a fact about the machine and the partner index,
@@ -24,7 +25,17 @@
  *   - the key-decisions note lists the repo's ADR candidates, which the
  *     commit miner writes into the VAULT; mining new commits moves those
  *     bytes with no change to the repository at all. Stamped with each
- *     candidate's sha and matched signals.
+ *     candidate's sha and matched signals;
+ *   - a module note's `depends_on` frontmatter key is GENERATOR-OWNED and
+ *     rewritten on every run: the modules this module's manifests declare
+ *     a dependency on, as a YAML block list of quoted wikilinks, sorted,
+ *     and absent when there is none. It lives in frontmatter because a
+ *     frontmatter field named after a relation is the one way a typed
+ *     edge enters the search index; a region cannot carry one. The
+ *     generator touches exactly that key and no other, and overwrites
+ *     whatever an operator typed under it. It does not break byte
+ *     identity: an unchanged project renders the same key, and the merge
+ *     then returns the note's bytes untouched.
  *
  * The overview's `module-map` diagram is NOT an exception: it renders the
  * same scanned facts as every other region and moves only when the tree
@@ -33,7 +44,8 @@
  *
  * Frontmatter is written ONCE at file creation and never rewritten -
  * it carries static identity (kind, repo key, path), while every fact
- * that can change between scans lives inside a region.
+ * that can change between scans lives inside a region. The one exception
+ * is the generator-owned `depends_on` key above.
  *
  * Module REMOVAL keeps the old module note on disk (the operator may
  * have annotated it); the overview's module region reflects only the
@@ -413,6 +425,89 @@ function moduleLink(key: string, name: string): string {
   return `[[Brain/projects/arch/${key}/modules/${name}|${name}]]`;
 }
 
+/**
+ * The frontmatter key the generator owns on module notes. Named after the
+ * relation it produces, because the indexer turns a frontmatter field
+ * named after a known relation into typed links of that relation.
+ */
+export const DEPENDS_ON_KEY = "depends_on";
+
+/** The fence that opens and closes a note's frontmatter. */
+const FRONTMATTER_FENCE = "---";
+
+/** A YAML double-quoted scalar: backslash and quote are the two characters it escapes. */
+function yamlQuoted(text: string): string {
+  return `"${text.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+}
+
+/** The `depends_on` key as frontmatter lines, or no lines when the module has no edge. */
+function dependsOnLines(key: string, targets: ReadonlyArray<string>): ReadonlyArray<string> {
+  if (targets.length === 0) return [];
+  return [
+    `${DEPENDS_ON_KEY}:`,
+    ...targets.map((name) => `  - ${yamlQuoted(moduleLink(key, name))}`),
+  ];
+}
+
+/** A note whose frontmatter opens and never closes; the generator will not guess where it ends. */
+export class ArchFrontmatterError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ArchFrontmatterError";
+  }
+}
+
+/** A line without the `\r` a CRLF note leaves on it. */
+function bare(line: string): string {
+  return line.replace(/\r$/, "");
+}
+
+/**
+ * Rewrite one generator-owned frontmatter key, leaving every other byte
+ * of `text` as it was.
+ *
+ * The key's extent is its own line plus every following line that is
+ * indented or a block-list item, which is how YAML continues a value.
+ * Rendered `lines` replace that extent in place, or are appended before
+ * the closing fence when the key is absent; no lines remove it. A note
+ * without frontmatter gets one only when there is something to write. A
+ * frontmatter block that opens and never closes is refused by name
+ * rather than edited, as the region engine refuses broken sentinels.
+ * A CRLF note keeps CRLF on the lines written into it.
+ */
+function replaceGeneratorOwnedKey(text: string, key: string, lines: ReadonlyArray<string>): string {
+  const all = text.split("\n");
+  if (bare(all[0] ?? "") !== FRONTMATTER_FENCE) {
+    if (lines.length === 0) return text;
+    return [FRONTMATTER_FENCE, ...lines, FRONTMATTER_FENCE, text].join("\n");
+  }
+  const close = all.findIndex((line, index) => index > 0 && bare(line) === FRONTMATTER_FENCE);
+  if (close < 0) {
+    throw new ArchFrontmatterError(
+      `frontmatter opens with "${FRONTMATTER_FENCE}" and never closes - ` +
+        `the "${key}" key cannot be rewritten safely`,
+    );
+  }
+  const eol = all[close]!.endsWith("\r") ? "\r" : "";
+  const rendered = lines.map((line) => `${line}${eol}`);
+  const keyLine = new RegExp(`^${key}\\s*:`);
+  const start = all.findIndex((line, index) => index > 0 && index < close && keyLine.test(line));
+  if (start < 0) {
+    all.splice(close, 0, ...rendered);
+    return all.join("\n");
+  }
+  let end = start + 1;
+  while (end < close && /^(?:\s|-)/.test(all[end]!)) end += 1;
+  all.splice(start, end - start, ...rendered);
+  return all.join("\n");
+}
+
+/** One generator-owned frontmatter key and the lines it renders to. */
+interface OwnedKey {
+  readonly key: string;
+  readonly lines: ReadonlyArray<string>;
+}
+
 /** The modules `module` declares a dependency on, sorted. */
 function dependsOn(facts: ProjectFacts, module: ModuleFact): ReadonlyArray<string> {
   return facts.moduleDependencies
@@ -563,7 +658,12 @@ interface PlannedNote {
  * order, which made it predictable but no less wrong: an operator asked
  * to repair one note found the rest of the tree already half-refreshed.
  */
-function planNote(path: string, head: string, regions: ReadonlyArray<Region>): PlannedNote {
+function planNote(
+  path: string,
+  head: string,
+  regions: ReadonlyArray<Region>,
+  owned?: OwnedKey,
+): PlannedNote {
   if (!existsSync(path)) {
     return {
       path,
@@ -572,7 +672,18 @@ function planNote(path: string, head: string, regions: ReadonlyArray<Region>): P
     };
   }
   const existing = readFileSync(path, "utf8");
-  const merged = mergeRegions(existing, regions);
+  const regionsMerged = mergeRegions(existing, regions);
+  let merged = regionsMerged;
+  if (owned !== undefined) {
+    try {
+      merged = replaceGeneratorOwnedKey(regionsMerged, owned.key, owned.lines);
+    } catch (error) {
+      if (error instanceof ArchFrontmatterError) {
+        throw new ArchFrontmatterError(`${path}: ${error.message}`);
+      }
+      throw error;
+    }
+  }
   if (merged === existing) return { path, text: null, disposition: NOTE_DISPOSITION.unchanged };
   return { path, text: merged, disposition: NOTE_DISPOSITION.updated };
 }
@@ -671,11 +782,14 @@ function renderNotes(
   );
   for (const module of facts.modules) {
     opts.safeguard?.checkpoint();
+    const targets = dependsOn(facts, module);
+    const owned = { key: DEPENDS_ON_KEY, lines: dependsOnLines(key, targets) };
     plans.push(
       planNote(
         modulePath(dir, module),
-        frontmatter("arch-module", key, [`module: ${module.name}`]),
-        moduleRegions(key, module, dependsOn(facts, module)),
+        frontmatter("arch-module", key, [`module: ${module.name}`, ...owned.lines]),
+        moduleRegions(key, module, targets),
+        owned,
       ),
     );
   }
