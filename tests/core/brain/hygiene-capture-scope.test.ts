@@ -119,6 +119,16 @@ afterEach(() => {
 });
 
 describe("detectCaptureScope", () => {
+  test("a finding that opens a fence and never closes it does not hide the report", () => {
+    const report = writeResearchReport(
+      vault,
+      { title: "T", sources: [URL_B], findings: [{ statement: "x\n```", sources: [URL_B] }] },
+      { agent: "claude", now: NOW },
+    );
+
+    expect(findingsFor(report.reportPath)).toHaveLength(1);
+  });
+
   test("a research report citing only URLs is one review warning naming the URLs", () => {
     const report = writeResearchReport(
       vault,

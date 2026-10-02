@@ -136,6 +136,20 @@ describe("sourcesSectionTargets", () => {
     expect(sourcesSectionTargets(body)).toEqual(["https://example.com/a"]);
   });
 
+  test("a fence that never closes is text and hides nothing after it", () => {
+    const body = [
+      "## Findings",
+      "",
+      "- x",
+      "```",
+      "",
+      "## Sources",
+      "",
+      "- [[https://example.com/b]]",
+    ];
+    expect(sourcesSectionTargets(body.join("\n"))).toEqual(["https://example.com/b"]);
+  });
+
   test("a deeper heading inside the section ends it too", () => {
     expect(sourcesSectionTargets("## Sources\n- [[a.md]]\n### Sub\n- [[b.md]]\n")).toEqual([
       "a.md",

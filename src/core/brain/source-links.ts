@@ -44,6 +44,35 @@ function closesFence(line: string, opener: string): boolean {
   );
 }
 
+/**
+ * Which lines sit inside a fenced code block, fence lines included. Only a
+ * closed fence is a fence: an opener with no closing line before the end of
+ * the body is plain text, as are the lines after it, so caller text that
+ * opens a fence and never closes it cannot hide the structure that follows.
+ * Two linear passes at most: the single pass that pairs fences, then the
+ * unmarking of the one span that can be left open.
+ */
+function fencedLineMask(lines: ReadonlyArray<string>): boolean[] {
+  const mask = Array.from({ length: lines.length }, () => false);
+  let fence: string | null = null;
+  let openedAt = 0;
+  for (const [i, line] of lines.entries()) {
+    if (fence !== null) {
+      mask[i] = true;
+      if (closesFence(line, fence)) fence = null;
+      continue;
+    }
+    const opened = FENCE_RE.exec(line);
+    if (opened !== null) {
+      fence = opened[1]!;
+      openedAt = i;
+      mask[i] = true;
+    }
+  }
+  if (fence !== null) mask.fill(false, openedAt);
+  return mask;
+}
+
 /** The string members of a frontmatter list field; anything else reads as empty. */
 export function stringArrayField(meta: FrontmatterMap, key: string): ReadonlyArray<string> {
   const value = meta[key];
@@ -64,7 +93,8 @@ export function wikilinkTarget(raw: string): string {
  * `source` link. A body without the section cites nothing here.
  *
  * Lines inside fenced code blocks are content, not structure: a heading or
- * link there neither opens, ends nor feeds the section. The last section
+ * link there neither opens, ends nor feeds the section. A fence that never
+ * closes is not a fence (see {@link fencedLineMask}). The last section
  * wins because the writer renders the provenance section after everything
  * else on the page, so an earlier `## Sources` line (quoted or planted in
  * caller text) never stands in for it.
@@ -72,17 +102,10 @@ export function wikilinkTarget(raw: string): string {
 export function sourcesSectionTargets(body: string): ReadonlyArray<string> {
   let targets: string[] = [];
   let inSection = false;
-  let fence: string | null = null;
-  for (const line of body.split(LINE_SPLIT_RE)) {
-    if (fence !== null) {
-      if (closesFence(line, fence)) fence = null;
-      continue;
-    }
-    const opened = FENCE_RE.exec(line);
-    if (opened !== null) {
-      fence = opened[1]!;
-      continue;
-    }
+  const lines = body.split(LINE_SPLIT_RE);
+  const fenced = fencedLineMask(lines);
+  for (const [i, line] of lines.entries()) {
+    if (fenced[i]) continue;
     if (SOURCES_HEADING_RE.test(line)) {
       inSection = true;
       targets = [];
