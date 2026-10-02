@@ -293,7 +293,7 @@ file. An unrecognised value exits `2`:
 
 ```
 $ o2b mcp --harness nope
-o2b mcp: invalid --harness value: nope; expected one of: aider, claude-code, codex, copilot-cli, cursor, gemini-cli, generic, grok, hermes, kiro, openclaw, opencode, pi
+o2b mcp: invalid --harness value: "nope"; expected one of: aider, claude-code, codex, copilot-cli, cursor, gemini-cli, generic, grok, hermes, kiro, openclaw, opencode, pi
 ```
 
 The Claude Code plugin registers both of its servers with
