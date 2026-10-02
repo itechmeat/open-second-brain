@@ -47,6 +47,7 @@ import { COUNT_GUARD_WIRE_CODE, TOOL_ERROR_CODE } from "../tool-error-codes.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceBoolOptional, coerceStr, unknownOperationError } from "../coerce.ts";
 import { coerceNonNegativeInteger, readCountGuardArgs } from "./shared.ts";
+import { readableAtContextReach } from "./reach-readable.ts";
 
 const TOOL = "brain_note_lifecycle";
 
@@ -132,6 +133,9 @@ async function toolBrainNoteLifecycle(
       ...(deleteLinked !== undefined ? { deleteLinked } : {}),
       expect,
       strict,
+      // A note the caller may not read at its reach is refused exactly
+      // as a missing one.
+      readable: readableAtContextReach(ctx),
     });
     return renderResult(res);
   } catch (err) {

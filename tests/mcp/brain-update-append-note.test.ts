@@ -26,6 +26,7 @@ import { NOTES_TOOLS, writeBatchErrorToMcp } from "../../src/mcp/brain/notes-too
 import { WriteBatchError } from "../../src/core/brain/write-batch.ts";
 import { PAGE_LINT_KEY } from "../../src/core/brain/page-lint.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
 /**
@@ -180,8 +181,14 @@ describe("brain_update_note", () => {
     // A directory where the note should be: it exists, and reading it
     // raises EISDIR regardless of the running user.
     mkdirSync(join(vault, "Notes/Doc.md"), { recursive: true });
+    // At local reach: a remote caller is answered as for a missing note,
+    // because a page nobody can measure is treated as one that reserved
+    // itself. The diagnostic is for the operator who can fix the file.
     const err = await rejectedMcpError(
-      updateTool.handler(ctx, { path: "Notes/Doc.md", content: "replacement" }),
+      updateTool.handler(
+        { ...ctx, reach: TRANSPORT_REACH.local },
+        { path: "Notes/Doc.md", content: "replacement" },
+      ),
     );
     expect(err.code).toBe(INTERNAL_ERROR);
     expect(err.data).toMatchObject({ code: "target_unreadable", path: "Notes/Doc.md" });
@@ -224,8 +231,12 @@ describe("brain_append_note", () => {
 
   test("an existing note the host cannot read is refused, not overwritten", async () => {
     mkdirSync(join(vault, "Notes/Doc.md"), { recursive: true });
+    // At local reach, for the reason the update case above gives.
     const err = await rejectedMcpError(
-      appendTool.handler(ctx, { path: "Notes/Doc.md", content: "more" }),
+      appendTool.handler(
+        { ...ctx, reach: TRANSPORT_REACH.local },
+        { path: "Notes/Doc.md", content: "more" },
+      ),
     );
     expect(err.code).toBe(INTERNAL_ERROR);
     expect(err.data).toMatchObject({ code: "target_unreadable", path: "Notes/Doc.md" });

@@ -41,6 +41,7 @@ import { MAX_BATCH_OPERATIONS } from "../../src/core/brain/write-batch.ts";
 import * as ledger from "../../src/core/brain/idempotency-ledger.ts";
 import { PAGE_LINT_KEY } from "../../src/core/brain/page-lint.ts";
 import { INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
 /**
@@ -249,10 +250,18 @@ describe("brain_write_batch", () => {
     mkdirSync(join(vault, "Notes/Unreadable.md"), { recursive: true });
     let thrown: unknown;
     try {
-      await runBatch([
-        { op: "create_note", path: "Notes/First.md", content: "one" },
-        { op: "update_note", path: "Notes/Unreadable.md", content: "two" },
-      ]);
+      // At local reach: a remote caller is answered as for a missing
+      // note, because a page nobody can measure is treated as one that
+      // reserved itself. The diagnostic is for the operator.
+      await tool.handler(
+        { ...ctx, reach: TRANSPORT_REACH.local },
+        {
+          operations: [
+            { op: "create_note", path: "Notes/First.md", content: "one" },
+            { op: "update_note", path: "Notes/Unreadable.md", content: "two" },
+          ],
+        },
+      );
     } catch (err) {
       thrown = err;
     }

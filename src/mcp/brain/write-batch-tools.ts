@@ -34,6 +34,7 @@ import {
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { noteWriteResult, parseFrontmatterArg, writeBatchErrorToMcp } from "./notes-tools.ts";
+import { readableAtContextReach } from "./reach-readable.ts";
 import { vaultRelativeSafe } from "./shared.ts";
 import { unknownOperationError } from "../coerce.ts";
 
@@ -221,7 +222,12 @@ async function toolBrainWriteBatch(
   const operations = rawOps.map((raw, index) => mapOperation(raw, index, resolveAgent));
   const requestId = optionalStr(args, "request_id");
 
-  const baseOpts = ctx.configPath !== null ? { configPath: ctx.configPath } : {};
+  // An update or append whose target the caller may not read at its
+  // reach is refused exactly as a missing one.
+  const baseOpts = {
+    readable: readableAtContextReach(ctx),
+    ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
+  };
   let batch: WriteBatchResult;
   // Set exactly when a request ID was supplied: the core's receipted
   // overload always carries the status, so nothing here invents one.

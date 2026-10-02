@@ -429,6 +429,13 @@ export interface NoteLifecycleInput {
   readonly strict?: boolean;
   /** Injected clock, forwarded to the recovery point so a run stays reproducible. */
   readonly now?: Date;
+  /**
+   * May the caller read the subject note at this vault-relative path? One
+   * it may not read is refused as `source_missing`, the refusal a path
+   * with no note gets, before the note is stat-ed. Absent, every note is
+   * a subject (the CLI, which reads the vault directly).
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 export interface NoteLifecycleResult {
@@ -866,7 +873,7 @@ export async function noteLifecycle(
   // alone let it through to `readFileSync`, which raised a bare `EISDIR`
   // that left MCP as an internal fault. There is no note at that path,
   // which is what `source_missing` says.
-  const sourceStat = statOrNull(source.abs);
+  const sourceStat = input.readable?.(source.relPath) === false ? null : statOrNull(source.abs);
   if (sourceStat === null || !sourceStat.isFile()) {
     throw new NoteLifecycleError("source_missing", `no note file at ${source.relPath}`);
   }

@@ -52,6 +52,7 @@ import { rethrowVaultFrozen } from "../frozen-refusal.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, type JsonRpcErrorCode, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceBoolOptional, coerceStr, coerceStringOptional } from "../coerce.ts";
+import { readableAtContextReach } from "./reach-readable.ts";
 
 /**
  * The two vocabularies a refused write speaks, and the bridge between
@@ -441,11 +442,12 @@ function runSingleWrite<K extends SingleNoteOperation["kind"]>(
 ): Extract<NoteOpResult, { readonly kind: K }> {
   let batch;
   try {
-    batch = applyWriteBatch(
-      ctx.vault,
-      [op],
-      ctx.configPath !== null ? { configPath: ctx.configPath } : {},
-    );
+    // A target the caller may not read at its reach is refused exactly
+    // as a missing one.
+    batch = applyWriteBatch(ctx.vault, [op], {
+      readable: readableAtContextReach(ctx),
+      ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
+    });
   } catch (err) {
     throw writeBatchErrorToMcp(err, tool);
   }

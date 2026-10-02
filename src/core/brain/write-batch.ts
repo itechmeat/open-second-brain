@@ -392,6 +392,14 @@ export interface ApplyWriteBatchOptions {
    * before any write.
    */
   readonly requestId?: string;
+  /**
+   * May the caller read the existing note at this vault-relative path?
+   * An update or append whose target it may not read is refused as
+   * `target_missing`, the refusal a path with no note gets, before the
+   * note is read or any other check runs on it. Absent, every existing
+   * note is a target (the CLI, which reads the vault directly).
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 /**
@@ -715,7 +723,7 @@ function projectUpdateNote(
     );
   }
   const target = reserveNoteTarget(vault, op.path, index, noteTargets);
-  const state = readExistingNote(target.abs, target.relPath, index);
+  const state = readExistingNote(target.abs, target.relPath, index, opts.readable);
   // The one seam the blank-overwrite guard is wired at - it covers both
   // callers, `brain_update_note` and `brain_write_batch`'s update op,
   // because both project through here.
@@ -803,7 +811,7 @@ function projectAppendNote(
     );
   }
   const target = reserveNoteTarget(vault, op.path, index, noteTargets);
-  const state = readExistingNote(target.abs, target.relPath, index);
+  const state = readExistingNote(target.abs, target.relPath, index, opts.readable);
   const appended = op.content.trim();
   const body = state.body.length > 0 ? `${state.body}${APPEND_SEPARATOR}${appended}` : appended;
   const contents = formatFrontmatter(state.frontmatter, body);
@@ -1089,8 +1097,16 @@ function refuseReadOnlyAttribute(abs: string, relPath: string, index: number): v
  * Both notices come off the same parse, and both mean the same thing:
  * part of the content this write would replace is unknown to it.
  */
-function readExistingNote(abs: string, relPath: string, index: number): ExistingNote {
-  if (!existsSync(abs)) {
+function readExistingNote(
+  abs: string,
+  relPath: string,
+  index: number,
+  readable: ((rel: string) => boolean) | undefined,
+): ExistingNote {
+  // A note the caller may not read is answered as a missing one, asked
+  // first so no later check (read-only attribute, parse, reserved key)
+  // can tell the two apart.
+  if (readable?.(relPath) === false || !existsSync(abs)) {
     throw new WriteBatchError(
       "target_missing",
       index,
