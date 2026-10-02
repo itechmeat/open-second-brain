@@ -14,6 +14,7 @@ import { planBatches, type BatchPlan } from "../../core/brain/ingest/batch-plan.
 import { clearCheckpoint, PLAN_ID_LABEL } from "../../core/brain/ingest/checkpoint.ts";
 import { assertCheckpointId } from "../../core/brain/checkpoint-store.ts";
 import { ingestSource } from "../../core/brain/ingest/ingest.ts";
+import type { PartsOutcome, TableOutcome } from "../../core/brain/ingest/extract-source.ts";
 import type { CodeEdgeSeed, PreExtractResult } from "../../core/brain/ingest/pre-extract.ts";
 import { reconcilePlan } from "../../core/brain/ingest/reconcile.ts";
 import { IntakeValidationError } from "../../core/brain/intake/extract-intake.ts";
@@ -103,11 +104,47 @@ async function toolBrainIngestSource(
       // it. Always present: absence would read as "full-local" to a caller
       // that never learned the key exists.
       capture_scope: res.captureScope,
+      // Only for an HTML or CSV/TSV source, so a text source's payload is
+      // byte-identical to before. Counts and tokens only, never content.
+      ...(res.parts !== undefined ? { parts: serializeParts(res.parts) } : {}),
+      ...(res.table !== undefined ? { table: serializeTable(res.table) } : {}),
       // Only emitted when the pre-extract pass ran, so a call without it is
       // byte-identical to before (P4).
       ...(res.preExtract !== undefined ? { pre_extract: serializePreExtract(res.preExtract) } : {}),
     };
   });
+}
+
+/** The HTML outcome on the wire: `{extracted, count, omitted?}` or `{extracted: false, reason}`. */
+function serializeParts(parts: PartsOutcome): Record<string, unknown> {
+  if (!parts.extracted) return { extracted: false, reason: parts.reason };
+  return {
+    extracted: true,
+    count: parts.count,
+    ...(parts.omitted !== undefined ? { omitted: parts.omitted } : {}),
+  };
+}
+
+/** The table outcome on the wire, snake_case, `truncated` only when a cap cut it. */
+function serializeTable(table: TableOutcome): Record<string, unknown> {
+  if (!table.rendered) {
+    return {
+      rendered: false,
+      format: table.format,
+      reason: table.reason,
+      ...(table.detail !== undefined ? { detail: table.detail } : {}),
+    };
+  }
+  return {
+    rendered: true,
+    format: table.format,
+    delimiter: table.delimiter,
+    columns: table.columns,
+    rows: table.rows,
+    rows_rendered: table.rowsRendered,
+    ...(table.truncated.length > 0 ? { truncated: [...table.truncated] } : {}),
+    redacted_cells: table.redactedCells,
+  };
 }
 
 /** The pre-extract result with its edge keys in the payload's snake_case. */

@@ -58,6 +58,7 @@ import {
 } from "../provenance/provenance.ts";
 import { PLAN_ID_LABEL, recordCompleted } from "./checkpoint.ts";
 import { readManifest, updateManifest } from "./content-manifest.ts";
+import { deriveSourceSection, type PartsOutcome, type TableOutcome } from "./extract-source.ts";
 import {
   isCodeStructureSource,
   preExtractCodeStructure,
@@ -137,7 +138,26 @@ export interface IngestSourceResult {
    * never a fake empty success. Absent entirely when the pass was off.
    */
   readonly preExtract?: PreExtractResult;
+  /**
+   * What the HTML extractor made of an HTML source: a part count, or the
+   * named reason there is no `## Parts` section. Absent for every other
+   * format.
+   */
+  readonly parts?: PartsOutcome;
+  /**
+   * What the table note made of a CSV or TSV source: its counts, or the
+   * named reason there is no `## Table` section. Absent for every other
+   * format.
+   */
+  readonly table?: TableOutcome;
 }
+
+/**
+ * Frontmatter key an operator sets to scope a page's visibility. Kept on a
+ * rewrite like `created_at`: dropping it on re-ingest would widen a page the
+ * operator narrowed.
+ */
+const VISIBILITY_FRONTMATTER_KEY = "visibility";
 
 function renderLinkSection(heading: string, ids: readonly string[]): string {
   if (ids.length === 0) return "";
@@ -188,6 +208,9 @@ export function ingestSource(
   const captureScope = captureScopeForTrust(trust);
   const connections = intake.entitiesUpdated;
   const allEntities = [...intake.entitiesCreated, ...intake.entitiesUpdated];
+  // After the intake, which decided the lane: the derived section reads the
+  // source only in the trusted lane and only at the caller's reach.
+  const derivation = deriveSourceSection(vault, canonicalSource, trust, opts.readable);
 
   // The page filename keys on the source-identity hash, not just the slug:
   // two distinct non-ASCII / symbol-only source paths can slugify to the same
@@ -198,8 +221,11 @@ export function ingestSource(
   const absPath = sourcePagePath(vault, `${slugify(canonicalSource)}-${sourceHash.slice(0, 12)}`);
   const existed = existsSync(absPath);
   const stamp = isoSecond(opts.now);
-  // Preserve the original created_at on a re-ingest; bump updated_at.
-  const createdAt = existed ? readCreatedAt(absPath, stamp) : stamp;
+  // Preserve the original created_at and an operator-set visibility on a
+  // re-ingest; bump updated_at.
+  const kept: KeptFrontmatter = existed
+    ? readKeptFrontmatter(absPath, stamp)
+    : { createdAt: stamp };
 
   const meta: FrontmatterMap = {
     kind: BRAIN_SOURCE_KIND,
@@ -214,9 +240,14 @@ export function ingestSource(
     // Says how much of the source was captured when it is less than the
     // whole file; a full-local source adds nothing, for the same reason.
     ...captureScopeFrontmatter(captureScope),
-    created_at: createdAt,
+    // An HTML, CSV or TSV source read in the trusted lane names its format,
+    // the digest of the bytes the section was derived from, and its own
+    // keys. Every other source adds nothing.
+    ...derivation?.frontmatter,
+    created_at: kept.createdAt,
     updated_at: stamp,
     tags: ["brain", "brain/source"],
+    ...(kept.visibility !== undefined ? { [VISIBILITY_FRONTMATTER_KEY]: kept.visibility } : {}),
   };
 
   const body = [
@@ -224,6 +255,7 @@ export function ingestSource(
     renderProvenanceSection(provenance),
     renderLinkSection("Entities", allEntities),
     renderLinkSection("Connections to existing notes", connections),
+    derivation?.section ?? "",
   ]
     .filter((section) => section.length > 0)
     .join("\n\n");
@@ -281,6 +313,8 @@ export function ingestSource(
     connections,
     captureScope,
     ...(preExtract !== undefined ? { preExtract } : {}),
+    ...(derivation?.parts !== undefined ? { parts: derivation.parts } : {}),
+    ...(derivation?.table !== undefined ? { table: derivation.table } : {}),
   };
 }
 
@@ -422,8 +456,18 @@ function resolvesInsideVault(vault: string, canonicalSource: string): boolean {
 }
 
 /** Read a stable `created_at` from an existing summary page, else fall back. */
-function readCreatedAt(absPath: string, fallback: string): string {
+/** The frontmatter a rewrite keeps from the page it replaces. */
+interface KeptFrontmatter {
+  readonly createdAt: string;
+  readonly visibility?: FrontmatterMap[string];
+}
+
+function readKeptFrontmatter(absPath: string, fallback: string): KeptFrontmatter {
   const [meta] = parseFrontmatter(absPath);
   const value = meta["created_at"];
-  return typeof value === "string" && value.length > 0 ? value : fallback;
+  const createdAt = typeof value === "string" && value.length > 0 ? value : fallback;
+  const visibility = meta[VISIBILITY_FRONTMATTER_KEY];
+  return visibility === undefined || visibility === null
+    ? { createdAt }
+    : { createdAt, visibility };
 }

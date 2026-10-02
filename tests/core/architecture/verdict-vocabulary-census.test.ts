@@ -234,6 +234,14 @@ import {
   SOURCE_FORMATS,
 } from "../../../src/core/brain/ingest/source-formats.ts";
 import {
+  isTableNoteSkipReason,
+  isTableTruncation,
+  TABLE_NOTE_SKIP_REASON,
+  TABLE_NOTE_SKIP_REASONS,
+  TABLE_TRUNCATION,
+  TABLE_TRUNCATIONS,
+} from "../../../src/core/brain/ingest/table-note.ts";
+import {
   EGRESS_REDACTION,
   EGRESS_REDACTION_STATUSES,
   isEgressRedactionStatus,
@@ -799,6 +807,25 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: SOURCE_EXTRACT_SKIP_REASON,
     members: SOURCE_EXTRACT_SKIP_REASONS,
     guard: isSourceExtractSkipReason,
+  },
+  {
+    // Why a CSV or TSV source has no rendered table. The token crosses the
+    // MCP wire on the ingest result's `table` and the extract verb's JSON,
+    // so a reason added here and forgotten in the list is one no reader can
+    // narrow.
+    name: "TABLE_NOTE_SKIP_REASON",
+    values: TABLE_NOTE_SKIP_REASON,
+    members: TABLE_NOTE_SKIP_REASONS,
+    guard: isTableNoteSkipReason,
+  },
+  {
+    // Which cap cut a rendered table. Persisted as `table_truncated` on the
+    // summary page and read back across the wire, so every cap must survive
+    // the round trip through a string.
+    name: "TABLE_TRUNCATION",
+    values: TABLE_TRUNCATION,
+    members: TABLE_TRUNCATIONS,
+    guard: isTableTruncation,
   },
   {
     // C1. What a given export path does about secrets on the way out.
@@ -1694,7 +1721,7 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
  * How many four-piece vocabularies `src/` currently holds. Measured, and
  * kept as an equality rather than a floor - see the population test.
  */
-const VOCABULARY_POPULATION = 86;
+const VOCABULARY_POPULATION = 88;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {
