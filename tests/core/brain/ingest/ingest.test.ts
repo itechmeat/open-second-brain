@@ -11,6 +11,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { join, relative } from "node:path";
 import { tmpdir } from "node:os";
 
+import { IS_WINDOWS } from "../../../helpers/platform.ts";
+
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
 import {
@@ -293,6 +295,33 @@ describe("ingestSource pre-extract pass (P4, t_ef786747)", () => {
       reason: `source is larger than ${PRE_EXTRACT_MAX_SOURCE_BYTES} bytes; code-structure pre-extraction skipped: ${CODE_INPUT.sourcePath}`,
     });
   });
+
+  // Windows has no FIFOs.
+  test.skipIf(IS_WINDOWS)(
+    "a FIFO code source has no readable bytes and the read does not block",
+    () => {
+      mkdirSync(join(vault, "Code"), { recursive: true });
+      const fifo = join(vault, "Code", "widget.ts");
+      expect(Bun.spawnSync(["mkfifo", fifo]).exitCode).toBe(0);
+      // A writer that holds the FIFO open for two seconds and writes
+      // nothing: a reader that blocks fails on its answer after two seconds
+      // instead of hanging the run.
+      const writer = Bun.spawn(["sh", "-c", 'exec 3>"$0"; exec sleep 2', fifo]);
+      try {
+        const res = ingestSource(vault, CODE_INPUT, {
+          agent: "claude",
+          now: NOW,
+          preExtract: true,
+        });
+        expect(res.preExtract).toEqual({
+          extracted: false,
+          reason: `source has no readable file bytes for code-structure pre-extraction: ${CODE_INPUT.sourcePath}`,
+        });
+      } finally {
+        writer.kill();
+      }
+    },
+  );
 
   test("with the pass off the result carries no seeds and the page is byte-identical", () => {
     writeCode();

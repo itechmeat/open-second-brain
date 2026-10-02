@@ -19,7 +19,16 @@
  * genuine connection to prior material; a freshly created entity is not.
  */
 
-import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import {
+  closeSync,
+  constants as fsConstants,
+  existsSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+} from "node:fs";
 import { dirname, join, relative } from "node:path";
 
 import type { FrontmatterMap } from "../../types.ts";
@@ -289,6 +298,55 @@ export function ingestSource(
  */
 export const PRE_EXTRACT_MAX_SOURCE_BYTES = 1_048_576;
 
+/** Why a source read yields no text, apart from a thrown error. */
+const SOURCE_UNREAD = Object.freeze({
+  notAFile: "not a regular file",
+  tooLarge: "larger than the read limit",
+} as const);
+
+type SourceUnread = (typeof SOURCE_UNREAD)[keyof typeof SOURCE_UNREAD];
+
+/**
+ * How a source is opened: read-only and never blocking, so a FIFO met
+ * where a file was expected cannot stall the server. No `O_NOFOLLOW`: an
+ * in-vault symlink is admitted by the containment check above. The flag
+ * is POSIX; where the platform lacks it it is simply absent.
+ */
+const SOURCE_OPEN_FLAGS = fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0);
+
+/**
+ * Read a source through ONE descriptor, so the checks hold for the bytes
+ * read: the descriptor must be a regular file, and no more than
+ * {@link PRE_EXTRACT_MAX_SOURCE_BYTES} is read however large the file has
+ * grown since the `fstat`.
+ */
+function readSourceBounded(
+  absolute: string,
+):
+  | { readonly text: string; readonly unread?: undefined }
+  | { readonly text: null; readonly unread: SourceUnread } {
+  const fd = openSync(absolute, SOURCE_OPEN_FLAGS);
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) return { text: null, unread: SOURCE_UNREAD.notAFile };
+    if (stat.size > PRE_EXTRACT_MAX_SOURCE_BYTES)
+      return { text: null, unread: SOURCE_UNREAD.tooLarge };
+    // One byte past the cap, so growth since the fstat is seen.
+    const buffer = Buffer.allocUnsafe(PRE_EXTRACT_MAX_SOURCE_BYTES + 1);
+    let filled = 0;
+    for (;;) {
+      const count = readSync(fd, buffer, filled, buffer.length - filled, null);
+      if (count === 0) break;
+      filled += count;
+      if (filled > PRE_EXTRACT_MAX_SOURCE_BYTES)
+        return { text: null, unread: SOURCE_UNREAD.tooLarge };
+    }
+    return { text: buffer.toString("utf8", 0, filled) };
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function runPreExtract(
   vault: string,
   canonicalSource: string,
@@ -315,16 +373,15 @@ function runPreExtract(
     reason: `source has no readable file bytes for code-structure pre-extraction: ${canonicalSource}`,
   };
   if (readable !== undefined && !readable(canonicalSource)) return noBytes;
+  const tooLarge: PreExtractResult = {
+    extracted: false,
+    reason: `source is larger than ${PRE_EXTRACT_MAX_SOURCE_BYTES} bytes; code-structure pre-extraction skipped: ${canonicalSource}`,
+  };
   let content: string;
   try {
-    const absolute = join(vault, canonicalSource);
-    if (statSync(absolute).size > PRE_EXTRACT_MAX_SOURCE_BYTES) {
-      return {
-        extracted: false,
-        reason: `source is larger than ${PRE_EXTRACT_MAX_SOURCE_BYTES} bytes; code-structure pre-extraction skipped: ${canonicalSource}`,
-      };
-    }
-    content = readFileSync(absolute, "utf8");
+    const read = readSourceBounded(join(vault, canonicalSource));
+    if (read.text === null) return read.unread === SOURCE_UNREAD.tooLarge ? tooLarge : noBytes;
+    content = read.text;
   } catch {
     // A source with no readable file bytes - a URL/identity-only source, a
     // directory, a permission failure, or a deletion race - cannot be parsed,
