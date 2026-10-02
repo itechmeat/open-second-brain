@@ -49,7 +49,7 @@ reference it finds (`removed-tool-reference`).
 
 ## Upgrading to 1.68.0
 
-No step below is required. Five changes are visible to an operator or a
+No step below is required. Six changes are visible to an operator or a
 client.
 
 **Architecture notes gain dependency regions and one owned frontmatter
@@ -72,10 +72,19 @@ every run; a value typed under that key is replaced. `--json` gains a
 token such as `git::https://<token>@github.com/o/r.git`) and the value
 of a named credential query parameter (`sshkey`, `token`,
 `access_token`, `password`, `signature`, the S3 and GCS access-key and
-signing parameters) are replaced. A conventional login such as
-`ssh://git@` is kept. A credential in a path segment, a fragment or an
-unnamed query parameter is not recognised. Specifiers without
-credentials are unchanged.
+signing parameters) are replaced, the query parameter also on a
+specifier that is not a URL, such as `git@host:org/repo.git?sshkey=...`.
+A conventional login such as `ssh://git@` is kept. A credential in a
+path segment, a fragment or an unnamed query parameter is not
+recognised. Specifiers without credentials are unchanged; a specifier
+longer than 2048 characters is replaced whole. With `pre_extract`,
+`brain_ingest_source` skips a source larger than 1 MiB and says so.
+
+**A remote search with no match no longer states index counts.** The
+answer of an empty `brain_search` and of `brain_recall_gate` below local
+reach names the index time only and carries no coverage receipt, since
+its counts include pages the caller cannot read. A local caller and the
+CLI keep the receipt.
 
 **More tools treat a record the caller cannot read at its reach as
 absent.** A remote client now gets, for such a record, exactly the
