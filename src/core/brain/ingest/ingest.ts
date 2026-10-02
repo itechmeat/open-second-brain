@@ -32,7 +32,7 @@ import {
 import { dirname, join, relative } from "node:path";
 
 import type { FrontmatterMap } from "../../types.ts";
-import { normToken } from "../../graph/visibility.ts";
+import { normToken, REMOTE_DENY_VISIBILITY_TOKEN } from "../../graph/visibility.ts";
 import { canonicalNotePath, ensureInsideVault } from "../../path-safety.ts";
 import { assertCheckpointId } from "../checkpoint-store.ts";
 import {
@@ -487,11 +487,12 @@ function readKeptFrontmatter(absPath: string, fallback: string): KeptFrontmatter
 }
 
 /**
- * The summary page's `visibility`: the kept value as it was when the source
- * declares none (a page with neither gains none), else the union of the
- * kept tokens and the source's own, kept ones first. A page that copies
- * source content is at most as visible as its source, and a re-ingest
- * never narrows what the operator set.
+ * The summary page's `visibility`. The page's audience is never wider than
+ * the source's or the operator's: when only one side declares tokens, that
+ * side's tokens are written (a page with neither gains none); when both do,
+ * the page keeps the tokens both allow, and when they share none it gets
+ * the reserved token, so it is withheld below local reach rather than
+ * widened. The reserved token is kept whenever either side carries it.
  */
 function visibilityFrontmatter(
   kept: KeptFrontmatter["visibility"],
@@ -500,11 +501,18 @@ function visibilityFrontmatter(
   if (source === undefined || source.length === 0) {
     return kept !== undefined ? { [VISIBILITY_FRONTMATTER_KEY]: kept } : {};
   }
-  const keptTokens =
-    kept === undefined ? [] : Array.isArray(kept) ? kept.map(String) : [String(kept)];
-  const union = [...keptTokens];
-  for (const token of source) {
-    if (!keptTokens.some((k) => normToken(k) === token)) union.push(token);
+  let keptTokens: string[] = [];
+  if (Array.isArray(kept)) keptTokens = kept.map((k) => normToken(String(k)));
+  else if (kept !== undefined) keptTokens = [normToken(String(kept))];
+  keptTokens = keptTokens.filter((k) => k.length > 0);
+  if (keptTokens.length === 0) return { [VISIBILITY_FRONTMATTER_KEY]: [...source] };
+  const merged = source.filter((token) => keptTokens.includes(token));
+  const reserved =
+    merged.length === 0 ||
+    keptTokens.includes(REMOTE_DENY_VISIBILITY_TOKEN) ||
+    source.includes(REMOTE_DENY_VISIBILITY_TOKEN);
+  if (reserved && !merged.includes(REMOTE_DENY_VISIBILITY_TOKEN)) {
+    merged.push(REMOTE_DENY_VISIBILITY_TOKEN);
   }
-  return { [VISIBILITY_FRONTMATTER_KEY]: union };
+  return { [VISIBILITY_FRONTMATTER_KEY]: merged };
 }

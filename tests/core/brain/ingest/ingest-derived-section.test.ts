@@ -103,6 +103,22 @@ function frontmatterLines(text: string): string[] {
   return text.slice(4, end).split("\n");
 }
 
+/** Ingest the CSV, give its page `pageValue`, then re-ingest with `sourceValue`. */
+function reingestWith(pageValue: string | undefined, sourceValue: string): string[] {
+  seed(vault, "Clips/parts.csv", PARTS_CSV);
+  const res = ingestSource(vault, input("Clips/parts.csv"), { agent: "claude", now: NOW });
+  const abs = join(vault, res.summaryPath);
+  if (pageValue !== undefined) {
+    writeFileSync(
+      abs,
+      readFileSync(abs, "utf8").replace("\n---\n", `\nvisibility: ${pageValue}\n---\n`),
+    );
+  }
+  seed(vault, "Clips/parts.csv", `---\nvisibility: ${sourceValue}\n---\n${PARTS_CSV}`);
+  ingestSource(vault, input("Clips/parts.csv"), { agent: "claude", now: LATER });
+  return frontmatterLines(readFileSync(abs, "utf8"));
+}
+
 describe("an HTML source in the vault", () => {
   test("gets its format, its content hash and the Parts section last", () => {
     seed(vault, "Clips/page.html", PAGE_HTML);
@@ -311,15 +327,33 @@ describe("visibility on a summary page", () => {
     expect(frontmatterLines(page(vault, res.summaryPath))).toContain("visibility: [private]");
   });
 
-  test("the source's visibility joins an operator-set one, never narrowing it", () => {
-    seed(vault, "Clips/parts.csv", PARTS_CSV);
+  test("a source moved to another audience withholds the page rather than widening it", () => {
+    seed(vault, "Clips/parts.csv", `---\nvisibility: team-a\n---\n${PARTS_CSV}`);
     const res = ingestSource(vault, input("Clips/parts.csv"), { agent: "claude", now: NOW });
     const abs = join(vault, res.summaryPath);
-    writeFileSync(abs, readFileSync(abs, "utf8").replace("\n---\n", "\nvisibility: team\n---\n"));
+    expect(frontmatterLines(readFileSync(abs, "utf8"))).toContain("visibility: [team-a]");
 
-    seed(vault, "Clips/parts.csv", `---\nvisibility: private\n---\n${PARTS_CSV}`);
+    seed(vault, "Clips/parts.csv", `---\nvisibility: team-b\n---\n${PARTS_CSV}`);
     ingestSource(vault, input("Clips/parts.csv"), { agent: "claude", now: LATER });
-    expect(frontmatterLines(readFileSync(abs, "utf8"))).toContain("visibility: [team, private]");
+    const after = frontmatterLines(readFileSync(abs, "utf8"));
+    expect(after).toContain("visibility: [private]");
+    expect(after.join("\n")).not.toContain("team-a");
+  });
+
+  test("an operator audience the source does not share withholds the page", () => {
+    expect(reingestWith("team", "team-a")).toContain("visibility: [private]");
+  });
+
+  test("the reserved token on the source keeps the page reserved", () => {
+    expect(reingestWith("[team, private]", "private")).toContain("visibility: [private]");
+  });
+
+  test("an audience both the operator and the source allow is kept", () => {
+    expect(reingestWith("[team, ops]", "[team, team-b]")).toContain("visibility: [team]");
+  });
+
+  test("the source's tokens are written when the page declares none", () => {
+    expect(reingestWith(undefined, "team-a")).toContain("visibility: [team-a]");
   });
 
   test("a page with no visibility gains none", () => {

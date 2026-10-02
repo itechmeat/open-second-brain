@@ -2154,9 +2154,10 @@ format characters), when it contains NUL, or when it exceeds the cap.
   credential no pass recognises stays on the indexed page and in its
   embeddings, as it already sits in the file in the vault. A summary page
   that carries a derived section is at most as visible as its source: it
-  takes on the source's own `visibility` tokens, joined with any
-  `visibility` the page already had; a re-ingest never drops a token
-  the page carries, and an operator removes one by editing the page. A leading frontmatter block in an
+  takes on the source's own `visibility` tokens; when the page already
+  had a `visibility`, it gets the audience both the operator and the
+  source allow; when they share none, the page is withheld below local
+  reach. A leading frontmatter block in an
   HTML, CSV or TSV source is not extracted, so it is never read as table
   data or text. A URL source, an absent file and a file the caller
   cannot read at its reach all answer `source-not-local`, with no digest and no section. A Markdown or

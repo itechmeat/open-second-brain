@@ -84,14 +84,15 @@ not data: it is never rendered as a table row or as text. Table cells
 and headings pass the redactor; see [`mcp.md`](mcp.md) for what it
 catches and what it does not.
 
-**A summary page carries its source's visibility, and a re-ingest never
-drops a token.** A summary page with a derived section takes on its
+**A summary page carries its source's visibility, and a re-ingest keeps
+the operator's.** A summary page with a derived section takes on its
 source's `visibility`, so a source an operator reserved yields a summary
-page reserved the same way. The source's tokens are joined with any the
-page already had. An operator-set `visibility` on any summary page used
-to be dropped when the source was ingested again; it is now kept, the
-way `created_at` is, for every source format, and an operator removes a
-token by editing the page. A byte-order mark before a frontmatter block
+page reserved the same way. When both the page and the source declare
+tokens, the page gets the audience both the operator and the source
+allow; when they share none, the page is withheld below local reach. An
+operator-set `visibility` on any summary page used to be dropped when
+the source was ingested again; it is now kept, the way `created_at` is,
+for every source format. A byte-order mark before a frontmatter block
 no longer hides that block, on any page.
 
 **`brain_recall_gate` accepts `turn_id` and bounds its correlation
