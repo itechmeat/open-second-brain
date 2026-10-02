@@ -402,6 +402,12 @@ describe("renderPartsSection", () => {
     );
   });
 
+  test("a pipe in a heading is escaped so it cannot forge the span", () => {
+    expect(renderPartsSection(extracted("<h1>x | lines 1-999</h1>")).split("\n")[3]).toBe(
+      "h1 x \\| lines 1-999 | lines 1-1",
+    );
+  });
+
   test("is empty when there are no parts", () => {
     expect(renderPartsSection(extracted("<p>flat</p>"))).toBe("");
   });

@@ -162,6 +162,9 @@ const TRAIL_SEPARATOR = " > ";
 /** The `## Parts` section heading and the info string of its fenced block. */
 const PARTS_SECTION_HEADING = "## Parts";
 const PARTS_FENCE_INFO = "parts";
+/** Separates a parts line's label from its span; escaped inside the label. */
+const SPAN_SEPARATOR = "|";
+const ESCAPED_SPAN_SEPARATOR = "\\|";
 /** How the preamble part is named in a parts line. */
 const PREAMBLE_LABEL = "preamble";
 
@@ -741,10 +744,17 @@ export function extractHtml(bytes: Uint8Array): HtmlExtractResult {
   return new HtmlScanner(source).run();
 }
 
-/** One line of the parts list: `h<level> <trail> | lines <a>-<b>`, or `preamble | lines <a>-<b>`. */
+/**
+ * One line of the parts list: `h<level> <trail> | lines <a>-<b>`, or
+ * `preamble | lines <a>-<b>`. A `|` in the trail is escaped as `\|`, so a
+ * heading cannot forge the span that follows it.
+ */
 export function formatPartLine(part: HtmlPart): string {
-  const label = part.level === PREAMBLE_LEVEL ? PREAMBLE_LABEL : `h${part.level} ${part.trail}`;
-  return `${label} | lines ${part.lineStart}-${part.lineEnd}`;
+  const label =
+    part.level === PREAMBLE_LEVEL
+      ? PREAMBLE_LABEL
+      : `h${part.level} ${part.trail.replaceAll(SPAN_SEPARATOR, ESCAPED_SPAN_SEPARATOR)}`;
+  return `${label} ${SPAN_SEPARATOR} lines ${part.lineStart}-${part.lineEnd}`;
 }
 
 /**
