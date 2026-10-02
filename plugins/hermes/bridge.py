@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import subprocess
 import sys
@@ -69,7 +70,11 @@ def resolve_request_timeout() -> float | None:
     A non-positive value disables the deadline, which is the escape hatch for
     an operator whose vault legitimately outruns it; it is spelled explicitly
     rather than reached by a malformed value, and a malformed value falls back
-    to the default rather than to no bound at all.
+    to the default rather than to no bound at all. ``nan`` is malformed (it
+    never compares equal, so it would also split every shared-bridge key);
+    ``inf`` is an explicit "no bound", like a non-positive value. The WARNING
+    names the variable only: the value belongs to a profile and lands in the
+    shared gateway log.
 
     :raises config.ProfileScopeError: on a multiplexed gateway with no profile
         scope bound; the provider resolves it once where the scope is bound
@@ -81,14 +86,15 @@ def resolve_request_timeout() -> float | None:
     try:
         seconds = float(raw)
     except ValueError:
+        seconds = math.nan
+    if math.isnan(seconds):
         logger.warning(
-            "%s is not a number (%r); using the %.0fs default",
+            "%s is not a number; using the %.0fs default",
             REQUEST_TIMEOUT_ENV,
-            raw,
             DEFAULT_REQUEST_TIMEOUT_SECONDS,
         )
         return DEFAULT_REQUEST_TIMEOUT_SECONDS
-    return None if seconds <= 0 else seconds
+    return None if seconds <= 0 or math.isinf(seconds) else seconds
 
 
 class BridgeError(RuntimeError):

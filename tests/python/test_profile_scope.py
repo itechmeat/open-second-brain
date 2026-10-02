@@ -523,6 +523,63 @@ class BridgeTimeoutFixedAtConstructionTests(ScopeTestCase):
             self.assertEqual(bridge_module.resolve_request_timeout(), 9.0)
 
 
+class RequestTimeoutValueTests(ScopeTestCase):
+    """A timeout value that is not a finite number never becomes a deadline."""
+
+    def _resolve(self, raw):
+        os.environ["OPEN_SECOND_BRAIN_MCP_TIMEOUT"] = raw
+        with self.no_hermes():
+            return bridge_module.resolve_request_timeout()
+
+    def test_nan_falls_back_to_the_default_with_a_warning(self):
+        for raw in ("nan", "NaN", "-nan"):
+            with self.subTest(raw=raw), self.assertLogs("plugins.hermes.bridge", "WARNING") as logs:
+                self.assertEqual(self._resolve(raw), bridge_module.DEFAULT_REQUEST_TIMEOUT_SECONDS)
+            self.assertEqual(len(logs.records), 1)
+
+    def test_infinity_disables_the_deadline(self):
+        for raw in ("inf", "Infinity", "-inf"):
+            with self.subTest(raw=raw), self.assertNoLogs("plugins.hermes.bridge", "WARNING"):
+                self.assertIsNone(self._resolve(raw))
+
+    def test_malformed_value_warning_never_carries_the_value(self):
+        for raw in ("launch-timeout-value", "nan"):
+            with self.subTest(raw=raw), self.assertLogs("plugins.hermes.bridge", "WARNING") as logs:
+                self._resolve(raw)
+            message = logs.records[0].getMessage()
+            self.assertIn("OPEN_SECOND_BRAIN_MCP_TIMEOUT", message)
+            self.assertNotIn(raw, message)
+
+    def test_nan_scoped_timeouts_share_one_bridge(self):
+        os.environ[cfg.XDG_CONFIG_HOME_ENV] = str(self.tmp / "absent")
+        built = []
+        try:
+            for _ in range(2):
+                pair = make_fake_scope(
+                    multiplexed=True,
+                    values={"VAULT_DIR": "v", "OPEN_SECOND_BRAIN_MCP_TIMEOUT": "nan"},
+                )
+                with (
+                    self.install(pair),
+                    patch(
+                        "plugins.hermes.provider.McpBrainBridge",
+                        side_effect=lambda **kw: built.append(kw) or FakeBrainBridge(),
+                    ),
+                    patch.object(OpenSecondBrainMemoryProvider, "_repo_root", return_value="/repo"),
+                    patch.object(
+                        OpenSecondBrainMemoryProvider,
+                        "_resolve_command",
+                        return_value=("o2b", "mcp"),
+                    ),
+                    patch.object(OpenSecondBrainMemoryProvider, "_resolve_env", return_value=None),
+                ):
+                    OpenSecondBrainMemoryProvider().initialize("session", hermes_home=str(self.tmp))
+        finally:
+            provider_module._reset_shared_bridges_for_tests()
+        self.assertEqual(len(built), 1)
+        self.assertEqual(built[0]["timeout"], bridge_module.DEFAULT_REQUEST_TIMEOUT_SECONDS)
+
+
 class PrefetchDegradeTests(ScopeTestCase):
     """(h) ``prefetch`` with no scope bound omits the reminder for the turn."""
 
