@@ -26,6 +26,7 @@ import { regenerateLessons } from "../../src/core/brain/lessons.ts";
 import { appendLogEvent } from "../../src/core/brain/log.ts";
 import { brainDirs } from "../../src/core/brain/paths.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
+import { createTriggers, readTriggers } from "../../src/core/brain/triggers/store.ts";
 import {
   BRAIN_CONFIDENCE,
   BRAIN_LOG_EVENT_KIND,
@@ -261,6 +262,41 @@ describe("the activity and lessons digests treat a withheld record as absent at 
     expect(withheld).toContain(SHARED_PRINCIPLE);
     expect(withheld).toBe(absent);
     expect(await morning(fixture(true), TRANSPORT_REACH.local)).toContain(MARKER);
+  });
+
+  test("a remote morning brief shows no pending trigger and leaves the queue undelivered", async () => {
+    const now = new Date();
+    const withheld = fixture(true);
+    // The stale-claim trigger a health scan builds for the reserved preference.
+    createTriggers(
+      withheld.vault,
+      [
+        {
+          kind: "stale_claim",
+          urgency: "medium",
+          reason: `pref-${PRIVATE_SLUG} has had no fresh evidence for 40 days`,
+          suggestedAction: "Re-evidence the preference or let the dream pass retire it",
+          sourceArtifacts: [`[[pref-${PRIVATE_SLUG}]]`],
+          contextSnippets: [],
+          cooldownKey: `stale_claim:pref-${PRIVATE_SLUG}`,
+        },
+      ],
+      { now },
+    );
+    const morning = async (f: Fixture, reach: TransportReach): Promise<string> =>
+      normalise(
+        f,
+        JSON.stringify(await server(f, reach).callTool("brain_brief", { view: "morning" })),
+      );
+    const statuses = (): ReadonlyArray<string> =>
+      readTriggers(withheld.vault, { now }).records.map((record) => record.status);
+    expect(await morning(withheld, TRANSPORT_REACH.remote)).toBe(
+      await morning(fixture(false), TRANSPORT_REACH.remote),
+    );
+    expect(statuses()).toEqual(["pending"]);
+    // A local caller is the operator: the trigger is shown and delivered.
+    expect(await morning(withheld, TRANSPORT_REACH.local)).toContain(`pref-${PRIVATE_SLUG}`);
+    expect(statuses()).toEqual(["delivered"]);
   });
 
   test("the osb://digest/latest resource answers identically", () => {

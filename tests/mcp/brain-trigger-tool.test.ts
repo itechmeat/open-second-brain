@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createTriggers } from "../../src/core/brain/triggers/store.ts";
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { TRIGGER_STATUSES, type InsightCandidate } from "../../src/core/brain/triggers/types.ts";
 import { buildToolTable, findTool } from "../../src/mcp/tools.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
@@ -34,7 +35,8 @@ beforeEach(() => {
   mkdirSync(join(vault, "Brain"), { recursive: true });
   const configPath = join(tmp, "config.yaml");
   writeFileSync(configPath, `vault: "${vault}"\n`);
-  ctx = { vault, configPath, repoRoot: null };
+  // The local operator: the pending-trigger queue is theirs.
+  ctx = { vault, configPath, repoRoot: null, reach: TRANSPORT_REACH.local };
 });
 
 afterEach(() => {

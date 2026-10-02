@@ -56,6 +56,12 @@ import {
 import type { ProgressSink } from "../../core/brain/progress.ts";
 import { OPERATION } from "../../core/brain/safeguard.ts";
 
+/** What a reader outside the operator's queue is told about it: nothing. */
+const NO_TRIGGER_QUEUE_FAILURES: TriggerQueueFailures = Object.freeze({
+  unreadable: Object.freeze([]),
+  queueError: null,
+});
+
 async function toolBrainMorningBrief(
   ctx: ServerContext,
   args: Record<string, unknown>,
@@ -95,18 +101,27 @@ async function toolBrainMorningBrief(
   // queue: the one outcome the anti-nag ledger exists to rule out. The
   // records that could not be read are collected first and reported
   // alongside whatever did render.
-  const triggerFailures: TriggerQueueFailures = readTriggerQueueFailures(ctx.vault, now);
+  //
+  // The queue and its delivery state belong to the local operator: a
+  // reader below local reach is shown no trigger, no queue failure, and
+  // marks nothing delivered.
+  const operatorQueue = contextReach(ctx) === TRANSPORT_REACH.local;
+  const triggerFailures: TriggerQueueFailures = operatorQueue
+    ? readTriggerQueueFailures(ctx.vault, now)
+    : NO_TRIGGER_QUEUE_FAILURES;
   let triggerSection: ReturnType<typeof renderTriggerBriefSection> | null = null;
   let triggerQueueError = triggerFailures.queueError;
-  try {
-    triggerSection = renderTriggerBriefSection(ctx.vault, {
-      now,
-      cooldownDays: resolveTriggerCooldownDays(ctx.configPath ?? undefined),
-    });
-    if (triggerSection.triggers.length > 0) deliverBriefTriggers(ctx.vault, triggerSection, now);
-  } catch (err) {
-    triggerSection = null;
-    triggerQueueError = (err as Error).message ?? String(err);
+  if (operatorQueue) {
+    try {
+      triggerSection = renderTriggerBriefSection(ctx.vault, {
+        now,
+        cooldownDays: resolveTriggerCooldownDays(ctx.configPath ?? undefined),
+      });
+      if (triggerSection.triggers.length > 0) deliverBriefTriggers(ctx.vault, triggerSection, now);
+    } catch (err) {
+      triggerSection = null;
+      triggerQueueError = (err as Error).message ?? String(err);
+    }
   }
   const failureText = renderTriggerQueueFailures({
     unreadable: triggerFailures.unreadable,

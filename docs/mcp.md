@@ -1080,7 +1080,9 @@ generates deduped triggers from semantic-health and retention data,
 `acknowledge` / `dismiss` / `act` transition one trigger. Cooldown keys
 keep the same issue from reappearing while an earlier trigger is open
 or cooling down; `brain_brief` `view="morning"` surfaces capped pending
-triggers and marks them delivered (once per `trigger_cooldown_days`).
+triggers and marks them delivered (once per `trigger_cooldown_days`) for
+a caller at local reach; below local reach it shows no trigger section
+and marks nothing delivered, because the queue is the operator's own.
 `suppress` silences a cooldown key indefinitely - it is legal from any
 status and carries no clock, so the finding never re-nags - and
 `unsuppress` restores the status suppression interrupted along with its
@@ -2075,7 +2077,8 @@ format characters), when it contains NUL, or when it exceeds the cap.
   its counts, the log events naming it and their share of the agent
   summary go, and a remote digest neither takes a report snapshot nor
   shows its delta. `brain_brief` `view="morning"` leaves such a
-  preference out of its list. The resource also follows the owner gate now, as
+  preference out of its list, and below local reach it shows no pending
+  trigger and marks none delivered. The resource also follows the owner gate now, as
   `brain_context` does, so under `integrity.owner_scope_delivery: fail`
   it answers with the caller's own view. `brain_health` drops a finding
   any of whose members the caller cannot read, and `brain_doctor` with
