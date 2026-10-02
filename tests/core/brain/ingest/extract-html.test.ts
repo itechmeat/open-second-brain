@@ -44,6 +44,11 @@ const HEADING_WINDOW_CEILING_MS = 1_000;
 /** The parts section of one part: heading, blank line, fence, the part line, fence. */
 const RENDERED_LINES_ONE_PART = 5;
 
+/** A URL-userinfo run of about `bytes`: the shape that made the unwindowed pass cost seconds. */
+function userinfoRun(bytes: number): string {
+  return "a://b:".repeat(Math.floor(bytes / 6));
+}
+
 /** The extraction of `html`, failing the test when the scanner refused it. */
 function extracted(html: string): HtmlExtraction {
   const result = extractHtml(encoder.encode(html));
@@ -361,11 +366,15 @@ describe("extractHtml - parts", () => {
 
   describe("a huge heading or title is redacted in a bounded window", () => {
     const MIB = 1 << 20;
-    /** A URL-userinfo run: the shape that made the unwindowed pass cost seconds. */
-    const run = (bytes: number): string => "a://b:".repeat(Math.floor(bytes / 6));
     test.each([
-      ["one heading near the source cap", `<h1>${run(HTML_EXTRACT_MAX_SOURCE_BYTES - 64)}</h1>`],
-      ["a title and a heading", `<title>${run(4 * MIB - 64)}</title><h1>${run(4 * MIB - 64)}</h1>`],
+      [
+        "one heading near the source cap",
+        `<h1>${userinfoRun(HTML_EXTRACT_MAX_SOURCE_BYTES - 64)}</h1>`,
+      ],
+      [
+        "a title and a heading",
+        `<title>${userinfoRun(4 * MIB - 64)}</title><h1>${userinfoRun(4 * MIB - 64)}</h1>`,
+      ],
     ])("%s", (_name, html) => {
       const started = performance.now();
       const result = extracted(html);
