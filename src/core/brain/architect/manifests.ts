@@ -108,6 +108,8 @@ class ManifestShapeError extends Error {}
 const NOT_A_TABLE_DETAIL = "top-level value is not a table";
 const INVALID_JSON_DETAIL = "invalid JSON";
 const INVALID_TOML_DETAIL = "invalid TOML";
+/** A parser that runs out of stack on a deeply nested value throws a `RangeError`. */
+const NESTING_TOO_DEEP_DETAIL = "nesting too deep";
 /** A go.mod directive name, the only part of a go.mod a detail may quote. */
 const GO_DIRECTIVE_NAME = /^[a-z]+$/;
 
@@ -174,6 +176,9 @@ export function readManifestAt(root: string, relPath: string): ManifestReading {
     // message quotes the manifest's text, which must not reach a note.
     if (error instanceof ManifestShapeError) {
       return reading(path, spec, MANIFEST_STATUS.malformed, error.message);
+    }
+    if (error instanceof RangeError) {
+      return reading(path, spec, MANIFEST_STATUS.malformed, NESTING_TOO_DEEP_DETAIL);
     }
     throw error;
   }

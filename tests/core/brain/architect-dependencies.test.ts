@@ -195,3 +195,13 @@ test("a manifest key carrying a region sentinel stays inside its region", () => 
   expect(second.updated).toBe(0);
   expect(third.updated).toBe(0);
 });
+
+test("a manifest nested too deep to parse is malformed and the other modules still render", () => {
+  const depth = 100_000;
+  put("packages/py/pyproject.toml", `a = ${"[".repeat(depth)}${"]".repeat(depth)}\n`);
+  const res = generateArchDocs(vault, project);
+  const lines = regionBody(overview(res), "dependencies").split("\n");
+  expect(lines).toContain("- `packages/py/pyproject.toml` (pypi): malformed - nesting too deep");
+  expect(lines).toContain("- `packages/web/package.json` (npm): read");
+  expect(regionBody(moduleNote(res, "web"), "dependencies")).toContain("Depends on:");
+});
