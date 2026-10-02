@@ -17,7 +17,11 @@ import {
 } from "../../src/core/brain/trust/untrusted-provenance.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { DISTILL_TOOLS } from "../../src/mcp/brain/distill-tools.ts";
-import { CAPTURE_SCOPE } from "../../src/core/brain/provenance/capture-scope.ts";
+import {
+  CAPTURE_EXCERPT_MAX_BYTES,
+  CAPTURE_SCOPE,
+} from "../../src/core/brain/provenance/capture-scope.ts";
+import { DISTILL_CLAIMS_MAX } from "../../src/core/brain/distill/distill-source.ts";
 import { QUOTE_CHECK_OUTCOME } from "../../src/core/brain/distill/quote-verdict.ts";
 import { INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
 import { PROPERTY_DESCRIPTION_MAX, TOOL_DESCRIPTION_MAX } from "../../src/mcp/registry-guard.ts";
@@ -136,10 +140,12 @@ describe("brain_distill_source - quote check and capture scope", () => {
     const tool = DISTILL_TOOLS[0]!;
     const props = tool.inputSchema["properties"] as Record<
       string,
-      { type: string; description: string }
+      { type: string; description: string; maxLength?: number }
     >;
     expect(props["strict_quotes"]?.type).toBe("boolean");
     expect(props["excerpt"]?.type).toBe("string");
+    expect(props["excerpt"]?.maxLength).toBe(CAPTURE_EXCERPT_MAX_BYTES);
+    expect(props["claims"]?.description).toContain(String(DISTILL_CLAIMS_MAX));
     for (const name of ["strict_quotes", "excerpt"]) {
       expect(props[name]!.description.length).toBeLessThanOrEqual(PROPERTY_DESCRIPTION_MAX);
     }

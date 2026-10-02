@@ -13,6 +13,7 @@
  */
 
 import {
+  DISTILL_CLAIMS_MAX,
   distillSource,
   DistillValidationError,
   parseDistillClaims,
@@ -21,7 +22,10 @@ import {
   type DistillSourceResult,
 } from "../../core/brain/distill/distill-source.ts";
 import { QuoteCheckError } from "../../core/brain/distill/quote-verdict.ts";
-import { CaptureExcerptError } from "../../core/brain/provenance/capture-scope.ts";
+import {
+  CAPTURE_EXCERPT_MAX_BYTES,
+  CaptureExcerptError,
+} from "../../core/brain/provenance/capture-scope.ts";
 import { ResponseShapeError } from "../../core/brain/response-shape.ts";
 import { resolveAgentName } from "../../core/config.ts";
 import { coerceBoolOptional, coerceStr } from "../coerce.ts";
@@ -159,7 +163,7 @@ export const DISTILL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         claims: {
           type: "array",
-          description: "Atomic claims distilled from the source (non-empty).",
+          description: `Atomic claims distilled from the source, each one line (1 to ${DISTILL_CLAIMS_MAX}).`,
           items: {
             type: "object",
             properties: {
@@ -180,8 +184,9 @@ export const DISTILL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         excerpt: {
           type: "string",
-          description:
-            "Verbatim text read from a url-only source; stored on the page as bounded-local and used to check quotes. At most 65536 bytes.",
+          // Characters, a necessary bound on the byte cap the core enforces.
+          maxLength: CAPTURE_EXCERPT_MAX_BYTES,
+          description: `Verbatim text read from a url-only source; stored on the page as bounded-local and used to check quotes. At most ${CAPTURE_EXCERPT_MAX_BYTES} bytes.`,
         },
         agent: {
           type: "string",

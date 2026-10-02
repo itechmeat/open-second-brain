@@ -98,6 +98,15 @@ export const BRAIN_DISTILLATION_KIND = "brain-distillation";
 export type { DistillClaim } from "./claim.ts";
 
 /**
+ * The most claims one call may carry. Every claim is checked against the
+ * source, so the cap bounds the work one request can ask for.
+ */
+export const DISTILL_CLAIMS_MAX = 1000;
+
+/** Line breaks a claim may not hold: a claim is one bullet line on the page. */
+const CLAIM_LINE_BREAK_RE = /[\r\n]/;
+
+/**
  * Normalize one agent-supplied claim record into a {@link DistillClaim}. Shared
  * by the CLI and MCP surfaces so both accept the same shape: a `text` string and
  * an optional `block` id (a leading `^` sigil is stripped; an empty block is
@@ -239,9 +248,17 @@ function validate(input: DistillSourceInput): void {
   if (input.claims.length === 0) {
     throw new DistillValidationError("distillation requires at least one claim");
   }
+  if (input.claims.length > DISTILL_CLAIMS_MAX) {
+    throw new DistillValidationError(
+      `distillation accepts at most ${DISTILL_CLAIMS_MAX} claims per call, got ${input.claims.length}`,
+    );
+  }
   input.claims.forEach((claim, i) => {
     if (claim.text.trim().length === 0) {
       throw new DistillValidationError(`claim ${i} has empty text`);
+    }
+    if (CLAIM_LINE_BREAK_RE.test(claim.text)) {
+      throw new DistillValidationError(`claim ${i} spans more than one line; a claim is one line`);
     }
     if (claim.block !== undefined && !BLOCK_ID_RE.test(claim.block)) {
       throw new DistillValidationError(

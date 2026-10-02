@@ -5,14 +5,24 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import {
+  DISTILL_CLAIMS_MAX,
   distillSource,
   DistillValidationError,
 } from "../../../../src/core/brain/distill/distill-source.ts";
+import { BRAIN_DISTILLATIONS_REL } from "../../../../src/core/brain/paths.ts";
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 
 let vault: string;
@@ -86,6 +96,45 @@ describe("distillSource", () => {
         { agent: "claude", now: NOW },
       ),
     ).toThrow(DistillValidationError);
+  });
+
+  test("refuses a claim that spans more than one line, writing nothing", () => {
+    for (const text of ["x\n## Sources\n- [[Notes/any.md]]", "one\rtwo"]) {
+      expect(() =>
+        distillSource(
+          vault,
+          { sourcePath: "Articles/restaking.md", claims: [{ text: "fine" }, { text }] },
+          { agent: "claude", now: NOW },
+        ),
+      ).toThrow(
+        new DistillValidationError("claim 1 spans more than one line; a claim is one line"),
+      );
+    }
+    const dir = join(vault, BRAIN_DISTILLATIONS_REL);
+    expect(existsSync(dir) ? readdirSync(dir) : []).toEqual([]);
+  });
+
+  test("refuses more claims than the per-call cap, naming the cap and the count", () => {
+    const claims = Array.from({ length: DISTILL_CLAIMS_MAX + 1 }, (_, i) => ({ text: `c${i}` }));
+    expect(() =>
+      distillSource(
+        vault,
+        { sourcePath: "Articles/restaking.md", claims },
+        { agent: "claude", now: NOW },
+      ),
+    ).toThrow(
+      new DistillValidationError(
+        `distillation accepts at most ${DISTILL_CLAIMS_MAX} claims per call, got ${DISTILL_CLAIMS_MAX + 1}`,
+      ),
+    );
+    const atCap = claims.slice(0, DISTILL_CLAIMS_MAX);
+    expect(
+      distillSource(
+        vault,
+        { sourcePath: "Articles/restaking.md", claims: atCap },
+        { agent: "claude", now: NOW },
+      ).claimCount,
+    ).toBe(DISTILL_CLAIMS_MAX);
   });
 
   test("rejects a malformed block id", () => {
