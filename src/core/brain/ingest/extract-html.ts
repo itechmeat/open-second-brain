@@ -11,17 +11,17 @@
  *
  * The grammar, by decision: comments, the doctype and processing
  * instructions are dropped; raw-text elements and the elements in
- * {@link SKIPPED_ELEMENTS} contribute nothing; a `<private>` region
- * becomes {@link PRIVATE_REGION_PLACEHOLDER}; numeric character
- * references and the six named entities are decoded, any other named
- * entity is kept verbatim; block elements break lines, `pre` keeps its
- * whitespace and everywhere else whitespace collapses; `<title>` is the
- * title; no attribute value is ever emitted; CRLF and a lone CR count as
- * one line break; bytes that are not UTF-8 are refused by name.
+ * {@link SKIPPED_ELEMENTS} contribute nothing; a `<private>` region, also
+ * one inside a title or a textarea, becomes {@link PRIVATE_REGION_PLACEHOLDER};
+ * numeric character references and the six named entities are decoded, any
+ * other named entity is kept verbatim; block elements break lines, `pre`
+ * keeps its whitespace and everywhere else whitespace collapses; `<title>`
+ * is the title; no attribute value is ever emitted; CRLF and a lone CR
+ * count as one line break; bytes that are not UTF-8 are refused by name.
  */
 
 import { fenceFor } from "../../markdown-fence.ts";
-import { PRIVATE_REGION_PLACEHOLDER } from "../../redactor.ts";
+import { PRIVATE_REGION_PLACEHOLDER, stripPrivateRegions } from "../../redactor.ts";
 import { oneLine } from "../architect/manifests.ts";
 import { SOURCE_HASH_MAX_BYTES } from "../intake/source-trust.ts";
 import { SOURCE_EXTRACT_SKIP_REASON } from "./source-formats.ts";
@@ -627,7 +627,8 @@ class HtmlScanner {
       return;
     }
     if (RCDATA_ELEMENTS.has(name)) {
-      const content = decodeAll(this.readUntilEndTag(name));
+      // Stripped after decoding, so an encoded `&lt;private&gt;` hides too (fail-closed).
+      const content = stripPrivateRegions(decodeAll(this.readUntilEndTag(name)));
       if (name === TITLE_ELEMENT) {
         if (this.title === null) {
           const folded = oneLine(collapseWhitespace(content));

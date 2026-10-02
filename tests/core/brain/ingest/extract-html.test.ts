@@ -94,6 +94,33 @@ describe("extractHtml - text", () => {
     );
   });
 
+  test("a private region inside a heading stays out of the text and the part", () => {
+    const result = extracted("<h1>Plan <private>vault 4711</private> v2</h1><p>body</p>");
+    expect(result.text).toBe(`Plan ${PRIVATE_REGION_PLACEHOLDER} v2\nbody`);
+    expect(result.parts.map((p) => p.heading)).toEqual([`Plan ${PRIVATE_REGION_PLACEHOLDER} v2`]);
+    expect(renderPartsSection(result)).not.toContain("4711");
+    const unclosed = extracted("<h2>Plan <private>vault 4711</h2><p>after</p>");
+    expect(JSON.stringify(unclosed)).not.toContain("4711");
+    expect(JSON.stringify(unclosed)).not.toContain("after");
+  });
+
+  test("a private region inside a title or a textarea is not emitted", () => {
+    // Title and textarea content is read as raw text, so the private-region
+    // rule is applied to that text as well; the title reaches the CLI preview.
+    const titled = extracted("<title>Plan <private>vault 4711</private></title><p>x</p>");
+    expect(titled.title).toBe(`Plan ${PRIVATE_REGION_PLACEHOLDER}`);
+    const area = extracted("<textarea>a <private>vault 4711</private> b</textarea>");
+    expect(area.text).toBe(`a ${PRIVATE_REGION_PLACEHOLDER} b`);
+  });
+
+  test("a private region inside a textarea in a heading stays out of the parts", () => {
+    const result = extracted(
+      "<h1>Ops <textarea>key <private>vault 4711</private></textarea></h1><p>x</p>",
+    );
+    expect(result.parts.map((p) => p.heading)).toEqual([`Ops key ${PRIVATE_REGION_PLACEHOLDER}`]);
+    expect(renderPartsSection(result)).not.toContain("4711");
+  });
+
   test("an unclosed private region hides everything after it", () => {
     expect(textOf("<p>kept</p><private><p>hidden to the end</p>")).toBe(
       `kept\n${PRIVATE_REGION_PLACEHOLDER}`,
