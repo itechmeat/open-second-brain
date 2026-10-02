@@ -18,8 +18,8 @@
  * claim and source bytes themselves are never normalised.
  */
 
-import type { DistillClaim } from "./distill-source.ts";
 import { resolveBlock } from "./block-resolve.ts";
+import type { DistillClaim } from "./claim.ts";
 import {
   findQuoteSpans,
   normalizeForQuoteComparison,

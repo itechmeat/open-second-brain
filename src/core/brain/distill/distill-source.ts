@@ -83,6 +83,7 @@ import {
   type CaptureScope,
 } from "../provenance/capture-scope.ts";
 import { BLOCK_ID_RE } from "./block-resolve.ts";
+import type { DistillClaim } from "./claim.ts";
 import { checkClaimQuotes, type QuoteEvidence } from "./quote-check.ts";
 import {
   QUOTES_UNQUOTED_KEY,
@@ -94,13 +95,7 @@ import {
 /** Frontmatter `kind:` marker of a distillation page. */
 export const BRAIN_DISTILLATION_KIND = "brain-distillation";
 
-/** One atomic claim distilled from the source, with an optional block ref. */
-export interface DistillClaim {
-  /** The atomic claim text. */
-  readonly text: string;
-  /** Block id in the source the claim was drawn from (the `^abc` sigil, id only). */
-  readonly block?: string;
-}
+export type { DistillClaim } from "./claim.ts";
 
 /**
  * Normalize one agent-supplied claim record into a {@link DistillClaim}. Shared
