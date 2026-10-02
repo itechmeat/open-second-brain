@@ -23,8 +23,10 @@ import type { DistillClaim } from "./claim.ts";
 import {
   findQuoteSpans,
   normalizeForQuoteComparison,
+  quoteHaystack,
   spanOccursIn,
   unquoteSpans,
+  type QuoteHaystack,
   type QuoteSpan,
 } from "./quote-spans.ts";
 import {
@@ -69,7 +71,7 @@ const TEXTLESS_OUTCOME: Readonly<
 type Target =
   | {
       readonly kind: "haystack";
-      readonly normalized: string;
+      readonly haystack: QuoteHaystack;
       readonly verified: QuoteCheckOutcome;
       readonly failed: QuoteCheckOutcome;
     }
@@ -95,7 +97,7 @@ function targetResolver(evidence: QuoteEvidence): (claim: DistillClaim) => Targe
       case "found":
         return {
           kind: "haystack",
-          normalized: normalizeForQuoteComparison(block.text),
+          haystack: quoteHaystack(normalizeForQuoteComparison(block.text)),
           verified: QUOTE_CHECK_OUTCOME.verifiedInBlock,
           failed: QUOTE_CHECK_OUTCOME.notInBlock,
         };
@@ -109,7 +111,7 @@ function targetResolver(evidence: QuoteEvidence): (claim: DistillClaim) => Targe
     if (claim.block === undefined) {
       wholeSource ??= {
         kind: "haystack",
-        normalized: normalizeForQuoteComparison(evidence.text),
+        haystack: quoteHaystack(normalizeForQuoteComparison(evidence.text)),
         verified: QUOTE_CHECK_OUTCOME.verifiedInSource,
         failed: QUOTE_CHECK_OUTCOME.notInSource,
       };
@@ -126,7 +128,7 @@ function targetResolver(evidence: QuoteEvidence): (claim: DistillClaim) => Targe
 
 function spanOutcome(span: QuoteSpan, target: Target): QuoteCheckOutcome {
   if (target.kind === "settled") return target.outcome;
-  return spanOccursIn(span.inner, target.normalized) ? target.verified : target.failed;
+  return spanOccursIn(span.inner, target.haystack) ? target.verified : target.failed;
 }
 
 /** The span's own text, cut at the preview cap without splitting a code point. */

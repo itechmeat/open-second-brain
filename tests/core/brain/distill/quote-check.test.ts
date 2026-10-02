@@ -95,6 +95,19 @@ describe("checkClaimQuotes - claims without a block", () => {
     expect(res.report!.findings).toEqual([]);
   });
 
+  test("a span inside a longer word of the source is not-in-source", () => {
+    const res = checkClaimQuotes({
+      claims: [{ text: 'It is "unsafe" here.' }, { text: 'It is "safe" here.' }],
+      evidence: { kind: "text", text: "The method is unsafe." },
+    });
+    expect(res.report!.verified_in_source).toBe(1);
+    expect(res.report!.unquoted).toBe(1);
+    expect(res.report!.findings).toEqual([
+      { claim: 1, outcome: QUOTE_CHECK_OUTCOME.notInSource, span: "safe" },
+    ]);
+    expect(res.claims[1]!.text).toBe("It is safe here.");
+  });
+
   test("a span absent from the source is not-in-source", () => {
     const res = one({ text: "Risk is “uncorrelated slashing risk” here." });
     expect(res.report!.findings).toEqual([

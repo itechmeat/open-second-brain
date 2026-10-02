@@ -1373,9 +1373,11 @@ display text (paired emphasis and code markers, so `snake_case` and
 `[[target]]`), line-leading block markers and a trailing ` ^id` removed,
 quotation-mark variants folded, whitespace runs collapsed. Case,
 punctuation and wording are never folded. The normalised span must then
-be an exact substring of the normalised evidence. A span holding an
-ellipsis (`…` or three or more dots) is split there, and every fragment
-must appear in order without overlap. A bracketed insertion such as
+be an exact substring of the normalised evidence that starts and ends on
+a word boundary, by the Unicode word rules, so `"safe"` does not verify
+inside `unsafe`. A span holding an ellipsis (`…` or three or more dots)
+is split there, and every fragment must appear in order without overlap;
+an edge next to an ellipsis may fall inside a word. A bracketed insertion such as
 `[sic]` is not interpreted and fails as a mismatch. The page bytes are
 never normalised; normalisation is used for the comparison only.
 

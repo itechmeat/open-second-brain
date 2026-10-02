@@ -413,6 +413,10 @@ export function normalizeForQuoteComparison(text: string): string {
 
 /** U+2026 or a run of three or more full stops. */
 const ELLIPSIS_RE = /…|\.{3,}/u;
+/** A span that opens with an ellipsis: its first fragment may start inside a word. */
+const LEADING_ELLIPSIS_RE = /^\s*(?:…|\.{3,})/u;
+/** A span that closes with an ellipsis: its last fragment may end inside a word. */
+const TRAILING_ELLIPSIS_RE = /(?:…|\.{3,})\s*$/u;
 
 /** The fragments an ellipsis separates, trimmed, empty ones dropped. */
 export function splitEllipsisFragments(inner: string): ReadonlyArray<string> {
@@ -422,19 +426,60 @@ export function splitEllipsisFragments(inner: string): ReadonlyArray<string> {
     .filter((fragment) => fragment.length > 0);
 }
 
+/** Word segmentation by the Unicode rules (dictionary-based for scripts written without spaces). */
+const WORD_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "word" });
+
+/**
+ * An already-normalised text a span is searched in, with its word boundaries.
+ * The segmentation is built on the first boundary question and reused for
+ * every later one, so a haystack shared by many claims is segmented once.
+ */
+export interface QuoteHaystack {
+  readonly normalized: string;
+  /** Does a word boundary fall at `offset` (the two ends of the text always do)? */
+  isWordBoundary(offset: number): boolean;
+}
+
+/** Wrap a normalised text (from {@link normalizeForQuoteComparison}) as a haystack. */
+export function quoteHaystack(normalized: string): QuoteHaystack {
+  let segments: Intl.Segments | undefined;
+  return {
+    normalized,
+    isWordBoundary(offset: number): boolean {
+      if (offset <= 0 || offset >= normalized.length) return true;
+      segments ??= WORD_SEGMENTER.segment(normalized);
+      return segments.containing(offset)?.index === offset;
+    },
+  };
+}
+
 /**
  * Does the quoted `inner` occur in an already-normalised haystack? Every
  * ellipsis fragment must appear, in order, without overlapping the previous
- * one. A span that is nothing but an ellipsis quotes nothing and fails.
+ * one. The outer ends of the span must fall on word boundaries of the
+ * haystack, so `"safe"` does not verify inside `unsafe`; an edge next to an
+ * ellipsis is free, since an ellipsis may cut a word on purpose. A span that
+ * is nothing but an ellipsis quotes nothing and fails.
  */
-export function spanOccursIn(inner: string, haystackNormalized: string): boolean {
+export function spanOccursIn(inner: string, haystack: string | QuoteHaystack): boolean {
+  const target = typeof haystack === "string" ? quoteHaystack(haystack) : haystack;
+  const text = target.normalized;
   const fragments = splitEllipsisFragments(inner)
     .map(normalizeForQuoteComparison)
     .filter((fragment) => fragment.length > 0);
   if (fragments.length === 0) return false;
+  const openStart = LEADING_ELLIPSIS_RE.test(inner);
+  const openEnd = TRAILING_ELLIPSIS_RE.test(inner);
+  const last = fragments.length - 1;
   let from = 0;
-  for (const fragment of fragments) {
-    const at = haystackNormalized.indexOf(fragment, from);
+  for (const [k, fragment] of fragments.entries()) {
+    const startBound = k === 0 && !openStart;
+    const endBound = k === last && !openEnd;
+    const fits = (at: number): boolean =>
+      (!startBound || target.isWordBoundary(at)) &&
+      (!endBound || target.isWordBoundary(at + fragment.length));
+    let at = text.indexOf(fragment, from);
+    while (at !== -1 && !fits(at)) at = text.indexOf(fragment, at + 1);
     if (at === -1) return false;
     from = at + fragment.length;
   }

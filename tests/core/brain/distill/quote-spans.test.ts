@@ -318,3 +318,34 @@ describe("ellipsis fragments", () => {
     expect(spanOccursIn("said   very clearly", haystack)).toBe(true);
   });
 });
+
+describe("word boundaries at the outer ends of a span", () => {
+  test("a span inside a longer word does not verify", () => {
+    const haystack = normalizeForQuoteComparison("The method is unsafe.");
+    expect(spanOccursIn("safe", haystack)).toBe(false);
+    expect(spanOccursIn("method i", haystack)).toBe(false);
+  });
+
+  test("a span that starts and ends on word boundaries verifies", () => {
+    const haystack = normalizeForQuoteComparison("The method is unsafe.");
+    expect(spanOccursIn("unsafe", haystack)).toBe(true);
+    expect(spanOccursIn("is unsafe.", haystack)).toBe(true);
+    expect(spanOccursIn("The method", haystack)).toBe(true);
+  });
+
+  test("a span of word-segmented text without spaces verifies inside running text", () => {
+    const sentence = [0x4ed6, 0x8bf4, 0x4f60, 0x597d, 0x5417, 0x3002].map(cp).join("");
+    const span = [0x4f60, 0x597d].map(cp).join("");
+    expect(spanOccursIn(span, normalizeForQuoteComparison(sentence))).toBe(true);
+  });
+
+  test("an ellipsis edge may cut a word, an outer edge may not", () => {
+    const haystack = normalizeForQuoteComparison("the reconfiguration was unsafe today");
+    expect(spanOccursIn(`the reconfig${cp(0x2026)}unsafe today`, haystack)).toBe(true);
+    expect(spanOccursIn(`${cp(0x2026)}configuration was`, haystack)).toBe(true);
+    expect(spanOccursIn(`was uns${cp(0x2026)}`, haystack)).toBe(true);
+    expect(spanOccursIn(`he reconfig${cp(0x2026)}today`, haystack)).toBe(false);
+    expect(spanOccursIn(`the${cp(0x2026)}safe today`, haystack)).toBe(true);
+    expect(spanOccursIn(`the${cp(0x2026)}today unsafe`, haystack)).toBe(false);
+  });
+});
