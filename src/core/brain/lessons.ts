@@ -36,10 +36,12 @@ import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { parseFrontmatter } from "../vault.ts";
+import { UNFILTERED_ARTIFACT_REFS, artifactRefView } from "./artifact-ref-view.ts";
 import { decayWeight } from "./continuity/usage-signal.ts";
 import { listDeadEnds, type DeadEndEntry } from "./dead-ends.ts";
 import { listLogDates, readLogDay } from "./log-jsonl.ts";
-import { brainDirs, brainDirsForWrite, brainLessonsPath } from "./paths.ts";
+import { logEntryArtifactRefs, type BrainLogEntry } from "./log.ts";
+import { brainDirs, brainDirsForWrite, brainLessonsPath, vaultRelative } from "./paths.ts";
 import { parsePreference } from "./preference.ts";
 import {
   LESSONS_CORROBORATION_MIN_DEFAULT,
@@ -110,6 +112,11 @@ export interface ComputeLessonsOptions {
   readonly corroborationMin?: number;
   /** Max lessons returned. Default 20. */
   readonly limit?: number;
+  /**
+   * Whether an apply-evidence event may count. Omitted, every event the
+   * scoring reads counts.
+   */
+  readonly keepEvent?: (entry: BrainLogEntry) => boolean;
 }
 
 /** Mutable per-node accumulator during the scoring pass. */
@@ -181,7 +188,9 @@ export function computeLessons(
   };
 
   // One pass over every log day, bucketing signed outcomes by pref.
-  if (prefByKey.size > 0) scoreApplyEvidence(vault, prefByKey, accFor, nowMs, halfLifeDays);
+  if (prefByKey.size > 0) {
+    scoreApplyEvidence(vault, prefByKey, accFor, nowMs, halfLifeDays, opts.keepEvent);
+  }
 
   const entries: LessonEntry[] = [];
 
@@ -248,6 +257,7 @@ function scoreApplyEvidence(
   accFor: (key: string) => Accumulator,
   nowMs: number,
   halfLifeDays: number,
+  keepEvent: ((entry: BrainLogEntry) => boolean) | undefined,
 ): void {
   const dirs = brainDirs(vault);
   if (!existsSync(dirs.log)) return;
@@ -264,6 +274,7 @@ function scoreApplyEvidence(
     }
     for (const e of parsed.entries) {
       if (e.eventType !== BRAIN_LOG_EVENT_KIND.applyEvidence) continue;
+      if (keepEvent !== undefined && !keepEvent(e)) continue;
       const prefField = e.body["preference"];
       if (typeof prefField !== "string") continue;
       const key = normaliseWikilinkTarget(prefField);
@@ -351,34 +362,54 @@ export interface RegenerateLessonsOptions {
 export interface RegenerateLessonsResult {
   readonly path: string;
   readonly changed: boolean;
-  readonly counts: {
-    readonly preferred: number;
-    readonly tentative: number;
-    readonly contested: number;
-    readonly avoid: number;
-    readonly total: number;
-  };
+  readonly counts: LessonCounts;
 }
 
-/**
- * Regenerate `<vault>/Brain/lessons.md`. Idempotent: the rendered body
- * is compared byte-for-byte against the existing file before writing so
- * a no-op `dream` rerun leaves the file (and its mtime) untouched.
- *
- * Parser failures on individual preference / dead-end files are
- * swallowed and the offending file is omitted, exactly like
- * `regenerateActive` — a single corrupted frontmatter must not blank
- * the whole lessons view. `brain_doctor` is the surface for corruption.
- */
-export function regenerateLessons(
-  vault: string,
-  opts: RegenerateLessonsOptions = {},
-): RegenerateLessonsResult {
-  const now = opts.now ?? new Date();
-  const path = brainLessonsPath(vault);
+export interface LessonCounts {
+  readonly preferred: number;
+  readonly tentative: number;
+  readonly contested: number;
+  readonly avoid: number;
+  readonly total: number;
+}
 
-  const preferences = readActivePreferences(vault);
-  const { entries: deadEnds } = listDeadEnds(vault);
+/** Who is reading the shared lessons digest. */
+export interface LessonsReaderOptions {
+  /**
+   * May this reader see the record at a vault-relative path? A preference
+   * or dead-end it answers `false` for is treated as absent, and so is
+   * every apply-evidence event naming a page it cannot see. Omitted,
+   * nothing is filtered. It never reaches the shared write.
+   */
+  readonly readable?: (rel: string) => boolean;
+}
+
+interface RenderLessonsOptions extends LessonsReaderOptions {
+  readonly now: Date;
+  readonly generatedAt: string;
+}
+
+/** A rendered lessons digest that has NOT been written anywhere. */
+export interface LessonsRender {
+  /** Body only, no frontmatter: what the idempotency check compares. */
+  readonly body: string;
+  /** Frontmatter + body: exactly the bytes a write would store. */
+  readonly document: string;
+  readonly counts: LessonCounts;
+}
+
+function renderLessons(vault: string, opts: RenderLessonsOptions): LessonsRender {
+  const readable = opts.readable;
+  const refs =
+    readable === undefined
+      ? UNFILTERED_ARTIFACT_REFS
+      : artifactRefView(vault, (rel) => readable(rel));
+  const preferences = readActivePreferences(vault).filter(({ path }) =>
+    refs.visible(vaultRelative(path, vault)),
+  );
+  const deadEnds = listDeadEnds(vault).entries.filter((de) =>
+    refs.visible(vaultRelative(de.path, vault)),
+  );
 
   // Tunables from `_brain.yaml:lessons.*`. A malformed config never
   // blocks the digest — fall back to the defaults (doctor's job).
@@ -396,28 +427,79 @@ export function regenerateLessons(
     // intentional fallback — config error is doctor's job to surface
   }
 
-  const lessons = computeLessons(vault, preferences, deadEnds, {
-    now,
-    halfLifeDays,
-    corroborationMin,
-    limit,
-  });
+  const lessons = computeLessons(
+    vault,
+    preferences.map(({ pref }) => pref),
+    deadEnds,
+    {
+      now: opts.now,
+      halfLifeDays,
+      corroborationMin,
+      limit,
+      ...(refs.filtersNothing
+        ? {}
+        : { keepEvent: (e: BrainLogEntry) => refs.row(...logEntryArtifactRefs(e)) }),
+    },
+  );
 
   const body = renderBody(lessons, { corroborationMin, halfLifeDays });
-  const existingBody = readExistingBody(path);
-  const changed = existingBody === null || existingBody !== body.trim();
-  if (changed) {
-    atomicWriteFileSync(path, renderDocument(body, isoSecond(now)));
-  }
-
-  const counts = {
-    preferred: lessons.filter((l) => l.tier === LESSON_TIER.preferred).length,
-    tentative: lessons.filter((l) => l.tier === LESSON_TIER.tentative).length,
-    contested: lessons.filter((l) => l.tier === LESSON_TIER.contested).length,
-    avoid: lessons.filter((l) => l.tier === LESSON_TIER.avoid).length,
-    total: lessons.length,
+  return {
+    body,
+    document: renderDocument(body, opts.generatedAt),
+    counts: {
+      preferred: lessons.filter((l) => l.tier === LESSON_TIER.preferred).length,
+      tentative: lessons.filter((l) => l.tier === LESSON_TIER.tentative).length,
+      contested: lessons.filter((l) => l.tier === LESSON_TIER.contested).length,
+      avoid: lessons.filter((l) => l.tier === LESSON_TIER.avoid).length,
+      total: lessons.length,
+    },
   };
-  return { path, changed, counts };
+}
+
+/**
+ * Regenerate `<vault>/Brain/lessons.md`. Idempotent: the rendered body
+ * is compared byte-for-byte against the existing file before writing so
+ * a no-op `dream` rerun leaves the file (and its mtime) untouched.
+ *
+ * Parser failures on individual preference / dead-end files are
+ * swallowed and the offending file is omitted, exactly like
+ * `regenerateActive` — a single corrupted frontmatter must not blank
+ * the whole lessons view. `brain_doctor` is the surface for corruption.
+ *
+ * The write is ALWAYS unscoped: a reader's narrowing is
+ * {@link renderLessonsForReader}, which writes nothing.
+ */
+export function regenerateLessons(
+  vault: string,
+  opts: RegenerateLessonsOptions = {},
+): RegenerateLessonsResult {
+  const now = opts.now ?? new Date();
+  const path = brainLessonsPath(vault);
+  const rendered = renderLessons(vault, { now, generatedAt: isoSecond(now) });
+  const existingBody = readExistingBody(path);
+  const changed = existingBody === null || existingBody !== rendered.body.trim();
+  if (changed) {
+    atomicWriteFileSync(path, rendered.document);
+  }
+  return { path, changed, counts: rendered.counts };
+}
+
+/**
+ * The lessons digest as ONE reader may see it, rendered in memory and
+ * scored at the `generated_at` instant already on disk, so the narrowed
+ * document names and scores the same generation the shared file does.
+ * Nothing is written. The file must exist; the caller regenerates it
+ * first.
+ */
+export function renderLessonsForReader(vault: string, opts: LessonsReaderOptions): LessonsRender {
+  const generatedAt = readGeneratedAt(brainLessonsPath(vault));
+  const stampMs = generatedAt === null ? Number.NaN : Date.parse(generatedAt);
+  const now = Number.isNaN(stampMs) ? new Date() : new Date(stampMs);
+  return renderLessons(vault, {
+    ...opts,
+    now,
+    generatedAt: generatedAt ?? isoSecond(now),
+  });
 }
 
 /**
@@ -436,15 +518,22 @@ export function regenerateLessonsQuiet(vault: string, opts: RegenerateLessonsOpt
 
 // ----- Scan helpers --------------------------------------------------------
 
-function readActivePreferences(vault: string): BrainPreference[] {
-  // Only reached from `regenerateLessons`, which writes `Brain/lessons.md`.
+interface PreferenceAtPath {
+  readonly pref: BrainPreference;
+  readonly path: string;
+}
+
+function readActivePreferences(vault: string): PreferenceAtPath[] {
+  // Reached from the shared write and from the per-reader render; both
+  // read the directory the write resolves, so they score the same set.
   const dirs = brainDirsForWrite(vault);
   if (!existsSync(dirs.preferences)) return [];
-  const out: BrainPreference[] = [];
+  const out: PreferenceAtPath[] = [];
   for (const name of readdirSync(dirs.preferences)) {
     if (!name.endsWith(".md")) continue;
+    const path = join(dirs.preferences, name);
     try {
-      out.push(parsePreference(join(dirs.preferences, name)));
+      out.push({ pref: parsePreference(path), path });
     } catch {
       // Corrupted / status-folder-mismatched — omit; doctor flags it.
     }
@@ -543,6 +632,19 @@ function renderDocument(body: string, generatedAt: string): string {
     body.trimEnd(),
     "",
   ].join("\n");
+}
+
+/** The `generated_at` stamp of the file on disk, or null when absent or unreadable. */
+function readGeneratedAt(path: string): string | null {
+  if (!existsSync(path)) return null;
+  try {
+    const [meta] = parseFrontmatter(path);
+    const value = meta["generated_at"];
+    return typeof value === "string" && value.trim().length > 0 ? value : null;
+  } catch {
+    // A torn header has no stamp to reuse; the render then stamps its own.
+    return null;
+  }
 }
 
 function readExistingBody(path: string): string | null {

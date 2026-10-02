@@ -250,6 +250,12 @@ const NOTE_CONTENT_PRODUCERS: ReadonlyArray<ProducerRule> = Object.freeze([
     identifiers: ["buildSchemaLint", "buildSchemaStats", "reviewSchemaOrphans"],
   },
   { specifierIncludes: "/brain/dead-ends.ts", identifiers: ["listDeadEnds", "recordDeadEnd"] },
+  // The compiled digests: both render preference records by principle.
+  { specifierIncludes: "/brain/digest.ts", identifiers: ["renderDigest"] },
+  {
+    specifierIncludes: "/brain/lessons.ts",
+    identifiers: ["regenerateLessons", "renderLessonsForReader"],
+  },
   {
     specifierIncludes: "/brain/claim-graph.ts",
     identifiers: [
@@ -461,9 +467,12 @@ function reasonProblems(entries: ReadonlyArray<VisibilitySurfaceEntry>): {
  * which named a malformed reserved record by path (both are covered now
  * that the repair plan is bounded by the caller's reach), plus `brain_health`,
  * `brain_status` and `schema_apply_mutations` on the file-level rule.
+ *
+ * 54 before the vocabulary gained the two compiled digests. The one new
+ * name is `brain_brief`, whose digest view renders preference records.
  */
-const MCP_TOOL_POPULATION_SIZE = 54;
-/** Measured: MCP resources + templates, all excluded. */
+const MCP_TOOL_POPULATION_SIZE = 55;
+/** Measured: MCP resources + templates. */
 const MCP_RESOURCE_POPULATION_SIZE = 8;
 /** Measured: hand-enumerated CLI verb mirrors. */
 const CLI_VERB_POPULATION_SIZE = 20;
@@ -563,13 +572,13 @@ describe("visibility surface census", () => {
       expect(advertised.size).toBe(MCP_RESOURCE_POPULATION_SIZE);
     });
 
-    test("the templated readers and the active digest are covered, three whole-vault ones are not", () => {
+    test("the templated readers and the three digests are covered, the status projection is not", () => {
       // A templated reader is keyed by a caller-supplied id and is
-      // therefore root C. The active digest is a shared file, but it is a
-      // render of preference records, so a reader is handed it without
-      // the records withheld from it. The three remaining whole-vault
-      // readers return the lessons digest, the digest page and the status
-      // projection, which no page's reservation covers.
+      // therefore root C. The active, lessons and activity digests are
+      // renders of preference records, so a reader is handed each without
+      // the records withheld from it. The status projection returns
+      // counts over the whole Brain layer, which no page's reservation
+      // covers.
       const byCategory = (category: string): string[] =>
         REGISTRY_BY_KIND(VISIBILITY_SURFACE_KIND.mcpResource)
           .filter((e) => e.category === category)
@@ -577,16 +586,14 @@ describe("visibility surface census", () => {
           .toSorted();
       expect(byCategory(VISIBILITY_SURFACE_CATEGORY.covered)).toEqual([
         "osb://backlinks/{id}",
+        "osb://digest/latest",
+        "osb://lessons",
         "osb://log/{date}",
         "osb://preference/{id}",
         "osb://preferences/active",
         "osb://topic/{slug}",
       ]);
-      expect(byCategory(VISIBILITY_SURFACE_CATEGORY.excluded)).toEqual([
-        "osb://digest/latest",
-        "osb://lessons",
-        "osb://status",
-      ]);
+      expect(byCategory(VISIBILITY_SURFACE_CATEGORY.excluded)).toEqual(["osb://status"]);
     });
   });
 

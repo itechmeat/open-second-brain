@@ -36,13 +36,18 @@
  */
 
 import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 
-import { backlinkCount, buildBacklinkIndex, type BacklinkIndex } from "./backlinks.ts";
+import {
+  UNFILTERED_ARTIFACT_REFS,
+  artifactRefView,
+  type ArtifactRefView,
+} from "./artifact-ref-view.ts";
+import { buildBacklinkIndex, type BacklinkIndex } from "./backlinks.ts";
 import { computeAgentSummary, type AgentSummaryEntry } from "./digest-agent-summary.ts";
 import { findMergeCandidates } from "./merge-candidates.ts";
 import { computeMostApplied } from "./most-applied.ts";
-import { brainDirs, vaultRelative } from "./paths.ts";
+import { BRAIN_RETIRED_REL, brainDirs, vaultRelative } from "./paths.ts";
 import { collectMaintenanceActions } from "./maintenance/collect.ts";
 import type { ActionItem } from "./maintenance/action-scorer.ts";
 import { loadActiveMostAppliedSafe } from "./policy.ts";
@@ -54,7 +59,7 @@ import {
   resolveOwnerScopeDelivery,
 } from "./preferences-collect.ts";
 import { isPreferenceVisible } from "./owner-scoped-facts.ts";
-import type { BrainLogEntry } from "./log.ts";
+import { logEntryArtifactRefs, type BrainLogEntry } from "./log.ts";
 import { listLogDates, readLogDay } from "./log-jsonl.ts";
 import {
   BRAIN_APPLY_RESULT,
@@ -102,6 +107,14 @@ export interface RenderDigestOptions {
    * output is byte-identical to a vault without the gate.
    */
   readonly agentScope?: string;
+  /**
+   * May this reader see the record at a vault-relative path? A preference
+   * or retired record it answers `false` for is treated as absent: its
+   * rows, its counts, the log events naming it and the backlinks it is
+   * the source of all go. Omitted, nothing is filtered and the output is
+   * byte-identical to a digest without the option.
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 export interface RenderDigestResult {
@@ -336,7 +349,7 @@ export function renderDigest(vault: string, opts: RenderDigestOptions = {}): Ren
     );
   }
 
-  const data = collectDigestData(vault, since, until, opts.agentScope);
+  const data = collectDigestData(vault, since, until, opts.agentScope, readerRefs(vault, opts));
   const empty = isEmpty(data);
 
   if (format === "json") {
@@ -413,6 +426,18 @@ function renderTrustSection(
 
 // ----- Data collection ------------------------------------------------------
 
+/**
+ * The reader's predicate as a reference view, so a log event, a backlink
+ * source or an action target named by id is asked the same question a
+ * record path is.
+ */
+function readerRefs(vault: string, opts: RenderDigestOptions): ArtifactRefView {
+  const readable = opts.readable;
+  return readable === undefined
+    ? UNFILTERED_ARTIFACT_REFS
+    : artifactRefView(vault, (rel) => readable(rel));
+}
+
 interface DigestData {
   readonly new_unconfirmed: ReadonlyArray<DigestJsonNewUnconfirmed>;
   readonly confirmed: ReadonlyArray<DigestJsonConfirmed>;
@@ -433,6 +458,7 @@ function collectDigestData(
   since: Date,
   until: Date,
   agentScope: string | undefined,
+  refs: ArtifactRefView,
 ): DigestData {
   const sinceMs = since.getTime();
   const untilMs = until.getTime();
@@ -445,7 +471,7 @@ function collectDigestData(
 
   // 1. Iterate preferences/ for unconfirmed (created_at in window) and
   //    confirmed (confirmed_at in window).
-  const preferences = readAllPreferences(vault, agentScope);
+  const preferences = readAllPreferences(vault, agentScope, refs);
   const new_unconfirmed: DigestJsonNewUnconfirmed[] = [];
   const confirmed: DigestJsonConfirmed[] = [];
 
@@ -468,14 +494,14 @@ function collectDigestData(
         principle: pref.principle,
         scope: pref.scope ?? null,
         confirmed_at: pref.confirmed_at!,
-        first_applied_artifact: findFirstAppliedArtifact(vault, pref.id),
+        first_applied_artifact: findFirstAppliedArtifact(vault, pref.id, refs),
       });
     }
   }
 
   // 2. Iterate retired/ for entries retired in window.
   const retiredEntries: DigestJsonRetired[] = [];
-  const retiredAll = readAllRetired(vault, agentScope);
+  const retiredAll = readAllRetired(vault, agentScope, refs);
   for (const { ret, path } of retiredAll) {
     void path;
     if (inWindow(ret.retired_at)) {
@@ -500,9 +526,16 @@ function collectDigestData(
   const idToPrinciple = new Map<string, string>();
   for (const { pref } of preferences) idToPrinciple.set(pref.id, pref.principle);
   for (const { ret } of retiredAll) idToPrinciple.set(ret.id, ret.principle);
-  const logEntries = readLogsInWindow(vault, since, until);
-  const confidenceShifts = extractConfidenceShifts(logEntries, idToPrinciple);
-  const contradictions = extractContradictions(logEntries, idToPrinciple);
+  const logEntries = refs.keep(readLogsInWindow(vault, since, until), logEntryArtifactRefs);
+  // A shift or contradiction line is one string naming its preference
+  // inside other text, so the event-level filter above cannot resolve it;
+  // the parsed id is asked on its own.
+  const confidenceShifts = extractConfidenceShifts(logEntries, idToPrinciple).filter((row) =>
+    refs.visible(row.id),
+  );
+  const contradictions = extractContradictions(logEntries, idToPrinciple).filter((row) =>
+    refs.visible(row.id),
+  );
 
   // Stable ordering — id ascending so two runs on the same fixture
   // produce byte-identical output.
@@ -515,7 +548,8 @@ function collectDigestData(
   // read the same vault state within this digest run, so one
   // full-history backlink scan replaces two.
   const backlinkIndex = buildBacklinkIndex(vault);
-  const top_referenced = pickTopReferenced(backlinkIndex, preferences);
+  const inbound = (id: string): number => visibleBacklinkCount(backlinkIndex, id, refs);
+  const top_referenced = pickTopReferenced(inbound, preferences);
   // `merge_suggestions` reflects current vault state, not windowed
   // change. It is independent of `since`/`until` on purpose —
   // operators should see pending duplicates regardless of the digest
@@ -585,8 +619,8 @@ function collectDigestData(
     merge_suggestions,
     agent_summary,
     most_applied,
-    connection_health: computeConnectionHealth(vault, backlinkIndex, preferences),
-    actions: collectMaintenanceActions(vault),
+    connection_health: computeConnectionHealth(vault, inbound, preferences, refs),
+    actions: refs.keep(collectMaintenanceActions(vault), (action) => [action.target]),
   };
 }
 
@@ -618,14 +652,25 @@ function pickTopApplied(
   }));
 }
 
+/**
+ * Inbound references to `target` whose source this reader may see. With
+ * nothing filtered it is the index's own count.
+ */
+function visibleBacklinkCount(index: BacklinkIndex, target: string, refs: ArtifactRefView): number {
+  const sources = index.get(normaliseWikilinkTarget(target)) ?? [];
+  return refs.filtersNothing
+    ? sources.length
+    : sources.filter((ref) => refs.visible(ref.source)).length;
+}
+
 function pickTopReferenced(
-  index: BacklinkIndex,
+  inbound: (id: string) => number,
   preferences: ReadonlyArray<PreferenceWithPath>,
 ): ReadonlyArray<DigestJsonTopReferenced> {
   const scored = preferences
     .map(({ pref }) => ({
       pref,
-      count: backlinkCount(index, pref.id),
+      count: inbound(pref.id),
     }))
     .filter((x) => x.count > 0);
   scored.sort((a, b) => {
@@ -648,8 +693,9 @@ function pickTopReferenced(
  */
 function computeConnectionHealth(
   vault: string,
-  index: BacklinkIndex,
+  inbound: (id: string) => number,
   preferences: ReadonlyArray<PreferenceWithPath>,
+  refs: ArtifactRefView,
 ): DigestJsonConnectionHealth {
   const allIds = preferences.map(({ pref }) => pref.id);
   // Also include retired entries.
@@ -658,12 +704,13 @@ function computeConnectionHealth(
     for (const entry of readdirSync(dirs.retired, { withFileTypes: true })) {
       if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
       if (!entry.name.startsWith("ret-")) continue;
+      if (!refs.visible(posix.join(BRAIN_RETIRED_REL, entry.name))) continue;
       allIds.push(entry.name.replace(/\.md$/, ""));
     }
   }
 
   const totalNodes = allIds.length;
-  const counts = allIds.map((id) => backlinkCount(index, id));
+  const counts = allIds.map(inbound);
   const linkedNodes = counts.filter((c) => c > 0).length;
   const orphanNodes = totalNodes - linkedNodes;
 
@@ -711,6 +758,7 @@ interface PreferenceWithPath {
 function readAllPreferences(
   vault: string,
   agentScope: string | undefined,
+  refs: ArtifactRefView,
 ): ReadonlyArray<PreferenceWithPath> {
   const dirs = brainDirs(vault);
   // Shared delivery-path walk (context-integrity-gates, Unit A). This
@@ -722,7 +770,9 @@ function readAllPreferences(
     namePrefix: PREFERENCE_ID_PREFIX,
     regularFilesOnly: true,
     ownerScope: resolveOwnerScopeDelivery(vault, agentScope),
-  }).entries.map(({ pref, path }) => ({ pref, path }));
+  })
+    .entries.filter(({ path }) => refs.visible(vaultRelative(path, vault)))
+    .map(({ pref, path }) => ({ pref, path }));
 }
 
 interface RetiredWithPath {
@@ -739,6 +789,7 @@ interface RetiredWithPath {
 function readAllRetired(
   vault: string,
   agentScope: string | undefined,
+  refs: ArtifactRefView,
 ): ReadonlyArray<RetiredWithPath> {
   const dirs = brainDirs(vault);
   if (!existsSync(dirs.retired)) return [];
@@ -747,6 +798,7 @@ function readAllRetired(
   for (const entry of readdirSync(dirs.retired, { withFileTypes: true })) {
     if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
     if (!entry.name.startsWith("ret-")) continue;
+    if (!refs.visible(posix.join(BRAIN_RETIRED_REL, entry.name))) continue;
     const path = join(dirs.retired, entry.name);
     try {
       const ret = parseRetired(path);
@@ -795,10 +847,14 @@ function addDays(day: string, delta: number): string {
  * applied evidence is found — e.g. a preference that was force-confirmed
  * without ever being applied. This matches design doc §8.2 example.
  */
-function findFirstAppliedArtifact(vault: string, prefId: string): string | null {
+function findFirstAppliedArtifact(
+  vault: string,
+  prefId: string,
+  refs: ArtifactRefView,
+): string | null {
   for (const date of listLogDates(vault)) {
     const { entries } = readLogDay(vault, date);
-    for (const e of entries) {
+    for (const e of refs.keep(entries, logEntryArtifactRefs)) {
       if (e.eventType !== BRAIN_LOG_EVENT_KIND.applyEvidence) continue;
       if (e.body["result"] !== BRAIN_APPLY_RESULT.applied) continue;
       const prefPayload = e.body["preference"];

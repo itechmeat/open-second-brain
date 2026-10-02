@@ -320,7 +320,10 @@ const SCOPED_CALLS: ReadonlyArray<ProbeEntry> = [
   },
   {
     name: "brain_brief",
-    calls: [{ args: { view: "morning" }, reason: "the session-start summary view" }],
+    calls: [
+      { args: { view: "morning" }, reason: "the session-start summary view" },
+      { args: { view: "digest" }, reason: "the activity digest renders preference records" },
+    ],
   },
   {
     name: "brain_retrieval_plan",

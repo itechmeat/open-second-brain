@@ -492,6 +492,18 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "with no visibility check.",
   },
   {
+    surface: "brain_brief",
+    kind: K.mcpTool,
+    category: C.excluded,
+    reason:
+      "view=digest (brief-tools.ts) is rendered for the caller below local reach - renderDigest " +
+      "is handed readableAtContextReach(ctx), so a reserved preference or retired record is " +
+      "absent from its rows and counts - but the report delta (when report snapshots are " +
+      "enabled) is diffed over the whole digest, view=morning lists confirmed preferences " +
+      "without asking the reach rule, and the daily, weekly, monthly, operator and today views " +
+      "count over the whole Brain layer.",
+  },
+  {
     surface: "brain_pre_compress_pack",
     kind: K.mcpTool,
     category: C.covered,
@@ -629,8 +641,10 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
     category: C.excluded,
     reason:
       "reports install/config/vault status blocks - no note path, title, or body crosses this " +
-      "surface; included for completeness of the file-level sweep only (tools.ts imports " +
-      "listVaultPages for second_brain_query, defined in the same file).",
+      "surface, but its Brain block is computeBrainStatus over the whole Brain layer, so the " +
+      "preference counts and the last apply-evidence time move with a reserved record; included " +
+      "for the file-level sweep (tools.ts imports listVaultPages for second_brain_query, defined " +
+      "in the same file).",
   },
   {
     surface: "vault_health",
@@ -804,16 +818,24 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
   {
     surface: "osb://lessons",
     kind: K.mcpResource,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "readLessons (resources.ts) serves Brain/lessons.md, a whole-vault digest over " +
-      "preferences and dead-ends, as it is on disk; visibility: is never consulted.",
+      "readLessons (resources.ts) serves Brain/lessons.md's bytes only to a local reader with no " +
+      "owner scope; any other reader gets renderLessonsForReader, handed the request view " +
+      "(owner view ANDed with reachView): a preference or dead-end it cannot read, and every " +
+      "apply-evidence event naming a page it cannot read, is absent, scored at the generation " +
+      "on disk.",
   },
   {
     surface: "osb://digest/latest",
     kind: K.mcpResource,
-    category: C.excluded,
-    reason: "renderDigest() output, same unfiltered whole-vault-reader class; no visibility check.",
+    category: C.covered,
+    reason:
+      "readDigestLatest (resources.ts) hands renderDigest the request view below local reach: a " +
+      "preference or retired record the caller cannot read is absent from every row and count, " +
+      "with the log events, backlink sources and action targets naming one; the agent summary " +
+      "still counts every event in the window, and the token-footprint action measures the " +
+      "whole vault.",
   },
   {
     surface: "osb://status",

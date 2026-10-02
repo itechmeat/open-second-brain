@@ -32,8 +32,10 @@ import {
 import { buildOperatorSummary } from "../../core/brain/trust/operator-summary.ts";
 import { isoDate } from "../../core/brain/time.ts";
 import { captureReportDelta } from "../../core/brain/report-snapshot.ts";
+import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
-import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
+import { contextReach, type ServerContext, type ToolDefinition } from "../tool-contract.ts";
+import { readableAtContextReach } from "./reach-readable.ts";
 import { vaultPathField } from "../vault-path-field.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import {
@@ -149,13 +151,19 @@ async function toolBrainDigest(
   // window even when the caller omitted `until`.
   const effectiveUntil = until ?? new Date();
   const agentScope = coerceAgentScope(ctx, args, true);
-  const result = renderDigest(ctx.vault, {
-    ...(since ? { since } : {}),
-    until: effectiveUntil,
-    format,
-    linkOutputFormat: resolveLinkOutputFormat(ctx.configPath ?? undefined),
-    ...(agentScope !== undefined ? { agentScope } : {}),
-  });
+  // Below local reach the digest is rendered for this reader: a record it
+  // cannot read is absent from every row and count.
+  const restricted = contextReach(ctx) !== TRANSPORT_REACH.local;
+  const renderFor = (renderFormat: DigestFormat, readable?: (rel: string) => boolean) =>
+    renderDigest(ctx.vault, {
+      ...(since ? { since } : {}),
+      until: effectiveUntil,
+      format: renderFormat,
+      linkOutputFormat: resolveLinkOutputFormat(ctx.configPath ?? undefined),
+      ...(agentScope !== undefined ? { agentScope } : {}),
+      ...(readable !== undefined ? { readable } : {}),
+    });
+  const result = renderFor(format, restricted ? readableAtContextReach(ctx) : undefined);
 
   const envelope: Record<string, unknown> = {
     format,
@@ -166,16 +174,10 @@ async function toolBrainDigest(
   // a JSON digest for the snapshot regardless of the caller's format
   // so the run-over-run diff keys on data.
   const digestDate = isoDate(effectiveUntil);
+  // The snapshot is the vault's own run-over-run record, so it is always
+  // taken from the digest every record feeds, whoever asked.
   const snapshotSource =
-    format === "json"
-      ? result.content
-      : renderDigest(ctx.vault, {
-          ...(since ? { since } : {}),
-          until: effectiveUntil,
-          format: "json",
-          linkOutputFormat: resolveLinkOutputFormat(ctx.configPath ?? undefined),
-          ...(agentScope !== undefined ? { agentScope } : {}),
-        }).content;
+    format === "json" && !restricted ? result.content : renderFor("json").content;
   let parsedSnapshot: unknown = null;
   try {
     parsedSnapshot = JSON.parse(snapshotSource);
