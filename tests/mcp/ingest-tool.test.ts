@@ -15,6 +15,7 @@ import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { CAPTURE_SCOPE } from "../../src/core/brain/provenance/capture-scope.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { listEntities } from "../../src/core/brain/entities/registry.ts";
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { INGEST_TOOLS } from "../../src/mcp/brain/ingest-tools.ts";
 import { INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
@@ -261,5 +262,51 @@ describe("brain_ingest_source - capture_scope", () => {
       entities: [{ category: "concept", name: "Remote" }],
     })) as Record<string, unknown>;
     expect(res["capture_scope"]).toBe(CAPTURE_SCOPE.urlOnly);
+  });
+});
+
+/** Every Markdown page under `Brain/`, as text. */
+function brainPages(root: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(join(root, "Brain"), { recursive: true, withFileTypes: true })) {
+    if (entry.isFile() && entry.name.endsWith(".md")) {
+      out.push(readFileSync(join(entry.parentPath, entry.name), "utf8"));
+    }
+  }
+  return out;
+}
+
+/**
+ * A page the caller cannot read at its reach is ingested exactly like an
+ * absent one: untrusted lane, `url-only`, and no digest on any page.
+ */
+describe("brain_ingest_source - a page withheld at the caller's reach", () => {
+  const SECRET = "Notes/secret.md";
+
+  beforeEach(() => {
+    mkdirSync(join(vault, "Notes"), { recursive: true });
+    writeFileSync(join(vault, SECRET), "---\nvisibility: private\n---\nThe code is ZX8.\n", "utf8");
+  });
+
+  const ingest = (source: string, reachCtx: ServerContext = ctx) =>
+    handler(reachCtx, {
+      source_path: source,
+      summary: "Codes.",
+      entities: [{ category: "concept", name: "Codes" }],
+    }) as Promise<{ capture_scope: string; summary_path: string }>;
+
+  test("answers like an absent source and writes no digest", async () => {
+    const hidden = await ingest(SECRET);
+    const absent = await ingest("Notes/absent.md");
+    expect(hidden.capture_scope).toBe(CAPTURE_SCOPE.urlOnly);
+    expect(hidden.capture_scope).toBe(absent.capture_scope);
+    const summary = readFileSync(join(vault, hidden.summary_path), "utf8");
+    expect(summary).toContain("untrusted_source");
+    for (const page of brainPages(vault)) expect(page).not.toContain("source_content_hash");
+  });
+
+  test("at local reach the same page is full-local", async () => {
+    const res = await ingest(SECRET, { ...ctx, reach: TRANSPORT_REACH.local });
+    expect(res.capture_scope).toBe(CAPTURE_SCOPE.fullLocal);
   });
 });

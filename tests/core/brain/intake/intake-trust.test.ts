@@ -307,3 +307,55 @@ describe("ingestSource derives trust from the source identity", () => {
     expect(scrapedMeta[UNTRUSTED_SOURCE_FRONTMATTER_KEY]).toBeDefined();
   });
 });
+
+/**
+ * A caller-supplied reach predicate: a cited vault file it refuses is
+ * classified as a source with no local bytes, in both intake shapes.
+ */
+describe("intakeExtraction with a reach predicate", () => {
+  const OTHER_SOURCE = "Articles/other.md";
+  const hide = (rel: string): boolean => rel !== TRUSTED_SOURCE;
+
+  test("a refused single source is untrusted, asked by its canonical identity", () => {
+    seed(TRUSTED_SOURCE);
+    const asked: string[] = [];
+    const res = intakeExtraction(vault, EXTRACTION, {
+      agent: "claude",
+      now: NOW,
+      provenance: provenanceCiting(TRUSTED_SOURCE),
+      readable: (rel) => {
+        asked.push(rel);
+        return hide(rel);
+      },
+    });
+    expect(res.trust).toBe(INTAKE_TRUST.untrusted);
+    expect(asked).toEqual([TRUSTED_SOURCE]);
+  });
+
+  test("a refused source among several makes the whole intake untrusted", () => {
+    seed(TRUSTED_SOURCE);
+    seed(OTHER_SOURCE);
+    const res = intakeExtraction(vault, EXTRACTION, {
+      agent: "claude",
+      now: NOW,
+      provenance: {
+        level: "stated",
+        sources: [`[[${OTHER_SOURCE}]]`, `[[${TRUSTED_SOURCE}]]`],
+        premises: [],
+      },
+      readable: hide,
+    });
+    expect(res.trust).toBe(INTAKE_TRUST.untrusted);
+  });
+
+  test("a predicate that admits every source changes nothing", () => {
+    seed(TRUSTED_SOURCE);
+    const res = intakeExtraction(vault, EXTRACTION, {
+      agent: "claude",
+      now: NOW,
+      provenance: provenanceCiting(TRUSTED_SOURCE),
+      readable: () => true,
+    });
+    expect(res.trust).toBe(INTAKE_TRUST.trusted);
+  });
+});

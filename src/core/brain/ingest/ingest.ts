@@ -93,6 +93,13 @@ export interface IngestSourceOptions {
    * the result only, keeping the persisted page unchanged.
    */
   readonly preExtract?: boolean;
+  /**
+   * May the caller read the vault file at this vault-relative path? Handed to
+   * the intake: a source the predicate refuses is classified as one with no
+   * local bytes (untrusted lane, no digest, `url-only`). A local caller passes
+   * nothing.
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 export interface IngestSourceResult {
@@ -165,6 +172,7 @@ export function ingestSource(
     agent: opts.agent,
     now: opts.now,
     provenance,
+    ...(opts.readable !== undefined ? { readable: opts.readable } : {}),
   });
   const trust = intake.trust;
   const captureScope = captureScopeForTrust(trust);

@@ -157,7 +157,14 @@ export interface SourceOriginWithBytes extends SourceOrigin {
   readonly bytes?: Uint8Array;
 }
 
-const UNTRUSTED_ORIGIN: SourceOriginWithBytes = Object.freeze({ trust: INTAKE_TRUST.untrusted });
+/**
+ * The origin of a source with no local bytes: the untrusted lane, no digest.
+ * Also the answer for a vault file the caller may not read at its reach, so
+ * a hidden page and an absent one are indistinguishable.
+ */
+export const UNTRUSTED_ORIGIN: SourceOriginWithBytes = Object.freeze({
+  trust: INTAKE_TRUST.untrusted,
+});
 
 /** Everything before the first occurrence of `separator`, or the whole string. */
 function cutAt(value: string, separator: string): string {

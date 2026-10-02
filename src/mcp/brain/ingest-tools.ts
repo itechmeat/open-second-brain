@@ -37,6 +37,7 @@ import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { parseExtractionIntakeArgs } from "./intake-args.ts";
+import { readableAtContextReach } from "./reach-readable.ts";
 import { enforceCountGuard, readCountGuardArgs, wrapToolErrors } from "./shared.ts";
 
 const TOOL = "brain_ingest_source";
@@ -86,6 +87,8 @@ async function toolBrainIngestSource(
       {
         agent,
         now: new Date(),
+        // A page the caller may not read at its reach answers as an absent one.
+        readable: readableAtContextReach(ctx),
         ...(planId !== undefined ? { planId } : {}),
         ...(preExtract ? { preExtract: true } : {}),
       },

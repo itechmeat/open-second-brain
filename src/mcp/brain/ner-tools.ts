@@ -18,6 +18,7 @@ import { intakeExtraction, IntakeValidationError } from "../../core/brain/intake
 import { resolveAgentName } from "../../core/config.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { parseExtractionIntakeArgs } from "./intake-args.ts";
+import { readableAtContextReach } from "./reach-readable.ts";
 import { wrapToolErrors } from "./shared.ts";
 
 const TOOL = "brain_intake_entities";
@@ -42,6 +43,8 @@ async function toolBrainIntakeEntities(
       agent,
       now: new Date(),
       provenance: parsed.provenance,
+      // A page the caller may not read at its reach answers as an absent one.
+      readable: readableAtContextReach(ctx),
     });
     return {
       entities_created: [...result.entitiesCreated],
