@@ -504,7 +504,9 @@ function replaceGeneratorOwnedKey(text: string, key: string, lines: ReadonlyArra
     return all.join("\n");
   }
   let end = start + 1;
-  while (end < close && /^(?:\s|-)/.test(all[end]!)) end += 1;
+  // Indentation or a list item continues the value; a blank line, `\r`
+  // alone on a CRLF note included, ends it and is left where it is.
+  while (end < close && /^(?:[ \t]|-)/.test(all[end]!)) end += 1;
   all.splice(start, end - start, ...rendered);
   return all.join("\n");
 }

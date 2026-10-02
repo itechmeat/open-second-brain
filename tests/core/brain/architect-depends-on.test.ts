@@ -111,6 +111,28 @@ test("the key is rewritten and removed while other keys and prose stay byte-iden
   expect(removed.endsWith("\nOperator: web renders, core decides.\n")).toBe(true);
 });
 
+test("on a CRLF note a blank line after the key ends the key and is kept", () => {
+  const first = generateArchDocs(vault, project);
+  const webPath = notePath(first, "web");
+  const crlf = readFileSync(webPath, "utf8")
+    .replace(`${link(first, "core")}\n`, `${link(first, "core")}\n\nnote: kept\n`)
+    .replaceAll("\n", "\r\n");
+  writeFileSync(webPath, crlf);
+
+  put("packages/web/package.json", pkg("web", { core: "*", util: "*" }));
+  const second = generateArchDocs(vault, project);
+  const rewritten = readFileSync(webPath, "utf8");
+  const keyLines = (res: GenerateArchDocsResult, names: ReadonlyArray<string>): string =>
+    ["depends_on:", ...names.map((name) => link(res, name))].map((l) => `${l}\r\n`).join("");
+  expect(rewritten).toContain(`${keyLines(second, ["core", "util"])}\r\nnote: kept\r\n`);
+  // Outside the key, the frontmatter is byte-identical to what the operator left.
+  const crlfFrontmatter = (text: string): string =>
+    text.slice(0, text.indexOf("\r\n---\r\n", 4) + 7);
+  expect(crlfFrontmatter(rewritten).replace(keyLines(second, ["core", "util"]), "")).toBe(
+    crlfFrontmatter(crlf).replace(keyLines(first, ["core"]), ""),
+  );
+});
+
 test("an unchanged project leaves every note unchanged", () => {
   const first = generateArchDocs(vault, project);
   const before = readFileSync(notePath(first, "web"), "utf8");
