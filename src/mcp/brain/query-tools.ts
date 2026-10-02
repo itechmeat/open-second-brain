@@ -294,6 +294,10 @@ async function toolBrainAgentQuery(
     ...(query !== null ? { query } : {}),
     ...(kind !== null ? { kind } : {}),
     ...(ownerScope !== undefined ? { ownerScope } : {}),
+    // A note contribution echoes the write event's body, which carries
+    // the page's digest and size: a page the caller may not read at its
+    // reach is withheld exactly as an absent one.
+    view: reachView(ctx.vault, contextReach(ctx)),
     limit: coerceInt(args, "limit", 50, 1, 500),
   }) as unknown as Record<string, unknown>;
 }
@@ -460,6 +464,7 @@ async function toolBrainAgentDiff(
   return diffAgentSources(ctx.vault, {
     ...(mode !== null ? { mode } : {}),
     ...(ownerScope !== null ? { ownerScope } : {}),
+    view: reachView(ctx.vault, contextReach(ctx)),
     agents: coerceStrList(args, "agents"),
     ...(topic !== null ? { topic } : {}),
     ...(query !== null ? { query } : {}),

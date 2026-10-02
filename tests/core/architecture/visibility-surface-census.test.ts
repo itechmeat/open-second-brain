@@ -507,11 +507,14 @@ describe("visibility surface census", () => {
         .map((e) => e.surface)
         .toSorted();
       expect(covered).toEqual([
+        "brain_agent_diff",
+        "brain_agent_query",
         "brain_backlinks",
         "brain_bridges",
         "brain_clusters",
         "brain_deep_synthesis",
         "brain_eval",
+        "brain_event_trace",
         "brain_file_context",
         "brain_hygiene",
         "brain_query",

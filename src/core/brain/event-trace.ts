@@ -35,6 +35,11 @@
  */
 
 import { readLogDay } from "./log-jsonl.ts";
+import {
+  UNFILTERED_ARTIFACT_REFS,
+  everyArtifactRefView,
+  type ArtifactRefView,
+} from "./artifact-ref-view.ts";
 import { ownerScopeView } from "./owner-scope-view.ts";
 import type { BrainLogEntry, BrainLogEntryPayload } from "./log.ts";
 import { loadNormalizedContinuityRecords } from "./continuity/read-model.ts";
@@ -98,6 +103,15 @@ export interface EventTraceSelector {
    * artifact this caller may not see is a log line about that artifact.
    */
   readonly ownerScope?: string | null;
+  /**
+   * A second reference view every event must also pass, typically the
+   * caller's reach (`reachView`). Asked over the same references as the
+   * owner scope, BEFORE the cap, so a withheld event is never counted and
+   * never takes a slot an absent one would leave free. An attached trace
+   * whose `handoffRef` the view hides is dropped from that event. Absent
+   * filters nothing.
+   */
+  readonly view?: ArtifactRefView;
 }
 
 /** One continuity record attached to a log event, with the join provenance. */
@@ -211,7 +225,10 @@ export function resolveLogEventTraces(
   }
 
   const { entries } = readLogDay(vault, date);
-  const view = ownerScopeView(vault, selector.ownerScope ?? null);
+  const view = everyArtifactRefView(
+    ownerScopeView(vault, selector.ownerScope ?? null),
+    selector.view ?? UNFILTERED_ARTIFACT_REFS,
+  );
   const records = loadNormalizedContinuityRecords(
     vault,
     selector.keepPrivate === true ? { keepPrivate: true } : {},
@@ -230,7 +247,9 @@ export function resolveLogEventTraces(
     if (selector.sessionId !== undefined && correlation.sessionId !== selector.sessionId) continue;
     if (!view.row(...correlation.artifacts, ...bodyStrings(entry.body))) continue;
     if (cap !== undefined && results.length >= cap) break;
-    const traces = attachTracesToEvent(records, correlation);
+    const traces = attachTracesToEvent(records, correlation).filter((trace) =>
+      view.row(trace.handoffRef),
+    );
     results.push({
       event: {
         timestamp: entry.timestamp,

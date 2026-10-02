@@ -1,4 +1,5 @@
 import { isOwnerVisible, normalizeAgentScope } from "../../graph/agent-scope.ts";
+import type { ArtifactRefView } from "../artifact-ref-view.ts";
 import { collectAgentSourceContributions, summarizeAgentSources } from "./registry.ts";
 import { summarizeAgentContributions } from "./summary.ts";
 import type {
@@ -21,6 +22,15 @@ export interface AgentSourceQueryOptions {
    * unscoped call is byte-identical to before.
    */
   readonly ownerScope?: string;
+  /**
+   * A reference view each contribution must also pass, typically the
+   * caller's reach (`reachView`). It is asked over the contribution's id,
+   * the page a `note` contribution names and every string of an event body,
+   * which carries the written page's digest and size. Like the owner
+   * scope it runs before the roster is folded, so a withheld contribution
+   * is neither listed nor counted. Absent filters nothing.
+   */
+  readonly view?: ArtifactRefView;
 }
 
 export interface AgentSourceQueryFilters {
@@ -57,7 +67,9 @@ export function queryAgentSources(
   // it withheld (context-integrity-gates, A5). An unscoped call filters
   // nothing, so the roster is the same array it always was.
   const visible = collectAgentSourceContributions(vault).filter(
-    (contribution) => ownerScope === null || isOwnerVisible(contribution.owner ?? null, ownerScope),
+    (contribution) =>
+      (ownerScope === null || isOwnerVisible(contribution.owner ?? null, ownerScope)) &&
+      (opts.view === undefined || opts.view.row(...contributionRefs(contribution))),
   );
   const availableAgents = summarizeAgentSources(visible);
   const availableIds = new Set(availableAgents.map((a) => a.id));
@@ -139,4 +151,24 @@ function matchesText(contribution: AgentSourceContribution, query: string): bool
     contribution.agents.join(" "),
   ];
   return fields.some((field) => field.toLowerCase().includes(needle));
+}
+
+/**
+ * The references a contribution answers for: its id (a preference or
+ * signal id resolves to that Brain page), the page a `note` contribution
+ * names, and every string of the event body it echoes.
+ */
+function contributionRefs(
+  contribution: AgentSourceContribution,
+): ReadonlyArray<string | undefined> {
+  const refs: Array<string | undefined> = [contribution.id, contribution.path];
+  const body = contribution.data["body"];
+  if (body !== null && typeof body === "object") {
+    for (const value of Object.values(body as Record<string, unknown>)) {
+      for (const item of Array.isArray(value) ? value : [value]) {
+        if (typeof item === "string" && item.length > 0) refs.push(item);
+      }
+    }
+  }
+  return refs;
 }

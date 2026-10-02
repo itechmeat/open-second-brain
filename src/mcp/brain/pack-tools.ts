@@ -530,6 +530,10 @@ async function toolBrainEventTrace(
       // The event body is echoed verbatim and log payloads carry
       // artifact paths (a-label-is-not-a-boundary, U3).
       ownerScope: gatedOwnerScopeView(ctx.vault, ctx.agentName).scope,
+      // A note-write body carries the page's whole-file digest and byte
+      // size, so an event naming a page the caller may not read at its
+      // reach is dropped exactly as an event about an absent page is.
+      view: reachView(ctx.vault, contextReach(ctx)),
     });
   } catch (err) {
     // A selector-validation error (bad date/at/kind, checked before any IO) is

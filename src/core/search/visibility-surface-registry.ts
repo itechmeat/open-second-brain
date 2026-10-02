@@ -355,11 +355,13 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
   {
     surface: "brain_agent_query",
     kind: K.mcpTool,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "queryAgentSources (core/brain/agent-source/query.ts) returns, by the handler's own " +
-      "comment, 'contribution rows - ids, topics and the record text' from the provenance fold, " +
-      "gated by an explicit agent_scope argument only - never by visibility.",
+      "queryAgentSources (core/brain/agent-source/query.ts) takes the handler's " +
+      "reachView(ctx.vault, contextReach(ctx)) as its view option and drops, before the roster " +
+      "is folded, every contribution whose named page or event-body string the caller may not " +
+      "read at its reach, so a note-write row for a withheld page is answered as one for an " +
+      "absent page; agent_scope still gates ownership.",
   },
   {
     surface: "brain_writes",
@@ -375,11 +377,12 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
   {
     surface: "brain_agent_diff",
     kind: K.mcpTool,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "diffAgentSources returns the same contribution rows brain_agent_query does, gated by the " +
-      "GATED server identity (owner_scope_delivery, off by default) rather than an argument - " +
-      "visibility is not part of either gate.",
+      "diffAgentSources folds queryAgentSources, and the handler passes the same " +
+      "reachView(ctx.vault, contextReach(ctx)) view brain_agent_query does, so a contribution " +
+      "naming a page the caller may not read at its reach is dropped before any count or topic " +
+      "map is built; ownership is gated by the GATED server identity.",
   },
   {
     surface: "brain_anticipatory_context",
@@ -401,11 +404,12 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
   {
     surface: "brain_event_trace",
     kind: K.mcpTool,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "resolveLogEventTraces (core/brain/event-trace.ts) returns Brain log event bodies, which " +
-      "can name a note path per event; gated by a keep_private argument over the event's own " +
-      "flag, not by the named artifact's visibility.",
+      "resolveLogEventTraces (core/brain/event-trace.ts) takes the handler's " +
+      "reachView(ctx.vault, contextReach(ctx)) as its view option and drops, before the limit " +
+      "and the totals, every event whose artifacts or body strings name a page the caller may " +
+      "not read at its reach, and every attached trace whose handoff reference it hides.",
   },
   {
     surface: "brain_foresight",

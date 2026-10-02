@@ -1,0 +1,132 @@
+/**
+ * A page the caller may not read at its reach answers exactly as an
+ * absent page would.
+ *
+ * Every case builds two vaults through the same local-reach setup: vault
+ * A keeps `Notes/secret.md` (`visibility: private`), vault B deletes it
+ * once the setup has run. The same call through a real `MCPServer` with
+ * no reach minted (so remote, fail closed) must then answer identically
+ * in both, once run ids, timestamps and the vault paths are normalised.
+ * A local-reach control shows the page is still there for a caller that
+ * may read it, so an identical pair is not an empty surface.
+ */
+
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { bootstrapBrain } from "../../src/core/brain/init.ts";
+import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
+import { MCPServer } from "../../src/mcp/index.ts";
+
+const SECRET_REL = "Notes/secret.md";
+const SECRET =
+  "---\nvisibility: private\ntitle: Secret plan\n---\n# Secret plan\nThe PIN is 4711. See [[open]].\n";
+const OPEN = "---\ntitle: Open page\n---\n# Open page\nLinks to [[secret]] and [[Notes/secret]].\n";
+
+type Call = readonly [string, Record<string, unknown>];
+
+interface Fixture {
+  readonly base: string;
+  readonly vault: string;
+  readonly configPath: string;
+}
+
+const made: string[] = [];
+const savedConfig = process.env["OPEN_SECOND_BRAIN_CONFIG"];
+
+afterEach(() => {
+  for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+  if (savedConfig === undefined) delete process.env["OPEN_SECOND_BRAIN_CONFIG"];
+  else process.env["OPEN_SECOND_BRAIN_CONFIG"] = savedConfig;
+});
+
+async function fixture(setup: ReadonlyArray<Call>, dropSecret: boolean): Promise<Fixture> {
+  const base = mkdtempSync(join(tmpdir(), "o2b-reach-absent-"));
+  made.push(base);
+  const vault = join(base, "vault");
+  mkdirSync(join(vault, "Notes"), { recursive: true });
+  const configPath = join(base, "config.yaml");
+  atomicWriteFileSync(configPath, `vault: ${vault}\nagent_name: claude\n`);
+  bootstrapBrain(vault, { configPath });
+  writeFileSync(join(vault, SECRET_REL), SECRET);
+  writeFileSync(join(vault, "Notes/open.md"), OPEN);
+  const local = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
+  // Setup calls build on each other, so they run in order.
+  // eslint-disable-next-line no-await-in-loop
+  for (const [name, args] of setup) await local.callTool(name, args);
+  if (dropSecret) rmSync(join(vault, SECRET_REL));
+  return { base, vault, configPath };
+}
+
+function normalise(text: string, fx: Fixture): string {
+  return text
+    .split(fx.vault)
+    .join("<V>")
+    .split(fx.base)
+    .join("<B>")
+    .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z?([+-]\d{2}:?\d{2})?/g, "<TS>")
+    .replace(/"(\w*_ms|duration\w*|elapsed\w*|took\w*)":\s*[\d.]+/g, '"$1":<N>')
+    .replace(/run-\d+-[a-z0-9]+/g, "<RUN>")
+    .replace(/vault:\/\/[0-9a-f]{32}/g, "vault://<H>");
+}
+
+async function answer(
+  fx: Fixture,
+  call: Call,
+  reach?: (typeof TRANSPORT_REACH)[keyof typeof TRANSPORT_REACH],
+): Promise<string> {
+  process.env["OPEN_SECOND_BRAIN_CONFIG"] = fx.configPath;
+  const server = new MCPServer(
+    { vault: fx.vault, configPath: fx.configPath },
+    reach !== undefined ? { reach } : {},
+  );
+  try {
+    const res = (await server.callTool(call[0], call[1])) as Record<string, unknown>;
+    return normalise(JSON.stringify(res["structuredContent"] ?? res), fx);
+  } catch (err) {
+    return normalise(`ERR ${(err as Error).message}`, fx);
+  }
+}
+
+const CREATE_SECRET: Call = [
+  "brain_create_note",
+  { path: "Notes/private-write.md", frontmatter: { visibility: "private" }, content: "x\n" },
+];
+
+/** The remote answer with a privately written page kept, then deleted, and the local answer. */
+async function writePair(call: Call): Promise<{ withheld: string; absent: string; local: string }> {
+  const a = await fixture([CREATE_SECRET], false);
+  const b = await fixture([CREATE_SECRET], false);
+  rmSync(join(b.vault, "Notes/private-write.md"));
+  return {
+    withheld: await answer(a, call),
+    absent: await answer(b, call),
+    local: await answer(a, call, TRANSPORT_REACH.local),
+  };
+}
+
+describe("write events name a withheld page as they name an absent one", () => {
+  test("brain_event_trace", async () => {
+    const r = await writePair(["brain_event_trace", { kind: "note-write" }]);
+    expect(r.withheld).toBe(r.absent);
+    expect(r.withheld).not.toContain("private-write");
+    expect(r.local).toContain("Notes/private-write.md");
+  });
+
+  test("brain_agent_query", async () => {
+    const r = await writePair(["brain_agent_query", { kind: "note" }]);
+    expect(r.withheld).toBe(r.absent);
+    expect(r.withheld).not.toContain("private-write");
+    expect(r.local).toContain("Notes/private-write.md");
+  });
+
+  test("brain_agent_diff", async () => {
+    const r = await writePair(["brain_agent_diff", { kind: "note" }]);
+    expect(r.withheld).toBe(r.absent);
+    expect(r.withheld).not.toContain("private-write");
+    expect(r.local).toContain("Notes/private-write.md");
+  });
+});
