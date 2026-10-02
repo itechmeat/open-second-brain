@@ -66,6 +66,10 @@ const UNGUARDED_WITH_REASON: Readonly<Record<string, string>> = Object.freeze({
     "machine-local derived cache OUTSIDE the vault (the user cache dir). It " +
     "writes nothing under Brain/, and a refusal would only cost the next " +
     "capture a full walk, so there is no vault identity to assert.",
+  "src/core/brain/intake/source-trust.ts":
+    "never writes. It names `openSync` only to open a source read-only " +
+    "(O_RDONLY | O_NOFOLLOW | O_NONBLOCK) through one descriptor so the read " +
+    "is bounded, so there is no write to guard.",
   "src/core/brain/init.ts":
     "bootstrap. This is the path that CREATES the tree and stamps the marker; " +
     "gating it on the marker it is about to write would refuse `o2b brain init` " +
