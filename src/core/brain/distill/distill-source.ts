@@ -143,6 +143,15 @@ export interface DistillSourceOptions {
    * would be unquoted, instead of unquoting it. Unpaired marks never refuse.
    */
   readonly strictQuotes?: boolean;
+  /**
+   * May the caller read the vault file at this vault-relative path? Asked of
+   * the canonical source identity when the vault holds its bytes. A refusal
+   * makes the source answer the quote check as one with no local bytes (every
+   * span `url-only`) and withholds its digest from the result and the page,
+   * so the check never discloses what a page the caller may not read says.
+   * Absent: the caller reads everything (the local CLI).
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 export interface DistillSourceResult {
@@ -289,13 +298,17 @@ export function distillSource(
   // was DERIVED, which is orthogonal to who was entitled to supply the
   // material; the lane is carried by the marker below.
   const origin = readSourceOrigin(vault, input.sourcePath);
-  const sourceHash = origin.contentHash;
+  // A source the caller may not read answers as one with no local bytes: no
+  // span is checked against it and its digest is neither returned nor
+  // written, so neither tells the caller what the page says.
+  const hidden = origin.bytes !== undefined && opts.readable?.(canonicalSource) === false;
+  const sourceHash = hidden ? undefined : origin.contentHash;
 
   // The quote check runs on the bytes the digest above was computed over (or
   // on the admitted excerpt), before any write, so a refusal of either kind
   // leaves nothing behind.
   const { excerpt } = input;
-  const capture = captureOf(origin.trust, origin.bytes, excerpt);
+  const capture = captureOf(origin.trust, hidden ? undefined : origin.bytes, excerpt);
   const checked = checkClaimQuotes({ claims: input.claims, evidence: capture.evidence });
   const quotes = checked.report;
   if (opts.strictQuotes === true && quotes !== null && quotes.unquoted > 0) {

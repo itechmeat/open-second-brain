@@ -158,3 +158,52 @@ describe("distillSource - quote check", () => {
     expect(res.quotes?.findings.map((f) => f.outcome)).toEqual([QUOTE_CHECK_OUTCOME.sourceNotText]);
   });
 });
+
+/**
+ * The caller's reach decides whether the source's bytes may answer the
+ * check. A source the predicate refuses is checked as one with no local
+ * bytes, and its digest is neither returned nor recorded.
+ */
+describe("distillSource - a source the caller may not read", () => {
+  const hidden = (claims: ReadonlyArray<DistillClaim>, strictQuotes = false) =>
+    distillSource(
+      vault,
+      { sourcePath: SOURCE, claims },
+      { agent: "claude", now: NOW, strictQuotes, readable: (rel) => rel !== SOURCE },
+    );
+
+  test("every span settles url-only and no digest is returned or written", () => {
+    const res = hidden([VERBATIM, PARAPHRASE]);
+    expect(res.quotes?.findings.map((f) => f.outcome)).toEqual([
+      QUOTE_CHECK_OUTCOME.urlOnly,
+      QUOTE_CHECK_OUTCOME.urlOnly,
+    ]);
+    expect(res.sourceHash).toBeUndefined();
+    expect(meta(res)["source_hash"]).toBeUndefined();
+    expect(meta(res)["source_content_hash"]).toBeUndefined();
+  });
+
+  test("strict mode refuses a verbatim span and a paraphrase alike", () => {
+    let thrown: unknown;
+    try {
+      hidden([VERBATIM, PARAPHRASE], true);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(QuoteCheckError);
+    expect((thrown as QuoteCheckError).findings.map((f) => f.outcome)).toEqual([
+      QUOTE_CHECK_OUTCOME.urlOnly,
+      QUOTE_CHECK_OUTCOME.urlOnly,
+    ]);
+  });
+
+  test("a predicate that admits the source changes nothing", () => {
+    const res = distillSource(
+      vault,
+      { sourcePath: SOURCE, claims: [VERBATIM] },
+      { agent: "claude", now: NOW, readable: () => true },
+    );
+    expect(res.quotes?.verified_in_block).toBe(1);
+    expect(res.sourceHash).toBe(hashFile(join(vault, SOURCE)));
+  });
+});

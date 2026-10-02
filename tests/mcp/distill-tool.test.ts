@@ -22,6 +22,7 @@ import { QUOTE_CHECK_OUTCOME } from "../../src/core/brain/distill/quote-verdict.
 import { INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
 import { PROPERTY_DESCRIPTION_MAX, TOOL_DESCRIPTION_MAX } from "../../src/mcp/registry-guard.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 
 let vault: string;
 let configHome: string;
@@ -210,5 +211,65 @@ describe("brain_distill_source - quote check and capture scope", () => {
         excerpt: "   ",
       }),
     ).rejects.toThrow("excerpt refused: the excerpt is empty");
+  });
+});
+
+/**
+ * A page the caller cannot read at its reach answers the quote check exactly
+ * as a source with no local bytes does: every span settles `url-only` and no
+ * digest is returned or recorded, so the check never tells a caller whether
+ * a guessed phrase occurs in a page it may not read.
+ */
+describe("brain_distill_source - a page withheld at the caller's reach checks nothing", () => {
+  const SECRET = "Notes/secret.md";
+  const GUESS_RIGHT = "“The code is ZX8”";
+  const GUESS_WRONG = "“The code is ZX9”";
+
+  beforeEach(() => {
+    mkdirSync(join(vault, "Notes"), { recursive: true });
+    writeFileSync(
+      join(vault, SECRET),
+      "---\nvisibility: private\n---\nThe code is ZX8 today. ^p1\n",
+      "utf8",
+    );
+  });
+
+  const claims = [{ text: GUESS_RIGHT }, { text: GUESS_WRONG, block: "p1" }];
+
+  test("by default every span is url-only and no digest is returned or written", async () => {
+    const res = (await handler(ctx, { source_path: SECRET, claims })) as Record<string, unknown> & {
+      quotes: { findings: Array<{ outcome: string }>; verified_in_block: number };
+      distillation_path: string;
+    };
+    expect(res.quotes.findings.map((f) => f.outcome)).toEqual([
+      QUOTE_CHECK_OUTCOME.urlOnly,
+      QUOTE_CHECK_OUTCOME.urlOnly,
+    ]);
+    expect("source_hash" in res).toBe(false);
+    const md = readFileSync(join(vault, res.distillation_path), "utf8");
+    expect(md).not.toContain("source_hash");
+    expect(md).not.toContain("source_content_hash");
+  });
+
+  test("strict mode refuses every guess alike, naming url-only only", async () => {
+    let caught: unknown;
+    try {
+      await handler(ctx, { source_path: SECRET, claims, strict_quotes: true });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(MCPError);
+    const message = (caught as MCPError).message;
+    expect(message).toContain(`claim 0: ${QUOTE_CHECK_OUTCOME.urlOnly}`);
+    expect(message).toContain(`claim 1: ${QUOTE_CHECK_OUTCOME.urlOnly}`);
+  });
+
+  test("at local reach the same page is checked", async () => {
+    const res = (await handler(
+      { ...ctx, reach: TRANSPORT_REACH.local },
+      { source_path: SECRET, claims },
+    )) as { quotes: { verified_in_source: number; findings: Array<{ outcome: string }> } };
+    expect(res.quotes.verified_in_source).toBe(1);
+    expect(res.quotes.findings.map((f) => f.outcome)).toEqual([QUOTE_CHECK_OUTCOME.notInBlock]);
   });
 });

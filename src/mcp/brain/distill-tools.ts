@@ -27,6 +27,7 @@ import { resolveAgentName } from "../../core/config.ts";
 import { coerceBoolOptional, coerceStr } from "../coerce.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
+import { readableAtContextReach } from "./reach-readable.ts";
 import { wrapToolErrors } from "./shared.ts";
 
 const TOOL = "brain_distill_source";
@@ -56,7 +57,9 @@ async function toolBrainDistillSource(
       const res = distillWithQuoteCode(
         ctx.vault,
         { sourcePath, claims, ...(excerpt !== undefined ? { excerpt } : {}) },
-        { agent, now: new Date(), strictQuotes },
+        // The quote check reads the source's bytes on the caller's behalf, so
+        // it answers only for a page the caller may read at its reach.
+        { agent, now: new Date(), strictQuotes, readable: readableAtContextReach(ctx) },
       );
       return {
         distillation_path: res.distillationPath,
