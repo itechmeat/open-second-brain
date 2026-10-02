@@ -44,6 +44,8 @@ const PRIVATE_PATH = `Brain/preferences/pref-${PRIVATE_SLUG}.md`;
 const PRIVATE_RETIRED = `ret-${PRIVATE_SLUG}`;
 const SHARED_SLUG = "shared";
 const SHARED_PRINCIPLE = "Prefer short sentences.";
+const LATE_SLUG = "late";
+const LATE_PRINCIPLE = "Prefer late rules.";
 const DIGEST_URI = "osb://digest/latest";
 const LESSONS_URI = "osb://lessons";
 const SNAPSHOTS_ON = "report_snapshots_enabled: true";
@@ -273,6 +275,21 @@ describe("the activity and lessons digests treat a withheld record as absent at 
     const absent = resource(fixture(false), TRANSPORT_REACH.remote, LESSONS_URI);
     expect(withheld).not.toContain(MARKER);
     expect(withheld).toContain(SHARED_PRINCIPLE);
+    expect(withheld).toBe(absent);
+  });
+
+  test("the osb://lessons resource answers identically when the file on disk is stale", () => {
+    // A shared preference with evidence lands after the last regeneration:
+    // the remote render is built from the records, not from the stale file.
+    const late = (f: Fixture): string => {
+      confirmed(f.vault, LATE_SLUG, LATE_PRINCIPLE);
+      applied(f.vault, LATE_SLUG, new Date(Date.now() - EVIDENCE_AGE_MS).toISOString());
+      return resource(f, TRANSPORT_REACH.remote, LESSONS_URI);
+    };
+    const withheld = late(fixture(true));
+    const absent = late(fixture(false));
+    expect(withheld).toContain(LATE_PRINCIPLE);
+    expect(withheld).not.toContain(MARKER);
     expect(withheld).toBe(absent);
   });
 
