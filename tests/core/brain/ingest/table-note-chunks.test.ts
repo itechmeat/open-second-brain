@@ -62,7 +62,7 @@ describe("table note chunks", () => {
   test("a cell that opens with a backtick run keeps one Rows heading path per group", () => {
     const result = tableNote("Clips/wide.csv", wideCsv(FENCE_LIKE_ROW));
     if (!result.rendered) throw new Error(`not rendered: ${result.reason}`);
-    const groups = [...result.section.matchAll(/^### (Rows \d+-\d+)$/gm)].map((m) => m[1]);
+    const groups = [...result.section.matchAll(/^### (Rows \d+-\d+)$/gm)].map((m) => m[1]!);
     expect(groups.length).toBeGreaterThan(1);
 
     const { chunks } = chunkMarkdown(`# T\n\n${result.section}\n`, "wide");
