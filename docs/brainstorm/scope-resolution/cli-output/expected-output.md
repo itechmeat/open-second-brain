@@ -126,7 +126,7 @@ agent_name:  profile-b-agent
 timezone:    (unset)
 ```
 
-After, single-profile gateway: `settings_source: process environment` as the first line, then the "before" block unchanged.
+After, single-profile gateway: `settings_source: process environment (this command; a gateway with gateway.multiplex_profiles reads each profile's .env)` as the first line, then the "before" block unchanged.
 
 `hermes open-second-brain status` keeps its three lines (`provider:`, `available:`, `vault:`); under multiplexing `vault:` is the profile's vault.
 
