@@ -16,8 +16,10 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
+import { posix } from "node:path";
 
-import { renderActive } from "./active.ts";
+import { readerNarrowsActive, renderActiveForReader, type ActiveReaderOptions } from "./active.ts";
+import { BRAIN_PREFERENCES_REL } from "./path-constants.ts";
 import { brainActivePath, brainDirs } from "./paths.ts";
 import { brainConfigUnreadableReport } from "./policy.ts";
 import {
@@ -96,6 +98,13 @@ export interface PreCompressOptions {
    * output is byte-identical to a vault without the gate.
    */
   readonly agentScope?: string;
+  /**
+   * May the caller see the record at this vault-relative path? A
+   * preference it may not is absent from the top-K walk and from the
+   * active head, exactly as if the file did not exist. Omitted, nothing
+   * is filtered and the output is byte-identical to a build without it.
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 interface ConfirmedPref {
@@ -105,14 +114,19 @@ interface ConfirmedPref {
   readonly createdAt: string;
 }
 
-function collectConfirmed(vault: string, ownerScope: OwnerScopeDelivery): ConfirmedPref[] {
+function collectConfirmed(
+  vault: string,
+  ownerScope: OwnerScopeDelivery,
+  readable: ((rel: string) => boolean) | undefined,
+): ConfirmedPref[] {
   const dir = brainDirs(vault).preferences;
   const out: ConfirmedPref[] = [];
   // Listing and parse come from the shared delivery-path walk
   // (context-integrity-gates, Unit A); the confirmed-status filter is
   // this surface's own and stays here.
-  for (const { pref } of collectPreferences(dir, { ownerScope }).entries) {
+  for (const { name, pref } of collectPreferences(dir, { ownerScope }).entries) {
     if (pref.status !== BRAIN_PREFERENCE_STATUS.confirmed) continue;
+    if (readable !== undefined && !readable(posix.join(BRAIN_PREFERENCES_REL, name))) continue;
     out.push({
       id: pref.id,
       principle: pref.principle,
@@ -144,14 +158,15 @@ function deliveredHead(text: string): ActiveHead {
  *
  * `active.md` is ONE file shared by every agent, so under an enforcing
  * owner-scope gate the file's own bytes are the wrong answer: they carry
- * every owner's memories. The scoped caller gets an in-memory
- * {@link renderActive} instead, which is where the ownership predicate
- * already attaches. Narrowing the FILE to make this read correct is what
+ * every owner's memories, and a caller at remote reach must not be
+ * handed a preference it cannot read there. Such a caller gets an
+ * in-memory {@link renderActiveForReader} instead, which is where the
+ * ownership and reach predicates attach. Narrowing the FILE to make this read correct is what
  * `brain_context` used to do, and it made a shared write follow a
  * per-request filter (context-integrity-gates, A3).
  *
- * With no enforced scope - the shipped `off` default - the file is read
- * verbatim exactly as before, stamp and all.
+ * With no enforced scope - the shipped `off` default - and nothing
+ * withheld, the file is read verbatim exactly as before, stamp and all.
  *
  * ## Why an unreadable config is checked here rather than caught
  *
@@ -159,14 +174,14 @@ function deliveredHead(text: string): ActiveHead {
  * for. `loadIntegrityConfigSafe` deliberately RESOLVES on an unreadable
  * `_brain.yaml`, to its strict fallback, so the gate closes rather than
  * opens - which hands this caller an `enforcedScope`. {@link
- * renderActive} then reads the guardrail block through a loader that
+ * renderActiveForReader} then reads the guardrail block through a loader that
  * RAISES on the same file. One bad line therefore cost a scoped agent
  * its entire pre-compaction pack while an unscoped one still got a pack.
  *
  * So the condition is a precondition of the scoped render, tested by the
  * same predicate the loader splits on, and the head is withheld with the
  * reason named. It is not a `catch`: any other failure inside
- * `renderActive` still propagates, and a `catch` here would re-absorb
+ * the reader render still propagates, and a `catch` here would re-absorb
  * exactly the silence the split removed.
  *
  * Withheld, never substituted. The file's bytes are not a fallback for a
@@ -174,14 +189,24 @@ function deliveredHead(text: string): ActiveHead {
  * exists to prevent - and the strict fallback is what makes withholding
  * safe: an unreadable config can only close this gate, never open it.
  */
-function readActiveHead(vault: string, enforcedScope: string | null): ActiveHead {
-  if (enforcedScope !== null) {
+function readActiveHead(
+  vault: string,
+  enforcedScope: string | null,
+  readable: ((rel: string) => boolean) | undefined,
+): ActiveHead {
+  const reader: ActiveReaderOptions = {
+    ...(enforcedScope !== null ? { agentScope: enforcedScope } : {}),
+    ...(readable !== undefined ? { readable } : {}),
+  };
+  const path = brainActivePath(vault);
+  // An unscoped reader is handed the shared file or nothing: a vault
+  // whose digest was never generated has no head, whatever is withheld.
+  if (enforcedScope === null && !existsSync(path)) return NO_ACTIVE_HEAD;
+  if (readerNarrowsActive(vault, reader)) {
     const unreadableConfig = brainConfigUnreadableReport(vault);
     if (unreadableConfig !== null) return Object.freeze({ text: null, warning: unreadableConfig });
-    return deliveredHead(renderActive(vault, { agentScope: enforcedScope }).document.trim());
+    return deliveredHead(renderActiveForReader(vault, reader).document.trim());
   }
-  const path = brainActivePath(vault);
-  if (!existsSync(path)) return NO_ACTIVE_HEAD;
   try {
     return deliveredHead(readFileSync(path, "utf8").trim());
   } catch {
@@ -200,14 +225,14 @@ export function buildPreCompressPack(vault: string, opts: PreCompressOptions): P
   // active head must agree on it, and resolving it twice also read
   // `_brain.yaml` twice per pack.
   const ownerScope = resolveOwnerScopeDelivery(vault, opts.agentScope);
-  const ranked = collectConfirmed(vault, ownerScope).toSorted((a, b) => {
+  const ranked = collectConfirmed(vault, ownerScope, opts.readable).toSorted((a, b) => {
     if (b.confidence !== a.confidence) return b.confidence - a.confidence;
     if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? 1 : -1;
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
   const top = ranked.slice(0, Math.max(0, opts.topK));
 
-  const activeHead = readActiveHead(vault, ownerScope.enforcedScope);
+  const activeHead = readActiveHead(vault, ownerScope.enforcedScope, opts.readable);
   const safetyById = new Map<string, ContextSafetyReport>();
   const entries: Array<{ item: string; text: string }> = [];
   if (activeHead.text !== null) {

@@ -398,11 +398,12 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
   {
     surface: "brain_context",
     kind: K.mcpTool,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "toolBrainContext (context-tools.ts) returns Brain/active.md's rendered content via " +
-      "parseFrontmatter - the standing-rules digest, a Brain-authored artifact - with no " +
-      "visibility check; it is the always-loaded writer tool, not a general note reader.",
+      "toolBrainContext (context-tools.ts) serves Brain/active.md's bytes only when " +
+      "readerNarrowsActive finds no preference or retired record withheld by " +
+      "readableAtContextReach(ctx) and no owner scope enforced; otherwise it hands back " +
+      "renderActiveForReader's in-memory render without them, counts included.",
   },
   {
     surface: "brain_agent_query",
@@ -492,10 +493,11 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
   {
     surface: "brain_pre_compress_pack",
     kind: K.mcpTool,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "buildPreCompressPack (core/brain/pre-compress-pack.ts) returns id/principle items from " +
-      "the same Brain/preferences pool brain_context_pack draws from, gated by agentScope only.",
+      "buildPreCompressPack (core/brain/pre-compress-pack.ts) is handed " +
+      "readableAtContextReach(ctx): the top-K walk skips a preference the caller cannot read, " +
+      "and the active head is the reader render of Brain/active.md whenever a record is withheld.",
   },
   {
     surface: "brain_pre_compact_extract",
@@ -788,22 +790,23 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "src/cli/brain/verbs/maintenance.ts mirrors brain_maintenance; no note content crosses either.",
   },
 
-  // --- Excluded: MCP resources -----------------------------------------------
+  // --- MCP resources ---------------------------------------------------------
   {
     surface: "osb://preferences/active",
     kind: K.mcpResource,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "one of resources.ts's three whole-vault readers, deliberately unfiltered by its own " +
-      "docblock (Brain/active.md is shared by construction) - and visibility: is not part of " +
-      "that decision either way; the field is never consulted.",
+      "readActive (resources.ts) passes the request view (owner view ANDed with reachView) to " +
+      "readActiveForReader, which serves the shared file only when no preference or retired " +
+      "record is withheld and renders the digest without them otherwise.",
   },
   {
     surface: "osb://lessons",
     kind: K.mcpResource,
     category: C.excluded,
     reason:
-      "same whole-vault-reader class as osb://preferences/active; visibility: is never consulted.",
+      "readLessons (resources.ts) serves Brain/lessons.md, a whole-vault digest over " +
+      "preferences and dead-ends, as it is on disk; visibility: is never consulted.",
   },
   {
     surface: "osb://digest/latest",

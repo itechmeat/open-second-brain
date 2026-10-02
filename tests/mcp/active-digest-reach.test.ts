@@ -2,8 +2,8 @@
  * The active-preferences digest answers at the caller's reach.
  *
  * `Brain/active.md` is one shared file, written unscoped. Its remote
- * readers - `brain_context` and the `osb://preferences/active` resource -
- * must treat a preference the caller cannot read at its reach as absent:
+ * readers - `brain_context`, the `osb://preferences/active` resource and
+ * the `brain_pre_compress_pack` head and top-K walk - must treat a preference the caller cannot read at its reach as absent:
  * principle, counts and the most-applied list alike.
  *
  * Vault A holds a confirmed preference and a retired record reserved
@@ -191,6 +191,15 @@ async function resource(f: Fixture, reach: TransportReach): Promise<string> {
   return normalise(f, content.text);
 }
 
+async function pack(f: Fixture, reach: TransportReach): Promise<string> {
+  // Regenerated first, so both vaults carry an active head to deliver.
+  await server(f, TRANSPORT_REACH.local).callTool("brain_context", {});
+  return normalise(
+    f,
+    JSON.stringify(await server(f, reach).callTool("brain_pre_compress_pack", { top_k: 10 })),
+  );
+}
+
 describe("the active digest treats a withheld preference as absent at remote reach", () => {
   test("brain_context answers identically with and without the reserved records", async () => {
     const withheld = await context(fixture(true), TRANSPORT_REACH.remote);
@@ -206,6 +215,14 @@ describe("the active digest treats a withheld preference as absent at remote rea
     expect(withheld).toBe(absent);
   });
 
+  test("brain_pre_compress_pack answers identically, head and top-K alike", async () => {
+    const withheld = await pack(fixture(true), TRANSPORT_REACH.remote);
+    const absent = await pack(fixture(false), TRANSPORT_REACH.remote);
+    expect(withheld).not.toContain(MARKER);
+    expect(withheld).toContain("Prefer short sentences.");
+    expect(withheld).toBe(absent);
+  });
+
   test("a local caller still reads the reserved principle and its counts", async () => {
     const f = fixture(true);
     const local = await contextPayload(f, TRANSPORT_REACH.local);
@@ -214,6 +231,7 @@ describe("the active digest treats a withheld preference as absent at remote rea
     expect(local.counts.most_applied_30d).toBe(1);
     expect(local.content).toContain(PRIVATE_RETIRED);
     expect(await resource(f, TRANSPORT_REACH.local)).toContain(MARKER);
+    expect(await pack(f, TRANSPORT_REACH.local)).toContain(MARKER);
   });
 
   test("a remote read of a vault with nothing withheld is served the file's bytes", async () => {

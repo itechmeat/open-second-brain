@@ -525,12 +525,14 @@ describe("visibility surface census", () => {
         "brain_backlinks",
         "brain_bridges",
         "brain_clusters",
+        "brain_context",
         "brain_deep_synthesis",
         "brain_eval",
         "brain_event_trace",
         "brain_file_context",
         "brain_hygiene",
         "brain_idea_discovery",
+        "brain_pre_compress_pack",
         "brain_procedural_memory",
         "brain_query",
         "brain_recall_feedback",
@@ -559,12 +561,13 @@ describe("visibility surface census", () => {
       expect(advertised.size).toBe(MCP_RESOURCE_POPULATION_SIZE);
     });
 
-    test("the four templated readers are covered and the four whole-vault ones are not", () => {
-      // The split is the design, not an oversight: a templated reader is
-      // keyed by a caller-supplied id and is therefore root C, while the
-      // four whole-vault readers return Brain/active.md, the lessons
-      // digest and the status projection - shared artifacts by
-      // construction, which no page's reservation covers.
+    test("the templated readers and the active digest are covered, three whole-vault ones are not", () => {
+      // A templated reader is keyed by a caller-supplied id and is
+      // therefore root C. The active digest is a shared file, but it is a
+      // render of preference records, so a reader is handed it without
+      // the records withheld from it. The three remaining whole-vault
+      // readers return the lessons digest, the digest page and the status
+      // projection, which no page's reservation covers.
       const byCategory = (category: string): string[] =>
         REGISTRY_BY_KIND(VISIBILITY_SURFACE_KIND.mcpResource)
           .filter((e) => e.category === category)
@@ -574,12 +577,12 @@ describe("visibility surface census", () => {
         "osb://backlinks/{id}",
         "osb://log/{date}",
         "osb://preference/{id}",
+        "osb://preferences/active",
         "osb://topic/{slug}",
       ]);
       expect(byCategory(VISIBILITY_SURFACE_CATEGORY.excluded)).toEqual([
         "osb://digest/latest",
         "osb://lessons",
-        "osb://preferences/active",
         "osb://status",
       ]);
     });
