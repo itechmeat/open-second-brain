@@ -65,7 +65,14 @@ interface Extras {
   readonly cited?: boolean;
   /** The pages with a dropped frontmatter line. */
   readonly dropped?: boolean;
+  /** A withheld vault-root instruction file over the ceiling (vault A only). */
+  readonly instruction?: boolean;
 }
+
+/** A vault-root instruction file the doctor measures against its ceiling. */
+const INSTRUCTION_FILE = "AGENTS.md";
+/** Over the default `guardrails.instruction_file_max_lines` of 200. */
+const INSTRUCTION_FILE_LINES = 250;
 
 const bases: string[] = [];
 const savedConfig = process.env["OPEN_SECOND_BRAIN_CONFIG"];
@@ -154,6 +161,13 @@ function fixture(withPrivate: boolean, extras: Extras = {}): Fixture {
   }
   if (extras.cited) addCited(f.vault, withPrivate);
   if (extras.dropped) addDropped(f.vault, withPrivate);
+  if (extras.instruction && withPrivate) {
+    const body = Array.from({ length: INSTRUCTION_FILE_LINES }, (_, i) => `- rule ${i}`);
+    writeFileSync(
+      join(f.vault, INSTRUCTION_FILE),
+      `---\n${RESERVE_LINE}\n---\n${body.join("\n")}\n`,
+    );
+  }
   return f;
 }
 
@@ -248,10 +262,21 @@ describe("brain_doctor counts at the caller's reach", () => {
     expect(staleNotes(a).join("\n")).toContain("1 state stopped being current");
   });
 
+  test("remote reach: a withheld instruction file raises no ceiling warning", async () => {
+    const [withheld, absent] = await remotePair({ instruction: true });
+    expect(withheld).toBe(absent);
+    expect(withheld).not.toContain(INSTRUCTION_FILE);
+  });
+
   test("local control: the withheld consumer and the withheld dropped lines are counted", async () => {
     const cited = await doctorJson(fixture(true, { cited: true }), TRANSPORT_REACH.local);
     expect(cited).toContain(PRIVATE_PATH.toLowerCase());
     const dropped = await doctorJson(fixture(true, { dropped: true }), TRANSPORT_REACH.local);
     expect(dropped).toContain(PRIVATE_PATH);
+    const instruction = await doctorJson(
+      fixture(true, { instruction: true }),
+      TRANSPORT_REACH.local,
+    );
+    expect(instruction).toContain(INSTRUCTION_FILE);
   });
 });

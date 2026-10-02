@@ -362,6 +362,7 @@ export function runDoctor(vault: string, opts: RunDoctorOptions = {}): RunDoctor
   try {
     instructionWarnings = checkInstructionFileCeiling(vault, {
       maxLines: guardrails.instruction_file_max_lines,
+      ...(opts.readable !== undefined ? { readable: opts.readable } : {}),
     });
   } catch {
     /* doctor never throws */

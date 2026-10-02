@@ -133,6 +133,7 @@ export function buildOperatorSummary(
     : zeroVerification();
   const instructionWarnings = checkInstructionFileCeiling(vault, {
     maxLines: guardrails.instruction_file_max_lines,
+    ...(opts.readable !== undefined ? { readable: opts.readable } : {}),
   });
   const topActions = safeTopActions(
     vault,

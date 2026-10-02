@@ -23,6 +23,12 @@ const TRACKED_FILES: ReadonlyArray<string> = Object.freeze(["CLAUDE.md", "AGENTS
 
 export interface CheckInstructionFileCeilingOptions {
   readonly maxLines: number;
+  /**
+   * The vault-relative paths the reader may read. A file it rejects is
+   * skipped before it is read, so its existence and length cross no
+   * answer. Absent: every tracked file.
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 export function checkInstructionFileCeiling(
@@ -31,6 +37,7 @@ export function checkInstructionFileCeiling(
 ): ReadonlyArray<InstructionFileCeilingWarning> {
   const warnings: InstructionFileCeilingWarning[] = [];
   for (const name of TRACKED_FILES) {
+    if (opts.readable !== undefined && !opts.readable(name)) continue;
     const absolute = join(vault, name);
     if (!existsSync(absolute)) continue;
     try {
