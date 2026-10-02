@@ -376,6 +376,31 @@ describe("preExtractCodeStructure - Terraform edges", () => {
     ]);
   });
 
+  test("a multi-line depends_on item is seeded as a references edge, not depends_on", () => {
+    const res = asSuccess(
+      preExtractCodeStructure(
+        "multi.tf",
+        lines(
+          'resource "c" "d" {}',
+          'module "x" {',
+          '  source = "./x"',
+          "}",
+          'resource "a" "b" {',
+          "  depends_on = [",
+          "    c.d,",
+          "    module.x,",
+          "  ]",
+          "}",
+        ),
+      ),
+    );
+    expect(res.edges.filter((e) => e.kind === "depends_on")).toEqual([]);
+    expect(res.edges.filter((e) => e.kind === "references")).toEqual([
+      { kind: "references", from: "a.b", to: "c.d" },
+      { kind: "references", from: "a.b", to: "module.x" },
+    ]);
+  });
+
   test("var, local, module, data and same-file resource citations become references edges", () => {
     const res = asSuccess(preExtractCodeStructure("app/main.tf", EDGES_TF));
     expect(res.edges.filter((e) => e.kind === "references")).toEqual([

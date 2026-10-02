@@ -39,7 +39,8 @@
  * - attribute values (only names and a module `source` leave);
  * - nested blocks (`lifecycle`, `dynamic`, `provisioner`, `connection`) as
  *   entities; their citations count for the enclosing top-level block;
- * - multi-line `depends_on` lists and `depends_on` expressions;
+ * - multi-line `depends_on` lists (their items are read as ordinary
+ *   citations and seeded as `references`) and `depends_on` expressions;
  * - citations inside a heredoc or in template files;
  * - `for_each` and `count` expansion (one seed per block, not per instance);
  * - `moved`, `import`, `check` and `removed` blocks;
