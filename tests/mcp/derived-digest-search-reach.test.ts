@@ -12,11 +12,12 @@
  *
  * A/B over the same fixture: the local search finds the principle through
  * the digest page, the remote search finds neither the page nor the
- * principle, so the remote assertion is not vacuous.
+ * principle, so the remote assertion is not vacuous; an ordinary page is
+ * still found remotely, so the remote search is not simply empty.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -33,6 +34,9 @@ import { MCPServer } from "../../src/mcp/server.ts";
 const MARKER = "zzderiveddigestprobezz";
 const PRIVATE_PATH = "Brain/preferences/pref-withheld.md";
 const ACTIVE_PATH = "Brain/active.md";
+/** An ordinary page every reach may read: the remote half's positive control. */
+const OPEN_MARKER = "zzopenprobezz";
+const OPEN_PATH = "Notes/open.md";
 const RESERVE_LINE = `visibility: [${REMOTE_DENY_VISIBILITY_TOKEN}]`;
 
 const bases: string[] = [];
@@ -49,7 +53,7 @@ interface Fixture {
   readonly vault: string;
 }
 
-async function fixture(): Promise<Fixture> {
+async function fixture(reserved = true): Promise<Fixture> {
   const base = mkdtempSync(join(tmpdir(), "o2b-derived-digest-search-"));
   bases.push(base);
   const vault = join(base, "vault");
@@ -71,19 +75,23 @@ async function fixture(): Promise<Fixture> {
     confidence: BRAIN_CONFIDENCE.high,
     confidence_value: 0.8,
   });
-  const abs = join(vault, PRIVATE_PATH);
-  const text = readFileSync(abs, "utf8");
-  const close = text.indexOf("\n---\n", "---\n".length);
-  writeFileSync(abs, `${text.slice(0, close)}\n${RESERVE_LINE}${text.slice(close)}`);
+  if (reserved) {
+    const abs = join(vault, PRIVATE_PATH);
+    const text = readFileSync(abs, "utf8");
+    const close = text.indexOf("\n---\n", "---\n".length);
+    writeFileSync(abs, `${text.slice(0, close)}\n${RESERVE_LINE}${text.slice(close)}`);
+  }
+  mkdirSync(join(vault, "Notes"), { recursive: true });
+  writeFileSync(join(vault, OPEN_PATH), `# Open\n\nThis page mentions ${OPEN_MARKER}.\n`);
   regenerateActive(vault);
   await indexVault(resolveSearchConfig({ vault, configPath }), { force: true });
   return { configPath, vault };
 }
 
-async function search(f: Fixture, reach: TransportReach): Promise<string> {
+async function search(f: Fixture, reach: TransportReach, query = MARKER): Promise<string> {
   process.env["OPEN_SECOND_BRAIN_CONFIG"] = f.configPath;
   const server = new MCPServer({ vault: f.vault, configPath: f.configPath }, { reach });
-  return JSON.stringify(await server.callTool("brain_search", { query: MARKER }));
+  return JSON.stringify(await server.callTool("brain_search", { query }));
 }
 
 describe("the indexed active digest and remote search", () => {
@@ -98,5 +106,19 @@ describe("the indexed active digest and remote search", () => {
     expect(remote).not.toContain(PRIVATE_PATH);
     expect(remote).not.toContain(ACTIVE_PATH);
     expect(remote).not.toContain(MARKER);
+  });
+
+  test("a remote search still finds an ordinary page", async () => {
+    const remote = await search(await fixture(), TRANSPORT_REACH.remote, OPEN_MARKER);
+    expect(remote).toContain(OPEN_PATH);
+  });
+
+  test("the digest page is withheld at remote reach even when nothing is reserved", async () => {
+    // The compiled digest pages are withheld below local reach whatever
+    // they compile, so a vault with no reserved preference answers the
+    // same way; the local half proves the page is indexed.
+    const f = await fixture(false);
+    expect(await search(f, TRANSPORT_REACH.local)).toContain(ACTIVE_PATH);
+    expect(await search(f, TRANSPORT_REACH.remote)).not.toContain(ACTIVE_PATH);
   });
 });
