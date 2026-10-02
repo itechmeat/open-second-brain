@@ -2049,4 +2049,9 @@ format characters), when it contains NUL, or when it exceeds the cap.
   local source was deleted reports as `url-only`, and a `bounded-local`
   page counts as backed only while its excerpt still matches
   `excerpt_hash`. Quarantined pages (those carrying the untrusted
-  marker) are skipped; the marker already names the condition.
+  marker) are skipped; the marker already names the condition. A cited
+  file the caller cannot read at its reach counts as `url-only` for that
+  caller, in the scan and in the `brain_status` hygiene count.
+  `brain_ingest_batch_plan` plans a file the caller cannot read at its
+  reach as an absent one, and `brain_ingest_source` records a source in
+  the content manifest only in the trusted lane.
