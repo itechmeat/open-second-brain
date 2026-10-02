@@ -17,6 +17,8 @@
  * returned for a path with no history.
  */
 
+import { relative, resolve, sep } from "node:path";
+
 import { readCommits } from "./git/reader.ts";
 import type { GitCommit } from "./git/reader.ts";
 
@@ -52,6 +54,14 @@ export interface DecomposeNoteHistoryOptions {
   readonly repoPath?: string;
   /** Bound the walk to the newest N commits touching the path. */
   readonly maxCount?: number;
+  /**
+   * May the caller read the page at this vault-relative POSIX path? Asked
+   * before the history is read. A refused path answers exactly as a path
+   * no commit touches, because a page the caller may not read must not
+   * disclose its existence or edit timeline. Absent (the CLI) refuses
+   * nothing.
+   */
+  readonly include?: (rel: string) => boolean;
 }
 
 const DEFAULT_GAP_HOURS = 72;
@@ -74,29 +84,19 @@ export function decomposeNoteHistory(
   }
 
   const repoPath = opts.repoPath ?? vault;
+  if (opts.include !== undefined && !opts.include(vaultRelativePosix(vault, path))) {
+    // The repository's own availability is asked without the path, so the
+    // answer is the one a never-written path gets in this same vault.
+    const available = readCommits(repoPath, { maxCount: 1 }) !== null;
+    return available ? noCommits(path) : noHistory(path);
+  }
   const commits = readCommits(repoPath, {
     path,
     ...(opts.maxCount !== undefined ? { maxCount: opts.maxCount } : {}),
   });
 
-  if (commits === null) {
-    return Object.freeze({
-      notePath: path,
-      available: false,
-      reason: "no history available (not a git repository or git unavailable)",
-      commitCount: 0,
-      phases: Object.freeze([]),
-    });
-  }
-  if (commits.length === 0) {
-    return Object.freeze({
-      notePath: path,
-      available: true,
-      reason: "no commits touch this path",
-      commitCount: 0,
-      phases: Object.freeze([]),
-    });
-  }
+  if (commits === null) return noHistory(path);
+  if (commits.length === 0) return noCommits(path);
 
   const gapMs = Math.max(0, opts.gapHours ?? DEFAULT_GAP_HOURS) * HOUR_MS;
   const phases = splitIntoPhases(commits, gapMs);
@@ -150,4 +150,29 @@ function toPhase(group: ReadonlyArray<GitCommit>, index: number): NoteHistoryPha
 function parseMs(iso: string): number | null {
   const ms = Date.parse(iso);
   return Number.isNaN(ms) ? null : ms;
+}
+
+function noHistory(notePath: string): NoteHistoryResult {
+  return Object.freeze({
+    notePath,
+    available: false,
+    reason: "no history available (not a git repository or git unavailable)",
+    commitCount: 0,
+    phases: Object.freeze([]),
+  });
+}
+
+function noCommits(notePath: string): NoteHistoryResult {
+  return Object.freeze({
+    notePath,
+    available: true,
+    reason: "no commits touch this path",
+    commitCount: 0,
+    phases: Object.freeze([]),
+  });
+}
+
+/** `path` as the vault-relative POSIX form the visibility predicate speaks. */
+function vaultRelativePosix(vault: string, path: string): string {
+  return relative(resolve(vault), resolve(vault, path)).split(sep).join("/");
 }

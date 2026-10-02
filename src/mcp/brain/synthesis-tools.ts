@@ -34,6 +34,7 @@ import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { contextReach, type ServerContext, type ToolDefinition } from "../tool-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
+import { readableAtContextReach } from "./reach-readable.ts";
 
 const SUMMARY_TOOL = "brain_session_summary";
 
@@ -320,6 +321,9 @@ function toolBrainNoteHistory(
   const result = decomposeNoteHistory(ctx.vault, pathRaw.trim(), {
     ...(gapHours !== undefined ? { gapHours } : {}),
     ...(maxCount !== undefined ? { maxCount } : {}),
+    // A page the caller may not read at its reach answers as a path no
+    // commit touches.
+    include: readableAtContextReach(ctx),
   });
   return {
     note_path: result.notePath,
