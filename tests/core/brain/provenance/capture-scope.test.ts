@@ -81,6 +81,22 @@ describe("classifyCaptureScope", () => {
     expect(classifyCaptureScope(vault, "Articles/folder.md")).toBe(CAPTURE_SCOPE.urlOnly);
   });
 
+  test("an extensionless note identity is matched against its .md file", () => {
+    for (const identity of ["Articles/x", "[[Articles/x]]", "[[Articles/x|Alias]]"]) {
+      expect(classifyCaptureScope(vault, identity)).toBe(CAPTURE_SCOPE.fullLocal);
+    }
+    writeFileSync(join(vault, "Meeting.md"), "# Meeting\n");
+    expect(classifyCaptureScope(vault, "[[Meeting]]")).toBe(CAPTURE_SCOPE.fullLocal);
+    for (const identity of [
+      "Articles/missing",
+      "https://x.test/a",
+      "evil.com/x",
+      "Articles/x.txt",
+    ]) {
+      expect(classifyCaptureScope(vault, identity)).toBe(CAPTURE_SCOPE.urlOnly);
+    }
+  });
+
   test("captureScopeForTrust maps the two lanes", () => {
     expect(captureScopeForTrust(INTAKE_TRUST.trusted)).toBe(CAPTURE_SCOPE.fullLocal);
     expect(captureScopeForTrust(INTAKE_TRUST.untrusted)).toBe(CAPTURE_SCOPE.urlOnly);

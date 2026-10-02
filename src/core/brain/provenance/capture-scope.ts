@@ -9,8 +9,10 @@
  * Three members, decided STRUCTURALLY and never inferred from prose:
  *
  *   - `full-local` - the identity is vault-shaped and resolves to a readable
- *     file. It is exactly the trusted verdict of {@link classifySourceTrust},
- *     so the trust lane and the capture scope can never disagree.
+ *     file. It is the trusted verdict of {@link classifySourceTrust}, so the
+ *     trust lane and the capture scope never disagree on an identity as
+ *     written; {@link classifyCaptureScope} also accepts the Obsidian
+ *     spelling of a note without its extension (`[[notes/meeting]]`).
  *   - `url-only` - the identity carries a URI scheme or an authority shape,
  *     or is vault-shaped with nothing behind it: the untrusted verdict.
  *   - `bounded-local` - a `url-only` source whose page stores a verbatim
@@ -26,9 +28,10 @@
  */
 
 import { createHash } from "node:crypto";
+import { posix } from "node:path";
 
 import type { FrontmatterMap } from "../../types.ts";
-import { classifySourceTrust } from "../intake/source-trust.ts";
+import { classifySourceTrust, normalizeSourceIdentity } from "../intake/source-trust.ts";
 import { INTAKE_TRUST, type IntakeTrust } from "../trust/untrusted-provenance.ts";
 
 /** The closed vocabulary. See the module docblock for what each member proves. */
@@ -95,6 +98,9 @@ const FENCE_CHAR_RUN_RE = /`+/g;
 /** Line separator of a rendered section. */
 const NEWLINE = "\n";
 
+/** The extension a note identity written the Obsidian way leaves off. */
+const NOTE_EXTENSION = ".md";
+
 /** What an excerpt with no text is made of: controls, format characters, whitespace. */
 const NON_TEXT_RE = /[\p{Cc}\p{Cf}\s]/gu;
 
@@ -107,13 +113,18 @@ export function captureScopeForTrust(trust: IntakeTrust): CaptureScope {
 }
 
 /**
- * The current scope of a source identity, from its shape and one `stat`.
- * Never reads the source's bytes, so a sweep over many pages stays cheap.
- * `bounded-local` is never returned: it is a property of a page, not of an
- * identity.
+ * The current scope of a source identity, from its shape and one `stat` (two
+ * for an identity with no extension, retried once as a `.md` note, the way
+ * Obsidian links a note). Never reads the source's bytes, so a sweep over
+ * many pages stays cheap. `bounded-local` is never returned: it is a property
+ * of a page, not of an identity.
  */
 export function classifyCaptureScope(vault: string, identity: string): CaptureScope {
-  return captureScopeForTrust(classifySourceTrust(vault, identity));
+  const direct = captureScopeForTrust(classifySourceTrust(vault, identity));
+  if (direct === CAPTURE_SCOPE.fullLocal) return direct;
+  const target = normalizeSourceIdentity(identity);
+  if (target.length === 0 || posix.extname(target) !== "") return direct;
+  return captureScopeForTrust(classifySourceTrust(vault, `${target}${NOTE_EXTENSION}`));
 }
 
 /** The frontmatter stamp of a single-source page: nothing for `full-local`. */
