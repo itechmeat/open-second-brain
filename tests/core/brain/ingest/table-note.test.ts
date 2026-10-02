@@ -352,6 +352,12 @@ describe("caps", () => {
     expect(Array.from(value)).toHaveLength(TABLE_NOTE_MAX_CELL_CHARS);
   });
 
+  test("a cell past the scan window counts as cut even when its redacted window fits", () => {
+    const result = rendered(csv(`k,v\nrow,api_key=${"x".repeat(5_000)} tail\n`));
+    expect(fencedLines(result.section)[1]).toBe(`row | api_key=${REDACTION_PLACEHOLDER}`);
+    expect(result.truncated).toEqual(["cells"]);
+  });
+
   test("groups that would pass the byte cap are dropped whole and named", () => {
     const result = rendered(csv(csvOf(["a", "b", "c", "d"], numberedRows(900, 4, wideCell))));
     expect(result.truncated).toEqual(["bytes"]);
