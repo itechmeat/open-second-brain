@@ -57,7 +57,7 @@ import {
   resolveCaptureScope,
   type CaptureScope,
 } from "../../provenance/capture-scope.ts";
-import { SourceTrustError } from "../../intake/source-trust.ts";
+import { SourceTrustError, isSourceHidden } from "../../intake/source-trust.ts";
 import { sourcesSectionTargets } from "../../source-links.ts";
 import { hygieneFindingId } from "./id.ts";
 import type { HygieneFinding } from "../types.ts";
@@ -134,7 +134,9 @@ type Readable = ((rel: string) => boolean) | undefined;
 
 /**
  * Is this cited source url-only now, as the caller may know it? A refused
- * stat is not proof that it is; a backing file the caller may not read is.
+ * stat is not proof that it is, unless the caller may not read the file
+ * either, which an absent file would answer too; a backing file the caller
+ * may not read is.
  */
 function isUrlOnly(vault: string, source: string, readable: Readable): boolean {
   try {
@@ -142,7 +144,7 @@ function isUrlOnly(vault: string, source: string, readable: Readable): boolean {
     if (scope === CAPTURE_SCOPE.urlOnly) return true;
     return backing !== null && readable !== undefined && !readable(backing);
   } catch (err) {
-    if (err instanceof SourceTrustError) return false;
+    if (err instanceof SourceTrustError) return isSourceHidden(vault, source, readable);
     throw err;
   }
 }

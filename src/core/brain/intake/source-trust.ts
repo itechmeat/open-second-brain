@@ -53,7 +53,7 @@
  * that question is this module's to ask, and for the limit of the answer.
  */
 
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 import {
   closeSync,
   constants as fsConstants,
@@ -275,6 +275,34 @@ function resolveVaultShapedPath(vault: string, canonical: string): string | null
     // same verdict as naming one on another host.
     return null;
   }
+}
+
+/**
+ * The vault-relative identity of a source SHAPED like a location inside this
+ * vault, in POSIX form with every `.` and `..` segment resolved, or `null`
+ * when the shape does not hold. Touches no file: it is the identity a reach
+ * predicate is asked about BEFORE anything is stat-ed or read, so a refusal
+ * of the stat or the size ceiling never names a page the caller may not read.
+ */
+export function vaultShapedIdentity(vault: string, sourcePath: string): string | null {
+  const abs = resolveVaultShapedPath(vault, normalizeSourceIdentity(sourcePath));
+  return abs === null ? null : relative(vault, abs).split(sep).join(PATH_SEPARATOR);
+}
+
+/**
+ * Does `readable` refuse this source? Asked on {@link vaultShapedIdentity},
+ * before any filesystem question about the source; a source with no
+ * vault-shaped identity is never asked about, and without a predicate
+ * nothing is refused.
+ */
+export function isSourceHidden(
+  vault: string,
+  sourcePath: string,
+  readable: ((rel: string) => boolean) | undefined,
+): boolean {
+  if (readable === undefined) return false;
+  const rel = vaultShapedIdentity(vault, sourcePath);
+  return rel !== null && !readable(rel);
 }
 
 /** Is this the filesystem saying "nothing is there", rather than refusing? */

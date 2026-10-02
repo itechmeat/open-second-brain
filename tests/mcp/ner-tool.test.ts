@@ -135,10 +135,15 @@ describe("brain_intake_entities", () => {
     chmodSync(locked, 0o000);
     let thrown: unknown;
     try {
-      await handler(ctx, {
-        source: `[[${LOCKED_DIR}/note.md]]`,
-        entities: [{ category: "concept", name: "Restaking" }],
-      });
+      // At local reach: a caller that may not read the page is answered as
+      // for an absent one before the stat is made (source-reach-first.test.ts).
+      await handler(
+        { ...ctx, reach: TRANSPORT_REACH.local },
+        {
+          source: `[[${LOCKED_DIR}/note.md]]`,
+          entities: [{ category: "concept", name: "Restaking" }],
+        },
+      );
     } catch (err) {
       thrown = err;
     }

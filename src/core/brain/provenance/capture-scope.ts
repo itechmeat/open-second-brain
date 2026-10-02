@@ -31,7 +31,11 @@ import { createHash } from "node:crypto";
 import { posix } from "node:path";
 
 import type { FrontmatterMap } from "../../types.ts";
-import { classifySourceTrust, normalizeSourceIdentity } from "../intake/source-trust.ts";
+import {
+  classifySourceTrust,
+  normalizeSourceIdentity,
+  vaultShapedIdentity,
+} from "../intake/source-trust.ts";
 import { INTAKE_TRUST, type IntakeTrust } from "../trust/untrusted-provenance.ts";
 
 /** The closed vocabulary. See the module docblock for what each member proves. */
@@ -115,7 +119,10 @@ export function captureScopeForTrust(trust: IntakeTrust): CaptureScope {
 /** A source identity's scope, and the vault file behind it when there is one. */
 export interface CaptureScopeResolution {
   readonly scope: CaptureScope;
-  /** Vault-relative path of the backing file; `null` exactly when `url-only`. */
+  /**
+   * Vault-relative POSIX path of the backing file, every `.` and `..` segment
+   * resolved; `null` exactly when `url-only`.
+   */
   readonly backing: string | null;
 }
 
@@ -130,12 +137,12 @@ export interface CaptureScopeResolution {
 export function resolveCaptureScope(vault: string, identity: string): CaptureScopeResolution {
   const target = normalizeSourceIdentity(identity);
   if (classifySourceTrust(vault, identity) === INTAKE_TRUST.trusted) {
-    return { scope: CAPTURE_SCOPE.fullLocal, backing: target };
+    return { scope: CAPTURE_SCOPE.fullLocal, backing: vaultShapedIdentity(vault, identity) };
   }
   if (target.length > 0 && posix.extname(target) === "") {
     const note = `${target}${NOTE_EXTENSION}`;
     if (classifySourceTrust(vault, note) === INTAKE_TRUST.trusted) {
-      return { scope: CAPTURE_SCOPE.fullLocal, backing: note };
+      return { scope: CAPTURE_SCOPE.fullLocal, backing: vaultShapedIdentity(vault, note) };
     }
   }
   return { scope: CAPTURE_SCOPE.urlOnly, backing: null };

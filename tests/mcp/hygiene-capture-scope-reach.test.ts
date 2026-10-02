@@ -8,7 +8,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -20,6 +20,7 @@ import { HEALTH_TOOLS } from "../../src/mcp/brain/health-tools.ts";
 import { HYGIENE_TOOLS } from "../../src/mcp/brain/hygiene-tools.ts";
 import { RESEARCH_TOOLS } from "../../src/mcp/brain/research-tools.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
+import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 
 const WITHHELD_SOURCE = "Notes/withheld.md";
 const ABSENT_SOURCE = "Notes/absent.md";
@@ -90,4 +91,18 @@ describe("brain_hygiene capture-scope at the caller's reach", () => {
     rmSync(join(vault, WITHHELD_SOURCE));
     expect(await hygieneLineAt(TRANSPORT_REACH.remote)).toBe(withheldRemote);
   });
+
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "a cited page whose stat is refused counts as url-only for a caller who may not read it",
+    async () => {
+      const withheld = await reportCiting("Withheld", WITHHELD_SOURCE);
+      chmodSync(join(vault, "Notes"), 0o000);
+      try {
+        expect(await flaggedAt(TRANSPORT_REACH.remote)).toEqual([withheld]);
+        expect(await flaggedAt(TRANSPORT_REACH.local)).toEqual([]);
+      } finally {
+        chmodSync(join(vault, "Notes"), 0o755);
+      }
+    },
+  );
 });

@@ -41,7 +41,7 @@ import {
   UNTRUSTED_ORIGIN,
   classifySourceOrigin,
   classifySourceTrust,
-  normalizeSourceIdentity,
+  isSourceHidden,
   type SourceOrigin,
 } from "./source-trust.ts";
 
@@ -194,11 +194,12 @@ function resolveIntakeOrigin(
   // each of them in full and then discarded every digest but the first - and
   // discarded that one too the moment there was more than one source.
   const only = sources.length === 1 ? sources[0] : undefined;
+  // The reach question comes first, before any stat or read, so neither a
+  // refused stat nor the size ceiling can name a page the caller may not read.
   if (only !== undefined) {
-    const origin = classifySourceOrigin(vault, only);
-    return origin.trust === INTAKE_TRUST.trusted && !readableAtReach(only, readable)
+    return isSourceHidden(vault, only, readable)
       ? UNTRUSTED_ORIGIN
-      : origin;
+      : classifySourceOrigin(vault, only);
   }
 
   // `some` rather than a full map: the first source outside the vault (or
@@ -206,18 +207,10 @@ function resolveIntakeOrigin(
   // changes the answer.
   const untrusted = sources.some(
     (source) =>
-      classifySourceTrust(vault, source) === INTAKE_TRUST.untrusted ||
-      !readableAtReach(source, readable),
+      isSourceHidden(vault, source, readable) ||
+      classifySourceTrust(vault, source) === INTAKE_TRUST.untrusted,
   );
   return { trust: untrusted ? INTAKE_TRUST.untrusted : INTAKE_TRUST.trusted };
-}
-
-/** May the caller read this cited source? Always, without a predicate. */
-function readableAtReach(
-  source: string,
-  readable: ((rel: string) => boolean) | undefined,
-): boolean {
-  return readable === undefined || readable(normalizeSourceIdentity(source));
 }
 
 /**

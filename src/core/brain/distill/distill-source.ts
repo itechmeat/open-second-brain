@@ -55,6 +55,7 @@ import { canonicalNotePath } from "../../path-safety.ts";
 import { formatFrontmatter, parseFrontmatter, slugify } from "../../vault.ts";
 import {
   UNTRUSTED_ORIGIN,
+  isSourceHidden,
   normalizeSourceIdentity,
   readSourceOrigin,
 } from "../intake/source-trust.ts";
@@ -321,13 +322,15 @@ export function distillSource(
   // `provenance.level` stays `stated` - that vocabulary bands how a conclusion
   // was DERIVED, which is orthogonal to who was entitled to supply the
   // material; the lane is carried by the marker below.
-  const read = readSourceOrigin(vault, input.sourcePath);
+  //
   // A source the caller may not read answers exactly as an absent one: the
   // untrusted lane, no bytes, no digest. No span is checked against it, an
   // excerpt is admitted for it, and nothing in the result or on the page
-  // tells the caller that the page exists or what it says.
-  const hidden = read.bytes !== undefined && opts.readable?.(canonicalSource) === false;
-  const origin = hidden ? UNTRUSTED_ORIGIN : read;
+  // tells the caller that the page exists or what it says. Asked first, so
+  // the source is never stat-ed or read for such a caller.
+  const origin = isSourceHidden(vault, input.sourcePath, opts.readable)
+    ? UNTRUSTED_ORIGIN
+    : readSourceOrigin(vault, input.sourcePath);
   const sourceHash = origin.contentHash;
 
   // The quote check runs on the bytes the digest above was computed over (or
