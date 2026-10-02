@@ -15,7 +15,18 @@ import {
   renderStandingRulesFailure,
   type StandingRules,
 } from "../../core/brain/standing-rules.ts";
-import { loadBrainConfig, resolveStandingRulesMaxChars } from "../../core/brain/policy.ts";
+import {
+  loadBrainConfig,
+  resolveScopedRulesMaxChars,
+  resolveStandingRulesMaxChars,
+} from "../../core/brain/policy.ts";
+import {
+  SCOPED_RULE_AXES,
+  readScopedRules,
+  type ScopedRuleIdentity,
+  type ScopedRules,
+} from "../../core/brain/scoped-rules.ts";
+import { resolveHostScope, resolveProjectScope } from "../../core/brain/scope-identity.ts";
 import type { BrainConfig } from "../../core/brain/types.ts";
 import {
   regenerateActive,
@@ -370,18 +381,24 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
   // on a surface where every other path either carries the block or states
   // why it could not be read.
   const standing = readStandingBlock(ctx.vault);
+  // The scoped operator rules for the project, harness and host this
+  // server was launched for - local reach only, see `readScopedBlock`.
+  // Read beside the constitution, before the no-Brain return, for the
+  // same reason: the rules govern a session whatever the memory layer did.
+  const scoped = readScopedBlock(ctx);
 
   if (!existsSync(dirs.brain)) {
     return {
       vault_path: vaultPathField(ctx),
       present: false,
       active_path: activePath,
-      content: prependStandingBlock(standing, ""),
+      content: prependBlock(standing.text, prependBlock(scoped?.text ?? "", "")),
       counts: EMPTY_CONTEXT_COUNTS,
       generated_at: null,
       pinned: serializePinnedContext(ctx, pinned),
       maintenance_overdue: maintenanceOverdue,
       ...standingRulesField(ctx, standing),
+      ...scopedRulesField(scoped),
     };
   }
 
@@ -443,7 +460,8 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
     }
   }
 
-  content = prependStandingBlock(standing, content);
+  // Constitution first, then the scoped rules, then the memory body.
+  content = prependBlock(standing.text, prependBlock(scoped?.text ?? "", content));
   content = appendPinnedToContextContent(content, pinned.content);
 
   // Optional vault-root instruction file (v0.10.17). Absent file =
@@ -475,6 +493,7 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
     maintenance_overdue: maintenanceOverdue,
     ...(error ? { error } : {}),
     ...standingRulesField(ctx, standing),
+    ...scopedRulesField(scoped),
     ...(vaultInstruction
       ? {
           vault_instruction: {
@@ -546,11 +565,86 @@ function standingRulesField(ctx: ServerContext, standing: StandingBlock): Record
   };
 }
 
-/** Put the standing block at the head of the content, or leave it alone. */
-function prependStandingBlock(standing: StandingBlock, content: string): string {
-  if (standing.text.length === 0) return content;
+/** Put a block at the head of the content, or leave the content alone. */
+function prependBlock(block: string, content: string): string {
+  if (block.length === 0) return content;
   const trimmed = content.trimStart();
-  return trimmed.length === 0 ? `${standing.text}\n` : `${standing.text}\n\n${trimmed}`;
+  return trimmed.length === 0 ? `${block}\n` : `${block}\n\n${trimmed}`;
+}
+
+/**
+ * The scoped operator rules rendered for this server's scope, or nothing.
+ *
+ * LOCAL REACH ONLY. The scope is resolved from facts about the process
+ * that serves the call - the directory it was launched in, the harness
+ * its registration names, the device it runs on - and at remote reach
+ * none of them describes the caller. So at remote reach nothing is read
+ * at all: not the files, not the pointer, not the device id, and the
+ * answer is byte-identical whether or not any scoped file exists.
+ *
+ * The identity comes from {@link ServerContext.ruleScope} and the device
+ * id; no argument of this tool can name it (the tool takes none).
+ */
+function readScopedBlock(ctx: ServerContext): ScopedRules | null {
+  if (contextReach(ctx) !== TRANSPORT_REACH.local) return null;
+  let host: { readonly host: string | null; readonly unreadable: boolean };
+  try {
+    host = resolveHostScope(ctx.configPath ?? undefined);
+  } catch {
+    // A device id that cannot be resolved for any other reason (a config
+    // home that cannot be created, say) must not take the bootstrap
+    // surface down with it. It matches no host file, and the block says
+    // so when there is a host file it could have matched.
+    host = { host: null, unreadable: true };
+  }
+  const identity: ScopedRuleIdentity = {
+    project: resolveProjectScope(ctx.ruleScope?.workspaceDir ?? null),
+    harness: ctx.ruleScope?.harness ?? null,
+    host: host.host,
+  };
+  const rules = readScopedRules(ctx.vault, identity, {
+    maxChars: scopedRulesMaxChars(ctx.vault),
+    hostUnreadable: host.unreadable,
+  });
+  return rules.text.length === 0 ? null : rules;
+}
+
+/**
+ * The configured cap, or its default when `_brain.yaml` cannot be read
+ * (that failure surfaces through the regenerate arm's `error` slot, as
+ * for the constitution's cap).
+ */
+function scopedRulesMaxChars(vault: string): number {
+  let cfg: BrainConfig | null = null;
+  try {
+    cfg = loadBrainConfig(vault);
+  } catch {
+    // absorbed - see above
+  }
+  return resolveScopedRulesMaxChars(cfg);
+}
+
+/**
+ * The optional `scoped_rules` key, or nothing: present only when a file
+ * matched or the host notice applies, so a vault with no scoped rules -
+ * and every remote caller - keeps today's bytes.
+ */
+function scopedRulesField(scoped: ScopedRules | null): Record<string, unknown> {
+  if (scoped === null) return {};
+  return {
+    scoped_rules: {
+      scope: {
+        project: scoped.identity.project,
+        harness: scoped.identity.harness,
+        host: scoped.identity.host,
+      },
+      files: scoped.files.map((file) => ({
+        path: file.path,
+        axis: file.axis,
+        truncated: file.truncated,
+      })),
+    },
+  };
 }
 
 // ----- brain_digest --------------------------------------------------------
@@ -619,6 +713,37 @@ const BRAIN_CONTEXT_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> =
         path: { type: "string" },
         content: { type: "string" },
         truncated: { type: "boolean" },
+      },
+      additionalProperties: false,
+    },
+    // Declared, not required: present only at local reach and only when a
+    // scoped rule file matched this server's project, harness or host (or
+    // the host notice applies), so the common path stays byte-identical.
+    scoped_rules: {
+      type: "object",
+      required: ["scope", "files"],
+      properties: {
+        scope: {
+          type: "object",
+          required: ["project", "harness", "host"],
+          // `string | null` each (empty schema, as `generated_at` above):
+          // the descriptor subset has no union type.
+          properties: { project: {}, harness: {}, host: {} },
+          additionalProperties: false,
+        },
+        files: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["path", "axis", "truncated"],
+            properties: {
+              path: { type: "string" },
+              axis: { type: "string", enum: SCOPED_RULE_AXES },
+              truncated: { type: "boolean" },
+            },
+            additionalProperties: false,
+          },
+        },
       },
       additionalProperties: false,
     },
