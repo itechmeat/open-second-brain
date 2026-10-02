@@ -42,7 +42,10 @@ import {
   assertStandingRulesNotTargeted,
   StandingRulesWriteRefusedError,
 } from "../../src/core/brain/standing-rules.ts";
-import { BRAIN_STANDING_RULES_FILE } from "../../src/core/brain/path-constants.ts";
+import {
+  BRAIN_SCOPED_RULES_DIR,
+  BRAIN_STANDING_RULES_FILE,
+} from "../../src/core/brain/path-constants.ts";
 
 let tmp: string;
 let vault: string;
@@ -52,6 +55,8 @@ const savedEnv: Record<string, string | undefined> = {};
 
 const RULES_REL = `Brain/${BRAIN_STANDING_RULES_FILE}`;
 const RULES_BYTES = "Never force-push to main.\nAsk before deleting anything under Archive/.\n";
+const SCOPED_REL = `Brain/${BRAIN_SCOPED_RULES_DIR}/project/x.md`;
+const SCOPED_BYTES = "Run the project linter before every commit.\n";
 
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "o2b-standing-uneditable-"));
@@ -61,6 +66,8 @@ beforeEach(() => {
   }
   writeFileSync(join(vault, "Brain", "_brain.yaml"), "schema_version: 1\n");
   writeFileSync(join(vault, RULES_REL), RULES_BYTES, "utf8");
+  mkdirSync(join(vault, "Brain", BRAIN_SCOPED_RULES_DIR, "project"), { recursive: true });
+  writeFileSync(join(vault, SCOPED_REL), SCOPED_BYTES, "utf8");
   configHome = mkdtempSync(join(tmpdir(), "o2b-standing-uneditable-cfg-"));
   configPath = join(configHome, "config.yaml");
   for (const k of ["VAULT_AGENT_NAME", "VAULT_TIMEZONE", "VAULT_DIR", "OPEN_SECOND_BRAIN_CONFIG"]) {
@@ -115,6 +122,10 @@ function onDiskBytes(): string {
   return readFileSync(join(vault, RULES_REL), "utf8");
 }
 
+function scopedOnDiskBytes(): string {
+  return readFileSync(join(vault, SCOPED_REL), "utf8");
+}
+
 /** The four tools that address a note by a path the caller names. */
 const CALLER_NAMED_WRITE_TOOLS: ReadonlyArray<{
   readonly tool: string;
@@ -156,19 +167,23 @@ describe("Brain/standing-rules.md is uneditable through every caller-named write
     expect((thrown as CreateNoteError).message).toContain(RULES_REL);
   });
 
-  test("no tool name, description, or schema property description mentions the file", () => {
+  test("no tool name, description, or schema property description mentions the file or the scoped directory", () => {
+    // The scoped directory is matched with its trailing separator: the
+    // bare stem is also the stem of the constitution file name, which the
+    // first needle already covers.
+    const needles = [BRAIN_STANDING_RULES_FILE, `${BRAIN_SCOPED_RULES_DIR}/`];
     const offenders: string[] = [];
     for (const tool of buildToolTable("full")) {
       const places: Array<[string, string]> = [
         [`${tool.name} (name)`, tool.name],
         [`${tool.name} (description)`, tool.description],
       ];
-      for (const [label, text] of places) {
-        if (text.includes(BRAIN_STANDING_RULES_FILE)) offenders.push(label);
-      }
       for (const [prop, description] of schemaDescriptions(tool.inputSchema)) {
-        if (description.includes(BRAIN_STANDING_RULES_FILE)) {
-          offenders.push(`${tool.name}.${prop}`);
+        places.push([`${tool.name}.${prop}`, description]);
+      }
+      for (const [label, text] of places) {
+        for (const needle of needles) {
+          if (text.includes(needle)) offenders.push(`${label}: ${needle}`);
         }
       }
     }
@@ -269,10 +284,72 @@ describe("brain_labels cannot rewrite the standing-rules file", () => {
   test("the guard lets every other note through", () => {
     // Narrow by construction: several legitimate callers write into
     // `Brain/` through the same resolver (marker write-back, tombstones,
-    // temporal replace), so this guard names one file and no directory.
-    expect(() =>
-      assertStandingRulesNotTargeted(vault, "Brain/preferences/pref-x.md", "test surface"),
-    ).not.toThrow();
+    // temporal replace), so this guard names the constitution file and
+    // the scoped-rules directory beside it, and nothing else.
+    for (const other of [
+      "Brain/preferences/pref-x.md",
+      "Brain/standing-rules-notes.md",
+      "Notes/standing-rules/x.md",
+    ]) {
+      expect(() => assertStandingRulesNotTargeted(vault, other, "test surface")).not.toThrow();
+    }
+  });
+});
+
+/**
+ * The scoped operator rules (`Brain/standing-rules/<axis>/<key>.md`) are
+ * the constitution's per-project, per-harness and per-host companions and
+ * are exactly as uneditable: the four caller-named write tools inherit the
+ * `Brain/` refusal, and `brain_labels` - the one surface outside that
+ * envelope - is refused by the directory arm of the standing-rules guard.
+ */
+describe("the scoped standing-rules directory is uneditable", () => {
+  const SCOPED_WRITES: ReadonlyArray<{
+    readonly tool: string;
+    readonly args: Record<string, unknown>;
+  }> = Object.freeze([
+    { tool: "brain_create_note", args: { path: SCOPED_REL, content: "OVERWRITTEN" } },
+    { tool: "brain_update_note", args: { path: SCOPED_REL, content: "OVERWRITTEN" } },
+    { tool: "brain_append_note", args: { path: SCOPED_REL, content: "OVERWRITTEN" } },
+    {
+      tool: "brain_write_batch",
+      args: { operations: [{ op: "update_note", path: SCOPED_REL, content: "OVERWRITTEN" }] },
+    },
+  ]);
+
+  for (const { tool, args } of SCOPED_WRITES) {
+    test(`${tool} refuses a scoped rule file and leaves its bytes unchanged`, async () => {
+      const text = outcomeText(await callTool(tool, args));
+      expect(text).not.toContain("OVERWRITTEN");
+      expect(text).toContain(SCOPED_REL);
+      expect(text).toContain("Brain machinery root");
+      expect(scopedOnDiskBytes()).toBe(SCOPED_BYTES);
+    });
+  }
+
+  for (const args of [
+    { operation: "assign", path: SCOPED_REL, dimension: "status", value: "draft" },
+    { operation: "remove", path: SCOPED_REL, dimension: "status" },
+  ] as ReadonlyArray<Record<string, unknown>>) {
+    test(`brain_labels ${String(args["operation"])} is refused on a scoped rule file`, async () => {
+      const out = await callTool("brain_labels", args);
+      // Refused by the standing-rules guard, not by an incidental check
+      // (an unknown label dimension, a missing frontmatter block): the
+      // guard's own wording is what this row pins.
+      expect(out.result).toBeUndefined();
+      expect(out.error?.message ?? "").toContain("standing-rules file");
+      expect(scopedOnDiskBytes()).toBe(SCOPED_BYTES);
+    });
+  }
+
+  test("the guard refuses a scoped rule path directly", () => {
+    let thrown: unknown;
+    try {
+      assertStandingRulesNotTargeted(vault, SCOPED_REL, "test surface");
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(StandingRulesWriteRefusedError);
   });
 });
 
