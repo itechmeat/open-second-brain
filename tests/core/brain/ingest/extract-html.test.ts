@@ -6,6 +6,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 
 import { SOURCE_HASH_MAX_BYTES } from "../../../../src/core/brain/intake/source-trust.ts";
 import {
@@ -35,6 +36,11 @@ const OMITTED_HEADINGS = 400_000;
  * 850 MB on this input; the bounded scan takes about 40 MB.
  */
 const SCAN_MEMORY_BOUND_BYTES = 256 * 1024 * 1024;
+/** The extractor as a module URL a probe in a fresh process imports (a URL, so a Windows path works). */
+const EXTRACT_HTML_MODULE = new URL(
+  "../../../../src/core/brain/ingest/extract-html.ts",
+  import.meta.url,
+).href;
 /**
  * The time a source of huge headings may take. Redacting each heading
  * unwindowed took about 1.3 s per heading; the windowed pass leaves only
@@ -136,6 +142,9 @@ describe("extractHtml - text", () => {
     expect(titled.title).toBe(`Plan ${PRIVATE_REGION_PLACEHOLDER}`);
     const area = extracted("<textarea>a <private>vault 4711</private> b</textarea>");
     expect(area.text).toBe(`a ${PRIVATE_REGION_PLACEHOLDER} b`);
+    // Stripped after decoding: an entity-encoded region hides too (fail-closed).
+    const encoded = extracted("<textarea>a &lt;private&gt;vault 4711&lt;/private&gt; b</textarea>");
+    expect(encoded.text).toBe(`a ${PRIVATE_REGION_PLACEHOLDER} b`);
   });
 
   test("a private region inside a textarea in a heading stays out of the parts", () => {
@@ -410,15 +419,23 @@ describe("extractHtml - parts", () => {
 
   test("omitted parts cost no memory: many small headings under long ancestors", () => {
     // Every omitted h6 would otherwise carry a trail of about 1,000 characters.
-    const ancestors = [1, 2, 3, 4, 5]
-      .map((level) => `<h${level}>${"a".repeat(HTML_HEADING_MAX_CHARS - 1)}</h${level}>`)
-      .join("");
-    const bytes = encoder.encode(ancestors + "<h6>x</h6>".repeat(OMITTED_HEADINGS));
-    Bun.gc(true);
-    const before = process.memoryUsage().rss;
-    const result = extractHtml(bytes);
-    const grown = process.memoryUsage().rss - before;
-    expect(result.extracted && result.partsOmitted).toBe(OMITTED_HEADINGS + 5 - HTML_PARTS_MAX);
+    // Measured in a fresh process: in a shared test process the resident set
+    // already holds pages freed by earlier files, which an unbounded scan
+    // reuses without growing it, so an in-process probe passes either way.
+    const probe = [
+      `import { extractHtml } from ${JSON.stringify(EXTRACT_HTML_MODULE)};`,
+      `const ancestors = [1, 2, 3, 4, 5].map((l) => \`<h\${l}>\${"a".repeat(${HTML_HEADING_MAX_CHARS - 1})}</h\${l}>\`).join("");`,
+      `const bytes = new TextEncoder().encode(ancestors + "<h6>x</h6>".repeat(${OMITTED_HEADINGS}));`,
+      "Bun.gc(true);",
+      "const before = process.memoryUsage().rss;",
+      "const result = extractHtml(bytes);",
+      "const grown = process.memoryUsage().rss - before;",
+      "console.log(JSON.stringify({ grown, omitted: result.extracted ? result.partsOmitted : null }));",
+    ].join("\n");
+    const run = spawnSync(process.execPath, ["-e", probe], { encoding: "utf8" });
+    expect(run.status).toBe(0);
+    const { grown, omitted } = JSON.parse(run.stdout) as { grown: number; omitted: number };
+    expect(omitted).toBe(OMITTED_HEADINGS + 5 - HTML_PARTS_MAX);
     expect(grown).toBeLessThan(SCAN_MEMORY_BOUND_BYTES);
   });
 
