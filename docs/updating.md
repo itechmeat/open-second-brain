@@ -66,10 +66,16 @@ every run; a value typed under that key is replaced. `--json` gains a
 `brain_ingest_source` with `pre_extract` now return seeds for `.tf` and
 `.tfvars` files, which used to report `extracted: false`.
 
-**URL credentials in import specifiers are redacted.** An import
-specifier such as `https://user:pass@host/m.js` is emitted with its
-credentials replaced in every family's `imports` seeds. Specifiers
-without credentials are unchanged.
+**Credentials in import specifiers are redacted.** In every family's
+`imports` seeds, the userinfo of an http(s) or `git::` specifier (a
+`user:password` pair such as `https://user:pass@host/m.js`, or a bare
+token such as `git::https://<token>@github.com/o/r.git`) and the value
+of a named credential query parameter (`sshkey`, `token`,
+`access_token`, `password`, `signature`, the S3 and GCS access-key and
+signing parameters) are replaced. A conventional login such as
+`ssh://git@` is kept. A credential in a path segment, a fragment or an
+unnamed query parameter is not recognised. Specifiers without
+credentials are unchanged.
 
 **More tools treat a record the caller cannot read at its reach as
 absent.** A remote client now gets, for such a record, exactly the

@@ -7,9 +7,12 @@
  * (`var.<name>`), `output` (`output.<name>`), `provider` (`provider.<name>`)
  * and `locals` (`local.<name>`, one per declared local). A module's
  * `source` becomes an `imports` seed from the file path to the source
- * string, passed through the extractor's one specifier step (URL
- * credentials redacted) and never bound with `resolvedTo`: a module source
- * names a directory or a registry address, not a file. A `.tfvars` source
+ * string, passed through the extractor's one specifier step (the userinfo
+ * of an http(s) or `git::` source, a userinfo that does not read as a
+ * login, and the value of a named credential query parameter such as
+ * `sshkey` are redacted; a credential in a path segment, a fragment or an
+ * unnamed query parameter is not) and never bound with `resolvedTo`: a
+ * module source names a directory or a registry address, not a file. A `.tfvars` source
  * yields one `variable` seed per top-level assignment name.
  *
  * Edges run from a block address (or, inside `locals`, from the local being

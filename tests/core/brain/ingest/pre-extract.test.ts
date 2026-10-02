@@ -447,6 +447,23 @@ describe("preExtractCodeStructure - URL credentials in import specifiers", () =>
     expect(res.edges).toEqual([{ kind: "imports", from: "pkg/a.py", to: redacted }]);
   });
 
+  test("a TypeScript from-specifier whose userinfo is a bare token is redacted", () => {
+    const token = fakeCredential("tok", "1234", "56789");
+    const res = asSuccess(
+      preExtractCodeStructure(
+        "src/a.ts",
+        `import x from "https://${token}@host.example.com/m.js";\n`,
+      ),
+    );
+    expect(res.edges).toEqual([
+      {
+        kind: "imports",
+        from: "src/a.ts",
+        to: `https://${REDACTION_PLACEHOLDER}@host.example.com/m.js`,
+      },
+    ]);
+  });
+
   test("specifiers without credentials are byte-identical", () => {
     const plain = "https://registry.example.com:8443/m.js";
     const ts = asSuccess(

@@ -529,6 +529,112 @@ export function redactUrlCredentials(text: string): string {
   return text.replace(BASIC_AUTH_URL_RE, (_m, scheme: string) => `${scheme}${PLACEHOLDER}@`);
 }
 
+/**
+ * Query parameter keys whose value is a credential in a module source or
+ * import specifier: the Terraform git getter's `sshkey`, S3 and GCS
+ * signing and access-key parameters, and the generic token, password and
+ * signature names. Matched without regard to case.
+ */
+export const CREDENTIAL_QUERY_KEYS: ReadonlyArray<string> = Object.freeze([
+  "sshkey",
+  "token",
+  "access_token",
+  "password",
+  "secret",
+  "signature",
+  "sig",
+  "key",
+  "aws_access_key_id",
+  "aws_access_key_secret",
+  "aws_secret_access_key",
+  "aws_access_token",
+  "x-amz-signature",
+  "x-amz-credential",
+  "x-amz-security-token",
+  "x-goog-signature",
+  "x-goog-credential",
+]);
+
+const CREDENTIAL_QUERY_KEY_SET: ReadonlySet<string> = new Set(CREDENTIAL_QUERY_KEYS);
+
+/** A Terraform go-getter forcing prefix (`git::`, `s3::`, `gcs::`), kept as written. */
+const GETTER_PREFIX_RE = /^[a-z0-9]+::/i;
+
+/** Schemes whose userinfo has no conventional login: a bare user there is a token. */
+const TOKEN_USERINFO_SCHEMES: ReadonlySet<string> = new Set(["http:", "https:"]);
+
+/**
+ * A user name that reads as a login (`git`, `deploy`) rather than a token;
+ * kept on the schemes where a bare login is conventional (`ssh://git@`).
+ */
+const PLAUSIBLE_LOGIN_RE = /^[a-z_][a-z0-9._-]{0,31}$/;
+
+function decodedKey(raw: string): string {
+  try {
+    return decodeURIComponent(raw.replaceAll("+", " ")).toLowerCase();
+  } catch {
+    return raw.toLowerCase();
+  }
+}
+
+/** `search` with the value of every credential key replaced, or null when none matched. */
+function redactCredentialQuery(search: string): string | null {
+  if (search.length <= 1) return null;
+  let changed = false;
+  const pairs = search
+    .slice(1)
+    .split("&")
+    .map((pair) => {
+      const eq = pair.indexOf("=");
+      if (eq < 0 || !CREDENTIAL_QUERY_KEY_SET.has(decodedKey(pair.slice(0, eq)))) return pair;
+      changed = true;
+      return `${pair.slice(0, eq + 1)}${PLACEHOLDER}`;
+    });
+  return changed ? `?${pairs.join("&")}` : null;
+}
+
+/**
+ * The credential pass for a module source or import specifier. Covered:
+ * the `user:password@` pair of any scheme ({@link redactUrlCredentials}),
+ * a password containing `@`, a bare userinfo of an http(s) URL (a token,
+ * with or without a go-getter prefix such as `git::`), a userinfo of any
+ * other scheme that does not read as a login (`ssh://git@` is kept), and
+ * the value of every {@link CREDENTIAL_QUERY_KEYS} parameter. A specifier
+ * that does not parse as a URL gets the `user:password@` pass only; a
+ * credential in a path segment, a fragment or an unnamed query key is not
+ * recognised. A specifier with nothing to redact is returned
+ * byte-identical; a redacted one is re-serialised by the URL parser.
+ */
+export function redactSpecifierCredentials(specifier: string): string {
+  const basic = redactUrlCredentials(specifier);
+  const prefix = GETTER_PREFIX_RE.exec(basic)?.[0] ?? "";
+  let url: URL;
+  try {
+    url = new URL(basic.slice(prefix.length));
+  } catch {
+    return basic;
+  }
+  let changed = false;
+  if (url.password !== "") {
+    url.username = PLACEHOLDER;
+    url.password = "";
+    changed = true;
+  } else if (
+    url.username !== "" &&
+    url.username !== PLACEHOLDER &&
+    (TOKEN_USERINFO_SCHEMES.has(url.protocol) || !PLAUSIBLE_LOGIN_RE.test(url.username))
+  ) {
+    url.username = PLACEHOLDER;
+    changed = true;
+  }
+  const search = redactCredentialQuery(url.search);
+  if (search !== null) {
+    url.search = search;
+    changed = true;
+  }
+  return changed ? `${prefix}${url.href}` : basic;
+}
+
 function redactInfraTopology(text: string): string {
   // Credentials first, so the host that follows is still available to the
   // host/port passes below - the order this pass has always run in.

@@ -129,6 +129,85 @@ describe("preExtractCodeStructure - Terraform family", () => {
     expect(JSON.stringify(res)).not.toContain(userInfo);
   });
 
+  test("a module source whose userinfo is a bare token is redacted", () => {
+    // `git::https://<token>@host/...` is the usual way a CI token rides in a
+    // Terraform module source; it has no `user:password` colon.
+    const token = fakeCredential("ghp_", "tf-token-", "0a9b8c7d6e5f4a3b2c1d");
+    const res = asSuccess(
+      preExtractCodeStructure(
+        "infra/main.tf",
+        lines('module "net" {', `  source = "git::https://${token}@github.com/org/net.git"`, "}"),
+      ),
+    );
+    expect(JSON.stringify(res)).not.toContain(token);
+  });
+
+  test("an ssh module source keeps its conventional user byte-identical", () => {
+    const source = "git::ssh://git@github.com/org/net.git?ref=v1.2.0";
+    const res = asSuccess(
+      preExtractCodeStructure(
+        "infra/main.tf",
+        lines('module "net" {', `  source = "${source}"`, "}"),
+      ),
+    );
+    expect(res.edges).toEqual([{ kind: "imports", from: "infra/main.tf", to: source }]);
+  });
+
+  describe("every credential form a module source can carry is redacted", () => {
+    const value = fakeCredential("Zm9v", "YmFy", "-0a9b8c7d6e5f");
+    const P = REDACTION_PLACEHOLDER;
+    for (const [form, source, redacted] of [
+      [
+        "a short bare token in an https userinfo",
+        `git::https://${value}@git.example.com/net.git`,
+        `git::https://${P}@git.example.com/net.git`,
+      ],
+      [
+        "a password that itself contains an at sign",
+        `git::https://ci:${value}@x@github.com/org/net.git`,
+        `git::https://${P}@github.com/org/net.git`,
+      ],
+      [
+        "the git getter's sshkey parameter",
+        `git::ssh://git@example.com/r.git?sshkey=${value}`,
+        `git::ssh://git@example.com/r.git?sshkey=${P}`,
+      ],
+      [
+        "S3 access key parameters, other parameters kept",
+        `s3::https://s3.amazonaws.com/b/m.zip?aws_access_key_id=${value}&aws_access_key_secret=${value}&version=3`,
+        `s3::https://s3.amazonaws.com/b/m.zip?aws_access_key_id=${P}&aws_access_key_secret=${P}&version=3`,
+      ],
+      [
+        "a token query parameter on a plain https source",
+        `https://example.com/m.zip?token=${value}`,
+        `https://example.com/m.zip?token=${P}`,
+      ],
+      [
+        "a signed GCS URL, the key matched in any case",
+        `gcs::https://www.googleapis.com/storage/v1/b/m.zip?X-Goog-Signature=${value}`,
+        `gcs::https://www.googleapis.com/storage/v1/b/m.zip?X-Goog-Signature=${P}`,
+      ],
+    ] as const) {
+      test(form, () => {
+        const res = asSuccess(
+          preExtractCodeStructure(
+            "infra/main.tf",
+            lines('module "net" {', `  source = "${source}"`, "}"),
+          ),
+        );
+        expect(res.edges).toEqual([{ kind: "imports", from: "infra/main.tf", to: redacted }]);
+        expect(JSON.stringify(res)).not.toContain(value);
+      });
+    }
+  });
+
+  test("a CRLF source yields the same seeds as its LF form", () => {
+    const crlf = MAIN_TF.replaceAll("\n", "\r\n");
+    expect(preExtractCodeStructure("infra/main.tf", crlf)).toEqual(
+      preExtractCodeStructure("infra/main.tf", MAIN_TF),
+    );
+  });
+
   test("a source attribute outside a module block is not a module source", () => {
     const res = asSuccess(
       preExtractCodeStructure(

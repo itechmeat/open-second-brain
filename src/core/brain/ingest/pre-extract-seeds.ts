@@ -7,7 +7,7 @@
  * seed types, so callers keep importing them from there.
  */
 
-import { redactUrlCredentials } from "../../redactor.ts";
+import { redactSpecifierCredentials } from "../../redactor.ts";
 
 /**
  * A declaration surfaced as an entity seed: a class or function (TS/JS,
@@ -49,11 +49,16 @@ export interface CodeEdgeSeed {
 }
 
 /**
- * The one specifier step every family's `imports` seed passes through: URL
- * credentials (`scheme://user:password@host`) become the redaction
- * placeholder, so a specifier never carries them out of the extractor. Any
- * other specifier text is kept byte-identical.
+ * The one specifier step every family's `imports` seed passes through
+ * ({@link redactSpecifierCredentials}): the userinfo of an http(s) or
+ * `git::` specifier (a `user:password` pair or a bare token), a userinfo
+ * that does not read as a login on any other scheme, and the value of a
+ * named credential query parameter (`sshkey`, `token`, the S3 and GCS
+ * signing keys and the rest of `CREDENTIAL_QUERY_KEYS`) become the
+ * redaction placeholder. Not covered: a credential in a path segment, a
+ * fragment or an unnamed query parameter. A specifier with nothing to
+ * redact is kept byte-identical.
  */
 export function specifierSeed(path: string, specifier: string): CodeEdgeSeed {
-  return { kind: "imports", from: path, to: redactUrlCredentials(specifier) };
+  return { kind: "imports", from: path, to: redactSpecifierCredentials(specifier) };
 }
