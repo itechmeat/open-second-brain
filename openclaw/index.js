@@ -1943,7 +1943,7 @@ var SCAN_TRUNCATED_MARKER = `
 
 ${SCAN_TRUNCATED_SENTINEL} [redactor scan window exceeded (> 1 MiB); the unscanned tail was dropped. ` + `This payload was only partially scanned — treat it as unverified and inspect the raw source before sharing.]
 `;
-var PRIVATE_OPEN_TAG_RE = /<private\b[^>]*>/gi;
+var PRIVATE_OPEN_TAG_RE = /<private\b[^<>]*(?:>|(?=<)|$)/gi;
 var PRIVATE_CLOSE_TAG_RE = /<\/private>/gi;
 var SECRET_KEYS = [
   "api_key",
@@ -2087,42 +2087,55 @@ function quoteRedactedFrontmatter(text) {
     return text;
   return text.replace(FRONTMATTER_BLOCK_RE, (_match, open, body, close) => open + body.replace(FRONTMATTER_SCALAR_RE, (_m, prefix, value) => value.startsWith('"') ? `${prefix}${value}` : `${prefix}${quoteYamlScalar(value)}`).replace(FRONTMATTER_ITEM_RE, (_m, prefix, value) => value.startsWith('"') ? `${prefix}${value}` : `${prefix}${quoteYamlScalar(value)}`).replace(FRONTMATTER_FLOW_ITEM_RE, (_m, prefix, value) => `${prefix}${quoteYamlScalar(value)}`) + close);
 }
+function privateRegionSpans(text) {
+  const spans = [];
+  const open = new RegExp(PRIVATE_OPEN_TAG_RE.source, "gi");
+  const close = new RegExp(PRIVATE_CLOSE_TAG_RE.source, "gi");
+  const nextAt = (re, from) => {
+    re.lastIndex = from;
+    return re.exec(text);
+  };
+  let cursor = 0;
+  while (cursor < text.length) {
+    const first = nextAt(open, cursor);
+    if (!first)
+      break;
+    let depth = 1;
+    let scan = first.index + first[0].length;
+    let nextOpen = nextAt(open, scan);
+    let nextClose = nextAt(close, scan);
+    while (depth > 0) {
+      if (!nextClose) {
+        spans.push({ start: first.index, end: text.length });
+        return spans;
+      }
+      if (nextOpen && nextOpen.index < nextClose.index) {
+        depth += 1;
+        scan = nextOpen.index + nextOpen[0].length;
+      } else {
+        depth -= 1;
+        scan = nextClose.index + nextClose[0].length;
+      }
+      if (nextOpen && nextOpen.index < scan)
+        nextOpen = nextAt(open, scan);
+      if (nextClose.index < scan)
+        nextClose = nextAt(close, scan);
+    }
+    spans.push({ start: first.index, end: scan });
+    cursor = scan;
+  }
+  return spans;
+}
 function stripPrivateRegions(text) {
   if (!text)
     return text;
   let output = "";
   let cursor = 0;
-  PRIVATE_OPEN_TAG_RE.lastIndex = 0;
-  PRIVATE_CLOSE_TAG_RE.lastIndex = 0;
-  while (cursor < text.length) {
-    PRIVATE_OPEN_TAG_RE.lastIndex = cursor;
-    const openMatch = PRIVATE_OPEN_TAG_RE.exec(text);
-    if (!openMatch) {
-      output += text.slice(cursor);
-      break;
-    }
-    output += text.slice(cursor, openMatch.index);
-    output += PRIVATE_REGION_PLACEHOLDER;
-    let depth = 1;
-    let scan = PRIVATE_OPEN_TAG_RE.lastIndex;
-    while (depth > 0) {
-      PRIVATE_OPEN_TAG_RE.lastIndex = scan;
-      PRIVATE_CLOSE_TAG_RE.lastIndex = scan;
-      const nextOpen = PRIVATE_OPEN_TAG_RE.exec(text);
-      const nextClose = PRIVATE_CLOSE_TAG_RE.exec(text);
-      if (!nextClose)
-        return output;
-      if (nextOpen && nextOpen.index < nextClose.index) {
-        depth += 1;
-        scan = PRIVATE_OPEN_TAG_RE.lastIndex;
-      } else {
-        depth -= 1;
-        scan = PRIVATE_CLOSE_TAG_RE.lastIndex;
-      }
-    }
-    cursor = scan;
+  for (const span of privateRegionSpans(text)) {
+    output += text.slice(cursor, span.start) + PRIVATE_REGION_PLACEHOLDER;
+    cursor = span.end;
   }
-  return output;
+  return output + text.slice(cursor);
 }
 function scanRawOutput(text, opts = {}) {
   if (!text)
@@ -3308,7 +3321,8 @@ function isRemotelyReadable(pageTags, reach) {
 }
 
 // src/core/vault.ts
-var FRONTMATTER_RE = /^---\s*\n([\s\S]*?)\n---\s*\n?/;
+var FRONTMATTER_RE = /^---[^\S\n]*\n([\s\S]*?)\n---\s*\n?/;
+var BYTE_ORDER_MARK = 65279;
 var FRONTMATTER_KEY_PATTERN = "[a-zA-Z_][a-zA-Z0-9_-]*";
 var FRONTMATTER_KEY_RE = new RegExp(`^${FRONTMATTER_KEY_PATTERN}$`);
 var KEY_VALUE_RE = new RegExp(`^(${FRONTMATTER_KEY_PATTERN})\\s*:\\s*(.*?)\\s*$`);
@@ -3358,9 +3372,10 @@ function parseFrontmatterWithNotices(path, opts = {}) {
   }
   return parseFrontmatterTextWithNotices(text, { site, path });
 }
-function parseFrontmatterTextWithNotices(text, opts = {}) {
+function parseFrontmatterTextWithNotices(raw, opts = {}) {
   const notices = [];
   const site = opts.site ?? FRONTMATTER_SITE;
+  const text = raw.charCodeAt(0) === BYTE_ORDER_MARK ? raw.slice(1) : raw;
   const match = FRONTMATTER_RE.exec(text);
   if (!match) {
     return [{}, text.trim(), notices];
