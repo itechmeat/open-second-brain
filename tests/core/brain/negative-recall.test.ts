@@ -19,11 +19,14 @@ import {
   isRetractionEvidenceKind,
   NEGATIVE_RECALL_STATE,
   NEGATIVE_RECALL_UNKNOWN_REASON,
+  NEGATIVE_RECALL_UNKNOWN_REASONS,
   NegativeRecallError,
   RETRACTION_EVIDENCE_KIND,
   retractionEvidenceFromClaim,
   type CoverageIndexSnapshot,
+  withoutCorpusCounts,
   type CoverageScope,
+  type NegativeRecallUnknownReason,
 } from "../../../src/core/brain/negative-recall.ts";
 
 const INDEXED_AT = "2026-08-01T00:00:00.000Z";
@@ -463,6 +466,134 @@ describe("did_not_happen is grounded, never inferred", () => {
         retraction: { ...evidence, recorded_at: "not-an-instant" },
       }),
     ).toThrow(NegativeRecallError);
+  });
+});
+
+describe("the verdict below local reach", () => {
+  /**
+   * Two index states per `unknown_reason` that differ in documents,
+   * chunks, embeddings and indexed roots, as two vaults that differ by
+   * pages the reader cannot read would.
+   */
+  const SMALLER = { documents: 4, chunks: 10, embeddings: 10 } as const;
+  const LARGER = { documents: 5, chunks: 12, embeddings: 12 } as const;
+  const pairs: ReadonlyArray<
+    readonly [
+      string,
+      NegativeRecallUnknownReason,
+      () => ReturnType<typeof classifyNegativeRecall>,
+      () => ReturnType<typeof classifyNegativeRecall>,
+    ]
+  > = [
+    [
+      "no index",
+      NEGATIVE_RECALL_UNKNOWN_REASON.indexAbsent,
+      () =>
+        classifyNegativeRecall({
+          snapshot: snapshot({ ...SMALLER, exists: false }),
+          scope: scope(),
+        }),
+      () =>
+        classifyNegativeRecall({
+          snapshot: snapshot({ ...LARGER, exists: false }),
+          scope: scope(),
+        }),
+    ],
+    [
+      "unreadable index facts",
+      NEGATIVE_RECALL_UNKNOWN_REASON.coverageUnavailable,
+      () => classifyNegativeRecall({ snapshot: null, scope: scope() }),
+      () =>
+        classifyNegativeRecall({ snapshot: null, scope: scope({ authorizedRoots: ["a", "b"] }) }),
+    ],
+    [
+      "stale embeddings",
+      NEGATIVE_RECALL_UNKNOWN_REASON.indexStale,
+      () =>
+        classifyNegativeRecall({
+          snapshot: snapshot({ ...SMALLER, staleEmbeddings: 3 }),
+          scope: scope(),
+        }),
+      () =>
+        classifyNegativeRecall({
+          snapshot: snapshot({ ...LARGER, staleEmbeddings: 3 }),
+          scope: scope(),
+        }),
+    ],
+    [
+      "an undatable index instant",
+      NEGATIVE_RECALL_UNKNOWN_REASON.indexInstantUnusable,
+      () =>
+        classifyNegativeRecall({
+          snapshot: snapshot({ ...SMALLER, lastIndexedAt: "never" }),
+          scope: scope(),
+        }),
+      () =>
+        classifyNegativeRecall({
+          snapshot: snapshot({ ...LARGER, lastIndexedAt: "never" }),
+          scope: scope(),
+        }),
+    ],
+    [
+      "an unreached note root",
+      NEGATIVE_RECALL_UNKNOWN_REASON.coverageDivergent,
+      () =>
+        classifyNegativeRecall({
+          snapshot: snapshot(SMALLER),
+          scope: scope({ authorizedRoots: ["notes", "archive"], indexedRoots: ["notes"] }),
+        }),
+      () =>
+        classifyNegativeRecall({
+          snapshot: snapshot(LARGER),
+          scope: scope({
+            authorizedRoots: ["notes", "journal", "archive"],
+            indexedRoots: ["notes", "journal"],
+          }),
+        }),
+    ],
+    [
+      "an unfinished embedding run",
+      NEGATIVE_RECALL_UNKNOWN_REASON.embeddingsIncomplete,
+      () =>
+        classifyNegativeRecall({
+          snapshot: snapshot({ ...SMALLER, embeddings: 7 }),
+          scope: scope(),
+        }),
+      () =>
+        classifyNegativeRecall({
+          snapshot: snapshot({ ...LARGER, embeddings: 9 }),
+          scope: scope(),
+        }),
+    ],
+  ];
+
+  test("every unknown reason has a row", () => {
+    expect(new Set(pairs.map(([, reason]) => reason))).toEqual(
+      new Set(NEGATIVE_RECALL_UNKNOWN_REASONS),
+    );
+  });
+
+  for (const [name, reason, smaller, larger] of pairs) {
+    test(`${name}: the statement is the same whatever the index counts`, () => {
+      const a = withoutCorpusCounts(smaller());
+      const b = withoutCorpusCounts(larger());
+      expect(a.unknown_reason).toBe(reason);
+      expect(a.state).toBe(NEGATIVE_RECALL_STATE.unknown);
+      expect(a.complete).toBe(false);
+      expect(a.coverage).toBeUndefined();
+      expect(a.reason).not.toMatch(/\d/u);
+      expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+    });
+  }
+
+  test("an unreached note root is still named", () => {
+    const verdict = withoutCorpusCounts(
+      classifyNegativeRecall({
+        snapshot: snapshot(),
+        scope: scope({ authorizedRoots: ["notes", "archive"], indexedRoots: ["notes"] }),
+      }),
+    );
+    expect(verdict.reason).toContain("archive");
   });
 });
 

@@ -242,6 +242,31 @@ test("below local reach the corpus statement carries no coverage receipt", async
   expect(String(out.negative["reason"])).not.toContain("document(s)");
 });
 
+test("below local reach an unfinished embedding run is stated without index counts", async () => {
+  writeMd("notes/coolant.md", "# Coolant\n\nThe reactor coolant loop was replaced in March.\n");
+  writeMd("notes/pump.md", "# Pump\n\nThe feed pump was serviced in April.\n");
+  await buildIndex();
+  // A model is recorded after a keyword-only run: the index now holds no
+  // embedding for any of its chunks, so that model's run is unfinished.
+  writeFileSync(configPath, `vault: "${vault}"\nsearch_semantic_enabled: "true"\n`);
+  const local = (await tool("brain_recall_gate").handler(ctx(), {
+    prompt: "reactor coolant",
+    scores: [],
+    match_quality: 0,
+  })) as { negative: Record<string, unknown> };
+  expect(local.negative["unknown_reason"]).toBe("embeddings-incomplete");
+  const chunks = (local.negative["coverage"] as Record<string, unknown>)["chunks"] as number;
+  expect(String(local.negative["reason"])).toContain(`${chunks} chunk(s)`);
+
+  const remote = (await tool("brain_recall_gate").handler(
+    { ...ctx(), reach: TRANSPORT_REACH.remote },
+    { prompt: "reactor coolant", scores: [], match_quality: 0 },
+  )) as { negative: Record<string, unknown> };
+  expect(remote.negative["unknown_reason"]).toBe("embeddings-incomplete");
+  expect(remote.negative["coverage"]).toBeUndefined();
+  expect(String(remote.negative["reason"]).match(/\d+/gu) ?? []).not.toContain(String(chunks));
+});
+
 test("gate rejects a malformed scores argument", async () => {
   await expect(
     tool("brain_recall_gate").handler(ctx(), {

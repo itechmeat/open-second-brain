@@ -683,20 +683,58 @@ export function classifyNegativeRecall(input: NegativeRecallInput): NegativeReca
 }
 
 /**
+ * The fixed `unknown` reason a reader below local reach is told, one per
+ * {@link NegativeRecallUnknownReason}. The full reasons count chunks,
+ * embeddings and note roots over every indexed page, including pages that
+ * reader cannot read, so none of these carries a number.
+ */
+export const COUNT_FREE_UNKNOWN_REASON: Readonly<Record<NegativeRecallUnknownReason, string>> =
+  Object.freeze({
+    [NEGATIVE_RECALL_UNKNOWN_REASON.indexAbsent]:
+      "no index exists at the configured path, so nothing was searched",
+    [NEGATIVE_RECALL_UNKNOWN_REASON.indexStale]:
+      "the index carries out-of-date embeddings, predates the evidence or has never recorded a completed run",
+    [NEGATIVE_RECALL_UNKNOWN_REASON.coverageDivergent]:
+      "the index does not reach every authorized note root",
+    [NEGATIVE_RECALL_UNKNOWN_REASON.coverageUnavailable]:
+      "the index facts could not be read, so its coverage cannot be stated",
+    [NEGATIVE_RECALL_UNKNOWN_REASON.indexInstantUnusable]:
+      "the index stamped its last completed run with an instant that cannot be read as a date",
+    [NEGATIVE_RECALL_UNKNOWN_REASON.embeddingsIncomplete]:
+      "the index's embedding run is unfinished, so part of the corpus is unreachable by a semantic query",
+  });
+
+/**
  * The verdict for a reader below local reach. The coverage receipt counts
  * every indexed document, including pages that reader cannot read, so it
- * is left out, and a `not_found` reason names the index time only. Every
- * other field is the verdict's own.
+ * is left out; a `not_found` reason names the index time only, an
+ * `unknown` reason is the fixed text for its `unknown_reason`, and the
+ * authorized note roots the index does not reach are still named, because
+ * they come from the operator's configuration rather than from pages.
+ * Every other field is the verdict's own.
  */
 export function withoutCorpusCounts(verdict: NegativeRecallVerdict): NegativeRecallVerdict {
   const { coverage, ...rest } = verdict;
-  if (coverage === undefined) return verdict;
   return Object.freeze({
     ...rest,
     ...(verdict.state === NEGATIVE_RECALL_STATE.notFound
-      ? { reason: `no match in the index as of ${coverage.last_indexed_at ?? "an unknown time"}` }
+      ? { reason: `no match in the index as of ${coverage?.last_indexed_at ?? "an unknown time"}` }
+      : {}),
+    ...(verdict.unknown_reason !== undefined
+      ? { reason: countFreeUnknownReason(verdict.unknown_reason, coverage) }
       : {}),
   });
+}
+
+function countFreeUnknownReason(
+  reason: NegativeRecallUnknownReason,
+  coverage: CoverageReceipt | undefined,
+): string {
+  const fixed = COUNT_FREE_UNKNOWN_REASON[reason];
+  const unreached = coverage?.unindexed_roots ?? [];
+  return reason === NEGATIVE_RECALL_UNKNOWN_REASON.coverageDivergent && unreached.length > 0
+    ? `${fixed}; not reached: ${unreached.join(", ")}`
+    : fixed;
 }
 
 /** Every `unknown` leaves through here, so the shape cannot drift. */

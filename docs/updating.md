@@ -82,8 +82,9 @@ longer than 2048 characters is replaced whole. With `pre_extract`,
 
 **A remote search with no match no longer states index counts.** The
 answer of an empty `brain_search` and of `brain_recall_gate` below local
-reach names the index time only and carries no coverage receipt, since
-its counts include pages the caller cannot read. A local caller and the
+reach carries no coverage receipt, since its counts include pages the
+caller cannot read: a `not_found` names the index time only, and an
+`unknown` gives a fixed reason for its `unknown_reason`. A local caller and the
 CLI keep the receipt.
 
 **More tools treat a record the caller cannot read at its reach as
