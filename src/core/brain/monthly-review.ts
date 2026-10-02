@@ -30,6 +30,13 @@ export interface BuildMonthlyReviewOptions {
   readonly now?: Date;
   /** Optional area labels expected to show activity in the month. */
   readonly expectedAreas?: ReadonlyArray<string>;
+  /**
+   * The form of one log event the caller may see, or `null` when it may
+   * not see it at all. Applied once to the month's events before every
+   * count, so a withheld event moves none of them. Omitted, every event
+   * counts as logged (the operator's own shell).
+   */
+  readonly eventAtReach?: (ev: TemporalEvent) => TemporalEvent | null;
 }
 
 const MONTH_RE = /^\d{4}-\d{2}$/;
@@ -42,9 +49,12 @@ export function buildMonthlyReview(
   const month = normalizeMonthlyReviewMonth(options.month ?? now.toISOString().slice(0, 7));
   const window = monthWindow(month);
   const index = buildTimelineIndex(vault, window);
-  const transitions = collectTransitions(index.events);
+  const atReach = options.eventAtReach;
+  const events =
+    atReach === undefined ? index.events : index.events.flatMap((ev) => atReach(ev) ?? []);
+  const transitions = collectTransitions(events);
   const retired = transitions.filter((transition) => transition.kind === "retirement").length;
-  const contradictions = countContradictions(index.events);
+  const contradictions = countContradictions(events);
 
   return Object.freeze({
     schema_version: 1 as const,
@@ -52,11 +62,11 @@ export function buildMonthlyReview(
     month,
     window,
     summary: Object.freeze({
-      events: index.events.length,
+      events: events.length,
       status_transitions: transitions.length,
       retired,
       contradictions,
-      neglected_areas: Object.freeze(neglectedAreas(index.events, options.expectedAreas ?? [])),
+      neglected_areas: Object.freeze(neglectedAreas(events, options.expectedAreas ?? [])),
     }),
   });
 }

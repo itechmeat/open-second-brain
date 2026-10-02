@@ -404,7 +404,13 @@ async function toolBrainMonthlyReview(
       throw new MCPError(INVALID_PARAMS, "brain_brief view=monthly: month must be YYYY-MM");
     }
   }
-  const report = buildMonthlyReview(ctx.vault, month ? { month } : {});
+  // Below local reach (or under the ownership gate) the month is counted
+  // over the events this caller may see, in the form it may see them.
+  const refs = requestRefView(ctx);
+  const report = buildMonthlyReview(ctx.vault, {
+    ...(month ? { month } : {}),
+    ...(refs.filtersNothing ? {} : { eventAtReach: (ev) => eventAtReach(refs, ev) }),
+  });
   return {
     schema_version: report.schema_version,
     generated_at: report.generated_at,
