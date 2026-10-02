@@ -1536,6 +1536,13 @@ export interface BrainActiveConfig {
    * STANDING_RULES_MAX_CHARS_DEFAULT from standing-rules.ts applies.
    */
   readonly standing_rules_max_chars?: number;
+  /**
+   * Character cap for the operator-authored scoped rules block
+   * (`Brain/standing-rules/<axis>/<key>.md`). Unlike the constitution it
+   * is CHARGED against `inject_budget_chars`. Absent means the
+   * SCOPED_RULES_MAX_CHARS_DEFAULT from scoped-rules.ts applies.
+   */
+  readonly scoped_rules_max_chars?: number;
 }
 
 /**

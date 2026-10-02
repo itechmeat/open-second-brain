@@ -17,6 +17,11 @@ import {
   STANDING_RULES_MAX_CHARS_MAX,
   STANDING_RULES_MAX_CHARS_MIN,
 } from "../../standing-rules.ts";
+import {
+  SCOPED_RULES_MAX_CHARS_DEFAULT,
+  SCOPED_RULES_MAX_CHARS_MAX,
+  SCOPED_RULES_MAX_CHARS_MIN,
+} from "../../scoped-rules.ts";
 import { requireIntegerInRange } from "../field-checks.ts";
 import { openBlock, warnUnknownKeys, type BlockParseContext } from "../key-index.ts";
 
@@ -64,6 +69,7 @@ const KNOWN_KEYS = [
   "most_applied_limit",
   "inject_budget_chars",
   "standing_rules_max_chars",
+  "scoped_rules_max_chars",
 ] as const;
 
 /**
@@ -92,6 +98,13 @@ export function parseActiveBlock(ctx: BlockParseContext): BrainActiveConfig | un
     STANDING_RULES_MAX_CHARS_MAX,
     ctx.source,
   );
+  const scopedRulesMaxChars = optionalCharCount(
+    activeMap,
+    "scoped_rules_max_chars",
+    SCOPED_RULES_MAX_CHARS_MIN,
+    SCOPED_RULES_MAX_CHARS_MAX,
+    ctx.source,
+  );
 
   warnUnknownKeys(ctx, activeMap, KNOWN_KEYS, BLOCK);
   return {
@@ -100,13 +113,14 @@ export function parseActiveBlock(ctx: BlockParseContext): BrainActiveConfig | un
     ...(standingRulesMaxChars !== undefined
       ? { standing_rules_max_chars: standingRulesMaxChars }
       : {}),
+    ...(scopedRulesMaxChars !== undefined ? { scoped_rules_max_chars: scopedRulesMaxChars } : {}),
   };
 }
 
 /**
  * Read one optional character-count knob: absent stays absent so the
  * consumer's own default applies, present is range-checked as a hard
- * error. Both knobs in this block are the same shape, and writing the
+ * error. Every count knob in this block is the same shape, and writing the
  * `in`-check plus the range call twice is how the second one eventually
  * gets a clamped bound the first does not have.
  */
@@ -141,6 +155,17 @@ export function resolveMostApplied(cfg: BrainConfig): BrainMostAppliedConfig {
  */
 export function resolveStandingRulesMaxChars(cfg: BrainConfig | null): number {
   return cfg?.active?.standing_rules_max_chars ?? STANDING_RULES_MAX_CHARS_DEFAULT;
+}
+
+/**
+ * Read side of `active.scoped_rules_max_chars`: the configured cap on the
+ * scoped operator rules block, or its default. Unlike the constitution's
+ * cap this block is CHARGED against `inject_budget_chars`; the caller
+ * takes `min(this, inject_budget_chars)` so the layer never exceeds the
+ * budget it is charged against.
+ */
+export function resolveScopedRulesMaxChars(cfg: BrainConfig | null): number {
+  return cfg?.active?.scoped_rules_max_chars ?? SCOPED_RULES_MAX_CHARS_DEFAULT;
 }
 
 /**

@@ -57,6 +57,7 @@ import {
   DEFAULT_ANTICIPATORY_MAX_TOKENS,
   DEFAULT_ANTICIPATORY_TTL_SECONDS,
 } from "../../../src/core/brain/anticipatory-cache.ts";
+import { SCOPED_RULES_MAX_CHARS_DEFAULT } from "../../../src/core/brain/scoped-rules.ts";
 import type { BrainConfig } from "../../../src/core/brain/types.ts";
 
 /**
@@ -149,6 +150,8 @@ function resolvedView(cfg: BrainConfig): Record<string, unknown> {
     active_inject_budget_chars: cfg.active?.inject_budget_chars ?? INJECT_BUDGET_CHARS_DEFAULT,
     active_standing_rules_max_chars:
       cfg.active?.standing_rules_max_chars ?? STANDING_RULES_MAX_CHARS_DEFAULT,
+    active_scoped_rules_max_chars:
+      cfg.active?.scoped_rules_max_chars ?? SCOPED_RULES_MAX_CHARS_DEFAULT,
     lessons: {
       half_life_days: cfg.lessons?.half_life_days ?? LESSONS_HALF_LIFE_DAYS_DEFAULT,
       corroboration_min: cfg.lessons?.corroboration_min ?? LESSONS_CORROBORATION_MIN_DEFAULT,

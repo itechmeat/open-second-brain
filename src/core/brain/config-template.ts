@@ -63,6 +63,7 @@ import {
   MOST_APPLIED_WINDOW_DAYS_DEFAULT,
   STANDING_RULES_MAX_CHARS_DEFAULT,
 } from "./policy.ts";
+import { SCOPED_RULES_MAX_CHARS_DEFAULT } from "./scoped-rules.ts";
 import {
   DEFAULT_ANTICIPATORY_MAX_TOKENS,
   DEFAULT_ANTICIPATORY_TTL_SECONDS,
@@ -300,6 +301,9 @@ export const BRAIN_CONFIG_TEMPLATE: ReadonlyArray<BrainTemplateBlock> = Object.f
       "standing_rules_max_chars caps the operator-authored",
       "Brain/standing-rules.md block, which is injected first and is",
       "exempt from inject_budget_chars - hence its own number.",
+      "scoped_rules_max_chars caps the operator-authored scoped rules",
+      "under Brain/standing-rules/ (project, harness, host); that block",
+      "is charged against inject_budget_chars.",
     ],
     emit: "commented-default",
     keys: [
@@ -307,6 +311,7 @@ export const BRAIN_CONFIG_TEMPLATE: ReadonlyArray<BrainTemplateBlock> = Object.f
       def("most_applied_limit", MOST_APPLIED_LIMIT_DEFAULT),
       def("inject_budget_chars", INJECT_BUDGET_CHARS_DEFAULT),
       def("standing_rules_max_chars", STANDING_RULES_MAX_CHARS_DEFAULT),
+      def("scoped_rules_max_chars", SCOPED_RULES_MAX_CHARS_DEFAULT),
     ],
   },
   {

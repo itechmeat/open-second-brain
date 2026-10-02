@@ -4,7 +4,11 @@
 
 import { describe, expect, test } from "bun:test";
 import { parseBrainYaml } from "../../../src/core/brain/yaml-parse.ts";
-import { BrainConfigError, validateBrainConfigDetailed } from "../../../src/core/brain/policy.ts";
+import {
+  BrainConfigError,
+  resolveScopedRulesMaxChars,
+  validateBrainConfigDetailed,
+} from "../../../src/core/brain/policy.ts";
 
 function validate(yaml: string) {
   return validateBrainConfigDetailed(parseBrainYaml(yaml), "<test>");
@@ -152,5 +156,43 @@ describe("active.standing_rules_max_chars (silence-is-not-an-answer, U8)", () =>
   test("the key is known: it does not warn as unrecognised", () => {
     const { warnings } = validate(HEAD + `active:\n  standing_rules_max_chars: 4000\n`);
     expect(warnings.find((w) => w.message.includes("standing_rules_max_chars"))).toBeUndefined();
+  });
+});
+
+describe("active.scoped_rules_max_chars (scoped operator rules)", () => {
+  test("absent → undefined, and the resolver answers the default", () => {
+    const { config } = validate(HEAD + `active:\n  inject_budget_chars: 4000\n`);
+    expect(config.active?.scoped_rules_max_chars).toBeUndefined();
+    expect(resolveScopedRulesMaxChars(config)).toBe(2000);
+    expect(resolveScopedRulesMaxChars(null)).toBe(2000);
+  });
+
+  test("present → loaded and resolved", () => {
+    const { config } = validate(HEAD + `active:\n  scoped_rules_max_chars: 500\n`);
+    expect(config.active?.scoped_rules_max_chars).toBe(500);
+    expect(resolveScopedRulesMaxChars(config)).toBe(500);
+  });
+
+  test("below minimum rejected with the range message naming the key", () => {
+    expect(() => validate(HEAD + `active:\n  scoped_rules_max_chars: 150\n`)).toThrow(
+      /active\.scoped_rules_max_chars/,
+    );
+    expect(() => validate(HEAD + `active:\n  scoped_rules_max_chars: 150\n`)).toThrow(
+      BrainConfigError,
+    );
+  });
+
+  test("above maximum and non-integer rejected", () => {
+    expect(() => validate(HEAD + `active:\n  scoped_rules_max_chars: 1000000\n`)).toThrow(
+      BrainConfigError,
+    );
+    expect(() => validate(HEAD + `active:\n  scoped_rules_max_chars: lots\n`)).toThrow(
+      BrainConfigError,
+    );
+  });
+
+  test("the key is known: it does not warn as unrecognised", () => {
+    const { warnings } = validate(HEAD + `active:\n  scoped_rules_max_chars: 2000\n`);
+    expect(warnings.find((w) => w.message.includes("scoped_rules_max_chars"))).toBeUndefined();
   });
 });

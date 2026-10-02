@@ -78,6 +78,7 @@ export {
   MOST_APPLIED_WINDOW_DAYS_DEFAULT,
   MOST_APPLIED_WINDOW_DAYS_MAX,
   MOST_APPLIED_WINDOW_DAYS_MIN,
+  resolveScopedRulesMaxChars,
   resolveStandingRulesMaxChars,
 } from "./policy/blocks/active.ts";
 /**
