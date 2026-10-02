@@ -12,8 +12,9 @@
  * Parsing follows the delimiter the extension names: `.tsv` is TAB with no
  * quote processing (fields cannot hold a TAB or a line break); `.csv` is a
  * comma with lenient RFC 4180 quoting, read with semicolons only when the
- * first record is one field with commas and two or more with semicolons
- * (the spreadsheet export whose decimal separator is a comma). The first
+ * first record has two or more fields with semicolons and more with
+ * semicolons than with commas (the spreadsheet export whose decimal
+ * separator is a comma). The first
  * record is always the header: a file on disk carries no `header=` MIME
  * parameter, and any heuristic guesses wrong on all-text tables.
  */
@@ -279,15 +280,20 @@ function parseRecords(
   return { ok: true, records };
 }
 
-/** The CSV delimiter: a comma, unless the first record is one field with commas and more with semicolons. */
+/**
+ * The CSV delimiter: a comma, unless the first record has two or more
+ * fields with semicolons and more with semicolons than with commas. A
+ * semicolon export quotes only fields holding a semicolon, so its header
+ * may carry a bare comma (`Name;Price, EUR;Qty`).
+ */
 function csvDelimiter(text: string): TableDelimiter {
   const first = (delimiter: TableDelimiter): number => {
     const parsed = parseRecords(text, DELIMITER_CHAR[delimiter], true, 1);
     return parsed.ok ? (parsed.records[0]?.length ?? 0) : 0;
   };
-  if (first(TABLE_DELIMITER.comma) === 1 && first(TABLE_DELIMITER.semicolon) >= 2) {
-    return TABLE_DELIMITER.semicolon;
-  }
+  const comma = first(TABLE_DELIMITER.comma);
+  const semicolon = first(TABLE_DELIMITER.semicolon);
+  if (semicolon >= 2 && semicolon > comma) return TABLE_DELIMITER.semicolon;
   return TABLE_DELIMITER.comma;
 }
 

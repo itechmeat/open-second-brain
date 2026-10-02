@@ -154,7 +154,7 @@ describe("CSV parsing", () => {
     expect(result.columns).toBe(3);
   });
 
-  test("a semicolon export is read with semicolons only when commas give one field", () => {
+  test("a semicolon export is read with semicolons; semicolons in comma cells are data", () => {
     const semicolon = rendered(csv("name;price\nbolt;1,5\nnut;0,25\n"));
     expect(semicolon.delimiter).toBe("semicolon");
     expect(fencedLines(semicolon.section)).toEqual(["name | price", "bolt | 1,5", "nut | 0,25"]);
@@ -165,6 +165,18 @@ describe("CSV parsing", () => {
 
     const single = rendered(csv("only\nx\n"));
     expect(single.delimiter).toBe("comma");
+  });
+
+  test("a semicolon header with a comma inside a field is still read with semicolons", () => {
+    for (const text of ['name;"price, eur";qty\nAnn;1,5;2\n', "Name;Price, EUR;Qty\nAnn;1,5;2\n"]) {
+      const result = rendered(csv(text));
+      expect(result.delimiter).toBe("semicolon");
+      expect(result.columns).toBe(3);
+      expect(fencedLines(result.section)[1]).toBe("Ann | 1,5 | 2");
+    }
+    const quoted = rendered(csv('"a;b",c\n1,2\n'));
+    expect(quoted.delimiter).toBe("comma");
+    expect(fencedLines(quoted.section)).toEqual(["a;b | c", "1 | 2"]);
   });
 
   test("the first record is the header even when it looks like data", () => {
