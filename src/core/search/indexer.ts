@@ -1688,11 +1688,14 @@ export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexSt
  * statement - see {@link indexRootCoverage}.
  */
 export interface IndexRootCoverage {
-  /** Roots carrying at least one indexed document. */
+  /** Roots carrying at least one indexed (and, when filtered, admitted) document. */
   readonly rootsWithDocuments: ReadonlyArray<string>;
-  /** Roots the index holds no document under at all. */
+  /** Roots the index holds no (admitted) document under at all. */
   readonly rootsWithoutDocuments: ReadonlyArray<string>;
 }
+
+/** The visibility an unmeasured indexed document answers `admit` with. */
+const NO_INDEXED_TAGS: ReadonlyArray<string> = Object.freeze([]);
 
 /**
  * Partition note roots by whether the index carries any document under
@@ -1719,14 +1722,25 @@ export interface IndexRootCoverage {
  * index exists first, and an all-absent answer over a missing index would
  * read like a measurement.
  *
- * Cost: one read-mode open and one full document-path scan. It runs only
- * on the recall gate's zero-result path, where a search has already
- * failed to produce anything, and the alternative - a per-root prefix
- * query - would buy microseconds for a new store surface.
+ * `admit`, when given, decides which indexed documents count: a root is
+ * reached only through a document `admit` accepts. It receives the path
+ * and the visibility tokens the index measured for it (empty when none
+ * were measured), so a caller below local reach can count only the pages
+ * it may read and a root holding nothing else answers exactly like an
+ * empty one. It is asked lazily, root by root, and stops at the first
+ * admitted document. Omitted, every indexed document counts and nothing
+ * beyond the path scan is read.
+ *
+ * Cost: one read-mode open and one full document-path scan, plus one
+ * visibility lookup per candidate asked of `admit`. It runs only on the
+ * recall gate's zero-result path, where a search has already failed to
+ * produce anything, and the alternative - a per-root prefix query - would
+ * buy microseconds for a new store surface.
  */
 export async function indexRootCoverage(
   config: ResolvedSearchConfig,
   roots: ReadonlyArray<string>,
+  admit?: (path: string, indexedTags: ReadonlyArray<string>) => boolean,
 ): Promise<IndexRootCoverage> {
   const store = await Store.open(config, { mode: "read" });
   try {
@@ -1737,7 +1751,12 @@ export async function indexRootCoverage(
       // Segment-wise: a root of `Notes` is not reached by a document in
       // `Notes-archive/`. Roots arrive from `resolveNoteRoots`, which
       // normalises them, and indexed paths are what the walker wrote.
-      const reached = paths.some((path) => pathCovers(root, path));
+      const reached = paths.some(
+        (path) =>
+          pathCovers(root, path) &&
+          (admit === undefined ||
+            admit(path, store.indexedVisibilityByPaths([path]).get(path) ?? NO_INDEXED_TAGS)),
+      );
       (reached ? withDocuments : withoutDocuments).push(root);
     }
     return Object.freeze({
