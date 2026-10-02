@@ -28,7 +28,7 @@ import { join } from "node:path";
 import { FRONTMATTER_RE } from "../../vault.ts";
 import { buildBacklinkIndex } from "../backlinks.ts";
 import { ownerScopeView } from "../owner-scope-view.ts";
-import { brainDirs } from "../paths.ts";
+import { brainDirs, vaultRelative } from "../paths.ts";
 import { BRAIN_LINK_GRAPH_DEFAULTS, loadBrainConfig, resolveLinkGraph } from "../policy.ts";
 import { normaliseWikilinkTarget } from "../wikilink.ts";
 import { extractWikilinkRichBodies, parseWikilinkRich } from "./parse-wikilink.ts";
@@ -87,6 +87,14 @@ export interface AuditMocOptions {
    * see, so both follow the member out.
    */
   readonly ownerScope?: string | null;
+  /**
+   * May the caller read the page at this vault-relative path? Absent
+   * reads every page. A hub it refuses answers as an absent hub, and a
+   * member it refuses is dropped exactly as an owner-hidden member is:
+   * not bucketed, not sized, and its links not counted toward a missing
+   * target's `referenceCount`.
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 /** The structural hub thresholds (from `link_graph` config unless overridden). */
@@ -182,13 +190,17 @@ export function resolveHubThresholds(vault: string): HubBodyThresholds {
   };
 }
 
+/** The {@link AuditMocOptions.readable} answer when none is given. */
+const READ_EVERY_PAGE = (): boolean => true;
+
 export function auditMoc(vault: string, hubId: string, opts: AuditMocOptions = {}): MocAuditReport {
   const hubCanonical = normaliseWikilinkTarget(hubId);
   const view = ownerScopeView(vault, opts.ownerScope ?? null);
   const hubPath = locateArtifact(vault, hubCanonical);
+  const readable = opts.readable ?? READ_EVERY_PAGE;
   // A hub the caller may not see reads as a hub that is not there: the
   // same sentence an absent hub produces, so the two are indistinguishable.
-  if (!hubPath || !view.visible(hubCanonical)) {
+  if (!hubPath || !view.visible(hubCanonical) || !readable(vaultRelative(hubPath, vault))) {
     throw new MocAuditError(`hub note not found: ${hubCanonical}`);
   }
 
@@ -221,7 +233,9 @@ export function auditMoc(vault: string, hubId: string, opts: AuditMocOptions = {
     const memberPath = locateArtifact(vault, target);
     // A member this caller may not see leaves no trace in any bucket -
     // not even the missing one, which would decide exists-vs-absent for it.
-    if (memberPath && !view.visible(target)) continue;
+    if (memberPath && (!view.visible(target) || !readable(vaultRelative(memberPath, vault)))) {
+      continue;
+    }
     if (!memberPath) {
       missingCounts.set(target, (missingCounts.get(target) ?? 0) + 1);
       continue;
@@ -256,7 +270,7 @@ export function auditMoc(vault: string, hubId: string, opts: AuditMocOptions = {
     if (!missingCounts.has(target)) continue;
     for (const member of outboundTargets) {
       const path = locateArtifact(vault, member);
-      if (!path || !view.visible(member)) continue;
+      if (!path || !view.visible(member) || !readable(vaultRelative(path, vault))) continue;
       const body = stripFrontmatter(readFileSync(path, "utf8"));
       for (const bracketBody of extractWikilinkRichBodies(body)) {
         const t = parseWikilinkRich(bracketBody).target;

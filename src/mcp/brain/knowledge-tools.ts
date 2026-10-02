@@ -408,6 +408,7 @@ async function toolBrainMocAudit(
     // (a-label-is-not-a-boundary, U3, recon C4).
     const report = auditMoc(ctx.vault, targetId, {
       ownerScope: gatedOwnerScopeView(ctx.vault, ctx.agentName).scope,
+      readable: readableAtContextReach(ctx),
     });
     return {
       vault_path: vaultPathField(ctx),

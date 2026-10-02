@@ -7,7 +7,7 @@
  * record keeps its readable transitions, and a retired record is judged
  * under its `pref-` spelling too. The rows here cover the raw log
  * resource, `brain_query`'s log branches, the backlinks resource, the
- * preference readers and the doctor.
+ * preference readers, the doctor and the MOC audit.
  *
  * The vault pair is tests/helpers/reach-log-fixture.ts. A server with no
  * reach minted is a remote caller; each row also carries a local control
@@ -20,8 +20,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { appendLogEvent } from "../../src/core/brain/log.ts";
+import { brainDirs } from "../../src/core/brain/paths.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../src/core/brain/types.ts";
 import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
+import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts";
 import {
   buildReachLogFixture,
   maskVolatile,
@@ -261,4 +263,62 @@ describe("brain_doctor names no reserved record below local reach", () => {
     expect(local).toContain(HIDDEN_NOTE);
     expect(local).toContain(`pref-${PRIVATE_SLUG}.md`);
   });
+});
+
+describe("brain_moc_audit answers a reserved hub as an absent one", () => {
+  test(`id=pref-${PRIVATE_SLUG}`, async () => {
+    const row = await abRow((f, reach) =>
+      call(f, "brain_moc_audit", { id: `pref-${PRIVATE_SLUG}` }, reach),
+    );
+    expect(row.withheld).toBe(row.absent);
+    expect(row.withheld).toContain("hub note not found");
+    // Control: a local caller reaches the hub and is told it is no MOC.
+    expect(row.local).toContain("not a MOC");
+  });
+});
+
+/** Public preferences a public hub links to, enough of them for the hub to read as a MOC. */
+const HUB_MEMBERS = ["alpha", "beta", "gamma", "delta", "epsilon"].map((name) => `pref-${name}`);
+const HUB_ID = "pref-hub";
+/** A reserved member of the public hub, with no other backlink. */
+const VEILED_ID = "pref-veiled";
+/** A target the hub and the reserved member both link to, with no page. */
+const MISSING_ID = "pref-ghost";
+
+/** A minimal page in the preferences folder, the folder the audit resolves ids in. */
+function writePage(f: Fixture, id: string, body: string, frontmatter: string[] = []): void {
+  writeFileSync(
+    join(brainDirs(f.vault).preferences, `${id}.md`),
+    ["---", "kind: brain-preference", `id: ${id}`, ...frontmatter, "---", "", body, ""].join("\n"),
+  );
+}
+
+/** The `referenceCount` the audit reports for the missing target. */
+function missingReferences(normalised: string): number | undefined {
+  const report = JSON.parse(normalised) as {
+    candidate_missing: ReadonlyArray<{ id: string; referenceCount: number }>;
+  };
+  return report.candidate_missing.find((m) => m.id === MISSING_ID)?.referenceCount;
+}
+
+test("brain_moc_audit neither lists nor reads a reserved member of a public hub", async () => {
+  const a = fixture(true);
+  for (const id of HUB_MEMBERS) writePage(a, id, `Member ${id}.`);
+  writePage(a, VEILED_ID, `Reserved, linking [[${MISSING_ID}]].`, [
+    `visibility: [${REMOTE_DENY_VISIBILITY_TOKEN}]`,
+  ]);
+  const links = [...HUB_MEMBERS, VEILED_ID, MISSING_ID].map((id) => `- [[${id}]]`);
+  writePage(a, HUB_ID, links.join("\n"));
+  const remote = normalise(a, await call(a, "brain_moc_audit", { id: HUB_ID }));
+  const local = normalise(
+    a,
+    await call(a, "brain_moc_audit", { id: HUB_ID }, TRANSPORT_REACH.local),
+  );
+  expect(remote).toContain(HUB_MEMBERS[0]!);
+  expect(remote).not.toContain(VEILED_ID);
+  // The reserved member's own link is not counted: only the hub's is.
+  expect(missingReferences(remote)).toBe(1);
+  // Control: a local caller is shown the reserved member, and its link counts.
+  expect(local).toContain(VEILED_ID);
+  expect(missingReferences(local)).toBe(2);
 });
