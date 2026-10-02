@@ -332,6 +332,58 @@ describe("go.mod", () => {
   });
 });
 
+describe("strings a region body cannot carry", () => {
+  test("a dependency name a manifest cannot honestly declare is dropped and counted", () => {
+    seed(
+      "package.json",
+      JSON.stringify({
+        name: "demo",
+        dependencies: { zod: "^3", "x\n<!-- o2b:end dependencies -->": "1", "a b": "1" },
+        devDependencies: { "[[Brain/x]]": "1", vitest: "1" },
+      }),
+    );
+    const reading = readManifestAt(root, "package.json");
+    expect(reading.fact?.dependencies).toEqual(["zod"]);
+    expect(reading.otherGroups).toEqual([
+      { group: "dev", count: 1 },
+      { group: "unrepresentable", count: 3 },
+    ]);
+  });
+
+  test("head fields are one line and cannot open a wikilink", () => {
+    seed(
+      "Cargo.toml",
+      [
+        "[package]",
+        'name = "demo\\u0007rs"',
+        'version = "1.0.0\\r\\n2"',
+        'description = """',
+        "First line.",
+        "See [[Brain/preferences/x]].",
+        '"""',
+      ].join("\n"),
+    );
+    expect(readManifestAt(root, "Cargo.toml").fact).toEqual({
+      name: "demo rs",
+      version: "1.0.0 2",
+      description: "First line. See [\\[Brain/preferences/x]].",
+      dependencies: [],
+    });
+  });
+
+  test.each([
+    ["package.json", "{ not json", "invalid JSON"],
+    ["package.json", "[1, 2]", "top-level value is not a table"],
+    ["pyproject.toml", "[project\nname = ", "invalid TOML"],
+    ["Cargo.toml", 'x = "tok3n', "invalid TOML"],
+  ])("a %s that does not parse carries a fixed detail", (file, content, detail) => {
+    seed(file, content);
+    const reading = readManifestAt(root, file);
+    expect(reading.status).toBe(MANIFEST_STATUS.malformed);
+    expect(reading.detail).toBe(detail);
+  });
+});
+
 describe("unsupported manifests and caller errors", () => {
   test.each([
     ["pom.xml", MANIFEST_ECOSYSTEM.maven],

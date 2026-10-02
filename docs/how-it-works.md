@@ -1307,14 +1307,19 @@ Since v1.68.0 the scan reads dependency manifests at the project root
 and at each detected module: `package.json`, `pyproject.toml` (PEP 621
 and Poetry), `Cargo.toml` and `go.mod`. `pom.xml`, `build.gradle`,
 `Gemfile` and `composer.json` are detected and reported `unsupported`
-by name. Every manifest gets one status - `read`, `malformed` (with the
-parser's message), `unreadable` (with the error code) or `unsupported`
-- and one bad manifest never aborts the run. The overview's
+by name. Every manifest gets one status - `read`, `malformed` (with a
+fixed reason such as `invalid JSON` or `invalid TOML`, never the
+manifest's own text), `unreadable` (with the error code) or
+`unsupported` - and one bad manifest never aborts the run. The overview's
 `dependencies` region lists the manifests with their statuses and the
 runtime dependencies per ecosystem, one canonical name each (PyPI names
 normalised per PEP 503, a renamed Cargo dependency by its real crate
 name), and counts the dev, build, optional, peer and indirect groups on
-one line per ecosystem instead of listing them. The project name comes
+one line per ecosystem instead of listing them. A declared name that is
+not a plausible package name (one holding a line break, a space or a
+bracket) is not written into a note: it is counted on the same line as
+`unrepresentable`. The project's name, version and description are
+written on one line, with `[[` escaped so they cannot open a link. The project name comes
 from the first root manifest read, in the order `package.json`,
 `pyproject.toml`, `Cargo.toml`, `go.mod`.
 

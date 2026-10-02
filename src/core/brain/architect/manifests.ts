@@ -14,6 +14,14 @@
  * deduplicated and sorted. The other dependency groups (dev, build,
  * optional, peer, indirect) are counted, not listed.
  *
+ * Every string a reading carries is written into a note's region body,
+ * so it is made safe to write here, once, for every consumer: a
+ * dependency name that is not a plausible package name (a newline, a
+ * space, a bracket) is dropped and counted in the `unrepresentable`
+ * group, never silently; head fields are folded onto one line and cannot
+ * open a wikilink; and a parse failure carries a fixed detail rather than
+ * the parser's message, which quotes the manifest's own text.
+ *
  * TOML is parsed with `Bun.TOML.parse`, a runtime built-in. This module
  * is not part of the OpenClaw bundle that runs on Node; if a future
  * build bundles the architect for Node, the TOML readers must move
@@ -52,6 +60,8 @@ export const DEPENDENCY_GROUP = Object.freeze({
   optional: "optional",
   peer: "peer",
   indirect: "indirect",
+  /** Names dropped because a note cannot carry them; see {@link REPRESENTABLE_NAME}. */
+  unrepresentable: "unrepresentable",
 } as const);
 
 export type DependencyGroup = (typeof DEPENDENCY_GROUP)[keyof typeof DEPENDENCY_GROUP];
@@ -96,6 +106,29 @@ interface ParsedManifest {
 class ManifestShapeError extends Error {}
 
 const NOT_A_TABLE_DETAIL = "top-level value is not a table";
+const INVALID_JSON_DETAIL = "invalid JSON";
+const INVALID_TOML_DETAIL = "invalid TOML";
+/** A go.mod directive name, the only part of a go.mod a detail may quote. */
+const GO_DIRECTIVE_NAME = /^[a-z]+$/;
+
+/**
+ * A dependency name a note can carry: the shape npm (scoped names
+ * included), PEP 503, crates and Go module paths share, 214 characters
+ * at most (npm's own limit). Anything else - a newline, a space, a
+ * bracket - is not a package name any registry serves.
+ */
+const REPRESENTABLE_NAME = /^[A-Za-z0-9@_][A-Za-z0-9@._/~+:-]{0,213}$/;
+/** C0 control characters and DEL: what folds a string onto one line. */
+// oxlint-disable-next-line no-control-regex -- matching control characters is the point
+const CONTROL_RUN = /[\u0000-\u001f\u007f]+/g;
+const WIKILINK_OPEN = "[[";
+/** `[[` with its second bracket escaped: reads the same, links nothing. */
+const WIKILINK_OPEN_ESCAPED = "[\\[";
+
+/** `text` on one line: every run of control characters becomes one space. */
+export function oneLine(text: string): string {
+  return text.replace(CONTROL_RUN, " ").trim();
+}
 /** The detail when a read failure carries no errno code. */
 const UNKNOWN_READ_FAILURE = "read failed";
 
@@ -137,7 +170,9 @@ export function readManifestAt(root: string, relPath: string): ManifestReading {
   try {
     parsed = parseManifest(spec, text);
   } catch (error) {
-    if (error instanceof SyntaxError || error instanceof ManifestShapeError) {
+    // Every detail is one of this module's fixed strings: a parser's own
+    // message quotes the manifest's text, which must not reach a note.
+    if (error instanceof ManifestShapeError) {
       return reading(path, spec, MANIFEST_STATUS.malformed, error.message);
     }
     throw error;
@@ -211,12 +246,19 @@ const NPM_COUNTED_GROUPS: ReadonlyArray<readonly [string, DependencyGroup]> = Ob
 ]);
 
 function parsePackageJson(text: string): ParsedManifest {
-  const raw = asTable(JSON.parse(text));
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new ManifestShapeError(INVALID_JSON_DETAIL);
+    throw error;
+  }
+  const raw = asTable(parsed);
   if (raw === null) throw new ManifestShapeError(NOT_A_TABLE_DETAIL);
   const groups = new GroupCollector(MANIFEST_ECOSYSTEM.npm);
   for (const [key, group] of NPM_COUNTED_GROUPS) groups.addAll(group, tableKeys(raw[key]));
   return {
-    fact: fact(raw, MANIFEST_ECOSYSTEM.npm, tableKeys(raw["dependencies"])),
+    fact: fact(raw, groups, tableKeys(raw["dependencies"])),
     groups: groups.sets,
     raw: Object.freeze(raw),
   };
@@ -245,11 +287,7 @@ function parsePyproject(text: string): ParsedManifest {
   }
   return {
     // Poetry's head fields are the fallback when `[project]` leaves one out.
-    fact: fact(
-      { ...definedHead(poetry), ...definedHead(project) },
-      MANIFEST_ECOSYSTEM.pypi,
-      runtime,
-    ),
+    fact: fact({ ...definedHead(poetry), ...definedHead(project) }, groups, runtime),
     groups: groups.sets,
     raw: null,
   };
@@ -308,7 +346,7 @@ function parseCargoToml(text: string): ParsedManifest {
     }
   }
   return {
-    fact: fact(asTable(doc["package"]) ?? {}, MANIFEST_ECOSYSTEM.cargo, runtime),
+    fact: fact(asTable(doc["package"]) ?? {}, groups, runtime),
     groups: groups.sets,
     raw: null,
   };
@@ -374,9 +412,12 @@ function parseGoMod(text: string): ParsedManifest {
     if (GO_INDIRECT_COMMENT.test(comment)) groups.addAll(DEPENDENCY_GROUP.indirect, [entry[0]!]);
     else runtime.push(entry[0]!);
   }
-  if (block !== null) throw new ManifestShapeError(`unterminated ${block} block`);
+  if (block !== null) {
+    const directive = GO_DIRECTIVE_NAME.test(block) ? block : "directive";
+    throw new ManifestShapeError(`unterminated ${directive} block`);
+  }
   return {
-    fact: fact({ name: modulePath }, MANIFEST_ECOSYSTEM.go, runtime),
+    fact: fact({ name: modulePath }, groups, runtime),
     groups: groups.sets,
     raw: null,
   };
@@ -390,29 +431,41 @@ function unquoteGo(token: string): string {
 // --- shared helpers ------------------------------------------------------
 
 function parseToml(text: string): Record<string, unknown> {
-  const doc = asTable(Bun.TOML.parse(text));
+  let parsed: unknown;
+  try {
+    parsed = Bun.TOML.parse(text);
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new ManifestShapeError(INVALID_TOML_DETAIL);
+    throw error;
+  }
+  const doc = asTable(parsed);
   if (doc === null) throw new ManifestShapeError(NOT_A_TABLE_DETAIL);
   return doc;
 }
 
+/**
+ * The fact of a read manifest. Runtime names a note cannot carry are
+ * counted in `groups` as unrepresentable rather than listed.
+ */
 function fact(
   head: Record<string, unknown>,
-  ecosystem: ManifestEcosystem,
+  groups: GroupCollector,
   declared: ReadonlyArray<string>,
 ): ManifestFact {
   return Object.freeze({
-    name: stringOrNull(head["name"]),
-    version: stringOrNull(head["version"]),
-    description: stringOrNull(head["description"]),
-    dependencies: Object.freeze(canonicalSet(ecosystem, declared)),
+    name: headText(head["name"]),
+    version: headText(head["version"]),
+    description: headText(head["description"]),
+    dependencies: Object.freeze(
+      [...new Set(groups.canonical(declared))].toSorted(compareCodePoints),
+    ),
   });
 }
 
-/** Canonical, deduplicated, code-point sorted names. */
-function canonicalSet(ecosystem: ManifestEcosystem, declared: Iterable<string>): string[] {
-  const names = new Set<string>();
-  for (const name of declared) names.add(canonicalDependencyName(ecosystem, name));
-  return [...names].toSorted(compareCodePoints);
+/** A head field as a note writes it: one line, unable to open a wikilink. */
+function headText(value: unknown): string | null {
+  const text = stringOrNull(value);
+  return text === null ? null : oneLine(text).replaceAll(WIKILINK_OPEN, WIKILINK_OPEN_ESCAPED);
 }
 
 /** Collects the canonical names of each counted group. */
@@ -421,15 +474,30 @@ class GroupCollector {
 
   constructor(private readonly ecosystem: ManifestEcosystem) {}
 
-  addAll(group: DependencyGroup, declared: Iterable<string>): void {
-    let set = this.sets.get(group);
+  /**
+   * The canonical names of the declared names a note can carry, in
+   * declaration order. Every other name is counted as unrepresentable.
+   */
+  canonical(declared: Iterable<string>): string[] {
+    const names: string[] = [];
     for (const name of declared) {
-      if (set === undefined) {
-        set = new Set();
-        this.sets.set(group, set);
-      }
-      set.add(canonicalDependencyName(this.ecosystem, name));
+      if (REPRESENTABLE_NAME.test(name)) names.push(canonicalDependencyName(this.ecosystem, name));
+      else this.add(DEPENDENCY_GROUP.unrepresentable, name);
     }
+    return names;
+  }
+
+  addAll(group: DependencyGroup, declared: Iterable<string>): void {
+    for (const name of this.canonical(declared)) this.add(group, name);
+  }
+
+  private add(group: DependencyGroup, name: string): void {
+    let set = this.sets.get(group);
+    if (set === undefined) {
+      set = new Set();
+      this.sets.set(group, set);
+    }
+    set.add(name);
   }
 }
 

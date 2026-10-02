@@ -88,7 +88,7 @@ import { DEPENDENCY_MANIFESTS } from "../../project-manifests.ts";
 import type { ManifestEcosystem } from "../../project-manifests.ts";
 import { listRepoDecisionCandidates } from "./decisions.ts";
 import type { DecisionCandidateFact } from "./decisions.ts";
-import { MANIFEST_STATUS } from "./manifests.ts";
+import { MANIFEST_STATUS, oneLine } from "./manifests.ts";
 import type { DependencyGroup, ManifestReading } from "./manifests.ts";
 import {
   ARCHITECT_STAGE,
@@ -341,8 +341,8 @@ const NO_DEPENDS_ON = "Depends on: no other module";
 
 /** One manifest line: its path, ecosystem, status and, when it has one, the detail. */
 function manifestLine(reading: ManifestReading): string {
-  const detail = reading.detail === undefined ? "" : ` - ${reading.detail}`;
-  return `- \`${reading.path}\` (${reading.ecosystem}): ${reading.status}${detail}`;
+  const detail = reading.detail === undefined ? "" : ` - ${oneLine(reading.detail)}`;
+  return `- \`${oneLine(reading.path)}\` (${reading.ecosystem}): ${reading.status}${detail}`;
 }
 
 /** The groups a manifest counts but does not list, summed per group, zero counts omitted. */
@@ -542,9 +542,11 @@ function overviewRegions(
   codegraph: CodegraphReport,
 ): ReadonlyArray<Region> {
   const summary = [
-    `Project: ${facts.name}`,
-    ...(facts.manifest?.version != null ? [`Version: ${facts.manifest.version}`] : []),
-    ...(facts.manifest?.description != null ? [`Description: ${facts.manifest.description}`] : []),
+    `Project: ${oneLine(facts.name)}`,
+    ...(facts.manifest?.version != null ? [`Version: ${oneLine(facts.manifest.version)}`] : []),
+    ...(facts.manifest?.description != null
+      ? [`Description: ${oneLine(facts.manifest.description)}`]
+      : []),
     `Files: ${facts.totalFiles}`,
     `Languages: ${languagesLine(facts.languages)}`,
     ...(facts.testLayout !== null ? [`Test layout: ${facts.testLayout}/`] : []),
@@ -557,7 +559,7 @@ function overviewRegions(
   const entryPoints =
     facts.entryPoints.length === 0
       ? "none detected"
-      : facts.entryPoints.map((entry) => `- \`${entry}\``).join("\n");
+      : facts.entryPoints.map((entry) => `- \`${oneLine(entry)}\``).join("\n");
 
   return [
     { id: "summary", body: summary },
