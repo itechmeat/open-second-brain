@@ -15,6 +15,7 @@ import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { CAPTURE_SCOPE } from "../../src/core/brain/provenance/capture-scope.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { listEntities } from "../../src/core/brain/entities/registry.ts";
+import { readManifest } from "../../src/core/brain/ingest/content-manifest.ts";
 import {
   SOURCE_CONTENT_HASH_FRONTMATTER_KEY,
   UNTRUSTED_SOURCE_FRONTMATTER_KEY,
@@ -303,5 +304,67 @@ describe("brain_ingest_source - a page withheld at the caller's reach", () => {
   test("at local reach the same page is full-local", async () => {
     const res = await ingest(SECRET, { ...ctx, reach: TRANSPORT_REACH.local });
     expect(res.capture_scope).toBe(CAPTURE_SCOPE.fullLocal);
+  });
+
+  test("records no content manifest entry for it, as for an absent source", async () => {
+    await ingest(SECRET);
+    expect(Object.keys(readManifest(vault).entries)).not.toContain(SECRET);
+    await ingest(SECRET, { ...ctx, reach: TRANSPORT_REACH.local });
+    expect(Object.keys(readManifest(vault).entries)).toContain(SECRET);
+  });
+});
+
+/**
+ * A file the caller cannot read at its reach is planned exactly like an
+ * absent one: in no batch, no total, no skip list and no reconcile list.
+ */
+describe("brain_ingest_batch_plan - a page withheld at the caller's reach", () => {
+  const batchPlan = INGEST_TOOLS.find((t) => t.name === "brain_ingest_batch_plan")!.handler;
+  const OPEN = "Notes/open.md";
+  const SECRET = "Notes/secret.md";
+
+  beforeEach(() => {
+    seed(OPEN, "open\n");
+    seed(SECRET, "---\nvisibility: private\n---\nThe code is ZX8.\n");
+  });
+
+  type Plan = {
+    plan_id: string;
+    total_files: number;
+    total_bytes: number;
+    batches: Array<{ files: Array<{ path: string }> }>;
+    reconcile?: { dispatched: string[]; ingested: string[]; missing: string[] };
+  };
+  const plan = (reachCtx: ServerContext, args: Record<string, unknown> = {}) =>
+    batchPlan(reachCtx, { source_dir: "Notes", ...args }) as Promise<Plan>;
+  const planned = (p: Plan) => p.batches.flatMap((b) => b.files.map((f) => f.path));
+
+  test("plans the vault as if the page were absent", async () => {
+    const remote = await plan(ctx);
+    expect(planned(remote)).toEqual([OPEN]);
+    expect(remote.total_files).toBe(1);
+
+    rmSync(join(vault, SECRET));
+    const absent = await plan(ctx);
+    expect(remote).toEqual(absent);
+  });
+
+  test("at local reach the page is planned", async () => {
+    const local = await plan({ ...ctx, reach: TRANSPORT_REACH.local });
+    expect(planned(local)).toEqual([OPEN, SECRET]);
+  });
+
+  test("a checkpoint entry for the page stays out of the reconcile lists", async () => {
+    const localCtx = { ...ctx, reach: TRANSPORT_REACH.local };
+    const local = await plan(localCtx);
+    await handler(localCtx, {
+      source_path: SECRET,
+      summary: "Codes.",
+      entities: [{ category: "concept", name: "Codes" }],
+      plan_id: local.plan_id,
+    });
+    const remote = await plan(ctx, { reconcile: true });
+    expect(remote.reconcile?.dispatched).toEqual([OPEN]);
+    expect(remote.reconcile?.ingested).toEqual([]);
   });
 });

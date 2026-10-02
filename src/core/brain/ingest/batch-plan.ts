@@ -119,6 +119,14 @@ export interface BatchPlanOptions {
    * overrides the repository. Absent/empty → no exclusion.
    */
   readonly exclude?: readonly string[];
+  /**
+   * May the caller read this vault-relative file? Supplied by a surface that
+   * answers at a reach narrower than the vault; a local caller passes
+   * nothing. An ingestible file it refuses is treated as absent: never
+   * discovered, so it is in no batch, no total, no skip list and not in the
+   * plan id.
+   */
+  readonly include?: (rel: string) => boolean;
 }
 
 /** One file selected for (re-)ingest, with the reason it was selected. */
@@ -295,6 +303,7 @@ export function planBatches(vault: string, sourceDir: string, opts: BatchPlanOpt
       out: discovered,
       warnings: ignoreWarnings,
       unclassifiable,
+      ...(opts.include !== undefined ? { include: opts.include } : {}),
     });
   }
   const discoveredRel = discovered
@@ -549,6 +558,8 @@ interface WalkContext {
   readonly warnings: IgnoreWarning[];
   /** Counts files dropped for a non-ingestible extension, per extension. */
   readonly unclassifiable: Map<string, number>;
+  /** See {@link BatchPlanOptions.include}. Absent: every file is included. */
+  readonly include?: (rel: string) => boolean;
 }
 
 /**
@@ -591,6 +602,9 @@ function collectIngestible(dir: string, scope: IgnoreScope, ctx: WalkContext): v
         ctx.unclassifiable.set(ext, (ctx.unclassifiable.get(ext) ?? 0) + 1);
         continue;
       }
+      // After the extension test, so the predicate reads only files the plan
+      // could carry; a refused one is not this caller's to discover.
+      if (ctx.include !== undefined && !ctx.include(rel)) continue;
       ctx.out.push(abs);
     }
   }

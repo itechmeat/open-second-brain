@@ -36,7 +36,7 @@ import { sourcePagePath } from "../paths.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { intakeExtraction, type ExtractionIntake } from "../intake/extract-intake.ts";
 import { normalizeSourceIdentity } from "../intake/source-trust.ts";
-import { untrustedSourceFrontmatter } from "../trust/untrusted-provenance.ts";
+import { INTAKE_TRUST, untrustedSourceFrontmatter } from "../trust/untrusted-provenance.ts";
 import {
   captureScopeForTrust,
   captureScopeFrontmatter,
@@ -237,7 +237,14 @@ export function ingestSource(
   // an escaping identity must not reach `existsSync` either, or a path outside
   // the vault would be hashed into the content manifest and keyed into a
   // folder-plan checkpoint.
-  if (resolvesInsideVault(vault, canonicalSource) && existsSync(join(vault, canonicalSource))) {
+  // Only in the trusted lane, which the intake grants only to a file the
+  // caller may read at its reach: a source answered as absent records no
+  // digest anywhere, the manifest included.
+  if (
+    trust === INTAKE_TRUST.trusted &&
+    resolvesInsideVault(vault, canonicalSource) &&
+    existsSync(join(vault, canonicalSource))
+  ) {
     updateManifest(vault, [canonicalSource]);
     // Record plan-scoped progress so an interrupted batch resumes at the item
     // boundary (t_ba1fa5f6). Only for real vault files - a URL/identity-only

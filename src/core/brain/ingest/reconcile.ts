@@ -62,8 +62,17 @@ export interface ReconcileReport {
  * nothing. A plan that dispatched nothing, or whose sources all completed,
  * reports an empty (explicitly `complete`) gap.
  */
-export function reconcilePlan(vault: string, plan: BatchPlan): ReconcileReport {
-  const completed = new Set(readCheckpoint(vault, plan.planId)?.completed ?? []);
+export function reconcilePlan(
+  vault: string,
+  plan: BatchPlan,
+  include?: (rel: string) => boolean,
+): ReconcileReport {
+  // The checkpoint may record a source the plan itself left out for this
+  // caller (see `BatchPlanOptions.include`); it is left out here too.
+  const recorded = readCheckpoint(vault, plan.planId)?.completed ?? [];
+  const completed = new Set(
+    include === undefined ? recorded : recorded.filter((path) => include(path)),
+  );
 
   // Batch files are the sources actually dispatched for (re)ingest this run.
   const batchFiles = new Set<string>();

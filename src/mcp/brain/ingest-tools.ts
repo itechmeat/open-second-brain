@@ -323,16 +323,19 @@ async function toolBrainIngestBatchPlan(
   const reconcile = coerceBoolOptional(args, "reconcile") ?? false;
   const srcSubpath = coerceStr(args, "src_subpath", false) ?? undefined;
   const exclude = coerceStrList(args, "exclude");
+  // A file the caller may not read at its reach is planned as an absent one.
+  const include = readableAtContextReach(ctx);
   const plan = planBatches(ctx.vault, sourceDir, {
     maxBatchBytes,
     maxBatchFiles,
     resume,
+    include,
     ...(srcSubpath !== undefined ? { srcSubpath } : {}),
     ...(exclude.length > 0 ? { exclude } : {}),
   });
   // Reconcile BEFORE any checkpoint clear below, so the gap report reads a live
   // checkpoint. Read-only: it only diffs dispatched vs completed.
-  const report = reconcile ? reconcilePlan(ctx.vault, plan) : undefined;
+  const report = reconcile ? reconcilePlan(ctx.vault, plan, include) : undefined;
   // A resumed plan that comes back empty is fully drained: drop its checkpoint
   // (the content manifest is the authoritative final state from here on).
   if (resume && plan.batches.length === 0) {
