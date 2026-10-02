@@ -2436,6 +2436,37 @@ import { dirname as dirname4, join as join5 } from "node:path";
 import { existsSync as existsSync2, readdirSync, realpathSync } from "node:fs";
 import { dirname as dirname3, join as join4, resolve as resolve3 } from "node:path";
 
+// src/core/project-manifests.ts
+var MANIFEST_ECOSYSTEM = Object.freeze({
+  npm: "npm",
+  pypi: "pypi",
+  cargo: "cargo",
+  go: "go",
+  maven: "maven",
+  gradle: "gradle",
+  rubygems: "rubygems",
+  composer: "composer"
+});
+function spec(file, ecosystem, dependencyReadable) {
+  return Object.freeze({ file, ecosystem, dependencyReadable });
+}
+var DEPENDENCY_MANIFESTS = Object.freeze([
+  spec("package.json", MANIFEST_ECOSYSTEM.npm, true),
+  spec("pyproject.toml", MANIFEST_ECOSYSTEM.pypi, true),
+  spec("Cargo.toml", MANIFEST_ECOSYSTEM.cargo, true),
+  spec("go.mod", MANIFEST_ECOSYSTEM.go, true),
+  spec("pom.xml", MANIFEST_ECOSYSTEM.maven, false),
+  spec("build.gradle", MANIFEST_ECOSYSTEM.gradle, false),
+  spec("Gemfile", MANIFEST_ECOSYSTEM.rubygems, false),
+  spec("composer.json", MANIFEST_ECOSYSTEM.composer, false)
+]);
+var TYPESCRIPT_CONFIG_FILE = "tsconfig.json";
+var CODE_MANIFEST_FILES = Object.freeze([
+  ...DEPENDENCY_MANIFESTS.map((manifest) => manifest.file),
+  TYPESCRIPT_CONFIG_FILE
+]);
+var SPEC_BY_FILE = new Map(DEPENDENCY_MANIFESTS.map((manifest) => [manifest.file, manifest]));
+
 // src/core/partner/codegraph-health.ts
 var GRAPH_HEALTH_CODES = Object.freeze({
   emptyGraph: "empty-graph",
@@ -2494,17 +2525,6 @@ function summarizeGraphHealth(report) {
 }
 
 // src/core/partner/codegraph.ts
-var CODE_MANIFESTS = [
-  "package.json",
-  "pyproject.toml",
-  "Cargo.toml",
-  "go.mod",
-  "tsconfig.json",
-  "Gemfile",
-  "composer.json",
-  "build.gradle",
-  "pom.xml"
-];
 var DEFAULT_LIMIT = 50;
 var CODEGRAPH_CLI = Object.freeze({
   bin: "codegraph",
@@ -2521,7 +2541,7 @@ function isCodeProject(dir) {
       return false;
     if (!isDir(join4(dir, ".git")))
       return false;
-    return CODE_MANIFESTS.some((m) => existsSync2(join4(dir, m)));
+    return CODE_MANIFEST_FILES.some((m) => existsSync2(join4(dir, m)));
   } catch {
     return false;
   }
