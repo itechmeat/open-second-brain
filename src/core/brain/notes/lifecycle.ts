@@ -432,8 +432,15 @@ export interface NoteLifecycleInput {
   /**
    * May the caller read the subject note at this vault-relative path? One
    * it may not read is refused as `source_missing`, the refusal a path
-   * with no note gets, before the note is stat-ed. Absent, every note is
-   * a subject (the CLI, which reads the vault directly).
+   * with no note gets, before the note is stat-ed. The same test decides
+   * which files the reference report names and counts (`inboundFiles`,
+   * `filesScanned`, `filesRewritten`, `rewriteFailures`, the cascade
+   * lists and the recoverability derived from the rewrite): a file it
+   * rejects is reported as a vault without it would be, and a cascade
+   * never deletes it. The link rewrite of an applied relocation still
+   * edits it, so the readers who can see it are not left with links to a
+   * path that no longer exists. Absent, every file counts (the CLI, which
+   * reads the vault directly).
    */
   readonly readable?: (rel: string) => boolean;
 }
@@ -919,12 +926,17 @@ export async function noteLifecycle(
   // nothing and is not counted. A relocation REWRITES its own file when
   // the note names its own old path, so that file is one of the writes
   // `--expect` guards and has to be in the number.
-  const inboundFiles =
+  // A file the caller may not read is absent from every list and count
+  // below; see `NoteLifecycleInput.readable`.
+  const reported = (rel: string): boolean => input.readable?.(rel) ?? true;
+  const inboundFiles = (
     action === NOTE_LIFECYCLE_ACTION.delete
       ? probe.matched.filter((rel) => rel !== source.relPath)
-      : probe.matched;
+      : probe.matched
+  ).filter(reported);
+  const filesScanned = probe.files.filter(reported).length;
 
-  const cascade = deleteLinked ? planCascade(vault, source.relPath, inboundFiles) : null;
+  const cascade = deleteLinked ? planCascade(vault, source.relPath, inboundFiles, reported) : null;
 
   // The guard asserts what the operation will REMOVE. Without a cascade
   // that is one file and the number worth guarding is the collateral -
@@ -1006,7 +1018,7 @@ export async function noteLifecycle(
         true,
         gated.recoverability,
         snapshot,
-        probe.files.length,
+        filesScanned,
         inboundFiles,
         0,
         [],
@@ -1036,8 +1048,8 @@ export async function noteLifecycle(
       apply: true,
       neverRewrite: APPEND_ONLY_REL,
     });
-    rewritten = pass.rewritten;
-    rewriteFailures = pass.failed;
+    rewritten = pass.rewritten.filter(reported);
+    rewriteFailures = pass.failed.filter((failure) => reported(failure.path));
   }
 
   // The MOVE destroys nothing - the bytes are reachable under the
@@ -1072,7 +1084,7 @@ export async function noteLifecycle(
     apply,
     recoverability,
     snapshot,
-    probe.files.length,
+    filesScanned,
     inboundFiles,
     rewritten.length,
     retargets.flatMap((r) => (r.to === undefined ? [] : [{ from: r.from, to: r.to }])),
@@ -1116,8 +1128,11 @@ function planCascade(
   vault: string,
   sourceRel: string,
   inboundFiles: ReadonlyArray<string>,
+  readable: (rel: string) => boolean,
 ): NoteDeleteCascade {
-  const traced = traceNoteDerivations(vault, sourceRel);
+  // A page the caller may not read is neither deleted nor reported, as in
+  // a vault without it.
+  const traced = traceNoteDerivations(vault, sourceRel).filter((entry) => readable(entry.path));
   const derived = traced
     .filter((entry) => entry.deletable && entry.structuredProvenance)
     .map((entry) => entry.path)
