@@ -88,7 +88,7 @@ import {
 import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
 import type { ServerContext, ToolDefinition } from "../../src/mcp/tool-contract.ts";
-import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
+import type { TransportReach } from "../../src/core/graph/transport-reach.ts";
 
 /**
  * HOME is pinned for THIS file, and nothing pins it globally.
@@ -138,11 +138,7 @@ beforeEach(async () => {
   writeFileSync(join(vault, "notes", "shared.md"), `# Shared\n\n${QUERY} ${PROBE_TERMS} shared\n`);
   makePref("shared");
   makePref("owned-by-a", OWNER_A);
-  // This matrix measures the ownership axis, so the caller is local: at
-  // remote reach the Brain log pages the fixture's evidence lives in are
-  // not graph or search nodes, and the reach axis would decide recipes
-  // this matrix exists to hold to the owner rule.
-  ctx = { vault, configPath, repoRoot: null, agentName: OWNER_B, reach: TRANSPORT_REACH.local };
+  ctx = { vault, configPath, repoRoot: null, agentName: OWNER_B };
   await indexVault(resolveSearchConfig({ vault, configPath }), {});
 });
 
@@ -190,8 +186,10 @@ async function call(
   name: string,
   args: Record<string, unknown>,
   agentName: string = OWNER_B,
+  reach?: TransportReach,
 ): Promise<string> {
-  return JSON.stringify(await tool(name).handler({ ...ctx, agentName }, args));
+  const callCtx = reach === undefined ? { ...ctx, agentName } : { ...ctx, agentName, reach };
+  return JSON.stringify(await tool(name).handler(callCtx, args));
 }
 
 /** Vault-relative paths a listing surface returned. */
@@ -706,9 +704,13 @@ async function seedTwoOwnerFixture(): Promise<void> {
  * repository has already shipped one of those (`schema_inspect view=lint`
  * naming a host path in its parse error).
  */
-async function probeResponse(name: string, args: Record<string, unknown>): Promise<string> {
+async function probeResponse(
+  name: string,
+  args: Record<string, unknown>,
+  reach?: TransportReach,
+): Promise<string> {
   try {
-    return await call(name, args, OWNER_B);
+    return await call(name, args, OWNER_B, reach);
   } catch (err) {
     return `threw: ${err instanceof Error ? err.message : String(err)}`;
   }
@@ -783,11 +785,11 @@ for (const entry of PROBE_ENTRIES) {
         await seedTwoOwnerFixture();
 
         setGate(GATE_MODE.fail);
-        const scoped = await probeResponse(entry.name, probeArgs(recipe));
+        const scoped = await probeResponse(entry.name, probeArgs(recipe), recipe.reach);
         expect(scoped, `${label} under fail\n${recipe.reason}`).not.toContain(CROSS_OWNER_MARKER);
 
         setGate(GATE_MODE.off);
-        const unscoped = await probeResponse(entry.name, probeArgs(recipe));
+        const unscoped = await probeResponse(entry.name, probeArgs(recipe), recipe.reach);
         if (reaches) {
           expect(unscoped, `${label} under off\n${recipe.reason}`).toContain(CROSS_OWNER_MARKER);
         } else {

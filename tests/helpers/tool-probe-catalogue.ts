@@ -25,6 +25,7 @@
 import { runHygieneScan } from "../../src/core/brain/hygiene/scan.ts";
 import { scanTriggers } from "../../src/core/brain/triggers/scan.ts";
 import { transitionTrigger } from "../../src/core/brain/triggers/store.ts";
+import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
 
 export const OWNER_A = "agent-a";
 export const OWNER_B = "agent-b";
@@ -141,6 +142,12 @@ export interface ProbeCall {
    * the dispatch key cannot be read off a literal record.
    */
   readonly label?: string;
+  /**
+   * The transport reach the probe calls with, for the one recipe whose
+   * owner content is only reachable at local reach. Absent means no reach
+   * minted (remote), the HTTP deployment case the matrix covers by default.
+   */
+  readonly reach?: TransportReach;
 }
 
 /** One tool, and every call recipe the probe drives it with. */
@@ -501,7 +508,13 @@ export const NON_CONTENT: ReadonlyArray<ProbeEntry> = [
     name: "brain_clusters",
     calls: [
       { args: { operation: "list" }, reason: REASON.aggregateOnly },
-      { args: { operation: "run" }, reason: REASON.ownerFiltered },
+      {
+        args: { operation: "run" },
+        reason: REASON.ownerFiltered,
+        // The fixture's owner community forms through the evidence events on
+        // the Brain log page, which is a graph node only at local reach.
+        reach: TRANSPORT_REACH.local,
+      },
     ],
   },
   { name: "brain_codegraph_report", calls: one({}, REASON.configuredCorpus) },
