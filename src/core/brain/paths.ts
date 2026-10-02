@@ -77,7 +77,7 @@ import {
   HOOK_AUDIT_DIR,
 } from "./path-constants.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
-import type { ScopedRuleAxis } from "./scoped-rules.ts";
+import type { ScopedRuleAxis } from "./scoped-rule-axis.ts";
 import type { WriteLane } from "./freeze-marker.ts";
 
 export { ensureInsideVault, vaultRelative } from "../path-safety.ts";

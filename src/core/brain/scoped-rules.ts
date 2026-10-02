@@ -16,6 +16,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, posix } from "node:path";
 
 import { BRAIN_ROOT_REL, BRAIN_SCOPED_RULES_DIR } from "./path-constants.ts";
+import { SCOPED_RULE_AXES, SCOPED_RULE_AXIS, type ScopedRuleAxis } from "./scoped-rule-axis.ts";
 import { brainScopedRulePath, brainScopedRulesDir } from "./paths.ts";
 import { STANDING_RULES_MAX_CHARS_MAX } from "./standing-rules.ts";
 import {
@@ -26,28 +27,15 @@ import {
 
 // ---------- Axes ----------
 
-/** The three scope axes a rule file can be keyed on. */
-export const SCOPED_RULE_AXIS = Object.freeze({
-  project: "project",
-  harness: "harness",
-  host: "host",
-} as const);
-
-export type ScopedRuleAxis = (typeof SCOPED_RULE_AXIS)[keyof typeof SCOPED_RULE_AXIS];
-
-/**
- * The axes in render order, which is also the drop priority under the cap:
- * the index is the priority, so the host file drops first.
- */
-export const SCOPED_RULE_AXES: ReadonlyArray<ScopedRuleAxis> = Object.freeze([
-  SCOPED_RULE_AXIS.project,
-  SCOPED_RULE_AXIS.harness,
-  SCOPED_RULE_AXIS.host,
-]);
-
-export function isScopedRuleAxis(value: unknown): value is ScopedRuleAxis {
-  return typeof value === "string" && (SCOPED_RULE_AXES as ReadonlyArray<string>).includes(value);
-}
+// The axis vocabulary lives in a leaf module so that `paths.ts` can type
+// `brainScopedRulePath` without importing this reader (which imports
+// `paths.ts` and `standing-rules.ts`); it is re-exported here unchanged.
+export {
+  isScopedRuleAxis,
+  SCOPED_RULE_AXES,
+  SCOPED_RULE_AXIS,
+  type ScopedRuleAxis,
+} from "./scoped-rule-axis.ts";
 
 /** Code-authored subheading label per axis. */
 export const SCOPED_RULE_AXIS_LABEL: Readonly<Record<ScopedRuleAxis, string>> = Object.freeze({
