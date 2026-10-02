@@ -507,8 +507,13 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "is handed readableAtContextReach(ctx), so a reserved preference or retired record is " +
       "absent from its rows and counts, and no report snapshot is taken or delta shown; " +
       "view=morning is handed the same predicate and leaves such a preference out, and shows " +
-      "no pending trigger or trigger-queue failure and marks nothing delivered - but the " +
-      "daily, weekly, monthly, operator and today views count over the whole Brain layer.",
+      "no pending trigger or trigger-queue failure and marks nothing delivered; view=daily " +
+      "and view=weekly answer at the caller's reach for the ids they name - a status " +
+      "transition, retirement or contradiction naming a record the caller cannot read (under " +
+      "its pref- or ret- spelling) is dropped through readerRefView, source_pointers are " +
+      "recollected from the evidence events the caller may see, and no report snapshot is " +
+      "taken or delta shown. Residual: their events_by_kind and vault_delta counts, and the " +
+      "monthly, operator and today views, still count over the whole Brain layer.",
   },
   {
     surface: "brain_pre_compress_pack",

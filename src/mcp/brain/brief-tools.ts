@@ -19,6 +19,17 @@ import {
   type TriggerQueueFailures,
 } from "../../core/brain/triggers/store.ts";
 import { buildTimelineIndex } from "../../core/brain/temporal/build-index.ts";
+import { collectSourcePointers } from "../../core/brain/temporal/period-common.ts";
+import { selectEvents } from "../../core/brain/temporal/select-events.ts";
+import type { TimelineIndex } from "../../core/brain/temporal/types.ts";
+import {
+  readerRefView,
+  type ArtifactRef,
+  type ArtifactRefView,
+} from "../../core/brain/artifact-ref-view.ts";
+import { PREF_ID_PREFIX, RETIRED_ID_PREFIX } from "../../core/brain/dream-plan.ts";
+import { stripBrainIdPrefix } from "../../core/brain/wikilink.ts";
+import { BRAIN_LOG_EVENT_KIND } from "../../core/brain/types.ts";
 import { buildTodayDashboard } from "../../core/brain/today-dashboard.ts";
 import { buildDailyBrief } from "../../core/brain/temporal/daily-brief.ts";
 import { buildWeeklySynthesis } from "../../core/brain/temporal/weekly-brief.ts";
@@ -218,6 +229,73 @@ async function toolBrainDigest(
 // ----- brain_query ---------------------------------------------------------
 
 /**
+ * Every spelling a preference record answers to across its retirement:
+ * `pref-<slug>` before `moveToRetired` renamed it and `ret-<slug>` after.
+ * A row naming either must be judged by whichever page is on disk, or a
+ * transition logged under `pref-x` would name nothing once `ret-x` is the
+ * reserved page, and pass.
+ */
+function recordRefs(id: string | undefined): ReadonlyArray<ArtifactRef> {
+  if (id === undefined) return [];
+  const slug = stripBrainIdPrefix(id);
+  return [id, `${PREF_ID_PREFIX}${slug}`, `${RETIRED_ID_PREFIX}${slug}`];
+}
+
+/**
+ * The rows of a daily or weekly envelope a reader at this request's
+ * reach may see, or `null` at local reach, where the envelope is the
+ * builder's own (the digest precedent: a reader below local reach is
+ * shown only what it may read, and takes no report snapshot).
+ *
+ * Status transitions, retirements and contradictions are dropped when a
+ * record they name is withheld. Source pointers are deduplicated
+ * artifacts with no record left on them, so they are recollected from
+ * the window's evidence events the reader may see: an artifact cited
+ * only by evidence on a withheld preference is absent. The counts
+ * (`events_by_kind`, `vault_delta`) are not recomputed.
+ */
+function periodRowsAtReach(
+  ctx: ServerContext,
+  index: TimelineIndex,
+  window: { readonly since: string; readonly until: string },
+): PeriodRowsView | null {
+  if (contextReach(ctx) === TRANSPORT_REACH.local) return null;
+  const refs = readerRefView(ctx.vault, readableAtContextReach(ctx));
+  const evidence = selectEvents(index, window).filter(
+    (ev) =>
+      ev.kind !== BRAIN_LOG_EVENT_KIND.applyEvidence ||
+      refs.row(ev.artifact, ...recordRefs(ev.prefId)),
+  );
+  return { refs, sourcePointers: collectSourcePointers(evidence) };
+}
+
+interface PeriodRowsView {
+  readonly refs: ArtifactRefView;
+  readonly sourcePointers: ReadonlyArray<string>;
+}
+
+/** A transition or retirement row: the record id and the link it was logged with. */
+function transitionRefs(row: {
+  readonly prefId: string;
+  readonly link: string;
+}): ReadonlyArray<ArtifactRef> {
+  return [row.link, ...recordRefs(row.prefId)];
+}
+
+/** A contradiction row: its record, the topic's record and its evidence artifact. */
+function contradictionRefs(row: {
+  readonly prefId?: string;
+  readonly topic?: string;
+  readonly artifact?: string;
+}): ReadonlyArray<ArtifactRef> {
+  return [
+    row.artifact,
+    ...recordRefs(row.prefId),
+    ...(row.topic !== undefined ? recordRefs(`${PREF_ID_PREFIX}${row.topic}`) : []),
+  ];
+}
+
+/**
  * `brain_daily_brief` - structured counters + transitions + source
  * pointers for one day. Defaults `date` to today UTC when omitted.
  */
@@ -233,18 +311,22 @@ async function toolBrainDailyBrief(
   const brief = buildDailyBrief(index, ctx.vault, date, {
     offsetHours: cfg.daily_window_offset_hours,
   });
+  const atReach = periodRowsAtReach(ctx, index, brief.window);
   const envelope: Record<string, unknown> = {
     vault_path: vaultPathField(ctx),
     date: brief.date,
     window: brief.window,
     events_by_kind: brief.eventsByKind,
-    status_transitions: brief.statusTransitions,
+    status_transitions:
+      atReach?.refs.keep(brief.statusTransitions, transitionRefs) ?? brief.statusTransitions,
     vault_delta: brief.vaultDelta,
-    source_pointers: brief.sourcePointers,
+    source_pointers: atReach?.sourcePointers ?? brief.sourcePointers,
     generated_at: brief.generatedAt,
   };
-  // Dual-output (t_00eece5d): persist a machine snapshot and report
-  // the run-over-run delta when report snapshots are enabled.
+  // Below local reach no snapshot is taken and no delta reported.
+  if (atReach !== null) return envelope;
+  // Dual-output: persist a machine snapshot and report the run-over-run
+  // delta when report snapshots are enabled.
   const delta = captureReportDelta(
     ctx.vault,
     "daily",
@@ -274,18 +356,26 @@ async function toolBrainWeeklySynthesis(
   const cfg = loadTemporalConfigSafe(ctx.vault);
   const index = buildTimelineIndex(ctx.vault, {});
   const synth = buildWeeklySynthesis(index, ctx.vault, weekEnd, cfg);
+  const atReach = periodRowsAtReach(ctx, index, {
+    since: synth.windowStart,
+    until: synth.windowEnd,
+  });
   const envelope: Record<string, unknown> = {
     vault_path: vaultPathField(ctx),
     window_start: synth.windowStart,
     window_end: synth.windowEnd,
     events_by_kind: synth.eventsByKind,
-    status_transitions: synth.statusTransitions,
-    retired: synth.retired,
-    contradictions: synth.contradictions,
+    status_transitions:
+      atReach?.refs.keep(synth.statusTransitions, transitionRefs) ?? synth.statusTransitions,
+    retired: atReach?.refs.keep(synth.retired, transitionRefs) ?? synth.retired,
+    contradictions:
+      atReach?.refs.keep(synth.contradictions, contradictionRefs) ?? synth.contradictions,
     vault_delta: synth.vaultDelta,
-    source_pointers: synth.sourcePointers,
+    source_pointers: atReach?.sourcePointers ?? synth.sourcePointers,
     generated_at: synth.generatedAt,
   };
+  // Below local reach no snapshot is taken and no delta reported.
+  if (atReach !== null) return envelope;
   const delta = captureReportDelta(
     ctx.vault,
     "weekly",
