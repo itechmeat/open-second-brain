@@ -252,11 +252,12 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
   {
     surface: "brain_idea_discovery",
     kind: K.mcpTool,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "discoverIdeas / ideaCandidates (core/brain/idea-discovery.ts) walk the vault via " +
-      "readdirSync + parseFrontmatter to find orphan research notes, with no visibility check on " +
-      "any candidate page.",
+      "discoverIdeas (core/brain/idea-discovery.ts) takes the handler's " +
+      "readableAtContextReach(ctx) as its include option and leaves a page the caller may not " +
+      "read at its reach out of the inbound-link walk and the candidates, before ranking and " +
+      "the cap, so a withheld research page is answered as an absent one.",
   },
   {
     surface: "brain_dead_ends",
@@ -299,11 +300,12 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
   {
     surface: "brain_tiers",
     kind: K.mcpTool,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "check returns store.listTierDrift() unscoped across the whole index - every drifted " +
-      "document's path, with no visibility check - and restore additionally reads the named " +
-      "page's full frontmatter and body via parseFrontmatter.",
+      "check keeps only the drift rows whose page passes the handler's " +
+      "readableAtContextReach(ctx), and restore and accept refuse any other page with the 'not " +
+      "indexed' error a page the index never saw gets, before the drift is read or anything is " +
+      "written.",
   },
   {
     surface: "brain_maintenance",
@@ -514,14 +516,12 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
   {
     surface: "brain_procedural_memory",
     kind: K.mcpTool,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "collectEntries walks the configured roots with parseFrontmatter and returns `sourcePath` " +
-      "and `title` per entry, so this surface DOES disclose a page's path and title - it is " +
-      "excluded rather than swept in for completeness, and the distinction is the point of the " +
-      "row. It reads procedure-kind pages under caller-named roots rather than through any of " +
-      "the three read roots, and closing it means giving that walk a reach the way listVaultPages " +
-      "has one, which is a fourth root to build rather than a filter to add.",
+      "the handler filters list through readableAtContextReach(ctx) and recounts its total, " +
+      "reports reconcile counts over readable pages only, and refuses mark_used and " +
+      "mark_outcome on a withheld entry with the unknown-id error, before writing, so a " +
+      "procedure page the caller may not read at its reach is answered as an absent one.",
   },
   {
     surface: "brain_procedural_graph",
