@@ -39,6 +39,7 @@ const encoder = new TextEncoder();
 
 /** A cell pass bounded by a window takes milliseconds; a whole-cell pass over megabytes takes seconds. */
 const CELL_PASS_CEILING_MS = 1_000;
+const MIB = 1 << 20;
 
 function bytesOf(text: string): Uint8Array {
   return encoder.encode(text);
@@ -299,20 +300,22 @@ describe("caps", () => {
     expect(rendered(csv(`k\n${exact}\n`)).truncated).toEqual([]);
   });
 
+  test("a megabyte of nested private tags in a cell is hidden in linear time", () => {
+    const nested = `${"<private>".repeat(MIB / 8)}</private>`;
+    const started = performance.now();
+    const result = rendered(csv(`k,v\nrow,${nested}\n`));
+    expect(performance.now() - started).toBeLessThan(CELL_PASS_CEILING_MS);
+    expect(fencedLines(result.section)[1]).toBe(`row | ${PRIVATE_REGION_PLACEHOLDER}`);
+  });
+
   test("a megabyte-sized cell is redacted in a bounded window, not scanned whole", () => {
-    const MIB = 1 << 20;
-    const nested = "<private>".repeat(MIB / 8);
     const userinfo = "a://b:".repeat((4 * MIB) / 6);
-    for (const cell of [nested, userinfo]) {
-      const started = performance.now();
-      const result = rendered(csv(`k,v\nrow,${cell}\n`));
-      expect(performance.now() - started).toBeLessThan(CELL_PASS_CEILING_MS);
-      expect(result.truncated).toEqual(["cells"]);
-      const value = fencedLines(result.section)[1]!.split(" | ")[1]!;
-      expect(Array.from(value).length).toBeLessThanOrEqual(TABLE_NOTE_MAX_CELL_CHARS);
-    }
-    const hidden = rendered(csv(`k,v\nrow,${nested}\n`));
-    expect(fencedLines(hidden.section)[1]).toBe(`row | ${PRIVATE_REGION_PLACEHOLDER}`);
+    const started = performance.now();
+    const result = rendered(csv(`k,v\nrow,${userinfo}\n`));
+    expect(performance.now() - started).toBeLessThan(CELL_PASS_CEILING_MS);
+    expect(result.truncated).toEqual(["cells"]);
+    const value = fencedLines(result.section)[1]!.split(" | ")[1]!;
+    expect(Array.from(value)).toHaveLength(TABLE_NOTE_MAX_CELL_CHARS);
   });
 
   test("groups that would pass the byte cap are dropped whole and named", () => {
@@ -406,6 +409,7 @@ describe("escapes and fences", () => {
       "term | a\\u{001B}]0;title\\u{0007}b",
       "more | \\u{007F}\\u{0085}\\u{009F}\\u{0001}",
     ]);
+    // oxlint-disable-next-line no-control-regex -- matching control characters is the point
     expect(result.section).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/);
   });
 
@@ -451,6 +455,21 @@ describe("redaction", () => {
       `${REDACTION_PLACEHOLDER} | 3`,
       `${REDACTION_PLACEHOLDER} | 5`,
     ]);
+  });
+
+  test("a private region spanning records hides the rows between its tags", () => {
+    const text = "name,note\n<private>,x\nbob,ssn 123-45-6789\n</private>,y\ncarol,z\n";
+    const result = rendered(csv(text));
+    expect(fencedLines(result.section)).toEqual([
+      "name | note",
+      `${PRIVATE_REGION_PLACEHOLDER} | y`,
+      "carol | z",
+    ]);
+    expect(result.rows).toBe(2);
+    expect(result.section).not.toContain("123-45-6789");
+    expect(result.section).not.toContain("private>");
+    const tsv = rendered(tableNote("Clips/data.tsv", bytesOf(text.replaceAll(",", "\t"))));
+    expect(tsv.section).not.toContain("123-45-6789");
   });
 
   test("order ids and hashes are table data, not tokens", () => {

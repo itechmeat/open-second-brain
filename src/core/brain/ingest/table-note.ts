@@ -19,7 +19,12 @@
  */
 
 import { fenceFor } from "../../markdown-fence.ts";
-import { isSecretKeyName, REDACTION_PLACEHOLDER, redactRawOutput } from "../../redactor.ts";
+import {
+  isSecretKeyName,
+  REDACTION_PLACEHOLDER,
+  redactRawOutput,
+  stripPrivateRegions,
+} from "../../redactor.ts";
 import { countChunkTokens } from "../../search/chunker.ts";
 import type { FrontmatterMap } from "../../types.ts";
 import { SOURCE_FORMAT, sourceFormatOf } from "./source-formats.ts";
@@ -416,6 +421,10 @@ export function tableNote(path: string, bytes: Uint8Array): TableNoteResult {
     return skip(TABLE_NOTE_SKIP_REASON.notUtf8);
   }
   if (text.includes(NUL)) return skip(TABLE_NOTE_SKIP_REASON.containsNul);
+  // A private region follows the vault-wide rule before any parsing, so a
+  // region that spans records hides every row between its tags, not only
+  // the cells that hold a tag.
+  text = stripPrivateRegions(text);
 
   const delimiter = format === SOURCE_FORMAT.tsv ? TABLE_DELIMITER.tab : csvDelimiter(text);
   const parsed = parseRecords(text, DELIMITER_CHAR[delimiter], format === SOURCE_FORMAT.csv);
