@@ -13,6 +13,8 @@ takes effect without reloading anything.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 import sys
 import tempfile
@@ -256,6 +258,108 @@ class UnboundScopeTests(ScopeTestCase):
             "gateway's process environment, which belongs to the launch profile. Restart the "
             "gateway (hermes gateway restart); if it persists, report it.",
         )
+
+
+class IgnoredProcessValueWarningTests(ScopeTestCase):
+    """(c') and (g): one value-free WARNING per ignored name, once per process."""
+
+    def test_one_warning_per_ignored_name_without_its_value(self):
+        self.set_launch_env()
+        pair = make_fake_scope(multiplexed=True, values={"VAULT_AGENT_NAME": "scoped-agent"})
+        with self.install(pair), self.assertLogs("plugins.hermes.config", "WARNING") as logs:
+            cfg.resolve_agent_name()
+            cfg.resolve_timezone()
+        messages = [record.getMessage() for record in logs.records]
+        self.assertTrue(any("VAULT_AGENT_NAME" in m for m in messages))
+        self.assertTrue(any("VAULT_TIMEZONE" in m for m in messages))
+        for message in messages:
+            self.assertIn("multiplexed gateway", message)
+            for value in LAUNCH_VALUES.values():
+                self.assertNotIn(value, message)
+
+    def test_repeated_reads_warn_once(self):
+        os.environ["VAULT_AGENT_NAME"] = LAUNCH_VALUES["VAULT_AGENT_NAME"]
+        os.environ[cfg.XDG_CONFIG_HOME_ENV] = str(self.tmp / "absent")
+        pair = make_fake_scope(multiplexed=True, values={"VAULT_AGENT_NAME": "scoped-agent"})
+        with self.install(pair), self.assertLogs("plugins.hermes.config", "WARNING") as logs:
+            for _ in range(3):
+                cfg.resolve_agent_name()
+        named = [r for r in logs.records if "VAULT_AGENT_NAME" in r.getMessage()]
+        self.assertEqual(len(named), 1)
+
+    def test_no_warning_without_multiplexing_or_without_a_process_value(self):
+        pair = make_fake_scope(multiplexed=True, values={"VAULT_AGENT_NAME": "scoped-agent"})
+        with self.install(pair), self.assertNoLogs("plugins.hermes.config", "WARNING"):
+            cfg.resolve_agent_name()
+        os.environ["VAULT_AGENT_NAME"] = "launch-agent-value"
+        off = make_fake_scope(multiplexed=False)
+        with self.install(off), self.assertNoLogs("plugins.hermes.config", "WARNING"):
+            cfg.resolve_agent_name()
+
+
+class ShadowingSourceTests(ScopeTestCase):
+    def test_multiplexed_names_the_profile_env_file(self):
+        pair = make_fake_scope(multiplexed=True, values={"VAULT_AGENT_NAME": "scoped-agent"})
+        with self.install(pair):
+            self.assertEqual(
+                cfg.shadowing_source("agent_name"),
+                "the VAULT_AGENT_NAME setting in this Hermes profile's .env overrides the "
+                "config file",
+            )
+
+    def test_multiplexed_ignores_the_process_environment(self):
+        self.set_launch_env()
+        os.environ[cfg.XDG_CONFIG_HOME_ENV] = str(self.tmp / "absent")
+        pair = make_fake_scope(multiplexed=True)
+        with self.install(pair):
+            self.assertIsNone(cfg.shadowing_source("agent_name"))
+
+    def test_without_multiplexing_the_text_is_unchanged(self):
+        os.environ["VAULT_AGENT_NAME"] = "launch-agent-value"
+        with self.no_hermes():
+            self.assertEqual(
+                cfg.shadowing_source("agent_name"),
+                "the VAULT_AGENT_NAME environment variable overrides the config file",
+            )
+
+
+class ConfigCommandSourceTests(ScopeTestCase):
+    def _run_config(self):
+        from plugins.hermes import cli
+
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = cli._config()
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_first_line_names_the_process_environment(self):
+        os.environ[cfg.XDG_CONFIG_HOME_ENV] = str(self.tmp / "absent")
+        with self.no_hermes():
+            rc, out, _ = self._run_config()
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.splitlines()[0], "settings_source: process environment")
+        self.assertTrue(out.splitlines()[1].startswith("config_path:"))
+
+    def test_first_line_names_the_profile_scope(self):
+        os.environ[cfg.XDG_CONFIG_HOME_ENV] = str(self.tmp / "absent")
+        pair = make_fake_scope(multiplexed=True, values={"VAULT_AGENT_NAME": "scoped-agent"})
+        with self.install(pair):
+            rc, out, _ = self._run_config()
+        self.assertEqual(rc, 0)
+        lines = out.splitlines()
+        self.assertEqual(lines[0], "settings_source: profile scope (multiplexed gateway)")
+        self.assertIn("scoped-agent", out)
+
+    def test_unbound_scope_prints_the_named_error_and_exits_2(self):
+        self.set_launch_env()
+        pair = make_fake_scope(multiplexed=True, unbound=True)
+        with self.install(pair):
+            rc, out, err = self._run_config()
+        self.assertEqual(rc, 2)
+        self.assertEqual(out.splitlines()[0], "settings_source: profile scope (multiplexed gateway)")
+        self.assertIn("OPEN_SECOND_BRAIN_CONFIG cannot be resolved", err)
+        for value in LAUNCH_VALUES.values():
+            self.assertNotIn(value, out + err)
 
 
 if __name__ == "__main__":

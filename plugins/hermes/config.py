@@ -70,6 +70,7 @@ import logging
 import os
 import re
 import stat
+import threading
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -124,6 +125,11 @@ _TARGET = "hermes"
 _TARGET_TEMPLATE_PATH = _TEMPLATES_DIR / f"identity-reminder.{_TARGET}.txt"
 
 _template_cache: str | None = None
+
+# Scoped names already reported as ignored in this process. One WARNING per
+# name, not per call: the resolvers run on every turn.
+_scope_warned: set[str] = set()
+_scope_warned_lock = threading.Lock()
 
 # Line splitter matching the TypeScript `text.split(/\r?\n/)`. `str.splitlines`
 # also breaks on form feed, U+2028 and friends, which would make the two
@@ -215,11 +221,38 @@ def env_setting(name: str) -> str | None:
     scope_module = _profile_scope_module() if name in PROFILE_SCOPED_ENV else None
     if scope_module is None or not scope_module.is_multiplex_active():
         return os.environ.get(name) or None
+    _warn_ignored_process_value(name)
     try:
         value = scope_module.get_secret(name, None)
     except scope_module.UnscopedSecretError as exc:
         raise ProfileScopeError(name) from exc
     return value or None
+
+
+def _warn_ignored_process_value(name: str) -> None:
+    """Say once per process that a gateway-environment value is not used.
+
+    Names the variable and never its value: the value belongs to the launch
+    profile and may be a path or an identity the other profiles must not see.
+    """
+    if not os.environ.get(name):
+        return
+    with _scope_warned_lock:
+        if name in _scope_warned:
+            return
+        _scope_warned.add(name)
+    logger.warning(
+        "%s: ignoring %s from the gateway process environment on a multiplexed gateway; "
+        "set it in the profile's .env instead",
+        PLUGIN_NAME,
+        name,
+    )
+
+
+def _reset_scope_warnings_for_tests() -> None:
+    """Test-only: forget which ignored names were already reported."""
+    with _scope_warned_lock:
+        _scope_warned.clear()
 
 
 class ConfigValueError(ValueError):
@@ -569,7 +602,10 @@ def shadowing_source(key: str) -> str | None:
     env_key = {"vault": VAULT_DIR_ENV, "agent_name": AGENT_NAME_ENV, "timezone": TIMEZONE_ENV}.get(
         key
     )
-    if env_key and os.environ.get(env_key):
+    if env_key and is_multiplexed():
+        if env_setting(env_key):
+            return f"the {env_key} setting in this Hermes profile's .env overrides the config file"
+    elif env_key and os.environ.get(env_key):
         return f"the {env_key} environment variable overrides the config file"
     if key != "vault":
         return None

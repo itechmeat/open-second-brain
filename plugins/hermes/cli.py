@@ -68,11 +68,19 @@ def _status() -> int:
 
 
 def _config() -> int:
-    # The config path is resolved from the environment alone and is printable
-    # even when the file behind it is not, which is exactly the case an
-    # operator needs to see: the path this process looked at.
-    print(f"config_path: {config.config_path()}")
+    # Which source answered comes first and cannot fail: on a multiplexed
+    # gateway the profile scope does, and the gateway's own environment is
+    # ignored, so an operator comparing values needs to know which to check.
+    source = (
+        "profile scope (multiplexed gateway)" if config.is_multiplexed() else "process environment"
+    )
+    print(f"settings_source: {source}")
     try:
+        # The config path is printable even when the file behind it is not,
+        # which is exactly the case an operator needs to see: the path this
+        # process looked at. It is inside the try because on a multiplexed
+        # gateway with no profile scope bound it cannot be resolved at all.
+        print(f"config_path: {config.config_path()}")
         vault = config.resolve_vault()
         agent_name = config.resolve_agent_name()
         timezone = config.resolve_timezone()
