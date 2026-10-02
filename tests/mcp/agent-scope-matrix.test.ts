@@ -88,6 +88,7 @@ import {
 import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
 import type { ServerContext, ToolDefinition } from "../../src/mcp/tool-contract.ts";
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 
 /**
  * HOME is pinned for THIS file, and nothing pins it globally.
@@ -137,7 +138,11 @@ beforeEach(async () => {
   writeFileSync(join(vault, "notes", "shared.md"), `# Shared\n\n${QUERY} ${PROBE_TERMS} shared\n`);
   makePref("shared");
   makePref("owned-by-a", OWNER_A);
-  ctx = { vault, configPath, repoRoot: null, agentName: OWNER_B };
+  // This matrix measures the ownership axis, so the caller is local: at
+  // remote reach the Brain log pages the fixture's evidence lives in are
+  // not graph or search nodes, and the reach axis would decide recipes
+  // this matrix exists to hold to the owner rule.
+  ctx = { vault, configPath, repoRoot: null, agentName: OWNER_B, reach: TRANSPORT_REACH.local };
   await indexVault(resolveSearchConfig({ vault, configPath }), {});
 });
 
