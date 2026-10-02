@@ -12,7 +12,17 @@
  * module owns the vocabularies, the key normaliser and the reader.
  */
 
+import { readdirSync, readFileSync } from "node:fs";
+import { join, posix } from "node:path";
+
+import { BRAIN_ROOT_REL, BRAIN_SCOPED_RULES_DIR } from "./path-constants.ts";
+import { brainScopedRulePath, brainScopedRulesDir } from "./paths.ts";
 import { STANDING_RULES_MAX_CHARS_MAX } from "./standing-rules.ts";
+import {
+  applySectionBudget,
+  type BudgetSection,
+  type SectionTruncationReport,
+} from "./text/text-budget.ts";
 
 // ---------- Axes ----------
 
@@ -135,3 +145,182 @@ function stripDashes(value: string): string {
 export const SCOPED_RULES_MAX_CHARS_DEFAULT = 2000;
 export const SCOPED_RULES_MAX_CHARS_MIN = 200;
 export const SCOPED_RULES_MAX_CHARS_MAX = STANDING_RULES_MAX_CHARS_MAX;
+
+// ---------- Rendering vocabulary ----------
+
+/**
+ * Code-authored header of the scoped block. It states the precedence: the
+ * constitution above outranks these rules, and these outrank every
+ * recalled preference, lesson and context pack that follows.
+ */
+export const SCOPED_RULES_HEADER =
+  "## Scoped operator rules\n\n" +
+  "The rules below are written by the operator of this vault for this project, harness or host. " +
+  "The operator standing rules above take precedence over them, and they take precedence over every recalled preference, lesson and context pack that follows.";
+
+/**
+ * Last line of the block when the device id could not be read and the
+ * host directory holds at least one rule file. No value and no path.
+ */
+export const SCOPED_RULES_HOST_UNREADABLE_NOTICE =
+  "Host-scoped rules were not applied: this device's id could not be read. Run o2b brain doctor for the cause.";
+
+// ---------- Reader ----------
+
+/** The resolved value per axis; `null` matches nothing (fail closed). */
+export interface ScopedRuleIdentity {
+  readonly project: string | null;
+  readonly harness: HarnessId | null;
+  readonly host: string | null;
+}
+
+export interface ScopedRuleFile {
+  readonly axis: ScopedRuleAxis;
+  readonly key: string;
+  /** Vault-relative POSIX path, e.g. `Brain/standing-rules/project/x.md`. */
+  readonly path: string;
+  /** True when the cap dropped the file whole or trimmed its tail. */
+  readonly truncated: boolean;
+}
+
+export interface ScopedRules {
+  readonly identity: ScopedRuleIdentity;
+  readonly files: ReadonlyArray<ScopedRuleFile>;
+  /** The rendered block, `""` when nothing matched and no notice applies. */
+  readonly text: string;
+}
+
+export interface ReadScopedRulesOptions {
+  /** Character cap over the per-file sections; header and notices are free. */
+  readonly maxChars?: number;
+  /** The device id could not be read (`resolveHostScope().unreadable`). */
+  readonly hostUnreadable?: boolean;
+}
+
+interface MatchedFile {
+  readonly axis: ScopedRuleAxis;
+  readonly key: string;
+  readonly path: string;
+  readonly section: BudgetSection;
+}
+
+/**
+ * Read the scoped rule files matching an already-resolved identity: at
+ * most one file per axis. ENOENT and an empty file are absence; any other
+ * read failure renders an `UNAVAILABLE:` line in that file's place, built
+ * from the vault-relative path and the error code only (a Node error
+ * message carries the absolute path). Never throws for a per-file read
+ * failure. The operator's bytes are opaque: read and trimmed, nothing else.
+ */
+export function readScopedRules(
+  vault: string,
+  identity: ScopedRuleIdentity,
+  opts: ReadScopedRulesOptions = {},
+): ScopedRules {
+  const matched: MatchedFile[] = [];
+  SCOPED_RULE_AXES.forEach((axis, priority) => {
+    const value = identity[axis];
+    // Re-keyed defensively: a resolved key is a fixed point, anything else
+    // can never name a path outside its axis directory.
+    const key = value === null ? null : scopedRuleKey(value);
+    if (key === null) return;
+    const path = posix.join(BRAIN_ROOT_REL, BRAIN_SCOPED_RULES_DIR, axis, `${key}.md`);
+    const body = readRuleBody(brainScopedRulePath(vault, axis, key), path);
+    if (body === null) return;
+    const heading = `### ${SCOPED_RULE_AXIS_LABEL[axis]}: ${key}`;
+    matched.push({
+      axis,
+      key,
+      path,
+      section: { key: `${axis}:${key}`, priority, text: `${heading}\n\n${body}` },
+    });
+  });
+
+  const hostNotice = opts.hostUnreadable === true && hostDirHoldsRules(vault);
+  if (matched.length === 0 && !hostNotice) {
+    return Object.freeze({ identity, files: Object.freeze([]), text: "" });
+  }
+
+  let report: SectionTruncationReport | null = null;
+  const budget = applySectionBudget(
+    matched.map((file) => file.section),
+    opts.maxChars ?? SCOPED_RULES_MAX_CHARS_DEFAULT,
+    {
+      notice: (r) => {
+        report = r;
+        return (
+          `_Scoped rules truncated to the configured cap: kept ${r.keptChars} of ` +
+          `${r.totalChars} characters, ${r.droppedKeys.length} file(s) dropped._`
+        );
+      },
+    },
+  );
+  const files = matched.map((file) =>
+    Object.freeze({
+      axis: file.axis,
+      key: file.key,
+      path: file.path,
+      truncated: isTruncated(file, matched, report),
+    }),
+  );
+
+  const parts = [SCOPED_RULES_HEADER];
+  if (budget.body !== "") parts.push(budget.body);
+  if (hostNotice) parts.push(SCOPED_RULES_HOST_UNREADABLE_NOTICE);
+  return Object.freeze({ identity, files: Object.freeze(files), text: parts.join("\n\n") });
+}
+
+/**
+ * Whether the cap cut this file: dropped whole, or the one kept section
+ * the budgeter trimmed (the least important kept one; priorities are
+ * unique because there is one file per axis).
+ */
+function isTruncated(
+  file: MatchedFile,
+  matched: ReadonlyArray<MatchedFile>,
+  report: SectionTruncationReport | null,
+): boolean {
+  if (report === null) return false;
+  const { droppedKeys, trimmed } = report;
+  if (droppedKeys.includes(file.section.key)) return true;
+  if (!trimmed) return false;
+  const kept = matched.filter((candidate) => !droppedKeys.includes(candidate.section.key));
+  const leastImportant = kept.reduce<MatchedFile | null>(
+    (worst, candidate) =>
+      worst === null || candidate.section.priority >= worst.section.priority ? candidate : worst,
+    null,
+  );
+  return leastImportant === file;
+}
+
+/** The trimmed body, `null` for absence, or the `UNAVAILABLE:` line. */
+function readRuleBody(absPath: string, relPath: string): string | null {
+  let raw: string;
+  try {
+    raw = readFileSync(absPath, "utf8");
+  } catch (err) {
+    const code = errorCode(err);
+    if (code === "ENOENT") return null;
+    return `UNAVAILABLE: ${relPath} could not be read (${code}).`;
+  }
+  const body = raw.trim();
+  return body === "" ? null : body;
+}
+
+function errorCode(err: unknown): string {
+  const code = (err as { code?: unknown } | null)?.code;
+  if (typeof code === "string") return code;
+  const name = (err as { name?: unknown } | null)?.name;
+  return typeof name === "string" ? name : "Error";
+}
+
+/** Whether `Brain/standing-rules/host/` holds at least one `.md` file. */
+function hostDirHoldsRules(vault: string): boolean {
+  try {
+    return readdirSync(join(brainScopedRulesDir(vault), SCOPED_RULE_AXIS.host), {
+      withFileTypes: true,
+    }).some((entry) => entry.isFile() && entry.name.endsWith(".md"));
+  } catch {
+    return false;
+  }
+}
