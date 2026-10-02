@@ -142,22 +142,17 @@ test("an already-canonical link is not counted as a change", () => {
   expect(result.changed).toBe(0);
 });
 
-test("a fence closed by a longer run ends at the end of that run", () => {
-  const content = ["```", "[[alpha]] in a fence stays", "````", "After [[alpha]].", "`x`"].join(
-    "\n",
-  );
-  const result = normalizeWikilinks(content, "full", PAGES);
-  expect(result.content).toContain("[[alpha]] in a fence stays");
-  expect(result.content).toContain("After [[Brain/notes/alpha]].");
-  expect(result.changed).toBe(1);
-});
-
-test("a tilde fence closed by a longer run ends at the end of that run", () => {
-  const content = ["~~~", "[[alpha]] in a fence stays", "~~~~~~", "After [[alpha]].", "~~~"].join(
-    "\n",
-  );
-  const result = normalizeWikilinks(content, "full", PAGES);
-  expect(result.content).toContain("[[alpha]] in a fence stays");
-  expect(result.content).toContain("After [[Brain/notes/alpha]].");
-  expect(result.changed).toBe(1);
+test("a backtick or tilde fence closed by a longer run ends at the end of that run", () => {
+  for (const [open, close, tail] of [
+    ["```", "````", "`x`"],
+    ["~~~", "~~~~~~", "~~~"],
+  ]) {
+    const content = [open, "[[alpha]] in a fence stays", close, "After [[alpha]].", tail].join(
+      "\n",
+    );
+    const result = normalizeWikilinks(content, "full", PAGES);
+    expect(result.content).toContain("[[alpha]] in a fence stays");
+    expect(result.content).toContain("After [[Brain/notes/alpha]].");
+    expect(result.changed).toBe(1);
+  }
 });
