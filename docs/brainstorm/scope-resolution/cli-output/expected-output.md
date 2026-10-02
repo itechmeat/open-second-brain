@@ -69,10 +69,16 @@ After, local reach:
 ```json
 {
   "content": "## Operator standing rules\n\n...\n\n## Scoped operator rules\n\n...\n\n### Project: proj-x\n\n- Run the Python suite before every commit in this project.\n\n<memory body>",
-  "standing_rules": { "path": "Brain/standing-rules.md", "content": "# Operator\n\n- Never push to main.", "truncated": false },
+  "standing_rules": {
+    "path": "Brain/standing-rules.md",
+    "content": "# Operator\n\n- Never push to main.",
+    "truncated": false
+  },
   "scoped_rules": {
     "scope": { "project": "proj-x", "harness": "claude-code", "host": null },
-    "files": [ { "path": "Brain/standing-rules/project/proj-x.md", "axis": "project", "truncated": false } ]
+    "files": [
+      { "path": "Brain/standing-rules/project/proj-x.md", "axis": "project", "truncated": false }
+    ]
   }
 }
 ```
@@ -95,14 +101,14 @@ After:
 
 ```
 $ o2b mcp --harness nope
-o2b mcp: invalid --harness value: nope; expected one of: aider, claude-code, codex, copilot-cli, cursor, gemini-cli, generic, grok, hermes, kiro, openclaw, opencode, pi
+o2b mcp: invalid --harness value: "nope"; expected one of: aider, claude-code, codex, copilot-cli, cursor, gemini-cli, generic, grok, hermes, kiro, openclaw, opencode, pi
 (exit 2)
 ```
 
 The existing `--host-target` refusal is unchanged (captured):
 
 ```
-o2b mcp: invalid --host-target value: nope; expected one of: aider, codex, copilot-cli, cursor, gemini-cli, generic, grok, kiro, opencode, pi
+o2b mcp: invalid --host-target value: "nope"; expected one of: aider, codex, copilot-cli, cursor, gemini-cli, generic, grok, kiro, opencode, pi
 ```
 
 ## `hermes open-second-brain config`

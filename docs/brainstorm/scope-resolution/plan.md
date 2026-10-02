@@ -71,7 +71,7 @@ The OpenClaw bundle (`openclaw/index.js`) belongs to no lane: the integrator run
 
 ### Server and CLI (lane B)
 
-- CLI flag `--harness <id>` on `o2b mcp` (`main.ts` option table `"harness": { type: "string" }`, `command-manifest.ts` `flag("harness", "string")`). Invalid value: stderr `` `o2b mcp: invalid --harness value: ${value}; expected one of: ${HARNESS_IDS.join(", ")}\n` ``, exit 2.
+- CLI flag `--harness <id>` on `o2b mcp` (`main.ts` option table `"harness": { type: "string" }`, `command-manifest.ts` `flag("harness", "string")`). Invalid value: stderr `` `o2b mcp: invalid --harness value: ${JSON.stringify(value)}; expected one of: ${HARNESS_IDS.join(", ")}\n` ``, exit 2 (amended in review: the value is JSON-quoted, as in the `--host-target` refusal).
 - `MCPServerRuntimeOptions.harness?: HarnessId` and `MCPServerRuntimeOptions.workspaceDir?: string` (`main.ts` passes `process.cwd()` captured once).
 - `ServerContext.ruleScope?: RuleScopeSources` with `export interface RuleScopeSources { readonly workspaceDir: string | null; readonly harness: HarnessId | null }` in `src/mcp/tool-contract.ts`; the server sets `harness` to `resolveHarnessScope(opts.harness, opts.hostTarget)`.
 - `brain_context` output key (optional, present only when at least one file matched or the host notice applies): `scoped_rules: { scope: { project: string | null, harness: string | null, host: string | null }, files: Array<{ path: string, axis: "project" | "harness" | "host", truncated: boolean }> }`. Added to `BRAIN_CONTEXT_OUTPUT_SCHEMA`. No input property. Rendered only when `contextReach(ctx) === TRANSPORT_REACH.local`.

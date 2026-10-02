@@ -769,10 +769,12 @@ async function cmdMcp(argv: string[]): Promise<number> {
   // An unrecognised value is refused rather than dropped: silently
   // ignoring it would report the ceiling as unchecked on a host that
   // publishes one, which is the exact silence this flag exists to end.
+  // The refused value is echoed JSON-quoted, so a control character in
+  // it reaches stderr escaped.
   const hostTargetFlag = flags["host-target"] as string | undefined;
   if (hostTargetFlag !== undefined && !isInstallTargetId(hostTargetFlag)) {
     process.stderr.write(
-      `o2b mcp: invalid --host-target value: ${hostTargetFlag}; ` +
+      `o2b mcp: invalid --host-target value: ${JSON.stringify(hostTargetFlag)}; ` +
         `expected one of: ${INSTALL_TARGET_IDS.join(", ")}\n`,
     );
     return 2;
@@ -787,7 +789,7 @@ async function cmdMcp(argv: string[]): Promise<number> {
   const harnessFlag = flags["harness"] as string | undefined;
   if (harnessFlag !== undefined && !isHarnessId(harnessFlag)) {
     process.stderr.write(
-      `o2b mcp: invalid --harness value: ${harnessFlag}; ` +
+      `o2b mcp: invalid --harness value: ${JSON.stringify(harnessFlag)}; ` +
         `expected one of: ${HARNESS_IDS.join(", ")}\n`,
     );
     return 2;

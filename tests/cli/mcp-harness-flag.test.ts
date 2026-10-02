@@ -20,11 +20,22 @@ describe("o2b mcp --harness", () => {
     const res = await runCli(["mcp", "--harness", "nope"], { stdin: "" });
     expect(res.returncode).toBe(2);
     expect(res.stderr).toBe(
-      `o2b mcp: invalid --harness value: nope; expected one of: ${HARNESS_IDS.join(", ")}\n`,
+      `o2b mcp: invalid --harness value: "nope"; expected one of: ${HARNESS_IDS.join(", ")}\n`,
     );
     const offered = tokensOf(res.stderr);
     for (const id of HARNESS_IDS) {
       expect(`${id} offered: ${offered.has(id)}`).toBe(`${id} offered: true`);
+    }
+  });
+
+  test("a refused value is echoed JSON-quoted, control characters escaped", async () => {
+    const value = "x\u001b[31my\nz";
+    for (const flag of ["--harness", "--host-target"]) {
+      const res = await runCli(["mcp", flag, value], { stdin: "" });
+      expect(res.returncode).toBe(2);
+      expect(res.stderr).toStartWith(`o2b mcp: invalid ${flag} value: ${JSON.stringify(value)}; `);
+      expect(res.stderr).not.toContain("\u001b");
+      expect(res.stderr.split("\n").length).toBe(2);
     }
   });
 
