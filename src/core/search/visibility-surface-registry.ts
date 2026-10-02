@@ -740,8 +740,9 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "before the page is read or written: list keeps only the obligations the caller may read, " +
       "show answers a withheld slug as an absent one ({present: false}), and done and remove " +
       "refuse it with the 'no obligation' error an absent slug gets, so the page is neither " +
-      "completed nor archived. Residual: add over a taken slug is refused whoever may read the " +
-      "page, because creating it would replace the withheld page.",
+      "completed nor archived. Below local reach remove leaves the archive name, which steps " +
+      "past withheld archived pages, out of the answer. Residual: add over a taken slug is " +
+      "refused whoever may read the page, because creating it would replace the withheld page.",
   },
   {
     surface: "brain_agenda",

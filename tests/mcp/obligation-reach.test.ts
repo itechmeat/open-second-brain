@@ -8,7 +8,8 @@
  * A server with no reach minted is a remote caller: `list`, `show`,
  * `done` and `remove` over the two vaults must answer identically once
  * the volatile parts are masked, and the withheld page must stay
- * untouched. The local control proves the withheld page is there to
+ * untouched. Vault A also holds a withheld archived page of the public
+ * obligation's slug, which removing the public one must not reveal. The local control proves the withheld page is there to
  * hide.
  */
 
@@ -17,7 +18,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { addObligation } from "../../src/core/brain/obligations.ts";
+import { addObligation, removeObligation } from "../../src/core/brain/obligations.ts";
 import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts";
 import {
@@ -30,6 +31,7 @@ import {
 const PRIVATE_TITLE = "Zzreservedduty";
 const PRIVATE_SLUG = "zzreservedduty";
 const PUBLIC_TITLE = "Water the plants";
+const PUBLIC_SLUG = "water-the-plants";
 const RESERVE_LINE = `visibility: [${REMOTE_DENY_VISIBILITY_TOKEN}]`;
 const AGENT = "claude";
 
@@ -51,15 +53,25 @@ function fixture(withPrivate: boolean): Vault {
   const base = mkdtempSync(join(tmpdir(), "o2b-obligation-reach-"));
   bases.push(base);
   const f = buildReachLogFixture(base, withPrivate);
+  if (withPrivate) {
+    // An earlier page of the public slug, archived and withheld.
+    addObligation(f.vault, { title: PUBLIC_TITLE, cadence: "daily", agent: AGENT });
+    reserve(removeObligation(f.vault, PUBLIC_SLUG).archivePath);
+  }
   addObligation(f.vault, { title: PUBLIC_TITLE, cadence: "weekly", agent: AGENT });
   const privatePage = join(f.vault, "Brain", "obligations", `${PRIVATE_SLUG}.md`);
   if (withPrivate) {
     addObligation(f.vault, { title: PRIVATE_TITLE, cadence: "weekly", agent: AGENT });
-    const text = readFileSync(privatePage, "utf8");
-    const close = text.indexOf("\n---\n", "---\n".length);
-    writeFileSync(privatePage, `${text.slice(0, close)}\n${RESERVE_LINE}${text.slice(close)}`);
+    reserve(privatePage);
   }
   return { ...f, privatePage };
+}
+
+/** Insert the reserve line before the closing frontmatter fence of `path`. */
+function reserve(path: string): void {
+  const text = readFileSync(path, "utf8");
+  const close = text.indexOf("\n---\n", "---\n".length);
+  writeFileSync(path, `${text.slice(0, close)}\n${RESERVE_LINE}${text.slice(close)}`);
 }
 
 /** The tool's masked answer, or the masked error message it threw. */
@@ -87,6 +99,7 @@ describe("brain_obligation answers at the caller's reach", () => {
       { operation: "show", slug: PRIVATE_SLUG },
       { operation: "done", slug: PRIVATE_SLUG },
       { operation: "remove", slug: PRIVATE_SLUG },
+      { operation: "remove", slug: PUBLIC_SLUG },
     ]) {
       // Sequential on purpose: each server reads the process-wide config
       // variable reachServer sets, so concurrent calls would race on it.
@@ -116,12 +129,10 @@ describe("brain_obligation answers at the caller's reach", () => {
     const a = fixture(true);
     const listed = await obligation(a, { operation: "list" });
     expect(listed).toContain(PUBLIC_TITLE);
-    expect(await obligation(a, { operation: "show", slug: "water-the-plants" })).toContain(
+    expect(await obligation(a, { operation: "show", slug: PUBLIC_SLUG })).toContain(
       '"present":true',
     );
-    expect(await obligation(a, { operation: "done", slug: "water-the-plants" })).toContain(
-      PUBLIC_TITLE,
-    );
+    expect(await obligation(a, { operation: "done", slug: PUBLIC_SLUG })).toContain(PUBLIC_TITLE);
   });
 
   test("local control: the operator's own shell lists and shows the withheld page", async () => {
@@ -130,6 +141,9 @@ describe("brain_obligation answers at the caller's reach", () => {
     expect(await obligation(a, { operation: "list" }, local)).toContain(PRIVATE_TITLE);
     expect(await obligation(a, { operation: "show", slug: PRIVATE_SLUG }, local)).toContain(
       PRIVATE_TITLE,
+    );
+    expect(await obligation(a, { operation: "remove", slug: PUBLIC_SLUG }, local)).toContain(
+      "archive_path",
     );
   });
 });

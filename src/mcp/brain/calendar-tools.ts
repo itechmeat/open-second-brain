@@ -115,6 +115,9 @@ function toolBrainObligation(
     }
     if (operation === "remove") {
       const removed = removeObligation(ctx.vault, slug);
+      // The archive name steps past every name already taken in archive/,
+      // readable or not, so below local reach it is left out of the answer.
+      if (readable !== undefined) return { operation, slug: removed.slug };
       return { operation, slug: removed.slug, archive_path: removed.archivePath };
     }
   } catch (err) {
