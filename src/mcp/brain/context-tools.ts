@@ -55,7 +55,7 @@ import { TOOL_ERROR_CODE, type ToolErrorCode } from "../tool-error-codes.ts";
 import { contextReach, type ServerContext, type ToolDefinition } from "../tool-contract.ts";
 import { VAULT_PATH_OUTPUT_SCHEMA, vaultPathField } from "../vault-path-field.ts";
 import { coerceStr, coerceInt, unknownOperationError } from "../coerce.ts";
-import { readableAtContextReach } from "./reach-readable.ts";
+import { readableAtContextReachOrUndefined } from "./reach-readable.ts";
 import { vaultRelativeSafe } from "./shared.ts";
 
 /**
@@ -430,8 +430,9 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
   // reader render, decided on its reach rather than on what is withheld,
   // and stamped with the generation already on disk.
   if (!error) {
+    const readable = readableAtContextReachOrUndefined(ctx);
     const reader = {
-      readable: readableAtContextReach(ctx),
+      ...(readable !== undefined ? { readable } : {}),
       restricted: contextReach(ctx) !== TRANSPORT_REACH.local,
       ...(ctx.agentName !== undefined ? { agentScope: ctx.agentName } : {}),
     };

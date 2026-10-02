@@ -57,7 +57,7 @@ import { BRAIN_LOG_EVENT_KIND_SET, type BrainLogEventKind } from "../../core/bra
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { contextReach } from "../tool-contract.ts";
-import { readableAtContextReach } from "./reach-readable.ts";
+import { readableAtContextReachOrUndefined } from "./reach-readable.ts";
 import { reachView } from "../../core/brain/reach-view.ts";
 import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { vaultPathField } from "../vault-path-field.ts";
@@ -647,11 +647,13 @@ async function toolBrainPreCompressPack(
   const receipt = receiptOptionsFromArgs("brain_pre_compress_pack", args, "pre_compress", "mcp");
   const telemetry = telemetryOptionsFromArgs("brain_pre_compress_pack", args, "mcp");
   const agentScope = coerceAgentScope(ctx, args, true);
+  const readable = readableAtContextReachOrUndefined(ctx);
   const pack = buildPreCompressPack(ctx.vault, {
     topK,
     // A preference the caller cannot read at its reach is absent from the
-    // head and from the top-K walk alike.
-    readable: readableAtContextReach(ctx),
+    // head and from the top-K walk alike; a caller from whom nothing can
+    // be withheld is handed no filter.
+    ...(readable !== undefined ? { readable } : {}),
     restricted: contextReach(ctx) !== TRANSPORT_REACH.local,
     ...(agentScope !== undefined ? { agentScope } : {}),
     ...(maxCharsPerMemory !== undefined ? { maxCharsPerMemory } : {}),

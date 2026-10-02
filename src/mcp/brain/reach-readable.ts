@@ -35,14 +35,28 @@ import { contextReach, type ServerContext } from "../tool-contract.ts";
 /** A vault-relative path test bound to one request's reach and owner. */
 export type ReadablePredicate = (rel: string) => boolean;
 
+/** Every path readable: the answer for a local reach with the ownership gate off. */
+const READ_EVERYTHING: ReadablePredicate = () => true;
+
 /**
  * The predicate for one request. Local reach with the ownership gate off
  * answers `true` without touching the filesystem.
  */
 export function readableAtContextReach(ctx: ServerContext): ReadablePredicate {
+  return readableAtContextReachOrUndefined(ctx) ?? READ_EVERYTHING;
+}
+
+/**
+ * The predicate for one request, or `undefined` when it would withhold
+ * nothing (local reach with the ownership gate off), so a reader that
+ * skips work for an absent filter can be handed no filter at all.
+ */
+export function readableAtContextReachOrUndefined(
+  ctx: ServerContext,
+): ReadablePredicate | undefined {
   const reach = contextReach(ctx);
   const scope = resolveOwnerScopeDelivery(ctx.vault, ctx.agentName).enforcedScope;
-  if (reach === TRANSPORT_REACH.local && scope === null) return () => true;
+  if (reach === TRANSPORT_REACH.local && scope === null) return undefined;
   const root = resolve(ctx.vault);
   const cache: FrontmatterCache = new Map();
   return (rel) =>
