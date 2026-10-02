@@ -192,6 +192,14 @@ describe("checkClaimQuotes - the report", () => {
     expect(res.report!.verified_in_block).toBe(1);
   });
 
+  test("a fabricated quote in CJK running text is checked and unquoted", () => {
+    const res = one({ text: "他说「完全捏造」。" });
+    expect(res.report!.findings).toEqual([
+      { claim: 0, outcome: QUOTE_CHECK_OUTCOME.notInSource, span: "完全捏造" },
+    ]);
+    expect(res.claims[0]!.text).toBe("他说完全捏造。");
+  });
+
   test("a CRLF source verifies a span that crosses its line break", () => {
     const crlf = { kind: "text", text: SOURCE.replaceAll("\n", "\r\n") } as const;
     const res = one(

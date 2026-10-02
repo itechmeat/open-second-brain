@@ -14,20 +14,42 @@
  * population (identity-key folding, pinned over the whole code-point space)
  * and is deliberately not reused for detection.
  *
- * PAIRING BY POSITION, NOT BY GLYPH. Which mark opens and which closes differs
- * between writing traditions (`»…«` and `«…»`, `„…“` and `“…”`), so a mark is
- * classified by what stands beside it: an opener follows the start, whitespace,
- * opening punctuation or another opener, and precedes a non-space; a closer
- * precedes the end, whitespace or punctuation, and follows a non-space. A mark
- * with a letter on both sides is an apostrophe in any script and is never a
- * delimiter. Pairing is a stack and only outermost spans are reported; an
- * inner quote is part of its outer span's text.
+ * DIRECTIONAL MARKS. A quotation mark whose general category is opening
+ * (`Ps`: low-9 marks, corner brackets) or closing (`Pe`) punctuation says
+ * which it is by itself: it opens before a non-space, closes after one, and
+ * is never an apostrophe, because CJK running text glues corner brackets to
+ * letters on both sides.
+ *
+ * PAIRING BY POSITION, NOT BY GLYPH. Which of the other marks opens and which
+ * closes differs between writing traditions (`»…«` and `«…»`, `„…“` and
+ * `“…”`), so such a mark is classified by what stands beside it: an opener
+ * follows the start, whitespace, punctuation (opening, dash or other, but not
+ * a mark that just closed) or another opener, and precedes a non-space; a
+ * closer precedes the end, whitespace or punctuation, and follows a
+ * non-space. One no-break, narrow no-break or thin space between a mark and
+ * its text is transparent (spaced guillemets); an ordinary space is not. A
+ * non-directional mark with a letter on both sides is an apostrophe in any
+ * script and is never a delimiter.
+ *
+ * PAIRING WITHIN ONE WIDTH. A closer pairs only with an opener of its own
+ * width class (double or single, by the shared quote fold; a directional mark
+ * pairs with either), so a trailing possessive apostrophe never ends a double
+ * quote: a single-width closer whose innermost opener is of the other class is
+ * not a delimiter, and a double-width closer skips (and counts as unpaired)
+ * any single-width openers left open inside it.
+ *
+ * WHAT IS REPORTED. Every closed pair is collected and only the outermost
+ * among the closed pairs are spans, so an opener that never closes (a leading
+ * apostrophe as in `'90s`) encloses nothing and hides no later quote; an
+ * inner quote is part of its outer span's text. A pair whose text holds fewer
+ * than two letters or digits (`rock 'n' roll`, an empty pair) is not a span.
  *
  * Unpaired marks are not spans: they are counted and left alone.
  */
 
 import {
   foldQuoteVariantsByClass,
+  QUOTE_VARIANT_FOLD_TARGET,
   QUOTE_VARIANT_FOLD_TARGET_DOUBLE,
 } from "../entities/canonical.ts";
 import { listItemLines, LIST_ITEM_RE } from "./block-resolve.ts";
@@ -52,10 +74,19 @@ export interface QuoteSpanScan {
 }
 
 const LETTER_RE = /\p{L}/u;
-const WHITESPACE_RE = /\s/u;
 const LETTER_OR_DIGIT_RE = /[\p{L}\p{N}]/u;
-const OPENING_PUNCTUATION_RE = /[\p{Ps}\p{Pi}]/u;
+const WHITESPACE_RE = /\s/u;
+/** What may stand before an opener: opening, dash or other punctuation. */
+const OPENING_CONTEXT_RE = /[\p{Ps}\p{Pi}\p{Pd}\p{Po}]/u;
 const PUNCTUATION_RE = /\p{P}/u;
+const DIRECTIONAL_OPEN_RE = /\p{Ps}/u;
+const DIRECTIONAL_CLOSE_RE = /\p{Pe}/u;
+/** No-break, narrow no-break and thin space: transparent once beside a mark. */
+const INNER_QUOTE_SPACE_RE = /[   ]/u;
+/** A span needs at least this many letters or digits between its marks. */
+const SPAN_MIN_LETTERS_OR_DIGITS = 2;
+/** The width class of a directional mark: it pairs with either width. */
+const ANY_WIDTH = "any";
 
 /** One code point and its UTF-16 offset. */
 interface CodePointAt {
@@ -76,70 +107,166 @@ function codePoints(text: string): ReadonlyArray<CodePointAt> {
 const isLetter = (ch: string | undefined): boolean => ch !== undefined && LETTER_RE.test(ch);
 const isSpace = (ch: string | undefined): boolean => ch !== undefined && WHITESPACE_RE.test(ch);
 
-/** How a mark may act, decided by its two neighbours. */
+/** The width class a mark pairs within: the shared fold, or any for a directional mark. */
+function widthClass(ch: string): string {
+  return DIRECTIONAL_OPEN_RE.test(ch) || DIRECTIONAL_CLOSE_RE.test(ch)
+    ? ANY_WIDTH
+    : foldQuoteVariantsByClass(ch);
+}
+
+const sameWidth = (a: string, b: string): boolean => a === b || a === ANY_WIDTH || b === ANY_WIDTH;
+
+/** How a mark may act, decided by its neighbours; `null` for an apostrophe. */
 interface MarkRole {
   readonly opens: boolean;
   readonly closes: boolean;
 }
 
+/** The neighbour on one side, looking through one typographic inner space. */
+function neighbour(
+  points: ReadonlyArray<CodePointAt>,
+  i: number,
+  step: 1 | -1,
+): string | undefined {
+  const near = points[i + step]?.ch;
+  return near !== undefined && INNER_QUOTE_SPACE_RE.test(near) ? points[i + 2 * step]?.ch : near;
+}
+
 function markRole(
-  prev: string | undefined,
-  next: string | undefined,
+  points: ReadonlyArray<CodePointAt>,
+  i: number,
   prevOpened: boolean,
-): MarkRole {
-  const opens =
-    (prev === undefined || isSpace(prev) || OPENING_PUNCTUATION_RE.test(prev) || prevOpened) &&
-    next !== undefined &&
-    !isSpace(next);
+  prevClosed: boolean,
+): MarkRole | null {
+  const ch = points[i]!.ch;
+  const prev = points[i - 1]?.ch;
+  const next = points[i + 1]?.ch;
+  const textAfter = neighbour(points, i, 1);
+  const textBefore = neighbour(points, i, -1);
+  if (DIRECTIONAL_OPEN_RE.test(ch)) {
+    return { opens: textAfter !== undefined && !isSpace(textAfter), closes: false };
+  }
+  if (DIRECTIONAL_CLOSE_RE.test(ch)) {
+    return { opens: false, closes: textBefore !== undefined && !isSpace(textBefore) };
+  }
+  if (isLetter(prev) && isLetter(next)) return null;
+  const opensAfter =
+    prev === undefined ||
+    isSpace(prev) ||
+    prevOpened ||
+    (!prevClosed && OPENING_CONTEXT_RE.test(prev));
+  const opens = opensAfter && textAfter !== undefined && !isSpace(textAfter);
   const closes =
     (next === undefined || isSpace(next) || PUNCTUATION_RE.test(next)) &&
-    prev !== undefined &&
-    !isSpace(prev);
+    textBefore !== undefined &&
+    !isSpace(textBefore);
   return { opens, closes };
+}
+
+/** An opener still waiting for its closer. */
+interface OpenMark {
+  readonly at: number;
+  readonly width: string;
 }
 
 /** Find the outermost quoted spans of `text`. See the module docblock. */
 export function findQuoteSpans(text: string): QuoteSpanScan {
   const points = codePoints(text);
-  const spans: QuoteSpan[] = [];
-  const stack: number[] = [];
+  const pairs: QuoteSpan[] = [];
+  const stack: OpenMark[] = [];
+  // Open marks per width class, so a closer with no opener of its class is
+  // answered without walking the stack.
+  const openByWidth = new Map<string, number>();
+  const bump = (width: string, by: number): void => {
+    openByWidth.set(width, (openByWidth.get(width) ?? 0) + by);
+  };
   let unpaired = 0;
   let prevOpened = false;
+  let prevClosed = false;
+
+  /** The stack index of the opener `width` closes, or -1. */
+  const openerFor = (width: string): number => {
+    const top = stack.length - 1;
+    if (top < 0) return -1;
+    // A single-width closer closes only the innermost opener: anything else
+    // there makes it an apostrophe (`"the students' work"`).
+    if (width === QUOTE_VARIANT_FOLD_TARGET) return sameWidth(stack[top]!.width, width) ? top : -1;
+    if (
+      width !== ANY_WIDTH &&
+      (openByWidth.get(width) ?? 0) + (openByWidth.get(ANY_WIDTH) ?? 0) === 0
+    ) {
+      return -1;
+    }
+    for (let k = top; k >= 0; k--) if (sameWidth(stack[k]!.width, width)) return k;
+    return -1;
+  };
 
   for (let i = 0; i < points.length; i++) {
-    const point = points[i];
-    if (point === undefined || !QUOTATION_MARK_RE.test(point.ch)) {
+    const point = points[i]!;
+    if (!QUOTATION_MARK_RE.test(point.ch)) {
       prevOpened = false;
+      prevClosed = false;
       continue;
     }
-    const prev = points[i - 1]?.ch;
-    const next = points[i + 1]?.ch;
-    if (isLetter(prev) && isLetter(next)) {
-      prevOpened = false;
-      continue;
-    }
-    const role = markRole(prev, next, prevOpened);
+    const role = markRole(points, i, prevOpened, prevClosed);
     prevOpened = false;
+    prevClosed = false;
+    if (role === null) continue;
+    const width = widthClass(point.ch);
     if (role.closes && (stack.length > 0 || !role.opens)) {
-      const open = stack.pop();
-      if (open === undefined) {
+      const k = openerFor(width);
+      if (k !== -1) {
+        // Openers left open inside this pair (a leading apostrophe) are
+        // abandoned and counted once, here.
+        for (let j = stack.length - 1; j > k; j--) bump(stack[j]!.width, -1);
+        unpaired += stack.length - 1 - k;
+        const open = stack[k]!;
+        stack.length = k;
+        bump(open.width, -1);
+        const inner = text.slice(open.at + codePointLength(text, open.at), point.at);
+        pairs.push({ open: open.at, close: point.at, inner });
+        prevClosed = true;
+        continue;
+      }
+      if (!role.opens) {
         unpaired += 1;
         continue;
       }
-      if (stack.length === 0) {
-        const inner = text.slice(open + codePointLength(text, open), point.at);
-        if (inner.trim().length > 0) spans.push({ open, close: point.at, inner });
-      }
-      continue;
     }
     if (role.opens) {
-      stack.push(point.at);
+      stack.push({ at: point.at, width });
+      bump(width, 1);
       prevOpened = true;
       continue;
     }
     unpaired += 1;
   }
-  return { spans, unpaired: unpaired + stack.length };
+  unpaired += stack.length;
+
+  // Outermost among the CLOSED pairs. Pairs never cross (a stack made them),
+  // so in opening order a pair is enclosed exactly when an earlier one closes
+  // after it.
+  const spans: QuoteSpan[] = [];
+  let reach = -1;
+  for (const pair of pairs.toSorted((a, b) => a.open - b.open)) {
+    if (pair.close < reach) continue;
+    reach = pair.close;
+    if (!hasLettersOrDigits(pair.inner, SPAN_MIN_LETTERS_OR_DIGITS)) {
+      unpaired += 2;
+      continue;
+    }
+    spans.push(pair);
+  }
+  return { spans, unpaired };
+}
+
+/** Does `text` hold at least `min` letters or digits? Stops counting at `min`. */
+function hasLettersOrDigits(text: string, min: number): boolean {
+  let count = 0;
+  for (const ch of text) {
+    if (LETTER_OR_DIGIT_RE.test(ch) && ++count >= min) return true;
+  }
+  return false;
 }
 
 /** Length in UTF-16 units of the code point at `at`. */

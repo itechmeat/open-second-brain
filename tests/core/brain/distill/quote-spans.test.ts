@@ -63,8 +63,12 @@ describe("findQuoteSpans", () => {
     }
   });
 
-  test("a mark between two letters of any script is never a delimiter", () => {
-    for (const [, close] of PAIRS) {
+  test("a non-directional mark between two letters of any script is never a delimiter", () => {
+    // Corner brackets and low-9 marks carry their direction in their own
+    // category (Ps/Pe) and are never apostrophes; they are covered below.
+    const ambiguous = PAIRS.filter(([, close]) => !/[\p{Ps}\p{Pe}]/u.test(cp(close)));
+    expect(ambiguous.length).toBeGreaterThan(0);
+    for (const [, close] of ambiguous) {
       for (const left of LETTERS) {
         for (const right of LETTERS) {
           const scan = findQuoteSpans(`${left}${cp(close)}${right}`);
@@ -99,6 +103,103 @@ describe("findQuoteSpans", () => {
     expect(findQuoteSpans(`x ${cp(0x201c)} ${cp(0x201d)} y`).spans).toHaveLength(0);
   });
 
+  test("corner brackets glued to letters on both sides still pair (CJK running text)", () => {
+    const han = [0x4ed6, 0x8bf4].map(cp).join("");
+    const inner = [0x4f60, 0x597d].map(cp).join("");
+    for (const [open, close] of [
+      [0x300c, 0x300d],
+      [0x300e, 0x300f],
+    ] as const) {
+      const scan = findQuoteSpans(`${han}${cp(open)}${inner}${cp(close)}${cp(0x3002)}`);
+      expect(scan.spans.map((s) => s.inner)).toEqual([inner]);
+      expect(scan.unpaired).toBe(0);
+    }
+  });
+
+  test("an opener that never closes does not hide a later quote", () => {
+    const scan = findQuoteSpans(`the '90s were "great"`);
+    expect(scan.spans.map((s) => s.inner)).toEqual(["great"]);
+    expect(scan.unpaired).toBe(1);
+  });
+
+  test("a lone closer is unpaired and not a span", () => {
+    const scan = findQuoteSpans(`said today${cp(0x201d)}`);
+    expect(scan.spans).toHaveLength(0);
+    expect(scan.unpaired).toBe(1);
+  });
+
+  test("guillemets with inner spaces are counted as unpaired, never as a span", () => {
+    const scan = findQuoteSpans(`Il a dit ${cp(0xab)} bonjour ${cp(0xbb)} hier.`);
+    expect(scan.spans).toHaveLength(0);
+    expect(scan.unpaired).toBe(2);
+  });
+
+  test("corner brackets pair in CJK running text after letters and full-width punctuation", () => {
+    for (const [text, inner] of [
+      ["他说「你好」。", "你好"],
+      ["他说：「你好」。", "你好"],
+      ["「こんにちは」と言った", "こんにちは"],
+    ] as const) {
+      const scan = findQuoteSpans(text);
+      expect(scan.spans.map((s) => s.inner)).toEqual([inner]);
+      expect(scan.unpaired).toBe(0);
+    }
+  });
+
+  test("a possessive apostrophe never closes a double quote, and unquoting keeps it", () => {
+    const text = `"the students' work" is fine`;
+    const scan = findQuoteSpans(text);
+    expect(scan.spans.map((s) => s.inner)).toEqual(["the students' work"]);
+    expect(unquoteSpans(text, scan.spans)).toBe("the students' work is fine");
+  });
+
+  test("a single-width opener left open inside a double quote does not hide it", () => {
+    const scan = findQuoteSpans(`"back in the '90s it was" ok`);
+    expect(scan.spans.map((s) => s.inner)).toEqual(["back in the '90s it was"]);
+    expect(scan.unpaired).toBe(1);
+  });
+
+  test("an opener directly after a dash or a colon opens", () => {
+    expect(findQuoteSpans(`${cp(0x2014)}"quote" here`).spans.map((s) => s.inner)).toEqual([
+      "quote",
+    ]);
+    expect(findQuoteSpans(`He said:"xy"`).spans.map((s) => s.inner)).toEqual(["xy"]);
+    const scan = findQuoteSpans(
+      `${cp(0x201c)}Aa${cp(0x201d)}${cp(0x2014)}${cp(0x201c)}Bb${cp(0x201d)}`,
+    );
+    expect(scan.spans.map((s) => s.inner)).toEqual(["Aa", "Bb"]);
+    expect(scan.unpaired).toBe(0);
+  });
+
+  test("one no-break, narrow no-break or thin space inside guillemets is transparent", () => {
+    for (const space of [0xa0, 0x202f, 0x2009].map(cp)) {
+      const scan = findQuoteSpans(`Il a dit ${cp(0xab)}${space}bonjour${space}${cp(0xbb)} hier.`);
+      expect(scan.spans.map((s) => s.inner.trim())).toEqual(["bonjour"]);
+      expect(scan.unpaired).toBe(0);
+    }
+  });
+
+  test("a pair holding fewer than two letters or digits is not a span", () => {
+    const scan = findQuoteSpans(`rock 'n' roll`);
+    expect(scan.spans).toHaveLength(0);
+    expect(scan.unpaired).toBe(2);
+    expect(findQuoteSpans(`said "ok" twice`).spans.map((s) => s.inner)).toEqual(["ok"]);
+  });
+
+  test("stays linear on long runs of marks", () => {
+    const size = 256 * 1024;
+    for (const text of [
+      `${" 'a".repeat(size / 3)} "x"`,
+      `"ab" `.repeat(size / 5),
+      cp(0x201c).repeat(size),
+      `${" 'a".repeat(size / 6)}${'b" '.repeat(size / 6)}`,
+    ]) {
+      const started = performance.now();
+      findQuoteSpans(text);
+      expect(performance.now() - started).toBeLessThan(200);
+    }
+  });
+
   test("two quotes in one text are two spans in order", () => {
     const scan = findQuoteSpans(`"one" and "two".`);
     expect(scan.spans.map((s) => s.inner)).toEqual(["one", "two"]);
@@ -107,11 +208,11 @@ describe("findQuoteSpans", () => {
 
 describe("unquoteSpans", () => {
   test("removes exactly the two marks of each span and keeps every other byte", () => {
-    const text = `A ${cp(0x201e)}b c${cp(0x201c)}, then "d" and it${cp(0x2019)}s "e`;
+    const text = `A ${cp(0x201e)}b c${cp(0x201c)}, then "dd" and it${cp(0x2019)}s "e`;
     const scan = findQuoteSpans(text);
     expect(scan.spans).toHaveLength(2);
     expect(scan.unpaired).toBe(1);
-    expect(unquoteSpans(text, scan.spans)).toBe(`A b c, then d and it${cp(0x2019)}s "e`);
+    expect(unquoteSpans(text, scan.spans)).toBe(`A b c, then dd and it${cp(0x2019)}s "e`);
   });
 
   test("removing a subset leaves the other spans quoted", () => {
