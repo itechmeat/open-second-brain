@@ -39,3 +39,24 @@ test("evaluateSurfacingGate honours an explicit recall request", () => {
     reason: "explicit",
   });
 });
+
+test("evaluateSurfacingGate admits a multi-line prompt that starts with a command name", () => {
+  // The line-break test runs on the raw prompt: normalisation collapses
+  // whitespace, so a test on the normalised text could never see one.
+  expect(evaluateSurfacingGate({ prompt: "git status\nwhy does this fail" })).toEqual({
+    retrieve: true,
+    reason: "default_retrieve",
+  });
+  expect(evaluateSurfacingGate({ prompt: "git status\r\nwhy does this fail" }).reason).toBe(
+    "default_retrieve",
+  );
+  expect(evaluateSurfacingGate({ prompt: "git status" }).reason).toBe("shell_command");
+  expect(evaluateSurfacingGate({ prompt: "$ ls -la" }).reason).toBe("shell_command");
+  // A trailing line break alone does not make a one-line command multi-line.
+  expect(evaluateSurfacingGate({ prompt: "git status\n" }).reason).toBe("shell_command");
+  // Documented residue: a single-line prompt that starts with a command
+  // name is still skipped, even when the rest of it is prose.
+  expect(evaluateSurfacingGate({ prompt: "git push keeps failing after the rebase" }).reason).toBe(
+    "shell_command",
+  );
+});
