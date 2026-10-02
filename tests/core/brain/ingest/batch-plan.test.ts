@@ -15,7 +15,12 @@ import { tmpdir } from "node:os";
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
 import { updateManifest } from "../../../../src/core/brain/ingest/content-manifest.ts";
-import { planBatches, type BatchPlan } from "../../../../src/core/brain/ingest/batch-plan.ts";
+import {
+  DEFAULT_INGESTIBLE_EXTENSIONS as PLANNER_DEFAULT_EXTENSIONS,
+  planBatches,
+  type BatchPlan,
+} from "../../../../src/core/brain/ingest/batch-plan.ts";
+import { DEFAULT_INGESTIBLE_EXTENSIONS } from "../../../../src/core/brain/ingest/source-formats.ts";
 import { recordCompleted } from "../../../../src/core/brain/ingest/checkpoint.ts";
 import { SKIPPED_PAGE_REASON } from "../../../../src/core/brain/ingest/extractable-gate.ts";
 import { serializeBatchPlan } from "../../../../src/mcp/brain/ingest-tools.ts";
@@ -289,25 +294,25 @@ describe("planBatches — typed skip reasons + per-reason counts (P4)", () => {
 describe("planBatches — unclassifiable files (P4)", () => {
   test("counts files dropped for a non-ingestible extension, per extension", () => {
     writeSized("Docs/a.md", 50);
-    writeSized("Docs/pic.png", 50);
-    writeSized("Docs/data.csv", 50);
+    writeSized("Docs/pic.bin", 50);
+    writeSized("Docs/data.dat", 50);
 
     const plan = planBatches(vault, "Docs", CAPS);
     expect(plan.unclassifiable.total).toBe(2);
-    expect(plan.unclassifiable.byExtension).toEqual({ ".png": 1, ".csv": 1 });
+    expect(plan.unclassifiable.byExtension).toEqual({ ".bin": 1, ".dat": 1 });
 
     // Counting must not alter the discovered set: the plan id (derived from
     // the ingestible set) is the same with and without the foreign files.
-    rmSync(join(vault, "Docs", "pic.png"));
-    rmSync(join(vault, "Docs", "data.csv"));
+    rmSync(join(vault, "Docs", "pic.bin"));
+    rmSync(join(vault, "Docs", "data.dat"));
     expect(planBatches(vault, "Docs", CAPS).planId).toBe(plan.planId);
   });
 
   test("hidden entries and ignore-rule matches are excluded by declaration, not counted", () => {
     writeSized("Docs/a.md", 50);
-    writeSized("Docs/.hidden.png", 50);
-    writeSized("Docs/.hid/x.png", 50);
-    writeSized("Docs/node_modules/lib/x.png", 50);
+    writeSized("Docs/.hidden.bin", 50);
+    writeSized("Docs/.hid/x.bin", 50);
+    writeSized("Docs/node_modules/lib/x.bin", 50);
     writeFileSync(join(vault, "Docs", ".gitignore"), "node_modules/\n", "utf8");
 
     const plan = planBatches(vault, "Docs", CAPS);
@@ -320,12 +325,113 @@ describe("planBatches — unclassifiable files (P4)", () => {
     const clean = planBatches(vault, "Docs", CAPS);
     expect("unclassifiable" in serializeBatchPlan(clean)).toBe(false);
 
-    writeSized("Docs/pic.png", 50);
-    writeSized("Docs/data.csv", 50);
+    writeSized("Docs/pic.bin", 50);
+    writeSized("Docs/data.dat", 50);
     const withDrops = planBatches(vault, "Docs", CAPS);
     expect(serializeBatchPlan(withDrops)["unclassifiable"]).toEqual({
       total: 2,
-      by_extension: { ".png": 1, ".csv": 1 },
+      by_extension: { ".bin": 1, ".dat": 1 },
     });
+  });
+});
+
+describe("planBatches — source formats", () => {
+  test("plans HTML and CSV with their format, names PDF and images as format skips, counts the rest", () => {
+    writeSized("Clips/notes.md", 15);
+    writeSized("Clips/page.html", 40);
+    writeSized("Clips/parts.csv", 22);
+    writeSized("Clips/report.pdf", 9);
+    writeSized("Clips/shot.png", 12);
+    writeSized("Clips/blob.bin", 3);
+
+    const plan = planBatches(vault, "Clips", CAPS);
+    expect(plan.batches.flatMap((b) => b.files)).toEqual([
+      { path: "Clips/notes.md", bytes: 15, status: "new" },
+      { path: "Clips/page.html", bytes: 40, status: "new", format: "html" },
+      { path: "Clips/parts.csv", bytes: 22, status: "new", format: "csv" },
+    ]);
+    expect(plan.skippedNonExtractable).toEqual([
+      { path: "Clips/report.pdf", reason: SKIPPED_PAGE_REASON.formatNotExtractable, detail: "pdf" },
+      { path: "Clips/shot.png", reason: SKIPPED_PAGE_REASON.formatNotExtractable, detail: "image" },
+    ]);
+    expect(plan.skipReasonCounts).toEqual({ [SKIPPED_PAGE_REASON.formatNotExtractable]: 2 });
+    expect(plan.unclassifiable).toEqual({ total: 1, byExtension: { ".bin": 1 } });
+  });
+
+  test("format skips precede schema skips, each sorted by path", () => {
+    page("Mixed/b.md", "memo");
+    page("Mixed/a.md", "paper");
+    writeSized("Mixed/z.pdf", 9);
+    writeSized("Mixed/c.docx", 9);
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\nschema:\n  page_types:\n    - paper\n    - memo\n  extractable:\n    - paper\n",
+      "utf8",
+    );
+
+    const plan = planBatches(vault, "Mixed", CAPS);
+    expect(plan.skippedNonExtractable.map((s) => [s.path, s.reason, s.detail])).toEqual([
+      ["Mixed/c.docx", "format-not-extractable", "docx"],
+      ["Mixed/z.pdf", "format-not-extractable", "pdf"],
+      ["Mixed/b.md", "schema-type-not-extractable", "memo"],
+    ]);
+    expect(Object.keys(plan.skipReasonCounts)).toEqual([
+      "format-not-extractable",
+      "schema-type-not-extractable",
+    ]);
+  });
+
+  test("a caller's extensions override that lists .pdf plans it, with its format", () => {
+    writeSized("Clips/notes.md", 15);
+    writeSized("Clips/report.pdf", 9);
+
+    const plan = planBatches(vault, "Clips", { ...CAPS, extensions: [".md", ".pdf"] });
+    expect(plan.batches.flatMap((b) => b.files)).toEqual([
+      { path: "Clips/notes.md", bytes: 15, status: "new" },
+      { path: "Clips/report.pdf", bytes: 9, status: "new", format: "pdf" },
+    ]);
+    expect(plan.skippedNonExtractable).toEqual([]);
+  });
+
+  test("a Markdown-only tree serializes with no format key and no skip keys", () => {
+    writeSized("Docs/a.md", 10);
+    writeSized("Docs/b.txt", 20);
+
+    const wire = serializeBatchPlan(planBatches(vault, "Docs", CAPS));
+    expect(wire["batches"]).toEqual([
+      {
+        index: 0,
+        total_bytes: 30,
+        files: [
+          { path: "Docs/a.md", bytes: 10, status: "new" },
+          { path: "Docs/b.txt", bytes: 20, status: "new" },
+        ],
+      },
+    ]);
+    expect(Object.keys(wire)).toEqual([
+      "source_dir",
+      "max_batch_bytes",
+      "max_batch_files",
+      "total_files",
+      "total_bytes",
+      "skipped",
+      "plan_id",
+      "resumed_completed",
+      "batches",
+    ]);
+  });
+
+  test("a planned non-text file serializes format right after status", () => {
+    writeSized("Clips/page.html", 40);
+
+    const wire = serializeBatchPlan(planBatches(vault, "Clips", CAPS));
+    const files = (wire["batches"] as Array<{ files: Array<Record<string, unknown>> }>)[0]!.files;
+    expect(JSON.stringify(files[0])).toBe(
+      '{"path":"Clips/page.html","bytes":40,"status":"new","format":"html"}',
+    );
+  });
+
+  test("the planner re-exports the registry's default extensions", () => {
+    expect(PLANNER_DEFAULT_EXTENSIONS).toBe(DEFAULT_INGESTIBLE_EXTENSIONS);
   });
 });

@@ -208,14 +208,14 @@ describe("o2b brain batch-plan skip-reason counts (P4)", () => {
 describe("o2b brain batch-plan unclassifiable counts (P4)", () => {
   test("the human surface renders the per-extension counts", async () => {
     write("mono/a.md");
-    write("mono/pic.png", "binary");
-    write("mono/data.csv", "a,b\n");
+    write("mono/pic.bin", "binary");
+    write("mono/data.dat", "a,b\n");
 
     const res = await runCli(["brain", "batch-plan", "mono"], { env: ENV() });
     expect(res.returncode).toBe(0);
     expect(res.stdout).toContain("2 unclassifiable file(s)");
-    expect(res.stdout).toContain(".png: 1");
-    expect(res.stdout).toContain(".csv: 1");
+    expect(res.stdout).toContain(".bin: 1");
+    expect(res.stdout).toContain(".dat: 1");
   });
 
   test("a tree with no unclassifiable files renders no count and carries no key on the wire", async () => {
@@ -233,12 +233,66 @@ describe("o2b brain batch-plan unclassifiable counts (P4)", () => {
 
   test("the --json payload carries the total and per-extension counts", async () => {
     write("mono/a.md");
-    write("mono/pic.png", "binary");
-    write("mono/data.csv", "a,b\n");
+    write("mono/pic.bin", "binary");
+    write("mono/data.dat", "a,b\n");
 
     const res = await runCli(["brain", "batch-plan", "mono", "--json"], { env: ENV() });
     expect(res.returncode).toBe(0);
     const plan = JSON.parse(res.stdout);
-    expect(plan.unclassifiable).toEqual({ total: 2, by_extension: { ".png": 1, ".csv": 1 } });
+    expect(plan.unclassifiable).toEqual({ total: 2, by_extension: { ".bin": 1, ".dat": 1 } });
+  });
+});
+
+describe("o2b brain batch-plan source formats", () => {
+  const PAGE_HTML =
+    "<html><head><title>Release notes</title></head><body><h1>Overview</h1><p>Fish &amp; chips</p><h2>Install</h2><p>Run it.</p></body></html>\n";
+
+  function clips(): void {
+    write("Clips/page.html", PAGE_HTML);
+    write("Clips/parts.csv", "name,qty\nbolt,4\nnut,7\n");
+    write("Clips/report.pdf", "%PDF-1.7\n");
+    write("Clips/blob.bin", "abc");
+    write("Clips/notes.md", "# Notes\n\nHello\n");
+  }
+
+  test("the text surface lists the planned format and names the format skip", async () => {
+    clips();
+    const res = await runCli(["brain", "batch-plan", "Clips"], { env: ENV() });
+    expect(res.returncode).toBe(0);
+    const body = res.stdout.replace(/\(plan [0-9a-f]+\)/, "(plan <plan id>)");
+    expect(body).toContain(
+      [
+        "batch-plan: Clips (plan <plan id>)",
+        "  3 file(s) to ingest in 1 batch(es); 0 unchanged skipped",
+        "  batch 0: 3 file(s), 175 byte(s)",
+        "    - Clips/notes.md (new, 15B)",
+        "    - Clips/page.html (new, 138B, html)",
+        "    - Clips/parts.csv (new, 22B, csv)",
+        "  1 non-extractable page(s) skipped:",
+        "    - Clips/report.pdf (format-not-extractable: pdf)",
+        "    by reason: format-not-extractable=1",
+        "  1 unclassifiable file(s) not planned, by extension:",
+        "    - .bin: 1",
+      ].join("\n"),
+    );
+  });
+
+  test("--json carries format on the planned file and the format skip", async () => {
+    clips();
+    const res = await runCli(["brain", "batch-plan", "Clips", "--json"], { env: ENV() });
+    expect(res.returncode).toBe(0);
+    const plan = JSON.parse(res.stdout);
+    expect(plan.total_files).toBe(3);
+    expect(plan.total_bytes).toBe(175);
+    expect(plan.skipped_non_extractable).toEqual([
+      { path: "Clips/report.pdf", reason: "format-not-extractable", detail: "pdf" },
+    ]);
+    expect(plan.skip_reason_counts).toEqual({ "format-not-extractable": 1 });
+    expect(plan.unclassifiable).toEqual({ total: 1, by_extension: { ".bin": 1 } });
+    expect(plan.batches[0].files).toEqual([
+      { path: "Clips/notes.md", bytes: 15, status: "new" },
+      { path: "Clips/page.html", bytes: 138, status: "new", format: "html" },
+      { path: "Clips/parts.csv", bytes: 22, status: "new", format: "csv" },
+    ]);
   });
 });

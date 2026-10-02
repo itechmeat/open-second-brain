@@ -64,25 +64,28 @@ import { classifyPaths, readManifest } from "./content-manifest.ts";
 import {
   extractableAllowlist,
   partitionExtractable,
+  SKIPPED_PAGE_REASON,
   SKIPPED_PAGE_REASONS,
   type SkippedPage,
   type SkippedPageReason,
 } from "./extractable-gate.ts";
+import {
+  DEFAULT_INGESTIBLE_EXTENSIONS,
+  SOURCE_FORMAT,
+  SOURCE_FORMAT_BY_EXTENSION,
+  sourceFormatOf,
+  sourceFormatSpec,
+  type SourceFormat,
+} from "./source-formats.ts";
 
 /**
- * Default set of ingestible (text-bearing) extensions, lowercase with the dot.
- * Deliberately conservative - the pipeline runs no OCR/binary path, so only
- * plain-text and lightweight-markup document formats qualify. Callers may
- * override via {@link BatchPlanOptions.extensions}.
+ * Default set of ingestible extensions, lowercase with the dot: every
+ * extension the source format registry gives an extractor, the six text
+ * extensions first. Callers may override via
+ * {@link BatchPlanOptions.extensions}. Re-exported under the planner's
+ * historical name so nothing that iterates it reorders.
  */
-export const DEFAULT_INGESTIBLE_EXTENSIONS: readonly string[] = Object.freeze([
-  ".md",
-  ".markdown",
-  ".txt",
-  ".text",
-  ".rst",
-  ".org",
-]);
+export { DEFAULT_INGESTIBLE_EXTENSIONS };
 
 export interface BatchPlanOptions {
   /** Hard upper bound on the summed bytes of one batch (must be > 0). */
@@ -137,6 +140,12 @@ export interface PlannedFile {
   readonly bytes: number;
   /** Why the file is being ingested: absent from / differing in the manifest. */
   readonly status: "new" | "modified";
+  /**
+   * The file's registered format when it is not `text` (HTML, CSV, TSV, or a
+   * named format a caller's `extensions` override admitted). Absent for text
+   * and for an unregistered extension, so a Markdown plan is unchanged.
+   */
+  readonly format?: SourceFormat;
 }
 
 /** One bounded batch the caller dispatches as a single parallel unit. */
@@ -173,9 +182,11 @@ export interface BatchPlan {
   /** Canonical paths classified `unchanged` and therefore skipped, sorted. */
   readonly skipped: readonly string[];
   /**
-   * Pages skipped before extraction because their `schema_type` is not in the
-   * schema `extractable` allowlist (t_ed856388). Empty when the allowlist is
-   * unset (the gate is off), keeping the plan byte-identical to before.
+   * Files skipped before extraction: first every file whose format the
+   * source format registry names with no extractor (`format-not-extractable`,
+   * `detail` the format), sorted by path; then every page whose
+   * `schema_type` is not in the schema `extractable` allowlist (t_ed856388).
+   * Empty when neither applies, keeping the plan byte-identical to before.
    */
   readonly skippedNonExtractable: readonly SkippedPage[];
   /**
@@ -295,6 +306,7 @@ export function planBatches(vault: string, sourceDir: string, opts: BatchPlanOpt
   // root inside an ignored subtree discovers nothing and says why on the plan.
   const discovered: string[] = [];
   const unclassifiable = new Map<string, number>();
+  const formatSkips: SkippedPage[] = [];
   if (prunedWarning === null) {
     collectIngestible(walkRoot, walkScope, {
       vault,
@@ -303,6 +315,7 @@ export function planBatches(vault: string, sourceDir: string, opts: BatchPlanOpt
       out: discovered,
       warnings: ignoreWarnings,
       unclassifiable,
+      formatSkips,
       ...(opts.include !== undefined ? { include: opts.include } : {}),
     });
   }
@@ -316,7 +329,12 @@ export function planBatches(vault: string, sourceDir: string, opts: BatchPlanOpt
   // set (hence planId and the whole plan) stays byte-identical to before.
   const partition = partitionExtractable(vault, discoveredRel, extractableAllowlist(vault));
   const relPaths = partition.extractable;
-  const skippedNonExtractable = partition.skipped;
+  // A file meets the format gate before any schema gate, so format skips
+  // come first, each group in path order.
+  const skippedNonExtractable: SkippedPage[] = [
+    ...formatSkips.toSorted((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)),
+    ...partition.skipped,
+  ];
 
   // The plan id keys on the FULL discovered set, so it is identical before and
   // after an interruption regardless of how many items have completed.
@@ -342,11 +360,15 @@ export function planBatches(vault: string, sourceDir: string, opts: BatchPlanOpt
   const status = new Map<string, "new" | "modified">();
   for (const p of classification.new) status.set(p, "new");
   for (const p of classification.modified) status.set(p, "modified");
-  const planned: PlannedFile[] = [...status.keys()].toSorted().map((path) => ({
-    path,
-    bytes: statSync(join(vault, path)).size,
-    status: status.get(path)!,
-  }));
+  const planned: PlannedFile[] = [...status.keys()].toSorted().map((path) => {
+    const format = sourceFormatOf(path);
+    return {
+      path,
+      bytes: statSync(join(vault, path)).size,
+      status: status.get(path)!,
+      ...(format !== null && format !== SOURCE_FORMAT.text ? { format } : {}),
+    };
+  });
 
   const batches = packBatches(planned, opts.maxBatchBytes, opts.maxBatchFiles);
 
@@ -558,6 +580,8 @@ interface WalkContext {
   readonly warnings: IgnoreWarning[];
   /** Counts files dropped for a non-ingestible extension, per extension. */
   readonly unclassifiable: Map<string, number>;
+  /** Accumulates files of a registered format that has no extractor. */
+  readonly formatSkips: SkippedPage[];
   /** See {@link BatchPlanOptions.include}. Absent: every file is included. */
   readonly include?: (rel: string) => boolean;
 }
@@ -574,8 +598,11 @@ interface WalkContext {
  * repository-declared stack no matter how deep the walk goes.
  *
  * A regular file the scope lets through whose extension is not ingestible is
- * counted on {@link WalkContext.unclassifiable} (P4) instead of vanishing:
- * the discovery outcome is unchanged, but the drop is no longer silent.
+ * either named on {@link WalkContext.formatSkips} - its format is one the
+ * source format registry names with no extractor (PDF, Office, images) - or
+ * counted on {@link WalkContext.unclassifiable} (P4). Both run before the
+ * reach predicate: visibility is a Markdown rule, and asking it about a binary
+ * would read the binary whole.
  */
 function collectIngestible(dir: string, scope: IgnoreScope, ctx: WalkContext): void {
   const effective = ctx.excludeLayer === null ? scope : scope.extend(ctx.excludeLayer);
@@ -599,7 +626,16 @@ function collectIngestible(dir: string, scope: IgnoreScope, ctx: WalkContext): v
       if (effective.isIgnored(rel, false)) continue;
       const ext = extname(entry.name).toLowerCase();
       if (!ctx.extensions.has(ext)) {
-        ctx.unclassifiable.set(ext, (ctx.unclassifiable.get(ext) ?? 0) + 1);
+        const format = SOURCE_FORMAT_BY_EXTENSION.get(ext);
+        if (format !== undefined && sourceFormatSpec(format).extractor === null) {
+          ctx.formatSkips.push({
+            path: canonicalNotePath(rel),
+            reason: SKIPPED_PAGE_REASON.formatNotExtractable,
+            detail: format,
+          });
+        } else {
+          ctx.unclassifiable.set(ext, (ctx.unclassifiable.get(ext) ?? 0) + 1);
+        }
         continue;
       }
       // After the extension test, so the predicate reads only files the plan

@@ -97,7 +97,10 @@ export async function cmdBrainBatchPlan(argv: string[]): Promise<number> {
     );
     for (const b of plan.batches) {
       ok(`  batch ${b.index}: ${b.files.length} file(s), ${b.totalBytes} byte(s)`);
-      for (const f of b.files) ok(`    - ${f.path} (${f.status}, ${f.bytes}B)`);
+      for (const f of b.files) {
+        const format = f.format !== undefined ? `, ${f.format}` : "";
+        ok(`    - ${f.path} (${f.status}, ${f.bytes}B${format})`);
+      }
     }
     if (plan.skipped.length > 0) {
       info(`  ${plan.skipped.length} unchanged file(s) skipped:`);

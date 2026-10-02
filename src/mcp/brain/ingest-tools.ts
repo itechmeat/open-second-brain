@@ -254,8 +254,9 @@ export function serializeBatchPlan(plan: BatchPlan): Record<string, unknown> {
     skipped: [...plan.skipped],
     // Only emitted when the extractable gate skipped something, so a plan with
     // no extractable declaration serializes byte-identically to before. The
-    // reason is the typed token (P4) and `detail` carries the schema_type
-    // value behind it, so a reader can check the skip without re-reading.
+    // reason is the typed token (P4) and `detail` carries the value behind
+    // it - the schema_type, or the format of a format skip - so a reader can
+    // check the skip without re-reading.
     ...(plan.skippedNonExtractable.length > 0
       ? {
           skipped_non_extractable: plan.skippedNonExtractable.map((s) => ({
@@ -298,7 +299,13 @@ export function serializeBatchPlan(plan: BatchPlan): Record<string, unknown> {
     batches: plan.batches.map((b) => ({
       index: b.index,
       total_bytes: b.totalBytes,
-      files: b.files.map((f) => ({ path: f.path, bytes: f.bytes, status: f.status })),
+      // `format` only for a non-text file, so a Markdown plan is unchanged.
+      files: b.files.map((f) => ({
+        path: f.path,
+        bytes: f.bytes,
+        status: f.status,
+        ...(f.format !== undefined ? { format: f.format } : {}),
+      })),
     })),
   };
 }
