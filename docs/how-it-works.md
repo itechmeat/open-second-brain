@@ -1301,7 +1301,10 @@ dot-directory and no build or dependency output (`node_modules`,
 state. A run reports its two stages - `walk`, a counter with no
 denominator, and `render`, which knows its note count - through the
 progress spine, and honours a safeguard deadline at each directory
-read.
+read. The same release also closes the observability gap v0.39.0 left
+open: `brain_query` now emits opt-in recall telemetry with a kind-only
+payload, so the supplied preference id, topic, or timestamp never lands
+in a continuity record.
 
 Since v1.68.0 the scan reads dependency manifests at the project root
 and at each detected module: `package.json`, `pyproject.toml` (PEP 621
@@ -1313,16 +1316,20 @@ fixed reason such as `invalid JSON` or `invalid TOML`, never the
 manifest's own text), `unreadable` (with the error code, or because it
 is not a regular file or is larger than 1 MiB, which is not read) or
 `unsupported` - and one bad manifest never aborts the run. The overview's
-`dependencies` region lists the manifests with their statuses and the
-runtime dependencies per ecosystem, one canonical name each (PyPI names
+`dependencies` region lists every manifest of the root and the modules
+with its status, and the runtime dependencies they declare per
+ecosystem, leaving out a name that is another module's manifest name
+(those edges are drawn in `module-dependencies`), one canonical name
+each (PyPI names
 normalised per PEP 503, a renamed Cargo dependency by its real crate
 name), and counts the dev, build, optional, peer and indirect groups on
 one line per ecosystem instead of listing them. A declared name that is
 not a plausible package name (one holding a line break, a space or a
 bracket) is not written into a note: it is counted on the same line as
 `unrepresentable`. The project's name, version and description are
-written on one line, with `[[` escaped so they cannot open a link. The project name comes
-from the first root manifest read that names a project, in the order
+written on one line, with `[[` escaped so they cannot open a link. The
+project name comes from the first root manifest read that names a
+project, in the order
 `package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`.
 
 A module whose manifest declares a runtime dependency on the manifest
@@ -1341,10 +1348,7 @@ module has no edge, overwrites any value typed under it, and never
 touches another frontmatter key. The `module-map` region stays
 containment only. On an existing overview or module note the new
 regions are appended at the end of the note, once, so the first run
-after an upgrade reports those notes `updated`. The same release also closes the
-observability gap v0.39.0 left open: `brain_query` now emits opt-in
-recall telemetry with a kind-only payload, so the supplied preference
-id, topic, or timestamp never lands in a continuity record.
+after an upgrade reports those notes `updated`.
 
 ## The agent write contract (since v0.41.0)
 
