@@ -12,7 +12,7 @@
  * and deterministic; nothing is written.
  */
 
-import { statSync } from "node:fs";
+import { lstatSync } from "node:fs";
 
 import { oneLine } from "../../../core/brain/architect/manifests.ts";
 import {
@@ -51,18 +51,18 @@ const BYTE_READING_EXTRACTORS: ReadonlySet<SourceExtractor> = new Set([
 ]);
 
 /**
- * The dispatch answer for `file`. A format with no byte-reading extractor
- * (text read as it is, a named format with no extractor, an unknown
- * extension) is answered by name without reading the file; it is only
- * stat-ed, so a missing file stays an error. An HTML or table source goes
- * through the bounded reader, whose refusal answers in the same shape as a
- * format skip.
+ * The dispatch answer for `file`. The path is lstat-ed first, before any
+ * format is named: a missing path and a symbolic link are both errors. A
+ * format with no byte-reading extractor (text read as it is, a named format
+ * with no extractor, an unknown extension) is then answered by name without
+ * reading the file. An HTML or table source goes through the bounded
+ * reader, whose refusal answers in the same shape as a format skip.
  */
 function extractFile(file: string): SourceExtraction {
+  if (lstatSync(file).isSymbolicLink()) throw new Error(`symbolic link: ${file}`);
   const format = sourceFormatOf(file);
   const extractor = format === null ? null : sourceFormatSpec(format).extractor;
   if (extractor === null || !BYTE_READING_EXTRACTORS.has(extractor)) {
-    statSync(file);
     return extractSource(file, NO_BYTES);
   }
   const read = readSourceBounded(file, HTML_EXTRACT_MAX_SOURCE_BYTES);

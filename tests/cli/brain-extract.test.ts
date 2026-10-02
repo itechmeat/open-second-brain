@@ -8,7 +8,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -262,6 +262,18 @@ describe("o2b brain extract", () => {
       const res = await runCli(["brain", "extract", join(work, name)]);
       expect(res.returncode).toBe(1);
       expect(res.stderr).toContain(name);
+    },
+  );
+
+  test.skipIf(IS_WINDOWS).each([".html", ".md"])(
+    "a symbolic link is an error, not data (%s)",
+    async (ext) => {
+      const real = fixture(`real${ext}`, PAGE_HTML);
+      const link = join(work, `link${ext}`);
+      symlinkSync(real, link);
+      const res = await runCli(["brain", "extract", link]);
+      expect(res.returncode).toBe(1);
+      expect(res.stderr).toContain(`link${ext}`);
     },
   );
 
