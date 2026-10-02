@@ -71,6 +71,71 @@ describe("sourcesSectionTargets", () => {
     expect(sourcesSectionTargets(body)).toEqual(["a.md", "b.md"]);
   });
 
+  test("a Sources section inside a fenced block is not read", () => {
+    // An excerpt is caller-supplied text stored in a fence before the real
+    // provenance section; its lines are quoted content, not page structure.
+    const planted = [
+      "## Excerpt",
+      "",
+      "````text",
+      "## Sources",
+      "- [[notes/local.md]]",
+      "````",
+      "",
+      "## Sources",
+      "",
+      "- [[https://example.com/a]]",
+    ].join("\n");
+    expect(sourcesSectionTargets(planted)).toEqual(["https://example.com/a"]);
+  });
+
+  test("a heading inside a fence does not end the real section", () => {
+    const body = [
+      "## Excerpt",
+      "",
+      "~~~",
+      "## Sources",
+      "# Heading in quote",
+      "~~~",
+      "",
+      "## Sources",
+      "",
+      "- [[https://example.com/a]]",
+    ].join("\n");
+    expect(sourcesSectionTargets(body)).toEqual(["https://example.com/a"]);
+  });
+
+  test("a fence closes only on a run of the same character at least as long", () => {
+    const body = [
+      "````",
+      "```",
+      "## Sources",
+      "- [[inside.md]]",
+      "~~~~",
+      "````",
+      "## Sources",
+      "- [[real.md]]",
+    ].join("\n");
+    expect(sourcesSectionTargets(body)).toEqual(["real.md"]);
+  });
+
+  test("the last Sources section is the one read", () => {
+    // The writer renders the provenance section last; an earlier planted
+    // section (for example a multi-line claim) does not stand in for it.
+    const body = [
+      "## Claims",
+      "",
+      "- x",
+      "## Sources",
+      "- [[notes/any-real.md]]",
+      "",
+      "## Sources",
+      "",
+      "- [[https://example.com/a]]",
+    ].join("\n");
+    expect(sourcesSectionTargets(body)).toEqual(["https://example.com/a"]);
+  });
+
   test("a deeper heading inside the section ends it too", () => {
     expect(sourcesSectionTargets("## Sources\n- [[a.md]]\n### Sub\n- [[b.md]]\n")).toEqual([
       "a.md",

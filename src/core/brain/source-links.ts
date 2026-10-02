@@ -25,6 +25,25 @@ const WIKILINK_RE = /\[\[[^\]]+\]\]/g;
 /** Line separator for LF and CRLF bodies alike. */
 const LINE_SPLIT_RE = /\r?\n/;
 
+/**
+ * Opening or closing CommonMark code fence: up to three spaces of indent,
+ * three or more backticks or tildes. Same rule as the block resolver
+ * (`distill/block-resolve.ts`), copied rather than imported so this reader
+ * does not depend on the distill module.
+ */
+const FENCE_RE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+
+/** True when `line` closes a fence opened by `opener`: same character, at least as long, nothing after it. */
+function closesFence(line: string, opener: string): boolean {
+  const m = FENCE_RE.exec(line);
+  return (
+    m !== null &&
+    m[1]![0] === opener[0] &&
+    m[1]!.length >= opener.length &&
+    m[2]!.trim().length === 0
+  );
+}
+
 /** The string members of a frontmatter list field; anything else reads as empty. */
 export function stringArrayField(meta: FrontmatterMap, key: string): ReadonlyArray<string> {
   const value = meta[key];
@@ -39,21 +58,41 @@ export function wikilinkTarget(raw: string): string {
 }
 
 /**
- * The wikilink targets listed under the page's `## Sources` heading, in
- * order, read up to the next heading of any level. Targets go through
+ * The wikilink targets listed under the page's LAST `## Sources` heading,
+ * in order, read up to the next heading of any level. Targets go through
  * {@link wikilinkTarget}, the same rule the cleanup applies to a frontmatter
  * `source` link. A body without the section cites nothing here.
+ *
+ * Lines inside fenced code blocks are content, not structure: a heading or
+ * link there neither opens, ends nor feeds the section. The last section
+ * wins because the writer renders the provenance section after everything
+ * else on the page, so an earlier `## Sources` line (quoted or planted in
+ * caller text) never stands in for it.
  */
 export function sourcesSectionTargets(body: string): ReadonlyArray<string> {
-  const targets: string[] = [];
+  let targets: string[] = [];
   let inSection = false;
+  let fence: string | null = null;
   for (const line of body.split(LINE_SPLIT_RE)) {
+    if (fence !== null) {
+      if (closesFence(line, fence)) fence = null;
+      continue;
+    }
+    const opened = FENCE_RE.exec(line);
+    if (opened !== null) {
+      fence = opened[1]!;
+      continue;
+    }
     if (SOURCES_HEADING_RE.test(line)) {
       inSection = true;
+      targets = [];
       continue;
     }
     if (!inSection) continue;
-    if (ANY_HEADING_RE.test(line)) break;
+    if (ANY_HEADING_RE.test(line)) {
+      inSection = false;
+      continue;
+    }
     for (const match of line.matchAll(WIKILINK_RE)) targets.push(wikilinkTarget(match[0]));
   }
   return targets;
