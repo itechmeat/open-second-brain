@@ -141,6 +141,12 @@ describe("deriveSourceSection names the source's own visibility", () => {
     expect(derive("Clips/h.html", RESERVED_HTML)?.visibility).toEqual(["private"]);
   });
 
+  test("a byte-order mark before the block hides neither the tokens nor the block", () => {
+    const derived = derive("Clips/bom.csv", `\ufeff${RESERVED_CSV}`);
+    expect(derived?.visibility).toEqual(["private"]);
+    expect(derived?.section).not.toContain("visibility");
+  });
+
   test("a source that grew past the digest ceiling after the intake read answers source-not-local", () => {
     // The intake read the source in the trusted lane and wrote the entity
     // pages; the derived section's own read then meets a file past the

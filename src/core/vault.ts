@@ -80,6 +80,8 @@ import type { FrontmatterMap, FrontmatterValue, VaultPage } from "./types.ts";
  * fence still open the block; they are the first lines of its body.
  */
 export const FRONTMATTER_RE = /^---[^\S\n]*\n([\s\S]*?)\n---\s*\n?/;
+/** U+FEFF, which may precede a page's opening fence. */
+const BYTE_ORDER_MARK = 0xfeff;
 /**
  * The key grammar, written once and used by BOTH directions.
  *
@@ -251,11 +253,15 @@ export function parseFrontmatterWithNotices(
  * dropped, exactly as before; only the trace is new.
  */
 export function parseFrontmatterTextWithNotices(
-  text: string,
+  raw: string,
   opts: FrontmatterNoticeOptions = {},
 ): FrontmatterParseWithNotices {
   const notices: DegradationNotice[] = [];
   const site = opts.site ?? FRONTMATTER_SITE;
+  // A byte-order mark before the opening fence (a spreadsheet export, an
+  // editor's UTF-8 setting) must not hide the block: a hidden block is a
+  // hidden `visibility`, and the page would read as open.
+  const text = raw.charCodeAt(0) === BYTE_ORDER_MARK ? raw.slice(1) : raw;
   const match = FRONTMATTER_RE.exec(text);
   if (!match) {
     return [{}, text.trim(), notices];

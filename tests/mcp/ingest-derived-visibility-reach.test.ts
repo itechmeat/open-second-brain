@@ -34,10 +34,16 @@ const ROW_WORD = "zzderivedrowprobezz";
 const HEADING_WORD = "zzderivedheadingprobezz";
 const RESERVE_BLOCK = "---\nvisibility: private\n---\n";
 
+/** The byte-order mark a spreadsheet export may put before everything else. */
+const BYTE_ORDER_MARK = "\ufeff";
+
 interface Case {
   readonly label: string;
   readonly path: string;
-  readonly body: string;
+  /** What precedes the reserving block, kept in the open control too. */
+  readonly lead?: string;
+  /** The source's data, after the reserving block. */
+  readonly data: string;
   readonly word: string;
 }
 
@@ -45,13 +51,20 @@ const CASES: readonly Case[] = Object.freeze([
   {
     label: "a reserved CSV",
     path: "Clips/reserved.csv",
-    body: `${RESERVE_BLOCK}name,code\n${ROW_WORD},4711\n`,
+    data: `name,code\n${ROW_WORD},4711\n`,
+    word: ROW_WORD,
+  },
+  {
+    label: "a reserved CSV behind a byte-order mark",
+    path: "Clips/reserved-bom.csv",
+    lead: BYTE_ORDER_MARK,
+    data: `name,code\n${ROW_WORD},4711\n`,
     word: ROW_WORD,
   },
   {
     label: "a reserved HTML file",
     path: "Clips/reserved.html",
-    body: `${RESERVE_BLOCK}<h1>${HEADING_WORD}</h1><p>Body.</p>\n`,
+    data: `<h1>${HEADING_WORD}</h1><p>Body.</p>\n`,
     word: HEADING_WORD,
   },
 ]);
@@ -89,7 +102,8 @@ async function ingestedAtLocalReach(c: Case, reserved = true): Promise<Fixture> 
   const configPath = join(base, "config.yaml");
   atomicWriteFileSync(configPath, `vault: ${vault}\nagent_name: claude\n`);
   bootstrapBrain(vault, { configPath });
-  writeFileSync(join(vault, c.path), reserved ? c.body : c.body.slice(RESERVE_BLOCK.length));
+  const lead = c.lead ?? "";
+  writeFileSync(join(vault, c.path), `${lead}${reserved ? RESERVE_BLOCK : ""}${c.data}`);
   const result = (await serverAt({ vault, configPath }, TRANSPORT_REACH.local).callTool(
     "brain_ingest_source",
     {

@@ -10,16 +10,10 @@
  * section (`## Parts` or `## Table`); for every other source nothing.
  */
 
-import { pageVisibility, REMOTE_DENY_VISIBILITY_TOKEN } from "../../graph/visibility.ts";
-import { readCachedFrontmatterEntry } from "../../search/result-filters.ts";
+import { pageVisibility } from "../../graph/visibility.ts";
 import type { FrontmatterMap } from "../../types.ts";
-import { FRONTMATTER_RE } from "../../vault.ts";
-import {
-  isSourceHidden,
-  readSourceOrigin,
-  SourceTrustError,
-  vaultShapedIdentity,
-} from "../intake/source-trust.ts";
+import { FRONTMATTER_RE, parseFrontmatterText } from "../../vault.ts";
+import { isSourceHidden, readSourceOrigin, SourceTrustError } from "../intake/source-trust.ts";
 import {
   INTAKE_TRUST,
   type IntakeTrust,
@@ -107,6 +101,8 @@ const UTF8_BOM = Object.freeze([0xef, 0xbb, 0xbf]);
 /** The first bytes of a frontmatter block. */
 const FRONTMATTER_FENCE = "---";
 const UTF8_STRICT = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+/** Invalid bytes become U+FFFD, as in a page read as text; the mark is kept for the parser. */
+const UTF8_LENIENT = new TextDecoder("utf-8", { ignoreBOM: true });
 const UTF8_ENCODER = new TextEncoder();
 
 /**
@@ -240,7 +236,7 @@ export function deriveSourceSection(
     [SOURCE_FORMAT_FRONTMATTER_KEY]: format,
     ...sourceContentHashFrontmatter(origin.contentHash),
   };
-  const visibility = sourceVisibility(vault, source);
+  const visibility = sourceVisibility(origin.bytes);
   const reach = visibility.length > 0 ? { visibility } : {};
   const extraction = extractSource(source, origin.bytes);
   if ("html" in extraction) {
@@ -263,13 +259,13 @@ export function deriveSourceSection(
 }
 
 /**
- * The visibility tokens `source` declares, read the way the reach predicate
- * (`isPathReadableAtReach`) reads them: a source whose frontmatter cannot
- * be read answers the reserved token, as that predicate does.
+ * The visibility tokens the source's own frontmatter block declares, read
+ * from the bytes the extractor strips that block from (so the two agree by
+ * construction) and decoded the way the reach predicate
+ * (`isPathReadableAtReach`) decodes a page: leniently, through the vault's
+ * frontmatter parser.
  */
-function sourceVisibility(vault: string, source: string): readonly string[] {
-  const rel = vaultShapedIdentity(vault, source);
-  if (rel === null) return [];
-  const entry = readCachedFrontmatterEntry(new Map(), vault, rel);
-  return entry.unreadable ? [REMOTE_DENY_VISIBILITY_TOKEN] : pageVisibility(entry.meta);
+function sourceVisibility(bytes: Uint8Array): readonly string[] {
+  const [meta] = parseFrontmatterText(UTF8_LENIENT.decode(bytes));
+  return pageVisibility(meta);
 }

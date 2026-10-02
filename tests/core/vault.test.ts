@@ -135,6 +135,15 @@ describe("parseFrontmatter", () => {
   });
 });
 
+describe("parseFrontmatterText after a byte-order mark", () => {
+  test("a byte-order mark before the opening fence still opens the block", () => {
+    expect(parseFrontmatterText("\ufeff---\nvisibility: private\n---\nbody")).toEqual([
+      { visibility: "private" },
+      "body",
+    ]);
+  });
+});
+
 describe("parseFrontmatterText on an unclosed opener", () => {
   test("stays linear on a long run of blank lines after the opening fence", () => {
     const text = `---${"\n".repeat(256 * 1024)}name: kept`;
