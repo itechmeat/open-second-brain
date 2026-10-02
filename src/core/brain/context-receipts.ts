@@ -464,6 +464,14 @@ function adequacySummary(
   return { adequacy: { level, action, escalate: record["escalate"] === true } };
 }
 
+/**
+ * Receipt item ids of the operator-rule blocks the SessionStart hook
+ * injects: the constitution and the scoped rules. Structural ids, never
+ * derived from content; a reader below local reach withholds them.
+ */
+export const RECEIPT_ITEM_STANDING_RULES = "standing-rules";
+export const RECEIPT_ITEM_SCOPED_RULES = "scoped-rules";
+
 export function isContextReceiptTrigger(value: unknown): value is ContextReceiptTrigger {
   return value === "context_pack" || value === "pre_compress" || value === "session_inject";
 }

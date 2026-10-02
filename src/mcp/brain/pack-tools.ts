@@ -38,10 +38,14 @@ import {
   getContextReceipt,
   isContextReceiptTrigger,
   listContextReceipts,
+  RECEIPT_ITEM_SCOPED_RULES,
+  RECEIPT_ITEM_STANDING_RULES,
   summarizeContextReceipt,
   summarizeContextReceiptSession,
+  type ContextReceiptFoldResult,
   type ContextReceiptOptions,
 } from "../../core/brain/context-receipts.ts";
+import type { ContinuityRecord } from "../../core/brain/continuity/types.ts";
 import { observedReuseRates } from "../../core/brain/observed-use.ts";
 import {
   diffContextPreset,
@@ -353,7 +357,10 @@ async function toolBrainContextReceipts(
       ...(sessionId !== undefined ? { sessionId } : {}),
       ...(limit !== undefined ? { limit } : {}),
     });
-    const summaries = receipts.map(summarizeContextReceipt);
+    const local = contextReach(ctx) === TRANSPORT_REACH.local;
+    const summaries = receipts
+      .map((receipt) => receiptAtReach(receipt, local))
+      .map(summarizeContextReceipt);
     return {
       vault_path: vaultPathField(ctx),
       total: summaries.length,
@@ -366,10 +373,11 @@ async function toolBrainContextReceipts(
     if (id === undefined) {
       throw new MCPError(INVALID_PARAMS, "brain_context_receipts: id is required for show");
     }
-    const receipt = getContextReceipt(ctx.vault, id);
-    if (receipt === null) {
+    const stored = getContextReceipt(ctx.vault, id);
+    if (stored === null) {
       throw new MCPError(INVALID_PARAMS, `brain_context_receipts: receipt not found: ${id}`);
     }
+    const receipt = receiptAtReach(stored, contextReach(ctx) === TRANSPORT_REACH.local);
     return {
       id: receipt.id,
       kind: receipt.kind,
@@ -384,6 +392,81 @@ async function toolBrainContextReceipts(
   if (operation === "summary") return summarizeReceipts(ctx, args);
 
   throw unknownOperationError("brain_context_receipts: operation must be list, show, or summary");
+}
+
+/** Receipt items naming the operator-rule blocks the SessionStart hook injected. */
+const OPERATOR_RULE_ITEM_IDS: ReadonlySet<string> = new Set([
+  RECEIPT_ITEM_STANDING_RULES,
+  RECEIPT_ITEM_SCOPED_RULES,
+]);
+
+function isOperatorRuleItem(item: unknown): boolean {
+  const id = (item as { id?: unknown } | null)?.id;
+  return typeof id === "string" && OPERATOR_RULE_ITEM_IDS.has(id);
+}
+
+/** Payload fields of an injection receipt whose figures include the operator-rule blocks. */
+const INJECTION_TOTAL_FIELDS = ["final_text_hash", "final_text_chars"] as const;
+const INJECTION_EXTRA_TOTAL_FIELDS = ["total_bytes", "total_tokens"] as const;
+const BUDGET_RULE_FIELDS = ["scoped_rules_chars", "budgeted_source_count"] as const;
+
+/**
+ * A stored receipt as the caller may see it at its reach.
+ *
+ * At local reach the record is returned unchanged. Below it, an injection
+ * receipt says nothing about the operator's standing and scoped rules:
+ * their items and source references are dropped (the remaining items
+ * re-ranked), and every figure that counts or measures them - the item
+ * count, the whole-text hash and lengths, the scoped characters and the
+ * budgeted source count - is removed, so a session that injected rules
+ * answers like one that did not.
+ */
+function receiptAtReach(record: ContinuityRecord, local: boolean): ContinuityRecord {
+  if (local || record.payload["trigger"] !== "session_inject") return record;
+  const payload: Record<string, unknown> = { ...record.payload };
+  if (Array.isArray(payload["items"])) {
+    const items = (payload["items"] as ReadonlyArray<unknown>).filter(
+      (item) => !isOperatorRuleItem(item),
+    );
+    payload["items"] = items.map((item, index) =>
+      typeof item === "object" && item !== null ? { ...item, original_rank: index + 1 } : item,
+    );
+    payload["item_count"] = items.length;
+  }
+  for (const field of INJECTION_TOTAL_FIELDS) delete payload[field];
+  const injection = payload["injection"];
+  if (typeof injection === "object" && injection !== null) {
+    const kept: Record<string, unknown> = { ...(injection as Record<string, unknown>) };
+    for (const field of INJECTION_EXTRA_TOTAL_FIELDS) delete kept[field];
+    payload["injection"] = kept;
+  }
+  const budget = payload["budget"];
+  if (typeof budget === "object" && budget !== null) {
+    const kept: Record<string, unknown> = { ...(budget as Record<string, unknown>) };
+    for (const field of BUDGET_RULE_FIELDS) delete kept[field];
+    payload["budget"] = kept;
+  }
+  return {
+    ...record,
+    sourceRefs: record.sourceRefs.filter((ref) => !isOperatorRuleItem(ref)),
+    payload,
+  };
+}
+
+/**
+ * The receipt fold below local reach: the operator-rule items leave the
+ * per-item list and the item totals. A degraded injection that carried
+ * only the rules still counts as a non-empty receipt (a stated residual).
+ */
+function foldWithoutOperatorRules(fold: ContextReceiptFoldResult): ContextReceiptFoldResult {
+  const removed = fold.items.filter(isOperatorRuleItem);
+  if (removed.length === 0) return fold;
+  return {
+    ...fold,
+    item_total: fold.item_total - removed.reduce((sum, item) => sum + item.injections, 0),
+    distinct_items: fold.distinct_items - removed.length,
+    items: fold.items.filter((item) => !isOperatorRuleItem(item)),
+  };
 }
 
 /**
@@ -442,10 +525,14 @@ async function summarizeReceipts(
     ...(since !== undefined ? { since } : {}),
     ...(until !== undefined ? { until } : {}),
   };
-  const fold = summarizeContextReceiptSession(ctx.vault, {
+  const stored = summarizeContextReceiptSession(ctx.vault, {
     ...window,
     ...(maxReceipts !== undefined ? { maxReceipts } : {}),
   });
+  const fold =
+    stored.recorded && contextReach(ctx) !== TRANSPORT_REACH.local
+      ? foldWithoutOperatorRules(stored)
+      : stored;
   if (!fold.recorded) {
     return {
       vault_path: vaultPathField(ctx),

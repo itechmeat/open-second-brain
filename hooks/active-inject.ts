@@ -87,7 +87,11 @@ import { loadInjectContextFailOpen } from "../src/core/brain/inject-failopen.ts"
 import { collectRuntimeNotices, renderRuntimeNotices } from "../src/core/brain/runtime-notices.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { isContextEventName } from "./lib/context-events.ts";
-import { emitContextReceipt } from "../src/core/brain/context-receipts.ts";
+import {
+  emitContextReceipt,
+  RECEIPT_ITEM_SCOPED_RULES,
+  RECEIPT_ITEM_STANDING_RULES,
+} from "../src/core/brain/context-receipts.ts";
 import { estimateTokens } from "../src/core/brain/text/tokenizer.ts";
 import type { InjectContextSource } from "../src/core/brain/inject-failopen.ts";
 import type { BrainConfig } from "../src/core/brain/types.ts";
@@ -297,8 +301,8 @@ interface InjectionMeter {
 }
 
 /** Sub-body identifiers recorded per injection. Structural, not content-derived. */
-const SOURCE_STANDING_RULES = "standing-rules";
-const SOURCE_SCOPED_RULES = "scoped-rules";
+const SOURCE_STANDING_RULES = RECEIPT_ITEM_STANDING_RULES;
+const SOURCE_SCOPED_RULES = RECEIPT_ITEM_SCOPED_RULES;
 const SOURCE_RUNTIME_NOTICES = "runtime-notices";
 const SOURCE_ACTIVE_BODY = "active-body";
 const SOURCE_LESSONS_BODY = "lessons-body";
