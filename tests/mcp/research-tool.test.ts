@@ -95,10 +95,16 @@ describe("brain_research_report - capture_scopes", () => {
       findings: [{ statement: "A point", sources: ["Notes/open.md"] }],
     };
 
-    const remote = await handler({ ...ctx, reach: TRANSPORT_REACH.remote }, args);
-    expect(remote.capture_scopes).toEqual([CAPTURE_SCOPE.urlOnly, CAPTURE_SCOPE.fullLocal]);
+    const remote = (await handler({ ...ctx, reach: TRANSPORT_REACH.remote }, args)) as Record<
+      string,
+      unknown
+    >;
+    expect(remote["capture_scopes"]).toEqual([CAPTURE_SCOPE.urlOnly, CAPTURE_SCOPE.fullLocal]);
 
-    const local = await handler({ ...ctx, reach: TRANSPORT_REACH.local }, args);
-    expect(local.capture_scopes).toEqual([CAPTURE_SCOPE.fullLocal, CAPTURE_SCOPE.fullLocal]);
+    const local = (await handler({ ...ctx, reach: TRANSPORT_REACH.local }, args)) as Record<
+      string,
+      unknown
+    >;
+    expect(local["capture_scopes"]).toEqual([CAPTURE_SCOPE.fullLocal, CAPTURE_SCOPE.fullLocal]);
   });
 });
