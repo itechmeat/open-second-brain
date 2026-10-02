@@ -97,6 +97,64 @@ at a time), so activation is one explicit command:
 | Plugin update | **Automatic** — `memory.provider` persists in `config.yaml` | nothing |
 | Deactivate / uninstall | Not auto | `hermes memory off` (reverts to built-in) |
 
+### Multiple Hermes profiles
+
+A Hermes gateway with `gateway.multiplex_profiles: true` serves several
+profiles from one process, and that process's environment belongs to
+the profile that launched it. Since v1.70.0 the plugin then reads its
+profile-scoped settings from each turn's own profile scope - the
+profile's `.env`, as Hermes composes it - and never from the gateway
+process environment:
+
+| Variable | Setting |
+|---|---|
+| `VAULT_DIR` | vault |
+| `VAULT_AGENT_NAME` | agent name |
+| `VAULT_TIMEZONE` | timezone |
+| `OPEN_SECOND_BRAIN_CONFIG` | config file path |
+| `OPEN_SECOND_BRAIN_MCP_TIMEOUT` | MCP request timeout |
+
+Set these in each profile's `.env`. A variable the profile does not set
+falls through to the Open Second Brain config chain (the project
+pointer, the active profile, the config file, the default), not to the
+gateway environment. Each profile gets its own `o2b mcp` child, started
+with its own vault, agent name, timezone and config path, so two
+profiles that share a vault but not an agent name write under their own
+names. Without multiplexing nothing changes: the plugin reads the
+process environment as before.
+
+When one of these variables is also set in the gateway process
+environment, the gateway log names it once per process, never its
+value:
+
+```
+WARNING plugins.hermes.config: open-second-brain: ignoring VAULT_AGENT_NAME from the gateway process environment on a multiplexed gateway; set it in the profile's .env instead
+```
+
+If the gateway bound no profile scope for a call, the plugin refuses to
+guess: the provider reports a `ProfileScopeError` naming the variable
+and the remedy (`hermes gateway restart`), and a turn in that state
+runs without the vault reminder instead of failing.
+
+What stays process-wide on a multiplexed gateway:
+
+- `HOME`, `PATH`, `PATHEXT`, `XDG_CONFIG_HOME` and `LOCALAPPDATA`
+  describe the machine, not the profile, and are read from the process
+  environment in both modes.
+- Other variables the `o2b mcp` child reads - the search settings,
+  `OPEN_SECOND_BRAIN_MCP_API_KEY`, embedding provider keys and the
+  `TELEGRAM_*` settings - are still inherited from the gateway process
+  environment.
+- A gateway that serves a routed profile home without multiplexing
+  reads the process environment, as Hermes's own memory providers do.
+
+One install pitfall: Hermes looks for a memory provider in its own
+bundled `plugins/memory/open-second-brain/` before
+`$HERMES_HOME/plugins/open-second-brain/`. A copy left in the bundled
+location shadows the plugin `hermes plugins install` and
+`hermes plugins update` manage, so an update appears to change nothing.
+Remove such a copy and restart the gateway.
+
 ## 5. Verify
 
 ```bash
@@ -129,6 +187,13 @@ o2b doctor --vault /path/to/vault --repo .
 
 `memory.provider` persists across updates, so the provider stays active
 with no re-activation step.
+
+Keep the `o2b` on PATH at the plugin's version. The links step 2
+creates point into the plugin and follow it; an `o2b` installed some
+other way must be updated too. Since v1.70.0 the plugin launches its
+bridge with `o2b mcp --harness hermes`, and an older `o2b` refuses
+`--harness` as an unknown flag, so the bridge does not start; the
+gateway log shows the flag in the bridge's stderr.
 
 ## Uninstall
 

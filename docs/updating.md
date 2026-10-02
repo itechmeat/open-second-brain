@@ -47,6 +47,58 @@ instruction files such as `CLAUDE.md`/`AGENTS.md`, installed
 `.claude/skills/`) and warns with the exact replacement for any stale
 reference it finds (`removed-tool-reference`).
 
+## Upgrading to 1.70.0
+
+One step is required for Hermes users: update the `o2b` CLI and the
+Hermes plugin together. Five changes are visible to an operator or a
+client.
+
+**Update `o2b` and the Hermes plugin together.** The Hermes plugin now
+launches its MCP bridge as `o2b mcp --harness hermes`, and an `o2b`
+older than 1.70.0 refuses `--harness` as an unknown flag, so the bridge
+does not start; the bridge's stderr in the gateway log names the flag.
+The `o2b` links that `scripts/o2b install-cli` creates follow the
+plugin; an `o2b` installed some other way must be updated as well. The
+Claude Code plugin's two MCP registrations gain `--harness claude-code`
+in the same release, so they need no step.
+
+**Hermes settings come from the profile on a multiplexed gateway.** With
+`gateway.multiplex_profiles: true`, `VAULT_DIR`, `VAULT_AGENT_NAME`,
+`VAULT_TIMEZONE`, `OPEN_SECOND_BRAIN_CONFIG` and
+`OPEN_SECOND_BRAIN_MCP_TIMEOUT` are read from each turn's profile scope
+(the profile's `.env`), no longer from the gateway process environment.
+A profile that relied on the launch profile's environment now falls
+through to the Open Second Brain config chain instead; move such a
+setting into that profile's `.env`. The gateway log names each ignored
+variable once with a WARNING. A single-profile gateway is unchanged.
+See "Multiple Hermes profiles" in [`install/hermes.md`](../install/hermes.md).
+
+**Scoped operator rules.** Files under `Brain/standing-rules/project/`,
+`Brain/standing-rules/harness/` and `Brain/standing-rules/host/` are
+now rendered for the matching project, harness and device, after the
+operator standing rules, in the SessionStart hook (project and host
+only) and in `brain_context`, for a local caller only. A vault without
+the directory renders exactly as before. The block is charged against
+`active.inject_budget_chars` and capped by the new
+`active.scoped_rules_max_chars` (default 2,000); the hook receipt's
+`budget` block gains `scoped_rules_chars`, and `brain_context` gains an
+optional `scoped_rules` key. Every write path now refuses paths inside
+`Brain/standing-rules/`. See "Scoped operator rules" in
+[`how-it-works.md`](how-it-works.md).
+
+**`o2b mcp --harness <id>`.** A new optional flag naming the harness;
+an unknown value exits `2`. `--host-target` now also stands in for it
+when it is absent.
+
+**More brief and doctor counts answer at the caller's reach.** Below
+local reach `brain_brief` `view="today"` no longer lists an open loop
+or obligation from a page the caller cannot read, `view="monthly"`
+counts from the events the caller may see, `view="operator"` computes
+its doctor and digest counts, top actions, verification entries and
+trust verdict from what the caller may see, and the `brain_doctor` removed-tool warning cap and
+stale-dependency count leave out what the caller cannot read. A local
+caller and the CLI see no change.
+
 ## Upgrading to 1.69.0
 
 No step below is required. Ten changes are visible to an operator or a

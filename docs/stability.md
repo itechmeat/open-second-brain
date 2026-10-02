@@ -37,6 +37,11 @@ Examples frozen at 1.0.0: `vault`, `agent_name`, `timezone`
 per-operation variants (`OPEN_SECOND_BRAIN_SAFEGUARD_TIMEOUT`), and
 `report_snapshots_enabled` (`OPEN_SECOND_BRAIN_REPORT_SNAPSHOTS`).
 Unknown keys remain warnings, never errors.
+On a Hermes gateway that multiplexes profiles, the Hermes plugin reads
+`VAULT_DIR`, `VAULT_AGENT_NAME`, `VAULT_TIMEZONE`,
+`OPEN_SECOND_BRAIN_CONFIG` and `OPEN_SECOND_BRAIN_MCP_TIMEOUT` from the
+turn's profile scope in place of the process environment (since 1.70.0);
+the order is otherwise the same.
 
 ### Search index schema
 
@@ -72,6 +77,10 @@ directories are never modified or deleted by generators. Storage
 timestamps are canonical UTC everywhere (frontmatter, log headings,
 run ids); timezone conversion is strictly a presentation-layer
 concern.
+`Brain/standing-rules.md` and the scoped rule files under
+`Brain/standing-rules/` (`project/`, `harness/` and `host/`, since
+1.70.0) are operator-written: no generator or tool writes them, and
+their layout and file naming are part of this contract.
 
 ## What counts as breaking
 

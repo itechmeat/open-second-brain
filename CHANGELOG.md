@@ -26,13 +26,14 @@ A setting or a rule meant for one context no longer leaks into another: on a Her
 - **Each Hermes profile gets its own MCP child on a multiplexed gateway.** The child's environment carries the profile's own agent name, timezone, config path and vault instead of the launch profile's, and two profiles that share a vault but differ in any of those no longer share one child. A bridge keeps the timeout it was built with, so a restart never reads the environment.
 - **A Hermes setting ignored from the gateway environment is named once.** Under multiplexing each profile-scoped variable set in the gateway process environment logs one WARNING per process from `plugins.hermes.config`, without its value, saying to set it in the profile's `.env` instead; the shadowing hint names the profile's `.env`.
 - **A turn with no bound profile scope degrades.** When the gateway bound no profile scope, the settings readers raise a named `ProfileScopeError` (a `ConfigReadError`) instead of reading the launch profile's values, and the per-turn vault reminder is omitted with one WARNING instead of failing the turn.
-- **The today, monthly and operator brief views and two doctor counts answer at the caller's reach.** Below local reach `brain_brief` `view="today"` no longer lists an open loop or obligation on a page the caller cannot read and counts only the files it may scan; `view="monthly"` counts events, status transitions, retirements and contradictions from the events the caller may see, like the daily and weekly views; `view="operator"` computes its doctor and digest counts, its top actions and its trust verdict from what the caller may see; and `brain_doctor` fills its removed-tool warning cap and counts the stale-dependency `states_changed` from readable pages and records only. A local caller and the CLI see no change.
+- **The today, monthly and operator brief views and two doctor counts answer at the caller's reach.** Below local reach `brain_brief` `view="today"` no longer lists an open loop or obligation on a page the caller cannot read and counts only the files it may scan; `view="monthly"` counts events, status transitions, retirements and contradictions from the events the caller may see, like the daily and weekly views; `view="operator"` computes its doctor and digest counts, its top actions, its verification entries and counts and its trust verdict from what the caller may see; and `brain_doctor` fills its removed-tool warning cap and counts the stale-dependency `states_changed` from readable pages and records only. A local caller and the CLI see no change.
 - **Scoped rule files cannot be written by an agent.** Every write path that refuses `Brain/standing-rules.md` now also refuses any path inside `Brain/standing-rules/`, compared as written and after resolving symbolic links, so a not-yet-existing file reached through a linked folder is refused too.
 - **Docs:** `docs/how-it-works.md` gains "Scoped operator rules", `docs/mcp.md` the `scoped_rules` key and `--harness`, `docs/cli-reference.md` the `o2b mcp --harness` line, `docs/observability.md` the `scoped_rules_chars` field, `docs/stability.md` the two new layers, `install/hermes.md` "Multiple Hermes profiles", and `docs/updating.md` "Upgrading to 1.70.0"; the README names this release.
 
 ### Fixed
 
 - **The today view no longer lists an open loop from a page the caller cannot read.** Below local reach `view="today"` used to return the text and path of an open loop on a page withheld by visibility.
+- **The operator view no longer lists a verification entry the caller cannot read.** Below local reach `view="operator"` used to list verification entries by record id and page path for records withheld from the caller.
 
 ### Notes
 
@@ -40,7 +41,7 @@ A setting or a rule meant for one context no longer leaks into another: on a Her
 - The shared Hermes bridge resolves the gateway's working directory, so it usually matches no project-scoped file.
 - A Hermes gateway that serves a routed profile home without multiplexing keeps reading the process environment.
 - There are no combination scope files (for example project and host together); the matching single-axis files are joined instead.
-- The operator view's `dream_summary` and `verification_delta` are still counted over the whole Brain layer below local reach.
+- The operator view's `dream_summary` counts (the dry-run dream's warnings, uncertain and quarantined entries), and the dream warnings its trust verdict folds in, are still taken over the whole Brain layer below local reach; they name no record.
 - Updating the Hermes plugin without updating `o2b` makes the bridge fail to start, because an older `o2b mcp` refuses `--harness`; update both together.
 
 ## [1.69.0] - 2026-10-02
