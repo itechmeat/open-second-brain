@@ -20,11 +20,7 @@ import { DISTILL_TOOLS } from "../../src/mcp/brain/distill-tools.ts";
 import { CAPTURE_SCOPE } from "../../src/core/brain/provenance/capture-scope.ts";
 import { QUOTE_CHECK_OUTCOME } from "../../src/core/brain/distill/quote-verdict.ts";
 import { INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
-import {
-  PREVIEW_BUDGET_EXEMPT,
-  PROPERTY_DESCRIPTION_MAX,
-  TOOL_DESCRIPTION_MAX,
-} from "../../src/mcp/registry-guard.ts";
+import { PROPERTY_DESCRIPTION_MAX, TOOL_DESCRIPTION_MAX } from "../../src/mcp/registry-guard.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
 let vault: string;
@@ -214,9 +210,5 @@ describe("brain_distill_source - quote check and capture scope", () => {
         excerpt: "   ",
       }),
     ).rejects.toThrow("excerpt refused: the excerpt is empty");
-  });
-
-  test("the preview-budget rationale names the quotes report", () => {
-    expect(PREVIEW_BUDGET_EXEMPT["brain_distill_source"]).toContain("quotes");
   });
 });

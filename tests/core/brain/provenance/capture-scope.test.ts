@@ -21,7 +21,6 @@ import {
   CAPTURE_EXCERPT_MAX_BYTES,
   CAPTURE_SCOPE,
   CAPTURE_SCOPE_KEY,
-  CAPTURE_SCOPES,
   CAPTURE_SCOPES_KEY,
   CaptureExcerptError,
   captureScopeForTrust,
@@ -30,29 +29,20 @@ import {
   classifyCaptureScope,
   EXCERPT_HASH_KEY,
   excerptDigest,
-  isCaptureScope,
   readExcerptSection,
   renderExcerptSection,
 } from "../../../../src/core/brain/provenance/capture-scope.ts";
 import { INTAKE_TRUST } from "../../../../src/core/brain/trust/untrusted-provenance.ts";
 
 describe("CAPTURE_SCOPE vocabulary", () => {
-  test("the object is frozen and the member list equals its values", () => {
-    expect(Object.isFrozen(CAPTURE_SCOPE)).toBe(true);
-    expect(Object.isFrozen(CAPTURE_SCOPES)).toBe(true);
-    expect([...CAPTURE_SCOPES]).toEqual(Object.values(CAPTURE_SCOPE));
+  // Frozenness, membership and guard agreement are owned by the vocabulary
+  // census; this pins the frontmatter spellings only.
+  test("the scope tokens are the pinned spellings", () => {
     expect(CAPTURE_SCOPE).toEqual({
       fullLocal: "full-local",
       boundedLocal: "bounded-local",
       urlOnly: "url-only",
     });
-  });
-
-  test("the guard accepts each member and rejects near misses", () => {
-    for (const member of CAPTURE_SCOPES) expect(isCaptureScope(member)).toBe(true);
-    for (const outsider of ["full_local", "", "URL-ONLY", null, undefined, 3]) {
-      expect(isCaptureScope(outsider)).toBe(false);
-    }
   });
 
   test("the frontmatter keys are the pinned spellings", () => {

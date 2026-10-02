@@ -8,9 +8,7 @@ import { describe, expect, test } from "bun:test";
 import { PAGE_LINT_MAX_FINDINGS } from "../../../../src/core/brain/page-lint.ts";
 import { CAPTURE_SCOPE } from "../../../../src/core/brain/provenance/capture-scope.ts";
 import {
-  isQuoteCheckOutcome,
   QUOTE_CHECK_OUTCOME,
-  QUOTE_CHECK_OUTCOMES,
   QUOTE_FINDINGS_MAX,
   QUOTE_SPAN_PREVIEW_MAX_CHARS,
   QUOTE_UNVERIFIED_CODE,
@@ -22,10 +20,10 @@ import {
 } from "../../../../src/core/brain/distill/quote-verdict.ts";
 
 describe("QUOTE_CHECK_OUTCOME vocabulary", () => {
-  test("the object is frozen and the member list equals its values", () => {
-    expect(Object.isFrozen(QUOTE_CHECK_OUTCOME)).toBe(true);
-    expect(Object.isFrozen(QUOTE_CHECK_OUTCOMES)).toBe(true);
-    expect([...QUOTE_CHECK_OUTCOMES]).toEqual(Object.values(QUOTE_CHECK_OUTCOME));
+  // Frozenness, membership and guard agreement are owned by
+  // tests/core/architecture/verdict-vocabulary-census.test.ts; this pins the
+  // wire spellings only.
+  test("the outcome tokens are the pinned wire spellings", () => {
     expect(QUOTE_CHECK_OUTCOME).toEqual({
       verifiedInBlock: "verified-in-block",
       verifiedInSource: "verified-in-source",
@@ -40,13 +38,6 @@ describe("QUOTE_CHECK_OUTCOME vocabulary", () => {
 
   test("a span with no local bytes is named by the one capture-scope token", () => {
     expect(QUOTE_CHECK_OUTCOME.urlOnly).toBe(CAPTURE_SCOPE.urlOnly);
-  });
-
-  test("the guard accepts each member and rejects near misses", () => {
-    for (const member of QUOTE_CHECK_OUTCOMES) expect(isQuoteCheckOutcome(member)).toBe(true);
-    for (const outsider of ["verified_in_block", "", "url_only", null, 0]) {
-      expect(isQuoteCheckOutcome(outsider)).toBe(false);
-    }
   });
 
   test("only the two verified outcomes count as verified", () => {

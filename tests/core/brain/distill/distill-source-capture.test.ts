@@ -141,8 +141,21 @@ describe("distillSource - capture scope", () => {
     const claims = [{ text: "It “reuses staked capital”.", block: "abc" }];
     const first = distill(URL_SOURCE, claims, { excerpt: EXCERPT });
     const before = page(first);
+    expect(readExcerptSection(before)).toBe(EXCERPT);
     const second = distill(URL_SOURCE, claims, { excerpt: EXCERPT, now: LATER });
     expect(second.created).toBe(false);
+    expect(second.captureScope).toBe(CAPTURE_SCOPE.boundedLocal);
     expect(page(second)).toBe(before);
+  });
+
+  test("a CRLF excerpt holding a `---` line is stored verbatim and its digest still matches", () => {
+    const excerpt = "---\r\ntitle: not frontmatter\r\n---\r\nQuoted line here. ^q\r\n";
+    const res = distill(URL_SOURCE, [{ text: "It says “Quoted line here.”", block: "q" }], {
+      excerpt,
+    });
+    expect(res.quotes?.verified_in_block).toBe(1);
+    expect(meta(res)["title"]).toBeUndefined();
+    expect(readExcerptSection(page(res))).toBe(excerpt);
+    expect(meta(res)[EXCERPT_HASH_KEY]).toBe(excerptDigest(excerpt));
   });
 });

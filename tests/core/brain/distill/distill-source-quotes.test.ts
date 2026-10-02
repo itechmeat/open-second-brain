@@ -126,7 +126,9 @@ describe("distillSource - quote check", () => {
   test("re-running the same input is inert, unquoted page included", () => {
     const first = distill([PARAPHRASE]);
     const before = page(first);
+    expect(before).toContain("- It recycles staked capital for more.");
     const second = distill([PARAPHRASE], { now: LATER });
+    expect(second.quotes?.unquoted).toBe(1);
     expect(second.created).toBe(false);
     expect(page(second)).toBe(before);
   });
