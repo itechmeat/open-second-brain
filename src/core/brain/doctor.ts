@@ -138,20 +138,14 @@ export type {
 
 // ----- The registry ---------------------------------------------------------
 
-/**
- * Every check the pass runs, in report order.
- *
- * The order is part of the contract: findings are reported in discovery
- * order and the id index the record checks fill is what
- * {@link duplicateIdCheck} reads, so it has to follow them.
- */
 /** The stale-dependency check over the unbounded collector. */
 const STALE_DEPENDENCY_CHECK_UNBOUNDED = makeStaleDependencyCheck(auditStaleDependencies);
 
 /**
  * The stale-dependency check, its collector bounded to the pages the
- * pass may read when the context carries a predicate, so a state the
- * caller cannot read moves no count of the note it renders.
+ * pass may read when the context carries a predicate, so a page the
+ * caller cannot read is neither a state nor a consumer of one, and moves
+ * no count of the note or the rows it renders.
  */
 const staleDependencyCheck: DoctorCheck = {
   failSoft: STALE_DEPENDENCY_CHECK_UNBOUNDED.failSoft,
@@ -167,6 +161,13 @@ const staleDependencyCheck: DoctorCheck = {
   },
 };
 
+/**
+ * Every check the pass runs, in report order.
+ *
+ * The order is part of the contract: findings are reported in discovery
+ * order and the id index the record checks fill is what
+ * {@link duplicateIdCheck} reads, so it has to follow them.
+ */
 const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = Object.freeze([
   configCheck,
   vaultIgnoreCheck,
