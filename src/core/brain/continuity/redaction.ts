@@ -1,4 +1,4 @@
-import { redactRawOutput, stripPrivateRegions } from "../../redactor.ts";
+import { privateRegionTexts, redactRawOutput, stripPrivateRegions } from "../../redactor.ts";
 
 export interface SafePayloadResult {
   readonly payload: Readonly<Record<string, unknown>>;
@@ -6,7 +6,6 @@ export interface SafePayloadResult {
   readonly redacted: boolean;
 }
 
-const PRIVATE_REGION_RE = /<private\b[^>]*>.*?<\/private>/is;
 const REDACTED_RE = /\*\*\*REDACTED\*\*\*/;
 
 export function safeContinuityPayload(
@@ -23,7 +22,10 @@ export function safeContinuityPayload(
 
   function sanitizeValue(value: unknown): unknown {
     if (typeof value === "string") {
-      if (PRIVATE_REGION_RE.test(value)) sawPrivate = true;
+      // The redactor's own region scan, linear in the value's length and
+      // the same rule the strip below applies; a lazy-dot pattern here was
+      // quadratic on a run of open tags (21.8 s at 720 KB).
+      if (privateRegionTexts(value).length > 0) sawPrivate = true;
       const stripped = stripPrivateRegions(value);
       const redacted = redactRawOutput(stripped);
       if (REDACTED_RE.test(redacted) && redacted !== stripped) sawRedaction = true;
