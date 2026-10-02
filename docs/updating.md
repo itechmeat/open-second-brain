@@ -50,7 +50,7 @@ reference it finds (`removed-tool-reference`).
 ## Upgrading to 1.70.0
 
 One step is required for Hermes users: update the `o2b` CLI and the
-Hermes plugin together. Five changes are visible to an operator or a
+Hermes plugin together. Six changes are visible to an operator or a
 client.
 
 **Update `o2b` and the Hermes plugin together.** The Hermes plugin now
@@ -72,6 +72,21 @@ through to the Open Second Brain config chain instead; move such a
 setting into that profile's `.env`. The gateway log names each ignored
 variable once with a WARNING. A single-profile gateway is unchanged.
 See "Multiple Hermes profiles" in [`install/hermes.md`](../install/hermes.md).
+
+**`hermes open-second-brain config` prints the settings source first.**
+The first line is now `settings_source: ...`, naming the source this
+command resolved from (`profile scope (multiplexed gateway)`, or
+`process environment` with a note that a multiplexed gateway reads each
+profile's `.env`), and `config_path:` follows it; when no profile
+scope is bound, the named error replaces the path. A script that reads
+`config_path:` from the first line must look for it by name. On a
+multiplexed gateway each profile identity (vault, agent name, timezone,
+config path and timeout) gets its own `o2b mcp` child, so the gateway
+runs more child processes, and a child whose identity changed (for
+example after an edited `.env`) stays alive until the gateway exits. A
+call with no bound profile scope reports a `ProfileScopeError` naming
+the variable, and `prefetch` omits the vault reminder for that turn with
+one WARNING.
 
 **Scoped operator rules.** Files under `Brain/standing-rules/project/`,
 `Brain/standing-rules/harness/` and `Brain/standing-rules/host/` are
