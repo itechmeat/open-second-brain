@@ -56,6 +56,10 @@ import { isValidDeviceId } from "../config.ts";
 import { resolveAppendShardId } from "./ledger-shards.ts";
 import { ORIGIN_CHANNEL_FIELD, originChannelStamp } from "../origin-channel.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_LOG_EVENT_KIND_SET, type BrainLogEventKind } from "./types.ts";
+import { PREF_ID_PREFIX } from "./dream-plan.ts";
+
+/** A topic that can stand as a preference slug: no path separator, no dot run. */
+const RECONCILE_TOPIC_SLUG_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
 // ----- Public types ---------------------------------------------------------
 
@@ -669,7 +673,7 @@ function parseIsoUtc(timestamp: string): IsoUtcParts {
  */
 export function logEntryArtifactRefs(entry: BrainLogEntry): ReadonlyArray<string | undefined> {
   const body = (entry.body ?? {}) as Record<string, unknown>;
-  const refs: Array<string | undefined> = [];
+  const refs: Array<string | undefined> = [reconcileTopicPreferenceId(entry)];
   for (const value of Object.values(body)) {
     if (typeof value === "string") refs.push(value);
     else if (Array.isArray(value)) {
@@ -677,4 +681,19 @@ export function logEntryArtifactRefs(entry: BrainLogEntry): ReadonlyArray<string
     }
   }
   return refs;
+}
+
+/**
+ * The preference a reconcile event is about, by id.
+ *
+ * A reconcile event names its subject by `topic`, not by id, and a
+ * preference's slug is its topic: the open question on topic `x` is about
+ * `pref-x`. A topic that cannot be a slug names no preference.
+ */
+export function reconcileTopicPreferenceId(entry: BrainLogEntry): string | undefined {
+  if (entry.eventType !== BRAIN_LOG_EVENT_KIND.reconcile) return undefined;
+  const topic = (entry.body ?? {})["topic"];
+  return typeof topic === "string" && RECONCILE_TOPIC_SLUG_RE.test(topic)
+    ? `${PREF_ID_PREFIX}${topic}`
+    : undefined;
 }

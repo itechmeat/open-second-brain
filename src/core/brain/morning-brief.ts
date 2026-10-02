@@ -20,6 +20,7 @@ import { brainDirs } from "./paths.ts";
 import { collectPreferences, resolveOwnerScopeDelivery } from "./preferences-collect.ts";
 import { applyCharBudget } from "./recall-budget.ts";
 import { readLogDay } from "./log-jsonl.ts";
+import { reconcileTopicPreferenceId } from "./log.ts";
 import { renderActivityTimeline, type ActivityItem } from "./render/activity-line.ts";
 import { isoDate, relativeAge } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_PREFERENCE_STATUS } from "./types.ts";
@@ -121,7 +122,12 @@ interface LogScan {
   readonly notes: ScannedNote[];
 }
 
-function scanRecentLog(vault: string, now: Date, lookbackDays: number): LogScan {
+function scanRecentLog(
+  vault: string,
+  now: Date,
+  lookbackDays: number,
+  readable: ((rel: string) => boolean) | undefined,
+): LogScan {
   const openQuestions: ScannedOpenQuestion[] = [];
   const notes: ScannedNote[] = [];
   const seenTopics = new Set<string>();
@@ -138,6 +144,15 @@ function scanRecentLog(vault: string, now: Date, lookbackDays: number): LogScan 
         // Auto-resolutions carry a `resolution` field; only open
         // questions (no resolution) are surfaced to the operator.
         if (typeof e.body["resolution"] === "string") continue;
+        // An open question is about the preference its topic names.
+        const subject = reconcileTopicPreferenceId(e);
+        if (
+          readable !== undefined &&
+          subject !== undefined &&
+          !readable(posix.join(BRAIN_PREFERENCES_REL, `${subject}.md`))
+        ) {
+          continue;
+        }
         const topic = typeof e.body["topic"] === "string" ? e.body["topic"] : "";
         const domain = typeof e.body["domain"] === "string" ? e.body["domain"] : "";
         if (topic && !seenTopics.has(topic)) {
@@ -178,7 +193,7 @@ export function buildMorningBrief(vault: string, opts: MorningBriefOptions): Mor
   });
   const topPrefs = ranked.slice(0, Math.max(0, opts.topK));
 
-  const { openQuestions, notes } = scanRecentLog(vault, opts.now, lookbackDays);
+  const { openQuestions, notes } = scanRecentLog(vault, opts.now, lookbackDays, opts.readable);
 
   // Budget all variable-length entries together so one oversized entry
   // cannot crowd out the rest. Items are tagged by kind so the result

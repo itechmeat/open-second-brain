@@ -299,6 +299,33 @@ describe("the activity and lessons digests treat a withheld record as absent at 
     expect(statuses()).toEqual(["delivered"]);
   });
 
+  test("an open question on a reserved preference's topic is absent from a remote morning brief and digest", async () => {
+    const withheld = fixture(true, RECENT_EVIDENCE_AGE_MS);
+    appendLogEvent(
+      withheld.vault,
+      {
+        timestamp: new Date().toISOString(),
+        eventType: BRAIN_LOG_EVENT_KIND.reconcile,
+        body: { topic: PRIVATE_SLUG, domain: "general", positives: "1", negatives: "1" },
+      },
+      { deviceId: "" },
+    );
+    const absent = fixture(false, RECENT_EVIDENCE_AGE_MS);
+    const morning = async (f: Fixture, reach: TransportReach): Promise<string> =>
+      normalise(
+        f,
+        JSON.stringify(await server(f, reach).callTool("brain_brief", { view: "morning" })),
+      );
+    expect(await morning(withheld, TRANSPORT_REACH.remote)).toBe(
+      await morning(absent, TRANSPORT_REACH.remote),
+    );
+    expect(await briefDigest(withheld, TRANSPORT_REACH.remote, "json")).toBe(
+      await briefDigest(absent, TRANSPORT_REACH.remote, "json"),
+    );
+    // A local caller still sees the open question.
+    expect(await morning(withheld, TRANSPORT_REACH.local)).toContain(`"topic":"${PRIVATE_SLUG}"`);
+  });
+
   test("the osb://digest/latest resource answers identically", () => {
     const withheld = resource(fixture(true), TRANSPORT_REACH.remote, DIGEST_URI);
     const absent = resource(fixture(false), TRANSPORT_REACH.remote, DIGEST_URI);
