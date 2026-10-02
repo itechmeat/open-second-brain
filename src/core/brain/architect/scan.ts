@@ -1,11 +1,18 @@
 /**
  * Deterministic project scanner (Project History Suite, t_929da8a2).
  *
- * Stdlib-only structural facts: no network, no LLM, no per-language
- * parsing - directory layout, file extensions, and manifests are the
- * whole input, so the same tree always produces the same facts (the
- * generator's idempotency rests on this). Import-graph analysis is
- * explicitly out of scope (design doc).
+ * Built-in runtime only, no dependency: no network, no LLM, no
+ * per-language parsing - directory layout, file extensions, and
+ * dependency manifests are the whole input, so the same tree always
+ * produces the same facts (the generator's idempotency rests on this).
+ * Import-graph analysis is explicitly out of scope (design doc).
+ *
+ * Manifests are read at the project root and at every detected module
+ * path, found in the walk's own path list (`manifests.ts` reads them and
+ * records a manifest it cannot read rather than swallowing it). The only
+ * module-to-module relation this scan states is one a manifest DECLARES:
+ * a module whose manifest names, as a runtime dependency, the manifest
+ * name of exactly one other module in the same ecosystem.
  *
  * Module detection prefers `src/<dir>` children, then `packages/<dir>`,
  * and degrades to a single `root` module on flat layouts rather than
@@ -18,9 +25,13 @@
  * which carries the measurement behind that decision.
  */
 
-import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { basename, extname, join, resolve } from "node:path";
 
+import { DEPENDENCY_MANIFESTS } from "../../project-manifests.ts";
+import { resolveUniqueMatch } from "../../graph/unique-match.ts";
+import { canonicalDependencyName, MANIFEST_STATUS, readManifestAt } from "./manifests.ts";
+import type { ManifestFact, ManifestReading } from "./manifests.ts";
 import { OPERATION, progressCounter, progressReasonForError } from "../progress.ts";
 import type { ProgressCounter, ProgressSink } from "../progress.ts";
 import type { Safeguard } from "../safeguard.ts";
@@ -96,19 +107,35 @@ export interface ModuleFact {
   readonly languages: Readonly<Record<string, number>>;
   /** Module-relative file paths, sorted, capped for note rendering. */
   readonly topFiles: ReadonlyArray<string>;
+  /** The dependency manifests at this module's path, in precedence order. */
+  readonly manifests: ReadonlyArray<ManifestReading>;
 }
 
-export interface ManifestFact {
-  readonly name: string | null;
-  readonly version: string | null;
-  readonly description: string | null;
-  readonly dependencies: ReadonlyArray<string>;
+export type { ManifestFact } from "./manifests.ts";
+
+/**
+ * One module's manifest declaring a runtime dependency on another
+ * module's manifest name. Module names, never paths: the generator links
+ * module notes, which are named after their module.
+ */
+export interface ModuleDependency {
+  readonly from: string;
+  readonly to: string;
 }
 
 export interface ProjectFacts {
   readonly root: string;
   readonly name: string;
+  /**
+   * Name, version and description of the first root manifest READ in
+   * precedence order (`DEPENDENCY_MANIFESTS`); `null` when no root
+   * manifest was read.
+   */
   readonly manifest: ManifestFact | null;
+  /** Every manifest read or attempted, root and modules, sorted by path. */
+  readonly manifests: ReadonlyArray<ManifestReading>;
+  /** Declared module-to-module edges, sorted by `from`, then `to`. */
+  readonly moduleDependencies: ReadonlyArray<ModuleDependency>;
   readonly entryPoints: ReadonlyArray<string>;
   readonly modules: ReadonlyArray<ModuleFact>;
   readonly testLayout: string | null;
@@ -281,71 +308,171 @@ function childDirs(total: WalkStats, base: string): ReadonlyArray<string> {
     .toSorted();
 }
 
+/** The flat layout's single module, whose path is the project root. */
+const ROOT_MODULE_PATH = ".";
+
 /**
- * A manifest and the object it was parsed from. The raw object travels
- * with the fact because entry-point detection needs `main` and `bin`,
- * which the fact does not carry - reading and parsing `package.json` a
- * second time to reach them was two syscalls and a parse for data
- * already in memory, and left two readers that could disagree about
- * what the file said.
+ * The dependency manifests directly at `dir` (project-relative, `.` for
+ * the root), in precedence order, found in the walk's path list - so a
+ * manifest is read only where the walk saw a file, and nothing is
+ * traversed a second time to find it.
  */
-interface ManifestRead {
-  readonly fact: ManifestFact;
-  readonly raw: Record<string, unknown>;
-}
-
-function readManifest(root: string): ManifestRead | null {
-  const path = join(root, "package.json");
-  if (!existsSync(path)) return null;
-  try {
-    const raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
-    const deps =
-      typeof raw["dependencies"] === "object" && raw["dependencies"] !== null
-        ? Object.keys(raw["dependencies"] as Record<string, unknown>).toSorted()
-        : [];
-    return {
-      fact: Object.freeze({
-        name: typeof raw["name"] === "string" ? raw["name"] : null,
-        version: typeof raw["version"] === "string" ? raw["version"] : null,
-        description: typeof raw["description"] === "string" ? raw["description"] : null,
-        dependencies: Object.freeze(deps),
-      }),
-      raw,
-    };
-  } catch {
-    return null;
+function readManifestsAt(
+  root: string,
+  files: ReadonlySet<string>,
+  dir: string,
+): ReadonlyArray<ManifestReading> {
+  const readings: ManifestReading[] = [];
+  for (const spec of DEPENDENCY_MANIFESTS) {
+    const rel = dir === ROOT_MODULE_PATH ? spec.file : `${dir}/${spec.file}`;
+    if (files.has(rel)) readings.push(readManifestAt(root, rel));
   }
+  return Object.freeze(readings);
 }
 
-function moduleFact(name: string, path: string, stats: SubtreeStats): ModuleFact {
+/** The first reading that was read, in the order given. */
+function firstRead(readings: ReadonlyArray<ManifestReading>): ManifestReading | null {
+  return readings.find((reading) => reading.status === MANIFEST_STATUS.read) ?? null;
+}
+
+/**
+ * One identity per ecosystem: the key two manifests share when they name
+ * one package. `name` is already canonical (a declared dependency is; a
+ * manifest's own name goes through `canonicalDependencyName` first).
+ */
+export function manifestIdentity(ecosystem: string, name: string): string {
+  return `${ecosystem}\u0000${name}`;
+}
+
+/**
+ * The manifest identities a module answers to: the canonical name of each
+ * of its read manifests, keyed by ecosystem.
+ */
+function moduleIdentities(module: ModuleFact): ReadonlyArray<string> {
+  const keys: string[] = [];
+  for (const reading of module.manifests) {
+    const name = reading.fact?.name;
+    if (name == null) continue;
+    keys.push(
+      manifestIdentity(reading.ecosystem, canonicalDependencyName(reading.ecosystem, name)),
+    );
+  }
+  return keys;
+}
+
+/** Every module manifest's identity: the names that are modules, not external packages. */
+export function moduleManifestIdentities(modules: ReadonlyArray<ModuleFact>): ReadonlySet<string> {
+  return new Set(modules.flatMap(moduleIdentities));
+}
+
+/**
+ * Module-to-module edges, as the manifests declare them.
+ *
+ * A declared dependency binds under the exactly-one rule
+ * ({@link resolveUniqueMatch}): a name two modules' manifests carry binds
+ * nothing, because picking one would state a relation nothing decided.
+ * A module naming itself is not an edge. Sorted, so the facts do not
+ * depend on module or manifest order.
+ */
+function detectModuleDependencies(
+  modules: ReadonlyArray<ModuleFact>,
+): ReadonlyArray<ModuleDependency> {
+  const owners = new Map<string, string[]>();
+  for (const module of modules) {
+    for (const key of moduleIdentities(module)) {
+      const list = owners.get(key) ?? [];
+      list.push(module.name);
+      owners.set(key, list);
+    }
+  }
+  const edges = new Map<string, ModuleDependency>();
+  for (const module of modules) {
+    for (const reading of module.manifests) {
+      for (const dependency of reading.fact?.dependencies ?? []) {
+        const verdict = resolveUniqueMatch(
+          owners.get(manifestIdentity(reading.ecosystem, dependency)) ?? [],
+        );
+        if (verdict.status !== "unique" || verdict.target === module.name) continue;
+        const edge = Object.freeze({ from: module.name, to: verdict.target });
+        edges.set(`${edge.from}\u0000${edge.to}`, edge);
+      }
+    }
+  }
+  return Object.freeze(
+    [...edges.values()].toSorted(
+      (a, b) => compareStable(a.from, b.from) || compareStable(a.to, b.to),
+    ),
+  );
+}
+
+/** Root and module readings, one per path, sorted by path. */
+function allManifests(
+  rootManifests: ReadonlyArray<ManifestReading>,
+  modules: ReadonlyArray<ModuleFact>,
+): ReadonlyArray<ManifestReading> {
+  const byPath = new Map<string, ManifestReading>();
+  for (const reading of [...rootManifests, ...modules.flatMap((module) => module.manifests)]) {
+    byPath.set(reading.path, reading);
+  }
+  return Object.freeze([...byPath.values()].toSorted((a, b) => compareStable(a.path, b.path)));
+}
+
+function moduleFact(
+  name: string,
+  path: string,
+  stats: SubtreeStats,
+  manifests: ReadonlyArray<ManifestReading>,
+): ModuleFact {
   return Object.freeze({
     name,
     path,
     files: stats.files,
     languages: Object.freeze(stats.languages),
     topFiles: Object.freeze(stats.paths.toSorted().slice(0, TOP_FILES_CAP)),
+    manifests,
   });
 }
 
-function detectModules(total: WalkStats): ReadonlyArray<ModuleFact> {
+function detectModules(
+  root: string,
+  total: WalkStats,
+  files: ReadonlySet<string>,
+  rootManifests: ReadonlyArray<ManifestReading>,
+): ReadonlyArray<ModuleFact> {
   for (const base of MODULE_BASES) {
     const dirs = childDirs(total, base);
     if (dirs.length === 0) continue;
     return Object.freeze(
-      dirs.map((name) =>
-        moduleFact(name, `${base}/${name}`, subtreeStats(total, `${base}/${name}`)),
-      ),
+      dirs.map((name) => {
+        const path = `${base}/${name}`;
+        return moduleFact(
+          name,
+          path,
+          subtreeStats(total, path),
+          readManifestsAt(root, files, path),
+        );
+      }),
     );
   }
   // Flat layout: the project root is the single module, and the root walk
-  // IS its walk - nothing is traversed a second time to learn that.
-  return Object.freeze([moduleFact("root", ".", total)]);
+  // IS its walk - nothing is traversed a second time to learn that. Its
+  // manifests are the root's, already read.
+  return Object.freeze([moduleFact("root", ROOT_MODULE_PATH, total, rootManifests)]);
 }
 
-function detectEntryPoints(root: string, manifest: ManifestRead | null): ReadonlyArray<string> {
+/**
+ * Entry points from a read root `package.json` (`main`, `bin`) and the
+ * conventional candidates. The raw object travels on the reading because
+ * `main` and `bin` are not part of the fact; reading the file a second
+ * time would leave two readers that could disagree about what it said.
+ */
+function detectEntryPoints(
+  root: string,
+  rootManifests: ReadonlyArray<ManifestReading>,
+): ReadonlyArray<string> {
   const points = new Set<string>();
-  if (manifest !== null) {
-    const raw = manifest.raw;
+  const raw = rootManifests.find((reading) => reading.raw !== null)?.raw ?? null;
+  if (raw !== null) {
     if (typeof raw["main"] === "string") points.add(raw["main"]);
     if (typeof raw["bin"] === "object" && raw["bin"] !== null) {
       for (const value of Object.values(raw["bin"] as Record<string, unknown>)) {
@@ -362,17 +489,22 @@ function detectEntryPoints(root: string, manifest: ManifestRead | null): Readonl
 /** Scan one project tree into deterministic structural facts. */
 export function scanProject(projectRoot: string, opts: ScanProjectOptions = {}): ProjectFacts {
   const root = resolve(projectRoot);
-  const manifest = readManifest(root);
   const progress = progressCounter(OPERATION.architect, opts.onProgress);
   progress.start(ARCHITECT_STAGE.walk);
   const total = walkTree(root, progress, opts.safeguard);
+  const files: ReadonlySet<string> = new Set(total.paths);
+  const rootManifests = readManifestsAt(root, files, ROOT_MODULE_PATH);
+  const manifest = firstRead(rootManifests)?.fact ?? null;
+  const modules = detectModules(root, total, files, rootManifests);
   const testLayout = TEST_LAYOUTS.find((layout) => existsSync(join(root, layout))) ?? null;
   return Object.freeze({
     root,
-    name: manifest?.fact.name ?? basename(root),
-    manifest: manifest?.fact ?? null,
-    entryPoints: detectEntryPoints(root, manifest),
-    modules: detectModules(total),
+    name: manifest?.name ?? basename(root),
+    manifest,
+    manifests: allManifests(rootManifests, modules),
+    moduleDependencies: detectModuleDependencies(modules),
+    entryPoints: detectEntryPoints(root, rootManifests),
+    modules,
     testLayout,
     totalFiles: total.files,
     languages: Object.freeze(total.languages),

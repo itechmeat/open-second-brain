@@ -1,5 +1,5 @@
 /**
- * P4 (t_ef786747): deterministic, stdlib-only code-structure pre-extractor.
+ * The deterministic, built-in-runtime-only code-structure pre-extractor.
  *
  * Turns a code source into JSON entity/edge seeds (classes/functions as
  * entities; imports and inheritance as edges) without any model. Same input
@@ -124,7 +124,7 @@ describe("preExtractCodeStructure - unknown languages", () => {
   });
 });
 
-describe("preExtractCodeStructure - relative-import binding (t_2356dace)", () => {
+describe("preExtractCodeStructure - relative-import binding", () => {
   const INGESTED = new Set([
     "src/lib/dom.ts",
     "src/lib/widget.ts",
@@ -332,7 +332,7 @@ describe("preExtractCodeStructure - relative-import binding (t_2356dace)", () =>
   });
 });
 
-describe("preExtractCodeStructure - JSX component usage (t_998aa4e6)", () => {
+describe("preExtractCodeStructure - JSX component usage", () => {
   test("a capitalized opening tag in a .tsx source yields a uses edge", () => {
     const res = asSuccess(
       preExtractCodeStructure(

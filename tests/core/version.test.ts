@@ -33,7 +33,7 @@
  *     and the equality below would not notice if something started.
  *   - A module that reads `package.json` off the filesystem at runtime
  *     is deliberately out of population: `src/core/doctor.ts` and
- *     `src/core/brain/architect/scan.ts` both do, and both are reading
+ *     `src/core/brain/architect/manifests.ts` both do, and both are reading
  *     SOME project's manifest discovered at a runtime root, not this
  *     install's own version. Folding them in would make the census
  *     answer a different question than the one it is named for.

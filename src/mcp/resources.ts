@@ -60,7 +60,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { listLogMarkdownFiles } from "../core/brain/log-jsonl.ts";
 
-import { regenerateActive } from "../core/brain/active.ts";
+import { readActiveForReader, regenerateActive } from "../core/brain/active.ts";
 import { regenerateLessons } from "../core/brain/lessons.ts";
 import { buildBacklinkIndex } from "../core/brain/backlinks.ts";
 import type { BacklinkRef } from "../core/brain/backlinks.ts";
@@ -212,7 +212,7 @@ export function readResource(ctx: ResourceContext, uri: string): ResourceContent
   const parsed = parseUri(uri);
   switch (parsed.kind) {
     case "active":
-      return readActive(ctx, uri);
+      return readActive(ctx, uri, requestView(ctx));
     case "lessons":
       return readLessons(ctx, uri);
     case "digestLatest":
@@ -333,7 +333,7 @@ function parseUri(uri: string): Parsed {
 
 // ----- Readers -------------------------------------------------------------
 
-function readActive(ctx: ResourceContext, uri: string): ResourceContent {
+function readActive(ctx: ResourceContext, uri: string, view: RequestView): ResourceContent {
   const path = brainActivePath(ctx.vault);
   // First read attempt: the file usually exists because dream
   // regenerates it. On a fresh vault that has never been dreamed, the
@@ -351,7 +351,14 @@ function readActive(ctx: ResourceContext, uri: string): ResourceContent {
       );
     }
   }
-  return readMarkdown(uri, path);
+  // The shared file is served as it is unless this request withholds a
+  // record it draws from; then the reader gets the digest without it,
+  // stamped with the generation on disk (see `readActiveForReader`).
+  const text = readActiveForReader(ctx.vault, {
+    ...(view.refs.filtersNothing ? {} : { readable: view.refs.visible }),
+    ...(view.ownerScope !== null ? { agentScope: view.ownerScope } : {}),
+  });
+  return { uri, mimeType: MIME_MARKDOWN, text };
 }
 
 function readLessons(ctx: ResourceContext, uri: string): ResourceContent {

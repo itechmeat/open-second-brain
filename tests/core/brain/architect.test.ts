@@ -3,7 +3,7 @@
  * (Project History Suite, t_929da8a2).
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   chmodSync,
   existsSync,
@@ -336,4 +336,129 @@ test("unchanged project regenerates byte-identically", () => {
   expect(readFileSync(second.overviewPath, "utf8")).toBe(before);
   expect(second.created).toBe(0);
   expect(second.unchanged).toBeGreaterThanOrEqual(3);
+});
+
+function manifestProject(name: string): string {
+  const root = join(tmp, name);
+  mkdirSync(root, { recursive: true });
+  return root;
+}
+
+function put(root: string, relPath: string, content: string): void {
+  const abs = join(root, relPath);
+  mkdirSync(join(abs, ".."), { recursive: true });
+  writeFileSync(abs, content);
+}
+
+function pkg(name: string, dependencies: Record<string, string> = {}): string {
+  return JSON.stringify({ name, version: "0.1.0", dependencies });
+}
+
+/**
+ * Manifest facts in the scan: every root manifest and every manifest at a
+ * detected module path is read from the walk's path list, a manifest that
+ * cannot be read is recorded rather than swallowed, and a module whose
+ * manifest names exactly one other module's manifest gets an edge.
+ */
+describe("manifest facts", () => {
+  test("the first read root manifest in precedence order names the project", () => {
+    const root = manifestProject("poly");
+    put(root, "pyproject.toml", '[project]\nname = "py-name"\ndependencies = ["Requests>=2"]\n');
+    put(root, "package.json", pkg("js-name", { "left-pad": "^1" }));
+    put(root, "main.py", "print('x')\n");
+
+    const facts = scanProject(root);
+    expect(facts.name).toBe("js-name");
+    expect(facts.manifest!.dependencies).toEqual(["left-pad"]);
+    expect(facts.manifests.map((m) => [m.path, m.ecosystem, m.status])).toEqual([
+      ["package.json", "npm", "read"],
+      ["pyproject.toml", "pypi", "read"],
+    ]);
+  });
+
+  test("pyproject.toml names the project when package.json is absent", () => {
+    const root = manifestProject("pyonly");
+    put(root, "pyproject.toml", '[project]\nname = "py-name"\nversion = "2.0.0"\n');
+    const facts = scanProject(root);
+    expect(facts.name).toBe("py-name");
+    expect(facts.manifest!.version).toBe("2.0.0");
+  });
+
+  test("a malformed root manifest is a recorded reading and the name falls back", () => {
+    const root = manifestProject("broken-app");
+    put(root, "package.json", "{ not json");
+    put(root, "index.js", "// x\n");
+
+    const facts = scanProject(root);
+    expect(facts.name).toBe("broken-app");
+    expect(facts.manifest).toBeNull();
+    expect(facts.manifests).toHaveLength(1);
+    expect(facts.manifests[0]!.path).toBe("package.json");
+    expect(facts.manifests[0]!.status).toBe("malformed");
+    expect(facts.manifests[0]!.detail).toBeTruthy();
+  });
+
+  test("a project with no manifest has an empty manifest list", () => {
+    const root = manifestProject("bare");
+    put(root, "main.py", "print('x')\n");
+    const facts = scanProject(root);
+    expect(facts.manifests).toEqual([]);
+    expect(facts.moduleDependencies).toEqual([]);
+  });
+
+  test("module manifests are read at the module paths and bind exactly-one edges", () => {
+    const root = manifestProject("mono");
+    put(root, "package.json", pkg("mono"));
+    put(root, "packages/core/package.json", pkg("@mono/core", { lodash: "^4" }));
+    put(root, "packages/core/index.ts", "// x\n");
+    put(root, "packages/web/package.json", pkg("@mono/web", { "@mono/core": "*", react: "^19" }));
+    put(root, "packages/web/index.ts", "// x\n");
+    // A manifest deeper than the module root is not the module's manifest.
+    put(root, "packages/web/fixtures/package.json", pkg("@mono/fixture"));
+
+    const facts = scanProject(root);
+    const web = facts.modules.find((m) => m.name === "web")!;
+    expect(web.manifests.map((m) => m.path)).toEqual(["packages/web/package.json"]);
+    expect(web.manifests[0]!.fact!.dependencies).toEqual(["@mono/core", "react"]);
+    expect(facts.manifests.map((m) => m.path)).toEqual([
+      "package.json",
+      "packages/core/package.json",
+      "packages/web/package.json",
+    ]);
+    expect(facts.moduleDependencies).toEqual([{ from: "web", to: "core" }]);
+  });
+
+  test("a name two modules declare binds nothing, and a self-edge is dropped", () => {
+    const root = manifestProject("twins");
+    put(root, "packages/a/package.json", pkg("shared"));
+    put(root, "packages/b/package.json", pkg("shared"));
+    put(root, "packages/c/package.json", pkg("c", { shared: "*", c: "*" }));
+    put(root, "packages/d/package.json", pkg("d", { c: "*" }));
+
+    const facts = scanProject(root);
+    expect(facts.moduleDependencies).toEqual([{ from: "d", to: "c" }]);
+  });
+
+  test("edges bind within one ecosystem under its canonical name", () => {
+    const root = manifestProject("pymono");
+    put(root, "src/core_lib/pyproject.toml", '[project]\nname = "Core_Lib"\n');
+    put(
+      root,
+      "src/app/pyproject.toml",
+      '[project]\nname = "app"\ndependencies = ["core-lib>=1"]\n',
+    );
+    // An npm package of the same name is a different identity.
+    put(root, "src/jsapp/package.json", pkg("jsapp", { "core-lib": "*" }));
+
+    const facts = scanProject(root);
+    expect(facts.moduleDependencies).toEqual([{ from: "app", to: "core_lib" }]);
+  });
+
+  test("manifest facts are byte-stable across two scans", () => {
+    const root = manifestProject("stable");
+    put(root, "package.json", pkg("stable", { b: "1", a: "1" }));
+    put(root, "packages/x/package.json", pkg("x", { stable: "*", y: "*" }));
+    put(root, "packages/y/package.json", pkg("y"));
+    expect(JSON.stringify(scanProject(root))).toBe(JSON.stringify(scanProject(root)));
+  });
 });
