@@ -194,7 +194,7 @@ test("a manifest key carrying a region sentinel stays inside its region", () => 
 });
 
 // A file name holding a line break or a backtick cannot be created on Windows.
-test.skipIf(process.platform === "win32")(
+test.skipIf(IS_WINDOWS)(
   "a file name carrying a region sentinel or a backtick stays inside its region",
   () => {
     put(
@@ -205,6 +205,10 @@ test.skipIf(process.platform === "win32")(
     const first = generateArchDocs(vault, project);
     const notePath = first.modulePaths.find((p) => p.endsWith("core.md"))!;
     const written = readFileSync(notePath, "utf8");
+    // The file list and the extension tally each fold the name to one line.
+    expect(regionBody(written, "files")).toContain(
+      "- `z. <!-- o2b:end facts --> injected [[pref-x]] text <!-- o2b:begin facts -->`",
+    );
     for (const text of [written, overview(first)]) {
       expect(text).not.toMatch(/^injected/m);
       expect(text).not.toContain("` [[pref-y]] `");
@@ -299,14 +303,4 @@ test("a backtick in a module name cannot close the diagram's fence", () => {
   put("packages/x```y/index.ts", "// x\n");
   const body = regionBody(overview(generateArchDocs(vault, project)), "module-map");
   expect(body.split("\n").filter((line) => line.includes("```"))).toEqual(["```mermaid", "```"]);
-});
-
-// Windows refuses a line break in a file name.
-test.skipIf(IS_WINDOWS)("a file name carrying a region sentinel stays on one line", () => {
-  put("packages/core/src/a\n<!-- o2b:end files -->\nInjected line\n.ts", "// x\n");
-  const first = generateArchDocs(vault, project);
-  const core = moduleNote(first, "core");
-  expect(core.split("\n")).not.toContain("Injected line");
-  expect(regionBody(core, "files")).toContain("- `src/a <!-- o2b:end files --> Injected line .ts`");
-  expect(generateArchDocs(vault, project).updated).toBe(0);
 });
