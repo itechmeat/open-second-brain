@@ -8,6 +8,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -17,6 +18,7 @@ import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
 import { hashBytes } from "../../../../src/core/brain/ingest/content-manifest.ts";
 import { ingestSource } from "../../../../src/core/brain/ingest/ingest.ts";
 import { INGEST_TOOLS } from "../../../../src/mcp/brain/ingest-tools.ts";
+import { IS_WINDOWS } from "../../../helpers/platform.ts";
 
 const NOW = new Date("2026-06-13T12:00:00Z");
 const LATER = new Date("2026-06-14T09:00:00Z");
@@ -210,6 +212,17 @@ describe("a CSV source that is not local answers like an absent one", () => {
     expect(res.table).toEqual(NOT_LOCAL);
     assertNoDerivation(page(vault, res.summaryPath));
   });
+
+  test.skipIf(IS_WINDOWS)(
+    "a FIFO named .csv answers like an absent file and does not block",
+    () => {
+      mkdirSync(join(vault, "Clips"), { recursive: true });
+      expect(spawnSync("mkfifo", [join(vault, "Clips/parts.csv")]).status).toBe(0);
+      const res = ingestSource(vault, input("Clips/parts.csv"), { agent: "claude", now: NOW });
+      expect(res.table).toEqual(NOT_LOCAL);
+      assertNoDerivation(page(vault, res.summaryPath));
+    },
+  );
 
   test("a hidden file answers exactly as an absent one: same result, same page", () => {
     seed(vault, "Clips/parts.csv", PARTS_CSV);
