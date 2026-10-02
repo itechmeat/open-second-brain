@@ -74,6 +74,15 @@ export function manifestPath(vault: string): string {
 }
 
 /**
+ * SHA-256 hex over raw bytes already in memory. The one digest every source
+ * record in this repository uses, so a caller that read a file once for
+ * another purpose records the same digest {@link hashFile} would.
+ */
+export function hashBytes(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+/**
  * SHA-256 hex over a single file's raw bytes. Timestamp-independent: only the
  * content contributes to the digest. Throws if the path is a directory - use
  * {@link hashTree} for those.
@@ -83,7 +92,7 @@ export function hashFile(absPath: string): string {
   if (stat.isDirectory()) {
     throw new Error(`hashFile: path is a directory, use hashTree: ${absPath}`);
   }
-  return createHash("sha256").update(readFileSync(absPath)).digest("hex");
+  return hashBytes(readFileSync(absPath));
 }
 
 /**

@@ -54,10 +54,10 @@
  */
 
 import { isAbsolute, join } from "node:path";
-import { statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 
 import { canonicalNotePath, ensureInsideVault, hasUriScheme } from "../../path-safety.ts";
-import { hashFile } from "../ingest/content-manifest.ts";
+import { hashBytes } from "../ingest/content-manifest.ts";
 import { INTAKE_TRUST, type IntakeTrust } from "../trust/untrusted-provenance.ts";
 
 /** `[[Articles/x.md]]` - the wikilink form the NER tool's `source` arrives in. */
@@ -125,7 +125,16 @@ export interface SourceOrigin {
   readonly contentHash?: string;
 }
 
-const UNTRUSTED_ORIGIN: SourceOrigin = Object.freeze({ trust: INTAKE_TRUST.untrusted });
+/**
+ * A source origin together with the bytes its digest was computed over.
+ * `bytes` is present exactly when `contentHash` is: both come from one read,
+ * so a check that runs on these bytes runs on the bytes the page records.
+ */
+export interface SourceOriginWithBytes extends SourceOrigin {
+  readonly bytes?: Uint8Array;
+}
+
+const UNTRUSTED_ORIGIN: SourceOriginWithBytes = Object.freeze({ trust: INTAKE_TRUST.untrusted });
 
 /** Everything before the first occurrence of `separator`, or the whole string. */
 function cutAt(value: string, separator: string): string {
@@ -349,6 +358,18 @@ export function classifySourceTrust(vault: string, sourcePath: string): IntakeTr
  * can be asked - and it belongs to the boundaries that can still ask.
  */
 export function classifySourceOrigin(vault: string, sourcePath: string): SourceOrigin {
+  const { trust, contentHash } = readSourceOrigin(vault, sourcePath);
+  return contentHash === undefined ? UNTRUSTED_ORIGIN : { trust, contentHash };
+}
+
+/**
+ * {@link classifySourceOrigin}, keeping the bytes the digest was computed
+ * over. Same verdicts, same refusals ({@link SourceTrustError}, the
+ * {@link SOURCE_HASH_MAX_BYTES} ceiling), and ONE read of the file: the
+ * digest and the returned bytes cannot describe two different versions of
+ * the source, which a hash followed by a second read for the caller could.
+ */
+export function readSourceOrigin(vault: string, sourcePath: string): SourceOriginWithBytes {
   const file = resolveVaultSourceFile(vault, sourcePath);
   if (file === null) return UNTRUSTED_ORIGIN;
 
@@ -364,12 +385,11 @@ export function classifySourceOrigin(vault: string, sourcePath: string): SourceO
     );
   }
 
+  let bytes: Uint8Array;
   try {
-    // The one hasher in this repository, so the digest a summary page records
-    // and the digest an entity page records cannot drift apart. It stats the
-    // file again; that is the price of one hasher, and it is the READ this
-    // ceiling was added to bound, not the stat.
-    return { trust: INTAKE_TRUST.trusted, contentHash: hashFile(file.abs) };
+    // One read; the stat above already established a regular file, so the
+    // directory guard of `hashFile` (and its second stat) is not needed.
+    bytes = readFileSync(file.abs);
   } catch (cause) {
     // The file went away between the stat and the read. That is the same
     // answer the stat itself would have given a moment later - there is
@@ -378,4 +398,7 @@ export function classifySourceOrigin(vault: string, sourcePath: string): SourceO
     if (isAbsenceErrno(cause)) return UNTRUSTED_ORIGIN;
     throw refusal(file.identity, cause);
   }
+  // The one digest function in this repository, so the digest a summary page
+  // records and the digest an entity page records cannot drift apart.
+  return { trust: INTAKE_TRUST.trusted, contentHash: hashBytes(bytes), bytes };
 }
