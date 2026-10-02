@@ -7,6 +7,7 @@ import { appendLogEvent } from "../../src/core/brain/log.ts";
 import { appendContinuityRecord } from "../../src/core/brain/continuity/store.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../src/core/brain/types.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
 
@@ -137,5 +138,23 @@ describe("brain_event_trace tool", () => {
       params: { name: "brain_event_trace", arguments: { date: "2026-06-15" } },
     })) as { error?: { code: number } };
     expect(response.error?.code).toBe(-32603);
+  });
+
+  test("an event naming a page outside the vault is withheld at remote reach", async () => {
+    writeFileSync(join(tmp, "outside.md"), "---\ntitle: beside the vault\n---\nbody\n");
+    appendLogEvent(vault, {
+      timestamp: "2026-06-15T10:00:00Z",
+      eventType: BRAIN_LOG_EVENT_KIND.note,
+      agent: "tester",
+      body: { text: "../outside.md" },
+    });
+
+    const remote = new MCPServer({ vault, configPath });
+    await initialize(remote);
+    const local = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
+    await initialize(local);
+
+    expect((await callEventTrace(remote, { date: "2026-06-15" }))["total"]).toBe(0);
+    expect((await callEventTrace(local, { date: "2026-06-15" }))["total"]).toBe(1);
   });
 });

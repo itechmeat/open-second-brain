@@ -117,3 +117,19 @@ describe("what a log entry offers the rule", () => {
     expect(hidingView().keep(rows, logEntryArtifactRefs)).toEqual(rows);
   });
 });
+
+describe("a reference that leaves the vault", () => {
+  test("is hidden without asking the rule, so nothing beside the vault is read", () => {
+    const asked: string[] = [];
+    const view = artifactRefView(vault, (rel) => {
+      asked.push(rel);
+      return true;
+    });
+    expect(view.visible("../outside.md")).toBe(false);
+    expect(view.visible("[[../../outside.md]]")).toBe(false);
+    expect(view.visible("Notes/../../outside.md")).toBe(false);
+    expect(asked).toEqual([]);
+    expect(view.visible("notes/inside.md")).toBe(true);
+    expect(asked).toEqual(["notes/inside.md"]);
+  });
+});

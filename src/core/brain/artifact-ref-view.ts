@@ -32,7 +32,7 @@
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 
-import { vaultRelative } from "../path-safety.ts";
+import { pathIsInside, vaultRelative } from "../path-safety.ts";
 import type { FrontmatterCache } from "../search/result-filters.ts";
 import { BRAIN_SOURCES_REL, brainDirs } from "./paths.ts";
 import { ANCHORED_WIKILINK_RE, stripWikilinkDecoration } from "./wikilink.ts";
@@ -202,7 +202,11 @@ export function artifactRefView(
     const bare = unbracket(ref);
     const rel =
       bare.length === 0 ? null : bare.endsWith(MARKDOWN_EXT) ? bare : artifactPath(vault, bare);
-    const verdict = rel === null ? true : pathVisible(rel, cache);
+    // A reference that resolves outside the vault names no page anyone
+    // could be shown, and is hidden before the rule reads anything: log
+    // bodies carry strings an earlier caller wrote.
+    const verdict =
+      rel === null ? true : pathIsInside(join(vault, rel), vault) && pathVisible(rel, cache);
     verdicts.set(ref, verdict);
     return verdict;
   };
