@@ -19,6 +19,7 @@
  */
 
 import { resolveUniqueMatch } from "../../graph/unique-match.ts";
+import { redactUrlCredentials } from "../../redactor.ts";
 
 /** A class/function declaration surfaced as an entity seed. */
 export interface CodeEntitySeed {
@@ -347,10 +348,20 @@ function parsePython(
     if (importMatch) {
       for (const spec of splitNames(importMatch[1]!)) {
         const mod = spec.split(/\s+as\s+/)[0]!.trim();
-        if (mod.length > 0) edges.push({ kind: "imports", from: path, to: mod });
+        if (mod.length > 0) edges.push(specifierSeed(path, mod));
       }
     }
   }
+}
+
+/**
+ * The one specifier step every family's `imports` seed passes through: URL
+ * credentials (`scheme://user:password@host`) become the redaction
+ * placeholder, so a specifier never carries them out of the extractor. Any
+ * other specifier text is kept byte-identical.
+ */
+function specifierSeed(path: string, specifier: string): CodeEdgeSeed {
+  return { kind: "imports", from: path, to: redactUrlCredentials(specifier) };
 }
 
 /** Build an `imports` seed, binding a relative specifier to its ingested file. */
@@ -360,13 +371,10 @@ function importSeed(
   ingestedFiles: ReadonlySet<string> | undefined,
   rule: RelativeImportRule,
 ): CodeEdgeSeed {
-  if (ingestedFiles === undefined || !rule.relative.test(to)) {
-    return { kind: "imports", from: path, to };
-  }
-  const resolvedTo = resolveRelativeImport(path, to, ingestedFiles, rule);
-  return resolvedTo === undefined
-    ? { kind: "imports", from: path, to }
-    : { kind: "imports", from: path, to, resolvedTo };
+  const seed = specifierSeed(path, to);
+  if (ingestedFiles === undefined || !rule.relative.test(seed.to)) return seed;
+  const resolvedTo = resolveRelativeImport(path, seed.to, ingestedFiles, rule);
+  return resolvedTo === undefined ? seed : { ...seed, resolvedTo };
 }
 
 /**

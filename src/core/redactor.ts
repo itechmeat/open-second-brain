@@ -520,8 +520,12 @@ function redactBareTokens(text: string): string {
  * redacting every `host:port` in a knowledge bundle mangles legitimate
  * references for a class of leak the operator already controls by
  * choosing the destination.
+ *
+ * Exported for the code-structure pre-extractor, which runs this pass alone
+ * on every import specifier it emits: the key-value passes of
+ * `redactRawOutput` would rewrite specifier text that is not a credential.
  */
-function redactUrlCredentials(text: string): string {
+export function redactUrlCredentials(text: string): string {
   return text.replace(BASIC_AUTH_URL_RE, (_m, scheme: string) => `${scheme}${PLACEHOLDER}@`);
 }
 
