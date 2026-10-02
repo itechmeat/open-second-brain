@@ -9,6 +9,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { dream, DreamPreviewReadableError } from "../../../src/core/brain/dream.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { dreamRunsDir } from "../../../src/core/brain/paths.ts";
 import { buildReviewCandidates } from "../../../src/core/brain/review-candidates.ts";
@@ -64,5 +65,9 @@ describe("buildReviewCandidates", () => {
     const a = await buildReviewCandidates(vault, { now: new Date("2026-05-27T12:00:00Z") });
     const b = await buildReviewCandidates(vault, { now: new Date("2026-05-27T12:00:00Z") });
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+  });
+
+  test("a real pass refuses a preview filter by name", () => {
+    expect(() => dream(vault, { previewReadable: () => true })).toThrow(DreamPreviewReadableError);
   });
 });

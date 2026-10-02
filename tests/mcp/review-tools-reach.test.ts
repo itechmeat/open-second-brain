@@ -1,7 +1,7 @@
 /**
  * The lifecycle review readers - `brain_stale_scan`,
- * `brain_review_candidates` and `brain_retention` - answer at the
- * caller's reach.
+ * `brain_review_candidates`, `brain_retention` and `brain_intent_review` -
+ * answer at the caller's reach.
  *
  * The vault pair is tests/helpers/reach-log-fixture.ts: vault A holds a
  * reserved preference and a reserved retired record; vault B never had
@@ -10,7 +10,11 @@
  * would retire them, and both vaults hold one readable preference in the
  * same state, so a remote answer is never empty. The same holds for an
  * old processed signal the retention review recommends pruning: a
- * withheld one in vault A, a readable one in both. A server with no reach
+ * withheld one in vault A, a readable one in both. The signal clusters the
+ * dream preview and the intent review fold are built the same way: vault A
+ * holds a withheld inbox signal on a topic of its own and a second one on
+ * the readable cluster's topic, which would move that cluster's count. A
+ * server with no reach
  * minted is a remote caller: each tool's whole masked answer must be the
  * same over both vaults. The local control proves the withheld records
  * are there to list.
@@ -38,7 +42,14 @@ import {
 const WITHHELD_PREFIX = "zzwithheld-stale";
 const READABLE_SLUG = "public-stale";
 const RESERVE_LINE = `visibility: [${REMOTE_DENY_VISIBILITY_TOKEN}]`;
-const TOOLS = ["brain_stale_scan", "brain_review_candidates", "brain_retention"] as const;
+const CLUSTER_TOPIC = "public-cluster";
+const WITHHELD_CLUSTER_TOPIC = `${WITHHELD_PREFIX}-cluster`;
+const TOOLS = [
+  "brain_stale_scan",
+  "brain_review_candidates",
+  "brain_retention",
+  "brain_intent_review",
+] as const;
 
 const bases: string[] = [];
 const savedConfig = process.env["OPEN_SECOND_BRAIN_CONFIG"];
@@ -73,6 +84,21 @@ function processedSignal(vault: string, slug: string, reserved: boolean): void {
   if (reserved) reserve(path);
 }
 
+/** An inbox signal written today, so the dream preview and the intent review fold it. */
+function inboxSignal(vault: string, topic: string, slug: string, reserved: boolean): void {
+  const date = new Date().toISOString().slice(0, 10);
+  writeSignal(vault, {
+    topic,
+    signal: "positive",
+    agent: "test",
+    principle: `Prefer ${topic}.`,
+    created_at: `${date}T00:00:00Z`,
+    date,
+    slug,
+  });
+  if (reserved) reserve(signalPath(vault, date, slug));
+}
+
 /** A confirmed preference whose last evidence is months old and never logged since. */
 function stalePreference(vault: string, slug: string, reserved: boolean): void {
   writePreference(vault, {
@@ -99,7 +125,10 @@ function fixture(withPrivate: boolean): Fixture {
   const f = buildReachLogFixture(base, withPrivate);
   stalePreference(f.vault, READABLE_SLUG, false);
   processedSignal(f.vault, READABLE_SLUG, false);
+  inboxSignal(f.vault, CLUSTER_TOPIC, CLUSTER_TOPIC, false);
   if (withPrivate) {
+    inboxSignal(f.vault, WITHHELD_CLUSTER_TOPIC, WITHHELD_CLUSTER_TOPIC, true);
+    inboxSignal(f.vault, CLUSTER_TOPIC, `${WITHHELD_PREFIX}-second`, true);
     for (const suffix of ["a", "b"]) stalePreference(f.vault, `${WITHHELD_PREFIX}-${suffix}`, true);
     processedSignal(f.vault, `${WITHHELD_PREFIX}-signal`, true);
   }
@@ -127,6 +156,8 @@ describe("the lifecycle review readers answer at the caller's reach", () => {
     expect(await answer(a, "brain_stale_scan")).toContain(READABLE_SLUG);
     expect(await answer(a, "brain_review_candidates")).toContain(READABLE_SLUG);
     expect(await answer(a, "brain_retention")).toContain(READABLE_SLUG);
+    expect(await answer(a, "brain_review_candidates")).toContain(CLUSTER_TOPIC);
+    expect(await answer(a, "brain_intent_review")).toContain(CLUSTER_TOPIC);
   });
 
   test("local control: the operator's own shell lists the withheld records", async () => {
@@ -135,5 +166,6 @@ describe("the lifecycle review readers answer at the caller's reach", () => {
     expect(await answer(a, "brain_stale_scan", local)).toContain(WITHHELD_PREFIX);
     expect(await answer(a, "brain_review_candidates", local)).toContain(WITHHELD_PREFIX);
     expect(await answer(a, "brain_retention", local)).toContain(WITHHELD_PREFIX);
+    expect(await answer(a, "brain_intent_review", local)).toContain(WITHHELD_CLUSTER_TOPIC);
   });
 });

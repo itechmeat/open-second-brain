@@ -32,6 +32,13 @@ export interface BrainIntentReviewReport {
 
 export interface BuildIntentReviewOptions {
   readonly now?: Date;
+  /**
+   * Vault-relative path test: when set, the review folds only the inbox
+   * signals and rejected retired records it admits, as if the others
+   * were absent, so a caller below local reach is shown no topic, count
+   * or decision a withheld record contributed to. Absent folds every one.
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 interface SignalRecord {
@@ -50,8 +57,11 @@ export function buildIntentReview(
 ): BrainIntentReviewReport {
   const now = options.now ?? new Date();
   const config = loadBrainConfig(vault);
-  const records = collectActiveSignals(vault).filter((record) =>
-    isWithinWindow(record.signal.created_at, config.dream.contradiction_window_days, now),
+  const admit = options.readable;
+  const records = collectActiveSignals(vault).filter(
+    (record) =>
+      (admit === undefined || admit(record.path)) &&
+      isWithinWindow(record.signal.created_at, config.dream.contradiction_window_days, now),
   );
   // Clustered by RAW topic, deliberately and not yet reconciled: the dream
   // pass that acts on these same signals indexes them by folded `topicKey`,
@@ -71,7 +81,7 @@ export function buildIntentReview(
       topicRecords.push(record);
     }
   }
-  const rejectedRetiredByTopic = collectRejectedRetiredSuppressors(vault);
+  const rejectedRetiredByTopic = collectRejectedRetiredSuppressors(vault, admit);
 
   const reviews = [...byTopic.entries()]
     .toSorted(([leftTopic], [rightTopic]) => leftTopic.localeCompare(rightTopic))
@@ -100,7 +110,7 @@ function collectActiveSignals(vault: string): SignalRecord[] {
     const path = join(inbox, name);
     try {
       records.push({
-        path: vaultRelative(vault, path),
+        path: vaultRelative(path, vault),
         signal: parseSignal(path),
       });
     } catch {
@@ -112,14 +122,17 @@ function collectActiveSignals(vault: string): SignalRecord[] {
 
 function collectRejectedRetiredSuppressors(
   vault: string,
+  admit: ((rel: string) => boolean) | undefined,
 ): Map<string, RejectedRetiredSuppressor[]> {
   const retiredDir = brainDirs(vault).retired;
   const byTopic = new Map<string, RejectedRetiredSuppressor[]>();
   if (!existsSync(retiredDir)) return byTopic;
   for (const name of readdirSync(retiredDir).toSorted()) {
     if (!name.endsWith(".md")) continue;
+    const path = join(retiredDir, name);
+    if (admit !== undefined && !admit(vaultRelative(path, vault))) continue;
     try {
-      const retired = parseRetired(join(retiredDir, name));
+      const retired = parseRetired(path);
       if (!retired.user_rejected_reason?.trim()) continue;
       const suppressor: RejectedRetiredSuppressor = {
         topic: retired.topic,

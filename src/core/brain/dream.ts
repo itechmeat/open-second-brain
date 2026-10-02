@@ -63,7 +63,7 @@ import {
 } from "./dream-apply.ts";
 import { planAutoRetires } from "./dream-plan-retires.ts";
 import { planTopics, topicKeyContentionWarnings } from "./dream-plan-topics.ts";
-import type { PlanState } from "./dream-plan.ts";
+import type { PlanState, ScanResult } from "./dream-plan.ts";
 import { planRefresh, scanApplyEvidence, type RefreshResult } from "./dream-refresh.ts";
 import { writeDreamLog } from "./dream-report.ts";
 import { scanBrain } from "./dream-scan.ts";
@@ -81,7 +81,7 @@ import {
 import { regenerateLessonsQuiet } from "./lessons.ts";
 import { buildLinkCandidateManifest, type LinkCandidateManifest } from "./notes/link-candidates.ts";
 import { gatedOwnerScopeView } from "./owner-scope-view.ts";
-import { brainDirsForWrite, dreamWorkrunPath } from "./paths.ts";
+import { brainDirsForWrite, dreamWorkrunPath, vaultRelative } from "./paths.ts";
 import { loadBrainConfig } from "./policy.ts";
 import { buildReconcileOutcomes } from "./reconcile-outcomes.ts";
 import {
@@ -168,6 +168,33 @@ function noteProgressFaults(warnings: DreamWarning[], faults: ReadonlyArray<stri
  * not tell a cancelled pass from a crashed one from a hung one, which is
  * the whole distinction `SafeguardAbortError` exists to preserve.
  */
+/** `previewReadable` was passed to a pass that is not a dry run. */
+export class DreamPreviewReadableError extends Error {
+  constructor() {
+    super("dream: previewReadable applies to a dry run only");
+    this.name = "DreamPreviewReadableError";
+  }
+}
+
+/**
+ * The scan as a caller who may read only what `admit` passes sees it:
+ * every record at a path it rejects is dropped, as if it were absent.
+ */
+function scanAsAdmitted(
+  vault: string,
+  scan: ScanResult,
+  admit: (rel: string) => boolean,
+): ScanResult {
+  const keep = (path: string): boolean => admit(vaultRelative(path, vault));
+  return {
+    ...scan,
+    signals: scan.signals.filter((r) => keep(r.path)),
+    preferences: scan.preferences.filter((r) => keep(r.path)),
+    retired: scan.retired.filter((r) => keep(r.path)),
+    corrupted: scan.corrupted.filter((r) => keep(r.path)),
+  };
+}
+
 export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   // A caller's progress sink is an observer, and an observer must not be
   // able to destroy what it observes: a closed pipe or a renderer defect
@@ -195,6 +222,7 @@ function dreamRun(
 ): DreamRunSummary {
   const now = opts.now ?? new Date();
   const dryRun = opts.dryRun === true;
+  if (opts.previewReadable !== undefined && !dryRun) throw new DreamPreviewReadableError();
   // The stage opens BEFORE the first checkpoint, not after it. A guard
   // that is already past its deadline - or a signal already aborted -
   // trips here, and a counter with no stage open emits nothing, so the
@@ -228,9 +256,16 @@ function dreamRun(
   //    the whole `Brain/` tree between two of the pass's five
   //    checkpoints; the stream, by contrast, is this counter's, which
   //    already owns a `scan` stage.
-  const scan = scanBrain(vault, opts.safeguard ? { safeguard: opts.safeguard } : {});
+  const fullScan = scanBrain(vault, opts.safeguard ? { safeguard: opts.safeguard } : {});
+  const scan =
+    opts.previewReadable === undefined
+      ? fullScan
+      : scanAsAdmitted(vault, fullScan, opts.previewReadable);
   progress.advance(DREAM_STAGE.scan);
-  const intentReview = buildIntentReview(vault, { now });
+  const intentReview = buildIntentReview(vault, {
+    now,
+    ...(opts.previewReadable !== undefined ? { readable: opts.previewReadable } : {}),
+  });
   progress.start(DREAM_STAGE.plan, scan.preferences.length);
 
   // 1-2. Plan per-topic transitions: new unconfirmed preferences,

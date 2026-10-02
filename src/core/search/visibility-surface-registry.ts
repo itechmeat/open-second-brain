@@ -789,14 +789,15 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
   {
     surface: "brain_review_candidates",
     kind: K.mcpTool,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "the dry-run dream preview names preferences by id: would_create, would_promote, " +
-      "would_retire, would_supersede and gated_retires keep a row only when both the pref- and " +
-      "the ret- spelling of its id pass the gated owner view ANDed with reachView, and " +
-      "signal_novelty asks the same of each signal's path and id. Residual: " +
-      "clusters_below_threshold and intent_reviews are folds over inbox signal clusters keyed " +
-      "by topic, with no visibility check, so a withheld signal's topic still shows there.",
+      "the dry-run dream preview runs with previewReadable bound to readableAtContextReach(ctx), " +
+      "so below local reach it clusters, counts and routes only the signals, preferences and " +
+      "retired records the caller may read: clusters_below_threshold and intent_reviews fold no " +
+      "withheld signal. would_create, would_promote, would_retire, would_supersede and " +
+      "gated_retires keep a row only when both the pref- and the ret- spelling of its id pass " +
+      "the gated owner view ANDed with reachView, and signal_novelty asks the same of each " +
+      "signal's path and id.",
   },
   {
     surface: "brain_retention",
@@ -811,12 +812,12 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
   {
     surface: "brain_intent_review",
     kind: K.mcpTool,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "swept in for file-level completeness because review-tools.ts also registers " +
-      "brain_stale_scan: buildIntentReview folds inbox signal clusters into a topic, a decision, " +
-      "a signal count and a risk band, never a note path, title or body, with no visibility " +
-      "check, so a withheld signal's topic still shows.",
+      "buildIntentReview folds inbox signal clusters into a topic, a decision, a signal count " +
+      "and a risk band; the handler hands it readableAtContextReach(ctx), so below local reach " +
+      "it folds only the signals and rejected retired records the caller may read, and a " +
+      "withheld one moves no topic, count or decision.",
   },
 
   // --- Excluded: CLI verbs, one per MCP tool above that has a CLI mirror ----

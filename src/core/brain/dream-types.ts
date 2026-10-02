@@ -248,4 +248,14 @@ export interface DreamOptions {
    * run reads every gate from `Brain/_brain.yaml` exactly as before.
    */
   readonly gates?: DreamGateOverrides;
+  /**
+   * Dry run only: plan over the records this vault-relative path test
+   * admits, as if the others were absent. A preview answered to a caller
+   * below local reach clusters, counts and routes only the signals,
+   * preferences and retired records that caller may read, so a withheld
+   * record moves no topic, count or decision in the projection. A real
+   * pass always plans over the whole vault, so passing this without
+   * `dryRun: true` throws `DreamPreviewReadableError`.
+   */
+  readonly previewReadable?: (rel: string) => boolean;
 }

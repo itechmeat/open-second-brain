@@ -21,6 +21,7 @@ import { OPERATION } from "../../core/brain/safeguard.ts";
 import type { ProgressSink } from "../../core/brain/progress.ts";
 import { contextReach, type ServerContext, type ToolDefinition } from "../tool-contract.ts";
 import { vaultPathField } from "../vault-path-field.ts";
+import { readableAtContextReachOrUndefined } from "./reach-readable.ts";
 import { coerceIsoDate } from "../coerce.ts";
 import { toolSafeguard } from "./shared.ts";
 
@@ -42,15 +43,15 @@ async function toolBrainIntentReview(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const nowDate = coerceIsoDate(args, "now");
-  const report = buildIntentReview(ctx.vault, nowDate ? { now: nowDate } : {});
-  // Deliberately unfiltered, and the reason is on the record rather than
-  // implied by silence (a-label-is-not-a-boundary, U3). Every row here is
-  // a fold over INBOX SIGNAL clusters - a topic, a decision, a count -
-  // and a signal carries no `owner:` anywhere in this product, so there
-  // is no ownership claim on disk for this surface to read. A filter
-  // keyed on "does a preference of this topic exist and may you see it"
-  // would withhold a row whose whole content came from artifacts the
-  // caller is entitled to, which is a narrowing nobody asked for.
+  // Every row is a fold over inbox signal clusters - a topic, a decision,
+  // a count - so below local reach the fold runs over the signals and
+  // rejected retired records the caller may read only, and a withheld one
+  // moves no topic, count or decision (a-label-is-not-a-boundary, U3).
+  const readable = readableAtContextReachOrUndefined(ctx);
+  const report = buildIntentReview(ctx.vault, {
+    ...(nowDate ? { now: nowDate } : {}),
+    ...(readable !== undefined ? { readable } : {}),
+  });
   return {
     schema_version: report.schema_version,
     generated_at: report.generated_at,
@@ -109,7 +110,13 @@ async function toolBrainReviewCandidates(
   } catch {
     searchConfig = undefined;
   }
+  // Below local reach the dry run plans over the records the caller may
+  // read only, so `clusters_below_threshold` and `intent_reviews` - folds
+  // over inbox signal clusters keyed by topic - count no withheld signal,
+  // and no withheld preference routes a cluster.
+  const readable = readableAtContextReachOrUndefined(ctx);
   const report = await buildReviewCandidates(ctx.vault, {
+    ...(readable !== undefined ? { readable } : {}),
     // The projection is read-only, but it runs a full dry-run
     // consolidation pass to produce it - the same pass, and so the same
     // budget, as `brain_dream`.
@@ -127,9 +134,6 @@ async function toolBrainReviewCandidates(
     const slug = brainArtifactSlug(id);
     return [`pref-${slug}`, `ret-${slug}`];
   };
-  // `clusters_below_threshold` and `intent_reviews` stay unfiltered, for
-  // the reason `brain_intent_review` states above: both are keyed by a
-  // topic over inbox signals, and signals carry no owner.
   return {
     // Signal rows name an inbox signal by id AND by vault-relative path.
     ...(report.signal_novelty !== undefined

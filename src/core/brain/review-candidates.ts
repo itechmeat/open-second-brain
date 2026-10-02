@@ -79,6 +79,12 @@ export interface BuildReviewCandidatesOptions {
   /** Wall clock for the underlying dream pass. */
   readonly now?: Date;
   /**
+   * Vault-relative path test for a caller below local reach: the dry run
+   * plans over the records it admits only (`DreamOptions.previewReadable`),
+   * so the clusters, counts and intent reviews fold no withheld record.
+   */
+  readonly readable?: (rel: string) => boolean;
+  /**
    * When provided, annotate the report with surprisal novelty over
    * the existing vec index (t_fddfe64a). Read-only; absent or
    * unembedded indexes leave the report unchanged.
@@ -126,6 +132,7 @@ export async function buildReviewCandidates(
     ...(opts.now ? { now: opts.now } : {}),
     ...(opts.safeguard !== undefined ? { safeguard: opts.safeguard } : {}),
     ...(opts.onProgress !== undefined ? { onProgress: opts.onProgress } : {}),
+    ...(opts.readable !== undefined ? { previewReadable: opts.readable } : {}),
   });
 
   let signalNovelty: ReadonlyArray<SignalNoveltyEntry> | undefined;
