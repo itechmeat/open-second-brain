@@ -60,7 +60,14 @@ region to each module note, so it reports those notes `updated` once.
 A module note whose manifest depends on another module gets a
 `depends_on` frontmatter key that the generator owns and rewrites on
 every run; a value typed under that key is replaced. `--json` gains a
-`manifests` list. See [`how-it-works.md`](how-it-works.md).
+`manifests` list. A malformed root `package.json`, which used to be read
+as no manifest at all, is now reported `malformed`, and the `detail` of
+every malformed manifest is a fixed reason such as `invalid JSON`, not
+the parser's message. A dependency name that cannot be written into a
+note is counted as `unrepresentable` instead of listed, and a module
+whose directory name a link cannot carry is named once on the overview
+and left out of every link and edge. See
+[`how-it-works.md`](how-it-works.md).
 
 **The pre-extractor reads Terraform.** `o2b brain pre-extract` and
 `brain_ingest_source` with `pre_extract` now return seeds for `.tf` and
@@ -93,8 +100,11 @@ answer an absent one gets from `brain_context`, the
 `osb://preferences/active` resource, `brain_pre_compress_pack`,
 `brain_brief` `view="digest"` and `view="morning"`, the
 `osb://digest/latest` and `osb://lessons` resources, `brain_health` and
-the `brain_doctor` repair plan and apply. A remote `view="digest"` takes
-no report snapshot and shows no delta. The `osb://preferences/active`
+the `brain_doctor` repair plan and apply. The first three now always
+hand a remote client a render stamped with the file's `generated_at`
+instead of the file's bytes. A remote `view="digest"` takes no report
+snapshot and shows no delta, and a remote `view="morning"` shows no
+pending-triggers section and marks no trigger delivered. The `osb://preferences/active`
 resource also follows the owner gate under
 `integrity.owner_scope_delivery: fail`, as `brain_context` does. A local
 caller and the CLI see no change.
