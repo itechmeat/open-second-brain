@@ -154,6 +154,20 @@ describe("assertExcerptAdmissible", () => {
     );
   });
 
+  test("refuses an excerpt of control or format characters only, as empty", () => {
+    for (const excerpt of ["\u0001\u001b", "\u200b\u00ad \n", "\u0000"]) {
+      expect(() => assertExcerptAdmissible(CAPTURE_SCOPE.urlOnly, excerpt)).toThrow(
+        new CaptureExcerptError("excerpt refused: the excerpt is empty"),
+      );
+    }
+  });
+
+  test("refuses an excerpt holding NUL", () => {
+    expect(() => assertExcerptAdmissible(CAPTURE_SCOPE.urlOnly, "text\u0000more")).toThrow(
+      new CaptureExcerptError("excerpt refused: the excerpt contains NUL"),
+    );
+  });
+
   test("counts bytes, not characters, against the cap", () => {
     // U+00E9 is two UTF-8 bytes: half the cap in characters is the cap in bytes.
     const atCap = "é".repeat(CAPTURE_EXCERPT_MAX_BYTES / 2);

@@ -95,6 +95,12 @@ const FENCE_CHAR_RUN_RE = /`+/g;
 /** Line separator of a rendered section. */
 const NEWLINE = "\n";
 
+/** What an excerpt with no text is made of: controls, format characters, whitespace. */
+const NON_TEXT_RE = /[\p{Cc}\p{Cf}\s]/gu;
+
+/** NUL, which a Markdown page never holds. */
+const NUL = "\u0000";
+
 /** The scope a trust verdict stands for: the two can never disagree. */
 export function captureScopeForTrust(trust: IntakeTrust): CaptureScope {
   return trust === INTAKE_TRUST.trusted ? CAPTURE_SCOPE.fullLocal : CAPTURE_SCOPE.urlOnly;
@@ -194,7 +200,8 @@ export class CaptureExcerptError extends Error {
 /**
  * Refuse an excerpt this page must not store: one for a source that is not
  * `url-only` (a local file is already the evidence, and an excerpt beside it
- * would be a second, weaker claim), an empty one, or one past
+ * would be a second, weaker claim), an empty one (nothing but control,
+ * format or whitespace characters), one holding NUL, or one past
  * {@link CAPTURE_EXCERPT_MAX_BYTES}.
  */
 export function assertExcerptAdmissible(scope: CaptureScope, excerpt: string): void {
@@ -204,8 +211,11 @@ export function assertExcerptAdmissible(scope: CaptureScope, excerpt: string): v
         `${CAPTURE_SCOPE.urlOnly} source`,
     );
   }
-  if (excerpt.trim().length === 0) {
+  if (excerpt.replace(NON_TEXT_RE, "").length === 0) {
     throw new CaptureExcerptError("excerpt refused: the excerpt is empty");
+  }
+  if (excerpt.includes(NUL)) {
+    throw new CaptureExcerptError("excerpt refused: the excerpt contains NUL");
   }
   const bytes = Buffer.byteLength(excerpt, "utf8");
   if (bytes > CAPTURE_EXCERPT_MAX_BYTES) {
