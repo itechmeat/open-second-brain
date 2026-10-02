@@ -34,9 +34,11 @@ name is read from the profile scope Hermes bound for the call (the profile's
 ``.env`` and secret sources) and NEVER from ``os.environ``; an unset scoped
 value falls through to the rest of the chain (pointer, profile, config key,
 default), and a call with no scope bound refuses with
-:class:`ProfileScopeError`. Without multiplexing - and whenever Hermes is not
-importable, which is how the parity suite and the doctor load this file - the
-reader is the plain ``os.environ`` lookup, so every answer is unchanged.
+:class:`ProfileScopeError`. Without multiplexing - and whenever Hermes or its
+``agent.secret_scope`` module is absent, which is how the parity suite and the
+doctor load this file - the reader is the plain ``os.environ`` lookup, so every
+answer is unchanged. A scope module that is present but fails to import is
+treated as multiplexed with no scope bound, never as absent.
 
 ## Where the mirror is deliberately imperfect
 
@@ -65,6 +67,7 @@ processing, and the LAST occurrence of a duplicate key winning.
 
 from __future__ import annotations
 
+import importlib
 import json
 import logging
 import os
@@ -126,8 +129,9 @@ _TARGET_TEMPLATE_PATH = _TEMPLATES_DIR / f"identity-reminder.{_TARGET}.txt"
 
 _template_cache: str | None = None
 
-# Scoped names already reported as ignored in this process. One WARNING per
-# name, not per call: the resolvers run on every turn.
+# Scoped names already reported as ignored in this process, plus the scope
+# module's own name once its import failure is reported. One WARNING per name,
+# not per call: the resolvers run on every turn.
 _scope_warned: set[str] = set()
 _scope_warned_lock = threading.Lock()
 
@@ -186,19 +190,67 @@ class ProfileScopeError(ConfigReadError):
         self.reason = "no profile scope bound"
 
 
+#: Hermes's profile-scope module, and the module names whose absence means
+#: "not running inside a Hermes that scopes settings".
+_SCOPE_MODULE_NAME = "agent.secret_scope"
+_ABSENT_SCOPE_MODULE_NAMES = frozenset({"agent", _SCOPE_MODULE_NAME})
+
+
+class _UnusableProfileScope:
+    """Stands in for a Hermes scope module that is present but failed to import.
+
+    It answers "multiplexed, no scope bound", so every profile-scoped read
+    refuses with :class:`ProfileScopeError` instead of serving the launch
+    profile's process environment to every profile.
+    """
+
+    class UnscopedSecretError(Exception):
+        """The scope module could not be imported, so no scope is bound."""
+
+    @staticmethod
+    def is_multiplex_active() -> bool:
+        return True
+
+    @classmethod
+    def get_secret(cls, name: str, default: str | None = None) -> str | None:
+        raise cls.UnscopedSecretError(name)
+
+
 def _profile_scope_module():
     """Hermes's ``agent.secret_scope`` module, or ``None`` outside Hermes.
 
     Imported lazily, absolutely and per call: this file is also loaded by file
     location with no package and no Hermes (the resolver parity suite and the
     doctor's parity check), where the import must fail quietly and leave the
-    process-environment answers in force.
+    process-environment answers in force. Only the absence of ``agent`` or of
+    ``agent.secret_scope`` counts as "outside Hermes"; any other import failure
+    is a Hermes whose scoping is broken, which fails closed: one WARNING naming
+    the exception type, then :class:`_UnusableProfileScope`.
     """
     try:
-        from agent import secret_scope as scope_module
-    except Exception:  # noqa: BLE001 - no Hermes, or a Hermes without the module
-        return None
-    return scope_module
+        return importlib.import_module(_SCOPE_MODULE_NAME)
+    except ModuleNotFoundError as exc:
+        if exc.name in _ABSENT_SCOPE_MODULE_NAMES:
+            return None
+        failure: Exception = exc
+    except Exception as exc:  # noqa: BLE001 - any failure of a present module fails closed
+        failure = exc
+    _warn_scope_module_failed(failure)
+    return _UnusableProfileScope
+
+
+def _warn_scope_module_failed(exc: Exception) -> None:
+    """Say once per process that the scope module failed, naming its type only."""
+    with _scope_warned_lock:
+        if _SCOPE_MODULE_NAME in _scope_warned:
+            return
+        _scope_warned.add(_SCOPE_MODULE_NAME)
+    logger.warning(
+        "%s: %s failed to import (%s); profile-scoped settings are refused until it imports",
+        PLUGIN_NAME,
+        _SCOPE_MODULE_NAME,
+        type(exc).__name__,
+    )
 
 
 def is_multiplexed() -> bool:

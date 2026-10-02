@@ -161,6 +161,58 @@ class WithoutHermesTests(ScopeTestCase):
             self.assertIsNone(cfg.env_setting("VAULT_AGENT_NAME"))
 
 
+class BrokenScopeModuleTests(ScopeTestCase):
+    """A Hermes scope module that is present but fails to import fails closed."""
+
+    def _hermes_on_path(self, secret_scope_source: str | None):
+        """A real ``agent`` package on ``sys.path``; ``None`` omits ``secret_scope``."""
+        root = Path(tempfile.mkdtemp(prefix="hermes-src-", dir=self.tmp))
+        package = root / "agent"
+        package.mkdir(parents=True)
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        if secret_scope_source is not None:
+            (package / "secret_scope.py").write_text(secret_scope_source, encoding="utf-8")
+        stack = contextlib.ExitStack()
+        stack.enter_context(patch.object(sys, "path", [str(root), *sys.path]))
+        stack.enter_context(patch.dict(sys.modules))
+        for name in ("agent", "agent.secret_scope"):
+            sys.modules.pop(name, None)
+        return stack
+
+    def test_a_failing_import_refuses_scoped_reads_and_warns_once_by_type(self):
+        self.set_launch_env()
+        failures = {
+            "RuntimeError": "raise RuntimeError('launch-vault-dir-value')\n",
+            "ModuleNotFoundError": "import o2b_hermes_dependency_that_is_absent\n",
+        }
+        for type_name, source in failures.items():
+            with self.subTest(failure=type_name):
+                cfg._reset_scope_warnings_for_tests()
+                with (
+                    self._hermes_on_path(source),
+                    self.assertLogs("plugins.hermes.config", "WARNING") as logs,
+                ):
+                    self.assertTrue(cfg.is_multiplexed())
+                    with self.assertRaises(cfg.ProfileScopeError):
+                        cfg.resolve_agent_name()
+                    with self.assertRaises(cfg.ProfileScopeError):
+                        cfg.config_path()
+                    self.assertEqual(cfg.env_setting("PATH"), os.environ.get("PATH") or None)
+                failed = [
+                    r.getMessage() for r in logs.records if "failed to import" in r.getMessage()
+                ]
+                self.assertEqual(len(failed), 1)
+                self.assertIn(type_name, failed[0])
+                for value in LAUNCH_VALUES.values():
+                    self.assertNotIn(value, failed[0])
+
+    def test_a_hermes_without_the_scope_module_reads_the_process_environment(self):
+        self.set_launch_env()
+        with self._hermes_on_path(None), self.assertNoLogs("plugins.hermes.config", "WARNING"):
+            self.assertFalse(cfg.is_multiplexed())
+            self.assertEqual(cfg.resolve_agent_name(), "launch-agent-value")
+
+
 class MultiplexOffTests(ScopeTestCase):
     """(b) Hermes present, multiplexing off: the process environment wins."""
 
