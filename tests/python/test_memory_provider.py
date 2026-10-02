@@ -60,6 +60,7 @@ _CONFIG_ENV_KEYS = (
     cfg.VAULT_DIR_ENV,
     cfg.TIMEZONE_ENV,
     cfg.CONFIG_PATH_ENV,
+    cfg.REQUEST_TIMEOUT_ENV,
 )
 
 

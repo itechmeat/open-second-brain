@@ -24,6 +24,20 @@ behaviour separately.
 - agent name:   ``VAULT_AGENT_NAME`` env -> ``agent_name``/``agentName`` -> ``"agent"``
 - timezone:     ``VAULT_TIMEZONE`` env -> ``timezone`` field -> ``None``
 
+## Two modes: a multiplexed Hermes gateway
+
+"env" above means :func:`env_setting`, the one reader of the names in
+:data:`PROFILE_SCOPED_ENV`. A Hermes gateway with ``multiplex_profiles`` serves
+several profiles from one process, and that process's environment belongs to
+the profile that launched it. So when Hermes reports multiplexing, a scoped
+name is read from the profile scope Hermes bound for the call (the profile's
+``.env`` and secret sources) and NEVER from ``os.environ``; an unset scoped
+value falls through to the rest of the chain (pointer, profile, config key,
+default), and a call with no scope bound refuses with
+:class:`ProfileScopeError`. Without multiplexing - and whenever Hermes is not
+importable, which is how the parity suite and the doctor load this file - the
+reader is the plain ``os.environ`` lookup, so every answer is unchanged.
+
 ## Where the mirror is deliberately imperfect
 
 Three differences remain, named here rather than left as a false claim:
@@ -76,6 +90,22 @@ AGENT_NAME_ENV = "VAULT_AGENT_NAME"
 TIMEZONE_ENV = "VAULT_TIMEZONE"
 CONFIG_PATH_ENV = "OPEN_SECOND_BRAIN_CONFIG"
 XDG_CONFIG_HOME_ENV = "XDG_CONFIG_HOME"
+#: Per-request deadline of the MCP bridge, read by ``bridge.py``.
+REQUEST_TIMEOUT_ENV = "OPEN_SECOND_BRAIN_MCP_TIMEOUT"
+
+#: The settings that belong to a Hermes profile rather than to the process.
+#: On a multiplexed gateway these come from the bound profile scope only.
+#: ``XDG_CONFIG_HOME``, ``LOCALAPPDATA``, ``PATH``, ``PATHEXT`` and ``HOME``
+#: describe the operating system and stay process-global in both modes: Hermes
+#: does not carry them in a profile scope, so routing them through it would
+#: answer ``None`` and silently move the config path.
+PROFILE_SCOPED_ENV: tuple[str, ...] = (
+    VAULT_DIR_ENV,
+    AGENT_NAME_ENV,
+    TIMEZONE_ENV,
+    CONFIG_PATH_ENV,
+    REQUEST_TIMEOUT_ENV,
+)
 
 #: Characters a config value may not contain, mirroring
 #: ``CONFIG_VALUE_REJECTED_CHARS`` in ``src/core/config.ts``. The reader strips
@@ -125,6 +155,71 @@ class ConfigReadError(Exception):
         )
         self.path = path
         self.reason = reason
+
+
+class ProfileScopeError(ConfigReadError):
+    """A profile-scoped setting was read on a multiplexed gateway with no scope.
+
+    A subclass of :class:`ConfigReadError` so every site that already refuses,
+    propagates or reports an unreadable configuration does the same here: the
+    setting the operator configured exists, and it is not the one this call
+    can see. The message names the setting and never a value; it does not use
+    the parent's file-read template, which is pinned to the file case.
+    """
+
+    def __init__(self, name: str) -> None:
+        Exception.__init__(
+            self,
+            f"{name} cannot be resolved: this multiplexed Hermes gateway bound no "
+            "profile scope for the call, and Open Second Brain does not fall back to "
+            "the gateway's process environment, which belongs to the launch profile. "
+            "Restart the gateway (hermes gateway restart); if it persists, report it.",
+        )
+        self.name = name
+        self.path = ""
+        self.reason = "no profile scope bound"
+
+
+def _profile_scope_module():
+    """Hermes's ``agent.secret_scope`` module, or ``None`` outside Hermes.
+
+    Imported lazily, absolutely and per call: this file is also loaded by file
+    location with no package and no Hermes (the resolver parity suite and the
+    doctor's parity check), where the import must fail quietly and leave the
+    process-environment answers in force.
+    """
+    try:
+        from agent import secret_scope as scope_module
+    except Exception:  # noqa: BLE001 - no Hermes, or a Hermes without the module
+        return None
+    return scope_module
+
+
+def is_multiplexed() -> bool:
+    """Whether Hermes reports a multiplexed gateway for the current call."""
+    scope_module = _profile_scope_module()
+    return scope_module is not None and bool(scope_module.is_multiplex_active())
+
+
+def env_setting(name: str) -> str | None:
+    """The one reader of a profile-scoped setting; empty counts as unset.
+
+    Not multiplexed: ``os.environ``, exactly as before. Multiplexed: the bound
+    profile scope only - a miss is ``None`` and the caller's chain continues;
+    the process environment is never consulted. Names outside
+    :data:`PROFILE_SCOPED_ENV` are process-global and always read from
+    ``os.environ``.
+
+    :raises ProfileScopeError: when multiplexed and no scope is bound.
+    """
+    scope_module = _profile_scope_module() if name in PROFILE_SCOPED_ENV else None
+    if scope_module is None or not scope_module.is_multiplex_active():
+        return os.environ.get(name) or None
+    try:
+        value = scope_module.get_secret(name, None)
+    except scope_module.UnscopedSecretError as exc:
+        raise ProfileScopeError(name) from exc
+    return value or None
 
 
 class ConfigValueError(ValueError):
@@ -185,7 +280,7 @@ def _windows_local_app_data() -> Path:
 
 def config_path() -> Path:
     """Resolve the plugin config path (``OPEN_SECOND_BRAIN_CONFIG`` -> XDG -> platform default)."""
-    override = os.environ.get(CONFIG_PATH_ENV)
+    override = env_setting(CONFIG_PATH_ENV)
     if override:
         return Path(expand_tilde(override))
     xdg = os.environ.get(XDG_CONFIG_HOME_ENV)
@@ -355,7 +450,7 @@ def resolve_agent_name() -> str:
 
     :raises ConfigReadError: when the config file is present but unreadable.
     """
-    env_value = os.environ.get(AGENT_NAME_ENV)
+    env_value = env_setting(AGENT_NAME_ENV)
     if env_value:
         return env_value
     data = _config_data()
@@ -377,7 +472,7 @@ def resolve_vault(cwd: str | None = None) -> str | None:
         directory when omitted, which is what the gateway passes implicitly.
     :raises ConfigReadError: when the config file is present but unreadable.
     """
-    env_value = os.environ.get(VAULT_DIR_ENV)
+    env_value = env_setting(VAULT_DIR_ENV)
     if env_value:
         return expand_tilde(env_value)
     pointer_vault = _resolve_pointer_vault(cwd if cwd is not None else os.getcwd())
@@ -403,7 +498,7 @@ def resolve_timezone() -> str | None:
 
     :raises ConfigReadError: when the config file is present but unreadable.
     """
-    env_value = os.environ.get(TIMEZONE_ENV)
+    env_value = env_setting(TIMEZONE_ENV)
     if env_value:
         return env_value
     return _config_data().get("timezone") or None
