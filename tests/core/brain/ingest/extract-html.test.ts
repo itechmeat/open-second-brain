@@ -375,6 +375,13 @@ describe("extractHtml - parts", () => {
     expect(grown).toBeLessThan(SCAN_MEMORY_BOUND_BYTES);
   });
 
+  test("a heading of astral characters is capped at a code-point boundary", () => {
+    const heading =
+      extracted(`<h1>${"\u{1F600}".repeat(HTML_HEADING_MAX_CHARS + 50)}</h1>`).parts[0]?.heading ??
+      "";
+    expect(heading).toBe(`${"\u{1F600}".repeat(HTML_HEADING_MAX_CHARS - 1)}\u2026`);
+  });
+
   test("a 300-character heading is capped", () => {
     const heading = extracted(`<h1>${"x".repeat(300)}</h1>`).parts[0]?.heading ?? "";
     expect(Array.from(heading).length).toBe(HTML_HEADING_MAX_CHARS);
