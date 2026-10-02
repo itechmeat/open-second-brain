@@ -61,7 +61,7 @@ const ROOT_INSTRUCTION_FILES: ReadonlyArray<string> = Object.freeze(["CLAUDE.md"
  */
 export const removedToolReferenceCheck: DoctorCheck = {
   failSoft: true,
-  run({ vault }, { issues, uncertain }) {
+  run({ vault, readable }, { issues, uncertain }) {
     const candidates: string[] = [];
     const dirs = brainDirs(vault);
     const swept: SweptPath = {
@@ -87,6 +87,9 @@ export const removedToolReferenceCheck: DoctorCheck = {
     let emitted = 0;
     for (const path of candidates) {
       if (emitted >= REMOVED_TOOL_MAX_WARNINGS) return;
+      // A page the caller may not read is skipped before it is read, so it
+      // spends no slot of the cap a readable page would have filled.
+      if (readable !== undefined && !readable(toPosix(relative(vault, path)))) continue;
       // Every candidate was listed by the walk a moment ago, so an
       // ENOENT here is a file that vanished under it.
       const body = readSweptFile(path, swept, SWEEP_ORIGIN.discovered);

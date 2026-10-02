@@ -51,7 +51,7 @@
  */
 
 import { readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 
 import { buildBacklinkIndex } from "./backlinks.ts";
 import type { ContinuityRecord } from "./continuity/types.ts";
@@ -77,6 +77,7 @@ import { readLifecycleState } from "./lifecycle/tombstone.ts";
 import { boundaryToMs, VALID_UNTIL_KEY } from "./lifecycle/temporal-replace.ts";
 import { brainDirs } from "./paths.ts";
 import { MS_PER_DAY } from "./time.ts";
+import { toPosix } from "../path-safety.ts";
 import { parseFrontmatter } from "../vault.ts";
 import { brainArtifactSlug } from "./wikilink.ts";
 
@@ -115,6 +116,13 @@ export interface StaleDependencyOptions {
   readonly lookbackDays?: number;
   /** Per-state report cap; defaults to {@link STALE_DEPENDENCY_MAX_CONSUMERS_PER_STATE}. */
   readonly maxConsumersPerState?: number;
+  /**
+   * Whether the caller may read a vault-relative path. A state whose page
+   * it rejects is left out before the join and `states_changed`, so it
+   * moves no count. Omitted, every state counts (the operator's own
+   * shell).
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 /**
@@ -183,7 +191,12 @@ export function auditStaleDependencies(
   const contextReceipts = readContextReceipts(vault, windowSince);
   const decisionReceipts = readDecisionCitations(vault, windowSince);
   const artifacts = walkBrainArtifacts(vault);
-  const states = collectStates(vault, artifacts, now.getTime());
+  const allStates = collectStates(vault, artifacts, now.getTime());
+  const readable = opts.readable;
+  const states =
+    readable === undefined
+      ? allStates
+      : allStates.filter((state) => readable(toPosix(relative(vault, state.path))));
   const stateKeys = new Set(states.map((state) => state.key));
 
   // The artifact arm runs unconditionally, and that is the point. It reads

@@ -25,7 +25,7 @@ import type { DoctorIssue } from "../../core/brain/types.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceBool, coerceFormat } from "../coerce.ts";
 import { vaultRelativeSafe } from "./shared.ts";
-import { readableAtContextReach } from "./reach-readable.ts";
+import { readableAtContextReach, readableAtContextReachOrUndefined } from "./reach-readable.ts";
 import { findingRefs } from "./hygiene-tools.ts";
 import { everyArtifactRefView } from "../../core/brain/artifact-ref-view.ts";
 import { reachView } from "../../core/brain/reach-view.ts";
@@ -138,6 +138,7 @@ async function toolBrainDoctor(
     return { format, repair: outcome };
   }
 
+  const readable = readableAtContextReachOrUndefined(ctx);
   const result = runDoctor(ctx.vault, {
     strict,
     dbPath: resolveSearchConfig({ vault: ctx.vault, configPath: ctx.configPath ?? undefined })
@@ -146,6 +147,10 @@ async function toolBrainDoctor(
     // the config this server was started against, not whatever default
     // discovery would find.
     ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
+    // The counts the checks take before any finding is filtered below -
+    // the removed-tool warning cap, the stale-dependency note - are taken
+    // over the pages this caller may read.
+    ...(readable !== undefined ? { readable } : {}),
   });
 
   // Every issue names the artifact it is about - `path`, `target`, the

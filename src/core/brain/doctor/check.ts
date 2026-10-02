@@ -42,6 +42,12 @@ export interface DoctorCheckContext {
    * answer the runtime itself would get.
    */
   readonly configPath: string | undefined;
+  /**
+   * Whether the caller may read a vault-relative path, for the checks
+   * that count before any finding is filtered: a page it rejects spends
+   * no slot of a cap and moves no count. Absent means every page counts.
+   */
+  readonly readable?: (rel: string) => boolean;
   /** Every valid wikilink target inside `Brain/`, keyed by basename. */
   readonly knownBasenames: ReadonlySet<string>;
   /**

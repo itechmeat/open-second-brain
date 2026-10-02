@@ -141,6 +141,28 @@ export type {
  * order and the id index the record checks fill is what
  * {@link duplicateIdCheck} reads, so it has to follow them.
  */
+/** The stale-dependency check over the unbounded collector. */
+const STALE_DEPENDENCY_CHECK_UNBOUNDED = makeStaleDependencyCheck(auditStaleDependencies);
+
+/**
+ * The stale-dependency check, its collector bounded to the pages the
+ * pass may read when the context carries a predicate, so a state the
+ * caller cannot read moves no count of the note it renders.
+ */
+const staleDependencyCheck: DoctorCheck = {
+  failSoft: STALE_DEPENDENCY_CHECK_UNBOUNDED.failSoft,
+  run(ctx, out) {
+    const readable = ctx.readable;
+    if (readable === undefined) {
+      STALE_DEPENDENCY_CHECK_UNBOUNDED.run(ctx, out);
+      return;
+    }
+    makeStaleDependencyCheck((vault, opts) =>
+      auditStaleDependencies(vault, { ...opts, readable }),
+    ).run(ctx, out);
+  },
+};
+
 const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = Object.freeze([
   configCheck,
   vaultIgnoreCheck,
@@ -156,7 +178,7 @@ const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = Object.freeze([
   // pure kernel is the leaf both halves share, so this registry - which
   // already reaches every check module and the store beneath them - is
   // where the two meet without closing a loop.
-  makeStaleDependencyCheck(auditStaleDependencies),
+  staleDependencyCheck,
   removedToolReferenceCheck,
   duplicatePreferenceCheck,
   topicKeyCollisionCheck,
@@ -398,6 +420,7 @@ function resolveContext(
     config,
     dbPath: opts.dbPath,
     configPath: opts.configPath,
+    ...(opts.readable !== undefined ? { readable: opts.readable } : {}),
     knownBasenames: collectAllBasenames(vault, {
       site: CONTEXT_SITE,
       consequence:

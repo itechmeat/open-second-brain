@@ -37,6 +37,14 @@ export interface RunDoctorOptions {
    */
   readonly configPath?: string;
   /**
+   * Whether the caller may read a vault-relative path. Passed through to
+   * {@link DoctorCheckContext.readable}, so the counts a check computes
+   * itself (the removed-tool warning cap, the stale-dependency note) are
+   * taken over the pages the caller may read. Omitted, every page counts
+   * (the operator's own shell).
+   */
+  readonly readable?: (rel: string) => boolean;
+  /**
    * Optional precomputed dream summary (v0.10.16). When supplied,
    * the doctor runs the verification-delta helper and folds the
    * counts into the trust verdict. When omitted, verification
