@@ -33,9 +33,10 @@ export const TAG_RE = /(^|[^\w/])#([A-Za-z_][\w\-/]*)/g;
 // character at least as long (or to the end of the text), the CommonMark
 // rule: a shorter run, or a run of the other character, is content. A
 // stored excerpt is fenced one backtick longer than any run it holds, so
-// its lines never close it early.
+// its lines never close it early. The opening run is a whole run, which
+// fixes its length and keeps the scan linear on a long line of marks.
 const CODE_FENCE_RE =
-  /(^|\n)(?:(`{3,})[^\n]*\n[\s\S]*?(?:\n\2`*[^\n]*|$)|(~{3,})[^\n]*\n[\s\S]*?(?:\n\3~*[^\n]*|$))/g;
+  /(^|\n)(?:(`{3,})(?!`)[^\n]*\n[\s\S]*?(?:\n\2`*[^\n]*|$)|(~{3,})(?!~)[^\n]*\n[\s\S]*?(?:\n\3~*[^\n]*|$))/g;
 const INLINE_CODE_RE = /`[^`\n]*`/g;
 
 /**

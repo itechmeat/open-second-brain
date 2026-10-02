@@ -1,6 +1,7 @@
 import { test, expect } from "bun:test";
 import { renderExcerptSection } from "../../../src/core/brain/provenance/capture-scope.ts";
 import { extractLinks } from "../../../src/core/search/links.ts";
+import { LINEAR_CEILING_MS } from "../../helpers/linear-time.ts";
 
 test("extracts wikilinks with and without alt text", () => {
   const links = extractLinks("See [[foo-note]] and [[bar|the bar]].");
@@ -195,5 +196,13 @@ test("a stored excerpt contributes no links, whatever backtick lines it holds", 
     const page = `Intro [[real-link]].\n\n${renderExcerptSection(excerpt)}\nTail [[tail-link]].`;
     const targets = extractLinks(page).map((l) => l.targetPath);
     expect(targets).toEqual(["real-link", "tail-link"]);
+  }
+});
+
+test("link extraction stays linear on a long line of fence marks", () => {
+  for (const mark of ["`", "~"]) {
+    const started = performance.now();
+    extractLinks(`${mark.repeat(256 * 1024)} [[x]]`);
+    expect(performance.now() - started).toBeLessThan(LINEAR_CEILING_MS);
   }
 });
