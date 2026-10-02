@@ -22,7 +22,7 @@
 import { createHash } from "node:crypto";
 
 import { appendContinuityRecord, listContinuityRecords } from "./continuity/store.ts";
-import type { ContinuityRecord } from "./continuity/types.ts";
+import { CONTINUITY_TURN_ID_KEY, type ContinuityRecord } from "./continuity/types.ts";
 import type { NegativeRecallVerdict } from "./negative-recall.ts";
 
 export interface GateTelemetryInput {
@@ -31,6 +31,8 @@ export interface GateTelemetryInput {
   readonly retrieve: boolean;
   readonly reason: string;
   readonly sessionId?: string;
+  /** The caller's turn correlation id, recorded under {@link CONTINUITY_TURN_ID_KEY}. */
+  readonly turnId?: string;
   readonly createdAt?: string;
   /**
    * The adequacy verdict and the caller's advisory decision-model
@@ -72,6 +74,7 @@ export function emitGateTelemetry(vault: string, input: GateTelemetryInput): Con
     payload: {
       host: input.host,
       ...(input.sessionId !== undefined ? { session_id: input.sessionId } : {}),
+      ...(input.turnId !== undefined ? { [CONTINUITY_TURN_ID_KEY]: input.turnId } : {}),
       decision: input.retrieve ? "retrieve" : "skip",
       reason: input.reason,
       prompt_hash: hashPrompt(input.prompt),

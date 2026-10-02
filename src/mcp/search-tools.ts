@@ -563,6 +563,11 @@ const SEARCH_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
  */
 const RECALL_SCORES_ARG_NAME = "scores";
 
+/** The bound on the gate's `session_id` and `turn_id` correlation arguments. */
+const GATE_CORRELATION_ID_MAX_CHARS = 512;
+/** The bound on the gate's `telemetry_host` label. */
+const GATE_TELEMETRY_HOST_MAX_CHARS = 200;
+
 const RECALL_GATE_INPUT_SCHEMA: Record<string, unknown> = {
   type: "object",
   properties: {
@@ -585,13 +590,18 @@ const RECALL_GATE_INPUT_SCHEMA: Record<string, unknown> = {
     },
     telemetry_host: {
       type: "string",
-      maxLength: 200,
+      maxLength: GATE_TELEMETRY_HOST_MAX_CHARS,
       description: "Optional host/client label recorded on the telemetry record.",
     },
     session_id: {
       type: "string",
-      maxLength: 512,
+      maxLength: GATE_CORRELATION_ID_MAX_CHARS,
       description: "Optional session correlation id recorded on the telemetry record.",
+    },
+    turn_id: {
+      type: "string",
+      maxLength: GATE_CORRELATION_ID_MAX_CHARS,
+      description: "Optional turn correlation id recorded on the telemetry record.",
     },
     [RECALL_SCORES_ARG_NAME]: RECALL_SCORES_SCHEMA,
     [MATCH_QUALITY_ARG_NAME]: matchQualitySchema(RECALL_SCORES_ARG_NAME),
@@ -1256,6 +1266,14 @@ async function toolBrainRecallGate(
   }
   const previousPrompt = coerceStringOptional(args, "previous_prompt", 4000);
   const explicit = coerceBoolOptional(args, "explicit") ?? false;
+  // The telemetry correlation arguments are checked here, before anything
+  // runs, rather than inside the telemetry thunks below: those are
+  // fail-open, so a bound broken there was dropped without a word, and
+  // with telemetry off it was never checked at all.
+  const telemetryHost =
+    coerceStringOptional(args, "telemetry_host", GATE_TELEMETRY_HOST_MAX_CHARS) ?? "mcp";
+  const sessionId = coerceStringOptional(args, "session_id", GATE_CORRELATION_ID_MAX_CHARS);
+  const turnId = coerceStringOptional(args, "turn_id", GATE_CORRELATION_ID_MAX_CHARS);
   const decision = evaluateSurfacingGate({
     prompt,
     previousPrompt: previousPrompt ?? null,
@@ -1296,15 +1314,14 @@ async function toolBrainRecallGate(
   // emit kernel (t_5d7aa7c5) - the payload thunk never runs with the
   // config off, and a broken continuity store never breaks the gate's
   // pure-diagnostic contract (fail-open).
-  emitGatedTelemetry(resolveRecallGateTelemetry(ctx.configPath ?? undefined), () => {
-    const host = coerceStringOptional(args, "telemetry_host", 200) ?? "mcp";
-    const sessionId = coerceStringOptional(args, "session_id", 512);
-    return emitGateTelemetry(ctx.vault, {
-      host,
+  emitGatedTelemetry(resolveRecallGateTelemetry(ctx.configPath ?? undefined), () =>
+    emitGateTelemetry(ctx.vault, {
+      host: telemetryHost,
       prompt,
       retrieve: decision.retrieve,
       reason: decision.reason,
       ...(sessionId !== undefined ? { sessionId } : {}),
+      ...(turnId !== undefined ? { turnId } : {}),
       ...(verdict !== undefined && answerableVerdict !== undefined
         ? {
             decisionAnswerable: {
@@ -1314,8 +1331,8 @@ async function toolBrainRecallGate(
             },
           }
         : {}),
-    });
-  });
+    }),
+  );
   if (refused !== null) throw refused;
   if (verdict === undefined) return { ...decision };
   // signals-that-survive, unit 6: an unmet verdict is stamped onto the
@@ -1338,14 +1355,13 @@ async function toolBrainRecallGate(
   // same fail-open kernel as everything else this handler writes.
   const negative = verdict.resultCount === 0 ? await assessNegativeRecall(ctx) : null;
   if (negative !== null) {
-    emitGatedTelemetry(resolveRecallGateTelemetry(ctx.configPath ?? undefined), () => {
-      const sessionId = coerceStringOptional(args, "session_id", 512);
-      return emitNegativeRecallTelemetry(ctx.vault, {
+    emitGatedTelemetry(resolveRecallGateTelemetry(ctx.configPath ?? undefined), () =>
+      emitNegativeRecallTelemetry(ctx.vault, {
         prompt,
         verdict: negative,
         ...(sessionId !== undefined ? { sessionId } : {}),
-      });
-    });
+      }),
+    );
   }
   return {
     ...decision,

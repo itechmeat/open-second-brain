@@ -480,6 +480,10 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                    'description': 'Optional session correlation id '
                                                                   'recorded on the telemetry '
                                                                   'record.'},
+                                    'turn_id': {'type': 'string',
+                                                'maxLength': 512,
+                                                'description': 'Optional turn correlation id '
+                                                               'recorded on the telemetry record.'},
                                     'scores': {'type': 'array',
                                                'maxItems': 200,
                                                'items': {'type': 'number'},

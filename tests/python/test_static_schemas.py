@@ -386,6 +386,10 @@ def schema_violations(schema: dict, args: dict) -> list[str]:
     return violations
 
 
+# The turn id the lifecycle drive hands to one prefetch.
+_PREFETCH_TURN_ID = "turn-2"
+
+
 class ProviderPayloadConformanceTests(unittest.TestCase):
     """Payloads the provider BUILDS must satisfy the schema the server publishes.
 
@@ -439,6 +443,9 @@ class ProviderPayloadConformanceTests(unittest.TestCase):
         provider.initialize("sess-1", hermes_home=home)
         provider.system_prompt_block()
         provider.prefetch("what did we decide", session_id="sess-1")
+        # Hermes passes the turn id on prefetch; the provider forwards it to
+        # both recall calls, so the gate's schema must declare it too.
+        provider.prefetch("and after that", session_id="sess-1", turn_id=_PREFETCH_TURN_ID)
         provider.sync_turn("u1", "a1", session_id="sess-1")
         provider.sync_turn("u2", "a2", session_id="sess-1")
         provider._drain_captures()
@@ -468,6 +475,16 @@ class ProviderPayloadConformanceTests(unittest.TestCase):
         # a silent flush is the failure mode being guarded, so an unexercised
         # path must fail here rather than read as a clean run.
         self.assertEqual(exercised, self._PROVIDER_BUILT)
+
+    def test_the_turn_id_reaches_both_recall_calls_and_conforms(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            calls = self._drive_lifecycle(tmp)
+        schemas = {s["name"]: s["inputSchema"] for s in STATIC_TOOL_SCHEMAS}
+        for tool in ("brain_recall_gate", "brain_context_pack"):
+            carried = [args for name, args in calls if name == tool and "turn_id" in args]
+            with self.subTest(tool=tool):
+                self.assertEqual([a["turn_id"] for a in carried], [_PREFETCH_TURN_ID])
+                self.assertEqual(schema_violations(schemas[tool], carried[0]), [])
 
     def test_the_flush_payload_carries_both_turn_bounds_as_strings(self):
         with tempfile.TemporaryDirectory() as tmp:
