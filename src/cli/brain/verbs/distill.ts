@@ -4,8 +4,13 @@
  *
  * Provider-agnostic: the agent supplies the atomic claims (and optional source
  * block ids) as JSON - a `[{ "text": "...", "block": "^abc" }]` array via
- * `--claims` or `--claims-file`. OSB validates them and writes one idempotent
+ * `--claims` or `--claims-file`. Open Second Brain validates them, checks every
+ * quoted span against the cited block or the source, and writes one idempotent
  * distillation page per source. No model, no extraction here.
+ *
+ * `--strict-quotes` turns an unverified span into a refusal (exit 1, nothing
+ * written); `--excerpt-file` stores the verbatim text read from a source the
+ * vault does not hold, making the page `bounded-local`.
  *
  * Exit codes: 0 on success, 1 on an operational failure, 2 on usage errors.
  */
@@ -17,7 +22,17 @@ import {
   DistillValidationError,
   parseDistillClaims,
   type DistillClaim,
+  type DistillSourceResult,
 } from "../../../core/brain/distill/distill-source.ts";
+import {
+  QuoteCheckError,
+  type QuoteCheckReport,
+} from "../../../core/brain/distill/quote-verdict.ts";
+import {
+  CAPTURE_SCOPE,
+  CaptureExcerptError,
+  type CaptureScope,
+} from "../../../core/brain/provenance/capture-scope.ts";
 import { ResponseShapeError } from "../../../core/brain/response-shape.ts";
 import {
   INTAKE_TRUST,
@@ -27,7 +42,15 @@ import {
 import { brainVerbContext, fail, ok, okJson, parse, resolveBrainAgent } from "../helpers.ts";
 
 const USAGE =
-  "usage: o2b brain distill <source> (--claims <json> | --claims-file <path>) [--vault <path>] [--json]";
+  "usage: o2b brain distill <source> (--claims <json> | --claims-file <path>) [--strict-quotes] [--excerpt-file <path>] [--vault <path>] [--json]";
+
+/** Errors that are the operator's input, reported as `distill: <message>`. */
+const OPERATOR_ERROR_CLASSES: ReadonlyArray<new (...args: never[]) => Error> = [
+  DistillValidationError,
+  ResponseShapeError,
+  QuoteCheckError,
+  CaptureExcerptError,
+];
 
 /** What `--claims` accepts, named in the operator's own terms. */
 const CLAIMS_SHAPE_HINT = "claims must be a JSON array of { text, block? } objects";
@@ -76,12 +99,41 @@ function untrustedNote(trust: IntakeTrust): string {
   return trust === INTAKE_TRUST.untrusted ? ` [${UNTRUSTED_SOURCE_FRONTMATTER_KEY}]` : "";
 }
 
+/**
+ * What the success line adds when an excerpt was stored. Only `bounded-local`
+ * earns a token: `url-only` is already named by the untrusted marker, and a
+ * `full-local` run keeps its line exactly as it was.
+ */
+function captureNote(scope: CaptureScope): string {
+  return scope === CAPTURE_SCOPE.boundedLocal ? ` [${CAPTURE_SCOPE.boundedLocal}]` : "";
+}
+
+/**
+ * What the success line adds when quoted spans were checked: the spans that
+ * verified (in a block or in the whole source) and the spans unquoted.
+ */
+function quotesNote(quotes: QuoteCheckReport | undefined): string {
+  if (quotes === undefined) return "";
+  const verified = quotes.verified_in_block + quotes.verified_in_source;
+  return ` [quotes verified:${verified} unquoted:${quotes.unquoted}]`;
+}
+
+/** The success line, suffixes in their pinned order. */
+function successLine(res: DistillSourceResult): string {
+  return (
+    `distilled ${res.claimCount} claim(s) -> ${res.distillationPath}${res.created ? "" : " (updated)"}` +
+    `${untrustedNote(res.trust)}${captureNote(res.captureScope)}${quotesNote(res.quotes)}`
+  );
+}
+
 export async function cmdBrainDistill(argv: string[]): Promise<number> {
   const { flags, positional } = parse(argv, {
     vault: { type: "string" },
     agent: { type: "string" },
     claims: { type: "string" },
     "claims-file": { type: "string" },
+    "strict-quotes": { type: "boolean" },
+    "excerpt-file": { type: "string" },
     json: { type: "boolean" },
   });
   const source = positional[0];
@@ -105,10 +157,20 @@ export async function cmdBrainDistill(argv: string[]): Promise<number> {
         ? (flags["claims"] as string)
         : readFileSync(flags["claims-file"] as string, "utf8");
     const claims = parseClaims(claimsRaw);
+    // Read verbatim: the excerpt is stored byte for byte and its digest is
+    // taken over exactly these bytes.
+    const excerpt =
+      typeof flags["excerpt-file"] === "string"
+        ? readFileSync(flags["excerpt-file"] as string, "utf8")
+        : undefined;
     const res = distillSource(
       vault,
-      { sourcePath: source, claims },
-      { agent: resolveBrainAgent(flags, config), now: new Date() },
+      { sourcePath: source, claims, ...(excerpt !== undefined ? { excerpt } : {}) },
+      {
+        agent: resolveBrainAgent(flags, config),
+        now: new Date(),
+        strictQuotes: flags["strict-quotes"] === true,
+      },
     );
     if (flags["json"]) {
       okJson({
@@ -119,16 +181,16 @@ export async function cmdBrainDistill(argv: string[]): Promise<number> {
         // "not recorded" rather than a sentinel that looks like a digest.
         ...(res.sourceHash !== undefined ? { source_hash: res.sourceHash } : {}),
         trust: res.trust,
+        capture_scope: res.captureScope,
+        ...(res.quotes !== undefined ? { quotes: res.quotes } : {}),
       });
       return 0;
     }
-    ok(
-      `distilled ${res.claimCount} claim(s) -> ${res.distillationPath}${res.created ? "" : " (updated)"}${untrustedNote(res.trust)}`,
-    );
+    ok(successLine(res));
     return 0;
   } catch (err) {
-    if (err instanceof DistillValidationError || err instanceof ResponseShapeError) {
-      return fail(`distill: ${err.message}`);
+    if (OPERATOR_ERROR_CLASSES.some((cls) => err instanceof cls)) {
+      return fail(`distill: ${(err as Error).message}`);
     }
     return fail(`distill failed: ${(err as Error).message ?? err}`);
   }

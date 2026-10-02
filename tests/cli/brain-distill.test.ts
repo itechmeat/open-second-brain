@@ -3,11 +3,21 @@
  * with block-level provenance, supplied as JSON.
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { nestedCommand } from "../../src/cli/command-manifest.ts";
+import { BRAIN_DISTILLATIONS_REL } from "../../src/core/brain/path-constants.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
 let tmp: string;
@@ -131,4 +141,138 @@ test("missing <source> or --claims is a usage error (exit 2)", async () => {
   expect(noSource.returncode).toBe(2);
   const noClaims = await runCli(["brain", "distill", "Articles/src.md", "--vault", vault], { env });
   expect(noClaims.returncode).toBe(2);
+});
+
+const QUOTED_SOURCE = "Articles/quoted.md";
+
+/** A source whose one paragraph carries the block id `^p1`. */
+function seedQuotedSource(): void {
+  writeFileSync(
+    join(vault, QUOTED_SOURCE),
+    "# Quoted\n\nThe protocol settles every batch within one minute. ^p1\n",
+    "utf8",
+  );
+}
+
+/** Distillation pages on disk; the directory may not exist yet. */
+function distillationPages(): string[] {
+  const dir = join(vault, BRAIN_DISTILLATIONS_REL);
+  return existsSync(dir) ? readdirSync(dir).filter((name) => name.endsWith(".md")) : [];
+}
+
+/**
+ * The quote check and the capture scope reach the operator (distilled
+ * provenance, D2): two flags in, two suffixes and two `--json` members out.
+ */
+describe("o2b brain distill - quote check and capture scope", () => {
+  const VERBATIM = {
+    text: 'The author writes "settles every batch within one minute".',
+    block: "p1",
+  };
+  const PARAPHRASE = { text: 'The author writes "settles all batches quickly".', block: "p1" };
+
+  test("--strict-quotes refuses a paraphrase in quotation marks and writes nothing", async () => {
+    seedQuotedSource();
+    const res = await runCli(
+      [
+        "brain",
+        "distill",
+        QUOTED_SOURCE,
+        "--claims",
+        JSON.stringify([PARAPHRASE]),
+        "--strict-quotes",
+        "--vault",
+        vault,
+      ],
+      { env },
+    );
+    expect(res.returncode).toBe(1);
+    expect(res.stderr).toContain(
+      "distill: quoted spans failed verification: claim 0: not-in-block",
+    );
+    expect(distillationPages()).toEqual([]);
+  });
+
+  test("--excerpt-file stores a bounded-local page for a url source", async () => {
+    const excerptPath = join(tmp, "excerpt.txt");
+    writeFileSync(excerptPath, "The protocol settles every batch within one minute.\n", "utf8");
+    const res = await runCli(
+      [
+        "brain",
+        "distill",
+        "https://example.test/post",
+        "--claims",
+        JSON.stringify([{ text: "A claim." }]),
+        "--excerpt-file",
+        excerptPath,
+        "--vault",
+        vault,
+      ],
+      { env },
+    );
+    expect(res.returncode).toBe(0);
+    expect(res.stdout.trimEnd()).toEndWith(" [untrusted_source] [bounded-local]");
+    const [page] = distillationPages();
+    const md = readFileSync(join(vault, BRAIN_DISTILLATIONS_REL, page!), "utf8");
+    expect(md).toContain("capture_scope: bounded-local");
+  });
+
+  test("a checked quote adds the quotes suffix to the human line", async () => {
+    seedQuotedSource();
+    const res = await runCli(
+      ["brain", "distill", QUOTED_SOURCE, "--claims", JSON.stringify([VERBATIM]), "--vault", vault],
+      { env },
+    );
+    expect(res.returncode).toBe(0);
+    expect(res.stdout.trimEnd()).toEndWith(" [quotes verified:1 unquoted:0]");
+  });
+
+  test("--json carries capture_scope and quotes", async () => {
+    seedQuotedSource();
+    const res = await runCli(
+      [
+        "brain",
+        "distill",
+        QUOTED_SOURCE,
+        "--claims",
+        JSON.stringify([VERBATIM, PARAPHRASE]),
+        "--vault",
+        vault,
+        "--json",
+      ],
+      { env },
+    );
+    expect(res.returncode).toBe(0);
+    const out = JSON.parse(res.stdout) as {
+      capture_scope: string;
+      quotes: { verified_in_block: number; unquoted: number; findings: unknown[] };
+    };
+    expect(out.capture_scope).toBe("full-local");
+    expect(out.quotes.verified_in_block).toBe(1);
+    expect(out.quotes.unquoted).toBe(1);
+    expect(out.quotes.findings).toHaveLength(1);
+  });
+
+  test("a clean trusted run keeps its human line exactly", async () => {
+    const res = await runCli(
+      [
+        "brain",
+        "distill",
+        "Articles/src.md",
+        "--claims",
+        JSON.stringify([{ text: "A claim." }]),
+        "--vault",
+        vault,
+      ],
+      { env },
+    );
+    expect(res.returncode).toBe(0);
+    expect(res.stdout.trimEnd()).toMatch(/^distilled 1 claim\(s\) -> \S+\.md$/);
+  });
+
+  test("the manifest entry lists the two new flags", () => {
+    const names = (nestedCommand("brain", "distill")?.flags ?? []).map((f) => f.name);
+    expect(names).toContain("strict-quotes");
+    expect(names).toContain("excerpt-file");
+  });
 });

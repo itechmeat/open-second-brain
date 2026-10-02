@@ -572,7 +572,15 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         ),
         command(
           "distill",
-          "Condense a source into agent-supplied atomic claims with block provenance",
+          "Condense a source into agent-supplied atomic claims with block provenance and checked quotes",
+          [
+            flag("vault", "string"),
+            flag("agent", "string"),
+            flag("claims", "string"),
+            flag("claims-file", "string"),
+            flag("strict-quotes", "boolean"),
+            flag("excerpt-file", "string"),
+          ],
         ),
         command("session-summary", "Session-scoped structured digest: write, get, list"),
         command(
