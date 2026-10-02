@@ -20,6 +20,7 @@ import { SOURCE_EXTRACT_SKIP_REASON } from "../../../../src/core/brain/ingest/so
 import {
   PRIVATE_REGION_PLACEHOLDER,
   REDACTION_PLACEHOLDER,
+  SCAN_TRUNCATED_MARKER,
 } from "../../../../src/core/redactor.ts";
 import { extractTagValues, stripCode } from "../../../../src/core/tags.ts";
 import { extractWikilinks } from "../../../../src/core/vault.ts";
@@ -34,6 +35,14 @@ const OMITTED_HEADINGS = 400_000;
  * 850 MB on this input; the bounded scan takes about 40 MB.
  */
 const SCAN_MEMORY_BOUND_BYTES = 256 * 1024 * 1024;
+/**
+ * The time a source of huge headings may take. Redacting each heading
+ * unwindowed took about 1.3 s per heading; the windowed pass leaves only
+ * the scan itself, about 0.2 s for 8 MiB.
+ */
+const HEADING_WINDOW_CEILING_MS = 1_000;
+/** The parts section of one part: heading, blank line, fence, the part line, fence. */
+const RENDERED_LINES_ONE_PART = 5;
 
 /** The extraction of `html`, failing the test when the scanner refused it. */
 function extracted(html: string): HtmlExtraction {
@@ -350,6 +359,35 @@ describe("extractHtml - parts", () => {
     expect(renderPartsSection(result)).not.toContain(password);
   });
 
+  describe("a huge heading or title is redacted in a bounded window", () => {
+    const MIB = 1 << 20;
+    /** A URL-userinfo run: the shape that made the unwindowed pass cost seconds. */
+    const run = (bytes: number): string => "a://b:".repeat(Math.floor(bytes / 6));
+    test.each([
+      ["one heading near the source cap", `<h1>${run(HTML_EXTRACT_MAX_SOURCE_BYTES - 64)}</h1>`],
+      ["a title and a heading", `<title>${run(4 * MIB - 64)}</title><h1>${run(4 * MIB - 64)}</h1>`],
+    ])("%s", (_name, html) => {
+      const started = performance.now();
+      const result = extracted(html);
+      expect(performance.now() - started).toBeLessThan(HEADING_WINDOW_CEILING_MS);
+      expect(Array.from(result.parts[0]?.heading ?? "").length).toBe(HTML_HEADING_MAX_CHARS);
+    });
+
+    test("a credential heading past the redactor's input cap keeps its part on one line", () => {
+      const result = extracted(`<h1>password=${"x".repeat(MIB + 16)}</h1><p>x</p>`);
+      const trail = result.parts[0]?.trail ?? "";
+      expect(trail).toContain(REDACTION_PLACEHOLDER);
+      expect(trail).not.toContain("\n");
+      expect(trail).not.toContain(SCAN_TRUNCATED_MARKER);
+      expect(renderPartsSection(result).split("\n")).toHaveLength(RENDERED_LINES_ONE_PART);
+    });
+
+    test("a heading cut by the window is marked as cut", () => {
+      const result = extracted(`<h1>password=${"x".repeat(MIB)} tail</h1>`);
+      expect(result.parts[0]?.heading).toBe(`password=${REDACTION_PLACEHOLDER}…`);
+    });
+  });
+
   test.each([
     ["without a preamble", "", 300],
     ["with a preamble", "<p>intro</p>", 301],
@@ -412,6 +450,12 @@ describe("renderPartsSection", () => {
   test("a pipe in a heading is escaped so it cannot forge the span", () => {
     expect(renderPartsSection(extracted("<h1>x | lines 1-999</h1>")).split("\n")[3]).toBe(
       "h1 x \\| lines 1-999 | lines 1-1",
+    );
+  });
+
+  test("a backslash before a pipe in a heading cannot unescape it", () => {
+    expect(renderPartsSection(extracted("<h1>x \\| lines 1-999</h1>")).split("\n")[3]).toBe(
+      "h1 x \\\\\\| lines 1-999 | lines 1-1",
     );
   });
 

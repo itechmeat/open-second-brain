@@ -165,6 +165,8 @@ const PARTS_FENCE_INFO = "parts";
 /** Separates a parts line's label from its span; escaped inside the label. */
 const SPAN_SEPARATOR = "|";
 const ESCAPED_SPAN_SEPARATOR = "\\|";
+const ESCAPE_CHAR = "\\";
+const ESCAPED_ESCAPE_CHAR = "\\\\";
 /** How the preamble part is named in a parts line. */
 const PREAMBLE_LABEL = "preamble";
 
@@ -316,19 +318,41 @@ function collapseWhitespace(text: string): string {
 const HEADING_REDACTION = Object.freeze({ redactUrlCredentials: true });
 
 /**
- * A folded heading or title as it is kept: redacted, then cut to
- * {@link HTML_HEADING_MAX_CHARS} code points, so a credential the cut would
- * split is still seen whole.
+ * The code units of a heading or title the value pass reads: far wider than
+ * {@link HTML_HEADING_MAX_CHARS}, so a credential the cap would split is
+ * still seen whole, and bounded, so one megabyte-sized heading costs no
+ * more than a short one.
+ */
+const HEADING_SCAN_MAX_CHARS = 4_096;
+
+/** The last code point of a heading cut by the window or the cap. */
+const CUT_MARK = "…";
+
+/**
+ * A folded heading or title as it is kept: its first
+ * {@link HEADING_SCAN_MAX_CHARS} code units redacted, folded onto one line
+ * again (the redactor's own notices carry line breaks), then cut to
+ * {@link HTML_HEADING_MAX_CHARS} code points. A heading longer than the
+ * window ends in the cut mark even when its redacted window is short.
  */
 function keptHeading(folded: string): string {
-  return capCodePoints(redactRawOutput(folded, HEADING_REDACTION), HTML_HEADING_MAX_CHARS);
+  const windowCut = folded.length > HEADING_SCAN_MAX_CHARS;
+  const window = windowCut ? codePointPrefix(folded, HEADING_SCAN_MAX_CHARS) : folded;
+  const kept = oneLine(redactRawOutput(window, HEADING_REDACTION));
+  return capCodePoints(windowCut ? `${kept}${CUT_MARK}` : kept, HTML_HEADING_MAX_CHARS);
 }
 
-/** `text` cut to `max` code points, the last one an ellipsis when anything was cut. */
+/** The first `max` code units of `text`, one fewer when the cut would split a surrogate pair. */
+function codePointPrefix(text: string, max: number): string {
+  const last = text.charCodeAt(max - 1);
+  return text.slice(0, last >= 0xd800 && last <= 0xdbff ? max - 1 : max);
+}
+
+/** `text` cut to `max` code points, the last one the cut mark when anything was cut. */
 function capCodePoints(text: string, max: number): string {
   const points = Array.from(text);
   if (points.length <= max) return text;
-  return `${points.slice(0, max - 1).join("")}…`;
+  return `${points.slice(0, max - 1).join("")}${CUT_MARK}`;
 }
 
 /**
@@ -746,14 +770,17 @@ export function extractHtml(bytes: Uint8Array): HtmlExtractResult {
 
 /**
  * One line of the parts list: `h<level> <trail> | lines <a>-<b>`, or
- * `preamble | lines <a>-<b>`. A `|` in the trail is escaped as `\|`, so a
- * heading cannot forge the span that follows it.
+ * `preamble | lines <a>-<b>`. A `\` in the trail is escaped as `\\` and
+ * then a `|` as `\|`, as table cells are, so a heading cannot forge the
+ * span that follows it, not even with a backslash of its own.
  */
 export function formatPartLine(part: HtmlPart): string {
   const label =
     part.level === PREAMBLE_LEVEL
       ? PREAMBLE_LABEL
-      : `h${part.level} ${part.trail.replaceAll(SPAN_SEPARATOR, ESCAPED_SPAN_SEPARATOR)}`;
+      : `h${part.level} ${part.trail
+          .replaceAll(ESCAPE_CHAR, ESCAPED_ESCAPE_CHAR)
+          .replaceAll(SPAN_SEPARATOR, ESCAPED_SPAN_SEPARATOR)}`;
   return `${label} ${SPAN_SEPARATOR} lines ${part.lineStart}-${part.lineEnd}`;
 }
 
