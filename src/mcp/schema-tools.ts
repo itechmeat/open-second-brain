@@ -10,11 +10,44 @@ import {
   reviewSchemaOrphans,
 } from "../core/brain/schema-admin.ts";
 import { previewSchemaMutations, type SchemaMutation } from "../core/brain/schema-mutate.ts";
+import { buildSchemaReport, type SchemaReportFinding } from "../core/brain/schema-report.ts";
+import { reachView } from "../core/brain/reach-view.ts";
+import { TRANSPORT_REACH } from "../core/graph/transport-reach.ts";
 import { resolveSearchConfig } from "../core/search/index.ts";
 import { INVALID_PARAMS, MCPError } from "./protocol.ts";
 import { coerceBool, coerceStr } from "./coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
-import type { ServerContext, ToolDefinition } from "./tool-contract.ts";
+import { contextReach, type ServerContext, type ToolDefinition } from "./tool-contract.ts";
+
+/**
+ * The pages a schema finding names, as references the reach view judges.
+ * A declaration nobody uses names no page.
+ */
+function findingRefs(finding: SchemaReportFinding): ReadonlyArray<string> {
+  switch (finding.kind) {
+    case "unknown-token":
+    case "unreadable-artifact":
+      return [finding.path];
+    case "link-constraint-violation":
+      return [finding.source, finding.target];
+    case "unused-declaration":
+      return [];
+  }
+}
+
+/**
+ * The findings a caller may see at its reach. Every finding that names a
+ * record names it by path, so below local reach a record the caller may
+ * not read is reported by no view, and `stats` counts what `lint` lists:
+ * a malformed private page answers as an absent one.
+ */
+function visibleFindings<T extends SchemaReportFinding>(
+  ctx: ServerContext,
+  findings: ReadonlyArray<T>,
+): ReadonlyArray<T> {
+  const view = reachView(ctx.vault, contextReach(ctx));
+  return view.filtersNothing ? findings : view.keep(findings, findingRefs);
+}
 
 // Read-side handlers behind the consolidated `schema_inspect` views.
 // The per-view alias tools were removed in 1.0.0 (tombstones in
@@ -23,13 +56,25 @@ const SCHEMA_INSPECT_VIEWS: Readonly<
   Record<string, (ctx: ServerContext, args: Record<string, unknown>) => Promise<unknown> | unknown>
 > = Object.freeze({
   graph: (ctx: ServerContext) => buildSchemaGraph(ctx.vault),
-  lint: (ctx: ServerContext) =>
-    buildSchemaLint(ctx.vault, {
+  lint: (ctx: ServerContext) => {
+    const lint = buildSchemaLint(ctx.vault, {
       dbPath: resolveSearchConfig({ vault: ctx.vault, configPath: ctx.configPath ?? undefined })
         .dbPath,
-    }),
-  stats: (ctx: ServerContext) => buildSchemaStats(ctx.vault),
-  orphans: (ctx: ServerContext) => reviewSchemaOrphans(ctx.vault),
+    });
+    return { ...lint, findings: visibleFindings(ctx, lint.findings) };
+  },
+  stats: (ctx: ServerContext) => {
+    const stats = buildSchemaStats(ctx.vault);
+    if (contextReach(ctx) === TRANSPORT_REACH.local) return stats;
+    return {
+      ...stats,
+      findings: visibleFindings(ctx, buildSchemaReport(ctx.vault).findings).length,
+    };
+  },
+  orphans: (ctx: ServerContext) => {
+    const orphans = reviewSchemaOrphans(ctx.vault);
+    return { ...orphans, orphans: visibleFindings(ctx, orphans.orphans) };
+  },
   explain_type: (ctx: ServerContext, args: Record<string, unknown>) =>
     explainSchemaToken(ctx.vault, coerceStr(args, "token")!),
   active_pack: (ctx: ServerContext) => getActiveSchemaPack(ctx.vault),

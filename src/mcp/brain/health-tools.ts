@@ -30,6 +30,10 @@ import { findingRefs } from "./hygiene-tools.ts";
 import { everyArtifactRefView } from "../../core/brain/artifact-ref-view.ts";
 import { reachView } from "../../core/brain/reach-view.ts";
 import { contextReach } from "../tool-contract.ts";
+import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
+import { Store } from "../../core/search/store.ts";
+import { computeTrustVerdict } from "../../core/brain/trust/compute-trust-verdict.ts";
+import { TIER_DRIFT_CODE, tierDriftMessage } from "../../core/brain/doctor/store-integrity.ts";
 
 /**
  * One reported issue, as an MCP caller sees it.
@@ -56,6 +60,46 @@ function issueView(ctx: ServerContext, issue: DoctorIssue): Record<string, unkno
     ...(issue.sources !== undefined ? { sources: issue.sources } : {}),
     ...nextCommandField(issue.code),
   };
+}
+
+/** The verification counts of a doctor run given no dream summary. */
+const NO_VERIFICATION_DELTA = Object.freeze({
+  confirmed: 0,
+  drift: 0,
+  regression: 0,
+  missing_evidence: 0,
+});
+
+/**
+ * The `tier-drift` warning restated over the drift rows the caller may
+ * read, the rows `brain_tiers check` lists for it.
+ *
+ * The warning carries no path - only the count of every staged row - so
+ * the reference view cannot judge it, and the count alone moves when a
+ * page the caller may not read drifts. Below local reach the count is
+ * taken again over the readable rows; none left drops the warning, as
+ * for a vault with no drift.
+ */
+async function recountTierDrift<T extends { readonly code: string; readonly message: string }>(
+  ctx: ServerContext,
+  warnings: ReadonlyArray<T>,
+): Promise<ReadonlyArray<T>> {
+  if (!warnings.some((w) => w.code === TIER_DRIFT_CODE)) return warnings;
+  const readable = readableAtContextReach(ctx);
+  const store = await Store.open(
+    resolveSearchConfig({ vault: ctx.vault, configPath: ctx.configPath ?? undefined }),
+    { mode: "read" },
+  );
+  let count: number;
+  try {
+    count = store.listTierDrift().filter((row) => readable(row.path)).length;
+  } finally {
+    await store.close();
+  }
+  return warnings.flatMap((w) => {
+    if (w.code !== TIER_DRIFT_CODE) return [w];
+    return count === 0 ? [] : [{ ...w, message: tierDriftMessage(count) }];
+  });
 }
 
 async function toolBrainDoctor(
@@ -108,7 +152,15 @@ async function toolBrainDoctor(
   // Filtered BEFORE `ok` is decided: an `ok: false` beside an empty error
   // list would say a hidden artifact is broken without naming it, which
   // is the existence leak with the evidence removed.
-  const view = gatedOwnerScopeView(ctx.vault, ctx.agentName);
+  //
+  // The reach view joins the owner view for the same reason: below local
+  // reach a record the caller may not read is named by no issue, so a
+  // malformed private preference answers as an absent one.
+  const reach = contextReach(ctx);
+  const view = everyArtifactRefView(
+    gatedOwnerScopeView(ctx.vault, ctx.agentName),
+    reachView(ctx.vault, reach),
+  );
   /** Generic over the three streams: they share the naming fields, not a type. */
   const visibleIssues = <
     T extends {
@@ -133,8 +185,24 @@ async function toolBrainDoctor(
       ...extractWikilinkRichBodies(i.message).map((b) => parseWikilinkRich(b).target),
     ]);
   const errors = visibleIssues(result.errors);
-  const warnings = visibleIssues(result.warnings);
+  const warnings =
+    reach === TRANSPORT_REACH.local
+      ? visibleIssues(result.warnings)
+      : await recountTierDrift(ctx, visibleIssues(result.warnings));
   const uncertain = result.uncertain === undefined ? undefined : visibleIssues(result.uncertain);
+  // The verdict summarises the streams, so it is taken again over the
+  // streams this caller sees: a verdict computed over a dropped error
+  // would say a hidden record is broken without naming it. The dream and
+  // verification inputs are the ones `runDoctor` was given here (none).
+  const trustVerdict =
+    view.filtersNothing || result.trust_verdict === undefined
+      ? result.trust_verdict
+      : computeTrustVerdict({
+          doctorWarnings: warnings,
+          doctorErrors: errors,
+          dreamWarnings: [],
+          verification: result.verification_delta_summary ?? NO_VERIFICATION_DELTA,
+        });
 
   // Decide a single ok flag — `strict` only changes the CLI exit code,
   // so we mirror that semantic here: with `strict`, warnings demote ok
@@ -186,7 +254,7 @@ async function toolBrainDoctor(
     // surface, so it stays absent here). `instruction_file_warnings`
     // surfaces vault-root instruction files exceeding the configured
     // ceiling.
-    ...(result.trust_verdict !== undefined ? { trust_verdict: result.trust_verdict } : {}),
+    ...(trustVerdict !== undefined ? { trust_verdict: trustVerdict } : {}),
     instruction_file_warnings: (result.instruction_file_warnings ?? []).map((w) => ({
       path: w.path,
       lines: w.lines,

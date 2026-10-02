@@ -46,14 +46,23 @@ export const tierDriftCheck: DoctorCheck = {
     if (driftCount > 0) {
       issues.push({
         severity: "warning",
-        code: "tier-drift",
-        message:
-          `${driftCount} identity-field hand-edit(s) staged - ` +
-          "review with: o2b brain tiers check",
+        code: TIER_DRIFT_CODE,
+        message: tierDriftMessage(driftCount),
       });
     }
   },
 };
+
+/** The code of the {@link tierDriftCheck} warning. */
+export const TIER_DRIFT_CODE = "tier-drift";
+
+/**
+ * The {@link tierDriftCheck} warning text for `count` staged drift rows,
+ * shared with a surface that recounts the rows a caller may read.
+ */
+export function tierDriftMessage(count: number): string {
+  return `${count} identity-field hand-edit(s) staged - review with: o2b brain tiers check`;
+}
 
 /**
  * `dangling-workrun` (v0.12.0, Brain Integrity Suite): surfaces every

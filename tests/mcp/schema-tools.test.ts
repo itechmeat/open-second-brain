@@ -13,6 +13,7 @@ import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { INVALID_PARAMS } from "../../src/mcp/protocol.ts";
 import { toPosix } from "../../src/core/path-safety.ts";
@@ -90,8 +91,8 @@ async function call(
   });
 }
 
-function makeServer(): MCPServer {
-  return new MCPServer({ vault, configPath });
+function makeServer(reach?: typeof TRANSPORT_REACH.local): MCPServer {
+  return new MCPServer({ vault, configPath }, reach !== undefined ? { reach } : {});
 }
 
 describe("schema MCP tools", () => {
@@ -363,7 +364,9 @@ describe("schema_inspect reports the malformed artifact instead of dying on it",
   for (const view of ["lint", "orphans"] as const) {
     test(`view=${view} answers with findings, not an error`, async () => {
       const planted = plantMalformedArtifacts();
-      const server = makeServer();
+      // At local reach: below it, a record whose file cannot be read is
+      // treated as one the caller may not read, and is not named.
+      const server = makeServer(TRANSPORT_REACH.local);
       await initialize(server);
 
       const response = await call(server, "schema_inspect", { view });

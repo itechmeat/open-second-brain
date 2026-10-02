@@ -242,6 +242,13 @@ const NOTE_CONTENT_PRODUCERS: ReadonlyArray<ProducerRule> = Object.freeze([
     identifiers: ["discoverIdeas", "ideaCandidates"],
   },
   { specifierIncludes: "/brain/link-graph/moc-audit.ts", identifiers: ["auditMoc"] },
+  // Record diagnostics: the doctor and the schema report name a Brain
+  // record by path when it is malformed, so both hand paths to a caller.
+  { specifierIncludes: "/brain/doctor.ts", identifiers: ["runDoctor"] },
+  {
+    specifierIncludes: "/brain/schema-admin.ts",
+    identifiers: ["buildSchemaLint", "buildSchemaStats", "reviewSchemaOrphans"],
+  },
   { specifierIncludes: "/brain/dead-ends.ts", identifiers: ["listDeadEnds", "recordDeadEnd"] },
   {
     specifierIncludes: "/brain/claim-graph.ts",
@@ -448,8 +455,14 @@ function reasonProblems(entries: ReadonlyArray<VisibilitySurfaceEntry>): {
  * `brain_skill_proposals`, which the sweep could not see and which were
  * both leaking, plus the three tools that share `procedure-tools.ts` with
  * the second of them and come in on the file-level rule.
+ *
+ * 49 before the vocabulary gained `runDoctor` and the schema-admin record
+ * views. The five new names are `brain_doctor` and `schema_inspect`,
+ * which named a malformed reserved record by path (the doctor's repair
+ * plan still does, so it is registered excluded), plus `brain_health`,
+ * `brain_status` and `schema_apply_mutations` on the file-level rule.
  */
-const MCP_TOOL_POPULATION_SIZE = 49;
+const MCP_TOOL_POPULATION_SIZE = 54;
 /** Measured: MCP resources + templates, all excluded. */
 const MCP_RESOURCE_POPULATION_SIZE = 8;
 /** Measured: hand-enumerated CLI verb mirrors. */
@@ -527,6 +540,7 @@ describe("visibility surface census", () => {
         "brain_tiers",
         "brain_unlinked_mentions",
         "brain_writes",
+        "schema_inspect",
         "second_brain_query",
       ]);
     });

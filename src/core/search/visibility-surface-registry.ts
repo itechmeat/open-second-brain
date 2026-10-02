@@ -308,6 +308,56 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "written.",
   },
   {
+    surface: "brain_doctor",
+    kind: K.mcpTool,
+    category: C.excluded,
+    reason:
+      "the read-only report keeps every issue stream through the owner view ANDed with " +
+      "reachView, over the path, target, sources and message wikilinks each issue names, takes " +
+      "ok and trust_verdict again over the kept issues, and below local reach recounts the " +
+      "tier-drift warning over the rows readableAtContextReach(ctx) keeps. It stays EXCLUDED " +
+      "because the repair branch is bounded by the owner scope only, and its plan names the " +
+      "records it would fix, reserved ones included.",
+  },
+  {
+    surface: "schema_inspect",
+    kind: K.mcpTool,
+    category: C.covered,
+    reason:
+      "the lint and orphans views keep only the findings whose named pages (path, or the source " +
+      "and target of a blocked link) pass reachView, and below local reach stats counts the same " +
+      "kept findings; graph, explain_type, active_pack and packs read the schema pack and its " +
+      "token usage counts, never a page path, title or body. Swept in through schema-admin.ts.",
+  },
+  {
+    surface: "schema_apply_mutations",
+    kind: K.mcpTool,
+    category: C.excluded,
+    reason:
+      "swept in for file-level completeness because schema-tools.ts also registers " +
+      "schema_inspect: it writes Brain/_brain.yaml and returns the resulting pack, its diff and " +
+      "the audit path, never a note path, title, or body.",
+  },
+  {
+    surface: "brain_health",
+    kind: K.mcpTool,
+    category: C.excluded,
+    reason:
+      "runs runDoctor's semantic-health pass and names preferences by id in its contradiction, " +
+      "stale-claim and batch-inflation findings; those are kept through the gated owner view " +
+      "only, and no reach view is asked, so a reserved preference can be named at remote reach.",
+  },
+  {
+    surface: "brain_status",
+    kind: K.mcpTool,
+    category: C.excluded,
+    reason:
+      "its hygiene count asks the owner view ANDed with reachView and its cited pages answer " +
+      "readableAtContextReach(ctx), but the doctor error and warning counts and the preference " +
+      "counts are taken over the whole Brain layer, so they move with a reserved record; it " +
+      "returns counts and problem labels, never a note path, title, or body.",
+  },
+  {
     surface: "brain_maintenance",
     kind: K.mcpTool,
     category: C.excluded,
