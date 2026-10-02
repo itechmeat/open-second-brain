@@ -205,3 +205,46 @@ test("a manifest nested too deep to parse is malformed and the other modules sti
   expect(lines).toContain("- `packages/web/package.json` (npm): read");
   expect(regionBody(moduleNote(res, "web"), "dependencies")).toContain("Depends on:");
 });
+
+/** `text` without the region `id`, as a note written before that region existed. */
+function withoutRegion(text: string, id: string): string {
+  const begin = text.indexOf(`<!-- o2b:begin ${id} -->`);
+  const endMarker = `<!-- o2b:end ${id} -->\n`;
+  const end = text.indexOf(endMarker, begin) + endMarker.length;
+  return text.slice(0, begin).replace(/\n$/, "") + text.slice(end);
+}
+
+function regionIds(text: string): string {
+  return [...text.matchAll(/<!-- o2b:begin (\S+) -->/g)].map((match) => match[1]).join(",");
+}
+
+test("notes written before the dependency regions gain them after the operator's prose", () => {
+  const first = generateArchDocs(vault, project);
+  const prose = "\nOperator prose written before the upgrade.\n";
+  const legacyOverview = withoutRegion(overview(first), "module-dependencies") + prose;
+  writeFileSync(first.overviewPath, legacyOverview);
+  const webPath = first.modulePaths.find((p) => p.endsWith("web.md"))!;
+  const legacyWeb =
+    withoutRegion(readFileSync(webPath, "utf8"), "dependencies").replace(
+      /^depends_on:\n(?: {2}- .*\n)*/m,
+      "",
+    ) + prose;
+  writeFileSync(webPath, legacyWeb);
+
+  const second = generateArchDocs(vault, project);
+  const upgraded = overview(second);
+  expect(regionIds(upgraded)).toBe(
+    "summary,modules,module-map,entry-points,dependencies,codegraph,module-dependencies",
+  );
+  // Everything the old note held, prose included, is unchanged and comes first.
+  expect(upgraded.startsWith(legacyOverview)).toBe(true);
+  const web = readFileSync(webPath, "utf8");
+  const key = `depends_on:\n  - "[[Brain/projects/arch/${second.repoKey}/modules/core|core]]"\n`;
+  expect(web).toContain(key);
+  expect(web.indexOf(prose)).toBeLessThan(web.indexOf("<!-- o2b:begin dependencies -->"));
+  // Without the new key and region, the note is byte for byte what it was.
+  expect(withoutRegion(web.replace(key, ""), "dependencies")).toBe(legacyWeb);
+
+  const third = generateArchDocs(vault, project);
+  expect(third.updated).toBe(0);
+});
