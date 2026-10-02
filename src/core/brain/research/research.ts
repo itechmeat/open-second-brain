@@ -33,6 +33,11 @@ import {
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { renderProvenanceSection, type Provenance } from "../provenance/provenance.ts";
 import {
+  captureScopesFrontmatter,
+  classifyCaptureScope,
+  type CaptureScope,
+} from "../provenance/capture-scope.ts";
+import {
   ExternalFetchError,
   createFetchTransport,
   createMemoryResponseCache,
@@ -78,6 +83,12 @@ export interface ResearchReportResult {
   readonly reportPath: string;
   readonly created: boolean;
   readonly findingCount: number;
+  /**
+   * The current capture scope of every consulted source, parallel to
+   * `input.sources`. A report stores no excerpt, so each member is
+   * `full-local` (a vault file) or `url-only` (no local bytes).
+   */
+  readonly captureScopes: ReadonlyArray<CaptureScope>;
 }
 
 /** A research report failed validation; nothing was written. */
@@ -178,6 +189,12 @@ export function writeResearchReport(
     premises: [],
   };
 
+  // Classified from the identity alone (no byte read), in the consulted
+  // order, so `capture_scopes[i]` always describes `sources[i]`.
+  const captureScopes = Object.freeze(
+    input.sources.map((source) => classifyCaptureScope(vault, source)),
+  );
+
   const body = [
     `# ${input.title.trim()}`,
     ["## Findings", "", ...findingLines].join("\n"),
@@ -190,6 +207,9 @@ export function writeResearchReport(
     report_date: date,
     provenance: provenance.level,
     source_count: input.sources.length,
+    // Written only when some source is not a local file, so a report built
+    // from vault files alone stays byte-identical to before.
+    ...captureScopesFrontmatter(captureScopes),
     created_at: stamp,
     updated_at: stamp,
     tags: ["brain", "brain/report"],
@@ -206,6 +226,7 @@ export function writeResearchReport(
     reportPath: canonicalNotePath(relative(vault, absPath)),
     created,
     findingCount: input.findings.length,
+    captureScopes,
   };
 }
 
