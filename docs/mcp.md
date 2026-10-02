@@ -2055,5 +2055,7 @@ format characters), when it contains NUL, or when it exceeds the cap.
   local reach the scan's `link_integrity` reports `measured: false` with
   reason `reach`, because its counts are taken over the whole index.
   `brain_ingest_batch_plan` plans a file the caller cannot read at its
-  reach as an absent one, and `brain_ingest_source` records a source in
+  reach as an absent one (visibility is a rule over Markdown pages, so the
+  plan's `unclassifiable` counts of other files are the same at every
+  reach), and `brain_ingest_source` records a source in
   the content manifest only in the trusted lane.
