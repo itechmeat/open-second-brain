@@ -60,6 +60,7 @@ import {
   brainDirs,
 } from "./paths.ts";
 import { BRAIN_SOURCE_KIND } from "./ingest/ingest.ts";
+import { isSourceHidden } from "./intake/source-trust.ts";
 import { manifestPath, readManifest, writeManifestAtomic } from "./ingest/content-manifest.ts";
 import { appendContinuitySourceInvalidation } from "./continuity/store.ts";
 import { isoSecond } from "./time.ts";
@@ -184,10 +185,12 @@ export interface DeleteBySourceOptions {
   /** Agent identity recorded in the audit reason. */
   readonly agent?: string;
   /**
-   * May the caller read the original at this vault-relative path? Asked
-   * before the original is stat-ed, so one it may not read is planned,
-   * counted and left on disk exactly as an absent one would be. Absent
-   * includes every original (the CLI, which reads the vault directly).
+   * May the caller read the page or the original at this vault-relative
+   * path? Asked before anything is stat-ed or deleted, so a derived page,
+   * a mention, an original or a manifest entry whose source it may not
+   * read is planned, counted and left on disk exactly as an absent one
+   * would be. Absent includes everything (the CLI, which reads the vault
+   * directly).
    */
   readonly include?: (rel: string) => boolean;
 }
@@ -685,9 +688,19 @@ export function deleteBySource(
   // Dry-run (the default) plans and writes nothing, so it stays ungated.
   if (confirm) assertVaultIdentityForWrite(vault);
 
-  const { derived, mentions } = traceReferences(vault, identity);
+  // A page or a source the caller may not read is planned, counted and
+  // left on disk exactly as an absent one: a remote caller can neither
+  // learn of a reserved summary page nor delete it.
+  const included = (rel: string): boolean => opts.include?.(rel) !== false;
+  const traced = traceReferences(vault, identity);
+  const derived = traced.derived.filter((entry) => included(entry.path));
+  const mentions = traced.mentions.filter((entry) => included(entry.path));
   const originals = findOriginals(vault, canonical, opts.include);
-  const manifestKey = readManifest(vault).entries[canonical] !== undefined ? canonical : null;
+  const manifestKey =
+    readManifest(vault).entries[canonical] !== undefined &&
+    !isSourceHidden(vault, canonical, opts.include)
+      ? canonical
+      : null;
   const blastRadius = derived.length + mentions.length + originals.length;
 
   /**

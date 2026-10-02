@@ -220,7 +220,10 @@ async function toolBrainSearchBySource(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const sourceFile = coerceStr(args, "source_file", true)!;
-  const hits = searchBySourceFile(ctx.vault, sourceFile);
+  // A page the caller may not read at its reach (a summary page that
+  // inherited a reserved source's visibility) is answered as an absent one.
+  const readable = readableAtContextReach(ctx);
+  const hits = searchBySourceFile(ctx.vault, sourceFile).filter((entry) => readable(entry.path));
   // Owner-scope isolation (context-integrity-gates, Unit A). Every entry
   // names a Brain page, so the ownership rule applies through the same
   // path-based resolver the ranked search path uses - including its
