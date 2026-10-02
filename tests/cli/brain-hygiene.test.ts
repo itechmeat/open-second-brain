@@ -22,6 +22,8 @@ import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { brainDirs } from "../../src/core/brain/paths.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { resetVaultIdentityPins } from "../../src/core/brain/vault-identity.ts";
+import { HYGIENE_TOOLS } from "../../src/mcp/brain/hygiene-tools.ts";
+import { PROPERTY_DESCRIPTION_MAX, TOOL_DESCRIPTION_MAX } from "../../src/mcp/registry-guard.ts";
 import { runCli } from "../helpers/run-cli.ts";
 import { changedPaths, digestVaultFiles, digestVaultTree } from "../helpers/vault-digest.ts";
 
@@ -234,5 +236,41 @@ describe("o2b brain hygiene apply", () => {
     const out = await runCli(["brain", "hygiene", "sniff", "--vault", vault], { env: env() });
     expect(out.returncode).not.toBe(0);
     expect(out.stderr).toContain("scan|apply");
+  });
+});
+
+/**
+ * The `capture-scope` detector reaches both surfaces (distilled provenance,
+ * D3): it runs in the default sweep, it is a named subset member, and the
+ * MCP schema offers it within the registry caps.
+ */
+describe("the capture-scope detector on the hygiene surfaces", () => {
+  const DETECTOR = "capture-scope";
+
+  test("the default sweep runs it and an explicit subset accepts it", async () => {
+    expect((await scan()).detectors_run).toContain(DETECTOR);
+    expect((await scan("--detectors", DETECTOR)).detectors_run).toEqual([DETECTOR]);
+  });
+
+  test("an unknown detector refusal lists it", async () => {
+    const out = await runCli(
+      ["brain", "hygiene", "scan", "--vault", vault, "--detectors", "not-a-detector"],
+      { env: env() },
+    );
+    expect(out.returncode).not.toBe(0);
+    expect(out.stderr).toContain(DETECTOR);
+  });
+
+  test("the brain_hygiene schema offers it within the registry caps", () => {
+    const tool = HYGIENE_TOOLS[0]!;
+    const props = tool.inputSchema["properties"] as Record<
+      string,
+      { description: string; items?: { enum?: string[] } }
+    >;
+    expect(props["detectors"]!.items!.enum).toContain(DETECTOR);
+    expect(props["detectors"]!.description).toContain(DETECTOR);
+    expect(props["detectors"]!.description.length).toBeLessThanOrEqual(PROPERTY_DESCRIPTION_MAX);
+    expect(tool.description).toContain("url-only");
+    expect(tool.description.length).toBeLessThanOrEqual(TOOL_DESCRIPTION_MAX);
   });
 });

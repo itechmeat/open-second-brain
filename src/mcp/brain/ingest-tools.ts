@@ -96,6 +96,10 @@ async function toolBrainIngestSource(
       entities_created: [...res.entitiesCreated],
       entities_updated: [...res.entitiesUpdated],
       connections: [...res.connections],
+      // How much of the source the vault holds, as the summary page records
+      // it. Always present: absence would read as "full-local" to a caller
+      // that never learned the key exists.
+      capture_scope: res.captureScope,
       // Only emitted when the pre-extract pass ran, so a call without it is
       // byte-identical to before (P4).
       ...(res.preExtract !== undefined ? { pre_extract: serializePreExtract(res.preExtract) } : {}),

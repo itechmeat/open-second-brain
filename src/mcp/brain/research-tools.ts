@@ -40,6 +40,8 @@ async function toolBrainResearchReport(
       report_path: res.reportPath,
       created: res.created,
       finding_count: res.findingCount,
+      // One scope per consulted source, in the caller's `sources` order.
+      capture_scopes: [...res.captureScopes],
     };
   });
 }

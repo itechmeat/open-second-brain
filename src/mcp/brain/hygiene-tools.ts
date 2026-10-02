@@ -330,7 +330,7 @@ export const HYGIENE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_hygiene",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
-      "Memory hygiene pipeline. `scan`: read-only digest of contested truth slots, near-duplicate preferences, stale/orphaned pages, low-usefulness candidates. `apply`: execute selected finding ids (review findings never execute). `refresh`: targeted recompile of stale pages with dry-run.",
+      "Memory hygiene pipeline. `scan`: read-only digest of contested truth slots, near-duplicate preferences, stale/orphaned pages, low-usefulness candidates, knowledge resting on url-only sources. `apply`: run selected finding ids (review findings never run). `refresh`: recompile stale pages.",
     inputSchema: {
       type: "object",
       properties: {
@@ -342,7 +342,7 @@ export const HYGIENE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         detectors: {
           type: "array",
           items: { type: "string", enum: [...HYGIENE_DETECTOR_IDS] },
-          description: `Detector subset for scan/apply. Default: ${DEFAULT_SCAN_IDS.join(", ")} (every registered detector except the opt-in ones).`,
+          description: `Detector subset for scan/apply. Default: ${DEFAULT_SCAN_IDS.join(", ")} (all but the opt-in ones).`,
         },
         ids: {
           type: "array",

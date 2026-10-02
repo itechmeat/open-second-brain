@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { mkdirSync, writeFileSync } from "node:fs";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
+import { CAPTURE_SCOPE } from "../../src/core/brain/provenance/capture-scope.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { listEntities } from "../../src/core/brain/entities/registry.ts";
 import { INGEST_TOOLS } from "../../src/mcp/brain/ingest-tools.ts";
@@ -234,5 +235,31 @@ describe("brain_ingest_batch_plan reconcile (P5, t_d067a153)", () => {
     writeFileSync(join(vault, "Docs", "a.md"), "alpha", "utf8");
     const res = (await batchPlan(ctx, { source_dir: "Docs" })) as Record<string, unknown>;
     expect(res["reconcile"]).toBeUndefined();
+  });
+});
+
+/**
+ * The capture scope reaches the MCP caller (distilled provenance, D3): a
+ * source the vault holds is `full-local`, a URL is `url-only`, and the key
+ * is always present so a caller never infers it from absence.
+ */
+describe("brain_ingest_source - capture_scope", () => {
+  test("a source the vault holds is full-local", async () => {
+    seed("Articles/held.md");
+    const res = (await handler(ctx, {
+      source_path: "Articles/held.md",
+      summary: "A held source.",
+      entities: [{ category: "concept", name: "Held" }],
+    })) as Record<string, unknown>;
+    expect(res["capture_scope"]).toBe(CAPTURE_SCOPE.fullLocal);
+  });
+
+  test("a url source is url-only", async () => {
+    const res = (await handler(ctx, {
+      source_path: "https://example.test/post",
+      summary: "A remote source.",
+      entities: [{ category: "concept", name: "Remote" }],
+    })) as Record<string, unknown>;
+    expect(res["capture_scope"]).toBe(CAPTURE_SCOPE.urlOnly);
   });
 });
