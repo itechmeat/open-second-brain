@@ -17,7 +17,14 @@ import {
 } from "../../src/core/brain/trust/untrusted-provenance.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { DISTILL_TOOLS } from "../../src/mcp/brain/distill-tools.ts";
-import { MCPError } from "../../src/mcp/protocol.ts";
+import { CAPTURE_SCOPE } from "../../src/core/brain/provenance/capture-scope.ts";
+import { QUOTE_CHECK_OUTCOME } from "../../src/core/brain/distill/quote-verdict.ts";
+import { INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
+import {
+  PREVIEW_BUDGET_EXEMPT,
+  PROPERTY_DESCRIPTION_MAX,
+  TOOL_DESCRIPTION_MAX,
+} from "../../src/mcp/registry-guard.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
 let vault: string;
@@ -95,5 +102,121 @@ describe("brain_distill_source - the response names the lane it committed in", (
     // A caller choosing between tools reads the description, not this test;
     // pinning it keeps the promise and the behaviour from drifting apart.
     expect(DISTILL_TOOLS[0]!.description).toContain(UNTRUSTED_SOURCE_FRONTMATTER_KEY);
+  });
+});
+
+/** A source whose one paragraph carries the block id `^p1`. */
+function seedQuotedSource(): void {
+  writeFileSync(
+    join(vault, "Articles", "quoted.md"),
+    "# Quoted\n\nThe protocol settles every batch within one minute. ^p1\n",
+    "utf8",
+  );
+}
+
+/**
+ * The quote check and the capture scope reach the MCP caller (distilled
+ * provenance, D1). The core decides; this surface declares the two new
+ * inputs, forwards them, and serialises the two new result members under
+ * their snake_case names.
+ */
+describe("brain_distill_source - quote check and capture scope", () => {
+  const VERBATIM = 'The author writes "settles every batch within one minute".';
+  const PARAPHRASE = 'The author writes "settles all batches quickly".';
+  const QUOTE_REPORT_KEYS = [
+    "checked",
+    "verified_in_block",
+    "verified_in_source",
+    "unquoted",
+    "unpaired",
+    "findings",
+    "total",
+    "returned",
+    "truncated",
+  ];
+
+  test("the two inputs are declared within the registry caps", () => {
+    const tool = DISTILL_TOOLS[0]!;
+    const props = tool.inputSchema["properties"] as Record<
+      string,
+      { type: string; description: string }
+    >;
+    expect(props["strict_quotes"]?.type).toBe("boolean");
+    expect(props["excerpt"]?.type).toBe("string");
+    for (const name of ["strict_quotes", "excerpt"]) {
+      expect(props[name]!.description.length).toBeLessThanOrEqual(PROPERTY_DESCRIPTION_MAX);
+    }
+    expect(tool.description.length).toBeLessThanOrEqual(TOOL_DESCRIPTION_MAX);
+    expect(tool.description).toContain("search_trust_gate_enabled");
+  });
+
+  test("capture_scope is always present and quotes only when a claim holds a span", async () => {
+    const res = (await handler(ctx, {
+      source_path: "Articles/src.md",
+      claims: [{ text: "A claim without quotation marks." }],
+    })) as Record<string, unknown>;
+    expect(res["capture_scope"]).toBe(CAPTURE_SCOPE.fullLocal);
+    expect("quotes" in res).toBe(false);
+  });
+
+  test("a checked quote is reported under the contract keys verbatim", async () => {
+    seedQuotedSource();
+    const res = (await handler(ctx, {
+      source_path: "Articles/quoted.md",
+      claims: [
+        { text: VERBATIM, block: "p1" },
+        { text: PARAPHRASE, block: "p1" },
+      ],
+    })) as { quotes: Record<string, unknown>; distillation_path: string };
+    expect(Object.keys(res.quotes).toSorted()).toEqual(QUOTE_REPORT_KEYS.toSorted());
+    expect(res.quotes["verified_in_block"]).toBe(1);
+    expect(res.quotes["unquoted"]).toBe(1);
+    expect(res.quotes["findings"]).toEqual([
+      {
+        claim: 1,
+        outcome: QUOTE_CHECK_OUTCOME.notInBlock,
+        span: "settles all batches quickly",
+      },
+    ]);
+  });
+
+  test("a url-only source with an excerpt is bounded-local", async () => {
+    const res = (await handler(ctx, {
+      source_path: "https://example.test/post",
+      claims: [{ text: "A claim." }],
+      excerpt: "The protocol settles every batch within one minute.",
+    })) as Record<string, unknown>;
+    expect(res["capture_scope"]).toBe(CAPTURE_SCOPE.boundedLocal);
+  });
+
+  test("an excerpt for a source the vault holds is refused as invalid_params", async () => {
+    let caught: unknown;
+    try {
+      await handler(ctx, {
+        source_path: "Articles/src.md",
+        claims: [{ text: "A claim." }],
+        excerpt: "Body.",
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(MCPError);
+    expect((caught as MCPError).code).toBe(INVALID_PARAMS);
+    expect((caught as MCPError).message).toStartWith("brain_distill_source: ");
+    expect((caught as MCPError).message).toContain(CAPTURE_SCOPE.fullLocal);
+  });
+
+  test("a blank excerpt is refused by name, never dropped as absent", async () => {
+    await expect(
+      handler(ctx, {
+        source_path: "https://example.test/post",
+        claims: [{ text: "A claim." }],
+        excerpt: "   ",
+      }),
+    ).rejects.toThrow("excerpt refused: the excerpt is empty");
+  });
+
+  test("the preview-budget rationale names the quotes report", () => {
+    expect(PREVIEW_BUDGET_EXEMPT["brain_distill_source"]).toContain("quotes");
   });
 });

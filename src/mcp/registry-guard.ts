@@ -350,7 +350,8 @@ export const PREVIEW_BUDGET_EXEMPT: Readonly<Record<string, string>> = Object.fr
   brain_write_session: "lifecycle ops return one fixed-shape envelope; prompts are kernel-bounded",
   brain_intake_entities: "write; returns created/updated id lists and a relation count",
   brain_ingest_source: "write; returns the summary path plus bounded id lists",
-  brain_distill_source: "write; returns the distillation path plus a claim count and source hash",
+  brain_distill_source:
+    "write; returns the distillation path, a claim count, source hash, capture scope, and a quotes report whose finding list is capped and self-declaring its truncation",
   brain_research_report: "write; returns the report path and a finding count",
   brain_derive_fact: "write; returns one derived preference id, its level and premises",
   brain_memory_bridge:
