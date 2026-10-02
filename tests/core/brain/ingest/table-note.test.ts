@@ -7,15 +7,26 @@
 
 import { describe, expect, test } from "bun:test";
 
+import { fakeCredential } from "../../../helpers/fake-credentials.ts";
+
+import { REDACTION_PLACEHOLDER } from "../../../../src/core/redactor.ts";
+import { countChunkTokens } from "../../../../src/core/search/chunker.ts";
 import {
   isTableNoteSkipReason,
   isTableTruncation,
   TABLE_DELIMITER,
+  TABLE_NOTE_GROUP_MAX_TOKENS,
+  TABLE_NOTE_MAX_BYTES,
+  TABLE_NOTE_MAX_CELL_CHARS,
+  TABLE_NOTE_MAX_COLUMNS,
+  TABLE_NOTE_MAX_ROWS,
+  TABLE_NOTE_ROWS_PER_GROUP,
   TABLE_NOTE_SKIP_REASON,
   TABLE_NOTE_SKIP_REASONS,
   TABLE_TRUNCATION,
   TABLE_TRUNCATIONS,
   tableNote,
+  tableNoteFrontmatter,
   type TableNoteRendered,
   type TableNoteResult,
   type TableNoteSkipped,
@@ -196,5 +207,253 @@ describe("refusals", () => {
     for (const text of ["", "﻿", "\n\r\n\n", "only,header\n"]) {
       expect(skipped(csv(text)).reason).toBe("empty");
     }
+  });
+});
+
+/** Every `### Rows a-b` group of a section with its fenced lines. */
+function groupsOf(
+  section: string,
+): Array<{ first: number; last: number; block: string; lines: string[] }> {
+  const parts = section.split(/\n\n(?=### Rows )/).slice(1);
+  return parts.map((part) => {
+    const match = /^### Rows (\d+)-(\d+)\n\n([\s\S]*?)(?:\n\nRendered \d+ of \d+ rows\.)?$/.exec(
+      part,
+    )!;
+    return {
+      first: Number(match[1]),
+      last: Number(match[2]),
+      block: `### Rows ${match[1]}-${match[2]}\n\n${match[3]}`,
+      lines: fencedLines(match[3]!),
+    };
+  });
+}
+
+function csvOf(header: ReadonlyArray<string>, rows: ReadonlyArray<ReadonlyArray<string>>): string {
+  return [header, ...rows].map((r) => r.join(",")).join("\n");
+}
+
+function numberedRows(count: number, columns: number, cell: (r: number, c: number) => string) {
+  return Array.from({ length: count }, (_row, r) =>
+    Array.from({ length: columns }, (_column, c) => cell(r + 1, c + 1)),
+  );
+}
+
+/** A 240-character cell with no whitespace: many bytes, one token. */
+function wideCell(r: number, c: number): string {
+  return `${r}-${c}-${"w".repeat(240)}`;
+}
+
+/** A five-word cell. */
+function wordsCell(r: number, c: number): string {
+  return `row ${r} cell ${c} text`;
+}
+
+describe("caps", () => {
+  test("more rows than the cap: the rest are counted, named and stated on a closing line", () => {
+    const header = ["id", "v"];
+    const result = rendered(
+      csv(
+        csvOf(
+          header,
+          numberedRows(TABLE_NOTE_MAX_ROWS + 1, 2, (r) => `${r}`),
+        ),
+      ),
+    );
+    expect(result.rows).toBe(TABLE_NOTE_MAX_ROWS + 1);
+    expect(result.rowsRendered).toBe(TABLE_NOTE_MAX_ROWS);
+    expect(result.truncated).toEqual(["rows"]);
+    expect(
+      result.section.endsWith(
+        `\n\nRendered ${TABLE_NOTE_MAX_ROWS} of ${TABLE_NOTE_MAX_ROWS + 1} rows.`,
+      ),
+    ).toBe(true);
+    expect(groupsOf(result.section).at(-1)!.last).toBe(TABLE_NOTE_MAX_ROWS);
+  });
+
+  test("a record wider than the cap is cut at the right", () => {
+    const width = TABLE_NOTE_MAX_COLUMNS + 6;
+    const header = Array.from({ length: width }, (_, c) => `c${c + 1}`);
+    const result = rendered(csv(csvOf(header, [header.map((_, c) => `${c + 1}`)])));
+    expect(result.columns).toBe(TABLE_NOTE_MAX_COLUMNS);
+    expect(result.truncated).toEqual(["columns"]);
+    const [head, row] = fencedLines(result.section);
+    expect(head!.split(" | ")).toEqual(header.slice(0, TABLE_NOTE_MAX_COLUMNS));
+    expect(row!.split(" | ").at(-1)).toBe(String(TABLE_NOTE_MAX_COLUMNS));
+    expect(result.section).not.toContain("Rendered ");
+  });
+
+  test("a long cell is cut at a code-point boundary and marked with an ellipsis", () => {
+    const long = "\u{1F600}".repeat(TABLE_NOTE_MAX_CELL_CHARS + 10);
+    const result = rendered(csv(`k,v\nshort,${long}\n`));
+    expect(result.truncated).toEqual(["cells"]);
+    const cell = fencedLines(result.section)[1]!.split(" | ")[1]!;
+    expect(Array.from(cell)).toHaveLength(TABLE_NOTE_MAX_CELL_CHARS);
+    expect(cell).toBe(`${"\u{1F600}".repeat(TABLE_NOTE_MAX_CELL_CHARS - 1)}\u2026`);
+    const exact = "x".repeat(TABLE_NOTE_MAX_CELL_CHARS);
+    expect(rendered(csv(`k\n${exact}\n`)).truncated).toEqual([]);
+  });
+
+  test("groups that would pass the byte cap are dropped whole and named", () => {
+    const result = rendered(csv(csvOf(["a", "b", "c", "d"], numberedRows(900, 4, wideCell))));
+    expect(result.truncated).toEqual(["bytes"]);
+    expect(new TextEncoder().encode(result.section).length).toBeLessThanOrEqual(
+      TABLE_NOTE_MAX_BYTES,
+    );
+    expect(result.rowsRendered).toBeLessThan(900);
+    expect(result.rowsRendered).toBeGreaterThan(0);
+    expect(groupsOf(result.section).at(-1)!.last).toBe(result.rowsRendered);
+    expect(result.section.endsWith(`Rendered ${result.rowsRendered} of 900 rows.`)).toBe(true);
+  });
+
+  test("several caps are named in the vocabulary order", () => {
+    const width = TABLE_NOTE_MAX_COLUMNS + 1;
+    const header = Array.from({ length: width }, (_, c) => `c${c}`);
+    const rows = numberedRows(TABLE_NOTE_MAX_ROWS + 5, width, (r, c) =>
+      r === 1 && c === 1 ? "y".repeat(400) : "1",
+    );
+    const result = rendered(csv(csvOf(header, rows)));
+    expect(result.truncated.slice(0, 3)).toEqual(["rows", "columns", "cells"]);
+  });
+});
+
+describe("row groups", () => {
+  test("a narrow table groups at most 50 rows, each group repeating the header", () => {
+    const result = rendered(
+      csv(
+        csvOf(
+          ["id", "v"],
+          numberedRows(120, 2, (r, c) => `${r}.${c}`),
+        ),
+      ),
+    );
+    const groups = groupsOf(result.section);
+    expect(groups.map((g) => [g.first, g.last])).toEqual([
+      [1, 50],
+      [51, 100],
+      [101, 120],
+    ]);
+    for (const group of groups) {
+      expect(group.lines[0]).toBe("id | v");
+      expect(group.lines).toHaveLength(group.last - group.first + 2);
+    }
+    expect(groups[1]!.lines[1]).toBe("51.1 | 51.2");
+  });
+
+  test("a wide table groups by the token budget as well, below the row cap", () => {
+    const header = Array.from({ length: 15 }, (_, c) => `column ${c}`);
+    const result = rendered(csv(csvOf(header, numberedRows(200, 15, wordsCell))));
+    const groups = groupsOf(result.section);
+    expect(groups.length).toBeGreaterThan(200 / TABLE_NOTE_ROWS_PER_GROUP);
+    let next = 1;
+    for (const group of groups) {
+      expect(group.first).toBe(next);
+      expect(group.last - group.first + 1).toBeLessThanOrEqual(TABLE_NOTE_ROWS_PER_GROUP);
+      expect(countChunkTokens(group.block)).toBeLessThanOrEqual(TABLE_NOTE_GROUP_MAX_TOKENS);
+      next = group.last + 1;
+    }
+    expect(next).toBe(201);
+  });
+
+  test("a single row over the token budget forms its own group", () => {
+    // Twenty cells of forty words each: more tokens than one group may hold.
+    const cell = Array.from({ length: 40 }, () => "ab").join(" ");
+    const big = Array.from({ length: 20 }, () => cell).join(",");
+    expect(countChunkTokens(big.replaceAll(",", " | "))).toBeGreaterThan(
+      TABLE_NOTE_GROUP_MAX_TOKENS,
+    );
+    const result = rendered(csv(`k,v\na,1\nb,${big}\nc,3\n`));
+    expect(groupsOf(result.section).map((g) => [g.first, g.last])).toEqual([
+      [1, 1],
+      [2, 2],
+      [3, 3],
+    ]);
+  });
+});
+
+describe("escapes and fences", () => {
+  test("bars, backslashes, tabs and line breaks are escaped inside a cell", () => {
+    const result = rendered(csv('k,v\n"a|b","c\\d\te\r\nf"\n'));
+    expect(fencedLines(result.section)[1]).toBe("a\\|b | c\\\\d\\te\\r\\nf");
+  });
+
+  test("the fence outgrows a backtick run in a cell", () => {
+    const result = rendered(csv("k,v\nx,```js\ny,````\n"));
+    expect(result.section).toContain("\n`````table\n");
+    expect(fencedLines(result.section)).toEqual(["k | v", "x | ```js", "y | ````"]);
+  });
+
+  test("links and tags in cells stay inside the fence", () => {
+    const result = rendered(csv("k,v\n[[Secret Page]],#tag\n"));
+    expect(fencedLines(result.section)[1]).toBe("[[Secret Page]] | #tag");
+  });
+});
+
+describe("redaction", () => {
+  test("a key-like header redacts its column; other cells go through the value pass", () => {
+    const credential = fakeCredential("q7Lm", "Zp2x", "Vb9n", "Rt4k");
+    const userinfo = fakeCredential("https://deploy:", "hunter", "2pass@example.com/repo");
+    const text = `name,api_key,url\nalpha,${credential},${userinfo}\nbeta,,plain\n`;
+    const result = rendered(csv(text));
+    expect(result.redactedCells).toBe(2);
+    expect(result.section).not.toContain(credential);
+    expect(result.section).not.toContain("hunter2pass");
+    const [head, alpha, beta] = fencedLines(result.section);
+    expect(head).toBe("name | api_key | url");
+    expect(alpha).toBe(
+      `alpha | ${REDACTION_PLACEHOLDER} | https://${REDACTION_PLACEHOLDER}@example.com/repo`,
+    );
+    expect(beta).toBe("beta |  | plain");
+  });
+
+  test("a keyword header over-redacts by design: the single key-name predicate decides", () => {
+    const result = rendered(csv("keyword,count\napple,3\npear,5\n"));
+    expect(result.redactedCells).toBe(2);
+    expect(fencedLines(result.section)).toEqual([
+      "keyword | count",
+      `${REDACTION_PLACEHOLDER} | 3`,
+      `${REDACTION_PLACEHOLDER} | 5`,
+    ]);
+  });
+
+  test("order ids and hashes are table data, not tokens", () => {
+    const hash = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
+    const result = rendered(csv(`order,digest\nA1B2C3D4E5F6G7H8,${hash}\n`));
+    expect(result.redactedCells).toBe(0);
+    expect(fencedLines(result.section)[1]).toBe(`A1B2C3D4E5F6G7H8 | ${hash}`);
+  });
+});
+
+describe("determinism and frontmatter", () => {
+  test("the same bytes render the same result", () => {
+    const text = csvOf(
+      ["a", "b"],
+      numberedRows(130, 2, (r, c) => `${r * c}`),
+    );
+    expect(csv(text)).toEqual(csv(text));
+  });
+
+  test("frontmatter keys in the pinned order; table_truncated only when something was cut", () => {
+    const plain = rendered(csv("name,qty\nbolt,4\nnut,7\n"));
+    expect(Object.entries(tableNoteFrontmatter(plain))).toEqual([
+      ["table_delimiter", "comma"],
+      ["table_columns", 2],
+      ["table_rows", 2],
+      ["table_rows_rendered", 2],
+    ]);
+    const cut = rendered(
+      csv(
+        csvOf(
+          ["id"],
+          numberedRows(TABLE_NOTE_MAX_ROWS + 1, 1, (r) => `${r}`),
+        ),
+      ),
+    );
+    expect(tableNoteFrontmatter(cut)).toEqual({
+      table_delimiter: "comma",
+      table_columns: 1,
+      table_rows: TABLE_NOTE_MAX_ROWS + 1,
+      table_rows_rendered: TABLE_NOTE_MAX_ROWS,
+      table_truncated: ["rows"],
+    });
   });
 });

@@ -29,7 +29,12 @@
  */
 export const CHUNKER_VERSION = 2;
 
-const DEFAULT_MAX_TOKENS = 800;
+/**
+ * Token budget of one chunk when the caller names none. Exported so a
+ * renderer that sizes blocks to fit one chunk (the table note's row
+ * groups) states its budget against this one rather than a copy.
+ */
+export const DEFAULT_CHUNK_MAX_TOKENS = 800;
 const DEFAULT_MIN_TOKENS = 100;
 const DEFAULT_OVERLAP_TOKENS = 100;
 
@@ -154,7 +159,12 @@ function walkTokens(text: string, starts: number[] | null): number {
   return count;
 }
 
-function countTokens(text: string): number {
+/**
+ * The chunker's token count of `text`, the same count every budget in this
+ * module is measured with. Exported so a renderer can size a block to fit
+ * one chunk without re-deriving the rules.
+ */
+export function countChunkTokens(text: string): number {
   if (text.length === 0) return 0;
   return walkTokens(text, null);
 }
@@ -176,7 +186,7 @@ function tailTokens(text: string, budget: number): string {
 
 function tokensOfLines(lines: ReadonlyArray<Line>): number {
   let total = 0;
-  for (const l of lines) total += countTokens(l.text);
+  for (const l of lines) total += countChunkTokens(l.text);
   return total;
 }
 
@@ -371,7 +381,7 @@ function tailLines(lines: ReadonlyArray<Line>, budget: number): Line[] {
   const tail: Line[] = [];
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i]!;
-    const t = countTokens(line.text);
+    const t = countChunkTokens(line.text);
     if (acc + t > budget) {
       if (tail.length === 0) {
         const cut = tailTokens(line.text, budget);
@@ -407,7 +417,7 @@ function emitChunk(
       ? tailLines(overlap, maxTokens - draft.tokens)
       : overlap;
   const allText = [...fitted.map((l) => l.text), ...bodyLines.map((l) => l.text)].join("\n");
-  const tokenCount = countTokens(allText);
+  const tokenCount = countChunkTokens(allText);
   return Object.freeze({
     chunkIndex: index,
     content: allText,
@@ -483,7 +493,7 @@ function splitLine(text: string, budget: number): string[] {
   const parts: string[] = [];
   let acc = "";
   for (const s of sentences(text)) {
-    if (countTokens(s) > budget) {
+    if (countChunkTokens(s) > budget) {
       if (acc !== "") parts.push(acc);
       const pieces = hardCut(s, budget);
       parts.push(...pieces.slice(0, -1));
@@ -491,7 +501,7 @@ function splitLine(text: string, budget: number): string[] {
       continue;
     }
     const merged = acc + s;
-    if (acc !== "" && countTokens(merged) > budget) {
+    if (acc !== "" && countChunkTokens(merged) > budget) {
       parts.push(acc);
       acc = s;
     } else {
@@ -511,7 +521,7 @@ function splitLine(text: string, budget: number): string[] {
 function splitBlock(block: Block, budget: number): Block[] {
   const units: Block[] = [];
   for (const line of block.lines) {
-    const t = countTokens(line.text);
+    const t = countChunkTokens(line.text);
     if (t <= budget) {
       units.push({ kind: block.kind, lines: [line], tokenCount: t });
       continue;
@@ -520,7 +530,7 @@ function splitBlock(block: Block, budget: number): Block[] {
       units.push({
         kind: block.kind,
         lines: [{ num: line.num, text: part }],
-        tokenCount: countTokens(part),
+        tokenCount: countChunkTokens(part),
       });
     }
   }
@@ -696,7 +706,7 @@ export function chunkMarkdown(
   filenameBase: string | null,
   opts?: ChunkOptions,
 ): ChunkResult {
-  const maxTokens = opts?.maxTokens ?? DEFAULT_MAX_TOKENS;
+  const maxTokens = opts?.maxTokens ?? DEFAULT_CHUNK_MAX_TOKENS;
   const minTokens = opts?.minTokens ?? DEFAULT_MIN_TOKENS;
   const overlapTokens = opts?.overlapTokens ?? DEFAULT_OVERLAP_TOKENS;
 

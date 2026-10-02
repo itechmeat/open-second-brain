@@ -18,8 +18,11 @@
  * parameter, and any heuristic guesses wrong on all-text tables.
  */
 
-import { SOURCE_FORMAT, sourceFormatOf } from "./source-formats.ts";
 import { fenceFor } from "../../markdown-fence.ts";
+import { isSecretKeyName, REDACTION_PLACEHOLDER, redactRawOutput } from "../../redactor.ts";
+import { countChunkTokens } from "../../search/chunker.ts";
+import type { FrontmatterMap } from "../../types.ts";
+import { SOURCE_FORMAT, sourceFormatOf } from "./source-formats.ts";
 
 /** Data rows rendered at most; the rest are counted, not shown. */
 export const TABLE_NOTE_MAX_ROWS = 1_000;
@@ -152,7 +155,25 @@ const CELL_ESCAPES: Readonly<Record<string, string>> = Object.freeze({
 });
 const CELL_ESCAPE_RE = /[\\|\n\r\t]/g;
 
+/** Marks a cell cut at {@link TABLE_NOTE_MAX_CELL_CHARS}. */
+const CUT_MARKER = "\u2026";
+
+/**
+ * The value pass over a cell: key=value credentials, private regions and
+ * URL userinfo, never truncated (the cell cap applies after it, so a
+ * credential the cap would split is still seen whole).
+ */
+const CELL_REDACTION = Object.freeze({
+  redactUrlCredentials: true,
+  maxInput: Number.POSITIVE_INFINITY,
+});
+
 const UTF8_STRICT = new TextDecoder("utf-8", { fatal: true });
+const UTF8_ENCODER = new TextEncoder();
+
+function utf8Length(text: string): number {
+  return UTF8_ENCODER.encode(text).length;
+}
 
 type Records = string[][];
 type ParseOutcome =
@@ -240,19 +261,105 @@ function csvDelimiter(text: string): TableDelimiter {
   return TABLE_DELIMITER.comma;
 }
 
+/** A cell cut to {@link TABLE_NOTE_MAX_CELL_CHARS} code points, the last one the marker. */
+function capCell(cell: string): { readonly text: string; readonly cut: boolean } {
+  // A UTF-16 length within the cap is a code-point count within it.
+  if (cell.length <= TABLE_NOTE_MAX_CELL_CHARS) return { text: cell, cut: false };
+  const points = Array.from(cell);
+  if (points.length <= TABLE_NOTE_MAX_CELL_CHARS) return { text: cell, cut: false };
+  return { text: points.slice(0, TABLE_NOTE_MAX_CELL_CHARS - 1).join("") + CUT_MARKER, cut: true };
+}
+
 function escapeCell(cell: string): string {
   return cell.replace(CELL_ESCAPE_RE, (ch) => CELL_ESCAPES[ch]!);
 }
 
-function renderLine(record: ReadonlyArray<string>): string {
-  return record.map(escapeCell).join(CELL_SEPARATOR);
+/** One record as it is rendered: its line and what the caps and redaction did to it. */
+interface PreparedLine {
+  readonly line: string;
+  readonly width: number;
+  readonly redacted: number;
+  readonly columnsCut: boolean;
+  readonly cellsCut: boolean;
+  /** Chunker tokens of {@link line}. */
+  readonly tokens: number;
+}
+
+/**
+ * Cut, redact, cap and escape one record. A cell under a column whose
+ * header names a credential is replaced whole (the header is kept: names
+ * only); every other cell, header cells included (the first record may be
+ * data), goes through the value pass. No bare-token pass: it would erase
+ * order ids, SKUs and hashes, which are table data.
+ */
+function prepareLine(
+  record: ReadonlyArray<string>,
+  credentialColumns: ReadonlyArray<boolean>,
+): PreparedLine {
+  const kept = record.slice(0, TABLE_NOTE_MAX_COLUMNS);
+  let redacted = 0;
+  let cellsCut = false;
+  const cells = kept.map((raw, column) => {
+    const clean =
+      credentialColumns[column] === true && raw.length > 0
+        ? REDACTION_PLACEHOLDER
+        : redactRawOutput(raw, CELL_REDACTION);
+    if (clean !== raw) redacted += 1;
+    const capped = capCell(clean);
+    if (capped.cut) cellsCut = true;
+    return escapeCell(capped.text);
+  });
+  const line = cells.join(CELL_SEPARATOR);
+  return {
+    line,
+    width: kept.length,
+    redacted,
+    columnsCut: record.length > kept.length,
+    cellsCut,
+    tokens: countChunkTokens(line),
+  };
+}
+
+function groupHeading(first: number, last: number): string {
+  return `${GROUP_HEADING_PREFIX}${first}-${last}`;
 }
 
 function renderGroup(header: string, lines: ReadonlyArray<string>, first: number): string {
   const body = [header, ...lines].join(NEWLINE);
   const fence = fenceFor(body);
-  const heading = `${GROUP_HEADING_PREFIX}${first}-${first + lines.length - 1}`;
+  const heading = groupHeading(first, first + lines.length - 1);
   return `${heading}${BLOCK_SEPARATOR}${fence}${FENCE_INFO}${NEWLINE}${body}${NEWLINE}${fence}`;
+}
+
+function closingLine(rendered: number, total: number): string {
+  return `Rendered ${rendered} of ${total} rows.`;
+}
+
+/** Data rows split into groups of at most {@link TABLE_NOTE_ROWS_PER_GROUP} rows and {@link TABLE_NOTE_GROUP_MAX_TOKENS} tokens. */
+function groupRows(
+  header: PreparedLine,
+  rows: ReadonlyArray<PreparedLine>,
+): ReadonlyArray<ReadonlyArray<PreparedLine>> {
+  // Tokens are whitespace-delimited, so a group's count is the sum of its
+  // lines plus the fixed lines around them (heading, fences, header).
+  const overhead = countChunkTokens(renderGroup(header.line, [], 1));
+  const groups: PreparedLine[][] = [];
+  let current: PreparedLine[] = [];
+  let tokens = overhead;
+  for (const row of rows) {
+    const full =
+      current.length === TABLE_NOTE_ROWS_PER_GROUP ||
+      (current.length > 0 && tokens + row.tokens > TABLE_NOTE_GROUP_MAX_TOKENS);
+    if (full) {
+      groups.push(current);
+      current = [];
+      tokens = overhead;
+    }
+    current.push(row);
+    tokens += row.tokens;
+  }
+  if (current.length > 0) groups.push(current);
+  return groups;
 }
 
 function tableFormatOf(path: string): TableFormat {
@@ -289,22 +396,75 @@ export function tableNote(path: string, bytes: Uint8Array): TableNoteResult {
     return skip(TABLE_NOTE_SKIP_REASON.empty);
   }
 
-  const header = renderLine(headerRecord);
-  const groups: string[] = [];
-  for (let start = 0; start < dataRecords.length; start += TABLE_NOTE_ROWS_PER_GROUP) {
-    const slice = dataRecords.slice(start, start + TABLE_NOTE_ROWS_PER_GROUP);
-    groups.push(renderGroup(header, slice.map(renderLine), start + 1));
+  const credentialColumns = headerRecord.map((name) => isSecretKeyName(name));
+  const header = prepareLine(headerRecord, []);
+  const rows = dataRecords
+    .slice(0, TABLE_NOTE_MAX_ROWS)
+    .map((record) => prepareLine(record, credentialColumns));
+  const scoped = [header, ...rows];
+
+  // Groups are added while the section, with room for the closing line,
+  // stays within the byte cap; the last group needs no closing line when
+  // nothing else was cut.
+  const total = dataRecords.length;
+  const reserve = utf8Length(BLOCK_SEPARATOR + closingLine(total, total));
+  const groups = groupRows(header, rows);
+  const blocks: string[] = [TABLE_HEADING];
+  let bytesUsed = utf8Length(TABLE_HEADING);
+  let rowsRendered = 0;
+  let redactedCells = header.redacted;
+  let bytesCut = false;
+  for (const [index, group] of groups.entries()) {
+    const block = renderGroup(
+      header.line,
+      group.map((row) => row.line),
+      rowsRendered + 1,
+    );
+    const size = utf8Length(BLOCK_SEPARATOR + block);
+    const completes = index === groups.length - 1 && rows.length === total;
+    if (bytesUsed + size + (completes ? 0 : reserve) > TABLE_NOTE_MAX_BYTES) {
+      bytesCut = true;
+      break;
+    }
+    blocks.push(block);
+    bytesUsed += size;
+    rowsRendered += group.length;
+    for (const row of group) redactedCells += row.redacted;
   }
-  const columns = Math.max(...parsed.records.map((r) => r.length));
+  if (rowsRendered < total) blocks.push(closingLine(rowsRendered, total));
+
+  const cuts: Readonly<Record<TableTruncation, boolean>> = {
+    rows: total > rows.length,
+    columns: scoped.some((line) => line.columnsCut),
+    cells: scoped.some((line) => line.cellsCut),
+    bytes: bytesCut,
+  };
+  let columns = 0;
+  for (const line of scoped) columns = Math.max(columns, line.width);
   return {
     rendered: true,
     format,
     delimiter,
     columns,
-    rows: dataRecords.length,
-    rowsRendered: dataRecords.length,
-    truncated: [],
-    redactedCells: 0,
-    section: [TABLE_HEADING, ...groups].join(BLOCK_SEPARATOR),
+    rows: total,
+    rowsRendered,
+    truncated: TABLE_TRUNCATIONS.filter((kind) => cuts[kind]),
+    redactedCells,
+    section: blocks.join(BLOCK_SEPARATOR),
   };
+}
+
+/**
+ * The frontmatter keys a rendered table adds to its summary page, in the
+ * pinned order; `table_truncated` only when a cap cut the rendering.
+ */
+export function tableNoteFrontmatter(result: TableNoteRendered): FrontmatterMap {
+  const keys: FrontmatterMap = {
+    table_delimiter: result.delimiter,
+    table_columns: result.columns,
+    table_rows: result.rows,
+    table_rows_rendered: result.rowsRendered,
+  };
+  if (result.truncated.length > 0) keys.table_truncated = [...result.truncated];
+  return keys;
 }
