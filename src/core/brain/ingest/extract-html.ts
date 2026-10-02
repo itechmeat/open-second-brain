@@ -21,7 +21,11 @@
  */
 
 import { fenceFor } from "../../markdown-fence.ts";
-import { PRIVATE_REGION_PLACEHOLDER, stripPrivateRegions } from "../../redactor.ts";
+import {
+  PRIVATE_REGION_PLACEHOLDER,
+  redactRawOutput,
+  stripPrivateRegions,
+} from "../../redactor.ts";
 import { oneLine } from "../architect/manifests.ts";
 import { SOURCE_HASH_MAX_BYTES } from "../intake/source-trust.ts";
 import { SOURCE_EXTRACT_SKIP_REASON } from "./source-formats.ts";
@@ -294,6 +298,22 @@ function collapseWhitespace(text: string): string {
   return sink.text();
 }
 
+/**
+ * The value pass over a heading or the title: key=value credentials and
+ * URL userinfo. A heading is written to a summary page that search and
+ * embeddings read, while the HTML file itself is never indexed.
+ */
+const HEADING_REDACTION = Object.freeze({ redactUrlCredentials: true });
+
+/**
+ * A folded heading or title as it is kept: redacted, then cut to
+ * {@link HTML_HEADING_MAX_CHARS} code points, so a credential the cut would
+ * split is still seen whole.
+ */
+function keptHeading(folded: string): string {
+  return capCodePoints(redactRawOutput(folded, HEADING_REDACTION), HTML_HEADING_MAX_CHARS);
+}
+
 /** `text` cut to `max` code points, the last one an ellipsis when anything was cut. */
 function capCodePoints(text: string, max: number): string {
   const points = Array.from(text);
@@ -483,7 +503,7 @@ class HtmlScanner {
     this.openHeading = null;
     const folded = oneLine(this.sink.lines.slice(open.linesBefore).join(SPACE));
     if (folded.length === 0) return;
-    const heading = capCodePoints(folded, HTML_HEADING_MAX_CHARS);
+    const heading = keptHeading(folded);
     while ((this.sections.at(-1)?.level ?? PREAMBLE_LEVEL) >= open.level) this.sections.pop();
     this.sections.push({ level: open.level, heading });
     this.scanned.push({
@@ -632,7 +652,7 @@ class HtmlScanner {
       if (name === TITLE_ELEMENT) {
         if (this.title === null) {
           const folded = oneLine(collapseWhitespace(content));
-          if (folded.length > 0) this.title = capCodePoints(folded, HTML_HEADING_MAX_CHARS);
+          if (folded.length > 0) this.title = keptHeading(folded);
         }
         return;
       }

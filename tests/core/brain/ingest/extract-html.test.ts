@@ -17,7 +17,10 @@ import {
   renderPartsSection,
 } from "../../../../src/core/brain/ingest/extract-html.ts";
 import { SOURCE_EXTRACT_SKIP_REASON } from "../../../../src/core/brain/ingest/source-formats.ts";
-import { PRIVATE_REGION_PLACEHOLDER } from "../../../../src/core/redactor.ts";
+import {
+  PRIVATE_REGION_PLACEHOLDER,
+  REDACTION_PLACEHOLDER,
+} from "../../../../src/core/redactor.ts";
 import { extractTagValues, stripCode } from "../../../../src/core/tags.ts";
 import { extractWikilinks } from "../../../../src/core/vault.ts";
 import { fakeCredential } from "../../../helpers/fake-credentials.ts";
@@ -321,6 +324,22 @@ describe("extractHtml - parts", () => {
     expect(result.parts.length).toBe(HTML_PARTS_MAX);
     expect(result.partsOmitted).toBe(1);
     expect(result.parts.at(-1)?.lineEnd).toBe(HTML_PARTS_MAX);
+  });
+
+  test("a credential in a heading or a title is redacted before the cap", () => {
+    const key = fakeCredential("sk-", "live-9f8e7d6c5b4a3210");
+    const password = fakeCredential("hunter", "2pass");
+    const result = extracted(
+      `<title>api_key=${key}</title><h1>api_key=${key}</h1>` +
+        `<h2>https://admin:${password}@db.example</h2>` +
+        `<h3>${"x".repeat(HTML_HEADING_MAX_CHARS - 25)} https://admin:${password}@db.example</h3><p>x</p>`,
+    );
+    const visible = JSON.stringify({ title: result.title, parts: result.parts });
+    for (const leaked of [key, password, password.slice(0, 5)])
+      expect(visible).not.toContain(leaked);
+    expect(result.title).toContain(REDACTION_PLACEHOLDER);
+    expect(result.parts[0]?.heading).toContain(REDACTION_PLACEHOLDER);
+    expect(renderPartsSection(result)).not.toContain(password);
   });
 
   test("a 300-character heading is capped", () => {
