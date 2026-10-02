@@ -141,6 +141,9 @@ class ContractTests(unittest.TestCase):
         for name in ("XDG_CONFIG_HOME", "LOCALAPPDATA", "PATH", "PATHEXT", "HOME"):
             self.assertNotIn(name, cfg.PROFILE_SCOPED_ENV)
 
+    def test_config_directories_are_scope_first(self):
+        self.assertEqual(cfg.SCOPE_FIRST_ENV, ("XDG_CONFIG_HOME", "LOCALAPPDATA"))
+
 
 class WithoutHermesTests(ScopeTestCase):
     """(a) No ``agent.secret_scope``: today's answers."""
@@ -252,13 +255,41 @@ class MultiplexedScopeTests(ScopeTestCase):
             self.assertEqual(cfg.config_path(), scoped_config)
             self.assertEqual(cfg.env_setting("OPEN_SECOND_BRAIN_MCP_TIMEOUT"), "7")
 
-    def test_os_level_names_still_come_from_the_process(self):
+    def test_config_directories_fall_back_to_the_process_when_the_scope_has_none(self):
         xdg = self.tmp / "xdg"
         os.environ[cfg.XDG_CONFIG_HOME_ENV] = str(xdg)
         pair = make_fake_scope(multiplexed=True)
         with self.install(pair):
             self.assertEqual(cfg.config_path(), xdg / cfg.PLUGIN_NAME / cfg.CONFIG_FILENAME)
-        self.assertNotIn(cfg.XDG_CONFIG_HOME_ENV, pair[1].reads)
+        self.assertIn(cfg.XDG_CONFIG_HOME_ENV, pair[1].reads)
+
+    def test_the_scope_config_directory_beats_the_process_one(self):
+        os.environ[cfg.XDG_CONFIG_HOME_ENV] = str(self.tmp / "launch-xdg")
+        scoped = self.tmp / "profile-xdg"
+        pair = make_fake_scope(multiplexed=True, values={"XDG_CONFIG_HOME": str(scoped)})
+        with self.install(pair):
+            self.assertEqual(cfg.config_path(), scoped / cfg.PLUGIN_NAME / cfg.CONFIG_FILENAME)
+
+    def test_the_scope_local_app_data_beats_the_process_one(self):
+        scoped = self.tmp / "profile-local"
+        with patch.dict(os.environ, {"LOCALAPPDATA": str(self.tmp / "launch-local")}):
+            pair = make_fake_scope(multiplexed=True, values={"LOCALAPPDATA": str(scoped)})
+            with self.install(pair):
+                self.assertEqual(cfg._windows_local_app_data(), scoped)
+            empty = make_fake_scope(multiplexed=True)
+            with self.install(empty):
+                self.assertEqual(cfg._windows_local_app_data(), self.tmp / "launch-local")
+            off = make_fake_scope(multiplexed=False, values={"LOCALAPPDATA": str(scoped)})
+            with self.install(off):
+                self.assertEqual(cfg._windows_local_app_data(), self.tmp / "launch-local")
+            self.assertEqual(off[1].reads, [])
+
+    def test_unbound_scope_refuses_the_config_directories(self):
+        pair = make_fake_scope(multiplexed=True, unbound=True)
+        with self.install(pair):
+            for name in cfg.SCOPE_FIRST_ENV:
+                with self.subTest(name=name), self.assertRaises(cfg.ProfileScopeError):
+                    cfg.scope_first_setting(name)
 
 
 class MultiplexedEmptyScopeTests(ScopeTestCase):
@@ -484,6 +515,24 @@ class ScopedChildEnvironmentTests(ScopeTestCase):
             self.assertNotIn(value, env.values())
         # The bridge never reads the deadline itself on this gateway.
         self.assertEqual(built[0]["timeout"], bridge_module.DEFAULT_REQUEST_TIMEOUT_SECONDS)
+
+    def test_child_env_carries_the_scope_config_directory(self):
+        os.environ[cfg.XDG_CONFIG_HOME_ENV] = str(self.tmp / "launch-xdg")
+        scoped = str(self.tmp / "profile-xdg")
+        built = []
+        pair = make_fake_scope(
+            multiplexed=True, values={"VAULT_DIR": "v", "XDG_CONFIG_HOME": scoped}
+        )
+        self._initialize(pair, lambda **kw: built.append(kw) or FakeBrainBridge())
+        self.assertEqual(built[0]["env"]["XDG_CONFIG_HOME"], scoped)
+
+    def test_child_env_keeps_the_process_config_directory_the_scope_lacks(self):
+        launch = str(self.tmp / "launch-xdg")
+        os.environ[cfg.XDG_CONFIG_HOME_ENV] = launch
+        built = []
+        pair = make_fake_scope(multiplexed=True, values={"VAULT_DIR": "v"})
+        self._initialize(pair, lambda **kw: built.append(kw) or FakeBrainBridge())
+        self.assertEqual(built[0]["env"]["XDG_CONFIG_HOME"], launch)
 
     def test_overlay_path_survives_the_scoping(self):
         os.environ[cfg.XDG_CONFIG_HOME_ENV] = str(self.tmp / "absent")

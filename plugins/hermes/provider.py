@@ -487,7 +487,10 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         and config path from it - so every profile-scoped name is removed and
         the scope's own non-empty values are set in its place; a name the
         scope leaves unset is resolved by the child from the config file, as
-        the plugin resolves it. The deadline is fixed here (``0.0`` when
+        the plugin resolves it. The config directories
+        (:data:`config.SCOPE_FIRST_ENV`) are overridden only when the scope
+        sets them, so the child looks for the same config file the plugin
+        resolved. The deadline is fixed here (``0.0`` when
         disabled) so a restart never reads the scope from a thread that has
         none.
 
@@ -498,6 +501,10 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
             env.pop(name, None)
         for name in config.PROFILE_SCOPED_ENV:
             value = config.env_setting(name)
+            if value:
+                env[name] = value
+        for name in config.SCOPE_FIRST_ENV:
+            value = config.scope_first_setting(name)
             if value:
                 env[name] = value
         deadline = resolve_request_timeout()

@@ -19,6 +19,8 @@ fixture table through BOTH implementations rather than asserting each side's
 behaviour separately.
 
 - config path:  ``OPEN_SECOND_BRAIN_CONFIG`` -> ``XDG_CONFIG_HOME`` -> ``~/.config``
+                (``XDG_CONFIG_HOME`` and ``LOCALAPPDATA`` through
+                :func:`scope_first_setting`)
 - vault:        ``VAULT_DIR`` env -> project pointer walk-up -> active named
                 profile -> ``vault`` field -> ``None``, every result tilde-expanded
 - agent name:   ``VAULT_AGENT_NAME`` env -> ``agent_name``/``agentName`` -> ``"agent"``
@@ -94,15 +96,14 @@ AGENT_NAME_ENV = "VAULT_AGENT_NAME"
 TIMEZONE_ENV = "VAULT_TIMEZONE"
 CONFIG_PATH_ENV = "OPEN_SECOND_BRAIN_CONFIG"
 XDG_CONFIG_HOME_ENV = "XDG_CONFIG_HOME"
+LOCALAPPDATA_ENV = "LOCALAPPDATA"
 #: Per-request deadline of the MCP bridge, read by ``bridge.py``.
 REQUEST_TIMEOUT_ENV = "OPEN_SECOND_BRAIN_MCP_TIMEOUT"
 
 #: The settings that belong to a Hermes profile rather than to the process.
 #: On a multiplexed gateway these come from the bound profile scope only.
-#: ``XDG_CONFIG_HOME``, ``LOCALAPPDATA``, ``PATH``, ``PATHEXT`` and ``HOME``
-#: describe the operating system and stay process-global in both modes: Hermes
-#: does not carry them in a profile scope, so routing them through it would
-#: answer ``None`` and silently move the config path.
+#: ``PATH``, ``PATHEXT`` and ``HOME`` describe the operating system and stay
+#: process-global in both modes: Hermes keeps them out of a profile scope.
 PROFILE_SCOPED_ENV: tuple[str, ...] = (
     VAULT_DIR_ENV,
     AGENT_NAME_ENV,
@@ -110,6 +111,15 @@ PROFILE_SCOPED_ENV: tuple[str, ...] = (
     CONFIG_PATH_ENV,
     REQUEST_TIMEOUT_ENV,
 )
+
+#: The config directories, which are scope-first on a multiplexed gateway.
+#: Hermes scopes them like any other ``.env`` name, so a profile's value lives
+#: in its scope and only the launch profile's value is in ``os.environ``;
+#: reading ``os.environ`` alone would hand every profile the launch profile's
+#: config file. Unlike :data:`PROFILE_SCOPED_ENV`, a name the scope leaves
+#: unset falls back to the process environment, because on most installs it
+#: is the operating system's own value and no profile sets it.
+SCOPE_FIRST_ENV: tuple[str, ...] = (XDG_CONFIG_HOME_ENV, LOCALAPPDATA_ENV)
 
 #: Characters a config value may not contain, mirroring
 #: ``CONFIG_VALUE_REJECTED_CHARS`` in ``src/core/config.ts``. The reader strips
@@ -281,6 +291,26 @@ def env_setting(name: str) -> str | None:
     return value or None
 
 
+def scope_first_setting(name: str) -> str | None:
+    """A :data:`SCOPE_FIRST_ENV` name: the bound scope's value, else ``os.environ``.
+
+    Not multiplexed: ``os.environ``, exactly as before, and the scope is never
+    read. Multiplexed: the bound profile scope's non-empty value, falling back
+    to the process environment when the scope has none.
+
+    :raises ProfileScopeError: when multiplexed and no scope is bound.
+    """
+    scope_module = _profile_scope_module()
+    if scope_module is not None and scope_module.is_multiplex_active():
+        try:
+            value = scope_module.get_secret(name, None)
+        except scope_module.UnscopedSecretError as exc:
+            raise ProfileScopeError(name) from exc
+        if value:
+            return value
+    return os.environ.get(name) or None
+
+
 def _warn_ignored_process_value(name: str) -> None:
     """Say once per process that a gateway-environment value is not used.
 
@@ -359,7 +389,7 @@ def expand_tilde(value: str) -> str:
 
 def _windows_local_app_data() -> Path:
     """``%LOCALAPPDATA%``, or ``~/AppData/Local`` in a stripped environment."""
-    local = os.environ.get("LOCALAPPDATA")
+    local = scope_first_setting(LOCALAPPDATA_ENV)
     return Path(local) if local else Path.home() / "AppData" / "Local"
 
 
@@ -368,7 +398,7 @@ def config_path() -> Path:
     override = env_setting(CONFIG_PATH_ENV)
     if override:
         return Path(expand_tilde(override))
-    xdg = os.environ.get(XDG_CONFIG_HOME_ENV)
+    xdg = scope_first_setting(XDG_CONFIG_HOME_ENV)
     if xdg:
         return Path(expand_tilde(xdg)) / PLUGIN_NAME / CONFIG_FILENAME
     if os.name == "nt":
