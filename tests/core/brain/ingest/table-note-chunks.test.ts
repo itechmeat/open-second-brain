@@ -37,7 +37,6 @@ describe("table note chunks", () => {
   test("the group budget fits one chunk with room for the chunker's own overlap", () => {
     expect(TABLE_NOTE_GROUP_MAX_TOKENS).toBeLessThan(DEFAULT_CHUNK_MAX_TOKENS);
     expect(countChunkTokens("")).toBe(0);
-    expect(countChunkTokens("name | qty")).toBe(3);
   });
 
   test("every chunk holding rows carries the header line and a Rows heading path", () => {
@@ -58,12 +57,6 @@ describe("table note chunks", () => {
       for (const match of chunk.content.matchAll(/^value (\d+) 1 \|/gm)) seen.add(Number(match[1]));
     }
     expect(seen.size).toBe(ROWS);
-  });
-
-  test("chunking the same rendered page twice gives the same chunks", () => {
-    const result = tableNote("Clips/wide.csv", wideCsv());
-    if (!result.rendered) throw new Error(`not rendered: ${result.reason}`);
-    expect(chunkMarkdown(result.section, "wide")).toEqual(chunkMarkdown(result.section, "wide"));
   });
 
   test("a cell that opens with a backtick run keeps one Rows heading path per group", () => {

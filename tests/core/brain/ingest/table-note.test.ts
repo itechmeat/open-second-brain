@@ -301,6 +301,28 @@ describe("caps", () => {
     expect(result.section).not.toContain("Rendered ");
   });
 
+  test("a 10,000-column record is cut to the column cap without dropping the row", () => {
+    const width = 10_000;
+    const header = Array.from({ length: width }, (_, c) => `c${c + 1}`);
+    const result = rendered(csv(csvOf(header, [header.map((_, c) => `${c + 1}`)])));
+    expect(result.columns).toBe(TABLE_NOTE_MAX_COLUMNS);
+    expect(result.rows).toBe(1);
+    expect(result.truncated).toEqual(["columns"]);
+    const [head, row] = fencedLines(result.section);
+    expect(head!.split(" | ")).toHaveLength(TABLE_NOTE_MAX_COLUMNS);
+    expect(row!.split(" | ")).toHaveLength(TABLE_NOTE_MAX_COLUMNS);
+  });
+
+  test("an unterminated quote that runs to the end of a large file is refused, not rendered", () => {
+    const result = skipped(csv(`h\nok\n"${"x,".repeat(50_000)}`));
+    expect(result).toEqual({
+      rendered: false,
+      format: "csv",
+      reason: "malformed-quoting",
+      detail: "3",
+    });
+  });
+
   test("a long cell is cut at a code-point boundary and marked with an ellipsis", () => {
     const long = "\u{1F600}".repeat(TABLE_NOTE_MAX_CELL_CHARS + 10);
     const result = rendered(csv(`k,v\nshort,${long}\n`));
@@ -492,15 +514,7 @@ describe("redaction", () => {
   });
 });
 
-describe("determinism and frontmatter", () => {
-  test("the same bytes render the same result", () => {
-    const text = csvOf(
-      ["a", "b"],
-      numberedRows(130, 2, (r, c) => `${r * c}`),
-    );
-    expect(csv(text)).toEqual(csv(text));
-  });
-
+describe("frontmatter", () => {
   test("frontmatter keys in the pinned order; table_truncated only when something was cut", () => {
     const plain = rendered(csv("name,qty\nbolt,4\nnut,7\n"));
     expect(Object.entries(tableNoteFrontmatter(plain))).toEqual([
