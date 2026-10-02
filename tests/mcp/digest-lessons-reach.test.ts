@@ -200,6 +200,16 @@ async function briefDigest(
   return normalise(f, JSON.stringify(result));
 }
 
+/** The apply-evidence events the digest's agent summary counts, over every agent. */
+async function appliedEventsCounted(f: Fixture, reach: TransportReach): Promise<number> {
+  const result = await server(f, reach).callTool("brain_brief", { view: "digest", format: "json" });
+  const structured = result.structuredContent as Record<string, unknown> | undefined;
+  const digest = JSON.parse(String(structured?.["content"])) as {
+    agent_summary: ReadonlyArray<{ apply_evidence_count: number }>;
+  };
+  return digest.agent_summary.reduce((n, row) => n + row.apply_evidence_count, 0);
+}
+
 function resource(f: Fixture, reach: TransportReach, uri: string): string {
   return normalise(f, readResource({ vault: f.vault, agentName: "claude", reach }, uri).text);
 }
@@ -216,24 +226,15 @@ describe("the activity and lessons digests treat a withheld record as absent at 
   }
 
   test("the agent summary of brain_brief view=digest leaves out an event about a reserved record", async () => {
-    const withheld = await briefDigest(
-      fixture(true, RECENT_EVIDENCE_AGE_MS),
-      TRANSPORT_REACH.remote,
-      "json",
+    const withheld = fixture(true, RECENT_EVIDENCE_AGE_MS);
+    const absent = fixture(false, RECENT_EVIDENCE_AGE_MS);
+    expect(await briefDigest(withheld, TRANSPORT_REACH.remote, "json")).toBe(
+      await briefDigest(absent, TRANSPORT_REACH.remote, "json"),
     );
-    const absent = await briefDigest(
-      fixture(false, RECENT_EVIDENCE_AGE_MS),
-      TRANSPORT_REACH.remote,
-      "json",
-    );
-    expect(withheld).toContain("apply_evidence_count");
-    expect(withheld).toBe(absent);
-    const local = await briefDigest(
-      fixture(true, RECENT_EVIDENCE_AGE_MS),
-      TRANSPORT_REACH.local,
-      "json",
-    );
-    expect(local).not.toBe(absent);
+    // The shared event is counted at remote reach and the reserved one is
+    // counted locally, so the summary is neither empty nor blind to it.
+    expect(await appliedEventsCounted(withheld, TRANSPORT_REACH.remote)).toBe(1);
+    expect(await appliedEventsCounted(withheld, TRANSPORT_REACH.local)).toBe(2);
   });
 
   test("a remote digest takes no report snapshot and reports no delta", async () => {
