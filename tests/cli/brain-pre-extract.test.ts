@@ -83,6 +83,21 @@ describe("o2b brain pre-extract", () => {
     ]);
   });
 
+  test("prints each seed on one line without control characters", async () => {
+    const file = join(work, "main.tf");
+    const source = "./mod\u001b[31mred";
+    writeFileSync(file, ['module "vpc" {', `  source = "${source}"`, "}", ""].join("\n"), "utf8");
+    const text = await runCli(["brain", "pre-extract", file]);
+    expect(text.returncode).toBe(0);
+    expect(text.stdout).not.toContain("\u001b");
+    expect(text.stdout).toContain("imports");
+
+    const json = await runCli(["brain", "pre-extract", file, "--json"]);
+    expect(json.stdout).toContain("\\u001b");
+    const out = JSON.parse(json.stdout);
+    expect(out.edges.map((e: { to: string }) => e.to)).toEqual([source]);
+  });
+
   test("the manifest description names Terraform", () => {
     expect(preExtractManifest().summary).toContain("Terraform");
   });

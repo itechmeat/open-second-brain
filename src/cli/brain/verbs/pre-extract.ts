@@ -13,6 +13,7 @@
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 
+import { oneLine } from "../../../core/brain/architect/manifests.ts";
 import { preExtractCodeStructure } from "../../../core/brain/ingest/pre-extract.ts";
 import { fail, info, ok, okJson, parse, usageError } from "../helpers.ts";
 
@@ -46,8 +47,10 @@ export async function cmdBrainPreExtract(argv: string[]): Promise<number> {
       `pre-extract: ${file} (${result.language}) - ` +
         `${result.entities.length} entit(ies), ${result.edges.length} edge(s)`,
     );
-    for (const e of result.entities) ok(`  ${e.kind} ${e.name}`);
-    for (const e of result.edges) ok(`  ${e.kind} ${e.from} -> ${e.to}`);
+    // A seed carries text from the source file; fold it onto one line so
+    // no control character reaches the terminal. `--json` keeps it escaped.
+    for (const e of result.entities) ok(`  ${e.kind} ${oneLine(e.name)}`);
+    for (const e of result.edges) ok(`  ${e.kind} ${oneLine(e.from)} -> ${oneLine(e.to)}`);
     return 0;
   } catch (err) {
     return fail((err as Error).message ?? String(err));

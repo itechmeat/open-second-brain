@@ -290,6 +290,22 @@ describe("preExtractCodeStructure - Terraform family", () => {
     ]);
   });
 
+  test("a quoted label that is not an identifier opens no block and seeds nothing", () => {
+    const res = asSuccess(
+      preExtractCodeStructure(
+        "odd.tf",
+        lines(
+          'variable "env" {}',
+          'resource "aws_x" "a\u001b[31mRED [[Link]] b" {',
+          "  name = var.env",
+          "}",
+        ),
+      ),
+    );
+    expect(res.entities).toEqual([{ kind: "variable", name: "var.env" }]);
+    expect(res.edges).toEqual([]);
+  });
+
   test("a single-line block still yields its entity", () => {
     const res = asSuccess(preExtractCodeStructure("vars.tf", lines('variable "zone" {}')));
     expect(res.entities).toEqual([{ kind: "variable", name: "var.zone" }]);

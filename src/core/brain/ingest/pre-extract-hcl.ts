@@ -108,10 +108,14 @@ const DATA_CITATION_ROOT = "data";
 
 /** A Terraform identifier (letters, digits, `_` and `-`, not starting with a digit). */
 const IDENT = "[A-Za-z_][\\w-]*";
-/** A block header: keyword, then labels (quoted or bare), then `{`. */
-const BLOCK_HEADER = new RegExp(`^(${IDENT})((?:\\s+(?:"[^"]*"|${IDENT}))*)\\s*\\{`);
+/**
+ * A block header: keyword, then labels (quoted or bare), then `{`. A label
+ * is an identifier either way, as Terraform requires for these block kinds,
+ * so any other quoted label opens no block.
+ */
+const BLOCK_HEADER = new RegExp(`^(${IDENT})((?:\\s+(?:"${IDENT}"|${IDENT}))*)\\s*\\{`);
 /** One label inside a header's label run. */
-const BLOCK_LABEL = new RegExp(`"([^"]*)"|(${IDENT})`, "g");
+const BLOCK_LABEL = new RegExp(`"(${IDENT})"|(${IDENT})`, "g");
 /** An attribute assignment `name = ...` (not the `==` comparison). */
 const ATTRIBUTE = new RegExp(`^(${IDENT})\\s*=(?!=)`);
 /** The module-block attribute naming where the module's code lives. */
