@@ -2245,7 +2245,12 @@ format characters), when it contains NUL, or when it exceeds the cap.
 
   `path` is vault-relative, `axis` is `project`, `harness` or `host`, and
   `truncated` is `true` for a file the `active.scoped_rules_max_chars` cap
-  cut. The tool gains no input argument. Below local reach neither the
+  cut; `brain_context` has no injection budget, so the cap applies as
+  configured. The notice that host-scoped rules were not applied is
+  rendered by the SessionStart hook: on this tool an unreadable
+  configuration file, or a config home that cannot be created, fails
+  the whole call before the notice could render. The tool gains no
+  input argument. Below local reach neither the
   block nor the key appears: the output is the same as for a vault
   without the directory. Every write tool refuses a path inside
   `Brain/standing-rules/`, as it refuses `Brain/standing-rules.md`. See
@@ -2261,7 +2266,40 @@ format characters), when it contains NUL, or when it exceeds the cap.
   may see, its digest counts from readable pages, its top actions from
   readable targets before the top entries are picked, its verification
   entries and their counts from the records and pages the caller may
-  read, and recomputes its trust verdict from those; and `brain_doctor` fills the cap on
-  `removed-tool-reference` warnings and counts the stale-dependency
-  note's `states_changed` from the pages and records the caller can
-  read.
+  read, and recomputes its trust verdict from those; and `brain_doctor`
+  fills the cap on `removed-tool-reference` warnings and the per-code
+  cap of its `uncertain` stream from readable pages, counts the
+  stale-dependency note's `states_changed` and each stale row's
+  consumers from the pages and records the caller can read (a withheld
+  page is neither a state nor a consumer), runs its concept-gap and
+  contradiction detectors over readable preferences and signals only,
+  and leaves out an `instruction_file_warnings` entry for a vault-root
+  instruction file the caller cannot read; the operator view's
+  `instruction_file_warnings` follow the same rule.
+- Since v1.70.0 more readers answer at the caller's reach; a local
+  caller and the CLI see no change. Below local reach
+  `brain_obligation` lists, shows, completes and removes an obligation
+  page the caller cannot read exactly as an absent one (`show` answers
+  `present: false`, `done` and `remove` refuse with `no obligation`),
+  and `add` still refuses a slug whose page exists. `brain_health`
+  computes `concept_gaps`, the `suppressed` counts and the verdict
+  over the preferences and signals the caller can read, so a term only
+  withheld principles carry is not reported. `brain_trigger`
+  `operation="scan"` builds its candidates from readable records only,
+  so `candidates` counts none the caller cannot read and the scan
+  writes no trigger about such a record; every trigger row and
+  transition treats a trigger naming such a record as absent.
+  `brain_stale_scan`, `brain_review_candidates` and `brain_retention`
+  list no preference or signal the caller cannot read, and
+  `brain_retention` counts its `summary` over the rows it returns.
+  `brain_review_candidates`' `clusters_below_threshold` and
+  `intent_reviews`, and `brain_intent_review`, still fold inbox signal
+  clusters by topic with no visibility check.
+- Since v1.70.0 `brain_context_receipts` answers at the caller's reach
+  for the operator rules. Below local reach a SessionStart injection
+  receipt leaves out the `standing-rules` and `scoped-rules` items,
+  their source references and every figure that counts or measures
+  them (the item count, the whole-text hash and lengths, the total bytes
+  and tokens, `scoped_rules_chars` and `budgeted_source_count`), and
+  `summary` leaves them out of its item totals. A stored receipt is
+  otherwise returned as recorded, with no visibility check at read time.

@@ -110,9 +110,14 @@ local reach `brain_brief` `view="today"` no longer lists an open loop
 or obligation from a page the caller cannot read, `view="monthly"`
 counts from the events the caller may see, `view="operator"` computes
 its doctor and digest counts, top actions, verification entries and
-trust verdict from what the caller may see, and the `brain_doctor` removed-tool warning cap and
-stale-dependency count leave out what the caller cannot read. A local
-caller and the CLI see no change.
+trust verdict from what the caller may see, and the `brain_doctor`
+removed-tool warning cap, `uncertain` cap, stale-dependency counts,
+concept-gap and contradiction detectors and instruction-file warnings
+leave out what the caller cannot read. `brain_obligation`,
+`brain_health`, `brain_trigger` scans, `brain_stale_scan`,
+`brain_review_candidates`, `brain_retention` and
+`brain_context_receipts` answer the same way. A local caller and the
+CLI see no change.
 
 ## Upgrading to 1.69.0
 
