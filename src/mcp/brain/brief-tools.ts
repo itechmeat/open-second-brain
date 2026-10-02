@@ -541,9 +541,13 @@ async function toolBrainToday(
   // (or under the ownership gate) it shows them as this caller may see
   // them, before the limit and the totals.
   const refs = requestRefView(ctx);
+  // Obligation pages and open-loop notes are listed only when the caller
+  // may read them, before the totals.
+  const readable = readableAtContextReachOrUndefined(ctx);
   const dashboard = buildTodayDashboard(ctx.vault, {
     now: new Date(),
     ...(refs.filtersNothing ? {} : { eventAtReach: (ev) => eventAtReach(refs, ev) }),
+    ...(readable === undefined ? {} : { readable }),
     ...(lookbackDays !== undefined ? { activityLookbackDays: lookbackDays } : {}),
     ...(limit !== undefined ? { activityLimit: limit } : {}),
   });

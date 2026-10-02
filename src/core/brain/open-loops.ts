@@ -104,6 +104,13 @@ export interface ScanOpenLoopsOptions {
   readonly exclude?: ReadonlyArray<string>;
   /** Per-file byte cap. Defaults to the 1 MiB `scanInline` cap. */
   readonly maxFileSizeBytes?: number;
+  /**
+   * Whether the caller may read a vault-relative path. Tested before the
+   * file is read, so a page it rejects is neither read nor counted in
+   * `scannedFiles`. Omitted, every walked file is read (the operator's
+   * own shell).
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 /**
@@ -167,6 +174,7 @@ export function scanOpenLoops(vault: string, opts: ScanOpenLoopsOptions = {}): O
   let scannedFiles = 0;
 
   for (const file of files) {
+    if (opts.readable !== undefined && !opts.readable(file.relPath)) continue;
     let content: string;
     try {
       content = readFileSync(file.absPath, "utf8");

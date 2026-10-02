@@ -219,6 +219,28 @@ describe("buildTodayDashboard - populated vault", () => {
     expect(dashboard.text).toContain("- [note] shipped v1");
     expect(dashboard.text).toContain("Open loops: 1");
   });
+
+  test("a readable predicate leaves out the pages it rejects before the totals", () => {
+    seedFullVault();
+    const asked: string[] = [];
+    const dashboard = buildTodayDashboard(vault, {
+      now: NOW,
+      readable: (rel) => {
+        asked.push(rel);
+        return rel !== "Daily/2026-07-17.md" && rel !== "Brain/obligations/past-due.md";
+      },
+    });
+    expect(asked).toContain("Daily/2026-07-17.md");
+    expect(asked).toContain("Brain/obligations/past-due.md");
+    expect(dashboard.obligations.items.map((i) => i.slug)).toEqual(["upcoming"]);
+    expect(dashboard.openLoops.openLoops).toEqual([]);
+    expect(dashboard.openLoops.counts.scannedFiles).toBe(0);
+    expect(dashboard.totals.obligationsTotal).toBe(1);
+    expect(dashboard.totals.obligationsOverdue).toBe(0);
+    expect(dashboard.totals.openLoopsCount).toBe(0);
+    expect(dashboard.text).not.toContain("vendor");
+    expect(dashboard.text).not.toContain("Past Due");
+  });
 });
 
 describe("buildTodayDashboard - fault isolation", () => {

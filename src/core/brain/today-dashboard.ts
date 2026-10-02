@@ -25,6 +25,7 @@
  */
 
 import { listObligations } from "./obligations.ts";
+import { BRAIN_OBLIGATIONS_REL } from "./path-constants.ts";
 import { scanOpenLoops, type OpenLoopScan } from "./open-loops.ts";
 import { isoSecond } from "./time.ts";
 import { buildActivityTimeline, type ActivityTimeline } from "./temporal/activity-timeline.ts";
@@ -46,6 +47,13 @@ export interface TodayDashboardOptions {
    * event is shown as logged (the operator's own shell).
    */
   readonly eventAtReach?: (ev: TemporalEvent) => TemporalEvent | null;
+  /**
+   * Whether the caller may read a vault-relative path. Obligation pages
+   * and open-loop notes it rejects are left out before the totals, so
+   * they move no count. Omitted, every page is listed (the operator's own
+   * shell).
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 /** One obligation row surfaced on the dashboard. */
@@ -166,8 +174,17 @@ function computeSection<T>(
   }
 }
 
-function buildObligationsSection(vault: string, now: Date): TodayDashboardObligationsSection {
-  const items = listObligations(vault, { now }).map((o) =>
+function buildObligationsSection(
+  vault: string,
+  now: Date,
+  readable: TodayDashboardOptions["readable"],
+): TodayDashboardObligationsSection {
+  const listed = listObligations(vault, { now });
+  const shown =
+    readable === undefined
+      ? listed
+      : listed.filter((o) => readable(`${BRAIN_OBLIGATIONS_REL}/${o.slug}.md`));
+  const items = shown.map((o) =>
     Object.freeze({
       slug: o.slug,
       title: o.title,
@@ -319,13 +336,13 @@ export function buildTodayDashboard(vault: string, opts: TodayDashboardOptions):
   const obligations = computeSection(
     "obligations",
     errors,
-    () => buildObligationsSection(vault, opts.now),
+    () => buildObligationsSection(vault, opts.now, opts.readable),
     EMPTY_OBLIGATIONS_SECTION,
   );
   const openLoops = computeSection(
     "openLoops",
     errors,
-    () => scanOpenLoops(vault),
+    () => scanOpenLoops(vault, opts.readable === undefined ? {} : { readable: opts.readable }),
     EMPTY_OPEN_LOOP_SCAN,
   );
   const recentActivity = computeSection(
