@@ -231,10 +231,13 @@ function readBounded(
     const stat = fstatSync(fd);
     if (!stat.isFile()) return { text: null, detail: NOT_A_REGULAR_FILE_DETAIL };
     if (stat.size > MANIFEST_MAX_BYTES) return { text: null, detail: TOO_LARGE_DETAIL };
-    // One byte past the cap, so growth since the fstat is seen.
-    const buffer = Buffer.allocUnsafe(MANIFEST_MAX_BYTES + 1);
+    // Sized to the file plus one byte, so growth since the fstat is seen;
+    // a file that grew is read on into one buffer of the cap plus one byte.
+    let buffer = Buffer.allocUnsafe(stat.size + 1);
     let filled = 0;
     for (;;) {
+      // A full buffer is under the cap here: past it, the loop has returned.
+      if (filled === buffer.length) buffer = Buffer.concat([buffer], MANIFEST_MAX_BYTES + 1);
       const read = readSync(fd, buffer, filled, buffer.length - filled, null);
       if (read === 0) break;
       filled += read;

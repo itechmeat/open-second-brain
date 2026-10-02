@@ -3,7 +3,8 @@
  * a closed status for every outcome, never a throw on project content.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,6 +24,16 @@ function seed(relPath: string, content: string): void {
   const abs = join(root, relPath);
   mkdirSync(join(abs, ".."), { recursive: true });
   writeFileSync(abs, content);
+}
+
+/** Report `size` from the next fstat, as if the file grew after it. */
+function fstatReportsSize(size: number): { mockRestore(): void; mock: { calls: unknown[] } } {
+  const real = fs.fstatSync;
+  const spy = spyOn(fs, "fstatSync").mockImplementation(((fd: number) => {
+    const stat = real(fd);
+    return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { size });
+  }) as typeof fs.fstatSync);
+  return spy;
 }
 
 beforeEach(() => {
@@ -409,6 +420,34 @@ describe("what the reader opens", () => {
     expect(reading.status).toBe(MANIFEST_STATUS.unreadable);
     expect(reading.detail).toBe(`larger than ${MANIFEST_MAX_BYTES} bytes`);
     expect(reading.fact).toBeNull();
+  });
+
+  test("a manifest that grows after the fstat but stays under the cap is read in full", () => {
+    const description = "y".repeat(8192);
+    seed("package.json", JSON.stringify({ name: "grown", description }));
+    const spy = fstatReportsSize(16);
+    try {
+      const reading = readManifestAt(root, "package.json");
+      expect(spy.mock.calls.length).toBe(1);
+      expect(reading.status).toBe(MANIFEST_STATUS.read);
+      expect(reading.fact?.name).toBe("grown");
+      expect(reading.fact?.description).toBe(description);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test("a manifest that grows past the cap after the fstat is unreadable", () => {
+    seed("package.json", `{"name":"big","description":"${"x".repeat(MANIFEST_MAX_BYTES)}"}`);
+    const spy = fstatReportsSize(16);
+    try {
+      const reading = readManifestAt(root, "package.json");
+      expect(spy.mock.calls.length).toBe(1);
+      expect(reading.status).toBe(MANIFEST_STATUS.unreadable);
+      expect(reading.detail).toBe(`larger than ${MANIFEST_MAX_BYTES} bytes`);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   // Windows has no FIFOs, and creating a symlink there needs a privilege.
