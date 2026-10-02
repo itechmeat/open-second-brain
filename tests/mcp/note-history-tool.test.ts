@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
@@ -115,5 +115,20 @@ describe("brain_note_history tool", () => {
     expect(withheld["commit_count"]).toBe(0);
     expect(JSON.stringify(withheld)).not.toContain("secret start");
     expect(local["commit_count"]).toBe(2);
+  });
+
+  test("a path that leaves the vault answers as a path no commit touches at remote reach", async () => {
+    commit("notes/open.md", "open", "open", "2026-05-21T10:00:00Z");
+    const outside = mkdtempSync(join(tmpdir(), "o2b-note-history-outside-"));
+    try {
+      writeFileSync(join(outside, "x.md"), "---\ntitle: beside\n---\nbody\n");
+      const rel = `../${basename(outside)}/x.md`;
+      const escaped = payload(await call({ path: rel }));
+      const neverWritten = payload(await call({ path: "notes/never.md" }));
+      expect({ ...escaped, note_path: "notes/never.md" }).toEqual(neverWritten);
+      expect(escaped["commit_count"]).toBe(0);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });

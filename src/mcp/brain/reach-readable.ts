@@ -20,7 +20,10 @@
  * vault file.
  */
 
+import { resolve } from "node:path";
+
 import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
+import { pathIsInside } from "../../core/path-safety.ts";
 import { resolveOwnerScopeDelivery } from "../../core/brain/preferences-collect.ts";
 import {
   isPathOwnerVisible,
@@ -40,8 +43,12 @@ export function readableAtContextReach(ctx: ServerContext): ReadablePredicate {
   const reach = contextReach(ctx);
   const scope = resolveOwnerScopeDelivery(ctx.vault, ctx.agentName).enforcedScope;
   if (reach === TRANSPORT_REACH.local && scope === null) return () => true;
+  const root = resolve(ctx.vault);
   const cache: FrontmatterCache = new Map();
   return (rel) =>
+    // A path that leaves the vault names no page the caller could be
+    // shown, and is answered before anything is read.
+    pathIsInside(resolve(root, rel), root) &&
     isPathReadableAtReach(ctx.vault, rel, reach, cache) &&
     (scope === null || isPathOwnerVisible(ctx.vault, rel, scope, cache));
 }

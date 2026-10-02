@@ -6,13 +6,15 @@
  */
 
 import { beforeEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import { brainConfigPath } from "../../src/core/brain/paths.ts";
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { readableAtContextReach } from "../../src/mcp/brain/reach-readable.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
+import { IS_WINDOWS } from "../helpers/platform.ts";
 import { pinHome, tempDirs } from "../helpers/temp-dir.ts";
 
 const mkTemp = tempDirs();
@@ -31,6 +33,14 @@ beforeEach(() => {
 
 function ctx(reach: ServerContext["reach"], agentName = "me-agent"): ServerContext {
   return { vault, configPath: null, repoRoot: null, agentName, ...(reach ? { reach } : {}) };
+}
+
+/** A public page in a fresh directory beside the vault, and its path from the vault. */
+function outside(): { dir: string; rel: string } {
+  const dir = mkTemp("o2b-reach-readable-outside-");
+  const rel = join("..", basename(dir), "sibling.md");
+  writeFileSync(join(dir, "sibling.md"), "---\ntitle: sibling\n---\nbody\n");
+  return { dir, rel };
 }
 
 function setOwnerGate(mode: string): void {
@@ -60,5 +70,28 @@ describe("readableAtContextReach", () => {
     expect(
       readableAtContextReach(ctx(TRANSPORT_REACH.local, "other-agent"))("Notes/theirs.md"),
     ).toBe(true);
+  });
+
+  describe("a path that leaves the vault", () => {
+    test("a public page beside the vault is not readable at remote reach", () => {
+      const { rel } = outside();
+      expect(readableAtContextReach(ctx(TRANSPORT_REACH.remote))(rel)).toBe(false);
+    });
+
+    test("an absolute path outside the vault is not readable at remote reach", () => {
+      const { dir } = outside();
+      expect(readableAtContextReach(ctx(TRANSPORT_REACH.remote))(join(dir, "sibling.md"))).toBe(
+        false,
+      );
+    });
+
+    test.skipIf(IS_WINDOWS)("a FIFO outside the vault is answered without reading it", () => {
+      const dir = mkTemp("o2b-reach-readable-fifo-");
+      const made = spawnSync("mkfifo", [join(dir, "pipe.md")]);
+      expect(made.status).toBe(0);
+      const rel = join("..", basename(dir), "pipe.md");
+      // Before the containment check this read blocked the process for good.
+      expect(readableAtContextReach(ctx(TRANSPORT_REACH.remote))(rel)).toBe(false);
+    });
   });
 });

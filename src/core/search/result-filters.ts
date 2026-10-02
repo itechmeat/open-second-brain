@@ -9,6 +9,7 @@ import { statSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseFrontmatterWithNotices } from "../vault.ts";
+import { pathIsInside } from "../path-safety.ts";
 import { BRAIN_STATE_REL } from "../brain/paths.ts";
 import { DEGRADATION_CODE } from "../integrity/degradation.ts";
 import type { FrontmatterMap } from "../types.ts";
@@ -358,6 +359,12 @@ export function applyVisibilityScope(
  * and writing a public one at its path made the stale private chunks
  * pass this check - the file said "public" - and a remote search served
  * the private body. Omitted by surfaces that serve the file itself.
+ *
+ * A path that resolves OUTSIDE the vault answers `false` at every reach,
+ * before any read: it names no page anyone could be shown, and some
+ * callers hand this function a path the caller of a tool chose, which
+ * must never make the server open a file beside the vault (a named pipe
+ * there would block the read for good).
  */
 export function isPathReadableAtReach(
   vault: string,
@@ -366,6 +373,7 @@ export function isPathReadableAtReach(
   frontmatterCache: FrontmatterCache,
   indexedTags: ReadonlyArray<string> = [],
 ): boolean {
+  if (!pathIsInside(join(vault, path), vault)) return false;
   const entry = readCachedFrontmatterEntry(frontmatterCache, vault, path);
   const tags = entry.unreadable ? UNMEASURABLE_VISIBILITY : pageVisibility(entry.meta);
   return isRemotelyReadable(tags, reach) && isRemotelyReadable(indexedTags, reach);
