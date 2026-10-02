@@ -88,6 +88,7 @@ import { checkClaimQuotes, type QuoteEvidence } from "./quote-check.ts";
 import {
   QUOTES_UNQUOTED_KEY,
   QUOTES_VERIFIED_KEY,
+  QUOTE_CHECK_OUTCOME,
   QuoteCheckError,
   type QuoteCheckReport,
 } from "./quote-verdict.ts";
@@ -200,12 +201,14 @@ const UTF8_STRICT = new TextDecoder("utf-8", { fatal: true });
 
 /** The evidence a quote is checked against: the bytes the digest covers. */
 function quoteEvidence(bytes: Uint8Array | undefined): QuoteEvidence {
-  if (bytes === undefined) return { kind: "url-only" };
+  if (bytes === undefined) return { kind: QUOTE_CHECK_OUTCOME.urlOnly };
   try {
     return { kind: "text", text: UTF8_STRICT.decode(bytes) };
-  } catch {
+  } catch (cause) {
     // A decode failure IS the verdict: these bytes are not text, so no span
-    // can be said to occur in them. It is reported per span, by name.
+    // can be said to occur in them. It is reported per span, by name. The
+    // fatal decoder signals that with a TypeError; anything else is a fault.
+    if (!(cause instanceof TypeError)) throw cause;
     return { kind: "not-text" };
   }
 }

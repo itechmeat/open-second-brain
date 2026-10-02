@@ -40,7 +40,7 @@ import {
 export type QuoteEvidence =
   | { readonly kind: "text"; readonly text: string }
   | { readonly kind: "not-text" }
-  | { readonly kind: "url-only" };
+  | { readonly kind: typeof QUOTE_CHECK_OUTCOME.urlOnly };
 
 export interface QuoteCheckInput {
   readonly claims: ReadonlyArray<DistillClaim>;
@@ -59,7 +59,7 @@ const TEXTLESS_OUTCOME: Readonly<
   Record<Exclude<QuoteEvidence["kind"], "text">, QuoteCheckOutcome>
 > = Object.freeze({
   "not-text": QUOTE_CHECK_OUTCOME.sourceNotText,
-  "url-only": QUOTE_CHECK_OUTCOME.urlOnly,
+  [QUOTE_CHECK_OUTCOME.urlOnly]: QUOTE_CHECK_OUTCOME.urlOnly,
 });
 
 /**
