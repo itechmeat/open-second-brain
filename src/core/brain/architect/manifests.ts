@@ -564,7 +564,12 @@ function groupCounts(
   return Object.freeze(counts.toSorted((a, b) => compareCodePoints(a.group, b.group)));
 }
 
-function compareCodePoints(a: string, b: string): number {
+/**
+ * True code-point order, which `<` on strings is not: it compares UTF-16
+ * code units, so a supplementary character sorts before U+E000-U+FFFF.
+ * Every list of dependency names is ordered with this one comparator.
+ */
+export function compareCodePoints(a: string, b: string): number {
   const left = [...a];
   const right = [...b];
   const length = Math.min(left.length, right.length);

@@ -88,7 +88,7 @@ import { DEPENDENCY_MANIFESTS } from "../../project-manifests.ts";
 import type { ManifestEcosystem } from "../../project-manifests.ts";
 import { listRepoDecisionCandidates } from "./decisions.ts";
 import type { DecisionCandidateFact } from "./decisions.ts";
-import { MANIFEST_STATUS, oneLine } from "./manifests.ts";
+import { compareCodePoints, MANIFEST_STATUS, oneLine } from "./manifests.ts";
 import type { DependencyGroup, ManifestReading } from "./manifests.ts";
 import {
   ARCHITECT_STAGE,
@@ -381,7 +381,7 @@ function dependencySections(
     if (read.length === 0) continue;
     const names = [...new Set(read.flatMap((reading) => reading.fact?.dependencies ?? []))]
       .filter((name) => !exclude.has(manifestIdentity(ecosystem, name)))
-      .toSorted(compareStable);
+      .toSorted(compareCodePoints);
     const runtime =
       names.length === 0
         ? `Runtime dependencies (${ecosystem}): ${NO_RUNTIME_DEPENDENCY}`

@@ -187,12 +187,14 @@ interface WalkStats {
 }
 
 /**
- * Codepoint order, not `localeCompare`: ICU collation varies with the
+ * UTF-16 code-unit order, not `localeCompare`: ICU collation varies with the
  * runtime locale, so a collator-based tie-break renders different bytes
  * for the same tree on two hosts - and byte-identical regeneration is the
  * generator's whole contract. Plain `toSorted()` on strings already does
  * this; the comparator exists for the orderings that need a tie-break
- * (language counts) or sort objects rather than strings.
+ * (language counts) or sort objects rather than strings. Dependency
+ * names are the exception: they are ordered in true code-point order by
+ * `compareCodePoints` in `manifests.ts`, in the fact and in the rendering.
  *
  * It lives here, in the leaf of the scan/render pair, because both the
  * renderer and the decision-candidate reader order their output with it
