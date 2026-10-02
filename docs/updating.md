@@ -81,7 +81,10 @@ credentials are unchanged.
 absent.** A remote client now gets, for such a record, exactly the
 answer an absent one gets from `brain_context`, the
 `osb://preferences/active` resource, `brain_pre_compress_pack`,
-`brain_health` and the `brain_doctor` repair plan and apply. The
+`brain_brief` `view="digest"`, the `osb://digest/latest` and
+`osb://lessons` resources, `brain_health` and the `brain_doctor` repair
+plan and apply. A remote `view="digest"` takes no report snapshot and
+shows no delta. The
 resource also follows the owner gate under
 `integrity.owner_scope_delivery: fail`, as `brain_context` does. A local
 caller and the CLI see no change.

@@ -2072,11 +2072,11 @@ format characters), when it contains NUL, or when it exceeds the cap.
   file's own bytes. `brain_brief` `view="digest"`, the
   `osb://digest/latest` resource and the `osb://lessons` resource do the
   same for the activity and lessons digests: such a record, its rows,
-  its counts and the log events naming it go. Not every preference
-  reader does: `brain_brief` `view="morning"` still lists every
-  confirmed preference, the digest's agent summary still counts every
-  event in its window, and the status counts cover the whole Brain
-  layer. The resource also follows the owner gate now, as
+  its counts, the log events naming it and their share of the agent
+  summary go, and a remote digest neither takes a report snapshot nor
+  shows its delta. Not every preference reader does: `brain_brief`
+  `view="morning"` still lists every confirmed preference, and the
+  status counts cover the whole Brain layer. The resource also follows the owner gate now, as
   `brain_context` does, so under `integrity.owner_scope_delivery: fail`
   it answers with the caller's own view. `brain_health` drops a finding
   any of whose members the caller cannot read, and `brain_doctor` with
@@ -2089,6 +2089,6 @@ format characters), when it contains NUL, or when it exceeds the cap.
   client reads the active digest through the three readers above and the
   lessons digest through `osb://lessons`.
   `brain_ingest_source` with `pre_extract` reads Terraform
-  (`.tf`, `.tfvars`) and redacts URL credentials in every import
-  specifier (see `o2b brain pre-extract` in
+  (`.tf`, `.tfvars`) and redacts credentials in import specifiers
+  (see `o2b brain pre-extract` in
   [`cli-reference.md`](cli-reference.md)).
