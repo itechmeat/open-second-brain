@@ -47,8 +47,7 @@
  *   brace inside such a nested string can end the interpolation early.
  */
 
-import type { CodeEdgeSeed, CodeEntitySeed } from "./pre-extract.ts";
-import { specifierSeed } from "./pre-extract.ts";
+import { type CodeEdgeSeed, type CodeEntitySeed, specifierSeed } from "./pre-extract-seeds.ts";
 
 /** The top-level block kinds this family turns into entity seeds. */
 export const HCL_BLOCK_KIND = Object.freeze({
