@@ -49,7 +49,7 @@ reference it finds (`removed-tool-reference`).
 
 ## Upgrading to 1.68.0
 
-No step below is required. Four changes are visible to an operator or a
+No step below is required. Five changes are visible to an operator or a
 client.
 
 **Architecture notes gain dependency regions and one owned frontmatter
@@ -78,8 +78,16 @@ answer an absent one gets from `brain_context`, the
 `brain_health` and the `brain_doctor` repair plan and apply. The
 resource also follows the owner gate under
 `integrity.owner_scope_delivery: fail`, as `brain_context` does. A local
-caller and the CLI see no change. See the 1.68.0 entry in
-[`CHANGELOG.md`](../CHANGELOG.md).
+caller and the CLI see no change.
+
+**Remote search no longer returns the compiled digest pages.**
+`Brain/active.md` and `Brain/lessons.md` compile preferences and dead-ends
+that may reserve themselves against remote reads, so `brain_search` and the
+other generic page readers withhold both pages from a remote client. The
+active digest stays available remotely through `brain_context`, the
+`osb://preferences/active` resource and `brain_pre_compress_pack`, each
+rendered without the records that client cannot read. Local search is
+unchanged. See the 1.68.0 entry in [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## Upgrading to 1.67.0
 

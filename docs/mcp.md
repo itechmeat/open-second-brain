@@ -2074,7 +2074,12 @@ format characters), when it contains NUL, or when it exceeds the cap.
   any of whose members the caller cannot read, and `brain_doctor` with
   `repair` derives its plan only from findings the caller can read: such
   a record is neither planned, counted under `unfixable`, nor written by
-  `apply`. `brain_ingest_source` with `pre_extract` reads Terraform
+  `apply`. The generic page readers (`brain_search` and every other
+  tool that reads a page by path) no longer return the compiled digest
+  pages `Brain/active.md` and `Brain/lessons.md` to a remote caller,
+  because those pages compile records that may be reserved; a remote
+  client reads the active digest through the three readers above.
+  `brain_ingest_source` with `pre_extract` reads Terraform
   (`.tf`, `.tfvars`) and redacts URL credentials in every import
   specifier (see `o2b brain pre-extract` in
   [`cli-reference.md`](cli-reference.md)).
