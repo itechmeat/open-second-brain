@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { BRAIN_SCOPED_RULES_DIR } from "../../../src/core/brain/path-constants.ts";
@@ -293,3 +293,43 @@ describe("readScopedRules", () => {
     expect(rules.files.map((file) => file.path)).toEqual(["Brain/standing-rules/project/etc.md"]);
   });
 });
+
+describe("readScopedRules and a symlink leaving the vault", () => {
+  const SYMLINKS = canSymlink();
+  const ESCAPED = "UNAVAILABLE: Brain/standing-rules/project/x.md could not be read (Error).";
+
+  test.skipIf(!SYMLINKS)("a symlinked rule file renders the UNAVAILABLE line", () => {
+    const vault = vaultWith({});
+    const outside = join(mkTemp("o2b-scoped-outside-"), "x.md");
+    writeFileSync(outside, "zzoutsidezz");
+    mkdirSync(dirname(brainScopedRulePath(vault, "project", "x")), { recursive: true });
+    symlinkSync(outside, brainScopedRulePath(vault, "project", "x"), "file");
+    const rules = readScopedRules(vault, { ...NO_SCOPE, project: "x" });
+    expect(rules.text).toContain(ESCAPED);
+    expect(rules.text).not.toContain("zzoutsidezz");
+    for (const marker of vaultMarkers(vault)) expect(rules.text).not.toContain(marker);
+  });
+
+  test.skipIf(!SYMLINKS)("a symlinked axis folder renders the UNAVAILABLE line", () => {
+    const vault = vaultWith({});
+    const outside = mkTemp("o2b-scoped-outside-");
+    writeFileSync(join(outside, "x.md"), "zzoutsidezz");
+    mkdirSync(brainScopedRulesDir(vault), { recursive: true });
+    symlinkSync(outside, join(brainScopedRulesDir(vault), "project"), "dir");
+    const rules = readScopedRules(vault, { ...NO_SCOPE, project: "x" });
+    expect(rules.text).toContain(ESCAPED);
+    expect(rules.text).not.toContain("zzoutsidezz");
+    for (const marker of vaultMarkers(vault)) expect(rules.text).not.toContain(marker);
+  });
+});
+
+/** Symlinks need a privilege Windows CI does not grant; probe once. */
+function canSymlink(): boolean {
+  const dir = mkTemp("o2b-symlink-probe-");
+  try {
+    symlinkSync(join(dir, "missing"), join(dir, "link"), "dir");
+    return true;
+  } catch {
+    return false;
+  }
+}

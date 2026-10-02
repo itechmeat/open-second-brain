@@ -602,10 +602,18 @@ function readScopedBlock(ctx: ServerContext): ScopedRules | null {
     harness: ctx.ruleScope?.harness ?? null,
     host: host.host,
   };
-  const rules = readScopedRules(ctx.vault, identity, {
-    maxChars: scopedRulesMaxChars(ctx.vault),
-    hostUnreadable: host.unreadable,
-  });
+  let rules: ScopedRules;
+  try {
+    rules = readScopedRules(ctx.vault, identity, {
+      maxChars: scopedRulesMaxChars(ctx.vault),
+      hostUnreadable: host.unreadable,
+    });
+  } catch {
+    // The reader renders every per-file failure as an `UNAVAILABLE:` line
+    // and does not throw for one; anything that still escapes it must not
+    // take the constitution and the memory layer down with the scoped block.
+    return null;
+  }
   return rules.text.length === 0 ? null : rules;
 }
 

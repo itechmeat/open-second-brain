@@ -13,7 +13,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -292,3 +292,37 @@ describe("brain_context scoped rules - gaps closed by the test audit", () => {
     expect(withFiles).toBe(normalised(await callContext(runtime)));
   });
 });
+
+describe("brain_context scoped rules - a symlink leaving the vault", () => {
+  test.skipIf(!canSymlink())(
+    "a symlinked axis folder renders the UNAVAILABLE line and keeps the constitution",
+    async () => {
+      const outside = mkdtempSync(join(tmp, "outside-"));
+      writeFileSync(join(outside, "proj-x.md"), "zzoutsidezz");
+      mkdirSync(join(vault, "Brain", "standing-rules"), { recursive: true });
+      symlinkSync(outside, join(vault, "Brain", "standing-rules", "project"), "dir");
+      const out = await callContext({ reach: LOCAL, workspaceDir: projectX });
+      const content = out["content"] as string;
+      expect(content).toContain(STANDING);
+      expect(content).toContain(
+        "UNAVAILABLE: Brain/standing-rules/project/proj-x.md could not be read (Error).",
+      );
+      expect(content).not.toContain("zzoutsidezz");
+      expect(content).not.toContain(vault);
+      expect(JSON.stringify(content)).not.toContain(JSON.stringify(vault).slice(1, -1));
+    },
+  );
+});
+
+/** Symlinks need a privilege Windows CI does not grant; probe once per call. */
+function canSymlink(): boolean {
+  const dir = mkdtempSync(join(tmpdir(), "o2b-symlink-probe-"));
+  try {
+    symlinkSync(join(dir, "missing"), join(dir, "link"), "dir");
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}

@@ -198,7 +198,8 @@ interface MatchedFile {
  * read failure renders an `UNAVAILABLE:` line in that file's place, built
  * from the vault-relative path and the error code only (a Node error
  * message carries the absolute path). Never throws for a per-file read
- * failure. The operator's bytes are opaque: read and trimmed, nothing else.
+ * failure, a path that leaves the vault through a symlink included. The
+ * operator's bytes are opaque: read and trimmed, nothing else.
  */
 export function readScopedRules(
   vault: string,
@@ -213,7 +214,7 @@ export function readScopedRules(
     const key = value === null ? null : scopedRuleKey(value);
     if (key === null) return;
     const path = posix.join(BRAIN_ROOT_REL, BRAIN_SCOPED_RULES_DIR, axis, `${key}.md`);
-    const body = readRuleBody(brainScopedRulePath(vault, axis, key), path);
+    const body = readRuleBody(() => brainScopedRulePath(vault, axis, key), path);
     if (body === null) return;
     const heading = `### ${SCOPED_RULE_AXIS_LABEL[axis]}: ${key}`;
     matched.push({
@@ -281,11 +282,16 @@ function isTruncated(
   return leastImportant === file;
 }
 
-/** The trimmed body, `null` for absence, or the `UNAVAILABLE:` line. */
-function readRuleBody(absPath: string, relPath: string): string | null {
+/**
+ * The trimmed body, `null` for absence, or the `UNAVAILABLE:` line. The
+ * absolute path is resolved inside the `try`: the containment check throws
+ * (with the absolute path in its message) for a file or axis folder that
+ * is a symlink leaving the vault, and that is one more per-file failure.
+ */
+function readRuleBody(absPath: () => string, relPath: string): string | null {
   let raw: string;
   try {
-    raw = readFileSync(absPath, "utf8");
+    raw = readFileSync(absPath(), "utf8");
   } catch (err) {
     const code = errorCode(err);
     if (code === "ENOENT") return null;
