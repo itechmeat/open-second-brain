@@ -355,3 +355,37 @@ describe("brain_brief view=today answers at the caller's reach", () => {
     ]);
   });
 });
+
+describe("a dream shared with a reserved record is kept, showing only readable transitions", () => {
+  test("brain_brief view=digest counts the shared dream for its public transition", async () => {
+    const row = await expectAnswersAsAbsent(
+      "brain_brief",
+      () => ({ view: "digest", format: "json" }),
+      [`pref-${PRIVATE_SLUG}`],
+    );
+    // Not vacuous: the agent summary counts the public evidence and the shared dream.
+    const digest = JSON.parse((JSON.parse(row.withheld) as { content: string }).content) as {
+      agent_summary: ReadonlyArray<{ total_events: number }>;
+    };
+    expect(digest.agent_summary.map((a) => a.total_events)).toEqual([2]);
+  });
+
+  for (const args of [
+    {},
+    { kind: BRAIN_LOG_EVENT_KIND.dream },
+    { kind: BRAIN_LOG_EVENT_KIND.applyEvidence },
+  ]) {
+    test(`brain_event_trace ${JSON.stringify(args)}`, async () => {
+      const row = await expectAnswersAsAbsent(
+        "brain_event_trace",
+        (f) => ({ date: f.date, ...args }),
+        [
+          args.kind === BRAIN_LOG_EVENT_KIND.applyEvidence
+            ? `Notes/${PRIVATE_SLUG}-`
+            : PRIVATE_SLUG,
+        ],
+      );
+      expect(row.withheld).toContain(`pref-${SHARED_SLUG}`);
+    });
+  }
+});

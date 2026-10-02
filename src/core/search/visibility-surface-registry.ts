@@ -362,8 +362,9 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
     reason:
       "its hygiene count asks the owner view ANDed with reachView and its cited pages answer " +
       "readableAtContextReach(ctx), but the doctor error and warning counts and the preference " +
-      "counts are taken over the whole Brain layer, so they move with a reserved record; it " +
-      "returns counts and problem labels, never a note path, title, or body.",
+      "counts are taken over the whole Brain layer, so they move with a reserved record " +
+      "(a stated, deferred residual: no count is recomputed per reader yet); it returns counts " +
+      "and problem labels, never a note path, title, or body.",
   },
   {
     surface: "brain_maintenance",
@@ -470,7 +471,10 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "resolveLogEventTraces (core/brain/event-trace.ts) takes the handler's " +
       "reachView(ctx.vault, contextReach(ctx)) as its view option and drops, before the limit " +
       "and the totals, every event whose artifacts or body strings name a page the caller may " +
-      "not read at its reach, and every attached trace whose handoff reference it hides.",
+      "not read at its reach, and every attached trace whose handoff reference it hides; a " +
+      "dream shared with a withheld record is kept with its readable transitions only " +
+      "(log-events-at-reach.ts), its body and artifacts read from that form, so the count " +
+      "does not fall when a reserved preference shares a dream.",
   },
   {
     surface: "brain_foresight",
@@ -505,7 +509,8 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
     reason:
       "view=digest (brief-tools.ts) is rendered for the caller below local reach - renderDigest " +
       "is handed readableAtContextReach(ctx), so a reserved preference or retired record is " +
-      "absent from its rows and counts, and no report snapshot is taken or delta shown; " +
+      "absent from its rows and counts (a dream shared with one is counted with its readable " +
+      "transitions only), and no report snapshot is taken or delta shown; " +
       "view=morning is handed the same predicate and leaves such a preference out, and shows " +
       "no pending trigger or trigger-queue failure and marks nothing delivered; view=daily " +
       "and view=weekly answer at the caller's reach for the ids they name - a status " +
@@ -679,7 +684,8 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
     reason:
       "reports install/config/vault status blocks - no note path, title, or body crosses this " +
       "surface, but its Brain block is computeBrainStatus over the whole Brain layer, so the " +
-      "preference counts and the last apply-evidence time move with a reserved record; included " +
+      "preference counts and the last apply-evidence time move with a reserved record (a " +
+      "stated, deferred residual); included " +
       "for the file-level sweep (tools.ts imports listVaultPages for second_brain_query, defined " +
       "in the same file).",
   },
@@ -881,7 +887,9 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
     kind: K.mcpResource,
     category: C.excluded,
     reason:
-      "computeBrainStatus() output, same unfiltered whole-vault-reader class; no visibility check.",
+      "computeBrainStatus() output, same unfiltered whole-vault-reader class; no visibility " +
+      "check, so its preference and retired counts move with a reserved record (a stated, " +
+      "deferred residual).",
   },
   {
     surface: "osb://preference/{id}",
