@@ -17,7 +17,7 @@ o2b doctor                    Run vault + adapter checks
 o2b index                     Rebuild the Markdown page index
 o2b export-config             Write a redacted config snapshot
 o2b secrets list|status       Inspect $secret:NAME references without printing values
-o2b mcp                       Run the MCP tool server (stdio by default; --transport http binds loopback, and a key - --api-key or, kept out of the process list, OPEN_SECOND_BRAIN_MCP_API_KEY - is required only for a non-loopback --host); --scope full|writer|catalog, --tool-profile full|writer|catalog|recall|minimal (an unknown profile exits 2 rather than serving the full surface), --host-target <runtime>, --probe, --allow-tool, --disable-tool, --max-tools
+o2b mcp                       Run the MCP tool server (stdio by default; --transport http binds loopback, and a key - --api-key or, kept out of the process list, OPEN_SECOND_BRAIN_MCP_API_KEY - is required only for a non-loopback --host); --scope full|writer|catalog, --tool-profile full|writer|catalog|recall|minimal (an unknown profile exits 2 rather than serving the full surface), --host-target <runtime>, --harness <id>, --probe, --allow-tool, --disable-tool, --max-tools
 o2b state status|migrate|rollback
                               Inventory the state this vault holds, move it to another directory, or put it back (see "State surfaces" below)
 o2b tool-call                 Invoke an MCP tool handler from the CLI
@@ -279,7 +279,26 @@ that documents "no limit" is not recorded as unchecked.
 launched it. Install adapters write it into the registration they generate;
 an unrecognised value is refused with exit `2` naming the known ids, rather
 than dropped - silently ignoring it would report the ceiling as unchecked on
-a host that publishes one. It carries no other behaviour.
+a host that publishes one. Its only other use is as the fallback for
+`--harness` below.
+
+**`o2b mcp --harness <id>`** (since v1.70.0) names the harness the server
+runs under, so `brain_context` can render the operator's
+`Brain/standing-rules/harness/<id>.md` (see "Scoped operator rules" in
+[`how-it-works.md`](how-it-works.md)). The list is closed: `aider`,
+`claude-code`, `codex`, `copilot-cli`, `cursor`, `gemini-cli`, `generic`,
+`grok`, `hermes`, `kiro`, `openclaw`, `opencode`, `pi`. Without it the
+server takes `--host-target`, and with neither it matches no harness
+file. An unrecognised value exits `2`:
+
+```
+$ o2b mcp --harness nope
+o2b mcp: invalid --harness value: nope; expected one of: aider, claude-code, codex, copilot-cli, cursor, gemini-cli, generic, grok, hermes, kiro, openclaw, opencode, pi
+```
+
+The Claude Code plugin registers both of its servers with
+`--harness claude-code`, and the Hermes plugin launches its bridge with
+`--harness hermes`.
 
 `second_brain_capabilities` reads it back and reports a `host_ceiling`
 object beside the tool counts: `target`, `kind`, `max_tools`, `source`,

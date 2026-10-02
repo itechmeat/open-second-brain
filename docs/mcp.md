@@ -700,7 +700,8 @@ Optional flags:
 - `--scope full|writer` — choose the full server or the always-loaded writer subset.
 - `--writer-only` — alias for `--scope writer`.
 - `--tool-profile full|writer|catalog|recall|minimal` — a named scope-plus-window bundle (see "Tool-surface profiles" below).
-- `--host-target <runtime>` — name the runtime that launched this server, so the capability report can cite that host's published tool ceiling. Install adapters write it into the registration they generate; an unrecognised value exits `2` naming the known ids. It changes nothing else.
+- `--host-target <runtime>` — name the runtime that launched this server, so the capability report can cite that host's published tool ceiling. Install adapters write it into the registration they generate; an unrecognised value exits `2` naming the known ids. It also stands in for `--harness` when that option is absent, and changes nothing else.
+- `--harness <id>` — name the harness this server runs under (since v1.70.0), from a closed list: `aider`, `claude-code`, `codex`, `copilot-cli`, `cursor`, `gemini-cli`, `generic`, `grok`, `hermes`, `kiro`, `openclaw`, `opencode`, `pi`. It selects which `Brain/standing-rules/harness/<id>.md` file `brain_context` renders (see "Scoped operator rules" in [`how-it-works.md`](how-it-works.md)); the Claude Code plugin passes `--harness claude-code` and the Hermes plugin `--harness hermes`. An unrecognised value exits `2` naming the accepted ids. No tool argument names the harness.
 - `--probe` — start an in-process handshake and print whether the server can advertise tools, then exit.
 - `--transport stdio|http` — choose stdio (default) or Streamable HTTP.
 - `--host HOST` — HTTP bind host (default `127.0.0.1`).
@@ -1255,7 +1256,7 @@ The plugin manifest `.claude-plugin/plugin.json` declares **two** MCP-server ent
 - `open-second-brain` - the full surface, whose advertised tool count is stated once under "Tool Highlights" above (including the consolidated `brain_brief`, `brain_analytics`, and `schema_inspect`, plus `brain_health`, `brain_mcp_landscape`, `brain_agent_query`, `brain_agent_diff`, `brain_recall_gate`, `brain_pinned_context`, `brain_memory_bridge`, `brain_pre_compress_pack`, `brain_audit`, `brain_sources`, and `brain_switch_vault`) and 18 hidden deprecated aliases listed under "Consolidated views and deprecated aliases" above; subject to Claude Code's `MCPSearch` tool-search deferral when MCP definitions push the system prompt past 10% of the context window.
 - `open-second-brain-writer` - a minimal always-loaded surface of five tools: `brain_feedback`, `brain_apply_evidence`, `brain_note`, `brain_pinned_context` (writers) and `brain_context` (read-only pull-bootstrap of `Brain/active.md` plus pinned context, v0.16.0). The agent records taste signals, evidence events, milestone notes, and current-task pinned facts - and fetches the active rule digest at session start in runtimes without a SessionStart hook - without a ToolSearch round-trip on every session boot.
 
-Both servers reuse the same backing CLI (`o2b mcp --scope writer` vs the default `--scope full`). Handlers are byte-identical; the writer-mode instructions text explicitly tells the agent to prefer the writer copy over any duplicate the full server still exposes (both call the same code path).
+Both servers reuse the same backing CLI (`o2b mcp --scope writer` vs the default `--scope full`), and since v1.70.0 both are registered with `--harness claude-code`. Handlers are byte-identical; the writer-mode instructions text explicitly tells the agent to prefer the writer copy over any duplicate the full server still exposes (both call the same code path).
 
 `brain_feedback`'s `scope` argument stays optional. When the vault declares `feedback.default_scope` in `Brain/_brain.yaml`, a call that omits `scope` records the signal under that default category; an explicit `scope` always wins, and with no default configured a scope-less call stays scope-less. The same effective scope is reused for a `force_confirmed: true` preference so the preference and its signal share one scope. The configured value is validated against the same constraints as any signal `scope` (non-empty after trim, single-line, at most 128 characters).
 
@@ -2177,10 +2178,11 @@ format characters), when it contains NUL, or when it exceeds the cap.
   when every evidence event citing it is about such a record, or when
   the pointer names a page the caller cannot read, recompute the
   `events_by_kind` and `vault_delta` counts from the events the caller
-  may see, and take no report snapshot and show no `delta`. The monthly
-  and operator views, and the today view outside its recent activity,
-  still count over the whole Brain layer and name no record. The
-  read-only preview of the same
+  may see, and take no report snapshot and show no `delta`. Since
+  v1.70.0 the today, monthly and operator views answer at the caller's
+  reach too; only the operator view's `dream_summary` counts, and the
+  dream warnings its trust verdict folds in, still count over the whole
+  Brain layer, and they name no record. The read-only preview of the same
   extraction is the CLI verb `o2b brain extract` (see
   [`cli-reference.md`](cli-reference.md)).
 - Since v1.69.0 more readers treat a page or record the caller cannot
@@ -2216,7 +2218,50 @@ format characters), when it contains NUL, or when it exceeds the cap.
   `visibility` applies to the page. The empty-search coverage verdict no
   longer counts a root as reached through a page the caller cannot read.
   Some counts still run over the whole Brain layer and name no record:
-  the monthly and operator views, the status views, the cap on
-  `removed-tool-reference` warnings and the `brain_doctor`
-  stale-dependency note; the ranking statistics of `brain_search` are
-  taken over the shared index.
+  the operator view's `dream_summary` counts (and the dream warnings its
+  trust verdict folds in) and the status views; the ranking statistics of `brain_search` are taken over
+  the shared index.
+- Since v1.70.0 `brain_context` renders the operator's scoped rules for a
+  local caller. After the standing-rules block, and before the memory
+  body, `content` carries a `## Scoped operator rules` block built from
+  `Brain/standing-rules/project/<key>.md`,
+  `Brain/standing-rules/harness/<harness id>.md` and
+  `Brain/standing-rules/host/<device id>.md`, the files whose key matches
+  the scope the server resolved: the project from the nearest
+  `.o2b-vault.json` pointer above the directory the server was started
+  in, the harness from `--harness` (falling back to `--host-target`) and
+  the host from the device id. The result then carries an optional
+  `scoped_rules` key, present only when at least one file matched or the
+  block carries the notice that host-scoped rules were not applied:
+
+  ```json
+  {
+    "scope": { "project": "proj-x", "harness": "claude-code", "host": null },
+    "files": [
+      { "path": "Brain/standing-rules/project/proj-x.md", "axis": "project", "truncated": false }
+    ]
+  }
+  ```
+
+  `path` is vault-relative, `axis` is `project`, `harness` or `host`, and
+  `truncated` is `true` for a file the `active.scoped_rules_max_chars` cap
+  cut. The tool gains no input argument. Below local reach neither the
+  block nor the key appears: the output is the same as for a vault
+  without the directory. Every write tool refuses a path inside
+  `Brain/standing-rules/`, as it refuses `Brain/standing-rules.md`. See
+  "Scoped operator rules" in [`how-it-works.md`](how-it-works.md).
+- Since v1.70.0 more brief and doctor counts answer at the caller's
+  reach; a local caller and the CLI see no change. Below local reach
+  `brain_brief` `view="today"` lists no open loop or obligation from a
+  page the caller cannot read and counts only the files it may read in
+  `scannedFiles`; `view="monthly"` counts events, status transitions,
+  retirements, contradictions and neglected areas from the events the
+  caller may see, the same rule as the daily and weekly views;
+  `view="operator"` takes its doctor counts from the findings the caller
+  may see, its digest counts from readable pages, its top actions from
+  readable targets before the top entries are picked, its verification
+  entries and their counts from the records and pages the caller may
+  read, and recomputes its trust verdict from those; and `brain_doctor` fills the cap on
+  `removed-tool-reference` warnings and counts the stale-dependency
+  note's `states_changed` from the pages and records the caller can
+  read.

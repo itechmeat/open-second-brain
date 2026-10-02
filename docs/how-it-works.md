@@ -494,7 +494,8 @@ flowchart LR
   (`brain_create_note`, `brain_update_note`, `brain_append_note`,
   `brain_write_batch`), and `brain_labels` - which takes a caller-named
   path but resolves it through the weaker containment-only resolver - is
-  refused by a named guard that knows this one file. Nothing generates or
+  refused by a named guard that knows this one file (and, since v1.70.0,
+  the `Brain/standing-rules/` directory beside it). Nothing generates or
   rewrites it.
 - **SessionStart hook** (`startup | resume | clear | compact`) injects
   the body as `additionalContext` so the agent sees current rules at
@@ -534,6 +535,86 @@ flowchart LR
 `active.md` is **not** edited by hand — `o2b brain dream` and pin /
 unpin re-derive it from `preferences/` and `retired/`. Deleting the
 file is harmless: the next dream regenerates it.
+
+### Scoped operator rules
+
+Since v1.70.0 the operator can also write rules that hold for one
+project, one harness or one machine, one file per scope value, beside
+the vault-wide `Brain/standing-rules.md`:
+
+| File | Matches when |
+|---|---|
+| `Brain/standing-rules/project/<key>.md` | the session runs in a project linked to the vault whose key is `<key>` |
+| `Brain/standing-rules/harness/<harness id>.md` | the MCP server was launched for that harness |
+| `Brain/standing-rules/host/<device id>.md` | the session runs on the device with that id |
+
+The scope identity is resolved by the server from facts the operator
+or the packager wrote, never from anything a caller names about itself:
+
+- **Project:** the directory holding the nearest `.o2b-vault.json`
+  pointer found from the workspace directory (the pointer
+  `o2b brain project link` writes), by its basename. The hook uses the
+  payload's `cwd` (else its own working directory), the MCP server the
+  directory it was started in.
+  No pointer, or a pointer that cannot be read, matches no project file.
+- **Harness:** the `--harness <id>` option of `o2b mcp`, falling back to
+  `--host-target`. The Claude Code plugin registers both of its servers
+  with `--harness claude-code` and the Hermes plugin launches its bridge
+  with `--harness hermes`; install adapters already write
+  `--host-target`. A server launched with neither matches no harness
+  file.
+- **Host:** the device id (`device_id` in the config, or
+  `O2B_DEVICE_ID`). An empty device id is the explicit opt-out and
+  matches no host file. A device id that cannot be read applies no host
+  file either, and when `Brain/standing-rules/host/` holds a file the
+  block ends with one sentence saying so and naming `o2b brain doctor`
+  for the cause.
+
+A project or device name becomes a key by lowercasing it and turning
+every run of characters that is neither a letter nor a digit, in any
+script, into one `-`, without leading or trailing `-` and at most 64
+characters: a project folder `My_Repo.v2` keys to `my-repo-v2`.
+
+The matching files are joined under one `## Scoped operator rules`
+header, which states the precedence: the operator standing rules above
+take precedence over them, and they take precedence over every recalled
+preference, lesson and context pack that follows. Each file gets a
+`### Project: <key>`, `### Harness: <key>` or `### Host: <key>`
+subheading, and its own text follows as written. A file that cannot be
+read is replaced by one line, `UNAVAILABLE: <vault-relative path> could
+not be read (<error code>).`; an empty or missing file is no rule.
+
+Where each layer renders:
+
+- **SessionStart hook:** project and host files, right after the
+  operator standing rules and before the active body. Harness files do
+  not render in the hook in this release, because the hook has no
+  launch-time harness of its own.
+- **`brain_context`:** project, harness and host files, after the
+  standing-rules block and before the memory body, plus an optional
+  `scoped_rules` key with the resolved scope and the matched files (see
+  [`mcp.md`](mcp.md)).
+- **Reach:** the layer renders only for a local caller. Below local
+  reach the server's working directory and device are not the caller's,
+  so neither the block nor the key appears and the device id is not
+  read.
+
+The block is capped by `active.scoped_rules_max_chars` (default 2,000,
+at least 200). When the cap cuts anything the host file goes first, then
+the harness file, then the project file, and the block ends with a
+notice of the characters kept and the files dropped. Unlike the
+vault-wide file, the block is charged against the injection budget in
+the SessionStart hook: there its cap is never larger than
+`active.inject_budget_chars`, the rendered block is subtracted from
+`inject_budget_chars` before the active body is budgeted, and the
+block's length is recorded as `scoped_rules_chars` on the hook's receipt
+(see [`observability.md`](observability.md)). The files are read on every render and never cached, so one
+project's rules are never replayed in another.
+
+The directory is as far out of an agent's reach as the vault-wide file:
+every write path that refuses `Brain/standing-rules.md` refuses any path
+inside `Brain/standing-rules/` too, compared as written and after
+resolving symbolic links, and nothing generates or rewrites the files.
 
 ## CLI / MCP surface
 
