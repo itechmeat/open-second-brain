@@ -101,6 +101,11 @@ export interface RemoveObligationResult {
 
 export class ObligationError extends Error {}
 
+/** The refusal for a slug that names no active obligation page. */
+export function noObligationError(slug: string): ObligationError {
+  return new ObligationError(`no obligation: ${slug}`);
+}
+
 /** Validate and narrow an arbitrary cadence string. */
 export function parseCadence(raw: string): ObligationCadence {
   const value = raw.trim().toLowerCase();
@@ -281,7 +286,7 @@ export function completeObligation(vault: string, input: CompleteObligationInput
   assertVaultIdentityForWrite(vault);
   const slug = slugify(input.slug);
   const prior = parsePage(vault, slug);
-  if (prior === null) throw new ObligationError(`no obligation: ${slug}`);
+  if (prior === null) throw noObligationError(slug);
   const now = input.now ?? new Date();
   const date = input.date ? requireIsoDate(input.date, "date") : isoDate(now);
   const page = {
@@ -355,7 +360,7 @@ export function removeObligation(vault: string, slug: string): RemoveObligationR
   assertVaultIdentityForWrite(vault);
   const normalized = slugify(slug);
   const activePath = obligationPath(vault, normalized);
-  if (!existsSync(activePath)) throw new ObligationError(`no obligation: ${normalized}`);
+  if (!existsSync(activePath)) throw noObligationError(normalized);
   const archiveDir = obligationsArchiveDir(vault);
   mkdirSync(archiveDir, { recursive: true });
   let archivePath = join(archiveDir, `${normalized}.md`);

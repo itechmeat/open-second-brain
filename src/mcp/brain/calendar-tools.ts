@@ -12,10 +12,13 @@ import {
   completeObligation,
   listObligations,
   removeObligation,
+  noObligationError,
   showObligation,
   type ObligationListItem,
   type ObligationPage,
 } from "../../core/brain/obligations.ts";
+import { BRAIN_OBLIGATIONS_REL } from "../../core/brain/path-constants.ts";
+import { slugify } from "../../core/vault.ts";
 import {
   synthesizeAgenda,
   type AgendaEventInput,
@@ -25,6 +28,7 @@ import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { coerceStr, coerceStrList, unknownOperationError } from "../coerce.ts";
+import { readableAtContextReachOrUndefined } from "./reach-readable.ts";
 
 function pageJson(page: ObligationPage): Record<string, unknown> {
   return {
@@ -52,21 +56,37 @@ function listItemJson(item: ObligationListItem): Record<string, unknown> {
   };
 }
 
+/** The vault-relative page an obligation slug names. */
+function obligationRel(slug: string): string {
+  return `${BRAIN_OBLIGATIONS_REL}/${slugify(slug)}.md`;
+}
+
 function toolBrainObligation(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Record<string, unknown> {
   const operation = coerceStr(args, "operation", true)!;
+  // Every operation answers at the caller's reach: a page the caller may
+  // not read is listed, shown, completed and removed exactly as an absent
+  // one would be, so neither its text nor its existence crosses, and it
+  // is never written. `undefined` at local reach with the owner gate off.
+  const readable = readableAtContextReachOrUndefined(ctx);
+  const withheld = (slug: string): boolean =>
+    readable !== undefined && !readable(obligationRel(slug));
   try {
     if (operation === "list") {
       const items = listObligations(ctx.vault, { overdueOnly: args["overdue"] === true });
-      return { operation, obligations: items.map(listItemJson) };
+      const kept = readable === undefined ? items : items.filter((o) => !withheld(o.slug));
+      return { operation, obligations: kept.map(listItemJson) };
     }
     if (operation === "add") {
       const title = coerceStr(args, "title", true)!;
       const cadence = coerceStr(args, "cadence", true)!;
       const anchor = coerceStr(args, "anchor", false);
       const notes = coerceStr(args, "notes", false);
+      // `addObligation` refuses a taken slug and never overwrites it; the
+      // refusal is the one answer that cannot match an absent page's,
+      // because creating the page would replace the withheld one.
       const page = addObligation(ctx.vault, {
         title,
         cadence,
@@ -77,6 +97,12 @@ function toolBrainObligation(
       return { operation, obligation: pageJson(page) };
     }
     const slug = coerceStr(args, "slug", true)!;
+    if (withheld(slug)) {
+      if (operation === "show") return { operation, slug, present: false };
+      if (operation === "done" || operation === "remove") {
+        throw noObligationError(slugify(slug));
+      }
+    }
     if (operation === "show") {
       const page = showObligation(ctx.vault, slug);
       if (page === null) return { operation, slug, present: false };

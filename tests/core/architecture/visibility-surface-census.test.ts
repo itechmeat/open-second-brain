@@ -276,6 +276,12 @@ const NOTE_CONTENT_PRODUCERS: ReadonlyArray<ProducerRule> = Object.freeze([
       "allClaims",
     ],
   },
+  // Obligation pages are vault pages the today view already filtered by
+  // reach while the tool that lists, shows and completes them did not.
+  {
+    specifierIncludes: "/brain/obligations.ts",
+    identifiers: ["listObligations", "showObligation"],
+  },
   {
     specifierIncludes: "/brain/truth/",
     identifiers: ["computeTruthStateWithConflicts", "aggregateQuantities", "detectAgentCollisions"],
@@ -483,8 +489,12 @@ function reasonProblems(entries: ReadonlyArray<VisibilitySurfaceEntry>): {
  * 55 before the vocabulary gained `buildConceptCluster`. The one new name
  * is `brain_analytics`, whose timeline, belief-evolution and
  * concept-synthesis views render log events and backlinks.
+ *
+ * 56 before the vocabulary gained the obligation readers. The two new
+ * names are `brain_obligation`, which listed and showed a withheld
+ * obligation page, and `brain_agenda` on the file-level rule.
  */
-const MCP_TOOL_POPULATION_SIZE = 56;
+const MCP_TOOL_POPULATION_SIZE = 58;
 /** Measured: MCP resources + templates. */
 const MCP_RESOURCE_POPULATION_SIZE = 8;
 /** Measured: hand-enumerated CLI verb mirrors. */
@@ -557,6 +567,7 @@ describe("visibility surface census", () => {
         "brain_health",
         "brain_hygiene",
         "brain_idea_discovery",
+        "brain_obligation",
         "brain_pre_compress_pack",
         "brain_procedural_memory",
         "brain_query",

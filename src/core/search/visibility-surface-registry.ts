@@ -716,6 +716,28 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "runs vault/config/plugin-manifest health checks and state-surface inventory - no note " +
       "content crosses this surface; included for completeness of the file-level sweep only.",
   },
+  {
+    surface: "brain_obligation",
+    kind: K.mcpTool,
+    category: C.covered,
+    reason:
+      "every operation asks readableAtContextReach(ctx) about Brain/obligations/<slug>.md " +
+      "before the page is read or written: list keeps only the obligations the caller may read, " +
+      "show answers a withheld slug as an absent one ({present: false}), and done and remove " +
+      "refuse it with the 'no obligation' error an absent slug gets, so the page is neither " +
+      "completed nor archived. Residual: add over a taken slug is refused whoever may read the " +
+      "page, because creating it would replace the withheld page.",
+  },
+  {
+    surface: "brain_agenda",
+    kind: K.mcpTool,
+    category: C.excluded,
+    reason:
+      "swept in for file-level completeness because calendar-tools.ts also registers " +
+      "brain_obligation: synthesizeAgenda folds the caller-supplied calendar events into " +
+      "conflicts and focus blocks and never reads a vault page, so no note path, title or body " +
+      "crosses this surface.",
+  },
 
   // --- Excluded: CLI verbs, one per MCP tool above that has a CLI mirror ----
   {
