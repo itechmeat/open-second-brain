@@ -33,6 +33,8 @@
  */
 
 import { isKnownRelation, normalizeRelation } from "../../graph/relation-vocab.ts";
+import { TRANSPORT_REACH } from "../../graph/transport-reach.ts";
+import { isPathReadableAtReach, type FrontmatterCache } from "../../search/result-filters.ts";
 import { validateEntityCategory, normalizeEntityName } from "../entities/canonical.ts";
 import { relateEntities, upsertEntity } from "../entities/registry.ts";
 import { renderProvenanceSection, type Provenance } from "../provenance/provenance.ts";
@@ -169,7 +171,9 @@ function validateIntake(intake: ExtractionIntake): void {
  * source. With several, there is no single set of bytes this extraction came
  * from, and stamping the first one would record a file the entities may have
  * nothing to do with - a misleading audit record is worse than none, because
- * only the second can be read as "not recorded".
+ * only the second can be read as "not recorded". Nor is it recorded for a
+ * source a remote reader may not read: the entity pages carrying it are
+ * readable where the source is not.
  *
  * An intake citing NO source throws instead of picking a lane. It cannot be
  * classified, and both lanes are wrong for it: trusting it makes the omission
@@ -197,9 +201,14 @@ function resolveIntakeOrigin(
   // The reach question comes first, before any stat or read, so neither a
   // refused stat nor the size ceiling can name a page the caller may not read.
   if (only !== undefined) {
-    return isSourceHidden(vault, only, readable)
-      ? UNTRUSTED_ORIGIN
-      : classifySourceOrigin(vault, only);
+    if (isSourceHidden(vault, only, readable)) return UNTRUSTED_ORIGIN;
+    const origin = classifySourceOrigin(vault, only);
+    // The digest lands on entity pages, which do not inherit the source's
+    // visibility: a source a remote reader may not read keeps its lane but
+    // records no digest, or the digest would confirm a guess of its bytes.
+    return origin.contentHash !== undefined && isSourceHidden(vault, only, remotelyReadable(vault))
+      ? { trust: origin.trust }
+      : origin;
   }
 
   // `some` rather than a full map: the first source outside the vault (or
@@ -211,6 +220,12 @@ function resolveIntakeOrigin(
       classifySourceTrust(vault, source) === INTAKE_TRUST.untrusted,
   );
   return { trust: untrusted ? INTAKE_TRUST.untrusted : INTAKE_TRUST.trusted };
+}
+
+/** May a remote reader read the vault file at this vault-relative path? */
+function remotelyReadable(vault: string): (rel: string) => boolean {
+  const cache: FrontmatterCache = new Map();
+  return (rel) => isPathReadableAtReach(vault, rel, TRANSPORT_REACH.remote, cache);
 }
 
 /**
