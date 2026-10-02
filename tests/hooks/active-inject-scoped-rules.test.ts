@@ -24,7 +24,11 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { STANDING_RULES_HEADER } from "../../src/core/brain/standing-rules.ts";
-import { SCOPED_RULES_HEADER, readScopedRules } from "../../src/core/brain/scoped-rules.ts";
+import {
+  SCOPED_RULES_HEADER,
+  SCOPED_RULES_NOTICE_RESERVE,
+  readScopedRules,
+} from "../../src/core/brain/scoped-rules.ts";
 import { budgetActiveBody } from "../../src/core/brain/active-budget.ts";
 import { writeVaultPointer } from "../../src/core/brain/portability/pointer.ts";
 import { homeEnv } from "../helpers/platform.ts";
@@ -195,10 +199,12 @@ describe("active-inject scoped rules - budget", () => {
   test("the scoped block is capped and subtracted from the injection budget", async () => {
     writeFileSync(
       join(vault, "Brain", "_brain.yaml"),
-      "schema_version: 1\nactive:\n  inject_budget_chars: 500\n  scoped_rules_max_chars: 200\n",
+      "schema_version: 1\nactive:\n  inject_budget_chars: 1000\n  scoped_rules_max_chars: 200\n",
       "utf8",
     );
-    writeScoped("project", "proj-x", `${MARKER} ${"x".repeat(5000)}`);
+    // Many short lines, so the cap cuts at a real line and keeps the marker.
+    const ruleLines = Array.from({ length: 200 }, (_, i) => `- scoped rule line ${i}`);
+    writeScoped("project", "proj-x", `${MARKER}\n${ruleLines.join("\n")}`);
     const lines = Array.from({ length: 60 }, (_, i) => `- \`pref-${i}\` — rule body number ${i}`);
     const longActive = `---\nkind: brain-active\ngenerated_at: 2026-05-15T10:00:00Z\n---\n\n${ACTIVE_HEAD}\n\n## Confirmed (60)\n\n${lines.join("\n")}\n`;
     writeFileSync(join(vault, "Brain", "active.md"), longActive, "utf8");
@@ -210,18 +216,18 @@ describe("active-inject scoped rules - budget", () => {
       { project: "proj-x", harness: null, host: null },
       { maxChars: 200 },
     );
-    expect(expected.text.length).toBeGreaterThan(0);
-    expect(expected.text.length).toBeLessThan(5000);
+    expect(expected.text).toContain(MARKER);
+    expect(expected.files[0]?.truncated).toBe(true);
     expect(context).toContain(expected.text);
 
     const trimmedActive = longActive.slice(longActive.indexOf(ACTIVE_HEAD)).trim();
-    const activeBudget = Math.max(0, 500 - expected.text.length);
+    const activeBudget = Math.max(0, 1000 - expected.text.length);
     expect(context.endsWith(budgetActiveBody(trimmedActive, activeBudget))).toBe(true);
 
     const receipts = injectionReceipts();
     expect(receipts.length).toBe(1);
     const budget = receipts[0]!.payload["budget"] as Record<string, unknown>;
-    expect(budget["inject_budget_chars"]).toBe(500);
+    expect(budget["inject_budget_chars"]).toBe(1000);
     expect(budget["scoped_rules_chars"]).toBe(expected.text.length);
     const items = receipts[0]!.payload["items"] as ReadonlyArray<Record<string, unknown>>;
     expect(items.map((item) => item["id"])).toContain("scoped-rules");
@@ -279,20 +285,84 @@ describe("active-inject scoped rules - gaps closed by the test audit", () => {
   test("the scoped cap never exceeds the injection budget", async () => {
     writeFileSync(
       join(vault, "Brain", "_brain.yaml"),
-      "schema_version: 1\nactive:\n  inject_budget_chars: 500\n",
+      "schema_version: 1\nactive:\n  inject_budget_chars: 1000\n",
       "utf8",
     );
     // Many short lines: the budgeter cuts at a line, so a one-line body
-    // would be trimmed to its heading under any cap and prove nothing.
+    // would be dropped under any cap and prove nothing.
     const lines = Array.from({ length: 200 }, (_, i) => `- scoped rule line ${i}`);
     writeScoped("project", "proj-x", `${MARKER}\n${lines.join("\n")}`);
     const context = injected(await runHook({ hook_event_name: "SessionStart", cwd: projectX }));
+    // The default cap (2000) is clamped to what the budget leaves once the
+    // header and the notices are reserved.
     const clamped = readScopedRules(
       vault,
       { project: "proj-x", harness: null, host: null },
-      { maxChars: 500 },
+      { maxChars: 1000 - SCOPED_RULES_HEADER.length - SCOPED_RULES_NOTICE_RESERVE },
     );
     expect(clamped.text).toContain(MARKER);
+    expect(clamped.text.length).toBeLessThanOrEqual(1000);
     expect(context).toContain(clamped.text);
+  });
+
+  test("the header and the notices ride inside a tight injection budget", async () => {
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\nactive:\n  inject_budget_chars: 500\n  scoped_rules_max_chars: 200\n",
+      "utf8",
+    );
+    writeScoped("project", "proj-x", `${MARKER} ${"x".repeat(5000)}`);
+    const lines = Array.from({ length: 60 }, (_, i) => `- \`pref-${i}\` — rule body number ${i}`);
+    const longActive = `---\nkind: brain-active\ngenerated_at: 2026-05-15T10:00:00Z\n---\n\n${ACTIVE_HEAD}\n\n## Confirmed (60)\n\n${lines.join("\n")}\n`;
+    writeFileSync(join(vault, "Brain", "active.md"), longActive, "utf8");
+
+    const context = injected(await runHook({ hook_event_name: "SessionStart", cwd: projectX }));
+
+    const scopedStart = context.indexOf(SCOPED_RULES_HEADER);
+    const activeStart = context.indexOf(ACTIVE_HEAD);
+    expect(scopedStart).toBeGreaterThan(-1);
+    const scopedBlock = context.slice(scopedStart, activeStart).trimEnd();
+    // A one-line rule that cannot fit is dropped whole, never left as a
+    // bare heading, and the notice says so.
+    expect(scopedBlock).not.toContain("### Project: proj-x");
+    expect(scopedBlock).toContain("1 file(s) dropped");
+    expect(scopedBlock.length).toBeLessThanOrEqual(500);
+    // The budgeted output (the constitution excluded) stays within the
+    // budget plus the memory body's own truncation notice.
+    const budgeted = context.slice(scopedStart);
+    const trimmedActive = longActive.slice(longActive.indexOf(ACTIVE_HEAD)).trim();
+    const activeBudget = 500 - scopedBlock.length;
+    const activeOut = budgetActiveBody(trimmedActive, activeBudget);
+    expect(budgeted.endsWith(activeOut)).toBe(true);
+    const activeNotice = activeOut.slice(activeOut.lastIndexOf("\n\n") + 2);
+    expect(budgeted.length).toBeLessThanOrEqual(500 + "\n\n".length + activeNotice.length);
+  });
+
+  test("a degraded run keeps the scoped-rules item in the receipt", async () => {
+    writeScoped("project", "proj-x", MARKER);
+    await runHook({ hook_event_name: "SessionStart", cwd: projectX });
+    rmSync(join(vault, "Brain", "active.md"));
+    mkdirSync(join(vault, "Brain", "active.md"));
+    const context = injected(await runHook({ hook_event_name: "SessionStart", cwd: projectX }));
+    expect(context).toContain(MARKER);
+    const receipts = injectionReceipts();
+    expect(receipts.length).toBe(2);
+    const degraded = receipts[1]!.payload;
+    const injection = degraded["injection"] as Record<string, unknown>;
+    expect(injection["loader_source"]).not.toBe("fresh");
+    const items = degraded["items"] as ReadonlyArray<Record<string, unknown>>;
+    expect(items.map((item) => item["id"])).toEqual(["standing-rules", "scoped-rules"]);
+  });
+
+  test("with no active.md the receipt still records the scoped characters", async () => {
+    rmSync(join(vault, "Brain", "active.md"));
+    writeScoped("project", "proj-x", MARKER);
+    const context = injected(await runHook({ hook_event_name: "SessionStart", cwd: projectX }));
+    const expected = readScopedRules(vault, { project: "proj-x", harness: null, host: null });
+    expect(context).toContain(expected.text);
+    const receipts = injectionReceipts();
+    expect(receipts.length).toBe(1);
+    const budget = receipts[0]!.payload["budget"] as Record<string, unknown>;
+    expect(budget["scoped_rules_chars"]).toBe(expected.text.length);
   });
 });

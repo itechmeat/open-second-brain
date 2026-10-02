@@ -155,6 +155,32 @@ export const SCOPED_RULES_HEADER =
 export const SCOPED_RULES_HOST_UNREADABLE_NOTICE =
   "Host-scoped rules were not applied: this device's id could not be read. Run o2b brain doctor for the cause.";
 
+/** The notice appended when the cap dropped or trimmed a file; integers only. */
+function scopedTruncationNotice(report: SectionTruncationReport): string {
+  return (
+    `_Scoped rules truncated to the configured cap: kept ${report.keptChars} of ` +
+    `${report.totalChars} characters, ${report.droppedKeys.length} file(s) dropped._`
+  );
+}
+
+/** Blank line between the header, the sections and each notice. */
+const BLOCK_SEPARATOR = "\n\n";
+
+/**
+ * Characters a caller reserves beside {@link SCOPED_RULES_HEADER} when it
+ * fits the whole block into a budget: the separators, the longest
+ * truncation notice and the host notice. The cap covers the sections only.
+ */
+export const SCOPED_RULES_NOTICE_RESERVE =
+  3 * BLOCK_SEPARATOR.length +
+  scopedTruncationNotice({
+    droppedKeys: SCOPED_RULE_AXES,
+    keptChars: Number.MAX_SAFE_INTEGER,
+    totalChars: Number.MAX_SAFE_INTEGER,
+    trimmed: true,
+  }).length +
+  SCOPED_RULES_HOST_UNREADABLE_NOTICE.length;
+
 // ---------- Reader ----------
 
 /** The resolved value per axis; `null` matches nothing (fail closed). */
@@ -181,7 +207,10 @@ export interface ScopedRules {
 }
 
 export interface ReadScopedRulesOptions {
-  /** Character cap over the per-file sections; header and notices are free. */
+  /**
+   * Character cap over the per-file sections; the header and the notices
+   * ride on top (see {@link SCOPED_RULES_NOTICE_RESERVE}).
+   */
   readonly maxChars?: number;
   /** The device id could not be read (`resolveHostScope().unreadable`). */
   readonly hostUnreadable?: boolean;
@@ -223,7 +252,7 @@ export function readScopedRules(
       axis,
       key,
       path,
-      section: { key: `${axis}:${key}`, priority, text: `${heading}\n\n${body}` },
+      section: { key: `${axis}:${key}`, priority, text: `${heading}\n\n${body}`, headLines: 1 },
     });
   });
 
@@ -239,10 +268,7 @@ export function readScopedRules(
     {
       notice: (r) => {
         report = r;
-        return (
-          `_Scoped rules truncated to the configured cap: kept ${r.keptChars} of ` +
-          `${r.totalChars} characters, ${r.droppedKeys.length} file(s) dropped._`
-        );
+        return scopedTruncationNotice(r);
       },
     },
   );
@@ -258,7 +284,11 @@ export function readScopedRules(
   const parts = [SCOPED_RULES_HEADER];
   if (budget.body !== "") parts.push(budget.body);
   if (hostNotice) parts.push(SCOPED_RULES_HOST_UNREADABLE_NOTICE);
-  return Object.freeze({ identity, files: Object.freeze(files), text: parts.join("\n\n") });
+  return Object.freeze({
+    identity,
+    files: Object.freeze(files),
+    text: parts.join(BLOCK_SEPARATOR),
+  });
 }
 
 /**

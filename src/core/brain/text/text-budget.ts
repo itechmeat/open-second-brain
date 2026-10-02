@@ -31,6 +31,12 @@ export interface BudgetSection {
   readonly priority: number;
   /** Rendered section text, headers included. */
   readonly text: string;
+  /**
+   * Leading lines (a heading) that never stand alone: a tail trim that
+   * would keep no more than these lines drops the section instead, so a
+   * heading never claims a section with nothing under it. Default 0.
+   */
+  readonly headLines?: number;
 }
 
 /**
@@ -119,16 +125,17 @@ function leastImportantIndex(kept: ReadonlyArray<KeptSection>): number {
 /**
  * Trim `text` from the tail at line boundaries so the result fits
  * `maxChars`. Trailing blank lines left behind by the cut are removed.
- * Returns null when not even the first line fits.
+ * Returns null when not even the first line fits, or when all that would
+ * be left is the first `headLines` lines.
  */
-function trimToLines(text: string, maxChars: number): string | null {
+function trimToLines(text: string, maxChars: number, headLines = 0): string | null {
   if (text.length <= maxChars) return text;
   const lines = text.split("\n");
   while (lines.length > 0) {
     lines.pop();
     while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
     const candidate = lines.join("\n");
-    if (candidate.length === 0) return null;
+    if (candidate.length === 0 || lines.length <= headLines) return null;
     if (candidate.length <= maxChars) return candidate;
   }
   return null;
@@ -164,7 +171,7 @@ export function applySectionBudget(
   // not even its first line fits.
   if (kept.length === 1 && joinedLength(kept) > budget) {
     const last = kept[0]!;
-    const trimmed = trimToLines(last.text, budget);
+    const trimmed = trimToLines(last.text, budget, last.headLines);
     if (trimmed === null) {
       droppedKeys.push(last.key);
       kept.splice(0, 1);

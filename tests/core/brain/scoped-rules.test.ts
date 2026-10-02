@@ -27,6 +27,7 @@ import {
   SCOPED_RULES_MAX_CHARS_DEFAULT,
   SCOPED_RULES_MAX_CHARS_MAX,
   SCOPED_RULES_MAX_CHARS_MIN,
+  SCOPED_RULES_NOTICE_RESERVE,
   scopedRuleKey,
   type ScopedRuleAxis,
   type ScopedRuleIdentity,
@@ -285,6 +286,30 @@ describe("readScopedRules", () => {
       { maxChars: 200, hostUnreadable: true },
     );
     for (const marker of vaultMarkers(vault)) expect(rules.text).not.toContain(marker);
+  });
+
+  test("a section whose body cannot fit is dropped whole, never left as a bare heading", () => {
+    const vault = vaultWith({ "project/x": `zzp ${"x".repeat(5000)}` });
+    const rules = readScopedRules(vault, { ...NO_SCOPE, project: "x" }, { maxChars: 200 });
+    expect(rules.text).not.toContain("### Project: x");
+    expect(rules.text).toContain("1 file(s) dropped");
+    expect(rules.files).toEqual([
+      { axis: "project", key: "x", path: "Brain/standing-rules/project/x.md", truncated: true },
+    ]);
+  });
+
+  test("the notice reserve covers every notice the block can carry", () => {
+    // Every axis matched, the cap at its maximum and an unreadable device id.
+    const body = Array.from({ length: 4000 }, (_, i) => `line ${i}`).join("\n");
+    const vault = vaultWith({ "project/x": body, "harness/codex": body, "host/aaaa0001": body });
+    const rules = readScopedRules(
+      vault,
+      { project: "x", harness: "codex", host: null },
+      { maxChars: SCOPED_RULES_MAX_CHARS_MAX, hostUnreadable: true },
+    );
+    expect(rules.text.length).toBeLessThanOrEqual(
+      SCOPED_RULES_HEADER.length + SCOPED_RULES_MAX_CHARS_MAX + SCOPED_RULES_NOTICE_RESERVE,
+    );
   });
 
   test("the default cap is the documented default", () => {
