@@ -19,9 +19,15 @@ import {
   type TriggerQueueFailures,
 } from "../../core/brain/triggers/store.ts";
 import { buildTimelineIndex } from "../../core/brain/temporal/build-index.ts";
-import { collectSourcePointers } from "../../core/brain/temporal/period-common.ts";
+import {
+  collectSourcePointers,
+  collectTransitions,
+  computeVaultDelta,
+  countByKind,
+  type PeriodStatusTransition,
+} from "../../core/brain/temporal/period-common.ts";
 import { selectEvents } from "../../core/brain/temporal/select-events.ts";
-import type { TimelineIndex } from "../../core/brain/temporal/types.ts";
+import type { TemporalEvent, TimelineIndex } from "../../core/brain/temporal/types.ts";
 import {
   readerRefView,
   type ArtifactRef,
@@ -250,9 +256,10 @@ function recordRefs(id: string | undefined): ReadonlyArray<ArtifactRef> {
  * Status transitions, retirements and contradictions are dropped when a
  * record they name is withheld. Source pointers are deduplicated
  * artifacts with no record left on them, so they are recollected from
- * the window's evidence events the reader may see: an artifact cited
- * only by evidence on a withheld preference is absent. The counts
- * (`events_by_kind`, `vault_delta`) are not recomputed.
+ * the window's events the reader may see: an artifact cited only by
+ * evidence on a withheld preference is absent. The counts
+ * (`events_by_kind`, `vault_delta`) are recomputed from the same
+ * selection, so a withheld record moves no count either.
  */
 function periodRowsAtReach(
   ctx: ServerContext,
@@ -261,17 +268,41 @@ function periodRowsAtReach(
 ): PeriodRowsView | null {
   if (contextReach(ctx) === TRANSPORT_REACH.local) return null;
   const refs = readerRefView(ctx.vault, readableAtContextReach(ctx));
-  const evidence = selectEvents(index, window).filter(
-    (ev) =>
-      ev.kind !== BRAIN_LOG_EVENT_KIND.applyEvidence ||
-      refs.row(ev.artifact, ...recordRefs(ev.prefId)),
-  );
-  return { refs, sourcePointers: collectSourcePointers(evidence) };
+  const events = selectEvents(index, window).filter((ev) => eventVisible(refs, ev));
+  return {
+    refs,
+    sourcePointers: collectSourcePointers(events),
+    eventsByKind: countByKind(events),
+    vaultDelta: (transitions) => computeVaultDelta(events, transitions),
+  };
+}
+
+/**
+ * May a reader see this event, and so have it counted? An evidence event
+ * is judged by its artifact and its record; a dream by the transitions
+ * it names, kept while one of them survives (a vault that never had the
+ * withheld record still logged the dream for the others); any other
+ * event by the record it scopes to.
+ */
+function eventVisible(refs: ArtifactRefView, ev: TemporalEvent): boolean {
+  if (ev.kind === BRAIN_LOG_EVENT_KIND.applyEvidence) {
+    return refs.row(ev.artifact, ...recordRefs(ev.prefId));
+  }
+  if (ev.kind === BRAIN_LOG_EVENT_KIND.dream) {
+    const transitions = collectTransitions([ev]);
+    return transitions.length === 0 || refs.keep(transitions, transitionRefs).length > 0;
+  }
+  return refs.row(...recordRefs(ev.prefId));
 }
 
 interface PeriodRowsView {
   readonly refs: ArtifactRefView;
   readonly sourcePointers: ReadonlyArray<string>;
+  readonly eventsByKind: ReturnType<typeof countByKind>;
+  /** The window's delta over the visible events and the transitions kept for the reader. */
+  readonly vaultDelta: (
+    transitions: ReadonlyArray<PeriodStatusTransition>,
+  ) => ReturnType<typeof computeVaultDelta>;
 }
 
 /** A transition or retirement row: the record id and the link it was logged with. */
@@ -312,14 +343,15 @@ async function toolBrainDailyBrief(
     offsetHours: cfg.daily_window_offset_hours,
   });
   const atReach = periodRowsAtReach(ctx, index, brief.window);
+  const statusTransitions =
+    atReach?.refs.keep(brief.statusTransitions, transitionRefs) ?? brief.statusTransitions;
   const envelope: Record<string, unknown> = {
     vault_path: vaultPathField(ctx),
     date: brief.date,
     window: brief.window,
-    events_by_kind: brief.eventsByKind,
-    status_transitions:
-      atReach?.refs.keep(brief.statusTransitions, transitionRefs) ?? brief.statusTransitions,
-    vault_delta: brief.vaultDelta,
+    events_by_kind: atReach?.eventsByKind ?? brief.eventsByKind,
+    status_transitions: statusTransitions,
+    vault_delta: atReach?.vaultDelta(statusTransitions) ?? brief.vaultDelta,
     source_pointers: atReach?.sourcePointers ?? brief.sourcePointers,
     generated_at: brief.generatedAt,
   };
@@ -360,17 +392,18 @@ async function toolBrainWeeklySynthesis(
     since: synth.windowStart,
     until: synth.windowEnd,
   });
+  const statusTransitions =
+    atReach?.refs.keep(synth.statusTransitions, transitionRefs) ?? synth.statusTransitions;
   const envelope: Record<string, unknown> = {
     vault_path: vaultPathField(ctx),
     window_start: synth.windowStart,
     window_end: synth.windowEnd,
-    events_by_kind: synth.eventsByKind,
-    status_transitions:
-      atReach?.refs.keep(synth.statusTransitions, transitionRefs) ?? synth.statusTransitions,
+    events_by_kind: atReach?.eventsByKind ?? synth.eventsByKind,
+    status_transitions: statusTransitions,
     retired: atReach?.refs.keep(synth.retired, transitionRefs) ?? synth.retired,
     contradictions:
       atReach?.refs.keep(synth.contradictions, contradictionRefs) ?? synth.contradictions,
-    vault_delta: synth.vaultDelta,
+    vault_delta: atReach?.vaultDelta(statusTransitions) ?? synth.vaultDelta,
     source_pointers: atReach?.sourcePointers ?? synth.sourcePointers,
     generated_at: synth.generatedAt,
   };

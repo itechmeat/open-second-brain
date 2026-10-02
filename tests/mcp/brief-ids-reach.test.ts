@@ -14,9 +14,8 @@
  * window; vault B never had either. Both carry the same public
  * preference with its own evidence and dream confirmation, so a remote
  * answer is never empty. The counts (`events_by_kind`, `vault_delta`)
- * still cover every event and are masked by the normaliser: that is the
- * residual the registry row states. A server with no reach minted is a
- * remote caller.
+ * are recomputed from the events the caller may see, so they are
+ * compared unmasked. A server with no reach minted is a remote caller.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -55,8 +54,6 @@ const OLDER_AGE_MS = 3 * DAY_MS;
 const STAMP_RE = /\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?Z?)?/g;
 /** The opaque per-vault handle `vault_path` carries: it differs between any two vaults. */
 const VAULT_HANDLE_RE = /vault:\/\/[0-9a-f]+/g;
-/** The count fields that still cover every event below local reach (the stated residual). */
-const COUNT_KEYS = Object.freeze(["events_by_kind", "vault_delta"]);
 
 const bases: string[] = [];
 const savedConfig = process.env["OPEN_SECOND_BRAIN_CONFIG"];
@@ -140,7 +137,10 @@ function fixture(withPrivate: boolean): Fixture {
   confirmed(vault, SHARED_SLUG);
   evidence(vault, SHARED_SLUG, recent, "applied");
   evidence(vault, SHARED_SLUG, older, "applied");
-  dream(vault, recent, [`pref-${SHARED_SLUG}`], []);
+  // One dream confirming the public preference, and in vault A the reserved
+  // one too: the event is still counted once, as vault B counts it.
+  const sharedDream = [`pref-${SHARED_SLUG}`];
+  dream(vault, recent, withPrivate ? [...sharedDream, `pref-${PRIVATE_SLUG}`] : sharedDream, []);
   if (withPrivate) {
     confirmed(vault, PRIVATE_SLUG);
     reserve(vault, PRIVATE_PATH);
@@ -200,11 +200,9 @@ async function brief(f: Fixture, view: View, reach?: TransportReach) {
   return result.structuredContent as Record<string, unknown>;
 }
 
-/** Vault paths, handles and instants replaced, and the stated count residual masked. */
+/** Vault paths, handles and instants replaced; the counts are compared as they are. */
 function normalise(f: Fixture, envelope: Record<string, unknown>): string {
-  const masked = { ...envelope };
-  for (const key of COUNT_KEYS) if (key in masked) masked[key] = "<counts>";
-  let out = JSON.stringify(masked);
+  let out = JSON.stringify(envelope);
   for (const [path, label] of [
     [f.vault, "<V>"],
     [f.base, "<B>"],
@@ -223,7 +221,11 @@ describe("brain_brief daily and weekly at the caller's reach", () => {
       const remoteWithheld = await brief(withheld, view);
       const remoteAbsent = await brief(absent, view);
       expect(normalise(withheld, remoteWithheld)).toBe(normalise(absent, remoteAbsent));
-      // Not vacuous: the public preference and its evidence are named.
+      // Not vacuous: the public preference, its evidence and its counts are named.
+      expect(remoteWithheld["events_by_kind"]).toMatchObject({
+        [BRAIN_LOG_EVENT_KIND.applyEvidence]: view === "daily" ? 1 : 2,
+        [BRAIN_LOG_EVENT_KIND.dream]: 1,
+      });
       const text = JSON.stringify(remoteWithheld);
       expect(text).toContain(`pref-${SHARED_SLUG}`);
       expect(text).toContain(`Notes/${SHARED_SLUG}-applied`);

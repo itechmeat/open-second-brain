@@ -511,9 +511,11 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "and view=weekly answer at the caller's reach for the ids they name - a status " +
       "transition, retirement or contradiction naming a record the caller cannot read (under " +
       "its pref- or ret- spelling) is dropped through readerRefView, source_pointers are " +
-      "recollected from the evidence events the caller may see, and no report snapshot is " +
-      "taken or delta shown. Residual: their events_by_kind and vault_delta counts, and the " +
-      "monthly, operator and today views, still count over the whole Brain layer.",
+      "recollected from the evidence events the caller may see, events_by_kind and vault_delta " +
+      "are recomputed from that same event selection (evidence on a withheld record, a dream " +
+      "whose every transition is withheld and any other event scoped to a withheld record are " +
+      "not counted), and no report snapshot is taken or delta shown. Residual: the monthly, " +
+      "operator and today views still count over the whole Brain layer.",
   },
   {
     surface: "brain_pre_compress_pack",
