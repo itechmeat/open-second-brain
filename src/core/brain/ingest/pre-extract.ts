@@ -46,9 +46,11 @@ export interface CodeEntitySeed {
 
 /**
  * A structural relationship surfaced as an edge seed. `imports` runs from the
- * source path to a module specifier; `inherits` runs from a subclass to a base
- * class (TS `extends`/`implements`, Python base classes); `uses` runs from a
- * `.tsx`/`.jsx` source path to a JSX component it renders.
+ * source path to a module specifier (a Terraform module `source` included);
+ * `inherits` runs from a subclass to a base class (TS `extends`/`implements`,
+ * Python base classes); `uses` runs from a `.tsx`/`.jsx` source path to a JSX
+ * component it renders; `depends_on` and `references` run from a Terraform
+ * address to an address it lists in `depends_on` or cites.
  *
  * `resolvedTo` is present only when the caller supplied the ingested-file set
  * and a relative import specifier probed to exactly one ingested file; it
@@ -56,7 +58,7 @@ export interface CodeEntitySeed {
  * probe leaves the seed with its raw specifier and no field.
  */
 export interface CodeEdgeSeed {
-  readonly kind: "imports" | "inherits" | "uses";
+  readonly kind: "imports" | "inherits" | "uses" | "depends_on" | "references";
   readonly from: string;
   readonly to: string;
   readonly resolvedTo?: string;

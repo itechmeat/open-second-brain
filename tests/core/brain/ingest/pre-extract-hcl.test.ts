@@ -185,3 +185,211 @@ describe("preExtractCodeStructure - Terraform family", () => {
     expect(res.edges).toEqual([{ kind: "imports", from: "src/app.ts", to: "./main" }]);
   });
 });
+
+describe("preExtractCodeStructure - Terraform edges", () => {
+  const EDGES_TF = lines(
+    'variable "env" {}',
+    "locals {",
+    '  name = "${var.env}-app"',
+    "  tags = merge(local.base, {",
+    "    env = var.env",
+    "  })",
+    '  base = { owner = "core" }',
+    "}",
+    'data "aws_iam_policy_document" "assume" {}',
+    'resource "aws_iam_role" "app" {',
+    "  name               = local.name",
+    "  assume_role_policy = data.aws_iam_policy_document.assume.json",
+    "}",
+    'resource "aws_lambda_function" "app" {',
+    "  role       = aws_iam_role.app.arn",
+    "  subnet_ids = module.vpc.private_subnets",
+    "  depends_on = [aws_iam_role.app, module.vpc]",
+    "}",
+    'module "vpc" {',
+    '  source = "./modules/vpc"',
+    "  name   = local.name",
+    "}",
+    'output "fn" {',
+    "  value = aws_lambda_function.app.arn",
+    "}",
+  );
+
+  test("single-line depends_on lists become depends_on edges", () => {
+    const res = asSuccess(preExtractCodeStructure("app/main.tf", EDGES_TF));
+    expect(res.edges.filter((e) => e.kind === "depends_on")).toEqual([
+      { kind: "depends_on", from: "aws_lambda_function.app", to: "aws_iam_role.app" },
+      { kind: "depends_on", from: "aws_lambda_function.app", to: "module.vpc" },
+    ]);
+  });
+
+  test("var, local, module, data and same-file resource citations become references edges", () => {
+    const res = asSuccess(preExtractCodeStructure("app/main.tf", EDGES_TF));
+    expect(res.edges.filter((e) => e.kind === "references")).toEqual([
+      { kind: "references", from: "aws_iam_role.app", to: "data.aws_iam_policy_document.assume" },
+      { kind: "references", from: "aws_iam_role.app", to: "local.name" },
+      { kind: "references", from: "aws_lambda_function.app", to: "aws_iam_role.app" },
+      { kind: "references", from: "aws_lambda_function.app", to: "module.vpc" },
+      { kind: "references", from: "local.name", to: "var.env" },
+      { kind: "references", from: "local.tags", to: "local.base" },
+      { kind: "references", from: "local.tags", to: "var.env" },
+      { kind: "references", from: "module.vpc", to: "local.name" },
+      { kind: "references", from: "output.fn", to: "aws_lambda_function.app" },
+    ]);
+  });
+
+  test("a bare type.name that is not a resource declared in the file is not a reference", () => {
+    const res = asSuccess(
+      preExtractCodeStructure(
+        "app/main.tf",
+        lines(
+          'resource "aws_instance" "web" {',
+          "  provider = aws.west",
+          "  count    = length(var.zones)",
+          "  ami      = aws_ami.other.id",
+          "  index    = count.index",
+          "}",
+        ),
+      ),
+    );
+    expect(res.edges).toEqual([{ kind: "references", from: "aws_instance.web", to: "var.zones" }]);
+  });
+
+  test("braces and citations inside strings and heredocs never count", () => {
+    const res = asSuccess(
+      preExtractCodeStructure(
+        "app/main.tf",
+        lines(
+          'resource "aws_iam_policy" "p" {',
+          '  description = "a { brace and var.not_a_ref in text"',
+          "  policy = <<-EOT",
+          "    {",
+          '      "Resource": "${var.in_heredoc}"',
+          "    }",
+          "  EOT",
+          '  name = "escaped \\" quote { still a string"',
+          "}",
+          'variable "after" {}',
+        ),
+      ),
+    );
+    expect(res.entities).toEqual([
+      { kind: "resource", name: "aws_iam_policy.p" },
+      { kind: "variable", name: "var.after" },
+    ]);
+    expect(res.edges).toEqual([]);
+  });
+
+  test("comments are skipped, including block comments and trailing comments", () => {
+    const res = asSuccess(
+      preExtractCodeStructure(
+        "app/main.tf",
+        lines(
+          '/* variable "ghost" {',
+          "}",
+          "*/",
+          '# module "ghost" {',
+          '// output "ghost" {',
+          'variable "real" { # a { brace in a comment',
+          "  type = string // and var.commented here",
+          "}",
+          'output "o" {',
+          "  value = var.real /* var.hidden */",
+          "}",
+        ),
+      ),
+    );
+    expect(res.entities).toEqual([
+      { kind: "output", name: "output.o" },
+      { kind: "variable", name: "var.real" },
+    ]);
+    expect(res.edges).toEqual([{ kind: "references", from: "output.o", to: "var.real" }]);
+  });
+
+  test("a nested provisioner source is not a module source", () => {
+    const res = asSuccess(
+      preExtractCodeStructure(
+        "app/main.tf",
+        lines(
+          'module "m" {',
+          '  source = "./m"',
+          '  provisioner "file" {',
+          '    source = "nested/file.txt"',
+          "  }",
+          "}",
+        ),
+      ),
+    );
+    expect(res.edges.filter((e) => e.kind === "imports")).toEqual([
+      { kind: "imports", from: "app/main.tf", to: "./m" },
+    ]);
+  });
+
+  test("a .tfvars file yields variable names, never values", () => {
+    const value = fakeCredential("tfvars", "-value-", "7c2e");
+    const res = asSuccess(
+      preExtractCodeStructure(
+        "envs/prod.tfvars",
+        lines(
+          `db_password = "${value}"`,
+          "zones = [",
+          '  "a",',
+          "]",
+          "tags = {",
+          '  owner = "core"',
+          "}",
+          "notes = <<EOT",
+          "inner = 1",
+          "EOT",
+        ),
+      ),
+    );
+    expect(res.entities).toEqual([
+      { kind: "variable", name: "var.db_password" },
+      { kind: "variable", name: "var.notes" },
+      { kind: "variable", name: "var.tags" },
+      { kind: "variable", name: "var.zones" },
+    ]);
+    expect(res.edges).toEqual([]);
+    expect(JSON.stringify(res)).not.toContain(value);
+  });
+
+  test("the output is deterministic", () => {
+    const a = JSON.stringify(preExtractCodeStructure("app/main.tf", EDGES_TF));
+    const b = JSON.stringify(preExtractCodeStructure("app/main.tf", EDGES_TF));
+    expect(a).toBe(b);
+  });
+});
+
+describe("pre-extract-hcl module comment", () => {
+  test("names every out-of-scope construct", async () => {
+    const source = await Bun.file(
+      new URL("../../../../src/core/brain/ingest/pre-extract-hcl.ts", import.meta.url),
+    ).text();
+    const docblock = source.slice(0, source.indexOf("*/"));
+    for (const construct of [
+      ".hcl",
+      ".tf.json",
+      "attribute values",
+      "lifecycle",
+      "dynamic",
+      "provisioner",
+      "connection",
+      "multi-line `depends_on`",
+      "heredoc",
+      "template files",
+      "for_each",
+      "count",
+      "moved",
+      "import",
+      "check",
+      "removed",
+      "terraform {}",
+      "required_providers",
+      "local module `source`",
+      "split across lines",
+    ]) {
+      expect(docblock).toContain(construct);
+    }
+  });
+});
