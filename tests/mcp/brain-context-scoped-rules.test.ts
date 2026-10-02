@@ -179,7 +179,10 @@ describe("brain_context scoped rules - project axis", () => {
     const content = out["content"] as string;
     const block = content.slice(content.indexOf(SCOPED_RULES_HEADER));
     expect(block).not.toContain(vault);
-    expect(JSON.stringify(out["scoped_rules"])).not.toContain(vault);
+    // JSON escapes a Windows backslash: compare against the escaped form too.
+    const field = JSON.stringify(out["scoped_rules"]);
+    expect(field).not.toContain(vault);
+    expect(field).not.toContain(JSON.stringify(vault).slice(1, -1));
   });
 });
 
@@ -260,5 +263,32 @@ describe("brain_context scoped rules - remote reach", () => {
     const bare = normalised(await callContext({ harness: "cursor" }));
     expect(withFile).toBe(bare);
     expect(withoutFile).toBe(bare);
+  });
+});
+
+describe("brain_context scoped rules - gaps closed by the test audit", () => {
+  test("the configured cap trims the block and marks the file truncated", async () => {
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\nactive:\n  scoped_rules_max_chars: 200\n",
+    );
+    writeScoped("project", "proj-x", `${MARKER} ${"x".repeat(5000)}`);
+    const out = await callContext({ reach: LOCAL, workspaceDir: projectX });
+    expect(out["content"] as string).toContain("_Scoped rules truncated to the configured cap:");
+    expect((out["scoped_rules"] as ScopedRulesKey).files).toEqual([
+      { path: "Brain/standing-rules/project/proj-x.md", axis: "project", truncated: true },
+    ]);
+  });
+
+  test("remote reach with every axis matching leaves no trace", async () => {
+    process.env["O2B_DEVICE_ID"] = "aaaa0001";
+    writeScoped("project", "proj-x", MARKER);
+    writeScoped("host", "aaaa0001", MARKER);
+    writeScoped("harness", "cursor", MARKER);
+    const runtime = { workspaceDir: projectX, harness: "cursor" as const };
+    const withFiles = normalised(await callContext(runtime));
+    rmSync(join(vault, "Brain", "standing-rules"), { recursive: true, force: true });
+    expect(withFiles).not.toContain("zzscopedmarkerzz");
+    expect(withFiles).toBe(normalised(await callContext(runtime)));
   });
 });

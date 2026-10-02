@@ -143,6 +143,14 @@ function vaultMarkers(vault: string): string[] {
   return [vault, posixVault];
 }
 
+/** The rules read for project `x` whose file is `length` characters, at the default cap. */
+function projectRuleOf(length: number): ReturnType<typeof readScopedRules> {
+  return readScopedRules(vaultWith({ "project/x": "a".repeat(length) }), {
+    ...NO_SCOPE,
+    project: "x",
+  });
+}
+
 describe("readScopedRules", () => {
   test("renders only the file matching the resolved value, after the header", () => {
     const vault = vaultWith({
@@ -269,9 +277,19 @@ describe("readScopedRules", () => {
   });
 
   test("the default cap is the documented default", () => {
-    const body = "a\n".repeat(SCOPED_RULES_MAX_CHARS_DEFAULT);
-    const vault = vaultWith({ "project/x": body });
-    const rules = readScopedRules(vault, { ...NO_SCOPE, project: "x" });
-    expect(rules.files[0]?.truncated).toBe(true);
+    // The section is "### Project: x\n\n" (16 characters) plus the body:
+    // 100 under the default fits, 100 over it is cut. A default moved by
+    // more than 100 either way flips one of the two.
+    expect(projectRuleOf(SCOPED_RULES_MAX_CHARS_DEFAULT - 116).files[0]?.truncated).toBe(false);
+    expect(projectRuleOf(SCOPED_RULES_MAX_CHARS_DEFAULT + 100).files[0]?.truncated).toBe(true);
+  });
+
+  test("a resolved value that spells a path never leaves its axis directory", () => {
+    const vault = vaultWith({ "project/etc": "zzinsidezz" });
+    writeFileSync(join(vault, "Brain", "etc.md"), "zzoutsidezz");
+    const rules = readScopedRules(vault, { ...NO_SCOPE, project: "../../etc" });
+    expect(rules.text).toContain("zzinsidezz");
+    expect(rules.text).not.toContain("zzoutsidezz");
+    expect(rules.files.map((file) => file.path)).toEqual(["Brain/standing-rules/project/etc.md"]);
   });
 });

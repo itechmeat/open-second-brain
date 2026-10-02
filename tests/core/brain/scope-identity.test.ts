@@ -51,6 +51,16 @@ describe("resolveProjectScope", () => {
     expect(resolveProjectScope(broken)).toBeNull();
   });
 
+  test("a project whose name has no Latin character still keys", () => {
+    const root = mkTemp("o2b-scope-script-");
+    const vault = join(root, "vault");
+    const project = join(root, "Проект Альфа");
+    mkdirSync(vault, { recursive: true });
+    mkdirSync(project, { recursive: true });
+    writeVaultPointer(project, vault);
+    expect(resolveProjectScope(project)).toBe("проект-альфа");
+  });
+
   test("a directory whose name has no letter or digit gives null", () => {
     const root = mkTemp("o2b-scope-dashes-");
     const vault = join(root, "vault");

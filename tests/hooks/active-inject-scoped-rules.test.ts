@@ -233,3 +233,66 @@ describe("active-inject scoped rules - budget", () => {
     expect(budget["scoped_rules_chars"]).toBe(0);
   });
 });
+
+describe("active-inject scoped rules - gaps closed by the test audit", () => {
+  test("a cached memory body never replays another project's rules", async () => {
+    // Prime the fail-open cache in project X, then break the memory layer
+    // (a directory in active.md's place) so project Y is served the cache.
+    // A scoped block that rode inside the cached body would replay X here.
+    writeScoped("project", "proj-x", MARKER);
+    await runHook({ hook_event_name: "SessionStart", cwd: projectX });
+    rmSync(join(vault, "Brain", "active.md"));
+    mkdirSync(join(vault, "Brain", "active.md"));
+    const context = injected(await runHook({ hook_event_name: "SessionStart", cwd: projectY }));
+    expect(context).toContain(ACTIVE_HEAD);
+    expect(context).not.toContain(MARKER);
+  });
+
+  test("a payload cwd outside every linked project matches no project file", async () => {
+    const unlinked = join(tmp, "unlinked", "deep");
+    mkdirSync(unlinked, { recursive: true });
+    const payload = { hook_event_name: "SessionStart", cwd: unlinked };
+    const path = writeScoped("project", "unlinked", MARKER);
+    const withFile = await runHook(payload);
+    rmSync(path);
+    expect(withFile).not.toContain(MARKER);
+    expect(withFile).toBe(await runHook(payload));
+  });
+
+  test("an unreadable device id with a host file ends the block with the notice", async () => {
+    writeScoped("host", "aaaa0001", MARKER);
+    const configDir = join(configHome, "config-is-a-directory");
+    mkdirSync(configDir, { recursive: true });
+    const context = injected(
+      await runHook(
+        { hook_event_name: "SessionStart", cwd: projectY },
+        { O2B_DEVICE_ID: "NOT A VALID ID", OPEN_SECOND_BRAIN_CONFIG: configDir },
+      ),
+    );
+    expect(context).toContain(
+      "Host-scoped rules were not applied: this device's id could not be read.",
+    );
+    expect(context).not.toContain(MARKER);
+    expect(context).not.toContain(configDir);
+  });
+
+  test("the scoped cap never exceeds the injection budget", async () => {
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\nactive:\n  inject_budget_chars: 500\n",
+      "utf8",
+    );
+    // Many short lines: the budgeter cuts at a line, so a one-line body
+    // would be trimmed to its heading under any cap and prove nothing.
+    const lines = Array.from({ length: 200 }, (_, i) => `- scoped rule line ${i}`);
+    writeScoped("project", "proj-x", `${MARKER}\n${lines.join("\n")}`);
+    const context = injected(await runHook({ hook_event_name: "SessionStart", cwd: projectX }));
+    const clamped = readScopedRules(
+      vault,
+      { project: "proj-x", harness: null, host: null },
+      { maxChars: 500 },
+    );
+    expect(clamped.text).toContain(MARKER);
+    expect(context).toContain(clamped.text);
+  });
+});
