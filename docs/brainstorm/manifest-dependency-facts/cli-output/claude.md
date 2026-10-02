@@ -6,7 +6,7 @@
   - Con: scan.ts absorbs four parsers plus status handling and stops being a tree walker; the Bun-only TOML call sits in a file other builds might one day bundle.
   - Con: line-filtering a compiled digest is lossy and fragile; three readers re-implement the same filter and the A/B tests must cover each.
   - Con: a frontmatter rewrite exception weakens an invariant generate.ts documents at length; byte identity depends on the key merge being perfectly stable.
-  - Con: Terraform module `source` redaction becomes a one-off in the new branch, leaving the TS specifier leak in place unless fixed separately.
+  - Con: Terraform module `source` redaction becomes a one-off in the new branch, leaving TypeScript specifiers on the older redaction unless changed separately.
 - **Complexity**: medium
 - **Risk**: medium
 
