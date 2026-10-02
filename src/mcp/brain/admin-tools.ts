@@ -28,6 +28,7 @@ import { loadSchemaPack } from "../../core/brain/schema-pack.ts";
 import { listSecrets } from "../../core/brain/secrets/store.ts";
 import { runWithSecret, SecretExecDeniedError } from "../../core/brain/secrets/exec.ts";
 import type { ProgressSink } from "../../core/brain/progress.ts";
+import { readableAtContextReach } from "./reach-readable.ts";
 import { requiredStringArg, toolSafeguard } from "./shared.ts";
 import { currentLease } from "../../core/brain/maintenance/lease.ts";
 import { listJournal, MAINTENANCE_JOURNAL_CAP } from "../../core/brain/maintenance/journal.ts";
@@ -183,9 +184,13 @@ async function toolBrainTiers(
     // Fail-soft: a vault that was never indexed has no snapshots and
     // therefore no drift - not an error.
     if (!existsSync(searchConfig.dbPath)) return { findings: [] };
+    // A drift row names a page's path and both values of one of its
+    // identity fields, so only the rows of pages the caller may read at
+    // its reach are listed.
+    const readable = readableAtContextReach(ctx);
     const store = await Store.open(searchConfig, { mode: "read" });
     try {
-      return { findings: store.listTierDrift() };
+      return { findings: store.listTierDrift().filter((row) => readable(row.path)) };
     } finally {
       await store.close();
     }
@@ -214,7 +219,9 @@ async function toolBrainTiers(
   }
   const store = await Store.open(searchConfig, { mode: "write" });
   try {
-    const docId = store.getDocumentIdByPath(path);
+    // A page the caller may not read at its reach is refused as one the
+    // index never saw, before anything about its drift is read or written.
+    const docId = readableAtContextReach(ctx)(path) ? store.getDocumentIdByPath(path) : null;
     if (docId === null) {
       throw new MCPError(INVALID_PARAMS, `brain_tiers ${op}: not indexed: ${path}`);
     }
