@@ -48,6 +48,10 @@ function canSymlink(): boolean {
   }
 }
 
+const SYMLINKS = canSymlink();
+/** The default file systems of these platforms compare names case-insensitively. */
+const CASE_INSENSITIVE_PLATFORM = process.platform === "darwin" || process.platform === "win32";
+
 describe("assertStandingRulesNotTargeted and the scoped directory", () => {
   test("a file inside the directory is refused with its own path", () => {
     const v = vault();
@@ -73,19 +77,20 @@ describe("assertStandingRulesNotTargeted and the scoped directory", () => {
     ).not.toBeNull();
   });
 
-  test("a not-yet-existing file reached through a symlinked folder is refused", () => {
-    if (!canSymlink()) return;
-    const v = vault();
-    mkdirSync(brainScopedRulesDir(v), { recursive: true });
-    mkdirSync(join(v, "Notes"), { recursive: true });
-    symlinkSync(brainScopedRulesDir(v), join(v, "Notes", "alias"), "dir");
-    expect(
-      refusal(() => assertStandingRulesNotTargeted(v, "Notes/alias/project/new.md", "t")),
-    ).not.toBeNull();
-  });
+  test.skipIf(!SYMLINKS)(
+    "a not-yet-existing file reached through a symlinked folder is refused",
+    () => {
+      const v = vault();
+      mkdirSync(brainScopedRulesDir(v), { recursive: true });
+      mkdirSync(join(v, "Notes"), { recursive: true });
+      symlinkSync(brainScopedRulesDir(v), join(v, "Notes", "alias"), "dir");
+      expect(
+        refusal(() => assertStandingRulesNotTargeted(v, "Notes/alias/project/new.md", "t")),
+      ).not.toBeNull();
+    },
+  );
 
-  test("a symlinked vault root does not make one path look like two", () => {
-    if (!canSymlink()) return;
+  test.skipIf(!SYMLINKS)("a symlinked vault root does not make one path look like two", () => {
     const real = vault();
     const link = join(mkTemp("o2b-scoped-guard-link-"), "vault");
     symlinkSync(real, link, "dir");
@@ -95,6 +100,38 @@ describe("assertStandingRulesNotTargeted and the scoped directory", () => {
       ),
     ).not.toBeNull();
   });
+
+  test.skipIf(!SYMLINKS)(
+    "a symlinked vault root and an in-vault alias reach a directory that does not exist yet",
+    () => {
+      const real = vault();
+      mkdirSync(join(real, "Notes"), { recursive: true });
+      symlinkSync(join(real, "Brain"), join(real, "Notes", "alias"), "dir");
+      const link = join(mkTemp("o2b-scoped-guard-link-"), "vault");
+      symlinkSync(real, link, "dir");
+      for (const root of [real, link]) {
+        expect(
+          refusal(() =>
+            assertStandingRulesNotTargeted(root, "Notes/alias/standing-rules/project/x.md", "t"),
+          ),
+        ).not.toBeNull();
+      }
+    },
+  );
+
+  test.skipIf(!CASE_INSENSITIVE_PLATFORM)(
+    "a case-variant spelling of the directory is refused where names fold",
+    () => {
+      const v = vault();
+      expect(
+        refusal(() => assertStandingRulesNotTargeted(v, "brain/Standing-Rules/project/x.md", "t")),
+      ).not.toBeNull();
+      mkdirSync(brainScopedRulesDir(v), { recursive: true });
+      expect(
+        refusal(() => assertStandingRulesNotTargeted(v, "BRAIN/STANDING-RULES/host/a.md", "t")),
+      ).not.toBeNull();
+    },
+  );
 
   test("neighbours of the directory are not refused", () => {
     const v = vault();

@@ -218,18 +218,30 @@ export function assertStandingRulesNotTargeted(
   // The scoped rules directory (`Brain/standing-rules/`) is operator-authored
   // too. A write usually names a file that does not exist yet, so the
   // canonical side resolves the nearest existing ancestor and re-appends the
-  // missing tail: a new file under a symlinked folder is still caught.
+  // missing tail: a new file under a symlinked folder is still caught. Both
+  // sides go through the same resolution, so a directory that does not
+  // exist yet under a symlinked vault root compares like for like.
   const scopedDir = brainScopedRulesDir(vault);
   if (
     isSameOrInside(candidate, scopedDir) ||
-    isSameOrInside(canonicalTail(candidate), canonicalPath(scopedDir))
+    isSameOrInside(canonicalTail(candidate), canonicalTail(scopedDir))
   ) {
     throw new StandingRulesWriteRefusedError(candidate, surface);
   }
 }
 
+/**
+ * The default file systems of macOS and Windows compare names without
+ * case, so there `brain/Standing-Rules/x.md` names the guarded directory.
+ * The native realpath returns the on-disk casing for the part that
+ * exists; the fold covers the tail that does not exist yet.
+ */
+const FOLD_PATH_CASE = process.platform === "darwin" || process.platform === "win32";
+
 function isSameOrInside(path: string, dir: string): boolean {
-  return path === dir || path.startsWith(dir.endsWith(sep) ? dir : dir + sep);
+  const p = FOLD_PATH_CASE ? path.toLowerCase() : path;
+  const d = FOLD_PATH_CASE ? dir.toLowerCase() : dir;
+  return p === d || p.startsWith(d.endsWith(sep) ? d : d + sep);
 }
 
 /**
@@ -241,7 +253,7 @@ function canonicalTail(path: string): string {
   let current = path;
   for (;;) {
     try {
-      const real = realpathSync(current);
+      const real = realpathSync.native(current);
       return missing.length === 0 ? real : join(real, ...missing.toReversed());
     } catch {
       const parent = dirname(current);
@@ -260,7 +272,7 @@ function canonicalTail(path: string): string {
  */
 function canonicalPath(path: string): string {
   try {
-    return realpathSync(path);
+    return realpathSync.native(path);
   } catch {
     return path;
   }
