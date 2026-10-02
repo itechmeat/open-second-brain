@@ -1268,13 +1268,20 @@ export const VERB_HELP: Record<string, string> = {
     "current persona step; after synthesis the decision note commits under\n" +
     "Brain/decisions/panels/. The calling agent generates every word.",
   architect:
-    "usage: o2b brain architect <project-path> [--vault V] [--json]\n" +
-    "Scan a project tree deterministically (stdlib-only, no LLM) and\n" +
-    "write architecture notes under Brain/projects/arch/<repo-key>/:\n" +
+    "usage: o2b brain architect <project-path> [--vault V] [--progress] [--json]\n" +
+    "Scan a project tree deterministically (built-in runtime only, no dependency,\n" +
+    "no LLM) and write architecture notes under Brain/projects/arch/<repo-key>/:\n" +
     "an overview, a key-decisions note listing this repo's ADR\n" +
     "candidates, and one note per detected module.\n" +
+    "Dependency manifests (package.json, pyproject.toml, Cargo.toml, go.mod)\n" +
+    "are read at the root and at each module; pom.xml, build.gradle, Gemfile\n" +
+    "and composer.json are reported unsupported. Each manifest is read,\n" +
+    "malformed, unreadable or unsupported; --json lists them under\n" +
+    "`manifests`. A module whose manifest names exactly one other module's\n" +
+    "manifest gets a depends_on frontmatter key, which the generator owns.\n" +
     "Generated content lives in sentinel regions; operator prose\n" +
-    "outside regions survives every re-scan byte-for-byte.",
+    "outside regions survives every re-scan byte-for-byte.\n" +
+    "--progress streams the walk and render stages to stderr.",
   git:
     "usage: o2b brain git <ingest|status|find|mine> [args] [--vault V] [--json]\n" +
     "ingest <repo-path> [--max-count N]  walk a worktree read-only, store\n" +

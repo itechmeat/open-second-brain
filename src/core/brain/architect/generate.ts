@@ -128,6 +128,13 @@ export interface GenerateArchDocsResult {
   readonly decisionsPath: string;
   readonly modulePaths: ReadonlyArray<string>;
   /**
+   * Every dependency manifest the scan found, root and modules, with its
+   * status, sorted by path. A scan fact like `modulePaths`: it goes out
+   * on the CLI's JSON envelope, where a manifest that was not read is the
+   * operator's to fix.
+   */
+  readonly manifests: ReadonlyArray<ManifestReading>;
+  /**
    * What this run did to the notes: how many it wrote for the first time,
    * how many it rewrote, and how many it found already correct. They sum
    * to `2 + modulePaths.length` - the overview, the key-decisions note,
@@ -957,6 +964,7 @@ function generateRun(
     overviewPath,
     decisionsPath: decisionsPath(dir),
     modulePaths: Object.freeze(modulePaths),
+    manifests: facts.manifests,
     created: countOf(plans, NOTE_DISPOSITION.created),
     updated: countOf(plans, NOTE_DISPOSITION.updated),
     unchanged: countOf(plans, NOTE_DISPOSITION.unchanged),

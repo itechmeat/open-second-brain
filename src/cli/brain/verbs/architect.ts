@@ -13,6 +13,8 @@
  */
 
 import { generateArchDocs } from "../../../core/brain/architect/generate.ts";
+import { MANIFEST_STATUS } from "../../../core/brain/architect/manifests.ts";
+import type { ManifestReading } from "../../../core/brain/architect/manifests.ts";
 import { RegionError } from "../../../core/brain/regions.ts";
 import {
   createSafeguard,
@@ -23,6 +25,28 @@ import { attachProgress, reportProgressRefusal } from "../../progress-rail.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
 const USAGE = "usage: o2b brain architect <project-path> [--vault V] [--progress] [--json]";
+
+/**
+ * One manifest on the JSON envelope: path, ecosystem, status, and the
+ * reason only when the status carries one. The parsed fact and the raw
+ * object stay in the notes; the envelope reports what was read.
+ */
+function manifestEntry(reading: ManifestReading): Record<string, string> {
+  return {
+    path: reading.path,
+    ecosystem: reading.ecosystem,
+    status: reading.status,
+    ...(reading.detail === undefined ? {} : { detail: reading.detail }),
+  };
+}
+
+/** The text-mode line naming every manifest that was not read, or `null` when all were. */
+function notReadLine(manifests: ReadonlyArray<ManifestReading>): string | null {
+  const notRead = manifests.filter((reading) => reading.status !== MANIFEST_STATUS.read);
+  if (notRead.length === 0) return null;
+  const named = notRead.map((reading) => `${reading.path} (${reading.status})`).join(", ");
+  return `manifests not read: ${named}`;
+}
 
 export async function cmdBrainArchitect(argv: string[]): Promise<number> {
   const { flags, positional } = parse(argv, {
@@ -63,6 +87,7 @@ export async function cmdBrainArchitect(argv: string[]): Promise<number> {
         overview_path: res.overviewPath,
         decisions_path: res.decisionsPath,
         module_paths: res.modulePaths,
+        manifests: res.manifests.map(manifestEntry),
         created: res.created,
         updated: res.updated,
         unchanged: res.unchanged,
@@ -78,6 +103,10 @@ export async function cmdBrainArchitect(argv: string[]): Promise<number> {
         `${res.updated} updated, ${res.unchanged} unchanged`,
     );
     ok(`overview: ${res.overviewPath}`);
+    // Only when needed: a run where every manifest was read prints the
+    // two lines it always printed.
+    const notRead = notReadLine(res.manifests);
+    if (notRead !== null) ok(notRead);
     // The generation succeeded and the caller's stream did not. Carried
     // out rather than swallowed: an observer that died mid-run explains
     // a stream that stops before the last note.

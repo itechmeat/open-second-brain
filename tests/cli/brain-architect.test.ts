@@ -63,3 +63,54 @@ test("missing path argument prints usage", async () => {
   expect(res.returncode).toBe(1);
   expect(res.stderr).toContain("usage: o2b brain architect");
 });
+
+interface ManifestEntry {
+  path: string;
+  ecosystem: string;
+  status: string;
+  detail?: string;
+}
+
+test("--json always carries the manifests the scan found, sorted by path", async () => {
+  mkdirSync(join(project, "src", "py"), { recursive: true });
+  writeFileSync(join(project, "src", "py", "pyproject.toml"), "[project\n");
+  writeFileSync(join(project, "pom.xml"), "<project/>\n");
+
+  const res = await runCli(["brain", "architect", project, "--vault", vault, "--json"]);
+  expect(res.returncode).toBe(0);
+  const manifests = (JSON.parse(res.stdout) as { manifests: ManifestEntry[] }).manifests;
+  expect(manifests.map(({ path, ecosystem, status }) => ({ path, ecosystem, status }))).toEqual([
+    { path: "package.json", ecosystem: "npm", status: "read" },
+    { path: "pom.xml", ecosystem: "maven", status: "unsupported" },
+    { path: "src/py/pyproject.toml", ecosystem: "pypi", status: "malformed" },
+  ]);
+  expect(manifests[0]).not.toHaveProperty("detail");
+  expect(manifests[2]!.detail).toBeTruthy();
+});
+
+test("--json carries an empty manifests list when the project has none", async () => {
+  rmSync(join(project, "package.json"));
+  const res = await runCli(["brain", "architect", project, "--vault", vault, "--json"]);
+  expect((JSON.parse(res.stdout) as { manifests: ManifestEntry[] }).manifests).toEqual([]);
+});
+
+test("text mode names the manifests not read, and only when there are some", async () => {
+  const clean = await runCli(["brain", "architect", project, "--vault", vault]);
+  expect(clean.returncode).toBe(0);
+  expect(clean.stdout).not.toContain("not read");
+
+  writeFileSync(join(project, "pom.xml"), "<project/>\n");
+  const res = await runCli(["brain", "architect", project, "--vault", vault]);
+  expect(res.returncode).toBe(0);
+  expect(res.stdout).toContain("manifests not read: pom.xml (unsupported)");
+});
+
+test("help names the runtime-only scan and every flag", async () => {
+  const res = await runCli(["brain", "architect", "--help"]);
+  const text = res.stdout + res.stderr;
+  expect(text).toContain("built-in runtime only, no dependency");
+  expect(text).not.toContain("stdlib-only");
+  expect(text).toContain(
+    "usage: o2b brain architect <project-path> [--vault V] [--progress] [--json]",
+  );
+});
