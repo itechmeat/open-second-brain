@@ -686,7 +686,13 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         """
         del provider_config  # the host's own store holds nothing for us
         status: dict[str, Any] = dict(_resolved_config_values())
-        status["config_file"] = str(config.config_path())
+        try:
+            status["config_file"] = str(config.config_path())
+        except config.ConfigReadError:
+            # A multiplexed gateway with no profile scope bound: the path
+            # cannot be resolved, so the field is skipped like any other
+            # unreadable value rather than failing the status call.
+            pass
         return status
 
     def save_config(self, values: dict[str, Any], hermes_home: str) -> None:

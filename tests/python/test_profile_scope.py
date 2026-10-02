@@ -451,6 +451,26 @@ class ConfigCommandSourceTests(ScopeTestCase):
             self.assertNotIn(value, out + err)
 
 
+class StatusConfigScopeTests(ScopeTestCase):
+    def test_unbound_scope_skips_the_config_file_field(self):
+        self.set_launch_env()
+        pair = make_fake_scope(multiplexed=True, unbound=True)
+        with self.install(pair):
+            status = OpenSecondBrainMemoryProvider(bridge=FakeBrainBridge()).get_status_config({})
+        self.assertNotIn("config_file", status)
+        for value in LAUNCH_VALUES.values():
+            self.assertNotIn(value, json.dumps(status))
+
+    def test_bound_scope_reports_the_config_file(self):
+        scoped_config = self.tmp / "scoped.yaml"
+        pair = make_fake_scope(
+            multiplexed=True, values={"OPEN_SECOND_BRAIN_CONFIG": str(scoped_config)}
+        )
+        with self.install(pair):
+            status = OpenSecondBrainMemoryProvider(bridge=FakeBrainBridge()).get_status_config({})
+        self.assertEqual(status["config_file"], str(scoped_config))
+
+
 class _HandshakeProcess:
     """A child that answers ``initialize`` and ``tools/list`` and nothing else."""
 
