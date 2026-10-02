@@ -189,6 +189,10 @@ function validate(input: ResearchReportInput): void {
  * unreadable. The scope is an annotation, so it never aborts the report, and
  * it answers `url-only`: the vault can show none of the file's bytes, and the
  * answer is the same at every reach, so it names nothing about the path.
+ * The `capture-scope` hygiene detector deliberately treats the same refused
+ * stat as backing, unless the caller may not read the file: this stamp is a
+ * snapshot of what the report could show, while the detector avoids warning
+ * about a file that may well exist.
  */
 function captureScopeAtReach(
   vault: string,
