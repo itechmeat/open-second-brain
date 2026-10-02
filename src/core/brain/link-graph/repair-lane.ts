@@ -43,7 +43,7 @@ import { resolveUniqueMatch } from "../../graph/unique-match.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { scaffoldStub } from "../notes/scaffold-stub.ts";
 import { MAINTENANCE_LANE_REACH } from "../../graph/transport-reach.ts";
-import { CODE_SPAN_MASK_RE } from "../wikilink.ts";
+import { maskCodeRegions } from "../wikilink.ts";
 
 /** Identity-strength tiers, strongest first. `inferred` is opt-in. */
 export const IDENTITY_STRENGTH = Object.freeze({
@@ -415,9 +415,9 @@ function pairId(source: string, target: string): string {
 
 /** Mask wikilink and code spans so a mention inside them is not counted. */
 function maskSpans(text: string): string {
-  return text
-    .replace(CODE_SPAN_MASK_RE, (s) => " ".repeat(s.length))
-    .replace(WIKILINK_SPAN_RE, (s) => " ".repeat(s.length));
+  return maskCodeRegions(text, (s) => " ".repeat(s.length)).replace(WIKILINK_SPAN_RE, (s) =>
+    " ".repeat(s.length),
+  );
 }
 
 function isWordEdge(ch: string | undefined): boolean {

@@ -30,7 +30,7 @@ import { compositeScopeKey, scopeFromFrontmatter } from "../scope-key.ts";
 import { matchScope, mayDescend, resolveVaultScope } from "../vault-scope/index.ts";
 import { pathCovers, type VaultScopeRules } from "../vault-scope/defaults.ts";
 import { brainDirs, BRAIN_ROOT_REL } from "./paths.ts";
-import { CODE_SPAN_MASK_RE } from "./wikilink.ts";
+import { codeRegions } from "./wikilink.ts";
 import {
   isMergeResolved,
   mergePointerLookup,
@@ -292,7 +292,7 @@ interface DocumentSegment {
  * without needing a second opinion about where the code was.
  *
  * Code is a fenced block or an inline code span, the regions every link
- * reader masks ({@link CODE_SPAN_MASK_RE}). A `[[Projects/Old]]` inside
+ * reader masks ({@link codeRegions}). A `[[Projects/Old]]` inside
  * either is a QUOTATION of a link - a tutorial showing the syntax, a
  * design note quoting a vault's contents, a README explaining how a
  * rename behaves - and rewriting it edits documentation into describing a
@@ -302,10 +302,10 @@ interface DocumentSegment {
 function segmentCode(raw: string): DocumentSegment[] {
   const out: DocumentSegment[] = [];
   let last = 0;
-  for (const m of raw.matchAll(CODE_SPAN_MASK_RE)) {
-    if (m.index > last) out.push({ text: raw.slice(last, m.index), code: false });
-    out.push({ text: m[0], code: true });
-    last = m.index + m[0].length;
+  for (const [start, end] of codeRegions(raw)) {
+    if (start > last) out.push({ text: raw.slice(last, start), code: false });
+    out.push({ text: raw.slice(start, end), code: true });
+    last = end;
   }
   out.push({ text: raw.slice(last), code: false });
   return out;

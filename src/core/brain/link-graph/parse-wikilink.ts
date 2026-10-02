@@ -29,7 +29,7 @@
 
 import { basename } from "node:path";
 
-import { ANCHORED_WIKILINK_RE, CODE_SPAN_MASK_RE, RICH_WIKILINK_RE } from "../wikilink.ts";
+import { ANCHORED_WIKILINK_RE, RICH_WIKILINK_RE, maskCodeRegions } from "../wikilink.ts";
 
 /**
  * Local regex for the rich extractor. Captures the full bracket
@@ -175,7 +175,7 @@ export function parseWikilinkRich(value: string): WikilinkParse {
  * input yields an empty array.
  */
 export function extractWikilinkRichBodies(content: string): ReadonlyArray<string> {
-  const masked = content.replace(CODE_SPAN_MASK_RE, " ");
+  const masked = maskCodeRegions(content, () => " ");
   const out: string[] = [];
   for (const m of masked.matchAll(RICH_WIKILINK_RE)) {
     const body = m[1]!;
