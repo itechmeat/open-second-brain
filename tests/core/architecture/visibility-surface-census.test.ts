@@ -546,6 +546,7 @@ describe("visibility surface census", () => {
         "brain_agent_query",
         "brain_backlinks",
         "brain_bridges",
+        "brain_claims",
         "brain_clusters",
         "brain_context",
         "brain_deep_synthesis",

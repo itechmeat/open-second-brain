@@ -389,3 +389,14 @@ describe("a dream shared with a reserved record is kept, showing only readable t
     });
   }
 });
+
+describe("brain_claims answers at the caller's reach", () => {
+  for (const operation of ["current", "history"]) {
+    test(`operation=${operation} lists no reserved record and counts only what it lists`, async () => {
+      const row = await expectAnswersAsAbsent("brain_claims", () => ({ operation }), [
+        `pref-${PRIVATE_SLUG}`,
+      ]);
+      expect(row.withheld).toContain(`pref-${SHARED_SLUG}`);
+    });
+  }
+});

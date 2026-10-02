@@ -504,9 +504,6 @@ const COVERED_TOOLS: ReadonlySet<string> = new Set(
  */
 const STILL_NAMED_AT_REMOTE: ReadonlySet<string> = new Set([
   "brain_anticipatory_context",
-  "brain_claims operation=at",
-  "brain_claims operation=current",
-  "brain_claims operation=history",
   "brain_context_pack",
   "brain_retention",
   "brain_scaffold_stub action=list",

@@ -278,11 +278,13 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
   {
     surface: "brain_claims",
     kind: K.mcpTool,
-    category: C.excluded,
+    category: C.covered,
     reason:
       "toolBrainClaims's own docblock (knowledge-tools.ts) states a claim row carries the " +
       "artifact's id, vault-relative path, topic and full principle text; every row-returning " +
-      "operation is filtered by gatedOwnerScopeView (agent-scope), never by visibility.",
+      "operation and the rebuild count keep a row only when it passes gatedOwnerScopeView and, " +
+      "at the caller's reach, reachView over its page, its id under the pref- and ret- " +
+      "spellings, and the records that superseded or contest it.",
   },
   {
     surface: "brain_truth",
