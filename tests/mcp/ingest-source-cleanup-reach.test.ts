@@ -19,6 +19,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { readManifest } from "../../src/core/brain/ingest/content-manifest.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
@@ -126,9 +127,9 @@ describe("source-cleanup tools at the caller's reach", () => {
     expect(JSON.stringify(local)).toContain(String(reserved.summaryPath));
     expect(local["manifest_entry"]).toBe(SOURCE_PATH);
 
-    expect(await call(reserved, "brain_delete_by_source", args)).toEqual(
-      await call(control, "brain_delete_by_source", args),
-    );
+    const remote = await call(reserved, "brain_delete_by_source", args);
+    expect(remote["manifest_entry"]).toBeNull();
+    expect(remote).toEqual(await call(control, "brain_delete_by_source", args));
   });
 
   test("a remote confirmed delete leaves the reserved summary page byte-identical", async () => {
@@ -142,6 +143,7 @@ describe("source-cleanup tools at the caller's reach", () => {
       normalised(await call(control, "brain_delete_by_source", args)),
     );
     expect(readFileSync(summaryAbs).equals(before)).toBe(true);
+    expect(readManifest(reserved.vault).entries[SOURCE_PATH]).toBeDefined();
 
     const local = await call(reserved, "brain_delete_by_source", args, TRANSPORT_REACH.local);
     expect(local["deleted"]).toContain(reserved.summaryPath);
