@@ -48,7 +48,8 @@ import { join } from "node:path";
 
 import { normalizeAgentArgument } from "../agent-identity.ts";
 import { resolveAgentName } from "../config.ts";
-import { vaultRelative } from "../path-safety.ts";
+import type { TransportReach } from "../graph/transport-reach.ts";
+import { pathIsInside, vaultRelative } from "../path-safety.ts";
 import { parseFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
 
 import { UnclassifiedRepairCodeError, requireMechanicalRepair } from "./applier-capability.ts";
@@ -62,7 +63,9 @@ import { scanDanglingWorkruns, WORKRUN_PHASE } from "./dream-workrun.ts";
 import { extractWikilinkRichBodies, parseWikilinkRich } from "./link-graph/parse-wikilink.ts";
 import { LINT_CONSOLIDATE_KIND } from "./lint-consolidate.ts";
 import { appendLogEvent } from "./log.ts";
+import { everyArtifactRefView } from "./artifact-ref-view.ts";
 import { ownerScopeView } from "./owner-scope-view.ts";
+import { reachView } from "./reach-view.ts";
 import { acquireLockSync } from "./sync-lockfile.ts";
 import { isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND, type DoctorIssue } from "./types.ts";
@@ -1258,6 +1261,48 @@ export interface ApplyRepairOptions {
    * afterwards would have hidden the second half while still doing it.
    */
   readonly ownerScope?: string | null;
+  /**
+   * The reach the caller's transport minted. Present, a record the
+   * caller cannot read at that reach is absent from the plan: no fix, no
+   * needs-review item and no unfixable count is derived from it, and
+   * nothing is written to it. Absent means no transport is involved (the
+   * CLI) and only {@link ownerScope} bounds the plan.
+   */
+  readonly reach?: TransportReach;
+}
+
+/** The fields a doctor finding names artifacts in. */
+export interface DoctorIssueNaming {
+  readonly message: string;
+  readonly path?: string;
+  readonly target?: string;
+  readonly sources?: ReadonlyArray<string>;
+}
+
+/**
+ * Every artifact one doctor finding names: its page (vault-relative when
+ * inside the vault), its target, the referencing sources, and the
+ * wikilinks its message spells. The semantic-health codes carry no
+ * structured target and name their subjects inside the message as
+ * `[[pref-x]]`; they are read through the shared wikilink lexer, a
+ * structural read of link syntax rather than a match on prose. A finding
+ * survives a view only when every reference passes it.
+ */
+export function doctorIssueRefs(
+  vault: string,
+  issue: DoctorIssueNaming,
+): ReadonlyArray<string | undefined> {
+  return [
+    issue.path === undefined ? undefined : vaultRelativeOrSelf(vault, issue.path),
+    issue.target,
+    ...(issue.sources ?? []),
+    ...extractWikilinkRichBodies(issue.message).map((b) => parseWikilinkRich(b).target),
+  ];
+}
+
+/** The in-vault form of a path, or the path itself when it lies outside. */
+function vaultRelativeOrSelf(vault: string, path: string): string {
+  return pathIsInside(path, vault) ? vaultRelative(path, vault) : path;
 }
 
 /**
@@ -1287,8 +1332,18 @@ export function applyRepair(vault: string, opts: ApplyRepairOptions): RepairOutc
   // previews and writes nothing, so it stays ungated. See the write-guard
   // section of `applier-capability.ts`.
   if (opts.dryRun !== true) assertVaultIdentityForWrite(vault);
-  const plan = planRepair(vault);
-  const view = ownerScopeView(vault, opts.ownerScope ?? null);
+  const owner = ownerScopeView(vault, opts.ownerScope ?? null);
+  const view =
+    opts.reach === undefined ? owner : everyArtifactRefView(owner, reachView(vault, opts.reach));
+  // The findings are bounded BEFORE the plan is derived from them, so the
+  // unfixable counts describe only records the caller may see; the fixes
+  // are bounded again by what each one would name, so a fix that reaches
+  // a withheld page through its detail is not planned either.
+  const plan = view.filtersNothing
+    ? planRepair(vault)
+    : planRepair(vault, {
+        issues: view.keep(collectDoctorIssues(vault), (i) => doctorIssueRefs(vault, i)),
+      });
   const fixes = view.keep(plan.fixes, repairRefs);
   const needsReview = fixes.filter((f) => !f.applicable);
   const applicable = fixes.filter((f) => f.applicable);

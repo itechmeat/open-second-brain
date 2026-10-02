@@ -458,8 +458,8 @@ function reasonProblems(entries: ReadonlyArray<VisibilitySurfaceEntry>): {
  *
  * 49 before the vocabulary gained `runDoctor` and the schema-admin record
  * views. The five new names are `brain_doctor` and `schema_inspect`,
- * which named a malformed reserved record by path (the doctor's repair
- * plan still does, so it is registered excluded), plus `brain_health`,
+ * which named a malformed reserved record by path (both are covered now
+ * that the repair plan is bounded by the caller's reach), plus `brain_health`,
  * `brain_status` and `schema_apply_mutations` on the file-level rule.
  */
 const MCP_TOOL_POPULATION_SIZE = 54;
@@ -527,9 +527,11 @@ describe("visibility surface census", () => {
         "brain_clusters",
         "brain_context",
         "brain_deep_synthesis",
+        "brain_doctor",
         "brain_eval",
         "brain_event_trace",
         "brain_file_context",
+        "brain_health",
         "brain_hygiene",
         "brain_idea_discovery",
         "brain_pre_compress_pack",

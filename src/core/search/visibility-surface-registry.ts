@@ -310,14 +310,14 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
   {
     surface: "brain_doctor",
     kind: K.mcpTool,
-    category: C.excluded,
+    category: C.covered,
     reason:
       "the read-only report keeps every issue stream through the owner view ANDed with " +
-      "reachView, over the path, target, sources and message wikilinks each issue names, takes " +
-      "ok and trust_verdict again over the kept issues, and below local reach recounts the " +
-      "tier-drift warning over the rows readableAtContextReach(ctx) keeps. It stays EXCLUDED " +
-      "because the repair branch is bounded by the owner scope only, and its plan names the " +
-      "records it would fix, reserved ones included.",
+      "reachView, over the doctorIssueRefs each issue names (path, target, sources, message " +
+      "wikilinks), takes ok and trust_verdict again over the kept issues, and below local reach " +
+      "recounts the tier-drift warning over the rows readableAtContextReach(ctx) keeps. The " +
+      "repair branch hands applyRepair the caller's reach, which bounds the findings before the " +
+      "plan is derived, so a withheld record is neither planned, counted nor written.",
   },
   {
     surface: "schema_inspect",
@@ -341,11 +341,12 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
   {
     surface: "brain_health",
     kind: K.mcpTool,
-    category: C.excluded,
+    category: C.covered,
     reason:
       "runs runDoctor's semantic-health pass and names preferences by id in its contradiction, " +
-      "stale-claim and batch-inflation findings; those are kept through the gated owner view " +
-      "only, and no reach view is asked, so a reserved preference can be named at remote reach.",
+      "stale-claim and batch-inflation findings; each finding is kept only when every member " +
+      "passes the gated owner view ANDed with reachView, and the verdict is folded again over " +
+      "the kept families.",
   },
   {
     surface: "brain_status",

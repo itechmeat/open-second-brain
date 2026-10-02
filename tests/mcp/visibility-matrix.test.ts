@@ -509,7 +509,6 @@ const STILL_NAMED_AT_REMOTE: ReadonlySet<string> = new Set([
   "brain_claims operation=current",
   "brain_claims operation=history",
   "brain_context_pack",
-  "brain_doctor #2",
   "brain_retention",
   "brain_scaffold_stub action=list",
   "brain_stale_scan",

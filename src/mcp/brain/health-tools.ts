@@ -11,15 +11,15 @@ import { collectMaintenanceActions } from "../../core/brain/maintenance/collect.
 import { runDoctor } from "../../core/brain/doctor.ts";
 import { annotateEntityAliasIssues } from "../../core/brain/doctor/entity-alias-verdicts.ts";
 import { verdictFields } from "../../core/decision-model/pair-verdict.ts";
-import { applyRepair } from "../../core/brain/diagnostics.ts";
+import {
+  applyRepair,
+  doctorIssueRefs,
+  type DoctorIssueNaming,
+} from "../../core/brain/diagnostics.ts";
 import { nextCommandField } from "../../core/brain/next-step.ts";
 import { NO_EXIT_KEY, noExitReasons } from "../../core/brain/doctor-exits.ts";
 import { buildOperatorSnapshot } from "../../core/brain/operator-snapshot.ts";
 import { foldSemanticHealthVerdict } from "../../core/brain/health/reconcile.ts";
-import {
-  extractWikilinkRichBodies,
-  parseWikilinkRich,
-} from "../../core/brain/link-graph/parse-wikilink.ts";
 import { gatedOwnerScopeView } from "../../core/brain/owner-scope-view.ts";
 import type { DoctorIssue } from "../../core/brain/types.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
@@ -131,6 +131,9 @@ async function toolBrainDoctor(
       // (a-label-is-not-a-boundary, U3). The scope bounds the plan, so
       // the write is bounded too, not just the report.
       ownerScope: gatedOwnerScopeView(ctx.vault, ctx.agentName).scope,
+      // And by the caller's reach: a record it cannot read there is
+      // neither planned nor written, and counts toward nothing.
+      reach: contextReach(ctx),
     });
     return { format, repair: outcome };
   }
@@ -162,28 +165,8 @@ async function toolBrainDoctor(
     reachView(ctx.vault, reach),
   );
   /** Generic over the three streams: they share the naming fields, not a type. */
-  const visibleIssues = <
-    T extends {
-      readonly message: string;
-      readonly path?: string;
-      readonly target?: string;
-      readonly sources?: ReadonlyArray<string>;
-    },
-  >(
-    issues: ReadonlyArray<T>,
-  ): ReadonlyArray<T> =>
-    view.keep(issues, (i) => [
-      i.path === undefined ? undefined : vaultRelativeSafe(ctx.vault, i.path),
-      i.target,
-      ...(i.sources ?? []),
-      // The semantic-health codes (`low-evidence-confirmed`,
-      // `batch-concept-inflation`) carry NO structured target - they name
-      // their subjects inside the message, as `[[pref-x]]`. Read through
-      // the shared wikilink lexer rather than by matching prose, so this
-      // is a structural read of the same link syntax the rest of the
-      // vault uses and no natural-language pattern is involved.
-      ...extractWikilinkRichBodies(i.message).map((b) => parseWikilinkRich(b).target),
-    ]);
+  const visibleIssues = <T extends DoctorIssueNaming>(issues: ReadonlyArray<T>): ReadonlyArray<T> =>
+    view.keep(issues, (i) => doctorIssueRefs(ctx.vault, i));
   const errors = visibleIssues(result.errors);
   const warnings =
     reach === TRANSPORT_REACH.local
@@ -304,7 +287,13 @@ async function toolBrainHealth(
   // visible is dropped WHOLE rather than trimmed: its `count` and its
   // `topics` describe the batch the detector measured, so a batch of five
   // reported as four is not a narrower true finding, it is a false one.
-  const view = gatedOwnerScopeView(ctx.vault, ctx.agentName);
+  // The reach view joins the owner view: below local reach a preference
+  // the caller cannot read is named by no finding, so a family member
+  // reserved against remote reads drops its finding as an absent one would.
+  const view = everyArtifactRefView(
+    gatedOwnerScopeView(ctx.vault, ctx.agentName),
+    reachView(ctx.vault, contextReach(ctx)),
+  );
   const contradictions = view.keep(sh?.contradictions ?? [], (c) => [c.aId, c.bId]);
   const conceptGaps = sh?.conceptGaps ?? [];
   const staleClaims = view.keep(sh?.staleClaims ?? [], (s) => [s.id]);
