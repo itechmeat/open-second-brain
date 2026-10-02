@@ -29,7 +29,7 @@
 
 import { basename } from "node:path";
 
-import { ANCHORED_WIKILINK_RE, RICH_WIKILINK_RE } from "../wikilink.ts";
+import { ANCHORED_WIKILINK_RE, CODE_SPAN_MASK_RE, RICH_WIKILINK_RE } from "../wikilink.ts";
 
 /**
  * Local regex for the rich extractor. Captures the full bracket
@@ -40,13 +40,6 @@ import { ANCHORED_WIKILINK_RE, RICH_WIKILINK_RE } from "../wikilink.ts";
  * don't collapse two adjacent wikilinks into one match. Anchored to
  * non-newline so a link that spans lines is not silently joined.
  */
-
-/**
- * Local mask for fenced and inline code spans. Mirrors the constant
- * used by `extractWikilinks` in `vault.ts` so a wikilink that lives
- * inside a code block does not pollute the index.
- */
-const CODE_BLOCK_RE = /```[\s\S]*?```|`[^`]+`/g;
 
 /**
  * Inclusive list of file-extension suffixes (lower-case) that
@@ -182,7 +175,7 @@ export function parseWikilinkRich(value: string): WikilinkParse {
  * input yields an empty array.
  */
 export function extractWikilinkRichBodies(content: string): ReadonlyArray<string> {
-  const masked = content.replace(CODE_BLOCK_RE, " ");
+  const masked = content.replace(CODE_SPAN_MASK_RE, " ");
   const out: string[] = [];
   for (const m of masked.matchAll(RICH_WIKILINK_RE)) {
     const body = m[1]!;

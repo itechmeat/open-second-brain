@@ -8,7 +8,11 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { parseWikilinkRich } from "../../../../src/core/brain/link-graph/parse-wikilink.ts";
+import {
+  extractWikilinkRichBodies,
+  parseWikilinkRich,
+} from "../../../../src/core/brain/link-graph/parse-wikilink.ts";
+import { renderExcerptSection } from "../../../../src/core/brain/provenance/capture-scope.ts";
 
 describe("parseWikilinkRich - bare target", () => {
   test("bare target inside brackets", () => {
@@ -107,5 +111,23 @@ describe("parseWikilinkRich - immutability", () => {
   test("returned object is frozen", () => {
     const r = parseWikilinkRich("[[Note#H|alias]]");
     expect(Object.isFrozen(r)).toBe(true);
+  });
+});
+
+describe("extractWikilinkRichBodies - code masking", () => {
+  test("a longer fence is not closed by a shorter backtick run inside it", () => {
+    const content = "````\nx ```\n[[Hidden/Note]]\n````\nReal: [[real-link]]";
+    expect(extractWikilinkRichBodies(content)).toEqual(["real-link"]);
+  });
+
+  test("a fence closed by a longer run ends at the end of that run", () => {
+    const content = "```\ncode\n````\nAfter: [[after-link]]\n`x`";
+    expect(extractWikilinkRichBodies(content)).toEqual(["after-link"]);
+  });
+
+  test("a stored excerpt never contributes links, whatever backtick runs it holds", () => {
+    for (const excerpt of ["x ```\n[[Secret/Note]]\n", "```` [[A]] ``` [[B]]", "`` [[C]] ```"]) {
+      expect(extractWikilinkRichBodies(renderExcerptSection(excerpt))).toEqual([]);
+    }
   });
 });

@@ -43,6 +43,7 @@ import { resolveUniqueMatch } from "../../graph/unique-match.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { scaffoldStub } from "../notes/scaffold-stub.ts";
 import { MAINTENANCE_LANE_REACH } from "../../graph/transport-reach.ts";
+import { CODE_SPAN_MASK_RE } from "../wikilink.ts";
 
 /** Identity-strength tiers, strongest first. `inferred` is opt-in. */
 export const IDENTITY_STRENGTH = Object.freeze({
@@ -401,7 +402,6 @@ const CONFIDENCE_CEILING = 0.85;
  */
 export const HUB_CANDIDATE_CONFIDENCE = 1.0;
 
-const CODE_SPAN_RE = /```[\s\S]*?```|`[^`]+`/g;
 const WIKILINK_SPAN_RE = /\[\[[^\]\n]+\]\]/g;
 const WORD_CHAR_RE = /[\p{L}\p{N}]/u;
 
@@ -416,7 +416,7 @@ function pairId(source: string, target: string): string {
 /** Mask wikilink and code spans so a mention inside them is not counted. */
 function maskSpans(text: string): string {
   return text
-    .replace(CODE_SPAN_RE, (s) => " ".repeat(s.length))
+    .replace(CODE_SPAN_MASK_RE, (s) => " ".repeat(s.length))
     .replace(WIKILINK_SPAN_RE, (s) => " ".repeat(s.length));
 }
 

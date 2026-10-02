@@ -80,6 +80,16 @@ export const ANCHORED_WIKILINK_RE = /^\[\[([^\]]+)\]\]/;
 export const EXACT_WIKILINK_RE = /^\[\[([^\]]+)\]\]$/;
 
 /**
+ * Code regions a wikilink or mention scan masks out: a fenced block (a
+ * run of three or more backticks, closed only by a run of the same
+ * length that is not followed by another backtick, so a longer fence
+ * holding a shorter run stays masked and a longer closing run is
+ * consumed whole) or an inline code span. Shared by every link and
+ * mention reader so a stored excerpt never contributes links anywhere.
+ */
+export const CODE_SPAN_MASK_RE = /(`{3,})[\s\S]*?\1(?!`)|`[^`]+`/g;
+
+/**
  * Strip wikilink decoration off `value` and return the bare target id.
  *
  * Recognises:

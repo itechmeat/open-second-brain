@@ -141,3 +141,23 @@ test("an already-canonical link is not counted as a change", () => {
   expect(result.content).toBe(content);
   expect(result.changed).toBe(0);
 });
+
+test("a fence closed by a longer run ends at the end of that run", () => {
+  const content = ["```", "[[alpha]] in a fence stays", "````", "After [[alpha]].", "`x`"].join(
+    "\n",
+  );
+  const result = normalizeWikilinks(content, "full", PAGES);
+  expect(result.content).toContain("[[alpha]] in a fence stays");
+  expect(result.content).toContain("After [[Brain/notes/alpha]].");
+  expect(result.changed).toBe(1);
+});
+
+test("a tilde fence closed by a longer run ends at the end of that run", () => {
+  const content = ["~~~", "[[alpha]] in a fence stays", "~~~~~~", "After [[alpha]].", "~~~"].join(
+    "\n",
+  );
+  const result = normalizeWikilinks(content, "full", PAGES);
+  expect(result.content).toContain("[[alpha]] in a fence stays");
+  expect(result.content).toContain("After [[Brain/notes/alpha]].");
+  expect(result.changed).toBe(1);
+});

@@ -32,12 +32,13 @@ export function isWikiLinkFormat(value: string): value is WikiLinkFormat {
   return (WIKI_LINK_FORMATS as ReadonlyArray<string>).includes(value);
 }
 
-/** Mirrors the masks used by the link-graph parser, broadened for the
- * rewrite path: backtick fences of any length (3+), tilde fences, and
+/** Mirrors `CODE_SPAN_MASK_RE`, broadened for the rewrite path:
+ * backtick and tilde fences of any length (3+), each closed only by a
+ * run of its own character and length not followed by another one, and
  * inline code spans all stay verbatim. */
 import { RICH_WIKILINK_RE } from "../wikilink.ts";
 
-const CODE_BLOCK_RE = /(`{3,}|~{3,})[\s\S]*?\1|`[^`]+`/g;
+const CODE_BLOCK_RE = /(`{3,})[\s\S]*?\1(?!`)|(~{3,})[\s\S]*?\2(?!~)|`[^`]+`/g;
 
 export interface NormalizeResult {
   readonly content: string;

@@ -25,6 +25,7 @@ import { parseFrontmatter } from "../../vault.ts";
 import { ownerScopeView } from "../owner-scope-view.ts";
 import { UNFILTERED_ARTIFACT_REFS, type ArtifactRefView } from "../artifact-ref-view.ts";
 import { brainDirs } from "../paths.ts";
+import { CODE_SPAN_MASK_RE } from "../wikilink.ts";
 
 /** One unlinked-mention occurrence. */
 export interface MentionRef {
@@ -72,7 +73,6 @@ const MIN_TERM_CODEPOINTS = 2;
 const MASK_CHAR = " ";
 
 const BRACKET_RE = /\[\[[^\]\n]+\]\]/g;
-const CODE_BLOCK_RE = /```[\s\S]*?```|`[^`]+`/g;
 const WORD_CHAR_RE = /[\p{L}\p{N}]/u;
 
 /**
@@ -195,7 +195,7 @@ function scanBody(
   // ignored. The mask preserves character offsets so line/column
   // bookkeeping stays exact - replace each masked region with a
   // run of MASK_CHAR of identical length.
-  const masked = maskRegions(body, [BRACKET_RE, CODE_BLOCK_RE]);
+  const masked = maskRegions(body, [BRACKET_RE, CODE_SPAN_MASK_RE]);
   const lines = masked.split("\n");
   const originalLines = body.split("\n");
 

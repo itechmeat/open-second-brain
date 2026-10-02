@@ -50,7 +50,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
-import { WIKILINK_TARGET_RE } from "./brain/wikilink.ts";
+import { CODE_SPAN_MASK_RE, WIKILINK_TARGET_RE } from "./brain/wikilink.ts";
 import {
   FileAlreadyExistsError,
   atomicCreateFileSyncExclusive,
@@ -91,10 +91,6 @@ const KEY_VALUE_RE = new RegExp(`^(${FRONTMATTER_KEY_PATTERN})\\s*:\\s*(.*?)\\s*
 // list item) is NOT matched. Captures the item text after the whitespace.
 const DASH_ITEM_RE = /^-(?:\s+(.*))?$/;
 const PLAIN_SCALAR_RE = /^[A-Za-z0-9_./-](?:[A-Za-z0-9_./ -]*[A-Za-z0-9_./-])?$/;
-// Fenced code (a run of three or more backticks, closed only by a run of
-// the same length that is not followed by another backtick, so a longer
-// fence holding a shorter run stays masked) or an inline code span.
-const CODE_BLOCK_RE = /(`{3,})[\s\S]*?\1(?!`)|`[^`]+`/g;
 const SLUG_INVALID_RE = /[^a-z0-9]+/g;
 const SLUG_MAX_LEN = 64;
 
@@ -559,7 +555,7 @@ export function slugify(value: string): string {
  * file extensions and links inside fenced or inline code blocks.
  */
 export function extractWikilinks(content: string): string[] {
-  const masked = content.replace(CODE_BLOCK_RE, " ");
+  const masked = content.replace(CODE_SPAN_MASK_RE, " ");
   const seen = new Set<string>();
   const result: string[] = [];
   for (const m of masked.matchAll(WIKILINK_TARGET_RE)) {

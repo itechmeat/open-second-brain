@@ -245,6 +245,28 @@ describe("findUnlinkedMentions - code block exclusion", () => {
     const out = findUnlinkedMentions(vault, "pref-foo");
     expect(out.length).toBe(1);
   });
+
+  test("a longer fence holding a shorter backtick run stays masked", () => {
+    writePref("pref-foo", {
+      kind: "preference",
+      topic: "foo",
+      status: "confirmed",
+      principle: "x",
+      title: "Token Bucket",
+    });
+    writePref(
+      "pref-linker",
+      {
+        kind: "preference",
+        topic: "l",
+        status: "confirmed",
+        principle: "y",
+      },
+      "````\nx ```\nToken Bucket in a fence\n````\n\nUse Token Bucket in real prose.",
+    );
+    const out = findUnlinkedMentions(vault, "pref-foo");
+    expect(out.length).toBe(1);
+  });
 });
 
 describe("findUnlinkedMentions - shape", () => {
