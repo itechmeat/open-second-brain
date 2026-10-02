@@ -160,7 +160,8 @@ export function ingestSource(
   // producing two summary pages for one source against this pipeline's
   // documented idempotency.
   const canonicalSource = normalizeSourceIdentity(input.sourcePath);
-  const preExtract = opts.preExtract === true ? runPreExtract(vault, canonicalSource) : undefined;
+  const preExtract =
+    opts.preExtract === true ? runPreExtract(vault, canonicalSource, opts.readable) : undefined;
   const sourceLink = `[[${canonicalSource}]]`;
   const provenance: Provenance = { level: "stated", sources: [sourceLink], premises: [] };
 
@@ -277,9 +278,15 @@ export function ingestSource(
 /**
  * Run the code-structure pre-extraction pass over a vault-file source. A source
  * with no readable file bytes (a URL or identity-only source) cannot be parsed,
- * so it is reported as unextracted rather than a fake empty success.
+ * so it is reported as unextracted rather than a fake empty success. A source
+ * `readable` refuses is answered the same way, before its bytes are read, so
+ * the pass reads no file the intake would treat as having no local bytes.
  */
-function runPreExtract(vault: string, canonicalSource: string): PreExtractResult {
+function runPreExtract(
+  vault: string,
+  canonicalSource: string,
+  readable: ((rel: string) => boolean) | undefined,
+): PreExtractResult {
   // The identity is caller-supplied and `..` segments survive normalization,
   // so the read is contained the same way the trust classifier contains its
   // own resolution (`source-trust.ts`): an identity that resolves outside the
@@ -296,6 +303,11 @@ function runPreExtract(vault: string, canonicalSource: string): PreExtractResult
   if (!isCodeStructureSource(canonicalSource)) {
     return preExtractCodeStructure(canonicalSource, "");
   }
+  const noBytes: PreExtractResult = {
+    extracted: false,
+    reason: `source has no readable file bytes for code-structure pre-extraction: ${canonicalSource}`,
+  };
+  if (readable !== undefined && !readable(canonicalSource)) return noBytes;
   let content: string;
   try {
     content = readFileSync(join(vault, canonicalSource), "utf8");
@@ -303,10 +315,7 @@ function runPreExtract(vault: string, canonicalSource: string): PreExtractResult
     // A source with no readable file bytes - a URL/identity-only source, a
     // directory, a permission failure, or a deletion race - cannot be parsed,
     // so it is reported as unextracted rather than aborting the whole ingest.
-    return {
-      extracted: false,
-      reason: `source has no readable file bytes for code-structure pre-extraction: ${canonicalSource}`,
-    };
+    return noBytes;
   }
   // The manifest's canonical path set is what a relative import specifier
   // may bind to: a specifier probes it and fills the seed's `resolvedTo`

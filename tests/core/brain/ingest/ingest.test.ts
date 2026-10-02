@@ -257,6 +257,27 @@ describe("ingestSource pre-extract pass (P4, t_ef786747)", () => {
     }
   });
 
+  test("a code source the caller may not read answers as one with no bytes", () => {
+    writeCode();
+    const refused = ingestSource(vault, CODE_INPUT, {
+      agent: "claude",
+      now: NOW,
+      preExtract: true,
+      readable: (rel) => rel !== CODE_INPUT.sourcePath,
+    });
+    expect(refused.preExtract).toEqual({
+      extracted: false,
+      reason: `source has no readable file bytes for code-structure pre-extraction: ${CODE_INPUT.sourcePath}`,
+    });
+    const allowed = ingestSource(vault, CODE_INPUT, {
+      agent: "claude",
+      now: NOW,
+      preExtract: true,
+      readable: () => true,
+    });
+    expect(allowed.preExtract?.extracted).toBe(true);
+  });
+
   test("with the pass off the result carries no seeds and the page is byte-identical", () => {
     writeCode();
     // First ingest creates the entity + page; a second (idempotent) re-ingest
