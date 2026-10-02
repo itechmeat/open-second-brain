@@ -52,9 +52,9 @@
  */
 
 import { readFileSync, realpathSync } from "node:fs";
-import { resolve } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 
-import { brainStandingRulesPath } from "./paths.ts";
+import { brainScopedRulesDir, brainStandingRulesPath } from "./paths.ts";
 import { applySectionBudget } from "./text/text-budget.ts";
 
 /**
@@ -189,9 +189,10 @@ export class StandingRulesWriteRefusedError extends Error {
 }
 
 /**
- * Refuse a write whose target is `Brain/standing-rules.md`.
+ * Refuse a write whose target is `Brain/standing-rules.md` or any path
+ * inside the scoped rules directory `Brain/standing-rules/`.
  *
- * Narrow on purpose: it names ONE file, and it is called from the write
+ * Narrow on purpose: it names one file and one directory, and it is called from the write
  * paths that resolve a caller-named path without going through the
  * note-target envelope that already refuses the whole `Brain/` root. It
  * runs before any I/O in its callers, so a refused call also performs no
@@ -213,6 +214,41 @@ export function assertStandingRulesNotTargeted(
   const candidate = resolve(vault, notePath);
   if (candidate === target || canonicalPath(candidate) === canonicalPath(target)) {
     throw new StandingRulesWriteRefusedError(target, surface);
+  }
+  // The scoped rules directory (`Brain/standing-rules/`) is operator-authored
+  // too. A write usually names a file that does not exist yet, so the
+  // canonical side resolves the nearest existing ancestor and re-appends the
+  // missing tail: a new file under a symlinked folder is still caught.
+  const scopedDir = brainScopedRulesDir(vault);
+  if (
+    isSameOrInside(candidate, scopedDir) ||
+    isSameOrInside(canonicalTail(candidate), canonicalPath(scopedDir))
+  ) {
+    throw new StandingRulesWriteRefusedError(candidate, surface);
+  }
+}
+
+function isSameOrInside(path: string, dir: string): boolean {
+  return path === dir || path.startsWith(dir.endsWith(sep) ? dir : dir + sep);
+}
+
+/**
+ * Canonical form of `path` when part of it does not exist yet: the nearest
+ * existing ancestor is canonicalized and the missing tail re-appended.
+ */
+function canonicalTail(path: string): string {
+  const missing: string[] = [];
+  let current = path;
+  for (;;) {
+    try {
+      const real = realpathSync(current);
+      return missing.length === 0 ? real : join(real, ...missing.toReversed());
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) return path;
+      missing.push(basename(current));
+      current = parent;
+    }
   }
 }
 
