@@ -21,6 +21,15 @@ import { MCPServer } from "../../src/mcp/server.ts";
 
 const PRIVATE_PATH = "Clips/private.md";
 const PRIVATE_BODY = "---\nvisibility: private\n---\n# Private plan\nThe code is 4711.\n";
+/**
+ * Hidden pages of every planned format: HTML and CSV are now planned by
+ * default and pass the same reach predicate as Markdown.
+ */
+const PRIVATE_PAGES: ReadonlyArray<readonly [string, string]> = Object.freeze([
+  [PRIVATE_PATH, PRIVATE_BODY],
+  ["Clips/private.csv", "---\nvisibility: private\n---\nname,code\nvault,4711\n"],
+  ["Clips/private.html", "---\nvisibility: private\n---\n<h1>Private plan</h1><p>4711</p>\n"],
+]);
 
 const bases: string[] = [];
 
@@ -33,7 +42,11 @@ interface Fixture {
   readonly server: MCPServer;
 }
 
-function fixture(withPrivate: boolean, reach?: typeof TRANSPORT_REACH.local): Fixture {
+function fixture(
+  withPrivate: boolean,
+  reach?: typeof TRANSPORT_REACH.local,
+  privatePage: readonly [string, string] = [PRIVATE_PATH, PRIVATE_BODY],
+): Fixture {
   const base = mkdtempSync(join(tmpdir(), "o2b-plan-format-reach-"));
   bases.push(base);
   const vault = join(base, "vault");
@@ -46,7 +59,7 @@ function fixture(withPrivate: boolean, reach?: typeof TRANSPORT_REACH.local): Fi
   writeFileSync(join(vault, "Clips/report.pdf"), "%PDF-1.7\n");
   writeFileSync(join(vault, "Clips/scan.png"), "png");
   writeFileSync(join(vault, "Clips/blob.bin"), "abc");
-  if (withPrivate) writeFileSync(join(vault, PRIVATE_PATH), PRIVATE_BODY);
+  if (withPrivate) writeFileSync(join(vault, privatePage[0]), privatePage[1]);
   const server = new MCPServer({ vault, configPath }, reach !== undefined ? { reach } : undefined);
   return { vault, server };
 }
@@ -73,6 +86,16 @@ describe("format skips at remote reach", () => {
     ]);
     expect(hidden["unclassifiable"]).toEqual({ total: 1, by_extension: { ".bin": 1 } });
   });
+
+  for (const page of PRIVATE_PAGES) {
+    test(`a hidden ${page[0]} leaves the remote plan identical to the tree without it`, async () => {
+      const hidden = structured(await plan(fixture(true, undefined, page)));
+      const absent = structured(await plan(fixture(false)));
+      expect(JSON.stringify(hidden)).toBe(JSON.stringify(absent));
+      const local = structured(await plan(fixture(true, TRANSPORT_REACH.local, page)));
+      expect(JSON.stringify(local["batches"])).toContain(page[0]);
+    });
+  }
 
   test("at local reach the private page is planned and the format skips are the same", async () => {
     const local = structured(await plan(fixture(true, TRANSPORT_REACH.local)));
