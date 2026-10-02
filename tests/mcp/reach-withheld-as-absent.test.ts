@@ -240,3 +240,25 @@ describe("a revert plan over a withheld page seals what an absent page's plan se
     expect(r.local).toContain('"target":"Notes/private-write.md"');
   });
 });
+
+/** The brain_status hygiene problem line, or a marker when there is none. */
+function hygieneLine(answerText: string): string {
+  const body = JSON.parse(answerText) as {
+    problems: ReadonlyArray<{ code: string; detail: string }>;
+  };
+  return body.problems.find((p) => p.code === "hygiene-findings")?.detail ?? "<none>";
+}
+
+// `secret-2.md` beside `secret.md` is a slug-collision finding that
+// names both pages.
+function collide(vault: string): void {
+  writeFileSync(join(vault, "Notes/secret-2.md"), "# Two\n");
+}
+
+describe("aggregate counts leave out a withheld page as they leave out an absent one", () => {
+  test("brain_status hygiene count", async () => {
+    const r = await pair([], ["brain_status", {}], collide);
+    expect(hygieneLine(r.withheld)).toBe(hygieneLine(r.absent));
+    expect(hygieneLine(r.local)).not.toBe(hygieneLine(r.withheld));
+  });
+});

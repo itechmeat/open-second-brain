@@ -26,6 +26,10 @@ import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceBool, coerceFormat } from "../coerce.ts";
 import { vaultRelativeSafe } from "./shared.ts";
 import { readableAtContextReach } from "./reach-readable.ts";
+import { findingRefs } from "./hygiene-tools.ts";
+import { everyArtifactRefView } from "../../core/brain/artifact-ref-view.ts";
+import { reachView } from "../../core/brain/reach-view.ts";
+import { contextReach } from "../tool-contract.ts";
 
 /**
  * One reported issue, as an MCP caller sees it.
@@ -296,10 +300,21 @@ async function toolBrainStatus(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const format = coerceFormat(args);
+  // The hygiene count keeps the findings `brain_hygiene` would list for
+  // this caller - the owner and reach views, ANDed over each finding's
+  // targets - so a page the caller may not read moves it no more than an
+  // absent page does.
+  const findingView = everyArtifactRefView(
+    gatedOwnerScopeView(ctx.vault, ctx.agentName),
+    reachView(ctx.vault, contextReach(ctx)),
+  );
   const snapshot = await buildOperatorSnapshot(ctx.vault, {
     ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
     // A cited page the caller may not read at its reach answers as an absent one.
     readable: readableAtContextReach(ctx),
+    ...(findingView.filtersNothing
+      ? {}
+      : { keepFinding: (finding) => findingView.row(...findingRefs(ctx.vault, finding)) }),
   });
   return { format, ...snapshot };
 }

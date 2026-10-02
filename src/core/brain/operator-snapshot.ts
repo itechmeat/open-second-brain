@@ -28,6 +28,7 @@ import {
   type SelfHealUpgradeFailure,
 } from "../maintenance/self-heal-upgrade-state.ts";
 import { runHygieneScan } from "./hygiene/scan.ts";
+import type { HygieneFinding } from "./hygiene/types.ts";
 import { brainConfigPath, brainDirs } from "./paths.ts";
 import { loadTemporalConfigSafe } from "./policy.ts";
 import { listProfiles } from "./portability/profiles.ts";
@@ -104,6 +105,14 @@ export interface BuildOperatorSnapshotOptions {
    * caller passes nothing.
    */
   readonly readable?: (rel: string) => boolean;
+  /**
+   * Does the caller see this finding? The hygiene problem line counts only
+   * the findings it keeps, so the count matches what `brain_hygiene`
+   * would list for the same caller rather than the whole vault's: a count
+   * over the unfiltered set would move with a page the caller may not
+   * read. A local caller passes nothing.
+   */
+  readonly keepFinding?: (finding: HygieneFinding) => boolean;
 }
 
 /**
@@ -171,8 +180,11 @@ export async function buildOperatorSnapshot(
       now,
       ...(opts.readable !== undefined ? { readable: opts.readable } : {}),
     });
-    if (hy.findings.length > 0) {
-      problem("hygiene-findings", `${hy.findings.length} hygiene finding(s)`);
+    const keepFinding = opts.keepFinding;
+    const findings =
+      keepFinding === undefined ? hy.findings : hy.findings.filter((f) => keepFinding(f));
+    if (findings.length > 0) {
+      problem("hygiene-findings", `${findings.length} hygiene finding(s)`);
     }
   } catch {
     problem("hygiene-findings", "hygiene scan failed to run");
