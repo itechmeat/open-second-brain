@@ -60,7 +60,8 @@ Narrowed: the scope identity is derived by the server from operator-owned or pac
 - **Two-call remote re-ingest**: needs a caller-lane summary identity across ingest, the manifest and source cleanup; a design, not a fix.
 - **Session tools' private-region model**: session turns carry no `visibility` field; a new model.
 - **Ranking statistics over withheld pages**: per-reader corpus statistics would change scores for every reader; no small hook.
-- **Operator view `dream_summary` and `verification_delta` at reach**: counts from a dry-run dream over the whole layer; recomputing a dream at reach is not small. Stated as the remaining residual.
+- **Operator view `dream_summary` at reach**: counts from a dry-run dream over the whole layer (and the dream warnings the trust verdict folds in); recomputing a dream at reach is not small. Stated as the remaining residual. (`verification_delta` moved to the caller's reach in D4, see below.)
+- **Tier-drift recount in the operator view**: `brain_doctor` below local reach recounts the tier-drift warning against the search index (`recountTierDrift` in `src/mcp/brain/health-tools.ts`); the operator view's doctor pass does not, so with a populated index the two warning counts can differ by that one row. It names no record; aligning them is a follow-up, not a leak.
 
 ## Chosen approach
 
@@ -119,13 +120,13 @@ The consultant's Variant 2 ("one derived session identity, one rules ladder, one
 - **D1 Today.** `ScanOpenLoopsOptions.readable` and `TodayDashboardOptions.readable`, tested before the file is read, so a withheld file is neither read nor counted in `scannedFiles`; obligations filtered by `readable("Brain/obligations/<slug>.md")`. Totals follow because they are arithmetic over the sections.
 - **D2 Monthly.** `BuildMonthlyReviewOptions.eventAtReach`, applied once to the event index before transitions, contradictions and neglected areas, the same `eventAtReach` rule the digest, today, timeline and the daily and weekly briefs use, so monthly and weekly counts agree over the same window.
 - **D3 Doctor.** `RunDoctorOptions.readable` and `DoctorCheckContext.readable` in core, because the cap and `states_changed` are computed inside the checks and the MCP-side filter cannot restore a slot the cap already spent. `StaleDependencyOptions.readable` filters states before `states_changed`.
-- **D4 Operator.** `BuildOperatorSummaryOptions.keepIssue`, `.readable`, `.keepAction`: doctor counts over kept issues, digest counts by readable path, top actions filtered by target before the top-N slice, the trust verdict recomputed from the kept streams. `dream_summary` and `verification_delta` stay as the stated residual.
+- **D4 Operator.** `BuildOperatorSummaryOptions.keepIssue`, `.readable`, `.keepAction`: doctor counts over kept issues, digest counts by readable path, top actions filtered by target before the top-N slice, verification-delta entries and their summary counts kept only when the caller may see the record and page each names (additive option `keepVerification`, added during implementation because the entries named withheld record ids and page paths and their counts drove the trust verdict), the trust verdict recomputed from the kept streams. `dream_summary` stays as the stated residual.
 - **D5** Every option is omitted at local reach (not passed as always-true), so local reach stays byte-identical. Each reader gets an A/B probe through the real MCP server at remote reach on `tests/helpers/reach-log-fixture.ts`, with evidence inside both the 24-hour and the 30-day windows, plus a local control that still sees the withheld item. The `brain_brief` and `brain_doctor` registry reasons are rewritten to state what remains; `brain_brief` stays `excluded`.
 
 ### Release and docs (lane E)
 
 - Version 1.70.0 (minor: additive output key, additive CLI flag, additive Hermes contract). CHANGELOG `## [1.70.0]` with the link reference; README release paragraph; `docs/how-it-works.md`, `docs/mcp.md`, `docs/cli-reference.md`, `docs/observability.md`, `docs/stability.md`, `install/hermes.md` (a "Multiple Hermes profiles" subsection with the install-shadowing pitfall), `docs/updating.md` ("Upgrading to 1.70.0": update `o2b` and the Hermes plugin together, because the bridge now passes `--harness`).
-- Residuals stated in the CHANGELOG: other variables the TypeScript core reads from the gateway environment; the Hermes shared bridge resolves the gateway's working directory, so it usually renders no project-scoped file; the routed-home case without multiplexing; combination scope files; harness-scoped files in the SessionStart hook; operator `dream_summary` and `verification_delta`; the deferred left-overs above.
+- Residuals stated in the CHANGELOG: other variables the TypeScript core reads from the gateway environment; the Hermes shared bridge resolves the gateway's working directory, so it usually renders no project-scoped file; the routed-home case without multiplexing; combination scope files; harness-scoped files in the SessionStart hook; operator `dream_summary`; the deferred left-overs above.
 
 ## File changes
 
