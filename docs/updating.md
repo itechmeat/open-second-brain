@@ -49,7 +49,7 @@ reference it finds (`removed-tool-reference`).
 
 ## Upgrading to 1.67.0
 
-No step below is required. Five changes are visible to an operator or a
+No step below is required. Six changes are visible to an operator or a
 client.
 
 **A distilled quote that does not verify loses its quotation marks.**
@@ -77,8 +77,10 @@ break. Both used to be written as given.
 Wikilink extraction and search indexing close a fenced block only on a run
 of its own character at least as long. Links inside a tilde fence are no
 longer extracted, and a longer fence holding a shorter backtick run no
-longer leaks the rest of its content as links, so such a vault may show
-fewer backlinks and link hits after its next index pass.
+longer leaks the rest of its content as links. An inline code span closes
+only on a backtick run of its own length, and a backtick run with no closer
+is plain text that hides no link after it. Such a vault may show different
+backlinks and link hits after its next index pass.
 
 **The `capture-scope` hygiene detector is on by default.** A default
 `brain_hygiene` or `o2b brain hygiene` scan may report new warnings on an
@@ -86,6 +88,20 @@ existing vault where a distillation, ingest summary, research report or
 canonical entity cites only URLs. The findings propose review and never
 change a page. Callers that pin the default detector list see the new id
 at the end. See [`cli-reference.md`](cli-reference.md).
+
+**More tools treat a page the caller cannot read at its reach as absent.**
+A remote client now gets, for such a page, exactly the answer an absent
+page gets: `brain_delete_by_source`, `brain_note_lifecycle`,
+`brain_append_note`, `brain_update_note`, `brain_write_batch`,
+`brain_note_history`, `brain_tiers`, `brain_event_trace`,
+`brain_agent_query`, `brain_agent_diff`, `brain_diarize`,
+`brain_design_note`, `brain_dream`, `brain_idea_discovery`,
+`brain_procedural_memory`, `brain_doctor`, `schema_inspect` and
+`brain_writes plan_revert` leave it out of their lists and counts or
+refuse it as missing, and the `brain_hygiene` `link_integrity` block
+reports `measured: false` with reason `reach`. A local caller and the CLI
+see no change. See the 1.67.0 entry in
+[`CHANGELOG.md`](../CHANGELOG.md).
 
 ## Upgrading to 1.66.0
 
