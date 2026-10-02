@@ -82,13 +82,14 @@ The OpenClaw bundle (`openclaw/index.js`) belongs to no lane: the integrator run
 
 - `config.PROFILE_SCOPED_ENV: tuple[str, ...] = (VAULT_DIR_ENV, AGENT_NAME_ENV, TIMEZONE_ENV, CONFIG_PATH_ENV, "OPEN_SECOND_BRAIN_MCP_TIMEOUT")` (the timeout name moves into config.py as `REQUEST_TIMEOUT_ENV`; bridge.py imports it).
 - `config.is_multiplexed() -> bool`; `config.env_setting(name: str) -> str | None` (the one reader; empty counts as unset).
+- `config.SCOPE_FIRST_ENV: tuple[str, ...] = (XDG_CONFIG_HOME_ENV, LOCALAPPDATA_ENV)` and `config.scope_first_setting(name: str) -> str | None` (review amendment): multiplexed, the bound scope's non-empty value, else `os.environ`; not multiplexed, `os.environ` only; unbound raises `ProfileScopeError`. `config_path()` and `_windows_local_app_data()` read through it, and the scoped MCP child env carries the scope's value for both names. `PATH`, `PATHEXT` and `HOME` stay process-global.
 - `class ProfileScopeError(ConfigReadError)` with `__init__(self, name: str)`, attributes `name`, `path` (`""`), `reason` (`"no profile scope bound"`), message: `"{name} cannot be resolved: this multiplexed Hermes gateway bound no profile scope for the call, and Open Second Brain does not fall back to the gateway's process environment, which belongs to the launch profile. Restart the gateway (hermes gateway restart); if it persists, report it."`
 - WARNING template (logger `plugins.hermes.config`): `"%s: ignoring %s from the gateway process environment on a multiplexed gateway; set it in the profile's .env instead"` with `PLUGIN_NAME` and the name; test reset `config._reset_scope_warnings_for_tests()`.
 - `prefetch` degrade WARNING (logger `plugins.hermes.provider`, once per process): `"%s: no profile scope bound for this turn; the vault reminder is omitted"` with `PROVIDER_NAME`.
 - Multiplexed `shadowing_source` text: `"the {env_key} setting in this Hermes profile's .env overrides the config file"`.
 - `McpBrainBridge(..., timeout: float | None = None)`; `start` uses it when not `None`, else `resolve_request_timeout()` as today.
 - `bridge.HARNESS_ARGV = ("--harness", "hermes")`; `_argv()` = command, then `--vault <v>` when set, then `--repo <r>` when set, then `--harness hermes`.
-- `cli._config` prints `settings_source: profile scope (multiplexed gateway)` or `settings_source: process environment` as its FIRST line (it cannot raise), then `config_path:`; `config_path()` moves inside the `try`, because under multiplexing it reads `OPEN_SECOND_BRAIN_CONFIG` through `env_setting` and can raise `ProfileScopeError`.
+- `cli._config` prints `settings_source: profile scope (multiplexed gateway)` or `settings_source: process environment (this command; a gateway with gateway.multiplex_profiles reads each profile's .env)` (review amendment) as its FIRST line (it cannot raise), then `config_path:`; `config_path()` moves inside the `try`, because under multiplexing it reads `OPEN_SECOND_BRAIN_CONFIG` through `env_setting` and can raise `ProfileScopeError`.
 
 ### Lane D options (lane D)
 
