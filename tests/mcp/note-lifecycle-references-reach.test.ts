@@ -14,7 +14,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
@@ -64,9 +64,13 @@ async function answer(f: Fixture, args: Record<string, unknown>): Promise<string
     const e = err as Error & { code?: unknown; data?: unknown };
     raw = `error: ${e.message} ${JSON.stringify(e.code)} ${JSON.stringify(e.data)}`;
   }
+  // The temp folder name carries no separators, so it also matches the
+  // JSON-escaped form of a Windows path, where `f.vault` itself does not.
   return raw
     .split(f.vault)
     .join("<vault>")
+    .split(basename(dirname(f.vault)))
+    .join("<base>")
     .replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z?/g, "<ts>")
     .replace(/\d{4}-\d{2}-\d{2}-\d{6}/g, "<run>");
 }

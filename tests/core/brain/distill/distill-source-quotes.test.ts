@@ -160,9 +160,9 @@ describe("distillSource - quote check", () => {
   });
 });
 
-/** How many of the recorded fs calls named the source file. */
+/** How many of the recorded fs calls named the source file, on any platform's separators. */
 const touches = (calls: ReadonlyArray<ReadonlyArray<unknown>>): number =>
-  calls.filter((args) => String(args[0]).endsWith(SOURCE)).length;
+  calls.filter((args) => String(args[0]).replaceAll("\\", "/").endsWith(SOURCE)).length;
 
 describe("distillSource - one read of the source", () => {
   test("the source file is opened or read exactly once per call", () => {
