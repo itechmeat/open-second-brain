@@ -1,0 +1,148 @@
+# Per-context scope resolution - per-profile Hermes settings on multiplexed gateways, standing rules scoped to project, harness and host, and reach left-overs
+
+**Status:** draft (phase 1 spec review applied)
+**Author:** release orchestrator (via feature-release-playbook)
+**Audience:** implementation
+**Base:** origin/main d49c4697 (v1.69.0), branch `feat/scope-resolution`, target version 1.70.0 (minor)
+
+## Problem statement
+
+A setting or a rule meant for one context leaks into another in two places. First, the Hermes memory plugin reads `VAULT_DIR`, `VAULT_AGENT_NAME`, `VAULT_TIMEZONE`, `OPEN_SECOND_BRAIN_CONFIG` and `OPEN_SECOND_BRAIN_MCP_TIMEOUT` straight from `os.environ` (`plugins/hermes/config.py:358, :380, :406, :188`, `bridge.py:66`). On a Hermes gateway with `multiplex_profiles: true` one process serves several profiles and the process environment belongs to the launch profile, so a secondary profile writes into the launch profile's vault under the launch profile's agent name. Second, the operator's standing rules are one vault-wide file (`Brain/standing-rules.md`); a rule that holds for one project, one harness or one machine is injected into every session everywhere. A third, smaller gap carries over from v1.69.0: the today, monthly and operator brief views and two doctor counts answer over the whole Brain layer at remote reach, and the today view even returns the text and path of an open loop on a page the caller may not read.
+
+## Premise verification (live source, d49c4697)
+
+Full evidence: the three reconnaissance reports of this wave. The orchestrator re-opened the anchors this design builds on: `standing-rules.ts:60-217`, `text-budget.ts:24-146`, `active-inject.ts:160-200, 230-260, 309-430`, `policy/blocks/active.ts:50-145`, `context-tools.ts:365-554`, `server.ts:75-100`, `tool-contract.ts:111-152, 207`, `main.ts:760-790`, `host-facts.ts:61-90`, `config.ts:455-470`, `portability/pointer.ts:34-43, 123-133`, `plugins/hermes/bridge.py:255-294`, `plugins/hermes/config.py:100-127, 465-488`, `plugins/hermes/cli.py:40-100`, `provider.py:442-466`, `.claude-plugin/plugin.json`, `tests/mcp/plugin-mcp-servers.test.ts:33-40`, `operator-summary.ts:72-243`, `health-tools.ts:160-190`, and ran the current hook and the current `o2b mcp` flag validation (outputs in `cli-output/expected-output.md`).
+
+### Card 1 (per-profile Hermes plugin configuration) - confirmed, widened
+
+- Confirmed: nothing under `plugins/hermes` calls `get_secret`, `is_multiplex_active` or anything in `agent.secret_scope`. The Hermes contract (`is_multiplex_active()`, `get_secret(name, default)`, `UnscopedSecretError`) exists in the installed Hermes and Hermes's own memory plugins already follow the two-mode pattern.
+- Narrowed by the validator, applied: the variable names are `VAULT_AGENT_NAME` and `VAULT_TIMEZONE` (not the card's spellings); the anchors moved to `:358/:380/:406`.
+- Widened, leak 1: the `o2b mcp` child inherits a copy of the gateway environment (`provider.py:390-395, 419-439`), and the TypeScript core reads the agent name and timezone from that inherited environment (`src/core/config.ts:324-329, 395-402`). A plugin-side resolver alone would leave the core writing under the launch profile's name. The child environment must carry the scoped values.
+- Widened, leak 2: the shared-bridge key `(vault, repo_root, command, PATH)` (`provider.py:167-180`) holds no identity, so two profiles that share a vault but differ in agent name, timezone or config file would share one child and one identity.
+- Refuted detail of the card: "skip cron sessions". Hermes binds a profile scope for routed cron fires and marks them multiplexed (`cron/scheduler.py:3178, :3783`), so the two-mode rule covers cron with no special case. The note came from upstream code that is not available for inspection and is not adopted.
+
+### Card 2 (standing rules scoped to project, harness and host) - partly false, narrowed and built as narrowed
+
+The card made three claims that the source refutes:
+
+1. False: "`SCOPE_AXES` normalizes owner/session/project server-side". The axes are normalised there, but no value is resolved by the server: `project` comes from page frontmatter (`scopeFromFrontmatter`, `scope-key.ts:53-61`) or from a caller-named tool argument (`project_scope` on `brain_search` and the session-summary tool). No server-resolved project identity exists.
+2. False: "Open Second Brain already computes host probes (`second_brain_wiring view=hosts`)". "Host" in this code base means an install target, which is a harness (`INSTALL_TARGET_ID`, `host-facts.ts:61-72`), not a machine. Nothing calls `os.hostname()`; the only per-machine identity is the device id (`resolveDeviceId`, `config.ts:461`).
+3. False: "`src/mcp/server.ts:127` is the MCP scope method". That line is a request type. `handleInitialize` reads only `protocolVersion`; `clientInfo` is read nowhere in `src/`; `ServerContext` carries no project, harness or host.
+
+Narrowed: the scope identity is derived by the server from operator-owned or packaged facts only, the layer is single-axis files in a dedicated directory, harness-scoped files render on the MCP surfaces only, and the layer renders only at local reach.
+
+### Lane D (v1.69.0 reach left-overs) - confirmed, one item understated
+
+- Understated: the today view's open loops are not a count. At remote reach `open_loops.openLoops` lists the loop text and the path of a page withheld by visibility (probe through the real MCP server: `{"text":"zzreservedloopzz","path":"Notes/PRIVATE_PATH.md","line":6}`), because `scanOpenLoops` walks `walkMarkdownFiles` with no visibility predicate (`open-loops.ts:149-176`). docs/mcp.md:2180-2182 states the opposite and is false today.
+- Confirmed by A/B probe: the monthly view (`events 7 / status_transitions 4 / retired 1 / contradictions 1` against `2 / 1 / 0 / 0`) and the operator view (`preference_count 2/1`, `warnings 11/3`, `trust_verdict investigate/watch`) differ with and without withheld records at remote reach.
+- Confirmed by code: the removed-tool warning cap counts withheld candidates before the MCP filter (`removed-tool-checks.ts:37, 87-117`), and the stale-dependency note counts `states_changed` over the whole layer (`stale-dependency.ts:186, 211`).
+- The steer's expected lane (status triple, removed-tool cap and stale count, ranking statistics, the entity page naming a reserved source path) was overturned by the left-overs report's ranking: the today loops leak content, so they come first; the status triple, the entity-page provenance and the ranking statistics are not small (see Out of scope).
+
+## Scope
+
+1. **Hermes plugin, two-mode settings.** Under multiplexing every profile-scoped setting comes from the turn's profile scope, never from the gateway process environment; without multiplexing the plugin answers exactly as today. A named `ProfileScopeError`, one value-free WARNING per ignored process-environment name, a scoped child environment, an identity-bearing shared-bridge key, a bridge timeout fixed at construction, and a degrading `prefetch`.
+2. **Scoped standing rules.** `Brain/standing-rules/{project,harness,host}/<key>.md`, one file per resolved scope value, rendered below the constitution and above recalled content, charged against the injection budget, refused to every write path, never cached, at local reach only.
+3. **Server-resolved scope identity.** Project from the nearest `.o2b-vault.json` pointer; harness from a new `o2b mcp --harness <id>` runtime option (falling back to `--host-target`), packaged into the Claude Code plugin registration and the Hermes bridge argv; host from the device id.
+4. **Surfaces.** The SessionStart hook (project and host only) and `brain_context` (all three axes, a new optional `scoped_rules` output key); `o2b mcp --harness`.
+5. **Reach left-overs.** The today view's open loops, the monthly view's counts, the doctor's removed-tool cap and stale-dependency count, and the operator view's doctor, digest, top-action and trust-verdict fields, each at the caller's reach with an A/B probe through the real MCP server.
+6. Docs, CHANGELOG, README, version 1.70.0.
+
+## Out of scope (deferred, by name)
+
+- **Combination scope files** (`project+host` and the like): the number of combinations grows quickly and no anchor needs them; the union of matching single-axis files covers the upstream `host:harness:project` triple.
+- **Harness-scoped files in the SessionStart hook**: the hook has no server-side harness signal (`CLAUDE_PLUGIN_ROOT` is exported by both Claude Code and Codex), and a per-harness marker on the hook command is constrained by the mirror sync's `o2b-hook <name>` fallback rule. Harness files render on the MCP surfaces only in this release.
+- **A standing-rules lane in OpenClaw**: OpenClaw runs in-process, never launches `o2b mcp`, and injects only an identity reminder (`src/openclaw/index.ts:58-75`); there is no lane to scope.
+- **Other variables the TypeScript core reads from the gateway environment** (search settings, `OPEN_SECOND_BRAIN_MCP_API_KEY`, embedding keys, `TELEGRAM_*`): they still come from the process environment on a multiplexed gateway. Hermes's `strip_launch_profile_env` is Hermes-internal and not adopted (see variants).
+- **The desktop routed-home case without multiplexing** (`serves_routed_profile` true, multiplex flag false): stays on `os.environ`, as in Hermes's own plugins.
+- **The pre-existing absolute path in the constitution's failure and truncation text** (`standing-rules.ts:254-276`): the constitution is byte-identical by contract; the new layer uses vault-relative paths only and does not copy the pattern.
+- **Status triple at reach** (`brain_status`, `second_brain_status`, `osb://status`): three surfaces, the census pin of `osb://status` as the only excluded resource, and index and vault-scope counts that stay whole-vault; a lane of its own.
+- **Entity page naming a reserved source path through summary-id provenance**: changing the provenance target changes which pages `brain_search_by_source` and `brain_delete_by_source` find at local reach (deletion semantics) and needs its own answer for `brain_intake_entities`.
+- **Two-call remote re-ingest**: needs a caller-lane summary identity across ingest, the manifest and source cleanup; a design, not a fix.
+- **Session tools' private-region model**: session turns carry no `visibility` field; a new model.
+- **Ranking statistics over withheld pages**: per-reader corpus statistics would change scores for every reader; no small hook.
+- **Operator view `dream_summary` and `verification_delta` at reach**: counts from a dry-run dream over the whole layer; recomputing a dream at reach is not small. Stated as the remaining residual.
+
+## Chosen approach
+
+The consultant's Variant 2 ("one derived session identity, one rules ladder, one reach layer"), adjusted. Identity is derived in one server-owned place from facts the caller cannot name, the scoped layer is one reader beside the untouched constitution reader, and the Hermes plugin gains one internal reader that switches on the Hermes multiplex flag. Adjustments, with evidence:
+
+1. The constitution reader is not wrapped in a "ladder": `standing-rules.ts`, its header and its exemption are pinned byte for byte (`brain-context-standing-rules.test.ts:120-180`, `active-inject.test.ts:445-548`). The scoped reader is a second module whose block is joined after the constitution's.
+2. Identity never comes from `clientInfo` or MCP roots: both are named by the client about itself (tests send arbitrary names; Hermes sends a constant). The harness is a launch-time `--harness` argument written by the packager or installer.
+3. No `ReachLayer` object: the shipped pattern is a per-reader `readable` predicate that is omitted at local reach (`readableAtContextReachOrUndefined`), which keeps local reach byte-identical and the fast paths intact. Lane D threads that predicate per reader.
+4. No settings-source argument on the Hermes resolvers: the doctor parity check and the parity suite call them with no arguments by file location; one internal reader keeps their signatures and answers unchanged.
+5. The scoped layer renders at local reach only, the rule the consultant flagged as missing from its own variant.
+
+## Design decisions
+
+### Scoped rules (lane A substrate)
+
+- **S1 Layout.** `Brain/standing-rules/project/<key>.md`, `Brain/standing-rules/harness/<harness id>.md`, `Brain/standing-rules/host/<device id>.md`. One file per scope value, not frontmatter inside the constitution: the constitution reader may not branch on content (`standing-rules.ts:37-44`) and its file stays byte-identical. Under `Brain/` the files inherit the note-target refusal and the importer rejections at no cost.
+- **S2 Vocabularies.** `SCOPED_RULE_AXIS` (project, harness, host; census row) and a closed `HARNESS_ID` = every `INSTALL_TARGET_ID` member plus `claude-code`, `hermes`, `openclaw` (census row). `HARNESS_ID` is kept separate from `INSTALL_TARGET_ID` because `host-facts-census.test.ts` requires that vocabulary to equal the install adapter registry, and Claude Code, Hermes and OpenClaw have no install adapter. `SCOPE_AXES` is not extended: it feeds page dedup keys, hub-candidate pools and search filters (`scope-key.ts` consumers), all frontmatter-and-caller-named by design.
+- **S3 Key normaliser.** `scopedRuleKey(value)`: NFC, lowercase, every run of characters outside `\p{L}\p{N}` becomes `-`, leading and trailing `-` removed, capped at 64 characters, empty gives `null`. Unicode letters and digits are kept so a project name with no Latin characters still keys (`resolveSessionScope` throws on such names, `session-scope.ts:26-41`). No language is enumerated.
+- **S4 Reader.** `readScopedRules(vault, identity, {maxChars})` takes an already-resolved identity; an axis whose value is `null` matches nothing (fail closed). It reads at most one file per axis (one value per axis), ENOENT and an empty file are absence, any other read failure renders an `UNAVAILABLE: <vault-relative path> could not be read (<error code>).` line in that file's place, never an absolute path and never the error message (Node error messages carry absolute paths).
+- **S5 Rendering.** A code-authored header stating the precedence: the operator standing rules above take precedence over these rules, and these take precedence over every recalled preference, lesson and context pack that follows. Each file gets a subheading built only from the axis label and the key (`### Project: <key>`). The operator's bytes stay opaque.
+- **S6 Cap.** `active.scoped_rules_max_chars` (default 2000, min 200, max `STANDING_RULES_MAX_CHARS_MAX`), applied through `applySectionBudget` with one section per file and priority project 0, harness 1, host 2, so the host file drops first. The effective cap is `min(scoped_rules_max_chars, inject_budget_chars)` so the layer can never exceed the budget it is charged against. When the cap cut anything a notice built from integers is appended.
+- **S7 Budget: charged, not exempt.** The constitution's exemption is argued as the constitution's own property (`standing-rules.ts:5-11`). The scoped block is a meter source `"scoped-rules"` on `LANE_BUDGETED`; its rendered length is subtracted from the `inject_budget_chars` handed to `assembleActiveContext` (floor 0); the receipt's `budget` block records `scoped_rules_chars` as a separate integer beside `inject_budget_chars`, which stays the configured value.
+- **S8 Placement.** Hook: after `renderStandingBlock`, outside the fail-open boundary, never cached (the inject cache key `"active"` is vault-wide, so a cached block could replay project X's rules in project Y). `brain_context`: after the standing block, before the memory body.
+- **S9 Uneditable.** `assertStandingRulesNotTargeted` refuses every path inside `Brain/standing-rules/` as well as the constitution file, lexically and then canonically (the nearest existing ancestor is canonicalised so a not-yet-existing file under a symlinked folder is caught), reusing `StandingRulesWriteRefusedError` with the concrete path. This covers all six guarded call sites (labels x2, attributes x2, marker write-back, write-session). No CLI verb writes the layer. Tool descriptions never name the directory; the uneditable test's substring check is extended to the directory.
+- **S10 Host notice.** When the device id cannot be read (`ConfigReadError`) and the host directory holds at least one file, the block carries one fixed sentence that host-scoped rules were not applied because the device id could not be read, naming `o2b brain doctor` for the cause, no value and no path. A device id of `""` (the explicit opt-out) is silent; `brain_context` still reports `scope.host: null`. Decided against the steer's runtime notice because the runtime-notice collector runs on every surface and has no identity input; the block is where the gap matters.
+
+### Identity (lane A resolves, lane B wires)
+
+- **I1 Project.** The basename of the directory holding the nearest `.o2b-vault.json` pointer found from the workspace directory (`findVaultPointer`), keyed by `scopedRuleKey`; no pointer or a malformed pointer gives `null`. The pointer is operator-written by `o2b brain project link` and already walked by every vault resolution; git remotes cost subprocesses and are absent outside git. The pointer is not required to name the serving vault: it proves the directory is a linked project.
+- **I2 Workspace directory.** Hook: payload `cwd`, falling back to `process.cwd()`. Stdio MCP server: `process.cwd()` captured once in `main.ts` and passed as the runtime option `workspaceDir` (injectable in tests). A server built without it resolves project `null`.
+- **I3 Harness.** `o2b mcp --harness <HARNESS_ID>`, validated against the closed list (unknown value: exit 2 with the list, the `--host-target` message shape), falling back to `--host-target` when absent (install targets are a subset of `HARNESS_ID`), else `null`. Packaged: the Claude Code plugin's two MCP registrations gain `--harness claude-code`; the Hermes bridge argv gains `--harness hermes`. The manifest file is owned by the release lane (it also carries the synced version), so one lane edits it. OpenClaw launches no `o2b mcp`. Install adapters already write `--host-target`, so no adapter changes. Never `clientInfo`, never a tool argument, never page frontmatter; a census test (modelled on `origin-channel-census.test.ts`) asserts no MCP tool schema property spells the harness.
+- **I4 Host.** `resolveDeviceId(configPath)`, read lazily only when the layer renders (local reach), `""` gives `null`, `ConfigReadError` gives `null` plus S10. Never `os.hostname()`: not stable, not unique, and host names must not reach public text.
+- **I5 Hook scope.** The hook resolves project and host only; the docs say plainly that harness-scoped files render on the MCP surfaces only in this release.
+
+### Surfaces (lane B)
+
+- **B1 `brain_context`.** `readScopedBlock(ctx)` beside `readStandingBlock`; its text joins after the standing block in `content`; optional output key `scoped_rules: {scope: {project, harness, host}, files: [{path, axis, truncated}]}` (vault-relative POSIX paths) present only when at least one file matched; no new input argument (`additionalProperties: false` stays).
+- **B2 Reach.** The layer renders only when `contextReach(ctx) === TRANSPORT_REACH.local`. At remote reach the server's cwd and device are not the caller's, so the block, the key and the device-id read are all skipped, and the output is byte-identical with and without scoped files.
+- **B3 `--harness` on the CLI manifest** (`command-manifest.ts`) so the help and the flag census see it.
+
+### Hermes plugin (lane C), per the Hermes reconnaissance section 4
+
+- **H1 Scoped names.** `PROFILE_SCOPED_ENV = (VAULT_DIR, VAULT_AGENT_NAME, VAULT_TIMEZONE, OPEN_SECOND_BRAIN_CONFIG, OPEN_SECOND_BRAIN_MCP_TIMEOUT)` beside the existing constants. `XDG_CONFIG_HOME`, `LOCALAPPDATA`, `PATH`, `PATHEXT`, `HOME` stay process-global in both modes: they describe the OS, and routing `XDG_CONFIG_HOME` through `get_secret` would return `None` under multiplexing and silently move the config path.
+- **H2 One reader.** `_env_setting(name)`: when a lazy, absolute, `try/except`-guarded `from agent.secret_scope import ...` succeeds and `is_multiplex_active()` is true, `get_secret(name, None)`; a miss (`None` or empty) falls through to the rest of the existing chain (pointer, active profile, config key, default), never to `os.environ`. Otherwise today's `os.environ.get(name)`, unchanged. `config.py` stays importable without a package (the doctor parity check and the parity suite load it by file location).
+- **H3 `ProfileScopeError(ConfigReadError)`.** Own `__init__` (the pinned `ConfigReadError` template is untouched), value-free message, attributes `name`, `path`, `reason`, raised `from` `UnscopedSecretError`. Every existing `ConfigReadError` catch site already does the right thing: `is_available` refuses and the refusal reaches the gateway log, `initialize` propagates, the wizard readback skips the field, the two CLI diagnostics print it and exit 2.
+- **H4 Warning.** Under multiplexing, for each scoped name with a non-empty `os.environ` value, one WARNING per process per name from `plugins.hermes.config`, never the value, deduplicated under a lock, with a test-only reset.
+- **H5 Child and key.** Under multiplexing `initialize` resolves vault, agent name, timezone, config path and timeout once under the bound scope; the child environment is the existing one with every scoped name removed and the resolved non-empty values set (`VAULT_DIR` only when the vault came from the scope). `McpBrainBridge(timeout=...)` so a restart from the plugin's own `sync_turn` thread never reads the environment. `_shared_bridge_key` gains agent name, timezone, config path and timeout; without multiplexing those are constant per process, so sharing is unchanged.
+- **H6 `prefetch` degrades** on `ProfileScopeError`: the reminder is omitted for that turn and a WARNING is logged once, matching `_safe_call`'s degrade policy, instead of failing the turn.
+- **H7 `shadowing_source`** under multiplexing checks the scope value and says the setting in this Hermes profile's `.env` overrides the config file; the non-multiplexed text is byte-identical.
+- **H8 `--harness hermes`** appended to the bridge argv after `--vault` and `--repo`.
+- **H9 Diagnostics.** `hermes open-second-brain config` prints one more line, `settings_source:`, naming `profile scope (multiplexed gateway)` or `process environment`, so an operator can see which source answered. Values are never printed for ignored names.
+- **H10 Cron** needs no special case (see premise verification).
+
+### Reach left-overs (lane D)
+
+- **D1 Today.** `ScanOpenLoopsOptions.readable` and `TodayDashboardOptions.readable`, tested before the file is read, so a withheld file is neither read nor counted in `scannedFiles`; obligations filtered by `readable("Brain/obligations/<slug>.md")`. Totals follow because they are arithmetic over the sections.
+- **D2 Monthly.** `BuildMonthlyReviewOptions.eventAtReach`, applied once to the event index before transitions, contradictions and neglected areas, the same `eventAtReach` rule the digest, today, timeline and the daily and weekly briefs use, so monthly and weekly counts agree over the same window.
+- **D3 Doctor.** `RunDoctorOptions.readable` and `DoctorCheckContext.readable` in core, because the cap and `states_changed` are computed inside the checks and the MCP-side filter cannot restore a slot the cap already spent. `StaleDependencyOptions.readable` filters states before `states_changed`.
+- **D4 Operator.** `BuildOperatorSummaryOptions.keepIssue`, `.readable`, `.keepAction`: doctor counts over kept issues, digest counts by readable path, top actions filtered by target before the top-N slice, the trust verdict recomputed from the kept streams. `dream_summary` and `verification_delta` stay as the stated residual.
+- **D5** Every option is omitted at local reach (not passed as always-true), so local reach stays byte-identical. Each reader gets an A/B probe through the real MCP server at remote reach on `tests/helpers/reach-log-fixture.ts`, with evidence inside both the 24-hour and the 30-day windows, plus a local control that still sees the withheld item. The `brain_brief` and `brain_doctor` registry reasons are rewritten to state what remains; `brain_brief` stays `excluded`.
+
+### Release and docs (lane E)
+
+- Version 1.70.0 (minor: additive output key, additive CLI flag, additive Hermes contract). CHANGELOG `## [1.70.0]` with the link reference; README release paragraph; `docs/how-it-works.md`, `docs/mcp.md`, `docs/cli-reference.md`, `docs/observability.md`, `docs/stability.md`, `install/hermes.md` (a "Multiple Hermes profiles" subsection with the install-shadowing pitfall), `docs/updating.md` ("Upgrading to 1.70.0": update `o2b` and the Hermes plugin together, because the bridge now passes `--harness`).
+- Residuals stated in the CHANGELOG: other variables the TypeScript core reads from the gateway environment; the Hermes shared bridge resolves the gateway's working directory, so it usually renders no project-scoped file; the routed-home case without multiplexing; combination scope files; harness-scoped files in the SessionStart hook; operator `dream_summary` and `verification_delta`; the deferred left-overs above.
+
+## File changes
+
+New:
+- `src/core/brain/scoped-rules.ts`, `src/core/brain/scope-identity.ts`
+- `tests/core/brain/scoped-rules.test.ts`, `tests/core/brain/scope-identity.test.ts`, `tests/core/brain/scoped-rules-guard.test.ts`
+- `tests/hooks/active-inject-scoped-rules.test.ts`, `tests/mcp/brain-context-scoped-rules.test.ts`, `tests/core/architecture/harness-identity-census.test.ts`, `tests/cli/mcp-harness-flag.test.ts`
+- `tests/python/test_profile_scope.py`
+- `tests/mcp/today-open-loops-reach.test.ts`, `tests/mcp/brief-monthly-reach.test.ts`, `tests/mcp/doctor-counts-reach.test.ts`, `tests/mcp/brief-operator-reach.test.ts`
+
+Changed: see plan.md "File ownership" (every file is owned by exactly one lane).
+
+## Risks and open questions
+
+- **Stale `o2b` on PATH with a new Hermes plugin.** The bridge prefers an `o2b` found on PATH (`provider.py:461-465`); an older binary refuses `--harness` with `unknown flag` and the bridge fails to start. The failure is explicit (the stderr tail names the flag), not silent; `docs/updating.md` and `install/hermes.md` say to update both together. Accepted.
+- **Budget arithmetic.** With a small `inject_budget_chars` and a full scoped layer the active body can shrink to zero; that is the operator's configuration and the receipt shows both integers. The hook test pins the arithmetic.
+- **Device id first use.** `resolveDeviceId` may generate and persist an id on first use; the log writers already do the same on every vault, so the scoped reader adds no new write. The test preload pins `O2B_DEVICE_ID=""`; host tests set it per test through `tests/helpers/device-id.ts`.
+- **Receipt `budgeted_source_count`** now counts the scoped source when it rendered; the docs state that the scoped source is subtracted, not charged against the full ceiling.
+- **Degraded hook runs** keep only exempt sources in the receipt items; the scoped block is still injected live (it is outside the fail-open boundary) and `scoped_rules_chars` is recorded only on measured runs, matching the existing budget block.
+- No open questions remain; every decision named in the reconnaissance reports is settled above.
