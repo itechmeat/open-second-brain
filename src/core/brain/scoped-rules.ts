@@ -97,17 +97,19 @@ export function isHarnessId(value: unknown): value is HarnessId {
 
 export const SCOPED_RULE_KEY_MAX_CHARS = 64;
 
-const NON_KEY_RUN = /[^\p{L}\p{N}]+/gu;
+const NON_KEY_RUN = /[^\p{L}\p{M}\p{N}]+/gu;
 
 /**
- * File key for one scope value: NFC, lowercase, every run of characters
- * that are not a Unicode letter or digit becomes one `-`, leading and
- * trailing dashes removed, capped at {@link SCOPED_RULE_KEY_MAX_CHARS}
- * code units (never half of a surrogate pair), `null` when nothing is left. No language is
- * enumerated, so a name with no Latin character still keys.
+ * File key for one scope value: NFC, lowercase, NFC again (lowercasing
+ * can decompose), every run of characters that are not a Unicode letter,
+ * combining mark or digit becomes one `-`, leading and trailing dashes
+ * removed, capped at {@link SCOPED_RULE_KEY_MAX_CHARS} code units (never
+ * half of a surrogate pair), `null` when nothing is left. No language is
+ * enumerated, so a name with no Latin character still keys, and a word
+ * written with vowel signs or diacritic marks keys whole.
  */
 export function scopedRuleKey(value: string): string | null {
-  const folded = value.normalize("NFC").toLowerCase().replace(NON_KEY_RUN, "-");
+  const folded = value.normalize("NFC").toLowerCase().normalize("NFC").replace(NON_KEY_RUN, "-");
   const trimmed = stripDashes(capCodeUnits(stripDashes(folded), SCOPED_RULE_KEY_MAX_CHARS));
   return trimmed === "" ? null : trimmed;
 }

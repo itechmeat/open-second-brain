@@ -64,6 +64,17 @@ describe("scopedRuleKey", () => {
     expect(astral).toBe("a".repeat(63));
   });
 
+  test("keeps combining marks, so a word in an abugida or with vowel marks keys whole", () => {
+    expect(scopedRuleKey("हिन्दी")).toBe("हिन्दी");
+    expect(scopedRuleKey("مُحَمَّد")).toBe("مُحَمَّد");
+    // The lowercase of a dotted capital I is i plus a combining dot above,
+    // which NFC cannot recompose; the mark stays part of the key.
+    expect(scopedRuleKey("İstanbul")).toBe("i\u0307stanbul");
+    expect(scopedRuleKey("Café")).toBe("café");
+    expect(scopedRuleKey("café")).toBe("café");
+    expect(scopedRuleKey("Cafe\u0301")).toBe("café");
+  });
+
   test("normalises to NFC so composed and decomposed spellings share a key", () => {
     expect(scopedRuleKey("Café")).toBe(scopedRuleKey("Café"));
   });
