@@ -376,9 +376,22 @@ function moduleIdentities(module: ModuleFact): ReadonlyArray<string> {
   return keys;
 }
 
-/** Every module manifest's identity: the names that are modules, not external packages. */
+/**
+ * The module manifest identities that bind to exactly one module: the
+ * names that become module edges, not external packages. A name two
+ * modules' manifests share binds nothing (see
+ * {@link detectModuleDependencies}), so it stays an external name.
+ */
 export function moduleManifestIdentities(modules: ReadonlyArray<ModuleFact>): ReadonlySet<string> {
-  return new Set(modules.flatMap(moduleIdentities));
+  const owners = new Map<string, Set<string>>();
+  for (const module of modules) {
+    for (const key of moduleIdentities(module)) {
+      const names = owners.get(key) ?? new Set<string>();
+      names.add(module.name);
+      owners.set(key, names);
+    }
+  }
+  return new Set([...owners].filter(([, names]) => names.size === 1).map(([key]) => key));
 }
 
 /**

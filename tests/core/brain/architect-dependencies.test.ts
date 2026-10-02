@@ -133,7 +133,27 @@ test("module-dependencies states the absence of edges in a fixed sentence", () =
     JSON.stringify({ name: "@mono/web", dependencies: { react: "^19" } }),
   );
   const body = regionBody(overview(generateArchDocs(vault, project)), "module-dependencies");
-  expect(body).toBe("No module declares a runtime dependency on another module's manifest name.");
+  expect(body).toBe(
+    "No module's manifest names exactly one other module's manifest as a runtime dependency.",
+  );
+});
+
+test("a name two modules' manifests share stays listed and binds no edge", () => {
+  put(
+    "package.json",
+    JSON.stringify({ name: "mono", dependencies: { shared: "1", "left-pad": "1" } }),
+  );
+  put("packages/core/package.json", JSON.stringify({ name: "shared" }));
+  put("packages/web/package.json", JSON.stringify({ name: "shared" }));
+  put("packages/c/package.json", JSON.stringify({ name: "c", dependencies: { shared: "1" } }));
+  put("packages/c/index.ts", "// x\n");
+  const text = overview(generateArchDocs(vault, project));
+  const lines = regionBody(text, "dependencies").split("\n");
+  expect(lines).toContain("- shared");
+  expect(lines).toContain("- left-pad");
+  expect(regionBody(text, "module-dependencies")).toBe(
+    "No module's manifest names exactly one other module's manifest as a runtime dependency.",
+  );
 });
 
 test("module-map stays containment-only when modules depend on each other", () => {

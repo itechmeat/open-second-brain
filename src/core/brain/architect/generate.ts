@@ -336,7 +336,7 @@ const MODULE_DEPENDENCIES_CLAIM =
 
 /** What the `module-dependencies` region says when no module declares an edge. */
 const NO_MODULE_DEPENDENCY =
-  "No module declares a runtime dependency on another module's manifest name.";
+  "No module's manifest names exactly one other module's manifest as a runtime dependency.";
 
 /** What a module note says when its module declares no edge. */
 const NO_DEPENDS_ON = "Depends on: no other module";
@@ -397,8 +397,9 @@ function dependencySections(
 /**
  * The overview's `dependencies` region: every manifest the scan found,
  * root and modules, with its status; the runtime dependencies per
- * ecosystem with module names left out (those are modules, drawn in
- * `module-dependencies`); one count line per ecosystem for the rest.
+ * ecosystem with the names that bind to exactly one module left out
+ * (those are modules, drawn in `module-dependencies`); one count line per
+ * ecosystem for the rest.
  */
 function dependenciesBody(facts: ProjectFacts): string {
   if (facts.manifests.length === 0) return NO_MANIFEST;
