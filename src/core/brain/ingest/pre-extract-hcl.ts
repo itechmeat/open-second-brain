@@ -29,7 +29,8 @@
  * escapes), skips heredoc bodies up to their terminator (`<<EOF`, `<<-EOF`)
  * and drops `#`, `//` and `/* ... *\/` comments, so braces and text inside
  * strings, heredocs and comments never count. Text inside a string is never
- * a citation; the inside of a `${...}` or `%{...}` interpolation is.
+ * a citation; the inside of a `${...}` or `%{...}` interpolation is, and
+ * the literal escapes `$${` and `%%{` stay string text.
  *
  * Out of scope, by name (a line grammar, not a Terraform parser):
  *
@@ -46,8 +47,8 @@
  * - resolution of a local module `source` to a directory;
  * - a block header split across lines (the header must open its `{` on the
  *   line that names the block);
- * - quotes inside an interpolation (`"${f("x")}"`) are not tracked, so a
- *   brace inside such a nested string can end the interpolation early.
+ * - quotes inside an interpolation (`"${f("x")}"`) are not tracked, which
+ *   can end the interpolation early and drop citations later on that line.
  */
 
 import { type CodeEdgeSeed, type CodeEntitySeed, specifierSeed } from "./pre-extract-seeds.ts";
@@ -325,6 +326,11 @@ function scanHcl(content: string): HclLine[] {
         } else if (ch === '"') {
           state = SCAN_STATE.code;
           code += ch;
+        } else if ((ch === "$" || ch === "%") && next === ch && raw[i + 2] === "{") {
+          // `$${` and `%%{` are the literal escapes: string text, not an
+          // interpolation.
+          text += next + raw[i + 2];
+          i += 2;
         } else if ((ch === "$" || ch === "%") && next === "{") {
           text += next;
           i++;

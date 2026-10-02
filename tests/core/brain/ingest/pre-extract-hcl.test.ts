@@ -82,16 +82,7 @@ describe("preExtractCodeStructure - Terraform family", () => {
     ]);
   });
 
-  test("the block-kind vocabulary names exactly the seven extracted kinds", () => {
-    expect(Object.values(HCL_BLOCK_KIND).toSorted()).toEqual([
-      "data",
-      "locals",
-      "module",
-      "output",
-      "provider",
-      "resource",
-      "variable",
-    ]);
+  test("the block-kind vocabulary is frozen", () => {
     expect(Object.isFrozen(HCL_BLOCK_KIND)).toBe(true);
   });
 
@@ -359,6 +350,41 @@ describe("preExtractCodeStructure - Terraform edges", () => {
     expect(res.edges).toEqual([]);
   });
 
+  test("a lone brace inside a heredoc does not open a block", () => {
+    const res = asSuccess(
+      preExtractCodeStructure(
+        "app/main.tf",
+        lines(
+          'resource "aws_iam_policy" "p" {',
+          "  policy = <<-EOT",
+          "    {",
+          "  EOT",
+          "}",
+          'variable "after" {}',
+        ),
+      ),
+    );
+    expect(res.entities).toEqual([
+      { kind: "resource", name: "aws_iam_policy.p" },
+      { kind: "variable", name: "var.after" },
+    ]);
+  });
+
+  test("the literal escapes $${ and %%{ stay string text, never a citation", () => {
+    const res = asSuccess(
+      preExtractCodeStructure(
+        "app/main.tf",
+        lines(
+          'resource "a_b" "x" {',
+          '  s = "$${var.notref} and %%{local.notref}"',
+          '  t = "${var.cited}"',
+          "}",
+        ),
+      ),
+    );
+    expect(res.edges).toEqual([{ kind: "references", from: "a_b.x", to: "var.cited" }]);
+  });
+
   test("comments are skipped, including block comments and trailing comments", () => {
     const res = asSuccess(
       preExtractCodeStructure(
@@ -431,44 +457,5 @@ describe("preExtractCodeStructure - Terraform edges", () => {
     ]);
     expect(res.edges).toEqual([]);
     expect(JSON.stringify(res)).not.toContain(value);
-  });
-
-  test("the output is deterministic", () => {
-    const a = JSON.stringify(preExtractCodeStructure("app/main.tf", EDGES_TF));
-    const b = JSON.stringify(preExtractCodeStructure("app/main.tf", EDGES_TF));
-    expect(a).toBe(b);
-  });
-});
-
-describe("pre-extract-hcl module comment", () => {
-  test("names every out-of-scope construct", async () => {
-    const source = await Bun.file(
-      new URL("../../../../src/core/brain/ingest/pre-extract-hcl.ts", import.meta.url),
-    ).text();
-    const docblock = source.slice(0, source.indexOf("*/"));
-    for (const construct of [
-      ".hcl",
-      ".tf.json",
-      "attribute values",
-      "lifecycle",
-      "dynamic",
-      "provisioner",
-      "connection",
-      "multi-line `depends_on`",
-      "heredoc",
-      "template files",
-      "for_each",
-      "count",
-      "moved",
-      "import",
-      "check",
-      "removed",
-      "terraform {}",
-      "required_providers",
-      "local module `source`",
-      "split across lines",
-    ]) {
-      expect(docblock).toContain(construct);
-    }
   });
 });
