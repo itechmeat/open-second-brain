@@ -6,7 +6,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -14,6 +14,7 @@ import {
   deriveSourceSection,
   extractSource,
 } from "../../../../src/core/brain/ingest/extract-source.ts";
+import { SOURCE_HASH_MAX_BYTES } from "../../../../src/core/brain/intake/source-trust.ts";
 import { INTAKE_TRUST } from "../../../../src/core/brain/trust/untrusted-provenance.ts";
 
 const utf8 = (text: string): Uint8Array => new TextEncoder().encode(text);
@@ -130,6 +131,25 @@ describe("deriveSourceSection names the source's own visibility", () => {
   test("a reserved CSV and a reserved HTML source carry their tokens", () => {
     expect(derive("Clips/h.csv", RESERVED_CSV)?.visibility).toEqual(["private"]);
     expect(derive("Clips/h.html", RESERVED_HTML)?.visibility).toEqual(["private"]);
+  });
+
+  test("a source that grew past the digest ceiling after the intake read answers source-not-local", () => {
+    // The intake read the source in the trusted lane and wrote the entity
+    // pages; the derived section's own read then meets a file past the
+    // ceiling, which must not fail an ingest that already landed.
+    const vault = mkdtempSync(join(tmpdir(), "o2b-derive-visibility-"));
+    vaults.push(vault);
+    mkdirSync(join(vault, "Clips"), { recursive: true });
+    writeFileSync(join(vault, "Clips/grown.csv"), "name,qty\nbolt,4\n");
+    truncateSync(join(vault, "Clips/grown.csv"), SOURCE_HASH_MAX_BYTES + 1);
+    expect(deriveSourceSection(vault, "Clips/grown.csv", INTAKE_TRUST.trusted, () => true)).toEqual(
+      {
+        format: "csv",
+        frontmatter: {},
+        section: "",
+        table: { rendered: false, format: "csv", reason: "source-not-local" },
+      },
+    );
   });
 
   test("a source with no visibility carries none", () => {

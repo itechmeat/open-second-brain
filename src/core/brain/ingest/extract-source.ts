@@ -13,7 +13,12 @@
 import { pageVisibility, REMOTE_DENY_VISIBILITY_TOKEN } from "../../graph/visibility.ts";
 import { readCachedFrontmatterEntry } from "../../search/result-filters.ts";
 import type { FrontmatterMap } from "../../types.ts";
-import { isSourceHidden, readSourceOrigin, vaultShapedIdentity } from "../intake/source-trust.ts";
+import {
+  isSourceHidden,
+  readSourceOrigin,
+  SourceTrustError,
+  vaultShapedIdentity,
+} from "../intake/source-trust.ts";
 import {
   INTAKE_TRUST,
   type IntakeTrust,
@@ -222,7 +227,17 @@ export function deriveSourceSection(
   if (trust !== INTAKE_TRUST.trusted || isSourceHidden(vault, source, readable)) {
     return notLocal(format);
   }
-  const origin = readSourceOrigin(vault, source);
+  let origin: ReturnType<typeof readSourceOrigin>;
+  try {
+    origin = readSourceOrigin(vault, source);
+  } catch (cause) {
+    // The intake already read this source; a refusal now (it grew past the
+    // digest ceiling, or stopped being readable, between the two reads) is
+    // the source not being there to derive from, not a reason to fail an
+    // ingest whose entity pages are already written.
+    if (cause instanceof SourceTrustError) return notLocal(format);
+    throw cause;
+  }
   if (origin.bytes === undefined || origin.contentHash === undefined) return notLocal(format);
 
   const base: FrontmatterMap = {
