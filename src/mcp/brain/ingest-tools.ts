@@ -429,7 +429,7 @@ export const INGEST_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         pre_extract: {
           type: "boolean",
           description:
-            "No-LLM code-structure pass: class/function seeds and import/inheritance/uses edges under `pre_extract`, a bound import with `resolved_to`. Off by default.",
+            "No-LLM code-structure pass under `pre_extract`: class/function seeds with import/inheritance/uses edges, Terraform block seeds in address syntax with depends_on/references edges; a bound import has `resolved_to`. Off by default.",
         },
       },
       required: ["source_path", "summary", "entities"],

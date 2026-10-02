@@ -1,5 +1,5 @@
 /**
- * P4 (t_ef786747): the `o2b brain pre-extract` CLI runs the deterministic
+ * The `o2b brain pre-extract` CLI runs the deterministic
  * no-LLM code-structure pass over one source file and prints its JSON seeds.
  * The extraction itself is covered at the core level; this asserts the verb is
  * wired, emits deterministic JSON, and reports unknown languages as unextracted.
@@ -10,7 +10,16 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
+import { CLI_COMMAND_MANIFEST, type CliCommandManifest } from "../../src/cli/command-manifest.ts";
 import { runCli } from "../helpers/run-cli.ts";
+
+/** The manifest entry of `o2b brain pre-extract`. */
+function preExtractManifest(): CliCommandManifest {
+  const brain = CLI_COMMAND_MANIFEST.commands.find((c) => c.name === "brain");
+  const verb = brain?.commands?.find((c) => c.name === "pre-extract");
+  if (verb === undefined) throw new Error("brain pre-extract is missing from the CLI manifest");
+  return verb;
+}
 
 let work: string;
 
@@ -40,6 +49,42 @@ describe("o2b brain pre-extract", () => {
       { kind: "imports", from: file, to: "./dom" },
       { kind: "inherits", from: "Widget", to: "Base" },
     ]);
+  });
+
+  test("emits Terraform seeds for a .tf source", async () => {
+    const file = join(work, "main.tf");
+    writeFileSync(
+      file,
+      [
+        'variable "region" {}',
+        'resource "aws_s3_bucket" "logs" {',
+        "  bucket = var.region",
+        "}",
+        'module "vpc" {',
+        '  source = "./modules/vpc"',
+        "}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const res = await runCli(["brain", "pre-extract", file, "--json"]);
+    expect(res.returncode).toBe(0);
+    const out = JSON.parse(res.stdout);
+    expect(out.extracted).toBe(true);
+    expect(out.language).toBe("hcl");
+    expect(out.entities).toEqual([
+      { kind: "module", name: "module.vpc" },
+      { kind: "resource", name: "aws_s3_bucket.logs" },
+      { kind: "variable", name: "var.region" },
+    ]);
+    expect(out.edges.map((e: { kind: string; to: string }) => [e.kind, e.to])).toEqual([
+      ["imports", "./modules/vpc"],
+      ["references", "var.region"],
+    ]);
+  });
+
+  test("the manifest description names Terraform", () => {
+    expect(preExtractManifest().summary).toContain("Terraform");
   });
 
   test("reports an unsupported extension as unextracted rather than empty success", async () => {

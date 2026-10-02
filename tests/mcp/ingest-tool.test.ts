@@ -122,7 +122,40 @@ describe("brain_ingest_source", () => {
     ).rejects.toThrow(MCPError);
   });
 
-  test("pre_extract surfaces deterministic code-structure seeds (P4)", async () => {
+  test("pre_extract on a .tf source surfaces Terraform seeds", async () => {
+    mkdirSync(join(vault, "Infra"), { recursive: true });
+    writeFileSync(
+      join(vault, "Infra", "main.tf"),
+      'variable "region" {}\nresource "aws_s3_bucket" "logs" {\n  bucket = var.region\n}\n',
+      "utf8",
+    );
+    const res = (await handler(ctx, {
+      source_path: "Infra/main.tf",
+      summary: "The infrastructure root module.",
+      entities: [{ category: "concept", name: "Logs bucket" }],
+      pre_extract: true,
+    })) as Record<string, unknown>;
+    expect(res["pre_extract"]).toEqual({
+      extracted: true,
+      language: "hcl",
+      entities: [
+        { kind: "resource", name: "aws_s3_bucket.logs" },
+        { kind: "variable", name: "var.region" },
+      ],
+      edges: [{ kind: "references", from: "aws_s3_bucket.logs", to: "var.region" }],
+    });
+  });
+
+  test("the pre_extract description is one line and names the Terraform seeds", () => {
+    const schema = INGEST_TOOLS[0]!.inputSchema as {
+      properties: Record<string, { description: string }>;
+    };
+    const description = schema.properties["pre_extract"]!.description;
+    expect(description).not.toContain("\n");
+    expect(description).toContain("Terraform");
+  });
+
+  test("pre_extract surfaces deterministic code-structure seeds", async () => {
     mkdirSync(join(vault, "Code"), { recursive: true });
     writeFileSync(
       join(vault, "Code", "widget.ts"),

@@ -1,12 +1,13 @@
 /**
- * `o2b brain pre-extract <file>` (P4 / t_ef786747): run the deterministic,
- * no-LLM code-structure pre-extraction pass over one source file and print its
- * JSON entity/edge seeds.
+ * `o2b brain pre-extract <file>`: run the deterministic, no-LLM
+ * code-structure pre-extraction pass over one source file and print its JSON
+ * entity/edge seeds.
  *
  * This is the agent-facing form of the pre-ingest pass: an agent runs it before
  * extracting from a code source so the structural seeds (classes, functions,
- * imports, inheritance, JSX component usages) are available as pre-extracted
- * facts. Read-only and deterministic - the kernel runs no model. An unsupported extension is
+ * imports, inheritance, JSX component usages; Terraform blocks in address
+ * syntax with their `depends_on` and `references` edges) are available as
+ * pre-extracted facts. Read-only and deterministic - the kernel runs no model. An unsupported extension is
  * reported as unextracted with a reason, never a fake empty success.
  */
 
