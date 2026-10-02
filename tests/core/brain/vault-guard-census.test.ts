@@ -62,6 +62,10 @@ const GUARD_RE = /assertVaultIdentityForWrite|brainDirsForWrite/;
  * be wrong, never because asserting was inconvenient.
  */
 const UNGUARDED_WITH_REASON: Readonly<Record<string, string>> = Object.freeze({
+  "src/core/brain/architect/manifests.ts":
+    "never writes. It names `openSync` only to open a project manifest " +
+    "read-only (O_RDONLY | O_NOFOLLOW | O_NONBLOCK) through one descriptor so " +
+    "the read is bounded; the file lives in the scanned project, outside the vault.",
   "src/core/brain/dedup-index-cache.ts":
     "machine-local derived cache OUTSIDE the vault (the user cache dir). It " +
     "writes nothing under Brain/, and a refusal would only cost the next " +

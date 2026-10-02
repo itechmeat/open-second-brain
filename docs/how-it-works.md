@@ -1309,7 +1309,8 @@ and Poetry), `Cargo.toml` and `go.mod`. `pom.xml`, `build.gradle`,
 `Gemfile` and `composer.json` are detected and reported `unsupported`
 by name. Every manifest gets one status - `read`, `malformed` (with a
 fixed reason such as `invalid JSON` or `invalid TOML`, never the
-manifest's own text), `unreadable` (with the error code) or
+manifest's own text), `unreadable` (with the error code, or because it
+is not a regular file or is larger than 1 MiB, which is not read) or
 `unsupported` - and one bad manifest never aborts the run. The overview's
 `dependencies` region lists the manifests with their statuses and the
 runtime dependencies per ecosystem, one canonical name each (PyPI names

@@ -29,7 +29,7 @@
  * `src/core/project-manifests.ts`.
  */
 
-import { readFileSync } from "node:fs";
+import { closeSync, constants as fsConstants, fstatSync, openSync, readSync } from "node:fs";
 import { basename, join } from "node:path";
 
 import { manifestSpecFor, MANIFEST_ECOSYSTEM } from "../../project-manifests.ts";
@@ -134,6 +134,20 @@ export function oneLine(text: string): string {
 /** The detail when a read failure carries no errno code. */
 const UNKNOWN_READ_FAILURE = "read failed";
 
+/** The largest manifest read, in bytes; a larger one is `unreadable`, unread. */
+export const MANIFEST_MAX_BYTES = 1_048_576;
+const TOO_LARGE_DETAIL = `larger than ${MANIFEST_MAX_BYTES} bytes`;
+const NOT_A_REGULAR_FILE_DETAIL = "not a regular file";
+
+/**
+ * How a manifest is opened: read-only, never through a final-component
+ * symlink (`ELOOP`), never blocking (a FIFO met where the walk saw a file
+ * must not hang the scan). Both flags are POSIX; where the platform lacks
+ * one it is simply absent.
+ */
+const MANIFEST_OPEN_FLAGS =
+  fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0);
+
 /** Poetry lists the interpreter constraint among its dependencies. */
 const POETRY_PYTHON_KEY = "python";
 
@@ -164,7 +178,9 @@ export function readManifestAt(root: string, relPath: string): ManifestReading {
   if (!spec.dependencyReadable) return reading(path, spec, MANIFEST_STATUS.unsupported);
   let text: string;
   try {
-    text = readFileSync(join(root, path), "utf8");
+    const read = readBounded(join(root, path));
+    if (read.text === null) return reading(path, spec, MANIFEST_STATUS.unreadable, read.detail);
+    text = read.text;
   } catch (error) {
     return reading(path, spec, MANIFEST_STATUS.unreadable, errnoDetail(error));
   }
@@ -191,6 +207,38 @@ export function readManifestAt(root: string, relPath: string): ManifestReading {
     otherGroups: groupCounts(parsed.groups),
     raw: parsed.raw,
   });
+}
+
+/**
+ * Read a manifest through ONE descriptor, so the checks hold for the
+ * bytes read: the open refuses a symlink, the descriptor must be a
+ * regular file, and no more than {@link MANIFEST_MAX_BYTES} is read
+ * however large the file has grown since the `fstat`. The walk saw a
+ * plain file here, but the tree may have changed since.
+ */
+function readBounded(
+  abs: string,
+):
+  | { readonly text: string; readonly detail?: undefined }
+  | { readonly text: null; readonly detail: string } {
+  const fd = openSync(abs, MANIFEST_OPEN_FLAGS);
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) return { text: null, detail: NOT_A_REGULAR_FILE_DETAIL };
+    if (stat.size > MANIFEST_MAX_BYTES) return { text: null, detail: TOO_LARGE_DETAIL };
+    // One byte past the cap, so growth since the fstat is seen.
+    const buffer = Buffer.allocUnsafe(MANIFEST_MAX_BYTES + 1);
+    let filled = 0;
+    for (;;) {
+      const read = readSync(fd, buffer, filled, buffer.length - filled, null);
+      if (read === 0) break;
+      filled += read;
+      if (filled > MANIFEST_MAX_BYTES) return { text: null, detail: TOO_LARGE_DETAIL };
+    }
+    return { text: buffer.toString("utf8", 0, filled) };
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /** Parse one manifest's text, or `null` when this ecosystem has no reader. */

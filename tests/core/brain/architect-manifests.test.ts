@@ -4,17 +4,18 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
   canonicalDependencyName,
+  MANIFEST_MAX_BYTES,
   MANIFEST_STATUS,
   readManifestAt,
 } from "../../../src/core/brain/architect/manifests.ts";
 import { MANIFEST_ECOSYSTEM } from "../../../src/core/project-manifests.ts";
-import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
+import { CHMOD_CANNOT_DENY, IS_WINDOWS } from "../../helpers/platform.ts";
 
 let root: string;
 
@@ -381,6 +382,33 @@ describe("strings a region body cannot carry", () => {
     const reading = readManifestAt(root, file);
     expect(reading.status).toBe(MANIFEST_STATUS.malformed);
     expect(reading.detail).toBe(detail);
+  });
+});
+
+describe("what the reader opens", () => {
+  test("a manifest larger than the cap is unreadable and not read", () => {
+    seed("package.json", `{"name":"big","description":"${"x".repeat(MANIFEST_MAX_BYTES)}"}`);
+    const reading = readManifestAt(root, "package.json");
+    expect(reading.status).toBe(MANIFEST_STATUS.unreadable);
+    expect(reading.detail).toBe(`larger than ${MANIFEST_MAX_BYTES} bytes`);
+    expect(reading.fact).toBeNull();
+  });
+
+  // Windows has no FIFOs, and creating a symlink there needs a privilege.
+  test.skipIf(IS_WINDOWS)("a FIFO is not a regular file and the read does not block", () => {
+    const made = Bun.spawnSync(["mkfifo", join(root, "go.mod")]);
+    expect(made.exitCode).toBe(0);
+    const reading = readManifestAt(root, "go.mod");
+    expect(reading.status).toBe(MANIFEST_STATUS.unreadable);
+    expect(reading.detail).toBe("not a regular file");
+  });
+
+  test.skipIf(IS_WINDOWS)("a manifest swapped for a symlink is not followed", () => {
+    seed("elsewhere.json", JSON.stringify({ name: "elsewhere" }));
+    symlinkSync(join(root, "elsewhere.json"), join(root, "package.json"));
+    const reading = readManifestAt(root, "package.json");
+    expect(reading.status).toBe(MANIFEST_STATUS.unreadable);
+    expect(reading.detail).toBe("ELOOP");
   });
 });
 
