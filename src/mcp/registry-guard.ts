@@ -350,7 +350,7 @@ export const PREVIEW_BUDGET_EXEMPT: Readonly<Record<string, string>> = Object.fr
   brain_write_session: "lifecycle ops return one fixed-shape envelope; prompts are kernel-bounded",
   brain_intake_entities: "write; returns created/updated id lists and a relation count",
   brain_ingest_source:
-    "write; returns the summary path, bounded id lists and derived-section counts",
+    "write; returns the summary path, bounded id lists and derived-section counts. Below local reach a summary page the caller cannot read is left untouched and the call answers as a first ingest would, so a repeated call answers created each time where a vault without that page answers created once; closing that needs a caller-lane summary path",
   brain_distill_source:
     "write; returns the distillation path, a claim count, source hash, capture scope, and a quotes report whose finding list is capped and self-declaring its truncation",
   brain_research_report:
