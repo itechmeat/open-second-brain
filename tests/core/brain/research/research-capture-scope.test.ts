@@ -7,7 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -19,6 +19,7 @@ import {
   CAPTURE_SCOPES_KEY,
 } from "../../../../src/core/brain/provenance/capture-scope.ts";
 import { parseFrontmatter } from "../../../../src/core/vault.ts";
+import { CHMOD_CANNOT_DENY } from "../../../helpers/platform.ts";
 
 let vault: string;
 let configHome: string;
@@ -150,4 +151,56 @@ describe("writeResearchReport capture scopes", () => {
     expect(asked).toEqual(["notes/meeting.md"]);
     expect(result.captureScopes).toEqual([CAPTURE_SCOPE.urlOnly]);
   });
+
+  test("a directory beside an extensionless source does not stand in for its note", () => {
+    seed("notes/meeting.md");
+    seed("notes/meeting/agenda.md");
+    const asked: string[] = [];
+
+    const result = writeResearchReport(
+      vault,
+      {
+        title: "T",
+        sources: ["notes/meeting"],
+        findings: [{ statement: "S", sources: ["notes/meeting"] }],
+      },
+      {
+        agent: "claude",
+        now: NOW,
+        readable: (rel) => {
+          asked.push(rel);
+          return rel !== "notes/meeting.md";
+        },
+      },
+    );
+
+    expect(asked).toEqual(["notes/meeting.md"]);
+    expect(result.captureScopes).toEqual([CAPTURE_SCOPE.urlOnly]);
+  });
+});
+
+describe("writeResearchReport when the filesystem refuses a source", () => {
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "an unreadable cited source is written as backing locally and hidden at a narrower reach",
+    () => {
+      const locked = join(vault, "locked");
+      seed("locked/inner/a.md");
+      const sources = ["locked/inner/a.md", URL_SOURCE];
+      const input = { title: "T", sources, findings: [{ statement: "S", sources: [URL_SOURCE] }] };
+      chmodSync(locked, 0o000);
+      try {
+        const local = writeResearchReport(vault, input, { agent: "claude", now: NOW });
+        expect(local.captureScopes).toEqual([CAPTURE_SCOPE.fullLocal, CAPTURE_SCOPE.urlOnly]);
+
+        const remote = writeResearchReport(
+          vault,
+          { ...input, title: "R" },
+          { agent: "claude", now: NOW, readable: () => true },
+        );
+        expect(remote.captureScopes).toEqual([CAPTURE_SCOPE.urlOnly, CAPTURE_SCOPE.urlOnly]);
+      } finally {
+        chmodSync(locked, 0o755);
+      }
+    },
+  );
 });

@@ -112,19 +112,38 @@ export function captureScopeForTrust(trust: IntakeTrust): CaptureScope {
   return trust === INTAKE_TRUST.trusted ? CAPTURE_SCOPE.fullLocal : CAPTURE_SCOPE.urlOnly;
 }
 
+/** A source identity's scope, and the vault file behind it when there is one. */
+export interface CaptureScopeResolution {
+  readonly scope: CaptureScope;
+  /** Vault-relative path of the backing file; `null` exactly when `url-only`. */
+  readonly backing: string | null;
+}
+
 /**
- * The current scope of a source identity, from its shape and one `stat` (two
- * for an identity with no extension, retried once as a `.md` note, the way
- * Obsidian links a note). Never reads the source's bytes, so a sweep over
- * many pages stays cheap. `bounded-local` is never returned: it is a property
- * of a page, not of an identity.
+ * The current scope of a source identity and the file that backs it, from its
+ * shape and one `stat` (two for an identity with no extension, retried once as
+ * a `.md` note, the way Obsidian links a note). Never reads the source's
+ * bytes, so a sweep over many pages stays cheap. `bounded-local` is never
+ * returned: it is a property of a page, not of an identity. A refused `stat`
+ * propagates as the {@link classifySourceTrust} refusal.
  */
-export function classifyCaptureScope(vault: string, identity: string): CaptureScope {
-  const direct = captureScopeForTrust(classifySourceTrust(vault, identity));
-  if (direct === CAPTURE_SCOPE.fullLocal) return direct;
+export function resolveCaptureScope(vault: string, identity: string): CaptureScopeResolution {
   const target = normalizeSourceIdentity(identity);
-  if (target.length === 0 || posix.extname(target) !== "") return direct;
-  return captureScopeForTrust(classifySourceTrust(vault, `${target}${NOTE_EXTENSION}`));
+  if (classifySourceTrust(vault, identity) === INTAKE_TRUST.trusted) {
+    return { scope: CAPTURE_SCOPE.fullLocal, backing: target };
+  }
+  if (target.length > 0 && posix.extname(target) === "") {
+    const note = `${target}${NOTE_EXTENSION}`;
+    if (classifySourceTrust(vault, note) === INTAKE_TRUST.trusted) {
+      return { scope: CAPTURE_SCOPE.fullLocal, backing: note };
+    }
+  }
+  return { scope: CAPTURE_SCOPE.urlOnly, backing: null };
+}
+
+/** The scope half of {@link resolveCaptureScope}. */
+export function classifyCaptureScope(vault: string, identity: string): CaptureScope {
+  return resolveCaptureScope(vault, identity).scope;
 }
 
 /** The frontmatter stamp of a single-source page: nothing for `full-local`. */

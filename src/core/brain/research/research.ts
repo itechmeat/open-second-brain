@@ -18,7 +18,7 @@
  */
 
 import { existsSync, mkdirSync } from "node:fs";
-import { dirname, extname, join, relative } from "node:path";
+import { dirname, relative } from "node:path";
 
 import type { FrontmatterMap } from "../../types.ts";
 import { canonicalNotePath } from "../../path-safety.ts";
@@ -35,10 +35,11 @@ import { renderProvenanceSection, type Provenance } from "../provenance/provenan
 import {
   CAPTURE_SCOPE,
   captureScopesFrontmatter,
-  classifyCaptureScope,
+  resolveCaptureScope,
   type CaptureScope,
+  type CaptureScopeResolution,
 } from "../provenance/capture-scope.ts";
-import { normalizeSourceIdentity } from "../intake/source-trust.ts";
+import { SourceTrustError } from "../intake/source-trust.ts";
 import {
   ExternalFetchError,
   createFetchTransport,
@@ -175,19 +176,30 @@ function validate(input: ResearchReportInput): void {
  * The capture scope of one consulted source as the caller may know it. A
  * `full-local` source whose backing file the caller cannot read answers
  * `url-only`, so the scope never tells a narrower caller that a hidden page
- * exists. The backing file is the identity's own path, or its `.md`
- * sibling when the identity names no extension and has no file of its own.
+ * exists. The backing file is the identity's own path, or its `.md` note
+ * when the identity names no extension (see `resolveCaptureScope`).
+ *
+ * A source whose `stat` the filesystem refuses is inside this vault but
+ * unreadable. The scope is an annotation, so it never aborts the report: a
+ * local caller gets `full-local` (the vault does own the file, the same
+ * answer the capture-scope hygiene detector gives), and a narrower caller
+ * gets `url-only`, because no reach rule can vouch for a file nobody can
+ * read.
  */
 function captureScopeAtReach(
   vault: string,
   source: string,
   readable: ((rel: string) => boolean) | undefined,
 ): CaptureScope {
-  const scope = classifyCaptureScope(vault, source);
-  if (scope !== CAPTURE_SCOPE.fullLocal || readable === undefined) return scope;
-  const target = normalizeSourceIdentity(source);
-  const backing =
-    extname(target) === "" && !existsSync(join(vault, target)) ? `${target}.md` : target;
+  let resolved: CaptureScopeResolution;
+  try {
+    resolved = resolveCaptureScope(vault, source);
+  } catch (err) {
+    if (!(err instanceof SourceTrustError)) throw err;
+    return readable === undefined ? CAPTURE_SCOPE.fullLocal : CAPTURE_SCOPE.urlOnly;
+  }
+  const { scope, backing } = resolved;
+  if (backing === null || readable === undefined) return scope;
   return readable(backing) ? scope : CAPTURE_SCOPE.urlOnly;
 }
 
