@@ -20,6 +20,11 @@ import {
   ExpirationValueError,
   InvalidExpirationTargetError,
 } from "../../src/core/brain/expiration-set.ts";
+import {
+  QUOTE_CHECK_OUTCOME,
+  QUOTE_UNVERIFIED_CODE,
+  QuoteCheckError,
+} from "../../src/core/brain/distill/quote-verdict.ts";
 import { BrainParseError } from "../../src/core/brain/parse-error.ts";
 import { BrainStatusFolderMismatchError } from "../../src/core/brain/preference.ts";
 import { PinnedBatchError } from "../../src/core/brain/pinned.ts";
@@ -82,6 +87,7 @@ const NEW_TOKENS = [
   "unknown_argument",
   "brain_artifact_unparseable",
   "argument_forbidden",
+  "quote_unverified",
 ] as const;
 
 /**
@@ -163,7 +169,7 @@ describe("TOOL_ERROR_CODES", () => {
     expect(new Set(TOOL_ERROR_CODES).size).toBe(TOOL_ERROR_CODES.length);
   });
 
-  test("is exactly the imported vocabularies plus the 21 new tokens", () => {
+  test("is exactly the imported vocabularies plus the 22 new tokens", () => {
     const expected = new Set<string>([
       ...NEW_TOKENS,
       ...SEARCH_ERROR_CODES,
@@ -283,6 +289,15 @@ describe("codeForError", () => {
         ),
       ),
     ).toBe("brain_artifact_unparseable");
+    expect(lines).toEqual([]);
+  });
+
+  test("a strict quote refusal is quote_unverified", () => {
+    const error = new QuoteCheckError([
+      { claim: 0, outcome: QUOTE_CHECK_OUTCOME.notInBlock, span: "x" },
+    ]);
+    expect(codeForError(error)).toBe("quote_unverified");
+    expect(TOOL_ERROR_CODE.quoteUnverified).toBe(QUOTE_UNVERIFIED_CODE);
     expect(lines).toEqual([]);
   });
 

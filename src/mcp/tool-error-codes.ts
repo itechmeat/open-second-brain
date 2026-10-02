@@ -27,6 +27,7 @@
 
 import { BrainPreferenceNotFoundError } from "../core/brain/apply-evidence.ts";
 import { CountGuardError } from "../core/brain/count-guard.ts";
+import { QuoteCheckError } from "../core/brain/distill/quote-verdict.ts";
 import type { ExactStateErrorCode } from "../core/brain/exact-state.ts";
 import { ExactStateError } from "../core/brain/exact-state.ts";
 import {
@@ -125,6 +126,8 @@ export const TOOL_ERROR_CODE = Object.freeze({
   brainArtifactUnparseable: "brain_artifact_unparseable",
   /** An argument that belongs to another action of the same tool. */
   argumentForbidden: "argument_forbidden",
+  /** A strict distillation refused a quoted span it could not verify. */
+  quoteUnverified: "quote_unverified",
 } as const);
 
 /** Closed union over {@link TOOL_ERROR_CODE}. */
@@ -366,6 +369,7 @@ const CLASSIFICATION: ReadonlyArray<ClassificationRule> = Object.freeze([
   fixed(ExpirationValueError, EXPIRATION_REFUSAL_CODE.invalidValue),
   fixed(ExpirationTargetNotFoundError, EXPIRATION_REFUSAL_CODE.targetNotFound),
   fixed(InvalidExpirationTargetError, EXPIRATION_REFUSAL_CODE.invalidTarget),
+  fixed(QuoteCheckError, TOOL_ERROR_CODE.quoteUnverified),
 ]);
 
 /**
