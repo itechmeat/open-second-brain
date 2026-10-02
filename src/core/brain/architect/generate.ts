@@ -28,7 +28,8 @@
  *
  * The overview's `module-map` diagram is NOT an exception: it renders the
  * same scanned facts as every other region and moves only when the tree
- * does.
+ * does. Neither are the `dependencies` and `module-dependencies` regions:
+ * they render manifest facts, which are files in the tree.
  *
  * Frontmatter is written ONCE at file creation and never rewritten -
  * it carries static identity (kind, repo key, path), while every fact
@@ -71,10 +72,20 @@ import { buildRegionDocument, mergeRegions } from "../regions.ts";
 import type { Region } from "../regions.ts";
 import type { Safeguard } from "../safeguard.ts";
 import { acquireLockSyncWithRetry, LOCK_WAIT_INTERACTIVE_MS } from "../sync-lockfile.ts";
+import { DEPENDENCY_MANIFESTS } from "../../project-manifests.ts";
+import type { ManifestEcosystem } from "../../project-manifests.ts";
 import { listRepoDecisionCandidates } from "./decisions.ts";
 import type { DecisionCandidateFact } from "./decisions.ts";
-import { ARCHITECT_STAGE, compareStable, scanProject } from "./scan.ts";
-import type { ModuleFact, ProjectFacts } from "./scan.ts";
+import { MANIFEST_STATUS } from "./manifests.ts";
+import type { DependencyGroup, ManifestReading } from "./manifests.ts";
+import {
+  ARCHITECT_STAGE,
+  compareStable,
+  manifestIdentity,
+  moduleManifestIdentities,
+  scanProject,
+} from "./scan.ts";
+import type { ModuleDependency, ModuleFact, ProjectFacts } from "./scan.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 export interface GenerateArchDocsOptions {
@@ -250,7 +261,9 @@ const NO_LANGUAGE = "no language detected";
  * scanner records no import graph at all (`scan.ts`: "Import-graph
  * analysis is explicitly out of scope"), so every edge here runs from the
  * project root to a module it contains; a module-to-module edge would be
- * a relation nothing measured.
+ * a relation nothing measured. The edges manifests DECLARE between modules
+ * render in their own `module-dependencies` region, under their own claim,
+ * so this diagram's claim stays true.
  *
  * Node ids are positional (`mod0`, `mod1`, ...), never derived from the
  * module name. A directory name is arbitrary bytes and a Mermaid node id
@@ -258,7 +271,7 @@ const NO_LANGUAGE = "no language detected";
  * must also stay collision-free - an index needs neither.
  */
 function moduleMapBody(facts: ProjectFacts): string {
-  const modules = facts.modules.toSorted((a, b) => compareStable(a.name, b.name));
+  const modules = modulesByName(facts);
   const lines = [
     "Containment only: the scan records no import edges, so this diagram claims none.",
     "",
@@ -277,6 +290,150 @@ function moduleMapBody(facts: ProjectFacts): string {
   return lines.join("\n");
 }
 
+/** Ecosystems in the manifest precedence order, each once. */
+const ECOSYSTEM_ORDER: ReadonlyArray<ManifestEcosystem> = Object.freeze([
+  ...new Set(DEPENDENCY_MANIFESTS.map((spec) => spec.ecosystem)),
+]);
+
+/** What the overview's `dependencies` region says when the tree has no manifest. */
+const NO_MANIFEST = "No dependency manifest found.";
+
+/** What a module note's `dependencies` region says when the module has no manifest. */
+const NO_MODULE_MANIFEST = "No dependency manifest in this module.";
+
+/** What an ecosystem's runtime list says when its read manifests declare nothing. */
+const NO_RUNTIME_DEPENDENCY = "none declared";
+
+/**
+ * The claim the `module-dependencies` region makes, above its diagram.
+ * The edges are DECLARED, not measured: the scan reads manifests and no
+ * import graph, so the sentence names where every edge came from.
+ */
+const MODULE_DEPENDENCIES_CLAIM =
+  "Declared by manifests, not measured from imports: an edge means the module's " +
+  "manifest names exactly one other module's manifest as a runtime dependency.";
+
+/** What the `module-dependencies` region says when no module declares an edge. */
+const NO_MODULE_DEPENDENCY =
+  "No module declares a runtime dependency on another module's manifest name.";
+
+/** What a module note says when its module declares no edge. */
+const NO_DEPENDS_ON = "Depends on: no other module";
+
+/** One manifest line: its path, ecosystem, status and, when it has one, the detail. */
+function manifestLine(reading: ManifestReading): string {
+  const detail = reading.detail === undefined ? "" : ` - ${reading.detail}`;
+  return `- \`${reading.path}\` (${reading.ecosystem}): ${reading.status}${detail}`;
+}
+
+/** The groups a manifest counts but does not list, summed per group, zero counts omitted. */
+function groupCountsLine(
+  ecosystem: string,
+  readings: ReadonlyArray<ManifestReading>,
+): string | null {
+  const totals = new Map<DependencyGroup, number>();
+  for (const reading of readings) {
+    for (const { group, count } of reading.otherGroups) {
+      totals.set(group, (totals.get(group) ?? 0) + count);
+    }
+  }
+  if (totals.size === 0) return null;
+  const parts = [...totals.entries()]
+    .toSorted((a, b) => compareStable(a[0], b[0]))
+    .map(([group, count]) => `${group} ${count}`);
+  return `Not listed (${ecosystem}): ${parts.join(", ")}`;
+}
+
+/**
+ * The manifest list and, per ecosystem with a read manifest, its runtime
+ * dependencies and the count line for the groups not listed. `exclude`
+ * holds the canonical names, per ecosystem, that are left out of the
+ * runtime lists (a module's own manifest name, on the overview).
+ */
+function dependencySections(
+  readings: ReadonlyArray<ManifestReading>,
+  exclude: ReadonlySet<string>,
+): string {
+  const sections = [["Manifests:", ...readings.map(manifestLine)].join("\n")];
+  for (const ecosystem of ECOSYSTEM_ORDER) {
+    const read = readings.filter(
+      (reading) => reading.ecosystem === ecosystem && reading.status === MANIFEST_STATUS.read,
+    );
+    if (read.length === 0) continue;
+    const names = [...new Set(read.flatMap((reading) => reading.fact?.dependencies ?? []))]
+      .filter((name) => !exclude.has(manifestIdentity(ecosystem, name)))
+      .toSorted(compareStable);
+    const runtime =
+      names.length === 0
+        ? `Runtime dependencies (${ecosystem}): ${NO_RUNTIME_DEPENDENCY}`
+        : [`Runtime dependencies (${ecosystem}):`, ...names.map((name) => `- ${name}`)].join("\n");
+    const counts = groupCountsLine(ecosystem, read);
+    sections.push(counts === null ? runtime : `${runtime}\n\n${counts}`);
+  }
+  return sections.join("\n\n");
+}
+
+/**
+ * The overview's `dependencies` region: every manifest the scan found,
+ * root and modules, with its status; the runtime dependencies per
+ * ecosystem with module names left out (those are modules, drawn in
+ * `module-dependencies`); one count line per ecosystem for the rest.
+ */
+function dependenciesBody(facts: ProjectFacts): string {
+  if (facts.manifests.length === 0) return NO_MANIFEST;
+  return dependencySections(facts.manifests, moduleManifestIdentities(facts.modules));
+}
+
+/** The modules in the order both diagrams number them. */
+function modulesByName(facts: ProjectFacts): ReadonlyArray<ModuleFact> {
+  return facts.modules.toSorted((a, b) => compareStable(a.name, b.name));
+}
+
+/**
+ * The declared module edges, as a Mermaid flowchart under its claim.
+ * Node ids are the same positional ids `module-map` uses, so one module
+ * is one id across both diagrams.
+ */
+function moduleDependenciesBody(facts: ProjectFacts): string {
+  if (facts.moduleDependencies.length === 0) return NO_MODULE_DEPENDENCY;
+  const ids = new Map(modulesByName(facts).map((module, index) => [module.name, `mod${index}`]));
+  const node = (name: string): string => `${ids.get(name)}["${mermaidLabel(name)}"]`;
+  return [
+    MODULE_DEPENDENCIES_CLAIM,
+    "",
+    "```mermaid",
+    "graph LR",
+    ...facts.moduleDependencies.map((edge) => `  ${node(edge.from)} --> ${node(edge.to)}`),
+    "```",
+  ].join("\n");
+}
+
+/** The wikilink to one module's note, as the overview's module list writes it. */
+function moduleLink(key: string, name: string): string {
+  return `[[Brain/projects/arch/${key}/modules/${name}|${name}]]`;
+}
+
+/** The modules `module` declares a dependency on, sorted. */
+function dependsOn(facts: ProjectFacts, module: ModuleFact): ReadonlyArray<string> {
+  return facts.moduleDependencies
+    .filter((edge: ModuleDependency) => edge.from === module.name)
+    .map((edge) => edge.to);
+}
+
+/** A module note's `dependencies` region: its manifests and the modules it depends on. */
+function moduleDependenciesRegionBody(
+  key: string,
+  module: ModuleFact,
+  targets: ReadonlyArray<string>,
+): string {
+  if (module.manifests.length === 0) return NO_MODULE_MANIFEST;
+  const edges =
+    targets.length === 0
+      ? NO_DEPENDS_ON
+      : ["Depends on:", ...targets.map((name) => `- ${moduleLink(key, name)}`)].join("\n");
+  return `${dependencySections(module.manifests, new Set())}\n\n${edges}`;
+}
+
 function overviewRegions(
   facts: ProjectFacts,
   key: string,
@@ -292,11 +449,7 @@ function overviewRegions(
   ].join("\n");
 
   const modules = facts.modules
-    .map(
-      (module) =>
-        `- [[Brain/projects/arch/${key}/modules/${module.name}|${module.name}]] ` +
-        `(${module.path}, ${module.files} file(s))`,
-    )
+    .map((module) => `- ${moduleLink(key, module.name)} (${module.path}, ${module.files} file(s))`)
     .join("\n");
 
   const entryPoints =
@@ -304,17 +457,13 @@ function overviewRegions(
       ? "none detected"
       : facts.entryPoints.map((entry) => `- \`${entry}\``).join("\n");
 
-  const dependencies =
-    facts.manifest === null || facts.manifest.dependencies.length === 0
-      ? "none declared"
-      : facts.manifest.dependencies.map((dep) => `- ${dep}`).join("\n");
-
   return [
     { id: "summary", body: summary },
     { id: "modules", body: modules },
     { id: "module-map", body: moduleMapBody(facts) },
     { id: "entry-points", body: entryPoints },
-    { id: "dependencies", body: dependencies },
+    { id: "dependencies", body: dependenciesBody(facts) },
+    { id: "module-dependencies", body: moduleDependenciesBody(facts) },
     { id: "codegraph", body: codegraphRegionBody(codegraph) },
   ];
 }
@@ -362,7 +511,11 @@ function decisionsRegionBody(candidates: ReadonlyArray<DecisionCandidateFact>): 
     .join("\n");
 }
 
-function moduleRegions(module: ModuleFact): ReadonlyArray<Region> {
+function moduleRegions(
+  key: string,
+  module: ModuleFact,
+  targets: ReadonlyArray<string>,
+): ReadonlyArray<Region> {
   const facts = [
     `Path: ${module.path}`,
     `Files: ${module.files}`,
@@ -375,6 +528,7 @@ function moduleRegions(module: ModuleFact): ReadonlyArray<Region> {
   return [
     { id: "facts", body: facts },
     { id: "files", body: files },
+    { id: "dependencies", body: moduleDependenciesRegionBody(key, module, targets) },
   ];
 }
 
@@ -521,7 +675,7 @@ function renderNotes(
       planNote(
         modulePath(dir, module),
         frontmatter("arch-module", key, [`module: ${module.name}`]),
-        moduleRegions(module),
+        moduleRegions(key, module, dependsOn(facts, module)),
       ),
     );
   }

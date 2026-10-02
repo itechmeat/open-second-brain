@@ -195,7 +195,7 @@ test("operator prose outside the regions survives a moving verdict", () => {
   expect(second.updated).toBe(1);
   // Only the verdict region moved: every other region is byte-identical.
   const before = readFileSync(first.overviewPath, "utf8");
-  for (const id of ["summary", "modules", "entry-points", "dependencies"]) {
+  for (const id of ["summary", "modules", "entry-points", "dependencies", "module-dependencies"]) {
     expect(regionBody(after, id)).toBe(regionBody(before, id));
   }
 });
