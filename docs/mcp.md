@@ -2131,10 +2131,15 @@ format characters), when it contains NUL, or when it exceeds the cap.
   a cell a backslash, `|`, a backtick, a line feed, a carriage return
   and a tab are written as `\\`, `\|`, ``\` ``, `\n`, `\r` and `\t`, and
   every other control character (C0, DEL and C1) as `\u{XXXX}` with its
-  code point in hexadecimal, so no cell can end the fence or reach a
+  code point in four uppercase hexadecimal digits, so no cell can end the fence or reach a
   terminal raw. The caps are 1,000 rows, 64 columns, 256 characters per
   cell and 256 KiB per section, and each cut is named in
-  `table_truncated`. The page gains
+  `table_truncated`; only the first 4,096 code units of a cell are read
+  for redaction, and a longer cell counts as cut. A `<private>` region
+  is hidden before the records are split, so a region spanning records
+  hides every row between its tags. Each HTML heading is redacted
+  (`key=value` credentials and URL userinfo) before it is capped, and a
+  `|` in a heading is written as `\|` in the parts list. The page gains
   `table_delimiter`, `table_columns`, `table_rows`,
   `table_rows_rendered` and `table_truncated` (absent when nothing was
   cut); the result gains `table` (`{rendered: true, format, delimiter,
@@ -2148,7 +2153,8 @@ format characters), when it contains NUL, or when it exceeds the cap.
   embeddings, as it already sits in the file in the vault. A summary page
   that carries a derived section is at most as visible as its source: it
   takes on the source's own `visibility` tokens, joined with any
-  `visibility` the page already had. A leading frontmatter block in an
+  `visibility` the page already had; a re-ingest never drops a token
+  the page carries, and an operator removes one by editing the page. A leading frontmatter block in an
   HTML, CSV or TSV source is not extracted, so it is never read as table
   data or text. A URL source, an absent file and a file the caller
   cannot read at its reach all answer `source-not-local`, with no digest and no section. A Markdown or

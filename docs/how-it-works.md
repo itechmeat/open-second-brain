@@ -1521,6 +1521,9 @@ parts, each with its level, its trail of ancestor headings and its line
 span in the extracted text. Only the parts reach the page, under
 `## Parts` inside one fenced block, so a heading that holds `[[...]]` or
 `#word` adds no link and no tag while full-text search still finds it.
+Each heading and the title are redacted (`key=value` credentials and URL
+userinfo) before they are capped, and a `|` in a heading is written as
+`\|` in the parts list, so a heading cannot forge a line span.
 The text itself stays out of the page; `o2b brain extract --json`
 returns it.
 
@@ -1534,12 +1537,16 @@ it is never read as data. The rows are rendered as fenced plain text,
 not a Markdown table, in groups that each repeat the header and stay
 under one search chunk, so every chunk of the page carries the column
 names and a `Table > Rows a-b` heading path. Rows, columns, cell length
-and section size are capped, and every cut is named. A column whose header names a
+and section size are capped, and every cut is named; only the first
+4,096 code units of a cell are read for redaction, and a longer cell
+counts as cut. A `<private>` region is hidden before the records are
+split, so a region spanning records hides every row between its tags. A column whose header names a
 credential has its values replaced, and every other cell goes through
 the output redactor. Inside a cell a backslash, `|`, a backtick, a line
 feed, a carriage return and a tab are escaped (`\\`, `\|`, ``\` ``,
 `\n`, `\r`, `\t`), and every other control character (C0, DEL and C1)
-is written as `\u{XXXX}` with its code point in hexadecimal, so no row
+is written as `\u{XXXX}` with its code point in four uppercase
+hexadecimal digits, so no row
 line can open or close a fence and no escape sequence reaches a
 terminal. One limit of the chunk alignment remains, and it loses no
 content: a single row longer than one group's token budget forms a
@@ -1559,7 +1566,9 @@ the embeddings, as it already sits in the source file in the vault.
 A summary page that carries a derived section is at most as visible as
 its source: the source's own `visibility` tokens are joined with any the
 page already had, so a reader that cannot read the source cannot read
-what was derived from it.
+what was derived from it. A re-ingest never drops a token the page
+already carries, even when the source has since dropped it; an operator
+removes one by editing the page.
 
 A Markdown or text source gets nothing new: its page is byte for byte
 what it was.

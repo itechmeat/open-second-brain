@@ -1211,7 +1211,13 @@ extract: <file> (html)
 `--json` adds the extracted `text` and each part's `index`, `level`,
 `heading`, `trail`, `line_start`, `line_end` and `source_offset` (the
 byte offset of its start tag), plus `parts_omitted` when more than 256
-headings were found. For CSV and TSV it prints the delimiter and the
+headings were found. A leading frontmatter block in the file is left
+out, as ingest leaves it out. Each heading and the title are redacted
+(`key=value` credentials and URL userinfo) before they are capped at 200
+characters, and a `|` in a heading is written as `\|` in the parts list.
+The `text` has every `<private>` region replaced by its placeholder and
+is otherwise not redacted; it is a preview of a file the caller already
+reads, and it never reaches a page. For CSV and TSV it prints the delimiter and the
 counts, then the `## Table` section the summary page would hold:
 
 ````text
@@ -1233,7 +1239,8 @@ Any other file prints `not extracted: <reason>`, and `--json` returns
 `format-read-verbatim`
 for Markdown and plain text, `format-not-extractable` for a named format
 such as PDF, `format-unknown` (with `format: null`) for an extension the
-registry does not know, and `not-a-regular-file`, `source-too-large`,
+registry does not know (a named or unknown format is answered from the
+extension, without reading the file), and `not-a-regular-file`, `source-too-large`,
 `not-utf8` or a table refusal for a file that could not be read or
 parsed. The exit code is `0` in every one of these cases: a file that
 cannot be extracted is a result, not an error. A path that does not
