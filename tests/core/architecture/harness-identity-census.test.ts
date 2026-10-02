@@ -6,47 +6,35 @@
  * LAUNCHED this server (`o2b mcp --harness`, written by the packager or
  * installer, falling back to `--host-target`). A harness a caller could
  * name in a tool argument would let any caller pick which operator rules
- * it is shown, so no MCP tool input schema may declare a property
- * spelling it. The directory the layer lives in is also never advertised:
+ * it is shown, so no MCP tool input schema, in any tool scope or surface
+ * profile, may declare a property whose key spells it. The directory the layer lives in is also never advertised:
  * a tool description naming it would point agents at a target every
  * write path refuses.
  */
 
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
-import { join, relative } from "node:path";
-
 import { BRAIN_SCOPED_RULES_DIR } from "../../../src/core/brain/path-constants.ts";
+import { TOOL_SURFACE_PROFILES } from "../../../src/mcp/profiles.ts";
+import { TOOL_SCOPES, type ToolScope } from "../../../src/mcp/tool-contract.ts";
 import { buildToolTable } from "../../../src/mcp/tools.ts";
 
-const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
-
-interface SourceFile {
-  readonly path: string;
-  readonly text: string;
-}
-
-function readTree(rel: string): SourceFile[] {
-  const files: SourceFile[] = [];
-  const walk = (dir: string): void => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const abs = join(dir, entry.name);
-      if (entry.isDirectory()) walk(abs);
-      else if (entry.name.endsWith(".ts")) {
-        files.push({
-          path: relative(REPO_ROOT, abs).split("\\").join("/"),
-          text: readFileSync(abs, "utf8"),
-        });
-      }
-    }
-  };
-  walk(join(REPO_ROOT, rel));
-  return files.toSorted((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-}
-
-/** `harness` itself or any `*_harness` / `*Harness` property key. */
+/** Any property key spelling the harness, in any case or position. */
 function isHarnessKey(key: string): boolean {
-  return key === "harness" || key.endsWith("_harness") || key.endsWith("Harness");
+  return /harness/i.test(key);
+}
+
+/**
+ * Every live tool table a server can advertise: each tool scope, and the
+ * scope behind each named surface profile (a profile only narrows it).
+ */
+function liveToolTables(): ReadonlyArray<{ readonly label: string; readonly scope: ToolScope }> {
+  return [
+    ...TOOL_SCOPES.map((scope) => ({ label: `scope ${scope}`, scope })),
+    ...Object.entries(TOOL_SURFACE_PROFILES).map(([name, profile]) => ({
+      label: `profile ${name}`,
+      scope: profile.scope,
+    })),
+  ];
 }
 
 /** Every property key reachable from a JSON schema, with its path. */
@@ -73,30 +61,24 @@ function schemaPropertyKeys(schema: unknown, path = ""): string[] {
 }
 
 describe("no caller can name the harness", () => {
-  test("no live tool input schema declares a harness property", () => {
+  test("no live tool input schema declares a harness property in any scope or profile", () => {
     const offenders: string[] = [];
-    for (const tool of buildToolTable("full")) {
-      for (const keyPath of schemaPropertyKeys(tool.inputSchema)) {
-        const leaf = keyPath.split(".").at(-1) ?? keyPath;
-        if (isHarnessKey(leaf)) offenders.push(`${tool.name}.${keyPath}`);
+    for (const { label, scope } of liveToolTables()) {
+      for (const tool of buildToolTable(scope)) {
+        for (const keyPath of schemaPropertyKeys(tool.inputSchema)) {
+          const leaf = keyPath.split(".").at(-1) ?? keyPath;
+          if (isHarnessKey(leaf)) offenders.push(`${label}: ${tool.name}.${keyPath}`);
+        }
       }
     }
     expect(offenders).toEqual([]);
   });
 
-  test("no schema property declaration under src/mcp spells the harness", () => {
-    // The source half, for schemas a scope or profile hides from the
-    // full table: a declaration is a key at the start of a line opening
-    // an object, the shape every schema in this tree uses.
-    const re = /^\s*(?:"|')?([A-Za-z_]*(?:harness|Harness))(?:"|')?\s*:\s*\{/gm;
-    const offenders: string[] = [];
-    for (const file of readTree("src/mcp")) {
-      for (const match of file.text.matchAll(re)) {
-        const key = match[1] ?? "";
-        if (isHarnessKey(key)) offenders.push(`${file.path}: ${key}`);
-      }
+  test("the key check catches every spelling of the harness", () => {
+    for (const key of ["harness", "harness_id", "harnessId", "harness_name", "launch_harness"]) {
+      expect(isHarnessKey(key)).toBe(true);
     }
-    expect(offenders.toSorted()).toEqual([]);
+    expect(isHarnessKey("host_target")).toBe(false);
   });
 
   test("no tool description names the scoped rules directory", () => {
