@@ -6,8 +6,8 @@
  * a record the caller cannot read is dropped, a dream shared with such a
  * record keeps its readable transitions, and a retired record is judged
  * under its `pref-` spelling too. The rows here cover the raw log
- * resource, `brain_query`'s log branches, the backlinks resource and the
- * preference readers.
+ * resource, `brain_query`'s log branches, the backlinks resource, the
+ * preference readers and the doctor.
  *
  * The vault pair is tests/helpers/reach-log-fixture.ts. A server with no
  * reach minted is a remote caller; each row also carries a local control
@@ -15,7 +15,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -25,6 +25,7 @@ import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/trans
 import {
   buildReachLogFixture,
   maskVolatile,
+  PRIVATE_PATH,
   PRIVATE_SLUG,
   reachServer,
   type ReachLogFixture as Fixture,
@@ -36,6 +37,10 @@ import {
 const AGE_RE = /\b\d+(?:ms|s|m|h|d)\b/g;
 /** A log heading's time of day, which ticks between the two builds. */
 const HEADING_TIME_RE = /\b\d{2}:\d{2}:\d{2}Z/g;
+/** A tool the product no longer ships, which the doctor reports when a page names it. */
+const REMOVED_TOOL = "brain_digest";
+/** The evidence artifact of the malformed-range row: a reserved note, by path. */
+const HIDDEN_NOTE = "Notes/zzhiddendoc";
 
 const bases: string[] = [];
 const savedConfig = process.env["OPEN_SECOND_BRAIN_CONFIG"];
@@ -203,4 +208,57 @@ describe("a reserved preference page that fails to parse answers as an absent on
       expect(row.local).toContain(`ret-${RETIRED_SLUG}`);
     });
   }
+});
+
+/**
+ * Vault A's reserved preference names a removed tool and carries evidence
+ * whose artifact range is malformed, and the retired reserved record
+ * carries evidence logged under its `pref-` spelling; vault B carries none
+ * of them.
+ */
+function doctorFindings(withPrivate: boolean): (f: Fixture) => Promise<void> {
+  return async (f) => {
+    if (!withPrivate) return;
+    const abs = join(f.vault, PRIVATE_PATH);
+    writeFileSync(abs, `${readFileSync(abs, "utf8")}\nSee \`${REMOVED_TOOL}\`.\n`);
+    logOnDay(f, BRAIN_LOG_EVENT_KIND.applyEvidence, {
+      preference: `[[pref-${PRIVATE_SLUG}]]`,
+      artifact: `[[${HIDDEN_NOTE}:9-x]]`,
+      result: "applied",
+    });
+    // Evidence on the retired reserved record, logged under `pref-`.
+    logOnDay(f, BRAIN_LOG_EVENT_KIND.applyEvidence, {
+      preference: `[[pref-${RETIRED_SLUG}]]`,
+      artifact: `[[Notes/${RETIRED_SLUG}-applied]]`,
+      result: "applied",
+    });
+  };
+}
+
+/** The doctor's warnings and errors, sorted (their order follows the checks). */
+function findings(normalised: string): ReadonlyArray<string> {
+  const report = JSON.parse(normalised) as { warnings?: unknown[]; errors?: unknown[] };
+  return [...(report.warnings ?? []), ...(report.errors ?? [])]
+    .map((w) => JSON.stringify(w))
+    .toSorted();
+}
+
+describe("brain_doctor names no reserved record below local reach", () => {
+  test("every finding agrees with the vault that never had the record", async () => {
+    const row = await abRow((f, reach) => call(f, "brain_doctor", {}, reach), doctorFindings);
+    expect(findings(row.withheld)).toEqual(findings(row.absent));
+    expect(row.withheld).not.toContain(PRIVATE_SLUG);
+    expect(row.withheld).not.toContain(RETIRED_SLUG);
+    expect(row.withheld).not.toContain(HIDDEN_NOTE);
+    // Control: locally the orphan evidence, the malformed range and the
+    // removed-tool mention of the reserved preference are all reported.
+    const local = findings(row.local).join("\n");
+    for (const code of ["orphan-evidence", "malformed-evidence-range", "removed-tool-reference"]) {
+      expect(local).toContain(code);
+    }
+    expect(local).toContain(`${PRIVATE_SLUG}-applied`);
+    expect(local).toContain(`${RETIRED_SLUG}-applied`);
+    expect(local).toContain(HIDDEN_NOTE);
+    expect(local).toContain(`pref-${PRIVATE_SLUG}.md`);
+  });
 });

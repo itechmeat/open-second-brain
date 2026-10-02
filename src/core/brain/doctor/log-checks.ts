@@ -10,7 +10,7 @@
 import type { DegradationNotice } from "../../integrity/degradation.ts";
 import { listVaultBasenames } from "../../vault.ts";
 import { listLogMarkdownFiles } from "../log-jsonl.ts";
-import { parseLogDayFile } from "../log.ts";
+import { parseLogDayFile, type BrainLogEntry } from "../log.ts";
 import { brainDirs } from "../paths.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
 import { parseArtifactRef } from "../wikilink.ts";
@@ -77,6 +77,19 @@ function listShards(
 }
 
 /**
+ * The preference an `apply-evidence` event was logged against, as the
+ * finding's `sources`. The message names only the evidence artifact, so
+ * without it a reader filtering findings by what they name could not
+ * tell that the finding is about a preference the caller may not read.
+ */
+function evidencePreferenceSources(e: BrainLogEntry): { readonly sources?: ReadonlyArray<string> } {
+  const preference = e.body["preference"];
+  if (typeof preference !== "string") return {};
+  const target = parseArtifactRef(preference).target;
+  return target ? { sources: [target] } : {};
+}
+
+/**
  * `malformed-evidence-range`: walks every `apply-evidence` event,
  * runs the artifact wikilink through {@link parseArtifactRef}, and
  * flags any malformed range suffix (`:abc-def`, `:120-100`, etc.).
@@ -95,6 +108,7 @@ export const evidenceRangeCheck: DoctorCheck = {
           issues.push({
             severity: "warning",
             code: "malformed-evidence-range",
+            ...evidencePreferenceSources(e),
             message:
               `apply-evidence at ${e.timestamp} references artifact ${parsed.raw}` +
               ` with malformed range '${parsed.rangeText}'.` +
@@ -150,6 +164,7 @@ export const orphanEvidenceCheck: DoctorCheck = {
         issues.push({
           severity: "warning",
           code: "orphan-evidence",
+          ...evidencePreferenceSources(e),
           message:
             `apply-evidence at ${e.timestamp} references artifact [[${target}]]` +
             " but no file with that basename exists in the vault.",

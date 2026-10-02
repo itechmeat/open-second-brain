@@ -105,6 +105,9 @@ export const removedToolReferenceCheck: DoctorCheck = {
       issues.push({
         severity: "warning",
         code: "removed-tool-reference",
+        // The page, structurally: a reader filtering findings by what they
+        // name cannot judge a path that appears only in the prose.
+        path,
         message:
           // Vault-relative, forward-slash on every host: the note is named the
           // way Obsidian and every other vault path in the report spell it.

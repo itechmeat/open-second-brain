@@ -72,6 +72,7 @@ import { BRAIN_LOG_EVENT_KIND, type DoctorIssue } from "./types.ts";
 import { isBrainArtifactId, normaliseWikilinkTarget } from "./wikilink.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { recordRefs } from "./log-events-at-reach.ts";
+import { extractId } from "./temporal/period-common.ts";
 
 // ----- Diagnostics-signal model --------------------------------------------
 
@@ -1287,9 +1288,10 @@ export interface DoctorIssueNaming {
  * structured target and name their subjects inside the message as
  * `[[pref-x]]`; they are read through the shared wikilink lexer, a
  * structural read of link syntax rather than a match on prose. A finding
- * survives a view only when every reference passes it. A record id is
- * asked under every spelling it answers to ({@link recordRefs}), so a
- * broken backlink to `pref-x` names the reserved `ret-x` it became.
+ * survives a view only when every reference passes it. A record id - the
+ * target, an id-shaped source, a message wikilink - is asked under every
+ * spelling it answers to ({@link recordRefs}), so a broken backlink to
+ * `pref-x` names the reserved `ret-x` it became.
  */
 export function doctorIssueRefs(
   vault: string,
@@ -1298,7 +1300,7 @@ export function doctorIssueRefs(
   return [
     issue.path === undefined ? undefined : vaultRelativeOrSelf(vault, issue.path),
     ...recordRefs(issue.target),
-    ...(issue.sources ?? []),
+    ...(issue.sources ?? []).flatMap((source) => [source, ...recordRefs(extractId(source))]),
     ...extractWikilinkRichBodies(issue.message).flatMap((b) =>
       recordRefs(parseWikilinkRich(b).target),
     ),
