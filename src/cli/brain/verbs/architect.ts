@@ -13,7 +13,7 @@
  */
 
 import { generateArchDocs } from "../../../core/brain/architect/generate.ts";
-import { MANIFEST_STATUS } from "../../../core/brain/architect/manifests.ts";
+import { MANIFEST_STATUS, oneLine } from "../../../core/brain/architect/manifests.ts";
 import type { ManifestReading } from "../../../core/brain/architect/manifests.ts";
 import { RegionError } from "../../../core/brain/regions.ts";
 import {
@@ -44,7 +44,9 @@ function manifestEntry(reading: ManifestReading): Record<string, string> {
 function notReadLine(manifests: ReadonlyArray<ManifestReading>): string | null {
   const notRead = manifests.filter((reading) => reading.status !== MANIFEST_STATUS.read);
   if (notRead.length === 0) return null;
-  const named = notRead.map((reading) => `${reading.path} (${reading.status})`).join(", ");
+  // A path is text from the scanned tree: folded to one line, so no control
+  // character reaches the terminal.
+  const named = notRead.map((reading) => `${oneLine(reading.path)} (${reading.status})`).join(", ");
   return `manifests not read: ${named}`;
 }
 
