@@ -274,6 +274,17 @@ describe("a retired record is judged under its pref- spelling too", () => {
     ]);
   });
 
+  for (const args of [{ kind: BRAIN_LOG_EVENT_KIND.applyEvidence }, {}]) {
+    test(`brain_event_trace ${JSON.stringify(args)} drops evidence on the retired record`, async () => {
+      const row = await expectAnswersAsAbsent(
+        "brain_event_trace",
+        (f) => ({ date: f.date, ...args }),
+        [`Notes/${RETIRED_SLUG}-applied`],
+      );
+      expect(row.withheld).toContain(`Notes/${SHARED_SLUG}-applied`);
+    });
+  }
+
   test("brain_doctor names no broken backlink to the retired record", async () => {
     // Only the broken-backlinks findings are compared: the orphan-evidence
     // findings name evidence artifacts by basename and are outside this row.

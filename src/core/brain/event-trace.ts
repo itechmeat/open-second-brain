@@ -41,7 +41,7 @@ import {
   type ArtifactRefView,
 } from "./artifact-ref-view.ts";
 import { ownerScopeView } from "./owner-scope-view.ts";
-import { dreamEntryAtReach } from "./log-events-at-reach.ts";
+import { logEntryAtReach } from "./log-events-at-reach.ts";
 import type { BrainLogEntry, BrainLogEntryPayload } from "./log.ts";
 import { loadNormalizedContinuityRecords } from "./continuity/read-model.ts";
 import type { NormalizedContinuityRecord } from "./continuity/read-model.ts";
@@ -245,8 +245,10 @@ export function resolveLogEventTraces(
     if (selector.kind !== undefined && logged.eventType !== selector.kind) continue;
     // A dream shared with a withheld record is kept with its readable
     // transitions only, and its correlation is read from that form, so
-    // neither the body nor the artifacts name the withheld record.
-    const entry = dreamEntryAtReach(view, logged);
+    // neither the body nor the artifacts name the withheld record; each
+    // record id is asked under its pref- and ret- spellings, so evidence
+    // logged before a reserved record was retired is dropped too.
+    const entry = logEntryAtReach(view, logged);
     if (entry === null) continue;
     if (wantStamp !== undefined && entry.timestamp !== wantStamp) continue;
     const correlation = extractEventCorrelation(entry);

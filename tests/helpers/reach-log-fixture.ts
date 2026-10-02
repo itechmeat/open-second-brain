@@ -5,7 +5,8 @@
  * evidence inside both the 24-hour and the 30-day windows, a lifecycle
  * event outside a dream naming it, and a reserved preference a dream
  * confirmed and then retired inside the window (only `ret-bygone` is on
- * disk). Vault B never had either. Both carry the same public preference
+ * disk), with evidence logged before it was retired, so the event names
+ * it only as `pref-bygone`, inside both windows. Vault B never had either. Both carry the same public preference
  * with its own evidence and a dream confirming it (shared in vault A with
  * the reserved record), so a remote answer is never empty.
  */
@@ -137,6 +138,14 @@ export function buildReachLogFixture(
     }
     dream(vault, older, [`pref-${PRIVATE_SLUG}`, `pref-${RETIRED_SLUG}`], []);
     dream(vault, recent, [`pref-${RETIRED_SLUG}`], [`ret-${RETIRED_SLUG}`]);
+    for (const at of [recent, older]) {
+      // Written as apply-evidence writes it: a wikilink with the principle, no path.
+      log(vault, at, BRAIN_LOG_EVENT_KIND.applyEvidence, {
+        preference: `[[pref-${RETIRED_SLUG}|Rule ${RETIRED_SLUG}.]]`,
+        artifact: `[[Notes/${RETIRED_SLUG}-applied]]`,
+        result: "applied",
+      });
+    }
     log(vault, recent, BRAIN_LOG_EVENT_KIND.forceConfirmed, {
       path: PRIVATE_PATH,
       preference: `[[pref-${PRIVATE_SLUG}]]`,

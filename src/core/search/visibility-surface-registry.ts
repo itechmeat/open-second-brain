@@ -480,7 +480,8 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "not read at its reach, and every attached trace whose handoff reference it hides; a " +
       "dream shared with a withheld record is kept with its readable transitions only " +
       "(log-events-at-reach.ts), its body and artifacts read from that form, so the count " +
-      "does not fall when a reserved preference shares a dream.",
+      "does not fall when a reserved preference shares a dream; each record id is judged " +
+      "under its pref- and ret- spellings.",
   },
   {
     surface: "brain_foresight",
