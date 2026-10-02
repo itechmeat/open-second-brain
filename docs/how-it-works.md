@@ -1397,6 +1397,46 @@ of the system follows - storage stays canonical UTC, conversion
 happens at the boundary, and an unconfigured vault renders
 byte-identically.
 
+## Checked quotes and capture scope (since v1.67.0)
+
+A distillation page presents itself as a faithful record of its source, so
+two things it asserts are now checked or recorded rather than assumed.
+
+**Quotes are verified at write time.** When an agent submits claims to
+`brain_distill_source` or `o2b brain distill`, every span between
+quotation marks is compared with the block the claim cites, or with the
+whole source when it cites none. The comparison is deterministic and
+language-neutral: quotation marks are recognised by their Unicode property,
+paired by position, and both sides are normalised the same way for the
+comparison only. A span that does not verify loses its quotation marks and
+is named in the result, so the page never shows an unverified quote; a
+caller that prefers a refusal passes `strict_quotes` and gets the
+registered error code `quote_unverified` with nothing written. The bytes
+checked are the bytes hashed into `source_hash`, read once.
+
+**Every page says how much of its source the vault holds.** The capture
+scope has three values:
+
+- `full-local`: the source is a file this vault holds;
+- `bounded-local`: the source has no local bytes, but the page stores a
+  verbatim excerpt the writer read, with its digest (`excerpt_hash`);
+- `url-only`: the page rests on a locator only - a URL, or a path with no
+  file behind it.
+
+The scope is stamped at write time on distillation, ingest summary and
+research report pages (`capture_scope`, or `capture_scopes` per source on a
+report), and only when it is not `full-local`, so pages over local sources
+stay byte-identical. An absent stamp means "full-local, or written before
+this release", and readers re-derive rather than assume: the default-on
+`capture-scope` hygiene detector re-classifies each cited source from its
+identity at scan time, without reading its bytes. A retrievable page of
+active knowledge - a distillation, an ingest summary, a research report or
+a canonical entity - whose every cited source is currently `url-only` gets
+a `warning` finding with `proposed_action: review`. A local source that
+was deleted therefore surfaces as `url-only`, a `bounded-local` page counts
+as backed only while its excerpt still matches its digest, and quarantined
+pages are skipped because the trust gate already handles them.
+
 ## Safety properties
 
 These are invariants of the system, not configuration to enable.

@@ -279,6 +279,7 @@ generic tokens:
 | `unknown_argument` | the call carried an argument the tool does not declare (see "Argument contract" above) |
 | `brain_artifact_unparseable` | a Brain artifact file (a preference or a retired rule, for example) could not be parsed |
 | `argument_forbidden` | `brain_scaffold_stub` was given an argument that belongs to its other action |
+| `quote_unverified` | `brain_distill_source` with `strict_quotes: true` refused the write because a quoted span in a claim did not verify against its source (see "Source distillation" below) |
 
 plus every member of the vocabularies the core already defines, passed
 through unchanged:
@@ -376,7 +377,7 @@ flags for a narrower per-process full server.
 | `brain_agenda`              | Stateless agenda synthesis over caller-provided calendar events (the host fetches them; the Brain never calls a calendar API): overlap conflicts, free focus blocks (optionally clipped to a workday window), and events organised outside the operator's own email domain(s). No vault writes. | `events`                                       |
 | `brain_context_presets`     | Show, suggest, or diff read-only context budget presets (`tight-context`, `long-context`) without writing config.                              | `operation`                                    |
 | `brain_pre_compact_extract` | Extract decision/commitment/outcome/rule/open-question records from bounded text into continuity storage.                                      | `session_id`, `turn_start`, `turn_end`, `text` |
-| `brain_hygiene`             | Memory hygiene: `scan` findings (conflicts, dedup, freshness, usefulness; since v1.64.0 `slug-collisions` is default-on — same-stem allocation residue such as `topic.md` beside `topic-2.md` — and `tags` is opt-in, auditing inline body tags only, never frontmatter tags arrays; the default is the sweep of every registered detector except the opt-in ones), `apply` selected ids, `refresh` stale pages. Resolver command comes from `_brain.yaml` only. With the optional `dedup` decision-model use in enforce, `scan` dedup findings carry an advisory `decision_model` verdict; `apply` never reads it. | `mode`                                         |
+| `brain_hygiene`             | Memory hygiene: `scan` findings (conflicts, dedup, freshness, usefulness; since v1.64.0 `slug-collisions` is default-on — same-stem allocation residue such as `topic.md` beside `topic-2.md` — and `tags` is opt-in, auditing inline body tags only, never frontmatter tags arrays; since v1.67.0 `capture-scope` is default-on and warns when active knowledge rests only on `url-only` sources; the default is the sweep of every registered detector except the opt-in ones), `apply` selected ids, `refresh` stale pages. Resolver command comes from `_brain.yaml` only. With the optional `dedup` decision-model use in enforce, `scan` dedup findings carry an advisory `decision_model` verdict; `apply` never reads it. | `mode`                                         |
 | `brain_anticipatory_context` | Turn-specific context bundle kept warm by lifecycle hooks, keyed by the session's lineage root; reports `cache_state` warm / stale / miss.   | `session_id`                                   |
 | `brain_session_grep`        | Search imported session recall raw turns and deterministic summary nodes.                                                                      | `query`                                        |
 | `brain_session_describe`    | Describe raw-turn counts and summary depths for one imported session recall DAG.                                                               | `session_id`                                   |
@@ -1318,6 +1319,118 @@ and bypass the note-write path entirely. Log appends (`brain_note`,
 `brain_apply_evidence`) name no note path and are not linted, because the
 log line is machine-composed rather than authored.
 
+## Source distillation (since v1.67.0)
+
+`brain_distill_source` writes one idempotent distillation page per source
+from atomic claims the calling agent supplies. Open Second Brain runs no
+model here: it validates the claims, checks every quotation inside them
+against the source, and writes the page. The page cites each claim as
+`[[source#^block]]` when the claim names a block.
+
+Inputs:
+
+| Argument | Type | Meaning |
+| --- | --- | --- |
+| `source_path` | string, required | the source identity: a vault-relative path or a URL |
+| `claims` | array, required | `{ text, block? }` items; `block` is the source block id (`^abc` or `abc`) |
+| `strict_quotes` | boolean, optional | refuse the whole write when any quoted span fails the check |
+| `excerpt` | string, optional | the verbatim text the caller read from a `url-only` source, stored on the page |
+| `agent` | string, optional | agent identity override |
+
+Result keys: `distillation_path`, `created`, `claim_count`, `source_hash`
+(absent when the source had no bytes to hash), `trust` (`trusted` or
+`untrusted`), `capture_scope` (always present) and `quotes` (present only
+when at least one claim contains a quoted span).
+
+### The quote check
+
+A quoted span is the text between a pair of quotation marks in a claim.
+A quotation mark is any character with the Unicode `Quotation_Mark`
+property, so straight, curly, low-high, guillemet and corner-bracket
+quotes all count without a list of languages. Marks pair by position: an
+opener follows the start of the text, whitespace or opening punctuation,
+a closer is followed by the end, whitespace or punctuation. A mark with a
+letter on both sides (an apostrophe inside a word) is never a delimiter.
+Only the outermost span is checked; a quote inside it is part of its
+text. A mark that finds no partner is counted as `unpaired` and left on
+the page untouched. An empty span is not a quote.
+
+Each span is compared with the evidence after the same normalisation is
+applied to both sides: Unicode NFC, inline Markdown reduced to its
+display text (emphasis and code markers, `[text](url)`, `[[target|alias]]`,
+`[[target]]`), line-leading block markers and a trailing ` ^id` removed,
+quotation-mark variants folded, whitespace runs collapsed. Case,
+punctuation and wording are never folded. The normalised span must then
+be an exact substring of the normalised evidence. A span holding an
+ellipsis (`…` or three or more dots) is split there, and every fragment
+must appear in order without overlap. A bracketed insertion such as
+`[sic]` is not interpreted and fails as a mismatch. The page bytes are
+never normalised; normalisation is used for the comparison only.
+
+The evidence depends on the claim:
+
+- A claim with `block` is compared with that block only. A block id that
+  resolves nowhere gives `block-not-found`, an id defined twice gives
+  `block-ambiguous`; neither falls back to the whole source, because the
+  citation is part of what the page asserts.
+- A claim without `block` is compared with the whole source and verifies
+  as `verified-in-source`, a weaker outcome than `verified-in-block`.
+- A source whose bytes are not valid UTF-8 gives `source-not-text` for
+  every span. A source with no local bytes gives `url-only`.
+
+The bytes checked are the bytes read once for `source_hash`, so the
+verdict and the digest on the page always describe the same content.
+
+**A failed span is unquoted by default.** Its two quotation marks are
+removed, the words stay, the write lands, and the result names the
+failure. The page never shows an unverified quote. Unquoting changes the
+bytes the caller supplied; this is deliberate, the change is reported in
+`quotes.findings`, and an identical re-run produces an identical page.
+
+**Strict refusal.** With `strict_quotes: true` the whole write is refused
+when any span would be unquoted, and nothing is written. The refusal is a
+JSON-RPC error with `INVALID_PARAMS` and `error.data.code` set to
+`quote_unverified`; its message names claim indices and outcomes
+(`claim 0: not-in-block`), never claim text or paths. Unpaired marks
+never trigger a refusal.
+
+The `quotes` report:
+
+| Key | Meaning |
+| --- | --- |
+| `checked` | quoted spans examined |
+| `verified_in_block` | spans found verbatim in the cited block |
+| `verified_in_source` | spans found verbatim in the whole source (claims without `block`) |
+| `unquoted` | spans that failed and lost their quotation marks |
+| `unpaired` | quotation marks without a partner, counted only |
+| `findings` | one `{ claim, outcome, span }` per unquoted span: `claim` is the 0-based claim index, `outcome` one of `not-in-block`, `not-in-source`, `block-not-found`, `block-ambiguous`, `source-not-text`, `url-only`, `span` the span text capped at 120 characters |
+| `total`, `returned`, `truncated` | the findings list is capped at 25 and declares its own truncation |
+
+A page whose claims held spans carries `quotes_verified` and
+`quotes_unquoted` in its frontmatter. A page without spans is
+byte-identical to the one earlier releases wrote.
+
+### Capture scope and the excerpt
+
+`capture_scope` says how much of the source the vault actually holds:
+
+| Value | Meaning |
+| --- | --- |
+| `full-local` | the source is a file this vault holds |
+| `bounded-local` | the source has no local bytes, and the page stores a verbatim excerpt the caller read |
+| `url-only` | the source is a URL, or a vault-shaped path with no file behind it |
+
+The page records `capture_scope` in its frontmatter only when the value is
+not `full-local`, so a page over a local source stays byte-identical.
+`excerpt` makes `bounded-local` reachable: for a `url-only` source the
+caller passes the text it read, at most 65,536 bytes of UTF-8. The page
+stores it under a `## Excerpt` heading in a fenced block with the info
+string `excerpt`, records its sha256 as `excerpt_hash`, and quotes are
+checked against it. An excerpt is refused with `INVALID_PARAMS`, before
+anything is written, when the source is a file the vault holds (the file
+is the evidence), when it is empty after trimming, or when it exceeds the
+cap.
+
 ## Safety notes
 
 - The vault path is bound to the server instance at startup. Tools cannot
@@ -1893,3 +2006,19 @@ log line is machine-composed rather than authored.
   group at its timeout or when the server exits. A duplicated
   `retry_tasks` entry counts once, and the `status` notice names the env
   override when that turned the tasks off.
+- Since v1.67.0 `brain_distill_source` checks quoted spans in claims
+  against the cited block or the source, unquotes a span that fails and
+  reports it under `quotes`, refuses the write with `quote_unverified`
+  under `strict_quotes: true`, accepts a bounded `excerpt` for a
+  `url-only` source, and always returns `capture_scope` (see "Source
+  distillation"). `brain_ingest_source` returns `capture_scope`;
+  `brain_research_report` returns `capture_scopes`, one per entry of
+  `sources` in the same order, and stamps a `capture_scopes` frontmatter
+  list when any source is not `full-local`. `brain_hygiene` gains the
+  default-on `capture-scope` detector: a retrievable page of active
+  knowledge whose every cited source is currently `url-only` gets a
+  `warning` finding with `proposed_action: review`. The scope is
+  re-derived from each source identity at scan time, so a page whose
+  local source was deleted reports as `url-only`, and a `bounded-local`
+  page counts as backed only while its excerpt still matches
+  `excerpt_hash`. Quarantined pages are skipped.

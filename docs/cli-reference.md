@@ -490,7 +490,7 @@ o2b brain session-grep        --query <text> [--session-id <id>] [--limit <n>] [
 o2b brain session-describe    --session-id <id> [--json]
 o2b brain session-expand      <record-id> [--raw-limit <n>] [--cursor <offset>] [--json]
 o2b brain handoff             <session-file> [--session-id <id>] [--format auto|claude|codex|hermes] [--json] - write Brain/handoffs/<date>-<scope>.md (since v0.37.0)
-o2b brain hygiene             scan | apply --ids <id,...> [--detectors conflicts,dedup,freshness,usefulness,slug-collisions,tags] [--dry-run] [--json] - hygiene findings pipeline; review findings never execute (since v1.3.0); the default sweep runs every detector except the opt-in ones (since v1.64.0: `slug-collisions` is default-on and reports same-stem groups such as topic.md beside topic-2.md as info findings, `tags` is opt-in and audits inline body tags only - frontmatter tags arrays are out of scope)
+o2b brain hygiene             scan | apply --ids <id,...> [--detectors conflicts,dedup,freshness,usefulness,slug-collisions,capture-scope,tags] [--dry-run] [--json] - hygiene findings pipeline; review findings never execute (since v1.3.0); the default sweep runs every detector except the opt-in ones (since v1.64.0: `slug-collisions` is default-on and reports same-stem groups such as topic.md beside topic-2.md as info findings, `tags` is opt-in and audits inline body tags only - frontmatter tags arrays are out of scope; since v1.67.0 `capture-scope` is default-on and warns, with proposed action review, when a retrievable page of active knowledge cites only sources that are currently url-only)
 o2b brain hygiene             scan: with the optional `dedup` decision-model use in enforce, dedup findings carry an advisory `decision_model` verdict and a confident `different` is listed last; `o2b brain doctor` annotates `entity-alias-candidate` warnings the same way; `apply` ignores verdicts
 o2b brain refresh             --stale [--dry-run] [--json] - targeted recompile of stale derived pages; orphans archive into Brain/.snapshots (since v1.3.0)
 o2b brain anticipate          --session <id> [--refresh] [--signal <text>] [--json] - read or warm the anticipatory context cache for the session's lineage root (since v1.3.0)
@@ -1140,6 +1140,52 @@ note: no conversation matched; <scanned> transcript file(s) scanned, <n> from an
 
 The four reasons sum to `scanned` minus the exported records, so an empty
 file under exit `0` can never be read as a machine that recorded nothing.
+
+### Source distillation (since v1.67.0)
+
+```text
+o2b brain distill            <source> (--claims <json> | --claims-file <path>) [--strict-quotes] [--excerpt-file <path>] [--agent <name>] [--vault <path>] [--json]
+```
+
+Writes one idempotent distillation page per source from atomic claims the
+calling agent supplies as a JSON array of `{ "text": "...", "block": "^abc" }`
+objects (or an object with a `claims` array). `<source>` is a vault-relative
+path or a URL. Open Second Brain runs no model: it validates the claims,
+checks every quoted span in them against the source, and writes the page.
+
+Every quoted span in a claim is compared with the block the claim cites,
+or with the whole source when the claim cites no block. A quotation mark is
+any character with the Unicode `Quotation_Mark` property, paired by
+position, and an apostrophe inside a word is never a delimiter. The
+comparison normalises both sides the same way (NFC, inline Markdown reduced
+to display text, block markers and a trailing ` ^id` removed, whitespace
+collapsed) and never folds case, punctuation or wording; an ellipsis splits
+a span into fragments that must appear in order. A cited block that does
+not resolve fails the span rather than falling back to the whole source.
+The full rules are in [the MCP reference](mcp.md#source-distillation-since-v1670).
+
+- A span that fails is unquoted: its quotation marks are removed, the words
+  stay, the page is written, and the result reports it.
+- `--strict-quotes` refuses the whole write instead, exits `1`, and writes
+  nothing. The message reads `distill: quoted spans failed verification:`
+  followed by `claim <index>: <outcome>` pairs, never claim text.
+- `--excerpt-file <path>` stores the verbatim text read from a source the
+  vault does not hold (a URL, or a path with no file). The page records
+  `capture_scope: bounded-local` and an `excerpt_hash`, keeps the text under
+  a `## Excerpt` heading, and checks quotes against it. The excerpt is
+  refused, before anything is written, for a source the vault holds, when
+  it is empty, or above 65,536 bytes.
+
+The success line keeps its earlier form for a clean run over a local source
+and gains suffixes in this order: ` [untrusted_source]` when the page is
+in the untrusted lane, ` [bounded-local]` when an excerpt was stored, and
+` [quotes verified:V unquoted:U]` when spans were checked, where `V` is the
+number of spans verified in a block or in the source and `U` the number
+unquoted. `--json` adds `capture_scope` (always: `full-local`,
+`bounded-local` or `url-only`) and, when spans were checked, `quotes`:
+`checked`, `verified_in_block`, `verified_in_source`, `unquoted`,
+`unpaired`, `findings` (each `{ claim, outcome, span }`, capped at 25 with
+`total`, `returned` and `truncated`).
 
 ### Knowledge packs
 
