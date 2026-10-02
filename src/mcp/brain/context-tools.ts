@@ -24,6 +24,7 @@ import {
   type RegenerateActiveResult,
 } from "../../core/brain/active.ts";
 import { computeMaintenanceOverdueFlag } from "../../core/brain/status.ts";
+import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { parseFrontmatter } from "../../core/vault.ts";
 import { readVaultInstructionFile } from "../../core/brain/vault-instruction-file.ts";
 import { normalizeAgentArgument } from "../../core/agent-identity.ts";
@@ -51,7 +52,7 @@ import {
 } from "../../core/brain/pinned.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { TOOL_ERROR_CODE, type ToolErrorCode } from "../tool-error-codes.ts";
-import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
+import { contextReach, type ServerContext, type ToolDefinition } from "../tool-contract.ts";
 import { VAULT_PATH_OUTPUT_SCHEMA, vaultPathField } from "../vault-path-field.ts";
 import { coerceStr, coerceInt, unknownOperationError } from "../coerce.ts";
 import { readableAtContextReach } from "./reach-readable.ts";
@@ -424,13 +425,14 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
   // `ServerContext.agentName` is its only source of identity and the
   // minted reach its only source of distance. A preference or retired
   // record the caller cannot read is absent from its digest - principle,
-  // counts and most-applied entry alike. When nothing is withheld the
-  // reader render is skipped and the delivered bytes stay the file's
-  // own; otherwise the re-render reuses the stamp already on disk so the
-  // narrowed view names the same generation the shared file does.
+  // counts and most-applied entry alike. A local caller with no enforced
+  // owner scope keeps the file's own bytes; any other caller gets the
+  // reader render, decided on its reach rather than on what is withheld,
+  // and stamped with the generation already on disk.
   if (!error) {
     const reader = {
       readable: readableAtContextReach(ctx),
+      restricted: contextReach(ctx) !== TRANSPORT_REACH.local,
       ...(ctx.agentName !== undefined ? { agentScope: ctx.agentName } : {}),
     };
     if (readerNarrowsActive(ctx.vault, reader)) {

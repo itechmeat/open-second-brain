@@ -105,6 +105,12 @@ export interface PreCompressOptions {
    * is filtered and the output is byte-identical to a build without it.
    */
   readonly readable?: (rel: string) => boolean;
+  /**
+   * The caller arrived below local reach: its active head is always the
+   * in-memory render, never the shared file (see
+   * {@link ActiveReaderOptions.restricted}).
+   */
+  readonly restricted?: boolean;
 }
 
 interface ConfirmedPref {
@@ -165,8 +171,10 @@ function deliveredHead(text: string): ActiveHead {
  * `brain_context` used to do, and it made a shared write follow a
  * per-request filter (context-integrity-gates, A3).
  *
- * With no enforced scope - the shipped `off` default - and nothing
- * withheld, the file is read verbatim exactly as before, stamp and all.
+ * A caller below local reach always gets that render too, whatever is
+ * withheld from it, so a stale file is never the tell that a record it
+ * cannot read exists. A local caller with no enforced scope - the
+ * shipped `off` default - reads the file verbatim, stamp and all.
  *
  * ## Why an unreadable config is checked here rather than caught
  *
@@ -192,15 +200,16 @@ function deliveredHead(text: string): ActiveHead {
 function readActiveHead(
   vault: string,
   enforcedScope: string | null,
-  readable: ((rel: string) => boolean) | undefined,
+  opts: Pick<PreCompressOptions, "readable" | "restricted">,
 ): ActiveHead {
   const reader: ActiveReaderOptions = {
     ...(enforcedScope !== null ? { agentScope: enforcedScope } : {}),
-    ...(readable !== undefined ? { readable } : {}),
+    ...(opts.readable !== undefined ? { readable: opts.readable } : {}),
+    ...(opts.restricted === true ? { restricted: true } : {}),
   };
   const path = brainActivePath(vault);
-  // An unscoped reader is handed the shared file or nothing: a vault
-  // whose digest was never generated has no head, whatever is withheld.
+  // A vault whose digest was never generated has no head for an unscoped
+  // reader, whatever its reach and whatever is withheld from it.
   if (enforcedScope === null && !existsSync(path)) return NO_ACTIVE_HEAD;
   if (readerNarrowsActive(vault, reader)) {
     const unreadableConfig = brainConfigUnreadableReport(vault);
@@ -232,7 +241,7 @@ export function buildPreCompressPack(vault: string, opts: PreCompressOptions): P
   });
   const top = ranked.slice(0, Math.max(0, opts.topK));
 
-  const activeHead = readActiveHead(vault, ownerScope.enforcedScope, opts.readable);
+  const activeHead = readActiveHead(vault, ownerScope.enforcedScope, opts);
   const safetyById = new Map<string, ContextSafetyReport>();
   const entries: Array<{ item: string; text: string }> = [];
   if (activeHead.text !== null) {

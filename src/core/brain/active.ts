@@ -48,7 +48,7 @@ import { parseRetired } from "./preference.ts";
 import { collectPreferences, resolveOwnerScopeDelivery } from "./preferences-collect.ts";
 import { BRAIN_TOMBSTONE_STATUS } from "./types.ts";
 import { BRAIN_PREFERENCES_REL, BRAIN_RETIRED_REL } from "./path-constants.ts";
-import { brainActivePath, brainDirs, brainDirsForWrite } from "./paths.ts";
+import { brainActivePath, brainDirsForWrite } from "./paths.ts";
 import { isoSecond } from "./time.ts";
 import { sortByProvenanceTrust } from "./provenance/trust-order.ts";
 import { BRAIN_PREFERENCE_STATUS, type BrainPreference, type BrainRetired } from "./types.ts";
@@ -105,6 +105,13 @@ export interface ActiveReaderOptions {
   readonly readable?: (rel: string) => boolean;
   /** See {@link RenderActiveOptions.agentScope}. */
   readonly agentScope?: string;
+  /**
+   * The reader arrived below local reach. Such a reader is always handed
+   * the in-memory render, never the file: whether a record is withheld
+   * from it must not decide between a fresh render and a file that may
+   * be stale, or the choice itself tells it the record exists.
+   */
+  readonly restricted?: boolean;
 }
 
 /** A rendered digest that has NOT been written anywhere. */
@@ -230,16 +237,17 @@ export function renderActive(vault: string, opts: RenderActiveOptions = {}): Act
 }
 
 /**
- * Does this reader see less than the shared file holds?
+ * Must this reader be handed the in-memory render rather than the file?
  *
- * False is the common case and the cheap one: no owner scope is enforced
- * and every preference and retired record passes `readable`, so the
- * reader may be served the file's own bytes and a vault with nothing
- * withheld answers byte-identically to one without the rule.
+ * Decided on who is reading, never on what is withheld: an enforced owner
+ * scope or a restricted reach always renders, so the answer does not
+ * depend on whether a record the reader cannot see exists. The common
+ * case - a local reader with no enforced scope - is served the file's own
+ * bytes, unchanged.
  */
 export function readerNarrowsActive(vault: string, opts: ActiveReaderOptions): boolean {
-  if (resolveOwnerScopeDelivery(vault, opts.agentScope).enforcedScope !== null) return true;
-  return opts.readable !== undefined && anyRecordWithheld(vault, opts.readable);
+  if (opts.restricted === true) return true;
+  return resolveOwnerScopeDelivery(vault, opts.agentScope).enforcedScope !== null;
 }
 
 /**
@@ -259,7 +267,7 @@ export function renderActiveForReader(vault: string, opts: ActiveReaderOptions):
 
 /**
  * The bytes of `Brain/active.md` this reader may be handed: the file
- * itself when nothing is withheld from it, the narrowed render
+ * itself for a local reader with no enforced scope, the reader render
  * otherwise. The file must exist; the caller regenerates it first.
  */
 export function readActiveForReader(vault: string, opts: ActiveReaderOptions): string {
@@ -318,30 +326,6 @@ export function regenerateActiveQuiet(vault: string, opts: RegenerateActiveOptio
 // ----- Scan helpers --------------------------------------------------------
 
 const READ_EVERYTHING = (_rel: string): boolean => true;
-
-/** The record directories the digest draws from, with their vault-relative form. */
-function recordDirs(vault: string): ReadonlyArray<{ readonly abs: string; readonly rel: string }> {
-  const dirs = brainDirs(vault);
-  return [
-    { abs: dirs.preferences, rel: BRAIN_PREFERENCES_REL },
-    { abs: dirs.retired, rel: BRAIN_RETIRED_REL },
-  ];
-}
-
-/**
- * Does `readable` withhold any record the digest could draw from? A path
- * test over the listing, no parse: a withheld file that would not have
- * rendered anyway costs one needless re-render, never a leak.
- */
-function anyRecordWithheld(vault: string, readable: (rel: string) => boolean): boolean {
-  for (const { abs, rel } of recordDirs(vault)) {
-    if (!existsSync(abs)) continue;
-    for (const name of readdirSync(abs)) {
-      if (name.endsWith(".md") && !readable(posix.join(rel, name))) return true;
-    }
-  }
-  return false;
-}
 
 function readGeneratedAt(path: string): string | null {
   if (!existsSync(path)) return null;

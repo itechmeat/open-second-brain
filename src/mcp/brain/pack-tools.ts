@@ -652,6 +652,7 @@ async function toolBrainPreCompressPack(
     // A preference the caller cannot read at its reach is absent from the
     // head and from the top-K walk alike.
     readable: readableAtContextReach(ctx),
+    restricted: contextReach(ctx) !== TRANSPORT_REACH.local,
     ...(agentScope !== undefined ? { agentScope } : {}),
     ...(maxCharsPerMemory !== undefined ? { maxCharsPerMemory } : {}),
     ...(maxTotalChars !== undefined ? { maxTotalChars } : {}),

@@ -11,8 +11,9 @@
  * never had them. The same remote read must answer identically in both
  * once vault paths and the generation stamp are normalised, and a local
  * read must still name the reserved principle, so an identical pair is
- * not an empty surface. A vault with nothing withheld is served the
- * file's own bytes.
+ * not an empty surface. A remote reader is always handed the in-memory
+ * render, stamped with the file's own `generated_at`, so whether a record
+ * is withheld never decides between a fresh render and a stale file.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -22,7 +23,7 @@ import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { appendLogEvent } from "../../src/core/brain/log.ts";
-import { brainActivePath, brainDirs } from "../../src/core/brain/paths.ts";
+import { brainActivePath, brainConfigPath, brainDirs } from "../../src/core/brain/paths.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
 import {
   BRAIN_CONFIDENCE,
@@ -30,6 +31,7 @@ import {
   BRAIN_PREFERENCE_STATUS,
 } from "../../src/core/brain/types.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import { GATE_MODE } from "../../src/core/integrity/stamp.ts";
 import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts";
 import { readResource } from "../../src/mcp/resources.ts";
@@ -40,11 +42,23 @@ const PRIVATE_SLUG = "withheld";
 const PRIVATE_PATH = `Brain/preferences/pref-${PRIVATE_SLUG}.md`;
 const PRIVATE_RETIRED = `ret-${PRIVATE_SLUG}`;
 const ACTIVE_URI = "osb://preferences/active";
+const LATE_PRINCIPLE = "Name the late rule.";
+const FOREIGN_MARKER = "zzforeignownerzz";
+const OTHER_AGENT = "other-agent";
+const GENERATED_AT_RE = /generated_at: (\S+)/;
 const RESERVE_LINE = `visibility: [${REMOTE_DENY_VISIBILITY_TOKEN}]`;
 /** Any ISO-8601 instant: the two vaults are generated seconds apart. */
 const STAMP_RE = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g;
 /** The per-vault opaque handle `brain_context` names the vault by. */
 const VAULT_HANDLE_RE = /vault:\/\/[0-9a-f]+/g;
+/**
+ * One stamp for every fixture event, taken once: the A/B pair compares
+ * two vaults built at different moments, and a pair straddling UTC
+ * midnight would otherwise put their newest log day on different dates.
+ * It stays near now so the applied event falls inside the most-applied
+ * window.
+ */
+const FIXTURE_EVENT_AT = new Date().toISOString();
 
 const bases: string[] = [];
 const savedConfig = process.env["OPEN_SECOND_BRAIN_CONFIG"];
@@ -61,8 +75,9 @@ interface Fixture {
   readonly vault: string;
 }
 
-function confirmed(vault: string, slug: string, principle: string): void {
+function confirmed(vault: string, slug: string, principle: string, owner?: string): void {
   writePreference(vault, {
+    ...(owner !== undefined ? { owner } : {}),
     slug,
     topic: slug,
     principle,
@@ -100,7 +115,7 @@ function fixture(withPrivate: boolean): Fixture {
   appendLogEvent(
     vault,
     {
-      timestamp: new Date().toISOString(),
+      timestamp: FIXTURE_EVENT_AT,
       eventType: BRAIN_LOG_EVENT_KIND.note,
       body: { text: "fixture" },
     },
@@ -135,7 +150,7 @@ function fixture(withPrivate: boolean): Fixture {
     appendLogEvent(
       vault,
       {
-        timestamp: new Date().toISOString(),
+        timestamp: FIXTURE_EVENT_AT,
         eventType: BRAIN_LOG_EVENT_KIND.applyEvidence,
         body: { path: PRIVATE_PATH, preference: `[[pref-${PRIVATE_SLUG}]]`, result: "applied" },
       },
@@ -150,20 +165,34 @@ function server(f: Fixture, reach: TransportReach): MCPServer {
   return new MCPServer({ vault: f.vault, configPath: f.configPath }, { reach });
 }
 
+/** `text` as it sits inside one more JSON string (a tool's text payload, stringified again). */
+function jsonEscaped(text: string): string {
+  return JSON.stringify(text).slice(1, -1);
+}
+
 function normalise(f: Fixture, text: string): string {
-  const escaped = JSON.stringify(f.vault).slice(1, -1);
-  const escapedBase = JSON.stringify(f.base).slice(1, -1);
-  return text
-    .split(escaped)
-    .join("<V>")
-    .split(f.vault)
-    .join("<V>")
-    .split(escapedBase)
-    .join("<B>")
-    .split(f.base)
-    .join("<B>")
-    .replace(STAMP_RE, "<T>")
-    .replace(VAULT_HANDLE_RE, "vault://<H>");
+  const escaped = jsonEscaped(f.vault);
+  const escapedBase = jsonEscaped(f.base);
+  return (
+    text
+      // On Windows the payload text of `brain_context` carries `active_path`
+      // escaped twice once the whole result is stringified; replace the
+      // longest form first so its single-escaped tail is not split apart.
+      .split(jsonEscaped(escaped))
+      .join("<V>")
+      .split(jsonEscaped(escapedBase))
+      .join("<B>")
+      .split(escaped)
+      .join("<V>")
+      .split(f.vault)
+      .join("<V>")
+      .split(escapedBase)
+      .join("<B>")
+      .split(f.base)
+      .join("<B>")
+      .replace(STAMP_RE, "<T>")
+      .replace(VAULT_HANDLE_RE, "vault://<H>")
+  );
 }
 
 interface ContextPayload {
@@ -189,6 +218,16 @@ async function resource(f: Fixture, reach: TransportReach): Promise<string> {
   await server(f, TRANSPORT_REACH.local).callTool("brain_context", {});
   const content = readResource({ vault: f.vault, agentName: "claude", reach }, ACTIVE_URI);
   return normalise(f, content.text);
+}
+
+/** The pack read after a shared preference landed without a regeneration. */
+async function stalePack(f: Fixture, reach: TransportReach): Promise<string> {
+  await server(f, TRANSPORT_REACH.local).callTool("brain_context", {});
+  confirmed(f.vault, "late", LATE_PRINCIPLE);
+  return normalise(
+    f,
+    JSON.stringify(await server(f, reach).callTool("brain_pre_compress_pack", { top_k: 10 })),
+  );
 }
 
 async function pack(f: Fixture, reach: TransportReach): Promise<string> {
@@ -234,15 +273,42 @@ describe("the active digest treats a withheld preference as absent at remote rea
     expect(await pack(f, TRANSPORT_REACH.local)).toContain(MARKER);
   });
 
-  test("a remote read of a vault with nothing withheld is served the file's bytes", async () => {
-    const f = fixture(false);
-    const out = await contextPayload(f, TRANSPORT_REACH.remote);
-    const onDisk = readFileSync(brainActivePath(f.vault), "utf8");
-    expect(out.content.endsWith(onDisk)).toBe(true);
-    const content = readResource(
-      { vault: f.vault, agentName: "claude", reach: TRANSPORT_REACH.remote },
-      ACTIVE_URI,
-    );
-    expect(content.text).toBe(onDisk);
+  for (const withPrivate of [true, false]) {
+    test(`a remote read is the reader render, stamped with the file's generated_at (reserved records: ${withPrivate})`, async () => {
+      const f = fixture(withPrivate);
+      const out = await contextPayload(f, TRANSPORT_REACH.remote);
+      const stamp = GENERATED_AT_RE.exec(readFileSync(brainActivePath(f.vault), "utf8"))![1]!;
+      expect(out.content).toContain(`generated_at: ${stamp}`);
+      expect(out.content).not.toContain(MARKER);
+    });
+  }
+
+  test("a stale digest file answers identically at remote reach", async () => {
+    // The file is generated, then a shared preference lands without a
+    // regeneration. Whether a reserved record exists must not decide
+    // whether the remote head is the stale file or a fresh render.
+    const withheld = await stalePack(fixture(true), TRANSPORT_REACH.remote);
+    const absent = await stalePack(fixture(false), TRANSPORT_REACH.remote);
+    expect(withheld).not.toContain(MARKER);
+    expect(absent).toContain(LATE_PRINCIPLE);
+    expect(absent).toContain("## Confirmed (2)");
+    expect(withheld).toBe(absent);
   });
+
+  for (const [mode, visible] of [
+    [GATE_MODE.fail, false],
+    [GATE_MODE.off, true],
+  ] as const) {
+    test(`the resource follows the owner gate (owner_scope_delivery: ${mode})`, async () => {
+      const f = fixture(false);
+      confirmed(f.vault, "foreign", `Mention ${FOREIGN_MARKER} first.`, OTHER_AGENT);
+      writeFileSync(
+        brainConfigPath(f.vault),
+        `schema_version: 1\nintegrity:\n  owner_scope_delivery: ${mode}\n`,
+      );
+      const text = await resource(f, TRANSPORT_REACH.local);
+      expect(text.includes(FOREIGN_MARKER)).toBe(visible);
+      expect(text).toContain(visible ? "## Confirmed (2)" : "## Confirmed (1)");
+    });
+  }
 });
