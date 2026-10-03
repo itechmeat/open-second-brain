@@ -301,11 +301,19 @@ describe("brain_doctor counts at the caller's reach", () => {
     expect(withheld).not.toContain(INSTRUCTION_FILE);
   });
 
-  test("local control: the withheld consumer and the withheld dropped lines are counted", async () => {
+  // One fixture and one doctor pass per control, so no test spends more
+  // than a fraction of Bun's default 5 s per-test timeout on the Linux job.
+  test("local control: the withheld consumer is counted", async () => {
     const cited = await doctorJson(fixture(true, { cited: true }), TRANSPORT_REACH.local);
     expect(cited).toContain(PRIVATE_PATH.toLowerCase());
+  });
+
+  test("local control: the withheld dropped lines are counted", async () => {
     const dropped = await doctorJson(fixture(true, { dropped: true }), TRANSPORT_REACH.local);
     expect(dropped).toContain(PRIVATE_PATH);
+  });
+
+  test("local control: the withheld instruction file is measured", async () => {
     const instruction = await doctorJson(
       fixture(true, { instruction: true }),
       TRANSPORT_REACH.local,

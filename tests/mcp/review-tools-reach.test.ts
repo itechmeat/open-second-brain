@@ -135,8 +135,13 @@ function fixture(withPrivate: boolean): Fixture {
   return f;
 }
 
-async function answer(f: Fixture, tool: string, reach?: TransportReach): Promise<string> {
-  const result = await reachServer(f, reach).callTool(tool, {});
+async function answer(
+  f: Fixture,
+  tool: string,
+  reach?: TransportReach,
+  args: Record<string, unknown> = {},
+): Promise<string> {
+  const result = await reachServer(f, reach).callTool(tool, args);
   return maskVolatile(f, result["structuredContent"] ?? result);
 }
 
@@ -167,5 +172,13 @@ describe("the lifecycle review readers answer at the caller's reach", () => {
     expect(await answer(a, "brain_review_candidates", local)).toContain(WITHHELD_PREFIX);
     expect(await answer(a, "brain_retention", local)).toContain(WITHHELD_PREFIX);
     expect(await answer(a, "brain_intent_review", local)).toContain(WITHHELD_CLUSTER_TOPIC);
+  });
+
+  test("remote reach: a trigger scan queues nothing from a withheld retention row", async () => {
+    const scan = { operation: "scan" };
+    const withheld = await answer(fixture(true), "brain_trigger", undefined, scan);
+    const absent = await answer(fixture(false), "brain_trigger", undefined, scan);
+    expect(withheld).toBe(absent);
+    expect(withheld).not.toContain(WITHHELD_PREFIX);
   });
 });

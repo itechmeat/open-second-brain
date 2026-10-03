@@ -74,6 +74,10 @@ describe("scopedRuleKey", () => {
     expect(scopedRuleKey("Café")).toBe("café");
     expect(scopedRuleKey("café")).toBe("café");
     expect(scopedRuleKey("Cafe\u0301")).toBe("café");
+    // A capital with no precomposed form whose lowercase has one: only an
+    // NFC pass after lowercasing gives both spellings one key.
+    expect(scopedRuleKey("T\u0308ag")).toBe("\u1e97ag");
+    expect(scopedRuleKey("\u1e97ag")).toBe("\u1e97ag");
   });
 
   test("normalises to NFC so composed and decomposed spellings share a key", () => {
@@ -309,6 +313,25 @@ describe("readScopedRules", () => {
     );
     expect(rules.text.length).toBeLessThanOrEqual(
       SCOPED_RULES_HEADER.length + SCOPED_RULES_MAX_CHARS_MAX + SCOPED_RULES_NOTICE_RESERVE,
+    );
+  });
+
+  test("the notice reserve covers both notices when the kept sections fill the cap", () => {
+    // One-character lines, so the cut keeps the sections within a line of
+    // the cap and both the truncation and the host notice ride on top.
+    const vault = vaultWith({
+      "project/x": "a\n".repeat(SCOPED_RULES_MAX_CHARS_DEFAULT),
+      "host/aaaa0001": "zzhostzz",
+    });
+    const rules = readScopedRules(
+      vault,
+      { ...NO_SCOPE, project: "x" },
+      { maxChars: SCOPED_RULES_MAX_CHARS_DEFAULT, hostUnreadable: true },
+    );
+    expect(rules.files[0]?.truncated).toBe(true);
+    expect(rules.text).toEndWith(SCOPED_RULES_HOST_UNREADABLE_NOTICE);
+    expect(rules.text.length).toBeLessThanOrEqual(
+      SCOPED_RULES_HEADER.length + SCOPED_RULES_MAX_CHARS_DEFAULT + SCOPED_RULES_NOTICE_RESERVE,
     );
   });
 

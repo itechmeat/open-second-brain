@@ -18,7 +18,9 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { signalPath } from "../../src/core/brain/paths.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
+import { writeSignal } from "../../src/core/brain/signal.ts";
 import { BRAIN_CONFIDENCE, BRAIN_PREFERENCE_STATUS } from "../../src/core/brain/types.ts";
 import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts";
@@ -68,11 +70,36 @@ function withheldPreference(vault: string, index: number): void {
   writeFileSync(path, `${text.slice(0, close)}\n${RESERVE_LINE}${text.slice(close)}`);
 }
 
-function fixture(withPrivate: boolean): Fixture {
+/** The phrase the withheld signals repeat, so it surfaces as a concept gap. */
+const SIGNAL_MARKER = "zzbasalt quay";
+
+/** A withheld inbox signal whose principle carries {@link SIGNAL_MARKER}. */
+function withheldSignal(vault: string, index: number): void {
+  const date = "2026-05-01";
+  const slug = `zzgap-signal-${index}`;
+  writeSignal(vault, {
+    topic: `misc-signal-${index}`,
+    signal: "positive",
+    agent: "test",
+    principle: `Ship releases via Zzbasalt Quay ${index}.`,
+    created_at: `${date}T00:00:00Z`,
+    date,
+    slug,
+  });
+  const path = signalPath(vault, date, slug);
+  const text = readFileSync(path, "utf8");
+  const close = text.indexOf("\n---\n", "---\n".length);
+  writeFileSync(path, `${text.slice(0, close)}\n${RESERVE_LINE}${text.slice(close)}`);
+}
+
+function fixture(withPrivate: boolean, withheldSignals = false): Fixture {
   const base = mkdtempSync(join(tmpdir(), "o2b-health-gaps-reach-"));
   bases.push(base);
   const f = buildReachLogFixture(base, withPrivate);
   if (withPrivate) for (let i = 0; i < WITHHELD_COUNT; i++) withheldPreference(f.vault, i);
+  if (withPrivate && withheldSignals) {
+    for (let i = 0; i < WITHHELD_COUNT; i++) withheldSignal(f.vault, i);
+  }
   return f;
 }
 
@@ -129,5 +156,14 @@ describe("concept gaps answer at the caller's reach", () => {
     expect(await answer(a, "brain_doctor", preview, TRANSPORT_REACH.local)).toContain(
       CONCEPT_GAP_CODE,
     );
+  });
+
+  test("remote reach: withheld signal principles add no concept gap", async () => {
+    const withheld = await answer(fixture(true, true), "brain_health", {});
+    const absent = await answer(fixture(false, true), "brain_health", {});
+    expect(withheld).toBe(absent);
+    expect(withheld).not.toContain(SIGNAL_MARKER);
+    const local = await answer(fixture(true, true), "brain_health", {}, TRANSPORT_REACH.local);
+    expect(local).toContain(SIGNAL_MARKER);
   });
 });
