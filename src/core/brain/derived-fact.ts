@@ -16,6 +16,7 @@
 
 import { existsSync } from "node:fs";
 
+import { vaultRelative } from "../path-safety.ts";
 import { loadBrainConfig, DEFAULT_BRAIN_CONFIG } from "./policy.ts";
 import { preferencePath } from "./paths.ts";
 import { writePreference } from "./preference.ts";
@@ -42,6 +43,12 @@ export interface DeriveFactOptions {
    * config passes its own.
    */
   readonly configPath?: string;
+  /**
+   * The vault-relative paths the caller may read. A premise preference it
+   * may not read is refused exactly as a missing one is, before anything
+   * is written. Absent, every preference counts.
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 export interface DeriveFactResult {
@@ -132,7 +139,11 @@ export function deriveFact(
   for (const premise of input.premises) {
     const slug = premiseSlug(premise);
     if (!slug) throw new DeriveFactError("premise id must not be empty");
-    if (!existsSync(preferencePath(vault, slug))) {
+    const premisePath = preferencePath(vault, slug);
+    if (
+      !existsSync(premisePath) ||
+      (opts.readable !== undefined && !opts.readable(vaultRelative(premisePath, vault)))
+    ) {
       throw new DeriveFactError(`premise preference not found: ${JSON.stringify(premise)}`);
     }
     evidencedBy.push(`[[pref-${slug}]]`);

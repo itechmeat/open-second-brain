@@ -20,6 +20,7 @@ import { loadGuardrailsConfigSafe } from "../../core/brain/policy.ts";
 import { ResponseShapeError } from "../../core/brain/response-shape.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
+import { readableAtContextReachOrUndefined } from "./reach-readable.ts";
 import { wrapToolErrors } from "./shared.ts";
 
 const TOOL = "brain_derive_fact";
@@ -39,8 +40,11 @@ async function toolBrainDeriveFact(
     // Shape first: the payload is validated before any field is read, so a
     // structurally wrong request never reaches the premise lookup or a write.
     const input = parseDeriveFactInput(args);
+    // A premise the caller may not read is refused as a missing one.
+    const readable = readableAtContextReachOrUndefined(ctx);
     const res = deriveFact(ctx.vault, input, {
       now: new Date(),
+      ...(readable !== undefined ? { readable } : {}),
       // The ownership stamp resolves the writing identity from the
       // server's own config, not from anything the caller sent.
       ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
