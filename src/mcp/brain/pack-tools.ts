@@ -421,10 +421,14 @@ function isOperatorRuleItem(item: unknown): boolean {
  */
 function isRuleOnlyInjection(record: ContinuityRecord): boolean {
   if (record.payload["trigger"] !== "session_inject") return false;
-  // A degraded injection served a cached body beside the rules, and is
-  // recorded whether or not rules applied: it stays, emptied of them.
-  const injection = record.payload["injection"] as { sources_measured?: unknown } | undefined;
-  if (injection?.sources_measured === false) return false;
+  // A degraded injection that served a cached body beside the rules is
+  // recorded whether or not rules applied: it stays, emptied of them. One
+  // with no cached body (`loader_source: "empty"`) exists only because the
+  // rules were injected, so it is rule-only like a measured one.
+  const injection = record.payload["injection"] as
+    | { sources_measured?: unknown; loader_source?: unknown }
+    | undefined;
+  if (injection?.sources_measured === false && injection.loader_source !== "empty") return false;
   const items = record.payload["items"];
   return Array.isArray(items) && items.length > 0 && items.every(isOperatorRuleItem);
 }

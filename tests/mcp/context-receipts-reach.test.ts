@@ -282,7 +282,7 @@ describe("brain_context_receipts and the operator rules", () => {
     const b = vaultFor("b", false, { active: false });
     const degraded = {
       extra: {
-        injection: { hook_event: "SessionStart", loader_source: "cache", sources_measured: false },
+        injection: { hook_event: "SessionStart", loader_source: "cached", sources_measured: false },
       },
     };
     const options = {
@@ -300,5 +300,25 @@ describe("brain_context_receipts and the operator rules", () => {
     const withRules = await allAnswers(a.vault, {});
     expect(withRules).toBe(await allAnswers(b.vault, {}));
     expect(withRules).toContain('"empty_receipts":1');
+  });
+
+  test("below local reach a degraded injection with no cached body and only the rules is not there", async () => {
+    const a = vaultFor("a", false, { active: false });
+    const b = vaultFor("b", false, { active: false });
+    emitContextReceipt(a.vault, {
+      options: { host: "hook", trigger: "session_inject", createdAt: "2026-09-01T00:00:00Z" },
+      items: [{ id: RECEIPT_ITEM_SCOPED_RULES, bytes: 40, tokens: 10 }],
+      finalText: "rules only",
+      extra: {
+        injection: { hook_event: "SessionStart", loader_source: "empty", sources_measured: false },
+      },
+    });
+    expect(await allAnswers(a.vault, {})).toBe(await allAnswers(b.vault, {}));
+    const local = await callReceipts(
+      a.vault,
+      { reach: TRANSPORT_REACH.local },
+      { operation: "list" },
+    );
+    expect(local["total"]).toBe(1);
   });
 });
