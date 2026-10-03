@@ -723,6 +723,22 @@ async function cmdIndex(argv: string[]): Promise<number> {
   return 0;
 }
 
+/** The C1 control range, which `JSON.stringify` leaves as raw characters. */
+const C1_CONTROL_RE = /[\u0080-\u009f]/g;
+
+/**
+ * A refused argv value as it is echoed to stderr: JSON-quoted, which
+ * escapes the C0 controls, with the C1 controls (the 8-bit CSI U+009B
+ * among them) escaped as `\uXXXX` too, so no terminal control sequence
+ * reaches the operator's screen.
+ */
+function quoteRefusedValue(value: string): string {
+  return JSON.stringify(value).replace(
+    C1_CONTROL_RE,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
 async function cmdMcp(argv: string[]): Promise<number> {
   const { flags } = parseFlags(argv, {
     vault: { type: "string" },
@@ -769,12 +785,12 @@ async function cmdMcp(argv: string[]): Promise<number> {
   // An unrecognised value is refused rather than dropped: silently
   // ignoring it would report the ceiling as unchecked on a host that
   // publishes one, which is the exact silence this flag exists to end.
-  // The refused value is echoed JSON-quoted, so a control character in
-  // it reaches stderr escaped.
+  // The refused value is echoed quoted and escaped (quoteRefusedValue),
+  // so a control character in it reaches stderr escaped.
   const hostTargetFlag = flags["host-target"] as string | undefined;
   if (hostTargetFlag !== undefined && !isInstallTargetId(hostTargetFlag)) {
     process.stderr.write(
-      `o2b mcp: invalid --host-target value: ${JSON.stringify(hostTargetFlag)}; ` +
+      `o2b mcp: invalid --host-target value: ${quoteRefusedValue(hostTargetFlag)}; ` +
         `expected one of: ${INSTALL_TARGET_IDS.join(", ")}\n`,
     );
     return 2;
@@ -789,7 +805,7 @@ async function cmdMcp(argv: string[]): Promise<number> {
   const harnessFlag = flags["harness"] as string | undefined;
   if (harnessFlag !== undefined && !isHarnessId(harnessFlag)) {
     process.stderr.write(
-      `o2b mcp: invalid --harness value: ${JSON.stringify(harnessFlag)}; ` +
+      `o2b mcp: invalid --harness value: ${quoteRefusedValue(harnessFlag)}; ` +
         `expected one of: ${HARNESS_IDS.join(", ")}\n`,
     );
     return 2;

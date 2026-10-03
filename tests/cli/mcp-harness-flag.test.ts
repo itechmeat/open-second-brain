@@ -29,7 +29,9 @@ describe("o2b mcp --harness", () => {
   });
 
   test("a refused value is echoed JSON-quoted, control characters escaped", async () => {
-    const value = "x\u001b[31my\nz";
+    // A C0 escape, a newline and the 8-bit CSI (a C1 control).
+    const value = "x\u001b[31my\nz\u009b1mw";
+    const quoted = '"x\\u001b[31my\\nz\\u009b1mw"';
     const flags = ["--harness", "--host-target"];
     const results = await Promise.all(
       flags.map((flag) => runCli(["mcp", flag, value], { stdin: "" })),
@@ -37,8 +39,9 @@ describe("o2b mcp --harness", () => {
     for (const [i, flag] of flags.entries()) {
       const res = results[i]!;
       expect(res.returncode).toBe(2);
-      expect(res.stderr).toStartWith(`o2b mcp: invalid ${flag} value: ${JSON.stringify(value)}; `);
+      expect(res.stderr).toStartWith(`o2b mcp: invalid ${flag} value: ${quoted}; `);
       expect(res.stderr).not.toContain("\u001b");
+      expect(res.stderr).not.toContain("\u009b");
       expect(res.stderr.split("\n").length).toBe(2);
     }
   });
