@@ -145,7 +145,7 @@ describe("brain_scaffold_stub answers at the caller's reach", () => {
     expect(refusal?.message).toContain("already names more than one note");
     expect(refusal?.message.endsWith(": ")).toBe(false);
     expect(refusal?.message).not.toContain("twin.md");
-    expect(refusal?.data?.["candidates"]).toBeUndefined();
+    expect((refusal?.data as Record<string, unknown> | undefined)?.["candidates"]).toBeUndefined();
   });
 
   test("local control: the operator's own shell cites and lists the withheld note", async () => {
