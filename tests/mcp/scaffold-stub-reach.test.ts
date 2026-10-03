@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts";
 import { resolveSearchConfig } from "../../src/core/search/index.ts";
+import type { MCPError } from "../../src/mcp/protocol.ts";
 import { indexVault } from "../../src/core/search/indexer.ts";
 import {
   buildReachLogFixture,
@@ -122,6 +123,29 @@ describe("brain_scaffold_stub answers at the caller's reach", () => {
     });
     expect(withheld).toContain("already resolves to a note");
     expect(withheld).not.toContain(PRIVATE_NOTE);
+  });
+
+  test("remote reach: an ambiguity among withheld notes names no candidate list", async () => {
+    const a = await fixture(false);
+    const hidden = `---\nvisibility: [${REMOTE_DENY_VISIBILITY_TOKEN}]\n---\n\n# Twin\n`;
+    write(a, "Deep/twin.md", hidden);
+    write(a, "Other/twin.md", hidden);
+    // The title resolver walks the declared note roots only.
+    const brainYaml = join(a.vault, "Brain", "_brain.yaml");
+    writeFileSync(
+      brainYaml,
+      `${readFileSync(brainYaml, "utf8")}\nnotes:\n  read_paths:\n    - Deep\n    - Other\n`,
+    );
+    let refusal: MCPError | null = null;
+    try {
+      await reachServer(a).callTool(TOOL, { action: "write", target: "twin" });
+    } catch (error) {
+      refusal = error as MCPError;
+    }
+    expect(refusal?.message).toContain("already names more than one note");
+    expect(refusal?.message.endsWith(": ")).toBe(false);
+    expect(refusal?.message).not.toContain("twin.md");
+    expect(refusal?.data?.["candidates"]).toBeUndefined();
   });
 
   test("local control: the operator's own shell cites and lists the withheld note", async () => {

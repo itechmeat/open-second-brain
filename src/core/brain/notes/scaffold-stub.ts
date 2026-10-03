@@ -417,12 +417,14 @@ function assertMissing(
   } catch (err) {
     if (err instanceof NoteTitleResolutionError) {
       if (err.code === "ambiguous") {
-        // Only the candidates the caller may read are named.
+        // Only the candidates the caller may read are named; with none, the
+        // sentence ends without an empty list.
         const candidates = err.candidates.filter(shown);
         throw new ScaffoldStubError(
           "target_ambiguous",
           `target "${target}" already names more than one note; ` +
-            `resolve the ambiguity rather than adding a third: ${candidates.join(", ")}`,
+            "resolve the ambiguity rather than adding a third" +
+            (candidates.length > 0 ? `: ${candidates.join(", ")}` : ""),
           candidates,
         );
       }
