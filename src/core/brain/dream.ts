@@ -158,16 +158,6 @@ function noteProgressFaults(warnings: DreamWarning[], faults: ReadonlyArray<stri
   });
 }
 
-/**
- * Run one consolidation pass.
- *
- * A thin shell around {@link dreamRun} for one reason: a pass that stops
- * at a checkpoint - because the operator interrupted it, or because the
- * deadline elapsed - must say so on the progress stream before the error
- * leaves. Without this the stream would simply end, and a caller could
- * not tell a cancelled pass from a crashed one from a hung one, which is
- * the whole distinction `SafeguardAbortError` exists to preserve.
- */
 /** `previewReadable` was passed to a pass that is not a dry run. */
 export class DreamPreviewReadableError extends Error {
   constructor() {
@@ -195,6 +185,16 @@ function scanAsAdmitted(
   };
 }
 
+/**
+ * Run one consolidation pass.
+ *
+ * A thin shell around {@link dreamRun} for one reason: a pass that stops
+ * at a checkpoint - because the operator interrupted it, or because the
+ * deadline elapsed - must say so on the progress stream before the error
+ * leaves. Without this the stream would simply end, and a caller could
+ * not tell a cancelled pass from a crashed one from a hung one, which is
+ * the whole distinction `SafeguardAbortError` exists to preserve.
+ */
 export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   // A caller's progress sink is an observer, and an observer must not be
   // able to destroy what it observes: a closed pipe or a renderer defect
