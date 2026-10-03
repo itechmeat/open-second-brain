@@ -2246,10 +2246,12 @@ format characters), when it contains NUL, or when it exceeds the cap.
   `path` is vault-relative, `axis` is `project`, `harness` or `host`, and
   `truncated` is `true` for a file the `active.scoped_rules_max_chars` cap
   cut; `brain_context` has no injection budget, so the cap applies as
-  configured. The notice that host-scoped rules were not applied is
-  rendered by the SessionStart hook: on this tool an unreadable
-  configuration file, or a config home that cannot be created, fails
-  the whole call before the notice could render. The tool gains no
+  configured. The tool renders the notice that host-scoped rules were
+  not applied, with `scope.host: null`, when the device id cannot be
+  resolved but the call can still be answered, for example when no
+  device id is stored yet and the configuration directory cannot be
+  written; an unreadable configuration file, or a config home that
+  cannot be created, fails the whole call first. The tool gains no
   input argument. Below local reach neither the
   block nor the key appears: the output is the same as for a vault
   without the directory. Every write tool refuses a path inside
