@@ -332,7 +332,7 @@ describe("readScopedRules", () => {
 
 describe("readScopedRules and a symlink leaving the vault", () => {
   const SYMLINKS = canSymlink();
-  const ESCAPED = "UNAVAILABLE: Brain/standing-rules/project/x.md could not be read (Error).";
+  const ESCAPED = "UNAVAILABLE: Brain/standing-rules/project/x.md could not be read (ESCAPE).";
 
   test.skipIf(!SYMLINKS)("a symlinked rule file renders the UNAVAILABLE line", () => {
     const vault = vaultWith({});

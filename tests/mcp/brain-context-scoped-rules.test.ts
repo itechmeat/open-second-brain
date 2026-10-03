@@ -333,7 +333,7 @@ describe("brain_context scoped rules - a symlink leaving the vault", () => {
       const content = out["content"] as string;
       expect(content).toContain(STANDING);
       expect(content).toContain(
-        "UNAVAILABLE: Brain/standing-rules/project/proj-x.md could not be read (Error).",
+        "UNAVAILABLE: Brain/standing-rules/project/proj-x.md could not be read (ESCAPE).",
       );
       expect(content).not.toContain("zzoutsidezz");
       expect(content).not.toContain(vault);

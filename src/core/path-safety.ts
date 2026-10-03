@@ -11,6 +11,22 @@
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, posix, relative, resolve, sep } from "node:path";
 
+/** The `code` a {@link VaultEscapeError} carries, beside the errno codes of fs errors. */
+export const VAULT_ESCAPE_CODE = "ESCAPE";
+
+/**
+ * A path that leaves the vault, lexically or through a symlink. It carries
+ * a `code` the way a Node fs error does, so a reader that reports a failed
+ * read by its code names this one too rather than the bare class.
+ */
+export class VaultEscapeError extends Error {
+  readonly code = VAULT_ESCAPE_CODE;
+  constructor(message: string) {
+    super(message);
+    this.name = "VaultEscapeError";
+  }
+}
+
 /**
  * Throw if `target` is not the vault root or a descendant of it.
  *
@@ -37,14 +53,14 @@ export function ensureInsideVault(target: string, vault: string): string {
   const resolvedVault = resolve(vault);
 
   if (!isLexicallyInside(resolvedTarget, resolvedVault)) {
-    throw new Error(`path escapes vault: ${target}`);
+    throw new VaultEscapeError(`path escapes vault: ${target}`);
   }
 
   // Realpath protection only matters when the vault actually exists on
   // disk — otherwise there is no symlink to follow. Pure-lexical inputs
   // (used by unit tests) skip this branch and rely on step 1 above.
   if (existsSync(resolvedVault) && !realpathInsideVault(resolvedTarget, resolvedVault)) {
-    throw new Error(`path escapes vault via symlink: ${target}`);
+    throw new VaultEscapeError(`path escapes vault via symlink: ${target}`);
   }
 
   return resolvedTarget;
