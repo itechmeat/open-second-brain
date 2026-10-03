@@ -67,6 +67,15 @@ export function intentionRel(scope: string): string {
   return posix.join(INTENTIONS_REL, `${resolveSessionScope(scope)}.md`);
 }
 
+/**
+ * The vault-relative page of a listed chain, by its file stem as it is on
+ * disk. A hand-written chain's name need not be scope-shaped, so a listing
+ * judges the file it read rather than the scope fold of its name.
+ */
+export function intentionStemRel(stem: string): string {
+  return posix.join(INTENTIONS_REL, `${stem}.md`);
+}
+
 /** `move` found no active chain for the scope. */
 export function noActiveIntentionError(scope: string): Error {
   return new Error(`no active intention for scope: ${scope}`);

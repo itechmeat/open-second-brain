@@ -29,6 +29,7 @@ import {
 } from "../../core/brain/triggers/types.ts";
 import {
   intentionRel,
+  intentionStemRel,
   listIntentions,
   moveIntentionToHistory,
   noActiveIntentionError,
@@ -57,7 +58,8 @@ function toolBrainIntention(
     readable !== undefined && !readable(intentionRel(scope));
   if (operation === "list") {
     const chains = listIntentions(ctx.vault);
-    const kept = readable === undefined ? chains : chains.filter((c) => !withheld(c.scope));
+    const kept =
+      readable === undefined ? chains : chains.filter((c) => readable(intentionStemRel(c.scope)));
     return {
       intentions: kept.map((chain) => ({
         scope: chain.scope,

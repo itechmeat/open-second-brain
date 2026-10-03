@@ -13,7 +13,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -140,5 +140,32 @@ describe("brain_intention answers at the caller's reach", () => {
     expect(await intention(a, { operation: "move", scope: PUBLIC_SCOPE }, local)).toContain(
       "archive_path",
     );
+  });
+
+  test("remote reach: a list judges each chain by its own file name", async () => {
+    // Hand-written chains whose file names are not scope-shaped: the
+    // readable one stays listed, the withheld one is dropped, and a name
+    // with no letters or digits does not fail the call.
+    const handWritten = (f: Fixture, from: string, to: string, text: string): string => {
+      setIntention(f.vault, { scope: from, text, agent: AGENT });
+      const dir = join(f.vault, "Brain", "intentions");
+      const target = join(dir, `${to}.md`);
+      renameSync(join(dir, `${from}.md`), target);
+      return target;
+    };
+    const build = (withPrivate: boolean): Fixture => {
+      const f = fixture(withPrivate);
+      handWritten(f, "open-plan", "Open_Plan", "Draft the open plan");
+      handWritten(f, "symbols-only", "___", "A chain named by symbols");
+      if (withPrivate) reserve(handWritten(f, "hidden-plan", "Zzreserved_Plan", PRIVATE_TEXT));
+      return f;
+    };
+    const withheld = await intention(build(true), { operation: "list" });
+    const absent = await intention(build(false), { operation: "list" });
+    expect(withheld).toBe(absent);
+    expect(withheld.startsWith("error: ")).toBe(false);
+    expect(withheld).toContain("Open_Plan");
+    expect(withheld).toContain("Draft the open plan");
+    expect(withheld).not.toContain("Zzreserved");
   });
 });
