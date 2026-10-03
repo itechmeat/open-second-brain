@@ -32,6 +32,8 @@ const PRIVATE_TITLE = "Zzreservedduty";
 const PRIVATE_SLUG = "zzreservedduty";
 const PUBLIC_TITLE = "Water the plants";
 const PUBLIC_SLUG = "water-the-plants";
+const UNSLUGGED_STEM = "Feed_The_Cat";
+const UNSLUGGED_TITLE = "Feed the cat";
 const RESERVE_LINE = `visibility: [${REMOTE_DENY_VISIBILITY_TOKEN}]`;
 const AGENT = "claude";
 
@@ -133,6 +135,14 @@ describe("brain_obligation answers at the caller's reach", () => {
       '"present":true',
     );
     expect(await obligation(a, { operation: "done", slug: PUBLIC_SLUG })).toContain(PUBLIC_TITLE);
+  });
+
+  test("remote reach: a readable page whose file name is not slug-shaped is still listed", async () => {
+    const a = fixture(true);
+    const dir = join(a.vault, "Brain", "obligations");
+    const page = readFileSync(join(dir, `${PUBLIC_SLUG}.md`), "utf8");
+    writeFileSync(join(dir, `${UNSLUGGED_STEM}.md`), page.replace(PUBLIC_TITLE, UNSLUGGED_TITLE));
+    expect(await obligation(a, { operation: "list" })).toContain(UNSLUGGED_TITLE);
   });
 
   test("local control: the operator's own shell lists and shows the withheld page", async () => {

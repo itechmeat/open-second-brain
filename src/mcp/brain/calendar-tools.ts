@@ -56,9 +56,14 @@ function listItemJson(item: ObligationListItem): Record<string, unknown> {
   };
 }
 
-/** The vault-relative page an obligation slug names. */
+/** The vault-relative page of an obligation file stem, as listed (no slug fold). */
+function obligationStemRel(stem: string): string {
+  return `${BRAIN_OBLIGATIONS_REL}/${stem}.md`;
+}
+
+/** The vault-relative page a caller's slug argument names. */
 function obligationRel(slug: string): string {
-  return `${BRAIN_OBLIGATIONS_REL}/${slugify(slug)}.md`;
+  return obligationStemRel(slugify(slug));
 }
 
 function toolBrainObligation(
@@ -76,7 +81,10 @@ function toolBrainObligation(
   try {
     if (operation === "list") {
       const items = listObligations(ctx.vault, { overdueOnly: args["overdue"] === true });
-      const kept = readable === undefined ? items : items.filter((o) => !withheld(o.slug));
+      // A listed slug is the file's own stem, which need not be slug-shaped,
+      // so its page is asked about as it is named on disk.
+      const kept =
+        readable === undefined ? items : items.filter((o) => readable(obligationStemRel(o.slug)));
       return { operation, obligations: kept.map(listItemJson) };
     }
     if (operation === "add") {
