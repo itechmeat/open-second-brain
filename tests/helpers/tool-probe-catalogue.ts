@@ -634,13 +634,16 @@ export const NON_CONTENT: ReadonlyArray<ProbeEntry> = [
   {
     name: "brain_dream",
     calls: [
-      { args: { action: "list" }, reason: REASON.aggregateOnly },
+      // Below local reach only a dry run is served; the staged lifecycle
+      // is probed at local reach, where the owner filter still applies.
+      { args: { action: "list" }, reason: REASON.aggregateOnly, reach: TRANSPORT_REACH.local },
       { args: { action: "run", dry_run: true }, reason: REASON.ownerFiltered },
-      { args: { action: "stage" }, reason: REASON.ownerFiltered },
-      { args: { action: "validate", run_id: "run-probe-absent" }, reason: REASON.aggregateOnly },
-      { args: { action: "apply", run_id: "run-probe-absent" }, reason: REASON.aggregateOnly },
-      { args: { action: "discard", run_id: "run-probe-absent" }, reason: REASON.aggregateOnly },
-      { args: { action: "retriage", run_id: "run-probe-absent" }, reason: REASON.aggregateOnly },
+      { args: { action: "stage" }, reason: REASON.ownerFiltered, reach: TRANSPORT_REACH.local },
+      ...["validate", "apply", "discard", "retriage"].map((action) => ({
+        args: { action, run_id: "run-probe-absent" },
+        reason: REASON.aggregateOnly,
+        reach: TRANSPORT_REACH.local,
+      })),
     ],
   },
   {
