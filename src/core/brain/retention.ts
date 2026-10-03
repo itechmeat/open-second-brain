@@ -121,7 +121,7 @@ function recommendRetired(
     artifact_type: "retired_preference" as const,
     action,
     reason,
-    path: vaultRelative(vault, path),
+    path: vaultRelative(path, vault),
   });
 }
 
@@ -153,7 +153,7 @@ function recommendProcessedSignal(
     artifact_type: "processed_signal" as const,
     action,
     reason,
-    path: vaultRelative(vault, path),
+    path: vaultRelative(path, vault),
   });
 }
 

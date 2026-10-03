@@ -45,7 +45,7 @@ export function buildForgetPlan(vault: string, opts: { readonly source: string }
     if (!text.includes(source)) continue;
     entries.push({
       id: readId(path),
-      path: vaultRelative(vault, path),
+      path: vaultRelative(path, vault),
       kind: classify(vault, path),
       action: "would-remove-source-support",
       sha256: createHash("sha256").update(text, "utf8").digest("hex"),

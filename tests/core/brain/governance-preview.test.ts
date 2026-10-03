@@ -48,6 +48,11 @@ describe("buildForgetPlan", () => {
       true,
     );
     expect(plan.audit.contentIncluded).toBe(false);
+    expect(plan.entries.map((entry) => entry.path)).toEqual([
+      "Brain/inbox/sig-2026-05-31-one.md",
+      "Brain/preferences/pref-one.md",
+      "Brain/processed-archive/note.md",
+    ]);
   });
 });
 

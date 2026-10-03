@@ -181,4 +181,9 @@ describe("the lifecycle review readers answer at the caller's reach", () => {
     expect(withheld).toBe(absent);
     expect(withheld).not.toContain(WITHHELD_PREFIX);
   });
+
+  test("remote reach: a trigger scan still queues the readable retention row", async () => {
+    const scan = { operation: "scan" };
+    expect(await answer(fixture(true), "brain_trigger", undefined, scan)).toContain(READABLE_SLUG);
+  });
 });

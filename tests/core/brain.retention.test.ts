@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
-import { preferencePath, processedSignalPath, signalPath } from "../../src/core/brain/paths.ts";
+import {
+  preferencePath,
+  processedSignalPath,
+  signalPath,
+  vaultRelative,
+} from "../../src/core/brain/paths.ts";
 import { moveToRetired, writePreference } from "../../src/core/brain/preference.ts";
 import { writeSignal } from "../../src/core/brain/signal.ts";
 import { buildRetentionReview } from "../../src/core/brain/retention.ts";
@@ -81,5 +86,12 @@ describe("buildRetentionReview", () => {
     expect(existsSync(processedSignal)).toBe(true);
     expect(statSync(retired.path).mtimeMs).toBe(retiredMtimeBefore);
     expect(statSync(processedSignal).mtimeMs).toBe(processedMtimeBefore);
+    expect(report.recommendations.map((r) => r.path)).toEqual([
+      vaultRelative(retired.path, vault),
+      vaultRelative(processedSignal, vault),
+    ]);
+    expect(report.recommendations[1]!.path).toBe(
+      "Brain/inbox/processed/sig-2026-04-01-discarded-signal.md",
+    );
   });
 });
