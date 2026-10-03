@@ -53,7 +53,7 @@ import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { enforceCountGuard, readCountGuardArgs, vaultRelativeSafe } from "./shared.ts";
-import { readableAtContextReach } from "./reach-readable.ts";
+import { readableAtContextReach, readableAtContextReachOrUndefined } from "./reach-readable.ts";
 
 function coerceStringArray(args: Record<string, unknown>, key: string): string[] | undefined {
   const raw = args[key];
@@ -232,7 +232,21 @@ async function toolBrainHygiene(
   const dryRun = coerceBool(args, "dry_run") === true;
 
   if (mode === "refresh") {
-    const plan = planRecompile(ctx.vault);
+    // A derived page the caller cannot read at its reach is treated as
+    // absent: it is neither planned, named nor re-derived or archived, so
+    // the plan and the result read as in a vault without it.
+    const readable = readableAtContextReachOrUndefined(ctx);
+    const fullPlan = planRecompile(ctx.vault);
+    const plan =
+      readable === undefined
+        ? fullPlan
+        : Object.freeze({
+            entries: Object.freeze(
+              fullPlan.entries.filter((entry) =>
+                readable(vaultRelativeSafe(ctx.vault, entry.page)),
+              ),
+            ),
+          });
     const result = await executeRecompile(ctx.vault, plan, {
       dryRun,
       agent: resolveAgentName(ctx.configPath ?? undefined),
