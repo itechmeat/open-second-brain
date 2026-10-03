@@ -2,7 +2,7 @@ You are brainstorming architectural variants for the following task. Do not writ
 
 # Task
 
-One release of Open Second Brain whose theme is "a setting or a rule meant for one context must not leak into another".
+One release of Open Second Brain whose theme is "a setting or a rule meant for one context must not carry over into another".
 
 1. Per-profile configuration for the Hermes memory plugin on multiplexed gateways. The Python plugin (`plugins/hermes/`) reads `VAULT_DIR`, `VAULT_AGENT_NAME`, `VAULT_TIMEZONE`, `OPEN_SECOND_BRAIN_CONFIG` (config.py) and `OPEN_SECOND_BRAIN_MCP_TIMEOUT` (bridge.py) straight from `os.environ`. A Hermes gateway with `multiplex_profiles: true` serves several profiles from one process; the process environment belongs to the launch profile. Hermes exposes `agent.secret_scope` with `is_multiplex_active()` and `get_secret(name, default)`, which reads the turn's bound profile scope and raises `UnscopedSecretError` when multiplexing is on and no scope is bound. The plugin also spawns one long-lived `o2b mcp` child per key `(vault, repo_root, command, PATH)` and gives it a copy of the gateway's environment, so the TypeScript core reads the launch profile's agent name and timezone from its inherited environment. `config.py` must stay importable without Hermes and without a package (a doctor check and a parity suite load it by file location and pin today's answers byte for byte). The plugin's existing `ConfigReadError` message is pinned by a parity test.
 

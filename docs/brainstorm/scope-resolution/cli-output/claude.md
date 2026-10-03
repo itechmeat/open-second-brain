@@ -29,11 +29,11 @@
   - Pro: no process multiplication on multiplexed gateways and rules participate in search, backlinks and dedup like any page.
   - Pro: one index-level reach filter covers the left-overs and any future reader.
   - Con: extending `SCOPE_AXES` changes dedup and source-identity keys across search and the query cache, a wide blast radius unrelated to the theme.
-  - Con: per-call `_meta` makes agent name a request-time property; every code path that read it from process env at startup (write receipts, ledgers, logs) must become request-scoped or it leaks the launch profile anyway.
+  - Con: per-call `_meta` makes agent name a request-time property; every code path that read it from process env at startup (write receipts, ledgers, logs) must become request-scoped or it carries the launch profile over anyway.
   - Con: an index-level reach filter changes what local readers see unless gated carefully, and the "byte-identical at local reach" pin is hard to prove.
   - Con: `Brain/rules/` pages sit outside the Brain-root refusal story of `standing-rules.ts`, so uneditability has to be re-argued.
 - **Complexity**: large
 - **Risk**: high
 
 ### Recommended: Variant 2
-**Rationale**: It is the only variant where identity, rule ranking and reach filtering each have exactly one owner, which is what the release theme demands and what the project's conventions already reward (closed vocabularies with a census, server-derived identity, failures named by class). Variant 1 is cheaper but leaves the harness vocabulary and project walk-up duplicated between hook and server, the exact kind of drift that lets one context leak into another. Variant 3 reaches into search keys and the page index and would break the byte-identical pins the constraints require.
+**Rationale**: It is the only variant where identity, rule ranking and reach filtering each have exactly one owner, which is what the release theme demands and what the project's conventions already reward (closed vocabularies with a census, server-derived identity, failures named by class). Variant 1 is cheaper but leaves the harness vocabulary and project walk-up duplicated between hook and server, the exact kind of drift that lets one context carry over into another. Variant 3 reaches into search keys and the page index and would break the byte-identical pins the constraints require.

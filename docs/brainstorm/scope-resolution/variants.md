@@ -6,7 +6,7 @@ Consultant: the primary CLI consultant (`claude -p`, prompt in `cli-output/promp
 
 Fix each lane where it lives: an optional `env` mapping on every Hermes resolver, sibling scoped-rule files read by a second reader, identity resolved inline in `server.ts` at `initialize` (from `clientInfo`) and separately in the hook, per-view reach edits.
 
-Why it lost: identity derived in two places drifts, which is the leak this release exists to close, and `clientInfo` is a name the client asserts about itself. Its file layout and its untouched constitution survive in the chosen variant.
+Why it lost: identity derived in two places drifts, which is the cross-context carry-over this release exists to close, and `clientInfo` is a name the client asserts about itself. Its file layout and its untouched constitution survive in the chosen variant.
 
 ## Variant 2: One derived identity, one rules ladder, one reach layer - chosen, adjusted
 
@@ -22,7 +22,7 @@ Consultant's recommendation, accepted with five adjustments (evidence in `design
 
 Scoped rules as ordinary pages with `harness` and `host` added to `SCOPE_AXES`; one Hermes child per vault with the turn's agent name sent as JSON-RPC `_meta`; reach pushed into the page index.
 
-Why it lost: extending `SCOPE_AXES` changes page dedup keys, hub-candidate pools and search filters; per-call `_meta` turns the agent name into a request property every startup reader would have to learn, or it leaks the launch profile anyway; an index-level reach filter puts the local byte-identity pin at risk; rule pages outside the Brain-root refusal need uneditability argued again.
+Why it lost: extending `SCOPE_AXES` changes page dedup keys, hub-candidate pools and search filters; per-call `_meta` turns the agent name into a request property every startup reader would have to learn, or it carries the launch profile over anyway; an index-level reach filter puts the local byte-identity pin at risk; rule pages outside the Brain-root refusal need uneditability argued again.
 
 ## Alternatives considered inside the chosen variant
 
