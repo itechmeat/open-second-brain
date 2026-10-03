@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, symlinkSync } from "node:fs";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
 import { brainScopedRulesDir, brainStandingRulesPath } from "../../../src/core/brain/paths.ts";
@@ -116,6 +116,33 @@ describe("assertStandingRulesNotTargeted and the scoped directory", () => {
           ),
         ).not.toBeNull();
       }
+    },
+  );
+
+  test.skipIf(!SYMLINKS)(
+    "a scoped rules folder symlinked out of the vault refuses its own paths and lets other writes through",
+    () => {
+      const v = vault();
+      const outside = mkTemp("o2b-scoped-guard-outside-");
+      symlinkSync(outside, join(v, "Brain", "standing-rules"), "dir");
+      expect(refusal(() => assertStandingRulesNotTargeted(v, "Notes/a.md", "t"))).toBeNull();
+      expect(
+        refusal(() => assertStandingRulesNotTargeted(v, "Brain/standing-rules/project/x.md", "t")),
+      ).not.toBeNull();
+    },
+  );
+
+  test.skipIf(!SYMLINKS)(
+    "a constitution file symlinked out of the vault is refused and lets other writes through",
+    () => {
+      const v = vault();
+      const outside = join(mkTemp("o2b-scoped-guard-outside-"), "rules.md");
+      writeFileSync(outside, "# Rules\n");
+      symlinkSync(outside, join(v, "Brain", "standing-rules.md"), "file");
+      expect(refusal(() => assertStandingRulesNotTargeted(v, "Notes/a.md", "t"))).toBeNull();
+      expect(
+        refusal(() => assertStandingRulesNotTargeted(v, "Brain/standing-rules.md", "t")),
+      ).not.toBeNull();
     },
   );
 

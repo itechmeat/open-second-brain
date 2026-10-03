@@ -54,7 +54,8 @@
 import { readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 
-import { brainScopedRulesDir, brainStandingRulesPath } from "./paths.ts";
+import { BRAIN_SCOPED_RULES_DIR, BRAIN_STANDING_RULES_FILE } from "./path-constants.ts";
+import { brainDirs, brainStandingRulesPath } from "./paths.ts";
 import { applySectionBudget } from "./text/text-budget.ts";
 
 /**
@@ -210,7 +211,11 @@ export function assertStandingRulesNotTargeted(
   notePath: string,
   surface: string,
 ): void {
-  const target = brainStandingRulesPath(vault);
+  // Lexical joins, not the containment-checked helpers: a rules file or
+  // folder symlinked out of the vault must not break unrelated writes, and
+  // the canonical comparison below still refuses its own paths.
+  const brainDir = brainDirs(vault).brain;
+  const target = join(brainDir, BRAIN_STANDING_RULES_FILE);
   const candidate = resolve(vault, notePath);
   if (candidate === target || canonicalPath(candidate) === canonicalPath(target)) {
     throw new StandingRulesWriteRefusedError(target, surface);
@@ -221,7 +226,7 @@ export function assertStandingRulesNotTargeted(
   // missing tail: a new file under a symlinked folder is still caught. Both
   // sides go through the same resolution, so a directory that does not
   // exist yet under a symlinked vault root compares like for like.
-  const scopedDir = brainScopedRulesDir(vault);
+  const scopedDir = join(brainDir, BRAIN_SCOPED_RULES_DIR);
   if (
     isSameOrInside(candidate, scopedDir) ||
     isSameOrInside(canonicalTail(candidate), canonicalTail(scopedDir))
