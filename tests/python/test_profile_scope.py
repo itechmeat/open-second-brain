@@ -209,6 +209,26 @@ class BrokenScopeModuleTests(ScopeTestCase):
                 for value in LAUNCH_VALUES.values():
                     self.assertNotIn(value, failed[0])
 
+    def test_a_failed_import_is_tried_once_until_reset(self):
+        calls = []
+
+        def failing_import(name, *args, **kwargs):
+            calls.append(name)
+            raise ImportError("scope module is broken")
+
+        with (
+            patch.object(cfg.importlib, "import_module", side_effect=failing_import),
+            self.assertLogs("plugins.hermes.config", "WARNING"),
+        ):
+            for _ in range(2):
+                with self.assertRaises(cfg.ProfileScopeError):
+                    cfg.env_setting("VAULT_AGENT_NAME")
+            self.assertEqual(calls, [cfg._SCOPE_MODULE_NAME])
+            cfg._reset_scope_warnings_for_tests()
+            with self.assertRaises(cfg.ProfileScopeError):
+                cfg.env_setting("VAULT_AGENT_NAME")
+            self.assertEqual(len(calls), 2)
+
     def test_a_hermes_without_the_scope_module_reads_the_process_environment(self):
         self.set_launch_env()
         with self._hermes_on_path(None), self.assertNoLogs("plugins.hermes.config", "WARNING"):

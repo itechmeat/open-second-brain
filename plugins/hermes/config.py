@@ -206,6 +206,13 @@ _SCOPE_MODULE_NAME = "agent.secret_scope"
 _ABSENT_SCOPE_MODULE_NAMES = frozenset({"agent", _SCOPE_MODULE_NAME})
 
 
+#: Set once the scope module failed to import for a reason other than its
+#: absence, so later reads fail closed without importing it again (a present
+#: module that fails would otherwise rerun its top-level code on every read).
+#: Absent and present modules are still looked up per call.
+_scope_module_failed = False
+
+
 class _UnusableProfileScope:
     """Stands in for a Hermes scope module that is present but failed to import.
 
@@ -235,8 +242,12 @@ def _profile_scope_module():
     process-environment answers in force. Only the absence of ``agent`` or of
     ``agent.secret_scope`` counts as "outside Hermes"; any other import failure
     is a Hermes whose scoping is broken, which fails closed: one WARNING naming
-    the exception type, then :class:`_UnusableProfileScope`.
+    the exception type, then :class:`_UnusableProfileScope`, which later calls
+    return without importing the module again.
     """
+    global _scope_module_failed
+    if _scope_module_failed:
+        return _UnusableProfileScope
     try:
         return importlib.import_module(_SCOPE_MODULE_NAME)
     except ModuleNotFoundError as exc:
@@ -245,6 +256,7 @@ def _profile_scope_module():
         failure: Exception = exc
     except Exception as exc:  # noqa: BLE001 - any failure of a present module fails closed
         failure = exc
+    _scope_module_failed = True
     _warn_scope_module_failed(failure)
     return _UnusableProfileScope
 
@@ -332,9 +344,11 @@ def _warn_ignored_process_value(name: str) -> None:
 
 
 def _reset_scope_warnings_for_tests() -> None:
-    """Test-only: forget which ignored names were already reported."""
+    """Test-only: forget which ignored names were already reported and a failed import."""
+    global _scope_module_failed
     with _scope_warned_lock:
         _scope_warned.clear()
+    _scope_module_failed = False
 
 
 class ConfigValueError(ValueError):
