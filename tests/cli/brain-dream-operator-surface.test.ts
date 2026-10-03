@@ -35,6 +35,7 @@ import { writeSignal } from "../../src/core/brain/signal.ts";
 import { BRAIN_PREFERENCE_STATUS } from "../../src/core/brain/types.ts";
 import { DREAM_PHASE } from "../../src/core/brain/dream-phases.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { cmdBrainDream } from "../../src/cli/brain/verbs/dream.ts";
 import { runCli } from "../helpers/run-cli.ts";
@@ -105,7 +106,8 @@ function makeLinkableNotes(): string {
 }
 
 async function makeServer(): Promise<MCPServer> {
-  const server = new MCPServer({ vault, configPath });
+  // A real dream pass and a single step run at local reach only.
+  const server = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
   await server.handleRequest({
     jsonrpc: JSONRPC_VERSION,
     id: 1,

@@ -439,6 +439,10 @@ function scopedDreamRows<R extends string>(
   };
 }
 
+/** The one answer a caller below local reach gets for anything but a dry run. */
+const DREAM_LOCAL_REACH_ONLY =
+  "brain_dream: below local reach only action=run with dry_run is served; a real pass, a step and the staged lifecycle run at local reach only";
+
 async function toolBrainDream(
   ctx: ServerContext,
   args: Record<string, unknown>,
@@ -470,6 +474,16 @@ async function toolBrainDream(
   // The rollup step's link candidates leave out a page the caller may not
   // read at its reach, exactly as an absent page.
   const readable = readableAtContextReach(ctx);
+  // Below local reach only a dry run is served, planned over the records
+  // the caller may read as if the others were absent. A real pass, a
+  // single step and the staged lifecycle move, rewrite or report records
+  // the caller may not read, so they are refused with one fixed answer
+  // before anything is read or written, whatever the vault holds.
+  const previewReadable = readableAtContextReachOrUndefined(ctx);
+  if (previewReadable !== undefined && (action !== "run" || !dryRun || stepArg)) {
+    throw new MCPError(INVALID_PARAMS, DREAM_LOCAL_REACH_ONLY);
+  }
+  const previewScope = previewReadable !== undefined ? { previewReadable } : {};
 
   // Single-step requests (no-dead-ends, Unit E - operator surface).
   // Deliberately checked before any environment work: a step the pass
@@ -646,6 +660,7 @@ async function toolBrainDream(
       dryRun: true,
       safeguard,
       readable,
+      ...previewScope,
       ...(nowDate ? { now: nowDate } : {}),
       ...(agent ? { agentName: agent } : {}),
       // Preview the run being guarded, overrides and all.
@@ -670,6 +685,7 @@ async function toolBrainDream(
     dryRun,
     safeguard,
     readable,
+    ...previewScope,
     ...(nowDate ? { now: nowDate } : {}),
     ...(agent ? { agentName: agent } : {}),
     ...(gates !== undefined ? { gates } : {}),

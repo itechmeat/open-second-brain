@@ -25,6 +25,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
@@ -103,7 +104,8 @@ async function call(
 }
 
 function makeServer(): MCPServer {
-  return new MCPServer({ vault, configPath });
+  // The operator's own shell: a real dream pass runs at local reach only.
+  return new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
 }
 
 // ---------------------------------------------------------------------------

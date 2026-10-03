@@ -11,6 +11,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { resetVaultIdentityPins, writeVaultIdentity } from "../../src/core/brain/vault-identity.ts";
@@ -83,7 +84,8 @@ async function callTool(
 
 describe("brain_dream MCP wrapper - trust fields", () => {
   test("no-op run emits empty uncertain[] and quarantined[]", async () => {
-    const server = new MCPServer({ vault, configPath });
+    // A real dream pass runs at local reach only.
+    const server = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
     await initialize(server);
     const out = await callTool(server, "brain_dream", {});
     expect(out["uncertain"]).toEqual([]);

@@ -13,6 +13,7 @@ import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { writeSignal } from "../../src/core/brain/signal.ts";
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 
 let tmp: string;
@@ -47,7 +48,8 @@ afterEach(() => {
 });
 
 async function makeServer(): Promise<MCPServer> {
-  const server = new MCPServer({ vault, configPath });
+  // The staged lifecycle runs at local reach only.
+  const server = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
   await server.handleRequest({
     jsonrpc: JSONRPC_VERSION,
     id: 1,
