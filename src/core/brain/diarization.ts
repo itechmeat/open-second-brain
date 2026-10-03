@@ -120,7 +120,9 @@ export interface DiarizationOptions {
    * May the caller read the page at this vault-relative path at its
    * reach? ANDed into the link-candidate filter beside the owner scope, so
    * a page withheld from the caller is not offered as a citation target
-   * nor counted in the manifest's total, exactly as an absent page. The
+   * nor counted in the manifest's total, exactly as an absent page. A
+   * withheld subject page answers as an unknown entity, and a withheld
+   * source page is not evidence: it is neither counted nor named. The
    * MCP handler binds it to `readableAtContextReach(ctx)`; absent (the
    * CLI) filters nothing beyond the owner scope.
    */
@@ -158,6 +160,11 @@ export function diarize(
     status: entity.status,
   };
   const entityRel = toPosixRel(vault, entity.path);
+  // A subject page the caller may not read at its reach is an unknown
+  // entity, exactly as an absent one.
+  if (opts.readable !== undefined && !opts.readable(entityRel)) {
+    throw new DiarizationError(`unknown entity: ${ref.query}`);
+  }
   const entityIdentity: EvidenceIdentity = Object.freeze({
     path: entityRel,
     kind: EVIDENCE_KIND_ENTITY,
@@ -177,6 +184,9 @@ export function diarize(
   // are the behavioral signals; both are pure counts over structure.
   const evidencedSources: EvidencedSource[] = [];
   for (const listed of listIngestedSources(vault)) {
+    // A source page the caller may not read at its reach is neither
+    // evidence, counted nor named, exactly as an absent one.
+    if (opts.readable !== undefined && !opts.readable(listed.path)) continue;
     const detail = getIngestedSource(vault, listed.path);
     if (detail === null) continue;
     const anchored = decomposeAtomicFacts(detail.body, { entities: [entityLike] }).some((a) =>
