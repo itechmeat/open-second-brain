@@ -2334,3 +2334,34 @@ format characters), when it contains NUL, or when it exceeds the cap.
   missing one gets (`note does not exist: <path>`, `no signal or
   preference with id`), before anything is written; `brain_lifecycle`
   `curator` leaves out a row whose key names such a page or record.
+- Since v1.70.0 the writers that name a preference, a premise, a
+  decision, a label target, a stub source or a chain id answer at the
+  caller's reach; a local caller and the CLI see no change. Below local
+  reach a page or record the caller cannot read is treated as absent
+  before anything is written: `brain_apply_evidence` and the
+  `apply_evidence` operation of `brain_write_batch` refuse it as a
+  missing preference, `brain_derive_fact` as a missing premise,
+  `brain_decision` `show`, `outcome` and `rate` with `no decision:
+  <slug>` (and `list`, `compare`, `history`, `recall` and `similar`
+  leave it out), `brain_labels` `assign` and `remove` with `note does
+  not exist`, `brain_scaffold_stub` as an unknown source (and `list`
+  leaves it out), and `brain_lifecycle` `tip` reads it as an unknown id.
+  The `brain_feedback` conflict and routing hints score only
+  readable preferences and signals, and `brain_design_note` grounds only
+  on readable tensions and decisions.
+- Since v1.70.0 `brain_dream` serves only a dry run below local reach,
+  planned over the records the caller can read; a real pass, a single
+  step and the staged lifecycle are refused, and `brain_maintenance`
+  `run` is refused too (its `status` still answers). A preference the
+  dream pass drafts carries the strictest `visibility` of the signals it
+  is drafted from and of the record it supersedes or rebuts, at every
+  reach.
+- Since v1.70.0 `brain_dead_ends` `list`, `brain_diarize`, `brain_hygiene`
+  `mode="refresh"` and `brain_anticipatory_context` answer at the
+  caller's reach. Below local reach `brain_dead_ends` lists only readable
+  dead ends and `record` leaves out the archived ids; `brain_diarize`
+  answers a subject page the caller cannot read as an unknown entity and
+  takes no evidence from a source page it cannot read; `refresh` plans,
+  re-derives and archives only readable derived pages; and
+  `brain_anticipatory_context` builds its bundle for the caller without
+  reading or writing the shared cache, answering `cache_state: "miss"`.

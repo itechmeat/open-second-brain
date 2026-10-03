@@ -119,6 +119,16 @@ leave out what the caller cannot read. `brain_obligation`,
 `brain_retention` and `brain_context_receipts` answer the same way. A local caller and the
 CLI see no change.
 
+**A remote client runs only a dry dream.** Below local reach (an HTTP
+bind on a non-loopback interface) `brain_dream` serves a dry run and
+refuses a real pass, a step and the staged lifecycle, and
+`brain_maintenance` refuses `run`; schedule them on the vault's own
+host (`o2b brain dream`, `o2b brain maintenance run`, or a stdio or
+loopback client). The evidence, feedback, derived-fact, decision,
+label, scaffold, chain-tip, dead-end, diarize, hygiene refresh and
+anticipatory-context tools treat a page the caller cannot read as
+absent.
+
 ## Upgrading to 1.69.0
 
 No step below is required. Ten changes are visible to an operator or a
