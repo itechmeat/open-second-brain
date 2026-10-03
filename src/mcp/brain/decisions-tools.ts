@@ -42,6 +42,11 @@ import {
   DECISION_HISTORY_DEFAULT_LIMIT,
 } from "../../core/brain/decisions/receipts.ts";
 import { recallRatedDecisions } from "../../core/brain/decisions/recall.ts";
+import { everyArtifactRefView } from "../../core/brain/artifact-ref-view.ts";
+import { gatedOwnerScopeView } from "../../core/brain/owner-scope-view.ts";
+import { reachView } from "../../core/brain/reach-view.ts";
+import { contextReach } from "../tool-contract.ts";
+import { readableAtContextReachOrUndefined } from "./reach-readable.ts";
 
 const TOOL = "brain_decision";
 
@@ -52,6 +57,11 @@ async function toolBrainDecision(
   return wrapToolErrors(TOOL, [DecisionError, ReceiptError], async () => {
     const action = coerceStr(args, "action", true)!;
     const agent = coerceStr(args, "agent", false) ?? undefined;
+    // A decision page the caller cannot read at its reach is answered as
+    // an absent one by every action: skipped by the lists, refused by the
+    // single-slug reads and writes with the absent slug's error.
+    const readable = readableAtContextReachOrUndefined(ctx);
+    const reads = readable !== undefined ? { readable } : {};
 
     switch (action) {
       case "record": {
@@ -105,6 +115,7 @@ async function toolBrainDecision(
         );
         const rationale = coerceStr(args, "rationale", false) ?? undefined;
         const res = updateRating(ctx.vault, {
+          ...reads,
           slug,
           rating,
           ...(rationale ? { rationale } : {}),
@@ -114,7 +125,7 @@ async function toolBrainDecision(
       }
       case "compare": {
         const slugs = coerceStrList(args, "slugs");
-        const rows = compareDecisions(ctx.vault, slugs);
+        const rows = compareDecisions(ctx.vault, slugs, reads);
         return {
           action,
           decisions: rows.map((d) => ({
@@ -132,6 +143,7 @@ async function toolBrainDecision(
         const slug = coerceStr(args, "slug", true)!;
         const outcome = coerceStr(args, "outcome", true)!;
         const res = backfillOutcome(ctx.vault, {
+          ...reads,
           slug,
           outcome,
           ...(agent ? { agent } : {}),
@@ -140,7 +152,7 @@ async function toolBrainDecision(
       }
       case "show": {
         const slug = coerceStr(args, "slug", true)!;
-        const res = showDecision(ctx.vault, slug);
+        const res = showDecision(ctx.vault, slug, reads);
         if (res === null) throw new DecisionError(`no decision: ${slug}`);
         return {
           action,
@@ -159,7 +171,9 @@ async function toolBrainDecision(
       }
       case "list": {
         const ratedOnly = coerceBool(args, "rated");
-        const all = ratedOnly ? listRatedDecisions(ctx.vault) : listDecisions(ctx.vault);
+        const all = ratedOnly
+          ? listRatedDecisions(ctx.vault, reads)
+          : listDecisions(ctx.vault, reads);
         return {
           action,
           decisions: all.map((d) => ({
@@ -185,6 +199,7 @@ async function toolBrainDecision(
             : coerceInt(args, "last_turn", 0, 0, 1_000_000);
         const surfacedIds = coerceStrList(args, "surfaced_ids");
         const res = recallRatedDecisions(ctx.vault, {
+          ...reads,
           prompt,
           turn,
           state: {
@@ -214,7 +229,15 @@ async function toolBrainDecision(
           args["limit"] === undefined
             ? DECISION_HISTORY_DEFAULT_LIMIT
             : coerceInt(args, "limit", DECISION_HISTORY_DEFAULT_LIMIT, 1, 500);
+        // A receipt names its subject by decision id, page path or record
+        // id; one naming a page the caller cannot read is dropped before
+        // the total and the page are taken.
+        const view = everyArtifactRefView(
+          gatedOwnerScopeView(ctx.vault, ctx.agentName),
+          reachView(ctx.vault, contextReach(ctx)),
+        );
         const page = queryDecisionChangeHistory(ctx.vault, {
+          ...(view.filtersNothing ? {} : { keep: (r) => view.visible(r.subject) }),
           ...(subject ? { subject } : {}),
           ...(cursor ? { cursor } : {}),
           limit,
@@ -238,10 +261,14 @@ async function toolBrainDecision(
       case "similar": {
         const title = coerceStr(args, "title", true)!;
         const chosen = coerceStr(args, "chosen", false) ?? undefined;
-        const hits = findSimilarDecisions(ctx.vault, {
-          title,
-          ...(chosen ? { chosen } : {}),
-        });
+        const hits = findSimilarDecisions(
+          ctx.vault,
+          {
+            title,
+            ...(chosen ? { chosen } : {}),
+          },
+          reads,
+        );
         return {
           action,
           similar: hits.map((h) => ({

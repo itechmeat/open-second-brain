@@ -40,6 +40,8 @@ export interface RecallRatedDecisionsInput {
   readonly configPath?: string;
   /** Optional override of the match threshold (else the governor default). */
   readonly minOverlap?: number;
+  /** The paths the caller may read; a decision it may not read is never a candidate. */
+  readonly readable?: (rel: string) => boolean;
 }
 
 export interface RecallRatedDecisionsResult {
@@ -86,7 +88,10 @@ export function recallRatedDecisions(
   const minSpacingTurns = resolveDecisionRecallMinSpacingTurns(input.configPath) ?? 0;
   const turn = input.turn ?? 0;
 
-  const rated = listRatedDecisions(vault);
+  const rated = listRatedDecisions(
+    vault,
+    input.readable !== undefined ? { readable: input.readable } : {},
+  );
   const candidates: RatedDecisionCandidate[] = rated.map((d) => ({
     id: d.id,
     rating: d.rating ?? 0,

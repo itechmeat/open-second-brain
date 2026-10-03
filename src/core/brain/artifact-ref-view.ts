@@ -34,7 +34,7 @@ import { existsSync } from "node:fs";
 
 import { pathIsInside, vaultRelative } from "../path-safety.ts";
 import type { FrontmatterCache } from "../search/result-filters.ts";
-import { BRAIN_SOURCES_REL, brainDirs } from "./paths.ts";
+import { BRAIN_DECISIONS_REL, BRAIN_SOURCES_REL, brainDirs } from "./paths.ts";
 import { ANCHORED_WIKILINK_RE, stripWikilinkDecoration } from "./wikilink.ts";
 
 /** The `.md` extension every Brain artifact id resolves through. */
@@ -140,7 +140,9 @@ export const UNFILTERED_ARTIFACT_REFS: ArtifactRefView = Object.freeze({
  *   - `sources` (`src-<slug>.md`) and `entities` are taggable the same
  *     way, and `brain_search_by_source` already filters the first of them
  *     on the search side - so an id-shaped reference to one reaching a
- *     view here and passing was the two halves disagreeing.
+ *     view here and passing was the two halves disagreeing;
+ *   - `decisions` (`decision-<slug>.md`) is named by id in the
+ *     decision-change receipts (`[[decision-<slug>]]`).
  *
  * `log` is deliberately absent - a log shard is named by date, is shared
  * by construction, and carries no per-page claim to read. `bases` holds
@@ -158,6 +160,7 @@ function artifactPath(vault: string, id: string): string | null {
     dirs.pending,
     join(vault, BRAIN_SOURCES_REL),
     dirs.entities,
+    join(vault, BRAIN_DECISIONS_REL),
   ]) {
     const abs = join(dir, `${id}${MARKDOWN_EXT}`);
     // The visibility predicate speaks vault-relative POSIX paths - the

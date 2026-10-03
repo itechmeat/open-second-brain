@@ -491,6 +491,12 @@ export interface DecisionHistoryQuery {
   readonly cursor?: string;
   /** Page size; defaults to {@link DECISION_HISTORY_DEFAULT_LIMIT}. */
   readonly limit?: number;
+  /**
+   * Keep only the receipts this answers true for, before the total and
+   * the page are taken, so a dropped receipt moves neither. Absent, every
+   * receipt is kept.
+   */
+  readonly keep?: (receipt: DecisionChangeReceipt) => boolean;
 }
 
 export interface DecisionHistoryPage {
@@ -535,7 +541,8 @@ export function queryDecisionChangeHistory(
   const offset = query.cursor !== undefined ? decodeCursor(query.cursor) : 0;
   if (offset < 0) throw new ReceiptError("receipt: malformed cursor");
 
-  const all = readDecisionChangeReceipts(vault).receipts;
+  const read = readDecisionChangeReceipts(vault).receipts;
+  const all = query.keep === undefined ? read : read.filter(query.keep);
   let matching = all;
   if (query.subject !== undefined) {
     // Read-side only: receipts store subjects in whichever shape their

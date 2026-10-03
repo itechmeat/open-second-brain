@@ -32,6 +32,7 @@ import { parseFrontmatter, slugify } from "../../vault.ts";
 import { appendLogEvent } from "../log.ts";
 import { addObligation } from "../obligations.ts";
 import { decisionPath, decisionsDir, obligationPath, validateIsoDate } from "../paths.ts";
+import { BRAIN_DECISIONS_REL } from "../path-constants.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { jaccard, tokenise } from "../similarity.ts";
 import { isoSecond } from "../time.ts";
@@ -155,7 +156,17 @@ export interface RecordDecisionResult {
   readonly obligationCreated: boolean;
 }
 
-export interface BackfillOutcomeInput {
+/**
+ * The vault-relative paths the caller may read. A decision page it may
+ * not read is answered exactly as an absent one: skipped by every list,
+ * and refused by every single-slug read or write with the absent slug's
+ * error, before anything is written. Absent, every page may be read.
+ */
+export interface DecisionReadOptions {
+  readonly readable?: (rel: string) => boolean;
+}
+
+export interface BackfillOutcomeInput extends DecisionReadOptions {
   readonly slug: string;
   readonly outcome: string;
   readonly agent?: string;
@@ -163,7 +174,7 @@ export interface BackfillOutcomeInput {
   readonly configPath?: string;
 }
 
-export interface UpdateRatingInput {
+export interface UpdateRatingInput extends DecisionReadOptions {
   readonly slug: string;
   readonly rating: number;
   readonly rationale?: string;
@@ -188,7 +199,7 @@ export interface SimilarDecisionQuery {
   readonly excludeSlug?: string;
 }
 
-export interface FindSimilarDecisionsOptions {
+export interface FindSimilarDecisionsOptions extends DecisionReadOptions {
   readonly threshold?: number;
   readonly limit?: number;
 }
@@ -298,9 +309,14 @@ function render(record: Omit<DecisionRecord, "path">): string {
   return lines.join("\n");
 }
 
-function parsePage(vault: string, slug: string): DecisionRecord | null {
+function parsePage(
+  vault: string,
+  slug: string,
+  readable: DecisionReadOptions["readable"],
+): DecisionRecord | null {
   const path = decisionPath(vault, slug);
   if (!existsSync(path)) return null;
+  if (readable !== undefined && !readable(decisionRel(slug))) return null;
   const [meta, body] = parseFrontmatter(path);
   if (meta["type"] !== DECISION_TYPE) return null;
   const reviewRaw = typeof meta["review_date"] === "string" ? meta["review_date"].trim() : "";
@@ -331,6 +347,11 @@ function parsePage(vault: string, slug: string): DecisionRecord | null {
     notes: body.trim(),
     path,
   });
+}
+
+/** The vault-relative POSIX path of one decision page, as the reach predicate reads it. */
+function decisionRel(slug: string): string {
+  return `${BRAIN_DECISIONS_REL}/decision-${slug}.md`;
 }
 
 // ----- Review obligation ----------------------------------------------------
@@ -464,7 +485,7 @@ export function backfillOutcome(vault: string, input: BackfillOutcomeInput): Dec
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
   const slug = slugify(input.slug);
-  const prior = parsePage(vault, slug);
+  const prior = parsePage(vault, slug, input.readable);
   if (prior === null) throw new DecisionError(`no decision: ${slug}`);
   const outcome = sanitiseTextField(input.outcome, {
     maxLen: FIELD_MAX_LEN,
@@ -516,7 +537,7 @@ export function updateRating(vault: string, input: UpdateRatingInput): DecisionR
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
   const slug = slugify(input.slug);
-  const prior = parsePage(vault, slug);
+  const prior = parsePage(vault, slug, input.readable);
   if (prior === null) throw new DecisionError(`no decision: ${slug}`);
   const rating = requireRating(input.rating);
   const rationale =
@@ -564,8 +585,11 @@ export function updateRating(vault: string, input: UpdateRatingInput): DecisionR
  * Unrated decisions are excluded - this is the rated-capture list surface,
  * separate from ordinary signal/preference recall.
  */
-export function listRatedDecisions(vault: string): DecisionRecord[] {
-  return listDecisions(vault)
+export function listRatedDecisions(
+  vault: string,
+  opts: DecisionReadOptions = {},
+): DecisionRecord[] {
+  return listDecisions(vault, opts)
     .filter((d) => d.rating !== null)
     .toSorted((a, b) => (b.rating ?? 0) - (a.rating ?? 0) || a.slug.localeCompare(b.slug));
 }
@@ -574,10 +598,14 @@ export function listRatedDecisions(vault: string): DecisionRecord[] {
  * Read a specific set of decisions side by side for comparison, in the
  * order requested. Unknown slugs are skipped (a comparison of what exists).
  */
-export function compareDecisions(vault: string, slugs: ReadonlyArray<string>): DecisionRecord[] {
+export function compareDecisions(
+  vault: string,
+  slugs: ReadonlyArray<string>,
+  opts: DecisionReadOptions = {},
+): DecisionRecord[] {
   const out: DecisionRecord[] = [];
   for (const slug of slugs) {
-    const page = parsePage(vault, slugify(slug));
+    const page = parsePage(vault, slugify(slug), opts.readable);
     if (page !== null) out.push(page);
   }
   return out;
@@ -586,19 +614,23 @@ export function compareDecisions(vault: string, slugs: ReadonlyArray<string>): D
 // ----- Reads ----------------------------------------------------------------
 
 /** One decision, or null. */
-export function showDecision(vault: string, slug: string): DecisionRecord | null {
-  return parsePage(vault, slugify(slug));
+export function showDecision(
+  vault: string,
+  slug: string,
+  opts: DecisionReadOptions = {},
+): DecisionRecord | null {
+  return parsePage(vault, slugify(slug), opts.readable);
 }
 
 /** Every decision, sorted by slug. */
-export function listDecisions(vault: string): DecisionRecord[] {
+export function listDecisions(vault: string, opts: DecisionReadOptions = {}): DecisionRecord[] {
   const dir = decisionsDir(vault);
   if (!existsSync(dir)) return [];
   const out: DecisionRecord[] = [];
   for (const name of readdirSync(dir)) {
     if (!name.endsWith(".md") || !name.startsWith("decision-")) continue;
     const slug = name.replace(/^decision-/u, "").replace(/\.md$/u, "");
-    const page = parsePage(vault, slug);
+    const page = parsePage(vault, slug, opts.readable);
     if (page !== null) out.push(page);
   }
   return out.toSorted((a, b) => a.slug.localeCompare(b.slug));
@@ -622,7 +654,10 @@ export function findSimilarDecisions(
   const queryTokens = tokenise(`${query.title} ${query.chosen ?? ""}`);
   if (queryTokens.size === 0) return [];
   const out: SimilarDecision[] = [];
-  for (const decision of listDecisions(vault)) {
+  for (const decision of listDecisions(
+    vault,
+    opts.readable !== undefined ? { readable: opts.readable } : {},
+  )) {
     if (query.excludeSlug !== undefined && decision.slug === query.excludeSlug) continue;
     const tokens = tokenise(`${decision.title} ${decision.chosen}`);
     const score = jaccard(queryTokens, tokens);
