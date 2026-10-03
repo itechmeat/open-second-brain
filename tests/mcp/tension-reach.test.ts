@@ -159,4 +159,25 @@ describe("brain_tension answers at the caller's reach", () => {
     expect(await answer(a, { action: "list" }, TRANSPORT_REACH.local)).toContain(PRIVATE_ID);
     expect(readFileSync(tensionPage(a, slug), "utf8")).toContain(STAMPED_LINE);
   });
+
+  test("a local re-detect restamps a tension page whose source note became reserved", async () => {
+    const a = fixture(false);
+    const b = fixture(false);
+    // The note starts at default visibility, so the first detect persists
+    // a default-visibility tension page that quotes it.
+    note(a.vault, "tabs.md", PRIVATE_ID, `${PRIVATE_QUOTE}.`);
+    const slug = withheldSlug(await detectLocally(a));
+    expect(readFileSync(tensionPage(a, slug), "utf8")).not.toContain(STAMPED_LINE);
+    // The operator reserves the note; the next local detect must carry
+    // that onto the page that quotes it.
+    note(a.vault, "tabs.md", PRIVATE_ID, `${PRIVATE_QUOTE}.`, true);
+    await detectLocally(a);
+    // Vault B never had the note; two detects keep its counts in step.
+    await detectLocally(b);
+    await detectLocally(b);
+    expect(readFileSync(tensionPage(a, slug), "utf8")).toContain(STAMPED_LINE);
+    const withheld = await answer(a, { action: "list" });
+    expect(withheld).toBe(await answer(b, { action: "list" }));
+    expect(withheld).not.toContain(PRIVATE_ID);
+  });
 });
