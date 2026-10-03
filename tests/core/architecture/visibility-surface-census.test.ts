@@ -290,6 +290,20 @@ const NOTE_CONTENT_PRODUCERS: ReadonlyArray<ProducerRule> = Object.freeze([
   { specifierIncludes: "/brain/temporal/stale-watch.ts", identifiers: ["findStaleEntries"] },
   { specifierIncludes: "/brain/review-candidates.ts", identifiers: ["buildReviewCandidates"] },
   { specifierIncludes: "/brain/retention.ts", identifiers: ["buildRetentionReview"] },
+  // A tension page quotes the two notes it pairs, the lifecycle writes
+  // and the expiration writer resolve a page or record by path or id and
+  // answer with it, and the curator rows name pages by path.
+  {
+    specifierIncludes: "/brain/tensions.ts",
+    identifiers: ["detectTensionsInVault", "listTensions", "showTension"],
+  },
+  {
+    specifierIncludes: "/brain/lifecycle/tombstone.ts",
+    identifiers: ["tombstone", "supersede"],
+  },
+  { specifierIncludes: "/brain/lifecycle/temporal-replace.ts", identifiers: ["temporalReplace"] },
+  { specifierIncludes: "/brain/lifecycle/curator.ts", identifiers: ["curatorSlices"] },
+  { specifierIncludes: "/brain/expiration-set.ts", identifiers: ["setExpiration"] },
   {
     specifierIncludes: "/brain/truth/",
     identifiers: ["computeTruthStateWithConflicts", "aggregateQuantities", "detectAgentCollisions"],
@@ -510,8 +524,15 @@ function reasonProblems(entries: ReadonlyArray<VisibilitySurfaceEntry>): {
  * new names are `brain_stale_scan`, `brain_review_candidates` and
  * `brain_retention`, which named withheld preferences and signals by id
  * and path, and `brain_intent_review` on the file-level rule.
+ *
+ * 64 before the vocabulary gained the tension, lifecycle and expiration
+ * producers. The eight new names are `brain_tension`, which paired and
+ * quoted withheld notes, `brain_lifecycle` and `brain_expire`, which
+ * wrote to withheld pages and records, and `brain_feedback`,
+ * `brain_apply_evidence`, `brain_dream`, `brain_note` and
+ * `brain_observed_use` on the file-level rule.
  */
-const MCP_TOOL_POPULATION_SIZE = 64;
+const MCP_TOOL_POPULATION_SIZE = 72;
 /** Measured: MCP resources + templates. */
 const MCP_RESOURCE_POPULATION_SIZE = 8;
 /** Measured: hand-enumerated CLI verb mirrors. */
@@ -580,12 +601,14 @@ describe("visibility surface census", () => {
         "brain_doctor",
         "brain_eval",
         "brain_event_trace",
+        "brain_expire",
         "brain_file_context",
         "brain_health",
         "brain_hygiene",
         "brain_idea_discovery",
         "brain_intent_review",
         "brain_intention",
+        "brain_lifecycle",
         "brain_obligation",
         "brain_pre_compress_pack",
         "brain_procedural_memory",
@@ -597,6 +620,7 @@ describe("visibility surface census", () => {
         "brain_search_expand",
         "brain_skill_proposals",
         "brain_stale_scan",
+        "brain_tension",
         "brain_tiers",
         "brain_trigger",
         "brain_unlinked_mentions",

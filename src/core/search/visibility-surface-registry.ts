@@ -336,7 +336,9 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "the semantic-health detectors behind the concept-gap and contradiction warnings, and a " +
       "withheld vault-root instruction file raises no ceiling warning. The " +
       "repair branch hands applyRepair the caller's reach, which bounds the findings before the " +
-      "plan is derived, so a withheld record is neither planned, counted nor written.",
+      "plan is derived, and the same predicate, so the checks behind the plan count and cap " +
+      "over readable pages too: a withheld record is neither planned, counted nor written, and " +
+      "the unfixable counts are those of a vault without it.",
   },
   {
     surface: "schema_inspect",
@@ -480,9 +482,11 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "SessionStart injection receipt (pack-tools.ts receiptAtReach) drops the standing-rules " +
       "and scoped-rules items and source references and every figure that counts or measures " +
       "them (item_count, final_text_hash, final_text_chars, total_bytes, total_tokens, " +
-      "scoped_rules_chars, budgeted_source_count), and summary leaves them out of its item " +
-      "totals; a degraded injection that carried only the rules still counts as a non-empty " +
-      "receipt in summary.",
+      "scoped_rules_chars, budgeted_source_count), drops the budget block when no budgeted body " +
+      "is left, and summary folds without the rule items, so a degraded injection that kept " +
+      "only the rules counts as an empty receipt. A measured injection receipt whose every item " +
+      "was a rule block (isRuleOnlyInjection) is withheld whole: list and summary exclude it " +
+      "before their limit and fold bound, and show answers it as an unknown id.",
   },
   {
     surface: "brain_event_trace",
@@ -812,6 +816,89 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "vault-relative path; the handler keeps a recommendation only when its path and id pass " +
       "the gated owner view ANDed with reachView, and counts the summary again over the kept " +
       "rows, so a withheld record moves neither a row nor a count.",
+  },
+  {
+    surface: "brain_tension",
+    kind: K.mcpTool,
+    category: C.covered,
+    reason:
+      "detect hands detectTensionsInVault readableAtContextReach(ctx), so a note the caller " +
+      "may not read is skipped before it is opened: it is not counted in scanned_files, takes " +
+      "part in no pair and names no tension. A persisted tension page carries the stricter " +
+      "visibility of its two source notes (strictestVisibility), and list, verify, show and the " +
+      "confirm, dismiss and resolve transitions ask the same predicate about the tension page's " +
+      "vault-relative path, answering a withheld one as absent ('no tension') before any write.",
+  },
+  {
+    surface: "brain_lifecycle",
+    kind: K.mcpTool,
+    category: C.covered,
+    reason:
+      "tombstone, supersede and temporal-replace resolve each page argument through " +
+      "resolveNotePath with readableAtContextReach(ctx): a page the caller may not read is " +
+      "refused with the 'note does not exist' error a missing page gets, before anything is " +
+      "written. curator keeps a slice row only when its key (a page path or a memory id) passes " +
+      "the gated owner view ANDed with reachView. tip walks superseded_by links and names only " +
+      "the ids the caller supplied or the links hold.",
+  },
+  {
+    surface: "brain_expire",
+    kind: K.mcpTool,
+    category: C.covered,
+    reason:
+      "setExpiration is handed readableAtContextReach(ctx) and passes over a candidate file the " +
+      "caller may not read as if it were not there, so a withheld signal or preference is " +
+      "refused with the unknown-id error (ExpirationTargetNotFoundError, the same searched " +
+      "list) and nothing is written to it.",
+  },
+  {
+    surface: "brain_feedback",
+    kind: K.mcpTool,
+    category: C.excluded,
+    reason:
+      "swept in for file-level completeness because feedback-tools.ts also registers " +
+      "brain_expire: it writes the caller's own inbox signal (and, with force_confirmed, its " +
+      "preference) from the caller's arguments and answers with the ids and paths it wrote; it " +
+      "lists, shows and counts no other page.",
+  },
+  {
+    surface: "brain_note",
+    kind: K.mcpTool,
+    category: C.excluded,
+    reason:
+      "swept in for file-level completeness because feedback-tools.ts also registers " +
+      "brain_expire: appendBrainNote appends the caller's own line to today's log and answers " +
+      "with the log path and agent; it reads no vault page.",
+  },
+  {
+    surface: "brain_observed_use",
+    kind: K.mcpTool,
+    category: C.excluded,
+    reason:
+      "swept in for file-level completeness because feedback-tools.ts also registers " +
+      "brain_expire: emitObservedUse stores the caller-supplied verdicts as one continuity " +
+      "record and answers with its id, the entry count and the timestamp; it reads no vault page.",
+  },
+  {
+    surface: "brain_apply_evidence",
+    kind: K.mcpTool,
+    category: C.excluded,
+    reason:
+      "swept in for file-level completeness because feedback-tools.ts also registers " +
+      "brain_expire: appendApplyEvidence logs the caller's evidence line against a preference " +
+      "id and answers with the log path, returning no page content. It refuses an id with no " +
+      "preference file, and that check is not asked at the caller's reach, so below local reach " +
+      "an id whose preference is withheld is accepted where an absent one is refused.",
+  },
+  {
+    surface: "brain_dream",
+    kind: K.mcpTool,
+    category: C.excluded,
+    reason:
+      "swept in for file-level completeness because feedback-tools.ts also registers " +
+      "brain_expire: the dream pass and its staged lifecycle report the preference and signal " +
+      "ids they touch through gatedOwnerScopeView only, and readableAtContextReach(ctx) bounds " +
+      "only the rollup step's link candidates; the pass itself is not run at the caller's reach.",
   },
   {
     surface: "brain_intent_review",
