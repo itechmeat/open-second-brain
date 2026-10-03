@@ -160,9 +160,11 @@ export function resolveStandingRulesMaxChars(cfg: BrainConfig | null): number {
 /**
  * Read side of `active.scoped_rules_max_chars`: the configured cap on the
  * scoped operator rules block, or its default. Unlike the constitution's
- * cap this block is CHARGED against `inject_budget_chars`; the caller
- * takes `min(this, inject_budget_chars)` so the layer never exceeds the
- * budget it is charged against.
+ * cap this block is CHARGED against `inject_budget_chars`: the SessionStart
+ * hook clamps it to what `inject_budget_chars` leaves once the block's
+ * header and notice reserve are taken (`scopedSectionCap`), so the whole
+ * block fits the budget it is charged against; `brain_context` applies the
+ * cap alone.
  */
 export function resolveScopedRulesMaxChars(cfg: BrainConfig | null): number {
   return cfg?.active?.scoped_rules_max_chars ?? SCOPED_RULES_MAX_CHARS_DEFAULT;
