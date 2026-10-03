@@ -27,8 +27,10 @@ import { assessRecallAdequacy } from "../../core/brain/recall-adequacy.ts";
 import { recordRecallAdequacyDemand } from "../../core/brain/query-demand.ts";
 import { emitGatedTelemetry } from "../../core/brain/continuity/emit.ts";
 import {
+  buildReaderAnticipatoryContext,
   readAnticipatoryContext,
   refreshAnticipatoryCache,
+  type ReadAnticipatoryContextResult,
 } from "../../core/brain/anticipatory-cache.ts";
 import { loadBrainConfig } from "../../core/brain/policy.ts";
 import { buildPreCompressPack } from "../../core/brain/pre-compress-pack.ts";
@@ -852,6 +854,26 @@ async function toolBrainAnticipatoryContext(
   }
   const anticipatoryScope = coerceAgentScope(ctx, args, true);
   const now = new Date();
+  // Below local reach the bundle is built for this caller with the same
+  // candidate filter `brain_context_pack` applies, and the shared cache is
+  // neither read nor written: a cached bundle may hold pages this caller
+  // cannot read, and a filtered bundle must not replace the operator's.
+  const view = reachView(ctx.vault, contextReach(ctx));
+  const remote = view.reach !== TRANSPORT_REACH.local;
+  if (remote) {
+    // A refresh takes the caller's signal exactly as the cached path does;
+    // a plain read has no cached signal to reuse here.
+    const signal = coerceBool(args, "refresh") === true ? coerceStr(args, "signal_text") : null;
+    const result = buildReaderAnticipatoryContext(ctx.vault, {
+      sessionId,
+      now,
+      visible: (abs: string) => view.visible(vaultRelative(ctx.vault, abs)),
+      ...(anticipatoryScope !== undefined ? { agentScope: anticipatoryScope } : {}),
+      ...(maxTokens !== undefined ? { maxTokens } : {}),
+      ...(typeof signal === "string" ? { signalText: signal } : {}),
+    });
+    return anticipatoryAnswer(result);
+  }
   if (coerceBool(args, "refresh") === true) {
     const signal = coerceStr(args, "signal_text");
     refreshAnticipatoryCache(ctx.vault, {
@@ -870,6 +892,10 @@ async function toolBrainAnticipatoryContext(
     ...(ttlSeconds !== undefined ? { ttlSeconds } : {}),
     ...(maxTokens !== undefined ? { maxTokens } : {}),
   });
+  return anticipatoryAnswer(result);
+}
+
+function anticipatoryAnswer(result: ReadAnticipatoryContextResult): Record<string, unknown> {
   return {
     cache_state: result.cache_state,
     root_session_id: result.root_session_id,

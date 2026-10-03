@@ -245,6 +245,8 @@ interface BuildBundleInput {
   readonly agentScope: string | undefined;
   /** Injected clock; the stamp's window is anchored to it. */
   readonly now: Date;
+  /** Candidate filter handed to the pack (absolute paths); absent keeps every candidate. */
+  readonly visible?: (absPath: string) => boolean;
 }
 
 interface BuiltBundle {
@@ -256,6 +258,7 @@ function buildBundle(vault: string, input: BuildBundleInput): BuiltBundle {
   const pack = packContext(vault, {
     maxTokens: input.maxTokens,
     ...(input.agentScope !== undefined ? { agentScope: input.agentScope } : {}),
+    ...(input.visible !== undefined ? { visible: input.visible } : {}),
     stamp: { now: input.now },
   });
   const signal = input.signalText?.trim() ?? "";
@@ -427,6 +430,44 @@ export function readAnticipatoryContext(
       maxTokens: requestedTokens,
       agentScope: input.agentScope,
       now: input.now,
+    }).context,
+  });
+}
+
+export interface BuildReaderAnticipatoryContextInput extends ReadAnticipatoryContextInput {
+  /** Latest user-visible signal steering the session hits, if any. */
+  readonly signalText?: string;
+  /** Candidate filter for one reader (absolute paths). */
+  readonly visible: (absPath: string) => boolean;
+}
+
+/**
+ * A live bundle built for one reader, outside the shared cache.
+ *
+ * The cache entry is keyed by lineage root and owner scope only, so it
+ * holds the bundle one particular reader was entitled to. A reader whose
+ * candidates are filtered must neither be served that entry (it may carry
+ * pages this reader cannot read) nor write its own filtered bundle over
+ * it (the operator would then be served a narrowed bundle). This path
+ * therefore never reads or writes the cache file and answers `miss`,
+ * which is what it is: no cached bundle answered the call.
+ */
+export function buildReaderAnticipatoryContext(
+  vault: string,
+  input: BuildReaderAnticipatoryContextInput,
+): ReadAnticipatoryContextResult {
+  const rootId = resolveRootId(vault, input.sessionId);
+  const signal = input.signalText?.trim();
+  return Object.freeze({
+    cache_state: "miss" as const,
+    root_session_id: rootId,
+    context: buildBundle(vault, {
+      sessionId: input.sessionId,
+      signalText: signal !== undefined && signal.length > 0 ? signal : undefined,
+      maxTokens: input.maxTokens ?? DEFAULT_ANTICIPATORY_MAX_TOKENS,
+      agentScope: input.agentScope,
+      now: input.now,
+      visible: input.visible,
     }).context,
   });
 }
