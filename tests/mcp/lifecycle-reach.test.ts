@@ -153,3 +153,49 @@ describe("brain_lifecycle answers at the caller's reach", () => {
     expect(readFileSync(join(a.vault, PRIVATE_NOTE), "utf8")).toContain("tombstoned");
   });
 });
+
+/**
+ * `tip` walks the supersede chain over Brain pages. In vault A the public
+ * page `chain-head` points at the withheld preference, which points on to
+ * the public page `chain-tail`; vault B has the same two public pages and
+ * no withheld one. A remote walk must stop at the withheld id exactly as
+ * at an unknown one, and a tip asked of the withheld id itself must read
+ * as an unknown id.
+ */
+function chainFixture(withPrivate: boolean): Fixture {
+  const f = fixture(withPrivate);
+  const dir = join(f.vault, "Brain", "processed");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "chain-head.md"),
+    `---\nsuperseded_by: "[[pref-withheld]]"\n---\n# head\n`,
+  );
+  writeFileSync(join(dir, "chain-tail.md"), "---\ntitle: tail\n---\n# tail\n");
+  if (withPrivate) {
+    const abs = join(f.vault, PRIVATE_PREFERENCE);
+    const text = readFileSync(abs, "utf8");
+    writeFileSync(abs, text.replace("\n---\n", '\nsuperseded_by: "[[chain-tail]]"\n---\n'));
+  }
+  return f;
+}
+
+describe("brain_lifecycle tip answers at the caller's reach", () => {
+  for (const id of ["chain-head", "pref-withheld"]) {
+    test(`remote reach: tip of ${id} reads as in a vault without the withheld page`, async () => {
+      const args = { action: "tip", id };
+      const withheld = await answer(chainFixture(true), args);
+      expect(withheld).toBe(await answer(chainFixture(false), args));
+      expect(withheld).not.toContain("chain-tail");
+    });
+  }
+
+  test("local control: the operator's own walk steps through the withheld page", async () => {
+    const local = await answer(
+      chainFixture(true),
+      { action: "tip", id: "chain-head" },
+      TRANSPORT_REACH.local,
+    );
+    expect(local).toContain('"tip":"chain-tail"');
+    expect(local).toContain('"steps":2');
+  });
+});

@@ -32,7 +32,7 @@ import type { FrontmatterMap } from "../../types.ts";
 import { parseFrontmatter, writeFrontmatterAtomic } from "../../vault.ts";
 import { appendLogEvent } from "../log.ts";
 import { appendDecisionChangeReceipt } from "../decisions/receipts.ts";
-import { BRAIN_ROOT_REL } from "../paths.ts";
+import { BRAIN_ROOT_REL, vaultRelative } from "../paths.ts";
 import { resolveNotePath } from "../note-path.ts";
 import { isoSecond } from "../time.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_TOMBSTONE_STATUS } from "../types.ts";
@@ -396,16 +396,23 @@ export function resolveChainTip(
  * Build a {@link ChainLookup} over every markdown file under `Brain/`,
  * keyed by bare basename. Reads each file's frontmatter once. A node
  * that exists but carries no `superseded_by` resolves to a tip entry;
- * an unknown basename resolves to `null`.
+ * an unknown basename resolves to `null`. A page whose vault-relative
+ * path `readable` refuses is not indexed at all, so it reads exactly as
+ * an unknown basename; absent, every page is indexed.
  */
-export function buildChainLookup(vault: string): ChainLookup {
+export function buildChainLookup(vault: string, readable?: (rel: string) => boolean): ChainLookup {
   const index = new Map<string, ChainLookupEntry>();
   const root = join(vault, BRAIN_ROOT_REL);
-  if (existsSync(root)) walk(root, index);
+  if (existsSync(root)) walk(vault, root, index, readable);
   return (link: string): ChainLookupEntry | null => index.get(normalizeChainLink(link)) ?? null;
 }
 
-function walk(dir: string, index: Map<string, ChainLookupEntry>): void {
+function walk(
+  vault: string,
+  dir: string,
+  index: Map<string, ChainLookupEntry>,
+  readable: ((rel: string) => boolean) | undefined,
+): void {
   let entries;
   try {
     entries = readdirSync(dir, { withFileTypes: true });
@@ -416,10 +423,13 @@ function walk(dir: string, index: Map<string, ChainLookupEntry>): void {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
       if (entry.name.startsWith(".")) continue;
-      walk(full, index);
+      walk(vault, full, index, readable);
       continue;
     }
     if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".md")) continue;
+    // Asked before the page is parsed, so a page the caller may not read
+    // contributes nothing - not even its basename.
+    if (readable !== undefined && !readable(vaultRelative(full, vault))) continue;
     let meta: FrontmatterMap;
     try {
       [meta] = parseFrontmatter(full);
@@ -441,7 +451,11 @@ function walk(dir: string, index: Map<string, ChainLookupEntry>): void {
 export function resolveChainTipInVault(
   vault: string,
   start: string,
-  opts: { readonly maxDepth?: number } = {},
+  opts: {
+    readonly maxDepth?: number;
+    /** The vault-relative paths the caller may read; see {@link buildChainLookup}. */
+    readonly readable?: (rel: string) => boolean;
+  } = {},
 ): ResolveChainTipResult {
-  return resolveChainTip(start, buildChainLookup(vault), opts);
+  return resolveChainTip(start, buildChainLookup(vault, opts.readable), opts);
 }

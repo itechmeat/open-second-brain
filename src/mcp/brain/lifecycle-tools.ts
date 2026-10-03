@@ -119,7 +119,9 @@ async function toolBrainLifecycle(
       }
       case "tip": {
         const id = coerceStr(args, "id", true)!;
-        const res = resolveChainTipInVault(ctx.vault, id);
+        // A page the caller may not read is no chain node: it reads as an
+        // unknown id, and a walk never steps onto or through it.
+        const res = resolveChainTipInVault(ctx.vault, id, reachOpt);
         return {
           action,
           tip: res.tip,
