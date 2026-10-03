@@ -4,16 +4,17 @@
  * Vault A holds a dead end withheld from a remote caller by visibility
  * beside a readable one; vault B holds only the readable one. A server
  * with no reach minted is a remote caller: `list` must read alike over
- * both vaults, and `record` must name no archived id. The local control
+ * both vaults, and `record` must name no archived id nor move a withheld
+ * page into the archive when it trims the active set. The local control
  * proves the withheld dead end is there to list.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { recordDeadEnd } from "../../src/core/brain/dead-ends.ts";
+import { DEAD_END_MAX_ACTIVE, recordDeadEnd } from "../../src/core/brain/dead-ends.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts";
 import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
 import {
@@ -68,6 +69,29 @@ function fixture(withPrivate: boolean): Fixture {
   return f;
 }
 
+/** A vault holding a full active set whose oldest dead end is withheld. */
+function fullFixture(): { f: Fixture; oldest: string } {
+  const base = mkdtempSync(join(tmpdir(), "o2b-dead-ends-reach-full-"));
+  bases.push(base);
+  const f = buildReachLogFixture(base, false);
+  const { entry } = recordDeadEnd(f.vault, {
+    approach: PRIVATE_APPROACH,
+    reason: PRIVATE_REASON,
+    agent: "claude",
+    now: new Date("2026-01-01T00:00:00Z"),
+  });
+  reserve(entry.path);
+  for (let i = 1; i < DEAD_END_MAX_ACTIVE; i += 1) {
+    recordDeadEnd(f.vault, {
+      approach: `Readable route ${i}`,
+      reason: "Readable reason.",
+      agent: "claude",
+      now: new Date(Date.UTC(2026, 1, 1, 0, 0, i)),
+    });
+  }
+  return { f, oldest: entry.path };
+}
+
 async function answer(
   f: Fixture,
   args: Record<string, unknown>,
@@ -96,6 +120,25 @@ describe("brain_dead_ends answers at the caller's reach", () => {
     const withheld = await answer(fixture(true), args);
     expect(withheld).toBe(await answer(fixture(false), args));
     expect(withheld).not.toContain("archived");
+  });
+
+  test("remote reach: the overflow trim leaves a withheld dead end in place", async () => {
+    const { f, oldest } = fullFixture();
+    const bytes = readFileSync(oldest, "utf8");
+    await answer(f, { operation: "record", approach: "A new route", reason: "New reason." });
+    expect(existsSync(oldest)).toBe(true);
+    expect(readFileSync(oldest, "utf8")).toBe(bytes);
+  });
+
+  test("local reach: the overflow trim archives the oldest dead end", async () => {
+    const { f, oldest } = fullFixture();
+    const local = await answer(
+      f,
+      { operation: "record", approach: "A new route", reason: "New reason." },
+      TRANSPORT_REACH.local,
+    );
+    expect(existsSync(oldest)).toBe(false);
+    expect(local).toContain("archived");
   });
 
   test("local reach: list carries the withheld dead end", async () => {

@@ -278,8 +278,10 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "list keeps only the entries and parse warnings whose page readableAtContextReach(ctx) " +
       "keeps, so a withheld dead end is absent from the answer; record writes the caller's own " +
       "dead end and, below local reach, leaves out the ids the overflow trim archived. The trim " +
-      "still counts every active dead end, and a same-day id collision with a withheld dead end " +
-      "still takes a suffix (inherent create-collision residual).",
+      "still counts every active dead end against the cap but, handed the same predicate, " +
+      "archives only the readable ones, so a withheld dead end is never moved; a same-day id " +
+      "collision with a withheld dead end still takes a suffix (inherent create-collision " +
+      "residual).",
   },
   {
     surface: "brain_claims",

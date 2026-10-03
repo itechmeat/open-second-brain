@@ -724,9 +724,11 @@ function toolBrainDeadEnds(
     ...(typeof args["context"] === "string" ? { context: args["context"] as string } : {}),
     agent,
     now: new Date(),
+    ...(readable !== undefined ? { readable } : {}),
   });
   // The overflow trim walks every active dead end, so below local reach the
   // ids it archived are left out: they would name or count withheld pages.
+  // It archives only pages the caller can read; a withheld one stays put.
   return {
     ok: true,
     id: result.entry.id,

@@ -13,6 +13,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { vaultRelative } from "../path-safety.ts";
 import { sanitiseTextField } from "../redactor.ts";
 import { parseFrontmatterText, slugify, writeFrontmatterAtomic } from "../vault.ts";
 import type { FrontmatterMap } from "../types.ts";
@@ -52,6 +53,13 @@ export interface RecordDeadEndInput {
   readonly now: Date;
   /** Override the active-set cap (tests). */
   readonly maxActive?: number;
+  /**
+   * Whether the caller may read a vault-relative page at its reach. When
+   * given, the overflow trim still counts every active dead end against
+   * the cap but archives only the readable ones: a withheld page is never
+   * moved on that caller's behalf.
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 export interface RecordDeadEndResult {
@@ -135,7 +143,7 @@ export function recordDeadEnd(vault: string, input: RecordDeadEndInput): RecordD
     },
   );
 
-  const archived = trimActive(vault, input.maxActive ?? DEAD_END_MAX_ACTIVE);
+  const archived = trimActive(vault, input.maxActive ?? DEAD_END_MAX_ACTIVE, input.readable);
 
   return Object.freeze({
     entry: Object.freeze({
@@ -151,12 +159,24 @@ export function recordDeadEnd(vault: string, input: RecordDeadEndInput): RecordD
   });
 }
 
-/** Move the oldest active entries beyond the cap into `archive/`. */
-function trimActive(vault: string, maxActive: number): string[] {
+/**
+ * Move the oldest active entries beyond the cap into `archive/`. The cap
+ * counts every entry; with `readable`, an overflow entry the caller cannot
+ * read stays where it is.
+ */
+function trimActive(
+  vault: string,
+  maxActive: number,
+  readable: ((rel: string) => boolean) | undefined,
+): string[] {
   const { entries } = listDeadEnds(vault);
   if (entries.length <= maxActive) return [];
   // `entries` is newest first; everything past the cap archives.
-  const overflow = entries.slice(maxActive).toReversed();
+  const overflow = entries
+    .slice(maxActive)
+    .toReversed()
+    .filter((entry) => readable === undefined || readable(vaultRelative(entry.path, vault)));
+  if (overflow.length === 0) return [];
   const archiveDir = join(deadEndsDir(vault), "archive");
   mkdirSync(archiveDir, { recursive: true });
   const archived: string[] = [];
