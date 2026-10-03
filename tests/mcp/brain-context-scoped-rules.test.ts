@@ -13,7 +13,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,9 +21,14 @@ import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/inde
 import type { MCPServerRuntimeOptions } from "../../src/mcp/server.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { STANDING_RULES_HEADER } from "../../src/core/brain/standing-rules.ts";
-import { SCOPED_RULES_HEADER } from "../../src/core/brain/scoped-rules.ts";
+import {
+  SCOPED_RULES_HEADER,
+  SCOPED_RULES_HOST_UNREADABLE_NOTICE,
+} from "../../src/core/brain/scoped-rules.ts";
+import { resolveInstallationSecret } from "../../src/core/config.ts";
 import { writeVaultPointer } from "../../src/core/brain/portability/pointer.ts";
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
+import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 
 let tmp: string;
 let vault: string;
@@ -229,6 +234,29 @@ describe("brain_context scoped rules - host axis", () => {
     expect(field.scope.host).toBe("aaaa0001");
     expect(field.files.map((f) => f.path)).toEqual(["Brain/standing-rules/host/aaaa0001.md"]);
   });
+
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "a device id that cannot be stored renders the host notice and the key",
+    async () => {
+      // The config is readable and holds no device id, and its directory
+      // cannot be written, so the first-use id cannot be persisted: the
+      // call still succeeds and says host-scoped rules were not applied.
+      delete process.env["O2B_DEVICE_ID"];
+      resolveInstallationSecret(configPath);
+      writeScoped("host", "aaaa0001", MARKER);
+      chmodSync(configHome, 0o555);
+      try {
+        const out = await callContext({ reach: LOCAL });
+        expect(out["content"] as string).toContain(SCOPED_RULES_HOST_UNREADABLE_NOTICE);
+        expect(out["content"] as string).not.toContain(MARKER);
+        const field = out["scoped_rules"] as ScopedRulesKey;
+        expect(field.scope.host).toBeNull();
+        expect(field.files).toEqual([]);
+      } finally {
+        chmodSync(configHome, 0o755);
+      }
+    },
+  );
 
   test("the empty device id opts out silently", async () => {
     process.env["O2B_DEVICE_ID"] = "";
