@@ -299,7 +299,7 @@ const NOTE_CONTENT_PRODUCERS: ReadonlyArray<ProducerRule> = Object.freeze([
   },
   {
     specifierIncludes: "/brain/lifecycle/tombstone.ts",
-    identifiers: ["tombstone", "supersede"],
+    identifiers: ["tombstone", "supersede", "buildChainLookup", "resolveChainTipInVault"],
   },
   { specifierIncludes: "/brain/lifecycle/temporal-replace.ts", identifiers: ["temporalReplace"] },
   { specifierIncludes: "/brain/lifecycle/curator.ts", identifiers: ["curatorSlices"] },
@@ -308,6 +308,41 @@ const NOTE_CONTENT_PRODUCERS: ReadonlyArray<ProducerRule> = Object.freeze([
     specifierIncludes: "/brain/truth/",
     identifiers: ["computeTruthStateWithConflicts", "aggregateQuantities", "detectAgentCollisions"],
   },
+  {
+    specifierIncludes: "/brain/decisions/record.ts",
+    identifiers: [
+      "showDecision",
+      "listDecisions",
+      "listRatedDecisions",
+      "compareDecisions",
+      "findSimilarDecisions",
+      "backfillOutcome",
+      "updateRating",
+    ],
+  },
+  { specifierIncludes: "/brain/decisions/recall.ts", identifiers: ["recallRatedDecisions"] },
+  {
+    specifierIncludes: "/brain/decisions/receipts.ts",
+    identifiers: ["queryDecisionChangeHistory"],
+  },
+  { specifierIncludes: "/brain/labels.ts", identifiers: ["assignNoteLabel", "removeNoteLabel"] },
+  {
+    specifierIncludes: "/brain/notes/scaffold-stub.ts",
+    identifiers: ["scaffoldStub", "listDanglingTargets"],
+  },
+  { specifierIncludes: "/brain/design-note.ts", identifiers: ["designNoteGrounding"] },
+  { specifierIncludes: "/brain/apply-evidence.ts", identifiers: ["appendApplyEvidence"] },
+  {
+    specifierIncludes: "/brain/write-advisory.ts",
+    identifiers: ["adviseIncomingFeedback", "adviseUnroutableCapture"],
+  },
+  { specifierIncludes: "/brain/derived-fact.ts", identifiers: ["deriveFact"] },
+  {
+    specifierIncludes: "/brain/anticipatory-cache.ts",
+    identifiers: ["readAnticipatoryContext", "buildReaderAnticipatoryContext"],
+  },
+  { specifierIncludes: "/brain/diarization.ts", identifiers: ["diarize"] },
+  { specifierIncludes: "/brain/recompile.ts", identifiers: ["planRecompile"] },
 ]);
 
 /**
@@ -531,8 +566,16 @@ function reasonProblems(entries: ReadonlyArray<VisibilitySurfaceEntry>): {
  * wrote to withheld pages and records, and `brain_feedback`,
  * `brain_apply_evidence`, `brain_dream`, `brain_note` and
  * `brain_observed_use` on the file-level rule.
+ *
+ * 72 before the vocabulary gained the decision, label, scaffold, chain
+ * tip, design-note, evidence, advisory, derived-fact, anticipatory,
+ * diarization and recompile producers. The four new names are
+ * `brain_decision`, which showed and rewrote a withheld decision page,
+ * `brain_derive_fact` and `brain_scaffold_stub`, which accepted a
+ * withheld premise or source, and `brain_note_lifecycle` on the
+ * file-level rule.
  */
-const MCP_TOOL_POPULATION_SIZE = 72;
+const MCP_TOOL_POPULATION_SIZE = 76;
 /** Measured: MCP resources + templates. */
 const MCP_RESOURCE_POPULATION_SIZE = 8;
 /** Measured: hand-enumerated CLI verb mirrors. */
@@ -592,23 +635,33 @@ describe("visibility surface census", () => {
       expect(covered).toEqual([
         "brain_agent_diff",
         "brain_agent_query",
+        "brain_apply_evidence",
         "brain_backlinks",
         "brain_bridges",
         "brain_claims",
         "brain_clusters",
         "brain_context",
+        "brain_dead_ends",
+        "brain_decision",
         "brain_deep_synthesis",
+        "brain_derive_fact",
+        "brain_diarize",
         "brain_doctor",
+        "brain_dream",
         "brain_eval",
         "brain_event_trace",
         "brain_expire",
+        "brain_feedback",
         "brain_file_context",
         "brain_health",
         "brain_hygiene",
         "brain_idea_discovery",
         "brain_intent_review",
         "brain_intention",
+        "brain_labels",
         "brain_lifecycle",
+        "brain_maintenance",
+        "brain_note_lifecycle",
         "brain_obligation",
         "brain_pre_compress_pack",
         "brain_procedural_memory",
@@ -616,6 +669,7 @@ describe("visibility surface census", () => {
         "brain_recall_feedback",
         "brain_retention",
         "brain_review_candidates",
+        "brain_scaffold_stub",
         "brain_search",
         "brain_search_expand",
         "brain_skill_proposals",
