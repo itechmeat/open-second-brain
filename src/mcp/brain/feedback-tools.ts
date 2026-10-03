@@ -240,8 +240,12 @@ async function toolBrainFeedback(
   // advisory when it closely resembles an existing rule. Computed BEFORE
   // any force-confirmed write so it never matches the pref this very call
   // is about to create. The write has already landed; this never blocks it.
+  // Both advisories answer at the caller's reach: a preference or signal
+  // the caller may not read is never scored, named or counted.
+  const readable = readableAtContextReachOrUndefined(ctx);
   const advisory: WriteConflictAdvisory | null = adviseIncomingFeedback(ctx.vault, {
     principle,
+    ...(readable !== undefined ? { readable } : {}),
     ...(effectiveScope !== undefined ? { scope: effectiveScope } : {}),
     agent,
     now,
@@ -251,6 +255,7 @@ async function toolBrainFeedback(
   // no scope, so no scoped recall reaches it. Non-blocking like the
   // advisory, and absent entirely when this vault uses no scopes yet.
   const routingHint: CaptureRoutingHint | null = adviseUnroutableCapture(ctx.vault, {
+    ...(readable !== undefined ? { readable } : {}),
     ...(effectiveScope !== undefined ? { scope: effectiveScope } : {}),
     agent,
     now,

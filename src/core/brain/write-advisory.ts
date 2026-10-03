@@ -37,6 +37,8 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
+import { vaultRelative } from "../path-safety.ts";
+
 import { adviseOnIncoming, type PreferenceForContradiction } from "./health/contradiction.ts";
 import { appendLogEvent } from "./log.ts";
 import { nextCommandField, requireNextStep, type NextCommandField } from "./next-step.ts";
@@ -79,7 +81,16 @@ export interface AdviseIncomingFeedbackParams {
   readonly agent: string;
   /** Injected clock for a deterministic log timestamp. Defaults to now. */
   readonly now?: Date;
+  /**
+   * The vault-relative paths the caller may read. A preference it may
+   * not read is left out before scoring, so the advisory never names it.
+   * Absent, every preference counts.
+   */
+  readonly readable?: ReadablePath;
 }
+
+/** A vault-relative path test bound to one caller. */
+type ReadablePath = (rel: string) => boolean;
 
 /** The Markdown documents in `dir`, or nothing when it does not exist. */
 function markdownNames(dir: string): ReadonlyArray<string> {
@@ -88,14 +99,31 @@ function markdownNames(dir: string): ReadonlyArray<string> {
 }
 
 /**
+ * The Markdown documents in `dir` the caller may read: a document it may
+ * not read is passed over as if it were not there.
+ */
+function readableMarkdownNames(
+  vault: string,
+  dir: string,
+  readable: ReadablePath | undefined,
+): ReadonlyArray<string> {
+  const names = markdownNames(dir);
+  if (readable === undefined) return names;
+  return names.filter((name) => readable(vaultRelative(join(dir, name), vault)));
+}
+
+/**
  * Every confirmed preference in the vault. A corrupt / mis-foldered
  * preference file is skipped (that is the doctor's concern, not the write
  * path's).
  */
-function loadConfirmedPrefs(vault: string): PreferenceForContradiction[] {
+function loadConfirmedPrefs(
+  vault: string,
+  readable: ReadablePath | undefined,
+): PreferenceForContradiction[] {
   const dir = brainDirs(vault).preferences;
   const out: PreferenceForContradiction[] = [];
-  for (const name of markdownNames(dir)) {
+  for (const name of readableMarkdownNames(vault, dir, readable)) {
     let pref;
     try {
       pref = parsePreference(join(dir, name));
@@ -116,9 +144,12 @@ function loadConfirmedPrefs(vault: string): PreferenceForContradiction[] {
 function loadConfirmedScopePrefs(
   vault: string,
   scope: string | undefined,
+  readable: ReadablePath | undefined,
 ): PreferenceForContradiction[] {
   const bucketKey = scope ?? UNSCOPED_BUCKET;
-  return loadConfirmedPrefs(vault).filter((pref) => (pref.scope ?? UNSCOPED_BUCKET) === bucketKey);
+  return loadConfirmedPrefs(vault, readable).filter(
+    (pref) => (pref.scope ?? UNSCOPED_BUCKET) === bucketKey,
+  );
 }
 
 /**
@@ -134,7 +165,7 @@ export function adviseIncomingFeedback(
   params: AdviseIncomingFeedbackParams,
 ): WriteConflictAdvisory | null {
   try {
-    const prefs = loadConfirmedScopePrefs(vault, params.scope);
+    const prefs = loadConfirmedScopePrefs(vault, params.scope, params.readable);
     const advisory = adviseOnIncoming(params.principle, params.scope, prefs);
     if (advisory === null) return null;
 
@@ -259,6 +290,12 @@ export interface AdviseUnroutableCaptureParams {
   readonly agent: string;
   /** Injected clock for a deterministic log timestamp. Defaults to now. */
   readonly now?: Date;
+  /**
+   * The vault-relative paths the caller may read. A preference or signal
+   * it may not read adds no document to any scope. Absent, every
+   * document counts.
+   */
+  readonly readable?: ReadablePath;
 }
 
 /**
@@ -275,16 +312,19 @@ export interface AdviseUnroutableCaptureParams {
  * what could not be read, so it cannot be counted; leaving it silent
  * would change a ranking the operator reads with nothing to explain why.
  */
-function countScopeDocuments(vault: string): ReadonlyMap<string, number> {
+function countScopeDocuments(
+  vault: string,
+  readable: ReadablePath | undefined,
+): ReadonlyMap<string, number> {
   const counts = new Map<string, number>();
   const tally = (scope: string | undefined): void => {
     const slug = scope?.trim();
     if (!slug) return;
     counts.set(slug, (counts.get(slug) ?? 0) + 1);
   };
-  for (const pref of loadConfirmedPrefs(vault)) tally(pref.scope);
+  for (const pref of loadConfirmedPrefs(vault, readable)) tally(pref.scope);
   const inbox = brainDirs(vault).inbox;
-  for (const name of markdownNames(inbox)) {
+  for (const name of readableMarkdownNames(vault, inbox, readable)) {
     const path = join(inbox, name);
     try {
       tally(parseSignal(path).scope);
@@ -314,7 +354,7 @@ export function adviseUnroutableCapture(
 ): CaptureRoutingHint | null {
   if (params.scope?.trim()) return null;
   try {
-    const candidates = [...countScopeDocuments(vault)]
+    const candidates = [...countScopeDocuments(vault, params.readable)]
       .map(([scope, documents]) => Object.freeze({ scope, documents }))
       .toSorted((a, b) => b.documents - a.documents || a.scope.localeCompare(b.scope));
     if (candidates.length === 0) return null;
