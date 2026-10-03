@@ -49,6 +49,16 @@ const REMOVED_TOOL = "brain_digest";
 const PAGE_COUNT = 50;
 const PAGE_DIR = "Brain/memos";
 const PRIVATE_PATH = "PRIVATE_PATH";
+/**
+ * Prefix of every withheld page that competes with readable pages for a
+ * 50-slot cap. The scans walk in directory order, which the filesystem
+ * decides: case-insensitive alphabetical on NTFS, where `memo-` sorts before
+ * `PRIVATE_PATH-` and the readable pages alone fill the cap. The prefix sorts
+ * before the readable names (`memo-`, `zz-draft-`) in byte order and in
+ * case-insensitive order alike, so an alphabetical walk reaches the withheld
+ * pages first and a hashed walk (ext4) interleaves them with the readable ones.
+ */
+const WITHHELD_FIRST_PREFIX = "AA-";
 const REMOVED_TOOL_CODE = "removed-tool-reference";
 const STALE_DEPENDENCY_CODE = "stale-dependency";
 const RESERVE_LINE = `visibility: [${REMOTE_DENY_VISIBILITY_TOKEN}]`;
@@ -135,7 +145,7 @@ function addDropped(vault: string, withPrivate: boolean): void {
     writeFileSync(join(dir, `zz-draft-${n}.md`), `---\ntitle: d\n${DROPPED_LINE}\n---\n# d\n`);
     if (withPrivate) {
       writeFileSync(
-        join(dir, `AA-${PRIVATE_PATH}-${n}.md`),
+        join(dir, `${WITHHELD_FIRST_PREFIX}${PRIVATE_PATH}-${n}.md`),
         `---\n${RESERVE_LINE}\n${DROPPED_LINE}\n---\n# d\n`,
       );
     }
@@ -151,7 +161,9 @@ function fixture(withPrivate: boolean, extras: Extras = {}): Fixture {
   for (let i = 0; i < PAGE_COUNT; i++) {
     const n = String(i).padStart(2, "0");
     writeFileSync(join(dir, `memo-${n}.md`), page(i, false));
-    if (withPrivate) writeFileSync(join(dir, `${PRIVATE_PATH}-${n}.md`), page(i, true));
+    if (withPrivate) {
+      writeFileSync(join(dir, `${WITHHELD_FIRST_PREFIX}${PRIVATE_PATH}-${n}.md`), page(i, true));
+    }
   }
   if (withPrivate) {
     writeFileSync(
