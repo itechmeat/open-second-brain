@@ -91,7 +91,7 @@ import {
   vaultRelativeSafe,
 } from "./shared.ts";
 import { OPERATION } from "../../core/brain/safeguard.ts";
-import { readableAtContextReach } from "./reach-readable.ts";
+import { readableAtContextReach, readableAtContextReachOrUndefined } from "./reach-readable.ts";
 
 /**
  * Build the slug used in the signal / preference filename. We never let
@@ -917,9 +917,13 @@ async function toolBrainExpire(
   const id = coerceStr(args, "id", true)!;
   const expires = coerceStr(args, "expires", true)!;
   const agent = coerceStr(args, "agent", false);
+  // A record the caller may not read is refused as an unknown id, before
+  // anything is written.
+  const readable = readableAtContextReachOrUndefined(ctx);
   try {
     const res = setExpiration(ctx.vault, id, expires, {
       ...(agent ? { agent } : {}),
+      ...(readable !== undefined ? { readable } : {}),
     });
     return {
       id: res.id,

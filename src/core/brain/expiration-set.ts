@@ -150,6 +150,13 @@ export interface SetExpirationOptions {
   readonly agent?: string;
   /** Injected clock, so a run stays reproducible. */
   readonly now?: Date;
+  /**
+   * The vault-relative paths the caller may read. A candidate file it may
+   * not read is passed over as if it were not there, so a record withheld
+   * from the caller is refused with the unknown-id error and nothing is
+   * written to it. Absent, every candidate counts.
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 /** Agent recorded when the caller names none. */
@@ -239,13 +246,12 @@ export function setExpiration(
   let abs: string | null = null;
   for (const dir of dirs) {
     const candidate = ensureInsideVault(join(dir, `${trimmed}.md`), vault);
-    searched.push(
-      candidate
-        .slice(vault.length + 1)
-        .split("\\")
-        .join("/"),
-    );
-    if (existsSync(candidate)) {
+    const rel = candidate
+      .slice(vault.length + 1)
+      .split("\\")
+      .join("/");
+    searched.push(rel);
+    if (existsSync(candidate) && (opts.readable === undefined || opts.readable(rel))) {
       abs = candidate;
       break;
     }
