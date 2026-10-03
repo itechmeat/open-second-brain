@@ -135,6 +135,12 @@ export interface TemporalReplaceInput {
   readonly at: string | Date;
   readonly agent?: string;
   readonly configPath?: string;
+  /**
+   * The vault-relative paths the caller may read. A fact it may not read
+   * is refused as a missing one, before anything is written. Absent,
+   * every fact may be written.
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 export interface TemporalReplaceResult {
@@ -163,8 +169,12 @@ export function temporalReplace(input: TemporalReplaceInput): TemporalReplaceRes
   let absPred: string;
   let absSucc: string;
   try {
-    absPred = resolveNotePath(input.vault, input.predecessor, { mustExist: true });
-    absSucc = resolveNotePath(input.vault, input.successor, { mustExist: true });
+    const opts = {
+      mustExist: true,
+      ...(input.readable !== undefined ? { readable: input.readable } : {}),
+    };
+    absPred = resolveNotePath(input.vault, input.predecessor, opts);
+    absSucc = resolveNotePath(input.vault, input.successor, opts);
   } catch (err) {
     throw new TemporalReplaceError(
       `temporalReplace: a fact does not resolve inside the vault: ${(err as Error).message}`,

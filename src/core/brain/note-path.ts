@@ -8,11 +8,18 @@
  */
 
 import { existsSync, realpathSync } from "node:fs";
-import { resolve, sep } from "node:path";
+import { relative, resolve, sep } from "node:path";
 
 export interface ResolveNotePathOptions {
   /** When true (default), a missing file is an error. */
   readonly mustExist?: boolean;
+  /**
+   * The vault-relative paths the caller may read. An existing note it may
+   * not read is refused with the error a missing note gets, so the
+   * refusal does not confirm the note exists. Absent, every note may be
+   * resolved.
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 /**
@@ -31,6 +38,12 @@ export function resolveNotePath(
   }
   if (!existsSync(path)) {
     if (opts.mustExist === false) return path;
+    throw new Error(`note does not exist: ${relPath}`);
+  }
+  if (
+    opts.readable !== undefined &&
+    !opts.readable(relative(vaultRoot, path).split(sep).join("/"))
+  ) {
     throw new Error(`note does not exist: ${relPath}`);
   }
   // Canonicalize both sides: a symlinked vault root is fine, a

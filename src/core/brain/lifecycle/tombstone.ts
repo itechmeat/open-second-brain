@@ -157,6 +157,12 @@ export interface TombstoneInput {
   readonly now?: Date;
   /** Config path for `resolveAgentName`. Optional. */
   readonly configPath?: string;
+  /**
+   * The vault-relative paths the caller may read. A target it may not
+   * read is refused as a missing one, before anything is written. Absent,
+   * every target may be written.
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 export interface TombstoneResult {
@@ -195,7 +201,10 @@ export function tombstone(input: TombstoneInput): TombstoneResult {
 
   let abs: string;
   try {
-    abs = resolveNotePath(input.vault, input.path, { mustExist: true });
+    abs = resolveNotePath(input.vault, input.path, {
+      mustExist: true,
+      ...(input.readable !== undefined ? { readable: input.readable } : {}),
+    });
   } catch (err) {
     throw new TombstoneError(
       `tombstone: target does not resolve inside the vault: ${(err as Error).message}`,
@@ -296,6 +305,8 @@ export interface SupersedeInput {
   readonly agent?: string;
   readonly now?: Date;
   readonly configPath?: string;
+  /** The vault-relative paths the caller may read; see {@link TombstoneInput.readable}. */
+  readonly readable?: (rel: string) => boolean;
 }
 
 /**
@@ -315,6 +326,7 @@ export function supersede(input: SupersedeInput): TombstoneResult {
     ...(input.agent !== undefined ? { agent: input.agent } : {}),
     ...(input.now !== undefined ? { now: input.now } : {}),
     ...(input.configPath !== undefined ? { configPath: input.configPath } : {}),
+    ...(input.readable !== undefined ? { readable: input.readable } : {}),
   });
 }
 

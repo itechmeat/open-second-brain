@@ -13,7 +13,8 @@
  * core lifecycle module so the on-disk shape cannot drift.
  */
 
-import { curatorSlices } from "../../core/brain/lifecycle/curator.ts";
+import { everyArtifactRefView } from "../../core/brain/artifact-ref-view.ts";
+import { curatorSlices, type CuratorEntry } from "../../core/brain/lifecycle/curator.ts";
 import {
   temporalReplace,
   TemporalReplaceError,
@@ -24,20 +25,18 @@ import {
   tombstone,
   TombstoneError,
 } from "../../core/brain/lifecycle/tombstone.ts";
+import { gatedOwnerScopeView } from "../../core/brain/owner-scope-view.ts";
+import { reachView } from "../../core/brain/reach-view.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
-import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
+import { contextReach, type ServerContext, type ToolDefinition } from "../tool-contract.ts";
 import { coerceStr, unknownOperationError } from "../coerce.ts";
+import { readableAtContextReachOrUndefined } from "./reach-readable.ts";
 import { coerceNonNegativeInteger, wrapToolErrors } from "./shared.ts";
 
 const TOOL = "brain_lifecycle";
 
 /** Project curator slice rows into the tool's snake_cased response shape. */
-function renderCuratorRows(
-  rows: ReadonlyArray<{
-    key: string;
-    reuse: { used: number; ignored: number; contradicted: number };
-  }>,
-): Array<Record<string, unknown>> {
+function renderCuratorRows(rows: ReadonlyArray<CuratorEntry>): Array<Record<string, unknown>> {
   return rows.map((r) => ({
     key: r.key,
     used: r.reuse.used,
@@ -53,6 +52,10 @@ async function toolBrainLifecycle(
   return wrapToolErrors(TOOL, [TombstoneError, TemporalReplaceError], async () => {
     const action = coerceStr(args, "action", true)!;
     const agent = coerceStr(args, "agent", false) ?? undefined;
+    // Every write answers at the caller's reach: a page it may not read is
+    // refused as a missing one, before anything is written.
+    const readable = readableAtContextReachOrUndefined(ctx);
+    const reachOpt = readable !== undefined ? { readable } : {};
 
     switch (action) {
       case "tombstone": {
@@ -65,6 +68,7 @@ async function toolBrainLifecycle(
           reason,
           ...(supersededBy ? { supersededBy } : {}),
           ...(agent ? { agent } : {}),
+          ...reachOpt,
         });
         return {
           action,
@@ -84,6 +88,7 @@ async function toolBrainLifecycle(
           successor,
           ...(reason ? { reason } : {}),
           ...(agent ? { agent } : {}),
+          ...reachOpt,
         });
         return {
           action,
@@ -102,6 +107,7 @@ async function toolBrainLifecycle(
           successor,
           at,
           ...(agent ? { agent } : {}),
+          ...reachOpt,
         });
         return {
           action,
@@ -125,11 +131,19 @@ async function toolBrainLifecycle(
       case "curator": {
         const highUseMin = coerceNonNegativeInteger(TOOL, "high_use_min", args["high_use_min"]);
         const slices = curatorSlices(ctx.vault, highUseMin !== undefined ? { highUseMin } : {});
+        // A row's key is the page path or the memory id; a row naming a
+        // page the caller may not see is left out.
+        const view = everyArtifactRefView(
+          gatedOwnerScopeView(ctx.vault, ctx.agentName),
+          reachView(ctx.vault, contextReach(ctx)),
+        );
+        const rows = (entries: ReadonlyArray<CuratorEntry>) =>
+          renderCuratorRows(view.keep(entries, (e) => [e.key]));
         return {
           action,
-          injected_never_used: renderCuratorRows(slices.injectedNeverUsed),
-          contradicted: renderCuratorRows(slices.contradicted),
-          high_used: renderCuratorRows(slices.highUsed),
+          injected_never_used: rows(slices.injectedNeverUsed),
+          contradicted: rows(slices.contradicted),
+          high_used: rows(slices.highUsed),
         };
       }
       default:
