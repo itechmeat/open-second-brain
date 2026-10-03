@@ -50,7 +50,7 @@ reference it finds (`removed-tool-reference`).
 ## Upgrading to 1.70.0
 
 One step is required for Hermes users: update the `o2b` CLI and the
-Hermes plugin together. Six changes are visible to an operator or a
+Hermes plugin together. Seven changes are visible to an operator or a
 client.
 
 **Update `o2b` and the Hermes plugin together.** The Hermes plugin now
@@ -103,7 +103,10 @@ optional `scoped_rules` key. Every write path now refuses paths inside
 
 **`o2b mcp --harness <id>`.** A new optional flag naming the harness;
 an unknown value exits `2`. `--host-target` now also stands in for it
-when it is absent.
+when it is absent, and a refused `--host-target` value is now echoed as
+a JSON string with its control characters escaped, as a refused
+`--harness` value is; a script that matches the raw value on stderr must
+match the quoted one.
 
 **More brief and doctor counts answer at the caller's reach.** Below
 local reach `brain_brief` `view="today"` no longer lists an open loop
@@ -113,21 +116,31 @@ its doctor and digest counts, top actions, verification entries and
 trust verdict from what the caller may see, and the `brain_doctor`
 removed-tool warning cap, `uncertain` cap, stale-dependency counts,
 concept-gap and contradiction detectors and instruction-file warnings
-leave out what the caller cannot read. `brain_obligation`,
+leave out what the caller cannot read, and the `brain_doctor` `repair`
+preview plans from the same checks. `brain_obligation`,
 `brain_intention`, `brain_health`, `brain_trigger` scans,
 `brain_stale_scan`, `brain_review_candidates`, `brain_intent_review`,
-`brain_retention` and `brain_context_receipts` answer the same way. A local caller and the
-CLI see no change.
+`brain_retention`, `brain_tension` and `brain_context_receipts` answer
+the same way. A local caller and the CLI see no change.
 
 **A remote client runs only a dry dream.** Below local reach (an HTTP
 bind on a non-loopback interface) `brain_dream` serves a dry run and
 refuses a real pass, a step and the staged lifecycle, and
 `brain_maintenance` refuses `run`; schedule them on the vault's own
 host (`o2b brain dream`, `o2b brain maintenance run`, or a stdio or
-loopback client). The evidence, feedback, derived-fact, decision,
-label, scaffold, chain-tip, dead-end, diarize, hygiene refresh and
-anticipatory-context tools treat a page the caller cannot read as
-absent.
+loopback client). The lifecycle (including the chain tip), expire,
+evidence, feedback, derived-fact, decision, label, scaffold, dead-end,
+diarize, hygiene refresh and anticipatory-context tools treat a page the
+caller cannot read as absent, and a write aimed at such a page is
+refused before anything is written.
+
+**Derived pages keep the visibility of their sources.** A preference
+the dream pass drafts from signals reserved with `visibility`, or that
+supersedes or rebuts a reserved record, now carries the strictest
+`visibility` of those sources, and a tension page carries the stricter
+`visibility` of its two source notes, refreshed when it is detected
+again. Such pages were written without a `visibility` line before, so
+they may now be withheld from a remote caller.
 
 ## Upgrading to 1.69.0
 

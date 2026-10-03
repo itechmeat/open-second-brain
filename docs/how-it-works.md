@@ -589,8 +589,8 @@ preference, lesson and context pack that follows. Each file gets a
 subheading, and its own text follows as written. A file that cannot be
 read is replaced by one line, `UNAVAILABLE: <vault-relative path> could
 not be read (<error code>).`, and so is a file or an axis folder that is
-a symbolic link leading out of the vault; an empty or missing file is no
-rule.
+a symbolic link leading out of the vault, with the code `ESCAPE`; an
+empty or missing file is no rule.
 
 Where each layer renders:
 

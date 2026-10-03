@@ -296,6 +296,10 @@ $ o2b mcp --harness nope
 o2b mcp: invalid --harness value: "nope"; expected one of: aider, claude-code, codex, copilot-cli, cursor, gemini-cli, generic, grok, hermes, kiro, openclaw, opencode, pi
 ```
 
+Both refusals echo the value as a JSON string with every control
+character escaped; a refused `--host-target` value was echoed raw before
+v1.70.0.
+
 The Claude Code plugin registers both of its servers with
 `--harness claude-code`, and the Hermes plugin launches its bridge with
 `--harness hermes`.
