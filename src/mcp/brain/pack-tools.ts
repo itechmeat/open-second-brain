@@ -401,16 +401,21 @@ async function toolBrainContextReceipts(
   throw unknownOperationError("brain_context_receipts: operation must be list, show, or summary");
 }
 
+/** Predicate: a receipt item whose `id` is one of `ids`. */
+const itemIdIn =
+  (ids: ReadonlySet<string>) =>
+  (item: unknown): boolean => {
+    const id = (item as { id?: unknown } | null)?.id;
+    return typeof id === "string" && ids.has(id);
+  };
+
 /** Receipt items naming the operator-rule blocks the SessionStart hook injected. */
 const OPERATOR_RULE_ITEM_IDS: ReadonlySet<string> = new Set([
   RECEIPT_ITEM_STANDING_RULES,
   RECEIPT_ITEM_SCOPED_RULES,
 ]);
 
-function isOperatorRuleItem(item: unknown): boolean {
-  const id = (item as { id?: unknown } | null)?.id;
-  return typeof id === "string" && OPERATOR_RULE_ITEM_IDS.has(id);
-}
+const isOperatorRuleItem = itemIdIn(OPERATOR_RULE_ITEM_IDS);
 
 /**
  * A measured injection receipt whose every item was an operator-rule
@@ -439,10 +444,7 @@ const BUDGETED_BODY_ITEM_IDS: ReadonlySet<string> = new Set([
   RECEIPT_ITEM_LESSONS_BODY,
 ]);
 
-function isBudgetedBodyItem(item: unknown): boolean {
-  const id = (item as { id?: unknown } | null)?.id;
-  return typeof id === "string" && BUDGETED_BODY_ITEM_IDS.has(id);
-}
+const isBudgetedBodyItem = itemIdIn(BUDGETED_BODY_ITEM_IDS);
 
 /** Payload fields of an injection receipt whose figures include the operator-rule blocks. */
 const INJECTION_TOTAL_FIELDS = ["final_text_hash", "final_text_chars"] as const;
