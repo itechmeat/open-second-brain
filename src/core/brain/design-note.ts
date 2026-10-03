@@ -54,7 +54,7 @@ import {
   type LinkCandidateManifest,
 } from "./notes/link-candidates.ts";
 import { ownerScopeView } from "./owner-scope-view.ts";
-import { decisionsDir } from "./paths.ts";
+import { BRAIN_TENSIONS_REL, decisionsDir } from "./paths.ts";
 import {
   assertResponseCheck,
   registerResponseCheck,
@@ -278,13 +278,25 @@ registerResponseCheck(DESIGN_NOTE_SURFACE, (payload) => {
 /**
  * Read the three stores and keep what the topic reaches. Pure read; writes
  * nothing, calls no model, and never fails on an empty vault.
+ *
+ * `visible` is asked about each tension and decision page by its
+ * vault-relative path before the page is scored or counted, so a page
+ * the caller may not read is matched, listed and counted exactly as an
+ * absent one (an empty store included). Absent, every page is visible.
  */
-export function designNoteGrounding(vault: string, topic: string): DesignNoteGrounding {
+export function designNoteGrounding(
+  vault: string,
+  topic: string,
+  visible?: (rel: string) => boolean,
+): DesignNoteGrounding {
   const trimmed = requireTopic(topic);
   const queryTokens = tokenise(trimmed);
   const emptyStores: DesignNoteStore[] = [];
+  const reads = visible !== undefined ? { readable: visible } : {};
 
-  const allTensions = listTensions(vault);
+  const allTensions = listTensions(vault).filter(
+    (record) => visible === undefined || visible(`${BRAIN_TENSIONS_REL}/tension-${record.slug}.md`),
+  );
   if (allTensions.length === 0) emptyStores.push(DESIGN_NOTE_STORE.tensions);
   const tensions = allTensions
     .map((record) => ({ record, score: tensionScore(queryTokens, record) }))
@@ -304,11 +316,11 @@ export function designNoteGrounding(vault: string, topic: string): DesignNoteGro
 
   // The decision store owns its own matcher; reusing it keeps one ranking
   // rule for "a decision like this one" across every surface that asks.
-  if (listDecisions(vault).length === 0) emptyStores.push(DESIGN_NOTE_STORE.decisions);
+  if (listDecisions(vault, reads).length === 0) emptyStores.push(DESIGN_NOTE_STORE.decisions);
   const decisions = findSimilarDecisions(
     vault,
     { title: trimmed },
-    { threshold: DESIGN_NOTE_MATCH_THRESHOLD, limit: DESIGN_NOTE_PER_STORE_LIMIT },
+    { threshold: DESIGN_NOTE_MATCH_THRESHOLD, limit: DESIGN_NOTE_PER_STORE_LIMIT, ...reads },
   ).map((match) =>
     Object.freeze({
       id: match.id,
@@ -384,13 +396,15 @@ export function planDesignNote(
   opts: PlanDesignNoteOptions,
 ): DesignNoteReport {
   const trimmed = requireTopic(topic);
-  const grounding = designNoteGrounding(vault, trimmed);
+  const ownerView = ownerScopeView(vault, opts.ownerScope);
+  const visible = (rel: string): boolean =>
+    ownerView.visible(rel) && (opts.readable?.(rel) ?? true);
+  const grounding = designNoteGrounding(vault, trimmed, visible);
   const slug = slugify(trimmed);
   const targetPath = posix.join(DESIGN_NOTE_DIR_REL, noteBasename(slug, opts.now));
-  const ownerView = ownerScopeView(vault, opts.ownerScope);
   const linkCandidates = buildLinkCandidateManifest(vault, {
     query: trimmed,
-    visible: (rel) => ownerView.visible(rel) && (opts.readable?.(rel) ?? true),
+    visible,
   });
   return Object.freeze({
     topic: trimmed,

@@ -31,6 +31,8 @@ const PUBLIC_SLUG = "adopt-the-bun-runtime";
 const PRIVATE_TITLE = "Adopt the nightingale vendor";
 const PRIVATE_SLUG = "adopt-the-nightingale-vendor";
 const PRIVATE_DECISION = `Brain/decisions/decision-${PRIVATE_SLUG}.md`;
+/** The review obligation recording opens; its title names the decision, so it is reserved too. */
+const PRIVATE_REVIEW = `Brain/obligations/review-decision-${PRIVATE_SLUG}.md`;
 const RECALL_CONFIG = ["decision_recall.max_per_session: 3"];
 
 const bases: string[] = [];
@@ -71,6 +73,7 @@ function fixture(withPrivate: boolean): Fixture {
   if (withPrivate) {
     record(f, PRIVATE_TITLE, 5);
     reserve(f, PRIVATE_DECISION);
+    reserve(f, PRIVATE_REVIEW);
   }
   return f;
 }
@@ -140,6 +143,23 @@ describe("brain_decision answers at the caller's reach", () => {
       expect(writtenBytes(a)).toEqual(before);
     });
   }
+
+  test("remote reach: brain_design_note grounds on no withheld decision", async () => {
+    const args = { topic: "Adopt the nightingale vendor" };
+    const call = async (f: Fixture, reach?: TransportReach) => {
+      try {
+        const result = await reachServer(f, reach).callTool("brain_design_note", args);
+        return maskVolatile(f, result["structuredContent"] ?? result);
+      } catch (error) {
+        return maskVolatile(f, { error: (error as Error).message });
+      }
+    };
+    const withheld = await call(fixture(true));
+    expect(withheld).toBe(await call(fixture(false)));
+    expect(withheld).not.toContain("nightingale vendor now");
+    // Local control: the operator's own plan does ground on it.
+    expect(await call(fixture(true), TRANSPORT_REACH.local)).toContain("nightingale vendor now");
+  });
 
   test("remote reach: a readable decision still takes an outcome", async () => {
     const args = { action: "outcome", slug: PUBLIC_SLUG, outcome: "It held." };
