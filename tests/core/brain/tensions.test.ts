@@ -15,12 +15,14 @@ import {
   persistTension,
   resolveTension,
   showTension,
+  strictestVisibility,
   TENSION_STATUS,
   TENSION_TYPE,
   TensionError,
   tensionDedupKey,
   tensionWarningsForContextItems,
 } from "../../../src/core/brain/tensions.ts";
+import { REMOTE_DENY_VISIBILITY_TOKEN as RESERVED } from "../../../src/core/graph/visibility.ts";
 
 let vault: string;
 
@@ -199,5 +201,23 @@ describe("tensionWarningsForContextItems", () => {
     const { record } = persistTension(vault, finding(), { agent: "tester" });
     dismissTension(vault, record.slug, { agent: "tester" });
     expect(tensionWarningsForContextItems(vault, ["pref-tabs", "pref-spaces"]).length).toBe(0);
+  });
+});
+
+describe("strictestVisibility", () => {
+  test("the reserved token on either side wins alone", () => {
+    expect(strictestVisibility([RESERVED, "team"], [])).toEqual([RESERVED]);
+    expect(strictestVisibility(["team"], [RESERVED])).toEqual([RESERVED]);
+  });
+
+  test("a default-visibility side takes the other side's tokens", () => {
+    expect(strictestVisibility([], ["team"])).toEqual(["team"]);
+    expect(strictestVisibility(["team"], [])).toEqual(["team"]);
+    expect(strictestVisibility([], [])).toEqual([]);
+  });
+
+  test("two tagged sides keep the shared tokens, or the reserved token when none is shared", () => {
+    expect(strictestVisibility(["team", "ops"], ["ops", "qa"])).toEqual(["ops"]);
+    expect(strictestVisibility(["team"], ["qa"])).toEqual([RESERVED]);
   });
 });

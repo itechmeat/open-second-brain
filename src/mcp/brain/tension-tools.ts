@@ -30,10 +30,12 @@ import {
 } from "../../core/brain/tensions.ts";
 import { verifyTensions } from "../../core/brain/tension-verdicts.ts";
 import { verdictFields } from "../../core/decision-model/pair-verdict.ts";
+import { vaultRelative } from "../../core/path-safety.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceBool, coerceStr, unknownOperationError } from "../coerce.ts";
+import { readableAtContextReachOrUndefined, type ReadablePredicate } from "./reach-readable.ts";
 import { wrapToolErrors } from "./shared.ts";
 
 const TOOL = "brain_tension";
@@ -53,6 +55,36 @@ function renderRow(t: TensionRecord): Record<string, unknown> {
   };
 }
 
+/**
+ * May the caller read this tension page? The page carries the stricter
+ * `visibility:` of its two source notes, so the page's own rule is the
+ * notes' rule. `readable` undefined withholds nothing.
+ */
+function tensionReadable(
+  vault: string,
+  readable: ReadablePredicate | undefined,
+  t: TensionRecord,
+): boolean {
+  return readable === undefined || readable(vaultRelative(t.path, vault));
+}
+
+/**
+ * One tension by slug, or a typed `no tension` error when it is absent
+ * or withheld from the caller: the two answer alike, so the error does
+ * not confirm the page exists.
+ */
+function readableTension(
+  vault: string,
+  readable: ReadablePredicate | undefined,
+  slug: string,
+): TensionRecord {
+  const t = showTension(vault, slug);
+  if (t === null || !tensionReadable(vault, readable, t)) {
+    throw new TensionError(`no tension: ${slug}`);
+  }
+  return t;
+}
+
 async function toolBrainTension(
   ctx: ServerContext,
   args: Record<string, unknown>,
@@ -61,6 +93,13 @@ async function toolBrainTension(
     const action = coerceStr(args, "action", true)!;
     const agent = coerceStr(args, "agent", false) ?? undefined;
     const reason = coerceStr(args, "reason", false) ?? undefined;
+    // Every action answers at the caller's reach: detect reads only the
+    // notes it may read, and a tension page it may not read is left out
+    // of list and verify and answered as absent by show and the
+    // transitions, before anything is written.
+    const readable = readableAtContextReachOrUndefined(ctx);
+    const visible = (rows: ReadonlyArray<TensionRecord>): TensionRecord[] =>
+      rows.filter((t) => tensionReadable(ctx.vault, readable, t));
 
     switch (action) {
       case "detect":
@@ -79,6 +118,7 @@ async function toolBrainTension(
         const res = detectTensionsInVault(ctx.vault, {
           ...(jaccard !== undefined ? { jaccard } : {}),
           ...(agent ? { agent } : {}),
+          ...(readable !== undefined ? { readable } : {}),
         });
         return {
           action,
@@ -91,12 +131,11 @@ async function toolBrainTension(
       case "list": {
         const unresolved = coerceBool(args, "unresolved");
         const rows = unresolved ? listUnresolvedTensions(ctx.vault) : listTensions(ctx.vault);
-        return { action, tensions: rows.map(renderRow) };
+        return { action, tensions: visible(rows).map(renderRow) };
       }
       case "show": {
         const slug = coerceStr(args, "slug", true)!;
-        const t = showTension(ctx.vault, slug);
-        if (t === null) throw new TensionError(`no tension: ${slug}`);
+        const t = readableTension(ctx.vault, readable, slug);
         return {
           action,
           ...renderRow(t),
@@ -123,6 +162,7 @@ async function toolBrainTension(
             : action === "dismiss"
               ? dismissTension
               : resolveTension;
+        readableTension(ctx.vault, readable, slug);
         const t = fn(ctx.vault, slug, opts);
         return { action, ...renderRow(t) };
       }
@@ -130,11 +170,9 @@ async function toolBrainTension(
         const slug = coerceStr(args, "slug", false);
         let records: TensionRecord[];
         if (slug) {
-          const t = showTension(ctx.vault, slug);
-          if (t === null) throw new TensionError(`no tension: ${slug}`);
-          records = [t];
+          records = [readableTension(ctx.vault, readable, slug)];
         } else {
-          records = listUnresolvedTensions(ctx.vault);
+          records = visible(listUnresolvedTensions(ctx.vault));
         }
         const verified = await verifyTensions(ctx.vault, records, { configPath: ctx.configPath });
         return {
