@@ -783,9 +783,13 @@ async function toolBrainApplyEvidence(
   // payload that explains what to do next, not a JSON-RPC error frame.
   // v0.10.16: assert applier role at the MCP boundary so the structural
   // permission gate fires before any I/O.
+  // A preference the caller may not read is refused as a missing one,
+  // before anything is written.
+  const readable = readableAtContextReachOrUndefined(ctx);
   try {
     const res = appendApplyEvidence(ctx.vault, input, {
       role: BRAIN_ROLES.applier,
+      ...(readable !== undefined ? { readable } : {}),
     });
     return {
       logged_at: res.logged_at,

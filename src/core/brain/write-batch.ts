@@ -44,6 +44,7 @@ import { DEGRADATION_CODE } from "../integrity/degradation.ts";
 import { writePathAdvisoryField, type WritePathAdvisoryField } from "./write-path-advisory.ts";
 import {
   appendApplyEvidence,
+  isApplyEvidenceTargetPresent,
   type AppendApplyEvidenceInput,
   type AppendApplyEvidenceOptions,
 } from "./apply-evidence.ts";
@@ -570,7 +571,7 @@ function projectOperation(
     case "append_note":
       return projectAppendNote(vault, operation as AppendNoteOperation, index, noteTargets, opts);
     case "apply_evidence":
-      return projectApplyEvidence(vault, operation as ApplyEvidenceOperation, index);
+      return projectApplyEvidence(vault, operation as ApplyEvidenceOperation, index, opts.readable);
     case "append_log_line":
       return projectAppendLogLine(vault, operation as AppendLogLineOperation, index);
     default:
@@ -925,6 +926,7 @@ function projectApplyEvidence(
   vault: string,
   op: ApplyEvidenceOperation,
   index: number,
+  readable: ((rel: string) => boolean) | undefined,
 ): PlannedOperation {
   const input = op.input;
   if (input === null || typeof input !== "object") {
@@ -964,7 +966,8 @@ function projectApplyEvidence(
     );
   }
   // Existence pre-check mirrors appendApplyEvidence's own resolution so a
-  // missing preference aborts the whole batch before any write happens.
+  // missing preference aborts the whole batch before any write happens. A
+  // preference the caller may not read is answered as a missing one.
   const slug = prefId.startsWith("pref-") ? prefId.slice("pref-".length) : prefId;
   try {
     validateSlug(slug);
@@ -975,7 +978,7 @@ function projectApplyEvidence(
       `operation ${index}: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
-  if (!existsSync(preferencePath(vault, slug))) {
+  if (!isApplyEvidenceTargetPresent(vault, preferencePath(vault, slug), readable)) {
     throw new WriteBatchError(
       "preference_not_found",
       index,
@@ -985,7 +988,10 @@ function projectApplyEvidence(
   }
   return {
     commit: () => {
-      const res = appendApplyEvidence(vault, input, op.options ?? {});
+      const res = appendApplyEvidence(vault, input, {
+        ...op.options,
+        ...(readable !== undefined ? { readable } : {}),
+      });
       return { kind: "apply_evidence", logged_at: res.logged_at, log_path: res.log_path };
     },
   };

@@ -32,6 +32,7 @@
 import { existsSync } from "node:fs";
 import { join, relative } from "node:path";
 
+import { vaultRelative } from "../path-safety.ts";
 import { sanitiseTextField } from "../redactor.ts";
 import {
   computePayloadHash,
@@ -142,6 +143,26 @@ export interface AppendApplyEvidenceOptions {
    * the default is to preserve pre-v0.10.16 behaviour.
    */
   readonly role?: BrainRole;
+  /**
+   * The vault-relative paths the caller may read. A preference file it
+   * may not read is refused with {@link BrainPreferenceNotFoundError}
+   * exactly as a missing one is, before anything is written. Absent,
+   * every preference counts.
+   */
+  readonly readable?: (rel: string) => boolean;
+}
+
+/**
+ * Does `prefFilePath` name a preference the caller may record evidence
+ * against? A file the caller may not read answers as a missing one.
+ */
+export function isApplyEvidenceTargetPresent(
+  vault: string,
+  prefFilePath: string,
+  readable: ((rel: string) => boolean) | undefined,
+): boolean {
+  if (!existsSync(prefFilePath)) return false;
+  return readable === undefined || readable(vaultRelative(prefFilePath, vault));
 }
 
 export interface AppendApplyEvidenceResult {
@@ -224,7 +245,7 @@ export function appendApplyEvidence(
   }
   validateSlug(slug);
   const prefFilePath = preferencePath(vault, slug);
-  if (!existsSync(prefFilePath)) {
+  if (!isApplyEvidenceTargetPresent(vault, prefFilePath, opts.readable)) {
     throw new BrainPreferenceNotFoundError(`pref-${slug}`, prefFilePath);
   }
   // Parse so a corrupted target produces a meaningful error rather
