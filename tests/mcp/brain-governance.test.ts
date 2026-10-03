@@ -262,6 +262,19 @@ test("brain_maintenance run executes the lane; status reads the journal", async 
   expect((status["journal"] as unknown[]).length).toBeGreaterThanOrEqual(2);
 });
 
+test("brain_maintenance run is allowed at local reach when the owner scope gate is enforced", async () => {
+  // The guard is the transport reach, not the owner gate: a local caller
+  // with `owner_scope_delivery: fail` is still the operator.
+  const brainYaml = join(vault, "Brain", "_brain.yaml");
+  const existing = readFileSync(brainYaml, "utf8");
+  if (/^integrity:/m.test(existing)) throw new Error("fixture already has an integrity block");
+  writeFileSync(brainYaml, `${existing.trimEnd()}\nintegrity:\n  owner_scope_delivery: fail\n`);
+  const server = new MCPServer({ vault, configPath }, { reach: "local" });
+  await initialize(server);
+  const ran = await call(server, "brain_maintenance", { operation: "run", force: true });
+  expect(ran["verdict"]).toBe("run");
+});
+
 /** Every file under `root` with its bytes. */
 function treeBytes(root: string, rel = ""): Record<string, string> {
   const out: Record<string, string> = {};

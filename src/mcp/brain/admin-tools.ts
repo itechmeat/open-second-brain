@@ -10,6 +10,7 @@ import { existsSync } from "node:fs";
 import { relative } from "node:path";
 
 import { toPosix } from "../../core/path-safety.ts";
+import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { reachView } from "../../core/brain/reach-view.ts";
 import { resolveAgentName } from "../../core/config.ts";
 import { resolveSearchConfig } from "../../core/search/index.ts";
@@ -385,8 +386,10 @@ async function toolBrainMaintenance(
   // reindexing and the operator's custom tasks - over every page of the
   // vault, so it is the operator's own operation. Below local reach it is
   // refused with one fixed sentence, before the lease or any write, and
-  // whatever the vault holds.
-  if (readableAtContextReachOrUndefined(ctx) !== undefined) {
+  // whatever the vault holds. The test is the transport reach itself, not
+  // the owner gate: an owner-gated caller at local reach is still the
+  // operator.
+  if (contextReach(ctx) !== TRANSPORT_REACH.local) {
     throw new MCPError(INVALID_PARAMS, MAINTENANCE_RUN_LOCAL_ONLY);
   }
   let window: DailyWindow | undefined;
