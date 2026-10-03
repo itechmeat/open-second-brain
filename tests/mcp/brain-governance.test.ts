@@ -6,7 +6,7 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -16,6 +16,7 @@ import { resetFreezeMarkerCache } from "../../src/core/brain/freeze-marker.ts";
 import { setSecret } from "../../src/core/brain/secrets/store.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
+import { MAINTENANCE_RUN_LOCAL_ONLY } from "../../src/mcp/brain/admin-tools.ts";
 
 let tmp: string;
 let vault: string;
@@ -246,7 +247,8 @@ test("brain_secrets lists metadata only and refuses a non-allowlisted run", asyn
 });
 
 test("brain_maintenance run executes the lane; status reads the journal", async () => {
-  const server = new MCPServer({ vault, configPath });
+  // A lane run is the operator's own operation: local reach only.
+  const server = new MCPServer({ vault, configPath }, { reach: "local" });
   await initialize(server);
   const ran = await call(server, "brain_maintenance", { operation: "run" });
   expect(ran["verdict"]).toBe("run");
@@ -258,4 +260,28 @@ test("brain_maintenance run executes the lane; status reads the journal", async 
   const status = await call(server, "brain_maintenance", { operation: "status" });
   expect(status["lease"]).toBeNull();
   expect((status["journal"] as unknown[]).length).toBeGreaterThanOrEqual(2);
+});
+
+/** Every file under `root` with its bytes. */
+function treeBytes(root: string, rel = ""): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const entry of readdirSync(join(root, rel), { withFileTypes: true })) {
+    const child = rel === "" ? entry.name : `${rel}/${entry.name}`;
+    if (entry.isDirectory()) Object.assign(out, treeBytes(root, child));
+    else out[child] = readFileSync(join(root, child), "utf8");
+  }
+  return out;
+}
+
+test("brain_maintenance run is refused below local reach before the lease or any write", async () => {
+  const before = treeBytes(vault);
+  const server = new MCPServer({ vault, configPath }, { reach: "remote" });
+  await initialize(server);
+  await expect(
+    call(server, "brain_maintenance", { operation: "run", force: true }),
+  ).rejects.toThrow(MAINTENANCE_RUN_LOCAL_ONLY);
+  expect(treeBytes(vault)).toEqual(before);
+  // Reading the lane's state is not a run, and stays open.
+  const status = await call(server, "brain_maintenance", { operation: "status" });
+  expect(status["lease"]).toBeNull();
 });

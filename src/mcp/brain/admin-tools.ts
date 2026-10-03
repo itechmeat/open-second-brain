@@ -28,7 +28,7 @@ import { loadSchemaPack } from "../../core/brain/schema-pack.ts";
 import { listSecrets } from "../../core/brain/secrets/store.ts";
 import { runWithSecret, SecretExecDeniedError } from "../../core/brain/secrets/exec.ts";
 import type { ProgressSink } from "../../core/brain/progress.ts";
-import { readableAtContextReach } from "./reach-readable.ts";
+import { readableAtContextReach, readableAtContextReachOrUndefined } from "./reach-readable.ts";
 import { requiredStringArg, toolSafeguard } from "./shared.ts";
 import { currentLease } from "../../core/brain/maintenance/lease.ts";
 import { listJournal, MAINTENANCE_JOURNAL_CAP } from "../../core/brain/maintenance/journal.ts";
@@ -344,6 +344,9 @@ async function toolBrainSecrets(
  */
 const MAX_RETRY_TASKS = LANE_TASKS.length + CUSTOM_TASK_MAX;
 
+/** The refusal of a lane run below local reach; it names nothing in the vault. */
+export const MAINTENANCE_RUN_LOCAL_ONLY = "brain_maintenance: run executes at local reach only";
+
 /** Quiet-window, lease-guarded heavy maintenance lane. */
 async function toolBrainMaintenance(
   ctx: ServerContext,
@@ -366,6 +369,14 @@ async function toolBrainMaintenance(
       journal: listJournal(ctx.vault, coerceInt(args, "limit", 10, 1, MAINTENANCE_JOURNAL_CAP)),
       ...(notice !== null ? { notice } : {}),
     };
+  }
+  // A run executes the whole lane - a real dream pass that moves records,
+  // reindexing and the operator's custom tasks - over every page of the
+  // vault, so it is the operator's own operation. Below local reach it is
+  // refused with one fixed sentence, before the lease or any write, and
+  // whatever the vault holds.
+  if (readableAtContextReachOrUndefined(ctx) !== undefined) {
+    throw new MCPError(INVALID_PARAMS, MAINTENANCE_RUN_LOCAL_ONLY);
   }
   let window: DailyWindow | undefined;
   const startHour = args["window_start_hour"];

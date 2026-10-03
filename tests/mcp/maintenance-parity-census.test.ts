@@ -65,6 +65,7 @@ import {
 } from "../../src/core/brain/maintenance/custom-tasks.ts";
 import { isOperation } from "../../src/core/brain/safeguard.ts";
 import { ADMIN_TOOLS } from "../../src/mcp/brain/admin-tools.ts";
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { INVALID_PARAMS } from "../../src/mcp/protocol.ts";
 import { homeEnv } from "../helpers/platform.ts";
@@ -422,7 +423,7 @@ describe("the two surfaces refuse the same values, not only the same names", () 
       // lane must never START on a number the other door refuses.
       expect(cli.returncode).toBe(2);
 
-      const server = new MCPServer({ vault, configPath });
+      const server = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
       await server.handleRequest({
         jsonrpc: JSONRPC_VERSION,
         id: 1,
@@ -452,7 +453,7 @@ describe("the two surfaces refuse the same values, not only the same names", () 
     // array was accepted while the schema said it could not be. After
     // deduplication a longer list always names an unknown task, so it is
     // refused by name, in the same words the CLI uses.
-    const server = new MCPServer({ vault, configPath });
+    const server = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
     await server.handleRequest({
       jsonrpc: JSONRPC_VERSION,
       id: 1,
@@ -517,7 +518,7 @@ describe("an unknown retry name is refused by name on both surfaces", () => {
     expect(cli.stderr).toContain("dreams");
     for (const task of LANE_TASKS) expect(cli.stderr).toContain(task);
 
-    const server = new MCPServer({ vault, configPath });
+    const server = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
     await server.handleRequest({
       jsonrpc: JSONRPC_VERSION,
       id: 1,
@@ -594,7 +595,7 @@ describe("declared custom tasks are retried and refused the same way on both sur
   });
 
   async function callTool(args: Record<string, unknown>) {
-    const server = new MCPServer({ vault, configPath });
+    const server = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
     await server.handleRequest({
       jsonrpc: JSONRPC_VERSION,
       id: 1,

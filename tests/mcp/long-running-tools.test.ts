@@ -48,6 +48,16 @@ import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/inde
 import { PROGRESS_META_KEY, PROGRESS_NOTIFICATION_METHOD } from "../../src/mcp/progress.ts";
 import type { JsonRpcNotification } from "../../src/mcp/protocol.ts";
 import { PROGRESS_SCHEMA } from "../../src/core/brain/progress.ts";
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
+
+/**
+ * The lane, the dream pass and their stages are the operator's own
+ * operations and run at local reach only, so every server here is the
+ * operator's own shell.
+ */
+function localServer(): MCPServer {
+  return new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
+}
 
 /** Whether sqlite-vec loaded in THIS process: the spend-surface test needs it. */
 const VEC_LOADABLE = sqliteVecLoadable();
@@ -142,7 +152,7 @@ test("brain_bridges discover aborts once its deadline has passed", async () => {
   await indexVault(
     makeConfig({ vault, dbPath: join(vault, ".open-second-brain", "brain.sqlite") }),
   );
-  const server = new MCPServer({ vault, configPath });
+  const server = localServer();
   await initialize(server);
 
   const restore = jumpingClock();
@@ -161,7 +171,7 @@ test("brain_clusters run aborts once its deadline has passed", async () => {
   await indexVault(
     makeConfig({ vault, dbPath: join(vault, ".open-second-brain", "brain.sqlite") }),
   );
-  const server = new MCPServer({ vault, configPath });
+  const server = localServer();
   await initialize(server);
 
   const restore = jumpingClock();
@@ -176,7 +186,7 @@ test("brain_clusters run aborts once its deadline has passed", async () => {
 });
 
 test("brain_dream run aborts once its deadline has passed", async () => {
-  const server = new MCPServer({ vault, configPath });
+  const server = localServer();
   await initialize(server);
 
   const restore = jumpingClock();
@@ -191,7 +201,7 @@ test("brain_dream run aborts once its deadline has passed", async () => {
 });
 
 test("brain_dream stage aborts once its deadline has passed", async () => {
-  const server = new MCPServer({ vault, configPath });
+  const server = localServer();
   await initialize(server);
 
   const restore = jumpingClock();
@@ -211,7 +221,7 @@ test("brain_dream step aborts once its deadline has passed", async () => {
   // over a large tree held the server's event loop for its whole
   // duration. It is bounded on the same `dream` budget as every other
   // branch now, and the abort names the operation rather than the step.
-  const server = new MCPServer({ vault, configPath });
+  const server = localServer();
   await initialize(server);
 
   const restore = jumpingClock();
@@ -259,7 +269,7 @@ test("brain_dream step heal-enrich reports under its own stage too", async () =>
 });
 
 test("brain_maintenance names the task whose deadline tripped", async () => {
-  const server = new MCPServer({ vault, configPath });
+  const server = localServer();
   await initialize(server);
 
   const restore = jumpingClock();
@@ -284,7 +294,7 @@ test("brain_maintenance names the task whose deadline tripped", async () => {
 });
 
 test("brain_review_candidates aborts once its deadline has passed", async () => {
-  const server = new MCPServer({ vault, configPath });
+  const server = localServer();
   await initialize(server);
 
   const restore = jumpingClock();
@@ -299,7 +309,7 @@ test("brain_review_candidates aborts once its deadline has passed", async () => 
 });
 
 test("brain_brief view=operator names the deadline its dream pass tripped", async () => {
-  const server = new MCPServer({ vault, configPath });
+  const server = localServer();
   await initialize(server);
 
   const restore = jumpingClock();
@@ -326,7 +336,7 @@ test("a live clock leaves all four tools running to completion", async () => {
   await indexVault(
     makeConfig({ vault, dbPath: join(vault, ".open-second-brain", "brain.sqlite") }),
   );
-  const server = new MCPServer({ vault, configPath });
+  const server = localServer();
   await initialize(server);
 
   const bridges = await callRaw(server, "brain_bridges", { operation: "discover" });
@@ -357,7 +367,7 @@ test.skipIf(!VEC_LOADABLE)(
       `vault: ${vault}\nagent_name: claude\nsearch_semantic_enabled: true\nembedding_provider: local\n` +
         `${MAINTENANCE_EMBEDDINGS_CONFIG_KEY}: true\n`,
     );
-    const server = new MCPServer({ vault, configPath });
+    const server = localServer();
     await initialize(server);
 
     const res = (await server.handleRequest({
@@ -403,7 +413,7 @@ test.skipIf(!VEC_LOADABLE)(
       `vault: ${vault}\nagent_name: claude\nsearch_semantic_enabled: true\nembedding_provider: local\n` +
         `${MAINTENANCE_EMBEDDINGS_CONFIG_KEY}: true\n`,
     );
-    const server = new MCPServer({ vault, configPath });
+    const server = localServer();
     await initialize(server);
     // A one-hour window the current hour cannot fall in.
     const start = (new Date().getUTCHours() + 2) % 24;
@@ -463,7 +473,10 @@ function stagesIn(frames: JsonRpcNotification[]): Set<string> {
 function observedServer(frames: JsonRpcNotification[]): MCPServer {
   return new MCPServer(
     { vault, configPath },
-    { sendNotification: (notification) => frames.push(notification) },
+    {
+      reach: TRANSPORT_REACH.local,
+      sendNotification: (notification) => frames.push(notification),
+    },
   );
 }
 
