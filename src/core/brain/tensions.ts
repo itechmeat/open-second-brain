@@ -33,7 +33,7 @@ import { normalizeAgentArgument } from "../agent-identity.ts";
 import { resolveAgentName } from "../config.ts";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { sanitiseTextField } from "../redactor.ts";
-import { pageVisibility, REMOTE_DENY_VISIBILITY_TOKEN } from "../graph/visibility.ts";
+import { pageVisibility, strictestVisibility } from "../graph/visibility.ts";
 import type { FrontmatterMap } from "../types.ts";
 import { parseFrontmatter } from "../vault.ts";
 import {
@@ -411,31 +411,6 @@ function cleanQuote(quote: string): string {
 }
 
 // ----- Visibility -----------------------------------------------------------
-
-/**
- * The stricter of two `visibility:` token lists (each already normalised
- * by `pageVisibility`), for a page derived from both pages.
- *
- * - Either list carries the reserved token: the reserved token alone,
- *   which no caller below local reach reads.
- * - One list is empty (default visibility): the other one.
- * - Both carry tokens: the tokens they share, so only a scope that
- *   reaches both pages reaches the derived one; when they share none, no
- *   single scope reaches both, and the reserved token is stamped.
- */
-export function strictestVisibility(
-  a: ReadonlyArray<string>,
-  b: ReadonlyArray<string>,
-): ReadonlyArray<string> {
-  const reserved = Object.freeze([REMOTE_DENY_VISIBILITY_TOKEN]);
-  if (a.includes(REMOTE_DENY_VISIBILITY_TOKEN) || b.includes(REMOTE_DENY_VISIBILITY_TOKEN)) {
-    return reserved;
-  }
-  if (a.length === 0) return Object.freeze([...b]);
-  if (b.length === 0) return Object.freeze([...a]);
-  const shared = a.filter((t) => b.includes(t));
-  return shared.length > 0 ? Object.freeze([...new Set(shared)]) : reserved;
-}
 
 // ----- Persist --------------------------------------------------------------
 

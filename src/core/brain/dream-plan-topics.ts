@@ -23,6 +23,7 @@
  * Pure: no I/O, no clock beyond the `now` it is handed.
  */
 
+import { strictestVisibilityOf } from "../graph/visibility.ts";
 import { applySelfApprovalGuardrail } from "./trust/self-approval-guardrail.ts";
 import {
   emptyPlan,
@@ -347,6 +348,13 @@ function planTopicWithoutActivePref(
     principle: source.principle,
     evidencedBy,
     sign: source.signal,
+    // Drafted from every windowed signal (the principle is the dominant
+    // one's, the evidence cites them all) and quoting the superseded
+    // record's principle: the strictest of their visibilities.
+    visibility: strictestVisibilityOf([
+      ...windowedSigs.map((s) => s.visibility ?? []),
+      supersedesRecord?.visibility ?? [],
+    ]),
     ...deriveSignalTemporal(source, now),
     ...(supersedesRecord
       ? {
@@ -542,6 +550,12 @@ function handleSignalsOnActivePref(
     principle: source.principle,
     evidencedBy: opposing.map((s) => `[[${s.signal.id}]]`),
     sign: oppositeSign,
+    // Drafted from the opposing signals and quoting the rebutted
+    // preference's principle: the strictest of their visibilities.
+    visibility: strictestVisibilityOf([
+      ...opposing.map((s) => s.visibility ?? []),
+      active.visibility ?? [],
+    ]),
     ...deriveSignalTemporal(source, now),
     supersedes: activeLink,
   });

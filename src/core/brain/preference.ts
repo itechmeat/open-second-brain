@@ -152,6 +152,14 @@ export interface WritePreferenceInput {
    */
   readonly owner?: string;
   /**
+   * Optional `visibility:` tokens (already normalised by `pageVisibility`).
+   * Emitted only when non-empty, so a default-visibility preference stays
+   * byte-identical. The dream pass stamps the strictest visibility of the
+   * signals a preference is drafted from; a rewrite that omits it keeps the
+   * file's own line through the tiered merge (it is a user-tier field).
+   */
+  readonly visibility?: ReadonlyArray<string>;
+  /**
    * Optional provenance trust level (Knowledge Provenance suite, v1.7).
    * Absent reads as `stated` (operator-asserted) for every existing
    * preference. A derived fact is written `deduced` or `inferred` with its
@@ -791,6 +799,9 @@ function preferenceFrontmatter(input: WritePreferenceInput, id: string): Frontma
   // Freshness trend (t_ee09a6ce): stamped by the dream refresh pass;
   // emitted only when supplied so legacy callers stay byte-identical.
   if (input.freshness_trend?.trim()) metadata["freshness_trend"] = input.freshness_trend.trim();
+  if (input.visibility !== undefined && input.visibility.length > 0) {
+    metadata["visibility"] = [...input.visibility];
+  }
   return metadata;
 }
 

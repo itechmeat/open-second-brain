@@ -15,14 +15,16 @@ import {
   persistTension,
   resolveTension,
   showTension,
-  strictestVisibility,
   TENSION_STATUS,
   TENSION_TYPE,
   TensionError,
   tensionDedupKey,
   tensionWarningsForContextItems,
 } from "../../../src/core/brain/tensions.ts";
-import { REMOTE_DENY_VISIBILITY_TOKEN as RESERVED } from "../../../src/core/graph/visibility.ts";
+import {
+  REMOTE_DENY_VISIBILITY_TOKEN as RESERVED,
+  strictestVisibility,
+} from "../../../src/core/graph/visibility.ts";
 
 let vault: string;
 

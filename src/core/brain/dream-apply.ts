@@ -187,6 +187,8 @@ function writePreferences(input: DreamApplyInput, agent: string): void {
         // F5: bi-temporal validity extracted from the source signal.
         ...(np.valid_from ? { valid_from: np.valid_from } : {}),
         ...(np.valid_until ? { valid_until: np.valid_until } : {}),
+        // The strictest visibility of the records it was drafted from.
+        ...(np.visibility.length > 0 ? { visibility: np.visibility } : {}),
       },
       [],
       { overwrite: false },

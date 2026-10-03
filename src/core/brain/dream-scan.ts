@@ -13,6 +13,8 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
+import { pageVisibility } from "../graph/visibility.ts";
+import type { FrontmatterMap } from "../types.ts";
 import { parseFrontmatter } from "../vault.ts";
 import type {
   CorruptedEntry,
@@ -97,6 +99,15 @@ function markdownFilesIn(dir: string): string[] {
 }
 
 /**
+ * A record's `visibility:` tokens as a spreadable slice: `{}` for default
+ * visibility, so a record from an untagged page keeps its exact shape.
+ */
+function visibilitySlice(meta: FrontmatterMap): { visibility?: ReadonlyArray<string> } {
+  const tokens = pageVisibility(meta);
+  return tokens.length > 0 ? { visibility: Object.freeze(tokens) } : {};
+}
+
+/**
  * Signals from one directory. `inbox/`, `processed/` and `archived/` differ
  * only in the flags they stamp on each record, so they share this walk.
  */
@@ -113,12 +124,14 @@ function collectSignals(
     try {
       // Belief lifecycle suite (t_7d5a3589): a tombstoned signal is
       // excluded from the dream pass so it is never re-clustered.
-      if (isTombstoned(parseFrontmatter(full)[0])) continue;
+      const meta = parseFrontmatter(full)[0];
+      if (isTombstoned(meta)) continue;
       signals.push({
         path: full,
         signal: parseSignal(full),
         active,
         ...(archived ? { archived: true as const } : {}),
+        ...visibilitySlice(meta),
       });
     } catch {
       corrupted.push({ path: full });
@@ -144,7 +157,12 @@ function collectPreferences(
         ? (rawMeta["superseded_by"] as string)
         : null;
     try {
-      preferences.push({ path: full, pref: parsePreference(full), supersededBy });
+      preferences.push({
+        path: full,
+        pref: parsePreference(full),
+        supersededBy,
+        ...visibilitySlice(rawMeta),
+      });
     } catch {
       corrupted.push({ path: full });
     }
@@ -182,6 +200,7 @@ function collectRetired(
           principle,
           ...(scope ? { scope } : {}),
           ...(userReason ? { user_rejected_reason: userReason } : {}),
+          ...visibilitySlice(meta),
         });
       }
     } catch {

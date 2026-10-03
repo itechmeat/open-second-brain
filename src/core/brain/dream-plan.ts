@@ -106,6 +106,13 @@ export interface SignalRecord {
    * pass archived because it had left the contradiction window unconsumed.
    */
   readonly archived?: true;
+  /**
+   * The record's normalised `visibility:` tokens (`pageVisibility`), read by
+   * the scan. A preference the pass drafts from records carries the
+   * strictest of theirs, so a page drafted from reserved text stays
+   * reserved. Absent (or empty) means default visibility.
+   */
+  readonly visibility?: ReadonlyArray<string>;
 }
 
 export interface PreferenceRecord {
@@ -118,6 +125,13 @@ export interface PreferenceRecord {
    * ancestors. `null` when the memory is a chain tip.
    */
   readonly supersededBy: string | null;
+  /**
+   * The record's normalised `visibility:` tokens (`pageVisibility`), read by
+   * the scan. A preference the pass drafts from records carries the
+   * strictest of theirs, so a page drafted from reserved text stays
+   * reserved. Absent (or empty) means default visibility.
+   */
+  readonly visibility?: ReadonlyArray<string>;
 }
 
 export interface RetiredRecord {
@@ -132,6 +146,13 @@ export interface RetiredRecord {
    * same (topic, scope) — see §6 of the OSB features summary.
    */
   readonly user_rejected_reason?: string;
+  /**
+   * The record's normalised `visibility:` tokens (`pageVisibility`), read by
+   * the scan. A preference the pass drafts from records carries the
+   * strictest of theirs, so a page drafted from reserved text stays
+   * reserved. Absent (or empty) means default visibility.
+   */
+  readonly visibility?: ReadonlyArray<string>;
 }
 
 export interface CorruptedEntry {
@@ -256,6 +277,12 @@ export interface NewUnconfirmedPlan {
    */
   readonly valid_from?: string;
   readonly valid_until?: string;
+  /**
+   * The strictest `visibility:` tokens of every record the entry is drafted
+   * from (its evidencing signals and the record it supersedes). Written to
+   * the new preference's frontmatter when non-empty.
+   */
+  readonly visibility: ReadonlyArray<string>;
 }
 
 export interface RetirePlan {
