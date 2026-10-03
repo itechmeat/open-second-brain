@@ -514,6 +514,9 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
             config.resolve_timezone(),
             str(config.config_path()),
             timeout,
+            # The core derives its config, data and state directories from
+            # these, so two profiles that differ only here need two children.
+            *(env.get(name) for name in config.SCOPE_FIRST_ENV),
         )
         return env, identity, timeout
 

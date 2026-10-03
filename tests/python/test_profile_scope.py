@@ -594,6 +594,26 @@ class ScopedChildEnvironmentTests(ScopeTestCase):
             [kw["env"]["VAULT_AGENT_NAME"] for kw in built], ["agent-one", "agent-two"]
         )
 
+    def test_same_config_different_config_directories_get_two_bridges(self):
+        shared = str(self.tmp / "shared-config.yaml")
+        built = []
+        for xdg in ("profile-one-xdg", "profile-two-xdg", "profile-one-xdg"):
+            pair = make_fake_scope(
+                multiplexed=True,
+                values={
+                    "VAULT_DIR": "shared-vault",
+                    "VAULT_AGENT_NAME": "same-agent",
+                    "OPEN_SECOND_BRAIN_CONFIG": shared,
+                    "XDG_CONFIG_HOME": str(self.tmp / xdg),
+                },
+            )
+            self._initialize(pair, lambda **kw: built.append(kw) or FakeBrainBridge())
+        self.assertEqual(
+            [kw["env"]["XDG_CONFIG_HOME"] for kw in built],
+            [str(self.tmp / "profile-one-xdg"), str(self.tmp / "profile-two-xdg")],
+        )
+        self.assertEqual(len(provider_module._SHARED_BRIDGES), 2)
+
     def test_without_multiplexing_env_and_sharing_are_unchanged(self):
         os.environ["VAULT_DIR"] = "launch-vault"
         os.environ["VAULT_AGENT_NAME"] = "launch-agent-value"
