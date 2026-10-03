@@ -47,7 +47,7 @@ import { COUNT_GUARD_WIRE_CODE, TOOL_ERROR_CODE } from "../tool-error-codes.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceBoolOptional, coerceStr, unknownOperationError } from "../coerce.ts";
 import { coerceNonNegativeInteger, readCountGuardArgs } from "./shared.ts";
-import { readableAtContextReach } from "./reach-readable.ts";
+import { readableAtContextReach, readableAtContextReachOrUndefined } from "./reach-readable.ts";
 
 const TOOL = "brain_note_lifecycle";
 
@@ -277,9 +277,13 @@ async function toolBrainScaffoldStub(
     // `sources` are vault-relative document paths and `target` is the
     // link spelling, so an unscoped listing published both for a note
     // this caller may not read (a-label-is-not-a-boundary, U3).
+    // A source the caller may not read at its reach is dropped like one
+    // outside its owner scope.
+    const readable = readableAtContextReachOrUndefined(ctx);
     const scan = await listDanglingTargets(ctx.vault, {
       ...(limit !== undefined ? { limit } : {}),
       ownerScope: gatedOwnerScopeView(ctx.vault, ctx.agentName).scope,
+      ...(readable !== undefined ? { readable } : {}),
     });
     return {
       action,
@@ -301,8 +305,12 @@ async function toolBrainScaffoldStub(
   }
   const apply = coerceBoolOptional(args, "apply");
 
+  // A source the caller may not read is refused as a missing one, and an
+  // occupied-target refusal names no note it may not read.
+  const readable = readableAtContextReachOrUndefined(ctx);
   try {
     const res = scaffoldStub(ctx.vault, {
+      ...(readable !== undefined ? { readable } : {}),
       target,
       ...(path !== undefined ? { path } : {}),
       sources: coerceStringArray(args, "sources"),

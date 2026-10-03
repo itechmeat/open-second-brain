@@ -43,7 +43,7 @@
 import { statSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
 
-import { ensureInsideVault } from "../../path-safety.ts";
+import { ensureInsideVault, vaultRelative } from "../../path-safety.ts";
 import { REDACTION_PLACEHOLDER } from "../../redactor.ts";
 import { requireNextStep } from "../next-step.ts";
 import { SEARCH_INDEX_MISSING_CODE } from "../diagnostics.ts";
@@ -153,6 +153,13 @@ export interface ListDanglingOptions {
    * pointed at it.
    */
   readonly ownerScope?: string | null;
+  /**
+   * The vault-relative paths the caller may read at its reach, applied
+   * the same way as {@link ListDanglingOptions.ownerScope}: a source the
+   * caller may not read is dropped, and a target left with no source is
+   * dropped whole. Absent filters nothing.
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 /**
@@ -212,7 +219,12 @@ export async function listDanglingTargets(
     // it this way costs nothing: `listDangling` reads every unresolved
     // row out of sqlite regardless and applies `limit` while grouping.
     const scope = opts.ownerScope ?? null;
-    const visible = await visibleTargets(vault, store.listDangling(UNBOUNDED_TARGETS), scope);
+    const visible = await visibleTargets(
+      vault,
+      store.listDangling(UNBOUNDED_TARGETS),
+      scope,
+      opts.readable,
+    );
     return Object.freeze({
       state: DANGLING_SCAN.measured,
       targets: Object.freeze(visible.slice(0, limit)),
@@ -246,13 +258,17 @@ async function visibleTargets(
   vault: string,
   targets: ReadonlyArray<DanglingLinkTarget>,
   scope: string | null,
+  readable: ((rel: string) => boolean) | undefined,
 ): Promise<ReadonlyArray<DanglingLinkTarget>> {
-  if (scope === null) return targets;
+  if (scope === null && readable === undefined) return targets;
   const { ownerScopeView } = await import("../owner-scope-view.ts");
-  const view = ownerScopeView(vault, scope);
+  const view = scope === null ? null : ownerScopeView(vault, scope);
   const kept: DanglingLinkTarget[] = [];
   for (const target of targets) {
-    const sources = target.sources.filter((source) => view.visible(source));
+    const sources = target.sources.filter(
+      (source) =>
+        (view === null || view.visible(source)) && (readable === undefined || readable(source)),
+    );
     if (sources.length === 0) continue;
     kept.push(
       sources.length === target.sources.length
@@ -341,6 +357,13 @@ export interface ScaffoldStubInput {
    * like any other and is attributed like one.
    */
   readonly configPath?: string;
+  /**
+   * The vault-relative paths the caller may read at its reach. A source
+   * it may not read is refused exactly as a missing one, and a refusal
+   * about an occupied target names no note it may not read. Absent,
+   * every note may be read.
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 export interface ScaffoldStubResult {
@@ -382,18 +405,25 @@ function basenameOf(target: string): string {
  * over-answered, and a third note makes it worse. Only `not_found` /
  * `path_not_found` is a target worth materialising.
  */
-function assertMissing(vault: string, target: string): void {
+function assertMissing(
+  vault: string,
+  target: string,
+  readable: ((rel: string) => boolean) | undefined,
+): void {
+  const shown = (rel: string): boolean => readable === undefined || readable(rel);
   let resolved: string | null = null;
   try {
     resolved = resolveNoteTitle(vault, target);
   } catch (err) {
     if (err instanceof NoteTitleResolutionError) {
       if (err.code === "ambiguous") {
+        // Only the candidates the caller may read are named.
+        const candidates = err.candidates.filter(shown);
         throw new ScaffoldStubError(
           "target_ambiguous",
           `target "${target}" already names more than one note; ` +
-            `resolve the ambiguity rather than adding a third: ${err.candidates.join(", ")}`,
-          err.candidates,
+            `resolve the ambiguity rather than adding a third: ${candidates.join(", ")}`,
+          candidates,
         );
       }
       if (err.code === "empty_target") {
@@ -405,7 +435,8 @@ function assertMissing(vault: string, target: string): void {
   }
   throw new ScaffoldStubError(
     "target_resolves",
-    `target "${target}" already resolves to ${resolved}; there is nothing to materialise`,
+    `target "${target}" already resolves to ${shown(resolved) ? resolved : "a note"}; ` +
+      "there is nothing to materialise",
   );
 }
 
@@ -427,7 +458,11 @@ function assertMissing(vault: string, target: string): void {
  * re-deriving it here would make a write depend on an index the write
  * path deliberately does not consult.
  */
-function assertSourcesExist(vault: string, sources: ReadonlyArray<string>): void {
+function assertSourcesExist(
+  vault: string,
+  sources: ReadonlyArray<string>,
+  readable: ((rel: string) => boolean) | undefined,
+): void {
   for (const source of sources) {
     let abs: string;
     try {
@@ -440,7 +475,9 @@ function assertSourcesExist(vault: string, sources: ReadonlyArray<string>): void
     }
     if (
       !source.toLowerCase().endsWith(MARKDOWN_SUFFIX) ||
-      !statSync(abs, { throwIfNoEntry: false })?.isFile()
+      !statSync(abs, { throwIfNoEntry: false })?.isFile() ||
+      // A note the caller may not read is answered as a missing one.
+      (readable !== undefined && !readable(vaultRelative(abs, vault)))
     ) {
       throw new ScaffoldStubError(
         "unknown_source",
@@ -462,11 +499,11 @@ export function scaffoldStub(vault: string, input: ScaffoldStubInput): ScaffoldS
   if (target.length === 0) {
     throw new ScaffoldStubError("empty_target", "scaffold target must not be empty");
   }
-  assertMissing(vault, target);
+  assertMissing(vault, target, input.readable);
 
   const path = input.path ?? `${target}${MARKDOWN_SUFFIX}`;
   const sources = Object.freeze([...(input.sources ?? [])].toSorted());
-  assertSourcesExist(vault, sources);
+  assertSourcesExist(vault, sources, input.readable);
   // Body links are the SOURCES, spelled the way a wikilink spells a note:
   // the vault-relative path without its extension. Nothing else about a
   // target that does not exist is known, so nothing else is written.
