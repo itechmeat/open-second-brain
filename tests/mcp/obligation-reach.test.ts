@@ -9,8 +9,8 @@
  * `done` and `remove` over the two vaults must answer identically once
  * the volatile parts are masked, and the withheld page must stay
  * untouched. Vault A also holds a withheld archived page of the public
- * obligation's slug, which removing the public one must not reveal. The local control proves the withheld page is there to
- * hide.
+ * obligation's slug, which removing the public one must not reveal. The
+ * local control proves the withheld page is there to hide.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";

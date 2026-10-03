@@ -14,10 +14,10 @@
  * dream preview and the intent review fold are built the same way: vault A
  * holds a withheld inbox signal on a topic of its own and a second one on
  * the readable cluster's topic, which would move that cluster's count. A
- * server with no reach
- * minted is a remote caller: each tool's whole masked answer must be the
- * same over both vaults. The local control proves the withheld records
- * are there to list.
+ * server with no reach minted is a remote caller: each tool's whole
+ * masked answer, and that of a `brain_trigger` scan over the retention
+ * rows, must be the same over both vaults. The local control proves the
+ * withheld records are there to list.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";

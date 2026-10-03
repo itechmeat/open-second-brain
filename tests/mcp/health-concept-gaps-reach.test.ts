@@ -163,6 +163,9 @@ describe("concept gaps answer at the caller's reach", () => {
     const absent = await answer(fixture(false, true), "brain_health", {});
     expect(withheld).toBe(absent);
     expect(withheld).not.toContain(SIGNAL_MARKER);
+  });
+
+  test("local control: the operator's brain_health names the withheld signals' term", async () => {
     const local = await answer(fixture(true, true), "brain_health", {}, TRANSPORT_REACH.local);
     expect(local).toContain(SIGNAL_MARKER);
   });

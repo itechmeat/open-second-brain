@@ -142,7 +142,8 @@ describe("brain_lifecycle answers at the caller's reach", () => {
   test("local control: the operator's curator lists the withheld pages", async () => {
     const local = await answer(fixture(true), { action: "curator" }, TRANSPORT_REACH.local);
     expect(local).toContain(PRIVATE_NOTE);
-    expect(local).toContain("pref-withheld");
+    // The id-keyed row, apart from the row keyed by the preference's path.
+    expect(local).toContain('"key":"pref-withheld"');
   });
 
   test("local control: the operator's own shell tombstones the withheld page", async () => {

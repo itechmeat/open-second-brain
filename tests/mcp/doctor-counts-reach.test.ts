@@ -259,7 +259,9 @@ describe("brain_doctor counts at the caller's reach", () => {
     expect(withheld).not.toContain(PRIVATE_PATH);
   });
 
-  test("local control: the operator's repair preview counts the withheld pages in the cap", async () => {
+  test("local control: the operator's repair preview over the same vault counts the withheld pages", async () => {
+    // The removed-tool count sits at the cap either way; the withheld
+    // pages show in the codes and counts the remote preview leaves out.
     const json = await repairJson(fixture(true), TRANSPORT_REACH.local);
     expect(unfixableCount(json, REMOVED_TOOL_CODE)).toBe(PAGE_COUNT);
     expect(json).not.toBe(await repairJson(fixture(true)));
