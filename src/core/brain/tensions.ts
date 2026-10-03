@@ -410,8 +410,6 @@ function cleanQuote(quote: string): string {
   return sanitiseTextField(quote, { maxLen: QUOTE_MAX_LEN, singleLine: true }).trim();
 }
 
-// ----- Visibility -----------------------------------------------------------
-
 // ----- Persist --------------------------------------------------------------
 
 /**
