@@ -190,6 +190,25 @@ async function doctorJson(f: Fixture, reach?: TransportReach): Promise<string> {
   return maskVolatile(f, result["structuredContent"] ?? result);
 }
 
+/** The repair preview (a dry run) as JSON, with the fixture's paths and instants masked. */
+async function repairJson(f: Fixture, reach?: TransportReach): Promise<string> {
+  const result = (await reachServer(f, reach).callTool("brain_doctor", {
+    repair: true,
+    format: "json",
+  })) as Record<string, unknown>;
+  return maskVolatile(f, result["structuredContent"] ?? result);
+}
+
+interface Unfixable {
+  readonly code: string;
+  readonly count: number;
+}
+
+function unfixableCount(json: string, code: string): number | undefined {
+  const parsed = JSON.parse(json) as { repair: { unfixable: ReadonlyArray<Unfixable> } };
+  return parsed.repair.unfixable.find((u) => u.code === code)?.count;
+}
+
 async function doctor(f: Fixture, reach?: TransportReach): Promise<Report> {
   return JSON.parse(await doctorJson(f, reach)) as Report;
 }
@@ -230,6 +249,20 @@ describe("brain_doctor counts at the caller's reach", () => {
     expect(withheld).toBe(absent);
     expect(removedToolWarnings(JSON.parse(absent) as Report)).toHaveLength(PAGE_COUNT);
     expect(withheld).not.toContain(PRIVATE_PATH);
+  });
+
+  test("remote reach: the repair preview spends no slot of the removed-tool cap on withheld pages", async () => {
+    const withheld = await repairJson(fixture(true));
+    const absent = await repairJson(fixture(false));
+    expect(withheld).toBe(absent);
+    expect(unfixableCount(absent, REMOVED_TOOL_CODE)).toBe(PAGE_COUNT);
+    expect(withheld).not.toContain(PRIVATE_PATH);
+  });
+
+  test("local control: the operator's repair preview counts the withheld pages in the cap", async () => {
+    const json = await repairJson(fixture(true), TRANSPORT_REACH.local);
+    expect(unfixableCount(json, REMOVED_TOOL_CODE)).toBe(PAGE_COUNT);
+    expect(json).not.toBe(await repairJson(fixture(true)));
   });
 
   test("remote reach: a withheld closed state moves no stale-dependency count", async () => {

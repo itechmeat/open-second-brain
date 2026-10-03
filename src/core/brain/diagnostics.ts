@@ -1166,6 +1166,13 @@ export interface PlanRepairOptions {
    * cannot have.
    */
   readonly issues?: ReadonlyArray<DoctorIssue>;
+  /**
+   * The pages the caller may read, when the doctor runs here (no
+   * {@link issues} supplied). The checks then count and cap over those
+   * pages only, as `runDoctor` does with the same option. Absent, every
+   * page counts.
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 /**
@@ -1183,7 +1190,7 @@ export interface PlanRepairOptions {
  * the same findings, each with its next-command hint.
  */
 export function planRepair(vault: string, opts: PlanRepairOptions = {}): RepairPlan {
-  const issues = opts.issues ?? collectDoctorIssues(vault);
+  const issues = opts.issues ?? collectDoctorIssues(vault, opts.readable);
 
   const fixes: RepairItem[] = [];
   for (const fixer of FIXERS) {
@@ -1216,8 +1223,11 @@ export function planRepair(vault: string, opts: PlanRepairOptions = {}): RepairP
 }
 
 /** The doctor's errors and warnings as one stream, in report order. */
-function collectDoctorIssues(vault: string): ReadonlyArray<DoctorIssue> {
-  const doctor = runDoctor(vault);
+function collectDoctorIssues(
+  vault: string,
+  readable: ((rel: string) => boolean) | undefined,
+): ReadonlyArray<DoctorIssue> {
+  const doctor = runDoctor(vault, readable !== undefined ? { readable } : {});
   return [...doctor.errors, ...doctor.warnings];
 }
 
@@ -1271,6 +1281,14 @@ export interface ApplyRepairOptions {
    * CLI) and only {@link ownerScope} bounds the plan.
    */
   readonly reach?: TransportReach;
+  /**
+   * The pages the caller may read at {@link reach}. The doctor's checks
+   * count and cap over these pages before any finding exists to filter:
+   * a withheld page spends no slot of a capped warning and a withheld
+   * principle adds no concept gap, so the unfixable counts match a vault
+   * that never held them. Absent, every page counts.
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 /** The fields a doctor finding names artifacts in. */
@@ -1347,9 +1365,11 @@ export function applyRepair(vault: string, opts: ApplyRepairOptions): RepairOutc
   // are bounded again by what each one would name, so a fix that reaches
   // a withheld page through its detail is not planned either.
   const plan = view.filtersNothing
-    ? planRepair(vault)
+    ? planRepair(vault, opts.readable !== undefined ? { readable: opts.readable } : {})
     : planRepair(vault, {
-        issues: view.keep(collectDoctorIssues(vault), (i) => doctorIssueRefs(vault, i)),
+        issues: view.keep(collectDoctorIssues(vault, opts.readable), (i) =>
+          doctorIssueRefs(vault, i),
+        ),
       });
   const fixes = view.keep(plan.fixes, repairRefs);
   const needsReview = fixes.filter((f) => !f.applicable);

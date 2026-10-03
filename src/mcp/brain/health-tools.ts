@@ -118,6 +118,11 @@ async function toolBrainDoctor(
   if (apply && !repair) {
     throw new Error("brain_doctor: apply requires repair");
   }
+  // The counts the checks take before any finding is filtered - the
+  // removed-tool warning cap, the stale-dependency note, the concept
+  // gaps - are taken over the pages this caller may read, in the repair
+  // preview as in the report.
+  const readable = readableAtContextReachOrUndefined(ctx);
   if (repair) {
     if (strict && apply) {
       throw new Error("brain_doctor: cannot combine strict (read-only) with repair + apply");
@@ -134,11 +139,11 @@ async function toolBrainDoctor(
       // And by the caller's reach: a record it cannot read there is
       // neither planned nor written, and counts toward nothing.
       reach: contextReach(ctx),
+      ...(readable !== undefined ? { readable } : {}),
     });
     return { format, repair: outcome };
   }
 
-  const readable = readableAtContextReachOrUndefined(ctx);
   const result = runDoctor(ctx.vault, {
     strict,
     dbPath: resolveSearchConfig({ vault: ctx.vault, configPath: ctx.configPath ?? undefined })
@@ -147,9 +152,6 @@ async function toolBrainDoctor(
     // the config this server was started against, not whatever default
     // discovery would find.
     ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
-    // The counts the checks take before any finding is filtered below -
-    // the removed-tool warning cap, the stale-dependency note - are taken
-    // over the pages this caller may read.
     ...(readable !== undefined ? { readable } : {}),
   });
 

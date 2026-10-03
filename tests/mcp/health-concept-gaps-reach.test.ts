@@ -32,6 +32,8 @@ import {
 /** The phrase the withheld principles repeat, so it surfaces as a concept gap. */
 const MARKER = "zzquartz harbor";
 const WITHHELD_COUNT = 6;
+/** The doctor code a recurring uncovered term is reported under. */
+const CONCEPT_GAP_CODE = "concept-gap";
 const RESERVE_LINE = `visibility: [${REMOTE_DENY_VISIBILITY_TOKEN}]`;
 
 const bases: string[] = [];
@@ -107,6 +109,12 @@ describe("concept gaps answer at the caller's reach", () => {
     expect(withheld).not.toContain(MARKER);
   });
 
+  test("remote reach: the brain_doctor repair preview counts no concept gap from withheld principles", async () => {
+    const [withheld, absent] = await remotePair("brain_doctor", { repair: true, format: "json" });
+    expect(withheld).toBe(absent);
+    expect(withheld).not.toContain(CONCEPT_GAP_CODE);
+  });
+
   test("remote reach: brain_trigger scan counts no candidate from withheld records", async () => {
     const [withheld, absent] = await remotePair("brain_trigger", { operation: "scan" });
     expect(withheld).toBe(absent);
@@ -117,5 +125,9 @@ describe("concept gaps answer at the caller's reach", () => {
     const a = fixture(true);
     expect(await answer(a, "brain_health", {}, TRANSPORT_REACH.local)).toContain(MARKER);
     expect(await answer(a, "brain_doctor", {}, TRANSPORT_REACH.local)).toContain(MARKER);
+    const preview = { repair: true, format: "json" };
+    expect(await answer(a, "brain_doctor", preview, TRANSPORT_REACH.local)).toContain(
+      CONCEPT_GAP_CODE,
+    );
   });
 });
