@@ -86,6 +86,11 @@ export interface ContextReceiptFilter {
   readonly host?: string;
   readonly sessionId?: string;
   readonly limit?: number;
+  /**
+   * Receipts the caller may not see at all. They are left out before the
+   * limit is applied, so the answer is the one a store without them gives.
+   */
+  readonly exclude?: (record: ContinuityRecord) => boolean;
 }
 
 export interface ContextReceiptSummary {
@@ -221,6 +226,18 @@ export interface ContextReceiptFoldFilter {
   readonly until?: string;
   /** Fold bound; defaults to {@link CONTEXT_RECEIPT_FOLD_MAX_RECEIPTS}. */
   readonly maxReceipts?: number;
+  /**
+   * Receipts the caller may not see at all. They are left out before the
+   * fold bound is applied, so neither `receipt_count` nor `truncated`
+   * counts them.
+   */
+  readonly exclude?: (record: ContinuityRecord) => boolean;
+  /**
+   * Receipt items the caller may not see. They leave the item figures,
+   * and a receipt they leave with no item counts in `empty_receipts`, as
+   * a receipt that never carried them would.
+   */
+  readonly excludeItem?: (item: unknown) => boolean;
 }
 
 /**
@@ -352,6 +369,7 @@ export function summarizeContextReceiptSession(
         ...(filter.trigger !== undefined ? { trigger: filter.trigger } : {}),
         ...(filter.host !== undefined ? { host: filter.host } : {}),
         ...(filter.sessionId !== undefined ? { sessionId: filter.sessionId } : {}),
+        ...(filter.exclude !== undefined ? { exclude: filter.exclude } : {}),
       }),
     )
     .toReversed();
@@ -372,11 +390,13 @@ export function summarizeContextReceiptSession(
       withheld += 1;
       continue;
     }
-    const items = record.payload["items"];
-    if (!Array.isArray(items)) {
+    const stored = record.payload["items"];
+    if (!Array.isArray(stored)) {
       malformedReceipts += 1;
       continue;
     }
+    const excludeItem = filter.excludeItem;
+    const items = excludeItem === undefined ? stored : stored.filter((item) => !excludeItem(item));
     if (items.length === 0) emptyReceipts += 1;
     for (const raw of items) {
       if (raw === null || typeof raw !== "object") continue;
@@ -472,6 +492,15 @@ function adequacySummary(
 export const RECEIPT_ITEM_STANDING_RULES = "standing-rules";
 export const RECEIPT_ITEM_SCOPED_RULES = "scoped-rules";
 
+/**
+ * Receipt item ids of the memory bodies the SessionStart hook charges
+ * against `inject_budget_chars` besides the scoped rules: the active and
+ * the lessons body. A receipt's budget block exists because one of them,
+ * or the scoped rules, was measured.
+ */
+export const RECEIPT_ITEM_ACTIVE_BODY = "active-body";
+export const RECEIPT_ITEM_LESSONS_BODY = "lessons-body";
+
 export function isContextReceiptTrigger(value: unknown): value is ContextReceiptTrigger {
   return value === "context_pack" || value === "pre_compress" || value === "session_inject";
 }
@@ -488,5 +517,6 @@ function matchesReceiptFilter(record: ContinuityRecord, filter: ContextReceiptFi
   if (filter.trigger !== undefined && payload["trigger"] !== filter.trigger) return false;
   if (filter.host !== undefined && payload["host"] !== filter.host) return false;
   if (filter.sessionId !== undefined && payload["session_id"] !== filter.sessionId) return false;
+  if (filter.exclude !== undefined && filter.exclude(record)) return false;
   return true;
 }

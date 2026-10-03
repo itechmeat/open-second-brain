@@ -89,6 +89,8 @@ import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { isContextEventName } from "./lib/context-events.ts";
 import {
   emitContextReceipt,
+  RECEIPT_ITEM_ACTIVE_BODY,
+  RECEIPT_ITEM_LESSONS_BODY,
   RECEIPT_ITEM_SCOPED_RULES,
   RECEIPT_ITEM_STANDING_RULES,
 } from "../src/core/brain/context-receipts.ts";
@@ -304,8 +306,8 @@ interface InjectionMeter {
 const SOURCE_STANDING_RULES = RECEIPT_ITEM_STANDING_RULES;
 const SOURCE_SCOPED_RULES = RECEIPT_ITEM_SCOPED_RULES;
 const SOURCE_RUNTIME_NOTICES = "runtime-notices";
-const SOURCE_ACTIVE_BODY = "active-body";
-const SOURCE_LESSONS_BODY = "lessons-body";
+const SOURCE_ACTIVE_BODY = RECEIPT_ITEM_ACTIVE_BODY;
+const SOURCE_LESSONS_BODY = RECEIPT_ITEM_LESSONS_BODY;
 
 /** Blank line between two injected blocks. */
 const BLOCK_SEPARATOR = "\n\n";

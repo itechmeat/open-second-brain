@@ -38,11 +38,12 @@ import {
   getContextReceipt,
   isContextReceiptTrigger,
   listContextReceipts,
+  RECEIPT_ITEM_ACTIVE_BODY,
+  RECEIPT_ITEM_LESSONS_BODY,
   RECEIPT_ITEM_SCOPED_RULES,
   RECEIPT_ITEM_STANDING_RULES,
   summarizeContextReceipt,
   summarizeContextReceiptSession,
-  type ContextReceiptFoldResult,
   type ContextReceiptOptions,
 } from "../../core/brain/context-receipts.ts";
 import type { ContinuityRecord } from "../../core/brain/continuity/types.ts";
@@ -351,13 +352,14 @@ async function toolBrainContextReceipts(
     const host = optionalStringArg("brain_context_receipts", args, "host");
     const sessionId = optionalStringArg("brain_context_receipts", args, "session_id");
     const limit = coercePositiveInteger("brain_context_receipts", "limit", args["limit"]);
+    const local = contextReach(ctx) === TRANSPORT_REACH.local;
     const receipts = listContextReceipts(ctx.vault, {
       ...(trigger !== undefined ? { trigger } : {}),
       ...(host !== undefined ? { host } : {}),
       ...(sessionId !== undefined ? { sessionId } : {}),
       ...(limit !== undefined ? { limit } : {}),
+      ...(local ? {} : { exclude: isRuleOnlyInjection }),
     });
-    const local = contextReach(ctx) === TRANSPORT_REACH.local;
     const summaries = receipts
       .map((receipt) => receiptAtReach(receipt, local))
       .map(summarizeContextReceipt);
@@ -373,11 +375,14 @@ async function toolBrainContextReceipts(
     if (id === undefined) {
       throw new MCPError(INVALID_PARAMS, "brain_context_receipts: id is required for show");
     }
+    const local = contextReach(ctx) === TRANSPORT_REACH.local;
     const stored = getContextReceipt(ctx.vault, id);
-    if (stored === null) {
+    // Below local reach a receipt that recorded only the operator rules
+    // is answered as an unknown id: showing it would say rules applied.
+    if (stored === null || (!local && isRuleOnlyInjection(stored))) {
       throw new MCPError(INVALID_PARAMS, `brain_context_receipts: receipt not found: ${id}`);
     }
-    const receipt = receiptAtReach(stored, contextReach(ctx) === TRANSPORT_REACH.local);
+    const receipt = receiptAtReach(stored, local);
     return {
       id: receipt.id,
       kind: receipt.kind,
@@ -403,6 +408,34 @@ const OPERATOR_RULE_ITEM_IDS: ReadonlySet<string> = new Set([
 function isOperatorRuleItem(item: unknown): boolean {
   const id = (item as { id?: unknown } | null)?.id;
   return typeof id === "string" && OPERATOR_RULE_ITEM_IDS.has(id);
+}
+
+/**
+ * A measured injection receipt whose every item was an operator-rule
+ * block: the hook recorded it only because rules applied (a session with
+ * no `active.md` body to inject). Below local reach it
+ * is withheld whole - left out of list and summary, refused by show -
+ * since even its empty remainder would say that rules applied.
+ */
+function isRuleOnlyInjection(record: ContinuityRecord): boolean {
+  if (record.payload["trigger"] !== "session_inject") return false;
+  // A degraded injection served a cached body beside the rules, and is
+  // recorded whether or not rules applied: it stays, emptied of them.
+  const injection = record.payload["injection"] as { sources_measured?: unknown } | undefined;
+  if (injection?.sources_measured === false) return false;
+  const items = record.payload["items"];
+  return Array.isArray(items) && items.length > 0 && items.every(isOperatorRuleItem);
+}
+
+/** Receipt items charged against the injection budget besides the scoped rules. */
+const BUDGETED_BODY_ITEM_IDS: ReadonlySet<string> = new Set([
+  RECEIPT_ITEM_ACTIVE_BODY,
+  RECEIPT_ITEM_LESSONS_BODY,
+]);
+
+function isBudgetedBodyItem(item: unknown): boolean {
+  const id = (item as { id?: unknown } | null)?.id;
+  return typeof id === "string" && BUDGETED_BODY_ITEM_IDS.has(id);
 }
 
 /** Payload fields of an injection receipt whose figures include the operator-rule blocks. */
@@ -441,7 +474,12 @@ function receiptAtReach(record: ContinuityRecord, local: boolean): ContinuityRec
     payload["injection"] = kept;
   }
   const budget = payload["budget"];
-  if (typeof budget === "object" && budget !== null) {
+  const remaining = Array.isArray(payload["items"]) ? (payload["items"] as unknown[]) : [];
+  if (!remaining.some(isBudgetedBodyItem)) {
+    // The block exists only because the scoped rules were charged: with
+    // no budgeted body left, a receipt without the rules carries none.
+    delete payload["budget"];
+  } else if (typeof budget === "object" && budget !== null) {
     const kept: Record<string, unknown> = { ...(budget as Record<string, unknown>) };
     for (const field of BUDGET_RULE_FIELDS) delete kept[field];
     payload["budget"] = kept;
@@ -450,22 +488,6 @@ function receiptAtReach(record: ContinuityRecord, local: boolean): ContinuityRec
     ...record,
     sourceRefs: record.sourceRefs.filter((ref) => !isOperatorRuleItem(ref)),
     payload,
-  };
-}
-
-/**
- * The receipt fold below local reach: the operator-rule items leave the
- * per-item list and the item totals. A degraded injection that carried
- * only the rules still counts as a non-empty receipt (a stated residual).
- */
-function foldWithoutOperatorRules(fold: ContextReceiptFoldResult): ContextReceiptFoldResult {
-  const removed = fold.items.filter(isOperatorRuleItem);
-  if (removed.length === 0) return fold;
-  return {
-    ...fold,
-    item_total: fold.item_total - removed.reduce((sum, item) => sum + item.injections, 0),
-    distinct_items: fold.distinct_items - removed.length,
-    items: fold.items.filter((item) => !isOperatorRuleItem(item)),
   };
 }
 
@@ -525,14 +547,14 @@ async function summarizeReceipts(
     ...(since !== undefined ? { since } : {}),
     ...(until !== undefined ? { until } : {}),
   };
-  const stored = summarizeContextReceiptSession(ctx.vault, {
+  const local = contextReach(ctx) === TRANSPORT_REACH.local;
+  const fold = summarizeContextReceiptSession(ctx.vault, {
     ...window,
     ...(maxReceipts !== undefined ? { maxReceipts } : {}),
+    // Below local reach the operator-rule items leave the item figures,
+    // and a receipt that recorded nothing else is not folded at all.
+    ...(local ? {} : { exclude: isRuleOnlyInjection, excludeItem: isOperatorRuleItem }),
   });
-  const fold =
-    stored.recorded && contextReach(ctx) !== TRANSPORT_REACH.local
-      ? foldWithoutOperatorRules(stored)
-      : stored;
   if (!fold.recorded) {
     return {
       vault_path: vaultPathField(ctx),

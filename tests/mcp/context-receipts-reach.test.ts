@@ -19,6 +19,10 @@ import { fileURLToPath } from "node:url";
 
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { writeVaultPointer } from "../../src/core/brain/portability/pointer.ts";
+import {
+  emitContextReceipt,
+  RECEIPT_ITEM_SCOPED_RULES,
+} from "../../src/core/brain/context-receipts.ts";
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import type { MCPServerRuntimeOptions } from "../../src/mcp/server.ts";
@@ -49,16 +53,32 @@ afterEach(() => {
   rmSync(configHome, { recursive: true, force: true });
 });
 
+/** Which pages a probe vault carries. */
+interface VaultShape {
+  /** `Brain/active.md`; true unless stated. */
+  readonly active?: boolean;
+  /** The constitution, `Brain/standing-rules.md`. */
+  readonly constitution?: boolean;
+  /** A project rule under `Brain/standing-rules/project/`. */
+  readonly scoped?: boolean;
+}
+
 /** A vault and a linked project; with `rules`, a constitution and a project rule. */
-function vaultFor(name: string, rules: boolean): { vault: string; project: string } {
+function vaultFor(
+  name: string,
+  rules: boolean,
+  shape: VaultShape = { constitution: rules, scoped: rules },
+): { vault: string; project: string } {
   const vault = join(tmp, name, "vault");
   const project = join(tmp, name, "proj-x");
   mkdirSync(join(vault, "Brain"), { recursive: true });
   mkdirSync(project, { recursive: true });
-  writeFileSync(join(vault, "Brain", "active.md"), ACTIVE_BODY, "utf8");
+  if (shape.active !== false) writeFileSync(join(vault, "Brain", "active.md"), ACTIVE_BODY, "utf8");
   writeVaultPointer(project, vault);
-  if (rules) {
+  if (shape.constitution === true) {
     writeFileSync(join(vault, "Brain", "standing-rules.md"), "Never force-push to main.", "utf8");
+  }
+  if (shape.scoped === true) {
     mkdirSync(join(vault, "Brain", "standing-rules", "project"), { recursive: true });
     writeFileSync(
       join(vault, "Brain", "standing-rules", "project", "proj-x.md"),
@@ -130,6 +150,32 @@ async function answers(
   return JSON.parse(JSON.stringify({ list, show, summary }).replaceAll(id, "<id>"));
 }
 
+/** Every answer of the tool for whatever receipts the vault holds, ids masked. */
+async function allAnswers(vault: string, runtime: MCPServerRuntimeOptions): Promise<string> {
+  const list = await callReceipts(vault, runtime, { operation: "list" });
+  const ids = (list["receipts"] as ReadonlyArray<{ id: string }>).map((r) => r.id);
+  const shows = await Promise.all(
+    ids.map((id) => callReceipts(vault, runtime, { operation: "show", id })),
+  );
+  const summary = await callReceipts(vault, runtime, { operation: "summary" });
+  let text = JSON.stringify({ list, shows, summary });
+  for (const id of ids) text = text.replaceAll(id, "<id>");
+  return masked(JSON.parse(text));
+}
+
+/** The `show` answer for one receipt id, or the refusal it gets. */
+async function showOrRefusal(
+  vault: string,
+  runtime: MCPServerRuntimeOptions,
+  id: string,
+): Promise<string> {
+  try {
+    return masked(await callReceipts(vault, runtime, { operation: "show", id }));
+  } catch {
+    return "refused";
+  }
+}
+
 function masked(value: unknown): string {
   return JSON.stringify(value)
     .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?/g, "<ts>")
@@ -165,5 +211,94 @@ describe("brain_context_receipts and the operator rules", () => {
     const budget = show.payload["budget"] as Record<string, unknown>;
     expect(budget["scoped_rules_chars"]).toBeGreaterThan(0);
     expect(masked(withRules)).not.toBe(masked(withoutRules));
+  });
+
+  for (const shape of [
+    { constitution: true },
+    { scoped: true },
+    { constitution: true, scoped: true },
+  ]) {
+    test(`below local reach a vault with no active.md and rules ${JSON.stringify(shape)} answers like one without them`, async () => {
+      const a = vaultFor("a", true, { active: false, ...shape });
+      const b = vaultFor("b", false, { active: false });
+      await runHook(a.vault, a.project);
+      await runHook(b.vault, b.project);
+      const withRules = await allAnswers(a.vault, {});
+      expect(withRules).toBe(await allAnswers(b.vault, {}));
+      expect(withRules).not.toContain("inject_budget_chars");
+      // The local control: the operator sees the receipt the rules left.
+      const local = await callReceipts(
+        a.vault,
+        { reach: TRANSPORT_REACH.local },
+        {
+          operation: "list",
+        },
+      );
+      expect(local["total"]).toBe(1);
+    });
+  }
+
+  test("below local reach a rule-only receipt is refused by show as an unknown id", async () => {
+    const a = vaultFor("a", true, { active: false, scoped: true });
+    await runHook(a.vault, a.project);
+    const local = await callReceipts(
+      a.vault,
+      { reach: TRANSPORT_REACH.local },
+      {
+        operation: "list",
+      },
+    );
+    const id = (local["receipts"] as ReadonlyArray<{ id: string }>)[0]!.id;
+    expect(await showOrRefusal(a.vault, {}, id)).toBe("refused");
+    expect(await showOrRefusal(a.vault, {}, "ctx-unknown")).toBe("refused");
+    expect(await showOrRefusal(a.vault, { reach: TRANSPORT_REACH.local }, id)).not.toBe("refused");
+  });
+
+  test("below local reach the budget block leaves with the last budgeted source", async () => {
+    const a = vaultFor("a", false, { active: false });
+    const b = vaultFor("b", false, { active: false });
+    const notices = { id: "runtime-notices", bytes: 10, tokens: 3 };
+    emitContextReceipt(a.vault, {
+      options: { host: "hook", trigger: "session_inject", createdAt: "2026-09-01T00:00:00Z" },
+      items: [{ id: RECEIPT_ITEM_SCOPED_RULES, bytes: 40, tokens: 10 }, notices],
+      finalText: "notices and rules",
+      budget: { inject_budget_chars: 8000, budgeted_source_count: 1, scoped_rules_chars: 40 },
+    });
+    emitContextReceipt(b.vault, {
+      options: { host: "hook", trigger: "session_inject", createdAt: "2026-09-01T00:00:00Z" },
+      items: [notices],
+      finalText: "notices",
+    });
+    const withRules = await allAnswers(a.vault, {});
+    expect(withRules).toBe(await allAnswers(b.vault, {}));
+    expect(withRules).not.toContain("inject_budget_chars");
+    expect(await allAnswers(a.vault, { reach: TRANSPORT_REACH.local })).toContain(
+      "inject_budget_chars",
+    );
+  });
+
+  test("below local reach a degraded injection that kept only the rules reads as an empty one", async () => {
+    const a = vaultFor("a", false, { active: false });
+    const b = vaultFor("b", false, { active: false });
+    const degraded = {
+      extra: {
+        injection: { hook_event: "SessionStart", loader_source: "cache", sources_measured: false },
+      },
+    };
+    const options = {
+      host: "hook",
+      trigger: "session_inject",
+      createdAt: "2026-09-01T00:00:00Z",
+    } as const;
+    emitContextReceipt(a.vault, {
+      options,
+      items: [{ id: RECEIPT_ITEM_SCOPED_RULES, bytes: 40, tokens: 10 }],
+      finalText: "cached body and rules",
+      ...degraded,
+    });
+    emitContextReceipt(b.vault, { options, items: [], finalText: "cached body", ...degraded });
+    const withRules = await allAnswers(a.vault, {});
+    expect(withRules).toBe(await allAnswers(b.vault, {}));
+    expect(withRules).toContain('"empty_receipts":1');
   });
 });
