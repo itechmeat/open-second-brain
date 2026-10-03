@@ -130,9 +130,13 @@ function toolBrainLabels(
   if (typeof dimension !== "string" || dimension.trim() === "") {
     throw new MCPError(INVALID_PARAMS, `brain_labels ${op}: dimension must be non-empty`);
   }
+  // A note the caller may not read at its reach is refused as a missing
+  // one, before its frontmatter is read or written.
+  const readable = readableAtContextReachOrUndefined(ctx);
+  const reach = readable !== undefined ? { readable } : {};
   try {
     if (op === "remove") {
-      return { ...removeNoteLabel(ctx.vault, path, { dimension, pack }) };
+      return { ...removeNoteLabel(ctx.vault, path, { dimension, pack, ...reach }) };
     }
     const value = args["value"];
     if (typeof value !== "string" || value.trim() === "") {
@@ -143,7 +147,14 @@ function toolBrainLabels(
       normalizeAgentArgument(typeof agentArg === "string" ? agentArg : null) ??
       resolveAgentName(ctx.configPath ?? undefined);
     return {
-      ...assignNoteLabel(ctx.vault, path, { dimension, value, pack, agent, now: new Date() }),
+      ...assignNoteLabel(ctx.vault, path, {
+        dimension,
+        value,
+        pack,
+        agent,
+        now: new Date(),
+        ...reach,
+      }),
     };
   } catch (exc) {
     if (exc instanceof LabelVocabularyError) {

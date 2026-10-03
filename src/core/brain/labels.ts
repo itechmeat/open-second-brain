@@ -70,12 +70,23 @@ export interface AssignNoteLabelOptions {
   readonly agent: string;
   /** Injected clock for deterministic registry stamps. */
   readonly now: Date;
+  /** The paths the caller may read; see {@link NoteLabelReach}. */
+  readonly readable?: NoteLabelReach;
 }
 
 export interface RemoveNoteLabelOptions {
   readonly dimension: string;
   readonly pack: SchemaPack;
+  /** The paths the caller may read; see {@link NoteLabelReach}. */
+  readonly readable?: NoteLabelReach;
 }
+
+/**
+ * The vault-relative paths the caller may read. A note it may not read is
+ * refused with the error a missing note gets, before its frontmatter is
+ * read or written. Absent, every note may be labelled.
+ */
+export type NoteLabelReach = (rel: string) => boolean;
 
 export interface NoteLabelResult {
   /** Vault-relative path of the labelled note. */
@@ -166,7 +177,11 @@ export function assignNoteLabel(
   // rewrote frontmatter anywhere in the vault regardless of the binding.
   governCallerNamedWritePath(vault, relPath, LABEL_ASSIGN_SURFACE);
   const assignment = validateLabelAssignment(opts.pack, opts.dimension, opts.value);
-  const path = resolveNotePath(vault, relPath);
+  const path = resolveNotePath(
+    vault,
+    relPath,
+    opts.readable !== undefined ? { readable: opts.readable } : {},
+  );
   const [metadata, body] = parseFrontmatter(path);
   const existing = readLabels(metadata);
   const kept = existing.filter((token) => !token.startsWith(`${assignment.dimension}/`));
@@ -202,7 +217,11 @@ export function removeNoteLabel(
   assertStandingRulesNotTargeted(vault, relPath, LABEL_REMOVE_SURFACE);
   governCallerNamedWritePath(vault, relPath, LABEL_REMOVE_SURFACE);
   const dimension = normalizeSchemaToken(opts.dimension);
-  const path = resolveNotePath(vault, relPath);
+  const path = resolveNotePath(
+    vault,
+    relPath,
+    opts.readable !== undefined ? { readable: opts.readable } : {},
+  );
   const [metadata, body] = parseFrontmatter(path);
   const existing = readLabels(metadata);
   const next = existing.filter((token) => !token.startsWith(`${dimension}/`));
