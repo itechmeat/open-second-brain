@@ -76,8 +76,8 @@ import {
   coerceBool,
   unknownOperationError,
 } from "../coerce.ts";
-import { coercePositiveInteger, toolSafeguard } from "./shared.ts";
-import { readableAtContextReach } from "./reach-readable.ts";
+import { coercePositiveInteger, toolSafeguard, vaultRelativeSafe } from "./shared.ts";
+import { readableAtContextReach, readableAtContextReachOrUndefined } from "./reach-readable.ts";
 
 /**
  * Vault-relative locations these two handlers read BY PATH, rather than
@@ -694,9 +694,17 @@ function toolBrainDeadEnds(
   if (op !== "record" && op !== "list") {
     throw unknownOperationError("brain_dead_ends: operation must be record|list");
   }
+  // A dead-end page the caller cannot read at its reach is treated as
+  // absent: `list` leaves it out of the entries and the warnings.
+  const readable = readableAtContextReachOrUndefined(ctx);
   if (op === "list") {
     const { entries, warnings } = listDeadEnds(ctx.vault);
-    return { entries, warnings };
+    if (readable === undefined) return { entries, warnings };
+    const shown = (path: string): boolean => readable(vaultRelativeSafe(ctx.vault, path));
+    return {
+      entries: entries.filter((entry) => shown(entry.path)),
+      warnings: warnings.filter((warning) => shown(warning.path)),
+    };
   }
   const approach = args["approach"];
   const reason = args["reason"];
@@ -717,7 +725,14 @@ function toolBrainDeadEnds(
     agent,
     now: new Date(),
   });
-  return { ok: true, id: result.entry.id, path: result.entry.path, archived: result.archived };
+  // The overflow trim walks every active dead end, so below local reach the
+  // ids it archived are left out: they would name or count withheld pages.
+  return {
+    ok: true,
+    id: result.entry.id,
+    path: result.entry.path,
+    ...(readable === undefined ? { archived: result.archived } : {}),
+  };
 }
 
 // ----- brain_codegraph_report (t_a1e76788) -----------------------------------
