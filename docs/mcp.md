@@ -2309,5 +2309,28 @@ format characters), when it contains NUL, or when it exceeds the cap.
   their source references and every figure that counts or measures
   them (the item count, the whole-text hash and lengths, the total bytes
   and tokens, `scoped_rules_chars` and `budgeted_source_count`), and
-  `summary` leaves them out of its item totals. A stored receipt is
-  otherwise returned as recorded, with no visibility check at read time.
+  `summary` leaves them out of its item totals, counting a receipt left
+  with no item in `empty_receipts`. A measured injection receipt whose
+  every item was an operator-rule block (a session with no `active.md`
+  body) is left out of `list` and `summary` before their limit and fold
+  bound, and `show` answers it with `receipt not found`; the `budget`
+  block is dropped from a receipt that has no budgeted body left. A
+  stored receipt is otherwise returned as recorded, with no visibility
+  check at read time.
+- Since v1.70.0 `brain_doctor` with `repair` runs the checks behind its
+  plan over the pages and records the caller can read, so below local
+  reach the `unfixable` counts (the removed-tool cap, the concept gaps)
+  are the counts a vault without the withheld pages gives.
+- Since v1.70.0 `brain_tension`, `brain_lifecycle` and `brain_expire`
+  answer at the caller's reach; a local caller and the CLI see no
+  change. Below local reach `brain_tension` `detect` reads only the notes
+  the caller may read (`scanned_files` counts those) and pairs nothing
+  from the others; a persisted tension page carries the stricter
+  `visibility` of its two source notes, and `list`, `verify` and `show`,
+  `confirm`, `dismiss` and `resolve` treat a tension page the caller
+  cannot read as absent (`no tension: <slug>`). `brain_lifecycle`
+  `tombstone`, `supersede` and `temporal-replace`, and `brain_expire`,
+  refuse a page or record the caller cannot read with the error a
+  missing one gets (`note does not exist: <path>`, `no signal or
+  preference with id`), before anything is written; `brain_lifecycle`
+  `curator` leaves out a row whose key names such a page or record.
