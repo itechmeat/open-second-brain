@@ -237,7 +237,6 @@ async function main(): Promise<void> {
     // NOR memory - a vault with rules and a broken memory layer still speaks.
     const blocks = [standingBlock, scopedBlock, memoryContext];
     const context = joinBlocks(blocks);
-    if (context.length === 0) return;
 
     const epochInput: RecordInjectionEpochInput = {
       sessionId: payload.session_id,
@@ -246,6 +245,17 @@ async function main(): Promise<void> {
       memoryContext,
       meter,
     };
+    if (context.length === 0) {
+      // Nothing to emit, but the earlier context is gone all the same: the
+      // epoch still clears the recall set and any stale re-delivery queue.
+      recordInjectionEpoch(vault, epochInput, {
+        parts: [""],
+        partsDropped: 0,
+        partCeilingChars: 0,
+        meter: null,
+      });
+      return;
+    }
 
     // Chunked re-delivery (off by default). A split payload is committed
     // to the ledger BEFORE stdout: if the queue cannot be written, parts

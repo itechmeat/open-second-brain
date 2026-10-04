@@ -143,6 +143,17 @@ describe("active-inject injection ledger", () => {
     expect(readRecallInjected(vault, SESSION).size).toBe(0);
   });
 
+  test("a SessionStart with nothing to emit still clears the recall set", async () => {
+    recordRecallInjected(vault, SESSION, [":Brain/notes/a.md#L1-L4"]);
+    const r = await runHook(
+      { hook_event_name: "SessionStart", source: "compact", session_id: SESSION },
+      RECALL_ON,
+    );
+    expect(r.exit).toBe(0);
+    expect(r.stdout).toBe("");
+    expect(readRecallInjected(vault, SESSION).size).toBe(0);
+  });
+
   test("the reground flag alone is a consumer too", async () => {
     writeActive(ACTIVE_BODY);
     const r = await runHook(
