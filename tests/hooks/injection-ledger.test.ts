@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -32,6 +33,7 @@ import {
   writeHookStamp,
 } from "../../hooks/lib/session-state.ts";
 import { _resetHeldLocksForTests } from "../../src/core/brain/sync-lockfile.ts";
+import { IS_WINDOWS } from "../helpers/platform.ts";
 
 let vault: string;
 
@@ -155,6 +157,11 @@ describe("digestNotePaths", () => {
 });
 
 describe("beginInjectionEpoch", () => {
+  test.skipIf(IS_WINDOWS)("writes the state file private (mode 0o600)", () => {
+    seedQueue("sess-1", ["part-2"]);
+    expect(statSync(hookStateFilePath(vault, "sess-1")).mode & 0o777).toBe(0o600);
+  });
+
   test("sets the active set, clears the recall set and replaces the queue in one write", () => {
     recordRecallInjected(vault, "sess-1", ["k1"], NOW);
     seedQueue("sess-1", ["old-2", "old-3"], "ep-old");

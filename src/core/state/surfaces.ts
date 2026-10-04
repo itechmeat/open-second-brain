@@ -570,11 +570,13 @@ export const STATE_SURFACES: ReadonlyArray<StateSurface> = Object.freeze([
     derive: derivedStore(HOOK_STATE_DIR),
     override_env: null,
     override_config_key: null,
-    carries_memory: false,
+    carries_memory: true,
     reason:
-      "One JSON file per session scope recording what a hook has already done this session. It " +
-      "is scoped to a session by construction, so deleting it re-runs at most one session's " +
-      "worth of once-per-session work.",
+      "One JSON file per session scope recording what a hook has already done this session, " +
+      "including the queued re-grounding parts of an oversized SessionStart payload (the " +
+      "standing rules, the scoped rules and the memory digest tail), so it is written private. " +
+      "It is scoped to a session by construction, so deleting it re-runs at most one " +
+      "session's worth of once-per-session work and drops that session's undelivered parts.",
     sources: ["hooks/lib/session-state.ts"],
   },
   {

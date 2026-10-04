@@ -35,7 +35,7 @@ import {
   resolveSessionScope,
   SESSION_SCOPE_MAX_LENGTH,
 } from "../../src/core/brain/session-scope.ts";
-import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import { atomicWriteText } from "../../src/core/fs-atomic.ts";
 
 /** The vault's hook-surface directory. */
 const OSB_DIR = ".open-second-brain";
@@ -297,7 +297,10 @@ export function updateHookState<T>(
     lock = acquireScopeLock(path, opts.tryOnce === true);
     if (lock === null) return { status: "busy" };
     const next = mutate(readState(vault, sessionId), opts.nowMs ?? Date.now());
-    atomicWriteFileSync(path, JSON.stringify(next.state, null, 2) + "\n");
+    // Private mode: the re-grounding queue holds digest parts (standing and
+    // scoped rules, the memory digest), the same class of text the inject
+    // cache keeps at 0o600.
+    atomicWriteText(path, JSON.stringify(next.state, null, 2) + "\n", { mode: 0o600 });
     return { status: "ok", result: next.result };
   } catch {
     return { status: "failed" };
