@@ -139,7 +139,7 @@ export interface RecallInjectOptions {
    */
   readonly decisionFilter?: RecallInjectFilter;
   /**
-   * Notes this session was already shown, as {@link recallNoteKey} values
+   * Notes this session was already shown, as {@link recallInjectNoteKey} values
    * (origin, path and line span). Absent or empty filters nothing. Applied
    * after the floor check, so the set never moves a floor verdict.
    */
@@ -364,10 +364,8 @@ export interface RecallInjectedNote {
 
 /**
  * The per-session dedupe key of one note: origin, vault-relative path and
- * line span, with an empty origin for the primary vault. A local mirror of
- * the injection ledger's `recallNoteKey` (same format string), kept here so
- * the pure core imports nothing from the hook tree; a hook test pins that
- * both produce equal keys.
+ * line span, with an empty origin for the primary vault. The one source of
+ * the key: the hook records these values and this core filters on them.
  */
 export function recallInjectNoteKey(note: RecallInjectedNote): string {
   return `${note.origin ?? ""}:${note.path}#L${note.startLine}-L${note.endLine}`;

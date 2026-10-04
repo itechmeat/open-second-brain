@@ -5,19 +5,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { hookAuditDir } from "../../src/core/brain/paths.ts";
-import { recallInjectNoteKey } from "../../src/core/brain/recall-inject.ts";
 import { indexVault } from "../../src/core/search/indexer.ts";
 import { resolveSearchConfig } from "../../src/core/search/index.ts";
-import {
-  beginInjectionEpoch,
-  readRecallInjected,
-  recallNoteKey,
-} from "../../hooks/lib/injection-ledger.ts";
+import { beginInjectionEpoch, readRecallInjected } from "../../hooks/lib/injection-ledger.ts";
+import { hookStateFilePath } from "../../hooks/lib/session-state.ts";
 import { homeEnv } from "../helpers/platform.ts";
 import { createTempVault, writeMd } from "../helpers/search-fixtures.ts";
 
@@ -131,10 +127,27 @@ describe("recall-inject hook: per-session dedupe", () => {
     expect(details["decision"]).toBe("abstain");
     expect(details["reason"]).toBe("all_already_injected");
     // The ledger the second run consulted held what the first run rendered.
-    const deduped = details["deduped"] as { already_injected: number; digest_paths: number };
-    expect(deduped.digest_paths).toBe(0);
-    expect(deduped.already_injected).toBe(readRecallInjected(vault, SESSION).size);
-    expect(deduped.already_injected).toBeGreaterThan(0);
+    const sets = details["dedupe_sets"] as { already_injected: number; digest_paths: number };
+    expect(sets.digest_paths).toBe(0);
+    expect(sets.already_injected).toBe(readRecallInjected(vault, SESSION).size);
+    expect(sets.already_injected).toBeGreaterThan(0);
+    expect(details["deduped"]).toBeUndefined();
+    expect(details["ledger_recorded"]).toBeUndefined();
+  });
+
+  test("a ledger write that fails after stdout is named on the audit line", async () => {
+    // A fresh lockfile reads as a live holder, so the post-stdout record
+    // gives up after its bounded retry while the read still succeeds.
+    const statePath = hookStateFilePath(vault, SESSION);
+    mkdirSync(dirname(statePath), { recursive: true });
+    writeFileSync(`${statePath}.lock`, "held by the test\n");
+    const run = await runHook(SESSION);
+    expect(run.exit).toBe(0);
+    expect(brief(run)).toContain("notes/schedule.md");
+    const details = lastDetails();
+    expect(details["decision"]).toBe("inject");
+    expect(details["ledger_recorded"]).toBe(false);
+    expect(readRecallInjected(vault, SESSION).size).toBe(0);
   });
 
   test("without a session id both runs inject and no ledger is consulted", async () => {
@@ -142,7 +155,7 @@ describe("recall-inject hook: per-session dedupe", () => {
     const second = await runHook();
     expect(brief(first)).toContain("notes/schedule.md");
     expect(second.stdout).toBe(first.stdout);
-    expect(lastDetails()["deduped"]).toBeUndefined();
+    expect(lastDetails()["dedupe_sets"]).toBeUndefined();
   });
 
   test("recall_inject_dedupe: false injects both times", async () => {
@@ -169,13 +182,28 @@ describe("recall-inject hook: per-session dedupe", () => {
     expect(run.exit).toBe(0);
     expect(brief(run)).not.toContain(PREF_PATH);
     expect(brief(run)).toContain("notes/schedule.md");
+    expect(lastDetails()["dedupe_sets"]).toEqual({ already_injected: 0, digest_paths: 1 });
+  });
+});
+
+/** The note bullets of a brief, one per rendered note. */
+function bullets(text: string): string[] {
+  return text.split("\n").filter((line) => line.startsWith('- "'));
+}
+
+describe("recall-inject hook: resolved caps take effect", () => {
+  test("recall_inject_max_notes=1 renders exactly one bullet", async () => {
+    const control = await runHook();
+    expect(bullets(brief(control)).length).toBeGreaterThan(1);
+    const run = await runHook(undefined, { OPEN_SECOND_BRAIN_RECALL_INJECT_MAX_NOTES: "1" });
+    expect(bullets(brief(run))).toHaveLength(1);
   });
 
-  test("the ledger key and the core key agree for the same note", () => {
-    const local = { path: "notes/a.md", startLine: 3, endLine: 9 };
-    const remote = { ...local, origin: "team" };
-    expect(recallNoteKey(local)).toBe(recallInjectNoteKey(local));
-    expect(recallNoteKey(remote)).toBe(recallInjectNoteKey(remote));
+  test("recall_inject_max_chars=200 bounds the brief", async () => {
+    const control = await runHook();
+    expect(brief(control).length).toBeGreaterThan(200);
+    const run = await runHook(undefined, { OPEN_SECOND_BRAIN_RECALL_INJECT_MAX_CHARS: "200" });
+    expect(brief(run).length).toBeLessThanOrEqual(200);
   });
 });
 
@@ -206,6 +234,28 @@ describe("recall-inject hook: operator-declared slices", () => {
     expect(slices[0]).toMatchObject({ name: "field", outcome: "inject" });
     expect(slices[0]!["notes"]).toBe(details["note_count"]);
     expect(details["slices_config"]).toBeUndefined();
+  });
+
+  test("a types slice injects only notes of that frontmatter type", async () => {
+    writeMd(
+      vault,
+      "Brain/_brain.yaml",
+      [
+        "schema_version: 1",
+        "recall_inject:",
+        "  slices: [prefs]",
+        "  slice_prefs_heading: Preferences",
+        "  slice_prefs_types: [preference]",
+        "",
+      ].join("\n"),
+    );
+    const run = await runHook();
+    expect(run.exit).toBe(0);
+    const text = brief(run);
+    expect(text).toContain("## Preferences");
+    expect(text).toContain(PREF_PATH);
+    expect(text).not.toContain("notes/schedule.md");
+    expect(text).not.toContain("notes/nests.md");
   });
 
   test("a _brain.yaml that fails to load falls back to the unsliced path", async () => {

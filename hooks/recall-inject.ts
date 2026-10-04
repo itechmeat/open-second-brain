@@ -26,13 +26,15 @@
  *     (default on), notes this session was already shown - by an earlier
  *     brief or by the SessionStart digest - are not injected again. The
  *     injection ledger is read before the decision and written only after
- *     the stdout write. Without a session id no ledger is touched.
+ *     the stdout write, and a failed write is named on the audit line.
+ *     Without a session id no ledger is touched.
  *   - TUNABLE: the four caps resolve from config and env; an invalid value
  *     keeps the built-in constant and is named on the audit line.
  *   - SLICED: a `recall_inject:` block in `Brain/_brain.yaml` declares named
  *     slices, retrieved under the one budget and rendered as headed groups
- *     inside the one fence. A `_brain.yaml` that fails to load falls back
- *     to the unsliced brief and says so on the audit line.
+ *     inside the one fence. A `_brain.yaml` that fails to load also fails
+ *     the search that reads it: an `error` decision with fault
+ *     `retriever_failed`, and `slices_config: "invalid"` on the audit line.
  *   - OPTIONAL DECISION-MODEL FILTER: with the `recall_inject` use in
  *     `shadow` or `enforce` (default `off`), an `inject` decision is checked
  *     by one decision request within `decision_model_hook_budget_ms` and
@@ -70,6 +72,7 @@ import {
   decideRecallInject,
   defaultRecallRetriever,
   RECALL_INJECT_FAULT,
+  recallInjectNoteKey,
   recallInjectAuditDetails,
   recallInjectTelemetryMetadata,
   type RecallInjectDecision,
@@ -87,7 +90,6 @@ import {
   isRealSessionId,
   readActiveEmittedPaths,
   readRecallInjected,
-  recallNoteKey,
   recordRecallInjected,
 } from "./lib/injection-ledger.ts";
 import { armProcessCeiling, resolveHookCeilingMs } from "./lib/process-ceiling.ts";
@@ -165,7 +167,8 @@ function telemetryStatus(decision: RecallInjectDecision): RecallTelemetryStatus 
  * needs. The withholding happens on the other surface, not here.
  *
  * `hookDetails` carries what only the hook knows (rejected config keys,
- * the dedupe sets it consulted); an empty object leaves the line as it was.
+ * the sizes of the dedupe sets it consulted, a failed ledger record); an
+ * empty object leaves the line as it was.
  */
 function auditDecision(
   vault: string,
@@ -270,7 +273,7 @@ function deliveredSetsFor(
 /**
  * The vault's declared recall slices. A vault without `_brain.yaml` has
  * none and says nothing; one whose `_brain.yaml` fails to load is reported
- * as `invalid` so the hook can take the unsliced path and audit why.
+ * as `invalid` so the audit line can say why the decision failed.
  */
 function slicesFor(vault: string): {
   readonly slices: ReadonlyArray<RecallSliceSpec>;
@@ -297,16 +300,20 @@ function sliceRetrieverFor(
     });
 }
 
-/** Record the rendered notes after the brief reached stdout; best-effort. */
+/**
+ * Record the rendered notes after the brief reached stdout; best-effort.
+ * Returns `false` when the ledger could not be written.
+ */
 function recordInjected(
   vault: string,
   sessionId: string,
   decision: Extract<RecallInjectDecision, { kind: "inject" }>,
-): void {
+): boolean {
   try {
-    recordRecallInjected(vault, sessionId, decision.injectedNotes.map(recallNoteKey));
+    return recordRecallInjected(vault, sessionId, decision.injectedNotes.map(recallInjectNoteKey));
   } catch {
     // best-effort: a missed record costs one repeat, never the session
+    return false;
   }
 }
 
@@ -370,20 +377,23 @@ async function main(): Promise<void> {
         ...delivered,
       },
     );
-    recordDecision(vault, decision, {
+    const hookDetails = {
       ...(invalid.length > 0 ? { config_invalid: invalid } : {}),
       ...(sliceConfig.invalid ? { slices_config: "invalid" } : {}),
       ...(delivered !== null
         ? {
-            deduped: {
+            dedupe_sets: {
               already_injected: delivered.alreadyInjected.size,
               digest_paths: delivered.activeDigestPaths.size,
             },
           }
         : {}),
-    });
+    };
     recordTokenImpact(vault, configPath, decision);
-    if (decision.kind !== "inject") return;
+    if (decision.kind !== "inject") {
+      recordDecision(vault, decision, hookDetails);
+      return;
+    }
 
     const out = {
       hookSpecificOutput: {
@@ -392,7 +402,15 @@ async function main(): Promise<void> {
       },
     };
     process.stdout.write(JSON.stringify(out) + "\n");
-    if (delivered !== null && sessionId !== null) recordInjected(vault, sessionId, decision);
+    // Audited after the record, so a ledger that cannot be written (and so
+    // will repeat these notes) leaves evidence on the same line.
+    const recorded =
+      delivered === null || sessionId === null || recordInjected(vault, sessionId, decision);
+    recordDecision(
+      vault,
+      decision,
+      recorded ? hookDetails : { ...hookDetails, ledger_recorded: false },
+    );
   } finally {
     disarm();
   }

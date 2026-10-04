@@ -121,7 +121,8 @@ of what this session was already shown, under
 - The hook records the notes actually rendered into the brief (after the
   decision-model filter and the char-budget fit) only after the brief was
   written to stdout. A note cut by the char budget was never shown and is
-  not recorded.
+  not recorded. When that write fails, the audit line carries
+  `ledger_recorded: false`, and those notes can be injected again.
 - The ledger is per session id. Every entry has a 24 h expiry that is
   refreshed on each write. Without a session id, the hook reads and writes no
   ledger, so one host's recall never suppresses another's.
@@ -144,7 +145,9 @@ the vault paths present in the payload it actually emitted. That is the
 post-budget text, never the `Brain/active.md` file on disk. It records
 `Brain/active.md` when the active body was emitted, `Brain/lessons.md` when
 the lessons body was emitted, and `Brain/preferences/pref-<slug>.md` for
-each backticked `pref-<slug>` token in the emitted text. Under chunked
+each backticked `pref-<slug>` token in the emitted text. When the payload
+came from the last-good cache, any non-empty memory body counts as both
+`Brain/active.md` and `Brain/lessons.md`. Under chunked
 re-grounding, parts still queued count as emitted. The recall hook drops
 any candidate whose path is in that set, on any line span: the digest
 delivers whole notes, not spans. The active hook writes this ledger only
