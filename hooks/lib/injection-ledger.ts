@@ -16,7 +16,7 @@
  * `false` rather than throwing, so the hooks stay fail-open.
  */
 
-import { readHookStamp, updateHookState } from "./session-state.ts";
+import { parseHookStamp, readHookStamp, updateHookState } from "./session-state.ts";
 
 export const LEDGER_KEY_RECALL = "osb.recall_inject.injected";
 export const LEDGER_KEY_ACTIVE = "osb.active_inject.emitted";
@@ -186,15 +186,7 @@ export type RegroundTake =
 
 /** The `data` record of a live (unexpired) stamp in raw state, else `null`. */
 function liveData(raw: unknown, nowMs: number): Record<string, unknown> | null {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const record = raw as Record<string, unknown>;
-  const expiresAt = record["expiresAt"];
-  if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt) || expiresAt <= nowMs) {
-    return null;
-  }
-  const data = record["data"];
-  if (data === null || typeof data !== "object" || Array.isArray(data)) return null;
-  return data as Record<string, unknown>;
+  return parseHookStamp(raw, nowMs)?.data ?? null;
 }
 
 /** A validated re-delivery queue. */

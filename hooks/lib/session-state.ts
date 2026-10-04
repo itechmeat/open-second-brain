@@ -97,17 +97,11 @@ function readState(vault: string, sessionId: string | null | undefined): Record<
 }
 
 /**
- * Read one namespaced stamp. Returns `null` when the stamp is missing,
- * malformed (no numeric `expiresAt`), or expired (`expiresAt <= nowMs` -
- * expiry is exclusive). Never throws.
+ * Validate one raw stamp value. Returns `null` when it is missing, malformed
+ * (no finite numeric `expiresAt`), or expired (`expiresAt <= nowMs` - expiry is
+ * exclusive). A non-object `data` is dropped. Never throws.
  */
-export function readHookStamp(
-  vault: string,
-  sessionId: string | null | undefined,
-  key: string,
-  nowMs: number = Date.now(),
-): HookStamp | null {
-  const raw = readState(vault, sessionId)[key];
+export function parseHookStamp(raw: unknown, nowMs: number): HookStamp | null {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
   const record = raw as Record<string, unknown>;
   const expiresAt = record["expiresAt"];
@@ -118,6 +112,19 @@ export function readHookStamp(
     return Object.freeze({ expiresAt, data: data as Record<string, unknown> });
   }
   return Object.freeze({ expiresAt });
+}
+
+/**
+ * Read one namespaced stamp through {@link parseHookStamp}: `null` when the
+ * stamp is missing, malformed, or expired. Never throws.
+ */
+export function readHookStamp(
+  vault: string,
+  sessionId: string | null | undefined,
+  key: string,
+  nowMs: number = Date.now(),
+): HookStamp | null {
+  return parseHookStamp(readState(vault, sessionId)[key], nowMs);
 }
 
 /** Bounded busy-retry acquiring the per-scope advisory lock. */
