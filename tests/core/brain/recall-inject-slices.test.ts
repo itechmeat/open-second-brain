@@ -77,6 +77,13 @@ function notes(prefix: string, count: number, score = 0.9): ReadonlyArray<Recall
   );
 }
 
+/** A slice retriever that ignores the requested limit and always returns six rows. */
+const ignoresLimit = (): RecallRetriever => async () => ({
+  candidates: notes("Brain/w", 6),
+  total: 6,
+  idfWeightedCoverage: 1,
+});
+
 const threeNotes: RecallRetriever = async () => ({
   candidates: notes("Brain/x", 3),
   total: 3,
@@ -180,11 +187,6 @@ describe("decideRecallInject with operator-declared slices", () => {
   });
 
   test("a slice places at most its limit even when the retriever returns more", async () => {
-    const ignoresLimit = (): RecallRetriever => async () => ({
-      candidates: notes("Brain/w", 6),
-      total: 6,
-      idfWeightedCoverage: 1,
-    });
     const decision = await decideRecallInject("receipts", unused, {
       maxNotes: 5,
       slices: [slice("narrow", { limit: 2 })],
