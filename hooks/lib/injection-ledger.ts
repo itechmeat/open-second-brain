@@ -26,12 +26,13 @@ export const LEDGER_KEY_REGROUND = "osb.reground.queue";
 export const LEDGER_TTL_MS = 86_400_000;
 
 /**
- * True only for a non-empty string session id. A sessionless host gets no
- * ledger at all, so one host's recall can never suppress another's through
- * the shared default scope.
+ * True only for a string session id with at least one ASCII alphanumeric, the
+ * same floor `resolveSessionScope` needs; anything less would collapse to the
+ * shared default scope. A sessionless host gets no ledger at all, so one
+ * host's recall can never suppress another's through that scope.
  */
 export function isRealSessionId(sessionId: unknown): sessionId is string {
-  return typeof sessionId === "string" && sessionId.trim().length > 0;
+  return typeof sessionId === "string" && /[A-Za-z0-9]/.test(sessionId);
 }
 
 /** The string members of `value` when it is an array, else an empty list. */

@@ -67,8 +67,8 @@ describe("isRealSessionId", () => {
     expect(isRealSessionId("sess-1")).toBe(true);
   });
 
-  test("rejects undefined, null, empty and non-strings", () => {
-    for (const value of [undefined, null, "", "   ", "\t", 42, {}, ["s"]]) {
+  test("rejects undefined, null, empty, separator-only and non-strings", () => {
+    for (const value of [undefined, null, "", "   ", "\t", "---", "::", 42, {}, ["s"]]) {
       expect(isRealSessionId(value)).toBe(false);
     }
   });
