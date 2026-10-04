@@ -906,7 +906,11 @@ part is dropped, the last part closes with
 parts 2..n are queued in the session's hook state; the `reground-deliver`
 hook then hands out exactly one queued part per `PostToolUse` or
 `UserPromptSubmit` event until the queue is empty or the next
-SessionStart replaces it. Only Claude Code and Codex payloads with a
+SessionStart replaces it. A tool call inside a delegated sub-agent (the
+payload carries `agent_id`) takes no part, so the queue stays for the main
+agent. Only a SessionStart event splits and starts a new queue; a run of
+the SessionStart hook on another event emits the whole payload and leaves
+the queue alone. Only Claude Code and Codex payloads with a
 session id are split, because only they have the carrier registered;
 every other runtime, and any payload that fits the ceiling, gets the
 single payload as before. The ceiling is in UTF-16 code units:
@@ -922,7 +926,9 @@ default 9000 (the observed Claude Code threshold less 10%, applied to
 Codex too until measured). At each level the env value wins over the
 config value, and an invalid value falls through to the next level. The
 queue lives under `.open-second-brain/hook-state/` with a 24 h expiry,
-and the receipt and audit fields it adds are listed in
+in a per-session file written with mode `0600`; when `.open-second-brain`
+or `hook-state` is a symbolic link, the hooks neither read nor write
+through it. The receipt and audit fields it adds are listed in
 [observability](observability.md).
 
 ### Semantic-health baselining (since v1.38.0)

@@ -124,11 +124,15 @@ of what this session was already shown, under
   not recorded. When that write fails, the audit line carries
   `ledger_recorded: false`, and those notes can be injected again.
 - The ledger is per session id. Every entry has a 24 h expiry that is
-  refreshed on each write. Without a session id, the hook reads and writes no
-  ledger, so one host's recall never suppresses another's.
+  refreshed on each write, and the recall set keeps at most the 2000 most
+  recent keys, the oldest dropping first. Without a session id, the hook
+  reads and writes no ledger, so one host's recall never suppresses
+  another's.
 - Every SessionStart that emits (startup, resume, clear, compact) starts a new
   injection epoch and clears the recall set. On `resume` a note can therefore
-  be injected once more.
+  be injected once more. Only a SessionStart event starts an epoch: a run of
+  the same hook on another event (an operator-registered `UserPromptSubmit`)
+  injects its payload whole and leaves the recall set alone.
 - Dedupe runs after the confidence floor, which is judged on the unfiltered
   retrieval, and before the `recall_inject_max_notes` cut. Nothing is
   over-fetched to refill the brief, because that would change the floor
@@ -145,12 +149,16 @@ the vault paths present in the payload it actually emitted. That is the
 post-budget text, never the `Brain/active.md` file on disk. It records
 `Brain/active.md` when the active body was emitted, `Brain/lessons.md` when
 the lessons body was emitted, and `Brain/preferences/pref-<slug>.md` for
-each backticked `pref-<slug>` token in the emitted text. When the payload
+each rendered preference bullet (a line that opens with
+`` - `pref-<slug>` ``) in the emitted text; a lesson or any other line that
+only quotes a `pref-` id does not count. When the payload
 came from the last-good cache, any non-empty memory body counts as both
 `Brain/active.md` and `Brain/lessons.md`. Under chunked
 re-grounding, parts still queued count as emitted. The recall hook drops
-any candidate whose path is in that set, on any line span: the digest
-delivers whole notes, not spans. The active hook writes this ledger only
+any candidate from the active vault whose path is in that set, on any line
+span: the digest delivers whole notes, not spans. A candidate from a profile
+or a recall source is never dropped by this filter, because the same
+vault-relative path there names a different note. The active hook writes this ledger only
 when `recall_inject_enabled` or `reground_parts_enabled` is on and a session
 id is present.
 
