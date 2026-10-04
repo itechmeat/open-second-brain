@@ -8,7 +8,10 @@ import {
   type RecallRetriever,
 } from "../../../src/core/brain/recall-inject.ts";
 import type { RecallSliceSpec } from "../../../src/core/brain/types.ts";
-import { UNTRUSTED_SOURCE_TAG } from "../../../src/core/brain/untrusted-source.ts";
+import {
+  fenceUntrustedContent,
+  UNTRUSTED_SOURCE_TAG,
+} from "../../../src/core/brain/untrusted-source.ts";
 
 function candidate(overrides: Partial<RecallCandidate> = {}): RecallCandidate {
   return {
@@ -166,6 +169,82 @@ describe("decideRecallInject with operator-declared slices", () => {
     ]);
   });
 
+  test("a slice limit above maxNotes asks the retriever for maxNotes", async () => {
+    const limits = new Map<string, number>();
+    await decideRecallInject("receipts", unused, {
+      maxNotes: 4,
+      slices: [slice("wide", { limit: 10 })],
+      sliceRetriever: slicesOf({ wide: { candidates: notes("Brain/w", 6), total: 6 } }, limits),
+    });
+    expect(limits.get("wide")).toBe(4);
+  });
+
+  test("a slice places at most its limit even when the retriever returns more", async () => {
+    const ignoresLimit = (): RecallRetriever => async () => ({
+      candidates: notes("Brain/w", 6),
+      total: 6,
+      idfWeightedCoverage: 1,
+    });
+    const decision = await decideRecallInject("receipts", unused, {
+      maxNotes: 5,
+      slices: [slice("narrow", { limit: 2 })],
+      sliceRetriever: ignoresLimit,
+    });
+    expect(decision.kind).toBe("inject");
+    if (decision.kind !== "inject") return;
+    expect(decision.noteCount).toBe(2);
+    expect(decision.slices).toEqual([{ name: "narrow", outcome: "inject", notes: 2 }]);
+  });
+
+  test("topScore and the hint aggregate over every slice", async () => {
+    const decision = await decideRecallInject("receipts", unused, {
+      slices: [slice("low"), slice("high")],
+      sliceRetriever: slicesOf({
+        low: { candidates: [candidate({ path: "Brain/l.md", score: 0.4 })], total: 3 },
+        high: { candidates: [candidate({ path: "Brain/h.md", score: 0.95 })], total: 4 },
+      }),
+    });
+    expect(decision.kind).toBe("inject");
+    if (decision.kind !== "inject") return;
+    expect(decision.topScore).toBe(0.95);
+    expect(decision.brief).toContain("Recalled 2 of 7");
+  });
+
+  test("a heading that neutralises to nothing renders the slice name", async () => {
+    const decision = await decideRecallInject("receipts", unused, {
+      slices: [slice("ghost", { heading: "\u200b\u0007" })],
+      sliceRetriever: slicesOf({ ghost: { candidates: [candidate()], total: 1 } }),
+    });
+    expect(decision.kind).toBe("inject");
+    if (decision.kind !== "inject") return;
+    expect(decision.brief).toContain("\n## ghost\n");
+  });
+
+  test("a maxChars with room for a short section but not the header omits the header", async () => {
+    // The section is shorter than the header line, so only a header seeded
+    // regardless of the cap could crowd the note out.
+    const one = { one: { candidates: [candidate({ path: "a.md", title: "A" })], total: 1 } };
+    const roomy = await decideRecallInject("receipts", unused, {
+      slices: [slice("one")],
+      sliceRetriever: slicesOf(one),
+    });
+    expect(roomy.kind).toBe("inject");
+    if (roomy.kind !== "inject") return;
+    const lines = roomy.brief.split("\n");
+    const section = lines.slice(lines.indexOf("## one"), -1).join("\n");
+    const maxChars = fenceUntrustedContent(section, "recall-inject").length;
+    const decision = await decideRecallInject("receipts", unused, {
+      maxChars,
+      slices: [slice("one")],
+      sliceRetriever: slicesOf(one),
+    });
+    expect(decision.kind).toBe("inject");
+    if (decision.kind !== "inject") return;
+    expect(decision.brief.length).toBeLessThanOrEqual(maxChars);
+    expect(decision.brief).not.toContain("Recalled vault context");
+    expect(decision.noteCount).toBe(1);
+  });
+
   test("the global maxChars, fence included, bounds the sum and clamps the later slice", async () => {
     const plain = await decideRecallInject("receipts", unused, {
       slices: [slice("first")],
@@ -290,6 +369,8 @@ describe("decideRecallInject with operator-declared slices", () => {
         { name: "blank", outcome: "unmeasurable_quality", notes: 0 },
       ],
     });
+    // The strongest measurable slice speaks for the abstain.
+    expect(decision.kind === "abstain" && decision.matchQuality).toBe(0.1);
   });
 
   test("the slices share one time budget: a slow slice errors the whole decision", async () => {
