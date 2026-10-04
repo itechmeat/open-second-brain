@@ -53,7 +53,11 @@
 
 import { existsSync, readFileSync } from "node:fs";
 
-import { resolveVault } from "../src/core/config.ts";
+import {
+  resolveRecallInjectEnabled,
+  resolveRegroundPartsEnabled,
+  resolveVault,
+} from "../src/core/config.ts";
 import { parseFrontmatterText } from "../src/core/vault.ts";
 import {
   brainActivePath,
@@ -86,6 +90,8 @@ import { appendAuditRecord } from "../src/core/reliability/audit.ts";
 import { loadInjectContextFailOpen } from "../src/core/brain/inject-failopen.ts";
 import { collectRuntimeNotices, renderRuntimeNotices } from "../src/core/brain/runtime-notices.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
+import { beginInjectionEpoch, digestNotePaths, isRealSessionId } from "./lib/injection-ledger.ts";
+import { pruneHookStateFiles } from "./lib/session-state.ts";
 import { isContextEventName } from "./lib/context-events.ts";
 import {
   emitContextReceipt,
@@ -237,12 +243,86 @@ async function main(): Promise<void> {
     };
     process.stdout.write(JSON.stringify(out) + "\n");
 
+    // After stdout, like the meter: the ledger serves later hooks in this
+    // session and must never delay or alter what was injected.
+    recordInjectionEpoch(vault, {
+      sessionId: payload.session_id,
+      startSource: payload.source,
+      loaderSource: source,
+      context,
+      memoryContext,
+      meter,
+    });
+
     // Measure LAST, so the injected context is already on stdout before the
     // meter can spend a millisecond of the ceiling. See recordInjectionSize.
     recordInjectionSize(vault, { hookEventName, loaderSource: source, context, meter });
   } finally {
     disarm();
   }
+}
+
+// ----- injection ledger (recall-injection-lifecycle) -----------------------
+
+interface RecordInjectionEpochInput {
+  readonly sessionId: unknown;
+  /** The SessionStart `source` (startup, resume, clear, compact), when sent. */
+  readonly startSource: unknown;
+  readonly loaderSource: InjectContextSource;
+  /** Everything committed for delivery in this epoch. */
+  readonly context: string;
+  readonly memoryContext: string;
+  readonly meter: InjectionMeter;
+}
+
+/**
+ * Start a new injection epoch in the per-session ledger: record the note
+ * paths this injection delivered and clear the recall-inject set, so the
+ * recall brief neither repeats the digest nor carries dedupe state across
+ * a compaction or a clear.
+ *
+ * Written only when a consumer exists (`recall_inject_enabled` or
+ * `reground_parts_enabled`) and the host sent a real session id, so a
+ * default install gets no new disk write. A `startup` also prunes scope
+ * files of long-gone sessions, once the ledger write succeeded.
+ *
+ * FAIL-SOFT. The context is already on stdout; nothing here can change it
+ * or the exit code.
+ */
+function recordInjectionEpoch(vault: string, input: RecordInjectionEpochInput): void {
+  try {
+    if (!isRealSessionId(input.sessionId)) return;
+    if (!resolveRecallInjectEnabled() && !resolveRegroundPartsEnabled()) return;
+    const startSource =
+      typeof input.startSource === "string" && input.startSource.length > 0
+        ? input.startSource
+        : "unknown";
+    const written = beginInjectionEpoch(vault, input.sessionId, {
+      epoch: `${startSource}:${Date.now()}`,
+      emittedPaths: digestNotePaths({
+        emittedText: input.context,
+        activeBodyEmitted: bodyEmitted(input, SOURCE_ACTIVE_BODY),
+        lessonsBodyEmitted: bodyEmitted(input, SOURCE_LESSONS_BODY),
+      }),
+      regroundParts: [],
+      partCeilingChars: 0,
+    });
+    if (written && startSource === "startup") pruneHookStateFiles(vault);
+  } catch {
+    // The ledger is an optimisation for later hooks. A failure to record
+    // must never disturb an injection that already succeeded.
+  }
+}
+
+/**
+ * Whether a memory sub-body reached the payload. A fresh assembly says so
+ * through the meter; a body served from the last-good cache cannot be
+ * attributed, so any non-empty cached memory counts as delivered - the
+ * conservative side for dedupe, which only ever suppresses a repeat.
+ */
+function bodyEmitted(input: RecordInjectionEpochInput, name: string): boolean {
+  if (input.loaderSource !== "fresh") return input.memoryContext.length > 0;
+  return input.meter.sources.some((source) => source.name === name && source.text.length > 0);
 }
 
 // ----- injection-size meter (context-integrity-gates, Unit H) --------------
