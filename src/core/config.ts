@@ -1055,6 +1055,160 @@ export function resolveRecallInjectEnabled(configPath?: string): boolean {
   );
 }
 
+/** Recall-inject cap overrides that passed validation (absent = hook default). */
+export interface RecallInjectCapsResolution {
+  readonly caps: {
+    readonly maxNotes?: number;
+    readonly maxChars?: number;
+    readonly timeBudgetMs?: number;
+    readonly confidenceFloor?: number;
+  };
+  /** Config key names whose value was rejected, in resolution order. */
+  readonly invalid: ReadonlyArray<string>;
+}
+
+/**
+ * Raw value of one setting: the env override when it is set and non-empty,
+ * otherwise the config value, otherwise `undefined`. Env always wins.
+ */
+function readSetting(
+  envKey: string,
+  configKey: string,
+  data: Record<string, string>,
+): string | undefined {
+  const env = process.env[envKey]?.trim();
+  const raw = env || data[configKey]?.trim();
+  return raw ? raw : undefined;
+}
+
+/** `raw` as a number within `[min, max]` (an integer when asked), else `undefined`. */
+function parseBounded(raw: string, min: number, max: number, integer: boolean): number | undefined {
+  const value = Number(raw);
+  if (!Number.isFinite(value) || (integer && !Number.isInteger(value))) return undefined;
+  if (value < min || value > max) return undefined;
+  return value;
+}
+
+/** One recall-inject cap: its field, env override, config key and range. */
+const RECALL_INJECT_CAP_SPECS = [
+  {
+    field: "maxNotes",
+    env: "OPEN_SECOND_BRAIN_RECALL_INJECT_MAX_NOTES",
+    key: "recall_inject_max_notes",
+    min: 1,
+    max: 10,
+    integer: true,
+  },
+  {
+    field: "maxChars",
+    env: "OPEN_SECOND_BRAIN_RECALL_INJECT_MAX_CHARS",
+    key: "recall_inject_max_chars",
+    min: 200,
+    max: 8000,
+    integer: true,
+  },
+  {
+    field: "timeBudgetMs",
+    env: "OPEN_SECOND_BRAIN_RECALL_INJECT_TIME_BUDGET_MS",
+    key: "recall_inject_time_budget_ms",
+    min: 250,
+    max: 6000,
+    integer: true,
+  },
+  {
+    field: "confidenceFloor",
+    env: "OPEN_SECOND_BRAIN_RECALL_INJECT_CONFIDENCE_FLOOR",
+    key: "recall_inject_confidence_floor",
+    min: 0,
+    max: 1,
+    integer: false,
+  },
+] as const;
+
+/**
+ * Operator overrides of the recall-inject caps (note count, brief size, time
+ * budget, confidence floor). Each key resolves env first, then config. A value
+ * out of range, non-numeric or (for the integer caps) fractional is left out
+ * of `caps` and named in `invalid`, so the hook keeps its built-in default and
+ * can audit the rejection. Unset keys contribute nothing, so a default install
+ * resolves to empty caps.
+ */
+export function resolveRecallInjectCaps(configPath?: string): RecallInjectCapsResolution {
+  const data = discoverConfig(configPath).data;
+  const caps: Record<string, number> = {};
+  const invalid: string[] = [];
+  for (const spec of RECALL_INJECT_CAP_SPECS) {
+    const raw = readSetting(spec.env, spec.key, data);
+    if (raw === undefined) continue;
+    const value = parseBounded(raw, spec.min, spec.max, spec.integer);
+    if (value === undefined) invalid.push(spec.key);
+    else caps[spec.field] = value;
+  }
+  return { caps: caps as RecallInjectCapsResolution["caps"], invalid };
+}
+
+/**
+ * Recall-inject per-session dedupe. Default ON: a note already injected this
+ * session is not injected again. Only an explicit falsy literal (`"false"` or
+ * `"0"`, env first, then config) turns it off.
+ */
+export function resolveRecallInjectDedupe(configPath?: string): boolean {
+  const raw = readSetting(
+    "OPEN_SECOND_BRAIN_RECALL_INJECT_DEDUPE",
+    "recall_inject_dedupe",
+    discoverConfig(configPath).data,
+  );
+  return raw !== "false" && raw !== "0";
+}
+
+/**
+ * Active-digest re-delivery gate. Default OFF: the SessionStart digest is
+ * emitted as one payload, byte-identical to today, unless
+ * `reground_parts_enabled: "true"` (or the matching env override), when an
+ * over-ceiling digest is split and parts 2..n are re-delivered on later events.
+ */
+export function resolveRegroundPartsEnabled(configPath?: string): boolean {
+  return resolveConfigFlag(
+    "OPEN_SECOND_BRAIN_REGROUND_PARTS_ENABLED",
+    "reground_parts_enabled",
+    configPath,
+  );
+}
+
+/**
+ * Default per-part ceiling of a split digest, in UTF-16 code units: the
+ * observed Claude Code 10,000-unit persistence threshold less 10%.
+ */
+export const REGROUND_PART_CHARS_DEFAULT = 9000;
+
+/**
+ * Per-part ceiling of a split digest for one host runtime. Precedence:
+ * `reground_part_chars_<runtime>`, then `reground_part_chars`, then
+ * {@link REGROUND_PART_CHARS_DEFAULT}; each level reads env first, then
+ * config. A value outside the integer range 2000..100000 falls through to the
+ * next level.
+ */
+export function resolveRegroundPartChars(
+  runtime: "claudecode" | "codex",
+  configPath?: string,
+): number {
+  const data = discoverConfig(configPath).data;
+  const levels = [
+    [
+      `OPEN_SECOND_BRAIN_REGROUND_PART_CHARS_${runtime.toUpperCase()}`,
+      `reground_part_chars_${runtime}`,
+    ],
+    ["OPEN_SECOND_BRAIN_REGROUND_PART_CHARS", "reground_part_chars"],
+  ] as const;
+  for (const [envKey, configKey] of levels) {
+    const raw = readSetting(envKey, configKey, data);
+    if (raw === undefined) continue;
+    const value = parseBounded(raw, 2000, 100_000, true);
+    if (value !== undefined) return value;
+  }
+  return REGROUND_PART_CHARS_DEFAULT;
+}
+
 /**
  * Tiered context-injection nav tier gate (retrieval-quality-and-context-delivery,
  * D1 / t_2d4f34d7). Default OFF: the additive navigation/map tier stays a
