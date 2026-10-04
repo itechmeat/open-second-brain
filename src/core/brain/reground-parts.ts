@@ -40,16 +40,30 @@ function partTrailer(next: number, total: number): string {
   return `(continued in part ${next} of ${total})`;
 }
 
+/** Closes the last delivered part when parts past the cap were dropped. */
+function truncationTrailer(dropped: number): string {
+  return `(context truncated: ${dropped} further part(s) not delivered)`;
+}
+
 /**
- * The frame every non-final part carries, measured at the widest index
- * that can be printed. The total is capped at REGROUND_MAX_PARTS, so the
- * width of `i` and `n` is fixed and the reserve is exact.
+ * The frame a part carries, measured at its widest: the header at the
+ * widest index, and the longer of the continuation trailer and the
+ * truncation line at the widest count that can be printed. The total is
+ * capped at REGROUND_MAX_PARTS, and every body holds at least one char, so
+ * fewer than `joinedChars` parts can be dropped; the reserve bounds every
+ * part, the final one included.
  */
-const FRAME_RESERVE =
-  partHeader(REGROUND_MAX_PARTS, REGROUND_MAX_PARTS).length +
-  FRAME_SEPARATOR.length +
-  FRAME_SEPARATOR.length +
-  partTrailer(REGROUND_MAX_PARTS, REGROUND_MAX_PARTS).length;
+function frameReserve(joinedChars: number): number {
+  return (
+    partHeader(REGROUND_MAX_PARTS, REGROUND_MAX_PARTS).length +
+    FRAME_SEPARATOR.length +
+    FRAME_SEPARATOR.length +
+    Math.max(
+      partTrailer(REGROUND_MAX_PARTS, REGROUND_MAX_PARTS).length,
+      truncationTrailer(joinedChars).length,
+    )
+  );
+}
 
 /** One indivisible run of text, with the separator that joined it to its predecessor. */
 interface Unit {
@@ -75,7 +89,7 @@ export function splitRegroundParts(
     return { parts: [joined], utf16Chars: joined.length, partsDropped: 0, overBudget: false };
   }
 
-  const capacity = Math.max(2, ceilingChars - FRAME_RESERVE);
+  const capacity = Math.max(2, ceilingChars - frameReserve(joined.length));
   const units: Unit[] = [];
   for (const block of blocks) {
     if (block.length === 0) continue;
@@ -89,7 +103,10 @@ export function splitRegroundParts(
   const parts = kept.map((body, offset) => {
     const index = offset + 1;
     const head = partHeader(index, total) + FRAME_SEPARATOR + body;
-    return index < total ? head + FRAME_SEPARATOR + partTrailer(index + 1, total) : head;
+    if (index < total) return head + FRAME_SEPARATOR + partTrailer(index + 1, total);
+    // A dropped tail is said in the payload itself, so the agent never
+    // reads the last part as the whole context.
+    return partsDropped > 0 ? head + FRAME_SEPARATOR + truncationTrailer(partsDropped) : head;
   });
   return {
     parts,

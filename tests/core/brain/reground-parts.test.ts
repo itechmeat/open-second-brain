@@ -44,11 +44,12 @@ function expectVerbatimCover(bodies: ReadonlyArray<string>, joined: string): voi
   expect(at).toBe(joined.length);
 }
 
-/** Strip the part header and the continuation trailer, leaving the body. */
+/** Strip the part header and the continuation or truncation trailer, leaving the body. */
 function bodyOf(part: string): string {
   return part
     .replace(/^\[Open Second Brain context - part \d+ of \d+\]\n\n/, "")
-    .replace(/\n\n\(continued in part \d+ of \d+\)$/, "");
+    .replace(/\n\n\(continued in part \d+ of \d+\)$/, "")
+    .replace(/\n\n\(context truncated: \d+ further part\(s\) not delivered\)$/, "");
 }
 
 describe("splitRegroundParts", () => {
@@ -128,6 +129,24 @@ describe("splitRegroundParts", () => {
     expect(split.overBudget).toBe(false);
   });
 
+  test("a payload one unit over the ceiling is split", () => {
+    const blocks = [makeBlock("S", 2, 10, 80), makeBlock("M", 2, 10, 80)];
+    const joined = join(blocks);
+    const split = splitRegroundParts(blocks, joined.length - 1, join);
+    expect(split.parts.length).toBeGreaterThan(1);
+    expect(split.parts[0]!.startsWith("[Open Second Brain context - part 1 of ")).toBe(true);
+    expectVerbatimCover(split.parts.map(bodyOf), joined);
+  });
+
+  test("a zero or negative ceiling terminates, keeps every unit and flags over budget", () => {
+    for (const ceiling of [0, -5]) {
+      const split = splitRegroundParts(["abcdef"], ceiling, join);
+      expect(split.overBudget).toBe(true);
+      expect(split.parts.length).toBeLessThanOrEqual(REGROUND_MAX_PARTS);
+      expect(split.parts.length + split.partsDropped).toBe(3);
+    }
+  });
+
   test("a part longer than the ceiling flags over budget with nothing dropped", () => {
     // Below the frame reserve every framed part outgrows the ceiling.
     const split = splitRegroundParts(["abcdefghijkl"], 10, join);
@@ -192,6 +211,25 @@ describe("splitRegroundParts", () => {
     expect(split.parts[0]!.startsWith(`[Open Second Brain context - part 1 of ${n}]`)).toBe(true);
     expect(split.parts[n - 1]).not.toContain("(continued in part");
     expect(split.utf16Chars).toBe(40_000);
+  });
+
+  test("the last part names the dropped parts and every part fits the ceiling", () => {
+    const line = "z".repeat(40_000);
+    const split = splitRegroundParts([line], 2000, join);
+    expect(split.partsDropped).toBeGreaterThan(0);
+    const last = split.parts.at(-1)!;
+    expect(
+      last.endsWith(`\n\n(context truncated: ${split.partsDropped} further part(s) not delivered)`),
+    ).toBe(true);
+    for (const part of split.parts) expect(part.length).toBeLessThanOrEqual(2000);
+  });
+
+  test("a split that keeps every part carries no truncation line", () => {
+    const blocks = [makeBlock("S", 4, 10, 80), makeBlock("M", 8, 10, 80)];
+    const split = splitRegroundParts(blocks, 4000, join);
+    expect(split.parts.length).toBeGreaterThan(1);
+    expect(split.partsDropped).toBe(0);
+    expect(split.parts.at(-1)).not.toContain("(context truncated:");
   });
 
   test("astral characters are never cut in half", () => {

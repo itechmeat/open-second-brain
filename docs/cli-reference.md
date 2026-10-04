@@ -898,7 +898,11 @@ persists an `additionalContext` past roughly 10,000 UTF-16 units to a
 file and shows only a preview, so with the flag on, a joined
 standing-rules, scoped-rules and memory payload longer than the part
 ceiling is cut into at most 8 parts (at block, then paragraph, then line
-boundaries, in priority order). Part 1 is emitted at SessionStart and
+boundaries, in priority order). Each part opens with
+`[Open Second Brain context - part i of n]` and every part but the last
+closes with `(continued in part i+1 of n)`; when content past the 8th
+part is dropped, the last part closes with
+`(context truncated: N further part(s) not delivered)` instead. Part 1 is emitted at SessionStart and
 parts 2..n are queued in the session's hook state; the `reground-deliver`
 hook then hands out exactly one queued part per `PostToolUse` or
 `UserPromptSubmit` event until the queue is empty or the next
