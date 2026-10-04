@@ -34,16 +34,6 @@ export function isRealSessionId(sessionId: unknown): sessionId is string {
   return typeof sessionId === "string" && sessionId.trim().length > 0;
 }
 
-/** Stable dedupe key of one recalled note span: origin, path and line span. */
-export function recallNoteKey(note: {
-  readonly path: string;
-  readonly origin?: string;
-  readonly startLine: number;
-  readonly endLine: number;
-}): string {
-  return `${note.origin ?? ""}:${note.path}#L${note.startLine}-L${note.endLine}`;
-}
-
 /** The string members of `value` when it is an array, else an empty list. */
 function stringList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];

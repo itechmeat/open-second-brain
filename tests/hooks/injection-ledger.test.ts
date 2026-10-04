@@ -21,7 +21,6 @@ import {
   isRealSessionId,
   readActiveEmittedPaths,
   readRecallInjected,
-  recallNoteKey,
   recordRecallInjected,
   takeRegroundPart,
 } from "../../hooks/lib/injection-ledger.ts";
@@ -68,24 +67,6 @@ describe("isRealSessionId", () => {
     for (const value of [undefined, null, "", "   ", "\t", 42, {}, ["s"]]) {
       expect(isRealSessionId(value)).toBe(false);
     }
-  });
-});
-
-describe("recallNoteKey", () => {
-  test("is stable and carries the origin and the line span", () => {
-    const note = { path: "Notes/a.md", origin: "vault", startLine: 3, endLine: 9 };
-    expect(recallNoteKey(note)).toBe("vault:Notes/a.md#L3-L9");
-    expect(recallNoteKey({ ...note })).toBe(recallNoteKey(note));
-  });
-
-  test("an absent origin renders as an empty prefix", () => {
-    expect(recallNoteKey({ path: "a.md", startLine: 1, endLine: 2 })).toBe(":a.md#L1-L2");
-  });
-
-  test("distinct spans of one file get distinct keys", () => {
-    const a = recallNoteKey({ path: "a.md", startLine: 1, endLine: 2 });
-    const b = recallNoteKey({ path: "a.md", startLine: 3, endLine: 4 });
-    expect(a).not.toBe(b);
   });
 });
 

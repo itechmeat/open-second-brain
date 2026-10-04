@@ -5,6 +5,7 @@ import {
   RECALL_INJECT_CONFIDENCE_FLOOR,
   RECALL_INJECT_MAX_CHARS,
   RECALL_INJECT_MAX_NOTES,
+  recallInjectNoteKey,
   type RecallCandidate,
   type RecallResultSet,
   type RecallRetriever,
@@ -461,5 +462,23 @@ describe("per-session dedupe and the cross-lane digest filter", () => {
     expect(decision.kind).toBe("inject");
     if (decision.kind !== "inject") return;
     expect(decision.injectedNotes.map((n) => n.path)).toEqual(["Brain/a.md", "Brain/c.md"]);
+  });
+});
+
+describe("recallInjectNoteKey", () => {
+  test("is stable and carries the origin and the line span", () => {
+    const note = { path: "Notes/a.md", origin: "vault", startLine: 3, endLine: 9 };
+    expect(recallInjectNoteKey(note)).toBe("vault:Notes/a.md#L3-L9");
+    expect(recallInjectNoteKey({ ...note })).toBe(recallInjectNoteKey(note));
+  });
+
+  test("an absent origin renders as an empty prefix", () => {
+    expect(recallInjectNoteKey({ path: "a.md", startLine: 1, endLine: 2 })).toBe(":a.md#L1-L2");
+  });
+
+  test("distinct spans of one file get distinct keys", () => {
+    const a = recallInjectNoteKey({ path: "a.md", startLine: 1, endLine: 2 });
+    const b = recallInjectNoteKey({ path: "a.md", startLine: 3, endLine: 4 });
+    expect(a).not.toBe(b);
   });
 });
