@@ -764,8 +764,8 @@ has an env override, and the env value always wins over the config value:
 
 The four caps resolve leniently: a value that is out of range,
 non-numeric or (for the integer caps) fractional keeps the built-in
-default, and the hook names the rejected key in its audit line
-(`config_invalid`). Unset caps leave the brief byte-identical.
+default, and the hook names the rejected key (or its env variable when
+the value came from the env) in its audit line (`config_invalid`). Unset caps leave the brief byte-identical.
 `recall_inject_dedupe` is on unless set to the literal `"false"` or `"0"`.
 With it on and a host that sends a `session_id`, a note span this session
 was already shown, by an earlier brief or by the SessionStart digest, is

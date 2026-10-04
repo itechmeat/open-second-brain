@@ -677,6 +677,15 @@ function readSetting(
 }
 
 /**
+ * Name of the setting a rejected value came from: the environment variable
+ * when it holds a non-blank value (the one {@link readSetting} answered from),
+ * the config key otherwise, so a report points at what the operator set.
+ */
+function rejectedSettingName(envKey: string, configKey: string): string {
+  return process.env[envKey]?.trim() ? envKey : configKey;
+}
+
+/**
  * Shared body for a default-OFF boolean config gate: env var (trimmed)
  * wins, falling back to the matching `_brain.yaml`/config key (trimmed);
  * only the literal strings `"true"`/`"1"` are truthy, anything else
@@ -1143,7 +1152,7 @@ export function resolveRecallInjectCaps(configPath?: string): RecallInjectCapsRe
     const raw = readSetting(spec.env, spec.key, data);
     if (raw === undefined) continue;
     const value = parseBounded(raw, spec.min, spec.max, spec.integer);
-    if (value === undefined) invalid.push(spec.key);
+    if (value === undefined) invalid.push(rejectedSettingName(spec.env, spec.key));
     else caps[spec.field] = value;
   }
   return { caps: caps as RecallInjectCapsResolution["caps"], invalid };
@@ -1220,7 +1229,7 @@ export function resolveRegroundPartChars(
     if (raw === undefined) continue;
     const value = parseBounded(raw, 2000, 100_000, true);
     if (value !== undefined) return { chars: value, invalid };
-    invalid.push(process.env[envKey]?.trim() ? envKey : configKey);
+    invalid.push(rejectedSettingName(envKey, configKey));
   }
   return { chars: REGROUND_PART_CHARS_DEFAULT, invalid };
 }

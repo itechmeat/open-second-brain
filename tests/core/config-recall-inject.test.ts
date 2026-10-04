@@ -87,15 +87,6 @@ describe("resolveRecallInjectCaps", () => {
     });
   });
 
-  test("a rejected environment value is named by its environment variable", () => {
-    writeConfig({ reground_part_chars: "5000", reground_part_chars_claudecode: "4000" });
-    process.env["OPEN_SECOND_BRAIN_REGROUND_PART_CHARS_CLAUDECODE"] = "1999";
-    expect(resolveRegroundPartChars("claudecode", configPath)).toEqual({
-      chars: 5000,
-      invalid: ["OPEN_SECOND_BRAIN_REGROUND_PART_CHARS_CLAUDECODE"],
-    });
-  });
-
   test("range edges are inclusive", () => {
     writeConfig({
       recall_inject_max_notes: "1",
@@ -136,12 +127,12 @@ describe("resolveRecallInjectCaps", () => {
     });
   });
 
-  test("an invalid env value is rejected even when config holds a valid one", () => {
+  test("an invalid env value is rejected even when config holds a valid one, and named by its env variable", () => {
     writeConfig({ recall_inject_max_notes: "3" });
     process.env["OPEN_SECOND_BRAIN_RECALL_INJECT_MAX_NOTES"] = "0";
     expect(resolveRecallInjectCaps(configPath)).toEqual({
       caps: {},
-      invalid: ["recall_inject_max_notes"],
+      invalid: ["OPEN_SECOND_BRAIN_RECALL_INJECT_MAX_NOTES"],
     });
   });
 
@@ -232,6 +223,15 @@ describe("resolveRegroundPartChars", () => {
     ]);
     writeConfig({ reground_part_chars: "4000" });
     expect(resolveRegroundPartChars("codex", configPath).invalid).toEqual([]);
+  });
+
+  test("a rejected environment value is named by its environment variable", () => {
+    writeConfig({ reground_part_chars: "5000", reground_part_chars_claudecode: "4000" });
+    process.env["OPEN_SECOND_BRAIN_REGROUND_PART_CHARS_CLAUDECODE"] = "1999";
+    expect(resolveRegroundPartChars("claudecode", configPath)).toEqual({
+      chars: 5000,
+      invalid: ["OPEN_SECOND_BRAIN_REGROUND_PART_CHARS_CLAUDECODE"],
+    });
   });
 
   test("range edges are inclusive", () => {

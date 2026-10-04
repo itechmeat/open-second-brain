@@ -107,7 +107,7 @@ describe("recall-inject hook", () => {
     const record = auditRecords().find((rec) => rec["actor"] === "recall-inject");
     const details = (record?.["details"] ?? {}) as Record<string, unknown>;
     expect(["inject", "abstain"]).toContain(details["decision"] as string);
-    expect(details["config_invalid"]).toEqual(["recall_inject_max_notes"]);
+    expect(details["config_invalid"]).toEqual(["OPEN_SECOND_BRAIN_RECALL_INJECT_MAX_NOTES"]);
   });
 
   test("valid caps leave config_invalid off the audit line", async () => {

@@ -66,8 +66,9 @@ restore the previous behaviour. See "Session dedupe and slices" in
 **The recall caps are configurable.** `recall_inject_max_notes`,
 `recall_inject_max_chars`, `recall_inject_time_budget_ms` and
 `recall_inject_confidence_floor` keep their previous values as defaults;
-an out-of-range value keeps the default and is named as
-`config_invalid` on the audit line.
+an out-of-range value keeps the default and is named (by its env
+variable when it came from the env) as `config_invalid` on the audit
+line.
 
 **Recall slices are opt-in vault policy.** A `recall_inject:` block in
 `Brain/_brain.yaml` is new and absent from the generated template; a vault
