@@ -386,7 +386,9 @@ function plantOutside(link: "hook-state" | ".open-second-brain"): string {
 
 describe("symlinked hook-state directories", () => {
   const KEY = "osb.nav_tier.last_injected";
-  const LIVE = { expiresAt: Date.now() + 60_000, data: { from: "outside" } };
+  // Far-future expiry: a stamp that expired mid-run would read as null for
+  // that reason alone and pass the "reads as empty" cases vacuously.
+  const LIVE = { expiresAt: Number.MAX_SAFE_INTEGER, data: { from: "outside" } };
 
   test("a real directory accepts the write (control)", () => {
     expect(updateHookState(vault, "sess-1", (state) => ({ state, result: 1 }))).toEqual({

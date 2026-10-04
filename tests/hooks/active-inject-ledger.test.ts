@@ -195,6 +195,29 @@ describe("active-inject injection ledger", () => {
     expect(readActiveEmittedPaths(vault, SESSION).size).toBe(0);
   });
 
+  test("a UserPromptSubmit run with nothing to emit keeps the queue and the recall set", async () => {
+    expect(
+      beginInjectionEpoch(vault, SESSION, {
+        epoch: "startup:1",
+        emittedPaths: ["Brain/preferences/pref-old.md"],
+        regroundParts: ["[Open Second Brain context - part 2 of 2]\n\nold"],
+        partCeilingChars: 9000,
+      }),
+    ).toBe(true);
+    recordRecallInjected(vault, SESSION, ["k"]);
+    const r = await runHook(
+      { hook_event_name: "UserPromptSubmit", session_id: SESSION },
+      { ...RECALL_ON, OPEN_SECOND_BRAIN_REGROUND_PARTS_ENABLED: "true" },
+    );
+    expect(r.exit).toBe(0);
+    expect(r.stdout).toBe("");
+    expect([...readRecallInjected(vault, SESSION)]).toEqual(["k"]);
+    expect([...readActiveEmittedPaths(vault, SESSION)]).toEqual(["Brain/preferences/pref-old.md"]);
+    const take = takeRegroundPart(vault, SESSION);
+    expect(take.status).toBe("part");
+    if (take.status === "part") expect(take.epoch).toBe("startup:1");
+  });
+
   test("the reground flag alone is a consumer too", async () => {
     writeActive(ACTIVE_BODY);
     const r = await runHook(
