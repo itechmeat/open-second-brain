@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -337,6 +338,36 @@ describe("reground-deliver hook", () => {
   );
 
   test.skipIf(CHMOD_CANNOT_DENY)(
+    "a failed take under a new queue epoch is audited again",
+    async () => {
+      const stateDir = dirname(hookStateFilePath(vault, SESSION));
+      const failOnce = async (): Promise<void> => {
+        chmodSync(stateDir, 0o500);
+        try {
+          await runHook(postTool(), REGROUND_ON);
+        } finally {
+          chmodSync(stateDir, 0o700);
+        }
+      };
+      seedQueue();
+      await failOnce();
+      expect(
+        beginInjectionEpoch(vault, SESSION, {
+          epoch: "compact:1760000000001",
+          emittedPaths: [],
+          regroundParts: [PART_2, PART_3],
+          partCeilingChars: 9000,
+        }),
+      ).toBe(true);
+      await failOnce();
+      expect(auditRecords().map((record) => record["details"])).toEqual([
+        { epoch: EPOCH },
+        { epoch: "compact:1760000000001" },
+      ]);
+    },
+  );
+
+  test.skipIf(CHMOD_CANNOT_DENY)(
     "a symlink planted at the failed-take marker name is not written through",
     async () => {
       seedQueue();
@@ -353,6 +384,12 @@ describe("reground-deliver hook", () => {
       }
       expect(readFileSync(victim, "utf8")).toBe("keep me");
       expect(auditRecords().map((record) => record["action"])).toEqual(["reground_take_failed"]);
+      // A drifted marker formula would leave a second, regular marker here.
+      const marker = `o2b-reground-take-failed-${scope}`;
+      expect(
+        readdirSync(configHome).filter((name) => name.startsWith("o2b-reground-take-failed-")),
+      ).toEqual([marker]);
+      expect(lstatSync(join(configHome, marker)).isSymbolicLink()).toBe(true);
     },
   );
 });
