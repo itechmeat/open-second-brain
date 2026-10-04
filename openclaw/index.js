@@ -1911,9 +1911,15 @@ function vaultStoreReference(vaultPath, configPath) {
   const digest = createHmac("sha256", key).update(resolve2(vaultPath)).digest("hex").slice(0, VAULT_STORE_REF_HEX_LEN);
   return `${VAULT_STORE_REF_PREFIX}${digest}`;
 }
-function resolveConfigFlag(envKey, configKey, configPath) {
+function readSetting(envKey, configKey, data) {
   const env = process.env[envKey]?.trim();
-  return isFlagOn(env || discoverConfig(configPath).data[configKey]?.trim());
+  if (env)
+    return env;
+  const raw = (typeof data === "function" ? data() : data)[configKey]?.trim();
+  return raw ? raw : undefined;
+}
+function resolveConfigFlag(envKey, configKey, configPath) {
+  return isFlagOn(readSetting(envKey, configKey, () => discoverConfig(configPath).data));
 }
 function isFlagOn(raw) {
   return raw === "true" || raw === "1";
