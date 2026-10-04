@@ -24,6 +24,7 @@ import type { RecallSource } from "./portability/recall-sources.ts";
 import { fenceUntrustedContent, neutralizeUntrustedText } from "./untrusted-source.ts";
 import { RECALL_INJECT_ANY_MIN, RECALL_INJECT_NOTE_MIN } from "../decision-model/questions.ts";
 import { estimateTokens } from "./text/tokenizer.ts";
+import type { RecallSliceSpec } from "./types.ts";
 
 /** `origin` label stamped on the recall brief's untrusted-content fence. */
 const RECALL_FENCE_ORIGIN = "recall-inject";
@@ -104,6 +105,27 @@ export interface RecallResultSet {
 /** Relevance retriever: maps a query to a candidate set. */
 export type RecallRetriever = (query: string) => Promise<RecallResultSet>;
 
+/** What one operator-declared slice narrows the default retrieval to. */
+export interface RecallRetrieverFilter {
+  readonly limit?: number;
+  /** Vault-relative path prefix. */
+  readonly pathPrefix?: string;
+  /** Frontmatter `type` values; empty means no class filter. */
+  readonly types?: ReadonlyArray<string>;
+}
+
+/** What one slice did in a sliced decision; names and counts only. */
+export interface RecallSliceOutcome {
+  readonly name: string;
+  /**
+   * `inject` means the slice's material cleared its floor and was not
+   * already shown; `notes` can still be 0 when the global caps left it no
+   * room. Any other value is the reason the slice was omitted.
+   */
+  readonly outcome: "inject" | RecallAbstainReason;
+  readonly notes: number;
+}
+
 export interface RecallInjectOptions {
   readonly maxNotes?: number;
   readonly maxChars?: number;
@@ -127,6 +149,14 @@ export interface RecallInjectOptions {
    * on the path alone, any span, because the digest delivers whole notes.
    */
   readonly activeDigestPaths?: ReadonlySet<string>;
+  /**
+   * Operator-declared slices, in declared order. Used only together with
+   * {@link sliceRetriever}; absent or empty takes the single implicit
+   * relevance slice through the `retriever` argument, byte for byte.
+   */
+  readonly slices?: ReadonlyArray<RecallSliceSpec>;
+  /** Builds the retriever for one slice, asked for at most `limit` notes. */
+  readonly sliceRetriever?: (slice: RecallSliceSpec, limit: number) => RecallRetriever;
   /** Clock for the time budget (tests). */
   readonly now?: () => number;
 }
@@ -226,7 +256,9 @@ export type RecallAbstainReason =
    * Every candidate that cleared the floor was already shown in this
    * session, by an earlier brief or by the SessionStart digest.
    */
-  | "all_already_injected";
+  | "all_already_injected"
+  /** Slices were declared and none of them placed a note in the brief. */
+  | "all_slices_abstained";
 
 /**
  * Why an attempt failed, as a closed vocabulary rather than as prose.
@@ -288,6 +320,8 @@ export type RecallInjectDecision =
        * without having been shown.
        */
       readonly injectedNotes: ReadonlyArray<RecallInjectedNote>;
+      /** Per-slice outcomes, in declared order; present only when slices ran. */
+      readonly slices?: ReadonlyArray<RecallSliceOutcome>;
       /** Present only when the decision-model filter ran (use not `off`). */
       readonly decisionModel?: RecallInjectDecisionModelInfo;
     }
@@ -302,6 +336,8 @@ export type RecallInjectDecision =
        * short-circuits when the retrieval could not weigh the prompt.
        */
       readonly matchQuality: number | null;
+      /** Per-slice outcomes, in declared order; present only when slices ran. */
+      readonly slices?: ReadonlyArray<RecallSliceOutcome>;
       /** Present only on a `decision_model_abstain`. */
       readonly decisionModel?: RecallInjectDecisionModelInfo;
     }
@@ -401,24 +437,23 @@ export async function decideRecallInject(
   const maxChars = options.maxChars ?? RECALL_INJECT_MAX_CHARS;
   const timeBudgetMs = options.timeBudgetMs ?? RECALL_INJECT_TIME_BUDGET_MS;
   const floor = options.confidenceFloor ?? RECALL_INJECT_CONFIDENCE_FLOOR;
+  const caps: ResolvedCaps = { maxNotes, maxChars, timeBudgetMs, floor };
+  if (
+    options.slices !== undefined &&
+    options.slices.length > 0 &&
+    options.sliceRetriever !== undefined
+  ) {
+    return decideSliced(query, options.slices, options.sliceRetriever, caps, options, started);
+  }
 
   let resultSet: RecallResultSet;
   try {
     resultSet = await withTimeBudget(retriever(query), timeBudgetMs);
   } catch (exc) {
-    if (exc instanceof RecallInjectTimeoutError) {
-      return Object.freeze({ kind: "error", fault: RECALL_INJECT_FAULT.timeout });
-    }
-    return Object.freeze({
-      kind: "error",
-      fault: RECALL_INJECT_FAULT.retrieverFailed,
-      detail: errorDetail(exc),
-    });
+    return retrievalError(exc);
   }
 
-  const ranked = resultSet.candidates.toSorted(
-    (a, b) => b.score - a.score || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0),
-  );
+  const ranked = rankCandidates(resultSet.candidates);
   const matchQuality = resultSet.idfWeightedCoverage;
   if (ranked.length === 0) {
     return Object.freeze({ kind: "abstain", reason: "no_matches", topScore: 0, matchQuality });
@@ -473,9 +508,155 @@ export async function decideRecallInject(
   return applyDecisionFilter(filter, today, {
     query,
     rendered: chosen.slice(0, noteCount),
-    total: resultSet.total,
-    maxChars,
+    render: (kept) => {
+      const out = renderRecallBrief(kept, resultSet.total, maxChars);
+      return { ...out, injectedNotes: injectedNotesOf(kept.slice(0, out.noteCount)) };
+    },
     remainingMs: timeBudgetMs - (clock() - started),
+    clock,
+  });
+}
+
+interface ResolvedCaps {
+  readonly maxNotes: number;
+  readonly maxChars: number;
+  readonly timeBudgetMs: number;
+  readonly floor: number;
+}
+
+/** A failed or timed-out retrieval as an explicit `error` decision. */
+function retrievalError(exc: unknown): RecallInjectDecision {
+  if (exc instanceof RecallInjectTimeoutError) {
+    return Object.freeze({ kind: "error", fault: RECALL_INJECT_FAULT.timeout });
+  }
+  return Object.freeze({
+    kind: "error",
+    fault: RECALL_INJECT_FAULT.retrieverFailed,
+    detail: errorDetail(exc),
+  });
+}
+
+/** Score descending, then path, so equal scores render in a stable order. */
+function rankCandidates(
+  candidates: ReadonlyArray<RecallCandidate>,
+): ReadonlyArray<RecallCandidate> {
+  return candidates.toSorted(
+    (a, b) => b.score - a.score || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0),
+  );
+}
+
+/** One slice's retrieval judged against the floor on its own rows. */
+interface SliceVerdict {
+  readonly spec: RecallSliceSpec;
+  readonly outcome: "inject" | RecallAbstainReason;
+  readonly ranked: ReadonlyArray<RecallCandidate>;
+  readonly total: number;
+  readonly topScore: number;
+  readonly matchQuality: number | null;
+}
+
+function judgeSlice(spec: RecallSliceSpec, set: RecallResultSet, floor: number): SliceVerdict {
+  const ranked = rankCandidates(set.candidates);
+  const matchQuality = set.idfWeightedCoverage;
+  const topScore = ranked[0]?.score ?? 0;
+  const base = { spec, ranked, total: set.total, topScore, matchQuality };
+  if (ranked.length === 0) return { ...base, outcome: "no_matches" };
+  if (matchQuality === null) return { ...base, outcome: "unmeasurable_quality" };
+  if (matchQuality < floor) return { ...base, outcome: "below_floor" };
+  return { ...base, outcome: "inject" };
+}
+
+/**
+ * The slice path: every slice retrieves in parallel under the one shared
+ * time budget, each is judged against the floor on its own retrieval, and
+ * the survivors are laid out in declared order inside one fence, with the
+ * global caps bounding the sum. A slow slice fails the whole decision the
+ * way a slow single retrieval does; there is no partial inject.
+ */
+async function decideSliced(
+  query: string,
+  slices: ReadonlyArray<RecallSliceSpec>,
+  sliceRetriever: (slice: RecallSliceSpec, limit: number) => RecallRetriever,
+  caps: ResolvedCaps,
+  options: RecallInjectOptions,
+  started: number,
+): Promise<RecallInjectDecision> {
+  const clock = options.now ?? Date.now;
+  let sets: ReadonlyArray<RecallResultSet>;
+  try {
+    sets = await withTimeBudget(
+      Promise.all(
+        slices.map((spec) =>
+          sliceRetriever(spec, Math.min(spec.limit ?? caps.maxNotes, caps.maxNotes))(query),
+        ),
+      ),
+      caps.timeBudgetMs,
+    );
+  } catch (exc) {
+    return retrievalError(exc);
+  }
+  const verdicts = slices.map((spec, i) => judgeSlice(spec, sets[i]!, caps.floor));
+  const total = sets.reduce((sum, set) => sum + set.total, 0);
+  const groups = verdicts.map((v) =>
+    v.outcome === "inject" ? withoutDelivered(v.ranked, options) : [],
+  );
+  // Fixed before any layout: a slice the session had already seen in full.
+  const shownBefore = verdicts.map((v, i) => v.outcome === "inject" && groups[i]!.length === 0);
+
+  const layout = (pools: ReadonlyArray<ReadonlyArray<RecallCandidate>>) => {
+    const out = renderSlicedBrief(verdicts, pools, total, caps);
+    const outcomes = verdicts.map((v, i): RecallSliceOutcome => {
+      const placed = out.placed[i]!.length;
+      if (v.outcome !== "inject") return { name: v.spec.name, outcome: v.outcome, notes: 0 };
+      if (shownBefore[i] === true || out.onlyRepeats[i] === true) {
+        return { name: v.spec.name, outcome: "all_already_injected", notes: 0 };
+      }
+      return { name: v.spec.name, outcome: "inject", notes: placed };
+    });
+    return { ...out, slices: Object.freeze(outcomes.map((o) => Object.freeze(o))) };
+  };
+
+  const first = layout(groups);
+  const placedVerdicts = verdicts.filter((_, i) => first.placed[i]!.length > 0);
+  if (placedVerdicts.length === 0) {
+    const qualities = verdicts.flatMap((v) => (v.matchQuality === null ? [] : [v.matchQuality]));
+    return Object.freeze({
+      kind: "abstain",
+      reason: "all_slices_abstained",
+      topScore: Math.max(0, ...verdicts.map((v) => v.topScore)),
+      matchQuality: qualities.length > 0 ? Math.max(...qualities) : null,
+      slices: first.slices,
+    });
+  }
+  const rendered = first.placed.flat();
+  const today: Extract<RecallInjectDecision, { kind: "inject" }> = Object.freeze({
+    kind: "inject",
+    brief: first.brief,
+    noteCount: rendered.length,
+    topScore: Math.max(...placedVerdicts.map((v) => v.topScore)),
+    matchQuality: Math.max(...placedVerdicts.map((v) => v.matchQuality ?? 0)),
+    injectedNotes: injectedNotesOf(rendered),
+    slices: first.slices,
+  });
+  const filter = options.decisionFilter;
+  if (filter === undefined) return today;
+  return applyDecisionFilter(filter, today, {
+    query,
+    rendered,
+    render: (kept) => {
+      const keep = new Set(kept.map(recallInjectNoteKey));
+      const out = layout(
+        first.placed.map((pool) => pool.filter((c) => keep.has(recallInjectNoteKey(c)))),
+      );
+      const notes = out.placed.flat();
+      return {
+        brief: out.brief,
+        noteCount: notes.length,
+        injectedNotes: injectedNotesOf(notes),
+        slices: out.slices,
+      };
+    },
+    remainingMs: caps.timeBudgetMs - (clock() - started),
     clock,
   });
 }
@@ -506,11 +687,19 @@ export function recallInjectFilterOutcome(
   return { abstain, keep };
 }
 
+/** A brief laid out again over the notes the filter kept. */
+interface RenderedBrief {
+  readonly brief: string;
+  readonly noteCount: number;
+  readonly injectedNotes: ReadonlyArray<RecallInjectedNote>;
+  readonly slices?: ReadonlyArray<RecallSliceOutcome>;
+}
+
 interface FilterContext {
   readonly query: string;
   readonly rendered: ReadonlyArray<RecallCandidate>;
-  readonly total: number;
-  readonly maxChars: number;
+  /** The same renderer and caps that produced today's brief. */
+  readonly render: (kept: ReadonlyArray<RecallCandidate>) => RenderedBrief;
   readonly remainingMs: number;
   readonly clock: () => number;
 }
@@ -606,6 +795,7 @@ async function applyDecisionFilter(
       reason: "decision_model_abstain",
       topScore: today.topScore,
       matchQuality: today.matchQuality,
+      ...(today.slices !== undefined ? { slices: today.slices } : {}),
       decisionModel: Object.freeze({
         ...info,
         abstained: true,
@@ -617,7 +807,7 @@ async function applyDecisionFilter(
     });
   if (abstain) return withheld();
   // The existing renderer and caps over the surviving notes only.
-  const { brief, noteCount } = renderRecallBrief(kept, ctx.total, ctx.maxChars);
+  const { brief, noteCount, injectedNotes, slices } = ctx.render(kept);
   if (noteCount === 0) return withheld();
   return Object.freeze({
     kind: "inject",
@@ -625,7 +815,8 @@ async function applyDecisionFilter(
     noteCount,
     topScore: today.topScore,
     matchQuality: today.matchQuality,
-    injectedNotes: injectedNotesOf(kept.slice(0, noteCount)),
+    injectedNotes,
+    ...(slices !== undefined ? { slices } : {}),
     decisionModel: Object.freeze({
       ...info,
       tokensBefore,
@@ -665,7 +856,7 @@ function renderRecallBrief(
   const innerBudget = Math.max(0, maxChars - fenceOverhead());
   // Seed the header only when it fits the inner budget; a caller-supplied
   // tiny `maxChars` must never be exceeded just to carry the header.
-  const header = "Recalled vault context (relevance-matched to this prompt):";
+  const header = RECALL_BRIEF_HEADER;
   const lines: string[] = header.length <= innerBudget ? [header] : [];
   // The hint is orientation, not a pointer: keep it only while it fits, so a
   // tight budget spends its characters on the actual note pointers instead.
@@ -678,6 +869,83 @@ function renderRecallBrief(
     noteCount += 1;
   }
   return { brief: fenceUntrustedContent(lines.join("\n"), RECALL_FENCE_ORIGIN), noteCount };
+}
+
+const RECALL_BRIEF_HEADER = "Recalled vault context (relevance-matched to this prompt):";
+
+/**
+ * The sectioned variant of {@link renderRecallBrief}: the same header,
+ * fence, neutralisers and bullet format, with each slice's notes under a
+ * `## <heading>` line. Slices are laid out in declared order; each takes
+ * `min(slice.limit, notes left)` notes and `min(slice.maxChars, chars
+ * left)` of heading plus bullets, so the global caps, fence included,
+ * bound the sum and a later slice is the one clamped. A note already
+ * placed by an earlier slice is not repeated, and a slice that places no
+ * note gets no heading. The recall-hint line is orientation, so it goes in
+ * after the notes and only while it still fits.
+ */
+function renderSlicedBrief(
+  verdicts: ReadonlyArray<SliceVerdict>,
+  pools: ReadonlyArray<ReadonlyArray<RecallCandidate>>,
+  total: number,
+  caps: Pick<ResolvedCaps, "maxNotes" | "maxChars">,
+): {
+  readonly brief: string;
+  readonly placed: ReadonlyArray<ReadonlyArray<RecallCandidate>>;
+  /** Per slice: its pool was not empty, and an earlier slice placed every note of it. */
+  readonly onlyRepeats: ReadonlyArray<boolean>;
+} {
+  const innerBudget = Math.max(0, caps.maxChars - fenceOverhead());
+  const lines: string[] = RECALL_BRIEF_HEADER.length <= innerBudget ? [RECALL_BRIEF_HEADER] : [];
+  const seen = new Set<string>();
+  const placed: RecallCandidate[][] = [];
+  const onlyRepeats: boolean[] = [];
+  for (const [i, verdict] of verdicts.entries()) {
+    const fresh = (pools[i] ?? []).filter((c) => !seen.has(recallInjectNoteKey(c)));
+    onlyRepeats.push((pools[i] ?? []).length > 0 && fresh.length === 0);
+    const notesLeft = caps.maxNotes - seen.size;
+    const take = Math.min(verdict.spec.limit ?? notesLeft, notesLeft);
+    const sliceChars = verdict.spec.maxChars ?? Number.POSITIVE_INFINITY;
+    const heading = `## ${neutralizeHeading(verdict.spec)}`;
+    const section: string[] = [];
+    const chosen: RecallCandidate[] = [];
+    for (const note of fresh) {
+      if (chosen.length >= take) break;
+      const line = renderNoteLine({ ...note, title: neutralizeTitle(note.title) });
+      const next = [heading, ...section, line];
+      if (next.join("\n").length > sliceChars) break;
+      if ([...lines, ...next].join("\n").length > innerBudget) break;
+      section.push(line);
+      chosen.push(note);
+    }
+    if (chosen.length > 0) lines.push(heading, ...section);
+    for (const note of chosen) seen.add(recallInjectNoteKey(note));
+    placed.push(chosen);
+  }
+  const hint = deriveRecallHint(
+    placed.flat().map((c) => ({
+      searchType: c.searchType,
+      score: c.score,
+      title: neutralizeTitle(c.title),
+    })),
+    total,
+  );
+  const at = lines[0] === RECALL_BRIEF_HEADER ? 1 : 0;
+  if (hint !== null) {
+    const withHint = lines.toSpliced(at, 0, hint);
+    if (withHint.join("\n").length <= innerBudget) lines.splice(at, 0, hint);
+  }
+  return {
+    brief: fenceUntrustedContent(lines.join("\n"), RECALL_FENCE_ORIGIN),
+    placed,
+    onlyRepeats,
+  };
+}
+
+/** A slice heading is operator text: neutralised like a title, never empty. */
+function neutralizeHeading(spec: RecallSliceSpec): string {
+  const clean = neutralizeSingleLine(spec.heading).trim();
+  return clean.length > 0 ? clean : spec.name;
 }
 
 /** Character cost of the untrusted-content fence around an empty body. */
@@ -775,12 +1043,16 @@ export function recallInjectAuditDetails(
 ): Readonly<Record<string, unknown>> {
   const safe = recallInjectTelemetryMetadata(decision);
   if (decision.kind !== "error") {
+    // Slice names are operator vocabulary, local to this vault's policy:
+    // they ride the audit line only, never the synced telemetry record.
+    const sliced =
+      decision.slices === undefined ? safe : Object.freeze({ ...safe, slices: decision.slices });
     // The decision-model degrade reason is local operational evidence,
     // like a retriever's message: it rides this line only.
     const reason = decision.decisionModel?.degradeReason;
-    if (reason === undefined) return safe;
+    if (reason === undefined) return sliced;
     return Object.freeze({
-      ...safe,
+      ...sliced,
       decision_model: Object.freeze({
         ...(safe["decision_model"] as Readonly<Record<string, unknown>>),
         degrade_reason: reason,
@@ -838,8 +1110,12 @@ async function withTimeBudget<T>(promise: Promise<T>, budgetMs: number): Promise
 export function defaultRecallRetriever(
   configPath: string,
   vault: string,
-  limit: number = RECALL_INJECT_MAX_NOTES,
+  limitOrFilter: number | RecallRetrieverFilter = RECALL_INJECT_MAX_NOTES,
 ): RecallRetriever {
+  const filter: RecallRetrieverFilter =
+    typeof limitOrFilter === "number" ? { limit: limitOrFilter } : limitOrFilter;
+  const limit = filter.limit ?? RECALL_INJECT_MAX_NOTES;
+  const types = filter.types ?? [];
   return async (query) => {
     // The decision-model rerank kind is skipped here: a decision request
     // (its timeout plus a retry) does not fit the hook's retrieval budget,
@@ -848,6 +1124,8 @@ export function defaultRecallRetriever(
       query,
       limit,
       skipDecisionModelRerank: true,
+      ...(filter.pathPrefix !== undefined ? { pathPrefix: filter.pathPrefix } : {}),
+      ...(types.length > 0 ? { properties: new Map([["type", types]]) } : {}),
     });
     const candidates = outcome.results.map((result) =>
       Object.freeze({
