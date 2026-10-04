@@ -37,7 +37,6 @@ export function parseRecallInjectBlock(
   if (map === undefined) return undefined;
 
   const names = parseSliceNames(map, ctx.source);
-  const fields = new Map<string, Map<string, unknown>>(names.map((n) => [n, new Map()]));
   const nonSlice: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(map)) {
     if (!key.startsWith(SLICE_KEY_PREFIX)) {
@@ -48,8 +47,7 @@ export function parseRecallInjectBlock(
     const cut = rest.indexOf("_");
     const name = cut === -1 ? rest : rest.slice(0, cut);
     const field = cut === -1 ? "" : rest.slice(cut + 1);
-    const sliceFields = fields.get(name);
-    if (sliceFields === undefined) {
+    if (!names.includes(name)) {
       throw new BrainConfigError(
         `names slice '${name}', which is not declared in ${BLOCK}.slices`,
         `${BLOCK}.${key}`,
@@ -63,7 +61,6 @@ export function parseRecallInjectBlock(
         ctx.source,
       );
     }
-    sliceFields.set(field, value);
   }
 
   warnUnknownKeys(ctx, nonSlice, KNOWN_KEYS, BLOCK);

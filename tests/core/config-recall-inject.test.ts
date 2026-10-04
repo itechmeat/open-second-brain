@@ -119,6 +119,14 @@ describe("resolveRecallInjectCaps", () => {
     ]);
   });
 
+  test("one past the upper edge lands in invalid", () => {
+    writeConfig({ recall_inject_max_chars: "8001", recall_inject_time_budget_ms: "6001" });
+    expect(resolveRecallInjectCaps(configPath)).toEqual({
+      caps: {},
+      invalid: ["recall_inject_max_chars", "recall_inject_time_budget_ms"],
+    });
+  });
+
   test("an invalid env value is rejected even when config holds a valid one", () => {
     writeConfig({ recall_inject_max_notes: "3" });
     process.env["OPEN_SECOND_BRAIN_RECALL_INJECT_MAX_NOTES"] = "0";

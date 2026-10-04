@@ -131,6 +131,11 @@ describe("recall_inject block", () => {
     expectFieldError("  slices: [a]\n  slice_a_types: decision\n", "recall_inject.slice_a_types");
   });
 
+  test("a blank heading or a blank types entry is a hard error", () => {
+    expectFieldError('  slices: [a]\n  slice_a_heading: "  "\n', "recall_inject.slice_a_heading");
+    expectFieldError('  slices: [a]\n  slice_a_types: ["  "]\n', "recall_inject.slice_a_types");
+  });
+
   test("an unknown non-slice key warns and does not error", () => {
     const { config, warnings } = load("  slices: [a]\n  future_knob: 3\n");
     expect(config.recall_inject?.slices).toHaveLength(1);
