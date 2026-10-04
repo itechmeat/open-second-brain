@@ -19,15 +19,10 @@
 
 import { createHash } from "node:crypto";
 import {
-  closeSync,
-  constants as fsConstants,
-  fstatSync,
   linkSync,
   lstatSync,
   mkdirSync,
-  openSync,
   readdirSync,
-  readFileSync,
   renameSync,
   statSync,
   unlinkSync,
@@ -39,6 +34,10 @@ import {
   resolveSessionScope,
   SESSION_SCOPE_MAX_LENGTH,
 } from "../../src/core/brain/session-scope.ts";
+import {
+  derivedDirIsSymlinked,
+  readRegularFileNoFollow,
+} from "../../src/core/derived-store-guard.ts";
 import { atomicWriteText } from "../../src/core/fs-atomic.ts";
 
 /** The vault's hook-surface directory. */
@@ -105,15 +104,6 @@ export function hookStateFilePath(vault: string, sessionId: string | null | unde
   return join(vault, OSB_DIR, HOOK_STATE_DIR, `${scopeSlug(sessionId)}.json`);
 }
 
-/** Whether `path` exists and is a symbolic link; `false` when it is absent. */
-function isSymlink(path: string): boolean {
-  try {
-    return lstatSync(path).isSymbolicLink();
-  } catch {
-    return false;
-  }
-}
-
 /**
  * True when `<vault>/.open-second-brain` or its `hook-state` directory is a
  * symbolic link. A vault received from elsewhere could point either at any
@@ -121,12 +111,8 @@ function isSymlink(path: string): boolean {
  * answer empty, writes fail, the sweep removes nothing.
  */
 function hookStateDirIsSymlinked(vault: string): boolean {
-  const osbDir = join(vault, OSB_DIR);
-  return isSymlink(osbDir) || isSymlink(join(osbDir, HOOK_STATE_DIR));
+  return derivedDirIsSymlinked(vault, OSB_DIR, HOOK_STATE_DIR);
 }
-
-/** Open flags for a state-file read: never follow a leaf symlink where the platform can refuse one. */
-const STATE_READ_FLAGS = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0);
 
 /**
  * Read the whole state object for a scope. Any failure (missing file, unreadable,
@@ -148,22 +134,11 @@ function loadState(
   sessionId: string | null | undefined,
 ): Record<string, unknown> | null {
   if (hookStateDirIsSymlinked(vault)) return {};
-  const path = hookStateFilePath(vault, sessionId);
+  const read = readRegularFileNoFollow(hookStateFilePath(vault, sessionId));
+  if (read.status === "absent") return {};
+  if (read.status !== "ok") return null;
   try {
-    if (!lstatSync(path).isFile()) return null;
-  } catch {
-    return {};
-  }
-  try {
-    const fd = openSync(path, STATE_READ_FLAGS);
-    let text: string;
-    try {
-      if (!fstatSync(fd).isFile()) return null;
-      text = readFileSync(fd, "utf8");
-    } finally {
-      closeSync(fd);
-    }
-    const parsed = JSON.parse(text) as unknown;
+    const parsed = JSON.parse(read.text) as unknown;
     if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
       return parsed as Record<string, unknown>;
     }
