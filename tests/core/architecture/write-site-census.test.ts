@@ -846,11 +846,11 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
     reason: "rewrites the rerank-provider registry JSON in full, name-sorted for determinism.",
   },
   "src/core/search/session-focus.ts": {
-    categories: [C.machineArtifact, C.retentionDelete],
-    calls: ["rmSync", "writeFileSync"],
+    categories: [C.retentionDelete],
+    calls: ["rmSync"],
     reason:
-      "the per-session focus JSON, one small document per session scope, and the call that clears " +
-      "it. Each entry expires on its own and is rewritten whole by the next `focus` call, so a " +
+      "the call that clears the per-session focus JSON (the write itself goes through the shared " +
+      "atomic text writer). Each entry expires on its own and is rewritten whole by the next `focus` call, so a " +
       "torn file costs one session's standing query and is replaced rather than repaired; the " +
       "clear removes the file because an empty focus and no focus are the same state.",
   },
@@ -1283,8 +1283,10 @@ const DIRECT_WRITE_ROWS = 76;
  * signal's `session_ref` through `writeFrontmatterAtomic`.
  * 107 -> 108: `src/core/brain/link-graph/repair-lane.ts` stages hub
  * candidates through the shared atomic JSONL writer.
+ * 108 -> 109: `src/core/search/session-focus.ts` writes the focus through
+ * `atomicWriteText` (mode 0600, a leaf link is replaced, not followed).
  */
-const SHARED_HELPER_ROWS = 108;
+const SHARED_HELPER_ROWS = 109;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1368,9 +1370,10 @@ const UNSTAMPED_DIRECT_ROWS = 75;
  * failed-upgrade marker `self-heal-upgrade-state.ts` writes (101 -> 102),
  * and the dedup index cache, a derived file outside the vault (102 -> 103),
  * and the orphan-repair detach (103 -> 104). 104 -> 105: the repair lane
- * stages hub candidates through the shared atomic JSONL writer.
+ * stages hub candidates through the shared atomic JSONL writer. 105 -> 106:
+ * the session focus writes through the shared atomic text writer.
  */
-const UNSTAMPED_SHARED_ROWS = 105;
+const UNSTAMPED_SHARED_ROWS = 106;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {
