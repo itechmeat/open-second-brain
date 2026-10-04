@@ -19,6 +19,7 @@ import { join } from "node:path";
 import {
   HOOK_STATE_LOCK_RETRY_DELAY_MS,
   HOOK_STATE_STALE_LOCK_MS,
+  _clearStaleLockForTests,
   hookStateFilePath,
   pruneHookStateFiles,
   readHookStamp,
@@ -268,6 +269,26 @@ describe("updateHookState", () => {
       unlinkSync(lockPath);
       rmSync(aside, { recursive: true, force: true });
       _resetHeldLocksForTests();
+    }
+  });
+
+  test("a takeover that moved a live lock puts it back and reports no takeover", () => {
+    const lockPath = holdLock("sess-1");
+    const liveIno = statSync(lockPath, { bigint: true }).ino;
+    // The lock reads stale at the first check, but the file the rename moved
+    // is fresh: another contender re-acquired in between.
+    const staleOnlyUnderLockName = (path: string): boolean => path === lockPath;
+    try {
+      const tookOver = _clearStaleLockForTests(
+        hookStateFilePath(vault, "sess-1"),
+        staleOnlyUnderLockName,
+      );
+      expect(tookOver).toBe(false);
+      expect(existsSync(lockPath)).toBe(true);
+      expect(statSync(lockPath, { bigint: true }).ino).toBe(liveIno);
+      expect(readdirSync(dir()).filter((name) => name.includes(".stale-"))).toEqual([]);
+    } finally {
+      unlinkSync(lockPath);
     }
   });
 

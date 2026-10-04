@@ -158,20 +158,27 @@ function isStale(path: string): boolean {
  * the stale lock, only one moves it. The other's rename then either fails
  * (nothing there) or moves the winner's fresh lock, which the re-check of the
  * moved file catches; that lock is linked back under its name (`link` never
- * overwrites) and the takeover reports `false`. Best-effort: any I/O race
- * reports `false`.
+ * overwrites) and the takeover reports `false`. Every I/O error reports
+ * `false`.
+ *
+ * One residual race remains: while a moved live lock is aside, between the
+ * rename and the link back, the lock name is absent, so a third contender
+ * arriving in that window acquires alongside the live holder; the link back
+ * then fails and the live holder's lock is lost. That needs a crash residue,
+ * three contenders on one scope and an arrival within microseconds, and the
+ * worst outcome is a lost update to the operator's own session state.
  */
-function clearStaleLock(path: string): boolean {
+function clearStaleLock(path: string, stale: (path: string) => boolean = isStale): boolean {
   const lockPath = path + ".lock";
   const aside = `${lockPath}.stale-${process.pid}`;
   try {
-    if (!isStale(lockPath)) return false;
+    if (!stale(lockPath)) return false;
     renameSync(lockPath, aside);
   } catch {
     return false;
   }
   try {
-    if (isStale(aside)) return true;
+    if (stale(aside)) return true;
     // Moved a live holder's lock: put it back before anyone can see the gap widen.
     linkSync(aside, lockPath);
     return false;
@@ -185,6 +192,16 @@ function clearStaleLock(path: string): boolean {
     }
   }
 }
+
+/**
+ * Test-only entry to {@link clearStaleLock} with an injected stale check, so
+ * a test can reach the "moved a live lock" branch, which otherwise needs an
+ * mtime change between the two checks.
+ *
+ * The leading underscore is this repo's marker for a test-only export.
+ */
+// oxlint-disable-next-line no-underscore-dangle
+export const _clearStaleLockForTests = clearStaleLock;
 
 /**
  * Acquire the scope's advisory lock. The read-merge-write is not atomic on its
