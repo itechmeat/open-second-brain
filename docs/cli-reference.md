@@ -738,8 +738,9 @@ o2b brain morning-brief       renders recalled items as one chronological Recent
 
 Prompt-time recall is a hook, not a verb: with `recall_inject_enabled:
 "true"` (env `OPEN_SECOND_BRAIN_RECALL_INJECT_ENABLED`) the
-UserPromptSubmit hook injects a bounded brief of relevant vault notes (4
-notes, 900 chars, fixed time budget, confidence floor), fenced as
+UserPromptSubmit hook injects a bounded brief of relevant vault notes (by
+default 4 notes, 900 chars, a 2,500 ms time budget and a 0.35 confidence
+floor, each tunable as described below), fenced as
 untrusted content with neutralized titles; any internal error or timeout
 injects nothing, and every decision writes one audit line recording
 counts and scores only. The knowledge-gap loop is likewise hook-driven:
@@ -748,6 +749,65 @@ threshold via `gap_loop_threshold`), recurring recall gaps promote at
 session end into durable task notes under `Brain/gap-tasks/` (stable-key
 dedup, never the kanban board), render as a session-start agenda, and
 auto-close once the topic is later recalled confidently.
+
+Recall-inject tuning keys live in the flat global config next to
+`recall_inject_enabled` and matter only while that flag is on. Each one
+has an env override, and the env value always wins over the config value:
+
+| Config key | Env override | Range | Default |
+|---|---|---|---|
+| `recall_inject_max_notes` | `OPEN_SECOND_BRAIN_RECALL_INJECT_MAX_NOTES` | integer 1..10 | 4 |
+| `recall_inject_max_chars` | `OPEN_SECOND_BRAIN_RECALL_INJECT_MAX_CHARS` | integer 200..8000 | 900 |
+| `recall_inject_time_budget_ms` | `OPEN_SECOND_BRAIN_RECALL_INJECT_TIME_BUDGET_MS` | integer 250..6000 | 2500 |
+| `recall_inject_confidence_floor` | `OPEN_SECOND_BRAIN_RECALL_INJECT_CONFIDENCE_FLOOR` | number 0..1 | 0.35 |
+| `recall_inject_dedupe` | `OPEN_SECOND_BRAIN_RECALL_INJECT_DEDUPE` | boolean | `true` |
+
+The four caps resolve leniently: a value that is out of range,
+non-numeric or (for the integer caps) fractional keeps the built-in
+default, and the hook names the rejected key in its audit line
+(`config_invalid`). Unset caps leave the brief byte-identical.
+`recall_inject_dedupe` is on unless set to the literal `"false"` or `"0"`.
+With it on and a host that sends a `session_id`, a note span this session
+was already shown, by an earlier brief or by the SessionStart digest, is
+not injected again; a host without a session id gets no dedupe. The
+semantics are in
+[the recall-inject decision-model page](decision-models/recall-inject.md#session-dedupe-and-slices).
+
+Recall slices are vault policy, not machine config: a `recall_inject:`
+block in `Brain/_brain.yaml` declares named slices, each retrieved with
+its own filters and rendered under its own heading inside the one fenced
+brief. The block is deliberately absent from the generated `_brain.yaml`
+template, because slices name this vault's folders and note types and
+have no default. Without the block the hook keeps its single unsliced
+relevance query, byte for byte. Contract example:
+
+```yaml
+recall_inject:
+  slices: [decisions, lessons]
+  slice_decisions_heading: Recent decisions
+  slice_decisions_path_prefix: Brain/decisions/
+  slice_decisions_types: [decision]
+  slice_decisions_limit: 2
+  slice_decisions_max_chars: 400
+  slice_lessons_path_prefix: Brain/lessons
+```
+
+`slices` lists the slice names in the order they are laid out; a name
+matches `^[a-z][a-z0-9]{0,23}$` (no underscore, so each
+`slice_<name>_<field>` key splits unambiguously), and at most 6 slices
+are allowed. The per-slice fields are `heading` (defaults to the name),
+`path_prefix` (vault-relative), `types` (an inline array matched against
+frontmatter `type`; empty means no class filter), `limit` (integer 1..10)
+and `max_chars` (integer 100..8000). A slice with neither `limit` nor
+`max_chars` takes the global caps. An unknown field for a declared slice,
+a `slice_*` key for an undeclared name, a duplicate name, more than 6
+slices or an out-of-range number is a hard load error. Every slice is
+retrieved in parallel under the one shared time budget, so more slices
+trade against latency on a large vault. A `_brain.yaml` that fails to
+load takes no slice path and is recorded as `slices_config: "invalid"` on
+the audit line; because the search reads the same policy file, the
+decision then ends in `error` with fault `retriever_failed` and nothing
+is injected until the file is fixed.
 
 Search-side trust switches: `search_trust_gate_enabled` (env
 `OPEN_SECOND_BRAIN_SEARCH_TRUST_GATE`) zero-ranks quarantined material
@@ -829,6 +889,36 @@ live under `.open-second-brain/hook-state/` with epoch-ms expiry.
 status across every discovered code project, threading `project_path`
 per query when supported (feature-detected) and degrading with an
 explicit note when not.
+
+Chunked re-grounding: `reground_parts_enabled` (env
+`OPEN_SECOND_BRAIN_REGROUND_PARTS_ENABLED`, default off) splits an
+oversized SessionStart payload instead of emitting it whole. Claude Code
+persists an `additionalContext` past roughly 10,000 UTF-16 units to a
+file and shows only a preview, so with the flag on, a joined
+standing-rules, scoped-rules and memory payload longer than the part
+ceiling is cut into at most 8 parts (at block, then paragraph, then line
+boundaries, in priority order). Part 1 is emitted at SessionStart and
+parts 2..n are queued in the session's hook state; the `reground-deliver`
+hook then hands out exactly one queued part per `PostToolUse` or
+`UserPromptSubmit` event until the queue is empty or the next
+SessionStart replaces it. Only Claude Code and Codex payloads with a
+session id are split, because only they have the carrier registered;
+every other runtime, and any payload that fits the ceiling, gets the
+single payload as before. The ceiling is in UTF-16 code units:
+
+| Config key | Env override | Range | Default |
+|---|---|---|---|
+| `reground_part_chars` | `OPEN_SECOND_BRAIN_REGROUND_PART_CHARS` | integer 2000..100000 | 9000 |
+| `reground_part_chars_claudecode` | `OPEN_SECOND_BRAIN_REGROUND_PART_CHARS_CLAUDECODE` | integer 2000..100000 | `reground_part_chars` |
+| `reground_part_chars_codex` | `OPEN_SECOND_BRAIN_REGROUND_PART_CHARS_CODEX` | integer 2000..100000 | `reground_part_chars` |
+
+The runtime key wins over `reground_part_chars`, which wins over the
+default 9000 (the observed Claude Code threshold less 10%, applied to
+Codex too until measured). At each level the env value wins over the
+config value, and an invalid value falls through to the next level. The
+queue lives under `.open-second-brain/hook-state/` with a 24 h expiry,
+and the receipt and audit fields it adds are listed in
+[observability](observability.md).
 
 ### Semantic-health baselining (since v1.38.0)
 
