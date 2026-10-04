@@ -102,6 +102,16 @@ function parseSliceNames(
   return [...seen];
 }
 
+/**
+ * Whether a (slash-normalised) `path_prefix` is vault-relative. The search
+ * request refuses `..`, an absolute path and a drive letter at query time,
+ * and the slice would then abstain on every prompt with no sign of why, so
+ * the same forms are load errors here.
+ */
+function isVaultRelativePrefix(prefix: string): boolean {
+  return !prefix.includes("..") && !prefix.startsWith("/") && !/^[A-Za-z]:/.test(prefix);
+}
+
 function parseSlice(
   name: string,
   map: Readonly<Record<string, unknown>>,
@@ -113,9 +123,9 @@ function parseSlice(
   const heading = optionalString(map, key("heading"), path("heading"), source) ?? name;
   const rawPrefix = optionalString(map, key("path_prefix"), path("path_prefix"), source);
   const pathPrefix = rawPrefix === undefined ? null : rawPrefix.replaceAll("\\", "/");
-  if (pathPrefix !== null && pathPrefix.includes("..")) {
+  if (pathPrefix !== null && !isVaultRelativePrefix(pathPrefix)) {
     throw new BrainConfigError(
-      "must be a vault-relative path without '..'",
+      "must be a vault-relative path without '..', a leading '/' or a drive letter",
       path("path_prefix"),
       source,
     );

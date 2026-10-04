@@ -136,6 +136,18 @@ describe("recall_inject block", () => {
     expectFieldError('  slices: [a]\n  slice_a_types: ["  "]\n', "recall_inject.slice_a_types");
   });
 
+  test("a non-string heading, a bare slice key and a fractional limit are hard errors", () => {
+    expectFieldError("  slices: [a]\n  slice_a_heading: 5\n", "recall_inject.slice_a_heading");
+    expectFieldError("  slices: [a]\n  slice_a_heading: [x]\n", "recall_inject.slice_a_heading");
+    expectFieldError("  slices: [a]\n  slice_a: 1\n", "recall_inject.slice_a");
+    expectFieldError("  slices: [a]\n  slice_a_limit: 2.5\n", "recall_inject.slice_a_limit");
+    expectFieldError("  slices: [a]\n  slice_a_limit: -1\n", "recall_inject.slice_a_limit");
+  });
+
+  test("an empty slices list parses to no slices", () => {
+    expect(load("  slices: []\n").config.recall_inject).toEqual({ slices: [] });
+  });
+
   test("an unknown non-slice key warns and does not error", () => {
     const { config, warnings } = load("  slices: [a]\n  future_knob: 3\n");
     expect(config.recall_inject?.slices).toHaveLength(1);
@@ -154,5 +166,14 @@ describe("recall_inject block", () => {
       "  slices: [a]\n  slice_a_path_prefix: Brain/../private\n",
       "recall_inject.slice_a_path_prefix",
     );
+  });
+
+  test("an absolute or drive-letter path_prefix is rejected", () => {
+    for (const prefix of ["/Brain", "/etc", "\\\\Brain\\\\x", "C:/Brain", "c:Brain"]) {
+      expectFieldError(
+        `  slices: [a]\n  slice_a_path_prefix: ${prefix}\n`,
+        "recall_inject.slice_a_path_prefix",
+      );
+    }
   });
 });

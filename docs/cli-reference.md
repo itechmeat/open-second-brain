@@ -801,7 +801,8 @@ frontmatter `type`; empty means no class filter), `limit` (integer 1..10)
 and `max_chars` (integer 100..8000). A slice with neither `limit` nor
 `max_chars` takes the global caps. An unknown field for a declared slice,
 a `slice_*` key for an undeclared name, a duplicate name, more than 6
-slices or an out-of-range number is a hard load error. Every slice is
+slices, an out-of-range number or a `path_prefix` with `..`, a leading
+`/` or a drive letter is a hard load error. Every slice is
 retrieved in parallel under the one shared time budget, so more slices
 trade against latency on a large vault. A `_brain.yaml` that fails to
 load takes no slice path and is recorded as `slices_config: "invalid"` on
