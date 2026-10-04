@@ -88,13 +88,14 @@ emitted whole; the keys and the receipt fields are in
 **Hook-state files are private and some are renamed.** The per-session
 files under `.open-second-brain/hook-state/` are now written with mode
 `0600`, because the re-grounding queue holds parts of the SessionStart
-payload. A session id that is not already a lowercase slug (one with
-upper case, separators or more than 64 characters) now gets a file name
-with a hash suffix, so two such ids no longer share a file. Claude Code
-and Codex session ids keep their file names. A host that sends other ids
-starts its hook state afresh once after the upgrade: once-per-session
-nudges can repeat in an open session, and the old file is pruned after
-seven days.
+payload. Existing files become private on their next write; a file never
+written again stays as it was until the prune removes it. A session id
+that is not already a lowercase slug (one with upper case, separators or
+more than 64 characters) now gets a file name with a hash suffix, so two
+such ids no longer share a file. Claude Code and Codex session ids keep
+their file names. A host that sends other ids starts its hook state
+afresh once after the upgrade: once-per-session nudges can repeat in an
+open session, and the old file is pruned after seven days.
 
 ## Upgrading to 1.70.0
 
