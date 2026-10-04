@@ -26,6 +26,13 @@ export const LEDGER_KEY_REGROUND = "osb.reground.queue";
 export const LEDGER_TTL_MS = 86_400_000;
 
 /**
+ * Ceiling on the recall set: only the most recent keys are kept, so a long
+ * session without a new SessionStart cannot grow the scope file that every
+ * lock-free reader re-parses on each prompt and tool call.
+ */
+export const RECALL_SET_MAX = 2000;
+
+/**
  * True only for a string session id with at least one ASCII alphanumeric, the
  * same floor `resolveSessionScope` needs; anything less would collapse to the
  * shared default scope. A sessionless host gets no ledger at all, so one
@@ -64,7 +71,9 @@ export function readRecallInjected(
 
 /**
  * Merge `keys` into the session's injected set and refresh its expiry. An
- * expired set is dropped rather than merged. Returns `false` on any failure.
+ * expired set is dropped rather than merged. Past {@link RECALL_SET_MAX}
+ * keys the oldest drop first (a re-recorded key keeps its first position,
+ * which is enough for a dedupe hint). Returns `false` on any failure.
  */
 export function recordRecallInjected(
   vault: string,
@@ -78,7 +87,11 @@ export function recordRecallInjected(
     (state, now) => {
       const prior = liveData(state[LEDGER_KEY_RECALL], now);
       const merged = new Set([...stringList(prior?.["keys"]), ...keys]);
-      state[LEDGER_KEY_RECALL] = { expiresAt: now + LEDGER_TTL_MS, data: { keys: [...merged] } };
+      const all = [...merged];
+      state[LEDGER_KEY_RECALL] = {
+        expiresAt: now + LEDGER_TTL_MS,
+        data: { keys: all.slice(Math.max(0, all.length - RECALL_SET_MAX)) },
+      };
       return { state, result: true };
     },
     { nowMs },

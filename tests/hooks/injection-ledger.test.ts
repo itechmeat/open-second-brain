@@ -16,6 +16,7 @@ import {
   LEDGER_KEY_RECALL,
   LEDGER_KEY_REGROUND,
   LEDGER_TTL_MS,
+  RECALL_SET_MAX,
   beginInjectionEpoch,
   digestNotePaths,
   isRealSessionId,
@@ -93,6 +94,17 @@ describe("recall injected set", () => {
     recordRecallInjected(vault, "sess-1", ["old"], NOW);
     recordRecallInjected(vault, "sess-1", ["new"], NOW + LEDGER_TTL_MS + 1);
     expect([...readRecallInjected(vault, "sess-1", NOW + LEDGER_TTL_MS + 2)]).toEqual(["new"]);
+  });
+
+  test("the set keeps only the most recent RECALL_SET_MAX keys", () => {
+    const keys = Array.from({ length: RECALL_SET_MAX + 5 }, (_, i) => `k${i}`);
+    expect(recordRecallInjected(vault, "sess-1", keys.slice(0, 10), NOW)).toBe(true);
+    expect(recordRecallInjected(vault, "sess-1", keys.slice(10), NOW + 1)).toBe(true);
+    const live = readRecallInjected(vault, "sess-1", NOW + 2);
+    expect(live.size).toBe(RECALL_SET_MAX);
+    for (const dropped of keys.slice(0, 5)) expect(live.has(dropped)).toBe(false);
+    expect(live.has(keys[5]!)).toBe(true);
+    expect(live.has(keys.at(-1)!)).toBe(true);
   });
 
   test("a malformed payload reads as an empty set", () => {
