@@ -350,6 +350,31 @@ describe("decideRecallInject with operator-declared slices", () => {
     ]);
   });
 
+  test("the digest filter spares a slice note from another vault on the same path", async () => {
+    const decision = await decideRecallInject("receipts", unused, {
+      activeDigestPaths: new Set(["Brain/lessons.md"]),
+      slices: [slice("one")],
+      sliceRetriever: slicesOf({
+        one: {
+          candidates: [
+            candidate({ path: "Brain/lessons.md", title: "Local", origin: "local" }),
+            candidate({
+              path: "Brain/lessons.md",
+              title: "Profile",
+              origin: "profile/work",
+              score: 0.5,
+            }),
+          ],
+          total: 2,
+        },
+      }),
+    });
+    expect(decision.kind).toBe("inject");
+    if (decision.kind !== "inject") return;
+    expect(decision.injectedNotes.map((n) => n.origin)).toEqual(["profile/work"]);
+    expect(decision.slices).toEqual([{ name: "one", outcome: "inject", notes: 1 }]);
+  });
+
   test("every slice abstaining gives all_slices_abstained with per-slice outcomes", async () => {
     const decision = await decideRecallInject("receipts", unused, {
       slices: [slice("empty"), slice("weak"), slice("blank")],

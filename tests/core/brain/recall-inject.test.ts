@@ -407,6 +407,30 @@ describe("per-session dedupe and the cross-lane digest filter", () => {
     expect(decision.injectedNotes).toEqual([{ path: "Brain/b.md", startLine: 1, endLine: 4 }]);
   });
 
+  test("activeDigestPaths filters only candidates from the active vault", async () => {
+    const decision = await decideRecallInject(
+      "receipts",
+      retrieverOf({
+        candidates: [
+          candidate({ path: "Brain/preferences/pref-x.md", title: "Local", origin: "local" }),
+          candidate({
+            path: "Brain/preferences/pref-x.md",
+            title: "Other",
+            origin: "source/other",
+            score: 0.5,
+          }),
+        ],
+        total: 2,
+      }),
+      { activeDigestPaths: new Set(["Brain/preferences/pref-x.md"]) },
+    );
+    expect(decision.kind).toBe("inject");
+    if (decision.kind !== "inject") return;
+    expect(decision.injectedNotes).toEqual([
+      { path: "Brain/preferences/pref-x.md", origin: "source/other", startLine: 1, endLine: 4 },
+    ]);
+  });
+
   test("injectedNotes lists exactly the rendered notes, origin included", async () => {
     const decision = await decideRecallInject(
       "receipts",

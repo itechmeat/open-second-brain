@@ -21,6 +21,7 @@
 import { deriveRecallHint, type RecallHintInput } from "../search/recall-hint.ts";
 import { searchAcrossVaults } from "../search/cross-vault.ts";
 import type { RecallSource } from "./portability/recall-sources.ts";
+import { LOCAL_ORIGIN } from "./portability/origins.ts";
 import { fenceUntrustedContent, neutralizeUntrustedText } from "./untrusted-source.ts";
 import { RECALL_INJECT_ANY_MIN, RECALL_INJECT_NOTE_MIN } from "../decision-model/questions.ts";
 import { estimateTokens } from "./text/tokenizer.ts";
@@ -146,7 +147,8 @@ export interface RecallInjectOptions {
   readonly alreadyInjected?: ReadonlySet<string>;
   /**
    * Vault-relative paths the SessionStart digest actually emitted. Matched
-   * on the path alone, any span, because the digest delivers whole notes.
+   * on the path alone, any span, because the digest delivers whole notes,
+   * and only for candidates from the active vault, the one the digest reads.
    */
   readonly activeDigestPaths?: ReadonlySet<string>;
   /**
@@ -363,8 +365,9 @@ export interface RecallInjectedNote {
 }
 
 /**
- * The per-session dedupe key of one note: origin, vault-relative path and
- * line span, with an empty origin for the primary vault. The one source of
+ * The per-session dedupe key of one note: origin label (`local` for the
+ * active vault through the default retriever; empty when a retriever sets
+ * no origin), vault-relative path and line span. The one source of
  * the key: the hook records these values and this core filters on them.
  */
 export function recallInjectNoteKey(note: RecallInjectedNote): string {
@@ -403,8 +406,19 @@ function withoutDelivered(
     return ranked;
   }
   return ranked.filter(
-    (c) => !(injected?.has(recallInjectNoteKey(c)) ?? false) && !(digest?.has(c.path) ?? false),
+    (c) =>
+      !(injected?.has(recallInjectNoteKey(c)) ?? false) &&
+      !(fromActiveVault(c) && (digest?.has(c.path) ?? false)),
   );
+}
+
+/**
+ * Whether a candidate comes from the active vault. The SessionStart digest
+ * delivers the active vault's notes only, so a profile or recall source
+ * note on the same vault-relative path was never shown and stays eligible.
+ */
+function fromActiveVault(candidate: RecallCandidate): boolean {
+  return candidate.origin === undefined || candidate.origin === LOCAL_ORIGIN;
 }
 
 /** Typed error for a retrieval that exceeded the fixed time budget. */
