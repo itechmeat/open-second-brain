@@ -90,7 +90,7 @@ export interface ResolvedSearchRequest {
 
 function assertSafePathPrefix(prefix: string | undefined): string | undefined {
   if (!prefix) return undefined;
-  if (prefix.includes("..") || prefix.startsWith("/")) {
+  if (prefix.includes("..") || prefix.startsWith("/") || /^[A-Za-z]:/.test(prefix)) {
     throw new SearchError("INVALID_INPUT", "path_prefix escapes vault");
   }
   return prefix;
