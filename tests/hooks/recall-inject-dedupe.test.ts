@@ -133,6 +133,7 @@ describe("recall-inject hook: per-session dedupe", () => {
     expect(sets.already_injected).toBeGreaterThan(0);
     expect(details["deduped"]).toBeUndefined();
     expect(details["ledger_recorded"]).toBeUndefined();
+    expect(details["ledger_read"]).toBeUndefined();
   });
 
   test("a ledger write that fails after stdout is named on the audit line", async () => {
@@ -148,6 +149,18 @@ describe("recall-inject hook: per-session dedupe", () => {
     expect(details["decision"]).toBe("inject");
     expect(details["ledger_recorded"]).toBe(false);
     expect(readRecallInjected(vault, SESSION).size).toBe(0);
+  });
+
+  test("a corrupt ledger fails open and is named on the audit line", async () => {
+    const statePath = hookStateFilePath(vault, SESSION);
+    mkdirSync(dirname(statePath), { recursive: true });
+    writeFileSync(statePath, "{not json");
+    const run = await runHook(SESSION);
+    expect(run.exit).toBe(0);
+    expect(brief(run)).toContain("notes/schedule.md");
+    const details = lastDetails();
+    expect(details["ledger_read"]).toBe("corrupt");
+    expect(details["dedupe_sets"]).toEqual({ already_injected: 0, digest_paths: 0 });
   });
 
   test("without a session id both runs inject and no ledger is consulted", async () => {

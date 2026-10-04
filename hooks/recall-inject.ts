@@ -93,6 +93,7 @@ import {
   recordRecallInjected,
 } from "./lib/injection-ledger.ts";
 import { armProcessCeiling, resolveHookCeilingMs } from "./lib/process-ceiling.ts";
+import { isHookStateCorrupt } from "./lib/session-state.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { isContextEventName } from "./lib/context-events.ts";
 
@@ -249,24 +250,29 @@ interface DeliveredSets {
 }
 
 /**
- * The session's ledger sets, or null when dedupe does not apply: no real
- * session id, `recall_inject_dedupe` off, or a ledger that cannot be read
- * (fail-open: a broken ledger means repeats, never a lost brief).
+ * The session's ledger sets (null when dedupe does not apply: no real session
+ * id, `recall_inject_dedupe` off, or a read that threw) and how the read
+ * degraded. Fail-open: a broken ledger means repeats, never a lost brief, and
+ * `ledgerRead` names it so the audit line does not pass it off as a fresh
+ * session (`corrupt`) or as dedupe being off (`failed`).
  */
 function deliveredSetsFor(
   vault: string,
   configPath: string,
   sessionId: string | null,
-): DeliveredSets | null {
-  if (sessionId === null) return null;
+): { readonly sets: DeliveredSets | null; readonly ledgerRead: "corrupt" | "failed" | null } {
+  if (sessionId === null) return { sets: null, ledgerRead: null };
   try {
-    if (!resolveRecallInjectDedupe(configPath)) return null;
+    if (!resolveRecallInjectDedupe(configPath)) return { sets: null, ledgerRead: null };
     return {
-      alreadyInjected: readRecallInjected(vault, sessionId),
-      activeDigestPaths: readActiveEmittedPaths(vault, sessionId),
+      sets: {
+        alreadyInjected: readRecallInjected(vault, sessionId),
+        activeDigestPaths: readActiveEmittedPaths(vault, sessionId),
+      },
+      ledgerRead: isHookStateCorrupt(vault, sessionId) ? "corrupt" : null,
     };
   } catch {
-    return null;
+    return { sets: null, ledgerRead: "failed" };
   }
 }
 
@@ -358,7 +364,7 @@ async function main(): Promise<void> {
 
     const sessionId = isRealSessionId(payload.session_id) ? payload.session_id : null;
     const { caps, invalid } = resolveRecallInjectCaps(configPath);
-    const delivered = deliveredSetsFor(vault, configPath, sessionId);
+    const { sets: delivered, ledgerRead } = deliveredSetsFor(vault, configPath, sessionId);
     const sliceConfig = slicesFor(vault);
 
     const decisionFilter = await decisionFilterFor(configPath, vault);
@@ -388,6 +394,7 @@ async function main(): Promise<void> {
             },
           }
         : {}),
+      ...(ledgerRead !== null ? { ledger_read: ledgerRead } : {}),
     };
     recordTokenImpact(vault, configPath, decision);
     if (decision.kind !== "inject") {

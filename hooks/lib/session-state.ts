@@ -83,17 +83,30 @@ export function hookStateFilePath(vault: string, sessionId: string | null | unde
  * throw and a corrupt file behaves exactly like a fresh one.
  */
 function readState(vault: string, sessionId: string | null | undefined): Record<string, unknown> {
-  const path = hookStateFilePath(vault, sessionId);
+  return loadState(hookStateFilePath(vault, sessionId)) ?? {};
+}
+
+/** The parsed state at `path`: `{}` when absent, `null` when present but unusable. */
+function loadState(path: string): Record<string, unknown> | null {
   if (!existsSync(path)) return {};
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
     if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
       return parsed as Record<string, unknown>;
     }
-    return {};
+    return null;
   } catch {
-    return {};
+    return null;
   }
+}
+
+/**
+ * True when the scope's state file exists but cannot be read or parsed into an
+ * object - the case every reader silently treats as a fresh session, surfaced
+ * so a caller can name it. Never throws.
+ */
+export function isHookStateCorrupt(vault: string, sessionId: string | null | undefined): boolean {
+  return loadState(hookStateFilePath(vault, sessionId)) === null;
 }
 
 /**
