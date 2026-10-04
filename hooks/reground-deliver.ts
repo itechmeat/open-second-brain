@@ -41,7 +41,13 @@
  */
 
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  constants as fsConstants,
+  openSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -55,6 +61,16 @@ const HOOK_NAME = "reground-deliver";
 const CARRIER_EVENTS: ReadonlySet<string> = new Set(["PostToolUse", "UserPromptSubmit"]);
 
 const UTF8 = new TextEncoder();
+
+/**
+ * Open flags for the failed-take marker. The temp directory can be shared
+ * with other local accounts, so never follow a symlink planted at the
+ * marker name where the platform can refuse one.
+ */
+const MARKER_NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
+const MARKER_READ_FLAGS = fsConstants.O_RDONLY | MARKER_NOFOLLOW;
+const MARKER_WRITE_FLAGS =
+  fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | MARKER_NOFOLLOW;
 
 /** Appends one hook audit line; bound once the audit module is loaded. */
 type HookAuditor = (
@@ -100,12 +116,22 @@ function firstTakeFailureOfEpoch(vault: string, sessionId: string, epoch: string
   const marker = join(tmpdir(), `o2b-reground-take-failed-${scope}`);
   const seen = epoch ?? "";
   try {
-    if (readFileSync(marker, "utf8") === seen) return false;
+    const fd = openSync(marker, MARKER_READ_FLAGS);
+    try {
+      if (readFileSync(fd, "utf8") === seen) return false;
+    } finally {
+      closeSync(fd);
+    }
   } catch {
     // no marker yet
   }
   try {
-    writeFileSync(marker, seen, { mode: 0o600 });
+    const fd = openSync(marker, MARKER_WRITE_FLAGS, 0o600);
+    try {
+      writeFileSync(fd, seen);
+    } finally {
+      closeSync(fd);
+    }
   } catch {
     // best-effort
   }

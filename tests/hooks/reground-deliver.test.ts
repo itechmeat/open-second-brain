@@ -14,9 +14,11 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -309,6 +311,26 @@ describe("reground-deliver hook", () => {
       } finally {
         chmodSync(stateDir, 0o700);
       }
+      expect(auditRecords().map((record) => record["action"])).toEqual(["reground_take_failed"]);
+    },
+  );
+
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "a symlink planted at the failed-take marker name is not written through",
+    async () => {
+      seedQueue();
+      const scope = createHash("sha256").update(`${vault}\0${SESSION}`).digest("hex").slice(0, 16);
+      const victim = join(configHome, "victim.txt");
+      writeFileSync(victim, "keep me");
+      symlinkSync(victim, join(configHome, `o2b-reground-take-failed-${scope}`));
+      const stateDir = dirname(hookStateFilePath(vault, SESSION));
+      chmodSync(stateDir, 0o500);
+      try {
+        await runHook(postTool(), REGROUND_ON);
+      } finally {
+        chmodSync(stateDir, 0o700);
+      }
+      expect(readFileSync(victim, "utf8")).toBe("keep me");
       expect(auditRecords().map((record) => record["action"])).toEqual(["reground_take_failed"]);
     },
   );
