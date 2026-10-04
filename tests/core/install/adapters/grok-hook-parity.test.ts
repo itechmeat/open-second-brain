@@ -33,11 +33,16 @@ const PLUGIN_HOOKS_JSON = join(REPO_ROOT, "hooks", "hooks.json");
  * Hooks the plugin registers that grok deliberately does not, keyed
  * `<event>:<hook>`, each with the reason an operator would need.
  *
- * Empty today, and that is the contract: a divergence is a written
- * decision or it is a defect. A stale entry fails too - see the test
+ * A divergence is a written decision or it is a defect. A stale entry fails too - see the test
  * below - so this cannot become a list of things that used to be true.
  */
-const DECLARED_GROK_DIVERGENCES: Readonly<Record<string, string>> = Object.freeze({});
+const REGROUND_DIVERGENCE =
+  "chunked re-delivery splits only for Claude Code and Codex; grok keeps the single SessionStart payload";
+
+const DECLARED_GROK_DIVERGENCES: Readonly<Record<string, string>> = Object.freeze({
+  "PostToolUse:reground-deliver": REGROUND_DIVERGENCE,
+  "UserPromptSubmit:reground-deliver": REGROUND_DIVERGENCE,
+});
 
 /** `<event>:<hook-script-name>` for every hook one JSON hooks file registers. */
 function registeredHooks(hooksJson: string): ReadonlySet<string> {

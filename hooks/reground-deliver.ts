@@ -1,0 +1,128 @@
+#!/usr/bin/env -S bun
+/**
+ * PostToolUse / UserPromptSubmit hook: hands out the queued parts of an
+ * oversized SessionStart payload (recall-injection-lifecycle, t_55ee804e).
+ *
+ * The host persists an `additionalContext` past roughly 10,000 UTF-16
+ * units to a file and shows only a preview, so with
+ * `reground_parts_enabled` on (default OFF) active-inject emits part 1 of
+ * a payload that large and queues parts 2..n in the session ledger. This
+ * carrier delivers exactly one queued part per event, until the queue is
+ * empty or a new SessionStart replaces it.
+ *
+ * Contract:
+ *   stdin: hook payload JSON with `hook_event_name` and `session_id`.
+ *   stdout: nothing, or
+ *     { "hookSpecificOutput": { "hookEventName": "<event>", "additionalContext": "<part>" } }
+ *
+ * Emits only for an exact `PostToolUse` or `UserPromptSubmit`, the two
+ * events registered for it: emitting under an event whose schema does not
+ * accept `additionalContext` echoes the payload into a validation error.
+ * A user prompt carries a part rather than cancelling the queue - after a
+ * manual `/compact` the very next event is a prompt, and cancelling there
+ * would drop parts 2..n almost every time.
+ *
+ * Cheap when off: the flag is checked before the vault is resolved or any
+ * state is read, because this runs after every tool call on every install.
+ * The take is try-once under the scope lock: on contention the event
+ * passes silently and the next one delivers. The cursor advances before
+ * the part is printed, so a crash in between loses that part and never
+ * duplicates it.
+ *
+ * Quiet on failures: exit 0 with no output on any error.
+ */
+
+import { resolveRegroundPartsEnabled, resolveVault } from "../src/core/config.ts";
+import { hookAuditDir } from "../src/core/brain/paths.ts";
+import { appendAuditRecord } from "../src/core/reliability/audit.ts";
+import { isRealSessionId, takeRegroundPart } from "./lib/injection-ledger.ts";
+import { armProcessCeiling, resolveHookCeilingMs } from "./lib/process-ceiling.ts";
+import { asHookPayload, readHookInput } from "./lib/stdin.ts";
+
+const HOOK_NAME = "reground-deliver";
+
+/** The events this hook is registered on; any other emits nothing. */
+const CARRIER_EVENTS: ReadonlySet<string> = new Set(["PostToolUse", "UserPromptSubmit"]);
+
+const UTF8 = new TextEncoder();
+
+/**
+ * Best-effort hook audit line. Never throws: a failure to record must never
+ * disturb the fail-soft hook contract.
+ */
+function auditHook(
+  vault: string | null,
+  action: string,
+  target: string,
+  ok: boolean,
+  details: Record<string, unknown>,
+): void {
+  if (vault === null) return;
+  try {
+    appendAuditRecord(hookAuditDir(vault), {
+      timestamp: new Date().toISOString(),
+      actor: HOOK_NAME,
+      action,
+      target,
+      ok,
+      details,
+    });
+  } catch {
+    // best-effort
+  }
+}
+
+async function main(): Promise<void> {
+  let auditVault: string | null = null;
+  const disarm = armProcessCeiling({
+    ceilingMs: resolveHookCeilingMs(),
+    onExpire: () =>
+      auditHook(auditVault, "hook_ceiling_exceeded", "reground", false, { hook: HOOK_NAME }),
+  });
+  try {
+    let payload;
+    try {
+      payload = asHookPayload(await readHookInput());
+    } catch {
+      return;
+    }
+
+    // Before anything else: off is the default, and this runs per tool call.
+    if (!resolveRegroundPartsEnabled()) return;
+
+    const hookEventName = payload.hook_event_name;
+    if (typeof hookEventName !== "string" || !CARRIER_EVENTS.has(hookEventName)) return;
+    if (!isRealSessionId(payload.session_id)) return;
+
+    const vault = resolveVault();
+    if (vault === null) return;
+    auditVault = vault;
+
+    const take = takeRegroundPart(vault, payload.session_id);
+    if (take.status !== "part") return;
+
+    const out = {
+      hookSpecificOutput: {
+        hookEventName,
+        additionalContext: take.part,
+      },
+    };
+    process.stdout.write(JSON.stringify(out) + "\n");
+
+    auditHook(vault, "reground_part_delivered", hookEventName, true, {
+      part: take.index,
+      total: take.total,
+      epoch: take.epoch,
+      bytes: UTF8.encode(take.part).length,
+      utf16_chars: take.part.length,
+      part_ceiling_chars: take.partCeilingChars,
+      over_budget: take.part.length > take.partCeilingChars,
+    });
+  } finally {
+    disarm();
+  }
+}
+
+main().catch(() => {
+  // Never block on hook crash.
+});
