@@ -40,6 +40,7 @@ import { buildCandidateState, mayLeaveMachine } from "../decision-model/state.ts
 import { pageVisibility } from "../graph/visibility.ts";
 import { privateRegionTexts, stripPrivateRegions } from "../redactor.ts";
 import { readCachedFrontmatterEntry, type FrontmatterCache } from "../search/result-filters.ts";
+import { LOCAL_ORIGIN } from "./portability/origins.ts";
 import {
   recallInjectFilterOutcome,
   type RecallCandidate,
@@ -47,9 +48,6 @@ import {
   type RecallInjectFilterMode,
   type RecallInjectFilterVerdict,
 } from "./recall-inject.ts";
-
-/** The active vault's origin label in cross-vault results. */
-const ACTIVE_ORIGIN_LABEL = "local";
 
 /** Stands in for a note that may not be named in a synced record. */
 const WITHHELD_PATH = "(withheld)";
@@ -85,7 +83,7 @@ function clipChars(text: string, max: number): string {
 }
 
 function isActiveVaultNote(note: RecallCandidate): boolean {
-  return note.origin === undefined || note.origin === ACTIVE_ORIGIN_LABEL;
+  return note.origin === undefined || note.origin === LOCAL_ORIGIN;
 }
 
 function defaultResolvePage(
