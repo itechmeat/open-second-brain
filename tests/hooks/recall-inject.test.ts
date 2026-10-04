@@ -206,6 +206,7 @@ describe("recall-inject telemetry", () => {
         noteCount: 2,
         topScore: 0.9,
         matchQuality: 0.8,
+        injectedNotes: [{ path: "Brain/a.md", startLine: 1, endLine: 4 }],
       }),
     ).toEqual({ decision: "inject", note_count: 2, top_score: 0.9, match_quality: 0.8 });
     expect(

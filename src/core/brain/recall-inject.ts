@@ -116,6 +116,17 @@ export interface RecallInjectOptions {
    * inside what is left of {@link timeBudgetMs}.
    */
   readonly decisionFilter?: RecallInjectFilter;
+  /**
+   * Notes this session was already shown, as {@link recallNoteKey} values
+   * (origin, path and line span). Absent or empty filters nothing. Applied
+   * after the floor check, so the set never moves a floor verdict.
+   */
+  readonly alreadyInjected?: ReadonlySet<string>;
+  /**
+   * Vault-relative paths the SessionStart digest actually emitted. Matched
+   * on the path alone, any span, because the digest delivers whole notes.
+   */
+  readonly activeDigestPaths?: ReadonlySet<string>;
   /** Clock for the time budget (tests). */
   readonly now?: () => number;
 }
@@ -210,7 +221,12 @@ export type RecallAbstainReason =
    * would help (issue #213, Part 9). Only ever follows what would have
    * been an `inject`.
    */
-  | "decision_model_abstain";
+  | "decision_model_abstain"
+  /**
+   * Every candidate that cleared the floor was already shown in this
+   * session, by an earlier brief or by the SessionStart digest.
+   */
+  | "all_already_injected";
 
 /**
  * Why an attempt failed, as a closed vocabulary rather than as prose.
@@ -265,6 +281,13 @@ export type RecallInjectDecision =
       readonly topScore: number;
       /** The quantity the floor was compared against; see the floor's docblock. */
       readonly matchQuality: number;
+      /**
+       * Exactly the notes rendered into {@link brief}, in brief order:
+       * after the char-budget fit and after the decision-model filter. The
+       * hook records these, so a note that was cut is never suppressed
+       * without having been shown.
+       */
+      readonly injectedNotes: ReadonlyArray<RecallInjectedNote>;
       /** Present only when the decision-model filter ran (use not `off`). */
       readonly decisionModel?: RecallInjectDecisionModelInfo;
     }
@@ -294,6 +317,61 @@ export type RecallInjectDecision =
        */
       readonly detail?: string;
     };
+
+/** The identity of one rendered brief bullet. */
+export interface RecallInjectedNote {
+  readonly path: string;
+  readonly origin?: string;
+  readonly startLine: number;
+  readonly endLine: number;
+}
+
+/**
+ * The per-session dedupe key of one note: origin, vault-relative path and
+ * line span, with an empty origin for the primary vault. A local mirror of
+ * the injection ledger's `recallNoteKey` (same format string), kept here so
+ * the pure core imports nothing from the hook tree; a hook test pins that
+ * both produce equal keys.
+ */
+export function recallInjectNoteKey(note: RecallInjectedNote): string {
+  return `${note.origin ?? ""}:${note.path}#L${note.startLine}-L${note.endLine}`;
+}
+
+/** Narrow rendered candidates to the identity the ledger records. */
+function injectedNotesOf(notes: ReadonlyArray<RecallCandidate>): ReadonlyArray<RecallInjectedNote> {
+  return Object.freeze(
+    notes.map((n) =>
+      Object.freeze({
+        path: n.path,
+        ...(n.origin !== undefined ? { origin: n.origin } : {}),
+        startLine: n.startLine,
+        endLine: n.endLine,
+      }),
+    ),
+  );
+}
+
+/**
+ * Drop candidates this session was already shown. Runs after the floor
+ * check and before the `maxNotes` slice; with neither set given it returns
+ * the input unchanged.
+ */
+function withoutDelivered(
+  ranked: ReadonlyArray<RecallCandidate>,
+  options: RecallInjectOptions,
+): ReadonlyArray<RecallCandidate> {
+  const injected = options.alreadyInjected;
+  const digest = options.activeDigestPaths;
+  if (
+    (injected === undefined || injected.size === 0) &&
+    (digest === undefined || digest.size === 0)
+  ) {
+    return ranked;
+  }
+  return ranked.filter(
+    (c) => !(injected?.has(recallInjectNoteKey(c)) ?? false) && !(digest?.has(c.path) ?? false),
+  );
+}
 
 /** Typed error for a retrieval that exceeded the fixed time budget. */
 export class RecallInjectTimeoutError extends Error {
@@ -367,7 +445,20 @@ export async function decideRecallInject(
     return Object.freeze({ kind: "abstain", reason: "below_floor", topScore, matchQuality });
   }
 
-  const chosen = ranked.slice(0, maxNotes);
+  // Dedupe sits after the floor, which read the unfiltered retrieval, and
+  // before the cap. There is no over-fetch: the coverage the floor read is
+  // measured over the retrieved rows, so refilling would move verdicts.
+  const fresh = withoutDelivered(ranked, options);
+  if (fresh.length === 0) {
+    return Object.freeze({
+      kind: "abstain",
+      reason: "all_already_injected",
+      topScore,
+      matchQuality,
+    });
+  }
+
+  const chosen = fresh.slice(0, maxNotes);
   const { brief, noteCount } = renderRecallBrief(chosen, resultSet.total, maxChars);
   const today: Extract<RecallInjectDecision, { kind: "inject" }> = Object.freeze({
     kind: "inject",
@@ -375,6 +466,7 @@ export async function decideRecallInject(
     noteCount,
     topScore,
     matchQuality,
+    injectedNotes: injectedNotesOf(chosen.slice(0, noteCount)),
   });
   const filter = options.decisionFilter;
   if (filter === undefined || noteCount === 0) return today;
@@ -533,6 +625,7 @@ async function applyDecisionFilter(
     noteCount,
     topScore: today.topScore,
     matchQuality: today.matchQuality,
+    injectedNotes: injectedNotesOf(kept.slice(0, noteCount)),
     decisionModel: Object.freeze({
       ...info,
       tokensBefore,
