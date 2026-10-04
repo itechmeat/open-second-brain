@@ -17,6 +17,7 @@
  * holds even on a read-only or full filesystem.
  */
 
+import { createHash } from "node:crypto";
 import {
   closeSync,
   constants as fsConstants,
@@ -68,21 +69,35 @@ export interface HookStamp {
   readonly data?: Record<string, unknown>;
 }
 
+/** Slug characters kept in front of the hash suffix of a lossy slug (47 + 1 + 16 = 64). */
+const LOSSY_SLUG_KEEP = SESSION_SCOPE_MAX_LENGTH - 17;
+
 /**
  * Normalise a raw session id into a filesystem-safe scope slug, falling back
  * to {@link DEFAULT_SCOPE} for a missing, empty, or separator-only id so a
  * host that omits the session id still gets a single stable lane rather than a
  * throw.
+ *
+ * When the normalisation is lossy (case, punctuation, or past 64 characters),
+ * the slug is cut to {@link LOSSY_SLUG_KEEP} characters and suffixed with 16
+ * hex characters of the id's SHA-256, so `Sess_ABC` and `sess-abc`, or two
+ * long ids with a common prefix, never share a ledger and a queue. Ids that
+ * are already slugs, such as the Claude Code and Codex UUIDs, keep their
+ * plain name. The result stays inside {@link SCOPE_FILE_RE}.
  */
 function scopeSlug(sessionId: string | null | undefined): string {
   if (sessionId === null || sessionId === undefined || sessionId.length === 0) {
     return DEFAULT_SCOPE;
   }
+  let slug: string;
   try {
-    return resolveSessionScope(sessionId);
+    slug = resolveSessionScope(sessionId);
   } catch {
     return DEFAULT_SCOPE;
   }
+  if (slug === sessionId) return slug;
+  const digest = createHash("sha256").update(sessionId).digest("hex").slice(0, 16);
+  return `${slug.slice(0, LOSSY_SLUG_KEEP)}-${digest}`;
 }
 
 /** Absolute path of the state file for one vault + session scope. */

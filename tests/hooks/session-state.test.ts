@@ -14,7 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import {
   HOOK_STATE_LOCK_RETRY_DELAY_MS,
@@ -99,6 +99,30 @@ describe("hook session state", () => {
     writeHookStamp(vault, undefined, KEY, { expiresAt: now + 1000 });
     expect(readHookStamp(vault, undefined, KEY, now)).not.toBeNull();
     expect(readHookStamp(vault, "", KEY, now)).not.toBeNull();
+  });
+
+  test("ids that differ only by case or punctuation get separate state files", () => {
+    const a = hookStateFilePath(vault, "Sess_ABC");
+    const b = hookStateFilePath(vault, "sess-abc");
+    expect(a).not.toBe(b);
+    expect(basename(b)).toBe("sess-abc.json");
+    expect(basename(a)).toMatch(/^sess-abc-[0-9a-f]{16}\.json$/);
+    writeHookStamp(vault, "Sess_ABC", KEY, { expiresAt: Date.now() + 5000 });
+    expect(readHookStamp(vault, "sess-abc", KEY)).toBeNull();
+    expect(readHookStamp(vault, "Sess_ABC", KEY)).not.toBeNull();
+  });
+
+  test("a host UUID keeps its plain file name", () => {
+    const uuid = "3f2b8c1e-9a4d-4e7b-8c2a-1d5e6f7a8b9c";
+    expect(basename(hookStateFilePath(vault, uuid))).toBe(`${uuid}.json`);
+  });
+
+  test("long ids sharing a 64-character prefix get separate names inside the slug shape", () => {
+    const prefix = "a".repeat(64);
+    const one = basename(hookStateFilePath(vault, `${prefix}-one`));
+    const two = basename(hookStateFilePath(vault, `${prefix}-two`));
+    expect(one).not.toBe(two);
+    for (const name of [one, two]) expect(name).toMatch(/^[a-z0-9-]{1,64}\.json$/);
   });
 
   test("writing one key preserves other keys in the same session file", () => {
