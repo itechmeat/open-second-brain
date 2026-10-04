@@ -1899,6 +1899,12 @@ export interface BrainConfig {
    * pre-compress. Absent: the historical hard cut.
    */
   readonly recall?: BrainRecallConfig;
+  /**
+   * Optional `recall_inject:` block. Declares the named slices the
+   * recall-inject hook retrieves and renders as headed groups. Absent:
+   * the single implicit relevance slice.
+   */
+  readonly recall_inject?: BrainRecallInjectConfig;
 }
 
 /** Optional `hygiene:` block (continuity-hygiene-freshness suite). */
@@ -1921,6 +1927,28 @@ export interface BrainAnticipatoryConfig {
 export interface BrainRecallConfig {
   /** Per-entry trim strategy: historical hard cut or the staged ladder. */
   readonly degradation?: "hard-cut" | "staged";
+}
+
+/** One operator-declared recall slice from the `recall_inject:` block. */
+export interface RecallSliceSpec {
+  /** Matches `^[a-z][a-z0-9]{0,23}$`, so `slice_<name>_<field>` splits unambiguously. */
+  readonly name: string;
+  /** Group heading in the rendered brief. Defaults to the name. */
+  readonly heading: string;
+  /** Vault-relative path prefix, forward slashes. `null`: no path filter. */
+  readonly pathPrefix: string | null;
+  /** Frontmatter `type` values. Empty: no class filter. */
+  readonly types: ReadonlyArray<string>;
+  /** Note limit in 1..10. `null`: the global cap applies. */
+  readonly limit: number | null;
+  /** Char budget in 100..8000. `null`: the global cap applies. */
+  readonly maxChars: number | null;
+}
+
+/** Optional `recall_inject:` block. */
+export interface BrainRecallInjectConfig {
+  /** Declared order, at most 6. */
+  readonly slices: ReadonlyArray<RecallSliceSpec>;
 }
 
 /**

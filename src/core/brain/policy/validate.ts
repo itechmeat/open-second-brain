@@ -25,6 +25,7 @@ import {
 } from "./blocks/lifecycle.ts";
 import { parseVaultBlock } from "./blocks/vault-scope.ts";
 import { parseActiveBlock } from "./blocks/active.ts";
+import { parseRecallInjectBlock } from "./blocks/recall-inject.ts";
 import { parseLessonsBlock } from "./blocks/lessons.ts";
 import { parseMaintenanceBlock } from "./blocks/maintenance.ts";
 import { parseInstallBlock } from "./blocks/install.ts";
@@ -104,6 +105,7 @@ export function validateBrainConfigDetailed(
 
   const vault = parseVaultBlock(ctx);
   const active = parseActiveBlock(ctx);
+  const recallInject = parseRecallInjectBlock(ctx);
   const lessons = parseLessonsBlock(ctx);
   const maintenance = parseMaintenanceBlock(ctx);
   const install = parseInstallBlock(ctx);
@@ -154,6 +156,7 @@ export function validateBrainConfigDetailed(
     ...(hygiene !== undefined ? { hygiene } : {}),
     ...(anticipatory !== undefined ? { anticipatory } : {}),
     ...(recall !== undefined ? { recall } : {}),
+    ...(recallInject !== undefined ? { recall_inject: recallInject } : {}),
     ...(feedback !== undefined ? { feedback } : {}),
     ...(decisionModel !== undefined ? { decision_model: decisionModel } : {}),
   };
