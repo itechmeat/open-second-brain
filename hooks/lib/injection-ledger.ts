@@ -178,7 +178,11 @@ export type RegroundTake =
     }
   | { readonly status: "empty" }
   | { readonly status: "busy" }
-  | { readonly status: "failed" };
+  | {
+      readonly status: "failed";
+      /** Epoch of the queue the lock-free pre-check read; `null` when malformed. */
+      readonly epoch: string | null;
+    };
 
 /** The `data` record of a live (unexpired) stamp in raw state, else `null`. */
 function liveData(raw: unknown, nowMs: number): Record<string, unknown> | null {
@@ -228,9 +232,8 @@ export function takeRegroundPart(
   sessionId: string,
   nowMs: number = Date.now(),
 ): RegroundTake {
-  if (readHookStamp(vault, sessionId, LEDGER_KEY_REGROUND, nowMs) === null) {
-    return { status: "empty" };
-  }
+  const stamp = readHookStamp(vault, sessionId, LEDGER_KEY_REGROUND, nowMs);
+  if (stamp === null) return { status: "empty" };
   const outcome = updateHookState<RegroundTake>(
     vault,
     sessionId,
@@ -264,5 +267,8 @@ export function takeRegroundPart(
     },
     { tryOnce: true, nowMs },
   );
-  return outcome.status === "ok" ? outcome.result : outcome;
+  if (outcome.status === "ok") return outcome.result;
+  if (outcome.status === "busy") return outcome;
+  const epoch = stamp.data?.["epoch"];
+  return { status: "failed", epoch: typeof epoch === "string" ? epoch : null };
 }

@@ -33,8 +33,17 @@
  *
  * Quiet on failures: exit 0 with no output on any error. A take that
  * fails for a reason other than contention leaves a
- * `reground_take_failed` audit line.
+ * `reground_take_failed` audit line, once per queue epoch: a state write
+ * that keeps failing leaves the queue undrained, so every later tool call
+ * fails the same way, and one line plus an fsync per call is noise. The
+ * epoch already audited is remembered in a per-machine marker under the OS
+ * temp directory, because the failing `hook-state/` tree cannot hold it.
  */
+
+import { createHash } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { resolveRegroundPartsEnabled, resolveVault } from "../src/core/config.ts";
 import { armProcessCeiling, resolveHookCeilingMs } from "./lib/process-ceiling.ts";
@@ -81,6 +90,28 @@ async function loadAuditor(vault: string): Promise<HookAuditor> {
   };
 }
 
+/**
+ * Whether a failed take of `epoch` is the first one this machine has seen
+ * for the session, recording it when so. Any marker I/O error answers
+ * `true`: an extra audit line beats a silent failure.
+ */
+function firstTakeFailureOfEpoch(vault: string, sessionId: string, epoch: string | null): boolean {
+  const scope = createHash("sha256").update(`${vault}\0${sessionId}`).digest("hex").slice(0, 16);
+  const marker = join(tmpdir(), `o2b-reground-take-failed-${scope}`);
+  const seen = epoch ?? "";
+  try {
+    if (readFileSync(marker, "utf8") === seen) return false;
+  } catch {
+    // no marker yet
+  }
+  try {
+    writeFileSync(marker, seen, { mode: 0o600 });
+  } catch {
+    // best-effort
+  }
+  return true;
+}
+
 async function main(): Promise<void> {
   let audit: HookAuditor | null = null;
   const disarm = armProcessCeiling({
@@ -110,7 +141,9 @@ async function main(): Promise<void> {
 
     const take = takeRegroundPart(vault, payload.session_id);
     if (take.status === "failed") {
-      audit("reground_take_failed", hookEventName, false, {});
+      if (firstTakeFailureOfEpoch(vault, payload.session_id, take.epoch)) {
+        audit("reground_take_failed", hookEventName, false, { epoch: take.epoch });
+      }
       return;
     }
     if (take.status !== "part") return;

@@ -292,4 +292,20 @@ describe("reground-deliver hook", () => {
       ]);
     },
   );
+
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "a take that keeps failing audits only its first failure of the epoch",
+    async () => {
+      seedQueue();
+      const stateDir = dirname(hookStateFilePath(vault, SESSION));
+      chmodSync(stateDir, 0o500);
+      try {
+        await runHook(postTool(), REGROUND_ON);
+        await runHook(postTool(), REGROUND_ON);
+      } finally {
+        chmodSync(stateDir, 0o700);
+      }
+      expect(auditRecords().map((record) => record["action"])).toEqual(["reground_take_failed"]);
+    },
+  );
 });
