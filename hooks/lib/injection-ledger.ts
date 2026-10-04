@@ -239,9 +239,10 @@ function parseQueue(data: Record<string, unknown> | null): RegroundQueue | null 
  * deleted; in practice that is an expired active stamp or a hand-edited
  * state file. The gate does NOT catch a failed SessionStart replacement:
  * {@link beginInjectionEpoch} writes the active epoch and the queue in one
- * atomic write, so when that write fails both old keys survive with
- * matching epochs, and the following takes still hand out the earlier
- * SessionStart's remaining parts, one per event, after the fallback payload. A missing queue is
+ * atomic write, so when that write fails, and so does the retry
+ * active-inject makes after printing the whole payload, both old keys
+ * survive with matching epochs and the following takes still hand out the
+ * earlier SessionStart's remaining parts, one per event. A missing queue is
  * answered from a lock-free read, without taking the lock or writing.
  */
 export function takeRegroundPart(
