@@ -1186,7 +1186,11 @@ export const REGROUND_PART_CHARS_DEFAULT = 9000;
 /** The per-part ceiling that applies, and the keys whose value was rejected on the way. */
 export interface RegroundPartCharsResolution {
   readonly chars: number;
-  /** Config key names whose value was out of range or not an integer, in precedence order. */
+  /**
+   * Names of the settings whose value was out of range or not an integer, in
+   * precedence order: the environment variable when the value came from it,
+   * the config key otherwise.
+   */
   readonly invalid: ReadonlyArray<string>;
 }
 
@@ -1195,7 +1199,8 @@ export interface RegroundPartCharsResolution {
  * `reground_part_chars_<runtime>`, then `reground_part_chars`, then
  * {@link REGROUND_PART_CHARS_DEFAULT}; each level reads env first, then
  * config. A value outside the integer range 2000..100000 falls through to the
- * next level and is named in `invalid`, so the caller can report it.
+ * next level and is named in `invalid` by the source it came from, so the
+ * caller can report it.
  */
 export function resolveRegroundPartChars(
   runtime: "claudecode" | "codex",
@@ -1215,7 +1220,7 @@ export function resolveRegroundPartChars(
     if (raw === undefined) continue;
     const value = parseBounded(raw, 2000, 100_000, true);
     if (value !== undefined) return { chars: value, invalid };
-    invalid.push(configKey);
+    invalid.push(process.env[envKey]?.trim() ? envKey : configKey);
   }
   return { chars: REGROUND_PART_CHARS_DEFAULT, invalid };
 }

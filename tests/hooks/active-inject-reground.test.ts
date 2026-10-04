@@ -259,7 +259,7 @@ describe("active-inject chunked re-delivery", () => {
     expect(injectionPayload()["part_ceiling_chars"]).toBe(9000);
   });
 
-  test("a rejected ceiling value is named on the receipt", async () => {
+  test("a rejected ceiling value is named on the receipt by its source", async () => {
     writeLargeVault();
     const r = await runHook(claudePayload(), {
       ...REGROUND_ON,
@@ -268,7 +268,9 @@ describe("active-inject chunked re-delivery", () => {
     expect(r.exit).toBe(0);
     const injection = injectionPayload();
     expect(injection["part_ceiling_chars"]).toBe(9000);
-    expect(injection["config_invalid"]).toEqual(["reground_part_chars_claudecode"]);
+    expect(injection["config_invalid"]).toEqual([
+      "OPEN_SECOND_BRAIN_REGROUND_PART_CHARS_CLAUDECODE",
+    ]);
   });
 
   test("grok-shaped and unknown payloads emit the single full payload and queue nothing", async () => {

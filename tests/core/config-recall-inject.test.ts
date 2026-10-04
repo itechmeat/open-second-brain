@@ -87,6 +87,15 @@ describe("resolveRecallInjectCaps", () => {
     });
   });
 
+  test("a rejected environment value is named by its environment variable", () => {
+    writeConfig({ reground_part_chars: "5000", reground_part_chars_claudecode: "4000" });
+    process.env["OPEN_SECOND_BRAIN_REGROUND_PART_CHARS_CLAUDECODE"] = "1999";
+    expect(resolveRegroundPartChars("claudecode", configPath)).toEqual({
+      chars: 5000,
+      invalid: ["OPEN_SECOND_BRAIN_REGROUND_PART_CHARS_CLAUDECODE"],
+    });
+  });
+
   test("range edges are inclusive", () => {
     writeConfig({
       recall_inject_max_notes: "1",
