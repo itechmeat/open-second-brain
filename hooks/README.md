@@ -31,6 +31,15 @@ hook payload shape, not on the runtime.
 | `SubagentStop`     | `*`                                   | Records a non-blocking lifecycle observation for a delegated sub-agent's close, attributed to `<delegator>-sub-<agent-id>` from the `agent_id` the event carries. The sibling `agent_transcript_path` is deliberately not persisted - it is a machine-local host path, and the sub-agent's turns reach memory through `o2b brain import-session`, which reads `isSidechain` and `agentId` off the transcript itself.  |
 | `SessionEnd`       | `*`                                   | Records a non-blocking lifecycle observation for session close.                                                                                                                                                                                                                                                                                                                                                       |
 
+Per-session hook state (nav-tier and orientation stamps, the recall
+dedupe set and the re-grounding queue) lives in one JSON file per session
+under `.open-second-brain/hook-state/`. The files are written with mode
+`0600`, because the queue holds parts of the SessionStart payload. When
+`.open-second-brain` or `hook-state` is a symbolic link, the hooks neither
+read nor write nor prune that tree: reads answer empty and writes fail
+open. The SessionStart prune removes scope files, leftover temp files and
+abandoned locks older than seven days.
+
 The Stop guardrail respects the runtime-provided `stop_hook_active`
 flag: it fires at most once per turn, so the agent can deliberately
 decide that an edit was trivial and skip logging by just finishing

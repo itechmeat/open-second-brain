@@ -340,6 +340,73 @@ describe("updateHookState", () => {
   });
 });
 
+describe("symlinked hook-state directories", () => {
+  const KEY = "osb.nav_tier.last_injected";
+  const LIVE = { expiresAt: Date.now() + 60_000, data: { from: "outside" } };
+
+  function plantOutside(link: "hook-state" | ".open-second-brain"): string {
+    const outside = mkdtempSync(join(tmpdir(), "o2b-hook-state-outside-"));
+    if (link === "hook-state") {
+      mkdirSync(join(vault, ".open-second-brain"), { recursive: true });
+      symlinkSync(outside, dir(), "dir");
+    } else {
+      symlinkSync(outside, join(vault, ".open-second-brain"), "dir");
+    }
+    return outside;
+  }
+
+  test("a real directory accepts the write (control)", () => {
+    expect(updateHookState(vault, "sess-1", (state) => ({ state, result: 1 }))).toEqual({
+      status: "ok",
+      result: 1,
+    });
+    expect(readdirSync(dir())).toContain("sess-1.json");
+  });
+
+  for (const link of ["hook-state", ".open-second-brain"] as const) {
+    test.skipIf(IS_WINDOWS)(
+      `a symlinked ${link} fails the write and leaves the target empty`,
+      () => {
+        const outside = plantOutside(link);
+        try {
+          expect(updateHookState(vault, "sess-1", (state) => ({ state, result: 1 }))).toEqual({
+            status: "failed",
+          });
+          expect(writeHookStamp(vault, "sess-1", KEY, LIVE)).toBe(false);
+          expect(readdirSync(outside)).toEqual([]);
+        } finally {
+          rmSync(outside, { recursive: true, force: true });
+        }
+      },
+    );
+
+    test.skipIf(IS_WINDOWS)(`a symlinked ${link} reads as empty state`, () => {
+      const outside = plantOutside(link);
+      try {
+        const stateDir = link === "hook-state" ? outside : join(outside, "hook-state");
+        mkdirSync(stateDir, { recursive: true });
+        writeFileSync(join(stateDir, "sess-1.json"), JSON.stringify({ [KEY]: LIVE }));
+        expect(readHookStamp(vault, "sess-1", KEY)).toBeNull();
+      } finally {
+        rmSync(outside, { recursive: true, force: true });
+      }
+    });
+  }
+
+  test.skipIf(IS_WINDOWS)("a state file that is itself a symlink is not followed on read", () => {
+    const outside = mkdtempSync(join(tmpdir(), "o2b-hook-state-outside-"));
+    try {
+      const target = join(outside, "planted.json");
+      writeFileSync(target, JSON.stringify({ [KEY]: LIVE }));
+      mkdirSync(dir(), { recursive: true });
+      symlinkSync(target, hookStateFilePath(vault, "sess-1"));
+      expect(readHookStamp(vault, "sess-1", KEY)).toBeNull();
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+});
+
 function seed(name: string, ageMs: number, now: number): string {
   mkdirSync(dir(), { recursive: true });
   const path = join(dir(), name);

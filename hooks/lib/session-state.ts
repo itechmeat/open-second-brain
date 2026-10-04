@@ -18,10 +18,13 @@
  */
 
 import {
-  existsSync,
+  closeSync,
+  constants as fsConstants,
+  fstatSync,
   linkSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
   renameSync,
@@ -87,20 +90,65 @@ export function hookStateFilePath(vault: string, sessionId: string | null | unde
   return join(vault, OSB_DIR, HOOK_STATE_DIR, `${scopeSlug(sessionId)}.json`);
 }
 
-/**
- * Read the whole state object for a scope. Any failure (missing file, unreadable,
- * malformed JSON, non-object root) degrades to an empty object so callers never
- * throw and a corrupt file behaves exactly like a fresh one.
- */
-function readState(vault: string, sessionId: string | null | undefined): Record<string, unknown> {
-  return loadState(hookStateFilePath(vault, sessionId)) ?? {};
+/** Whether `path` exists and is a symbolic link; `false` when it is absent. */
+function isSymlink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch {
+    return false;
+  }
 }
 
-/** The parsed state at `path`: `{}` when absent, `null` when present but unusable. */
-function loadState(path: string): Record<string, unknown> | null {
-  if (!existsSync(path)) return {};
+/**
+ * True when `<vault>/.open-second-brain` or its `hook-state` directory is a
+ * symbolic link. A vault received from elsewhere could point either at any
+ * directory, so every reader, writer and the prune refuse such a tree: reads
+ * answer empty, writes fail, the sweep removes nothing.
+ */
+function hookStateDirIsSymlinked(vault: string): boolean {
+  const osbDir = join(vault, OSB_DIR);
+  return isSymlink(osbDir) || isSymlink(join(osbDir, HOOK_STATE_DIR));
+}
+
+/** Open flags for a state-file read: never follow a leaf symlink where the platform can refuse one. */
+const STATE_READ_FLAGS = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0);
+
+/**
+ * Read the whole state object for a scope. Any failure (missing file, unreadable,
+ * malformed JSON, non-object root, symlinked directory) degrades to an empty
+ * object so callers never throw and a corrupt file behaves exactly like a fresh
+ * one.
+ */
+function readState(vault: string, sessionId: string | null | undefined): Record<string, unknown> {
+  return loadState(vault, sessionId) ?? {};
+}
+
+/**
+ * The parsed state of a scope: `{}` when absent or when the hook-state tree is
+ * symlinked, `null` when present but unusable (including a state file that is
+ * not a regular file).
+ */
+function loadState(
+  vault: string,
+  sessionId: string | null | undefined,
+): Record<string, unknown> | null {
+  if (hookStateDirIsSymlinked(vault)) return {};
+  const path = hookStateFilePath(vault, sessionId);
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    if (!lstatSync(path).isFile()) return null;
+  } catch {
+    return {};
+  }
+  try {
+    const fd = openSync(path, STATE_READ_FLAGS);
+    let text: string;
+    try {
+      if (!fstatSync(fd).isFile()) return null;
+      text = readFileSync(fd, "utf8");
+    } finally {
+      closeSync(fd);
+    }
+    const parsed = JSON.parse(text) as unknown;
     if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
       return parsed as Record<string, unknown>;
     }
@@ -116,7 +164,7 @@ function loadState(path: string): Record<string, unknown> | null {
  * so a caller can name it. Never throws.
  */
 export function isHookStateCorrupt(vault: string, sessionId: string | null | undefined): boolean {
-  return loadState(hookStateFilePath(vault, sessionId)) === null;
+  return loadState(vault, sessionId) === null;
 }
 
 /**
@@ -281,7 +329,8 @@ export type HookStateUpdateOutcome<T> =
  * the per-scope advisory lock is held, and its state is written through an
  * atomic rename so lock-free readers never see a torn file. `busy` means the
  * lock stayed contended (`tryOnce`: a single attempt, no retry); `failed`
- * means any other error, including a throwing mutator, in which case nothing
+ * means any other error, including a throwing mutator or a symlinked
+ * hook-state tree (see {@link hookStateDirIsSymlinked}), in which case nothing
  * is written. Never throws.
  */
 export function updateHookState<T>(
@@ -292,6 +341,7 @@ export function updateHookState<T>(
 ): HookStateUpdateOutcome<T> {
   let lock: LockHandle | null = null;
   try {
+    if (hookStateDirIsSymlinked(vault)) return { status: "failed" };
     const path = hookStateFilePath(vault, sessionId);
     mkdirSync(dirname(path), { recursive: true });
     lock = acquireScopeLock(path, opts.tryOnce === true);
@@ -338,15 +388,6 @@ const PRUNE_MAX_AGE_MS = 7 * 86_400_000;
 /** Default ceiling on files removed by one {@link pruneHookStateFiles} sweep. */
 const PRUNE_MAX_FILES = 200;
 
-/** Whether `path` exists and is a symbolic link; `false` when it is absent. */
-function isSymlink(path: string): boolean {
-  try {
-    return lstatSync(path).isSymbolicLink();
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Delete scope state files (`<slug>.json`) and their write and lock residue
  * (see {@link SCOPE_RESIDUE_RE}) whose mtime is older than `maxAgeMs`,
@@ -365,9 +406,8 @@ export function pruneHookStateFiles(
   const maxAgeMs = opts.maxAgeMs ?? PRUNE_MAX_AGE_MS;
   const maxFiles = opts.maxFiles ?? PRUNE_MAX_FILES;
   const nowMs = opts.nowMs ?? Date.now();
-  const osbDir = join(vault, OSB_DIR);
-  const dir = join(osbDir, HOOK_STATE_DIR);
-  if (isSymlink(osbDir) || isSymlink(dir)) return 0;
+  if (hookStateDirIsSymlinked(vault)) return 0;
+  const dir = join(vault, OSB_DIR, HOOK_STATE_DIR);
   let names: string[];
   try {
     names = readdirSync(dir);
