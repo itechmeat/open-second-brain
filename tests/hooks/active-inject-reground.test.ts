@@ -95,6 +95,15 @@ function claudePayload(): Record<string, unknown> {
   };
 }
 
+function codexPayload(): Record<string, unknown> {
+  return {
+    hook_event_name: "SessionStart",
+    source: "startup",
+    session_id: SESSION,
+    transcript_path: CODEX_TRANSCRIPT,
+  };
+}
+
 /** Standing rules plus an active body totalling about 20,000 chars. */
 function writeLargeVault(): void {
   writeFileSync(
@@ -198,15 +207,7 @@ describe("active-inject chunked re-delivery", () => {
 
   test("a Codex payload is split the same way", async () => {
     writeLargeVault();
-    const r = await runHook(
-      {
-        hook_event_name: "SessionStart",
-        source: "startup",
-        session_id: SESSION,
-        transcript_path: CODEX_TRANSCRIPT,
-      },
-      REGROUND_ON,
-    );
+    const r = await runHook(codexPayload(), REGROUND_ON);
     expect(r.exit).toBe(0);
     expect(contextOf(r).startsWith("[Open Second Brain context - part 1 of ")).toBe(true);
     expect(drainQueue().length).toBeGreaterThanOrEqual(2);
@@ -226,6 +227,31 @@ describe("active-inject chunked re-delivery", () => {
     const smaller = drainQueue();
     expect(smaller.length).toBeGreaterThan(standard);
     for (const entry of smaller) expect(entry.part.length).toBeLessThanOrEqual(5000);
+  });
+
+  test("a Codex ceiling key bounds every Codex part", async () => {
+    writeLargeVault();
+    const r = await runHook(codexPayload(), {
+      ...REGROUND_ON,
+      OPEN_SECOND_BRAIN_REGROUND_PART_CHARS_CODEX: "5000",
+    });
+    expect(r.exit).toBe(0);
+    expect(contextOf(r).length).toBeLessThanOrEqual(5000);
+    const queued = drainQueue();
+    expect(queued.length).toBeGreaterThanOrEqual(2);
+    for (const entry of queued) expect(entry.part.length).toBeLessThanOrEqual(5000);
+    expect(injectionPayload()["part_ceiling_chars"]).toBe(5000);
+  });
+
+  test("the Claude Code ceiling key does not apply to Codex", async () => {
+    writeLargeVault();
+    const r = await runHook(codexPayload(), {
+      ...REGROUND_ON,
+      OPEN_SECOND_BRAIN_REGROUND_PART_CHARS_CLAUDECODE: "5000",
+    });
+    expect(r.exit).toBe(0);
+    expect(contextOf(r).length).toBeGreaterThan(5000);
+    expect(injectionPayload()["part_ceiling_chars"]).toBe(9000);
   });
 
   test("grok-shaped and unknown payloads emit the single full payload and queue nothing", async () => {
@@ -298,6 +324,8 @@ describe("active-inject chunked re-delivery", () => {
   test("a queue that cannot be written falls back to the whole payload", async () => {
     writeLargeVault();
     const off = await runHook(claudePayload());
+    // Only the fallback run's receipt is under test.
+    rmSync(join(vault, "Brain", "log", "continuity"), { recursive: true, force: true });
     // A regular file where the state directory belongs makes every write fail.
     mkdirSync(join(vault, ".open-second-brain"), { recursive: true });
     writeFileSync(join(vault, ".open-second-brain", "hook-state"), "not a directory", "utf8");
@@ -305,5 +333,42 @@ describe("active-inject chunked re-delivery", () => {
     const r = await runHook(claudePayload(), REGROUND_ON);
     expect(r.exit).toBe(0);
     expect(r.stdout).toBe(off.stdout);
+    const injection = injectionPayload();
+    expect(injection["parts_total"]).toBe(1);
+    expect(injection["parts_dropped"]).toBe(0);
+    expect(injection["over_budget"]).toBe(true);
+    expect(injection["reground_fallback"]).toBe("ledger_write_failed");
+  });
+
+  test("a split that fits needs no fallback marker", async () => {
+    writeLargeVault();
+    await runHook(claudePayload(), REGROUND_ON);
+    expect(injectionPayload()["reground_fallback"]).toBeUndefined();
+  });
+
+  test("parts dropped past the cap are absent from the emitted set", async () => {
+    writeLargeVault();
+    writeFileSync(join(vault, "Brain", "lessons.md"), "# Lessons\n\n- Lesson one\n", "utf8");
+    const r = await runHook(claudePayload(), {
+      ...REGROUND_ON,
+      OPEN_SECOND_BRAIN_REGROUND_PART_CHARS_CLAUDECODE: "2000",
+    });
+    expect(r.exit).toBe(0);
+    const queued = drainQueue();
+    const committed = [contextOf(r), ...queued.map((entry) => entry.part)].join("\n\n");
+    expect(injectionPayload()["parts_dropped"]).toBeGreaterThan(0);
+    expect(committed).not.toContain("pref-late");
+
+    const emitted = readActiveEmittedPaths(vault, SESSION);
+    expect(emitted.has("Brain/preferences/pref-n0.md")).toBe(true);
+    expect(emitted.has("Brain/preferences/pref-late.md")).toBe(false);
+    // Every recorded pref was actually committed for delivery.
+    for (const path of emitted) {
+      const slug = /^Brain\/preferences\/(pref-[^/]+)\.md$/.exec(path)?.[1];
+      if (slug !== undefined) expect(committed).toContain(`\`${slug}\``);
+    }
+    // The memory bodies did not survive whole, so neither counts as emitted.
+    expect(emitted.has("Brain/active.md")).toBe(false);
+    expect(emitted.has("Brain/lessons.md")).toBe(false);
   });
 });

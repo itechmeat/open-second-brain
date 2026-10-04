@@ -243,7 +243,6 @@ async function main(): Promise<void> {
       sessionId: payload.session_id,
       startSource: payload.source,
       loaderSource: source,
-      context,
       memoryContext,
       meter,
     };
@@ -292,15 +291,14 @@ interface RecordInjectionEpochInput {
   /** The SessionStart `source` (startup, resume, clear, compact), when sent. */
   readonly startSource: unknown;
   readonly loaderSource: InjectContextSource;
-  /** Everything committed for delivery in this epoch. */
-  readonly context: string;
   readonly memoryContext: string;
   readonly meter: InjectionMeter;
 }
 
 /**
  * Start a new injection epoch in the per-session ledger: record the note
- * paths this injection committed for delivery (queued parts included),
+ * paths this injection committed for delivery - the emitted part and the
+ * queued parts, never the parts the splitter dropped past its cap -
  * clear the recall-inject set and replace the re-delivery queue, so the
  * recall brief neither repeats the digest nor carries dedupe state across
  * a compaction or a clear.
@@ -323,12 +321,13 @@ function recordInjectionEpoch(
       typeof input.startSource === "string" && input.startSource.length > 0
         ? input.startSource
         : "unknown";
+    const committed = delivery.parts.join(BLOCK_SEPARATOR);
     return beginInjectionEpoch(vault, input.sessionId, {
       epoch: `${startSource}:${Date.now()}`,
       emittedPaths: digestNotePaths({
-        emittedText: input.context,
-        activeBodyEmitted: bodyEmitted(input, SOURCE_ACTIVE_BODY),
-        lessonsBodyEmitted: bodyEmitted(input, SOURCE_LESSONS_BODY),
+        emittedText: committed,
+        activeBodyEmitted: bodyEmitted(input, SOURCE_ACTIVE_BODY, delivery, committed),
+        lessonsBodyEmitted: bodyEmitted(input, SOURCE_LESSONS_BODY, delivery, committed),
       }),
       regroundParts: delivery.parts.slice(1),
       partCeilingChars: delivery.partCeilingChars,
@@ -358,10 +357,25 @@ function pruneHookStateFilesSafe(vault: string): void {
  * through the meter; a body served from the last-good cache cannot be
  * attributed, so any non-empty cached memory counts as delivered - the
  * conservative side for dedupe, which only ever suppresses a repeat.
+ *
+ * When the split dropped parts past its cap, the dropped tail is the end of
+ * the payload, so a body counts only when its last line is still in the
+ * committed parts: a body cut short was not delivered whole.
  */
-function bodyEmitted(input: RecordInjectionEpochInput, name: string): boolean {
-  if (input.loaderSource !== "fresh") return input.memoryContext.length > 0;
-  return input.meter.sources.some((source) => source.name === name && source.text.length > 0);
+function bodyEmitted(
+  input: RecordInjectionEpochInput,
+  name: string,
+  delivery: Delivery,
+  committed: string,
+): boolean {
+  const text =
+    input.loaderSource === "fresh"
+      ? (input.meter.sources.find((source) => source.name === name)?.text ?? "")
+      : input.memoryContext;
+  if (text.length === 0) return false;
+  if (delivery.partsDropped === 0) return true;
+  const lastLine = text.trimEnd().split("\n").at(-1) ?? "";
+  return lastLine.length > 0 && committed.includes(lastLine);
 }
 
 // ----- chunked re-delivery (recall-injection-lifecycle) --------------------
@@ -374,11 +388,22 @@ interface RegroundMeter {
   readonly parts_total: number;
   readonly parts_dropped: number;
   readonly over_budget: boolean;
+  /**
+   * Set only when a planned split fell back to the whole payload because its
+   * queue could not be written, so that case reads apart from a plain
+   * over-ceiling payload.
+   */
+  readonly reground_fallback?: typeof REGROUND_FALLBACK_LEDGER_WRITE_FAILED;
 }
+
+/** {@link RegroundMeter.reground_fallback} value for a failed queue write. */
+const REGROUND_FALLBACK_LEDGER_WRITE_FAILED = "ledger_write_failed";
 
 interface Delivery {
   /** parts[0] goes to stdout now; the rest are queued for `reground-deliver`. */
   readonly parts: ReadonlyArray<string>;
+  /** Parts the splitter cut past its cap: neither emitted nor queued. */
+  readonly partsDropped: number;
   /** The ceiling the parts were cut to; 0 when no split applies. */
   readonly partCeilingChars: number;
   /** `null` while `reground_parts_enabled` is off, so the receipt keeps its shape. */
@@ -397,7 +422,7 @@ function planDelivery(
   blocks: ReadonlyArray<string>,
   context: string,
 ): Delivery {
-  const single: Delivery = { parts: [context], partCeilingChars: 0, meter: null };
+  const single: Delivery = { parts: [context], partsDropped: 0, partCeilingChars: 0, meter: null };
   try {
     if (!resolveRegroundPartsEnabled()) return single;
     const runtime = detectHookRuntime(payload);
@@ -414,9 +439,10 @@ function planDelivery(
       };
     }
     const ceiling = resolveRegroundPartChars(runtime);
-    const split = splitRegroundParts(blocks, ceiling, joinBlocks);
+    const split = splitRegroundParts(blocks, ceiling, joinBlocks, BLOCK_SEPARATOR);
     return {
       parts: split.parts,
+      partsDropped: split.partsDropped,
       partCeilingChars: ceiling,
       meter: {
         utf16_chars: split.utf16Chars,
@@ -435,11 +461,18 @@ function planDelivery(
 function unsplitDelivery(delivery: Delivery, context: string): Delivery {
   return {
     parts: [context],
+    partsDropped: 0,
     partCeilingChars: delivery.partCeilingChars,
     meter:
       delivery.meter === null
         ? null
-        : { ...delivery.meter, parts_total: 1, parts_dropped: 0, over_budget: true },
+        : {
+            ...delivery.meter,
+            parts_total: 1,
+            parts_dropped: 0,
+            over_budget: true,
+            reground_fallback: REGROUND_FALLBACK_LEDGER_WRITE_FAILED,
+          },
   };
 }
 

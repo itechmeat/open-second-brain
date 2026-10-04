@@ -196,7 +196,7 @@ describe("active-inject injection ledger", () => {
   test("a startup SessionStart prunes a 10-day-old scope file", async () => {
     writeActive(ACTIVE_BODY);
     mkdirSync(hookStateDir(), { recursive: true });
-    const stale = join(hookStateDir(), "AA-stale-scope.json");
+    const stale = join(hookStateDir(), "aa-stale-scope.json");
     writeFileSync(stale, "{}", "utf8");
     const tenDaysAgo = (Date.now() - 10 * 86_400_000) / 1000;
     utimesSync(stale, tenDaysAgo, tenDaysAgo);
@@ -214,7 +214,7 @@ describe("active-inject injection ledger", () => {
   test("a resume SessionStart does not prune", async () => {
     writeActive(ACTIVE_BODY);
     mkdirSync(hookStateDir(), { recursive: true });
-    const stale = join(hookStateDir(), "AA-stale-scope.json");
+    const stale = join(hookStateDir(), "aa-stale-scope.json");
     writeFileSync(stale, "{}", "utf8");
     const tenDaysAgo = (Date.now() - 10 * 86_400_000) / 1000;
     utimesSync(stale, tenDaysAgo, tenDaysAgo);
@@ -241,4 +241,48 @@ describe("active-inject injection ledger", () => {
     expect(broken.exit).toBe(0);
     expect(broken.stdout).toBe(healthy.stdout);
   });
+
+  test("a fresh load records Brain/active.md and omits an absent lessons body", async () => {
+    writeActive(ACTIVE_BODY);
+    const r = await runHook(startup(), RECALL_ON);
+    expect(r.exit).toBe(0);
+    const emitted = readActiveEmittedPaths(vault, SESSION);
+    expect(emitted.has("Brain/active.md")).toBe(true);
+    expect(emitted.has("Brain/lessons.md")).toBe(false);
+  });
+
+  test("a fresh load with a lessons body records both memory bodies", async () => {
+    writeActive(ACTIVE_BODY);
+    writeLessons();
+    const r = await runHook(startup(), RECALL_ON);
+    expect(r.stdout).toContain(LESSON_LINE);
+    const emitted = readActiveEmittedPaths(vault, SESSION);
+    expect(emitted.has("Brain/active.md")).toBe(true);
+    expect(emitted.has("Brain/lessons.md")).toBe(true);
+  });
+
+  test("a last-good-cache load records both memory bodies", async () => {
+    writeActive(ACTIVE_BODY);
+    const fresh = await runHook(startup(), RECALL_ON);
+    expect(fresh.stdout).toContain("pref-foo");
+    // An active.md that cannot be read as a file makes the assembly throw,
+    // so the loader serves the last-good cache.
+    rmSync(join(vault, "Brain", "active.md"));
+    mkdirSync(join(vault, "Brain", "active.md"));
+    const cached = await runHook(startup(), RECALL_ON);
+    expect(cached.stdout).toContain("pref-foo");
+    const emitted = readActiveEmittedPaths(vault, SESSION);
+    expect(emitted.has("Brain/active.md")).toBe(true);
+    expect(emitted.has("Brain/lessons.md")).toBe(true);
+  });
 });
+
+const LESSON_LINE = "- Lesson one: verify before claiming done";
+
+function writeLessons(): void {
+  writeFileSync(join(vault, "Brain", "lessons.md"), `# Lessons\n\n${LESSON_LINE}\n`, "utf8");
+}
+
+function startup(): Record<string, unknown> {
+  return { hook_event_name: "SessionStart", source: "startup", session_id: SESSION };
+}
