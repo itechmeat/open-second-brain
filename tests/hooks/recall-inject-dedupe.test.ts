@@ -178,3 +178,59 @@ describe("recall-inject hook: per-session dedupe", () => {
     expect(recallNoteKey(remote)).toBe(recallInjectNoteKey(remote));
   });
 });
+
+describe("recall-inject hook: operator-declared slices", () => {
+  test("a path_prefix slice injects only notes under that prefix, under its heading", async () => {
+    writeMd(
+      vault,
+      "Brain/_brain.yaml",
+      [
+        "schema_version: 1",
+        "recall_inject:",
+        "  slices: [field]",
+        "  slice_field_heading: Field notes",
+        "  slice_field_path_prefix: notes/",
+        "",
+      ].join("\n"),
+    );
+    const run = await runHook();
+    expect(run.exit).toBe(0);
+    const text = brief(run);
+    expect(text).toContain("## Field notes");
+    expect(text).toContain("notes/schedule.md");
+    expect(text).not.toContain(PREF_PATH);
+    const details = lastDetails();
+    expect(details["decision"]).toBe("inject");
+    const slices = details["slices"] as Array<Record<string, unknown>>;
+    expect(slices).toHaveLength(1);
+    expect(slices[0]).toMatchObject({ name: "field", outcome: "inject" });
+    expect(slices[0]!["notes"]).toBe(details["note_count"]);
+    expect(details["slices_config"]).toBeUndefined();
+  });
+
+  test("a _brain.yaml that fails to load falls back to the unsliced path", async () => {
+    writeMd(
+      vault,
+      "Brain/_brain.yaml",
+      ["schema_version: 1", "recall_inject:", "  slices: [Bad_Name]", ""].join("\n"),
+    );
+    const run = await runHook();
+    expect(run.exit).toBe(0);
+    // The search loads the same policy file, so the unsliced retrieval
+    // fails on it too and the hook stays fail-closed with no brief. What
+    // this pins is that the slice path was not taken and the reason is on
+    // the audit line.
+    expect(run.stdout).toBe("");
+    const details = lastDetails();
+    expect(details["slices_config"]).toBe("invalid");
+    expect(details["slices"]).toBeUndefined();
+    expect(details["fault"]).toBe("retriever_failed");
+  });
+
+  test("a vault without _brain.yaml adds no slice fields to the audit line", async () => {
+    await runHook();
+    const details = lastDetails();
+    expect(details["slices"]).toBeUndefined();
+    expect(details["slices_config"]).toBeUndefined();
+  });
+});

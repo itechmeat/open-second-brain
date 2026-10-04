@@ -29,6 +29,10 @@
  *     the stdout write. Without a session id no ledger is touched.
  *   - TUNABLE: the four caps resolve from config and env; an invalid value
  *     keeps the built-in constant and is named on the audit line.
+ *   - SLICED: a `recall_inject:` block in `Brain/_brain.yaml` declares named
+ *     slices, retrieved under the one budget and rendered as headed groups
+ *     inside the one fence. A `_brain.yaml` that fails to load falls back
+ *     to the unsliced brief and says so on the audit line.
  *   - OPTIONAL DECISION-MODEL FILTER: with the `recall_inject` use in
  *     `shadow` or `enforce` (default `off`), an `inject` decision is checked
  *     by one decision request within `decision_model_hook_budget_ms` and
@@ -57,7 +61,11 @@ import { emitTokenImpact, TOKEN_COUNT_METHOD } from "../src/core/brain/token-imp
 import { decisionTokenImpactSource } from "../src/core/decision-model/contract.ts";
 import { appendAuditRecord } from "../src/core/reliability/audit.ts";
 import { emitGatedTelemetry } from "../src/core/brain/continuity/emit.ts";
-import { hookAuditDir } from "../src/core/brain/paths.ts";
+import { existsSync } from "node:fs";
+
+import { brainConfigPath, hookAuditDir } from "../src/core/brain/paths.ts";
+import { loadBrainConfig } from "../src/core/brain/policy/load.ts";
+import type { RecallSliceSpec } from "../src/core/brain/types.ts";
 import {
   decideRecallInject,
   defaultRecallRetriever,
@@ -66,6 +74,7 @@ import {
   recallInjectTelemetryMetadata,
   type RecallInjectDecision,
   type RecallInjectFilter,
+  type RecallRetriever,
 } from "../src/core/brain/recall-inject.ts";
 import {
   emitRecallTelemetry,
@@ -258,6 +267,36 @@ function deliveredSetsFor(
   }
 }
 
+/**
+ * The vault's declared recall slices. A vault without `_brain.yaml` has
+ * none and says nothing; one whose `_brain.yaml` fails to load is reported
+ * as `invalid` so the hook can take the unsliced path and audit why.
+ */
+function slicesFor(vault: string): {
+  readonly slices: ReadonlyArray<RecallSliceSpec>;
+  readonly invalid: boolean;
+} {
+  try {
+    if (!existsSync(brainConfigPath(vault))) return { slices: [], invalid: false };
+    return { slices: loadBrainConfig(vault).recall_inject?.slices ?? [], invalid: false };
+  } catch {
+    return { slices: [], invalid: true };
+  }
+}
+
+/** The default retriever narrowed to one slice's path prefix and types. */
+function sliceRetrieverFor(
+  configPath: string,
+  vault: string,
+): (slice: RecallSliceSpec, limit: number) => RecallRetriever {
+  return (slice, limit) =>
+    defaultRecallRetriever(configPath, vault, {
+      limit,
+      ...(slice.pathPrefix !== null ? { pathPrefix: slice.pathPrefix } : {}),
+      types: slice.types,
+    });
+}
+
 /** Record the rendered notes after the brief reached stdout; best-effort. */
 function recordInjected(
   vault: string,
@@ -313,6 +352,7 @@ async function main(): Promise<void> {
     const sessionId = isRealSessionId(payload.session_id) ? payload.session_id : null;
     const { caps, invalid } = resolveRecallInjectCaps(configPath);
     const delivered = deliveredSetsFor(vault, configPath, sessionId);
+    const sliceConfig = slicesFor(vault);
 
     const decisionFilter = await decisionFilterFor(configPath, vault);
     const decision = await decideRecallInject(
@@ -321,11 +361,18 @@ async function main(): Promise<void> {
       {
         ...caps,
         ...(decisionFilter !== undefined ? { decisionFilter } : {}),
+        ...(sliceConfig.slices.length > 0
+          ? {
+              slices: sliceConfig.slices,
+              sliceRetriever: sliceRetrieverFor(configPath, vault),
+            }
+          : {}),
         ...delivered,
       },
     );
     recordDecision(vault, decision, {
       ...(invalid.length > 0 ? { config_invalid: invalid } : {}),
+      ...(sliceConfig.invalid ? { slices_config: "invalid" } : {}),
       ...(delivered !== null
         ? {
             deduped: {
