@@ -224,6 +224,27 @@ describe("reground-deliver hook", () => {
     expect(readFileSync(hookStateFilePath(vault, undefined), "utf8")).toBe(before);
   });
 
+  test("a tool call inside a sub-agent emits nothing and keeps the cursor", async () => {
+    seedQueue();
+    const queueBefore = readHookStamp(vault, SESSION, LEDGER_KEY_REGROUND);
+    const r = await runHook(
+      { ...postTool(), agent_id: "subagent-12345", agent_type: "security-reviewer" },
+      REGROUND_ON,
+    );
+    expect(r.exit).toBe(0);
+    expect(r.stdout).toBe("");
+    expect(auditRecords()).toEqual([]);
+    expect(readHookStamp(vault, SESSION, LEDGER_KEY_REGROUND)).toEqual(queueBefore);
+    const main = await runHook(postTool(), REGROUND_ON);
+    expect(contextOf(main, "PostToolUse")).toBe(PART_2);
+  });
+
+  test("a main thread started with --agent (agent_type, no agent_id) still gets its part", async () => {
+    seedQueue();
+    const r = await runHook({ ...postTool(), agent_type: "reviewer" }, REGROUND_ON);
+    expect(contextOf(r, "PostToolUse")).toBe(PART_2);
+  });
+
   test("a held scope lock emits nothing, audits no delivery and keeps the cursor", async () => {
     seedQueue();
     const queueBefore = readHookStamp(vault, SESSION, LEDGER_KEY_REGROUND);

@@ -15,6 +15,10 @@
  *   stdout: nothing, or
  *     { "hookSpecificOutput": { "hookEventName": "<event>", "additionalContext": "<part>" } }
  *
+ * Emits nothing for a tool call made inside a sub-agent (the payload
+ * carries a non-empty `agent_id`), so the part stays queued for the main
+ * agent's next event.
+ *
  * Emits only for an exact `PostToolUse` or `UserPromptSubmit`, the two
  * events registered for it: emitting under an event whose schema does not
  * accept `additionalContext` echoes the payload into a validation error.
@@ -157,6 +161,13 @@ async function main(): Promise<void> {
 
     const hookEventName = payload.hook_event_name;
     if (typeof hookEventName !== "string" || !CARRIER_EVENTS.has(hookEventName)) return;
+
+    // A tool call made inside a delegated sub-agent shares the parent's
+    // session id; taking a part there would hand the operator's rules to the
+    // sub-agent and starve the main agent. The host marks such calls with
+    // `agent_id`. `agent_type` alone is not a sub-agent marker: the host also
+    // sends it on the main thread of a session started with `--agent`.
+    if (typeof payload.agent_id === "string" && payload.agent_id.length > 0) return;
 
     const { isRealSessionId, takeRegroundPart } = await import("./lib/injection-ledger.ts");
     if (!isRealSessionId(payload.session_id)) return;

@@ -46,7 +46,12 @@ export interface HookPayloadBase {
   readonly tool_response?: unknown;
   /**
    * `SubagentStop`: the host-assigned id of the delegated sub-agent that
-   * just finished. The event's sibling field `agent_transcript_path` is
+   * just finished. Claude Code also sends it on every other hook event
+   * (`PreToolUse`, `PostToolUse` and so on) that fires inside a sub-agent,
+   * and only there, so its presence tells a sub-agent's tool call from the
+   * main thread's; `reground-deliver` relies on that. The sibling
+   * `agent_type` is not such a marker: it is also present on the main thread
+   * of a session started with `--agent`. The event's sibling field `agent_transcript_path` is
    * deliberately not declared here - it is a machine-local host path and
    * nothing in this tree may persist one into a vault that syncs between
    * devices.
