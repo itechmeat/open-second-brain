@@ -371,4 +371,49 @@ describe("active-inject chunked re-delivery", () => {
     expect(emitted.has("Brain/active.md")).toBe(false);
     expect(emitted.has("Brain/lessons.md")).toBe(false);
   });
+
+  test("a dropped body whose last line is a fragment of a committed line is not emitted", async () => {
+    writeLargeVault();
+    // The last line is a substring of the committed standing rule line, not a line of its own.
+    writeFileSync(
+      join(vault, "Brain", "lessons.md"),
+      "# Lessons\n\n- Lesson one\nStanding rule 0\n",
+      "utf8",
+    );
+    const r = await runHook(claudePayload(), {
+      ...REGROUND_ON,
+      OPEN_SECOND_BRAIN_REGROUND_PART_CHARS_CLAUDECODE: "2000",
+    });
+    expect(r.exit).toBe(0);
+    const committed = [contextOf(r), ...drainQueue().map((entry) => entry.part)].join("\n\n");
+    expect(injectionPayload()["parts_dropped"]).toBeGreaterThan(0);
+    expect(committed).toContain("Standing rule 0");
+    expect(committed).not.toContain("Lesson one");
+    expect(readActiveEmittedPaths(vault, SESSION).has("Brain/lessons.md")).toBe(false);
+  });
+
+  test("a body delivered whole before the dropped tail is still emitted", async () => {
+    writeSmallVault();
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\nactive:\n  inject_budget_chars: 40000\n",
+      "utf8",
+    );
+    const lessons = Array.from({ length: 250 }, (_, i) => `- Lesson ${i} `.padEnd(99, "l"));
+    writeFileSync(
+      join(vault, "Brain", "lessons.md"),
+      ["# Lessons", "", ...lessons, ""].join("\n"),
+      "utf8",
+    );
+    const r = await runHook(claudePayload(), {
+      ...REGROUND_ON,
+      OPEN_SECOND_BRAIN_REGROUND_PART_CHARS_CLAUDECODE: "2000",
+    });
+    expect(r.exit).toBe(0);
+    drainQueue();
+    expect(injectionPayload()["parts_dropped"]).toBeGreaterThan(0);
+    const emitted = readActiveEmittedPaths(vault, SESSION);
+    expect(emitted.has("Brain/active.md")).toBe(true);
+    expect(emitted.has("Brain/lessons.md")).toBe(false);
+  });
 });

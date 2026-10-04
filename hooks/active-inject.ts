@@ -359,8 +359,10 @@ function pruneHookStateFilesSafe(vault: string): void {
  * conservative side for dedupe, which only ever suppresses a repeat.
  *
  * When the split dropped parts past its cap, the dropped tail is the end of
- * the payload, so a body counts only when its last line is still in the
- * committed parts: a body cut short was not delivered whole.
+ * the payload, so a body counts only when its last line is still a whole
+ * line of the committed parts: a body cut short was not delivered whole. A
+ * whole-line match, not a substring one, so a short last line that only
+ * occurs inside a longer committed line does not count.
  */
 function bodyEmitted(
   input: RecordInjectionEpochInput,
@@ -375,7 +377,7 @@ function bodyEmitted(
   if (text.length === 0) return false;
   if (delivery.partsDropped === 0) return true;
   const lastLine = text.trimEnd().split("\n").at(-1) ?? "";
-  return lastLine.length > 0 && committed.includes(lastLine);
+  return lastLine.length > 0 && new Set(committed.split("\n")).has(lastLine);
 }
 
 // ----- chunked re-delivery (recall-injection-lifecycle) --------------------
