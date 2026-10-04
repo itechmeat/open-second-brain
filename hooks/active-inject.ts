@@ -260,6 +260,7 @@ async function main(): Promise<void> {
         recordInjectionEpoch(vault, epochInput, {
           parts: [""],
           partsDropped: 0,
+          droppedChars: 0,
           partCeilingChars: 0,
           meter: null,
         });
@@ -272,7 +273,7 @@ async function main(): Promise<void> {
     // 2..n would be lost, so the hook emits the whole payload instead.
     let delivery: Delivery = startsEpoch
       ? planDelivery(payload, blocks, context)
-      : { parts: [context], partsDropped: 0, partCeilingChars: 0, meter: null };
+      : { parts: [context], partsDropped: 0, droppedChars: 0, partCeilingChars: 0, meter: null };
     let ledgerWritten: boolean | null = null;
     if (delivery.parts.length > 1) {
       ledgerWritten = recordInjectionEpoch(vault, epochInput, delivery);
@@ -352,8 +353,8 @@ function recordInjectionEpoch(
       epoch: `${startSource}:${Date.now()}`,
       emittedPaths: digestNotePaths({
         emittedText: committed,
-        activeBodyEmitted: bodyEmitted(input, SOURCE_ACTIVE_BODY, delivery, committed),
-        lessonsBodyEmitted: bodyEmitted(input, SOURCE_LESSONS_BODY, delivery, committed),
+        activeBodyEmitted: bodyEmitted(input, SOURCE_ACTIVE_BODY, delivery),
+        lessonsBodyEmitted: bodyEmitted(input, SOURCE_LESSONS_BODY, delivery),
       }),
       regroundParts: delivery.parts.slice(1),
       partCeilingChars: delivery.partCeilingChars,
@@ -397,10 +398,10 @@ function pruneHookStateFilesSafe(vault: string): void {
  * conservative side for dedupe, which only ever suppresses a repeat.
  *
  * When the split dropped parts past its cap, the dropped tail is the end of
- * the payload, so a body counts only when its last line is still a whole
- * line of the committed parts: a body cut short was not delivered whole. A
- * whole-line match, not a substring one, so a short last line that only
- * occurs inside a longer committed line does not count.
+ * the payload, and the memory context is the payload's last block. A body
+ * counts only when it ends before that tail, measured by its position: a
+ * body cut short was not delivered whole, even when its last line repeats
+ * a line that was.
  *
  * The two truncation paths differ on purpose. A body cut by the injection
  * budget (`budgetActiveBody`) still counts whole when no part was dropped,
@@ -410,20 +411,30 @@ function pruneHookStateFilesSafe(vault: string): void {
  * eligible; only the `Brain/active.md` and `Brain/lessons.md` paths
  * themselves are over-suppressed for the epoch.
  */
-function bodyEmitted(
-  input: RecordInjectionEpochInput,
-  name: string,
-  delivery: Delivery,
-  committed: string,
-): boolean {
-  const text =
-    input.loaderSource === "fresh"
-      ? (input.meter.sources.find((source) => source.name === name)?.text ?? "")
-      : input.memoryContext;
-  if (text.length === 0) return false;
-  if (delivery.partsDropped === 0) return true;
-  const lastLine = text.trimEnd().split("\n").at(-1) ?? "";
-  return lastLine.length > 0 && new Set(committed.split("\n")).has(lastLine);
+function bodyEmitted(input: RecordInjectionEpochInput, name: string, delivery: Delivery): boolean {
+  const end = bodyEndInMemory(input, name);
+  if (end === null) return false;
+  return input.memoryContext.length - end >= delivery.droppedChars;
+}
+
+/**
+ * Where the named sub-body ends in the memory context, or `null` when it
+ * did not reach it. A cached memory context cannot be attributed, so it
+ * ends where the memory context ends. A fresh one is the meter's memory
+ * sub-bodies joined in order; a body that is not where that join puts it
+ * is not attributed.
+ */
+function bodyEndInMemory(input: RecordInjectionEpochInput, name: string): number | null {
+  const memory = input.memoryContext;
+  if (input.loaderSource !== "fresh") return memory.length > 0 ? memory.length : null;
+  let end = 0;
+  for (const source of input.meter.sources) {
+    if (!MEMORY_SOURCES.has(source.name) || source.text.length === 0) continue;
+    const start = end === 0 ? 0 : end + BLOCK_SEPARATOR.length;
+    end = start + source.text.length;
+    if (source.name === name) return memory.slice(start, end) === source.text ? end : null;
+  }
+  return null;
 }
 
 // ----- chunked re-delivery (recall-injection-lifecycle) --------------------
@@ -457,6 +468,8 @@ interface Delivery {
   readonly parts: ReadonlyArray<string>;
   /** Parts the splitter cut past its cap: neither emitted nor queued. */
   readonly partsDropped: number;
+  /** Length of the joined context's tail those parts held; 0 when none were dropped. */
+  readonly droppedChars: number;
   /** The ceiling the parts were cut to; 0 when no split applies. */
   readonly partCeilingChars: number;
   /** `null` while `reground_parts_enabled` is off, so the receipt keeps its shape. */
@@ -475,7 +488,13 @@ function planDelivery(
   blocks: ReadonlyArray<string>,
   context: string,
 ): Delivery {
-  const single: Delivery = { parts: [context], partsDropped: 0, partCeilingChars: 0, meter: null };
+  const single: Delivery = {
+    parts: [context],
+    partsDropped: 0,
+    droppedChars: 0,
+    partCeilingChars: 0,
+    meter: null,
+  };
   try {
     if (!resolveRegroundPartsEnabled()) return single;
     const runtime = detectHookRuntime(payload);
@@ -496,6 +515,7 @@ function planDelivery(
     return {
       parts: split.parts,
       partsDropped: split.partsDropped,
+      droppedChars: split.droppedChars,
       partCeilingChars: ceiling,
       meter: {
         utf16_chars: split.utf16Chars,
@@ -516,6 +536,7 @@ function unsplitDelivery(delivery: Delivery, context: string): Delivery {
   return {
     parts: [context],
     partsDropped: 0,
+    droppedChars: 0,
     partCeilingChars: delivery.partCeilingChars,
     meter:
       delivery.meter === null
@@ -593,6 +614,13 @@ const SOURCE_SCOPED_RULES = RECEIPT_ITEM_SCOPED_RULES;
 const SOURCE_RUNTIME_NOTICES = "runtime-notices";
 const SOURCE_ACTIVE_BODY = RECEIPT_ITEM_ACTIVE_BODY;
 const SOURCE_LESSONS_BODY = RECEIPT_ITEM_LESSONS_BODY;
+
+/** The memory sub-bodies, in the order `assembleActiveContext` joins them. */
+const MEMORY_SOURCES: ReadonlySet<string> = new Set([
+  SOURCE_RUNTIME_NOTICES,
+  SOURCE_ACTIVE_BODY,
+  SOURCE_LESSONS_BODY,
+]);
 
 /** Blank line between two injected blocks. */
 const BLOCK_SEPARATOR = "\n\n";

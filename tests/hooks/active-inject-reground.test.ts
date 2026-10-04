@@ -457,6 +457,28 @@ describe("active-inject chunked re-delivery", () => {
     expect(readActiveEmittedPaths(vault, SESSION).has("Brain/lessons.md")).toBe(false);
   });
 
+  test("a dropped body whose last line repeats a committed line is not emitted", async () => {
+    writeLargeVault();
+    // The last line equals a whole committed standing rule line, so only the
+    // body's position in the payload can tell that the body was cut.
+    const repeated = "- Standing rule 0 ".padEnd(99, "r");
+    writeFileSync(
+      join(vault, "Brain", "lessons.md"),
+      `# Lessons\n\n- Lesson one\n${repeated}\n`,
+      "utf8",
+    );
+    const r = await runHook(claudePayload(), {
+      ...REGROUND_ON,
+      OPEN_SECOND_BRAIN_REGROUND_PART_CHARS_CLAUDECODE: "2000",
+    });
+    expect(r.exit).toBe(0);
+    const committed = [contextOf(r), ...drainQueue().map((entry) => entry.part)].join("\n\n");
+    expect(injectionPayload()["parts_dropped"]).toBeGreaterThan(0);
+    expect(committed.split("\n")).toContain(repeated);
+    expect(committed).not.toContain("Lesson one");
+    expect(readActiveEmittedPaths(vault, SESSION).has("Brain/lessons.md")).toBe(false);
+  });
+
   test("a body delivered whole before the dropped tail is still emitted", async () => {
     writeSmallVault();
     writeFileSync(

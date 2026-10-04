@@ -22,6 +22,13 @@ export interface RegroundSplit {
   /** Length of the unsplit joined context. */
   readonly utf16Chars: number;
   readonly partsDropped: number;
+  /**
+   * Length of the joined context's tail the dropped parts held, the
+   * separator before it included; 0 when nothing was dropped. A text of the
+   * joined context reached the kept parts whole exactly when it ends at
+   * least this far from the end.
+   */
+  readonly droppedChars: number;
   /** Any part longer than the ceiling, or partsDropped > 0. */
   readonly overBudget: boolean;
 }
@@ -86,7 +93,13 @@ export function splitRegroundParts(
 ): RegroundSplit {
   const joined = join(blocks);
   if (joined.length <= ceilingChars) {
-    return { parts: [joined], utf16Chars: joined.length, partsDropped: 0, overBudget: false };
+    return {
+      parts: [joined],
+      utf16Chars: joined.length,
+      partsDropped: 0,
+      droppedChars: 0,
+      overBudget: false,
+    };
   }
 
   const capacity = Math.max(2, ceilingChars - frameReserve(joined.length));
@@ -95,10 +108,11 @@ export function splitRegroundParts(
     if (block.length === 0) continue;
     pushUnits(units, block, units.length === 0 ? "" : separator, capacity);
   }
-  const bodies = pack(units, capacity);
+  const { bodies, ends } = pack(units, capacity);
 
   const kept = bodies.slice(0, REGROUND_MAX_PARTS);
   const partsDropped = bodies.length - kept.length;
+  const droppedChars = partsDropped > 0 ? joined.length - ends[kept.length - 1]! : 0;
   const total = kept.length;
   const parts = kept.map((body, offset) => {
     const index = offset + 1;
@@ -112,6 +126,7 @@ export function splitRegroundParts(
     parts,
     utf16Chars: joined.length,
     partsDropped,
+    droppedChars,
     overBudget: partsDropped > 0 || parts.some((part) => part.length > ceilingChars),
   };
 }
@@ -158,10 +173,20 @@ function safeCut(text: string, limit: number): number {
   return isHighSurrogate && limit > 1 ? limit - 1 : limit;
 }
 
+/** Packed bodies, and where each one ends in the joined context. */
+interface Packed {
+  readonly bodies: string[];
+  readonly ends: number[];
+}
+
 /** Greedily fill bodies with whole units; a separator at a part boundary is dropped. */
-function pack(units: ReadonlyArray<Unit>, capacity: number): string[] {
+function pack(units: ReadonlyArray<Unit>, capacity: number): Packed {
   const bodies: string[] = [];
+  const ends: number[] = [];
   let current = "";
+  // The units joined by their separators are the joined context, so this
+  // running offset is a position in it.
+  let offset = 0;
   for (const unit of units) {
     if (current.length === 0) {
       current = unit.text;
@@ -169,9 +194,14 @@ function pack(units: ReadonlyArray<Unit>, capacity: number): string[] {
       current += unit.separator + unit.text;
     } else {
       bodies.push(current);
+      ends.push(offset);
       current = unit.text;
     }
+    offset += unit.separator.length + unit.text.length;
   }
-  if (current.length > 0) bodies.push(current);
-  return bodies;
+  if (current.length > 0) {
+    bodies.push(current);
+    ends.push(offset);
+  }
+  return { bodies, ends };
 }

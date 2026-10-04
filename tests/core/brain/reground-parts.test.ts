@@ -224,6 +224,22 @@ describe("splitRegroundParts", () => {
     for (const part of split.parts) expect(part.length).toBeLessThanOrEqual(2000);
   });
 
+  test("droppedChars is the joined tail the kept parts did not carry", () => {
+    const blocks = [makeBlock("S", 4, 10, 80), makeBlock("M", 40, 10, 80)];
+    const joined = join(blocks);
+    const split = splitRegroundParts(blocks, 2000, join);
+    expect(split.partsDropped).toBeGreaterThan(0);
+    const delivered = joined.slice(0, joined.length - split.droppedChars);
+    expect(delivered.endsWith(bodyOf(split.parts.at(-1)!))).toBe(true);
+    expect(joined.slice(delivered.length).startsWith("\n")).toBe(true);
+  });
+
+  test("droppedChars is 0 when every part is kept", () => {
+    const blocks = [makeBlock("S", 4, 10, 80), makeBlock("M", 8, 10, 80)];
+    expect(splitRegroundParts(blocks, 4000, join).droppedChars).toBe(0);
+    expect(splitRegroundParts(["short"], 4000, join).droppedChars).toBe(0);
+  });
+
   test("a split that keeps every part carries no truncation line", () => {
     const blocks = [makeBlock("S", 4, 10, 80), makeBlock("M", 8, 10, 80)];
     const split = splitRegroundParts(blocks, 4000, join);
