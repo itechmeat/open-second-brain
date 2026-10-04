@@ -216,7 +216,7 @@ export function readHookStamp(
 /** Bounded busy-retry acquiring the per-scope advisory lock. */
 const LOCK_RETRIES = 20;
 /** Sleep between lock attempts (ms). 20 * 5ms ~= 100ms worst-case wait. */
-export const HOOK_STATE_LOCK_RETRY_DELAY_MS = 5;
+const HOOK_STATE_LOCK_RETRY_DELAY_MS = 5;
 
 /**
  * Age past which a scope lockfile is presumed abandoned and taken over: three

@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -10,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import {
   LEDGER_KEY_ACTIVE,
@@ -52,6 +53,22 @@ function holdLock(sessionId: string): string {
   mkdirSync(join(vault, ".open-second-brain", "hook-state"), { recursive: true });
   writeFileSync(lockPath, "held by another process\n");
   return lockPath;
+}
+
+/** How many times `run` sleeps through `Atomics.wait` (the lock retry's sleep). */
+function countRetrySleeps(run: () => void): number {
+  const original = Atomics.wait;
+  let calls = 0;
+  Atomics.wait = ((...args: Parameters<typeof Atomics.wait>) => {
+    calls += 1;
+    return original(...args);
+  }) as typeof Atomics.wait;
+  try {
+    run();
+  } finally {
+    Atomics.wait = original;
+  }
+  return calls;
 }
 
 function seedQueue(sessionId: string, parts: ReadonlyArray<string>, epoch = "ep-1"): void {
@@ -311,20 +328,20 @@ describe("takeRegroundPart", () => {
     seedQueue("sess-1", ["p2", "p3"]);
     const lockPath = holdLock("sess-1");
     try {
-      // The bounded retry path on the same held lock, for scale.
-      const retryStarted = performance.now();
-      expect(updateHookState(vault, "sess-1", (state) => ({ state, result: null }))).toEqual({
-        status: "busy",
+      // Count the retry sleeps instead of timing them: the bounded retry
+      // sleeps between attempts through Atomics.wait, a try-once take never
+      // sleeps. A count does not drift on a loaded runner the way latency does.
+      const sleeps = countRetrySleeps(() => {
+        expect(updateHookState(vault, "sess-1", (state) => ({ state, result: null }))).toEqual({
+          status: "busy",
+        });
       });
-      const retryMs = performance.now() - retryStarted;
-      let takeMs = Number.POSITIVE_INFINITY;
-      for (let i = 0; i < 3; i++) {
-        const started = performance.now();
-        expect(takeRegroundPart(vault, "sess-1", NOW + 1)).toEqual({ status: "busy" });
-        takeMs = Math.min(takeMs, performance.now() - started);
-      }
-      // One lock attempt, never the retry loop.
-      expect(takeMs).toBeLessThan(retryMs / 2);
+      expect(sleeps).toBeGreaterThan(0);
+      expect(
+        countRetrySleeps(() => {
+          expect(takeRegroundPart(vault, "sess-1", NOW + 1)).toEqual({ status: "busy" });
+        }),
+      ).toBe(0);
     } finally {
       unlinkSync(lockPath);
       _resetHeldLocksForTests();
@@ -338,6 +355,21 @@ describe("takeRegroundPart", () => {
 });
 
 describe("session isolation", () => {
+  test("a session id with separators, dots or NUL keeps its ledger inside hook-state", () => {
+    const stateDir = join(vault, ".open-second-brain", "hook-state");
+    for (const id of ["../../outside", "a/b\\c", "sess.1", "x\u0000y", ".hidden"]) {
+      expect(isRealSessionId(id)).toBe(true);
+      expect(recordRecallInjected(vault, id, [`k-${id.length}`], NOW)).toBe(true);
+      const path = hookStateFilePath(vault, id);
+      expect(dirname(path)).toBe(stateDir);
+      // A lossy id gets the hashed scope name, still inside the scope-file shape.
+      expect(basename(path)).toMatch(/^[a-z0-9-]{1,64}\.json$/);
+      expect(readRecallInjected(vault, id, NOW).has(`k-${id.length}`)).toBe(true);
+    }
+    expect(readdirSync(vault).toSorted()).toEqual([".open-second-brain"]);
+    expect(readdirSync(stateDir).filter((name) => name.endsWith(".json"))).toHaveLength(5);
+  });
+
   test("every key is scoped per session id", () => {
     recordRecallInjected(vault, "sess-a", ["k1"], NOW);
     beginInjectionEpoch(

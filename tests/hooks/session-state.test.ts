@@ -17,7 +17,6 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
 import {
-  HOOK_STATE_LOCK_RETRY_DELAY_MS,
   HOOK_STATE_STALE_LOCK_MS,
   _clearStaleLockForTests,
   hookStateFilePath,
@@ -239,12 +238,21 @@ describe("updateHookState", () => {
   test("without tryOnce it keeps the bounded retry before reporting busy", () => {
     const lockPath = holdLock("sess-1");
     try {
-      const started = performance.now();
-      const outcome = updateHookState(vault, "sess-1", (state) => ({ state, result: 1 }));
-      const elapsed = performance.now() - started;
+      // Count the retry sleeps (Atomics.wait) instead of timing them.
+      const original = Atomics.wait;
+      let sleeps = 0;
+      Atomics.wait = ((...args: Parameters<typeof Atomics.wait>) => {
+        sleeps += 1;
+        return original(...args);
+      }) as typeof Atomics.wait;
+      let outcome: unknown;
+      try {
+        outcome = updateHookState(vault, "sess-1", (state) => ({ state, result: 1 }));
+      } finally {
+        Atomics.wait = original;
+      }
       expect(outcome).toEqual({ status: "busy" });
-      // A lower bound only: at least one retry sleep means more than one attempt.
-      expect(elapsed).toBeGreaterThanOrEqual(HOOK_STATE_LOCK_RETRY_DELAY_MS);
+      expect(sleeps).toBeGreaterThan(0);
     } finally {
       unlinkSync(lockPath);
       _resetHeldLocksForTests();
