@@ -86,6 +86,10 @@ async function runHook(
     env: {
       PATH: process.env["PATH"] ?? "",
       ...homeEnv(configHome),
+      // The failed-take marker lives under the OS temp dir; keep it per test.
+      TMPDIR: configHome,
+      TEMP: configHome,
+      TMP: configHome,
       VAULT_DIR: vault,
       ...env,
     },
