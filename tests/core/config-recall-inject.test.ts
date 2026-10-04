@@ -183,37 +183,52 @@ describe("resolveRegroundPartsEnabled", () => {
 describe("resolveRegroundPartChars", () => {
   test("defaults to 9000", () => {
     expect(REGROUND_PART_CHARS_DEFAULT).toBe(9000);
-    expect(resolveRegroundPartChars("claudecode", configPath)).toBe(9000);
-    expect(resolveRegroundPartChars("codex", configPath)).toBe(9000);
+    expect(resolveRegroundPartChars("claudecode", configPath).chars).toBe(9000);
+    expect(resolveRegroundPartChars("codex", configPath).chars).toBe(9000);
   });
 
   test("the runtime key wins over the shared key, which wins over the default", () => {
     writeConfig({ reground_part_chars: "5000", reground_part_chars_codex: "3000" });
-    expect(resolveRegroundPartChars("codex", configPath)).toBe(3000);
-    expect(resolveRegroundPartChars("claudecode", configPath)).toBe(5000);
+    expect(resolveRegroundPartChars("codex", configPath).chars).toBe(3000);
+    expect(resolveRegroundPartChars("claudecode", configPath).chars).toBe(5000);
   });
 
   test("env wins at each level", () => {
     writeConfig({ reground_part_chars: "5000", reground_part_chars_claudecode: "4000" });
     process.env["OPEN_SECOND_BRAIN_REGROUND_PART_CHARS_CLAUDECODE"] = "2500";
-    expect(resolveRegroundPartChars("claudecode", configPath)).toBe(2500);
+    expect(resolveRegroundPartChars("claudecode", configPath).chars).toBe(2500);
     process.env["OPEN_SECOND_BRAIN_REGROUND_PART_CHARS"] = "6000";
-    expect(resolveRegroundPartChars("codex", configPath)).toBe(6000);
+    expect(resolveRegroundPartChars("codex", configPath).chars).toBe(6000);
   });
 
   test("an invalid value falls through to the next level", () => {
     writeConfig({ reground_part_chars: "5000", reground_part_chars_claudecode: "1999" });
-    expect(resolveRegroundPartChars("claudecode", configPath)).toBe(5000);
+    expect(resolveRegroundPartChars("claudecode", configPath).chars).toBe(5000);
     writeConfig({ reground_part_chars: "100001", reground_part_chars_codex: "abc" });
-    expect(resolveRegroundPartChars("codex", configPath)).toBe(9000);
+    expect(resolveRegroundPartChars("codex", configPath).chars).toBe(9000);
     writeConfig({ reground_part_chars: "2000.5" });
-    expect(resolveRegroundPartChars("codex", configPath)).toBe(9000);
+    expect(resolveRegroundPartChars("codex", configPath).chars).toBe(9000);
+  });
+
+  test("a rejected value is named by its config key", () => {
+    writeConfig({ reground_part_chars: "5000", reground_part_chars_claudecode: "1999" });
+    expect(resolveRegroundPartChars("claudecode", configPath)).toEqual({
+      chars: 5000,
+      invalid: ["reground_part_chars_claudecode"],
+    });
+    writeConfig({ reground_part_chars: "100001", reground_part_chars_codex: "abc" });
+    expect(resolveRegroundPartChars("codex", configPath).invalid).toEqual([
+      "reground_part_chars_codex",
+      "reground_part_chars",
+    ]);
+    writeConfig({ reground_part_chars: "4000" });
+    expect(resolveRegroundPartChars("codex", configPath).invalid).toEqual([]);
   });
 
   test("range edges are inclusive", () => {
     writeConfig({ reground_part_chars_claudecode: "2000", reground_part_chars_codex: "100000" });
-    expect(resolveRegroundPartChars("claudecode", configPath)).toBe(2000);
-    expect(resolveRegroundPartChars("codex", configPath)).toBe(100000);
+    expect(resolveRegroundPartChars("claudecode", configPath).chars).toBe(2000);
+    expect(resolveRegroundPartChars("codex", configPath).chars).toBe(100000);
   });
 });
 
@@ -223,6 +238,6 @@ describe("malformed config", () => {
     expect(resolveRecallInjectCaps(configPath)).toEqual({ caps: {}, invalid: [] });
     expect(resolveRecallInjectDedupe(configPath)).toBe(true);
     expect(resolveRegroundPartsEnabled(configPath)).toBe(false);
-    expect(resolveRegroundPartChars("codex", configPath)).toBe(9000);
+    expect(resolveRegroundPartChars("codex", configPath).chars).toBe(9000);
   });
 });

@@ -259,6 +259,18 @@ describe("active-inject chunked re-delivery", () => {
     expect(injectionPayload()["part_ceiling_chars"]).toBe(9000);
   });
 
+  test("a rejected ceiling value is named on the receipt", async () => {
+    writeLargeVault();
+    const r = await runHook(claudePayload(), {
+      ...REGROUND_ON,
+      OPEN_SECOND_BRAIN_REGROUND_PART_CHARS_CLAUDECODE: "1999",
+    });
+    expect(r.exit).toBe(0);
+    const injection = injectionPayload();
+    expect(injection["part_ceiling_chars"]).toBe(9000);
+    expect(injection["config_invalid"]).toEqual(["reground_part_chars_claudecode"]);
+  });
+
   test("grok-shaped and unknown payloads emit the single full payload and queue nothing", async () => {
     writeLargeVault();
     const off = await runHook(claudePayload());
@@ -298,6 +310,7 @@ describe("active-inject chunked re-delivery", () => {
     expect(injection["parts_total"]).toBe(queued.length + 1);
     expect(injection["parts_dropped"]).toBe(0);
     expect(injection["over_budget"]).toBe(false);
+    expect(injection["config_invalid"]).toBeUndefined();
     const utf16 = injection["utf16_chars"] as number;
     expect(utf16).toBeGreaterThan(9000);
   });

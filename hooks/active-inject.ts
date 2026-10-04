@@ -442,6 +442,11 @@ interface RegroundMeter {
    * over-ceiling payload.
    */
   readonly reground_fallback?: typeof REGROUND_FALLBACK_LEDGER_WRITE_FAILED;
+  /**
+   * Set only when a part-ceiling key held a value out of range or not an
+   * integer: the rejected config keys, so the ceiling that ran is explained.
+   */
+  readonly config_invalid?: ReadonlyArray<string>;
 }
 
 /** {@link RegroundMeter.reground_fallback} value for a failed queue write. */
@@ -486,7 +491,7 @@ function planDelivery(
         },
       };
     }
-    const ceiling = resolveRegroundPartChars(runtime);
+    const { chars: ceiling, invalid } = resolveRegroundPartChars(runtime);
     const split = splitRegroundParts(blocks, ceiling, joinBlocks, BLOCK_SEPARATOR);
     return {
       parts: split.parts,
@@ -498,6 +503,7 @@ function planDelivery(
         parts_total: split.parts.length,
         parts_dropped: split.partsDropped,
         over_budget: split.overBudget,
+        ...(invalid.length > 0 ? { config_invalid: invalid } : {}),
       },
     };
   } catch {

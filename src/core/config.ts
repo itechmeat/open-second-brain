@@ -1183,17 +1183,24 @@ export function resolveRegroundPartsEnabled(configPath?: string): boolean {
  */
 export const REGROUND_PART_CHARS_DEFAULT = 9000;
 
+/** The per-part ceiling that applies, and the keys whose value was rejected on the way. */
+export interface RegroundPartCharsResolution {
+  readonly chars: number;
+  /** Config key names whose value was out of range or not an integer, in precedence order. */
+  readonly invalid: ReadonlyArray<string>;
+}
+
 /**
  * Per-part ceiling of a split digest for one host runtime. Precedence:
  * `reground_part_chars_<runtime>`, then `reground_part_chars`, then
  * {@link REGROUND_PART_CHARS_DEFAULT}; each level reads env first, then
  * config. A value outside the integer range 2000..100000 falls through to the
- * next level.
+ * next level and is named in `invalid`, so the caller can report it.
  */
 export function resolveRegroundPartChars(
   runtime: "claudecode" | "codex",
   configPath?: string,
-): number {
+): RegroundPartCharsResolution {
   const data = discoverConfig(configPath).data;
   const levels = [
     [
@@ -1202,13 +1209,15 @@ export function resolveRegroundPartChars(
     ],
     ["OPEN_SECOND_BRAIN_REGROUND_PART_CHARS", "reground_part_chars"],
   ] as const;
+  const invalid: string[] = [];
   for (const [envKey, configKey] of levels) {
     const raw = readSetting(envKey, configKey, data);
     if (raw === undefined) continue;
     const value = parseBounded(raw, 2000, 100_000, true);
-    if (value !== undefined) return value;
+    if (value !== undefined) return { chars: value, invalid };
+    invalid.push(configKey);
   }
-  return REGROUND_PART_CHARS_DEFAULT;
+  return { chars: REGROUND_PART_CHARS_DEFAULT, invalid };
 }
 
 /**

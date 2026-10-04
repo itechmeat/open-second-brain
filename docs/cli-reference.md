@@ -924,7 +924,8 @@ single payload as before. The ceiling is in UTF-16 code units:
 The runtime key wins over `reground_part_chars`, which wins over the
 default 9000 (the observed Claude Code threshold less 10%, applied to
 Codex too until measured). At each level the env value wins over the
-config value, and an invalid value falls through to the next level. The
+config value, and an invalid value falls through to the next level and
+is named in the receipt's `config_invalid`. The
 queue lives under `.open-second-brain/hook-state/` with a 24 h expiry,
 in a per-session file written with mode `0600`; when `.open-second-brain`
 or `hook-state` is a symbolic link, the hooks neither read nor write
