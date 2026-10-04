@@ -372,20 +372,21 @@ describe("updateHookState", () => {
   });
 });
 
+/** Point `.open-second-brain` or its `hook-state` directory at a fresh outside directory. */
+function plantOutside(link: "hook-state" | ".open-second-brain"): string {
+  const outside = mkdtempSync(join(tmpdir(), "o2b-hook-state-outside-"));
+  if (link === "hook-state") {
+    mkdirSync(join(vault, ".open-second-brain"), { recursive: true });
+    symlinkSync(outside, dir(), "dir");
+  } else {
+    symlinkSync(outside, join(vault, ".open-second-brain"), "dir");
+  }
+  return outside;
+}
+
 describe("symlinked hook-state directories", () => {
   const KEY = "osb.nav_tier.last_injected";
   const LIVE = { expiresAt: Date.now() + 60_000, data: { from: "outside" } };
-
-  function plantOutside(link: "hook-state" | ".open-second-brain"): string {
-    const outside = mkdtempSync(join(tmpdir(), "o2b-hook-state-outside-"));
-    if (link === "hook-state") {
-      mkdirSync(join(vault, ".open-second-brain"), { recursive: true });
-      symlinkSync(outside, dir(), "dir");
-    } else {
-      symlinkSync(outside, join(vault, ".open-second-brain"), "dir");
-    }
-    return outside;
-  }
 
   test("a real directory accepts the write (control)", () => {
     expect(updateHookState(vault, "sess-1", (state) => ({ state, result: 1 }))).toEqual({
