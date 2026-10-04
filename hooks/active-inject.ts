@@ -204,8 +204,11 @@ async function main(): Promise<void> {
     // the block never reaches the budgeter, so the configured injection
     // budget cannot shrink it; a throw inside memory assembly cannot take
     // it down with it; and it is never written to the inject cache, so a
-    // stale constitution can never be served from disk while the live one
-    // is unreadable.
+    // stale constitution can never be served from that cache while the
+    // live one is unreadable. With `reground_parts_enabled` on, the tail of
+    // a split payload (this block included, when it spills past part 1) is
+    // queued in the per-session hook-state file for re-grounding, until the
+    // next SessionStart replaces the queue.
     const standingBlock = renderStandingBlock(vault, limits.standingRulesMaxChars, meter);
 
     // The scoped operator rules for the project this session runs in (the
@@ -238,6 +241,11 @@ async function main(): Promise<void> {
     const blocks = [standingBlock, scopedBlock, memoryContext];
     const context = joinBlocks(blocks);
 
+    // Only a SessionStart starts an injection epoch: the same hook run on
+    // another context event (an operator-registered UserPromptSubmit) must
+    // neither clear the recall set nor replace the re-delivery queue, so it
+    // injects unsplit and leaves the ledger alone.
+    const startsEpoch = hookEventName === "SessionStart";
     const epochInput: RecordInjectionEpochInput = {
       sessionId: payload.session_id,
       startSource: payload.source,
@@ -248,19 +256,23 @@ async function main(): Promise<void> {
     if (context.length === 0) {
       // Nothing to emit, but the earlier context is gone all the same: the
       // epoch still clears the recall set and any stale re-delivery queue.
-      recordInjectionEpoch(vault, epochInput, {
-        parts: [""],
-        partsDropped: 0,
-        partCeilingChars: 0,
-        meter: null,
-      });
+      if (startsEpoch) {
+        recordInjectionEpoch(vault, epochInput, {
+          parts: [""],
+          partsDropped: 0,
+          partCeilingChars: 0,
+          meter: null,
+        });
+      }
       return;
     }
 
     // Chunked re-delivery (off by default). A split payload is committed
     // to the ledger BEFORE stdout: if the queue cannot be written, parts
     // 2..n would be lost, so the hook emits the whole payload instead.
-    let delivery = planDelivery(payload, blocks, context);
+    let delivery: Delivery = startsEpoch
+      ? planDelivery(payload, blocks, context)
+      : { parts: [context], partsDropped: 0, partCeilingChars: 0, meter: null };
     let ledgerWritten: boolean | null = null;
     if (delivery.parts.length > 1) {
       ledgerWritten = recordInjectionEpoch(vault, epochInput, delivery);
@@ -276,9 +288,16 @@ async function main(): Promise<void> {
     process.stdout.write(JSON.stringify(out) + "\n");
 
     // After stdout, like the meter: the ledger serves later hooks in this
-    // session and must never delay or alter what was injected.
-    ledgerWritten ??= recordInjectionEpoch(vault, epochInput, delivery);
-    if (ledgerWritten && payload.source === "startup") pruneHookStateFilesSafe(vault);
+    // session and must never delay or alter what was injected. A split
+    // whose queue could not be written went out whole; retrying the epoch
+    // with that unsplit delivery (no queue) still clears the previous
+    // epoch's queue and recall set when the failure was transient.
+    if (startsEpoch && ledgerWritten !== true) {
+      ledgerWritten = recordInjectionEpoch(vault, epochInput, delivery);
+    }
+    if (ledgerWritten === true && startSourceOf(payload.source) === "startup") {
+      pruneHookStateFilesSafe(vault);
+    }
 
     // Measure LAST, so the injected context is already on stdout before the
     // meter can spend a millisecond of the ceiling. See recordInjectionSize.
@@ -327,10 +346,7 @@ function recordInjectionEpoch(
   try {
     if (!isRealSessionId(input.sessionId)) return false;
     if (!resolveRecallInjectEnabled() && !resolveRegroundPartsEnabled()) return false;
-    const startSource =
-      typeof input.startSource === "string" && input.startSource.length > 0
-        ? input.startSource
-        : "unknown";
+    const startSource = startSourceOf(input.startSource);
     const committed = delivery.parts.join(BLOCK_SEPARATOR);
     return beginInjectionEpoch(vault, input.sessionId, {
       epoch: `${startSource}:${Date.now()}`,
@@ -347,6 +363,18 @@ function recordInjectionEpoch(
     // must never disturb an injection.
     return false;
   }
+}
+
+/** The SessionStart `source` values the host documents. */
+const START_SOURCES = new Set(["startup", "resume", "clear", "compact"]);
+
+/**
+ * The payload's SessionStart `source`, mapped to the closed set the host
+ * documents and `unknown` for anything else, so a host-supplied string
+ * never reaches the ledger epoch, the marker or the audit lines unbounded.
+ */
+function startSourceOf(source: unknown): string {
+  return typeof source === "string" && START_SOURCES.has(source) ? source : "unknown";
 }
 
 /**
@@ -373,6 +401,14 @@ function pruneHookStateFilesSafe(vault: string): void {
  * line of the committed parts: a body cut short was not delivered whole. A
  * whole-line match, not a substring one, so a short last line that only
  * occurs inside a longer committed line does not count.
+ *
+ * The two truncation paths differ on purpose. A body cut by the injection
+ * budget (`budgetActiveBody`) still counts whole when no part was dropped,
+ * so a recall candidate on a span past the budget cut is filtered as
+ * already shown. The cost is small: preference paths come only from the
+ * backticked tokens actually emitted, so a preference past the cut stays
+ * eligible; only the `Brain/active.md` and `Brain/lessons.md` paths
+ * themselves are over-suppressed for the epoch.
  */
 function bodyEmitted(
   input: RecordInjectionEpochInput,

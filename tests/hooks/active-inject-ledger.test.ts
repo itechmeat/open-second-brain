@@ -25,9 +25,11 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  beginInjectionEpoch,
   readActiveEmittedPaths,
   readRecallInjected,
   recordRecallInjected,
+  takeRegroundPart,
 } from "../../hooks/lib/injection-ledger.ts";
 import { homeEnv } from "../helpers/platform.ts";
 import { waitForSelfHealChildren } from "../helpers/self-heal-children.ts";
@@ -152,6 +154,45 @@ describe("active-inject injection ledger", () => {
     expect(r.exit).toBe(0);
     expect(r.stdout).toBe("");
     expect(readRecallInjected(vault, SESSION).size).toBe(0);
+  });
+
+  test("a SessionStart with nothing to emit drops the earlier re-delivery queue", async () => {
+    expect(
+      beginInjectionEpoch(vault, SESSION, {
+        epoch: "startup:1",
+        emittedPaths: ["Brain/preferences/pref-old.md"],
+        regroundParts: ["[Open Second Brain context - part 2 of 2]\n\nold"],
+        partCeilingChars: 9000,
+      }),
+    ).toBe(true);
+    const r = await runHook(
+      { hook_event_name: "SessionStart", source: "compact", session_id: SESSION },
+      { OPEN_SECOND_BRAIN_REGROUND_PARTS_ENABLED: "true" },
+    );
+    expect(r.exit).toBe(0);
+    expect(r.stdout).toBe("");
+    expect(takeRegroundPart(vault, SESSION)).toEqual({ status: "empty" });
+    expect(readActiveEmittedPaths(vault, SESSION).size).toBe(0);
+  });
+
+  test("an empty SessionStart without a session id writes nothing", async () => {
+    const r = await runHook({ hook_event_name: "SessionStart", source: "compact" }, RECALL_ON);
+    expect(r.exit).toBe(0);
+    expect(r.stdout).toBe("");
+    expect(existsSync(hookStateDir())).toBe(false);
+  });
+
+  test("a UserPromptSubmit run injects but starts no epoch", async () => {
+    writeActive(ACTIVE_BODY);
+    recordRecallInjected(vault, SESSION, ["k"]);
+    const r = await runHook(
+      { hook_event_name: "UserPromptSubmit", session_id: SESSION },
+      RECALL_ON,
+    );
+    expect(r.exit).toBe(0);
+    expect(r.stdout).toContain("pref-foo");
+    expect([...readRecallInjected(vault, SESSION)]).toEqual(["k"]);
+    expect(readActiveEmittedPaths(vault, SESSION).size).toBe(0);
   });
 
   test("the reground flag alone is a consumer too", async () => {

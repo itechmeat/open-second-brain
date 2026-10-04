@@ -22,7 +22,12 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { readActiveEmittedPaths, takeRegroundPart } from "../../hooks/lib/injection-ledger.ts";
+import {
+  beginInjectionEpoch,
+  readActiveEmittedPaths,
+  takeRegroundPart,
+} from "../../hooks/lib/injection-ledger.ts";
+import { hookStateFilePath } from "../../hooks/lib/session-state.ts";
 import { homeEnv } from "../helpers/platform.ts";
 import { waitForSelfHealChildren } from "../helpers/self-heal-children.ts";
 
@@ -338,6 +343,51 @@ describe("active-inject chunked re-delivery", () => {
     expect(injection["parts_dropped"]).toBe(0);
     expect(injection["over_budget"]).toBe(true);
     expect(injection["reground_fallback"]).toBe("ledger_write_failed");
+  });
+
+  test("a UserPromptSubmit run past the ceiling emits the whole context and queues nothing", async () => {
+    writeLargeVault();
+    const whole = contextOf(await runHook(claudePayload()));
+    const r = await runHook(
+      { ...claudePayload(), hook_event_name: "UserPromptSubmit" },
+      REGROUND_ON,
+    );
+    expect(r.exit).toBe(0);
+    expect(contextOf(r)).toBe(whole);
+    expect(existsSync(join(vault, ".open-second-brain", "hook-state"))).toBe(false);
+  });
+
+  test("a SessionStart source outside the host's set is recorded as unknown", async () => {
+    writeLargeVault();
+    const r = await runHook({ ...claudePayload(), source: "x/../not-a-source" }, REGROUND_ON);
+    expect(r.exit).toBe(0);
+    const queued = drainQueue();
+    expect(queued.length).toBeGreaterThanOrEqual(1);
+    for (const entry of queued) expect(entry.epoch.startsWith("unknown:")).toBe(true);
+  });
+
+  test("when every ledger write fails, the earlier queue outlives the whole-payload fallback", async () => {
+    // Documents the accepted behaviour: the fallback retries the epoch write
+    // with the unsplit delivery, which clears the earlier queue after a
+    // transient failure; a lock held through both attempts leaves it.
+    writeLargeVault();
+    expect(
+      beginInjectionEpoch(vault, SESSION, {
+        epoch: "startup:1",
+        emittedPaths: [],
+        regroundParts: ["[Open Second Brain context - part 2 of 2]\n\nold"],
+        partCeilingChars: 9000,
+      }),
+    ).toBe(true);
+    const off = await runHook(claudePayload());
+    const lock = hookStateFilePath(vault, SESSION) + ".lock";
+    writeFileSync(lock, "held by the test\n", "utf8");
+    const r = await runHook(claudePayload(), REGROUND_ON);
+    rmSync(lock, { force: true });
+    expect(r.exit).toBe(0);
+    expect(r.stdout).toBe(off.stdout);
+    const queued = drainQueue();
+    expect(queued.map((entry) => entry.epoch)).toEqual(["startup:1"]);
   });
 
   test("a split that fits needs no fallback marker", async () => {
