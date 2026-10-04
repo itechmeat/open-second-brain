@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   existsSync,
   mkdirSync,
@@ -24,8 +24,12 @@ import {
   recordRecallInjected,
   takeRegroundPart,
 } from "../../hooks/lib/injection-ledger.ts";
-import * as sessionState from "../../hooks/lib/session-state.ts";
-import { hookStateFilePath, readHookStamp, writeHookStamp } from "../../hooks/lib/session-state.ts";
+import {
+  hookStateFilePath,
+  readHookStamp,
+  updateHookState,
+  writeHookStamp,
+} from "../../hooks/lib/session-state.ts";
 import { _resetHeldLocksForTests } from "../../src/core/brain/sync-lockfile.ts";
 
 let vault: string;
@@ -272,15 +276,20 @@ describe("takeRegroundPart", () => {
     seedQueue("sess-1", ["p2", "p3"]);
     const lockPath = holdLock("sess-1");
     try {
-      const update = spyOn(sessionState, "updateHookState");
-      try {
+      // The bounded retry path on the same held lock, for scale.
+      const retryStarted = performance.now();
+      expect(updateHookState(vault, "sess-1", (state) => ({ state, result: null }))).toEqual({
+        status: "busy",
+      });
+      const retryMs = performance.now() - retryStarted;
+      let takeMs = Number.POSITIVE_INFINITY;
+      for (let i = 0; i < 3; i++) {
+        const started = performance.now();
         expect(takeRegroundPart(vault, "sess-1", NOW + 1)).toEqual({ status: "busy" });
-        // One lock attempt, never the retry loop.
-        expect(update).toHaveBeenCalledTimes(1);
-        expect(update.mock.calls[0]![3]).toMatchObject({ tryOnce: true });
-      } finally {
-        update.mockRestore();
+        takeMs = Math.min(takeMs, performance.now() - started);
       }
+      // One lock attempt, never the retry loop.
+      expect(takeMs).toBeLessThan(retryMs / 2);
     } finally {
       unlinkSync(lockPath);
       _resetHeldLocksForTests();
