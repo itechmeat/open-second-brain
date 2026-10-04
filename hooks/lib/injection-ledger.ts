@@ -235,7 +235,7 @@ function parseQueue(data: Record<string, unknown> | null): RegroundQueue | null 
  * atomic write, so when that write fails both old keys survive with
  * matching epochs, and the following takes still hand out the earlier
  * SessionStart's remaining parts, one per event, after the fallback payload. A missing queue is
- * answered from a lock-free read without touching disk.
+ * answered from a lock-free read, without taking the lock or writing.
  */
 export function takeRegroundPart(
   vault: string,
