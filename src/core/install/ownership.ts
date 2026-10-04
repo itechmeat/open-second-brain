@@ -271,6 +271,21 @@ export const OUT_OF_VAULT_STATE: ReadonlyArray<OutOfVaultState> = Object.freeze(
     sources: ["hooks/post-write-reminder.ts"],
   },
   {
+    id: "reground_take_failed_markers",
+    label: "re-grounding failed-take markers",
+    location: "$TMPDIR/o2b-reground-take-failed-<hash>, one per vault and session id",
+    carries_memory: false,
+    created_by:
+      "the reground-deliver hook, the first time a take from the re-grounding queue fails in an epoch",
+    removed_by:
+      "the OS temp cleanup, or deleting the file yourself - nothing in this tool prunes it",
+    note:
+      "Holds only the queue epoch whose failure was already audited (a start source and a " +
+      "timestamp), so the audit line is written once per epoch. It lives in the temp directory " +
+      "because the failing hook-state tree in the vault cannot hold it.",
+    sources: ["hooks/reground-deliver.ts"],
+  },
+  {
     id: "cron_recipe_artifacts",
     label: "cron recipe scripts and their stamps",
     location:
