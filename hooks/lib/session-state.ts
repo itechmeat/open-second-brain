@@ -31,7 +31,10 @@ import {
 import { dirname, join } from "node:path";
 
 import { acquireLockSync, type LockHandle } from "../../src/core/brain/sync-lockfile.ts";
-import { resolveSessionScope } from "../../src/core/brain/session-scope.ts";
+import {
+  resolveSessionScope,
+  SESSION_SCOPE_MAX_LENGTH,
+} from "../../src/core/brain/session-scope.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 
 /** The vault's hook-surface directory. */
@@ -41,7 +44,7 @@ const OSB_DIR = ".open-second-brain";
 const HOOK_STATE_DIR = "hook-state";
 
 /** A scope state file name: a scope slug plus `.json`, nothing else. */
-const SCOPE_FILE_RE = /^[a-z0-9-]{1,64}\.json$/;
+const SCOPE_FILE_RE = new RegExp(`^[a-z0-9-]{1,${SESSION_SCOPE_MAX_LENGTH}}\\.json$`);
 
 /** Scope slug used when no session id is available (single flat lane). */
 const DEFAULT_SCOPE = "default";
