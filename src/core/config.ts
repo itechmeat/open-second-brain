@@ -660,6 +660,23 @@ export function resolveSkillsDir(configPath?: string): string | null {
 }
 
 /**
+ * Raw value of one setting: the env override when it is set and non-empty,
+ * otherwise the config value, otherwise `undefined`. Env always wins. When
+ * `data` is a function it is called only when no env override is set, so
+ * an env answer never opens the config file.
+ */
+function readSetting(
+  envKey: string,
+  configKey: string,
+  data: Record<string, string> | (() => Record<string, string>),
+): string | undefined {
+  const env = process.env[envKey]?.trim();
+  if (env) return env;
+  const raw = (typeof data === "function" ? data() : data)[configKey]?.trim();
+  return raw ? raw : undefined;
+}
+
+/**
  * Shared body for a default-OFF boolean config gate: env var (trimmed)
  * wins, falling back to the matching `_brain.yaml`/config key (trimmed);
  * only the literal strings `"true"`/`"1"` are truthy, anything else
@@ -667,8 +684,7 @@ export function resolveSkillsDir(configPath?: string): string | null {
  * resolver bodies that differed only in their env/config key names.
  */
 function resolveConfigFlag(envKey: string, configKey: string, configPath?: string): boolean {
-  const env = process.env[envKey]?.trim();
-  return isFlagOn(env || discoverConfig(configPath).data[configKey]?.trim());
+  return isFlagOn(readSetting(envKey, configKey, () => discoverConfig(configPath).data));
 }
 
 /** The one parse every boolean switch in this file shares. */
@@ -1065,20 +1081,6 @@ export interface RecallInjectCapsResolution {
   };
   /** Config key names whose value was rejected, in resolution order. */
   readonly invalid: ReadonlyArray<string>;
-}
-
-/**
- * Raw value of one setting: the env override when it is set and non-empty,
- * otherwise the config value, otherwise `undefined`. Env always wins.
- */
-function readSetting(
-  envKey: string,
-  configKey: string,
-  data: Record<string, string>,
-): string | undefined {
-  const env = process.env[envKey]?.trim();
-  const raw = env || data[configKey]?.trim();
-  return raw ? raw : undefined;
 }
 
 /** `raw` as a number within `[min, max]` (an integer when asked), else `undefined`. */
