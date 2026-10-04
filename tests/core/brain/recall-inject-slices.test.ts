@@ -156,7 +156,7 @@ describe("decideRecallInject with operator-declared slices", () => {
     const limits = new Map<string, number>();
     const decision = await decideRecallInject("receipts", unused, {
       maxNotes: 4,
-      slices: [slice("first", { limit: 3 }), slice("second")],
+      slices: [slice("first", { limit: 3 }), slice("second", { limit: 3 })],
       sliceRetriever: slicesOf(
         {
           first: { candidates: notes("Brain/f", 5), total: 5 },
@@ -168,7 +168,8 @@ describe("decideRecallInject with operator-declared slices", () => {
     expect(decision.kind).toBe("inject");
     if (decision.kind !== "inject") return;
     expect(limits.get("first")).toBe(3);
-    expect(limits.get("second")).toBe(4);
+    expect(limits.get("second")).toBe(3);
+    // The second slice's own limit (3) is clamped by the notes left (1).
     expect(decision.noteCount).toBe(4);
     expect(decision.slices).toEqual([
       { name: "first", outcome: "inject", notes: 3 },
@@ -354,9 +355,9 @@ describe("decideRecallInject with operator-declared slices", () => {
       slices: [slice("empty"), slice("weak"), slice("blank")],
       sliceRetriever: slicesOf({
         empty: { candidates: [], total: 0, idfWeightedCoverage: 0 },
-        weak: { candidates: [candidate()], total: 1, idfWeightedCoverage: 0.1 },
+        weak: { candidates: [candidate({ score: 0.1 })], total: 1, idfWeightedCoverage: 0.1 },
         blank: {
-          candidates: [candidate({ path: "Brain/b.md" })],
+          candidates: [candidate({ path: "Brain/b.md", score: 0.3 })],
           total: 1,
           idfWeightedCoverage: null,
         },
@@ -373,6 +374,8 @@ describe("decideRecallInject with operator-declared slices", () => {
     });
     // The strongest measurable slice speaks for the abstain.
     expect(decision.kind === "abstain" && decision.matchQuality).toBe(0.1);
+    // The top score is the strongest across every slice, not the first one's.
+    expect(decision.kind === "abstain" && decision.topScore).toBe(0.3);
   });
 
   test("the slices share one time budget: a slow slice errors the whole decision", async () => {
