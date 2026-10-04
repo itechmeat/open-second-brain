@@ -97,6 +97,14 @@ their file names. A host that sends other ids starts its hook state
 afresh once after the upgrade: once-per-session nudges can repeat in an
 open session, and the old file is pruned after seven days.
 
+The last-good SessionStart snapshot under
+`.open-second-brain/inject-cache/` and the search session focus file are
+written with mode `0600` as well, and setting a focus answers
+`INVALID_INPUT` when a directory on the way to the focus file is a
+symbolic link. A search `path_prefix` that starts with a drive letter is
+now refused with `INVALID_INPUT`, like one containing `..` or starting
+with `/`.
+
 ## Upgrading to 1.70.0
 
 One step is required for Hermes users: update the `o2b` CLI and the
