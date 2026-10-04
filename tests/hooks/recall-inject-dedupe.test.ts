@@ -168,7 +168,9 @@ describe("recall-inject hook: per-session dedupe", () => {
     const second = await runHook();
     expect(brief(first)).toContain("notes/schedule.md");
     expect(second.stdout).toBe(first.stdout);
+    expect(lastDetails()["decision"]).toBe("inject");
     expect(lastDetails()["dedupe_sets"]).toBeUndefined();
+    expect(existsSync(join(vault, ".open-second-brain", "hook-state"))).toBe(false);
   });
 
   test("recall_inject_dedupe: false injects both times", async () => {
@@ -271,7 +273,7 @@ describe("recall-inject hook: operator-declared slices", () => {
     expect(text).not.toContain("notes/nests.md");
   });
 
-  test("a _brain.yaml that fails to load falls back to the unsliced path", async () => {
+  test("a _brain.yaml that fails to load errors the decision and names slices_config", async () => {
     writeMd(
       vault,
       "Brain/_brain.yaml",
@@ -293,6 +295,7 @@ describe("recall-inject hook: operator-declared slices", () => {
   test("a vault without _brain.yaml adds no slice fields to the audit line", async () => {
     await runHook();
     const details = lastDetails();
+    expect(details["decision"]).toBe("inject");
     expect(details["slices"]).toBeUndefined();
     expect(details["slices_config"]).toBeUndefined();
   });

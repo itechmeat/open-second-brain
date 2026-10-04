@@ -116,7 +116,10 @@ describe("recall-inject hook", () => {
       { VAULT_DIR: vault, OPEN_SECOND_BRAIN_RECALL_INJECT_ENABLED: "true" },
     );
     const record = auditRecords().find((rec) => rec["actor"] === "recall-inject");
-    expect(Object.keys((record?.["details"] ?? {}) as object)).not.toContain("config_invalid");
+    expect(record).toBeDefined();
+    const details = record!["details"] as Record<string, unknown>;
+    expect(["inject", "abstain"]).toContain(details["decision"] as string);
+    expect(Object.keys(details)).not.toContain("config_invalid");
   });
 
   test("flag on stays fail-open and audits a decision on an empty vault", async () => {
