@@ -108,14 +108,21 @@ export function readActiveEmittedPaths(
   return readStringSet(vault, sessionId, LEDGER_KEY_ACTIVE, "paths", nowMs);
 }
 
-/** Backticked preference id in a digest line, e.g. `` `pref-no-emoji` ``. */
-const PREF_TOKEN_RE = /`pref-([A-Za-z0-9][A-Za-z0-9_-]*)`/g;
+/**
+ * A preference bullet as the active digest renders it: a line that starts
+ * with `` - `pref-<slug>` `` followed by a space or the line end (see
+ * `renderConfirmedLine` and its siblings in src/core/brain/active.ts). A
+ * backticked `pref-` token anywhere else in a line, such as a lesson or a
+ * prose line quoting one, is not a rendered preference and does not match.
+ */
+const PREF_BULLET_RE = /^- `pref-([A-Za-z0-9][A-Za-z0-9_-]*)`(?=[ \t\r]|$)/gm;
 
 /**
  * Vault paths a digest emission covers: `Brain/active.md` and
  * `Brain/lessons.md` when their bodies were emitted, then one
- * `Brain/preferences/pref-<slug>.md` per backticked preference token, in
- * first-seen order with repeats dropped.
+ * `Brain/preferences/pref-<slug>.md` per rendered preference bullet, in
+ * first-seen order with repeats dropped. Only the bullet shape counts, so
+ * vault text that merely quotes a preference id cannot suppress its recall.
  */
 export function digestNotePaths(input: {
   readonly emittedText: string;
@@ -125,7 +132,7 @@ export function digestNotePaths(input: {
   const paths = new Set<string>();
   if (input.activeBodyEmitted) paths.add("Brain/active.md");
   if (input.lessonsBodyEmitted) paths.add("Brain/lessons.md");
-  for (const match of input.emittedText.matchAll(PREF_TOKEN_RE)) {
+  for (const match of input.emittedText.matchAll(PREF_BULLET_RE)) {
     paths.add(`Brain/preferences/pref-${match[1]}.md`);
   }
   return [...paths];

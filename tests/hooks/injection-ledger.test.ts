@@ -121,9 +121,10 @@ describe("recall injected set", () => {
 });
 
 describe("digestNotePaths", () => {
-  test("maps every pref token and dedupes repeats", () => {
+  test("maps every rendered preference bullet and dedupes repeats", () => {
     const paths = digestNotePaths({
-      emittedText: "- `pref-alpha` rule\n- `pref-beta-2` rule\n- again `pref-alpha`",
+      emittedText:
+        "- `pref-alpha` (confidence: high) — rule\n- `pref-beta-2` — rule\n- `pref-alpha` (applied_in_window: 3)",
       activeBodyEmitted: false,
       lessonsBodyEmitted: false,
     });
@@ -138,11 +139,26 @@ describe("digestNotePaths", () => {
     });
     expect(both).toEqual(["Brain/active.md", "Brain/lessons.md"]);
     const lessonsOnly = digestNotePaths({
-      emittedText: "`pref-x`",
+      emittedText: "- `pref-x` — rule",
       activeBodyEmitted: false,
       lessonsBodyEmitted: true,
     });
     expect(lessonsOnly).toEqual(["Brain/lessons.md", "Brain/preferences/pref-x.md"]);
+  });
+
+  test("a backticked pref token quoted in prose is not a delivered preference", () => {
+    expect(
+      digestNotePaths({
+        emittedText: [
+          "- `lesson-1` (tags: x) — remember `pref-x` when editing",
+          "Quoted in active.md: see `pref-y` for details.",
+          "  - `pref-z` nested quote",
+          "- `pref-real` (confidence: high) — a rendered rule",
+        ].join("\n"),
+        activeBodyEmitted: false,
+        lessonsBodyEmitted: false,
+      }),
+    ).toEqual(["Brain/preferences/pref-real.md"]);
   });
 
   test("ignores a pref word outside backticks", () => {
