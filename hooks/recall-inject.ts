@@ -22,6 +22,13 @@
  *     a retriever's own message (see `recordDecision`).
  *   - FAIL-OPEN FOR THE SESSION: the hook process never blocks the user. It
  *     arms a self-watchdog ceiling and exits 0 on every path.
+ *   - SESSION-AWARE: with a real `session_id` and `recall_inject_dedupe`
+ *     (default on), notes this session was already shown - by an earlier
+ *     brief or by the SessionStart digest - are not injected again. The
+ *     injection ledger is read before the decision and written only after
+ *     the stdout write. Without a session id no ledger is touched.
+ *   - TUNABLE: the four caps resolve from config and env; an invalid value
+ *     keeps the built-in constant and is named on the audit line.
  *   - OPTIONAL DECISION-MODEL FILTER: with the `recall_inject` use in
  *     `shadow` or `enforce` (default `off`), an `inject` decision is checked
  *     by one decision request within `decision_model_hook_budget_ms` and
@@ -36,6 +43,8 @@
 import {
   defaultConfigPath,
   discoverConfig,
+  resolveRecallInjectCaps,
+  resolveRecallInjectDedupe,
   resolveRecallInjectEnabled,
   resolveTokenImpactLedgerEnabled,
   resolveVault,
@@ -65,6 +74,13 @@ import {
   RECALL_TELEMETRY_STATUS,
   type RecallTelemetryStatus,
 } from "../src/core/brain/recall-telemetry.ts";
+import {
+  isRealSessionId,
+  readActiveEmittedPaths,
+  readRecallInjected,
+  recallNoteKey,
+  recordRecallInjected,
+} from "./lib/injection-ledger.ts";
 import { armProcessCeiling, resolveHookCeilingMs } from "./lib/process-ceiling.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { isContextEventName } from "./lib/context-events.ts";
@@ -81,8 +97,12 @@ import { isContextEventName } from "./lib/context-events.ts";
  * which swallows a throwing continuity write exactly as every other
  * telemetry site does.
  */
-function recordDecision(vault: string, decision: RecallInjectDecision): void {
-  auditDecision(vault, decision);
+function recordDecision(
+  vault: string,
+  decision: RecallInjectDecision,
+  hookDetails: Readonly<Record<string, unknown>> = {},
+): void {
+  auditDecision(vault, decision, hookDetails);
   emitGatedTelemetry(true, () =>
     emitRecallTelemetry(vault, {
       host: HOOK_TELEMETRY_HOST,
@@ -134,8 +154,15 @@ function telemetryStatus(decision: RecallInjectDecision): RecallTelemetryStatus 
  * under `<vault>/.open-second-brain/hook-audit/`, and a SQLite or config
  * message is precisely what an operator debugging a broken retriever
  * needs. The withholding happens on the other surface, not here.
+ *
+ * `hookDetails` carries what only the hook knows (rejected config keys,
+ * the dedupe sets it consulted); an empty object leaves the line as it was.
  */
-function auditDecision(vault: string, decision: RecallInjectDecision): void {
+function auditDecision(
+  vault: string,
+  decision: RecallInjectDecision,
+  hookDetails: Readonly<Record<string, unknown>>,
+): void {
   try {
     appendAuditRecord(hookAuditDir(vault), {
       timestamp: new Date().toISOString(),
@@ -143,7 +170,7 @@ function auditDecision(vault: string, decision: RecallInjectDecision): void {
       action: "recall_inject_decision",
       target: "UserPromptSubmit",
       ok: decision.kind === "inject",
-      details: recallInjectAuditDetails(decision),
+      details: { ...recallInjectAuditDetails(decision), ...hookDetails },
     });
   } catch {
     // best-effort: auditing must never disturb the fail-open contract
@@ -203,6 +230,47 @@ function recordTokenImpact(
   }
 }
 
+/** What this session was already shown, for the dedupe filter. */
+interface DeliveredSets {
+  readonly alreadyInjected: ReadonlySet<string>;
+  readonly activeDigestPaths: ReadonlySet<string>;
+}
+
+/**
+ * The session's ledger sets, or null when dedupe does not apply: no real
+ * session id, `recall_inject_dedupe` off, or a ledger that cannot be read
+ * (fail-open: a broken ledger means repeats, never a lost brief).
+ */
+function deliveredSetsFor(
+  vault: string,
+  configPath: string,
+  sessionId: string | null,
+): DeliveredSets | null {
+  if (sessionId === null) return null;
+  try {
+    if (!resolveRecallInjectDedupe(configPath)) return null;
+    return {
+      alreadyInjected: readRecallInjected(vault, sessionId),
+      activeDigestPaths: readActiveEmittedPaths(vault, sessionId),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Record the rendered notes after the brief reached stdout; best-effort. */
+function recordInjected(
+  vault: string,
+  sessionId: string,
+  decision: Extract<RecallInjectDecision, { kind: "inject" }>,
+): void {
+  try {
+    recordRecallInjected(vault, sessionId, decision.injectedNotes.map(recallNoteKey));
+  } catch {
+    // best-effort: a missed record costs one repeat, never the session
+  }
+}
+
 async function main(): Promise<void> {
   // Fast opt-out FIRST: default OFF means an immediate no-op, no process
   // ceiling armed, no payload read, no output - byte-identical to before.
@@ -242,13 +310,31 @@ async function main(): Promise<void> {
     auditVault = vault;
     const configPath = defaultConfigPath();
 
+    const sessionId = isRealSessionId(payload.session_id) ? payload.session_id : null;
+    const { caps, invalid } = resolveRecallInjectCaps(configPath);
+    const delivered = deliveredSetsFor(vault, configPath, sessionId);
+
     const decisionFilter = await decisionFilterFor(configPath, vault);
     const decision = await decideRecallInject(
       prompt,
-      defaultRecallRetriever(configPath, vault),
-      decisionFilter !== undefined ? { decisionFilter } : {},
+      defaultRecallRetriever(configPath, vault, caps.maxNotes),
+      {
+        ...caps,
+        ...(decisionFilter !== undefined ? { decisionFilter } : {}),
+        ...delivered,
+      },
     );
-    recordDecision(vault, decision);
+    recordDecision(vault, decision, {
+      ...(invalid.length > 0 ? { config_invalid: invalid } : {}),
+      ...(delivered !== null
+        ? {
+            deduped: {
+              already_injected: delivered.alreadyInjected.size,
+              digest_paths: delivered.activeDigestPaths.size,
+            },
+          }
+        : {}),
+    });
     recordTokenImpact(vault, configPath, decision);
     if (decision.kind !== "inject") return;
 
@@ -259,6 +345,7 @@ async function main(): Promise<void> {
       },
     };
     process.stdout.write(JSON.stringify(out) + "\n");
+    if (delivered !== null && sessionId !== null) recordInjected(vault, sessionId, decision);
   } finally {
     disarm();
   }
