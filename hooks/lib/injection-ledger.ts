@@ -228,7 +228,10 @@ function parseQueue(data: Record<string, unknown> | null): RegroundQueue | null 
  * part stays queued for the next event. The cursor advance is persisted
  * before the part is returned, so a crash after the write loses that part and
  * never duplicates it. The queue key is deleted once its last part is taken.
- * A missing queue is answered from a lock-free read without touching disk.
+ * A queue whose epoch is not the active epoch is a leftover of an earlier
+ * SessionStart whose replacement write failed: it reads as empty and is
+ * deleted. A missing queue is answered from a lock-free read without
+ * touching disk.
  */
 export function takeRegroundPart(
   vault: string,
@@ -243,7 +246,8 @@ export function takeRegroundPart(
     sessionId,
     (state, now) => {
       const queue = parseQueue(liveData(state[LEDGER_KEY_REGROUND], now));
-      if (queue === null || queue.next >= queue.parts.length) {
+      const activeEpoch = liveData(state[LEDGER_KEY_ACTIVE], now)?.["epoch"];
+      if (queue === null || queue.epoch !== activeEpoch || queue.next >= queue.parts.length) {
         delete state[LEDGER_KEY_REGROUND];
         return { state, result: { status: "empty" } };
       }

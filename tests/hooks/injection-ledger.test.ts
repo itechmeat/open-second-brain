@@ -1,5 +1,13 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -17,7 +25,8 @@ import {
   recordRecallInjected,
   takeRegroundPart,
 } from "../../hooks/lib/injection-ledger.ts";
-import { hookStateFilePath, readHookStamp } from "../../hooks/lib/session-state.ts";
+import * as sessionState from "../../hooks/lib/session-state.ts";
+import { hookStateFilePath, readHookStamp, writeHookStamp } from "../../hooks/lib/session-state.ts";
 import { _resetHeldLocksForTests } from "../../src/core/brain/sync-lockfile.ts";
 
 let vault: string;
@@ -56,7 +65,7 @@ describe("isRealSessionId", () => {
   });
 
   test("rejects undefined, null, empty and non-strings", () => {
-    for (const value of [undefined, null, "", 42, {}, ["s"]]) {
+    for (const value of [undefined, null, "", "   ", "\t", 42, {}, ["s"]]) {
       expect(isRealSessionId(value)).toBe(false);
     }
   });
@@ -194,6 +203,24 @@ describe("beginInjectionEpoch", () => {
     expect(takeRegroundPart(vault, "sess-1", NOW + 6)).toEqual({ status: "empty" });
   });
 
+  test("repeated emitted paths are stored once", () => {
+    beginInjectionEpoch(
+      vault,
+      "sess-1",
+      {
+        epoch: "e",
+        emittedPaths: ["Brain/active.md", "Brain/active.md", "Brain/preferences/pref-a.md"],
+        regroundParts: [],
+        partCeilingChars: 9000,
+      },
+      NOW,
+    );
+    expect(readHookStamp(vault, "sess-1", LEDGER_KEY_ACTIVE, NOW)!.data!["paths"]).toEqual([
+      "Brain/active.md",
+      "Brain/preferences/pref-a.md",
+    ]);
+  });
+
   test("the active set expires after the TTL", () => {
     beginInjectionEpoch(
       vault,
@@ -219,8 +246,40 @@ describe("takeRegroundPart", () => {
     expect(takeRegroundPart(vault, "sess-1", NOW + 1)).toEqual({ status: "empty" });
   });
 
-  test("no queue reads as empty", () => {
+  test("taking the last part deletes the queue key", () => {
+    seedQueue("sess-1", ["p2", "p3"]);
+    takeRegroundPart(vault, "sess-1", NOW + 1);
+    expect(readHookStamp(vault, "sess-1", LEDGER_KEY_REGROUND, NOW + 1)).not.toBeNull();
+    expect(takeRegroundPart(vault, "sess-1", NOW + 2)).toMatchObject({ status: "part", index: 3 });
+    expect(readStateKeys("sess-1")).not.toContain(LEDGER_KEY_REGROUND);
+  });
+
+  test("no queue reads as empty without creating a state file", () => {
     expect(takeRegroundPart(vault, "sess-1", NOW)).toEqual({ status: "empty" });
+    expect(existsSync(hookStateFilePath(vault, "sess-1"))).toBe(false);
+  });
+
+  test("a queue whose cursor is not a non-negative integer reads as empty and is deleted", () => {
+    for (const next of [-1, 1.5]) {
+      seedQueue("sess-1", ["p2", "p3"]);
+      const queue = readHookStamp(vault, "sess-1", LEDGER_KEY_REGROUND, NOW)!;
+      writeHookStamp(vault, "sess-1", LEDGER_KEY_REGROUND, {
+        expiresAt: queue.expiresAt,
+        data: { ...queue.data, next },
+      });
+      expect(takeRegroundPart(vault, "sess-1", NOW + 1)).toEqual({ status: "empty" });
+      expect(readStateKeys("sess-1")).not.toContain(LEDGER_KEY_REGROUND);
+    }
+  });
+
+  test("a queue from an older epoch than the active one reads as empty and is deleted", () => {
+    seedQueue("sess-1", ["p2", "p3"], "ep-a");
+    writeHookStamp(vault, "sess-1", LEDGER_KEY_ACTIVE, {
+      expiresAt: NOW + LEDGER_TTL_MS,
+      data: { epoch: "ep-b", paths: [] },
+    });
+    expect(takeRegroundPart(vault, "sess-1", NOW + 1)).toEqual({ status: "empty" });
+    expect(readStateKeys("sess-1")).not.toContain(LEDGER_KEY_REGROUND);
   });
 
   test("an expired queue reads as empty", () => {
@@ -232,7 +291,15 @@ describe("takeRegroundPart", () => {
     seedQueue("sess-1", ["p2", "p3"]);
     const lockPath = holdLock("sess-1");
     try {
-      expect(takeRegroundPart(vault, "sess-1", NOW + 1)).toEqual({ status: "busy" });
+      const update = spyOn(sessionState, "updateHookState");
+      try {
+        expect(takeRegroundPart(vault, "sess-1", NOW + 1)).toEqual({ status: "busy" });
+        // One lock attempt, never the retry loop.
+        expect(update).toHaveBeenCalledTimes(1);
+        expect(update.mock.calls[0]![3]).toMatchObject({ tryOnce: true });
+      } finally {
+        update.mockRestore();
+      }
     } finally {
       unlinkSync(lockPath);
       _resetHeldLocksForTests();
@@ -244,7 +311,7 @@ describe("takeRegroundPart", () => {
     expect(takeRegroundPart(vault, "sess-1", NOW + 4)).toEqual({ status: "empty" });
   });
 
-  test("two interleaved takers never receive the same index", () => {
+  test("alternating sequential takers advance one shared cursor", () => {
     seedQueue("sess-1", ["p2", "p3", "p4", "p5", "p6"]);
     const seen: number[] = [];
     for (let i = 0; i < 4; i++) {
@@ -280,3 +347,12 @@ describe("session isolation", () => {
     expect(takeRegroundPart(vault, "sess-a", NOW)).toMatchObject({ status: "part", index: 2 });
   });
 });
+
+function readStateKeys(sessionId: string): string[] {
+  return Object.keys(
+    JSON.parse(readFileSync(hookStateFilePath(vault, sessionId), "utf8")) as Record<
+      string,
+      unknown
+    >,
+  );
+}
