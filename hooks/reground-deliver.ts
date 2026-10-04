@@ -23,19 +23,20 @@
  * would drop parts 2..n almost every time.
  *
  * Cheap when off: the flag is checked before the vault is resolved or any
- * state is read, because this runs after every tool call on every install.
+ * state is read, because this runs after every tool call on every install,
+ * and the ledger, lock and audit modules are imported only after it, so a
+ * default-off run never loads them.
  * The take is try-once under the scope lock: on contention the event
  * passes silently and the next one delivers. The cursor advances before
  * the part is printed, so a crash in between loses that part and never
  * duplicates it.
  *
- * Quiet on failures: exit 0 with no output on any error.
+ * Quiet on failures: exit 0 with no output on any error. A take that
+ * fails for a reason other than contention leaves a
+ * `reground_take_failed` audit line.
  */
 
 import { resolveRegroundPartsEnabled, resolveVault } from "../src/core/config.ts";
-import { hookAuditDir } from "../src/core/brain/paths.ts";
-import { appendAuditRecord } from "../src/core/reliability/audit.ts";
-import { isRealSessionId, takeRegroundPart } from "./lib/injection-ledger.ts";
 import { armProcessCeiling, resolveHookCeilingMs } from "./lib/process-ceiling.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 
@@ -46,38 +47,45 @@ const CARRIER_EVENTS: ReadonlySet<string> = new Set(["PostToolUse", "UserPromptS
 
 const UTF8 = new TextEncoder();
 
-/**
- * Best-effort hook audit line. Never throws: a failure to record must never
- * disturb the fail-soft hook contract.
- */
-function auditHook(
-  vault: string | null,
+/** Appends one hook audit line; bound once the audit module is loaded. */
+type HookAuditor = (
   action: string,
   target: string,
   ok: boolean,
   details: Record<string, unknown>,
-): void {
-  if (vault === null) return;
-  try {
-    appendAuditRecord(hookAuditDir(vault), {
-      timestamp: new Date().toISOString(),
-      actor: HOOK_NAME,
-      action,
-      target,
-      ok,
-      details,
-    });
-  } catch {
-    // best-effort
-  }
+) => void;
+
+/**
+ * Load the audit writer for `vault`. The returned auditor is best-effort and
+ * never throws: a failure to record must never disturb the fail-soft hook
+ * contract.
+ */
+async function loadAuditor(vault: string): Promise<HookAuditor> {
+  const [{ hookAuditDir }, { appendAuditRecord }] = await Promise.all([
+    import("../src/core/brain/paths.ts"),
+    import("../src/core/reliability/audit.ts"),
+  ]);
+  return (action, target, ok, details) => {
+    try {
+      appendAuditRecord(hookAuditDir(vault), {
+        timestamp: new Date().toISOString(),
+        actor: HOOK_NAME,
+        action,
+        target,
+        ok,
+        details,
+      });
+    } catch {
+      // best-effort
+    }
+  };
 }
 
 async function main(): Promise<void> {
-  let auditVault: string | null = null;
+  let audit: HookAuditor | null = null;
   const disarm = armProcessCeiling({
     ceilingMs: resolveHookCeilingMs(),
-    onExpire: () =>
-      auditHook(auditVault, "hook_ceiling_exceeded", "reground", false, { hook: HOOK_NAME }),
+    onExpire: () => audit?.("hook_ceiling_exceeded", "reground", false, { hook: HOOK_NAME }),
   });
   try {
     let payload;
@@ -92,13 +100,19 @@ async function main(): Promise<void> {
 
     const hookEventName = payload.hook_event_name;
     if (typeof hookEventName !== "string" || !CARRIER_EVENTS.has(hookEventName)) return;
+
+    const { isRealSessionId, takeRegroundPart } = await import("./lib/injection-ledger.ts");
     if (!isRealSessionId(payload.session_id)) return;
 
     const vault = resolveVault();
     if (vault === null) return;
-    auditVault = vault;
+    audit = await loadAuditor(vault);
 
     const take = takeRegroundPart(vault, payload.session_id);
+    if (take.status === "failed") {
+      audit("reground_take_failed", hookEventName, false, {});
+      return;
+    }
     if (take.status !== "part") return;
 
     const out = {
@@ -109,7 +123,7 @@ async function main(): Promise<void> {
     };
     process.stdout.write(JSON.stringify(out) + "\n");
 
-    auditHook(vault, "reground_part_delivered", hookEventName, true, {
+    audit("reground_part_delivered", hookEventName, true, {
       part: take.index,
       total: take.total,
       epoch: take.epoch,

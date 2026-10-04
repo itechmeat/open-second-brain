@@ -7,6 +7,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -20,10 +21,10 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { beginInjectionEpoch } from "../../hooks/lib/injection-ledger.ts";
-import { hookStateFilePath } from "../../hooks/lib/session-state.ts";
+import { LEDGER_KEY_REGROUND, beginInjectionEpoch } from "../../hooks/lib/injection-ledger.ts";
+import { hookStateFilePath, readHookStamp } from "../../hooks/lib/session-state.ts";
 import { hookAuditDir } from "../../src/core/brain/paths.ts";
-import { homeEnv } from "../helpers/platform.ts";
+import { CHMOD_CANNOT_DENY, homeEnv } from "../helpers/platform.ts";
 
 const HOOK = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -32,6 +33,19 @@ const HOOK = resolve(
   "hooks",
   "reground-deliver.ts",
 );
+
+/**
+ * Modules a flag-off run must never load: the ledger, the lock and the audit
+ * writer. (`fs-atomic.ts` is not listed: `config.ts`, which the flag check
+ * needs, already imports it.)
+ */
+const HEAVY_MODULES = ["injection-ledger.ts", "session-state.ts", "sync-lockfile.ts", "audit.ts"];
+
+/** Preload that reports every loaded module path on stderr at exit. */
+const LOADED_PROBE = `process.on("exit", () => {
+  process.stderr.write("LOADED:" + JSON.stringify(Object.keys(require.cache)) + "\\n");
+});
+`;
 
 const SESSION = "deliver-session-0001";
 const EPOCH = "compact:1760000000000";
@@ -56,13 +70,16 @@ afterEach(() => {
 
 interface RunResult {
   readonly stdout: string;
+  readonly stderr: string;
   readonly exit: number;
-  readonly elapsedMs: number;
 }
 
-async function runHook(payload: unknown, env: Record<string, string> = {}): Promise<RunResult> {
-  const started = Date.now();
-  const proc = Bun.spawn(["bun", "run", HOOK], {
+async function runHook(
+  payload: unknown,
+  env: Record<string, string> = {},
+  preload: ReadonlyArray<string> = [],
+): Promise<RunResult> {
+  const proc = Bun.spawn(["bun", "run", ...preload, HOOK], {
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
@@ -75,16 +92,16 @@ async function runHook(payload: unknown, env: Record<string, string> = {}): Prom
   });
   proc.stdin.write(JSON.stringify(payload));
   await proc.stdin.end();
-  const [stdout] = await Promise.all([
+  const [stdout, stderr] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
   ]);
   const exit = await proc.exited;
-  return { stdout, exit, elapsedMs: Date.now() - started };
+  return { stdout, stderr, exit };
 }
 
-function seedQueue(): void {
-  const ok = beginInjectionEpoch(vault, SESSION, {
+function seedQueue(sessionId: string = SESSION): void {
+  const ok = beginInjectionEpoch(vault, sessionId, {
     epoch: EPOCH,
     emittedPaths: ["Brain/preferences/pref-b.md"],
     regroundParts: [PART_2, PART_3],
@@ -126,6 +143,23 @@ describe("reground-deliver hook", () => {
     expect(r.stdout).toBe("");
     expect(auditRecords()).toEqual([]);
     expect(existsSync(join(vault, ".open-second-brain"))).toBe(false);
+  });
+
+  test("flag off loads none of the ledger, lock or audit modules", async () => {
+    seedQueue();
+    const probe = join(configHome, "loaded-probe.ts");
+    writeFileSync(probe, LOADED_PROBE);
+    const r = await runHook(postTool(), {}, ["--preload", probe]);
+    expect(r.exit).toBe(0);
+    const line = r.stderr.split("\n").find((l) => l.startsWith("LOADED:"));
+    expect(line).toBeDefined();
+    const loaded = (JSON.parse(line!.slice("LOADED:".length)) as string[]).map((path) =>
+      path.replaceAll("\\", "/"),
+    );
+    expect(loaded.some((path) => path.endsWith("hooks/reground-deliver.ts"))).toBe(true);
+    for (const name of HEAVY_MODULES) {
+      expect(loaded.filter((path) => path.endsWith(`/${name}`))).toEqual([]);
+    }
   });
 
   test("flag off leaves a seeded queue untouched", async () => {
@@ -172,22 +206,29 @@ describe("reground-deliver hook", () => {
     expect(contextOf(r, "PostToolUse")).toBe(PART_2);
   });
 
-  test("without a session id nothing is delivered", async () => {
-    seedQueue();
+  test("without a session id nothing is delivered, not even from the default scope", async () => {
+    // The sessionless lane maps to the default scope file; a queue there must stay put.
+    const defaultScope = "default";
+    expect(hookStateFilePath(vault, defaultScope)).toBe(hookStateFilePath(vault, undefined));
+    seedQueue(defaultScope);
+    const before = readFileSync(hookStateFilePath(vault, undefined), "utf8");
     const r = await runHook({ hook_event_name: "PostToolUse", tool_name: "Read" }, REGROUND_ON);
     expect(r.exit).toBe(0);
     expect(r.stdout).toBe("");
+    expect(readFileSync(hookStateFilePath(vault, undefined), "utf8")).toBe(before);
   });
 
-  test("a held scope lock emits nothing quickly and the part survives", async () => {
+  test("a held scope lock emits nothing, audits no delivery and keeps the cursor", async () => {
     seedQueue();
+    const queueBefore = readHookStamp(vault, SESSION, LEDGER_KEY_REGROUND);
     const lockPath = hookStateFilePath(vault, SESSION) + ".lock";
     writeFileSync(lockPath, "held by another process\n");
     try {
       const r = await runHook(postTool(), REGROUND_ON);
       expect(r.exit).toBe(0);
       expect(r.stdout).toBe("");
-      expect(r.elapsedMs).toBeLessThan(10_000);
+      expect(auditRecords()).toEqual([]);
+      expect(readHookStamp(vault, SESSION, LEDGER_KEY_REGROUND)).toEqual(queueBefore);
     } finally {
       unlinkSync(lockPath);
     }
@@ -230,4 +271,25 @@ describe("reground-deliver hook", () => {
     const details = auditRecords()[0]!["details"] as Record<string, unknown>;
     expect(details["over_budget"]).toBe(true);
   });
+
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "a failed take emits nothing and leaves a reground_take_failed audit line",
+    async () => {
+      seedQueue();
+      const stateDir = dirname(hookStateFilePath(vault, SESSION));
+      // A read-only state directory: the queue reads, the lock cannot be created.
+      chmodSync(stateDir, 0o500);
+      try {
+        const r = await runHook(postTool(), REGROUND_ON);
+        expect(r.exit).toBe(0);
+        expect(r.stdout).toBe("");
+      } finally {
+        chmodSync(stateDir, 0o700);
+      }
+      const records = auditRecords();
+      expect(records.map((record) => [record["action"], record["ok"]])).toEqual([
+        ["reground_take_failed", false],
+      ]);
+    },
+  );
 });
