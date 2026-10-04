@@ -406,7 +406,7 @@ function pruneHookStateFilesSafe(vault: string): void {
  * budget (`budgetActiveBody`) still counts whole when no part was dropped,
  * so a recall candidate on a span past the budget cut is filtered as
  * already shown. The cost is small: preference paths come only from the
- * backticked tokens actually emitted, so a preference past the cut stays
+ * preference bullets actually emitted, so a preference past the cut stays
  * eligible; only the `Brain/active.md` and `Brain/lessons.md` paths
  * themselves are over-suppressed for the epoch.
  */

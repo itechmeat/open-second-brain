@@ -104,9 +104,9 @@ function parseSliceNames(
 
 /**
  * Whether a (slash-normalised) `path_prefix` is vault-relative. The search
- * request refuses `..`, an absolute path and a drive letter at query time,
- * and the slice would then abstain on every prompt with no sign of why, so
- * the same forms are load errors here.
+ * request refuses `..` and a leading `/` at query time, so the slice would
+ * then fail on every prompt with no sign of why, and a drive-letter path
+ * can never match a vault-relative one; all three are load errors here.
  */
 function isVaultRelativePrefix(prefix: string): boolean {
   return !prefix.includes("..") && !prefix.startsWith("/") && !/^[A-Za-z]:/.test(prefix);
