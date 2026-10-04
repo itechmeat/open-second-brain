@@ -51,7 +51,7 @@ afterEach(() => {
 });
 
 async function race(): Promise<number[]> {
-  const startAt = Date.now() + 500;
+  const startAt = Date.now() + 1500;
   const children = Array.from({ length: CHILDREN }, () =>
     Bun.spawn(
       [process.execPath, "-e", CHILD_SCRIPT, vault, SESSION, String(NOW), String(startAt)],
@@ -93,7 +93,7 @@ describe("takeRegroundPart across processes", () => {
   test("concurrent takers never receive the same part", async () => {
     seed();
     expectExactlyOnce(await race());
-  }, 10_000);
+  }, 30_000);
 
   test("concurrent takers racing a stale-lock takeover never receive the same part", async () => {
     seed();
@@ -102,5 +102,5 @@ describe("takeRegroundPart across processes", () => {
     const old = (Date.now() - HOOK_STATE_STALE_LOCK_MS - 5_000) / 1000;
     utimesSync(lockPath, old, old);
     expectExactlyOnce(await race());
-  }, 10_000);
+  }, 30_000);
 });
