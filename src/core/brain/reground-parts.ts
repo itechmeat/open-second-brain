@@ -26,9 +26,8 @@ export interface RegroundSplit {
   readonly overBudget: boolean;
 }
 
-/** Separators between blocks, paragraphs and lines, in preference order. */
-const BLOCK_SEPARATOR = "\n\n";
-const PARAGRAPH_SEPARATOR = "\n\n";
+/** The blank-line boundary: the default block separator, and the paragraph one. */
+const BLANK_LINE = "\n\n";
 const LINE_SEPARATOR = "\n";
 /** Between the header, the body and the trailer of a part. */
 const FRAME_SEPARATOR = "\n\n";
@@ -62,12 +61,14 @@ interface Unit {
  * Split `blocks` (standing, scoped, memory, in priority order) into parts
  * of at most `ceilingChars`. `join` is active-inject's own block join, so
  * a payload that fits is returned as one part identical to what the hook
- * emits without this lane.
+ * emits without this lane; `separator` is the string that join puts
+ * between blocks, so the multi-part bodies keep it too.
  */
 export function splitRegroundParts(
   blocks: ReadonlyArray<string>,
   ceilingChars: number,
   join: (blocks: ReadonlyArray<string>) => string,
+  separator: string = BLANK_LINE,
 ): RegroundSplit {
   const joined = join(blocks);
   if (joined.length <= ceilingChars) {
@@ -78,7 +79,7 @@ export function splitRegroundParts(
   const units: Unit[] = [];
   for (const block of blocks) {
     if (block.length === 0) continue;
-    pushUnits(units, block, units.length === 0 ? "" : BLOCK_SEPARATOR, capacity);
+    pushUnits(units, block, units.length === 0 ? "" : separator, capacity);
   }
   const bodies = pack(units, capacity);
 
@@ -108,10 +109,10 @@ function pushUnits(units: Unit[], text: string, separator: string, capacity: num
     units.push({ text, separator });
     return;
   }
-  const paragraphs = text.split(PARAGRAPH_SEPARATOR);
+  const paragraphs = text.split(BLANK_LINE);
   if (paragraphs.length > 1) {
     paragraphs.forEach((paragraph, i) =>
-      pushUnits(units, paragraph, i === 0 ? separator : PARAGRAPH_SEPARATOR, capacity),
+      pushUnits(units, paragraph, i === 0 ? separator : BLANK_LINE, capacity),
     );
     return;
   }

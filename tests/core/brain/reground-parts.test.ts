@@ -28,9 +28,20 @@ function makeBlock(tag: string, paragraphs: number, lines: number, width: number
   return out.join("\n\n");
 }
 
-/** Drop newlines, which part boundaries may absorb. */
-function strip(text: string): string {
-  return text.replaceAll("\n", "");
+/**
+ * Assert the bodies are verbatim, in-order slices of `joined` that cover it
+ * whole: between two bodies only the one separator a part boundary absorbs.
+ */
+function expectVerbatimCover(bodies: ReadonlyArray<string>, joined: string): void {
+  let at = 0;
+  for (const [i, body] of bodies.entries()) {
+    const found = joined.indexOf(body, at);
+    expect(found).toBeGreaterThanOrEqual(at);
+    if (i > 0) expect(["", "\n", "\n\n"]).toContain(joined.slice(at, found));
+    else expect(found).toBe(0);
+    at = found + body.length;
+  }
+  expect(at).toBe(joined.length);
 }
 
 /** Strip the part header and the continuation trailer, leaving the body. */
@@ -97,8 +108,41 @@ describe("splitRegroundParts", () => {
   test("no content is lost or duplicated across parts", () => {
     const blocks = [makeBlock("S", 3, 6, 70), makeBlock("C", 2, 6, 70), makeBlock("M", 8, 9, 70)];
     const split = splitRegroundParts(blocks, 2500, join);
-    const bodies = split.parts.map(bodyOf).join("");
-    expect(strip(bodies)).toBe(strip(join(blocks)));
+    expect(split.parts.length).toBeGreaterThan(1);
+    expectVerbatimCover(split.parts.map(bodyOf), join(blocks));
+  });
+
+  test("an empty middle block adds no stray separator", () => {
+    const blocks = [makeBlock("S", 3, 6, 70), "", makeBlock("M", 8, 9, 70)];
+    const split = splitRegroundParts(blocks, 2500, join);
+    expect(split.parts.length).toBeGreaterThan(1);
+    for (const part of split.parts) expect(bodyOf(part)).not.toContain("\n\n\n");
+    expectVerbatimCover(split.parts.map(bodyOf), join(blocks));
+  });
+
+  test("a payload exactly at the ceiling stays one part, byte for byte", () => {
+    const blocks = [makeBlock("S", 2, 10, 80), makeBlock("M", 2, 10, 80)];
+    const joined = join(blocks);
+    const split = splitRegroundParts(blocks, joined.length, join);
+    expect(split.parts).toEqual([joined]);
+    expect(split.overBudget).toBe(false);
+  });
+
+  test("a part longer than the ceiling flags over budget with nothing dropped", () => {
+    // Below the frame reserve every framed part outgrows the ceiling.
+    const split = splitRegroundParts(["abcdefghijkl"], 10, join);
+    expect(split.partsDropped).toBe(0);
+    expect(split.overBudget).toBe(true);
+  });
+
+  test("a caller's separator joins blocks on the multi-part path too", () => {
+    const separator = "\n---\n";
+    const joinWith = (blocks: ReadonlyArray<string>) =>
+      blocks.filter((block) => block.length > 0).join(separator);
+    const blocks = [paragraph("A", 5, 60), paragraph("B", 5, 60), "y".repeat(2500)];
+    const split = splitRegroundParts(blocks, 2000, joinWith, separator);
+    expect(split.parts.length).toBeGreaterThan(1);
+    expect(bodyOf(split.parts[0]!)).toBe(paragraph("A", 5, 60) + separator + paragraph("B", 5, 60));
   });
 
   test("a block that fits a part is never split across parts", () => {
@@ -152,13 +196,15 @@ describe("splitRegroundParts", () => {
 
   test("astral characters are never cut in half", () => {
     const line = "\u{1F600}".repeat(5_000); // 10,000 UTF-16 units, all surrogate pairs
-    const split = splitRegroundParts([line], 2001, join);
+    // Odd capacity (ceiling minus the frame reserve), so a naive hard cut
+    // would land inside a pair.
+    const split = splitRegroundParts([line], 2002, join);
     for (const part of split.parts) {
       const body = bodyOf(part);
       expect(body.length % 2).toBe(0);
       expect(/[\uD800-\uDBFF]$/.test(body)).toBe(false);
       expect(/^[\uDC00-\uDFFF]/.test(body)).toBe(false);
-      expect(part.length).toBeLessThanOrEqual(2001);
+      expect(part.length).toBeLessThanOrEqual(2002);
     }
     expect(split.parts.map(bodyOf).join("")).toBe(line);
   });
