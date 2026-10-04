@@ -17,15 +17,31 @@
  * holds even on a read-only or full filesystem.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import {
+  existsSync,
+  linkSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 
 import { acquireLockSync, type LockHandle } from "../../src/core/brain/sync-lockfile.ts";
 import { resolveSessionScope } from "../../src/core/brain/session-scope.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 
-/** Directory (under the vault's `.open-second-brain/`) holding per-scope state. */
+/** The vault's hook-surface directory. */
+const OSB_DIR = ".open-second-brain";
+
+/** Directory (under {@link OSB_DIR}) holding per-scope state. */
 const HOOK_STATE_DIR = "hook-state";
+
+/** A scope state file name: a scope slug plus `.json`, nothing else. */
+const SCOPE_FILE_RE = /^[a-z0-9-]{1,64}\.json$/;
 
 /** Scope slug used when no session id is available (single flat lane). */
 const DEFAULT_SCOPE = "default";
@@ -55,7 +71,7 @@ function scopeSlug(sessionId: string | null | undefined): string {
 
 /** Absolute path of the state file for one vault + session scope. */
 export function hookStateFilePath(vault: string, sessionId: string | null | undefined): string {
-  return join(vault, ".open-second-brain", HOOK_STATE_DIR, `${scopeSlug(sessionId)}.json`);
+  return join(vault, OSB_DIR, HOOK_STATE_DIR, `${scopeSlug(sessionId)}.json`);
 }
 
 /**
@@ -104,7 +120,7 @@ export function readHookStamp(
 /** Bounded busy-retry acquiring the per-scope advisory lock. */
 const LOCK_RETRIES = 20;
 /** Sleep between lock attempts (ms). 20 * 5ms ~= 100ms worst-case wait. */
-const LOCK_RETRY_DELAY_MS = 5;
+export const HOOK_STATE_LOCK_RETRY_DELAY_MS = 5;
 
 /**
  * Age past which a scope lockfile is presumed abandoned and taken over: three
@@ -127,20 +143,46 @@ function tryLock(path: string): LockHandle | null {
   }
 }
 
+/** Whether the file at `path` was last modified more than the stale threshold ago. */
+function isStale(path: string): boolean {
+  return Date.now() - statSync(path).mtimeMs > HOOK_STATE_STALE_LOCK_MS;
+}
+
 /**
- * Remove the scope lockfile when its mtime is older than
+ * Take over the scope lockfile when its mtime is older than
  * {@link HOOK_STATE_STALE_LOCK_MS}, the residue of a hook killed mid-update.
- * Returns `true` when it removed one. Best-effort: a stat or unlink race with
- * a live holder just reports `false`.
+ * Returns `true` when it removed one.
+ *
+ * The takeover is a rename to a per-process aside name, not an unlink in
+ * place: a rename moves exactly one file, so of two contenders that both saw
+ * the stale lock, only one moves it. The other's rename then either fails
+ * (nothing there) or moves the winner's fresh lock, which the re-check of the
+ * moved file catches; that lock is linked back under its name (`link` never
+ * overwrites) and the takeover reports `false`. Best-effort: any I/O race
+ * reports `false`.
  */
 function clearStaleLock(path: string): boolean {
   const lockPath = path + ".lock";
+  const aside = `${lockPath}.stale-${process.pid}`;
   try {
-    if (Date.now() - statSync(lockPath).mtimeMs <= HOOK_STATE_STALE_LOCK_MS) return false;
-    unlinkSync(lockPath);
-    return true;
+    if (!isStale(lockPath)) return false;
+    renameSync(lockPath, aside);
   } catch {
     return false;
+  }
+  try {
+    if (isStale(aside)) return true;
+    // Moved a live holder's lock: put it back before anyone can see the gap widen.
+    linkSync(aside, lockPath);
+    return false;
+  } catch {
+    return false;
+  } finally {
+    try {
+      unlinkSync(aside);
+    } catch {
+      // already gone
+    }
   }
 }
 
@@ -148,7 +190,7 @@ function clearStaleLock(path: string): boolean {
  * Acquire the scope's advisory lock. The read-merge-write is not atomic on its
  * own, so two concurrent hook processes could otherwise each read the file,
  * merge their own key, and clobber the other's stamp. A stale lockfile is
- * taken over once (unlink, then one fresh attempt). With `tryOnce` a contended
+ * taken over once (rename aside, then one fresh attempt). With `tryOnce` a contended
  * lock yields `null` immediately; otherwise it retries within a bounded budget
  * before yielding `null`, and the caller degrades rather than throwing.
  */
@@ -161,7 +203,7 @@ function acquireScopeLock(path: string, tryOnce: boolean): LockHandle | null {
   }
   if (tryOnce) return null;
   for (let attempt = 1; attempt < LOCK_RETRIES; attempt++) {
-    sleepSync(LOCK_RETRY_DELAY_MS);
+    sleepSync(HOOK_STATE_LOCK_RETRY_DELAY_MS);
     const handle = tryLock(path);
     if (handle !== null) return handle;
   }
@@ -243,11 +285,23 @@ const PRUNE_MAX_AGE_MS = 7 * 86_400_000;
 /** Default ceiling on files removed by one {@link pruneHookStateFiles} sweep. */
 const PRUNE_MAX_FILES = 200;
 
+/** Whether `path` exists and is a symbolic link; `false` when it is absent. */
+function isSymlink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Delete scope state files (`*.json`) whose mtime is older than `maxAgeMs`,
- * removing at most `maxFiles` per sweep. Lockfiles and any other file are left
- * alone. Returns the number of files removed; a missing directory or any I/O
- * error counts as nothing removed. Never throws.
+ * Delete scope state files (`<slug>.json`) whose mtime is older than
+ * `maxAgeMs`, removing at most `maxFiles` per sweep. Lockfiles, symlinks and
+ * any name outside the scope-slug shape are left alone, and nothing is swept
+ * when `.open-second-brain` or `hook-state` is itself a symlink: a vault
+ * received from elsewhere could otherwise point the sweep at any directory.
+ * Returns the number of files removed; a missing directory or any I/O error
+ * counts as nothing removed. Never throws.
  */
 export function pruneHookStateFiles(
   vault: string,
@@ -256,7 +310,9 @@ export function pruneHookStateFiles(
   const maxAgeMs = opts.maxAgeMs ?? PRUNE_MAX_AGE_MS;
   const maxFiles = opts.maxFiles ?? PRUNE_MAX_FILES;
   const nowMs = opts.nowMs ?? Date.now();
-  const dir = join(vault, ".open-second-brain", HOOK_STATE_DIR);
+  const osbDir = join(vault, OSB_DIR);
+  const dir = join(osbDir, HOOK_STATE_DIR);
+  if (isSymlink(osbDir) || isSymlink(dir)) return 0;
   let names: string[];
   try {
     names = readdirSync(dir);
@@ -266,10 +322,10 @@ export function pruneHookStateFiles(
   let removed = 0;
   for (const name of names) {
     if (removed >= maxFiles) break;
-    if (!name.endsWith(".json")) continue;
+    if (!SCOPE_FILE_RE.test(name)) continue;
     const path = join(dir, name);
     try {
-      const st = statSync(path);
+      const st = lstatSync(path);
       if (!st.isFile() || nowMs - st.mtimeMs <= maxAgeMs) continue;
       unlinkSync(path);
       removed += 1;

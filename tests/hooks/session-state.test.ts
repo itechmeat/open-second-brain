@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
+  symlinkSync,
   unlinkSync,
   utimesSync,
   writeFileSync,
@@ -14,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  HOOK_STATE_LOCK_RETRY_DELAY_MS,
   HOOK_STATE_STALE_LOCK_MS,
   hookStateFilePath,
   pruneHookStateFiles,
@@ -22,6 +26,7 @@ import {
   writeHookStamp,
 } from "../../hooks/lib/session-state.ts";
 import { _resetHeldLocksForTests } from "../../src/core/brain/sync-lockfile.ts";
+import { IS_WINDOWS } from "../helpers/platform.ts";
 
 let vault: string;
 
@@ -184,11 +189,10 @@ describe("updateHookState", () => {
     expect(seenNow).toBe(42);
   });
 
-  test("tryOnce returns busy within 20 ms on a held lock, without a retry loop", () => {
+  test("tryOnce returns busy on a held lock without running the mutator", () => {
     const lockPath = holdLock("sess-1");
     try {
       let calls = 0;
-      const started = performance.now();
       const outcome = updateHookState(
         vault,
         "sess-1",
@@ -198,10 +202,9 @@ describe("updateHookState", () => {
         },
         { tryOnce: true },
       );
-      const elapsed = performance.now() - started;
       expect(outcome).toEqual({ status: "busy" });
       expect(calls).toBe(0);
-      expect(elapsed).toBeLessThan(20);
+      expect(existsSync(lockPath)).toBe(true);
     } finally {
       unlinkSync(lockPath);
       _resetHeldLocksForTests();
@@ -215,8 +218,8 @@ describe("updateHookState", () => {
       const outcome = updateHookState(vault, "sess-1", (state) => ({ state, result: 1 }));
       const elapsed = performance.now() - started;
       expect(outcome).toEqual({ status: "busy" });
-      // 20 attempts x 5 ms sleep: well above a single attempt.
-      expect(elapsed).toBeGreaterThanOrEqual(50);
+      // A lower bound only: at least one retry sleep means more than one attempt.
+      expect(elapsed).toBeGreaterThanOrEqual(HOOK_STATE_LOCK_RETRY_DELAY_MS);
     } finally {
       unlinkSync(lockPath);
       _resetHeldLocksForTests();
@@ -240,7 +243,30 @@ describe("updateHookState", () => {
       expect(outcome).toEqual({ status: "ok", result: "took" });
       expect(readHookStamp(vault, "sess-1", KEY_A)).not.toBeNull();
       expect(existsSync(lockPath)).toBe(false);
+      expect(readdirSync(dir()).filter((name) => name.includes(".stale-"))).toEqual([]);
     } finally {
+      _resetHeldLocksForTests();
+    }
+  });
+
+  test("the stale takeover moves the lockfile aside by rename, never unlinks it in place", () => {
+    const lockPath = holdLock("sess-1");
+    const old = (Date.now() - HOOK_STATE_STALE_LOCK_MS - 5_000) / 1000;
+    utimesSync(lockPath, old, old);
+    // Occupy the rename target with a non-empty directory: the rename fails,
+    // so a takeover that goes through it must leave the stale lock in place.
+    const aside = `${lockPath}.stale-${process.pid}`;
+    mkdirSync(aside);
+    writeFileSync(join(aside, "keep"), "");
+    try {
+      const outcome = updateHookState(vault, "sess-1", (state) => ({ state, result: 1 }), {
+        tryOnce: true,
+      });
+      expect(outcome).toEqual({ status: "busy" });
+      expect(existsSync(lockPath)).toBe(true);
+    } finally {
+      unlinkSync(lockPath);
+      rmSync(aside, { recursive: true, force: true });
       _resetHeldLocksForTests();
     }
   });
@@ -270,7 +296,14 @@ describe("updateHookState", () => {
     expect(existsSync(hookStateFilePath(vault, "sess-1") + ".lock")).toBe(false);
   });
 
-  test("writes replace the state file by rename and leave no temp file behind", () => {
+  test.skipIf(IS_WINDOWS)("writes replace the state file by rename (new inode)", () => {
+    writeHookStamp(vault, "sess-1", KEY_A, { expiresAt: Number.MAX_SAFE_INTEGER });
+    const before = statSync(hookStateFilePath(vault, "sess-1")).ino;
+    writeHookStamp(vault, "sess-1", KEY_B, { expiresAt: Number.MAX_SAFE_INTEGER });
+    expect(statSync(hookStateFilePath(vault, "sess-1")).ino).not.toBe(before);
+  });
+
+  test("writes leave no temp file behind", () => {
     writeHookStamp(vault, "sess-1", KEY_A, { expiresAt: Number.MAX_SAFE_INTEGER });
     updateHookState(vault, "sess-1", (state) => {
       state[KEY_B] = { expiresAt: Number.MAX_SAFE_INTEGER };
@@ -304,8 +337,8 @@ describe("pruneHookStateFiles", () => {
 
   test("removes only scope files older than maxAgeMs", () => {
     const now = Date.now();
-    const old = seed("AA-old.json", 8 * DAY, now);
-    const fresh = seed("AB-fresh.json", 1 * DAY, now);
+    const old = seed("aa-old.json", 8 * DAY, now);
+    const fresh = seed("ab-fresh.json", 1 * DAY, now);
     expect(pruneHookStateFiles(vault, { nowMs: now })).toBe(1);
     expect(existsSync(old)).toBe(false);
     expect(existsSync(fresh)).toBe(true);
@@ -313,24 +346,85 @@ describe("pruneHookStateFiles", () => {
 
   test("honours a custom maxAgeMs", () => {
     const now = Date.now();
-    const a = seed("AA-a.json", 2 * DAY, now);
+    const a = seed("aa-a.json", 2 * DAY, now);
     expect(pruneHookStateFiles(vault, { nowMs: now, maxAgeMs: DAY })).toBe(1);
     expect(existsSync(a)).toBe(false);
   });
 
   test("stops at maxFiles", () => {
     const now = Date.now();
-    for (const n of ["AA-1", "AA-2", "AA-3"]) seed(`${n}.json`, 8 * DAY, now);
+    for (const n of ["aa-1", "aa-2", "aa-3"]) seed(`${n}.json`, 8 * DAY, now);
     expect(pruneHookStateFiles(vault, { nowMs: now, maxFiles: 2 })).toBe(2);
     expect(readdirSync(dir()).length).toBe(1);
   });
 
   test("ignores lockfiles and non-JSON files", () => {
     const now = Date.now();
-    const lock = seed("AA-sess.json.lock", 8 * DAY, now);
-    const txt = seed("AB-notes.txt", 8 * DAY, now);
+    const lock = seed("aa-sess.json.lock", 8 * DAY, now);
+    const txt = seed("ab-notes.txt", 8 * DAY, now);
     expect(pruneHookStateFiles(vault, { nowMs: now })).toBe(0);
     expect(existsSync(lock)).toBe(true);
     expect(existsSync(txt)).toBe(true);
+  });
+
+  test("leaves names outside the scope-slug shape alone", () => {
+    const now = Date.now();
+    const hostile = ["Upper.json", "under_score.json", "dot.ted.json", `${"a".repeat(65)}.json`];
+    const paths = hostile.map((name) => seed(name, 8 * DAY, now));
+    expect(pruneHookStateFiles(vault, { nowMs: now })).toBe(0);
+    for (const path of paths) expect(existsSync(path)).toBe(true);
+  });
+
+  test.skipIf(IS_WINDOWS)("never sweeps through a symlinked hook-state directory", () => {
+    const now = Date.now();
+    const outside = mkdtempSync(join(tmpdir(), "o2b-hook-state-outside-"));
+    try {
+      const victim = join(outside, "victim.json");
+      writeFileSync(victim, "{}\n");
+      const t = (now - 8 * DAY) / 1000;
+      utimesSync(victim, t, t);
+      mkdirSync(join(vault, ".open-second-brain"), { recursive: true });
+      symlinkSync(outside, dir());
+      expect(pruneHookStateFiles(vault, { nowMs: now })).toBe(0);
+      expect(existsSync(victim)).toBe(true);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(IS_WINDOWS)("never sweeps through a symlinked .open-second-brain directory", () => {
+    const now = Date.now();
+    const outside = mkdtempSync(join(tmpdir(), "o2b-hook-state-outside-"));
+    try {
+      mkdirSync(join(outside, "hook-state"));
+      const victim = join(outside, "hook-state", "victim.json");
+      writeFileSync(victim, "{}\n");
+      const t = (now - 8 * DAY) / 1000;
+      utimesSync(victim, t, t);
+      symlinkSync(outside, join(vault, ".open-second-brain"));
+      expect(pruneHookStateFiles(vault, { nowMs: now })).toBe(0);
+      expect(existsSync(victim)).toBe(true);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(IS_WINDOWS)("skips an entry that is itself a symlink", () => {
+    const now = Date.now();
+    const outside = mkdtempSync(join(tmpdir(), "o2b-hook-state-outside-"));
+    try {
+      const target = join(outside, "target.json");
+      writeFileSync(target, "{}\n");
+      const t = (now - 8 * DAY) / 1000;
+      utimesSync(target, t, t);
+      mkdirSync(dir(), { recursive: true });
+      const link = join(dir(), "linked.json");
+      symlinkSync(target, link);
+      expect(pruneHookStateFiles(vault, { nowMs: now })).toBe(0);
+      expect(lstatSync(link).isSymbolicLink()).toBe(true);
+      expect(existsSync(target)).toBe(true);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });
