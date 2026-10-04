@@ -17,11 +17,12 @@
  * holds even on a read-only or full filesystem.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { acquireLockSync, type LockHandle } from "../../src/core/brain/sync-lockfile.ts";
 import { resolveSessionScope } from "../../src/core/brain/session-scope.ts";
+import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 
 /** Directory (under the vault's `.open-second-brain/`) holding per-scope state. */
 const HOOK_STATE_DIR = "hook-state";
@@ -105,29 +106,112 @@ const LOCK_RETRIES = 20;
 /** Sleep between lock attempts (ms). 20 * 5ms ~= 100ms worst-case wait. */
 const LOCK_RETRY_DELAY_MS = 5;
 
+/**
+ * Age past which a scope lockfile is presumed abandoned and taken over: three
+ * times the 10 s host hook timeout, so no live hook can still hold it.
+ */
+export const HOOK_STATE_STALE_LOCK_MS = 30_000;
+
 /** Sleep synchronously without spinning the CPU (hooks are sync end-to-end). */
 function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+/** One lock attempt; `null` on contention, rethrows anything else. */
+function tryLock(path: string): LockHandle | null {
+  try {
+    return acquireLockSync(path);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ELOCKED") throw err;
+    return null;
+  }
+}
+
 /**
- * Acquire the scope's advisory lock, retrying on contention. The read-merge-
- * write in {@link writeHookStamp} is not atomic on its own, so two concurrent
- * hook processes could otherwise each read the file, merge their own key, and
- * clobber the other's stamp. The lock serialises that critical section; if it
- * stays contended past the retry budget we surface `null` and the caller
- * degrades to a `false` write (its fail-open contract) rather than throwing.
+ * Remove the scope lockfile when its mtime is older than
+ * {@link HOOK_STATE_STALE_LOCK_MS}, the residue of a hook killed mid-update.
+ * Returns `true` when it removed one. Best-effort: a stat or unlink race with
+ * a live holder just reports `false`.
  */
-function acquireScopeLock(path: string): LockHandle | null {
-  for (let attempt = 0; attempt < LOCK_RETRIES; attempt++) {
-    try {
-      return acquireLockSync(path);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ELOCKED") throw err;
-      sleepSync(LOCK_RETRY_DELAY_MS);
-    }
+function clearStaleLock(path: string): boolean {
+  const lockPath = path + ".lock";
+  try {
+    if (Date.now() - statSync(lockPath).mtimeMs <= HOOK_STATE_STALE_LOCK_MS) return false;
+    unlinkSync(lockPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Acquire the scope's advisory lock. The read-merge-write is not atomic on its
+ * own, so two concurrent hook processes could otherwise each read the file,
+ * merge their own key, and clobber the other's stamp. A stale lockfile is
+ * taken over once (unlink, then one fresh attempt). With `tryOnce` a contended
+ * lock yields `null` immediately; otherwise it retries within a bounded budget
+ * before yielding `null`, and the caller degrades rather than throwing.
+ */
+function acquireScopeLock(path: string, tryOnce: boolean): LockHandle | null {
+  const first = tryLock(path);
+  if (first !== null) return first;
+  if (clearStaleLock(path)) {
+    const taken = tryLock(path);
+    if (taken !== null) return taken;
+  }
+  if (tryOnce) return null;
+  for (let attempt = 1; attempt < LOCK_RETRIES; attempt++) {
+    sleepSync(LOCK_RETRY_DELAY_MS);
+    const handle = tryLock(path);
+    if (handle !== null) return handle;
   }
   return null;
+}
+
+/**
+ * Mutator applied by {@link updateHookState}: receives the scope's current
+ * state (a fresh copy) and the clock, returns the state to persist plus a
+ * caller-defined result.
+ */
+export type HookStateMutator<T> = (
+  state: Record<string, unknown>,
+  nowMs: number,
+) => { readonly state: Record<string, unknown>; readonly result: T };
+
+/** Outcome of {@link updateHookState}. */
+export type HookStateUpdateOutcome<T> =
+  | { readonly status: "ok"; readonly result: T }
+  | { readonly status: "busy" }
+  | { readonly status: "failed" };
+
+/**
+ * Locked read-modify-write over one scope's state file. The mutator runs while
+ * the per-scope advisory lock is held, and its state is written through an
+ * atomic rename so lock-free readers never see a torn file. `busy` means the
+ * lock stayed contended (`tryOnce`: a single attempt, no retry); `failed`
+ * means any other error, including a throwing mutator, in which case nothing
+ * is written. Never throws.
+ */
+export function updateHookState<T>(
+  vault: string,
+  sessionId: string | null | undefined,
+  mutate: HookStateMutator<T>,
+  opts: { readonly tryOnce?: boolean; readonly nowMs?: number } = {},
+): HookStateUpdateOutcome<T> {
+  let lock: LockHandle | null = null;
+  try {
+    const path = hookStateFilePath(vault, sessionId);
+    mkdirSync(dirname(path), { recursive: true });
+    lock = acquireScopeLock(path, opts.tryOnce === true);
+    if (lock === null) return { status: "busy" };
+    const next = mutate(readState(vault, sessionId), opts.nowMs ?? Date.now());
+    atomicWriteFileSync(path, JSON.stringify(next.state, null, 2) + "\n");
+    return { status: "ok", result: next.result };
+  } catch {
+    return { status: "failed" };
+  } finally {
+    lock?.release();
+  }
 }
 
 /**
@@ -144,24 +228,54 @@ export function writeHookStamp(
   key: string,
   stamp: HookStamp,
 ): boolean {
-  let lock: LockHandle | null = null;
-  try {
-    const path = hookStateFilePath(vault, sessionId);
-    mkdirSync(dirname(path), { recursive: true });
-    lock = acquireScopeLock(path);
-    if (lock === null) return false;
-    const state = readState(vault, sessionId);
+  const outcome = updateHookState(vault, sessionId, (state) => {
     state[key] =
       stamp.data !== undefined
         ? { expiresAt: stamp.expiresAt, data: stamp.data }
-        : {
-            expiresAt: stamp.expiresAt,
-          };
-    writeFileSync(path, JSON.stringify(state, null, 2) + "\n");
-    return true;
+        : { expiresAt: stamp.expiresAt };
+    return { state, result: true };
+  });
+  return outcome.status === "ok";
+}
+
+/** Default age past which {@link pruneHookStateFiles} removes a scope file. */
+const PRUNE_MAX_AGE_MS = 7 * 86_400_000;
+/** Default ceiling on files removed by one {@link pruneHookStateFiles} sweep. */
+const PRUNE_MAX_FILES = 200;
+
+/**
+ * Delete scope state files (`*.json`) whose mtime is older than `maxAgeMs`,
+ * removing at most `maxFiles` per sweep. Lockfiles and any other file are left
+ * alone. Returns the number of files removed; a missing directory or any I/O
+ * error counts as nothing removed. Never throws.
+ */
+export function pruneHookStateFiles(
+  vault: string,
+  opts: { readonly maxAgeMs?: number; readonly maxFiles?: number; readonly nowMs?: number } = {},
+): number {
+  const maxAgeMs = opts.maxAgeMs ?? PRUNE_MAX_AGE_MS;
+  const maxFiles = opts.maxFiles ?? PRUNE_MAX_FILES;
+  const nowMs = opts.nowMs ?? Date.now();
+  const dir = join(vault, ".open-second-brain", HOOK_STATE_DIR);
+  let names: string[];
+  try {
+    names = readdirSync(dir);
   } catch {
-    return false;
-  } finally {
-    lock?.release();
+    return 0;
   }
+  let removed = 0;
+  for (const name of names) {
+    if (removed >= maxFiles) break;
+    if (!name.endsWith(".json")) continue;
+    const path = join(dir, name);
+    try {
+      const st = statSync(path);
+      if (!st.isFile() || nowMs - st.mtimeMs <= maxAgeMs) continue;
+      unlinkSync(path);
+      removed += 1;
+    } catch {
+      // vanished or unremovable; leave it for the next sweep
+    }
+  }
+  return removed;
 }
