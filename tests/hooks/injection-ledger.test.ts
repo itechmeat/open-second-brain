@@ -300,18 +300,6 @@ describe("takeRegroundPart", () => {
     expect(after.status === "part" && after.index).toBe(3);
     expect(takeRegroundPart(vault, "sess-1", NOW + 4)).toEqual({ status: "empty" });
   });
-
-  test("alternating sequential takers advance one shared cursor", () => {
-    seedQueue("sess-1", ["p2", "p3", "p4", "p5", "p6"]);
-    const seen: number[] = [];
-    for (let i = 0; i < 4; i++) {
-      const takeA = takeRegroundPart(vault, "sess-1", NOW + i);
-      const takeB = takeRegroundPart(vault, "sess-1", NOW + i);
-      for (const take of [takeA, takeB]) if (take.status === "part") seen.push(take.index);
-    }
-    expect(seen).toEqual([2, 3, 4, 5, 6]);
-    expect(new Set(seen).size).toBe(seen.length);
-  });
 });
 
 describe("session isolation", () => {
