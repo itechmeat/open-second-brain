@@ -46,6 +46,16 @@ const HOOK_STATE_DIR = "hook-state";
 /** A scope state file name: a scope slug plus `.json`, nothing else. */
 const SCOPE_FILE_RE = new RegExp(`^[a-z0-9-]{1,${SESSION_SCOPE_MAX_LENGTH}}\\.json$`);
 
+/**
+ * Residue a killed hook can leave beside a scope file: an atomic-write temp
+ * file (`.<slug>.json.<pid>.<ms>.<rand>.tmp`), an abandoned scope lockfile
+ * (`<slug>.json.lock`) and a stale-lock aside (`<slug>.json.lock.stale-<pid>`).
+ */
+const SCOPE_RESIDUE_RE = new RegExp(
+  `^(?:\\.[a-z0-9-]{1,${SESSION_SCOPE_MAX_LENGTH}}\\.json\\.\\d+\\.\\d+\\.[0-9a-f]+\\.tmp` +
+    `|[a-z0-9-]{1,${SESSION_SCOPE_MAX_LENGTH}}\\.json\\.lock(?:\\.stale-\\d+)?)$`,
+);
+
 /** Scope slug used when no session id is available (single flat lane). */
 const DEFAULT_SCOPE = "default";
 
@@ -335,9 +345,11 @@ function isSymlink(path: string): boolean {
 }
 
 /**
- * Delete scope state files (`<slug>.json`) whose mtime is older than
- * `maxAgeMs`, removing at most `maxFiles` per sweep. Lockfiles, symlinks and
- * any name outside the scope-slug shape are left alone, and nothing is swept
+ * Delete scope state files (`<slug>.json`) and their write and lock residue
+ * (see {@link SCOPE_RESIDUE_RE}) whose mtime is older than `maxAgeMs`,
+ * removing at most `maxFiles` per sweep. A lock that old is far past
+ * {@link HOOK_STATE_STALE_LOCK_MS}, so no live hook holds it. Symlinks and
+ * any name outside those shapes are left alone, and nothing is swept
  * when `.open-second-brain` or `hook-state` is itself a symlink: a vault
  * received from elsewhere could otherwise point the sweep at any directory.
  * Returns the number of files removed; a missing directory or any I/O error
@@ -362,7 +374,7 @@ export function pruneHookStateFiles(
   let removed = 0;
   for (const name of names) {
     if (removed >= maxFiles) break;
-    if (!SCOPE_FILE_RE.test(name)) continue;
+    if (!SCOPE_FILE_RE.test(name) && !SCOPE_RESIDUE_RE.test(name)) continue;
     const path = join(dir, name);
     try {
       const st = lstatSync(path);

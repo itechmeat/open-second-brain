@@ -379,13 +379,23 @@ describe("pruneHookStateFiles", () => {
     expect(readdirSync(dir()).length).toBe(1);
   });
 
-  test("ignores lockfiles and non-JSON files", () => {
+  test("sweeps old write and lock residue, keeps fresh locks and unrelated files", () => {
     const now = Date.now();
-    const lock = seed("aa-sess.json.lock", 8 * DAY, now);
-    const txt = seed("ab-notes.txt", 8 * DAY, now);
-    expect(pruneHookStateFiles(vault, { nowMs: now })).toBe(0);
-    expect(existsSync(lock)).toBe(true);
+    const oldTmp = seed(".default.json.1.2.ab.tmp", 8 * DAY, now);
+    const oldLock = seed("default.json.lock", 8 * DAY, now);
+    const oldAside = seed("default.json.lock.stale-9", 8 * DAY, now);
+    const freshLock = seed("aa-sess.json.lock", 1 * DAY, now);
+    const freshTmp = seed(".aa-sess.json.3.4.cd.tmp", 1 * DAY, now);
+    const txt = seed("notes.txt", 8 * DAY, now);
+    const foreignTmp = seed(".Upper.json.1.2.ab.tmp", 8 * DAY, now);
+    expect(pruneHookStateFiles(vault, { nowMs: now })).toBe(3);
+    expect(existsSync(oldTmp)).toBe(false);
+    expect(existsSync(oldLock)).toBe(false);
+    expect(existsSync(oldAside)).toBe(false);
+    expect(existsSync(freshLock)).toBe(true);
+    expect(existsSync(freshTmp)).toBe(true);
     expect(existsSync(txt)).toBe(true);
+    expect(existsSync(foreignTmp)).toBe(true);
   });
 
   test("leaves names outside the scope-slug shape alone", () => {
