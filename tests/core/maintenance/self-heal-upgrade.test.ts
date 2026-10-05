@@ -355,6 +355,32 @@ describe("a vault removed while the worker runs", () => {
     }
   });
 
+  test("before the lock: a missing vault is not created for the claim", () => {
+    const missing = join(root, "gone");
+    const run = runSelfHealUpgrade(missing, { now: T0 });
+
+    expect(run.outcome).toBe(SELF_HEAL_UPGRADE_OUTCOME.notInitialized);
+    expect(existsSync(missing)).toBe(false);
+  });
+
+  test("right after the rewrite: no metrics row recreates the vault", () => {
+    makeManualStale();
+    const realApply = upgradeModule.applyUpgrade;
+    const spy = spyOn(upgradeModule, "applyUpgrade").mockImplementationOnce((v, opts) => {
+      const applied = realApply(v, opts);
+      rmSync(vault, { recursive: true, force: true });
+      return applied;
+    });
+    try {
+      const run = runSelfHealUpgrade(vault, { now: T0 });
+
+      expect(run.outcome).toBe(SELF_HEAL_UPGRADE_OUTCOME.notInitialized);
+      expect(existsSync(vault)).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   test("a failure in a vault that is still there is recorded as before", () => {
     makeManualStale();
     const spy = spyOn(upgradeModule, "planUpgrade").mockImplementationOnce(() => {

@@ -112,6 +112,9 @@ export function runSelfHealUpgrade(
     // longer ours; the process that took it over does the work.
     token = ownsSelfHealUpgradeLock(vault, opts.lockToken) ? opts.lockToken : null;
   } else {
+    // The claim creates the lock's directory, so a vault that is gone is
+    // answered before it: claiming first would recreate it.
+    if (vaultGone(vault)) return run(SELF_HEAL_UPGRADE_OUTCOME.notInitialized);
     try {
       token = claimSelfHealUpgradeLock(vault, now);
     } catch (e) {
@@ -162,6 +165,9 @@ function attempt(vault: string, now: Date): SelfHealUpgradeRun {
     pending = plan.files.filter((f) => f.status === "update").map((f) => f.path);
     if (vaultGone(vault)) return run(SELF_HEAL_UPGRADE_OUTCOME.notInitialized);
     const applied = applyUpgrade(vault, { now });
+    // The metrics row creates its directory: a vault removed during the
+    // rewrite would come back for it.
+    if (vaultGone(vault)) return run(SELF_HEAL_UPGRADE_OUTCOME.notInitialized);
     clearSelfHealUpgradeFailure(vault);
     recordRow(vault, {
       outcome: SELF_HEAL_UPGRADE_OUTCOME.applied,

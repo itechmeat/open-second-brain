@@ -81,7 +81,8 @@ export interface EnsureCurrentResult {
   readonly brainUpgraded: ReadonlyArray<string>;
   /**
    * In `background` mode, what was done about the managed-file upgrade;
-   * `null` in the foreground, where {@link brainUpgradeOutcome} answers.
+   * `null` in the foreground, where {@link brainUpgradeOutcome} answers,
+   * and when the vault was removed before a worker could be started.
    */
   readonly brainUpgradeSpawn: SelfHealUpgradeSpawnDecision | null;
   /** In the foreground, how the upgrade attempt ended; `null` in `background` mode. */
@@ -186,7 +187,10 @@ function startSelfHealUpgrade(
   vault: string,
   configPath: string | undefined,
   now: Date,
-): SelfHealUpgradeSpawnDecision {
+): SelfHealUpgradeSpawnDecision | null {
+  // The claim creates the lock's directory; a vault removed since the
+  // caller's check is left alone and nothing is started.
+  if (!existsSync(brainConfigPath(vault))) return null;
   if (selfHealUpgradeBackoffActive(readSelfHealUpgradeFailure(vault), now)) {
     return SELF_HEAL_UPGRADE_SPAWN.skippedBackoff;
   }
