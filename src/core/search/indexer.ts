@@ -40,6 +40,7 @@ import {
   unpricedRefusalMessage,
   USD_DECIMALS,
 } from "./embedding-spend.ts";
+import { embeddingPriceRecommendations } from "./price-recommendations.ts";
 import type { EmbeddingPriceSource } from "./embeddings/pricing.ts";
 import { makeProvider } from "./embeddings/provider.ts";
 import {
@@ -2089,6 +2090,13 @@ function buildRecommendations(input: BuildRecommendationsInput): string[] {
     recs.push(
       "Provider: OpenAI `text-embedding-3-small` is the default; any OpenAI-compatible endpoint works via OPEN_SECOND_BRAIN_EMBEDDING_BASE_URL.",
     );
+  }
+
+  // The price the cost gate reasons from (Honest Embedding Spend): an
+  // unpriced active model and a declaration that prices another model.
+  // Silent for priced and local models, so their output is unchanged.
+  if (input.config.semantic.enabled) {
+    recs.push(...embeddingPriceRecommendations(input.config));
   }
 
   if (input.vecExtension === "unavailable") {

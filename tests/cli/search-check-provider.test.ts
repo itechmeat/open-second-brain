@@ -279,3 +279,62 @@ test("every probe state maps to exactly one exit, and a machine fault outranks a
   // the number there must not have to learn a second one here.
   expect(SEARCH_CHECK_EXIT.providerUnreachable).toBe(INSTALL_EXIT.mcpUnreachable);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Price recommendations (Honest Embedding Spend, task 7)
+//
+// `fake-model` is in no price table, so the configured stub is an
+// unpriced model. The recommendation arms have their own suite
+// (tests/core/search/check-price-recommendations.test.ts); these pin that
+// `search check` carries the lines in both report shapes and stays silent
+// once the model is priced.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const PRICE_KEYS = ["embedding_price_model", "embedding_price_usd_per_mtok"] as const;
+
+function priceRecommendations(run: CheckRun): string[] {
+  const recs = (run.payload["recommendations"] ?? []) as string[];
+  return recs.filter((r) => PRICE_KEYS.some((key) => r.includes(key)));
+}
+
+test("an unpriced model gets one price recommendation in both report shapes", async () => {
+  await writeConfiguredProvider();
+
+  const json = await runCheck("--json", "--no-probe");
+  const lines = priceRecommendations(json);
+  expect(lines).toHaveLength(1);
+  expect(lines[0]).toContain('"fake-model"');
+  expect(lines[0]).toContain("a positive gate would refuse");
+
+  const human = await runCheck("--no-probe");
+  expect(human.stdout).toContain(`  - ${lines[0]}`);
+});
+
+test("an unpriced model under a positive gate is told that backfills refuse", async () => {
+  await writeConfiguredProvider(["embedding_cost_gate_usd: 0.5"]);
+
+  const lines = priceRecommendations(await runCheck("--json", "--no-probe"));
+  expect(lines).toHaveLength(1);
+  expect(lines[0]).toContain("vector backfills refuse");
+});
+
+test("a declared pair for another model yields one stale-declaration recommendation", async () => {
+  await writeConfiguredProvider([
+    'embedding_model: "text-embedding-3-small"',
+    "embedding_price_model: acme-embed-retired",
+    "embedding_price_usd_per_mtok: 0.07",
+  ]);
+
+  const lines = priceRecommendations(await runCheck("--json", "--no-probe"));
+  expect(lines).toHaveLength(1);
+  expect(lines[0]).toContain('names model "acme-embed-retired"');
+});
+
+test("an operator-priced model adds no price recommendation", async () => {
+  await writeConfiguredProvider([
+    "embedding_price_model: fake-model",
+    "embedding_price_usd_per_mtok: 0.07",
+  ]);
+
+  expect(priceRecommendations(await runCheck("--json", "--no-probe"))).toEqual([]);
+});

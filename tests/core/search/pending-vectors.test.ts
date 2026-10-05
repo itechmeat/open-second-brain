@@ -142,9 +142,12 @@ test("a file that is not a readable index is unrecorded with the reason the open
 test("a fully embedded vault emits no reindex recommendation", async () => {
   if (!sqliteVecLoadable()) return;
   writeMd(vault, "a.md", "# A\n\nA note with vectors.");
-  await indexVault(cfg(), { embeddings: true });
+  // `fake-model` is in no price table; declaring its price keeps the
+  // unpriced-model hint out of a report that must say nothing at all.
+  const priced = cfg({ priceOverride: { model: "fake-model", usdPerMtok: 0 } });
+  await indexVault(priced, { embeddings: true });
 
-  const report = await indexCheck(cfg());
+  const report = await indexCheck(priced);
   expect(report.pendingVectors.verdict).toBe("measured");
   if (report.pendingVectors.verdict === "measured") {
     expect(report.pendingVectors.pending).toBe(0);
