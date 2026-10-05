@@ -41,7 +41,11 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 /** Index two notes keyword-only and write a CLI config naming `model`. */
-async function seed(model: string, baseUrl = "http://127.0.0.1:9"): Promise<string> {
+async function seed(
+  model: string,
+  baseUrl = "http://127.0.0.1:9",
+  extra: ReadonlyArray<string> = [],
+): Promise<string> {
   writeMd(vault, "a.md", "# A\n\nFirst note about something.");
   writeMd(vault, "b.md", "# B\n\nSecond note discussing other things.");
   await indexVault(makeConfig({ vault, dbPath }));
@@ -56,6 +60,7 @@ async function seed(model: string, baseUrl = "http://127.0.0.1:9"): Promise<stri
       `embedding_model: ${model}`,
       "embedding_api_key: test-key",
       "embedding_dimension: 4",
+      ...extra,
       "",
     ].join("\n"),
   );
@@ -96,6 +101,59 @@ test.skipIf(!VEC_LOADABLE)("a table-priced backfill names its builtin source", a
   expect(await cli(config, ["search", "vector-backfill"])).toMatch(
     /estimated cost: \$\d+\.\d{4}\n/,
   );
+});
+
+const POSITIVE_GATE = "embedding_cost_gate_usd: 5";
+
+test.skipIf(!VEC_LOADABLE)(
+  "a dry run under a positive gate names the refusal its --apply would meet",
+  async () => {
+    const config = await seed(UNPRICED_MODEL, undefined, [POSITIVE_GATE]);
+    const payload = JSON.parse(
+      await cli(config, ["search", "vector-backfill", "--json"]),
+    ) as Record<string, unknown>;
+    expect(payload["gate_blocked"]).toBe(true);
+    expect(payload["gate_reason"]).toBe("unpriced");
+    expect(payload["next_command"]).toBe("o2b search vector-backfill --apply --force-cost");
+    const human = await cli(config, ["search", "vector-backfill"]);
+    expect(human).toContain(
+      "cost gate: would refuse (unpriced); add --force-cost or set " +
+        "embedding_price_model and embedding_price_usd_per_mtok",
+    );
+  },
+);
+
+test.skipIf(!VEC_LOADABLE)("without a gate the dry run carries no gate keys", async () => {
+  const config = await seed(UNPRICED_MODEL);
+  const payload = JSON.parse(await cli(config, ["search", "vector-backfill", "--json"])) as Record<
+    string,
+    unknown
+  >;
+  expect("gate_blocked" in payload).toBe(false);
+  expect("gate_reason" in payload).toBe(false);
+  expect("spend" in payload).toBe(false);
+  expect(payload["next_command"]).toBe("o2b search vector-backfill --apply");
+  expect(await cli(config, ["search", "vector-backfill"])).not.toContain("cost gate:");
+});
+
+test.skipIf(!VEC_LOADABLE)("a forced apply names its spend receipt", async () => {
+  const server = await startFakeHttp();
+  try {
+    const config = await seed(UNPRICED_MODEL, server.url, [POSITIVE_GATE]);
+    const payload = JSON.parse(
+      await cli(config, ["search", "vector-backfill", "--apply", "--force-cost", "--json"]),
+    ) as Record<string, unknown>;
+    expect(payload["embedded"]).toBe(2);
+    expect(payload["spend"]).toEqual({
+      model: UNPRICED_MODEL,
+      tokens: expect.any(Number),
+      estimated_usd: null,
+      price_source: "unknown",
+      forced: true,
+    });
+  } finally {
+    await server.close();
+  }
 });
 
 test("status of an unpriced model says price unknown and reports its source", async () => {

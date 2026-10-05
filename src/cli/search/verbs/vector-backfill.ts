@@ -41,7 +41,17 @@
  * the embedding phase is the part an operator would ever want to stop.
  */
 
-import { formatEstimatedUsd } from "../../../core/search/embedding-spend.ts";
+import {
+  COST_GATE_KEY,
+  EMBEDDING_GATE_REASON,
+  FORCE_COST_FLAG,
+  formatEstimatedUsd,
+  type EmbeddingGateReason,
+} from "../../../core/search/embedding-spend.ts";
+import {
+  EMBEDDING_PRICE_MODEL_KEY,
+  EMBEDDING_PRICE_RATE_KEY,
+} from "../../../core/search/embeddings/pricing.ts";
 import { appendLogEvent } from "../../../core/brain/log.ts";
 import { NEXT_COMMAND_KEY, resolveNextStep } from "../../../core/brain/next-step.ts";
 import {
@@ -120,7 +130,28 @@ function jsonForResult(result: VectorBackfillResult): Record<string, unknown> {
     ...(result.unmatchedPathPrefixes.length > 0
       ? { unmatched_path_prefixes: result.unmatchedPathPrefixes }
       : {}),
+    // Present only when the unforced gate would refuse, and only for a
+    // run that reached the provider, so an unblocked payload is unchanged.
+    ...(result.blocked ? { gate_blocked: true, gate_reason: result.reason } : {}),
+    ...(result.spend !== null
+      ? {
+          spend: {
+            model: result.spend.model,
+            tokens: result.spend.tokens,
+            estimated_usd: result.spend.estimatedUsd,
+            price_source: result.spend.priceSource,
+            forced: result.spend.forced,
+          },
+        }
+      : {}),
   };
+}
+
+/** What lifts a gate refusal besides `--force-cost`, per reason. */
+function gateRemedy(reason: EmbeddingGateReason | null): string {
+  return reason === EMBEDDING_GATE_REASON.unpriced
+    ? `set ${EMBEDDING_PRICE_MODEL_KEY} and ${EMBEDDING_PRICE_RATE_KEY}`
+    : `raise ${COST_GATE_KEY}`;
 }
 
 async function renderHuman(result: VectorBackfillResult): Promise<void> {
@@ -133,6 +164,11 @@ async function renderHuman(result: VectorBackfillResult): Promise<void> {
   }
   if (result.pathPrefixes.length > 0) info(`  scope: ${result.pathPrefixes.join(", ")}`);
   if (result.pending > 0) info(`  estimated cost: ${formatEstimatedUsd(result.estimatedCostUsd)}`);
+  if (!result.applied && result.blocked) {
+    info(
+      `  cost gate: would refuse (${result.reason}); add ${FORCE_COST_FLAG} or ${gateRemedy(result.reason)}`,
+    );
+  }
   if (result.retries > 0) info(`  provider retries: ${result.retries}`);
   // What the operator CONFIGURED, resolved from the registry - never a
   // sentence built here.
@@ -219,11 +255,16 @@ export async function cmdSearchVectorBackfill(argv: ReadonlyArray<string>): Prom
     : VECTORS_PENDING;
   // A scoped run repeats its scope in the advice: the registered
   // `--apply` alone would widen the spend to the whole vault. An
-  // unregistered code has no command, so the JSON key stays absent.
+  // unregistered code has no command, so the JSON key stays absent. A
+  // run the gate would refuse names `--force-cost` too, so the advice is
+  // never a command already known to fail.
   const registered = resolveNextStep(exitCode)?.nextCommand;
   const nextCommand =
     registered !== undefined && exitCode === VECTORS_PENDING
-      ? withPathFlags(registered, result.pathPrefixes)
+      ? withPathFlags(
+          result.blocked ? `${registered} ${FORCE_COST_FLAG}` : registered,
+          result.pathPrefixes,
+        )
       : registered;
 
   // A typo'd scope has nothing pending and would otherwise read like a

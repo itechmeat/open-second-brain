@@ -1828,7 +1828,14 @@ o2b search vector-backfill    Run the vector phase ALONE for indexed chunks that
                               path_prefixes on a scoped run, plus unmatched_path_prefixes when a
                               prefix matches no document. Since v1.72.0 estimated_cost_usd is
                               null (never 0, never omitted) when the model's price is unknown, and
-                              the text report prints `price unknown` for it
+                              the text report prints `price unknown` for it. Since v1.72.0, when
+                              the configured gate would refuse the run unforced, --json adds
+                              gate_blocked: true and gate_reason (unpriced or over_cap), the
+                              dry-run text report adds `cost gate: would refuse (<reason>); add
+                              --force-cost or ...` naming the price pair or embedding_cost_gate_usd,
+                              and the next step it names carries --force-cost. An --apply run that
+                              reached the provider adds spend {model, tokens, estimated_usd,
+                              price_source, forced}, its receipt. Both are absent otherwise
                               Idempotent; an --apply run that wrote vectors appends one
                               vector-backfill Brain log event
 o2b search status             Index status; since v0.36.0 also reports the active embedding
