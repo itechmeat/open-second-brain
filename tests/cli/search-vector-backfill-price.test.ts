@@ -125,6 +125,29 @@ test.skipIf(!VEC_LOADABLE)(
   },
 );
 
+test.skipIf(!VEC_LOADABLE)(
+  "a dry run over the gate names the over_cap refusal and the gate key as its remedy",
+  async () => {
+    // A declared rate at the ceiling prices the two notes far above the gate.
+    const config = await seed(UNPRICED_MODEL, undefined, [
+      POSITIVE_GATE,
+      `embedding_price_model: ${UNPRICED_MODEL}`,
+      'embedding_price_usd_per_mtok: "1000000"',
+    ]);
+    const payload = JSON.parse(
+      await cli(config, ["search", "vector-backfill", "--json"]),
+    ) as Record<string, unknown>;
+    expect(payload["gate_blocked"]).toBe(true);
+    expect(payload["gate_reason"]).toBe("over_cap");
+    expect(payload["next_command"]).toBe("o2b search vector-backfill --apply");
+    const human = await cli(config, ["search", "vector-backfill"]);
+    expect(human).toContain(
+      "cost gate: would refuse (over_cap); add --force-cost or raise embedding_cost_gate_usd",
+    );
+    expect(human).toContain("next: o2b search vector-backfill --apply\n");
+  },
+);
+
 test.skipIf(!VEC_LOADABLE)("without a gate the dry run carries no gate keys", async () => {
   const config = await seed(UNPRICED_MODEL);
   const payload = JSON.parse(await cli(config, ["search", "vector-backfill", "--json"])) as Record<
