@@ -32,6 +32,7 @@ import {
 import { cmdSearchReindex } from "../../../src/cli/search/verbs/indexing.ts";
 import { resolveSearchConfig } from "../../../src/core/search/index.ts";
 import { acquireWriterLock } from "../../../src/core/search/store/writer-lock.ts";
+import { waitForSelfHealUpgradeWorker } from "../../helpers/self-heal-children.ts";
 
 let vault: string;
 let configHome: string;
@@ -61,12 +62,22 @@ beforeEach(() => {
   bootstrapBrain(vault, { configPath });
 });
 
-afterEach(() => {
-  if (prevConfigEnv === undefined) delete process.env["OPEN_SECOND_BRAIN_CONFIG"];
-  else process.env["OPEN_SECOND_BRAIN_CONFIG"] = prevConfigEnv;
-  rmSync(vault, { recursive: true, force: true });
-  rmSync(configHome, { recursive: true, force: true });
-});
+afterEach(async () => {
+  // Every background `ensureVaultCurrent` also starts the detached
+  // managed-file upgrade worker, which no test here waits for. Removing the
+  // vault under it lets its metrics row recreate the directory after the
+  // test is gone, so the removal waits for that worker first. The reindex
+  // children are awaited by the tests that spawn them, and two tests write
+  // spawn rows no child will ever pair.
+  try {
+    await waitForSelfHealUpgradeWorker(vault, CHILD_BUDGET_MS);
+  } finally {
+    if (prevConfigEnv === undefined) delete process.env["OPEN_SECOND_BRAIN_CONFIG"];
+    else process.env["OPEN_SECOND_BRAIN_CONFIG"] = prevConfigEnv;
+    rmSync(vault, { recursive: true, force: true });
+    rmSync(configHome, { recursive: true, force: true });
+  }
+}, CHILD_BUDGET_MS + 10_000);
 
 function dbPath(): string {
   return resolveSearchConfig({ vault, configPath }).dbPath;
