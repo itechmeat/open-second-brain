@@ -107,8 +107,17 @@ export interface VectorBackfillResult {
   readonly blocked: boolean;
   /** Why the gate would refuse; null when it would not. */
   readonly reason: EmbeddingGateReason | null;
-  /** The prefixes the run was limited to; empty for the whole vault. */
+  /**
+   * The prefixes the run was limited to, normalised (no leading `./`,
+   * `/` separators); empty for the whole vault.
+   */
   readonly pathPrefixes: ReadonlyArray<string>;
+  /**
+   * The prefixes that match no indexed document. A scope that matches
+   * nothing has nothing pending, and without this list it would read
+   * exactly like a fully embedded scope.
+   */
+  readonly unmatchedPathPrefixes: ReadonlyArray<string>;
   /**
    * The spend receipt of an applied run that reached the provider, from
    * the same scoped plan the dry run reports; null otherwise.
@@ -120,22 +129,36 @@ export interface VectorBackfillResult {
 const PATH_PREFIX_ARGUMENT = "path prefix";
 
 /**
- * Validate every prefix by name; an empty list scopes nothing. An empty
- * or blank prefix is refused rather than skipped: it would match every
- * document and widen a scoped run to the whole vault while the report
- * still echoed a scope.
+ * The spelling a prefix is matched under: Windows separators become `/`
+ * and a leading `./` is dropped, so `./Brain/` and `Brain\preferences\` match the
+ * stored `Brain/...` paths. Matching itself stays a raw string prefix.
  */
-function pendingScope(pathPrefixes: ReadonlyArray<string>): PendingVectorScope | undefined {
-  for (const prefix of pathPrefixes) {
-    if (prefix.trim() === "") {
-      throw new SearchError(
-        "INVALID_INPUT",
-        `${PATH_PREFIX_ARGUMENT} is empty: ${JSON.stringify(prefix)}`,
-      );
-    }
-    assertSafePathPrefix(prefix, PATH_PREFIX_ARGUMENT);
-  }
-  return pathPrefixes.length > 0 ? { pathPrefixes } : undefined;
+function normalisePathPrefix(prefix: string): string {
+  let normal = prefix.replaceAll("\\", "/");
+  while (normal.startsWith("./")) normal = normal.slice(2);
+  return normal;
+}
+
+/**
+ * Normalise and validate every prefix by name; an empty list scopes
+ * nothing. An empty or blank prefix is refused rather than skipped: it
+ * would match every document and widen a scoped run to the whole vault
+ * while the report still echoed a scope.
+ */
+function normalisePathPrefixes(pathPrefixes: ReadonlyArray<string>): ReadonlyArray<string> {
+  return Object.freeze(
+    pathPrefixes.map((raw) => {
+      const prefix = normalisePathPrefix(raw);
+      if (prefix.trim() === "") {
+        throw new SearchError(
+          "INVALID_INPUT",
+          `${PATH_PREFIX_ARGUMENT} is empty: ${JSON.stringify(raw)}`,
+        );
+      }
+      assertSafePathPrefix(prefix, PATH_PREFIX_ARGUMENT);
+      return prefix;
+    }),
+  );
 }
 
 /**
@@ -164,13 +187,17 @@ async function planVectorBackfillRun(
   progress: ProgressCounter,
 ): Promise<VectorBackfillResult> {
   const apply = opts.apply === true;
-  const pathPrefixes = Object.freeze([...(opts.pathPrefixes ?? [])]);
-  const scope = pendingScope(pathPrefixes);
+  const pathPrefixes = normalisePathPrefixes(opts.pathPrefixes ?? []);
+  const scope: PendingVectorScope | undefined =
+    pathPrefixes.length > 0 ? { pathPrefixes } : undefined;
   const capability = resolveSemanticCapability(config.semantic);
   const store = await Store.open(config, { mode: apply ? "write" : "read" });
   try {
     const plan = planEmbeddingSpend(store, config, scope ? { scope } : {});
     const chunksTotal = store.counts().chunks;
+    const unmatchedPathPrefixes = Object.freeze(
+      pathPrefixes.filter((prefix) => store.countDocumentsUnderPrefix(prefix) === 0),
+    );
     const tally: EmbeddingPhaseTally = { embeddingsComputed: 0, embeddingsRetries: 0 };
 
     if (apply && plan.pending.length > 0) {
@@ -196,6 +223,7 @@ async function planVectorBackfillRun(
       blocked: plan.gate.blocked,
       reason: plan.gate.reason,
       pathPrefixes,
+      unmatchedPathPrefixes,
       spend: tally.spend ?? null,
     });
   } finally {

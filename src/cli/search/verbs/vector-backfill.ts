@@ -117,6 +117,9 @@ function jsonForResult(result: VectorBackfillResult): Record<string, unknown> {
     price_source: result.priceSource,
     // Present only for a scoped run, so an unscoped payload is unchanged.
     ...(result.pathPrefixes.length > 0 ? { path_prefixes: result.pathPrefixes } : {}),
+    ...(result.unmatchedPathPrefixes.length > 0
+      ? { unmatched_path_prefixes: result.unmatchedPathPrefixes }
+      : {}),
   };
 }
 
@@ -223,6 +226,11 @@ export async function cmdSearchVectorBackfill(argv: ReadonlyArray<string>): Prom
       ? withPathFlags(registered, result.pathPrefixes)
       : registered;
 
+  // A typo'd scope has nothing pending and would otherwise read like a
+  // fully embedded one; stderr, so the JSON on stdout stays parseable.
+  for (const prefix of result.unmatchedPathPrefixes) {
+    process.stderr.write(`warning: scope ${prefix} matches no indexed document\n`);
+  }
   if (jsonRequested) {
     process.stdout.write(
       JSON.stringify({

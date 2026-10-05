@@ -280,3 +280,46 @@ test.skipIf(!VEC_LOADABLE).each([
     expect(after.pending).toBe(before.pending);
   },
 );
+
+test.skipIf(!VEC_LOADABLE).each(["./Brain/preferences/", "Brain\\preferences\\"])(
+  "a %p prefix matches the same notes as its plain form",
+  async (prefix) => {
+    await seed();
+    const plain = await planVectorBackfill(semanticConfig(), { pathPrefixes: [BELIEFS] });
+    const spelled = await planVectorBackfill(semanticConfig(), { pathPrefixes: [prefix] });
+    expect(spelled.pending).toBe(plain.pending);
+    expect(spelled.pathPrefixes).toEqual([BELIEFS]);
+  },
+);
+
+test.skipIf(!VEC_LOADABLE)(
+  "a scope that matches no document is named, not reported as done",
+  async () => {
+    await seed();
+    const config = await cliConfig();
+    const run = await backfillCli(config, ["--path", "Brain/prefs/", "--path", BELIEFS, "--json"]);
+    expect(run.returncode).toBe(0);
+    expect(run.stderr).toContain("scope Brain/prefs/ matches no indexed document");
+    expect(run.stderr).not.toContain(`scope ${BELIEFS} matches`);
+    const payload = JSON.parse(run.stdout) as Record<string, unknown>;
+    expect(payload["unmatched_path_prefixes"]).toEqual(["Brain/prefs/"]);
+
+    const human = await backfillCli(config, ["--path", "Brain/prefs/"]);
+    expect(human.stderr).toContain("scope Brain/prefs/ matches no indexed document");
+  },
+);
+
+test.skipIf(!VEC_LOADABLE)(
+  "a fully embedded scope that matches documents warns nothing",
+  async () => {
+    await seed();
+    await planVectorBackfill(semanticConfig(), { pathPrefixes: [BELIEFS], apply: true });
+    const config = await cliConfig();
+    const run = await backfillCli(config, ["--path", BELIEFS, "--json"]);
+    expect(run.returncode).toBe(0);
+    expect(run.stderr).not.toContain("matches no indexed document");
+    const payload = JSON.parse(run.stdout) as Record<string, unknown>;
+    expect(payload["pending"]).toBe(0);
+    expect("unmatched_path_prefixes" in payload).toBe(false);
+  },
+);

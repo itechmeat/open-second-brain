@@ -1814,11 +1814,19 @@ o2b search vector-backfill    Run the vector phase ALONE for indexed chunks that
                               the cost gate and the spend receipt all read the same scoped census,
                               so `--path Brain/preferences/` prices and embeds only belief notes.
                               The text report adds a `scope:` line and the next step it names keeps
-                              the scope (since v1.72.0)
+                              the scope.
+                              The prefix is a raw string prefix, not a directory: end a directory
+                              with `/`, or `Brain/pref` also matches `Brain/preferences-old/`. A
+                              leading `./` is dropped and `\` becomes `/`; an empty prefix is
+                              refused with INVALID_INPUT. A prefix that matches no indexed
+                              document is warned on stderr by name (`scope <prefix> matches no
+                              indexed document`) rather than reported like a fully embedded
+                              scope (since v1.72.0)
                               --progress watches it; Ctrl-C stops it between embed batches
                               --json emits dry_run, capability_tier, capability_code, chunks_total,
                               pending, embedded, retries, estimated_cost_usd, price_source, and
-                              path_prefixes on a scoped run. Since v1.72.0 estimated_cost_usd is
+                              path_prefixes on a scoped run, plus unmatched_path_prefixes when a
+                              prefix matches no document. Since v1.72.0 estimated_cost_usd is
                               null (never 0, never omitted) when the model's price is unknown, and
                               the text report prints `price unknown` for it
                               Idempotent; an --apply run that wrote vectors appends one

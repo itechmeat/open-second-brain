@@ -479,6 +479,11 @@ export class Store {
     return chunks.countChunksWithoutEmbeddings(this.db, scope);
   }
 
+  /** How many documents sit under one path prefix of a pending-vector scope. */
+  countDocumentsUnderPrefix(prefix: string): number {
+    return documents.countDocumentsUnderPrefix(this.db, prefix);
+  }
+
   // ── embeddings ─────────────────────────────────────────────────────────────
 
   /**
