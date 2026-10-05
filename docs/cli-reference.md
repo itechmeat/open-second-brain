@@ -1900,7 +1900,7 @@ o2b search check              Pre-flight diagnostics: vault, index directory, SQ
                               probe order (OPEN_SECOND_BRAIN_EMBEDDING_KEY, embedding_api_key, then
                               the env-key names of the registered profile `embedding_provider`
                               selects), and `key_present_under:` lists the other registered profiles
-                              whose env key is set, or says `no registered profile`. --json carries
+                              whose env key is set, or says `none`. --json carries
                               the same as `credential_sources` {consulted, present_elsewhere}. Only
                               names you declared are consulted (config keys and your provider
                               registry), no value is ever printed, and a configured setup's output

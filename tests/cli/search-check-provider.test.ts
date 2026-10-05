@@ -454,7 +454,7 @@ test("explicit keyless config consults the explicit pair and says when no profil
     present_elsewhere: [],
   });
   const human = await runCheckWithEnv({}, "--no-probe");
-  expect(human.stdout).toContain("key_present_under:     no registered profile");
+  expect(human.stdout).toContain("key_present_under:     none\n");
 });
 
 test("a configured tier carries no credential report in either shape", async () => {

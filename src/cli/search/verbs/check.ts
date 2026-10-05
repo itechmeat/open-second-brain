@@ -546,8 +546,7 @@ function renderCheckHuman(r: IndexCheckReport): string {
   if (r.credentialSources !== undefined) {
     const { consulted, presentElsewhere } = r.credentialSources;
     lines.push(`key_sources_checked:   ${consulted.join(", ")}`);
-    const holders =
-      presentElsewhere.length > 0 ? presentElsewhere.join(", ") : "no registered profile";
+    const holders = presentElsewhere.length > 0 ? presentElsewhere.join(", ") : "none";
     lines.push(`key_present_under:     ${holders}`);
   }
   for (const f of r.fatal) lines.push(`fatal:   ${f}`);
