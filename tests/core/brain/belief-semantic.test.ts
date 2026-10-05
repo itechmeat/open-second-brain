@@ -339,6 +339,18 @@ describe("loadBeliefSemanticRelevance", () => {
     expect((refusal as SearchError).code).toBe("VEC_EXTENSION_UNAVAILABLE");
   });
 
+  test("a store without sqlite-vec refuses by name even when no belief note exists", async () => {
+    writeMd(vault, "notes/n.md", "# A note\n\nNot a belief.\n");
+    const config = vecConfig();
+    await indexVault(config);
+    const refusal = await loadBeliefSemanticRelevance(config, QUERY, {
+      provider: throwingProvider,
+      loadVec: false,
+    }).catch((e: unknown) => e);
+    expect(refusal).toBeInstanceOf(SearchError);
+    expect((refusal as SearchError).code).toBe("VEC_EXTENSION_UNAVAILABLE");
+  });
+
   test("a sibling directory sharing the prefix string is not a belief", async () => {
     if (!sqliteVecLoadable()) return;
     writeBelief("Brain/preferences/pref-a.md", "pref-a", "Keep answers short");
