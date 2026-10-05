@@ -254,19 +254,54 @@ export function countChunks(db: Database): number {
 }
 
 /**
+ * Optional path scope of the pending-vector census: only chunks whose
+ * document path starts with one of the prefixes. An absent or empty list
+ * means vault-wide, and then the census SQL is exactly the unscoped form.
+ */
+export interface PendingVectorScope {
+  readonly pathPrefixes?: ReadonlyArray<string>;
+}
+
+const PENDING_ANTI_JOIN =
+  "FROM chunks c LEFT JOIN embeddings e ON e.chunk_id = c.id WHERE e.chunk_id IS NULL";
+
+/**
+ * The anti-join's FROM/WHERE text and bindings for a scope. A scoped
+ * census joins `documents` and matches each prefix with the
+ * `substr(path, 1, length(?)) = ?` form the vector prefix filter uses,
+ * which needs no LIKE wildcard escaping.
+ */
+function pendingCensusClause(scope: PendingVectorScope | undefined): {
+  sql: string;
+  bindings: string[];
+} {
+  const prefixes = scope?.pathPrefixes ?? [];
+  if (prefixes.length === 0) return { sql: PENDING_ANTI_JOIN, bindings: [] };
+  const matches = prefixes.map(() => "substr(d.path, 1, length(?)) = ?").join(" OR ");
+  return {
+    sql:
+      "FROM chunks c JOIN documents d ON d.id = c.document_id " +
+      "LEFT JOIN embeddings e ON e.chunk_id = c.id " +
+      `WHERE e.chunk_id IS NULL AND (${matches})`,
+    bindings: prefixes.flatMap((prefix) => [prefix, prefix]),
+  };
+}
+
+/**
  * Chunks that have no row in `embeddings`. Used by the indexer to
- * populate vectors after a fresh index or after the model-change drop.
+ * populate vectors after a fresh index or after the model-change drop,
+ * optionally scoped to path prefixes.
  */
 export function findChunksWithoutEmbeddings(
   db: Database,
+  scope?: PendingVectorScope,
 ): Array<{ chunkId: number; content: string }> {
+  const { sql, bindings } = pendingCensusClause(scope);
   const rows = db
-    .query<{ id: number; content: string }, []>(
-      "SELECT c.id AS id, c.content AS content FROM chunks c " +
-        "LEFT JOIN embeddings e ON e.chunk_id = c.id " +
-        "WHERE e.chunk_id IS NULL ORDER BY c.id",
+    .query<{ id: number; content: string }, string[]>(
+      `SELECT c.id AS id, c.content AS content ${sql} ORDER BY c.id`,
     )
-    .all();
+    .all(...bindings);
   return rows.map((r) => ({ chunkId: r.id, content: r.content }));
 }
 
@@ -274,23 +309,16 @@ export function findChunksWithoutEmbeddings(
  * How MANY chunks have no row in `embeddings`, without materialising a
  * single one of their bodies.
  *
- * The same anti-join {@link findChunksWithoutEmbeddings} walks, as a
- * `COUNT(*)`. The row-returning form is the indexer's work queue and
- * loads every pending chunk's full `content` into JS memory to hand it
- * to a provider; a diagnostic that only wants the number must not pay
- * that, which is the whole reason this second query exists rather than
- * a `.length` on the first.
+ * The same anti-join {@link findChunksWithoutEmbeddings} walks, under the
+ * same scope, as a `COUNT(*)`. The row-returning form is the indexer's
+ * work queue and loads every pending chunk's full `content` into JS
+ * memory to hand it to a provider; a diagnostic that only wants the
+ * number must not pay that, which is the whole reason this second query
+ * exists rather than a `.length` on the first.
  */
-export function countChunksWithoutEmbeddings(db: Database): number {
-  return (
-    db
-      .query<{ n: number }, []>(
-        "SELECT COUNT(*) AS n FROM chunks c " +
-          "LEFT JOIN embeddings e ON e.chunk_id = c.id " +
-          "WHERE e.chunk_id IS NULL",
-      )
-      .get()?.n ?? 0
-  );
+export function countChunksWithoutEmbeddings(db: Database, scope?: PendingVectorScope): number {
+  const { sql, bindings } = pendingCensusClause(scope);
+  return db.query<{ n: number }, string[]>(`SELECT COUNT(*) AS n ${sql}`).get(...bindings)?.n ?? 0;
 }
 
 export function hydrateChunks(

@@ -1,0 +1,144 @@
+/**
+ * The shared embedding spend plan (Honest Embedding Spend).
+ *
+ * Four places price embedding spend: the phase gate, the maintenance
+ * preview, the vector-backfill dry run and the `search status` refresh
+ * estimate. They all read {@link planEmbeddingSpend}, so what a run
+ * announces, refuses, spends and receipts is one computation: one pending
+ * census (optionally path-scoped), one model resolution, one token
+ * estimate, one price quote and one gate verdict.
+ *
+ * The gate fails closed only under an explicit cap: a positive
+ * `embedding_cost_gate_usd` refuses an unpriced model with pending work,
+ * because for an operator who asked for a ceiling an unknown price is not
+ * a price below it. A zero gate (the default) never blocks.
+ */
+
+import { resolveEmbeddingPrice, type PriceQuote } from "./embeddings/pricing.ts";
+import { estimateCostUsd, estimateTokens, LOCAL_EMBEDDING_MODEL } from "./embeddings/signature.ts";
+import type { Store } from "./store.ts";
+import type { PendingVectorScope } from "./store/chunks.ts";
+import type { ResolvedSearchConfig } from "./types.ts";
+
+/** Why a gate refused. The value leaves TypeScript in previews and JSON. */
+export const EMBEDDING_GATE_REASON = Object.freeze({
+  /** The known estimate strictly exceeds the positive gate. */
+  overCap: "over_cap",
+  /** The gate is positive and nobody stated the model's price. */
+  unpriced: "unpriced",
+} as const);
+
+/** Closed union over {@link EMBEDDING_GATE_REASON}. */
+export type EmbeddingGateReason =
+  (typeof EMBEDDING_GATE_REASON)[keyof typeof EMBEDDING_GATE_REASON];
+
+/** Membership list of {@link EMBEDDING_GATE_REASON}. */
+export const EMBEDDING_GATE_REASONS: ReadonlyArray<EmbeddingGateReason> = Object.freeze([
+  EMBEDDING_GATE_REASON.overCap,
+  EMBEDDING_GATE_REASON.unpriced,
+]);
+
+/** Narrow a string read back off disk or across a tool boundary. */
+export function isEmbeddingGateReason(value: unknown): value is EmbeddingGateReason {
+  return (
+    typeof value === "string" && (EMBEDDING_GATE_REASONS as ReadonlyArray<string>).includes(value)
+  );
+}
+
+/** A gate verdict: `reason` is null exactly when the run is not blocked. */
+export type EmbeddingGateVerdict =
+  | { readonly blocked: false; readonly reason: null }
+  | { readonly blocked: true; readonly reason: EmbeddingGateReason };
+
+/** Outcome of a cost-gate evaluation for an embedding run. */
+export type CostGateResult = EmbeddingGateVerdict & {
+  readonly tokens: number;
+  /** Null when the price is unknown; never 0 for an unknown price. */
+  readonly estimatedUsd: number | null;
+};
+
+const PASS: EmbeddingGateVerdict = Object.freeze({ blocked: false, reason: null });
+
+/**
+ * Evaluate whether an embedding run should be blocked on estimated spend.
+ * Never blocks when the gate is 0, the run is forced or nothing is
+ * pending. Otherwise an unknown price blocks as `unpriced` and a known
+ * estimate strictly over the gate blocks as `over_cap`.
+ */
+export function evaluateCostGate(opts: {
+  texts: ReadonlyArray<string>;
+  quote: PriceQuote;
+  gateUsd: number;
+  forced?: boolean;
+}): CostGateResult {
+  const tokens = estimateTokens(opts.texts);
+  const estimatedUsd = estimateCostUsd(tokens, opts.quote);
+  return { tokens, estimatedUsd, ...gateVerdict(opts, estimatedUsd) };
+}
+
+function gateVerdict(
+  opts: { texts: ReadonlyArray<string>; gateUsd: number; forced?: boolean },
+  estimatedUsd: number | null,
+): EmbeddingGateVerdict {
+  if (opts.gateUsd <= 0 || opts.forced === true || opts.texts.length === 0) return PASS;
+  if (estimatedUsd === null) return { blocked: true, reason: EMBEDDING_GATE_REASON.unpriced };
+  if (estimatedUsd > opts.gateUsd) return { blocked: true, reason: EMBEDDING_GATE_REASON.overCap };
+  return PASS;
+}
+
+/**
+ * The model an embedding request would name right now. The local
+ * provider always embeds with its implicit model, whatever
+ * `embedding_model` says; every other provider takes the configured
+ * one, falling back to what the index recorded when the config leaves
+ * it unset.
+ */
+export function activeEmbeddingModel(
+  config: ResolvedSearchConfig,
+  storedModel: string | null = null,
+): string | null {
+  if (config.semantic.provider === "local") return LOCAL_EMBEDDING_MODEL;
+  return config.semantic.model ?? storedModel;
+}
+
+/** One computation of what an embedding pass would spend. */
+export interface EmbeddingSpendPlan {
+  /** The scoped pending census: chunks with no vector yet. */
+  readonly pending: ReadonlyArray<{ readonly chunkId: number; readonly content: string }>;
+  readonly model: string | null;
+  readonly tokens: number;
+  readonly quote: PriceQuote;
+  /** Null when the price is unknown. */
+  readonly estimatedUsd: number | null;
+  readonly gate: EmbeddingGateVerdict;
+}
+
+/** Options of {@link planEmbeddingSpend}. */
+export interface EmbeddingSpendPlanOptions {
+  /** Path scope of the pending census; vault-wide when absent. */
+  readonly scope?: PendingVectorScope;
+  /** A forced plan never blocks. */
+  readonly forced?: boolean;
+}
+
+/**
+ * Plan the spend of embedding every pending chunk in scope. Reads only:
+ * the phase in `indexer.ts` remains the only spender and throws on a
+ * blocked verdict.
+ */
+export function planEmbeddingSpend(
+  store: Store,
+  config: ResolvedSearchConfig,
+  opts: EmbeddingSpendPlanOptions = {},
+): EmbeddingSpendPlan {
+  const pending = store.findChunksWithoutEmbeddings(opts.scope);
+  const model = activeEmbeddingModel(config);
+  const quote = resolveEmbeddingPrice(model, config.semantic.priceOverride);
+  const { tokens, estimatedUsd, ...gate } = evaluateCostGate({
+    texts: pending.map((p) => p.content),
+    quote,
+    gateUsd: config.semantic.costGateUsd,
+    ...(opts.forced === undefined ? {} : { forced: opts.forced }),
+  });
+  return { pending, model, tokens, quote, estimatedUsd, gate };
+}

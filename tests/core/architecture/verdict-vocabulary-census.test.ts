@@ -201,6 +201,11 @@ import {
   READINESS_STATUSES,
 } from "../../../src/core/doctor-readiness.ts";
 import {
+  EMBEDDING_GATE_REASON,
+  EMBEDDING_GATE_REASONS,
+  isEmbeddingGateReason,
+} from "../../../src/core/search/embedding-spend.ts";
+import {
   EMBEDDING_PRICE_SOURCE,
   EMBEDDING_PRICE_SOURCES,
   isEmbeddingPriceSource,
@@ -569,6 +574,15 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: EMBEDDING_PRICE_SOURCE,
     members: EMBEDDING_PRICE_SOURCES,
     guard: isEmbeddingPriceSource,
+  },
+  {
+    // Why the embedding cost gate refused: over the cap on a known price,
+    // or unpriced under an explicit positive gate. Rendered in previews and
+    // JSON so a refusal says which of the two it is.
+    name: "EMBEDDING_GATE_REASON",
+    values: EMBEDDING_GATE_REASON,
+    members: EMBEDDING_GATE_REASONS,
+    guard: isEmbeddingGateReason,
   },
   {
     name: "SCHEMA_PACK_INTEGRITY",
@@ -1761,7 +1775,7 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
  * How many four-piece vocabularies `src/` currently holds. Measured, and
  * kept as an equality rather than a floor - see the population test.
  */
-const VOCABULARY_POPULATION = 91;
+const VOCABULARY_POPULATION = 92;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {

@@ -465,10 +465,18 @@ export class Store {
 
   /**
    * Chunks that have no row in `embeddings`. Used by the indexer to
-   * populate vectors after a fresh index or after the model-change drop.
+   * populate vectors after a fresh index or after the model-change drop,
+   * optionally scoped to path prefixes.
    */
-  findChunksWithoutEmbeddings(): Array<{ chunkId: number; content: string }> {
-    return chunks.findChunksWithoutEmbeddings(this.db);
+  findChunksWithoutEmbeddings(
+    scope?: chunks.PendingVectorScope,
+  ): Array<{ chunkId: number; content: string }> {
+    return chunks.findChunksWithoutEmbeddings(this.db, scope);
+  }
+
+  /** How many chunks the scoped census above would return, without their bodies. */
+  countChunksWithoutEmbeddings(scope?: chunks.PendingVectorScope): number {
+    return chunks.countChunksWithoutEmbeddings(this.db, scope);
   }
 
   // ── embeddings ─────────────────────────────────────────────────────────────

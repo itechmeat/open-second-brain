@@ -11,7 +11,7 @@
  * spend, and compare two signatures for staleness.
  */
 
-import { resolveEmbeddingPrice, type KnownPriceQuote, type PriceQuote } from "./pricing.ts";
+import type { KnownPriceQuote, PriceQuote } from "./pricing.ts";
 
 /**
  * Dimension field of a NAMED model whose dimension is left to the model
@@ -278,29 +278,4 @@ export function estimateCostUsd(tokens: number, quote: PriceQuote): number | nul
 export function isStaleSignature(active: string, stored: string): boolean {
   if (!signatureIdentityKnown(active) || !signatureIdentityKnown(stored)) return true;
   return active !== stored;
-}
-
-/** Outcome of a cost-gate evaluation for an embedding run. */
-export interface CostGateResult {
-  readonly tokens: number;
-  readonly estimatedUsd: number;
-  readonly blocked: boolean;
-}
-
-/**
- * Evaluate whether an embedding run should be blocked on estimated spend.
- * A run is blocked only when the gate is positive, the run is not forced,
- * and the estimate strictly exceeds the gate. A zero gate (the default)
- * and free models (local/unknown -> estimate 0) never block.
- */
-export function evaluateCostGate(opts: {
-  texts: ReadonlyArray<string>;
-  model: string | null;
-  gateUsd: number;
-  forced?: boolean;
-}): CostGateResult {
-  const tokens = estimateTokens(opts.texts);
-  const estimatedUsd = estimateCostUsd(tokens, resolveEmbeddingPrice(opts.model)) ?? 0;
-  const blocked = opts.gateUsd > 0 && opts.forced !== true && estimatedUsd > opts.gateUsd;
-  return { tokens, estimatedUsd, blocked };
 }

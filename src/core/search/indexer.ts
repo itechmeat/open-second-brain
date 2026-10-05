@@ -30,15 +30,18 @@ import { parseAuthoredAtSeconds } from "./authored-at.ts";
 import { CHUNKER_VERSION, chunkMarkdown } from "./chunker.ts";
 import { expandTextForCjkFts } from "./cjk-tokenizer.ts";
 import { declaredInputWindowTokens, passagePrefixSentByProvider } from "./embeddings/presets.ts";
+import {
+  activeEmbeddingModel,
+  EMBEDDING_GATE_REASON,
+  planEmbeddingSpend,
+} from "./embedding-spend.ts";
 import { resolveEmbeddingPrice } from "./embeddings/pricing.ts";
 import { makeProvider } from "./embeddings/provider.ts";
 import {
   embeddingSignature,
   estimateCostUsd,
   estimateTokens,
-  evaluateCostGate,
   isStaleSignature,
-  LOCAL_EMBEDDING_MODEL,
   MODEL_NATIVE_DIMENSION,
   type EmbeddingIdentity,
 } from "./embeddings/signature.ts";
@@ -801,20 +804,6 @@ async function indexIntoRun(
 }
 
 /**
- * The model an embedding request would name right now. The local
- * provider has an implicit model string; every other provider takes the
- * configured one, falling back to what the index recorded when the
- * config leaves it unset.
- */
-function activeEmbeddingModel(
-  config: ResolvedSearchConfig,
-  storedModel: string | null = null,
-): string | null {
-  if (config.semantic.provider === "local") return LOCAL_EMBEDDING_MODEL;
-  return config.semantic.model ?? storedModel;
-}
-
-/**
  * Canonical signature of the ACTIVE embedding configuration for status
  * reporting. Null when semantic search is disabled. Stored model and
  * dimension fill in fields the config leaves unset (e.g. an
@@ -1053,39 +1042,36 @@ export async function runEmbeddingPhase(
     );
   }
 
-  const pending = store.findChunksWithoutEmbeddings();
+  const plan = planEmbeddingSpend(store, config);
+  const pending = plan.pending;
   if (pending.length === 0) return;
 
   const provider = makeProvider(config.semantic);
   const model = config.semantic.model ?? provider.model;
 
-  // Cost gate: estimate the spend for the whole pending set up front and
-  // refuse the run when it exceeds the configured ceiling, unless forced.
-  // The local provider (price 0) and unknown-price models never block.
+  // Cost gate: the shared spend plan estimates the whole pending set up
+  // front and the run is refused when it exceeds the configured ceiling,
+  // unless forced.
   //
-  // The gate is evaluated UNFORCED so the refusal and the receipt read
-  // one verdict: `blocked && !forceCost` is exactly the blocked flag
-  // `evaluateCostGate` would have returned for `forced: forceCost`, and
-  // `blocked && forceCost` is the honest meaning of the receipt's
-  // `forced` - this run overrode a gate that would have refused it.
-  const gate = evaluateCostGate({
-    texts: pending.map((p) => p.content),
-    model,
-    gateUsd: config.semantic.costGateUsd,
-  });
-  if (gate.blocked && !forceCost) {
+  // The plan is evaluated UNFORCED so the refusal and the receipt read
+  // one verdict: `blocked && !forceCost` is exactly the blocked flag a
+  // forced plan would have returned, and `blocked && forceCost` is the
+  // honest meaning of the receipt's `forced` - this run overrode a gate
+  // that would have refused it.
+  const overCap = plan.gate.reason === EMBEDDING_GATE_REASON.overCap;
+  if (overCap && !forceCost) {
     throw new SearchError(
       "EMBEDDING_COST_GATE",
-      `estimated embedding cost $${gate.estimatedUsd.toFixed(4)} for ${pending.length} chunk(s) ` +
+      `estimated embedding cost $${(plan.estimatedUsd ?? 0).toFixed(4)} for ${pending.length} chunk(s) ` +
         `exceeds embedding_cost_gate_usd $${config.semantic.costGateUsd.toFixed(4)}. ` +
         `Re-run with --force-cost to proceed or raise the gate.`,
     );
   }
   stats.spend = {
-    model,
-    tokens: gate.tokens,
-    estimatedUsd: gate.estimatedUsd,
-    forced: gate.blocked && forceCost,
+    model: plan.model,
+    tokens: plan.tokens,
+    estimatedUsd: plan.estimatedUsd ?? 0,
+    forced: overCap && forceCost,
   };
   const batchSize = Math.max(1, config.semantic.batchSize);
   // Hand the provider a super-batch large enough to keep its internal
@@ -1156,10 +1142,9 @@ export interface EmbeddingSpendPreview {
  * The spend preview the maintenance lane announces before its reindex
  * task and records on its journal row after it (t_9d155d0e).
  *
- * Deliberately a READ over the same census and the same cost kernel
- * {@link runEmbeddingPhase} gates on - the phase's guards, in its order,
- * and its own `findChunksWithoutEmbeddings` anti-join and
- * `evaluateCostGate` - so what a run ANNOUNCES and what it later RECORDS
+ * Deliberately a READ over the same spend plan {@link runEmbeddingPhase}
+ * gates on - the phase's guards, in its order, and `planEmbeddingSpend`
+ * (`embedding-spend.ts`) - so what a run ANNOUNCES and what it later RECORDS
  * cannot drift from what would actually be refused or embedded. This
  * function never spends: the phase remains the only spender, and a
  * refusal it would throw stays its to throw.
@@ -1184,21 +1169,14 @@ export async function estimatePendingEmbeddingSpend(
   }
   try {
     if (!store.vecLoaded()) return null;
-    const pending = store.findChunksWithoutEmbeddings();
-    if (pending.length === 0) return null;
-    const provider = makeProvider(config.semantic);
-    const model = config.semantic.model ?? provider.model;
-    const gate = evaluateCostGate({
-      texts: pending.map((p) => p.content),
-      model,
-      gateUsd: config.semantic.costGateUsd,
-    });
+    const plan = planEmbeddingSpend(store, config);
+    if (plan.pending.length === 0) return null;
     return {
-      model,
-      pendingChunks: pending.length,
-      tokens: gate.tokens,
-      estimatedUsd: gate.estimatedUsd,
-      blocked: gate.blocked,
+      model: plan.model,
+      pendingChunks: plan.pending.length,
+      tokens: plan.tokens,
+      estimatedUsd: plan.estimatedUsd ?? 0,
+      blocked: plan.gate.reason === EMBEDDING_GATE_REASON.overCap,
     };
   } finally {
     await store.close();

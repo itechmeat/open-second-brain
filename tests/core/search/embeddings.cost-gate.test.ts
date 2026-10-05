@@ -3,9 +3,10 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { evaluateCostGate } from "../../../src/core/search/embedding-spend.ts";
+import { resolveEmbeddingPrice } from "../../../src/core/search/embeddings/pricing.ts";
 import {
   embeddingSignature,
-  evaluateCostGate,
   LOCAL_EMBEDDING_MODEL,
 } from "../../../src/core/search/embeddings/signature.ts";
 import { resolveSearchConfig } from "../../../src/core/search/index.ts";
@@ -17,14 +18,22 @@ import type { ResolvedSearchConfig } from "../../../src/core/search/types.ts";
 test("evaluateCostGate estimates spend for a priced model", () => {
   // 4,000,000 chars -> ~1,000,000 tokens at chars/4.
   const texts = ["x".repeat(4_000_000)];
-  const r = evaluateCostGate({ texts, model: "text-embedding-3-small", gateUsd: 0 });
+  const r = evaluateCostGate({
+    texts,
+    quote: resolveEmbeddingPrice("text-embedding-3-small"),
+    gateUsd: 0,
+  });
   expect(r.tokens).toBe(1_000_000);
   expect(r.estimatedUsd).toBeGreaterThan(0);
 });
 
 test("evaluateCostGate blocks when the estimate exceeds a positive gate", () => {
   const texts = ["x".repeat(4_000_000)]; // ~1M tokens
-  const r = evaluateCostGate({ texts, model: "text-embedding-3-small", gateUsd: 0.001 });
+  const r = evaluateCostGate({
+    texts,
+    quote: resolveEmbeddingPrice("text-embedding-3-small"),
+    gateUsd: 0.001,
+  });
   expect(r.blocked).toBe(true);
 });
 
@@ -32,7 +41,7 @@ test("evaluateCostGate does not block when forced", () => {
   const texts = ["x".repeat(4_000_000)];
   const r = evaluateCostGate({
     texts,
-    model: "text-embedding-3-small",
+    quote: resolveEmbeddingPrice("text-embedding-3-small"),
     gateUsd: 0.001,
     forced: true,
   });
@@ -41,13 +50,21 @@ test("evaluateCostGate does not block when forced", () => {
 
 test("a zero gate (default) never blocks", () => {
   const texts = ["x".repeat(40_000_000)];
-  const r = evaluateCostGate({ texts, model: "text-embedding-3-small", gateUsd: 0 });
+  const r = evaluateCostGate({
+    texts,
+    quote: resolveEmbeddingPrice("text-embedding-3-small"),
+    gateUsd: 0,
+  });
   expect(r.blocked).toBe(false);
 });
 
 test("the local model never blocks regardless of gate or volume", () => {
   const texts = ["x".repeat(40_000_000)];
-  const r = evaluateCostGate({ texts, model: LOCAL_EMBEDDING_MODEL, gateUsd: 0.0001 });
+  const r = evaluateCostGate({
+    texts,
+    quote: resolveEmbeddingPrice(LOCAL_EMBEDDING_MODEL),
+    gateUsd: 0.0001,
+  });
   expect(r.estimatedUsd).toBe(0);
   expect(r.blocked).toBe(false);
 });

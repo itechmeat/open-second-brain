@@ -98,6 +98,35 @@ test("the count agrees with the row walk it replaces", async () => {
   }
 });
 
+test("a path-scoped census returns only chunks under the prefixes, row walk and count agreeing", async () => {
+  writeMd(vault, "Brain/preferences/pref-a.md", "# Pref A\n\nA belief.");
+  writeMd(vault, "Brain/retired/pref-b.md", "# Pref B\n\nA retired belief.");
+  writeMd(vault, "notes/c.md", "# C\n\nA plain note.");
+  await indexVault(makeConfig({ vault, dbPath }));
+
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    const pathOf = db.query<{ path: string }, [number]>(
+      "SELECT d.path AS path FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.id = ?",
+    );
+    const all = findChunksWithoutEmbeddings(db);
+    for (const pathPrefixes of [["Brain/preferences/"], ["Brain/preferences/", "Brain/retired/"]]) {
+      const scoped = findChunksWithoutEmbeddings(db, { pathPrefixes });
+      expect(scoped.length).toBeGreaterThan(0);
+      expect(scoped.length).toBeLessThan(all.length);
+      for (const row of scoped) {
+        const path = pathOf.get(row.chunkId)?.path ?? "";
+        expect(pathPrefixes.some((prefix) => path.startsWith(prefix))).toBe(true);
+      }
+      expect(countChunksWithoutEmbeddings(db, { pathPrefixes })).toBe(scoped.length);
+    }
+    expect(findChunksWithoutEmbeddings(db, { pathPrefixes: [] })).toEqual(all);
+    expect(countChunksWithoutEmbeddings(db, { pathPrefixes: [] })).toBe(all.length);
+  } finally {
+    db.close();
+  }
+});
+
 test("an absent index is unrecorded and names the path, never a pending count of zero", () => {
   const peek = peekPendingVectorsSync(dbPath);
   expect(peek.kind).toBe("absent");
