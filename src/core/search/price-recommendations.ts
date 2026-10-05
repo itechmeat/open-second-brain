@@ -16,7 +16,12 @@
  * byte-identical.
  */
 
-import { activeSpendQuote, USD_DECIMALS } from "./embedding-spend.ts";
+import {
+  activeSpendQuote,
+  COST_GATE_KEY,
+  FORCE_COST_FLAG,
+  formatEstimatedUsd,
+} from "./embedding-spend.ts";
 import {
   EMBEDDING_PRICE_MODEL_KEY,
   EMBEDDING_PRICE_RATE_KEY,
@@ -25,16 +30,11 @@ import {
 import { canonicalToken } from "./embeddings/signature.ts";
 import type { ResolvedSearchConfig } from "./types.ts";
 
-/** The config key whose positive value turns an unknown price into a refusal. */
-const COST_GATE_KEY = "embedding_cost_gate_usd";
-/** The flag that passes a cost-gate refusal for one run. */
-const FORCE_COST_FLAG = "--force-cost";
-
 /** What the cost gate does with an unpriced model under `gateUsd`. */
 function gateConsequence(gateUsd: number): string {
   if (gateUsd > 0) {
     return (
-      `${COST_GATE_KEY} is $${gateUsd.toFixed(USD_DECIMALS)}, so embedding reindexes and ` +
+      `${COST_GATE_KEY} is ${formatEstimatedUsd(gateUsd)}, so embedding reindexes and ` +
       `vector backfills refuse until the price is declared or the run passes ${FORCE_COST_FLAG}.`
     );
   }

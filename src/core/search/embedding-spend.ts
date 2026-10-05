@@ -170,12 +170,17 @@ export function formatEstimatedUsd(usd: number | null): string {
   return usd === null ? PRICE_UNKNOWN_LABEL : `$${usd.toFixed(USD_DECIMALS)}`;
 }
 
+/** The config key whose positive value turns an estimate into a refusal. */
+export const COST_GATE_KEY = "embedding_cost_gate_usd";
+/** The flag that passes a cost-gate refusal for one run. */
+export const FORCE_COST_FLAG = "--force-cost";
+
 /** The refusal text for an unpriced model under a positive gate. */
 export function unpricedRefusalMessage(plan: EmbeddingSpendPlan, gateUsd: number): string {
   return (
     `embedding model ${plan.model ?? "(unset)"} has no known price, so ${plan.pending.length} ` +
-    `chunk(s) cannot be checked against embedding_cost_gate_usd $${gateUsd.toFixed(USD_DECIMALS)}. ` +
+    `chunk(s) cannot be checked against ${COST_GATE_KEY} ${formatEstimatedUsd(gateUsd)}. ` +
     `Declare its price with ${EMBEDDING_PRICE_MODEL_KEY} and ${EMBEDDING_PRICE_RATE_KEY}, ` +
-    `or re-run with --force-cost to proceed.`
+    `or re-run with ${FORCE_COST_FLAG} to proceed.`
   );
 }

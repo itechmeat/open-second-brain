@@ -33,12 +33,13 @@ import { declaredInputWindowTokens, passagePrefixSentByProvider } from "./embedd
 import {
   activeEmbeddingModel,
   activeSpendQuote,
+  COST_GATE_KEY,
   EMBEDDING_GATE_REASON,
   type EmbeddingGateReason,
+  FORCE_COST_FLAG,
   formatEstimatedUsd,
   planEmbeddingSpend,
   unpricedRefusalMessage,
-  USD_DECIMALS,
 } from "./embedding-spend.ts";
 import { embeddingPriceRecommendations } from "./price-recommendations.ts";
 import type { EmbeddingPriceSource } from "./embeddings/pricing.ts";
@@ -1089,8 +1090,8 @@ export async function runEmbeddingPhase(
     throw new SearchError(
       "EMBEDDING_COST_GATE",
       `estimated embedding cost ${formatEstimatedUsd(plan.estimatedUsd)} for ${pending.length} chunk(s) ` +
-        `exceeds embedding_cost_gate_usd $${gateUsd.toFixed(USD_DECIMALS)}. ` +
-        `Re-run with --force-cost to proceed or raise the gate.`,
+        `exceeds ${COST_GATE_KEY} ${formatEstimatedUsd(gateUsd)}. ` +
+        `Re-run with ${FORCE_COST_FLAG} to proceed or raise the gate.`,
     );
   }
   stats.spend = {
