@@ -40,6 +40,7 @@ import {
   FORCE_COST_FLAG,
   formatEstimatedUsd,
   planEmbeddingSpend,
+  priceSpendPlan,
   unpricedRefusalMessage,
 } from "./embedding-spend.ts";
 import { embeddingPriceRecommendations } from "./price-recommendations.ts";
@@ -1007,10 +1008,12 @@ export interface EmbeddingPhaseOptions {
    */
   readonly scope?: PendingVectorScope;
   /**
-   * A spend plan the caller already computed, UNFORCED, on this store and
-   * over the same `scope`; the phase embeds from it instead of reading the
-   * pending census a second time, so a caller that reported the plan
-   * embeds exactly what it priced. Recomputed when absent.
+   * A spend plan the caller already computed on this store and over the
+   * same `scope`; the phase embeds its pending census instead of reading
+   * it a second time, so a caller that reported the plan embeds exactly
+   * what it priced. Its price and gate verdict are recomputed here from
+   * the current config, so a forced or stale verdict is never trusted.
+   * Recomputed in full when absent.
    */
   readonly plan?: EmbeddingSpendPlan;
   readonly safeguard?: import("../brain/safeguard.ts").Safeguard;
@@ -1073,8 +1076,12 @@ export async function runEmbeddingPhase(
     );
   }
 
+  // A handed-in plan keeps its census but is priced and gated again here,
+  // unforced: the verdict this phase acts on is always its own.
   const plan =
-    opts.plan ?? planEmbeddingSpend(store, config, opts.scope ? { scope: opts.scope } : {});
+    opts.plan !== undefined
+      ? priceSpendPlan(opts.plan.pending, config)
+      : planEmbeddingSpend(store, config, opts.scope ? { scope: opts.scope } : {});
   const pending = plan.pending;
   if (pending.length === 0) return;
 

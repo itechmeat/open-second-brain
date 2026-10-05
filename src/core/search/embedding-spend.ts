@@ -148,13 +148,27 @@ export function planEmbeddingSpend(
   config: ResolvedSearchConfig,
   opts: EmbeddingSpendPlanOptions = {},
 ): EmbeddingSpendPlan {
-  const pending = store.findChunksWithoutEmbeddings(opts.scope);
+  return priceSpendPlan(store.findChunksWithoutEmbeddings(opts.scope), config, opts.forced);
+}
+
+/**
+ * Price `pending` under the current config: the model, the quote, the
+ * estimate and the gate verdict, with no census read. The embedding
+ * phase re-prices a plan a caller handed in this way, so the verdict it
+ * gates on is never one the caller computed forced or under another
+ * config.
+ */
+export function priceSpendPlan(
+  pending: EmbeddingSpendPlan["pending"],
+  config: ResolvedSearchConfig,
+  forced?: boolean,
+): EmbeddingSpendPlan {
   const { model, quote } = activeSpendQuote(config);
   const { tokens, estimatedUsd, ...gate } = evaluateCostGate({
     texts: pending.map((p) => p.content),
     quote,
     gateUsd: config.semantic.costGateUsd,
-    ...(opts.forced === undefined ? {} : { forced: opts.forced }),
+    ...(forced === undefined ? {} : { forced }),
   });
   return { pending, model, tokens, quote, estimatedUsd, gate };
 }

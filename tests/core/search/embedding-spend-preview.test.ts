@@ -34,6 +34,7 @@ import {
   runEmbeddingPhase,
   type EmbeddingPhaseTally,
 } from "../../../src/core/search/indexer.ts";
+import { planEmbeddingSpend } from "../../../src/core/search/embedding-spend.ts";
 import { planVectorBackfill } from "../../../src/core/search/vector-backfill.ts";
 import { indexVault, resolveSearchConfig } from "../../../src/core/search/index.ts";
 import { Store } from "../../../src/core/search/store.ts";
@@ -441,6 +442,43 @@ test("a positive gate refuses an unpriced model by name, before any provider con
         priceSource: "unknown",
         estimatedUsd: null,
       });
+    } finally {
+      await store.close();
+    }
+  } finally {
+    await server?.close();
+  }
+});
+
+test("a handed-in plan is re-gated, so a forced or stale verdict cannot pass the gate", async () => {
+  let server: FakeHttp | null = null;
+  try {
+    server = await startFakeHttp();
+    const config = configWith({
+      search_semantic_enabled: "true",
+      embedding_provider: "openai-compat",
+      embedding_base_url: server.url,
+      embedding_model: UNPRICED_MODEL,
+      embedding_api_key: FAKE_PROVIDER_KEY,
+      embedding_cost_gate_usd: "100",
+    });
+    const store = await openSeeded(config, ["a chunk whose plan claims the gate passed"]);
+    try {
+      const forcedPlan = planEmbeddingSpend(store, config, { forced: true });
+      expect(forcedPlan.gate.blocked).toBe(false);
+      const unforced = planEmbeddingSpend(store, config);
+      const stalePlan = { ...unforced, gate: { blocked: false as const, reason: null } };
+      for (const plan of [forcedPlan, stalePlan]) {
+        const tally: EmbeddingPhaseTally = { embeddingsComputed: 0, embeddingsRetries: 0 };
+        // eslint-disable-next-line no-await-in-loop -- two plans, one after the other
+        const refusal = await runEmbeddingPhase(store, config, tally, { plan }).then(
+          () => null,
+          (error: unknown) => error,
+        );
+        expect((refusal as SearchError).code).toBe("EMBEDDING_COST_UNPRICED");
+        expect(tally.spend).toBeUndefined();
+      }
+      expect(server.callCount()).toBe(0);
     } finally {
       await store.close();
     }
