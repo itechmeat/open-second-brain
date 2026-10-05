@@ -537,9 +537,13 @@ function journalReceiptSuffix(receipt: MaintenanceSpendReceipt | undefined): str
  */
 export function formatSpendBanner(preview: EmbeddingSpendPreview, gateUsd: number): string {
   const gate = gateUsd > 0 ? formatEstimatedUsd(gateUsd) : "off";
+  const estimate =
+    preview.estimatedUsd === null
+      ? PRICE_UNKNOWN_LABEL
+      : `estimated ${formatEstimatedUsd(preview.estimatedUsd)}`;
   return (
     `embedding spend: model ${preview.model ?? "unknown"}, ${preview.pendingChunks} chunks pending, ` +
-    `${preview.estimatedUsd === null ? PRICE_UNKNOWN_LABEL : `estimated ${formatEstimatedUsd(preview.estimatedUsd)}`} (gate: ${gate})`
+    `${estimate} (gate: ${gate})`
   );
 }
 
