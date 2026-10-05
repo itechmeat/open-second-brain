@@ -412,9 +412,21 @@ export class Store {
   }
 
   /**
-   * Atomically replace every chunk for a document. Old vec rows are
-   * removed first; FTS5 stays in sync via the chunks_ai/ad/au triggers.
-   * Returns the new chunk ids in `chunkIndex` order.
+   * Atomically replace every chunk for a document, carrying the stored
+   * vector of every unchanged chunk (same content hash, recorded model
+   * and dimension) and purging only the rest. FTS5 stays in sync via the
+   * chunks_ai/ad/au triggers. Returns the new ids and the carried count.
+   */
+  replaceDocumentChunks(
+    documentId: number,
+    input: ReadonlyArray<chunks.ChunkInput>,
+  ): chunks.ChunkReplacement {
+    return chunks.replaceDocumentChunks(this.db, this.vecExtensionLoaded, documentId, input);
+  }
+
+  /**
+   * {@link Store.replaceDocumentChunks}, returning only the new chunk
+   * ids in `chunkIndex` order.
    */
   replaceChunks(documentId: number, input: ReadonlyArray<chunks.ChunkInput>): number[] {
     return chunks.replaceChunks(this.db, this.vecExtensionLoaded, documentId, input);

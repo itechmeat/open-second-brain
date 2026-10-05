@@ -1,0 +1,252 @@
+/**
+ * Vector carry-over on edit (t_82c3b275, task 9).
+ *
+ * The defect pinned here: `replaceChunks` purged every stored vector of
+ * a document before it rewrote the chunks, so an edit to one paragraph
+ * re-embedded, and re-paid for, every paragraph that did not change.
+ * The rule now is that a new chunk whose `content_hash` equals an old
+ * chunk's hash in the same document keeps that chunk's vector, provided
+ * the old row's model and dimension equal the identity `index_state`
+ * records. Only the vectors that are not carried are purged.
+ *
+ * Covered: the pure multiset matcher (edit, move, duplicates), the
+ * store seam (carry, purge of the uncarried vec rows, the model and
+ * dimension guards, the unrecorded-identity guard, vec not loaded), the
+ * `embeddingsReused` tally of an index run, the embedder record audit on
+ * carried rows, and a KNN query that finds the carried chunk under its
+ * new id.
+ *
+ * Deliberately not covered: carry-over ACROSS documents (a paragraph
+ * moved into another note is re-embedded by design - the key is scoped
+ * to one document) and any change to the model-change lifecycle, which
+ * still clears every vector through `ensureEmbeddingModel`.
+ */
+
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+
+import { Store } from "../../../src/core/search/store.ts";
+import type { ChunkInput } from "../../../src/core/search/store/chunks.ts";
+import { readEmbedderRecordCensusSync } from "../../../src/core/search/store/embedder-audit.ts";
+import {
+  EMBEDDING_DIMENSION_STATE_KEY,
+  EMBEDDING_MODEL_STATE_KEY,
+} from "../../../src/core/search/store/state.ts";
+import { matchCarriedVectors } from "../../../src/core/search/store/vector-carry-over.ts";
+import { loadVecExtension } from "../../../src/core/search/store/vectors.ts";
+import type { ResolvedSearchConfig } from "../../../src/core/search/types.ts";
+import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
+import { createTempVault, makeConfig } from "../../helpers/search-fixtures.ts";
+import { sqliteVecLoadable } from "../../helpers/sqlite-vec.ts";
+
+const STORE_MODEL = "carry-model";
+const STORE_DIMENSION = 4;
+const NOTE_PATH = "Notes/carry.md";
+
+let vault: string;
+let dbPath: string;
+let cleanup: () => void;
+
+beforeEach(() => {
+  const v = createTempVault("vector-carry-over");
+  vault = v.vault;
+  dbPath = v.dbPath;
+  cleanup = v.cleanup;
+});
+
+afterEach(() => {
+  cleanup();
+});
+
+function storeConfig(): ResolvedSearchConfig {
+  return makeConfig({
+    vault,
+    dbPath,
+    semantic: {
+      enabled: true,
+      provider: "openai-compat",
+      baseUrl: "https://embeddings.invalid/v1",
+      model: STORE_MODEL,
+      apiKey: FAKE_PROVIDER_KEY,
+      dimension: STORE_DIMENSION,
+    },
+  });
+}
+
+function chunkInput(chunkIndex: number, contentHash: string): ChunkInput {
+  return {
+    chunkIndex,
+    content: `content ${contentHash}`,
+    contentHash,
+    startLine: chunkIndex + 1,
+    endLine: chunkIndex + 1,
+    tokenCount: 2,
+  };
+}
+
+function unitVector(seed: number): number[] {
+  const raw = [seed + 1, seed * 2 + 1, 3 - seed, 1];
+  const norm = Math.hypot(...raw);
+  return raw.map((v) => v / norm);
+}
+
+const SEED_HASHES = ["h0", "h1", "h2"] as const;
+
+/** A write store holding one document of three embedded chunks. */
+async function seededStore(): Promise<{ store: Store; docId: number; oldIds: number[] }> {
+  const store = await Store.open(storeConfig(), { mode: "write" });
+  const docId = store.upsertDocument({
+    path: NOTE_PATH,
+    title: null,
+    contentHash: "doc-v1",
+    mtime: 0,
+    size: 1,
+  });
+  const oldIds = store.replaceChunks(
+    docId,
+    SEED_HASHES.map((h, i) => chunkInput(i, h)),
+  );
+  oldIds.forEach((id, i) => {
+    store.vecUpsert(id, unitVector(i), STORE_MODEL, STORE_DIMENSION, `emb-${i}`);
+  });
+  return { store, docId, oldIds };
+}
+
+function vecRowCount(path: string): number {
+  const db = new Database(path, { readonly: true });
+  try {
+    if (loadVecExtension(db) === null) throw new Error("sqlite-vec failed to load in the probe");
+    return db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM chunk_vec").get()?.n ?? 0;
+  } finally {
+    db.close();
+  }
+}
+
+function old(hashes: ReadonlyArray<string>): Array<{ contentHash: string; ref: string }> {
+  return hashes.map((contentHash, i) => ({ contentHash, ref: `old-${i}` }));
+}
+
+describe("matchCarriedVectors", () => {
+  test("an edited chunk is the only unmatched position", () => {
+    const matches = matchCarriedVectors(old(["a", "b", "c"]), ["a", "b2", "c"]);
+    expect(matches.map((m) => [m.position, m.candidate.ref])).toEqual([
+      [0, "old-0"],
+      [2, "old-2"],
+    ]);
+  });
+
+  test("a moved chunk is matched at its new position", () => {
+    const matches = matchCarriedVectors(old(["a", "b", "c"]), ["c", "a", "b"]);
+    expect(matches.map((m) => [m.position, m.candidate.ref])).toEqual([
+      [0, "old-2"],
+      [1, "old-0"],
+      [2, "old-1"],
+    ]);
+  });
+
+  test("duplicated hashes match as a multiset in order", () => {
+    const matches = matchCarriedVectors(old(["a", "a", "b"]), ["a", "b", "a", "a"]);
+    expect(matches.map((m) => [m.position, m.candidate.ref])).toEqual([
+      [0, "old-0"],
+      [1, "old-2"],
+      [2, "old-1"],
+    ]);
+  });
+
+  test("no shared hash carries nothing", () => {
+    expect(matchCarriedVectors(old(["a"]), ["b"])).toEqual([]);
+  });
+});
+
+describe("replaceDocumentChunks carry-over", () => {
+  test("an edit keeps the vectors of the unchanged chunks and purges only the replaced one", async () => {
+    if (!sqliteVecLoadable()) return;
+    const { store, docId } = await seededStore();
+    const replaced = store.replaceDocumentChunks(docId, [
+      chunkInput(0, "h0"),
+      chunkInput(1, "h1-edited"),
+      chunkInput(2, "h2"),
+    ]);
+    const [first, edited, last] = replaced.chunkIds;
+    expect(replaced.embeddingsReused).toBe(2);
+    expect(store.getEmbeddingHash(first!)).toBe("emb-0");
+    expect(store.getEmbeddingHash(last!)).toBe("emb-2");
+    expect(store.getEmbeddingHash(edited!)).toBeNull();
+    expect(store.findChunksWithoutEmbeddings().map((p) => p.chunkId)).toEqual([edited!]);
+    expect(Array.from(store.embeddingForChunk(last!) ?? [])).toEqual(
+      Array.from(Float32Array.from(unitVector(2))),
+    );
+    const hits = store.semanticTopK(unitVector(2), { limit: 1 });
+    expect(hits.map((h) => h.chunkId)).toEqual([last!]);
+    await store.close();
+    expect(vecRowCount(dbPath)).toBe(2);
+    const census = readEmbedderRecordCensusSync(dbPath);
+    expect(census.verdict).toBe("audited");
+    if (census.verdict === "audited") expect(census.outcome).toBe("complete");
+  });
+
+  test("the plain replaceChunks form carries too and still returns the ids", async () => {
+    if (!sqliteVecLoadable()) return;
+    const { store, docId } = await seededStore();
+    const ids = store.replaceChunks(docId, [chunkInput(0, "h2")]);
+    expect(store.getEmbeddingHash(ids[0]!)).toBe("emb-2");
+    await store.close();
+    expect(vecRowCount(dbPath)).toBe(1);
+  });
+
+  test("a row whose model differs from the recorded identity is not carried", async () => {
+    if (!sqliteVecLoadable()) return;
+    const { store, docId } = await seededStore();
+    store.setState(EMBEDDING_MODEL_STATE_KEY, "another-model");
+    const replaced = store.replaceDocumentChunks(
+      docId,
+      SEED_HASHES.map((h, i) => chunkInput(i, h)),
+    );
+    expect(replaced.embeddingsReused).toBe(0);
+    expect(store.countEmbeddings()).toBe(0);
+    await store.close();
+    expect(vecRowCount(dbPath)).toBe(0);
+  });
+
+  test("a row whose dimension differs from the recorded identity is not carried", async () => {
+    if (!sqliteVecLoadable()) return;
+    const { store, docId } = await seededStore();
+    store.setState(EMBEDDING_DIMENSION_STATE_KEY, String(STORE_DIMENSION * 2));
+    const replaced = store.replaceDocumentChunks(
+      docId,
+      SEED_HASHES.map((h, i) => chunkInput(i, h)),
+    );
+    expect(replaced.embeddingsReused).toBe(0);
+    expect(store.countEmbeddings()).toBe(0);
+    await store.close();
+  });
+
+  test("nothing is carried when the embedding identity is unrecorded", async () => {
+    if (!sqliteVecLoadable()) return;
+    const { store, docId } = await seededStore();
+    store.deleteState(EMBEDDING_MODEL_STATE_KEY);
+    const replaced = store.replaceDocumentChunks(
+      docId,
+      SEED_HASHES.map((h, i) => chunkInput(i, h)),
+    );
+    expect(replaced.embeddingsReused).toBe(0);
+    expect(store.countEmbeddings()).toBe(0);
+    await store.close();
+  });
+
+  test("with vec not loaded the replacement behaves as before: nothing carried", async () => {
+    if (!sqliteVecLoadable()) return;
+    const seeded = await seededStore();
+    await seeded.store.close();
+    const store = await Store.open(storeConfig(), { mode: "write", loadVec: false });
+    expect(store.vecLoaded()).toBe(false);
+    const replaced = store.replaceDocumentChunks(
+      seeded.docId,
+      SEED_HASHES.map((h, i) => chunkInput(i, h)),
+    );
+    expect(replaced.embeddingsReused).toBe(0);
+    expect(replaced.chunkIds).toHaveLength(3);
+    expect(store.countEmbeddings()).toBe(0);
+    await store.close();
+  });
+});
