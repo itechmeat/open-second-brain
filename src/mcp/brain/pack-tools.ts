@@ -75,7 +75,7 @@ import { readableAtContextReachOrUndefined } from "./reach-readable.ts";
 import { reachView } from "../../core/brain/reach-view.ts";
 import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { vaultPathField } from "../vault-path-field.ts";
-import { MCP_QUERY_MAX_CHARS, searchErrorToMcp } from "../search-tools.ts";
+import { exceedsMcpQueryCap, MCP_QUERY_MAX_CHARS, searchErrorToMcp } from "../search-tools.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import {
   AGENT_SCOPE_SCHEMA,
@@ -200,7 +200,7 @@ async function toolBrainContextPack(
       );
     }
   }
-  if (query !== undefined && query.length > MCP_QUERY_MAX_CHARS) {
+  if (query !== undefined && exceedsMcpQueryCap(query)) {
     throw new MCPError(
       INVALID_PARAMS,
       `brain_context_pack: argument 'query' exceeds ${MCP_QUERY_MAX_CHARS} characters`,

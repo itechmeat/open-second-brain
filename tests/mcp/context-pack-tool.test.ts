@@ -395,6 +395,49 @@ describe("brain_context_pack tool — ranked query mode", () => {
     expect(schema.properties["query"]!.maxLength).toBe(2000);
   });
 
+  test("a query of exactly 2000 characters is not refused for its length", async () => {
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const r = await callPackRaw(server, { max_tokens: 10_000, query: "x".repeat(2000) });
+    expect(r.error?.message ?? "").not.toContain("exceeds 2000 characters");
+  });
+
+  // JSON Schema `maxLength` counts code points, so the enforced cap does
+  // too: a character outside the Basic Multilingual Plane is one
+  // character, not the two UTF-16 units of its surrogate pair.
+  const ASTRAL = "\u{1D11E}";
+
+  test("the cap counts code points: 1001 astral characters are accepted", async () => {
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const r = await callPackRaw(server, {
+      max_tokens: 10_000,
+      query: ASTRAL.repeat(1001),
+      query_mode: "ranked",
+    });
+    expect(r.error?.message ?? "").not.toContain("exceeds 2000 characters");
+  });
+
+  test("the cap counts code points: 2001 astral characters are refused", async () => {
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const r = await callPackRaw(server, {
+      max_tokens: 10_000,
+      query: ASTRAL.repeat(2001),
+      query_mode: "ranked",
+    });
+    expect(r.error?.code).toBe(-32602);
+    expect(r.error!.message).toContain("exceeds 2000 characters");
+  });
+
+  test("the cap applies in every query mode, the default substring reading included", async () => {
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const r = await callPackRaw(server, { max_tokens: 10_000, query: "x".repeat(2001) });
+    expect(r.error?.code).toBe(-32602);
+    expect(r.error!.message).toContain("exceeds 2000 characters");
+  });
+
   test("an unknown query_mode names the accepted set", async () => {
     const server = new MCPServer({ vault, configPath });
     await initialize(server);

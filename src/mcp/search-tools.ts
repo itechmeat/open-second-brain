@@ -108,6 +108,21 @@ const MCP_LIMIT_MAX = 50;
 
 /** The longest `query` a recall tool accepts, advertised and enforced from here. */
 export const MCP_QUERY_MAX_CHARS = 2000;
+
+/**
+ * Whether `query` is longer than {@link MCP_QUERY_MAX_CHARS}, counted in
+ * code points as the advertised JSON Schema `maxLength` counts them: a
+ * character outside the Basic Multilingual Plane is one character, not the
+ * two UTF-16 units `String.length` would see.
+ */
+export function exceedsMcpQueryCap(query: string): boolean {
+  if (query.length <= MCP_QUERY_MAX_CHARS) return false;
+  let count = 0;
+  for (const _ of query) {
+    if (++count > MCP_QUERY_MAX_CHARS) return true;
+  }
+  return false;
+}
 const MCP_CONTENT_MAX = 600;
 const SEARCH_TIMEOUT_MS = 10_000;
 /** Surfaced rows named as source refs on one recall-telemetry record. */
@@ -926,7 +941,7 @@ async function toolBrainSearch(
   if (typeof query !== "string" || query.trim() === "") {
     throw new MCPError(INVALID_PARAMS, "missing required argument: query");
   }
-  if (query.length > MCP_QUERY_MAX_CHARS) {
+  if (exceedsMcpQueryCap(query)) {
     throw new MCPError(
       INVALID_PARAMS,
       `argument 'query' exceeds ${MCP_QUERY_MAX_CHARS} characters`,
