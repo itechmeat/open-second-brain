@@ -533,8 +533,9 @@ function resolveRegistryProvider(
  * registered profile `embedding_provider` selects (by the same env-over-
  * config rule and registry lookup {@link resolveSearchConfig} expands),
  * the vault's registry and the env. Fail-soft like the expansion itself:
- * a registry that cannot be read is an empty one, and a name it does not
- * hold is no profile.
+ * `loadProviderRegistry` reads a missing or malformed registry as an empty
+ * one, so the report names exactly the profiles the resolver can see, and a
+ * name the registry does not hold is no profile.
  */
 export function resolveCredentialContext(opts: {
   vault: string;
@@ -551,12 +552,7 @@ export function resolveCredentialContext(opts: {
     "OPEN_SECOND_BRAIN_EMBEDDING_PROVIDER",
     "embedding_provider",
   );
-  let registry: ReadonlyArray<ProviderProfile> = [];
-  try {
-    registry = loadProviderRegistry(opts.vault);
-  } catch {
-    registry = [];
-  }
+  const registry: ReadonlyArray<ProviderProfile> = loadProviderRegistry(opts.vault);
   const activeProfile =
     rawProvider !== null &&
     !BUILTIN_PROVIDERS.has(rawProvider) &&
