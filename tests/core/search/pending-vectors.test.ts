@@ -44,6 +44,8 @@ import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtu
 import { sqliteVecLoadable } from "../../helpers/sqlite-vec.ts";
 import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
 
+const VEC_LOADABLE = sqliteVecLoadable();
+
 let vault: string;
 let dbPath: string;
 let cleanup: () => void;
@@ -139,8 +141,7 @@ test("a file that is not a readable index is unrecorded with the reason the open
   expect(peek.kind).toBe("unreadable");
 });
 
-test("a fully embedded vault emits no reindex recommendation", async () => {
-  if (!sqliteVecLoadable()) return;
+test.skipIf(!VEC_LOADABLE)("a fully embedded vault emits no reindex recommendation", async () => {
   writeMd(vault, "a.md", "# A\n\nA note with vectors.");
   // `fake-model` is in no price table; declaring its price keeps the
   // unpriced-model hint out of a report that must say nothing at all.

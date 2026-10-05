@@ -360,3 +360,14 @@ test("brain_search surfaces authoredAt when present and omits it otherwise", asy
   expect(dated!["authoredAt"]).toBe(Math.floor(Date.parse("2026-05-20T10:00:00Z") / 1000));
   expect("authoredAt" in plain!).toBe(false);
 });
+
+test("brain_search counts its query cap in code points, as the advertised maxLength does", async () => {
+  const astral = "\u{1F600}";
+  const server = makeServer();
+  await initialize(server);
+  const within = (await call(server, "brain_search", { query: astral.repeat(1001) })) as any;
+  expect(within?.error?.message ?? "").not.toContain("exceeds 2000 characters");
+  const over = (await call(server, "brain_search", { query: astral.repeat(2001) })) as any;
+  expect(over?.error?.code).toBe(-32602);
+  expect(over.error.message).toContain("exceeds 2000 characters");
+});
