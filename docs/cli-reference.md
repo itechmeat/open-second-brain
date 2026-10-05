@@ -2082,7 +2082,11 @@ built-in `openai-compat`, the offline `local` feature-hashing embedder
 (no cloud, no key, no model download; `embedding_dimension` default 256),
 `disabled`, or any name registered via `o2b search provider add`.
 `embedding_cost_gate_usd` (default 0 = off) refuses an embedding run whose
-estimated spend exceeds it unless `--force-cost`.
+estimated spend exceeds it unless `--force-cost`. Since v1.72.0 a blank
+(whitespace-only) value of the gate or of its env twin
+`OPEN_SECOND_BRAIN_EMBEDDING_COST_GATE` fails config resolution with
+`INVALID_INPUT` instead of reading as a gate of 0, and a blank
+`search_rerank_min_score` is refused the same way.
 
 Embedding prices (since v1.72.0). Every estimate names where its price
 came from: `builtin` (the frozen price table, and the local embedder,
