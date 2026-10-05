@@ -68,11 +68,13 @@ test("an operator declaration re-prices a table model and may declare it free", 
 
 test("a declaration for another model leaves the table answer unchanged", () => {
   const override = { model: "other-model", usdPerMtok: OPERATOR_RATE };
-  expect(resolveEmbeddingPrice(TABLE_MODEL, override)).toEqual(resolveEmbeddingPrice(TABLE_MODEL));
-  expect(resolveEmbeddingPrice(UNLISTED_MODEL, override)).toEqual(
-    resolveEmbeddingPrice(UNLISTED_MODEL),
-  );
-  expect(resolveEmbeddingPrice(null, override)).toEqual(resolveEmbeddingPrice(null));
+  const unknown = { usdPerMtok: null, source: EMBEDDING_PRICE_SOURCE.unknown };
+  expect(resolveEmbeddingPrice(TABLE_MODEL, override)).toEqual({
+    usdPerMtok: TABLE_RATE,
+    source: EMBEDDING_PRICE_SOURCE.builtin,
+  });
+  expect(resolveEmbeddingPrice(UNLISTED_MODEL, override)).toEqual(unknown);
+  expect(resolveEmbeddingPrice(null, override)).toEqual(unknown);
 });
 
 test("estimateCostUsd scales tokens by the quoted rate", () => {
