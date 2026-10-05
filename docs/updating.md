@@ -49,7 +49,9 @@ reference it finds (`removed-tool-reference`).
 
 ## Upgrading to 1.72.0
 
-No step is required unless you set a positive `embedding_cost_gate_usd`.
+No step is required unless you set a positive `embedding_cost_gate_usd`
+or an integration reads the JSON embedding cost estimates, which can now
+be `null` whatever the gate (see below).
 
 **A positive cost gate now refuses a model with no known price.**
 Before this release, a model missing from the built-in price table was
