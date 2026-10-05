@@ -39,7 +39,7 @@ import {
   semanticCapabilityLabel,
 } from "../search/capability-tier.ts";
 import type { EmbeddingProvider } from "../search/embeddings/contract.ts";
-import { activeSpendQuote, formatEstimatedUsd } from "../search/embedding-spend.ts";
+import { activeSpendQuote, COST_GATE_KEY, formatEstimatedUsd } from "../search/embedding-spend.ts";
 import { EMBEDDING_PRICE_SOURCE, type EmbeddingPriceSource } from "../search/embeddings/pricing.ts";
 import { makeProvider } from "../search/embeddings/provider.ts";
 import { estimateCostUsd, estimateTokens } from "../search/embeddings/signature.ts";
@@ -266,7 +266,7 @@ export async function loadBeliefSemanticRelevance(
       throw new SearchError(
         "EMBEDDING_COST_UNPRICED",
         "semantic belief order refused: the embedding model has no known price " +
-          "and embedding_cost_gate_usd is positive",
+          `and ${COST_GATE_KEY} is positive`,
       );
     }
     const [queryVector = []] = await provider.embed([query], "query");
