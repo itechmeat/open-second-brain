@@ -114,12 +114,14 @@ test.skipIf(!VEC_LOADABLE)(
     ) as Record<string, unknown>;
     expect(payload["gate_blocked"]).toBe(true);
     expect(payload["gate_reason"]).toBe("unpriced");
-    expect(payload["next_command"]).toBe("o2b search vector-backfill --apply --force-cost");
+    // The advised step stays unforced; only the remedy line names the bypass.
+    expect(payload["next_command"]).toBe("o2b search vector-backfill --apply");
     const human = await cli(config, ["search", "vector-backfill"]);
     expect(human).toContain(
       "cost gate: would refuse (unpriced); add --force-cost or set " +
         "embedding_price_model and embedding_price_usd_per_mtok",
     );
+    expect(human).toContain("next: o2b search vector-backfill --apply\n");
   },
 );
 

@@ -72,7 +72,7 @@ import {
   planVectorBackfill,
   type VectorBackfillResult,
 } from "../../../core/search/vector-backfill.ts";
-import { emitNextStep } from "../../advisory-rail.ts";
+import { advisoryIsLegal, emitNextStep, type AdvisoryStream } from "../../advisory-rail.ts";
 import { shellQuote } from "../../cron-recipe.ts";
 import { onInterrupt, reportInterrupted } from "../../interrupt.ts";
 import { info, ok } from "../../output.ts";
@@ -124,8 +124,67 @@ export function scopedNextCommand(
   ].join(" ");
 }
 
-/** The line that replaces a scoped next step Windows cannot run as printed. */
-const REPEAT_PATH_FLAGS_HINT = `  repeat your --${PATH_FLAG} flags on that command`;
+/**
+ * The line that replaces a scoped next step Windows cannot run as
+ * printed. Deliberately not a command: a scope-free `--apply` copied as
+ * printed would widen the spend to the whole vault.
+ */
+export const RERUN_WITH_SCOPE_LINE = `next: rerun this command with --apply and the same --${PATH_FLAG} flags`;
+
+/** The next step a backfill run advises, resolved before anything prints. */
+export interface BackfillNextStep {
+  /** The registered exit the advice names. */
+  readonly exitCode: string;
+  /**
+   * The runnable command, also the `next_command` JSON value. Absent
+   * when the code has no command or when the scope cannot be quoted on
+   * this platform.
+   */
+  readonly command: string | undefined;
+  /** True when a scope was dropped because the platform cannot quote it. */
+  readonly scopeDropped: boolean;
+}
+
+/**
+ * Resolve the advice for `result`. A scoped run repeats its scope: the
+ * registered `--apply` alone would widen the spend to the whole vault.
+ * The command stays UNFORCED even when the gate would refuse it: the
+ * gate is the operator's decision, so `--force-cost` is named only in
+ * the human remedy line, never in a command a machine reader runs.
+ */
+export function backfillNextStep(
+  result: Pick<VectorBackfillResult, "capability" | "pathPrefixes">,
+  platform: NodeJS.Platform = process.platform,
+): BackfillNextStep {
+  // WHICH exit depends on what is in the operator's way. Naming
+  // `--apply` while the credential is missing would advise a command that
+  // cannot succeed, so a blocked tier names the tier's own exit instead.
+  const exitCode = semanticCapabilityIsBlocked(result.capability)
+    ? result.capability.code
+    : VECTORS_PENDING;
+  const registered = resolveNextStep(exitCode)?.nextCommand;
+  if (registered === undefined || exitCode !== VECTORS_PENDING) {
+    return { exitCode, command: registered, scopeDropped: false };
+  }
+  const scoped = scopedNextCommand(registered, result.pathPrefixes, platform);
+  return scoped === null
+    ? { exitCode, command: undefined, scopeDropped: true }
+    : { exitCode, command: scoped, scopeDropped: false };
+}
+
+/**
+ * Print `advice` on a human stream: the command, or, for a dropped
+ * scope, the one rerun line that names no runnable command.
+ */
+export function emitBackfillNextStep(advice: BackfillNextStep, stream: AdvisoryStream): void {
+  if (!advice.scopeDropped) {
+    emitNextStep(advice.exitCode, stream, advice.command);
+    return;
+  }
+  if (resolveNextStep(advice.exitCode) !== null && advisoryIsLegal(stream)) {
+    info(RERUN_WITH_SCOPE_LINE);
+  }
+}
 
 /** JSON payload shape. Snake case, matching every other search verb. */
 function jsonForResult(result: VectorBackfillResult): Record<string, unknown> {
@@ -261,34 +320,8 @@ export async function cmdSearchVectorBackfill(argv: ReadonlyArray<string>): Prom
     }
   }
 
-  // Work remains exactly when the run did not consume it.
+  const advice = backfillNextStep(result);
   const pendingAfter = result.pending - result.embedded;
-  // WHICH exit, though, depends on what is in the operator's way. Naming
-  // `--apply` while the credential is missing would advise a command that
-  // cannot succeed, so a blocked tier names the tier's own exit instead.
-  const exitCode = semanticCapabilityIsBlocked(result.capability)
-    ? result.capability.code
-    : VECTORS_PENDING;
-  // A scoped run repeats its scope in the advice: the registered
-  // `--apply` alone would widen the spend to the whole vault. An
-  // unregistered code has no command, so the JSON key stays absent. A
-  // run the gate would refuse names `--force-cost` too, so the advice is
-  // never a command already known to fail.
-  const registered = resolveNextStep(exitCode)?.nextCommand;
-  const pendingCommand =
-    registered !== undefined && exitCode === VECTORS_PENDING
-      ? result.blocked
-        ? `${registered} ${FORCE_COST_FLAG}`
-        : registered
-      : undefined;
-  const scoped =
-    pendingCommand !== undefined
-      ? scopedNextCommand(pendingCommand, result.pathPrefixes)
-      : registered;
-  // A scope the platform cannot quote drops the command from the JSON
-  // and prints the scope-free one with a reminder to repeat the scope.
-  const scopeDropped = scoped === null;
-  const nextCommand = scoped ?? pendingCommand;
 
   // A typo'd scope has nothing pending and would otherwise read like a
   // fully embedded one; stderr, so the JSON on stdout stays parseable.
@@ -299,17 +332,14 @@ export async function cmdSearchVectorBackfill(argv: ReadonlyArray<string>): Prom
     process.stdout.write(
       JSON.stringify({
         ...jsonForResult(result),
-        ...(pendingAfter > 0 && nextCommand !== undefined && !scopeDropped
-          ? { [NEXT_COMMAND_KEY]: nextCommand }
+        ...(pendingAfter > 0 && advice.command !== undefined
+          ? { [NEXT_COMMAND_KEY]: advice.command }
           : {}),
       }) + "\n",
     );
   } else {
     await renderHuman(result);
   }
-  if (pendingAfter > 0) {
-    const emission = emitNextStep(exitCode, searchAdvisoryStream(argv, jsonRequested), nextCommand);
-    if (scopeDropped && emission.line !== null) info(REPEAT_PATH_FLAGS_HINT);
-  }
+  if (pendingAfter > 0) emitBackfillNextStep(advice, searchAdvisoryStream(argv, jsonRequested));
   return 0;
 }

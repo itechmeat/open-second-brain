@@ -24,7 +24,12 @@ import { indexVault } from "../../src/core/search/indexer.ts";
 import { SearchError } from "../../src/core/search/search-error.ts";
 import { Store } from "../../src/core/search/store.ts";
 import { planVectorBackfill } from "../../src/core/search/vector-backfill.ts";
-import { scopedNextCommand } from "../../src/cli/search/verbs/vector-backfill.ts";
+import {
+  backfillNextStep,
+  emitBackfillNextStep,
+  RERUN_WITH_SCOPE_LINE,
+  scopedNextCommand,
+} from "../../src/cli/search/verbs/vector-backfill.ts";
 import { FAKE_PROVIDER_KEY } from "../helpers/fake-credentials.ts";
 import { startFakeHttp, type FakeHttp } from "../helpers/fake-http.ts";
 import { runCli } from "../helpers/run-cli.ts";
@@ -378,3 +383,37 @@ test("a plain scope stays in the next step on every platform", () => {
     `${APPLY_COMMAND} --path 'Notes/with space/'`,
   );
 });
+
+test.skipIf(!VEC_LOADABLE)(
+  "a gate-blocked scope Windows cannot quote advises no runnable command",
+  async () => {
+    await seed();
+    writeMd(vault, "a b/d.md", "# D\n\nA note in a folder whose name has a space.");
+    await indexVault(semanticConfig());
+    // Priced far above a one-cent gate, so the unforced run is blocked.
+    const result = await planVectorBackfill(semanticConfig(0.000_001), { pathPrefixes: ["a b/"] });
+    expect(result.blocked).toBe(true);
+    expect(result.pending).toBeGreaterThan(0);
+
+    const advice = backfillNextStep(result, "win32");
+    expect(advice.command).toBeUndefined();
+    const written: string[] = [];
+    const spy = spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      written.push(String(chunk));
+      return true;
+    });
+    try {
+      emitBackfillNextStep(advice, {
+        command: "search",
+        argv: ["vector-backfill"],
+        jsonRequested: false,
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    const lines = written.join("").split("\n");
+    expect(lines).toContain(RERUN_WITH_SCOPE_LINE);
+    expect(lines.some((line) => /^next: .*--apply( --force-cost)?$/u.test(line))).toBe(false);
+    expect(lines.some((line) => line.includes("--force-cost"))).toBe(false);
+  },
+);

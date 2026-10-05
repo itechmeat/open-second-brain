@@ -1815,8 +1815,8 @@ o2b search vector-backfill    Run the vector phase ALONE for indexed chunks that
                               so `--path Brain/preferences/` prices and embeds only belief notes.
                               The text report adds a `scope:` line and the next step it names keeps
                               the scope. On Windows a prefix that would need quoting is not
-                              spliced into the advice: next_command is omitted and the text names
-                              the scope-free command with a reminder to repeat your --path flags.
+                              spliced into the advice: next_command is omitted and the text says
+                              `next: rerun this command with --apply and the same --path flags`.
                               The prefix is a raw string prefix, not a directory: end a directory
                               with `/`, or `Brain/pref` also matches `Brain/preferences-old/`. A
                               leading `./` is dropped and `\` becomes `/`; an empty prefix is
@@ -1834,8 +1834,8 @@ o2b search vector-backfill    Run the vector phase ALONE for indexed chunks that
                               the configured gate would refuse the run unforced, --json adds
                               gate_blocked: true and gate_reason (unpriced or over_cap), the
                               dry-run text report adds `cost gate: would refuse (<reason>); add
-                              --force-cost or ...` naming the price pair or embedding_cost_gate_usd,
-                              and the next step it names carries --force-cost. An --apply run that
+                              --force-cost or ...` naming the price pair or embedding_cost_gate_usd;
+                              the next step it names stays unforced. An --apply run that
                               reached the provider adds spend {model, tokens, estimated_usd,
                               price_source, forced}, its receipt. Both are absent otherwise
                               Idempotent; an --apply run that wrote vectors appends one
