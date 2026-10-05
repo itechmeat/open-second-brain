@@ -260,3 +260,23 @@ test.skipIf(!VEC_LOADABLE)("an unsafe --path exits non-zero naming the prefix", 
   expect(run.returncode).not.toBe(0);
   expect(run.stderr).toContain("../outside/");
 });
+
+test.skipIf(!VEC_LOADABLE).each([
+  ["", []],
+  ["", ["--apply"]],
+  ["   ", ["--apply"]],
+] as const)(
+  "an empty --path %p exits INVALID_INPUT and embeds nothing (%p)",
+  async (prefix, extra) => {
+    await seed();
+    const config = await cliConfig();
+    const before = await planVectorBackfill(semanticConfig());
+    const run = await backfillCli(config, ["--path", prefix, ...extra]);
+    expect(run.returncode).toBe(2);
+    expect(run.stderr).toContain("[INVALID_INPUT]");
+    expect(run.stderr).toContain("path prefix is empty");
+    expect(run.stderr).toContain(JSON.stringify(prefix));
+    const after = await planVectorBackfill(semanticConfig());
+    expect(after.pending).toBe(before.pending);
+  },
+);

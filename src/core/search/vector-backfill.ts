@@ -40,6 +40,7 @@ import { planEmbeddingSpend, type EmbeddingGateReason } from "./embedding-spend.
 import { EMBEDDING_PRICE_SOURCE, type EmbeddingPriceSource } from "./embeddings/pricing.ts";
 import { runEmbeddingPhase, type EmbeddingPhaseTally } from "./indexer.ts";
 import { assertSafePathPrefix } from "./pipeline/request.ts";
+import { SearchError } from "./search-error.ts";
 import { Store } from "./store.ts";
 import type { PendingVectorScope } from "./store/chunks.ts";
 import type { ResolvedSearchConfig } from "./types.ts";
@@ -118,9 +119,22 @@ export interface VectorBackfillResult {
 /** The argument name an unsafe prefix is refused under. */
 const PATH_PREFIX_ARGUMENT = "path prefix";
 
-/** Validate every prefix by name; an empty list scopes nothing. */
+/**
+ * Validate every prefix by name; an empty list scopes nothing. An empty
+ * or blank prefix is refused rather than skipped: it would match every
+ * document and widen a scoped run to the whole vault while the report
+ * still echoed a scope.
+ */
 function pendingScope(pathPrefixes: ReadonlyArray<string>): PendingVectorScope | undefined {
-  for (const prefix of pathPrefixes) assertSafePathPrefix(prefix, PATH_PREFIX_ARGUMENT);
+  for (const prefix of pathPrefixes) {
+    if (prefix.trim() === "") {
+      throw new SearchError(
+        "INVALID_INPUT",
+        `${PATH_PREFIX_ARGUMENT} is empty: ${JSON.stringify(prefix)}`,
+      );
+    }
+    assertSafePathPrefix(prefix, PATH_PREFIX_ARGUMENT);
+  }
   return pathPrefixes.length > 0 ? { pathPrefixes } : undefined;
 }
 
