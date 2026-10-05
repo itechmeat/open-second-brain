@@ -29,6 +29,10 @@ import {
 import { indexVault, resolveSearchConfig } from "../../../src/core/search/index.ts";
 import { Store } from "../../../src/core/search/store.ts";
 import {
+  resolveEmbeddingPrice,
+  type KnownPriceQuote,
+} from "../../../src/core/search/embeddings/pricing.ts";
+import {
   estimateCostUsd,
   estimateTokens,
   LOCAL_EMBEDDING_MODEL,
@@ -37,6 +41,13 @@ import { SearchError } from "../../../src/core/search/types.ts";
 import type { ResolvedSearchConfig } from "../../../src/core/search/types.ts";
 import { startFakeHttp, type FakeHttp } from "../../helpers/fake-http.ts";
 import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
+
+/** The builtin quote of the table model the gate fixtures price against. */
+const TABLE_QUOTE: KnownPriceQuote = (() => {
+  const quote = resolveEmbeddingPrice("text-embedding-3-small");
+  if (quote.usdPerMtok === null) throw new Error("text-embedding-3-small lost its table price");
+  return quote;
+})();
 
 let tmp: string;
 let vault: string;
@@ -108,7 +119,7 @@ test("a vault with no index cannot spend: null", async () => {
 test("pending chunks preview the kernel's own numbers at the resolved model", async () => {
   const contents = ["alpha beta gamma delta", "second chunk of prose"];
   const tokens = estimateTokens(contents);
-  const usd = estimateCostUsd(tokens, "text-embedding-3-small");
+  const usd = estimateCostUsd(tokens, TABLE_QUOTE);
   // A positive gate set BELOW the kernel's estimate: the run would be
   // refused without a forced bypass, and the preview says so.
   const config = configWith({
@@ -273,7 +284,7 @@ test("a positive gate refuses unforced and records nothing; forced records the b
       expect(forced.spend?.model).toBe("text-embedding-3-small");
       expect(forced.spend?.tokens).toBe(estimateTokens(contents));
       expect(forced.spend?.estimatedUsd).toBe(
-        estimateCostUsd(forced.spend?.tokens ?? 0, "text-embedding-3-small"),
+        estimateCostUsd(forced.spend?.tokens ?? 0, TABLE_QUOTE),
       );
       expect(forced.spend?.estimatedUsd).toBeGreaterThan(0);
       expect(server.callCount()).toBeGreaterThan(0);

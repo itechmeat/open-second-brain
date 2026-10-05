@@ -149,14 +149,12 @@ export function findEmbeddingPreset(model: string): EmbeddingModelPreset | null 
  * The input window declared for `model`, or `null` when this table does
  * not declare one.
  *
- * `null` means UNKNOWN, and every caller must treat it as such. It is
- * deliberately NOT the shape {@link pricePerMillionTokens} uses, which
- * answers 0 for an unlisted model so the cost gate can never falsely
- * block: an unknown price is safe to treat as free because the
- * consequence of the fallback is that a gate declines to fire. An unknown
- * window has the opposite polarity - treating it as "fits" would report a
- * passing check for a condition nobody measured, which is the misleading
- * silence this census exists to remove.
+ * `null` means UNKNOWN, and every caller must treat it as such. This is
+ * the same polarity the price resolver (`resolveEmbeddingPrice` in
+ * `pricing.ts`) uses for an unlisted model: treating an unknown window as
+ * "fits", like treating an unknown price as free, would report a passing
+ * check for a condition nobody measured, which is the misleading silence
+ * this census exists to remove.
  *
  * Structural lookup by exact model string only. There is no family
  * heuristic here on purpose: `e5` prefixes are a property of the

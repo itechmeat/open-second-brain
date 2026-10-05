@@ -64,9 +64,8 @@
  *     validation and this tool's own onboarding recommends a preview model
  *     that no catalog here carries, so off-survey is the NORMAL case. This
  *     is the same polarity `declaredInputWindowTokens` chose for an
- *     unlisted window and the opposite of `pricePerMillionTokens`, which
- *     may answer 0 for an unknown model only because its fallback makes a
- *     gate DECLINE to fire.
+ *     unlisted window and `resolveEmbeddingPrice` chose for an unlisted
+ *     price: unknown is reported as unknown, never as a passing value.
  *
  * ## What an entry may honestly claim
  *

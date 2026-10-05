@@ -36,7 +36,8 @@
  */
 
 import { resolveSemanticCapability, type SemanticCapability } from "./capability-tier.ts";
-import { estimateCostUsd, estimateTokens, pricePerMillionTokens } from "./embeddings/signature.ts";
+import { resolveEmbeddingPrice } from "./embeddings/pricing.ts";
+import { estimateCostUsd, estimateTokens } from "./embeddings/signature.ts";
 import { runEmbeddingPhase } from "./indexer.ts";
 import { Store } from "./store.ts";
 import type { ResolvedSearchConfig } from "./types.ts";
@@ -120,7 +121,8 @@ async function planVectorBackfillRun(
     const chunksTotal = store.counts().chunks;
     const model = config.semantic.model;
     const tokens = estimateTokens(pendingChunks.map((c) => c.content));
-    const estimatedCostUsd = estimateCostUsd(tokens, model);
+    const price = resolveEmbeddingPrice(model);
+    const estimatedCostUsd = estimateCostUsd(tokens, price) ?? 0;
     const tally = { embeddingsComputed: 0, embeddingsRetries: 0 };
 
     if (apply && pendingChunks.length > 0) {
@@ -143,7 +145,7 @@ async function planVectorBackfillRun(
       // Whether the MODEL has a price, not whether this run costs
       // anything: an empty pending set costs nothing and that is not the
       // same statement as "the price of this model is unknown".
-      costKnown: pricePerMillionTokens(model) > 0,
+      costKnown: price.usdPerMtok !== null && price.usdPerMtok > 0,
     });
   } finally {
     await store.close();

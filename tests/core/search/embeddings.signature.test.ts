@@ -2,9 +2,7 @@ import { test, expect } from "bun:test";
 
 import {
   embeddingSignature,
-  pricePerMillionTokens,
   estimateTokens,
-  estimateCostUsd,
   isStaleSignature,
   signatureIdentityKnown,
   EMBEDDING_PRICING,
@@ -44,16 +42,6 @@ test("two identities with the same fields share a signature; different dim diffe
   expect(a).not.toBe(c);
 });
 
-test("pricePerMillionTokens returns a positive rate for a known remote model", () => {
-  expect(pricePerMillionTokens("text-embedding-3-small")).toBeGreaterThan(0);
-});
-
-test("pricePerMillionTokens is 0 for the local model and for unknown models", () => {
-  expect(pricePerMillionTokens(LOCAL_EMBEDDING_MODEL)).toBe(0);
-  expect(pricePerMillionTokens("some-model-nobody-priced")).toBe(0);
-  expect(pricePerMillionTokens(null)).toBe(0);
-});
-
 test("local model is present in the pricing table at 0", () => {
   expect(EMBEDDING_PRICING[LOCAL_EMBEDDING_MODEL]).toBe(0);
 });
@@ -65,18 +53,6 @@ test("estimateTokens sums a chars/4 heuristic and rounds up", () => {
   expect(estimateTokens(["abcde"])).toBe(2); // ceil(5/4)
   expect(estimateTokens([])).toBe(0);
   expect(estimateTokens(["", ""])).toBe(0);
-});
-
-test("estimateCostUsd scales tokens by the per-million rate", () => {
-  // 1,000,000 tokens * rate == rate USD.
-  const rate = pricePerMillionTokens("text-embedding-3-small");
-  expect(estimateCostUsd(1_000_000, "text-embedding-3-small")).toBeCloseTo(rate, 9);
-  expect(estimateCostUsd(500_000, "text-embedding-3-small")).toBeCloseTo(rate / 2, 9);
-});
-
-test("estimateCostUsd is 0 for local/unknown models regardless of token count", () => {
-  expect(estimateCostUsd(10_000_000, LOCAL_EMBEDDING_MODEL)).toBe(0);
-  expect(estimateCostUsd(10_000_000, "unknown")).toBe(0);
 });
 
 test("isStaleSignature is true only when active and stored differ", () => {

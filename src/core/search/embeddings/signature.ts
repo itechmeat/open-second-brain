@@ -11,6 +11,8 @@
  * spend, and compare two signatures for staleness.
  */
 
+import { resolveEmbeddingPrice, type KnownPriceQuote, type PriceQuote } from "./pricing.ts";
+
 /**
  * Dimension field of a NAMED model whose dimension is left to the model
  * (no `embedding_dimension` configured). The model fixes its own output
@@ -32,7 +34,8 @@ export const LOCAL_EMBEDDING_MODEL = "hashing-ngram-v1";
 /** Sentinel for a null model/dimension so signatures stay parseable. */
 const NULL_FIELD = "?";
 
-function canonicalToken(raw: string): string {
+/** NFC, trim, lowercase: the one normalisation for identity and price keys. */
+export function canonicalToken(raw: string): string {
   return raw.normalize("NFC").trim().toLowerCase();
 }
 
@@ -77,11 +80,14 @@ export function signatureIdentityKnown(signature: string): boolean {
 }
 
 /**
- * Best-effort embedding price in USD per million input tokens, keyed by
- * model name. Rates drift as providers change pricing, so the table is
- * deliberately small and any model NOT listed is treated as free
- * (price 0) - the cost gate must never falsely block on a model whose
- * rate we do not know. The local embedder is listed explicitly at 0.
+ * Builtin embedding prices in USD per million input tokens, keyed by
+ * canonical model name. Rates drift as providers change pricing, so the
+ * table is deliberately small. A model NOT listed has an UNKNOWN price,
+ * never a price of 0: `resolveEmbeddingPrice` (`pricing.ts`) reports it
+ * as unknown, an explicit positive cost gate refuses to spend on it, and
+ * the operator can state its rate with the `embedding_price_model` /
+ * `embedding_price_usd_per_mtok` pair, which also wins over this table.
+ * The local embedder is listed explicitly at 0, so it is known to be free.
  */
 export const EMBEDDING_PRICING: Readonly<Record<string, number>> = Object.freeze({
   [LOCAL_EMBEDDING_MODEL]: 0,
@@ -89,13 +95,6 @@ export const EMBEDDING_PRICING: Readonly<Record<string, number>> = Object.freeze
   "text-embedding-3-large": 0.13,
   "text-embedding-ada-002": 0.1,
 });
-
-/** Per-million-token price for a model; 0 for the local/unknown/null case. */
-export function pricePerMillionTokens(model: string | null): number {
-  if (model === null) return 0;
-  const rate = EMBEDDING_PRICING[canonicalToken(model)];
-  return typeof rate === "number" && Number.isFinite(rate) && rate > 0 ? rate : 0;
-}
 
 /**
  * Characters per estimated token. Lifted out of {@link estimateTokens}
@@ -251,11 +250,19 @@ export function utf8ByteFloorUnderTokenBudget(tokens: number): number {
   );
 }
 
-/** Estimated spend in USD for `tokens` against `model`'s rate. */
-export function estimateCostUsd(tokens: number, model: string | null): number {
-  const rate = pricePerMillionTokens(model);
-  if (rate === 0) return 0;
-  return (tokens / 1_000_000) * rate;
+/** Tokens per unit of a per-million-token rate. */
+const TOKENS_PER_PRICED_UNIT = 1_000_000;
+
+/**
+ * Estimated spend in USD for `tokens` at the quoted rate: null when the
+ * price is unknown, so an unpriced model never reads as free.
+ */
+export function estimateCostUsd(tokens: number, quote: KnownPriceQuote): number;
+export function estimateCostUsd(tokens: number, quote: PriceQuote): number | null;
+export function estimateCostUsd(tokens: number, quote: PriceQuote): number | null {
+  if (quote.usdPerMtok === null) return null;
+  if (quote.usdPerMtok === 0) return 0;
+  return (tokens / TOKENS_PER_PRICED_UNIT) * quote.usdPerMtok;
 }
 
 /**
@@ -293,7 +300,7 @@ export function evaluateCostGate(opts: {
   forced?: boolean;
 }): CostGateResult {
   const tokens = estimateTokens(opts.texts);
-  const estimatedUsd = estimateCostUsd(tokens, opts.model);
+  const estimatedUsd = estimateCostUsd(tokens, resolveEmbeddingPrice(opts.model)) ?? 0;
   const blocked = opts.gateUsd > 0 && opts.forced !== true && estimatedUsd > opts.gateUsd;
   return { tokens, estimatedUsd, blocked };
 }

@@ -30,6 +30,7 @@ import { parseAuthoredAtSeconds } from "./authored-at.ts";
 import { CHUNKER_VERSION, chunkMarkdown } from "./chunker.ts";
 import { expandTextForCjkFts } from "./cjk-tokenizer.ts";
 import { declaredInputWindowTokens, passagePrefixSentByProvider } from "./embeddings/presets.ts";
+import { resolveEmbeddingPrice } from "./embeddings/pricing.ts";
 import { makeProvider } from "./embeddings/provider.ts";
 import {
   embeddingSignature,
@@ -37,7 +38,6 @@ import {
   estimateTokens,
   evaluateCostGate,
   isStaleSignature,
-  pricePerMillionTokens,
   LOCAL_EMBEDDING_MODEL,
   MODEL_NATIVE_DIMENSION,
   type EmbeddingIdentity,
@@ -1638,12 +1638,13 @@ export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexSt
     // Best-effort spend estimate to bring stale/missing embeddings current.
     // Only scan chunk content when the active model is actually priced.
     const activeModel = activeEmbeddingModel(config, model);
+    const activePrice = resolveEmbeddingPrice(activeModel);
     let estimatedRefreshCostUsd = 0;
-    if (config.semantic.enabled && pricePerMillionTokens(activeModel) > 0) {
+    if (config.semantic.enabled && activePrice.usdPerMtok !== null && activePrice.usdPerMtok > 0) {
       const pending = store.findChunksWithoutEmbeddings();
       estimatedRefreshCostUsd = estimateCostUsd(
         estimateTokens(pending.map((p) => p.content)),
-        activeModel,
+        activePrice,
       );
     }
 
