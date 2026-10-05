@@ -531,18 +531,20 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                    'description': 'Strict upper bound on the '
                                                                   "returned slice's token count."},
                                     'query': {'type': 'string',
+                                              'maxLength': 2000,
                                               'description': 'Optional query. Read as a '
                                                              'case/Unicode-insensitive substring '
                                                              'filter on topic + principle unless '
                                                              '`query_mode` says otherwise.'},
                                     'query_mode': {'type': 'string',
-                                                   'enum': ['substring', 'ranked'],
+                                                   'enum': ['substring', 'ranked', 'semantic'],
                                                    'description': 'How `query` is read: '
-                                                                  '`substring` (default) filters, '
-                                                                  'dropping misses as '
-                                                                  '`filter-miss`; `ranked` orders '
-                                                                  'candidates by token overlap and '
-                                                                  'excludes none.'},
+                                                                  '`substring` (default) drops '
+                                                                  'misses; `ranked` orders by '
+                                                                  'token overlap; `semantic` '
+                                                                  'orders by stored belief '
+                                                                  'vectors, embedding the query '
+                                                                  'once.'},
                                     'focus_session': {'type': 'string',
                                                       'minLength': 1,
                                                       'maxLength': 128,
