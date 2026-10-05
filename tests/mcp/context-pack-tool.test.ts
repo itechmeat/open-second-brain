@@ -717,6 +717,23 @@ describe("brain_context_pack tool — semantic query mode", () => {
     expect(r.error!.message).toContain(BELIEF_VECTORS_BACKFILL_COMMAND);
   });
 
+  test("a refusal after the query embed still discloses that spend", async () => {
+    if (!sqliteVecLoadable()) return;
+    writeLocalSemanticConfig();
+    // The loader sees the tombstoned belief's vector and embeds; the pack
+    // drops the tombstone and refuses over what it keeps.
+    writeBelief("pref-gone", "keep answers short and brief", "_status: tombstoned\n");
+    await indexBeliefs(true);
+    writeBelief("pref-live", "a live belief with no vector yet");
+    await indexBeliefs(false);
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const r = await callPackRpc(server, SEMANTIC_ARGS);
+    expect(readRpcErrorCode(r)).toBe("BELIEF_VECTORS_MISSING");
+    expect(r.error!.message).toContain("the query embed was still spent");
+    expect(r.error!.message).toContain(`model ${LOCAL_EMBEDDING_MODEL}`);
+  });
+
   test("a reach-withheld page with a vector never lifts the refusal", async () => {
     if (!sqliteVecLoadable()) return;
     writeLocalSemanticConfig();
