@@ -20,9 +20,10 @@
  *   - {@link loadBeliefSemanticRelevance} opens the index, refuses a
  *     blocked capability tier and a missing sqlite-vec by name BEFORE it
  *     embeds anything, embeds the query exactly once with the `query`
- *     prefix kind, and discloses that one ungated spend: the model, the
- *     price source, the query tokens and the cost (null when the price is
- *     unknown).
+ *     prefix kind, and discloses that one spend: the model, the price
+ *     source, the query tokens and the cost (null when the price is
+ *     unknown). A remote caller's embed of an unpriced model is refused
+ *     under a positive cost gate, before the call.
  *
  * No belief row under the model anywhere is refused here, before the
  * embed, with `BELIEF_VECTORS_MISSING`: none in reach can have one. Any
@@ -39,7 +40,7 @@ import {
 } from "../search/capability-tier.ts";
 import type { EmbeddingProvider } from "../search/embeddings/contract.ts";
 import { activeSpendQuote } from "../search/embedding-spend.ts";
-import type { EmbeddingPriceSource } from "../search/embeddings/pricing.ts";
+import { EMBEDDING_PRICE_SOURCE, type EmbeddingPriceSource } from "../search/embeddings/pricing.ts";
 import { makeProvider } from "../search/embeddings/provider.ts";
 import { estimateCostUsd, estimateTokens } from "../search/embeddings/signature.ts";
 import { SearchError } from "../search/search-error.ts";
@@ -235,21 +236,37 @@ export async function loadBeliefSemanticRelevance(
           `for the configured model; run: ${BELIEF_VECTORS_BACKFILL_COMMAND}`,
       );
     }
-    const [queryVector = []] = await provider.embed([query], "query");
-    assertValidVector(queryVector, QUERY_VECTOR_CONTEXT);
     // Priced through the resolution every spend surface shares; `model`
     // above stays the row filter because it matches the indexer's stamp.
     const spend = activeSpendQuote(config);
+    // A remote caller spends the operator's money on every request. Under
+    // a positive gate an unpriced model is the spend the gate exists to
+    // stop, so it is refused before the call; a local caller keeps the
+    // disclosed, ungated embed, as for `search`.
+    if (
+      reach !== TRANSPORT_REACH.local &&
+      config.semantic.costGateUsd > 0 &&
+      spend.quote.source === EMBEDDING_PRICE_SOURCE.unknown
+    ) {
+      throw new SearchError(
+        "EMBEDDING_COST_UNPRICED",
+        "semantic belief order refused: the embedding model has no known price " +
+          "and embedding_cost_gate_usd is positive",
+      );
+    }
+    const [queryVector = []] = await provider.embed([query], "query");
     const queryTokens = estimateTokens([query]);
+    const report: BeliefSemanticQueryReport = {
+      model: spend.model ?? model,
+      priceSource: spend.quote.source,
+      queryTokens,
+      estimatedUsd: estimateCostUsd(queryTokens, spend.quote),
+    };
+    assertValidVector(queryVector, QUERY_VECTOR_CONTEXT);
     const contradicted = contradictedAbiFields(store.embeddingAbiMismatches());
     return {
       ...scoreBeliefsByVector({ model, queryVector, vectorsByPath }),
-      report: {
-        model: spend.model ?? model,
-        priceSource: spend.quote.source,
-        queryTokens,
-        estimatedUsd: estimateCostUsd(queryTokens, spend.quote),
-      },
+      report,
       warnings: Object.freeze(
         contradicted.length > 0 ? [formatEmbeddingAbiDrift(contradicted)] : [],
       ),

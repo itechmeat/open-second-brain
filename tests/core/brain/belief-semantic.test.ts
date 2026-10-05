@@ -25,6 +25,7 @@ import {
   scoreBeliefsByVector,
   type StoredBeliefVector,
 } from "../../../src/core/brain/belief-semantic.ts";
+import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
 import { EMBEDDING_PRICE_SOURCE } from "../../../src/core/search/embeddings/pricing.ts";
 import { LOCAL_EMBEDDING_MODEL } from "../../../src/core/search/embeddings/signature.ts";
 import type { EmbedKind, EmbeddingProvider } from "../../../src/core/search/embeddings/contract.ts";
@@ -42,6 +43,7 @@ const MODEL = "c11-model";
 const OTHER_MODEL = "c11-older-model";
 const DIMENSION = 4;
 const QUERY = "how should replies be phrased";
+const VEC_LOADABLE = sqliteVecLoadable();
 
 let vault: string;
 let dbPath: string;
@@ -419,6 +421,64 @@ describe("loadBeliefSemanticRelevance", () => {
       expect((refusal as SearchError).message).toContain("belief semantic query");
     });
   }
+
+  describe("an unpriced query embed under a positive cost gate", () => {
+    async function seed(semantic: Partial<ResolvedEmbeddingConfig>): Promise<ResolvedSearchConfig> {
+      writeBelief("Brain/preferences/pref-a.md", "pref-a", "Keep answers short");
+      const config = vecConfig(semantic);
+      await indexVault(config);
+      await plant(config, { "Brain/preferences/pref-a.md": { vector: [1, 0, 0, 0] } });
+      return config;
+    }
+
+    test.skipIf(!VEC_LOADABLE)(
+      "is refused for a remote caller with EMBEDDING_COST_UNPRICED before anything is embedded",
+      async () => {
+        const config = await seed({ costGateUsd: 1 });
+
+        const refusal = await loadBeliefSemanticRelevance(config, QUERY, {
+          provider: throwingProvider,
+          reach: TRANSPORT_REACH.remote,
+        }).catch((e: unknown) => e);
+
+        expect(refusal).toBeInstanceOf(SearchError);
+        expect((refusal as SearchError).code).toBe("EMBEDDING_COST_UNPRICED");
+      },
+    );
+
+    test.skipIf(!VEC_LOADABLE)("is embedded once and disclosed for a local caller", async () => {
+      const config = await seed({ costGateUsd: 1 });
+      const { provider, calls } = countingProvider(unit([1, 0, 0, 0]));
+
+      const loaded = await loadBeliefSemanticRelevance(config, QUERY, {
+        provider,
+        reach: TRANSPORT_REACH.local,
+      });
+
+      expect(calls).toHaveLength(1);
+      expect(loaded.report.priceSource).toBe(EMBEDDING_PRICE_SOURCE.unknown);
+    });
+
+    test.skipIf(!VEC_LOADABLE)(
+      "is embedded for a remote caller once the model is priced or the gate is off",
+      async () => {
+        await seed({});
+        for (const semantic of [
+          { costGateUsd: 1, priceOverride: { model: MODEL, usdPerMtok: 2 } },
+          { costGateUsd: 0 },
+        ]) {
+          const config = vecConfig(semantic);
+          const { provider, calls } = countingProvider(unit([1, 0, 0, 0]));
+          // eslint-disable-next-line no-await-in-loop
+          await loadBeliefSemanticRelevance(config, QUERY, {
+            provider,
+            reach: TRANSPORT_REACH.remote,
+          });
+          expect(calls).toHaveLength(1);
+        }
+      },
+    );
+  });
 
   test("a contradicted embedding identity reaches the warnings", async () => {
     if (!sqliteVecLoadable()) return;

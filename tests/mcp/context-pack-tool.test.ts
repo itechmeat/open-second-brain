@@ -810,6 +810,48 @@ describe("brain_context_pack tool — semantic query mode", () => {
     }
   });
 
+  test("a remote caller's unpriced query embed under a positive gate is refused before it is sent", async () => {
+    if (!sqliteVecLoadable()) return;
+    const fake = await startFakeHttp();
+    try {
+      atomicWriteFileSync(
+        configPath,
+        [
+          `vault: ${vault}`,
+          "agent_name: claude",
+          "search_semantic_enabled: true",
+          "embedding_provider: openai-compat",
+          `embedding_base_url: "${fake.url}"`,
+          "embedding_model: c13-unpriced-model",
+          "embedding_api_key: test-key",
+          "embedding_dimension: 4",
+          "embedding_cost_gate_usd: 1",
+          "",
+        ].join("\n"),
+      );
+      writeBelief("pref-brevity", "keep answers short and brief");
+      await indexBeliefs(false);
+      await plantVectors(["Brain/preferences/pref-brevity.md"], "c13-unpriced-model");
+
+      const remote = new MCPServer({ vault, configPath }, { reach: "remote" });
+      await initialize(remote);
+      const r = await callPackRpc(remote, SEMANTIC_ARGS);
+      expect(readRpcErrorCode(r)).toBe("EMBEDDING_COST_UNPRICED");
+      expect(fake.callCount()).toBe(0);
+
+      // The operator's own transport keeps the disclosed, ungated embed.
+      const local = new MCPServer({ vault, configPath }, { reach: "local" });
+      await initialize(local);
+      const out = await callPack(local, SEMANTIC_ARGS);
+      expect(fake.callCount()).toBe(1);
+      expect((out["semantic"] as Record<string, unknown>)["price_source"]).toBe(
+        EMBEDDING_PRICE_SOURCE.unknown,
+      );
+    } finally {
+      await fake.close();
+    }
+  });
+
   test("a contradicted embedding identity reaches the wire warnings", async () => {
     if (!sqliteVecLoadable()) return;
     writeLocalSemanticConfig();
