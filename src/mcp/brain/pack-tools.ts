@@ -286,6 +286,7 @@ async function toolBrainContextPack(
           loadBeliefSemanticRelevance(
             resolveSearchConfig({ vault: ctx.vault, configPath: ctx.configPath ?? undefined }),
             query,
+            { reach: view.reach },
           ),
         )
       : null;

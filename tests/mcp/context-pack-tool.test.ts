@@ -692,4 +692,40 @@ describe("brain_context_pack tool — semantic query mode", () => {
     expect(readRpcErrorCode(r)).toBe("BELIEF_VECTORS_MISSING");
     expect(JSON.stringify(r)).not.toContain("pref-reserved");
   });
+
+  test("vectors captured while a page was reserved never order it for a remote caller", async () => {
+    if (!sqliteVecLoadable()) return;
+    const SECRET = "secret salary negotiation number is high";
+    const PUBLIC = "use tabs for indentation in makefiles";
+    const probe = {
+      max_tokens: 10_000,
+      query: "secret salary negotiation number",
+      query_mode: "semantic",
+    };
+    /** One remote pack over a fresh vault, `seed` deciding what the last index run saw. */
+    async function remotePack(seed: () => Promise<void>): Promise<Record<string, unknown>> {
+      rmSync(vault, { recursive: true, force: true });
+      mkdirSync(join(vault, "Brain", "preferences"), { recursive: true });
+      writeLocalSemanticConfig();
+      await seed();
+      const remote = new MCPServer({ vault, configPath }, { reach: "remote" });
+      await initialize(remote);
+      const out = await callPack(remote, probe);
+      return { items: out["items"], semantic: out["semantic"] };
+    }
+
+    const reservedThenRewritten = await remotePack(async () => {
+      writeBelief("pref-a", "keep answers short and brief");
+      writeBelief("pref-b", SECRET, "visibility: [private]\n");
+      await indexBeliefs(true);
+      writeBelief("pref-b", PUBLIC);
+    });
+    const neverReserved = await remotePack(async () => {
+      writeBelief("pref-a", "keep answers short and brief");
+      await indexBeliefs(true);
+      writeBelief("pref-b", PUBLIC);
+    });
+
+    expect(JSON.stringify(reservedThenRewritten)).toBe(JSON.stringify(neverReserved));
+  });
 });

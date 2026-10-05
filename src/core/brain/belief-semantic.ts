@@ -41,6 +41,8 @@ import { resolveEmbeddingPrice, type EmbeddingPriceSource } from "../search/embe
 import { makeProvider } from "../search/embeddings/provider.ts";
 import { estimateCostUsd, estimateTokens } from "../search/embeddings/signature.ts";
 import { SearchError } from "../search/search-error.ts";
+import { isRemotelyReadable } from "../graph/visibility.ts";
+import { TRANSPORT_REACH, type TransportReach } from "../graph/transport-reach.ts";
 import { contradictedAbiFields, formatEmbeddingAbiDrift, Store } from "../search/store.ts";
 import type { ResolvedSearchConfig } from "../search/types.ts";
 import { assertValidVector } from "../search/vector-guard.ts";
@@ -97,6 +99,13 @@ export interface BeliefSemanticDeps {
   readonly provider?: EmbeddingProvider;
   /** Whether the store loads sqlite-vec; omitted loads it. */
   readonly loadVec?: boolean;
+  /**
+   * The caller's transport reach; local when omitted. Below local reach a
+   * belief whose INDEXED visibility is not readable there loses its
+   * vectors: they were captured from bytes reserved at index time, and a
+   * live file rewritten since must not be ordered by them.
+   */
+  readonly reach?: TransportReach;
 }
 
 /** The context the query vector is validated under, named in a refusal. */
@@ -180,10 +189,17 @@ export async function loadBeliefSemanticRelevance(
         "semantic belief order unavailable: sqlite-vec extension not loaded",
       );
     }
+    const reach = deps.reach ?? TRANSPORT_REACH.local;
+    const beliefDocs = [...store.listDocuments()].filter(([path]) => isBeliefPath(path));
+    const indexed =
+      reach === TRANSPORT_REACH.local
+        ? new Map<string, ReadonlyArray<string>>()
+        : store.indexedVisibilityByPaths(beliefDocs.map(([path]) => path));
     const vectorsByPath = new Map<string, ReadonlyArray<StoredBeliefVector>>();
-    for (const [path, doc] of store.listDocuments()) {
-      if (!isBeliefPath(path)) continue;
-      vectorsByPath.set(path, store.storedEmbeddingsForDocument(doc.id));
+    for (const [path, doc] of beliefDocs) {
+      // Reads as unembedded, exactly as a page whose reserved bytes were never indexed.
+      const readable = isRemotelyReadable(indexed.get(path) ?? [], reach);
+      vectorsByPath.set(path, readable ? store.storedEmbeddingsForDocument(doc.id) : []);
     }
     const provider = deps.provider ?? makeProvider(config.semantic);
     const [queryVector = []] = await provider.embed([query], "query");
