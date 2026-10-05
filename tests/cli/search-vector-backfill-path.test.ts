@@ -323,3 +323,16 @@ test.skipIf(!VEC_LOADABLE)(
     expect("unmatched_path_prefixes" in payload).toBe(false);
   },
 );
+
+test.skipIf(!VEC_LOADABLE)("a scoped next step quotes a prefix with a space", async () => {
+  await seed();
+  writeMd(vault, "Notes/with space/d.md", "# D\n\nA note in a folder whose name has a space.");
+  await indexVault(semanticConfig());
+  const config = await cliConfig();
+  const json = await backfillCli(config, ["--path", "Notes/with space/", "--json"]);
+  expect(json.returncode).toBe(0);
+  const payload = JSON.parse(json.stdout) as Record<string, unknown>;
+  expect(payload["next_command"]).toBe(
+    "o2b search vector-backfill --apply --path 'Notes/with space/'",
+  );
+});
