@@ -111,6 +111,14 @@ export interface BeliefSemanticDeps {
    * live file rewritten since must not be ordered by them.
    */
   readonly reach?: TransportReach;
+  /**
+   * Whether the caller may be shown a belief, by vault-relative path; every
+   * belief when omitted. A belief it rejects is left out of the read, so the
+   * pre-embed refusal below answers for it exactly as for an absent page:
+   * the pack drops it after its own reach and owner filters, and a refusal
+   * decided over a wider set would tell the two apart.
+   */
+  readonly inView?: (path: string) => boolean;
 }
 
 /** The context the query vector is validated under, named in a refusal. */
@@ -195,7 +203,10 @@ export async function loadBeliefSemanticRelevance(
       );
     }
     const reach = deps.reach ?? TRANSPORT_REACH.local;
-    const beliefDocs = [...store.listDocuments()].filter(([path]) => isBeliefPath(path));
+    const inView = deps.inView ?? (() => true);
+    const beliefDocs = [...store.listDocuments()].filter(
+      ([path]) => isBeliefPath(path) && inView(path),
+    );
     const indexed =
       reach === TRANSPORT_REACH.local
         ? new Map<string, ReadonlyArray<string>>()

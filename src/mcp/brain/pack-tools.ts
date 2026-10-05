@@ -64,7 +64,8 @@ import {
 } from "../../core/brain/context-presets.ts";
 import { extractPreCompactRecords } from "../../core/brain/pre-compact-extract.ts";
 import { EventTraceSelectorError, resolveLogEventTraces } from "../../core/brain/event-trace.ts";
-import { gatedOwnerScopeView } from "../../core/brain/owner-scope-view.ts";
+import { gatedOwnerScopeView, ownerScopeView } from "../../core/brain/owner-scope-view.ts";
+import { resolveOwnerScopeDelivery } from "../../core/brain/preferences-collect.ts";
 import { BRAIN_LOG_EVENT_KIND_SET, type BrainLogEventKind } from "../../core/brain/types.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
@@ -292,16 +293,23 @@ async function toolBrainContextPack(
   // stays synchronous for every other caller. Every refusal is a named
   // SearchError: a blocked tier and a missing sqlite-vec from the loader,
   // before any embed, and `BELIEF_VECTORS_MISSING` from the pack, after
-  // the reach filter and before a receipt is written.
+  // the reach filter and before a receipt is written. The loader reads
+  // only the beliefs this caller's pack can keep - the same reach and
+  // owner views the pack applies - so its own pre-embed refusal never
+  // answers for a withheld belief differently than for an absent one.
   const semantic =
     queryMode === "semantic" && query !== undefined
-      ? await withSearchErrorsOnWire(() =>
-          loadBeliefSemanticRelevance(
+      ? await withSearchErrorsOnWire(() => {
+          const owners = ownerScopeView(
+            ctx.vault,
+            resolveOwnerScopeDelivery(ctx.vault, agentScope).enforcedScope,
+          );
+          return loadBeliefSemanticRelevance(
             resolveSearchConfig({ vault: ctx.vault, configPath: ctx.configPath ?? undefined }),
             query,
-            { reach: view.reach },
-          ),
-        )
+            { reach: view.reach, inView: (rel) => view.visible(rel) && owners.visible(rel) },
+          );
+        })
       : null;
   const report = await withSearchErrorsOnWire(async () =>
     packContext(ctx.vault, {

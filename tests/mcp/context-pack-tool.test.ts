@@ -13,6 +13,7 @@ import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/inde
 import { buildToolTable } from "../../src/mcp/tools.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { CONTEXT_GUARD_PLACEHOLDER } from "../../src/core/brain/safety/context-guard.ts";
+import { brainConfigPath } from "../../src/core/brain/paths.ts";
 import { persistTension } from "../../src/core/brain/tensions.ts";
 import { BELIEF_VECTORS_BACKFILL_COMMAND } from "../../src/core/brain/context-pack.ts";
 import { LOCAL_EMBEDDING_MODEL } from "../../src/core/search/embeddings/signature.ts";
@@ -843,5 +844,59 @@ describe("brain_context_pack tool — semantic query mode", () => {
     });
 
     expect(JSON.stringify(reservedThenRewritten)).toBe(JSON.stringify(neverReserved));
+  });
+
+  /** One raw pack over a fresh vault, `seed` deciding what the index and the live files hold. */
+  async function freshPackRpc(
+    reach: "local" | "remote",
+    seed: () => Promise<void>,
+  ): Promise<string> {
+    rmSync(vault, { recursive: true, force: true });
+    mkdirSync(join(vault, "Brain", "preferences"), { recursive: true });
+    writeLocalSemanticConfig();
+    await seed();
+    const server = new MCPServer({ vault, configPath }, { reach });
+    await initialize(server);
+    return JSON.stringify(await callPackRpc(server, SEMANTIC_ARGS));
+  }
+
+  test("a belief reserved since its vector was stored answers as if it were absent", async () => {
+    if (!sqliteVecLoadable()) return;
+    const withheld = await freshPackRpc("remote", async () => {
+      writeBelief("pref-withheld", "keep answers short and brief");
+      await indexBeliefs(true);
+      writeBelief("pref-public", "a public belief with no vector yet");
+      await indexBeliefs(false);
+      writeBelief("pref-withheld", "keep answers short and brief", "visibility: [private]\n");
+    });
+    const absent = await freshPackRpc("remote", async () => {
+      writeBelief("pref-public", "a public belief with no vector yet");
+      await indexBeliefs(false);
+    });
+
+    expect(withheld).toBe(absent);
+  });
+
+  test("a belief another owner holds answers as if it were absent under the owner gate", async () => {
+    if (!sqliteVecLoadable()) return;
+    const gate = () =>
+      writeFileSync(
+        brainConfigPath(vault),
+        "schema_version: 1\nintegrity:\n  owner_scope_delivery: fail\n",
+      );
+    const withheld = await freshPackRpc("local", async () => {
+      gate();
+      writeBelief("pref-foreign", "keep answers short and brief", "owner: another-agent\n");
+      await indexBeliefs(true);
+      writeBelief("pref-own", "a belief of this agent with no vector yet");
+      await indexBeliefs(false);
+    });
+    const absent = await freshPackRpc("local", async () => {
+      gate();
+      writeBelief("pref-own", "a belief of this agent with no vector yet");
+      await indexBeliefs(false);
+    });
+
+    expect(withheld).toBe(absent);
   });
 });
