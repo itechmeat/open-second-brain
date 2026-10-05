@@ -21,6 +21,7 @@ import type { StampMismatch } from "../integrity/stamp.ts";
 import type { ReconciliationOutcome, ReconciliationReport } from "../reconciliation-report.ts";
 import type { VaultPathRule, VaultScopeRules } from "../vault-scope/defaults.ts";
 import type { MaintenanceSpendReceipt } from "../brain/maintenance/journal.ts";
+import type { EmbeddingPriceOverride } from "./embeddings/pricing.ts";
 import type { DegreePredicate } from "./property-filter.ts";
 import type { TemporalIntent } from "./temporal-intent.ts";
 import type { FtsMatchMode } from "./fts-match-mode.ts";
@@ -1238,6 +1239,13 @@ export interface ResolvedEmbeddingConfig {
    * run whose estimated cost exceeds this is refused unless forced.
    */
   readonly costGateUsd: number;
+  /**
+   * The operator's declared price for one named model (Honest Embedding
+   * Spend), from `embedding_price_model` + `embedding_price_usd_per_mtok`.
+   * Absent when neither key is set. Price is never part of the embedding
+   * identity, so declaring or editing it never triggers a reindex.
+   */
+  readonly priceOverride?: EmbeddingPriceOverride;
   /**
    * Active instruction prefix for a search query
    * (memory-write-path-integrity B2). Resolved from the preset default and
