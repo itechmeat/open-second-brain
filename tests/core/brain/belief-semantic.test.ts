@@ -30,7 +30,7 @@ import { EMBEDDING_PRICE_SOURCE } from "../../../src/core/search/embeddings/pric
 import { LOCAL_EMBEDDING_MODEL } from "../../../src/core/search/embeddings/signature.ts";
 import type { EmbedKind, EmbeddingProvider } from "../../../src/core/search/embeddings/contract.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
-import { Store } from "../../../src/core/search/store.ts";
+import { EMBEDDING_DIMENSION_STATE_KEY, Store } from "../../../src/core/search/store.ts";
 import { SearchError } from "../../../src/core/search/search-error.ts";
 import type {
   ResolvedEmbeddingConfig,
@@ -167,6 +167,19 @@ describe("scoreBeliefsByVector", () => {
     expect(result.relevanceByPath.get("Brain/preferences/c.md")).toBeCloseTo(0, 12);
     expect(result.scored).toBe(3);
     expect(result.unembedded).toEqual([]);
+  });
+
+  test("a note's relevance is its best chunk, not the sum of its chunks", () => {
+    const result = scoreBeliefsByVector({
+      model: MODEL,
+      queryVector: [1, 0, 0, 0],
+      vectorsByPath: new Map([
+        ["Brain/preferences/a.md", [row([0.6, 0.8, 0, 0]), row([0.6, 0, 0.8, 0])]],
+        ["Brain/preferences/b.md", [row([0.9, Math.sqrt(0.19), 0, 0])]],
+      ]),
+    });
+    expect(result.order).toEqual(["Brain/preferences/b.md", "Brain/preferences/a.md"]);
+    expect(result.relevanceByPath.get("Brain/preferences/a.md")).toBeCloseTo(0.6, 6);
   });
 
   test("rows from another model or dimension count as unembedded, never as scored", () => {
@@ -324,6 +337,63 @@ describe("loadBeliefSemanticRelevance", () => {
     }).catch((e: unknown) => e);
     expect(refusal).toBeInstanceOf(SearchError);
     expect((refusal as SearchError).code).toBe("VEC_EXTENSION_UNAVAILABLE");
+  });
+
+  test("a sibling directory sharing the prefix string is not a belief", async () => {
+    if (!sqliteVecLoadable()) return;
+    writeBelief("Brain/preferences/pref-a.md", "pref-a", "Keep answers short");
+    writeBelief("Brain/preferences-archive/x.md", "pref-x", "Keep answers short");
+    const config = vecConfig();
+    await indexVault(config);
+    await plant(config, {
+      "Brain/preferences/pref-a.md": { vector: [1, 0, 0, 0] },
+      "Brain/preferences-archive/x.md": { vector: [1, 0, 0, 0] },
+    });
+    const { provider } = countingProvider(unit([1, 0, 0, 0]));
+
+    const loaded = await loadBeliefSemanticRelevance(config, QUERY, { provider });
+
+    expect([...loaded.relevanceByPath.keys()]).toEqual(["Brain/preferences/pref-a.md"]);
+    expect(loaded.unembedded).toEqual([]);
+  });
+
+  for (const [label, vector] of [
+    ["an empty", []],
+    ["a non-finite", [Number.NaN, 0, 0, 0]],
+  ] as const) {
+    test(`${label} query vector is refused with EMBEDDING_INVALID_VECTOR`, async () => {
+      if (!sqliteVecLoadable()) return;
+      writeBelief("Brain/preferences/pref-a.md", "pref-a", "Keep answers short");
+      const config = vecConfig();
+      await indexVault(config);
+      await plant(config, { "Brain/preferences/pref-a.md": { vector: [1, 0, 0, 0] } });
+      const { provider } = countingProvider([...vector]);
+
+      const refusal = await loadBeliefSemanticRelevance(config, QUERY, { provider }).catch(
+        (e: unknown) => e,
+      );
+
+      expect(refusal).toBeInstanceOf(SearchError);
+      expect((refusal as SearchError).code).toBe("EMBEDDING_INVALID_VECTOR");
+      expect((refusal as SearchError).message).toContain("belief semantic query");
+    });
+  }
+
+  test("a contradicted embedding identity reaches the warnings", async () => {
+    if (!sqliteVecLoadable()) return;
+    writeBelief("Brain/preferences/pref-a.md", "pref-a", "Keep answers short");
+    const config = vecConfig();
+    await indexVault(config);
+    await plant(config, { "Brain/preferences/pref-a.md": { vector: [1, 0, 0, 0] } });
+    const store = await Store.open(config, { mode: "write" });
+    store.setState(EMBEDDING_DIMENSION_STATE_KEY, "8");
+    await store.close();
+    const { provider } = countingProvider(unit([1, 0, 0, 0]));
+
+    const loaded = await loadBeliefSemanticRelevance(config, QUERY, { provider });
+
+    expect(loaded.warnings).toHaveLength(1);
+    expect(loaded.warnings[0]).toContain(EMBEDDING_DIMENSION_STATE_KEY);
   });
 
   test("the scored set is the preferences and retired directories", () => {

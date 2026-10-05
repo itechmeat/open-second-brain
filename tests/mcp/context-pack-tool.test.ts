@@ -18,6 +18,8 @@ import { BELIEF_VECTORS_BACKFILL_COMMAND } from "../../src/core/brain/context-pa
 import { LOCAL_EMBEDDING_MODEL } from "../../src/core/search/embeddings/signature.ts";
 import { EMBEDDING_PRICE_SOURCE } from "../../src/core/search/embeddings/pricing.ts";
 import { indexVault, resolveSearchConfig } from "../../src/core/search/index.ts";
+import { EMBEDDING_DIMENSION_STATE_KEY, Store } from "../../src/core/search/store.ts";
+import { startFakeHttp } from "../helpers/fake-http.ts";
 import { sqliteVecLoadable } from "../helpers/sqlite-vec.ts";
 import { readRpcErrorCode } from "../helpers/tool-error-envelope.ts";
 
@@ -596,6 +598,20 @@ async function indexBeliefs(embeddings: boolean): Promise<void> {
   await indexVault(resolveSearchConfig({ vault, configPath }), { embeddings });
 }
 
+/** Plant one unit vector under `model` on every chunk of each indexed path. */
+async function plantVectors(paths: ReadonlyArray<string>, model: string): Promise<void> {
+  const store = await Store.open(resolveSearchConfig({ vault, configPath }), { mode: "write" });
+  try {
+    for (const path of paths) {
+      for (const chunk of store.chunksForDocument(store.getDocumentIdByPath(path)!)) {
+        store.vecUpsert(chunk.id, [1, 0, 0, 0], model, 4, `planted-${chunk.id}`);
+      }
+    }
+  } finally {
+    await store.close();
+  }
+}
+
 /** One `brain_context_pack` call returning the raw JSON-RPC response. */
 async function callPackRpc(
   server: MCPServer,
@@ -718,6 +734,79 @@ describe("brain_context_pack tool — semantic query mode", () => {
     const r = await callPackRpc(remote, SEMANTIC_ARGS);
     expect(readRpcErrorCode(r)).toBe("BELIEF_VECTORS_MISSING");
     expect(JSON.stringify(r)).not.toContain("pref-reserved");
+  });
+
+  test("scored on the wire counts kept candidates only, not every belief with a vector", async () => {
+    if (!sqliteVecLoadable()) return;
+    writeLocalSemanticConfig();
+    // Indexed public with a vector, reserved since: the loader still reads
+    // its vector vault-wide, the pack's reach filter drops the live page.
+    writeBelief("pref-reserved", "keep answers short and brief");
+    writeBelief("pref-public", "never ship on friday");
+    await indexBeliefs(true);
+    writeBelief("pref-reserved", "keep answers short and brief", "visibility: [private]\n");
+    const remote = new MCPServer({ vault, configPath }, { reach: "remote" });
+    await initialize(remote);
+
+    const out = await callPack(remote, SEMANTIC_ARGS);
+
+    const semantic = out["semantic"] as Record<string, unknown>;
+    expect(semantic["scored"]).toBe(1);
+    expect(semantic["unembedded"]).toEqual([]);
+    expect(JSON.stringify(out)).not.toContain("pref-reserved");
+  });
+
+  test("an unpriced openai-compat model reports a null cost and an unknown price on the wire", async () => {
+    if (!sqliteVecLoadable()) return;
+    const server = await startFakeHttp();
+    try {
+      atomicWriteFileSync(
+        configPath,
+        [
+          `vault: ${vault}`,
+          "agent_name: claude",
+          "search_semantic_enabled: true",
+          "embedding_provider: openai-compat",
+          `embedding_base_url: "${server.url}"`,
+          "embedding_model: c13-unpriced-model",
+          "embedding_api_key: test-key",
+          "embedding_dimension: 4",
+          "",
+        ].join("\n"),
+      );
+      writeBelief("pref-brevity", "keep answers short and brief");
+      await indexBeliefs(false);
+      await plantVectors(["Brain/preferences/pref-brevity.md"], "c13-unpriced-model");
+      const mcp = new MCPServer({ vault, configPath });
+      await initialize(mcp);
+
+      const out = await callPack(mcp, SEMANTIC_ARGS);
+
+      const semantic = out["semantic"] as Record<string, unknown>;
+      expect(semantic["model"]).toBe("c13-unpriced-model");
+      expect(semantic["price_source"]).toBe(EMBEDDING_PRICE_SOURCE.unknown);
+      expect(semantic["estimated_usd"]).toBeNull();
+      expect(semantic["scored"]).toBe(1);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("a contradicted embedding identity reaches the wire warnings", async () => {
+    if (!sqliteVecLoadable()) return;
+    writeLocalSemanticConfig();
+    writeBelief("pref-brevity", "keep answers short and brief");
+    await indexBeliefs(true);
+    const store = await Store.open(resolveSearchConfig({ vault, configPath }), { mode: "write" });
+    store.setState(EMBEDDING_DIMENSION_STATE_KEY, "999");
+    await store.close();
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+
+    const out = await callPack(server, SEMANTIC_ARGS);
+
+    const warnings = out["warnings"] as string[];
+    expect(warnings.some((w) => w.includes(EMBEDDING_DIMENSION_STATE_KEY))).toBe(true);
   });
 
   test("vectors captured while a page was reserved never order it for a remote caller", async () => {

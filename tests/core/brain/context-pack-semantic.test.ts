@@ -142,6 +142,32 @@ describe("packContext semantic mode", () => {
     expect(report.semantic).toEqual({ scored: 1, unembedded: ["pref-imports"] });
   });
 
+  test("unembedded is sorted by id even where recency orders the items the other way", () => {
+    writePref("brevity", {
+      principle: "keep answers short",
+      tier: "core",
+      created_at: "2026-01-01T00:00:00Z",
+    });
+    writePref("alpha", {
+      principle: "the oldest",
+      tier: "core",
+      created_at: "2026-01-02T00:00:00Z",
+    });
+    writePref("zeta", {
+      principle: "the newest",
+      tier: "core",
+      created_at: "2026-01-09T00:00:00Z",
+    });
+    const report = packContext(vault, {
+      maxTokens: 10_000,
+      query: PARAPHRASE,
+      queryMode: "semantic",
+      semanticRelevance: new Map([[rel("brevity"), 0.5]]),
+    });
+    expect(report.items.map((i) => i.id)).toEqual(["pref-brevity", "pref-zeta", "pref-alpha"]);
+    expect(report.semantic).toEqual({ scored: 1, unembedded: ["pref-alpha", "pref-zeta"] });
+  });
+
   test("scored and unembedded are computed after the reach filter", () => {
     writeBeliefs();
     const withheld = join(vault, rel("brevity"));
