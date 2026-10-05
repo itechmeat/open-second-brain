@@ -29,6 +29,8 @@ let vault: string;
 let configHome: string;
 let configPath: string;
 const savedEnv: Record<string, string | undefined> = {};
+/** Counted once: a runner without sqlite-vec reports these tests as skipped, never as passed. */
+const VEC_LOADABLE = sqliteVecLoadable();
 
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "o2b-mcp-context-pack-"));
@@ -689,30 +691,36 @@ describe("brain_context_pack tool — semantic query mode", () => {
   /** The env override for the embedding credential, unset for the key-missing case. */
   const EMBEDDING_KEY_ENV = "OPEN_SECOND_BRAIN_EMBEDDING_KEY";
 
-  test("orders by stored vectors and carries the semantic report", async () => {
-    if (!sqliteVecLoadable()) return;
-    writeLocalSemanticConfig();
-    writeBelief("pref-deploy", "never ship on friday");
-    writeBelief("pref-brevity", "keep answers short and brief");
-    await indexBeliefs(true);
-    writeBelief("pref-new", "a belief written after the last embedding pass");
-    await indexBeliefs(false);
-    const server = new MCPServer({ vault, configPath });
-    await initialize(server);
+  test.skipIf(!VEC_LOADABLE)(
+    "orders by stored vectors and carries the semantic report",
+    async () => {
+      writeLocalSemanticConfig();
+      writeBelief("pref-deploy", "never ship on friday");
+      writeBelief("pref-brevity", "keep answers short and brief");
+      await indexBeliefs(true);
+      writeBelief("pref-new", "a belief written after the last embedding pass");
+      await indexBeliefs(false);
+      const server = new MCPServer({ vault, configPath });
+      await initialize(server);
 
-    const out = await callPack(server, SEMANTIC_ARGS);
+      const out = await callPack(server, SEMANTIC_ARGS);
 
-    const items = out["items"] as Array<{ id: string }>;
-    expect(items[0]!.id).toBe("pref-brevity");
-    expect(items.map((i) => i.id).toSorted()).toEqual(["pref-brevity", "pref-deploy", "pref-new"]);
-    const semantic = out["semantic"] as Record<string, unknown>;
-    expect(semantic["model"]).toBe(LOCAL_EMBEDDING_MODEL);
-    expect(semantic["price_source"]).toBe(EMBEDDING_PRICE_SOURCE.builtin);
-    expect(semantic["estimated_usd"]).toBe(0);
-    expect(semantic["query_tokens"]).toBeGreaterThan(0);
-    expect(semantic["scored"]).toBe(2);
-    expect(semantic["unembedded"]).toEqual(["pref-new"]);
-  });
+      const items = out["items"] as Array<{ id: string }>;
+      expect(items[0]!.id).toBe("pref-brevity");
+      expect(items.map((i) => i.id).toSorted()).toEqual([
+        "pref-brevity",
+        "pref-deploy",
+        "pref-new",
+      ]);
+      const semantic = out["semantic"] as Record<string, unknown>;
+      expect(semantic["model"]).toBe(LOCAL_EMBEDDING_MODEL);
+      expect(semantic["price_source"]).toBe(EMBEDDING_PRICE_SOURCE.builtin);
+      expect(semantic["estimated_usd"]).toBe(0);
+      expect(semantic["query_tokens"]).toBeGreaterThan(0);
+      expect(semantic["scored"]).toBe(2);
+      expect(semantic["unembedded"]).toEqual(["pref-new"]);
+    },
+  );
 
   test("a disabled tier surfaces EMBEDDING_DISABLED on the wire", async () => {
     writeBelief("pref-brevity", "keep answers short and brief");
@@ -748,205 +756,221 @@ describe("brain_context_pack tool — semantic query mode", () => {
     }
   });
 
-  test("no kept belief with a vector refuses with BELIEF_VECTORS_MISSING naming the backfill", async () => {
-    if (!sqliteVecLoadable()) return;
-    writeLocalSemanticConfig();
-    writeBelief("pref-brevity", "keep answers short and brief");
-    await indexBeliefs(false);
-    const server = new MCPServer({ vault, configPath });
-    await initialize(server);
-    const r = await callPackRpc(server, SEMANTIC_ARGS);
-    expect(readRpcErrorCode(r)).toBe("BELIEF_VECTORS_MISSING");
-    expect(r.error!.message).toContain(BELIEF_VECTORS_BACKFILL_COMMAND);
-  });
-
-  test("a refusal after the query embed still discloses that spend", async () => {
-    if (!sqliteVecLoadable()) return;
-    writeLocalSemanticConfig();
-    // The loader sees the tombstoned belief's vector and embeds; the pack
-    // drops the tombstone and refuses over what it keeps.
-    writeBelief("pref-gone", "keep answers short and brief", "_status: tombstoned\n");
-    await indexBeliefs(true);
-    writeBelief("pref-live", "a live belief with no vector yet");
-    await indexBeliefs(false);
-    const server = new MCPServer({ vault, configPath });
-    await initialize(server);
-    const r = await callPackRpc(server, SEMANTIC_ARGS);
-    expect(readRpcErrorCode(r)).toBe("BELIEF_VECTORS_MISSING");
-    expect(r.error!.message).toContain("the query embed was still spent");
-    expect(r.error!.message).toContain(`model ${LOCAL_EMBEDDING_MODEL}`);
-  });
-
-  test("a reach-withheld page with a vector never lifts the refusal", async () => {
-    if (!sqliteVecLoadable()) return;
-    writeLocalSemanticConfig();
-    writeBelief("pref-reserved", "keep answers short and brief", "visibility: [private]\n");
-    await indexBeliefs(true);
-    writeBelief("pref-public", "a public belief with no vector yet");
-    await indexBeliefs(false);
-
-    const local = new MCPServer({ vault, configPath }, { reach: "local" });
-    await initialize(local);
-    const seen = await callPack(local, SEMANTIC_ARGS);
-    expect((seen["semantic"] as Record<string, unknown>)["scored"]).toBe(1);
-
-    const remote = new MCPServer({ vault, configPath }, { reach: "remote" });
-    await initialize(remote);
-    const r = await callPackRpc(remote, SEMANTIC_ARGS);
-    expect(readRpcErrorCode(r)).toBe("BELIEF_VECTORS_MISSING");
-    expect(JSON.stringify(r)).not.toContain("pref-reserved");
-  });
-
-  test("scored on the wire counts kept candidates only, not every belief with a vector", async () => {
-    if (!sqliteVecLoadable()) return;
-    writeLocalSemanticConfig();
-    // Indexed public with a vector, reserved since: the loader still reads
-    // its vector vault-wide, the pack's reach filter drops the live page.
-    writeBelief("pref-reserved", "keep answers short and brief");
-    writeBelief("pref-public", "never ship on friday");
-    await indexBeliefs(true);
-    writeBelief("pref-reserved", "keep answers short and brief", "visibility: [private]\n");
-    const remote = new MCPServer({ vault, configPath }, { reach: "remote" });
-    await initialize(remote);
-
-    const out = await callPack(remote, SEMANTIC_ARGS);
-
-    const semantic = out["semantic"] as Record<string, unknown>;
-    expect(semantic["scored"]).toBe(1);
-    expect(semantic["unembedded"]).toEqual([]);
-    expect(JSON.stringify(out)).not.toContain("pref-reserved");
-  });
-
-  test("an unpriced openai-compat model reports a null cost and an unknown price on the wire", async () => {
-    if (!sqliteVecLoadable()) return;
-    const server = await startFakeHttp();
-    try {
-      atomicWriteFileSync(
-        configPath,
-        [
-          `vault: ${vault}`,
-          "agent_name: claude",
-          "search_semantic_enabled: true",
-          "embedding_provider: openai-compat",
-          `embedding_base_url: "${server.url}"`,
-          "embedding_model: c13-unpriced-model",
-          "embedding_api_key: test-key",
-          "embedding_dimension: 4",
-          "",
-        ].join("\n"),
-      );
+  test.skipIf(!VEC_LOADABLE)(
+    "no kept belief with a vector refuses with BELIEF_VECTORS_MISSING naming the backfill",
+    async () => {
+      writeLocalSemanticConfig();
       writeBelief("pref-brevity", "keep answers short and brief");
       await indexBeliefs(false);
-      await plantVectors(["Brain/preferences/pref-brevity.md"], "c13-unpriced-model");
-      const mcp = new MCPServer({ vault, configPath });
-      await initialize(mcp);
+      const server = new MCPServer({ vault, configPath });
+      await initialize(server);
+      const r = await callPackRpc(server, SEMANTIC_ARGS);
+      expect(readRpcErrorCode(r)).toBe("BELIEF_VECTORS_MISSING");
+      expect(r.error!.message).toContain(BELIEF_VECTORS_BACKFILL_COMMAND);
+    },
+  );
 
-      const out = await callPack(mcp, SEMANTIC_ARGS);
-
-      const semantic = out["semantic"] as Record<string, unknown>;
-      expect(semantic["model"]).toBe("c13-unpriced-model");
-      expect(semantic["price_source"]).toBe(EMBEDDING_PRICE_SOURCE.unknown);
-      expect(semantic["estimated_usd"]).toBeNull();
-      expect(semantic["scored"]).toBe(1);
-    } finally {
-      await server.close();
-    }
-  });
-
-  test("a remote caller's unpriced query embed under a positive gate is refused before it is sent", async () => {
-    if (!sqliteVecLoadable()) return;
-    const fake = await startFakeHttp();
-    try {
-      atomicWriteFileSync(
-        configPath,
-        [
-          `vault: ${vault}`,
-          "agent_name: claude",
-          "search_semantic_enabled: true",
-          "embedding_provider: openai-compat",
-          `embedding_base_url: "${fake.url}"`,
-          "embedding_model: c13-unpriced-model",
-          "embedding_api_key: test-key",
-          "embedding_dimension: 4",
-          "embedding_cost_gate_usd: 1",
-          "",
-        ].join("\n"),
-      );
-      writeBelief("pref-brevity", "keep answers short and brief");
+  test.skipIf(!VEC_LOADABLE)(
+    "a refusal after the query embed still discloses that spend",
+    async () => {
+      writeLocalSemanticConfig();
+      // The loader sees the tombstoned belief's vector and embeds; the pack
+      // drops the tombstone and refuses over what it keeps.
+      writeBelief("pref-gone", "keep answers short and brief", "_status: tombstoned\n");
+      await indexBeliefs(true);
+      writeBelief("pref-live", "a live belief with no vector yet");
       await indexBeliefs(false);
-      await plantVectors(["Brain/preferences/pref-brevity.md"], "c13-unpriced-model");
+      const server = new MCPServer({ vault, configPath });
+      await initialize(server);
+      const r = await callPackRpc(server, SEMANTIC_ARGS);
+      expect(readRpcErrorCode(r)).toBe("BELIEF_VECTORS_MISSING");
+      expect(r.error!.message).toContain("the query embed was still spent");
+      expect(r.error!.message).toContain(`model ${LOCAL_EMBEDDING_MODEL}`);
+    },
+  );
+
+  test.skipIf(!VEC_LOADABLE)(
+    "a reach-withheld page with a vector never lifts the refusal",
+    async () => {
+      writeLocalSemanticConfig();
+      writeBelief("pref-reserved", "keep answers short and brief", "visibility: [private]\n");
+      await indexBeliefs(true);
+      writeBelief("pref-public", "a public belief with no vector yet");
+      await indexBeliefs(false);
+
+      const local = new MCPServer({ vault, configPath }, { reach: "local" });
+      await initialize(local);
+      const seen = await callPack(local, SEMANTIC_ARGS);
+      expect((seen["semantic"] as Record<string, unknown>)["scored"]).toBe(1);
 
       const remote = new MCPServer({ vault, configPath }, { reach: "remote" });
       await initialize(remote);
       const r = await callPackRpc(remote, SEMANTIC_ARGS);
-      expect(readRpcErrorCode(r)).toBe("EMBEDDING_COST_UNPRICED");
-      expect(fake.callCount()).toBe(0);
+      expect(readRpcErrorCode(r)).toBe("BELIEF_VECTORS_MISSING");
+      expect(JSON.stringify(r)).not.toContain("pref-reserved");
+    },
+  );
 
-      // The operator's own transport keeps the disclosed, ungated embed.
-      const local = new MCPServer({ vault, configPath }, { reach: "local" });
-      await initialize(local);
-      const out = await callPack(local, SEMANTIC_ARGS);
-      expect(fake.callCount()).toBe(1);
-      expect((out["semantic"] as Record<string, unknown>)["price_source"]).toBe(
-        EMBEDDING_PRICE_SOURCE.unknown,
-      );
-    } finally {
-      await fake.close();
-    }
-  });
-
-  test("a contradicted embedding identity reaches the wire warnings", async () => {
-    if (!sqliteVecLoadable()) return;
-    writeLocalSemanticConfig();
-    writeBelief("pref-brevity", "keep answers short and brief");
-    await indexBeliefs(true);
-    const store = await Store.open(resolveSearchConfig({ vault, configPath }), { mode: "write" });
-    store.setState(EMBEDDING_DIMENSION_STATE_KEY, "999");
-    await store.close();
-    const server = new MCPServer({ vault, configPath });
-    await initialize(server);
-
-    const out = await callPack(server, SEMANTIC_ARGS);
-
-    const warnings = out["warnings"] as string[];
-    expect(warnings.some((w) => w.includes(EMBEDDING_DIMENSION_STATE_KEY))).toBe(true);
-  });
-
-  test("vectors captured while a page was reserved never order it for a remote caller", async () => {
-    if (!sqliteVecLoadable()) return;
-    const SECRET = "secret salary negotiation number is high";
-    const PUBLIC = "use tabs for indentation in makefiles";
-    const probe = {
-      max_tokens: 10_000,
-      query: "secret salary negotiation number",
-      query_mode: "semantic",
-    };
-    /** One remote pack over a fresh vault, `seed` deciding what the last index run saw. */
-    async function remotePack(seed: () => Promise<void>): Promise<Record<string, unknown>> {
-      rmSync(vault, { recursive: true, force: true });
-      mkdirSync(join(vault, "Brain", "preferences"), { recursive: true });
+  test.skipIf(!VEC_LOADABLE)(
+    "scored on the wire counts kept candidates only, not every belief with a vector",
+    async () => {
       writeLocalSemanticConfig();
-      await seed();
+      // Indexed public with a vector, reserved since: the loader still reads
+      // its vector vault-wide, the pack's reach filter drops the live page.
+      writeBelief("pref-reserved", "keep answers short and brief");
+      writeBelief("pref-public", "never ship on friday");
+      await indexBeliefs(true);
+      writeBelief("pref-reserved", "keep answers short and brief", "visibility: [private]\n");
       const remote = new MCPServer({ vault, configPath }, { reach: "remote" });
       await initialize(remote);
-      const out = await callPack(remote, probe);
-      return { items: out["items"], semantic: out["semantic"] };
-    }
 
-    const reservedThenRewritten = await remotePack(async () => {
-      writeBelief("pref-a", "keep answers short and brief");
-      writeBelief("pref-b", SECRET, "visibility: [private]\n");
-      await indexBeliefs(true);
-      writeBelief("pref-b", PUBLIC);
-    });
-    const neverReserved = await remotePack(async () => {
-      writeBelief("pref-a", "keep answers short and brief");
-      await indexBeliefs(true);
-      writeBelief("pref-b", PUBLIC);
-    });
+      const out = await callPack(remote, SEMANTIC_ARGS);
 
-    expect(JSON.stringify(reservedThenRewritten)).toBe(JSON.stringify(neverReserved));
-  });
+      const semantic = out["semantic"] as Record<string, unknown>;
+      expect(semantic["scored"]).toBe(1);
+      expect(semantic["unembedded"]).toEqual([]);
+      expect(JSON.stringify(out)).not.toContain("pref-reserved");
+    },
+  );
+
+  test.skipIf(!VEC_LOADABLE)(
+    "an unpriced openai-compat model reports a null cost and an unknown price on the wire",
+    async () => {
+      const server = await startFakeHttp();
+      try {
+        atomicWriteFileSync(
+          configPath,
+          [
+            `vault: ${vault}`,
+            "agent_name: claude",
+            "search_semantic_enabled: true",
+            "embedding_provider: openai-compat",
+            `embedding_base_url: "${server.url}"`,
+            "embedding_model: c13-unpriced-model",
+            "embedding_api_key: test-key",
+            "embedding_dimension: 4",
+            "",
+          ].join("\n"),
+        );
+        writeBelief("pref-brevity", "keep answers short and brief");
+        await indexBeliefs(false);
+        await plantVectors(["Brain/preferences/pref-brevity.md"], "c13-unpriced-model");
+        const mcp = new MCPServer({ vault, configPath });
+        await initialize(mcp);
+
+        const out = await callPack(mcp, SEMANTIC_ARGS);
+
+        const semantic = out["semantic"] as Record<string, unknown>;
+        expect(semantic["model"]).toBe("c13-unpriced-model");
+        expect(semantic["price_source"]).toBe(EMBEDDING_PRICE_SOURCE.unknown);
+        expect(semantic["estimated_usd"]).toBeNull();
+        expect(semantic["scored"]).toBe(1);
+      } finally {
+        await server.close();
+      }
+    },
+  );
+
+  test.skipIf(!VEC_LOADABLE)(
+    "a remote caller's unpriced query embed under a positive gate is refused before it is sent",
+    async () => {
+      const fake = await startFakeHttp();
+      try {
+        atomicWriteFileSync(
+          configPath,
+          [
+            `vault: ${vault}`,
+            "agent_name: claude",
+            "search_semantic_enabled: true",
+            "embedding_provider: openai-compat",
+            `embedding_base_url: "${fake.url}"`,
+            "embedding_model: c13-unpriced-model",
+            "embedding_api_key: test-key",
+            "embedding_dimension: 4",
+            "embedding_cost_gate_usd: 1",
+            "",
+          ].join("\n"),
+        );
+        writeBelief("pref-brevity", "keep answers short and brief");
+        await indexBeliefs(false);
+        await plantVectors(["Brain/preferences/pref-brevity.md"], "c13-unpriced-model");
+
+        const remote = new MCPServer({ vault, configPath }, { reach: "remote" });
+        await initialize(remote);
+        const r = await callPackRpc(remote, SEMANTIC_ARGS);
+        expect(readRpcErrorCode(r)).toBe("EMBEDDING_COST_UNPRICED");
+        expect(fake.callCount()).toBe(0);
+
+        // The operator's own transport keeps the disclosed, ungated embed.
+        const local = new MCPServer({ vault, configPath }, { reach: "local" });
+        await initialize(local);
+        const out = await callPack(local, SEMANTIC_ARGS);
+        expect(fake.callCount()).toBe(1);
+        expect((out["semantic"] as Record<string, unknown>)["price_source"]).toBe(
+          EMBEDDING_PRICE_SOURCE.unknown,
+        );
+      } finally {
+        await fake.close();
+      }
+    },
+  );
+
+  test.skipIf(!VEC_LOADABLE)(
+    "a contradicted embedding identity reaches the wire warnings",
+    async () => {
+      writeLocalSemanticConfig();
+      writeBelief("pref-brevity", "keep answers short and brief");
+      await indexBeliefs(true);
+      const store = await Store.open(resolveSearchConfig({ vault, configPath }), { mode: "write" });
+      store.setState(EMBEDDING_DIMENSION_STATE_KEY, "999");
+      await store.close();
+      const server = new MCPServer({ vault, configPath });
+      await initialize(server);
+
+      const out = await callPack(server, SEMANTIC_ARGS);
+
+      const warnings = out["warnings"] as string[];
+      expect(warnings.some((w) => w.includes(EMBEDDING_DIMENSION_STATE_KEY))).toBe(true);
+    },
+  );
+
+  test.skipIf(!VEC_LOADABLE)(
+    "vectors captured while a page was reserved never order it for a remote caller",
+    async () => {
+      const PRIVATE_BODY = "secret salary negotiation number is high";
+      const PUBLIC = "use tabs for indentation in makefiles";
+      const probe = {
+        max_tokens: 10_000,
+        query: "secret salary negotiation number",
+        query_mode: "semantic",
+      };
+      /** One remote pack over a fresh vault, `seed` deciding what the last index run saw. */
+      async function remotePack(seed: () => Promise<void>): Promise<Record<string, unknown>> {
+        rmSync(vault, { recursive: true, force: true });
+        mkdirSync(join(vault, "Brain", "preferences"), { recursive: true });
+        writeLocalSemanticConfig();
+        await seed();
+        const remote = new MCPServer({ vault, configPath }, { reach: "remote" });
+        await initialize(remote);
+        const out = await callPack(remote, probe);
+        return { items: out["items"], semantic: out["semantic"] };
+      }
+
+      const reservedThenRewritten = await remotePack(async () => {
+        writeBelief("pref-a", "keep answers short and brief");
+        writeBelief("pref-b", PRIVATE_BODY, "visibility: [private]\n");
+        await indexBeliefs(true);
+        writeBelief("pref-b", PUBLIC);
+      });
+      const neverReserved = await remotePack(async () => {
+        writeBelief("pref-a", "keep answers short and brief");
+        await indexBeliefs(true);
+        writeBelief("pref-b", PUBLIC);
+      });
+
+      expect(JSON.stringify(reservedThenRewritten)).toBe(JSON.stringify(neverReserved));
+    },
+  );
 
   /** One raw pack over a fresh vault, `seed` deciding what the index and the live files hold. */
   async function freshPackRpc(
@@ -962,43 +986,47 @@ describe("brain_context_pack tool — semantic query mode", () => {
     return JSON.stringify(await callPackRpc(server, SEMANTIC_ARGS));
   }
 
-  test("a belief reserved since its vector was stored answers as if it were absent", async () => {
-    if (!sqliteVecLoadable()) return;
-    const withheld = await freshPackRpc("remote", async () => {
-      writeBelief("pref-withheld", "keep answers short and brief");
-      await indexBeliefs(true);
-      writeBelief("pref-public", "a public belief with no vector yet");
-      await indexBeliefs(false);
-      writeBelief("pref-withheld", "keep answers short and brief", "visibility: [private]\n");
-    });
-    const absent = await freshPackRpc("remote", async () => {
-      writeBelief("pref-public", "a public belief with no vector yet");
-      await indexBeliefs(false);
-    });
+  test.skipIf(!VEC_LOADABLE)(
+    "a belief reserved since its vector was stored answers as if it were absent",
+    async () => {
+      const withheld = await freshPackRpc("remote", async () => {
+        writeBelief("pref-withheld", "keep answers short and brief");
+        await indexBeliefs(true);
+        writeBelief("pref-public", "a public belief with no vector yet");
+        await indexBeliefs(false);
+        writeBelief("pref-withheld", "keep answers short and brief", "visibility: [private]\n");
+      });
+      const absent = await freshPackRpc("remote", async () => {
+        writeBelief("pref-public", "a public belief with no vector yet");
+        await indexBeliefs(false);
+      });
 
-    expect(withheld).toBe(absent);
-  });
+      expect(withheld).toBe(absent);
+    },
+  );
 
-  test("a belief another owner holds answers as if it were absent under the owner gate", async () => {
-    if (!sqliteVecLoadable()) return;
-    const gate = () =>
-      writeFileSync(
-        brainConfigPath(vault),
-        "schema_version: 1\nintegrity:\n  owner_scope_delivery: fail\n",
-      );
-    const withheld = await freshPackRpc("local", async () => {
-      gate();
-      writeBelief("pref-foreign", "keep answers short and brief", "owner: another-agent\n");
-      await indexBeliefs(true);
-      writeBelief("pref-own", "a belief of this agent with no vector yet");
-      await indexBeliefs(false);
-    });
-    const absent = await freshPackRpc("local", async () => {
-      gate();
-      writeBelief("pref-own", "a belief of this agent with no vector yet");
-      await indexBeliefs(false);
-    });
+  test.skipIf(!VEC_LOADABLE)(
+    "a belief another owner holds answers as if it were absent under the owner gate",
+    async () => {
+      const gate = () =>
+        writeFileSync(
+          brainConfigPath(vault),
+          "schema_version: 1\nintegrity:\n  owner_scope_delivery: fail\n",
+        );
+      const withheld = await freshPackRpc("local", async () => {
+        gate();
+        writeBelief("pref-foreign", "keep answers short and brief", "owner: another-agent\n");
+        await indexBeliefs(true);
+        writeBelief("pref-own", "a belief of this agent with no vector yet");
+        await indexBeliefs(false);
+      });
+      const absent = await freshPackRpc("local", async () => {
+        gate();
+        writeBelief("pref-own", "a belief of this agent with no vector yet");
+        await indexBeliefs(false);
+      });
 
-    expect(withheld).toBe(absent);
-  });
+      expect(withheld).toBe(absent);
+    },
+  );
 });

@@ -245,48 +245,49 @@ describe("scoreBeliefsByVector", () => {
 });
 
 describe("loadBeliefSemanticRelevance", () => {
-  test("reads stored belief vectors, embeds the query once and discloses the spend", async () => {
-    if (!sqliteVecLoadable()) return;
-    writeBelief("Brain/preferences/pref-near.md", "pref-near", "Keep answers short");
-    writeBelief("Brain/preferences/pref-far.md", "pref-far", "Use tabs in makefiles");
-    writeBelief("Brain/retired/pref-old.md", "pref-old", "Answer in long form");
-    writeBelief("Brain/preferences/pref-stale.md", "pref-stale", "Reply politely");
-    writeBelief("Brain/preferences/pref-new.md", "pref-new", "Never guess");
-    writeMd(vault, "Notes/elsewhere.md", "# Elsewhere\n\nA note that is not a belief.\n");
-    const config = vecConfig();
-    await indexVault(config);
-    await plant(config, {
-      "Brain/preferences/pref-near.md": { vector: [1, 0.05, 0, 0] },
-      "Brain/preferences/pref-far.md": { vector: [0, 0, 0, 1] },
-      "Brain/retired/pref-old.md": { vector: [0.7, 0.7, 0, 0] },
-      "Brain/preferences/pref-stale.md": { vector: [1, 0, 0, 0], model: OTHER_MODEL },
-      "Notes/elsewhere.md": { vector: [1, 0, 0, 0] },
-    });
-    const { provider, calls } = countingProvider(unit([1, 0, 0, 0]));
+  test.skipIf(!VEC_LOADABLE)(
+    "reads stored belief vectors, embeds the query once and discloses the spend",
+    async () => {
+      writeBelief("Brain/preferences/pref-near.md", "pref-near", "Keep answers short");
+      writeBelief("Brain/preferences/pref-far.md", "pref-far", "Use tabs in makefiles");
+      writeBelief("Brain/retired/pref-old.md", "pref-old", "Answer in long form");
+      writeBelief("Brain/preferences/pref-stale.md", "pref-stale", "Reply politely");
+      writeBelief("Brain/preferences/pref-new.md", "pref-new", "Never guess");
+      writeMd(vault, "Notes/elsewhere.md", "# Elsewhere\n\nA note that is not a belief.\n");
+      const config = vecConfig();
+      await indexVault(config);
+      await plant(config, {
+        "Brain/preferences/pref-near.md": { vector: [1, 0.05, 0, 0] },
+        "Brain/preferences/pref-far.md": { vector: [0, 0, 0, 1] },
+        "Brain/retired/pref-old.md": { vector: [0.7, 0.7, 0, 0] },
+        "Brain/preferences/pref-stale.md": { vector: [1, 0, 0, 0], model: OTHER_MODEL },
+        "Notes/elsewhere.md": { vector: [1, 0, 0, 0] },
+      });
+      const { provider, calls } = countingProvider(unit([1, 0, 0, 0]));
 
-    const loaded = await loadBeliefSemanticRelevance(config, QUERY, { provider });
+      const loaded = await loadBeliefSemanticRelevance(config, QUERY, { provider });
 
-    expect(calls).toEqual([{ texts: [QUERY], kind: "query" }]);
-    expect(loaded.order).toEqual([
-      "Brain/preferences/pref-near.md",
-      "Brain/retired/pref-old.md",
-      "Brain/preferences/pref-far.md",
-    ]);
-    expect(loaded.relevanceByPath.has("Notes/elsewhere.md")).toBe(false);
-    expect(loaded.unembedded).toEqual([
-      "Brain/preferences/pref-new.md",
-      "Brain/preferences/pref-stale.md",
-    ]);
-    expect(loaded.scored).toBe(3);
-    expect(loaded.report.model).toBe(MODEL);
-    expect(loaded.report.priceSource).toBe(EMBEDDING_PRICE_SOURCE.unknown);
-    expect(loaded.report.estimatedUsd).toBeNull();
-    expect(loaded.report.queryTokens).toBeGreaterThan(0);
-    expect(loaded.warnings).toEqual([]);
-  });
+      expect(calls).toEqual([{ texts: [QUERY], kind: "query" }]);
+      expect(loaded.order).toEqual([
+        "Brain/preferences/pref-near.md",
+        "Brain/retired/pref-old.md",
+        "Brain/preferences/pref-far.md",
+      ]);
+      expect(loaded.relevanceByPath.has("Notes/elsewhere.md")).toBe(false);
+      expect(loaded.unembedded).toEqual([
+        "Brain/preferences/pref-new.md",
+        "Brain/preferences/pref-stale.md",
+      ]);
+      expect(loaded.scored).toBe(3);
+      expect(loaded.report.model).toBe(MODEL);
+      expect(loaded.report.priceSource).toBe(EMBEDDING_PRICE_SOURCE.unknown);
+      expect(loaded.report.estimatedUsd).toBeNull();
+      expect(loaded.report.queryTokens).toBeGreaterThan(0);
+      expect(loaded.warnings).toEqual([]);
+    },
+  );
 
-  test("an operator-priced model reports its query cost", async () => {
-    if (!sqliteVecLoadable()) return;
+  test.skipIf(!VEC_LOADABLE)("an operator-priced model reports its query cost", async () => {
     writeBelief("Brain/preferences/pref-a.md", "pref-a", "Keep answers short");
     const config = vecConfig({ priceOverride: { model: MODEL, usdPerMtok: 2 } });
     await indexVault(config);
@@ -299,55 +300,61 @@ describe("loadBeliefSemanticRelevance", () => {
     expect(loaded.report.estimatedUsd).toBeCloseTo((loaded.report.queryTokens / 1_000_000) * 2, 12);
   });
 
-  test("the local provider prices its query as the local model, not a leftover embedding_model", async () => {
-    if (!sqliteVecLoadable()) return;
-    writeBelief("Brain/preferences/pref-a.md", "pref-a", "Keep answers short");
-    const config = vecConfig({ provider: "local", apiKey: null });
-    await indexVault(config);
-    await plant(config, { "Brain/preferences/pref-a.md": { vector: [1, 0, 0, 0] } });
-    const { provider } = countingProvider(unit([1, 0, 0, 0]));
+  test.skipIf(!VEC_LOADABLE)(
+    "the local provider prices its query as the local model, not a leftover embedding_model",
+    async () => {
+      writeBelief("Brain/preferences/pref-a.md", "pref-a", "Keep answers short");
+      const config = vecConfig({ provider: "local", apiKey: null });
+      await indexVault(config);
+      await plant(config, { "Brain/preferences/pref-a.md": { vector: [1, 0, 0, 0] } });
+      const { provider } = countingProvider(unit([1, 0, 0, 0]));
 
-    const loaded = await loadBeliefSemanticRelevance(config, QUERY, { provider });
+      const loaded = await loadBeliefSemanticRelevance(config, QUERY, { provider });
 
-    expect(loaded.scored).toBe(1);
-    expect(loaded.report.model).toBe(LOCAL_EMBEDDING_MODEL);
-    expect(loaded.report.priceSource).toBe(EMBEDDING_PRICE_SOURCE.builtin);
-    expect(loaded.report.estimatedUsd).toBe(0);
-  });
+      expect(loaded.scored).toBe(1);
+      expect(loaded.report.model).toBe(LOCAL_EMBEDDING_MODEL);
+      expect(loaded.report.priceSource).toBe(EMBEDDING_PRICE_SOURCE.builtin);
+      expect(loaded.report.estimatedUsd).toBe(0);
+    },
+  );
 
-  test("no belief row under the model refuses with BELIEF_VECTORS_MISSING before any query embed", async () => {
-    if (!sqliteVecLoadable()) return;
-    writeBelief("Brain/preferences/pref-a.md", "pref-a", "Keep answers short");
-    writeBelief("Brain/preferences/pref-b.md", "pref-b", "Reply politely");
-    const config = vecConfig();
-    await indexVault(config);
-    await plant(config, {
-      "Brain/preferences/pref-b.md": { vector: [1, 0, 0, 0], model: OTHER_MODEL },
-    });
+  test.skipIf(!VEC_LOADABLE)(
+    "no belief row under the model refuses with BELIEF_VECTORS_MISSING before any query embed",
+    async () => {
+      writeBelief("Brain/preferences/pref-a.md", "pref-a", "Keep answers short");
+      writeBelief("Brain/preferences/pref-b.md", "pref-b", "Reply politely");
+      const config = vecConfig();
+      await indexVault(config);
+      await plant(config, {
+        "Brain/preferences/pref-b.md": { vector: [1, 0, 0, 0], model: OTHER_MODEL },
+      });
 
-    const refusal = await loadBeliefSemanticRelevance(config, QUERY, {
-      provider: throwingProvider,
-    }).catch((e: unknown) => e);
+      const refusal = await loadBeliefSemanticRelevance(config, QUERY, {
+        provider: throwingProvider,
+      }).catch((e: unknown) => e);
 
-    expect(refusal).toBeInstanceOf(SearchError);
-    expect((refusal as SearchError).code).toBe("BELIEF_VECTORS_MISSING");
-    expect((refusal as SearchError).message).toContain(BELIEF_VECTORS_BACKFILL_COMMAND);
-  });
+      expect(refusal).toBeInstanceOf(SearchError);
+      expect((refusal as SearchError).code).toBe("BELIEF_VECTORS_MISSING");
+      expect((refusal as SearchError).message).toContain(BELIEF_VECTORS_BACKFILL_COMMAND);
+    },
+  );
 
-  test("a row under the model at another dimension still embeds and reads as unembedded", async () => {
-    if (!sqliteVecLoadable()) return;
-    writeBelief("Brain/preferences/pref-a.md", "pref-a", "Keep answers short");
-    const config = vecConfig();
-    await indexVault(config);
-    await plant(config, { "Brain/preferences/pref-a.md": { vector: [1, 0, 0, 0] } });
-    const { provider, calls } = countingProvider(unit([1, 0, 0]));
+  test.skipIf(!VEC_LOADABLE)(
+    "a row under the model at another dimension still embeds and reads as unembedded",
+    async () => {
+      writeBelief("Brain/preferences/pref-a.md", "pref-a", "Keep answers short");
+      const config = vecConfig();
+      await indexVault(config);
+      await plant(config, { "Brain/preferences/pref-a.md": { vector: [1, 0, 0, 0] } });
+      const { provider, calls } = countingProvider(unit([1, 0, 0]));
 
-    const loaded = await loadBeliefSemanticRelevance(config, QUERY, { provider });
+      const loaded = await loadBeliefSemanticRelevance(config, QUERY, { provider });
 
-    expect(calls).toHaveLength(1);
-    expect(loaded.scored).toBe(0);
-    expect(loaded.unembedded).toEqual(["Brain/preferences/pref-a.md"]);
-  });
+      expect(calls).toHaveLength(1);
+      expect(loaded.scored).toBe(0);
+      expect(loaded.unembedded).toEqual(["Brain/preferences/pref-a.md"]);
+    },
+  );
 
   test("a disabled tier refuses with EMBEDDING_DISABLED before any query embed", async () => {
     const config = vecConfig({ enabled: false });
@@ -382,48 +389,52 @@ describe("loadBeliefSemanticRelevance", () => {
     expect((refusal as SearchError).code).toBe("VEC_EXTENSION_UNAVAILABLE");
   });
 
-  test("a sibling directory sharing the prefix string is not a belief", async () => {
-    if (!sqliteVecLoadable()) return;
-    writeBelief("Brain/preferences/pref-a.md", "pref-a", "Keep answers short");
-    writeBelief("Brain/preferences-archive/x.md", "pref-x", "Keep answers short");
-    const config = vecConfig();
-    await indexVault(config);
-    await plant(config, {
-      "Brain/preferences/pref-a.md": { vector: [1, 0, 0, 0] },
-      "Brain/preferences-archive/x.md": { vector: [1, 0, 0, 0] },
-    });
-    const { provider } = countingProvider(unit([1, 0, 0, 0]));
+  test.skipIf(!VEC_LOADABLE)(
+    "a sibling directory sharing the prefix string is not a belief",
+    async () => {
+      writeBelief("Brain/preferences/pref-a.md", "pref-a", "Keep answers short");
+      writeBelief("Brain/preferences-archive/x.md", "pref-x", "Keep answers short");
+      const config = vecConfig();
+      await indexVault(config);
+      await plant(config, {
+        "Brain/preferences/pref-a.md": { vector: [1, 0, 0, 0] },
+        "Brain/preferences-archive/x.md": { vector: [1, 0, 0, 0] },
+      });
+      const { provider } = countingProvider(unit([1, 0, 0, 0]));
 
-    const loaded = await loadBeliefSemanticRelevance(config, QUERY, { provider });
+      const loaded = await loadBeliefSemanticRelevance(config, QUERY, { provider });
 
-    expect([...loaded.relevanceByPath.keys()]).toEqual(["Brain/preferences/pref-a.md"]);
-    expect(loaded.unembedded).toEqual([]);
-  });
+      expect([...loaded.relevanceByPath.keys()]).toEqual(["Brain/preferences/pref-a.md"]);
+      expect(loaded.unembedded).toEqual([]);
+    },
+  );
 
   for (const [label, vector] of [
     ["an empty", []],
     ["a non-finite", [Number.NaN, 0, 0, 0]],
   ] as const) {
-    test(`${label} query vector is refused with EMBEDDING_INVALID_VECTOR`, async () => {
-      if (!sqliteVecLoadable()) return;
-      writeBelief("Brain/preferences/pref-a.md", "pref-a", "Keep answers short");
-      const config = vecConfig();
-      await indexVault(config);
-      await plant(config, { "Brain/preferences/pref-a.md": { vector: [1, 0, 0, 0] } });
-      const { provider } = countingProvider([...vector]);
+    test.skipIf(!VEC_LOADABLE)(
+      `${label} query vector is refused with EMBEDDING_INVALID_VECTOR`,
+      async () => {
+        writeBelief("Brain/preferences/pref-a.md", "pref-a", "Keep answers short");
+        const config = vecConfig();
+        await indexVault(config);
+        await plant(config, { "Brain/preferences/pref-a.md": { vector: [1, 0, 0, 0] } });
+        const { provider } = countingProvider([...vector]);
 
-      const refusal = await loadBeliefSemanticRelevance(config, QUERY, { provider }).catch(
-        (e: unknown) => e,
-      );
+        const refusal = await loadBeliefSemanticRelevance(config, QUERY, { provider }).catch(
+          (e: unknown) => e,
+        );
 
-      expect(refusal).toBeInstanceOf(SearchError);
-      expect((refusal as SearchError).code).toBe("EMBEDDING_INVALID_VECTOR");
-      expect((refusal as SearchError).message).toContain("belief semantic query");
-      // The provider answered, so the call was paid: the refusal names it.
-      expect((refusal as SearchError).message).toContain("the query embed was still spent");
-      expect((refusal as SearchError).message).toContain(`model ${MODEL}`);
-      expect((refusal as SearchError).message).toContain("price source unknown");
-    });
+        expect(refusal).toBeInstanceOf(SearchError);
+        expect((refusal as SearchError).code).toBe("EMBEDDING_INVALID_VECTOR");
+        expect((refusal as SearchError).message).toContain("belief semantic query");
+        // The provider answered, so the call was paid: the refusal names it.
+        expect((refusal as SearchError).message).toContain("the query embed was still spent");
+        expect((refusal as SearchError).message).toContain(`model ${MODEL}`);
+        expect((refusal as SearchError).message).toContain("price source unknown");
+      },
+    );
   }
 
   describe("an unpriced query embed under a positive cost gate", () => {
@@ -484,8 +495,7 @@ describe("loadBeliefSemanticRelevance", () => {
     );
   });
 
-  test("a contradicted embedding identity reaches the warnings", async () => {
-    if (!sqliteVecLoadable()) return;
+  test.skipIf(!VEC_LOADABLE)("a contradicted embedding identity reaches the warnings", async () => {
     writeBelief("Brain/preferences/pref-a.md", "pref-a", "Keep answers short");
     const config = vecConfig();
     await indexVault(config);
