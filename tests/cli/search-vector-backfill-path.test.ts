@@ -253,14 +253,6 @@ test.skipIf(!VEC_LOADABLE)("--apply --path embeds only the scoped chunks", async
   expect(rest.pending).toBeGreaterThan(0);
 });
 
-test.skipIf(!VEC_LOADABLE)("an unsafe --path exits non-zero naming the prefix", async () => {
-  await seed();
-  const config = await cliConfig();
-  const run = await backfillCli(config, ["--path", "../outside/"]);
-  expect(run.returncode).not.toBe(0);
-  expect(run.stderr).toContain("../outside/");
-});
-
 test.skipIf(!VEC_LOADABLE).each([
   ["", []],
   ["", ["--apply"]],

@@ -37,6 +37,7 @@ const UNLISTED_MODEL = "zembed-1";
 const MILLION_TOKEN_TEXTS = ["x".repeat(4_000_000)];
 const LOW_GATE_USD = 0.001;
 const HIGH_GATE_USD = 100;
+const MICRO_USD = 0.000001;
 
 // ── pure gate verdicts ───────────────────────────────────────────────────────
 
@@ -57,7 +58,26 @@ test("a positive gate with a known price blocks only over the cap, as over_cap",
   const over = evaluateCostGate({ texts: MILLION_TOKEN_TEXTS, quote, gateUsd: LOW_GATE_USD });
   expect(over).toMatchObject({ blocked: true, reason: EMBEDDING_GATE_REASON.overCap });
   const under = evaluateCostGate({ texts: MILLION_TOKEN_TEXTS, quote, gateUsd: HIGH_GATE_USD });
-  expect(under).toMatchObject({ blocked: false, reason: null });
+  expect(under).toMatchObject({ blocked: false, reason: null, tokens: 1_000_000 });
+  expect(under.estimatedUsd).toBeGreaterThan(0);
+});
+
+test("an estimate exactly at the gate passes; one micro-dollar over blocks", () => {
+  const quote = resolveEmbeddingPrice(TABLE_MODEL);
+  const estimate = evaluateCostGate({
+    texts: MILLION_TOKEN_TEXTS,
+    quote,
+    gateUsd: 0,
+  }).estimatedUsd!;
+  expect(estimate).toBeGreaterThan(MICRO_USD);
+  const at = evaluateCostGate({ texts: MILLION_TOKEN_TEXTS, quote, gateUsd: estimate });
+  expect(at.blocked).toBe(false);
+  const below = evaluateCostGate({
+    texts: MILLION_TOKEN_TEXTS,
+    quote,
+    gateUsd: estimate - MICRO_USD,
+  });
+  expect(below.blocked).toBe(true);
 });
 
 test("a positive gate with an unknown price and pending work blocks as unpriced", () => {

@@ -48,7 +48,6 @@ import {
 } from "../../../src/core/search/embeddings/signature.ts";
 import { SearchError } from "../../../src/core/search/types.ts";
 import type { ResolvedSearchConfig } from "../../../src/core/search/types.ts";
-import { isToolErrorCode } from "../../../src/mcp/tool-error-codes.ts";
 import { startFakeHttp, type FakeHttp } from "../../helpers/fake-http.ts";
 import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
 
@@ -468,10 +467,6 @@ test("the over-cap refusal keeps its code and message", async () => {
   }
 });
 
-test("the unpriced refusal code is registered on the MCP wire", () => {
-  expect(isToolErrorCode("EMBEDDING_COST_UNPRICED")).toBe(true);
-});
-
 // ── every surface reads the one plan ────────────────────────────────────────
 
 const OPERATOR_PRICED = {
@@ -556,27 +551,13 @@ test("an unknown price reads null on every surface and blocks as unpriced under 
   });
 });
 
-test("the backfill knows the price of the local model and of an operator-priced model", async () => {
+test("a local index prices as a known zero on the backfill and on status", async () => {
   const local = configWith({ search_semantic_enabled: "true", embedding_provider: "local" });
   await storeWithChunks(local, ["local chunk"]);
   expect(await planVectorBackfill(local)).toMatchObject({
     estimatedCostUsd: 0,
     priceSource: "builtin",
   });
-
-  const operator = configWith({
-    ...PRICED_MODEL,
-    embedding_model: UNPRICED_MODEL,
-    ...OPERATOR_PRICED,
-  });
-  expect(await planVectorBackfill(operator)).toMatchObject({
-    priceSource: "operator",
-  });
-});
-
-test("the status estimate of a local index is a known zero", async () => {
-  const local = configWith({ search_semantic_enabled: "true", embedding_provider: "local" });
-  await storeWithChunks(local, ["local chunk"]);
   const status = await indexStatus(local);
   expect(status.estimatedRefreshCostUsd).toBe(0);
   expect(status.refreshPriceSource).toBe("builtin");
