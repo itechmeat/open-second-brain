@@ -46,7 +46,6 @@ import type { EmbeddingPriceSource } from "./embeddings/pricing.ts";
 import { makeProvider } from "./embeddings/provider.ts";
 import {
   embeddingSignature,
-  estimateCostUsd,
   isStaleSignature,
   MODEL_NATIVE_DIMENSION,
   type EmbeddingIdentity,
@@ -1662,10 +1661,10 @@ export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexSt
       refreshPriceSource = quote.source;
       if (quote.usdPerMtok !== null && quote.usdPerMtok > 0) {
         estimatedRefreshCostUsd = planEmbeddingSpend(store, config).estimatedUsd;
-      } else if (quote.usdPerMtok === null && store.countChunksWithoutEmbeddings() === 0) {
-        estimatedRefreshCostUsd = 0;
+      } else if (quote.usdPerMtok === null && store.countChunksWithoutEmbeddings() > 0) {
+        estimatedRefreshCostUsd = null;
       } else {
-        estimatedRefreshCostUsd = estimateCostUsd(0, quote);
+        estimatedRefreshCostUsd = 0;
       }
     }
 
