@@ -27,6 +27,7 @@ import {
   type StoredBeliefVector,
 } from "../../../src/core/brain/belief-semantic.ts";
 import { EMBEDDING_PRICE_SOURCE } from "../../../src/core/search/embeddings/pricing.ts";
+import { LOCAL_EMBEDDING_MODEL } from "../../../src/core/search/embeddings/signature.ts";
 import type { EmbedKind, EmbeddingProvider } from "../../../src/core/search/embeddings/contract.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { Store } from "../../../src/core/search/store.ts";
@@ -243,6 +244,22 @@ describe("loadBeliefSemanticRelevance", () => {
 
     expect(loaded.report.priceSource).toBe(EMBEDDING_PRICE_SOURCE.operator);
     expect(loaded.report.estimatedUsd).toBeCloseTo((loaded.report.queryTokens / 1_000_000) * 2, 12);
+  });
+
+  test("the local provider prices its query as the local model, not a leftover embedding_model", async () => {
+    if (!sqliteVecLoadable()) return;
+    writeBelief("Brain/preferences/pref-a.md", "pref-a", "Keep answers short");
+    const config = vecConfig({ provider: "local", apiKey: null });
+    await indexVault(config);
+    await plant(config, { "Brain/preferences/pref-a.md": { vector: [1, 0, 0, 0] } });
+    const { provider } = countingProvider(unit([1, 0, 0, 0]));
+
+    const loaded = await loadBeliefSemanticRelevance(config, QUERY, { provider });
+
+    expect(loaded.scored).toBe(1);
+    expect(loaded.report.model).toBe(LOCAL_EMBEDDING_MODEL);
+    expect(loaded.report.priceSource).toBe(EMBEDDING_PRICE_SOURCE.builtin);
+    expect(loaded.report.estimatedUsd).toBe(0);
   });
 
   test("no belief row under the model refuses with BELIEF_VECTORS_MISSING before any query embed", async () => {

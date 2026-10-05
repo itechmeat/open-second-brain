@@ -38,7 +38,8 @@ import {
   semanticCapabilityLabel,
 } from "../search/capability-tier.ts";
 import type { EmbeddingProvider } from "../search/embeddings/contract.ts";
-import { resolveEmbeddingPrice, type EmbeddingPriceSource } from "../search/embeddings/pricing.ts";
+import { activeSpendQuote } from "../search/embedding-spend.ts";
+import type { EmbeddingPriceSource } from "../search/embeddings/pricing.ts";
 import { makeProvider } from "../search/embeddings/provider.ts";
 import { estimateCostUsd, estimateTokens } from "../search/embeddings/signature.ts";
 import { SearchError } from "../search/search-error.ts";
@@ -222,16 +223,18 @@ export async function loadBeliefSemanticRelevance(
     }
     const [queryVector = []] = await provider.embed([query], "query");
     assertValidVector(queryVector, QUERY_VECTOR_CONTEXT);
-    const quote = resolveEmbeddingPrice(model, config.semantic.priceOverride);
+    // Priced through the resolution every spend surface shares; `model`
+    // above stays the row filter because it matches the indexer's stamp.
+    const spend = activeSpendQuote(config);
     const queryTokens = estimateTokens([query]);
     const contradicted = contradictedAbiFields(store.embeddingAbiMismatches());
     return {
       ...scoreBeliefsByVector({ model, queryVector, vectorsByPath }),
       report: {
-        model,
-        priceSource: quote.source,
+        model: spend.model ?? model,
+        priceSource: spend.quote.source,
         queryTokens,
-        estimatedUsd: estimateCostUsd(queryTokens, quote),
+        estimatedUsd: estimateCostUsd(queryTokens, spend.quote),
       },
       warnings: Object.freeze(
         contradicted.length > 0 ? [formatEmbeddingAbiDrift(contradicted)] : [],
