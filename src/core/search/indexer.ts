@@ -33,7 +33,10 @@ import { declaredInputWindowTokens, passagePrefixSentByProvider } from "./embedd
 import {
   activeEmbeddingModel,
   EMBEDDING_GATE_REASON,
+  formatEstimatedUsd,
   planEmbeddingSpend,
+  unpricedRefusalMessage,
+  USD_DECIMALS,
 } from "./embedding-spend.ts";
 import { resolveEmbeddingPrice } from "./embeddings/pricing.ts";
 import { makeProvider } from "./embeddings/provider.ts";
@@ -1058,20 +1061,24 @@ export async function runEmbeddingPhase(
   // forced plan would have returned, and `blocked && forceCost` is the
   // honest meaning of the receipt's `forced` - this run overrode a gate
   // that would have refused it.
-  const overCap = plan.gate.reason === EMBEDDING_GATE_REASON.overCap;
-  if (overCap && !forceCost) {
+  if (plan.gate.blocked && !forceCost) {
+    const gateUsd = config.semantic.costGateUsd;
+    if (plan.gate.reason === EMBEDDING_GATE_REASON.unpriced) {
+      throw new SearchError("EMBEDDING_COST_UNPRICED", unpricedRefusalMessage(plan, gateUsd));
+    }
     throw new SearchError(
       "EMBEDDING_COST_GATE",
-      `estimated embedding cost $${(plan.estimatedUsd ?? 0).toFixed(4)} for ${pending.length} chunk(s) ` +
-        `exceeds embedding_cost_gate_usd $${config.semantic.costGateUsd.toFixed(4)}. ` +
+      `estimated embedding cost ${formatEstimatedUsd(plan.estimatedUsd)} for ${pending.length} chunk(s) ` +
+        `exceeds embedding_cost_gate_usd $${gateUsd.toFixed(USD_DECIMALS)}. ` +
         `Re-run with --force-cost to proceed or raise the gate.`,
     );
   }
   stats.spend = {
     model: plan.model,
     tokens: plan.tokens,
-    estimatedUsd: plan.estimatedUsd ?? 0,
-    forced: overCap && forceCost,
+    estimatedUsd: plan.estimatedUsd,
+    forced: plan.gate.blocked && forceCost,
+    priceSource: plan.quote.source,
   };
   const batchSize = Math.max(1, config.semantic.batchSize);
   // Hand the provider a super-batch large enough to keep its internal

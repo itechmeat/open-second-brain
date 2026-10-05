@@ -54,6 +54,7 @@ import {
   parseWindowBounds,
   renderMaintenanceCronTemplate,
 } from "../../maintenance-cron.ts";
+import { PRICE_UNKNOWN_LABEL, USD_DECIMALS } from "../../../core/search/embedding-spend.ts";
 import type { EmbeddingSpendPreview } from "../../../core/search/indexer.ts";
 import { resolveSearchConfig } from "../../../core/search/index.ts";
 import { onInterrupt } from "../../interrupt.ts";
@@ -493,10 +494,11 @@ export function renderTaskLine(t: MaintenanceTaskResult): string {
     t.timed_out === true ? `TIMED OUT (${t.error})` : t.ok ? "ok" : `FAILED (${t.error})`;
   const line = `${t.name}: ${outcome} in ${t.duration_ms}ms`;
   if (t.receipt === undefined) return line;
-  return (
-    `${line} (tokens=${t.receipt.tokens}, ` +
-    `estimatedUsd=${t.receipt.estimatedUsd.toFixed(4)}, model=${t.receipt.model ?? "unknown"})`
-  );
+  const estimate =
+    t.receipt.estimatedUsd === null
+      ? PRICE_UNKNOWN_LABEL
+      : `estimatedUsd=${t.receipt.estimatedUsd.toFixed(USD_DECIMALS)}`;
+  return `${line} (tokens=${t.receipt.tokens}, ${estimate}, model=${t.receipt.model ?? "unknown"})`;
 }
 
 /**

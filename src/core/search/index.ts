@@ -24,7 +24,13 @@ import {
 import { loadRerankRegistry, expandRegisteredRerankProvider } from "./rerank/registry.ts";
 import { decisionModelModeFor, resolveDecisionModelConfig } from "../decision-model/config.ts";
 import { resolveEmbeddingPrefixes } from "./embeddings/presets.ts";
-import type { EmbeddingPriceOverride } from "./embeddings/pricing.ts";
+import {
+  EMBEDDING_PRICE_MODEL_ENV,
+  EMBEDDING_PRICE_MODEL_KEY,
+  EMBEDDING_PRICE_RATE_ENV,
+  EMBEDDING_PRICE_RATE_KEY,
+  type EmbeddingPriceOverride,
+} from "./embeddings/pricing.ts";
 import { SearchError } from "./types.ts";
 import type {
   ResolvedEmbeddingConfig,
@@ -318,9 +324,6 @@ function parseNonNegativeFloat(raw: string | null, fallback: number, fieldName: 
   return n;
 }
 
-const PRICE_MODEL_KEY = "embedding_price_model";
-const PRICE_RATE_KEY = "embedding_price_usd_per_mtok";
-
 /**
  * The operator's declared embedding price: `embedding_price_model` and
  * `embedding_price_usd_per_mtok`, both or neither, each overridable by its
@@ -334,28 +337,20 @@ function resolveEmbeddingPriceOverride(
   env: NodeJS.ProcessEnv,
   config: Readonly<Record<string, string>>,
 ): EmbeddingPriceOverride | null {
-  const model = envOrConfig(
-    env,
-    config,
-    "OPEN_SECOND_BRAIN_EMBEDDING_PRICE_MODEL",
-    PRICE_MODEL_KEY,
-  );
-  const rateRaw = envOrConfig(
-    env,
-    config,
-    "OPEN_SECOND_BRAIN_EMBEDDING_PRICE_USD_PER_MTOK",
-    PRICE_RATE_KEY,
-  );
+  const model = envOrConfig(env, config, EMBEDDING_PRICE_MODEL_ENV, EMBEDDING_PRICE_MODEL_KEY);
+  const rateRaw = envOrConfig(env, config, EMBEDDING_PRICE_RATE_ENV, EMBEDDING_PRICE_RATE_KEY);
   if (model === null && rateRaw === null) return null;
   if (model === null || rateRaw === null) {
     const [present, missing] =
-      model === null ? [PRICE_RATE_KEY, PRICE_MODEL_KEY] : [PRICE_MODEL_KEY, PRICE_RATE_KEY];
+      model === null
+        ? [EMBEDDING_PRICE_RATE_KEY, EMBEDDING_PRICE_MODEL_KEY]
+        : [EMBEDDING_PRICE_MODEL_KEY, EMBEDDING_PRICE_RATE_KEY];
     throw new SearchError(
       "INVALID_INPUT",
       `${present} is set but ${missing} is not: declare both or neither`,
     );
   }
-  const usdPerMtok = parseNonNegativeFloat(rateRaw, 0, PRICE_RATE_KEY);
+  const usdPerMtok = parseNonNegativeFloat(rateRaw, 0, EMBEDDING_PRICE_RATE_KEY);
   return Object.freeze({ model, usdPerMtok });
 }
 

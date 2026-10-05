@@ -14,7 +14,12 @@
  * a price below it. A zero gate (the default) never blocks.
  */
 
-import { resolveEmbeddingPrice, type PriceQuote } from "./embeddings/pricing.ts";
+import {
+  EMBEDDING_PRICE_MODEL_KEY,
+  EMBEDDING_PRICE_RATE_KEY,
+  resolveEmbeddingPrice,
+  type PriceQuote,
+} from "./embeddings/pricing.ts";
 import { estimateCostUsd, estimateTokens, LOCAL_EMBEDDING_MODEL } from "./embeddings/signature.ts";
 import type { Store } from "./store.ts";
 import type { PendingVectorScope } from "./store/chunks.ts";
@@ -141,4 +146,25 @@ export function planEmbeddingSpend(
     ...(opts.forced === undefined ? {} : { forced: opts.forced }),
   });
   return { pending, model, tokens, quote, estimatedUsd, gate };
+}
+
+/** What every spend surface prints in place of a dollar figure nobody can state. */
+export const PRICE_UNKNOWN_LABEL = "price unknown";
+
+/** Decimal places of every rendered USD amount, the gate's own spelling. */
+export const USD_DECIMALS = 4;
+
+/** A USD estimate as `$0.0123`, or {@link PRICE_UNKNOWN_LABEL} when null. */
+export function formatEstimatedUsd(usd: number | null): string {
+  return usd === null ? PRICE_UNKNOWN_LABEL : `$${usd.toFixed(USD_DECIMALS)}`;
+}
+
+/** The refusal text for an unpriced model under a positive gate. */
+export function unpricedRefusalMessage(plan: EmbeddingSpendPlan, gateUsd: number): string {
+  return (
+    `embedding model ${plan.model ?? "(unset)"} has no known price, so ${plan.pending.length} ` +
+    `chunk(s) cannot be checked against embedding_cost_gate_usd $${gateUsd.toFixed(USD_DECIMALS)}. ` +
+    `Declare its price with ${EMBEDDING_PRICE_MODEL_KEY} and ${EMBEDDING_PRICE_RATE_KEY}, ` +
+    `or re-run with --force-cost to proceed.`
+  );
 }

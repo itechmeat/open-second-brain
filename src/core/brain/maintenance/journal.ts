@@ -7,6 +7,7 @@
  * sweep on append, matching the activation-store discipline.
  */
 
+import type { EmbeddingPriceSource } from "../../search/embeddings/pricing.ts";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -112,9 +113,18 @@ export interface MaintenanceSpendReceipt {
   /** The model the pass named; null when the config leaves it unset. */
   readonly model: string | null;
   readonly tokens: number;
-  readonly estimatedUsd: number;
+  /**
+   * Null when nobody stated the model's price. A row written before price
+   * sources existed keeps the number it was written with.
+   */
+  readonly estimatedUsd: number | null;
   /** True when `--force-cost` overrode a positive gate that would have blocked the run. */
   readonly forced: boolean;
+  /**
+   * Who stated the price the estimate used. Absent on rows written before
+   * price sources existed: such a row's source is unrecorded, not known.
+   */
+  readonly priceSource?: EmbeddingPriceSource;
 }
 
 /**

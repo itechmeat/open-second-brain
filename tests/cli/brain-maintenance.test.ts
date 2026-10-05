@@ -510,6 +510,19 @@ describe("renderTaskLine", () => {
     expect(line).toContain("reindex: ok in 1ms");
     expect(line).toContain("(tokens=38110, estimatedUsd=0.0076, model=text-embedding-3-small)");
   });
+
+  test("a receipt for an unknown price says so instead of a dollar figure", () => {
+    const receipt: MaintenanceSpendReceipt = {
+      model: "zembed-1",
+      tokens: 120,
+      estimatedUsd: null,
+      forced: true,
+      priceSource: "unknown",
+    };
+    const line = renderTaskLine({ ...okRow(LANE_TASK.reindex), receipt });
+    expect(line).toContain("(tokens=120, price unknown, model=zembed-1)");
+    expect(line).not.toContain("$0");
+  });
 });
 
 describe("formatSpendBanner", () => {

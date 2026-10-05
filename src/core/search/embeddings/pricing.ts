@@ -38,6 +38,15 @@ export function isEmbeddingPriceSource(value: unknown): value is EmbeddingPriceS
   );
 }
 
+/** Config key naming the model the operator's declared price applies to. */
+export const EMBEDDING_PRICE_MODEL_KEY = "embedding_price_model";
+/** Config key carrying the operator's declared USD per million input tokens. */
+export const EMBEDDING_PRICE_RATE_KEY = "embedding_price_usd_per_mtok";
+/** Env twin of {@link EMBEDDING_PRICE_MODEL_KEY}. */
+export const EMBEDDING_PRICE_MODEL_ENV = "OPEN_SECOND_BRAIN_EMBEDDING_PRICE_MODEL";
+/** Env twin of {@link EMBEDDING_PRICE_RATE_KEY}. */
+export const EMBEDDING_PRICE_RATE_ENV = "OPEN_SECOND_BRAIN_EMBEDDING_PRICE_USD_PER_MTOK";
+
 /** The operator's declared price, bound to one model name. */
 export interface EmbeddingPriceOverride {
   readonly model: string;

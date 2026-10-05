@@ -13,6 +13,12 @@
  *   the pass's walk and a walk that adds chunks (a dream or an agent
  *   wrote since the last index) makes the preview an estimate by
  *   position. The receipt is what the pass actually refused or priced.
+ *
+ * - The unpriced refusal (Honest Embedding Spend): under an explicit
+ *   positive gate a model nobody priced is refused with
+ *   EMBEDDING_COST_UNPRICED before any provider contact, instead of being
+ *   estimated at $0 and let through. A forced run records the unknown
+ *   price as a null estimate with `priceSource: unknown`.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -39,6 +45,7 @@ import {
 } from "../../../src/core/search/embeddings/signature.ts";
 import { SearchError } from "../../../src/core/search/types.ts";
 import type { ResolvedSearchConfig } from "../../../src/core/search/types.ts";
+import { isToolErrorCode } from "../../../src/mcp/tool-error-codes.ts";
 import { startFakeHttp, type FakeHttp } from "../../helpers/fake-http.ts";
 import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
 
@@ -230,6 +237,7 @@ test("the phase records its own gate result on the tally, at the resolved model"
       tokens: estimateTokens(contents),
       estimatedUsd: 0,
       forced: false,
+      priceSource: "builtin",
     });
   } finally {
     await store.close();
@@ -330,4 +338,80 @@ test("embeddingSpendOf reads the receipt off a completed run's stats", async () 
   const offlineStats = await indexVault(offlineConfig, {});
   expect(offlineStats.backend).toBe("offline");
   expect(embeddingSpendOf(offlineStats)).toBeUndefined();
+});
+
+// ── unpriced models under an explicit gate ───────────────────────────────────
+
+const UNPRICED_MODEL = "zembed-1";
+
+test("a positive gate refuses an unpriced model by name, before any provider contact", async () => {
+  let server: FakeHttp | null = null;
+  try {
+    server = await startFakeHttp();
+    const config = configWith({
+      search_semantic_enabled: "true",
+      embedding_provider: "openai-compat",
+      embedding_base_url: server.url,
+      embedding_model: UNPRICED_MODEL,
+      embedding_api_key: FAKE_PROVIDER_KEY,
+      embedding_cost_gate_usd: "100",
+    });
+    const store = await openSeeded(config, ["a short chunk the price of which nobody stated"]);
+    try {
+      const tally: EmbeddingPhaseTally = { embeddingsComputed: 0, embeddingsRetries: 0 };
+      const refusal = await runEmbeddingPhase(store, config, tally, {}).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      expect(refusal).toBeInstanceOf(SearchError);
+      const error = refusal as SearchError;
+      expect(error.code).toBe("EMBEDDING_COST_UNPRICED");
+      for (const named of [
+        UNPRICED_MODEL,
+        "embedding_price_model",
+        "embedding_price_usd_per_mtok",
+        "--force-cost",
+      ]) {
+        expect(error.message).toContain(named);
+      }
+      expect(tally.spend).toBeUndefined();
+      expect(server.callCount()).toBe(0);
+
+      const forced: EmbeddingPhaseTally = { embeddingsComputed: 0, embeddingsRetries: 0 };
+      await runEmbeddingPhase(store, config, forced, { forceCost: true });
+      expect(forced.embeddingsComputed).toBe(1);
+      expect(forced.spend).toMatchObject({
+        model: UNPRICED_MODEL,
+        forced: true,
+        priceSource: "unknown",
+        estimatedUsd: null,
+      });
+    } finally {
+      await store.close();
+    }
+  } finally {
+    await server?.close();
+  }
+});
+
+test("the over-cap refusal keeps its code and message", async () => {
+  const config = configWith({ ...PRICED_MODEL, embedding_cost_gate_usd: "0.000001" });
+  const store = await openSeeded(config, ["pricing text repeated to exceed the gate. ".repeat(8)]);
+  try {
+    const tally: EmbeddingPhaseTally = { embeddingsComputed: 0, embeddingsRetries: 0 };
+    const refusal = await runEmbeddingPhase(store, config, tally, {}).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect((refusal as SearchError).code).toBe("EMBEDDING_COST_GATE");
+    expect((refusal as SearchError).message).toMatch(
+      /^estimated embedding cost \$\d+\.\d{4} for 1 chunk\(s\) exceeds embedding_cost_gate_usd \$0\.0000\. Re-run with --force-cost to proceed or raise the gate\.$/,
+    );
+  } finally {
+    await store.close();
+  }
+});
+
+test("the unpriced refusal code is registered on the MCP wire", () => {
+  expect(isToolErrorCode("EMBEDDING_COST_UNPRICED")).toBe(true);
 });
