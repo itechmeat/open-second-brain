@@ -24,6 +24,7 @@ import { indexVault } from "../../src/core/search/indexer.ts";
 import { SearchError } from "../../src/core/search/search-error.ts";
 import { Store } from "../../src/core/search/store.ts";
 import { planVectorBackfill } from "../../src/core/search/vector-backfill.ts";
+import { scopedNextCommand } from "../../src/cli/search/verbs/vector-backfill.ts";
 import { FAKE_PROVIDER_KEY } from "../helpers/fake-credentials.ts";
 import { startFakeHttp, type FakeHttp } from "../helpers/fake-http.ts";
 import { runCli } from "../helpers/run-cli.ts";
@@ -336,5 +337,25 @@ test.skipIf(!VEC_LOADABLE)("a scoped next step quotes a prefix with a space", as
   const payload = JSON.parse(json.stdout) as Record<string, unknown>;
   expect(payload["next_command"]).toBe(
     "o2b search vector-backfill --apply --path 'Notes/with space/'",
+  );
+});
+
+const APPLY_COMMAND = "o2b search vector-backfill --apply";
+
+test("a scope Windows cannot quote drops the scoped next step", () => {
+  // POSIX quoting is not a word cmd.exe or PowerShell reads back, so the
+  // advice falls back to the scope-free command plus a reminder.
+  expect(scopedNextCommand(APPLY_COMMAND, ["Notes/with space/"], "win32")).toBeNull();
+  expect(scopedNextCommand(APPLY_COMMAND, [BELIEFS, "Notes/it's/"], "win32")).toBeNull();
+});
+
+test("a plain scope stays in the next step on every platform", () => {
+  for (const platform of ["win32", "linux", "darwin"] as const) {
+    expect(scopedNextCommand(APPLY_COMMAND, [BELIEFS], platform)).toBe(
+      `${APPLY_COMMAND} --path ${BELIEFS}`,
+    );
+  }
+  expect(scopedNextCommand(APPLY_COMMAND, ["Notes/with space/"], "linux")).toBe(
+    `${APPLY_COMMAND} --path 'Notes/with space/'`,
   );
 });

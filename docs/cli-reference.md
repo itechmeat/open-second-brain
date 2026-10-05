@@ -1814,7 +1814,9 @@ o2b search vector-backfill    Run the vector phase ALONE for indexed chunks that
                               the cost gate and the spend receipt all read the same scoped census,
                               so `--path Brain/preferences/` prices and embeds only belief notes.
                               The text report adds a `scope:` line and the next step it names keeps
-                              the scope.
+                              the scope. On Windows a prefix that would need quoting is not
+                              spliced into the advice: next_command is omitted and the text names
+                              the scope-free command with a reminder to repeat your --path flags.
                               The prefix is a raw string prefix, not a directory: end a directory
                               with `/`, or `Brain/pref` also matches `Brain/preferences-old/`. A
                               leading `./` is dropped and `\` becomes `/`; an empty prefix is

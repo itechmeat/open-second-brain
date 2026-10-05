@@ -101,15 +101,31 @@ const PATH_FLAG = "path";
 /** A prefix that needs no shell quoting when echoed in a command. */
 const PLAIN_SHELL_WORD = /^[A-Za-z0-9_./-]+$/u;
 
-/** `command` with one `--path <prefix>` per prefix, quoted only when needed. */
-function withPathFlags(command: string, pathPrefixes: ReadonlyArray<string>): string {
+/**
+ * `command` with one `--path <prefix>` per prefix, quoted only when
+ * needed. Null on Windows when a prefix needs quoting: the quoting is
+ * POSIX, which neither cmd.exe nor PowerShell reads back as the same
+ * word, so the caller falls back to the scope-free command and asks the
+ * operator to repeat their own `--path` flags instead of advising a
+ * command that would not run as printed.
+ */
+export function scopedNextCommand(
+  command: string,
+  pathPrefixes: ReadonlyArray<string>,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  const plain = (prefix: string) => PLAIN_SHELL_WORD.test(prefix);
+  if (platform === "win32" && !pathPrefixes.every(plain)) return null;
   return [
     command,
     ...pathPrefixes.map(
-      (prefix) => `--${PATH_FLAG} ${PLAIN_SHELL_WORD.test(prefix) ? prefix : shellQuote(prefix)}`,
+      (prefix) => `--${PATH_FLAG} ${plain(prefix) ? prefix : shellQuote(prefix)}`,
     ),
   ].join(" ");
 }
+
+/** The line that replaces a scoped next step Windows cannot run as printed. */
+const REPEAT_PATH_FLAGS_HINT = `  repeat your --${PATH_FLAG} flags on that command`;
 
 /** JSON payload shape. Snake case, matching every other search verb. */
 function jsonForResult(result: VectorBackfillResult): Record<string, unknown> {
@@ -259,13 +275,20 @@ export async function cmdSearchVectorBackfill(argv: ReadonlyArray<string>): Prom
   // run the gate would refuse names `--force-cost` too, so the advice is
   // never a command already known to fail.
   const registered = resolveNextStep(exitCode)?.nextCommand;
-  const nextCommand =
+  const pendingCommand =
     registered !== undefined && exitCode === VECTORS_PENDING
-      ? withPathFlags(
-          result.blocked ? `${registered} ${FORCE_COST_FLAG}` : registered,
-          result.pathPrefixes,
-        )
+      ? result.blocked
+        ? `${registered} ${FORCE_COST_FLAG}`
+        : registered
+      : undefined;
+  const scoped =
+    pendingCommand !== undefined
+      ? scopedNextCommand(pendingCommand, result.pathPrefixes)
       : registered;
+  // A scope the platform cannot quote drops the command from the JSON
+  // and prints the scope-free one with a reminder to repeat the scope.
+  const scopeDropped = scoped === null;
+  const nextCommand = scoped ?? pendingCommand;
 
   // A typo'd scope has nothing pending and would otherwise read like a
   // fully embedded one; stderr, so the JSON on stdout stays parseable.
@@ -276,7 +299,7 @@ export async function cmdSearchVectorBackfill(argv: ReadonlyArray<string>): Prom
     process.stdout.write(
       JSON.stringify({
         ...jsonForResult(result),
-        ...(pendingAfter > 0 && nextCommand !== undefined
+        ...(pendingAfter > 0 && nextCommand !== undefined && !scopeDropped
           ? { [NEXT_COMMAND_KEY]: nextCommand }
           : {}),
       }) + "\n",
@@ -285,7 +308,8 @@ export async function cmdSearchVectorBackfill(argv: ReadonlyArray<string>): Prom
     await renderHuman(result);
   }
   if (pendingAfter > 0) {
-    emitNextStep(exitCode, searchAdvisoryStream(argv, jsonRequested), nextCommand);
+    const emission = emitNextStep(exitCode, searchAdvisoryStream(argv, jsonRequested), nextCommand);
+    if (scopeDropped && emission.line !== null) info(REPEAT_PATH_FLAGS_HINT);
   }
   return 0;
 }
