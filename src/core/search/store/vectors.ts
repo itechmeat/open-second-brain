@@ -11,9 +11,9 @@
 import { Database } from "bun:sqlite";
 
 import {
+  BLOCKED_TIER_ERROR_CODE,
+  isBlockedCapability,
   resolveSemanticCapability,
-  SEMANTIC_CAPABILITY_TIER,
-  type SemanticCapabilityTier,
 } from "../capability-tier.ts";
 import { LOCAL_EMBEDDING_MODEL } from "../embeddings/signature.ts";
 import { dropVecTable, ensureVecTable } from "../schema.ts";
@@ -319,19 +319,6 @@ export interface EmbeddingRebuildGate {
 }
 
 /**
- * The typed error each blocked capability tier refuses with. Both codes
- * pre-exist in the closed `SEARCH_ERROR_CODES` union and carry exactly
- * these meanings: a `disabled` configuration computes no embeddings at
- * all, and a `credential-missing` one cannot reach its provider.
- */
-const BLOCKED_TIER_ERROR_CODE: Readonly<
-  Record<Exclude<SemanticCapabilityTier, "configured">, SearchErrorCode>
-> = Object.freeze({
-  [SEMANTIC_CAPABILITY_TIER.disabled]: "EMBEDDING_DISABLED",
-  [SEMANTIC_CAPABILITY_TIER.credentialMissing]: "EMBEDDING_KEY_MISSING",
-});
-
-/**
  * Whether any `chunks` rows exist - the source-material half of the
  * verify-before-replace gate.
  *
@@ -381,7 +368,7 @@ function rebuildRefusalBeforeClear(
   const stored = countEmbeddings(db);
   if (stored === 0) return null;
   const capability = resolveSemanticCapability(gate.semantic);
-  if (capability.tier === SEMANTIC_CAPABILITY_TIER.configured) return null;
+  if (!isBlockedCapability(capability)) return null;
   const material = hasChunkRows(db) ? "" : "; no chunk material remains to rebuild from";
   return {
     code: BLOCKED_TIER_ERROR_CODE[capability.tier],
