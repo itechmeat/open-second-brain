@@ -13,6 +13,8 @@ import { join } from "node:path";
 import { runCli } from "../helpers/run-cli.ts";
 import { sqliteVecLoadable } from "../helpers/sqlite-vec.ts";
 
+const VEC_LOADABLE = sqliteVecLoadable();
+
 let tmp: string;
 let vault: string;
 let configPath: string;
@@ -62,20 +64,21 @@ function statsOf(stdout: string): Record<string, unknown> {
   return (JSON.parse(stdout) as { stats: Record<string, unknown> }).stats;
 }
 
-test("an edit reports the carried vectors as embeddings_reused in JSON", async () => {
-  if (!sqliteVecLoadable()) return;
-  writeNote(SECTIONS);
-  const first = statsOf(await index(true));
-  expect(first).not.toHaveProperty("embeddings_reused");
+test.skipIf(!VEC_LOADABLE)(
+  "an edit reports the carried vectors as embeddings_reused in JSON",
+  async () => {
+    writeNote(SECTIONS);
+    const first = statsOf(await index(true));
+    expect(first).not.toHaveProperty("embeddings_reused");
 
-  writeNote([SECTIONS[0], EDITED_BETA, SECTIONS[2]]);
-  const second = statsOf(await index(true));
-  expect(second["embeddings_computed"]).toBe(1);
-  expect(second["embeddings_reused"]).toBe((first["embeddings_computed"] as number) - 1);
-});
+    writeNote([SECTIONS[0], EDITED_BETA, SECTIONS[2]]);
+    const second = statsOf(await index(true));
+    expect(second["embeddings_computed"]).toBe(1);
+    expect(second["embeddings_reused"]).toBe((first["embeddings_computed"] as number) - 1);
+  },
+);
 
-test("the human embeddings line names the reused count", async () => {
-  if (!sqliteVecLoadable()) return;
+test.skipIf(!VEC_LOADABLE)("the human embeddings line names the reused count", async () => {
   writeNote(SECTIONS);
   expect(await index(false)).not.toContain("reused");
 
