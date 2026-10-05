@@ -105,9 +105,9 @@ const PLAIN_SHELL_WORD = /^[A-Za-z0-9_./-]+$/u;
  * `command` with one `--path <prefix>` per prefix, quoted only when
  * needed. Null on Windows when a prefix needs quoting: the quoting is
  * POSIX, which neither cmd.exe nor PowerShell reads back as the same
- * word, so the caller falls back to the scope-free command and asks the
- * operator to repeat their own `--path` flags instead of advising a
- * command that would not run as printed.
+ * word, so the caller prints {@link RERUN_WITH_SCOPE_LINE}, which names
+ * no command, instead of advising one that would not run as printed or
+ * would run unscoped.
  */
 export function scopedNextCommand(
   command: string,
