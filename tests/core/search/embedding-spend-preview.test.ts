@@ -501,7 +501,6 @@ test("preview, backfill dry run, status and the phase report one estimate and so
     expect(preview?.priceSource).toBe("operator");
     expect(dryRun.estimatedCostUsd).toBe(preview?.estimatedUsd ?? -1);
     expect(dryRun.priceSource).toBe("operator");
-    expect(dryRun.costKnown).toBe(true);
     expect(status.estimatedRefreshCostUsd).toBe(preview?.estimatedUsd ?? -1);
     expect(status.refreshPriceSource).toBe("operator");
 
@@ -540,7 +539,6 @@ test("an unknown price reads null on every surface and blocks as unpriced under 
   const dryRun = await planVectorBackfill(config);
   expect(dryRun).toMatchObject({
     estimatedCostUsd: null,
-    costKnown: false,
     priceSource: "unknown",
     blocked: true,
     reason: "unpriced",
@@ -562,7 +560,6 @@ test("the backfill knows the price of the local model and of an operator-priced 
   const local = configWith({ search_semantic_enabled: "true", embedding_provider: "local" });
   await storeWithChunks(local, ["local chunk"]);
   expect(await planVectorBackfill(local)).toMatchObject({
-    costKnown: true,
     estimatedCostUsd: 0,
     priceSource: "builtin",
   });
@@ -573,7 +570,6 @@ test("the backfill knows the price of the local model and of an operator-priced 
     ...OPERATOR_PRICED,
   });
   expect(await planVectorBackfill(operator)).toMatchObject({
-    costKnown: true,
     priceSource: "operator",
   });
 });

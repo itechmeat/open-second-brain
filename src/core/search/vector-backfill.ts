@@ -37,7 +37,7 @@
 
 import { resolveSemanticCapability, type SemanticCapability } from "./capability-tier.ts";
 import { planEmbeddingSpend, type EmbeddingGateReason } from "./embedding-spend.ts";
-import { EMBEDDING_PRICE_SOURCE, type EmbeddingPriceSource } from "./embeddings/pricing.ts";
+import type { EmbeddingPriceSource } from "./embeddings/pricing.ts";
 import { runEmbeddingPhase, type EmbeddingPhaseTally } from "./indexer.ts";
 import { assertSafePathPrefix } from "./pipeline/request.ts";
 import { SearchError } from "./search-error.ts";
@@ -95,12 +95,6 @@ export interface VectorBackfillResult {
    * than printing `$0.0000`.
    */
   readonly estimatedCostUsd: number | null;
-  /**
-   * Whether the MODEL has a stated price (builtin or operator), not
-   * whether this run costs anything: an empty pending set costs nothing
-   * and that is not the same statement as "the price is unknown".
-   */
-  readonly costKnown: boolean;
   /** Who stated the price the estimate used. */
   readonly priceSource: EmbeddingPriceSource;
   /** True when the configured gate would refuse this spend unforced. */
@@ -218,7 +212,6 @@ async function planVectorBackfillRun(
       embedded: tally.embeddingsComputed,
       retries: tally.embeddingsRetries,
       estimatedCostUsd: plan.estimatedUsd,
-      costKnown: plan.quote.source !== EMBEDDING_PRICE_SOURCE.unknown,
       priceSource: plan.quote.source,
       blocked: plan.gate.blocked,
       reason: plan.gate.reason,
