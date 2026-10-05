@@ -65,6 +65,23 @@ class StaticSchemaIntegrityTests(unittest.TestCase):
         self.assertNotIn("__mutated__", second[0]["parameters"]["properties"])
 
 
+def _kill_tree(proc: subprocess.Popen) -> None:
+    """Kill the server and everything it started.
+
+    On Windows ``o2b`` is ``o2b.cmd``: ``proc`` is cmd.exe and Bun is its
+    child, so ``proc.kill()`` alone would leave Bun holding the stdout pipe
+    and the stderr log open.
+    """
+    if os.name == "nt":
+        subprocess.run(  # noqa: S603, S607 - fixed argv, test-only
+            ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+            check=False,
+            capture_output=True,
+        )
+    else:
+        proc.kill()
+
+
 def _live_memory_tool_projection(vault: str, diagnostics) -> list[dict]:
     """Fetch tools/list from a live ``o2b mcp`` and project the curated subset.
 
@@ -97,7 +114,7 @@ def _live_memory_tool_projection(vault: str, diagnostics) -> list[dict]:
     )
     # Deadline for the whole handshake: if the server stays alive but never
     # answers, the timer kills it, readline() sees EOF, and the caller skips.
-    watchdog = threading.Timer(_HANDSHAKE_TIMEOUT, proc.kill)
+    watchdog = threading.Timer(_HANDSHAKE_TIMEOUT, _kill_tree, args=(proc,))
     watchdog.start()
     try:
         def request(rid: int, method: str, params: dict) -> dict:
@@ -136,11 +153,14 @@ def _live_memory_tool_projection(vault: str, diagnostics) -> list[dict]:
         for stream in (proc.stdin, proc.stdout):
             if stream is not None:
                 stream.close()
-        proc.terminate()
+        # Closed stdin is the server's shutdown signal. Wait for the whole
+        # launcher chain to exit before the caller removes the directory that
+        # holds the stderr log: on Windows terminate() stops cmd.exe but not
+        # its Bun child, which keeps the log open and fails the cleanup.
         try:
             proc.wait(timeout=_HANDSHAKE_TIMEOUT)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            _kill_tree(proc)
             proc.wait(timeout=_HANDSHAKE_TIMEOUT)
     return [
         {field: tool.get(field) for field in _EMBEDDED_FIELDS}
