@@ -517,6 +517,11 @@ export class Store {
     return vectors.embeddingForChunk(this.db, this.vecExtensionLoaded, chunkId);
   }
 
+  /** Every stored vector of a document's chunks with its recorded model and dimension. */
+  storedEmbeddingsForDocument(documentId: number): vectors.StoredChunkEmbedding[] {
+    return vectors.storedEmbeddingsForDocument(this.db, this.vecExtensionLoaded, documentId);
+  }
+
   getEmbeddingHash(chunkId: number): string | null {
     return vectors.getEmbeddingHash(this.db, chunkId);
   }
