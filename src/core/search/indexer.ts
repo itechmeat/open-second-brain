@@ -51,6 +51,10 @@ import {
   type EmbeddingIdentity,
 } from "./embeddings/signature.ts";
 import { LOCAL_DEFAULT_DIMENSION } from "./embeddings/local-provider.ts";
+import {
+  describeCredentialSources,
+  type CredentialSourceContext,
+} from "./embeddings/credential-report.ts";
 import { resolveEventAnchor } from "./event-anchor.ts";
 import { extractLinks } from "./links.ts";
 import { resolveDocumentEventTimeWindow } from "./pipeline/event-time.ts";
@@ -1800,6 +1804,13 @@ export interface IndexCheckOptions {
    * a call nobody made proves neither.
    */
   readonly probeProvider?: boolean;
+  /**
+   * The env and provider registry the credential-source report reads
+   * names from. Passed explicitly so the report never reads the process
+   * on its own; absent, the report is not built and the result carries no
+   * `credentialSources` field.
+   */
+  readonly credentialContext?: CredentialSourceContext;
 }
 
 export async function indexCheck(
@@ -1942,6 +1953,13 @@ export async function indexCheck(
   // Rules match the design doc table; agents and operators read the
   // list to know what command to run next without learning the
   // internals of OSB.
+  // Names only, and only for a credential-missing tier: every other tier
+  // yields null and the result stays byte-identical.
+  const credentialSources =
+    opts?.credentialContext === undefined
+      ? null
+      : describeCredentialSources({ semantic: config.semantic, ...opts.credentialContext });
+
   const recommendations = buildRecommendations({
     config,
     embeddingKeyResolved,
@@ -1970,6 +1988,7 @@ export async function indexCheck(
     warnings: Object.freeze(warnings),
     fatal: Object.freeze(fatal),
     recommendations: Object.freeze(recommendations),
+    ...(credentialSources === null ? {} : { credentialSources }),
   });
 }
 

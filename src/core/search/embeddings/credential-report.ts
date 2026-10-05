@@ -19,8 +19,14 @@
  */
 
 import { resolveSemanticCapability, SEMANTIC_CAPABILITY_TIER } from "../capability-tier.ts";
-import { SearchError, type ResolvedEmbeddingConfig } from "../types.ts";
+import {
+  SearchError,
+  type CredentialSourceReport,
+  type ResolvedEmbeddingConfig,
+} from "../types.ts";
 import { envKeyList, type ProviderProfile } from "./registry.ts";
+
+export type { CredentialSourceReport };
 
 /** The env override of the explicit credential, which wins over the config key. */
 export const EMBEDDING_KEY_ENV = "OPEN_SECOND_BRAIN_EMBEDDING_KEY";
@@ -37,20 +43,16 @@ export const EXPLICIT_CREDENTIAL_SOURCES: ReadonlyArray<string> = Object.freeze(
   EMBEDDING_KEY_CONFIG,
 ]);
 
-/** The names a `credential-missing` check consulted, and where a key does exist. */
-export interface CredentialSourceReport {
-  /** Credential sources consulted, in probe order. */
-  readonly consulted: ReadonlyArray<string>;
-  /** Other registered profiles whose env key is present, in registry order. */
-  readonly presentElsewhere: ReadonlyArray<string>;
-}
-
-export interface CredentialSourceInput {
-  readonly semantic: ResolvedEmbeddingConfig;
+/** Where the report reads names from, handed in by the caller rather than read from the process. */
+export interface CredentialSourceContext {
   /** The registered profile the configuration names, or null for explicit config. */
   readonly activeProfile: string | null;
   readonly registry: ReadonlyArray<ProviderProfile>;
   readonly env: Readonly<Record<string, string | undefined>>;
+}
+
+export interface CredentialSourceInput extends CredentialSourceContext {
+  readonly semantic: ResolvedEmbeddingConfig;
 }
 
 function hasPresentKey(

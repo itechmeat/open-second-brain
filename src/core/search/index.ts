@@ -20,7 +20,9 @@ import {
   loadProviderRegistry,
   expandRegisteredProvider,
   type ExpandedProvider,
+  type ProviderProfile,
 } from "./embeddings/registry.ts";
+import type { CredentialSourceContext } from "./embeddings/credential-report.ts";
 import { loadRerankRegistry, expandRegisteredRerankProvider } from "./rerank/registry.ts";
 import { decisionModelModeFor, resolveDecisionModelConfig } from "../decision-model/config.ts";
 import { resolveEmbeddingPrefixes } from "./embeddings/presets.ts";
@@ -58,6 +60,7 @@ export type {
   ExpandHitInput,
   ExpandHitResult,
   IndexCheckReport,
+  CredentialSourceReport,
   EmbedderRecordCensus,
   IndexStats,
   IndexStatusSnapshot,
@@ -514,6 +517,44 @@ function resolveRegistryProvider(
   } catch {
     return null;
   }
+}
+
+/**
+ * The names `search check` hands the credential-source report: the
+ * registered profile `embedding_provider` selects (by the same env-over-
+ * config rule and registry lookup {@link resolveSearchConfig} expands),
+ * the vault's registry and the env. Fail-soft like the expansion itself:
+ * a registry that cannot be read is an empty one, and a name it does not
+ * hold is no profile.
+ */
+export function resolveCredentialContext(opts: {
+  vault: string;
+  configPath?: string;
+  env?: NodeJS.ProcessEnv;
+}): CredentialSourceContext {
+  const env = opts.env ?? process.env;
+  const config: Readonly<Record<string, string>> = opts.configPath
+    ? discoverConfig(opts.configPath).data
+    : {};
+  const rawProvider = envOrConfig(
+    env,
+    config,
+    "OPEN_SECOND_BRAIN_EMBEDDING_PROVIDER",
+    "embedding_provider",
+  );
+  let registry: ReadonlyArray<ProviderProfile> = [];
+  try {
+    registry = loadProviderRegistry(opts.vault);
+  } catch {
+    registry = [];
+  }
+  const activeProfile =
+    rawProvider !== null &&
+    !BUILTIN_PROVIDERS.has(rawProvider) &&
+    registry.some((p) => p.name === rawProvider)
+      ? rawProvider
+      : null;
+  return Object.freeze({ activeProfile, registry, env });
 }
 
 export function resolveSearchConfig(opts: {

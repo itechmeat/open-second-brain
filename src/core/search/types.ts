@@ -602,6 +602,21 @@ export interface IndexCheckReport {
    * key so headless callers (Hermes cron, CI) can act on them.
    */
   readonly recommendations: ReadonlyArray<string>;
+  /**
+   * Where the resolver looked for an embedding credential, by name only
+   * (Honest Embedding Spend). Present only on a `credential-missing` tier
+   * and only when the caller handed the check a credential context, so a
+   * configured or disabled setup reports byte-identically.
+   */
+  readonly credentialSources?: CredentialSourceReport;
+}
+
+/** The names a `credential-missing` check consulted, and where a key does exist. */
+export interface CredentialSourceReport {
+  /** Credential sources consulted, in probe order. */
+  readonly consulted: ReadonlyArray<string>;
+  /** Other registered profiles whose env key is present, in registry order. */
+  readonly presentElsewhere: ReadonlyArray<string>;
 }
 
 /**

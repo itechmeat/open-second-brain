@@ -43,12 +43,13 @@ import { join } from "node:path";
 
 import { INSTALL_EXIT } from "../../src/cli/install/install.ts";
 import { exitCodeForCheck, SEARCH_CHECK_EXIT } from "../../src/cli/search/verbs/check.ts";
+import { providerRegistryPath } from "../../src/core/search/embeddings/registry.ts";
 import { PROVIDER_PROBE } from "../../src/core/search/provider-probe.ts";
 import type { IndexCheckReport } from "../../src/core/search/types.ts";
 import { startFakeHttp, type FakeHttp } from "../helpers/fake-http.ts";
 import { createTempVault, writeMd } from "../helpers/search-fixtures.ts";
 import { runCli } from "../helpers/run-cli.ts";
-import { FAKE_PROVIDER_KEY } from "../helpers/fake-credentials.ts";
+import { FAKE_PROVIDER_KEY, fakeCredential } from "../helpers/fake-credentials.ts";
 
 /** Short enough for a test, long enough that a healthy loopback answer beats it. */
 const SHORT_REQUEST_TIMEOUT_MS = 120;
@@ -337,4 +338,132 @@ test("an operator-priced model adds no price recommendation", async () => {
   ]);
 
   expect(priceRecommendations(await runCheck("--json", "--no-probe"))).toEqual([]);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Credential-source report (Honest Embedding Spend, task 8)
+//
+// A credential-missing tier names where the resolver looked and which
+// other registered profiles hold a key, by name only. The pure report has
+// its own suite (tests/core/search/credential-report.test.ts); these pin
+// the wiring: the env and registry `search check` hands it, both report
+// shapes, and that no env value reaches either.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const ACTIVE_PROFILE = "acme-embed";
+const ACTIVE_ENV_KEY = "ACME_EMBED_TEST_KEY";
+const OTHER_PROFILE = "beta-embed";
+const OTHER_ENV_KEY = "BETA_EMBED_TEST_KEY";
+/** A credential-shaped placeholder that must never be printed. */
+const PRIVATE_BODY = fakeCredential("beta", "-private-", "0d9b");
+
+/** The keyless env every credential run starts from, so a shell key cannot leak in. */
+const KEYLESS_ENV: Readonly<Record<string, string>> = Object.freeze({
+  OPEN_SECOND_BRAIN_EMBEDDING_KEY: "",
+  [ACTIVE_ENV_KEY]: "",
+});
+
+async function writeProviderRegistry(): Promise<void> {
+  await Bun.write(
+    providerRegistryPath(vault),
+    JSON.stringify([
+      {
+        name: ACTIVE_PROFILE,
+        baseUrl: "https://acme.invalid/v1",
+        defaultModel: "acme-1",
+        envKey: ACTIVE_ENV_KEY,
+      },
+      {
+        name: OTHER_PROFILE,
+        baseUrl: "https://beta.invalid/v1",
+        defaultModel: "beta-1",
+        envKey: OTHER_ENV_KEY,
+      },
+    ]),
+  );
+}
+
+async function writeKeylessProfile(): Promise<void> {
+  await Bun.write(
+    configPath,
+    [
+      `vault: "${vault}"`,
+      "search_semantic_enabled: true",
+      `embedding_provider: ${ACTIVE_PROFILE}`,
+      "",
+    ].join("\n"),
+  );
+}
+
+async function runCheckWithEnv(
+  env: Readonly<Record<string, string>>,
+  ...extra: ReadonlyArray<string>
+): Promise<CheckRun> {
+  const r = await runCli(
+    ["search", "check", "--vault", vault, "--db", dbPath, "--config", configPath, ...extra],
+    { env: { OPEN_SECOND_BRAIN_CONFIG: configPath, ...KEYLESS_ENV, ...env } },
+  );
+  const json = extra.includes("--json")
+    ? (JSON.parse(r.stdout) as Record<string, unknown>)
+    : ({} as Record<string, unknown>);
+  return { payload: json, returncode: r.returncode, stdout: r.stdout };
+}
+
+test("a keyless registry profile names the sources consulted and the profile that holds a key", async () => {
+  await writeProviderRegistry();
+  await writeKeylessProfile();
+
+  const run = await runCheckWithEnv({ [OTHER_ENV_KEY]: PRIVATE_BODY }, "--json", "--no-probe");
+
+  expect(run.payload["embedding_key_resolved"]).toBe(false);
+  expect(run.payload["credential_sources"]).toEqual({
+    consulted: ["OPEN_SECOND_BRAIN_EMBEDDING_KEY", "embedding_api_key", ACTIVE_ENV_KEY],
+    present_elsewhere: [OTHER_PROFILE],
+  });
+  expect(run.stdout).not.toContain(PRIVATE_BODY);
+});
+
+test("the human report renders the credential sources and never an env value", async () => {
+  await writeProviderRegistry();
+  await writeKeylessProfile();
+
+  const run = await runCheckWithEnv({ [OTHER_ENV_KEY]: PRIVATE_BODY }, "--no-probe");
+
+  expect(run.stdout).toContain(
+    `key_sources_checked:   OPEN_SECOND_BRAIN_EMBEDDING_KEY, embedding_api_key, ${ACTIVE_ENV_KEY}`,
+  );
+  expect(run.stdout).toContain(`key_present_under:     ${OTHER_PROFILE}`);
+  expect(run.stdout).not.toContain(PRIVATE_BODY);
+});
+
+test("explicit keyless config consults the explicit pair and says when no profile holds a key", async () => {
+  await Bun.write(
+    configPath,
+    [
+      `vault: "${vault}"`,
+      "search_semantic_enabled: true",
+      "embedding_provider: openai-compat",
+      `embedding_base_url: "${server.url}"`,
+      "",
+    ].join("\n"),
+  );
+
+  const json = await runCheckWithEnv({}, "--json", "--no-probe");
+  expect(json.payload["credential_sources"]).toEqual({
+    consulted: ["OPEN_SECOND_BRAIN_EMBEDDING_KEY", "embedding_api_key"],
+    present_elsewhere: [],
+  });
+  const human = await runCheckWithEnv({}, "--no-probe");
+  expect(human.stdout).toContain("key_present_under:     no registered profile");
+});
+
+test("a configured tier carries no credential report in either shape", async () => {
+  await writeProviderRegistry();
+  await writeConfiguredProvider();
+
+  const json = await runCheckWithEnv({ [OTHER_ENV_KEY]: PRIVATE_BODY }, "--json", "--no-probe");
+  expect("credential_sources" in json.payload).toBe(false);
+  const human = await runCheckWithEnv({ [OTHER_ENV_KEY]: PRIVATE_BODY }, "--no-probe");
+  expect(human.stdout).not.toContain("key_sources_checked:");
+  expect(human.stdout).not.toContain("key_present_under:");
 });
