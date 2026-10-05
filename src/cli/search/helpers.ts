@@ -36,6 +36,12 @@ export function flagString(flags: SearchVerbFlags, name: string): string | undef
   return typeof value === "string" ? value : undefined;
 }
 
+/** Every value of a repeatable (`string-array`) flag, in argv order; empty when absent. */
+export function flagStrings(flags: SearchVerbFlags, name: string): ReadonlyArray<string> {
+  const value = flags[name];
+  return Array.isArray(value) ? value : [];
+}
+
 /** True when the flag was passed; every boolean flag is opt-in. */
 export function flagBoolean(flags: SearchVerbFlags, name: string): boolean {
   return flags[name] === true;

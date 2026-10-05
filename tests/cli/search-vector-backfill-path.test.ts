@@ -7,7 +7,9 @@
  * backfill now takes repeatable path prefixes, validated by the search
  * layer's `assertSafePathPrefix`, and threads them through the one spend
  * plan, so the dry run, the cost gate's refusal, the embedding phase and
- * the spend receipt all read the same scoped census.
+ * the spend receipt all read the same scoped census. The CLI takes the
+ * scope as a repeatable `--path`, echoes it, and names a scoped `--apply`
+ * as the next step, never the vault-wide one.
  *
  * The only embedding endpoint is the loopback fake the search fixtures
  * ship. Deliberately not covered here: the unscoped census and apply
@@ -16,12 +18,14 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { join } from "node:path";
 
 import { indexVault } from "../../src/core/search/indexer.ts";
 import { SearchError } from "../../src/core/search/search-error.ts";
 import { planVectorBackfill } from "../../src/core/search/vector-backfill.ts";
 import { FAKE_PROVIDER_KEY } from "../helpers/fake-credentials.ts";
 import { startFakeHttp, type FakeHttp } from "../helpers/fake-http.ts";
+import { runCli } from "../helpers/run-cli.ts";
 import { createTempVault, makeConfig, writeMd } from "../helpers/search-fixtures.ts";
 import { sqliteVecLoadable } from "../helpers/sqlite-vec.ts";
 
@@ -166,3 +170,93 @@ test.each(["../outside/", "/etc/", "C:/Users/"])(
     expect((refusal as SearchError).message).toContain(prefix);
   },
 );
+
+/** A CLI config file for the fake provider. */
+async function cliConfig(): Promise<string> {
+  const config = join(vault, "cli-config.yaml");
+  await Bun.write(
+    config,
+    [
+      `vault: "${vault}"`,
+      "search_semantic_enabled: true",
+      "embedding_provider: openai-compat",
+      `embedding_base_url: "${server.url}"`,
+      `embedding_model: ${MODEL}`,
+      "embedding_api_key: test-key",
+      "embedding_dimension: 4",
+      "",
+    ].join("\n"),
+  );
+  return config;
+}
+
+async function backfillCli(config: string, extra: ReadonlyArray<string>) {
+  return await runCli(
+    ["search", "vector-backfill", "--vault", vault, "--db", dbPath, "--config", config, ...extra],
+    { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+  );
+}
+
+test.skipIf(!VEC_LOADABLE)(
+  "--path is repeatable, echoed, and the next step keeps the scope",
+  async () => {
+    await seed();
+    writeMd(vault, "Brain/retired/pref-old.md", "# Old\n\nAnswer at length.");
+    await indexVault(semanticConfig());
+    const config = await cliConfig();
+    const scoped = await planVectorBackfill(semanticConfig(), {
+      pathPrefixes: [BELIEFS, "Brain/retired/"],
+    });
+
+    const json = await backfillCli(config, [
+      "--path",
+      BELIEFS,
+      "--path",
+      "Brain/retired/",
+      "--json",
+    ]);
+    expect(json.returncode).toBe(0);
+    const payload = JSON.parse(json.stdout) as Record<string, unknown>;
+    expect(payload["path_prefixes"]).toEqual([BELIEFS, "Brain/retired/"]);
+    expect(payload["pending"]).toBe(scoped.pending);
+    expect(payload["next_command"]).toBe(
+      "o2b search vector-backfill --apply --path Brain/preferences/ --path Brain/retired/",
+    );
+
+    const human = await backfillCli(config, ["--path", BELIEFS]);
+    expect(human.returncode).toBe(0);
+    expect(human.stdout).toContain(`scope: ${BELIEFS}`);
+    expect(human.stdout).toContain(
+      "next: o2b search vector-backfill --apply --path Brain/preferences/",
+    );
+  },
+);
+
+test.skipIf(!VEC_LOADABLE)("an unscoped run keeps its report and next step", async () => {
+  await seed();
+  const config = await cliConfig();
+  const json = await backfillCli(config, ["--json"]);
+  const payload = JSON.parse(json.stdout) as Record<string, unknown>;
+  expect("path_prefixes" in payload).toBe(false);
+  expect(payload["next_command"]).toBe("o2b search vector-backfill --apply");
+});
+
+test.skipIf(!VEC_LOADABLE)("--apply --path embeds only the scoped chunks", async () => {
+  await seed();
+  const config = await cliConfig();
+  const dry = await planVectorBackfill(semanticConfig(), { pathPrefixes: [BELIEFS] });
+  const applied = await backfillCli(config, ["--path", BELIEFS, "--apply", "--json"]);
+  expect(applied.returncode).toBe(0);
+  const payload = JSON.parse(applied.stdout) as Record<string, unknown>;
+  expect(payload["embedded"]).toBe(dry.pending);
+  const rest = await planVectorBackfill(semanticConfig());
+  expect(rest.pending).toBeGreaterThan(0);
+});
+
+test.skipIf(!VEC_LOADABLE)("an unsafe --path exits non-zero naming the prefix", async () => {
+  await seed();
+  const config = await cliConfig();
+  const run = await backfillCli(config, ["--path", "../outside/"]);
+  expect(run.returncode).not.toBe(0);
+  expect(run.stderr).toContain("../outside/");
+});

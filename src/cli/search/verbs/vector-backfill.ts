@@ -43,7 +43,7 @@
 
 import { formatEstimatedUsd } from "../../../core/search/embedding-spend.ts";
 import { appendLogEvent } from "../../../core/brain/log.ts";
-import { nextCommandField } from "../../../core/brain/next-step.ts";
+import { NEXT_COMMAND_KEY, resolveNextStep } from "../../../core/brain/next-step.ts";
 import {
   createSafeguard,
   OPERATION,
@@ -63,12 +63,14 @@ import {
   type VectorBackfillResult,
 } from "../../../core/search/vector-backfill.ts";
 import { emitNextStep } from "../../advisory-rail.ts";
+import { shellQuote } from "../../cron-recipe.ts";
 import { onInterrupt, reportInterrupted } from "../../interrupt.ts";
 import { info, ok } from "../../output.ts";
 import { attachProgress, reportProgressRefusal } from "../../progress-rail.ts";
 import {
   flagBoolean,
   flagString,
+  flagStrings,
   parseFlags,
   resolveConfig,
   resolveConfigPath,
@@ -82,6 +84,22 @@ import {
  * under `--apply`, which is the whole point of naming it.
  */
 const VECTORS_PENDING = SEMANTIC_VECTOR_CODE.pending;
+
+/** The repeatable flag that limits the run to a vault-relative path prefix. */
+const PATH_FLAG = "path";
+
+/** A prefix that needs no shell quoting when echoed in a command. */
+const PLAIN_SHELL_WORD = /^[A-Za-z0-9_./-]+$/u;
+
+/** `command` with one `--path <prefix>` per prefix, quoted only when needed. */
+function withPathFlags(command: string, pathPrefixes: ReadonlyArray<string>): string {
+  return [
+    command,
+    ...pathPrefixes.map(
+      (prefix) => `--${PATH_FLAG} ${PLAIN_SHELL_WORD.test(prefix) ? prefix : shellQuote(prefix)}`,
+    ),
+  ].join(" ");
+}
 
 /** JSON payload shape. Snake case, matching every other search verb. */
 function jsonForResult(result: VectorBackfillResult): Record<string, unknown> {
@@ -97,6 +115,8 @@ function jsonForResult(result: VectorBackfillResult): Record<string, unknown> {
     // missing price is not a free run.
     estimated_cost_usd: result.estimatedCostUsd,
     price_source: result.priceSource,
+    // Present only for a scoped run, so an unscoped payload is unchanged.
+    ...(result.pathPrefixes.length > 0 ? { path_prefixes: result.pathPrefixes } : {}),
   };
 }
 
@@ -108,6 +128,7 @@ async function renderHuman(result: VectorBackfillResult): Promise<void> {
       `vector-backfill dry-run: ${result.pending} of ${result.chunksTotal} chunk(s) have no vector`,
     );
   }
+  if (result.pathPrefixes.length > 0) info(`  scope: ${result.pathPrefixes.join(", ")}`);
   if (result.pending > 0) info(`  estimated cost: ${formatEstimatedUsd(result.estimatedCostUsd)}`);
   if (result.retries > 0) info(`  provider retries: ${result.retries}`);
   // What the operator CONFIGURED, resolved from the registry - never a
@@ -122,6 +143,8 @@ export async function cmdSearchVectorBackfill(argv: ReadonlyArray<string>): Prom
     ...VAULT_FLAGS,
     apply: { type: "boolean" },
     "force-cost": { type: "boolean" },
+    // Spelled out, not `[PATH_FLAG]`: the flag census reads literal keys.
+    path: { type: "string-array" },
     progress: { type: "boolean" },
     json: { type: "boolean" },
   });
@@ -145,6 +168,7 @@ export async function cmdSearchVectorBackfill(argv: ReadonlyArray<string>): Prom
     result = await planVectorBackfill(cfg, {
       apply,
       forceCost: flagBoolean(flags, "force-cost"),
+      pathPrefixes: flagStrings(flags, PATH_FLAG),
       // The three seams this module declared and nothing produced until
       // now. The deadline is the `reindex` budget off the same ladder the
       // builders read, because this pass IS that run's embedding phase on
@@ -190,19 +214,29 @@ export async function cmdSearchVectorBackfill(argv: ReadonlyArray<string>): Prom
   const exitCode = semanticCapabilityIsBlocked(result.capability)
     ? result.capability.code
     : VECTORS_PENDING;
+  // A scoped run repeats its scope in the advice: the registered
+  // `--apply` alone would widen the spend to the whole vault. An
+  // unregistered code has no command, so the JSON key stays absent.
+  const registered = resolveNextStep(exitCode)?.nextCommand;
+  const nextCommand =
+    registered !== undefined && exitCode === VECTORS_PENDING
+      ? withPathFlags(registered, result.pathPrefixes)
+      : registered;
 
   if (jsonRequested) {
     process.stdout.write(
       JSON.stringify({
         ...jsonForResult(result),
-        ...(pendingAfter > 0 ? nextCommandField(exitCode) : {}),
+        ...(pendingAfter > 0 && nextCommand !== undefined
+          ? { [NEXT_COMMAND_KEY]: nextCommand }
+          : {}),
       }) + "\n",
     );
   } else {
     await renderHuman(result);
   }
   if (pendingAfter > 0) {
-    emitNextStep(exitCode, searchAdvisoryStream(argv, jsonRequested));
+    emitNextStep(exitCode, searchAdvisoryStream(argv, jsonRequested), nextCommand);
   }
   return 0;
 }
