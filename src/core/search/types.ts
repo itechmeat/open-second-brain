@@ -238,6 +238,11 @@ export interface IndexStats {
   readonly deleted: number;
   readonly chunksTotal: number;
   readonly embeddingsComputed: number;
+  /**
+   * Stored vectors this run kept for chunks whose content did not change
+   * across an edit (vector carry-over), and therefore did not re-embed.
+   */
+  readonly embeddingsReused: number;
   readonly embeddingsRetries: number;
   readonly errors: ReadonlyArray<{
     readonly path: string;

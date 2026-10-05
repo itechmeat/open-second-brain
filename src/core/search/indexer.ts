@@ -178,6 +178,7 @@ interface MutableStats {
   deleted: number;
   chunksTotal: number;
   embeddingsComputed: number;
+  embeddingsReused: number;
   embeddingsRetries: number;
   errors: Array<{ readonly path: string; readonly message: string }>;
   frontmatterNotices: DegradationNotice[];
@@ -206,6 +207,7 @@ function newStats(): MutableStats {
     deleted: 0,
     chunksTotal: 0,
     embeddingsComputed: 0,
+    embeddingsReused: 0,
     embeddingsRetries: 0,
     errors: [],
     frontmatterNotices: [],
@@ -246,6 +248,7 @@ function freezeStats(s: MutableStats, durationMs: number): IndexStats {
     deleted: s.deleted,
     chunksTotal: s.chunksTotal,
     embeddingsComputed: s.embeddingsComputed,
+    embeddingsReused: s.embeddingsReused,
     embeddingsRetries: s.embeddingsRetries,
     errors: Object.freeze([...s.errors]),
     frontmatterNotices: Object.freeze([...s.frontmatterNotices]),
@@ -605,7 +608,11 @@ async function indexIntoRun(
           tokenCount: c.tokenCount,
           headingPath: c.headingPath,
         }));
-        const chunkIds = store.replaceChunks(docId, chunkInputs);
+        // An unchanged chunk keeps its stored vector (vector carry-over),
+        // so the embedding phase below never re-pays for it.
+        const replaced = store.replaceDocumentChunks(docId, chunkInputs);
+        const chunkIds = replaced.chunkIds;
+        stats.embeddingsReused += replaced.embeddingsReused;
 
         const links: LinkInput[] = [];
         for (let i = 0; i < chunkResult.chunks.length; i++) {

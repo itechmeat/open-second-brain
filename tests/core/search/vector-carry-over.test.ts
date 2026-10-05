@@ -25,6 +25,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
+import { indexVault } from "../../../src/core/search/indexer.ts";
 import { Store } from "../../../src/core/search/store.ts";
 import type { ChunkInput } from "../../../src/core/search/store/chunks.ts";
 import { readEmbedderRecordCensusSync } from "../../../src/core/search/store/embedder-audit.ts";
@@ -36,7 +37,7 @@ import { matchCarriedVectors } from "../../../src/core/search/store/vector-carry
 import { loadVecExtension } from "../../../src/core/search/store/vectors.ts";
 import type { ResolvedSearchConfig } from "../../../src/core/search/types.ts";
 import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
-import { createTempVault, makeConfig } from "../../helpers/search-fixtures.ts";
+import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 import { sqliteVecLoadable } from "../../helpers/sqlite-vec.ts";
 
 const STORE_MODEL = "carry-model";
@@ -248,5 +249,52 @@ describe("replaceDocumentChunks carry-over", () => {
     expect(replaced.chunkIds).toHaveLength(3);
     expect(store.countEmbeddings()).toBe(0);
     await store.close();
+  });
+});
+
+describe("an index run tallies carried vectors", () => {
+  /** The offline local embedder, with chunks small enough that each section is its own. */
+  function localRunConfig(): ResolvedSearchConfig {
+    const base = makeConfig({
+      vault,
+      dbPath,
+      semantic: {
+        enabled: true,
+        provider: "local",
+        baseUrl: null,
+        model: null,
+        apiKey: null,
+        dimension: 64,
+        costGateUsd: 0,
+      },
+    });
+    return { ...base, chunkSize: 60, chunkOverlap: 0, chunkMinSize: 1 };
+  }
+
+  const SECTIONS = [
+    "# Alpha\n\nThe first section talks about compost and soil.",
+    "# Beta\n\nThe second section talks about tomatoes in spring.",
+    "# Gamma\n\nThe third section talks about watering at dawn.",
+  ] as const;
+
+  test("an edit re-embeds only the changed chunk and reports the rest as reused", async () => {
+    if (!sqliteVecLoadable()) return;
+    writeMd(vault, NOTE_PATH, SECTIONS.join("\n\n"));
+    const cfg = localRunConfig();
+    const first = await indexVault(cfg, { embeddings: true });
+    expect(first.embeddingsReused).toBe(0);
+    const chunks = first.embeddingsComputed;
+    expect(chunks).toBeGreaterThanOrEqual(SECTIONS.length);
+
+    writeMd(
+      vault,
+      NOTE_PATH,
+      [SECTIONS[0], "# Beta\n\nThe second section now talks about peppers.", SECTIONS[2]].join(
+        "\n\n",
+      ),
+    );
+    const second = await indexVault(cfg, { embeddings: true });
+    expect(second.embeddingsComputed).toBe(1);
+    expect(second.embeddingsReused).toBe(chunks - 1);
   });
 });
