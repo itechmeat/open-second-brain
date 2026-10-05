@@ -365,6 +365,33 @@ describe("brain_context_pack tool — ranked query mode", () => {
     expect(r.error!.message).toContain("query");
   });
 
+  test("a blank semantic query is refused before anything is embedded", async () => {
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const r = await callPackRaw(server, {
+      max_tokens: 10_000,
+      query: "  ",
+      query_mode: "semantic",
+    });
+    expect(r.error?.code).toBe(-32602);
+    expect(r.error!.message).toContain("query_mode requires a non-empty query");
+  });
+
+  test("a query over 2000 characters is refused, as the schema declares", async () => {
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const r = await callPackRaw(server, {
+      max_tokens: 10_000,
+      query: "x".repeat(2001),
+      query_mode: "semantic",
+    });
+    expect(r.error?.code).toBe(-32602);
+    expect(r.error!.message).toContain("exceeds 2000 characters");
+    const tool = buildToolTable("full").find((t) => t.name === "brain_context_pack")!;
+    const schema = tool.inputSchema as { properties: Record<string, { maxLength?: number }> };
+    expect(schema.properties["query"]!.maxLength).toBe(2000);
+  });
+
   test("an unknown query_mode names the accepted set", async () => {
     const server = new MCPServer({ vault, configPath });
     await initialize(server);

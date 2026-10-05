@@ -172,6 +172,19 @@ async function toolBrainContextPack(
         "brain_context_pack: query_mode requires query; a mode with nothing to read is inert",
       );
     }
+    // The semantic query is embedded once, ungated: a blank one buys nothing.
+    if (queryMode === "semantic" && query.trim() === "") {
+      throw new MCPError(
+        INVALID_PARAMS,
+        "brain_context_pack: query_mode requires a non-empty query",
+      );
+    }
+  }
+  if (query !== undefined && query.length > 2000) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_context_pack: argument 'query' exceeds 2000 characters",
+    );
   }
   const includeLanes = coerceBool(args, "lanes");
   const cacheStable = coerceBool(args, "cache_stable");
@@ -992,6 +1005,7 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         query: {
           type: "string",
+          maxLength: 2000,
           description:
             "Optional query. Read as a case/Unicode-insensitive substring filter on topic + principle unless `query_mode` says otherwise.",
         },
