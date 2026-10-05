@@ -18,8 +18,8 @@ import {
 } from "../../core/config.ts";
 import { resolveSearchConfig } from "../../core/search/index.ts";
 import { SearchError } from "../../core/search/search-error.ts";
-import { formatEstimatedUsd } from "../../core/search/embedding-spend.ts";
 import {
+  discloseSpentQuery,
   loadBeliefSemanticRelevance,
   type BeliefSemanticRelevance,
 } from "../../core/brain/belief-semantic.ts";
@@ -138,18 +138,12 @@ async function withSearchErrorsOnWire<T>(
  * fewer (no tombstones, chain tips only, and a dimension the query vector
  * decides), so the embed can be paid and the pack refused all the same.
  */
-function discloseSpentQuery(
+function discloseSpentPackQuery(
   semantic: BeliefSemanticRelevance | null,
 ): (e: SearchError) => SearchError {
   return (e) => {
     if (semantic === null || e.code !== "BELIEF_VECTORS_MISSING") return e;
-    const spent = semantic.report;
-    return new SearchError(
-      e.code,
-      `${e.message} (the query embed was still spent: model ${spent.model}, ` +
-        `price source ${spent.priceSource}, ${spent.queryTokens} query token(s), ` +
-        `${formatEstimatedUsd(spent.estimatedUsd)})`,
-    );
+    return discloseSpentQuery(e, semantic.report);
   };
 }
 
@@ -372,7 +366,7 @@ async function toolBrainContextPack(
         ...(attentionFlowIds.length > 0 && !remote ? { attentionFlowIds } : {}),
         ...(semantic !== null ? { semanticRelevance: semantic.relevanceByPath } : {}),
       }),
-    discloseSpentQuery(semantic),
+    discloseSpentPackQuery(semantic),
   );
   const warnings = [
     ...(report.warnings ?? []),

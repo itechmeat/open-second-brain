@@ -39,7 +39,7 @@ import {
   semanticCapabilityLabel,
 } from "../search/capability-tier.ts";
 import type { EmbeddingProvider } from "../search/embeddings/contract.ts";
-import { activeSpendQuote } from "../search/embedding-spend.ts";
+import { activeSpendQuote, formatEstimatedUsd } from "../search/embedding-spend.ts";
 import { EMBEDDING_PRICE_SOURCE, type EmbeddingPriceSource } from "../search/embeddings/pricing.ts";
 import { makeProvider } from "../search/embeddings/provider.ts";
 import { estimateCostUsd, estimateTokens } from "../search/embeddings/signature.ts";
@@ -120,6 +120,21 @@ export interface BeliefSemanticDeps {
    * decided over a wider set would tell the two apart.
    */
   readonly inView?: (path: string) => boolean;
+}
+
+/**
+ * A refusal raised after the query embed still names that spend: the
+ * provider answered, so the call was paid whatever is refused after it.
+ * Shared by the loader (a query vector the guard rejects) and the pack (a
+ * refusal decided over the beliefs it keeps), so both read the same.
+ */
+export function discloseSpentQuery(e: SearchError, spent: BeliefSemanticQueryReport): SearchError {
+  return new SearchError(
+    e.code,
+    `${e.message} (the query embed was still spent: model ${spent.model}, ` +
+      `price source ${spent.priceSource}, ${spent.queryTokens} query token(s), ` +
+      `${formatEstimatedUsd(spent.estimatedUsd)})`,
+  );
 }
 
 /** The context the query vector is validated under, named in a refusal. */
@@ -262,7 +277,11 @@ export async function loadBeliefSemanticRelevance(
       queryTokens,
       estimatedUsd: estimateCostUsd(queryTokens, spend.quote),
     };
-    assertValidVector(queryVector, QUERY_VECTOR_CONTEXT);
+    try {
+      assertValidVector(queryVector, QUERY_VECTOR_CONTEXT);
+    } catch (e) {
+      throw e instanceof SearchError ? discloseSpentQuery(e, report) : e;
+    }
     const contradicted = contradictedAbiFields(store.embeddingAbiMismatches());
     return {
       ...scoreBeliefsByVector({ model, queryVector, vectorsByPath }),

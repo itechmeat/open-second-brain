@@ -419,6 +419,10 @@ describe("loadBeliefSemanticRelevance", () => {
       expect(refusal).toBeInstanceOf(SearchError);
       expect((refusal as SearchError).code).toBe("EMBEDDING_INVALID_VECTOR");
       expect((refusal as SearchError).message).toContain("belief semantic query");
+      // The provider answered, so the call was paid: the refusal names it.
+      expect((refusal as SearchError).message).toContain("the query embed was still spent");
+      expect((refusal as SearchError).message).toContain(`model ${MODEL}`);
+      expect((refusal as SearchError).message).toContain("price source unknown");
     });
   }
 
