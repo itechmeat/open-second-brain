@@ -2104,6 +2104,8 @@ server that costs nothing.
 An unknown price is reported as unknown, never as $0: the maintenance
 banner, the backfill dry run and `search status` print `price unknown`,
 the JSON estimates are `null`, and spend receipts carry `price_source`.
+A fully embedded index has nothing pending to pay for, so `search status`
+then prints no `refresh_cost_est` line and its JSON estimate is `0`.
 Under a positive `embedding_cost_gate_usd`, an embedding run on a model
 with no known price and pending chunks is refused with
 `EMBEDDING_COST_UNPRICED`, because an unknown price cannot be checked

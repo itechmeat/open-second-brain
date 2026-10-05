@@ -1650,17 +1650,22 @@ export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexSt
 
     // Best-effort spend estimate to bring stale/missing embeddings current,
     // from the shared spend plan. Chunk content is scanned only when the
-    // price is a positive known rate: a known-free model costs 0 and an
-    // unknown price is unknown whatever the census holds.
+    // price is a positive known rate: a known-free model costs 0. An
+    // unknown price is unknown only while chunks are pending - a fully
+    // embedded index has nothing to pay for, so it reads 0, counted
+    // without loading a chunk body.
     let estimatedRefreshCostUsd: number | null = 0;
     let refreshPriceSource: EmbeddingPriceSource | null = null;
     if (config.semantic.enabled) {
       const { quote } = activeSpendQuote(config);
       refreshPriceSource = quote.source;
-      estimatedRefreshCostUsd =
-        quote.usdPerMtok !== null && quote.usdPerMtok > 0
-          ? planEmbeddingSpend(store, config).estimatedUsd
-          : estimateCostUsd(0, quote);
+      if (quote.usdPerMtok !== null && quote.usdPerMtok > 0) {
+        estimatedRefreshCostUsd = planEmbeddingSpend(store, config).estimatedUsd;
+      } else if (quote.usdPerMtok === null && store.countChunksWithoutEmbeddings() === 0) {
+        estimatedRefreshCostUsd = 0;
+      } else {
+        estimatedRefreshCostUsd = estimateCostUsd(0, quote);
+      }
     }
 
     return Object.freeze({

@@ -16,6 +16,9 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { join } from "node:path";
 
 import { indexVault } from "../../src/core/search/indexer.ts";
+import { planVectorBackfill } from "../../src/core/search/vector-backfill.ts";
+import { FAKE_PROVIDER_KEY } from "../helpers/fake-credentials.ts";
+import { startFakeHttp } from "../helpers/fake-http.ts";
 import { createTempVault, makeConfig, writeMd } from "../helpers/search-fixtures.ts";
 import { sqliteVecLoadable } from "../helpers/sqlite-vec.ts";
 import { runCli } from "../helpers/run-cli.ts";
@@ -38,7 +41,7 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 /** Index two notes keyword-only and write a CLI config naming `model`. */
-async function seed(model: string): Promise<string> {
+async function seed(model: string, baseUrl = "http://127.0.0.1:9"): Promise<string> {
   writeMd(vault, "a.md", "# A\n\nFirst note about something.");
   writeMd(vault, "b.md", "# B\n\nSecond note discussing other things.");
   await indexVault(makeConfig({ vault, dbPath }));
@@ -49,7 +52,7 @@ async function seed(model: string): Promise<string> {
       `vault: "${vault}"`,
       "search_semantic_enabled: true",
       "embedding_provider: openai-compat",
-      'embedding_base_url: "http://127.0.0.1:9"',
+      `embedding_base_url: "${baseUrl}"`,
       `embedding_model: ${model}`,
       "embedding_api_key: test-key",
       "embedding_dimension: 4",
@@ -107,3 +110,38 @@ test("status of an unpriced model says price unknown and reports its source", as
   expect(human).toContain("refresh_cost_est:    price unknown");
   expect(human).not.toContain("$0.0000");
 });
+
+test.skipIf(!VEC_LOADABLE)(
+  "status of a fully embedded index on an unpriced model prints no unknown spend",
+  async () => {
+    const server = await startFakeHttp();
+    try {
+      const config = await seed(UNPRICED_MODEL, server.url);
+      await planVectorBackfill(
+        makeConfig({
+          vault,
+          dbPath,
+          semantic: {
+            enabled: true,
+            provider: "openai-compat",
+            baseUrl: server.url,
+            model: UNPRICED_MODEL,
+            apiKey: FAKE_PROVIDER_KEY,
+            dimension: 4,
+            timeoutMs: 5_000,
+          },
+        }),
+        { apply: true },
+      );
+      const payload = JSON.parse(await cli(config, ["search", "status", "--json"])) as Record<
+        string,
+        unknown
+      >;
+      expect(payload["estimated_refresh_cost_usd"]).toBe(0);
+      expect(payload["refresh_price_source"]).toBe("unknown");
+      expect(await cli(config, ["search", "status"])).not.toContain("refresh_cost_est");
+    } finally {
+      await server.close();
+    }
+  },
+);
