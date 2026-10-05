@@ -23,7 +23,8 @@ import {
   guardBrainContextSnippet,
   type ContextSafetyReport,
 } from "./safety/context-guard.ts";
-import { BRAIN_PREFERENCES_REL, brainDirs } from "./paths.ts";
+import { brainDirs } from "./paths.ts";
+import { BELIEF_VECTORS_BACKFILL_COMMAND } from "./belief-semantic.ts";
 import { SearchError } from "../search/search-error.ts";
 import {
   collectPreferencePages,
@@ -118,8 +119,7 @@ export function isContextPackQueryMode(value: unknown): value is ContextPackQuer
   );
 }
 
-/** The command that pays for the vectors the `semantic` mode reads. */
-export const BELIEF_VECTORS_BACKFILL_COMMAND = `o2b search vector-backfill --path ${BRAIN_PREFERENCES_REL}/ --apply`;
+export { BELIEF_VECTORS_BACKFILL_COMMAND };
 
 /**
  * A `semantic` pack was asked for without the relevance map that mode

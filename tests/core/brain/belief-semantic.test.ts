@@ -21,6 +21,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import {
   BELIEF_SEMANTIC_PATH_PREFIXES,
+  BELIEF_VECTORS_BACKFILL_COMMAND,
   loadBeliefSemanticRelevance,
   scoreBeliefsByVector,
   type StoredBeliefVector,
@@ -244,17 +245,37 @@ describe("loadBeliefSemanticRelevance", () => {
     expect(loaded.report.estimatedUsd).toBeCloseTo((loaded.report.queryTokens / 1_000_000) * 2, 12);
   });
 
-  test("zero usable vectors is an empty map, not a refusal", async () => {
+  test("no belief row under the model refuses with BELIEF_VECTORS_MISSING before any query embed", async () => {
+    if (!sqliteVecLoadable()) return;
+    writeBelief("Brain/preferences/pref-a.md", "pref-a", "Keep answers short");
+    writeBelief("Brain/preferences/pref-b.md", "pref-b", "Reply politely");
+    const config = vecConfig();
+    await indexVault(config);
+    await plant(config, {
+      "Brain/preferences/pref-b.md": { vector: [1, 0, 0, 0], model: OTHER_MODEL },
+    });
+
+    const refusal = await loadBeliefSemanticRelevance(config, QUERY, {
+      provider: throwingProvider,
+    }).catch((e: unknown) => e);
+
+    expect(refusal).toBeInstanceOf(SearchError);
+    expect((refusal as SearchError).code).toBe("BELIEF_VECTORS_MISSING");
+    expect((refusal as SearchError).message).toContain(BELIEF_VECTORS_BACKFILL_COMMAND);
+  });
+
+  test("a row under the model at another dimension still embeds and reads as unembedded", async () => {
     if (!sqliteVecLoadable()) return;
     writeBelief("Brain/preferences/pref-a.md", "pref-a", "Keep answers short");
     const config = vecConfig();
     await indexVault(config);
-    const { provider } = countingProvider(unit([1, 0, 0, 0]));
+    await plant(config, { "Brain/preferences/pref-a.md": { vector: [1, 0, 0, 0] } });
+    const { provider, calls } = countingProvider(unit([1, 0, 0]));
 
     const loaded = await loadBeliefSemanticRelevance(config, QUERY, { provider });
 
+    expect(calls).toHaveLength(1);
     expect(loaded.scored).toBe(0);
-    expect(loaded.relevanceByPath.size).toBe(0);
     expect(loaded.unembedded).toEqual(["Brain/preferences/pref-a.md"]);
   });
 

@@ -24,9 +24,10 @@
  *     price source, the query tokens and the cost (null when the price is
  *     unknown).
  *
- * Zero usable vectors is an empty map here, not a refusal: whether the
- * caller's KEPT candidates have vectors is only known after the pack's
- * reach filter, so that verdict belongs to the pack's caller.
+ * No belief row under the model anywhere is refused here, before the
+ * embed, with `BELIEF_VECTORS_MISSING`: none in reach can have one. Any
+ * other shortfall is the pack's to judge, because whether the caller's
+ * KEPT candidates have vectors is only known after its reach filter.
  */
 
 import { BRAIN_PREFERENCES_REL, BRAIN_RETIRED_REL } from "./path-constants.ts";
@@ -52,6 +53,9 @@ export const BELIEF_SEMANTIC_PATH_PREFIXES: ReadonlyArray<string> = Object.freez
   `${BRAIN_PREFERENCES_REL}/`,
   `${BRAIN_RETIRED_REL}/`,
 ]);
+
+/** The command that pays for the vectors the `semantic` mode reads. */
+export const BELIEF_VECTORS_BACKFILL_COMMAND = `o2b search vector-backfill --path ${BRAIN_PREFERENCES_REL}/ --apply`;
 
 /** One stored vector with the identity its `embeddings` row recorded. */
 export interface StoredBeliefVector {
@@ -202,9 +206,22 @@ export async function loadBeliefSemanticRelevance(
       vectorsByPath.set(path, readable ? store.storedEmbeddingsForDocument(doc.id) : []);
     }
     const provider = deps.provider ?? makeProvider(config.semantic);
+    const model = config.semantic.model ?? provider.model;
+    // No belief row under the model anywhere means none in reach has one:
+    // the pack's refusal is certain, so it is raised before the paid embed.
+    // The dimension needs the query vector and is judged after it.
+    const anyUsable = [...vectorsByPath.values()].some((rows) =>
+      rows.some((r) => r.model === model),
+    );
+    if (!anyUsable) {
+      throw new SearchError(
+        "BELIEF_VECTORS_MISSING",
+        `semantic belief order unavailable: no belief note has a stored vector ` +
+          `for the configured model; run: ${BELIEF_VECTORS_BACKFILL_COMMAND}`,
+      );
+    }
     const [queryVector = []] = await provider.embed([query], "query");
     assertValidVector(queryVector, QUERY_VECTOR_CONTEXT);
-    const model = config.semantic.model ?? provider.model;
     const quote = resolveEmbeddingPrice(model, config.semantic.priceOverride);
     const queryTokens = estimateTokens([query]);
     const contradicted = contradictedAbiFields(store.embeddingAbiMismatches());
