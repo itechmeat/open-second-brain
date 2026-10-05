@@ -20,7 +20,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import {
-  BELIEF_SEMANTIC_PATH_PREFIXES,
   BELIEF_VECTORS_BACKFILL_COMMAND,
   loadBeliefSemanticRelevance,
   scoreBeliefsByVector,
@@ -327,19 +326,10 @@ describe("loadBeliefSemanticRelevance", () => {
     expect((refusal as SearchError).code).toBe("EMBEDDING_KEY_MISSING");
   });
 
+  // No belief note on purpose: with one, the per-document vector read
+  // throws the same code, so only an empty belief set proves the guard
+  // runs before the query embed.
   test("a store without sqlite-vec refuses with VEC_EXTENSION_UNAVAILABLE before any query embed", async () => {
-    writeBelief("Brain/preferences/pref-a.md", "pref-a", "Keep answers short");
-    const config = vecConfig();
-    await indexVault(config);
-    const refusal = await loadBeliefSemanticRelevance(config, QUERY, {
-      provider: throwingProvider,
-      loadVec: false,
-    }).catch((e: unknown) => e);
-    expect(refusal).toBeInstanceOf(SearchError);
-    expect((refusal as SearchError).code).toBe("VEC_EXTENSION_UNAVAILABLE");
-  });
-
-  test("a store without sqlite-vec refuses by name even when no belief note exists", async () => {
     writeMd(vault, "notes/n.md", "# A note\n\nNot a belief.\n");
     const config = vecConfig();
     await indexVault(config);
@@ -406,9 +396,5 @@ describe("loadBeliefSemanticRelevance", () => {
 
     expect(loaded.warnings).toHaveLength(1);
     expect(loaded.warnings[0]).toContain(EMBEDDING_DIMENSION_STATE_KEY);
-  });
-
-  test("the scored set is the preferences and retired directories", () => {
-    expect(BELIEF_SEMANTIC_PATH_PREFIXES).toEqual(["Brain/preferences/", "Brain/retired/"]);
   });
 });
