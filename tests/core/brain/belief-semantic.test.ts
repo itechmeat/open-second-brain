@@ -201,6 +201,28 @@ describe("scoreBeliefsByVector", () => {
       "Brain/preferences/stale-model.md",
     ]);
   });
+
+  // The store guard rejects such rows only since v1.32.0; an older index
+  // can still hold one, and its NaN cosine must not reach the order.
+  test("a stored zero or non-finite vector is unusable, never a NaN relevance", () => {
+    const stored = (values: number[]): StoredBeliefVector => ({
+      vector: Float32Array.from(values),
+      model: MODEL,
+      dimension: values.length,
+    });
+    const result = scoreBeliefsByVector({
+      model: MODEL,
+      queryVector: unit([1, 0, 0, 0]),
+      vectorsByPath: new Map([
+        ["Brain/preferences/zero.md", [stored([0, 0, 0, 0])]],
+        ["Brain/preferences/nan.md", [stored([Number.NaN, 0, 0, 0])]],
+        ["Brain/preferences/mixed.md", [stored([0, 0, 0, 0]), row([1, 0, 0, 0])]],
+      ]),
+    });
+    expect([...result.relevanceByPath.keys()]).toEqual(["Brain/preferences/mixed.md"]);
+    expect(result.relevanceByPath.get("Brain/preferences/mixed.md")).toBeCloseTo(1, 6);
+    expect(result.unembedded).toEqual(["Brain/preferences/nan.md", "Brain/preferences/zero.md"]);
+  });
 });
 
 describe("loadBeliefSemanticRelevance", () => {

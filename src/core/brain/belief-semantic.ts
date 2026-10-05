@@ -153,6 +153,9 @@ export function scoreBeliefsByVector(input: BeliefVectorScoreInput): BeliefVecto
       if (row.model !== input.model) continue;
       if (row.dimension !== dimension || row.vector.length !== dimension) continue;
       const score = cosine(input.queryVector, row.vector);
+      // A zero or non-finite row from an index written before the store
+      // guard has no direction: unusable, never a NaN in the order.
+      if (!Number.isFinite(score)) continue;
       if (best === null || score > best) best = score;
     }
     if (best === null) unembedded.push(path);
