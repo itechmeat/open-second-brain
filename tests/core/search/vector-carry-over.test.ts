@@ -13,8 +13,9 @@
  * store seam (carry, purge of the uncarried vec rows, the model and
  * dimension guards, the unrecorded-identity guard, vec not loaded), the
  * `embeddingsReused` tally of an index run, the embedder record audit on
- * carried rows, and a KNN query that finds the carried chunk under its
- * new id.
+ * carried rows, a KNN query that finds the carried chunk under its
+ * new id, and the one-document scope of the carry census (two notes
+ * sharing a paragraph never trade vectors).
  *
  * Deliberately not covered: carry-over ACROSS documents (a paragraph
  * moved into another note is re-embedded by design - the key is scoped
@@ -248,6 +249,66 @@ describe("replaceDocumentChunks carry-over", () => {
     expect(replaced.embeddingsReused).toBe(0);
     expect(replaced.chunkIds).toHaveLength(3);
     expect(store.countEmbeddings()).toBe(0);
+    await store.close();
+  });
+});
+
+/** The `chunk_vec_map` rows of one document's chunks, as `chunk_id:vec_rowid`. */
+function vecMapRows(path: string, docId: number): string[] {
+  const db = new Database(path, { readonly: true });
+  try {
+    return db
+      .query<{ chunk_id: number; vec_rowid: number }, [number]>(
+        "SELECT m.chunk_id AS chunk_id, m.vec_rowid AS vec_rowid FROM chunk_vec_map m " +
+          "JOIN chunks c ON c.id = m.chunk_id WHERE c.document_id = ? ORDER BY m.chunk_id",
+      )
+      .all(docId)
+      .map((r) => `${r.chunk_id}:${r.vec_rowid}`);
+  } finally {
+    db.close();
+  }
+}
+
+describe("carry-over stays inside one document", () => {
+  test("a paragraph two notes share carries only the edited note's own vector", async () => {
+    if (!sqliteVecLoadable()) return;
+    const store = await Store.open(storeConfig(), { mode: "write" });
+    const docOf = (path: string) =>
+      store.upsertDocument({ path, title: null, contentHash: path, mtime: 0, size: 1 });
+    const docA = docOf("Notes/a.md");
+    const docB = docOf("Notes/b.md");
+    // A's shared paragraph sits AFTER B's in chunk_index order, so a
+    // census that leaked across documents would hand A B's vector first.
+    const idsA = store.replaceChunks(docA, [chunkInput(0, "only-a"), chunkInput(1, "shared")]);
+    const idsB = store.replaceChunks(docB, [chunkInput(0, "shared"), chunkInput(1, "only-b")]);
+    idsA.forEach((id, i) =>
+      store.vecUpsert(id, unitVector(i), STORE_MODEL, STORE_DIMENSION, `a-${i}`),
+    );
+    idsB.forEach((id, i) =>
+      store.vecUpsert(id, unitVector(i + 2), STORE_MODEL, STORE_DIMENSION, `b-${i}`),
+    );
+    const oldRowidsA = vecMapRows(dbPath, docA).map((row) => row.split(":")[1]);
+    const rowsB = vecMapRows(dbPath, docB);
+
+    const replaced = store.replaceDocumentChunks(docA, [
+      chunkInput(0, "only-a-edited"),
+      chunkInput(1, "shared"),
+    ]);
+    expect(replaced.embeddingsReused).toBe(1);
+    const carried = vecMapRows(dbPath, docA).map((row) => row.split(":")[1]);
+    expect(carried).toHaveLength(1);
+    for (const rowid of carried) expect(oldRowidsA).toContain(rowid);
+    expect(vecMapRows(dbPath, docB)).toEqual(rowsB);
+    const sharedA = replaced.chunkIds[1]!;
+    expect(store.getEmbeddingHash(sharedA)).toBe("a-1");
+
+    store.deleteDocument("Notes/b.md");
+    expect(Array.from(store.embeddingForChunk(sharedA) ?? [])).toEqual(
+      Array.from(Float32Array.from(unitVector(1))),
+    );
+    expect(store.semanticTopK(unitVector(1), { limit: 1 }).map((h) => h.chunkId)).toEqual([
+      sharedA,
+    ]);
     await store.close();
   });
 });
