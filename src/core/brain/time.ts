@@ -88,10 +88,15 @@ export function msToWholeDays(durationMs: number): number {
  * `nowMs` is required rather than defaulted so a caller that already
  * holds a pinned clock cannot accidentally measure against a second,
  * later one mid-scan.
+ *
+ * The mtime is floored to the whole millisecond `nowMs` is measured in
+ * (`Date.now()`): the filesystem stamps a sub-millisecond mtime, so a
+ * file written within the clock's own millisecond would otherwise read
+ * as stamped in the future - a precision artefact, not clock skew.
  */
 export function fileAgeMs(path: string, nowMs: number): number | null {
   try {
-    return nowMs - statSync(path).mtimeMs;
+    return nowMs - Math.floor(statSync(path).mtimeMs);
   } catch {
     return null;
   }
