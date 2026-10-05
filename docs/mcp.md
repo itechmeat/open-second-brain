@@ -2384,7 +2384,10 @@ format characters), when it contains NUL, or when it exceeds the cap.
   caller when the model has no known price and `embedding_cost_gate_usd`
   is positive. `query` is capped at 2000 characters in every query mode,
   counted in Unicode code points as the schema's `maxLength` counts them,
-  and `brain_search` counts its 2000-character cap the same way. The
+  and `brain_search` counts its 2000-character cap the same way.
+  `brain_recall_feedback`, which advertised the same cap without checking
+  it, now refuses a longer `query` with `INVALID_PARAMS` before it records
+  anything. The
   `substring` and `ranked` modes are otherwise unchanged. The embedding spend
   surfaces also change: `EMBEDDING_COST_UNPRICED` joins the stable error
   codes (an embedding run refused under a positive cost gate because the

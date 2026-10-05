@@ -49,8 +49,8 @@ reference it finds (`removed-tool-reference`).
 
 ## Upgrading to 1.72.0
 
-No step is required unless you set a positive `embedding_cost_gate_usd`
-or an integration reads the JSON embedding cost estimates, which can now
+No step is required unless you set a positive `embedding_cost_gate_usd`,
+left a numeric search setting blank, or an integration reads the JSON embedding cost estimates, which can now
 be `null` whatever the gate (see below).
 
 **A positive cost gate now refuses a model with no known price.**
@@ -89,6 +89,13 @@ Nothing needs reindexing to benefit.
 
 `o2b search vector-backfill` gains a repeatable `--path`, and
 `brain_context_pack` gains `query_mode: "semantic"`; both are additive.
+
+**Blank numeric settings and long feedback queries are refused.** A
+whitespace-only `embedding_cost_gate_usd` or `search_rerank_min_score`
+(in config or through its env twin) used to read as 0; it now fails config
+resolution with `INVALID_INPUT`, so remove the key or give it a number.
+`brain_recall_feedback` now enforces its advertised 2000-character `query`
+cap and refuses a longer query with `INVALID_PARAMS`.
 
 ## Upgrading to 1.71.0
 
