@@ -1250,11 +1250,11 @@ semantic_weight·cosine + link_boost + recency_boost + entity_boost)`
   is embedded for the notes themselves. Only vectors written by the
   configured model at the query's dimension count, and the scores are
   read only for candidates that survive the reach filter. A note without
-  a usable vector scores 0 and is named in the response's
+  a usable vector sorts after the scored notes of its tier and is named in the response's
   `semantic.unembedded`. The mode refuses by name when the semantic tier
   is blocked, when sqlite-vec is not loadable, and when no kept
   candidate has a usable vector (`BELIEF_VECTORS_MISSING`, naming
-  `o2b search vector-backfill --path Brain/preferences/ --apply`). The
+  `o2b search vector-backfill --path Brain/preferences/ --path Brain/retired/ --apply`). The
   query embed is disclosed (model, price source, tokens, estimate) and
   not gated, as for `search`.
 - **Atomic reindex.** `o2b search reindex` writes to

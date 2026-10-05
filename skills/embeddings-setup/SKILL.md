@@ -161,8 +161,8 @@ o2b search vector-backfill --apply
 
 `--path <prefix>` (repeatable) limits the census, the estimate and the
 spend to one part of the vault. For example,
-`o2b search vector-backfill --path Brain/preferences/ --apply` embeds
-just the belief notes, which is what the `semantic` query mode of
+`o2b search vector-backfill --path Brain/preferences/ --path Brain/retired/ --apply`
+embeds just the belief notes, which is what the `semantic` query mode of
 `brain_context_pack` reads. Later edits re-embed only the chunks that
 changed; unchanged chunks keep their vectors.
 

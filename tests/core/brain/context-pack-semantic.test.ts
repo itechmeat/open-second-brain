@@ -194,7 +194,7 @@ describe("packContext semantic mode", () => {
     expect((refusal as SearchError).code).toBe("BELIEF_VECTORS_MISSING");
     expect((refusal as SearchError).message).toContain(BELIEF_VECTORS_BACKFILL_COMMAND);
     expect(BELIEF_VECTORS_BACKFILL_COMMAND).toBe(
-      "o2b search vector-backfill --path Brain/preferences/ --apply",
+      "o2b search vector-backfill --path Brain/preferences/ --path Brain/retired/ --apply",
     );
     expect(listContextReceipts(vault, {})).toEqual([]);
 

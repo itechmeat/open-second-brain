@@ -56,7 +56,7 @@ export const BELIEF_SEMANTIC_PATH_PREFIXES: ReadonlyArray<string> = Object.freez
 ]);
 
 /** The command that pays for the vectors the `semantic` mode reads. */
-export const BELIEF_VECTORS_BACKFILL_COMMAND = `o2b search vector-backfill --path ${BRAIN_PREFERENCES_REL}/ --apply`;
+export const BELIEF_VECTORS_BACKFILL_COMMAND = `o2b search vector-backfill ${BELIEF_SEMANTIC_PATH_PREFIXES.map((prefix) => `--path ${prefix}`).join(" ")} --apply`;
 
 /** One stored vector with the identity its `embeddings` row recorded. */
 export interface StoredBeliefVector {

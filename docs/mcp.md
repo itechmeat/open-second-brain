@@ -2378,7 +2378,7 @@ format characters), when it contains NUL, or when it exceeds the cap.
   capability codes (`EMBEDDING_DISABLED`, `EMBEDDING_KEY_MISSING`) for a
   blocked tier, `VEC_EXTENSION_UNAVAILABLE`, and `BELIEF_VECTORS_MISSING`
   when no kept candidate has a usable vector, naming
-  `o2b search vector-backfill --path Brain/preferences/ --apply`. The
+  `o2b search vector-backfill --path Brain/preferences/ --path Brain/retired/ --apply`. The
   `substring` and `ranked` modes are unchanged. The embedding spend
   surfaces also change: `EMBEDDING_COST_UNPRICED` joins the stable error
   codes (an embedding run refused under a positive cost gate because the
