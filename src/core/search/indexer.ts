@@ -32,18 +32,19 @@ import { expandTextForCjkFts } from "./cjk-tokenizer.ts";
 import { declaredInputWindowTokens, passagePrefixSentByProvider } from "./embeddings/presets.ts";
 import {
   activeEmbeddingModel,
+  activeSpendQuote,
   EMBEDDING_GATE_REASON,
+  type EmbeddingGateReason,
   formatEstimatedUsd,
   planEmbeddingSpend,
   unpricedRefusalMessage,
   USD_DECIMALS,
 } from "./embedding-spend.ts";
-import { resolveEmbeddingPrice } from "./embeddings/pricing.ts";
+import type { EmbeddingPriceSource } from "./embeddings/pricing.ts";
 import { makeProvider } from "./embeddings/provider.ts";
 import {
   embeddingSignature,
   estimateCostUsd,
-  estimateTokens,
   isStaleSignature,
   MODEL_NATIVE_DIMENSION,
   type EmbeddingIdentity,
@@ -1137,12 +1138,17 @@ export interface EmbeddingSpendPreview {
   /** Chunks the phase's own anti-join still finds vectorless. */
   readonly pendingChunks: number;
   readonly tokens: number;
-  readonly estimatedUsd: number;
+  /** Null when nobody stated the model's price. */
+  readonly estimatedUsd: number | null;
+  /** Who stated the price the estimate used. */
+  readonly priceSource: EmbeddingPriceSource;
   /**
    * True when the configured gate would refuse this spend unforced - the
    * fact a `--force-cost` receipt is honest about.
    */
   readonly blocked: boolean;
+  /** Why the gate would refuse; null when it would not. */
+  readonly reason: EmbeddingGateReason | null;
 }
 
 /**
@@ -1182,8 +1188,10 @@ export async function estimatePendingEmbeddingSpend(
       model: plan.model,
       pendingChunks: plan.pending.length,
       tokens: plan.tokens,
-      estimatedUsd: plan.estimatedUsd ?? 0,
-      blocked: plan.gate.reason === EMBEDDING_GATE_REASON.overCap,
+      estimatedUsd: plan.estimatedUsd,
+      priceSource: plan.quote.source,
+      blocked: plan.gate.blocked,
+      reason: plan.gate.reason,
     };
   } finally {
     await store.close();
@@ -1518,6 +1526,7 @@ export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexSt
         embeddingDimension: null,
         embeddingSignature: activeEmbeddingSignature(config),
         estimatedRefreshCostUsd: 0,
+        refreshPriceSource: null,
         vecExtension: "unknown" as const,
         semanticEnabled: config.semantic.enabled,
         embeddingKeyPresent: !!config.semantic.apiKey,
@@ -1620,17 +1629,19 @@ export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexSt
       warnings.push(await formatChunkWindowMeasured(chunkWindow));
     }
 
-    // Best-effort spend estimate to bring stale/missing embeddings current.
-    // Only scan chunk content when the active model is actually priced.
-    const activeModel = activeEmbeddingModel(config, model);
-    const activePrice = resolveEmbeddingPrice(activeModel);
-    let estimatedRefreshCostUsd = 0;
-    if (config.semantic.enabled && activePrice.usdPerMtok !== null && activePrice.usdPerMtok > 0) {
-      const pending = store.findChunksWithoutEmbeddings();
-      estimatedRefreshCostUsd = estimateCostUsd(
-        estimateTokens(pending.map((p) => p.content)),
-        activePrice,
-      );
+    // Best-effort spend estimate to bring stale/missing embeddings current,
+    // from the shared spend plan. Chunk content is scanned only when the
+    // price is a positive known rate: a known-free model costs 0 and an
+    // unknown price is unknown whatever the census holds.
+    let estimatedRefreshCostUsd: number | null = 0;
+    let refreshPriceSource: EmbeddingPriceSource | null = null;
+    if (config.semantic.enabled) {
+      const { quote } = activeSpendQuote(config);
+      refreshPriceSource = quote.source;
+      estimatedRefreshCostUsd =
+        quote.usdPerMtok !== null && quote.usdPerMtok > 0
+          ? planEmbeddingSpend(store, config).estimatedUsd
+          : estimateCostUsd(0, quote);
     }
 
     return Object.freeze({
@@ -1645,6 +1656,7 @@ export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexSt
       embeddingDimension: dim,
       embeddingSignature: activeEmbeddingSignature(config, model, dim),
       estimatedRefreshCostUsd,
+      refreshPriceSource,
       vecExtension: store.vecLoaded() ? ("loaded" as const) : ("unavailable" as const),
       semanticEnabled: config.semantic.enabled,
       embeddingKeyPresent: !!config.semantic.apiKey,

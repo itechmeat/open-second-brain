@@ -29,9 +29,11 @@ import { join } from "node:path";
 import {
   embeddingSpendOf,
   estimatePendingEmbeddingSpend,
+  indexStatus,
   runEmbeddingPhase,
   type EmbeddingPhaseTally,
 } from "../../../src/core/search/indexer.ts";
+import { planVectorBackfill } from "../../../src/core/search/vector-backfill.ts";
 import { indexVault, resolveSearchConfig } from "../../../src/core/search/index.ts";
 import { Store } from "../../../src/core/search/store.ts";
 import {
@@ -414,4 +416,118 @@ test("the over-cap refusal keeps its code and message", async () => {
 
 test("the unpriced refusal code is registered on the MCP wire", () => {
   expect(isToolErrorCode("EMBEDDING_COST_UNPRICED")).toBe(true);
+});
+
+// ── every surface reads the one plan ────────────────────────────────────────
+
+const OPERATOR_PRICED = {
+  embedding_price_model: UNPRICED_MODEL,
+  embedding_price_usd_per_mtok: "0.05",
+};
+
+test("preview, backfill dry run, status and the phase report one estimate and source", async () => {
+  let server: FakeHttp | null = null;
+  try {
+    server = await startFakeHttp();
+    const config = configWith({
+      search_semantic_enabled: "true",
+      embedding_provider: "openai-compat",
+      embedding_base_url: server.url,
+      embedding_model: UNPRICED_MODEL,
+      embedding_api_key: FAKE_PROVIDER_KEY,
+      ...OPERATOR_PRICED,
+    });
+    const contents = ["first chunk the operator priced", "second chunk the operator priced"];
+    await storeWithChunks(config, contents);
+
+    const preview = await estimatePendingEmbeddingSpend(config);
+    const dryRun = await planVectorBackfill(config);
+    const status = await indexStatus(config);
+    expect(preview?.estimatedUsd).toBeGreaterThan(0);
+    expect(preview?.priceSource).toBe("operator");
+    expect(dryRun.estimatedCostUsd).toBe(preview?.estimatedUsd ?? -1);
+    expect(dryRun.priceSource).toBe("operator");
+    expect(dryRun.costKnown).toBe(true);
+    expect(status.estimatedRefreshCostUsd).toBe(preview?.estimatedUsd ?? -1);
+    expect(status.refreshPriceSource).toBe("operator");
+
+    const store = await Store.open(config, { mode: "write" });
+    try {
+      const tally: EmbeddingPhaseTally = { embeddingsComputed: 0, embeddingsRetries: 0 };
+      await runEmbeddingPhase(store, config, tally, {});
+      expect(tally.spend).toMatchObject({
+        tokens: preview?.tokens ?? -1,
+        estimatedUsd: preview?.estimatedUsd ?? -1,
+        priceSource: "operator",
+      });
+    } finally {
+      await store.close();
+    }
+  } finally {
+    await server?.close();
+  }
+});
+
+test("an unknown price reads null on every surface and blocks as unpriced under a gate", async () => {
+  const config = configWith({
+    ...PRICED_MODEL,
+    embedding_model: UNPRICED_MODEL,
+    embedding_cost_gate_usd: "100",
+  });
+  await storeWithChunks(config, ["a chunk nobody priced"]);
+
+  const preview = await estimatePendingEmbeddingSpend(config);
+  expect(preview).toMatchObject({
+    estimatedUsd: null,
+    priceSource: "unknown",
+    blocked: true,
+    reason: "unpriced",
+  });
+  const dryRun = await planVectorBackfill(config);
+  expect(dryRun).toMatchObject({
+    estimatedCostUsd: null,
+    costKnown: false,
+    priceSource: "unknown",
+    blocked: true,
+    reason: "unpriced",
+  });
+  const status = await indexStatus(config);
+  expect(status.estimatedRefreshCostUsd).toBeNull();
+  expect(status.refreshPriceSource).toBe("unknown");
+
+  // The gate off: nothing blocks, the estimate stays unknown.
+  const ungated = configWith({ ...PRICED_MODEL, embedding_model: UNPRICED_MODEL });
+  expect(await estimatePendingEmbeddingSpend(ungated)).toMatchObject({
+    estimatedUsd: null,
+    blocked: false,
+    reason: null,
+  });
+});
+
+test("the backfill knows the price of the local model and of an operator-priced model", async () => {
+  const local = configWith({ search_semantic_enabled: "true", embedding_provider: "local" });
+  await storeWithChunks(local, ["local chunk"]);
+  expect(await planVectorBackfill(local)).toMatchObject({
+    costKnown: true,
+    estimatedCostUsd: 0,
+    priceSource: "builtin",
+  });
+
+  const operator = configWith({
+    ...PRICED_MODEL,
+    embedding_model: UNPRICED_MODEL,
+    ...OPERATOR_PRICED,
+  });
+  expect(await planVectorBackfill(operator)).toMatchObject({
+    costKnown: true,
+    priceSource: "operator",
+  });
+});
+
+test("the status estimate of a local index is a known zero", async () => {
+  const local = configWith({ search_semantic_enabled: "true", embedding_provider: "local" });
+  await storeWithChunks(local, ["local chunk"]);
+  const status = await indexStatus(local);
+  expect(status.estimatedRefreshCostUsd).toBe(0);
+  expect(status.refreshPriceSource).toBe("builtin");
 });

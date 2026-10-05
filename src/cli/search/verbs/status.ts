@@ -3,6 +3,7 @@
  * indexer named as the exit when there is no index at all.
  */
 
+import { formatEstimatedUsd } from "../../../core/search/embedding-spend.ts";
 import {
   eventTimeStatus,
   indexStatus,
@@ -68,8 +69,8 @@ function renderStatusHuman(s: IndexStatusSnapshot, eventTime: EventTimeStatus | 
   lines.push(`embedding_model:     ${s.embeddingModel ?? "(none)"}`);
   lines.push(`embedding_dimension: ${s.embeddingDimension ?? "(none)"}`);
   lines.push(`embedding_signature: ${s.embeddingSignature ?? "(disabled)"}`);
-  if (s.estimatedRefreshCostUsd > 0) {
-    lines.push(`refresh_cost_est:    $${s.estimatedRefreshCostUsd.toFixed(4)}`);
+  if (s.estimatedRefreshCostUsd === null || s.estimatedRefreshCostUsd > 0) {
+    lines.push(`refresh_cost_est:    ${formatEstimatedUsd(s.estimatedRefreshCostUsd)}`);
   }
   lines.push(`vec_extension:       ${s.vecExtension}`);
   lines.push(`semantic_enabled:    ${s.semanticEnabled}`);

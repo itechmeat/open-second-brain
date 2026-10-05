@@ -57,7 +57,8 @@ export interface LaneSpendBlock {
   readonly banner?: {
     readonly model: string | null;
     readonly pendingChunks: number;
-    readonly estimatedUsd: number;
+    /** Null when nobody stated the model's price. */
+    readonly estimatedUsd: number | null;
     readonly gateUsd: number;
   };
   readonly receipt?: MaintenanceSpendReceipt;

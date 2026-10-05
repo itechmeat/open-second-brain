@@ -534,7 +534,9 @@ describe("formatSpendBanner", () => {
           pendingChunks: 214,
           tokens: 1,
           estimatedUsd: 0.011,
+          priceSource: "builtin",
           blocked: false,
+          reason: null,
         },
         0,
       ),
@@ -544,10 +546,35 @@ describe("formatSpendBanner", () => {
     );
     expect(
       formatSpendBanner(
-        { model: null, pendingChunks: 1, tokens: 0, estimatedUsd: 0, blocked: false },
+        {
+          model: null,
+          pendingChunks: 1,
+          tokens: 0,
+          estimatedUsd: 0,
+          priceSource: "builtin",
+          blocked: false,
+          reason: null,
+        },
         0.5,
       ),
     ).toBe("embedding spend: model unknown, 1 chunks pending, estimated $0.0000 (gate: $0.5000)");
+  });
+
+  test("an unknown price prints price unknown, never a dollar figure", () => {
+    expect(
+      formatSpendBanner(
+        {
+          model: "zembed-1",
+          pendingChunks: 3,
+          tokens: 9,
+          estimatedUsd: null,
+          priceSource: "unknown",
+          blocked: true,
+          reason: "unpriced",
+        },
+        0.5,
+      ),
+    ).toBe("embedding spend: model zembed-1, 3 chunks pending, price unknown (gate: $0.5000)");
   });
 });
 

@@ -21,7 +21,7 @@ import type { StampMismatch } from "../integrity/stamp.ts";
 import type { ReconciliationOutcome, ReconciliationReport } from "../reconciliation-report.ts";
 import type { VaultPathRule, VaultScopeRules } from "../vault-scope/defaults.ts";
 import type { MaintenanceSpendReceipt } from "../brain/maintenance/journal.ts";
-import type { EmbeddingPriceOverride } from "./embeddings/pricing.ts";
+import type { EmbeddingPriceOverride, EmbeddingPriceSource } from "./embeddings/pricing.ts";
 import type { DegreePredicate } from "./property-filter.ts";
 import type { TemporalIntent } from "./temporal-intent.ts";
 import type { FtsMatchMode } from "./fts-match-mode.ts";
@@ -377,10 +377,13 @@ export interface IndexStatusSnapshot {
   readonly embeddingSignature: string | null;
   /**
    * Best-effort USD estimate to (re-)embed the chunks that currently
-   * lack a current embedding, at the active model's rate. 0 for the
-   * local/unknown-price case.
+   * lack a current embedding, at the active model's quoted rate, from the
+   * shared spend plan. 0 for a known-free model, semantic search off or
+   * no index; null when nobody stated the model's price.
    */
-  readonly estimatedRefreshCostUsd: number;
+  readonly estimatedRefreshCostUsd: number | null;
+  /** Who stated the price of the refresh estimate; null when semantic search is off or there is no index. */
+  readonly refreshPriceSource: EmbeddingPriceSource | null;
   readonly vecExtension: VecExtensionState;
   readonly semanticEnabled: boolean;
   readonly embeddingKeyPresent: boolean;

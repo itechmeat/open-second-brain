@@ -36,8 +36,8 @@
  */
 
 import { resolveSemanticCapability, type SemanticCapability } from "./capability-tier.ts";
-import { resolveEmbeddingPrice } from "./embeddings/pricing.ts";
-import { estimateCostUsd, estimateTokens } from "./embeddings/signature.ts";
+import { planEmbeddingSpend, type EmbeddingGateReason } from "./embedding-spend.ts";
+import { EMBEDDING_PRICE_SOURCE, type EmbeddingPriceSource } from "./embeddings/pricing.ts";
 import { runEmbeddingPhase } from "./indexer.ts";
 import { Store } from "./store.ts";
 import type { ResolvedSearchConfig } from "./types.ts";
@@ -78,14 +78,24 @@ export interface VectorBackfillResult {
   /** Provider retries this run consumed (0 on a dry run). */
   readonly retries: number;
   /**
-   * Estimated spend for the pending set, from the estimator that already
-   * governs the indexer's cost gate. `0` when the model carries no known
-   * price - which is an absent price, not a free run, and the human
-   * report says so rather than printing `$0.0000`.
+   * Estimated spend for the pending set, from the shared spend plan the
+   * indexer's cost gate reads. Null when nobody stated the model's price
+   * - an absent price, not a free run, and the report says so rather
+   * than printing `$0.0000`.
    */
-  readonly estimatedCostUsd: number;
-  /** True when {@link estimatedCostUsd} could be derived at all. */
+  readonly estimatedCostUsd: number | null;
+  /**
+   * Whether the MODEL has a stated price (builtin or operator), not
+   * whether this run costs anything: an empty pending set costs nothing
+   * and that is not the same statement as "the price is unknown".
+   */
   readonly costKnown: boolean;
+  /** Who stated the price the estimate used. */
+  readonly priceSource: EmbeddingPriceSource;
+  /** True when the configured gate would refuse this spend unforced. */
+  readonly blocked: boolean;
+  /** Why the gate would refuse; null when it would not. */
+  readonly reason: EmbeddingGateReason | null;
 }
 
 /**
@@ -117,15 +127,11 @@ async function planVectorBackfillRun(
   const capability = resolveSemanticCapability(config.semantic);
   const store = await Store.open(config, { mode: apply ? "write" : "read" });
   try {
-    const pendingChunks = store.findChunksWithoutEmbeddings();
+    const plan = planEmbeddingSpend(store, config);
     const chunksTotal = store.counts().chunks;
-    const model = config.semantic.model;
-    const tokens = estimateTokens(pendingChunks.map((c) => c.content));
-    const price = resolveEmbeddingPrice(model);
-    const estimatedCostUsd = estimateCostUsd(tokens, price) ?? 0;
     const tally = { embeddingsComputed: 0, embeddingsRetries: 0 };
 
-    if (apply && pendingChunks.length > 0) {
+    if (apply && plan.pending.length > 0) {
       await runEmbeddingPhase(store, config, tally, {
         forceCost: opts.forceCost === true,
         ...(opts.safeguard !== undefined ? { safeguard: opts.safeguard } : {}),
@@ -138,14 +144,14 @@ async function planVectorBackfillRun(
       applied: apply,
       capability,
       chunksTotal,
-      pending: pendingChunks.length,
+      pending: plan.pending.length,
       embedded: tally.embeddingsComputed,
       retries: tally.embeddingsRetries,
-      estimatedCostUsd,
-      // Whether the MODEL has a price, not whether this run costs
-      // anything: an empty pending set costs nothing and that is not the
-      // same statement as "the price of this model is unknown".
-      costKnown: price.usdPerMtok !== null && price.usdPerMtok > 0,
+      estimatedCostUsd: plan.estimatedUsd,
+      costKnown: plan.quote.source !== EMBEDDING_PRICE_SOURCE.unknown,
+      priceSource: plan.quote.source,
+      blocked: plan.gate.blocked,
+      reason: plan.gate.reason,
     });
   } finally {
     await store.close();

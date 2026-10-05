@@ -106,6 +106,18 @@ export function activeEmbeddingModel(
   return config.semantic.model ?? storedModel;
 }
 
+/**
+ * The model a pass would name and its price quote, through the operator
+ * pair. The one model resolution every spend surface shares.
+ */
+export function activeSpendQuote(config: ResolvedSearchConfig): {
+  readonly model: string | null;
+  readonly quote: PriceQuote;
+} {
+  const model = activeEmbeddingModel(config);
+  return { model, quote: resolveEmbeddingPrice(model, config.semantic.priceOverride) };
+}
+
 /** One computation of what an embedding pass would spend. */
 export interface EmbeddingSpendPlan {
   /** The scoped pending census: chunks with no vector yet. */
@@ -137,8 +149,7 @@ export function planEmbeddingSpend(
   opts: EmbeddingSpendPlanOptions = {},
 ): EmbeddingSpendPlan {
   const pending = store.findChunksWithoutEmbeddings(opts.scope);
-  const model = activeEmbeddingModel(config);
-  const quote = resolveEmbeddingPrice(model, config.semantic.priceOverride);
+  const { model, quote } = activeSpendQuote(config);
   const { tokens, estimatedUsd, ...gate } = evaluateCostGate({
     texts: pending.map((p) => p.content),
     quote,

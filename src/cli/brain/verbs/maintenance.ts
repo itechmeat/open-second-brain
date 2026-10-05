@@ -54,7 +54,11 @@ import {
   parseWindowBounds,
   renderMaintenanceCronTemplate,
 } from "../../maintenance-cron.ts";
-import { PRICE_UNKNOWN_LABEL, USD_DECIMALS } from "../../../core/search/embedding-spend.ts";
+import {
+  formatEstimatedUsd,
+  PRICE_UNKNOWN_LABEL,
+  USD_DECIMALS,
+} from "../../../core/search/embedding-spend.ts";
 import type { EmbeddingSpendPreview } from "../../../core/search/indexer.ts";
 import { resolveSearchConfig } from "../../../core/search/index.ts";
 import { onInterrupt } from "../../interrupt.ts";
@@ -510,10 +514,10 @@ export function renderTaskLine(t: MaintenanceTaskResult): string {
  * the refusal that can follow it print one spelling.
  */
 export function formatSpendBanner(preview: EmbeddingSpendPreview, gateUsd: number): string {
-  const gate = gateUsd > 0 ? `$${gateUsd.toFixed(4)}` : "off";
+  const gate = gateUsd > 0 ? formatEstimatedUsd(gateUsd) : "off";
   return (
     `embedding spend: model ${preview.model ?? "unknown"}, ${preview.pendingChunks} chunks pending, ` +
-    `estimated $${preview.estimatedUsd.toFixed(4)} (gate: ${gate})`
+    `${preview.estimatedUsd === null ? PRICE_UNKNOWN_LABEL : `estimated ${formatEstimatedUsd(preview.estimatedUsd)}`} (gate: ${gate})`
   );
 }
 

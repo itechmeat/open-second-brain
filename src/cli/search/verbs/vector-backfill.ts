@@ -41,6 +41,7 @@
  * the embedding phase is the part an operator would ever want to stop.
  */
 
+import { formatEstimatedUsd } from "../../../core/search/embedding-spend.ts";
 import { appendLogEvent } from "../../../core/brain/log.ts";
 import { nextCommandField } from "../../../core/brain/next-step.ts";
 import {
@@ -92,9 +93,9 @@ function jsonForResult(result: VectorBackfillResult): Record<string, unknown> {
     pending: result.pending,
     embedded: result.embedded,
     retries: result.retries,
-    // Absent rather than zero when the model carries no known price: a
+    // Null rather than zero when the model carries no known price: a
     // missing price is not a free run.
-    ...(result.costKnown ? { estimated_cost_usd: result.estimatedCostUsd } : {}),
+    estimated_cost_usd: result.estimatedCostUsd,
   };
 }
 
@@ -106,9 +107,7 @@ async function renderHuman(result: VectorBackfillResult): Promise<void> {
       `vector-backfill dry-run: ${result.pending} of ${result.chunksTotal} chunk(s) have no vector`,
     );
   }
-  if (result.costKnown && result.pending > 0) {
-    info(`  estimated cost: $${result.estimatedCostUsd.toFixed(4)}`);
-  }
+  if (result.pending > 0) info(`  estimated cost: ${formatEstimatedUsd(result.estimatedCostUsd)}`);
   if (result.retries > 0) info(`  provider retries: ${result.retries}`);
   // What the operator CONFIGURED, resolved from the registry - never a
   // sentence built here.
