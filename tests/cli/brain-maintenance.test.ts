@@ -580,6 +580,40 @@ describe("the journal listing", () => {
   });
 });
 
+describe("a journaled receipt without a numeric estimate", () => {
+  test("reads price unknown and never breaks the listing", async () => {
+    const init = await runCli(["brain", "init", "--vault", vault], { env: baseEnv() });
+    expect(init.returncode).toBe(0);
+    // Rows another build, another device's shard or a hand edit could
+    // write: the journal read casts them, so the listing must not trust
+    // the estimate's type.
+    const receipts = [
+      { model: "m-absent", tokens: 3, forced: false },
+      { model: "m-string", tokens: 4, forced: false, estimatedUsd: "x" },
+    ] as unknown as ReadonlyArray<MaintenanceSpendReceipt>;
+    for (const [i, receipt] of receipts.entries()) {
+      appendJournal(vault, {
+        ts: `2026-09-0${i + 4}T00:00:00Z`,
+        holder: "test",
+        verdict: MAINTENANCE_VERDICT.run,
+        task: LANE_TASK.reindex,
+        ok: true,
+        receipt,
+      });
+    }
+    const status = await runCli(["brain", "maintenance", "status", "--vault", vault], {
+      env: baseEnv(),
+    });
+    expect(status.returncode).toBe(0);
+    expect(status.stdout).toContain(
+      "(tokens=3, price unknown, model=m-absent, price_source=unrecorded)",
+    );
+    expect(status.stdout).toContain(
+      "(tokens=4, price unknown, model=m-string, price_source=unrecorded)",
+    );
+  });
+});
+
 describe("a receipt whose price source this build does not know", () => {
   test("renders as unrecorded, never as the stray value", async () => {
     expect(isEmbeddingPriceSource("vendor")).toBe(false);

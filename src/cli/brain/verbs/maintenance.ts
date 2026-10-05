@@ -510,10 +510,13 @@ export function renderTaskLine(t: MaintenanceTaskResult): string {
 
 /** A spend receipt's tokens, estimate and model, as the task line prints them. */
 function receiptFields(receipt: MaintenanceSpendReceipt): string {
+  // The journal read casts its rows unvalidated, so a row from another
+  // build or a hand edit may carry no estimate or a non-number one; that
+  // reads as an unknown price instead of breaking the whole listing.
   const estimate =
-    receipt.estimatedUsd === null
-      ? PRICE_UNKNOWN_LABEL
-      : `estimatedUsd=${receipt.estimatedUsd.toFixed(USD_DECIMALS)}`;
+    typeof receipt.estimatedUsd === "number" && Number.isFinite(receipt.estimatedUsd)
+      ? `estimatedUsd=${receipt.estimatedUsd.toFixed(USD_DECIMALS)}`
+      : PRICE_UNKNOWN_LABEL;
   return `tokens=${receipt.tokens}, ${estimate}, model=${receipt.model ?? "unknown"}`;
 }
 
