@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const LEAKED = "OPEN_SECOND_BRAIN_EMBEDDING_MODEL";
+const KEEP_OPT_OUT = "O2B_TEST_KEEP_EMBEDDING_ENV";
 const REPO_ROOT = join(import.meta.dir, "..");
 let probeDir: string | undefined;
 
@@ -25,9 +26,12 @@ function runProbe(extraEnv: Record<string, string>): { code: number; output: str
     `import { test } from "bun:test";\n` +
       `test("probe", () => { console.log("seen=" + String(process.env["${LEAKED}"])); });\n`,
   );
+  // A suite run with the opt-out set would hand it to every probe; each
+  // probe states it explicitly instead.
+  const { [KEEP_OPT_OUT]: _inherited, ...baseEnv } = process.env;
   const child = Bun.spawnSync([process.execPath, "test", probe], {
     cwd: REPO_ROOT,
-    env: { ...process.env, ...extraEnv },
+    env: { ...baseEnv, ...extraEnv },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -40,8 +44,8 @@ test("an exported embedding twin is gone before the first test file loads", () =
   expect(run.output).toContain("seen=undefined");
 });
 
-test("O2B_TEST_KEEP_EMBEDDING_ENV=1 keeps it", () => {
-  const run = runProbe({ [LEAKED]: "leaked-model", O2B_TEST_KEEP_EMBEDDING_ENV: "1" });
+test(`${KEEP_OPT_OUT}=1 keeps it`, () => {
+  const run = runProbe({ [LEAKED]: "leaked-model", [KEEP_OPT_OUT]: "1" });
   expect(run.code).toBe(0);
   expect(run.output).toContain("seen=leaked-model");
 });
