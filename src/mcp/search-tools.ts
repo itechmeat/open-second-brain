@@ -109,6 +109,9 @@ const MCP_LIMIT_MAX = 50;
 /** The longest `query` a recall tool accepts, advertised and enforced from here. */
 export const MCP_QUERY_MAX_CHARS = 2000;
 
+/** The refusal text of a query over {@link MCP_QUERY_MAX_CHARS}, shared by every capped tool. */
+export const MCP_QUERY_CAP_MESSAGE = `argument 'query' exceeds ${MCP_QUERY_MAX_CHARS} characters`;
+
 /**
  * Whether `query` is longer than {@link MCP_QUERY_MAX_CHARS}, counted in
  * code points as the advertised JSON Schema `maxLength` counts them: a
@@ -942,10 +945,7 @@ async function toolBrainSearch(
     throw new MCPError(INVALID_PARAMS, "missing required argument: query");
   }
   if (exceedsMcpQueryCap(query)) {
-    throw new MCPError(
-      INVALID_PARAMS,
-      `argument 'query' exceeds ${MCP_QUERY_MAX_CHARS} characters`,
-    );
+    throw new MCPError(INVALID_PARAMS, MCP_QUERY_CAP_MESSAGE);
   }
 
   let limit = 10;
@@ -1483,6 +1483,9 @@ async function toolBrainRecallFeedback(
   args: Record<string, unknown>,
 ): Promise<unknown> {
   const query = coerceStr(args, "query")!;
+  if (exceedsMcpQueryCap(query)) {
+    throw new MCPError(INVALID_PARAMS, MCP_QUERY_CAP_MESSAGE);
+  }
   const resultPath = coerceStr(args, "result_path")!;
   const verdict = coerceStr(args, "verdict")!;
   if (verdict !== "up" && verdict !== "down") {
