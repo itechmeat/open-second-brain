@@ -57,14 +57,14 @@ Every code the verb can return, in one table. A CI script that gates on
 `o2b install --check` should branch on these rather than on the printed
 table:
 
-| Code | Meaning                                                                                                                 |
-| ---- | ----------------------------------------------------------------------------------------------------------------------- |
+| Code | Meaning |
+| ---- | -------- |
 | `0`  | Success, or `--check` found no drift. A target the operator never installed reports `not-installed` and still exits `0` |
-| `1`  | I/O or runtime error during `--apply`                                                                                   |
-| `2`  | Usage error: unknown `--target`, a bad `--format` value, or a vault that is not configured                              |
-| `3`  | `--check` found drift in at least one target                                                                            |
-| `4`  | `--apply` hit a user-modified managed block; re-run with `--force` to overwrite it                                      |
-| `5`  | `--check` found a runtime it proved unreachable (since v1.46.0)                                                         |
+| `1`  | I/O or runtime error during `--apply` |
+| `2`  | Usage error: unknown `--target`, a bad `--format` value, or a vault that is not configured |
+| `3`  | `--check` found drift in at least one target |
+| `4`  | `--apply` hit a user-modified managed block; re-run with `--force` to overwrite it |
+| `5`  | `--check` found a runtime it proved unreachable (since v1.46.0) |
 
 Code `5` is a behaviour change, and a breaking one for any script that
 treated a zero exit as "everything is fine". Before v1.46.0 a
@@ -91,11 +91,11 @@ proves" below.
 
 ### `o2b doctor` exit codes
 
-| Code | Meaning                                                                                       |
-| ---- | --------------------------------------------------------------------------------------------- |
-| `0`  | Every check passed, and with `--readiness` every probe answered                               |
+| Code | Meaning |
+| ---- | -------- |
+| `0`  | Every check passed, and with `--readiness` every probe answered |
 | `1`  | At least one check FAILED, or with `--readiness` at least one probe proved its surface broken |
-| `6`  | With `--readiness`: no check failed, and at least one probe could not find out                |
+| `6`  | With `--readiness`: no check failed, and at least one probe could not find out |
 
 Code `6` is a behaviour change for `--readiness` runs and is deliberately
 the number `o2b search check` already spends on a probe that did not
@@ -196,14 +196,14 @@ diff under `friction_diff`.
 Six dimensions, computed from `src/core/runtime/host-facts.ts` and from
 the live adapter rather than from a table maintained beside this page:
 
-| Dimension             | What the cell answers                                                                                                                                                                                  |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `install-mechanism`   | the step kinds the adapter's own plan uses - `json-merge`, `managed-block`, `subprocess`, `file-copy`, `symlink`, `print` - with the artifact paths it writes on the citation line                     |
-| `tool-ceiling`        | the host's published per-workspace tool limit: `declared: N tools` with its source, `unbounded` with its source, or `unknown` with the reason nobody has one                                           |
-| `tool-profile`        | the profile the generated registration will actually carry, and which tier of the ladder produced it; `not carried` for a target that writes no MCP command line at all                                |
-| `verify-evidence`     | what a `--check` on this target is evidence OF: `host probe: <command>` for a runtime that can be asked, `configuration comparison only` for one that cannot                                           |
+| Dimension | What the cell answers |
+| --- | --- |
+| `install-mechanism` | the step kinds the adapter's own plan uses - `json-merge`, `managed-block`, `subprocess`, `file-copy`, `symlink`, `print` - with the artifact paths it writes on the citation line |
+| `tool-ceiling` | the host's published per-workspace tool limit: `declared: N tools` with its source, `unbounded` with its source, or `unknown` with the reason nobody has one |
+| `tool-profile` | the profile the generated registration will actually carry, and which tier of the ladder produced it; `not carried` for a target that writes no MCP command line at all |
+| `verify-evidence` | what a `--check` on this target is evidence OF: `host probe: <command>` for a runtime that can be asked, `configuration comparison only` for one that cannot |
 | `session-transcripts` | the transcript roots this adapter DECLARES, resolved against the machine, with each root's glob and on-disk format. Declared, not measured - whether the directory exists here is a discovery question |
-| `session-parser`      | which adapter in this build reads those roots, or `none ships` naming the format nothing parses                                                                                                        |
+| `session-parser` | which adapter in this build reads those roots, or `none ships` naming the format nothing parses |
 
 A diff prints only the differing dimensions and COUNTS the rest, because a
 diff that reprints everything is the table the reader already asked to
@@ -254,10 +254,10 @@ verify `ok` against the operator's real `~/.codex`.
 **A refuting probe means two different things**, and which one it means
 depends on whether an artifact backs the registration:
 
-| The host answered "not registered", and                                                                                                             | Verdict           | Repair                                                                                                            |
-| --------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------- |
-| this build wrote an artifact and that artifact still matches the canonical payload                                                                  | `mcp-unreachable` | restart the runtime so it reloads its MCP configuration; re-applying would rewrite bytes that are already correct |
-| the host's own registry IS the record (`copilot mcp add` leaves no file; a Codex `config.toml` that declares no tables has no artifact to be right) | `drift`           | `o2b install --target <t> --apply`                                                                                |
+| The host answered "not registered", and | Verdict | Repair |
+| --- | --- | --- |
+| this build wrote an artifact and that artifact still matches the canonical payload | `mcp-unreachable` | restart the runtime so it reloads its MCP configuration; re-applying would rewrite bytes that are already correct |
+| the host's own registry IS the record (`copilot mcp add` leaves no file; a Codex `config.toml` that declares no tables has no artifact to be right) | `drift` | `o2b install --target <t> --apply` |
 
 A probe that could not RUN refutes nothing. Demoting a correct install
 because a binary was absent would be the same over-claim as a blanket
@@ -315,11 +315,11 @@ regenerates the registration. An unchecked ceiling is never an absent one.
 **The tool-profile ladder has three tiers, highest first**, and the
 generated registration is what it parameterises:
 
-| Tier | Source                                                                                    |
-| ---- | ----------------------------------------------------------------------------------------- |
-| 1    | `install.tool_profile` in `<vault>/Brain/_brain.yaml` - the COMMITTED tier                |
-| 2    | `mcp_tool_profile` in the machine-local `config.yaml`                                     |
-| 3    | the host's own `RUNTIME_FACTS` row - `catalog` for Cursor, nothing for every other target |
+| Tier | Source |
+| --- | --- |
+| 1 | `install.tool_profile` in `<vault>/Brain/_brain.yaml` - the COMMITTED tier |
+| 2 | `mcp_tool_profile` in the machine-local `config.yaml` |
+| 3 | the host's own `RUNTIME_FACTS` row - `catalog` for Cursor, nothing for every other target |
 
 Tier 1 above tier 2 is the reverse of the guess, and it is the point.
 Install verification works by RE-CONSTRUCTION rather than a stored hash, so
@@ -359,8 +359,8 @@ settings that parameterise GENERATED output:
 
 ```yaml
 install:
-  tool_profile: catalog # full | writer | catalog | recall | minimal
-  hook_timeout_seconds: 10 # 1..600; the generated Grok hook entry's cap
+  tool_profile: catalog        # full | writer | catalog | recall | minimal
+  hook_timeout_seconds: 10     # 1..600; the generated Grok hook entry's cap
 ```
 
 Both live in the vault rather than in the machine-local config for the
@@ -756,13 +756,13 @@ Recall-inject tuning keys live in the flat global config next to
 `recall_inject_enabled` and matter only while that flag is on. Each one
 has an env override, and the env value always wins over the config value:
 
-| Config key                       | Env override                                       | Range             | Default |
-| -------------------------------- | -------------------------------------------------- | ----------------- | ------- |
-| `recall_inject_max_notes`        | `OPEN_SECOND_BRAIN_RECALL_INJECT_MAX_NOTES`        | integer 1..10     | 4       |
-| `recall_inject_max_chars`        | `OPEN_SECOND_BRAIN_RECALL_INJECT_MAX_CHARS`        | integer 200..8000 | 900     |
-| `recall_inject_time_budget_ms`   | `OPEN_SECOND_BRAIN_RECALL_INJECT_TIME_BUDGET_MS`   | integer 250..6000 | 2500    |
-| `recall_inject_confidence_floor` | `OPEN_SECOND_BRAIN_RECALL_INJECT_CONFIDENCE_FLOOR` | number 0..1       | 0.35    |
-| `recall_inject_dedupe`           | `OPEN_SECOND_BRAIN_RECALL_INJECT_DEDUPE`           | boolean           | `true`  |
+| Config key | Env override | Range | Default |
+|---|---|---|---|
+| `recall_inject_max_notes` | `OPEN_SECOND_BRAIN_RECALL_INJECT_MAX_NOTES` | integer 1..10 | 4 |
+| `recall_inject_max_chars` | `OPEN_SECOND_BRAIN_RECALL_INJECT_MAX_CHARS` | integer 200..8000 | 900 |
+| `recall_inject_time_budget_ms` | `OPEN_SECOND_BRAIN_RECALL_INJECT_TIME_BUDGET_MS` | integer 250..6000 | 2500 |
+| `recall_inject_confidence_floor` | `OPEN_SECOND_BRAIN_RECALL_INJECT_CONFIDENCE_FLOOR` | number 0..1 | 0.35 |
+| `recall_inject_dedupe` | `OPEN_SECOND_BRAIN_RECALL_INJECT_DEDUPE` | boolean | `true` |
 
 The four caps resolve leniently: a value that is out of range,
 non-numeric or (for the integer caps) fractional keeps the built-in
@@ -917,11 +917,11 @@ session id are split, because only they have the carrier registered;
 every other runtime, and any payload that fits the ceiling, gets the
 single payload as before. The ceiling is in UTF-16 code units:
 
-| Config key                       | Env override                                       | Range                | Default               |
-| -------------------------------- | -------------------------------------------------- | -------------------- | --------------------- |
-| `reground_part_chars`            | `OPEN_SECOND_BRAIN_REGROUND_PART_CHARS`            | integer 2000..100000 | 9000                  |
+| Config key | Env override | Range | Default |
+|---|---|---|---|
+| `reground_part_chars` | `OPEN_SECOND_BRAIN_REGROUND_PART_CHARS` | integer 2000..100000 | 9000 |
 | `reground_part_chars_claudecode` | `OPEN_SECOND_BRAIN_REGROUND_PART_CHARS_CLAUDECODE` | integer 2000..100000 | `reground_part_chars` |
-| `reground_part_chars_codex`      | `OPEN_SECOND_BRAIN_REGROUND_PART_CHARS_CODEX`      | integer 2000..100000 | `reground_part_chars` |
+| `reground_part_chars_codex` | `OPEN_SECOND_BRAIN_REGROUND_PART_CHARS_CODEX` | integer 2000..100000 | `reground_part_chars` |
 
 The runtime key wins over `reground_part_chars`, which wins over the
 default 9000 (the observed Claude Code threshold less 10%, applied to
@@ -1057,11 +1057,11 @@ changed underneath it.
 
 The verdict is now three-state, and each state is a distinct answer:
 
-| `freshness` | Meaning                                                                                  | `freshness_reason`                                       |
-| ----------- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| `fresh`     | outputs are current; `--if-stale` skips the run                                          | `null`                                                   |
-| `stale`     | outputs must be recomputed                                                               | `not_materialized`, `input_newer`, or `ceiling_exceeded` |
-| `unknown`   | the measurement itself failed; the run recomputes AND names which half could not be read | `outputs_unreadable` or `inputs_unreadable`              |
+| `freshness` | Meaning | `freshness_reason` |
+| ----------- | ------- | ------------------ |
+| `fresh`     | outputs are current; `--if-stale` skips the run | `null` |
+| `stale`     | outputs must be recomputed | `not_materialized`, `input_newer`, or `ceiling_exceeded` |
+| `unknown`   | the measurement itself failed; the run recomputes AND names which half could not be read | `outputs_unreadable` or `inputs_unreadable` |
 
 The stale reasons are: `not_materialized` (nothing has been written yet),
 `input_newer` (an input note is newer than the oldest output), and
@@ -1304,7 +1304,7 @@ The full rules are in [the MCP reference](mcp.md#source-distillation).
   refused, before anything is written, for a source the vault holds, when
   it holds no text or contains NUL, or above 65,536 bytes. A file whose bytes are not valid
   UTF-8 is a usage error (exit `2`, `distill: excerpt file is not valid
-UTF-8`), so the stored excerpt is always the file's own bytes.
+  UTF-8`), so the stored excerpt is always the file's own bytes.
 
 The success line keeps its earlier form for a clean run over a local source
 and gains suffixes in this order: ` [untrusted_source]` when the page is
@@ -1422,7 +1422,7 @@ o2b brain knowledge-pack list      [--json]
   body and authored frontmatter as installed; both are written by the
   installer and stripped from any bundle that supplies them itself.
 - **Provenance** of an installed entry shows in `o2b brain query
---preference` (and `brain_query`) and in search trust metadata
+  --preference` (and `brain_query`) and in search trust metadata
   (`brain_search` with `trust: true`, field `trust.knowledge_pack`).
 - **Uninstall** is a dry run until `--confirm`. It removes every stamped
   rule and every page still staged under `OKF Review/` for that pack name,
@@ -1467,16 +1467,16 @@ Long-running operations (dream, `o2b search index | reindex | vector-backfill`, 
 
 Which emitters those verbs actually have is not taken on trust. `tests/cli/progress-emitter-census.test.ts` enumerates every `progressCounter(` call site in `src/` from the source, maps each to the entry point that reaches it, then RUNS each entry point against a fixture and requires records carrying that site's operation and stage to arrive with a terminator. A call site no entry point reaches is a failure, which is how `vector-backfill` - which had grown the whole spine in core with no flag to reach it - was found.
 
-**Stopping one, and what Ctrl-C actually does.** This differs per verb, and the difference is a property of the operation rather than a gap in the wiring. A cooperative interrupt is delivered to a JavaScript signal handler, and a signal handler runs on the event loop; an operation that never yields to the event loop therefore cannot observe one, and merely _registering_ a handler would suppress the default terminate and make the keystroke do nothing at all.
+**Stopping one, and what Ctrl-C actually does.** This differs per verb, and the difference is a property of the operation rather than a gap in the wiring. A cooperative interrupt is delivered to a JavaScript signal handler, and a signal handler runs on the event loop; an operation that never yields to the event loop therefore cannot observe one, and merely *registering* a handler would suppress the default terminate and make the keystroke do nothing at all.
 
-| Verb                                                                                                                                                                                       | Ctrl-C / SIGTERM                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `o2b search index`, `o2b search reindex`                                                                                                                                                   | Stops the run at the next checkpoint - between files, between embed batches, never mid-write - and exits **130** (SIGINT) or **143** (SIGTERM). A stopped rebuild leaves the live index exactly as it found it, because the staging build is abandoned before the swap.                                                                                                                                                                                |
-| `o2b search vector-backfill`                                                                                                                                                               | Stops **between embed batches** and exits **130** / **143**; vectors already written stay written, because each chunk commits as it is computed. The dry run and the planning query are synchronous SQLite between two awaits, so a keystroke landing there is not observed at a checkpoint - it ends the process on release instead, which is the same outcome the un-suppressed keystroke would have had.                                            |
-| `o2b brain maintenance run`                                                                                                                                                                | Stops the lane at a task boundary and exits **130** / **143**. The lane journals the stop and releases its lease, so the vault is never left leased.                                                                                                                                                                                                                                                                                                   |
+| Verb | Ctrl-C / SIGTERM |
+| --- | --- |
+| `o2b search index`, `o2b search reindex` | Stops the run at the next checkpoint - between files, between embed batches, never mid-write - and exits **130** (SIGINT) or **143** (SIGTERM). A stopped rebuild leaves the live index exactly as it found it, because the staging build is abandoned before the swap. |
+| `o2b search vector-backfill` | Stops **between embed batches** and exits **130** / **143**; vectors already written stay written, because each chunk commits as it is computed. The dry run and the planning query are synchronous SQLite between two awaits, so a keystroke landing there is not observed at a checkpoint - it ends the process on release instead, which is the same outcome the un-suppressed keystroke would have had. |
+| `o2b brain maintenance run` | Stops the lane at a task boundary and exits **130** / **143**. The lane journals the stop and releases its lease, so the vault is never left leased. |
 | `o2b brain dream` (including `stage`/`validate`/`apply`), `o2b brain bridges discover`, `o2b brain clusters run`, `o2b brain architect`, `o2b brain import-session --status \| --discover` | **Terminates the process immediately**, the ordinary shell behaviour. These passes are synchronous end to end, so no cooperative stop is possible and none is claimed. Every artifact they write is written atomically, so a killed pass leaves no half-written note - it leaves the vault as it was before the pass, or after the last completed write. Their deadline (`safeguard_timeout_*_seconds`, above) is the only cooperative stop they have. |
-| `o2b search watch`                                                                                                                                                                         | Exits **0**, unchanged: stopping is how that command ends.                                                                                                                                                                                                                                                                                                                                                                                             |
-| `o2b mcp` (both transports, since v1.50.0)                                                                                                                                                 | Stops accepting new requests, waits for the in-flight ones to a bounded deadline, closes, and exits **130** / **143**. It is the one verb here that calls `process.exit` rather than re-raising, because two `exit` hooks - the search-store WAL checkpoint and the lock release - do not run when a process dies by signal. See "Shutdown and draining" in [`mcp.md`](mcp.md).                                                                        |
+| `o2b search watch` | Exits **0**, unchanged: stopping is how that command ends. |
+| `o2b mcp` (both transports, since v1.50.0) | Stops accepting new requests, waits for the in-flight ones to a bounded deadline, closes, and exits **130** / **143**. It is the one verb here that calls `process.exit` rather than re-raising, because two `exit` hooks - the search-store WAL checkpoint and the lock release - do not run when a process dies by signal. See "Shutdown and draining" in [`mcp.md`](mcp.md). |
 
 `o2b mcp` exits **70** on an uncaught exception (since v1.65.0) after naming it on stderr: the served transports install a fault guard that survives, names, rate-limits and counts unhandled promise rejections, but an exception leaves the process state unknown, so the server exits - through `process.exit`, for the same two `exit` hooks - without draining. See "Background faults" in [`mcp.md`](mcp.md).
 
@@ -1488,11 +1488,11 @@ Three environment variables tune how long a writer waits for a shared lock
 and where the machine-local dedup cache lives. None of them has a
 `_brain.yaml` key: they describe the host, not the vault.
 
-| Variable                            | Default                                                    | Effect                                                                                                                                                                                                                                                                                                                                                                                                 |
-| ----------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `OPEN_SECOND_BRAIN_LOCK_WAIT_MS`    | `5000`                                                     | How long a write to shared ingest state (content manifest, plan checkpoint, session ledger, git record store) waits for its lock before it is refused with `ELOCKED`. A whole number of milliseconds; `0` means one attempt; anything else is an error. The one-second interactive wait is not affected. See [Source pipeline integrity](#source-pipeline-integrity-and-operator-tooling-since-v1340). |
-| `OPEN_SECOND_BRAIN_DEDUP_CACHE_DIR` | the user cache directory, `open-second-brain/dedup-index/` | Where the signal dedup index cache is kept, one `<vault-digest>.json` per vault, outside the vault.                                                                                                                                                                                                                                                                                                    |
-| `OPEN_SECOND_BRAIN_DEDUP_CACHE`     | on                                                         | `0` turns the dedup index cache off; every capture then walks the inbox, `processed/` and `archived/` in full.                                                                                                                                                                                                                                                                                         |
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `OPEN_SECOND_BRAIN_LOCK_WAIT_MS` | `5000` | How long a write to shared ingest state (content manifest, plan checkpoint, session ledger, git record store) waits for its lock before it is refused with `ELOCKED`. A whole number of milliseconds; `0` means one attempt; anything else is an error. The one-second interactive wait is not affected. See [Source pipeline integrity](#source-pipeline-integrity-and-operator-tooling-since-v1340). |
+| `OPEN_SECOND_BRAIN_DEDUP_CACHE_DIR` | the user cache directory, `open-second-brain/dedup-index/` | Where the signal dedup index cache is kept, one `<vault-digest>.json` per vault, outside the vault. |
+| `OPEN_SECOND_BRAIN_DEDUP_CACHE` | on | `0` turns the dedup index cache off; every capture then walks the inbox, `processed/` and `archived/` in full. |
 
 The automatic Brain upgrade worker takes no override: its lock is
 `.open-second-brain/self-heal-upgrade.lock` in the vault, so a hook, the MCP
@@ -1532,10 +1532,10 @@ A refused lane path appears under `excluded` with the reason
 `not-admitted`, beside the two scope reasons that already existed. The
 `reason` field on each excluded entry is that closed set:
 
-| `reason`       | Refused by                                                                  |
-| -------------- | --------------------------------------------------------------------------- |
-| `ignored`      | a `vault.ignore_paths` rule                                                 |
-| `not-included` | an allowlist is declared and the path is under none of its roots            |
+| `reason`       | Refused by |
+| -------------- | ---------- |
+| `ignored`      | a `vault.ignore_paths` rule |
+| `not-included` | an allowlist is declared and the path is under none of its roots |
 | `not-admitted` | index admission, with no scope rule involved - `rule` and `kind` are `null` |
 
 The walk records one entry per refused subtree root rather than one per
@@ -1577,10 +1577,10 @@ at that location, never that this machine has it; presence is the measured
 half. They are grouped by what losing one costs, which is the first thing a
 migration needs:
 
-| Tier            | Meaning                                                              |
-| --------------- | -------------------------------------------------------------------- |
-| `derived`       | rebuildable from the vault, so deleting it costs time and not memory |
-| `vault-content` | the memory itself, so a loss here is permanent without a backup      |
+| Tier | Meaning |
+| --- | --- |
+| `derived` | rebuildable from the vault, so deleting it costs time and not memory |
+| `vault-content` | the memory itself, so a loss here is permanent without a backup |
 
 The tier is a RECOVERY story, not a location: `Brain/.state/anticipatory/`
 sits inside the Markdown tree and is `derived` because deleting it costs one
@@ -1603,10 +1603,10 @@ could not look" as `false`, which reads as "it is not there" at every call
 site and sends an operator to recreate something that already exists under a
 mode they cannot read.
 
-| `state`     | Rendered as                                              | Meaning                                                           |
-| ----------- | -------------------------------------------------------- | ----------------------------------------------------------------- |
-| `present`   | `present`                                                | the probe found something at the resolved path                    |
-| `absent`    | `absent - nothing has created it in this vault yet`      | absence is a state, not a failure                                 |
+| `state` | Rendered as | Meaning |
+| --- | --- | --- |
+| `present` | `present` | the probe found something at the resolved path |
+| `absent` | `absent - nothing has created it in this vault yet` | absence is a state, not a failure |
 | `unchecked` | `NOT CHECKED - could not be probed (<errno>): <message>` | an `EACCES` on the parent, an `ELOOP`, an `EIO` from a dying disk |
 
 `o2b state status` exits `0` whenever the inventory COMPLETED, including
@@ -1626,15 +1626,15 @@ interrupted migration at a time.
 
 Seven refusal classes, each a distinct repair:
 
-| Code                   | Refused because                                                                                                                                                                                                                     |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `symlink`              | a bound path is a symbolic link. A migration copies bytes, so the link would arrive pointing at the OLD location and its target would silently stay behind                                                                          |
-| `special_file`         | a FIFO, socket or device node, which has no bytes to copy; copying it would produce a plain file that only looks like the original                                                                                                  |
-| `destination_occupied` | the destination exists and is not an empty directory, or could not be examined or listed. Merging would make the manifest unable to say which files this migration put there                                                        |
-| `insufficient_space`   | the destination filesystem has less free space than the plan needs, or its free space could not be measured at all                                                                                                                  |
-| `reserved_namespace`   | the destination is inside the vault, an ancestor of it, the filesystem root, or the home directory itself. Every comparison is made over the REALPATH, so a symlink cannot smuggle the state tree back into the vault it is leaving |
-| `writer_lock_held`     | the search index writer lock is held by a live writer, or its state could not be determined. Bytes appended after this run hashed the index would land in neither copy - the one loss a digest cannot detect afterwards             |
-| `unreadable_surface`   | a declared surface, a directory in the tree, or a file in it could not be probed, listed or read. A tree this run cannot enumerate cannot be bound by a manifest, and an unbound file is not restorable                             |
+| Code | Refused because |
+| --- | --- |
+| `symlink` | a bound path is a symbolic link. A migration copies bytes, so the link would arrive pointing at the OLD location and its target would silently stay behind |
+| `special_file` | a FIFO, socket or device node, which has no bytes to copy; copying it would produce a plain file that only looks like the original |
+| `destination_occupied` | the destination exists and is not an empty directory, or could not be examined or listed. Merging would make the manifest unable to say which files this migration put there |
+| `insufficient_space` | the destination filesystem has less free space than the plan needs, or its free space could not be measured at all |
+| `reserved_namespace` | the destination is inside the vault, an ancestor of it, the filesystem root, or the home directory itself. Every comparison is made over the REALPATH, so a symlink cannot smuggle the state tree back into the vault it is leaving |
+| `writer_lock_held` | the search index writer lock is held by a live writer, or its state could not be determined. Bytes appended after this run hashed the index would land in neither copy - the one loss a digest cannot detect afterwards |
+| `unreadable_surface` | a declared surface, a directory in the tree, or a file in it could not be probed, listed or read. A tree this run cannot enumerate cannot be bound by a manifest, and an unbound file is not restorable |
 
 Every refusal names what was found AND the remedy. A surface an override put
 outside the vault is not a refusal: it is reported separately as left where
@@ -1644,13 +1644,13 @@ it is, because migrating the vault does not move it.
 rather than reinvented because an operator who has learned one destructive
 verb in this CLI has learned all of them:
 
-| Form                                        | Behaviour                                                                                                                                           |
-| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| bare `--to <dir>`                           | plans and prints; writes nothing                                                                                                                    |
-| `--dry-run`                                 | the same plan, said explicitly. Mutually exclusive with `--apply`                                                                                   |
-| `--apply --yes`                             | performs it                                                                                                                                         |
-| `--apply` on a TTY                          | prints the plan, states how many files and bytes are about to MOVE and where the rollback manifest will be, and prompts; only `y` or `yes` proceeds |
-| `--apply` under `--json` or a non-TTY stdin | refused - nobody can answer the prompt                                                                                                              |
+| Form | Behaviour |
+| --- | --- |
+| bare `--to <dir>` | plans and prints; writes nothing |
+| `--dry-run` | the same plan, said explicitly. Mutually exclusive with `--apply` |
+| `--apply --yes` | performs it |
+| `--apply` on a TTY | prints the plan, states how many files and bytes are about to MOVE and where the rollback manifest will be, and prompts; only `y` or `yes` proceeds |
+| `--apply` under `--json` or a non-TTY stdin | refused - nobody can answer the prompt |
 
 Within the apply the same rule holds one level down. Every file is COPIED
 and its landed bytes re-digested BEFORE any source byte is removed. A copy
@@ -1689,12 +1689,12 @@ Everything else is refused by name and left exactly where it is: nothing
 this verb can do makes an operator's later edit recoverable, so the one
 thing it must never do is delete it.
 
-| Code                     | Left alone because                                                                             |
-| ------------------------ | ---------------------------------------------------------------------------------------------- |
-| `digest_mismatch`        | the destination copy has changed since the migration                                           |
-| `missing_at_destination` | the manifest binds it and nothing is there now                                                 |
-| `source_diverged`        | something has written the source path since the migration                                      |
-| `unreadable`             | this run could not read one end of it, so it cannot be shown to be the file the manifest binds |
+| Code | Left alone because |
+| --- | --- |
+| `digest_mismatch` | the destination copy has changed since the migration |
+| `missing_at_destination` | the manifest binds it and nothing is there now |
+| `source_diverged` | something has written the source path since the migration |
+| `unreadable` | this run could not read one end of it, so it cannot be shown to be the file the manifest binds |
 
 Every entry is measured AGAIN at apply time, because a plan is a statement
 about the moment it was made. The manifest is removed only when there is
@@ -1709,11 +1709,11 @@ something nobody measured.
 
 ### Exit codes
 
-| Code | Meaning                                                                                                                                                       |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `0`  | the inventory completed, the plan was printed with no refusals, or the operation did what it was asked                                                        |
-| `1`  | a REFUSAL: a migration that will not run, a rollback that left files behind, or a plan that could not be built                                                |
-| `2`  | a usage error: a missing `--to` or `--from`, `--dry-run` with `--apply`, an unknown subcommand, or `--apply` without `--yes` where nobody can answer a prompt |
+| Code | Meaning |
+| --- | --- |
+| `0` | the inventory completed, the plan was printed with no refusals, or the operation did what it was asked |
+| `1` | a REFUSAL: a migration that will not run, a rollback that left files behind, or a plan that could not be built |
+| `2` | a usage error: a missing `--to` or `--from`, `--dry-run` with `--apply`, an unknown subcommand, or `--apply` without `--yes` where nobody can answer a prompt |
 
 The split is the point. A refusal is an ANSWER - the command did what it was
 asked and the answer is no - and a supervisor that cannot tell it from a
@@ -1951,12 +1951,12 @@ decision model and its `decision_model_*` config; see
 whenever `search_rerank_enabled` is on with the `openai-compat` kind. The
 check reads configuration only and sends no request:
 
-| Code                               | Stream    | When                                                                                                                                                                                                                                                                                                                                                                          | Next command                      |
-| ---------------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
-| `rerank-endpoint-unconfigured`     | error     | the base URL is missing, carries `user:password@` credentials or is not an accepted endpoint (the configured value is never repeated in the finding; `<search_rerank_base_url>` stands in for it), the model or the key is missing or blank, or `search_rerank_provider` names no registered profile and so left one of them empty, so every rerank-enabled search would fail | `o2b search rerank-provider list` |
-| `rerank-model-sunset-announced`    | warning   | the configured model has an announced decommission date that is 90 days away or fewer, or already past                                                                                                                                                                                                                                                                        | `o2b search rerank-provider add`  |
-| `rerank-model-sunset-unsurveyed`   | uncertain | the configured model is outside the shipped rerank decommission survey, so no statement was made about it                                                                                                                                                                                                                                                                     | none, with the reason printed     |
-| `rerank-model-sunset-undetermined` | uncertain | the check ran and reached no verdict, for example because the survey is older than its horizon                                                                                                                                                                                                                                                                                | none, with the reason printed     |
+| Code | Stream | When | Next command |
+| ---- | ------ | ---- | ------------ |
+| `rerank-endpoint-unconfigured` | error | the base URL is missing, carries `user:password@` credentials or is not an accepted endpoint (the configured value is never repeated in the finding; `<search_rerank_base_url>` stands in for it), the model or the key is missing or blank, or `search_rerank_provider` names no registered profile and so left one of them empty, so every rerank-enabled search would fail | `o2b search rerank-provider list` |
+| `rerank-model-sunset-announced` | warning | the configured model has an announced decommission date that is 90 days away or fewer, or already past | `o2b search rerank-provider add` |
+| `rerank-model-sunset-unsurveyed` | uncertain | the configured model is outside the shipped rerank decommission survey, so no statement was made about it | none, with the reason printed |
+| `rerank-model-sunset-undetermined` | uncertain | the check ran and reached no verdict, for example because the survey is older than its horizon | none, with the reason printed |
 
 The survey records model strings and the published notice each entry
 rests on, never an endpoint: a hosted service shutting down while its
@@ -1991,26 +1991,26 @@ narrowed them - so an existing consumer's payload is unchanged.
 identifier safe to branch on, and each names its own lane in its own name,
 so there is no separate lane field that could drift from it:
 
-| Code                                 | The narrowing it reports                                                                                                                                                                                                                                          |
-| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `keyword-fts-match-empty`            | the query tokenised to an empty FTS match, so the keyword lane never ran                                                                                                                                                                                          |
-| `keyword-trigram-lane-fault`         | the trigram candidate lane could not be read; `detail.fault` carries that lane's own classification                                                                                                                                                               |
-| `semantic-embeddings-absent`         | the index holds no compatible embedding                                                                                                                                                                                                                           |
-| `semantic-vec-extension-unavailable` | sqlite-vec is not loaded on this machine                                                                                                                                                                                                                          |
-| `semantic-capability-blocked`        | the configured semantic capability blocks the vector lane; `detail.tier` names the rung                                                                                                                                                                           |
-| `semantic-provider-unavailable`      | the embedding provider could not answer; `detail.category` carries the error category                                                                                                                                                                             |
-| `semantic-empty-query-vector`        | the provider answered with an empty query vector                                                                                                                                                                                                                  |
-| `semantic-structured-lanes-skipped`  | a structured semantic lane was requested while semantic search is off                                                                                                                                                                                             |
-| `semantic-embedding-abi-drift`       | the index carries embeddings written by another build; `detail.fields` counts the contradicted ABI fields                                                                                                                                                         |
-| `hybrid-degraded`                    | hybrid recall was asked for and the semantic lane did not run, so this answer is keyword-only                                                                                                                                                                     |
-| `hybrid-deadline-exceeded`           | the composite hybrid path (embed, semantic top-k, rerank, second pass) outlived `search_hybrid_deadline_ms`, so the phases past the budget were cut; `detail.budgetMs` is the deadline, `detail.elapsedMs` the moment it fired                                    |
-| `rank-cap-truncated-pool`            | the rank cap truncated the candidate pool; `detail.cap` is the cap that bit                                                                                                                                                                                       |
-| `rerank-provider-unavailable`        | the configured cross-encoder reranker (remote endpoint or local model) could not answer, so the answer keeps the heuristic order; `detail.category` is one of `auth`, `quota`, `gone`, `rejected`, `transient`, `timeout`, `network`, `malformed`, `unclassified` |
-| `rerank-model-sunset`                | the configured rerank model's announced decommission date has passed, so no rerank request was sent and the answer keeps the heuristic order                                                                                                                      |
-| `relevance-floor-dropped-rows`       | the relevance floor dropped ranked rows; `detail.dropped` counts them                                                                                                                                                                                             |
-| `scope-filters-dropped-rows`         | visibility, ownership, or session / project scope dropped ranked rows; `detail.dropped` against `detail.before`                                                                                                                                                   |
-| `cross-vault-origin-failed`          | a cross-vault origin could not be searched; `detail.origin` is the origin label                                                                                                                                                                                   |
-| `cross-vault-chain-stopped`          | an origin answered confidently and the remaining origins were deliberately not searched; `detail.skipped` counts them                                                                                                                                             |
+| Code | The narrowing it reports |
+| ---- | ------------------------ |
+| `keyword-fts-match-empty` | the query tokenised to an empty FTS match, so the keyword lane never ran |
+| `keyword-trigram-lane-fault` | the trigram candidate lane could not be read; `detail.fault` carries that lane's own classification |
+| `semantic-embeddings-absent` | the index holds no compatible embedding |
+| `semantic-vec-extension-unavailable` | sqlite-vec is not loaded on this machine |
+| `semantic-capability-blocked` | the configured semantic capability blocks the vector lane; `detail.tier` names the rung |
+| `semantic-provider-unavailable` | the embedding provider could not answer; `detail.category` carries the error category |
+| `semantic-empty-query-vector` | the provider answered with an empty query vector |
+| `semantic-structured-lanes-skipped` | a structured semantic lane was requested while semantic search is off |
+| `semantic-embedding-abi-drift` | the index carries embeddings written by another build; `detail.fields` counts the contradicted ABI fields |
+| `hybrid-degraded` | hybrid recall was asked for and the semantic lane did not run, so this answer is keyword-only |
+| `hybrid-deadline-exceeded` | the composite hybrid path (embed, semantic top-k, rerank, second pass) outlived `search_hybrid_deadline_ms`, so the phases past the budget were cut; `detail.budgetMs` is the deadline, `detail.elapsedMs` the moment it fired |
+| `rank-cap-truncated-pool` | the rank cap truncated the candidate pool; `detail.cap` is the cap that bit |
+| `rerank-provider-unavailable` | the configured cross-encoder reranker (remote endpoint or local model) could not answer, so the answer keeps the heuristic order; `detail.category` is one of `auth`, `quota`, `gone`, `rejected`, `transient`, `timeout`, `network`, `malformed`, `unclassified` |
+| `rerank-model-sunset` | the configured rerank model's announced decommission date has passed, so no rerank request was sent and the answer keeps the heuristic order |
+| `relevance-floor-dropped-rows` | the relevance floor dropped ranked rows; `detail.dropped` counts them |
+| `scope-filters-dropped-rows` | visibility, ownership, or session / project scope dropped ranked rows; `detail.dropped` against `detail.before` |
+| `cross-vault-origin-failed` | a cross-vault origin could not be searched; `detail.origin` is the origin label |
+| `cross-vault-chain-stopped` | an origin answered confidently and the remaining origins were deliberately not searched; `detail.skipped` counts them |
 
 Members are not invented for conditions nothing reports, so every code
 above has a producer on the search path today. `hybrid-degraded` is the
@@ -2024,17 +2024,17 @@ human signal for a failed endpoint. `detail.category` on
 `rerank-provider-unavailable` is computed from the typed failure, never
 from the provider's message:
 
-| Category       | The failure it names                                                                                                                      |
-| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `auth`         | the endpoint answered 401 or 403                                                                                                          |
-| `quota`        | the endpoint answered 402                                                                                                                 |
-| `gone`         | the endpoint answered 404 or 410, the usual sign of a retired endpoint                                                                    |
-| `rejected`     | the endpoint answered any other 4xx                                                                                                       |
-| `transient`    | the endpoint answered 408, 429 or a 5xx. Some vendors also answer 429 for exhausted quota; the category is computed from the status alone |
-| `timeout`      | the request outlived its timeout, including a 2xx body that stalled after the headers arrived                                             |
-| `network`      | the request never reached a complete answer: refused connection, DNS, TLS, a redirect, or a body that broke while it was read             |
-| `malformed`    | the endpoint answered, but the body was not JSON, carried the wrong number of scores, or an out-of-range or duplicate index               |
-| `unclassified` | the rerank provider threw an error the cross-encoder did not type; it is named rather than folded into another category                   |
+| Category | The failure it names |
+| -------- | -------------------- |
+| `auth` | the endpoint answered 401 or 403 |
+| `quota` | the endpoint answered 402 |
+| `gone` | the endpoint answered 404 or 410, the usual sign of a retired endpoint |
+| `rejected` | the endpoint answered any other 4xx |
+| `transient` | the endpoint answered 408, 429 or a 5xx. Some vendors also answer 429 for exhausted quota; the category is computed from the status alone |
+| `timeout` | the request outlived its timeout, including a 2xx body that stalled after the headers arrived |
+| `network` | the request never reached a complete answer: refused connection, DNS, TLS, a redirect, or a body that broke while it was read |
+| `malformed` | the endpoint answered, but the body was not JSON, carried the wrong number of scores, or an out-of-range or duplicate index |
+| `unclassified` | the rerank provider threw an error the cross-encoder did not type; it is named rather than folded into another category |
 
 An answer carrying `rerank-provider-unavailable` is served but never
 written to the query cache, so the next identical query asks the
@@ -2190,18 +2190,18 @@ layer config-tunable and bounded:
 
 Recall and ranking quality (v0.20.0), each tunable and bounded:
 
-| Config key                  | Env var                                      | Default | Effect                                                                                                                                      |
-| --------------------------- | -------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `search_recency_shape`      | `OPEN_SECOND_BRAIN_SEARCH_RECENCY_SHAPE`     | `0.8`   | Weibull recency curve shape (k)                                                                                                             |
-| `search_recency_scale`      | `OPEN_SECOND_BRAIN_SEARCH_RECENCY_SCALE`     | `30`    | Weibull characteristic lifetime in days                                                                                                     |
-| `search_recency_amplitude`  | `OPEN_SECOND_BRAIN_SEARCH_RECENCY_AMPLITUDE` | `0.05`  | Max recency boost at age 0; `0` disables the recency layer                                                                                  |
-| `search_intent_enabled`     | `OPEN_SECOND_BRAIN_SEARCH_INTENT_ENABLED`    | `true`  | Re-weight ranking by structural query intent; `false` is neutral                                                                            |
-| `search_synonym_enabled`    | `OPEN_SECOND_BRAIN_SEARCH_SYNONYM_ENABLED`   | `false` | Opt-in co-occurrence query expansion (language-agnostic)                                                                                    |
-| `search_synonym_max_terms`  | `OPEN_SECOND_BRAIN_SEARCH_SYNONYM_MAX_TERMS` | `3`     | Cap on expansion terms OR'd onto the query                                                                                                  |
-| `search_cache_enabled`      | `OPEN_SECOND_BRAIN_SEARCH_CACHE_ENABLED`     | `false` | Opt-in persistent query cache, gated by corpus generation                                                                                   |
-| `search_cache_ttl_seconds`  | `OPEN_SECOND_BRAIN_SEARCH_CACHE_TTL`         | `300`   | Cache row time-to-live in seconds                                                                                                           |
-| `search_chain_stop_enabled` | `OPEN_SECOND_BRAIN_SEARCH_CHAIN_STOP`        | `false` | Opt-in cross-vault early termination once an origin answers confidently                                                                     |
-| `search_chain_stop_score`   | `OPEN_SECOND_BRAIN_SEARCH_CHAIN_STOP_SCORE`  | `0.8`   | Match-quality `[0,1]` threshold that triggers the chain-stop: the share of the query's IDF mass an origin covered, not its top result score |
+| Config key                 | Env var                                      | Default | Effect                                                           |
+| -------------------------- | -------------------------------------------- | ------- | ---------------------------------------------------------------- |
+| `search_recency_shape`     | `OPEN_SECOND_BRAIN_SEARCH_RECENCY_SHAPE`     | `0.8`   | Weibull recency curve shape (k)                                  |
+| `search_recency_scale`     | `OPEN_SECOND_BRAIN_SEARCH_RECENCY_SCALE`     | `30`    | Weibull characteristic lifetime in days                          |
+| `search_recency_amplitude` | `OPEN_SECOND_BRAIN_SEARCH_RECENCY_AMPLITUDE` | `0.05`  | Max recency boost at age 0; `0` disables the recency layer       |
+| `search_intent_enabled`    | `OPEN_SECOND_BRAIN_SEARCH_INTENT_ENABLED`    | `true`  | Re-weight ranking by structural query intent; `false` is neutral |
+| `search_synonym_enabled`   | `OPEN_SECOND_BRAIN_SEARCH_SYNONYM_ENABLED`   | `false` | Opt-in co-occurrence query expansion (language-agnostic)         |
+| `search_synonym_max_terms` | `OPEN_SECOND_BRAIN_SEARCH_SYNONYM_MAX_TERMS` | `3`     | Cap on expansion terms OR'd onto the query                       |
+| `search_cache_enabled`     | `OPEN_SECOND_BRAIN_SEARCH_CACHE_ENABLED`     | `false` | Opt-in persistent query cache, gated by corpus generation        |
+| `search_cache_ttl_seconds` | `OPEN_SECOND_BRAIN_SEARCH_CACHE_TTL`         | `300`   | Cache row time-to-live in seconds                                |
+| `search_chain_stop_enabled`| `OPEN_SECOND_BRAIN_SEARCH_CHAIN_STOP`        | `false` | Opt-in cross-vault early termination once an origin answers confidently |
+| `search_chain_stop_score`  | `OPEN_SECOND_BRAIN_SEARCH_CHAIN_STOP_SCORE`  | `0.8`   | Match-quality `[0,1]` threshold that triggers the chain-stop: the share of the query's IDF mass an origin covered, not its top result score |
 
 `brain_context_pack` also accepts `max_chars_per_memory` and
 `max_total_chars` (code-point caps). Pass `--lanes` to keep the legacy flat
@@ -2235,11 +2235,11 @@ reports the persisted windows on its `event_time` line.
 
 Two opt-in ranking guards and one deadline join the suite:
 
-| Config key                     | Env var                                          | Default | Effect                                                                                                                                                                                                                                                                                                                                                                                       |
-| ------------------------------ | ------------------------------------------------ | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `search_relational_rerank_pin` | `OPEN_SECOND_BRAIN_SEARCH_RELATIONAL_RERANK_PIN` | `false` | Rerank may promote a relational-origin candidate but never sink it below its pre-rerank order (the relevance floor is untouched)                                                                                                                                                                                                                                                             |
-| `search_metadata_boost_gate`   | `OPEN_SECOND_BRAIN_SEARCH_METADATA_BOOST_GATE`   | `false` | A query whose keyword lane returned no hits contributes zero from every additive metadata/structural boost layer                                                                                                                                                                                                                                                                             |
-| `search_hybrid_deadline_ms`    | `OPEN_SECOND_BRAIN_SEARCH_HYBRID_DEADLINE`       | `15000` | Wall-clock budget over the whole composite hybrid path (embed, semantic top-k, rerank, second pass); on expiry the abandoned embed and rerank requests are aborted, the search completes with what it has (keyword-only, or the pre-rerank order with exclusions, trust gate and the other post-rank phases still applied), reports `hybridDeadlineExceeded` and is not cached; `0` disables |
+| Config key                      | Env var                                            | Default | Effect                                                                    |
+| ------------------------------- | -------------------------------------------------- | ------- | ------------------------------------------------------------------------- |
+| `search_relational_rerank_pin`  | `OPEN_SECOND_BRAIN_SEARCH_RELATIONAL_RERANK_PIN`   | `false` | Rerank may promote a relational-origin candidate but never sink it below its pre-rerank order (the relevance floor is untouched) |
+| `search_metadata_boost_gate`    | `OPEN_SECOND_BRAIN_SEARCH_METADATA_BOOST_GATE`     | `false` | A query whose keyword lane returned no hits contributes zero from every additive metadata/structural boost layer |
+| `search_hybrid_deadline_ms`     | `OPEN_SECOND_BRAIN_SEARCH_HYBRID_DEADLINE`         | `15000` | Wall-clock budget over the whole composite hybrid path (embed, semantic top-k, rerank, second pass); on expiry the abandoned embed and rerank requests are aborted, the search completes with what it has (keyword-only, or the pre-rerank order with exclusions, trust gate and the other post-rank phases still applied), reports `hybridDeadlineExceeded` and is not cached; `0` disables |
 
 Both guards are off by default and leave every score byte-identical;
 the deadline is on by default because its lane budgets already summed
@@ -2339,13 +2339,13 @@ text, so the chunk comes back unfindable while the index reports success.
 The full decision record for each is `src/core/egress/registry.ts`, keyed
 by the id below.
 
-| id                               | verb                                     | what leaves                                                                                                                                        | when it can happen                                                                                                                |
-| -------------------------------- | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `search-embedding-openai-compat` | `o2b search index` / any reindex         | every indexed chunk BODY, verbatim                                                                                                                 | only once `search_embedding_endpoint` + an API key are configured; the endpoint is whichever host you name, including a local one |
-| `search-embedding-zeroentropy`   | `o2b search index` (zeroentropy profile) | the same chunk bodies, to a second vendor's embed endpoint                                                                                         | same gate, when that provider profile is selected                                                                                 |
-| `search-rerank-cross-encoder`    | `o2b search --rerank`                    | the QUERY plus the top-of-pool candidate DOCUMENTS - vault text the embedding path may never have seen, chosen by relevance to what you just asked | only with a reranker endpoint configured                                                                                          |
-| `brain-telegram-capture`         | `o2b brain telegram-run`                 | reply text POSTed to the Telegram Bot API; the `/catchup` reply is composed from vault content                                                     | only while the runner verb is running; an install that never starts it never reaches this path                                    |
-| `research-external-fetch`        | `o2b brain research`                     | an agent-composed search query (not a page body) to the configured research provider                                                               | key-gated: with no key set every call is a typed `disabled` error                                                                 |
+| id | verb | what leaves | when it can happen |
+| --- | --- | --- | --- |
+| `search-embedding-openai-compat` | `o2b search index` / any reindex | every indexed chunk BODY, verbatim | only once `search_embedding_endpoint` + an API key are configured; the endpoint is whichever host you name, including a local one |
+| `search-embedding-zeroentropy` | `o2b search index` (zeroentropy profile) | the same chunk bodies, to a second vendor's embed endpoint | same gate, when that provider profile is selected |
+| `search-rerank-cross-encoder` | `o2b search --rerank` | the QUERY plus the top-of-pool candidate DOCUMENTS - vault text the embedding path may never have seen, chosen by relevance to what you just asked | only with a reranker endpoint configured |
+| `brain-telegram-capture` | `o2b brain telegram-run` | reply text POSTed to the Telegram Bot API; the `/catchup` reply is composed from vault content | only while the runner verb is running; an install that never starts it never reaches this path |
+| `research-external-fetch` | `o2b brain research` | an agent-composed search query (not a page body) to the configured research provider | key-gated: with no key set every call is a typed `disabled` error |
 
 Semantic search, reranking, Telegram capture and research are all off
 until you configure an endpoint, so a default install has no network
@@ -2361,9 +2361,9 @@ to offer, so each endpoint has its own explicit opt-out:
 
 ```yaml
 embedding_base_url: http://100.64.0.5:1234/v1
-embedding_allow_insecure_http: true # OPEN_SECOND_BRAIN_EMBEDDING_ALLOW_INSECURE_HTTP
+embedding_allow_insecure_http: true        # OPEN_SECOND_BRAIN_EMBEDDING_ALLOW_INSECURE_HTTP
 search_rerank_base_url: http://192.168.1.20:8080/v1
-search_rerank_allow_insecure_http: true # OPEN_SECOND_BRAIN_SEARCH_RERANK_ALLOW_INSECURE_HTTP
+search_rerank_allow_insecure_http: true    # OPEN_SECOND_BRAIN_SEARCH_RERANK_ALLOW_INSECURE_HTTP
 ```
 
 Both default to `false`. An opt-out applies only to a base URL set in
