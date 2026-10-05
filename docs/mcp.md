@@ -2382,8 +2382,10 @@ format characters), when it contains NUL, or when it exceeds the cap.
   The query embed is one paid call per request, disclosed in the
   response, and refused with `EMBEDDING_COST_UNPRICED` for a remote
   caller when the model has no known price and `embedding_cost_gate_usd`
-  is positive. The
-  `substring` and `ranked` modes are unchanged. The embedding spend
+  is positive. `query` is capped at 2000 characters in every query mode,
+  counted in Unicode code points as the schema's `maxLength` counts them,
+  and `brain_search` counts its 2000-character cap the same way. The
+  `substring` and `ranked` modes are otherwise unchanged. The embedding spend
   surfaces also change: `EMBEDDING_COST_UNPRICED` joins the stable error
   codes (an embedding run refused under a positive cost gate because the
   model has no known price), `brain_maintenance` spend receipts carry

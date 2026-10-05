@@ -1255,8 +1255,10 @@ semantic_weight·cosine + link_boost + recency_boost + entity_boost)`
   is blocked, when sqlite-vec is not loadable, and when no kept
   candidate has a usable vector (`BELIEF_VECTORS_MISSING`, naming
   `o2b search vector-backfill --path Brain/preferences/ --path Brain/retired/ --apply`). The
-  query embed is disclosed (model, price source, tokens, estimate) and
-  not gated, as for `search`.
+  query embed is disclosed (model, price source, tokens, estimate); a
+  remote caller's embed is refused with `EMBEDDING_COST_UNPRICED` when
+  the model has no known price and `embedding_cost_gate_usd` is
+  positive, while a local caller's embed is not gated, as for `search`.
 - **Atomic reindex.** `o2b search reindex` writes to
   `brain.sqlite.new`, renames to `brain.sqlite`, and keeps the
   previous file as `brain.sqlite.bak`. If the main file is missing on
