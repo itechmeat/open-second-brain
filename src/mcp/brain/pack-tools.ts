@@ -1013,7 +1013,7 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "string",
           enum: [...CONTEXT_PACK_QUERY_MODES],
           description:
-            "How `query` is read: `substring` (default) drops misses; `ranked` orders by token overlap; `semantic` orders by stored belief vectors, embedding the query once",
+            "How `query` is read: `substring` (default) drops misses; `ranked` orders by token overlap; `semantic` orders by stored belief vectors, embedding the query once.",
         },
         focus_session: {
           type: "string",

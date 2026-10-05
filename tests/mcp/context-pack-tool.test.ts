@@ -416,7 +416,7 @@ describe("brain_context_pack tool — ranked query mode", () => {
     const declared = schema.properties["query_mode"]!;
     expect(declared.enum).toEqual(["substring", "ranked", "semantic"]);
     expect(declared.description).toContain("semantic");
-    expect(declared.description!.length).toBeGreaterThan(0);
+    expect(declared.description!.endsWith(".")).toBe(true);
     expect(schema.additionalProperties).toBe(false);
     expect(schema.dependentRequired!["query_mode"]).toEqual(["query"]);
   });
