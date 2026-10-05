@@ -2365,3 +2365,22 @@ format characters), when it contains NUL, or when it exceeds the cap.
   re-derives and archives only readable derived pages; and
   `brain_anticipatory_context` builds its bundle for the caller without
   reading or writing the shared cache, answering `cache_state: "miss"`.
+- Since v1.72.0 `brain_context_pack` accepts `query_mode: "semantic"`,
+  which orders the curated belief notes by the stored vectors of their
+  chunks against one embedding of `query` (it still requires `query`).
+  The response gains a `semantic` object: `model`, `price_source`,
+  `query_tokens`, `estimated_usd` (null when the price is unknown),
+  `scored` and `unembedded` (kept candidates with no usable vector, which
+  sort after the scored ones by the usual tier and recency keys). The
+  counts are taken after the reach filter, so a withheld page appears in
+  neither. The mode refuses with a stable `error.data.code`: the semantic
+  capability codes (`EMBEDDING_DISABLED`, `EMBEDDING_KEY_MISSING`) for a
+  blocked tier, `VEC_EXTENSION_UNAVAILABLE`, and `BELIEF_VECTORS_MISSING`
+  when no kept candidate has a usable vector, naming
+  `o2b search vector-backfill --path Brain/preferences/ --apply`. The
+  `substring` and `ranked` modes are unchanged. The embedding spend
+  surfaces also change: `EMBEDDING_COST_UNPRICED` joins the stable error
+  codes (an embedding run refused under a positive cost gate because the
+  model has no known price), `brain_maintenance` spend receipts carry
+  `price_source` with a null `estimated_usd` for an unknown price. No new
+  tool.

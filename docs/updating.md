@@ -47,6 +47,47 @@ instruction files such as `CLAUDE.md`/`AGENTS.md`, installed
 `.claude/skills/`) and warns with the exact replacement for any stale
 reference it finds (`removed-tool-reference`).
 
+## Upgrading to 1.72.0
+
+No step is required unless you set a positive `embedding_cost_gate_usd`.
+
+**A positive cost gate now refuses a model with no known price.**
+Before this release, a model missing from the built-in price table was
+priced at $0, so a gate never stopped it. Now its price is `unknown`,
+and an embedding reindex, maintenance reindex or vector backfill with
+pending chunks on that model is refused with `EMBEDDING_COST_UNPRICED`
+while the gate is positive. This affects local servers (Ollama, LM
+Studio, llama.cpp) and any model the table does not list. Run
+`o2b search check`: it names the model and the keys to set. Declare the
+price once to restore unattended runs:
+
+```yaml
+embedding_price_model: nomic-embed-text:latest
+embedding_price_usd_per_mtok: 0
+```
+
+`0` declares the model free; use the provider's real rate otherwise.
+`--force-cost` (MCP `force_cost`) passes a single run without a
+declaration. With the gate at 0, the default, nothing is refused.
+
+**Unknown prices read as unknown.** Where an estimate used to print
+`$0.0000` for an unlisted model, the maintenance banner, the backfill
+dry run and `search status` now print `price unknown`, and the JSON
+estimates (`estimated_cost_usd`, `estimated_usd`, the status refresh
+estimate) are `null`. A consumer that read `0` as free must treat `null`
+as unknown. The backfill's `estimated_cost_usd` used to be omitted for an
+unknown price and is now always present. Spend receipts, the
+`maintenance_spend` metric, the backfill JSON and the status JSON gain
+`price_source` (`refresh_price_source` on status); journal rows written
+before this release list their price source as `unrecorded`.
+
+**Edits re-embed less.** An edited note keeps the vectors of its
+unchanged chunks, so the next embedding pass pays only for what changed.
+Nothing needs reindexing to benefit.
+
+`o2b search vector-backfill` gains a repeatable `--path`, and
+`brain_context_pack` gains `query_mode: "semantic"`; both are additive.
+
 ## Upgrading to 1.71.0
 
 No step is required. Three changes are visible to an operator who runs

@@ -634,6 +634,8 @@ The lane's two vault-side knobs live in `Brain/_brain.yaml` under `maintenance:`
 
 Since v1.64.0 the lane's timeouts are honest and its embedding spend is named. A task killed at its safeguard deadline exits **6** (`probeIncomplete`), keyed on `timed_out` rows alone: the only proved fact is that the pass did not finish, which is not the same as a task failing; a proved failure (1) outranks a timeout, a timeout outranks a refusal (7), and the render says TIMED OUT with the safeguard detail. The reindex task stays keyword-only unless `maintenance_embeddings: true` (env `OPEN_SECOND_BRAIN_MAINTENANCE_EMBEDDINGS`, default `false`) opts it in; then it requests the embedding phase whenever the resolved semantic config can reach a provider, announces the pending-spend estimate before the pass, and journals the phase's own cost-gate result as the per-run receipt - model, tokens, estimated cost, and whether a bypass fired - on the task row, the journal line and the `maintenance_spend` metrics surface; the preview is an estimate by position, the receipt prices what the completed pass embedded, and a run killed mid-spend receipts nothing. `--force-cost` (MCP `force_cost`) bypasses a positive `embedding_cost_gate_usd` for this run, recorded on the receipt when it overrode a gate that would have refused. A safeguard timeout is journaled as `timed_out` and neither counts toward nor resets the failure streak that refuses a task.
 
+Since v1.72.0 the spend is priced honestly. The banner prints `price unknown` instead of `$0.0000` when the embedding model has no known price, the receipt and the `maintenance_spend` metric carry `price_source` (`builtin`, `operator` or `unknown`) with a null estimate for an unknown price, and `o2b brain maintenance status` lists each receipt with its `price_source` (`unrecorded` for rows journaled before this release). Under a positive `embedding_cost_gate_usd` an unpriced model refuses the reindex task's embedding phase with `EMBEDDING_COST_UNPRICED` unless `--force-cost`; declare the price with `embedding_price_model` and `embedding_price_usd_per_mtok` (see "Embedding prices" below).
+
 Since v1.65.0 the lane prints its own schedule and can carry an install's own upkeep. `o2b brain maintenance run --cron-template` prints a script (`~/.local/bin/osb-maintenance-<hash>.sh`, where `<hash>` is the first 8 hex characters of the SHA-256 of the resolved vault path, so each vault gets its own script, Hermes job and systemd units and re-rendering for the same vault keeps the name) and its scheduler lines - a crontab line and the Hermes form by default, a systemd user timer with `--format systemd` - with `--interval <N>m|h|d` defaulting to `1h`: the gates decide whether work happens and a gate skip exits 0, so an hourly schedule plus `--window` is the intended pattern. The script embeds the resolved vault, runs `o2b brain maintenance run --vault '<vault>' --json`, stays silent on exit 0 and prints the captured JSON and keeps the exit code otherwise. The rendered script calls `o2b` by name, so it expects `o2b` on the scheduler's PATH: cron jobs and systemd user services start with a minimal PATH, so add the install directory (usually `~/.local/bin`) to that PATH. The verb returns before the lease, the gates, the journal and the metrics, so printing a recipe leaves no trace. A bad interval, window or format, `--interval` or `--format` without `--cron-template`, a lane-run flag (`--force`, `--retry`, `--force-cost`, `--busy-minutes`, `--busy-threshold`, `--agent`, `--progress`, `--json`) beside `--cron-template`, and `status --cron-template` exit 2.
 
 Custom lane tasks (since v1.65.0) put an install's own upkeep under the lane's window, busy, pressure, lease and streak gates. They are declared in the machine config file, never in the vault: `maintenance_custom_<name>: <command>`, optionally `maintenance_custom_<name>_cwd: <absolute dir>` (default the running user's home directory; the vault is allowed when named) and `maintenance_custom_<name>_timeout_seconds: <N>` (default 120; a whole number from 1 to 1200). The lease is taken once per pass for 30 minutes, so the declared custom timeouts together stay within 1200 s, which leaves 600 s for the built-in tasks; in name order, a task whose timeout would take the sum past 1200 s is refused by name, and the full 8 tasks fit at the default. Declared tasks run only with the master switch `maintenance_custom_tasks: true` (env `OPEN_SECOND_BRAIN_MAINTENANCE_CUSTOM_TASKS`, default off; `0` turns it off on one host). Each runs as `custom:<name>`, where `<name>` matches `^[a-z][a-z0-9-]{0,31}$` (no underscores, so the suffixes stay unambiguous, and no task can be named `tasks`), after the four built-in tasks and stale-first with them; at most 8 are declared. The command runs through `sh -c` (`cmd.exe /d /s /c` on Windows) with stdin closed, stdout discarded and `O2B_VAULT` set. Its environment is this process's minus every variable whose name declares a credential (`*_API_KEY`, `*_TOKEN`, `*_SECRET`, `*PASSWORD*` and the other names the redactor treats as secrets); `PATH`, `HOME`, `LANG`, `LC_*`, `TZ`, `TMPDIR` and `O2B_VAULT` are always kept, and a command that needs a key reads it from its own configuration. The default working directory is not the vault because the vault syncs and is writable through the MCP write tools, and on Windows a bare command name resolves in the working directory first; use absolute executable paths. A `_cwd` that does not exist fails the task as `custom task <name>: cwd does not exist: <path>`. A non-zero exit is reported as `exit <N>: <stderr tail>`, redacted and capped at 4096 bytes. The task's outcome is its shell's exit status: it does not wait for processes the command left in the background, but those still belong to the task, and on POSIX the command's whole process group is killed (SIGTERM, then SIGKILL a second later) when the timeout elapses or the o2b process exits, whichever is first, also after the shell has exited (on Windows `taskkill /T /F` kills the tree while the shell runs). Past its timeout the run is journaled as timed out, and unlike a built-in task, a custom task's timeout counts toward its `failure_streak_limit` and exits 1 rather than 6, so a command that always hangs is refused like one that always fails. A shell that exits before its timeout keeps its exit status even when a background process still holds its stderr at the deadline. `--retry custom:<name>` (MCP `retry_tasks`) attempts a refused custom task alone; an undeclared name is refused with the registered list. A bad declaration (a bad name, an empty command, an out-of-range timeout, a relative `_cwd`, a suffix key without its command, a ninth task, a timeout over the budget) is named on stderr as `custom task refused: <reason>` (MCP `custom_task_errors`) and the valid ones still run; `status` says `custom tasks declared but maintenance_custom_tasks is off` while the switch is off, or `custom tasks declared but OPEN_SECOND_BRAIN_MAINTENANCE_CUSTOM_TASKS turns them off` when the env override did it. A custom task never calls a model on the lane's behalf and records no spend receipt, and the lane cannot police spend or side effects inside an operator's own command. No MCP parameter can add, edit or read a command. The config reader strips one pair of matching surrounding quotes from a value, so a command that starts and ends with the same quote character loses them; wrap such a command in single quotes (`maintenance_custom_tidy: '"/opt/my tool" --flag "x"'`).
@@ -1806,14 +1808,26 @@ o2b search vector-backfill    Run the vector phase ALONE for indexed chunks that
                               configured semantic capability tier, and contacts no provider.
                               --apply is the only path that reaches a provider or writes a vector
                               --force-cost bypasses the embedding cost gate for that run
+                              --path <prefix> scopes the run to chunks under a vault-relative
+                              prefix; repeatable, and validated like every other path prefix (an
+                              unsafe prefix is refused by name). The pending census, the estimate,
+                              the cost gate and the spend receipt all read the same scoped census,
+                              so `--path Brain/preferences/` prices and embeds only belief notes.
+                              The text report adds a `scope:` line and the next step it names keeps
+                              the scope (since v1.72.0)
                               --progress watches it; Ctrl-C stops it between embed batches
                               --json emits dry_run, capability_tier, capability_code, chunks_total,
-                              pending, embedded, retries, plus estimated_cost_usd only when the
-                              model's price is known - a missing price is an absent key, never 0
+                              pending, embedded, retries, estimated_cost_usd, price_source, and
+                              path_prefixes on a scoped run. Since v1.72.0 estimated_cost_usd is
+                              null (never 0, never omitted) when the model's price is unknown, and
+                              the text report prints `price unknown` for it
                               Idempotent; an --apply run that wrote vectors appends one
                               vector-backfill Brain log event
 o2b search status             Index status; since v0.36.0 also reports the active embedding
                               signature (<provider>:<model>:<dimension>) and a refresh-cost estimate
+                              Since v1.72.0 the estimate is null and printed as `price unknown` when
+                              the model has no known price; --json adds refresh_price_source
+                              (builtin, operator or unknown)
                               Since v1.64.0, once an index exists, status also prints
                               event_time: <with>/<documents> documents (earliest <ISO>, latest <ISO>,
                               <n> in the last 30 days); --json carries it as the event_time object
@@ -1872,6 +1886,20 @@ o2b search check              Pre-flight diagnostics: vault, index directory, SQ
                               `contradicted` - a record the data itself disproves, which is a
                               different finding from ABI drift (the record disagrees with this build)
                               and from an unrecorded token (no claim was ever made).
+
+                              Since v1.72.0, when no embedding key resolves, the report names where
+                              it looked, by name only: `key_sources_checked:` lists the sources in
+                              probe order (OPEN_SECOND_BRAIN_EMBEDDING_KEY, embedding_api_key, then
+                              the env-key names of the registered profile `embedding_provider`
+                              selects), and `key_present_under:` lists the other registered profiles
+                              whose env key is set, or says `no registered profile`. --json carries
+                              the same as `credential_sources` {consulted, present_elsewhere}. Only
+                              names you declared are consulted (config keys and your provider
+                              registry), no value is ever printed, and a configured setup's output
+                              is unchanged. The recommendations also name an embedding model with
+                              no known price (with the price pair to declare and what a positive
+                              gate does with it) and a price pair that names a model other than the
+                              active one.
 o2b search restamp            Record this build's sqlite-vec version as the one the stored vectors are
                               accepted under - the repair for a drift confined to
                               embedding_vec_version, which is an ABI marker rather than a property of
@@ -2038,6 +2066,48 @@ built-in `openai-compat`, the offline `local` feature-hashing embedder
 `disabled`, or any name registered via `o2b search provider add`.
 `embedding_cost_gate_usd` (default 0 = off) refuses an embedding run whose
 estimated spend exceeds it unless `--force-cost`.
+
+Embedding prices (since v1.72.0). Every estimate names where its price
+came from: `builtin` (the frozen price table, and the local embedder,
+which is free), `operator` (declared by you) or `unknown`. Declare a price
+for a model the table does not list, or correct a table price, with the
+operator price pair:
+
+```yaml
+embedding_price_model: nomic-embed-text:latest
+embedding_price_usd_per_mtok: 0.02
+```
+
+The env twins are `OPEN_SECOND_BRAIN_EMBEDDING_PRICE_MODEL` and
+`OPEN_SECOND_BRAIN_EMBEDDING_PRICE_USD_PER_MTOK`, and they win over the
+config keys. Set both keys or neither; the rate is USD per million tokens,
+a non-negative number, and `0` declares the model free. A half pair, a
+negative rate or a non-numeric rate fails config resolution with
+`INVALID_INPUT` naming the key. The pair binds the price to one model
+name (compared case-insensitively), so switching models never re-targets
+it silently: `o2b search check` flags a declaration that names a model
+other than the active one. A price is not part of the embedding identity,
+so declaring or editing it never triggers a reindex. A loopback
+`embedding_base_url` is not assumed to be free; declare `0` for a local
+server that costs nothing.
+
+An unknown price is reported as unknown, never as $0: the maintenance
+banner, the backfill dry run and `search status` print `price unknown`,
+the JSON estimates are `null`, and spend receipts carry `price_source`.
+Under a positive `embedding_cost_gate_usd`, an embedding run on a model
+with no known price and pending chunks is refused with
+`EMBEDDING_COST_UNPRICED`, because an unknown price cannot be checked
+against a cap. The message names the model, both price keys and
+`--force-cost`; the provider is never contacted. `--force-cost` passes the
+refusal, and the receipt then records `forced: true`, `price_source:
+unknown` and a null estimate. With the gate at 0 (the default) nothing is
+refused.
+
+Vector carry-over (since v1.72.0). When a note is edited, a chunk whose
+content did not change keeps its stored vector, provided the vector was
+written by the model and dimension the index records. Only changed chunks
+are re-embedded and paid for. A paragraph moved within the note is
+carried too; a paragraph moved into another note is re-embedded.
 `embedding_batch_tokens` (`OPEN_SECOND_BRAIN_EMBEDDING_BATCH_TOKENS`, since
 v1.43.0) adds a per-request token budget beside `embedding_batch_size`: a
 batch closes on whichever cap fills first, so a run of long chunks cannot

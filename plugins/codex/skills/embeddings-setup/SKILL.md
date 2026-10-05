@@ -25,7 +25,14 @@ is also present in the `--json` output for headless callers.
 
 Branch on what the report shows:
 
-- `embedding_key: MISSING` → go to step 2.
+- `embedding_key: MISSING` → go to step 2. The `key_sources_checked:`
+  line names where the key was looked for, and `key_present_under:`
+  names any other registered provider profile whose env key is set. If
+  the key sits under another profile, the fix may be pointing
+  `embedding_provider` at that profile rather than adding a key.
+- A recommendation saying the embedding model has no known price, or
+  that the price pair names another model → see "Declare the model's
+  price" in step 2.
 - `vec_extension: unavailable` on macOS → go to step 3.
 - `vec_extension: unavailable` on Linux → go to step 4.
 - Everything OK but `semantic_enabled: false` (no embeddings yet) →
@@ -72,6 +79,29 @@ instead. Every run that uses it prints one stderr warning per endpoint.
 **Never invent or echo the key.** Write a placeholder, then ask the
 user to paste their key in place of it. Recheck with `o2b search
 check` after the user confirms.
+
+### Declare the model's price
+
+Spend estimates name their price source: `builtin` (the built-in table;
+the `local` provider is free), `operator` (declared) or `unknown`. A
+model the table does not list (most local servers, newer or niche
+models) is `unknown`, and its estimates print `price unknown`. When the
+user has set a positive `embedding_cost_gate_usd`, an unknown price
+refuses embedding runs with `EMBEDDING_COST_UNPRICED` until the price is
+declared. Ask the user for the provider's rate (USD per million tokens)
+and write the pair beside the other embedding settings:
+
+```bash
+OPEN_SECOND_BRAIN_EMBEDDING_PRICE_MODEL=nomic-embed-text:latest
+OPEN_SECOND_BRAIN_EMBEDDING_PRICE_USD_PER_MTOK=0
+```
+
+(or `embedding_price_model` and `embedding_price_usd_per_mtok` in the
+o2b config). Set both or neither. `0` declares the model free; only use
+it when the user confirms the endpoint costs nothing, because a
+loopback URL can still be a paid proxy. The pair names one model, so
+after a model switch `o2b search check` flags the stale declaration
+until it is updated. Declaring a price never triggers a reindex.
 
 ## Step 3 — macOS: install Homebrew SQLite
 
@@ -120,6 +150,21 @@ o2b search reindex --embeddings
 This walks the vault, chunks every Markdown file, and computes
 embeddings. Cost scales linearly with vault size — a 150-file vault
 typically lands in a few seconds.
+
+When the index already exists and only some chunks lack vectors,
+price the work first with the dry run, then apply it:
+
+```bash
+o2b search vector-backfill
+o2b search vector-backfill --apply
+```
+
+`--path <prefix>` (repeatable) limits the census, the estimate and the
+spend to one part of the vault. For example,
+`o2b search vector-backfill --path Brain/preferences/ --apply` embeds
+just the belief notes, which is what the `semantic` query mode of
+`brain_context_pack` reads. Later edits re-embed only the chunks that
+changed; unchanged chunks keep their vectors.
 
 Verify semantic search works:
 
