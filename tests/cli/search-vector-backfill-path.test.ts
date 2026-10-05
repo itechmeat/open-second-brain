@@ -338,6 +338,8 @@ test.skipIf(!VEC_LOADABLE)(
  * that quoting would not run as printed, the key is omitted instead.
  */
 function expectQuotedNextStep(payload: Record<string, unknown>, posix: string): void {
+  // Pending work is what makes an absent key mean "dropped", not "nothing to advise".
+  expect(payload["pending"]).toBeGreaterThan(0);
   if (process.platform === "win32") expect("next_command" in payload).toBe(false);
   else expect(payload["next_command"]).toBe(posix);
 }
@@ -362,13 +364,25 @@ test.skipIf(!VEC_LOADABLE)("a scoped next step quotes a prefix with a space", as
   expect(json.returncode).toBe(0);
   const payload = JSON.parse(json.stdout) as Record<string, unknown>;
   expectQuotedNextStep(payload, "o2b search vector-backfill --apply --path 'Notes/with space/'");
+
+  // The human advice: the quoted scope off Windows, the rerun line that
+  // names no runnable command on it.
+  const human = await backfillCli(config, ["--path", "Notes/with space/"]);
+  const advice = human.stdout + human.stderr;
+  if (process.platform === "win32") {
+    expect(advice).toContain(RERUN_WITH_SCOPE_LINE);
+    expect(advice).not.toContain("'Notes/with space/'");
+  } else {
+    expect(advice).toContain("--path 'Notes/with space/'");
+    expect(advice).not.toContain(RERUN_WITH_SCOPE_LINE);
+  }
 });
 
 const APPLY_COMMAND = "o2b search vector-backfill --apply";
 
 test("a scope Windows cannot quote drops the scoped next step", () => {
   // POSIX quoting is not a word cmd.exe or PowerShell reads back, so the
-  // advice falls back to the scope-free command plus a reminder.
+  // advice names no command and asks for a rerun with the same flags.
   expect(scopedNextCommand(APPLY_COMMAND, ["Notes/with space/"], "win32")).toBeNull();
   expect(scopedNextCommand(APPLY_COMMAND, [BELIEFS, "Notes/it's/"], "win32")).toBeNull();
 });
