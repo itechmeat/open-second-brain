@@ -17,11 +17,12 @@
  * (search-vector-backfill-price.test.ts).
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { join } from "node:path";
 
 import { indexVault } from "../../src/core/search/indexer.ts";
 import { SearchError } from "../../src/core/search/search-error.ts";
+import { Store } from "../../src/core/search/store.ts";
 import { planVectorBackfill } from "../../src/core/search/vector-backfill.ts";
 import { FAKE_PROVIDER_KEY } from "../helpers/fake-credentials.ts";
 import { startFakeHttp, type FakeHttp } from "../helpers/fake-http.ts";
@@ -101,10 +102,19 @@ test.skipIf(!VEC_LOADABLE)(
   async () => {
     await seed();
     const dry = await planVectorBackfill(semanticConfig(), { pathPrefixes: [BELIEFS] });
-    const applied = await planVectorBackfill(semanticConfig(), {
-      pathPrefixes: [BELIEFS],
-      apply: true,
-    });
+    // The applied run embeds from the plan it priced: one census read,
+    // not a second one the receipt could disagree with.
+    const census = spyOn(Store.prototype, "findChunksWithoutEmbeddings");
+    let applied: Awaited<ReturnType<typeof planVectorBackfill>>;
+    try {
+      applied = await planVectorBackfill(semanticConfig(), {
+        pathPrefixes: [BELIEFS],
+        apply: true,
+      });
+      expect(census).toHaveBeenCalledTimes(1);
+    } finally {
+      census.mockRestore();
+    }
 
     expect(applied.embedded).toBe(dry.pending);
     expect(applied.spend).not.toBeNull();

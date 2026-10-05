@@ -36,6 +36,7 @@ import {
   COST_GATE_KEY,
   EMBEDDING_GATE_REASON,
   type EmbeddingGateReason,
+  type EmbeddingSpendPlan,
   FORCE_COST_FLAG,
   formatEstimatedUsd,
   planEmbeddingSpend,
@@ -1005,6 +1006,13 @@ export interface EmbeddingPhaseOptions {
    * same chunks the phase embeds. Vault-wide when absent.
    */
   readonly scope?: PendingVectorScope;
+  /**
+   * A spend plan the caller already computed, UNFORCED, on this store and
+   * over the same `scope`; the phase embeds from it instead of reading the
+   * pending census a second time, so a caller that reported the plan
+   * embeds exactly what it priced. Recomputed when absent.
+   */
+  readonly plan?: EmbeddingSpendPlan;
   readonly safeguard?: import("../brain/safeguard.ts").Safeguard;
   readonly signal?: AbortSignal;
   /**
@@ -1065,7 +1073,8 @@ export async function runEmbeddingPhase(
     );
   }
 
-  const plan = planEmbeddingSpend(store, config, opts.scope ? { scope: opts.scope } : {});
+  const plan =
+    opts.plan ?? planEmbeddingSpend(store, config, opts.scope ? { scope: opts.scope } : {});
   const pending = plan.pending;
   if (pending.length === 0) return;
 

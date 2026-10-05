@@ -198,6 +198,7 @@ async function planVectorBackfillRun(
       await runEmbeddingPhase(store, config, tally, {
         forceCost: opts.forceCost === true,
         ...(scope ? { scope } : {}),
+        plan,
         ...(opts.safeguard !== undefined ? { safeguard: opts.safeguard } : {}),
         ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
         progress,
