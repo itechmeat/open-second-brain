@@ -124,6 +124,22 @@ function vecRowCount(path: string): number {
   }
 }
 
+/** The two timestamps of one chunk's `embeddings` row, read off disk. */
+function embeddingTimes(path: string, chunkId: number): { createdAt: string; updatedAt: string } {
+  const db = new Database(path, { readonly: true });
+  try {
+    const row = db
+      .query<{ created_at: string; updated_at: string }, [number]>(
+        "SELECT created_at, updated_at FROM embeddings WHERE chunk_id = ?",
+      )
+      .get(chunkId);
+    if (row === null) throw new Error(`no embeddings row for chunk ${chunkId}`);
+    return { createdAt: row.created_at, updatedAt: row.updated_at };
+  } finally {
+    db.close();
+  }
+}
+
 function old(hashes: ReadonlyArray<string>): Array<{ contentHash: string; ref: string }> {
   return hashes.map((contentHash, i) => ({ contentHash, ref: `old-${i}` }));
 }
@@ -185,6 +201,22 @@ describe("replaceDocumentChunks carry-over", () => {
     const census = readEmbedderRecordCensusSync(dbPath);
     expect(census.verdict).toBe("audited");
     if (census.verdict === "audited") expect(census.outcome).toBe("complete");
+  });
+
+  test("a carried vector keeps its created_at and moves its updated_at", async () => {
+    if (!sqliteVecLoadable()) return;
+    const { store, docId, oldIds } = await seededStore();
+    const before = embeddingTimes(dbPath, oldIds[0]!);
+    await Bun.sleep(5);
+    const replaced = store.replaceDocumentChunks(docId, [
+      chunkInput(0, "h0"),
+      chunkInput(1, "h1-edited"),
+      chunkInput(2, "h2"),
+    ]);
+    await store.close();
+    const after = embeddingTimes(dbPath, replaced.chunkIds[0]!);
+    expect(after.createdAt).toBe(before.createdAt);
+    expect(after.updatedAt).not.toBe(before.updatedAt);
   });
 
   test("the plain replaceChunks form carries too and still returns the ids", async () => {
