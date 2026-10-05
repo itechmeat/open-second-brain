@@ -202,6 +202,23 @@ describe("scoreBeliefsByVector", () => {
     ]);
   });
 
+  test("a stored vector longer than its recorded dimension is unusable, never a truncated score", () => {
+    // Recorded at the query's dimension, but the blob holds more values:
+    // a cosine over the first DIMENSION of them is a score of a vector
+    // nobody stored.
+    const query = unit([1, 0, 0, 0]);
+    const scores = scoreBeliefsByVector({
+      model: MODEL,
+      queryVector: query,
+      vectorsByPath: new Map([
+        ["Brain/preferences/long.md", [{ ...row([1, 0, 0, 0, 1]), dimension: DIMENSION }]],
+        ["Brain/preferences/ok.md", [row([0, 1, 0, 0])]],
+      ]),
+    });
+    expect(scores.unembedded).toEqual(["Brain/preferences/long.md"]);
+    expect(scores.order).toEqual(["Brain/preferences/ok.md"]);
+  });
+
   // The store guard rejects such rows only since v1.32.0; an older index
   // can still hold one, and its NaN cosine must not reach the order.
   test("a stored zero or non-finite vector is unusable, never a NaN relevance", () => {
