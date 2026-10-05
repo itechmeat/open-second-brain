@@ -33,6 +33,7 @@ Open Second Brain now prices embedding spend honestly: every estimate names wher
 ### Fixed
 
 - **The managed-file upgrade worker never recreates a removed vault.** The automatic upgrade worker checks again that the vault still exists right before it rewrites managed files or records a failure, and writes nothing when the vault was removed or moved while it ran.
+- **The Hermes anti-drift test no longer fails intermittently on Windows.** It waits for the live `o2b mcp` server and its launcher to exit, and kills the whole process tree if they do not, before removing its temporary directory, so a log file the server still holds open no longer breaks the cleanup.
 
 ### Notes
 
