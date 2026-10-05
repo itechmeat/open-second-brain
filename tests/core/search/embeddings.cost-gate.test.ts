@@ -159,6 +159,32 @@ test("a half pair is refused, naming the missing key", () => {
   expect(noModel.message).toContain(PRICE_MODEL_KEY);
 });
 
+test("an env model never pairs with a config rate", () => {
+  const refusal = refusalOf(() =>
+    resolveWith([`${PRICE_RATE_KEY}: "0.05"`], { [PRICE_MODEL_ENV]: "voyage-3" }),
+  );
+  expect(refusal.code).toBe("INVALID_INPUT");
+  expect(refusal.message).toContain(`${PRICE_MODEL_ENV} is set but ${PRICE_RATE_ENV} is not`);
+});
+
+test("a half-set env pair is refused even over a full config pair", () => {
+  const refusal = refusalOf(() =>
+    resolveWith([`${PRICE_MODEL_KEY}: zembed-1`, `${PRICE_RATE_KEY}: "0.05"`], {
+      [PRICE_RATE_ENV]: "0.06",
+    }),
+  );
+  expect(refusal.code).toBe("INVALID_INPUT");
+  expect(refusal.message).toContain(`${PRICE_RATE_ENV} is set but ${PRICE_MODEL_ENV} is not`);
+});
+
+test("a bad env rate is refused under the env name", () => {
+  const refusal = refusalOf(() =>
+    resolveWith([], { [PRICE_MODEL_ENV]: "voyage-3", [PRICE_RATE_ENV]: "cheap" }),
+  );
+  expect(refusal.code).toBe("INVALID_INPUT");
+  expect(refusal.message).toContain(PRICE_RATE_ENV);
+});
+
 test("a negative or non-numeric rate is refused by name", () => {
   for (const rate of ["-1", "cheap"]) {
     const refusal = refusalOf(() =>

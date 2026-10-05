@@ -2080,10 +2080,12 @@ embedding_price_usd_per_mtok: 0.02
 
 The env twins are `OPEN_SECOND_BRAIN_EMBEDDING_PRICE_MODEL` and
 `OPEN_SECOND_BRAIN_EMBEDDING_PRICE_USD_PER_MTOK`, and they win over the
-config keys. Set both keys or neither; the rate is USD per million tokens,
+config keys as a pair: when either env twin is set, both halves come from
+env and the config pair is ignored, so an env model never pairs with a
+config rate. Set both keys or neither; the rate is USD per million tokens,
 a non-negative number, and `0` declares the model free. A half pair, a
 negative rate or a non-numeric rate fails config resolution with
-`INVALID_INPUT` naming the key. The pair binds the price to one model
+`INVALID_INPUT` naming the key or env variable that supplied it. The pair binds the price to one model
 name (compared case-insensitively), so switching models never re-targets
 it silently: `o2b search check` flags a declaration that names a model
 other than the active one. A price is not part of the embedding identity,

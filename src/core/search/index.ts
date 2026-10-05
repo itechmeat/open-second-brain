@@ -329,31 +329,40 @@ function parseNonNegativeFloat(raw: string | null, fallback: number, fieldName: 
 
 /**
  * The operator's declared embedding price: `embedding_price_model` and
- * `embedding_price_usd_per_mtok`, both or neither, each overridable by its
- * `OPEN_SECOND_BRAIN_EMBEDDING_PRICE_*` env twin. A pair, not a
+ * `embedding_price_usd_per_mtok`, both or neither, overridable as a unit
+ * by their `OPEN_SECOND_BRAIN_EMBEDDING_PRICE_*` env twins. A pair, not a
  * model-keyed map, because the flat parser splits a key on its first
  * colon and model ids carry colons (`nomic-embed-text:latest`); the value
  * side keeps them. Binding the rate to one model name means a model
- * switch never silently re-targets the price. Null when neither is set.
+ * switch never silently re-targets the price. The pair resolves from ONE
+ * source: when either env twin is set both halves come from env, so an
+ * env model never borrows a config rate into a price nobody declared.
+ * Null when neither source sets either half.
  */
 function resolveEmbeddingPriceOverride(
   env: NodeJS.ProcessEnv,
   config: Readonly<Record<string, string>>,
 ): EmbeddingPriceOverride | null {
-  const model = envOrConfig(env, config, EMBEDDING_PRICE_MODEL_ENV, EMBEDDING_PRICE_MODEL_KEY);
-  const rateRaw = envOrConfig(env, config, EMBEDDING_PRICE_RATE_ENV, EMBEDDING_PRICE_RATE_KEY);
+  const set = (layer: Readonly<Record<string, string | undefined>>, name: string) => {
+    const value = layer[name];
+    return value === undefined || value === "" ? null : value;
+  };
+  const fromEnv =
+    set(env, EMBEDDING_PRICE_MODEL_ENV) !== null || set(env, EMBEDDING_PRICE_RATE_ENV) !== null;
+  const [layer, modelName, rateName] = fromEnv
+    ? [env, EMBEDDING_PRICE_MODEL_ENV, EMBEDDING_PRICE_RATE_ENV]
+    : [config, EMBEDDING_PRICE_MODEL_KEY, EMBEDDING_PRICE_RATE_KEY];
+  const model = set(layer, modelName);
+  const rateRaw = set(layer, rateName);
   if (model === null && rateRaw === null) return null;
   if (model === null || rateRaw === null) {
-    const [present, missing] =
-      model === null
-        ? [EMBEDDING_PRICE_RATE_KEY, EMBEDDING_PRICE_MODEL_KEY]
-        : [EMBEDDING_PRICE_MODEL_KEY, EMBEDDING_PRICE_RATE_KEY];
+    const [present, missing] = model === null ? [rateName, modelName] : [modelName, rateName];
     throw new SearchError(
       "INVALID_INPUT",
       `${present} is set but ${missing} is not: declare both or neither`,
     );
   }
-  const usdPerMtok = parseNonNegativeFloat(rateRaw, 0, EMBEDDING_PRICE_RATE_KEY);
+  const usdPerMtok = parseNonNegativeFloat(rateRaw, 0, rateName);
   return Object.freeze({ model, usdPerMtok });
 }
 
