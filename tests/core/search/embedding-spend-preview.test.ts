@@ -22,6 +22,7 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -243,6 +244,36 @@ test("the phase records its own gate result on the tally, at the resolved model"
     });
   } finally {
     await store.close();
+  }
+});
+
+/**
+ * Pinned split, deliberately: the receipt names the model the price was
+ * resolved for - the local provider always embeds with its implicit
+ * model - while the vectors keep the stamp `embedding_model` gives them,
+ * because changing the stamp would re-key (and drop) every existing
+ * local index. The local model is free, so the money statement holds.
+ */
+test("a local receipt names the priced model while vectors keep the configured stamp", async () => {
+  const config = configWith({
+    search_semantic_enabled: "true",
+    embedding_provider: "local",
+    embedding_model: "custom-local",
+  });
+  const store = await openSeeded(config, ["alpha beta gamma"]);
+  const tally: EmbeddingPhaseTally = { embeddingsComputed: 0, embeddingsRetries: 0 };
+  try {
+    await runEmbeddingPhase(store, config, tally, {});
+  } finally {
+    await store.close();
+  }
+  expect(tally.spend?.model).toBe(LOCAL_EMBEDDING_MODEL);
+  const db = new Database(config.dbPath, { readonly: true });
+  try {
+    const stamps = db.query<{ model: string }, []>("SELECT DISTINCT model FROM embeddings").all();
+    expect(stamps.map((row) => row.model)).toEqual(["custom-local"]);
+  } finally {
+    db.close();
   }
 });
 
