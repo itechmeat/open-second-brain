@@ -2371,7 +2371,8 @@ format characters), when it contains NUL, or when it exceeds the cap.
   The response gains a `semantic` object: `model`, `price_source`,
   `query_tokens`, `estimated_usd` (null when the price is unknown),
   `scored` and `unembedded` (kept candidates with no usable vector, which
-  sort after the scored ones by the usual tier and recency keys). The
+  sort after the scored ones within the same tier, then by recency;
+  tier still decides first). The
   counts are taken after the reach filter, so a withheld page appears in
   neither. The mode refuses with a stable `error.data.code`: the semantic
   capability codes (`EMBEDDING_DISABLED`, `EMBEDDING_KEY_MISSING`) for a

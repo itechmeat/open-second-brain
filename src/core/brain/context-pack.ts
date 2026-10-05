@@ -122,6 +122,13 @@ export function isContextPackQueryMode(value: unknown): value is ContextPackQuer
 export { BELIEF_VECTORS_BACKFILL_COMMAND };
 
 /**
+ * The relevance an unembedded candidate reads in `semantic` mode: below
+ * any cosine, so it sorts after every scored candidate of its tier,
+ * negative cosines included.
+ */
+const UNEMBEDDED_RELEVANCE = -2;
+
+/**
  * A `semantic` pack was asked for without the relevance map that mode
  * reads. Packing by recency instead would answer a meaning query with an
  * order that ignores the query, so the call fails by name.
@@ -177,7 +184,7 @@ export interface ContextPackItem extends ContextTransformAnnotations {
 export interface ContextPackSemanticReport {
   /** Kept candidates that had a relevance score. */
   readonly scored: number;
-  /** Ids of kept candidates without one, sorted; they read relevance 0. */
+  /** Ids of kept candidates without one, sorted; they sort after the scored ones of their tier. */
   readonly unembedded: ReadonlyArray<string>;
 }
 
@@ -251,7 +258,7 @@ export interface ContextPackOptions {
   /**
    * Relevance per belief note for the `semantic` mode, keyed by the
    * note's vault-relative POSIX path. A candidate absent from the map has
-   * no usable vector: it reads relevance 0 and is named in
+   * no usable vector: it sorts after every scored candidate of its tier and is named in
    * {@link ContextPackReport.semantic}. Required in `semantic` mode and
    * read in no other.
    */
@@ -575,18 +582,20 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
   // Semantic relevance reads the caller's map over the KEPT candidates
   // only, so the report below is post-reach by construction.
   const unembedded: string[] = [];
+  let scored = 0;
   if (semanticRelevance !== null) {
     for (const c of candidates) {
       const score = semanticRelevance.get(canonicalNotePath(relative(vault, c.path)));
       if (score === undefined) unembedded.push(c.id);
-      else relevanceById.set(c.id, score);
+      else scored += 1;
+      relevanceById.set(c.id, score ?? UNEMBEDDED_RELEVANCE);
     }
   }
   // No kept candidate has a usable vector: a "semantic" order would be
   // pure recency. Refused here, before the receipt and telemetry are
   // emitted, so a refused pack leaves no record of a delivery. An empty
   // candidate set is an empty pack, not a refusal.
-  if (semanticRelevance !== null && candidates.length > 0 && relevanceById.size === 0) {
+  if (semanticRelevance !== null && candidates.length > 0 && scored === 0) {
     throw new SearchError(
       "BELIEF_VECTORS_MISSING",
       `semantic belief order unavailable: none of the ${candidates.length} belief note(s) ` +
@@ -598,7 +607,7 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
       ? {}
       : {
           semantic: Object.freeze({
-            scored: relevanceById.size,
+            scored,
             unembedded: Object.freeze(unembedded.toSorted()),
           }),
         };
