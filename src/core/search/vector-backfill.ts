@@ -38,9 +38,12 @@
 import { resolveSemanticCapability, type SemanticCapability } from "./capability-tier.ts";
 import { planEmbeddingSpend, type EmbeddingGateReason } from "./embedding-spend.ts";
 import { EMBEDDING_PRICE_SOURCE, type EmbeddingPriceSource } from "./embeddings/pricing.ts";
-import { runEmbeddingPhase } from "./indexer.ts";
+import { runEmbeddingPhase, type EmbeddingPhaseTally } from "./indexer.ts";
+import { assertSafePathPrefix } from "./pipeline/request.ts";
 import { Store } from "./store.ts";
+import type { PendingVectorScope } from "./store/chunks.ts";
 import type { ResolvedSearchConfig } from "./types.ts";
+import type { MaintenanceSpendReceipt } from "../brain/maintenance/journal.ts";
 import {
   OPERATION,
   progressCounter,
@@ -53,6 +56,13 @@ export interface VectorBackfillOptions {
   readonly apply?: boolean;
   /** Bypass the configured spend ceiling for this run. */
   readonly forceCost?: boolean;
+  /**
+   * Vault-relative path prefixes the run is limited to. Each one is
+   * validated by {@link assertSafePathPrefix}; the census, the estimate,
+   * the gate and the receipt all read this scope. Empty or absent means
+   * the whole vault.
+   */
+  readonly pathPrefixes?: ReadonlyArray<string>;
   readonly safeguard?: import("../brain/safeguard.ts").Safeguard;
   readonly signal?: AbortSignal;
   /**
@@ -96,6 +106,22 @@ export interface VectorBackfillResult {
   readonly blocked: boolean;
   /** Why the gate would refuse; null when it would not. */
   readonly reason: EmbeddingGateReason | null;
+  /** The prefixes the run was limited to; empty for the whole vault. */
+  readonly pathPrefixes: ReadonlyArray<string>;
+  /**
+   * The spend receipt of an applied run that reached the provider, from
+   * the same scoped plan the dry run reports; null otherwise.
+   */
+  readonly spend: MaintenanceSpendReceipt | null;
+}
+
+/** The argument name an unsafe prefix is refused under. */
+const PATH_PREFIX_ARGUMENT = "path prefix";
+
+/** Validate every prefix by name; an empty list scopes nothing. */
+function pendingScope(pathPrefixes: ReadonlyArray<string>): PendingVectorScope | undefined {
+  for (const prefix of pathPrefixes) assertSafePathPrefix(prefix, PATH_PREFIX_ARGUMENT);
+  return pathPrefixes.length > 0 ? { pathPrefixes } : undefined;
 }
 
 /**
@@ -124,16 +150,19 @@ async function planVectorBackfillRun(
   progress: ProgressCounter,
 ): Promise<VectorBackfillResult> {
   const apply = opts.apply === true;
+  const pathPrefixes = Object.freeze([...(opts.pathPrefixes ?? [])]);
+  const scope = pendingScope(pathPrefixes);
   const capability = resolveSemanticCapability(config.semantic);
   const store = await Store.open(config, { mode: apply ? "write" : "read" });
   try {
-    const plan = planEmbeddingSpend(store, config);
+    const plan = planEmbeddingSpend(store, config, scope ? { scope } : {});
     const chunksTotal = store.counts().chunks;
-    const tally = { embeddingsComputed: 0, embeddingsRetries: 0 };
+    const tally: EmbeddingPhaseTally = { embeddingsComputed: 0, embeddingsRetries: 0 };
 
     if (apply && plan.pending.length > 0) {
       await runEmbeddingPhase(store, config, tally, {
         forceCost: opts.forceCost === true,
+        ...(scope ? { scope } : {}),
         ...(opts.safeguard !== undefined ? { safeguard: opts.safeguard } : {}),
         ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
         progress,
@@ -152,6 +181,8 @@ async function planVectorBackfillRun(
       priceSource: plan.quote.source,
       blocked: plan.gate.blocked,
       reason: plan.gate.reason,
+      pathPrefixes,
+      spend: tally.spend ?? null,
     });
   } finally {
     await store.close();

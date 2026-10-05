@@ -88,10 +88,22 @@ export interface ResolvedSearchRequest {
   readonly hybridDeadlineMs: number | null;
 }
 
-function assertSafePathPrefix(prefix: string | undefined): string | undefined {
+/** The argument name a refused prefix is reported under unless the caller names its own. */
+const PATH_PREFIX_ARGUMENT = "path_prefix";
+
+/**
+ * Refuse a vault-relative path prefix that could reach outside the vault:
+ * a `..` segment, an absolute POSIX path or a Windows drive letter. The
+ * refusal names the argument and the offending value, so a caller passing
+ * several prefixes learns which one was refused.
+ */
+export function assertSafePathPrefix(
+  prefix: string | undefined,
+  argument: string = PATH_PREFIX_ARGUMENT,
+): string | undefined {
   if (!prefix) return undefined;
   if (prefix.includes("..") || prefix.startsWith("/") || /^[A-Za-z]:/.test(prefix)) {
-    throw new SearchError("INVALID_INPUT", "path_prefix escapes vault");
+    throw new SearchError("INVALID_INPUT", `${argument} escapes vault: ${JSON.stringify(prefix)}`);
   }
   return prefix;
 }

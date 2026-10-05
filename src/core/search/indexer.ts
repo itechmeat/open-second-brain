@@ -106,6 +106,7 @@ import {
   excludedCallableVisibilitySurfaces,
 } from "./visibility-surface-registry.ts";
 import type { ChunkInput, LinkInput } from "./store.ts";
+import type { PendingVectorScope } from "./store/chunks.ts";
 import type {
   ChunkWindowCensus,
   EmbedderRecordCensus,
@@ -986,6 +987,12 @@ export interface EmbeddingPhaseTally {
 export interface EmbeddingPhaseOptions {
   /** Bypass the configured spend ceiling for this run. */
   readonly forceCost?: boolean;
+  /**
+   * Path scope of the pending census. It reaches the census only through
+   * the spend plan, so the gate, the refusal and the receipt read the
+   * same chunks the phase embeds. Vault-wide when absent.
+   */
+  readonly scope?: PendingVectorScope;
   readonly safeguard?: import("../brain/safeguard.ts").Safeguard;
   readonly signal?: AbortSignal;
   /**
@@ -1046,7 +1053,7 @@ export async function runEmbeddingPhase(
     );
   }
 
-  const plan = planEmbeddingSpend(store, config);
+  const plan = planEmbeddingSpend(store, config, opts.scope ? { scope: opts.scope } : {});
   const pending = plan.pending;
   if (pending.length === 0) return;
 
