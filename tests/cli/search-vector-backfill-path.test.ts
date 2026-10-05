@@ -170,7 +170,7 @@ test.skipIf(!VEC_LOADABLE)("an unpriced refusal counts the scoped census", async
   expect((refusal as SearchError).message).toContain(`${scopedDry.pending} chunk(s)`);
 });
 
-test.each(["../outside/", "/etc/", "C:/Users/"])(
+test.each(["../outside/", "Brain/../Notes/", "/etc/", "//server/share/", "C:/Users/"])(
   "an unsafe prefix is refused by name (%p)",
   async (prefix) => {
     const refusal = await planVectorBackfill(semanticConfig(), { pathPrefixes: [prefix] }).catch(
@@ -268,6 +268,7 @@ test.skipIf(!VEC_LOADABLE).each([
   ["", []],
   ["", ["--apply"]],
   ["   ", ["--apply"]],
+  ["./", ["--apply"]],
 ] as const)(
   "an empty --path %p exits INVALID_INPUT and embeds nothing (%p)",
   async (prefix, extra) => {
@@ -327,6 +328,26 @@ test.skipIf(!VEC_LOADABLE)(
   },
 );
 
+/**
+ * A prefix that needs quoting is quoted POSIX-style; on Windows, where
+ * that quoting would not run as printed, the key is omitted instead.
+ */
+function expectQuotedNextStep(payload: Record<string, unknown>, posix: string): void {
+  if (process.platform === "win32") expect("next_command" in payload).toBe(false);
+  else expect(payload["next_command"]).toBe(posix);
+}
+
+test.skipIf(!VEC_LOADABLE)("a scoped next step quotes a prefix with a quote", async () => {
+  await seed();
+  writeMd(vault, "Notes/it's/d.md", "# D\n\nA note in a folder whose name has a quote.");
+  await indexVault(semanticConfig());
+  const config = await cliConfig();
+  const json = await backfillCli(config, ["--path", "Notes/it's/", "--json"]);
+  expect(json.returncode).toBe(0);
+  const payload = JSON.parse(json.stdout) as Record<string, unknown>;
+  expectQuotedNextStep(payload, "o2b search vector-backfill --apply --path 'Notes/it'\\''s/'");
+});
+
 test.skipIf(!VEC_LOADABLE)("a scoped next step quotes a prefix with a space", async () => {
   await seed();
   writeMd(vault, "Notes/with space/d.md", "# D\n\nA note in a folder whose name has a space.");
@@ -335,9 +356,7 @@ test.skipIf(!VEC_LOADABLE)("a scoped next step quotes a prefix with a space", as
   const json = await backfillCli(config, ["--path", "Notes/with space/", "--json"]);
   expect(json.returncode).toBe(0);
   const payload = JSON.parse(json.stdout) as Record<string, unknown>;
-  expect(payload["next_command"]).toBe(
-    "o2b search vector-backfill --apply --path 'Notes/with space/'",
-  );
+  expectQuotedNextStep(payload, "o2b search vector-backfill --apply --path 'Notes/with space/'");
 });
 
 const APPLY_COMMAND = "o2b search vector-backfill --apply";
