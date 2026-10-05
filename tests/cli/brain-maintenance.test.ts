@@ -32,6 +32,10 @@ import {
 import { listMetrics } from "../../src/core/brain/metrics.ts";
 import { currentLease, MAINTENANCE_LEASE_NAME } from "../../src/core/brain/maintenance/lease.ts";
 import { MAINTENANCE_EMBEDDINGS_ENV } from "../../src/core/config.ts";
+import {
+  isEmbeddingPriceSource,
+  type EmbeddingPriceSource,
+} from "../../src/core/search/embeddings/pricing.ts";
 import { MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT } from "../../src/core/brain/policy/blocks/maintenance.ts";
 import { sqliteVecLoadable } from "../helpers/sqlite-vec.ts";
 import { startFakeHttp, type FakeHttp } from "../helpers/fake-http.ts";
@@ -573,6 +577,34 @@ describe("the journal listing", () => {
     expect(status.stdout).toContain(
       "(tokens=40, price unknown, model=zembed-1, price_source=unknown)",
     );
+  });
+});
+
+describe("a receipt whose price source this build does not know", () => {
+  test("renders as unrecorded, never as the stray value", async () => {
+    expect(isEmbeddingPriceSource("vendor")).toBe(false);
+    const init = await runCli(["brain", "init", "--vault", vault], { env: baseEnv() });
+    expect(init.returncode).toBe(0);
+    appendJournal(vault, {
+      ts: "2026-09-03T00:00:00Z",
+      holder: "test",
+      verdict: MAINTENANCE_VERDICT.run,
+      task: LANE_TASK.reindex,
+      ok: true,
+      receipt: {
+        model: "voyage-3",
+        tokens: 70,
+        estimatedUsd: 0.0001,
+        forced: false,
+        priceSource: "vendor" as EmbeddingPriceSource,
+      },
+    });
+    const status = await runCli(["brain", "maintenance", "status", "--vault", vault], {
+      env: baseEnv(),
+    });
+    expect(status.returncode).toBe(0);
+    expect(status.stdout).toContain("model=voyage-3, price_source=unrecorded)");
+    expect(status.stdout).not.toContain("vendor");
   });
 });
 

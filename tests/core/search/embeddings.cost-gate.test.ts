@@ -3,7 +3,10 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { evaluateCostGate } from "../../../src/core/search/embedding-spend.ts";
+import {
+  activeEmbeddingModel,
+  evaluateCostGate,
+} from "../../../src/core/search/embedding-spend.ts";
 import { resolveEmbeddingPrice } from "../../../src/core/search/embeddings/pricing.ts";
 import {
   embeddingSignature,
@@ -35,6 +38,15 @@ test("evaluateCostGate blocks when the estimate exceeds a positive gate", () => 
     gateUsd: 0.001,
   });
   expect(r.blocked).toBe(true);
+});
+
+test("an estimate exactly at the gate passes; one micro-dollar over blocks", () => {
+  const texts = ["x".repeat(4_000_000)];
+  const quote = resolveEmbeddingPrice("text-embedding-3-small");
+  const estimate = evaluateCostGate({ texts, quote, gateUsd: 0 }).estimatedUsd!;
+  expect(estimate).toBeGreaterThan(0.000001);
+  expect(evaluateCostGate({ texts, quote, gateUsd: estimate }).blocked).toBe(false);
+  expect(evaluateCostGate({ texts, quote, gateUsd: estimate - 0.000001 }).blocked).toBe(true);
 });
 
 test("evaluateCostGate does not block when forced", () => {
@@ -218,4 +230,12 @@ test("declaring a price never changes the embedding signature", () => {
   ]);
   expect(priced.semantic.priceOverride).toBeDefined();
   expect(signatureOf(priced)).toBe(signatureOf(plain));
+});
+
+test("the configured embedding model wins over the stored one; the stored one fills a gap", () => {
+  const configured = resolveWith(["embedding_model: voyage-3"]);
+  expect(activeEmbeddingModel(configured, "zembed-1")).toBe("voyage-3");
+  const unset = resolveWith([]);
+  expect(unset.semantic.model).toBeNull();
+  expect(activeEmbeddingModel(unset, "zembed-1")).toBe("zembed-1");
 });

@@ -337,6 +337,29 @@ test("a positive gate refuses unforced and records nothing; forced records the b
   }
 });
 
+test("--force-cost under the cap is not recorded as forced", async () => {
+  let server: FakeHttp | null = null;
+  try {
+    server = await startFakeHttp();
+    const config = configWith({
+      ...PRICED_MODEL,
+      embedding_base_url: server.url,
+      embedding_cost_gate_usd: "100",
+    });
+    const store = await openSeeded(config, ["a short chunk well under the cap"]);
+    try {
+      const tally: EmbeddingPhaseTally = { embeddingsComputed: 0, embeddingsRetries: 0 };
+      await runEmbeddingPhase(store, config, tally, { forceCost: true });
+      expect(tally.embeddingsComputed).toBe(1);
+      expect(tally.spend?.forced).toBe(false);
+    } finally {
+      await store.close();
+    }
+  } finally {
+    await server?.close();
+  }
+});
+
 test("embeddingSpendOf reads the receipt off a completed run's stats", async () => {
   const config = configWith({
     search_semantic_enabled: "true",
