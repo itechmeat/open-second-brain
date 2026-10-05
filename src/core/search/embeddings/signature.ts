@@ -11,8 +11,6 @@
  * spend, and compare two signatures for staleness.
  */
 
-import type { KnownPriceQuote, PriceQuote } from "./pricing.ts";
-
 /**
  * Dimension field of a NAMED model whose dimension is left to the model
  * (no `embedding_dimension` configured). The model fixes its own output
@@ -254,12 +252,21 @@ export function utf8ByteFloorUnderTokenBudget(tokens: number): number {
 const TOKENS_PER_PRICED_UNIT = 1_000_000;
 
 /**
+ * The rate half of a price quote (`PriceQuote` in `pricing.ts`), stated
+ * structurally so this kernel imports nothing from the resolver that
+ * imports it: null means nobody stated the price.
+ */
+interface QuotedRate {
+  readonly usdPerMtok: number | null;
+}
+
+/**
  * Estimated spend in USD for `tokens` at the quoted rate: null when the
  * price is unknown, so an unpriced model never reads as free.
  */
-export function estimateCostUsd(tokens: number, quote: KnownPriceQuote): number;
-export function estimateCostUsd(tokens: number, quote: PriceQuote): number | null;
-export function estimateCostUsd(tokens: number, quote: PriceQuote): number | null {
+export function estimateCostUsd(tokens: number, quote: { readonly usdPerMtok: number }): number;
+export function estimateCostUsd(tokens: number, quote: QuotedRate): number | null;
+export function estimateCostUsd(tokens: number, quote: QuotedRate): number | null {
   if (quote.usdPerMtok === null) return null;
   if (quote.usdPerMtok === 0) return 0;
   return (tokens / TOKENS_PER_PRICED_UNIT) * quote.usdPerMtok;
