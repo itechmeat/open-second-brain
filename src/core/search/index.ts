@@ -324,6 +324,10 @@ function parsePositiveFloat(raw: string | null, fallback: number, fieldName: str
 /** Parse a non-negative finite float (e.g. a cost gate; 0 disables). */
 function parseNonNegativeFloat(raw: string | null, fallback: number, fieldName: string): number {
   if (raw === null) return fallback;
+  // `Number("  ")` is 0: a blank gate would read as a gate switched off.
+  if (raw.trim() === "") {
+    throw new SearchError("INVALID_INPUT", `${fieldName} must be a number >= 0, got empty string`);
+  }
   const n = Number(raw);
   if (!Number.isFinite(n) || n < 0) {
     throw new SearchError("INVALID_INPUT", `${fieldName} must be a number >= 0, got '${raw}'`);
@@ -342,7 +346,10 @@ const EMBEDDING_PRICE_RATE_CEILING = 1_000_000;
  */
 function parseEmbeddingPriceRate(raw: string, fieldName: string): number {
   if (!/^\d+(\.\d+)?$/.test(raw)) {
-    throw new SearchError("INVALID_INPUT", `${fieldName} must be a number >= 0, got '${raw}'`);
+    throw new SearchError(
+      "INVALID_INPUT",
+      `${fieldName} must be a plain decimal number >= 0 (for example 0.02), got '${raw}'`,
+    );
   }
   const n = Number(raw);
   if (n > EMBEDDING_PRICE_RATE_CEILING) {
@@ -422,6 +429,12 @@ function rawSetting(
  */
 function parseFiniteFloat(raw: string | null, fallback: number, fieldName: string): number {
   if (raw === null) return fallback;
+  if (raw.trim() === "") {
+    throw new SearchError(
+      "INVALID_INPUT",
+      `${fieldName} must be a finite number, got empty string`,
+    );
+  }
   const n = Number(raw);
   if (!Number.isFinite(n)) {
     throw new SearchError("INVALID_INPUT", `${fieldName} must be a finite number, got '${raw}'`);

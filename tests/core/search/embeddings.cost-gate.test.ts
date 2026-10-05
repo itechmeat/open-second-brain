@@ -35,6 +35,45 @@ test("embedding_cost_gate_usd is parsed from config", () => {
   expect(cfg.semantic.costGateUsd).toBe(2.5);
 });
 
+const COST_GATE_ENV = "OPEN_SECOND_BRAIN_EMBEDDING_COST_GATE";
+
+/** Resolve `lines` with `value` (or nothing) as the gate env twin, restoring it after. */
+function resolveGate(lines: ReadonlyArray<string>, value?: string): ResolvedSearchConfig {
+  writeFileSync(config, [`vault: "${tmp}"`, ...lines, ""].join("\n"));
+  const saved = process.env[COST_GATE_ENV];
+  if (value === undefined) delete process.env[COST_GATE_ENV];
+  else process.env[COST_GATE_ENV] = value;
+  try {
+    return resolveSearchConfig({ vault: tmp, configPath: config });
+  } finally {
+    if (saved === undefined) delete process.env[COST_GATE_ENV];
+    else process.env[COST_GATE_ENV] = saved;
+  }
+}
+
+test("a blank cost gate is refused, never read as a gate of 0", () => {
+  // `Number("  ")` is 0, which would silently switch the gate off.
+  for (const run of [
+    () => resolveGate(["embedding_cost_gate_usd: 1"], "  "),
+    () => resolveGate(['embedding_cost_gate_usd: "  "']),
+  ]) {
+    const refusal = refusalOf(run);
+    expect(refusal.code).toBe("INVALID_INPUT");
+    expect(refusal.message).toContain("embedding_cost_gate_usd must be a number >= 0");
+    expect(refusal.message).toContain("got empty string");
+  }
+});
+
+test("an empty cost gate env twin still counts as unset", () => {
+  expect(resolveGate(["embedding_cost_gate_usd: 1"], "").semantic.costGateUsd).toBe(1);
+});
+
+test("a blank rerank floor is refused, never read as 0", () => {
+  const refusal = refusalOf(() => resolveGate(['search_rerank_min_score: "  "']));
+  expect(refusal.code).toBe("INVALID_INPUT");
+  expect(refusal.message).toContain("must be a finite number, got empty string");
+});
+
 // ── operator price pair ──────────────────────────────────────────────────────
 
 const PRICE_MODEL_KEY = "embedding_price_model";
@@ -132,6 +171,17 @@ test("a negative or non-numeric rate is refused by name", () => {
     );
     expect(refusal.code).toBe("INVALID_INPUT");
     expect(refusal.message).toContain(PRICE_RATE_KEY);
+  }
+});
+
+test("a rate that is not a plain decimal is refused with an example", () => {
+  for (const rate of [".5", "5."]) {
+    const refusal = refusalOf(() =>
+      resolveWith([`${PRICE_MODEL_KEY}: zembed-1`, `${PRICE_RATE_KEY}: "${rate}"`]),
+    );
+    expect(refusal.message).toBe(
+      `${PRICE_RATE_KEY} must be a plain decimal number >= 0 (for example 0.02), got '${rate}'`,
+    );
   }
 });
 
