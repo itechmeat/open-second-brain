@@ -22,7 +22,11 @@ import {
   type ExpandedProvider,
   type ProviderProfile,
 } from "./embeddings/registry.ts";
-import type { CredentialSourceContext } from "./embeddings/credential-report.ts";
+import {
+  EMBEDDING_KEY_CONFIG,
+  EMBEDDING_KEY_ENV,
+  type CredentialSourceContext,
+} from "./embeddings/credential-report.ts";
 import { loadRerankRegistry, expandRegisteredRerankProvider } from "./rerank/registry.ts";
 import { decisionModelModeFor, resolveDecisionModelConfig } from "../decision-model/config.ts";
 import { resolveEmbeddingPrefixes } from "./embeddings/presets.ts";
@@ -650,12 +654,7 @@ export function resolveSearchConfig(opts: {
     "OPEN_SECOND_BRAIN_EMBEDDING_MODEL",
     "embedding_model",
   );
-  const explicitApiKey = envOrConfig(
-    env,
-    config,
-    "OPEN_SECOND_BRAIN_EMBEDDING_KEY",
-    "embedding_api_key",
-  );
+  const explicitApiKey = envOrConfig(env, config, EMBEDDING_KEY_ENV, EMBEDDING_KEY_CONFIG);
   // Explicit config/env always wins over the registry profile's fields.
   const baseUrl = explicitBaseUrl ?? registryExpansion?.baseUrl ?? null;
   // The plain-http opt-out binds to the URL the operator wrote down: the

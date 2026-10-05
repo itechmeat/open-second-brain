@@ -3,6 +3,10 @@
  */
 
 import { resolveVault } from "../core/config.ts";
+import {
+  EMBEDDING_KEY_CONFIG,
+  EMBEDDING_KEY_ENV,
+} from "../core/search/embeddings/credential-report.ts";
 
 export const NO_VAULT_ERROR =
   "error: no vault configured. Pass --vault <path> explicitly, " +
@@ -102,8 +106,8 @@ export function resolveSemanticConfigState(
   // `discoverConfig().data` is typed `Record<string, string>`, but
   // this helper accepts the wider `unknown`-keyed map for forward
   // compat with future callers; coerce defensively without throwing.
-  const cfgKey = configData["embedding_api_key"];
-  const envKey = env["OPEN_SECOND_BRAIN_EMBEDDING_KEY"];
+  const cfgKey = configData[EMBEDDING_KEY_CONFIG];
+  const envKey = env[EMBEDDING_KEY_ENV];
   const keyPresent =
     (typeof cfgKey === "string" && cfgKey.trim().length > 0) ||
     (typeof envKey === "string" && envKey.trim().length > 0);
