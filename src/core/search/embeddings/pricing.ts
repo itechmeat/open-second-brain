@@ -24,10 +24,10 @@ export const EMBEDDING_PRICE_SOURCE = Object.freeze({
 export type EmbeddingPriceSource =
   (typeof EMBEDDING_PRICE_SOURCE)[keyof typeof EMBEDDING_PRICE_SOURCE];
 
-/** Membership list, in resolution order after the operator declaration. */
+/** Membership list, in resolution order. */
 export const EMBEDDING_PRICE_SOURCES: ReadonlyArray<EmbeddingPriceSource> = Object.freeze([
-  EMBEDDING_PRICE_SOURCE.builtin,
   EMBEDDING_PRICE_SOURCE.operator,
+  EMBEDDING_PRICE_SOURCE.builtin,
   EMBEDDING_PRICE_SOURCE.unknown,
 ]);
 
