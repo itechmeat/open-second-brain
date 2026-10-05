@@ -89,14 +89,18 @@ export function msToWholeDays(durationMs: number): number {
  * holds a pinned clock cannot accidentally measure against a second,
  * later one mid-scan.
  *
- * The mtime is floored to the whole millisecond `nowMs` is measured in
- * (`Date.now()`): the filesystem stamps a sub-millisecond mtime, so a
- * file written within the clock's own millisecond would otherwise read
- * as stamped in the future - a precision artefact, not clock skew.
+ * A negative age within the clock's own millisecond is age zero: `nowMs`
+ * is a whole millisecond (`Date.now()`) while the filesystem stamps a
+ * sub-millisecond mtime, so a file written in that millisecond would
+ * otherwise read as stamped in the future - a precision artefact, not
+ * clock skew. Every other age keeps its fraction, so an mtime a whole
+ * millisecond or more ahead still reads negative.
  */
 export function fileAgeMs(path: string, nowMs: number): number | null {
   try {
-    return nowMs - Math.floor(statSync(path).mtimeMs);
+    const mtimeMs = statSync(path).mtimeMs;
+    const ageMs = nowMs - mtimeMs;
+    return ageMs < 0 && Math.floor(mtimeMs) === Math.floor(nowMs) ? 0 : ageMs;
   } catch {
     return null;
   }

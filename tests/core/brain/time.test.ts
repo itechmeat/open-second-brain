@@ -96,6 +96,23 @@ describe("fileAgeMs", () => {
     }
   });
 
+  // Only the same-millisecond artefact is absorbed: an older file keeps its
+  // fractional age, so one just under a day old is not rounded up into it.
+  test("a file just under a day old keeps its fraction and reads zero days", () => {
+    const dir = makeTempDir();
+    try {
+      const path = join(dir, "almost-a-day.md");
+      writeFileSync(path, "x");
+      const stampedMs = NOW_MS - MS_PER_DAY + 0.5;
+      utimesSync(path, stampedMs / 1000, stampedMs / 1000);
+      expect(statSync(path).mtimeMs).toBeGreaterThan(NOW_MS - MS_PER_DAY);
+      expect(fileAgeMs(path, NOW_MS)).toBeLessThan(MS_PER_DAY);
+      expect(msToWholeDays(fileAgeMs(path, NOW_MS) ?? Number.NaN)).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("returns null for a path that does not exist", () => {
     const dir = makeTempDir();
     try {
