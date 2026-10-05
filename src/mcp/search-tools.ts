@@ -105,6 +105,9 @@ import { emitGatedTelemetry } from "../core/brain/continuity/emit.ts";
 import { recordQueryDemand, recordRecallAdequacyDemand } from "../core/brain/query-demand.ts";
 
 const MCP_LIMIT_MAX = 50;
+
+/** The longest `query` a recall tool accepts, advertised and enforced from here. */
+export const MCP_QUERY_MAX_CHARS = 2000;
 const MCP_CONTENT_MAX = 600;
 const SEARCH_TIMEOUT_MS = 10_000;
 /** Surfaced rows named as source refs on one recall-telemetry record. */
@@ -116,7 +119,7 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
     query: {
       type: "string",
       minLength: 1,
-      maxLength: 2000,
+      maxLength: MCP_QUERY_MAX_CHARS,
       description:
         "What to recall from the vault. Matched against the index by keyword, semantics, or both.",
     },
@@ -923,8 +926,11 @@ async function toolBrainSearch(
   if (typeof query !== "string" || query.trim() === "") {
     throw new MCPError(INVALID_PARAMS, "missing required argument: query");
   }
-  if (query.length > 2000) {
-    throw new MCPError(INVALID_PARAMS, "argument 'query' exceeds 2000 characters");
+  if (query.length > MCP_QUERY_MAX_CHARS) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `argument 'query' exceeds ${MCP_QUERY_MAX_CHARS} characters`,
+    );
   }
 
   let limit = 10;
@@ -1422,7 +1428,7 @@ const RECALL_FEEDBACK_INPUT_SCHEMA: Record<string, unknown> = {
     query: {
       type: "string",
       minLength: 1,
-      maxLength: 2000,
+      maxLength: MCP_QUERY_MAX_CHARS,
       description: "The query that produced the judged result; re-run to recover its layer scores.",
     },
     result_path: {

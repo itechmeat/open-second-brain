@@ -75,7 +75,7 @@ import { readableAtContextReachOrUndefined } from "./reach-readable.ts";
 import { reachView } from "../../core/brain/reach-view.ts";
 import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { vaultPathField } from "../vault-path-field.ts";
-import { searchErrorToMcp } from "../search-tools.ts";
+import { MCP_QUERY_MAX_CHARS, searchErrorToMcp } from "../search-tools.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import {
   AGENT_SCOPE_SCHEMA,
@@ -206,10 +206,10 @@ async function toolBrainContextPack(
       );
     }
   }
-  if (query !== undefined && query.length > 2000) {
+  if (query !== undefined && query.length > MCP_QUERY_MAX_CHARS) {
     throw new MCPError(
       INVALID_PARAMS,
-      "brain_context_pack: argument 'query' exceeds 2000 characters",
+      `brain_context_pack: argument 'query' exceeds ${MCP_QUERY_MAX_CHARS} characters`,
     );
   }
   const includeLanes = coerceBool(args, "lanes");
@@ -1042,7 +1042,7 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         query: {
           type: "string",
-          maxLength: 2000,
+          maxLength: MCP_QUERY_MAX_CHARS,
           description:
             "Optional query. Read as a case/Unicode-insensitive substring filter on topic + principle unless `query_mode` says otherwise.",
         },
