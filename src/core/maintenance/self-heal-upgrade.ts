@@ -134,10 +134,19 @@ export function runSelfHealUpgrade(
   }
 }
 
+/**
+ * Whether `vault` is no longer an initialised vault. Asked again right
+ * before every write, not only once at the start: a vault removed or moved
+ * while the worker plans would otherwise come back as a failure marker, a
+ * metrics row or rewritten managed files, recreating a directory nobody
+ * wants.
+ */
+function vaultGone(vault: string): boolean {
+  return !existsSync(brainConfigPath(vault));
+}
+
 function attempt(vault: string, now: Date): SelfHealUpgradeRun {
-  // A vault removed or moved since the spawn: writing a marker would
-  // recreate a directory nobody wants, so nothing is written at all.
-  if (!existsSync(brainConfigPath(vault))) return run(SELF_HEAL_UPGRADE_OUTCOME.notInitialized);
+  if (vaultGone(vault)) return run(SELF_HEAL_UPGRADE_OUTCOME.notInitialized);
   if (selfHealUpgradeBackoffActive(readSelfHealUpgradeFailure(vault), now)) {
     return run(SELF_HEAL_UPGRADE_OUTCOME.backoff);
   }
@@ -151,6 +160,7 @@ function attempt(vault: string, now: Date): SelfHealUpgradeRun {
       return run(SELF_HEAL_UPGRADE_OUTCOME.current);
     }
     pending = plan.files.filter((f) => f.status === "update").map((f) => f.path);
+    if (vaultGone(vault)) return run(SELF_HEAL_UPGRADE_OUTCOME.notInitialized);
     const applied = applyUpgrade(vault, { now });
     clearSelfHealUpgradeFailure(vault);
     recordRow(vault, {
@@ -160,6 +170,9 @@ function attempt(vault: string, now: Date): SelfHealUpgradeRun {
     });
     return run(SELF_HEAL_UPGRADE_OUTCOME.applied, applied.files_updated);
   } catch (e) {
+    // A plan or an apply that failed because the vault went away under it
+    // is not a failure to record: there is no vault left to record it in.
+    if (vaultGone(vault)) return run(SELF_HEAL_UPGRADE_OUTCOME.notInitialized);
     const error = message(e);
     try {
       recordSelfHealUpgradeFailure(vault, error, pending, now);
