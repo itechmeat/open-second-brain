@@ -126,13 +126,42 @@ test("a bad env rate is refused under the env name", () => {
 });
 
 test("a negative or non-numeric rate is refused by name", () => {
-  for (const rate of ["-1", "cheap"]) {
+  for (const rate of ["-1", "cheap", "NaN", "Infinity", "-Infinity", "0x10", "1e3", "1e308"]) {
     const refusal = refusalOf(() =>
       resolveWith([`${PRICE_MODEL_KEY}: zembed-1`, `${PRICE_RATE_KEY}: "${rate}"`]),
     );
     expect(refusal.code).toBe("INVALID_INPUT");
     expect(refusal.message).toContain(PRICE_RATE_KEY);
   }
+});
+
+test("a blank half is a missing half, never a declared free price", () => {
+  // `Number("  ")` is 0: a whitespace rate used to resolve to an operator
+  // price of $0 - the unknown-reads-as-free defect this pair exists to end.
+  const blankRate = refusalOf(() =>
+    resolveWith([`${PRICE_MODEL_KEY}: zembed-1`, `${PRICE_RATE_KEY}: "  "`]),
+  );
+  expect(blankRate.code).toBe("INVALID_INPUT");
+  expect(blankRate.message).toContain(`${PRICE_MODEL_KEY} is set but ${PRICE_RATE_KEY} is not`);
+  const blankEnvRate = refusalOf(() =>
+    resolveWith([], { [PRICE_MODEL_ENV]: "voyage-3", [PRICE_RATE_ENV]: " " }),
+  );
+  expect(blankEnvRate.message).toContain(`${PRICE_MODEL_ENV} is set but ${PRICE_RATE_ENV} is not`);
+  const blankModel = refusalOf(() =>
+    resolveWith([], { [PRICE_MODEL_ENV]: "  ", [PRICE_RATE_ENV]: "0.05" }),
+  );
+  expect(blankModel.message).toContain(`${PRICE_RATE_ENV} is set but ${PRICE_MODEL_ENV} is not`);
+});
+
+test("a rate above the ceiling is refused by name; the ceiling itself resolves", () => {
+  const refusal = refusalOf(() =>
+    resolveWith([`${PRICE_MODEL_KEY}: zembed-1`, `${PRICE_RATE_KEY}: "1000001"`]),
+  );
+  expect(refusal.code).toBe("INVALID_INPUT");
+  expect(refusal.message).toContain(PRICE_RATE_KEY);
+  expect(refusal.message).toContain("1000000");
+  const ceiling = resolveWith([`${PRICE_MODEL_KEY}: zembed-1`, `${PRICE_RATE_KEY}: "1000000"`]);
+  expect(ceiling.semantic.priceOverride).toEqual({ model: "zembed-1", usdPerMtok: 1_000_000 });
 });
 
 test("without the pair priceOverride is absent", () => {

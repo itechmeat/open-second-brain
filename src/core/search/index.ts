@@ -331,6 +331,29 @@ function parseNonNegativeFloat(raw: string | null, fallback: number, fieldName: 
   return n;
 }
 
+/** The highest declarable embedding rate, in USD per million tokens. */
+const EMBEDDING_PRICE_RATE_CEILING = 1_000_000;
+
+/**
+ * Parse a declared embedding rate. Only a plain decimal spelling is a
+ * price: `Number()` would read `0x10`, `1e3` or `Infinity` as numbers an
+ * operator never wrote as a rate. A rate above the ceiling is a typo, not
+ * a price, and would overflow every estimate built on it.
+ */
+function parseEmbeddingPriceRate(raw: string, fieldName: string): number {
+  if (!/^\d+(\.\d+)?$/.test(raw)) {
+    throw new SearchError("INVALID_INPUT", `${fieldName} must be a number >= 0, got '${raw}'`);
+  }
+  const n = Number(raw);
+  if (n > EMBEDDING_PRICE_RATE_CEILING) {
+    throw new SearchError(
+      "INVALID_INPUT",
+      `${fieldName} must be at most ${EMBEDDING_PRICE_RATE_CEILING} USD per million tokens, got '${raw}'`,
+    );
+  }
+  return n;
+}
+
 /**
  * The operator's declared embedding price: `embedding_price_model` and
  * `embedding_price_usd_per_mtok`, both or neither, overridable as a unit
@@ -347,8 +370,10 @@ function resolveEmbeddingPriceOverride(
   env: NodeJS.ProcessEnv,
   config: Readonly<Record<string, string>>,
 ): EmbeddingPriceOverride | null {
+  // A blank half is a missing half: `Number("  ")` is 0, so a whitespace
+  // rate would otherwise declare an unpriced model free.
   const set = (layer: Readonly<Record<string, string | undefined>>, name: string) => {
-    const value = layer[name];
+    const value = layer[name]?.trim();
     return value === undefined || value === "" ? null : value;
   };
   const fromEnv =
@@ -366,7 +391,7 @@ function resolveEmbeddingPriceOverride(
       `${present} is set but ${missing} is not: declare both or neither`,
     );
   }
-  const usdPerMtok = parseNonNegativeFloat(rateRaw, 0, rateName);
+  const usdPerMtok = parseEmbeddingPriceRate(rateRaw, rateName);
   return Object.freeze({ model, usdPerMtok });
 }
 
