@@ -2001,6 +2001,7 @@ export async function buildSearchStatusBlock(ctx: ServerContext): Promise<Record
     const {
       embedding_signature: _embeddingSignature,
       estimated_refresh_cost_usd: _estimatedRefreshCostUsd,
+      refresh_price_source: _refreshPriceSource,
       warnings,
       ...rest
     } = serializeIndexStatus(snap);

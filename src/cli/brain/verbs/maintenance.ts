@@ -39,7 +39,12 @@ import {
   type LaneTaskId,
   type MaintenanceTaskResult,
 } from "../../../core/brain/maintenance/lane.ts";
-import { listJournal, MAINTENANCE_JOURNAL_CAP } from "../../../core/brain/maintenance/journal.ts";
+import {
+  listJournal,
+  MAINTENANCE_JOURNAL_CAP,
+  recordedPriceSource,
+  type MaintenanceSpendReceipt,
+} from "../../../core/brain/maintenance/journal.ts";
 import {
   customTasksOffNotice,
   resolveCustomTasks,
@@ -243,7 +248,9 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
           // the task never ran; rendering it as FAILED would report an
           // attempt that did not happen.
           const outcome = e.ok === undefined ? "" : ` ${e.ok ? "ok" : "FAILED"}`;
-          ok(`  ${e.ts}  ${e.verdict}${e.task ? `  ${e.task}${outcome}` : ""}`);
+          ok(
+            `  ${e.ts}  ${e.verdict}${e.task ? `  ${e.task}${outcome}` : ""}${journalReceiptSuffix(e.receipt)}`,
+          );
         }
       }
       return MAINTENANCE_EXIT.ok;
@@ -498,11 +505,26 @@ export function renderTaskLine(t: MaintenanceTaskResult): string {
     t.timed_out === true ? `TIMED OUT (${t.error})` : t.ok ? "ok" : `FAILED (${t.error})`;
   const line = `${t.name}: ${outcome} in ${t.duration_ms}ms`;
   if (t.receipt === undefined) return line;
+  return `${line} (${receiptFields(t.receipt)})`;
+}
+
+/** A spend receipt's tokens, estimate and model, as the task line prints them. */
+function receiptFields(receipt: MaintenanceSpendReceipt): string {
   const estimate =
-    t.receipt.estimatedUsd === null
+    receipt.estimatedUsd === null
       ? PRICE_UNKNOWN_LABEL
-      : `estimatedUsd=${t.receipt.estimatedUsd.toFixed(USD_DECIMALS)}`;
-  return `${line} (tokens=${t.receipt.tokens}, ${estimate}, model=${t.receipt.model ?? "unknown"})`;
+      : `estimatedUsd=${receipt.estimatedUsd.toFixed(USD_DECIMALS)}`;
+  return `tokens=${receipt.tokens}, ${estimate}, model=${receipt.model ?? "unknown"}`;
+}
+
+/**
+ * A journaled receipt for the status listing: the task line's fields plus
+ * the recorded price source, so a row written before sources existed
+ * reads as unrecorded instead of as a known price.
+ */
+function journalReceiptSuffix(receipt: MaintenanceSpendReceipt | undefined): string {
+  if (receipt === undefined) return "";
+  return `  (${receiptFields(receipt)}, price_source=${recordedPriceSource(receipt)})`;
 }
 
 /**

@@ -22,7 +22,14 @@ import {
   type MaintenanceSpendReceipt,
   type MaintenanceTaskResult,
 } from "../../src/core/brain/maintenance/lane.ts";
-import { listJournal, MAINTENANCE_JOURNAL_CAP } from "../../src/core/brain/maintenance/journal.ts";
+import {
+  appendJournal,
+  listJournal,
+  MAINTENANCE_JOURNAL_CAP,
+  MAINTENANCE_SPEND_METRIC,
+  MAINTENANCE_VERDICT,
+} from "../../src/core/brain/maintenance/journal.ts";
+import { listMetrics } from "../../src/core/brain/metrics.ts";
 import { currentLease, MAINTENANCE_LEASE_NAME } from "../../src/core/brain/maintenance/lease.ts";
 import { MAINTENANCE_EMBEDDINGS_ENV } from "../../src/core/config.ts";
 import { MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT } from "../../src/core/brain/policy/blocks/maintenance.ts";
@@ -525,6 +532,50 @@ describe("renderTaskLine", () => {
   });
 });
 
+describe("the journal listing", () => {
+  test("a receipt written before price sources renders as unrecorded, its estimate as written", async () => {
+    const init = await runCli(["brain", "init", "--vault", vault], { env: baseEnv() });
+    expect(init.returncode).toBe(0);
+    appendJournal(vault, {
+      ts: "2026-09-01T00:00:00Z",
+      holder: "test",
+      verdict: MAINTENANCE_VERDICT.run,
+      task: LANE_TASK.reindex,
+      ok: true,
+      receipt: {
+        model: "text-embedding-3-small",
+        tokens: 500,
+        estimatedUsd: 0.0123,
+        forced: false,
+      },
+    });
+    appendJournal(vault, {
+      ts: "2026-09-02T00:00:00Z",
+      holder: "test",
+      verdict: MAINTENANCE_VERDICT.run,
+      task: LANE_TASK.reindex,
+      ok: true,
+      receipt: {
+        model: "zembed-1",
+        tokens: 40,
+        estimatedUsd: null,
+        forced: true,
+        priceSource: "unknown",
+      },
+    });
+    const status = await runCli(["brain", "maintenance", "status", "--vault", vault], {
+      env: baseEnv(),
+    });
+    expect(status.returncode).toBe(0);
+    expect(status.stdout).toContain(
+      "(tokens=500, estimatedUsd=0.0123, model=text-embedding-3-small, price_source=unrecorded)",
+    );
+    expect(status.stdout).toContain(
+      "(tokens=40, price unknown, model=zembed-1, price_source=unknown)",
+    );
+  });
+});
+
 describe("formatSpendBanner", () => {
   test("names the model, the pending census and the gate - including a zero gate", () => {
     expect(
@@ -620,7 +671,13 @@ describe("the spend surface end to end", () => {
       expect(first.returncode).toBe(0);
       const payload = JSON.parse(first.stdout) as {
         spend?: {
-          banner: { model: string; pendingChunks: number; estimatedUsd: number; gateUsd: number };
+          banner: {
+            model: string;
+            pendingChunks: number;
+            estimatedUsd: number;
+            priceSource: string;
+            gateUsd: number;
+          };
           receipt: MaintenanceSpendReceipt;
         };
         tasks: Array<{ name: string; ok: boolean; receipt?: MaintenanceSpendReceipt }>;
@@ -633,6 +690,11 @@ describe("the spend surface end to end", () => {
       expect(payload.spend?.receipt).toEqual(reindex?.receipt);
       expect(payload.spend?.receipt.tokens).toBeGreaterThan(0);
       expect(payload.spend?.receipt.forced).toBe(false);
+      // Who stated the price rides the banner, the receipt and the metric.
+      expect(payload.spend?.banner.priceSource).toBe("builtin");
+      expect(payload.spend?.receipt.priceSource).toBe("builtin");
+      const metric = listMetrics(vault, { surface: MAINTENANCE_SPEND_METRIC }).at(-1);
+      expect(metric?.payload["price_source"]).toBe("builtin");
 
       // The receipt the lane journaled agrees with the row it reported.
       const status = await runCli(["brain", "maintenance", "status", "--vault", vault, "--json"], {

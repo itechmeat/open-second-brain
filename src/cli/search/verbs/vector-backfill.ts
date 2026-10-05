@@ -96,6 +96,7 @@ function jsonForResult(result: VectorBackfillResult): Record<string, unknown> {
     // Null rather than zero when the model carries no known price: a
     // missing price is not a free run.
     estimated_cost_usd: result.estimatedCostUsd,
+    price_source: result.priceSource,
   };
 }
 

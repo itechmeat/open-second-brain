@@ -174,6 +174,7 @@ export function serializeIndexStatus(s: IndexStatusSnapshot): Record<string, unk
     embedding_dimension: s.embeddingDimension,
     embedding_signature: s.embeddingSignature,
     estimated_refresh_cost_usd: s.estimatedRefreshCostUsd,
+    refresh_price_source: s.refreshPriceSource,
     vec_extension: s.vecExtension,
     semantic_enabled: s.semanticEnabled,
     embedding_key_present: s.embeddingKeyPresent,

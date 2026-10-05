@@ -7,7 +7,10 @@
  * sweep on append, matching the activation-store discipline.
  */
 
-import type { EmbeddingPriceSource } from "../../search/embeddings/pricing.ts";
+import {
+  isEmbeddingPriceSource,
+  type EmbeddingPriceSource,
+} from "../../search/embeddings/pricing.ts";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -125,6 +128,22 @@ export interface MaintenanceSpendReceipt {
    * price sources existed: such a row's source is unrecorded, not known.
    */
   readonly priceSource?: EmbeddingPriceSource;
+}
+
+/** How a receipt written before price sources existed names its source. */
+export const PRICE_SOURCE_UNRECORDED = "unrecorded";
+
+/**
+ * The price source a journaled receipt recorded, read back off disk:
+ * {@link PRICE_SOURCE_UNRECORDED} for a row written before price sources
+ * existed (or carrying a value this build does not know), never a guess.
+ */
+export function recordedPriceSource(
+  receipt: MaintenanceSpendReceipt,
+): EmbeddingPriceSource | typeof PRICE_SOURCE_UNRECORDED {
+  return isEmbeddingPriceSource(receipt.priceSource)
+    ? receipt.priceSource
+    : PRICE_SOURCE_UNRECORDED;
 }
 
 /**
