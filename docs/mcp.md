@@ -2419,5 +2419,8 @@ format characters), when it contains NUL, or when it exceeds the cap.
   and `brain_tune` refuses to save a winner measured with the semantic
   lane missing: `EMBEDDING_COST_UNPRICED` for the cost gate,
   `EMBEDDING_KEY_MISSING` or `EMBEDDING_DISABLED` for a blocked tier,
-  `EMBEDDING_PROVIDER_HTTP` when the provider did not answer, each naming
-  the remedy.
+  `EMBEDDING_PROVIDER_HTTP` when the provider did not answer, and the
+  same `EMBEDDING_PROVIDER_HTTP` for any other stop that left the hybrid
+  caller keyword-only (the composite deadline, an empty query vector, an
+  empty fit), with a remedy naming `search_hybrid_deadline_ms` or the
+  input window. Each refusal names the remedy.

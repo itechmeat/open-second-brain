@@ -161,8 +161,10 @@ the message names the files and advises `o2b brain upgrade --dry-run` to
 review a plan that reads the edit. Each write checks the file again right
 before it replaces it, so an edit that lands mid-apply is left as it is;
 when earlier files were already rewritten the message names them and
-offers `o2b brain rollback <run_id>` (without `--force-rollback`, which
-would destroy the edit) or a re-run of the dry run. With `--apply --json`
+advises the same dry-run re-plan; a rollback is deliberately not
+offered, because the pre-apply snapshot predates the rewritten files,
+so its own drift guard would refuse it, and forcing it would destroy
+the edit. With `--apply --json`
 a refusal prints `{ "ok": false, "error", "run_id", "drifted" }`, where
 `drifted` lists the refused paths. A file that holds bytes which are not
 valid UTF-8 and was not edited still upgrades.
