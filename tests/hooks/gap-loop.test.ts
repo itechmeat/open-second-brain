@@ -309,15 +309,13 @@ describe("gap-promote hook audit line and auto-close", () => {
     );
     expect(run.exit).toBe(0);
     const [details] = auditDetails();
-    const codes = details?.["retrieval_degraded"];
-    expect(Array.isArray(codes)).toBe(true);
-    expect((codes as ReadonlyArray<unknown>).length).toBeGreaterThan(0);
-    for (const code of codes as ReadonlyArray<unknown>) {
-      expect(Object.values(RETRIEVAL_DEGRADATION)).toContain(code);
-    }
-    expect(new Set(codes as ReadonlyArray<unknown>).size).toBe(
-      (codes as ReadonlyArray<unknown>).length,
-    );
+    const raw = details?.["retrieval_degraded"];
+    expect(Array.isArray(raw)).toBe(true);
+    const codes = raw as ReadonlyArray<string>;
+    expect(codes.length).toBeGreaterThan(0);
+    const known: ReadonlyArray<string> = Object.values(RETRIEVAL_DEGRADATION);
+    for (const code of codes) expect(known).toContain(code);
+    expect(new Set(codes).size).toBe(codes.length);
     // Reported, not judged: the task stays open exactly as it would have.
     expect(details?.["kept"]).toBe(1);
   });
