@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import {
   existsSync,
   mkdtempSync,
@@ -352,6 +353,28 @@ describe("expectBefore compare-before-write", () => {
       atomicWriteFileSync(target, "next\n", { expectBefore: "same\n", skipIfUnchanged: true }),
     ).toBe(true);
     expect(readFileSync(target, "utf8")).toBe("next\n");
+    expect(tempFiles()).toEqual([]);
+  });
+
+  test("an edit landing after the temp write is refused before the rename", () => {
+    const target = join(tmp, "x.md");
+    writeFileSync(target, "old\n");
+    // The first fsync is the temp file's: by then the up-front check has
+    // passed and the temp file exists, so only the re-check before the
+    // rename can see this edit.
+    const realFsync = fs.fsyncSync;
+    const spy = spyOn(fs, "fsyncSync").mockImplementationOnce((fd) => {
+      realFsync(fd);
+      writeFileSync(target, "edit during the write\n");
+    });
+    try {
+      const err = driftOf(() => atomicWriteFileSync(target, "new\n", { expectBefore: "old\n" }));
+      expect(spy).toHaveBeenCalled();
+      expect(err.path).toBe(target);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(readFileSync(target, "utf8")).toBe("edit during the write\n");
     expect(tempFiles()).toEqual([]);
   });
 
