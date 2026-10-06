@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { OpenAICompatProvider } from "../../../src/core/search/embeddings/openai-compat.ts";
+import { makeProvider } from "../../../src/core/search/embeddings/provider.ts";
 import { providerCeilingKey } from "../../../src/core/search/embeddings/provider-semaphore.ts";
 import {
   EXTRA_BODY_ENV,
@@ -286,12 +287,15 @@ test("an override cannot pair a non-openai-compat provider with an extra body", 
   expect(e.message).toContain("'zeroentropy'");
 });
 
-test("a disabled provider leaves an extra body inert rather than refused", () => {
+test("a disabled provider accepts an extra body and builds a provider that sends nothing", async () => {
   const resolved = resolveWith([
     "embedding_provider: disabled",
     `${EXTRA_BODY_KEY}: {"user": "x"}`,
   ]);
   expect(resolved.semantic.provider).toBe("disabled");
+  const provider = makeProvider(resolved.semantic);
+  expect(provider.producesVectors).toBe(false);
+  await expect(provider.embed(["hello"])).rejects.toMatchObject({ code: "EMBEDDING_DISABLED" });
 });
 
 // ── identity ─────────────────────────────────────────────────────────────────
