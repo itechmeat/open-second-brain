@@ -21,6 +21,7 @@ import { indexVault } from "../../../src/core/search/indexer.ts";
 import {
   declaredInputWindowTokens,
   effectiveInputWindowTokens,
+  INPUT_WINDOW_TOKENS_KEY,
   queryPrefixSentByProvider,
   RECOMMENDED_EMBEDDING_MODEL,
 } from "../../../src/core/search/embeddings/presets.ts";
@@ -33,7 +34,6 @@ import type {
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
 
-const KEY = "embedding_input_window_tokens";
 const ENV_KEY = "OPEN_SECOND_BRAIN_EMBEDDING_INPUT_WINDOW_TOKENS";
 
 /** A model string deliberately outside the curated table. */
@@ -114,7 +114,7 @@ test("an absent key leaves the field absent", () => {
 });
 
 test("the key resolves from config, and the env variable beats config", () => {
-  writeConfig(`${KEY}: "300"\n`);
+  writeConfig(`${INPUT_WINDOW_TOKENS_KEY}: "300"\n`);
   expect(resolveSearchConfig({ vault, configPath }).semantic.inputWindowTokens).toBe(300);
   process.env[ENV_KEY] = "700";
   expect(resolveSearchConfig({ vault, configPath }).semantic.inputWindowTokens).toBe(700);
@@ -122,7 +122,7 @@ test("the key resolves from config, and the env variable beats config", () => {
 
 test("zero, a fraction and a blank value are refused from the string, naming the key", () => {
   for (const raw of ["0", "2.5", "", "   "]) {
-    writeConfig(`${KEY}: "${raw}"\n`);
+    writeConfig(`${INPUT_WINDOW_TOKENS_KEY}: "${raw}"\n`);
     let caught: unknown = null;
     try {
       resolveSearchConfig({ vault, configPath });
@@ -130,14 +130,14 @@ test("zero, a fraction and a blank value are refused from the string, naming the
       caught = e;
     }
     expect(`${raw}: ${(caught as { code?: string } | null)?.code}`).toBe(`${raw}: INVALID_INPUT`);
-    expect((caught as Error).message).toContain(KEY);
+    expect((caught as Error).message).toContain(INPUT_WINDOW_TOKENS_KEY);
   }
 });
 
 test("a blank env value is refused, naming the key", () => {
   writeConfig();
   process.env[ENV_KEY] = "";
-  expect(() => resolveSearchConfig({ vault, configPath })).toThrow(KEY);
+  expect(() => resolveSearchConfig({ vault, configPath })).toThrow(INPUT_WINDOW_TOKENS_KEY);
 });
 
 test("zero, a fraction and a non-number are refused from an override, naming the key", () => {
@@ -154,12 +154,12 @@ test("zero, a fraction and a non-number are refused from an override, naming the
       caught = e;
     }
     expect(`${bad}: ${(caught as { code?: string } | null)?.code}`).toBe(`${bad}: INVALID_INPUT`);
-    expect((caught as Error).message).toContain(KEY);
+    expect((caught as Error).message).toContain(INPUT_WINDOW_TOKENS_KEY);
   }
 });
 
 test("the key is refused for the offline local embedder, naming the provider", () => {
-  writeConfig(`embedding_provider: local\n${KEY}: "512"\n`);
+  writeConfig(`embedding_provider: local\n${INPUT_WINDOW_TOKENS_KEY}: "512"\n`);
   let caught: unknown = null;
   try {
     resolveSearchConfig({ vault, configPath });
@@ -167,7 +167,7 @@ test("the key is refused for the offline local embedder, naming the provider", (
     caught = e;
   }
   expect((caught as { code?: string } | null)?.code).toBe("INVALID_INPUT");
-  expect((caught as Error).message).toContain(KEY);
+  expect((caught as Error).message).toContain(INPUT_WINDOW_TOKENS_KEY);
   expect((caught as Error).message).toContain("'local'");
 });
 
@@ -179,12 +179,12 @@ test("an override cannot pair the local embedder with a window", () => {
       configPath,
       overrides: { semantic: { provider: "local", inputWindowTokens: 64 } },
     }),
-  ).toThrow(KEY);
+  ).toThrow(INPUT_WINDOW_TOKENS_KEY);
 });
 
 test("the key resolves for every provider that reads it", () => {
   for (const provider of ["openai-compat", "zeroentropy"]) {
-    writeConfig(`embedding_provider: ${provider}\n${KEY}: "512"\n`);
+    writeConfig(`embedding_provider: ${provider}\n${INPUT_WINDOW_TOKENS_KEY}: "512"\n`);
     expect(resolveSearchConfig({ vault, configPath }).semantic.inputWindowTokens).toBe(512);
   }
 });
