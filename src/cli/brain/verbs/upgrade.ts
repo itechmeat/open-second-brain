@@ -133,8 +133,9 @@ export async function cmdBrainUpgrade(argv: string[]): Promise<number> {
   let result;
   const now = new Date();
   try {
-    // The plan printed and confirmed above, not a re-plan: a file that
-    // changed since it was read is refused by name instead of overwritten.
+    // The plan computed (and, interactively, confirmed) above, not a
+    // re-plan: a file that changed since it was read is refused by name
+    // instead of overwritten.
     result = applyUpgrade(vault, { plan, now });
   } catch (exc) {
     // Recorded as the automatic path records it, so `o2b doctor` shows
@@ -150,7 +151,13 @@ export async function cmdBrainUpgrade(argv: string[]): Promise<number> {
       // The error below is what the operator acts on.
     }
     if (exc instanceof BrainUpgradeError) {
-      process.stderr.write(`error: ${exc.message}\n`);
+      if (flags["json"]) {
+        // `drifted` names each refused file, so a script can tell a drift
+        // from any other failure without parsing the message.
+        okJson({ ok: false, error: exc.message, run_id: exc.runId, drifted: [...exc.drifted] });
+      } else {
+        process.stderr.write(`error: ${exc.message}\n`);
+      }
       return 1;
     }
     return fail(`upgrade failed: ${describeErrorChain(exc)}`);

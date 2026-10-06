@@ -228,4 +228,36 @@ describe("brain upgrade --apply applies the plan it printed", () => {
     }
     expect(readFileSync(join(vault, "Brain", "_BRAIN.md"), "utf8")).not.toBe("stale\n");
   });
+
+  test("--apply --json reports a drift refusal as JSON with run_id and drifted", async () => {
+    await bootstrap();
+    const manual = join(vault, "Brain", "_BRAIN.md");
+    writeFileSync(manual, "stale\n");
+    const realPlan = upgradeModule.planUpgrade;
+    // The hand edit lands between the plan and the apply.
+    const planSpy = spyOn(upgradeModule, "planUpgrade").mockImplementation((v) => {
+      const plan = realPlan(v);
+      writeFileSync(manual, "hand edit\n");
+      return plan;
+    });
+    const written: string[] = [];
+    const out = spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      written.push(String(chunk));
+      return true;
+    });
+    let code: number;
+    try {
+      code = await cmdBrainUpgrade(["--vault", vault, "--apply", "--yes", "--json"]);
+    } finally {
+      out.mockRestore();
+      planSpy.mockRestore();
+    }
+    expect(code).toBe(1);
+    const payload = JSON.parse(written.join("")) as Record<string, unknown>;
+    expect(payload["ok"]).toBe(false);
+    expect(payload["error"]).toContain("Brain/_BRAIN.md");
+    expect(payload["run_id"]).toBeNull();
+    expect(payload["drifted"]).toEqual(["Brain/_BRAIN.md"]);
+    expect(readFileSync(manual, "utf8")).toBe("hand edit\n");
+  });
 });
