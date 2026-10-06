@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.73.0] - 2026-10-06
+
+Open Second Brain now makes every query embed honest and every upgrade safe: one query-embed gateway applies the caller's reach and the embedding price gate before any provider is called, for the search lane behind six MCP tools and two hooks and for the `brain_context_pack` semantic belief order, and fits the query, instruction prefix included, to the model's input window, disclosing a refusal or a cut by trail code; an operator can declare the input window of an uncurated model and send extra request fields to an OpenAI-compatible endpoint; recall feedback, benchmark, eval and tune reports name the degradations their searches met; and `o2b brain upgrade` and the automatic upgrade worker apply exactly the plan they computed, refusing a managed file edited in between instead of overwriting it.
+
+### Added
+
+- **One gate for every query embed.** The search lane (reached by `o2b search`, `brain_search`, `brain_recall_feedback`, `brain_file_context`, `brain_eval`, `brain_benchmark`, `brain_tune` and the recall-inject and gap-promote hooks) and the `brain_context_pack` semantic belief order now decide through one gateway whether, and with what text, a query is embedded. Under a positive `embedding_cost_gate_usd`, a caller that is not local is refused the query embed of a model with no known price before any provider is called. A search that asked for the semantic lane by name fails with `EMBEDDING_COST_UNPRICED`; a hybrid search falls back to keyword-only, warns, and records the new trail code `semantic-cost-unpriced`. The message names the model and the price pair that clears the refusal and says only that the gate is positive, never its amount. The CLI runs at local reach and is not gated.
+- **Queries fitted to the model's input window.** The gateway cuts a query to the effective input window, counting the instruction prefix the provider sends, at a code-point boundary under the conservative token estimate, so it never sends more than the window and treats every language alike. A cut is disclosed by a warning naming the window and how much of the query was embedded, and by the new trail code `semantic-query-truncated` with `detail.windowTokens`. When the instruction prefix alone fills the window nothing is embedded: an explicit semantic search and the semantic belief order refuse with `INVALID_INPUT`, and a hybrid search falls back to keyword-only with the same code. An unknown window cuts nothing.
+- **`embedding_input_window_tokens`.** The effective window is this key (env `OPEN_SECOND_BRAIN_EMBEDDING_INPUT_WINDOW_TOKENS`, an integer of at least 1), then the window the curated model table declares, then unknown. The chunk-window census of an index run and of `o2b search status` reads the same window, so a declared window enables it for an uncurated model. A blank value is refused rather than read as unset, and the key is refused for the `local` provider, which has no window.
+- **`embedding_extra_body`.** One JSON object (env `OPEN_SECOND_BRAIN_EMBEDDING_EXTRA_BODY`) whose fields are sent with every embedding request to an OpenAI-compatible endpoint. The owned fields `model`, `input` and `encoding_format` are refused by name in any spelling (case, separators, fullwidth and zero-width variants are folded first); a blank value, invalid JSON or a non-object is refused naming the key or env variable that supplied it. The key is refused for any provider other than `openai-compat` (`disabled` is exempt, it sends nothing), and a `dimensions` field requires `embedding_dimension` and must agree with it. The checks run on the resolved config too, so a programmatic override meets them. The extra body is not part of the embedding identity and never triggers a reindex.
+- **Degradations reported where results are measured.** `brain_recall_feedback` returns an additive `degraded` array with the codes of its re-run search, and `brain_benchmark`, `brain_eval` and `brain_tune` reports carry a `degraded` union (and per query or per grid row) when a run measured a smaller system than the configured one.
+- **Hook audit lines name the retrieval codes.** The recall-inject and gap-promote hooks run at remote reach, so a gated query embed is now visible: their local audit lines carry `retrieval_degraded`, the trail codes of the searches behind the decision, each once in first-seen order. The codes ride the local line only, never the synced `recall_telemetry` record.
+- **`BrainUpgradeError.drifted` and `--apply --json` refusals.** An upgrade refused for drift names every refused path, and `o2b brain upgrade --apply --json` prints `{ "ok": false, "error", "run_id", "drifted" }` for a refusal so a script can tell a drift from any other failure.
+
+### Changed
+
+- **Upgrades apply the plan they showed.** `o2b brain upgrade --apply` and the automatic upgrade worker plan once and apply that plan; each planned row records the bytes it was read with, or `null` when the file was absent (an absent file used to read as an empty one). A managed file that changed after the plan was read is refused before the snapshot is taken, with nothing written and `o2b brain upgrade --dry-run` advised, and again right before each write, so an edit that lands mid-apply is left as it is. When earlier files were already rewritten, the message names them and offers `o2b brain rollback <run_id>` or a re-run of the dry run, never `--force-rollback`, which would destroy the edit. The `--dry-run --json` plan still reports `before_size: 0` for an absent file, and the text plan reads `absent`.
+- **`brain_context_pack` semantic mode counts what it sends.** `semantic.query_tokens` and the estimate count the text actually sent, instruction prefix included, and an omitted reach now resolves to remote like every other reader instead of local.
+- **`brain_tune` refuses to save a keyword-only winner.** A winner measured with the semantic lane missing is not saved: `EMBEDDING_COST_UNPRICED` for the cost gate, `EMBEDDING_KEY_MISSING` or `EMBEDDING_DISABLED` for a blocked tier, and `EMBEDDING_PROVIDER_HTTP` when the provider did not answer, each with its remedy. An index with no embeddings or a machine without sqlite-vec is keyword-only by construction and still tunes.
+- **Recall feedback does not learn from a keyword-only answer.** A feedback event whose re-run lost the semantic lane records zero layer contributions, so the vault's learned weights stay as they were.
+- **Gated and cut answers are never cached.** A search answer refused by the cost gate or cut to the input window is not stored in the search cache, so declaring a price or a window takes effect on the next search.
+- **Docs:** `docs/cli-reference.md` gains the two trail-table rows, "Query embeds", `embedding_input_window_tokens`, `embedding_extra_body`, the extra-body note in the egress table and the upgrade drift behaviour, `docs/how-it-works.md` the query-embed gateway and the drift-checked upgrade, `docs/mcp.md` the gateway, the `degraded` fields and the tune refusal, `docs/observability.md` the `retrieval_degraded` audit field, and `docs/updating.md` "Upgrading to 1.73.0"; the `embeddings-setup` skill gains the input window and extra body steps. The README names this release.
+
+### Fixed
+
+- **A managed file edited during an upgrade is no longer overwritten.** The upgrade used to plan again at apply time, so the plan an operator confirmed was not the plan applied, and an edit made in between was replaced without notice.
+- **The query embed of an MCP search or a hook was not gated.** The v1.72.0 cost gate covered embedding runs and the semantic belief order, but the search lane's query embed spent on an unpriced model for any caller; it now passes the same gate.
+
+### Notes
+
+- The rerank and decision-model spend paths stay outside the query-embed gate.
+- gap-promote verdicts are unchanged on degraded evidence: the codes are disclosed, the decisions are not altered.
+- An extra request body for the ZeroEntropy provider and for the reranker is not part of this release.
+- A width field under a name other than `dimensions` is not cross-checked against `embedding_dimension`; the provider's response-width checks still catch a mismatch.
+
 ## [1.72.0] - 2026-10-05
 
 Open Second Brain now prices embedding spend honestly: every estimate names where its price came from (`builtin`, `operator` or `unknown`), an operator can declare the price of a model the built-in table does not list, and one spend plan feeds the estimate, the cost gate, the spend receipt and `search status`, so an unknown price is reported as unknown instead of as $0 and a positive cost gate refuses it by name; edits re-embed only the chunks that changed, `o2b search vector-backfill` can be scoped to vault paths, `o2b search check` names an unpriced model, a stale price declaration and the places it looked for an embedding key, and `brain_context_pack` gains a `semantic` query mode that orders the curated belief notes by the stored vectors of their chunks.
@@ -8197,6 +8232,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.73.0]: https://github.com/itechmeat/open-second-brain/compare/v1.72.0...v1.73.0
 [1.72.0]: https://github.com/itechmeat/open-second-brain/compare/v1.71.0...v1.72.0
 [1.71.0]: https://github.com/itechmeat/open-second-brain/compare/v1.70.0...v1.71.0
 [1.70.0]: https://github.com/itechmeat/open-second-brain/compare/v1.69.0...v1.70.0
