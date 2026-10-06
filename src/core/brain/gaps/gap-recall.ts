@@ -102,10 +102,14 @@ export function gapScopedRecallRetriever(
     const admitted = outcome.results
       .filter((result) => admits(result.path))
       .slice(0, Math.max(1, limit));
+    // The trail's codes ride the result (a hook resolves to remote reach,
+    // so a gated query embed is reported here rather than dropped).
+    const degraded = outcome.retrievalTrail?.degraded ?? [];
     return Object.freeze({
       candidates: Object.freeze(admitted.map(toRecallCandidate)),
       total: outcome.total,
       idfWeightedCoverage: await coverageOverAdmitted(config, topic, admitted),
+      ...(degraded.length > 0 ? { degraded: Object.freeze(degraded.map((d) => d.code)) } : {}),
     });
   };
 }

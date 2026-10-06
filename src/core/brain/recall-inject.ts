@@ -20,6 +20,7 @@
 
 import { deriveRecallHint, type RecallHintInput } from "../search/recall-hint.ts";
 import { searchAcrossVaults } from "../search/cross-vault.ts";
+import type { RetrievalDegradationCode } from "../search/retrieval-trail.ts";
 import type { RecallSource } from "./portability/recall-sources.ts";
 import { LOCAL_ORIGIN } from "./portability/origins.ts";
 import { fenceUntrustedContent, neutralizeUntrustedText } from "./untrusted-source.ts";
@@ -101,6 +102,13 @@ export interface RecallResultSet {
    * that there is nothing to report.
    */
   readonly idfWeightedCoverage: number | null;
+  /**
+   * Why the retrieval narrowed, as the search trail's codes. Absent or
+   * empty when nothing did. A hook resolves to remote reach, so a gated
+   * query embed (`semantic-cost-unpriced`) lands here instead of being
+   * dropped with the rest of the trail.
+   */
+  readonly degraded?: ReadonlyArray<RetrievalDegradationCode>;
 }
 
 /** Relevance retriever: maps a query to a candidate set. */
@@ -326,6 +334,8 @@ export type RecallInjectDecision =
       readonly slices?: ReadonlyArray<RecallSliceOutcome>;
       /** Present only when the decision-model filter ran (use not `off`). */
       readonly decisionModel?: RecallInjectDecisionModelInfo;
+      /** See {@link RecallResultSet.degraded}; present only when non-empty. */
+      readonly retrievalDegraded?: ReadonlyArray<RetrievalDegradationCode>;
     }
   | {
       readonly kind: "abstain";
@@ -342,6 +352,8 @@ export type RecallInjectDecision =
       readonly slices?: ReadonlyArray<RecallSliceOutcome>;
       /** Present only on a `decision_model_abstain`. */
       readonly decisionModel?: RecallInjectDecisionModelInfo;
+      /** See {@link RecallResultSet.degraded}; present only when non-empty. */
+      readonly retrievalDegraded?: ReadonlyArray<RetrievalDegradationCode>;
     }
   | {
       readonly kind: "error";
@@ -438,6 +450,33 @@ export async function decideRecallInject(
   prompt: string,
   retriever: RecallRetriever,
   options: RecallInjectOptions = {},
+): Promise<RecallInjectDecision> {
+  // Every retrieval this decision makes reports through one recorder, so
+  // the codes reach the decision on every return path below without each
+  // path having to remember them. Order is first-seen, each code once.
+  const seen: RetrievalDegradationCode[] = [];
+  const recorded =
+    (inner: RecallRetriever): RecallRetriever =>
+    async (query) => {
+      const set = await inner(query);
+      for (const code of set.degraded ?? []) if (!seen.includes(code)) seen.push(code);
+      return set;
+    };
+  const sliceRetriever = options.sliceRetriever;
+  const decision = await decideOverRetrieval(prompt, recorded(retriever), {
+    ...options,
+    ...(sliceRetriever !== undefined
+      ? { sliceRetriever: (spec, limit) => recorded(sliceRetriever(spec, limit)) }
+      : {}),
+  });
+  if (decision.kind === "error" || seen.length === 0) return decision;
+  return Object.freeze({ ...decision, retrievalDegraded: Object.freeze(seen) });
+}
+
+async function decideOverRetrieval(
+  prompt: string,
+  retriever: RecallRetriever,
+  options: RecallInjectOptions,
 ): Promise<RecallInjectDecision> {
   const clock = options.now ?? Date.now;
   const started = clock();
@@ -1061,10 +1100,16 @@ export function recallInjectAuditDetails(
       decision.slices === undefined ? safe : Object.freeze({ ...safe, slices: decision.slices });
     // The decision-model degrade reason is local operational evidence,
     // like a retriever's message: it rides this line only.
+    // So are the retrieval's degradation codes: a gated or degraded
+    // semantic lane at the hook is named here, never in the synced record.
+    const degraded =
+      decision.retrievalDegraded === undefined
+        ? sliced
+        : Object.freeze({ ...sliced, retrieval_degraded: decision.retrievalDegraded });
     const reason = decision.decisionModel?.degradeReason;
-    if (reason === undefined) return sliced;
+    if (reason === undefined) return degraded;
     return Object.freeze({
-      ...sliced,
+      ...degraded,
       decision_model: Object.freeze({
         ...(safe["decision_model"] as Readonly<Record<string, unknown>>),
         degrade_reason: reason,
@@ -1151,10 +1196,12 @@ export function defaultRecallRetriever(
         content: result.content,
       }),
     );
+    const degraded = outcome.retrievalTrail?.degraded ?? [];
     return Object.freeze({
       candidates: Object.freeze(candidates),
       total: outcome.total,
       idfWeightedCoverage: outcome.idfWeightedCoverage,
+      ...(degraded.length > 0 ? { degraded: Object.freeze(degraded.map((d) => d.code)) } : {}),
     });
   };
 }
