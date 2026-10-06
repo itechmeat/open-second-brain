@@ -29,7 +29,7 @@
 
 import { resolvedTransportReach, TRANSPORT_REACH } from "../../graph/transport-reach.ts";
 import type { TransportReach } from "../../graph/transport-reach.ts";
-import { activeSpendQuote, COST_GATE_KEY, formatEstimatedUsd } from "../embedding-spend.ts";
+import { activeSpendQuote, COST_GATE_KEY } from "../embedding-spend.ts";
 import type { ResolvedSearchConfig } from "../types.ts";
 import {
   effectiveInputWindowTokens,
@@ -218,23 +218,14 @@ export function prepareQueryEmbed(
  * gate key, and the price pair that clears it. Shared so every caller
  * that surfaces the refusal names the same lever.
  *
- * The gate amount is the operator's budget, so only a local caller sees
- * it; any other reach (an omitted one resolves remote) learns only that
- * the gate is positive. The gate refuses only callers that are not local,
- * so today the sentence a refusal carries never states the amount.
+ * The gate amount is the operator's budget and the gateway refuses only
+ * callers that are not local, so the sentence says the gate is positive
+ * and never states the amount.
  */
-export function queryEmbedRefusalMessage(
-  refused: QueryEmbedRefused,
-  gateUsd: number,
-  reach: TransportReach | undefined,
-): string {
-  const gate =
-    resolvedTransportReach(reach) === TRANSPORT_REACH.local
-      ? formatEstimatedUsd(gateUsd)
-      : "positive";
+export function queryEmbedRefusalMessage(refused: QueryEmbedRefused): string {
   return (
     `embedding model ${refused.model ?? "(unset)"} has no known price and ` +
-    `${COST_GATE_KEY} is ${gate}, so a query embed for a caller ` +
+    `${COST_GATE_KEY} is positive, so a query embed for a caller ` +
     `that is not local is refused. Declare its price with ${EMBEDDING_PRICE_MODEL_KEY} ` +
     `and ${EMBEDDING_PRICE_RATE_KEY} (0 for a free self-hosted model).`
   );

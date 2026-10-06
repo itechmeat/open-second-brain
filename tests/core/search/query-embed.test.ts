@@ -251,7 +251,7 @@ test("the gateway constructs no provider: it is pure over config", () => {
 test("the refusal sentence names the model, the gate key and the price pair", () => {
   const result = prepareQueryEmbed(cfg(), "q", TRANSPORT_REACH.remote);
   if (result.kind !== "refused") throw new Error("narrowed wrong");
-  const message = queryEmbedRefusalMessage(result, 1, TRANSPORT_REACH.remote);
+  const message = queryEmbedRefusalMessage(result);
   for (const needle of [
     UNPRICED_MODEL,
     COST_GATE_KEY,
@@ -262,22 +262,13 @@ test("the refusal sentence names the model, the gate key and the price pair", ()
   }
 });
 
-test("a remote caller learns the gate is on, never its amount", () => {
+test("the refusal sentence says the gate is on, never its amount", () => {
   const result = prepareQueryEmbed(cfg({ costGateUsd: 7.25 }), "q", TRANSPORT_REACH.remote);
   if (result.kind !== "refused") throw new Error("narrowed wrong");
-  for (const reach of [TRANSPORT_REACH.remote, undefined]) {
-    const message = queryEmbedRefusalMessage(result, 7.25, reach);
-    expect(message).toContain(`${COST_GATE_KEY} is positive`);
-    expect(message).not.toContain(formatEstimatedUsd(7.25));
-    expect(message).not.toContain("7.25");
-  }
-});
-
-test("a local caller is shown the gate amount it configured", () => {
-  const result = prepareQueryEmbed(cfg({ costGateUsd: 7.25 }), "q", TRANSPORT_REACH.remote);
-  if (result.kind !== "refused") throw new Error("narrowed wrong");
-  const message = queryEmbedRefusalMessage(result, 7.25, TRANSPORT_REACH.local);
-  expect(message).toContain(`${COST_GATE_KEY} is ${formatEstimatedUsd(7.25)}`);
+  const message = queryEmbedRefusalMessage(result);
+  expect(message).toContain(`${COST_GATE_KEY} is positive`);
+  expect(message).not.toContain(formatEstimatedUsd(7.25));
+  expect(message).not.toContain("7.25");
 });
 
 // ── the shared sentences for a cut ───────────────────────────────────────────
