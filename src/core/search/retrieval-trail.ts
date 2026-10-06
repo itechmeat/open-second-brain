@@ -103,10 +103,16 @@ export const RETRIEVAL_DEGRADATION = Object.freeze({
   /**
    * The query was cut to the effective embedding input window, so the
    * semantic lane searched a prefix of what the caller sent.
-   * `detail.windowTokens` is the window it was fitted to. The lane still
-   * ran unless the instruction prefix alone filled the window.
+   * `detail.windowTokens` is the window it was fitted to. The lane ran.
    */
   semanticQueryTruncated: "semantic-query-truncated",
+  /**
+   * The instruction prefix alone fills the effective embedding input
+   * window, so no part of the query was left to embed and the semantic
+   * lane did not run. `detail.windowTokens` is that window. A code of its
+   * own, apart from the cut, because this one always means a stopped lane.
+   */
+  semanticQueryEmptyFit: "semantic-query-empty-fit",
   /** The provider answered with an empty vector, so there was nothing to search. */
   semanticEmptyQueryVector: "semantic-empty-query-vector",
   /** A structured semantic lane was requested while semantic search is off. */
@@ -194,6 +200,7 @@ export const RETRIEVAL_DEGRADATION_CODES: ReadonlyArray<RetrievalDegradationCode
   RETRIEVAL_DEGRADATION.semanticCapabilityBlocked,
   RETRIEVAL_DEGRADATION.semanticCostUnpriced,
   RETRIEVAL_DEGRADATION.semanticQueryTruncated,
+  RETRIEVAL_DEGRADATION.semanticQueryEmptyFit,
   RETRIEVAL_DEGRADATION.semanticProviderUnavailable,
   RETRIEVAL_DEGRADATION.semanticEmptyQueryVector,
   RETRIEVAL_DEGRADATION.semanticStructuredLanesSkipped,
@@ -307,6 +314,7 @@ const SEMANTIC_LANE_STOPS: ReadonlySet<RetrievalDegradationCode> = new Set([
   RETRIEVAL_DEGRADATION.hybridDegraded,
   RETRIEVAL_DEGRADATION.semanticCapabilityBlocked,
   RETRIEVAL_DEGRADATION.semanticCostUnpriced,
+  RETRIEVAL_DEGRADATION.semanticQueryEmptyFit,
   RETRIEVAL_DEGRADATION.semanticProviderUnavailable,
   RETRIEVAL_DEGRADATION.semanticEmptyQueryVector,
 ]);
@@ -321,7 +329,9 @@ const SEMANTIC_LANE_STOPS: ReadonlySet<RetrievalDegradationCode> = new Set([
  * The umbrella is only noted when the keyword lane found something, so the
  * codes that always mean the lane stopped count on their own too: a hit
  * that arrived through another lane was still scored without the
- * semantic one.
+ * semantic one. A cut query is not one of them - the lane ran on the cut
+ * text - while an empty fit, where the instruction prefix alone fills the
+ * window, is.
  * An index with no embeddings or a machine without sqlite-vec is
  * keyword-only by construction: the system it measured is the one that
  * will serve.
@@ -357,7 +367,9 @@ export function describeRetrievalDegradation(code: RetrievalDegradationCode): st
     case RETRIEVAL_DEGRADATION.semanticCostUnpriced:
       return "the embedding model has no known price and the cost gate is on, so a query embed for a caller that is not local was refused and the semantic lane did not run";
     case RETRIEVAL_DEGRADATION.semanticQueryTruncated:
-      return "the query was longer than the embedding input window, so the semantic lane searched a cut prefix of it, or did not run when the instruction prefix alone fills the window";
+      return "the query was longer than the embedding input window, so the semantic lane searched a cut prefix of it";
+    case RETRIEVAL_DEGRADATION.semanticQueryEmptyFit:
+      return "the instruction prefix alone fills the embedding input window, so no part of the query was left to embed and the semantic lane did not run";
     case RETRIEVAL_DEGRADATION.semanticProviderUnavailable:
       return "the embedding provider could not answer, so the semantic lane did not run";
     case RETRIEVAL_DEGRADATION.semanticEmptyQueryVector:

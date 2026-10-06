@@ -1270,7 +1270,8 @@ semantic_weight·cosine + link_boost + recency_boost + entity_boost)`
   code-point boundary under the ceiling token estimate, so it never sends
   more than the window and treats every language alike. A refused or cut
   query is disclosed by trail code (`semantic-cost-unpriced`,
-  `semantic-query-truncated`) and such an answer is never cached.
+  `semantic-query-truncated`, and `semantic-query-empty-fit` when the
+  instruction prefix alone fills the window) and such an answer is never cached.
 - **Atomic reindex.** `o2b search reindex` writes to
   `brain.sqlite.new`, renames to `brain.sqlite`, and keeps the
   previous file as `brain.sqlite.bak`. If the main file is missing on

@@ -39,6 +39,7 @@ import {
   RETRIEVAL_DEGRADATION,
   describeRetrievalDegradation,
   RETRIEVAL_DEGRADATION_CODES,
+  semanticLaneMissing,
 } from "../../../src/core/search/retrieval-trail.ts";
 import { search } from "../../../src/core/search/search.ts";
 import { runSemanticPhase } from "../../../src/core/search/semantic-phase.ts";
@@ -124,16 +125,18 @@ function codes(degraded: ReadonlyArray<{ code: string }>): string[] {
 
 // ── the vocabulary ───────────────────────────────────────────────────────────
 
-test("the two new codes are members of the closed list and carry a sentence", () => {
+test("the three new codes are members of the closed list and carry a sentence", () => {
   for (const code of [
     RETRIEVAL_DEGRADATION.semanticCostUnpriced,
     RETRIEVAL_DEGRADATION.semanticQueryTruncated,
+    RETRIEVAL_DEGRADATION.semanticQueryEmptyFit,
   ]) {
     expect(RETRIEVAL_DEGRADATION_CODES).toContain(code);
     expect(describeRetrievalDegradation(code).length).toBeGreaterThan(0);
   }
   expect(RETRIEVAL_DEGRADATION.semanticCostUnpriced).toBe("semantic-cost-unpriced");
   expect(RETRIEVAL_DEGRADATION.semanticQueryTruncated).toBe("semantic-query-truncated");
+  expect(RETRIEVAL_DEGRADATION.semanticQueryEmptyFit).toBe("semantic-query-empty-fit");
 });
 
 // ── the phase ────────────────────────────────────────────────────────────────
@@ -224,7 +227,10 @@ test("a prefix that fills the window is never embedded", async () => {
   const out = await runSemanticPhase(fakeStore(), config, "q", phaseOpts(false, "remote"));
   expect(server.callCount()).toBe(0);
   expect(out.attempted).toBe(false);
-  expect(codes(out.degraded)).toEqual([RETRIEVAL_DEGRADATION.semanticQueryTruncated]);
+  // Its own code, not the cut's: the lane did not run, so it counts as a stop.
+  expect(out.degraded).toEqual([
+    { code: RETRIEVAL_DEGRADATION.semanticQueryEmptyFit, detail: { windowTokens: 1 } },
+  ]);
   const prepared = prepareQueryEmbed(config, "q", TRANSPORT_REACH.remote);
   if (prepared.kind !== "ready" || !prepared.truncated) throw new Error("narrowed wrong");
   expect(out.warnings).toEqual([queryEmbedEmptyFitMessage(prepared)]);
@@ -275,6 +281,18 @@ test("a cut lane still ran, so the hybrid answer is not degraded", async () => {
   const config = gatedConfig({ costGateUsd: 0, inputWindowTokens: 8 });
   const out = await runSemanticLane(laneInput(config, "abcdefghij".repeat(20)));
   expect(codes(out.degraded)).toEqual([RETRIEVAL_DEGRADATION.semanticQueryTruncated]);
+});
+
+test("an empty-fit lane with no keyword hit still reads as a stopped lane", async () => {
+  const config = gatedConfig({
+    costGateUsd: 0,
+    inputWindowTokens: 1,
+    queryPrefix: "a long instruction prefix: ",
+  });
+  const out = await runSemanticLane({ ...laneInput(config, "q"), keywordHitCount: 0 });
+  expect(server.callCount()).toBe(0);
+  expect(codes(out.degraded)).toEqual([RETRIEVAL_DEGRADATION.semanticQueryEmptyFit]);
+  expect(semanticLaneMissing(out.degraded.map((d) => d.code))).toBe(true);
 });
 
 // ── search() over a real index ───────────────────────────────────────────────

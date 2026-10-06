@@ -125,6 +125,7 @@ describe("semanticLaneMissing", () => {
       RETRIEVAL_DEGRADATION.semanticCostUnpriced,
       RETRIEVAL_DEGRADATION.semanticProviderUnavailable,
       RETRIEVAL_DEGRADATION.semanticEmptyQueryVector,
+      RETRIEVAL_DEGRADATION.semanticQueryEmptyFit,
     ]) {
       expect(semanticLaneMissing([code])).toBe(true);
     }
@@ -179,7 +180,7 @@ test.skipIf(!sqliteVecLoadable())(
       ...config,
       semantic: { ...config.semantic, inputWindowTokens: 1, queryPrefix: "query: " },
     });
-    expect(err.message).toContain(RETRIEVAL_DEGRADATION.semanticQueryTruncated);
+    expect(err.message).toContain(RETRIEVAL_DEGRADATION.semanticQueryEmptyFit);
     expect(err.message).toContain(INPUT_WINDOW_TOKENS_KEY);
     expect(existsSync(tuningPath(config.vault))).toBe(false);
   },

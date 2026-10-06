@@ -165,7 +165,7 @@ export async function runSemanticPhase(
       const message = queryEmbedEmptyFitMessage(prepared);
       if (opts.explicit) throw new SearchError("INVALID_INPUT", message);
       warnings.push(message);
-      noteDegradation(degraded, RETRIEVAL_DEGRADATION.semanticQueryTruncated, detail);
+      noteDegradation(degraded, RETRIEVAL_DEGRADATION.semanticQueryEmptyFit, detail);
       return { attempted: false, hits: [], warnings, degraded };
     }
     // A cut the server would otherwise make silently (or refuse), made

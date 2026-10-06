@@ -2406,7 +2406,9 @@ format characters), when it contains NUL, or when it exceeds the cap.
   then the curated model table, then unknown, which cuts nothing) is cut
   and records `semantic-query-truncated`; when the instruction prefix
   alone fills the window, an explicit semantic search and the
-  `brain_context_pack` semantic belief order refuse with `INVALID_INPUT`.
+  `brain_context_pack` semantic belief order refuse with `INVALID_INPUT`,
+  and a hybrid search falls back to keyword-only with
+  `semantic-query-empty-fit`.
   `brain_context_pack` resolves an omitted reach to remote like every
   other reader, and its `semantic.query_tokens` counts the text actually
   sent, instruction prefix included. `brain_recall_feedback` returns an
@@ -2422,5 +2424,5 @@ format characters), when it contains NUL, or when it exceeds the cap.
   `EMBEDDING_PROVIDER_HTTP` when the provider did not answer, and the
   same `EMBEDDING_PROVIDER_HTTP` for any other stop that left the hybrid
   caller keyword-only (the composite deadline, an empty query vector, an
-  empty fit), with a remedy naming `search_hybrid_deadline_ms` or the
+  empty fit recorded as `semantic-query-empty-fit`), with a remedy naming `search_hybrid_deadline_ms` or the
   input window. Each refusal names the remedy.

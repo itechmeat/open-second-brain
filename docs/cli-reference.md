@@ -2025,7 +2025,8 @@ so there is no separate lane field that could drift from it:
 | `semantic-vec-extension-unavailable` | sqlite-vec is not loaded on this machine |
 | `semantic-capability-blocked` | the configured semantic capability blocks the vector lane; `detail.tier` names the rung |
 | `semantic-cost-unpriced` | the embedding model has no known price and `embedding_cost_gate_usd` is positive, so the query embed of a caller that is not local was refused before any provider call and the semantic lane did not run |
-| `semantic-query-truncated` | the query was longer than the effective embedding input window, so the semantic lane searched a cut prefix of it (or, when the instruction prefix alone fills the window, did not run); `detail.windowTokens` is the window |
+| `semantic-query-truncated` | the query was longer than the effective embedding input window, so the semantic lane searched a cut prefix of it; `detail.windowTokens` is the window |
+| `semantic-query-empty-fit` | the instruction prefix alone fills the effective embedding input window, so no part of the query was left to embed and the semantic lane did not run; `detail.windowTokens` is the window |
 | `semantic-provider-unavailable` | the embedding provider could not answer; `detail.category` carries the error category |
 | `semantic-empty-query-vector` | the provider answered with an empty query vector |
 | `semantic-structured-lanes-skipped` | a structured semantic lane was requested while semantic search is off |
@@ -2177,7 +2178,9 @@ of the query was embedded, and the trail records
 `semantic-query-truncated` with `detail.windowTokens`. When the
 instruction prefix alone fills the window nothing is embedded: an explicit
 semantic search and the semantic belief order refuse with `INVALID_INPUT`,
-and a hybrid search falls back to keyword-only with the same trail code.
+and a hybrid search falls back to keyword-only with the trail code
+`semantic-query-empty-fit`, which, unlike a cut, always means the
+semantic lane did not run.
 An answer refused by the gate or cut to the window is never cached, so
 declaring a price or a window takes effect on the next search.
 `brain_context_pack` discloses `query_tokens` for the text actually sent,

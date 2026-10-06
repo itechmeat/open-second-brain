@@ -154,3 +154,49 @@ test("feedback on an index with no embeddings records the layer contributions", 
   expect(out.event.contributions.keyword).toBeGreaterThan(0);
   expect(out.learned.keywordMul).toBeGreaterThan(1);
 });
+
+test.skipIf(!sqliteVecLoadable())(
+  "feedback on an empty-fit re-run with no keyword hit carries no layer signal",
+  async () => {
+    // The instruction prefix alone fills the input window, so the semantic
+    // lane never runs; the keyword lane finds nothing either, so no
+    // `hybrid-degraded` umbrella is noted. The judged page still arrives
+    // through the relational arm, scored without the semantic lane.
+    const v = createTempVault("feedback-empty-fit");
+    cleanup = v.cleanup;
+    writeMd(v.vault, "qx.md", '---\nrelated: "[[neighbor]]"\n---\n\nalpha topic.');
+    writeMd(v.vault, "neighbor.md", "# Beta\n\nbeta divergent content.");
+    const semantic = {
+      enabled: true,
+      provider: "openai-compat" as const,
+      baseUrl: server.url,
+      model: MODEL,
+      apiKey: FAKE_PROVIDER_KEY,
+      dimension: 4,
+      maxRetries: 1,
+      costGateUsd: 0,
+    };
+    const indexed = makeConfig({ vault: v.vault, dbPath: v.dbPath, semantic });
+    await indexVault(indexed, { embeddings: true });
+    const config = makeConfig({
+      vault: v.vault,
+      dbPath: v.dbPath,
+      fusionMode: "rrf",
+      relationalArmEnabled: true,
+      semantic: { ...semantic, inputWindowTokens: 1, queryPrefix: "a long instruction prefix: " },
+    });
+    const embedsBefore = server.callCount();
+    const out = await captureRecallFeedback(config, {
+      query: "[[qx]] related",
+      resultPath: "neighbor.md",
+      verdict: "up",
+      nowMs: NOW.getTime(),
+      transportReach: TRANSPORT_REACH.local,
+    });
+    expect(server.callCount()).toBe(embedsBefore);
+    expect(out.resultFound).toBe(true);
+    expect(out.degraded).toEqual([RETRIEVAL_DEGRADATION.semanticQueryEmptyFit]);
+    expect(out.event.contributions).toEqual({ keyword: 0, semantic: 0, entity: 0, recency: 0 });
+    expect(out.learned.events).toBe(1);
+  },
+);
