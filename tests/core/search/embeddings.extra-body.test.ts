@@ -7,6 +7,8 @@ import { OpenAICompatProvider } from "../../../src/core/search/embeddings/openai
 import { providerCeilingKey } from "../../../src/core/search/embeddings/provider-semaphore.ts";
 import { embeddingSignature } from "../../../src/core/search/embeddings/signature.ts";
 import {
+  EXTRA_BODY_ENV,
+  EXTRA_BODY_KEY,
   RESERVED_EMBEDDING_BODY_KEYS,
   resolveSearchConfig,
 } from "../../../src/core/search/index.ts";
@@ -17,9 +19,6 @@ import type {
 } from "../../../src/core/search/types.ts";
 import { startFakeHttp, type FakeHttp } from "../../helpers/fake-http.ts";
 import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
-
-const EXTRA_BODY_KEY = "embedding_extra_body";
-const EXTRA_BODY_ENV = "OPEN_SECOND_BRAIN_EMBEDDING_EXTRA_BODY";
 
 let server: FakeHttp;
 let tmp: string;
@@ -143,7 +142,10 @@ test("an absent key resolves to no extra body", () => {
 });
 
 test("a JSON object in the config key resolves to the extra body", () => {
-  const resolved = resolveWith([`${EXTRA_BODY_KEY}: {"dimensions": 256, "user": "x"}`]);
+  const resolved = resolveWith([
+    "embedding_dimension: 256",
+    `${EXTRA_BODY_KEY}: {"dimensions": 256, "user": "x"}`,
+  ]);
   expect(resolved.semantic.extraBody).toEqual({ dimensions: 256, user: "x" });
   expect(Object.isFrozen(resolved.semantic.extraBody)).toBe(true);
 });
@@ -228,6 +230,42 @@ test("a dimensions field that agrees with embedding_dimension resolves", () => {
     `${EXTRA_BODY_KEY}: {"dimensions": 256}`,
   ]);
   expect(resolved.semantic.extraBody).toEqual({ dimensions: 256 });
+});
+
+test("a dimensions field with no embedding_dimension is refused", () => {
+  const e = refusal([`${EXTRA_BODY_KEY}: {"dimensions": 256}`]);
+  expect(e.code).toBe("INVALID_INPUT");
+  expect(e.message).toContain(EXTRA_BODY_KEY);
+  expect(e.message).toContain("embedding_dimension");
+});
+
+test("a dimensions field in another spelling is checked by its spelling", () => {
+  const e = refusal(["embedding_dimension: 4", `${EXTRA_BODY_KEY}: {"Dimensions": 256}`]);
+  expect(e.code).toBe("INVALID_INPUT");
+  expect(e.message).toContain("'Dimensions'");
+});
+
+function overrideRefusal(semantic: Partial<ResolvedEmbeddingConfig>): SearchError {
+  writeFileSync(configPath, [`vault: "${tmp}"`, ""].join("\n"));
+  try {
+    resolveSearchConfig({ vault: tmp, configPath, overrides: { semantic } });
+  } catch (e) {
+    if (e instanceof SearchError) return e;
+    throw e;
+  }
+  throw new Error("expected resolveSearchConfig to refuse");
+}
+
+test("an override cannot carry a dimensions field past an unset width", () => {
+  const e = overrideRefusal({ dimension: null, extraBody: Object.freeze({ dimensions: 256 }) });
+  expect(e.code).toBe("INVALID_INPUT");
+  expect(e.message).toContain("embedding_dimension");
+});
+
+test("an override cannot carry a dimensions field that disagrees with its width", () => {
+  const e = overrideRefusal({ dimension: 4, extraBody: Object.freeze({ dimensions: 256 }) });
+  expect(e.code).toBe("INVALID_INPUT");
+  expect(e.message).toContain("embedding_dimension is 4");
 });
 
 // ── identity ─────────────────────────────────────────────────────────────────

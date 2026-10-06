@@ -403,8 +403,9 @@ function resolveEmbeddingPriceOverride(
   return Object.freeze({ model, usdPerMtok });
 }
 
-const EXTRA_BODY_KEY = "embedding_extra_body";
-const EXTRA_BODY_ENV = "OPEN_SECOND_BRAIN_EMBEDDING_EXTRA_BODY";
+export const EXTRA_BODY_KEY = "embedding_extra_body";
+export const EXTRA_BODY_ENV = "OPEN_SECOND_BRAIN_EMBEDDING_EXTRA_BODY";
+const EMBEDDING_DIMENSION_KEY = "embedding_dimension";
 
 /**
  * Request-body fields the OpenAI-compatible provider owns. An extra body
@@ -427,16 +428,14 @@ const RESERVED_BODY_KEYS_NORMALIZED: ReadonlySet<string> = new Set(
  * because the config file cannot hold a nested map. Read with raw
  * presence so a blank value is refused rather than folded into "unset".
  * Every refusal names the source the value came from - the env variable
- * when it is set, the config key otherwise. A `dimensions` field that
- * disagrees with a configured `embedding_dimension` is refused here,
- * because with no configured width the first response would silently
- * set a width the stored index does not have. Null when neither source
- * sets the key.
+ * when it is set, the config key otherwise. The cross-checks against the
+ * rest of the resolved config (the `dimensions` field, the provider)
+ * live in `validateExtraBody`, so a programmatic override meets them too.
+ * Null when neither source sets the key.
  */
 function resolveEmbeddingExtraBody(
   env: NodeJS.ProcessEnv,
   config: Readonly<Record<string, string>>,
-  dimension: number | null,
 ): Readonly<Record<string, unknown>> | null {
   const raw = rawSetting(env, config, EXTRA_BODY_ENV, EXTRA_BODY_KEY);
   if (raw === null) return null;
@@ -465,13 +464,40 @@ function resolveEmbeddingExtraBody(
         `refused ${reserved.map((k) => `'${k}'`).join(", ")}`,
     );
   }
-  if (dimension !== null && "dimensions" in body && body["dimensions"] !== dimension) {
-    throw new SearchError(
-      "INVALID_INPUT",
-      `${source} sets dimensions ${JSON.stringify(body["dimensions"])} but embedding_dimension is ${dimension}`,
-    );
-  }
   return Object.freeze(body);
+}
+
+/**
+ * Cross-check a resolved extra body against the config it rides in.
+ *
+ * A `dimensions` field, in any spelling, changes the width the provider
+ * answers with. With no configured `embedding_dimension` nothing pins the
+ * index to that width, so a mismatch with the stored index would surface
+ * as a raw vector-store error mid-search; with one configured, the two
+ * must agree. Both are refused here rather than at parse time so an
+ * override that never passed through the parser meets them too.
+ */
+function validateExtraBody(semantic: ResolvedEmbeddingConfig): void {
+  const body = semantic.extraBody;
+  if (body === undefined) return;
+  const target = normalizeReservedName("dimensions");
+  for (const key of Object.keys(body)) {
+    if (normalizeReservedName(key) !== target) continue;
+    const value = JSON.stringify(body[key]);
+    if (semantic.dimension === null) {
+      throw new SearchError(
+        "INVALID_INPUT",
+        `${EXTRA_BODY_KEY} sets '${key}' ${value} but ${EMBEDDING_DIMENSION_KEY} is not set: ` +
+          `declare ${EMBEDDING_DIMENSION_KEY} with the same width so the index is pinned to it`,
+      );
+    }
+    if (body[key] !== semantic.dimension) {
+      throw new SearchError(
+        "INVALID_INPUT",
+        `${EXTRA_BODY_KEY} sets '${key}' ${value} but ${EMBEDDING_DIMENSION_KEY} is ${semantic.dimension}`,
+      );
+    }
+  }
 }
 
 /**
@@ -568,7 +594,7 @@ function validateResolvedConfig(config: ResolvedSearchConfig): void {
     );
   }
   if (config.semantic.dimension !== null) {
-    validateIntegerRange(config.semantic.dimension, "embedding_dimension", {
+    validateIntegerRange(config.semantic.dimension, EMBEDDING_DIMENSION_KEY, {
       min: 1,
     });
   }
@@ -609,6 +635,7 @@ function validateResolvedConfig(config: ResolvedSearchConfig): void {
   validateIntegerRange(config.semantic.maxRetries, "embedding_max_retries", {
     min: 1,
   });
+  validateExtraBody(config.semantic);
 }
 
 function parseProvider(raw: string | null): ResolvedEmbeddingConfig["provider"] {
@@ -795,9 +822,14 @@ export function resolveSearchConfig(opts: {
   const apiKeys: ReadonlyArray<string> = explicitApiKey
     ? [explicitApiKey]
     : (registryExpansion?.apiKeys ?? (apiKey ? [apiKey] : []));
-  const dimRaw = envOrConfig(env, config, "OPEN_SECOND_BRAIN_EMBEDDING_DIM", "embedding_dimension");
+  const dimRaw = envOrConfig(
+    env,
+    config,
+    "OPEN_SECOND_BRAIN_EMBEDDING_DIM",
+    EMBEDDING_DIMENSION_KEY,
+  );
   const dimension =
-    dimRaw === null ? null : parseInteger(dimRaw, 0, "embedding_dimension", { min: 1 });
+    dimRaw === null ? null : parseInteger(dimRaw, 0, EMBEDDING_DIMENSION_KEY, { min: 1 });
   const timeoutMs = parseInteger(
     envOrConfig(env, config, "OPEN_SECOND_BRAIN_EMBEDDING_TIMEOUT", "embedding_timeout_ms"),
     DEFAULTS.timeoutMs,
@@ -871,7 +903,7 @@ export function resolveSearchConfig(opts: {
     "embedding_cost_gate_usd",
   );
   const priceOverride = resolveEmbeddingPriceOverride(env, config);
-  const extraBody = resolveEmbeddingExtraBody(env, config, dimension);
+  const extraBody = resolveEmbeddingExtraBody(env, config);
 
   // Instruction prefixes (memory-write-path-integrity B2). Resolved with raw
   // presence, not `envOrConfig`, because an explicit empty string must DISABLE
