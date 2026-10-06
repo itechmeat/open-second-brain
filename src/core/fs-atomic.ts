@@ -33,6 +33,19 @@ export interface AtomicWriteOptions {
    * churn in a vault the user is also hand-editing.
    */
   readonly skipIfUnchanged?: boolean;
+  /**
+   * Compare-before-write. When set, the target must still hold exactly these
+   * bytes (a string) or still be absent (`null`), checked before the temp
+   * file is made and again right before the rename; otherwise the write
+   * throws {@link FileDriftError} and the target is left untouched. An empty
+   * string and an absent file are different states. `undefined` (the
+   * default) keeps the unconditional overwrite.
+   *
+   * The window between the final re-read and `rename(2)` stays open: it is
+   * the same advisory window `skipIfUnchanged` has, and closing it needs an
+   * OS lock that vault sync tools do not honour.
+   */
+  readonly expectBefore?: string | null;
 }
 
 /**
@@ -133,8 +146,13 @@ export function atomicWriteFileSync(
   contents: string,
   opts: AtomicWriteOptions = {},
 ): boolean {
+  const expected = opts.expectBefore;
+  if (expected !== undefined) assertExpectedBefore(target, expected);
   if (opts.skipIfUnchanged && isUnchanged(target, contents)) return false;
   withTempFile(target, contents, (tmpPath) => {
+    // Re-read right before the rename: the temp write and fsync are the
+    // slow part, and an edit that landed during them must not be lost.
+    if (expected !== undefined) assertExpectedBefore(target, expected);
     // POSIX `rename(2)` is atomic and clobbers an existing target — that's
     // exactly the "overwrite" semantic we want. No exclusivity guarantee.
     // Windows `MoveFileEx(REPLACE_EXISTING)` is too, once no reader holds
@@ -155,6 +173,69 @@ function isUnchanged(target: string, contents: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Throw {@link FileDriftError} unless `target` is in the `expected` state:
+ * absent for `null`, holding exactly these bytes for a string. A read error
+ * other than "absent" propagates - an unreadable target cannot be shown to
+ * be unchanged.
+ */
+function assertExpectedBefore(target: string, expected: string | null): void {
+  let current: string | null;
+  try {
+    current = readFileSync(target, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException | null)?.code !== "ENOENT") throw err;
+    current = null;
+  }
+  if (current !== expected) throw new FileDriftError(target);
+}
+
+/** Optional detail carried by a {@link FileDriftError}. */
+export interface FileDriftOptions {
+  /**
+   * Path as the message should render it, e.g. vault-relative. Defaults to
+   * `path`, which stays the structured field.
+   */
+  readonly displayPath?: string;
+  readonly cause?: unknown;
+}
+
+/** Stable code a {@link FileDriftError} carries, for `isFileDrift`. */
+const FILE_DRIFT_CODE = "FILE_DRIFT";
+
+/**
+ * A compare-before-write refused: the target no longer holds the bytes (or
+ * the absence) the caller read, so writing would overwrite a change the
+ * caller never saw. Named like {@link FileAlreadyExistsError}, its sibling
+ * refusal for a create.
+ */
+export class FileDriftError extends Error {
+  readonly code: typeof FILE_DRIFT_CODE = FILE_DRIFT_CODE;
+  /** Absolute path whose state drifted. */
+  readonly path: string;
+
+  constructor(path: string, opts: FileDriftOptions = {}) {
+    super(
+      `file changed since it was read: ${opts.displayPath ?? path}; the write was refused ` +
+        "and the file left as it is. Re-read it and retry.",
+      { cause: opts.cause },
+    );
+    this.name = "FileDriftError";
+    this.path = path;
+  }
+}
+
+/** Is `err` a {@link FileDriftError}, directly or nested on `.cause`? */
+export function isFileDrift(err: unknown): boolean {
+  let current: unknown = err;
+  for (let depth = 0; depth < CAUSE_WALK_LIMIT; depth += 1) {
+    if (typeof current !== "object" || current === null) return false;
+    if ((current as { readonly code?: unknown }).code === FILE_DRIFT_CODE) return true;
+    current = (current as { readonly cause?: unknown }).cause;
+  }
+  return false;
 }
 
 export interface AtomicWriteTextOptions {

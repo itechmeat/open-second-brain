@@ -13,10 +13,12 @@ import { join } from "node:path";
 
 import {
   FileAlreadyExistsError,
+  FileDriftError,
   atomicCreateFileSyncExclusive,
   atomicWriteFileSync,
   atomicWriteText,
   isFileAlreadyExists,
+  isFileDrift,
 } from "../../src/core/fs-atomic.ts";
 import { writeFrontmatterAtomic } from "../../src/core/vault.ts";
 
@@ -270,5 +272,93 @@ describe("skipIfUnchanged short-circuit", () => {
     expect(atomicWriteText(target, "hello", { skipIfUnchanged: true })).toBe(true);
     expect(atomicWriteText(target, "hello", { skipIfUnchanged: true })).toBe(false);
     expect(atomicWriteText(target, "world", { skipIfUnchanged: true })).toBe(true);
+  });
+});
+
+describe("expectBefore compare-before-write", () => {
+  function tempFiles(): string[] {
+    return readdirSync(tmp).filter((n) => n.startsWith(".") && n.endsWith(".tmp"));
+  }
+
+  function driftOf(fn: () => unknown): FileDriftError {
+    try {
+      fn();
+    } catch (err) {
+      expect(isFileDrift(err)).toBe(true);
+      return err as FileDriftError;
+    }
+    throw new Error("expected a FileDriftError");
+  }
+
+  test("matching bytes write", () => {
+    const target = join(tmp, "x.md");
+    writeFileSync(target, "old\n");
+    expect(atomicWriteFileSync(target, "new\n", { expectBefore: "old\n" })).toBe(true);
+    expect(readFileSync(target, "utf8")).toBe("new\n");
+  });
+
+  test("different bytes throw FileDriftError naming the path and leave the target untouched", () => {
+    const target = join(tmp, "x.md");
+    writeFileSync(target, "hand edit\n");
+    const err = driftOf(() => atomicWriteFileSync(target, "new\n", { expectBefore: "old\n" }));
+    expect(err).toBeInstanceOf(FileDriftError);
+    expect(err.path).toBe(target);
+    expect(err.message).toContain(target);
+    expect(readFileSync(target, "utf8")).toBe("hand edit\n");
+    expect(tempFiles()).toEqual([]);
+  });
+
+  test("null with an absent target writes", () => {
+    const target = join(tmp, "fresh.md");
+    expect(atomicWriteFileSync(target, "body\n", { expectBefore: null })).toBe(true);
+    expect(readFileSync(target, "utf8")).toBe("body\n");
+  });
+
+  test("null with a present target throws, even when it is empty", () => {
+    const target = join(tmp, "x.md");
+    writeFileSync(target, "");
+    driftOf(() => atomicWriteFileSync(target, "body\n", { expectBefore: null }));
+    expect(readFileSync(target, "utf8")).toBe("");
+    expect(tempFiles()).toEqual([]);
+  });
+
+  test("a string expectation with an absent target throws, even an empty one", () => {
+    const target = join(tmp, "gone.md");
+    driftOf(() => atomicWriteFileSync(target, "body\n", { expectBefore: "" }));
+    expect(existsSync(target)).toBe(false);
+    expect(tempFiles()).toEqual([]);
+  });
+
+  test("undefined keeps the unconditional overwrite", () => {
+    const target = join(tmp, "x.md");
+    writeFileSync(target, "anything\n");
+    expect(atomicWriteFileSync(target, "new\n", { expectBefore: undefined })).toBe(true);
+    expect(readFileSync(target, "utf8")).toBe("new\n");
+  });
+
+  test("composes with skipIfUnchanged", () => {
+    const target = join(tmp, "x.md");
+    writeFileSync(target, "same\n");
+    // The expectation holds and the bytes already match: nothing to write.
+    expect(
+      atomicWriteFileSync(target, "same\n", { expectBefore: "same\n", skipIfUnchanged: true }),
+    ).toBe(false);
+    // The expectation fails: drift wins over the short-circuit.
+    driftOf(() =>
+      atomicWriteFileSync(target, "same\n", { expectBefore: "other\n", skipIfUnchanged: true }),
+    );
+    // The expectation holds and the bytes differ: it writes.
+    expect(
+      atomicWriteFileSync(target, "next\n", { expectBefore: "same\n", skipIfUnchanged: true }),
+    ).toBe(true);
+    expect(readFileSync(target, "utf8")).toBe("next\n");
+    expect(tempFiles()).toEqual([]);
+  });
+
+  test("isFileDrift rejects other errors and follows a wrapped cause", () => {
+    expect(isFileDrift(new Error("x"))).toBe(false);
+    expect(isFileDrift(null)).toBe(false);
+    const inner = new FileDriftError(join(tmp, "x.md"));
+    expect(isFileDrift(new Error("wrapped", { cause: inner }))).toBe(true);
   });
 });
