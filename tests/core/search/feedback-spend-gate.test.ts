@@ -13,7 +13,10 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 
 import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
-import { captureRecallFeedback } from "../../../src/core/search/feedback.ts";
+import {
+  captureRecallFeedback,
+  NEUTRAL_LEARNED_WEIGHTS,
+} from "../../../src/core/search/feedback.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { RETRIEVAL_DEGRADATION } from "../../../src/core/search/retrieval-trail.ts";
 import type { ResolvedSearchConfig } from "../../../src/core/search/types.ts";
@@ -90,8 +93,12 @@ test("feedback on a gated re-run keeps the row and carries no layer signal", asy
   expect(out.event.contributions).toEqual({ keyword: 0, semantic: 0, entity: 0, recency: 0 });
   // The row is kept and counted; it moves no multiplier.
   expect(out.learned.events).toBe(1);
-  expect(out.learned.keywordMul).toBe(1);
-  expect(out.learned.recencyMul).toBe(1);
+  expect(out.learned).toMatchObject({
+    keywordMul: NEUTRAL_LEARNED_WEIGHTS.keywordMul,
+    semanticMul: NEUTRAL_LEARNED_WEIGHTS.semanticMul,
+    entityMul: NEUTRAL_LEARNED_WEIGHTS.entityMul,
+    recencyMul: NEUTRAL_LEARNED_WEIGHTS.recencyMul,
+  });
 });
 
 test("feedback on an ungated local re-run records the layer contributions", async () => {
