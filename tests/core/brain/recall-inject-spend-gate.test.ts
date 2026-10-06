@@ -118,6 +118,30 @@ describe("the decision carries the retrieval's degradation codes", () => {
       RETRIEVAL_DEGRADATION.rankCapTruncatedPool,
     ]);
   });
+
+  test("an error decision keeps the codes of a slice that answered first", async () => {
+    const spec = (name: string): RecallSliceSpec => ({
+      name,
+      heading: name,
+      pathPrefix: null,
+      types: [],
+      limit: null,
+      maxChars: null,
+    });
+    const decision = await decideRecallInject("ledger", retrieverWith(), {
+      slices: [spec("gated"), spec("broken")],
+      sliceRetriever: (s) =>
+        s.name === "gated"
+          ? retrieverWith([UNPRICED])
+          : async () => {
+              await new Promise((resolve) => setTimeout(resolve, 5));
+              throw new Error("slice store unreadable");
+            },
+    });
+    expect(decision.kind).toBe("error");
+    expect(recallInjectAuditDetails(decision)["retrieval_degraded"]).toEqual([UNPRICED]);
+    expect(JSON.stringify(recallInjectTelemetryMetadata(decision))).not.toContain(UNPRICED);
+  });
 });
 
 describe("the default retriever under a positive gate and an unpriced model", () => {

@@ -366,6 +366,11 @@ export type RecallInjectDecision =
        * in the first place.
        */
       readonly detail?: string;
+      /**
+       * See {@link RecallResultSet.degraded}; present only when non-empty.
+       * A slice that answered before another failed still reports here.
+       */
+      readonly retrievalDegraded?: ReadonlyArray<RetrievalDegradationCode>;
     };
 
 /** The identity of one rendered brief bullet. */
@@ -469,7 +474,7 @@ export async function decideRecallInject(
       ? { sliceRetriever: (spec, limit) => recorded(sliceRetriever(spec, limit)) }
       : {}),
   });
-  if (decision.kind === "error" || seen.length === 0) return decision;
+  if (seen.length === 0) return decision;
   return Object.freeze({ ...decision, retrievalDegraded: Object.freeze(seen) });
 }
 
@@ -1116,8 +1121,13 @@ export function recallInjectAuditDetails(
       }),
     });
   }
-  if (decision.detail === undefined) return safe;
-  return Object.freeze({ ...safe, detail: decision.detail });
+  return Object.freeze({
+    ...safe,
+    ...(decision.detail !== undefined ? { detail: decision.detail } : {}),
+    ...(decision.retrievalDegraded !== undefined
+      ? { retrieval_degraded: decision.retrievalDegraded }
+      : {}),
+  });
 }
 
 /**
