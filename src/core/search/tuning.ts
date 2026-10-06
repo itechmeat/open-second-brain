@@ -46,7 +46,7 @@ import {
   tuningPath,
 } from "./tuning-store.ts";
 import type { TransportReach } from "../graph/transport-reach.ts";
-import { SearchError } from "./types.ts";
+import { SearchError, type SearchErrorCode } from "./types.ts";
 import type { ResolvedSearchConfig, TunedParameters } from "./types.ts";
 
 export interface TuningEvaluation {
@@ -100,6 +100,39 @@ export function defaultTuningGrid(): TunedParameters[] {
 }
 
 /**
+ * The trail codes that say the semantic lane did not run for a reason
+ * the operator can clear, in the order a refusal names them, each with
+ * the typed error the explicit semantic lane throws for the same cause
+ * and the lever that clears it. An index with no embeddings or a machine
+ * without sqlite-vec is keyword-only by construction, so a winner tuned
+ * there is the system that will serve.
+ */
+const SEMANTIC_LANE_MISSING: ReadonlyArray<{
+  readonly trail: RetrievalDegradationCode;
+  readonly error: SearchErrorCode;
+  readonly remedy: (config: ResolvedSearchConfig) => string;
+}> = Object.freeze([
+  {
+    trail: RETRIEVAL_DEGRADATION.semanticCostUnpriced,
+    error: "EMBEDDING_COST_UNPRICED",
+    remedy: (config) =>
+      `It was refused by ${COST_GATE_KEY}: declare the price of ` +
+      `${config.semantic.model ?? "the embedding model"} with ${EMBEDDING_PRICE_MODEL_KEY} and ` +
+      `${EMBEDDING_PRICE_RATE_KEY} (0 for a free self-hosted model), or lower ${COST_GATE_KEY}`,
+  },
+  {
+    trail: RETRIEVAL_DEGRADATION.semanticCapabilityBlocked,
+    error: "EMBEDDING_DISABLED",
+    remedy: () => "Complete the embedding provider configuration and its credential",
+  },
+  {
+    trail: RETRIEVAL_DEGRADATION.semanticProviderUnavailable,
+    error: "EMBEDDING_PROVIDER_HTTP",
+    remedy: () => "Wait until the embedding provider answers again (o2b search check)",
+  },
+]);
+
+/**
  * Grid-evaluate against the benchmark and persist the winner.
  * Deterministic for a fixed index state and dataset.
  */
@@ -138,16 +171,15 @@ export async function tuneRecall(
     }
   }
 
-  // A winner scored while the gate refused the semantic lane would be
-  // saved as the vault's parameters for the hybrid system it never ran.
-  if (chosen.degraded.includes(RETRIEVAL_DEGRADATION.semanticCostUnpriced)) {
+  // A winner scored while the semantic lane was missing would be saved as
+  // the vault's parameters for the hybrid system it never ran.
+  const missing = SEMANTIC_LANE_MISSING.find(({ trail }) => chosen.degraded.includes(trail));
+  if (missing !== undefined) {
     throw new SearchError(
-      "EMBEDDING_COST_UNPRICED",
-      `the tuning sweep was measured with the semantic lane refused by ${COST_GATE_KEY}, ` +
-        `so its winner scores a keyword-only system and was not saved. Declare the price of ` +
-        `${config.semantic.model ?? "the embedding model"} with ${EMBEDDING_PRICE_MODEL_KEY} and ` +
-        `${EMBEDDING_PRICE_RATE_KEY} (0 for a free self-hosted model), or lower ${COST_GATE_KEY}, ` +
-        `then run the sweep again.`,
+      missing.error,
+      `the tuning sweep was measured with the semantic lane missing (${missing.trail}), ` +
+        `so its winner scores a keyword-only system and was not saved. ` +
+        `${missing.remedy(config)}, then run the sweep again.`,
     );
   }
 

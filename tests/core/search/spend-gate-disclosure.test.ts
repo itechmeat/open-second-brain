@@ -215,6 +215,26 @@ test("a tuning sweep measured with a gated lane refuses to save its winner", asy
   expect(existsSync(tuningPath(config.vault))).toBe(false);
 });
 
+test("a tuning sweep measured with the provider unreachable refuses to save its winner", async () => {
+  if (!sqliteVecLoadable()) return;
+  const config = await gatedIndex();
+  server.setHandler(() => ({ status: 500, body: { error: { message: "down" } } }));
+  let err: unknown = null;
+  try {
+    await tuneRecall(config, DATASET, {
+      grid: GRID,
+      now: NOW,
+      transportReach: TRANSPORT_REACH.local,
+    });
+  } catch (e) {
+    err = e;
+  }
+  expect(err).toBeInstanceOf(SearchError);
+  expect((err as SearchError).code).toBe("EMBEDDING_PROVIDER_HTTP");
+  expect((err as SearchError).message).toContain(RETRIEVAL_DEGRADATION.semanticProviderUnavailable);
+  expect(existsSync(tuningPath(config.vault))).toBe(false);
+});
+
 test("an ungated tuning sweep saves its winner and reports no degradation", async () => {
   if (!sqliteVecLoadable()) return;
   const config = await gatedIndex();
