@@ -185,9 +185,12 @@ function isUnchanged(target: string, contents: string): boolean {
  * that are not valid UTF-8 can never equal an encoded string, yet the
  * caller's `expected` came from a lossy UTF-8 read of those same bytes; for
  * them the lossy decodings are compared instead, or an untouched legacy file
- * would be refused on every attempt. Known limit: two different invalid
- * sequences that decode to the same text (0xfe and 0xff both become U+FFFD)
- * are indistinguishable. A read error other than "absent" propagates - an
+ * would be refused on every attempt. Known limits of that lossy arm: two
+ * different invalid sequences that decode to the same text (0xfe and 0xff
+ * both become U+FFFD) are indistinguishable, and so is a valid UTF-8 file
+ * whose literal U+FFFD character was replaced by an invalid byte, because
+ * the edited file decodes back to the text the caller read. A read error
+ * other than "absent" propagates - an
  * unreadable target cannot be shown to be unchanged.
  */
 export function fileMatchesExpected(target: string, expected: string | null): boolean {
