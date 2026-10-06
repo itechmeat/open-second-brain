@@ -139,6 +139,11 @@ async function main(): Promise<void> {
       capped: promotion.capped,
       closed: closure.closed.length,
       kept: closure.kept.length,
+      // Why a recall narrowed (a gated query embed, a missing semantic
+      // lane) rides this local line only, present only when non-empty.
+      ...(closure.retrievalDegraded !== undefined
+        ? { retrieval_degraded: closure.retrievalDegraded }
+        : {}),
     });
   } finally {
     disarm();
