@@ -152,6 +152,21 @@ each consecutive failure up to 24 hours, instead of repeating the same
 failing upgrade on every start. `o2b brain upgrade --apply --yes` ignores
 the cooldown and clears the record once nothing is pending.
 
+Since v1.73.0 an upgrade applies exactly the plan it showed.
+`o2b brain upgrade --apply` and the automatic worker plan once and apply
+that plan; each planned row records the bytes it was read with, or that
+the file was absent. A managed file that changed on disk after the plan
+was read is refused before the snapshot is taken: nothing is written, and
+the message names the files and advises `o2b brain upgrade --dry-run` to
+review a plan that reads the edit. Each write checks the file again right
+before it replaces it, so an edit that lands mid-apply is left as it is;
+when earlier files were already rewritten the message names them and
+offers `o2b brain rollback <run_id>` (without `--force-rollback`, which
+would destroy the edit) or a re-run of the dry run. With `--apply --json`
+a refusal prints `{ "ok": false, "error", "run_id", "drifted" }`, where
+`drifted` lists the refused paths. A file that holds bytes which are not
+valid UTF-8 and was not edited still upgrades.
+
 ### The codegraph partner check
 
 `o2b doctor` consults the optional [codegraph](https://github.com/colbymchenry/codegraph)
@@ -2007,6 +2022,8 @@ so there is no separate lane field that could drift from it:
 | `semantic-embeddings-absent` | the index holds no compatible embedding |
 | `semantic-vec-extension-unavailable` | sqlite-vec is not loaded on this machine |
 | `semantic-capability-blocked` | the configured semantic capability blocks the vector lane; `detail.tier` names the rung |
+| `semantic-cost-unpriced` | the embedding model has no known price and `embedding_cost_gate_usd` is positive, so the query embed of a caller that is not local was refused before any provider call and the semantic lane did not run |
+| `semantic-query-truncated` | the query was longer than the effective embedding input window, so the semantic lane searched a cut prefix of it (or, when the instruction prefix alone fills the window, did not run); `detail.windowTokens` is the window |
 | `semantic-provider-unavailable` | the embedding provider could not answer; `detail.category` carries the error category |
 | `semantic-empty-query-vector` | the provider answered with an empty query vector |
 | `semantic-structured-lanes-skipped` | a structured semantic lane was requested while semantic search is off |
@@ -2129,6 +2146,77 @@ against a cap. The message names the model, both price keys and
 refusal, and the receipt then records `forced: true`, `price_source:
 unknown` and a null estimate. With the gate at 0 (the default) nothing is
 refused.
+
+Query embeds (since v1.73.0). Every paid query embed passes one gate: the
+search lane (reached by `o2b search`, `brain_search`,
+`brain_recall_feedback`, `brain_file_context`, `brain_eval`,
+`brain_benchmark`, `brain_tune` and the recall-inject and gap-promote
+hooks) and the `brain_context_pack` semantic belief order. Under a
+positive `embedding_cost_gate_usd`, a caller that is not local is refused
+the query embed of a model with no known price before any provider is
+called. A search that asked for the semantic lane by name fails with
+`EMBEDDING_COST_UNPRICED`; a hybrid search falls back to keyword-only,
+says so in a warning and records `semantic-cost-unpriced` in its trail.
+The message names the model and the price pair that clears the refusal,
+and says only that the gate is positive, never its amount. The CLI runs
+at local reach, so `o2b search` is not gated, as before. The hooks run at
+remote reach: under a positive gate on an unpriced model they recall by
+keyword only and name the code on their local audit line
+(`retrieval_degraded`). Declare the price (`0` for a free self-hosted
+model) to bring the semantic lane back.
+
+The same gate fits the query to the model's input window before it is
+sent. The effective window is `embedding_input_window_tokens` when set,
+then the window the curated model table declares, then unknown; an
+unknown window cuts nothing. The cut counts the instruction prefix the
+provider sends, is made at a code-point boundary under the conservative
+token estimate, and is disclosed: a warning names the window and how much
+of the query was embedded, and the trail records
+`semantic-query-truncated` with `detail.windowTokens`. When the
+instruction prefix alone fills the window nothing is embedded: an explicit
+semantic search and the semantic belief order refuse with `INVALID_INPUT`,
+and a hybrid search falls back to keyword-only with the same trail code.
+An answer refused by the gate or cut to the window is never cached, so
+declaring a price or a window takes effect on the next search.
+`brain_context_pack` discloses `query_tokens` for the text actually sent,
+instruction prefix included, and its omitted reach now resolves to remote
+like every other reader.
+
+`embedding_input_window_tokens`
+(`OPEN_SECOND_BRAIN_EMBEDDING_INPUT_WINDOW_TOKENS`, since v1.73.0)
+declares the input window, in the model's own tokens, of a model the
+curated table does not list, or overrides the table's value. It is an
+integer of at least 1; a blank value is refused rather than read as
+unset. The chunk-window census of an index run and of `o2b search status`
+reads the same window, so a declared window enables it for an uncurated
+model. The
+offline `local` embedder has no input window, so the key is refused with
+`INVALID_INPUT` when `embedding_provider` is `local`.
+
+`embedding_extra_body` (`OPEN_SECOND_BRAIN_EMBEDDING_EXTRA_BODY`, since
+v1.73.0) sends operator-declared fields with every embedding request to an
+OpenAI-compatible endpoint, for a serving stack that needs a field the
+provider does not send (a `dimensions` value, a truncation switch). The
+value is one JSON object in one key, because the flat config format
+cannot hold a nested map:
+
+```yaml
+embedding_extra_body: '{"dimensions": 512}'
+embedding_dimension: 512
+```
+
+The owned request fields `model`, `input` and `encoding_format` may not
+be set, in any spelling (case, `_` and `-`, fullwidth and zero-width
+variants are folded before the comparison), and are refused by name with
+`INVALID_INPUT`. A blank value, invalid JSON or a JSON value that is not
+an object is refused the same way, naming the env variable or the key
+that supplied it. Only `openai-compat` sends the body, so the key is
+refused for any other provider; `disabled` sends nothing and is exempt. A
+`dimensions` field changes the width the provider answers with, so it
+requires `embedding_dimension` and must agree with it. The checks run on
+the resolved config, so a programmatic override meets them too. The extra
+body is not part of the embedding identity: declaring or editing it never
+triggers a reindex.
 
 Vector carry-over (since v1.72.0). When a note is edited, a chunk whose
 content did not change keeps its stored vector, provided the vector was
@@ -2354,7 +2442,7 @@ by the id below.
 
 | id | verb | what leaves | when it can happen |
 | --- | --- | --- | --- |
-| `search-embedding-openai-compat` | `o2b search index` / any reindex | every indexed chunk BODY, verbatim | only once `search_embedding_endpoint` + an API key are configured; the endpoint is whichever host you name, including a local one |
+| `search-embedding-openai-compat` | `o2b search index` / any reindex | every indexed chunk BODY, verbatim, plus any fields declared in `embedding_extra_body` | only once `search_embedding_endpoint` + an API key are configured; the endpoint is whichever host you name, including a local one |
 | `search-embedding-zeroentropy` | `o2b search index` (zeroentropy profile) | the same chunk bodies, to a second vendor's embed endpoint | same gate, when that provider profile is selected |
 | `search-rerank-cross-encoder` | `o2b search --rerank` | the QUERY plus the top-of-pool candidate DOCUMENTS - vault text the embedding path may never have seen, chosen by relevance to what you just asked | only with a reranker endpoint configured |
 | `brain-telegram-capture` | `o2b brain telegram-run` | reply text POSTed to the Telegram Bot API; the `/catchup` reply is composed from vault content | only while the runner verb is running; an install that never starts it never reaches this path |

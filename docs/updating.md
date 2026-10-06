@@ -47,6 +47,60 @@ instruction files such as `CLAUDE.md`/`AGENTS.md`, installed
 `.claude/skills/`) and warns with the exact replacement for any stale
 reference it finds (`removed-tool-reference`).
 
+## Upgrading to 1.73.0
+
+No step is required unless you set a positive `embedding_cost_gate_usd`
+on a model with no known price, run a model the curated table does not
+list, or want to send extra request fields to your embedding endpoint.
+
+**Hooks and MCP searches under a positive gate fall back to keyword-only
+and say so.** The query embed of a search that is not at local reach
+(every MCP tool and the recall-inject and gap-promote hooks) now passes
+the same price gate as the embedding runs of 1.72.0. With a positive
+`embedding_cost_gate_usd` on a model with no known price, a hybrid
+search answers keyword-only and records `semantic-cost-unpriced` in its
+trail, a hook names the code on its local audit line
+(`retrieval_degraded`), and an explicit semantic search fails with
+`EMBEDDING_COST_UNPRICED`. `o2b search` at the CLI runs at local reach
+and is unchanged. Declare the price of a self-hosted model to keep the
+semantic lane:
+
+```yaml
+embedding_price_model: nomic-embed-text:latest
+embedding_price_usd_per_mtok: 0
+```
+
+`brain_tune` now refuses to save a winner measured without the semantic
+lane, and recall feedback on such a search no longer moves the learned
+weights.
+
+**Declare the input window of an uncurated model.** A query longer than
+the model's input window is now cut to it before the embed and the trail
+records `semantic-query-truncated`. For a model the curated table does
+not list the window is unknown and nothing is cut; set
+`embedding_input_window_tokens` to the model's window (in its own
+tokens) so long queries are cut and disclosed instead of truncated or
+refused silently by the server. The key is refused for the `local`
+provider.
+
+**Extra request fields need `openai-compat`.** `embedding_extra_body`
+takes one JSON object, is sent only by the `openai-compat` provider
+(refused for others, inert for `disabled`), refuses `model`, `input` and
+`encoding_format`, and a `dimensions` field needs `embedding_dimension`
+set to the same width.
+
+**Upgrades refuse a file edited after the plan was read.**
+`o2b brain upgrade --apply` and the automatic upgrade worker now apply
+the plan they computed. When a managed file changed in between, nothing
+is overwritten: re-run `o2b brain upgrade --dry-run` and apply the new
+plan. Under `--apply --json` a refusal prints
+`{ "ok": false, "error", "run_id", "drifted" }`. In the `--dry-run --json`
+plan, a file that does not exist yet still reports `before_size: 0`.
+
+`brain_recall_feedback` gains an additive `degraded` array, and
+`brain_context_pack` in `semantic` mode resolves an omitted reach to
+remote and counts the instruction prefix in `query_tokens`.
+
 ## Upgrading to 1.72.0
 
 No step is required unless you set a positive `embedding_cost_gate_usd`,

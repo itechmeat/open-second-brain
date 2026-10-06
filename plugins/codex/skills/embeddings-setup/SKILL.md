@@ -88,7 +88,10 @@ model the table does not list (most local servers, newer or niche
 models) is `unknown`, and its estimates print `price unknown`. When the
 user has set a positive `embedding_cost_gate_usd`, an unknown price
 refuses embedding runs with `EMBEDDING_COST_UNPRICED` until the price is
-declared. Ask the user for the provider's rate (USD per million tokens)
+declared, and it also refuses the query embeds of searches that do not
+run at local reach (MCP tools and hooks): a hybrid search falls back to
+keyword-only and names `semantic-cost-unpriced` in its trail. Ask the
+user for the provider's rate (USD per million tokens)
 and write the pair beside the other embedding settings:
 
 ```bash
@@ -102,6 +105,38 @@ it when the user confirms the endpoint costs nothing, because a
 loopback URL can still be a paid proxy. The pair names one model, so
 after a model switch `o2b search check` flags the stale declaration
 until it is updated. Declaring a price never triggers a reindex.
+
+### Declare the model's input window (uncurated models)
+
+A search query longer than the model's input window is cut to it before
+the embed and the trail names `semantic-query-truncated`. The window
+comes from the curated model table; for a model it does not list the
+window is unknown and nothing is cut, so a serving stack that truncates
+silently or refuses long inputs does so unannounced. When the user knows
+the model's window (in its own tokens), declare it:
+
+```bash
+OPEN_SECOND_BRAIN_EMBEDDING_INPUT_WINDOW_TOKENS=512
+```
+
+(or `embedding_input_window_tokens` in the o2b config). It is refused
+for the `local` provider, which has no window.
+
+### Extra request fields (OpenAI-compatible endpoints)
+
+When the user's serving stack needs a request field the provider does
+not send, put a JSON object in `embedding_extra_body` (env
+`OPEN_SECOND_BRAIN_EMBEDDING_EXTRA_BODY`). Only `openai-compat` sends it,
+and `model`, `input` and `encoding_format` are refused by name. A
+`dimensions` field needs `embedding_dimension` set to the same width:
+
+```bash
+OPEN_SECOND_BRAIN_EMBEDDING_EXTRA_BODY='{"dimensions": 512}'
+OPEN_SECOND_BRAIN_EMBEDDING_DIM=512
+```
+
+The extra body is not part of the embedding identity, so changing it
+never triggers a reindex; a changed `embedding_dimension` does.
 
 ## Step 3 — macOS: install Homebrew SQLite
 

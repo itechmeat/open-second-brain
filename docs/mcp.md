@@ -2394,3 +2394,30 @@ format characters), when it contains NUL, or when it exceeds the cap.
   model has no known price), `brain_maintenance` spend receipts carry
   `price_source` with a null `estimated_usd` for an unknown price. No new
   tool.
+- Since v1.73.0 every paid query embed passes one gate. Under a positive
+  `embedding_cost_gate_usd`, a caller that is not local is refused the
+  query embed of a model with no known price before any provider call:
+  `brain_search` with an explicit semantic request fails with
+  `EMBEDDING_COST_UNPRICED`, and a hybrid search (also inside
+  `brain_recall_feedback`, `brain_file_context`, `brain_eval`,
+  `brain_benchmark` and `brain_tune`) falls back to keyword-only with
+  `semantic-cost-unpriced` in its retrieval trail. A query longer than
+  the effective embedding input window (`embedding_input_window_tokens`,
+  then the curated model table, then unknown, which cuts nothing) is cut
+  and records `semantic-query-truncated`; when the instruction prefix
+  alone fills the window, an explicit semantic search and the
+  `brain_context_pack` semantic belief order refuse with `INVALID_INPUT`.
+  `brain_context_pack` resolves an omitted reach to remote like every
+  other reader, and its `semantic.query_tokens` counts the text actually
+  sent, instruction prefix included. `brain_recall_feedback` returns an
+  additive `degraded` array with the re-run's degradation codes (empty
+  when nothing narrowed it), and a feedback event whose re-run lost the
+  semantic lane records zero layer contributions, so the learned weights
+  do not learn from a keyword-only answer. `brain_benchmark`, `brain_eval`
+  and `brain_tune` reports carry a `degraded` union (and per query or per
+  grid row) when a run measured a smaller system than the configured one,
+  and `brain_tune` refuses to save a winner measured with the semantic
+  lane missing: `EMBEDDING_COST_UNPRICED` for the cost gate,
+  `EMBEDDING_KEY_MISSING` or `EMBEDDING_DISABLED` for a blocked tier,
+  `EMBEDDING_PROVIDER_HTTP` when the provider did not answer, each naming
+  the remedy.
