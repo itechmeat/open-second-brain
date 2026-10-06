@@ -145,31 +145,85 @@ function windowed(config: ResolvedSearchConfig, inputWindowTokens: number): Reso
   return { ...config, semantic: { ...config.semantic, inputWindowTokens } };
 }
 
-const LONG_QUERY = Array.from({ length: 40 }, () => "fox").join(" ");
+/** A curated model whose window the table declares (512 tokens), indexed with the cache on. */
+const E5_MODEL = "intfloat/multilingual-e5-small";
+
+async function e5Index(): Promise<ResolvedSearchConfig> {
+  const v = createTempVault("spend-gate-e5");
+  cleanup = v.cleanup;
+  writeMd(v.vault, "Notes/fox.md", NOTE);
+  const config = makeConfig({
+    vault: v.vault,
+    dbPath: v.dbPath,
+    cacheEnabled: true,
+    semantic: {
+      enabled: true,
+      provider: "openai-compat",
+      baseUrl: server.url,
+      model: E5_MODEL,
+      apiKey: FAKE_PROVIDER_KEY,
+      dimension: 4,
+      maxRetries: 1,
+      costGateUsd: 0,
+      queryPrefix: "query: ",
+    },
+  });
+  await indexVault(config, { embeddings: true });
+  return config;
+}
+
+const LONG_QUERY = Array.from({ length: 2000 }, () => "fox").join(" ");
+
+function codesOf(out: Awaited<ReturnType<typeof search>>): string[] {
+  return out.retrievalTrail?.degraded.map((d) => d.code) ?? [];
+}
 
 test.skipIf(!sqliteVecLoadable())(
-  "a query cut to its window is served but never cached",
+  "a query cut to a curated window is cached under that window",
   async () => {
-    const config = windowed(await gatedIndex(), 4);
+    const config = await e5Index();
     const local = { query: LONG_QUERY, limit: 5, transportReach: TRANSPORT_REACH.local };
-    const cut = await search(config, local);
-    expect(cut.retrievalTrail?.degraded.map((d) => d.code)).toContain(
-      RETRIEVAL_DEGRADATION.semanticQueryTruncated,
-    );
-    expect(cut.results.length).toBeGreaterThan(0);
-    // The same cut query is embedded again rather than served from a cache.
-    const again = server.callCount();
-    await search(config, local);
-    expect(server.callCount()).toBe(again + 1);
-    // A wider window declared afterwards reaches the next identical query.
     const before = server.callCount();
-    const whole = await search(windowed(config, 8192), local);
+    const cut = await search(config, local);
     expect(server.callCount()).toBe(before + 1);
-    expect(whole.retrievalTrail?.degraded.map((d) => d.code) ?? []).not.toContain(
-      RETRIEVAL_DEGRADATION.semanticQueryTruncated,
-    );
+    expect(codesOf(cut)).toContain(RETRIEVAL_DEGRADATION.semanticQueryTruncated);
+    expect(cut.results.length).toBeGreaterThan(0);
+    // The same cut query under the same window is served from the cache.
+    const again = await search(config, local);
+    expect(server.callCount()).toBe(before + 1);
+    expect(codesOf(again)).toContain(RETRIEVAL_DEGRADATION.semanticQueryTruncated);
   },
 );
+
+test.skipIf(!sqliteVecLoadable())(
+  "a declared or changed window re-keys the cut answer",
+  async () => {
+    const config = await e5Index();
+    const local = { query: LONG_QUERY, limit: 5, transportReach: TRANSPORT_REACH.local };
+    await search(config, local);
+    // A wider window declared afterwards reaches the next identical query.
+    const before = server.callCount();
+    const whole = await search(windowed(config, 1_000_000), local);
+    expect(server.callCount()).toBe(before + 1);
+    expect(codesOf(whole)).not.toContain(RETRIEVAL_DEGRADATION.semanticQueryTruncated);
+    // A narrower one is a different cut, so it is computed again too.
+    const narrower = await search(windowed(config, 64), local);
+    expect(server.callCount()).toBe(before + 2);
+    expect(codesOf(narrower)).toContain(RETRIEVAL_DEGRADATION.semanticQueryTruncated);
+  },
+);
+
+test.skipIf(!sqliteVecLoadable())("a changed query prefix re-keys the cut answer", async () => {
+  const config = await e5Index();
+  const local = { query: LONG_QUERY, limit: 5, transportReach: TRANSPORT_REACH.local };
+  await search(config, local);
+  const before = server.callCount();
+  await search(
+    { ...config, semantic: { ...config.semantic, queryPrefix: "search_query: " } },
+    local,
+  );
+  expect(server.callCount()).toBe(before + 1);
+});
 
 // ── the benchmark ────────────────────────────────────────────────────────────
 

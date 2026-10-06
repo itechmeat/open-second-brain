@@ -1271,7 +1271,9 @@ semantic_weight·cosine + link_boost + recency_boost + entity_boost)`
   more than the window and treats every language alike. A refused or cut
   query is disclosed by trail code (`semantic-cost-unpriced`,
   `semantic-query-truncated`, and `semantic-query-empty-fit` when the
-  instruction prefix alone fills the window) and such an answer is never cached.
+  instruction prefix alone fills the window). A refused answer is never
+  cached; a cut one is cached under a key that carries the effective
+  window and the query prefix, so a changed window re-keys it.
 - **Atomic reindex.** `o2b search reindex` writes to
   `brain.sqlite.new`, renames to `brain.sqlite`, and keeps the
   previous file as `brain.sqlite.bak`. If the main file is missing on

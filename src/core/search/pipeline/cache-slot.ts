@@ -9,6 +9,7 @@
 
 import { canonicalSourceSetKey } from "../../scope-key.ts";
 import { activationStateFingerprint } from "../activation/store.ts";
+import { effectiveInputWindowTokens, queryPrefixSentByProvider } from "../embeddings/presets.ts";
 import { learnedWeightsFingerprint } from "../feedback.ts";
 import { buildCacheKey, getCachedOutcome, putCachedOutcome } from "../query-cache.ts";
 import { reinforceFingerprint } from "../reinforce.ts";
@@ -108,6 +109,17 @@ function configFingerprint(config: ResolvedSearchConfig): string {
     tri: r.trigramPrefilterEnabled,
     triMin: r.trigramPrefilterMinChunks,
     triSel: r.trigramPrefilterMaxSelectivity,
+    // The query embed is fitted to the effective input window with the
+    // instruction prefix the provider sends counted in, so either one
+    // changes the text embedded (and whether it was cut): a declared or
+    // changed window, or another prefix, re-keys the answer. Present only
+    // with semantic search on, so every keyword-only key is unchanged.
+    ...(config.semantic.enabled
+      ? {
+          qWin: effectiveInputWindowTokens(config.semantic),
+          qPre: queryPrefixSentByProvider(config.semantic.provider, config.semantic.queryPrefix),
+        }
+      : {}),
   });
 }
 

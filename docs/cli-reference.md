@@ -2181,8 +2181,11 @@ semantic search and the semantic belief order refuse with `INVALID_INPUT`,
 and a hybrid search falls back to keyword-only with the trail code
 `semantic-query-empty-fit`, which, unlike a cut, always means the
 semantic lane did not run.
-An answer refused by the gate or cut to the window is never cached, so
-declaring a price or a window takes effect on the next search.
+An answer refused by the gate is never cached, so declaring a price takes
+effect on the next search. An answer cut to the window is cached under a
+key that carries the effective window and the query prefix, so a repeated
+long query is not embedded again, and a declared or changed window takes
+effect on the next search.
 `brain_context_pack` discloses `query_tokens` for the text actually sent,
 instruction prefix included, and its omitted reach now resolves to remote
 like every other reader.
