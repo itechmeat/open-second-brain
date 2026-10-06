@@ -5,19 +5,22 @@ import { join } from "node:path";
 
 import { OpenAICompatProvider } from "../../../src/core/search/embeddings/openai-compat.ts";
 import { providerCeilingKey } from "../../../src/core/search/embeddings/provider-semaphore.ts";
-import { embeddingSignature } from "../../../src/core/search/embeddings/signature.ts";
 import {
   EXTRA_BODY_ENV,
   EXTRA_BODY_KEY,
   RESERVED_EMBEDDING_BODY_KEYS,
   resolveSearchConfig,
 } from "../../../src/core/search/index.ts";
+import { indexStatus, indexVault, reindexVault } from "../../../src/core/search/indexer.ts";
 import { SearchError } from "../../../src/core/search/search-error.ts";
 import type {
   ResolvedEmbeddingConfig,
   ResolvedSearchConfig,
 } from "../../../src/core/search/types.ts";
+import { SafeguardAbortError } from "../../../src/core/brain/safeguard.ts";
 import { startFakeHttp, type FakeHttp } from "../../helpers/fake-http.ts";
+import { makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
+import { sqliteVecLoadable } from "../../helpers/sqlite-vec.ts";
 import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
 
 let server: FakeHttp;
@@ -293,7 +296,81 @@ test("a disabled provider leaves an extra body inert rather than refused", () =>
 
 // ── identity ─────────────────────────────────────────────────────────────────
 
-test("the extra body is not part of the embedding identity", () => {
+/** A config over the test vault that indexes through the fake provider. */
+function indexConfig(
+  extraBody?: Readonly<Record<string, unknown>>,
+  rest: Partial<ResolvedSearchConfig> = {},
+): ResolvedSearchConfig {
+  const semantic = cfg(extraBody === undefined ? {} : { extraBody: Object.freeze(extraBody) });
+  return Object.freeze({
+    ...makeConfig({
+      vault: tmp,
+      dbPath: join(tmp, ".open-second-brain", "brain.sqlite"),
+      semantic,
+    }),
+    ...rest,
+  });
+}
+
+test.skipIf(!sqliteVecLoadable())(
+  "adding an extra body to an indexed vault re-embeds nothing and keeps the status signature",
+  async () => {
+    writeMd(tmp, "a.md", "# A\n\nFirst note about something.");
+    const plain = indexConfig();
+    const first = await indexVault(plain, { embeddings: true });
+    expect(first.embeddingsComputed).toBeGreaterThan(0);
+    const plainStatus = await indexStatus(plain);
+    const calls = server.callCount();
+
+    const extra = indexConfig({ user: "x" });
+    const second = await indexVault(extra, { embeddings: true });
+    expect(second.embeddingsComputed).toBe(0);
+    expect(server.callCount()).toBe(calls);
+
+    const extraStatus = await indexStatus(extra);
+    expect(extraStatus.embeddingSignature).toBe(plainStatus.embeddingSignature);
+    expect(extraStatus.staleEmbeddings).toBe(0);
+    expect(extraStatus.embeddings).toBe(extraStatus.chunks);
+
+    // The body is in force: a new note goes out with it, and alone.
+    const bodies: unknown[] = [];
+    server.setHandler(captureBodies(bodies));
+    writeMd(tmp, "b.md", "# B\n\nSecond note discussing things.");
+    await indexVault(extra, { embeddings: true });
+    expect(bodies.length).toBeGreaterThan(0);
+    for (const body of bodies) {
+      expect(body).toMatchObject({ user: "x" });
+      expect(JSON.stringify(body)).not.toContain("First note");
+    }
+  },
+);
+
+test.skipIf(!sqliteVecLoadable())(
+  "an interrupted rebuild resumes under a config that adds an extra body",
+  async () => {
+    for (let i = 0; i < 4; i++) writeMd(tmp, `n${i}.md`, `# N${i}\n\nbody number ${i}`);
+    const ac = new AbortController();
+    let processed = 0;
+    await expect(
+      reindexVault(indexConfig(undefined, { resumeReindex: true }), {
+        embeddings: true,
+        signal: ac.signal,
+        onFile: () => {
+          if (++processed === 1) ac.abort();
+        },
+      }),
+    ).rejects.toBeInstanceOf(SafeguardAbortError);
+
+    const stats = await reindexVault(indexConfig({ user: "x" }, { resumeReindex: true }), {
+      embeddings: true,
+    });
+    // A discarded staging build would count every note as added.
+    expect(stats.unchanged).toBeGreaterThanOrEqual(1);
+    expect(stats.added + stats.unchanged).toBe(4);
+  },
+);
+
+test("an extra body shares the provider's concurrency ceiling", () => {
   const base = [
     "embedding_provider: openai-compat",
     "embedding_model: fake-model",
@@ -301,9 +378,7 @@ test("the extra body is not part of the embedding identity", () => {
   ];
   const plain = resolveWith(base).semantic;
   const extra = resolveWith([...base, `${EXTRA_BODY_KEY}: {"user": "x"}`]).semantic;
-  const identity = (s: ResolvedEmbeddingConfig) =>
-    embeddingSignature({ provider: s.provider, model: s.model, dimension: s.dimension });
-  expect(identity(extra)).toBe(identity(plain));
+  expect(extra.extraBody).toEqual({ user: "x" });
   expect(providerCeilingKey("openai-compat", extra, server.url)).toBe(
     providerCeilingKey("openai-compat", plain, server.url),
   );
