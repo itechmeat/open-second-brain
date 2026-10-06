@@ -456,7 +456,10 @@ export class OpenAICompatProvider implements EmbeddingProvider {
           "content-type": "application/json",
           authorization: `Bearer ${this.activeKey}`,
         },
+        // The operator's extra fields go first so the owned fields always
+        // win; resolution already refuses a reserved key by name.
         body: JSON.stringify({
+          ...this.config.extraBody,
           model: this.model,
           input: texts,
           encoding_format: "float",

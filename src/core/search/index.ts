@@ -402,6 +402,82 @@ function resolveEmbeddingPriceOverride(
   return Object.freeze({ model, usdPerMtok });
 }
 
+const EXTRA_BODY_KEY = "embedding_extra_body";
+const EXTRA_BODY_ENV = "OPEN_SECOND_BRAIN_EMBEDDING_EXTRA_BODY";
+
+/**
+ * Request-body fields the OpenAI-compatible provider owns. An extra body
+ * may not name them in any spelling: the provider spreads the extra
+ * fields first so these win anyway, but a silently ignored field is a
+ * configuration the operator believes is in force when it is not.
+ */
+export const RESERVED_EMBEDDING_BODY_KEYS: ReadonlyArray<string> = Object.freeze([
+  "model",
+  "input",
+  "encoding_format",
+]);
+
+/** NFC, lower case, `_` and `-` dropped: the reach-refusal normalisation. */
+function normalizeBodyKey(name: string): string {
+  return name.normalize("NFC").toLowerCase().replaceAll(/[_-]/g, "");
+}
+
+const RESERVED_BODY_KEYS_NORMALIZED: ReadonlySet<string> = new Set(
+  RESERVED_EMBEDDING_BODY_KEYS.map(normalizeBodyKey),
+);
+
+/**
+ * The operator's extra request body: a JSON object in one flat key,
+ * because the config file cannot hold a nested map. Read with raw
+ * presence so a blank value is refused rather than folded into "unset".
+ * Every refusal names the source the value came from - the env variable
+ * when it is set, the config key otherwise. A `dimensions` field that
+ * disagrees with a configured `embedding_dimension` is refused here,
+ * because with no configured width the first response would silently
+ * set a width the stored index does not have. Null when neither source
+ * sets the key.
+ */
+function resolveEmbeddingExtraBody(
+  env: NodeJS.ProcessEnv,
+  config: Readonly<Record<string, string>>,
+  dimension: number | null,
+): Readonly<Record<string, unknown>> | null {
+  const raw = rawSetting(env, config, EXTRA_BODY_ENV, EXTRA_BODY_KEY);
+  if (raw === null) return null;
+  const source = env[EXTRA_BODY_ENV] !== undefined ? EXTRA_BODY_ENV : EXTRA_BODY_KEY;
+  if (raw.trim() === "") {
+    throw new SearchError("INVALID_INPUT", `${source} must be a JSON object, got a blank value`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new SearchError("INVALID_INPUT", `${source} must be a JSON object, got invalid JSON`);
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    const kind = parsed === null ? "null" : Array.isArray(parsed) ? "an array" : typeof parsed;
+    throw new SearchError("INVALID_INPUT", `${source} must be a JSON object, got ${kind}`);
+  }
+  const body = parsed as Record<string, unknown>;
+  const reserved = Object.keys(body).filter((k) =>
+    RESERVED_BODY_KEYS_NORMALIZED.has(normalizeBodyKey(k)),
+  );
+  if (reserved.length > 0) {
+    throw new SearchError(
+      "INVALID_INPUT",
+      `${source} may not set the owned request fields (${RESERVED_EMBEDDING_BODY_KEYS.join(", ")}): ` +
+        `refused ${reserved.map((k) => `'${k}'`).join(", ")}`,
+    );
+  }
+  if (dimension !== null && "dimensions" in body && body["dimensions"] !== dimension) {
+    throw new SearchError(
+      "INVALID_INPUT",
+      `${source} sets dimensions ${JSON.stringify(body["dimensions"])} but embedding_dimension is ${dimension}`,
+    );
+  }
+  return Object.freeze(body);
+}
+
 /**
  * Raw setting lookup that preserves an explicit empty string
  * (memory-write-path-integrity B2). Unlike `envOrConfig`, which folds `""`
@@ -799,6 +875,7 @@ export function resolveSearchConfig(opts: {
     "embedding_cost_gate_usd",
   );
   const priceOverride = resolveEmbeddingPriceOverride(env, config);
+  const extraBody = resolveEmbeddingExtraBody(env, config, dimension);
 
   // Instruction prefixes (memory-write-path-integrity B2). Resolved with raw
   // presence, not `envOrConfig`, because an explicit empty string must DISABLE
@@ -834,6 +911,7 @@ export function resolveSearchConfig(opts: {
     ...(priceOverride === null ? {} : { priceOverride }),
     queryPrefix,
     passagePrefix,
+    ...(extraBody === null ? {} : { extraBody }),
   });
 
   // Cross-encoder rerank (retrieval-precision-quality-loop, card A). Off

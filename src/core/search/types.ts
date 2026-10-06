@@ -1289,6 +1289,14 @@ export interface ResolvedEmbeddingConfig {
   readonly queryPrefix?: string;
   /** Active instruction prefix for an indexed passage; see {@link queryPrefix}. */
   readonly passagePrefix?: string;
+  /**
+   * Extra request-body fields for an OpenAI-compatible endpoint, from
+   * `embedding_extra_body` / `OPEN_SECOND_BRAIN_EMBEDDING_EXTRA_BODY` (a
+   * JSON object). Absent when the key is unset. Never carries a reserved
+   * owned field, and never part of the embedding identity, so declaring or
+   * editing it never triggers a reindex.
+   */
+  readonly extraBody?: Readonly<Record<string, unknown>>;
 }
 
 /**
