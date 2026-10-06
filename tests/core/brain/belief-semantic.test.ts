@@ -9,7 +9,10 @@
  * and `Brain/retired/` notes, embeds the query exactly once with the
  * `query` prefix kind, refuses a blocked tier and a missing sqlite-vec
  * by name BEFORE any query embed, and discloses the model, the price
- * source, the query tokens and the nullable query cost.
+ * source, the query tokens and the nullable query cost. The query goes
+ * through the shared query-embed gateway: an omitted reach is remote, the
+ * text is fitted to the model's input window (a cut adds one warning) and
+ * the disclosed query tokens count the instruction prefix.
  *
  * Deliberately not covered here: the reach filter and the
  * `BELIEF_VECTORS_MISSING` refusal, which are decided after the pack
@@ -26,8 +29,12 @@ import {
   type StoredBeliefVector,
 } from "../../../src/core/brain/belief-semantic.ts";
 import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
+import { E5_QUERY_PREFIX } from "../../../src/core/search/embeddings/presets.ts";
 import { EMBEDDING_PRICE_SOURCE } from "../../../src/core/search/embeddings/pricing.ts";
-import { LOCAL_EMBEDDING_MODEL } from "../../../src/core/search/embeddings/signature.ts";
+import {
+  estimateTokens,
+  LOCAL_EMBEDDING_MODEL,
+} from "../../../src/core/search/embeddings/signature.ts";
 import type { EmbedKind, EmbeddingProvider } from "../../../src/core/search/embeddings/contract.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { EMBEDDING_DIMENSION_STATE_KEY, Store } from "../../../src/core/search/store.ts";
@@ -461,6 +468,21 @@ describe("loadBeliefSemanticRelevance", () => {
       },
     );
 
+    // An omitted reach resolves as everywhere else in the tree: remote.
+    test.skipIf(!VEC_LOADABLE)(
+      "is refused with EMBEDDING_COST_UNPRICED when the caller names no reach",
+      async () => {
+        const config = await seed({ costGateUsd: 1 });
+
+        const refusal = await loadBeliefSemanticRelevance(config, QUERY, {
+          provider: throwingProvider,
+        }).catch((e: unknown) => e);
+
+        expect(refusal).toBeInstanceOf(SearchError);
+        expect((refusal as SearchError).code).toBe("EMBEDDING_COST_UNPRICED");
+      },
+    );
+
     test.skipIf(!VEC_LOADABLE)("is embedded once and disclosed for a local caller", async () => {
       const config = await seed({ costGateUsd: 1 });
       const { provider, calls } = countingProvider(unit([1, 0, 0, 0]));
@@ -491,6 +513,71 @@ describe("loadBeliefSemanticRelevance", () => {
           });
           expect(calls).toHaveLength(1);
         }
+      },
+    );
+  });
+
+  describe("the query is fitted to the model's input window", () => {
+    const E5_MODEL = "intfloat/multilingual-e5-small";
+
+    async function seed(semantic: Partial<ResolvedEmbeddingConfig>): Promise<ResolvedSearchConfig> {
+      writeBelief("Brain/preferences/pref-a.md", "pref-a", "Keep answers short");
+      const config = vecConfig({ model: E5_MODEL, queryPrefix: E5_QUERY_PREFIX, ...semantic });
+      await indexVault(config);
+      await plant(config, {
+        "Brain/preferences/pref-a.md": { vector: [1, 0, 0, 0], model: E5_MODEL },
+      });
+      return config;
+    }
+
+    test.skipIf(!VEC_LOADABLE)(
+      "discloses the query tokens of the text sent, instruction prefix included",
+      async () => {
+        const config = await seed({});
+        const { provider, calls } = countingProvider(unit([1, 0, 0, 0]));
+
+        const loaded = await loadBeliefSemanticRelevance(config, QUERY, { provider });
+
+        // The provider adds the prefix itself, so the query goes in bare.
+        expect(calls).toEqual([{ texts: [QUERY], kind: "query" }]);
+        expect(loaded.report.queryTokens).toBe(estimateTokens([E5_QUERY_PREFIX + QUERY]));
+        expect(loaded.report.queryTokens).toBeGreaterThan(estimateTokens([QUERY]));
+        expect(loaded.warnings).toEqual([]);
+      },
+    );
+
+    test.skipIf(!VEC_LOADABLE)(
+      "embeds an over-window query cut, with one warning naming the window",
+      async () => {
+        const config = await seed({ inputWindowTokens: 8 });
+        const { provider, calls } = countingProvider(unit([1, 0, 0, 0]));
+        const long = `${QUERY} ${"and keep every answer brief ".repeat(20)}`;
+
+        const loaded = await loadBeliefSemanticRelevance(config, long, { provider });
+
+        expect(calls).toHaveLength(1);
+        const sent = calls[0]!.texts[0]!;
+        expect(sent.length).toBeGreaterThan(0);
+        expect(sent.length).toBeLessThan(long.length);
+        expect(long.startsWith(sent)).toBe(true);
+        expect(loaded.report.queryTokens).toBe(estimateTokens([E5_QUERY_PREFIX + sent]));
+        expect(loaded.warnings).toHaveLength(1);
+        expect(loaded.warnings[0]).toContain("8");
+        expect(loaded.scored).toBe(1);
+      },
+    );
+
+    test.skipIf(!VEC_LOADABLE)(
+      "refuses with INVALID_INPUT before any embed when the prefix alone fills the window",
+      async () => {
+        const config = await seed({ inputWindowTokens: 1 });
+
+        const refusal = await loadBeliefSemanticRelevance(config, QUERY, {
+          provider: throwingProvider,
+        }).catch((e: unknown) => e);
+
+        expect(refusal).toBeInstanceOf(SearchError);
+        expect((refusal as SearchError).code).toBe("INVALID_INPUT");
       },
     );
   });

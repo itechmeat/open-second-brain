@@ -19,11 +19,14 @@
  *     with the query and counts as unembedded, never as scored.
  *   - {@link loadBeliefSemanticRelevance} opens the index, refuses a
  *     blocked capability tier and a missing sqlite-vec by name BEFORE it
- *     embeds anything, embeds the query exactly once with the `query`
- *     prefix kind, and discloses that one spend: the model, the price
- *     source, the query tokens and the cost (null when the price is
- *     unknown). A remote caller's embed of an unpriced model is refused
- *     under a positive cost gate, before the call.
+ *     embeds anything, asks the query-embed gateway (`prepareQueryEmbed`)
+ *     whether and with what text to embed, embeds that text exactly once
+ *     with the `query` prefix kind, and discloses that one spend: the
+ *     model, the price source, the query tokens actually sent (prefix
+ *     included) and the cost (null when the price is unknown). A caller
+ *     that is not local is refused an unpriced model's embed under a
+ *     positive cost gate, before the call; a query cut to the model's
+ *     input window adds a warning.
  *
  * No belief row under the model anywhere is refused here, before the
  * embed, with `BELIEF_VECTORS_MISSING`: none in reach can have one. Any
@@ -39,13 +42,22 @@ import {
   semanticCapabilityLabel,
 } from "../search/capability-tier.ts";
 import type { EmbeddingProvider } from "../search/embeddings/contract.ts";
-import { activeSpendQuote, COST_GATE_KEY, formatEstimatedUsd } from "../search/embedding-spend.ts";
-import { EMBEDDING_PRICE_SOURCE, type EmbeddingPriceSource } from "../search/embeddings/pricing.ts";
+import { formatEstimatedUsd } from "../search/embedding-spend.ts";
+import type { EmbeddingPriceSource } from "../search/embeddings/pricing.ts";
 import { makeProvider } from "../search/embeddings/provider.ts";
-import { estimateCostUsd, estimateTokens } from "../search/embeddings/signature.ts";
+import {
+  prepareQueryEmbed,
+  queryEmbedRefusalMessage,
+  type QueryEmbedReady,
+} from "../search/embeddings/query-embed.ts";
+import { estimateCostUsd } from "../search/embeddings/signature.ts";
 import { SearchError } from "../search/search-error.ts";
 import { isRemotelyReadable } from "../graph/visibility.ts";
-import { TRANSPORT_REACH, type TransportReach } from "../graph/transport-reach.ts";
+import {
+  resolvedTransportReach,
+  TRANSPORT_REACH,
+  type TransportReach,
+} from "../graph/transport-reach.ts";
 import { contradictedAbiFields, formatEmbeddingAbiDrift, Store } from "../search/store.ts";
 import type { ResolvedSearchConfig } from "../search/types.ts";
 import { assertValidVector } from "../search/vector-guard.ts";
@@ -85,10 +97,11 @@ export interface BeliefVectorScores {
   readonly scored: number;
 }
 
-/** The one ungated spend of the semantic mode, disclosed rather than hidden. */
+/** The one query spend of the semantic mode, disclosed rather than hidden. */
 export interface BeliefSemanticQueryReport {
   readonly model: string;
   readonly priceSource: EmbeddingPriceSource;
+  /** The estimate of the text actually sent, the instruction prefix included. */
   readonly queryTokens: number;
   /** Null when nobody stated the model's price. */
   readonly estimatedUsd: number | null;
@@ -96,7 +109,11 @@ export interface BeliefSemanticQueryReport {
 
 export interface BeliefSemanticRelevance extends BeliefVectorScores {
   readonly report: BeliefSemanticQueryReport;
-  /** The search lane's embedding-ABI drift warning when the index contradicts this build. */
+  /**
+   * The search lane's embedding-ABI drift warning when the index
+   * contradicts this build, and one warning when the query was cut to the
+   * model's input window.
+   */
   readonly warnings: ReadonlyArray<string>;
 }
 
@@ -106,7 +123,8 @@ export interface BeliefSemanticDeps {
   /** Whether the store loads sqlite-vec; omitted loads it. */
   readonly loadVec?: boolean;
   /**
-   * The caller's transport reach; local when omitted. Below local reach a
+   * The caller's transport reach; remote when omitted, as everywhere else
+   * (`resolvedTransportReach`). Below local reach a
    * belief whose INDEXED visibility is not readable there loses its
    * vectors: they were captured from bytes reserved at index time, and a
    * live file rewritten since must not be ordered by them.
@@ -188,15 +206,28 @@ export function scoreBeliefsByVector(input: BeliefVectorScoreInput): BeliefVecto
   };
 }
 
+/** The warning a query cut to the model's input window adds. */
+function queryCutWarning(query: string, prepared: QueryEmbedReady): string {
+  return (
+    `semantic belief query cut to the ${prepared.windowTokens}-token input window ` +
+    `of the embedding model: ${[...prepared.text].length} of ${[...query].length} ` +
+    `code point(s) embedded`
+  );
+}
+
 function isBeliefPath(path: string): boolean {
   return BELIEF_SEMANTIC_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 
 /**
- * Embed `query` once and score every indexed belief note by its stored
- * vectors. Throws a named {@link SearchError} for a blocked tier
- * (`EMBEDDING_DISABLED`, `EMBEDDING_KEY_MISSING`) and for a store without
- * sqlite-vec (`VEC_EXTENSION_UNAVAILABLE`), each before any embed call.
+ * Embed `query`, fitted to the model's input window, once and score every
+ * indexed belief note by its stored vectors. Throws a named
+ * {@link SearchError} for a blocked tier (`EMBEDDING_DISABLED`,
+ * `EMBEDDING_KEY_MISSING`), for a store without sqlite-vec
+ * (`VEC_EXTENSION_UNAVAILABLE`), for an unpriced model under a positive
+ * cost gate when the caller is not local (`EMBEDDING_COST_UNPRICED`) and
+ * for a window the instruction prefix alone fills (`INVALID_INPUT`), each
+ * before any embed call.
  */
 export async function loadBeliefSemanticRelevance(
   config: ResolvedSearchConfig,
@@ -221,7 +252,7 @@ export async function loadBeliefSemanticRelevance(
         "semantic belief order unavailable: sqlite-vec extension not loaded",
       );
     }
-    const reach = deps.reach ?? TRANSPORT_REACH.local;
+    const reach = resolvedTransportReach(deps.reach);
     const inView = deps.inView ?? (() => true);
     const beliefDocs = [...store.listDocuments()].filter(
       ([path]) => isBeliefPath(path) && inView(path),
@@ -251,31 +282,30 @@ export async function loadBeliefSemanticRelevance(
           `for the configured model; run: ${BELIEF_VECTORS_BACKFILL_COMMAND}`,
       );
     }
-    // Priced through the resolution every spend surface shares; `model`
-    // above stays the row filter because it matches the indexer's stamp.
-    const spend = activeSpendQuote(config);
-    // A remote caller spends the operator's money on every request. Under
-    // a positive gate an unpriced model is the spend the gate exists to
-    // stop, so it is refused before the call; a local caller keeps the
-    // disclosed, ungated embed, as for `search`.
-    if (
-      reach !== TRANSPORT_REACH.local &&
-      config.semantic.costGateUsd > 0 &&
-      spend.quote.source === EMBEDDING_PRICE_SOURCE.unknown
-    ) {
+    // The gateway every query embed shares decides whether the embed is
+    // sent and with what text; `model` above stays the row filter because
+    // it matches the indexer's stamp. This order has no keyword fallback,
+    // so a refusal is always an error here.
+    const prepared = prepareQueryEmbed(config, query, reach);
+    if (prepared.kind === "refused") {
       throw new SearchError(
         "EMBEDDING_COST_UNPRICED",
-        "semantic belief order refused: the embedding model has no known price " +
-          `and ${COST_GATE_KEY} is positive`,
+        `semantic belief order refused: ${queryEmbedRefusalMessage(prepared, config.semantic.costGateUsd)}`,
       );
     }
-    const [queryVector = []] = await provider.embed([query], "query");
-    const queryTokens = estimateTokens([query]);
+    if (prepared.text === "") {
+      throw new SearchError(
+        "INVALID_INPUT",
+        `semantic belief order unavailable: the query instruction prefix alone fills ` +
+          `the ${prepared.windowTokens}-token input window of the embedding model`,
+      );
+    }
+    const [queryVector = []] = await provider.embed([prepared.text], "query");
     const report: BeliefSemanticQueryReport = {
-      model: spend.model ?? model,
-      priceSource: spend.quote.source,
-      queryTokens,
-      estimatedUsd: estimateCostUsd(queryTokens, spend.quote),
+      model: prepared.model ?? model,
+      priceSource: prepared.quote.source,
+      queryTokens: prepared.sentTokens,
+      estimatedUsd: estimateCostUsd(prepared.sentTokens, prepared.quote),
     };
     try {
       assertValidVector(queryVector, QUERY_VECTOR_CONTEXT);
@@ -283,12 +313,13 @@ export async function loadBeliefSemanticRelevance(
       throw e instanceof SearchError ? discloseSpentQuery(e, report) : e;
     }
     const contradicted = contradictedAbiFields(store.embeddingAbiMismatches());
+    const warnings: string[] = [];
+    if (contradicted.length > 0) warnings.push(formatEmbeddingAbiDrift(contradicted));
+    if (prepared.truncated) warnings.push(queryCutWarning(query, prepared));
     return {
       ...scoreBeliefsByVector({ model, queryVector, vectorsByPath }),
       report,
-      warnings: Object.freeze(
-        contradicted.length > 0 ? [formatEmbeddingAbiDrift(contradicted)] : [],
-      ),
+      warnings: Object.freeze(warnings),
     };
   } finally {
     await store.close();
