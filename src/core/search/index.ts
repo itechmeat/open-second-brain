@@ -498,19 +498,20 @@ function refuseReservedBodyKeys(body: Readonly<Record<string, unknown>>, source:
  * configuration the operator believes is in force; `disabled` sends
  * nothing, so the body is inert there. All of it is refused here rather
  * than at parse time so an override that never passed through the parser
- * meets it too.
+ * meets it too. Every refusal names `source`: the env variable when it
+ * supplied the body, the config key otherwise.
  */
-function validateExtraBody(semantic: ResolvedEmbeddingConfig): void {
+function validateExtraBody(semantic: ResolvedEmbeddingConfig, source: string): void {
   const body = semantic.extraBody;
   if (body === undefined) return;
   if (semantic.provider !== "openai-compat" && semantic.provider !== "disabled") {
     throw new SearchError(
       "INVALID_INPUT",
-      `${EXTRA_BODY_KEY} is only sent by the 'openai-compat' provider, ` +
+      `${source} is only sent by the 'openai-compat' provider, ` +
         `but embedding_provider is '${semantic.provider}': remove the key or switch providers`,
     );
   }
-  refuseReservedBodyKeys(body, EXTRA_BODY_KEY);
+  refuseReservedBodyKeys(body, source);
   const target = normalizeReservedName("dimensions");
   for (const key of Object.keys(body)) {
     if (normalizeReservedName(key) !== target) continue;
@@ -518,14 +519,14 @@ function validateExtraBody(semantic: ResolvedEmbeddingConfig): void {
     if (semantic.dimension === null) {
       throw new SearchError(
         "INVALID_INPUT",
-        `${EXTRA_BODY_KEY} sets '${key}' ${value} but ${EMBEDDING_DIMENSION_KEY} is not set: ` +
+        `${source} sets '${key}' ${value} but ${EMBEDDING_DIMENSION_KEY} is not set: ` +
           `declare ${EMBEDDING_DIMENSION_KEY} with the same width so the index is pinned to it`,
       );
     }
     if (body[key] !== semantic.dimension) {
       throw new SearchError(
         "INVALID_INPUT",
-        `${EXTRA_BODY_KEY} sets '${key}' ${value} but ${EMBEDDING_DIMENSION_KEY} is ${semantic.dimension}`,
+        `${source} sets '${key}' ${value} but ${EMBEDDING_DIMENSION_KEY} is ${semantic.dimension}`,
       );
     }
   }
@@ -600,7 +601,7 @@ function validateWeight(n: number, fieldName: string): void {
   }
 }
 
-function validateResolvedConfig(config: ResolvedSearchConfig): void {
+function validateResolvedConfig(config: ResolvedSearchConfig, extraBodySource: string): void {
   validateIntegerRange(config.chunkSize, "search_chunk_size", { min: 1 });
   validateIntegerRange(config.chunkOverlap, "search_chunk_overlap", { min: 0 });
   if (config.chunkOverlap >= config.chunkSize) {
@@ -675,7 +676,7 @@ function validateResolvedConfig(config: ResolvedSearchConfig): void {
   validateIntegerRange(config.semantic.maxRetries, "embedding_max_retries", {
     min: 1,
   });
-  validateExtraBody(config.semantic);
+  validateExtraBody(config.semantic, extraBodySource);
 }
 
 function parseProvider(raw: string | null): ResolvedEmbeddingConfig["provider"] {
@@ -1396,8 +1397,14 @@ export function resolveSearchConfig(opts: {
     ftsTokenize,
   });
 
+  // The env variable names an extra-body refusal only when its value is
+  // the one in force, by the same raw-presence rule the parser used.
+  const extraBodySource =
+    opts.overrides?.semantic?.extraBody === undefined && env[EXTRA_BODY_ENV] !== undefined
+      ? EXTRA_BODY_ENV
+      : EXTRA_BODY_KEY;
   if (!opts.overrides) {
-    validateResolvedConfig(base);
+    validateResolvedConfig(base, extraBodySource);
     return base;
   }
   const merged = Object.freeze({
@@ -1409,6 +1416,6 @@ export function resolveSearchConfig(opts: {
       ? Object.freeze({ ...opts.overrides.scopeRules })
       : base.scopeRules,
   });
-  validateResolvedConfig(merged);
+  validateResolvedConfig(merged, extraBodySource);
   return merged;
 }

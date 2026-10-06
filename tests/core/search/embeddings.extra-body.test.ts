@@ -281,6 +281,20 @@ for (const provider of ["zeroentropy", "local"]) {
   });
 }
 
+test("an extra body from the env for another provider is refused naming the env variable", () => {
+  const e = refusal(["embedding_provider: zeroentropy"], '{"user": "x"}');
+  expect(e.code).toBe("INVALID_INPUT");
+  expect(e.message).toContain(EXTRA_BODY_ENV);
+  expect(e.message).not.toContain(EXTRA_BODY_KEY);
+});
+
+test("a dimensions field from the env is refused naming the env variable", () => {
+  const e = refusal(["embedding_dimension: 4"], '{"dimensions": 256}');
+  expect(e.code).toBe("INVALID_INPUT");
+  expect(e.message).toContain(EXTRA_BODY_ENV);
+  expect(e.message).toContain("embedding_dimension is 4");
+});
+
 test("an override cannot pair a non-openai-compat provider with an extra body", () => {
   const e = overrideRefusal({ provider: "zeroentropy", extraBody: Object.freeze({ user: "x" }) });
   expect(e.code).toBe("INVALID_INPUT");
