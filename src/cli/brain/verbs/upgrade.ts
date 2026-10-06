@@ -133,7 +133,9 @@ export async function cmdBrainUpgrade(argv: string[]): Promise<number> {
   let result;
   const now = new Date();
   try {
-    result = applyUpgrade(vault, { now });
+    // The plan printed and confirmed above, not a re-plan: a file that
+    // changed since it was read is refused by name instead of overwritten.
+    result = applyUpgrade(vault, { plan, now });
   } catch (exc) {
     // Recorded as the automatic path records it, so `o2b doctor` shows
     // the latest failure and the automatic retry waits its cooldown.

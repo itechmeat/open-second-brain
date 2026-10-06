@@ -179,7 +179,7 @@ describe("planUpgrade", () => {
     expect(yamlPlan.error.length).toBeGreaterThan(0);
   });
 
-  test("missing _brain.yaml → status: update with empty before (recoverable)", () => {
+  test("missing _brain.yaml → status: update from absent before (recoverable)", () => {
     // ENOENT path: a user (or a bad rsync) deleted _brain.yaml from
     // an otherwise-bootstrapped vault. Upgrade must restore it from
     // the canonical default rather than refusing every managed-file
@@ -189,7 +189,7 @@ describe("planUpgrade", () => {
     expect(plan.errors).toBe(0);
     const yamlPlan = plan.files.find((f) => f.path === "Brain/_brain.yaml")!;
     expect(yamlPlan.status).toBe("update");
-    expect(yamlPlan.before).toBe("");
+    expect(yamlPlan.before).toBeNull();
     expect(yamlPlan.after).toContain("schema_version: 1");
   });
 

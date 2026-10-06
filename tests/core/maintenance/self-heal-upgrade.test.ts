@@ -397,3 +397,48 @@ describe("a vault removed while the worker runs", () => {
     }
   });
 });
+
+describe("the worker applies the plan it computed", () => {
+  test("planUpgrade runs once per attempt and its plan is the one applied", () => {
+    makeManualStale();
+    const realPlan = upgradeModule.planUpgrade;
+    const plans: upgradeModule.UpgradePlan[] = [];
+    const planSpy = spyOn(upgradeModule, "planUpgrade").mockImplementation((v) => {
+      const plan = realPlan(v);
+      plans.push(plan);
+      return plan;
+    });
+    const applySpy = spyOn(upgradeModule, "applyUpgrade");
+    try {
+      const run = runSelfHealUpgrade(vault, { now: T0 });
+
+      expect(run.outcome).toBe(SELF_HEAL_UPGRADE_OUTCOME.applied);
+      expect(plans).toHaveLength(1);
+      expect(applySpy).toHaveBeenCalledTimes(1);
+      expect(applySpy.mock.calls[0]![1]?.plan).toBe(plans[0]);
+    } finally {
+      planSpy.mockRestore();
+      applySpy.mockRestore();
+    }
+  });
+
+  test("a drift between its plan and its apply is recorded as a failure, the edit kept", () => {
+    makeManualStale();
+    const realPlan = upgradeModule.planUpgrade;
+    const spy = spyOn(upgradeModule, "planUpgrade").mockImplementationOnce((v) => {
+      const plan = realPlan(v);
+      writeFileSync(brainManualPath(vault), "hand edit after the plan\n");
+      return plan;
+    });
+    try {
+      const run = runSelfHealUpgrade(vault, { now: T0 });
+
+      expect(run.outcome).toBe(SELF_HEAL_UPGRADE_OUTCOME.failed);
+      expect(run.error).toContain("Brain/_BRAIN.md");
+      expect(readFileSync(brainManualPath(vault), "utf8")).toBe("hand edit after the plan\n");
+      expect(readSelfHealUpgradeFailure(vault)!.pending).toEqual(["Brain/_BRAIN.md"]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});

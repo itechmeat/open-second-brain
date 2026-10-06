@@ -164,7 +164,9 @@ function attempt(vault: string, now: Date): SelfHealUpgradeRun {
     }
     pending = plan.files.filter((f) => f.status === "update").map((f) => f.path);
     if (vaultGone(vault)) return run(SELF_HEAL_UPGRADE_OUTCOME.notInitialized);
-    const applied = applyUpgrade(vault, { now });
+    // The plan just computed, so the attempt plans once and a file edited
+    // since is refused as drift rather than overwritten.
+    const applied = applyUpgrade(vault, { plan, now });
     // The metrics row creates its directory: a vault removed during the
     // rewrite would come back for it.
     if (vaultGone(vault)) return run(SELF_HEAL_UPGRADE_OUTCOME.notInitialized);
