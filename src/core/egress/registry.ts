@@ -239,7 +239,9 @@ export const EGRESS_SITES = Object.freeze({
       "come back unfindable while the index reported success, which is a silent failure " +
       "where this one is at least a stated exposure. The controls that do exist are " +
       "the operator's: semantic search is off until an endpoint and a key are configured, " +
-      "and the endpoint is whichever host they name, including a local one.",
+      "and the endpoint is whichever host they name, including a local one. The request " +
+      "also carries any extra body fields the operator declared in `embedding_extra_body`, " +
+      "verbatim, next to the owned model, input and encoding fields.",
   },
   "search-embedding-zeroentropy": {
     id: "search-embedding-zeroentropy",
