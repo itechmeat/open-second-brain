@@ -25,7 +25,7 @@ import { join } from "node:path";
 
 import type { BrainSearchResult, ResolvedSearchConfig, WeightProfile } from "./types.ts";
 import type { TransportReach } from "../graph/transport-reach.ts";
-import type { RetrievalDegradationCode } from "./retrieval-trail.ts";
+import { RETRIEVAL_DEGRADATION, type RetrievalDegradationCode } from "./retrieval-trail.ts";
 
 /** Lower bound for one learned per-layer multiplier. */
 export const LEARNED_WEIGHT_MIN = 0.8;
@@ -345,9 +345,21 @@ export async function captureRecallFeedback(
     ...(input.transportReach !== undefined ? { transportReach: input.transportReach } : {}),
   });
   const hit = outcome.results.find((r) => r.path === input.resultPath);
-  const contributions: LayerContributions = hit
-    ? contributionsFromResult(hit)
-    : Object.freeze({ keyword: 0, semantic: 0, entity: 0, recency: 0 });
+  const degraded = Object.freeze((outcome.retrievalTrail?.degraded ?? []).map((d) => d.code));
+  // A re-run the semantic lane never reached (the spend gate, or any other
+  // stop under hybrid recall) scored the hit on a keyword-only pool, so its
+  // layer shares describe the degradation, not the result. The event keeps
+  // its audit row with zero contributions, which the fold skips, so the
+  // vault-wide weights never drift toward keyword while the gate holds.
+  const laneMissing = degraded.some(
+    (code) =>
+      code === RETRIEVAL_DEGRADATION.semanticCostUnpriced ||
+      code === RETRIEVAL_DEGRADATION.hybridDegraded,
+  );
+  const contributions: LayerContributions =
+    hit && !laneMissing
+      ? contributionsFromResult(hit)
+      : Object.freeze({ keyword: 0, semantic: 0, entity: 0, recency: 0 });
   const normalized = input.query.trim().replace(/\s+/gu, " ").toLowerCase();
   const event: RecallFeedbackEvent = Object.freeze({
     ts: input.nowMs ?? Date.now(),
@@ -358,6 +370,5 @@ export async function captureRecallFeedback(
   });
   const file = recordRecallFeedback(config.vault, event);
   const learned = readLearnedWeights(config.vault) ?? NEUTRAL_LEARNED_WEIGHTS;
-  const degraded = Object.freeze((outcome.retrievalTrail?.degraded ?? []).map((d) => d.code));
   return Object.freeze({ file, event, learned, resultFound: hit !== undefined, degraded });
 }
