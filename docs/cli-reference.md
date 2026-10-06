@@ -2224,7 +2224,13 @@ refused for any other provider; `disabled` sends nothing and is exempt. A
 requires `embedding_dimension` and must agree with it. The checks run on
 the resolved config, so a programmatic override meets them too. The extra
 body is not part of the embedding identity: declaring or editing it never
-triggers a reindex.
+triggers a reindex. Some fields shape the vectors the provider returns
+(a provider `task`, `input_type`, `normalize` or `truncate` switch); after
+changing such a field, rebuild the vectors with
+`o2b search reindex --embeddings` so new query vectors stay in the space
+of the stored passages. Nothing triggers that rebuild on its own, and
+`o2b search index --force` is not enough: an unchanged chunk keeps its
+stored vector.
 
 Vector carry-over (since v1.72.0). When a note is edited, a chunk whose
 content did not change keeps its stored vector, provided the vector was

@@ -136,7 +136,12 @@ OPEN_SECOND_BRAIN_EMBEDDING_DIM=512
 ```
 
 The extra body is not part of the embedding identity, so changing it
-never triggers a reindex; a changed `embedding_dimension` does.
+never triggers a reindex; a changed `embedding_dimension` does. Some
+fields shape the vectors the provider returns (a provider `task`,
+`input_type`, `normalize` or `truncate` switch): after changing such a
+field, rebuild the vectors with `o2b search reindex --embeddings` so new
+query vectors stay in the space of the stored passages (`o2b search index
+--force` keeps the stored vector of every unchanged chunk).
 
 ## Step 3 — macOS: install Homebrew SQLite
 
