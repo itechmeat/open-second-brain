@@ -18,7 +18,7 @@ var __toESM = (mod, isNodeMode, target) => {
       return cached;
   }
   target = mod != null ? __create(__getProtoOf(mod)) : {};
-  const to = isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
+  const to = isNodeMode || !mod || !mod.__esModule || !__hasOwnProp.call(mod, "default") ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
   if (mod && typeof mod === "object" || typeof mod === "function") {
     for (let key of __getOwnPropNames(mod))
       if (!__hasOwnProp.call(to, key))
@@ -161,82 +161,82 @@ var require_polyfills = __commonJS(function(exports, module) {
         }
       };
     }(fs.readSync);
-    function patchLchmod(fs2) {
-      fs2.lchmod = function(path, mode, callback) {
-        fs2.open(path, constants.O_WRONLY | constants.O_SYMLINK, mode, function(err, fd) {
+    function patchLchmod(fs) {
+      fs.lchmod = function(path, mode, callback) {
+        fs.open(path, constants.O_WRONLY | constants.O_SYMLINK, mode, function(err, fd) {
           if (err) {
             if (callback)
               callback(err);
             return;
           }
-          fs2.fchmod(fd, mode, function(err2) {
-            fs2.close(fd, function(err22) {
+          fs.fchmod(fd, mode, function(err) {
+            fs.close(fd, function(err2) {
               if (callback)
-                callback(err2 || err22);
+                callback(err || err2);
             });
           });
         });
       };
-      fs2.lchmodSync = function(path, mode) {
-        var fd = fs2.openSync(path, constants.O_WRONLY | constants.O_SYMLINK, mode);
+      fs.lchmodSync = function(path, mode) {
+        var fd = fs.openSync(path, constants.O_WRONLY | constants.O_SYMLINK, mode);
         var threw = true;
         var ret;
         try {
-          ret = fs2.fchmodSync(fd, mode);
+          ret = fs.fchmodSync(fd, mode);
           threw = false;
         } finally {
           if (threw) {
             try {
-              fs2.closeSync(fd);
+              fs.closeSync(fd);
             } catch (er) {}
           } else {
-            fs2.closeSync(fd);
+            fs.closeSync(fd);
           }
         }
         return ret;
       };
     }
-    function patchLutimes(fs2) {
-      if (constants.hasOwnProperty("O_SYMLINK") && fs2.futimes) {
-        fs2.lutimes = function(path, at, mt, cb) {
-          fs2.open(path, constants.O_SYMLINK, function(er, fd) {
+    function patchLutimes(fs) {
+      if (constants.hasOwnProperty("O_SYMLINK") && fs.futimes) {
+        fs.lutimes = function(path, at, mt, cb) {
+          fs.open(path, constants.O_SYMLINK, function(er, fd) {
             if (er) {
               if (cb)
                 cb(er);
               return;
             }
-            fs2.futimes(fd, at, mt, function(er2) {
-              fs2.close(fd, function(er22) {
+            fs.futimes(fd, at, mt, function(er) {
+              fs.close(fd, function(er2) {
                 if (cb)
-                  cb(er2 || er22);
+                  cb(er || er2);
               });
             });
           });
         };
-        fs2.lutimesSync = function(path, at, mt) {
-          var fd = fs2.openSync(path, constants.O_SYMLINK);
+        fs.lutimesSync = function(path, at, mt) {
+          var fd = fs.openSync(path, constants.O_SYMLINK);
           var ret;
           var threw = true;
           try {
-            ret = fs2.futimesSync(fd, at, mt);
+            ret = fs.futimesSync(fd, at, mt);
             threw = false;
           } finally {
             if (threw) {
               try {
-                fs2.closeSync(fd);
+                fs.closeSync(fd);
               } catch (er) {}
             } else {
-              fs2.closeSync(fd);
+              fs.closeSync(fd);
             }
           }
           return ret;
         };
-      } else if (fs2.futimes) {
-        fs2.lutimes = function(_a, _b, _c, cb) {
+      } else if (fs.futimes) {
+        fs.lutimes = function(_a, _b, _c, cb) {
           if (cb)
             process.nextTick(cb);
         };
-        fs2.lutimesSync = function() {};
+        fs.lutimesSync = function() {};
       }
     }
     function chmodFix(orig) {
@@ -471,10 +471,10 @@ var require_graceful_fs = __commonJS(function(exports, module) {
     previousSymbol = "___graceful-fs.previous";
   }
   function noop() {}
-  function publishQueue(context, queue2) {
+  function publishQueue(context, queue) {
     Object.defineProperty(context, gracefulQueue, {
       get: function() {
-        return queue2;
+        return queue;
       }
     });
   }
@@ -532,101 +532,101 @@ GFS4: `);
     module.exports = patch(fs);
     fs.__patched = true;
   }
-  function patch(fs2) {
-    polyfills(fs2);
-    fs2.gracefulify = patch;
-    fs2.createReadStream = createReadStream;
-    fs2.createWriteStream = createWriteStream;
-    var fs$readFile = fs2.readFile;
-    fs2.readFile = readFile;
+  function patch(fs) {
+    polyfills(fs);
+    fs.gracefulify = patch;
+    fs.createReadStream = createReadStream;
+    fs.createWriteStream = createWriteStream;
+    var fs$readFile = fs.readFile;
+    fs.readFile = readFile;
     function readFile(path, options, cb) {
       if (typeof options === "function")
         cb = options, options = null;
       return go$readFile(path, options, cb);
-      function go$readFile(path2, options2, cb2, startTime) {
-        return fs$readFile(path2, options2, function(err) {
+      function go$readFile(path, options, cb, startTime) {
+        return fs$readFile(path, options, function(err) {
           if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
-            enqueue([go$readFile, [path2, options2, cb2], err, startTime || Date.now(), Date.now()]);
+            enqueue([go$readFile, [path, options, cb], err, startTime || Date.now(), Date.now()]);
           else {
-            if (typeof cb2 === "function")
-              cb2.apply(this, arguments);
+            if (typeof cb === "function")
+              cb.apply(this, arguments);
           }
         });
       }
     }
-    var fs$writeFile = fs2.writeFile;
-    fs2.writeFile = writeFile;
+    var fs$writeFile = fs.writeFile;
+    fs.writeFile = writeFile;
     function writeFile(path, data, options, cb) {
       if (typeof options === "function")
         cb = options, options = null;
       return go$writeFile(path, data, options, cb);
-      function go$writeFile(path2, data2, options2, cb2, startTime) {
-        return fs$writeFile(path2, data2, options2, function(err) {
+      function go$writeFile(path, data, options, cb, startTime) {
+        return fs$writeFile(path, data, options, function(err) {
           if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
-            enqueue([go$writeFile, [path2, data2, options2, cb2], err, startTime || Date.now(), Date.now()]);
+            enqueue([go$writeFile, [path, data, options, cb], err, startTime || Date.now(), Date.now()]);
           else {
-            if (typeof cb2 === "function")
-              cb2.apply(this, arguments);
+            if (typeof cb === "function")
+              cb.apply(this, arguments);
           }
         });
       }
     }
-    var fs$appendFile = fs2.appendFile;
+    var fs$appendFile = fs.appendFile;
     if (fs$appendFile)
-      fs2.appendFile = appendFile;
+      fs.appendFile = appendFile;
     function appendFile(path, data, options, cb) {
       if (typeof options === "function")
         cb = options, options = null;
       return go$appendFile(path, data, options, cb);
-      function go$appendFile(path2, data2, options2, cb2, startTime) {
-        return fs$appendFile(path2, data2, options2, function(err) {
+      function go$appendFile(path, data, options, cb, startTime) {
+        return fs$appendFile(path, data, options, function(err) {
           if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
-            enqueue([go$appendFile, [path2, data2, options2, cb2], err, startTime || Date.now(), Date.now()]);
+            enqueue([go$appendFile, [path, data, options, cb], err, startTime || Date.now(), Date.now()]);
           else {
-            if (typeof cb2 === "function")
-              cb2.apply(this, arguments);
+            if (typeof cb === "function")
+              cb.apply(this, arguments);
           }
         });
       }
     }
-    var fs$copyFile = fs2.copyFile;
+    var fs$copyFile = fs.copyFile;
     if (fs$copyFile)
-      fs2.copyFile = copyFile;
+      fs.copyFile = copyFile;
     function copyFile(src, dest, flags, cb) {
       if (typeof flags === "function") {
         cb = flags;
         flags = 0;
       }
       return go$copyFile(src, dest, flags, cb);
-      function go$copyFile(src2, dest2, flags2, cb2, startTime) {
-        return fs$copyFile(src2, dest2, flags2, function(err) {
+      function go$copyFile(src, dest, flags, cb, startTime) {
+        return fs$copyFile(src, dest, flags, function(err) {
           if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
-            enqueue([go$copyFile, [src2, dest2, flags2, cb2], err, startTime || Date.now(), Date.now()]);
+            enqueue([go$copyFile, [src, dest, flags, cb], err, startTime || Date.now(), Date.now()]);
           else {
-            if (typeof cb2 === "function")
-              cb2.apply(this, arguments);
+            if (typeof cb === "function")
+              cb.apply(this, arguments);
           }
         });
       }
     }
-    var fs$readdir = fs2.readdir;
-    fs2.readdir = readdir;
+    var fs$readdir = fs.readdir;
+    fs.readdir = readdir;
     var noReaddirOptionVersions = /^v[0-5]\./;
     function readdir(path, options, cb) {
       if (typeof options === "function")
         cb = options, options = null;
-      var go$readdir = noReaddirOptionVersions.test(process.version) ? function go$readdir2(path2, options2, cb2, startTime) {
-        return fs$readdir(path2, fs$readdirCallback(path2, options2, cb2, startTime));
-      } : function go$readdir2(path2, options2, cb2, startTime) {
-        return fs$readdir(path2, options2, fs$readdirCallback(path2, options2, cb2, startTime));
+      var go$readdir = noReaddirOptionVersions.test(process.version) ? function go$readdir(path, options, cb, startTime) {
+        return fs$readdir(path, fs$readdirCallback(path, options, cb, startTime));
+      } : function go$readdir(path, options, cb, startTime) {
+        return fs$readdir(path, options, fs$readdirCallback(path, options, cb, startTime));
       };
       return go$readdir(path, options, cb);
-      function fs$readdirCallback(path2, options2, cb2, startTime) {
+      function fs$readdirCallback(path, options, cb, startTime) {
         return function(err, files) {
           if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
             enqueue([
               go$readdir,
-              [path2, options2, cb2],
+              [path, options, cb],
               err,
               startTime || Date.now(),
               Date.now()
@@ -634,28 +634,28 @@ GFS4: `);
           else {
             if (files && files.sort)
               files.sort();
-            if (typeof cb2 === "function")
-              cb2.call(this, err, files);
+            if (typeof cb === "function")
+              cb.call(this, err, files);
           }
         };
       }
     }
     if (process.version.substr(0, 4) === "v0.8") {
-      var legStreams = legacy(fs2);
+      var legStreams = legacy(fs);
       ReadStream = legStreams.ReadStream;
       WriteStream = legStreams.WriteStream;
     }
-    var fs$ReadStream = fs2.ReadStream;
+    var fs$ReadStream = fs.ReadStream;
     if (fs$ReadStream) {
       ReadStream.prototype = Object.create(fs$ReadStream.prototype);
       ReadStream.prototype.open = ReadStream$open;
     }
-    var fs$WriteStream = fs2.WriteStream;
+    var fs$WriteStream = fs.WriteStream;
     if (fs$WriteStream) {
       WriteStream.prototype = Object.create(fs$WriteStream.prototype);
       WriteStream.prototype.open = WriteStream$open;
     }
-    Object.defineProperty(fs2, "ReadStream", {
+    Object.defineProperty(fs, "ReadStream", {
       get: function() {
         return ReadStream;
       },
@@ -665,7 +665,7 @@ GFS4: `);
       enumerable: true,
       configurable: true
     });
-    Object.defineProperty(fs2, "WriteStream", {
+    Object.defineProperty(fs, "WriteStream", {
       get: function() {
         return WriteStream;
       },
@@ -676,7 +676,7 @@ GFS4: `);
       configurable: true
     });
     var FileReadStream = ReadStream;
-    Object.defineProperty(fs2, "FileReadStream", {
+    Object.defineProperty(fs, "FileReadStream", {
       get: function() {
         return FileReadStream;
       },
@@ -687,7 +687,7 @@ GFS4: `);
       configurable: true
     });
     var FileWriteStream = WriteStream;
-    Object.defineProperty(fs2, "FileWriteStream", {
+    Object.defineProperty(fs, "FileWriteStream", {
       get: function() {
         return FileWriteStream;
       },
@@ -736,29 +736,29 @@ GFS4: `);
       });
     }
     function createReadStream(path, options) {
-      return new fs2.ReadStream(path, options);
+      return new fs.ReadStream(path, options);
     }
     function createWriteStream(path, options) {
-      return new fs2.WriteStream(path, options);
+      return new fs.WriteStream(path, options);
     }
-    var fs$open = fs2.open;
-    fs2.open = open;
+    var fs$open = fs.open;
+    fs.open = open;
     function open(path, flags, mode, cb) {
       if (typeof mode === "function")
         cb = mode, mode = null;
       return go$open(path, flags, mode, cb);
-      function go$open(path2, flags2, mode2, cb2, startTime) {
-        return fs$open(path2, flags2, mode2, function(err, fd) {
+      function go$open(path, flags, mode, cb, startTime) {
+        return fs$open(path, flags, mode, function(err, fd) {
           if (err && (err.code === "EMFILE" || err.code === "ENFILE"))
-            enqueue([go$open, [path2, flags2, mode2, cb2], err, startTime || Date.now(), Date.now()]);
+            enqueue([go$open, [path, flags, mode, cb], err, startTime || Date.now(), Date.now()]);
           else {
-            if (typeof cb2 === "function")
-              cb2.apply(this, arguments);
+            if (typeof cb === "function")
+              cb.apply(this, arguments);
           }
         });
       }
     }
-    return fs2;
+    return fs;
   }
   function enqueue(elem) {
     debug("ENQUEUE", elem[0].name, elem[1]);
@@ -1003,7 +1003,7 @@ var require_retry = __commonJS(function(exports) {
     for (var i = 0;i < methods.length; i++) {
       var method = methods[i];
       var original = obj[method];
-      obj[method] = function retryWrapper(original2) {
+      obj[method] = function retryWrapper(original) {
         var op = exports.operation(options);
         var args = Array.prototype.slice.call(arguments, 1);
         var callback = args.pop();
@@ -1017,7 +1017,7 @@ var require_retry = __commonJS(function(exports) {
           callback.apply(this, arguments);
         });
         op.attempt(function() {
-          original2.apply(obj, args);
+          original.apply(obj, args);
         });
       }.bind(obj, original);
       obj[method].options = options;
@@ -1045,8 +1045,8 @@ var require_signals = __commonJS(function(exports, module) {
 // node_modules/signal-exit/index.js
 var require_signal_exit = __commonJS(function(exports, module) {
   var process2 = global.process;
-  var processOk = function(process3) {
-    return process3 && typeof process3 === "object" && typeof process3.removeListener === "function" && typeof process3.emit === "function" && typeof process3.reallyExit === "function" && typeof process3.listeners === "function" && typeof process3.kill === "function" && typeof process3.pid === "number" && typeof process3.on === "function";
+  var processOk = function(process2) {
+    return process2 && typeof process2 === "object" && typeof process2.removeListener === "function" && typeof process2.emit === "function" && typeof process2.reallyExit === "function" && typeof process2.listeners === "function" && typeof process2.kill === "function" && typeof process2.pid === "number" && typeof process2.on === "function";
   };
   if (!processOk(process2)) {
     module.exports = function() {
@@ -1092,7 +1092,7 @@ var require_signal_exit = __commonJS(function(exports, module) {
       emitter.on(ev, cb);
       return remove;
     };
-    unload = function unload2() {
+    unload = function unload() {
       if (!loaded || !processOk(global.process)) {
         return;
       }
@@ -1107,7 +1107,7 @@ var require_signal_exit = __commonJS(function(exports, module) {
       emitter.count -= 1;
     };
     module.exports.unload = unload;
-    emit = function emit2(event, code, signal) {
+    emit = function emit(event, code, signal) {
       if (emitter.emitted[event]) {
         return;
       }
@@ -1136,7 +1136,7 @@ var require_signal_exit = __commonJS(function(exports, module) {
       return signals;
     };
     loaded = false;
-    load = function load2() {
+    load = function load() {
       if (loaded || !processOk(global.process)) {
         return;
       }
@@ -1155,7 +1155,7 @@ var require_signal_exit = __commonJS(function(exports, module) {
     };
     module.exports.load = load;
     originalProcessReallyExit = process2.reallyExit;
-    processReallyExit = function processReallyExit2(code) {
+    processReallyExit = function processReallyExit(code) {
       if (!processOk(global.process)) {
         return;
       }
@@ -1165,7 +1165,7 @@ var require_signal_exit = __commonJS(function(exports, module) {
       originalProcessReallyExit.call(process2, process2.exitCode);
     };
     originalProcessEmit = process2.emit;
-    processEmit = function processEmit2(ev, arg) {
+    processEmit = function processEmit(ev, arg) {
       if (ev === "exit" && processOk(global.process)) {
         if (arg !== undefined) {
           process2.exitCode = arg;
@@ -1213,9 +1213,9 @@ var require_mtime_precision = __commonJS(function(exports, module) {
       if (err) {
         return callback(err);
       }
-      fs.stat(file, (err2, stat) => {
-        if (err2) {
-          return callback(err2);
+      fs.stat(file, (err, stat) => {
+        if (err) {
+          return callback(err);
         }
         const precision = stat.mtime.getTime() % 1000 === 0 ? "s" : "ms";
         Object.defineProperty(fs, cacheSymbol, { value: precision });
@@ -1255,12 +1255,12 @@ var require_lockfile = __commonJS(function(exports, module) {
     const lockfilePath = getLockFile(file, options);
     options.fs.mkdir(lockfilePath, (err) => {
       if (!err) {
-        return mtimePrecision.probe(lockfilePath, options.fs, (err2, mtime, mtimePrecision2) => {
-          if (err2) {
+        return mtimePrecision.probe(lockfilePath, options.fs, (err, mtime, mtimePrecision) => {
+          if (err) {
             options.fs.rmdir(lockfilePath, () => {});
-            return callback(err2);
+            return callback(err);
           }
-          callback(null, mtime, mtimePrecision2);
+          callback(null, mtime, mtimePrecision);
         });
       }
       if (err.code !== "EEXIST") {
@@ -1269,19 +1269,19 @@ var require_lockfile = __commonJS(function(exports, module) {
       if (options.stale <= 0) {
         return callback(Object.assign(new Error("Lock file is already being held"), { code: "ELOCKED", file }));
       }
-      options.fs.stat(lockfilePath, (err2, stat) => {
-        if (err2) {
-          if (err2.code === "ENOENT") {
+      options.fs.stat(lockfilePath, (err, stat) => {
+        if (err) {
+          if (err.code === "ENOENT") {
             return acquireLock(file, { ...options, stale: 0 }, callback);
           }
-          return callback(err2);
+          return callback(err);
         }
         if (!isLockStale(stat, options)) {
           return callback(Object.assign(new Error("Lock file is already being held"), { code: "ELOCKED", file }));
         }
-        removeLock(file, options, (err3) => {
-          if (err3) {
-            return callback(err3);
+        removeLock(file, options, (err) => {
+          if (err) {
+            return callback(err);
           }
           acquireLock(file, { ...options, stale: 0 }, callback);
         });
@@ -1300,59 +1300,59 @@ var require_lockfile = __commonJS(function(exports, module) {
     });
   }
   function updateLock(file, options) {
-    const lock2 = locks[file];
-    if (lock2.updateTimeout) {
+    const lock = locks[file];
+    if (lock.updateTimeout) {
       return;
     }
-    lock2.updateDelay = lock2.updateDelay || options.update;
-    lock2.updateTimeout = setTimeout(() => {
-      lock2.updateTimeout = null;
-      options.fs.stat(lock2.lockfilePath, (err, stat) => {
-        const isOverThreshold = lock2.lastUpdate + options.stale < Date.now();
+    lock.updateDelay = lock.updateDelay || options.update;
+    lock.updateTimeout = setTimeout(() => {
+      lock.updateTimeout = null;
+      options.fs.stat(lock.lockfilePath, (err, stat) => {
+        const isOverThreshold = lock.lastUpdate + options.stale < Date.now();
         if (err) {
           if (err.code === "ENOENT" || isOverThreshold) {
-            return setLockAsCompromised(file, lock2, Object.assign(err, { code: "ECOMPROMISED" }));
+            return setLockAsCompromised(file, lock, Object.assign(err, { code: "ECOMPROMISED" }));
           }
-          lock2.updateDelay = 1000;
+          lock.updateDelay = 1000;
           return updateLock(file, options);
         }
-        const isMtimeOurs = lock2.mtime.getTime() === stat.mtime.getTime();
+        const isMtimeOurs = lock.mtime.getTime() === stat.mtime.getTime();
         if (!isMtimeOurs) {
-          return setLockAsCompromised(file, lock2, Object.assign(new Error("Unable to update lock within the stale threshold"), { code: "ECOMPROMISED" }));
+          return setLockAsCompromised(file, lock, Object.assign(new Error("Unable to update lock within the stale threshold"), { code: "ECOMPROMISED" }));
         }
-        const mtime = mtimePrecision.getMtime(lock2.mtimePrecision);
-        options.fs.utimes(lock2.lockfilePath, mtime, mtime, (err2) => {
-          const isOverThreshold2 = lock2.lastUpdate + options.stale < Date.now();
-          if (lock2.released) {
+        const mtime = mtimePrecision.getMtime(lock.mtimePrecision);
+        options.fs.utimes(lock.lockfilePath, mtime, mtime, (err) => {
+          const isOverThreshold = lock.lastUpdate + options.stale < Date.now();
+          if (lock.released) {
             return;
           }
-          if (err2) {
-            if (err2.code === "ENOENT" || isOverThreshold2) {
-              return setLockAsCompromised(file, lock2, Object.assign(err2, { code: "ECOMPROMISED" }));
+          if (err) {
+            if (err.code === "ENOENT" || isOverThreshold) {
+              return setLockAsCompromised(file, lock, Object.assign(err, { code: "ECOMPROMISED" }));
             }
-            lock2.updateDelay = 1000;
+            lock.updateDelay = 1000;
             return updateLock(file, options);
           }
-          lock2.mtime = mtime;
-          lock2.lastUpdate = Date.now();
-          lock2.updateDelay = null;
+          lock.mtime = mtime;
+          lock.lastUpdate = Date.now();
+          lock.updateDelay = null;
           updateLock(file, options);
         });
       });
-    }, lock2.updateDelay);
-    if (lock2.updateTimeout.unref) {
-      lock2.updateTimeout.unref();
+    }, lock.updateDelay);
+    if (lock.updateTimeout.unref) {
+      lock.updateTimeout.unref();
     }
   }
-  function setLockAsCompromised(file, lock2, err) {
-    lock2.released = true;
-    if (lock2.updateTimeout) {
-      clearTimeout(lock2.updateTimeout);
+  function setLockAsCompromised(file, lock, err) {
+    lock.released = true;
+    if (lock.updateTimeout) {
+      clearTimeout(lock.updateTimeout);
     }
-    if (locks[file] === lock2) {
+    if (locks[file] === lock) {
       delete locks[file];
     }
-    lock2.options.onCompromised(err);
+    lock.options.onCompromised(err);
   }
   function lock(file, options, callback) {
     options = {
@@ -1371,32 +1371,32 @@ var require_lockfile = __commonJS(function(exports, module) {
     options.stale = Math.max(options.stale || 0, 2000);
     options.update = options.update == null ? options.stale / 2 : options.update || 0;
     options.update = Math.max(Math.min(options.update, options.stale / 2), 1000);
-    resolveCanonicalPath(file, options, (err, file2) => {
+    resolveCanonicalPath(file, options, (err, file) => {
       if (err) {
         return callback(err);
       }
-      const operation = retry.operation(options.retries);
-      operation.attempt(() => {
-        acquireLock(file2, options, (err2, mtime, mtimePrecision2) => {
-          if (operation.retry(err2)) {
+      const operation2 = retry.operation(options.retries);
+      operation2.attempt(() => {
+        acquireLock(file, options, (err, mtime, mtimePrecision) => {
+          if (operation2.retry(err)) {
             return;
           }
-          if (err2) {
-            return callback(operation.mainError());
+          if (err) {
+            return callback(operation2.mainError());
           }
-          const lock2 = locks[file2] = {
-            lockfilePath: getLockFile(file2, options),
+          const lock = locks[file] = {
+            lockfilePath: getLockFile(file, options),
             mtime,
-            mtimePrecision: mtimePrecision2,
+            mtimePrecision,
             options,
             lastUpdate: Date.now()
           };
-          updateLock(file2, options);
+          updateLock(file, options);
           callback(null, (releasedCallback) => {
-            if (lock2.released) {
+            if (lock.released) {
               return releasedCallback && releasedCallback(Object.assign(new Error("Lock is already released"), { code: "ERELEASED" }));
             }
-            unlock(file2, { ...options, realpath: false }, releasedCallback);
+            unlock(file, { ...options, realpath: false }, releasedCallback);
           });
         });
       });
@@ -1408,18 +1408,18 @@ var require_lockfile = __commonJS(function(exports, module) {
       realpath: true,
       ...options
     };
-    resolveCanonicalPath(file, options, (err, file2) => {
+    resolveCanonicalPath(file, options, (err, file) => {
       if (err) {
         return callback(err);
       }
-      const lock2 = locks[file2];
-      if (!lock2) {
+      const lock = locks[file];
+      if (!lock) {
         return callback(Object.assign(new Error("Lock is not acquired/owned by you"), { code: "ENOTACQUIRED" }));
       }
-      lock2.updateTimeout && clearTimeout(lock2.updateTimeout);
-      lock2.released = true;
-      delete locks[file2];
-      removeLock(file2, options, callback);
+      lock.updateTimeout && clearTimeout(lock.updateTimeout);
+      lock.released = true;
+      delete locks[file];
+      removeLock(file, options, callback);
     });
   }
   function check(file, options, callback) {
@@ -1430,13 +1430,13 @@ var require_lockfile = __commonJS(function(exports, module) {
       ...options
     };
     options.stale = Math.max(options.stale || 0, 2000);
-    resolveCanonicalPath(file, options, (err, file2) => {
+    resolveCanonicalPath(file, options, (err, file) => {
       if (err) {
         return callback(err);
       }
-      options.fs.stat(getLockFile(file2, options), (err2, stat) => {
-        if (err2) {
-          return err2.code === "ENOENT" ? callback(null, false) : callback(err2);
+      options.fs.stat(getLockFile(file, options), (err, stat) => {
+        if (err) {
+          return err.code === "ENOENT" ? callback(null, false) : callback(err);
         }
         return callback(null, !isLockStale(stat, options));
       });
@@ -1462,15 +1462,15 @@ var require_lockfile = __commonJS(function(exports, module) {
 // node_modules/proper-lockfile/lib/adapter.js
 var require_adapter = __commonJS(function(exports, module) {
   var fs = require_graceful_fs();
-  function createSyncFs(fs2) {
+  function createSyncFs(fs) {
     const methods = ["mkdir", "realpath", "stat", "rmdir", "utimes"];
-    const newFs = { ...fs2 };
+    const newFs = { ...fs };
     methods.forEach((method) => {
       newFs[method] = (...args) => {
         const callback = args.pop();
         let ret;
         try {
-          ret = fs2[`${method}Sync`](...args);
+          ret = fs[`${method}Sync`](...args);
         } catch (err) {
           return callback(err);
         }
@@ -1565,6 +1565,7 @@ import { homedir as homedir2 } from "node:os";
 import { dirname as dirname2, isAbsolute, join as join3, resolve as resolve2 } from "node:path";
 
 // src/core/fs-atomic.ts
+import { isUtf8 } from "node:buffer";
 import {
   closeSync,
   existsSync,
@@ -1612,9 +1613,14 @@ function withWindowsSharingRetry(op, seams) {
   }
 }
 function atomicWriteFileSync(target, contents, opts = {}) {
+  const expected = opts.expectBefore;
+  if (expected !== undefined)
+    assertExpectedBefore(target, expected);
   if (opts.skipIfUnchanged && isUnchanged(target, contents))
     return false;
   withTempFile(target, contents, (tmpPath) => {
+    if (expected !== undefined)
+      assertExpectedBefore(target, expected);
     renameWithRetry(tmpPath, target);
   });
   return true;
@@ -1626,6 +1632,36 @@ function isUnchanged(target, contents) {
     return readFileSync(target, "utf8") === contents;
   } catch {
     return false;
+  }
+}
+function fileMatchesExpected(target, expected) {
+  let current;
+  try {
+    current = readFileSync(target);
+  } catch (err) {
+    if (err?.code !== "ENOENT")
+      throw err;
+    return expected === null;
+  }
+  if (expected === null)
+    return false;
+  if (current.equals(Buffer.from(expected, "utf8")))
+    return true;
+  return !isUtf8(current) && current.toString("utf8") === expected;
+}
+function assertExpectedBefore(target, expected) {
+  if (!fileMatchesExpected(target, expected))
+    throw new FileDriftError(target);
+}
+var FILE_DRIFT_CODE = "FILE_DRIFT";
+
+class FileDriftError extends Error {
+  code = FILE_DRIFT_CODE;
+  path;
+  constructor(path) {
+    super(`file changed since it was read: ${path}; the write was refused ` + "and the file left as it is. Re-read it and retry.");
+    this.name = "FileDriftError";
+    this.path = path;
   }
 }
 function withTempFile(target, contents, commit, mode = 420) {
@@ -2377,7 +2413,7 @@ var EGRESS_SITES = Object.freeze({
     verb: "o2b search index (embedding provider)",
     module: "src/core/search/embeddings/openai-compat.ts",
     redaction: R.unscannedNetworkPayload,
-    reason: "the largest and most continuous egress in this product: every indexed chunk BODY " + "is POSTed verbatim to whichever endpoint the operator configured, for every " + "reindex, and nothing scans it. It is declared unscanned rather than wired to the " + "guard because redaction here would corrupt the thing being built - a vector " + "computed over a placeholder is a vector for the placeholder, so the chunk would " + "come back unfindable while the index reported success, which is a silent failure " + "where this one is at least a stated exposure. The controls that do exist are " + "the operator's: semantic search is off until an endpoint and a key are configured, " + "and the endpoint is whichever host they name, including a local one."
+    reason: "the largest and most continuous egress in this product: every indexed chunk BODY " + "is POSTed verbatim to whichever endpoint the operator configured, for every " + "reindex, and nothing scans it. It is declared unscanned rather than wired to the " + "guard because redaction here would corrupt the thing being built - a vector " + "computed over a placeholder is a vector for the placeholder, so the chunk would " + "come back unfindable while the index reported success, which is a silent failure " + "where this one is at least a stated exposure. The controls that do exist are " + "the operator's: semantic search is off until an endpoint and a key are configured, " + "and the endpoint is whichever host they name, including a local one. The request " + "also carries any extra body fields the operator declared in `embedding_extra_body`, " + "verbatim, next to the owned model, input and encoding fields."
   },
   "search-embedding-zeroentropy": {
     id: "search-embedding-zeroentropy",
@@ -2689,8 +2725,8 @@ function defaultRunStatusJson(projectPath, timeoutMs = CODEGRAPH_PARTNER_TIMEOUT
     if (!proc.success) {
       if (stdout) {
         try {
-          const parsed2 = JSON.parse(stdout);
-          return { ok: true, data: parsed2 };
+          const parsed = JSON.parse(stdout);
+          return { ok: true, data: parsed };
         } catch {}
       }
       return {
