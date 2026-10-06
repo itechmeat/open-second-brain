@@ -14,7 +14,6 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 
 import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
@@ -22,6 +21,7 @@ import {
   parseRecallBenchmarkDataset,
   runRecallBenchmark,
 } from "../../../src/core/search/benchmark.ts";
+import { COST_GATE_KEY } from "../../../src/core/search/embedding-spend.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { RETRIEVAL_DEGRADATION } from "../../../src/core/search/retrieval-trail.ts";
 import { search } from "../../../src/core/search/search.ts";
@@ -100,22 +100,13 @@ function priced(config: ResolvedSearchConfig): ResolvedSearchConfig {
   };
 }
 
-function queryCacheRows(dbPath: string): number {
-  const db = new Database(dbPath, { readonly: true });
-  try {
-    return db.query<{ c: number }, []>("SELECT count(*) AS c FROM query_cache").get()?.c ?? 0;
-  } finally {
-    db.close();
-  }
-}
-
 const DATASET = parseRecallBenchmarkDataset({
   queries: [{ id: "fox", query: "fox", expected: ["Notes/fox.md"] }],
 });
 
 // ── the query cache ──────────────────────────────────────────────────────────
 
-test("a gated keyword-only answer is served but never cached", async () => {
+test("a gated keyword-only answer is served and discloses the gate", async () => {
   if (!sqliteVecLoadable()) return;
   const config = await gatedIndex();
   const out = await search(config, { query: "fox", limit: 5 });
@@ -123,10 +114,9 @@ test("a gated keyword-only answer is served but never cached", async () => {
     RETRIEVAL_DEGRADATION.semanticCostUnpriced,
   );
   expect(out.results.length).toBeGreaterThan(0);
-  expect(queryCacheRows(config.dbPath)).toBe(0);
 });
 
-test("a price declared after a gated answer reaches the next remote query", async () => {
+test("a gated answer is not cached: a price declared afterwards reaches the next remote query", async () => {
   if (!sqliteVecLoadable()) return;
   const config = await gatedIndex();
   await search(config, { query: "fox", limit: 5 });
@@ -141,8 +131,11 @@ test("a price declared after a gated answer reaches the next remote query", asyn
 test("an ungated local answer is still cached", async () => {
   if (!sqliteVecLoadable()) return;
   const config = await gatedIndex();
-  await search(config, { query: "fox", limit: 5, transportReach: TRANSPORT_REACH.local });
-  expect(queryCacheRows(config.dbPath)).toBe(1);
+  const local = { query: "fox", limit: 5, transportReach: TRANSPORT_REACH.local };
+  await search(config, local);
+  const before = server.callCount();
+  await search(config, local);
+  expect(server.callCount()).toBe(before);
 });
 
 function windowed(config: ResolvedSearchConfig, inputWindowTokens: number): ResolvedSearchConfig {
@@ -159,7 +152,11 @@ test("a query cut to its window is served but never cached", async () => {
   expect(cut.retrievalTrail?.degraded.map((d) => d.code)).toContain(
     RETRIEVAL_DEGRADATION.semanticQueryTruncated,
   );
-  expect(queryCacheRows(config.dbPath)).toBe(0);
+  expect(cut.results.length).toBeGreaterThan(0);
+  // The same cut query is embedded again rather than served from a cache.
+  const again = server.callCount();
+  await search(config, local);
+  expect(server.callCount()).toBe(again + 1);
   // A wider window declared afterwards reaches the next identical query.
   const before = server.callCount();
   const whole = await search(windowed(config, 8192), local);
@@ -211,7 +208,7 @@ test("a tuning sweep measured with a gated lane refuses to save its winner", asy
   }
   expect(err).toBeInstanceOf(SearchError);
   expect((err as SearchError).code).toBe("EMBEDDING_COST_UNPRICED");
-  expect((err as SearchError).message).toContain("embedding_cost_gate_usd");
+  expect((err as SearchError).message).toContain(COST_GATE_KEY);
   expect(existsSync(tuningPath(config.vault))).toBe(false);
 });
 
