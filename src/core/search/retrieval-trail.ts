@@ -303,6 +303,25 @@ export function noteDegradation(
 }
 
 /**
+ * Whether a hybrid caller was served keyword-only for a reason that is not
+ * the index or the machine: the one definition every consumer that must
+ * not learn from, or save, a keyword-only measurement reads.
+ *
+ * `hybrid-degraded` is the umbrella - the caller wanted the semantic lane
+ * and it did not run - so the deadline and an empty query vector count
+ * without a lane-specific list that drifts from the codes above. An index
+ * with no embeddings or a machine without sqlite-vec is keyword-only by
+ * construction: the system it measured is the one that will serve.
+ */
+export function semanticLaneMissing(degraded: ReadonlyArray<RetrievalDegradationCode>): boolean {
+  return (
+    degraded.includes(RETRIEVAL_DEGRADATION.hybridDegraded) &&
+    !degraded.includes(RETRIEVAL_DEGRADATION.semanticEmbeddingsAbsent) &&
+    !degraded.includes(RETRIEVAL_DEGRADATION.semanticVecExtensionUnavailable)
+  );
+}
+
+/**
  * The one English mapping, exhaustive over the vocabulary with no default
  * arm - so adding a code fails to compile here rather than silently
  * inheriting another code's sentence. Called by the human transcript and

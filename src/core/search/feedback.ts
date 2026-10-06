@@ -25,7 +25,7 @@ import { join } from "node:path";
 
 import type { BrainSearchResult, ResolvedSearchConfig, WeightProfile } from "./types.ts";
 import type { TransportReach } from "../graph/transport-reach.ts";
-import { RETRIEVAL_DEGRADATION, type RetrievalDegradationCode } from "./retrieval-trail.ts";
+import { semanticLaneMissing, type RetrievalDegradationCode } from "./retrieval-trail.ts";
 
 /** Lower bound for one learned per-layer multiplier. */
 export const LEARNED_WEIGHT_MIN = 0.8;
@@ -351,11 +351,7 @@ export async function captureRecallFeedback(
   // layer shares describe the degradation, not the result. The event keeps
   // its audit row with zero contributions, which the fold skips, so the
   // vault-wide weights never drift toward keyword while the gate holds.
-  const laneMissing = degraded.some(
-    (code) =>
-      code === RETRIEVAL_DEGRADATION.semanticCostUnpriced ||
-      code === RETRIEVAL_DEGRADATION.hybridDegraded,
-  );
+  const laneMissing = semanticLaneMissing(degraded);
   const contributions: LayerContributions =
     hit && !laneMissing
       ? contributionsFromResult(hit)

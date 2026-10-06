@@ -14,9 +14,10 @@
  *     grid order break ties), so the choice is auditable;
  *   - the winner persists to `Brain/search/tuning.json` with every
  *     evaluated score and the dataset hash - delete the file (reset)
- *     and nothing else changes. A winner measured while the spend gate
- *     refused the semantic lane is never saved: it scored a keyword-only
- *     system, not the configured one;
+ *     and nothing else changes. A winner measured while the semantic
+ *     lane was missing (the spend gate, a blocked capability, a provider
+ *     outage, the hybrid deadline) is never saved: it scored a
+ *     keyword-only system, not the configured one;
  *   - `search()` consults the tuned parameters ONLY when self-tuning
  *     is enabled (`search_self_tuning_enabled` /
  *     `OPEN_SECOND_BRAIN_SEARCH_SELF_TUNING`), values re-validated
@@ -37,7 +38,11 @@ import { runRecallBenchmark } from "./benchmark.ts";
 import type { RecallBenchmarkDataset } from "./benchmark.ts";
 import { COST_GATE_KEY } from "./embedding-spend.ts";
 import { EMBEDDING_PRICE_MODEL_KEY, EMBEDDING_PRICE_RATE_KEY } from "./embeddings/pricing.ts";
-import { RETRIEVAL_DEGRADATION, type RetrievalDegradationCode } from "./retrieval-trail.ts";
+import {
+  RETRIEVAL_DEGRADATION,
+  semanticLaneMissing,
+  type RetrievalDegradationCode,
+} from "./retrieval-trail.ts";
 import {
   applyTunedParameters,
   TUNING_POOL_MULTIPLIERS,
@@ -99,19 +104,21 @@ export function defaultTuningGrid(): TunedParameters[] {
   return grid;
 }
 
-/**
- * The trail codes that say the semantic lane did not run for a reason
- * the operator can clear, in the order a refusal names them, each with
- * the typed error the explicit semantic lane throws for the same cause
- * and the lever that clears it. An index with no embeddings or a machine
- * without sqlite-vec is keyword-only by construction, so a winner tuned
- * there is the system that will serve.
- */
-const SEMANTIC_LANE_MISSING: ReadonlyArray<{
+/** Why a sweep's winner was refused: the typed error and the lever that clears it. */
+interface SemanticLaneRefusal {
   readonly trail: RetrievalDegradationCode;
   readonly error: SearchErrorCode;
   readonly remedy: (config: ResolvedSearchConfig) => string;
-}> = Object.freeze([
+}
+
+/**
+ * The trail codes that name WHY the semantic lane did not run, in the
+ * order a refusal names them, each with the typed error the explicit
+ * semantic lane throws for the same cause. Whether the lane was missing
+ * at all is {@link semanticLaneMissing}'s call, not this list's: a stop
+ * no entry names refuses through {@link SEMANTIC_LANE_STOPPED}.
+ */
+const SEMANTIC_LANE_CAUSES: ReadonlyArray<SemanticLaneRefusal> = Object.freeze([
   {
     trail: RETRIEVAL_DEGRADATION.semanticCostUnpriced,
     error: "EMBEDDING_COST_UNPRICED",
@@ -131,6 +138,19 @@ const SEMANTIC_LANE_MISSING: ReadonlyArray<{
     remedy: () => "Wait until the embedding provider answers again (o2b search check)",
   },
 ]);
+
+/**
+ * The named generic arm: the composite hybrid deadline cut the lane, the
+ * provider answered with an empty vector, or another stop left the hybrid
+ * caller keyword-only. The message names the codes the winner carried.
+ */
+const SEMANTIC_LANE_STOPPED: SemanticLaneRefusal = Object.freeze({
+  trail: RETRIEVAL_DEGRADATION.hybridDegraded,
+  error: "EMBEDDING_PROVIDER_HTTP",
+  remedy: () =>
+    "Check why the embedding provider did not answer in time (o2b search check) " +
+    "or raise search_hybrid_deadline_ms",
+});
 
 /**
  * Grid-evaluate against the benchmark and persist the winner.
@@ -173,11 +193,14 @@ export async function tuneRecall(
 
   // A winner scored while the semantic lane was missing would be saved as
   // the vault's parameters for the hybrid system it never ran.
-  const missing = SEMANTIC_LANE_MISSING.find(({ trail }) => chosen.degraded.includes(trail));
-  if (missing !== undefined) {
+  if (semanticLaneMissing(chosen.degraded)) {
+    const missing =
+      SEMANTIC_LANE_CAUSES.find(({ trail }) => chosen.degraded.includes(trail)) ??
+      SEMANTIC_LANE_STOPPED;
     throw new SearchError(
       missing.error,
-      `the tuning sweep was measured with the semantic lane missing (${missing.trail}), ` +
+      `the tuning sweep was measured with the semantic lane missing ` +
+        `(${chosen.degraded.join(", ")}), ` +
         `so its winner scores a keyword-only system and was not saved. ` +
         `${missing.remedy(config)}, then run the sweep again.`,
     );

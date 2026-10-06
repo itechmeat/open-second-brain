@@ -120,3 +120,37 @@ test.skipIf(!sqliteVecLoadable())(
     expect(out.learned.keywordMul).toBeGreaterThan(1);
   },
 );
+
+test("feedback on an index with no embeddings records the layer contributions", async () => {
+  // Keyword-only by construction: the system the re-run measured is the
+  // one that serves, so its shares are signal, not a degradation.
+  const v = createTempVault("feedback-no-embeddings");
+  cleanup = v.cleanup;
+  writeMd(v.vault, "Notes/fox.md", "# Fox\n\nThe quick brown fox jumps over the lazy dog.");
+  const config = makeConfig({
+    vault: v.vault,
+    dbPath: v.dbPath,
+    semantic: {
+      enabled: true,
+      provider: "openai-compat",
+      baseUrl: server.url,
+      model: MODEL,
+      apiKey: FAKE_PROVIDER_KEY,
+      dimension: 4,
+      maxRetries: 1,
+      costGateUsd: 0,
+    },
+  });
+  await indexVault(config);
+  const out = await captureRecallFeedback(config, {
+    query: "fox",
+    resultPath: "Notes/fox.md",
+    verdict: "up",
+    nowMs: NOW.getTime(),
+    transportReach: TRANSPORT_REACH.local,
+  });
+  expect(out.degraded).toContain(RETRIEVAL_DEGRADATION.semanticEmbeddingsAbsent);
+  expect(out.degraded).toContain(RETRIEVAL_DEGRADATION.hybridDegraded);
+  expect(out.event.contributions.keyword).toBeGreaterThan(0);
+  expect(out.learned.keywordMul).toBeGreaterThan(1);
+});
