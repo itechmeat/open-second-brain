@@ -135,3 +135,26 @@ test.skipIf(!sqliteVecLoadable())(
     expect(existsSync(tuningPath(config.vault))).toBe(false);
   },
 );
+test.skipIf(!sqliteVecLoadable())(
+  "a sweep under a missing credential refuses with the credential code",
+  async () => {
+    const config = await embeddedIndex();
+    const err = await refusal({ ...config, semantic: { ...config.semantic, apiKey: null } });
+    expect(err.code).toBe("EMBEDDING_KEY_MISSING");
+    expect(err.message).toContain("Complete the embedding provider configuration");
+    expect(existsSync(tuningPath(config.vault))).toBe(false);
+  },
+);
+
+test.skipIf(!sqliteVecLoadable())(
+  "a sweep under a disabled provider keeps the disabled code",
+  async () => {
+    const config = await embeddedIndex();
+    const err = await refusal({
+      ...config,
+      semantic: { ...config.semantic, provider: "disabled" },
+    });
+    expect(err.code).toBe("EMBEDDING_DISABLED");
+    expect(existsSync(tuningPath(config.vault))).toBe(false);
+  },
+);

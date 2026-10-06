@@ -36,6 +36,7 @@ import { createHash } from "node:crypto";
 
 import { runRecallBenchmark } from "./benchmark.ts";
 import type { RecallBenchmarkDataset } from "./benchmark.ts";
+import { BLOCKED_TIER_ERROR_CODE, type BlockedCapabilityTier } from "./capability-tier.ts";
 import { COST_GATE_KEY } from "./embedding-spend.ts";
 import { EMBEDDING_PRICE_MODEL_KEY, EMBEDDING_PRICE_RATE_KEY } from "./embeddings/pricing.ts";
 import {
@@ -60,6 +61,8 @@ export interface TuningEvaluation {
   readonly hitAtK: number;
   /** The benchmark's degradation codes for this cell (empty when none). */
   readonly degraded: ReadonlyArray<RetrievalDegradationCode>;
+  /** The blocked capability rung, when {@link degraded} names one. */
+  readonly capabilityTier?: BlockedCapabilityTier;
 }
 
 export interface TuneRecallReport {
@@ -107,7 +110,7 @@ export function defaultTuningGrid(): TunedParameters[] {
 /** Why a sweep's winner was refused: the typed error and the lever that clears it. */
 interface SemanticLaneRefusal {
   readonly trail: RetrievalDegradationCode;
-  readonly error: SearchErrorCode;
+  readonly error: (chosen: TuningEvaluation) => SearchErrorCode;
   readonly remedy: (config: ResolvedSearchConfig) => string;
 }
 
@@ -118,10 +121,12 @@ interface SemanticLaneRefusal {
  * at all is {@link semanticLaneMissing}'s call, not this list's: a stop
  * no entry names refuses through {@link SEMANTIC_LANE_STOPPED}.
  */
-const SEMANTIC_LANE_CAUSES: ReadonlyArray<SemanticLaneRefusal> = Object.freeze([
+const SEMANTIC_LANE_CAUSES: ReadonlyArray<SemanticLaneRefusal> = Object.freeze<
+  SemanticLaneRefusal[]
+>([
   {
     trail: RETRIEVAL_DEGRADATION.semanticCostUnpriced,
-    error: "EMBEDDING_COST_UNPRICED",
+    error: () => "EMBEDDING_COST_UNPRICED",
     remedy: (config) =>
       `It was refused by ${COST_GATE_KEY}: declare the price of ` +
       `${config.semantic.model ?? "the embedding model"} with ${EMBEDDING_PRICE_MODEL_KEY} and ` +
@@ -129,12 +134,17 @@ const SEMANTIC_LANE_CAUSES: ReadonlyArray<SemanticLaneRefusal> = Object.freeze([
   },
   {
     trail: RETRIEVAL_DEGRADATION.semanticCapabilityBlocked,
-    error: "EMBEDDING_DISABLED",
+    // The rung the benchmark carried picks the code the explicit lane
+    // throws for it; a summary without one keeps the pre-tier code.
+    error: (chosen) =>
+      chosen.capabilityTier !== undefined
+        ? BLOCKED_TIER_ERROR_CODE[chosen.capabilityTier]
+        : "EMBEDDING_DISABLED",
     remedy: () => "Complete the embedding provider configuration and its credential",
   },
   {
     trail: RETRIEVAL_DEGRADATION.semanticProviderUnavailable,
-    error: "EMBEDDING_PROVIDER_HTTP",
+    error: () => "EMBEDDING_PROVIDER_HTTP",
     remedy: () => "Wait until the embedding provider answers again (o2b search check)",
   },
 ]);
@@ -146,7 +156,7 @@ const SEMANTIC_LANE_CAUSES: ReadonlyArray<SemanticLaneRefusal> = Object.freeze([
  */
 const SEMANTIC_LANE_STOPPED: SemanticLaneRefusal = Object.freeze({
   trail: RETRIEVAL_DEGRADATION.hybridDegraded,
-  error: "EMBEDDING_PROVIDER_HTTP",
+  error: () => "EMBEDDING_PROVIDER_HTTP",
   remedy: () =>
     "Check why the embedding provider did not answer in time (o2b search check) " +
     "or raise search_hybrid_deadline_ms",
@@ -176,6 +186,7 @@ export async function tuneRecall(
         mrr: report.mrr,
         hitAtK: report.hitAtK,
         degraded: report.degraded,
+        ...(report.capabilityTier !== undefined ? { capabilityTier: report.capabilityTier } : {}),
       });
     }),
   );
@@ -198,7 +209,7 @@ export async function tuneRecall(
       SEMANTIC_LANE_CAUSES.find(({ trail }) => chosen.degraded.includes(trail)) ??
       SEMANTIC_LANE_STOPPED;
     throw new SearchError(
-      missing.error,
+      missing.error(chosen),
       `the tuning sweep was measured with the semantic lane missing ` +
         `(${chosen.degraded.join(", ")}), ` +
         `so its winner scores a keyword-only system and was not saved. ` +
