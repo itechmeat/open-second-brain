@@ -450,12 +450,21 @@ function resolveEmbeddingExtraBody(
     throw new SearchError("INVALID_INPUT", `${source} must be a JSON object, got invalid JSON`);
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    const kind = parsed === null ? "null" : Array.isArray(parsed) ? "an array" : typeof parsed;
-    throw new SearchError("INVALID_INPUT", `${source} must be a JSON object, got ${kind}`);
+    throw new SearchError(
+      "INVALID_INPUT",
+      `${source} must be a JSON object, got ${describeJsonKind(parsed)}`,
+    );
   }
   const body = parsed as Record<string, unknown>;
   refuseReservedBodyKeys(body, source);
   return Object.freeze(body);
+}
+
+/** The kind of a parsed JSON value that is not an object, as a refusal names it. */
+function describeJsonKind(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "an array";
+  return typeof value;
 }
 
 /**
