@@ -203,22 +203,25 @@ export function applyUpgrade(vault: string, opts: ApplyUpgradeOptions = {}): Upg
     try {
       atomicWriteFileSync(join(vault, file.path), file.after, { expectBefore: file.before });
     } catch (err) {
+      // A drift leaves the edit on disk, so its remedy must not destroy
+      // it: no `--force-rollback`, which overrides rollback's own drift
+      // guard, and no rollback at all when nothing was written yet.
+      if (isFileDrift(err)) {
+        throw new BrainUpgradeError(midApplyDriftMessage(file.path, updated, runId), runId, [
+          file.path,
+        ]);
+      }
       // Mid-apply failure: one or more files have already been
       // rewritten under the new release, the rest still match the
       // old. The pre-apply snapshot is the recovery path — embed
       // its run id so the operator does not need to grep
-      // `.snapshots/` to find it. A drift leaves the edit on disk.
-      const drift = isFileDrift(err);
-      const reason = drift
-        ? "the file changed on disk after the upgrade plan was read and was left as it is"
-        : ((err as Error).message ?? String(err));
+      // `.snapshots/` to find it.
       throw new BrainUpgradeError(
-        `upgrade aborted mid-apply at ${file.path}: ${reason}. ` +
+        `upgrade aborted mid-apply at ${file.path}: ${(err as Error).message ?? String(err)}. ` +
           `${updated.length} file(s) already rewritten; ` +
           `roll back via \`o2b brain rollback ${runId} --force-rollback\` ` +
           `before re-running.`,
         runId,
-        drift ? [file.path] : [],
       );
     }
     updated.push(file.path);
@@ -347,6 +350,33 @@ function makeError(path: string, message: string): UpgradeFilePlan {
     after: "",
     error: message,
   });
+}
+
+/**
+ * The refusal for a row that changed on disk during the apply. The next
+ * plan reads the edit, so a fresh dry run is always the way forward; a
+ * rollback is offered only when earlier rows were rewritten, and without
+ * `--force-rollback`, so rollback's own drift guard keeps the edit too.
+ */
+function midApplyDriftMessage(
+  drifted: string,
+  updated: ReadonlyArray<string>,
+  runId: string,
+): string {
+  const head =
+    `upgrade refused at ${drifted}: the file changed on disk after the upgrade plan was ` +
+    "read and was left as it is.";
+  if (updated.length === 0) {
+    return (
+      `${head} Nothing was written; re-run \`o2b brain upgrade --dry-run\` to review a ` +
+      "plan that reads the edit, then apply it."
+    );
+  }
+  return (
+    `${head} ${updated.length} file(s) already rewritten: ${updated.join(", ")}. ` +
+    "Re-run `o2b brain upgrade --dry-run` to plan the rest against the edit, or undo the " +
+    `rewritten files via \`o2b brain rollback ${runId}\`.`
+  );
 }
 
 /**

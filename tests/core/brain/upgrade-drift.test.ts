@@ -6,7 +6,9 @@
  * Two windows are pinned. An edit made after the plan and before the apply
  * is refused before any snapshot is taken. An edit that lands while the
  * snapshot runs (injected through a spy on `createSnapshot`) is refused at
- * its own row, with the rollback command in the message.
+ * its own row: with nothing written yet the message says so and points at a
+ * fresh dry run; with rows already rewritten it names them and offers the
+ * plain rollback, never `--force-rollback`, which would destroy the edit.
  */
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
@@ -59,6 +61,39 @@ function upgradeError(fn: () => unknown): BrainUpgradeError {
 
 function snapshotCount(): number {
   return listSnapshots(vault).snapshots.length;
+}
+
+/**
+ * A plan with both managed files pending: a stale manual, and a config with
+ * its trailing `snapshots:` block cut. The cut pins the default layout, so
+ * it is asserted to have happened before the plan is trusted.
+ */
+function twoRowPlan(): { plan: UpgradePlan; without: string } {
+  writeFileSync(brainManualPath(vault), "stale\n");
+  const yaml = readFileSync(brainConfigPath(vault), "utf8");
+  const without = yaml.replace(/\nsnapshots:[\s\S]*$/, "\n");
+  expect(without).not.toBe(yaml);
+  writeFileSync(brainConfigPath(vault), without);
+  const plan = planUpgrade(vault);
+  expect(plan.pending).toBe(2);
+  return { plan, without };
+}
+
+/** Run `applyUpgrade` with `edit` injected right after the snapshot is taken. */
+function applyWithEditDuringSnapshot(plan: UpgradePlan, edit: () => void): BrainUpgradeError {
+  const realCreate = snapshotModule.createSnapshot;
+  const spy = spyOn(snapshotModule, "createSnapshot").mockImplementationOnce((v, id, opts) => {
+    const snap = realCreate(v, id, opts);
+    edit();
+    return snap;
+  });
+  try {
+    const err = upgradeError(() => applyUpgrade(vault, { plan, agent: "test-agent" }));
+    expect(spy).toHaveBeenCalledTimes(1);
+    return err;
+  } finally {
+    spy.mockRestore();
+  }
 }
 
 describe("plan rows tell an absent file from an empty one", () => {
@@ -163,12 +198,7 @@ describe("drift found before the snapshot", () => {
   });
 
   test("every drifted path is named, and no row is written", () => {
-    writeFileSync(brainManualPath(vault), "stale\n");
-    const yaml = readFileSync(brainConfigPath(vault), "utf8");
-    const without = yaml.replace(/\nsnapshots:[\s\S]*$/, "\n");
-    writeFileSync(brainConfigPath(vault), without);
-    const plan = planUpgrade(vault);
-    expect(plan.pending).toBe(2);
+    const { plan, without } = twoRowPlan();
     writeFileSync(brainManualPath(vault), "edited manual\n");
     writeFileSync(brainConfigPath(vault), `${without}# a comment\n`);
 
@@ -180,27 +210,38 @@ describe("drift found before the snapshot", () => {
 });
 
 describe("drift found at the write", () => {
-  test("an edit during the snapshot refuses at its row with the rollback command", () => {
+  test("drift at the first row: nothing was written, re-plan, no rollback offered", () => {
     writeFileSync(brainManualPath(vault), "stale\n");
     const plan = planUpgrade(vault);
-    const realCreate = snapshotModule.createSnapshot;
-    const spy = spyOn(snapshotModule, "createSnapshot").mockImplementationOnce((v, id, opts) => {
-      const snap = realCreate(v, id, opts);
-      writeFileSync(brainManualPath(vault), "hand edit during the snapshot\n");
-      return snap;
-    });
-    try {
-      const err = upgradeError(() => applyUpgrade(vault, { plan, agent: "test-agent" }));
+    const err = applyWithEditDuringSnapshot(plan, () =>
+      writeFileSync(brainManualPath(vault), "hand edit during the snapshot\n"),
+    );
 
-      expect(spy).toHaveBeenCalledTimes(1);
-      expect(err.runId).not.toBeNull();
-      expect(err.runId!.startsWith("upgrade-")).toBe(true);
-      expect(err.drifted).toEqual(["Brain/_BRAIN.md"]);
-      expect(err.message).toContain("Brain/_BRAIN.md");
-      expect(err.message).toContain(`o2b brain rollback ${err.runId}`);
-      expect(readFileSync(brainManualPath(vault), "utf8")).toBe("hand edit during the snapshot\n");
-    } finally {
-      spy.mockRestore();
-    }
+    expect(err.runId).not.toBeNull();
+    expect(err.runId!.startsWith("upgrade-")).toBe(true);
+    expect(err.drifted).toEqual(["Brain/_BRAIN.md"]);
+    expect(err.message).toContain("Brain/_BRAIN.md");
+    expect(err.message).toContain("Nothing was written");
+    expect(err.message).toContain("o2b brain upgrade --dry-run");
+    expect(err.message).not.toContain("rollback");
+    expect(readFileSync(brainManualPath(vault), "utf8")).toBe("hand edit during the snapshot\n");
+  });
+
+  test("drift at a later row: names the rewritten rows, offers the plain rollback", () => {
+    const { plan } = twoRowPlan();
+    const rows = plan.files.filter((f) => f.status === "update");
+    const [first, second] = [rows[0]!, rows[1]!];
+    const secondAbs = join(vault, second.path);
+    const edit = "# hand edit during the snapshot\n";
+    const err = applyWithEditDuringSnapshot(plan, () => writeFileSync(secondAbs, edit));
+
+    expect(readFileSync(join(vault, first.path), "utf8")).toBe(first.after);
+    expect(readFileSync(secondAbs, "utf8")).toBe(edit);
+    expect(err.drifted).toEqual([second.path]);
+    expect(err.message).toContain(second.path);
+    expect(err.message).toContain(`1 file(s) already rewritten: ${first.path}`);
+    expect(err.message).toContain(`o2b brain rollback ${err.runId}`);
+    expect(err.message).toContain("o2b brain upgrade --dry-run");
+    expect(err.message).not.toContain("--force-rollback");
   });
 });
