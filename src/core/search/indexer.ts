@@ -29,7 +29,7 @@ import { sha256Hex } from "../integrity/digest.ts";
 import { parseAuthoredAtSeconds } from "./authored-at.ts";
 import { CHUNKER_VERSION, chunkMarkdown } from "./chunker.ts";
 import { expandTextForCjkFts } from "./cjk-tokenizer.ts";
-import { declaredInputWindowTokens, passagePrefixSentByProvider } from "./embeddings/presets.ts";
+import { effectiveInputWindowTokens, passagePrefixSentByProvider } from "./embeddings/presets.ts";
 import {
   activeEmbeddingModel,
   activeSpendQuote,
@@ -878,7 +878,9 @@ function censusChunkWindow(
   if (chunksMeasured === 0) return null;
 
   const model = activeEmbeddingModel(config, storedModel);
-  const windowTokens = declaredInputWindowTokens(model);
+  // The one resolver the query fit reads too: an operator-declared window
+  // enables the census for an uncurated model.
+  const windowTokens = effectiveInputWindowTokens(config.semantic, model);
   if (model === null || windowTokens === null) {
     return Object.freeze({ verdict: "window-undeclared" as const, model, chunksMeasured });
   }

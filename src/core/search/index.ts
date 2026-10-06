@@ -29,7 +29,7 @@ import {
 } from "./embeddings/credential-report.ts";
 import { loadRerankRegistry, expandRegisteredRerankProvider } from "./rerank/registry.ts";
 import { decisionModelModeFor, resolveDecisionModelConfig } from "../decision-model/config.ts";
-import { resolveEmbeddingPrefixes } from "./embeddings/presets.ts";
+import { INPUT_WINDOW_TOKENS_KEY, resolveEmbeddingPrefixes } from "./embeddings/presets.ts";
 import {
   EMBEDDING_PRICE_MODEL_ENV,
   EMBEDDING_PRICE_MODEL_KEY,
@@ -527,6 +527,13 @@ function validateResolvedConfig(config: ResolvedSearchConfig): void {
       min: 1,
     });
   }
+  // Optional and default-free, like the token budget: a window that holds
+  // nothing is a misconfiguration whatever its source.
+  if (config.semantic.inputWindowTokens !== undefined) {
+    validateIntegerRange(config.semantic.inputWindowTokens, INPUT_WINDOW_TOKENS_KEY, {
+      min: 1,
+    });
+  }
   validateIntegerRange(config.semantic.maxRetries, "embedding_max_retries", {
     min: 1,
   });
@@ -767,6 +774,19 @@ export function resolveSearchConfig(opts: {
     batchTokensRaw === null
       ? null
       : parseInteger(batchTokensRaw, 0, "embedding_batch_tokens", { min: 1 });
+  // The declared input window of an uncurated model. Read with raw
+  // presence, not `envOrConfig`, so a blank value is refused rather than
+  // folded into "unset": an operator who wrote the key meant a window.
+  const inputWindowTokensRaw = rawSetting(
+    env,
+    config,
+    "OPEN_SECOND_BRAIN_EMBEDDING_INPUT_WINDOW_TOKENS",
+    INPUT_WINDOW_TOKENS_KEY,
+  );
+  const inputWindowTokens =
+    inputWindowTokensRaw === null
+      ? null
+      : parseInteger(inputWindowTokensRaw, 0, INPUT_WINDOW_TOKENS_KEY, { min: 1 });
   const maxRetries = parseInteger(
     envOrConfig(env, config, "OPEN_SECOND_BRAIN_EMBEDDING_MAX_RETRIES", "embedding_max_retries"),
     DEFAULTS.maxRetries,
@@ -808,6 +828,7 @@ export function resolveSearchConfig(opts: {
     concurrency,
     batchSize,
     ...(batchTokens === null ? {} : { batchTokens }),
+    ...(inputWindowTokens === null ? {} : { inputWindowTokens }),
     maxRetries,
     costGateUsd,
     ...(priceOverride === null ? {} : { priceOverride }),

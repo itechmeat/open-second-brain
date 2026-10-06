@@ -15,7 +15,7 @@
  * width, useful when setting `embedding_dimension` up front.
  */
 
-import type { EmbeddingProviderName } from "../types.ts";
+import type { EmbeddingProviderName, ResolvedEmbeddingConfig } from "../types.ts";
 
 /**
  * Instruction prefix an e5-family model expects before a search query
@@ -169,6 +169,38 @@ export function declaredInputWindowTokens(model: string | null): number | null {
 }
 
 /**
+ * The config key an operator declares a model's input window with. Named
+ * once so the resolver, its validation and every refusal spell it alike.
+ */
+export const INPUT_WINDOW_TOKENS_KEY = "embedding_input_window_tokens";
+
+/**
+ * The input window that governs the configured backend, or `null` when
+ * nobody declared one.
+ *
+ * Precedence: the operator's `embedding_input_window_tokens`, then the
+ * window the curated table declares for the model, then unknown. The
+ * operator key exists for the same reason the price pair does: a model
+ * outside the table has no other way to be declared, and an unknown
+ * window cuts nothing and censuses nothing.
+ *
+ * `model` defaults to the configured one; a caller that falls back to the
+ * model the index recorded (the census) passes that instead.
+ *
+ * The offline local embedder answers `null` whatever the key says: it
+ * hashes n-gram features over the whole text, with no encoder and no
+ * positional limit, so there is no window to cut a query to or to
+ * census chunks against.
+ */
+export function effectiveInputWindowTokens(
+  semantic: Pick<ResolvedEmbeddingConfig, "provider" | "model" | "inputWindowTokens">,
+  model: string | null = semantic.model,
+): number | null {
+  if (semantic.provider === "local") return null;
+  return semantic.inputWindowTokens ?? declaredInputWindowTokens(model);
+}
+
+/**
  * Structural e5-family detection (memory-write-path-integrity B2). Matches the
  * `e5` token wherever it appears delimited by `/` or `-` in the model id
  * (`intfloat/e5-large-v2`, `intfloat/multilingual-e5-small`), so a custom e5
@@ -206,6 +238,30 @@ export function passagePrefixSentByProvider(
       // Exactly `OpenAICompatProvider.prefixFor("passage")`: an absent
       // configured prefix is no prefix, an empty one is disabled.
       return configuredPassagePrefix ?? "";
+    case "zeroentropy":
+    case "local":
+    case "disabled":
+      return "";
+  }
+}
+
+/**
+ * The query prefix the CONFIGURED BACKEND will actually prepend to a
+ * search query - the twin of {@link passagePrefixSentByProvider}, for the
+ * same reason: a query fit that charged a prefix to a backend that never
+ * sends one would cut a query that fits.
+ *
+ * Exhaustive over {@link EmbeddingProviderName} with no default arm, so a
+ * new backend fails to compile here.
+ */
+export function queryPrefixSentByProvider(
+  provider: EmbeddingProviderName,
+  configuredQueryPrefix: string | undefined,
+): string {
+  switch (provider) {
+    case "openai-compat":
+      // Exactly `OpenAICompatProvider.prefixFor("query")`.
+      return configuredQueryPrefix ?? "";
     case "zeroentropy":
     case "local":
     case "disabled":

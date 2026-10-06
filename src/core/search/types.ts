@@ -1248,6 +1248,15 @@ export interface ResolvedEmbeddingConfig {
    */
   readonly batchTokens?: number;
   /**
+   * The operator's declared input window of the configured model, in the
+   * model's own tokens (`embedding_input_window_tokens`). Absent when the
+   * key is absent, which leaves the curated preset window (or no window at
+   * all) in charge; read it through `effectiveInputWindowTokens` in
+   * `embeddings/presets.ts`, never directly. No default: a window nobody
+   * declared is unknown, and an unknown window cuts nothing.
+   */
+  readonly inputWindowTokens?: number;
+  /**
    * Per-batch transient-retry budget (attempts, not extra retries) for
    * 429 / 5xx / network errors. Default 6, raised from the former hardcoded
    * 3 so an agent reindexing against a strict-RPM embedding account does not
