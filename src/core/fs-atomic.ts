@@ -201,16 +201,6 @@ function assertExpectedBefore(target: string, expected: string | null): void {
   if (!fileMatchesExpected(target, expected)) throw new FileDriftError(target);
 }
 
-/** Optional detail carried by a {@link FileDriftError}. */
-export interface FileDriftOptions {
-  /**
-   * Path as the message should render it, e.g. vault-relative. Defaults to
-   * `path`, which stays the structured field.
-   */
-  readonly displayPath?: string;
-  readonly cause?: unknown;
-}
-
 /** Stable code a {@link FileDriftError} carries, for `isFileDrift`. */
 const FILE_DRIFT_CODE = "FILE_DRIFT";
 
@@ -225,11 +215,10 @@ export class FileDriftError extends Error {
   /** Absolute path whose state drifted. */
   readonly path: string;
 
-  constructor(path: string, opts: FileDriftOptions = {}) {
+  constructor(path: string) {
     super(
-      `file changed since it was read: ${opts.displayPath ?? path}; the write was refused ` +
+      `file changed since it was read: ${path}; the write was refused ` +
         "and the file left as it is. Re-read it and retry.",
-      { cause: opts.cause },
     );
     this.name = "FileDriftError";
     this.path = path;
