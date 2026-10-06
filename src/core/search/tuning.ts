@@ -160,7 +160,7 @@ const SEMANTIC_LANE_CAUSES: ReadonlyArray<SemanticLaneRefusal> = Object.freeze<
 const SEMANTIC_LANE_STOPPED: SemanticLaneRefusal = Object.freeze({
   trail: RETRIEVAL_DEGRADATION.hybridDegraded,
   error: () => "EMBEDDING_PROVIDER_HTTP",
-  remedy: (_config, chosen) =>
+  remedy: (_config: ResolvedSearchConfig, chosen: TuningEvaluation) =>
     "Check why the embedding provider did not answer in time (o2b search check) " +
     "or raise search_hybrid_deadline_ms" +
     (chosen.degraded.includes(RETRIEVAL_DEGRADATION.semanticQueryTruncated)
