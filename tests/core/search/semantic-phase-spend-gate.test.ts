@@ -143,7 +143,10 @@ test("an implicit remote query under a positive gate and an unpriced model sends
   expect(server.callCount()).toBe(0);
   expect(out.attempted).toBe(false);
   expect(codes(out.degraded)).toEqual([RETRIEVAL_DEGRADATION.semanticCostUnpriced]);
-  expect(out.warnings.some((w) => w.includes(MODEL) && w.includes(COST_GATE_KEY))).toBe(true);
+  expect(out.warnings).toHaveLength(1);
+  for (const part of [MODEL, COST_GATE_KEY, EMBEDDING_PRICE_MODEL_KEY, EMBEDDING_PRICE_RATE_KEY]) {
+    expect(out.warnings[0]).toContain(part);
+  }
   expect(out.warnings.some((w) => w.includes(formatEstimatedUsd(GATE_USD)))).toBe(false);
 });
 
