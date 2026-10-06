@@ -39,6 +39,7 @@ import type { RecallBenchmarkDataset } from "./benchmark.ts";
 import { BLOCKED_TIER_ERROR_CODE, type BlockedCapabilityTier } from "./capability-tier.ts";
 import { COST_GATE_KEY } from "./embedding-spend.ts";
 import { EMBEDDING_PRICE_MODEL_KEY, EMBEDDING_PRICE_RATE_KEY } from "./embeddings/pricing.ts";
+import { INPUT_WINDOW_TOKENS_KEY } from "./embeddings/presets.ts";
 import {
   RETRIEVAL_DEGRADATION,
   semanticLaneMissing,
@@ -111,7 +112,7 @@ export function defaultTuningGrid(): TunedParameters[] {
 interface SemanticLaneRefusal {
   readonly trail: RetrievalDegradationCode;
   readonly error: (chosen: TuningEvaluation) => SearchErrorCode;
-  readonly remedy: (config: ResolvedSearchConfig) => string;
+  readonly remedy: (config: ResolvedSearchConfig, chosen: TuningEvaluation) => string;
 }
 
 /**
@@ -151,15 +152,21 @@ const SEMANTIC_LANE_CAUSES: ReadonlyArray<SemanticLaneRefusal> = Object.freeze<
 
 /**
  * The named generic arm: the composite hybrid deadline cut the lane, the
- * provider answered with an empty vector, or another stop left the hybrid
- * caller keyword-only. The message names the codes the winner carried.
+ * provider answered with an empty vector, the instruction prefix alone
+ * filled the input window, or another stop left the hybrid caller
+ * keyword-only. The message names the codes the winner carried, and a
+ * truncated query adds the window lever, which no provider check clears.
  */
 const SEMANTIC_LANE_STOPPED: SemanticLaneRefusal = Object.freeze({
   trail: RETRIEVAL_DEGRADATION.hybridDegraded,
   error: () => "EMBEDDING_PROVIDER_HTTP",
-  remedy: () =>
+  remedy: (_config, chosen) =>
     "Check why the embedding provider did not answer in time (o2b search check) " +
-    "or raise search_hybrid_deadline_ms",
+    "or raise search_hybrid_deadline_ms" +
+    (chosen.degraded.includes(RETRIEVAL_DEGRADATION.semanticQueryTruncated)
+      ? `; if the instruction prefix fills the input window, raise ${INPUT_WINDOW_TOKENS_KEY} ` +
+        "or shorten the query prefix"
+      : ""),
 });
 
 /**
@@ -213,7 +220,7 @@ export async function tuneRecall(
       `the tuning sweep was measured with the semantic lane missing ` +
         `(${chosen.degraded.join(", ")}), ` +
         `so its winner scores a keyword-only system and was not saved. ` +
-        `${missing.remedy(config)}, then run the sweep again.`,
+        `${missing.remedy(config, chosen)}, then run the sweep again.`,
     );
   }
 

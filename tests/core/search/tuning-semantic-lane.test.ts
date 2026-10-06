@@ -14,6 +14,7 @@ import { existsSync } from "node:fs";
 
 import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
 import { parseRecallBenchmarkDataset } from "../../../src/core/search/benchmark.ts";
+import { INPUT_WINDOW_TOKENS_KEY } from "../../../src/core/search/embeddings/presets.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import {
   RETRIEVAL_DEGRADATION,
@@ -166,6 +167,20 @@ test.skipIf(!sqliteVecLoadable())(
       semantic: { ...config.semantic, provider: "disabled" },
     });
     expect(err.code).toBe("EMBEDDING_DISABLED");
+    expect(existsSync(tuningPath(config.vault))).toBe(false);
+  },
+);
+
+test.skipIf(!sqliteVecLoadable())(
+  "a sweep whose query prefix fills the input window names the window lever",
+  async () => {
+    const config = await embeddedIndex();
+    const err = await refusal({
+      ...config,
+      semantic: { ...config.semantic, inputWindowTokens: 1, queryPrefix: "query: " },
+    });
+    expect(err.message).toContain(RETRIEVAL_DEGRADATION.semanticQueryTruncated);
+    expect(err.message).toContain(INPUT_WINDOW_TOKENS_KEY);
     expect(existsSync(tuningPath(config.vault))).toBe(false);
   },
 );
