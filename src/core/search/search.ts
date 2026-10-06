@@ -327,6 +327,7 @@ export async function search(
       limit,
       pathPrefix,
       keywordHitCount: keywordHits.length,
+      ...(opts.transportReach !== undefined ? { transportReach: opts.transportReach } : {}),
     };
     const semanticLane =
       deadline === null

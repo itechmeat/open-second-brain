@@ -11,6 +11,7 @@ import { RETRIEVAL_DEGRADATION, noteDegradation } from "../retrieval-trail.ts";
 import type { RetrievalDegradationSink } from "../retrieval-trail.ts";
 import type { SemanticPolicy } from "../semantic-phase.ts";
 import type { Store } from "../store.ts";
+import type { TransportReach } from "../../graph/transport-reach.ts";
 import type { ResolvedSearchConfig } from "../types.ts";
 
 export interface SemanticLaneInput {
@@ -26,6 +27,12 @@ export interface SemanticLaneInput {
   readonly keywordHitCount: number;
   /** The composite deadline's cancellation; absent when no deadline runs. */
   readonly signal?: AbortSignal;
+  /**
+   * The caller's reach, forwarded to the query-embed gateway. Absent
+   * resolves to remote there, so an internal caller that must embed
+   * under a positive cost gate passes local explicitly.
+   */
+  readonly transportReach?: TransportReach;
 }
 
 export interface SemanticLaneOutcome {
@@ -53,6 +60,7 @@ export async function runSemanticLane(input: SemanticLaneInput): Promise<Semanti
       pathPrefix,
       explicit: policy.explicit,
       ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      ...(input.transportReach !== undefined ? { transportReach: input.transportReach } : {}),
     });
     attempted = semOutcome.attempted;
     hits = semOutcome.hits;

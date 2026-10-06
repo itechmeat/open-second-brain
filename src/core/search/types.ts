@@ -901,10 +901,16 @@ export interface SearchOptions {
    *
    * Absent resolves to {@link TRANSPORT_REACH.remote}, the narrowest: a
    * search whose caller nobody established anything about is not a search
-   * that proved local access. Every internal lane that must see the whole
-   * corpus - benchmarks, recall feedback, rerank fit - passes
-   * {@link TRANSPORT_REACH.local} explicitly, and so does the CLI, which
-   * runs in the operator's own shell.
+   * that proved local access. An internal lane that must see the whole
+   * corpus passes {@link TRANSPORT_REACH.local} explicitly, and so does
+   * the CLI, which runs in the operator's own shell. Recall feedback does
+   * not: it re-runs the search under the reach of the caller who sent the
+   * feedback.
+   *
+   * The semantic lane's query embed reads this too: a caller that is not
+   * local, under a positive `embedding_cost_gate_usd`, on a model nobody
+   * priced, is refused before the embed is sent
+   * (`embeddings/query-embed.ts`).
    *
    * NOT to be confused with {@link SearchOptions.disclosure}, which is
    * the result-DEPTH mode; this one decides which pages exist for this
