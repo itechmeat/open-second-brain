@@ -474,12 +474,23 @@ function resolveEmbeddingExtraBody(
  * answers with. With no configured `embedding_dimension` nothing pins the
  * index to that width, so a mismatch with the stored index would surface
  * as a raw vector-store error mid-search; with one configured, the two
- * must agree. Both are refused here rather than at parse time so an
- * override that never passed through the parser meets them too.
+ * must agree. Only the OpenAI-compatible provider sends an extra body at
+ * all, so naming one for another backend is refused rather than left as a
+ * configuration the operator believes is in force; `disabled` sends
+ * nothing, so the body is inert there. All of it is refused here rather
+ * than at parse time so an override that never passed through the parser
+ * meets it too.
  */
 function validateExtraBody(semantic: ResolvedEmbeddingConfig): void {
   const body = semantic.extraBody;
   if (body === undefined) return;
+  if (semantic.provider !== "openai-compat" && semantic.provider !== "disabled") {
+    throw new SearchError(
+      "INVALID_INPUT",
+      `${EXTRA_BODY_KEY} is only sent by the 'openai-compat' provider, ` +
+        `but embedding_provider is '${semantic.provider}': remove the key or switch providers`,
+    );
+  }
   const target = normalizeReservedName("dimensions");
   for (const key of Object.keys(body)) {
     if (normalizeReservedName(key) !== target) continue;
@@ -626,11 +637,20 @@ function validateResolvedConfig(config: ResolvedSearchConfig): void {
     });
   }
   // Optional and default-free, like the token budget: a window that holds
-  // nothing is a misconfiguration whatever its source.
+  // nothing is a misconfiguration whatever its source. The offline local
+  // embedder hashes the whole text with no positional limit and never
+  // reads this key, so a declared window there would not be in force.
   if (config.semantic.inputWindowTokens !== undefined) {
     validateIntegerRange(config.semantic.inputWindowTokens, INPUT_WINDOW_TOKENS_KEY, {
       min: 1,
     });
+    if (config.semantic.provider === "local") {
+      throw new SearchError(
+        "INVALID_INPUT",
+        `${INPUT_WINDOW_TOKENS_KEY} is not read by the 'local' provider, ` +
+          `which has no input window: remove the key or switch providers`,
+      );
+    }
   }
   validateIntegerRange(config.semantic.maxRetries, "embedding_max_retries", {
     min: 1,

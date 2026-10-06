@@ -158,6 +158,37 @@ test("zero, a fraction and a non-number are refused from an override, naming the
   }
 });
 
+test("the key is refused for the offline local embedder, naming the provider", () => {
+  writeConfig(`embedding_provider: local\n${KEY}: "512"\n`);
+  let caught: unknown = null;
+  try {
+    resolveSearchConfig({ vault, configPath });
+  } catch (e) {
+    caught = e;
+  }
+  expect((caught as { code?: string } | null)?.code).toBe("INVALID_INPUT");
+  expect((caught as Error).message).toContain(KEY);
+  expect((caught as Error).message).toContain("'local'");
+});
+
+test("an override cannot pair the local embedder with a window", () => {
+  writeConfig();
+  expect(() =>
+    resolveSearchConfig({
+      vault,
+      configPath,
+      overrides: { semantic: { provider: "local", inputWindowTokens: 64 } },
+    }),
+  ).toThrow(KEY);
+});
+
+test("the key resolves for every provider that reads it", () => {
+  for (const provider of ["openai-compat", "zeroentropy"]) {
+    writeConfig(`embedding_provider: ${provider}\n${KEY}: "512"\n`);
+    expect(resolveSearchConfig({ vault, configPath }).semantic.inputWindowTokens).toBe(512);
+  }
+});
+
 // ── the resolver ─────────────────────────────────────────────────────────────
 
 test("the operator key beats the preset window", () => {

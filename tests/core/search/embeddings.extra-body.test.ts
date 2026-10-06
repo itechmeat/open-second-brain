@@ -268,6 +268,29 @@ test("an override cannot carry a dimensions field that disagrees with its width"
   expect(e.message).toContain("embedding_dimension is 4");
 });
 
+for (const provider of ["zeroentropy", "local"]) {
+  test(`an extra body is refused for the ${provider} provider, naming it`, () => {
+    const e = refusal([`embedding_provider: ${provider}`, `${EXTRA_BODY_KEY}: {"user": "x"}`]);
+    expect(e.code).toBe("INVALID_INPUT");
+    expect(e.message).toContain(EXTRA_BODY_KEY);
+    expect(e.message).toContain(`'${provider}'`);
+  });
+}
+
+test("an override cannot pair a non-openai-compat provider with an extra body", () => {
+  const e = overrideRefusal({ provider: "zeroentropy", extraBody: Object.freeze({ user: "x" }) });
+  expect(e.code).toBe("INVALID_INPUT");
+  expect(e.message).toContain("'zeroentropy'");
+});
+
+test("a disabled provider leaves an extra body inert rather than refused", () => {
+  const resolved = resolveWith([
+    "embedding_provider: disabled",
+    `${EXTRA_BODY_KEY}: {"user": "x"}`,
+  ]);
+  expect(resolved.semantic.provider).toBe("disabled");
+});
+
 // ── identity ─────────────────────────────────────────────────────────────────
 
 test("the extra body is not part of the embedding identity", () => {
