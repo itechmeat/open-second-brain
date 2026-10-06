@@ -357,7 +357,7 @@ export function describeRetrievalDegradation(code: RetrievalDegradationCode): st
     case RETRIEVAL_DEGRADATION.semanticCostUnpriced:
       return "the embedding model has no known price and the cost gate is on, so a query embed for a caller that is not local was refused and the semantic lane did not run";
     case RETRIEVAL_DEGRADATION.semanticQueryTruncated:
-      return "the query was longer than the embedding input window, so the semantic lane searched a cut prefix of it";
+      return "the query was longer than the embedding input window, so the semantic lane searched a cut prefix of it, or did not run when the instruction prefix alone fills the window";
     case RETRIEVAL_DEGRADATION.semanticProviderUnavailable:
       return "the embedding provider could not answer, so the semantic lane did not run";
     case RETRIEVAL_DEGRADATION.semanticEmptyQueryVector:

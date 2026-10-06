@@ -169,7 +169,7 @@ export async function runSemanticPhase(
       return { attempted: false, hits: [], warnings, degraded };
     }
     // A cut the server would otherwise make silently (or refuse), made
-    // here and disclosed. The lane still runs on the prefix.
+    // here and disclosed. The lane still runs on the cut query.
     warnings.push(queryEmbedCutMessage(prepared, query));
     noteDegradation(degraded, RETRIEVAL_DEGRADATION.semanticQueryTruncated, detail);
   }
