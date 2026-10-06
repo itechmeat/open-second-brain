@@ -9,6 +9,7 @@ import {
   parseBool as parseBoolShared,
   parseFloat01 as parseFloat01Shared,
   parseInteger as parseIntegerShared,
+  normalizeReservedName,
 } from "../validate.ts";
 import { resolveVaultScope } from "../vault-scope/index.ts";
 import { DEFAULT_HYBRID_DEADLINE_MS } from "./pipeline/request.ts";
@@ -417,13 +418,8 @@ export const RESERVED_EMBEDDING_BODY_KEYS: ReadonlyArray<string> = Object.freeze
   "encoding_format",
 ]);
 
-/** NFC, lower case, `_` and `-` dropped: the reach-refusal normalisation. */
-function normalizeBodyKey(name: string): string {
-  return name.normalize("NFC").toLowerCase().replaceAll(/[_-]/g, "");
-}
-
 const RESERVED_BODY_KEYS_NORMALIZED: ReadonlySet<string> = new Set(
-  RESERVED_EMBEDDING_BODY_KEYS.map(normalizeBodyKey),
+  RESERVED_EMBEDDING_BODY_KEYS.map(normalizeReservedName),
 );
 
 /**
@@ -460,7 +456,7 @@ function resolveEmbeddingExtraBody(
   }
   const body = parsed as Record<string, unknown>;
   const reserved = Object.keys(body).filter((k) =>
-    RESERVED_BODY_KEYS_NORMALIZED.has(normalizeBodyKey(k)),
+    RESERVED_BODY_KEYS_NORMALIZED.has(normalizeReservedName(k)),
   );
   if (reserved.length > 0) {
     throw new SearchError(

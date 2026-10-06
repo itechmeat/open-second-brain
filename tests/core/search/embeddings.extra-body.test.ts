@@ -167,6 +167,14 @@ for (const spelling of ["model", "Input", "encoding-format"]) {
   });
 }
 
+for (const spelling of ["\uFF4D\uFF4F\uFF44\uFF45\uFF4C", " input ", "encoding\u200B_format"]) {
+  test(`a reserved key in a compatibility or invisible spelling ${JSON.stringify(spelling)} is refused`, () => {
+    const e = refusal([`${EXTRA_BODY_KEY}: ${JSON.stringify({ [spelling]: 1 })}`]);
+    expect(e.code).toBe("INVALID_INPUT");
+    expect(e.message).toContain(`'${spelling}'`);
+  });
+}
+
 test("every reserved spelling is listed in one refusal", () => {
   const e = refusal([`${EXTRA_BODY_KEY}: {"MODEL": 1, "Encoding_Format": "x"}`]);
   expect(e.message).toContain("'MODEL'");
