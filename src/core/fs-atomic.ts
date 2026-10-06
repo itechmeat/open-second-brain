@@ -176,20 +176,29 @@ function isUnchanged(target: string, contents: string): boolean {
 }
 
 /**
- * Throw {@link FileDriftError} unless `target` is in the `expected` state:
- * absent for `null`, holding exactly these bytes for a string. A read error
- * other than "absent" propagates - an unreadable target cannot be shown to
- * be unchanged.
+ * Is `target` in the `expected` state: absent for `null`, holding exactly
+ * these bytes for a string? The one definition of drift, shared by the
+ * write below and by callers that check a batch before writing any of it.
+ *
+ * Bytes are compared, not their UTF-8 decoding: two different invalid
+ * sequences both decode to U+FFFD and would look equal as strings. A read
+ * error other than "absent" propagates - an unreadable target cannot be
+ * shown to be unchanged.
  */
-function assertExpectedBefore(target: string, expected: string | null): void {
-  let current: string | null;
+export function fileMatchesExpected(target: string, expected: string | null): boolean {
+  let current: Buffer;
   try {
-    current = readFileSync(target, "utf8");
+    current = readFileSync(target);
   } catch (err) {
     if ((err as NodeJS.ErrnoException | null)?.code !== "ENOENT") throw err;
-    current = null;
+    return expected === null;
   }
-  if (current !== expected) throw new FileDriftError(target);
+  return expected !== null && current.equals(Buffer.from(expected, "utf8"));
+}
+
+/** Throw {@link FileDriftError} unless {@link fileMatchesExpected} holds. */
+function assertExpectedBefore(target: string, expected: string | null): void {
+  if (!fileMatchesExpected(target, expected)) throw new FileDriftError(target);
 }
 
 /** Optional detail carried by a {@link FileDriftError}. */

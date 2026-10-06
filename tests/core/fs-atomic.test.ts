@@ -18,6 +18,7 @@ import {
   atomicCreateFileSyncExclusive,
   atomicWriteFileSync,
   atomicWriteText,
+  fileMatchesExpected,
   isFileAlreadyExists,
   isFileDrift,
 } from "../../src/core/fs-atomic.ts";
@@ -376,6 +377,28 @@ describe("expectBefore compare-before-write", () => {
     }
     expect(readFileSync(target, "utf8")).toBe("edit during the write\n");
     expect(tempFiles()).toEqual([]);
+  });
+
+  test("bytes are compared, not their decoding: two invalid sequences differ", () => {
+    // 0xff and 0xfe both decode to U+FFFD, so a string compare would see no drift.
+    const target = join(tmp, "bin.md");
+    writeFileSync(target, Buffer.from([0xfe]));
+    const read = Buffer.from([0xff]).toString("utf8");
+    expect(fileMatchesExpected(target, read)).toBe(false);
+    driftOf(() => atomicWriteFileSync(target, "new\n", { expectBefore: read }));
+    expect(readFileSync(target)).toEqual(Buffer.from([0xfe]));
+  });
+
+  test("fileMatchesExpected tells absent, empty and different apart", () => {
+    const target = join(tmp, "x.md");
+    expect(fileMatchesExpected(target, null)).toBe(true);
+    expect(fileMatchesExpected(target, "")).toBe(false);
+    writeFileSync(target, "");
+    expect(fileMatchesExpected(target, "")).toBe(true);
+    expect(fileMatchesExpected(target, null)).toBe(false);
+    writeFileSync(target, "body\n");
+    expect(fileMatchesExpected(target, "body\n")).toBe(true);
+    expect(fileMatchesExpected(target, "other\n")).toBe(false);
   });
 
   test("isFileDrift rejects other errors and follows a wrapped cause", () => {

@@ -18,7 +18,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
-import { atomicWriteFileSync, isFileDrift } from "../fs-atomic.ts";
+import { atomicWriteFileSync, fileMatchesExpected, isFileDrift } from "../fs-atomic.ts";
 import { formatFrontmatter, parseFrontmatterText } from "../vault.ts";
 import { sanitisePrinciple } from "./text/sanitize-principle.ts";
 import { defaultConfigPath, resolveAgentName } from "../config.ts";
@@ -180,7 +180,7 @@ export function applyUpgrade(vault: string, opts: ApplyUpgradeOptions = {}): Upg
   }
 
   const drifted = plan.files
-    .filter((f) => f.status === "update" && readCurrent(join(vault, f.path)) !== f.before)
+    .filter((f) => f.status === "update" && !fileMatchesExpected(join(vault, f.path), f.before))
     .map((f) => f.path);
   if (drifted.length > 0) {
     throw new BrainUpgradeError(
@@ -347,20 +347,6 @@ function makeError(path: string, message: string): UpgradeFilePlan {
     after: "",
     error: message,
   });
-}
-
-/**
- * The file's bytes, or `null` when it is absent - the same two states a
- * plan row's `before` records. Any other read error propagates: an
- * unreadable file cannot be shown to be unchanged.
- */
-function readCurrent(path: string): string | null {
-  try {
-    return readFileSync(path, "utf8");
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException | null)?.code === "ENOENT") return null;
-    throw err;
-  }
 }
 
 /**
