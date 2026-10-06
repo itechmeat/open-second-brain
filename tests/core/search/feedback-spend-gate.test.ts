@@ -79,40 +79,44 @@ async function gatedIndex(): Promise<ResolvedSearchConfig> {
   return { ...config, semantic: { ...config.semantic, costGateUsd: 1 } };
 }
 
-test("feedback on a gated re-run keeps the row and carries no layer signal", async () => {
-  if (!sqliteVecLoadable()) return;
-  const config = await gatedIndex();
-  const out = await captureRecallFeedback(config, {
-    query: "fox",
-    resultPath: "Notes/fox.md",
-    verdict: "up",
-    nowMs: NOW.getTime(),
-  });
-  expect(out.resultFound).toBe(true);
-  expect(out.degraded).toContain(RETRIEVAL_DEGRADATION.semanticCostUnpriced);
-  expect(out.event.contributions).toEqual({ keyword: 0, semantic: 0, entity: 0, recency: 0 });
-  // The row is kept and counted; it moves no multiplier.
-  expect(out.learned.events).toBe(1);
-  expect(out.learned).toMatchObject({
-    keywordMul: NEUTRAL_LEARNED_WEIGHTS.keywordMul,
-    semanticMul: NEUTRAL_LEARNED_WEIGHTS.semanticMul,
-    entityMul: NEUTRAL_LEARNED_WEIGHTS.entityMul,
-    recencyMul: NEUTRAL_LEARNED_WEIGHTS.recencyMul,
-  });
-});
+test.skipIf(!sqliteVecLoadable())(
+  "feedback on a gated re-run keeps the row and carries no layer signal",
+  async () => {
+    const config = await gatedIndex();
+    const out = await captureRecallFeedback(config, {
+      query: "fox",
+      resultPath: "Notes/fox.md",
+      verdict: "up",
+      nowMs: NOW.getTime(),
+    });
+    expect(out.resultFound).toBe(true);
+    expect(out.degraded).toContain(RETRIEVAL_DEGRADATION.semanticCostUnpriced);
+    expect(out.event.contributions).toEqual({ keyword: 0, semantic: 0, entity: 0, recency: 0 });
+    // The row is kept and counted; it moves no multiplier.
+    expect(out.learned.events).toBe(1);
+    expect(out.learned).toMatchObject({
+      keywordMul: NEUTRAL_LEARNED_WEIGHTS.keywordMul,
+      semanticMul: NEUTRAL_LEARNED_WEIGHTS.semanticMul,
+      entityMul: NEUTRAL_LEARNED_WEIGHTS.entityMul,
+      recencyMul: NEUTRAL_LEARNED_WEIGHTS.recencyMul,
+    });
+  },
+);
 
-test("feedback on an ungated local re-run records the layer contributions", async () => {
-  if (!sqliteVecLoadable()) return;
-  const config = await gatedIndex();
-  const out = await captureRecallFeedback(config, {
-    query: "fox",
-    resultPath: "Notes/fox.md",
-    verdict: "up",
-    nowMs: NOW.getTime(),
-    transportReach: TRANSPORT_REACH.local,
-  });
-  expect(out.degraded).toEqual([]);
-  expect(out.event.contributions.keyword).toBeGreaterThan(0);
-  expect(out.learned.events).toBe(1);
-  expect(out.learned.keywordMul).toBeGreaterThan(1);
-});
+test.skipIf(!sqliteVecLoadable())(
+  "feedback on an ungated local re-run records the layer contributions",
+  async () => {
+    const config = await gatedIndex();
+    const out = await captureRecallFeedback(config, {
+      query: "fox",
+      resultPath: "Notes/fox.md",
+      verdict: "up",
+      nowMs: NOW.getTime(),
+      transportReach: TRANSPORT_REACH.local,
+    });
+    expect(out.degraded).toEqual([]);
+    expect(out.event.contributions.keyword).toBeGreaterThan(0);
+    expect(out.learned.events).toBe(1);
+    expect(out.learned.keywordMul).toBeGreaterThan(1);
+  },
+);

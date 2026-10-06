@@ -293,56 +293,62 @@ async function indexedSearchConfig(costGateUsd: number) {
   };
 }
 
-test("search() threads reach: remote implicit serves keyword results without an embed", async () => {
-  if (!sqliteVecLoadable()) return;
-  const { config, cleanup } = await indexedSearchConfig(GATE_USD);
-  try {
-    const before = server.callCount();
-    const out = await search(config, { query: "fox", limit: 5 });
-    expect(server.callCount()).toBe(before);
-    expect(out.results.length).toBeGreaterThan(0);
-    const trail = codes(out.retrievalTrail?.degraded ?? []);
-    expect(trail).toContain(RETRIEVAL_DEGRADATION.semanticCostUnpriced);
-    expect(trail).toContain(RETRIEVAL_DEGRADATION.hybridDegraded);
-  } finally {
-    cleanup();
-  }
-});
-
-test("search() threads reach: remote explicit throws before the embed", async () => {
-  if (!sqliteVecLoadable()) return;
-  const { config, cleanup } = await indexedSearchConfig(GATE_USD);
-  try {
-    const before = server.callCount();
-    let err: unknown = null;
+test.skipIf(!sqliteVecLoadable())(
+  "search() threads reach: remote implicit serves keyword results without an embed",
+  async () => {
+    const { config, cleanup } = await indexedSearchConfig(GATE_USD);
     try {
-      await search(config, { query: "fox", limit: 5, semantic: true });
-    } catch (e) {
-      err = e;
+      const before = server.callCount();
+      const out = await search(config, { query: "fox", limit: 5 });
+      expect(server.callCount()).toBe(before);
+      expect(out.results.length).toBeGreaterThan(0);
+      const trail = codes(out.retrievalTrail?.degraded ?? []);
+      expect(trail).toContain(RETRIEVAL_DEGRADATION.semanticCostUnpriced);
+      expect(trail).toContain(RETRIEVAL_DEGRADATION.hybridDegraded);
+    } finally {
+      cleanup();
     }
-    expect(server.callCount()).toBe(before);
-    expect((err as SearchError).code).toBe("EMBEDDING_COST_UNPRICED");
-  } finally {
-    cleanup();
-  }
-});
+  },
+);
 
-test("search() threads reach: a local search embeds once", async () => {
-  if (!sqliteVecLoadable()) return;
-  const { config, cleanup } = await indexedSearchConfig(GATE_USD);
-  try {
-    const before = server.callCount();
-    await search(config, {
-      query: "fox",
-      limit: 5,
-      semantic: true,
-      transportReach: TRANSPORT_REACH.local,
-    });
-    expect(server.callCount()).toBe(before + 1);
-  } finally {
-    cleanup();
-  }
-});
+test.skipIf(!sqliteVecLoadable())(
+  "search() threads reach: remote explicit throws before the embed",
+  async () => {
+    const { config, cleanup } = await indexedSearchConfig(GATE_USD);
+    try {
+      const before = server.callCount();
+      let err: unknown = null;
+      try {
+        await search(config, { query: "fox", limit: 5, semantic: true });
+      } catch (e) {
+        err = e;
+      }
+      expect(server.callCount()).toBe(before);
+      expect((err as SearchError).code).toBe("EMBEDDING_COST_UNPRICED");
+    } finally {
+      cleanup();
+    }
+  },
+);
+
+test.skipIf(!sqliteVecLoadable())(
+  "search() threads reach: a local search embeds once",
+  async () => {
+    const { config, cleanup } = await indexedSearchConfig(GATE_USD);
+    try {
+      const before = server.callCount();
+      await search(config, {
+        query: "fox",
+        limit: 5,
+        semantic: true,
+        transportReach: TRANSPORT_REACH.local,
+      });
+      expect(server.callCount()).toBe(before + 1);
+    } finally {
+      cleanup();
+    }
+  },
+);
 
 // ── brain_search over MCP ────────────────────────────────────────────────────
 
@@ -395,23 +401,25 @@ async function mcpSearch(vault: string, reach: "local" | "remote", semantic: boo
   })) as { error?: { data?: { code?: string } } };
 }
 
-test("brain_search over a remote server refuses before the embed; a local one embeds", async () => {
-  if (!sqliteVecLoadable()) return;
-  const vault = await mcpVault();
-  const savedConfig = process.env["OPEN_SECOND_BRAIN_CONFIG"];
-  process.env["OPEN_SECOND_BRAIN_CONFIG"] = configPath;
-  try {
-    const before = server.callCount();
-    const remote = await mcpSearch(vault, "remote", true);
-    expect(server.callCount()).toBe(before);
-    expect(remote.error?.data?.code).toBe("EMBEDDING_COST_UNPRICED");
+test.skipIf(!sqliteVecLoadable())(
+  "brain_search over a remote server refuses before the embed; a local one embeds",
+  async () => {
+    const vault = await mcpVault();
+    const savedConfig = process.env["OPEN_SECOND_BRAIN_CONFIG"];
+    process.env["OPEN_SECOND_BRAIN_CONFIG"] = configPath;
+    try {
+      const before = server.callCount();
+      const remote = await mcpSearch(vault, "remote", true);
+      expect(server.callCount()).toBe(before);
+      expect(remote.error?.data?.code).toBe("EMBEDDING_COST_UNPRICED");
 
-    const local = await mcpSearch(vault, "local", true);
-    expect(local.error).toBeUndefined();
-    expect(server.callCount()).toBe(before + 1);
-  } finally {
-    if (savedConfig === undefined) delete process.env["OPEN_SECOND_BRAIN_CONFIG"];
-    else process.env["OPEN_SECOND_BRAIN_CONFIG"] = savedConfig;
-    rmSync(tmp, { recursive: true, force: true });
-  }
-});
+      const local = await mcpSearch(vault, "local", true);
+      expect(local.error).toBeUndefined();
+      expect(server.callCount()).toBe(before + 1);
+    } finally {
+      if (savedConfig === undefined) delete process.env["OPEN_SECOND_BRAIN_CONFIG"];
+      else process.env["OPEN_SECOND_BRAIN_CONFIG"] = savedConfig;
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  },
+);
