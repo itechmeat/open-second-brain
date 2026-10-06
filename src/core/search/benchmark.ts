@@ -22,6 +22,7 @@
 import { Semaphore } from "./embeddings/http-util.ts";
 import { search } from "./search.ts";
 import { resolvedTransportReach, type TransportReach } from "../graph/transport-reach.ts";
+import type { RetrievalDegradationCode } from "./retrieval-trail.ts";
 import { SearchError } from "./types.ts";
 import type { ResolvedSearchConfig, SearchOutcome } from "./types.ts";
 
@@ -120,6 +121,12 @@ export interface RecallBenchmarkQueryResult {
   readonly expectedFound: number;
   /** Total expected paths declared for this query. */
   readonly expectedTotal: number;
+  /**
+   * The retrieval trail's degradation codes for this query, present only
+   * when the search was degraded: a hit scored by a lane that did not run
+   * (the spend gate, a provider outage) is a keyword-only measurement.
+   */
+  readonly degraded?: ReadonlyArray<RetrievalDegradationCode>;
 }
 
 export interface RecallBenchmarkReport {
@@ -159,6 +166,12 @@ export interface RecallBenchmarkReport {
    * this with `source_warnings_max`.
    */
   readonly sourceWarnings: number;
+  /**
+   * Every degradation code any query carried, sorted and de-duplicated.
+   * Empty when every query ran the pipeline it asked for; otherwise the
+   * scores above measure a degraded system, not the configured one.
+   */
+  readonly degraded: ReadonlyArray<RetrievalDegradationCode>;
   readonly perQuery: ReadonlyArray<RecallBenchmarkQueryResult>;
 }
 
@@ -289,6 +302,7 @@ export async function runRecallBenchmark(
               q.answer,
               topK.map((r) => r.content),
             );
+      const degraded = (outcome.retrievalTrail?.degraded ?? []).map((d) => d.code);
       return Object.freeze({
         id: q.id,
         query: q.query,
@@ -298,6 +312,7 @@ export async function runRecallBenchmark(
         answerContained,
         expectedFound,
         expectedTotal: expected.size,
+        ...(degraded.length > 0 ? { degraded: Object.freeze(degraded) } : {}),
       });
     }),
   );
@@ -309,6 +324,7 @@ export async function runRecallBenchmark(
   const expectedFoundTotal = perQuery.reduce((sum, r) => sum + r.expectedFound, 0);
   const expectedDeclaredTotal = perQuery.reduce((sum, r) => sum + r.expectedTotal, 0);
   const hitRanks = perQuery.filter((r) => r.rank !== null).map((r) => r.rank!);
+  const degraded = [...new Set(perQuery.flatMap((r) => r.degraded ?? []))].toSorted();
   return Object.freeze({
     total: perQuery.length,
     k,
@@ -322,6 +338,7 @@ export async function runRecallBenchmark(
     citationDepth:
       hitRanks.length === 0 ? 0 : hitRanks.reduce((sum, r) => sum + r, 0) / hitRanks.length,
     sourceWarnings: perQuery.length - hits,
+    degraded: Object.freeze(degraded),
     perQuery: Object.freeze(perQuery),
   });
 }

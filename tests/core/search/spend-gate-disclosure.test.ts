@@ -15,12 +15,19 @@
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { existsSync } from "node:fs";
 
 import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
+import {
+  parseRecallBenchmarkDataset,
+  runRecallBenchmark,
+} from "../../../src/core/search/benchmark.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { RETRIEVAL_DEGRADATION } from "../../../src/core/search/retrieval-trail.ts";
 import { search } from "../../../src/core/search/search.ts";
-import type { ResolvedSearchConfig } from "../../../src/core/search/types.ts";
+import { tuneRecall } from "../../../src/core/search/tuning.ts";
+import { tuningPath } from "../../../src/core/search/tuning-store.ts";
+import { SearchError, type ResolvedSearchConfig } from "../../../src/core/search/types.ts";
 import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
 import { startFakeHttp, type FakeHttp } from "../../helpers/fake-http.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
@@ -29,6 +36,7 @@ import { sqliteVecLoadable } from "../../helpers/sqlite-vec.ts";
 const MODEL = "fake-model";
 const GATE_USD = 1;
 const NOTE = "# Fox\n\nThe quick brown fox jumps over the lazy dog.";
+const NOW = new Date("2026-10-06T12:00:00Z");
 
 let server: FakeHttp;
 let cleanup: () => void = () => {};
@@ -101,6 +109,10 @@ function queryCacheRows(dbPath: string): number {
   }
 }
 
+const DATASET = parseRecallBenchmarkDataset({
+  queries: [{ id: "fox", query: "fox", expected: ["Notes/fox.md"] }],
+});
+
 // ── the query cache ──────────────────────────────────────────────────────────
 
 test("a gated keyword-only answer is served but never cached", async () => {
@@ -131,4 +143,63 @@ test("an ungated local answer is still cached", async () => {
   const config = await gatedIndex();
   await search(config, { query: "fox", limit: 5, transportReach: TRANSPORT_REACH.local });
   expect(queryCacheRows(config.dbPath)).toBe(1);
+});
+
+// ── the benchmark ────────────────────────────────────────────────────────────
+
+test("a gated benchmark discloses the degradation per query and in aggregate", async () => {
+  if (!sqliteVecLoadable()) return;
+  const config = await gatedIndex();
+  const report = await runRecallBenchmark(config, DATASET, {
+    transportReach: TRANSPORT_REACH.remote,
+  });
+  expect(report.degraded).toContain(RETRIEVAL_DEGRADATION.semanticCostUnpriced);
+  expect(report.degraded).toContain(RETRIEVAL_DEGRADATION.hybridDegraded);
+  expect(report.perQuery[0]?.degraded).toContain(RETRIEVAL_DEGRADATION.semanticCostUnpriced);
+});
+
+test("an ungated benchmark reports no degradation and adds no per-query field", async () => {
+  if (!sqliteVecLoadable()) return;
+  const config = await gatedIndex();
+  const report = await runRecallBenchmark(config, DATASET, {
+    transportReach: TRANSPORT_REACH.local,
+  });
+  expect(report.degraded).toEqual([]);
+  expect(report.perQuery[0]).not.toHaveProperty("degraded");
+});
+
+// ── the tuning sweep ─────────────────────────────────────────────────────────
+
+const GRID = [{ poolMultiplier: 3, traversalDepth: 1, learnedWeights: false, expansion: false }];
+
+test("a tuning sweep measured with a gated lane refuses to save its winner", async () => {
+  if (!sqliteVecLoadable()) return;
+  const config = await gatedIndex();
+  let err: unknown = null;
+  try {
+    await tuneRecall(config, DATASET, {
+      grid: GRID,
+      now: NOW,
+      transportReach: TRANSPORT_REACH.remote,
+    });
+  } catch (e) {
+    err = e;
+  }
+  expect(err).toBeInstanceOf(SearchError);
+  expect((err as SearchError).code).toBe("EMBEDDING_COST_UNPRICED");
+  expect((err as SearchError).message).toContain("embedding_cost_gate_usd");
+  expect(existsSync(tuningPath(config.vault))).toBe(false);
+});
+
+test("an ungated tuning sweep saves its winner and reports no degradation", async () => {
+  if (!sqliteVecLoadable()) return;
+  const config = await gatedIndex();
+  const report = await tuneRecall(config, DATASET, {
+    grid: GRID,
+    now: NOW,
+    transportReach: TRANSPORT_REACH.local,
+  });
+  expect(report.degraded).toEqual([]);
+  expect(report.evaluated[0]?.degraded).toEqual([]);
+  expect(existsSync(tuningPath(config.vault))).toBe(true);
 });

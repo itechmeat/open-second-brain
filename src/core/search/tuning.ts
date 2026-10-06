@@ -14,7 +14,9 @@
  *     grid order break ties), so the choice is auditable;
  *   - the winner persists to `Brain/search/tuning.json` with every
  *     evaluated score and the dataset hash - delete the file (reset)
- *     and nothing else changes;
+ *     and nothing else changes. A winner measured while the spend gate
+ *     refused the semantic lane is never saved: it scored a keyword-only
+ *     system, not the configured one;
  *   - `search()` consults the tuned parameters ONLY when self-tuning
  *     is enabled (`search_self_tuning_enabled` /
  *     `OPEN_SECOND_BRAIN_SEARCH_SELF_TUNING`), values re-validated
@@ -33,6 +35,9 @@ import { createHash } from "node:crypto";
 
 import { runRecallBenchmark } from "./benchmark.ts";
 import type { RecallBenchmarkDataset } from "./benchmark.ts";
+import { COST_GATE_KEY } from "./embedding-spend.ts";
+import { EMBEDDING_PRICE_MODEL_KEY, EMBEDDING_PRICE_RATE_KEY } from "./embeddings/pricing.ts";
+import { RETRIEVAL_DEGRADATION, type RetrievalDegradationCode } from "./retrieval-trail.ts";
 import {
   applyTunedParameters,
   TUNING_POOL_MULTIPLIERS,
@@ -41,18 +46,23 @@ import {
   tuningPath,
 } from "./tuning-store.ts";
 import type { TransportReach } from "../graph/transport-reach.ts";
+import { SearchError } from "./types.ts";
 import type { ResolvedSearchConfig, TunedParameters } from "./types.ts";
 
 export interface TuningEvaluation {
   readonly params: TunedParameters;
   readonly mrr: number;
   readonly hitAtK: number;
+  /** The benchmark's degradation codes for this cell (empty when none). */
+  readonly degraded: ReadonlyArray<RetrievalDegradationCode>;
 }
 
 export interface TuneRecallReport {
   readonly chosen: TunedParameters;
   readonly evaluated: ReadonlyArray<TuningEvaluation>;
   readonly datasetHash: string;
+  /** Every cell's degradation codes, sorted and de-duplicated. */
+  readonly degraded: ReadonlyArray<RetrievalDegradationCode>;
 }
 
 export interface TuneRecallOptions {
@@ -108,7 +118,12 @@ export async function tuneRecall(
         ...(opts.transportReach !== undefined ? { transportReach: opts.transportReach } : {}),
         expand: params.expansion,
       });
-      return Object.freeze({ params, mrr: report.mrr, hitAtK: report.hitAtK });
+      return Object.freeze({
+        params,
+        mrr: report.mrr,
+        hitAtK: report.hitAtK,
+        degraded: report.degraded,
+      });
     }),
   );
 
@@ -121,6 +136,19 @@ export async function tuneRecall(
     ) {
       chosen = candidate;
     }
+  }
+
+  // A winner scored while the gate refused the semantic lane would be
+  // saved as the vault's parameters for the hybrid system it never ran.
+  if (chosen.degraded.includes(RETRIEVAL_DEGRADATION.semanticCostUnpriced)) {
+    throw new SearchError(
+      "EMBEDDING_COST_UNPRICED",
+      `the tuning sweep was measured with the semantic lane refused by ${COST_GATE_KEY}, ` +
+        `so its winner scores a keyword-only system and was not saved. Declare the price of ` +
+        `${config.semantic.model ?? "the embedding model"} with ${EMBEDDING_PRICE_MODEL_KEY} and ` +
+        `${EMBEDDING_PRICE_RATE_KEY} (0 for a free self-hosted model), or lower ${COST_GATE_KEY}, ` +
+        `then run the sweep again.`,
+    );
   }
 
   const datasetHash = createHash("sha256").update(JSON.stringify(dataset)).digest("hex");
@@ -149,5 +177,6 @@ export async function tuneRecall(
     chosen: chosen.params,
     evaluated: Object.freeze(evaluated),
     datasetHash,
+    degraded: Object.freeze([...new Set(evaluated.flatMap((e) => e.degraded))].toSorted()),
   });
 }

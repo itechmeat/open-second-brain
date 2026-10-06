@@ -144,6 +144,8 @@ async function toolBrainBenchmark(
     expand: report.expand,
     hit_at_k: report.hitAtK,
     mrr: report.mrr,
+    // A degraded run measured a smaller system than the configured one.
+    ...(report.degraded.length > 0 ? { degraded: report.degraded } : {}),
     per_query: report.perQuery,
   };
 }
@@ -206,8 +208,14 @@ async function toolBrainTune(
   }
   return {
     chosen: report.chosen,
-    evaluated: report.evaluated.map((e) => ({ params: e.params, mrr: e.mrr, hit_at_k: e.hitAtK })),
+    evaluated: report.evaluated.map((e) => ({
+      params: e.params,
+      mrr: e.mrr,
+      hit_at_k: e.hitAtK,
+      ...(e.degraded.length > 0 ? { degraded: e.degraded } : {}),
+    })),
     dataset_hash: report.datasetHash,
+    ...(report.degraded.length > 0 ? { degraded: report.degraded } : {}),
   };
 }
 

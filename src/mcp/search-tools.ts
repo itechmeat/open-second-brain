@@ -1598,6 +1598,7 @@ const EVAL_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
     source_utilization_at_k: { type: "number" },
     citation_depth: { type: "number" },
     source_warnings: { type: "integer" },
+    degraded: { type: "array", items: { type: "string" } },
     per_query: {
       type: "array",
       items: {
@@ -1607,6 +1608,7 @@ const EVAL_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
           hit: { type: "boolean" },
           rank: { type: "integer" },
           answer_contained: { type: "boolean" },
+          degraded: { type: "array", items: { type: "string" } },
         },
       },
     },
@@ -1688,11 +1690,14 @@ async function toolBrainEval(
     source_utilization_at_k: report.sourceUtilizationAtK,
     citation_depth: report.citationDepth,
     source_warnings: report.sourceWarnings,
+    // A degraded run measured a smaller system than the configured one.
+    ...(report.degraded.length > 0 ? { degraded: report.degraded } : {}),
     per_query: report.perQuery.map((q) => ({
       id: q.id,
       hit: q.hit,
       ...(q.rank !== null ? { rank: q.rank } : {}),
       ...(q.answerContained !== null ? { answer_contained: q.answerContained } : {}),
+      ...(q.degraded !== undefined ? { degraded: q.degraded } : {}),
     })),
   };
 }
