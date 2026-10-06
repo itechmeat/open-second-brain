@@ -281,7 +281,7 @@ export async function loadBeliefSemanticRelevance(
     const prepared = prepareQueryEmbed(config, query, reach);
     if (prepared.kind === "refused") {
       throw new SearchError(
-        "EMBEDDING_COST_UNPRICED",
+        prepared.code,
         `semantic belief order refused: ${queryEmbedRefusalMessage(prepared)}`,
       );
     }
