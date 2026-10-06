@@ -16,10 +16,15 @@ import { expect, test } from "bun:test";
 import {
   fitQueryToWindow,
   prepareQueryEmbed,
+  queryEmbedCutMessage,
+  queryEmbedEmptyFitMessage,
   queryEmbedRefusalMessage,
 } from "../../../src/core/search/embeddings/query-embed.ts";
 import { makeProvider } from "../../../src/core/search/embeddings/provider.ts";
-import { RECOMMENDED_EMBEDDING_MODEL } from "../../../src/core/search/embeddings/presets.ts";
+import {
+  INPUT_WINDOW_TOKENS_KEY,
+  RECOMMENDED_EMBEDDING_MODEL,
+} from "../../../src/core/search/embeddings/presets.ts";
 import {
   EMBEDDING_PRICE_MODEL_KEY,
   EMBEDDING_PRICE_RATE_KEY,
@@ -273,4 +278,52 @@ test("a local caller is shown the gate amount it configured", () => {
   if (result.kind !== "refused") throw new Error("narrowed wrong");
   const message = queryEmbedRefusalMessage(result, 7.25, TRANSPORT_REACH.local);
   expect(message).toContain(`${COST_GATE_KEY} is ${formatEstimatedUsd(7.25)}`);
+});
+
+// ── the shared sentences for a cut ───────────────────────────────────────────
+
+test("a prefix that fills the window is an empty fit, cut to that window", () => {
+  const config = cfg({ costGateUsd: 0, inputWindowTokens: 1, queryPrefix: "query: " });
+  const result = prepareQueryEmbed(config, "the actual question", TRANSPORT_REACH.remote);
+  if (result.kind !== "ready") throw new Error("narrowed wrong");
+  expect(result.text).toBe("");
+  expect(result.truncated).toBe(true);
+  expect(result.emptyFit).toBe(true);
+  expect(result.windowTokens).toBe(1);
+});
+
+test("a cut that keeps some of the query is not an empty fit", () => {
+  const config = cfg({ costGateUsd: 0, inputWindowTokens: 16, queryPrefix: "query: " });
+  const result = prepareQueryEmbed(config, "abcdefghij".repeat(40), TRANSPORT_REACH.remote);
+  if (result.kind !== "ready") throw new Error("narrowed wrong");
+  expect(result.truncated).toBe(true);
+  expect(result.emptyFit).toBe(false);
+});
+
+test("an empty query is sent as it came, not reported as an empty fit", () => {
+  const config = cfg({ costGateUsd: 0, inputWindowTokens: 16, queryPrefix: "query: " });
+  const result = prepareQueryEmbed(config, "", TRANSPORT_REACH.remote);
+  if (result.kind !== "ready") throw new Error("narrowed wrong");
+  expect(result.truncated).toBe(false);
+  expect(result.emptyFit).toBe(false);
+});
+
+test("the empty-fit sentence names the window and the key that raises it", () => {
+  const config = cfg({ costGateUsd: 0, inputWindowTokens: 3, queryPrefix: "a long prefix: " });
+  const result = prepareQueryEmbed(config, "q", TRANSPORT_REACH.remote);
+  if (result.kind !== "ready" || !result.truncated) throw new Error("narrowed wrong");
+  const message = queryEmbedEmptyFitMessage(result);
+  expect(message).toContain("3-token");
+  expect(message).toContain(INPUT_WINDOW_TOKENS_KEY);
+});
+
+test("the cut sentence names the window, what was kept and the key that raises it", () => {
+  const query = "abcdefghij".repeat(40);
+  const config = cfg({ costGateUsd: 0, inputWindowTokens: 16, queryPrefix: "query: " });
+  const result = prepareQueryEmbed(config, query, TRANSPORT_REACH.remote);
+  if (result.kind !== "ready" || !result.truncated) throw new Error("narrowed wrong");
+  const message = queryEmbedCutMessage(result, query);
+  expect(message).toContain("16-token");
+  expect(message).toContain(`${[...result.text].length} of ${[...query].length} code point(s)`);
+  expect(message).toContain(INPUT_WINDOW_TOKENS_KEY);
 });

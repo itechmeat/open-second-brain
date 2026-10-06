@@ -12,9 +12,13 @@ import {
   semanticCapabilityLabel,
 } from "./capability-tier.ts";
 import { classifyEmbeddingError } from "./embeddings/openai-compat.ts";
-import { INPUT_WINDOW_TOKENS_KEY } from "./embeddings/presets.ts";
 import { makeProvider } from "./embeddings/provider.ts";
-import { prepareQueryEmbed, queryEmbedRefusalMessage } from "./embeddings/query-embed.ts";
+import {
+  prepareQueryEmbed,
+  queryEmbedCutMessage,
+  queryEmbedEmptyFitMessage,
+  queryEmbedRefusalMessage,
+} from "./embeddings/query-embed.ts";
 import { RETRIEVAL_DEGRADATION, noteDegradation } from "./retrieval-trail.ts";
 import { Store } from "./store.ts";
 import { EMBEDDING_QUOTA_MESSAGE, SearchError } from "./types.ts";
@@ -157,26 +161,21 @@ export async function runSemanticPhase(
     noteDegradation(degraded, RETRIEVAL_DEGRADATION.semanticCostUnpriced);
     return { attempted: false, hits: [], warnings, degraded };
   }
-  if (prepared.truncated && prepared.windowTokens !== null) {
-    const windowTokens = prepared.windowTokens;
-    if (prepared.text === "") {
+  if (prepared.truncated) {
+    const detail = { windowTokens: prepared.windowTokens };
+    if (prepared.emptyFit) {
       // The instruction prefix alone fills the window: there is no query
       // left to embed, and embedding the prefix would search for nothing.
-      const message =
-        `the embedding input window (${windowTokens} tokens) leaves no room for the query ` +
-        `after the instruction prefix; raise ${INPUT_WINDOW_TOKENS_KEY} or shorten the prefix`;
+      const message = queryEmbedEmptyFitMessage(prepared);
       if (opts.explicit) throw new SearchError("INVALID_INPUT", message);
       warnings.push(message);
-      noteDegradation(degraded, RETRIEVAL_DEGRADATION.semanticQueryTruncated, { windowTokens });
+      noteDegradation(degraded, RETRIEVAL_DEGRADATION.semanticQueryTruncated, detail);
       return { attempted: false, hits: [], warnings, degraded };
     }
     // A cut the server would otherwise make silently (or refuse), made
     // here and disclosed. The lane still runs on the prefix.
-    warnings.push(
-      `query cut to the embedding input window (${windowTokens} tokens); ` +
-        "the semantic lane searched its beginning only",
-    );
-    noteDegradation(degraded, RETRIEVAL_DEGRADATION.semanticQueryTruncated, { windowTokens });
+    warnings.push(queryEmbedCutMessage(prepared, query));
+    noteDegradation(degraded, RETRIEVAL_DEGRADATION.semanticQueryTruncated, detail);
   }
 
   let queryVec: number[];

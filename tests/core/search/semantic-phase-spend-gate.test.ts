@@ -21,7 +21,12 @@ import { join } from "node:path";
 import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { COST_GATE_KEY, formatEstimatedUsd } from "../../../src/core/search/embedding-spend.ts";
-import { fitQueryToWindow } from "../../../src/core/search/embeddings/query-embed.ts";
+import {
+  fitQueryToWindow,
+  prepareQueryEmbed,
+  queryEmbedCutMessage,
+  queryEmbedEmptyFitMessage,
+} from "../../../src/core/search/embeddings/query-embed.ts";
 import { INPUT_WINDOW_TOKENS_KEY } from "../../../src/core/search/embeddings/presets.ts";
 import {
   EMBEDDING_PRICE_MODEL_KEY,
@@ -193,7 +198,10 @@ test("an over-window query embeds the cut text and names the window", async () =
   expect(out.degraded).toEqual([
     { code: RETRIEVAL_DEGRADATION.semanticQueryTruncated, detail: { windowTokens: window } },
   ]);
-  expect(out.warnings.some((w) => w.includes(String(window)))).toBe(true);
+  const prepared = prepareQueryEmbed(config, query, TRANSPORT_REACH.remote);
+  if (prepared.kind !== "ready" || !prepared.truncated) throw new Error("narrowed wrong");
+  expect(out.warnings).toEqual([queryEmbedCutMessage(prepared, query)]);
+  expect(out.warnings[0]).toContain(INPUT_WINDOW_TOKENS_KEY);
 });
 
 test("a query that fits the window is sent whole with no warning", async () => {
@@ -214,6 +222,9 @@ test("a prefix that fills the window is never embedded", async () => {
   expect(server.callCount()).toBe(0);
   expect(out.attempted).toBe(false);
   expect(codes(out.degraded)).toEqual([RETRIEVAL_DEGRADATION.semanticQueryTruncated]);
+  const prepared = prepareQueryEmbed(config, "q", TRANSPORT_REACH.remote);
+  if (prepared.kind !== "ready" || !prepared.truncated) throw new Error("narrowed wrong");
+  expect(out.warnings).toEqual([queryEmbedEmptyFitMessage(prepared)]);
 
   let err: unknown = null;
   try {
@@ -223,7 +234,7 @@ test("a prefix that fills the window is never embedded", async () => {
   }
   expect(server.callCount()).toBe(0);
   expect((err as SearchError).code).toBe("INVALID_INPUT");
-  expect((err as SearchError).message).toContain(INPUT_WINDOW_TOKENS_KEY);
+  expect((err as SearchError).message).toBe(queryEmbedEmptyFitMessage(prepared));
 });
 
 // ── the lane ─────────────────────────────────────────────────────────────────

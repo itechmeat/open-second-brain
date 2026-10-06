@@ -47,8 +47,9 @@ import type { EmbeddingPriceSource } from "../search/embeddings/pricing.ts";
 import { makeProvider } from "../search/embeddings/provider.ts";
 import {
   prepareQueryEmbed,
+  queryEmbedCutMessage,
+  queryEmbedEmptyFitMessage,
   queryEmbedRefusalMessage,
-  type QueryEmbedReady,
 } from "../search/embeddings/query-embed.ts";
 import { estimateCostUsd } from "../search/embeddings/signature.ts";
 import { SearchError } from "../search/search-error.ts";
@@ -206,15 +207,6 @@ export function scoreBeliefsByVector(input: BeliefVectorScoreInput): BeliefVecto
   };
 }
 
-/** The warning a query cut to the model's input window adds. */
-function queryCutWarning(query: string, prepared: QueryEmbedReady): string {
-  return (
-    `semantic belief query cut to the ${prepared.windowTokens}-token input window ` +
-    `of the embedding model: ${[...prepared.text].length} of ${[...query].length} ` +
-    `code point(s) embedded`
-  );
-}
-
 function isBeliefPath(path: string): boolean {
   return BELIEF_SEMANTIC_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
@@ -293,11 +285,10 @@ export async function loadBeliefSemanticRelevance(
         `semantic belief order refused: ${queryEmbedRefusalMessage(prepared, config.semantic.costGateUsd, reach)}`,
       );
     }
-    if (prepared.text === "") {
+    if (prepared.emptyFit) {
       throw new SearchError(
         "INVALID_INPUT",
-        `semantic belief order unavailable: the query instruction prefix alone fills ` +
-          `the ${prepared.windowTokens}-token input window of the embedding model`,
+        `semantic belief order unavailable: ${queryEmbedEmptyFitMessage(prepared)}`,
       );
     }
     const [queryVector = []] = await provider.embed([prepared.text], "query");
@@ -315,7 +306,9 @@ export async function loadBeliefSemanticRelevance(
     const contradicted = contradictedAbiFields(store.embeddingAbiMismatches());
     const warnings: string[] = [];
     if (contradicted.length > 0) warnings.push(formatEmbeddingAbiDrift(contradicted));
-    if (prepared.truncated) warnings.push(queryCutWarning(query, prepared));
+    if (prepared.truncated) {
+      warnings.push(`semantic belief order: ${queryEmbedCutMessage(prepared, query)}`);
+    }
     return {
       ...scoreBeliefsByVector({ model, queryVector, vectorsByPath }),
       report,

@@ -31,7 +31,11 @@ import { resolvedTransportReach, TRANSPORT_REACH } from "../../graph/transport-r
 import type { TransportReach } from "../../graph/transport-reach.ts";
 import { activeSpendQuote, COST_GATE_KEY, formatEstimatedUsd } from "../embedding-spend.ts";
 import type { ResolvedSearchConfig } from "../types.ts";
-import { effectiveInputWindowTokens, queryPrefixSentByProvider } from "./presets.ts";
+import {
+  effectiveInputWindowTokens,
+  INPUT_WINDOW_TOKENS_KEY,
+  queryPrefixSentByProvider,
+} from "./presets.ts";
 import {
   EMBEDDING_PRICE_MODEL_KEY,
   EMBEDDING_PRICE_RATE_KEY,
@@ -124,15 +128,37 @@ export interface QueryEmbedRefused {
 }
 
 /** The gateway cleared the embed: send {@link text}, disclose the rest. */
-export interface QueryEmbedReady extends QueryFit {
+interface QueryEmbedReadyBase extends QueryFit {
   readonly kind: "ready";
-  /** The effective input window the text was fitted to; null when unknown. */
-  readonly windowTokens: number | null;
   /** The price quote every spend surface shares for {@link model}. */
   readonly quote: PriceQuote;
   /** The model the embed names, null when none is configured. */
   readonly model: string | null;
 }
+
+/** The query fits its window (or the window is unknown): it is sent whole. */
+export interface QueryEmbedWhole extends QueryEmbedReadyBase {
+  readonly truncated: false;
+  readonly emptyFit: false;
+  /** The effective input window the text was fitted to; null when unknown. */
+  readonly windowTokens: number | null;
+}
+
+/** The query was cut to its window; only a known window cuts. */
+export interface QueryEmbedCut extends QueryEmbedReadyBase {
+  readonly truncated: true;
+  /**
+   * True when the instruction prefix alone fills the window, so nothing of
+   * the query survived the cut. Every caller must treat it as a
+   * degradation and never embed the prefix by itself.
+   */
+  readonly emptyFit: boolean;
+  /** The effective input window the text was cut to. */
+  readonly windowTokens: number;
+}
+
+/** A cleared embed: whole, or cut to a known window. */
+export type QueryEmbedReady = QueryEmbedWhole | QueryEmbedCut;
 
 /** What {@link prepareQueryEmbed} decided. */
 export type QueryEmbedPreparation = QueryEmbedRefused | QueryEmbedReady;
@@ -165,7 +191,26 @@ export function prepareQueryEmbed(
     queryPrefixSentByProvider(config.semantic.provider, config.semantic.queryPrefix),
     windowTokens,
   );
-  return Object.freeze({ kind: "ready", ...fit, windowTokens, quote, model });
+  if (fit.truncated && windowTokens !== null) {
+    return Object.freeze({
+      kind: "ready",
+      ...fit,
+      truncated: true,
+      emptyFit: fit.text === "",
+      windowTokens,
+      quote,
+      model,
+    });
+  }
+  return Object.freeze({
+    kind: "ready",
+    ...fit,
+    truncated: false,
+    emptyFit: false,
+    windowTokens,
+    quote,
+    model,
+  });
 }
 
 /**
@@ -192,5 +237,30 @@ export function queryEmbedRefusalMessage(
     `${COST_GATE_KEY} is ${gate}, so a query embed for a caller ` +
     `that is not local is refused. Declare its price with ${EMBEDDING_PRICE_MODEL_KEY} ` +
     `and ${EMBEDDING_PRICE_RATE_KEY} (0 for a free self-hosted model).`
+  );
+}
+
+/**
+ * The operator-facing sentence for an empty fit: the window, and the key
+ * that raises it when the model accepts more. Shared so the search lane
+ * and the semantic belief order name the same lever.
+ */
+export function queryEmbedEmptyFitMessage(cut: QueryEmbedCut): string {
+  return (
+    `the ${cut.windowTokens}-token embedding input window leaves no room for the query ` +
+    `after the instruction prefix; raise ${INPUT_WINDOW_TOKENS_KEY} if the model accepts ` +
+    `more, or shorten the query prefix`
+  );
+}
+
+/**
+ * The operator-facing sentence for a query cut to its window: the window,
+ * how much of `query` was embedded, and the key that raises the window.
+ */
+export function queryEmbedCutMessage(cut: QueryEmbedCut, query: string): string {
+  return (
+    `query cut to the ${cut.windowTokens}-token embedding input window: ` +
+    `${[...cut.text].length} of ${[...query].length} code point(s) embedded; ` +
+    `raise ${INPUT_WINDOW_TOKENS_KEY} if the model accepts more`
   );
 }

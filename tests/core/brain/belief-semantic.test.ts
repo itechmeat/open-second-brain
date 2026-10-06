@@ -30,7 +30,10 @@ import {
 } from "../../../src/core/brain/belief-semantic.ts";
 import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
 import { COST_GATE_KEY, formatEstimatedUsd } from "../../../src/core/search/embedding-spend.ts";
-import { E5_QUERY_PREFIX } from "../../../src/core/search/embeddings/presets.ts";
+import {
+  E5_QUERY_PREFIX,
+  INPUT_WINDOW_TOKENS_KEY,
+} from "../../../src/core/search/embeddings/presets.ts";
 import { EMBEDDING_PRICE_SOURCE } from "../../../src/core/search/embeddings/pricing.ts";
 import {
   estimateTokens,
@@ -566,7 +569,8 @@ describe("loadBeliefSemanticRelevance", () => {
         expect(long.startsWith(sent)).toBe(true);
         expect(loaded.report.queryTokens).toBe(estimateTokens([E5_QUERY_PREFIX + sent]));
         expect(loaded.warnings).toHaveLength(1);
-        expect(loaded.warnings[0]).toContain("8");
+        expect(loaded.warnings[0]).toContain("8-token");
+        expect(loaded.warnings[0]).toContain(INPUT_WINDOW_TOKENS_KEY);
         expect(loaded.scored).toBe(1);
       },
     );
@@ -582,6 +586,8 @@ describe("loadBeliefSemanticRelevance", () => {
 
         expect(refusal).toBeInstanceOf(SearchError);
         expect((refusal as SearchError).code).toBe("INVALID_INPUT");
+        expect((refusal as SearchError).message).toContain("1-token");
+        expect((refusal as SearchError).message).toContain(INPUT_WINDOW_TOKENS_KEY);
       },
     );
   });
