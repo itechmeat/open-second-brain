@@ -285,12 +285,15 @@ export async function search(
     // A deadline-degraded answer is keyword-only under a key that promises
     // the hybrid one: serve it, but never cache it. A spend-gated one is
     // the same, and the key carries no gate, price or window either, so a
-    // cached refusal would outlive the operator's price declaration.
+    // cached refusal would outlive the operator's price declaration; a
+    // query cut to its window would outlive a wider window the same way.
     const finalize = (outcome: SearchOutcome): SearchOutcome => {
-      const spendGated = degraded.some(
-        (d) => d.code === RETRIEVAL_DEGRADATION.semanticCostUnpriced,
+      const configBound = degraded.some(
+        (d) =>
+          d.code === RETRIEVAL_DEGRADATION.semanticCostUnpriced ||
+          d.code === RETRIEVAL_DEGRADATION.semanticQueryTruncated,
       );
-      if (cache.slot !== null && deadline?.hasFired() !== true && !spendGated) {
+      if (cache.slot !== null && deadline?.hasFired() !== true && !configBound) {
         persistCachedOutcome(store, cache.slot, outcome);
       }
       return outcome;

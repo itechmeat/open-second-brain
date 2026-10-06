@@ -145,6 +145,30 @@ test("an ungated local answer is still cached", async () => {
   expect(queryCacheRows(config.dbPath)).toBe(1);
 });
 
+function windowed(config: ResolvedSearchConfig, inputWindowTokens: number): ResolvedSearchConfig {
+  return { ...config, semantic: { ...config.semantic, inputWindowTokens } };
+}
+
+const LONG_QUERY = Array.from({ length: 40 }, () => "fox").join(" ");
+
+test("a query cut to its window is served but never cached", async () => {
+  if (!sqliteVecLoadable()) return;
+  const config = windowed(await gatedIndex(), 4);
+  const local = { query: LONG_QUERY, limit: 5, transportReach: TRANSPORT_REACH.local };
+  const cut = await search(config, local);
+  expect(cut.retrievalTrail?.degraded.map((d) => d.code)).toContain(
+    RETRIEVAL_DEGRADATION.semanticQueryTruncated,
+  );
+  expect(queryCacheRows(config.dbPath)).toBe(0);
+  // A wider window declared afterwards reaches the next identical query.
+  const before = server.callCount();
+  const whole = await search(windowed(config, 8192), local);
+  expect(server.callCount()).toBe(before + 1);
+  expect(whole.retrievalTrail?.degraded.map((d) => d.code) ?? []).not.toContain(
+    RETRIEVAL_DEGRADATION.semanticQueryTruncated,
+  );
+});
+
 // ── the benchmark ────────────────────────────────────────────────────────────
 
 test("a gated benchmark discloses the degradation per query and in aggregate", async () => {
