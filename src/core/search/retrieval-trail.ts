@@ -302,23 +302,38 @@ export function noteDegradation(
   sink.push(Object.freeze(detail !== undefined ? { code, detail } : { code }));
 }
 
+/** The codes that each mean the semantic lane a hybrid caller wanted did not run. */
+const SEMANTIC_LANE_STOPS: ReadonlySet<RetrievalDegradationCode> = new Set([
+  RETRIEVAL_DEGRADATION.hybridDegraded,
+  RETRIEVAL_DEGRADATION.semanticCapabilityBlocked,
+  RETRIEVAL_DEGRADATION.semanticCostUnpriced,
+  RETRIEVAL_DEGRADATION.semanticProviderUnavailable,
+  RETRIEVAL_DEGRADATION.semanticEmptyQueryVector,
+]);
+
 /**
  * Whether a hybrid caller was served keyword-only for a reason that is not
  * the index or the machine: the one definition every consumer that must
  * not learn from, or save, a keyword-only measurement reads.
  *
  * `hybrid-degraded` is the umbrella - the caller wanted the semantic lane
- * and it did not run - so the deadline and an empty query vector count
- * without a lane-specific list that drifts from the codes above. An index
- * with no embeddings or a machine without sqlite-vec is keyword-only by
- * construction: the system it measured is the one that will serve.
+ * and it did not run - so the deadline counts without a code of its own.
+ * The umbrella is only noted when the keyword lane found something, so the
+ * codes that always mean the lane stopped count on their own too: a hit
+ * that arrived through another lane was still scored without the
+ * semantic one.
+ * An index with no embeddings or a machine without sqlite-vec is
+ * keyword-only by construction: the system it measured is the one that
+ * will serve.
  */
 export function semanticLaneMissing(degraded: ReadonlyArray<RetrievalDegradationCode>): boolean {
-  return (
-    degraded.includes(RETRIEVAL_DEGRADATION.hybridDegraded) &&
-    !degraded.includes(RETRIEVAL_DEGRADATION.semanticEmbeddingsAbsent) &&
-    !degraded.includes(RETRIEVAL_DEGRADATION.semanticVecExtensionUnavailable)
-  );
+  if (
+    degraded.includes(RETRIEVAL_DEGRADATION.semanticEmbeddingsAbsent) ||
+    degraded.includes(RETRIEVAL_DEGRADATION.semanticVecExtensionUnavailable)
+  ) {
+    return false;
+  }
+  return degraded.some((code) => SEMANTIC_LANE_STOPS.has(code));
 }
 
 /**

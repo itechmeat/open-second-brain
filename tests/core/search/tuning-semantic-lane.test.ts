@@ -118,7 +118,18 @@ describe("semanticLaneMissing", () => {
     }
   });
 
-  test("a stop code without the hybrid umbrella is not", () => {
+  test("a lane stop counts without the umbrella, which needs a keyword hit", () => {
+    for (const code of [
+      RETRIEVAL_DEGRADATION.semanticCapabilityBlocked,
+      RETRIEVAL_DEGRADATION.semanticCostUnpriced,
+      RETRIEVAL_DEGRADATION.semanticProviderUnavailable,
+      RETRIEVAL_DEGRADATION.semanticEmptyQueryVector,
+    ]) {
+      expect(semanticLaneMissing([code])).toBe(true);
+    }
+  });
+
+  test("a cut query or a clean trail is not", () => {
     expect(semanticLaneMissing([RETRIEVAL_DEGRADATION.semanticQueryTruncated])).toBe(false);
     expect(semanticLaneMissing([])).toBe(false);
   });
