@@ -1468,6 +1468,9 @@ const RECALL_FEEDBACK_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]>
     recorded: { type: "boolean" },
     result_found: { type: "boolean" },
     learned: { type: "object" },
+    // Retrieval degradation codes of the re-run (for example
+    // semantic-cost-unpriced); empty when nothing narrowed it.
+    degraded: { type: "array", items: { type: "string" } },
   },
   required: ["recorded", "result_found", "learned"],
 };
@@ -1505,6 +1508,7 @@ async function toolBrainRecallFeedback(
     recorded: true,
     result_found: outcome.resultFound,
     learned: outcome.learned,
+    degraded: outcome.degraded,
   };
 }
 

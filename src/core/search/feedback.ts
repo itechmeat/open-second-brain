@@ -25,6 +25,7 @@ import { join } from "node:path";
 
 import type { BrainSearchResult, ResolvedSearchConfig, WeightProfile } from "./types.ts";
 import type { TransportReach } from "../graph/transport-reach.ts";
+import type { RetrievalDegradationCode } from "./retrieval-trail.ts";
 
 /** Lower bound for one learned per-layer multiplier. */
 export const LEARNED_WEIGHT_MIN = 0.8;
@@ -314,6 +315,14 @@ export interface CaptureRecallFeedbackOutcome {
   readonly learned: LearnedWeights;
   /** False when the judged path was not in the re-ran result set. */
   readonly resultFound: boolean;
+  /**
+   * Why the re-run narrowed, as the trail's codes; empty when nothing did.
+   * The re-run is gated like any search (a remote caller's unpriced query
+   * embed is refused), so the contributions it recorded describe the
+   * ranking this caller's own search produces, and this says when that
+   * ranking was keyword-only.
+   */
+  readonly degraded: ReadonlyArray<RetrievalDegradationCode>;
 }
 
 /**
@@ -349,5 +358,6 @@ export async function captureRecallFeedback(
   });
   const file = recordRecallFeedback(config.vault, event);
   const learned = readLearnedWeights(config.vault) ?? NEUTRAL_LEARNED_WEIGHTS;
-  return Object.freeze({ file, event, learned, resultFound: hit !== undefined });
+  const degraded = Object.freeze((outcome.retrievalTrail?.degraded ?? []).map((d) => d.code));
+  return Object.freeze({ file, event, learned, resultFound: hit !== undefined, degraded });
 }
