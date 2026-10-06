@@ -379,14 +379,43 @@ describe("expectBefore compare-before-write", () => {
     expect(tempFiles()).toEqual([]);
   });
 
-  test("bytes are compared, not their decoding: two invalid sequences differ", () => {
-    // 0xff and 0xfe both decode to U+FFFD, so a string compare would see no drift.
+  test("an unchanged file holding invalid UTF-8 matches the lossy read of it", () => {
     const target = join(tmp, "bin.md");
-    writeFileSync(target, Buffer.from([0xfe]));
-    const read = Buffer.from([0xff]).toString("utf8");
+    const bytes = Buffer.from([...Buffer.from("stale "), 0xff, 0x0a]);
+    writeFileSync(target, bytes);
+    const read = readFileSync(target, "utf8");
+    expect(fileMatchesExpected(target, read)).toBe(true);
+    atomicWriteFileSync(target, "new\n", { expectBefore: read });
+    expect(readFileSync(target, "utf8")).toBe("new\n");
+  });
+
+  test("valid UTF-8 is compared byte for byte", () => {
+    const target = join(tmp, "x.md");
+    writeFileSync(target, "café\n");
+    const read = readFileSync(target, "utf8");
+    // NFD: same text on screen, different bytes on disk.
+    writeFileSync(target, "café\n");
     expect(fileMatchesExpected(target, read)).toBe(false);
     driftOf(() => atomicWriteFileSync(target, "new\n", { expectBefore: read }));
-    expect(readFileSync(target)).toEqual(Buffer.from([0xfe]));
+    expect(readFileSync(target, "utf8")).toBe("café\n");
+  });
+
+  test("an invalid-UTF-8 file is drift when its decoding changed", () => {
+    const target = join(tmp, "bin.md");
+    writeFileSync(target, Buffer.from([...Buffer.from("stale "), 0xff, 0x0a]));
+    const read = readFileSync(target, "utf8");
+    const edited = Buffer.from([...Buffer.from("edited "), 0xff, 0x0a]);
+    writeFileSync(target, edited);
+    expect(fileMatchesExpected(target, read)).toBe(false);
+    driftOf(() => atomicWriteFileSync(target, "new\n", { expectBefore: read }));
+    expect(readFileSync(target)).toEqual(edited);
+  });
+
+  test("known limit: two invalid sequences with the same decoding look equal", () => {
+    // 0xff and 0xfe both decode to U+FFFD; the lossy read cannot tell them apart.
+    const target = join(tmp, "bin.md");
+    writeFileSync(target, Buffer.from([0xfe]));
+    expect(fileMatchesExpected(target, Buffer.from([0xff]).toString("utf8"))).toBe(true);
   });
 
   test("fileMatchesExpected tells absent, empty and different apart", () => {

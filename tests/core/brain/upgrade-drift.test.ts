@@ -158,6 +158,32 @@ describe("applyUpgrade applies the plan it is handed", () => {
   });
 });
 
+describe("a managed file holding invalid UTF-8", () => {
+  const stale = Buffer.from([...Buffer.from("stale "), 0xff, 0x0a]);
+
+  test("upgrades when nobody touched it since the plan", () => {
+    writeFileSync(brainManualPath(vault), stale);
+    const plan = planUpgrade(vault);
+
+    const res = applyUpgrade(vault, { plan, agent: "test-agent" });
+
+    expect(res.files_updated).toEqual(["Brain/_BRAIN.md"]);
+    expect(planUpgrade(vault).pending).toBe(0);
+  });
+
+  test("is drift when its text changed since the plan", () => {
+    writeFileSync(brainManualPath(vault), stale);
+    const plan = planUpgrade(vault);
+    const edited = Buffer.from([...Buffer.from("edited "), 0xff, 0x0a]);
+    writeFileSync(brainManualPath(vault), edited);
+
+    const err = upgradeError(() => applyUpgrade(vault, { plan }));
+
+    expect(err.drifted).toEqual(["Brain/_BRAIN.md"]);
+    expect(readFileSync(brainManualPath(vault))).toEqual(edited);
+  });
+});
+
 describe("drift found before the snapshot", () => {
   test("a hand edit after the plan refuses with drifted, no snapshot, the edit survives", () => {
     writeFileSync(brainManualPath(vault), "stale\n");

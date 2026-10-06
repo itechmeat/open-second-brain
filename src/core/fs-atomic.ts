@@ -11,6 +11,7 @@
  * directory entry to durably persist the rename).
  */
 
+import { isUtf8 } from "node:buffer";
 import {
   closeSync,
   existsSync,
@@ -180,10 +181,14 @@ function isUnchanged(target: string, contents: string): boolean {
  * these bytes for a string? The one definition of drift, shared by the
  * write below and by callers that check a batch before writing any of it.
  *
- * Bytes are compared, not their UTF-8 decoding: two different invalid
- * sequences both decode to U+FFFD and would look equal as strings. A read
- * error other than "absent" propagates - an unreadable target cannot be
- * shown to be unchanged.
+ * Valid UTF-8 is compared byte for byte, so any real edit is drift. Bytes
+ * that are not valid UTF-8 can never equal an encoded string, yet the
+ * caller's `expected` came from a lossy UTF-8 read of those same bytes; for
+ * them the lossy decodings are compared instead, or an untouched legacy file
+ * would be refused on every attempt. Known limit: two different invalid
+ * sequences that decode to the same text (0xfe and 0xff both become U+FFFD)
+ * are indistinguishable. A read error other than "absent" propagates - an
+ * unreadable target cannot be shown to be unchanged.
  */
 export function fileMatchesExpected(target: string, expected: string | null): boolean {
   let current: Buffer;
@@ -193,7 +198,9 @@ export function fileMatchesExpected(target: string, expected: string | null): bo
     if ((err as NodeJS.ErrnoException | null)?.code !== "ENOENT") throw err;
     return expected === null;
   }
-  return expected !== null && current.equals(Buffer.from(expected, "utf8"));
+  if (expected === null) return false;
+  if (current.equals(Buffer.from(expected, "utf8"))) return true;
+  return !isUtf8(current) && current.toString("utf8") === expected;
 }
 
 /** Throw {@link FileDriftError} unless {@link fileMatchesExpected} holds. */
