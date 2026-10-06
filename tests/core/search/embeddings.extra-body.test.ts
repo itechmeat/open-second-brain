@@ -287,6 +287,13 @@ test("an override cannot pair a non-openai-compat provider with an extra body", 
   expect(e.message).toContain("'zeroentropy'");
 });
 
+test("an override cannot carry an owned request field in any spelling", () => {
+  const e = overrideRefusal({ extraBody: Object.freeze({ Encoding_Format: "base64" }) });
+  expect(e.code).toBe("INVALID_INPUT");
+  expect(e.message).toContain(EXTRA_BODY_KEY);
+  expect(e.message).toContain("'Encoding_Format'");
+});
+
 test("a disabled provider accepts an extra body and builds a provider that sends nothing", async () => {
   const resolved = resolveWith([
     "embedding_provider: disabled",

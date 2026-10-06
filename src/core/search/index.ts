@@ -454,6 +454,17 @@ function resolveEmbeddingExtraBody(
     throw new SearchError("INVALID_INPUT", `${source} must be a JSON object, got ${kind}`);
   }
   const body = parsed as Record<string, unknown>;
+  refuseReservedBodyKeys(body, source);
+  return Object.freeze(body);
+}
+
+/**
+ * Refuse every key that names an owned request field in any spelling,
+ * listing them all in one sentence that names `source`. Run at parse time
+ * to name the env variable or the key, and again in `validateExtraBody`
+ * so an override that never passed through the parser meets it too.
+ */
+function refuseReservedBodyKeys(body: Readonly<Record<string, unknown>>, source: string): void {
   const reserved = Object.keys(body).filter((k) =>
     RESERVED_BODY_KEYS_NORMALIZED.has(normalizeReservedName(k)),
   );
@@ -464,7 +475,6 @@ function resolveEmbeddingExtraBody(
         `refused ${reserved.map((k) => `'${k}'`).join(", ")}`,
     );
   }
-  return Object.freeze(body);
 }
 
 /**
@@ -491,6 +501,7 @@ function validateExtraBody(semantic: ResolvedEmbeddingConfig): void {
         `but embedding_provider is '${semantic.provider}': remove the key or switch providers`,
     );
   }
+  refuseReservedBodyKeys(body, EXTRA_BODY_KEY);
   const target = normalizeReservedName("dimensions");
   for (const key of Object.keys(body)) {
     if (normalizeReservedName(key) !== target) continue;
