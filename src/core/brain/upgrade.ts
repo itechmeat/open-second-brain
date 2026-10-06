@@ -204,12 +204,9 @@ export function applyUpgrade(vault: string, opts: ApplyUpgradeOptions = {}): Upg
       atomicWriteFileSync(join(vault, file.path), file.after, { expectBefore: file.before });
     } catch (err) {
       // A drift leaves the edit on disk, so its remedy must not destroy
-      // it: no `--force-rollback`, which overrides rollback's own drift
-      // guard, and no rollback at all when nothing was written yet.
+      // it: no rollback at all, only a re-plan that reads the edit.
       if (isFileDrift(err)) {
-        throw new BrainUpgradeError(midApplyDriftMessage(file.path, updated, runId), runId, [
-          file.path,
-        ]);
+        throw new BrainUpgradeError(midApplyDriftMessage(file.path, updated), runId, [file.path]);
       }
       // Mid-apply failure: one or more files have already been
       // rewritten under the new release, the rest still match the
@@ -354,15 +351,12 @@ function makeError(path: string, message: string): UpgradeFilePlan {
 
 /**
  * The refusal for a row that changed on disk during the apply. The next
- * plan reads the edit, so a fresh dry run is always the way forward; a
- * rollback is offered only when earlier rows were rewritten, and without
- * `--force-rollback`, so rollback's own drift guard keeps the edit too.
+ * plan reads the edit, so a fresh dry run is the only way forward offered.
+ * A rollback is not: the snapshot manifest predates the apply, so plain
+ * rollback reports every rewritten row as drift and exits, and
+ * `--force-rollback` would destroy the edit.
  */
-function midApplyDriftMessage(
-  drifted: string,
-  updated: ReadonlyArray<string>,
-  runId: string,
-): string {
+function midApplyDriftMessage(drifted: string, updated: ReadonlyArray<string>): string {
   const head =
     `upgrade refused at ${drifted}: the file changed on disk after the upgrade plan was ` +
     "read and was left as it is.";
@@ -374,8 +368,7 @@ function midApplyDriftMessage(
   }
   return (
     `${head} ${updated.length} file(s) already rewritten: ${updated.join(", ")}. ` +
-    "Re-run `o2b brain upgrade --dry-run` to plan the rest against the edit, or undo the " +
-    `rewritten files via \`o2b brain rollback ${runId}\`.`
+    "Re-run `o2b brain upgrade --dry-run` to plan the rest against the edit, then apply it."
   );
 }
 

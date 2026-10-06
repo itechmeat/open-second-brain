@@ -7,8 +7,10 @@
  * is refused before any snapshot is taken. An edit that lands while the
  * snapshot runs (injected through a spy on `createSnapshot`) is refused at
  * its own row: with nothing written yet the message says so and points at a
- * fresh dry run; with rows already rewritten it names them and offers the
- * plain rollback, never `--force-rollback`, which would destroy the edit.
+ * fresh dry run; with rows already rewritten it names them and points at
+ * the same dry run. No rollback is offered: the snapshot manifest predates
+ * the apply, so a plain rollback refuses on the rewritten rows and a forced
+ * one would destroy the edit.
  */
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
@@ -253,7 +255,7 @@ describe("drift found at the write", () => {
     expect(readFileSync(brainManualPath(vault), "utf8")).toBe("hand edit during the snapshot\n");
   });
 
-  test("drift at a later row: names the rewritten rows, offers the plain rollback", () => {
+  test("drift at a later row: names the rewritten rows, re-plans against the edit", () => {
     const { plan } = twoRowPlan();
     const rows = plan.files.filter((f) => f.status === "update");
     const [first, second] = [rows[0]!, rows[1]!];
@@ -266,8 +268,12 @@ describe("drift found at the write", () => {
     expect(err.drifted).toEqual([second.path]);
     expect(err.message).toContain(second.path);
     expect(err.message).toContain(`1 file(s) already rewritten: ${first.path}`);
-    expect(err.message).toContain(`o2b brain rollback ${err.runId}`);
     expect(err.message).toContain("o2b brain upgrade --dry-run");
-    expect(err.message).not.toContain("--force-rollback");
+    expect(err.message).not.toContain("rollback");
+    // The offered dry run plans the rest from the partial state: the
+    // rewritten row is settled and the drifted row is read with the edit.
+    const replan = planUpgrade(vault);
+    expect(row(replan, first.path).status).toBe("noop");
+    expect(row(replan, second.path).before).toBe(edit);
   });
 });
