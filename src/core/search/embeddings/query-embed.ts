@@ -16,8 +16,28 @@
  *
  * An unknown window cuts nothing, which is byte-identical to the
  * behaviour before the window was known to anyone.
+ *
+ * The gate decides whether the embed is sent at all. A caller that is not
+ * local spends the operator's money on every request, so under a positive
+ * `embedding_cost_gate_usd` a model nobody priced is refused before any
+ * provider exists. That is v1.72.0's rule exactly (the unpriced arm only,
+ * never an over-cap comparison for one query), and this is the one place
+ * it lives. The gateway returns data rather than throwing, because its
+ * callers report a refusal differently: the search lane has an explicit
+ * and an implicit arm, the semantic belief order always refuses.
  */
 
+import { resolvedTransportReach, TRANSPORT_REACH } from "../../graph/transport-reach.ts";
+import type { TransportReach } from "../../graph/transport-reach.ts";
+import { activeSpendQuote, COST_GATE_KEY, formatEstimatedUsd } from "../embedding-spend.ts";
+import type { ResolvedSearchConfig } from "../types.ts";
+import { effectiveInputWindowTokens, queryPrefixSentByProvider } from "./presets.ts";
+import {
+  EMBEDDING_PRICE_MODEL_KEY,
+  EMBEDDING_PRICE_RATE_KEY,
+  EMBEDDING_PRICE_SOURCE,
+  type PriceQuote,
+} from "./pricing.ts";
 import { estimateTokens, textExtent, tokenEstimateCeiling } from "./signature.ts";
 
 /** What a query fit decided: the text to send and what it costs. */
@@ -93,4 +113,71 @@ export function fitQueryToWindow(
     truncated: true,
     sentTokens: text === "" ? 0 : estimateTokens([prefix + text]),
   });
+}
+
+/** The gateway refused: the embed must not be sent. */
+export interface QueryEmbedRefused {
+  readonly kind: "refused";
+  readonly code: "EMBEDDING_COST_UNPRICED";
+  /** The model the embed would have named, null when none is configured. */
+  readonly model: string | null;
+}
+
+/** The gateway cleared the embed: send {@link text}, disclose the rest. */
+export interface QueryEmbedReady extends QueryFit {
+  readonly kind: "ready";
+  /** The effective input window the text was fitted to; null when unknown. */
+  readonly windowTokens: number | null;
+  /** The price quote every spend surface shares for {@link model}. */
+  readonly quote: PriceQuote;
+  /** The model the embed names, null when none is configured. */
+  readonly model: string | null;
+}
+
+/** What {@link prepareQueryEmbed} decided. */
+export type QueryEmbedPreparation = QueryEmbedRefused | QueryEmbedReady;
+
+/**
+ * Decide whether, and with what text, a query is embedded.
+ *
+ * Pure over the config: no provider is constructed and nothing is sent.
+ * An omitted reach resolves through `resolvedTransportReach` (remote), as
+ * everywhere else in the tree. The local hashing embedder is priced at 0
+ * by the builtin table, so it is never refused; a self-hosted model is
+ * unpriced until the operator declares its price (0 for free).
+ */
+export function prepareQueryEmbed(
+  config: ResolvedSearchConfig,
+  query: string,
+  reach: TransportReach | undefined,
+): QueryEmbedPreparation {
+  const { model, quote } = activeSpendQuote(config);
+  if (
+    resolvedTransportReach(reach) !== TRANSPORT_REACH.local &&
+    config.semantic.costGateUsd > 0 &&
+    quote.source === EMBEDDING_PRICE_SOURCE.unknown
+  ) {
+    return Object.freeze({ kind: "refused", code: "EMBEDDING_COST_UNPRICED", model });
+  }
+  const windowTokens = effectiveInputWindowTokens(config.semantic);
+  const fit = fitQueryToWindow(
+    query,
+    queryPrefixSentByProvider(config.semantic.provider, config.semantic.queryPrefix),
+    windowTokens,
+  );
+  return Object.freeze({ kind: "ready", ...fit, windowTokens, quote, model });
+}
+
+/**
+ * The operator-facing sentence for a refused query embed: the model, the
+ * gate key and its value, and the price pair that clears it. Shared so
+ * every caller that surfaces the refusal names the same lever.
+ */
+export function queryEmbedRefusalMessage(refused: QueryEmbedRefused, gateUsd: number): string {
+  return (
+    `embedding model ${refused.model ?? "(unset)"} has no known price and ` +
+    `${COST_GATE_KEY} is ${formatEstimatedUsd(gateUsd)}, so a query embed for a caller ` +
+    `that is not local is refused. Declare its price with ${EMBEDDING_PRICE_MODEL_KEY} ` +
+    `and ${EMBEDDING_PRICE_RATE_KEY} (0 for a free self-hosted model).`
+  );
 }

@@ -13,9 +13,29 @@
 
 import { expect, test } from "bun:test";
 
-import { fitQueryToWindow } from "../../../src/core/search/embeddings/query-embed.ts";
+import {
+  fitQueryToWindow,
+  prepareQueryEmbed,
+  queryEmbedRefusalMessage,
+} from "../../../src/core/search/embeddings/query-embed.ts";
+import { makeProvider } from "../../../src/core/search/embeddings/provider.ts";
+import { RECOMMENDED_EMBEDDING_MODEL } from "../../../src/core/search/embeddings/presets.ts";
+import {
+  EMBEDDING_PRICE_MODEL_KEY,
+  EMBEDDING_PRICE_RATE_KEY,
+  EMBEDDING_PRICE_SOURCE,
+} from "../../../src/core/search/embeddings/pricing.ts";
+import { COST_GATE_KEY } from "../../../src/core/search/embedding-spend.ts";
+import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
+import type {
+  ResolvedEmbeddingConfig,
+  ResolvedSearchConfig,
+} from "../../../src/core/search/types.ts";
+import { makeConfig } from "../../helpers/search-fixtures.ts";
+import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
 import {
   estimateTokens,
+  LOCAL_EMBEDDING_MODEL,
   textExtent,
   tokenEstimateCeiling,
   tokenEstimateFloor,
@@ -100,4 +120,139 @@ test("sentTokens counts the prefix, with the shared spend estimator", () => {
   expect(uncut.sentTokens).toBeGreaterThan(estimateTokens(["hello world"]));
   const cut = fitQueryToWindow("abcdefghij".repeat(20), PREFIX, 16);
   expect(cut.sentTokens).toBe(estimateTokens([PREFIX + cut.text]));
+});
+
+// ── task 3: the reach and price gate ─────────────────────────────────────────
+
+/** A model string outside both the price table and the preset table. */
+const UNPRICED_MODEL = "acme/custom-embed-9000";
+
+function cfg(semantic: Partial<ResolvedEmbeddingConfig> = {}): ResolvedSearchConfig {
+  return makeConfig({
+    vault: "/vault-never-read",
+    dbPath: "/index-never-opened.db",
+    semantic: {
+      enabled: true,
+      provider: "openai-compat",
+      baseUrl: "https://embeddings.invalid/v1",
+      model: UNPRICED_MODEL,
+      apiKey: FAKE_PROVIDER_KEY,
+      dimension: 4,
+      costGateUsd: 1,
+      ...semantic,
+    },
+  });
+}
+
+test("a remote caller under a positive gate on an unpriced model is refused, naming the model", () => {
+  const result = prepareQueryEmbed(cfg(), "what did I decide", TRANSPORT_REACH.remote);
+  expect(result).toEqual({
+    kind: "refused",
+    code: "EMBEDDING_COST_UNPRICED",
+    model: UNPRICED_MODEL,
+  });
+});
+
+test("an omitted reach is remote, as everywhere else", () => {
+  expect(prepareQueryEmbed(cfg(), "what did I decide", undefined).kind).toBe("refused");
+});
+
+test("a local caller under a positive gate on an unpriced model is ready", () => {
+  const result = prepareQueryEmbed(cfg(), "what did I decide", TRANSPORT_REACH.local);
+  expect(result.kind).toBe("ready");
+  if (result.kind !== "ready") throw new Error("narrowed wrong");
+  expect(result.quote.source).toBe(EMBEDDING_PRICE_SOURCE.unknown);
+});
+
+test("a remote caller under a zero gate is ready", () => {
+  expect(prepareQueryEmbed(cfg({ costGateUsd: 0 }), "q", TRANSPORT_REACH.remote).kind).toBe(
+    "ready",
+  );
+});
+
+test("a remote caller on an operator-priced model is ready", () => {
+  const result = prepareQueryEmbed(
+    cfg({ priceOverride: { model: UNPRICED_MODEL, usdPerMtok: 0 } }),
+    "q",
+    TRANSPORT_REACH.remote,
+  );
+  expect(result.kind).toBe("ready");
+  if (result.kind !== "ready") throw new Error("narrowed wrong");
+  expect(result.quote).toEqual({ usdPerMtok: 0, source: EMBEDDING_PRICE_SOURCE.operator });
+});
+
+test("the offline local embedder is ready: its builtin price is zero", () => {
+  const result = prepareQueryEmbed(
+    cfg({ provider: "local", model: LOCAL_EMBEDDING_MODEL, baseUrl: null, apiKey: null }),
+    "q",
+    TRANSPORT_REACH.remote,
+  );
+  expect(result.kind).toBe("ready");
+  if (result.kind !== "ready") throw new Error("narrowed wrong");
+  expect(result.quote.source).toBe(EMBEDDING_PRICE_SOURCE.builtin);
+  expect(result.model).toBe(LOCAL_EMBEDDING_MODEL);
+  expect(result.windowTokens).toBeNull();
+});
+
+test("the ready result carries the fitted text, the window and the quote", () => {
+  const query = "abcdefghij".repeat(40);
+  const config = cfg({ costGateUsd: 0, inputWindowTokens: 16, queryPrefix: "query: " });
+  const result = prepareQueryEmbed(config, query, TRANSPORT_REACH.remote);
+  expect(result.kind).toBe("ready");
+  if (result.kind !== "ready") throw new Error("narrowed wrong");
+  const fit = fitQueryToWindow(query, "query: ", 16);
+  expect(result.text).toBe(fit.text);
+  expect(result.truncated).toBe(true);
+  expect(result.sentTokens).toBe(fit.sentTokens);
+  expect(result.windowTokens).toBe(16);
+  expect(result.model).toBe(UNPRICED_MODEL);
+  expect(result.quote.source).toBe(EMBEDDING_PRICE_SOURCE.unknown);
+});
+
+test("the fit charges the prefix the backend sends, not the one configured", () => {
+  const query = "abcdefghij".repeat(40);
+  const config = cfg({
+    provider: "zeroentropy",
+    costGateUsd: 0,
+    inputWindowTokens: 16,
+    queryPrefix: "query: ",
+  });
+  const result = prepareQueryEmbed(config, query, TRANSPORT_REACH.local);
+  if (result.kind !== "ready") throw new Error("narrowed wrong");
+  expect(result.text).toBe(fitQueryToWindow(query, "", 16).text);
+});
+
+test("a curated model is fitted to its declared window with no operator key", () => {
+  const query = "word ".repeat(2000);
+  const result = prepareQueryEmbed(
+    cfg({ model: RECOMMENDED_EMBEDDING_MODEL, costGateUsd: 0 }),
+    query,
+    TRANSPORT_REACH.local,
+  );
+  if (result.kind !== "ready") throw new Error("narrowed wrong");
+  expect(result.truncated).toBe(true);
+  expect(result.windowTokens).toBeGreaterThan(0);
+});
+
+test("the gateway constructs no provider: it is pure over config", () => {
+  // A config no provider can be built from: makeProvider throws on it.
+  const unbuildable = cfg({ baseUrl: null, apiKey: null, costGateUsd: 0 });
+  expect(() => makeProvider(unbuildable.semantic)).toThrow();
+  const result = prepareQueryEmbed(unbuildable, "q", TRANSPORT_REACH.remote);
+  expect(result instanceof Promise).toBe(false);
+  expect(result.kind).toBe("ready");
+});
+
+test("the refusal sentence names the model, the gate key and the price pair", () => {
+  const result = prepareQueryEmbed(cfg(), "q", TRANSPORT_REACH.remote);
+  if (result.kind !== "refused") throw new Error("narrowed wrong");
+  const message = queryEmbedRefusalMessage(result, 1);
+  for (const needle of [
+    UNPRICED_MODEL,
+    COST_GATE_KEY,
+    EMBEDDING_PRICE_MODEL_KEY,
+    EMBEDDING_PRICE_RATE_KEY,
+  ]) {
+    expect(message).toContain(needle);
+  }
 });
