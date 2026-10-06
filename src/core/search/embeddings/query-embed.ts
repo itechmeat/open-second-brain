@@ -170,13 +170,26 @@ export function prepareQueryEmbed(
 
 /**
  * The operator-facing sentence for a refused query embed: the model, the
- * gate key and its value, and the price pair that clears it. Shared so
- * every caller that surfaces the refusal names the same lever.
+ * gate key, and the price pair that clears it. Shared so every caller
+ * that surfaces the refusal names the same lever.
+ *
+ * The gate amount is the operator's budget, so only a local caller sees
+ * it; any other reach (an omitted one resolves remote) learns only that
+ * the gate is positive. The gate refuses only callers that are not local,
+ * so today the sentence a refusal carries never states the amount.
  */
-export function queryEmbedRefusalMessage(refused: QueryEmbedRefused, gateUsd: number): string {
+export function queryEmbedRefusalMessage(
+  refused: QueryEmbedRefused,
+  gateUsd: number,
+  reach: TransportReach | undefined,
+): string {
+  const gate =
+    resolvedTransportReach(reach) === TRANSPORT_REACH.local
+      ? formatEstimatedUsd(gateUsd)
+      : "positive";
   return (
     `embedding model ${refused.model ?? "(unset)"} has no known price and ` +
-    `${COST_GATE_KEY} is ${formatEstimatedUsd(gateUsd)}, so a query embed for a caller ` +
+    `${COST_GATE_KEY} is ${gate}, so a query embed for a caller ` +
     `that is not local is refused. Declare its price with ${EMBEDDING_PRICE_MODEL_KEY} ` +
     `and ${EMBEDDING_PRICE_RATE_KEY} (0 for a free self-hosted model).`
   );

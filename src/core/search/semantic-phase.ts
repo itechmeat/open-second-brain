@@ -147,7 +147,11 @@ export async function runSemanticPhase(
   // degrades by code and the lane is not attempted.
   const prepared = prepareQueryEmbed(config, query, opts.transportReach);
   if (prepared.kind === "refused") {
-    const message = queryEmbedRefusalMessage(prepared, config.semantic.costGateUsd);
+    const message = queryEmbedRefusalMessage(
+      prepared,
+      config.semantic.costGateUsd,
+      opts.transportReach,
+    );
     if (opts.explicit) throw new SearchError(prepared.code, message);
     warnings.push(message);
     noteDegradation(degraded, RETRIEVAL_DEGRADATION.semanticCostUnpriced);

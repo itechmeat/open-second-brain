@@ -290,7 +290,7 @@ export async function loadBeliefSemanticRelevance(
     if (prepared.kind === "refused") {
       throw new SearchError(
         "EMBEDDING_COST_UNPRICED",
-        `semantic belief order refused: ${queryEmbedRefusalMessage(prepared, config.semantic.costGateUsd)}`,
+        `semantic belief order refused: ${queryEmbedRefusalMessage(prepared, config.semantic.costGateUsd, reach)}`,
       );
     }
     if (prepared.text === "") {

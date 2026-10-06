@@ -29,6 +29,7 @@ import {
   type StoredBeliefVector,
 } from "../../../src/core/brain/belief-semantic.ts";
 import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
+import { COST_GATE_KEY, formatEstimatedUsd } from "../../../src/core/search/embedding-spend.ts";
 import { E5_QUERY_PREFIX } from "../../../src/core/search/embeddings/presets.ts";
 import { EMBEDDING_PRICE_SOURCE } from "../../../src/core/search/embeddings/pricing.ts";
 import {
@@ -465,6 +466,9 @@ describe("loadBeliefSemanticRelevance", () => {
 
         expect(refusal).toBeInstanceOf(SearchError);
         expect((refusal as SearchError).code).toBe("EMBEDDING_COST_UNPRICED");
+        // The operator's budget is not the remote caller's business.
+        expect((refusal as SearchError).message).toContain(`${COST_GATE_KEY} is positive`);
+        expect((refusal as SearchError).message).not.toContain(formatEstimatedUsd(1));
       },
     );
 

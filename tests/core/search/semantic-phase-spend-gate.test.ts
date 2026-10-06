@@ -20,7 +20,7 @@ import { join } from "node:path";
 
 import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
-import { COST_GATE_KEY } from "../../../src/core/search/embedding-spend.ts";
+import { COST_GATE_KEY, formatEstimatedUsd } from "../../../src/core/search/embedding-spend.ts";
 import { fitQueryToWindow } from "../../../src/core/search/embeddings/query-embed.ts";
 import { INPUT_WINDOW_TOKENS_KEY } from "../../../src/core/search/embeddings/presets.ts";
 import {
@@ -139,6 +139,7 @@ test("an implicit remote query under a positive gate and an unpriced model sends
   expect(out.attempted).toBe(false);
   expect(codes(out.degraded)).toEqual([RETRIEVAL_DEGRADATION.semanticCostUnpriced]);
   expect(out.warnings.some((w) => w.includes(MODEL) && w.includes(COST_GATE_KEY))).toBe(true);
+  expect(out.warnings.some((w) => w.includes(formatEstimatedUsd(GATE_USD)))).toBe(false);
 });
 
 test("an omitted reach is remote, so the gate refuses it too", async () => {
@@ -161,6 +162,8 @@ test("an explicit remote query throws EMBEDDING_COST_UNPRICED naming the levers"
   for (const part of [MODEL, COST_GATE_KEY, EMBEDDING_PRICE_MODEL_KEY, EMBEDDING_PRICE_RATE_KEY]) {
     expect(e.message).toContain(part);
   }
+  // The operator's budget is not the remote caller's business.
+  expect(e.message).not.toContain(formatEstimatedUsd(GATE_USD));
 });
 
 test("a local query under the same gate embeds once", async () => {

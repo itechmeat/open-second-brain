@@ -25,7 +25,7 @@ import {
   EMBEDDING_PRICE_RATE_KEY,
   EMBEDDING_PRICE_SOURCE,
 } from "../../../src/core/search/embeddings/pricing.ts";
-import { COST_GATE_KEY } from "../../../src/core/search/embedding-spend.ts";
+import { COST_GATE_KEY, formatEstimatedUsd } from "../../../src/core/search/embedding-spend.ts";
 import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
 import type {
   ResolvedEmbeddingConfig,
@@ -246,7 +246,7 @@ test("the gateway constructs no provider: it is pure over config", () => {
 test("the refusal sentence names the model, the gate key and the price pair", () => {
   const result = prepareQueryEmbed(cfg(), "q", TRANSPORT_REACH.remote);
   if (result.kind !== "refused") throw new Error("narrowed wrong");
-  const message = queryEmbedRefusalMessage(result, 1);
+  const message = queryEmbedRefusalMessage(result, 1, TRANSPORT_REACH.remote);
   for (const needle of [
     UNPRICED_MODEL,
     COST_GATE_KEY,
@@ -255,4 +255,22 @@ test("the refusal sentence names the model, the gate key and the price pair", ()
   ]) {
     expect(message).toContain(needle);
   }
+});
+
+test("a remote caller learns the gate is on, never its amount", () => {
+  const result = prepareQueryEmbed(cfg({ costGateUsd: 7.25 }), "q", TRANSPORT_REACH.remote);
+  if (result.kind !== "refused") throw new Error("narrowed wrong");
+  for (const reach of [TRANSPORT_REACH.remote, undefined]) {
+    const message = queryEmbedRefusalMessage(result, 7.25, reach);
+    expect(message).toContain(`${COST_GATE_KEY} is positive`);
+    expect(message).not.toContain(formatEstimatedUsd(7.25));
+    expect(message).not.toContain("7.25");
+  }
+});
+
+test("a local caller is shown the gate amount it configured", () => {
+  const result = prepareQueryEmbed(cfg({ costGateUsd: 7.25 }), "q", TRANSPORT_REACH.remote);
+  if (result.kind !== "refused") throw new Error("narrowed wrong");
+  const message = queryEmbedRefusalMessage(result, 7.25, TRANSPORT_REACH.local);
+  expect(message).toContain(`${COST_GATE_KEY} is ${formatEstimatedUsd(7.25)}`);
 });
