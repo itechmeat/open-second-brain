@@ -7,7 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -17,8 +17,13 @@ import { NOTES_TOOLS } from "../../src/mcp/brain/notes-tools.ts";
 import { WRITE_BATCH_TOOLS } from "../../src/mcp/brain/write-batch-tools.ts";
 import { resolveNextStep } from "../../src/core/brain/next-step.ts";
 import { PAGE_LINT_KEY } from "../../src/core/brain/page-lint.ts";
+import { resolveSearchConfig } from "../../src/core/search/index.ts";
+import { indexVault } from "../../src/core/search/indexer.ts";
 import { WRITE_BINDING_REFUSED_CODE } from "../../src/core/write-binding/index.ts";
+import { listMcpRouteLatency } from "../../src/core/brain/mcp-route-metrics.ts";
+import { isRouteStageName } from "../../src/core/route-scope.ts";
 import { MCPError } from "../../src/mcp/protocol.ts";
+import { MCPServer } from "../../src/mcp/server.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
 /**
@@ -303,5 +308,125 @@ describe("brain_create_note - the lint attached to the receipt", () => {
     });
     expect(res).toMatchObject({ created: false, outcome: "skipped" });
     expect(PAGE_LINT_KEY in res).toBe(false);
+  });
+});
+
+function enableWidening(): void {
+  appendFileSync(ctx.configPath!, "near_duplicate_write_widening_enabled: true\n");
+}
+
+/**
+ * Opt-in widening of the near-duplicate hint beyond the written page's
+ * directory, through the keyword index. With the key off the receipt is
+ * exactly what shipped; with it on, a create in another folder reports the
+ * earlier page and names the method.
+ */
+describe("brain_create_note - widened near-duplicate hint", () => {
+  const BODY = "orchard lantern copper meadow violet harbor";
+
+  async function seedIndexedEarlierPage(): Promise<void> {
+    await handler(ctx, { path: "Projects/Earlier.md", frontmatter: { title: "E" }, content: BODY });
+    await indexVault(resolveSearchConfig({ vault, configPath: ctx.configPath! }), { force: true });
+  }
+
+  test("with the key on, a create in another folder reports the earlier page", async () => {
+    enableWidening();
+    await seedIndexedEarlierPage();
+    const res = (await handler(ctx, {
+      path: "Notes/Later.md",
+      frontmatter: { title: "L" },
+      content: BODY,
+    })) as Record<string, unknown>;
+    const lint = res[PAGE_LINT_KEY] as {
+      findings: ReadonlyArray<Record<string, unknown>>;
+      widening: string;
+    };
+    expect(lint.widening).toBe("used");
+    expect(lint.findings).toEqual([
+      expect.objectContaining({
+        code: "near-duplicate",
+        page: "Notes/Later.md",
+        path: "Projects/Earlier.md",
+        message: expect.stringContaining("method=lexical"),
+      }),
+    ]);
+  });
+
+  test("with the key off, the receipt is unchanged", async () => {
+    await seedIndexedEarlierPage();
+    const res = (await handler(ctx, {
+      path: "Notes/Later.md",
+      frontmatter: { title: "L" },
+      content: BODY,
+    })) as Record<string, unknown>;
+    expect(Object.keys(res)).toEqual(["created", "outcome", "path", "write_id"]);
+  });
+
+  test("with the key on and no index, the receipt says widening did not run", async () => {
+    enableWidening();
+    const res = (await handler(ctx, {
+      path: "Notes/Later.md",
+      frontmatter: { title: "L" },
+      content: BODY,
+    })) as Record<string, unknown>;
+    expect(res[PAGE_LINT_KEY]).toMatchObject({
+      total: 0,
+      widening: "index_unavailable",
+      widening_detail: "INDEX_MISSING",
+    });
+  });
+});
+
+async function createdStages(): Promise<ReadonlyArray<{ name: unknown; ms: unknown }>> {
+  const server = new MCPServer({ vault, configPath: ctx.configPath! });
+  await server.callTool("brain_create_note", {
+    path: "Notes/AA-stage-probe.md",
+    content: "orchard lantern copper meadow violet harbor",
+  });
+  const [record] = listMcpRouteLatency(vault, { tool: "brain_create_note" });
+  const stages = record!.payload["stages"];
+  expect(Array.isArray(stages)).toBe(true);
+  return stages as ReadonlyArray<{ name: unknown; ms: unknown }>;
+}
+
+function expectTimed(stages: ReadonlyArray<{ name: unknown; ms: unknown }>, name: string): void {
+  const stage = stages.find((s) => s.name === name);
+  expect(stage).toBeDefined();
+  expect(isRouteStageName(stage!.name)).toBe(true);
+  expect(Number.isFinite(stage!.ms)).toBe(true);
+  expect(stage!.ms as number).toBeGreaterThanOrEqual(0);
+}
+
+/**
+ * With route metrics on, a create's continuity record names the time the
+ * receipt lint and the near-duplicate lookup took. Only presence and a
+ * finite non-negative value are asserted: never an order, never a size.
+ */
+describe("brain_create_note - receipt lint stage timings", () => {
+  const CONFIG_ENV = "OPEN_SECOND_BRAIN_CONFIG";
+  let savedConfigEnv: string | undefined;
+
+  beforeEach(() => {
+    savedConfigEnv = process.env[CONFIG_ENV];
+    process.env[CONFIG_ENV] = ctx.configPath!;
+    appendFileSync(ctx.configPath!, 'mcp_route_metrics_enabled: "true"\n');
+  });
+
+  afterEach(() => {
+    if (savedConfigEnv === undefined) delete process.env[CONFIG_ENV];
+    else process.env[CONFIG_ENV] = savedConfigEnv;
+  });
+
+  test("the record carries lint and near_duplicate_lookup", async () => {
+    const stages = await createdStages();
+    expectTimed(stages, "lint");
+    expectTimed(stages, "near_duplicate_lookup");
+  });
+
+  test("with widening on, the lookup is still one named stage", async () => {
+    enableWidening();
+    const stages = await createdStages();
+    expectTimed(stages, "near_duplicate_lookup");
+    expect(stages.filter((s) => s.name === "near_duplicate_lookup")).toHaveLength(1);
   });
 });

@@ -76,6 +76,43 @@ describe("fileAgeMs", () => {
     }
   });
 
+  // `nowMs` is a whole millisecond (`Date.now()`), while the filesystem
+  // stamps a sub-millisecond mtime: a file written within the clock's own
+  // millisecond would otherwise read a fraction of a millisecond in the
+  // future, and `msToWholeDays` would floor that to a whole day ago.
+  test("a file written within the clock's millisecond is age zero, not in the future", () => {
+    const dir = makeTempDir();
+    try {
+      const path = join(dir, "fresh.md");
+      writeFileSync(path, "x");
+      const stampedMs = NOW_MS + 0.5;
+      utimesSync(path, stampedMs / 1000, stampedMs / 1000);
+      // The fixture has to carry the fraction before the product is asked.
+      expect(statSync(path).mtimeMs).toBeGreaterThan(NOW_MS);
+      expect(fileAgeMs(path, NOW_MS)).toBe(0);
+      expect(msToWholeDays(fileAgeMs(path, NOW_MS) ?? Number.NaN)).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Only the same-millisecond artefact is absorbed: an older file keeps its
+  // fractional age, so one just under a day old is not rounded up into it.
+  test("a file just under a day old keeps its fraction and reads zero days", () => {
+    const dir = makeTempDir();
+    try {
+      const path = join(dir, "almost-a-day.md");
+      writeFileSync(path, "x");
+      const stampedMs = NOW_MS - MS_PER_DAY + 0.5;
+      utimesSync(path, stampedMs / 1000, stampedMs / 1000);
+      expect(statSync(path).mtimeMs).toBeGreaterThan(NOW_MS - MS_PER_DAY);
+      expect(fileAgeMs(path, NOW_MS)).toBeLessThan(MS_PER_DAY);
+      expect(msToWholeDays(fileAgeMs(path, NOW_MS) ?? Number.NaN)).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("returns null for a path that does not exist", () => {
     const dir = makeTempDir();
     try {

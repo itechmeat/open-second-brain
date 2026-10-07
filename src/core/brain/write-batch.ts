@@ -53,6 +53,7 @@ import { ORIGIN_CHANNEL_FIELD } from "../origin-channel.ts";
 import { preferencePath, validateSlug } from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { BRAIN_APPLY_RESULT } from "./types.ts";
+import { ROUTE_STAGE, timeStageSync } from "../route-scope.ts";
 import {
   computePayloadHash,
   IdempotencyPayloadMismatchError,
@@ -898,13 +899,15 @@ function commitNoteRewrite(
   mkdirSync(dirname(target.abs), { recursive: true });
   const wrote = atomicWriteFileSync(target.abs, contents, { skipIfUnchanged: true });
   if (!wrote) return { wrote: false };
-  const audit = recordNoteWrite(vault, {
-    op,
-    target: target.relPath,
-    before: { bytes: before },
-    after: { bytes: contents },
-    ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
-  });
+  const audit = timeStageSync(ROUTE_STAGE.writeReceipt, () =>
+    recordNoteWrite(vault, {
+      op,
+      target: target.relPath,
+      before: { bytes: before },
+      after: { bytes: contents },
+      ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
+    }),
+  );
   return { wrote: true, ...audit };
 }
 

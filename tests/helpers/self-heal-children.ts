@@ -52,9 +52,23 @@ export async function waitForSelfHealChildren(
   if (pending.length > 0) {
     throw new Error(`self-heal reindex children never finished: ${pending.join(", ")}`);
   }
-  // The detached managed-file upgrade worker (#216) holds a lock its parent
-  // claimed before the spawn and releases it when it ends, so the lock's
-  // absence is that worker's completion event.
+  await waitForSelfHealUpgradeWorker(vault, deadline - Date.now());
+}
+
+/**
+ * Wait for the detached managed-file upgrade worker (#216) alone. Every
+ * background `ensureVaultCurrent` starts one, so a test that drives the
+ * reindex children itself, or writes synthetic spawn rows no child will
+ * ever pair, still has this worker to wait for before removing its vault.
+ *
+ * The worker holds a lock its parent claimed before the spawn and releases
+ * it when it ends, so the lock's absence is that worker's completion event.
+ */
+export async function waitForSelfHealUpgradeWorker(
+  vault: string,
+  budgetMs = CHILD_BUDGET_MS,
+): Promise<void> {
+  const deadline = Date.now() + budgetMs;
   const lock = selfHealUpgradeLockPath(vault);
   while (existsSync(lock) && Date.now() < deadline) {
     // eslint-disable-next-line no-await-in-loop

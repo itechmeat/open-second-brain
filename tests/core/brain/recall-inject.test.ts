@@ -5,6 +5,7 @@ import {
   RECALL_INJECT_CONFIDENCE_FLOOR,
   RECALL_INJECT_MAX_CHARS,
   RECALL_INJECT_MAX_NOTES,
+  recallInjectNoteKey,
   type RecallCandidate,
   type RecallResultSet,
   type RecallRetriever,
@@ -283,5 +284,225 @@ describe("recall brief neutralization + fencing (untrusted vault titles)", () =>
     expect(decision.brief.length).toBeLessThanOrEqual(240);
     expect(decision.brief.endsWith(`</${UNTRUSTED_SOURCE_TAG}>`)).toBe(true);
     expect(decision.noteCount).toBeLessThan(4);
+  });
+});
+
+const three = (): ReadonlyArray<RecallCandidate> => [
+  candidate({ path: "Brain/a.md", title: "Alpha", score: 0.92 }),
+  candidate({
+    path: "Brain/b.md",
+    title: "Beta",
+    score: 0.71,
+    startLine: 10,
+    endLine: 20,
+    origin: "team",
+  }),
+  candidate({ path: "Brain/c.md", title: "Gamma", score: 0.5 }),
+];
+
+describe("per-session dedupe and the cross-lane digest filter", () => {
+  // Captured from the renderer before dedupe existed: no option set must
+  // keep this brief byte for byte.
+  const BRIEF_BEFORE_DEDUPE =
+    '<untrusted_source origin="recall-inject">\n' +
+    "Recalled vault context (relevance-matched to this prompt):\n" +
+    'Recalled 3 of 3 ranked candidates (3 hybrid). Top hit "Alpha" (hybrid, score 0.92). ' +
+    "See each result's reasons[] for why it surfaced.\n" +
+    '- "Alpha" (Brain/a.md:L1-L4, hybrid 0.92)\n' +
+    '- "Beta" (Brain/b.md:L10-L20, hybrid 0.71) [team]\n' +
+    '- "Gamma" (Brain/c.md:L1-L4, hybrid 0.50)\n' +
+    "</untrusted_source>";
+
+  test("with neither option set the brief is byte-identical to the pre-change fixture", async () => {
+    const decision = await decideRecallInject(
+      "receipts",
+      retrieverOf({ candidates: three(), total: 3, idfWeightedCoverage: 0.8 }),
+    );
+    expect(decision.kind).toBe("inject");
+    if (decision.kind !== "inject") return;
+    expect(decision.brief).toBe(BRIEF_BEFORE_DEDUPE);
+  });
+
+  test("an already-injected candidate is dropped and the next one is kept", async () => {
+    const decision = await decideRecallInject(
+      "receipts",
+      retrieverOf({ candidates: three(), total: 3 }),
+      { maxNotes: 2, alreadyInjected: new Set([":Brain/a.md#L1-L4"]) },
+    );
+    expect(decision.kind).toBe("inject");
+    if (decision.kind !== "inject") return;
+    expect(decision.brief).not.toContain("Alpha");
+    expect(decision.brief).toContain("Beta");
+    expect(decision.brief).toContain("Gamma");
+    expect(decision.noteCount).toBe(2);
+  });
+
+  test("the set never changes matchQuality or the floor verdict", async () => {
+    const all = new Set([":Brain/a.md#L1-L4", "team:Brain/b.md#L10-L20", ":Brain/c.md#L1-L4"]);
+    const weak = RECALL_INJECT_CONFIDENCE_FLOOR - 0.05;
+    const below = retrieverOf({ candidates: three(), total: 3, idfWeightedCoverage: weak });
+    const without = await decideRecallInject("receipts", below);
+    const withSet = await decideRecallInject("receipts", below, { alreadyInjected: all });
+    expect(withSet).toEqual(without);
+    expect(withSet).toMatchObject({ kind: "abstain", reason: "below_floor", matchQuality: weak });
+
+    const above = retrieverOf({ candidates: three(), total: 3, idfWeightedCoverage: 0.8 });
+    const plain = await decideRecallInject("receipts", above);
+    const partial = await decideRecallInject("receipts", above, {
+      alreadyInjected: new Set([":Brain/a.md#L1-L4"]),
+    });
+    expect(plain.kind).toBe("inject");
+    expect(partial.kind).toBe("inject");
+    if (plain.kind !== "inject" || partial.kind !== "inject") return;
+    expect(partial.matchQuality).toBe(plain.matchQuality);
+  });
+
+  test("every surviving candidate filtered abstains with all_already_injected", async () => {
+    const all = new Set([":Brain/a.md#L1-L4", "team:Brain/b.md#L10-L20", ":Brain/c.md#L1-L4"]);
+    const decision = await decideRecallInject(
+      "receipts",
+      retrieverOf({ candidates: three(), total: 3, idfWeightedCoverage: 0.8 }),
+      { alreadyInjected: all },
+    );
+    expect(decision).toEqual({
+      kind: "abstain",
+      reason: "all_already_injected",
+      topScore: 0.92,
+      matchQuality: 0.8,
+    });
+  });
+
+  test("a different line span of an injected path stays eligible", async () => {
+    const decision = await decideRecallInject(
+      "receipts",
+      retrieverOf({
+        candidates: [candidate({ path: "Brain/a.md", title: "Alpha", startLine: 30, endLine: 40 })],
+        total: 1,
+      }),
+      { alreadyInjected: new Set([":Brain/a.md#L1-L4"]) },
+    );
+    expect(decision.kind).toBe("inject");
+  });
+
+  test("activeDigestPaths filters by path on any span", async () => {
+    const decision = await decideRecallInject(
+      "receipts",
+      retrieverOf({
+        candidates: [
+          candidate({
+            path: "Brain/preferences/pref-x.md",
+            title: "Pref",
+            startLine: 7,
+            endLine: 9,
+          }),
+          candidate({ path: "Brain/b.md", title: "Beta", score: 0.5 }),
+        ],
+        total: 2,
+      }),
+      { activeDigestPaths: new Set(["Brain/preferences/pref-x.md"]) },
+    );
+    expect(decision.kind).toBe("inject");
+    if (decision.kind !== "inject") return;
+    expect(decision.brief).not.toContain("Pref");
+    expect(decision.injectedNotes).toEqual([{ path: "Brain/b.md", startLine: 1, endLine: 4 }]);
+  });
+
+  test("activeDigestPaths filters only candidates from the active vault", async () => {
+    const decision = await decideRecallInject(
+      "receipts",
+      retrieverOf({
+        candidates: [
+          candidate({ path: "Brain/preferences/pref-x.md", title: "Local", origin: "local" }),
+          candidate({
+            path: "Brain/preferences/pref-x.md",
+            title: "Other",
+            origin: "source/other",
+            score: 0.5,
+          }),
+        ],
+        total: 2,
+      }),
+      { activeDigestPaths: new Set(["Brain/preferences/pref-x.md"]) },
+    );
+    expect(decision.kind).toBe("inject");
+    if (decision.kind !== "inject") return;
+    expect(decision.injectedNotes).toEqual([
+      { path: "Brain/preferences/pref-x.md", origin: "source/other", startLine: 1, endLine: 4 },
+    ]);
+  });
+
+  test("injectedNotes lists exactly the rendered notes, origin included", async () => {
+    const decision = await decideRecallInject(
+      "receipts",
+      retrieverOf({ candidates: three(), total: 3 }),
+    );
+    expect(decision.kind).toBe("inject");
+    if (decision.kind !== "inject") return;
+    expect(decision.injectedNotes).toEqual([
+      { path: "Brain/a.md", startLine: 1, endLine: 4 },
+      { path: "Brain/b.md", origin: "team", startLine: 10, endLine: 20 },
+      { path: "Brain/c.md", startLine: 1, endLine: 4 },
+    ]);
+  });
+
+  test("a note cut by the maxChars fit is absent from injectedNotes", async () => {
+    const many = Array.from({ length: 4 }, (_, i) =>
+      candidate({
+        path: `Brain/really-long-note-path-number-${i}.md`,
+        title: `A reasonably long note title number ${i}`,
+        score: 0.9,
+      }),
+    );
+    const decision = await decideRecallInject(
+      "receipts",
+      retrieverOf({ candidates: many, total: 4 }),
+      { maxChars: 240 },
+    );
+    expect(decision.kind).toBe("inject");
+    if (decision.kind !== "inject") return;
+    expect(decision.noteCount).toBeLessThan(4);
+    expect(decision.injectedNotes).toHaveLength(decision.noteCount);
+    for (const note of decision.injectedNotes) expect(decision.brief).toContain(note.path);
+  });
+
+  test("a note removed by the enforce decision filter is absent from injectedNotes", async () => {
+    const decision = await decideRecallInject(
+      "receipts",
+      retrieverOf({ candidates: three(), total: 3 }),
+      {
+        decisionFilter: {
+          mode: "enforce",
+          run: async () => ({
+            status: "ok",
+            mode: "enforce",
+            latencyMs: 1,
+            helps: [1, 0, 1],
+            sent: [true, true, true],
+            injectAny: 1,
+          }),
+        },
+      },
+    );
+    expect(decision.kind).toBe("inject");
+    if (decision.kind !== "inject") return;
+    expect(decision.injectedNotes.map((n) => n.path)).toEqual(["Brain/a.md", "Brain/c.md"]);
+  });
+});
+
+describe("recallInjectNoteKey", () => {
+  test("is stable and carries the origin and the line span", () => {
+    const note = { path: "Notes/a.md", origin: "vault", startLine: 3, endLine: 9 };
+    expect(recallInjectNoteKey(note)).toBe("vault:Notes/a.md#L3-L9");
+    expect(recallInjectNoteKey({ ...note })).toBe(recallInjectNoteKey(note));
+  });
+
+  test("an absent origin renders as an empty prefix", () => {
+    expect(recallInjectNoteKey({ path: "a.md", startLine: 1, endLine: 2 })).toBe(":a.md#L1-L2");
+  });
+
+  test("distinct spans of one file get distinct keys", () => {
+    const a = recallInjectNoteKey({ path: "a.md", startLine: 1, endLine: 2 });
+    const b = recallInjectNoteKey({ path: "a.md", startLine: 3, endLine: 4 });
+    expect(a).not.toBe(b);
   });
 });

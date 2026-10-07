@@ -24,6 +24,8 @@ import {
   type ContextSafetyReport,
 } from "./safety/context-guard.ts";
 import { brainDirs } from "./paths.ts";
+import { BELIEF_VECTORS_BACKFILL_COMMAND } from "./belief-semantic.ts";
+import { SearchError } from "../search/search-error.ts";
 import {
   collectPreferencePages,
   formatOwnerScopeWarning,
@@ -99,8 +101,15 @@ const TIER_ORDER: ReadonlyArray<PageTier> = [
  * the budget - not a lexical accident - decides what is dropped, and the
  * curated pool, guard, tip preference, owner scope, and receipt the lane
  * exists for all still apply.
+ *
+ * `semantic` (Honest Embedding Spend) orders the same way, by meaning
+ * instead of token overlap: the caller passes
+ * {@link ContextPackOptions.semanticRelevance}, computed at the async
+ * boundary from the stored vectors of the belief notes, and the pack reads
+ * it in the slot `ranked` uses. The pack itself never embeds, so it stays
+ * synchronous for every other caller.
  */
-export const CONTEXT_PACK_QUERY_MODES = ["substring", "ranked"] as const;
+export const CONTEXT_PACK_QUERY_MODES = ["substring", "ranked", "semantic"] as const;
 
 export type ContextPackQueryMode = (typeof CONTEXT_PACK_QUERY_MODES)[number];
 
@@ -108,6 +117,27 @@ export function isContextPackQueryMode(value: unknown): value is ContextPackQuer
   return (
     typeof value === "string" && (CONTEXT_PACK_QUERY_MODES as ReadonlyArray<string>).includes(value)
   );
+}
+
+export { BELIEF_VECTORS_BACKFILL_COMMAND };
+
+/**
+ * The relevance an unembedded candidate reads in `semantic` mode: below
+ * any cosine, so it sorts after every scored candidate of its tier,
+ * negative cosines included.
+ */
+const UNEMBEDDED_RELEVANCE = -2;
+
+/**
+ * A `semantic` pack was asked for without the relevance map that mode
+ * reads. Packing by recency instead would answer a meaning query with an
+ * order that ignores the query, so the call fails by name.
+ */
+export class ContextPackSemanticRelevanceMissingError extends Error {
+  constructor() {
+    super("context pack: query_mode semantic requires a semanticRelevance map");
+    this.name = "ContextPackSemanticRelevanceMissingError";
+  }
 }
 
 export interface ContextPackItem extends ContextTransformAnnotations {
@@ -147,6 +177,17 @@ export interface ContextPackItem extends ContextTransformAnnotations {
   readonly safety?: ContextSafetyReport;
 }
 
+/**
+ * What the `semantic` mode could score, counted over the candidates that
+ * survived the reach filter, so a withheld page is in neither member.
+ */
+export interface ContextPackSemanticReport {
+  /** Kept candidates that had a relevance score. */
+  readonly scored: number;
+  /** Ids of kept candidates without one, sorted; they sort after the scored ones of their tier. */
+  readonly unembedded: ReadonlyArray<string>;
+}
+
 export interface ContextPackSkipped {
   readonly id: string;
   readonly tokens: number;
@@ -177,6 +218,8 @@ export interface ContextPackReport {
    * and `density` use.
    */
   readonly stamp?: ContextPackStamp;
+  /** Present only in `semantic` mode; see {@link ContextPackSemanticReport}. */
+  readonly semantic?: ContextPackSemanticReport;
 }
 
 /**
@@ -212,6 +255,14 @@ export interface ContextPackOptions {
    * Without a `query` the mode has nothing to act on and is inert.
    */
   readonly queryMode?: ContextPackQueryMode;
+  /**
+   * Relevance per belief note for the `semantic` mode, keyed by the
+   * note's vault-relative POSIX path. A candidate absent from the map has
+   * no usable vector: it sorts after every scored candidate of its tier and is named in
+   * {@link ContextPackReport.semantic}. Required in `semantic` mode and
+   * read in no other.
+   */
+  readonly semanticRelevance?: ReadonlyMap<string, number>;
   /**
    * Per-memory character cap (v0.20.0): trim any single page's body to
    * this many code points before it consumes the token budget, so one
@@ -454,6 +505,7 @@ export function packContext(
 export function packContext(vault: string, opts: ContextPackOptions): ContextPackReport;
 export function packContext(vault: string, opts: ContextPackOptions): ContextPackReport {
   const startedAtMs = Date.now();
+  const semanticRelevance = semanticRelevanceFor(opts);
   if (!Number.isFinite(opts.maxTokens) || opts.maxTokens <= 0) {
     return finalizeContextPackReport(
       vault,
@@ -473,7 +525,10 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
   // predicate - is null in that mode and no candidate is ever excluded for
   // failing to contain the turn verbatim.
   const rankedQuery = opts.queryMode === "ranked" && opts.query ? opts.query : null;
-  const query = rankedQuery === null && opts.query ? normalizeForDedup(opts.query) : null;
+  const query =
+    rankedQuery === null && semanticRelevance === null && opts.query
+      ? normalizeForDedup(opts.query)
+      : null;
   // Opt-in language-agnostic prompt-injection containment (Unit 1).
   // Default off, so the surfaced bodies are byte-identical to the legacy
   // blocklist guard unless the vault enables the flag.
@@ -524,6 +579,38 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
   // The map is empty when the mode is off, so both sides read 0 and the
   // comparator falls straight through.
   const relevanceById = new Map<string, number>();
+  // Semantic relevance reads the caller's map over the KEPT candidates
+  // only, so the report below is post-reach by construction.
+  const unembedded: string[] = [];
+  let scored = 0;
+  if (semanticRelevance !== null) {
+    for (const c of candidates) {
+      const score = semanticRelevance.get(canonicalNotePath(relative(vault, c.path)));
+      if (score === undefined) unembedded.push(c.id);
+      else scored += 1;
+      relevanceById.set(c.id, score ?? UNEMBEDDED_RELEVANCE);
+    }
+  }
+  // No kept candidate has a usable vector: a "semantic" order would be
+  // pure recency. Refused here, before the receipt and telemetry are
+  // emitted, so a refused pack leaves no record of a delivery. An empty
+  // candidate set is an empty pack, not a refusal.
+  if (semanticRelevance !== null && candidates.length > 0 && scored === 0) {
+    throw new SearchError(
+      "BELIEF_VECTORS_MISSING",
+      `semantic belief order unavailable: none of the ${candidates.length} belief note(s) ` +
+        `in reach has a stored vector for the configured model; run: ${BELIEF_VECTORS_BACKFILL_COMMAND}`,
+    );
+  }
+  const semanticReport: { readonly semantic?: ContextPackSemanticReport } =
+    semanticRelevance === null
+      ? {}
+      : {
+          semantic: Object.freeze({
+            scored,
+            unembedded: Object.freeze(unembedded.toSorted()),
+          }),
+        };
   if (rankedQuery !== null) {
     const queryTokens = tokenise(rankedQuery);
     for (const c of candidates) {
@@ -711,6 +798,7 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
           items: Object.freeze(keptItems),
           skipped: Object.freeze(skipped),
           ...withOptionalLanes(opts, keptItems),
+          ...semanticReport,
         },
         startedAtMs,
         [],
@@ -730,11 +818,23 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
       items: Object.freeze(finalItems),
       skipped: Object.freeze(skipped),
       ...withOptionalLanes(opts, finalItems),
+      ...semanticReport,
     },
     startedAtMs,
     ownerScopeWarnings,
     withheldIds,
   );
+}
+
+/**
+ * The relevance map the `semantic` mode reads, or null in every other
+ * mode. Throws {@link ContextPackSemanticRelevanceMissingError} when the
+ * mode is `semantic` and the map is absent.
+ */
+function semanticRelevanceFor(opts: ContextPackOptions): ReadonlyMap<string, number> | null {
+  if (opts.queryMode !== "semantic") return null;
+  if (opts.semanticRelevance === undefined) throw new ContextPackSemanticRelevanceMissingError();
+  return opts.semanticRelevance;
 }
 
 function finalizeContextPackReport(

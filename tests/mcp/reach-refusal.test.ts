@@ -142,6 +142,20 @@ describe("a caller-supplied reach is refused by name", () => {
     expect(findCallerSuppliedReach({ "transport-reach": "local" })).toEqual(["transport-reach"]);
   });
 
+  test("a compatibility, spaced or invisibly split spelling is the same argument", () => {
+    const spellings = [
+      "\uFF52\uFF45\uFF41\uFF43\uFF48",
+      " reach ",
+      "Transport Reach",
+      "re\u200Bach",
+      "transport\u00ADreach",
+      "transport\uFF3Freach",
+    ];
+    for (const name of spellings) {
+      expect(findCallerSuppliedReach({ [name]: "local" })).toEqual([name]);
+    }
+  });
+
   test("an ordinary argument is not mistaken for one", () => {
     // `disclosure` is the progressive result-DEPTH mode and is a real
     // argument on the recall surfaces; refusing it would break them.

@@ -77,12 +77,14 @@ import { nextCommandField } from "../../../core/brain/next-step.ts";
 import { formatStampMismatch } from "../../../core/integrity/stamp.ts";
 import {
   indexCheck,
+  resolveCredentialContext,
   serializeEmbedderRecordCensus,
   serializePendingVectorCensus,
   serializeStampMismatches,
   serializeVisibilityHonestyFinding,
 } from "../../../core/search/index.ts";
 import type {
+  CredentialSourceReport,
   EmbedderRecordCensus,
   IndexCheckReport,
   PendingVectorCensus,
@@ -105,6 +107,7 @@ import {
   flagBoolean,
   parseFlags,
   resolveConfig,
+  resolveConfigPath,
   searchAdvisoryStream,
   VAULT_FLAGS,
 } from "../helpers.ts";
@@ -389,6 +392,10 @@ function ok(passed: boolean): string {
   return passed ? "OK" : "MISSING";
 }
 
+function serializeCredentialSources(report: CredentialSourceReport): Record<string, unknown> {
+  return { consulted: report.consulted, present_elsewhere: report.presentElsewhere };
+}
+
 function jsonForCheck(r: IndexCheckReport): Record<string, unknown> {
   return {
     vault_readable: r.vaultReadable,
@@ -421,6 +428,11 @@ function jsonForCheck(r: IndexCheckReport): Record<string, unknown> {
     // to the pre-gate output (context-integrity-gates, Unit E).
     ...(r.embeddingAbi.length > 0
       ? { embedding_abi: serializeStampMismatches(r.embeddingAbi) }
+      : {}),
+    // Only on a credential-missing tier, so a configured setup's JSON is
+    // byte-identical. Names only: no env value is ever part of it.
+    ...(r.credentialSources !== undefined
+      ? { credential_sources: serializeCredentialSources(r.credentialSources) }
       : {}),
     warnings: r.warnings,
     fatal: r.fatal,
@@ -530,6 +542,13 @@ function renderCheckHuman(r: IndexCheckReport): string {
     lines.push(`visibility_honesty:    ${describeVisibilityHonesty(r.visibilityHonesty)}`);
   }
   for (const w of r.warnings) lines.push(`warning: ${w}`);
+  // Under the keyless warning, and only on a credential-missing tier.
+  if (r.credentialSources !== undefined) {
+    const { consulted, presentElsewhere } = r.credentialSources;
+    lines.push(`key_sources_checked:   ${consulted.join(", ")}`);
+    const holders = presentElsewhere.length > 0 ? presentElsewhere.join(", ") : "none";
+    lines.push(`key_present_under:     ${holders}`);
+  }
   for (const f of r.fatal) lines.push(`fatal:   ${f}`);
   if (r.recommendations.length > 0) {
     lines.push("");
@@ -595,7 +614,15 @@ export async function cmdSearchCheck(argv: ReadonlyArray<string>): Promise<numbe
   // worse surprise than one that still does. `--no-probe` is for the
   // caller who cannot spend a network round-trip - an air-gapped machine,
   // a tight CI loop - and it reports `skipped` rather than a verdict.
-  const report = await indexCheck(cfg, { probeProvider: !flagBoolean(flags, "no-probe") });
+  // The credential-source report reads names from this env and the
+  // vault's registry, handed over explicitly; it never reads a value out.
+  const report = await indexCheck(cfg, {
+    probeProvider: !flagBoolean(flags, "no-probe"),
+    credentialContext: resolveCredentialContext({
+      vault: cfg.vault,
+      configPath: resolveConfigPath(flags),
+    }),
+  });
   // Absent the flag nothing below runs, nothing is written, and the two
   // report shapes are byte-identical to what they were before it existed.
   const integrity = flagBoolean(flags, "integrity") ? await scanIntegrity(cfg) : null;

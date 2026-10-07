@@ -99,9 +99,23 @@ export function renderNextStepLine(step: NextStep): string {
  * its diagnostic yet, not a crash, and the doctor surfaces must be able to
  * report such an issue without inventing a command for it. The outcome
  * distinguishes that case from a suppressed one, so neither is silent.
+ *
+ * `nextCommand`, when given, replaces the registered command for a code
+ * that IS registered - the registered one with the caller's own
+ * arguments appended, such as a scope the run was limited to, so the
+ * advice repeats the run instead of widening it. An unregistered code
+ * stays unregistered: the override never invents an exit.
  */
-export function emitNextStep(code: string, stream: AdvisoryStream): AdvisoryEmission {
-  const nextStep = resolveNextStep(code);
+export function emitNextStep(
+  code: string,
+  stream: AdvisoryStream,
+  nextCommand?: string,
+): AdvisoryEmission {
+  const resolved = resolveNextStep(code);
+  const nextStep =
+    resolved !== null && nextCommand !== undefined
+      ? Object.freeze({ ...resolved, nextCommand })
+      : resolved;
   if (nextStep === null) {
     return Object.freeze({
       code,

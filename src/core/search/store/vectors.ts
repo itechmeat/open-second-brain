@@ -11,9 +11,9 @@
 import { Database } from "bun:sqlite";
 
 import {
+  BLOCKED_TIER_ERROR_CODE,
+  isBlockedCapability,
   resolveSemanticCapability,
-  SEMANTIC_CAPABILITY_TIER,
-  type SemanticCapabilityTier,
 } from "../capability-tier.ts";
 import { LOCAL_EMBEDDING_MODEL } from "../embeddings/signature.ts";
 import { dropVecTable, ensureVecTable } from "../schema.ts";
@@ -232,12 +232,60 @@ export function embeddingForChunk(
     )
     .get(chunkId);
   if (!row) return null;
-  const bytes = row.embedding;
+  return vectorFromBlob(row.embedding);
+}
+
+/** Copy a stored vec0 blob into a `Float32Array`. */
+function vectorFromBlob(bytes: Uint8Array): Float32Array {
   // Copy instead of viewing: a pooled buffer with a non-4-byte-aligned
   // byteOffset would make the Float32Array constructor throw.
   return new Float32Array(
     bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
   );
+}
+
+/** One stored chunk vector with the identity its `embeddings` row recorded. */
+export interface StoredChunkEmbedding {
+  readonly chunkId: number;
+  readonly vector: Float32Array;
+  readonly model: string;
+  readonly dimension: number;
+}
+
+/**
+ * Every stored vector of one document's chunks, in `chunk_index` order,
+ * each with the model and dimension recorded when it was written. A
+ * reader that scores against a fresh query vector needs the identity per
+ * row: a vector left by an older model is not comparable and must be
+ * told apart from a current one, which {@link embeddingForChunk} cannot.
+ */
+export function storedEmbeddingsForDocument(
+  db: Database,
+  vecLoaded: boolean,
+  documentId: number,
+): StoredChunkEmbedding[] {
+  if (!vecLoaded) {
+    throw new SearchError(
+      "VEC_EXTENSION_UNAVAILABLE",
+      "sqlite-vec extension not loaded; cannot read stored embeddings",
+    );
+  }
+  return db
+    .query<{ chunk_id: number; embedding: Uint8Array; model: string; dimension: number }, [number]>(
+      "SELECT c.id AS chunk_id, v.embedding AS embedding, e.model AS model, " +
+        "e.dimension AS dimension FROM chunks c " +
+        "JOIN chunk_vec_map m ON m.chunk_id = c.id " +
+        "JOIN chunk_vec v ON v.rowid = m.vec_rowid " +
+        "JOIN embeddings e ON e.chunk_id = c.id " +
+        "WHERE c.document_id = ? ORDER BY c.chunk_index",
+    )
+    .all(documentId)
+    .map((r) => ({
+      chunkId: r.chunk_id,
+      vector: vectorFromBlob(r.embedding),
+      model: r.model,
+      dimension: r.dimension,
+    }));
 }
 
 export function getEmbeddingHash(db: Database, chunkId: number): string | null {
@@ -319,19 +367,6 @@ export interface EmbeddingRebuildGate {
 }
 
 /**
- * The typed error each blocked capability tier refuses with. Both codes
- * pre-exist in the closed `SEARCH_ERROR_CODES` union and carry exactly
- * these meanings: a `disabled` configuration computes no embeddings at
- * all, and a `credential-missing` one cannot reach its provider.
- */
-const BLOCKED_TIER_ERROR_CODE: Readonly<
-  Record<Exclude<SemanticCapabilityTier, "configured">, SearchErrorCode>
-> = Object.freeze({
-  [SEMANTIC_CAPABILITY_TIER.disabled]: "EMBEDDING_DISABLED",
-  [SEMANTIC_CAPABILITY_TIER.credentialMissing]: "EMBEDDING_KEY_MISSING",
-});
-
-/**
  * Whether any `chunks` rows exist - the source-material half of the
  * verify-before-replace gate.
  *
@@ -381,7 +416,7 @@ function rebuildRefusalBeforeClear(
   const stored = countEmbeddings(db);
   if (stored === 0) return null;
   const capability = resolveSemanticCapability(gate.semantic);
-  if (capability.tier === SEMANTIC_CAPABILITY_TIER.configured) return null;
+  if (!isBlockedCapability(capability)) return null;
   const material = hasChunkRows(db) ? "" : "; no chunk material remains to rebuild from";
   return {
     code: BLOCKED_TIER_ERROR_CODE[capability.tier],

@@ -455,3 +455,17 @@ export function documentTitles(
 export function countDocuments(db: Database): number {
   return db.query<{ c: number }, []>("SELECT count(*) AS c FROM documents").get()?.c ?? 0;
 }
+
+/**
+ * How many documents sit under one raw path prefix, matched with the
+ * same `substr` form the pending-vector census uses so the two agree.
+ */
+export function countDocumentsUnderPrefix(db: Database, prefix: string): number {
+  return (
+    db
+      .query<{ c: number }, [string, string]>(
+        "SELECT count(*) AS c FROM documents WHERE substr(path, 1, length(?)) = ?",
+      )
+      .get(prefix, prefix)?.c ?? 0
+  );
+}

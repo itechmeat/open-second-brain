@@ -367,7 +367,7 @@ flags for a narrower per-process full server.
 | `brain_context_pack`        | Budgeted context slice; pass `lanes: true` to return directives, constraints, and consider lanes. Filtered items include `safety.reasons`. Each item carries a structural `epistemic` status (`observed` \| `derived` \| `hypothesis` \| `plan` \| `unknown`) plus `evidence_refs` derived from existing graph metadata; fields are absent when the status is `unknown`. Takes the same adequacy pair as `brain_recall_gate` under its own spelling, `recall_scores` AND `match_quality`: both or neither, an incomplete pair is refused, and the schema states it as `dependentRequired` keyed on this tool's own scores name. | `max_tokens`                                   |
 | `brain_context_receipts`    | List or show opt-in prompt context receipt continuity records with budgets, hashes, source refs, safety/redaction metadata, and item IDs.      | `operation`                                    |
 | `brain_recall_telemetry`    | List or summarise opt-in recall telemetry records for search, context-pack, and pre-compress calls.                                            | `operation`                                    |
-| `brain_route_metrics`       | List or summarise opt-in route-level MCP tool latency (`mcp_route_latency` records); `summary` rolls each tool up into count, error count, and min/avg/max + p50/p95/p99 latency, slowest-first. Emitted only when `mcp_route_metrics_enabled` is on; payload-safe (tool, scope, status, duration, arg key names). Read-only. | `operation`                                    |
+| `brain_route_metrics`       | List or summarise opt-in route-level MCP tool latency (`mcp_route_latency` records); `summary` rolls each tool up into count, error count, and min/avg/max + p50/p95/p99 latency, slowest-first, plus a per-stage count/avg/p95 for a route whose records carry write stages. Emitted only when `mcp_route_metrics_enabled` is on; payload-safe (tool, scope, status, duration, arg key names, stage names). Read-only. | `operation`                                    |
 | `brain_retrieval_plan`      | Shadow-only retrieval advisor for one `question`: composes query intent/weights, the summary-surface route, the context-pack density allocation, the token-impact ledger, and observed route p95 latency into a strategy, token-budget allocation, graph-expansion advice, reliability, and a marginal-value stop. Optional `token_budget`. Read-only; exposes no mutating parameters and changes no ranking. | `question`                                     |
 | `brain_token_impact`        | Durable value-of-memory ledger: `record` posts a context pack's tokenizer-exact prompt-token delta (`baseline` − `packed`, `method` exact/fallback) plus an optional modeled inference-avoidance estimate; `outcome` posts first-pass/repair/retry to calibrate the model; `summary` keeps EXACT prompt-token savings strictly separate from the MODELED (outcome-calibrated) figure; `list` reads raw samples. Writes gated on `token_impact_ledger_enabled` (default off); payload-safe (counts + opaque pack id only). Reads ignore the gate. | `operation`                                    |
 | `brain_context_pack_outcome`| Agent-operable outcome loop over the context-pack quality ledger: `post` records one compact outcome row for a carried context-pack quality-sample id — first-pass/repair/retry counters plus three STRICTLY SEPARATE token signals (`exact_prompt_token_savings`, `modeled_inference_avoidance`, `observed_provider_tokens`) — and composes the token-impact ledger by posting a matching first-pass/repair/retry calibration outcome; `list`/`summary` read the rows keeping the signals separate. Writes gated on `context_pack_outcome_enabled` (default off); payload-safe (counters + opaque sample id only), a field the caller omits is never invented. An optional `agent_id` names the ACTING agent and is recorded on every row the post lands; it is a tool ARGUMENT rather than the server's own config identity, so a config the server cannot read can never fail a telemetry post, and omitting it records no actor rather than a guessed one. Reads ignore the gate. | `operation`                                    |
@@ -1137,6 +1137,18 @@ gated and fail-open, so it can never fail or slow-fail the call it
 measures beyond one synchronous continuity append. `brain_route_metrics`
 reads them back (`operation: "list"|"summary"`).
 
+Since v1.74.0 a record can also carry `stages`: the wall time the call
+spent in each write stage, as `{ name, ms }` entries. Names come from a
+closed nine-name allowlist (`validate`, `idempotency_lookup`,
+`near_duplicate_lookup`, `document_write`, `idempotency_remember`,
+`log_append`, `preference_write`, `write_receipt`, `lint`); any other
+name and any negative or non-finite value is dropped before the record is
+written, and the key is absent when no stage ran. Stage timings never
+appear in the response of the call being measured, only in its
+continuity record. `brain_route_metrics` `summary` adds a `stages`
+roll-up per route (count, average and p95 per stage name); a route
+without stages has no `stages` key.
+
 The full observability contract behind these tools - event kinds,
 always-on vs opt-in status, correlation IDs, payload safety, and the
 continuity schema version - lives in `docs/observability.md`.
@@ -1309,6 +1321,25 @@ close ones landed in silence. The score is computed over the body exactly
 as authored, frontmatter is never compared or touched, an unreadable or
 over-cap sibling is excluded as a candidate, and the finding never gates
 the write - the receipt says what landed next to what.
+
+Since v1.74.0 the lint answers at the caller's reach. A sibling the caller
+may not read is never named, scored or counted on the receipt, and the
+broken-wikilink and merged-link checks treat a withheld page as absent: a
+wikilink to it reads as broken, and a merge chain ends at its first
+withheld hop.
+
+With the config key `near_duplicate_write_widening_enabled`
+(`OPEN_SECOND_BRAIN_NEAR_DUPLICATE_WRITE_WIDENING_ENABLED`, default off)
+set to `"true"`, the near-duplicate check also compares the written pages
+with candidates from other directories, pulled from the keyword index
+(the top 20 chunks per written page) and re-read from disk, under the
+same 0.8 bar, scope bucket and reach. The pull spends no embedding call.
+An index that cannot be opened, queried or closed, or any other failure
+while collecting the candidates, does not fail the write and does not
+disable the same-directory check: the report then carries
+`widening: "index_unavailable"` and a `widening_detail` code naming the
+failure, never a message or a path. With the key off nothing is opened
+and the receipt is unchanged.
 
 The lint runs AFTER the commit and reads what is on disk. It never gates
 the write, and it never throws. A call that authored no bytes - a
@@ -2365,3 +2396,100 @@ format characters), when it contains NUL, or when it exceeds the cap.
   re-derives and archives only readable derived pages; and
   `brain_anticipatory_context` builds its bundle for the caller without
   reading or writing the shared cache, answering `cache_state: "miss"`.
+- Since v1.72.0 `brain_context_pack` accepts `query_mode: "semantic"`,
+  which orders the curated belief notes by the stored vectors of their
+  chunks against one embedding of `query` (it still requires `query`).
+  The response gains a `semantic` object: `model`, `price_source`,
+  `query_tokens`, `estimated_usd` (null when the price is unknown),
+  `scored` and `unembedded` (kept candidates with no usable vector, which
+  sort after the scored ones within the same tier, then by recency;
+  tier still decides first). The
+  counts are taken after the reach filter, so a withheld page appears in
+  neither. The mode refuses with a stable `error.data.code`: the semantic
+  capability codes (`EMBEDDING_DISABLED`, `EMBEDDING_KEY_MISSING`) for a
+  blocked tier, `VEC_EXTENSION_UNAVAILABLE`, and `BELIEF_VECTORS_MISSING`
+  when no kept candidate has a usable vector, naming
+  `o2b search vector-backfill --path Brain/preferences/ --path Brain/retired/ --apply`.
+  The query embed is one paid call per request, disclosed in the
+  response, and refused with `EMBEDDING_COST_UNPRICED` for a remote
+  caller when the model has no known price and `embedding_cost_gate_usd`
+  is positive. `query` is capped at 2000 characters in every query mode,
+  counted in Unicode code points as the schema's `maxLength` counts them,
+  and `brain_search` counts its 2000-character cap the same way.
+  `brain_recall_feedback`, which advertised the same cap without checking
+  it, now refuses a longer `query` with `INVALID_PARAMS` before it records
+  anything. The
+  `substring` and `ranked` modes are otherwise unchanged. The embedding spend
+  surfaces also change: `EMBEDDING_COST_UNPRICED` joins the stable error
+  codes (an embedding run refused under a positive cost gate because the
+  model has no known price), `brain_maintenance` spend receipts carry
+  `price_source` with a null `estimated_usd` for an unknown price. No new
+  tool.
+- Since v1.73.0 every paid query embed passes one gate. Under a positive
+  `embedding_cost_gate_usd`, a caller that is not local is refused the
+  query embed of a model with no known price before any provider call:
+  `brain_search` with an explicit semantic request fails with
+  `EMBEDDING_COST_UNPRICED`, and a hybrid search (also inside
+  `brain_recall_feedback`, `brain_file_context`, `brain_eval`,
+  `brain_benchmark` and `brain_tune`) falls back to keyword-only with
+  `semantic-cost-unpriced` in its retrieval trail. A query longer than
+  the effective embedding input window (`embedding_input_window_tokens`,
+  then the curated model table, then unknown, which cuts nothing) is cut
+  and records `semantic-query-truncated`; when the instruction prefix
+  alone fills the window, an explicit semantic search and the
+  `brain_context_pack` semantic belief order refuse with `INVALID_INPUT`,
+  and a hybrid search falls back to keyword-only with
+  `semantic-query-empty-fit`.
+  `brain_context_pack` resolves an omitted reach to remote like every
+  other reader, and its `semantic.query_tokens` counts the text actually
+  sent, instruction prefix included. `brain_recall_feedback` returns an
+  additive `degraded` array with the re-run's degradation codes (empty
+  when nothing narrowed it), and a feedback event whose re-run lost the
+  semantic lane records zero layer contributions, so the learned weights
+  do not learn from a keyword-only answer. `brain_benchmark`, `brain_eval`
+  and `brain_tune` reports carry a `degraded` union (and per query or per
+  grid row) when a run measured a smaller system than the configured one,
+  and `brain_tune` refuses to save a winner measured with the semantic
+  lane missing: `EMBEDDING_COST_UNPRICED` for the cost gate,
+  `EMBEDDING_KEY_MISSING` or `EMBEDDING_DISABLED` for a blocked tier,
+  `EMBEDDING_PROVIDER_HTTP` when the provider did not answer, and the
+  same `EMBEDDING_PROVIDER_HTTP` for any other stop that left the hybrid
+  caller keyword-only (the composite deadline, an empty query vector, an
+  empty fit recorded as `semantic-query-empty-fit`), with a remedy naming `search_hybrid_deadline_ms` or the
+  input window. Each refusal names the remedy.
+- Since v1.74.0 a context-driven retire (`superseded-by-context`,
+  `rebutted`, `quarantine-violated`, `user-rejected`) can name the active
+  preferences that resemble it. With the config key
+  `near_duplicate_retire_siblings_enabled`
+  (`OPEN_SECOND_BRAIN_NEAR_DUPLICATE_RETIRE_SIBLINGS_ENABLED`, default
+  off) set to `"true"`, `brain_review_candidates` gains an additive
+  `retire_siblings` array of `{ retiring_id, sibling_id, score, method }`
+  pairs, the dream run summary - the CLI `o2b brain dream --json` and the
+  `brain_dream` tool response alike - carries the lexical pairs under the
+  same
+  key, and `o2b brain reject` lists the siblings of the rejected
+  preference with the command that rejects each (`--json` adds
+  `retire_siblings`). Decay retires and merges nominate nothing, a retire
+  the confirmed-evidence gate holds back nominates nothing, and nothing
+  is retired by the list: each pair is accepted through an existing verb
+  (`brain_apply_evidence` with `result: outdated`, or `o2b brain
+  reject`). Lexical pairs score at least 0.7 Jaccard on the principle.
+  With a search config, `brain_review_candidates` also compares the
+  stored vectors of the retiring and sibling preferences, at zero
+  embedding spend, and adds pairs at 0.92 cosine or above as
+  `method: "embedding"`; `retire_siblings_semantic` reports that tier's
+  outcome (`used`, `index_missing`, `vec_unavailable`, `not_embedded`,
+  `model_mismatch`, `index_unavailable` - the index exists but could not
+  be opened or read, in which case the lexical pairs still come back and
+  the search error code lands in `retire_siblings_semantic_detail`, a
+  field that appears only for that outcome and never carries a message
+  or a path). A pair is kept only when the caller may read both
+  preferences, and the stored-vector tier probes only the retires
+  `would_retire` keeps, so neither field reflects a withheld page.
+  `brain_extract_signals` now carries each mined turn's stored
+  `timestamp` on its `turns_mined` entries (`""` when the source has
+  none) and in the prompt lines; the envelope asks for a time bound as
+  an ISO 8601 date or interval resolved against the stating turn's
+  timestamp, which the dream pass turns into `valid_from` /
+  `valid_until`. A payload in which two items share a `topic` is refused
+  whole, naming both items. No new tool.

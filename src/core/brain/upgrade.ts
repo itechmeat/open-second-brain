@@ -18,7 +18,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
-import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { atomicWriteFileSync, fileMatchesExpected, isFileDrift } from "../fs-atomic.ts";
 import { formatFrontmatter, parseFrontmatterText } from "../vault.ts";
 import { sanitisePrinciple } from "./text/sanitize-principle.ts";
 import { defaultConfigPath, resolveAgentName } from "../config.ts";
@@ -40,8 +40,13 @@ export interface UpgradeFilePlan {
   /** Vault-relative path, e.g. `Brain/_brain.yaml`. */
   readonly path: string;
   readonly status: UpgradeFileStatus;
-  /** Current bytes on disk. Empty when the file does not exist yet. */
-  readonly before: string;
+  /**
+   * Bytes on disk when the plan was read; `null` when the file was absent.
+   * An empty file is `""`, so the two states stay apart for the
+   * compare-before-write check. Not carried by `noop` and `error` rows,
+   * which hold `""`.
+   */
+  readonly before: string | null;
   /** Target bytes for the file under the current release. */
   readonly after: string;
   /**
@@ -66,19 +71,36 @@ export interface UpgradeApplyResult {
   readonly files_updated: ReadonlyArray<string>;
 }
 
+export interface ApplyUpgradeOptions {
+  /**
+   * The plan to apply - the one the operator was shown, or the one the
+   * self-heal worker computed. Absent, `applyUpgrade` plans itself.
+   */
+  readonly plan?: UpgradePlan;
+  readonly agent?: string;
+  readonly now?: Date;
+}
+
 export class BrainUpgradeError extends Error {
   /**
    * The `upgrade-<ts>` snapshot run id when the failure happened
    * after the pre-apply snapshot was taken. `null` for failures
-   * during planning (malformed `_brain.yaml`, read errors) — those
-   * never wrote anything, so there is nothing to roll back.
+   * during planning (malformed `_brain.yaml`, read errors) or a drift
+   * found before the snapshot — those never wrote anything, so there
+   * is nothing to roll back.
    */
   readonly runId: string | null;
+  /**
+   * Vault-relative paths that changed on disk after the plan was read.
+   * Empty unless the run was refused for drift.
+   */
+  readonly drifted: ReadonlyArray<string>;
 
-  constructor(message: string, runId: string | null = null) {
+  constructor(message: string, runId: string | null = null, drifted: ReadonlyArray<string> = []) {
     super(message);
     this.name = "BrainUpgradeError";
     this.runId = runId;
+    this.drifted = Object.freeze([...drifted]);
   }
 }
 
@@ -114,29 +136,32 @@ export function planUpgrade(vault: string): UpgradePlan {
 // ----- applyUpgrade --------------------------------------------------------
 
 /**
- * Apply every pending update from {@link planUpgrade}.
+ * Apply every pending update of `opts.plan`, or of a fresh
+ * {@link planUpgrade} when no plan is given.
  *
  * Sequence:
- *   1. Compute the plan. If `errors > 0`, throw — never touch disk
+ *   1. Take the plan. If `errors > 0`, throw — never touch disk
  *      when the schema source is malformed.
  *   2. If `pending === 0`, return early without taking a snapshot or
  *      appending a log row. Idempotent re-run is free.
- *   3. `createSnapshot(vault, run_id)` — sidecar manifest comes
+ *   3. Check every `update` row against the disk. A file that no
+ *      longer holds the bytes (or the absence) the plan read refuses
+ *      the whole run, naming each path, before anything is written.
+ *   4. `createSnapshot(vault, run_id)` — sidecar manifest comes
  *      along automatically. The run id includes a `upgrade-` prefix
  *      so the operator can spot upgrade snapshots in `--list`.
- *   4. Write each `update` file via `atomicWriteFileSync`.
- *   5. Append a `BRAIN_LOG_EVENT_KIND.upgrade` event.
+ *   5. Write each `update` file via `atomicWriteFileSync` with
+ *      `expectBefore: file.before`, so an edit that landed during the
+ *      snapshot is refused at its row instead of overwritten.
+ *   6. Append a `BRAIN_LOG_EVENT_KIND.upgrade` event.
  *
  * On any write failure mid-step we throw — the snapshot already
  * persisted is the recovery path (`o2b brain rollback upgrade-<ts>`).
  */
-export function applyUpgrade(
-  vault: string,
-  opts: { agent?: string; now?: Date } = {},
-): UpgradeApplyResult {
+export function applyUpgrade(vault: string, opts: ApplyUpgradeOptions = {}): UpgradeApplyResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
-  const plan = planUpgrade(vault);
+  const plan = opts.plan ?? planUpgrade(vault);
   if (plan.errors > 0) {
     const messages = plan.files
       .filter((f) => f.status === "error")
@@ -154,6 +179,19 @@ export function applyUpgrade(
     });
   }
 
+  const drifted = plan.files
+    .filter((f) => f.status === "update" && !fileMatchesExpected(join(vault, f.path), f.before))
+    .map((f) => f.path);
+  if (drifted.length > 0) {
+    throw new BrainUpgradeError(
+      `upgrade refused: ${drifted.length} file(s) changed on disk since the upgrade plan ` +
+        `was read: ${drifted.join(", ")}. Nothing was written and no snapshot was taken; ` +
+        "re-run `o2b brain upgrade --dry-run` to review the current plan, then apply it.",
+      null,
+      drifted,
+    );
+  }
+
   const now = opts.now ?? new Date();
   // One constant for the run-id prefix and the recorded reason.
   const runId = `${BRAIN_SNAPSHOT_REASON.upgrade}-${isoSecondCompact(now)}`;
@@ -163,16 +201,20 @@ export function applyUpgrade(
   for (const file of plan.files) {
     if (file.status !== "update") continue;
     try {
-      atomicWriteFileSync(join(vault, file.path), file.after);
+      atomicWriteFileSync(join(vault, file.path), file.after, { expectBefore: file.before });
     } catch (err) {
+      // A drift leaves the edit on disk, so its remedy must not destroy
+      // it: no rollback at all, only a re-plan that reads the edit.
+      if (isFileDrift(err)) {
+        throw new BrainUpgradeError(midApplyDriftMessage(file.path, updated), runId, [file.path]);
+      }
       // Mid-apply failure: one or more files have already been
       // rewritten under the new release, the rest still match the
       // old. The pre-apply snapshot is the recovery path — embed
       // its run id so the operator does not need to grep
       // `.snapshots/` to find it.
       throw new BrainUpgradeError(
-        `upgrade aborted mid-apply at ${file.path}: ` +
-          `${(err as Error).message ?? String(err)}. ` +
+        `upgrade aborted mid-apply at ${file.path}: ${(err as Error).message ?? String(err)}. ` +
           `${updated.length} file(s) already rewritten; ` +
           `roll back via \`o2b brain rollback ${runId} --force-rollback\` ` +
           `before re-running.`,
@@ -223,7 +265,7 @@ function planBrainYaml(vault: string): UpgradeFilePlan {
       // missing as an update from empty so `--apply` restores the
       // canonical body. Refusing here would block every other
       // managed-file update behind one missing config.
-      return makeUpdate(rel, "", DEFAULT_BRAIN_CONFIG_YAML);
+      return makeUpdate(rel, null, DEFAULT_BRAIN_CONFIG_YAML);
     }
     return makeError(rel, `read failed: ${e.message ?? String(err)}`);
   }
@@ -253,8 +295,8 @@ function planManagedPath(
 ): UpgradeFilePlan {
   if (!existsSync(absolutePath)) {
     // File missing entirely: an upgrade should restore it. Treat as
-    // update with empty `before` so the diff shows the full body.
-    return makeUpdate(relPath, "", renderTarget(null));
+    // update from absent (`null`) so the diff shows the full body.
+    return makeUpdate(relPath, null, renderTarget(null));
   }
   let before: string;
   try {
@@ -287,7 +329,7 @@ function makeNoop(path: string): UpgradeFilePlan {
   });
 }
 
-function makeUpdate(path: string, before: string, after: string): UpgradeFilePlan {
+function makeUpdate(path: string, before: string | null, after: string): UpgradeFilePlan {
   return Object.freeze({
     path,
     status: "update" as const,
@@ -305,6 +347,29 @@ function makeError(path: string, message: string): UpgradeFilePlan {
     after: "",
     error: message,
   });
+}
+
+/**
+ * The refusal for a row that changed on disk during the apply. The next
+ * plan reads the edit, so a fresh dry run is the only way forward offered.
+ * A rollback is not: the snapshot manifest predates the apply, so plain
+ * rollback reports every rewritten row as drift and exits, and
+ * `--force-rollback` would destroy the edit.
+ */
+function midApplyDriftMessage(drifted: string, updated: ReadonlyArray<string>): string {
+  const head =
+    `upgrade refused at ${drifted}: the file changed on disk after the upgrade plan was ` +
+    "read and was left as it is.";
+  if (updated.length === 0) {
+    return (
+      `${head} Nothing was written; re-run \`o2b brain upgrade --dry-run\` to review a ` +
+      "plan that reads the edit, then apply it."
+    );
+  }
+  return (
+    `${head} ${updated.length} file(s) already rewritten: ${updated.join(", ")}. ` +
+    "Re-run `o2b brain upgrade --dry-run` to plan the rest against the edit, then apply it."
+  );
 }
 
 /**

@@ -83,7 +83,11 @@ export async function cmdBrainExtractSignals(argv: string[]): Promise<number> {
           generated_at: plan.generatedAt,
           boundary_decision: plan.boundaryDecision,
           turns_scanned: plan.turnsScanned,
-          turns_mined: plan.turnsMined.map((t) => ({ turn_id: t.turnId, text: t.text })),
+          turns_mined: plan.turnsMined.map((t) => ({
+            turn_id: t.turnId,
+            text: t.text,
+            timestamp: t.timestamp,
+          })),
           cap: plan.cap,
           confidence_floor: plan.confidenceFloor,
           llm_step: plan.llmStep,

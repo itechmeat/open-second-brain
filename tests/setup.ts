@@ -103,6 +103,18 @@ if (process.env["OPEN_SECOND_BRAIN_DEDUP_CACHE_DIR"] === undefined) {
   process.env["OPEN_SECOND_BRAIN_DEDUP_CACHE_DIR"] = cacheRoot;
 }
 
+// The embedding settings resolve from `OPEN_SECOND_BRAIN_EMBEDDING_*`
+// twins of the config keys (model, provider, key, price pair, cost gate).
+// A developer who exports one for daily use would otherwise change what
+// every config-resolving test means, so the suite starts without them. A
+// run that wants them kept sets `O2B_TEST_KEEP_EMBEDDING_ENV=1`; a test
+// that needs one sets it itself.
+if (process.env["O2B_TEST_KEEP_EMBEDDING_ENV"] !== "1") {
+  for (const name of Object.keys(process.env)) {
+    if (name.startsWith("OPEN_SECOND_BRAIN_EMBEDDING_")) delete process.env[name];
+  }
+}
+
 // Every temp entry a test mints lands under ONE per-run root, and the run
 // fails if any of them is still there after the last file (issue #194).
 //

@@ -816,7 +816,9 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "withheld signal. would_create, would_promote, would_retire, would_supersede and " +
       "gated_retires keep a row only when both the pref- and the ret- spelling of its id pass " +
       "the gated owner view ANDed with reachView, and signal_novelty asks the same of each " +
-      "signal's path and id.",
+      "signal's path and id. retire_siblings pairs two preference ids, and a pair is kept and " +
+      "counted only when both ids pass the same view, so a withheld retiring or sibling " +
+      "preference moves neither a row nor a count.",
   },
   {
     surface: "brain_retention",
@@ -898,6 +900,70 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "before anything is read or written. A move or rename onto an occupied withheld " +
       "destination still refuses as occupied, the inherent create-collision residual, and an " +
       "applied move still rewrites links inside withheld pages without naming them.",
+  },
+  {
+    surface: "brain_create_note",
+    kind: K.mcpTool,
+    category: C.covered,
+    reason:
+      "the write receipt carries the page lint (core/brain/page-lint.ts lintWrittenPages, through " +
+      "notes-tools.ts noteWriteResult), whose near-duplicate hint names sibling pages by path and " +
+      "counts the siblings it skipped or could not read; noteWriteResult binds the lint to " +
+      "readableAtContextReach(ctx), so a sibling the caller may not read is dropped at the " +
+      "directory listing, before it is scored and before candidates_skipped or " +
+      "candidates_unreadable count it; the wikilink and merged-link checks ask the same " +
+      "predicate, so a link to a withheld Brain page reads as broken and a merge chain ends at " +
+      "its first withheld hop, and the receipt answers as if the page were absent. " +
+      "A create onto an occupied withheld path still refuses as occupied, the inherent " +
+      "create-collision residual.",
+  },
+  {
+    surface: "brain_update_note",
+    kind: K.mcpTool,
+    category: C.covered,
+    reason:
+      "the write receipt carries the page lint (core/brain/page-lint.ts lintWrittenPages, through " +
+      "notes-tools.ts noteWriteResult), whose near-duplicate hint names sibling pages by path and " +
+      "counts the siblings it skipped or could not read; noteWriteResult binds the lint to " +
+      "readableAtContextReach(ctx), so a sibling the caller may not read is dropped at the " +
+      "directory listing, before it is scored and before candidates_skipped or " +
+      "candidates_unreadable count it; the wikilink and merged-link checks ask the same " +
+      "predicate, so a link to a withheld Brain page reads as broken and a merge chain ends at " +
+      "its first withheld hop, and the receipt answers as if the page were absent. " +
+      "The target itself resolves through the same predicate and a withheld one is refused " +
+      "with the error a missing note gets.",
+  },
+  {
+    surface: "brain_append_note",
+    kind: K.mcpTool,
+    category: C.covered,
+    reason:
+      "the write receipt carries the page lint (core/brain/page-lint.ts lintWrittenPages, through " +
+      "notes-tools.ts noteWriteResult), whose near-duplicate hint names sibling pages by path and " +
+      "counts the siblings it skipped or could not read; noteWriteResult binds the lint to " +
+      "readableAtContextReach(ctx), so a sibling the caller may not read is dropped at the " +
+      "directory listing, before it is scored and before candidates_skipped or " +
+      "candidates_unreadable count it; the wikilink and merged-link checks ask the same " +
+      "predicate, so a link to a withheld Brain page reads as broken and a merge chain ends at " +
+      "its first withheld hop, and the receipt answers as if the page were absent. " +
+      "The target itself resolves through the same predicate and a withheld one is refused " +
+      "with the error a missing note gets.",
+  },
+  {
+    surface: "brain_write_batch",
+    kind: K.mcpTool,
+    category: C.covered,
+    reason:
+      "the write receipt carries the page lint (core/brain/page-lint.ts lintWrittenPages, through " +
+      "notes-tools.ts noteWriteResult), whose near-duplicate hint names sibling pages by path and " +
+      "counts the siblings it skipped or could not read; noteWriteResult binds the lint to " +
+      "readableAtContextReach(ctx), so a sibling the caller may not read is dropped at the " +
+      "directory listing, before it is scored and before candidates_skipped or " +
+      "candidates_unreadable count it; the wikilink and merged-link checks ask the same " +
+      "predicate, so a link to a withheld Brain page reads as broken and a merge chain ends at " +
+      "its first withheld hop, and the receipt answers as if the page were absent. " +
+      "Every page the batch committed is linted under the one predicate, and the update and " +
+      "append operations refuse a withheld target with the error a missing note gets.",
   },
   {
     surface: "brain_expire",

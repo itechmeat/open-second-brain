@@ -47,6 +47,169 @@ instruction files such as `CLAUDE.md`/`AGENTS.md`, installed
 `.claude/skills/`) and warns with the exact replacement for any stale
 reference it finds (`removed-tool-reference`).
 
+## Upgrading to 1.73.0
+
+No step is required unless you set a positive `embedding_cost_gate_usd`
+on a model with no known price, run a model the curated table does not
+list, or want to send extra request fields to your embedding endpoint.
+
+**Hooks and MCP searches under a positive gate fall back to keyword-only
+and say so.** The query embed of a search that is not at local reach
+(every MCP tool and the recall-inject and gap-promote hooks) now passes
+the same price gate as the embedding runs of 1.72.0. With a positive
+`embedding_cost_gate_usd` on a model with no known price, a hybrid
+search answers keyword-only and records `semantic-cost-unpriced` in its
+trail, a hook names the code on its local audit line
+(`retrieval_degraded`), and an explicit semantic search fails with
+`EMBEDDING_COST_UNPRICED`. `o2b search` at the CLI runs at local reach
+and is unchanged. Declare the price of a self-hosted model to keep the
+semantic lane:
+
+```yaml
+embedding_price_model: nomic-embed-text:latest
+embedding_price_usd_per_mtok: 0
+```
+
+`brain_tune` now refuses to save a winner measured without the semantic
+lane, and recall feedback on such a search no longer moves the learned
+weights.
+
+**Declare the input window of an uncurated model.** A query longer than
+the model's input window is now cut to it before the embed and the trail
+records `semantic-query-truncated`. For a model the curated table does
+not list the window is unknown and nothing is cut; set
+`embedding_input_window_tokens` to the model's window (in its own
+tokens) so long queries are cut and disclosed instead of truncated or
+refused silently by the server. The key is refused for the `local`
+provider.
+
+**Extra request fields need `openai-compat`.** `embedding_extra_body`
+takes one JSON object, is sent only by the `openai-compat` provider
+(refused for others, inert for `disabled`), refuses `model`, `input` and
+`encoding_format`, and a `dimensions` field needs `embedding_dimension`
+set to the same width.
+
+**Upgrades refuse a file edited after the plan was read.**
+`o2b brain upgrade --apply` and the automatic upgrade worker now apply
+the plan they computed. When a managed file changed in between, nothing
+is overwritten: re-run `o2b brain upgrade --dry-run` and apply the new
+plan. Under `--apply --json` a refusal prints
+`{ "ok": false, "error", "run_id", "drifted" }`. In the `--dry-run --json`
+plan, a file that does not exist yet still reports `before_size: 0`.
+
+`brain_recall_feedback` gains an additive `degraded` array, and
+`brain_context_pack` in `semantic` mode resolves an omitted reach to
+remote and counts the instruction prefix in `query_tokens`.
+
+## Upgrading to 1.72.0
+
+No step is required unless you set a positive `embedding_cost_gate_usd`,
+left a numeric search setting blank, or an integration reads the JSON embedding cost estimates, which can now
+be `null` whatever the gate (see below).
+
+**A positive cost gate now refuses a model with no known price.**
+Before this release, a model missing from the built-in price table was
+priced at $0, so a gate never stopped it. Now its price is `unknown`,
+and an embedding reindex, maintenance reindex or vector backfill with
+pending chunks on that model is refused with `EMBEDDING_COST_UNPRICED`
+while the gate is positive. This affects local servers (Ollama, LM
+Studio, llama.cpp) and any model the table does not list. Run
+`o2b search check`: it names the model and the keys to set. Declare the
+price once to restore unattended runs:
+
+```yaml
+embedding_price_model: nomic-embed-text:latest
+embedding_price_usd_per_mtok: 0
+```
+
+`0` declares the model free; use the provider's real rate otherwise.
+`--force-cost` (MCP `force_cost`) passes a single run without a
+declaration. With the gate at 0, the default, nothing is refused.
+
+**Unknown prices read as unknown.** Where an estimate used to print
+`$0.0000` for an unlisted model, the maintenance banner, the backfill
+dry run and `search status` now print `price unknown`, and the JSON
+estimates (`estimated_cost_usd`, `estimated_usd`, the status refresh
+estimate) are `null`. A consumer that read `0` as free must treat `null`
+as unknown. The backfill's `estimated_cost_usd` used to be omitted for an
+unknown price and is now always present. Spend receipts, the
+`maintenance_spend` metric, the backfill JSON and the status JSON gain
+`price_source` (`refresh_price_source` on status); journal rows written
+before this release list their price source as `unrecorded`.
+
+**Edits re-embed less.** An edited note keeps the vectors of its
+unchanged chunks, so the next embedding pass pays only for what changed.
+Nothing needs reindexing to benefit.
+
+`o2b search vector-backfill` gains a repeatable `--path`, and
+`brain_context_pack` gains `query_mode: "semantic"`; both are additive.
+
+**Blank numeric settings and long feedback queries are refused.** A
+whitespace-only `embedding_cost_gate_usd` or `search_rerank_min_score`
+(in config or through its env twin) used to read as 0; it now fails config
+resolution with `INVALID_INPUT`, so remove the key or give it a number.
+`brain_recall_feedback` now enforces its advertised 2000-character `query`
+cap and refuses a longer query with `INVALID_PARAMS`.
+
+## Upgrading to 1.71.0
+
+No step is required. Three changes are visible to an operator who runs
+with `recall_inject_enabled` on, and one to every Claude Code and Codex
+install.
+
+**The recall brief no longer repeats notes within a session.**
+`recall_inject_dedupe` (env `OPEN_SECOND_BRAIN_RECALL_INJECT_DEDUPE`)
+defaults to `true`: with a host that sends a `session_id`, a note span
+already shown in the session, by an earlier brief or by the SessionStart
+digest, is not injected again until the next SessionStart, and a prompt
+whose candidates were all shown before abstains with
+`all_already_injected`. Set `recall_inject_dedupe: "false"` (or `"0"`) to
+restore the previous behaviour. See "Session dedupe and slices" in
+[`decision-models/recall-inject.md`](decision-models/recall-inject.md).
+
+**The recall caps are configurable.** `recall_inject_max_notes`,
+`recall_inject_max_chars`, `recall_inject_time_budget_ms` and
+`recall_inject_confidence_floor` keep their previous values as defaults;
+an out-of-range value keeps the default and is named (by its env
+variable when it came from the env) as `config_invalid` on the audit
+line.
+
+**Recall slices are opt-in vault policy.** A `recall_inject:` block in
+`Brain/_brain.yaml` is new and absent from the generated template; a vault
+without it recalls exactly as before. A malformed block makes
+`_brain.yaml` fail to load, and the recall decision then ends in `error`
+with fault `retriever_failed` until the file is fixed. The contract is in
+[`cli-reference.md`](cli-reference.md).
+
+**A new `reground-deliver` hook is registered.** The Claude Code and
+Codex hook manifests run it on every `PostToolUse` and `UserPromptSubmit`
+event. It does nothing unless `reground_parts_enabled` is on (default
+off), and it checks that flag before resolving the vault. Turn the flag
+on to have an oversized SessionStart payload split into parts instead of
+emitted whole; the keys and the receipt fields are in
+[`cli-reference.md`](cli-reference.md) and
+[`observability.md`](observability.md).
+
+**Hook-state files are private and some are renamed.** The per-session
+files under `.open-second-brain/hook-state/` are now written with mode
+`0600`, because the re-grounding queue holds parts of the SessionStart
+payload. Existing files become private on their next write; a file never
+written again stays as it was until the prune removes it. A session id
+that is not already a lowercase slug (one with upper case, separators or
+more than 64 characters) now gets a file name with a hash suffix, so two
+such ids no longer share a file. Claude Code and Codex session ids keep
+their file names. A host that sends other ids starts its hook state
+afresh once after the upgrade: once-per-session nudges can repeat in an
+open session, and the old file is pruned after seven days.
+
+The last-good SessionStart snapshot under
+`.open-second-brain/inject-cache/` and the search session focus file are
+written with mode `0600` as well, and setting a focus answers
+`INVALID_INPUT` when a directory on the way to the focus file is a
+symbolic link. A search `path_prefix` that starts with a drive letter is
+now refused with `INVALID_INPUT`, like one containing `..` or starting
+with `/`.
+
 ## Upgrading to 1.70.0
 
 One step is required for Hermes users: update the `o2b` CLI and the

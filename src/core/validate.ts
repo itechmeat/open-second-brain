@@ -179,3 +179,18 @@ export function envOrConfig(
 ): string | null {
   return resolveWithOrigin(env, config, envKey, configKey).value;
 }
+
+/**
+ * The one comparison form for a reserved name (a request-body field, a
+ * tool argument), so a spelling variant is never a second name. NFKC folds
+ * compatibility forms (fullwidth letters and separators) onto ASCII;
+ * default-ignorable code points (zero-width space, soft hyphen) and
+ * whitespace are dropped, then case and the `_` / `-` separators.
+ */
+export function normalizeReservedName(name: string): string {
+  return name
+    .normalize("NFKC")
+    .replaceAll(/[\p{Default_Ignorable_Code_Point}\s]/gu, "")
+    .toLowerCase()
+    .replaceAll(/[_-]/g, "");
+}

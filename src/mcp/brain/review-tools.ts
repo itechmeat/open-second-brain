@@ -6,6 +6,7 @@
  * BRAIN_TOOLS surface.
  */
 
+import { resolveNearDuplicateRetireSiblingsEnabled } from "../../core/config.ts";
 import { resolveSearchConfig } from "../../core/search/index.ts";
 import { buildTimelineIndex } from "../../core/brain/temporal/build-index.ts";
 import { findStaleEntries } from "../../core/brain/temporal/stale-watch.ts";
@@ -115,16 +116,6 @@ async function toolBrainReviewCandidates(
   // over inbox signal clusters keyed by topic - count no withheld signal,
   // and no withheld preference routes a cluster.
   const readable = readableAtContextReachOrUndefined(ctx);
-  const report = await buildReviewCandidates(ctx.vault, {
-    ...(readable !== undefined ? { readable } : {}),
-    // The projection is read-only, but it runs a full dry-run
-    // consolidation pass to produce it - the same pass, and so the same
-    // budget, as `brain_dream`.
-    safeguard: toolSafeguard(ctx, OPERATION.dream),
-    ...(onProgress ? { onProgress } : {}),
-    ...(nowDate ? { now: nowDate } : {}),
-    ...(searchConfig !== undefined ? { searchConfig } : {}),
-  });
   // The projected rows name preferences that EXIST by the id they would
   // get after the pass, so `ret-<slug>` is resolved back through the
   // shared slug fold and both spellings are asked about
@@ -134,10 +125,51 @@ async function toolBrainReviewCandidates(
     const slug = brainArtifactSlug(id);
     return [`pref-${slug}`, `ret-${slug}`];
   };
+  const report = await buildReviewCandidates(ctx.vault, {
+    ...(readable !== undefined ? { readable } : {}),
+    // The stored-vector tier probes only the retires `would_retire` keeps,
+    // so `retire_siblings_semantic` reflects no hidden retire.
+    retiringVisible: (id) => view.row(...bothSpellings(id)),
+    // The gate honours the server's own config file, as the write side does.
+    retireSiblingsEnabled: resolveNearDuplicateRetireSiblingsEnabled(ctx.configPath ?? undefined),
+    // The projection is read-only, but it runs a full dry-run
+    // consolidation pass to produce it - the same pass, and so the same
+    // budget, as `brain_dream`.
+    safeguard: toolSafeguard(ctx, OPERATION.dream),
+    ...(onProgress ? { onProgress } : {}),
+    ...(nowDate ? { now: nowDate } : {}),
+    ...(searchConfig !== undefined ? { searchConfig } : {}),
+  });
+  // A retire-sibling pair names two preferences; it is kept only when the
+  // caller may see both, in both spellings, and the list is filtered
+  // before anything is counted, so a withheld page moves no number.
+  const retireSiblings =
+    report.retire_siblings !== undefined
+      ? view.keep(report.retire_siblings, (p) => [
+          ...bothSpellings(p.retiring_id),
+          ...bothSpellings(p.sibling_id),
+        ])
+      : [];
   return {
     // Signal rows name an inbox signal by id AND by vault-relative path.
     ...(report.signal_novelty !== undefined
       ? { signal_novelty: view.keep(report.signal_novelty, (s) => [s.path, s.id]) }
+      : {}),
+    ...(retireSiblings.length > 0
+      ? {
+          retire_siblings: retireSiblings.map((p) => ({
+            retiring_id: p.retiring_id,
+            sibling_id: p.sibling_id,
+            score: p.score,
+            method: p.method,
+          })),
+        }
+      : {}),
+    ...(report.retire_siblings_semantic !== undefined
+      ? { retire_siblings_semantic: report.retire_siblings_semantic }
+      : {}),
+    ...(report.retire_siblings_semantic_detail !== undefined
+      ? { retire_siblings_semantic_detail: report.retire_siblings_semantic_detail }
       : {}),
     // `would_create` names ids the pass has not written yet, so most of
     // them resolve to nothing and pass; asking anyway is what keeps a
@@ -253,7 +285,7 @@ export const REVIEW_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_review_candidates",
     description:
-      "Read-only preview of the next `brain_dream` pass: would_create / would_promote / would_retire / would_supersede, clusters below threshold, gated retires, and intent reviews. Mutates nothing.",
+      "Read-only preview of the next `brain_dream` pass: would_create / would_promote / would_retire / would_supersede, clusters below threshold, gated retires, intent reviews, and opt-in retire_siblings (lexical or stored-vector pairs; tier status in retire_siblings_semantic). Mutates nothing.",
     inputSchema: {
       type: "object",
       properties: {

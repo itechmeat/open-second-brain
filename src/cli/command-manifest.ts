@@ -893,6 +893,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
             flag("db", "string"),
             flag("apply", "boolean"),
             flag("force-cost", "boolean"),
+            flag("path", "string-array"),
             flag("progress", "boolean"),
           ],
         ),

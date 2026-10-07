@@ -378,7 +378,10 @@ export const VERB_HELP: Record<string, string> = {
     "Compare source-agent coverage using the same provenance foundation as agent-query.\n",
   reject:
     "usage: o2b brain reject --id <pref-id> --reason <text> [--yes] [--vault <path>] [--json]\n" +
-    "Move a preference to retired/ with reason 'user-rejected'. --yes required when pinned.\n",
+    "Move a preference to retired/ with reason 'user-rejected'. --yes required when pinned.\n" +
+    "With near_duplicate_retire_siblings_enabled on, also lists the active preferences that resemble\n" +
+    "the rejected one (score, method) with the command that rejects each; --json adds retire_siblings.\n" +
+    "Nothing else is retired.\n",
   freeze:
     "usage: o2b brain freeze [--reason <text>] [--vault <path>] [--json]\n" +
     "Write Brain/.state/frozen.json. While it exists every content write in this vault is refused - on this device and, once Syncthing has carried the marker, on every device that shares it. The Brain log keeps recording, so the freeze and the writes it refuses stay auditable. Idempotent: a second freeze keeps the first one's reason.\n",

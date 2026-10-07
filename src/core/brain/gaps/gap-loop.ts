@@ -36,6 +36,7 @@ import { aggregateUnmetRecall } from "../query-demand.ts";
 import { summarizeRecallTelemetry } from "../recall-telemetry.ts";
 import { renderActivityTimeline, type ActivityItem } from "../render/activity-line.ts";
 import type { RecallResultSet, RecallRetriever } from "../recall-inject.ts";
+import type { RetrievalDegradationCode } from "../../search/retrieval-trail.ts";
 import { isFileAlreadyExists } from "../../fs-atomic.ts";
 import { parseFrontmatterText, writeFrontmatterAtomic } from "../../vault.ts";
 import type { FrontmatterMap } from "../../types.ts";
@@ -434,6 +435,14 @@ export interface GapAutoCloseResult {
   readonly closed: ReadonlyArray<string>;
   /** Keys left open (recall below the floor, or the recall failed). */
   readonly kept: ReadonlyArray<string>;
+  /**
+   * Why any of this run's recalls narrowed, as the search trail's codes:
+   * first-seen order, each code once, present only when non-empty. A hook
+   * resolves to remote reach, so a gated query embed lands here and the
+   * hook names it on its LOCAL audit line. Reported only: a degraded
+   * recall is judged by the same floor as any other.
+   */
+  readonly retrievalDegraded?: ReadonlyArray<RetrievalDegradationCode>;
 }
 
 /**
@@ -469,6 +478,7 @@ export async function autoCloseRecalledGaps(
   const floor = opts.confidenceFloor ?? GAP_LOOP_AUTO_CLOSE_FLOOR;
   const closed: string[] = [];
   const kept: string[] = [];
+  const degraded: RetrievalDegradationCode[] = [];
   for (const task of listGapTasks(vault, { status: GAP_TASK_STATUS_OPEN })) {
     let coveredElsewhere = false;
     let matchQuality: number | null = null;
@@ -487,6 +497,7 @@ export async function autoCloseRecalledGaps(
       .map((candidate) => candidate.path)
       .filter((path) => !admitsGapCoverageRow(path));
     if (rejected.length > 0) throw new GapRecallScopeError(task.topic, rejected);
+    for (const code of result.degraded ?? []) if (!degraded.includes(code)) degraded.push(code);
     // Only genuine vault coverage elsewhere may close a task - and the
     // quality now describes the same rows, because the retriever was told
     // which rows count before it measured them.
@@ -499,7 +510,11 @@ export async function autoCloseRecalledGaps(
       kept.push(task.key);
     }
   }
-  return Object.freeze({ closed: Object.freeze(closed), kept: Object.freeze(kept) });
+  return Object.freeze({
+    closed: Object.freeze(closed),
+    kept: Object.freeze(kept),
+    ...(degraded.length > 0 ? { retrievalDegraded: Object.freeze(degraded) } : {}),
+  });
 }
 
 function closeGapTask(task: GapTask, now: Date): void {

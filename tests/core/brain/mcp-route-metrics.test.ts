@@ -8,6 +8,7 @@ import {
   listMcpRouteLatency,
   summarizeMcpRouteLatency,
 } from "../../../src/core/brain/mcp-route-metrics.ts";
+import type { RouteStageTiming } from "../../../src/core/route-scope.ts";
 
 let tmp: string;
 let vault: string;
@@ -169,5 +170,127 @@ describe("summarizeMcpRouteLatency", () => {
     const summary = summarizeMcpRouteLatency(vault, { limit: 1 });
     expect(summary.total).toBe(3);
     expect(summary.routes[0]!.count).toBe(3);
+  });
+});
+
+describe("mcp route latency stages", () => {
+  const base = {
+    createdAt: "2026-06-01T00:00:00.000Z",
+    tool: "brain_feedback",
+    status: "ok" as const,
+    durationMs: 4,
+  };
+
+  test("stages are written only when non-empty", () => {
+    const withStages = emitMcpRouteLatency(
+      vault,
+      {
+        ...base,
+        stages: [
+          { name: "validate", ms: 0.4 },
+          { name: "log_append", ms: 1.26 },
+        ],
+      },
+      true,
+    );
+    expect(withStages!.payload["stages"]).toEqual([
+      { name: "validate", ms: 0.4 },
+      { name: "log_append", ms: 1.3 },
+    ]);
+    const empty = emitMcpRouteLatency(vault, { ...base, stages: [] }, true);
+    expect(Object.hasOwn(empty!.payload, "stages")).toBe(false);
+  });
+
+  test("unknown names, negative and non-finite values are dropped", () => {
+    const hostile = [
+      { name: "validate", ms: -1 },
+      { name: "document_write", ms: Number.NaN },
+      { name: "lint", ms: Number.POSITIVE_INFINITY },
+      { name: "not_a_stage", ms: 2 },
+      { name: "write_receipt", ms: 2 },
+    ] as unknown as ReadonlyArray<RouteStageTiming>;
+    const record = emitMcpRouteLatency(vault, { ...base, stages: hostile }, true);
+    expect(record!.payload["stages"]).toEqual([{ name: "write_receipt", ms: 2 }]);
+
+    const allBad = [{ name: "validate", ms: -3 }] as unknown as ReadonlyArray<RouteStageTiming>;
+    const none = emitMcpRouteLatency(vault, { ...base, stages: allBad }, true);
+    expect(Object.hasOwn(none!.payload, "stages")).toBe(false);
+  });
+
+  test("repeated names are summed in first-seen order", () => {
+    const record = emitMcpRouteLatency(
+      vault,
+      {
+        ...base,
+        stages: [
+          { name: "write_receipt", ms: 1 },
+          { name: "lint", ms: 0.5 },
+          { name: "write_receipt", ms: 0.25 },
+        ],
+      },
+      true,
+    );
+    expect(record!.payload["stages"]).toEqual([
+      { name: "write_receipt", ms: 1.3 },
+      { name: "lint", ms: 0.5 },
+    ]);
+  });
+
+  test("a hostile stage name never reaches the persisted continuity file", () => {
+    const PRIVATE_PATH = "Notes/private-topic-marker.md";
+    const PRIVATE_TOPIC = "private-topic-slug-marker";
+    const hostile = [
+      { name: PRIVATE_PATH, ms: 1 },
+      { name: PRIVATE_TOPIC, ms: 1 },
+      { name: "validate", ms: 1 },
+    ] as unknown as ReadonlyArray<RouteStageTiming>;
+    emitMcpRouteLatency(vault, { ...base, stages: hostile }, true);
+    const raw = readFileSync(join(vault, "Brain", "log", "continuity", "2026-06.jsonl"), "utf8");
+    expect(raw).not.toContain(PRIVATE_PATH);
+    expect(raw).not.toContain(PRIVATE_TOPIC);
+    expect(raw).toContain('"validate"');
+  });
+
+  test("records without stages keep the pre-stage payload byte-for-byte", () => {
+    const record = emitMcpRouteLatency(
+      vault,
+      { ...base, scope: "full", argKeys: ["topic"], decisionMs: 2.4 },
+      true,
+    );
+    expect(JSON.stringify(record!.payload)).toBe(
+      '{"tool":"brain_feedback","scope":"full","status":"ok","duration_ms":4,"arg_keys":["topic"],"decision_ms":2}',
+    );
+  });
+});
+
+function stagesFor(ms: number): ReadonlyArray<RouteStageTiming> {
+  return [
+    { name: "validate", ms },
+    { name: "log_append", ms: ms * 2 },
+  ];
+}
+
+describe("summarizeMcpRouteLatency stages", () => {
+  test("each route gets a per-stage count, average and p95", () => {
+    for (const ms of [1, 2, 3, 4]) {
+      emitMcpRouteLatency(
+        vault,
+        { tool: "brain_feedback", status: "ok", durationMs: 10, stages: stagesFor(ms) },
+        true,
+      );
+    }
+    emitMcpRouteLatency(vault, { tool: "brain_feedback", status: "ok", durationMs: 10 }, true);
+
+    const route = summarizeMcpRouteLatency(vault).routes.find((r) => r.tool === "brain_feedback")!;
+    expect(route.stages).toEqual([
+      { name: "validate", count: 4, avg_ms: 2.5, p95_ms: 4 },
+      { name: "log_append", count: 4, avg_ms: 5, p95_ms: 8 },
+    ]);
+  });
+
+  test("a route without stages has no stages key", () => {
+    emitMcpRouteLatency(vault, { tool: "second_brain_status", status: "ok", durationMs: 2 }, true);
+    const route = summarizeMcpRouteLatency(vault).routes[0]!;
+    expect(Object.hasOwn(route, "stages")).toBe(false);
   });
 });

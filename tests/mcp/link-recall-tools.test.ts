@@ -6,7 +6,7 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -225,6 +225,7 @@ test("brain_benchmark run scores an inline dataset and records the metric", asyn
   const report = await call(server, "brain_benchmark", { operation: "run", dataset: DATASET });
   expect(report["total"]).toBe(1);
   expect(report["hit_at_k"]).toBe(1);
+  expect("degraded" in report).toBe(false);
   expect(listMetrics(vault, { surface: "recall_benchmark" })).toHaveLength(1);
 
   const bad = await callError(server, "brain_benchmark", {
@@ -262,4 +263,42 @@ test("brain_tune run/status/reset lifecycle", async () => {
 
   const missingDataset = await callError(server, "brain_tune", { operation: "run" });
   expect(missingDataset.code).toBe(-32602);
+});
+
+/** The whole tool payload, fetched from the artifact store when the preview truncated it. */
+async function fullPayload(
+  server: MCPServer,
+  tool: string,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const out = await call(server, tool, args);
+  if (out["preview_truncated"] !== true) return out;
+  const stored = await call(server, "brain_artifact_get", { artifact_id: out["artifact_id"] });
+  return JSON.parse(stored["content"] as string) as Record<string, unknown>;
+}
+
+test("brain_benchmark and brain_tune name the degradation a run carried", async () => {
+  writeGroup();
+  await indexDefaultLocation();
+  const server = new MCPServer({ vault, configPath });
+  await initialize(server);
+
+  // Semantic recall configured over an index built without embeddings:
+  // keyword-only by construction, so the sweep saves and still says so.
+  atomicWriteFileSync(
+    configPath,
+    `vault: ${vault}\nagent_name: claude\nsearch_semantic_enabled: true\nembedding_provider: local\n`,
+  );
+  const absent = "semantic-embeddings-absent";
+  const expected = ["hybrid-degraded", absent];
+
+  const bench = await call(server, "brain_benchmark", { operation: "run", dataset: DATASET });
+  expect(bench["degraded"]).toEqual(expected);
+
+  const tuned = await fullPayload(server, "brain_tune", { operation: "run", dataset: DATASET });
+  expect(tuned["degraded"]).toEqual(expected);
+  const rows = tuned["evaluated"] as Array<Record<string, unknown>>;
+  expect(rows.length).toBeGreaterThan(0);
+  for (const row of rows) expect(row["degraded"]).toEqual(expected);
+  expect(existsSync(join(vault, "Brain", "search", "tuning.json"))).toBe(true);
 });

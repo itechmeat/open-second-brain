@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { nestedCommandGroups } from "../../src/cli/command-manifest.ts";
+import { renderCompletions } from "../../src/cli/completions.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
 describe("CLI command manifest", () => {
@@ -93,6 +94,33 @@ describe("nested subcommand coverage", () => {
     expect(out.returncode).toBe(0);
     for (const group of groups) {
       expect(out.stdout).toContain(`__fish_seen_subcommand_from ${group.parent}`);
+    }
+  });
+});
+
+describe("quoted completion words", () => {
+  // A trailing backslash used to escape the closing quote, so the word ran
+  // on into the rest of the script.
+  const manifest = {
+    command: "o2b" as const,
+    flags: [],
+    commands: [
+      { name: "a\\", summary: "" },
+      { name: "b'c\"d", summary: "" },
+    ],
+  };
+
+  test("fish escapes the backslash before the quote", () => {
+    const out = renderCompletions("fish", manifest);
+    expect(out).toContain(String.raw`-a 'a\\'`);
+    expect(out).toContain(String.raw`-a 'b\'c"d'`);
+  });
+
+  test("elvish and nushell escape the backslash before the quote", () => {
+    for (const shell of ["elvish", "nushell"] as const) {
+      const out = renderCompletions(shell, manifest);
+      expect(out).toContain(String.raw`"a\\"`);
+      expect(out).toContain(String.raw`"b'c\"d"`);
     }
   });
 });

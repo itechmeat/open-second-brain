@@ -8,7 +8,7 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -19,6 +19,7 @@ import { LATEST_SCHEMA_VERSION } from "../../src/core/search/schema.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { listRecallTelemetry } from "../../src/core/brain/recall-telemetry.ts";
 import { readQueryDemand } from "../../src/core/brain/query-demand.ts";
+import { feedbackDir } from "../../src/core/search/feedback.ts";
 
 let tmp: string;
 let vault: string;
@@ -359,4 +360,34 @@ test("brain_search surfaces authoredAt when present and omits it otherwise", asy
   expect(plain).toBeDefined();
   expect(dated!["authoredAt"]).toBe(Math.floor(Date.parse("2026-05-20T10:00:00Z") / 1000));
   expect("authoredAt" in plain!).toBe(false);
+});
+
+test("brain_search counts its query cap in code points, as the advertised maxLength does", async () => {
+  const astral = "\u{1F600}";
+  const server = makeServer();
+  await initialize(server);
+  const within = (await call(server, "brain_search", { query: astral.repeat(1001) })) as any;
+  expect(within?.error?.message ?? "").not.toContain("exceeds 2000 characters");
+  const over = (await call(server, "brain_search", { query: astral.repeat(2001) })) as any;
+  expect(over?.error?.code).toBe(-32602);
+  expect(over.error.message).toContain("exceeds 2000 characters");
+});
+
+test("brain_recall_feedback enforces its advertised query maxLength before recording", async () => {
+  const astral = "\u{1F600}";
+  writeMd("note.md", "# Note\n\nthe quarterly ledger reconciliation runbook\n");
+  await indexVault(resolveSearchConfig({ vault, configPath }));
+  const server = makeServer();
+  await initialize(server);
+  const feedback = (query: string) =>
+    call(server, "brain_recall_feedback", { query, result_path: "note.md", verdict: "up" });
+
+  const over = (await feedback(astral.repeat(2001))) as any;
+  expect(over?.error?.code).toBe(-32602);
+  expect(over.error.message).toContain("exceeds 2000 characters");
+  expect(existsSync(feedbackDir(vault))).toBe(false);
+
+  const within = extractToolResult(await feedback(astral.repeat(2000)));
+  expect(within["recorded"]).toBe(true);
+  expect(readdirSync(feedbackDir(vault))).toHaveLength(1);
 });

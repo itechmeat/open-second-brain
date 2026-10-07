@@ -19,6 +19,7 @@ const HOOKS_JSON = join(REPO, "hooks", "hooks.json");
 interface HookEntry {
   type: string;
   command: string;
+  statusMessage?: string;
 }
 function allCommands(): string[] {
   const parsed = JSON.parse(readFileSync(HOOKS_JSON, "utf8")) as {
@@ -62,6 +63,31 @@ describe("hooks.json command shape", () => {
     for (const group of sessionStart) {
       expect(group.matcher).toBe("startup|resume|clear|compact");
     }
+  });
+
+  test("reground-deliver rides the PostToolUse * and UserPromptSubmit * groups", () => {
+    const parsed = JSON.parse(readFileSync(HOOKS_JSON, "utf8")) as {
+      hooks: Record<string, Array<{ matcher?: string; hooks: HookEntry[] }>>;
+    };
+    for (const event of ["PostToolUse", "UserPromptSubmit"]) {
+      const star = (parsed.hooks[event] ?? []).filter((group) => group.matcher === "*");
+      expect(`${event}: ${star.length}`).toBe(`${event}: 1`);
+      const last = star[0]!.hooks.at(-1)!;
+      expect(last.command.trimEnd()).toEndWith(
+        "command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook reground-deliver; exit 0",
+      );
+    }
+  });
+
+  test("the PostToolUse reground-deliver entry shows no status line on every tool call", () => {
+    const parsed = JSON.parse(readFileSync(HOOKS_JSON, "utf8")) as {
+      hooks: Record<string, Array<{ matcher?: string; hooks: HookEntry[] }>>;
+    };
+    const carriers = (parsed.hooks["PostToolUse"] ?? [])
+      .flatMap((group) => group.hooks)
+      .filter((h) => h.command.includes("o2b-hook reground-deliver"));
+    expect(carriers.length).toBe(1);
+    expect(carriers[0]!.statusMessage).toBeUndefined();
   });
 
   // Runs the command through `sh` with a POSIX PATH (/usr/bin:/bin); native

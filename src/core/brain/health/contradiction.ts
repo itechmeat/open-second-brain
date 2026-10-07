@@ -15,8 +15,13 @@
  */
 
 import { dominantSignOf } from "../sign.ts";
-import { findSimilarPairs, jaccard, tokenise } from "../similarity.ts";
+import { findSimilarPairs, tokenise } from "../similarity.ts";
 import { BRAIN_HEALTH_DEFAULTS } from "../policy.ts";
+import {
+  READ_ALL_REFS,
+  findNearDuplicates,
+  type NearDuplicatePoolEntry,
+} from "../near-duplicate.ts";
 import {
   BRAIN_PREFERENCE_STATUS,
   type BrainPreferenceStatus,
@@ -273,9 +278,10 @@ export interface AdviseOnIncomingOptions {
 
 /**
  * Compute a write-time conflict advisory for a single incoming feedback
- * principle against already-confirmed preferences. Reuses the shared
- * similarity kernel (`tokenise` + `jaccard`) that `detectContradictions`
- * builds on, and mirrors its bucketing: only confirmed preferences in the
+ * principle against already-confirmed preferences. Scores through the
+ * shared near-duplicate kernel (`findNearDuplicates`, over the same
+ * `tokenise` + `jaccard` primitives `detectContradictions` builds on), and
+ * mirrors its bucketing: only confirmed preferences in the
  * SAME scope bucket are compared (an unscoped incoming signal compares
  * against the unscoped bucket). Every confirmed same-scope preference
  * whose principle overlaps the incoming principle at or above the
@@ -289,6 +295,13 @@ export interface AdviseOnIncomingOptions {
  * operator judges. Pure and deterministic; never throws on well-formed
  * input.
  *
+ * Two kernel rules apply: a principle (incoming or confirmed) under
+ * `NEAR_DUPLICATE_MIN_TOKENS` is not scored, because short principles
+ * share most of their tokens by accident, and each similarity is rounded
+ * to 3 decimals. Reach is not decided here: the caller hands in only the
+ * preferences it may read (`write-advisory.ts` applies the reach when it
+ * loads them), so the kernel's predicate is the explicit allow-all.
+ *
  * Returns `null` when no confirmed same-scope preference clears the
  * threshold - i.e. there is nothing to advise about.
  */
@@ -298,20 +311,25 @@ export function adviseOnIncoming(
   confirmedPrefs: ReadonlyArray<PreferenceForContradiction>,
   opts: AdviseOnIncomingOptions = {},
 ): IncomingConflictAdvisory | null {
-  const threshold = opts.jaccard ?? BRAIN_HEALTH_DEFAULTS.contradiction_jaccard;
-  const bucketKey = scope ?? "";
-  const incomingTokens = tokenise(principle);
-  const conflicts: IncomingConflictEvidence[] = [];
+  const pool: NearDuplicatePoolEntry[] = [];
   for (const p of confirmedPrefs) {
     if (p.status !== BRAIN_PREFERENCE_STATUS.confirmed) continue;
-    if ((p.scope ?? "") !== bucketKey) continue;
-    const sim = jaccard(incomingTokens, tokenise(p.principle));
-    if (sim < threshold) continue;
-    conflicts.push({ prefId: p.id, jaccard: sim });
+    pool.push({ ref: p.id, tokens: tokenise(p.principle), bucket: p.scope ?? "" });
   }
-  if (conflicts.length === 0) return null;
-  conflicts.sort((a, b) => b.jaccard - a.jaccard || a.prefId.localeCompare(b.prefId));
-  return { scope: scope ?? null, conflicts };
+  // The incoming signal has no id yet, so no preference id can equal the
+  // empty probe ref. Every confirmed preference is scored, as before: the
+  // pool is the caller's, so the kernel's cap is set to its size.
+  const { matches } = findNearDuplicates({ ref: "", tokens: tokenise(principle) }, pool, {
+    threshold: opts.jaccard ?? BRAIN_HEALTH_DEFAULTS.contradiction_jaccard,
+    readable: READ_ALL_REFS,
+    bucket: scope ?? "",
+    cap: pool.length,
+  });
+  if (matches.length === 0) return null;
+  return {
+    scope: scope ?? null,
+    conflicts: matches.map((m) => ({ prefId: m.ref, jaccard: m.score })),
+  };
 }
 
 /**

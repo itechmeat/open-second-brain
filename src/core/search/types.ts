@@ -21,6 +21,7 @@ import type { StampMismatch } from "../integrity/stamp.ts";
 import type { ReconciliationOutcome, ReconciliationReport } from "../reconciliation-report.ts";
 import type { VaultPathRule, VaultScopeRules } from "../vault-scope/defaults.ts";
 import type { MaintenanceSpendReceipt } from "../brain/maintenance/journal.ts";
+import type { EmbeddingPriceOverride, EmbeddingPriceSource } from "./embeddings/pricing.ts";
 import type { DegreePredicate } from "./property-filter.ts";
 import type { TemporalIntent } from "./temporal-intent.ts";
 import type { FtsMatchMode } from "./fts-match-mode.ts";
@@ -237,6 +238,11 @@ export interface IndexStats {
   readonly deleted: number;
   readonly chunksTotal: number;
   readonly embeddingsComputed: number;
+  /**
+   * Stored vectors this run kept for chunks whose content did not change
+   * across an edit (vector carry-over), and therefore did not re-embed.
+   */
+  readonly embeddingsReused: number;
   readonly embeddingsRetries: number;
   readonly errors: ReadonlyArray<{
     readonly path: string;
@@ -376,10 +382,13 @@ export interface IndexStatusSnapshot {
   readonly embeddingSignature: string | null;
   /**
    * Best-effort USD estimate to (re-)embed the chunks that currently
-   * lack a current embedding, at the active model's rate. 0 for the
-   * local/unknown-price case.
+   * lack a current embedding, at the active model's quoted rate, from the
+   * shared spend plan. 0 for a known-free model, semantic search off or
+   * no index; null when nobody stated the model's price.
    */
-  readonly estimatedRefreshCostUsd: number;
+  readonly estimatedRefreshCostUsd: number | null;
+  /** Who stated the price of the refresh estimate; null when semantic search is off or there is no index. */
+  readonly refreshPriceSource: EmbeddingPriceSource | null;
   readonly vecExtension: VecExtensionState;
   readonly semanticEnabled: boolean;
   readonly embeddingKeyPresent: boolean;
@@ -598,6 +607,21 @@ export interface IndexCheckReport {
    * key so headless callers (Hermes cron, CI) can act on them.
    */
   readonly recommendations: ReadonlyArray<string>;
+  /**
+   * Where the resolver looked for an embedding credential, by name only
+   * (Honest Embedding Spend). Present only on a `credential-missing` tier
+   * and only when the caller handed the check a credential context, so a
+   * configured or disabled setup reports byte-identically.
+   */
+  readonly credentialSources?: CredentialSourceReport;
+}
+
+/** The names a `credential-missing` check consulted, and where a key does exist. */
+export interface CredentialSourceReport {
+  /** Credential sources consulted, in probe order. */
+  readonly consulted: ReadonlyArray<string>;
+  /** Other registered profiles whose env key is present, in registry order. */
+  readonly presentElsewhere: ReadonlyArray<string>;
 }
 
 /**
@@ -877,10 +901,16 @@ export interface SearchOptions {
    *
    * Absent resolves to {@link TRANSPORT_REACH.remote}, the narrowest: a
    * search whose caller nobody established anything about is not a search
-   * that proved local access. Every internal lane that must see the whole
-   * corpus - benchmarks, recall feedback, rerank fit - passes
-   * {@link TRANSPORT_REACH.local} explicitly, and so does the CLI, which
-   * runs in the operator's own shell.
+   * that proved local access. An internal lane that must see the whole
+   * corpus passes {@link TRANSPORT_REACH.local} explicitly, and so does
+   * the CLI, which runs in the operator's own shell. Recall feedback does
+   * not: it re-runs the search under the reach of the caller who sent the
+   * feedback.
+   *
+   * The semantic lane's query embed reads this too: a caller that is not
+   * local, under a positive `embedding_cost_gate_usd`, on a model nobody
+   * priced, is refused before the embed is sent
+   * (`embeddings/query-embed.ts`).
    *
    * NOT to be confused with {@link SearchOptions.disclosure}, which is
    * the result-DEPTH mode; this one decides which pages exist for this
@@ -1224,6 +1254,15 @@ export interface ResolvedEmbeddingConfig {
    */
   readonly batchTokens?: number;
   /**
+   * The operator's declared input window of the configured model, in the
+   * model's own tokens (`embedding_input_window_tokens`). Absent when the
+   * key is absent, which leaves the curated preset window (or no window at
+   * all) in charge; read it through `effectiveInputWindowTokens` in
+   * `embeddings/presets.ts`, never directly. No default: a window nobody
+   * declared is unknown, and an unknown window cuts nothing.
+   */
+  readonly inputWindowTokens?: number;
+  /**
    * Per-batch transient-retry budget (attempts, not extra retries) for
    * 429 / 5xx / network errors. Default 6, raised from the former hardcoded
    * 3 so an agent reindexing against a strict-RPM embedding account does not
@@ -1239,6 +1278,13 @@ export interface ResolvedEmbeddingConfig {
    */
   readonly costGateUsd: number;
   /**
+   * The operator's declared price for one named model (Honest Embedding
+   * Spend), from `embedding_price_model` + `embedding_price_usd_per_mtok`.
+   * Absent when neither key is set. Price is never part of the embedding
+   * identity, so declaring or editing it never triggers a reindex.
+   */
+  readonly priceOverride?: EmbeddingPriceOverride;
+  /**
    * Active instruction prefix for a search query
    * (memory-write-path-integrity B2). Resolved from the preset default and
    * the `embedding_prefix_query` config/env override; an empty string means
@@ -1249,6 +1295,14 @@ export interface ResolvedEmbeddingConfig {
   readonly queryPrefix?: string;
   /** Active instruction prefix for an indexed passage; see {@link queryPrefix}. */
   readonly passagePrefix?: string;
+  /**
+   * Extra request-body fields for an OpenAI-compatible endpoint, from
+   * `embedding_extra_body` / `OPEN_SECOND_BRAIN_EMBEDDING_EXTRA_BODY` (a
+   * JSON object). Absent when the key is unset. Never carries a reserved
+   * owned field, and never part of the embedding identity, so declaring or
+   * editing it never triggers a reindex.
+   */
+  readonly extraBody?: Readonly<Record<string, unknown>>;
 }
 
 /**

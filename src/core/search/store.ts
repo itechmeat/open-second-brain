@@ -412,9 +412,21 @@ export class Store {
   }
 
   /**
-   * Atomically replace every chunk for a document. Old vec rows are
-   * removed first; FTS5 stays in sync via the chunks_ai/ad/au triggers.
-   * Returns the new chunk ids in `chunkIndex` order.
+   * Atomically replace every chunk for a document, carrying the stored
+   * vector of every unchanged chunk (same content hash, recorded model
+   * and dimension) and purging only the rest. FTS5 stays in sync via the
+   * chunks_ai/ad/au triggers. Returns the new ids and the carried count.
+   */
+  replaceDocumentChunks(
+    documentId: number,
+    input: ReadonlyArray<chunks.ChunkInput>,
+  ): chunks.ChunkReplacement {
+    return chunks.replaceDocumentChunks(this.db, this.vecExtensionLoaded, documentId, input);
+  }
+
+  /**
+   * {@link Store.replaceDocumentChunks}, returning only the new chunk
+   * ids in `chunkIndex` order.
    */
   replaceChunks(documentId: number, input: ReadonlyArray<chunks.ChunkInput>): number[] {
     return chunks.replaceChunks(this.db, this.vecExtensionLoaded, documentId, input);
@@ -453,10 +465,23 @@ export class Store {
 
   /**
    * Chunks that have no row in `embeddings`. Used by the indexer to
-   * populate vectors after a fresh index or after the model-change drop.
+   * populate vectors after a fresh index or after the model-change drop,
+   * optionally scoped to path prefixes.
    */
-  findChunksWithoutEmbeddings(): Array<{ chunkId: number; content: string }> {
-    return chunks.findChunksWithoutEmbeddings(this.db);
+  findChunksWithoutEmbeddings(
+    scope?: chunks.PendingVectorScope,
+  ): Array<{ chunkId: number; content: string }> {
+    return chunks.findChunksWithoutEmbeddings(this.db, scope);
+  }
+
+  /** How many chunks the scoped census above would return, without their bodies. */
+  countChunksWithoutEmbeddings(scope?: chunks.PendingVectorScope): number {
+    return chunks.countChunksWithoutEmbeddings(this.db, scope);
+  }
+
+  /** How many documents sit under one path prefix of a pending-vector scope. */
+  countDocumentsUnderPrefix(prefix: string): number {
+    return documents.countDocumentsUnderPrefix(this.db, prefix);
   }
 
   // ── embeddings ─────────────────────────────────────────────────────────────
@@ -495,6 +520,11 @@ export class Store {
    */
   embeddingForChunk(chunkId: number): Float32Array | null {
     return vectors.embeddingForChunk(this.db, this.vecExtensionLoaded, chunkId);
+  }
+
+  /** Every stored vector of a document's chunks with its recorded model and dimension. */
+  storedEmbeddingsForDocument(documentId: number): vectors.StoredChunkEmbedding[] {
+    return vectors.storedEmbeddingsForDocument(this.db, this.vecExtensionLoaded, documentId);
   }
 
   getEmbeddingHash(chunkId: number): string | null {

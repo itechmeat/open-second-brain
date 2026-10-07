@@ -17,6 +17,12 @@ import {
   resolveSearchFocusContextPack,
 } from "../../core/config.ts";
 import { resolveSearchConfig } from "../../core/search/index.ts";
+import { SearchError } from "../../core/search/search-error.ts";
+import {
+  discloseSpentQuery,
+  loadBeliefSemanticRelevance,
+  type BeliefSemanticRelevance,
+} from "../../core/brain/belief-semantic.ts";
 import { readActiveSessionFocus } from "../../core/search/session-focus.ts";
 import {
   CONTEXT_PACK_QUERY_MODES,
@@ -59,7 +65,8 @@ import {
 } from "../../core/brain/context-presets.ts";
 import { extractPreCompactRecords } from "../../core/brain/pre-compact-extract.ts";
 import { EventTraceSelectorError, resolveLogEventTraces } from "../../core/brain/event-trace.ts";
-import { gatedOwnerScopeView } from "../../core/brain/owner-scope-view.ts";
+import { gatedOwnerScopeView, ownerScopeView } from "../../core/brain/owner-scope-view.ts";
+import { resolveOwnerScopeDelivery } from "../../core/brain/preferences-collect.ts";
 import { BRAIN_LOG_EVENT_KIND_SET, type BrainLogEventKind } from "../../core/brain/types.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
@@ -68,6 +75,12 @@ import { readableAtContextReachOrUndefined } from "./reach-readable.ts";
 import { reachView } from "../../core/brain/reach-view.ts";
 import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { vaultPathField } from "../vault-path-field.ts";
+import {
+  exceedsMcpQueryCap,
+  MCP_QUERY_CAP_MESSAGE,
+  MCP_QUERY_MAX_CHARS,
+  searchErrorToMcp,
+} from "../search-tools.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import {
   AGENT_SCOPE_SCHEMA,
@@ -111,6 +124,53 @@ function vaultRelative(vault: string, absOrRel: string): string {
   return isAbsolute(absOrRel) ? relative(vault, absOrRel) : absOrRel;
 }
 
+/** Run `fn`, answering a SearchError with its stable code on the wire. */
+async function withSearchErrorsOnWire<T>(
+  fn: () => Promise<T>,
+  refine: (e: SearchError) => SearchError = (e) => e,
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    if (e instanceof SearchError) throw searchErrorToMcp(refine(e));
+    throw e;
+  }
+}
+
+/**
+ * A pack refusal raised after the query embed still names that spend. The
+ * loader's pre-embed check reads every belief in view, while the pack keeps
+ * fewer (no tombstones, chain tips only, and a dimension the query vector
+ * decides), so the embed can be paid and the pack refused all the same.
+ */
+function discloseSpentPackQuery(
+  semantic: BeliefSemanticRelevance | null,
+): (e: SearchError) => SearchError {
+  return (e) => {
+    if (semantic === null || e.code !== "BELIEF_VECTORS_MISSING") return e;
+    return discloseSpentQuery(e, semantic.report);
+  };
+}
+
+/**
+ * The `semantic` member of a semantic-mode response: the one ungated
+ * spend (the query embed) disclosed beside what the pack could score
+ * after the reach filter.
+ */
+function semanticReportField(
+  loaded: BeliefSemanticRelevance,
+  packed: NonNullable<ReturnType<typeof packContext>["semantic"]>,
+): Record<string, unknown> {
+  return {
+    model: loaded.report.model,
+    price_source: loaded.report.priceSource,
+    query_tokens: loaded.report.queryTokens,
+    estimated_usd: loaded.report.estimatedUsd,
+    scored: packed.scored,
+    unembedded: packed.unembedded,
+  };
+}
+
 async function toolBrainContextPack(
   ctx: ServerContext,
   args: Record<string, unknown>,
@@ -137,6 +197,16 @@ async function toolBrainContextPack(
         "brain_context_pack: query_mode requires query; a mode with nothing to read is inert",
       );
     }
+    // The semantic query is embedded once, ungated: a blank one buys nothing.
+    if (queryMode === "semantic" && query.trim() === "") {
+      throw new MCPError(
+        INVALID_PARAMS,
+        "brain_context_pack: query_mode requires a non-empty query",
+      );
+    }
+  }
+  if (query !== undefined && exceedsMcpQueryCap(query)) {
+    throw new MCPError(INVALID_PARAMS, `brain_context_pack: ${MCP_QUERY_CAP_MESSAGE}`);
   }
   const includeLanes = coerceBool(args, "lanes");
   const cacheStable = coerceBool(args, "cache_stable");
@@ -239,37 +309,72 @@ async function toolBrainContextPack(
   // core holds absolute paths; the view answers over vault-relative ones.
   const view = reachView(ctx.vault, contextReach(ctx));
   const remote = view.reach !== TRANSPORT_REACH.local;
-  const report = packContext(ctx.vault, {
-    ...(remote ? { visible: (abs: string) => view.visible(vaultRelative(ctx.vault, abs)) } : {}),
-    maxTokens,
-    ...(agentScope !== undefined ? { agentScope } : {}),
-    ...(densityRanking ? { densityRanking: true } : {}),
-    ...(sessionFocus !== null ? { sessionFocus } : {}),
-    ...(query ? { query } : {}),
-    ...(queryMode !== null ? { queryMode } : {}),
-    ...(includeLanes ? { includeLanes: true } : {}),
-    ...(receipt !== undefined ? { receipt } : {}),
-    ...(adequacy !== undefined ? { recallAdequacy: adequacy } : {}),
-    ...(answerableVerdict !== undefined ? { decisionAnswerable: answerableVerdict } : {}),
-    ...(cacheStable || dedupRepeated
-      ? {
-          transforms: {
-            ...(cacheStable ? { cacheStableOrdering: true } : {}),
-            ...(dedupRepeated ? { deduplicateRepeatedContext: true } : {}),
-          },
-        }
-      : {}),
-    ...(maxCharsPerMemory !== undefined ? { maxCharsPerMemory } : {}),
-    ...(maxTotalChars !== undefined ? { maxTotalChars } : {}),
-    ...(configuredDegradation(ctx.vault) !== undefined
-      ? { degradation: configuredDegradation(ctx.vault)! }
-      : {}),
-    ...(telemetry !== undefined ? { telemetry } : {}),
-    // The synthesized attention-flow block has no page of its own to ask
-    // the reach view about, so a remote caller does not get it (fail
-    // closed, as the per-item filter this replaced did).
-    ...(attentionFlowIds.length > 0 && !remote ? { attentionFlowIds } : {}),
-  });
+  // Semantic mode (Honest Embedding Spend): the one async step - the query
+  // embed and the stored-vector read - happens here, so `packContext`
+  // stays synchronous for every other caller. Every refusal is a named
+  // SearchError: a blocked tier and a missing sqlite-vec from the loader,
+  // before any embed, and `BELIEF_VECTORS_MISSING` from the pack, after
+  // the reach filter and before a receipt is written. The loader reads
+  // only the beliefs this caller's pack can keep - the same reach and
+  // owner views the pack applies - so its own pre-embed refusal never
+  // answers for a withheld belief differently than for an absent one.
+  const semantic =
+    queryMode === "semantic" && query !== undefined
+      ? await withSearchErrorsOnWire(() => {
+          const owners = ownerScopeView(
+            ctx.vault,
+            resolveOwnerScopeDelivery(ctx.vault, agentScope).enforcedScope,
+          );
+          return loadBeliefSemanticRelevance(
+            resolveSearchConfig({ vault: ctx.vault, configPath: ctx.configPath ?? undefined }),
+            query,
+            { reach: view.reach, inView: (rel) => view.visible(rel) && owners.visible(rel) },
+          );
+        })
+      : null;
+  const report = await withSearchErrorsOnWire(
+    async () =>
+      packContext(ctx.vault, {
+        ...(remote
+          ? { visible: (abs: string) => view.visible(vaultRelative(ctx.vault, abs)) }
+          : {}),
+        maxTokens,
+        ...(agentScope !== undefined ? { agentScope } : {}),
+        ...(densityRanking ? { densityRanking: true } : {}),
+        ...(sessionFocus !== null ? { sessionFocus } : {}),
+        ...(query ? { query } : {}),
+        ...(queryMode !== null ? { queryMode } : {}),
+        ...(includeLanes ? { includeLanes: true } : {}),
+        ...(receipt !== undefined ? { receipt } : {}),
+        ...(adequacy !== undefined ? { recallAdequacy: adequacy } : {}),
+        ...(answerableVerdict !== undefined ? { decisionAnswerable: answerableVerdict } : {}),
+        ...(cacheStable || dedupRepeated
+          ? {
+              transforms: {
+                ...(cacheStable ? { cacheStableOrdering: true } : {}),
+                ...(dedupRepeated ? { deduplicateRepeatedContext: true } : {}),
+              },
+            }
+          : {}),
+        ...(maxCharsPerMemory !== undefined ? { maxCharsPerMemory } : {}),
+        ...(maxTotalChars !== undefined ? { maxTotalChars } : {}),
+        ...(configuredDegradation(ctx.vault) !== undefined
+          ? { degradation: configuredDegradation(ctx.vault)! }
+          : {}),
+        ...(telemetry !== undefined ? { telemetry } : {}),
+        // The synthesized attention-flow block has no page of its own to ask
+        // the reach view about, so a remote caller does not get it (fail
+        // closed, as the per-item filter this replaced did).
+        ...(attentionFlowIds.length > 0 && !remote ? { attentionFlowIds } : {}),
+        ...(semantic !== null ? { semanticRelevance: semantic.relevanceByPath } : {}),
+      }),
+    discloseSpentPackQuery(semantic),
+  );
+  const warnings = [
+    ...(report.warnings ?? []),
+    ...(semantic?.warnings ?? []),
+    ...(answerable?.kind === "ignored" ? [answerable.warning] : []),
+  ];
   return {
     vault_path: vaultPathField(ctx),
     max_tokens: report.maxTokens,
@@ -304,13 +409,9 @@ async function toolBrainContextPack(
     // one surface that could not say a memory it injected is contested.
     // `brain_pre_compress_pack` has forwarded them all along; absent when
     // empty, so a warning-free pack stays byte-identical.
-    ...(report.warnings || answerable?.kind === "ignored"
-      ? {
-          warnings: [
-            ...(report.warnings ?? []),
-            ...(answerable?.kind === "ignored" ? [answerable.warning] : []),
-          ],
-        }
+    ...(warnings.length > 0 ? { warnings } : {}),
+    ...(semantic !== null && report.semantic !== undefined
+      ? { semantic: semanticReportField(semantic, report.semantic) }
       : {}),
     ...(adequacy !== undefined
       ? {
@@ -937,6 +1038,7 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         query: {
           type: "string",
+          maxLength: MCP_QUERY_MAX_CHARS,
           description:
             "Optional query. Read as a case/Unicode-insensitive substring filter on topic + principle unless `query_mode` says otherwise.",
         },
@@ -944,7 +1046,7 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "string",
           enum: [...CONTEXT_PACK_QUERY_MODES],
           description:
-            "How `query` is read: `substring` (default) filters, dropping misses as `filter-miss`; `ranked` orders candidates by token overlap and excludes none.",
+            "How `query` is read: `substring` (default) drops misses; `ranked` orders by token overlap; `semantic` orders by stored belief vectors, embedding the query once.",
         },
         focus_session: {
           type: "string",

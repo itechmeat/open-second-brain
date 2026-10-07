@@ -80,10 +80,11 @@
  * absent `lint` key must mean clean, and only that.
  */
 
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { posix, resolve } from "node:path";
+import { lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { join, posix, resolve } from "node:path";
 
 import { vaultRelative } from "../path-safety.ts";
+import { ROUTE_STAGE, timeStageSync } from "../route-scope.ts";
 import { compositeScopeKey, scopeFromFrontmatter } from "../scope-key.ts";
 import { parseFrontmatterText } from "../vault.ts";
 import type { FrontmatterMap } from "../types.ts";
@@ -91,12 +92,21 @@ import { collectAllBasenames } from "./doctor/records.ts";
 import {
   LINT_CONSOLIDATE_KIND,
   createMergedLinkResolver,
+  type MergedLinkResolution,
   type MergedLinkResolver,
 } from "./lint-consolidate.ts";
 import { nextCommandField, type NextCommandField } from "./next-step.ts";
+import { pageIdToPath, reportMergeChain } from "./page-meta/page-id.ts";
+import { brainDirs } from "./paths.ts";
 import { loadSchemaPack } from "./schema-pack.ts";
 import type { BrainSchemaVocabulary } from "./schema-vocab.ts";
-import { jaccard, tokenise } from "./similarity.ts";
+import {
+  NEAR_DUPLICATE_THRESHOLDS,
+  findNearDuplicates,
+  type NearDuplicatePoolEntry,
+  type ReadableRef,
+} from "./near-duplicate.ts";
+import { tokenise } from "./similarity.ts";
 import type { DoctorSeverity } from "./types.ts";
 import { WIKILINK_TARGET_RE, isBrainArtifactId, normaliseWikilinkTarget } from "./wikilink.ts";
 import { ARTIFACT_MAX_BYTES, validateArtifact } from "./write-session/validate.ts";
@@ -122,10 +132,10 @@ const BROKEN_WIKILINK_CODE = "broken-wikilink";
  * Near-duplicate bar (t_d30c0548): the jaccard score at or above which the
  * authored body counts as closely matching an existing page. Deliberately
  * high - near-DUPLICATE claims near-identity, unlike the 0.5 contradiction
- * precedent that answers "same subject" - and a named constant rather than
- * config, so promoting it after real-world noise is a one-line change.
+ * precedent that answers "same subject". An alias of the kernel's one
+ * threshold table, so the write hint cannot drift from it.
  */
-export const NEAR_DUPLICATE_JACCARD = 0.8;
+export const NEAR_DUPLICATE_JACCARD = NEAR_DUPLICATE_THRESHOLDS.writeHint;
 
 /** Code the near-duplicate detector reports under. */
 export const NEAR_DUPLICATE_CODE = "near-duplicate";
@@ -198,7 +208,7 @@ const UNNAMED_FAILURE_CODE = "unknown";
  * identifiers and integers cross this boundary, never a path and never an OS
  * message.
  */
-function failureCode(err: unknown): string {
+export function failureCode(err: unknown): string {
   const code = (err as NodeJS.ErrnoException | null)?.code;
   if (typeof code === "string" && code.length > 0) return code;
   const name = (err as Error | null)?.name;
@@ -271,6 +281,19 @@ export interface PageLintReport {
   readonly candidates_skipped?: number;
   /** Sibling pages the near-duplicate check could not read, each named. Present only when any. */
   readonly candidates_unreadable?: ReadonlyArray<PageLintCandidateSkip>;
+  /**
+   * Whether the near-duplicate check looked beyond the written pages'
+   * directories. Present only when widening is on; `used` alone is not
+   * something to say, `index_unavailable` is.
+   */
+  readonly widening?: NearDuplicateWideningStatus;
+  /**
+   * Why widening reported `index_unavailable`: the search error code, the
+   * errno code or the error name ({@link failureCode}), so a missing index,
+   * a locked or corrupt one and a defect read differently. Present only
+   * with that status.
+   */
+  readonly widening_detail?: string;
 }
 
 /** A sibling page the near-duplicate check could not read, and the errno code why. */
@@ -279,10 +302,44 @@ export interface PageLintCandidateSkip {
   readonly detail: string;
 }
 
+/**
+ * Whether the near-duplicate hint looked beyond the written pages' own
+ * directories: `used` when the keyword index answered, `index_unavailable`
+ * when it could not be opened or queried. Absent from a report when
+ * widening is off.
+ */
+export type NearDuplicateWideningStatus = "used" | "index_unavailable";
+
+/** How one call to {@link lintWrittenPages} is bounded. */
+export interface LintWrittenPagesOptions {
+  /**
+   * The caller's reach. Required, never defaulted: a sibling page the
+   * caller may not read is dropped before it is scored and before the
+   * census counts it, and a wikilink target or merge-chain hop the caller
+   * may not read answers as absent, so neither a finding nor a census
+   * number can disclose it. An operator-reach caller passes `READ_ALL_REFS`.
+   */
+  readonly readable: ReadableRef;
+  /**
+   * Candidates from outside the written pages' directories, collected by
+   * `page-lint-widening.ts`. Scored under the same scope-bucket and reach
+   * rules; a page already in a written page's directory counts once.
+   */
+  readonly extraCandidates?: ReadonlyArray<NearDuplicateCandidate>;
+  /** Whether widening ran; absent when it is off. */
+  readonly widening?: NearDuplicateWideningStatus;
+  /** Why widening was unavailable; see {@link PageLintReport.widening_detail}. */
+  readonly wideningDetail?: string;
+}
+
 /** What building the near-duplicate candidate index left out, by count and by name. */
 export interface NearDuplicateCensus {
   readonly candidatesSkipped: number;
   readonly unreadable: ReadonlyArray<PageLintCandidateSkip>;
+  /** Whether widening ran; absent when it is off. */
+  readonly widening?: NearDuplicateWideningStatus;
+  /** Why widening was unavailable; see {@link PageLintReport.widening_detail}. */
+  readonly wideningDetail?: string;
 }
 
 /**
@@ -374,17 +431,42 @@ export interface LintContext {
    * same scope bucket) needs nothing vault-wide.
    */
   readonly nearDuplicateCandidates: ReadonlyMap<string, ReadonlyArray<NearDuplicateCandidate>>;
+  /**
+   * Candidates from outside the written pages' directories (widening).
+   * Every written page is compared with them as well as with its own
+   * directory's candidates.
+   */
+  readonly extraCandidates?: ReadonlyArray<NearDuplicateCandidate>;
+  /**
+   * The caller's reach, applied again by the kernel before any score, and
+   * by the wikilink and merged-link checks, so a withheld page answers as
+   * an absent one on every finding.
+   */
+  readonly readable: ReadableRef;
   /** What the candidate index left out; absent means nothing was. */
   readonly nearDuplicateCensus?: NearDuplicateCensus;
 }
 
 /**
  * The near-duplicate findings for one written page: the authored body
- * against every candidate in the same directory and the same composite
- * scope bucket, at or above {@link NEAR_DUPLICATE_JACCARD}. The page
- * itself is never its own candidate - a batch can write two lookalikes,
- * but a single write cannot resemble itself - and the score rides the
- * message so an operator judgement call is informed.
+ * against every candidate in the same directory - plus every widened
+ * candidate - in the same composite scope bucket, scored through the
+ * shared kernel at {@link NEAR_DUPLICATE_JACCARD}. The page itself is
+ * never its own candidate - a batch can write two lookalikes, but a
+ * single write cannot resemble itself - and the score rides the message
+ * so an operator judgement call is informed.
+ *
+ * A same-directory finding keeps the message shipped since v1.64.0; a
+ * widened one appends `method=<method>`, so a reader can tell the hint
+ * came from the keyword index. One deliberate change from v1.73.0: the
+ * kernel scores nothing below `NEAR_DUPLICATE_MIN_TOKENS` body
+ * tokens, on either side, so two short stubs that share their few words
+ * by accident (formerly a jaccard=1.000 finding) are no longer reported.
+ * The kernel's own match order never reaches the receipt, which is ranked
+ * by {@link comparePageLintFindings}. The pool is bounded upstream (the
+ * directory cap is counted in `candidates_skipped`, the widening pull by
+ * its top-k), so the kernel's own cap is set to the pool size and never
+ * drops a candidate unreported.
  */
 function nearDuplicateFindings(
   ctx: LintContext,
@@ -392,28 +474,93 @@ function nearDuplicateFindings(
   meta: FrontmatterMap,
   body: string,
 ): PageLintFinding[] {
-  const out: PageLintFinding[] = [];
-  const scopeKey = compositeScopeKey(scopeFromFrontmatter(meta));
-  const tokens = tokenise(body);
-  for (const candidate of ctx.nearDuplicateCandidates.get(posix.dirname(page)) ?? NO_CANDIDATES) {
-    if (candidate.page === page) continue;
-    if (candidate.scopeKey !== scopeKey) continue;
-    const sim = jaccard(tokens, candidate.tokens);
-    if (sim < NEAR_DUPLICATE_JACCARD) continue;
-    out.push(
-      finding(
-        "warning",
-        NEAR_DUPLICATE_CODE,
-        page,
-        candidate.page,
-        `body resembles [[${candidate.page}]] jaccard=${sim.toFixed(3)} (threshold ${NEAR_DUPLICATE_JACCARD})`,
-      ),
-    );
+  const local = ctx.nearDuplicateCandidates.get(posix.dirname(page)) ?? NO_CANDIDATES;
+  const widened = new Set<string>();
+  const pool: NearDuplicatePoolEntry[] = local.map(poolEntry);
+  const inPool = new Set(local.map((candidate) => candidate.page));
+  for (const candidate of ctx.extraCandidates ?? NO_CANDIDATES) {
+    if (inPool.has(candidate.page)) continue;
+    inPool.add(candidate.page);
+    widened.add(candidate.page);
+    pool.push(poolEntry(candidate));
   }
-  return out;
+  const { matches } = findNearDuplicates({ ref: page, tokens: tokenise(body) }, pool, {
+    threshold: NEAR_DUPLICATE_JACCARD,
+    readable: ctx.readable,
+    bucket: compositeScopeKey(scopeFromFrontmatter(meta)),
+    cap: pool.length,
+  });
+  return matches.map((match) => {
+    const evidence = `body resembles [[${match.ref}]] jaccard=${match.score.toFixed(3)} (threshold ${NEAR_DUPLICATE_JACCARD})`;
+    const message = widened.has(match.ref) ? `${evidence} method=${match.method}` : evidence;
+    return finding("warning", NEAR_DUPLICATE_CODE, page, match.ref, message);
+  });
 }
 
-function lintOnePage(ctx: LintContext, page: string, raw: string): PageLintFinding[] {
+function poolEntry(candidate: NearDuplicateCandidate): NearDuplicatePoolEntry {
+  return { ref: candidate.page, tokens: candidate.tokens, bucket: candidate.scopeKey };
+}
+
+const NOT_MERGED: MergedLinkResolution = Object.freeze({ canonical: null, unresolvable: null });
+
+/** Whether `id` names a Brain page on disk the caller may not read. */
+function isWithheldPageId(vault: string, ctx: LintContext, id: string): boolean {
+  const path = pageIdToPath(vault, id);
+  return path !== null && !ctx.readable(vaultRelative(path, vault));
+}
+
+/**
+ * The merge-chain answer for one wikilink target at the caller's reach.
+ *
+ * The vault-wide resolver reads the `merged_into:` pointer of every page
+ * on the chain. A page the caller may not read answers as an absent one
+ * would: the walk ends at its id, the way it ends at a page with no file.
+ * So a withheld target is not merged at all, and a chain that reaches a
+ * withheld page names that page's id as the canonical end and nothing it
+ * points at. Only a link the resolver found merged pays the second walk.
+ */
+function mergedAtReach(vault: string, ctx: LintContext, target: string): MergedLinkResolution {
+  const merged = ctx.mergedLinks.resolve(target);
+  if (merged.canonical === null && merged.unresolvable === null) return merged;
+  const { visited } = reportMergeChain(vault, target);
+  const withheld = visited.findIndex((id) => isWithheldPageId(vault, ctx, id));
+  if (withheld === -1) return merged;
+  if (withheld === 0) return NOT_MERGED;
+  return Object.freeze({ canonical: visited[withheld]!, unresolvable: null });
+}
+
+/**
+ * Whether a Brain artifact named `target` exists where the caller may read
+ * it. `basenames` answers the vault-wide question once per call; a hit is
+ * asked again per directory `collectAllBasenames` indexes, so an artifact
+ * the caller may not read answers as an absent one. Only a linked name
+ * that exists pays the per-directory check.
+ */
+function hasReadableArtifact(vault: string, ctx: LintContext, target: string): boolean {
+  if (!ctx.basenames.has(target)) return false;
+  const dirs = brainDirs(vault);
+  for (const dir of [
+    dirs.brain,
+    dirs.inbox,
+    dirs.processed,
+    dirs.archived,
+    dirs.preferences,
+    dirs.retired,
+    dirs.log,
+  ]) {
+    const absolute = join(dir, `${target}.md`);
+    if (!ctx.readable(vaultRelative(absolute, vault))) continue;
+    if (lstatSync(absolute, { throwIfNoEntry: false })?.isFile() === true) return true;
+  }
+  return false;
+}
+
+function lintOnePage(
+  vault: string,
+  ctx: LintContext,
+  page: string,
+  raw: string,
+): PageLintFinding[] {
   const out: PageLintFinding[] = [];
   const [meta, body] = parseFrontmatterText(raw);
   const schemaType = declaredSchemaType(meta);
@@ -425,7 +572,7 @@ function lintOnePage(ctx: LintContext, page: string, raw: string): PageLintFindi
     // note, and is nobody's here to flag - the same boundary the doctor
     // and the orphaned-reference fixer draw.
     if (!isBrainArtifactId(target)) continue;
-    const merged = ctx.mergedLinks.resolve(target);
+    const merged = mergedAtReach(vault, ctx, target);
     if (merged.unresolvable !== null) {
       out.push(
         finding(
@@ -450,7 +597,7 @@ function lintOnePage(ctx: LintContext, page: string, raw: string): PageLintFindi
       );
       continue;
     }
-    if (!ctx.basenames.has(target)) {
+    if (!hasReadableArtifact(vault, ctx, target)) {
       out.push(
         finding(
           "warning",
@@ -462,7 +609,11 @@ function lintOnePage(ctx: LintContext, page: string, raw: string): PageLintFindi
       );
     }
   }
-  out.push(...nearDuplicateFindings(ctx, page, meta, body));
+  out.push(
+    ...timeStageSync(ROUTE_STAGE.nearDuplicateLookup, () =>
+      nearDuplicateFindings(ctx, page, meta, body),
+    ),
+  );
   return out;
 }
 
@@ -510,10 +661,15 @@ function canonicalPage(vault: string, page: string): string {
  * `unavailable` slot like every other context-building failure. A page
  * spelled outside the vault ({@link VAULT_ESCAPE_PREFIX}) collects no
  * candidates at all: the walk stops at the vault boundary.
+ *
+ * A sibling outside the caller's reach (`readable`) is dropped at the
+ * listing, before it is stat'ed: it is never scored, never named as
+ * unreadable and never counted against the cap.
  */
 function collectNearDuplicateCandidates(
   vault: string,
   pages: ReadonlyArray<string>,
+  readable: ReadableRef,
 ): {
   readonly index: ReadonlyMap<string, ReadonlyArray<NearDuplicateCandidate>>;
   readonly census: NearDuplicateCensus;
@@ -529,15 +685,17 @@ function collectNearDuplicateCandidates(
   let candidatesSkipped = 0;
   for (const directory of directories) {
     // Stat every sibling (cheap), then read only the newest few.
-    const siblings: Array<{ absolute: string; size: number; mtimeMs: number }> = [];
+    const siblings: Array<{ page: string; absolute: string; size: number; mtimeMs: number }> = [];
     for (const name of readdirSync(resolve(vault, directory))) {
       if (!name.endsWith(MARKDOWN_EXT)) continue;
       const absolute = resolve(vault, directory, name);
+      const page = canonicalPage(vault, absolute);
+      if (!readable(page)) continue;
       try {
         const stat = statSync(absolute);
-        siblings.push({ absolute, size: stat.size, mtimeMs: stat.mtimeMs });
+        siblings.push({ page, absolute, size: stat.size, mtimeMs: stat.mtimeMs });
       } catch (err) {
-        unreadable.push({ page: canonicalPage(vault, absolute), detail: failureCode(err) });
+        unreadable.push({ page, detail: failureCode(err) });
       }
     }
     const newest = siblings.toSorted((a, b) => b.mtimeMs - a.mtimeMs);
@@ -550,12 +708,12 @@ function collectNearDuplicateCandidates(
       try {
         const [meta, body] = parseFrontmatterText(readFileSync(sibling.absolute, "utf8"));
         candidates.push({
-          page: canonicalPage(vault, sibling.absolute),
+          page: sibling.page,
           scopeKey: compositeScopeKey(scopeFromFrontmatter(meta)),
           tokens: tokenise(body),
         });
       } catch (err) {
-        unreadable.push({ page: canonicalPage(vault, sibling.absolute), detail: failureCode(err) });
+        unreadable.push({ page: sibling.page, detail: failureCode(err) });
       }
     }
     index.set(directory, candidates);
@@ -579,18 +737,37 @@ function collectNearDuplicateCandidates(
  * nothing here walks vault content beyond the written pages' own
  * directories - the near-duplicate candidate index reads each of those
  * once per call, sized against the same artifact cap as the pages.
+ *
+ * Every finding answers at the caller's reach (`opts.readable`): a
+ * near-duplicate candidate, a wikilink target and a merge-chain hop the
+ * caller may not read all read as absent. The written pages themselves
+ * are always linted.
  */
-export function lintWrittenPages(vault: string, pages: ReadonlyArray<string>): PageLintReport {
+export function lintWrittenPages(
+  vault: string,
+  pages: ReadonlyArray<string>,
+  opts: LintWrittenPagesOptions,
+): PageLintReport {
   if (pages.length === 0) return emptyReport();
   let ctx: LintContext;
   try {
-    const nearDuplicates = collectNearDuplicateCandidates(vault, pages);
+    // The candidate walk and the per-page scoring are the near-duplicate
+    // lookup; under an open route scope both add to that one stage.
+    const nearDuplicates = timeStageSync(ROUTE_STAGE.nearDuplicateLookup, () =>
+      collectNearDuplicateCandidates(vault, pages, opts.readable),
+    );
     ctx = {
       basenames: collectAllBasenames(vault),
       vocabulary: loadSchemaPack(vault).vocabulary,
       mergedLinks: createMergedLinkResolver(vault),
       nearDuplicateCandidates: nearDuplicates.index,
-      nearDuplicateCensus: nearDuplicates.census,
+      ...(opts.extraCandidates !== undefined ? { extraCandidates: opts.extraCandidates } : {}),
+      readable: opts.readable,
+      nearDuplicateCensus: {
+        ...nearDuplicates.census,
+        ...(opts.widening !== undefined ? { widening: opts.widening } : {}),
+        ...(opts.wideningDetail !== undefined ? { wideningDetail: opts.wideningDetail } : {}),
+      },
     };
   } catch (err) {
     return emptyReport({
@@ -643,7 +820,7 @@ export function lintPagesWithContext(
       continue;
     }
     try {
-      detected.push(...lintOnePage(ctx, page, raw));
+      detected.push(...lintOnePage(vault, ctx, page, raw));
     } catch (err) {
       // One page's failure is one page's news. Reporting it as `unavailable`
       // threw away the findings already collected for EARLIER pages and the
@@ -669,6 +846,8 @@ export function lintPagesWithContext(
     ...(census !== undefined && census.unreadable.length > 0
       ? { candidates_unreadable: Object.freeze([...census.unreadable]) }
       : {}),
+    ...(census?.widening !== undefined ? { widening: census.widening } : {}),
+    ...(census?.wideningDetail !== undefined ? { widening_detail: census.wideningDetail } : {}),
   });
 }
 
@@ -684,7 +863,8 @@ function hasSomethingToSay(report: PageLintReport): boolean {
     report.skipped.length > 0 ||
     report.unavailable !== undefined ||
     report.candidates_skipped !== undefined ||
-    report.candidates_unreadable !== undefined
+    report.candidates_unreadable !== undefined ||
+    report.widening === "index_unavailable"
   );
 }
 

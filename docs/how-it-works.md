@@ -660,7 +660,7 @@ are mirrored in MCP; destructive operations are CLI-only by design.
 | Toggle pin                 | `o2b brain pin / unpin`                             | — (CLI-only)           | flips `pinned` field; regenerates `Brain/active.md`                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | Protect Brain/             | `o2b brain protect / unprotect`                     | — (CLI-only)           | machine-enforced deny rules for `claudecode` / `codex` runtimes; sidecar manifest at `.open-second-brain/protect.lock.json`                                                                                                                                                                                                                                                                                                                                                                                    |
 | Restore snapshot           | `o2b brain rollback`                                | — (CLI-only)           | overwrites Brain/ from snapshot; from v0.10.6 aborts on drift unless `--force-rollback`, see [Snapshots and rollback](#snapshots-and-rollback)                                                                                                                                                                                                                                                                                                                                                                 |
-| Upgrade managed files      | `o2b brain upgrade`                                 | — (CLI-only)           | migrates the three release-owned files (`_brain.yaml`, `_BRAIN.md`, `_OPEN_SECOND_BRAIN.md`) forward. `_brain.yaml` is text-merged additively (user values, comments, and ordering preserved); the other two are byte-compared and overwritten. `--dry-run` prints a per-file plan; `--check` exits 2 on pending updates (CI-friendly); `--apply --yes` takes an `upgrade-<ts>` snapshot before rewriting. After a plugin update the MCP server and the `SessionStart` hook run the same upgrade in a detached worker, off the start-up path, and back off after a failure (see `docs/updating.md`).                                                                                                     |
+| Upgrade managed files      | `o2b brain upgrade`                                 | — (CLI-only)           | migrates the three release-owned files (`_brain.yaml`, `_BRAIN.md`, `_OPEN_SECOND_BRAIN.md`) forward. `_brain.yaml` is text-merged additively (user values, comments, and ordering preserved); the other two are byte-compared and overwritten. `--dry-run` prints a per-file plan; `--check` exits 2 on pending updates (CI-friendly); `--apply --yes` applies the plan it showed: a file edited after the plan was read is refused before the `upgrade-<ts>` snapshot, and again at each write, instead of being overwritten. After a plugin update the MCP server and the `SessionStart` hook run the same upgrade in a detached worker, off the start-up path, and back off after a failure (see `docs/updating.md`).                                                                                                     |
 | Export active prefs        | `o2b brain export --format json\|llms-txt`          | — (CLI-only)           | read-only dump of `confirmed \| unconfirmed \| quarantine` preferences from `Brain/preferences/`. `--out <path>` writes a file (refuses to overwrite without `--force`); default sink is stdout. Retired and signal artifacts are deliberately excluded.                                                                                                                                                                                                                                                       |
 | Export a transcript corpus | `o2b brain export --format transcripts-jsonl --transcripts <file\|dir>` | — (CLI-only) | since v1.50.0: one JSON object per line, one per CONVERSATION, built from recorded session logs. Reads no vault. Messages carry role, text and the NAMES of the tools a turn called, never the tool inputs. `--runtime` filters by adapter; `--since`/`--until` select whole conversations by their start. Guarded record by record; a secret-shaped identifier refuses the whole export and writes nothing. Full contract in [`cli-reference.md`](cli-reference.md).                                          |
 | Force-directed explorer    | `o2b brain explorer [--port \| --export]`           | — (CLI-only)           | live HTTP on `127.0.0.1` (default `:7777`) or single-file HTML at `<path>`; renders preferences + retired as a graph; zero backend. Keyboard-accessible `<ul role="listbox">` mirror of visible nodes (ArrowUp/Down/Home/End/Enter/Escape); layout + filter state persisted to `localStorage` under `osb-explorer-layout:<vault_basename>`; "Reset layout" button clears the key.                                                                                                                              |
@@ -1141,7 +1141,27 @@ Key behaviours, all driven from `Brain/_brain.yaml`-free `search_*` /
   (which resolves to `openai-compat` config after the built-ins). One
   `signature.ts` kernel canonicalises `<provider>:<model>:<dimension>`
   and prices it; `embedding_cost_gate_usd` refuses an over-budget run
-  unless `--force-cost`, and the local / unlisted-model price is 0.
+  unless `--force-cost`.
+- **Embedding spend (v1.72.0).** A price quote names its source:
+  `builtin` (the frozen table; the local embedder is builtin and free),
+  `operator` (the `embedding_price_model` / `embedding_price_usd_per_mtok`
+  pair, which wins over the table for the model it names) or `unknown`.
+  One spend plan owns the pending census (optionally scoped by path
+  prefix), the model resolution, the token estimate, the quote and the
+  gate verdict. The embedding phase, the maintenance preview, the
+  backfill dry run and the `search status` refresh estimate all read it,
+  so what is announced, refused, spent and receipted is one computation.
+  An unknown price stays unknown (`null`, printed `price unknown`) rather
+  than reading as $0, and under a positive gate it refuses with
+  `EMBEDDING_COST_UNPRICED` unless forced. Price is never part of the
+  embedding identity.
+- **Vector carry-over (v1.72.0).** Replacing a document's chunks keeps
+  the stored vector of every new chunk whose content hash matches an old
+  chunk of the same document (duplicates match as a multiset), as long as
+  the old row's model and dimension equal the identity `index_state`
+  records; nothing is carried while that identity is unrecorded. Only the
+  vectors not carried are purged, and the index run reports the count as
+  `embeddingsReused`.
 - **Fusion modes (v0.36.0).** `search_fusion_mode` is `linear` (default,
   the weighted sum below) or `rrf` - Reciprocal Rank Fusion, which scores
   each candidate `Σ w_lane/(search_rrf_k + rank_in_lane)` across the
@@ -1222,6 +1242,38 @@ semantic_weight·cosine + link_boost + recency_boost + entity_boost)`
   throws a typed `SearchError` so a misconfigured run cannot hide.
   The data-state case (zero embeddings) always warns and skips —
   running `o2b search index --embeddings` is the right answer there.
+- **Semantic belief order (v1.72.0).** `brain_context_pack` with
+  `query_mode: "semantic"` orders the curated belief notes by meaning
+  rather than by shared words. The query is embedded once (with the
+  query prefix, through the configured provider), and each belief note
+  scores the maximum cosine over its stored chunk vectors; nothing new
+  is embedded for the notes themselves. Only vectors written by the
+  configured model at the query's dimension count, and the scores are
+  read only for candidates that survive the reach filter. A note without
+  a usable vector sorts after the scored notes of its tier and is named in the response's
+  `semantic.unembedded`. The mode refuses by name when the semantic tier
+  is blocked, when sqlite-vec is not loadable, and when no kept
+  candidate has a usable vector (`BELIEF_VECTORS_MISSING`, naming
+  `o2b search vector-backfill --path Brain/preferences/ --path Brain/retired/ --apply`). The
+  query embed is disclosed (model, price source, tokens, estimate); a
+  remote caller's embed is refused with `EMBEDDING_COST_UNPRICED` when
+  the model has no known price and `embedding_cost_gate_usd` is
+  positive, while a local caller's embed is not gated, as for `search`.
+- **One query-embed gateway (v1.73.0).** The search lane and the
+  semantic belief order ask the same gateway whether, and with what
+  text, a query is embedded. It applies the caller's reach and the
+  price gate before any provider exists (a caller that is not local,
+  under a positive `embedding_cost_gate_usd`, on an unpriced model, is
+  refused), then fits the query, instruction prefix included, to the
+  effective input window: `embedding_input_window_tokens`, then the
+  curated model table, then unknown, which cuts nothing. The cut is at a
+  code-point boundary under the ceiling token estimate, so it never sends
+  more than the window and treats every language alike. A refused or cut
+  query is disclosed by trail code (`semantic-cost-unpriced`,
+  `semantic-query-truncated`, and `semantic-query-empty-fit` when the
+  instruction prefix alone fills the window). A refused answer is never
+  cached; a cut one is cached under a key that carries the effective
+  window and the query prefix, so a changed window re-keys it.
 - **Atomic reindex.** `o2b search reindex` writes to
   `brain.sqlite.new`, renames to `brain.sqlite`, and keeps the
   previous file as `brain.sqlite.bak`. If the main file is missing on

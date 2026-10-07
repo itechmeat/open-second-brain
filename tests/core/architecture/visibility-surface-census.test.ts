@@ -343,6 +343,11 @@ const NOTE_CONTENT_PRODUCERS: ReadonlyArray<ProducerRule> = Object.freeze([
   },
   { specifierIncludes: "/brain/diarization.ts", identifiers: ["diarize"] },
   { specifierIncludes: "/brain/recompile.ts", identifiers: ["planRecompile"] },
+  // The write-receipt lint names a near-duplicate sibling page by path and
+  // counts the siblings it skipped, so every note-write tool that returns
+  // through the shared receipt envelope hands paths to its caller.
+  { specifierIncludes: "/brain/page-lint.ts", identifiers: ["lintWrittenPages"] },
+  { specifierIncludes: "/notes-tools.ts", identifiers: ["noteWriteResult"] },
 ]);
 
 /**
@@ -574,8 +579,13 @@ function reasonProblems(entries: ReadonlyArray<VisibilitySurfaceEntry>): {
  * `brain_derive_fact` and `brain_scaffold_stub`, which accepted a
  * withheld premise or source, and `brain_note_lifecycle` on the
  * file-level rule.
+ *
+ * 76 before the vocabulary gained the write-receipt lint and the shared
+ * receipt envelope. The four new names are `brain_create_note`,
+ * `brain_update_note`, `brain_append_note` and `brain_write_batch`, whose
+ * near-duplicate hint named sibling pages the caller could not read.
  */
-const MCP_TOOL_POPULATION_SIZE = 76;
+const MCP_TOOL_POPULATION_SIZE = 80;
 /** Measured: MCP resources + templates. */
 const MCP_RESOURCE_POPULATION_SIZE = 8;
 /** Measured: hand-enumerated CLI verb mirrors. */
@@ -635,12 +645,14 @@ describe("visibility surface census", () => {
       expect(covered).toEqual([
         "brain_agent_diff",
         "brain_agent_query",
+        "brain_append_note",
         "brain_apply_evidence",
         "brain_backlinks",
         "brain_bridges",
         "brain_claims",
         "brain_clusters",
         "brain_context",
+        "brain_create_note",
         "brain_dead_ends",
         "brain_decision",
         "brain_deep_synthesis",
@@ -678,6 +690,8 @@ describe("visibility surface census", () => {
         "brain_tiers",
         "brain_trigger",
         "brain_unlinked_mentions",
+        "brain_update_note",
+        "brain_write_batch",
         "brain_writes",
         "schema_inspect",
         "second_brain_query",

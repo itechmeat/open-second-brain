@@ -29,6 +29,9 @@ import { listRecallSources } from "./recall-sources.ts";
 
 export type SearchOriginKind = "active" | "profile" | "source" | "shared";
 
+/** Alias and label of the active vault's origin. */
+export const LOCAL_ORIGIN = "local";
+
 /** Label of the shared namespace: one key, so one origin, so no namespace segment. */
 const SHARED_ORIGIN_LABEL = "shared";
 
@@ -70,7 +73,7 @@ export function listSearchOrigins(
 ): ReadonlyArray<SearchOrigin> {
   const activeResolved = resolve(activeVault);
   const seen = new Set<string>([activeResolved]);
-  const origins: SearchOrigin[] = [origin("local", "local", activeResolved, "active")];
+  const origins: SearchOrigin[] = [origin(LOCAL_ORIGIN, LOCAL_ORIGIN, activeResolved, "active")];
   for (const profile of listProfiles(configPath).profiles) {
     const vault = resolve(profile.vault);
     if (seen.has(vault)) continue;

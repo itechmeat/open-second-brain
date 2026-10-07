@@ -186,6 +186,13 @@ function describeDeadLetter(outcome: DeadLetterOutcome): string {
 export interface MinedTurn {
   readonly turnId: string;
   readonly text: string;
+  /**
+   * The turn's stored timestamp, verbatim; "" when the source has none.
+   * Never a formatted `Date` and never the plan's clock: the caller grounds
+   * a relative time bound against it, so an invented value would ground it
+   * against the wrong day.
+   */
+  readonly timestamp: string;
 }
 
 /** Phase-one report: what will be mined, and the one envelope that mines it. */
@@ -290,10 +297,13 @@ export interface CommitExtractedSignalsOptions {
 // ----- Semantic rules the descriptor language cannot express ---------------
 
 /**
- * Cap and floor, registered once at module scope. Both read across the
- * payload rather than one value at a time - the cap counts the whole list,
- * and the floor compares a number to a limit the descriptor cannot name -
- * so they belong here rather than in {@link EXTRACTED_SIGNALS_SHAPE}.
+ * Cap, floor, topic uniqueness and interval sanity, registered once at
+ * module scope. Each reads across the payload or inside a value rather
+ * than one value at a time - the cap counts the whole list, the floor
+ * compares a number to a limit the descriptor cannot name, uniqueness
+ * compares items with each other, and an interval compares the two dates
+ * inside one principle - so they belong here rather than in
+ * {@link EXTRACTED_SIGNALS_SHAPE}.
  *
  * Registration is a module side effect on purpose: the registry is
  * fail-closed, so a lane that forgot to register refuses its own writes
@@ -325,8 +335,86 @@ registerResponseCheck(EXTRACTED_SIGNALS_SURFACE, (payload) => {
       );
     }
   });
+  violations.push(...duplicateTopicViolations(items));
+  violations.push(...intervalViolations(items));
   return violations;
 });
+
+/**
+ * An ISO interval inside a principle, the form the dream pass turns into
+ * a `[valid_from, valid_until)` window. Global so every interval in one
+ * principle is checked, not only the first.
+ */
+const PRINCIPLE_INTERVAL_RE = /\b(\d{4}-\d{2}-\d{2})\/(\d{4}-\d{2}-\d{2})\b/g;
+
+/**
+ * One violation per interval in a principle that names an impossible
+ * calendar date or ends on or before it starts. Either one yields a window
+ * that is never active, and nothing downstream would say why, so the
+ * payload is refused here where the caller can still correct it.
+ */
+function intervalViolations(items: ReadonlyArray<unknown>): SemanticViolation[] {
+  const violations: SemanticViolation[] = [];
+  items.forEach((item, index) => {
+    const principle = (item as { principle?: unknown }).principle;
+    if (typeof principle !== "string") return;
+    for (const [interval, start, end] of principle.matchAll(PRINCIPLE_INTERVAL_RE)) {
+      const impossible = [start!, end!].find((date) => !isCalendarDate(date));
+      const message =
+        impossible !== undefined
+          ? `interval ${interval} names ${impossible}, which is not a calendar date`
+          : end! <= start!
+            ? `interval ${interval} must end after it starts; its end date is exclusive, the day after the last day the rule holds`
+            : null;
+      if (message === null) continue;
+      violations.push(
+        semanticViolation(
+          SEMANTIC_VIOLATION_CODES.threshold,
+          `${SHAPE_ROOT_PATH}.items[${index}].principle`,
+          message,
+        ),
+      );
+    }
+  });
+  return violations;
+}
+
+/** Whether a `YYYY-MM-DD` string names a real day, so `2026-02-30` does not. */
+function isCalendarDate(date: string): boolean {
+  const parsed = new Date(`${date}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date;
+}
+
+/**
+ * One violation per item that repeats an earlier item's topic, naming both
+ * indices. The comparison is exact: two items under one topic are one rule
+ * stated twice or two rules filed under one name, and the lane cannot tell
+ * which - so the payload is refused whole rather than one of them kept by a
+ * guess. A fuzzy comparison of principles is deliberately absent: two short
+ * rules of opposite meaning read alike, and one false refusal here would
+ * drop every valid signal in the run.
+ */
+function duplicateTopicViolations(items: ReadonlyArray<unknown>): SemanticViolation[] {
+  const violations: SemanticViolation[] = [];
+  const firstIndex = new Map<string, number>();
+  items.forEach((item, index) => {
+    const topic = (item as { topic?: unknown }).topic;
+    if (typeof topic !== "string") return;
+    const first = firstIndex.get(topic);
+    if (first === undefined) {
+      firstIndex.set(topic, index);
+      return;
+    }
+    violations.push(
+      semanticViolation(
+        SEMANTIC_VIOLATION_CODES.crossItem,
+        `${SHAPE_ROOT_PATH}.items[${index}].topic`,
+        `items[${first}] and items[${index}] share topic ${JSON.stringify(topic)}`,
+      ),
+    );
+  });
+  return violations;
+}
 
 /**
  * The item list, or null when the payload is not shaped like one. The
@@ -382,7 +470,7 @@ export function planExtractSignals(
     if (boundary.suppressMessage(turn.text)) continue;
     const text = turn.text.trim();
     if (text.length === 0) continue;
-    mined.push(Object.freeze({ turnId: turn.turn_id, text }));
+    mined.push(Object.freeze({ turnId: turn.turn_id, text, timestamp: turn.timestamp }));
   }
   if (mined.length === 0) {
     throw new ExtractSignalsError(
@@ -402,6 +490,33 @@ export function planExtractSignals(
 }
 
 /**
+ * Hygiene rules the mined items are held to, in the instruction.
+ *
+ * Each names a CATEGORY and never an example word: the operator may write
+ * in any language, and a kernel that listed one language's greetings or
+ * date words would mine that language better than every other. Time is
+ * grounded the same way - the caller resolves a relative bound against the
+ * turn's timestamp and writes it as ISO, which the dream pass already turns
+ * into a validity window, so no date parser lives here.
+ */
+const EXTRACT_HYGIENE_RULES: ReadonlyArray<string> = Object.freeze([
+  "Write any time bound a rule carries as an ISO 8601 date or interval (YYYY-MM-DD, or " +
+    "YYYY-MM-DD/YYYY-MM-DD), resolving a relative bound against the timestamp of the turn " +
+    "that stated it; an interval's end date is exclusive, so write the day after the last " +
+    "day the rule holds, and an end that is not after the start refuses the whole payload; " +
+    "write a bound that only ends as an interval from that turn's date, " +
+    "because a lone date reads as the day the rule starts; a rule with no time bound stays " +
+    "undated.",
+  "Skip conversational mechanics - greetings, thanks, acknowledgements, requests to go on, " +
+    "and directions about the flow of this session - because they state no rule.",
+  "Return one rule per item: a turn that states two rules yields two items with distinct topics.",
+  "Keep every condition a rule was stated with - when, where, for which project or kind of " +
+    "work - inside its principle; never widen a conditional rule into an unconditional one.",
+  "Drop restatements: a rule the operator states more than once is returned once, under one " +
+    "topic, because two items sharing a topic refuse the whole payload.",
+]);
+
+/**
  * The one envelope. The turns ride inside the prompt rather than beside it
  * because the receiving agent is answering a question about exactly these
  * turns and nothing else; a prompt that named a session id would invite the
@@ -413,7 +528,7 @@ export function buildMiningStep(
   opts: { readonly sourceTurnHint?: boolean } = {},
 ): NeedsLlmStep {
   const transcript = mined
-    .map((turn) => `[${turn.turnId}] ${turn.text.slice(0, PROMPT_TURN_TEXT_MAX)}`)
+    .map((turn) => `${transcriptLabel(turn)} ${turn.text.slice(0, PROMPT_TURN_TEXT_MAX)}`)
     .join("\n");
   return buildNeedsLlmStep({
     step: EXTRACT_SIGNALS_STEP,
@@ -423,13 +538,16 @@ export function buildMiningStep(
       "correction, a prohibition - not a fact, a task, or a one-off instruction about this session. " +
       `Return at most ${AUTO_EXTRACT_PER_SESSION_CAP} items, each with a confidence of at least ` +
       `${AUTO_EXTRACT_CONFIDENCE_FLOOR}; omit anything you are less sure of rather than lowering the ` +
-      "number, because an item below the floor refuses the whole payload.\n\n" +
+      "number, because an item below the floor refuses the whole payload. " +
+      EXTRACT_HYGIENE_RULES.join(" ") +
+      "\n\n" +
       transcript,
     schema_hints: [
       'payload: { "items": [ { "topic", "signal", "principle", "confidence", "scope"? } ] }',
-      "topic: stable kebab-slug naming the rule",
+      "topic: stable kebab-slug naming the rule, unique within the payload",
       "signal: 'positive' when the principle is the rule to follow, 'negative' when it is what to avoid",
-      "principle: one imperative line, in the language the operator used",
+      "principle: one imperative line, in the language the operator used, with any time bound " +
+        "written as an ISO 8601 date or interval",
       `confidence: number in [${AUTO_EXTRACT_CONFIDENCE_FLOOR}, 1]`,
       `items: at most ${AUTO_EXTRACT_PER_SESSION_CAP} entries`,
       ...(opts.sourceTurnHint === true
@@ -438,6 +556,11 @@ export function buildMiningStep(
     ],
     target_path: posix.normalize(AUTO_EXTRACT_TARGET_DIR_REL),
   });
+}
+
+/** `[turnId @ timestamp]`, or `[turnId]` when the turn has no timestamp. */
+function transcriptLabel(turn: MinedTurn): string {
+  return turn.timestamp === "" ? `[${turn.turnId}]` : `[${turn.turnId} @ ${turn.timestamp}]`;
 }
 
 // ----- Phase two: what the caller mined ------------------------------------
@@ -589,9 +712,9 @@ export function commitExtractedSignals(
 
 /**
  * The key a missing item is NAMED by: its payload index and its topic.
- * The index carries the uniqueness (two items may share a topic) and the
- * topic carries the meaning, which is what an operator matches against
- * the payload they are about to re-run.
+ * The index carries the position and the topic carries the meaning,
+ * which is what an operator matches against the payload they are about to
+ * re-run.
  */
 function unwrittenKey(index: number, topic: string): string {
   return `items[${index}]:${topic}`;

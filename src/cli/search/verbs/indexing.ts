@@ -423,6 +423,9 @@ function jsonForStats(stats: IndexStats, cfg: ResolvedSearchConfig): unknown {
       chunks_total: stats.chunksTotal,
       embeddings_computed: stats.embeddingsComputed,
       embeddings_retries: stats.embeddingsRetries,
+      // Conditional, like the field below: a run that carried no vector
+      // over emits exactly the payload it emitted before this field existed.
+      ...(stats.embeddingsReused > 0 ? { embeddings_reused: stats.embeddingsReused } : {}),
       // Conditional: a vault with nothing pending emits exactly the
       // payload it emitted before this field existed.
       ...(stats.eventAnchorsPending > 0
@@ -463,9 +466,10 @@ function renderStatsHuman(stats: IndexStats, cfg: ResolvedSearchConfig): string 
   lines.push(`  updated:  ${stats.updated} files`);
   lines.push(`  unchanged: ${stats.unchanged} files`);
   lines.push(`  deleted:  ${stats.deleted} files`);
-  if (stats.embeddingsComputed > 0 || stats.embeddingsRetries > 0) {
+  if (stats.embeddingsComputed > 0 || stats.embeddingsRetries > 0 || stats.embeddingsReused > 0) {
+    const reused = stats.embeddingsReused > 0 ? `, ${stats.embeddingsReused} reused` : "";
     lines.push(
-      `  embeddings: ${stats.embeddingsComputed} computed (${stats.embeddingsRetries} retries)`,
+      `  embeddings: ${stats.embeddingsComputed} computed (${stats.embeddingsRetries} retries)${reused}`,
     );
   }
   // Above the errors block: these documents indexed fine, under a

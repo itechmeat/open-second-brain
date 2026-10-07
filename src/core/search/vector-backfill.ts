@@ -36,10 +36,15 @@
  */
 
 import { resolveSemanticCapability, type SemanticCapability } from "./capability-tier.ts";
-import { estimateCostUsd, estimateTokens, pricePerMillionTokens } from "./embeddings/signature.ts";
-import { runEmbeddingPhase } from "./indexer.ts";
+import { planEmbeddingSpend, type EmbeddingGateReason } from "./embedding-spend.ts";
+import type { EmbeddingPriceSource } from "./embeddings/pricing.ts";
+import { runEmbeddingPhase, type EmbeddingPhaseTally } from "./indexer.ts";
+import { assertSafePathPrefix } from "./pipeline/request.ts";
+import { SearchError } from "./search-error.ts";
 import { Store } from "./store.ts";
+import type { PendingVectorScope } from "./store/chunks.ts";
 import type { ResolvedSearchConfig } from "./types.ts";
+import type { MaintenanceSpendReceipt } from "../brain/maintenance/journal.ts";
 import {
   OPERATION,
   progressCounter,
@@ -52,6 +57,13 @@ export interface VectorBackfillOptions {
   readonly apply?: boolean;
   /** Bypass the configured spend ceiling for this run. */
   readonly forceCost?: boolean;
+  /**
+   * Vault-relative path prefixes the run is limited to. Each one is
+   * validated by {@link assertSafePathPrefix}; the census, the estimate,
+   * the gate and the receipt all read this scope. Empty or absent means
+   * the whole vault.
+   */
+  readonly pathPrefixes?: ReadonlyArray<string>;
   readonly safeguard?: import("../brain/safeguard.ts").Safeguard;
   readonly signal?: AbortSignal;
   /**
@@ -77,14 +89,70 @@ export interface VectorBackfillResult {
   /** Provider retries this run consumed (0 on a dry run). */
   readonly retries: number;
   /**
-   * Estimated spend for the pending set, from the estimator that already
-   * governs the indexer's cost gate. `0` when the model carries no known
-   * price - which is an absent price, not a free run, and the human
-   * report says so rather than printing `$0.0000`.
+   * Estimated spend for the pending set, from the shared spend plan the
+   * indexer's cost gate reads. Null when nobody stated the model's price
+   * - an absent price, not a free run, and the report says so rather
+   * than printing `$0.0000`.
    */
-  readonly estimatedCostUsd: number;
-  /** True when {@link estimatedCostUsd} could be derived at all. */
-  readonly costKnown: boolean;
+  readonly estimatedCostUsd: number | null;
+  /** Who stated the price the estimate used. */
+  readonly priceSource: EmbeddingPriceSource;
+  /** True when the configured gate would refuse this spend unforced. */
+  readonly blocked: boolean;
+  /** Why the gate would refuse; null when it would not. */
+  readonly reason: EmbeddingGateReason | null;
+  /**
+   * The prefixes the run was limited to, normalised (no leading `./`,
+   * `/` separators); empty for the whole vault.
+   */
+  readonly pathPrefixes: ReadonlyArray<string>;
+  /**
+   * The prefixes that match no indexed document. A scope that matches
+   * nothing has nothing pending, and without this list it would read
+   * exactly like a fully embedded scope.
+   */
+  readonly unmatchedPathPrefixes: ReadonlyArray<string>;
+  /**
+   * The spend receipt of an applied run that reached the provider, from
+   * the same scoped plan the dry run reports; null otherwise.
+   */
+  readonly spend: MaintenanceSpendReceipt | null;
+}
+
+/** The argument name an unsafe prefix is refused under. */
+const PATH_PREFIX_ARGUMENT = "path prefix";
+
+/**
+ * The spelling a prefix is matched under: Windows separators become `/`
+ * and a leading `./` is dropped, so `./Brain/` and `Brain\preferences\` match the
+ * stored `Brain/...` paths. Matching itself stays a raw string prefix.
+ */
+function normalisePathPrefix(prefix: string): string {
+  let normal = prefix.replaceAll("\\", "/");
+  while (normal.startsWith("./")) normal = normal.slice(2);
+  return normal;
+}
+
+/**
+ * Normalise and validate every prefix by name; an empty list scopes
+ * nothing. An empty or blank prefix is refused rather than skipped: it
+ * would match every document and widen a scoped run to the whole vault
+ * while the report still echoed a scope.
+ */
+function normalisePathPrefixes(pathPrefixes: ReadonlyArray<string>): ReadonlyArray<string> {
+  return Object.freeze(
+    pathPrefixes.map((raw) => {
+      const prefix = normalisePathPrefix(raw);
+      if (prefix.trim() === "") {
+        throw new SearchError(
+          "INVALID_INPUT",
+          `${PATH_PREFIX_ARGUMENT} is empty: ${JSON.stringify(raw)}`,
+        );
+      }
+      assertSafePathPrefix(prefix, PATH_PREFIX_ARGUMENT);
+      return prefix;
+    }),
+  );
 }
 
 /**
@@ -113,19 +181,24 @@ async function planVectorBackfillRun(
   progress: ProgressCounter,
 ): Promise<VectorBackfillResult> {
   const apply = opts.apply === true;
+  const pathPrefixes = normalisePathPrefixes(opts.pathPrefixes ?? []);
+  const scope: PendingVectorScope | undefined =
+    pathPrefixes.length > 0 ? { pathPrefixes } : undefined;
   const capability = resolveSemanticCapability(config.semantic);
   const store = await Store.open(config, { mode: apply ? "write" : "read" });
   try {
-    const pendingChunks = store.findChunksWithoutEmbeddings();
+    const plan = planEmbeddingSpend(store, config, scope ? { scope } : {});
     const chunksTotal = store.counts().chunks;
-    const model = config.semantic.model;
-    const tokens = estimateTokens(pendingChunks.map((c) => c.content));
-    const estimatedCostUsd = estimateCostUsd(tokens, model);
-    const tally = { embeddingsComputed: 0, embeddingsRetries: 0 };
+    const unmatchedPathPrefixes = Object.freeze(
+      pathPrefixes.filter((prefix) => store.countDocumentsUnderPrefix(prefix) === 0),
+    );
+    const tally: EmbeddingPhaseTally = { embeddingsComputed: 0, embeddingsRetries: 0 };
 
-    if (apply && pendingChunks.length > 0) {
+    if (apply && plan.pending.length > 0) {
       await runEmbeddingPhase(store, config, tally, {
         forceCost: opts.forceCost === true,
+        ...(scope ? { scope } : {}),
+        plan,
         ...(opts.safeguard !== undefined ? { safeguard: opts.safeguard } : {}),
         ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
         progress,
@@ -136,14 +209,16 @@ async function planVectorBackfillRun(
       applied: apply,
       capability,
       chunksTotal,
-      pending: pendingChunks.length,
+      pending: plan.pending.length,
       embedded: tally.embeddingsComputed,
       retries: tally.embeddingsRetries,
-      estimatedCostUsd,
-      // Whether the MODEL has a price, not whether this run costs
-      // anything: an empty pending set costs nothing and that is not the
-      // same statement as "the price of this model is unknown".
-      costKnown: pricePerMillionTokens(model) > 0,
+      estimatedCostUsd: plan.estimatedUsd,
+      priceSource: plan.quote.source,
+      blocked: plan.gate.blocked,
+      reason: plan.gate.reason,
+      pathPrefixes,
+      unmatchedPathPrefixes,
+      spend: tally.spend ?? null,
     });
   } finally {
     await store.close();

@@ -8,7 +8,7 @@
  * (and with it the whole upgrade) cannot proceed.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -16,6 +16,7 @@ import { dirname, join } from "node:path";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { listMetrics } from "../../../src/core/brain/metrics.ts";
 import { brainDirs, brainManualPath } from "../../../src/core/brain/paths.ts";
+import * as upgradeModule from "../../../src/core/brain/upgrade.ts";
 import { planUpgrade } from "../../../src/core/brain/upgrade.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import {
@@ -311,5 +312,133 @@ describe("operator surfaces after a failure", () => {
     expect(r.returncode).toBe(0);
     expect(readSelfHealUpgradeFailure(vault)).toBeNull();
     expect(planUpgrade(vault).pending).toBe(0);
+  });
+});
+
+describe("a vault removed while the worker runs", () => {
+  // The worker checks the vault once before planning. A vault removed (or
+  // moved) after that check must not come back as a failure marker, a
+  // metrics row or rewritten managed files.
+  const realPlan = upgradeModule.planUpgrade;
+
+  test("between the plan and the rewrite: nothing is written, no directory recreated", () => {
+    makeManualStale();
+    const spy = spyOn(upgradeModule, "planUpgrade").mockImplementationOnce((v) => {
+      const plan = realPlan(v);
+      rmSync(vault, { recursive: true, force: true });
+      return plan;
+    });
+    try {
+      const run = runSelfHealUpgrade(vault, { now: T0 });
+
+      expect(run.outcome).toBe(SELF_HEAL_UPGRADE_OUTCOME.notInitialized);
+      expect(run.filesUpdated).toEqual([]);
+      expect(existsSync(vault)).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test("during the plan: the failure is not recorded into a recreated vault", () => {
+    makeManualStale();
+    const spy = spyOn(upgradeModule, "planUpgrade").mockImplementationOnce(() => {
+      rmSync(vault, { recursive: true, force: true });
+      throw new Error("ENOENT: the vault went away mid-plan");
+    });
+    try {
+      const run = runSelfHealUpgrade(vault, { now: T0 });
+
+      expect(run.outcome).toBe(SELF_HEAL_UPGRADE_OUTCOME.notInitialized);
+      expect(existsSync(vault)).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test("before the lock: a missing vault is not created for the claim", () => {
+    const missing = join(root, "gone");
+    const run = runSelfHealUpgrade(missing, { now: T0 });
+
+    expect(run.outcome).toBe(SELF_HEAL_UPGRADE_OUTCOME.notInitialized);
+    expect(existsSync(missing)).toBe(false);
+  });
+
+  test("right after the rewrite: no metrics row recreates the vault", () => {
+    makeManualStale();
+    const realApply = upgradeModule.applyUpgrade;
+    const spy = spyOn(upgradeModule, "applyUpgrade").mockImplementationOnce((v, opts) => {
+      const applied = realApply(v, opts);
+      rmSync(vault, { recursive: true, force: true });
+      return applied;
+    });
+    try {
+      const run = runSelfHealUpgrade(vault, { now: T0 });
+
+      expect(run.outcome).toBe(SELF_HEAL_UPGRADE_OUTCOME.notInitialized);
+      expect(existsSync(vault)).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test("a failure in a vault that is still there is recorded as before", () => {
+    makeManualStale();
+    const spy = spyOn(upgradeModule, "planUpgrade").mockImplementationOnce(() => {
+      throw new Error("plan failed for another reason");
+    });
+    try {
+      const run = runSelfHealUpgrade(vault, { now: T0 });
+
+      expect(run.outcome).toBe(SELF_HEAL_UPGRADE_OUTCOME.failed);
+      expect(readSelfHealUpgradeFailure(vault)!.error).toBe("plan failed for another reason");
+      expect(upgradeRows().map((r) => r["outcome"])).toEqual([SELF_HEAL_UPGRADE_OUTCOME.failed]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe("the worker applies the plan it computed", () => {
+  test("planUpgrade runs once per attempt and its plan is the one applied", () => {
+    makeManualStale();
+    const realPlan = upgradeModule.planUpgrade;
+    const plans: upgradeModule.UpgradePlan[] = [];
+    const planSpy = spyOn(upgradeModule, "planUpgrade").mockImplementation((v) => {
+      const plan = realPlan(v);
+      plans.push(plan);
+      return plan;
+    });
+    const applySpy = spyOn(upgradeModule, "applyUpgrade");
+    try {
+      const run = runSelfHealUpgrade(vault, { now: T0 });
+
+      expect(run.outcome).toBe(SELF_HEAL_UPGRADE_OUTCOME.applied);
+      expect(plans).toHaveLength(1);
+      expect(applySpy).toHaveBeenCalledTimes(1);
+      expect(applySpy.mock.calls[0]![1]?.plan).toBe(plans[0]);
+    } finally {
+      planSpy.mockRestore();
+      applySpy.mockRestore();
+    }
+  });
+
+  test("a drift between its plan and its apply is recorded as a failure, the edit kept", () => {
+    makeManualStale();
+    const realPlan = upgradeModule.planUpgrade;
+    const spy = spyOn(upgradeModule, "planUpgrade").mockImplementationOnce((v) => {
+      const plan = realPlan(v);
+      writeFileSync(brainManualPath(vault), "hand edit after the plan\n");
+      return plan;
+    });
+    try {
+      const run = runSelfHealUpgrade(vault, { now: T0 });
+
+      expect(run.outcome).toBe(SELF_HEAL_UPGRADE_OUTCOME.failed);
+      expect(run.error).toContain("Brain/_BRAIN.md");
+      expect(readFileSync(brainManualPath(vault), "utf8")).toBe("hand edit after the plan\n");
+      expect(readSelfHealUpgradeFailure(vault)!.pending).toEqual(["Brain/_BRAIN.md"]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

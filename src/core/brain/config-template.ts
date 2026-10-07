@@ -652,6 +652,14 @@ export const BRAIN_CONFIG_TEMPLATE_OMISSIONS: ReadonlyArray<BrainTemplateOmissio
       "The one field of the decision_model opt-out block (only `false` is honoured); " +
       "documented with the block in docs/decision-models.md.",
   },
+  {
+    key: "recall_inject",
+    reason:
+      "Slice declarations are vault-specific (path prefixes and note types of this " +
+      "vault) and have no default: an absent block keeps the unsliced recall path. " +
+      "Templating an example would invite copying folder names that do not exist; " +
+      "the block and its contract example are documented in docs/cli-reference.md.",
+  },
 ]) as ReadonlyArray<BrainTemplateOmission>;
 
 export interface RenderBrainConfigTemplateOptions {

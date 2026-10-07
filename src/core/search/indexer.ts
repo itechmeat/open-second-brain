@@ -29,20 +29,34 @@ import { sha256Hex } from "../integrity/digest.ts";
 import { parseAuthoredAtSeconds } from "./authored-at.ts";
 import { CHUNKER_VERSION, chunkMarkdown } from "./chunker.ts";
 import { expandTextForCjkFts } from "./cjk-tokenizer.ts";
-import { declaredInputWindowTokens, passagePrefixSentByProvider } from "./embeddings/presets.ts";
+import { effectiveInputWindowTokens, passagePrefixSentByProvider } from "./embeddings/presets.ts";
+import {
+  activeEmbeddingModel,
+  activeSpendQuote,
+  COST_GATE_KEY,
+  EMBEDDING_GATE_REASON,
+  type EmbeddingGateReason,
+  type EmbeddingSpendPlan,
+  FORCE_COST_FLAG,
+  formatEstimatedUsd,
+  planEmbeddingSpend,
+  priceSpendPlan,
+  unpricedRefusalMessage,
+} from "./embedding-spend.ts";
+import { embeddingPriceRecommendations } from "./price-recommendations.ts";
+import type { EmbeddingPriceSource } from "./embeddings/pricing.ts";
 import { makeProvider } from "./embeddings/provider.ts";
 import {
   embeddingSignature,
-  estimateCostUsd,
-  estimateTokens,
-  evaluateCostGate,
   isStaleSignature,
-  pricePerMillionTokens,
-  LOCAL_EMBEDDING_MODEL,
   MODEL_NATIVE_DIMENSION,
   type EmbeddingIdentity,
 } from "./embeddings/signature.ts";
 import { LOCAL_DEFAULT_DIMENSION } from "./embeddings/local-provider.ts";
+import {
+  describeCredentialSources,
+  type CredentialSourceContext,
+} from "./embeddings/credential-report.ts";
 import { resolveEventAnchor } from "./event-anchor.ts";
 import { extractLinks } from "./links.ts";
 import { resolveDocumentEventTimeWindow } from "./pipeline/event-time.ts";
@@ -99,6 +113,7 @@ import {
   excludedCallableVisibilitySurfaces,
 } from "./visibility-surface-registry.ts";
 import type { ChunkInput, LinkInput } from "./store.ts";
+import type { PendingVectorScope } from "./store/chunks.ts";
 import type {
   ChunkWindowCensus,
   EmbedderRecordCensus,
@@ -165,6 +180,7 @@ interface MutableStats {
   deleted: number;
   chunksTotal: number;
   embeddingsComputed: number;
+  embeddingsReused: number;
   embeddingsRetries: number;
   errors: Array<{ readonly path: string; readonly message: string }>;
   frontmatterNotices: DegradationNotice[];
@@ -193,6 +209,7 @@ function newStats(): MutableStats {
     deleted: 0,
     chunksTotal: 0,
     embeddingsComputed: 0,
+    embeddingsReused: 0,
     embeddingsRetries: 0,
     errors: [],
     frontmatterNotices: [],
@@ -233,6 +250,7 @@ function freezeStats(s: MutableStats, durationMs: number): IndexStats {
     deleted: s.deleted,
     chunksTotal: s.chunksTotal,
     embeddingsComputed: s.embeddingsComputed,
+    embeddingsReused: s.embeddingsReused,
     embeddingsRetries: s.embeddingsRetries,
     errors: Object.freeze([...s.errors]),
     frontmatterNotices: Object.freeze([...s.frontmatterNotices]),
@@ -592,7 +610,11 @@ async function indexIntoRun(
           tokenCount: c.tokenCount,
           headingPath: c.headingPath,
         }));
-        const chunkIds = store.replaceChunks(docId, chunkInputs);
+        // An unchanged chunk keeps its stored vector (vector carry-over),
+        // so the embedding phase below never re-pays for it.
+        const replaced = store.replaceDocumentChunks(docId, chunkInputs);
+        const chunkIds = replaced.chunkIds;
+        stats.embeddingsReused += replaced.embeddingsReused;
 
         const links: LinkInput[] = [];
         for (let i = 0; i < chunkResult.chunks.length; i++) {
@@ -801,20 +823,6 @@ async function indexIntoRun(
 }
 
 /**
- * The model an embedding request would name right now. The local
- * provider has an implicit model string; every other provider takes the
- * configured one, falling back to what the index recorded when the
- * config leaves it unset.
- */
-function activeEmbeddingModel(
-  config: ResolvedSearchConfig,
-  storedModel: string | null = null,
-): string | null {
-  if (config.semantic.provider === "local") return LOCAL_EMBEDDING_MODEL;
-  return config.semantic.model ?? storedModel;
-}
-
-/**
  * Canonical signature of the ACTIVE embedding configuration for status
  * reporting. Null when semantic search is disabled. Stored model and
  * dimension fill in fields the config leaves unset (e.g. an
@@ -870,7 +878,9 @@ function censusChunkWindow(
   if (chunksMeasured === 0) return null;
 
   const model = activeEmbeddingModel(config, storedModel);
-  const windowTokens = declaredInputWindowTokens(model);
+  // The one resolver the query fit reads too: an operator-declared window
+  // enables the census for an uncurated model.
+  const windowTokens = effectiveInputWindowTokens(config.semantic, model);
   if (model === null || windowTokens === null) {
     return Object.freeze({ verdict: "window-undeclared" as const, model, chunksMeasured });
   }
@@ -993,6 +1003,21 @@ export interface EmbeddingPhaseTally {
 export interface EmbeddingPhaseOptions {
   /** Bypass the configured spend ceiling for this run. */
   readonly forceCost?: boolean;
+  /**
+   * Path scope of the pending census. It reaches the census only through
+   * the spend plan, so the gate, the refusal and the receipt read the
+   * same chunks the phase embeds. Vault-wide when absent.
+   */
+  readonly scope?: PendingVectorScope;
+  /**
+   * A spend plan the caller already computed on this store and over the
+   * same `scope`; the phase embeds its pending census instead of reading
+   * it a second time, so a caller that reported the plan embeds exactly
+   * what it priced. Its price and gate verdict are recomputed here from
+   * the current config, so a forced or stale verdict is never trusted.
+   * Recomputed in full when absent.
+   */
+  readonly plan?: EmbeddingSpendPlan;
   readonly safeguard?: import("../brain/safeguard.ts").Safeguard;
   readonly signal?: AbortSignal;
   /**
@@ -1053,39 +1078,45 @@ export async function runEmbeddingPhase(
     );
   }
 
-  const pending = store.findChunksWithoutEmbeddings();
+  // A handed-in plan keeps its census but is priced and gated again here,
+  // unforced: the verdict this phase acts on is always its own.
+  const plan =
+    opts.plan !== undefined
+      ? priceSpendPlan(opts.plan.pending, config)
+      : planEmbeddingSpend(store, config, opts.scope ? { scope: opts.scope } : {});
+  const pending = plan.pending;
   if (pending.length === 0) return;
 
   const provider = makeProvider(config.semantic);
   const model = config.semantic.model ?? provider.model;
 
-  // Cost gate: estimate the spend for the whole pending set up front and
-  // refuse the run when it exceeds the configured ceiling, unless forced.
-  // The local provider (price 0) and unknown-price models never block.
+  // Cost gate: the shared spend plan estimates the whole pending set up
+  // front and the run is refused when it exceeds the configured ceiling,
+  // unless forced.
   //
-  // The gate is evaluated UNFORCED so the refusal and the receipt read
-  // one verdict: `blocked && !forceCost` is exactly the blocked flag
-  // `evaluateCostGate` would have returned for `forced: forceCost`, and
-  // `blocked && forceCost` is the honest meaning of the receipt's
-  // `forced` - this run overrode a gate that would have refused it.
-  const gate = evaluateCostGate({
-    texts: pending.map((p) => p.content),
-    model,
-    gateUsd: config.semantic.costGateUsd,
-  });
-  if (gate.blocked && !forceCost) {
+  // The plan is evaluated UNFORCED so the refusal and the receipt read
+  // one verdict: `blocked && !forceCost` is exactly the blocked flag a
+  // forced plan would have returned, and `blocked && forceCost` is the
+  // honest meaning of the receipt's `forced` - this run overrode a gate
+  // that would have refused it.
+  if (plan.gate.blocked && !forceCost) {
+    const gateUsd = config.semantic.costGateUsd;
+    if (plan.gate.reason === EMBEDDING_GATE_REASON.unpriced) {
+      throw new SearchError("EMBEDDING_COST_UNPRICED", unpricedRefusalMessage(plan, gateUsd));
+    }
     throw new SearchError(
       "EMBEDDING_COST_GATE",
-      `estimated embedding cost $${gate.estimatedUsd.toFixed(4)} for ${pending.length} chunk(s) ` +
-        `exceeds embedding_cost_gate_usd $${config.semantic.costGateUsd.toFixed(4)}. ` +
-        `Re-run with --force-cost to proceed or raise the gate.`,
+      `estimated embedding cost ${formatEstimatedUsd(plan.estimatedUsd)} for ${pending.length} chunk(s) ` +
+        `exceeds ${COST_GATE_KEY} ${formatEstimatedUsd(gateUsd)}. ` +
+        `Re-run with ${FORCE_COST_FLAG} to proceed or raise the gate.`,
     );
   }
   stats.spend = {
-    model,
-    tokens: gate.tokens,
-    estimatedUsd: gate.estimatedUsd,
-    forced: gate.blocked && forceCost,
+    model: plan.model,
+    tokens: plan.tokens,
+    estimatedUsd: plan.estimatedUsd,
+    forced: plan.gate.blocked && forceCost,
+    priceSource: plan.quote.source,
   };
   const batchSize = Math.max(1, config.semantic.batchSize);
   // Hand the provider a super-batch large enough to keep its internal
@@ -1144,22 +1175,26 @@ export interface EmbeddingSpendPreview {
   /** Chunks the phase's own anti-join still finds vectorless. */
   readonly pendingChunks: number;
   readonly tokens: number;
-  readonly estimatedUsd: number;
+  /** Null when nobody stated the model's price. */
+  readonly estimatedUsd: number | null;
+  /** Who stated the price the estimate used. */
+  readonly priceSource: EmbeddingPriceSource;
   /**
    * True when the configured gate would refuse this spend unforced - the
    * fact a `--force-cost` receipt is honest about.
    */
   readonly blocked: boolean;
+  /** Why the gate would refuse; null when it would not. */
+  readonly reason: EmbeddingGateReason | null;
 }
 
 /**
  * The spend preview the maintenance lane announces before its reindex
  * task and records on its journal row after it (t_9d155d0e).
  *
- * Deliberately a READ over the same census and the same cost kernel
- * {@link runEmbeddingPhase} gates on - the phase's guards, in its order,
- * and its own `findChunksWithoutEmbeddings` anti-join and
- * `evaluateCostGate` - so what a run ANNOUNCES and what it later RECORDS
+ * Deliberately a READ over the same spend plan {@link runEmbeddingPhase}
+ * gates on - the phase's guards, in its order, and `planEmbeddingSpend`
+ * (`embedding-spend.ts`) - so what a run ANNOUNCES and what it later RECORDS
  * cannot drift from what would actually be refused or embedded. This
  * function never spends: the phase remains the only spender, and a
  * refusal it would throw stays its to throw.
@@ -1184,21 +1219,16 @@ export async function estimatePendingEmbeddingSpend(
   }
   try {
     if (!store.vecLoaded()) return null;
-    const pending = store.findChunksWithoutEmbeddings();
-    if (pending.length === 0) return null;
-    const provider = makeProvider(config.semantic);
-    const model = config.semantic.model ?? provider.model;
-    const gate = evaluateCostGate({
-      texts: pending.map((p) => p.content),
-      model,
-      gateUsd: config.semantic.costGateUsd,
-    });
+    const plan = planEmbeddingSpend(store, config);
+    if (plan.pending.length === 0) return null;
     return {
-      model,
-      pendingChunks: pending.length,
-      tokens: gate.tokens,
-      estimatedUsd: gate.estimatedUsd,
-      blocked: gate.blocked,
+      model: plan.model,
+      pendingChunks: plan.pending.length,
+      tokens: plan.tokens,
+      estimatedUsd: plan.estimatedUsd,
+      priceSource: plan.quote.source,
+      blocked: plan.gate.blocked,
+      reason: plan.gate.reason,
     };
   } finally {
     await store.close();
@@ -1533,6 +1563,7 @@ export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexSt
         embeddingDimension: null,
         embeddingSignature: activeEmbeddingSignature(config),
         estimatedRefreshCostUsd: 0,
+        refreshPriceSource: null,
         vecExtension: "unknown" as const,
         semanticEnabled: config.semantic.enabled,
         embeddingKeyPresent: !!config.semantic.apiKey,
@@ -1635,16 +1666,24 @@ export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexSt
       warnings.push(await formatChunkWindowMeasured(chunkWindow));
     }
 
-    // Best-effort spend estimate to bring stale/missing embeddings current.
-    // Only scan chunk content when the active model is actually priced.
-    const activeModel = activeEmbeddingModel(config, model);
-    let estimatedRefreshCostUsd = 0;
-    if (config.semantic.enabled && pricePerMillionTokens(activeModel) > 0) {
-      const pending = store.findChunksWithoutEmbeddings();
-      estimatedRefreshCostUsd = estimateCostUsd(
-        estimateTokens(pending.map((p) => p.content)),
-        activeModel,
-      );
+    // Best-effort spend estimate to bring stale/missing embeddings current,
+    // from the shared spend plan. Chunk content is scanned only when the
+    // price is a positive known rate: a known-free model costs 0. An
+    // unknown price is unknown only while chunks are pending - a fully
+    // embedded index has nothing to pay for, so it reads 0, counted
+    // without loading a chunk body.
+    let estimatedRefreshCostUsd: number | null = 0;
+    let refreshPriceSource: EmbeddingPriceSource | null = null;
+    if (config.semantic.enabled) {
+      const { quote } = activeSpendQuote(config);
+      refreshPriceSource = quote.source;
+      if (quote.usdPerMtok !== null && quote.usdPerMtok > 0) {
+        estimatedRefreshCostUsd = planEmbeddingSpend(store, config).estimatedUsd;
+      } else if (quote.usdPerMtok === null && store.countChunksWithoutEmbeddings() > 0) {
+        estimatedRefreshCostUsd = null;
+      } else {
+        estimatedRefreshCostUsd = 0;
+      }
     }
 
     return Object.freeze({
@@ -1659,6 +1698,7 @@ export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexSt
       embeddingDimension: dim,
       embeddingSignature: activeEmbeddingSignature(config, model, dim),
       estimatedRefreshCostUsd,
+      refreshPriceSource,
       vecExtension: store.vecLoaded() ? ("loaded" as const) : ("unavailable" as const),
       semanticEnabled: config.semantic.enabled,
       embeddingKeyPresent: !!config.semantic.apiKey,
@@ -1794,6 +1834,13 @@ export interface IndexCheckOptions {
    * a call nobody made proves neither.
    */
   readonly probeProvider?: boolean;
+  /**
+   * The env and provider registry the credential-source report reads
+   * names from. Passed explicitly so the report never reads the process
+   * on its own; absent, the report is not built and the result carries no
+   * `credentialSources` field.
+   */
+  readonly credentialContext?: CredentialSourceContext;
 }
 
 export async function indexCheck(
@@ -1936,6 +1983,13 @@ export async function indexCheck(
   // Rules match the design doc table; agents and operators read the
   // list to know what command to run next without learning the
   // internals of OSB.
+  // Names only, and only for a credential-missing tier: every other tier
+  // yields null and the result stays byte-identical.
+  const credentialSources =
+    opts?.credentialContext === undefined
+      ? null
+      : describeCredentialSources({ semantic: config.semantic, ...opts.credentialContext });
+
   const recommendations = buildRecommendations({
     config,
     embeddingKeyResolved,
@@ -1964,6 +2018,7 @@ export async function indexCheck(
     warnings: Object.freeze(warnings),
     fatal: Object.freeze(fatal),
     recommendations: Object.freeze(recommendations),
+    ...(credentialSources === null ? {} : { credentialSources }),
   });
 }
 
@@ -2084,6 +2139,13 @@ function buildRecommendations(input: BuildRecommendationsInput): string[] {
     recs.push(
       "Provider: OpenAI `text-embedding-3-small` is the default; any OpenAI-compatible endpoint works via OPEN_SECOND_BRAIN_EMBEDDING_BASE_URL.",
     );
+  }
+
+  // The price the cost gate reasons from (Honest Embedding Spend): an
+  // unpriced active model and a declaration that prices another model.
+  // Silent for priced and local models, so their output is unchanged.
+  if (input.config.semantic.enabled) {
+    recs.push(...embeddingPriceRecommendations(input.config));
   }
 
   if (input.vecExtension === "unavailable") {

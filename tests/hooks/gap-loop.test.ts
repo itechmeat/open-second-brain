@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,6 +22,7 @@ import {
   GAP_TASKS_MAX_NOTES,
 } from "../../src/core/brain/gaps/gap-loop.ts";
 import { brainGapTasksDir } from "../../src/core/brain/paths.ts";
+import { RETRIEVAL_DEGRADATION } from "../../src/core/search/retrieval-trail.ts";
 import { writeFrontmatterAtomic } from "../../src/core/vault.ts";
 import { homeEnv } from "../helpers/platform.ts";
 
@@ -291,6 +292,32 @@ describe("gap-promote hook audit line and auto-close", () => {
     expect(listGapTasks(vault, { status: GAP_TASK_STATUS_CLOSED }).map((t) => t.key)).toEqual([
       "gap-covered",
     ]);
+  });
+
+  test("names the recall's degradation codes on the audit line, local only", async () => {
+    // Semantic search on with no embedding provider configured: the gap
+    // recall's semantic lane cannot run, and the trail says so. The codes
+    // must reach the operator through the audit line, not vanish in the
+    // hook.
+    const configPath = join(configHome, "gap-config.yaml");
+    writeFileSync(configPath, `vault: ${vault}\nsearch_semantic_enabled: true\n`);
+    writeTask("gap-uncovered", GAP_TASK_STATUS_OPEN, { topic: COVERED_TOPIC });
+    const run = await runHook(
+      "gap-promote",
+      { hook_event_name: "SessionEnd" },
+      { VAULT_DIR: vault, OPEN_SECOND_BRAIN_CONFIG: configPath, ...FLAG_ON },
+    );
+    expect(run.exit).toBe(0);
+    const [details] = auditDetails();
+    const raw = details?.["retrieval_degraded"];
+    expect(Array.isArray(raw)).toBe(true);
+    const codes = raw as ReadonlyArray<string>;
+    expect(codes.length).toBeGreaterThan(0);
+    const known: ReadonlyArray<string> = Object.values(RETRIEVAL_DEGRADATION);
+    for (const code of codes) expect(known).toContain(code);
+    expect(new Set(codes).size).toBe(codes.length);
+    // Reported, not judged: the task stays open exactly as it would have.
+    expect(details?.["kept"]).toBe(1);
   });
 
   test("keeps a gap task whose only match is its own note", async () => {

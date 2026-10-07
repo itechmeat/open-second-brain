@@ -22,9 +22,20 @@ import {
   type MaintenanceSpendReceipt,
   type MaintenanceTaskResult,
 } from "../../src/core/brain/maintenance/lane.ts";
-import { listJournal, MAINTENANCE_JOURNAL_CAP } from "../../src/core/brain/maintenance/journal.ts";
+import {
+  appendJournal,
+  listJournal,
+  MAINTENANCE_JOURNAL_CAP,
+  MAINTENANCE_SPEND_METRIC,
+  MAINTENANCE_VERDICT,
+} from "../../src/core/brain/maintenance/journal.ts";
+import { listMetrics } from "../../src/core/brain/metrics.ts";
 import { currentLease, MAINTENANCE_LEASE_NAME } from "../../src/core/brain/maintenance/lease.ts";
 import { MAINTENANCE_EMBEDDINGS_ENV } from "../../src/core/config.ts";
+import {
+  isEmbeddingPriceSource,
+  type EmbeddingPriceSource,
+} from "../../src/core/search/embeddings/pricing.ts";
 import { MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT } from "../../src/core/brain/policy/blocks/maintenance.ts";
 import { sqliteVecLoadable } from "../helpers/sqlite-vec.ts";
 import { startFakeHttp, type FakeHttp } from "../helpers/fake-http.ts";
@@ -510,6 +521,125 @@ describe("renderTaskLine", () => {
     expect(line).toContain("reindex: ok in 1ms");
     expect(line).toContain("(tokens=38110, estimatedUsd=0.0076, model=text-embedding-3-small)");
   });
+
+  test("a receipt for an unknown price says so instead of a dollar figure", () => {
+    const receipt: MaintenanceSpendReceipt = {
+      model: "zembed-1",
+      tokens: 120,
+      estimatedUsd: null,
+      forced: true,
+      priceSource: "unknown",
+    };
+    const line = renderTaskLine({ ...okRow(LANE_TASK.reindex), receipt });
+    expect(line).toContain("(tokens=120, price unknown, model=zembed-1)");
+    expect(line).not.toContain("$0");
+  });
+});
+
+describe("the journal listing", () => {
+  test("a receipt written before price sources renders as unrecorded, its estimate as written", async () => {
+    const init = await runCli(["brain", "init", "--vault", vault], { env: baseEnv() });
+    expect(init.returncode).toBe(0);
+    appendJournal(vault, {
+      ts: "2026-09-01T00:00:00Z",
+      holder: "test",
+      verdict: MAINTENANCE_VERDICT.run,
+      task: LANE_TASK.reindex,
+      ok: true,
+      receipt: {
+        model: "text-embedding-3-small",
+        tokens: 500,
+        estimatedUsd: 0.0123,
+        forced: false,
+      },
+    });
+    appendJournal(vault, {
+      ts: "2026-09-02T00:00:00Z",
+      holder: "test",
+      verdict: MAINTENANCE_VERDICT.run,
+      task: LANE_TASK.reindex,
+      ok: true,
+      receipt: {
+        model: "zembed-1",
+        tokens: 40,
+        estimatedUsd: null,
+        forced: true,
+        priceSource: "unknown",
+      },
+    });
+    const status = await runCli(["brain", "maintenance", "status", "--vault", vault], {
+      env: baseEnv(),
+    });
+    expect(status.returncode).toBe(0);
+    expect(status.stdout).toContain(
+      "(tokens=500, estimatedUsd=0.0123, model=text-embedding-3-small, price_source=unrecorded)",
+    );
+    expect(status.stdout).toContain(
+      "(tokens=40, price unknown, model=zembed-1, price_source=unknown)",
+    );
+  });
+});
+
+describe("a journaled receipt without a numeric estimate", () => {
+  test("reads price unknown and never breaks the listing", async () => {
+    const init = await runCli(["brain", "init", "--vault", vault], { env: baseEnv() });
+    expect(init.returncode).toBe(0);
+    // Rows another build, another device's shard or a hand edit could
+    // write: the journal read casts them, so the listing must not trust
+    // the estimate's type.
+    const receipts = [
+      { model: "m-absent", tokens: 3, forced: false },
+      { model: "m-string", tokens: 4, forced: false, estimatedUsd: "x" },
+    ] as unknown as ReadonlyArray<MaintenanceSpendReceipt>;
+    for (const [i, receipt] of receipts.entries()) {
+      appendJournal(vault, {
+        ts: `2026-09-0${i + 4}T00:00:00Z`,
+        holder: "test",
+        verdict: MAINTENANCE_VERDICT.run,
+        task: LANE_TASK.reindex,
+        ok: true,
+        receipt,
+      });
+    }
+    const status = await runCli(["brain", "maintenance", "status", "--vault", vault], {
+      env: baseEnv(),
+    });
+    expect(status.returncode).toBe(0);
+    expect(status.stdout).toContain(
+      "(tokens=3, price unknown, model=m-absent, price_source=unrecorded)",
+    );
+    expect(status.stdout).toContain(
+      "(tokens=4, price unknown, model=m-string, price_source=unrecorded)",
+    );
+  });
+});
+
+describe("a receipt whose price source this build does not know", () => {
+  test("renders as unrecorded, never as the stray value", async () => {
+    expect(isEmbeddingPriceSource("vendor")).toBe(false);
+    const init = await runCli(["brain", "init", "--vault", vault], { env: baseEnv() });
+    expect(init.returncode).toBe(0);
+    appendJournal(vault, {
+      ts: "2026-09-03T00:00:00Z",
+      holder: "test",
+      verdict: MAINTENANCE_VERDICT.run,
+      task: LANE_TASK.reindex,
+      ok: true,
+      receipt: {
+        model: "voyage-3",
+        tokens: 70,
+        estimatedUsd: 0.0001,
+        forced: false,
+        priceSource: "vendor" as EmbeddingPriceSource,
+      },
+    });
+    const status = await runCli(["brain", "maintenance", "status", "--vault", vault], {
+      env: baseEnv(),
+    });
+    expect(status.returncode).toBe(0);
+    expect(status.stdout).toContain("model=voyage-3, price_source=unrecorded)");
+    expect(status.stdout).not.toContain("vendor");
+  });
 });
 
 describe("formatSpendBanner", () => {
@@ -521,7 +651,9 @@ describe("formatSpendBanner", () => {
           pendingChunks: 214,
           tokens: 1,
           estimatedUsd: 0.011,
+          priceSource: "builtin",
           blocked: false,
+          reason: null,
         },
         0,
       ),
@@ -531,10 +663,35 @@ describe("formatSpendBanner", () => {
     );
     expect(
       formatSpendBanner(
-        { model: null, pendingChunks: 1, tokens: 0, estimatedUsd: 0, blocked: false },
+        {
+          model: null,
+          pendingChunks: 1,
+          tokens: 0,
+          estimatedUsd: 0,
+          priceSource: "builtin",
+          blocked: false,
+          reason: null,
+        },
         0.5,
       ),
     ).toBe("embedding spend: model unknown, 1 chunks pending, estimated $0.0000 (gate: $0.5000)");
+  });
+
+  test("an unknown price prints price unknown, never a dollar figure", () => {
+    expect(
+      formatSpendBanner(
+        {
+          model: "zembed-1",
+          pendingChunks: 3,
+          tokens: 9,
+          estimatedUsd: null,
+          priceSource: "unknown",
+          blocked: true,
+          reason: "unpriced",
+        },
+        0.5,
+      ),
+    ).toBe("embedding spend: model zembed-1, 3 chunks pending, price unknown (gate: $0.5000)");
   });
 });
 
@@ -580,7 +737,13 @@ describe("the spend surface end to end", () => {
       expect(first.returncode).toBe(0);
       const payload = JSON.parse(first.stdout) as {
         spend?: {
-          banner: { model: string; pendingChunks: number; estimatedUsd: number; gateUsd: number };
+          banner: {
+            model: string;
+            pendingChunks: number;
+            estimatedUsd: number;
+            priceSource: string;
+            gateUsd: number;
+          };
           receipt: MaintenanceSpendReceipt;
         };
         tasks: Array<{ name: string; ok: boolean; receipt?: MaintenanceSpendReceipt }>;
@@ -593,6 +756,11 @@ describe("the spend surface end to end", () => {
       expect(payload.spend?.receipt).toEqual(reindex?.receipt);
       expect(payload.spend?.receipt.tokens).toBeGreaterThan(0);
       expect(payload.spend?.receipt.forced).toBe(false);
+      // Who stated the price rides the banner, the receipt and the metric.
+      expect(payload.spend?.banner.priceSource).toBe("builtin");
+      expect(payload.spend?.receipt.priceSource).toBe("builtin");
+      const metric = listMetrics(vault, { surface: MAINTENANCE_SPEND_METRIC }).at(-1);
+      expect(metric?.payload["price_source"]).toBe("builtin");
 
       // The receipt the lane journaled agrees with the row it reported.
       const status = await runCli(["brain", "maintenance", "status", "--vault", vault, "--json"], {

@@ -41,6 +41,7 @@
  * label lookup is async and every caller of it is already async.
  */
 
+import type { SearchErrorCode } from "./search-error.ts";
 import type { ResolvedEmbeddingConfig } from "./types.ts";
 
 /**
@@ -138,6 +139,40 @@ export function resolveSemanticCapability(semantic: ResolvedEmbeddingConfig): Se
 /** True when the configuration cannot reach a provider as it stands. */
 export function semanticCapabilityIsBlocked(capability: SemanticCapability): boolean {
   return capability.tier !== SEMANTIC_CAPABILITY_TIER.configured;
+}
+
+/** The rungs of the capability ladder that BLOCK; `configured` is not one. */
+export type BlockedCapabilityTier = Exclude<
+  SemanticCapabilityTier,
+  typeof SEMANTIC_CAPABILITY_TIER.configured
+>;
+
+/**
+ * The typed failure each blocked rung refuses with, shared by every
+ * surface that attempted semantic work and could not.
+ *
+ * One entry per rung, so adding a rung to the ladder is a type error here
+ * rather than a request that silently degrades. `credential-missing`
+ * raises `EMBEDDING_KEY_MISSING`; `disabled` raises `EMBEDDING_DISABLED`,
+ * the code the null provider already raises for the same configuration
+ * when the indexer meets it, so one condition has one code across the
+ * tree.
+ */
+export const BLOCKED_TIER_ERROR_CODE: Readonly<Record<BlockedCapabilityTier, SearchErrorCode>> =
+  Object.freeze({
+    [SEMANTIC_CAPABILITY_TIER.disabled]: "EMBEDDING_DISABLED",
+    [SEMANTIC_CAPABILITY_TIER.credentialMissing]: "EMBEDDING_KEY_MISSING",
+  });
+
+/**
+ * {@link semanticCapabilityIsBlocked} as a TYPE predicate, which lets
+ * {@link BLOCKED_TIER_ERROR_CODE} be indexed with no cast and no
+ * unreachable default arm.
+ */
+export function isBlockedCapability(
+  capability: SemanticCapability,
+): capability is SemanticCapability & { readonly tier: BlockedCapabilityTier } {
+  return semanticCapabilityIsBlocked(capability);
 }
 
 /**

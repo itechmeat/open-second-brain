@@ -22,13 +22,14 @@
  * the surfaces that would be worth attacking are exactly the ones a
  * future open schema would leave uncovered.
  *
- * Comparison is over a normalised name (case-folded, separators dropped),
- * so `reach`, `Reach`, `transport_reach`, `transport-reach` and
+ * Comparison is over a normalised name (compatibility-folded, case-folded,
+ * whitespace, invisible code points and separators dropped), so `reach`, `Reach`, `transport_reach`, `transport-reach` and
  * `transportReach` are one argument rather than five holes. `disclosure`
  * is deliberately NOT reserved: it is the progressive result-depth mode
  * on the recall surfaces and has nothing to do with this boundary.
  */
 
+import { normalizeReservedName } from "../core/validate.ts";
 import { INVALID_PARAMS, MCPError } from "./protocol.ts";
 import type { ToolDefinition } from "./tool-contract.ts";
 
@@ -38,20 +39,15 @@ export const REACH_REFUSAL = "caller-supplied-reach";
 /**
  * The argument names this server will not read a reach from, in their
  * canonical spelling. Every case and separator variant of these normalises
- * onto the same key - see {@link normalizeArgumentName}.
+ * onto the same key - see {@link normalizeReservedName}.
  */
 export const RESERVED_REACH_ARGUMENTS: ReadonlyArray<string> = Object.freeze([
   "reach",
   "transport_reach",
 ]);
 
-/** Case-folded, separator-free form, so one name is not five holes. */
-function normalizeArgumentName(name: string): string {
-  return name.normalize("NFC").toLowerCase().replaceAll(/[_-]/g, "");
-}
-
 const RESERVED_KEYS: ReadonlySet<string> = new Set(
-  RESERVED_REACH_ARGUMENTS.map(normalizeArgumentName),
+  RESERVED_REACH_ARGUMENTS.map(normalizeReservedName),
 );
 
 /** The structured payload attached to the refusal, for machine callers. */
@@ -73,7 +69,7 @@ export interface CallerSuppliedReachData {
  */
 export function findCallerSuppliedReach(args: Record<string, unknown>): ReadonlyArray<string> {
   return Object.freeze(
-    Object.keys(args).filter((k) => RESERVED_KEYS.has(normalizeArgumentName(k))),
+    Object.keys(args).filter((k) => RESERVED_KEYS.has(normalizeReservedName(k))),
   );
 }
 

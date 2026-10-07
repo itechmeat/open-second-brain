@@ -39,7 +39,12 @@ import {
   type LaneTaskId,
   type MaintenanceTaskResult,
 } from "../../../core/brain/maintenance/lane.ts";
-import { listJournal, MAINTENANCE_JOURNAL_CAP } from "../../../core/brain/maintenance/journal.ts";
+import {
+  listJournal,
+  MAINTENANCE_JOURNAL_CAP,
+  recordedPriceSource,
+  type MaintenanceSpendReceipt,
+} from "../../../core/brain/maintenance/journal.ts";
 import {
   customTasksOffNotice,
   resolveCustomTasks,
@@ -54,6 +59,11 @@ import {
   parseWindowBounds,
   renderMaintenanceCronTemplate,
 } from "../../maintenance-cron.ts";
+import {
+  formatEstimatedUsd,
+  PRICE_UNKNOWN_LABEL,
+  USD_DECIMALS,
+} from "../../../core/search/embedding-spend.ts";
 import type { EmbeddingSpendPreview } from "../../../core/search/indexer.ts";
 import { resolveSearchConfig } from "../../../core/search/index.ts";
 import { onInterrupt } from "../../interrupt.ts";
@@ -238,7 +248,9 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
           // the task never ran; rendering it as FAILED would report an
           // attempt that did not happen.
           const outcome = e.ok === undefined ? "" : ` ${e.ok ? "ok" : "FAILED"}`;
-          ok(`  ${e.ts}  ${e.verdict}${e.task ? `  ${e.task}${outcome}` : ""}`);
+          ok(
+            `  ${e.ts}  ${e.verdict}${e.task ? `  ${e.task}${outcome}` : ""}${journalReceiptSuffix(e.receipt)}`,
+          );
         }
       }
       return MAINTENANCE_EXIT.ok;
@@ -493,10 +505,29 @@ export function renderTaskLine(t: MaintenanceTaskResult): string {
     t.timed_out === true ? `TIMED OUT (${t.error})` : t.ok ? "ok" : `FAILED (${t.error})`;
   const line = `${t.name}: ${outcome} in ${t.duration_ms}ms`;
   if (t.receipt === undefined) return line;
-  return (
-    `${line} (tokens=${t.receipt.tokens}, ` +
-    `estimatedUsd=${t.receipt.estimatedUsd.toFixed(4)}, model=${t.receipt.model ?? "unknown"})`
-  );
+  return `${line} (${receiptFields(t.receipt)})`;
+}
+
+/** A spend receipt's tokens, estimate and model, as the task line prints them. */
+function receiptFields(receipt: MaintenanceSpendReceipt): string {
+  // The journal read casts its rows unvalidated, so a row from another
+  // build or a hand edit may carry no estimate or a non-number one; that
+  // reads as an unknown price instead of breaking the whole listing.
+  const estimate =
+    typeof receipt.estimatedUsd === "number" && Number.isFinite(receipt.estimatedUsd)
+      ? `estimatedUsd=${receipt.estimatedUsd.toFixed(USD_DECIMALS)}`
+      : PRICE_UNKNOWN_LABEL;
+  return `tokens=${receipt.tokens}, ${estimate}, model=${receipt.model ?? "unknown"}`;
+}
+
+/**
+ * A journaled receipt for the status listing: the task line's fields plus
+ * the recorded price source, so a row written before sources existed
+ * reads as unrecorded instead of as a known price.
+ */
+function journalReceiptSuffix(receipt: MaintenanceSpendReceipt | undefined): string {
+  if (receipt === undefined) return "";
+  return `  (${receiptFields(receipt)}, price_source=${recordedPriceSource(receipt)})`;
 }
 
 /**
@@ -508,10 +539,14 @@ export function renderTaskLine(t: MaintenanceTaskResult): string {
  * the refusal that can follow it print one spelling.
  */
 export function formatSpendBanner(preview: EmbeddingSpendPreview, gateUsd: number): string {
-  const gate = gateUsd > 0 ? `$${gateUsd.toFixed(4)}` : "off";
+  const gate = gateUsd > 0 ? formatEstimatedUsd(gateUsd) : "off";
+  const estimate =
+    preview.estimatedUsd === null
+      ? PRICE_UNKNOWN_LABEL
+      : `estimated ${formatEstimatedUsd(preview.estimatedUsd)}`;
   return (
     `embedding spend: model ${preview.model ?? "unknown"}, ${preview.pendingChunks} chunks pending, ` +
-    `estimated $${preview.estimatedUsd.toFixed(4)} (gate: ${gate})`
+    `${estimate} (gate: ${gate})`
   );
 }
 

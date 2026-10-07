@@ -1,7 +1,9 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, rmSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 
 import { resolveSessionScope } from "../brain/session-scope.ts";
+import { derivedDirIsSymlinked, readRegularFileNoFollow } from "../derived-store-guard.ts";
+import { atomicWriteText } from "../fs-atomic.ts";
 import { resolveIndexPath } from "./paths.ts";
 import { SearchError, type ResolvedSearchConfig, type SearchSessionFocus } from "./types.ts";
 
@@ -86,15 +88,37 @@ export function sessionFocusPath(config: ResolvedSearchConfig, sessionScope?: st
   return join(dir, FOCUS_DIR, `${resolveSessionScope(sessionScope)}.json`);
 }
 
+/**
+ * True when a directory on the way to the focus file is a symbolic link. The
+ * store directory is checked segment by segment from the vault when it lies
+ * inside the vault (a vault received from elsewhere could point any of them
+ * outside); a store the operator configured outside the vault is trusted as
+ * given, and only the per-scope `search-focus/` directory below it is checked.
+ */
+function focusDirIsSymlinked(config: ResolvedSearchConfig, sessionScope?: string): boolean {
+  const storeDir = dirname(resolveIndexPath(config.vault, config.dbPath));
+  const scopeSegments = sessionScope === undefined ? [] : [FOCUS_DIR];
+  const rel = relative(config.vault, storeDir);
+  if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) {
+    return derivedDirIsSymlinked(config.vault, ...rel.split(sep), ...scopeSegments);
+  }
+  return derivedDirIsSymlinked(storeDir, ...scopeSegments);
+}
+
+/**
+ * The persisted focus, or null when absent, expired, malformed, not a
+ * regular file (a link is not followed) or behind a symlinked directory.
+ */
 export function readSessionFocus(
   config: ResolvedSearchConfig,
   nowMs = Date.now(),
   sessionScope?: string,
 ): SearchSessionFocus | null {
-  const path = sessionFocusPath(config, sessionScope);
-  if (!existsSync(path)) return null;
+  if (focusDirIsSymlinked(config, sessionScope)) return null;
+  const read = readRegularFileNoFollow(sessionFocusPath(config, sessionScope));
+  if (read.status !== "ok") return null;
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as SearchSessionFocus;
+    const parsed = JSON.parse(read.text) as SearchSessionFocus;
     const query = normalizeQuery(typeof parsed.query === "string" ? parsed.query : null);
     const pathPrefix = normalizePathPrefix(
       typeof parsed.pathPrefix === "string" ? parsed.pathPrefix : null,
@@ -108,17 +132,30 @@ export function readSessionFocus(
   }
 }
 
+/**
+ * Persist a focus atomically with mode 0600. A symlinked directory on the way
+ * is refused with `INVALID_INPUT`; a focus file that is itself a link is
+ * replaced by the rename, never written through.
+ */
 export function writeSessionFocus(
   config: ResolvedSearchConfig,
   focus: SearchSessionFocus,
   sessionScope?: string,
 ): void {
-  const path = sessionFocusPath(config, sessionScope);
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(focus, null, 2) + "\n");
+  if (focusDirIsSymlinked(config, sessionScope)) {
+    throw new SearchError(
+      "INVALID_INPUT",
+      "session focus directory is a symbolic link; refusing to write through it",
+    );
+  }
+  atomicWriteText(sessionFocusPath(config, sessionScope), JSON.stringify(focus, null, 2) + "\n", {
+    mode: 0o600,
+  });
 }
 
+/** Remove a persisted focus. A symlinked directory on the way is left alone. */
 export function clearSessionFocus(config: ResolvedSearchConfig, sessionScope?: string): void {
+  if (focusDirIsSymlinked(config, sessionScope)) return;
   const path = sessionFocusPath(config, sessionScope);
   if (existsSync(path)) rmSync(path, { force: true });
 }

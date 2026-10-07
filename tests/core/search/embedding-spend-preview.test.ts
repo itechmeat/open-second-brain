@@ -13,9 +13,16 @@
  *   the pass's walk and a walk that adds chunks (a dream or an agent
  *   wrote since the last index) makes the preview an estimate by
  *   position. The receipt is what the pass actually refused or priced.
+ *
+ * - The unpriced refusal (Honest Embedding Spend): under an explicit
+ *   positive gate a model nobody priced is refused with
+ *   EMBEDDING_COST_UNPRICED before any provider contact, instead of being
+ *   estimated at $0 and let through. A forced run records the unknown
+ *   price as a null estimate with `priceSource: unknown`.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,11 +30,18 @@ import { join } from "node:path";
 import {
   embeddingSpendOf,
   estimatePendingEmbeddingSpend,
+  indexStatus,
   runEmbeddingPhase,
   type EmbeddingPhaseTally,
 } from "../../../src/core/search/indexer.ts";
+import { planEmbeddingSpend } from "../../../src/core/search/embedding-spend.ts";
+import { planVectorBackfill } from "../../../src/core/search/vector-backfill.ts";
 import { indexVault, resolveSearchConfig } from "../../../src/core/search/index.ts";
 import { Store } from "../../../src/core/search/store.ts";
+import {
+  resolveEmbeddingPrice,
+  type KnownPriceQuote,
+} from "../../../src/core/search/embeddings/pricing.ts";
 import {
   estimateCostUsd,
   estimateTokens,
@@ -37,6 +51,13 @@ import { SearchError } from "../../../src/core/search/types.ts";
 import type { ResolvedSearchConfig } from "../../../src/core/search/types.ts";
 import { startFakeHttp, type FakeHttp } from "../../helpers/fake-http.ts";
 import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
+
+/** The builtin quote of the table model the gate fixtures price against. */
+const TABLE_QUOTE: KnownPriceQuote = (() => {
+  const quote = resolveEmbeddingPrice("text-embedding-3-small");
+  if (quote.usdPerMtok === null) throw new Error("text-embedding-3-small lost its table price");
+  return quote;
+})();
 
 let tmp: string;
 let vault: string;
@@ -108,7 +129,7 @@ test("a vault with no index cannot spend: null", async () => {
 test("pending chunks preview the kernel's own numbers at the resolved model", async () => {
   const contents = ["alpha beta gamma delta", "second chunk of prose"];
   const tokens = estimateTokens(contents);
-  const usd = estimateCostUsd(tokens, "text-embedding-3-small");
+  const usd = estimateCostUsd(tokens, TABLE_QUOTE);
   // A positive gate set BELOW the kernel's estimate: the run would be
   // refused without a forced bypass, and the preview says so.
   const config = configWith({
@@ -219,9 +240,40 @@ test("the phase records its own gate result on the tally, at the resolved model"
       tokens: estimateTokens(contents),
       estimatedUsd: 0,
       forced: false,
+      priceSource: "builtin",
     });
   } finally {
     await store.close();
+  }
+});
+
+/**
+ * Pinned split, deliberately: the receipt names the model the price was
+ * resolved for - the local provider always embeds with its implicit
+ * model - while the vectors keep the stamp `embedding_model` gives them,
+ * because changing the stamp would re-key (and drop) every existing
+ * local index. The local model is free, so the money statement holds.
+ */
+test("a local receipt names the priced model while vectors keep the configured stamp", async () => {
+  const config = configWith({
+    search_semantic_enabled: "true",
+    embedding_provider: "local",
+    embedding_model: "custom-local",
+  });
+  const store = await openSeeded(config, ["alpha beta gamma"]);
+  const tally: EmbeddingPhaseTally = { embeddingsComputed: 0, embeddingsRetries: 0 };
+  try {
+    await runEmbeddingPhase(store, config, tally, {});
+  } finally {
+    await store.close();
+  }
+  expect(tally.spend?.model).toBe(LOCAL_EMBEDDING_MODEL);
+  const db = new Database(config.dbPath, { readonly: true });
+  try {
+    const stamps = db.query<{ model: string }, []>("SELECT DISTINCT model FROM embeddings").all();
+    expect(stamps.map((row) => row.model)).toEqual(["custom-local"]);
+  } finally {
+    db.close();
   }
 });
 
@@ -273,10 +325,33 @@ test("a positive gate refuses unforced and records nothing; forced records the b
       expect(forced.spend?.model).toBe("text-embedding-3-small");
       expect(forced.spend?.tokens).toBe(estimateTokens(contents));
       expect(forced.spend?.estimatedUsd).toBe(
-        estimateCostUsd(forced.spend?.tokens ?? 0, "text-embedding-3-small"),
+        estimateCostUsd(forced.spend?.tokens ?? 0, TABLE_QUOTE),
       );
       expect(forced.spend?.estimatedUsd).toBeGreaterThan(0);
       expect(server.callCount()).toBeGreaterThan(0);
+    } finally {
+      await store.close();
+    }
+  } finally {
+    await server?.close();
+  }
+});
+
+test("--force-cost under the cap is not recorded as forced", async () => {
+  let server: FakeHttp | null = null;
+  try {
+    server = await startFakeHttp();
+    const config = configWith({
+      ...PRICED_MODEL,
+      embedding_base_url: server.url,
+      embedding_cost_gate_usd: "100",
+    });
+    const store = await openSeeded(config, ["a short chunk well under the cap"]);
+    try {
+      const tally: EmbeddingPhaseTally = { embeddingsComputed: 0, embeddingsRetries: 0 };
+      await runEmbeddingPhase(store, config, tally, { forceCost: true });
+      expect(tally.embeddingsComputed).toBe(1);
+      expect(tally.spend?.forced).toBe(false);
     } finally {
       await store.close();
     }
@@ -319,4 +394,209 @@ test("embeddingSpendOf reads the receipt off a completed run's stats", async () 
   const offlineStats = await indexVault(offlineConfig, {});
   expect(offlineStats.backend).toBe("offline");
   expect(embeddingSpendOf(offlineStats)).toBeUndefined();
+});
+
+// ── unpriced models under an explicit gate ───────────────────────────────────
+
+const UNPRICED_MODEL = "zembed-1";
+
+test("a positive gate refuses an unpriced model by name, before any provider contact", async () => {
+  let server: FakeHttp | null = null;
+  try {
+    server = await startFakeHttp();
+    const config = configWith({
+      search_semantic_enabled: "true",
+      embedding_provider: "openai-compat",
+      embedding_base_url: server.url,
+      embedding_model: UNPRICED_MODEL,
+      embedding_api_key: FAKE_PROVIDER_KEY,
+      embedding_cost_gate_usd: "100",
+    });
+    const store = await openSeeded(config, ["a short chunk the price of which nobody stated"]);
+    try {
+      const tally: EmbeddingPhaseTally = { embeddingsComputed: 0, embeddingsRetries: 0 };
+      const refusal = await runEmbeddingPhase(store, config, tally, {}).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      expect(refusal).toBeInstanceOf(SearchError);
+      const error = refusal as SearchError;
+      expect(error.code).toBe("EMBEDDING_COST_UNPRICED");
+      for (const named of [
+        UNPRICED_MODEL,
+        "embedding_price_model",
+        "embedding_price_usd_per_mtok",
+        "--force-cost",
+      ]) {
+        expect(error.message).toContain(named);
+      }
+      expect(tally.spend).toBeUndefined();
+      expect(server.callCount()).toBe(0);
+
+      const forced: EmbeddingPhaseTally = { embeddingsComputed: 0, embeddingsRetries: 0 };
+      await runEmbeddingPhase(store, config, forced, { forceCost: true });
+      expect(forced.embeddingsComputed).toBe(1);
+      expect(forced.spend).toMatchObject({
+        model: UNPRICED_MODEL,
+        forced: true,
+        priceSource: "unknown",
+        estimatedUsd: null,
+      });
+    } finally {
+      await store.close();
+    }
+  } finally {
+    await server?.close();
+  }
+});
+
+test("a handed-in plan is re-gated, so a forced or stale verdict cannot pass the gate", async () => {
+  let server: FakeHttp | null = null;
+  try {
+    server = await startFakeHttp();
+    const config = configWith({
+      search_semantic_enabled: "true",
+      embedding_provider: "openai-compat",
+      embedding_base_url: server.url,
+      embedding_model: UNPRICED_MODEL,
+      embedding_api_key: FAKE_PROVIDER_KEY,
+      embedding_cost_gate_usd: "100",
+    });
+    const store = await openSeeded(config, ["a chunk whose plan claims the gate passed"]);
+    try {
+      const forcedPlan = planEmbeddingSpend(store, config, { forced: true });
+      expect(forcedPlan.gate.blocked).toBe(false);
+      const unforced = planEmbeddingSpend(store, config);
+      const stalePlan = { ...unforced, gate: { blocked: false as const, reason: null } };
+      for (const plan of [forcedPlan, stalePlan]) {
+        const tally: EmbeddingPhaseTally = { embeddingsComputed: 0, embeddingsRetries: 0 };
+        // eslint-disable-next-line no-await-in-loop -- two plans, one after the other
+        const refusal = await runEmbeddingPhase(store, config, tally, { plan }).then(
+          () => null,
+          (error: unknown) => error,
+        );
+        expect((refusal as SearchError).code).toBe("EMBEDDING_COST_UNPRICED");
+        expect(tally.spend).toBeUndefined();
+      }
+      expect(server.callCount()).toBe(0);
+    } finally {
+      await store.close();
+    }
+  } finally {
+    await server?.close();
+  }
+});
+
+test("the over-cap refusal keeps its code and message", async () => {
+  const config = configWith({ ...PRICED_MODEL, embedding_cost_gate_usd: "0.000001" });
+  const store = await openSeeded(config, ["pricing text repeated to exceed the gate. ".repeat(8)]);
+  try {
+    const tally: EmbeddingPhaseTally = { embeddingsComputed: 0, embeddingsRetries: 0 };
+    const refusal = await runEmbeddingPhase(store, config, tally, {}).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect((refusal as SearchError).code).toBe("EMBEDDING_COST_GATE");
+    expect((refusal as SearchError).message).toMatch(
+      /^estimated embedding cost \$\d+\.\d{4} for 1 chunk\(s\) exceeds embedding_cost_gate_usd \$0\.0000\. Re-run with --force-cost to proceed or raise the gate\.$/,
+    );
+  } finally {
+    await store.close();
+  }
+});
+
+// ── every surface reads the one plan ────────────────────────────────────────
+
+const OPERATOR_PRICED = {
+  embedding_price_model: UNPRICED_MODEL,
+  embedding_price_usd_per_mtok: "0.05",
+};
+
+test("preview, backfill dry run, status and the phase report one estimate and source", async () => {
+  let server: FakeHttp | null = null;
+  try {
+    server = await startFakeHttp();
+    const config = configWith({
+      search_semantic_enabled: "true",
+      embedding_provider: "openai-compat",
+      embedding_base_url: server.url,
+      embedding_model: UNPRICED_MODEL,
+      embedding_api_key: FAKE_PROVIDER_KEY,
+      ...OPERATOR_PRICED,
+    });
+    const contents = ["first chunk the operator priced", "second chunk the operator priced"];
+    await storeWithChunks(config, contents);
+
+    const preview = await estimatePendingEmbeddingSpend(config);
+    const dryRun = await planVectorBackfill(config);
+    const status = await indexStatus(config);
+    expect(preview?.estimatedUsd).toBeGreaterThan(0);
+    expect(preview?.priceSource).toBe("operator");
+    expect(dryRun.estimatedCostUsd).toBe(preview?.estimatedUsd ?? -1);
+    expect(dryRun.priceSource).toBe("operator");
+    expect(status.estimatedRefreshCostUsd).toBe(preview?.estimatedUsd ?? -1);
+    expect(status.refreshPriceSource).toBe("operator");
+
+    const store = await Store.open(config, { mode: "write" });
+    try {
+      const tally: EmbeddingPhaseTally = { embeddingsComputed: 0, embeddingsRetries: 0 };
+      await runEmbeddingPhase(store, config, tally, {});
+      expect(tally.spend).toMatchObject({
+        tokens: preview?.tokens ?? -1,
+        estimatedUsd: preview?.estimatedUsd ?? -1,
+        priceSource: "operator",
+      });
+    } finally {
+      await store.close();
+    }
+  } finally {
+    await server?.close();
+  }
+});
+
+test("an unknown price reads null on every surface and blocks as unpriced under a gate", async () => {
+  const config = configWith({
+    ...PRICED_MODEL,
+    embedding_model: UNPRICED_MODEL,
+    embedding_cost_gate_usd: "100",
+  });
+  await storeWithChunks(config, ["a chunk nobody priced"]);
+
+  const preview = await estimatePendingEmbeddingSpend(config);
+  expect(preview).toMatchObject({
+    estimatedUsd: null,
+    priceSource: "unknown",
+    blocked: true,
+    reason: "unpriced",
+  });
+  const dryRun = await planVectorBackfill(config);
+  expect(dryRun).toMatchObject({
+    estimatedCostUsd: null,
+    priceSource: "unknown",
+    blocked: true,
+    reason: "unpriced",
+  });
+  const status = await indexStatus(config);
+  expect(status.estimatedRefreshCostUsd).toBeNull();
+  expect(status.refreshPriceSource).toBe("unknown");
+
+  // The gate off: nothing blocks, the estimate stays unknown.
+  const ungated = configWith({ ...PRICED_MODEL, embedding_model: UNPRICED_MODEL });
+  expect(await estimatePendingEmbeddingSpend(ungated)).toMatchObject({
+    estimatedUsd: null,
+    blocked: false,
+    reason: null,
+  });
+});
+
+test("a local index prices as a known zero on the backfill and on status", async () => {
+  const local = configWith({ search_semantic_enabled: "true", embedding_provider: "local" });
+  await storeWithChunks(local, ["local chunk"]);
+  expect(await planVectorBackfill(local)).toMatchObject({
+    estimatedCostUsd: 0,
+    priceSource: "builtin",
+  });
+  const status = await indexStatus(local);
+  expect(status.estimatedRefreshCostUsd).toBe(0);
+  expect(status.refreshPriceSource).toBe("builtin");
 });

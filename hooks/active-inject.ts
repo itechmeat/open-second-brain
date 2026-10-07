@@ -53,7 +53,12 @@
 
 import { existsSync, readFileSync } from "node:fs";
 
-import { resolveVault } from "../src/core/config.ts";
+import {
+  resolveRecallInjectEnabled,
+  resolveRegroundPartChars,
+  resolveRegroundPartsEnabled,
+  resolveVault,
+} from "../src/core/config.ts";
 import { parseFrontmatterText } from "../src/core/vault.ts";
 import {
   brainActivePath,
@@ -85,7 +90,11 @@ import { armProcessCeiling, resolveHookCeilingMs } from "./lib/process-ceiling.t
 import { appendAuditRecord } from "../src/core/reliability/audit.ts";
 import { loadInjectContextFailOpen } from "../src/core/brain/inject-failopen.ts";
 import { collectRuntimeNotices, renderRuntimeNotices } from "../src/core/brain/runtime-notices.ts";
-import { asHookPayload, readHookInput } from "./lib/stdin.ts";
+import { asHookPayload, readHookInput, type HookPayloadBase } from "./lib/stdin.ts";
+import { beginInjectionEpoch, digestNotePaths, isRealSessionId } from "./lib/injection-ledger.ts";
+import { pruneHookStateFiles } from "./lib/session-state.ts";
+import { detectHookRuntime } from "./lib/detect.ts";
+import { splitRegroundParts } from "../src/core/brain/reground-parts.ts";
 import { isContextEventName } from "./lib/context-events.ts";
 import {
   emitContextReceipt,
@@ -195,8 +204,11 @@ async function main(): Promise<void> {
     // the block never reaches the budgeter, so the configured injection
     // budget cannot shrink it; a throw inside memory assembly cannot take
     // it down with it; and it is never written to the inject cache, so a
-    // stale constitution can never be served from disk while the live one
-    // is unreadable.
+    // stale constitution can never be served from that cache while the
+    // live one is unreadable. With `reground_parts_enabled` on, the tail of
+    // a split payload (this block included, when it spills past part 1) is
+    // queued in the per-session hook-state file for re-grounding, until the
+    // next SessionStart replaces the queue.
     const standingBlock = renderStandingBlock(vault, limits.standingRulesMaxChars, meter);
 
     // The scoped operator rules for the project this session runs in (the
@@ -226,23 +238,317 @@ async function main(): Promise<void> {
     });
     // The early return now fires only when there are NEITHER standing rules
     // NOR memory - a vault with rules and a broken memory layer still speaks.
-    const context = joinBlocks([standingBlock, scopedBlock, memoryContext]);
-    if (context.length === 0) return;
+    const blocks = [standingBlock, scopedBlock, memoryContext];
+    const context = joinBlocks(blocks);
+
+    // Only a SessionStart starts an injection epoch: the same hook run on
+    // another context event (an operator-registered UserPromptSubmit) must
+    // neither clear the recall set nor replace the re-delivery queue, so it
+    // injects unsplit and leaves the ledger alone.
+    const startsEpoch = hookEventName === "SessionStart";
+    const epochInput: RecordInjectionEpochInput = {
+      sessionId: payload.session_id,
+      startSource: payload.source,
+      loaderSource: source,
+      memoryContext,
+      meter,
+    };
+    if (context.length === 0) {
+      // Nothing to emit, but the earlier context is gone all the same: the
+      // epoch still clears the recall set and any stale re-delivery queue.
+      if (startsEpoch) {
+        recordInjectionEpoch(vault, epochInput, {
+          parts: [""],
+          partsDropped: 0,
+          droppedChars: 0,
+          partCeilingChars: 0,
+          meter: null,
+        });
+      }
+      return;
+    }
+
+    // Chunked re-delivery (off by default). A split payload is committed
+    // to the ledger BEFORE stdout: if the queue cannot be written, parts
+    // 2..n would be lost, so the hook emits the whole payload instead.
+    let delivery: Delivery = startsEpoch
+      ? planDelivery(payload, blocks, context)
+      : { parts: [context], partsDropped: 0, droppedChars: 0, partCeilingChars: 0, meter: null };
+    let ledgerWritten: boolean | null = null;
+    if (delivery.parts.length > 1) {
+      ledgerWritten = recordInjectionEpoch(vault, epochInput, delivery);
+      if (!ledgerWritten) delivery = unsplitDelivery(delivery, context);
+    }
 
     const out = {
       hookSpecificOutput: {
         hookEventName,
-        additionalContext: context,
+        additionalContext: delivery.parts[0]!,
       },
     };
     process.stdout.write(JSON.stringify(out) + "\n");
 
+    // After stdout, like the meter: the ledger serves later hooks in this
+    // session and must never delay or alter what was injected. A split
+    // whose queue could not be written went out whole; retrying the epoch
+    // with that unsplit delivery (no queue) still clears the previous
+    // epoch's queue and recall set when the failure was transient.
+    if (startsEpoch && ledgerWritten !== true) {
+      ledgerWritten = recordInjectionEpoch(vault, epochInput, delivery);
+    }
+    if (ledgerWritten === true && startSourceOf(payload.source) === "startup") {
+      pruneHookStateFilesSafe(vault);
+    }
+
     // Measure LAST, so the injected context is already on stdout before the
     // meter can spend a millisecond of the ceiling. See recordInjectionSize.
-    recordInjectionSize(vault, { hookEventName, loaderSource: source, context, meter });
+    recordInjectionSize(vault, {
+      hookEventName,
+      loaderSource: source,
+      context,
+      meter,
+      reground: delivery.meter,
+    });
   } finally {
     disarm();
   }
+}
+
+// ----- injection ledger (recall-injection-lifecycle) -----------------------
+
+interface RecordInjectionEpochInput {
+  readonly sessionId: unknown;
+  /** The SessionStart `source` (startup, resume, clear, compact), when sent. */
+  readonly startSource: unknown;
+  readonly loaderSource: InjectContextSource;
+  readonly memoryContext: string;
+  readonly meter: InjectionMeter;
+}
+
+/**
+ * Start a new injection epoch in the per-session ledger: record the note
+ * paths this injection committed for delivery - the emitted part and the
+ * queued parts, never the parts the splitter dropped past its cap -
+ * clear the recall-inject set and replace the re-delivery queue, so the
+ * recall brief neither repeats the digest nor carries dedupe state across
+ * a compaction or a clear.
+ *
+ * Written only when a consumer exists (`recall_inject_enabled` or
+ * `reground_parts_enabled`) and the host sent a real session id, so a
+ * default install gets no new disk write. Returns whether it was written.
+ *
+ * FAIL-SOFT. Never throws; nothing here can change the exit code.
+ */
+function recordInjectionEpoch(
+  vault: string,
+  input: RecordInjectionEpochInput,
+  delivery: Delivery,
+): boolean {
+  try {
+    if (!isRealSessionId(input.sessionId)) return false;
+    if (!resolveRecallInjectEnabled() && !resolveRegroundPartsEnabled()) return false;
+    const startSource = startSourceOf(input.startSource);
+    const committed = delivery.parts.join(BLOCK_SEPARATOR);
+    return beginInjectionEpoch(vault, input.sessionId, {
+      epoch: `${startSource}:${Date.now()}`,
+      emittedPaths: digestNotePaths({
+        emittedText: committed,
+        activeBodyEmitted: bodyEmitted(input, SOURCE_ACTIVE_BODY, delivery),
+        lessonsBodyEmitted: bodyEmitted(input, SOURCE_LESSONS_BODY, delivery),
+      }),
+      regroundParts: delivery.parts.slice(1),
+      partCeilingChars: delivery.partCeilingChars,
+    });
+  } catch {
+    // The ledger is an optimisation for later hooks. A failure to record
+    // must never disturb an injection.
+    return false;
+  }
+}
+
+/** The SessionStart `source` values the host documents. */
+const START_SOURCES = new Set(["startup", "resume", "clear", "compact"]);
+
+/**
+ * The payload's SessionStart `source`, mapped to the closed set the host
+ * documents and `unknown` for anything else, so a host-supplied string
+ * never reaches the ledger epoch, the marker or the audit lines unbounded.
+ */
+function startSourceOf(source: unknown): string {
+  return typeof source === "string" && START_SOURCES.has(source) ? source : "unknown";
+}
+
+/**
+ * Drop scope files of long-gone sessions. Called on a `startup` that just
+ * wrote the ledger, so the sweep is paid once per new session and only by
+ * installs that use the ledger.
+ */
+function pruneHookStateFilesSafe(vault: string): void {
+  try {
+    pruneHookStateFiles(vault);
+  } catch {
+    // best-effort housekeeping
+  }
+}
+
+/**
+ * Whether a memory sub-body reached the payload. A fresh assembly says so
+ * through the meter; a body served from the last-good cache cannot be
+ * attributed, so any non-empty cached memory counts as delivered - the
+ * conservative side for dedupe, which only ever suppresses a repeat.
+ *
+ * When the split dropped parts past its cap, the dropped tail is the end of
+ * the payload, and the memory context is the payload's last block. A body
+ * counts only when it ends before that tail, measured by its position: a
+ * body cut short was not delivered whole, even when its last line repeats
+ * a line that was.
+ *
+ * The two truncation paths differ on purpose. A body cut by the injection
+ * budget (`budgetActiveBody`) still counts whole when no part was dropped,
+ * so a recall candidate on a span past the budget cut is filtered as
+ * already shown. The cost is small: preference paths come only from the
+ * preference bullets actually emitted, so a preference past the cut stays
+ * eligible; only the `Brain/active.md` and `Brain/lessons.md` paths
+ * themselves are over-suppressed for the epoch.
+ */
+function bodyEmitted(input: RecordInjectionEpochInput, name: string, delivery: Delivery): boolean {
+  const end = bodyEndInMemory(input, name);
+  if (end === null) return false;
+  return input.memoryContext.length - end >= delivery.droppedChars;
+}
+
+/**
+ * Where the named sub-body ends in the memory context, or `null` when it
+ * did not reach it. A cached memory context cannot be attributed, so it
+ * ends where the memory context ends. A fresh one is the meter's memory
+ * sub-bodies joined in order; a body that is not where that join puts it
+ * is not attributed.
+ */
+function bodyEndInMemory(input: RecordInjectionEpochInput, name: string): number | null {
+  const memory = input.memoryContext;
+  if (input.loaderSource !== "fresh") return memory.length > 0 ? memory.length : null;
+  let end = 0;
+  for (const source of input.meter.sources) {
+    if (!MEMORY_SOURCES.has(source.name) || source.text.length === 0) continue;
+    const start = end === 0 ? 0 : end + BLOCK_SEPARATOR.length;
+    end = start + source.text.length;
+    if (source.name === name) return memory.slice(start, end) === source.text ? end : null;
+  }
+  return null;
+}
+
+// ----- chunked re-delivery (recall-injection-lifecycle) --------------------
+
+/** Receipt fields for the re-delivery lane, under `extra.injection`. */
+interface RegroundMeter {
+  readonly utf16_chars: number;
+  /** `null` on a runtime without the `reground-deliver` carrier. */
+  readonly part_ceiling_chars: number | null;
+  readonly parts_total: number;
+  readonly parts_dropped: number;
+  readonly over_budget: boolean;
+  /**
+   * Set only when a planned split fell back to the whole payload because its
+   * queue could not be written, so that case reads apart from a plain
+   * over-ceiling payload.
+   */
+  readonly reground_fallback?: typeof REGROUND_FALLBACK_LEDGER_WRITE_FAILED;
+  /**
+   * Set only when a part-ceiling key held a value out of range or not an
+   * integer: the rejected config keys, so the ceiling that ran is explained.
+   */
+  readonly config_invalid?: ReadonlyArray<string>;
+}
+
+/** {@link RegroundMeter.reground_fallback} value for a failed queue write. */
+const REGROUND_FALLBACK_LEDGER_WRITE_FAILED = "ledger_write_failed";
+
+interface Delivery {
+  /** parts[0] goes to stdout now; the rest are queued for `reground-deliver`. */
+  readonly parts: ReadonlyArray<string>;
+  /** Parts the splitter cut past its cap: neither emitted nor queued. */
+  readonly partsDropped: number;
+  /** Length of the joined context's tail those parts held; 0 when none were dropped. */
+  readonly droppedChars: number;
+  /** The ceiling the parts were cut to; 0 when no split applies. */
+  readonly partCeilingChars: number;
+  /** `null` while `reground_parts_enabled` is off, so the receipt keeps its shape. */
+  readonly meter: RegroundMeter | null;
+}
+
+/**
+ * Decide how the joined context is delivered. Only Claude Code and Codex
+ * have the carrier registered, so only they are split; every other
+ * runtime, and any payload that fits the ceiling, gets the single
+ * payload exactly as without this lane. A host that sends no session id
+ * cannot have a queue, so it is never split either.
+ */
+function planDelivery(
+  payload: HookPayloadBase,
+  blocks: ReadonlyArray<string>,
+  context: string,
+): Delivery {
+  const single: Delivery = {
+    parts: [context],
+    partsDropped: 0,
+    droppedChars: 0,
+    partCeilingChars: 0,
+    meter: null,
+  };
+  try {
+    if (!resolveRegroundPartsEnabled()) return single;
+    const runtime = detectHookRuntime(payload);
+    if ((runtime !== "claudecode" && runtime !== "codex") || !isRealSessionId(payload.session_id)) {
+      return {
+        ...single,
+        meter: {
+          utf16_chars: context.length,
+          part_ceiling_chars: null,
+          parts_total: 1,
+          parts_dropped: 0,
+          over_budget: false,
+        },
+      };
+    }
+    const { chars: ceiling, invalid } = resolveRegroundPartChars(runtime);
+    const split = splitRegroundParts(blocks, ceiling, joinBlocks, BLOCK_SEPARATOR);
+    return {
+      parts: split.parts,
+      partsDropped: split.partsDropped,
+      droppedChars: split.droppedChars,
+      partCeilingChars: ceiling,
+      meter: {
+        utf16_chars: split.utf16Chars,
+        part_ceiling_chars: ceiling,
+        parts_total: split.parts.length,
+        parts_dropped: split.partsDropped,
+        over_budget: split.overBudget,
+        ...(invalid.length > 0 ? { config_invalid: invalid } : {}),
+      },
+    };
+  } catch {
+    return single;
+  }
+}
+
+/** The whole payload in one part, for a split whose queue could not be written. */
+function unsplitDelivery(delivery: Delivery, context: string): Delivery {
+  return {
+    parts: [context],
+    partsDropped: 0,
+    droppedChars: 0,
+    partCeilingChars: delivery.partCeilingChars,
+    meter:
+      delivery.meter === null
+        ? null
+        : {
+            ...delivery.meter,
+            parts_total: 1,
+            parts_dropped: 0,
+            over_budget: true,
+            reground_fallback: REGROUND_FALLBACK_LEDGER_WRITE_FAILED,
+          },
+  };
 }
 
 // ----- injection-size meter (context-integrity-gates, Unit H) --------------
@@ -309,6 +615,13 @@ const SOURCE_RUNTIME_NOTICES = "runtime-notices";
 const SOURCE_ACTIVE_BODY = RECEIPT_ITEM_ACTIVE_BODY;
 const SOURCE_LESSONS_BODY = RECEIPT_ITEM_LESSONS_BODY;
 
+/** The memory sub-bodies, in the order `assembleActiveContext` joins them. */
+const MEMORY_SOURCES: ReadonlySet<string> = new Set([
+  SOURCE_RUNTIME_NOTICES,
+  SOURCE_ACTIVE_BODY,
+  SOURCE_LESSONS_BODY,
+]);
+
 /** Blank line between two injected blocks. */
 const BLOCK_SEPARATOR = "\n\n";
 
@@ -328,6 +641,7 @@ interface RecordInjectionSizeInput {
   readonly loaderSource: InjectContextSource;
   readonly context: string;
   readonly meter: InjectionMeter;
+  readonly reground: RegroundMeter | null;
 }
 
 /**
@@ -391,6 +705,7 @@ function recordInjectionSize(vault: string, input: RecordInjectionSizeInput): vo
           sources_measured: measured,
           total_bytes: totalBytes,
           total_tokens: estimateTokens(input.context),
+          ...input.reground,
         },
       },
     });

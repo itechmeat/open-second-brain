@@ -18,6 +18,7 @@
  * banner for a pass that did not happen.
  */
 
+import type { EmbeddingPriceSource } from "../../search/embeddings/pricing.ts";
 import { resolveMaintenanceEmbeddings } from "../../config.ts";
 import {
   resolveSemanticCapability,
@@ -57,7 +58,10 @@ export interface LaneSpendBlock {
   readonly banner?: {
     readonly model: string | null;
     readonly pendingChunks: number;
-    readonly estimatedUsd: number;
+    /** Null when nobody stated the model's price. */
+    readonly estimatedUsd: number | null;
+    /** Who stated the price the estimate used. */
+    readonly priceSource: EmbeddingPriceSource;
     readonly gateUsd: number;
   };
   readonly receipt?: MaintenanceSpendReceipt;
@@ -121,6 +125,7 @@ export function createLaneReindex(opts: LaneReindexOptions): LaneReindex {
               model: receipt.model,
               tokens: receipt.tokens,
               estimated_usd: receipt.estimatedUsd,
+              price_source: receipt.priceSource,
               forced: receipt.forced,
               lane: true,
             },
@@ -150,6 +155,7 @@ export function createLaneReindex(opts: LaneReindexOptions): LaneReindex {
                 model: banner.model,
                 pendingChunks: banner.pendingChunks,
                 estimatedUsd: banner.estimatedUsd,
+                priceSource: banner.priceSource,
                 gateUsd: opts.searchConfig.semantic.costGateUsd,
               },
             }

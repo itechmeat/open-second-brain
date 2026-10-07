@@ -7,6 +7,10 @@
  * sweep on append, matching the activation-store discipline.
  */
 
+import {
+  isEmbeddingPriceSource,
+  type EmbeddingPriceSource,
+} from "../../search/embeddings/pricing.ts";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -112,9 +116,34 @@ export interface MaintenanceSpendReceipt {
   /** The model the pass named; null when the config leaves it unset. */
   readonly model: string | null;
   readonly tokens: number;
-  readonly estimatedUsd: number;
+  /**
+   * Null when nobody stated the model's price. A row written before price
+   * sources existed keeps the number it was written with.
+   */
+  readonly estimatedUsd: number | null;
   /** True when `--force-cost` overrode a positive gate that would have blocked the run. */
   readonly forced: boolean;
+  /**
+   * Who stated the price the estimate used. Absent on rows written before
+   * price sources existed: such a row's source is unrecorded, not known.
+   */
+  readonly priceSource?: EmbeddingPriceSource;
+}
+
+/** How a receipt written before price sources existed names its source. */
+export const PRICE_SOURCE_UNRECORDED = "unrecorded";
+
+/**
+ * The price source a journaled receipt recorded, read back off disk:
+ * {@link PRICE_SOURCE_UNRECORDED} for a row written before price sources
+ * existed (or carrying a value this build does not know), never a guess.
+ */
+export function recordedPriceSource(
+  receipt: MaintenanceSpendReceipt,
+): EmbeddingPriceSource | typeof PRICE_SOURCE_UNRECORDED {
+  return isEmbeddingPriceSource(receipt.priceSource)
+    ? receipt.priceSource
+    : PRICE_SOURCE_UNRECORDED;
 }
 
 /**

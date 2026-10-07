@@ -79,14 +79,47 @@ function auditRecords(): Array<Record<string, unknown>> {
 }
 
 describe("recall-inject hook", () => {
-  test("flag off (default) is a silent no-op: no stdout, no audit", async () => {
+  test("flag off (default) is a silent no-op: no stdout, no audit, no hook state", async () => {
     const r = await runHook(
-      { hook_event_name: "UserPromptSubmit", prompt: "how do receipts work" },
+      {
+        hook_event_name: "UserPromptSubmit",
+        prompt: "how do receipts work",
+        session_id: "sess-flag-off",
+      },
       { VAULT_DIR: vault },
     );
     expect(r.exit).toBe(0);
     expect(r.stdout).toBe("");
     expect(auditRecords()).toHaveLength(0);
+    expect(existsSync(join(vault, ".open-second-brain", "hook-state"))).toBe(false);
+  });
+
+  test("an invalid cap is named in config_invalid and the decision still runs", async () => {
+    const r = await runHook(
+      { hook_event_name: "UserPromptSubmit", prompt: "how do receipts work" },
+      {
+        VAULT_DIR: vault,
+        OPEN_SECOND_BRAIN_RECALL_INJECT_ENABLED: "true",
+        OPEN_SECOND_BRAIN_RECALL_INJECT_MAX_NOTES: "99",
+      },
+    );
+    expect(r.exit).toBe(0);
+    const record = auditRecords().find((rec) => rec["actor"] === "recall-inject");
+    const details = (record?.["details"] ?? {}) as Record<string, unknown>;
+    expect(["inject", "abstain"]).toContain(details["decision"] as string);
+    expect(details["config_invalid"]).toEqual(["OPEN_SECOND_BRAIN_RECALL_INJECT_MAX_NOTES"]);
+  });
+
+  test("valid caps leave config_invalid off the audit line", async () => {
+    await runHook(
+      { hook_event_name: "UserPromptSubmit", prompt: "how do receipts work" },
+      { VAULT_DIR: vault, OPEN_SECOND_BRAIN_RECALL_INJECT_ENABLED: "true" },
+    );
+    const record = auditRecords().find((rec) => rec["actor"] === "recall-inject");
+    expect(record).toBeDefined();
+    const details = record!["details"] as Record<string, unknown>;
+    expect(["inject", "abstain"]).toContain(details["decision"] as string);
+    expect(Object.keys(details)).not.toContain("config_invalid");
   });
 
   test("flag on stays fail-open and audits a decision on an empty vault", async () => {
@@ -206,6 +239,7 @@ describe("recall-inject telemetry", () => {
         noteCount: 2,
         topScore: 0.9,
         matchQuality: 0.8,
+        injectedNotes: [{ path: "Brain/a.md", startLine: 1, endLine: 4 }],
       }),
     ).toEqual({ decision: "inject", note_count: 2, top_score: 0.9, match_quality: 0.8 });
     expect(

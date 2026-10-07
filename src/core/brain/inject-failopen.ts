@@ -12,11 +12,16 @@
  * empty assembly (nothing to inject this session) is NOT cached, so it never
  * clobbers a good snapshot a later error would degrade to. Only a thrown
  * assembly degrades, and it audits exactly once.
+ *
+ * The cache directory sits inside the vault, so a symbolic link on the way
+ * to it (`.open-second-brain` or `inject-cache`) is refused: nothing is read
+ * from or written through it, and a cache file that is itself a link is not
+ * followed (see `derived-store-guard.ts`).
  */
 
-import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { derivedDirIsSymlinked, readRegularFileNoFollow } from "../derived-store-guard.ts";
 import { atomicWriteText } from "../fs-atomic.ts";
 
 const INJECT_CACHE_DIR = ".open-second-brain";
@@ -26,21 +31,28 @@ function cachePath(vault: string, key: string): string {
   return join(vault, INJECT_CACHE_DIR, INJECT_CACHE_SUBDIR, `${key}.txt`);
 }
 
-/** Read the last-good injected body for `key`, or null when none/unreadable. */
-export function readInjectCache(vault: string, key: string): string | null {
-  const path = cachePath(vault, key);
-  if (!existsSync(path)) return null;
-  try {
-    return readFileSync(path, "utf8");
-  } catch {
-    return null;
-  }
+function cacheDirIsSymlinked(vault: string): boolean {
+  return derivedDirIsSymlinked(vault, INJECT_CACHE_DIR, INJECT_CACHE_SUBDIR);
 }
 
-/** Persist a last-good injected body. Best-effort: a write failure is swallowed. */
+/**
+ * Read the last-good injected body for `key`, or null when none, unreadable,
+ * not a regular file, or behind a symlinked cache directory.
+ */
+export function readInjectCache(vault: string, key: string): string | null {
+  if (cacheDirIsSymlinked(vault)) return null;
+  const read = readRegularFileNoFollow(cachePath(vault, key));
+  return read.status === "ok" ? read.text : null;
+}
+
+/**
+ * Persist a last-good injected body with mode 0600. Best-effort: a write
+ * failure is swallowed, and a symlinked cache directory skips the write.
+ */
 export function writeInjectCache(vault: string, key: string, body: string): void {
+  if (cacheDirIsSymlinked(vault)) return;
   try {
-    atomicWriteText(cachePath(vault, key), body);
+    atomicWriteText(cachePath(vault, key), body, { mode: 0o600 });
   } catch {
     // The cache is an optimization; a failure to persist must never disturb
     // the inject path.

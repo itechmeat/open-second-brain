@@ -10,7 +10,7 @@ import {
   resolveMcpRouteMetricsEnabled,
 } from "../core/config.ts";
 import { emitMcpRouteLatency, type McpRouteStatus } from "../core/brain/mcp-route-metrics.ts";
-import { createDecisionLatencyScope } from "../core/decision-model/latency.ts";
+import { createRouteScope } from "../core/route-scope.ts";
 import { assertKnownArguments } from "./argument-guard.ts";
 import { VaultFrozenError } from "../core/brain/freeze-marker.ts";
 import { UNRESOLVED_AGENT, vaultFrozenRefusal } from "./frozen-refusal.ts";
@@ -263,8 +263,10 @@ export class MCPServer {
    * metrics off it is a transparent pass-through; with them on it times
    * the handler and emits one payload-safe `mcp_route_latency` record
    * (status `error` on throw), then re-raises so error handling upstream
-   * is unchanged. The emit is gated and fail-open, so it can never fail
-   * or slow-fail the call beyond one synchronous continuity append.
+   * is unchanged. One route scope per call carries the decision time and
+   * the write stages the handler notes; neither ever reaches the response.
+   * The emit is gated and fail-open, so it can never fail or slow-fail the
+   * call beyond one synchronous continuity append.
    *
    * The unknown-argument gate runs FIRST, before the timer and before the
    * handler, because a refused call is not a route to measure. Placing it
@@ -297,9 +299,9 @@ export class MCPServer {
     }
     const start = performance.now();
     let status: McpRouteStatus = "ok";
-    const decisionScope = createDecisionLatencyScope();
+    const routeScope = createRouteScope();
     try {
-      return await decisionScope.run(async () => tool.handler(this.context, args, onProgress));
+      return await routeScope.run(async () => tool.handler(this.context, args, onProgress));
     } catch (exc) {
       status = "error";
       throw this.mapFrozen(tool, exc);
@@ -312,9 +314,8 @@ export class MCPServer {
           status,
           durationMs: performance.now() - start,
           argKeys: Object.keys(args),
-          ...(decisionScope.decisionMs() !== undefined
-            ? { decisionMs: decisionScope.decisionMs() }
-            : {}),
+          ...(routeScope.decisionMs() !== undefined ? { decisionMs: routeScope.decisionMs() } : {}),
+          ...(routeScope.stages() !== undefined ? { stages: routeScope.stages() } : {}),
         },
         this.routeMetricsEnabled,
       );

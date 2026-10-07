@@ -34,7 +34,7 @@ export interface ProviderProfile {
 }
 
 /** Normalise `envKey` (string | list) to an ordered list of env-var names. */
-function envKeyList(envKey: ProviderProfile["envKey"]): string[] {
+export function envKeyList(envKey: ProviderProfile["envKey"]): string[] {
   const raw = typeof envKey === "string" ? [envKey] : [...envKey];
   return raw.map((k) => k.trim()).filter((k) => k !== "");
 }

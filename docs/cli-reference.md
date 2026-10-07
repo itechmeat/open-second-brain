@@ -152,6 +152,23 @@ each consecutive failure up to 24 hours, instead of repeating the same
 failing upgrade on every start. `o2b brain upgrade --apply --yes` ignores
 the cooldown and clears the record once nothing is pending.
 
+Since v1.73.0 an upgrade applies exactly the plan it showed.
+`o2b brain upgrade --apply` and the automatic worker plan once and apply
+that plan; each planned row records the bytes it was read with, or that
+the file was absent. A managed file that changed on disk after the plan
+was read is refused before the snapshot is taken: nothing is written, and
+the message names the files and advises `o2b brain upgrade --dry-run` to
+review a plan that reads the edit. Each write checks the file again right
+before it replaces it, so an edit that lands mid-apply is left as it is;
+when earlier files were already rewritten the message names them and
+advises the same dry-run re-plan; a rollback is deliberately not
+offered, because the pre-apply snapshot predates the rewritten files,
+so its own drift guard would refuse it, and forcing it would destroy
+the edit. With `--apply --json`
+a refusal prints `{ "ok": false, "error", "run_id", "drifted" }`, where
+`drifted` lists the refused paths. A file that holds bytes which are not
+valid UTF-8 and was not edited still upgrades.
+
 ### The codegraph partner check
 
 `o2b doctor` consults the optional [codegraph](https://github.com/colbymchenry/codegraph)
@@ -634,6 +651,8 @@ The lane's two vault-side knobs live in `Brain/_brain.yaml` under `maintenance:`
 
 Since v1.64.0 the lane's timeouts are honest and its embedding spend is named. A task killed at its safeguard deadline exits **6** (`probeIncomplete`), keyed on `timed_out` rows alone: the only proved fact is that the pass did not finish, which is not the same as a task failing; a proved failure (1) outranks a timeout, a timeout outranks a refusal (7), and the render says TIMED OUT with the safeguard detail. The reindex task stays keyword-only unless `maintenance_embeddings: true` (env `OPEN_SECOND_BRAIN_MAINTENANCE_EMBEDDINGS`, default `false`) opts it in; then it requests the embedding phase whenever the resolved semantic config can reach a provider, announces the pending-spend estimate before the pass, and journals the phase's own cost-gate result as the per-run receipt - model, tokens, estimated cost, and whether a bypass fired - on the task row, the journal line and the `maintenance_spend` metrics surface; the preview is an estimate by position, the receipt prices what the completed pass embedded, and a run killed mid-spend receipts nothing. `--force-cost` (MCP `force_cost`) bypasses a positive `embedding_cost_gate_usd` for this run, recorded on the receipt when it overrode a gate that would have refused. A safeguard timeout is journaled as `timed_out` and neither counts toward nor resets the failure streak that refuses a task.
 
+Since v1.72.0 the spend is priced honestly. The banner prints `price unknown` instead of `$0.0000` when the embedding model has no known price, the receipt and the `maintenance_spend` metric carry `price_source` (`builtin`, `operator` or `unknown`) with a null estimate for an unknown price, and `o2b brain maintenance status` lists each receipt with its `price_source` (`unrecorded` for rows journaled before this release). Under a positive `embedding_cost_gate_usd` an unpriced model refuses the reindex task's embedding phase with `EMBEDDING_COST_UNPRICED` unless `--force-cost`; declare the price with `embedding_price_model` and `embedding_price_usd_per_mtok` (see "Embedding prices" below).
+
 Since v1.65.0 the lane prints its own schedule and can carry an install's own upkeep. `o2b brain maintenance run --cron-template` prints a script (`~/.local/bin/osb-maintenance-<hash>.sh`, where `<hash>` is the first 8 hex characters of the SHA-256 of the resolved vault path, so each vault gets its own script, Hermes job and systemd units and re-rendering for the same vault keeps the name) and its scheduler lines - a crontab line and the Hermes form by default, a systemd user timer with `--format systemd` - with `--interval <N>m|h|d` defaulting to `1h`: the gates decide whether work happens and a gate skip exits 0, so an hourly schedule plus `--window` is the intended pattern. The script embeds the resolved vault, runs `o2b brain maintenance run --vault '<vault>' --json`, stays silent on exit 0 and prints the captured JSON and keeps the exit code otherwise. The rendered script calls `o2b` by name, so it expects `o2b` on the scheduler's PATH: cron jobs and systemd user services start with a minimal PATH, so add the install directory (usually `~/.local/bin`) to that PATH. The verb returns before the lease, the gates, the journal and the metrics, so printing a recipe leaves no trace. A bad interval, window or format, `--interval` or `--format` without `--cron-template`, a lane-run flag (`--force`, `--retry`, `--force-cost`, `--busy-minutes`, `--busy-threshold`, `--agent`, `--progress`, `--json`) beside `--cron-template`, and `status --cron-template` exit 2.
 
 Custom lane tasks (since v1.65.0) put an install's own upkeep under the lane's window, busy, pressure, lease and streak gates. They are declared in the machine config file, never in the vault: `maintenance_custom_<name>: <command>`, optionally `maintenance_custom_<name>_cwd: <absolute dir>` (default the running user's home directory; the vault is allowed when named) and `maintenance_custom_<name>_timeout_seconds: <N>` (default 120; a whole number from 1 to 1200). The lease is taken once per pass for 30 minutes, so the declared custom timeouts together stay within 1200 s, which leaves 600 s for the built-in tasks; in name order, a task whose timeout would take the sum past 1200 s is refused by name, and the full 8 tasks fit at the default. Declared tasks run only with the master switch `maintenance_custom_tasks: true` (env `OPEN_SECOND_BRAIN_MAINTENANCE_CUSTOM_TASKS`, default off; `0` turns it off on one host). Each runs as `custom:<name>`, where `<name>` matches `^[a-z][a-z0-9-]{0,31}$` (no underscores, so the suffixes stay unambiguous, and no task can be named `tasks`), after the four built-in tasks and stale-first with them; at most 8 are declared. The command runs through `sh -c` (`cmd.exe /d /s /c` on Windows) with stdin closed, stdout discarded and `O2B_VAULT` set. Its environment is this process's minus every variable whose name declares a credential (`*_API_KEY`, `*_TOKEN`, `*_SECRET`, `*PASSWORD*` and the other names the redactor treats as secrets); `PATH`, `HOME`, `LANG`, `LC_*`, `TZ`, `TMPDIR` and `O2B_VAULT` are always kept, and a command that needs a key reads it from its own configuration. The default working directory is not the vault because the vault syncs and is writable through the MCP write tools, and on Windows a bare command name resolves in the working directory first; use absolute executable paths. A `_cwd` that does not exist fails the task as `custom task <name>: cwd does not exist: <path>`. A non-zero exit is reported as `exit <N>: <stderr tail>`, redacted and capped at 4096 bytes. The task's outcome is its shell's exit status: it does not wait for processes the command left in the background, but those still belong to the task, and on POSIX the command's whole process group is killed (SIGTERM, then SIGKILL a second later) when the timeout elapses or the o2b process exits, whichever is first, also after the shell has exited (on Windows `taskkill /T /F` kills the tree while the shell runs). Past its timeout the run is journaled as timed out, and unlike a built-in task, a custom task's timeout counts toward its `failure_streak_limit` and exits 1 rather than 6, so a command that always hangs is refused like one that always fails. A shell that exits before its timeout keeps its exit status even when a background process still holds its stderr at the deadline. `--retry custom:<name>` (MCP `retry_tasks`) attempts a refused custom task alone; an undeclared name is refused with the registered list. A bad declaration (a bad name, an empty command, an out-of-range timeout, a relative `_cwd`, a suffix key without its command, a ninth task, a timeout over the budget) is named on stderr as `custom task refused: <reason>` (MCP `custom_task_errors`) and the valid ones still run; `status` says `custom tasks declared but maintenance_custom_tasks is off` while the switch is off, or `custom tasks declared but OPEN_SECOND_BRAIN_MAINTENANCE_CUSTOM_TASKS turns them off` when the env override did it. A custom task never calls a model on the lane's behalf and records no spend receipt, and the lane cannot police spend or side effects inside an operator's own command. No MCP parameter can add, edit or read a command. The config reader strips one pair of matching surrounding quotes from a value, so a command that starts and ends with the same quote character loses them; wrap such a command in single quotes (`maintenance_custom_tidy: '"/opt/my tool" --flag "x"'`).
@@ -738,8 +757,9 @@ o2b brain morning-brief       renders recalled items as one chronological Recent
 
 Prompt-time recall is a hook, not a verb: with `recall_inject_enabled:
 "true"` (env `OPEN_SECOND_BRAIN_RECALL_INJECT_ENABLED`) the
-UserPromptSubmit hook injects a bounded brief of relevant vault notes (4
-notes, 900 chars, fixed time budget, confidence floor), fenced as
+UserPromptSubmit hook injects a bounded brief of relevant vault notes (by
+default 4 notes, 900 chars, a 2,500 ms time budget and a 0.35 confidence
+floor, each tunable as described below), fenced as
 untrusted content with neutralized titles; any internal error or timeout
 injects nothing, and every decision writes one audit line recording
 counts and scores only. The knowledge-gap loop is likewise hook-driven:
@@ -748,6 +768,66 @@ threshold via `gap_loop_threshold`), recurring recall gaps promote at
 session end into durable task notes under `Brain/gap-tasks/` (stable-key
 dedup, never the kanban board), render as a session-start agenda, and
 auto-close once the topic is later recalled confidently.
+
+Recall-inject tuning keys live in the flat global config next to
+`recall_inject_enabled` and matter only while that flag is on. Each one
+has an env override, and the env value always wins over the config value:
+
+| Config key | Env override | Range | Default |
+|---|---|---|---|
+| `recall_inject_max_notes` | `OPEN_SECOND_BRAIN_RECALL_INJECT_MAX_NOTES` | integer 1..10 | 4 |
+| `recall_inject_max_chars` | `OPEN_SECOND_BRAIN_RECALL_INJECT_MAX_CHARS` | integer 200..8000 | 900 |
+| `recall_inject_time_budget_ms` | `OPEN_SECOND_BRAIN_RECALL_INJECT_TIME_BUDGET_MS` | integer 250..6000 | 2500 |
+| `recall_inject_confidence_floor` | `OPEN_SECOND_BRAIN_RECALL_INJECT_CONFIDENCE_FLOOR` | number 0..1 | 0.35 |
+| `recall_inject_dedupe` | `OPEN_SECOND_BRAIN_RECALL_INJECT_DEDUPE` | boolean | `true` |
+
+The four caps resolve leniently: a value that is out of range,
+non-numeric or (for the integer caps) fractional keeps the built-in
+default, and the hook names the rejected key (or its env variable when
+the value came from the env) in its audit line (`config_invalid`). Unset caps leave the brief byte-identical.
+`recall_inject_dedupe` is on unless set to the literal `"false"` or `"0"`.
+With it on and a host that sends a `session_id`, a note span this session
+was already shown, by an earlier brief or by the SessionStart digest, is
+not injected again; a host without a session id gets no dedupe. The
+semantics are in
+[the recall-inject decision-model page](decision-models/recall-inject.md#session-dedupe-and-slices).
+
+Recall slices are vault policy, not machine config: a `recall_inject:`
+block in `Brain/_brain.yaml` declares named slices, each retrieved with
+its own filters and rendered under its own heading inside the one fenced
+brief. The block is deliberately absent from the generated `_brain.yaml`
+template, because slices name this vault's folders and note types and
+have no default. Without the block the hook keeps its single unsliced
+relevance query, byte for byte. Contract example:
+
+```yaml
+recall_inject:
+  slices: [decisions, lessons]
+  slice_decisions_heading: Recent decisions
+  slice_decisions_path_prefix: Brain/decisions/
+  slice_decisions_types: [decision]
+  slice_decisions_limit: 2
+  slice_decisions_max_chars: 400
+  slice_lessons_path_prefix: Brain/lessons
+```
+
+`slices` lists the slice names in the order they are laid out; a name
+matches `^[a-z][a-z0-9]{0,23}$` (no underscore, so each
+`slice_<name>_<field>` key splits unambiguously), and at most 6 slices
+are allowed. The per-slice fields are `heading` (defaults to the name),
+`path_prefix` (vault-relative), `types` (an inline array matched against
+frontmatter `type`; empty means no class filter), `limit` (integer 1..10)
+and `max_chars` (integer 100..8000). A slice with neither `limit` nor
+`max_chars` takes the global caps. An unknown field for a declared slice,
+a `slice_*` key for an undeclared name, a duplicate name, more than 6
+slices, an out-of-range number or a `path_prefix` with `..`, a leading
+`/` or a drive letter is a hard load error. Every slice is
+retrieved in parallel under the one shared time budget, so more slices
+trade against latency on a large vault. A `_brain.yaml` that fails to
+load takes no slice path and is recorded as `slices_config: "invalid"` on
+the audit line; because the search reads the same policy file, the
+decision then ends in `error` with fault `retriever_failed` and nothing
+is injected until the file is fixed.
 
 Search-side trust switches: `search_trust_gate_enabled` (env
 `OPEN_SECOND_BRAIN_SEARCH_TRUST_GATE`) zero-ranks quarantined material
@@ -771,8 +851,9 @@ o2b brain orphan-repair      [--apply --confirm "apply orphan repair"] - detach 
 o2b brain design-note        <topic> [--payload <json> | --payload-file <path>] [--agent <name>] [--json] - the one-shot sibling of `o2b brain panel`. Without a payload it is read-only: it grounds the topic in the vault's tension records, decision records and truth projections and prints the single needs-llm-step envelope the calling agent answers, naming any store the vault holds nothing in (which is not the same as a store that matched nothing). With a payload it validates the written note and commits it as Brain/decisions/design-<date>-<topic>.md. The note must weigh named alternatives and mark EXACTLY ONE recommended: zero and two-plus are both refused, and the refusal states the count. A second note for the same topic on the same day is refused, never overwritten
 o2b brain skill-proposals    page-candidates [--json] - read-only: gate the vault's user pages on the page-meta trio (core tier, non-stale lifecycle, high confidence) and an observed-reuse floor, skip any page an installed skill already covers, and return one needs-llm-step envelope per admitted page plus every skip with its reason
 o2b brain skill-proposals    page-draft <page> (--payload <json> | --payload-file <path>) [--json] - validate a returned SKILL.md draft and stage it as a pending mature_page proposal INSIDE the vault; accept is what materializes the SKILL.md under the configured skills root, through the write-ahead journal
-o2b brain extract-signals    <session-ref> [--payload <json> | --payload-file <path>] [--agent <name>] [--json] - mine durable taste signals from an already-imported session's user turns. Without a payload it is read-only: it prints the turns it would mine and the single needs-llm-step envelope the calling agent answers. With a payload it validates the answer and writes the accepted items into Brain/inbox/ as speculative source_type: auto_extract signals, subject to the durability denylist and to Brain/pending/ staging when write approval is on. A payload over the per-session cap, or an item below the confidence floor, refuses the whole payload by name and writes nothing; a session with no imported turns is refused, never reported as empty
+o2b brain extract-signals    <session-ref> [--payload <json> | --payload-file <path>] [--agent <name>] [--json] - mine durable taste signals from an already-imported session's user turns. Without a payload it is read-only: it prints the turns it would mine and the single needs-llm-step envelope the calling agent answers. With a payload it validates the answer and writes the accepted items into Brain/inbox/ as speculative source_type: auto_extract signals, subject to the durability denylist and to Brain/pending/ staging when write approval is on. A payload over the per-session cap, an item below the confidence floor, or two items sharing a topic refuses the whole payload by name and writes nothing; a session with no imported turns is refused, never reported as empty
                              With the optional decision-model turn pre-filter (use extract_prefilter, docs/decision-models/extract-prefilter.md) the --json plan may add turns_dropped, skipped { reason: decision_model_prefilter, turns_dropped } with llm_step: null (nothing to mine), and decision_model { degraded }; none appears with the use off. Payload items accept an optional string source_turn
+                             Since v1.74.0 every turns_mined entry carries timestamp, the turn's stored timestamp verbatim ("" when the source has none), and each prompt line reads [<turn-id> @ <timestamp>] <text>, or [<turn-id>] <text> for an undated turn - the run's clock is never substituted. The envelope instruction holds the items to five language-neutral rules: a time bound is written as an ISO 8601 date or interval resolved against the stating turn's timestamp (an end-only bound as an interval, because the dream pass reads a lone date as a start), conversational mechanics are skipped, one rule per item, a rule's conditions stay in its principle, and restatements are dropped. The dream pass turns the ISO bound into the preference's valid_from / valid_until through its existing temporal extraction; the extract lane writes neither field itself. Two items with the same topic refuse the payload under semantic_cross_item, the message naming both indices (items[i] and items[j] share topic "<topic>"), before any item is hashed or written
 o2b brain deep-synthesis     --json now also carries findings with causal_context, decomposed confidence (support, opposition, freshness, coverage), and the excluded_findings ledger with excluded_finding_count
 ```
 
@@ -829,6 +910,48 @@ live under `.open-second-brain/hook-state/` with epoch-ms expiry.
 status across every discovered code project, threading `project_path`
 per query when supported (feature-detected) and degrading with an
 explicit note when not.
+
+Chunked re-grounding: `reground_parts_enabled` (env
+`OPEN_SECOND_BRAIN_REGROUND_PARTS_ENABLED`, default off) splits an
+oversized SessionStart payload instead of emitting it whole. Claude Code
+persists an `additionalContext` past roughly 10,000 UTF-16 units to a
+file and shows only a preview, so with the flag on, a joined
+standing-rules, scoped-rules and memory payload longer than the part
+ceiling is cut into at most 8 parts (at block, then paragraph, then line
+boundaries, in priority order). Each part opens with
+`[Open Second Brain context - part i of n]` and every part but the last
+closes with `(continued in part i+1 of n)`; when content past the 8th
+part is dropped, the last part closes with
+`(context truncated: N further part(s) not delivered)` instead. Part 1 is emitted at SessionStart and
+parts 2..n are queued in the session's hook state; the `reground-deliver`
+hook then hands out exactly one queued part per `PostToolUse` or
+`UserPromptSubmit` event until the queue is empty or the next
+SessionStart replaces it. A tool call inside a delegated sub-agent (the
+payload carries `agent_id`) takes no part, so the queue stays for the main
+agent. Only a SessionStart event splits and starts a new queue; a run of
+the SessionStart hook on another event emits the whole payload and leaves
+the queue alone. Only Claude Code and Codex payloads with a
+session id are split, because only they have the carrier registered;
+every other runtime, and any payload that fits the ceiling, gets the
+single payload as before. The ceiling is in UTF-16 code units:
+
+| Config key | Env override | Range | Default |
+|---|---|---|---|
+| `reground_part_chars` | `OPEN_SECOND_BRAIN_REGROUND_PART_CHARS` | integer 2000..100000 | 9000 |
+| `reground_part_chars_claudecode` | `OPEN_SECOND_BRAIN_REGROUND_PART_CHARS_CLAUDECODE` | integer 2000..100000 | `reground_part_chars` |
+| `reground_part_chars_codex` | `OPEN_SECOND_BRAIN_REGROUND_PART_CHARS_CODEX` | integer 2000..100000 | `reground_part_chars` |
+
+The runtime key wins over `reground_part_chars`, which wins over the
+default 9000 (the observed Claude Code threshold less 10%, applied to
+Codex too until measured). At each level the env value wins over the
+config value, and an invalid value falls through to the next level and
+is named in the receipt's `config_invalid` (by its env variable when
+the rejected value came from the env). The
+queue lives under `.open-second-brain/hook-state/` with a 24 h expiry,
+in a per-session file written with mode `0600`; when `.open-second-brain`
+or `hook-state` is a symbolic link, the hooks neither read nor write
+through it. The receipt and audit fields it adds are listed in
+[observability](observability.md).
 
 ### Semantic-health baselining (since v1.38.0)
 
@@ -1703,14 +1826,43 @@ o2b search vector-backfill    Run the vector phase ALONE for indexed chunks that
                               configured semantic capability tier, and contacts no provider.
                               --apply is the only path that reaches a provider or writes a vector
                               --force-cost bypasses the embedding cost gate for that run
+                              --path <prefix> scopes the run to chunks under a vault-relative
+                              prefix; repeatable, and validated like every other path prefix (an
+                              unsafe prefix is refused by name). The pending census, the estimate,
+                              the cost gate and the spend receipt all read the same scoped census,
+                              so `--path Brain/preferences/` prices and embeds only belief notes.
+                              The text report adds a `scope:` line and the next step it names keeps
+                              the scope. On Windows a prefix that would need quoting is not
+                              spliced into the advice: next_command is omitted and the text says
+                              `next: rerun this command with --apply and the same --path flags`.
+                              The prefix is a raw string prefix, not a directory: end a directory
+                              with `/`, or `Brain/pref` also matches `Brain/preferences-old/`. A
+                              leading `./` is dropped and `\` becomes `/`; an empty prefix is
+                              refused with INVALID_INPUT. A prefix that matches no indexed
+                              document is warned on stderr by name (`scope <prefix> matches no
+                              indexed document`) rather than reported like a fully embedded
+                              scope (since v1.72.0)
                               --progress watches it; Ctrl-C stops it between embed batches
                               --json emits dry_run, capability_tier, capability_code, chunks_total,
-                              pending, embedded, retries, plus estimated_cost_usd only when the
-                              model's price is known - a missing price is an absent key, never 0
+                              pending, embedded, retries, estimated_cost_usd, price_source, and
+                              path_prefixes on a scoped run, plus unmatched_path_prefixes when a
+                              prefix matches no document. Since v1.72.0 estimated_cost_usd is
+                              null (never 0, never omitted) when the model's price is unknown, and
+                              the text report prints `price unknown` for it. Since v1.72.0, when
+                              the configured gate would refuse the run unforced, --json adds
+                              gate_blocked: true and gate_reason (unpriced or over_cap), the
+                              dry-run text report adds `cost gate: would refuse (<reason>); add
+                              --force-cost or ...` naming the price pair or embedding_cost_gate_usd;
+                              the next step it names stays unforced. An --apply run that
+                              reached the provider adds spend {model, tokens, estimated_usd,
+                              price_source, forced}, its receipt. Both are absent otherwise
                               Idempotent; an --apply run that wrote vectors appends one
                               vector-backfill Brain log event
 o2b search status             Index status; since v0.36.0 also reports the active embedding
                               signature (<provider>:<model>:<dimension>) and a refresh-cost estimate
+                              Since v1.72.0 the estimate is null and printed as `price unknown` when
+                              the model has no known price; --json adds refresh_price_source
+                              (builtin, operator or unknown)
                               Since v1.64.0, once an index exists, status also prints
                               event_time: <with>/<documents> documents (earliest <ISO>, latest <ISO>,
                               <n> in the last 30 days); --json carries it as the event_time object
@@ -1769,6 +1921,20 @@ o2b search check              Pre-flight diagnostics: vault, index directory, SQ
                               `contradicted` - a record the data itself disproves, which is a
                               different finding from ABI drift (the record disagrees with this build)
                               and from an unrecorded token (no claim was ever made).
+
+                              Since v1.72.0, when no embedding key resolves, the report names where
+                              it looked, by name only: `key_sources_checked:` lists the sources in
+                              probe order (OPEN_SECOND_BRAIN_EMBEDDING_KEY, embedding_api_key, then
+                              the env-key names of the registered profile `embedding_provider`
+                              selects), and `key_present_under:` lists the other registered profiles
+                              whose env key is set, or says `none`. --json carries
+                              the same as `credential_sources` {consulted, present_elsewhere}. Only
+                              names you declared are consulted (config keys and your provider
+                              registry), no value is ever printed, and a configured setup's output
+                              is unchanged. The recommendations also name an embedding model with
+                              no known price (with the price pair to declare and what a positive
+                              gate does with it) and a price pair that names a model other than the
+                              active one.
 o2b search restamp            Record this build's sqlite-vec version as the one the stored vectors are
                               accepted under - the repair for a drift confined to
                               embedding_vec_version, which is an ABI marker rather than a property of
@@ -1859,6 +2025,9 @@ so there is no separate lane field that could drift from it:
 | `semantic-embeddings-absent` | the index holds no compatible embedding |
 | `semantic-vec-extension-unavailable` | sqlite-vec is not loaded on this machine |
 | `semantic-capability-blocked` | the configured semantic capability blocks the vector lane; `detail.tier` names the rung |
+| `semantic-cost-unpriced` | the embedding model has no known price and `embedding_cost_gate_usd` is positive, so the query embed of a caller that is not local was refused before any provider call and the semantic lane did not run |
+| `semantic-query-truncated` | the query was longer than the effective embedding input window, so the semantic lane searched a cut prefix of it; `detail.windowTokens` is the window |
+| `semantic-query-empty-fit` | the instruction prefix alone fills the effective embedding input window, so no part of the query was left to embed and the semantic lane did not run; `detail.windowTokens` is the window |
 | `semantic-provider-unavailable` | the embedding provider could not answer; `detail.category` carries the error category |
 | `semantic-empty-query-vector` | the provider answered with an empty query vector |
 | `semantic-structured-lanes-skipped` | a structured semantic lane was requested while semantic search is off |
@@ -1934,7 +2103,141 @@ built-in `openai-compat`, the offline `local` feature-hashing embedder
 (no cloud, no key, no model download; `embedding_dimension` default 256),
 `disabled`, or any name registered via `o2b search provider add`.
 `embedding_cost_gate_usd` (default 0 = off) refuses an embedding run whose
-estimated spend exceeds it unless `--force-cost`.
+estimated spend exceeds it unless `--force-cost`. Since v1.72.0 a blank
+(whitespace-only) value of the gate or of its env twin
+`OPEN_SECOND_BRAIN_EMBEDDING_COST_GATE` fails config resolution with
+`INVALID_INPUT` instead of reading as a gate of 0, and a blank
+`search_rerank_min_score` is refused the same way.
+
+Embedding prices (since v1.72.0). Every estimate names where its price
+came from: `builtin` (the frozen price table, and the local embedder,
+which is free), `operator` (declared by you) or `unknown`. Declare a price
+for a model the table does not list, or correct a table price, with the
+operator price pair:
+
+```yaml
+embedding_price_model: nomic-embed-text:latest
+embedding_price_usd_per_mtok: 0.02
+```
+
+The env twins are `OPEN_SECOND_BRAIN_EMBEDDING_PRICE_MODEL` and
+`OPEN_SECOND_BRAIN_EMBEDDING_PRICE_USD_PER_MTOK`, and they win over the
+config keys as a pair: when either env twin is set, both halves come from
+env and the config pair is ignored, so an env model never pairs with a
+config rate. Set both keys or neither (a blank value counts as unset);
+the rate is USD per million tokens, a plain non-negative decimal number
+no larger than 1000000, and `0` declares the model free. A half pair, a
+negative rate, a non-decimal rate (`0x10`, `1e3`, `Infinity`) or a rate
+above 1000000 fails config resolution with `INVALID_INPUT` naming the key
+or env variable that supplied it. The pair binds the price to one model
+name (compared case-insensitively), so switching models never re-targets
+it silently: `o2b search check` flags a declaration that names a model
+other than the active one. A price is not part of the embedding identity,
+so declaring or editing it never triggers a reindex. A loopback
+`embedding_base_url` is not assumed to be free; declare `0` for a local
+server that costs nothing.
+
+An unknown price is reported as unknown, never as $0: the maintenance
+banner, the backfill dry run and `search status` print `price unknown`,
+the JSON estimates are `null`, and spend receipts carry `price_source`.
+A fully embedded index has nothing pending to pay for, so `search status`
+then prints no `refresh_cost_est` line and its JSON estimate is `0`.
+Under a positive `embedding_cost_gate_usd`, an embedding run on a model
+with no known price and pending chunks is refused with
+`EMBEDDING_COST_UNPRICED`, because an unknown price cannot be checked
+against a cap. The message names the model, both price keys and
+`--force-cost`; the provider is never contacted. `--force-cost` passes the
+refusal, and the receipt then records `forced: true`, `price_source:
+unknown` and a null estimate. With the gate at 0 (the default) nothing is
+refused.
+
+Query embeds (since v1.73.0). Every paid query embed passes one gate: the
+search lane (reached by `o2b search`, `brain_search`,
+`brain_recall_feedback`, `brain_file_context`, `brain_eval`,
+`brain_benchmark`, `brain_tune` and the recall-inject and gap-promote
+hooks) and the `brain_context_pack` semantic belief order. Under a
+positive `embedding_cost_gate_usd`, a caller that is not local is refused
+the query embed of a model with no known price before any provider is
+called. A search that asked for the semantic lane by name fails with
+`EMBEDDING_COST_UNPRICED`; a hybrid search falls back to keyword-only,
+says so in a warning and records `semantic-cost-unpriced` in its trail.
+The message names the model and the price pair that clears the refusal,
+and says only that the gate is positive, never its amount. The CLI runs
+at local reach, so `o2b search` is not gated, as before. The hooks run at
+remote reach: under a positive gate on an unpriced model they recall by
+keyword only and name the code on their local audit line
+(`retrieval_degraded`). Declare the price (`0` for a free self-hosted
+model) to bring the semantic lane back.
+
+The same gate fits the query to the model's input window before it is
+sent. The effective window is `embedding_input_window_tokens` when set,
+then the window the curated model table declares, then unknown; an
+unknown window cuts nothing. The cut counts the instruction prefix the
+provider sends, is made at a code-point boundary under the conservative
+token estimate, and is disclosed: a warning names the window and how much
+of the query was embedded, and the trail records
+`semantic-query-truncated` with `detail.windowTokens`. When the
+instruction prefix alone fills the window nothing is embedded: an explicit
+semantic search and the semantic belief order refuse with `INVALID_INPUT`,
+and a hybrid search falls back to keyword-only with the trail code
+`semantic-query-empty-fit`, which, unlike a cut, always means the
+semantic lane did not run.
+An answer refused by the gate is never cached, so declaring a price takes
+effect on the next search. An answer cut to the window is cached under a
+key that carries the effective window and the query prefix, so a repeated
+long query is not embedded again, and a declared or changed window takes
+effect on the next search.
+`brain_context_pack` discloses `query_tokens` for the text actually sent,
+instruction prefix included, and its omitted reach now resolves to remote
+like every other reader.
+
+`embedding_input_window_tokens`
+(`OPEN_SECOND_BRAIN_EMBEDDING_INPUT_WINDOW_TOKENS`, since v1.73.0)
+declares the input window, in the model's own tokens, of a model the
+curated table does not list, or overrides the table's value. It is an
+integer of at least 1; a blank value is refused rather than read as
+unset. The chunk-window census of an index run and of `o2b search status`
+reads the same window, so a declared window enables it for an uncurated
+model. The
+offline `local` embedder has no input window, so the key is refused with
+`INVALID_INPUT` when `embedding_provider` is `local`.
+
+`embedding_extra_body` (`OPEN_SECOND_BRAIN_EMBEDDING_EXTRA_BODY`, since
+v1.73.0) sends operator-declared fields with every embedding request to an
+OpenAI-compatible endpoint, for a serving stack that needs a field the
+provider does not send (a `dimensions` value, a truncation switch). The
+value is one JSON object in one key, because the flat config format
+cannot hold a nested map:
+
+```yaml
+embedding_extra_body: '{"dimensions": 512}'
+embedding_dimension: 512
+```
+
+The owned request fields `model`, `input` and `encoding_format` may not
+be set, in any spelling (case, `_` and `-`, fullwidth and zero-width
+variants are folded before the comparison), and are refused by name with
+`INVALID_INPUT`. A blank value, invalid JSON or a JSON value that is not
+an object is refused the same way, naming the env variable or the key
+that supplied it. Only `openai-compat` sends the body, so the key is
+refused for any other provider; `disabled` sends nothing and is exempt. A
+`dimensions` field changes the width the provider answers with, so it
+requires `embedding_dimension` and must agree with it. The checks run on
+the resolved config, so a programmatic override meets them too. The extra
+body is not part of the embedding identity: declaring or editing it never
+triggers a reindex. Some fields shape the vectors the provider returns
+(a provider `task`, `input_type`, `normalize` or `truncate` switch); after
+changing such a field, rebuild the vectors with
+`o2b search reindex --embeddings` so new query vectors stay in the space
+of the stored passages. Nothing triggers that rebuild on its own, and
+`o2b search index --force` is not enough: an unchanged chunk keeps its
+stored vector.
+
+Vector carry-over (since v1.72.0). When a note is edited, a chunk whose
+content did not change keeps its stored vector, provided the vector was
+written by the model and dimension the index records. Only changed chunks
+are re-embedded and paid for. A paragraph moved within the note is
+carried too; a paragraph moved into another note is re-embedded.
 `embedding_batch_tokens` (`OPEN_SECOND_BRAIN_EMBEDDING_BATCH_TOKENS`, since
 v1.43.0) adds a per-request token budget beside `embedding_batch_size`: a
 batch closes on whichever cap fills first, so a run of long chunks cannot
@@ -2154,7 +2457,7 @@ by the id below.
 
 | id | verb | what leaves | when it can happen |
 | --- | --- | --- | --- |
-| `search-embedding-openai-compat` | `o2b search index` / any reindex | every indexed chunk BODY, verbatim | only once `search_embedding_endpoint` + an API key are configured; the endpoint is whichever host you name, including a local one |
+| `search-embedding-openai-compat` | `o2b search index` / any reindex | every indexed chunk BODY, verbatim, plus any fields declared in `embedding_extra_body` | only once `search_embedding_endpoint` + an API key are configured; the endpoint is whichever host you name, including a local one |
 | `search-embedding-zeroentropy` | `o2b search index` (zeroentropy profile) | the same chunk bodies, to a second vendor's embed endpoint | same gate, when that provider profile is selected |
 | `search-rerank-cross-encoder` | `o2b search --rerank` | the QUERY plus the top-of-pool candidate DOCUMENTS - vault text the embedding path may never have seen, chosen by relevance to what you just asked | only with a reranker endpoint configured |
 | `brain-telegram-capture` | `o2b brain telegram-run` | reply text POSTed to the Telegram Bot API; the `/catchup` reply is composed from vault content | only while the runner verb is running; an install that never starts it never reaches this path |

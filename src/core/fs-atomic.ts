@@ -11,6 +11,7 @@
  * directory entry to durably persist the rename).
  */
 
+import { isUtf8 } from "node:buffer";
 import {
   closeSync,
   existsSync,
@@ -33,6 +34,19 @@ export interface AtomicWriteOptions {
    * churn in a vault the user is also hand-editing.
    */
   readonly skipIfUnchanged?: boolean;
+  /**
+   * Compare-before-write. When set, the target must still hold exactly these
+   * bytes (a string) or still be absent (`null`), checked before the temp
+   * file is made and again right before the rename; otherwise the write
+   * throws {@link FileDriftError} and the target is left untouched. An empty
+   * string and an absent file are different states. `undefined` (the
+   * default) keeps the unconditional overwrite.
+   *
+   * The window between the final re-read and `rename(2)` stays open: it is
+   * the same advisory window `skipIfUnchanged` has, and closing it needs an
+   * OS lock that vault sync tools do not honour.
+   */
+  readonly expectBefore?: string | null;
 }
 
 /**
@@ -133,8 +147,13 @@ export function atomicWriteFileSync(
   contents: string,
   opts: AtomicWriteOptions = {},
 ): boolean {
+  const expected = opts.expectBefore;
+  if (expected !== undefined) assertExpectedBefore(target, expected);
   if (opts.skipIfUnchanged && isUnchanged(target, contents)) return false;
   withTempFile(target, contents, (tmpPath) => {
+    // Re-read right before the rename: the temp write and fsync are the
+    // slow part, and an edit that landed during them must not be lost.
+    if (expected !== undefined) assertExpectedBefore(target, expected);
     // POSIX `rename(2)` is atomic and clobbers an existing target — that's
     // exactly the "overwrite" semantic we want. No exclusivity guarantee.
     // Windows `MoveFileEx(REPLACE_EXISTING)` is too, once no reader holds
@@ -155,6 +174,76 @@ function isUnchanged(target: string, contents: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Is `target` in the `expected` state: absent for `null`, holding exactly
+ * these bytes for a string? The one definition of drift, shared by the
+ * write below and by callers that check a batch before writing any of it.
+ *
+ * Valid UTF-8 is compared byte for byte, so any real edit is drift. Bytes
+ * that are not valid UTF-8 can never equal an encoded string, yet the
+ * caller's `expected` came from a lossy UTF-8 read of those same bytes; for
+ * them the lossy decodings are compared instead, or an untouched legacy file
+ * would be refused on every attempt. Known limits of that lossy arm: two
+ * different invalid sequences that decode to the same text (0xfe and 0xff
+ * both become U+FFFD) are indistinguishable, and so is a valid UTF-8 file
+ * whose literal U+FFFD character was replaced by an invalid byte, because
+ * the edited file decodes back to the text the caller read. A read error
+ * other than "absent" propagates - an
+ * unreadable target cannot be shown to be unchanged.
+ */
+export function fileMatchesExpected(target: string, expected: string | null): boolean {
+  let current: Buffer;
+  try {
+    current = readFileSync(target);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException | null)?.code !== "ENOENT") throw err;
+    return expected === null;
+  }
+  if (expected === null) return false;
+  if (current.equals(Buffer.from(expected, "utf8"))) return true;
+  return !isUtf8(current) && current.toString("utf8") === expected;
+}
+
+/** Throw {@link FileDriftError} unless {@link fileMatchesExpected} holds. */
+function assertExpectedBefore(target: string, expected: string | null): void {
+  if (!fileMatchesExpected(target, expected)) throw new FileDriftError(target);
+}
+
+/** Stable code a {@link FileDriftError} carries, for `isFileDrift`. */
+const FILE_DRIFT_CODE = "FILE_DRIFT";
+
+/**
+ * A compare-before-write refused: the target no longer holds the bytes (or
+ * the absence) the caller read, so writing would overwrite a change the
+ * caller never saw. Named like {@link FileAlreadyExistsError}, its sibling
+ * refusal for a create.
+ */
+export class FileDriftError extends Error {
+  readonly code: typeof FILE_DRIFT_CODE = FILE_DRIFT_CODE;
+  /** Absolute path whose state drifted. */
+  readonly path: string;
+
+  constructor(path: string) {
+    super(
+      `file changed since it was read: ${path}; the write was refused ` +
+        "and the file left as it is. Re-read it and retry.",
+    );
+    this.name = "FileDriftError";
+    this.path = path;
+  }
+}
+
+/** Is `err` a {@link FileDriftError}, directly or nested on `.cause`? */
+export function isFileDrift(err: unknown): boolean {
+  let current: unknown = err;
+  for (let depth = 0; depth < CAUSE_WALK_LIMIT; depth += 1) {
+    if (typeof current !== "object" || current === null) return false;
+    if ((current as { readonly code?: unknown }).code === FILE_DRIFT_CODE) return true;
+    current = (current as { readonly cause?: unknown }).cause;
+  }
+  return false;
 }
 
 export interface AtomicWriteTextOptions {

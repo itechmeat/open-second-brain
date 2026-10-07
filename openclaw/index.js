@@ -1565,6 +1565,7 @@ import { homedir as homedir2 } from "node:os";
 import { dirname as dirname2, isAbsolute, join as join3, resolve as resolve2 } from "node:path";
 
 // src/core/fs-atomic.ts
+import { isUtf8 } from "node:buffer";
 import {
   closeSync,
   existsSync,
@@ -1612,9 +1613,14 @@ function withWindowsSharingRetry(op, seams) {
   }
 }
 function atomicWriteFileSync(target, contents, opts = {}) {
+  const expected = opts.expectBefore;
+  if (expected !== undefined)
+    assertExpectedBefore(target, expected);
   if (opts.skipIfUnchanged && isUnchanged(target, contents))
     return false;
   withTempFile(target, contents, (tmpPath) => {
+    if (expected !== undefined)
+      assertExpectedBefore(target, expected);
     renameWithRetry(tmpPath, target);
   });
   return true;
@@ -1626,6 +1632,36 @@ function isUnchanged(target, contents) {
     return readFileSync(target, "utf8") === contents;
   } catch {
     return false;
+  }
+}
+function fileMatchesExpected(target, expected) {
+  let current;
+  try {
+    current = readFileSync(target);
+  } catch (err) {
+    if (err?.code !== "ENOENT")
+      throw err;
+    return expected === null;
+  }
+  if (expected === null)
+    return false;
+  if (current.equals(Buffer.from(expected, "utf8")))
+    return true;
+  return !isUtf8(current) && current.toString("utf8") === expected;
+}
+function assertExpectedBefore(target, expected) {
+  if (!fileMatchesExpected(target, expected))
+    throw new FileDriftError(target);
+}
+var FILE_DRIFT_CODE = "FILE_DRIFT";
+
+class FileDriftError extends Error {
+  code = FILE_DRIFT_CODE;
+  path;
+  constructor(path) {
+    super(`file changed since it was read: ${path}; the write was refused ` + "and the file left as it is. Re-read it and retry.");
+    this.name = "FileDriftError";
+    this.path = path;
   }
 }
 function withTempFile(target, contents, commit, mode = 420) {
@@ -1911,9 +1947,15 @@ function vaultStoreReference(vaultPath, configPath) {
   const digest = createHmac("sha256", key).update(resolve2(vaultPath)).digest("hex").slice(0, VAULT_STORE_REF_HEX_LEN);
   return `${VAULT_STORE_REF_PREFIX}${digest}`;
 }
-function resolveConfigFlag(envKey, configKey, configPath) {
+function readSetting(envKey, configKey, data) {
   const env = process.env[envKey]?.trim();
-  return isFlagOn(env || discoverConfig(configPath).data[configKey]?.trim());
+  if (env)
+    return env;
+  const raw = (typeof data === "function" ? data() : data)[configKey]?.trim();
+  return raw ? raw : undefined;
+}
+function resolveConfigFlag(envKey, configKey, configPath) {
+  return isFlagOn(readSetting(envKey, configKey, () => discoverConfig(configPath).data));
 }
 function isFlagOn(raw) {
   return raw === "true" || raw === "1";
@@ -2371,7 +2413,7 @@ var EGRESS_SITES = Object.freeze({
     verb: "o2b search index (embedding provider)",
     module: "src/core/search/embeddings/openai-compat.ts",
     redaction: R.unscannedNetworkPayload,
-    reason: "the largest and most continuous egress in this product: every indexed chunk BODY " + "is POSTed verbatim to whichever endpoint the operator configured, for every " + "reindex, and nothing scans it. It is declared unscanned rather than wired to the " + "guard because redaction here would corrupt the thing being built - a vector " + "computed over a placeholder is a vector for the placeholder, so the chunk would " + "come back unfindable while the index reported success, which is a silent failure " + "where this one is at least a stated exposure. The controls that do exist are " + "the operator's: semantic search is off until an endpoint and a key are configured, " + "and the endpoint is whichever host they name, including a local one."
+    reason: "the largest and most continuous egress in this product: every indexed chunk BODY " + "is POSTed verbatim to whichever endpoint the operator configured, for every " + "reindex, and nothing scans it. It is declared unscanned rather than wired to the " + "guard because redaction here would corrupt the thing being built - a vector " + "computed over a placeholder is a vector for the placeholder, so the chunk would " + "come back unfindable while the index reported success, which is a silent failure " + "where this one is at least a stated exposure. The controls that do exist are " + "the operator's: semantic search is off until an endpoint and a key are configured, " + "and the endpoint is whichever host they name, including a local one. The request " + "also carries any extra body fields the operator declared in `embedding_extra_body`, " + "verbatim, next to the owned model, input and encoding fields."
   },
   "search-embedding-zeroentropy": {
     id: "search-embedding-zeroentropy",

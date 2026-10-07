@@ -26,7 +26,8 @@ export function renderUpgradePlanJson(plan: UpgradePlan): {
     files: plan.files.map((f) => ({
       path: f.path,
       status: f.status,
-      before_size: f.before.length,
+      // An absent file (`before: null`) reports 0, as before the split.
+      before_size: f.before?.length ?? 0,
       after_size: f.after.length,
       ...(f.error ? { error: f.error } : {}),
     })),
@@ -43,8 +44,9 @@ export function printUpgradePlanText(plan: UpgradePlan): void {
       info(`  ${f.path}: ERROR ${f.error}`);
       continue;
     }
-    info(`  ${f.path}: update (${f.before.length} → ${f.after.length} bytes)`);
-    info(renderUnifiedDiff(f.before, f.after, f.path));
+    const from = f.before === null ? "absent" : String(f.before.length);
+    info(`  ${f.path}: update (${from} → ${f.after.length} bytes)`);
+    info(renderUnifiedDiff(f.before ?? "", f.after, f.path));
   }
   if (plan.pending === 0 && plan.errors === 0) {
     ok("upgrade: all managed files match the current release.");

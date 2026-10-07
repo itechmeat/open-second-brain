@@ -9,7 +9,12 @@ import { Database } from "bun:sqlite";
 
 import { SearchError } from "../types.ts";
 import { nowIso, sqlPlaceholders } from "./sql.ts";
-import { purgeVecRowsByChunkIds, purgeVecRowsForDocument } from "./vectors.ts";
+import {
+  matchCarriedVectors,
+  readCarryCandidates,
+  restoreCarriedVectors,
+} from "./vector-carry-over.ts";
+import { purgeVecRowsByChunkIds } from "./vectors.ts";
 
 export interface ChunkInput {
   readonly chunkIndex: number;
@@ -119,21 +124,47 @@ export function getChunksByDocument(db: Database, documentId: number): ChunkRow[
   }));
 }
 
+/** What one document's chunk replacement wrote. */
+export interface ChunkReplacement {
+  /** The new chunk ids, in `chunkIndex` order. */
+  readonly chunkIds: number[];
+  /**
+   * New chunks that kept a stored vector of an old chunk with the same
+   * `content_hash` (vector carry-over), so the embedding phase will not
+   * pay for them again.
+   */
+  readonly embeddingsReused: number;
+}
+
 /**
- * Atomically replace every chunk for a document. Old vec rows are
- * removed first; FTS5 stays in sync via the chunks_ai/ad/au triggers.
- * Returns the new chunk ids in `chunkIndex` order.
+ * Atomically replace every chunk for a document, carrying the stored
+ * vector of every new chunk whose content an old chunk of this document
+ * already embedded under the recorded model and dimension (the rule and
+ * its guard live in `vector-carry-over.ts`). Only the vec rows that are
+ * not carried are purged; the old `chunk_vec_map` and `embeddings` rows
+ * go with their chunks through the FK cascade, and the carried ones are
+ * re-attached to the new ids. FTS5 stays in sync via the
+ * chunks_ai/ad/au triggers.
  */
-export function replaceChunks(
+export function replaceDocumentChunks(
   db: Database,
   vecLoaded: boolean,
   documentId: number,
   chunks: ReadonlyArray<ChunkInput>,
-): number[] {
+): ChunkReplacement {
   const ids: number[] = [];
+  let embeddingsReused = 0;
   db.exec("BEGIN");
   try {
-    purgeVecRowsForDocument(db, vecLoaded, documentId);
+    const carried = matchCarriedVectors(
+      readCarryCandidates(db, vecLoaded, documentId),
+      chunks.map((c) => c.contentHash),
+    );
+    const keptChunkIds = new Set(carried.map((m) => m.candidate.chunkId));
+    const purged = chunksForDocument(db, documentId)
+      .map((c) => c.id)
+      .filter((id) => !keptChunkIds.has(id));
+    purgeVecRowsByChunkIds(db, vecLoaded, purged);
     db.run("DELETE FROM chunks WHERE document_id = ?", [documentId]);
     const insert = db.prepare<
       { id: number },
@@ -160,12 +191,27 @@ export function replaceChunks(
       if (!row) throw new SearchError("INDEX_UNREADABLE", "chunk insert returned no id");
       ids.push(row.id);
     }
+    restoreCarriedVectors(db, ids, carried);
+    embeddingsReused = carried.length;
     db.exec("COMMIT");
   } catch (e) {
     db.exec("ROLLBACK");
     throw e;
   }
-  return ids;
+  return { chunkIds: ids, embeddingsReused };
+}
+
+/**
+ * {@link replaceDocumentChunks} for callers that need only the new ids
+ * (in `chunkIndex` order). The carry-over applies all the same.
+ */
+export function replaceChunks(
+  db: Database,
+  vecLoaded: boolean,
+  documentId: number,
+  chunks: ReadonlyArray<ChunkInput>,
+): number[] {
+  return replaceDocumentChunks(db, vecLoaded, documentId, chunks).chunkIds;
 }
 
 /**
@@ -208,19 +254,54 @@ export function countChunks(db: Database): number {
 }
 
 /**
+ * Optional path scope of the pending-vector census: only chunks whose
+ * document path starts with one of the prefixes. An absent or empty list
+ * means vault-wide, and then the census SQL is exactly the unscoped form.
+ */
+export interface PendingVectorScope {
+  readonly pathPrefixes?: ReadonlyArray<string>;
+}
+
+const PENDING_ANTI_JOIN =
+  "FROM chunks c LEFT JOIN embeddings e ON e.chunk_id = c.id WHERE e.chunk_id IS NULL";
+
+/**
+ * The anti-join's FROM/WHERE text and bindings for a scope. A scoped
+ * census joins `documents` and matches each prefix with the
+ * `substr(path, 1, length(?)) = ?` form the vector prefix filter uses,
+ * which needs no LIKE wildcard escaping.
+ */
+function pendingCensusClause(scope: PendingVectorScope | undefined): {
+  sql: string;
+  bindings: string[];
+} {
+  const prefixes = scope?.pathPrefixes ?? [];
+  if (prefixes.length === 0) return { sql: PENDING_ANTI_JOIN, bindings: [] };
+  const matches = prefixes.map(() => "substr(d.path, 1, length(?)) = ?").join(" OR ");
+  return {
+    sql:
+      "FROM chunks c JOIN documents d ON d.id = c.document_id " +
+      "LEFT JOIN embeddings e ON e.chunk_id = c.id " +
+      `WHERE e.chunk_id IS NULL AND (${matches})`,
+    bindings: prefixes.flatMap((prefix) => [prefix, prefix]),
+  };
+}
+
+/**
  * Chunks that have no row in `embeddings`. Used by the indexer to
- * populate vectors after a fresh index or after the model-change drop.
+ * populate vectors after a fresh index or after the model-change drop,
+ * optionally scoped to path prefixes.
  */
 export function findChunksWithoutEmbeddings(
   db: Database,
+  scope?: PendingVectorScope,
 ): Array<{ chunkId: number; content: string }> {
+  const { sql, bindings } = pendingCensusClause(scope);
   const rows = db
-    .query<{ id: number; content: string }, []>(
-      "SELECT c.id AS id, c.content AS content FROM chunks c " +
-        "LEFT JOIN embeddings e ON e.chunk_id = c.id " +
-        "WHERE e.chunk_id IS NULL ORDER BY c.id",
+    .query<{ id: number; content: string }, string[]>(
+      `SELECT c.id AS id, c.content AS content ${sql} ORDER BY c.id`,
     )
-    .all();
+    .all(...bindings);
   return rows.map((r) => ({ chunkId: r.id, content: r.content }));
 }
 
@@ -228,23 +309,16 @@ export function findChunksWithoutEmbeddings(
  * How MANY chunks have no row in `embeddings`, without materialising a
  * single one of their bodies.
  *
- * The same anti-join {@link findChunksWithoutEmbeddings} walks, as a
- * `COUNT(*)`. The row-returning form is the indexer's work queue and
- * loads every pending chunk's full `content` into JS memory to hand it
- * to a provider; a diagnostic that only wants the number must not pay
- * that, which is the whole reason this second query exists rather than
- * a `.length` on the first.
+ * The same anti-join {@link findChunksWithoutEmbeddings} walks, under the
+ * same scope, as a `COUNT(*)`. The row-returning form is the indexer's
+ * work queue and loads every pending chunk's full `content` into JS
+ * memory to hand it to a provider; a diagnostic that only wants the
+ * number must not pay that, which is the whole reason this second query
+ * exists rather than a `.length` on the first.
  */
-export function countChunksWithoutEmbeddings(db: Database): number {
-  return (
-    db
-      .query<{ n: number }, []>(
-        "SELECT COUNT(*) AS n FROM chunks c " +
-          "LEFT JOIN embeddings e ON e.chunk_id = c.id " +
-          "WHERE e.chunk_id IS NULL",
-      )
-      .get()?.n ?? 0
-  );
+export function countChunksWithoutEmbeddings(db: Database, scope?: PendingVectorScope): number {
+  const { sql, bindings } = pendingCensusClause(scope);
+  return db.query<{ n: number }, string[]>(`SELECT COUNT(*) AS n ${sql}`).get(...bindings)?.n ?? 0;
 }
 
 export function hydrateChunks(

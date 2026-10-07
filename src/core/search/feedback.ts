@@ -25,6 +25,7 @@ import { join } from "node:path";
 
 import type { BrainSearchResult, ResolvedSearchConfig, WeightProfile } from "./types.ts";
 import type { TransportReach } from "../graph/transport-reach.ts";
+import { semanticLaneMissing, type RetrievalDegradationCode } from "./retrieval-trail.ts";
 
 /** Lower bound for one learned per-layer multiplier. */
 export const LEARNED_WEIGHT_MIN = 0.8;
@@ -314,6 +315,14 @@ export interface CaptureRecallFeedbackOutcome {
   readonly learned: LearnedWeights;
   /** False when the judged path was not in the re-ran result set. */
   readonly resultFound: boolean;
+  /**
+   * Why the re-run narrowed, as the trail's codes; empty when nothing did.
+   * The re-run is gated like any search (a remote caller's unpriced query
+   * embed is refused), so the contributions it recorded describe the
+   * ranking this caller's own search produces, and this says when that
+   * ranking was keyword-only.
+   */
+  readonly degraded: ReadonlyArray<RetrievalDegradationCode>;
 }
 
 /**
@@ -336,9 +345,17 @@ export async function captureRecallFeedback(
     ...(input.transportReach !== undefined ? { transportReach: input.transportReach } : {}),
   });
   const hit = outcome.results.find((r) => r.path === input.resultPath);
-  const contributions: LayerContributions = hit
-    ? contributionsFromResult(hit)
-    : Object.freeze({ keyword: 0, semantic: 0, entity: 0, recency: 0 });
+  const degraded = Object.freeze((outcome.retrievalTrail?.degraded ?? []).map((d) => d.code));
+  // A re-run the semantic lane never reached (the spend gate, or any other
+  // stop under hybrid recall) scored the hit on a keyword-only pool, so its
+  // layer shares describe the degradation, not the result. The event keeps
+  // its audit row with zero contributions, which the fold skips, so the
+  // vault-wide weights never drift toward keyword while the gate holds.
+  const laneMissing = semanticLaneMissing(degraded);
+  const contributions: LayerContributions =
+    hit && !laneMissing
+      ? contributionsFromResult(hit)
+      : Object.freeze({ keyword: 0, semantic: 0, entity: 0, recency: 0 });
   const normalized = input.query.trim().replace(/\s+/gu, " ").toLowerCase();
   const event: RecallFeedbackEvent = Object.freeze({
     ts: input.nowMs ?? Date.now(),
@@ -349,5 +366,5 @@ export async function captureRecallFeedback(
   });
   const file = recordRecallFeedback(config.vault, event);
   const learned = readLearnedWeights(config.vault) ?? NEUTRAL_LEARNED_WEIGHTS;
-  return Object.freeze({ file, event, learned, resultFound: hit !== undefined });
+  return Object.freeze({ file, event, learned, resultFound: hit !== undefined, degraded });
 }

@@ -7,7 +7,7 @@
  */
 
 import { resolve } from "node:path";
-import { resolveAgentName } from "../../core/config.ts";
+import { resolveAgentName, resolveNearDuplicateRetireSiblingsEnabled } from "../../core/config.ts";
 import {
   appendApplyEvidence,
   BrainPreferenceNotFoundError,
@@ -37,6 +37,7 @@ import {
 } from "../../core/brain/dream-stage.ts";
 import { BRAIN_ROLES } from "../../core/brain/trust/role.ts";
 import { resolveEffectiveScope, writeSignal } from "../../core/brain/signal.ts";
+import { ROUTE_STAGE, timeStageSync } from "../../core/route-scope.ts";
 import {
   adviseIncomingFeedback,
   adviseUnroutableCapture,
@@ -221,16 +222,18 @@ async function toolBrainFeedback(
       : mirrorSignal(sharedNamespace, ctx.vault, signalInput, writeOpts);
 
   try {
-    appendLogEvent(ctx.vault, {
-      timestamp: createdAt,
-      eventType: BRAIN_LOG_EVENT_KIND.feedback,
-      body: {
-        signal: `[[${sigResult.id}]]`,
-        topic: topic.trim(),
-        sign: signalRaw,
-        agent,
-      },
-    });
+    timeStageSync(ROUTE_STAGE.logAppend, () =>
+      appendLogEvent(ctx.vault, {
+        timestamp: createdAt,
+        eventType: BRAIN_LOG_EVENT_KIND.feedback,
+        body: {
+          signal: `[[${sigResult.id}]]`,
+          topic: topic.trim(),
+          sign: signalRaw,
+          agent,
+        },
+      }),
+    );
   } catch (err) {
     process.stderr.write(`warning: append feedback log failed: ${(err as Error).message}\n`);
   }
@@ -267,50 +270,55 @@ async function toolBrainFeedback(
     // `confirmed_at` is now; `unconfirmed_until` is also now so the trial
     // window collapses on inspection. The just-written signal is recorded
     // as the rule's origin under `evidenced_by`.
-    prefResult = writePreference(
-      ctx.vault,
-      {
-        slug,
-        topic: topic.trim(),
-        principle: principle.trim(),
-        created_at: createdAt,
-        unconfirmed_until: createdAt,
-        status: BRAIN_PREFERENCE_STATUS.confirmed,
-        evidenced_by: [`[[${sigResult.id}]]`],
-        confirmed_at: createdAt,
-        // Issue #149: an explicit zero, not an absent value. The
-        // on-disk encoding of "absent" is the literal `null`, and two
-        // ranking surfaces (`pre-compress-pack`, `morning-brief`) map
-        // `null` to negative infinity before sorting - so a rule
-        // force-confirmed a second ago would sort BELOW every rule
-        // that has a number, including one measured at zero. Zero is
-        // also the true Wilson lower bound on no evidence, which is
-        // why the dream pass already pre-seeds it for new
-        // preferences. This writer now matches it.
-        confidence_value: 0,
-        ...(effectiveScope !== undefined ? { scope: effectiveScope } : {}),
-        // The same lifetime the signal carries: a rule confirmed from an
-        // observation that expires on a date does not outlive it.
-        ...(expires !== undefined ? { expiration_date: expires } : {}),
-      },
-      // Ownership is resolved by the writer, never echoed from `agent`:
-      // that argument is caller-supplied, and a caller must not be able to
-      // name whose memory this becomes. The server's config path is handed
-      // over rather than a resolved name for the same reason.
-      ctx.configPath !== null ? { configPath: ctx.configPath } : {},
+    prefResult = timeStageSync(ROUTE_STAGE.preferenceWrite, () =>
+      writePreference(
+        ctx.vault,
+        {
+          slug,
+          topic: topic.trim(),
+          principle: principle.trim(),
+          created_at: createdAt,
+          unconfirmed_until: createdAt,
+          status: BRAIN_PREFERENCE_STATUS.confirmed,
+          evidenced_by: [`[[${sigResult.id}]]`],
+          confirmed_at: createdAt,
+          // Issue #149: an explicit zero, not an absent value. The
+          // on-disk encoding of "absent" is the literal `null`, and two
+          // ranking surfaces (`pre-compress-pack`, `morning-brief`) map
+          // `null` to negative infinity before sorting - so a rule
+          // force-confirmed a second ago would sort BELOW every rule
+          // that has a number, including one measured at zero. Zero is
+          // also the true Wilson lower bound on no evidence, which is
+          // why the dream pass already pre-seeds it for new
+          // preferences. This writer now matches it.
+          confidence_value: 0,
+          ...(effectiveScope !== undefined ? { scope: effectiveScope } : {}),
+          // The same lifetime the signal carries: a rule confirmed from an
+          // observation that expires on a date does not outlive it.
+          ...(expires !== undefined ? { expiration_date: expires } : {}),
+        },
+        // Ownership is resolved by the writer, never echoed from `agent`:
+        // that argument is caller-supplied, and a caller must not be able to
+        // name whose memory this becomes. The server's config path is handed
+        // over rather than a resolved name for the same reason.
+        ctx.configPath !== null ? { configPath: ctx.configPath } : {},
+      ),
     );
     try {
       // Offset by 1s so the force-confirmed event sorts after the feedback
       // event on the same UTC second (parseLogDay is stable on ties, but a
       // visible chronology reads cleaner).
-      appendLogEvent(ctx.vault, {
-        timestamp: isoSecond(new Date(now.getTime() + 1000)),
-        eventType: BRAIN_LOG_EVENT_KIND.forceConfirmed,
-        body: {
-          preference: `[[${prefResult.id}]]`,
-          agent,
-        },
-      });
+      const preferenceId = prefResult.id;
+      timeStageSync(ROUTE_STAGE.logAppend, () =>
+        appendLogEvent(ctx.vault, {
+          timestamp: isoSecond(new Date(now.getTime() + 1000)),
+          eventType: BRAIN_LOG_EVENT_KIND.forceConfirmed,
+          body: {
+            preference: `[[${preferenceId}]]`,
+            agent,
+          },
+        }),
+      );
     } catch (err) {
       process.stderr.write(
         `warning: append force-confirmed log failed: ${(err as Error).message}\n`,
@@ -653,6 +661,11 @@ async function toolBrainDream(
   // spends the run's budget - which is the honest reading of a budget the
   // operator set for this operation.
   const safeguard = toolSafeguard(ctx, OPERATION.dream);
+  // The retire-siblings key honours the server's own config file, as
+  // `brain_review_candidates` does.
+  const retireSiblingsEnabled = resolveNearDuplicateRetireSiblingsEnabled(
+    ctx.configPath ?? undefined,
+  );
   // Only pay for a preview pass when a guard is actually requested; otherwise
   // the run is byte-identical to before.
   if (expect !== null || strict) {
@@ -660,6 +673,7 @@ async function toolBrainDream(
       dryRun: true,
       safeguard,
       readable,
+      retireSiblingsEnabled,
       ...previewScope,
       ...(nowDate ? { now: nowDate } : {}),
       ...(agent ? { agentName: agent } : {}),
@@ -685,6 +699,7 @@ async function toolBrainDream(
     dryRun,
     safeguard,
     readable,
+    retireSiblingsEnabled,
     ...previewScope,
     ...(nowDate ? { now: nowDate } : {}),
     ...(agent ? { agentName: agent } : {}),
@@ -692,6 +707,17 @@ async function toolBrainDream(
     ...(onProgress ? { onProgress } : {}),
   });
   const changeList = dreamChangeList(summary);
+  // A retire-sibling pair names two preferences; it is kept only when the
+  // caller may see both, each in both spellings (`ret-<slug>` after the
+  // pass, `pref-<slug>` before it).
+  const bothSpellings = (id: string): ReadonlyArray<string> => {
+    const slug = brainArtifactSlug(id);
+    return [`pref-${slug}`, `ret-${slug}`];
+  };
+  const retireSiblings = dreamView.keep(summary.retire_siblings ?? [], (p) => [
+    ...bothSpellings(p.retiring_id),
+    ...bothSpellings(p.sibling_id),
+  ]);
 
   // The summary is already a Plain Old Frozen Object — JSON-serialise
   // verbatim. We surface `snapshot_path` / `log_path` as vault-relative
@@ -705,6 +731,16 @@ async function toolBrainDream(
     changed_count: dryRun ? 0 : changeList.length,
     dry_run: dryRun,
     ...scopedDreamRows(dreamView, summary),
+    ...(retireSiblings.length > 0
+      ? {
+          retire_siblings: retireSiblings.map((p) => ({
+            retiring_id: p.retiring_id,
+            sibling_id: p.sibling_id,
+            score: p.score,
+            method: p.method,
+          })),
+        }
+      : {}),
     // Inbox archive (issue #195): a count, not the ids. A first pass over a
     // long-lived vault archives thousands of signals; the run's log event
     // names every one of them.

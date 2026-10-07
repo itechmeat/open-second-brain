@@ -93,6 +93,26 @@ export const RETRIEVAL_DEGRADATION = Object.freeze({
    * site and, until now, stringified into a sentence and thrown away.
    */
   semanticProviderUnavailable: "semantic-provider-unavailable",
+  /**
+   * The query-embed gateway refused the embed: a caller that is not local,
+   * under a positive `embedding_cost_gate_usd`, on a model nobody priced.
+   * No `detail`: the model name is configuration, and the warning names
+   * it with the price pair that clears the refusal.
+   */
+  semanticCostUnpriced: "semantic-cost-unpriced",
+  /**
+   * The query was cut to the effective embedding input window, so the
+   * semantic lane searched a prefix of what the caller sent.
+   * `detail.windowTokens` is the window it was fitted to. The lane ran.
+   */
+  semanticQueryTruncated: "semantic-query-truncated",
+  /**
+   * The instruction prefix alone fills the effective embedding input
+   * window, so no part of the query was left to embed and the semantic
+   * lane did not run. `detail.windowTokens` is that window. A code of its
+   * own, apart from the cut, because this one always means a stopped lane.
+   */
+  semanticQueryEmptyFit: "semantic-query-empty-fit",
   /** The provider answered with an empty vector, so there was nothing to search. */
   semanticEmptyQueryVector: "semantic-empty-query-vector",
   /** A structured semantic lane was requested while semantic search is off. */
@@ -105,8 +125,8 @@ export const RETRIEVAL_DEGRADATION = Object.freeze({
   semanticEmbeddingAbiDrift: "semantic-embedding-abi-drift",
   /**
    * The caller wanted hybrid recall and the semantic lane did not run, so
-   * the answer is keyword-only. The umbrella over the five codes above -
-   * they say why, this says what the caller received.
+   * the answer is keyword-only. The umbrella over the semantic codes above
+   * that stop the lane - they say why, this says what the caller received.
    */
   hybridDegraded: "hybrid-degraded",
   /**
@@ -178,6 +198,9 @@ export const RETRIEVAL_DEGRADATION_CODES: ReadonlyArray<RetrievalDegradationCode
   RETRIEVAL_DEGRADATION.semanticEmbeddingsAbsent,
   RETRIEVAL_DEGRADATION.semanticVecExtensionUnavailable,
   RETRIEVAL_DEGRADATION.semanticCapabilityBlocked,
+  RETRIEVAL_DEGRADATION.semanticCostUnpriced,
+  RETRIEVAL_DEGRADATION.semanticQueryTruncated,
+  RETRIEVAL_DEGRADATION.semanticQueryEmptyFit,
   RETRIEVAL_DEGRADATION.semanticProviderUnavailable,
   RETRIEVAL_DEGRADATION.semanticEmptyQueryVector,
   RETRIEVAL_DEGRADATION.semanticStructuredLanesSkipped,
@@ -286,6 +309,43 @@ export function noteDegradation(
   sink.push(Object.freeze(detail !== undefined ? { code, detail } : { code }));
 }
 
+/** The codes that each mean the semantic lane a hybrid caller wanted did not run. */
+const SEMANTIC_LANE_STOPS: ReadonlySet<RetrievalDegradationCode> = new Set([
+  RETRIEVAL_DEGRADATION.hybridDegraded,
+  RETRIEVAL_DEGRADATION.semanticCapabilityBlocked,
+  RETRIEVAL_DEGRADATION.semanticCostUnpriced,
+  RETRIEVAL_DEGRADATION.semanticQueryEmptyFit,
+  RETRIEVAL_DEGRADATION.semanticProviderUnavailable,
+  RETRIEVAL_DEGRADATION.semanticEmptyQueryVector,
+]);
+
+/**
+ * Whether a hybrid caller was served keyword-only for a reason that is not
+ * the index or the machine: the one definition every consumer that must
+ * not learn from, or save, a keyword-only measurement reads.
+ *
+ * `hybrid-degraded` is the umbrella - the caller wanted the semantic lane
+ * and it did not run - so the deadline counts without a code of its own.
+ * The umbrella is only noted when the keyword lane found something, so the
+ * codes that always mean the lane stopped count on their own too: a hit
+ * that arrived through another lane was still scored without the
+ * semantic one. A cut query is not one of them - the lane ran on the cut
+ * text - while an empty fit, where the instruction prefix alone fills the
+ * window, is.
+ * An index with no embeddings or a machine without sqlite-vec is
+ * keyword-only by construction: the system it measured is the one that
+ * will serve.
+ */
+export function semanticLaneMissing(degraded: ReadonlyArray<RetrievalDegradationCode>): boolean {
+  if (
+    degraded.includes(RETRIEVAL_DEGRADATION.semanticEmbeddingsAbsent) ||
+    degraded.includes(RETRIEVAL_DEGRADATION.semanticVecExtensionUnavailable)
+  ) {
+    return false;
+  }
+  return degraded.some((code) => SEMANTIC_LANE_STOPS.has(code));
+}
+
 /**
  * The one English mapping, exhaustive over the vocabulary with no default
  * arm - so adding a code fails to compile here rather than silently
@@ -304,6 +364,12 @@ export function describeRetrievalDegradation(code: RetrievalDegradationCode): st
       return "the sqlite-vec extension is not loaded, so the semantic lane could not run";
     case RETRIEVAL_DEGRADATION.semanticCapabilityBlocked:
       return "the configured semantic capability blocks the vector lane, so it did not run";
+    case RETRIEVAL_DEGRADATION.semanticCostUnpriced:
+      return "the embedding model has no known price and the cost gate is on, so a query embed for a caller that is not local was refused and the semantic lane did not run";
+    case RETRIEVAL_DEGRADATION.semanticQueryTruncated:
+      return "the query was longer than the embedding input window, so the semantic lane searched a cut prefix of it";
+    case RETRIEVAL_DEGRADATION.semanticQueryEmptyFit:
+      return "the instruction prefix alone fills the embedding input window, so no part of the query was left to embed and the semantic lane did not run";
     case RETRIEVAL_DEGRADATION.semanticProviderUnavailable:
       return "the embedding provider could not answer, so the semantic lane did not run";
     case RETRIEVAL_DEGRADATION.semanticEmptyQueryVector:

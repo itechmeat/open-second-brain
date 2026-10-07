@@ -75,6 +75,7 @@ import {
   type NoteTemplateVariables,
 } from "./note-template.ts";
 import { NOTE_WRITE_OP, recordNoteWrite } from "./write-record.ts";
+import { ROUTE_STAGE, timeStageSync } from "../../route-scope.ts";
 
 /** Machine-readable reason a {@link createNote} call was refused. */
 export type CreateNoteErrorCode =
@@ -567,11 +568,13 @@ export function createNote(vault: string, input: CreateNoteInput): CreateNoteRes
 
   mkdirSync(dirname(abs), { recursive: true });
   try {
-    writeFrontmatterAtomic(abs, frontmatter, body, {
-      overwrite: false,
-      existsErrorKind: "note",
-      vaultForRelativePath: vault,
-    });
+    timeStageSync(ROUTE_STAGE.documentWrite, () =>
+      writeFrontmatterAtomic(abs, frontmatter, body, {
+        overwrite: false,
+        existsErrorKind: "note",
+        vaultForRelativePath: vault,
+      }),
+    );
   } catch (err) {
     // One predicate for "the name was taken", shared with every other
     // collision-aware call site. The hand-rolled pair it replaces read
@@ -591,12 +594,14 @@ export function createNote(vault: string, input: CreateNoteInput): CreateNoteRes
   // throwing, and the reason rides out on the result rather than being
   // swallowed here (who-wrote-what, Task A). A create replaces nothing,
   // so there is no before-image to store and `hash_before` is `absent`.
-  const receipt = recordNoteWrite(vault, {
-    op: NOTE_WRITE_OP.create,
-    target: relPath,
-    before: null,
-    after: { bytes: formatFrontmatter(frontmatter, body) },
-    ...(input.configPath !== undefined ? { configPath: input.configPath } : {}),
-  });
+  const receipt = timeStageSync(ROUTE_STAGE.writeReceipt, () =>
+    recordNoteWrite(vault, {
+      op: NOTE_WRITE_OP.create,
+      target: relPath,
+      before: null,
+      after: { bytes: formatFrontmatter(frontmatter, body) },
+      ...(input.configPath !== undefined ? { configPath: input.configPath } : {}),
+    }),
+  );
   return { path: relPath, outcome: "created", created: true, ...receipt };
 }

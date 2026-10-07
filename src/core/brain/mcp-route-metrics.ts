@@ -21,13 +21,21 @@
  * duration, and the SORTED SET OF ARGUMENT KEY NAMES land on disk.
  * Argument key names are the tool's own JSON-Schema property names
  * (`query`, `max_tokens`, ...), never operator-supplied values - so no
- * prompt, note body, or preference id is ever recorded. The whole
- * payload still passes `safeContinuityPayload` redaction.
+ * prompt, note body, or preference id is ever recorded. Optional
+ * `decision_ms` and `stages` carry timings only; stage names come from the
+ * closed `ROUTE_STAGE_NAMES` allowlist. The whole payload still passes
+ * `safeContinuityPayload` redaction.
  */
 
 import { emitGatedTelemetry } from "./continuity/emit.ts";
 import { appendContinuityRecord, listContinuityRecords } from "./continuity/store.ts";
 import type { ContinuityRecord } from "./continuity/types.ts";
+import {
+  isRouteStageName,
+  ROUTE_STAGE_NAMES,
+  type RouteStageName,
+  type RouteStageTiming,
+} from "../route-scope.ts";
 
 export type McpRouteStatus = "ok" | "error";
 
@@ -51,6 +59,12 @@ export interface McpRouteLatencyInput {
    * without the feature is unchanged.
    */
   readonly decisionMs?: number;
+  /**
+   * Write-stage timings noted inside this call. Only names in
+   * `ROUTE_STAGE_NAMES` with a finite, non-negative value are persisted;
+   * absent or empty leaves the record unchanged.
+   */
+  readonly stages?: ReadonlyArray<RouteStageTiming>;
 }
 
 export interface McpRouteLatencyFilter {
@@ -72,6 +86,16 @@ export interface McpRouteStats {
   readonly p50_ms: number;
   readonly p95_ms: number;
   readonly p99_ms: number;
+  /** Per-stage roll-up in `ROUTE_STAGE` order; absent when no record of the route carried stages. */
+  readonly stages?: ReadonlyArray<McpRouteStageStats>;
+}
+
+/** One write stage's roll-up within a route (nearest-rank p95). */
+export interface McpRouteStageStats {
+  readonly name: RouteStageName;
+  readonly count: number;
+  readonly avg_ms: number;
+  readonly p95_ms: number;
 }
 
 export interface McpRouteLatencySummary {
@@ -121,6 +145,8 @@ export function emitMcpRouteLatency<G>(
         ? { decision_ms: Math.max(0, Math.round(input.decisionMs)) }
         : {}),
     };
+    const stages = normalizeStages(input.stages);
+    if (stages.length > 0) payload["stages"] = stages;
     return appendContinuityRecord(vault, {
       kind: "mcp_route_latency",
       createdAt,
@@ -137,6 +163,28 @@ function normalizeArgKeys(raw: ReadonlyArray<string> | undefined): string[] {
     if (typeof key === "string" && key.length > 0) seen.add(key);
   }
   return [...seen].toSorted();
+}
+
+/**
+ * Keep allowlisted stage names with finite, non-negative values, sum
+ * repeated names in first-seen order and round to 0.1 ms. A name outside
+ * `ROUTE_STAGE_NAMES` is dropped here, at the only write site, so free
+ * text never reaches the continuity record.
+ */
+function normalizeStages(
+  raw: ReadonlyArray<RouteStageTiming> | undefined,
+): Array<{ name: RouteStageName; ms: number }> {
+  if (!Array.isArray(raw)) return [];
+  const summed = new Map<RouteStageName, number>();
+  for (const stage of raw as ReadonlyArray<unknown>) {
+    if (typeof stage !== "object" || stage === null) continue;
+    const { name, ms } = stage as { name?: unknown; ms?: unknown };
+    if (!isRouteStageName(name) || typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) {
+      continue;
+    }
+    summed.set(name, (summed.get(name) ?? 0) + ms);
+  }
+  return [...summed].map(([name, ms]) => ({ name, ms: Math.round(ms * 10) / 10 }));
 }
 
 /** List `mcp_route_latency` records newest-first, after applying filters. */
@@ -166,6 +214,7 @@ export function summarizeMcpRouteLatency(
   const byStatus: Partial<Record<McpRouteStatus, number>> = {};
   const durationsByTool = new Map<string, number[]>();
   const errorsByTool = new Map<string, number>();
+  const stagesByTool = new Map<string, Map<RouteStageName, number[]>>();
   let errorCount = 0;
 
   for (const record of records) {
@@ -185,12 +234,14 @@ export function summarizeMcpRouteLatency(
       if (bucket) bucket.push(duration);
       else durationsByTool.set(tool, [duration]);
     }
+    collectStageTimes(payload["stages"], tool, stagesByTool);
   }
 
   const routes: McpRouteStats[] = [];
   for (const [tool, durations] of durationsByTool) {
     const sorted = durations.toSorted((a, b) => a - b);
     const sum = sorted.reduce((acc, value) => acc + value, 0);
+    const stages = summarizeStages(stagesByTool.get(tool));
     routes.push({
       tool,
       count: sorted.length,
@@ -201,6 +252,7 @@ export function summarizeMcpRouteLatency(
       p50_ms: percentile(sorted, 50),
       p95_ms: percentile(sorted, 95),
       p99_ms: percentile(sorted, 99),
+      ...(stages.length > 0 ? { stages } : {}),
     });
   }
   // Slowest surface first, tie-broken by name for a stable order.
@@ -212,6 +264,54 @@ export function summarizeMcpRouteLatency(
     by_status: Object.freeze(byStatus),
     routes: Object.freeze(routes),
   });
+}
+
+/**
+ * Gather one persisted record's stage times under its tool. Re-checks the
+ * allowlist and the value guard on read, so a hand-edited record never
+ * puts a free-text name into the summary.
+ */
+function collectStageTimes(
+  raw: unknown,
+  tool: string,
+  stagesByTool: Map<string, Map<RouteStageName, number[]>>,
+): void {
+  if (!Array.isArray(raw)) return;
+  for (const stage of raw as ReadonlyArray<unknown>) {
+    if (typeof stage !== "object" || stage === null) continue;
+    const { name, ms } = stage as { name?: unknown; ms?: unknown };
+    if (!isRouteStageName(name) || typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) {
+      continue;
+    }
+    let byStage = stagesByTool.get(tool);
+    if (byStage === undefined) {
+      byStage = new Map();
+      stagesByTool.set(tool, byStage);
+    }
+    const bucket = byStage.get(name);
+    if (bucket) bucket.push(ms);
+    else byStage.set(name, [ms]);
+  }
+}
+
+function summarizeStages(
+  byStage: ReadonlyMap<RouteStageName, ReadonlyArray<number>> | undefined,
+): McpRouteStageStats[] {
+  if (byStage === undefined) return [];
+  const stats: McpRouteStageStats[] = [];
+  for (const name of ROUTE_STAGE_NAMES) {
+    const times = byStage.get(name);
+    if (times === undefined || times.length === 0) continue;
+    const sorted = times.toSorted((a, b) => a - b);
+    const sum = sorted.reduce((acc, value) => acc + value, 0);
+    stats.push({
+      name,
+      count: sorted.length,
+      avg_ms: Math.round((sum / sorted.length) * 10) / 10,
+      p95_ms: percentile(sorted, 95),
+    });
+  }
+  return stats;
 }
 
 /** Nearest-rank percentile over an ascending-sorted array; 0 for empty input. */

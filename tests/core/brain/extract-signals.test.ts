@@ -39,12 +39,16 @@ import {
 } from "../../../src/core/brain/extract-signals.ts";
 import { listDeadLetters } from "../../../src/core/brain/dead-letter.ts";
 import { NEEDS_LLM_STEP } from "../../../src/core/brain/llm-step.ts";
-import { ResponseCheckError } from "../../../src/core/brain/response-checks.ts";
+import {
+  ResponseCheckError,
+  SEMANTIC_VIOLATION_CODES,
+} from "../../../src/core/brain/response-checks.ts";
 import { ResponseShapeError } from "../../../src/core/brain/response-shape.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { brainConfigPath } from "../../../src/core/brain/paths.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { importSessionRecall } from "../../../src/core/brain/session-recall.ts";
+import type { DedupIndexEntry } from "../../../src/core/brain/dedup-hash.ts";
 import { parseSignal } from "../../../src/core/brain/signal.ts";
 import { BRAIN_SIGNAL_SOURCE_TYPE } from "../../../src/core/brain/types.ts";
 import type { SessionTurn } from "../../../src/core/brain/sessions/types.ts";
@@ -395,4 +399,126 @@ test("a partial write leaves a durable dead letter naming the unwritten items", 
   // the response can go straight to it.
   expect(err.deadLetter.recorded).toBe(true);
   if (err.deadLetter.recorded) expect(err.message).toContain(err.deadLetter.id);
+});
+
+// ----- Turn timestamps in the envelope (near-duplicate-defense, C1) --------
+//
+// 15. A mined turn carries the stored turn timestamp verbatim, and the
+//     transcript line shows it as `[turnId @ <timestamp>] text`.
+// 16. A turn stored without a timestamp renders `[turnId] text`; the plan's
+//     clock is never substituted for the missing value.
+
+test("a mined turn carries the stored timestamp verbatim into its transcript line", () => {
+  const plan = planExtractSignals(vault, SESSION, { now: NOW });
+  expect(plan.turnsMined.map((t) => t.timestamp)).toEqual([
+    "2026-08-22T09:01:00Z",
+    "2026-08-22T09:03:00Z",
+  ]);
+  expect(plan.llmStep.prompt).toContain(
+    "[t1 @ 2026-08-22T09:01:00Z] Always name the release theme in the heading.",
+  );
+  expect(plan.llmStep.prompt).toContain(
+    "[t3 @ 2026-08-22T09:03:00Z] And never abbreviate the module names.",
+  );
+  // Assistant turns stay out, timestamp or not.
+  expect(plan.llmStep.prompt).not.toContain("[t2");
+});
+
+test("a turn without a stored timestamp renders bare and never borrows the clock", () => {
+  importTurns("sess-undated", [
+    { turnId: "u1", timestamp: "", role: "user", text: "Keep the changelog terse." },
+  ]);
+  const plan = planExtractSignals(vault, "sess-undated", { now: NOW });
+  expect(plan.turnsMined.map((t) => t.timestamp)).toEqual([""]);
+  expect(plan.llmStep.prompt).toContain("[u1] Keep the changelog terse.");
+  expect(plan.llmStep.prompt).not.toContain("[u1 @");
+  expect(plan.llmStep.prompt).not.toContain(NOW.toISOString());
+});
+
+// ----- Hygiene rules in the envelope (near-duplicate-defense, C2) ----------
+//
+// 17. The instruction carries five language-neutral rules: time bounds as
+//     ISO dates or intervals, conversational mechanics skipped, one rule
+//     per item, conditions kept, restatements dropped.
+// 18. The rules name categories, never example words: the instruction and
+//     the schema hints quote no phrase and stay ASCII, so no language's
+//     vocabulary is baked into the kernel.
+
+/** The instruction half of the prompt, everything before the transcript. */
+function instruction(prompt: string): string {
+  return prompt.slice(0, prompt.indexOf("\n\n"));
+}
+
+test("the envelope instruction carries the five hygiene rules", () => {
+  const plan = planExtractSignals(vault, SESSION, { now: NOW });
+  const head = instruction(plan.llmStep.prompt);
+  expect(head).toContain("ISO 8601 date or interval");
+  expect(head).toContain("timestamp of the turn");
+  expect(head).toContain("conversational mechanics");
+  expect(head).toContain("one rule per item");
+  expect(head).toContain("condition");
+  expect(head).toContain("restatement");
+  expect(plan.llmStep.schema_hints.join("\n")).toContain("ISO 8601");
+});
+
+test("the hygiene rules name categories and quote no example words", () => {
+  const plan = planExtractSignals(vault, SESSION, { now: NOW });
+  const head = instruction(plan.llmStep.prompt);
+  const hints = plan.llmStep.schema_hints.filter((hint) => !hint.startsWith("payload:"));
+  for (const text of [head, ...hints]) {
+    expect(text).not.toMatch(/"/);
+    expect(text).toMatch(/^[\x20-\x7e]*$/);
+  }
+});
+
+// ----- Duplicate-topic refusal (near-duplicate-defense, C3) -----------------
+//
+// 19. Two items sharing a `topic` refuse the payload whole under the
+//     cross-item code, and the message names both indices and the topic.
+// 20. The refusal lands before any write and before any item is hashed for
+//     dedup, so a refused payload leaves the vault and the index untouched.
+
+/** A dedup index that counts every keyed read; one read follows every hash. */
+class CountingDedup extends Map<string, DedupIndexEntry> {
+  lookups = 0;
+  override has(key: string): boolean {
+    this.lookups += 1;
+    return super.has(key);
+  }
+  override get(key: string): DedupIndexEntry | undefined {
+    this.lookups += 1;
+    return super.get(key);
+  }
+}
+
+test("a payload that repeats a topic is refused whole, naming both indices", () => {
+  const dedup = new CountingDedup();
+  const items = [
+    item(),
+    item({ topic: "module-names", principle: "Never abbreviate module names." }),
+    item({ principle: "Put the release theme in the heading." }),
+  ];
+  let caught: unknown;
+  try {
+    commitExtractedSignals(vault, SESSION, { items }, { agent: "tester", now: NOW, dedup });
+  } catch (err) {
+    caught = err;
+  }
+  expect(caught).toBeInstanceOf(ResponseCheckError);
+  const err = caught as ResponseCheckError;
+  expect(err.code).toBe(SEMANTIC_VIOLATION_CODES.crossItem);
+  expect(err.message).toContain('items[0] and items[2] share topic "release-notes-style"');
+  expect(dedup.lookups).toBe(0);
+  expect(dedup.size).toBe(0);
+  expect(inboxFiles()).toEqual([]);
+});
+
+test("distinct topics pass the duplicate-topic rule", () => {
+  const res = commitExtractedSignals(
+    vault,
+    SESSION,
+    { items: [item(), item({ topic: "module-names", principle: "Never abbreviate modules." })] },
+    { agent: "tester", now: NOW },
+  );
+  expect(res.written.map((w) => w.topic)).toEqual(["release-notes-style", "module-names"]);
 });

@@ -1,11 +1,21 @@
 import { existsSync } from "node:fs";
-import { resolveAgentName } from "../../../core/config.ts";
+import {
+  resolveAgentName,
+  resolveNearDuplicateRetireSiblingsEnabled,
+} from "../../../core/config.ts";
+import { scanBrain } from "../../../core/brain/dream-scan.ts";
+import { READ_ALL_REFS } from "../../../core/brain/near-duplicate.ts";
 import { moveToRetired, parsePreference } from "../../../core/brain/preference.ts";
+import {
+  planRetireSiblings,
+  retireSiblingPool,
+  type RetireSibling,
+} from "../../../core/brain/retire-siblings.ts";
 import { preferencePath } from "../../../core/brain/paths.ts";
 import { isoDate, isoSecond } from "../../../core/brain/time.ts";
 import { renderPrefLink } from "../../../core/brain/wikilink.ts";
 import { appendLogEvent } from "../../../core/brain/log.ts";
-import { BRAIN_LOG_EVENT_KIND } from "../../../core/brain/types.ts";
+import { BRAIN_LOG_EVENT_KIND, BRAIN_RETIRED_REASON } from "../../../core/brain/types.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
 export async function cmdBrainReject(argv: string[]): Promise<number> {
@@ -77,10 +87,49 @@ export async function cmdBrainReject(argv: string[]): Promise<number> {
     process.stderr.write(`warning: append reject log failed: ${(err as Error).message}\n`);
   }
 
+  // Near-duplicate defense: list (never retire) the active preferences that
+  // resemble the one just rejected. The operator's own shell reads the whole
+  // vault, hence READ_ALL_REFS. Off, the output is unchanged. The retire
+  // has already happened, so a failing scan is a warning, never an error.
+  let siblings: ReadonlyArray<RetireSibling> = [];
+  if (resolveNearDuplicateRetireSiblingsEnabled(config)) {
+    try {
+      siblings = planRetireSiblings(
+        retireSiblingPool(scanBrain(vault).preferences.map((p) => p.pref)),
+        [
+          {
+            id: `pref-${slug}`,
+            principle: pref.principle,
+            reason: BRAIN_RETIRED_REASON.userRejected,
+          },
+        ],
+        { readable: READ_ALL_REFS, gated: new Set() },
+      );
+    } catch (err) {
+      process.stderr.write(`warning: retire siblings scan failed: ${(err as Error).message}\n`);
+    }
+  }
+
   if (flags["json"]) {
-    okJson({ id: `ret-${slug}`, reason: "user-rejected" });
+    okJson({
+      id: `ret-${slug}`,
+      reason: "user-rejected",
+      ...(siblings.length > 0 ? { retire_siblings: siblings } : {}),
+    });
   } else {
     ok(`retired: ret-${slug} (user-rejected)`);
+    if (siblings.length > 0) ok(formatRetireSiblings(siblings));
   }
   return 0;
+}
+
+/** One line per sibling with its score, then the command that accepts it. */
+function formatRetireSiblings(siblings: ReadonlyArray<RetireSibling>): string {
+  return [
+    `retire siblings: ${siblings.length}`,
+    ...siblings.flatMap((s) => [
+      `  ${s.sibling_id} score=${s.score.toFixed(3)} method=${s.method}`,
+      `    accept: o2b brain reject --id ${s.sibling_id} --reason <text>`,
+    ]),
+  ].join("\n");
 }
