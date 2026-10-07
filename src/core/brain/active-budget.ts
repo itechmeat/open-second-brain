@@ -195,7 +195,16 @@ export function budgetActiveBody(body: string, budgetChars: number): string {
   const result = applySectionBudget(ladder.sections, budgetChars, {
     notice:
       tieredLabels.length > 0
-        ? (report) => `${activeTruncationNotice(report)} ${tierNoticeClause(tieredLabels)}`
+        ? (report) => {
+            // Survivors only: a section tiered and THEN dropped whole is
+            // already named in the Dropped list, and naming it in the
+            // kept-headlines clause too made the notice contradict
+            // itself. No tiered section survived - the clause stays out.
+            const keptTiered = ladder.tieredKeys.filter((k) => !report.droppedKeys.includes(k));
+            const clause =
+              keptTiered.length > 0 ? tierNoticeClause(keptTiered.map(sectionLabel)) : "";
+            return `${activeTruncationNotice(report)}${clause}`;
+          }
         : activeTruncationNotice,
   });
   return result.body;
@@ -222,8 +231,10 @@ const TIER_NOTICE_POINTER =
 
 /**
  * Wording of the "headlines kept" clause appended to the drop notice
- * when tiering fired AND sections still dropped: the consumer must be
- * able to tell a tiered, partially-kept section from an intact one.
+ * when tiering fired AND tiered sections SURVIVED the drop pass: the
+ * consumer must be able to tell a tiered, partially-kept section from
+ * an intact one. A tiered section that then dropped whole is named in
+ * the Dropped list alone - the clause never names it too.
  */
 const TIER_CLAUSE_OPEN = " _Headlines kept in: ";
 const TIER_CLAUSE_CLOSE = "._";
