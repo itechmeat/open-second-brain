@@ -1,8 +1,11 @@
 /**
- * The PostToolUse subagent carrier (context-injection-pipeline, A2):
+ * The subagent context carrier (context-injection-pipeline, A2):
  * delivers the operator's standing-rules block into a delegated
- * sub-agent's first write-shaped tool call, once per agent id per
- * session-scope ledger, and stays silent everywhere else.
+ * sub-agent, once per agent id per session-scope ledger, and stays
+ * silent everywhere else. Primary channel: SubagentStart, at the
+ * sub-agent's conversation start. Fallback channel: PostToolUse
+ * write-shaped tool calls, for runtimes without the SubagentStart
+ * event.
  *
  * Spawn-based like its carrier siblings: the contract under test is the
  * process boundary (payload in, at most one stdout line out), not the
@@ -110,6 +113,29 @@ function subagentPayload(
   return payload;
 }
 
+/**
+ * A SubagentStart payload as Claude Code sends it when the Task tool
+ * spawns a sub-agent: no tool call has happened yet, so there is no
+ * tool_name / tool_input / tool_use_id to gate on.
+ */
+function subagentStartPayload(opts: { agentId?: string } = {}): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    hook_event_name: "SubagentStart",
+    session_id: SESSION,
+    cwd: vault,
+  };
+  if (opts.agentId !== undefined) payload["agent_id"] = opts.agentId;
+  return payload;
+}
+
+/** The parsed one-line output of a delivering run. */
+function deliveredContext(stdout: string): { hookEventName: string; additionalContext: string } {
+  const parsed = JSON.parse(stdout) as {
+    hookSpecificOutput: { hookEventName: string; additionalContext: string };
+  };
+  return parsed.hookSpecificOutput;
+}
+
 function expectedBlock(): string {
   return renderStandingBlock(vault, STANDING_RULES_MAX_CHARS_DEFAULT);
 }
@@ -146,6 +172,58 @@ describe("subagent-inject hook", () => {
     const second = await runHook(subagentPayload({ agentId: AGENT }));
     expect(second.exit).toBe(0);
     expect(second.stdout).toBe("");
+  });
+
+  test("SubagentStart delivers at the subagent conversation start, with no tool call", async () => {
+    writeRules("Always run the test suite before committing.");
+    const first = await runHook(subagentStartPayload({ agentId: AGENT }));
+    expect(first.exit).toBe(0);
+    expect(first.stderr).toBe("");
+    // Exactly one line: the JSON object and its single trailing newline.
+    expect(first.stdout.endsWith("\n")).toBe(true);
+    expect(first.stdout.trimEnd().includes("\n")).toBe(false);
+    const out = deliveredContext(first.stdout);
+    // The envelope names the event it rode in on: emitting a SubagentStart
+    // delivery under the PostToolUse name (or the reverse) would be
+    // rejected by the host's per-event output schema.
+    expect(out.hookEventName).toBe("SubagentStart");
+    expect(out.additionalContext).toBe(expectedBlock());
+  });
+
+  test("a SubagentStart payload without a non-empty agent_id emits nothing", async () => {
+    writeRules("Always run the test suite before committing.");
+    const missing = await runHook(subagentStartPayload());
+    expect(missing.exit).toBe(0);
+    expect(missing.stdout).toBe("");
+    const empty = await runHook(subagentStartPayload({ agentId: "" }));
+    expect(empty.exit).toBe(0);
+    expect(empty.stdout).toBe("");
+  });
+
+  test("a sessionless SubagentStart is silent - the ledger has no scope to dedupe against", async () => {
+    writeRules("rules no sessionless host may receive");
+    const { session_id: _session, ...scopeless } = subagentStartPayload({ agentId: AGENT });
+    const r = await runHook(scopeless);
+    expect(r.exit).toBe(0);
+    expect(r.stdout).toBe("");
+  });
+
+  test("SubagentStart and the PostToolUse fallback share one delivery per agent id", async () => {
+    writeRules("Always run the test suite before committing.");
+    // Primary channel delivers first; the fallback for the same agent id
+    // must not repeat it.
+    const start = await runHook(subagentStartPayload({ agentId: AGENT }));
+    expect(deliveredContext(start.stdout).hookEventName).toBe("SubagentStart");
+    const fallback = await runHook(subagentPayload({ agentId: AGENT }));
+    expect(fallback.stdout).toBe("");
+    // The reverse order too: on a runtime without SubagentStart the
+    // PostToolUse carrier delivers, and a later SubagentStart for the
+    // same id stays silent behind the same ledger.
+    const other = "agent-bbbb";
+    const viaFallback = await runHook(subagentPayload({ agentId: other }));
+    expect(deliveredContext(viaFallback.stdout).hookEventName).toBe("PostToolUse");
+    const viaStart = await runHook(subagentStartPayload({ agentId: other }));
+    expect(viaStart.stdout).toBe("");
   });
 
   test.skipIf(CHMOD_CANNOT_DENY)(

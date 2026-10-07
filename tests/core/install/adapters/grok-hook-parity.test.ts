@@ -42,6 +42,8 @@ const REGROUND_DIVERGENCE =
 const DECLARED_GROK_DIVERGENCES: Readonly<Record<string, string>> = Object.freeze({
   "PostToolUse:reground-deliver": REGROUND_DIVERGENCE,
   "UserPromptSubmit:reground-deliver": REGROUND_DIVERGENCE,
+  "SubagentStart:subagent-inject":
+    "grok has no SubagentStart event; the PostToolUse write carrier covers it",
 });
 
 /** `<event>:<hook-script-name>` for every hook one JSON hooks file registers. */

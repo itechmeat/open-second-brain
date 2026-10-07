@@ -180,4 +180,31 @@ describe("hooks.json subagent-inject entry", () => {
     // registered name can never silently no-op.
     expect(existsSync(join(REPO, "hooks", "subagent-inject.ts"))).toBe(true);
   });
+
+  test("SubagentStart registers the same carrier as the primary channel", () => {
+    const parsed = JSON.parse(readFileSync(HOOKS_JSON, "utf8")) as {
+      hooks: Record<
+        string,
+        Array<{ matcher?: string; hooks: Array<HookEntry & { timeout?: number }> }>
+      >;
+    };
+    // Exactly one group over every sub-agent, carrying exactly one
+    // subagent-inject entry - the SubagentStart event fires when the Task
+    // tool spawns the sub-agent, before its first prompt.
+    const groups = parsed.hooks["SubagentStart"] ?? [];
+    expect(groups.length).toBe(1);
+    expect(groups[0]!.matcher).toBe("*");
+    const carriers = groups[0]!.hooks.filter((h) => h.command.includes("o2b-hook subagent-inject"));
+    expect(carriers.length).toBe(1);
+    expect(groups[0]!.hooks.length).toBe(1);
+    // The same fail-soft command, timeout and status shape as the
+    // PostToolUse fallback entry: one hook script, two registrations.
+    const postToolUseCarrier = (parsed.hooks["PostToolUse"] ?? [])
+      .flatMap((group) => group.hooks)
+      .find((h) => h.command.includes("o2b-hook subagent-inject"))!;
+    expect(carriers[0]!.command).toBe(postToolUseCarrier.command);
+    expect(carriers[0]!.timeout).toBe(postToolUseCarrier.timeout);
+    expect(carriers[0]!.statusMessage).toBe(postToolUseCarrier.statusMessage);
+    expect(carriers[0]!.type).toBe("command");
+  });
 });

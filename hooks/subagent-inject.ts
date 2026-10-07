@@ -1,29 +1,44 @@
 #!/usr/bin/env -S bun
 /**
- * PostToolUse hook: delivers the operator's standing-rules block into a
- * delegated sub-agent's turn (context-injection-pipeline).
+ * SubagentStart / PostToolUse hook: delivers the operator's
+ * standing-rules block into a delegated sub-agent
+ * (context-injection-pipeline).
  *
  * The session-start digest never reaches a sub-agent: SessionStart fires
  * once for the main thread, while the agent that performs the actual
  * writes can be exactly the one running without the operator's rules.
- * This carrier closes that gap on the one channel a subagent turn
- * exposes - its write-shaped tool calls, which are the moments learned
- * rules govern - and stays silent for read-only subagents.
+ *
+ * Two channels, one ledger:
+ *
+ *   - SubagentStart (primary) fires when the host spawns the sub-agent,
+ *     before its first prompt, so the rules are in place from the first
+ *     turn; the host re-injects the context if the sub-agent compacts.
+ *     No tool gating: the event itself marks a sub-agent start.
+ *   - PostToolUse (fallback) keeps this carrier working on runtimes
+ *     without the SubagentStart event. It fires on the sub-agent's
+ *     write-shaped tool calls - the moments learned rules govern - and
+ *     stays silent for read-only subagents.
+ *
+ * Both channels feed the same once-per-sub-agent ledger, so on a host
+ * with both events only the first one to fire delivers.
  *
  * Contract (identical for every runtime):
- *   stdin: hook payload JSON with `tool_name`, `tool_input`, and the
- *     host-assigned `agent_id` that marks a tool call made inside a
- *     delegated sub-agent.
+ *   stdin: hook payload JSON with `hook_event_name`, the host-assigned
+ *     `agent_id` that marks a sub-agent, and - on the PostToolUse
+ *     fallback only - `tool_name` / `tool_input`.
  *   stdout: nothing, or one line naming the operator's standing rules:
- *     { "hookSpecificOutput": { "hookEventName": "PostToolUse",
+ *     { "hookSpecificOutput": { "hookEventName": "SubagentStart" |
+ *                                           "PostToolUse",
  *                               "additionalContext": "<block>" } }
- *     the one channel the post-write-reminder sibling in this matcher
- *     group proves is injected developer-side on this event. The Stop
- *     guardrail's portable `decision: "block"` shape never migrates
- *     here: on PostToolUse the tool result already exists, so a block
- *     is rejection feedback about that result (Codex marks the hook
- *     Blocked), not additive context. The output helper is local to
- *     this file so hooks/lib/messages.ts stays untouched.
+ *     the envelope must name the event it rode in on - a host validates
+ *     hook output against a per-event schema, so a SubagentStart
+ *     delivery under the PostToolUse name (or the reverse) is rejected
+ *     and echoed back as a validation error. A `decision: "block"` is
+ *     never a context channel on either event: on PostToolUse the tool
+ *     result already exists, so a block is rejection feedback about that
+ *     result (Codex marks the hook Blocked), not additive context. The
+ *     output helper is local to this file so hooks/lib/messages.ts
+ *     stays untouched.
  *
  * Exactly once per sub-agent: the delivered agent ids live in the
  * per-session hook-state ledger (`osb.subagent_inject.delivered`, capped,
@@ -33,19 +48,20 @@
  * rather than losing the rules.
  *
  * Silent on every empty-handed path, exit 0: no non-empty `agent_id`
- * (the main thread is served by active-inject), a tool outside the
- * write set, no real session id (the ledger needs a session scope; a
- * sessionless host would re-deliver on every call), no vault, an absent
- * or empty rules file (the steady state is an operator who wrote no
- * rules). A rules read that FAILED is not silent: it delivers the
- * explicit failure block naming the path, because a subagent must never
- * mistake "no rules were written" for "the rules could not be read".
+ * (the main thread is served by active-inject), on PostToolUse a tool
+ * outside the write set, no real session id (the ledger needs a session
+ * scope; a sessionless host would re-deliver on every call), no vault,
+ * an absent or empty rules file (the steady state is an operator who
+ * wrote no rules). A rules read that FAILED is not silent: it delivers
+ * the explicit failure block naming the path, because a subagent must
+ * never mistake "no rules were written" for "the rules could not be
+ * read".
  *
  * Quiet on failures: we never block the agent here. If we crash, we
  * exit 0 so the turn proceeds. No self-watchdog is armed: every step is
  * bounded (one config read, one rules read, one locked state write),
- * matching the post-write-reminder sibling in this matcher group, and
- * the host's declared 10 s timeout is the outer bound.
+ * matching the post-write-reminder sibling in the fallback's matcher
+ * group, and the host's declared 10 s timeout is the outer bound.
  */
 
 import { writeSync } from "node:fs";
@@ -62,8 +78,26 @@ import { loadBrainConfig, resolveStandingRulesMaxChars } from "../src/core/brain
 import type { BrainConfig } from "../src/core/brain/types.ts";
 import { resolveVault } from "../src/core/config.ts";
 
-/** The one event this hook is registered for; any other emits nothing. */
-const CARRIER_EVENT = "PostToolUse";
+/**
+ * The primary channel: registered in hooks/hooks.json for SubagentStart,
+ * which the host fires when the Task tool spawns a sub-agent. Any other
+ * event emits nothing.
+ */
+const START_EVENT = "SubagentStart";
+
+/**
+ * The fallback channel for runtimes without SubagentStart: registered
+ * for PostToolUse inside the write-shaped matcher group, next to the
+ * post-write-reminder sibling that proves the additionalContext channel
+ * is injected developer-side on this event.
+ */
+const FALLBACK_EVENT = "PostToolUse";
+
+type CarrierEvent = typeof START_EVENT | typeof FALLBACK_EVENT;
+
+function isCarrierEvent(name: unknown): name is CarrierEvent {
+  return name === START_EVENT || name === FALLBACK_EVENT;
+}
 
 /**
  * The standing-rules character cap, resolved once per run.
@@ -87,21 +121,21 @@ function resolveStandingRulesCap(vault: string): number {
 
 type SubagentInjectOutput = {
   readonly hookSpecificOutput: {
-    readonly hookEventName: "PostToolUse";
+    readonly hookEventName: CarrierEvent;
     readonly additionalContext: string;
   };
 };
 
 /**
- * The output shape for every runtime: the PostToolUse
- * `additionalContext` envelope, runtime-agnostic like the
- * post-write-reminder sibling that ships it to Claude Code, Codex and
- * Grok alike. A `decision: "block"` is never a context channel on this
- * event - it flags the completed write as rejected - so the Stop
- * guardrail's portable shape stays Stop-only.
+ * The output shape for every runtime: the `additionalContext` envelope
+ * naming the delivery event, runtime-agnostic like the post-write-
+ * reminder sibling that ships the PostToolUse form to Claude Code, Codex
+ * and Grok alike. A `decision: "block"` is never a context channel on
+ * these events - on PostToolUse it flags the completed write as
+ * rejected - so the Stop guardrail's portable shape stays Stop-only.
  */
-function subagentInjectOutput(block: string): SubagentInjectOutput {
-  return { hookSpecificOutput: { hookEventName: CARRIER_EVENT, additionalContext: block } };
+function subagentInjectOutput(event: CarrierEvent, block: string): SubagentInjectOutput {
+  return { hookSpecificOutput: { hookEventName: event, additionalContext: block } };
 }
 
 async function main(): Promise<void> {
@@ -112,13 +146,14 @@ async function main(): Promise<void> {
     return;
   }
 
-  // Only the event this hook is registered for: emitting a context
+  // Only the events this hook is registered for: emitting a context
   // payload under an event whose schema has no channel for it gets the
   // whole line echoed back as a validation error.
-  if (payload.hook_event_name !== CARRIER_EVENT) return;
+  const event = payload.hook_event_name;
+  if (!isCarrierEvent(event)) return;
 
-  // A tool call made inside a delegated sub-agent is the one this hook
-  // exists for. The host marks it with a non-empty `agent_id` and only
+  // A payload marked with a non-empty `agent_id` is the one this hook
+  // exists for. The host assigns it inside a delegated sub-agent and only
   // there; `agent_type` alone is not a sub-agent marker (the host also
   // sends it on the main thread of a session started with `--agent`).
   // This gate runs before any other work: the main thread pays a field
@@ -126,9 +161,12 @@ async function main(): Promise<void> {
   const agentId = payload.agent_id;
   if (typeof agentId !== "string" || agentId.length === 0) return;
 
-  // Write-shaped calls only, belt-and-suspenders: the hooks.json matcher
-  // filters most of the rest already.
-  if (typeof payload.tool_name !== "string" || !isArtifactToolName(payload.tool_name)) return;
+  // Fallback-only gating, belt-and-suspenders: the hooks.json matcher
+  // filters most of the rest already, and SubagentStart needs no tool
+  // gate at all - the event itself is the sub-agent marker.
+  if (event === FALLBACK_EVENT) {
+    if (typeof payload.tool_name !== "string" || !isArtifactToolName(payload.tool_name)) return;
+  }
 
   // The once-per-subagent ledger lives in a per-session scope. Without a
   // real session id there is no scope to dedupe against, so delivery
@@ -149,14 +187,14 @@ async function main(): Promise<void> {
   // asynchronously, which would resolve main, run the ledger record
   // below with the delivery still unlanded, and crash with a stderr
   // banner. The synchronous write throws into main's fail-soft catch
-  // instead, the id is never recorded, and the next write-shaped call
-  // re-delivers - the lose-not-duplicate order made real, not just
-  // ordered.
-  writeSync(1, `${JSON.stringify(subagentInjectOutput(block))}\n`);
+  // instead, the id is never recorded, and the next carrier event for
+  // this sub-agent re-delivers - the lose-not-duplicate order made real,
+  // not just ordered.
+  writeSync(1, `${JSON.stringify(subagentInjectOutput(event, block))}\n`);
 
   // Recorded after stdout: a crash or a failed state write in between
-  // re-delivers the rules to the next write-shaped call and never
-  // leaves a subagent unconstitutioned.
+  // re-delivers the rules on the next carrier event and never leaves a
+  // subagent unconstitutioned.
   recordSubagentDeliveredId(vault, payload.session_id, agentId);
 }
 

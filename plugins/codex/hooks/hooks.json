@@ -149,6 +149,20 @@
         ]
       }
     ],
+    "SubagentStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" subagent-inject; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook subagent-inject; exit 0",
+            "commandWindows": "set NoDefaultCurrentDirectoryInExePath=1& where /q $PATH:o2b-hook && o2b-hook subagent-inject & exit /b 0",
+            "timeout": 10,
+            "statusMessage": "OSB: delivering standing rules to a subagent"
+          }
+        ]
+      }
+    ],
     "SubagentStop": [
       {
         "matcher": "*",
