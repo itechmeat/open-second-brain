@@ -265,7 +265,7 @@ writes it, and they act only on a path the caller named.
 
 Three architectural invariants:
 
-- **Filesystem-first.** No database, no daemon. Every artifact is plain Markdown with YAML frontmatter; backup is `cp -r` or `tar`.
+- **Filesystem-first.** No database, no daemon. Every artifact is plain Markdown with YAML frontmatter; backup is `cp -r` or `tar`. Background work is started only by agent activity and exits when done: the search index is refreshed by a short detached run a stale read starts (freshen on read), never by a resident process.
 - **Deterministic core.** The `dream` algorithm is a pure function of inputs (signals, preferences, log, configuration, current time). No LLM calls inside the core. Semantic merging, if needed, is delegated to external agents via the same CLI / MCP surface. External judgment (the bench judge, the hygiene conflict resolver) goes through one sanctioned fail-open boundary: the operator-configured command bridge (`src/core/reliability/command-bridge.ts`).
 - **Pre-run snapshot + atomic per-file writes.** Each `dream` run takes a `.snapshots/<run_id>.tar.zst` before any state change (streamed through a staging file, and published under its final name only once complete); per-file writes go through `fs-atomic` (temp + rename). Combined with retention of the most-recent N snapshots, this gives reversible, audit-friendly mutation.
 

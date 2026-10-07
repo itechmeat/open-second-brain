@@ -47,6 +47,15 @@ instruction files such as `CLAUDE.md`/`AGENTS.md`, installed
 `.claude/skills/`) and warns with the exact replacement for any stale
 reference it finds (`removed-tool-reference`).
 
+## Upgrading to 1.75.0
+
+No step is required. Searches and session starts now keep the search
+index current on their own: an index older than a minute gets one
+background incremental run. If you scheduled `o2b search index` or
+`o2b search reindex` only to keep keyword search fresh, that job can go;
+keep it if it computes embeddings. To turn the background runs off, set
+`search_freshen_interval_s: "0"`.
+
 ## Upgrading to 1.73.0
 
 No step is required unless you set a positive `embedding_cost_gate_usd`

@@ -1342,6 +1342,22 @@ Full design and migration notes:
 and the matching implementation plan
 [`docs/plans/2026-05-16-brain-search-impl.md`](plans/2026-05-16-brain-search-impl.md).
 
+### Keeping the index current (since v1.75.0)
+
+The index is kept current by the reads that need it. When a search or a
+session start finds `last_indexed_at` older than
+`search_freshen_interval_s` (60 s by default), it answers from the
+index as it is and starts one detached, low-priority incremental run
+(`o2b search index --freshen`); an exclusive claim next to the index
+keeps concurrent readers from starting one each, and a failed run backs
+off from one minute to an hour. Nothing stays resident: with no agent
+working, nothing indexes. Two indexer changes make frequent runs cheap:
+a run that changed no document skips link and alias resolution, and a
+changed document keeps every chunk whose position and content did not
+change in place (row, full-text entry, entities, vector), so appending
+to a 1 MB daily log costs about 0.2 MB of writes instead of about 9 MB.
+Details: "Freshen on read" in `docs/cli-reference.md`.
+
 ## Workspace reach and proactive insight (since v0.38.0)
 
 Two suites extend where the Brain can be reached and what it

@@ -113,7 +113,7 @@ The full router with readiness criteria is [`install.md`](install.md); native Wi
 
 ## What is new
 
-1.73.0 makes the query embed honest and upgrades safe. Every query embed, from the search lane behind the MCP tools and hooks to the `brain_context_pack` semantic belief order, passes one gate: under a positive `embedding_cost_gate_usd` an unpriced model is refused for any caller that is not local (a hybrid search falls back to keyword-only and says so by trail code), and a query longer than the model's input window is cut to it and disclosed. `embedding_input_window_tokens` declares the window of a model the curated table does not list, and `embedding_extra_body` sends extra request fields to an OpenAI-compatible endpoint. `brain_recall_feedback` and the benchmark, eval and tune reports name the degradations their searches met, and `brain_tune` no longer saves a winner measured without the semantic lane. `o2b brain upgrade` and the automatic upgrade worker apply exactly the plan they computed and refuse a managed file edited in between instead of overwriting it. Every release is described in the [CHANGELOG](CHANGELOG.md).
+1.75.0 keeps the search index current without a scheduler. A search or a session start that finds the index more than a minute old answers from it as it is and starts one low-priority background run, so the next read sees the current vault; nothing stays resident, and nothing runs while no agent works. A changed note now rewrites only the parts of the index that changed, so appending to a large daily log costs a fraction of what it did, and `o2b search status` shows how fresh the index is. Every release is described in the [CHANGELOG](CHANGELOG.md).
 
 ## Documentation
 

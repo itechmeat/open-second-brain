@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.76.0] - 2026-10-08
+
+Open Second Brain now keeps its search index current without a scheduler: a search or a session start that finds the index more than a minute old answers from it as it is and starts one low-priority background incremental run, so the next read sees the current vault. Nothing stays resident and nothing runs while no agent works. Two indexer changes make those frequent runs cheap: a run that changed no document writes almost nothing, and a changed document rewrites only the chunks that changed, so an edit to a 1 MB daily log costs about 0.2 MB of writes instead of about 9 MB.
+
+### Added
+
+- **Freshen on read.** `search()` (every reading MCP tool, the recall-inject hook, `o2b search query`) and `ensureVaultCurrent` (SessionStart and MCP start) start a detached `o2b search index --freshen <token>` when `last_indexed_at` is older than `search_freshen_interval_s` (default `60`, `0` turns it off, env `OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S`). The reader never waits for the run. An exclusive claim next to the index (`freshen.claim`, taken over after ten minutes) keeps concurrent readers from starting a run each, a held writer lock skips the spawn, and a read-only open (cross-vault, recall sources) never starts one. The child lowers its CPU priority and runs under `ionice -c3` on Linux or `taskpolicy -b` on macOS when the tool exists. It is keyword-only unless `search_freshen_embeddings` is on.
+- **Backoff and visibility.** The child records its outcome in the per-device `freshen-state.json` (a new state surface); a failed run backs off one minute, doubling to an hour. `o2b search status` prints `freshen`, `index_age`, `last_freshen` and an active `freshen_backoff_until` (`freshen` object under `--json`); `o2b doctor` warns with the new code `freshen-failing` after three failures in a row; runs that changed documents or failed append one row to the new `index_freshen` metrics surface.
+- **Trail code `index-stale`.** A search over an index more than ten minutes old names it on the retrieval trail with `detail.ageSeconds`. Such answers are not written to the query cache.
+
+### Changed
+
+- **A no-change index run skips link and alias resolution.** Both are a pure function of the documents and their links; rewriting every link row on every run was the only write a no-change run made. The relation-constraint and tier passes still run, so a schema-pack edit alone still takes effect. `IndexStats.linkResolutionSkipped` reports it.
+- **Re-indexing a changed document keeps its unchanged chunks in place.** A chunk at the same position with the same content hash, lines, token count and heading keeps its row, id, full-text entry, entities and vector; only changed chunks are deleted and inserted, and moved ones still carry their vectors. Measured on a 5,812-note vault: one edit to a 1 MB daily log went from 9.3 MB written and 2.1 s to 0.2 MB and 0.17 s; 200 edited notes from 57 MB and 1.8 s to 28 MB and 0.58 s.
+- **Docs:** `docs/cli-reference.md` gains "Freshen on read", the two keys, the `--freshen` flag, the status fields and the `index-stale` row; `docs/how-it-works.md` "Keeping the index current"; `docs/architecture.md` states that background work starts only from agent activity; `docs/hermes-cron.md` and `docs/updating.md` say a scheduled reindex is now only needed for embeddings; `docs/metrics.md` lists `index_freshen`. The README names this release.
+
 ## [1.75.0] - 2026-10-07
 
 Open Second Brain now reaches the two moments the session-start injection never could: the delegated subagent that performs the writes, and the end of the turn. A carrier hands the operator's context to every delegated subagent once, on the SubagentStart event, before the subagent's first prompt, with the write-shaped PostToolUse registration kept as the fallback for runtimes without that event; an opt-in Stop-hook digest surfaces pending Brain hygiene findings as one line, once per change, on the runtimes whose Stop channel is non-blocking and stays silent elsewhere; and an injection body over its budget degrades its sections to headline tiers - the top three ranked bullets each - least important section first, until the body fits, before it drops a whole section.
@@ -8292,6 +8308,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.76.0]: https://github.com/itechmeat/open-second-brain/compare/v1.75.0...v1.76.0
 [1.75.0]: https://github.com/itechmeat/open-second-brain/compare/v1.74.1...v1.75.0
 [1.74.1]: https://github.com/itechmeat/open-second-brain/compare/v1.74.0...v1.74.1
 [1.74.0]: https://github.com/itechmeat/open-second-brain/compare/v1.73.1...v1.74.0
