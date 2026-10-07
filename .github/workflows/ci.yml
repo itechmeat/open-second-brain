@@ -320,6 +320,8 @@ jobs:
       - name: Record runner load
         id: telemetry
         background: true
+        # `cancel` may end it with exit code 1; a diagnostic must never fail the job.
+        continue-on-error: true
         shell: pwsh
         run: |
           $out = Join-Path $env:RUNNER_TEMP 'telemetry\runner-load.csv'
@@ -342,6 +344,8 @@ jobs:
       - name: Hang watchdog
         id: watchdog
         background: true
+        # `cancel` may end it with exit code 1; a diagnostic must never fail the job.
+        continue-on-error: true
         shell: pwsh
         run: |
           Start-Sleep -Seconds 1200
