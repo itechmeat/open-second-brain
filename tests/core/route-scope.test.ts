@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { performance } from "node:perf_hooks";
 
 import {
   createRouteScope,
@@ -40,11 +41,21 @@ describe("route scope", () => {
   test("repeated names are summed in first-seen order", async () => {
     const scope = createRouteScope();
     await scope.run(async () => {
-      timeStageSync(ROUTE_STAGE.writeReceipt, () => undefined);
+      // The first write_receipt spins on the clock the scope reads, so its
+      // share is at least 20 ms on any timer; the second one is near zero.
+      // A scope that kept only the last value would report under 20 ms.
+      timeStageSync(ROUTE_STAGE.writeReceipt, () => {
+        const until = performance.now() + 20;
+        while (performance.now() < until) {
+          // busy wait
+        }
+      });
       timeStageSync(ROUTE_STAGE.lint, () => undefined);
       timeStageSync(ROUTE_STAGE.writeReceipt, () => undefined);
     });
-    expect((scope.stages() ?? []).map((s) => s.name)).toEqual(["write_receipt", "lint"]);
+    const stages = scope.stages() ?? [];
+    expect(stages.map((s) => s.name)).toEqual(["write_receipt", "lint"]);
+    expect(stages[0]!.ms).toBeGreaterThanOrEqual(20);
   });
 
   test("values are rounded to 0.1 ms", async () => {
@@ -84,7 +95,9 @@ describe("route scope", () => {
     });
     expect(scope.decisionMs()).toBe(16);
     expect(createRouteScope().decisionMs()).toBeUndefined();
-    noteDecisionLatency(3);
+    // Outside every scope a note is dropped, never added to a closed scope.
+    expect(() => noteDecisionLatency(3)).not.toThrow();
+    expect(scope.decisionMs()).toBe(16);
   });
 
   test("isRouteStageName accepts exactly the nine allowlisted names", () => {
