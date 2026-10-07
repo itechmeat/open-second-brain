@@ -458,7 +458,12 @@ export interface LintContext {
  *
  * A same-directory finding keeps the message shipped since v1.64.0; a
  * widened one appends `method=<method>`, so a reader can tell the hint
- * came from the keyword index. The pool is bounded upstream (the
+ * came from the keyword index. One deliberate change from v1.73.0: the
+ * kernel scores nothing below `NEAR_DUPLICATE_MIN_TOKENS` body
+ * tokens, on either side, so two short stubs that share their few words
+ * by accident (formerly a jaccard=1.000 finding) are no longer reported.
+ * The kernel's own match order never reaches the receipt, which is ranked
+ * by {@link comparePageLintFindings}. The pool is bounded upstream (the
  * directory cap is counted in `candidates_skipped`, the widening pull by
  * its top-k), so the kernel's own cap is set to the pool size and never
  * drops a candidate unreported.

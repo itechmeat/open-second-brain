@@ -32,10 +32,12 @@ import {
 } from "../../../src/core/brain/page-lint.ts";
 import { LINT_CONSOLIDATE_KIND } from "../../../src/core/brain/lint-consolidate.ts";
 import {
+  NEAR_DUPLICATE_MIN_TOKENS,
   NEAR_DUPLICATE_THRESHOLDS,
   READ_ALL_REFS,
 } from "../../../src/core/brain/near-duplicate.ts";
 import { loadSchemaPack } from "../../../src/core/brain/schema-pack.ts";
+import { tokenise } from "../../../src/core/brain/similarity.ts";
 import { ARTIFACT_MAX_BYTES } from "../../../src/core/brain/write-session/validate.ts";
 
 let vault: string;
@@ -350,6 +352,16 @@ describe("lintWrittenPages - near-duplicate findings", () => {
         message: `body resembles [[${first}]] jaccard=1.000 (threshold 0.8)`,
       },
     ]);
+  });
+
+  test("same-directory stubs below the kernel's token floor are not reported", () => {
+    // Three tokens each: identical bodies, a jaccard=1.000 finding before the
+    // shared kernel's minimum token count.
+    const stub = "alpha beta gamma";
+    expect(tokenise(stub).size).toBe(NEAR_DUPLICATE_MIN_TOKENS - 1);
+    writeNote("Notes/Alpha.md", `---\ntitle: Alpha\n---\n\n${stub}\n`);
+    const rel = writeNote("Notes/Beta.md", `---\ntitle: Beta\n---\n\n${stub}\n`);
+    expect(nearDuplicateFindings(lintWrittenPages(vault, [rel], READ_ALL))).toEqual([]);
   });
 
   test("a write closely matching a same-directory same-scope page yields the finding", () => {
