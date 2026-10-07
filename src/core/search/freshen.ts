@@ -350,3 +350,62 @@ export function recordFreshenOutcome(
     // Same: metrics are diagnostics, never a reason to fail.
   }
 }
+
+/** What `o2b search status` and the doctor show about freshen on read. */
+export interface FreshenStatus {
+  /** 0 when freshening is off. */
+  readonly intervalSeconds: number;
+  readonly indexAgeSeconds: number | null;
+  readonly state: FreshenState;
+  /** The backoff end, only while it is still in the future. */
+  readonly activeBackoffUntil: string | null;
+}
+
+export function freshenStatus(
+  config: ResolvedSearchConfig,
+  lastIndexedAt: string | null,
+  nowMs: number = Date.now(),
+): FreshenStatus {
+  const state = readFreshenState(dirname(config.dbPath));
+  const backoffMs = state.backoffUntil === null ? Number.NaN : Date.parse(state.backoffUntil);
+  return Object.freeze({
+    intervalSeconds: config.freshen?.intervalSeconds ?? 0,
+    indexAgeSeconds: indexAgeSeconds(lastIndexedAt, nowMs),
+    state,
+    activeBackoffUntil: Number.isFinite(backoffMs) && backoffMs > nowMs ? state.backoffUntil : null,
+  });
+}
+
+/** The status lines, aligned with the rest of `o2b search status`. */
+export function renderFreshenStatus(s: FreshenStatus): string[] {
+  const lines = [
+    `freshen:             ${s.intervalSeconds > 0 ? `every ${s.intervalSeconds}s` : "off"}`,
+    `index_age:           ${s.indexAgeSeconds === null ? "(unknown)" : `${s.indexAgeSeconds}s`}`,
+  ];
+  const st = s.state;
+  if (st.lastOutcome === "completed") {
+    lines.push(`last_freshen:        completed ${st.lastRunAt} (${st.lastChanged ?? 0} changed)`);
+  } else if (st.lastOutcome === "failed") {
+    lines.push(
+      `last_freshen:        failed ${st.lastRunAt} (${st.failures} in a row): ${st.lastError}`,
+    );
+  } else {
+    lines.push("last_freshen:        (none)");
+  }
+  if (s.activeBackoffUntil !== null) lines.push(`freshen_backoff_until: ${s.activeBackoffUntil}`);
+  return lines;
+}
+
+/** The `freshen` object of `o2b search status --json`. */
+export function serializeFreshenStatus(s: FreshenStatus): Record<string, unknown> {
+  return {
+    interval_s: s.intervalSeconds,
+    index_age_s: s.indexAgeSeconds,
+    last_outcome: s.state.lastOutcome,
+    last_run_at: s.state.lastRunAt,
+    last_changed: s.state.lastChanged,
+    last_error: s.state.lastError,
+    failures: s.state.failures,
+    backoff_until: s.activeBackoffUntil,
+  };
+}

@@ -716,6 +716,14 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
+        // A review, like tier-drift: the status names the last error and
+        // the backoff, and the repair depends on what the error is.
+        code: "freshen-failing",
+        issueClass: "background index refresh keeps failing",
+        nextCommand: "o2b search status",
+        autoRepairable: false,
+      },
+      {
         code: "entity-label-malformed",
         issueClass: "entity label fails the quality gate",
         nextCommand: "o2b brain entity prune",

@@ -8,6 +8,9 @@
  * all of them are conditions only a walk of the tree can see.
  */
 
+import { dirname } from "node:path";
+
+import { readFreshenState } from "../../search/freshen.ts";
 import { join } from "node:path";
 
 import { ensureInsideVault, realpathInsideVault, vaultRelative } from "../../path-safety.ts";
@@ -52,6 +55,33 @@ export const tierDriftCheck: DoctorCheck = {
     }
   },
 };
+
+/**
+ * Freshen on read (index-freshness): background index runs started by
+ * stale reads that keep failing. Three in a row is a broken index, not a
+ * hiccup - every search meanwhile answers from an ageing index.
+ */
+export const freshenFailureCheck: DoctorCheck = {
+  failSoft: false,
+  run({ dbPath }, { issues }) {
+    if (dbPath === undefined) return;
+    const state = readFreshenState(dirname(dbPath));
+    if (state.lastOutcome !== "failed" || state.failures < FRESHEN_FAILURE_WARN_AT) return;
+    issues.push({
+      severity: "warning",
+      code: FRESHEN_FAILING_CODE,
+      message:
+        `background index refresh failed ${state.failures} times in a row ` +
+        `(last: ${state.lastError ?? "unknown error"}); the index is not being kept current`,
+    });
+  },
+};
+
+/** Failures in a row from which {@link freshenFailureCheck} warns. */
+export const FRESHEN_FAILURE_WARN_AT = 3;
+
+/** The code of the {@link freshenFailureCheck} warning. */
+export const FRESHEN_FAILING_CODE = "freshen-failing";
 
 /** The code of the {@link tierDriftCheck} warning. */
 export const TIER_DRIFT_CODE = "tier-drift";

@@ -5,6 +5,12 @@
 
 import { formatEstimatedUsd } from "../../../core/search/embedding-spend.ts";
 import {
+  freshenStatus,
+  renderFreshenStatus,
+  serializeFreshenStatus,
+  type FreshenStatus,
+} from "../../../core/search/freshen.ts";
+import {
   eventTimeStatus,
   indexStatus,
   renderEventTimeStatus,
@@ -31,11 +37,13 @@ export async function cmdSearchStatus(argv: ReadonlyArray<string>): Promise<numb
   const status = await indexStatus(cfg);
   // The event-time summary reads the index, so it exists only with one.
   const eventTime = status.exists ? await eventTimeStatus(cfg) : null;
+  const freshen = status.exists ? freshenStatus(cfg, status.lastIndexedAt) : null;
   if (flagBoolean(flags, "json")) {
     process.stdout.write(
       JSON.stringify({
         ...(serializeIndexStatus(status) as Record<string, unknown>),
         ...(eventTime !== null ? { event_time: serializeEventTimeStatus(eventTime) } : {}),
+        ...(freshen !== null ? { freshen: serializeFreshenStatus(freshen) } : {}),
         // Same polarity as the human twin below, so the two conditions
         // read as one rule rather than as each other's negation.
         ...(!status.exists ? nextCommandField("search-index-missing") : {}),
@@ -43,7 +51,7 @@ export async function cmdSearchStatus(argv: ReadonlyArray<string>): Promise<numb
     );
     return 0;
   }
-  process.stdout.write(renderStatusHuman(status, eventTime));
+  process.stdout.write(renderStatusHuman(status, eventTime, freshen));
   // no-dead-ends, phase 3: the pointer used to be spliced into the
   // renderer's first line, which is a second emission mechanism AND
   // beyond the reach of a scan over writer call sites. The rail decides
@@ -56,7 +64,11 @@ export async function cmdSearchStatus(argv: ReadonlyArray<string>): Promise<numb
   return 0;
 }
 
-function renderStatusHuman(s: IndexStatusSnapshot, eventTime: EventTimeStatus | null): string {
+function renderStatusHuman(
+  s: IndexStatusSnapshot,
+  eventTime: EventTimeStatus | null,
+  freshen: FreshenStatus | null,
+): string {
   if (!s.exists) {
     return `index: not initialised\n  path: ${s.indexPath}\n`;
   }
@@ -77,6 +89,7 @@ function renderStatusHuman(s: IndexStatusSnapshot, eventTime: EventTimeStatus | 
   lines.push(`embedding_key:       ${s.embeddingKeyPresent ? "present" : "missing"}`);
   lines.push(`last_indexed_at:     ${s.lastIndexedAt ?? "(never)"}`);
   lines.push(`last_full_index_at:  ${s.lastFullIndexAt ?? "(never)"}`);
+  if (freshen !== null) lines.push(...renderFreshenStatus(freshen));
   if (eventTime !== null) lines.push(`event_time:          ${renderEventTimeStatus(eventTime)}`);
   // The oversize-chunk census when it could NOT run. Above the warnings
   // and not among them, deliberately: this line reports a check that did

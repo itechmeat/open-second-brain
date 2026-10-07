@@ -188,6 +188,7 @@ const DOCTOR_REGISTERED_CODES: ReadonlyArray<string> = [
   "embeddings-backlog",
   "entity-label-malformed",
   "entity-quote-variant-collision",
+  "freshen-failing",
   "inbox-archivable",
   "log-chain-broken",
   "low-evidence-confirmed",
