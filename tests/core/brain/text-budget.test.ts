@@ -14,6 +14,7 @@ import {
   compareItemLines,
   firstTagGroup,
   joinedSectionsLength,
+  type SectionBudgetOptions,
   type SectionTruncationReport,
   splitSectionBullets,
   topItemLines,
@@ -178,6 +179,52 @@ describe("applySectionBudget: the notice as a function of the truncation report"
       const asFunction = applySectionBudget(sections(), budget, { notice: () => NOTICE });
       expect(asFunction).toEqual(asString);
     }
+  });
+});
+
+// ----- The reported total (original-size notice) -----------------------------
+
+/**
+ * `totalChars` on the options lets a caller that shrinks the sections
+ * BEFORE this pass (the active-body budgeter tiers them first) report
+ * the notice total against the body it started from, not the pre-shrunk
+ * slices it hands in. Without the override such a caller has no way to
+ * keep "kept X of Y" honest across its own pre-pass. The default - the
+ * join of the sections as handed in - is what the standing-rules and
+ * scoped-rules callers must keep receiving.
+ */
+describe("applySectionBudget: the reported total", () => {
+  function reportFor(opts: SectionBudgetOptions, budget: number): SectionTruncationReport {
+    let seen: SectionTruncationReport | null = null;
+    applySectionBudget(sections(), budget, {
+      ...opts,
+      notice: (report) => {
+        seen = report;
+        return "";
+      },
+    });
+    if (seen === null) throw new Error("the notice function was never called");
+    return seen;
+  }
+
+  test("default: the total is the join of the sections as handed in", () => {
+    const full = applySectionBudget(sections(), 10_000).body.length;
+    expect(reportFor({}, full - 20).totalChars).toBe(full);
+  });
+
+  test("an explicit totalChars is reported instead of the join of the given sections", () => {
+    const full = applySectionBudget(sections(), 10_000).body.length;
+    const report = reportFor({ totalChars: 50_000 }, full - 20);
+    expect(report.totalChars).toBe(50_000);
+    // The override changes only what the notice is told: the body the
+    // pass renders and the kept-chars figure are unaffected.
+    expect(report.keptChars).toBeLessThan(full);
+  });
+
+  test("the override never surfaces when nothing was truncated", () => {
+    const out = applySectionBudget(sections(), 10_000, { totalChars: 50_000, notice: NOTICE });
+    expect(out.truncated).toBe(false);
+    expect(out.body).not.toContain(NOTICE);
   });
 });
 

@@ -80,6 +80,16 @@ export interface SectionBudgetOptions {
    * happened, so the function form is never called on the common path.
    */
   readonly notice?: SectionBudgetNotice;
+  /**
+   * Total reported to the notice INSTEAD of the join of the sections
+   * as handed in. A caller that shrinks the sections BEFORE this pass
+   * (the active-body budgeter tiers them first) hands on smaller
+   * slices but must quantify the cut against the body it started
+   * from; the override keeps its "kept X of Y" honest. Absent - the
+   * standing-rules and scoped-rules callers - the join of the given
+   * sections is reported, exactly as before.
+   */
+  readonly totalChars?: number;
 }
 
 export interface SectionBudgetResult {
@@ -174,7 +184,7 @@ export function applySectionBudget(
   opts: SectionBudgetOptions = {},
 ): SectionBudgetResult {
   const budget = Number.isFinite(budgetChars) ? Math.max(0, Math.floor(budgetChars)) : 0;
-  const totalChars = joinedLength(sections);
+  const totalChars = opts.totalChars ?? joinedLength(sections);
   const kept: KeptSection[] = sections.map((s, index) => ({ ...s, index }));
   const droppedKeys: string[] = [];
   let trimmedAny = false;

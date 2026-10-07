@@ -289,6 +289,22 @@ describe("budgetActiveBody: the headline tier ladder", () => {
     expect(clause).not.toContain("Quarantine");
   });
 
+  test("after tiering, the drop notice quantifies the cut against the ORIGINAL body size", () => {
+    const input = tierableBody();
+    const tiered = expectedTieredJoin();
+    // Below the tiered body: the ladder tiers both sections, the body
+    // still overflows, and the drop pass removes Quarantine. The notice
+    // is built from the TIERED sections, so its total must be the
+    // original join - quoting the tiered size would claim fewer lost
+    // characters than the vault actually held.
+    const out = budgetActiveBody(input, tiered.length - 10);
+    const notice = out.slice(out.lastIndexOf("_Injection truncated"));
+    const m = /kept (\d+) of (\d+) characters/.exec(notice);
+    expect(m).not.toBeNull();
+    expect(m![2]).toBe(String(input.length));
+    expect(Number(m![1])).toBeLessThan(input.length);
+  });
+
   test("a section tiered and then dropped whole is named only in the Dropped list", () => {
     // Most-applied holds too few bullets to tier; Quarantine holds five
     // and a budget just below the tiered body drops it whole. The notice

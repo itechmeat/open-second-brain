@@ -188,11 +188,18 @@ export function splitSections(body: string): BudgetSection[] {
  *
  * When tiering fired, the reduction is never silent: the tier notice
  * rides alone when tiering alone brought the body within budget, and a
- * "headlines kept" clause joins the drop notice otherwise.
+ * "headlines kept" clause joins the drop notice otherwise. The drop
+ * notice's character pair quantifies the cut against the ORIGINAL
+ * body, not the tiered remainder the drop pass receives.
  */
 export function budgetActiveBody(body: string, budgetChars: number): string {
   if (body.length <= budgetChars) return body;
-  const ladder = applyHeadlineTiers(splitSections(body), budgetChars);
+  const sections = splitSections(body);
+  // The drop pass below sees the TIERED sections; the notice must
+  // quantify the cut against the body the vault holds, so the original
+  // join is captured before the ladder runs and overrides the report.
+  const originalTotal = joinedSectionsLength(sections);
+  const ladder = applyHeadlineTiers(sections, budgetChars);
   const tieredLabels = ladder.tieredKeys.map(sectionLabel);
   if (tieredLabels.length > 0 && joinedSectionsLength(ladder.sections) <= budgetChars) {
     // Tiering alone brought the body within budget: nothing was
@@ -202,6 +209,7 @@ export function budgetActiveBody(body: string, budgetChars: number): string {
     return joinSections(ladder.sections) + SECTION_SEPARATOR + activeTierNotice(tieredLabels);
   }
   const result = applySectionBudget(ladder.sections, budgetChars, {
+    totalChars: originalTotal,
     notice:
       tieredLabels.length > 0
         ? (report) => {
