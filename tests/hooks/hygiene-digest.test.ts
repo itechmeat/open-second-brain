@@ -164,12 +164,6 @@ async function runHook(
   return { stdout, stderr, exit };
 }
 
-function portableReason(stdout: string): string {
-  const parsed = JSON.parse(stdout) as { decision: string; reason: string };
-  expect(parsed.decision).toBe("block");
-  return parsed.reason;
-}
-
 describe("hygiene-digest hook", () => {
   test("flag off: no stdout, no ledger write, and the scan is never invoked", async () => {
     seedConflict();
@@ -349,27 +343,45 @@ describe("hygiene-digest hook", () => {
     expect(existsSync(hygieneDigestHashPath(vault))).toBe(false);
   });
 
-  test("claudecode gets the hookSpecificOutput Stop shape, other runtimes the portable one-line shape", async () => {
+  test("claudecode gets the Stop shape; every other runtime stays silent", async () => {
     seedConflict();
+    // M5: a codex-shaped Stop must be probed BEFORE the claudecode run
+    // below writes the hash ledger - under the old per-runtime shape the
+    // codex probe emitted decision:block, and on those runtimes a Stop
+    // block is a forced continuation turn. The digest is opt-in, so a
+    // runtime without a non-blocking channel stays silent instead.
+    const codex = writeTranscript(join(configHome, ".codex", "sessions", "codex-session.jsonl"), [
+      ccUser("please add a file"),
+      ccAssistantToolUse("apply_patch", { input: "*** Begin Patch\n+new line\n*** End Patch" }),
+    ]);
+    const codexRun = await runHook(stopPayload(codex), FLAG_ON);
+    expect(codexRun.exit).toBe(0);
+    expect(codexRun.stdout).toBe("");
+    expect(existsSync(hygieneDigestHashPath(vault))).toBe(false);
+
+    // The claudecode transcript path is what earns the non-blocking
+    // channel; its line rides hookSpecificOutput.additionalContext.
     const claude = await runHook(stopPayload(claudeTranscript(true)), FLAG_ON);
+    expect(claude.exit).toBe(0);
     const claudeParsed = JSON.parse(claude.stdout) as {
       hookSpecificOutput: { hookEventName: string; additionalContext: string } | undefined;
       decision: string | undefined;
     };
     expect(claudeParsed.hookSpecificOutput).toBeDefined();
+    expect(claudeParsed.hookSpecificOutput!.hookEventName).toBe("Stop");
     expect(claudeParsed.decision).toBeUndefined();
 
-    // The first probe recorded the emitted state; reset the ledger so the
-    // second probe emits again (this test pins output shape, not dedupe).
+    // An unrecognised runtime has no non-blocking channel either: same
+    // silence, and the emitted state is never recorded for it.
     rmSync(hygieneDigestHashPath(vault), { force: true });
     const plain = writeTranscript(join(configHome, "plain-session.jsonl"), [
       ccUser("please add a file"),
       ccAssistantToolUse("Write", { file_path: "/tmp/x.md" }),
     ]);
-    const portable = await runHook(stopPayload(plain), FLAG_ON);
-    const reason = portableReason(portable.stdout);
-    expect(reason.startsWith("Open Second Brain hygiene:")).toBe(true);
-    expect(reason.includes("\n")).toBe(false);
+    const unknown = await runHook(stopPayload(plain), FLAG_ON);
+    expect(unknown.exit).toBe(0);
+    expect(unknown.stdout).toBe("");
+    expect(existsSync(hygieneDigestHashPath(vault))).toBe(false);
   });
 
   test(`the ledger file is named ${HYGIENE_DIGEST_HASH_FILENAME} beside hook-state, never inside it`, () => {

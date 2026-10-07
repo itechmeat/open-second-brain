@@ -7,8 +7,9 @@
  * The line folds the default detector sweep plus the index-backed
  * dangling-link count into counts per detector (composer:
  * hooks/lib/hygiene-digest-text.ts). Silence is the steady state: zero
- * eligible findings, an unmeasurable scan, or a state the vault-level
- * hash ledger already emitted all exit 0 with no output.
+ * eligible findings, an unmeasurable scan, a state the vault-level
+ * hash ledger already emitted, or a runtime with no non-blocking
+ * channel all exit 0 with no output.
  *
  * Gates, in cost order:
  *
@@ -20,11 +21,18 @@
  *      the heavy imports: the detectors and the search index load
  *      lazily after every gate, so a default-off run pays one config
  *      read (reground-deliver precedent).
- *   4. No transcript, unreadable transcript, or a turn that wrote no
+ *   4. Runtime without a non-blocking Stop channel -> silent. Only
+ *      Claude Code gets the line: its Stop feedback renders as
+ *      non-blocking "Stop hook feedback". Everywhere else a Stop block
+ *      (`decision: "block"`) is a forced continuation turn, and an
+ *      opt-in digest must never buy one - so Codex, Grok Build and
+ *      unrecognised runtimes exit here, before any transcript work.
+ *   5. No transcript, unreadable transcript, or a turn that wrote no
  *      artifact -> silent. "Once per change" means once per
- *      vault-changing turn (`summarizeTurn` hadArtifact, the
- *      stop-log-guardrail gate).
- *   5. `resolveVault()` null -> silent.
+ *      artifact-writing turn (`summarizeTurn` hadArtifact, the
+ *      stop-log-guardrail gate) - an artifact write anywhere, code
+ *      included, counts; the sweep is not vault-scoped.
+ *   6. `resolveVault()` null -> silent.
  *
  * Change detection is a hash ledger,
  * `<vault>/.open-second-brain/hygiene-digest.hash`
@@ -33,16 +41,13 @@
  * crash in between loses the dedupe and the next eligible turn emits
  * again - lose-not-duplicate.
  *
- * Output channel per runtime, mirroring stop-log-guardrail (v1.58.2):
- *
- *   - Claude Code: `hookSpecificOutput.additionalContext` on the Stop
- *     event - non-error "Stop hook feedback", not the red block shape.
- *   - Every other runtime: the portable one-line
- *     `{"decision": "block", "reason": "<line>"}` shape; on Codex the
- *     reason becomes the continuation prompt.
- *
- * The per-runtime helper lives here, not in hooks/lib/messages.ts,
- * which this lane does not touch.
+ * Output shape: `hookSpecificOutput.additionalContext` on the Stop
+ * event - non-error "Stop hook feedback", not the red block shape. The
+ * per-runtime helper this file once shipped is gone with the runtimes
+ * it served: the only emitting runtime left is the one whose channel
+ * is additive. The Stop guardrail (hooks/stop-log-guardrail.ts) keeps
+ * its portable block shape - it is always-on and its continuation is
+ * the point.
  *
  * Crashes exit 0 - never deadlock.
  */
@@ -51,7 +56,6 @@ import { writeSync } from "node:fs";
 
 import { resolveHygieneDigestEnabled, resolveVault } from "../src/core/config.ts";
 import { detectHookRuntime, summarizeTurn } from "./lib/detect.ts";
-import type { HookRuntime } from "./lib/detect.ts";
 import { composeHygieneDigest } from "./lib/hygiene-digest-text.ts";
 import {
   computeHygieneDigestHash,
@@ -60,27 +64,6 @@ import {
 } from "./lib/hygiene-digest-state.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { readTranscript } from "./lib/transcript.ts";
-
-type HygieneDigestOutput =
-  | {
-      readonly hookSpecificOutput: {
-        readonly hookEventName: "Stop";
-        readonly additionalContext: string;
-      };
-    }
-  | { readonly decision: "block"; readonly reason: string };
-
-/**
- * Hook output for the hygiene digest. Claude Code gets the non-error
- * `additionalContext` channel; every other runtime gets the portable
- * `decision: "block"` shape. Both carry the same one line.
- */
-function hygieneDigestOutput(runtime: HookRuntime, line: string): HygieneDigestOutput {
-  if (runtime === "claudecode") {
-    return { hookSpecificOutput: { hookEventName: "Stop", additionalContext: line } };
-  }
-  return { decision: "block", reason: line };
-}
 
 async function main(): Promise<void> {
   let payload;
@@ -95,6 +78,12 @@ async function main(): Promise<void> {
   // Off is the default and this runs after every turn: one config read,
   // no vault resolution, no heavy imports.
   if (!resolveHygieneDigestEnabled()) return;
+
+  // Claude Code only: its Stop `additionalContext` is non-blocking
+  // feedback. On every other runtime a Stop block forces a continuation
+  // turn, and an opt-in digest must never do that. Payload-shape
+  // detection only, so a silent runtime pays nothing further.
+  if (detectHookRuntime(payload) !== "claudecode") return;
 
   const transcriptPath = payload.transcript_path;
   if (typeof transcriptPath !== "string" || transcriptPath.length === 0) return;
@@ -145,7 +134,10 @@ async function main(): Promise<void> {
   // with a stderr banner. The synchronous write throws into main's
   // fail-soft catch instead and the next eligible turn re-emits - the
   // lose-not-duplicate order made real, not just ordered.
-  writeSync(1, `${JSON.stringify(hygieneDigestOutput(detectHookRuntime(payload), line))}\n`);
+  writeSync(
+    1,
+    `${JSON.stringify({ hookSpecificOutput: { hookEventName: "Stop", additionalContext: line } })}\n`,
+  );
   // Lose-not-duplicate: the ledger records the state only after the
   // emit, so a crash in between re-emits rather than going silent.
   writeHygieneDigestHash(vault, hash);

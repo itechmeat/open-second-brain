@@ -542,7 +542,9 @@ flowchart LR
   not wait for an explicit `brain_hygiene` call. A hash ledger beside
   the hook-state directory keeps an unchanged finding set silent - once
   per change, not once per turn; zero eligible findings and flag-off
-  installs emit nothing.
+  installs emit nothing. The line rides Claude Code's non-blocking Stop
+  feedback channel only; on runtimes where a Stop block would force a
+  continuation turn the hook stays silent.
 - **MCP Resources** expose the same content for hosts that prefer
   pull access (`osb://preferences/active` and friends in the table
   above). The MCP `initialize` reply advertises the `resources`
