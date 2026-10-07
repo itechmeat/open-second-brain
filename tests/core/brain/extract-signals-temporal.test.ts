@@ -11,10 +11,16 @@
  *  3. The envelope tells the caller to write an end-only bound as an
  *     interval, because the dream pass reads a lone ISO date as the day a
  *     rule STARTS: an end bound written as a lone date would invert it.
+ *  4. The envelope says an interval's end date is exclusive, because the
+ *     window is `[valid_from, valid_until)`: "to the 20th" is written as
+ *     the 21st, or the rule stops applying for the whole of the 20th.
+ *  5. An interval with an impossible date, or one that does not end after
+ *     it starts, is refused whole: it would yield a window that is never
+ *     active, and nothing downstream would say why.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -26,12 +32,17 @@ import {
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { preferencePath } from "../../../src/core/brain/paths.ts";
 import { parsePreference } from "../../../src/core/brain/preference.ts";
+import {
+  ResponseCheckError,
+  SEMANTIC_VIOLATION_CODES,
+} from "../../../src/core/brain/response-checks.ts";
 import { importSessionRecall } from "../../../src/core/brain/session-recall.ts";
 import { parseSignal } from "../../../src/core/brain/signal.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 
 const TOPIC = "release-freeze";
-const INTERVAL = "2026-10-10/2026-10-20";
+// "From the 10th to the 20th": the end date is exclusive, so it is the 21st.
+const INTERVAL = "2026-10-10/2026-10-21";
 const NOW = new Date("2026-10-07T12:00:00Z");
 
 /**
@@ -101,7 +112,7 @@ test("an ISO interval in an extracted principle becomes the dream validity windo
   expect(summary.new_unconfirmed).toContain(`pref-${TOPIC}`);
   const pref = parsePreference(preferencePath(vault, TOPIC));
   expect(pref.valid_from).toBe("2026-10-10T00:00:00Z");
-  expect(pref.valid_until).toBe("2026-10-20T00:00:00Z");
+  expect(pref.valid_until).toBe("2026-10-21T00:00:00Z");
 });
 
 test("the envelope asks for an end-only bound as an interval, never a lone date", () => {
@@ -109,4 +120,33 @@ test("the envelope asks for an end-only bound as an interval, never a lone date"
   const head = plan.llmStep.prompt.slice(0, plan.llmStep.prompt.indexOf("\n\n"));
   expect(head).toContain("YYYY-MM-DD/YYYY-MM-DD");
   expect(head).toContain("a lone date reads as the day the rule starts");
+});
+
+test("the envelope says an interval's end date is exclusive", () => {
+  const plan = planExtractSignals(vault, SESSIONS[0]!.id, { now: NOW });
+  const head = plan.llmStep.prompt.slice(0, plan.llmStep.prompt.indexOf("\n\n"));
+  expect(head).toContain("an interval's end date is exclusive");
+  expect(head).toContain("the day after the last day the rule holds");
+});
+
+test.each([
+  ["a reversed interval", "2026-10-21/2026-10-10", "must end after it starts"],
+  ["an empty interval", "2026-10-10/2026-10-10", "must end after it starts"],
+  ["an impossible end date", "2026-02-01/2026-02-30", "2026-02-30, which is not a calendar date"],
+  ["an impossible start date", "2026-13-01/2026-12-20", "2026-13-01, which is not a calendar date"],
+])("%s is refused whole, naming the principle", (_label, interval, reason) => {
+  let caught: unknown;
+  try {
+    commit({ id: SESSIONS[0]!.id, principle: `Freeze release-branch merges during ${interval}.` });
+  } catch (err) {
+    caught = err;
+  }
+  expect(caught).toBeInstanceOf(ResponseCheckError);
+  const err = caught as ResponseCheckError;
+  expect(err.code).toBe(SEMANTIC_VIOLATION_CODES.threshold);
+  expect(err.message).toContain("items[0].principle");
+  expect(err.message).toContain(`interval ${interval}`);
+  expect(err.message).toContain(reason);
+  const inbox = join(vault, "Brain", "inbox");
+  expect(existsSync(inbox) ? readdirSync(inbox).filter((f) => f.endsWith(".md")) : []).toEqual([]);
 });

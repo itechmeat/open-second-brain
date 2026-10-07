@@ -297,11 +297,13 @@ export interface CommitExtractedSignalsOptions {
 // ----- Semantic rules the descriptor language cannot express ---------------
 
 /**
- * Cap, floor and topic uniqueness, registered once at module scope. Each
- * reads across the payload rather than one value at a time - the cap
- * counts the whole list, the floor compares a number to a limit the
- * descriptor cannot name, and uniqueness compares items with each other -
- * so they belong here rather than in {@link EXTRACTED_SIGNALS_SHAPE}.
+ * Cap, floor, topic uniqueness and interval sanity, registered once at
+ * module scope. Each reads across the payload or inside a value rather
+ * than one value at a time - the cap counts the whole list, the floor
+ * compares a number to a limit the descriptor cannot name, uniqueness
+ * compares items with each other, and an interval compares the two dates
+ * inside one principle - so they belong here rather than in
+ * {@link EXTRACTED_SIGNALS_SHAPE}.
  *
  * Registration is a module side effect on purpose: the registry is
  * fail-closed, so a lane that forgot to register refuses its own writes
@@ -334,8 +336,54 @@ registerResponseCheck(EXTRACTED_SIGNALS_SURFACE, (payload) => {
     }
   });
   violations.push(...duplicateTopicViolations(items));
+  violations.push(...intervalViolations(items));
   return violations;
 });
+
+/**
+ * An ISO interval inside a principle, the form the dream pass turns into
+ * a `[valid_from, valid_until)` window. Global so every interval in one
+ * principle is checked, not only the first.
+ */
+const PRINCIPLE_INTERVAL_RE = /\b(\d{4}-\d{2}-\d{2})\/(\d{4}-\d{2}-\d{2})\b/g;
+
+/**
+ * One violation per interval in a principle that names an impossible
+ * calendar date or ends on or before it starts. Either one yields a window
+ * that is never active, and nothing downstream would say why, so the
+ * payload is refused here where the caller can still correct it.
+ */
+function intervalViolations(items: ReadonlyArray<unknown>): SemanticViolation[] {
+  const violations: SemanticViolation[] = [];
+  items.forEach((item, index) => {
+    const principle = (item as { principle?: unknown }).principle;
+    if (typeof principle !== "string") return;
+    for (const [interval, start, end] of principle.matchAll(PRINCIPLE_INTERVAL_RE)) {
+      const impossible = [start!, end!].find((date) => !isCalendarDate(date));
+      const message =
+        impossible !== undefined
+          ? `interval ${interval} names ${impossible}, which is not a calendar date`
+          : end! <= start!
+            ? `interval ${interval} must end after it starts; its end date is exclusive, the day after the last day the rule holds`
+            : null;
+      if (message === null) continue;
+      violations.push(
+        semanticViolation(
+          SEMANTIC_VIOLATION_CODES.threshold,
+          `${SHAPE_ROOT_PATH}.items[${index}].principle`,
+          message,
+        ),
+      );
+    }
+  });
+  return violations;
+}
+
+/** Whether a `YYYY-MM-DD` string names a real day, so `2026-02-30` does not. */
+function isCalendarDate(date: string): boolean {
+  const parsed = new Date(`${date}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date;
+}
 
 /**
  * One violation per item that repeats an earlier item's topic, naming both
@@ -454,7 +502,9 @@ export function planExtractSignals(
 const EXTRACT_HYGIENE_RULES: ReadonlyArray<string> = Object.freeze([
   "Write any time bound a rule carries as an ISO 8601 date or interval (YYYY-MM-DD, or " +
     "YYYY-MM-DD/YYYY-MM-DD), resolving a relative bound against the timestamp of the turn " +
-    "that stated it; write a bound that only ends as an interval from that turn's date, " +
+    "that stated it; an interval's end date is exclusive, so write the day after the last " +
+    "day the rule holds, and an end that is not after the start refuses the whole payload; " +
+    "write a bound that only ends as an interval from that turn's date, " +
     "because a lone date reads as the day the rule starts; a rule with no time bound stays " +
     "undated.",
   "Skip conversational mechanics - greetings, thanks, acknowledgements, requests to go on, " +
