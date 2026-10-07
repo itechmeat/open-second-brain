@@ -262,3 +262,35 @@ describe("mcp route latency stages", () => {
     );
   });
 });
+
+function stagesFor(ms: number): ReadonlyArray<RouteStageTiming> {
+  return [
+    { name: "validate", ms },
+    { name: "log_append", ms: ms * 2 },
+  ];
+}
+
+describe("summarizeMcpRouteLatency stages", () => {
+  test("each route gets a per-stage count, average and p95", () => {
+    for (const ms of [1, 2, 3, 4]) {
+      emitMcpRouteLatency(
+        vault,
+        { tool: "brain_feedback", status: "ok", durationMs: 10, stages: stagesFor(ms) },
+        true,
+      );
+    }
+    emitMcpRouteLatency(vault, { tool: "brain_feedback", status: "ok", durationMs: 10 }, true);
+
+    const route = summarizeMcpRouteLatency(vault).routes.find((r) => r.tool === "brain_feedback")!;
+    expect(route.stages).toEqual([
+      { name: "validate", count: 4, avg_ms: 2.5, p95_ms: 4 },
+      { name: "log_append", count: 4, avg_ms: 5, p95_ms: 8 },
+    ]);
+  });
+
+  test("a route without stages has no stages key", () => {
+    emitMcpRouteLatency(vault, { tool: "second_brain_status", status: "ok", durationMs: 2 }, true);
+    const route = summarizeMcpRouteLatency(vault).routes[0]!;
+    expect(Object.hasOwn(route, "stages")).toBe(false);
+  });
+});
