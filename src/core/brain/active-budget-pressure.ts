@@ -17,6 +17,16 @@
  * (`SECTION_PRIORITIES` from `active-budget.ts`), so the advance
  * warning matches what would actually be dropped.
  *
+ * The reactive truncation also degrades sections through a HEADLINE
+ * TIER before it drops them (an over-budget body first compacts every
+ * non-keep-guard section to its heading, lead-ins and top-N ranked
+ * bullets). The probe models that step with the same shared code, the
+ * same exemptions and the same top-N, so doctor's picture of "what
+ * happens at the wall" stays the reactive path's picture:
+ * `tierFires` marks the exact overflow condition the reactive tier
+ * runs under, and every candidate carries the byte footprint the tier
+ * would first degrade it to.
+ *
  * Contract:
  *   - **Empty output = healthy.** At or below the warn threshold the
  *     status is `healthy` and `candidates` is empty; the doctor/hygiene
@@ -25,6 +35,13 @@
  *     Confirmed rules) is a live rule/config the probe never proposes
  *     for eviction - only pure stale history (retired, quarantine,
  *     most-applied, unknown future sections) is a candidate.
+ *   - **Headline tier mirror.** `tierFires` is true exactly when the
+ *     body exceeds the budget outright - the condition under which the
+ *     reactive path applies the headline tier before any drop. Each
+ *     candidate's `tieredBytes` is the byte length of its tiered form
+ *     (heading + lead-ins + top-N bullets), computed by the same
+ *     `tierSection` the reactive budgeter runs; it equals `bytes` for a
+ *     section the tier cannot compact.
  *   - **Suggestions only.** Candidates are surfaced to the operator /
  *     dream; nothing here mutates the vault or auto-archives anything.
  *   - **Pure and deterministic.** Byte/section counting, no LLM, no
@@ -36,7 +53,13 @@
  * reuses that identifier.
  */
 
-import { KEEP_GUARD_PRIORITY, priorityFor, splitSections } from "./active-budget.ts";
+import {
+  HEADLINE_TIER_TOP_ITEMS,
+  KEEP_GUARD_PRIORITY,
+  priorityFor,
+  splitSections,
+  tierSection,
+} from "./active-budget.ts";
 
 /**
  * Fill-rate at or below this is `healthy` (quiet). Between this and
@@ -62,6 +85,14 @@ export interface EvictionCandidate {
   readonly bytes: number;
   /** Drop priority (higher drops first); always > {@link KEEP_GUARD_PRIORITY}. */
   readonly priority: number;
+  /**
+   * Byte length the reactive headline tier first degrades this section
+   * to when the body overflows: heading, lead-ins and the top-N ranked
+   * bullets, measured with the shared `tierSection`. Equal to `bytes`
+   * when the tier cannot compact the section (at or below the top-N
+   * bullet count). Keep-guard sections never appear as candidates.
+   */
+  readonly tieredBytes: number;
 }
 
 export interface ActiveBudgetPressure {
@@ -78,6 +109,13 @@ export interface ActiveBudgetPressure {
    * body has no droppable (non-keep-guard) sections.
    */
   readonly candidates: ReadonlyArray<EvictionCandidate>;
+  /**
+   * True when the body exceeds the budget outright - the exact
+   * condition under which the reactive truncation applies the headline
+   * tier before any whole-section drop. Below 100% fill the reactive
+   * path never touches the body, so the tier never fires.
+   */
+  readonly tierFires: boolean;
 }
 
 /** First `## ` heading of a section slice, or `"preamble"`. */
@@ -109,6 +147,11 @@ export function computeActiveBudgetPressure(
   const budget = Number.isFinite(budgetChars) ? budgetChars : 0;
   const fillRate = budget > 0 ? bytes / budget : bytes > 0 ? Infinity : 0;
   const status = statusFor(fillRate);
+  // The reactive budgeter's entry condition: over budget it tiers
+  // first, at or below it the body passes through untouched. Mirrored
+  // so `tierFires` and the reactive tier can never disagree about when
+  // the ladder runs.
+  const tierFires = bytes > budget;
 
   // Empty output = healthy: no candidates unless pressure is real.
   if (status === "healthy") {
@@ -118,6 +161,7 @@ export function computeActiveBudgetPressure(
       bytes,
       budgetChars: budget,
       candidates: Object.freeze([]),
+      tierFires,
     });
   }
 
@@ -130,7 +174,17 @@ export function computeActiveBudgetPressure(
     // and robust to the merged-preamble slice.
     const priority = heading === "preamble" ? KEEP_GUARD_PRIORITY : priorityFor(heading);
     if (priority <= KEEP_GUARD_PRIORITY) return; // keep-guard: live rule/config
-    candidates.push({ sectionKey: heading, bytes: section.text.length, priority, index });
+    // The tiered footprint uses the SAME step the reactive budgeter
+    // runs - shared code, not a reimplementation, so the two surfaces
+    // cannot drift.
+    const tiered = tierSection(section, HEADLINE_TIER_TOP_ITEMS);
+    candidates.push({
+      sectionKey: heading,
+      bytes: section.text.length,
+      priority,
+      index,
+      tieredBytes: tiered.section.text.length,
+    });
   });
 
   // Rank in the exact reactive drop order: highest priority first,
@@ -143,8 +197,14 @@ export function computeActiveBudgetPressure(
     status,
     bytes,
     budgetChars: budget,
+    tierFires,
     candidates: Object.freeze(
-      candidates.map(({ sectionKey, bytes: b, priority }) => ({ sectionKey, bytes: b, priority })),
+      candidates.map(({ sectionKey, bytes: b, priority, tieredBytes }) => ({
+        sectionKey,
+        bytes: b,
+        priority,
+        tieredBytes,
+      })),
     ),
   });
 }
