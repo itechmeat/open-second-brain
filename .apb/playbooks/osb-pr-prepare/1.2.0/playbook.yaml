@@ -810,6 +810,12 @@ edges:
 - from: ci_wait
   to: ci_check
 - from: ci_check
+  to: ci_fix
+  condition:
+    type: output_match
+    node: ci_wait
+    pattern: 'CI-GATE: red'
+- from: ci_check
   to: bot_review
   condition:
     type: output_field
@@ -817,11 +823,12 @@ edges:
     field: pushed
     equals: 'yes'
 - from: ci_check
-  to: ci_fix
+  to: ready
   condition:
-    type: output_match
-    node: ci_wait
-    pattern: 'CI-GATE: red'
+    type: output_field
+    node: bot_review
+    field: pushed
+    equals: 'no'
 - from: ci_check
   to: blocked
   fallback: true
