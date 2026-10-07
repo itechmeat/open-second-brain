@@ -38,6 +38,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { vaultRelative } from "../path-safety.ts";
+import { ROUTE_STAGE, timeStageSync } from "../route-scope.ts";
 
 import { adviseOnIncoming, type PreferenceForContradiction } from "./health/contradiction.ts";
 import { appendLogEvent } from "./log.ts";
@@ -165,8 +166,15 @@ export function adviseIncomingFeedback(
   params: AdviseIncomingFeedbackParams,
 ): WriteConflictAdvisory | null {
   try {
-    const prefs = loadConfirmedScopePrefs(vault, params.scope, params.readable);
-    const advisory = adviseOnIncoming(params.principle, params.scope, prefs);
+    // Loading the comparison pool and scoring it is the near-duplicate
+    // lookup of the feedback route; the log append below is its own stage.
+    const advisory = timeStageSync(ROUTE_STAGE.nearDuplicateLookup, () =>
+      adviseOnIncoming(
+        params.principle,
+        params.scope,
+        loadConfirmedScopePrefs(vault, params.scope, params.readable),
+      ),
+    );
     if (advisory === null) return null;
 
     const result: WriteConflictAdvisory = {

@@ -84,6 +84,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { posix, resolve } from "node:path";
 
 import { vaultRelative } from "../path-safety.ts";
+import { ROUTE_STAGE, timeStageSync } from "../route-scope.ts";
 import { compositeScopeKey, scopeFromFrontmatter } from "../scope-key.ts";
 import { parseFrontmatterText } from "../vault.ts";
 import type { FrontmatterMap } from "../types.ts";
@@ -525,7 +526,11 @@ function lintOnePage(ctx: LintContext, page: string, raw: string): PageLintFindi
       );
     }
   }
-  out.push(...nearDuplicateFindings(ctx, page, meta, body));
+  out.push(
+    ...timeStageSync(ROUTE_STAGE.nearDuplicateLookup, () =>
+      nearDuplicateFindings(ctx, page, meta, body),
+    ),
+  );
   return out;
 }
 
@@ -661,7 +666,11 @@ export function lintWrittenPages(
   if (pages.length === 0) return emptyReport();
   let ctx: LintContext;
   try {
-    const nearDuplicates = collectNearDuplicateCandidates(vault, pages, opts.readable);
+    // The candidate walk and the per-page scoring are the near-duplicate
+    // lookup; under an open route scope both add to that one stage.
+    const nearDuplicates = timeStageSync(ROUTE_STAGE.nearDuplicateLookup, () =>
+      collectNearDuplicateCandidates(vault, pages, opts.readable),
+    );
     ctx = {
       basenames: collectAllBasenames(vault),
       vocabulary: loadSchemaPack(vault).vocabulary,

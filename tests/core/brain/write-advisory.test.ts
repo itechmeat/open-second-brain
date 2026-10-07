@@ -21,9 +21,13 @@ import { routeExtractedFacts } from "../../../src/core/brain/fact-extract.ts";
 import type { DedupIndexEntry } from "../../../src/core/brain/dedup-hash.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_PREFERENCE_STATUS } from "../../../src/core/brain/types.ts";
 import { adviseIncomingFeedback } from "../../../src/core/brain/write-advisory.ts";
-import { adviseOnIncoming } from "../../../src/core/brain/health/contradiction.ts";
+import {
+  adviseOnIncoming,
+  type PreferenceForContradiction,
+} from "../../../src/core/brain/health/contradiction.ts";
 import { NEAR_DUPLICATE_MIN_TOKENS } from "../../../src/core/brain/near-duplicate.ts";
 import { BRAIN_HEALTH_DEFAULTS } from "../../../src/core/brain/policy.ts";
+import { createRouteScope, ROUTE_STAGE } from "../../../src/core/route-scope.ts";
 
 let tmp: string;
 let vault: string;
@@ -160,8 +164,14 @@ describe("adviseIncomingFeedback", () => {
 });
 
 /** A confirmed `coding` preference as `adviseOnIncoming` reads it. */
-function codingPref(id: string, principle: string) {
-  return { id, principle, status: BRAIN_PREFERENCE_STATUS.confirmed, scope: "coding" };
+function codingPref(id: string, principle: string): PreferenceForContradiction {
+  return {
+    id,
+    principle,
+    status: BRAIN_PREFERENCE_STATUS.confirmed,
+    scope: "coding",
+    evidenced_by: [],
+  };
 }
 
 /**
@@ -233,5 +243,38 @@ describe("adviseIncomingFeedback - scored through the shared kernel", () => {
         (e) => e.eventType === BRAIN_LOG_EVENT_KIND.writeConflictAdvisory,
       ),
     ).toEqual([]);
+  });
+});
+
+describe("adviseIncomingFeedback - stage timing", () => {
+  test("a feedback advisory records near_duplicate_lookup in the open route scope", async () => {
+    confirmPref("tabs", "always indent source with tabs not spaces", "coding");
+    const scope = createRouteScope();
+    await scope.run(async () =>
+      adviseIncomingFeedback(vault, {
+        principle: "always indent source with tabs not spaces",
+        scope: "coding",
+        agent: "test-agent",
+        now: NOW,
+      }),
+    );
+    const stage = scope.stages()?.find((s) => s.name === ROUTE_STAGE.nearDuplicateLookup);
+    expect(stage).toBeDefined();
+    expect(Number.isFinite(stage!.ms)).toBe(true);
+    expect(stage!.ms).toBeGreaterThanOrEqual(0);
+  });
+
+  test("with no scope open the advisory is unchanged", () => {
+    confirmPref("tabs", "always indent source with tabs not spaces", "coding");
+    const advisory = adviseIncomingFeedback(vault, {
+      principle: "always indent source with tabs not spaces",
+      scope: "coding",
+      agent: "test-agent",
+      now: NOW,
+    });
+    expect(advisory).toEqual({
+      scope: "coding",
+      conflicts: [{ pref_id: "pref-tabs", jaccard: 1 }],
+    });
   });
 });

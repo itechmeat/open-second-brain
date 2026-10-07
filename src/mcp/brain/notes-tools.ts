@@ -53,6 +53,7 @@ import {
   type WideningResult,
 } from "../../core/brain/page-lint-widening.ts";
 import { resolveNearDuplicateWriteWideningEnabled } from "../../core/config.ts";
+import { ROUTE_STAGE, timeStage, timeStageSync } from "../../core/route-scope.ts";
 import { resolveSearchConfig } from "../../core/search/index.ts";
 import type { ResolvedSearchConfig } from "../../core/search/types.ts";
 import {
@@ -499,6 +500,10 @@ function runSingleWrite<K extends SingleNoteOperation["kind"]>(
  * directories ({@link collectWideningCandidates}), and the report states
  * whether that ran. With the key off nothing is opened and the receipt is
  * exactly the one that shipped before.
+ *
+ * Under an open route scope the lint is timed as the `lint` stage and the
+ * widening as `near_duplicate_lookup`, the stage the lint's own
+ * near-duplicate scoring also adds to.
  */
 export async function noteWriteResult<T extends Record<string, unknown>>(
   ctx: ServerContext,
@@ -507,12 +512,15 @@ export async function noteWriteResult<T extends Record<string, unknown>>(
 ): Promise<T & PageLintField> {
   if (pages.length === 0) return receipt;
   const readable = readableAtContextReach(ctx);
-  const widening = await widenNearDuplicates(ctx, pages, readable);
+  const widening = await timeStage(ROUTE_STAGE.nearDuplicateLookup, () =>
+    widenNearDuplicates(ctx, pages, readable),
+  );
   const opts: LintWrittenPagesOptions =
     widening === undefined
       ? { readable }
       : { readable, extraCandidates: widening.candidates, widening: widening.status };
-  return { ...receipt, ...pageLintField(lintWrittenPages(ctx.vault, pages, opts)) };
+  const report = timeStageSync(ROUTE_STAGE.lint, () => lintWrittenPages(ctx.vault, pages, opts));
+  return { ...receipt, ...pageLintField(report) };
 }
 
 /** What a widening reports when the search config itself cannot be resolved. */
