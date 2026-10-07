@@ -17,14 +17,18 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Linux jobs are pinned to Ubuntu 26.04: `ubuntu-latest` moves there between
+# 2026-10-19 and 2026-11-19, and pinning means that move happened in a pull
+# request that proved it, not on a random day in the rollout window.
+
 jobs:
-  # Decides whether the Windows job is worth its 10+ minutes; the validate
-  # job asks the same question itself, per step, so it does not wait for
-  # this one. A job skipped by its `if:` reports success, so `windows` can
-  # stay a required check.
+  # Decides whether the Windows shards are worth their runners. Only a pull
+  # request that touches nothing but prose skips them; the Linux suite in
+  # `validate` always runs, because tests under `tests/docs/` (and the
+  # egress census) read `docs/cli-reference.md` and CHANGELOG.md.
   changes:
     name: changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
       code: ${{ steps.scope.outputs.code }}
@@ -41,20 +45,13 @@ jobs:
 
   validate:
     name: validate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 2
-
-      # A pull request that changes only prose still gets every static
-      # check below (the link ratchet is the one it needs most); only the
-      # test suites, which read no prose, are skipped for it.
-      - name: Classify the changed paths
-        id: scope
-        run: .github/scripts/ci-scope.sh
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -68,6 +65,17 @@ jobs:
 
       - name: Install JS dependencies
         run: bun install --frozen-lockfile
+
+      # Per-file durations from the last run on main. `--parallel` starts the
+      # slowest files first with them, and the Windows shards split the suite
+      # by time instead of by file count. A miss only costs the ordering.
+      - name: Restore test timings
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .bun-timings.json
+          key: bun-timings-${{ github.run_id }}
+          restore-keys: bun-timings-
+          enableCrossOsArchive: true
 
       # The anti-drift test compares the vendored Hermes schemas against a
       # LIVE `tools/list`, and skips itself when `o2b` is not on PATH. It has
@@ -124,27 +132,17 @@ jobs:
 
       # The Python tests take seconds and share nothing with the Bun suite,
       # so they run in the background while it does.
-      # The skip for a prose-only change lives in the script, not in `if:`:
-      # the step always runs, so the `wait` below always has a step to join.
       - name: Python plugin tests
         id: python-tests
         background: true
-        env:
-          CODE: ${{ steps.scope.outputs.code }}
-        shell: bash
-        run: |
-          if [ "$CODE" = "false" ]; then
-            echo "prose-only change: Python tests skipped"
-            exit 0
-          fi
-          python -m unittest discover -s tests/python -v
+        run: python -m unittest discover -s tests/python -v
 
       # One worker per core (each file in a fresh global, `--parallel`
-      # implies `--isolate`): the suite was the whole length of this job,
-      # five to seven minutes serially.
+      # implies `--isolate`): serially the suite was five to seven minutes,
+      # the whole length of this job. The run rewrites the timings file the
+      # next runs on main and on pull requests start from.
       - name: TypeScript test suite
-        if: steps.scope.outputs.code != 'false'
-        run: bun test --parallel
+        run: bun test --parallel --timings=.bun-timings.json --update-timings
 
       - name: Wait for the Python plugin tests
         wait: python-tests
@@ -156,15 +154,15 @@ jobs:
         run: |
           set -euo pipefail
           python -m unittest test_static_schemas -v 2>&1 \
-            | tee /tmp/anti-drift.log
-          grep -q "test_static_schemas_match_live_tools_list" /tmp/anti-drift.log
+            | tee "$RUNNER_TEMP/anti-drift.log"
+          grep -q "test_static_schemas_match_live_tools_list" "$RUNNER_TEMP/anti-drift.log"
           # ANY skip of that test, not one message. It skips for two reasons -
           # no CLI on PATH, and a CLI that is there but whose server does not
           # come up - and matching the first message alone left the second
           # reading as a pass, which is the hole this step exists to close.
           if grep -qE 'test_static_schemas_match_live_tools_list.* \.\.\. skipped' \
-            /tmp/anti-drift.log; then
-            grep -E ' \.\.\. skipped' /tmp/anti-drift.log >&2
+            "$RUNNER_TEMP/anti-drift.log"; then
+            grep -E ' \.\.\. skipped' "$RUNNER_TEMP/anti-drift.log" >&2
             echo "anti-drift skipped itself; the live server was not reachable" >&2
             exit 1
           fi
@@ -173,6 +171,16 @@ jobs:
       - name: Python package compiles
         run: python -m compileall -q plugins/hermes
 
+      # Only main writes the timings; a pull request reads main's copy and
+      # never replaces it with its own branch's numbers.
+      - name: Save test timings
+        if: github.event_name == 'push'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .bun-timings.json
+          key: bun-timings-${{ github.run_id }}
+          enableCrossOsArchive: true
+
   # `hermes plugins install itechmeat/open-second-brain` runs Hermes' own
   # scanner over the whole clone and refuses a "dangerous" verdict with no
   # override (#188). This runs that scanner, fetched at a pinned commit and
@@ -180,7 +188,7 @@ jobs:
   # is the one that fails. Actions are pinned by commit SHA.
   hermes-plugin-scan:
     name: hermes plugin scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - name: Check out repository
@@ -210,19 +218,42 @@ jobs:
   # that must be closed before a rename, in-process gzip snapshots - on the
   # platform they exist for. Checks that are platform-independent are not
   # repeated here.
-  windows:
-    name: windows
+  #
+  # The suite is bound by the disk and Defender here, not by the CPU: run
+  # with `--parallel` on one runner it took as long as serially (21 minutes,
+  # every test about 3.5x slower). So it is split across three runners,
+  # each with its own disk, and `--shard` balances them by the timings
+  # `validate` records on main.
+  windows-tests:
+    name: windows (${{ matrix.shard }}/3)
     needs: changes
     # Runs unless the filter positively said "prose only": a failed or
-    # empty filter falls back to running the job, never to skipping it.
+    # empty filter falls back to running the shards, never to skipping them.
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: windows-latest
-    # The suite takes 20 minutes on a good day and has taken over 45 on a
-    # slow runner (every file about 2.5x slower, nothing hung); the bound is
-    # there so a hung test cannot hold a runner for GitHub's six-hour
-    # default, not to police the runner's speed.
-    timeout-minutes: 75
+    # A shard takes about a third of the old 20-45 minutes. The bound is there
+    # so a hung test cannot hold a runner for GitHub's six-hour default; the
+    # watchdog below fires first and records what was still running.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
+      # Real-time scanning inspects every file the fixtures write and every
+      # bun.exe the hook and CLI tests spawn. The runner is thrown away after
+      # the job, so there is nothing for it to protect. Started first and in
+      # the background so it overlaps the checkout and the tool setup; a
+      # refusal only costs speed, so it may fail without failing the job.
+      - name: Turn off Defender real-time scanning
+        id: defender
+        background: true
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Set-MpPreference -DisableRealtimeMonitoring $true
+          "real-time monitoring disabled: $((Get-MpPreference).DisableRealtimeMonitoring)"
+
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -241,42 +272,113 @@ jobs:
       - name: Install JS dependencies
         run: bun install --frozen-lockfile
 
+      - name: Restore test timings
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .bun-timings.json
+          key: bun-timings-${{ github.run_id }}
+          restore-keys: bun-timings-
+          enableCrossOsArchive: true
+
       - name: Publish o2b on PATH (the anti-drift test needs the live server)
         shell: bash
         run: echo "$GITHUB_WORKSPACE/scripts" >> "$GITHUB_PATH"
 
-      - parallel:
-          # The one validate-job check repeated here, because it is about the
-          # checkout: the mirrors must come out of a Windows clone as the same
-          # bytes (LF, per .gitattributes) and as real files, not as symlinks
-          # materialised as text.
-          - name: Codex plugin mirrors are in sync
-            run: bun run sync-plugin-mirrors:check
+      # The one validate-job check repeated here, because it is about the
+      # checkout: the mirrors must come out of a Windows clone as the same
+      # bytes (LF, per .gitattributes) and as real files, not as symlinks
+      # materialised as text.
+      - name: Codex plugin mirrors are in sync
+        run: bun run sync-plugin-mirrors:check
 
-          - name: Typecheck
-            run: bun run typecheck
+      # Steps that need to run once, not once per shard, run on shard 1. The
+      # check sits in the script rather than in `if:`, so the `wait` below
+      # always has a step to join.
+      - name: Typecheck (shard 1)
+        id: typecheck
+        background: true
+        shell: bash
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          [ "$SHARD" = "1" ] || { echo "runs on shard 1"; exit 0; }
+          bun run typecheck
 
-      - name: Python plugin tests
+      - name: Python plugin tests (shard 1)
         id: python-tests
         background: true
-        run: python -m unittest discover -s tests/python -v
+        shell: bash
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          [ "$SHARD" = "1" ] || { echo "runs on shard 1"; exit 0; }
+          python -m unittest discover -s tests/python -v
 
-      # GitHub's Windows runners take about twice as long as Linux over the
-      # same suite (NTFS and Defender on every file the fixtures touch), so
-      # Bun's 5 s default - which also bounds beforeEach/afterEach hooks -
+      # Samples CPU, disk queue, free memory and the bun.exe count every 10 s
+      # while the suite runs, so a slow day on a slow runner shows up as data
+      # in the job's artifact instead of a guess.
+      - name: Record runner load
+        id: telemetry
+        background: true
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'telemetry\runner-load.csv'
+          New-Item -ItemType Directory -Force (Split-Path $out) | Out-Null
+          'time,cpu_pct,disk_queue,free_mb,bun_procs' | Set-Content $out
+          $counters = '\Processor(_Total)\% Processor Time',
+                      '\PhysicalDisk(_Total)\Current Disk Queue Length',
+                      '\Memory\Available MBytes'
+          while ($true) {
+            $v = (Get-Counter $counters -ErrorAction SilentlyContinue).CounterSamples.CookedValue
+            $n = @(Get-Process bun -ErrorAction SilentlyContinue).Count
+            '{0:HH:mm:ss},{1:N0},{2:N1},{3:N0},{4}' -f (Get-Date), $v[0], $v[1], $v[2], $n |
+              Add-Content $out
+            Start-Sleep -Seconds 10
+          }
+
+      # Fires at 20 minutes, well past a healthy shard and before the job's
+      # timeout, and writes down every bun, node and python process with its
+      # command line and age: a hang leaves the name of what was stuck.
+      - name: Hang watchdog
+        id: watchdog
+        background: true
+        shell: pwsh
+        run: |
+          Start-Sleep -Seconds 1200
+          $out = Join-Path $env:RUNNER_TEMP 'telemetry\hang-dump.txt'
+          New-Item -ItemType Directory -Force (Split-Path $out) | Out-Null
+          Get-CimInstance Win32_Process |
+            Where-Object { $_.Name -match '^(bun|node|python)' } |
+            Select-Object ProcessId, ParentProcessId,
+              @{ n = 'Minutes'; e = { [int]((Get-Date) - $_.CreationDate).TotalMinutes } },
+              CommandLine |
+            Format-Table -AutoSize -Wrap | Out-String -Width 400 |
+            Tee-Object -FilePath $out
+          "::warning::shard still running after 20 minutes; process dump in the windows-telemetry artifact"
+
+      - name: Wait for Defender to be off
+        wait: defender
+
+      # GitHub's Windows runners are slower than Linux over the same suite,
+      # so Bun's 5 s default - which also bounds beforeEach/afterEach hooks -
       # times out tests that pass locally. Tests with their own timeout keep it.
-      # Serially the suite took 20 to 45 minutes here; one worker per core
-      # is what brings it down.
-      - name: TypeScript test suite
-        run: bun test --parallel --timeout 30000
+      - name: TypeScript test suite (shard ${{ matrix.shard }}/3)
+        run: bun test --shard=${{ matrix.shard }}/3 --timings=.bun-timings.json --timeout 30000
 
-      - name: Wait for the Python plugin tests
-        wait: python-tests
+      - name: Wait for the typecheck and the Python plugin tests
+        wait: [typecheck, python-tests]
+
+      - name: Stop the load recorder
+        cancel: telemetry
+
+      - name: Stop the hang watchdog
+        cancel: watchdog
 
       # Same assertion as in the validate job: on Windows the anti-drift test
       # reaches the server through `o2b.cmd`, a path of its own, and a skip
       # would read as a pass here just as it did there.
       - name: The anti-drift test actually ran
+        if: matrix.shard == 1
         shell: bash
         run: |
           set -euo pipefail
@@ -292,5 +394,32 @@ jobs:
         working-directory: tests/python
 
       - name: The .cmd launcher runs the CLI
+        if: matrix.shard == 1
         shell: cmd
         run: scripts\o2b.cmd --version
+
+      - name: Upload runner telemetry
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-telemetry-${{ matrix.shard }}
+          path: ${{ runner.temp }}/telemetry/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # One stable check name over the three shards, so a ruleset can require
+  # `windows` without listing shard names. Shards skipped for a prose-only
+  # pull request count as passed.
+  windows:
+    name: windows
+    needs: windows-tests
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 2
+    steps:
+      - name: Every Windows shard passed or was skipped
+        env:
+          RESULT: ${{ needs.windows-tests.result }}
+        run: |
+          echo "windows shards: $RESULT"
+          [ "$RESULT" = "success" ] || [ "$RESULT" = "skipped" ]

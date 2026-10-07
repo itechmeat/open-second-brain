@@ -16,8 +16,10 @@ on:
         default: false
         type: boolean
 
+# Read-only by default: the verify job runs the tree's own code and never
+# needs to write. Only the job that publishes the release gets write access.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref_name }}-${{ github.event.inputs.version || '' }}
@@ -26,10 +28,37 @@ concurrency:
 jobs:
   verify:
     name: Verify
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      checks: read
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # A release tags a commit that already went through CI on main. When
+      # `validate` and `windows` both passed on this exact commit, running
+      # the same suites again proves nothing new; the cheap packaging checks
+      # below still run either way. No green CI on the commit (a tag pushed
+      # early, a manual dispatch elsewhere) means the suites run here.
+      - name: CI already passed on this commit?
+        id: ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          passed=true
+          for check in validate windows; do
+            conclusion=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?check_name=$check" \
+              -q '[.check_runs[] | select(.app.slug == "github-actions")] | sort_by(.completed_at) | last | .conclusion // ""' \
+              || true)
+            echo "$check on $GITHUB_SHA: ${conclusion:-none}"
+            [ "$conclusion" = "success" ] || passed=false
+          done
+          echo "passed=$passed" >> "$GITHUB_OUTPUT"
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -54,9 +83,11 @@ jobs:
         run: bun run typecheck
 
       - name: Run TypeScript test suite (bun:test)
-        run: bun test
+        if: steps.ci.outputs.passed != 'true'
+        run: bun test --parallel
 
       - name: Run Python plugin tests
+        if: steps.ci.outputs.passed != 'true'
         run: python -m unittest discover -s tests/python -v
 
       - name: Validate manifests and CLI scripts
@@ -98,7 +129,9 @@ jobs:
   release:
     name: Build and publish GitHub release
     needs: verify
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: write
     # Only fire on actual release events — every push triggers `verify`,
     # but only tag pushes / workflow_dispatch should publish.
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
