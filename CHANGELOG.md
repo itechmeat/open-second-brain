@@ -21,6 +21,7 @@ Open Second Brain now defends against near-duplicate memory at the points a fact
 
 ### Changed
 
+- **Wave playbooks.** The feature-release playbook (1.4.0) records the picked cards for the wave's reviewers and merges the green pull request itself, squash and verified head, under the operator's 2026-10-06 merge authorization; the pr-prepare playbook (1.2.0) handles the bot review while CI runs, waits out its bot budget with one final CI watch, and reaches ready on a green gate when the bot review pushed nothing.
 - **Extract payloads that repeat a topic are refused.** Two items sharing a `topic` refuse the whole payload, naming both items, and nothing is written.
 - **Docs:** `docs/mcp.md` gains the retire siblings, the receipt widening and reach, the `turns_mined` timestamps and the write stages, `docs/observability.md` the `stages` field, its allowlist and the routes that emit it, and `docs/cli-reference.md` the extract-signals timestamps and topic refusal; the `o2b brain reject` help names the retire siblings.
 
