@@ -13,10 +13,10 @@ Spine: one near-duplicate candidate lookup built on the existing similarity mach
 
 # Verified premise reports (read all four files before answering)
 
-- /home/techmeat/.cache/osb-wave-20261007/design/premise-t_acab97de.md
-- /home/techmeat/.cache/osb-wave-20261007/design/premise-t_fda66477.md
-- /home/techmeat/.cache/osb-wave-20261007/design/premise-t_b915b9cc.md
-- /home/techmeat/.cache/osb-wave-20261007/design/premise-t_72e93e18.md
+- <wave-cache>/design/premise-t_acab97de.md
+- <wave-cache>/design/premise-t_fda66477.md
+- <wave-cache>/design/premise-t_b915b9cc.md
+- <wave-cache>/design/premise-t_72e93e18.md
 
 Key verified corrections to respect:
 - The hygiene apply "forget" action exists but NO detector ever proposes it, so a sibling scan hooked into the apply path would never fire; retirement actually happens through merge/archive/recompile today.
