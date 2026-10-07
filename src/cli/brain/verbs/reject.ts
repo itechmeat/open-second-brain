@@ -89,9 +89,12 @@ export async function cmdBrainReject(argv: string[]): Promise<number> {
 
   // Near-duplicate defense: list (never retire) the active preferences that
   // resemble the one just rejected. The operator's own shell reads the whole
-  // vault, hence READ_ALL_REFS. Off, the output is unchanged.
-  const siblings = resolveNearDuplicateRetireSiblingsEnabled(config)
-    ? planRetireSiblings(
+  // vault, hence READ_ALL_REFS. Off, the output is unchanged. The retire
+  // has already happened, so a failing scan is a warning, never an error.
+  let siblings: ReadonlyArray<RetireSibling> = [];
+  if (resolveNearDuplicateRetireSiblingsEnabled(config)) {
+    try {
+      siblings = planRetireSiblings(
         retireSiblingPool(scanBrain(vault).preferences.map((p) => p.pref)),
         [
           {
@@ -101,8 +104,11 @@ export async function cmdBrainReject(argv: string[]): Promise<number> {
           },
         ],
         { readable: READ_ALL_REFS, gated: new Set() },
-      )
-    : [];
+      );
+    } catch (err) {
+      process.stderr.write(`warning: retire siblings scan failed: ${(err as Error).message}\n`);
+    }
+  }
 
   if (flags["json"]) {
     okJson({

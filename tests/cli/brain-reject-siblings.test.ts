@@ -8,7 +8,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -105,6 +105,18 @@ describe("brain reject retire siblings", () => {
     rmSync(join(vault, "Brain", "retired", "ret-old.md"));
     const json = await reject(false, ["--json"]);
     expect(JSON.parse(json.stdout)).toEqual({ ok: true, id: "ret-old", reason: "user-rejected" });
+  });
+
+  test("a sibling scan that fails after the retire is a warning, not a failed reject", async () => {
+    // A file where the archived-signal directory belongs makes the scan throw.
+    const archived = join(vault, "Brain", "inbox", "archived");
+    rmSync(archived, { recursive: true, force: true });
+    writeFileSync(archived, "not a directory");
+    const r = await reject(true);
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toBe("retired: ret-old (user-rejected)\n");
+    expect(r.stderr).toContain("warning: retire siblings scan failed");
+    expect(names("retired")).toEqual(["ret-old.md"]);
   });
 
   test("nothing besides the rejected preference is retired", async () => {
