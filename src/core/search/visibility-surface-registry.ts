@@ -911,7 +911,9 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "counts the siblings it skipped or could not read; noteWriteResult binds the lint to " +
       "readableAtContextReach(ctx), so a sibling the caller may not read is dropped at the " +
       "directory listing, before it is scored and before candidates_skipped or " +
-      "candidates_unreadable count it, and the receipt answers as if the page were absent. " +
+      "candidates_unreadable count it; the wikilink and merged-link checks ask the same " +
+      "predicate, so a link to a withheld Brain page reads as broken and a merge chain ends at " +
+      "its first withheld hop, and the receipt answers as if the page were absent. " +
       "A create onto an occupied withheld path still refuses as occupied, the inherent " +
       "create-collision residual.",
   },
@@ -925,7 +927,9 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "counts the siblings it skipped or could not read; noteWriteResult binds the lint to " +
       "readableAtContextReach(ctx), so a sibling the caller may not read is dropped at the " +
       "directory listing, before it is scored and before candidates_skipped or " +
-      "candidates_unreadable count it, and the receipt answers as if the page were absent. " +
+      "candidates_unreadable count it; the wikilink and merged-link checks ask the same " +
+      "predicate, so a link to a withheld Brain page reads as broken and a merge chain ends at " +
+      "its first withheld hop, and the receipt answers as if the page were absent. " +
       "The target itself resolves through the same predicate and a withheld one is refused " +
       "with the error a missing note gets.",
   },
@@ -939,7 +943,9 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "counts the siblings it skipped or could not read; noteWriteResult binds the lint to " +
       "readableAtContextReach(ctx), so a sibling the caller may not read is dropped at the " +
       "directory listing, before it is scored and before candidates_skipped or " +
-      "candidates_unreadable count it, and the receipt answers as if the page were absent. " +
+      "candidates_unreadable count it; the wikilink and merged-link checks ask the same " +
+      "predicate, so a link to a withheld Brain page reads as broken and a merge chain ends at " +
+      "its first withheld hop, and the receipt answers as if the page were absent. " +
       "The target itself resolves through the same predicate and a withheld one is refused " +
       "with the error a missing note gets.",
   },
@@ -953,7 +959,9 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "counts the siblings it skipped or could not read; noteWriteResult binds the lint to " +
       "readableAtContextReach(ctx), so a sibling the caller may not read is dropped at the " +
       "directory listing, before it is scored and before candidates_skipped or " +
-      "candidates_unreadable count it, and the receipt answers as if the page were absent. " +
+      "candidates_unreadable count it; the wikilink and merged-link checks ask the same " +
+      "predicate, so a link to a withheld Brain page reads as broken and a merge chain ends at " +
+      "its first withheld hop, and the receipt answers as if the page were absent. " +
       "Every page the batch committed is linted under the one predicate, and the update and " +
       "append operations refuse a withheld target with the error a missing note gets.",
   },

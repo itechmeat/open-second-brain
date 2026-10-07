@@ -493,7 +493,9 @@ function runSingleWrite<K extends SingleNoteOperation["kind"]>(
  * means no bytes were authored, so there is nothing to lint.
  *
  * The lint answers at the caller's reach: a near-duplicate sibling the
- * caller may not read is never named, scored or counted on the receipt.
+ * caller may not read is never named, scored or counted on the receipt, a
+ * wikilink to a withheld Brain page reads as broken, and a merge chain
+ * ends at its first withheld hop, as they would if the page were absent.
  *
  * With `near_duplicate_write_widening_enabled` on, the near-duplicate hint
  * also compares the pages with keyword-index candidates from other

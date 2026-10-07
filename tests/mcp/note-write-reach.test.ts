@@ -164,3 +164,51 @@ describe("the near-duplicate receipt hint never names a withheld sibling", () =>
     });
   }
 });
+
+/**
+ * The receipt's wikilink and merged-link findings answer at the caller's
+ * reach as well. A preference that reserved itself is reported the way a
+ * preference that never existed is: a link to it reads as broken, and a
+ * merge chain through it ends at its id without naming where it points.
+ */
+describe("the receipt's link findings never reach past a withheld page", () => {
+  const PREFS = join("Brain", "preferences");
+
+  function writePref(f: Fixture, slug: string, fields: string): void {
+    writeFileSync(
+      join(f.vault, PREFS, `pref-${slug}.md`),
+      `---\nid: pref-${slug}\ntopic: x\nprinciple: y\n${fields}---\n`,
+    );
+  }
+
+  /** A vault with a public pref merged into `pref-held`, private or absent. */
+  function linkFixture(withHeld: boolean, reach?: typeof TRANSPORT_REACH.local): Fixture {
+    const f = fixture(false, reach);
+    writePref(f, "canon", "");
+    writePref(f, "dup", "merged_into: pref-held\n");
+    if (withHeld) writePref(f, "held", "visibility: private\nmerged_into: pref-canon\n");
+    return f;
+  }
+
+  const LINKS = ["[[pref-held]]", "[[pref-dup]]"];
+
+  for (const link of LINKS) {
+    const args = { path: "Notes/mine.md", content: `see ${link}\n` };
+
+    test(`a link ${link} answers as if the page were absent`, async () => {
+      const hidden = await receipt(linkFixture(true), "brain_create_note", args);
+      expect(hidden).not.toContain("pref-canon");
+      expect(hidden).toBe(await receipt(linkFixture(false), "brain_create_note", args));
+    });
+  }
+
+  test("at local reach the chain is followed to its canonical end", async () => {
+    const args = { path: "Notes/mine.md", content: "see [[pref-dup]]\n" };
+    const local = await receipt(
+      linkFixture(true, TRANSPORT_REACH.local),
+      "brain_create_note",
+      args,
+    );
+    expect(local).toContain("merged into pref-canon");
+  });
+});

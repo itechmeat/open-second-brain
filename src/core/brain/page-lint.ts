@@ -80,8 +80,8 @@
  * absent `lint` key must mean clean, and only that.
  */
 
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { posix, resolve } from "node:path";
+import { lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { join, posix, resolve } from "node:path";
 
 import { vaultRelative } from "../path-safety.ts";
 import { ROUTE_STAGE, timeStageSync } from "../route-scope.ts";
@@ -92,9 +92,12 @@ import { collectAllBasenames } from "./doctor/records.ts";
 import {
   LINT_CONSOLIDATE_KIND,
   createMergedLinkResolver,
+  type MergedLinkResolution,
   type MergedLinkResolver,
 } from "./lint-consolidate.ts";
 import { nextCommandField, type NextCommandField } from "./next-step.ts";
+import { pageIdToPath, reportMergeChain } from "./page-meta/page-id.ts";
+import { brainDirs } from "./paths.ts";
 import { loadSchemaPack } from "./schema-pack.ts";
 import type { BrainSchemaVocabulary } from "./schema-vocab.ts";
 import {
@@ -305,8 +308,9 @@ export interface LintWrittenPagesOptions {
   /**
    * The caller's reach. Required, never defaulted: a sibling page the
    * caller may not read is dropped before it is scored and before the
-   * census counts it, so neither a finding nor a census number can
-   * disclose it. An operator-reach caller passes `READ_ALL_REFS`.
+   * census counts it, and a wikilink target or merge-chain hop the caller
+   * may not read answers as absent, so neither a finding nor a census
+   * number can disclose it. An operator-reach caller passes `READ_ALL_REFS`.
    */
   readonly readable: ReadableRef;
   /**
@@ -422,7 +426,11 @@ export interface LintContext {
    * directory's candidates.
    */
   readonly extraCandidates?: ReadonlyArray<NearDuplicateCandidate>;
-  /** The caller's reach, applied again by the kernel before any score. */
+  /**
+   * The caller's reach, applied again by the kernel before any score, and
+   * by the wikilink and merged-link checks, so a withheld page answers as
+   * an absent one on every finding.
+   */
   readonly readable: ReadableRef;
   /** What the candidate index left out; absent means nothing was. */
   readonly nearDuplicateCensus?: NearDuplicateCensus;
@@ -477,7 +485,66 @@ function poolEntry(candidate: NearDuplicateCandidate): NearDuplicatePoolEntry {
   return { ref: candidate.page, tokens: candidate.tokens, bucket: candidate.scopeKey };
 }
 
-function lintOnePage(ctx: LintContext, page: string, raw: string): PageLintFinding[] {
+const NOT_MERGED: MergedLinkResolution = Object.freeze({ canonical: null, unresolvable: null });
+
+/** Whether `id` names a Brain page on disk the caller may not read. */
+function isWithheldPageId(vault: string, ctx: LintContext, id: string): boolean {
+  const path = pageIdToPath(vault, id);
+  return path !== null && !ctx.readable(vaultRelative(path, vault));
+}
+
+/**
+ * The merge-chain answer for one wikilink target at the caller's reach.
+ *
+ * The vault-wide resolver reads the `merged_into:` pointer of every page
+ * on the chain. A page the caller may not read answers as an absent one
+ * would: the walk ends at its id, the way it ends at a page with no file.
+ * So a withheld target is not merged at all, and a chain that reaches a
+ * withheld page names that page's id as the canonical end and nothing it
+ * points at. Only a link the resolver found merged pays the second walk.
+ */
+function mergedAtReach(vault: string, ctx: LintContext, target: string): MergedLinkResolution {
+  const merged = ctx.mergedLinks.resolve(target);
+  if (merged.canonical === null && merged.unresolvable === null) return merged;
+  const { visited } = reportMergeChain(vault, target);
+  const withheld = visited.findIndex((id) => isWithheldPageId(vault, ctx, id));
+  if (withheld === -1) return merged;
+  if (withheld === 0) return NOT_MERGED;
+  return Object.freeze({ canonical: visited[withheld]!, unresolvable: null });
+}
+
+/**
+ * Whether a Brain artifact named `target` exists where the caller may read
+ * it. `basenames` answers the vault-wide question once per call; a hit is
+ * asked again per directory `collectAllBasenames` indexes, so an artifact
+ * the caller may not read answers as an absent one. Only a linked name
+ * that exists pays the per-directory check.
+ */
+function hasReadableArtifact(vault: string, ctx: LintContext, target: string): boolean {
+  if (!ctx.basenames.has(target)) return false;
+  const dirs = brainDirs(vault);
+  for (const dir of [
+    dirs.brain,
+    dirs.inbox,
+    dirs.processed,
+    dirs.archived,
+    dirs.preferences,
+    dirs.retired,
+    dirs.log,
+  ]) {
+    const absolute = join(dir, `${target}.md`);
+    if (!ctx.readable(vaultRelative(absolute, vault))) continue;
+    if (lstatSync(absolute, { throwIfNoEntry: false })?.isFile() === true) return true;
+  }
+  return false;
+}
+
+function lintOnePage(
+  vault: string,
+  ctx: LintContext,
+  page: string,
+  raw: string,
+): PageLintFinding[] {
   const out: PageLintFinding[] = [];
   const [meta, body] = parseFrontmatterText(raw);
   const schemaType = declaredSchemaType(meta);
@@ -489,7 +556,7 @@ function lintOnePage(ctx: LintContext, page: string, raw: string): PageLintFindi
     // note, and is nobody's here to flag - the same boundary the doctor
     // and the orphaned-reference fixer draw.
     if (!isBrainArtifactId(target)) continue;
-    const merged = ctx.mergedLinks.resolve(target);
+    const merged = mergedAtReach(vault, ctx, target);
     if (merged.unresolvable !== null) {
       out.push(
         finding(
@@ -514,7 +581,7 @@ function lintOnePage(ctx: LintContext, page: string, raw: string): PageLintFindi
       );
       continue;
     }
-    if (!ctx.basenames.has(target)) {
+    if (!hasReadableArtifact(vault, ctx, target)) {
       out.push(
         finding(
           "warning",
@@ -655,8 +722,10 @@ function collectNearDuplicateCandidates(
  * directories - the near-duplicate candidate index reads each of those
  * once per call, sized against the same artifact cap as the pages.
  *
- * The near-duplicate candidates answer at the caller's reach
- * (`opts.readable`); the written pages themselves are always linted.
+ * Every finding answers at the caller's reach (`opts.readable`): a
+ * near-duplicate candidate, a wikilink target and a merge-chain hop the
+ * caller may not read all read as absent. The written pages themselves
+ * are always linted.
  */
 export function lintWrittenPages(
   vault: string,
@@ -734,7 +803,7 @@ export function lintPagesWithContext(
       continue;
     }
     try {
-      detected.push(...lintOnePage(ctx, page, raw));
+      detected.push(...lintOnePage(vault, ctx, page, raw));
     } catch (err) {
       // One page's failure is one page's news. Reporting it as `unavailable`
       // threw away the findings already collected for EARLIER pages and the

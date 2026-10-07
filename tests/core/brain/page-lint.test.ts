@@ -11,7 +11,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -567,6 +567,53 @@ describe("lintWrittenPages - near-duplicate candidates at the caller's reach", (
       },
     });
     expect([...new Set(asked)].toSorted()).toEqual(["Notes/Alpha.md", "Notes/Beta.md"]);
+  });
+});
+
+/**
+ * The wikilink and merged-link findings answer at the caller's reach too. A
+ * Brain page the caller may not read must produce the receipt a vault
+ * without that page produces, byte for byte, whichever finding it would
+ * otherwise have shaped.
+ */
+describe("lintWrittenPages - link findings at the caller's reach", () => {
+  const prefPath = (slug: string) => `Brain/preferences/pref-${slug}.md`;
+  const withhold = (slug: string) => ({ readable: (rel: string) => rel !== prefPath(slug) });
+
+  /** The report with `slug` withheld, then the report with `slug` deleted. */
+  function withheldThenAbsent(slug: string, rel: string): [string, string] {
+    const withheld = JSON.stringify(lintWrittenPages(vault, [rel], withhold(slug)));
+    unlinkSync(join(vault, prefPath(slug)));
+    return [withheld, JSON.stringify(lintWrittenPages(vault, [rel], READ_ALL))];
+  }
+
+  test("a link to a withheld page is reported as broken, as an absent one is", () => {
+    writePref("hidden");
+    const rel = writeNote("Notes/Links.md", "---\ntitle: L\n---\n\nsee [[pref-hidden]]\n");
+    expect(lintWrittenPages(vault, [rel], READ_ALL).findings).toEqual([]);
+    const [withheld, absent] = withheldThenAbsent("hidden", rel);
+    expect(withheld).toBe(absent);
+    expect(withheld).toContain("broken-wikilink");
+  });
+
+  test("a withheld merged-away target is not followed into its canonical", () => {
+    writePref("canon");
+    writePref("dup", { merged_into: "pref-canon" });
+    const rel = writeNote("Notes/Merged.md", "---\ntitle: M\n---\n\nsee [[pref-dup]]\n");
+    const [withheld, absent] = withheldThenAbsent("dup", rel);
+    expect(withheld).toBe(absent);
+    expect(withheld).not.toContain("pref-canon");
+  });
+
+  test("a merge chain ends at a withheld hop and names nothing past it", () => {
+    writePref("canon");
+    writePref("mid", { merged_into: "pref-canon" });
+    writePref("dup", { merged_into: "pref-mid" });
+    const rel = writeNote("Notes/Merged.md", "---\ntitle: M\n---\n\nsee [[pref-dup]]\n");
+    const [withheld, absent] = withheldThenAbsent("mid", rel);
+    expect(withheld).toBe(absent);
+    expect(withheld).toContain("merged into pref-mid");
+    expect(withheld).not.toContain("pref-canon");
   });
 });
 
