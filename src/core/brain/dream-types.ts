@@ -268,4 +268,10 @@ export interface DreamOptions {
    * `dryRun: true` throws `DreamPreviewReadableError`.
    */
   readonly previewReadable?: (rel: string) => boolean;
+  /**
+   * Whether the summary carries `retire_siblings`. Omitted, it resolves
+   * `near_duplicate_retire_siblings_enabled` from the default config; a
+   * caller with its own config path (the MCP server) resolves it there.
+   */
+  readonly retireSiblingsEnabled?: boolean;
 }

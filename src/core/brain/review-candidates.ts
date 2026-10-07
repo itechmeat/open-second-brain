@@ -117,6 +117,12 @@ export interface BuildReviewCandidatesOptions {
    */
   readonly retiringVisible?: (prefId: string) => boolean;
   /**
+   * Whether to project `retire_siblings`. Omitted, it resolves
+   * `near_duplicate_retire_siblings_enabled` from the default config; a
+   * caller with its own config path (the MCP server) resolves it there.
+   */
+  readonly retireSiblingsEnabled?: boolean;
+  /**
    * When provided, annotate the report with surprisal novelty over
    * the existing vec index (t_fddfe64a). Read-only; absent or
    * unembedded indexes leave the report unchanged.
@@ -159,8 +165,10 @@ export async function buildReviewCandidates(
   vault: string,
   opts: BuildReviewCandidatesOptions = {},
 ): Promise<ReviewCandidatesReport> {
+  const siblingsEnabled = opts.retireSiblingsEnabled ?? resolveNearDuplicateRetireSiblingsEnabled();
   const summary = dream(vault, {
     dryRun: true,
+    retireSiblingsEnabled: siblingsEnabled,
     ...(opts.now ? { now: opts.now } : {}),
     ...(opts.safeguard !== undefined ? { safeguard: opts.safeguard } : {}),
     ...(opts.onProgress !== undefined ? { onProgress: opts.onProgress } : {}),
@@ -178,7 +186,7 @@ export async function buildReviewCandidates(
     }
   }
 
-  const siblings = resolveNearDuplicateRetireSiblingsEnabled()
+  const siblings = siblingsEnabled
     ? await projectRetireSiblings(vault, summary, opts)
     : { siblings: [] };
 

@@ -215,6 +215,14 @@ describe("buildReviewCandidates retire_siblings", () => {
     },
   );
 
+  test("an explicit retireSiblingsEnabled decides over the default config", async () => {
+    const on = await buildReviewCandidates(vault, { now: NOW, retireSiblingsEnabled: true });
+    expect(on.retire_siblings).toEqual([LEXICAL]);
+    process.env[FLAG_ENV] = "1";
+    const off = await buildReviewCandidates(vault, { now: NOW, retireSiblingsEnabled: false });
+    expect("retire_siblings" in off).toBe(false);
+  });
+
   test("with the key off, both fields are absent", async () => {
     const r = await buildReviewCandidates(vault, { now: NOW, searchConfig: searchConfig() });
     expect("retire_siblings" in r).toBe(false);

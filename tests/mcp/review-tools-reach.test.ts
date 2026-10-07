@@ -306,6 +306,31 @@ describe("brain_review_candidates retire_siblings answer at the caller's reach",
     expect(remote).toBe(await answer(absent, "brain_review_candidates"));
   });
 
+  test("the key is read from the server's own config file, not the default one", async () => {
+    delete process.env[SIBLINGS_FLAG];
+    const base = mkdtempSync(join(tmpdir(), "o2b-review-siblings-config-"));
+    bases.push(base);
+    const f = buildReachLogFixture(base, false, ['near_duplicate_retire_siblings_enabled: "true"']);
+    rule(f.vault, "public-old", `${SIBLING_RULE} alpha`, false);
+    rule(f.vault, "public-twin", `${SIBLING_PARAPHRASE} alpha`, false);
+    evidence(f.vault, "public-twin", "applied");
+    evidence(f.vault, "public-old", "outdated");
+    const server = reachServer(f, TRANSPORT_REACH.local);
+    // The default config is now a file without the key.
+    const otherConfig = join(base, "other-config.yaml");
+    writeFileSync(otherConfig, `vault: ${f.vault}\n`);
+    process.env["OPEN_SECOND_BRAIN_CONFIG"] = otherConfig;
+    const result = await server.callTool("brain_review_candidates", {});
+    expect(siblingsOf(maskVolatile(f, result["structuredContent"] ?? result))).toEqual([
+      {
+        retiring_id: "pref-public-old",
+        sibling_id: "pref-public-twin",
+        score: 0.833,
+        method: "lexical",
+      },
+    ]);
+  });
+
   test("local control: the operator's own shell lists every pair", async () => {
     process.env[SIBLINGS_FLAG] = "1";
     const local = await answer(

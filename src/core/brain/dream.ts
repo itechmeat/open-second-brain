@@ -532,7 +532,7 @@ function dreamRun(
     healEnriched: exec.healEnriched,
     snapshotPath: snapshotPathStr,
   });
-  return withRetireSiblings(summary, scan, plan, exec.gatedRetires);
+  return withRetireSiblings(summary, scan, plan, exec.gatedRetires, opts.retireSiblingsEnabled);
 }
 
 /**
@@ -540,16 +540,20 @@ function dreamRun(
  * changed run's summary. Computed from the completed retire plan, so the
  * dry run and the real run agree, then reconciled against the retires the
  * apply step gated. The scan is the pass's own reach (a preview scan is
- * already admitted), hence {@link READ_ALL_REFS}. Off, or with nothing to
- * report, the summary is returned untouched.
+ * already admitted), hence {@link READ_ALL_REFS}. Off (`enabled`, else the
+ * default config's key), or with nothing to report, the summary is
+ * returned untouched.
  */
 function withRetireSiblings(
   summary: DreamRunSummary,
   scan: ScanResult,
   plan: PlanState,
   gatedRetires: ReadonlyArray<DreamGatedRetireEntry>,
+  enabled: boolean | undefined,
 ): DreamRunSummary {
-  if (plan.retires.length === 0 || !resolveNearDuplicateRetireSiblingsEnabled()) return summary;
+  if (plan.retires.length === 0 || !(enabled ?? resolveNearDuplicateRetireSiblingsEnabled())) {
+    return summary;
+  }
   const siblings = planRetireSiblings(
     retireSiblingPool(scan.preferences.map((p) => p.pref)),
     plan.retires.map((r) => ({ id: `pref-${r.slug}`, principle: r.principle, reason: r.reason })),

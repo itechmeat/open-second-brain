@@ -6,6 +6,7 @@
  * BRAIN_TOOLS surface.
  */
 
+import { resolveNearDuplicateRetireSiblingsEnabled } from "../../core/config.ts";
 import { resolveSearchConfig } from "../../core/search/index.ts";
 import { buildTimelineIndex } from "../../core/brain/temporal/build-index.ts";
 import { findStaleEntries } from "../../core/brain/temporal/stale-watch.ts";
@@ -129,6 +130,8 @@ async function toolBrainReviewCandidates(
     // The stored-vector tier probes only the retires `would_retire` keeps,
     // so `retire_siblings_semantic` reflects no hidden retire.
     retiringVisible: (id) => view.row(...bothSpellings(id)),
+    // The gate honours the server's own config file, as the write side does.
+    retireSiblingsEnabled: resolveNearDuplicateRetireSiblingsEnabled(ctx.configPath ?? undefined),
     // The projection is read-only, but it runs a full dry-run
     // consolidation pass to produce it - the same pass, and so the same
     // budget, as `brain_dream`.
