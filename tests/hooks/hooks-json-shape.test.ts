@@ -145,3 +145,36 @@ describe("hooks.json Stop hygiene-digest entry", () => {
     expect(existsSync(join(REPO, "hooks", match![1]! + ".ts"))).toBe(true);
   });
 });
+describe("hooks.json subagent-inject entry", () => {
+  test("the PostToolUse write group carries the carrier after post-write-reminder, shaped like its siblings", () => {
+    const parsed = JSON.parse(readFileSync(HOOKS_JSON, "utf8")) as {
+      hooks: Record<
+        string,
+        Array<{ matcher?: string; hooks: Array<HookEntry & { timeout?: number }> }>
+      >;
+    };
+    const group = (parsed.hooks["PostToolUse"] ?? []).find(
+      (g) => g.matcher === "Write|Edit|MultiEdit|apply_patch",
+    );
+    expect(group).toBeDefined();
+    const hooks = group!.hooks;
+    const carriers = hooks.filter((h) => h.command.includes("o2b-hook subagent-inject"));
+    expect(carriers.length).toBe(1);
+    const carrier = carriers[0]!;
+    // Registered inside the write-shaped group, right after its
+    // post-write-reminder sibling: both fire on the same tool calls and
+    // the operator's rules precede the logging reminder.
+    expect(hooks.at(-1)).toBe(carrier);
+    expect(hooks[hooks.indexOf(carrier) - 1]!.command).toContain("o2b-hook post-write-reminder");
+    expect(carrier.type).toBe("command");
+    expect(carrier.timeout).toBe(10);
+    expect(carrier.statusMessage).toBe("OSB: delivering standing rules to a subagent");
+    // Fail-soft shape identical to its sibling: same wrapper, same PATH
+    // fallback, same never-blocks tail, only the dispatch name differs.
+    const sibling = hooks.find((h) => h.command.includes("o2b-hook post-write-reminder"))!;
+    expect(carrier.command).toBe(sibling.command.replace("post-write-reminder", "subagent-inject"));
+    // The dispatch target resolves to an existing hook file, so the
+    // registered name can never silently no-op.
+    expect(existsSync(join(REPO, "hooks", "subagent-inject.ts"))).toBe(true);
+  });
+});
