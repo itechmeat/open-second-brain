@@ -6,6 +6,11 @@
  * that by scanning its source. Same precedent as `surprisal.ts`: open the
  * store read-only and read what reindexing paid for.
  *
+ * Only content chunks are compared. The indexer emits a page's frontmatter
+ * as chunks of their own, and two preference frontmatter blocks share
+ * their keys and most values, so a frontmatter pair would score near 1 for
+ * any two preferences.
+ *
  * The outcome is a named status, never a silent degrade:
  *   - `index_missing`: no index has been built;
  *   - `vec_unavailable`: the sqlite-vec extension did not load;
@@ -17,6 +22,7 @@
  */
 
 import { Store } from "../search/store.ts";
+import type { ChunkRow } from "../search/store.ts";
 import type { StoredChunkEmbedding } from "../search/store/vectors.ts";
 import { SearchError } from "../search/search-error.ts";
 import type { ResolvedSearchConfig } from "../search/types.ts";
@@ -63,7 +69,9 @@ export async function storedVectorSimilarity(
     if (!store.vecLoaded()) return { status: "vec_unavailable", scores: NO_SCORES };
     const stored = (path: string): ReadonlyArray<StoredChunkEmbedding> => {
       const docId = store.getDocumentIdByPath(path);
-      return docId === null ? [] : store.storedEmbeddingsForDocument(docId);
+      if (docId === null) return [];
+      const frontmatter = frontmatterChunkIds(store.getChunksByDocument(docId));
+      return store.storedEmbeddingsForDocument(docId).filter((r) => !frontmatter.has(r.chunkId));
     };
     const probeRows = stored(probePath);
     const { model, dimension } = config.semantic;
@@ -85,6 +93,27 @@ export async function storedVectorSimilarity(
   } finally {
     await store.close();
   }
+}
+
+/**
+ * Ids of the leading chunks the chunker emitted for the frontmatter block:
+ * chunk 0 opens with the `---` fence, and the block runs through the chunk
+ * that ends on the closing fence. An oversize block spans several chunks,
+ * and no body text shares a chunk with it.
+ */
+function frontmatterChunkIds(chunks: ReadonlyArray<ChunkRow>): Set<number> {
+  const ids = new Set<number>();
+  const ordered = chunks.toSorted((a, b) => a.chunkIndex - b.chunkIndex);
+  const first = ordered[0];
+  if (first === undefined || first.content.split("\n")[0]!.trim() !== "---") return ids;
+  for (const [i, chunk] of ordered.entries()) {
+    ids.add(chunk.id);
+    const lines = chunk.content.trimEnd().split("\n");
+    // Chunk 0's first line is the opening fence, never the closing one.
+    const tail = i === 0 ? lines.slice(1) : lines;
+    if (tail.at(-1)?.trim() === "---") break;
+  }
+  return ids;
 }
 
 function bestPairCosine(

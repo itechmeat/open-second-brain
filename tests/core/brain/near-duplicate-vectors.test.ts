@@ -68,7 +68,7 @@ function writePref(relPath: string, principle: string): void {
 
 async function plant(
   config: ResolvedSearchConfig,
-  byPath: Record<string, { vector: number[]; model?: string }>,
+  byPath: Record<string, { vector: number[]; model?: string; frontmatter?: number[] }>,
 ): Promise<void> {
   const store = await Store.open(config, { mode: "write" });
   try {
@@ -76,9 +76,12 @@ async function plant(
       const docId = store.getDocumentIdByPath(path);
       expect(docId).not.toBeNull();
       for (const chunk of store.chunksForDocument(docId!)) {
+        // Chunk 0 is the page's frontmatter block (see `writePref`).
+        const vector =
+          chunk.chunkIndex === 0 ? (planted.frontmatter ?? planted.vector) : planted.vector;
         store.vecUpsert(
           chunk.id,
-          unit(planted.vector),
+          unit(vector),
           planted.model ?? MODEL,
           DIMENSION,
           `eh-${path}-${chunk.id}`,
@@ -112,6 +115,22 @@ describe("storedVectorSimilarity", () => {
     expect(result.status).toBe("vec_unavailable");
     expect(result.scores.size).toBe(0);
   });
+
+  test.skipIf(!VEC_LOADABLE)(
+    "frontmatter chunks are never compared: matching frontmatter alone scores nothing",
+    async () => {
+      const config = vecConfig();
+      await indexedFixture(config);
+      // Identical frontmatter vectors, orthogonal principle vectors.
+      await plant(config, {
+        [PROBE]: { frontmatter: [1, 0, 0, 0], vector: [0, 1, 0, 0] },
+        [NEAR]: { frontmatter: [1, 0, 0, 0], vector: [0, 0, 1, 0] },
+      });
+      const result = await storedVectorSimilarity(config, PROBE, [NEAR]);
+      expect(result.status).toBe("used");
+      expect(result.scores.get(NEAR)).toBeCloseTo(0, 5);
+    },
+  );
 
   test.skipIf(!VEC_LOADABLE)(
     "a probe stored under another model reports model_mismatch",
