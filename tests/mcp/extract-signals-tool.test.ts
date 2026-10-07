@@ -11,6 +11,9 @@
  *  4. The tool is full-tier, absent from the writer surface.
  *  5. A committed signal's path is vault-relative: no MCP response of
  *     this tool carries the absolute host path.
+ *  6. Every `turns_mined` entry carries the turn's stored timestamp
+ *     verbatim, and the CLI `--json` plan over the same fixture carries
+ *     the identical projection.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -22,6 +25,7 @@ import { AUTO_EXTRACT_PER_SESSION_CAP } from "../../src/core/brain/extract-signa
 import { importSessionRecall } from "../../src/core/brain/session-recall.ts";
 import { buildToolTable, findTool } from "../../src/mcp/tools.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
+import { runCli } from "../helpers/run-cli.ts";
 
 const TOOL = "brain_extract_signals";
 const SESSION = "sess-mcp";
@@ -116,4 +120,25 @@ test("an over-cap payload is refused and writes nothing", async () => {
 test("is a full-tier tool, absent from the writer surface", () => {
   expect(buildToolTable("full").find((t) => t.name === TOOL)).toBeDefined();
   expect(buildToolTable("writer").find((t) => t.name === TOOL)).toBeUndefined();
+});
+
+test("turns_mined carries the stored turn timestamp, on the tool and the CLI alike", async () => {
+  const expected = [
+    {
+      turn_id: "t1",
+      text: "Always name the release theme in the heading.",
+      timestamp: "2026-08-22T09:01:00Z",
+    },
+  ];
+  const res = (await tool().handler(ctx, { session: SESSION })) as {
+    turns_mined: ReadonlyArray<Record<string, unknown>>;
+  };
+  expect(res.turns_mined).toEqual(expected);
+
+  const cli = await runCli(["brain", "extract-signals", SESSION, "--json", "--vault", vault], {
+    env: { OPEN_SECOND_BRAIN_CONFIG: ctx.configPath! },
+  });
+  expect(cli.returncode).toBe(0);
+  const payload = JSON.parse(cli.stdout) as { turns_mined: unknown };
+  expect(payload.turns_mined).toEqual(expected);
 });
