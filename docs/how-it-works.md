@@ -506,15 +506,18 @@ flowchart LR
   sections first degrade to headline tiers - a section below the
   keep-guard priority (the preamble and the confirmed rules are
   exempt) keeps its heading, its lead-in lines and its top three
-  ranked bullets - and then drop deterministically (recently retired
-  first, then quarantine, then most-applied). A one-line notice names
-  the sections that were reduced to headlines and the sections that
-  were dropped, how many characters survived out of how many, and
-  points the agent at `brain_context` for the full set. When `Brain/lessons.md`
-  exists, its (separately budgeted) body is appended so the unified
-  lessons corpus loads on the same surface. Fails soft - every error
-  path in the memory lane exits 0 and the runtime proceeds unaffected,
-  emitting no memory context. The standing-rules block is the one
+  bullets, ranked by the inline application/confidence tags (a
+  section whose lines carry none of the known tags keeps its first
+  three in render order) - and then drop deterministically (recently
+  retired first, then quarantine, then most-applied). A one-line
+  notice names the sections that were reduced to headlines and the
+  sections that were dropped, how many characters survived out of how
+  many, and points the agent at `brain_context` for the full set.
+  When `Brain/lessons.md` exists, its (separately budgeted) body is
+  appended so the unified lessons corpus loads on the same surface.
+  Fails soft - every error path in the memory lane exits 0 and the
+  runtime proceeds unaffected, emitting no memory context. The
+  standing-rules block is the one
   exception, by design: it is read outside that boundary, so a vault
   with an operator rules file still speaks even when the memory layer
   is down, and a rules file that cannot be read is stated rather than
@@ -524,7 +527,9 @@ flowchart LR
   sub-agent turn never saw the SessionStart payload, so the carrier
   delivers the same operator standing-rules block into the sub-agent's
   turn at its first write-shaped tool call, once per sub-agent per
-  session and only when a rules file exists - the agent doing the
+  session (the delivery ledger keeps the most recent 200 agent ids, so
+  a session that spawns more than that re-delivers to an evicted id)
+  and only when a rules file exists - the agent doing the
   writes is the one agent that must not run without them.
 - **End-of-turn hygiene digest** (opt-in): with `hygiene_digest_enabled`
   in the machine config (`~/.config/open-second-brain/config.yaml`, the

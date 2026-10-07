@@ -906,6 +906,12 @@ one-time deny that names the brain search surface, then downgrades to a
 soft nudge; any brain query/search refreshes an orientation stamp that
 suppresses the block, and every failure path fails open. Hook stamps
 live under `.open-second-brain/hook-state/` with epoch-ms expiry.
+`hygiene_digest_enabled` (env
+`OPEN_SECOND_BRAIN_HYGIENE_DIGEST_ENABLED`, default off) adds an
+end-of-turn Stop-hook line that surfaces pending Brain hygiene findings
+once per change, folding warning- and action-severity findings into
+per-detector counts and staying silent while the findings set is
+unchanged.
 `o2b partner codegraph report` and `o2b doctor` aggregate codegraph
 status across every discovered code project, threading `project_path`
 per query when supported (feature-detected) and degrading with an
