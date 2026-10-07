@@ -1334,8 +1334,9 @@ set to `"true"`, the near-duplicate check also compares the written pages
 with candidates from other directories, pulled from the keyword index
 (the top 20 chunks per written page) and re-read from disk, under the
 same 0.8 bar, scope bucket and reach. The pull spends no embedding call.
-An index that cannot be opened or queried does not fail the write and
-does not disable the same-directory check: the report then carries
+An index that cannot be opened, queried or closed, or any other failure
+while collecting the candidates, does not fail the write and does not
+disable the same-directory check: the report then carries
 `widening: "index_unavailable"` and a `widening_detail` code naming the
 failure, never a message or a path. With the key off nothing is opened
 and the receipt is unchanged.
@@ -2463,7 +2464,9 @@ format characters), when it contains NUL, or when it exceeds the cap.
   (`OPEN_SECOND_BRAIN_NEAR_DUPLICATE_RETIRE_SIBLINGS_ENABLED`, default
   off) set to `"true"`, `brain_review_candidates` gains an additive
   `retire_siblings` array of `{ retiring_id, sibling_id, score, method }`
-  pairs, the dream run summary carries the lexical pairs under the same
+  pairs, the dream run summary - the CLI `o2b brain dream --json` and the
+  `brain_dream` tool response alike - carries the lexical pairs under the
+  same
   key, and `o2b brain reject` lists the siblings of the rejected
   preference with the command that rejects each (`--json` adds
   `retire_siblings`). Decay retires and merges nominate nothing, a retire
@@ -2476,7 +2479,11 @@ format characters), when it contains NUL, or when it exceeds the cap.
   embedding spend, and adds pairs at 0.92 cosine or above as
   `method: "embedding"`; `retire_siblings_semantic` reports that tier's
   outcome (`used`, `index_missing`, `vec_unavailable`, `not_embedded`,
-  `model_mismatch`). A pair is kept only when the caller may read both
+  `model_mismatch`, `index_unavailable` - the index exists but could not
+  be opened or read, in which case the lexical pairs still come back and
+  the search error code lands in `retire_siblings_semantic_detail`, a
+  field that appears only for that outcome and never carries a message
+  or a path). A pair is kept only when the caller may read both
   preferences, and the stored-vector tier probes only the retires
   `would_retire` keeps, so neither field reflects a withheld page.
   `brain_extract_signals` now carries each mined turn's stored
