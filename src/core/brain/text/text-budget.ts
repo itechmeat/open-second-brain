@@ -91,7 +91,18 @@ export interface SectionBudgetResult {
   readonly droppedKeys: ReadonlyArray<string>;
 }
 
-const SEPARATOR = "\n\n";
+/** Blank line between joined sections; also the notice's lead-in separator. */
+export const SECTION_SEPARATOR = "\n\n";
+
+/**
+ * Render sections the way {@link applySectionBudget} renders them: the
+ * section texts in the given order, one blank line between neighbours.
+ * Exported so the active-body budgeter can assemble its pre-budget tier
+ * output from the exact same join the budget pass uses.
+ */
+export function joinSections(sections: ReadonlyArray<{ readonly text: string }>): string {
+  return sections.map((s) => s.text).join(SECTION_SEPARATOR);
+}
 
 /**
  * Character length of the sections joined the way {@link applySectionBudget}
@@ -111,7 +122,7 @@ interface KeptSection extends BudgetSection {
 
 function joinedLength(parts: ReadonlyArray<{ readonly text: string }>): number {
   if (parts.length === 0) return 0;
-  let total = SEPARATOR.length * (parts.length - 1);
+  let total = SECTION_SEPARATOR.length * (parts.length - 1);
   for (const p of parts) total += p.text.length;
   return total;
 }
@@ -193,10 +204,7 @@ export function applySectionBudget(
   }
 
   const truncated = trimmedAny || droppedKeys.length > 0;
-  const content = kept
-    .toSorted((a, b) => a.index - b.index)
-    .map((s) => s.text)
-    .join(SEPARATOR);
+  const content = joinSections(kept.toSorted((a, b) => a.index - b.index));
 
   const frozenDroppedKeys = Object.freeze(droppedKeys);
 
@@ -213,7 +221,7 @@ export function applySectionBudget(
       trimmed: trimmedAny,
     });
     if (notice.length > 0) {
-      body = content.length > 0 ? content + SEPARATOR + notice : notice;
+      body = content.length > 0 ? content + SECTION_SEPARATOR + notice : notice;
     }
   }
 
