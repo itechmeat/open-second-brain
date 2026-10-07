@@ -9,7 +9,8 @@
  *   1. the written body's distinct tokens become one FTS5 OR query through
  *      `buildFtsMatch`;
  *   2. `keywordTopK` pulls the BM25 top {@link NEAR_DUPLICATE_WIDENING_TOP_K}
- *      chunks per written page, so one call reads at most that many
+ *      chunks of other pages per written page (the page's own indexed
+ *      chunks are excluded), so one call reads at most that many
  *      candidate pages per page it wrote;
  *   3. each hit maps to its document path, the caller's `readable`
  *      predicate drops a withheld page before anything else happens, and
@@ -110,9 +111,21 @@ function widenQuery(vault: string, page: string): string {
   return buildFtsMatch([...candidate.tokens].join(" "), { matchMode: FTS_MATCH_MODE.any });
 }
 
-/** Vault-relative paths of the documents behind the top keyword hits, in hit order. */
-function keywordPaths(store: Store, query: string): ReadonlyArray<string> {
-  const hits = store.keywordTopK(query, { limit: NEAR_DUPLICATE_WIDENING_TOP_K });
+/**
+ * Vault-relative paths of the documents behind the top keyword hits, in hit
+ * order. The written page's own indexed chunks are excluded by document id:
+ * its query is built from its own tokens, so on an update its older chunks
+ * would otherwise be the strongest matches and fill every slot. The pull
+ * grows by exactly that page's chunk count, so the top-k still counts
+ * other pages only.
+ */
+function keywordPaths(store: Store, query: string, page: string): ReadonlyArray<string> {
+  const ownId = store.getDocumentIdByPath(page);
+  const ownChunks = ownId === null ? 0 : store.chunksForDocument(ownId).length;
+  const hits = store
+    .keywordTopK(query, { limit: NEAR_DUPLICATE_WIDENING_TOP_K + ownChunks })
+    .filter((hit) => hit.documentId !== ownId)
+    .slice(0, NEAR_DUPLICATE_WIDENING_TOP_K);
   const hydrated = store.hydrateChunks(hits.map((hit) => hit.chunkId));
   const paths: string[] = [];
   for (const hit of hits) {
@@ -142,9 +155,10 @@ export async function collectWideningCandidates(
   const hitPaths: string[] = [];
   try {
     for (const page of pages) {
-      const query = widenQuery(vault, canonicalPage(vault, page));
+      const written = canonicalPage(vault, page);
+      const query = widenQuery(vault, written);
       if (query === "") continue;
-      hitPaths.push(...keywordPaths(store, query));
+      hitPaths.push(...keywordPaths(store, query, written));
     }
   } catch (err) {
     return wideningUnavailable(err);

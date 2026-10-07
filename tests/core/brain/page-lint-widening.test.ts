@@ -21,6 +21,7 @@ import { tokenise } from "../../../src/core/brain/similarity.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { resolveSearchConfig } from "../../../src/core/search/index.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
+import { Store } from "../../../src/core/search/store.ts";
 
 const BODY = "orchard lantern copper meadow violet harbor";
 
@@ -126,6 +127,32 @@ describe("collectWideningCandidates", () => {
     const result = await collectWideningCandidates(config, vault, [written], READ_ALL_REFS);
     expect(result.candidates.length).toBeGreaterThan(0);
     expect(result.candidates.length).toBeLessThanOrEqual(NEAR_DUPLICATE_WIDENING_TOP_K);
+  });
+
+  test("a rewritten long page's own indexed chunks do not crowd out a lookalike", async () => {
+    // Every section repeats the probe tokens, so each of the page's own
+    // chunks outranks the lookalike under BM25.
+    const filler = Array.from({ length: 160 }, (_, i) => `filler${i}`).join(" ");
+    const sections = Array.from(
+      { length: NEAR_DUPLICATE_WIDENING_TOP_K + 10 },
+      (_, i) => `## Section ${i}\n\n${BODY} ${BODY} ${BODY}\n\n${filler}`,
+    );
+    const long = writeNote("Notes/Long.md", sections.join("\n\n"));
+    const lookalike = writeNote("Projects/Lookalike.md", BODY);
+    const config = await indexed();
+    const store = await Store.open(config, { mode: "read" });
+    try {
+      const ownId = store.getDocumentIdByPath(long);
+      expect(ownId).not.toBeNull();
+      expect(store.chunksForDocument(ownId!).length).toBeGreaterThan(NEAR_DUPLICATE_WIDENING_TOP_K);
+    } finally {
+      await store.close();
+    }
+    writeNote(long, `${sections.join("\n\n")}\n\nOne more line.`);
+    const result = await collectWideningCandidates(config, vault, [long], READ_ALL_REFS);
+    const pages = result.candidates.map((c) => c.page);
+    expect(pages).toContain(lookalike);
+    expect(pages).not.toContain(long);
   });
 
   test("a candidate two written pages both pull in is listed once", async () => {
