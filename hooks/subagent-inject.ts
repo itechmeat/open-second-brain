@@ -84,13 +84,22 @@ function resolveStandingRulesCap(vault: string): number {
   return resolveStandingRulesMaxChars(cfg);
 }
 
+type SubagentInjectOutput =
+  | {
+      readonly hookSpecificOutput: {
+        readonly hookEventName: "PostToolUse";
+        readonly additionalContext: string;
+      };
+    }
+  | { readonly decision: "block"; readonly reason: string };
+
 /**
  * The per-runtime output shape: claudecode carries `additionalContext`
  * on the PostToolUse event (the post-write-reminder precedent); every
  * other runtime gets the portable decision shape (the stop-log-guardrail
  * precedent for non-claudecode runtimes).
  */
-function subagentInjectOutput(runtime: HookRuntime, block: string): Record<string, unknown> {
+function subagentInjectOutput(runtime: HookRuntime, block: string): SubagentInjectOutput {
   if (runtime === "claudecode") {
     return { hookSpecificOutput: { hookEventName: CARRIER_EVENT, additionalContext: block } };
   }
