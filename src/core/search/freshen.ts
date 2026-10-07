@@ -15,7 +15,7 @@
  * cost is one state-file read, one lock probe and one exclusive create.
  */
 import { randomUUID } from "node:crypto";
-import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { appendMetric } from "../brain/metrics.ts";
@@ -124,10 +124,24 @@ export function nextBackoffMs(failures: number): number {
 }
 
 /**
+ * A claim file that cannot be parsed is normally one being written: the
+ * exclusive create and the write are two steps. Only past this grace is a
+ * torn claim taken for a dead run's.
+ */
+const CLAIM_TORN_GRACE_MS = 10_000;
+
+/** A takeover lock older than this belongs to a reader that died mid-takeover. */
+const TAKEOVER_STALE_MS = 30_000;
+
+/**
  * Take the claim, or return null when a live run holds it. The claim is an
  * exclusive create, so of N readers racing on a stale index exactly one
- * wins. A claim that is torn or older than {@link FRESHEN_CLAIM_ABANDONED_MS}
- * is a run that died (a reboot, an OOM kill) and is taken over.
+ * wins. A claim older than {@link FRESHEN_CLAIM_ABANDONED_MS} (or torn and
+ * older than {@link CLAIM_TORN_GRACE_MS}) is a run that died (a reboot, an
+ * OOM kill) and is taken over - but only by the reader holding the
+ * exclusive takeover lock, which re-reads the claim under it and replaces
+ * it with an atomic rename, so the slot is never empty and a fresh claim
+ * is never touched.
  */
 export function claimFreshen(dir: string, nowMs: number): string | null {
   const path = join(dir, FRESHEN_CLAIM_FILE);
@@ -140,23 +154,77 @@ export function claimFreshen(dir: string, nowMs: number): string | null {
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "EEXIST") return null;
     }
-    if (!claimAbandoned(path, nowMs)) return null;
-    try {
-      unlinkSync(path);
-    } catch {
-      // Another reader took it over first; the retry's exclusive create
-      // decides between us.
-    }
+    const seen = readClaimBody(path);
+    if (seen === null) continue; // released since: race the create again
+    if (!claimAbandoned(path, seen, nowMs)) return null;
+    return takeOver(path, token, body, nowMs);
   }
   return null;
 }
 
-function claimAbandoned(path: string, nowMs: number): boolean {
+function takeOver(path: string, token: string, body: string, nowMs: number): string | null {
+  const lock = `${path}.takeover`;
+  if (!createExclusive(lock)) {
+    let age = 0;
+    try {
+      age = nowMs - statSync(lock).mtimeMs;
+    } catch {
+      return null;
+    }
+    if (age <= TAKEOVER_STALE_MS) return null;
+    unlinkQuietly(lock);
+    if (!createExclusive(lock)) return null;
+  }
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as { at?: unknown };
-    return typeof parsed.at !== "number" || nowMs - parsed.at > FRESHEN_CLAIM_ABANDONED_MS;
+    const current = readClaimBody(path);
+    if (current !== null && !claimAbandoned(path, current, nowMs)) return null;
+    const tmp = `${path}.${token}.tmp`;
+    writeFileSync(tmp, body);
+    renameSync(tmp, path);
+    return token;
   } catch {
+    return null;
+  } finally {
+    unlinkQuietly(lock);
+  }
+}
+
+function createExclusive(path: string): boolean {
+  try {
+    writeFileSync(path, String(process.pid), { flag: "wx" });
     return true;
+  } catch {
+    return false;
+  }
+}
+
+function readClaimBody(path: string): string | null {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+function claimAbandoned(path: string, body: string, nowMs: number): boolean {
+  try {
+    const parsed = JSON.parse(body) as { at?: unknown };
+    if (typeof parsed.at === "number") return nowMs - parsed.at > FRESHEN_CLAIM_ABANDONED_MS;
+  } catch {
+    // Torn or empty: judged by age below.
+  }
+  try {
+    return nowMs - statSync(path).mtimeMs > CLAIM_TORN_GRACE_MS;
+  } catch {
+    return false;
+  }
+}
+
+function unlinkQuietly(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch {
+    // Already gone.
   }
 }
 

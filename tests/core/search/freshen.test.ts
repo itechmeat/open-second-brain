@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -82,9 +90,12 @@ describe("claim, state and backoff", () => {
     expect(token).not.toBe("dead");
   });
 
-  test("a torn claim file is taken over too", () => {
-    writeFileSync(join(dir, FRESHEN_CLAIM_FILE), "{");
-    expect(claimFreshen(dir, NOW)).toBeString();
+  test("a torn claim file older than the grace is taken over too", () => {
+    const path = join(dir, FRESHEN_CLAIM_FILE);
+    writeFileSync(path, "{");
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(path, old, old);
+    expect(claimFreshen(dir, Date.now())).toBeString();
   });
 
   test("releasing with a foreign token leaves the claim in place", () => {
@@ -242,5 +253,53 @@ describe("maybeFreshenIndex", () => {
     });
     expect(decision).toBe(FRESHEN_SKIP.spawnFailed);
     expect(existsSync(join(vault, ".open-second-brain", FRESHEN_CLAIM_FILE))).toBe(false);
+  });
+});
+
+describe("claim races", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "osb-freshen-race-"));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  test("a zero-byte claim younger than the grace is a claim being written, not a dead one", () => {
+    writeFileSync(join(dir, FRESHEN_CLAIM_FILE), "");
+    expect(claimFreshen(dir, Date.now())).toBeNull();
+  });
+
+  test("a zero-byte claim older than the grace is taken over", () => {
+    const path = join(dir, FRESHEN_CLAIM_FILE);
+    writeFileSync(path, "");
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(path, old, old);
+    expect(claimFreshen(dir, Date.now())).toBeString();
+  });
+
+  test("a stale claim taken over by one reader is not taken over again by the next", () => {
+    writeFileSync(
+      join(dir, FRESHEN_CLAIM_FILE),
+      JSON.stringify({ token: "dead", at: Date.now() - 601_000 }),
+    );
+    expect(claimFreshen(dir, Date.now())).toBeString();
+    expect(claimFreshen(dir, Date.now())).toBeNull();
+  });
+
+  test("of eight processes racing on a stale claim exactly one wins", async () => {
+    writeFileSync(
+      join(dir, FRESHEN_CLAIM_FILE),
+      JSON.stringify({ token: "dead", at: Date.now() - 601_000 }),
+    );
+    const module = join(import.meta.dir, "..", "..", "..", "src", "core", "search", "freshen.ts");
+    const script = `const { claimFreshen } = await import(${JSON.stringify(module)});
+      const go = Number(process.argv[1]);
+      while (Date.now() < go) {}
+      console.log(claimFreshen(process.argv[2], Date.now()) === null ? "lost" : "won");`;
+    const go = String(Date.now() + 1500);
+    const procs = Array.from({ length: 8 }, () =>
+      Bun.spawn(["bun", "-e", script, go, dir], { stdout: "pipe", stderr: "pipe" }),
+    );
+    const outs = await Promise.all(procs.map((p) => new Response(p.stdout).text()));
+    expect(outs.map((o) => o.trim()).filter((o) => o === "won")).toHaveLength(1);
   });
 });
