@@ -213,15 +213,36 @@ describe("replaceDocumentChunks carry-over", () => {
       const { store, docId, oldIds } = await seededStore();
       const before = embeddingTimes(dbPath, oldIds[0]!);
       await Bun.sleep(5);
+      // "h0" moves from position 0 to 1, so it is a new row that carries
+      // the old vector rather than a chunk kept in place.
       const replaced = store.replaceDocumentChunks(docId, [
-        chunkInput(0, "h0"),
-        chunkInput(1, "h1-edited"),
+        chunkInput(0, "h1-edited"),
+        chunkInput(1, "h0"),
         chunkInput(2, "h2"),
       ]);
       await store.close();
-      const after = embeddingTimes(dbPath, replaced.chunkIds[0]!);
+      const after = embeddingTimes(dbPath, replaced.chunkIds[1]!);
       expect(after.createdAt).toBe(before.createdAt);
       expect(after.updatedAt).not.toBe(before.updatedAt);
+    },
+  );
+
+  test.skipIf(!VEC_LOADABLE)(
+    "a chunk kept in place keeps its row, its vector and both timestamps",
+    async () => {
+      const { store, docId, oldIds } = await seededStore();
+      const before = embeddingTimes(dbPath, oldIds[2]!);
+      await Bun.sleep(5);
+      const replaced = store.replaceDocumentChunks(docId, [
+        chunkInput(0, "h1-edited"),
+        chunkInput(1, "h0"),
+        chunkInput(2, "h2"),
+      ]);
+      expect(replaced.chunkIds[2]).toBe(oldIds[2]!);
+      expect(replaced.keptChunkIds.has(oldIds[2]!)).toBe(true);
+      expect(store.getEmbeddingHash(oldIds[2]!)).toBe("emb-2");
+      await store.close();
+      expect(embeddingTimes(dbPath, oldIds[2]!)).toEqual(before);
     },
   );
 

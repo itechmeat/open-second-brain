@@ -126,25 +126,47 @@ export function getChunksByDocument(db: Database, documentId: number): ChunkRow[
 
 /** What one document's chunk replacement wrote. */
 export interface ChunkReplacement {
-  /** The new chunk ids, in `chunkIndex` order. */
+  /** The chunk ids, in `chunkIndex` order: kept rows keep theirs. */
   readonly chunkIds: number[];
   /**
-   * New chunks that kept a stored vector of an old chunk with the same
-   * `content_hash` (vector carry-over), so the embedding phase will not
-   * pay for them again.
+   * Chunks that kept a stored vector: kept in place with a vector of the
+   * recorded identity, or new rows that carried the vector of an old chunk
+   * with the same `content_hash` (vector carry-over). The embedding phase
+   * will not pay for them again.
    */
   readonly embeddingsReused: number;
+  /**
+   * Ids of the chunks kept in place: same position, same content, same
+   * lines and heading. Nothing derived from their content (full-text row,
+   * entities, vector) needs to be written again.
+   */
+  readonly keptChunkIds: ReadonlySet<number>;
+}
+
+interface StoredChunk {
+  id: number;
+  chunk_index: number;
+  content_hash: string;
+  start_line: number;
+  end_line: number;
+  token_count: number;
+  heading_path: string;
 }
 
 /**
- * Atomically replace every chunk for a document, carrying the stored
- * vector of every new chunk whose content an old chunk of this document
- * already embedded under the recorded model and dimension (the rule and
- * its guard live in `vector-carry-over.ts`). Only the vec rows that are
- * not carried are purged; the old `chunk_vec_map` and `embeddings` rows
- * go with their chunks through the FK cascade, and the carried ones are
- * re-attached to the new ids. FTS5 stays in sync via the
- * chunks_ai/ad/au triggers.
+ * Replace a document's chunks, rewriting only the ones that changed.
+ *
+ * A chunk at the same `chunkIndex` with the same content hash, lines,
+ * token count and heading is KEPT: its row, id, full-text row, entities
+ * and vector stay as they are (a kept vector of another embedding
+ * identity is dropped, as a replaced one would be). Every other old chunk
+ * is deleted and every other new chunk inserted, carrying the stored
+ * vector of an old chunk with the same content where the identity allows
+ * (the rule and its guard live in `vector-carry-over.ts`). A daily log
+ * that grows all day therefore costs its appended tail per run, not the
+ * whole file. The old `chunk_vec_map` and `embeddings` rows of deleted
+ * chunks go with them through the FK cascade; FTS5 stays in sync through
+ * the chunks_ai/ad/au triggers.
  */
 export function replaceDocumentChunks(
   db: Database,
@@ -154,18 +176,60 @@ export function replaceDocumentChunks(
 ): ChunkReplacement {
   const ids: number[] = [];
   let embeddingsReused = 0;
+  const kept = new Set<number>();
   db.exec("BEGIN");
   try {
+    const stored = db
+      .query<StoredChunk, [number]>(
+        "SELECT id, chunk_index, content_hash, start_line, end_line, token_count, heading_path " +
+          "FROM chunks WHERE document_id = ?",
+      )
+      .all(documentId);
+    const byIndex = new Map(stored.map((r) => [r.chunk_index, r]));
+    const keepAt = chunks.map((c) => {
+      const old = byIndex.get(c.chunkIndex);
+      const same =
+        old !== undefined &&
+        old.content_hash === c.contentHash &&
+        old.start_line === c.startLine &&
+        old.end_line === c.endLine &&
+        old.token_count === c.tokenCount &&
+        old.heading_path === (c.headingPath ?? "");
+      if (same) kept.add(old.id);
+      return same ? old.id : null;
+    });
+
+    const candidates = readCarryCandidates(db, vecLoaded, documentId);
+    // A kept chunk whose vector is not of the recorded identity loses it,
+    // exactly as a replaced chunk's vector would not be carried.
+    const validKept = new Set(candidates.filter((c) => kept.has(c.chunkId)).map((c) => c.chunkId));
+    const keptStale = [...kept].filter((id) => !validKept.has(id));
+    if (keptStale.length > 0) {
+      purgeVecRowsByChunkIds(db, vecLoaded, keptStale);
+      const placeholders = sqlPlaceholders(keptStale);
+      db.run(`DELETE FROM chunk_vec_map WHERE chunk_id IN (${placeholders})`, keptStale);
+      db.run(`DELETE FROM embeddings WHERE chunk_id IN (${placeholders})`, keptStale);
+    }
+
+    const newPositions: number[] = [];
+    keepAt.forEach((id, position) => {
+      if (id === null) newPositions.push(position);
+    });
     const carried = matchCarriedVectors(
-      readCarryCandidates(db, vecLoaded, documentId),
-      chunks.map((c) => c.contentHash),
+      candidates.filter((c) => !kept.has(c.chunkId)),
+      newPositions.map((p) => chunks[p]!.contentHash),
+    ).map((m) => ({ position: newPositions[m.position]!, candidate: m.candidate }));
+    const carriedOld = new Set(carried.map((m) => m.candidate.chunkId));
+    const removed = stored.map((r) => r.id).filter((id) => !kept.has(id));
+    purgeVecRowsByChunkIds(
+      db,
+      vecLoaded,
+      removed.filter((id) => !carriedOld.has(id)),
     );
-    const keptChunkIds = new Set(carried.map((m) => m.candidate.chunkId));
-    const purged = chunksForDocument(db, documentId)
-      .map((c) => c.id)
-      .filter((id) => !keptChunkIds.has(id));
-    purgeVecRowsByChunkIds(db, vecLoaded, purged);
-    db.run("DELETE FROM chunks WHERE document_id = ?", [documentId]);
+    if (removed.length > 0) {
+      db.run(`DELETE FROM chunks WHERE id IN (${sqlPlaceholders(removed)})`, removed);
+    }
+
     const insert = db.prepare<
       { id: number },
       [number, number, string, string, string, number, number, number, string, string, string]
@@ -174,7 +238,12 @@ export function replaceDocumentChunks(
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
     );
     const now = nowIso();
-    for (const c of chunks) {
+    chunks.forEach((c, position) => {
+      const keptId = keepAt[position];
+      if (keptId !== null && keptId !== undefined) {
+        ids.push(keptId);
+        return;
+      }
       const row = insert.get(
         documentId,
         c.chunkIndex,
@@ -190,15 +259,15 @@ export function replaceDocumentChunks(
       );
       if (!row) throw new SearchError("INDEX_UNREADABLE", "chunk insert returned no id");
       ids.push(row.id);
-    }
+    });
     restoreCarriedVectors(db, ids, carried);
-    embeddingsReused = carried.length;
+    embeddingsReused = validKept.size + carried.length;
     db.exec("COMMIT");
   } catch (e) {
     db.exec("ROLLBACK");
     throw e;
   }
-  return { chunkIds: ids, embeddingsReused };
+  return { chunkIds: ids, embeddingsReused, keptChunkIds: kept };
 }
 
 /**

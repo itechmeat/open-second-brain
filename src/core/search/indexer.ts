@@ -613,8 +613,8 @@ async function indexIntoRun(
           tokenCount: c.tokenCount,
           headingPath: c.headingPath,
         }));
-        // An unchanged chunk keeps its stored vector (vector carry-over),
-        // so the embedding phase below never re-pays for it.
+        // An unchanged chunk is kept in place, and a moved one carries its
+        // stored vector, so the embedding phase below never re-pays for it.
         const replaced = store.replaceDocumentChunks(docId, chunkInputs);
         const chunkIds = replaced.chunkIds;
         stats.embeddingsReused += replaced.embeddingsReused;
@@ -633,8 +633,9 @@ async function indexIntoRun(
             });
           }
           // Entity-boosted retrieval (v0.13.0): persist the chunk's
-          // deterministic entity set alongside its links.
-          store.replaceEntities(cid, extractEntities(content));
+          // deterministic entity set alongside its links. A chunk kept in
+          // place has the entities of the content it still holds.
+          if (!replaced.keptChunkIds.has(cid)) store.replaceEntities(cid, extractEntities(content));
         }
         // Typed graph semantics (v3): frontmatter relation fields
         // (related / extends / contradicts / superseded_by) become typed

@@ -2,7 +2,7 @@
 /**
  * Measure how many bytes an incremental index run writes, per pass.
  *
- *   bun run scripts/measure-index-writes.ts <vault> [changed-notes=200 | largest:N]
+ *   bun run tests/bench/measure-index-writes.ts <vault> [changed-notes=200 | largest:N]
  *
  * Copies the vault's Markdown (and `Brain/_brain.yaml`) to a temp dir,
  * builds an index there, then runs three incremental passes and prints the
@@ -22,9 +22,9 @@ import { appendFileSync, cpSync, mkdtempSync, readFileSync, rmSync } from "node:
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
-import { resolveSearchConfig } from "../src/core/search/index.ts";
-import { indexVault } from "../src/core/search/indexer.ts";
-import { Store } from "../src/core/search/store.ts";
+import { resolveSearchConfig } from "../../src/core/search/index.ts";
+import { indexVault } from "../../src/core/search/indexer.ts";
+import { Store } from "../../src/core/search/store.ts";
 
 function writeBytes(): number {
   const m = /write_bytes:\s+(\d+)/.exec(readFileSync("/proc/self/io", "utf8"));
@@ -60,6 +60,10 @@ for (const name of PASSES) {
   };
 }
 
+function mb(n: number): string {
+  return (n / 1024 / 1024).toFixed(1).padStart(8);
+}
+
 async function measured(label: string, vault: string): Promise<void> {
   tally.clear();
   const before = writeBytes();
@@ -67,7 +71,6 @@ async function measured(label: string, vault: string): Promise<void> {
   const stats = await indexVault(resolveSearchConfig({ vault }));
   const total = writeBytes() - before;
   const ms = Math.round(performance.now() - t0);
-  const mb = (n: number): string => (n / 1024 / 1024).toFixed(1).padStart(8);
   console.log(
     `\n${label}: ${mb(total)} MB in ${ms} ms ` +
       `(added ${stats.added}, updated ${stats.updated}, deleted ${stats.deleted}, ` +
@@ -84,7 +87,7 @@ async function measured(label: string, vault: string): Promise<void> {
 const [source, changedArg] = process.argv.slice(2);
 if (source === undefined) {
   console.error(
-    "usage: bun run scripts/measure-index-writes.ts <vault> [changed-notes=200 | largest:N]",
+    "usage: bun run tests/bench/measure-index-writes.ts <vault> [changed-notes=200 | largest:N]",
   );
   process.exit(2);
 }
