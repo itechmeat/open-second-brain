@@ -662,8 +662,9 @@ export function commitExtractedSignals(
 
 /**
  * The key a missing item is NAMED by: its payload index and its topic.
- * The index carries the position and the topic carries the meaning, which is what an operator matches against
- * the payload they are about to re-run.
+ * The index carries the position and the topic carries the meaning,
+ * which is what an operator matches against the payload they are about to
+ * re-run.
  */
 function unwrittenKey(index: number, topic: string): string {
   return `items[${index}]:${topic}`;

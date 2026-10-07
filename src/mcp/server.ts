@@ -264,8 +264,9 @@ export class MCPServer {
    * the handler and emits one payload-safe `mcp_route_latency` record
    * (status `error` on throw), then re-raises so error handling upstream
    * is unchanged. One route scope per call carries the decision time and
-   * the write stages the handler notes; neither ever reaches the response. The emit is gated and fail-open, so it can never fail
-   * or slow-fail the call beyond one synchronous continuity append.
+   * the write stages the handler notes; neither ever reaches the response.
+   * The emit is gated and fail-open, so it can never fail or slow-fail the
+   * call beyond one synchronous continuity append.
    *
    * The unknown-argument gate runs FIRST, before the timer and before the
    * handler, because a refused call is not a route to measure. Placing it
