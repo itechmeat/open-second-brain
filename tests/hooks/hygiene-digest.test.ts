@@ -1,0 +1,294 @@
+/**
+ * Spawn-based tests for the Stop hygiene-digest hook
+ * (context-injection-pipeline, lane B, task B3).
+ *
+ * The hook is opt-in (`hygiene_digest_enabled`, default OFF), gated to
+ * turns that wrote an artifact, surfaces the default hygiene sweep plus
+ * the dangling-link count as ONE line, and emits a given state once per
+ * change via the vault-level hash ledger. Every gate and failure path
+ * exits 0 silently.
+ *
+ * The fixture vault holds one contested truth slot, so the default sweep
+ * deterministically reports a single `conflicts` finding (severity
+ * `warning`) - the smallest eligible population the composer accepts.
+ */
+
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { appendClaimEvent } from "../../src/core/brain/truth/store.ts";
+import {
+  HYGIENE_DIGEST_HASH_FILENAME,
+  hygieneDigestHashPath,
+} from "../../hooks/lib/hygiene-digest-state.ts";
+import { homeEnv } from "../helpers/platform.ts";
+
+const HOOK = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+  "hooks",
+  "hygiene-digest.ts",
+);
+
+const FLAG_ON = { OPEN_SECOND_BRAIN_HYGIENE_DIGEST_ENABLED: "true" };
+
+/**
+ * Modules a flag-off run must never load: the detector sweep and the
+ * search index are the whole cost of this hook, so the flag gate must
+ * come before they are imported (lazy imports after the gates).
+ */
+const HEAVY_MODULE_SUFFIXES = [
+  "/brain/hygiene/scan.ts",
+  "/search/link-ratchet.ts",
+  "/search/index.ts",
+  "/brain/hygiene/detectors/conflicts.ts",
+];
+
+/** Preload that reports every loaded module path on stderr at exit. */
+const LOADED_PROBE = `process.on("exit", () => {
+  process.stderr.write("LOADED:" + JSON.stringify(Object.keys(require.cache)) + "\\n");
+});
+`;
+
+let vault: string;
+let configHome: string;
+
+beforeEach(() => {
+  vault = mkdtempSync(join(tmpdir(), "o2b-hygiene-digest-vault-"));
+  configHome = mkdtempSync(join(tmpdir(), "o2b-hygiene-digest-home-"));
+  mkdirSync(join(vault, "Brain"), { recursive: true });
+});
+
+afterEach(() => {
+  rmSync(vault, { recursive: true, force: true });
+  rmSync(configHome, { recursive: true, force: true });
+});
+
+/** Two contested claims for one slot: one deterministic `conflicts` finding. */
+function seedConflict(): void {
+  const now = Date.now();
+  appendClaimEvent(vault, {
+    ts: new Date(now - 48 * 3_600_000).toISOString(),
+    agent: "agent-a",
+    entity: "Acme Corp",
+    aspect: "headquarters",
+    value: "Berlin",
+    source: "[[note-a]]",
+  });
+  appendClaimEvent(vault, {
+    ts: new Date(now - 24 * 3_600_000).toISOString(),
+    agent: "agent-b",
+    entity: "Acme Corp",
+    aspect: "headquarters",
+    value: "Lisbon",
+    source: "[[note-b]]",
+  });
+}
+
+function ccUser(text: string): string {
+  return JSON.stringify({
+    type: "user",
+    message: { role: "user", content: [{ type: "text", text }] },
+  });
+}
+
+function ccAssistantToolUse(name: string, input: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    type: "assistant",
+    message: {
+      role: "assistant",
+      content: [{ type: "tool_use", id: "toolu_" + name, name, input }],
+    },
+  });
+}
+
+function writeTranscript(path: string, lines: readonly string[]): string {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, lines.join("\n") + "\n", "utf8");
+  return path;
+}
+
+/** A claudecode-shaped transcript path, under the throwaway home. */
+function claudeTranscript(withArtifact: boolean): string {
+  const lines = withArtifact
+    ? [ccUser("please add a file"), ccAssistantToolUse("Write", { file_path: "/tmp/x.md" })]
+    : [ccUser("what is in the README?"), ccAssistantToolUse("Read", { file_path: "/tmp/x.md" })];
+  return writeTranscript(join(configHome, ".claude", "projects", "session.jsonl"), lines);
+}
+
+function stopPayload(transcriptPath: string, extra: Record<string, unknown> = {}): unknown {
+  return {
+    hook_event_name: "Stop",
+    transcript_path: transcriptPath,
+    stop_hook_active: false,
+    ...extra,
+  };
+}
+
+interface RunResult {
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly exit: number;
+}
+
+async function runHook(
+  payload: unknown,
+  env: Record<string, string> = {},
+  preload: ReadonlyArray<string> = [],
+): Promise<RunResult> {
+  const proc = Bun.spawn(["bun", "run", ...preload, HOOK], {
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+    cwd: configHome,
+    env: {
+      PATH: process.env["PATH"] ?? "",
+      ...homeEnv(configHome),
+      VAULT_DIR: vault,
+      ...env,
+    },
+  });
+  proc.stdin.write(JSON.stringify(payload));
+  await proc.stdin.end();
+  const [stdout, stderr] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  const exit = await proc.exited;
+  return { stdout, stderr, exit };
+}
+
+function portableReason(stdout: string): string {
+  const parsed = JSON.parse(stdout) as { decision: string; reason: string };
+  expect(parsed.decision).toBe("block");
+  return parsed.reason;
+}
+
+describe("hygiene-digest hook", () => {
+  test("flag off: no stdout, no ledger write, and the scan is never invoked", async () => {
+    seedConflict();
+    const probe = join(configHome, "loaded-probe.ts");
+    writeFileSync(probe, LOADED_PROBE, "utf8");
+    const transcript = claudeTranscript(true);
+    const r = await runHook(stopPayload(transcript), {}, ["--preload", probe]);
+    expect(r.exit).toBe(0);
+    expect(r.stdout).toBe("");
+    expect(existsSync(hygieneDigestHashPath(vault))).toBe(false);
+    const line = r.stderr.split("\n").find((l) => l.startsWith("LOADED:"));
+    expect(line).toBeDefined();
+    const loaded = (JSON.parse(line!.slice("LOADED:".length)) as string[]).map((path) =>
+      path.replaceAll("\\", "/"),
+    );
+    expect(loaded.some((path) => path.endsWith("/hooks/hygiene-digest.ts"))).toBe(true);
+    for (const suffix of HEAVY_MODULE_SUFFIXES) {
+      expect(loaded.filter((path) => path.endsWith(suffix))).toEqual([]);
+    }
+  });
+
+  test("flag on, eligible findings, artifact-writing turn: exactly one line and the ledger is written", async () => {
+    seedConflict();
+    const transcript = claudeTranscript(true);
+    const r = await runHook(stopPayload(transcript), FLAG_ON);
+    expect(r.exit).toBe(0);
+    expect(r.stdout.endsWith("\n")).toBe(true);
+    expect(r.stdout.trim()).not.toBe("");
+    const parsed = JSON.parse(r.stdout) as {
+      hookSpecificOutput: { hookEventName: string; additionalContext: string };
+    };
+    expect(parsed.hookSpecificOutput.hookEventName).toBe("Stop");
+    const line = parsed.hookSpecificOutput.additionalContext;
+    expect(line.includes("\n")).toBe(false);
+    expect(line.startsWith("Open Second Brain hygiene:")).toBe(true);
+    expect(line).toContain("1 conflicts");
+    expect(line.endsWith("run o2b brain hygiene scan")).toBe(true);
+    const hashPath = hygieneDigestHashPath(vault);
+    expect(existsSync(hashPath)).toBe(true);
+    expect(readFileSync(hashPath, "utf8").trim()).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  test("an immediate second identical run is silent", async () => {
+    seedConflict();
+    const transcript = claudeTranscript(true);
+    const first = await runHook(stopPayload(transcript), FLAG_ON);
+    expect(first.stdout).not.toBe("");
+    const hashPath = hygieneDigestHashPath(vault);
+    const recorded = readFileSync(hashPath, "utf8");
+    const second = await runHook(stopPayload(transcript), FLAG_ON);
+    expect(second.exit).toBe(0);
+    expect(second.stdout).toBe("");
+    expect(readFileSync(hashPath, "utf8")).toBe(recorded);
+  });
+
+  test("stop_hook_active is silent", async () => {
+    seedConflict();
+    const transcript = claudeTranscript(true);
+    const r = await runHook(stopPayload(transcript, { stop_hook_active: true }), FLAG_ON);
+    expect(r.exit).toBe(0);
+    expect(r.stdout).toBe("");
+    expect(existsSync(hygieneDigestHashPath(vault))).toBe(false);
+  });
+
+  test("a turn without an artifact write is silent", async () => {
+    seedConflict();
+    const transcript = claudeTranscript(false);
+    const r = await runHook(stopPayload(transcript), FLAG_ON);
+    expect(r.exit).toBe(0);
+    expect(r.stdout).toBe("");
+    expect(existsSync(hygieneDigestHashPath(vault))).toBe(false);
+  });
+
+  test("a missing vault is silent", async () => {
+    seedConflict();
+    const transcript = claudeTranscript(true);
+    // No VAULT_DIR and a throwaway home with no config: resolution falls
+    // through every source and returns null. The cwd is the throwaway
+    // home, so the project-pointer walk-up finds no pointer either.
+    const r = await runHook(stopPayload(transcript), { VAULT_DIR: "" });
+    expect(r.exit).toBe(0);
+    expect(r.stdout).toBe("");
+  });
+
+  test("a scan with nothing eligible emits nothing and writes no ledger", async () => {
+    // Fresh vault: the default sweep runs (flag on, artifact turn) and
+    // finds nothing eligible, so the composer answers null.
+    const transcript = claudeTranscript(true);
+    const r = await runHook(stopPayload(transcript), FLAG_ON);
+    expect(r.exit).toBe(0);
+    expect(r.stdout).toBe("");
+    expect(existsSync(hygieneDigestHashPath(vault))).toBe(false);
+  });
+
+  test("claudecode gets the hookSpecificOutput Stop shape, other runtimes the portable one-line shape", async () => {
+    seedConflict();
+    const claude = await runHook(stopPayload(claudeTranscript(true)), FLAG_ON);
+    const claudeParsed = JSON.parse(claude.stdout) as {
+      hookSpecificOutput: { hookEventName: string; additionalContext: string } | undefined;
+      decision: string | undefined;
+    };
+    expect(claudeParsed.hookSpecificOutput).toBeDefined();
+    expect(claudeParsed.decision).toBeUndefined();
+
+    // The first probe recorded the emitted state; reset the ledger so the
+    // second probe emits again (this test pins output shape, not dedupe).
+    rmSync(hygieneDigestHashPath(vault), { force: true });
+    const plain = writeTranscript(join(configHome, "plain-session.jsonl"), [
+      ccUser("please add a file"),
+      ccAssistantToolUse("Write", { file_path: "/tmp/x.md" }),
+    ]);
+    const portable = await runHook(stopPayload(plain), FLAG_ON);
+    const reason = portableReason(portable.stdout);
+    expect(reason.startsWith("Open Second Brain hygiene:")).toBe(true);
+    expect(reason.includes("\n")).toBe(false);
+  });
+
+  test(`the ledger file is named ${HYGIENE_DIGEST_HASH_FILENAME} beside hook-state, never inside it`, () => {
+    expect(HYGIENE_DIGEST_HASH_FILENAME).toBe("hygiene-digest.hash");
+    expect(hygieneDigestHashPath("/v").replaceAll("\\", "/")).toBe(
+      "/v/.open-second-brain/hygiene-digest.hash",
+    );
+  });
+});

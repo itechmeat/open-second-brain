@@ -1264,6 +1264,22 @@ export function resolveRegroundPartChars(
 }
 
 /**
+ * End-of-turn hygiene digest gate (context-injection-pipeline). Default
+ * OFF: the Stop hook stays a silent no-op unless `hygiene_digest_enabled`
+ * is `"true"` (or the matching env override). Resolved BEFORE the vault so
+ * the off path costs one config read - the hook fires after every turn on
+ * every install, and the detectors and search index load only after this
+ * gate passes.
+ */
+export function resolveHygieneDigestEnabled(configPath?: string): boolean {
+  return resolveConfigFlag(
+    "OPEN_SECOND_BRAIN_HYGIENE_DIGEST_ENABLED",
+    "hygiene_digest_enabled",
+    configPath,
+  );
+}
+
+/**
  * Tiered context-injection nav tier gate (retrieval-quality-and-context-delivery,
  * D1 / t_2d4f34d7). Default OFF: the additive navigation/map tier stays a
  * no-op unless `nav_tier_enabled: "true"` (or the matching env override). The
