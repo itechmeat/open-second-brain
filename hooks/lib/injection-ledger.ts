@@ -3,13 +3,15 @@
  * in front of the agent this session, and the queue of active-digest parts
  * still to re-deliver after a split.
  *
- * Three namespaced keys live in the per-scope hook-state file
+ * Four namespaced keys live in the per-scope hook-state file
  * (`session-state.ts`); this module is the only one that spells them:
  *
  * - {@link LEDGER_KEY_RECALL}: recall note keys already injected, so a later
  *   prompt does not repeat them.
  * - {@link LEDGER_KEY_ACTIVE}: vault paths the SessionStart digest emitted.
  * - {@link LEDGER_KEY_REGROUND}: digest parts 2..n plus a delivery cursor.
+ * - {@link LEDGER_KEY_SUBAGENT_INJECT}: sub-agent ids the PostToolUse
+ *   carrier already delivered the standing rules to.
  *
  * Every entry carries a {@link LEDGER_TTL_MS} expiry refreshed on each write.
  * Readers degrade to "empty" on any failure and never throw; writers return
@@ -21,6 +23,7 @@ import { parseHookStamp, readHookStamp, updateHookState } from "./session-state.
 export const LEDGER_KEY_RECALL = "osb.recall_inject.injected";
 export const LEDGER_KEY_ACTIVE = "osb.active_inject.emitted";
 export const LEDGER_KEY_REGROUND = "osb.reground.queue";
+export const LEDGER_KEY_SUBAGENT_INJECT = "osb.subagent_inject.delivered";
 
 /** Lifetime of every ledger entry (24 h), refreshed on every write. */
 export const LEDGER_TTL_MS = 86_400_000;
@@ -31,6 +34,17 @@ export const LEDGER_TTL_MS = 86_400_000;
  * lock-free reader re-parses on each prompt and tool call.
  */
 export const RECALL_SET_MAX = 2000;
+
+/**
+ * Ceiling on the sub-agent delivery set, for the same reason the recall set
+ * is capped: a delegated sub-agent is delivered to once per session, so a
+ * session that spawns hundreds of them must not grow the scope file that
+ * every lock-free reader re-parses on each write-shaped tool call. A session
+ * with more distinct sub-agents than the cap starts re-delivering to the
+ * oldest ids, which is the lose-not-duplicate side the carrier already
+ * accepts for a failed write.
+ */
+export const SUBAGENT_SET_MAX = 200;
 
 /**
  * True only for a string session id with at least one ASCII alphanumeric, the
@@ -91,6 +105,45 @@ export function recordRecallInjected(
       state[LEDGER_KEY_RECALL] = {
         expiresAt: now + LEDGER_TTL_MS,
         data: { keys: all.slice(Math.max(0, all.length - RECALL_SET_MAX)) },
+      };
+      return { state, result: true };
+    },
+    { nowMs },
+  );
+  return outcome.status === "ok";
+}
+
+/** Sub-agent ids the standing-rules carrier already delivered to this session. */
+export function readSubagentDeliveredIds(
+  vault: string,
+  sessionId: string,
+  nowMs: number = Date.now(),
+): ReadonlySet<string> {
+  return readStringSet(vault, sessionId, LEDGER_KEY_SUBAGENT_INJECT, "ids", nowMs);
+}
+
+/**
+ * Merge `agentId` into the session's delivered set and refresh its expiry.
+ * An expired set is dropped rather than merged. Past {@link SUBAGENT_SET_MAX}
+ * ids the oldest drop first (a re-delivered id keeps its first position, which
+ * is enough for a dedupe hint). Returns `false` on any failure.
+ */
+export function recordSubagentDeliveredId(
+  vault: string,
+  sessionId: string,
+  agentId: string,
+  nowMs: number = Date.now(),
+): boolean {
+  const outcome = updateHookState(
+    vault,
+    sessionId,
+    (state, now) => {
+      const prior = liveData(state[LEDGER_KEY_SUBAGENT_INJECT], now);
+      const merged = new Set([...stringList(prior?.["ids"]), agentId]);
+      const all = [...merged];
+      state[LEDGER_KEY_SUBAGENT_INJECT] = {
+        expiresAt: now + LEDGER_TTL_MS,
+        data: { ids: all.slice(Math.max(0, all.length - SUBAGENT_SET_MAX)) },
       };
       return { state, result: true };
     },
