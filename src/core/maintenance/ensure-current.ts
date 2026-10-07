@@ -17,11 +17,10 @@
  * migrations and downgrades correctly.
  */
 import { existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { Database } from "bun:sqlite";
 
 import { defaultConfigPath } from "../config.ts";
+import { o2bCommand } from "./o2b-command.ts";
 import { brainConfigPath } from "../brain/paths.ts";
 import { resolveSearchConfig } from "../search/index.ts";
 import { reindexVault } from "../search/indexer.ts";
@@ -150,22 +149,6 @@ function indexNeedsRebuild(config: ResolvedSearchConfig): boolean {
   } finally {
     closeDatabase(db);
   }
-}
-
-/**
- * argv prefix that runs this checkout's CLI (current plugin version).
- *
- * POSIX goes through `scripts/o2b`, which also applies the macOS SQLite
- * setup. Native Windows cannot execute that bash launcher, so it runs the
- * TypeScript entry point with the Bun that is running this process.
- */
-function o2bCommand(): string[] {
-  // src/core/maintenance/ensure-current.ts -> repo root
-  const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-  if (process.platform === "win32") {
-    return [process.execPath, "run", join(repo, "src", "cli", "main.ts")];
-  }
-  return [join(repo, "scripts", "o2b")];
 }
 
 /**
