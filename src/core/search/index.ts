@@ -41,6 +41,7 @@ import {
 import { SearchError } from "./types.ts";
 import type {
   ResolvedEmbeddingConfig,
+  ResolvedFreshenConfig,
   ResolvedRecallConfig,
   ResolvedRerankConfig,
   ResolvedSearchConfig,
@@ -71,6 +72,7 @@ export type {
   IndexStatusSnapshot,
   PendingVectorCensus,
   ResolvedEmbeddingConfig,
+  ResolvedFreshenConfig,
   ResolvedRecallConfig,
   ResolvedRerankConfig,
   ResolvedSearchConfig,
@@ -1377,6 +1379,31 @@ export function resolveSearchConfig(opts: {
     trigramPrefilterMaxSelectivity,
   });
 
+  const freshen: ResolvedFreshenConfig = Object.freeze({
+    intervalSeconds: parseInteger(
+      envOrConfig(
+        env,
+        config,
+        "OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S",
+        "search_freshen_interval_s",
+      ),
+      60,
+      "search_freshen_interval_s",
+      { min: 0 },
+    ),
+    embeddings: parseBool(
+      envOrConfig(
+        env,
+        config,
+        "OPEN_SECOND_BRAIN_SEARCH_FRESHEN_EMBEDDINGS",
+        "search_freshen_embeddings",
+      ),
+      false,
+      "search_freshen_embeddings",
+    ),
+    configPath: opts.configPath ?? null,
+  });
+
   const base: ResolvedSearchConfig = Object.freeze({
     vault: opts.vault,
     dbPath,
@@ -1395,6 +1422,7 @@ export function resolveSearchConfig(opts: {
     resumeReindex,
     hybridDeadlineMs,
     ftsTokenize,
+    freshen,
   });
 
   // The env variable names an extra-body refusal only when its value is

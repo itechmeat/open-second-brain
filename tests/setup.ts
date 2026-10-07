@@ -56,6 +56,14 @@ if (process.env["O2B_DEVICE_ID"] === undefined) {
   process.env["O2B_DEVICE_ID"] = "";
 }
 
+// Freshen-on-read starts a detached `o2b search index` whenever a search
+// meets an index older than the interval. A test suite must never leave
+// background indexers behind, so the default is off here; the tests of the
+// feature own the variable while they run.
+if (process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"] === undefined) {
+  process.env["OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S"] = "0";
+}
+
 if (!process.env["OPEN_SECOND_BRAIN_CONFIG"]) {
   const root = mkdtempSync(join(tmpdir(), "osb-test-default-"));
   // A preload's afterAll runs once, after the last file: the throwaway
