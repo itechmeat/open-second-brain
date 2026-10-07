@@ -18,6 +18,49 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Decides whether the Windows job is worth its 10+ minutes. Only a pull
+  # request that touches nothing but prose outside the shipped trees skips
+  # it; a push to main, any code, test, script, skill, hook, plugin,
+  # manifest or workflow change runs it. A job skipped by its `if:` reports
+  # success, so `windows` can stay a required check.
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      windows: ${{ steps.filter.outputs.windows }}
+    steps:
+      # The pull_request checkout is the merge commit; its first parent is
+      # the base tip, so a depth of 2 is enough to list the PR's files.
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Classify the changed paths
+        id: filter
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "windows=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only HEAD^1 HEAD)
+          printf '%s\n' "$changed"
+          # Prose that nothing ships: docs/ and Markdown outside skills/,
+          # hooks/ and plugins/. A root README, LICENSE or SECURITY edit
+          # also changes its copy under plugins/codex/, so it still runs.
+          if printf '%s\n' "$changed" \
+            | grep -qvE '^(docs/.*|[^/]+\.md|\.reviews/.*|(\.github|tests|src|scripts)/.*\.md)$'; then
+            echo "windows=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "windows=false" >> "$GITHUB_OUTPUT"
+          fi
+
   validate:
     name: validate
     runs-on: ubuntu-latest
@@ -172,6 +215,10 @@ jobs:
   # repeated here.
   windows:
     name: windows
+    needs: changes
+    # Runs unless the filter positively said "prose only": a failed or
+    # empty filter falls back to running the job, never to skipping it.
+    if: ${{ !cancelled() && needs.changes.outputs.windows != 'false' }}
     runs-on: windows-latest
     # The suite takes 20 minutes on a good day and has taken over 45 on a
     # slow runner (every file about 2.5x slower, nothing hung); the bound is
