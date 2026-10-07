@@ -10,7 +10,10 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
 import { indexVault } from "../../../src/core/search/indexer.ts";
-import { LAST_INDEXED_AT_STATE_KEY } from "../../../src/core/search/store/state.ts";
+import {
+  LAST_INDEXED_AT_STATE_KEY,
+  LINK_RESOLUTION_PENDING_STATE_KEY,
+} from "../../../src/core/search/store/state.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 
 let vault: string;
@@ -102,4 +105,24 @@ test("a forced run never skips", async () => {
   const config = makeConfig({ vault, dbPath });
   await indexVault(config);
   expect((await indexVault(config, { force: true })).linkResolutionSkipped).toBe(false);
+});
+
+test("a run killed after writing documents but before resolving links is finished by the next run", async () => {
+  const config = makeConfig({ vault, dbPath });
+  await indexVault(config);
+  // What a run killed mid-way leaves: documents committed, the alias
+  // link not resolved yet, and the pending marker it set before writing.
+  const db = new Database(dbPath);
+  db.run("UPDATE links SET target_document_id = NULL WHERE target_path = 'grey-heron'");
+  db.query("INSERT OR REPLACE INTO index_state(key, value, updated_at) VALUES (?, '1', ?)").run(
+    LINK_RESOLUTION_PENDING_STATE_KEY,
+    new Date().toISOString(),
+  );
+  db.close();
+
+  const stats = await indexVault(config);
+  expect(stats.linkResolutionSkipped).toBe(false);
+  expect(linkTargets().find((l) => l.target_path === "grey-heron")?.resolved).toBe(1);
+  // Resolved now, so the run after that may skip again.
+  expect((await indexVault(config)).linkResolutionSkipped).toBe(true);
 });

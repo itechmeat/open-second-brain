@@ -53,6 +53,14 @@ export const EMBEDDING_VEC_VERSION_STATE_KEY = "embedding_vec_version";
  * dangling count (context-integrity-gates, unit G).
  */
 export const LAST_INDEXED_AT_STATE_KEY = "last_indexed_at";
+
+/**
+ * "1" from the moment an index run writes its first document change until
+ * it has resolved links and aliases; "0" after. A run killed in between
+ * leaves "1", so the next run resolves links even when it changes nothing
+ * itself (index-freshness: a no-change run otherwise skips resolution).
+ */
+export const LINK_RESOLUTION_PENDING_STATE_KEY = "link_resolution_pending";
 export const LAST_FULL_INDEX_AT_STATE_KEY = "last_full_index_at";
 
 /**

@@ -104,6 +104,7 @@ import {
   EMBEDDING_PREFIX_PASSAGE_STATE_KEY,
   LAST_FULL_INDEX_AT_STATE_KEY,
   LAST_INDEXED_AT_STATE_KEY,
+  LINK_RESOLUTION_PENDING_STATE_KEY,
 } from "./store.ts";
 import { LATEST_SCHEMA_VERSION } from "./schema.ts";
 import { chunkWindowDiagnosticCode, SearchError } from "./types.ts";
@@ -458,6 +459,12 @@ async function indexIntoRun(
   const ownsStore = !storeOverride;
   const store = storeOverride ?? (await Store.open(config, { mode: "write" }));
   const stats = newStats();
+  let linkResolutionMarked = false;
+  const markLinkResolutionPending = (): void => {
+    if (linkResolutionMarked) return;
+    linkResolutionMarked = true;
+    store.setState(LINK_RESOLUTION_PENDING_STATE_KEY, "1");
+  };
 
   try {
     const existing = store.listDocuments();
@@ -521,6 +528,7 @@ async function indexIntoRun(
           continue;
         }
 
+        markLinkResolutionPending();
         const filenameBase = basename(file.relPath, ".md");
         const chunkResult = chunkMarkdown(content, filenameBase, {
           maxTokens: config.chunkSize,
@@ -670,6 +678,7 @@ async function indexIntoRun(
 
     for (const [path] of existing) {
       if (!seen.has(path)) {
+        markLinkResolutionPending();
         store.deleteDocument(path);
         stats.deleted++;
         opts?.onFile?.({ path, kind: "deleted" });
@@ -682,13 +691,21 @@ async function indexIntoRun(
     // the alias pass resets and re-sets each alias-resolved link - which
     // is what made a no-change run write to disk. Skipped then; the
     // constraint and tier passes below still run.
-    if (stats.added + stats.updated + stats.deleted === 0 && opts?.force !== true) {
+    // A run killed between its document writes and this point leaves the
+    // pending marker set, and the next run resolves even if it changes
+    // nothing itself.
+    if (
+      stats.added + stats.updated + stats.deleted === 0 &&
+      opts?.force !== true &&
+      store.getState(LINK_RESOLUTION_PENDING_STATE_KEY) !== "1"
+    ) {
       stats.linkResolutionSkipped = true;
     } else {
       store.resolveLinkTargets();
       // Alias post-pass (v7): exact path matches above always win; this
       // only fills still-unresolved slash-free targets from doc_aliases.
       stats.aliasResolved = store.resolveAliasTargets();
+      store.setState(LINK_RESOLUTION_PENDING_STATE_KEY, "0");
     }
 
     // Link-constraint materialization post-pass

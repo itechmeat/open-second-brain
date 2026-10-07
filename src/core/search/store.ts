@@ -65,6 +65,7 @@ export {
   INDEX_REVISION_STATE_KEY,
   LAST_FULL_INDEX_AT_STATE_KEY,
   LAST_INDEXED_AT_STATE_KEY,
+  LINK_RESOLUTION_PENDING_STATE_KEY,
   peekCorpusGenerationSync,
   readCorpusGenerationSync,
 } from "./store/state.ts";
