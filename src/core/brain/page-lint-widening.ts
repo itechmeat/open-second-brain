@@ -6,8 +6,9 @@
  * stay bounded. A paraphrase usually lands somewhere else. This module
  * widens the candidate set through the search index that already exists:
  *
- *   1. the written body's distinct tokens become one FTS5 OR query through
- *      `buildFtsMatch`;
+ *   1. the written body's longest {@link WIDENING_QUERY_MAX_TERMS} distinct
+ *      tokens become one FTS5 OR query through `buildFtsMatch`; the
+ *      candidates are still scored on the full token set;
  *   2. `keywordTopK` pulls the BM25 top {@link NEAR_DUPLICATE_WIDENING_TOP_K}
  *      chunks of other pages per written page (the page's own indexed
  *      chunks are excluded), so one call reads at most that many
@@ -23,8 +24,9 @@
  * `src/core/search/embeddings/`. The store is opened read-only and is
  * never repaired from here (the FTS rebuild path takes the writer lock).
  *
- * Fail-open, never silent: an index that cannot be opened or queried
- * yields the named status `index_unavailable` and no candidates, so the
+ * Fail-open, never silent: an index that cannot be opened, queried or
+ * closed, and any other throw on the way to the candidates, yields the
+ * named status `index_unavailable` and no candidates, so the
  * write and the same-directory hint are unaffected and the receipt says
  * the widening did not run. The status carries the failure by name
  * (`detail`), so a missing index, a locked or corrupt one and a defect in
@@ -67,6 +69,14 @@ const MARKDOWN_EXT = ".md";
 /** Prefix of a vault-relative spelling that leaves the vault. */
 const VAULT_ESCAPE_PREFIX = "../";
 
+/**
+ * Most distinct tokens one widening query OR-joins. FTS5 cost grows with
+ * the term count and a written page may be up to the artifact byte cap,
+ * so the query is bounded; the hint's quality does not depend on it,
+ * because the lint scores every candidate on the full token set.
+ */
+export const WIDENING_QUERY_MAX_TERMS = 64;
+
 /** The fail-open answer for a widening that could not run, naming why. */
 export function wideningUnavailable(err: unknown): WideningResult {
   return Object.freeze({
@@ -104,11 +114,20 @@ function readCandidate(vault: string, page: string): NearDuplicateCandidate | nu
   }
 }
 
-/** The FTS5 query for one written page: its distinct body tokens, OR-joined. */
+/**
+ * The FTS5 query for one written page: its distinct body tokens, OR-joined,
+ * capped at {@link WIDENING_QUERY_MAX_TERMS} by the longest-first rule.
+ * Longest first, ties in code-unit order: a long token is the rarer one
+ * in practice and needs no index read to rank, and the order is total, so
+ * the same body always yields the same query.
+ */
 function widenQuery(vault: string, page: string): string {
   const candidate = readCandidate(vault, page);
   if (candidate === null) return "";
-  return buildFtsMatch([...candidate.tokens].join(" "), { matchMode: FTS_MATCH_MODE.any });
+  const terms = [...candidate.tokens]
+    .toSorted((a, b) => b.length - a.length || (a < b ? -1 : a > b ? 1 : 0))
+    .slice(0, WIDENING_QUERY_MAX_TERMS);
+  return buildFtsMatch(terms.join(" "), { matchMode: FTS_MATCH_MODE.any });
 }
 
 /**
@@ -139,6 +158,11 @@ function keywordPaths(store: Store, query: string, page: string): ReadonlyArray<
  * Near-duplicate candidates from the keyword index for the pages one write
  * committed. Each candidate appears once, in first-hit order, whatever
  * number of chunks or written pages pulled it in.
+ *
+ * Never throws: the write it hints on has already happened, so a failure
+ * anywhere - opening, querying or closing the store, the `readable`
+ * predicate, a candidate read - is the named `index_unavailable` status,
+ * never an error the caller would read as a failed write and retry.
  */
 export async function collectWideningCandidates(
   config: ResolvedSearchConfig,
@@ -146,12 +170,20 @@ export async function collectWideningCandidates(
   pages: ReadonlyArray<string>,
   readable: ReadableRef,
 ): Promise<WideningResult> {
-  let store: Store;
   try {
-    store = await Store.open(config, { mode: "read" });
+    return await widen(config, vault, pages, readable);
   } catch (err) {
     return wideningUnavailable(err);
   }
+}
+
+async function widen(
+  config: ResolvedSearchConfig,
+  vault: string,
+  pages: ReadonlyArray<string>,
+  readable: ReadableRef,
+): Promise<WideningResult> {
+  const store = await Store.open(config, { mode: "read" });
   const hitPaths: string[] = [];
   try {
     for (const page of pages) {
@@ -160,8 +192,6 @@ export async function collectWideningCandidates(
       if (query === "") continue;
       hitPaths.push(...keywordPaths(store, query, written));
     }
-  } catch (err) {
-    return wideningUnavailable(err);
   } finally {
     await store.close();
   }

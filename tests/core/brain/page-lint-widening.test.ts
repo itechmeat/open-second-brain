@@ -16,7 +16,10 @@ import {
   NEAR_DUPLICATE_WIDENING_TOP_K,
   READ_ALL_REFS,
 } from "../../../src/core/brain/near-duplicate.ts";
-import { collectWideningCandidates } from "../../../src/core/brain/page-lint-widening.ts";
+import {
+  collectWideningCandidates,
+  WIDENING_QUERY_MAX_TERMS,
+} from "../../../src/core/brain/page-lint-widening.ts";
 import { tokenise } from "../../../src/core/brain/similarity.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { resolveSearchConfig } from "../../../src/core/search/index.ts";
@@ -118,6 +121,37 @@ describe("collectWideningCandidates", () => {
     });
   });
 
+  test("a reach predicate that throws is a named status, never a thrown error", async () => {
+    writeNote("Projects/Earlier.md", BODY);
+    const config = await indexed();
+    const written = writeNote("Notes/Later.md", BODY);
+    const result = await collectWideningCandidates(config, vault, [written], () => {
+      throw new RangeError("reach lookup failed");
+    });
+    expect(result).toEqual({
+      status: "index_unavailable",
+      candidates: [],
+      detail: "RangeError",
+    });
+  });
+
+  test("a long body queries only its longest tokens, and a shared one still finds the lookalike", async () => {
+    // Every BODY token is longer than every filler token, so the capped
+    // query keeps all of BODY and drops the shortest fillers.
+    const fillers = Array.from({ length: WIDENING_QUERY_MAX_TERMS * 30 }, (_, i) => `q${i}`);
+    expect(fillers.every((t) => t.length < 6)).toBe(true);
+    const shortOnly = writeNote("Projects/ShortOnly.md", fillers.slice(0, 100).join(" "));
+    const lookalike = writeNote("Projects/Lookalike.md", BODY);
+    const config = await indexed();
+    const written = writeNote("Notes/Long.md", `${BODY} ${fillers.join(" ")}`);
+    const result = await collectWideningCandidates(config, vault, [written], READ_ALL_REFS);
+    expect(result.status).toBe("used");
+    const pages = result.candidates.map((c) => c.page);
+    expect(pages).toContain(lookalike);
+    // Its two- and three-character tokens are past the cap, so no query term reaches it.
+    expect(pages).not.toContain(shortOnly);
+  });
+
   test("the keyword pull is bounded by the widening top-k", async () => {
     for (let i = 0; i < NEAR_DUPLICATE_WIDENING_TOP_K + 10; i++) {
       writeNote(`Projects/AA-Copy-${String(i).padStart(2, "0")}.md`, BODY);
@@ -131,8 +165,9 @@ describe("collectWideningCandidates", () => {
 
   test("a rewritten long page's own indexed chunks do not crowd out a lookalike", async () => {
     // Every section repeats the probe tokens, so each of the page's own
-    // chunks outranks the lookalike under BM25.
-    const filler = Array.from({ length: 160 }, (_, i) => `filler${i}`).join(" ");
+    // chunks outranks the lookalike under BM25. The filler tokens are
+    // shorter than every probe token, so the capped query keeps the probe.
+    const filler = Array.from({ length: 320 }, (_, i) => `f${i}`).join(" ");
     const sections = Array.from(
       { length: NEAR_DUPLICATE_WIDENING_TOP_K + 10 },
       (_, i) => `## Section ${i}\n\n${BODY} ${BODY} ${BODY}\n\n${filler}`,
