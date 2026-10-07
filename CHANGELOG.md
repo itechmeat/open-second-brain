@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.75.0] - 2026-10-07
+
+Open Second Brain now reaches the two moments the session-start injection never could: the delegated subagent that performs the writes, and the end of the turn. A PostToolUse carrier hands the operator's standing rules to every delegated subagent once, at its first write-shaped tool call; an opt-in Stop-hook digest surfaces pending Brain hygiene findings as one line, once per change; and an injection body over its budget first degrades its sections to headline tiers - the top three ranked bullets each - before it drops a whole section.
+
+### Added
+
+- **The standing rules reach delegated subagents.** A PostToolUse carrier (`hooks/subagent-inject.ts`) delivers the operator's standing-rules block into a subagent's turn at its first write-shaped tool call (`Write|Edit|MultiEdit|apply_patch`) - the one channel a delegated turn exposes, and the moments learned rules govern. The main thread gets nothing, read-only subagents stay silent, an absent or empty rules file stays silent, and a failed read delivers the explicit failure block naming the path, so a subagent never mistakes "no rules were written" for "the rules could not be read". Delivery is once per subagent per session through the per-session hook-state ledger (`osb.subagent_inject.delivered`, the most recent 200 agent ids, 24 h TTL), recorded after the stdout write in the lose-not-duplicate direction, so a crash between write and record re-delivers rather than loses. Claude Code receives `hookSpecificOutput.additionalContext`, every other runtime the portable `decision: "block"` fallback. The block renderer is extracted to `hooks/lib/standing-block.ts`, so the session-start lane and the carrier render the operator's rules through exactly one code path with one cap policy.
+- **An end-of-turn hygiene digest, opt-in.** With `hygiene_digest_enabled` in the machine config (env `OPEN_SECOND_BRAIN_HYGIENE_DIGEST_ENABLED`, default off), the Stop hook runs after a turn that wrote an artifact and folds the default hygiene sweep plus the index-backed dangling-link count into ONE line: warning- and action-severity findings as per-detector counts (informational findings never emit), under a hard 300-character cap that degrades by dropping whole count segments, ending in the pointer to `o2b brain hygiene scan` where the findings behind the counts live. A hash ledger beside the hook-state directory (`<vault>/.open-second-brain/hygiene-digest.hash`, one overwrite-only SHA-256) keeps an unchanged finding set silent, so the line lands once per change, not once per turn, and re-arms in a new session; zero eligible findings and flag-off installs emit nothing. The flag resolves before the vault, so the per-turn cost when off is one config read. Claude Code receives `hookSpecificOutput.additionalContext`, other runtimes `decision: "block"`.
+- **Oversized sections degrade to headlines before they drop.** When the injected body exceeds `active.inject_budget_chars`, the shared budget core first compacts every section below the keep-guard priority (the preamble and the confirmed rules are exempt) to a headline tier - its heading, its lead-in lines and its top three bullets, ranked by the inline application/confidence tags, with lines that carry no parseable tags kept in render order - and only then drops whole sections deterministically (recently retired first, then quarantine, then most-applied). The one-line budget notice names the sections reduced to headlines and those dropped, and names as tiered only the sections the tier actually left behind. The doctor pressure probe mirrors the step through the same shared code, exemptions and top-N: `tierFires` marks the exact overflow condition under which the reactive tier runs, and each eviction candidate carries `tieredBytes`, the byte footprint the tier would first degrade it to, so the doctor's picture of what happens at the wall stays the reactive path's picture.
+
+### Changed
+
+- **Grok installs register both new hooks.** The grok asset registry adds `subagent-inject` to the write-shaped PostToolUse matcher and `hygiene-digest` to the Stop group, so a grok install delivers standing rules to its subagents and can surface the hygiene digest like Claude Code and Codex.
+- **Docs:** `docs/how-it-works.md` gains the subagent carrier and the hygiene digest and rewrites the budget paragraph around the headline tier, `hooks/README.md` gains rows for the new PostToolUse and Stop hooks, `docs/cli-reference.md` the `hygiene_digest_enabled` flag, and `docs/mcp.md` notes that `brain_hygiene`'s pull surface doubles as a push channel when the digest is on.
+
 ## [1.74.1] - 2026-10-07
 
 The bundled opencode plugin loads and works on OpenCode V2 hosts from the same installed file that already served V1. Contributed by @jkoelker in #190, with the maintainer-side completion of the V2 event names against the released 2.0.24 build.
@@ -8277,6 +8292,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.75.0]: https://github.com/itechmeat/open-second-brain/compare/v1.74.1...v1.75.0
 [1.74.1]: https://github.com/itechmeat/open-second-brain/compare/v1.74.0...v1.74.1
 [1.74.0]: https://github.com/itechmeat/open-second-brain/compare/v1.73.1...v1.74.0
 [1.73.1]: https://github.com/itechmeat/open-second-brain/compare/v1.73.0...v1.73.1
