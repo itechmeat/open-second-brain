@@ -134,10 +134,33 @@ async function toolBrainReviewCandidates(
     const slug = brainArtifactSlug(id);
     return [`pref-${slug}`, `ret-${slug}`];
   };
+  // A retire-sibling pair names two preferences; it is kept only when the
+  // caller may see both, in both spellings, and the list is filtered
+  // before anything is counted, so a withheld page moves no number.
+  const retireSiblings =
+    report.retire_siblings !== undefined
+      ? view.keep(report.retire_siblings, (p) => [
+          ...bothSpellings(p.retiring_id),
+          ...bothSpellings(p.sibling_id),
+        ])
+      : [];
   return {
     // Signal rows name an inbox signal by id AND by vault-relative path.
     ...(report.signal_novelty !== undefined
       ? { signal_novelty: view.keep(report.signal_novelty, (s) => [s.path, s.id]) }
+      : {}),
+    ...(retireSiblings.length > 0
+      ? {
+          retire_siblings: retireSiblings.map((p) => ({
+            retiring_id: p.retiring_id,
+            sibling_id: p.sibling_id,
+            score: p.score,
+            method: p.method,
+          })),
+        }
+      : {}),
+    ...(report.retire_siblings_semantic !== undefined
+      ? { retire_siblings_semantic: report.retire_siblings_semantic }
       : {}),
     // `would_create` names ids the pass has not written yet, so most of
     // them resolve to nothing and pass; asking anyway is what keeps a
@@ -253,7 +276,7 @@ export const REVIEW_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_review_candidates",
     description:
-      "Read-only preview of the next `brain_dream` pass: would_create / would_promote / would_retire / would_supersede, clusters below threshold, gated retires, and intent reviews. Mutates nothing.",
+      "Read-only preview of the next `brain_dream` pass: would_create / would_promote / would_retire / would_supersede, clusters below threshold, gated retires, intent reviews, and opt-in retire_siblings (lexical or stored-vector pairs; tier status in retire_siblings_semantic). Mutates nothing.",
     inputSchema: {
       type: "object",
       properties: {

@@ -25,6 +25,7 @@ import { mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { appendApplyEvidence } from "../../src/core/brain/apply-evidence.ts";
 import { processedSignalPath, signalPath } from "../../src/core/brain/paths.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
 import { writeSignal } from "../../src/core/brain/signal.ts";
@@ -185,5 +186,122 @@ describe("the lifecycle review readers answer at the caller's reach", () => {
   test("remote reach: a trigger scan still queues the readable retention row", async () => {
     const scan = { operation: "scan" };
     expect(await answer(fixture(true), "brain_trigger", undefined, scan)).toContain(READABLE_SLUG);
+  });
+});
+
+const SIBLINGS_FLAG = "OPEN_SECOND_BRAIN_NEAR_DUPLICATE_RETIRE_SIBLINGS_ENABLED";
+const SIBLING_RULE = "always run the formatter before every commit in this repository";
+const SIBLING_PARAPHRASE = "always run the formatter before each commit in this repository";
+
+function rule(vault: string, slug: string, principle: string, reserved: boolean): void {
+  writePreference(vault, {
+    slug,
+    topic: slug,
+    principle,
+    created_at: "2026-05-01T00:00:00Z",
+    unconfirmed_until: "2026-05-08T00:00:00Z",
+    status: BRAIN_PREFERENCE_STATUS.confirmed,
+    evidenced_by: [],
+    confirmed_at: "2026-05-02T00:00:00Z",
+    applied_count: 1,
+    violated_count: 0,
+    last_evidence_at: new Date().toISOString().slice(0, 10) + "T00:00:00Z",
+    confidence: BRAIN_CONFIDENCE.high,
+    confidence_value: 0.8,
+  });
+  if (reserved) reserve(join(vault, "Brain", "preferences", `pref-${slug}.md`));
+}
+
+function evidence(vault: string, slug: string, result: "applied" | "outdated"): void {
+  appendApplyEvidence(vault, {
+    pref_id: `pref-${slug}`,
+    artifact: "[[AA-artifact]]",
+    result,
+    agent: "test",
+  });
+}
+
+function siblingsOf(answerText: string): unknown {
+  return (JSON.parse(answerText) as { retire_siblings?: unknown }).retire_siblings;
+}
+
+/**
+ * Two context-driven retires, each with one paraphrase sibling. In the
+ * first pair the sibling is withheld, in the second the retiring
+ * preference is; a readable pair is in both vaults.
+ */
+function siblingFixture(withPrivate: boolean): Fixture {
+  const base = mkdtempSync(join(tmpdir(), "o2b-review-siblings-reach-"));
+  bases.push(base);
+  const f = buildReachLogFixture(base, withPrivate);
+  rule(f.vault, "public-old", `${SIBLING_RULE} alpha`, false);
+  rule(f.vault, "public-twin", `${SIBLING_PARAPHRASE} alpha`, false);
+  evidence(f.vault, "public-twin", "applied");
+  evidence(f.vault, "public-old", "outdated");
+  if (withPrivate) {
+    rule(f.vault, "public-retiring", `${SIBLING_RULE} beta`, false);
+    rule(f.vault, `${WITHHELD_PREFIX}-twin`, `${SIBLING_PARAPHRASE} beta`, true);
+    evidence(f.vault, `${WITHHELD_PREFIX}-twin`, "applied");
+    evidence(f.vault, "public-retiring", "outdated");
+    rule(f.vault, `${WITHHELD_PREFIX}-old`, `${SIBLING_RULE} gamma`, true);
+    rule(f.vault, "public-gamma-twin", `${SIBLING_PARAPHRASE} gamma`, false);
+    evidence(f.vault, "public-gamma-twin", "applied");
+    evidence(f.vault, `${WITHHELD_PREFIX}-old`, "outdated");
+  }
+  return f;
+}
+
+describe("brain_review_candidates retire_siblings answer at the caller's reach", () => {
+  const savedFlag = process.env[SIBLINGS_FLAG];
+
+  afterEach(() => {
+    if (savedFlag === undefined) delete process.env[SIBLINGS_FLAG];
+    else process.env[SIBLINGS_FLAG] = savedFlag;
+  });
+
+  test("remote reach: a pair with a withheld retiring or sibling id is neither listed nor counted", async () => {
+    process.env[SIBLINGS_FLAG] = "1";
+    const withheld = await answer(siblingFixture(true), "brain_review_candidates");
+    const absent = await answer(siblingFixture(false), "brain_review_candidates");
+    expect(withheld).not.toContain(WITHHELD_PREFIX);
+    expect(siblingsOf(withheld)).toEqual(siblingsOf(absent));
+    expect(siblingsOf(withheld)).toEqual([
+      {
+        retiring_id: "pref-public-old",
+        sibling_id: "pref-public-twin",
+        score: 0.833,
+        method: "lexical",
+      },
+    ]);
+  });
+
+  test("remote reach: a sibling whose ret- spelling is withheld is not listed", async () => {
+    // The dry run admits the readable `pref-bygone`, but the vault also holds
+    // a withheld `ret-bygone`: the view asks about both spellings.
+    process.env[SIBLINGS_FLAG] = "1";
+    const f = siblingFixture(true);
+    rule(f.vault, RETIRED_SLUG, `${SIBLING_PARAPHRASE} beta`, false);
+    evidence(f.vault, RETIRED_SLUG, "applied");
+    const remote = await answer(f, "brain_review_candidates");
+    expect(remote).not.toContain(RETIRED_SLUG);
+    const local = await answer(f, "brain_review_candidates", TRANSPORT_REACH.local);
+    expect(local).toContain(`"sibling_id":"pref-${RETIRED_SLUG}"`);
+  });
+
+  test("local control: the operator's own shell lists every pair", async () => {
+    process.env[SIBLINGS_FLAG] = "1";
+    const local = await answer(
+      siblingFixture(true),
+      "brain_review_candidates",
+      TRANSPORT_REACH.local,
+    );
+    const pairs = (siblingsOf(local) as Array<{ retiring_id: string; sibling_id: string }>).map(
+      (p) => `${p.retiring_id}>${p.sibling_id}`,
+    );
+    expect(pairs).toEqual([
+      "pref-public-old>pref-public-twin",
+      "pref-public-retiring>pref-zzwithheld-stale-twin",
+      "pref-zzwithheld-stale-old>pref-public-gamma-twin",
+    ]);
   });
 });
