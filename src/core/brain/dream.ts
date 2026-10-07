@@ -59,6 +59,7 @@ import {
   gatedRetireSlugs,
   plannedSignalArchiveIds,
   plannedSignalMoveIds,
+  shouldGateRetireFromConfirmed,
   type DreamApplyResult,
 } from "./dream-apply.ts";
 import { resolveNearDuplicateRetireSiblingsEnabled } from "../config.ts";
@@ -532,15 +533,24 @@ function dreamRun(
     healEnriched: exec.healEnriched,
     snapshotPath: snapshotPathStr,
   });
-  return withRetireSiblings(summary, scan, plan, exec.gatedRetires, opts.retireSiblingsEnabled);
+  return withRetireSiblings(summary, scan, plan, {
+    enabled: opts.retireSiblingsEnabled,
+    gatedRetires: exec.gatedRetires,
+    // A dry run applies nothing, so it gates nothing; the preview asks the
+    // same confirmed-evidence gate the apply step will.
+    previewGateThreshold: dryRun ? cfg.retire.confirmed_evidence_min_threshold : undefined,
+  });
 }
 
 /**
  * Attach the retire-sibling projection (near-duplicate defense) to a
- * changed run's summary. Computed from the completed retire plan, so the
- * dry run and the real run agree, then reconciled against the retires the
- * apply step gated. The scan is the pass's own reach (a preview scan is
- * already admitted), hence {@link READ_ALL_REFS}. Off (`enabled`, else the
+ * changed run's summary. Computed from the completed retire plan, then
+ * reconciled against the retires the confirmed-evidence gate holds back:
+ * the ones the apply step gated, or on a dry run the ones it would gate,
+ * so the dry run and the real run agree. A retiring preference is never
+ * refreshed first, so its scanned frontmatter is what the apply step
+ * reads. The scan is the pass's own reach (a preview scan is already
+ * admitted), hence {@link READ_ALL_REFS}. Off (`enabled`, else the
  * default config's key), or with nothing to report, the summary is
  * returned untouched.
  */
@@ -548,16 +558,32 @@ function withRetireSiblings(
   summary: DreamRunSummary,
   scan: ScanResult,
   plan: PlanState,
-  gatedRetires: ReadonlyArray<DreamGatedRetireEntry>,
-  enabled: boolean | undefined,
+  opts: {
+    readonly enabled: boolean | undefined;
+    readonly gatedRetires: ReadonlyArray<DreamGatedRetireEntry>;
+    readonly previewGateThreshold: number | undefined;
+  },
 ): DreamRunSummary {
-  if (plan.retires.length === 0 || !(enabled ?? resolveNearDuplicateRetireSiblingsEnabled())) {
+  if (plan.retires.length === 0 || !(opts.enabled ?? resolveNearDuplicateRetireSiblingsEnabled())) {
     return summary;
+  }
+  const gated = new Set(opts.gatedRetires.map((g) => g.pref_id));
+  if (opts.previewGateThreshold !== undefined) {
+    const byId = new Map(scan.preferences.map((p) => [p.pref.id, p.pref] as const));
+    for (const r of plan.retires) {
+      const existing = byId.get(`pref-${r.slug}`);
+      if (
+        existing !== undefined &&
+        shouldGateRetireFromConfirmed(existing, r.reason, opts.previewGateThreshold)
+      ) {
+        gated.add(existing.id);
+      }
+    }
   }
   const siblings = planRetireSiblings(
     retireSiblingPool(scan.preferences.map((p) => p.pref)),
     plan.retires.map((r) => ({ id: `pref-${r.slug}`, principle: r.principle, reason: r.reason })),
-    { readable: READ_ALL_REFS, gated: new Set(gatedRetires.map((g) => g.pref_id)) },
+    { readable: READ_ALL_REFS, gated },
   );
   if (siblings.length === 0) return summary;
   return Object.freeze({ ...summary, retire_siblings: Object.freeze([...siblings]) });

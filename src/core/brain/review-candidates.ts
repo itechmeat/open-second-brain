@@ -19,12 +19,13 @@ import { posix } from "node:path";
 import { resolveNearDuplicateRetireSiblingsEnabled } from "../config.ts";
 import { vaultRelative } from "../path-safety.ts";
 import type { ResolvedSearchConfig } from "../search/types.ts";
-import { dream, scanBrain } from "./dream.ts";
+import { dream, scanBrain, shouldGateRetireFromConfirmed } from "./dream.ts";
 import type { DreamOptions, DreamRunSummary } from "./dream-types.ts";
 import type { BrainIntentReviewEntry } from "./intent-review.ts";
 import { NEAR_DUPLICATE_THRESHOLDS, READ_ALL_REFS, roundScore } from "./near-duplicate.ts";
 import { storedVectorSimilarity, type StoredVectorStatus } from "./near-duplicate-vectors.ts";
 import { brainDirs } from "./paths.ts";
+import { loadBrainConfig } from "./policy.ts";
 import {
   compareRetireSiblings,
   RETIRE_SIBLING_TRIGGER_REASONS,
@@ -252,21 +253,33 @@ async function projectRetireSiblings(
   opts: BuildReviewCandidatesOptions,
 ): Promise<RetireSiblingProjection> {
   const lexical = summary.retire_siblings ?? [];
-  const retiringIds = summary.retired
-    .filter((r) => RETIRE_SIBLING_TRIGGER_REASONS.has(r.reason))
-    .map((r) => `pref-${r.id.replace(/^ret-/, "")}`)
+  const triggered = summary.retired.filter((r) => RETIRE_SIBLING_TRIGGER_REASONS.has(r.reason));
+  if (opts.searchConfig === undefined || triggered.length === 0) return { siblings: lexical };
+  const readable = opts.readable ?? READ_ALL_REFS;
+  const scanned = scanBrain(vault)
+    .preferences.filter((p) => readable(vaultRelative(p.path, vault)))
+    .map((p) => p.pref);
+  // The dry run gates nothing, so the retires the confirmed-evidence gate
+  // will hold back are dropped here, as the dream summary drops their
+  // lexical siblings.
+  const gateThreshold = loadBrainConfig(vault).retire.confirmed_evidence_min_threshold;
+  const byId = new Map(scanned.map((p) => [p.id, p] as const));
+  const retiringIds = triggered
+    .map((r) => ({ id: `pref-${r.id.replace(/^ret-/, "")}`, reason: r.reason }))
+    .filter(({ id, reason }) => {
+      const existing = byId.get(id);
+      return (
+        existing === undefined || !shouldGateRetireFromConfirmed(existing, reason, gateThreshold)
+      );
+    })
+    .map(({ id }) => id)
     .filter((id) => opts.retiringVisible?.(id) ?? true);
-  if (opts.searchConfig === undefined || retiringIds.length === 0) return { siblings: lexical };
+  if (retiringIds.length === 0) return { siblings: lexical };
 
   const prefsRel = vaultRelative(brainDirs(vault).preferences, vault);
   const pathOf = (id: string): string => posix.join(prefsRel, `${id}.md`);
-  const readable = opts.readable ?? READ_ALL_REFS;
   const allRetiring = new Set(summary.retired.map((r) => `pref-${r.id.replace(/^ret-/, "")}`));
-  const pool = retireSiblingPool(
-    scanBrain(vault)
-      .preferences.filter((p) => readable(vaultRelative(p.path, vault)))
-      .map((p) => p.pref),
-  ).filter((p) => !allRetiring.has(p.id));
+  const pool = retireSiblingPool(scanned).filter((p) => !allRetiring.has(p.id));
   const idByPath = new Map(pool.map((p) => [pathOf(p.id), p.id] as const));
   const candidatePaths = [...idByPath.keys()].toSorted();
 

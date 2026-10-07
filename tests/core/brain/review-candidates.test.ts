@@ -5,7 +5,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -193,6 +193,28 @@ describe("buildReviewCandidates retire_siblings", () => {
         { retiring_id: "pref-old", sibling_id: "pref-semantic", score: 0.958, method: "embedding" },
         LEXICAL,
       ]);
+    },
+  );
+
+  test.skipIf(!sqliteVecLoadable())(
+    "a retire the confirmed-evidence gate will hold back gets no embedding sibling",
+    async () => {
+      process.env[FLAG_ENV] = "1";
+      const yamlPath = join(vault, "Brain", "_brain.yaml");
+      writeFileSync(
+        yamlPath,
+        readFileSync(yamlPath, "utf8").replace(
+          "# confirmed_evidence_min_threshold: 3",
+          "confirmed_evidence_min_threshold: 50",
+        ),
+      );
+      const config = searchConfig();
+      await indexVault(config);
+      await plant(config, { old: [1, 0, 0, 0], semantic: [1, 0.3, 0, 0] });
+      const r = await buildReviewCandidates(vault, { now: NOW, searchConfig: config });
+      expect(r.would_retire).toEqual([{ id: "ret-old", reason: "superseded-by-context" }]);
+      expect("retire_siblings" in r).toBe(false);
+      expect("retire_siblings_semantic" in r).toBe(false);
     },
   );
 

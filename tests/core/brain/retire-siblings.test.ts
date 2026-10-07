@@ -218,7 +218,7 @@ describe("dream retire_siblings", () => {
     expect(JSON.stringify(on)).toBe(JSON.stringify(off));
   });
 
-  test("a sibling of a gated retire does not appear", () => {
+  test("a sibling of a gated retire does not appear, in the dry run or the real run", () => {
     process.env[FLAG_ENV] = "1";
     const yamlPath = join(vault, "Brain", "_brain.yaml");
     const yaml = readFileSync(yamlPath, "utf8").replace(
@@ -226,6 +226,9 @@ describe("dream retire_siblings", () => {
       "confirmed_evidence_min_threshold: 50",
     );
     writeFileSync(yamlPath, yaml);
+    const preview = dream(vault, { dryRun: true, now: NOW });
+    expect(preview.retired).toEqual([{ id: "ret-old", reason: "superseded-by-context" }]);
+    expect("retire_siblings" in preview).toBe(false);
     const real = dream(vault, { now: NOW });
     expect(real.gated_retires.map((g) => g.pref_id)).toEqual(["pref-old"]);
     expect("retire_siblings" in real).toBe(false);
