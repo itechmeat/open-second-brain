@@ -7,7 +7,10 @@ import { appendApplyEvidence } from "../../../src/core/brain/apply-evidence.ts";
 import { dream } from "../../../src/core/brain/dream.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 
-import { READ_ALL_REFS } from "../../../src/core/brain/near-duplicate.ts";
+import {
+  NEAR_DUPLICATE_CANDIDATE_CAP,
+  READ_ALL_REFS,
+} from "../../../src/core/brain/near-duplicate.ts";
 import {
   planRetireSiblings,
   RETIRE_SIBLING_TRIGGER_REASONS,
@@ -119,6 +122,16 @@ describe("planRetireSiblings", () => {
       },
     ];
     expect(planRetireSiblings(ACTIVE, both, NO_GATE)).toEqual([]);
+  });
+
+  test("a sibling sorting past the near-duplicate candidate cap is still scored", () => {
+    const fillers = Array.from({ length: NEAR_DUPLICATE_CANDIDATE_CAP + 50 }, (_, i) => ({
+      id: `pref-filler-${String(i).padStart(4, "0")}`,
+      principle: UNRELATED,
+    }));
+    const active = [...fillers, { id: "pref-zzz-dup", principle: RULE }];
+    const out = planRetireSiblings(active, retiring(BRAIN_RETIRED_REASON.rebutted), NO_GATE);
+    expect(out.map((s) => s.sibling_id)).toEqual(["pref-zzz-dup"]);
   });
 
   test("the output is stable across runs and input orders", () => {

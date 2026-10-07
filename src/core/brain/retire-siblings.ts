@@ -76,8 +76,8 @@ export function planRetireSiblings(
   opts: RetireSiblingOptions,
 ): ReadonlyArray<RetireSibling> {
   const retiringIds = new Set(retiring.map((r) => r.id));
-  // Sorted by id so the candidate cap keeps the same entries whatever
-  // order the caller scanned the vault in.
+  // Sorted by id so the output never depends on the order the caller
+  // scanned the vault in.
   const pool: NearDuplicatePoolEntry[] = active
     .filter((p) => !retiringIds.has(p.id))
     .map((p) => ({ ref: p.id, tokens: tokenise(p.principle) }))
@@ -89,6 +89,9 @@ export function planRetireSiblings(
     const { matches } = findNearDuplicates({ ref: r.id, tokens: tokenise(r.principle) }, pool, {
       threshold: NEAR_DUPLICATE_THRESHOLDS.retireSiblingLexical,
       readable: opts.readable,
+      // Lexical scoring over active preferences is cheap, and a capped
+      // scan would silently never score a sibling sorting past the cap.
+      cap: pool.length,
     });
     for (const m of matches) {
       out.push({ retiring_id: r.id, sibling_id: m.ref, score: m.score, method: m.method });
