@@ -21,13 +21,16 @@
  * duration, and the SORTED SET OF ARGUMENT KEY NAMES land on disk.
  * Argument key names are the tool's own JSON-Schema property names
  * (`query`, `max_tokens`, ...), never operator-supplied values - so no
- * prompt, note body, or preference id is ever recorded. The whole
- * payload still passes `safeContinuityPayload` redaction.
+ * prompt, note body, or preference id is ever recorded. Optional
+ * `decision_ms` and `stages` carry timings only; stage names come from the
+ * closed `ROUTE_STAGE_NAMES` allowlist. The whole payload still passes
+ * `safeContinuityPayload` redaction.
  */
 
 import { emitGatedTelemetry } from "./continuity/emit.ts";
 import { appendContinuityRecord, listContinuityRecords } from "./continuity/store.ts";
 import type { ContinuityRecord } from "./continuity/types.ts";
+import { isRouteStageName, type RouteStageName, type RouteStageTiming } from "../route-scope.ts";
 
 export type McpRouteStatus = "ok" | "error";
 
@@ -51,6 +54,12 @@ export interface McpRouteLatencyInput {
    * without the feature is unchanged.
    */
   readonly decisionMs?: number;
+  /**
+   * Write-stage timings noted inside this call. Only names in
+   * `ROUTE_STAGE_NAMES` with a finite, non-negative value are persisted;
+   * absent or empty leaves the record unchanged.
+   */
+  readonly stages?: ReadonlyArray<RouteStageTiming>;
 }
 
 export interface McpRouteLatencyFilter {
@@ -121,6 +130,8 @@ export function emitMcpRouteLatency<G>(
         ? { decision_ms: Math.max(0, Math.round(input.decisionMs)) }
         : {}),
     };
+    const stages = normalizeStages(input.stages);
+    if (stages.length > 0) payload["stages"] = stages;
     return appendContinuityRecord(vault, {
       kind: "mcp_route_latency",
       createdAt,
@@ -137,6 +148,28 @@ function normalizeArgKeys(raw: ReadonlyArray<string> | undefined): string[] {
     if (typeof key === "string" && key.length > 0) seen.add(key);
   }
   return [...seen].toSorted();
+}
+
+/**
+ * Keep allowlisted stage names with finite, non-negative values, sum
+ * repeated names in first-seen order and round to 0.1 ms. A name outside
+ * `ROUTE_STAGE_NAMES` is dropped here, at the only write site, so free
+ * text never reaches the continuity record.
+ */
+function normalizeStages(
+  raw: ReadonlyArray<RouteStageTiming> | undefined,
+): Array<{ name: RouteStageName; ms: number }> {
+  if (!Array.isArray(raw)) return [];
+  const summed = new Map<RouteStageName, number>();
+  for (const stage of raw as ReadonlyArray<unknown>) {
+    if (typeof stage !== "object" || stage === null) continue;
+    const { name, ms } = stage as { name?: unknown; ms?: unknown };
+    if (!isRouteStageName(name) || typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) {
+      continue;
+    }
+    summed.set(name, (summed.get(name) ?? 0) + ms);
+  }
+  return [...summed].map(([name, ms]) => ({ name, ms: Math.round(ms * 10) / 10 }));
 }
 
 /** List `mcp_route_latency` records newest-first, after applying filters. */
