@@ -60,12 +60,7 @@ import {
   resolveVault,
 } from "../src/core/config.ts";
 import { parseFrontmatterText } from "../src/core/vault.ts";
-import {
-  brainActivePath,
-  brainLessonsPath,
-  brainStandingRulesPath,
-  hookAuditDir,
-} from "../src/core/brain/paths.ts";
+import { brainActivePath, brainLessonsPath, hookAuditDir } from "../src/core/brain/paths.ts";
 import { budgetActiveBody } from "../src/core/brain/active-budget.ts";
 import {
   INJECT_BUDGET_CHARS_DEFAULT,
@@ -79,11 +74,6 @@ import {
   SCOPED_RULES_NOTICE_RESERVE,
 } from "../src/core/brain/scoped-rules.ts";
 import { resolveHostScope, resolveProjectScope } from "../src/core/brain/scope-identity.ts";
-import {
-  readStandingRules,
-  renderStandingRules,
-  renderStandingRulesFailure,
-} from "../src/core/brain/standing-rules.ts";
 import { healCliSymlinks } from "../src/cli/install-cli.ts";
 import { ensureVaultCurrent } from "../src/core/maintenance/ensure-current.ts";
 import { armProcessCeiling, resolveHookCeilingMs } from "./lib/process-ceiling.ts";
@@ -92,6 +82,12 @@ import { loadInjectContextFailOpen } from "../src/core/brain/inject-failopen.ts"
 import { collectRuntimeNotices, renderRuntimeNotices } from "../src/core/brain/runtime-notices.ts";
 import { asHookPayload, readHookInput, type HookPayloadBase } from "./lib/stdin.ts";
 import { beginInjectionEpoch, digestNotePaths, isRealSessionId } from "./lib/injection-ledger.ts";
+import {
+  LANE_BUDGETED,
+  LANE_UNBUDGETED,
+  renderStandingBlock,
+  type InjectionMeter,
+} from "./lib/standing-block.ts";
 import { pruneHookStateFiles } from "./lib/session-state.ts";
 import { detectHookRuntime } from "./lib/detect.ts";
 import { splitRegroundParts } from "../src/core/brain/reground-parts.ts";
@@ -101,7 +97,6 @@ import {
   RECEIPT_ITEM_ACTIVE_BODY,
   RECEIPT_ITEM_LESSONS_BODY,
   RECEIPT_ITEM_SCOPED_RULES,
-  RECEIPT_ITEM_STANDING_RULES,
 } from "../src/core/brain/context-receipts.ts";
 import { estimateTokens } from "../src/core/brain/text/tokenizer.ts";
 import type { InjectContextSource } from "../src/core/brain/inject-failopen.ts";
@@ -554,62 +549,13 @@ function unsplitDelivery(delivery: Delivery, context: string): Delivery {
 // ----- injection-size meter (context-integrity-gates, Unit H) --------------
 
 /**
- * Which ceiling a sub-body was charged against, and whether it was
- * emitted at all when the memory assembly failed.
- *
- *   - EXEMPT: produced outside the fail-open boundary. Charged against
- *     its own cap, not `inject_budget_chars`, and emitted whatever the
- *     memory layer does - so it is the one lane still real in a
- *     degraded injection.
- *   - BUDGETED: charged against `inject_budget_chars`. The scoped rules
- *     are charged first and their length is subtracted; the active and
- *     lessons bodies are each charged against what is left, which is why
- *     the receipt records the count and the scoped length.
- *   - UNBUDGETED: assembled inside the boundary but not charged (the
- *     runtime notices, which are bounded by the number of conditions
- *     that can hold rather than by a character count).
+ * Which ceiling a sub-body was charged against: the lane vocabulary and
+ * the meter type moved to hooks/lib/standing-block.ts with the standing
+ * renderer, which is where the one sub-body produced outside the
+ * fail-open boundary (the standing rules) is recorded.
  */
-const LANE_EXEMPT = "exempt";
-const LANE_BUDGETED = "budgeted";
-const LANE_UNBUDGETED = "unbudgeted";
-
-type InjectionLane = typeof LANE_EXEMPT | typeof LANE_BUDGETED | typeof LANE_UNBUDGETED;
-
-/**
- * One injected sub-body, captured while it is still a separate string.
- *
- * The parts are joined into one string before emission, so this is the
- * only point at which per-source attribution exists at all. The name is
- * a stable structural identifier, never derived from content.
- */
-interface InjectionSource {
-  readonly name: string;
-  readonly text: string;
-  readonly lane: InjectionLane;
-  /**
-   * Produced outside the fail-open boundary (the standing and scoped
-   * rules), so it reached the payload even when the memory body was
-   * replaced by the cache, and stays in a degraded receipt.
-   */
-  readonly outsideBoundary: boolean;
-}
-
-/** Mutable accumulator threaded through the assembly, read after it returns. */
-interface InjectionMeter {
-  readonly sources: InjectionSource[];
-  /** The configured `inject_budget_chars`, before the scoped rules are charged. */
-  readonly configuredBudgetChars: number;
-  /**
-   * The configured `inject_budget_chars` once a budgeted body was measured
-   * under it; `null` while nothing was.
-   */
-  budgetChars: number | null;
-  /** Length of the rendered scoped-rules block, subtracted from the budget; 0 when absent. */
-  scopedRulesChars: number;
-}
 
 /** Sub-body identifiers recorded per injection. Structural, not content-derived. */
-const SOURCE_STANDING_RULES = RECEIPT_ITEM_STANDING_RULES;
 const SOURCE_SCOPED_RULES = RECEIPT_ITEM_SCOPED_RULES;
 const SOURCE_RUNTIME_NOTICES = "runtime-notices";
 const SOURCE_ACTIVE_BODY = RECEIPT_ITEM_ACTIVE_BODY;
@@ -784,36 +730,6 @@ function resolveInjectionLimits(vault: string): InjectionLimits {
     standingRulesMaxChars: resolveStandingRulesMaxChars(cfg),
     scopedRulesMaxChars: resolveScopedRulesMaxChars(cfg),
   };
-}
-
-/**
- * Render the operator's standing-rules block, or the explicit statement
- * that it is unavailable.
- *
- * An absent or empty file yields "" and the lane simply does not appear.
- * A read that FAILED yields a block naming the path and the reason: the
- * agent must never be able to mistake "the operator wrote no rules" for
- * "the rules could not be read", and this is the surface where that
- * distinction has to be made, because there is no second channel the
- * operator would see.
- */
-function renderStandingBlock(vault: string, maxChars: number, meter: InjectionMeter): string {
-  const path = brainStandingRulesPath(vault);
-  let block: string;
-  try {
-    const rules = readStandingRules(vault, { maxChars });
-    if (rules === null) return "";
-    block = renderStandingRules(rules);
-  } catch (err) {
-    block = renderStandingRulesFailure(path, err);
-  }
-  meter.sources.push({
-    name: SOURCE_STANDING_RULES,
-    text: block,
-    lane: LANE_EXEMPT,
-    outsideBoundary: true,
-  });
-  return block;
 }
 
 /**
