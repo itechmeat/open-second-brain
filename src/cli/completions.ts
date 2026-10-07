@@ -91,13 +91,13 @@ Register-ArgumentCompleter -Native -CommandName o2b -ScriptBlock {
 }
 
 function quoteFish(value: string): string {
-  return `'${value.replace(/'/g, "\\'")}'`;
+  return `'${value.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
 }
 
 function quoteElvish(value: string): string {
-  return `"${value.replace(/"/g, '\\"')}"`;
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
 function quoteNu(value: string): string {
-  return `"${value.replace(/"/g, '\\"')}"`;
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }

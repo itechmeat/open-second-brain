@@ -27,6 +27,19 @@ Open Second Brain now defends against near-duplicate memory at the points a fact
 ### Fixed
 
 - **Every receipt lint finding answers at the caller's reach.** Note-write receipts used to apply the caller's reach to the near-duplicate check only; the broken-wikilink and merged-link checks now treat a withheld page as absent too, so a wikilink to it reads as broken and a merge chain ends at its first withheld hop.
+## [1.73.1] - 2026-10-07
+
+Sturdier input handling in three places, and a faster CI.
+
+### Fixed
+
+- **The HTTP transport parses the `Authorization` header in linear time.** The bearer pattern no longer lets two groups claim the same run of whitespace, so a long run of spaces cannot make the parse backtrack. Any whitespace before the key is still accepted, and a header with nothing after `Bearer` is still refused.
+- **Shell completions escape backslashes.** The fish, elvish and nushell scripts from `o2b completions` escape a backslash before quoting a word, so a word that ends in one can no longer swallow its closing quote.
+- **The brain explorer escapes every field it renders.** The node status and confidence in the details panel go through the same HTML escaping as every other field, and that escaping now covers quotes, since the status also lands in an attribute. Both values are already limited to known words by the parser, so this changes nothing a vault can produce today.
+
+### Changed
+
+- **CI:** the Linux suite runs in parallel workers, and the Windows suite in three shards on separate runners balanced by recorded timings (about 11 minutes instead of 25). Windows is skipped only for pull requests that change nothing but prose, and the release workflow reuses a green CI result on the tagged commit instead of running the suites again. The Linux jobs run on Ubuntu 26.04.
 
 ## [1.73.0] - 2026-10-06
 
@@ -8256,6 +8269,7 @@ plugin config (vault field)`, and exits with a clear
 - GitHub release workflow for tag-based and manually dispatched releases.
 
 [1.74.0]: https://github.com/itechmeat/open-second-brain/compare/v1.73.1...v1.74.0
+[1.73.1]: https://github.com/itechmeat/open-second-brain/compare/v1.73.0...v1.73.1
 [1.73.0]: https://github.com/itechmeat/open-second-brain/compare/v1.72.0...v1.73.0
 [1.72.0]: https://github.com/itechmeat/open-second-brain/compare/v1.71.0...v1.72.0
 [1.71.0]: https://github.com/itechmeat/open-second-brain/compare/v1.70.0...v1.71.0
