@@ -721,13 +721,13 @@
                 "</span></div>"
               : "",
             '<div class="field"><span class="k">status</span><span class="v"><span class="pill ' +
-              n.status +
+              esc(n.status) +
               '">' +
-              n.status +
+              esc(n.status) +
               "</span>" +
               (n.confidence
                 ? ' <span class="pill">' +
-                  n.confidence +
+                  esc(n.confidence) +
                   (n.confidence_value !== null
                     ? " (" + n.confidence_value.toFixed(2) + ")"
                     : "") +

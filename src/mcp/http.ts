@@ -454,8 +454,12 @@ function originAllowed(req: IncomingMessage, boundHost: string): boolean {
 
 function bearerToken(value: string | undefined): string | undefined {
   if (value === undefined) return undefined;
-  const m = /^Bearer\s+(.+)$/i.exec(value.trim());
-  return m?.[1];
+  // One whitespace and then the rest, trimmed after the match: the old
+  // `\s+(.+)` let both groups claim the same spaces, which backtracks
+  // polynomially on a long run of them.
+  const m = /^Bearer\s([\s\S]*)$/i.exec(value.trim());
+  const token = m?.[1]?.trimStart();
+  return token ? token : undefined;
 }
 
 function firstHeader(value: string | string[] | undefined): string | undefined {

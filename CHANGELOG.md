@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.73.1] - 2026-10-07
+
+Sturdier input handling in three places, and a faster CI.
+
+### Fixed
+
+- **The HTTP transport parses the `Authorization` header in linear time.** The bearer pattern no longer lets two groups claim the same run of whitespace, so a long run of spaces cannot make the parse backtrack. Any whitespace before the key is still accepted, and a header with nothing after `Bearer` is still refused.
+- **Shell completions escape backslashes.** The fish, elvish and nushell scripts from `o2b completions` escape a backslash before quoting a word, so a word that ends in one can no longer swallow its closing quote.
+- **The brain explorer escapes every field it renders.** The node status and confidence in the details panel go through the same HTML escaping as every other field. Both values are already limited to known words by the parser, so this changes nothing a vault can produce today.
+
+### Changed
+
+- **CI:** the Linux suite runs in parallel workers, and the Windows suite in three shards on separate runners balanced by recorded timings (about 11 minutes instead of 25). Windows is skipped only for pull requests that change nothing but prose, and the release workflow reuses a green CI result on the tagged commit instead of running the suites again. The Linux jobs run on Ubuntu 26.04.
+
 ## [1.73.0] - 2026-10-06
 
 Open Second Brain now makes every query embed honest and every upgrade safe: one query-embed gateway applies the caller's reach and the embedding price gate before any provider is called, for the search lane behind six MCP tools and two hooks and for the `brain_context_pack` semantic belief order, and fits the query, instruction prefix included, to the model's input window, disclosing a refusal or a cut by trail code; an operator can declare the input window of an uncurated model and send extra request fields to an OpenAI-compatible endpoint; recall feedback, benchmark, eval and tune reports name the degradations their searches met; and `o2b brain upgrade` and the automatic upgrade worker apply exactly the plan they computed, refusing a managed file edited in between instead of overwriting it.
@@ -8232,6 +8246,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.73.1]: https://github.com/itechmeat/open-second-brain/compare/v1.73.0...v1.73.1
 [1.73.0]: https://github.com/itechmeat/open-second-brain/compare/v1.72.0...v1.73.0
 [1.72.0]: https://github.com/itechmeat/open-second-brain/compare/v1.71.0...v1.72.0
 [1.71.0]: https://github.com/itechmeat/open-second-brain/compare/v1.70.0...v1.71.0

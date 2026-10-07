@@ -214,6 +214,26 @@ describe("Streamable HTTP MCP transport", () => {
     }
   });
 
+  test("the bearer accepts any run of whitespace before the key and nothing after it", async () => {
+    const handle = await startHttp({ vault }, { apiKey: "secret", host: "127.0.0.1", port: 0 });
+    try {
+      const send = (authorization: string) =>
+        fetch(handle.url, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            accept: "application/json",
+            authorization,
+          },
+          body: JSON.stringify(rpc("ping", 1)),
+        });
+      expect((await send("Bearer \t  secret")).status).toBe(200);
+      expect((await send(`Bearer ${" ".repeat(64)}`)).status).toBe(401);
+    } finally {
+      await handle.close();
+    }
+  });
+
   test("authenticated initialize and tools/list round-trip through JSON responses", async () => {
     const handle = await startHttp({ vault }, { apiKey: "secret", host: "127.0.0.1", port: 0 });
     try {
