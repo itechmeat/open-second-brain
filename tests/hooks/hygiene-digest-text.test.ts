@@ -80,10 +80,10 @@ describe("composeHygieneDigest", () => {
     const line = composeHygieneDigest({ findings, danglingLinks: 3 });
     expect(line).not.toBeNull();
     const positions = [
-      line.indexOf("1 conflicts"),
-      line.indexOf("2 dedup"),
-      line.indexOf("1 capture-scope"),
-      line.indexOf("3 dangling links"),
+      line!.indexOf("1 conflicts"),
+      line!.indexOf("2 dedup"),
+      line!.indexOf("1 capture-scope"),
+      line!.indexOf("3 dangling links"),
     ];
     expect(positions.every((p) => p >= 0)).toBe(true);
     expect([...positions].toSorted((a, b) => a - b)).toEqual(positions);
