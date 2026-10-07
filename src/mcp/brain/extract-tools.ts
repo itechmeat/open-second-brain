@@ -114,7 +114,7 @@ export const EXTRACT_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
     description:
-      "Mine taste signals from an imported session's USER turns; runs no model. Without `items` returns the turns plus one needs-llm-step envelope. With `items` writes them to Brain/inbox/ as speculative `source_type: auto_extract` signals. Over the cap, under the floor, or a repeated topic refuses the payload.",
+      "Mine taste signals from an imported session's USER turns; runs no model. Without `items` returns the turns plus one needs-llm-step envelope. With `items` writes them to Brain/inbox/ as speculative `source_type: auto_extract` signals. Refuses over-cap, under-floor or repeated-topic payloads.",
     inputSchema: {
       type: "object",
       properties: {

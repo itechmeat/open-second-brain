@@ -1204,7 +1204,7 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_route_metrics",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
-      "Route-level MCP latency: list mcp_route_latency records or summarize per-tool latency (count, errors, min/avg/max, p50/p95/p99, plus per-stage count/avg/p95 for routes that time write stages) slowest-first to find slow surfaces by endpoint. Emitted only when mcp_route_metrics_enabled is on; payload-safe (tool, scope, status, duration, arg keys, allowlisted stage names). Read-only.",
+      "Route-level MCP latency: list mcp_route_latency records or summarize per-tool latency (count, errors, min/avg/max, p50/p95/p99, per-stage count/avg/p95) slowest-first. Emitted only when mcp_route_metrics_enabled is on; payload-safe (tool, scope, status, duration, arg keys, stage names). Read-only.",
     inputSchema: {
       type: "object",
       properties: {
