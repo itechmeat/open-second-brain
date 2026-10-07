@@ -642,7 +642,9 @@ async function indexIntoRun(
           }
           // Entity-boosted retrieval (v0.13.0): persist the chunk's
           // deterministic entity set alongside its links. A chunk kept in
-          // place has the entities of the content it still holds.
+          // place has the entities of the content it still holds - so a
+          // release that changes `extractEntities` must bump CHUNKER_VERSION,
+          // which rebuilds every chunk, or kept rows keep the old entities.
           if (!replaced.keptChunkIds.has(cid)) store.replaceEntities(cid, extractEntities(content));
         }
         // Typed graph semantics (v3): frontmatter relation fields

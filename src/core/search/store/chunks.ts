@@ -151,13 +151,14 @@ interface StoredChunk {
   end_line: number;
   token_count: number;
   heading_path: string;
+  fts_content: string;
 }
 
 /**
  * Replace a document's chunks, rewriting only the ones that changed.
  *
  * A chunk at the same `chunkIndex` with the same content hash, lines,
- * token count and heading is KEPT: its row, id, full-text row, entities
+ * token count, heading and full-text form is KEPT: its row, id, full-text row, entities
  * and vector stay as they are (a kept vector of another embedding
  * identity is dropped, as a replaced one would be). Every other old chunk
  * is deleted and every other new chunk inserted, carrying the stored
@@ -181,8 +182,8 @@ export function replaceDocumentChunks(
   try {
     const stored = db
       .query<StoredChunk, [number]>(
-        "SELECT id, chunk_index, content_hash, start_line, end_line, token_count, heading_path " +
-          "FROM chunks WHERE document_id = ?",
+        "SELECT id, chunk_index, content_hash, start_line, end_line, token_count, heading_path, " +
+          "fts_content FROM chunks WHERE document_id = ?",
       )
       .all(documentId);
     const byIndex = new Map(stored.map((r) => [r.chunk_index, r]));
@@ -194,7 +195,10 @@ export function replaceDocumentChunks(
         old.start_line === c.startLine &&
         old.end_line === c.endLine &&
         old.token_count === c.tokenCount &&
-        old.heading_path === (c.headingPath ?? "");
+        old.heading_path === (c.headingPath ?? "") &&
+        // The stored full-text form is derived from the content; a release
+        // that derives it differently must not leave kept rows behind.
+        old.fts_content === (c.ftsContent ?? c.content);
       if (same) kept.add(old.id);
       return same ? old.id : null;
     });

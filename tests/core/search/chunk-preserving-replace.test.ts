@@ -142,3 +142,24 @@ test("a kept chunk keeps its entities and a rewritten one gets fresh ones", asyn
   await indexVault(config);
   expect(entityRows()).toBeGreaterThanOrEqual(entitiesBefore);
 });
+
+test("a chunk whose stored full-text form is out of date is rewritten, not kept", async () => {
+  const config = makeConfig({ vault, dbPath });
+  await indexVault(config);
+  // What a release that changes how full-text content is derived would
+  // leave behind: same content and hash, a different stored FTS form.
+  const db = new Database(dbPath);
+  db.run(
+    "UPDATE chunks SET fts_content = 'stale-form' WHERE chunk_index = 0 AND document_id = " +
+      "(SELECT id FROM documents WHERE path = ?)",
+    [LOG],
+  );
+  db.close();
+  writeMd(
+    vault,
+    LOG,
+    `# Log\n\n${section("alpha")}\n${section("bravo")}\n${section("charlie")}\n${section("delta")}`,
+  );
+  await indexVault(config);
+  expect(ftsHits("stale")).toBe(0);
+});
