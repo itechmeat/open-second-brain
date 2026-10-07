@@ -522,15 +522,19 @@ flowchart LR
   with an operator rules file still speaks even when the memory layer
   is down, and a rules file that cannot be read is stated rather than
   skipped. The hook emits nothing at all only when there are NEITHER
-  standing rules NOR memory. A PostToolUse carrier (`subagent-inject`)
+  standing rules NOR memory. A `subagent-inject` carrier
   closes the one gap this session-start event cannot: a delegated
   sub-agent turn never saw the SessionStart payload, so the carrier
-  delivers the same operator standing-rules block into the sub-agent's
-  turn at its first write-shaped tool call, once per sub-agent per
-  session (the delivery ledger keeps the most recent 200 agent ids, so
-  a session that spawns more than that re-delivers to an evicted id)
-  and only when a rules file exists - the agent doing the
-  writes is the one agent that must not run without them.
+  delivers the same composition - the operator standing-rules block,
+  the scoped rules and the budgeted active/lessons digest - on the
+  `SubagentStart` event, before the sub-agent's first prompt, and
+  again if the sub-agent compacts; on runtimes without that event the
+  same hook falls back to the write-shaped PostToolUse call, once per
+  sub-agent per session (the delivery ledger keeps the most recent 200
+  agent ids, so a session that spawns more than that re-delivers to an
+  evicted id) and only when the composed payload is non-empty - the
+  agent doing the writes is the one agent that must not run without
+  them.
 - **End-of-turn hygiene digest** (opt-in): with `hygiene_digest_enabled`
   in the machine config (`~/.config/open-second-brain/config.yaml`, the
   same discovery the `reground_parts_enabled` flag reads; it has no
