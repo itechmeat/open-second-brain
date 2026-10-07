@@ -266,6 +266,7 @@ function dreamRun(
   //    checkpoints; the stream, by contrast, is this counter's, which
   //    already owns a `scan` stage.
   const fullScan = scanBrain(vault, opts.safeguard ? { safeguard: opts.safeguard } : {});
+  opts.onScanPreferences?.(fullScan.preferences);
   const scan =
     opts.previewReadable === undefined
       ? fullScan

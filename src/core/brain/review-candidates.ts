@@ -19,7 +19,8 @@ import { posix } from "node:path";
 import { resolveNearDuplicateRetireSiblingsEnabled } from "../config.ts";
 import { vaultRelative } from "../path-safety.ts";
 import type { ResolvedSearchConfig } from "../search/types.ts";
-import { dream, scanBrain, shouldGateRetireFromConfirmed } from "./dream.ts";
+import { dream, shouldGateRetireFromConfirmed } from "./dream.ts";
+import type { PreferenceRecord } from "./dream-plan.ts";
 import type { DreamOptions, DreamRunSummary } from "./dream-types.ts";
 import type { BrainIntentReviewEntry } from "./intent-review.ts";
 import { NEAR_DUPLICATE_THRESHOLDS, READ_ALL_REFS, roundScore } from "./near-duplicate.ts";
@@ -167,9 +168,13 @@ export async function buildReviewCandidates(
   opts: BuildReviewCandidatesOptions = {},
 ): Promise<ReviewCandidatesReport> {
   const siblingsEnabled = opts.retireSiblingsEnabled ?? resolveNearDuplicateRetireSiblingsEnabled();
+  let scannedPreferences: ReadonlyArray<PreferenceRecord> = [];
   const summary = dream(vault, {
     dryRun: true,
     retireSiblingsEnabled: siblingsEnabled,
+    onScanPreferences: (preferences) => {
+      scannedPreferences = preferences;
+    },
     ...(opts.now ? { now: opts.now } : {}),
     ...(opts.safeguard !== undefined ? { safeguard: opts.safeguard } : {}),
     ...(opts.onProgress !== undefined ? { onProgress: opts.onProgress } : {}),
@@ -188,7 +193,7 @@ export async function buildReviewCandidates(
   }
 
   const siblings = siblingsEnabled
-    ? await projectRetireSiblings(vault, summary, opts)
+    ? await projectRetireSiblings(vault, summary, scannedPreferences, opts)
     : { siblings: [] };
 
   return Object.freeze({
@@ -245,19 +250,21 @@ interface RetireSiblingProjection {
  * The dream summary's lexical pairs, plus - when a search config is
  * present - the stored-vector tier over the same pool: every readable
  * active preference outside the retiring set that no merge resolved. A
- * pair the lexical tier already found keeps its lexical entry.
+ * pair the lexical tier already found keeps its lexical entry. The pool
+ * comes from the dry run's own full scan (`preferences`), not a second walk.
  */
 async function projectRetireSiblings(
   vault: string,
   summary: DreamRunSummary,
+  preferences: ReadonlyArray<PreferenceRecord>,
   opts: BuildReviewCandidatesOptions,
 ): Promise<RetireSiblingProjection> {
   const lexical = summary.retire_siblings ?? [];
   const triggered = summary.retired.filter((r) => RETIRE_SIBLING_TRIGGER_REASONS.has(r.reason));
   if (opts.searchConfig === undefined || triggered.length === 0) return { siblings: lexical };
   const readable = opts.readable ?? READ_ALL_REFS;
-  const scanned = scanBrain(vault)
-    .preferences.filter((p) => readable(vaultRelative(p.path, vault)))
+  const scanned = preferences
+    .filter((p) => readable(vaultRelative(p.path, vault)))
     .map((p) => p.pref);
   // The dry run gates nothing, so the retires the confirmed-evidence gate
   // will hold back are dropped here, as the dream summary drops their

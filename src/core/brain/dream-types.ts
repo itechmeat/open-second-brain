@@ -275,4 +275,13 @@ export interface DreamOptions {
    * caller with its own config path (the MCP server) resolves it there.
    */
   readonly retireSiblingsEnabled?: boolean;
+  /**
+   * Receives every preference of the pass's full Brain scan, before any
+   * `previewReadable` filter, so a caller that needs the same records after
+   * the pass (the review-candidates projection) reuses this read instead of
+   * walking `Brain/` a second time.
+   */
+  readonly onScanPreferences?: (
+    preferences: ReadonlyArray<import("./dream-plan.ts").PreferenceRecord>,
+  ) => void;
 }
