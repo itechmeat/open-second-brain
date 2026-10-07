@@ -18,8 +18,12 @@
  *     write-shaped tool calls - the moments learned rules govern - and
  *     stays silent for read-only subagents.
  *
- * Both channels feed the same once-per-sub-agent ledger, so on a host
- * with both events only the first one to fire delivers.
+ * The fallback feeds the once-per-sub-agent ledger, so on a host with
+ * both events the write-shaped calls of an already-served sub-agent
+ * stay silent. The primary channel never consults that ledger: the
+ * host re-fires SubagentStart when a sub-agent compacts, and the
+ * post-compaction context exists only if this hook answers that later
+ * event.
  *
  * Payload (composed by hooks/lib/active-context.ts, the same assembly
  * the session-start lane uses): the operator's standing rules first,
@@ -52,12 +56,12 @@
  *     output helper is local to this file so hooks/lib/messages.ts
  *     stays untouched.
  *
- * Exactly once per sub-agent: the delivered agent ids live in the
- * per-session hook-state ledger (`osb.subagent_inject.delivered`, capped,
- * 24 h TTL). The id is recorded AFTER the stdout write - lose-not-
- * duplicate, like every carrier in this tree - so a second call with the
- * same id is silent and a crash between write and record re-delivers
- * rather than losing the payload.
+ * The delivered agent ids live in the per-session hook-state ledger
+ * (`osb.subagent_inject.delivered`, capped, 24 h TTL); the fallback
+ * consults it before emitting, the primary channel does not. The id is
+ * recorded AFTER the stdout write on both channels - lose-not-duplicate,
+ * like every carrier in this tree - so a crash between write and record
+ * re-delivers rather than losing the payload.
  *
  * Silent on every empty-handed path, exit 0: no non-empty `agent_id`
  * (the main thread is served by active-inject), on PostToolUse a tool
@@ -197,7 +201,19 @@ async function main(): Promise<void> {
   const vault = resolveVault();
   if (vault === null) return;
 
-  if (readSubagentDeliveredIds(vault, payload.session_id).has(agentId)) return;
+  // The ledger suppresses only the fallback: PostToolUse fires on every
+  // write-shaped call, so a recorded id there means this sub-agent
+  // already has its payload. SubagentStart skips the read on purpose -
+  // the host re-fires it after a compaction, and Claude Code re-injects
+  // the post-compaction context only if the hook returns it on that
+  // later event; a ledger hit here would leave a compacted sub-agent
+  // with nothing.
+  if (
+    event === FALLBACK_EVENT &&
+    readSubagentDeliveredIds(vault, payload.session_id).has(agentId)
+  ) {
+    return;
+  }
 
   // The scoped rules key off the session's project: the payload `cwd`
   // when the host sent one, else this process's (the session-start lane
@@ -219,9 +235,10 @@ async function main(): Promise<void> {
   // not just ordered.
   writeSync(1, `${JSON.stringify(subagentInjectOutput(event, block))}\n`);
 
-  // Recorded after stdout: a crash or a failed state write in between
-  // re-delivers the payload on the next carrier event and never leaves a
-  // subagent unconstitutioned.
+  // Recorded after stdout on both channels: a crash or a failed state
+  // write in between re-delivers the payload on the next carrier event,
+  // and on the primary channel the record is what keeps the PostToolUse
+  // fallback silent once this sub-agent's payload has landed.
   recordSubagentDeliveredId(vault, payload.session_id, agentId);
 }
 

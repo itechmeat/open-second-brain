@@ -1,11 +1,11 @@
 /**
  * The subagent context carrier (context-injection-pipeline, A2):
- * delivers the operator's standing-rules block into a delegated
- * sub-agent, once per agent id per session-scope ledger, and stays
- * silent everywhere else. Primary channel: SubagentStart, at the
- * sub-agent's conversation start. Fallback channel: PostToolUse
- * write-shaped tool calls, for runtimes without the SubagentStart
- * event.
+ * delivers the operator's context payload into a delegated sub-agent.
+ * Primary channel: SubagentStart, at the sub-agent's conversation
+ * start, re-delivering on every event so a compaction re-injects.
+ * Fallback channel: PostToolUse write-shaped tool calls, once per
+ * agent id per session-scope ledger, for runtimes without the
+ * SubagentStart event.
  *
  * Spawn-based like its carrier siblings: the contract under test is the
  * process boundary (payload in, at most one stdout line out), not the
@@ -278,22 +278,34 @@ describe("subagent-inject hook", () => {
     expect(r.stdout).toBe("");
   });
 
-  test("SubagentStart and the PostToolUse fallback share one delivery per agent id", async () => {
+  test("a PostToolUse after a delivered SubagentStart stays silent", async () => {
     writeRules("Always run the test suite before committing.");
-    // Primary channel delivers first; the fallback for the same agent id
-    // must not repeat it.
+    // The primary channel delivered; the ledger it fed keeps the
+    // sub-agent's later write-shaped calls from repeating the payload.
     const start = await runHook(subagentStartPayload({ agentId: AGENT }));
     expect(deliveredContext(start.stdout).hookEventName).toBe("SubagentStart");
     const fallback = await runHook(subagentPayload({ agentId: AGENT }));
+    expect(fallback.exit).toBe(0);
     expect(fallback.stdout).toBe("");
-    // The reverse order too: on a runtime without SubagentStart the
-    // PostToolUse carrier delivers, and a later SubagentStart for the
-    // same id stays silent behind the same ledger.
-    const other = "agent-bbbb";
-    const viaFallback = await runHook(subagentPayload({ agentId: other }));
-    expect(deliveredContext(viaFallback.stdout).hookEventName).toBe("PostToolUse");
-    const viaStart = await runHook(subagentStartPayload({ agentId: other }));
-    expect(viaStart.stdout).toBe("");
+  });
+
+  test("a second SubagentStart for the same agent_id re-delivers", async () => {
+    writeRules("Always run the test suite before committing.");
+    const first = await runHook(subagentStartPayload({ agentId: AGENT }));
+    expect(deliveredContext(first.stdout).hookEventName).toBe("SubagentStart");
+    // The host re-fires SubagentStart when the sub-agent compacts, and
+    // it re-injects post-compaction context only if the hook answers
+    // that later event - so the primary channel never consults the
+    // delivery ledger.
+    const second = await runHook(subagentStartPayload({ agentId: AGENT }));
+    expect(second.exit).toBe(0);
+    const out = deliveredContext(second.stdout);
+    expect(out.hookEventName).toBe("SubagentStart");
+    expect(out.additionalContext).toBe(expectedBlock());
+    // The re-delivery re-records the id: the PostToolUse fallback stays
+    // deduped behind it.
+    const fallback = await runHook(subagentPayload({ agentId: AGENT }));
+    expect(fallback.stdout).toBe("");
   });
 
   test("a vault with learned preferences but no standing rules still delivers", async () => {
