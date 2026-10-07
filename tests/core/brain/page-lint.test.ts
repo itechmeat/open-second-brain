@@ -705,9 +705,10 @@ describe("lintWrittenPages - widened near-duplicate candidates", () => {
       ...READ_ALL,
       extraCandidates: [],
       widening: "index_unavailable",
+      wideningDetail: "INDEX_LOCKED",
     });
     expect(pageLintField(report)).toMatchObject({
-      [PAGE_LINT_KEY]: { widening: "index_unavailable" },
+      [PAGE_LINT_KEY]: { widening: "index_unavailable", widening_detail: "INDEX_LOCKED" },
     });
   });
 });

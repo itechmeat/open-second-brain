@@ -25,7 +25,9 @@
  * Fail-open, never silent: an index that cannot be opened or queried
  * yields the named status `index_unavailable` and no candidates, so the
  * write and the same-directory hint are unaffected and the receipt says
- * the widening did not run.
+ * the widening did not run. The status carries the failure by name
+ * (`detail`), so a missing index, a locked or corrupt one and a defect in
+ * this module read differently on the receipt.
  */
 
 import { readFileSync, statSync } from "node:fs";
@@ -39,13 +41,23 @@ import { Store } from "../search/store.ts";
 import type { ResolvedSearchConfig } from "../search/types.ts";
 import { parseFrontmatterText } from "../vault.ts";
 import { NEAR_DUPLICATE_WIDENING_TOP_K, type ReadableRef } from "./near-duplicate.ts";
-import type { NearDuplicateCandidate, NearDuplicateWideningStatus } from "./page-lint.ts";
+import {
+  failureCode,
+  type NearDuplicateCandidate,
+  type NearDuplicateWideningStatus,
+} from "./page-lint.ts";
 import { tokenise } from "./similarity.ts";
 import { ARTIFACT_MAX_BYTES } from "./write-session/validate.ts";
 
 export interface WideningResult {
   readonly status: NearDuplicateWideningStatus;
   readonly candidates: ReadonlyArray<NearDuplicateCandidate>;
+  /**
+   * Why the status is `index_unavailable`: the search error code, the
+   * errno code or the error name, never a message or a path. Absent when
+   * the index answered.
+   */
+  readonly detail?: string;
 }
 
 /** Extension every candidate page on disk carries. */
@@ -54,10 +66,14 @@ const MARKDOWN_EXT = ".md";
 /** Prefix of a vault-relative spelling that leaves the vault. */
 const VAULT_ESCAPE_PREFIX = "../";
 
-const INDEX_UNAVAILABLE: WideningResult = Object.freeze({
-  status: "index_unavailable",
-  candidates: Object.freeze([]),
-});
+/** The fail-open answer for a widening that could not run, naming why. */
+export function wideningUnavailable(err: unknown): WideningResult {
+  return Object.freeze({
+    status: "index_unavailable",
+    candidates: Object.freeze([]),
+    detail: failureCode(err),
+  });
+}
 
 /** The vault-relative spelling of a page, the one `page-lint.ts` reports. */
 function canonicalPage(vault: string, page: string): string {
@@ -120,8 +136,8 @@ export async function collectWideningCandidates(
   let store: Store;
   try {
     store = await Store.open(config, { mode: "read" });
-  } catch {
-    return INDEX_UNAVAILABLE;
+  } catch (err) {
+    return wideningUnavailable(err);
   }
   const hitPaths: string[] = [];
   try {
@@ -130,8 +146,8 @@ export async function collectWideningCandidates(
       if (query === "") continue;
       hitPaths.push(...keywordPaths(store, query));
     }
-  } catch {
-    return INDEX_UNAVAILABLE;
+  } catch (err) {
+    return wideningUnavailable(err);
   } finally {
     await store.close();
   }

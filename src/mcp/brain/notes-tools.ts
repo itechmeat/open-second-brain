@@ -50,6 +50,7 @@ import {
 } from "../../core/brain/page-lint.ts";
 import {
   collectWideningCandidates,
+  wideningUnavailable,
   type WideningResult,
 } from "../../core/brain/page-lint-widening.ts";
 import { resolveNearDuplicateWriteWideningEnabled } from "../../core/config.ts";
@@ -520,22 +521,22 @@ export async function noteWriteResult<T extends Record<string, unknown>>(
   const opts: LintWrittenPagesOptions =
     widening === undefined
       ? { readable }
-      : { readable, extraCandidates: widening.candidates, widening: widening.status };
+      : {
+          readable,
+          extraCandidates: widening.candidates,
+          widening: widening.status,
+          ...(widening.detail !== undefined ? { wideningDetail: widening.detail } : {}),
+        };
   const report = timeStageSync(ROUTE_STAGE.lint, () => lintWrittenPages(ctx.vault, pages, opts));
   return { ...receipt, ...pageLintField(report) };
 }
-
-/** What a widening reports when the search config itself cannot be resolved. */
-const WIDENING_INDEX_UNAVAILABLE: WideningResult = Object.freeze({
-  status: "index_unavailable",
-  candidates: Object.freeze([]),
-});
 
 /**
  * Keyword-index candidates for the near-duplicate hint, or `undefined`
  * when widening is off. A search config that does not resolve leaves no
  * index to read, which is the same named `index_unavailable` an index
- * that will not open reports: the write is never failed by its hint.
+ * that will not open reports, with the failure named in its detail: the
+ * write is never failed by its hint.
  */
 async function widenNearDuplicates(
   ctx: ServerContext,
@@ -547,8 +548,8 @@ async function widenNearDuplicates(
   let config: ResolvedSearchConfig;
   try {
     config = resolveSearchConfig({ vault: ctx.vault, configPath });
-  } catch {
-    return WIDENING_INDEX_UNAVAILABLE;
+  } catch (err) {
+    return wideningUnavailable(err);
   }
   return collectWideningCandidates(config, ctx.vault, pages, readable);
 }

@@ -208,7 +208,7 @@ const UNNAMED_FAILURE_CODE = "unknown";
  * identifiers and integers cross this boundary, never a path and never an OS
  * message.
  */
-function failureCode(err: unknown): string {
+export function failureCode(err: unknown): string {
   const code = (err as NodeJS.ErrnoException | null)?.code;
   if (typeof code === "string" && code.length > 0) return code;
   const name = (err as Error | null)?.name;
@@ -287,6 +287,13 @@ export interface PageLintReport {
    * something to say, `index_unavailable` is.
    */
   readonly widening?: NearDuplicateWideningStatus;
+  /**
+   * Why widening reported `index_unavailable`: the search error code, the
+   * errno code or the error name ({@link failureCode}), so a missing index,
+   * a locked or corrupt one and a defect read differently. Present only
+   * with that status.
+   */
+  readonly widening_detail?: string;
 }
 
 /** A sibling page the near-duplicate check could not read, and the errno code why. */
@@ -321,6 +328,8 @@ export interface LintWrittenPagesOptions {
   readonly extraCandidates?: ReadonlyArray<NearDuplicateCandidate>;
   /** Whether widening ran; absent when it is off. */
   readonly widening?: NearDuplicateWideningStatus;
+  /** Why widening was unavailable; see {@link PageLintReport.widening_detail}. */
+  readonly wideningDetail?: string;
 }
 
 /** What building the near-duplicate candidate index left out, by count and by name. */
@@ -329,6 +338,8 @@ export interface NearDuplicateCensus {
   readonly unreadable: ReadonlyArray<PageLintCandidateSkip>;
   /** Whether widening ran; absent when it is off. */
   readonly widening?: NearDuplicateWideningStatus;
+  /** Why widening was unavailable; see {@link PageLintReport.widening_detail}. */
+  readonly wideningDetail?: string;
 }
 
 /**
@@ -750,6 +761,7 @@ export function lintWrittenPages(
       nearDuplicateCensus: {
         ...nearDuplicates.census,
         ...(opts.widening !== undefined ? { widening: opts.widening } : {}),
+        ...(opts.wideningDetail !== undefined ? { wideningDetail: opts.wideningDetail } : {}),
       },
     };
   } catch (err) {
@@ -830,6 +842,7 @@ export function lintPagesWithContext(
       ? { candidates_unreadable: Object.freeze([...census.unreadable]) }
       : {}),
     ...(census?.widening !== undefined ? { widening: census.widening } : {}),
+    ...(census?.wideningDetail !== undefined ? { widening_detail: census.wideningDetail } : {}),
   });
 }
 

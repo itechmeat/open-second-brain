@@ -369,7 +369,11 @@ describe("brain_create_note - widened near-duplicate hint", () => {
       frontmatter: { title: "L" },
       content: BODY,
     })) as Record<string, unknown>;
-    expect(res[PAGE_LINT_KEY]).toMatchObject({ total: 0, widening: "index_unavailable" });
+    expect(res[PAGE_LINT_KEY]).toMatchObject({
+      total: 0,
+      widening: "index_unavailable",
+      widening_detail: "INDEX_MISSING",
+    });
   });
 });
 

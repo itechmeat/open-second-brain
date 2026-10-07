@@ -97,7 +97,24 @@ describe("collectWideningCandidates", () => {
     const config = resolveSearchConfig({ vault });
     const written = writeNote("Notes/Later.md", BODY);
     const result = await collectWideningCandidates(config, vault, [written], READ_ALL_REFS);
-    expect(result).toEqual({ status: "index_unavailable", candidates: [] });
+    expect(result).toEqual({
+      status: "index_unavailable",
+      candidates: [],
+      detail: "INDEX_MISSING",
+    });
+  });
+
+  test("an index that is there but will not open names a different failure", async () => {
+    const config = resolveSearchConfig({ vault });
+    mkdirSync(join(config.dbPath, ".."), { recursive: true });
+    writeFileSync(config.dbPath, "not a database");
+    const written = writeNote("Notes/Later.md", BODY);
+    const result = await collectWideningCandidates(config, vault, [written], READ_ALL_REFS);
+    expect(result).toEqual({
+      status: "index_unavailable",
+      candidates: [],
+      detail: "INDEX_UNREADABLE",
+    });
   });
 
   test("the keyword pull is bounded by the widening top-k", async () => {
