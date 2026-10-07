@@ -18,13 +18,19 @@ import { posix } from "node:path";
 
 import { resolveNearDuplicateRetireSiblingsEnabled } from "../config.ts";
 import { vaultRelative } from "../path-safety.ts";
+import { SearchError } from "../search/search-error.ts";
 import type { ResolvedSearchConfig } from "../search/types.ts";
 import { dream, shouldGateRetireFromConfirmed } from "./dream.ts";
 import type { PreferenceRecord } from "./dream-plan.ts";
 import type { DreamOptions, DreamRunSummary } from "./dream-types.ts";
 import type { BrainIntentReviewEntry } from "./intent-review.ts";
 import { NEAR_DUPLICATE_THRESHOLDS, READ_ALL_REFS, roundScore } from "./near-duplicate.ts";
-import { storedVectorSimilarities, type StoredVectorStatus } from "./near-duplicate-vectors.ts";
+import {
+  storedVectorSimilarities,
+  type StoredVectorSimilarity,
+  type StoredVectorStatus,
+} from "./near-duplicate-vectors.ts";
+import { failureCode } from "./page-lint.ts";
 import { brainDirs } from "./paths.ts";
 import { loadBrainConfig } from "./policy.ts";
 import {
@@ -35,6 +41,13 @@ import {
 } from "./retire-siblings.ts";
 import { scoreSignalNovelty, sortByNovelty, type SignalNoveltyEntry } from "./surprisal.ts";
 import { BRAIN_RETIRED_REASON, type BrainRetiredReason } from "./types.ts";
+
+/**
+ * Outcome of the retire-sibling stored-vector tier: a probe status, or
+ * `index_unavailable` when the store failed to open or read (busy,
+ * locked, schema). The preview degrades to the lexical pairs then.
+ */
+export type RetireSiblingSemanticStatus = StoredVectorStatus | "index_unavailable";
 
 export interface ReviewCandidatesReport {
   /** `pref-<slug>` ids that the dream pass would create new. */
@@ -98,7 +111,13 @@ export interface ReviewCandidatesReport {
    * are computed with a search config and a context-driven retire passes
    * `retiringVisible`.
    */
-  readonly retire_siblings_semantic?: StoredVectorStatus;
+  readonly retire_siblings_semantic?: RetireSiblingSemanticStatus;
+  /**
+   * Why the tier reported `index_unavailable`: the search error code
+   * ({@link failureCode}), never a message or a path. Present only with
+   * that status.
+   */
+  readonly retire_siblings_semantic_detail?: string;
 }
 
 export interface BuildReviewCandidatesOptions {
@@ -202,6 +221,7 @@ export async function buildReviewCandidates(
       ? { retire_siblings: Object.freeze(siblings.siblings.map((x) => Object.freeze({ ...x }))) }
       : {}),
     ...(siblings.semantic !== undefined ? { retire_siblings_semantic: siblings.semantic } : {}),
+    ...(siblings.detail !== undefined ? { retire_siblings_semantic_detail: siblings.detail } : {}),
     would_create: Object.freeze([...summary.new_unconfirmed]),
     would_promote: Object.freeze([...summary.confirmed]),
     would_retire: Object.freeze(
@@ -243,7 +263,8 @@ export async function buildReviewCandidates(
 
 interface RetireSiblingProjection {
   readonly siblings: ReadonlyArray<RetireSibling>;
-  readonly semantic?: StoredVectorStatus;
+  readonly semantic?: RetireSiblingSemanticStatus;
+  readonly detail?: string;
 }
 
 /**
@@ -252,6 +273,8 @@ interface RetireSiblingProjection {
  * active preference outside the retiring set that no merge resolved. A
  * pair the lexical tier already found keeps its lexical entry. The pool
  * comes from the dry run's own full scan (`preferences`), not a second walk.
+ * A store that fails to open or read is an advisory tier failing, not the
+ * preview: the lexical pairs stand and the status names the failure.
  */
 async function projectRetireSiblings(
   vault: string,
@@ -292,11 +315,17 @@ async function projectRetireSiblings(
 
   const seen = new Set(lexical.map((x) => `${x.retiring_id}\u0000${x.sibling_id}`));
   const merged: RetireSibling[] = [...lexical];
-  const results = await storedVectorSimilarities(
-    opts.searchConfig,
-    retiringIds.map(pathOf),
-    candidatePaths,
-  );
+  let results: ReadonlyArray<StoredVectorSimilarity>;
+  try {
+    results = await storedVectorSimilarities(
+      opts.searchConfig,
+      retiringIds.map(pathOf),
+      candidatePaths,
+    );
+  } catch (e) {
+    if (!(e instanceof SearchError)) throw e;
+    return { siblings: lexical, semantic: "index_unavailable", detail: failureCode(e) };
+  }
   results.forEach((result, i) => {
     const retiringId = retiringIds[i]!;
     for (const [path, score] of result.scores) {

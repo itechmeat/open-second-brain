@@ -21,15 +21,16 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { appendApplyEvidence } from "../../src/core/brain/apply-evidence.ts";
 import { processedSignalPath, signalPath } from "../../src/core/brain/paths.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
 import { writeSignal } from "../../src/core/brain/signal.ts";
 import { BRAIN_CONFIDENCE, BRAIN_PREFERENCE_STATUS } from "../../src/core/brain/types.ts";
+import { resolveSearchConfig } from "../../src/core/search/index.ts";
 import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts";
 import {
@@ -322,6 +323,25 @@ describe("brain_review_candidates retire_siblings answer at the caller's reach",
     process.env["OPEN_SECOND_BRAIN_CONFIG"] = otherConfig;
     const result = await server.callTool("brain_review_candidates", {});
     expect(siblingsOf(maskVolatile(f, result["structuredContent"] ?? result))).toEqual([
+      {
+        retiring_id: "pref-public-old",
+        sibling_id: "pref-public-twin",
+        score: 0.833,
+        method: "lexical",
+      },
+    ]);
+  });
+
+  test("an index that will not open keeps the lexical pairs and names the failure", async () => {
+    process.env[SIBLINGS_FLAG] = "1";
+    const f = siblingFixture(false);
+    const { dbPath } = resolveSearchConfig({ vault: f.vault, configPath: f.configPath });
+    mkdirSync(dirname(dbPath), { recursive: true });
+    writeFileSync(dbPath, "not a database");
+    const local = await answer(f, "brain_review_candidates", TRANSPORT_REACH.local);
+    expect(local).toContain('"retire_siblings_semantic":"index_unavailable"');
+    expect(local).toContain('"retire_siblings_semantic_detail":"INDEX_UNREADABLE"');
+    expect(siblingsOf(local)).toEqual([
       {
         retiring_id: "pref-public-old",
         sibling_id: "pref-public-twin",

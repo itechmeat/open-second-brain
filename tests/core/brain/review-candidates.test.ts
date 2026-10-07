@@ -5,7 +5,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -223,6 +231,19 @@ describe("buildReviewCandidates retire_siblings", () => {
     const r = await buildReviewCandidates(vault, { now: NOW, searchConfig: searchConfig() });
     expect(r.retire_siblings_semantic).toBe("index_missing");
     expect(r.retire_siblings).toEqual([LEXICAL]);
+    expect("retire_siblings_semantic_detail" in r).toBe(false);
+  });
+
+  test("an index that will not open degrades to the lexical list and names the failure", async () => {
+    process.env[FLAG_ENV] = "1";
+    const config = searchConfig();
+    mkdirSync(join(config.dbPath, ".."), { recursive: true });
+    writeFileSync(config.dbPath, "not a database");
+    const r = await buildReviewCandidates(vault, { now: NOW, searchConfig: config });
+    expect(r.retire_siblings_semantic).toBe("index_unavailable");
+    expect(r.retire_siblings_semantic_detail).toBe("INDEX_UNREADABLE");
+    expect(r.retire_siblings).toEqual([LEXICAL]);
+    expect(r.would_retire).toEqual([{ id: "ret-old", reason: "superseded-by-context" }]);
   });
 
   test.skipIf(!sqliteVecLoadable())(

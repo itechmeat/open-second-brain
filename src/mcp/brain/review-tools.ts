@@ -168,6 +168,9 @@ async function toolBrainReviewCandidates(
     ...(report.retire_siblings_semantic !== undefined
       ? { retire_siblings_semantic: report.retire_siblings_semantic }
       : {}),
+    ...(report.retire_siblings_semantic_detail !== undefined
+      ? { retire_siblings_semantic_detail: report.retire_siblings_semantic_detail }
+      : {}),
     // `would_create` names ids the pass has not written yet, so most of
     // them resolve to nothing and pass; asking anyway is what keeps a
     // projection over an id that DOES already exist from crossing.
