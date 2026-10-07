@@ -181,9 +181,12 @@ export async function cmdSearchIndex(argv: ReadonlyArray<string>): Promise<numbe
     progress: { type: "boolean" },
     json: { type: "boolean" },
     freshen: { type: "string" },
+    "freshen-state": { type: "string" },
   });
   const freshenToken = flagString(flags, "freshen");
-  if (freshenToken !== undefined) return runFreshenChild(flags, freshenToken);
+  if (freshenToken !== undefined) {
+    return runFreshenChild(flags, freshenToken, flagString(flags, "freshen-state"));
+  }
   const cfg = resolveConfig(flags);
 
   const verbose = flagBoolean(flags, "verbose");
@@ -229,7 +232,11 @@ export async function cmdSearchIndex(argv: ReadonlyArray<string>): Promise<numbe
  * releases the claim it was handed whatever happens. Nothing is printed:
  * every stream of a detached child is ignored.
  */
-async function runFreshenChild(flags: SearchVerbFlags, token: string): Promise<number> {
+async function runFreshenChild(
+  flags: SearchVerbFlags,
+  token: string,
+  stateDirFlag: string | undefined,
+): Promise<number> {
   try {
     setPriority(process.pid, 10);
   } catch {
@@ -237,20 +244,25 @@ async function runFreshenChild(flags: SearchVerbFlags, token: string): Promise<n
   }
   const startedAt = Date.now();
   let cfg: ResolvedSearchConfig | undefined;
+  let stateDir = stateDirFlag;
   try {
     cfg = resolveConfig(flags);
+    stateDir ??= dirname(cfg.dbPath);
     const stats = await indexVault(cfg, {
       embeddings: cfg.freshen?.embeddings === true,
     });
-    recordFreshenOutcome(cfg.vault, dirname(cfg.dbPath), {
+    recordFreshenOutcome(cfg.vault, stateDir, {
       outcome: "completed",
       durationMs: Date.now() - startedAt,
       changed: stats.added + stats.updated + stats.deleted,
     });
     return 0;
   } catch (e) {
-    if (cfg !== undefined) {
-      recordFreshenOutcome(cfg.vault, dirname(cfg.dbPath), {
+    // Another writer holds the index (a manual run, the watcher, the
+    // maintenance lane): nothing is wrong, the next stale read retries.
+    if (e instanceof SearchError && e.code === "INDEX_LOCKED") return 0;
+    if (stateDir !== undefined) {
+      recordFreshenOutcome(cfg?.vault ?? null, stateDir, {
         outcome: "failed",
         durationMs: Date.now() - startedAt,
         error: e instanceof Error ? e.message : String(e),
@@ -258,7 +270,7 @@ async function runFreshenChild(flags: SearchVerbFlags, token: string): Promise<n
     }
     return 1;
   } finally {
-    if (cfg !== undefined) releaseFreshen(dirname(cfg.dbPath), token);
+    if (stateDir !== undefined) releaseFreshen(stateDir, token);
   }
 }
 

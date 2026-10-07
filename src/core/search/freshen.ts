@@ -347,6 +347,10 @@ export function maybeFreshenIndex(
         "--vault",
         config.vault,
         ...(freshen.configPath !== null ? ["--config", freshen.configPath] : []),
+        // Where the claim and the state live, so a child that fails before
+        // it can resolve its config can still record it and release.
+        "--freshen-state",
+        dir,
         "--freshen",
         token,
       ],
@@ -380,7 +384,7 @@ export interface FreshenOutcome {
  * row. Never throws: a run must not fail because its bookkeeping did.
  */
 export function recordFreshenOutcome(
-  vault: string,
+  vault: string | null,
   dir: string,
   result: FreshenOutcome,
   nowMs: number = Date.now(),
@@ -402,7 +406,7 @@ export function recordFreshenOutcome(
   } catch {
     // Best effort, like the self-heal outcome rows.
   }
-  if (!failed && (result.changed ?? 0) === 0) return;
+  if (vault === null || (!failed && (result.changed ?? 0) === 0)) return;
   try {
     appendMetric(vault, {
       surface: INDEX_FRESHEN_SURFACE,

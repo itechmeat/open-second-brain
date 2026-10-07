@@ -16,6 +16,7 @@ import {
   INDEX_FRESHEN_SURFACE,
   readFreshenState,
 } from "../../src/core/search/freshen.ts";
+import { acquireWriterLockSync } from "../../src/core/search/store/writer-lock.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
 let tmp: string;
@@ -96,4 +97,41 @@ test("a success after failures clears the streak and the backoff", async () => {
   expect(state.lastOutcome).toBe("completed");
   expect(state.failures).toBe(0);
   expect(state.backoffUntil).toBeNull();
+});
+
+test("a run that meets another index writer is a skip, not a failure", async () => {
+  const release = acquireWriterLockSync(join(derived, "brain.sqlite"));
+  try {
+    await freshenRun();
+  } finally {
+    release();
+  }
+  const state = readFreshenState(derived);
+  expect(state.failures).toBe(0);
+  expect(state.backoffUntil).toBeNull();
+  expect(state.lastOutcome).toBeNull();
+  expect(existsSync(join(derived, FRESHEN_CLAIM_FILE))).toBe(false);
+  expect(listMetrics(vault, { surface: INDEX_FRESHEN_SURFACE })).toHaveLength(0);
+});
+
+test("a run that fails before it can resolve its config still records the failure and releases the claim", async () => {
+  const token = claimFreshen(derived, Date.now())!;
+  const result = await runCli(
+    [
+      "search",
+      "index",
+      "--config",
+      join(tmp, "missing.yaml"),
+      "--freshen",
+      token,
+      "--freshen-state",
+      derived,
+    ],
+    { env: env() },
+  );
+  expect(result.returncode).not.toBe(0);
+  const state = readFreshenState(derived);
+  expect(state.lastOutcome).toBe("failed");
+  expect(state.failures).toBe(1);
+  expect(existsSync(join(derived, FRESHEN_CLAIM_FILE))).toBe(false);
 });

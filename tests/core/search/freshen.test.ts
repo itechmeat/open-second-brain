@@ -303,3 +303,25 @@ describe("claim races", () => {
     expect(outs.map((o) => o.trim()).filter((o) => o === "won")).toHaveLength(1);
   });
 });
+
+test("the spawned run is told where its state lives", () => {
+  const vault = mkdtempSync(join(tmpdir(), "osb-freshen-statedir-"));
+  try {
+    mkdirSync(join(vault, ".open-second-brain"), { recursive: true });
+    const calls: string[][] = [];
+    const config = {
+      vault,
+      dbPath: join(vault, ".open-second-brain", "brain.sqlite"),
+      freshen: { intervalSeconds: 60, embeddings: false, configPath: null },
+    } as unknown as ResolvedSearchConfig;
+    maybeFreshenIndex(config, {
+      lastIndexedAt: new Date(Date.now() - 300_000).toISOString(),
+      spawn: (argv) => calls.push(argv),
+    });
+    const argv = calls[0]!;
+    const at = argv.indexOf("--freshen-state");
+    expect(argv[at + 1]).toBe(join(vault, ".open-second-brain"));
+  } finally {
+    rmSync(vault, { recursive: true, force: true });
+  }
+});
