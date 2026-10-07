@@ -503,10 +503,14 @@ flowchart LR
   `compact` matcher replaced the former PostCompact injection, whose
   event no longer exists in current Claude Code. The injected body is
   budgeted (`active.inject_budget_chars`, default 8,000 chars):
-  sections drop deterministically (recently retired first, then
-  quarantine, then most-applied) and a one-line notice names the
-  sections that were dropped, how many characters survived out of how
-  many, and points the agent at `brain_context` for the full set. When `Brain/lessons.md`
+  sections first degrade to headline tiers - a section below the
+  keep-guard priority (the preamble and the confirmed rules are
+  exempt) keeps its heading, its lead-in lines and its top three
+  ranked bullets - and then drop deterministically (recently retired
+  first, then quarantine, then most-applied). A one-line notice names
+  the sections that were reduced to headlines and the sections that
+  were dropped, how many characters survived out of how many, and
+  points the agent at `brain_context` for the full set. When `Brain/lessons.md`
   exists, its (separately budgeted) body is appended so the unified
   lessons corpus loads on the same surface. Fails soft - every error
   path in the memory lane exits 0 and the runtime proceeds unaffected,
@@ -515,7 +519,25 @@ flowchart LR
   with an operator rules file still speaks even when the memory layer
   is down, and a rules file that cannot be read is stated rather than
   skipped. The hook emits nothing at all only when there are NEITHER
-  standing rules NOR memory.
+  standing rules NOR memory. A PostToolUse carrier (`subagent-inject`)
+  closes the one gap this session-start event cannot: a delegated
+  sub-agent turn never saw the SessionStart payload, so the carrier
+  delivers the same operator standing-rules block into the sub-agent's
+  turn at its first write-shaped tool call, once per sub-agent per
+  session and only when a rules file exists - the agent doing the
+  writes is the one agent that must not run without them.
+- **End-of-turn hygiene digest** (opt-in): with `hygiene_digest_enabled`
+  in the machine config (`~/.config/open-second-brain/config.yaml`, the
+  same discovery the `reground_parts_enabled` flag reads; it has no
+  `_brain.yaml` template entry), default off, env override
+  `OPEN_SECOND_BRAIN_HYGIENE_DIGEST_ENABLED`, the Stop hook runs the
+  default hygiene detector sweep plus the index-backed dangling-link
+  count after any turn that wrote an artifact and folds the warning-
+  and action-severity findings into ONE line, so small maintenance does
+  not wait for an explicit `brain_hygiene` call. A hash ledger beside
+  the hook-state directory keeps an unchanged finding set silent - once
+  per change, not once per turn; zero eligible findings and flag-off
+  installs emit nothing.
 - **MCP Resources** expose the same content for hosts that prefer
   pull access (`osb://preferences/active` and friends in the table
   above). The MCP `initialize` reply advertises the `resources`
