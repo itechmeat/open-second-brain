@@ -48,9 +48,16 @@ const SPOOL_FORMAT = 1;
 const SPOOL_ORIGINATOR = "open-second-brain-opencode-plugin";
 const CAPTURE_EVENTS = new Set(["session.idle", "session.compacted", "session.deleted"]);
 const V2_CAPTURE_EVENTS = new Set([
+  // v2 tree naming: the turn ends with an idle event.
   "session.idle",
+  // v2 >= 2.0.24 naming: the turn ends with an execution event, and a
+  // failed or interrupted run still leaves messages worth capturing.
+  "session.execution.succeeded",
+  "session.execution.failed",
+  "session.execution.interrupted",
   "session.compaction.started",
   "session.compaction.ended",
+  "session.compaction.failed",
   "session.revert.committed",
   "session.deleted",
 ]);

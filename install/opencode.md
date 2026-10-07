@@ -49,7 +49,10 @@ manual step is needed.
   the Claude Code and Codex hook layers; if the shim or the vault is
   missing the inject silently skips.
 - **Session capture** - on `session.idle` / `session.compacted` /
-  `session.deleted` (V1), or idle and before/after compaction (V2), the
+  `session.deleted` (V1), or turn end / compaction / committed revert
+  (V2: `session.execution.*`, `session.compaction.*`,
+  `session.revert.committed`, `session.deleted`; opencode v2.0.24 emits
+  the `execution` names, the v2 tree also still emits `session.idle`), the
   plugin snapshots the session as a JSONL spool
   under `${XDG_DATA_HOME:-$HOME/.local/share}/open-second-brain/opencode/`.
   Import captured sessions with:

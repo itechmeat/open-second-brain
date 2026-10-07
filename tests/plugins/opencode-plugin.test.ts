@@ -525,6 +525,42 @@ describe("opencode plugin - post-write reminder", () => {
 });
 
 describe("opencode plugin - V2", () => {
+  for (const executionType of [
+    "session.execution.succeeded",
+    "session.execution.failed",
+    "session.execution.interrupted",
+  ]) {
+    test(`opencode 2.0.24 turn-end event ${executionType} writes a spool snapshot`, async () => {
+      const plugin = await makeV2Plugin(
+        [
+          {
+            id: "msg-exec",
+            type: "user",
+            time: { created: 1765900000000 },
+            text: "captured on execution end",
+          },
+        ],
+        [
+          {
+            type: executionType,
+            data: { sessionID: "sess-execution" },
+            location: { directory: "/work/dir" },
+          },
+        ],
+      );
+      try {
+        const turns = readFileSync(join(spoolDir, "sess-execution.jsonl"), "utf8")
+          .trim()
+          .split("\n")
+          .slice(1)
+          .map((line) => JSON.parse(line));
+        expect(turns.map((turn) => turn.turnId)).toEqual(["msg-exec"]);
+      } finally {
+        plugin.cleanup();
+      }
+    });
+  }
+
   test("a revert with an uncaptured boundary rebuilds from current context", async () => {
     const plugin = await makeV2Plugin(
       (call) => [
