@@ -430,3 +430,39 @@ test("a turn without a stored timestamp renders bare and never borrows the clock
   expect(plan.llmStep.prompt).not.toContain("[u1 @");
   expect(plan.llmStep.prompt).not.toContain(NOW.toISOString());
 });
+
+// ----- Hygiene rules in the envelope (near-duplicate-defense, C2) ----------
+//
+// 17. The instruction carries five language-neutral rules: time bounds as
+//     ISO dates or intervals, conversational mechanics skipped, one rule
+//     per item, conditions kept, restatements dropped.
+// 18. The rules name categories, never example words: the instruction and
+//     the schema hints quote no phrase and stay ASCII, so no language's
+//     vocabulary is baked into the kernel.
+
+/** The instruction half of the prompt, everything before the transcript. */
+function instruction(prompt: string): string {
+  return prompt.slice(0, prompt.indexOf("\n\n"));
+}
+
+test("the envelope instruction carries the five hygiene rules", () => {
+  const plan = planExtractSignals(vault, SESSION, { now: NOW });
+  const head = instruction(plan.llmStep.prompt);
+  expect(head).toContain("ISO 8601 date or interval");
+  expect(head).toContain("timestamp of the turn");
+  expect(head).toContain("conversational mechanics");
+  expect(head).toContain("one rule per item");
+  expect(head).toContain("condition");
+  expect(head).toContain("restatement");
+  expect(plan.llmStep.schema_hints.join("\n")).toContain("ISO 8601");
+});
+
+test("the hygiene rules name categories and quote no example words", () => {
+  const plan = planExtractSignals(vault, SESSION, { now: NOW });
+  const head = instruction(plan.llmStep.prompt);
+  const hints = plan.llmStep.schema_hints.filter((hint) => !hint.startsWith("payload:"));
+  for (const text of [head, ...hints]) {
+    expect(text).not.toMatch(/"/);
+    expect(text).toMatch(/^[\x20-\x7e]*$/);
+  }
+});

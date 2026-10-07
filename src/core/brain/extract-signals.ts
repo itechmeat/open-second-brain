@@ -409,6 +409,28 @@ export function planExtractSignals(
 }
 
 /**
+ * Hygiene rules the mined items are held to, in the instruction.
+ *
+ * Each names a CATEGORY and never an example word: the operator may write
+ * in any language, and a kernel that listed one language's greetings or
+ * date words would mine that language better than every other. Time is
+ * grounded the same way - the caller resolves a relative bound against the
+ * turn's timestamp and writes it as ISO, which the dream pass already turns
+ * into a validity window, so no date parser lives here.
+ */
+const EXTRACT_HYGIENE_RULES: ReadonlyArray<string> = Object.freeze([
+  "Write any time bound a rule carries as an ISO 8601 date or interval (YYYY-MM-DD, or " +
+    "YYYY-MM-DD/YYYY-MM-DD), resolving a relative bound against the timestamp of the turn " +
+    "that stated it; a rule with no time bound stays undated.",
+  "Skip conversational mechanics - greetings, thanks, acknowledgements, requests to go on, " +
+    "and directions about the flow of this session - because they state no rule.",
+  "Return one rule per item: a turn that states two rules yields two items with distinct topics.",
+  "Keep every condition a rule was stated with - when, where, for which project or kind of " +
+    "work - inside its principle; never widen a conditional rule into an unconditional one.",
+  "Drop restatements: a rule the operator states more than once is returned once, under one topic.",
+]);
+
+/**
  * The one envelope. The turns ride inside the prompt rather than beside it
  * because the receiving agent is answering a question about exactly these
  * turns and nothing else; a prompt that named a session id would invite the
@@ -430,13 +452,16 @@ export function buildMiningStep(
       "correction, a prohibition - not a fact, a task, or a one-off instruction about this session. " +
       `Return at most ${AUTO_EXTRACT_PER_SESSION_CAP} items, each with a confidence of at least ` +
       `${AUTO_EXTRACT_CONFIDENCE_FLOOR}; omit anything you are less sure of rather than lowering the ` +
-      "number, because an item below the floor refuses the whole payload.\n\n" +
+      "number, because an item below the floor refuses the whole payload. " +
+      EXTRACT_HYGIENE_RULES.join(" ") +
+      "\n\n" +
       transcript,
     schema_hints: [
       'payload: { "items": [ { "topic", "signal", "principle", "confidence", "scope"? } ] }',
-      "topic: stable kebab-slug naming the rule",
+      "topic: stable kebab-slug naming the rule, unique within the payload",
       "signal: 'positive' when the principle is the rule to follow, 'negative' when it is what to avoid",
-      "principle: one imperative line, in the language the operator used",
+      "principle: one imperative line, in the language the operator used, with any time bound " +
+        "written as an ISO 8601 date or interval",
       `confidence: number in [${AUTO_EXTRACT_CONFIDENCE_FLOOR}, 1]`,
       `items: at most ${AUTO_EXTRACT_PER_SESSION_CAP} entries`,
       ...(opts.sourceTurnHint === true
