@@ -1,4 +1,4 @@
-set -e
+set -eu
 
 # Materialize the deterministic collector for the osb-upstream-watch run into the
 # run directory. Script nodes receive no params: everything the collector needs
@@ -6,6 +6,7 @@ set -e
 # nodes that follow. The collector is the port of the nightly VPS workflow's
 # embedded osb-upstream-collect script (stdlib only, gh invoked read-only).
 
+: "${APB_RUN_DIR:?APB_RUN_DIR is required}"
 COLLECTOR_DIR="$APB_RUN_DIR/collector"
 mkdir -p "$COLLECTOR_DIR"
 
@@ -26,6 +27,7 @@ Stdlib only. gh is invoked read-only via subprocess.
 """
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -33,7 +35,6 @@ import time
 from datetime import datetime, timezone, date, timedelta
 from pathlib import Path
 
-TABLE_RELPATH = None  # unused here; the table path always arrives via --table
 RELEASE_BODY_MAX = 4000
 COMMITS_FALLBACK_DAYS = 60
 CANDIDATE_CAP = 10
@@ -126,6 +127,15 @@ def iso_since_from_updated(updated):
 # --------------------------------------------------------------------------- #
 # Table writeback (atomic, anchored on the unique repo URL)
 # --------------------------------------------------------------------------- #
+def _write_table_atomic(path, text):
+    """Write text to a sibling temp file, then os.replace it over `path` so a
+    crash mid-write can never leave a truncated table behind."""
+    p = Path(path)
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, p)
+
+
 def _set_cell(parts, idx, value):
     if idx >= len(parts):
         return
@@ -201,13 +211,14 @@ def decide_mode(in_window, all_releases, today, stale_days=COMMITS_FALLBACK_DAYS
         return "releases"
     if not all_releases:
         return "activity"
-    newest = max(_parse_iso(r["publishedAt"]).date() for r in all_releases if r.get("publishedAt"))
-    if (today - newest).days > stale_days:
+    newest = max((_parse_iso(r["publishedAt"]).date()
+                  for r in all_releases if r.get("publishedAt")), default=None)
+    if newest is None or (today - newest).days > stale_days:
         return "activity"
     return "empty"
 
 
-def filter_feature_commits(commits, owner, repo):
+def filter_feature_commits(commits):
     kept = []
     for c in commits:
         msg = (c.get("commit", {}) or {}).get("message", "") or ""
@@ -324,6 +335,7 @@ def gh_release_view(owner, repo, tag):
 
 
 def gh_api_commits(owner, repo, since):
+    # First page only: the cap and drop accounting cover the fetched page (no pagination).
     return _gh_json(["api", "-X", "GET", f"repos/{owner}/{repo}/commits",
                      "-F", f"since={since}", "-F", "per_page=100"])
 
@@ -411,7 +423,10 @@ def collect_one(row, today, since_override=None, cap=CANDIDATE_CAP, stale_days=C
                     "summary": p.get("title", ""),
                     "pr": {"number": num, "title": p.get("title", ""), "url": purl},
                 })
-            merge_oid = ((kept[-1].get("mergeCommit") or {}) or {}).get("oid", "")
+            merge_oid = ((kept[-1].get("mergeCommit") or {}) or {}).get("oid") or ""
+            if not merge_oid:
+                # an empty watermark would silently pin the repo as up-to-date forever
+                return {"error": "no merge commit in the first page"}, "error"
             base["newest_commit_sha"] = merge_oid[:7]
             base["mode"] = "prs"
             if dropped:
@@ -425,7 +440,7 @@ def collect_one(row, today, since_override=None, cap=CANDIDATE_CAP, stale_days=C
                     return {"error": "commits 404 but repo exists (malformed request)"}, "error"
                 return {"error": "repo not found"}, "error"
             return {"error": f"commits fetch failed: {gherr[2][:200]}"}, "error"
-        feat = filter_feature_commits(commits, owner, repo)
+        feat = filter_feature_commits(commits)
         if not feat:
             return {"reason": "no-feature-activity"}, "empty"
         kept, dropped = cap_candidates(list(reversed(feat)), cap)  # API newest-first -> oldest-first
@@ -469,9 +484,8 @@ def _dispose_empty(table_path, proc_path, repo, today, reason=None):
     never surfaced to the model."""
     owner, r = repo.split("/", 1)
     tp = Path(table_path)
-    tp.write_text(rewrite_row(tp.read_text(encoding="utf-8"), owner, r,
-                              updated=today.strftime("%d.%m.%Y"), last_error=""),
-                  encoding="utf-8")
+    _write_table_atomic(tp, rewrite_row(tp.read_text(encoding="utf-8"), owner, r,
+                                        updated=today.strftime("%d.%m.%Y"), last_error=""))
     append_processed(proc_path, repo, "empty", reason=reason)
 
 
@@ -479,8 +493,8 @@ def _record_collection_error(table_path, repo, message):
     owner, r = repo.split("/", 1)
     tp = Path(table_path)
     try:
-        tp.write_text(rewrite_row(tp.read_text(encoding="utf-8"), owner, r,
-                                  last_error=message[:200]), encoding="utf-8")
+        _write_table_atomic(tp, rewrite_row(tp.read_text(encoding="utf-8"), owner, r,
+                                            last_error=message[:200]))
     except RowNotFound:
         pass
 
@@ -612,15 +626,22 @@ def cmd_done(table, state_root, repo, last_tag=None, commit=None, error=None):
         text = rewrite_row(text, owner, r, updated=today.strftime("%d.%m.%Y"),
                            last_tag=tagval, last_error="")
         append_processed(proc_path, repo, "done", last_tag=last_tag, commit=commit)
-    tp.write_text(text, encoding="utf-8")
+    _write_table_atomic(tp, text)
     return {"repo": repo, "status": "error" if error else "done"}
 
 
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
+def _parse_cap(s):
+    n = int(s)  # non-numeric input -> argparse reports the invalid value itself
+    if n < 1:
+        raise SystemExit("--cap expects a positive integer")
+    return n
+
+
 def _add_common_filters(p):
-    p.add_argument("--cap", type=int, default=CANDIDATE_CAP,
+    p.add_argument("--cap", type=_parse_cap, default=CANDIDATE_CAP,
                    help="Max candidates per project, newest kept (default %d)." % CANDIDATE_CAP)
     p.add_argument("--stale-days", type=int, default=COMMITS_FALLBACK_DAYS,
                    help="Release-cadence threshold; older -> mine PRs/commits (default %d)."
