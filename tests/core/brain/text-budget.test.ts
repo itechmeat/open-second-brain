@@ -11,7 +11,12 @@ import { describe, expect, test } from "bun:test";
 import {
   applySectionBudget,
   type BudgetSection,
+  compareItemLines,
+  firstTagGroup,
+  joinedSectionsLength,
   type SectionTruncationReport,
+  splitSectionBullets,
+  topItemLines,
 } from "../../../src/core/brain/text/text-budget.ts";
 
 const NOTICE = "_Truncated to fit the injection budget. Call `brain_context` for the full view._";
@@ -173,5 +178,196 @@ describe("applySectionBudget: the notice as a function of the truncation report"
       const asFunction = applySectionBudget(sections(), budget, { notice: () => NOTICE });
       expect(asFunction).toEqual(asString);
     }
+  });
+});
+
+// ----- Section bullet primitives (headline tier, context-injection-pipeline) --
+
+/**
+ * The bullet primitives parse the DISPLAY grammar the active.md and
+ * lessons.md renderers emit at shrink time, when no structured metadata
+ * is available: heading, non-bullet lead-in lines, then `- ` item lines
+ * whose inline `(tag, tag)` group carries the ranking keys. The
+ * renderer functions and these primitives point at each other in their
+ * docblocks.
+ */
+describe("splitSectionBullets", () => {
+  const SECTION_TEXT = [
+    "## Quarantine (2)",
+    "",
+    "_Probationary rules — still active._",
+    "",
+    "- `q1` (applied: 0 / violated: 2) — one",
+    "- `q2` (applied: 1 / violated: 0) — two",
+  ].join("\n");
+
+  test("isolates the heading, the lead-in lines and the item lines", () => {
+    const split = splitSectionBullets(SECTION_TEXT);
+    expect(split.heading).toBe("## Quarantine (2)");
+    expect(split.leadInLines).toEqual(["", "_Probationary rules — still active._", ""]);
+    expect(split.itemLines).toEqual([
+      "- `q1` (applied: 0 / violated: 2) — one",
+      "- `q2` (applied: 1 / violated: 0) — two",
+    ]);
+    expect(split.headLines).toEqual(["## Quarantine (2)", ...split.leadInLines]);
+  });
+
+  test("a slice without a heading: heading null, every non-bullet line is a head line", () => {
+    const split = splitSectionBullets("plain lead-in prose\n- one");
+    expect(split.heading).toBeNull();
+    expect(split.leadInLines).toEqual([]);
+    expect(split.headLines).toEqual(["plain lead-in prose"]);
+    expect(split.itemLines).toEqual(["- one"]);
+  });
+
+  test("a slice without items: everything is head, items empty", () => {
+    const split = splitSectionBullets("## Confirmed (0)\n\n_Nothing yet._");
+    expect(split.itemLines).toEqual([]);
+    expect(split.headLines).toEqual(["## Confirmed (0)", "", "_Nothing yet._"]);
+  });
+
+  test("pure and deterministic: identical inputs, untouched input text", () => {
+    const before = SECTION_TEXT;
+    expect(splitSectionBullets(SECTION_TEXT)).toEqual(splitSectionBullets(SECTION_TEXT));
+    expect(SECTION_TEXT).toBe(before);
+  });
+});
+
+describe("firstTagGroup", () => {
+  test("reads the first parenthesized group after the id prefix", () => {
+    expect(firstTagGroup("- `pref-a` (scope: web, pinned) — Rule A")).toBe("scope: web, pinned");
+  });
+
+  test("survives nested parentheses inside the group", () => {
+    expect(firstTagGroup("- `pref-a` (confidence: high (0.95)) — Rule A")).toBe(
+      "confidence: high (0.95)",
+    );
+  });
+
+  test("the principle text after the group is never read", () => {
+    expect(firstTagGroup("- `pref-a` (applied: 1 / violated: 0) — use (parens) here")).toBe(
+      "applied: 1 / violated: 0",
+    );
+  });
+
+  test("a line with an id but no tag group is null", () => {
+    expect(firstTagGroup("- `pref-r` — low_confidence on 2026-05-01")).toBeNull();
+  });
+
+  test("a line without the id-backtick prefix is null", () => {
+    expect(firstTagGroup("- plain bullet without an id")).toBeNull();
+    expect(firstTagGroup("not a bullet at all")).toBeNull();
+  });
+
+  test("an unbalanced group is null (fail-open, never a misparse)", () => {
+    expect(firstTagGroup("- `p` (unclosed group of text")).toBeNull();
+  });
+});
+
+describe("item line ranking", () => {
+  test("applied_in_window ranks descending", () => {
+    const m1 = "- `m1` (applied_in_window: 2)";
+    const m2 = "- `m2` (applied_in_window: 5)";
+    const m3 = "- `m3` (applied_in_window: 9)";
+    expect(compareItemLines(m3, m1)).toBeLessThan(0);
+    expect(compareItemLines(m1, m3)).toBeGreaterThan(0);
+    expect(compareItemLines(m2, m1)).toBeLessThan(0);
+    expect(topItemLines([m1, m3, m2], 2)).toEqual([m3, m2]);
+  });
+
+  test("confidence values rank descending, the nested value parsed", () => {
+    const c1 = "- `c1` (confidence: high (0.95)) — A";
+    const c2 = "- `c2` (confidence: medium (0.50)) — B";
+    const c3 = "- `c3` (confidence: high (0.80)) — C";
+    expect(compareItemLines(c1, c2)).toBeLessThan(0);
+    expect(compareItemLines(c3, c2)).toBeLessThan(0);
+    expect(compareItemLines(c1, c3)).toBeLessThan(0);
+    expect(topItemLines([c2, c1, c3], 2)).toEqual([c1, c3]);
+  });
+
+  test("applied ranks descending, then violated ascending", () => {
+    const q1 = "- `q1` (applied: 2 / violated: 5) — one";
+    const q2 = "- `q2` (applied: 2 / violated: 1) — two";
+    const q3 = "- `q3` (applied: 4 / violated: 9) — three";
+    expect(compareItemLines(q3, q1)).toBeLessThan(0);
+    expect(compareItemLines(q2, q1)).toBeLessThan(0);
+    // Same applied count: fewer violations first.
+    expect(compareItemLines(q2, q3)).toBeGreaterThan(0);
+    // Same applied count: fewer violations first. Top two are q3, q2;
+    // survivors come back in render order.
+    expect(topItemLines([q1, q2, q3], 2)).toEqual([q2, q3]);
+  });
+
+  test("lines without a recognizable id-tag group rank last, in original order", () => {
+    const lines = [
+      "- trailing plain note",
+      "- `m1` (applied_in_window: 1)",
+      "- `r1` — retired prose without tags",
+      "- `m2` (applied_in_window: 2)",
+    ];
+    // Both recognized lines survive the cut; the unrecognizable band keeps
+    // its original order and loses its tail (`r1`). Survivors come back in
+    // render order, so the leading unrankable note rides along.
+    expect(topItemLines(lines, 3)).toEqual([
+      "- trailing plain note",
+      "- `m1` (applied_in_window: 1)",
+      "- `m2` (applied_in_window: 2)",
+    ]);
+  });
+
+  test("a group with none of the known keys ranks in the recognized band, original order", () => {
+    const lines = ["- `d2` (score: -0.50) — later", "- `d1` (score: -0.95) — earlier"];
+    expect(topItemLines(lines, 2)).toEqual(lines);
+  });
+
+  test("ties keep original render order", () => {
+    const lines = [
+      "- `m1` (applied_in_window: 4)",
+      "- `m2` (applied_in_window: 4)",
+      "- `m3` (applied_in_window: 4)",
+    ];
+    expect(topItemLines(lines, 2)).toEqual(lines.slice(0, 2));
+  });
+
+  test("top-N selection keeps the survivors in render order", () => {
+    const lines = [
+      "- `m1` (applied_in_window: 3)",
+      "- `m2` (applied_in_window: 9)",
+      "- `m3` (applied_in_window: 6)",
+      "- `m4` (applied_in_window: 1)",
+    ];
+    // Top three by count are m2, m3, m1; rendered in their original order.
+    expect(topItemLines(lines, 3)).toEqual([
+      "- `m1` (applied_in_window: 3)",
+      "- `m2` (applied_in_window: 9)",
+      "- `m3` (applied_in_window: 6)",
+    ]);
+  });
+
+  test("a limit at or below zero keeps nothing; a limit past the end keeps everything", () => {
+    const lines = ["- `m1` (applied_in_window: 3)", "- `m2` (applied_in_window: 9)"];
+    expect(topItemLines(lines, 0)).toEqual([]);
+    expect(topItemLines(lines, 10)).toEqual(lines);
+  });
+
+  test("deterministic and pure: identical calls agree, inputs untouched", () => {
+    const lines = [
+      "- `m1` (applied_in_window: 3)",
+      "- `q1` (applied: 1 / violated: 1) — x",
+      "- `c1` (confidence: high (0.95)) — y",
+      "stray tail",
+    ];
+    const snapshot = [...lines];
+    expect(topItemLines(lines, 4)).toEqual(topItemLines(lines, 4));
+    expect(compareItemLines(lines[0]!, lines[1]!)).toBe(compareItemLines(lines[0]!, lines[1]!));
+    expect(lines).toEqual(snapshot);
+  });
+});
+
+describe("joinedSectionsLength", () => {
+  test("is the character length of the separator-joined sections", () => {
+    expect(joinedSectionsLength([{ text: "aaa" }, { text: "bb" }])).toBe("aaa\n\nbb".length);
+    expect(joinedSectionsLength([{ text: "only" }])).toBe(4);
+    expect(joinedSectionsLength([])).toBe(0);
   });
 });
