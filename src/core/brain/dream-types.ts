@@ -131,8 +131,9 @@ export interface DreamRunSummary {
   /**
    * Near-duplicate defense (t_acab97de): active preferences that resemble
    * a context-driven retire of this run (`superseded-by-context`,
-   * `rebutted`, `quarantine-violated`), excluding siblings of
-   * {@link gated_retires}. Advisory only: nothing here is retired. Absent
+   * `rebutted`, `quarantine-violated`, `user-rejected`), excluding
+   * siblings of a retire the confirmed-evidence gate holds back (on a dry
+   * run, one it would hold back). Advisory only: nothing here is retired. Absent
    * when `near_duplicate_retire_siblings_enabled` is off or the list is
    * empty, so an un-opted-in summary stays byte-identical.
    */
