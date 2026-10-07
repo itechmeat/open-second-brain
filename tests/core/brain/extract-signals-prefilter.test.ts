@@ -225,9 +225,11 @@ describe("enforce", () => {
     expect(plan.skipped).toBeUndefined();
     const prompt = plan.llmStep!.prompt;
     expect(prompt).toContain("the 2 user turn(s)");
-    expect(prompt.indexOf("[t1]")).toBeLessThan(prompt.indexOf("[t5]"));
-    expect(prompt).not.toContain("[t3]");
-    expect(prompt).not.toContain("[t7]");
+    // Every turn line carries its timestamp: `[turnId @ <timestamp>] text`.
+    expect(prompt).toContain("[t1 @ ");
+    expect(prompt.indexOf("[t1 @ ")).toBeLessThan(prompt.indexOf("[t5 @ "));
+    expect(prompt).not.toContain("[t3 @ ");
+    expect(prompt).not.toContain("[t7 @ ");
   });
 
   test("an invalid item keeps its turn", async () => {

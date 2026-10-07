@@ -186,6 +186,13 @@ function describeDeadLetter(outcome: DeadLetterOutcome): string {
 export interface MinedTurn {
   readonly turnId: string;
   readonly text: string;
+  /**
+   * The turn's stored timestamp, verbatim; "" when the source has none.
+   * Never a formatted `Date` and never the plan's clock: the caller grounds
+   * a relative time bound against it, so an invented value would ground it
+   * against the wrong day.
+   */
+  readonly timestamp: string;
 }
 
 /** Phase-one report: what will be mined, and the one envelope that mines it. */
@@ -382,7 +389,7 @@ export function planExtractSignals(
     if (boundary.suppressMessage(turn.text)) continue;
     const text = turn.text.trim();
     if (text.length === 0) continue;
-    mined.push(Object.freeze({ turnId: turn.turn_id, text }));
+    mined.push(Object.freeze({ turnId: turn.turn_id, text, timestamp: turn.timestamp }));
   }
   if (mined.length === 0) {
     throw new ExtractSignalsError(
@@ -413,7 +420,7 @@ export function buildMiningStep(
   opts: { readonly sourceTurnHint?: boolean } = {},
 ): NeedsLlmStep {
   const transcript = mined
-    .map((turn) => `[${turn.turnId}] ${turn.text.slice(0, PROMPT_TURN_TEXT_MAX)}`)
+    .map((turn) => `${transcriptLabel(turn)} ${turn.text.slice(0, PROMPT_TURN_TEXT_MAX)}`)
     .join("\n");
   return buildNeedsLlmStep({
     step: EXTRACT_SIGNALS_STEP,
@@ -438,6 +445,11 @@ export function buildMiningStep(
     ],
     target_path: posix.normalize(AUTO_EXTRACT_TARGET_DIR_REL),
   });
+}
+
+/** `[turnId @ timestamp]`, or `[turnId]` when the turn has no timestamp. */
+function transcriptLabel(turn: MinedTurn): string {
+  return turn.timestamp === "" ? `[${turn.turnId}]` : `[${turn.turnId} @ ${turn.timestamp}]`;
 }
 
 // ----- Phase two: what the caller mined ------------------------------------

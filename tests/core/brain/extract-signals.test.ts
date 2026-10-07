@@ -396,3 +396,37 @@ test("a partial write leaves a durable dead letter naming the unwritten items", 
   expect(err.deadLetter.recorded).toBe(true);
   if (err.deadLetter.recorded) expect(err.message).toContain(err.deadLetter.id);
 });
+
+// ----- Turn timestamps in the envelope (near-duplicate-defense, C1) --------
+//
+// 15. A mined turn carries the stored turn timestamp verbatim, and the
+//     transcript line shows it as `[turnId @ <timestamp>] text`.
+// 16. A turn stored without a timestamp renders `[turnId] text`; the plan's
+//     clock is never substituted for the missing value.
+
+test("a mined turn carries the stored timestamp verbatim into its transcript line", () => {
+  const plan = planExtractSignals(vault, SESSION, { now: NOW });
+  expect(plan.turnsMined.map((t) => t.timestamp)).toEqual([
+    "2026-08-22T09:01:00Z",
+    "2026-08-22T09:03:00Z",
+  ]);
+  expect(plan.llmStep.prompt).toContain(
+    "[t1 @ 2026-08-22T09:01:00Z] Always name the release theme in the heading.",
+  );
+  expect(plan.llmStep.prompt).toContain(
+    "[t3 @ 2026-08-22T09:03:00Z] And never abbreviate the module names.",
+  );
+  // Assistant turns stay out, timestamp or not.
+  expect(plan.llmStep.prompt).not.toContain("[t2");
+});
+
+test("a turn without a stored timestamp renders bare and never borrows the clock", () => {
+  importTurns("sess-undated", [
+    { turnId: "u1", timestamp: "", role: "user", text: "Keep the changelog terse." },
+  ]);
+  const plan = planExtractSignals(vault, "sess-undated", { now: NOW });
+  expect(plan.turnsMined.map((t) => t.timestamp)).toEqual([""]);
+  expect(plan.llmStep.prompt).toContain("[u1] Keep the changelog terse.");
+  expect(plan.llmStep.prompt).not.toContain("[u1 @");
+  expect(plan.llmStep.prompt).not.toContain(NOW.toISOString());
+});
