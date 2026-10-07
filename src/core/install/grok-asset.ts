@@ -107,11 +107,14 @@ const HOOK_SPEC: ReadonlyArray<{ event: string; groups: ReadonlyArray<HookGroupS
       { matcher: "brain_feedback", hooks: ["session-capture"] },
       {
         matcher: "Write|Edit|MultiEdit|apply_patch|search_replace",
-        hooks: ["post-write-reminder"],
+        hooks: ["post-write-reminder", "subagent-inject"],
       },
     ],
   },
-  { event: "Stop", groups: [{ hooks: ["session-capture", "stop-log-guardrail"] }] },
+  {
+    event: "Stop",
+    groups: [{ hooks: ["session-capture", "stop-log-guardrail", "hygiene-digest"] }],
+  },
   // The delegated sub-agent's close. Without it a grok install records the
   // parent's turns and drops every sub-agent's, and a sub-agent transcript
   // reuses the PARENT's session id - so the loss is invisible in the data.
