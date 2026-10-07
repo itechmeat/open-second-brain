@@ -1,4 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { appendApplyEvidence } from "../../../src/core/brain/apply-evidence.ts";
+import { dream } from "../../../src/core/brain/dream.ts";
+import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 
 import { READ_ALL_REFS } from "../../../src/core/brain/near-duplicate.ts";
 import {
@@ -6,7 +13,10 @@ import {
   RETIRE_SIBLING_TRIGGER_REASONS,
   retireSiblingPool,
 } from "../../../src/core/brain/retire-siblings.ts";
+import { writePreference } from "../../../src/core/brain/preference.ts";
 import { BRAIN_RETIRED_REASON, type BrainRetiredReason } from "../../../src/core/brain/types.ts";
+import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
+import { digestVaultTree } from "../../helpers/vault-digest.ts";
 
 const RULE = "always run the formatter before every commit in this repository";
 const PARAPHRASE = "always run the formatter before each commit in this repository";
@@ -131,5 +141,92 @@ describe("planRetireSiblings", () => {
       "pref-y>pref-a",
       "pref-y>pref-b",
     ]);
+  });
+});
+
+const FLAG_ENV = "OPEN_SECOND_BRAIN_NEAR_DUPLICATE_RETIRE_SIBLINGS_ENABLED";
+const NOW = new Date("2026-06-10T12:00:00Z");
+
+describe("dream retire_siblings", () => {
+  let vault: string;
+  let configHome: string;
+  let savedFlag: string | undefined;
+
+  beforeEach(() => {
+    savedFlag = process.env[FLAG_ENV];
+    delete process.env[FLAG_ENV];
+    vault = mkdtempSync(join(tmpdir(), "o2b-retire-siblings-vault-"));
+    configHome = mkdtempSync(join(tmpdir(), "o2b-retire-siblings-cfg-"));
+    const configPath = join(configHome, "config.yaml");
+    atomicWriteFileSync(configPath, `vault: ${vault}\n`);
+    bootstrapBrain(vault, { configPath });
+    seedPreference("old", "formatting", RULE);
+    seedPreference("paraphrase", "commit-hygiene", PARAPHRASE);
+    seedPreference("unrelated", "makefiles", UNRELATED);
+    appendApplyEvidence(
+      vault,
+      { pref_id: "pref-old", artifact: "[[AA-artifact]]", result: "outdated", agent: "test-agent" },
+      { now: new Date("2026-06-09T12:00:00Z") },
+    );
+  });
+
+  afterEach(() => {
+    if (savedFlag === undefined) delete process.env[FLAG_ENV];
+    else process.env[FLAG_ENV] = savedFlag;
+    rmSync(vault, { recursive: true, force: true });
+    rmSync(configHome, { recursive: true, force: true });
+  });
+
+  function seedPreference(slug: string, topic: string, principle: string): void {
+    writePreference(vault, {
+      slug,
+      topic,
+      principle,
+      created_at: "2026-06-01T00:00:00Z",
+      confirmed_at: "2026-06-02T00:00:00Z",
+      unconfirmed_until: "2026-06-15T00:00:00Z",
+      status: "confirmed",
+      evidenced_by: ["[[sig-1]]"],
+      applied_count: 1,
+      violated_count: 0,
+      last_evidence_at: "2026-06-02T00:00:00Z",
+      confidence: "low",
+    });
+  }
+
+  const EXPECTED = [
+    { retiring_id: "pref-old", sibling_id: "pref-paraphrase", score: 0.818, method: "lexical" },
+  ];
+
+  test("with the key on, the dry run and the real run report the same siblings", () => {
+    process.env[FLAG_ENV] = "1";
+    const before = digestVaultTree(vault);
+    const preview = dream(vault, { dryRun: true, now: NOW });
+    expect(digestVaultTree(vault)).toBe(before);
+    expect(preview.retired).toEqual([{ id: "ret-old", reason: "superseded-by-context" }]);
+    expect(preview.retire_siblings).toEqual(EXPECTED);
+    const real = dream(vault, { now: NOW });
+    expect(real.retire_siblings).toEqual(EXPECTED);
+  });
+
+  test("with the key off, the field is absent and the summary is otherwise unchanged", () => {
+    const off = dream(vault, { dryRun: true, now: NOW });
+    expect("retire_siblings" in off).toBe(false);
+    process.env[FLAG_ENV] = "1";
+    const { retire_siblings: _siblings, ...on } = dream(vault, { dryRun: true, now: NOW });
+    expect(JSON.stringify(on)).toBe(JSON.stringify(off));
+  });
+
+  test("a sibling of a gated retire does not appear", () => {
+    process.env[FLAG_ENV] = "1";
+    const yamlPath = join(vault, "Brain", "_brain.yaml");
+    const yaml = readFileSync(yamlPath, "utf8").replace(
+      "# confirmed_evidence_min_threshold: 3",
+      "confirmed_evidence_min_threshold: 50",
+    );
+    writeFileSync(yamlPath, yaml);
+    const real = dream(vault, { now: NOW });
+    expect(real.gated_retires.map((g) => g.pref_id)).toEqual(["pref-old"]);
+    expect("retire_siblings" in real).toBe(false);
   });
 });

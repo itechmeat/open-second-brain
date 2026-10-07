@@ -14,6 +14,7 @@ import type { DreamPhaseSummary } from "./dream-phases.ts";
 import type { DreamQuarantinedEntry } from "./dream-plan.ts";
 import type { DreamOutcomeRegression } from "./dream-refresh.ts";
 import type { BrainIntentReviewEntry } from "./intent-review.ts";
+import type { RetireSibling } from "./retire-siblings.ts";
 import type { RollupLadderEntry } from "./rollup-ladder.ts";
 import type { SalienceGateVerdict } from "./salience-gate.ts";
 import type { BrainRetiredReason, DreamOpenQuestion } from "./types.ts";
@@ -127,6 +128,15 @@ export interface DreamRunSummary {
    * when the config field is absent (the default).
    */
   readonly gated_retires: ReadonlyArray<DreamGatedRetireEntry>;
+  /**
+   * Near-duplicate defense (t_acab97de): active preferences that resemble
+   * a context-driven retire of this run (`superseded-by-context`,
+   * `rebutted`, `quarantine-violated`), excluding siblings of
+   * {@link gated_retires}. Advisory only: nothing here is retired. Absent
+   * when `near_duplicate_retire_siblings_enabled` is off or the list is
+   * empty, so an un-opted-in summary stays byte-identical.
+   */
+  readonly retire_siblings?: ReadonlyArray<RetireSibling>;
   /**
    * Outcome-regression findings (t_d478df53): confirmed preferences
    * whose recent applied events co-occur with failure outcomes. The
