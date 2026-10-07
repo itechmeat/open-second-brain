@@ -52,6 +52,14 @@ const HEADING_PREFIX = "## ";
 const PREAMBLE_KEY = "preamble";
 
 /**
+ * The shared tail of every truncation notice: the pointer from the
+ * budgeted view back to the full preference set. Spelled out once so
+ * the drop notice and the tier notice can never drift apart.
+ */
+const FULL_VIEW_POINTER =
+  " Call `brain_context` (or read `Brain/active.md`) for the full preference set._";
+
+/**
  * The truncation notice, built from the budgeter's own report.
  *
  * It used to be a fixed sentence. The budgeter has always returned the
@@ -69,8 +77,7 @@ export function activeTruncationNotice(report: SectionTruncationReport): string 
       : "";
   return (
     `_Injection truncated to budget: kept ${report.keptChars} of ${report.totalChars} ` +
-    `characters.${dropped} Call \`brain_context\` (or read \`Brain/active.md\`) ` +
-    "for the full preference set._"
+    `characters.${dropped}${FULL_VIEW_POINTER}`
   );
 }
 
@@ -226,8 +233,7 @@ export const HEADLINE_TIER_TOP_ITEMS = 3;
  * view - so a reduction is never silent.
  */
 const TIER_NOTICE_OPEN = "_Headlines kept to fit the injection budget: ";
-const TIER_NOTICE_POINTER =
-  ". Call `brain_context` (or read `Brain/active.md`) for the full preference set._";
+const TIER_NOTICE_POINTER = `.${FULL_VIEW_POINTER}`;
 
 /**
  * Wording of the "headlines kept" clause appended to the drop notice

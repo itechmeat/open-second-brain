@@ -373,22 +373,28 @@ function itemRankKeys(line: string): ItemRankKeys | null {
   };
 }
 
-/** Descending with a documented hole: no value ranks after any value. */
-function compareDesc(a: number | null, b: number | null): number {
+/**
+ * The one "null ranks last" hole, written once: a missing key NEVER
+ * ranks ahead of a present one, whichever direction the rest of the
+ * comparison runs. Both sides null tie (0); exactly one null ranks
+ * last; otherwise the caller's `cmp` decides.
+ */
+function nullLast<T>(a: T | null, b: T | null, cmp: (x: T, y: T) => number): number {
   if (a === null || b === null) {
     if (a === null && b === null) return 0;
     return a === null ? 1 : -1;
   }
-  return b - a;
+  return cmp(a, b);
 }
 
-/** Ascending, same hole: no value ranks after any value. */
+/** Descending, through the shared null-last hole. */
+function compareDesc(a: number | null, b: number | null): number {
+  return nullLast(a, b, (x, y) => y - x);
+}
+
+/** Ascending, through the shared null-last hole. */
 function compareAsc(a: number | null, b: number | null): number {
-  if (a === null || b === null) {
-    if (a === null && b === null) return 0;
-    return a === null ? 1 : -1;
-  }
-  return a - b;
+  return nullLast(a, b, (x, y) => x - y);
 }
 
 /**
@@ -402,10 +408,7 @@ function compareAsc(a: number | null, b: number | null): number {
 export function compareItemLines(a: string, b: string): number {
   const ka = itemRankKeys(a);
   const kb = itemRankKeys(b);
-  if (ka === null || kb === null) {
-    if (ka === null && kb === null) return 0;
-    return ka === null ? 1 : -1;
-  }
+  if (ka === null || kb === null) return nullLast(ka, kb, () => 0);
   return (
     compareDesc(ka.appliedInWindow, kb.appliedInWindow) ||
     compareDesc(ka.confidenceValue, kb.confidenceValue) ||
