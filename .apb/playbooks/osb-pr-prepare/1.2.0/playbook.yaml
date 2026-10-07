@@ -594,6 +594,13 @@ nodes:
   runner: sh
   timeout_seconds: 6600
   expected_duration: 35m
+- id: ci_wait_final
+  title: Wait for CI after the budget-capped bot review pass
+  type: script
+  script: scripts/ci-wait.sh
+  runner: sh
+  timeout_seconds: 6600
+  expected_duration: 35m
 - id: ci_check
   title: CI verdict
   type: condition
@@ -838,5 +845,14 @@ edges:
   to: ci_wait
   max_traversals: 2
 - from: bot_review
+  to: ci_wait_final
+  fallback: true
+- from: ci_wait_final
   to: ready
+  condition:
+    type: node_status
+    node: ci_wait_final
+    equals: success
+- from: ci_wait_final
+  to: blocked
   fallback: true

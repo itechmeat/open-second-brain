@@ -230,9 +230,11 @@ nodes:
 
     write the file in BOTH places - the run working tree and the run
 
-    root (the checkout that holds `.apb/`, reached as
+    root (the checkout that holds `.apb/`: `$APB_RUN_DIR` is
 
-    `$APB_RUN_DIR/../../`). This is scratch state for reviewers, never
+    `<checkout>/.apb/runs/<run-id>`, so the root is `$APB_RUN_DIR/../../..`,
+
+    the parent of `.apb/`). This is scratch state for reviewers, never
 
     a tracked file: do not commit it.
 
@@ -472,13 +474,19 @@ nodes:
 
 
     Read the PR number and URL from the first line of the PR preparation answer in the run context (PR:
-    #N <url>). Verify with gh before merging, in this order:
+    #N <url>). First run `gh pr view <n> --json state,mergeCommit`: if the state is already MERGED (the
+    operator merged it themselves), accept it: report the merge commit and succeed without merging again,
+    skipping every step below.
+
+
+    Otherwise verify with gh before merging, in this order:
 
     1. `gh pr view <n> --json state,headRefOid,baseRefName,mergeable` - the PR is OPEN and targets the
     base branch.
 
     2. `gh pr checks <n>` - every check is green; if any check is pending, WAIT with one blocking re-check
-    after a few minutes (never a polling loop), and fail the node when a check is red.
+    after a few minutes (never a polling loop). Fail the node when a check is red, and also when a check
+    is still pending after that one re-check (name the pending checks); never merge on a pending check.
 
     3. The PR head equals the local branch HEAD in the run working tree (`git rev-parse HEAD`).
 
@@ -487,17 +495,14 @@ nodes:
 
     Merge with squash and admin (the repository requires it for feature branches):
 
-    `gh pr view <n> --json body -q .body > /tmp/pr-body.md` then
+    `body=$(mktemp "${TMPDIR:-/tmp}/osb-pr-body.XXXXXX")`, then `gh pr view <n> --json body -q .body >
+    "$body"`, then
 
     `gh pr merge <n> --squash --admin --match-head-commit <head> --subject "<PR title> (#<n>)" --body-file
-    /tmp/pr-body.md`.
+    "$body"` in the same shell call (a private file per run, so parallel waves never share it).
 
     The subject is the PR title exactly as GitHub shows it with the (#N) suffix; the body is the PR description,
     so no commit spam reaches main.
-
-
-    If the PR is ALREADY MERGED (the operator merged it themselves), accept it: report the merge commit
-    and succeed without merging again.
 
 
     Read back `gh pr view <n> --json state,mergeCommit`: it must be MERGED; report the squash sha in your
