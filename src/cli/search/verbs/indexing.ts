@@ -6,7 +6,11 @@
  * name once the index covers every document.
  */
 
+import { setPriority } from "node:os";
+import { dirname } from "node:path";
+
 import { formatDegradationNotice } from "../../../core/integrity/degradation.ts";
+import { recordFreshenOutcome, releaseFreshen } from "../../../core/search/freshen.ts";
 import {
   createSafeguard,
   resolveSafeguardTimeoutMs,
@@ -176,7 +180,10 @@ export async function cmdSearchIndex(argv: ReadonlyArray<string>): Promise<numbe
     verbose: { type: "boolean" },
     progress: { type: "boolean" },
     json: { type: "boolean" },
+    freshen: { type: "string" },
   });
+  const freshenToken = flagString(flags, "freshen");
+  if (freshenToken !== undefined) return runFreshenChild(flags, freshenToken);
   const cfg = resolveConfig(flags);
 
   const verbose = flagBoolean(flags, "verbose");
@@ -212,6 +219,47 @@ export async function cmdSearchIndex(argv: ReadonlyArray<string>): Promise<numbe
 
   reportIndexRun(stats, cfg, argv, flagBoolean(flags, "json"));
   return 0;
+}
+
+/**
+ * `--freshen <token>`: the background run a stale read started (see
+ * `src/core/search/freshen.ts`). It runs at lowered CPU priority, indexes
+ * incrementally (embeddings only when `search_freshen_embeddings` is on),
+ * records its outcome and backoff in the per-device state file, and
+ * releases the claim it was handed whatever happens. Nothing is printed:
+ * every stream of a detached child is ignored.
+ */
+async function runFreshenChild(flags: SearchVerbFlags, token: string): Promise<number> {
+  try {
+    setPriority(process.pid, 10);
+  } catch {
+    // Not permitted here (or not supported): run at normal priority.
+  }
+  const startedAt = Date.now();
+  let cfg: ResolvedSearchConfig | undefined;
+  try {
+    cfg = resolveConfig(flags);
+    const stats = await indexVault(cfg, {
+      embeddings: cfg.freshen?.embeddings === true,
+    });
+    recordFreshenOutcome(cfg.vault, dirname(cfg.dbPath), {
+      outcome: "completed",
+      durationMs: Date.now() - startedAt,
+      changed: stats.added + stats.updated + stats.deleted,
+    });
+    return 0;
+  } catch (e) {
+    if (cfg !== undefined) {
+      recordFreshenOutcome(cfg.vault, dirname(cfg.dbPath), {
+        outcome: "failed",
+        durationMs: Date.now() - startedAt,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+    return 1;
+  } finally {
+    if (cfg !== undefined) releaseFreshen(dirname(cfg.dbPath), token);
+  }
 }
 
 /**

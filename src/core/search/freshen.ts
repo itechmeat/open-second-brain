@@ -18,6 +18,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+import { appendMetric } from "../brain/metrics.ts";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { o2bCommand } from "../maintenance/o2b-command.ts";
 import { isWriterLockHeld } from "./store/writer-lock.ts";
@@ -28,6 +29,13 @@ export const FRESHEN_CLAIM_FILE = "freshen.claim";
 
 /** The child's outcome, failure streak and backoff. */
 export const FRESHEN_STATE_FILE = "freshen-state.json";
+
+/**
+ * Metrics surface for background runs. A row is written only when a run
+ * changed the index or failed: an idle machine would otherwise append one
+ * row a minute to a synced file for nothing.
+ */
+export const INDEX_FRESHEN_SURFACE = "index_freshen";
 
 /** A claim older than this belongs to a run that died; it is taken over. */
 export const FRESHEN_CLAIM_ABANDONED_MS = 10 * 60 * 1000;
@@ -287,5 +295,58 @@ export function maybeFreshenIndex(
   } catch {
     // A reader must never fail because freshening could not decide.
     return FRESHEN_SKIP.spawnFailed;
+  }
+}
+
+export interface FreshenOutcome {
+  readonly outcome: "completed" | "failed";
+  readonly durationMs: number;
+  /** Documents added, updated or deleted (completed runs). */
+  readonly changed?: number;
+  readonly error?: string;
+}
+
+/**
+ * What the background child records when it ends: the state file (outcome,
+ * streak, backoff) and, when it changed something or failed, one metric
+ * row. Never throws: a run must not fail because its bookkeeping did.
+ */
+export function recordFreshenOutcome(
+  vault: string,
+  dir: string,
+  result: FreshenOutcome,
+  nowMs: number = Date.now(),
+): void {
+  const previous = readFreshenState(dir);
+  const failed = result.outcome === "failed";
+  const failures = failed ? previous.failures + 1 : 0;
+  const runAt = new Date(nowMs).toISOString();
+  try {
+    writeFreshenState(dir, {
+      failures,
+      backoffUntil: failed ? new Date(nowMs + nextBackoffMs(failures)).toISOString() : null,
+      lastOutcome: result.outcome,
+      lastRunAt: runAt,
+      lastDurationMs: result.durationMs,
+      lastError: failed ? (result.error ?? "failed") : null,
+      lastChanged: failed ? null : (result.changed ?? 0),
+    });
+  } catch {
+    // Best effort, like the self-heal outcome rows.
+  }
+  if (!failed && (result.changed ?? 0) === 0) return;
+  try {
+    appendMetric(vault, {
+      surface: INDEX_FRESHEN_SURFACE,
+      runAt,
+      payload: {
+        outcome: result.outcome,
+        duration_ms: result.durationMs,
+        ...(failed ? { error: result.error ?? "failed", failures } : {}),
+        ...(!failed ? { changed: result.changed ?? 0 } : {}),
+      },
+    });
+  } catch {
+    // Same: metrics are diagnostics, never a reason to fail.
   }
 }
