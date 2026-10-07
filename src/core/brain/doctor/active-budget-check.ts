@@ -52,14 +52,25 @@ export const activeBudgetPressureCheck: DoctorCheck = {
       pressure.candidates.length > 0
         ? ` Archive candidates, highest-priority-to-drop first: ${ranked}.`
         : " No stale sections to archive - trim the confirmed rule set instead.";
+    // Say what the tier will actually do, from the computed fields: only
+    // a candidate whose tiered form is smaller than the section itself
+    // can be helped by the headline tier. When no candidate compacts
+    // (every non-guard section is already at or below the top-N) or none
+    // exists at all (the keep-guard content alone overflows), promising
+    // a headline reduction would overpromise - the overflow simply
+    // drops or trims at inject time.
+    const tierClause = pressure.candidates.some((c) => c.tieredBytes < c.bytes)
+      ? " Once it overflows, oversized sections are first reduced to headlines at" +
+        " inject time; only what still overflows is dropped."
+      : " Once it overflows, headlines cannot help and the overflow drops or" +
+        " trims at inject time as before.";
     issues.push({
       severity: "warning",
       code: "active-budget-pressure",
       path,
       message:
         `active.md is at ${pct}% of the ${budget}-char injection budget (${pressure.status}).` +
-        " Once it overflows, oversized sections are first reduced to headlines at" +
-        " inject time; only what still overflows is dropped." +
+        tierClause +
         suggestion,
     });
   },
