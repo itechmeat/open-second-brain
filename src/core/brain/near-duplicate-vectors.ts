@@ -14,9 +14,11 @@
  * The outcome is a named status, never a silent degrade:
  *   - `index_missing`: no index has been built;
  *   - `vec_unavailable`: the sqlite-vec extension did not load;
+ *   - `not_embedded`: the probe has no stored content vector yet, so
+ *     nothing was compared;
  *   - `model_mismatch`: the probe's stored vectors were written under a
  *     model or dimension other than the configured one;
- *   - `used`: the tier ran; a probe or candidate without comparable
+ *   - `used`: the probe was compared; a candidate without comparable
  *     stored vectors simply has no score.
  * Any other store failure is a named `SearchError` and propagates.
  */
@@ -27,7 +29,12 @@ import type { StoredChunkEmbedding } from "../search/store/vectors.ts";
 import { SearchError } from "../search/search-error.ts";
 import type { ResolvedSearchConfig } from "../search/types.ts";
 
-export type StoredVectorStatus = "used" | "index_missing" | "vec_unavailable" | "model_mismatch";
+export type StoredVectorStatus =
+  | "used"
+  | "index_missing"
+  | "vec_unavailable"
+  | "not_embedded"
+  | "model_mismatch";
 
 export interface StoredVectorSimilarity {
   readonly status: StoredVectorStatus;
@@ -74,16 +81,14 @@ export async function storedVectorSimilarity(
       return store.storedEmbeddingsForDocument(docId).filter((r) => !frontmatter.has(r.chunkId));
     };
     const probeRows = stored(probePath);
+    if (probeRows.length === 0) return { status: "not_embedded", scores: NO_SCORES };
     const { model, dimension } = config.semantic;
     const usable = probeRows.filter(
       (r) =>
         (model === null || r.model === model) && (dimension === null || r.dimension === dimension),
     );
-    if (probeRows.length > 0 && usable.length === 0) {
-      return { status: "model_mismatch", scores: NO_SCORES };
-    }
+    if (usable.length === 0) return { status: "model_mismatch", scores: NO_SCORES };
     const scores = new Map<string, number>();
-    if (usable.length === 0) return { status: "used", scores };
     for (const path of candidatePaths) {
       if (path === probePath) continue;
       const best = bestPairCosine(usable, stored(path));

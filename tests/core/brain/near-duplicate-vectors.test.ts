@@ -117,6 +117,18 @@ describe("storedVectorSimilarity", () => {
   });
 
   test.skipIf(!VEC_LOADABLE)(
+    "an indexed probe with no stored vector reports not_embedded, not used",
+    async () => {
+      const config = vecConfig();
+      await indexedFixture(config);
+      await plant(config, { [NEAR]: { vector: [1, 0, 0, 0] } });
+      const result = await storedVectorSimilarity(config, PROBE, [NEAR]);
+      expect(result.status).toBe("not_embedded");
+      expect(result.scores.size).toBe(0);
+    },
+  );
+
+  test.skipIf(!VEC_LOADABLE)(
     "frontmatter chunks are never compared: matching frontmatter alone scores nothing",
     async () => {
       const config = vecConfig();
@@ -129,6 +141,25 @@ describe("storedVectorSimilarity", () => {
       const result = await storedVectorSimilarity(config, PROBE, [NEAR]);
       expect(result.status).toBe("used");
       expect(result.scores.get(NEAR)).toBeCloseTo(0, 5);
+    },
+  );
+
+  test.skipIf(!VEC_LOADABLE)(
+    "a probe whose only stored vector is its frontmatter reports not_embedded",
+    async () => {
+      const config = vecConfig();
+      await indexedFixture(config);
+      const store = await Store.open(config, { mode: "write" });
+      try {
+        const docId = store.getDocumentIdByPath(PROBE)!;
+        const fm = store.chunksForDocument(docId).find((c) => c.chunkIndex === 0)!;
+        store.vecUpsert(fm.id, unit([1, 0, 0, 0]), MODEL, DIMENSION, "eh-probe-fm");
+      } finally {
+        await store.close();
+      }
+      await plant(config, { [NEAR]: { vector: [1, 0, 0, 0] } });
+      const result = await storedVectorSimilarity(config, PROBE, [NEAR]);
+      expect(result.status).toBe("not_embedded");
     },
   );
 

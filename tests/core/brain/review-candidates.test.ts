@@ -203,6 +203,18 @@ describe("buildReviewCandidates retire_siblings", () => {
     expect(r.retire_siblings).toEqual([LEXICAL]);
   });
 
+  test.skipIf(!sqliteVecLoadable())(
+    "an index that has not embedded the preferences reports not_embedded, not used",
+    async () => {
+      process.env[FLAG_ENV] = "1";
+      const config = searchConfig();
+      await indexVault(config);
+      const r = await buildReviewCandidates(vault, { now: NOW, searchConfig: config });
+      expect(r.retire_siblings_semantic).toBe("not_embedded");
+      expect(r.retire_siblings).toEqual([LEXICAL]);
+    },
+  );
+
   test("with the key off, both fields are absent", async () => {
     const r = await buildReviewCandidates(vault, { now: NOW, searchConfig: searchConfig() });
     expect("retire_siblings" in r).toBe(false);

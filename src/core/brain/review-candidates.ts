@@ -278,8 +278,9 @@ async function projectRetireSiblings(
 }
 
 /**
- * One status for the whole tier: `used` when any probe was scored, else
- * the first named reason it could not run.
+ * One status for the whole tier: `used` when any probe was compared, else
+ * the first named reason it could not run (`not_embedded` when the probes
+ * have no stored content vector yet).
  */
 function foldStatuses(statuses: ReadonlyArray<StoredVectorStatus>): StoredVectorStatus {
   return statuses.includes("used") ? "used" : statuses[0]!;
