@@ -58,7 +58,8 @@ export const activeBudgetPressureCheck: DoctorCheck = {
       path,
       message:
         `active.md is at ${pct}% of the ${budget}-char injection budget (${pressure.status}).` +
-        " Content will be dropped at inject time once it overflows." +
+        " Once it overflows, oversized sections are first reduced to headlines at" +
+        " inject time; only what still overflows is dropped." +
         suggestion,
     });
   },
