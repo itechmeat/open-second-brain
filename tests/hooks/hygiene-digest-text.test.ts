@@ -28,6 +28,9 @@ import {
 
 let seq = 0;
 
+/** The module-private separator between the counts and the pointer: an em dash with spaces. */
+const POINTER_JOIN = " \u2014 ";
+
 function finding(detector: HygieneDetectorId, severity: HygieneSeverity): HygieneFinding {
   seq += 1;
   return {
@@ -122,6 +125,38 @@ describe("composeHygieneDigest", () => {
     expect(line!.length).toBeLessThanOrEqual(HYGIENE_DIGEST_MAX_CHARS);
     expect(line!.startsWith(HYGIENE_DIGEST_PREFIX)).toBe(true);
     expect(line!.endsWith(HYGIENE_DIGEST_POINTER)).toBe(true);
+  });
+
+  /**
+   * Every realistic population fits the default cap with room to spare,
+   * so the degradation loop is reachable only through a tighter ceiling:
+   * `maxChars` exercises the exact branch the hook relies on when a
+   * pathological population does arrive.
+   */
+  test("a cap nothing fits under keeps the prefix and pointer floor as one line", () => {
+    const findings = [finding("conflicts", "warning"), finding("dedup", "warning")];
+    const floor = composeHygieneDigest({ findings, danglingLinks: 7 }, 1);
+    expect(floor).toBe(`${HYGIENE_DIGEST_PREFIX} ${POINTER_JOIN}${HYGIENE_DIGEST_POINTER}`);
+    expect(floor!.includes("\n")).toBe(false);
+  });
+
+  test("a tight cap drops whole trailing segments, the dangling count first", () => {
+    const findings = [
+      finding("conflicts", "warning"),
+      finding("dedup", "warning"),
+      finding("freshness", "action"),
+    ];
+    const twoSegments = `${HYGIENE_DIGEST_PREFIX} 1 conflicts, 1 dedup${POINTER_JOIN}${HYGIENE_DIGEST_POINTER}`;
+    // One char below the full line's length: the last whole segments go
+    // (freshness, then the dangling count), never a partial slice.
+    expect(composeHygieneDigest({ findings, danglingLinks: 5 }, twoSegments.length)).toBe(
+      twoSegments,
+    );
+    // One char tighter and the second segment goes whole too.
+    const oneSegment = `${HYGIENE_DIGEST_PREFIX} 1 conflicts${POINTER_JOIN}${HYGIENE_DIGEST_POINTER}`;
+    expect(composeHygieneDigest({ findings, danglingLinks: 5 }, twoSegments.length - 1)).toBe(
+      oneSegment,
+    );
   });
 
   test("identical input composes byte-identical output, regardless of finding order", () => {

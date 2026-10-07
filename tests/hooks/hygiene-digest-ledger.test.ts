@@ -11,7 +11,17 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -24,7 +34,7 @@ import {
   writeHygieneDigestHash,
 } from "../../hooks/lib/hygiene-digest-state.ts";
 import { sha256Hex } from "../../src/core/integrity/digest.ts";
-import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
+import { CHMOD_CANNOT_DENY, IS_WINDOWS } from "../helpers/platform.ts";
 import type { HygieneFinding } from "../../src/core/brain/hygiene/types.ts";
 
 let vault: string;
@@ -120,6 +130,53 @@ describe("writeHygieneDigestHash", () => {
     expect(readHygieneDigestHash(vault)).toBe(second);
     const names = readdirSync(dir).toSorted();
     expect(names).toEqual([HYGIENE_DIGEST_HASH_FILENAME]);
+  });
+
+  /**
+   * A vault received from elsewhere could point its derived-state
+   * directory, or the ledger leaf itself, at any location on disk.
+   * The documented contract (derived-store-guard): a symlinked
+   * directory refuses the write outright; a symlinked LEAF is swapped
+   * out by the atomic rename - the write lands in a fresh regular
+   * file inside the vault and never travels through the link.
+   */
+  describe("symlinked ledger locations", () => {
+    test.skipIf(IS_WINDOWS)(
+      "a symlinked .open-second-brain refuses the write and leaves the target empty",
+      () => {
+        const outside = mkdtempSync(join(tmpdir(), "o2b-hygiene-ledger-outside-"));
+        try {
+          symlinkSync(outside, join(vault, ".open-second-brain"), "dir");
+          expect(writeHygieneDigestHash(vault, sha256Hex("state"))).toBe(false);
+          expect(readdirSync(outside)).toEqual([]);
+          expect(readHygieneDigestHash(vault)).toBeNull();
+        } finally {
+          rmSync(outside, { recursive: true, force: true });
+        }
+      },
+    );
+
+    test.skipIf(IS_WINDOWS)(
+      "a symlinked hash leaf is replaced by a regular file, never written through",
+      () => {
+        const outside = mkdtempSync(join(tmpdir(), "o2b-hygiene-ledger-leaf-"));
+        try {
+          const victim = join(outside, "victim");
+          writeFileSync(victim, "planted", "utf8");
+          mkdirSync(join(vault, ".open-second-brain"), { recursive: true });
+          symlinkSync(victim, hygieneDigestHashPath(vault));
+          const hash = sha256Hex("state");
+          expect(writeHygieneDigestHash(vault, hash)).toBe(true);
+          // The write did not travel through the link: the planted
+          // target is untouched, and the leaf is now a regular file.
+          expect(readFileSync(victim, "utf8")).toBe("planted");
+          expect(lstatSync(hygieneDigestHashPath(vault)).isSymbolicLink()).toBe(false);
+          expect(readHygieneDigestHash(vault)).toBe(hash);
+        } finally {
+          rmSync(outside, { recursive: true, force: true });
+        }
+      },
+    );
   });
 });
 

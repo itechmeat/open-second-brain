@@ -102,12 +102,21 @@ function composeLine(segments: ReadonlyArray<string>): string {
 /**
  * Compose the one-line digest, or `null` when nothing is eligible.
  *
+ * `maxChars` is the hard ceiling the degradation loop keeps the line
+ * under; it defaults to {@link HYGIENE_DIGEST_MAX_CHARS} and production
+ * callers never pass it. The parameter exists because the default cap
+ * is only approachable by a pathological population today, which would
+ * otherwise leave the degrade-by-dropping behavior unverifiable.
+ *
  * Deterministic and pure: counts are taken per detector in
  * `HYGIENE_DETECTOR_IDS` order regardless of the findings' input order,
  * the dangling-link count is appended last, and identical input composes
  * byte-identical output.
  */
-export function composeHygieneDigest(input: HygieneDigestInput): string | null {
+export function composeHygieneDigest(
+  input: HygieneDigestInput,
+  maxChars: number = HYGIENE_DIGEST_MAX_CHARS,
+): string | null {
   const segments: string[] = [];
   for (const detector of HYGIENE_DETECTOR_IDS) {
     const count = eligibleCount(input.findings, detector);
@@ -124,7 +133,7 @@ export function composeHygieneDigest(input: HygieneDigestInput): string | null {
   // line without ever slicing mid-word.
   for (let keep = segments.length; keep > 0; keep -= 1) {
     const line = composeLine(segments.slice(0, keep));
-    if (line.length <= HYGIENE_DIGEST_MAX_CHARS) return line;
+    if (line.length <= maxChars) return line;
   }
   return composeLine([]);
 }

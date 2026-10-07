@@ -162,8 +162,7 @@ describe("hooks.json subagent-inject entry", () => {
     expect(carriers.length).toBe(1);
     const carrier = carriers[0]!;
     // Registered inside the write-shaped group, right after its
-    // post-write-reminder sibling: both fire on the same tool calls and
-    // the operator's rules precede the logging reminder.
+    // post-write-reminder sibling: both fire on the same tool calls.
     expect(hooks.at(-1)).toBe(carrier);
     expect(hooks[hooks.indexOf(carrier) - 1]!.command).toContain("o2b-hook post-write-reminder");
     expect(carrier.type).toBe("command");
