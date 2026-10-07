@@ -454,7 +454,9 @@ export function planExtractSignals(
 const EXTRACT_HYGIENE_RULES: ReadonlyArray<string> = Object.freeze([
   "Write any time bound a rule carries as an ISO 8601 date or interval (YYYY-MM-DD, or " +
     "YYYY-MM-DD/YYYY-MM-DD), resolving a relative bound against the timestamp of the turn " +
-    "that stated it; a rule with no time bound stays undated.",
+    "that stated it; write a bound that only ends as an interval from that turn's date, " +
+    "because a lone date reads as the day the rule starts; a rule with no time bound stays " +
+    "undated.",
   "Skip conversational mechanics - greetings, thanks, acknowledgements, requests to go on, " +
     "and directions about the flow of this session - because they state no rule.",
   "Return one rule per item: a turn that states two rules yields two items with distinct topics.",
