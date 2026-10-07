@@ -12,7 +12,10 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 
-import { storedVectorSimilarity } from "../../../src/core/brain/near-duplicate-vectors.ts";
+import {
+  storedVectorSimilarities,
+  storedVectorSimilarity,
+} from "../../../src/core/brain/near-duplicate-vectors.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { Store } from "../../../src/core/search/store.ts";
 import type {
@@ -205,6 +208,27 @@ describe("storedVectorSimilarity", () => {
       expect(result.status).toBe("used");
       expect([...result.scores.keys()]).toEqual([NEAR]);
       expect(result.scores.get(NEAR)).toBeCloseTo(1 / Math.hypot(1, 0.05), 5);
+    },
+  );
+
+  test.skipIf(!VEC_LOADABLE)(
+    "several probes over one store: one result per probe, in order",
+    async () => {
+      const config = vecConfig();
+      await indexedFixture(config);
+      await plant(config, {
+        [PROBE]: { vector: [1, 0, 0, 0] },
+        [NEAR]: { vector: [1, 0.05, 0, 0] },
+      });
+      const results = await storedVectorSimilarities(config, [FAR, PROBE], [PROBE, NEAR]);
+      expect(results.map((r) => r.status)).toEqual(["not_embedded", "used"]);
+      expect([...results[1]!.scores.keys()]).toEqual([NEAR]);
+      const mismatched = await storedVectorSimilarities(
+        vecConfig({ dimension: 8 }),
+        [PROBE, NEAR],
+        [],
+      );
+      expect(mismatched.map((r) => r.status)).toEqual(["model_mismatch", "model_mismatch"]);
     },
   );
 });

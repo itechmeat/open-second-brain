@@ -60,6 +60,21 @@ export async function storedVectorSimilarity(
   candidatePaths: ReadonlyArray<string>,
   deps: StoredVectorDeps = {},
 ): Promise<StoredVectorSimilarity> {
+  return (await storedVectorSimilarities(config, [probePath], candidatePaths, deps))[0]!;
+}
+
+/**
+ * {@link storedVectorSimilarity} for several probes over one read store:
+ * one result per probe, in order, and each page's stored rows read once.
+ */
+export async function storedVectorSimilarities(
+  config: ResolvedSearchConfig,
+  probePaths: ReadonlyArray<string>,
+  candidatePaths: ReadonlyArray<string>,
+  deps: StoredVectorDeps = {},
+): Promise<ReadonlyArray<StoredVectorSimilarity>> {
+  const every = (status: StoredVectorStatus): ReadonlyArray<StoredVectorSimilarity> =>
+    probePaths.map(() => ({ status, scores: NO_SCORES }));
   let store: Store;
   try {
     store = await Store.open(config, {
@@ -67,34 +82,42 @@ export async function storedVectorSimilarity(
       ...(deps.loadVec !== undefined ? { loadVec: deps.loadVec } : {}),
     });
   } catch (e) {
-    if (e instanceof SearchError && e.code === "INDEX_MISSING") {
-      return { status: "index_missing", scores: NO_SCORES };
-    }
+    if (e instanceof SearchError && e.code === "INDEX_MISSING") return every("index_missing");
     throw e;
   }
   try {
-    if (!store.vecLoaded()) return { status: "vec_unavailable", scores: NO_SCORES };
+    if (!store.vecLoaded()) return every("vec_unavailable");
+    const rowsByPath = new Map<string, ReadonlyArray<StoredChunkEmbedding>>();
     const stored = (path: string): ReadonlyArray<StoredChunkEmbedding> => {
+      const cached = rowsByPath.get(path);
+      if (cached !== undefined) return cached;
       const docId = store.getDocumentIdByPath(path);
-      if (docId === null) return [];
-      const frontmatter = frontmatterChunkIds(store.getChunksByDocument(docId));
-      return store.storedEmbeddingsForDocument(docId).filter((r) => !frontmatter.has(r.chunkId));
+      let rows: ReadonlyArray<StoredChunkEmbedding> = [];
+      if (docId !== null) {
+        const frontmatter = frontmatterChunkIds(store.getChunksByDocument(docId));
+        rows = store.storedEmbeddingsForDocument(docId).filter((r) => !frontmatter.has(r.chunkId));
+      }
+      rowsByPath.set(path, rows);
+      return rows;
     };
-    const probeRows = stored(probePath);
-    if (probeRows.length === 0) return { status: "not_embedded", scores: NO_SCORES };
     const { model, dimension } = config.semantic;
-    const usable = probeRows.filter(
-      (r) =>
-        (model === null || r.model === model) && (dimension === null || r.dimension === dimension),
-    );
-    if (usable.length === 0) return { status: "model_mismatch", scores: NO_SCORES };
-    const scores = new Map<string, number>();
-    for (const path of candidatePaths) {
-      if (path === probePath) continue;
-      const best = bestPairCosine(usable, stored(path));
-      if (best !== null) scores.set(path, best);
-    }
-    return { status: "used", scores };
+    return probePaths.map((probePath): StoredVectorSimilarity => {
+      const probeRows = stored(probePath);
+      if (probeRows.length === 0) return { status: "not_embedded", scores: NO_SCORES };
+      const usable = probeRows.filter(
+        (r) =>
+          (model === null || r.model === model) &&
+          (dimension === null || r.dimension === dimension),
+      );
+      if (usable.length === 0) return { status: "model_mismatch", scores: NO_SCORES };
+      const scores = new Map<string, number>();
+      for (const path of candidatePaths) {
+        if (path === probePath) continue;
+        const best = bestPairCosine(usable, stored(path));
+        if (best !== null) scores.set(path, best);
+      }
+      return { status: "used", scores };
+    });
   } finally {
     await store.close();
   }

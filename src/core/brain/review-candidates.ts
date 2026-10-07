@@ -23,7 +23,7 @@ import { dream, scanBrain, shouldGateRetireFromConfirmed } from "./dream.ts";
 import type { DreamOptions, DreamRunSummary } from "./dream-types.ts";
 import type { BrainIntentReviewEntry } from "./intent-review.ts";
 import { NEAR_DUPLICATE_THRESHOLDS, READ_ALL_REFS, roundScore } from "./near-duplicate.ts";
-import { storedVectorSimilarity, type StoredVectorStatus } from "./near-duplicate-vectors.ts";
+import { storedVectorSimilarities, type StoredVectorStatus } from "./near-duplicate-vectors.ts";
 import { brainDirs } from "./paths.ts";
 import { loadBrainConfig } from "./policy.ts";
 import {
@@ -285,9 +285,10 @@ async function projectRetireSiblings(
 
   const seen = new Set(lexical.map((x) => `${x.retiring_id}\u0000${x.sibling_id}`));
   const merged: RetireSibling[] = [...lexical];
-  const searchConfig = opts.searchConfig;
-  const results = await Promise.all(
-    retiringIds.map((id) => storedVectorSimilarity(searchConfig, pathOf(id), candidatePaths)),
+  const results = await storedVectorSimilarities(
+    opts.searchConfig,
+    retiringIds.map(pathOf),
+    candidatePaths,
   );
   results.forEach((result, i) => {
     const retiringId = retiringIds[i]!;
