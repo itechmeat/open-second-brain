@@ -39,12 +39,16 @@ import {
 } from "../../../src/core/brain/extract-signals.ts";
 import { listDeadLetters } from "../../../src/core/brain/dead-letter.ts";
 import { NEEDS_LLM_STEP } from "../../../src/core/brain/llm-step.ts";
-import { ResponseCheckError } from "../../../src/core/brain/response-checks.ts";
+import {
+  ResponseCheckError,
+  SEMANTIC_VIOLATION_CODES,
+} from "../../../src/core/brain/response-checks.ts";
 import { ResponseShapeError } from "../../../src/core/brain/response-shape.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { brainConfigPath } from "../../../src/core/brain/paths.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { importSessionRecall } from "../../../src/core/brain/session-recall.ts";
+import type { DedupIndexEntry } from "../../../src/core/brain/dedup-hash.ts";
 import { parseSignal } from "../../../src/core/brain/signal.ts";
 import { BRAIN_SIGNAL_SOURCE_TYPE } from "../../../src/core/brain/types.ts";
 import type { SessionTurn } from "../../../src/core/brain/sessions/types.ts";
@@ -465,4 +469,51 @@ test("the hygiene rules name categories and quote no example words", () => {
     expect(text).not.toMatch(/"/);
     expect(text).toMatch(/^[\x20-\x7e]*$/);
   }
+});
+
+// ----- Duplicate-topic refusal (near-duplicate-defense, C3) -----------------
+//
+// 19. Two items sharing a `topic` refuse the payload whole under the
+//     cross-item code, and the message names both indices and the topic.
+// 20. The refusal lands before any write and before any item is hashed for
+//     dedup, so a refused payload leaves the vault and the index untouched.
+
+/** A dedup index that counts its lookups; one lookup follows every hash. */
+class CountingDedup extends Map<string, DedupIndexEntry> {
+  lookups = 0;
+  override has(key: string): boolean {
+    this.lookups += 1;
+    return super.has(key);
+  }
+}
+
+test("a payload that repeats a topic is refused whole, naming both indices", () => {
+  const dedup = new CountingDedup();
+  const items = [
+    item(),
+    item({ topic: "module-names", principle: "Never abbreviate module names." }),
+    item({ principle: "Put the release theme in the heading." }),
+  ];
+  let caught: unknown;
+  try {
+    commitExtractedSignals(vault, SESSION, { items }, { agent: "tester", now: NOW, dedup });
+  } catch (err) {
+    caught = err;
+  }
+  expect(caught).toBeInstanceOf(ResponseCheckError);
+  const err = caught as ResponseCheckError;
+  expect(err.code).toBe(SEMANTIC_VIOLATION_CODES.crossItem);
+  expect(err.message).toContain('items[0] and items[2] share topic "release-notes-style"');
+  expect(dedup.lookups).toBe(0);
+  expect(inboxFiles()).toEqual([]);
+});
+
+test("distinct topics pass the duplicate-topic rule", () => {
+  const res = commitExtractedSignals(
+    vault,
+    SESSION,
+    { items: [item(), item({ topic: "module-names", principle: "Never abbreviate modules." })] },
+    { agent: "tester", now: NOW },
+  );
+  expect(res.written.map((w) => w.topic)).toEqual(["release-notes-style", "module-names"]);
 });

@@ -297,9 +297,10 @@ export interface CommitExtractedSignalsOptions {
 // ----- Semantic rules the descriptor language cannot express ---------------
 
 /**
- * Cap and floor, registered once at module scope. Both read across the
- * payload rather than one value at a time - the cap counts the whole list,
- * and the floor compares a number to a limit the descriptor cannot name -
+ * Cap, floor and topic uniqueness, registered once at module scope. Each
+ * reads across the payload rather than one value at a time - the cap
+ * counts the whole list, the floor compares a number to a limit the
+ * descriptor cannot name, and uniqueness compares items with each other -
  * so they belong here rather than in {@link EXTRACTED_SIGNALS_SHAPE}.
  *
  * Registration is a module side effect on purpose: the registry is
@@ -332,8 +333,40 @@ registerResponseCheck(EXTRACTED_SIGNALS_SURFACE, (payload) => {
       );
     }
   });
+  violations.push(...duplicateTopicViolations(items));
   return violations;
 });
+
+/**
+ * One violation per item that repeats an earlier item's topic, naming both
+ * indices. The comparison is exact: two items under one topic are one rule
+ * stated twice or two rules filed under one name, and the lane cannot tell
+ * which - so the payload is refused whole rather than one of them kept by a
+ * guess. A fuzzy comparison of principles is deliberately absent: two short
+ * rules of opposite meaning read alike, and one false refusal here would
+ * drop every valid signal in the run.
+ */
+function duplicateTopicViolations(items: ReadonlyArray<unknown>): SemanticViolation[] {
+  const violations: SemanticViolation[] = [];
+  const firstIndex = new Map<string, number>();
+  items.forEach((item, index) => {
+    const topic = (item as { topic?: unknown }).topic;
+    if (typeof topic !== "string") return;
+    const first = firstIndex.get(topic);
+    if (first === undefined) {
+      firstIndex.set(topic, index);
+      return;
+    }
+    violations.push(
+      semanticViolation(
+        SEMANTIC_VIOLATION_CODES.crossItem,
+        `${SHAPE_ROOT_PATH}.items[${index}].topic`,
+        `items[${first}] and items[${index}] share topic ${JSON.stringify(topic)}`,
+      ),
+    );
+  });
+  return violations;
+}
 
 /**
  * The item list, or null when the payload is not shaped like one. The
@@ -427,7 +460,8 @@ const EXTRACT_HYGIENE_RULES: ReadonlyArray<string> = Object.freeze([
   "Return one rule per item: a turn that states two rules yields two items with distinct topics.",
   "Keep every condition a rule was stated with - when, where, for which project or kind of " +
     "work - inside its principle; never widen a conditional rule into an unconditional one.",
-  "Drop restatements: a rule the operator states more than once is returned once, under one topic.",
+  "Drop restatements: a rule the operator states more than once is returned once, under one " +
+    "topic, because two items sharing a topic refuse the whole payload.",
 ]);
 
 /**
@@ -626,8 +660,7 @@ export function commitExtractedSignals(
 
 /**
  * The key a missing item is NAMED by: its payload index and its topic.
- * The index carries the uniqueness (two items may share a topic) and the
- * topic carries the meaning, which is what an operator matches against
+ * The index carries the position and the topic carries the meaning, which is what an operator matches against
  * the payload they are about to re-run.
  */
 function unwrittenKey(index: number, topic: string): string {
