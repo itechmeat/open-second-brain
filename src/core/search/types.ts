@@ -1047,6 +1047,12 @@ export interface SearchOptions {
    */
   readonly selfHeal?: boolean;
   /**
+   * Test seam for freshen-on-read: replaces the detached spawn of the
+   * background index run a stale index starts. Production callers leave
+   * it unset.
+   */
+  readonly freshenSpawn?: (argv: string[]) => void;
+  /**
    * Skip rerank kind `decision-model` for this call. Set by the hook
    * surfaces (recall inject), whose time budget is shorter than a decision
    * request, until a hook-specific decision use exists. The skipped call

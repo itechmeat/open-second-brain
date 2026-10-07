@@ -26,7 +26,8 @@ import { resolveSearchConfig } from "../search/index.ts";
 import { reindexVault } from "../search/indexer.ts";
 import { CHUNKER_VERSION } from "../search/chunker.ts";
 import { LATEST_SCHEMA_VERSION, readSchemaVersion } from "../search/schema.ts";
-import { CHUNKER_VERSION_STATE_KEY } from "../search/store/state.ts";
+import { CHUNKER_VERSION_STATE_KEY, LAST_INDEXED_AT_STATE_KEY } from "../search/store/state.ts";
+import { maybeFreshenIndex, type FreshenDecision } from "../search/freshen.ts";
 import { isWriterLockHeld } from "../search/store/writer-lock.ts";
 import type { ResolvedSearchConfig } from "../search/types.ts";
 import {
@@ -94,6 +95,12 @@ export interface EnsureCurrentResult {
    * foreground and there was no child to decide about.
    */
   readonly reindexSpawn: SelfHealSpawnDecision | null;
+  /**
+   * Freshen on read at session start: whether a current index that has
+   * gone stale got a background incremental run, or why not. Null when the
+   * index needed a rebuild (self-heal owns it) or was not looked at.
+   */
+  readonly freshen: FreshenDecision | null;
   /** Non-empty when nothing ran, e.g. "not-initialized". */
   readonly skipped: string;
   /** Best-effort: per-step failures, never thrown. */
@@ -110,6 +117,8 @@ export interface EnsureCurrentOptions {
    * (re)built matches the one the caller's server actually uses, e.g. under
    * `o2b mcp --config <custom>`. */
   readonly configPath?: string;
+  /** Test seam: replaces the detached spawn of a freshen-on-read run. */
+  readonly freshenSpawn?: (argv: string[]) => void;
 }
 
 function message(e: unknown): string {
@@ -128,6 +137,27 @@ function chunksAreStale(db: Database): boolean {
     .get(CHUNKER_VERSION_STATE_KEY);
   if (row?.value === String(CHUNKER_VERSION)) return false;
   return db.query<{ one: number }, []>("SELECT 1 AS one FROM documents LIMIT 1").get() !== null;
+}
+
+/** The index's `last_indexed_at`, or null when it cannot be read. */
+function readLastIndexedAt(dbPath: string): string | null {
+  let db: Database;
+  try {
+    db = new Database(dbPath, { readonly: true });
+  } catch {
+    return null;
+  }
+  try {
+    return (
+      db
+        .query<{ value: string }, [string]>("SELECT value FROM index_state WHERE key = ? LIMIT 1")
+        .get(LAST_INDEXED_AT_STATE_KEY)?.value ?? null
+    );
+  } catch {
+    return null;
+  } finally {
+    closeDatabase(db);
+  }
 }
 
 /**
@@ -332,6 +362,7 @@ export async function ensureVaultCurrent(
   let brainUpgradeOutcome: SelfHealUpgradeOutcome | null = null;
   let reindexTriggered = false;
   let reindexSpawn: SelfHealSpawnDecision | null = null;
+  let freshen: FreshenDecision | null = null;
 
   // Only an already-initialised vault is an upgrade target. A missing
   // `_brain.yaml` means "not set up yet" - that is `o2b init`'s job, not ours.
@@ -342,6 +373,7 @@ export async function ensureVaultCurrent(
       brainUpgradeOutcome: null,
       reindexTriggered: false,
       reindexSpawn: null,
+      freshen: null,
       skipped: "not-initialized",
       errors: [],
     };
@@ -381,6 +413,13 @@ export async function ensureVaultCurrent(
         await reindexVault(config);
         reindexTriggered = true;
       }
+    } else {
+      // 3. A current index that has gone stale: catch it up in the
+      //    background so the session's first read is not the one that pays.
+      freshen = maybeFreshenIndex(config, {
+        lastIndexedAt: readLastIndexedAt(config.dbPath),
+        ...(opts.freshenSpawn !== undefined ? { spawn: opts.freshenSpawn } : {}),
+      });
     }
   } catch (e) {
     errors.push(`search-reindex: ${message(e)}`);
@@ -392,6 +431,7 @@ export async function ensureVaultCurrent(
     brainUpgradeOutcome,
     reindexTriggered,
     reindexSpawn,
+    freshen,
     skipped: "",
     errors,
   };

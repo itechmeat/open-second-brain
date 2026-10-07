@@ -208,3 +208,60 @@ describe("ensureVaultCurrent: chunks cut by older chunking rules (#186)", () => 
     expect(r.reindexTriggered).toBe(false);
   });
 });
+
+describe("ensureVaultCurrent: freshen on session start", () => {
+  const INTERVAL_ENV = "OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S";
+  let prevInterval: string | undefined;
+  let calls: string[][];
+  const freshenSpawn = (argv: string[]): void => {
+    calls.push(argv);
+  };
+
+  beforeEach(() => {
+    prevInterval = process.env[INTERVAL_ENV];
+    process.env[INTERVAL_ENV] = "60";
+    calls = [];
+  });
+
+  afterEach(() => {
+    if (prevInterval === undefined) delete process.env[INTERVAL_ENV];
+    else process.env[INTERVAL_ENV] = prevInterval;
+  });
+
+  function ageIndex(seconds: number): void {
+    const db = new Database(dbPath());
+    db.query("UPDATE index_state SET value = ? WHERE key = 'last_indexed_at'").run(
+      new Date(Date.now() - seconds * 1000).toISOString(),
+    );
+    db.close();
+  }
+
+  test("a current index that has gone stale is caught up in the background", async () => {
+    bootstrapBrain(vault, { configPath });
+    await ensureVaultCurrent(vault, { background: false });
+    ageIndex(300);
+    const r = await ensureVaultCurrent(vault, { background: false, freshenSpawn });
+    expect(r.freshen).toBe("spawned");
+    expect(calls).toHaveLength(1);
+  });
+
+  test("a fresh index starts nothing", async () => {
+    bootstrapBrain(vault, { configPath });
+    await ensureVaultCurrent(vault, { background: false });
+    const r = await ensureVaultCurrent(vault, { background: false, freshenSpawn });
+    expect(r.freshen).toBe("fresh");
+    expect(calls).toHaveLength(0);
+  });
+
+  test("an index that needs a rebuild is left to self-heal, not freshened", async () => {
+    bootstrapBrain(vault, { configPath });
+    await ensureVaultCurrent(vault, { background: false });
+    const db = new Database(dbPath());
+    db.run("UPDATE index_state SET value = '1' WHERE key = 'schema_version'");
+    db.close();
+    const r = await ensureVaultCurrent(vault, { background: false, freshenSpawn });
+    expect(r.reindexTriggered).toBe(true);
+    expect(r.freshen).toBeNull();
+    expect(calls).toHaveLength(0);
+  });
+});

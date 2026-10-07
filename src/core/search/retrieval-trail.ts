@@ -65,7 +65,17 @@ import type {
  * are NOT invented for conditions nothing reports: a code with no
  * producer would be a promise the search path does not keep.
  */
+/** How old the index may be before a search names it on the trail. */
+export const INDEX_STALE_SECONDS = 600;
+
 export const RETRIEVAL_DEGRADATION = Object.freeze({
+  /**
+   * The index was last updated more than {@link INDEX_STALE_SECONDS} ago, so
+   * notes changed since then may be missing from the answer. Detail:
+   * `ageSeconds`. Freshen on read has started a background run unless it is
+   * off, backing off, or another run already holds the claim.
+   */
+  indexStale: "index-stale",
   /**
    * The query tokenised to an empty FTS match, so the keyword lane never
    * ran. The purest silent empty in the tree: `fts.ts` returned no hits
@@ -193,6 +203,7 @@ export type RetrievalDegradationCode =
 
 /** Membership list, ordered lane by lane along the pipeline. */
 export const RETRIEVAL_DEGRADATION_CODES: ReadonlyArray<RetrievalDegradationCode> = Object.freeze([
+  RETRIEVAL_DEGRADATION.indexStale,
   RETRIEVAL_DEGRADATION.keywordFtsMatchEmpty,
   RETRIEVAL_DEGRADATION.keywordTrigramLaneFault,
   RETRIEVAL_DEGRADATION.semanticEmbeddingsAbsent,
@@ -354,6 +365,8 @@ export function semanticLaneMissing(degraded: ReadonlyArray<RetrievalDegradation
  */
 export function describeRetrievalDegradation(code: RetrievalDegradationCode): string {
   switch (code) {
+    case RETRIEVAL_DEGRADATION.indexStale:
+      return "the index was last updated more than ten minutes ago, so notes changed since then may be missing";
     case RETRIEVAL_DEGRADATION.keywordFtsMatchEmpty:
       return "the query carried no term the keyword index can match, so the keyword lane never ran";
     case RETRIEVAL_DEGRADATION.keywordTrigramLaneFault:

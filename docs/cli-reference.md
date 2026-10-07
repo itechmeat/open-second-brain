@@ -2027,6 +2027,7 @@ so there is no separate lane field that could drift from it:
 
 | Code | The narrowing it reports |
 | ---- | ------------------------ |
+| `index-stale` | the index was last updated more than ten minutes ago (`detail.ageSeconds`), so notes changed since then may be missing; freshen on read has started a background run unless `search_freshen_interval_s` is `0`, a failed run is backing off, or another run already holds the claim |
 | `keyword-fts-match-empty` | the query tokenised to an empty FTS match, so the keyword lane never ran |
 | `keyword-trigram-lane-fault` | the trigram candidate lane could not be read; `detail.fault` carries that lane's own classification |
 | `semantic-embeddings-absent` | the index holds no compatible embedding |
