@@ -787,6 +787,35 @@ export function resolveRecentTurnsResurface(configPath?: string): boolean {
 }
 
 /**
+ * Retire-sibling projection gate (near-duplicate defense, t_acab97de).
+ * Default OFF: the dream summary, `brain_review_candidates` and
+ * `o2b brain reject` carry no `retire_siblings` unless
+ * `near_duplicate_retire_siblings_enabled: "true"`, so unchanged installs
+ * stay byte-identical.
+ */
+export function resolveNearDuplicateRetireSiblingsEnabled(configPath?: string): boolean {
+  return resolveConfigFlag(
+    "OPEN_SECOND_BRAIN_NEAR_DUPLICATE_RETIRE_SIBLINGS_ENABLED",
+    "near_duplicate_retire_siblings_enabled",
+    configPath,
+  );
+}
+
+/**
+ * Write-receipt near-duplicate widening gate (near-duplicate defense,
+ * t_fda66477). Default OFF: the receipt hint compares only pages in the
+ * written page's directory unless `near_duplicate_write_widening_enabled:
+ * "true"`, which adds keyword-index candidates from other directories.
+ */
+export function resolveNearDuplicateWriteWideningEnabled(configPath?: string): boolean {
+  return resolveConfigFlag(
+    "OPEN_SECOND_BRAIN_NEAR_DUPLICATE_WRITE_WIDENING_ENABLED",
+    "near_duplicate_write_widening_enabled",
+    configPath,
+  );
+}
+
+/**
  * SessionEnd handoff-note gate (Agent Surface Suite, t_28afa4d2).
  * Default OFF: lifecycle capture writes no handoff note unless
  * `session_handoff: "true"`.
