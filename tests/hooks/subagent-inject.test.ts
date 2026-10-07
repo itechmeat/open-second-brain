@@ -264,18 +264,22 @@ describe("subagent-inject hook", () => {
     20_000,
   );
 
-  test("a runtime the host-shape detector cannot name gets the portable decision shape", async () => {
+  test("a runtime the host-shape detector cannot name still gets the additionalContext envelope", async () => {
     writeRules("Always run the test suite before committing.");
-    // No transcript path, no cwd/tool_use_id triple: the detector resolves
-    // to `unknown`, which must not receive the runtime-specific shape.
+    // No transcript path, no cwd/tool_use_id triple: the detector would
+    // resolve to `unknown`, and the carrier is runtime-agnostic anyway -
+    // the PostToolUse envelope is the one additive-context channel on
+    // this event, so every runtime gets it (post-write-reminder shape).
     const payload = subagentPayload({ agentId: AGENT });
     delete payload["tool_use_id"];
     delete payload["cwd"];
     const r = await runHook(payload);
     expect(r.exit).toBe(0);
-    const parsed = JSON.parse(r.stdout) as { decision: string; reason: string };
-    expect(parsed.decision).toBe("block");
-    expect(parsed.reason).toBe(expectedBlock());
+    const parsed = JSON.parse(r.stdout) as {
+      hookSpecificOutput: { hookEventName: string; additionalContext: string };
+    };
+    expect(parsed.hookSpecificOutput.hookEventName).toBe("PostToolUse");
+    expect(parsed.hookSpecificOutput.additionalContext).toBe(expectedBlock());
   });
 });
 

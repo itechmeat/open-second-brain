@@ -10,19 +10,20 @@
  * exposes - its write-shaped tool calls, which are the moments learned
  * rules govern - and stays silent for read-only subagents.
  *
- * Contract (identical for Claude Code and Codex):
+ * Contract (identical for every runtime):
  *   stdin: hook payload JSON with `tool_name`, `tool_input`, and the
  *     host-assigned `agent_id` that marks a tool call made inside a
  *     delegated sub-agent.
  *   stdout: nothing, or one line naming the operator's standing rules:
- *     - claudecode:
- *       { "hookSpecificOutput": { "hookEventName": "PostToolUse",
- *                                 "additionalContext": "<block>" } }
- *     - every other runtime gets the portable fallback shape,
- *       { "decision": "block", "reason": "<block>" }, the same
- *       arrangement the Stop guardrail makes for non-claudecode
- *       runtimes. The per-runtime helper is local to this file so
- *       hooks/lib/messages.ts stays untouched.
+ *     { "hookSpecificOutput": { "hookEventName": "PostToolUse",
+ *                               "additionalContext": "<block>" } }
+ *     the one channel the post-write-reminder sibling in this matcher
+ *     group proves is injected developer-side on this event. The Stop
+ *     guardrail's portable `decision: "block"` shape never migrates
+ *     here: on PostToolUse the tool result already exists, so a block
+ *     is rejection feedback about that result (Codex marks the hook
+ *     Blocked), not additive context. The output helper is local to
+ *     this file so hooks/lib/messages.ts stays untouched.
  *
  * Exactly once per sub-agent: the delivered agent ids live in the
  * per-session hook-state ledger (`osb.subagent_inject.delivered`, capped,
@@ -50,7 +51,7 @@
 import { writeSync } from "node:fs";
 
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
-import { detectHookRuntime, isArtifactToolName, type HookRuntime } from "./lib/detect.ts";
+import { isArtifactToolName } from "./lib/detect.ts";
 import {
   isRealSessionId,
   readSubagentDeliveredIds,
@@ -84,26 +85,23 @@ function resolveStandingRulesCap(vault: string): number {
   return resolveStandingRulesMaxChars(cfg);
 }
 
-type SubagentInjectOutput =
-  | {
-      readonly hookSpecificOutput: {
-        readonly hookEventName: "PostToolUse";
-        readonly additionalContext: string;
-      };
-    }
-  | { readonly decision: "block"; readonly reason: string };
+type SubagentInjectOutput = {
+  readonly hookSpecificOutput: {
+    readonly hookEventName: "PostToolUse";
+    readonly additionalContext: string;
+  };
+};
 
 /**
- * The per-runtime output shape: claudecode carries `additionalContext`
- * on the PostToolUse event (the post-write-reminder precedent); every
- * other runtime gets the portable decision shape (the stop-log-guardrail
- * precedent for non-claudecode runtimes).
+ * The output shape for every runtime: the PostToolUse
+ * `additionalContext` envelope, runtime-agnostic like the
+ * post-write-reminder sibling that ships it to Claude Code, Codex and
+ * Grok alike. A `decision: "block"` is never a context channel on this
+ * event - it flags the completed write as rejected - so the Stop
+ * guardrail's portable shape stays Stop-only.
  */
-function subagentInjectOutput(runtime: HookRuntime, block: string): SubagentInjectOutput {
-  if (runtime === "claudecode") {
-    return { hookSpecificOutput: { hookEventName: CARRIER_EVENT, additionalContext: block } };
-  }
-  return { decision: "block", reason: block };
+function subagentInjectOutput(block: string): SubagentInjectOutput {
+  return { hookSpecificOutput: { hookEventName: CARRIER_EVENT, additionalContext: block } };
 }
 
 async function main(): Promise<void> {
@@ -154,7 +152,7 @@ async function main(): Promise<void> {
   // instead, the id is never recorded, and the next write-shaped call
   // re-delivers - the lose-not-duplicate order made real, not just
   // ordered.
-  writeSync(1, `${JSON.stringify(subagentInjectOutput(detectHookRuntime(payload), block))}\n`);
+  writeSync(1, `${JSON.stringify(subagentInjectOutput(block))}\n`);
 
   // Recorded after stdout: a crash or a failed state write in between
   // re-delivers the rules to the next write-shaped call and never
