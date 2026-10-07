@@ -35,6 +35,7 @@ import {
   rememberKey,
 } from "./idempotency-ledger.ts";
 import { sanitisePrinciple } from "./text/sanitize-principle.ts";
+import { ROUTE_STAGE, timeStageSync } from "../route-scope.ts";
 import {
   ORIGIN_CHANNEL_FIELD,
   isOriginChannelStamp,
@@ -323,27 +324,9 @@ export function writeSignal(
   // `topic`, `slug`, `agent`, `date`, `signal` are constrained by
   // their own validators (slug rules / ISO date / enum) and are
   // already rejected if they carry junk — don't double-process them.
-  const sanitised = sanitiseSignalInput(resolvedInput);
-
-  for (const field of REQUIRED_INPUT_FIELDS) {
-    const value = sanitised[field];
-    if (value === undefined || value === null || String(value).trim() === "") {
-      throw new Error(`signal missing field: ${String(field)}`);
-    }
-  }
-  if (
-    sanitised.signal !== BRAIN_SIGNAL_SIGN.positive &&
-    sanitised.signal !== BRAIN_SIGNAL_SIGN.negative
-  ) {
-    throw new Error(
-      `signal field 'signal' must be 'positive' or 'negative'; got ${JSON.stringify(sanitised.signal)}`,
-    );
-  }
-  if (sanitised.source_type !== undefined && !isBrainSignalSourceType(sanitised.source_type)) {
-    throw new Error(
-      `signal field 'source_type' must be one of ${renderSourceTypes()}; got ${JSON.stringify(sanitised.source_type)}`,
-    );
-  }
+  const sanitised = timeStageSync(ROUTE_STAGE.validate, () =>
+    validateSignalInput(sanitiseSignalInput(resolvedInput)),
+  );
 
   // Idempotency consult (C1): when a client key is supplied, hash the
   // semantic payload and check the ledger BEFORE allocating a slug or
@@ -354,7 +337,7 @@ export function writeSignal(
   let contentHash: string | undefined;
   if (idKey) {
     contentHash = computePayloadHash(signalPayloadFields(sanitised));
-    const existing = lookupKey(vault, idKey);
+    const existing = timeStageSync(ROUTE_STAGE.idempotencyLookup, () => lookupKey(vault, idKey));
     if (existing) {
       if (existing.contentHash === contentHash) {
         const ref = (existing.ref ?? {}) as { id?: string; path?: string };
@@ -379,42 +362,47 @@ export function writeSignal(
   // session import each write many signals per run on the same date and
   // often the same topic stem - so losing the name to a concurrent
   // writer has to cost this call the next candidate, not the event.
-  const { allocation: allocated, value: id } = allocateAndCreate(
-    {
-      vault,
-      targetDir: options.targetDir ?? dirs.inbox,
-      prefix,
-      slug: sanitised.slug,
-      maxAttempts: options.maxSlugAttempts,
-    },
-    (allocation) => {
-      // The on-disk id always equals the filename basename, including any
-      // `-2`/`-3` collision suffix — which is why the document is rendered
-      // per attempt rather than once: a retry that reused the first
-      // attempt's bytes would ship a file whose `id` names a different
-      // file. We surface it as the canonical id and duplicate it inside
-      // the frontmatter so a manual `mv` keeps the link.
-      const signalId = `${prefix}-${allocation.slug}`;
-      const { metadata, body } = renderSignalDocument(sanitised, signalId);
-      writeFrontmatterAtomic(allocation.path, metadata, body, {
-        overwrite: false,
-        existsErrorKind: "signal",
-        vaultForRelativePath: vault,
-      });
-      return signalId;
-    },
+  const { allocation: allocated, value: id } = timeStageSync(ROUTE_STAGE.documentWrite, () =>
+    allocateAndCreate(
+      {
+        vault,
+        targetDir: options.targetDir ?? dirs.inbox,
+        prefix,
+        slug: sanitised.slug,
+        maxAttempts: options.maxSlugAttempts,
+      },
+      (allocation) => {
+        // The on-disk id always equals the filename basename, including any
+        // `-2`/`-3` collision suffix — which is why the document is rendered
+        // per attempt rather than once: a retry that reused the first
+        // attempt's bytes would ship a file whose `id` names a different
+        // file. We surface it as the canonical id and duplicate it inside
+        // the frontmatter so a manual `mv` keeps the link.
+        const signalId = `${prefix}-${allocation.slug}`;
+        const { metadata, body } = renderSignalDocument(sanitised, signalId);
+        writeFrontmatterAtomic(allocation.path, metadata, body, {
+          overwrite: false,
+          existsErrorKind: "signal",
+          vaultForRelativePath: vault,
+        });
+        return signalId;
+      },
+    ),
   );
 
   // Record the key AFTER the file lands so a future retry dedupes. `ref`
   // stores the vault-relative path + id so the dedupe branch above can
   // return the original coordinates without re-deriving them.
   if (idKey && contentHash !== undefined) {
-    rememberKey(vault, {
-      key: idKey,
-      contentHash,
-      createdAt: sanitised.created_at,
-      ref: { id, path: relative(vault, allocated.path) },
-    });
+    const hash = contentHash;
+    timeStageSync(ROUTE_STAGE.idempotencyRemember, () =>
+      rememberKey(vault, {
+        key: idKey,
+        contentHash: hash,
+        createdAt: sanitised.created_at,
+        ref: { id, path: relative(vault, allocated.path) },
+      }),
+    );
   }
 
   return { path: allocated.path, id };
@@ -544,6 +532,33 @@ function signalPayloadFields(input: WriteSignalInput): Record<string, unknown> {
 }
 
 // ----- Sanitisation --------------------------------------------------------
+
+/**
+ * Refuse a sanitised signal input that lacks a required field or carries
+ * an out-of-enum `signal` / `source_type`; returns the input unchanged.
+ */
+function validateSignalInput(sanitised: WriteSignalInput): WriteSignalInput {
+  for (const field of REQUIRED_INPUT_FIELDS) {
+    const value = sanitised[field];
+    if (value === undefined || value === null || String(value).trim() === "") {
+      throw new Error(`signal missing field: ${String(field)}`);
+    }
+  }
+  if (
+    sanitised.signal !== BRAIN_SIGNAL_SIGN.positive &&
+    sanitised.signal !== BRAIN_SIGNAL_SIGN.negative
+  ) {
+    throw new Error(
+      `signal field 'signal' must be 'positive' or 'negative'; got ${JSON.stringify(sanitised.signal)}`,
+    );
+  }
+  if (sanitised.source_type !== undefined && !isBrainSignalSourceType(sanitised.source_type)) {
+    throw new Error(
+      `signal field 'source_type' must be one of ${renderSourceTypes()}; got ${JSON.stringify(sanitised.source_type)}`,
+    );
+  }
+  return sanitised;
+}
 
 /**
  * Hard caps for free-form fields. `principle` is rendered as a

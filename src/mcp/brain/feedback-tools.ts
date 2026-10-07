@@ -37,6 +37,7 @@ import {
 } from "../../core/brain/dream-stage.ts";
 import { BRAIN_ROLES } from "../../core/brain/trust/role.ts";
 import { resolveEffectiveScope, writeSignal } from "../../core/brain/signal.ts";
+import { ROUTE_STAGE, timeStageSync } from "../../core/route-scope.ts";
 import {
   adviseIncomingFeedback,
   adviseUnroutableCapture,
@@ -221,16 +222,18 @@ async function toolBrainFeedback(
       : mirrorSignal(sharedNamespace, ctx.vault, signalInput, writeOpts);
 
   try {
-    appendLogEvent(ctx.vault, {
-      timestamp: createdAt,
-      eventType: BRAIN_LOG_EVENT_KIND.feedback,
-      body: {
-        signal: `[[${sigResult.id}]]`,
-        topic: topic.trim(),
-        sign: signalRaw,
-        agent,
-      },
-    });
+    timeStageSync(ROUTE_STAGE.logAppend, () =>
+      appendLogEvent(ctx.vault, {
+        timestamp: createdAt,
+        eventType: BRAIN_LOG_EVENT_KIND.feedback,
+        body: {
+          signal: `[[${sigResult.id}]]`,
+          topic: topic.trim(),
+          sign: signalRaw,
+          agent,
+        },
+      }),
+    );
   } catch (err) {
     process.stderr.write(`warning: append feedback log failed: ${(err as Error).message}\n`);
   }
@@ -267,50 +270,55 @@ async function toolBrainFeedback(
     // `confirmed_at` is now; `unconfirmed_until` is also now so the trial
     // window collapses on inspection. The just-written signal is recorded
     // as the rule's origin under `evidenced_by`.
-    prefResult = writePreference(
-      ctx.vault,
-      {
-        slug,
-        topic: topic.trim(),
-        principle: principle.trim(),
-        created_at: createdAt,
-        unconfirmed_until: createdAt,
-        status: BRAIN_PREFERENCE_STATUS.confirmed,
-        evidenced_by: [`[[${sigResult.id}]]`],
-        confirmed_at: createdAt,
-        // Issue #149: an explicit zero, not an absent value. The
-        // on-disk encoding of "absent" is the literal `null`, and two
-        // ranking surfaces (`pre-compress-pack`, `morning-brief`) map
-        // `null` to negative infinity before sorting - so a rule
-        // force-confirmed a second ago would sort BELOW every rule
-        // that has a number, including one measured at zero. Zero is
-        // also the true Wilson lower bound on no evidence, which is
-        // why the dream pass already pre-seeds it for new
-        // preferences. This writer now matches it.
-        confidence_value: 0,
-        ...(effectiveScope !== undefined ? { scope: effectiveScope } : {}),
-        // The same lifetime the signal carries: a rule confirmed from an
-        // observation that expires on a date does not outlive it.
-        ...(expires !== undefined ? { expiration_date: expires } : {}),
-      },
-      // Ownership is resolved by the writer, never echoed from `agent`:
-      // that argument is caller-supplied, and a caller must not be able to
-      // name whose memory this becomes. The server's config path is handed
-      // over rather than a resolved name for the same reason.
-      ctx.configPath !== null ? { configPath: ctx.configPath } : {},
+    prefResult = timeStageSync(ROUTE_STAGE.preferenceWrite, () =>
+      writePreference(
+        ctx.vault,
+        {
+          slug,
+          topic: topic.trim(),
+          principle: principle.trim(),
+          created_at: createdAt,
+          unconfirmed_until: createdAt,
+          status: BRAIN_PREFERENCE_STATUS.confirmed,
+          evidenced_by: [`[[${sigResult.id}]]`],
+          confirmed_at: createdAt,
+          // Issue #149: an explicit zero, not an absent value. The
+          // on-disk encoding of "absent" is the literal `null`, and two
+          // ranking surfaces (`pre-compress-pack`, `morning-brief`) map
+          // `null` to negative infinity before sorting - so a rule
+          // force-confirmed a second ago would sort BELOW every rule
+          // that has a number, including one measured at zero. Zero is
+          // also the true Wilson lower bound on no evidence, which is
+          // why the dream pass already pre-seeds it for new
+          // preferences. This writer now matches it.
+          confidence_value: 0,
+          ...(effectiveScope !== undefined ? { scope: effectiveScope } : {}),
+          // The same lifetime the signal carries: a rule confirmed from an
+          // observation that expires on a date does not outlive it.
+          ...(expires !== undefined ? { expiration_date: expires } : {}),
+        },
+        // Ownership is resolved by the writer, never echoed from `agent`:
+        // that argument is caller-supplied, and a caller must not be able to
+        // name whose memory this becomes. The server's config path is handed
+        // over rather than a resolved name for the same reason.
+        ctx.configPath !== null ? { configPath: ctx.configPath } : {},
+      ),
     );
     try {
       // Offset by 1s so the force-confirmed event sorts after the feedback
       // event on the same UTC second (parseLogDay is stable on ties, but a
       // visible chronology reads cleaner).
-      appendLogEvent(ctx.vault, {
-        timestamp: isoSecond(new Date(now.getTime() + 1000)),
-        eventType: BRAIN_LOG_EVENT_KIND.forceConfirmed,
-        body: {
-          preference: `[[${prefResult.id}]]`,
-          agent,
-        },
-      });
+      const preferenceId = prefResult.id;
+      timeStageSync(ROUTE_STAGE.logAppend, () =>
+        appendLogEvent(ctx.vault, {
+          timestamp: isoSecond(new Date(now.getTime() + 1000)),
+          eventType: BRAIN_LOG_EVENT_KIND.forceConfirmed,
+          body: {
+            preference: `[[${preferenceId}]]`,
+            agent,
+          },
+        }),
+      );
     } catch (err) {
       process.stderr.write(
         `warning: append force-confirmed log failed: ${(err as Error).message}\n`,

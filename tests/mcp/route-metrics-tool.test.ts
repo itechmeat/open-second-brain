@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { listMcpRouteLatency } from "../../src/core/brain/mcp-route-metrics.ts";
+import { isRouteStageName } from "../../src/core/route-scope.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
 
@@ -203,5 +204,64 @@ describe("route scope stages through callTool", () => {
     const server = new MCPServer({ vault, configPath });
     await server.callTool("brain_feedback", FEEDBACK_ARGS);
     expect(listMcpRouteLatency(vault)).toHaveLength(0);
+  });
+});
+
+function stageNames(payload: Record<string, unknown>): string[] {
+  const stages = payload["stages"];
+  if (!Array.isArray(stages)) return [];
+  for (const stage of stages as Array<{ name: unknown; ms: unknown }>) {
+    expect(isRouteStageName(stage.name)).toBe(true);
+    expect(typeof stage.ms).toBe("number");
+    expect(Number.isFinite(stage.ms as number)).toBe(true);
+    expect(stage.ms as number).toBeGreaterThanOrEqual(0);
+  }
+  return (stages as Array<{ name: string }>).map((stage) => stage.name);
+}
+
+describe("signal write stages", () => {
+  test("a brain_feedback record carries the signal write stages", async () => {
+    writeConfig(true);
+    const server = new MCPServer({ vault, configPath });
+    await server.callTool("brain_feedback", { ...FEEDBACK_ARGS, idempotency_key: "stage-key-1" });
+
+    const [record] = listMcpRouteLatency(vault, { tool: "brain_feedback" });
+    const names = stageNames(record!.payload);
+    for (const name of [
+      "validate",
+      "idempotency_lookup",
+      "document_write",
+      "idempotency_remember",
+      "log_append",
+    ]) {
+      expect(names).toContain(name);
+    }
+    expect(names).not.toContain("preference_write");
+  });
+
+  test("force_confirmed adds preference_write", async () => {
+    writeConfig(true);
+    const server = new MCPServer({ vault, configPath });
+    await server.callTool("brain_feedback", { ...FEEDBACK_ARGS, force_confirmed: true });
+
+    const [record] = listMcpRouteLatency(vault, { tool: "brain_feedback" });
+    expect(stageNames(record!.payload)).toContain("preference_write");
+  });
+
+  test("an idempotency mismatch still propagates and records an error", async () => {
+    writeConfig(true);
+    const server = new MCPServer({ vault, configPath });
+    await server.callTool("brain_feedback", { ...FEEDBACK_ARGS, idempotency_key: "stage-key-2" });
+    await expect(
+      server.callTool("brain_feedback", {
+        ...FEEDBACK_ARGS,
+        principle: "A different principle under the same idempotency key.",
+        idempotency_key: "stage-key-2",
+      }),
+    ).rejects.toThrow();
+
+    const errors = listMcpRouteLatency(vault, { tool: "brain_feedback", status: "error" });
+    expect(errors).toHaveLength(1);
+    expect(stageNames(errors[0]!.payload)).toContain("idempotency_lookup");
   });
 });
