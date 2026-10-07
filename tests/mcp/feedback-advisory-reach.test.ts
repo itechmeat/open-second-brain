@@ -23,6 +23,7 @@ import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts
 import {
   buildReachLogFixture,
   maskVolatile,
+  PRIVATE_PATH,
   PRIVATE_SLUG,
   reachServer,
   type ReachLogFixture as Fixture,
@@ -63,10 +64,25 @@ function reserveFile(abs: string): void {
   );
 }
 
+/**
+ * The shared fixture's `Rule <slug>.` principle is two tokens, under the
+ * near-duplicate kernel's minimum, so the withheld preference gets a
+ * principle long enough for the conflict advisory to score it.
+ */
+const PRIVATE_PRINCIPLE = `Rule ${PRIVATE_SLUG} governs every release checklist.`;
+
+function lengthenPrivatePrinciple(vault: string): void {
+  const abs = join(vault, PRIVATE_PATH);
+  const text = readFileSync(abs, "utf8");
+  expect(text).toContain(`Rule ${PRIVATE_SLUG}.`);
+  writeFileSync(abs, text.replaceAll(`Rule ${PRIVATE_SLUG}.`, PRIVATE_PRINCIPLE));
+}
+
 function fixture(withPrivate: boolean): Fixture {
   const base = mkdtempSync(join(tmpdir(), "o2b-feedback-reach-"));
   bases.push(base);
   const f = buildReachLogFixture(base, withPrivate);
+  if (withPrivate) lengthenPrivatePrinciple(f.vault);
   seedSignal(f.vault, "public-capture", PUBLIC_SCOPE);
   if (withPrivate) reserveFile(seedSignal(f.vault, "withheld-capture", WITHHELD_SCOPE));
   return f;
@@ -82,7 +98,7 @@ async function answer(
 }
 
 /** A scope-less capture whose principle repeats the withheld rule word for word. */
-const PROBE = { topic: "probe", signal: "positive", principle: `Rule ${PRIVATE_SLUG}.` };
+const PROBE = { topic: "probe", signal: "positive", principle: PRIVATE_PRINCIPLE };
 
 describe("brain_feedback advisories answer at the caller's reach", () => {
   test("remote reach: neither advisory names or counts a withheld record", async () => {
