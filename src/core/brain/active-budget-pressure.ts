@@ -27,7 +27,8 @@
  * its candidates in that same order, so doctor's picture of "what
  * happens at the wall" stays the reactive path's picture: `tierFires`
  * marks the exact overflow condition the reactive tier runs under, the
- * first candidate is the first section the ladder compacts, and every
+ * first candidate is the first section the ladder offers compaction
+ * to (the ladder may still pass it over), and every
  * candidate carries the byte footprint the tier would first degrade it
  * to.
  *
