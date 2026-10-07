@@ -7,12 +7,14 @@
  * fits the body into a character budget through the shared
  * section-aware truncation core, in a deterministic ladder:
  *
- *   1. HEADLINE TIER - sections below the keep-guard priority holding
- *      more bullets than {@link HEADLINE_TIER_TOP_ITEMS} are compacted
- *      to their heading, their non-bullet lead-ins and the top-N ranked
- *      bullets, ranked by the inline tags. Applied only on an
- *      over-budget body, before the budget pass, so a within-budget
- *      body passes through byte-identical.
+ *   1. HEADLINE TIER - on an over-budget body, sections below the
+ *      keep-guard priority holding more bullets than
+ *      {@link HEADLINE_TIER_TOP_ITEMS} are compacted to their heading,
+ *      their non-bullet lead-ins and the top-N ranked bullets, ranked by
+ *      the inline tags. Compaction runs SEQUENTIALLY in the drop order,
+ *      least important section first, stopping as soon as the body fits
+ *      - a small overflow costs the least valuable section a few
+ *      bullets instead of stripping every non-guard section at once.
  *   2. Whole-section drops, in fixed priority order - recently retired
  *      first, then quarantine, then most-applied, with the confirmed
  *      rules (and the document preamble) surviving longest.
@@ -179,10 +181,10 @@ export function splitSections(body: string): BudgetSection[] {
 /**
  * Fit `body` into `budgetChars`. Within budget the input passes
  * through byte-identical (the idempotent-write comparison upstream
- * stays valid); over budget the headline tier runs first (sections
- * below the keep-guard priority compact to their top
- * {@link HEADLINE_TIER_TOP_ITEMS} ranked bullets), then the section
- * drop order is deterministic.
+ * stays valid); over budget the headline tier runs first - sections
+ * below the keep-guard priority compacted sequentially in the drop
+ * order, least important first, only until the body fits - then the
+ * section drop order is deterministic.
  *
  * When tiering fired, the reduction is never silent: the tier notice
  * rides alone when tiering alone brought the body within budget, and a
@@ -304,9 +306,16 @@ export interface HeadlineTierResult {
 /**
  * The headline tier ladder over a split body: when the sections fit
  * `budgetChars` untouched, nothing is compacted (within-budget
- * byte-identity is the caller's contract); otherwise every non-guard
- * section holding more than `topItems` bullets is compacted by
- * {@link tierSection}.
+ * byte-identity is the caller's contract). Otherwise the ladder tiers
+ * SEQUENTIALLY in the drop order - least important section first
+ * (highest drop-priority number, ties to the later render position, the
+ * same selection the budget pass makes) - recomputing the joined total
+ * after each compaction and stopping as soon as the body fits, so a
+ * five-character overflow costs the low-value section a few bullets
+ * instead of stripping every non-guard section at once. Sections the
+ * tier cannot compact (keep-guard, at or below the top-N) are passed
+ * over; when the ladder runs out of them and the body still overflows,
+ * the caller hands the tiered body to the drop pass.
  *
  * Pure and deterministic. Exported for the pressure probe, which must
  * model this exact step with the same exemptions and the same top-N.
@@ -317,12 +326,20 @@ export function applyHeadlineTiers(
   topItems: number = HEADLINE_TIER_TOP_ITEMS,
 ): HeadlineTierResult {
   if (joinedSectionsLength(sections) <= budgetChars) return { sections, tieredKeys: [] };
-  const out: BudgetSection[] = [];
-  const tieredKeys: string[] = [];
-  for (const section of sections) {
-    const step = tierSection(section, topItems);
-    if (step.tiered) tieredKeys.push(section.key);
-    out.push(step.section);
+  const out: BudgetSection[] = [...sections];
+  const tieredAt = new Set<number>();
+  const order = sections
+    .map((_, index) => index)
+    .toSorted((a, b) => sections[b]!.priority - sections[a]!.priority || b - a);
+  for (const index of order) {
+    const step = tierSection(out[index]!, topItems);
+    if (!step.tiered) continue;
+    out[index] = step.section;
+    tieredAt.add(index);
+    if (joinedSectionsLength(out) <= budgetChars) break;
   }
+  // Keys in render order: the notice names the compacted sections the
+  // way the body renders them, whichever order the ladder visited them.
+  const tieredKeys = sections.filter((_, i) => tieredAt.has(i)).map((s) => s.key);
   return { sections: out, tieredKeys };
 }

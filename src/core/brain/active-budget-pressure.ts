@@ -18,14 +18,18 @@
  * warning matches what would actually be dropped.
  *
  * The reactive truncation also degrades sections through a HEADLINE
- * TIER before it drops them (an over-budget body first compacts every
- * non-keep-guard section to its heading, lead-ins and top-N ranked
- * bullets). The probe models that step with the same shared code, the
- * same exemptions and the same top-N, so doctor's picture of "what
- * happens at the wall" stays the reactive path's picture:
- * `tierFires` marks the exact overflow condition the reactive tier
- * runs under, and every candidate carries the byte footprint the tier
- * would first degrade it to.
+ * TIER before it drops them: an over-budget body is compacted
+ * SEQUENTIALLY in the drop order - least important section first,
+ * stopping as soon as the body fits - so a small overflow costs the
+ * least valuable section a few bullets instead of stripping every
+ * non-keep-guard section at once. The probe models that step with the
+ * same shared code, the same exemptions and the same top-N, and ranks
+ * its candidates in that same order, so doctor's picture of "what
+ * happens at the wall" stays the reactive path's picture: `tierFires`
+ * marks the exact overflow condition the reactive tier runs under, the
+ * first candidate is the first section the ladder compacts, and every
+ * candidate carries the byte footprint the tier would first degrade it
+ * to.
  *
  * Contract:
  *   - **Empty output = healthy.** At or below the warn threshold the
