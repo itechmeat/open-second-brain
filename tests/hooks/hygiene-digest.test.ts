@@ -25,7 +25,10 @@ import {
   computeHygieneDigestHash,
   hygieneDigestHashPath,
 } from "../../hooks/lib/hygiene-digest-state.ts";
-import { HYGIENE_DIGEST_SEVERITIES } from "../../hooks/lib/hygiene-digest-text.ts";
+import {
+  HYGIENE_DIGEST_POINTER,
+  HYGIENE_DIGEST_SEVERITIES,
+} from "../../hooks/lib/hygiene-digest-text.ts";
 import { homeEnv } from "../helpers/platform.ts";
 
 const HOOK = resolve(
@@ -200,7 +203,7 @@ describe("hygiene-digest hook", () => {
     expect(line.includes("\n")).toBe(false);
     expect(line.startsWith("Open Second Brain hygiene:")).toBe(true);
     expect(line).toContain("1 conflicts");
-    expect(line.endsWith("run o2b brain hygiene scan")).toBe(true);
+    expect(line.endsWith(HYGIENE_DIGEST_POINTER)).toBe(true);
     const hashPath = hygieneDigestHashPath(vault);
     expect(existsSync(hashPath)).toBe(true);
     expect(readFileSync(hashPath, "utf8").trim()).toMatch(/^[0-9a-f]{64}$/);
@@ -250,7 +253,9 @@ describe("hygiene-digest hook", () => {
     };
     const line = parsed.hookSpecificOutput.additionalContext;
     expect(line).toContain("1 conflicts");
-    expect(line).not.toContain("dangling");
+    // The pointer names the dangling-links surface, so the segment check
+    // is numeric: no "<n> dangling links" count may appear.
+    expect(line).not.toMatch(/\d dangling links/);
     const findings = await fixtureEligibleFindings();
     const recorded = readFileSync(hygieneDigestHashPath(vault), "utf8").trim();
     expect(recorded).toBe(computeHygieneDigestHash({ findings, danglingLinks: null }));

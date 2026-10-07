@@ -37,11 +37,16 @@ import {
 export const HYGIENE_DIGEST_PREFIX = "Open Second Brain hygiene:";
 
 /**
- * The pointer to the pull surface that lists the findings behind the
- * counts. The digest names counts, never targets - the details live
- * behind this command.
+ * The pointer to the pull surfaces behind the line's counts. The digest
+ * names counts, never targets - the details live behind these commands.
+ * TWO surfaces, because the line reports two kinds of counts: the CLI
+ * scan lists the detector findings, while the dangling-link count is
+ * measured from the search index and reported only by the MCP
+ * `brain_hygiene` tool - a pointer to the scan alone would lead the
+ * reader to a surface where that number never appears.
  */
-export const HYGIENE_DIGEST_POINTER = "run o2b brain hygiene scan";
+export const HYGIENE_DIGEST_POINTER =
+  "run o2b brain hygiene scan for the findings; the brain_hygiene tool reports the dangling links";
 
 /**
  * Hard ceiling on the composed line, in UTF-16 code units, mirroring the

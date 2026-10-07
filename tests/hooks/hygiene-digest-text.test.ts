@@ -97,7 +97,9 @@ describe("composeHygieneDigest", () => {
     for (const danglingLinks of [null, 0]) {
       const line = composeHygieneDigest({ findings, danglingLinks });
       expect(line).not.toBeNull();
-      expect(line).not.toContain("dangling");
+      // The POINTER names the dangling-links surface, so the segment
+      // check is numeric: no "<n> dangling links" count may appear.
+      expect(line).not.toMatch(/\d dangling links/);
     }
   });
 
@@ -187,6 +189,19 @@ describe("composeHygieneDigest", () => {
 describe("digest constants", () => {
   test("only warning and action severities surface at turn end", () => {
     expect([...HYGIENE_DIGEST_SEVERITIES].toSorted()).toEqual(["action", "warning"]);
+  });
+
+  test("the pointer names a surface that shows each kind of count the line reports", () => {
+    // The CLI scan lists the detector findings. The dangling-link count
+    // is NOT on that surface: it is measured from the search index and
+    // reported only by the MCP brain_hygiene tool, so a pointer to the
+    // scan alone would send the reader somewhere the line's dangling
+    // count never appears.
+    expect(HYGIENE_DIGEST_POINTER).toContain("o2b brain hygiene scan");
+    expect(HYGIENE_DIGEST_POINTER).toContain("brain_hygiene");
+    expect(HYGIENE_DIGEST_POINTER).toContain("dangling");
+    expect(HYGIENE_DIGEST_POINTER).not.toContain("OSB");
+    expect(HYGIENE_DIGEST_POINTER).not.toContain("!");
   });
 
   test("the cap leaves room for the fixed prefix and pointer", () => {
