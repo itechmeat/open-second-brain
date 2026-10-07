@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.74.1] - 2026-10-07
+
+The bundled opencode plugin loads and works on OpenCode V2 hosts from the same installed file that already served V1. Contributed by @jkoelker in #190, with the maintainer-side completion of the V2 event names against the released 2.0.24 build.
+
+### Fixed
+
+- **The opencode plugin supports the V1 and V2 plugin APIs from one file.** The module now default-exports `{ id, server, setup }`: OpenCode V1 keeps calling `server()` exactly as before, and OpenCode V2 loads the same installed copy through `setup()`, which feature-detects every capability it needs (`location.directory`, `session.hook` / `get` / `context`, `tool.hook`, `event.subscribe`) and does nothing when one is missing, so hosts without a hook stay unaffected. Under V2, active-context injection rides the session `context` hook, the post-write reminder rides `tool.hook("execute.after")`, and session capture subscribes to the event stream and merges each snapshot with the earlier turns so history survives compactions; a committed revert removes the saved boundary and the turns after it, rebuilding from active context when the boundary was never captured. Verified live against opencode 2.0.24: plugin load, context hook, capture spool and post-write reminder.
+- **V2 capture listens on the turn-end events a released opencode emits.** opencode 2.0.24 never fires `session.idle`; a finished turn emits `session.execution.succeeded` (failed and interrupted runs likewise). The capture set now covers those names alongside the v2-tree names, plus `session.compaction.failed`, so a turn that ends or fails on a released V2 host still lands its spool snapshot.
 ## [1.74.0] - 2026-10-07
 
 Open Second Brain now defends against near-duplicate memory at the points a fact enters or leaves the vault: one reach-aware near-duplicate kernel scores the note-write receipt hint, the feedback advisory and a new retire-sibling list, so a context-driven retire names the active paraphrases that would otherwise survive it; the receipt hint can look beyond the written page's directory through the keyword index; every receipt lint finding answers at the caller's reach; extract-signals grounds time bounds in each turn's timestamp and refuses a payload that repeats a topic; and route metrics time each write stage without carrying any content.
@@ -8269,6 +8277,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.74.1]: https://github.com/itechmeat/open-second-brain/compare/v1.74.0...v1.74.1
 [1.74.0]: https://github.com/itechmeat/open-second-brain/compare/v1.73.1...v1.74.0
 [1.73.1]: https://github.com/itechmeat/open-second-brain/compare/v1.73.0...v1.73.1
 [1.73.0]: https://github.com/itechmeat/open-second-brain/compare/v1.72.0...v1.73.0
