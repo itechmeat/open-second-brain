@@ -40,62 +40,78 @@ jobs:
       - name: Install JS dependencies
         run: bun install --frozen-lockfile
 
-      - name: Verify manifest version sync
-        run: bun run sync-version:check
-
-      # Codex caches only `plugins/codex/` and drops symlinks, so the Codex
-      # plugin carries real copies of `skills/` and `hooks/hooks.json`.
-      - name: Codex plugin mirrors are in sync
-        run: bun run sync-plugin-mirrors:check
-
-      - name: OpenClaw bundle is in sync with sources
-        shell: bash
-        run: |
-          set -euo pipefail
-          # The release workflow has always checked this, but only on a tag -
-          # so a stale `openclaw/index.js` shipped to plugin users and turned
-          # the release job red two versions running before anyone looked.
-          # Checking it here fails the pull request that caused it instead.
-          bun build src/openclaw/index.ts \
-            --outfile /tmp/openclaw-rebuild.js \
-            --target=node --format=esm \
-            --external openclaw/plugin-sdk/plugin-entry
-          diff -q /tmp/openclaw-rebuild.js openclaw/index.js \
-            || { echo "openclaw/index.js is out of date; run: bun run build:openclaw" >&2; exit 1; }
-
-      - name: Broken-link ratchet
-        run: bun run link-ratchet:check
-
-      - name: Hardcoded path hygiene (report-only)
-        run: bun run check:paths
-
-      - name: Formatting check
-        run: bun run fmt:check
-
-      - name: Lint
-        run: bun run lint
-
-      - name: Typecheck
-        run: bun run typecheck
-
-      - name: TypeScript test suite
-        run: bun test
-
       # The anti-drift test compares the vendored Hermes schemas against a
       # LIVE `tools/list`, and skips itself when `o2b` is not on PATH. It has
       # been skipping here since it was written - `OK (skipped=1)` - so the
       # one guard against a vendored copy diverging from the server ran only
       # on a developer machine that happened to have the symlink. That is how
-      # two tools drifted structurally and nobody was told.
+      # two tools drifted structurally and nobody was told. Published before
+      # the background Python step below, because a PATH change made by a
+      # background step is only visible after its `wait`.
       - name: Publish o2b on PATH (the anti-drift test needs the live server)
         run: echo "$GITHUB_WORKSPACE/scripts" >> "$GITHUB_PATH"
 
+      # The static checks below read the tree and write nothing in it, so
+      # they run side by side; the group takes as long as the slowest one
+      # (typecheck) instead of their sum.
+      - parallel:
+          - name: Verify manifest version sync
+            run: bun run sync-version:check
+
+          # Codex caches only `plugins/codex/` and drops symlinks, so the Codex
+          # plugin carries real copies of `skills/` and `hooks/hooks.json`.
+          - name: Codex plugin mirrors are in sync
+            run: bun run sync-plugin-mirrors:check
+
+          - name: OpenClaw bundle is in sync with sources
+            shell: bash
+            run: |
+              set -euo pipefail
+              # The release workflow has always checked this, but only on a tag -
+              # so a stale `openclaw/index.js` shipped to plugin users and turned
+              # the release job red two versions running before anyone looked.
+              # Checking it here fails the pull request that caused it instead.
+              bun build src/openclaw/index.ts \
+                --outfile "$RUNNER_TEMP/openclaw-rebuild.js" \
+                --target=node --format=esm \
+                --external openclaw/plugin-sdk/plugin-entry
+              diff -q "$RUNNER_TEMP/openclaw-rebuild.js" openclaw/index.js \
+                || { echo "openclaw/index.js is out of date; run: bun run build:openclaw" >&2; exit 1; }
+
+          - name: Broken-link ratchet
+            run: bun run link-ratchet:check
+
+          - name: Hardcoded path hygiene (report-only)
+            run: bun run check:paths
+
+          - name: Formatting check
+            run: bun run fmt:check
+
+          - name: Lint
+            run: bun run lint
+
+          - name: Typecheck
+            run: bun run typecheck
+
+      # The Python tests take seconds and share nothing with the Bun suite,
+      # so they run in the background while it does.
       - name: Python plugin tests
+        id: python-tests
+        background: true
         run: python -m unittest discover -s tests/python -v
 
+      # One worker per core (each file in a fresh global, `--parallel`
+      # implies `--isolate`): the suite was the whole length of this job,
+      # five to seven minutes serially.
+      - name: TypeScript test suite
+        run: bun test --parallel
+
+      - name: Wait for the Python plugin tests
+        wait: python-tests
+
       # A skip is indistinguishable from a pass in the summary line, so the
-      # step above is asserted rather than trusted: if the CLI stops being
-      # reachable, this fails instead of quietly going back to skipping.
+      # anti-drift test is asserted rather than trusted: if the CLI stops
+      # being reachable, this fails instead of quietly going back to skipping.
       - name: The anti-drift test actually ran
         run: |
           set -euo pipefail
@@ -181,29 +197,37 @@ jobs:
       - name: Install JS dependencies
         run: bun install --frozen-lockfile
 
-      # The one validate-job check repeated here, because it is about the
-      # checkout: the mirrors must come out of a Windows clone as the same
-      # bytes (LF, per .gitattributes) and as real files, not as symlinks
-      # materialised as text.
-      - name: Codex plugin mirrors are in sync
-        run: bun run sync-plugin-mirrors:check
+      - name: Publish o2b on PATH (the anti-drift test needs the live server)
+        shell: bash
+        run: echo "$GITHUB_WORKSPACE/scripts" >> "$GITHUB_PATH"
 
-      - name: Typecheck
-        run: bun run typecheck
+      - parallel:
+          # The one validate-job check repeated here, because it is about the
+          # checkout: the mirrors must come out of a Windows clone as the same
+          # bytes (LF, per .gitattributes) and as real files, not as symlinks
+          # materialised as text.
+          - name: Codex plugin mirrors are in sync
+            run: bun run sync-plugin-mirrors:check
+
+          - name: Typecheck
+            run: bun run typecheck
+
+      - name: Python plugin tests
+        id: python-tests
+        background: true
+        run: python -m unittest discover -s tests/python -v
 
       # GitHub's Windows runners take about twice as long as Linux over the
       # same suite (NTFS and Defender on every file the fixtures touch), so
       # Bun's 5 s default - which also bounds beforeEach/afterEach hooks -
       # times out tests that pass locally. Tests with their own timeout keep it.
+      # Serially the suite took 20 to 45 minutes here; one worker per core
+      # is what brings it down.
       - name: TypeScript test suite
-        run: bun test --timeout 30000
+        run: bun test --parallel --timeout 30000
 
-      - name: Publish o2b on PATH (the anti-drift test needs the live server)
-        shell: bash
-        run: echo "$GITHUB_WORKSPACE/scripts" >> "$GITHUB_PATH"
-
-      - name: Python plugin tests
-        run: python -m unittest discover -s tests/python -v
+      - name: Wait for the Python plugin tests
+        wait: python-tests
 
       # Same assertion as in the validate job: on Windows the anti-drift test
       # reaches the server through `o2b.cmd`, a path of its own, and a skip
