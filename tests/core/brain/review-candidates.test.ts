@@ -15,6 +15,7 @@ import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { dreamRunsDir } from "../../../src/core/brain/paths.ts";
 import { writePreference } from "../../../src/core/brain/preference.ts";
 import { buildReviewCandidates } from "../../../src/core/brain/review-candidates.ts";
+import type { RetireSibling } from "../../../src/core/brain/retire-siblings.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { Store } from "../../../src/core/search/store.ts";
@@ -158,7 +159,7 @@ describe("buildReviewCandidates retire_siblings", () => {
     else process.env[FLAG_ENV] = savedFlag;
   });
 
-  const LEXICAL = {
+  const LEXICAL: RetireSibling = {
     retiring_id: "pref-old",
     sibling_id: "pref-paraphrase",
     score: 0.818,

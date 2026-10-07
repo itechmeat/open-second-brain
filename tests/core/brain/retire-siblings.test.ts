@@ -12,6 +12,7 @@ import {
   planRetireSiblings,
   RETIRE_SIBLING_TRIGGER_REASONS,
   retireSiblingPool,
+  type RetireSibling,
 } from "../../../src/core/brain/retire-siblings.ts";
 import { writePreference } from "../../../src/core/brain/preference.ts";
 import { BRAIN_RETIRED_REASON, type BrainRetiredReason } from "../../../src/core/brain/types.ts";
@@ -194,7 +195,7 @@ describe("dream retire_siblings", () => {
     });
   }
 
-  const EXPECTED = [
+  const EXPECTED: RetireSibling[] = [
     { retiring_id: "pref-old", sibling_id: "pref-paraphrase", score: 0.818, method: "lexical" },
   ];
 
