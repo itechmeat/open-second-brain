@@ -98,6 +98,14 @@
               "VAULT_AGENT_NAME": "grok-dev-agent"
             },
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "<BUN> run <REPO>/hooks/subagent-inject.ts",
+            "env": {
+              "VAULT_AGENT_NAME": "grok-dev-agent"
+            },
+            "timeout": 10
           }
         ]
       }
@@ -116,6 +124,14 @@
           {
             "type": "command",
             "command": "<BUN> run <REPO>/hooks/stop-log-guardrail.ts",
+            "env": {
+              "VAULT_AGENT_NAME": "grok-dev-agent"
+            },
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "<BUN> run <REPO>/hooks/hygiene-digest.ts",
             "env": {
               "VAULT_AGENT_NAME": "grok-dev-agent"
             },
