@@ -1827,8 +1827,9 @@ o2b search reindex            Rebuild the SQLite + FTS5 index from scratch
                               machine-local pid
 o2b search index              Incrementally update the index; --embeddings computes vectors, --progress watches it
                               --force-cost bypasses the embedding cost gate (since v0.36.0)
-                              --freshen <token> is the background run freshen on read starts (since
-                              v1.75.0): lowered priority, no output, outcome in freshen-state.json
+                              --freshen <token> [--freshen-state <dir>] is the background run freshen on
+                              read starts (since v1.75.0): lowered priority, no output, outcome in
+                              <dir>/freshen-state.json; meeting another index writer is a skip
 o2b search vector-backfill    Run the vector phase ALONE for indexed chunks that have no vector -
                               no vault walk, no re-chunking, no frontmatter pass (since v1.43.0).
                               Dry-run by DEFAULT: it counts the pending chunks, reports the
@@ -2391,7 +2392,9 @@ next read sees the current vault. Only agent activity triggers it.
 - **One run at a time.** The reader takes an exclusive claim,
   `<index dir>/freshen.claim`, and skips when another run holds it or an
   indexer holds the writer lock. A claim older than ten minutes belongs
-  to a run that died and is taken over.
+  to a run that died and is taken over by exactly one reader, under an
+  exclusive takeover lock. A run that still meets another writer ends as
+  a skip, not a failure.
 - **Out of the way.** The child lowers its CPU priority and runs under
   `ionice -c3` on Linux or `taskpolicy -b` on macOS when the tool exists.
   It indexes keyword-only unless `search_freshen_embeddings` is on.
