@@ -22,8 +22,10 @@ import { fileURLToPath } from "node:url";
 import { appendClaimEvent } from "../../src/core/brain/truth/store.ts";
 import {
   HYGIENE_DIGEST_HASH_FILENAME,
+  computeHygieneDigestHash,
   hygieneDigestHashPath,
 } from "../../hooks/lib/hygiene-digest-state.ts";
+import { HYGIENE_DIGEST_SEVERITIES } from "../../hooks/lib/hygiene-digest-text.ts";
 import { homeEnv } from "../helpers/platform.ts";
 
 const HOOK = resolve(
@@ -208,6 +210,56 @@ describe("hygiene-digest hook", () => {
     const hashPath = hygieneDigestHashPath(vault);
     expect(existsSync(hashPath)).toBe(true);
     expect(readFileSync(hashPath, "utf8").trim()).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  /**
+   * The eligible findings a fresh in-process sweep reports for the
+   * fixture vault, the same population the hook just hashed: one
+   * deterministic `conflicts` warning.
+   */
+  async function fixtureEligibleFindings() {
+    const { runHygieneScan } = await import("../../src/core/brain/hygiene/scan.ts");
+    const findings = runHygieneScan(vault, { now: new Date() }).findings;
+    expect(
+      findings.filter((f) => HYGIENE_DIGEST_SEVERITIES.includes(f.severity)).map((f) => f.detector),
+    ).toEqual(["conflicts"]);
+    return findings;
+  }
+
+  test("a vault with no search index records the null-dangling hash, never a zero-flattened one", async () => {
+    seedConflict();
+    const transcript = claudeTranscript(true);
+    const r = await runHook(stopPayload(transcript), FLAG_ON);
+    expect(r.exit).toBe(0);
+    expect(r.stdout).not.toBe("");
+    const findings = await fixtureEligibleFindings();
+    const recorded = readFileSync(hygieneDigestHashPath(vault), "utf8").trim();
+    // The index is absent, so the count is UNMEASURED: the recorded state
+    // keeps `danglingLinks: null` and is never flattened into a zero.
+    expect(recorded).toBe(computeHygieneDigestHash({ findings, danglingLinks: null }));
+    expect(recorded).not.toBe(computeHygieneDigestHash({ findings, danglingLinks: 0 }));
+  });
+
+  test("a throwing search config degrades to an unmeasured dangling count and the digest still emits", async () => {
+    seedConflict();
+    const transcript = claudeTranscript(true);
+    // An out-of-range env twin makes resolveSearchConfig throw before the
+    // measurement runs; the digest must survive it with the count omitted.
+    const r = await runHook(stopPayload(transcript), {
+      ...FLAG_ON,
+      OPEN_SECOND_BRAIN_SEARCH_CHUNK_SIZE: "0",
+    });
+    expect(r.exit).toBe(0);
+    expect(r.stdout).not.toBe("");
+    const parsed = JSON.parse(r.stdout) as {
+      hookSpecificOutput: { additionalContext: string };
+    };
+    const line = parsed.hookSpecificOutput.additionalContext;
+    expect(line).toContain("1 conflicts");
+    expect(line).not.toContain("dangling");
+    const findings = await fixtureEligibleFindings();
+    const recorded = readFileSync(hygieneDigestHashPath(vault), "utf8").trim();
+    expect(recorded).toBe(computeHygieneDigestHash({ findings, danglingLinks: null }));
   });
 
   test("an immediate second identical run is silent", async () => {

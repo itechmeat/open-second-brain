@@ -117,10 +117,18 @@ async function main(): Promise<void> {
   const { measureFromIndex } = await import("../src/core/search/link-ratchet.ts");
 
   const report = runHygieneScan(vault, { now: new Date() });
-  // The dangling-link measurement is read-only over the existing index;
-  // an unmeasurable index is `null`, never flattened into a zero.
-  const measurement = await measureFromIndex(resolveSearchConfig({ vault }));
-  const danglingLinks = measurement.measurable ? measurement.dangling : null;
+  // The dangling-link measurement must never fail the digest: resolving
+  // the search config itself can throw (a bad `search_chunk_size` env or
+  // config value), and an index that cannot be measured is unmeasured.
+  // Both degrade to `null` here, never flattened into a zero - the same
+  // composition the hygiene tool makes (measured:false with a reason).
+  let danglingLinks: number | null = null;
+  try {
+    const measurement = await measureFromIndex(resolveSearchConfig({ vault }));
+    danglingLinks = measurement.measurable ? measurement.dangling : null;
+  } catch {
+    // Absorbed: the count is unmeasured, the findings still surface.
+  }
 
   const line = composeHygieneDigest({ findings: report.findings, danglingLinks });
   if (line === null) return;
