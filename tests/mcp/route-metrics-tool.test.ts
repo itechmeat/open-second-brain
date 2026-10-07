@@ -94,6 +94,8 @@ describe("route latency capture through tools/call", () => {
     const server = new MCPServer({ vault, configPath });
     await initialize(server);
     await callTool(server, "second_brain_status", {});
+    // A route that times write stages records nothing either.
+    await callTool(server, "brain_feedback", FEEDBACK_ARGS);
     expect(listMcpRouteLatency(vault)).toHaveLength(0);
   });
 
@@ -197,13 +199,6 @@ describe("route scope stages through callTool", () => {
     expect(records).toHaveLength(1);
     expect(records[0]!.payload["status"]).toBe("ok");
     expect(Object.hasOwn(records[0]!.payload, "decision_ms")).toBe(false);
-  });
-
-  test("gate off: brain_feedback writes no record", async () => {
-    writeConfig(false);
-    const server = new MCPServer({ vault, configPath });
-    await server.callTool("brain_feedback", FEEDBACK_ARGS);
-    expect(listMcpRouteLatency(vault)).toHaveLength(0);
   });
 });
 
