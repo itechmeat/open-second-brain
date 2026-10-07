@@ -111,13 +111,13 @@ describe("collectWideningCandidates", () => {
     expect(result.candidates.length).toBeLessThanOrEqual(NEAR_DUPLICATE_WIDENING_TOP_K);
   });
 
-  test("no candidate is listed twice", async () => {
-    writeNote("Projects/Earlier.md", `${BODY}\n\n## Second\n\n${BODY}`);
+  test("a candidate two written pages both pull in is listed once", async () => {
+    const earlier = writeNote("Projects/Earlier.md", BODY);
     const config = await indexed();
-    const written = writeNote("Notes/Later.md", BODY);
-    const result = await collectWideningCandidates(config, vault, [written], READ_ALL_REFS);
-    const pages = result.candidates.map((c) => c.page);
-    expect(pages).toEqual([...new Set(pages)]);
+    const first = writeNote("Notes/Later.md", BODY);
+    const second = writeNote("Notes/Later-Again.md", BODY);
+    const result = await collectWideningCandidates(config, vault, [first, second], READ_ALL_REFS);
+    expect(result.candidates.filter((c) => c.page === earlier)).toHaveLength(1);
   });
 
   test("no embedding provider is imported", () => {
