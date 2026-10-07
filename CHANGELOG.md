@@ -13,7 +13,7 @@ Sturdier input handling in three places, and a faster CI.
 
 - **The HTTP transport parses the `Authorization` header in linear time.** The bearer pattern no longer lets two groups claim the same run of whitespace, so a long run of spaces cannot make the parse backtrack. Any whitespace before the key is still accepted, and a header with nothing after `Bearer` is still refused.
 - **Shell completions escape backslashes.** The fish, elvish and nushell scripts from `o2b completions` escape a backslash before quoting a word, so a word that ends in one can no longer swallow its closing quote.
-- **The brain explorer escapes every field it renders.** The node status and confidence in the details panel go through the same HTML escaping as every other field. Both values are already limited to known words by the parser, so this changes nothing a vault can produce today.
+- **The brain explorer escapes every field it renders.** The node status and confidence in the details panel go through the same HTML escaping as every other field, and that escaping now covers quotes, since the status also lands in an attribute. Both values are already limited to known words by the parser, so this changes nothing a vault can produce today.
 
 ### Changed
 

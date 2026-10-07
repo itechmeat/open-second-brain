@@ -691,10 +691,18 @@
           }
           const inbound = edges.filter((e) => e.target === n.id);
           const outbound = edges.filter((e) => e.source === n.id);
+          // Quotes too: the status lands inside a class attribute.
           const esc = (s) =>
             String(s).replace(
-              /[&<>]/g,
-              (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c],
+              /[&<>"']/g,
+              (c) =>
+                ({
+                  "&": "&amp;",
+                  "<": "&lt;",
+                  ">": "&gt;",
+                  '"': "&quot;",
+                  "'": "&#39;",
+                })[c],
             );
           const edgeLabel = (e) => e.relation || e.kind;
           const html = [
