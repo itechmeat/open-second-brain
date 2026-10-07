@@ -478,12 +478,16 @@ test("the hygiene rules name categories and quote no example words", () => {
 // 20. The refusal lands before any write and before any item is hashed for
 //     dedup, so a refused payload leaves the vault and the index untouched.
 
-/** A dedup index that counts its lookups; one lookup follows every hash. */
+/** A dedup index that counts every keyed read; one read follows every hash. */
 class CountingDedup extends Map<string, DedupIndexEntry> {
   lookups = 0;
   override has(key: string): boolean {
     this.lookups += 1;
     return super.has(key);
+  }
+  override get(key: string): DedupIndexEntry | undefined {
+    this.lookups += 1;
+    return super.get(key);
   }
 }
 
@@ -505,6 +509,7 @@ test("a payload that repeats a topic is refused whole, naming both indices", () 
   expect(err.code).toBe(SEMANTIC_VIOLATION_CODES.crossItem);
   expect(err.message).toContain('items[0] and items[2] share topic "release-notes-style"');
   expect(dedup.lookups).toBe(0);
+  expect(dedup.size).toBe(0);
   expect(inboxFiles()).toEqual([]);
 });
 
