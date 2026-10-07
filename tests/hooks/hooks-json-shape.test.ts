@@ -171,8 +171,12 @@ describe("hooks.json subagent-inject entry", () => {
     expect(carrier.statusMessage).toBe("OSB: delivering standing rules to a subagent");
     // Fail-soft shape identical to its sibling: same wrapper, same PATH
     // fallback, same never-blocks tail, only the dispatch name differs.
+    // Both occurrences of the name (plugin-root branch and fallback) must
+    // map, so the swap is a replaceAll.
     const sibling = hooks.find((h) => h.command.includes("o2b-hook post-write-reminder"))!;
-    expect(carrier.command).toBe(sibling.command.replace("post-write-reminder", "subagent-inject"));
+    expect(carrier.command).toBe(
+      sibling.command.replaceAll("post-write-reminder", "subagent-inject"),
+    );
     // The dispatch target resolves to an existing hook file, so the
     // registered name can never silently no-op.
     expect(existsSync(join(REPO, "hooks", "subagent-inject.ts"))).toBe(true);
