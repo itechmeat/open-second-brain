@@ -285,6 +285,14 @@ export interface PageLintCandidateSkip {
  */
 export type ReadablePage = (ref: string) => boolean;
 
+/**
+ * Whether the near-duplicate hint looked beyond the written pages' own
+ * directories: `used` when the keyword index answered, `index_unavailable`
+ * when it could not be opened or queried. Absent from a report when
+ * widening is off.
+ */
+export type NearDuplicateWideningStatus = "used" | "index_unavailable";
+
 /** How one call to {@link lintWrittenPages} is bounded. */
 export interface LintWrittenPagesOptions {
   /**
