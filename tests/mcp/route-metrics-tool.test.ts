@@ -265,3 +265,34 @@ describe("signal write stages", () => {
     expect(stageNames(errors[0]!.payload)).toContain("idempotency_lookup");
   });
 });
+
+describe("note write stages", () => {
+  test("a brain_create_note record carries document_write and write_receipt", async () => {
+    writeConfig(true);
+    const server = new MCPServer({ vault, configPath });
+    await server.callTool("brain_create_note", {
+      path: "Notes/AA-stage-probe.md",
+      content: "stage probe body",
+    });
+
+    const [record] = listMcpRouteLatency(vault, { tool: "brain_create_note" });
+    const names = stageNames(record!.payload);
+    expect(names).toContain("document_write");
+    expect(names).toContain("write_receipt");
+  });
+
+  test("a brain_write_batch rewrite record carries write_receipt", async () => {
+    writeConfig(true);
+    const server = new MCPServer({ vault, configPath });
+    await server.callTool("brain_create_note", {
+      path: "Notes/AA-batch-target.md",
+      content: "first body",
+    });
+    await server.callTool("brain_write_batch", {
+      operations: [{ op: "update_note", path: "Notes/AA-batch-target.md", content: "second" }],
+    });
+
+    const [record] = listMcpRouteLatency(vault, { tool: "brain_write_batch" });
+    expect(stageNames(record!.payload)).toContain("write_receipt");
+  });
+});
