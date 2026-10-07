@@ -426,8 +426,8 @@ export function topItemLines(items: ReadonlyArray<string>, limit: number): Reado
   if (keep >= items.length) return items;
   return items
     .map((line, index) => ({ line, index }))
-    .sort((a, b) => compareItemLines(a.line, b.line) || a.index - b.index)
+    .toSorted((a, b) => compareItemLines(a.line, b.line) || a.index - b.index)
     .slice(0, keep)
-    .sort((a, b) => a.index - b.index)
+    .toSorted((a, b) => a.index - b.index)
     .map((entry) => entry.line);
 }
