@@ -31,13 +31,17 @@ import {
   type NearDuplicateCandidate,
 } from "../../../src/core/brain/page-lint.ts";
 import { LINT_CONSOLIDATE_KIND } from "../../../src/core/brain/lint-consolidate.ts";
+import {
+  NEAR_DUPLICATE_THRESHOLDS,
+  READ_ALL_REFS,
+} from "../../../src/core/brain/near-duplicate.ts";
 import { loadSchemaPack } from "../../../src/core/brain/schema-pack.ts";
 import { ARTIFACT_MAX_BYTES } from "../../../src/core/brain/write-session/validate.ts";
 
 let vault: string;
 
 /** Operator reach: every page readable. */
-const READ_ALL = { readable: () => true } as const;
+const READ_ALL = { readable: READ_ALL_REFS } as const;
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-page-lint-"));
@@ -225,6 +229,7 @@ describe("lintPagesWithContext - one page's failure is not the report's", () => 
       basenames: new Set<string>(),
       vocabulary: loadSchemaPack(vault).vocabulary,
       nearDuplicateCandidates: new Map<string, ReadonlyArray<NearDuplicateCandidate>>(),
+      readable: READ_ALL_REFS,
       mergedLinks: {
         resolve() {
           throw reason;
@@ -330,6 +335,21 @@ describe("lintWrittenPages - near-duplicate findings", () => {
 
   test("NEAR_DUPLICATE_JACCARD is the designed threshold, a named constant", () => {
     expect(NEAR_DUPLICATE_JACCARD).toBe(0.8);
+    expect(NEAR_DUPLICATE_JACCARD).toBe(NEAR_DUPLICATE_THRESHOLDS.writeHint);
+  });
+
+  test("a same-directory finding is byte-identical to the shipped receipt", () => {
+    const first = writeNote("Notes/Alpha.md", alphaNote("Alpha"));
+    const rel = writeNote("Notes/Beta.md", alphaNote("Beta"));
+    expect(nearDuplicateFindings(lintWrittenPages(vault, [rel], READ_ALL))).toEqual([
+      {
+        severity: "warning",
+        code: NEAR_DUPLICATE_CODE,
+        page: rel,
+        path: first,
+        message: `body resembles [[${first}]] jaccard=1.000 (threshold 0.8)`,
+      },
+    ]);
   });
 
   test("a write closely matching a same-directory same-scope page yields the finding", () => {
@@ -546,7 +566,102 @@ describe("lintWrittenPages - near-duplicate candidates at the caller's reach", (
         return true;
       },
     });
-    expect(asked.toSorted()).toEqual(["Notes/Alpha.md", "Notes/Beta.md"]);
+    expect([...new Set(asked)].toSorted()).toEqual(["Notes/Alpha.md", "Notes/Beta.md"]);
+  });
+});
+
+/**
+ * Widening: candidates from outside the written page's directory, handed in
+ * by the keyword-index collector. They are scored through the same kernel
+ * under the same scope-bucket rule; a cross-directory finding keeps the
+ * `near-duplicate` code and names its method, and the report states whether
+ * widening ran only when the caller says it was asked to.
+ */
+describe("lintWrittenPages - widened near-duplicate candidates", () => {
+  const BODY = "alpha beta gamma delta epsilon";
+
+  function note(title: string): string {
+    return `---\ntitle: ${title}\n---\n\n${BODY}\n`;
+  }
+
+  function candidate(page: string, scopeKey = ""): NearDuplicateCandidate {
+    return { page, scopeKey, tokens: new Set(BODY.split(" ")) };
+  }
+
+  test("a cross-directory candidate yields the same code with the method in the message", () => {
+    const rel = writeNote("Notes/Beta.md", note("Beta"));
+    const report = lintWrittenPages(vault, [rel], {
+      ...READ_ALL,
+      extraCandidates: [candidate("Projects/Alpha.md")],
+      widening: "used",
+    });
+    expect(nearDuplicateFindings(report)).toEqual([
+      {
+        severity: "warning",
+        code: NEAR_DUPLICATE_CODE,
+        page: rel,
+        path: "Projects/Alpha.md",
+        message:
+          "body resembles [[Projects/Alpha.md]] jaccard=1.000 (threshold 0.8) method=lexical",
+      },
+    ]);
+    expect(report.widening).toBe("used");
+  });
+
+  test("a widened candidate already in the directory is reported once, as shipped", () => {
+    const first = writeNote("Notes/Alpha.md", note("Alpha"));
+    const rel = writeNote("Notes/Beta.md", note("Beta"));
+    const findings = nearDuplicateFindings(
+      lintWrittenPages(vault, [rel], {
+        ...READ_ALL,
+        extraCandidates: [candidate(first)],
+        widening: "used",
+      }),
+    );
+    expect(findings.map((f) => f.message)).toEqual([
+      `body resembles [[${first}]] jaccard=1.000 (threshold 0.8)`,
+    ]);
+  });
+
+  test("a widened candidate in another scope bucket is not reported", () => {
+    const rel = writeNote("Notes/Beta.md", note("Beta"));
+    const report = lintWrittenPages(vault, [rel], {
+      ...READ_ALL,
+      extraCandidates: [candidate("Projects/Alpha.md", "session=atlas")],
+      widening: "used",
+    });
+    expect(report.findings).toEqual([]);
+  });
+
+  test("a widened candidate outside the caller's reach is not reported", () => {
+    const rel = writeNote("Notes/Beta.md", note("Beta"));
+    const report = lintWrittenPages(vault, [rel], {
+      readable: (page) => page !== "Projects/Alpha.md",
+      extraCandidates: [candidate("Projects/Alpha.md")],
+      widening: "used",
+    });
+    expect(report.findings).toEqual([]);
+  });
+
+  test("the widening status is absent unless passed, and a clean used widening says nothing", () => {
+    const rel = writeNote("Notes/Beta.md", note("Beta"));
+    const off = lintWrittenPages(vault, [rel], READ_ALL);
+    expect("widening" in off).toBe(false);
+    const used = lintWrittenPages(vault, [rel], { ...READ_ALL, widening: "used" });
+    expect(used.widening).toBe("used");
+    expect(pageLintField(used)).toEqual({});
+  });
+
+  test("an unavailable index is stated on the receipt", () => {
+    const rel = writeNote("Notes/Beta.md", note("Beta"));
+    const report = lintWrittenPages(vault, [rel], {
+      ...READ_ALL,
+      extraCandidates: [],
+      widening: "index_unavailable",
+    });
+    expect(pageLintField(report)).toMatchObject({
+      [PAGE_LINT_KEY]: { widening: "index_unavailable" },
+    });
   });
 });
 
@@ -572,6 +687,7 @@ describe("lintPagesWithContext - caller-supplied near-duplicate candidates", () 
       basenames: new Set<string>(),
       vocabulary: loadSchemaPack(vault).vocabulary,
       nearDuplicateCandidates: new Map([["Notes", candidates]]),
+      readable: READ_ALL_REFS,
       mergedLinks: { resolve: () => ({ canonical: null, unresolvable: null }) },
     };
     const report = lintPagesWithContext(vault, ctx, [rel]);
@@ -596,6 +712,7 @@ describe("lintPagesWithContext - caller-supplied near-duplicate candidates", () 
       basenames: new Set<string>(),
       vocabulary: loadSchemaPack(vault).vocabulary,
       nearDuplicateCandidates: new Map([["Notes", candidates]]),
+      readable: READ_ALL_REFS,
       mergedLinks: { resolve: () => ({ canonical: null, unresolvable: null }) },
     };
     expect(lintPagesWithContext(vault, ctx, [rel]).findings).toEqual([]);

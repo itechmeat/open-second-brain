@@ -7,7 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -17,6 +17,8 @@ import { NOTES_TOOLS } from "../../src/mcp/brain/notes-tools.ts";
 import { WRITE_BATCH_TOOLS } from "../../src/mcp/brain/write-batch-tools.ts";
 import { resolveNextStep } from "../../src/core/brain/next-step.ts";
 import { PAGE_LINT_KEY } from "../../src/core/brain/page-lint.ts";
+import { resolveSearchConfig } from "../../src/core/search/index.ts";
+import { indexVault } from "../../src/core/search/indexer.ts";
 import { WRITE_BINDING_REFUSED_CODE } from "../../src/core/write-binding/index.ts";
 import { MCPError } from "../../src/mcp/protocol.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
@@ -303,5 +305,67 @@ describe("brain_create_note - the lint attached to the receipt", () => {
     });
     expect(res).toMatchObject({ created: false, outcome: "skipped" });
     expect(PAGE_LINT_KEY in res).toBe(false);
+  });
+});
+
+/**
+ * Opt-in widening of the near-duplicate hint beyond the written page's
+ * directory, through the keyword index. With the key off the receipt is
+ * exactly what shipped; with it on, a create in another folder reports the
+ * earlier page and names the method.
+ */
+describe("brain_create_note - widened near-duplicate hint", () => {
+  const BODY = "orchard lantern copper meadow violet harbor";
+
+  async function seedIndexedEarlierPage(): Promise<void> {
+    await handler(ctx, { path: "Projects/Earlier.md", frontmatter: { title: "E" }, content: BODY });
+    await indexVault(resolveSearchConfig({ vault, configPath: ctx.configPath! }), { force: true });
+  }
+
+  function enableWidening(): void {
+    appendFileSync(ctx.configPath!, "near_duplicate_write_widening_enabled: true\n");
+  }
+
+  test("with the key on, a create in another folder reports the earlier page", async () => {
+    enableWidening();
+    await seedIndexedEarlierPage();
+    const res = (await handler(ctx, {
+      path: "Notes/Later.md",
+      frontmatter: { title: "L" },
+      content: BODY,
+    })) as Record<string, unknown>;
+    const lint = res[PAGE_LINT_KEY] as {
+      findings: ReadonlyArray<Record<string, unknown>>;
+      widening: string;
+    };
+    expect(lint.widening).toBe("used");
+    expect(lint.findings).toEqual([
+      expect.objectContaining({
+        code: "near-duplicate",
+        page: "Notes/Later.md",
+        path: "Projects/Earlier.md",
+        message: expect.stringContaining("method=lexical"),
+      }),
+    ]);
+  });
+
+  test("with the key off, the receipt is unchanged", async () => {
+    await seedIndexedEarlierPage();
+    const res = (await handler(ctx, {
+      path: "Notes/Later.md",
+      frontmatter: { title: "L" },
+      content: BODY,
+    })) as Record<string, unknown>;
+    expect(Object.keys(res)).toEqual(["created", "outcome", "path", "write_id"]);
+  });
+
+  test("with the key on and no index, the receipt says widening did not run", async () => {
+    enableWidening();
+    const res = (await handler(ctx, {
+      path: "Notes/Later.md",
+      frontmatter: { title: "L" },
+      content: BODY,
+    })) as Record<string, unknown>;
+    expect(res[PAGE_LINT_KEY]).toMatchObject({ total: 0, widening: "index_unavailable" });
   });
 });

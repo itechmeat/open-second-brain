@@ -40,8 +40,21 @@ import {
   type NoteWriteAudit,
   type WriteBatchOpResult,
 } from "../../core/brain/write-batch.ts";
+import type { ReadableRef } from "../../core/brain/near-duplicate.ts";
 import { nextCommandField } from "../../core/brain/next-step.ts";
-import { lintWrittenPages, pageLintField, type PageLintField } from "../../core/brain/page-lint.ts";
+import {
+  lintWrittenPages,
+  pageLintField,
+  type LintWrittenPagesOptions,
+  type PageLintField,
+} from "../../core/brain/page-lint.ts";
+import {
+  collectWideningCandidates,
+  type WideningResult,
+} from "../../core/brain/page-lint-widening.ts";
+import { resolveNearDuplicateWriteWideningEnabled } from "../../core/config.ts";
+import { resolveSearchConfig } from "../../core/search/index.ts";
+import type { ResolvedSearchConfig } from "../../core/search/types.ts";
 import {
   WRITE_PATH_ADVISORY_KEY,
   type WritePathAdvisoryField,
@@ -272,7 +285,7 @@ async function toolBrainCreateNote(
     // has always returned and stays in lockstep with it, so a skip can
     // never be read as a create by either field. A skip authored no
     // bytes, so it names no page for the lint.
-    return noteWriteResult(ctx, res.created ? [res.path] : [], {
+    return await noteWriteResult(ctx, res.created ? [res.path] : [], {
       created: res.created,
       outcome: res.outcome,
       path: res.path,
@@ -480,17 +493,54 @@ function runSingleWrite<K extends SingleNoteOperation["kind"]>(
  *
  * The lint answers at the caller's reach: a near-duplicate sibling the
  * caller may not read is never named, scored or counted on the receipt.
+ *
+ * With `near_duplicate_write_widening_enabled` on, the near-duplicate hint
+ * also compares the pages with keyword-index candidates from other
+ * directories ({@link collectWideningCandidates}), and the report states
+ * whether that ran. With the key off nothing is opened and the receipt is
+ * exactly the one that shipped before.
  */
-export function noteWriteResult<T extends Record<string, unknown>>(
+export async function noteWriteResult<T extends Record<string, unknown>>(
   ctx: ServerContext,
   pages: ReadonlyArray<string>,
   receipt: T,
-): T & PageLintField {
+): Promise<T & PageLintField> {
   if (pages.length === 0) return receipt;
-  return {
-    ...receipt,
-    ...pageLintField(lintWrittenPages(ctx.vault, pages, { readable: readableAtContextReach(ctx) })),
-  };
+  const readable = readableAtContextReach(ctx);
+  const widening = await widenNearDuplicates(ctx, pages, readable);
+  const opts: LintWrittenPagesOptions =
+    widening === undefined
+      ? { readable }
+      : { readable, extraCandidates: widening.candidates, widening: widening.status };
+  return { ...receipt, ...pageLintField(lintWrittenPages(ctx.vault, pages, opts)) };
+}
+
+/** What a widening reports when the search config itself cannot be resolved. */
+const WIDENING_INDEX_UNAVAILABLE: WideningResult = Object.freeze({
+  status: "index_unavailable",
+  candidates: Object.freeze([]),
+});
+
+/**
+ * Keyword-index candidates for the near-duplicate hint, or `undefined`
+ * when widening is off. A search config that does not resolve leaves no
+ * index to read, which is the same named `index_unavailable` an index
+ * that will not open reports: the write is never failed by its hint.
+ */
+async function widenNearDuplicates(
+  ctx: ServerContext,
+  pages: ReadonlyArray<string>,
+  readable: ReadableRef,
+): Promise<WideningResult | undefined> {
+  const configPath = ctx.configPath ?? undefined;
+  if (!resolveNearDuplicateWriteWideningEnabled(configPath)) return undefined;
+  let config: ResolvedSearchConfig;
+  try {
+    config = resolveSearchConfig({ vault: ctx.vault, configPath });
+  } catch {
+    return WIDENING_INDEX_UNAVAILABLE;
+  }
+  return collectWideningCandidates(config, ctx.vault, pages, readable);
 }
 
 export const NOTES_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
