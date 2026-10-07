@@ -43,8 +43,13 @@ export const CHMOD_CANNOT_DENY = RUNNING_AS_ROOT || IS_WINDOWS;
  * three Windows variables under `home`, the layout Windows itself uses.
  */
 export function homeEnv(home: string): Record<string, string> {
-  if (!IS_WINDOWS) return { HOME: home };
+  // The preload pins freshen on read off for this process; a child spawned
+  // with a minimal environment needs it pinned too, or a search it runs
+  // starts real background indexers into a vault the test then deletes.
+  const freshenOff = { OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S: "0" };
+  if (!IS_WINDOWS) return { HOME: home, ...freshenOff };
   return {
+    ...freshenOff,
     HOME: home,
     USERPROFILE: home,
     LOCALAPPDATA: join(home, "AppData", "Local"),
