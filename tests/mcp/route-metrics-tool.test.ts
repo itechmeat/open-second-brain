@@ -178,3 +178,30 @@ describe("route latency capture through tools/call", () => {
     expect(response.error ?? response.result?.isError).toBeTruthy();
   });
 });
+
+const FEEDBACK_ARGS = {
+  topic: "route-stage-probe",
+  signal: "positive",
+  principle: "Keep route stage timings out of tool responses entirely.",
+};
+
+describe("route scope stages through callTool", () => {
+  test("gate on: a brain_feedback call yields one record and no decision_ms", async () => {
+    writeConfig(true);
+    const server = new MCPServer({ vault, configPath });
+    const result = await server.callTool("brain_feedback", FEEDBACK_ARGS);
+    expect(JSON.stringify(result)).not.toContain("stages");
+
+    const records = listMcpRouteLatency(vault, { tool: "brain_feedback" });
+    expect(records).toHaveLength(1);
+    expect(records[0]!.payload["status"]).toBe("ok");
+    expect(Object.hasOwn(records[0]!.payload, "decision_ms")).toBe(false);
+  });
+
+  test("gate off: brain_feedback writes no record", async () => {
+    writeConfig(false);
+    const server = new MCPServer({ vault, configPath });
+    await server.callTool("brain_feedback", FEEDBACK_ARGS);
+    expect(listMcpRouteLatency(vault)).toHaveLength(0);
+  });
+});
