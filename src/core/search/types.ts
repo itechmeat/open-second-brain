@@ -314,6 +314,12 @@ export interface IndexStats {
    */
   readonly aliasResolved: number;
   /**
+   * True when the run added, updated and deleted no document and was not
+   * forced, so the link and alias resolution passes - a pure function of
+   * the documents and their links - were skipped (index-freshness).
+   */
+  readonly linkResolutionSkipped: boolean;
+  /**
    * Backend that processed this run, resolved lazily after content
    * detection (offline code-only extraction, t_85252236). `"offline"`
    * when only the deterministic lexical pipeline ran and no provider

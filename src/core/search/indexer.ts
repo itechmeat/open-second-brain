@@ -187,6 +187,7 @@ interface MutableStats {
   relationViolations: IndexStats["relationViolations"];
   tierDrift: IndexStats["tierDrift"];
   aliasResolved: number;
+  linkResolutionSkipped: boolean;
   eventAnchorsPending: number;
   backend: IndexStats["backend"];
   deferredReason: IndexStats["deferredReason"];
@@ -216,6 +217,7 @@ function newStats(): MutableStats {
     relationViolations: [],
     tierDrift: [],
     aliasResolved: 0,
+    linkResolutionSkipped: false,
     // Counted at the end of the run, once every changed document has
     // been upserted: what is left is what this run did not reach.
     eventAnchorsPending: 0,
@@ -257,6 +259,7 @@ function freezeStats(s: MutableStats, durationMs: number): IndexStats {
     relationViolations: Object.freeze([...s.relationViolations]),
     tierDrift: Object.freeze([...s.tierDrift]),
     aliasResolved: s.aliasResolved,
+    linkResolutionSkipped: s.linkResolutionSkipped,
     eventAnchorsPending: s.eventAnchorsPending,
     backend: s.backend,
     deferredReason: s.deferredReason,
@@ -672,10 +675,20 @@ async function indexIntoRun(
       }
     }
 
-    store.resolveLinkTargets();
-    // Alias post-pass (v7): exact path matches above always win; this
-    // only fills still-unresolved slash-free targets from doc_aliases.
-    stats.aliasResolved = store.resolveAliasTargets();
+    // Link and alias resolution are a pure function of the documents and
+    // their links. A run that changed no document (and was not forced)
+    // would only rewrite every link row to the value it already holds -
+    // the alias pass resets and re-sets each alias-resolved link - which
+    // is what made a no-change run write to disk. Skipped then; the
+    // constraint and tier passes below still run.
+    if (stats.added + stats.updated + stats.deleted === 0 && opts?.force !== true) {
+      stats.linkResolutionSkipped = true;
+    } else {
+      store.resolveLinkTargets();
+      // Alias post-pass (v7): exact path matches above always win; this
+      // only fills still-unresolved slash-free targets from doc_aliases.
+      stats.aliasResolved = store.resolveAliasTargets();
+    }
 
     // Link-constraint materialization post-pass
     // (write-time-integrity-governance): recompute every typed edge's
