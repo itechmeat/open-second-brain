@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.74.0] - 2026-10-07
+
+Open Second Brain now defends against near-duplicate memory at the points a fact enters or leaves the vault: one reach-aware near-duplicate kernel scores the note-write receipt hint, the feedback advisory and a new retire-sibling list, so a context-driven retire names the active paraphrases that would otherwise survive it; the receipt hint can look beyond the written page's directory through the keyword index; every receipt lint finding answers at the caller's reach; extract-signals grounds time bounds in each turn's timestamp and refuses a payload that repeats a topic; and route metrics time each write stage without carrying any content.
+
+### Added
+
+- **A reach-aware near-duplicate kernel.** One pure lookup (`src/core/brain/near-duplicate.ts`) scores the write-receipt hint, the `brain_feedback` write-conflict advisory and the retire siblings over one named threshold table. Its `readable` predicate is required and runs before anything else, so a page the caller may not read is neither scored nor counted.
+- **Retire siblings.** A context-driven retire (`superseded-by-context`, `rebutted`, `quarantine-violated`, `user-rejected`) now nominates the active preferences that resemble it, at 0.7 Jaccard or above on the principle. `brain_review_candidates` returns them as an additive `retire_siblings` array of `{ retiring_id, sibling_id, score, method }` pairs, the dream run summary carries the same key, and `o2b brain reject` lists the siblings of the rejected preference with the command that rejects each (`--json` adds `retire_siblings`). The list is advisory and accept-gated: nothing is retired by it, and each pair is accepted through `brain_apply_evidence` with `result: outdated` or `o2b brain reject`. Decay retires, merges and retires the confirmed-evidence gate holds back nominate nothing, and a pair is kept only when the caller may read both preferences.
+- **A stored-vector tier for retire siblings.** With a search config, `brain_review_candidates` also compares the stored content vectors of the retiring and sibling preferences and adds pairs at 0.92 cosine or above as `method: "embedding"`, with zero embedding spend. `retire_siblings_semantic` reports the tier's outcome (`used`, `index_missing`, `vec_unavailable`, `not_embedded`, `model_mismatch`), and the tier probes only the retires the answer keeps.
+- **`near_duplicate_retire_siblings_enabled`.** The key (env `OPEN_SECOND_BRAIN_NEAR_DUPLICATE_RETIRE_SIBLINGS_ENABLED`, default off) gates every retire-sibling surface; off, the dream summary, `brain_review_candidates` and `o2b brain reject` are unchanged.
+- **A wider near-duplicate receipt hint.** With `near_duplicate_write_widening_enabled` (env `OPEN_SECOND_BRAIN_NEAR_DUPLICATE_WRITE_WIDENING_ENABLED`, default off), the advisory near-duplicate hint on note-write receipts also compares the written pages with candidates from other directories, pulled from the keyword index (the top 20 chunks per written page) and re-read from disk, at no embedding spend. An index that cannot be opened or queried never fails the write: the lint report carries `widening: "index_unavailable"` and a `widening_detail` code naming the failure, and the same-directory hint still runs.
+- **Turn timestamps in extract-signals.** Every `turns_mined` entry carries the turn's stored `timestamp` (`""` when the source has none), and each prompt line names it. The envelope asks for a time bound as an ISO 8601 date or interval resolved against the stating turn's timestamp, in language-neutral terms, and the dream pass turns that bound into the preference's `valid_from` / `valid_until`.
+- **Write-stage timings on route metrics.** `mcp_route_latency` records gain an optional `stages` array of `{ name, ms }` entries from a closed allowlist of nine stage names (`validate`, `idempotency_lookup`, `near_duplicate_lookup`, `document_write`, `idempotency_remember`, `log_append`, `preference_write`, `write_receipt`, `lint`); any other name and any negative or non-finite value is dropped, so no content reaches the record. Stages appear only in the continuity record, never in a tool response, and `brain_route_metrics` `summary` rolls them up per route (count, average and p95 per stage).
+
+### Changed
+
+- **Extract payloads that repeat a topic are refused.** Two items sharing a `topic` refuse the whole payload, naming both items, and nothing is written.
+- **Docs:** `docs/mcp.md` gains the retire siblings, the receipt widening and reach, the `turns_mined` timestamps and the write stages, `docs/observability.md` the `stages` field, its allowlist and the routes that emit it, and `docs/cli-reference.md` the extract-signals timestamps and topic refusal; the `o2b brain reject` help names the retire siblings.
+
+### Fixed
+
+- **Every receipt lint finding answers at the caller's reach.** Note-write receipts used to apply the caller's reach to the near-duplicate check only; the broken-wikilink and merged-link checks now treat a withheld page as absent too, so a wikilink to it reads as broken and a merge chain ends at its first withheld hop.
+
 ## [1.73.0] - 2026-10-06
 
 Open Second Brain now makes every query embed honest and every upgrade safe: one query-embed gateway applies the caller's reach and the embedding price gate before any provider is called, for the search lane behind six MCP tools and two hooks and for the `brain_context_pack` semantic belief order, and fits the query, instruction prefix included, to the model's input window, disclosing a refusal or a cut by trail code; an operator can declare the input window of an uncurated model and send extra request fields to an OpenAI-compatible endpoint; recall feedback, benchmark, eval and tune reports name the degradations their searches met; and `o2b brain upgrade` and the automatic upgrade worker apply exactly the plan they computed, refusing a managed file edited in between instead of overwriting it.
@@ -8232,6 +8255,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.74.0]: https://github.com/itechmeat/open-second-brain/compare/v1.73.1...v1.74.0
 [1.73.0]: https://github.com/itechmeat/open-second-brain/compare/v1.72.0...v1.73.0
 [1.72.0]: https://github.com/itechmeat/open-second-brain/compare/v1.71.0...v1.72.0
 [1.71.0]: https://github.com/itechmeat/open-second-brain/compare/v1.70.0...v1.71.0
