@@ -469,8 +469,7 @@ nodes:
 - id: merge_gate
   title: Merge the green PR (authorized since 2026-10-06)
   type: agent_task
-  prompt: 'Merge the PR this wave prepared. The operator authorized agent merges on 2026-10-06 ("мержить
-    можно без апрува, на это теперь есть права"): no human gate here.
+  prompt: 'Merge the PR this wave prepared. The operator authorized agent merges on 2026-10-06 ("merging without approval is allowed; the rights are in place now"): no human gate here.
 
 
     Read the PR number and URL from the first line of the PR preparation answer in the run context (PR:
@@ -499,7 +498,8 @@ nodes:
     "$body"`, then
 
     `gh pr merge <n> --squash --admin --match-head-commit <head> --subject "<PR title> (#<n>)" --body-file
-    "$body"` in the same shell call (a private file per run, so parallel waves never share it).
+    "$body" && rm -f "$body"` in the same shell call (a private file per run, so parallel waves never
+    share it, and the file is removed after the merge).
 
     The subject is the PR title exactly as GitHub shows it with the (#N) suffix; the body is the PR description,
     so no commit spam reaches main.

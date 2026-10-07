@@ -24,7 +24,7 @@ cd "$root"
 load_ctx
 command -v bun >/dev/null 2>&1 || die "bun is not on PATH"
 use_ci_bun
-py=$(ci_python)
+py=$(ci_python) || exit 2
 
 logs="$CTX_DIR/qa-logs"
 rm -rf "$logs"

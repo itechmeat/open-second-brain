@@ -823,6 +823,12 @@ edges:
     node: ci_wait
     pattern: 'CI-GATE: red'
 - from: ci_check
+  to: blocked
+  condition:
+    type: node_status
+    node: ci_wait
+    equals: failure
+- from: ci_check
   to: bot_review
   condition:
     type: output_field
