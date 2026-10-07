@@ -912,6 +912,17 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "this tool's own per-device state, never a note.",
   },
 
+  "src/core/search/freshen.ts": {
+    categories: [C.lockPrimitive, C.retentionDelete],
+    calls: ["unlinkSync", "writeFileSync"],
+    reason:
+      "the freshen-on-read claim is an exclusive create (`wx`) of a token file in " +
+      "`.open-second-brain/`, released or taken over by unlinking it; routing it through " +
+      "the atomic writer would lose the exclusivity that keeps concurrent readers from " +
+      "starting a background index run each. The run's state file goes through " +
+      "`atomicWriteFileSync`. Both are this tool's own per-device state, never a note.",
+  },
+
   "src/core/state/migrate.ts": {
     categories: [C.archiveTransfer, C.lifecycleMove, C.retentionDelete],
     calls: ["copyFileSync", "rmSync", "rmdirSync"],
@@ -1221,8 +1232,10 @@ const DIRECT_ROWS = ROWS.filter((row) => row.directCalls.length > 0);
  * removes the failed-upgrade marker once nothing is pending.
  * 75 -> 76: the doctor self-test seeds and journals a throwaway store in
  * temp storage and removes the tree when the run ends.
+ * 76 -> 77: `src/core/search/freshen.ts` claims and releases the
+ * freshen-on-read claim (an exclusive create) in `.open-second-brain/`.
  */
-const DIRECT_WRITE_ROWS = 76;
+const DIRECT_WRITE_ROWS = 77;
 
 /**
  * Measured modules reaching a write through a shared helper. An equality.
@@ -1285,8 +1298,11 @@ const DIRECT_WRITE_ROWS = 76;
  * candidates through the shared atomic JSONL writer.
  * 108 -> 109: `src/core/search/session-focus.ts` writes the focus through
  * `atomicWriteText` (mode 0600, a leaf link is replaced, not followed).
+ *
+ * 109 -> 110: `src/core/search/freshen.ts` writes the freshen-on-read state
+ * file through `atomicWriteFileSync`.
  */
-const SHARED_HELPER_ROWS = 109;
+const SHARED_HELPER_ROWS = 110;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1357,8 +1373,9 @@ const STAMPED_PATHS: ReadonlySet<string> = new Set(
  * 72 -> 73: the payload registry's touch (metadata only).
  * 73 -> 74: the automatic-upgrade lock and marker removal (state, not notes).
  * 74 -> 75: the doctor self-test's throwaway-store writes (temp storage).
+ * 75 -> 76: the freshen-on-read claim and its release (state, not notes).
  */
-const UNSTAMPED_DIRECT_ROWS = 75;
+const UNSTAMPED_DIRECT_ROWS = 76;
 
 /**
  * Shared-helper write sites the stamp does not reach, measured the same
@@ -1371,9 +1388,10 @@ const UNSTAMPED_DIRECT_ROWS = 75;
  * and the dedup index cache, a derived file outside the vault (102 -> 103),
  * and the orphan-repair detach (103 -> 104). 104 -> 105: the repair lane
  * stages hub candidates through the shared atomic JSONL writer. 105 -> 106:
- * the session focus writes through the shared atomic text writer.
+ * the session focus writes through the shared atomic text writer. 106 -> 107:
+ * the freshen-on-read state file writes through the shared atomic writer.
  */
-const UNSTAMPED_SHARED_ROWS = 106;
+const UNSTAMPED_SHARED_ROWS = 107;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {

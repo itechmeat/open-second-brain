@@ -15,9 +15,10 @@
  * cost is one state-file read, one lock probe and one exclusive create.
  */
 import { randomUUID } from "node:crypto";
-import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { o2bCommand } from "../maintenance/o2b-command.ts";
 import { isWriterLockHeld } from "./store/writer-lock.ts";
 import type { ResolvedSearchConfig } from "./types.ts";
@@ -192,12 +193,9 @@ export function readFreshenState(dir: string): FreshenState {
   }
 }
 
-/** Write the state file atomically (temp file and rename). */
+/** Write the state file atomically. */
 export function writeFreshenState(dir: string, state: FreshenState): void {
-  const path = join(dir, FRESHEN_STATE_FILE);
-  const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(state, null, 2) + "\n");
-  renameSync(tmp, path);
+  atomicWriteFileSync(join(dir, FRESHEN_STATE_FILE), JSON.stringify(state, null, 2) + "\n");
 }
 
 /**

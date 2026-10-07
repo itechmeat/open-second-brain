@@ -123,6 +123,7 @@ export const STATE_SURFACE_ID = Object.freeze({
   hookAudit: "hook_audit",
   hookSessionState: "hook_session_state",
   selfHealUpgradeMarker: "self_heal_upgrade_marker",
+  freshenState: "freshen_state",
   watchdogAudit: "watchdog_audit",
   injectFailopenCache: "inject_failopen_cache",
   aiderContext: "aider_context_artifact",
@@ -285,6 +286,7 @@ const MAINTENANCE_LEASE_FILE = "maintenance.sqlite";
 const MAINTENANCE_JOURNAL_FILE = `${MAINTENANCE_JOURNAL_STEM}.${JSONL_LEDGER_EXT}`;
 const HOOK_STATE_DIR = "hook-state";
 const SELF_HEAL_UPGRADE_MARKER_FILE = "self-heal-upgrade.json";
+const FRESHEN_STATE_FILE = "freshen-state.json";
 const INJECT_CACHE_DIR = "inject-cache";
 const AIDER_CONTEXT_FILE = "aider-context.md";
 const DREAM_RUNS_DIR = "dream-runs";
@@ -592,6 +594,21 @@ export const STATE_SURFACES: ReadonlyArray<StateSurface> = Object.freeze([
       "and when the next automatic attempt is due. Deleting it ends the cooldown early and " +
       "drops the failure from `o2b doctor`; the next start simply tries again.",
     sources: ["src/core/maintenance/self-heal-upgrade-state.ts"],
+  },
+  {
+    id: STATE_SURFACE_ID.freshenState,
+    label: "freshen-on-read state",
+    tier: STATE_TIER.derived,
+    derive: derivedStore(FRESHEN_STATE_FILE),
+    override_env: null,
+    override_config_key: null,
+    carries_memory: false,
+    reason:
+      "What the last background index run started by a stale read did on this device: its " +
+      "outcome, how many documents it changed, the failure streak and when the next run may " +
+      "start. Deleting it ends any backoff early and forgets the last outcome; the next stale " +
+      "read simply starts a run again.",
+    sources: ["src/core/search/freshen.ts"],
   },
   {
     id: STATE_SURFACE_ID.watchdogAudit,

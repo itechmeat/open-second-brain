@@ -30,6 +30,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { selfHealUpgradeMarkerPath } from "../../../src/core/maintenance/self-heal-upgrade-state.ts";
+import { FRESHEN_STATE_FILE } from "../../../src/core/search/freshen.ts";
 import { chmodSync, existsSync, mkdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 
@@ -262,6 +263,7 @@ const RESOLVER_BINDINGS: ReadonlyArray<readonly [StateSurfaceId, (vault: string)
     ["hook_audit", (v) => hookAuditDir(v)],
     ["hook_session_state", (v) => dirname(hookStateFilePath(v, null))],
     ["self_heal_upgrade_marker", (v) => selfHealUpgradeMarkerPath(v)],
+    ["freshen_state", (v) => join(v, ".open-second-brain", FRESHEN_STATE_FILE)],
     ["aider_context_artifact", (v) => resolveAiderSidecarPath({ vault: v } as InstallEnv, {})],
     // --- Under `<vault>/Brain/` --------------------------------------------
     ["brain_log", (v) => brainDirs(v).log],
