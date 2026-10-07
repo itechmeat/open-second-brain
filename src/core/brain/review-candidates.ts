@@ -93,7 +93,8 @@ export interface ReviewCandidatesReport {
   readonly retire_siblings?: ReadonlyArray<RetireSibling>;
   /**
    * Outcome of the stored-vector tier. Present only when retire siblings
-   * are computed with a search config and a context-driven retire exists.
+   * are computed with a search config and a context-driven retire passes
+   * `retiringVisible`.
    */
   readonly retire_siblings_semantic?: StoredVectorStatus;
 }
@@ -107,6 +108,14 @@ export interface BuildReviewCandidatesOptions {
    * so the clusters, counts and intent reviews fold no withheld record.
    */
   readonly readable?: (rel: string) => boolean;
+  /**
+   * May the caller see this retiring `pref-*` id? A caller whose answer
+   * drops a retire row passes the same test here, so the stored-vector
+   * tier probes only the retires that answer keeps and
+   * `retire_siblings_semantic` folds no hidden probe. Omitted, every
+   * retire is probed.
+   */
+  readonly retiringVisible?: (prefId: string) => boolean;
   /**
    * When provided, annotate the report with surprisal novelty over
    * the existing vec index (t_fddfe64a). Read-only; absent or
@@ -237,7 +246,8 @@ async function projectRetireSiblings(
   const lexical = summary.retire_siblings ?? [];
   const retiringIds = summary.retired
     .filter((r) => RETIRE_SIBLING_TRIGGER_REASONS.has(r.reason))
-    .map((r) => `pref-${r.id.replace(/^ret-/, "")}`);
+    .map((r) => `pref-${r.id.replace(/^ret-/, "")}`)
+    .filter((id) => opts.retiringVisible?.(id) ?? true);
   if (opts.searchConfig === undefined || retiringIds.length === 0) return { siblings: lexical };
 
   const prefsRel = vaultRelative(brainDirs(vault).preferences, vault);

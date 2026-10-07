@@ -288,6 +288,24 @@ describe("brain_review_candidates retire_siblings answer at the caller's reach",
     expect(local).toContain(`"sibling_id":"pref-${RETIRED_SLUG}"`);
   });
 
+  test("remote reach: a retire hidden by its withheld ret- spelling moves no semantic status", async () => {
+    // The only context-driven retire is the readable `pref-bygone`, whose
+    // withheld `ret-bygone` hides it; the absent vault has neither.
+    process.env[SIBLINGS_FLAG] = "1";
+    const withheldBase = mkdtempSync(join(tmpdir(), "o2b-review-semantic-reach-"));
+    const absentBase = mkdtempSync(join(tmpdir(), "o2b-review-semantic-reach-"));
+    bases.push(withheldBase, absentBase);
+    const withheld = buildReachLogFixture(withheldBase, true);
+    rule(withheld.vault, RETIRED_SLUG, SIBLING_RULE, false);
+    evidence(withheld.vault, RETIRED_SLUG, "outdated");
+    const absent = buildReachLogFixture(absentBase, false);
+    const local = await answer(withheld, "brain_review_candidates", TRANSPORT_REACH.local);
+    expect(local).toContain('"retire_siblings_semantic"');
+    const remote = await answer(withheld, "brain_review_candidates");
+    expect(remote).not.toContain("retire_siblings_semantic");
+    expect(remote).toBe(await answer(absent, "brain_review_candidates"));
+  });
+
   test("local control: the operator's own shell lists every pair", async () => {
     process.env[SIBLINGS_FLAG] = "1";
     const local = await answer(

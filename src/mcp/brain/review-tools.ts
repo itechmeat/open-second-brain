@@ -115,16 +115,6 @@ async function toolBrainReviewCandidates(
   // over inbox signal clusters keyed by topic - count no withheld signal,
   // and no withheld preference routes a cluster.
   const readable = readableAtContextReachOrUndefined(ctx);
-  const report = await buildReviewCandidates(ctx.vault, {
-    ...(readable !== undefined ? { readable } : {}),
-    // The projection is read-only, but it runs a full dry-run
-    // consolidation pass to produce it - the same pass, and so the same
-    // budget, as `brain_dream`.
-    safeguard: toolSafeguard(ctx, OPERATION.dream),
-    ...(onProgress ? { onProgress } : {}),
-    ...(nowDate ? { now: nowDate } : {}),
-    ...(searchConfig !== undefined ? { searchConfig } : {}),
-  });
   // The projected rows name preferences that EXIST by the id they would
   // get after the pass, so `ret-<slug>` is resolved back through the
   // shared slug fold and both spellings are asked about
@@ -134,6 +124,19 @@ async function toolBrainReviewCandidates(
     const slug = brainArtifactSlug(id);
     return [`pref-${slug}`, `ret-${slug}`];
   };
+  const report = await buildReviewCandidates(ctx.vault, {
+    ...(readable !== undefined ? { readable } : {}),
+    // The stored-vector tier probes only the retires `would_retire` keeps,
+    // so `retire_siblings_semantic` reflects no hidden retire.
+    retiringVisible: (id) => view.row(...bothSpellings(id)),
+    // The projection is read-only, but it runs a full dry-run
+    // consolidation pass to produce it - the same pass, and so the same
+    // budget, as `brain_dream`.
+    safeguard: toolSafeguard(ctx, OPERATION.dream),
+    ...(onProgress ? { onProgress } : {}),
+    ...(nowDate ? { now: nowDate } : {}),
+    ...(searchConfig !== undefined ? { searchConfig } : {}),
+  });
   // A retire-sibling pair names two preferences; it is kept only when the
   // caller may see both, in both spellings, and the list is filtered
   // before anything is counted, so a withheld page moves no number.
