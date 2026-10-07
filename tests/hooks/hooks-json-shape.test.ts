@@ -167,7 +167,7 @@ describe("hooks.json subagent-inject entry", () => {
     expect(hooks[hooks.indexOf(carrier) - 1]!.command).toContain("o2b-hook post-write-reminder");
     expect(carrier.type).toBe("command");
     expect(carrier.timeout).toBe(10);
-    expect(carrier.statusMessage).toBe("OSB: delivering standing rules to a subagent");
+    expect(carrier.statusMessage).toBe("OSB: delivering context to a subagent");
     // Fail-soft shape identical to its sibling: same wrapper, same PATH
     // fallback, same never-blocks tail, only the dispatch name differs.
     // Both occurrences of the name (plugin-root branch and fallback) must

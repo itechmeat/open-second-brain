@@ -25,7 +25,7 @@
             "type": "command",
             "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" subagent-inject; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook subagent-inject; exit 0",
             "timeout": 10,
-            "statusMessage": "OSB: delivering standing rules to a subagent"
+            "statusMessage": "OSB: delivering context to a subagent"
           }
         ]
       },
@@ -142,7 +142,7 @@
             "type": "command",
             "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" subagent-inject; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook subagent-inject; exit 0",
             "timeout": 10,
-            "statusMessage": "OSB: delivering standing rules to a subagent"
+            "statusMessage": "OSB: delivering context to a subagent"
           }
         ]
       }

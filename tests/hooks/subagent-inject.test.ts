@@ -23,7 +23,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -34,7 +34,12 @@ import {
 } from "../../hooks/lib/injection-ledger.ts";
 import { renderStandingBlock } from "../../hooks/lib/standing-block.ts";
 import { hookStateFilePath } from "../../hooks/lib/session-state.ts";
+import { budgetActiveBody } from "../../src/core/brain/active-budget.ts";
+import { writeVaultPointer } from "../../src/core/brain/portability/pointer.ts";
+import { INJECT_BUDGET_CHARS_DEFAULT } from "../../src/core/brain/policy.ts";
+import { readScopedRules, scopedRuleKey } from "../../src/core/brain/scoped-rules.ts";
 import { STANDING_RULES_MAX_CHARS_DEFAULT } from "../../src/core/brain/standing-rules.ts";
+import { parseFrontmatterText } from "../../src/core/vault.ts";
 import { CHMOD_CANNOT_DENY, homeEnv } from "../helpers/platform.ts";
 
 const HOOK = resolve(
@@ -51,22 +56,83 @@ const TOOL_USE_ID = "toolu-01";
 
 let vault: string;
 let configHome: string;
+/** Linked project dirs created by {@link linkedProject}; removed after each test. */
+let projects: string[];
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-subagent-inject-vault-"));
   configHome = mkdtempSync(join(tmpdir(), "o2b-subagent-inject-cfg-"));
+  projects = [];
   mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 
 afterEach(() => {
   rmSync(vault, { recursive: true, force: true });
   rmSync(configHome, { recursive: true, force: true });
+  for (const dir of projects) rmSync(dir, { recursive: true, force: true });
 });
 
 function writeRules(body: string): string {
   const path = join(vault, "Brain", "standing-rules.md");
   writeFileSync(path, body, "utf8");
   return path;
+}
+
+const ACTIVE_BODY =
+  "---\nkind: brain-active\ngenerated_at: 2026-05-15T10:00:00Z\n---\n\n" +
+  "# Active Brain Preferences\n\n## Confirmed (1)\n\n- `pref-foo` — Rule body\n";
+
+const LESSONS_BODY =
+  "---\nkind: brain-lessons\ngenerated_at: 2026-05-15T10:00:00Z\n---\n\n" +
+  "# Lessons\n\n## Dead ends (1)\n\n- Do not cache scoped rules vault-wide.\n";
+
+function writeActive(body: string): void {
+  writeFileSync(join(vault, "Brain", "active.md"), body, "utf8");
+}
+
+function writeLessons(body: string): void {
+  writeFileSync(join(vault, "Brain", "lessons.md"), body, "utf8");
+}
+
+/** The active.md body as the assembly renders it: frontmatter dropped, budget applied. */
+function expectedActiveBody(budget: number): string {
+  const raw = readFileSync(join(vault, "Brain", "active.md"), "utf8");
+  const [, fmBody] = parseFrontmatterText(raw);
+  return budgetActiveBody(fmBody.trim(), budget);
+}
+
+/** The lessons.md body as the assembly renders it, or "" without the file. */
+function expectedLessonsBody(budget: number): string {
+  try {
+    const raw = readFileSync(join(vault, "Brain", "lessons.md"), "utf8");
+    const [, fmBody] = parseFrontmatterText(raw);
+    return budgetActiveBody(fmBody.trim(), budget);
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * The budgeted memory context the way the assembly joins it: the runtime
+ * notices are disabled for the tests that call this, the active body
+ * leads and the lessons body rides along.
+ */
+function expectedMemoryContext(budget: number): string {
+  return [expectedActiveBody(budget), expectedLessonsBody(budget)]
+    .filter((block) => block.length > 0)
+    .join("\n\n");
+}
+
+/**
+ * A project directory OUTSIDE the vault, linked by a vault pointer, as
+ * the scoped-rules project axis resolves it. The scoped rule written for
+ * it renders under `readScopedRules` with that project key.
+ */
+function linkedProject(name: string): string {
+  const dir = mkdtempSync(join(tmpdir(), `${name}-`));
+  writeVaultPointer(dir, vault);
+  projects.push(dir);
+  return dir;
 }
 
 interface RunResult {
@@ -84,6 +150,10 @@ async function runHook(payload: unknown, env: Record<string, string> = {}): Prom
       PATH: process.env["PATH"] ?? "",
       ...homeEnv(configHome),
       VAULT_DIR: vault,
+      // Isolate the payload composition from the runtime-notice channel
+      // by default, like the active-inject suite; the dedicated notice
+      // test re-enables it.
+      OPEN_SECOND_BRAIN_RUNTIME_NOTICES: "false",
       ...env,
     },
   });
@@ -224,6 +294,105 @@ describe("subagent-inject hook", () => {
     expect(deliveredContext(viaFallback.stdout).hookEventName).toBe("PostToolUse");
     const viaStart = await runHook(subagentStartPayload({ agentId: other }));
     expect(viaStart.stdout).toBe("");
+  });
+
+  test("a vault with learned preferences but no standing rules still delivers", async () => {
+    // The H2 gap: a carrier that only reads standing-rules.md delivers
+    // nothing on the vaults whose operators never wrote one, even though
+    // the card covers learned preferences, lessons and standing rules.
+    writeActive(ACTIVE_BODY);
+    const start = await runHook(subagentStartPayload({ agentId: AGENT }));
+    expect(start.exit).toBe(0);
+    const out = deliveredContext(start.stdout);
+    expect(out.hookEventName).toBe("SubagentStart");
+    expect(out.additionalContext).toBe(expectedMemoryContext(INJECT_BUDGET_CHARS_DEFAULT));
+    // The PostToolUse fallback carries the same payload for a runtime
+    // without the primary event.
+    const fallback = await runHook(subagentPayload({ agentId: "agent-bbbb" }));
+    expect(deliveredContext(fallback.stdout).additionalContext).toBe(
+      expectedMemoryContext(INJECT_BUDGET_CHARS_DEFAULT),
+    );
+  });
+
+  test("the payload composes standing rules, scoped rules, then the budgeted active context", async () => {
+    writeRules("Never force-push to main.");
+    writeActive(ACTIVE_BODY);
+    writeLessons(LESSONS_BODY);
+    const project = linkedProject("o2b-subagent-proj");
+    const projectKey = scopedRuleKey(basename(project))!;
+    mkdirSync(join(vault, "Brain", "standing-rules", "project"), { recursive: true });
+    writeFileSync(
+      join(vault, "Brain", "standing-rules", "project", `${projectKey}.md`),
+      "Write the changelog before every release.",
+      "utf8",
+    );
+    const noticesOff = { O2B_DEVICE_ID: "" };
+    const r = await runHook(
+      { ...subagentStartPayload({ agentId: AGENT }), cwd: project },
+      noticesOff,
+    );
+    expect(r.exit).toBe(0);
+    const out = deliveredContext(r.stdout);
+    // Same composition as the session-start lane: constitution first,
+    // then this project's scoped rules, then the budgeted memory body.
+    const scoped = readScopedRules(vault, {
+      project: projectKey,
+      harness: null,
+      host: null,
+    }).text;
+    expect(scoped).toContain("Write the changelog before every release.");
+    const memoryBudget = Math.max(0, INJECT_BUDGET_CHARS_DEFAULT - scoped.length);
+    expect(out.additionalContext).toBe(
+      [
+        renderStandingBlock(vault, STANDING_RULES_MAX_CHARS_DEFAULT),
+        scoped,
+        expectedMemoryContext(memoryBudget),
+      ]
+        .filter((block) => block.length > 0)
+        .join("\n\n"),
+    );
+  });
+
+  test("an oversized digest is budgeted, never dumped whole", async () => {
+    writeActive(
+      "---\nkind: brain-active\ngenerated_at: 2026-05-15T10:00:00Z\n---\n\n" +
+        Array.from(
+          { length: 200 },
+          (_, i) => `- \`pref-b${i}\` — filler preference body line`,
+        ).join("\n") +
+        "\n",
+    );
+    // The budget is `active.inject_budget_chars` in `Brain/_brain.yaml`;
+    // the tier ladder in the budget core degrades the oversized body the
+    // same way the session-start lane degrades it.
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\nactive:\n  inject_budget_chars: 1200\n",
+      "utf8",
+    );
+    const r = await runHook(subagentStartPayload({ agentId: AGENT }));
+    expect(r.exit).toBe(0);
+    const out = deliveredContext(r.stdout);
+    expect(out.additionalContext).toBe(expectedMemoryContext(1200));
+    expect(out.additionalContext).toContain("Injection truncated to budget");
+  });
+
+  test("runtime notices ride the carrier payload when the channel is on", async () => {
+    writeRules("Never force-push to main.");
+    const { collectRuntimeNotices, renderRuntimeNotices } =
+      await import("../../src/core/brain/runtime-notices.ts");
+    const r = await runHook(subagentStartPayload({ agentId: AGENT }), {
+      OPEN_SECOND_BRAIN_RUNTIME_NOTICES: "true",
+    });
+    expect(r.exit).toBe(0);
+    const out = deliveredContext(r.stdout);
+    // The same notices the session-start preamble carries, in the same
+    // place: after the rules lanes, ahead of nothing (no active.md here).
+    const noticesBlock = renderRuntimeNotices(collectRuntimeNotices(vault));
+    expect(noticesBlock).not.toBe("");
+    expect(out.additionalContext).toBe(
+      [renderStandingBlock(vault, STANDING_RULES_MAX_CHARS_DEFAULT), noticesBlock].join("\n\n"),
+    );
   });
 
   test.skipIf(CHMOD_CANNOT_DENY)(

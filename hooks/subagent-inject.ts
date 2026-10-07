@@ -1,17 +1,16 @@
 #!/usr/bin/env -S bun
 /**
- * SubagentStart / PostToolUse hook: delivers the operator's
- * standing-rules block into a delegated sub-agent
- * (context-injection-pipeline).
+ * SubagentStart / PostToolUse hook: delivers the operator's context
+ * payload into a delegated sub-agent (context-injection-pipeline).
  *
  * The session-start digest never reaches a sub-agent: SessionStart fires
  * once for the main thread, while the agent that performs the actual
- * writes can be exactly the one running without the operator's rules.
+ * writes can be exactly the one running without the operator's context.
  *
  * Two channels, one ledger:
  *
  *   - SubagentStart (primary) fires when the host spawns the sub-agent,
- *     before its first prompt, so the rules are in place from the first
+ *     before its first prompt, so the payload is in place from the first
  *     turn; the host re-injects the context if the sub-agent compacts.
  *     No tool gating: the event itself marks a sub-agent start.
  *   - PostToolUse (fallback) keeps this carrier working on runtimes
@@ -22,14 +21,27 @@
  * Both channels feed the same once-per-sub-agent ledger, so on a host
  * with both events only the first one to fire delivers.
  *
+ * Payload (composed by hooks/lib/active-context.ts, the same assembly
+ * the session-start lane uses): the operator's standing rules first,
+ * then the scoped operator rules for this project and this device, then
+ * the budgeted active context - runtime notices, the rendered
+ * Brain/active.md body, lessons - under the same
+ * `active.inject_budget_chars` ceiling, whose tier ladder degrades
+ * oversized sections. Absence and failure stay different answers: a
+ * rules read that FAILED delivers the explicit failure block naming the
+ * path, because a subagent must never mistake "no rules were written"
+ * for "the rules could not be read"; a memory assembly that throws
+ * degrades the memory lane to empty and never takes the rules lanes
+ * down with it.
+ *
  * Contract (identical for every runtime):
  *   stdin: hook payload JSON with `hook_event_name`, the host-assigned
  *     `agent_id` that marks a sub-agent, and - on the PostToolUse
  *     fallback only - `tool_name` / `tool_input`.
- *   stdout: nothing, or one line naming the operator's standing rules:
+ *   stdout: nothing, or one line with the payload:
  *     { "hookSpecificOutput": { "hookEventName": "SubagentStart" |
  *                                           "PostToolUse",
- *                               "additionalContext": "<block>" } }
+ *                               "additionalContext": "<payload>" } }
  *     the envelope must name the event it rode in on - a host validates
  *     hook output against a per-event schema, so a SubagentStart
  *     delivery under the PostToolUse name (or the reverse) is rejected
@@ -45,23 +57,22 @@
  * 24 h TTL). The id is recorded AFTER the stdout write - lose-not-
  * duplicate, like every carrier in this tree - so a second call with the
  * same id is silent and a crash between write and record re-delivers
- * rather than losing the rules.
+ * rather than losing the payload.
  *
  * Silent on every empty-handed path, exit 0: no non-empty `agent_id`
  * (the main thread is served by active-inject), on PostToolUse a tool
  * outside the write set, no real session id (the ledger needs a session
  * scope; a sessionless host would re-deliver on every call), no vault,
- * an absent or empty rules file (the steady state is an operator who
- * wrote no rules). A rules read that FAILED is not silent: it delivers
- * the explicit failure block naming the path, because a subagent must
- * never mistake "no rules were written" for "the rules could not be
- * read".
+ * or an entirely empty payload - no standing rules, no scoped rules,
+ * no learned context (the steady state is an operator whose vault says
+ * nothing yet).
  *
  * Quiet on failures: we never block the agent here. If we crash, we
  * exit 0 so the turn proceeds. No self-watchdog is armed: every step is
- * bounded (one config read, one rules read, one locked state write),
- * matching the post-write-reminder sibling in the fallback's matcher
- * group, and the host's declared 10 s timeout is the outer bound.
+ * bounded (one config read, a handful of file reads, one locked state
+ * write), matching the post-write-reminder sibling in the fallback's
+ * matcher group, and the host's declared 10 s timeout is the outer
+ * bound.
  */
 
 import { writeSync } from "node:fs";
@@ -74,8 +85,14 @@ import {
   recordSubagentDeliveredId,
 } from "./lib/injection-ledger.ts";
 import { renderStandingBlock } from "./lib/standing-block.ts";
-import { loadBrainConfig, resolveStandingRulesMaxChars } from "../src/core/brain/policy.ts";
-import type { BrainConfig } from "../src/core/brain/types.ts";
+import {
+  assembleActiveContext,
+  createInjectionMeter,
+  joinBlocks,
+  renderScopedBlock,
+  resolveInjectionLimits,
+  scopedSectionCap,
+} from "./lib/active-context.ts";
 import { resolveVault } from "../src/core/config.ts";
 
 /**
@@ -99,26 +116,6 @@ function isCarrierEvent(name: unknown): name is CarrierEvent {
   return name === START_EVENT || name === FALLBACK_EVENT;
 }
 
-/**
- * The standing-rules character cap, resolved once per run.
- *
- * The same policy limit the session-start lane applies
- * (`active.standing_rules_max_chars`, documented default on a missing or
- * unreadable `_brain.yaml`). An unreadable config degrades only the CAP
- * here, never the answer: a rules read that then fails still delivers
- * the explicit failure block, so the operator's constitution cannot be
- * mistaken for a missing one.
- */
-function resolveStandingRulesCap(vault: string): number {
-  let cfg: BrainConfig | null = null;
-  try {
-    cfg = loadBrainConfig(vault);
-  } catch {
-    // absorbed deliberately - the documented default below
-  }
-  return resolveStandingRulesMaxChars(cfg);
-}
-
 type SubagentInjectOutput = {
   readonly hookSpecificOutput: {
     readonly hookEventName: CarrierEvent;
@@ -136,6 +133,30 @@ type SubagentInjectOutput = {
  */
 function subagentInjectOutput(event: CarrierEvent, block: string): SubagentInjectOutput {
   return { hookSpecificOutput: { hookEventName: event, additionalContext: block } };
+}
+
+/**
+ * Compose the carrier's payload: the same three lanes, joined the same
+ * way, as the session-start preamble. The meter exists because the
+ * assembly records its sub-bodies there; the carrier never reads it
+ * back - it feeds the session-start receipt, not a carrier emission.
+ */
+function composeCarrierPayload(vault: string, workspaceDir: string): string {
+  const limits = resolveInjectionLimits(vault);
+  const meter = createInjectionMeter(limits.injectBudgetChars);
+  const standingBlock = renderStandingBlock(vault, limits.standingRulesMaxChars, meter);
+  const scopedBlock = renderScopedBlock(vault, workspaceDir, scopedSectionCap(limits), meter);
+  const memoryBudget = Math.max(0, limits.injectBudgetChars - scopedBlock.length);
+  // No last-good cache on this surface: a genuine read error inside the
+  // assembly degrades the memory lane to empty rather than emitting a
+  // partial or poisoned payload, and the rules lanes above it survive.
+  let memoryContext = "";
+  try {
+    memoryContext = assembleActiveContext(vault, memoryBudget, meter);
+  } catch {
+    memoryContext = "";
+  }
+  return joinBlocks([standingBlock, scopedBlock, memoryContext]);
 }
 
 async function main(): Promise<void> {
@@ -178,8 +199,14 @@ async function main(): Promise<void> {
 
   if (readSubagentDeliveredIds(vault, payload.session_id).has(agentId)) return;
 
-  const block = renderStandingBlock(vault, resolveStandingRulesCap(vault));
-  // An absent or empty rules file is the steady state, not a failure.
+  // The scoped rules key off the session's project: the payload `cwd`
+  // when the host sent one, else this process's (the session-start lane
+  // resolves the same field the same way).
+  const workspaceDir =
+    typeof payload.cwd === "string" && payload.cwd.length > 0 ? payload.cwd : process.cwd();
+  const block = composeCarrierPayload(vault, workspaceDir);
+  // Silent only when the ENTIRE payload is empty: an absent rules file is
+  // no longer silence on a vault whose operator has learned preferences.
   if (block.length === 0) return;
 
   // One blocking write to fd 1, not process.stdout.write: a write error
@@ -193,7 +220,7 @@ async function main(): Promise<void> {
   writeSync(1, `${JSON.stringify(subagentInjectOutput(event, block))}\n`);
 
   // Recorded after stdout: a crash or a failed state write in between
-  // re-delivers the rules on the next carrier event and never leaves a
+  // re-delivers the payload on the next carrier event and never leaves a
   // subagent unconstitutioned.
   recordSubagentDeliveredId(vault, payload.session_id, agentId);
 }
