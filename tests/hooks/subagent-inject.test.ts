@@ -225,6 +225,45 @@ describe("subagent-inject hook", () => {
     expect(readHookStampKey(vault, SESSION)).toBe(LEDGER_KEY_SUBAGENT_INJECT);
   });
 
+  test.skipIf(process.platform === "win32")(
+    "a failed stdout write records no ledger id: the record happens only after the emission",
+    async () => {
+      writeRules("Always run the test suite before committing.");
+      const payloadPath = join(configHome, "payload.json");
+      writeFileSync(payloadPath, JSON.stringify(subagentPayload({ agentId: AGENT })), "utf8");
+      // A completed run cannot tell the two orders apart, so the hook is
+      // driven with a stdout pipe that is already closed: `head -c0`
+      // exits before the hook starts, so its single stdout write fails
+      // with EPIPE in a real process (the stdout-epipe-guard precedent).
+      // The delay makes the close deterministic; bash's pipefail carries
+      // the hook's own exit past head.
+      const script =
+        "set -o pipefail; sleep 0.3; " +
+        `bun run ${JSON.stringify(HOOK)} < ${JSON.stringify(payloadPath)}` +
+        " | head -c0 >/dev/null";
+      const proc = Bun.spawn(["bash", "-c", script], {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: {
+          PATH: process.env["PATH"] ?? "",
+          ...homeEnv(configHome),
+          VAULT_DIR: vault,
+        },
+      });
+      const [stderr, exit] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
+      // The hook never blocks on its own failure: the EPIPE throw is
+      // swallowed by the fail-soft catch and exits 0.
+      expect(stderr).toBe("");
+      expect(exit).toBe(0);
+      // The rules were deliverable and the write failed: recording the id
+      // here would lose them, so the ledger must stay empty and the next
+      // write-shaped call re-delivers.
+      expect(existsSync(hookStateFilePath(vault, SESSION))).toBe(false);
+      expect(readSubagentDeliveredIds(vault, SESSION).has(AGENT)).toBe(false);
+    },
+    20_000,
+  );
+
   test("a runtime the host-shape detector cannot name gets the portable decision shape", async () => {
     writeRules("Always run the test suite before committing.");
     // No transcript path, no cwd/tool_use_id triple: the detector resolves

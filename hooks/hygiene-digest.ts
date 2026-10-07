@@ -47,6 +47,8 @@
  * Crashes exit 0 - never deadlock.
  */
 
+import { writeSync } from "node:fs";
+
 import { resolveHygieneDigestEnabled, resolveVault } from "../src/core/config.ts";
 import { detectHookRuntime, summarizeTurn } from "./lib/detect.ts";
 import type { HookRuntime } from "./lib/detect.ts";
@@ -136,9 +138,14 @@ async function main(): Promise<void> {
   const hash = computeHygieneDigestHash({ findings: report.findings, danglingLinks });
   if (hygieneDigestHashMatches(vault, hash)) return;
 
-  process.stdout.write(
-    JSON.stringify(hygieneDigestOutput(detectHookRuntime(payload), line)) + "\n",
-  );
+  // One blocking write to fd 1, not process.stdout.write: a write error
+  // must surface HERE, before the ledger write below. Bun and Node
+  // deliver stdout errors asynchronously, which would resolve main,
+  // record this state as emitted while the line never landed, and crash
+  // with a stderr banner. The synchronous write throws into main's
+  // fail-soft catch instead and the next eligible turn re-emits - the
+  // lose-not-duplicate order made real, not just ordered.
+  writeSync(1, `${JSON.stringify(hygieneDigestOutput(detectHookRuntime(payload), line))}\n`);
   // Lose-not-duplicate: the ledger records the state only after the
   // emit, so a crash in between re-emits rather than going silent.
   writeHygieneDigestHash(vault, hash);

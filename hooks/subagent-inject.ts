@@ -47,6 +47,8 @@
  * the host's declared 10 s timeout is the outer bound.
  */
 
+import { writeSync } from "node:fs";
+
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { detectHookRuntime, isArtifactToolName, type HookRuntime } from "./lib/detect.ts";
 import {
@@ -135,9 +137,15 @@ async function main(): Promise<void> {
   // An absent or empty rules file is the steady state, not a failure.
   if (block.length === 0) return;
 
-  process.stdout.write(
-    JSON.stringify(subagentInjectOutput(detectHookRuntime(payload), block)) + "\n",
-  );
+  // One blocking write to fd 1, not process.stdout.write: a write error
+  // must surface HERE, at the emit. Bun and Node deliver stdout errors
+  // asynchronously, which would resolve main, run the ledger record
+  // below with the delivery still unlanded, and crash with a stderr
+  // banner. The synchronous write throws into main's fail-soft catch
+  // instead, the id is never recorded, and the next write-shaped call
+  // re-delivers - the lose-not-duplicate order made real, not just
+  // ordered.
+  writeSync(1, `${JSON.stringify(subagentInjectOutput(detectHookRuntime(payload), block))}\n`);
 
   // Recorded after stdout: a crash or a failed state write in between
   // re-delivers the rules to the next write-shaped call and never

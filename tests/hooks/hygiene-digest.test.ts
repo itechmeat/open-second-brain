@@ -262,6 +262,41 @@ describe("hygiene-digest hook", () => {
     expect(recorded).toBe(computeHygieneDigestHash({ findings, danglingLinks: null }));
   });
 
+  test("a stdout write that fails records no ledger hash: the emit lands before the ledger", async () => {
+    seedConflict();
+    const payloadPath = join(configHome, "payload.json");
+    writeFileSync(payloadPath, JSON.stringify(stopPayload(claudeTranscript(true))), "utf8");
+    // A completed run cannot tell a landed emit from a lost one, so the
+    // hook is driven with a stdout pipe that is already closed: `head
+    // -c0` exits before the hook starts and its single write hits EPIPE
+    // in a real process (the stdout-epipe-guard precedent). The delay
+    // makes the close deterministic; bash's pipefail carries the hook's
+    // own exit past head.
+    const script =
+      "set -o pipefail; sleep 0.3; " +
+      `bun run ${JSON.stringify(HOOK)} < ${JSON.stringify(payloadPath)}` +
+      " | head -c0 >/dev/null";
+    const proc = Bun.spawn(["bash", "-c", script], {
+      stdout: "pipe",
+      stderr: "pipe",
+      env: {
+        PATH: process.env["PATH"] ?? "",
+        ...homeEnv(configHome),
+        VAULT_DIR: vault,
+        ...FLAG_ON,
+      },
+    });
+    const [stderr, exit] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
+    // The hook never deadlocks on its own failure: the write error is
+    // silenced by the fail-soft catch and exits 0.
+    expect(stderr).toBe("");
+    expect(exit).toBe(0);
+    // The line never landed: recording the hash here would silence this
+    // exact state until the findings change, so the ledger stays empty
+    // and the next eligible turn re-emits (lose-not-duplicate).
+    expect(existsSync(hygieneDigestHashPath(vault))).toBe(false);
+  }, 20_000);
+
   test("an immediate second identical run is silent", async () => {
     seedConflict();
     const transcript = claudeTranscript(true);
