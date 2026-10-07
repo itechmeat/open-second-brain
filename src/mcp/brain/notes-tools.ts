@@ -477,6 +477,9 @@ function runSingleWrite<K extends SingleNoteOperation["kind"]>(
  * to say - so a receipt for a clean write is byte-identical to the one
  * that shipped before. `pages` empty (a skipped create, a log-only batch)
  * means no bytes were authored, so there is nothing to lint.
+ *
+ * The lint answers at the caller's reach: a near-duplicate sibling the
+ * caller may not read is never named, scored or counted on the receipt.
  */
 export function noteWriteResult<T extends Record<string, unknown>>(
   ctx: ServerContext,
@@ -484,7 +487,10 @@ export function noteWriteResult<T extends Record<string, unknown>>(
   receipt: T,
 ): T & PageLintField {
   if (pages.length === 0) return receipt;
-  return { ...receipt, ...pageLintField(lintWrittenPages(ctx.vault, pages)) };
+  return {
+    ...receipt,
+    ...pageLintField(lintWrittenPages(ctx.vault, pages, { readable: readableAtContextReach(ctx) })),
+  };
 }
 
 export const NOTES_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([

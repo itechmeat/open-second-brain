@@ -36,6 +36,9 @@ import { ARTIFACT_MAX_BYTES } from "../../../src/core/brain/write-session/valida
 
 let vault: string;
 
+/** Operator reach: every page readable. */
+const READ_ALL = { readable: () => true } as const;
+
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-page-lint-"));
   for (const dir of ["preferences", "retired", "log", "inbox"]) {
@@ -70,7 +73,7 @@ function writePref(slug: string, fields: Record<string, string> = {}): void {
 describe("lintWrittenPages - the clean path", () => {
   test("a valid page with no broken links yields nothing to say", () => {
     const rel = writeNote("Notes/Clean.md", "---\ntitle: Clean\n---\n\nplain prose\n");
-    const report = lintWrittenPages(vault, [rel]);
+    const report = lintWrittenPages(vault, [rel], READ_ALL);
     expect(report.findings).toEqual([]);
     expect(report.total).toBe(0);
     expect(report.returned).toBe(0);
@@ -83,14 +86,14 @@ describe("lintWrittenPages - the clean path", () => {
   test("a wikilink to a non-Brain note is nobody's business here", () => {
     writeNote("Notes/Other.md", "---\ntitle: Other\n---\n\nx\n");
     const rel = writeNote("Notes/Links.md", "---\ntitle: Links\n---\n\nsee [[Other]]\n");
-    expect(lintWrittenPages(vault, [rel]).findings).toEqual([]);
+    expect(lintWrittenPages(vault, [rel], READ_ALL).findings).toEqual([]);
   });
 });
 
 describe("lintWrittenPages - findings", () => {
   test("a broken Brain wikilink is one warning carrying a next command", () => {
     const rel = writeNote("Notes/Broken.md", "---\ntitle: B\n---\n\nsee [[pref-ghost]]\n");
-    const report = lintWrittenPages(vault, [rel]);
+    const report = lintWrittenPages(vault, [rel], READ_ALL);
     expect(report.findings.length).toBe(1);
     expect(report.findings[0]).toMatchObject({
       severity: "warning",
@@ -109,7 +112,7 @@ describe("lintWrittenPages - findings", () => {
     writePref("mid", { merged_into: "pref-canon" });
     writePref("dup", { merged_into: "pref-mid" });
     const rel = writeNote("Notes/Merged.md", "---\ntitle: M\n---\n\nsee [[pref-dup]]\n");
-    const report = lintWrittenPages(vault, [rel]);
+    const report = lintWrittenPages(vault, [rel], READ_ALL);
     expect(report.findings.length).toBe(1);
     expect(report.findings[0]).toMatchObject({
       severity: "warning",
@@ -123,7 +126,7 @@ describe("lintWrittenPages - findings", () => {
 
   test("an invalid document reports error findings, ranked ahead of warnings", () => {
     const rel = writeNote("Notes/Invalid.md", "no frontmatter at all, see [[pref-ghost]]\n");
-    const report = lintWrittenPages(vault, [rel]);
+    const report = lintWrittenPages(vault, [rel], READ_ALL);
     expect(report.findings.length).toBeGreaterThanOrEqual(2);
     expect(report.findings[0]!.severity).toBe("error");
     expect(report.findings[0]!.code).toBe("frontmatter-missing");
@@ -133,7 +136,7 @@ describe("lintWrittenPages - findings", () => {
 
   test("a declared type outside the schema pack is an error finding", () => {
     const rel = writeNote("Notes/Typed.md", "---\ntitle: T\ntype: not-a-declared-type\n---\n\nx\n");
-    const codes = lintWrittenPages(vault, [rel]).findings.map((f) => f.code);
+    const codes = lintWrittenPages(vault, [rel], READ_ALL).findings.map((f) => f.code);
     expect(codes).toContain("schema-type-unknown");
   });
 });
@@ -142,7 +145,7 @@ describe("lintWrittenPages - bounds", () => {
   test("a page over the artifact byte cap is skipped with a reason, never dropped", () => {
     const filler = "x".repeat(ARTIFACT_MAX_BYTES + 1024);
     const rel = writeNote("Notes/Huge.md", `---\ntitle: H\n---\n\n${filler}\n`);
-    const report = lintWrittenPages(vault, [rel]);
+    const report = lintWrittenPages(vault, [rel], READ_ALL);
     expect(report.findings).toEqual([]);
     expect(report.skipped).toEqual([
       { page: rel, reason: PAGE_LINT_SKIP_REASON.overByteCap, detail: expect.any(String) },
@@ -156,7 +159,7 @@ describe("lintWrittenPages - bounds", () => {
       (_, i) => `see [[pref-ghost-${i}]]`,
     ).join("\n");
     const rel = writeNote("Notes/Many.md", `---\ntitle: M\n---\n\n${links}\n`);
-    const report = lintWrittenPages(vault, [rel]);
+    const report = lintWrittenPages(vault, [rel], READ_ALL);
     expect(report.total).toBe(PAGE_LINT_MAX_FINDINGS + 5);
     expect(report.returned).toBe(PAGE_LINT_MAX_FINDINGS);
     expect(report.findings.length).toBe(PAGE_LINT_MAX_FINDINGS);
@@ -164,7 +167,7 @@ describe("lintWrittenPages - bounds", () => {
   });
 
   test("an unreadable page is skipped with its own reason", () => {
-    const report = lintWrittenPages(vault, ["Notes/NeverWritten.md"]);
+    const report = lintWrittenPages(vault, ["Notes/NeverWritten.md"], READ_ALL);
     expect(report.findings).toEqual([]);
     expect(report.skipped.map((s) => s.reason)).toEqual([PAGE_LINT_SKIP_REASON.unreadable]);
   });
@@ -179,7 +182,7 @@ describe("lintWrittenPages - bounds", () => {
  */
 describe("lintWrittenPages - nothing of the operator's filesystem crosses the wire", () => {
   test("an unreadable page carries the errno CODE, not the kernel's sentence", () => {
-    const report = lintWrittenPages(vault, ["Notes/NeverWritten.md"]);
+    const report = lintWrittenPages(vault, ["Notes/NeverWritten.md"], READ_ALL);
     expect(report.skipped).toEqual([
       {
         page: "Notes/NeverWritten.md",
@@ -193,14 +196,14 @@ describe("lintWrittenPages - nothing of the operator's filesystem crosses the wi
   test("a lint that cannot start names its errno code and no path", () => {
     mkdirSync(join(vault, "Brain", "_brain.yaml"), { recursive: true });
     const rel = writeNote("Notes/Any.md", "---\ntitle: A\n---\n\nx\n");
-    const report = lintWrittenPages(vault, [rel]);
+    const report = lintWrittenPages(vault, [rel], READ_ALL);
     expect(report.unavailable!.message).not.toContain(vault);
     expect(report.unavailable!.message).toMatch(/could not start: [A-Za-z][A-Za-z0-9_]*$/);
   });
 
   test("an over-cap skip is stated in bytes, which name nothing on disk", () => {
     const rel = writeNote("Notes/Huge.md", "x".repeat(ARTIFACT_MAX_BYTES + 8));
-    const report = lintWrittenPages(vault, [rel]);
+    const report = lintWrittenPages(vault, [rel], READ_ALL);
     expect(report.skipped[0]!.reason).toBe(PAGE_LINT_SKIP_REASON.overByteCap);
     expect(JSON.stringify(report)).not.toContain(vault);
   });
@@ -266,7 +269,7 @@ describe("lintWrittenPages - failure is named, never absent", () => {
     // EISDIR, which is a failure of the LINT, not of the page.
     mkdirSync(join(vault, "Brain", "_brain.yaml"), { recursive: true });
     const rel = writeNote("Notes/Any.md", "---\ntitle: A\n---\n\nx\n");
-    const report = lintWrittenPages(vault, [rel]);
+    const report = lintWrittenPages(vault, [rel], READ_ALL);
     expect(report.unavailable).toMatchObject({ code: PAGE_LINT_UNAVAILABLE_CODE });
     expect(report.unavailable!.message.length).toBeGreaterThan(0);
     expect(report.total).toBe(0);
@@ -332,7 +335,7 @@ describe("lintWrittenPages - near-duplicate findings", () => {
   test("a write closely matching a same-directory same-scope page yields the finding", () => {
     const first = writeNote("Notes/Alpha.md", alphaNote("Alpha"));
     const rel = writeNote("Notes/Beta.md", alphaNote("Beta"));
-    const report = lintWrittenPages(vault, [rel]);
+    const report = lintWrittenPages(vault, [rel], READ_ALL);
     const findings = nearDuplicateFindings(report);
     expect(findings).toHaveLength(1);
     expect(findings[0]).toMatchObject({
@@ -351,7 +354,7 @@ describe("lintWrittenPages - near-duplicate findings", () => {
     // 4 shared tokens over a 5-token union is exactly 4/5 = 0.8.
     writeNote("Notes/Alpha.md", `---\ntitle: Alpha\n---\n\n${ALPHA_BODY}\n`);
     const rel = writeNote("Notes/Beta.md", "---\ntitle: Beta\n---\n\nalpha beta gamma delta\n");
-    const report = lintWrittenPages(vault, [rel]);
+    const report = lintWrittenPages(vault, [rel], READ_ALL);
     const findings = nearDuplicateFindings(report);
     expect(findings).toHaveLength(1);
     expect(findings[0]!.message).toContain("jaccard=0.800");
@@ -360,7 +363,7 @@ describe("lintWrittenPages - near-duplicate findings", () => {
   test("a below-threshold resemblance yields nothing", () => {
     writeNote("Notes/Alpha.md", alphaNote("Alpha"));
     const rel = writeNote("Notes/Beta.md", "---\ntitle: Beta\n---\n\nalpha zeta eta theta iota\n");
-    const report = lintWrittenPages(vault, [rel]);
+    const report = lintWrittenPages(vault, [rel], READ_ALL);
     expect(report.findings).toEqual([]);
     expect(pageLintField(report)).toEqual({});
   });
@@ -368,21 +371,21 @@ describe("lintWrittenPages - near-duplicate findings", () => {
   test("a same-body page in a different directory is not a candidate", () => {
     writeNote("Elsewhere/Alpha.md", alphaNote("Alpha"));
     const rel = writeNote("Notes/Beta.md", alphaNote("Beta"));
-    const report = lintWrittenPages(vault, [rel]);
+    const report = lintWrittenPages(vault, [rel], READ_ALL);
     expect(report.findings).toEqual([]);
   });
 
   test("a same-body page in a different scope bucket is not a candidate", () => {
     writeNote("Notes/Alpha.md", alphaNote("Alpha", ["session: atlas"]));
     const rel = writeNote("Notes/Beta.md", alphaNote("Beta"));
-    const report = lintWrittenPages(vault, [rel]);
+    const report = lintWrittenPages(vault, [rel], READ_ALL);
     expect(report.findings).toEqual([]);
   });
 
   test("a same-body page in the SAME scope bucket is a candidate", () => {
     writeNote("Notes/Alpha.md", alphaNote("Alpha", ["session: atlas"]));
     const rel = writeNote("Notes/Beta.md", alphaNote("Beta", ["session: atlas"]));
-    const report = lintWrittenPages(vault, [rel]);
+    const report = lintWrittenPages(vault, [rel], READ_ALL);
     expect(nearDuplicateFindings(report)).toHaveLength(1);
   });
 
@@ -391,7 +394,7 @@ describe("lintWrittenPages - near-duplicate findings", () => {
     // be a REAL difference - it is a scope axis - so it must not appear here.)
     writeNote("Notes/Alpha.md", `---\ntitle: Alpha\ntype: note\n---\n\n${ALPHA_BODY}\n`);
     const rel = writeNote("Notes/Beta.md", alphaNote("Beta"));
-    const report = lintWrittenPages(vault, [rel]);
+    const report = lintWrittenPages(vault, [rel], READ_ALL);
     expect(nearDuplicateFindings(report)).toHaveLength(1);
   });
 
@@ -401,7 +404,7 @@ describe("lintWrittenPages - near-duplicate findings", () => {
       "Notes/Beta.md",
       "---\ntitle: Same\ntype: note\n---\n\nanother kind entirely\n",
     );
-    const report = lintWrittenPages(vault, [rel]);
+    const report = lintWrittenPages(vault, [rel], READ_ALL);
     expect(report.findings).toEqual([]);
   });
 
@@ -414,7 +417,7 @@ describe("lintWrittenPages - near-duplicate findings", () => {
       utimesSync(join(vault, rel), at, at);
     }
     const rel = writeNote("Notes/Beta.md", alphaNote("Beta"));
-    const report = lintWrittenPages(vault, [rel]);
+    const report = lintWrittenPages(vault, [rel], READ_ALL);
     // The written page is the newest sibling, so the cap leaves out the oldest fillers.
     expect(report.candidates_skipped).toBe(extra + 1);
     expect(pageLintField(report)).toHaveProperty("lint");
@@ -422,14 +425,14 @@ describe("lintWrittenPages - near-duplicate findings", () => {
 
   test("the written page never resembles itself", () => {
     const rel = writeNote("Notes/Alpha.md", alphaNote("Alpha"));
-    const report = lintWrittenPages(vault, [rel]);
+    const report = lintWrittenPages(vault, [rel], READ_ALL);
     expect(report.findings).toEqual([]);
   });
 
   test("two near-identical pages written in one call report each other", () => {
     const first = writeNote("Notes/Alpha.md", alphaNote("Alpha"));
     const second = writeNote("Notes/Beta.md", alphaNote("Beta"));
-    const report = lintWrittenPages(vault, [first, second]);
+    const report = lintWrittenPages(vault, [first, second], READ_ALL);
     const pairs = nearDuplicateFindings(report)
       .map((f) => `${f.page} -> ${f.path}`)
       .toSorted();
@@ -442,7 +445,7 @@ describe("lintWrittenPages - near-duplicate findings", () => {
     // write-conflict advisory takes toward corrupt preference files.
     mkdirSync(join(vault, "Notes", "Stuck.md"), { recursive: true });
     const rel = writeNote("Notes/Beta.md", alphaNote("Beta"));
-    const report = lintWrittenPages(vault, [rel]);
+    const report = lintWrittenPages(vault, [rel], READ_ALL);
     expect(report.unavailable).toBeUndefined();
     expect(report.findings).toEqual([]);
     // Excluded by name, with the errno code, never silently.
@@ -453,7 +456,7 @@ describe("lintWrittenPages - near-duplicate findings", () => {
     const filler = `${ALPHA_BODY} `.repeat(ARTIFACT_MAX_BYTES / ALPHA_BODY.length + 1);
     writeNote("Notes/Alpha.md", `---\ntitle: Alpha\n---\n\n${filler}\n`);
     const rel = writeNote("Notes/Beta.md", alphaNote("Beta"));
-    const report = lintWrittenPages(vault, [rel]);
+    const report = lintWrittenPages(vault, [rel], READ_ALL);
     expect(report.unavailable).toBeUndefined();
     expect(report.findings).toEqual([]);
     // The skip list stays reserved for WRITTEN pages.
@@ -471,12 +474,79 @@ describe("lintWrittenPages - near-duplicate findings", () => {
       writeFileSync(join(outside, "Escaped.md"), alphaNoteText, "utf8");
       // vault/../Escaped.md IS the file written above - the same bytes as
       // its neighbor, yet no near-duplicate may be reported about them.
-      const report = lintWrittenPages(vault, ["../Escaped.md"]);
+      const report = lintWrittenPages(vault, ["../Escaped.md"], READ_ALL);
       expect(report.unavailable).toBeUndefined();
       expect(report.findings.filter((f) => f.code === NEAR_DUPLICATE_CODE)).toEqual([]);
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * The receipt answers at the caller's reach. A sibling the caller may not
+ * read is dropped before it is scored and before any census counts it, so
+ * neither a finding nor `candidates_skipped` nor `candidates_unreadable`
+ * can disclose that it exists.
+ */
+describe("lintWrittenPages - near-duplicate candidates at the caller's reach", () => {
+  const BODY = "alpha beta gamma delta epsilon";
+  const HIDDEN_PREFIX = "Notes/Hidden-";
+  const withholdHidden = { readable: (rel: string) => !rel.startsWith(HIDDEN_PREFIX) } as const;
+
+  function note(title: string): string {
+    return `---\ntitle: ${title}\n---\n\n${BODY}\n`;
+  }
+
+  test("a withheld near-identical sibling is neither scored nor named", () => {
+    writeNote("Notes/Hidden-Alpha.md", note("Alpha"));
+    const rel = writeNote("Notes/Beta.md", note("Beta"));
+    const report = lintWrittenPages(vault, [rel], withholdHidden);
+    expect(report.findings).toEqual([]);
+    expect(JSON.stringify(report)).not.toContain("Hidden-Alpha");
+    // A clean write still contributes no key at all.
+    expect(pageLintField(report)).toEqual({});
+  });
+
+  test("the same sibling at full reach is reported, so the filter is what hid it", () => {
+    const sibling = writeNote("Notes/Hidden-Alpha.md", note("Alpha"));
+    const rel = writeNote("Notes/Beta.md", note("Beta"));
+    const findings = nearDuplicateFindings(lintWrittenPages(vault, [rel], READ_ALL));
+    expect(findings.map((f) => f.path)).toEqual([sibling]);
+  });
+
+  test("a withheld sibling that cannot be read is not counted as unreadable", () => {
+    mkdirSync(join(vault, "Notes", "Hidden-Stuck.md"), { recursive: true });
+    const rel = writeNote("Notes/Beta.md", note("Beta"));
+    const report = lintWrittenPages(vault, [rel], withholdHidden);
+    expect(report.candidates_unreadable).toBeUndefined();
+    expect(pageLintField(report)).toEqual({});
+  });
+
+  test("withheld siblings never count toward the candidate cap", () => {
+    const oldest = Date.parse("2026-01-01T00:00:00Z");
+    for (let i = 0; i < NEAR_DUPLICATE_MAX_CANDIDATES + 3; i++) {
+      const rel = writeNote(`${HIDDEN_PREFIX}${i}.md`, `---\ntitle: H${i}\n---\n\nfiller ${i}\n`);
+      const at = new Date(oldest + i * 1000);
+      utimesSync(join(vault, rel), at, at);
+    }
+    const rel = writeNote("Notes/Beta.md", note("Beta"));
+    const report = lintWrittenPages(vault, [rel], withholdHidden);
+    expect(report.candidates_skipped).toBeUndefined();
+    expect(pageLintField(report)).toEqual({});
+  });
+
+  test("the predicate is asked about vault-relative paths", () => {
+    writeNote("Notes/Alpha.md", note("Alpha"));
+    const rel = writeNote("Notes/Beta.md", note("Beta"));
+    const asked: string[] = [];
+    lintWrittenPages(vault, [rel], {
+      readable: (path) => {
+        asked.push(path);
+        return true;
+      },
+    });
+    expect(asked.toSorted()).toEqual(["Notes/Alpha.md", "Notes/Beta.md"]);
   });
 });
 

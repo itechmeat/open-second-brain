@@ -67,6 +67,11 @@ async function answer(f: Fixture, tool: string, args: Record<string, unknown>): 
   return raw.split(f.vault).join("<vault>");
 }
 
+/** The answer with the per-write receipt id normalised. */
+async function receipt(f: Fixture, tool: string, args: Record<string, unknown>): Promise<string> {
+  return (await answer(f, tool, args)).replace(/nw_\d{14}_[0-9a-f]{16}/g, "<nw>");
+}
+
 const CALLS: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
   ["brain_note_lifecycle", { action: "delete", path: PRIVATE_PATH }],
   ["brain_note_lifecycle", { action: "delete", path: PRIVATE_PATH, apply: true, confirm: true }],
@@ -116,4 +121,46 @@ describe("at local reach the page is planned and written", () => {
     await local.server.callTool("brain_append_note", { path: PRIVATE_PATH, content: "appended" });
     expect(readFileSync(join(local.vault, PRIVATE_PATH), "utf8")).toContain("appended");
   });
+});
+
+/**
+ * The write receipt's near-duplicate hint answers at the caller's reach.
+ * A body that copies the private page would be named as its near
+ * duplicate at local reach; at a reach that withholds the page, every
+ * note-write tool answers exactly as if the page never existed.
+ */
+describe("the near-duplicate receipt hint never names a withheld sibling", () => {
+  const COPIED_BODY = "# Secret plan\nThe PIN is 4711.\n";
+  const DRAFT_PATH = "Notes/draft.md";
+
+  /** A fixture with an empty-bodied draft to append to. */
+  function writeFixture(withSecret: boolean, reach?: typeof TRANSPORT_REACH.local): Fixture {
+    const f = fixture(withSecret, reach);
+    writeFileSync(join(f.vault, DRAFT_PATH), "---\ntitle: Draft\n---\n");
+    return f;
+  }
+
+  const WRITES: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
+    ["brain_create_note", { path: "Notes/mine.md", content: COPIED_BODY }],
+    ["brain_update_note", { path: "Notes/open.md", content: COPIED_BODY }],
+    ["brain_append_note", { path: DRAFT_PATH, content: COPIED_BODY }],
+    [
+      "brain_write_batch",
+      { operations: [{ op: "create_note", path: "Notes/mine.md", content: COPIED_BODY }] },
+    ],
+  ];
+
+  for (const [tool, args] of WRITES) {
+    test(`${tool} answers as if the page were absent`, async () => {
+      const hidden = await receipt(writeFixture(true), tool, args);
+      expect(hidden).not.toContain(PRIVATE_PATH);
+      expect(hidden).toBe(await receipt(writeFixture(false), tool, args));
+    });
+
+    test(`${tool} names the page at local reach`, async () => {
+      const local = await receipt(writeFixture(true, TRANSPORT_REACH.local), tool, args);
+      expect(local).toContain("near-duplicate");
+      expect(local).toContain(PRIVATE_PATH);
+    });
+  }
 });

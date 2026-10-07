@@ -279,6 +279,23 @@ export interface PageLintCandidateSkip {
   readonly detail: string;
 }
 
+/**
+ * May the caller read the page at this vault-relative path? The same shape
+ * as the near-duplicate kernel's `ReadableRef`.
+ */
+export type ReadablePage = (ref: string) => boolean;
+
+/** How one call to {@link lintWrittenPages} is bounded. */
+export interface LintWrittenPagesOptions {
+  /**
+   * The caller's reach. Required, never defaulted: a sibling page the
+   * caller may not read is dropped before it is scored and before the
+   * census counts it, so neither a finding nor a census number can
+   * disclose it. An operator-reach caller passes an explicit allow-all.
+   */
+  readonly readable: ReadablePage;
+}
+
 /** What building the near-duplicate candidate index left out, by count and by name. */
 export interface NearDuplicateCensus {
   readonly candidatesSkipped: number;
@@ -510,10 +527,15 @@ function canonicalPage(vault: string, page: string): string {
  * `unavailable` slot like every other context-building failure. A page
  * spelled outside the vault ({@link VAULT_ESCAPE_PREFIX}) collects no
  * candidates at all: the walk stops at the vault boundary.
+ *
+ * A sibling outside the caller's reach (`readable`) is dropped at the
+ * listing, before it is stat'ed: it is never scored, never named as
+ * unreadable and never counted against the cap.
  */
 function collectNearDuplicateCandidates(
   vault: string,
   pages: ReadonlyArray<string>,
+  readable: ReadablePage,
 ): {
   readonly index: ReadonlyMap<string, ReadonlyArray<NearDuplicateCandidate>>;
   readonly census: NearDuplicateCensus;
@@ -529,15 +551,17 @@ function collectNearDuplicateCandidates(
   let candidatesSkipped = 0;
   for (const directory of directories) {
     // Stat every sibling (cheap), then read only the newest few.
-    const siblings: Array<{ absolute: string; size: number; mtimeMs: number }> = [];
+    const siblings: Array<{ page: string; absolute: string; size: number; mtimeMs: number }> = [];
     for (const name of readdirSync(resolve(vault, directory))) {
       if (!name.endsWith(MARKDOWN_EXT)) continue;
       const absolute = resolve(vault, directory, name);
+      const page = canonicalPage(vault, absolute);
+      if (!readable(page)) continue;
       try {
         const stat = statSync(absolute);
-        siblings.push({ absolute, size: stat.size, mtimeMs: stat.mtimeMs });
+        siblings.push({ page, absolute, size: stat.size, mtimeMs: stat.mtimeMs });
       } catch (err) {
-        unreadable.push({ page: canonicalPage(vault, absolute), detail: failureCode(err) });
+        unreadable.push({ page, detail: failureCode(err) });
       }
     }
     const newest = siblings.toSorted((a, b) => b.mtimeMs - a.mtimeMs);
@@ -550,12 +574,12 @@ function collectNearDuplicateCandidates(
       try {
         const [meta, body] = parseFrontmatterText(readFileSync(sibling.absolute, "utf8"));
         candidates.push({
-          page: canonicalPage(vault, sibling.absolute),
+          page: sibling.page,
           scopeKey: compositeScopeKey(scopeFromFrontmatter(meta)),
           tokens: tokenise(body),
         });
       } catch (err) {
-        unreadable.push({ page: canonicalPage(vault, sibling.absolute), detail: failureCode(err) });
+        unreadable.push({ page: sibling.page, detail: failureCode(err) });
       }
     }
     index.set(directory, candidates);
@@ -579,12 +603,19 @@ function collectNearDuplicateCandidates(
  * nothing here walks vault content beyond the written pages' own
  * directories - the near-duplicate candidate index reads each of those
  * once per call, sized against the same artifact cap as the pages.
+ *
+ * The near-duplicate candidates answer at the caller's reach
+ * (`opts.readable`); the written pages themselves are always linted.
  */
-export function lintWrittenPages(vault: string, pages: ReadonlyArray<string>): PageLintReport {
+export function lintWrittenPages(
+  vault: string,
+  pages: ReadonlyArray<string>,
+  opts: LintWrittenPagesOptions,
+): PageLintReport {
   if (pages.length === 0) return emptyReport();
   let ctx: LintContext;
   try {
-    const nearDuplicates = collectNearDuplicateCandidates(vault, pages);
+    const nearDuplicates = collectNearDuplicateCandidates(vault, pages, opts.readable);
     ctx = {
       basenames: collectAllBasenames(vault),
       vocabulary: loadSchemaPack(vault).vocabulary,
