@@ -7,7 +7,7 @@
  */
 
 import { resolve } from "node:path";
-import { resolveAgentName } from "../../core/config.ts";
+import { resolveAgentName, resolveNearDuplicateRetireSiblingsEnabled } from "../../core/config.ts";
 import {
   appendApplyEvidence,
   BrainPreferenceNotFoundError,
@@ -661,6 +661,11 @@ async function toolBrainDream(
   // spends the run's budget - which is the honest reading of a budget the
   // operator set for this operation.
   const safeguard = toolSafeguard(ctx, OPERATION.dream);
+  // The retire-siblings key honours the server's own config file, as
+  // `brain_review_candidates` does.
+  const retireSiblingsEnabled = resolveNearDuplicateRetireSiblingsEnabled(
+    ctx.configPath ?? undefined,
+  );
   // Only pay for a preview pass when a guard is actually requested; otherwise
   // the run is byte-identical to before.
   if (expect !== null || strict) {
@@ -668,6 +673,7 @@ async function toolBrainDream(
       dryRun: true,
       safeguard,
       readable,
+      retireSiblingsEnabled,
       ...previewScope,
       ...(nowDate ? { now: nowDate } : {}),
       ...(agent ? { agentName: agent } : {}),
@@ -693,6 +699,7 @@ async function toolBrainDream(
     dryRun,
     safeguard,
     readable,
+    retireSiblingsEnabled,
     ...previewScope,
     ...(nowDate ? { now: nowDate } : {}),
     ...(agent ? { agentName: agent } : {}),
@@ -700,6 +707,17 @@ async function toolBrainDream(
     ...(onProgress ? { onProgress } : {}),
   });
   const changeList = dreamChangeList(summary);
+  // A retire-sibling pair names two preferences; it is kept only when the
+  // caller may see both, each in both spellings (`ret-<slug>` after the
+  // pass, `pref-<slug>` before it).
+  const bothSpellings = (id: string): ReadonlyArray<string> => {
+    const slug = brainArtifactSlug(id);
+    return [`pref-${slug}`, `ret-${slug}`];
+  };
+  const retireSiblings = dreamView.keep(summary.retire_siblings ?? [], (p) => [
+    ...bothSpellings(p.retiring_id),
+    ...bothSpellings(p.sibling_id),
+  ]);
 
   // The summary is already a Plain Old Frozen Object — JSON-serialise
   // verbatim. We surface `snapshot_path` / `log_path` as vault-relative
@@ -713,6 +731,16 @@ async function toolBrainDream(
     changed_count: dryRun ? 0 : changeList.length,
     dry_run: dryRun,
     ...scopedDreamRows(dreamView, summary),
+    ...(retireSiblings.length > 0
+      ? {
+          retire_siblings: retireSiblings.map((p) => ({
+            retiring_id: p.retiring_id,
+            sibling_id: p.sibling_id,
+            score: p.score,
+            method: p.method,
+          })),
+        }
+      : {}),
     // Inbox archive (issue #195): a count, not the ids. A first pass over a
     // long-lived vault archives thousands of signals; the run's log event
     // names every one of them.

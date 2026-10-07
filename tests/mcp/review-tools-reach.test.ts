@@ -368,3 +368,71 @@ describe("brain_review_candidates retire_siblings answer at the caller's reach",
     ]);
   });
 });
+
+describe("brain_dream retire_siblings answer at the caller's reach", () => {
+  const savedFlag = process.env[SIBLINGS_FLAG];
+  const DRY_RUN = { dry_run: true };
+  const PUBLIC_PAIR = {
+    retiring_id: "pref-public-old",
+    sibling_id: "pref-public-twin",
+    score: 0.833,
+    method: "lexical",
+  };
+
+  afterEach(() => {
+    if (savedFlag === undefined) delete process.env[SIBLINGS_FLAG];
+    else process.env[SIBLINGS_FLAG] = savedFlag;
+  });
+
+  test("remote reach: a pair with a withheld retiring or sibling id is neither listed nor counted", async () => {
+    process.env[SIBLINGS_FLAG] = "1";
+    const withheld = await answer(siblingFixture(true), "brain_dream", undefined, DRY_RUN);
+    const absent = await answer(siblingFixture(false), "brain_dream", undefined, DRY_RUN);
+    expect(siblingsOf(withheld)).toEqual(siblingsOf(absent));
+    expect(siblingsOf(withheld)).toEqual([PUBLIC_PAIR]);
+  });
+
+  test("local control: the operator's own shell lists every pair", async () => {
+    process.env[SIBLINGS_FLAG] = "1";
+    const local = await answer(siblingFixture(true), "brain_dream", TRANSPORT_REACH.local, DRY_RUN);
+    const pairs = (siblingsOf(local) as Array<{ retiring_id: string; sibling_id: string }>).map(
+      (p) => `${p.retiring_id}>${p.sibling_id}`,
+    );
+    expect(pairs).toEqual([
+      "pref-public-old>pref-public-twin",
+      "pref-public-retiring>pref-zzwithheld-stale-twin",
+      "pref-zzwithheld-stale-old>pref-public-gamma-twin",
+    ]);
+  });
+
+  test("with the key off, the field is absent", async () => {
+    delete process.env[SIBLINGS_FLAG];
+    const local = await answer(
+      siblingFixture(false),
+      "brain_dream",
+      TRANSPORT_REACH.local,
+      DRY_RUN,
+    );
+    expect(local).not.toContain("retire_siblings");
+  });
+
+  test("the key is read from the server's own config file, not the default one", async () => {
+    delete process.env[SIBLINGS_FLAG];
+    const base = mkdtempSync(join(tmpdir(), "o2b-dream-siblings-config-"));
+    bases.push(base);
+    const f = buildReachLogFixture(base, false, ['near_duplicate_retire_siblings_enabled: "true"']);
+    rule(f.vault, "public-old", `${SIBLING_RULE} alpha`, false);
+    rule(f.vault, "public-twin", `${SIBLING_PARAPHRASE} alpha`, false);
+    evidence(f.vault, "public-twin", "applied");
+    evidence(f.vault, "public-old", "outdated");
+    const server = reachServer(f, TRANSPORT_REACH.local);
+    // The default config is now a file without the key.
+    const otherConfig = join(base, "other-config.yaml");
+    writeFileSync(otherConfig, `vault: ${f.vault}\n`);
+    process.env["OPEN_SECOND_BRAIN_CONFIG"] = otherConfig;
+    const result = await server.callTool("brain_dream", DRY_RUN);
+    expect(siblingsOf(maskVolatile(f, result["structuredContent"] ?? result))).toEqual([
+      PUBLIC_PAIR,
+    ]);
+  });
+});
