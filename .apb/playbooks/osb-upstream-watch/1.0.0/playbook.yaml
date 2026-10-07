@@ -195,15 +195,20 @@ nodes:
       so refetch each block read-only:
       python3 "$APB_RUN_DIR/collector/osb-upstream-collect.py" block \
         --table "{{params.table_path}}" --repo <owner/repo> \
-        --since <the since from that worklist entry> \
         --cap <the cap collect used, when set>
-      A block can come back {"repo": ..., "mode": "empty"|"error", ...}:
-      record it under unjudged with its reason and judge nothing for it.
-    - when dry_run is "false" the day snapshot exists: loop
-      python3 "$APB_RUN_DIR/collector/osb-upstream-collect.py" next \
+      and append --since {{params.since}} only when that param is non-empty
+      (never the worklist entry's since value - it is the collector's ISO
+      watermark, not a --since argument). A block can come back {"repo": ...,
+      "mode": "empty"|"error", ...}: record it under unjudged with its reason
+      and judge nothing for it.
+    - when dry_run is "false" the day snapshot exists: judge the project
+      blocks the host hands you pre-split from the run's collection.json and
+      fetch any you were not handed with one read-only call:
+      python3 "$APB_RUN_DIR/collector/osb-upstream-collect.py" pending \
         --state-root "$APB_RUN_DIR/state"
-      until it prints nothing; each printed JSON object is one project block.
-      You never run `done` yourself.
+      (add --repo <owner/repo> for a single block); it prints every
+      not-yet-processed block as one JSON array. Never loop `next`, never run
+      `done` - the bookkeeping node owns the ledger and the table.
 
     Block shape: {repo, url, stars, mode, since, newest_tag|newest_commit_sha,
     releases[], commits[], dropped?}. mode is releases (in-window releases; each

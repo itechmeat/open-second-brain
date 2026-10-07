@@ -16,13 +16,14 @@ cat > "$COLLECTOR_DIR/osb-upstream-collect.py" <<'__OSB_COLLECT_PY__'
 
 Offloads the mechanical, token-heavy work (gh release/commit fetching, date filtering,
 release-vs-commits mode decision, conventional-commit filtering, Markdown table writeback)
-out of the LLM. The model orchestrates (collect -> next -> done) and does only the semantic
-work (feature extraction, evidence gathering, kanban).
+out of the LLM. The model orchestrates (collect -> pending -> done) and does only the
+semantic work (feature extraction, evidence gathering, kanban).
 
 Port of the nightly VPS workflow's embedded collector to the devbox run directory:
 no personal default paths (--table and --state-root are required), a --repos filter,
-an explicit --since window override, a --dry-run mode that writes nothing, and a
-read-only `block` subcommand that fetches one project block without touching state.
+an explicit --since window override, a --dry-run mode that writes nothing, and the
+read-only `block` / `pending` subcommands that fetch project blocks without touching
+state.
 Stdlib only. gh is invoked read-only via subprocess.
 """
 import argparse
@@ -581,18 +582,27 @@ def cmd_collect(table, state_root, refetch=False, since_date=None, process_all=F
             "state_dir": None if dry_run else str(sd)}
 
 
-def cmd_next(state_root):
-    today = today_utc()
-    sd = _state_dir(state_root, today)
+def _pending_blocks(state_root, repo=None):
+    """The day snapshot's projects the processed ledger has not consumed yet,
+    optionally narrowed to one owner/name. Read-only: no ledger, no table, no
+    state write. Empty when nothing is pending or no snapshot exists."""
+    sd = _state_dir(state_root, today_utc())
     snap_path = sd / "collection.json"
     if not snap_path.exists():
-        return None
+        return []
     snapshot = json.loads(snap_path.read_text(encoding="utf-8"))
     processed = read_processed_repos(sd / "processed.ndjson")
-    for p in snapshot.get("projects", []):
-        if p["repo"] not in processed:
-            return p
-    return None
+    return [p for p in snapshot.get("projects", [])
+            if p["repo"] not in processed and (repo is None or p["repo"] == repo)]
+
+
+def cmd_next(state_root):
+    pending = _pending_blocks(state_root)
+    return pending[0] if pending else None
+
+
+def cmd_pending(state_root, repo=None):
+    return _pending_blocks(state_root, repo)
 
 
 def cmd_block(table, repo, since_date=None, cap=CANDIDATE_CAP, stale_days=COMMITS_FALLBACK_DAYS):
@@ -646,18 +656,22 @@ def _add_common_filters(p):
     p.add_argument("--stale-days", type=int, default=COMMITS_FALLBACK_DAYS,
                    help="Release-cadence threshold; older -> mine PRs/commits (default %d)."
                         % COMMITS_FALLBACK_DAYS)
-    p.add_argument("--since", type=str, default=None, metavar="YYYY-MM-DD",
+    p.add_argument("--since", type=str, default=None, metavar="YYYY-MM-DD[THH:MM:SSZ]",
                    help="Force a uniform window start for every project (overrides the "
-                        "per-row Updated / LastReleaseTag watermark).")
+                        "per-row Updated / LastReleaseTag watermark); a plain date or an "
+                        "ISO timestamp, normalized to its date.")
 
 
 def _parse_since(s):
     if not s:
         return None
-    try:
-        return datetime.strptime(s.strip(), "%Y-%m-%d").date()
-    except ValueError:
-        raise SystemExit("--since expects YYYY-MM-DD, got %r" % s)
+    value = s.strip()
+    for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%SZ"):
+        try:
+            return datetime.strptime(value, fmt).date()
+        except ValueError:
+            continue
+    raise SystemExit("--since expects YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ, got %r" % s)
 
 
 def _parse_repos(s):
@@ -691,6 +705,11 @@ def main(argv=None):
     pn = sub.add_parser("next", help="Print the next pending project block (empty when done).")
     pn.add_argument("--state-root", required=True, help="Directory holding the day snapshot.")
 
+    pp = sub.add_parser("pending",
+                        help="Print every pending project block (read-only, no state).")
+    pp.add_argument("--state-root", required=True, help="Directory holding the day snapshot.")
+    pp.add_argument("--repo", default=None, help="Limit the output to one owner/name block.")
+
     pd = sub.add_parser("done", help="Mark a project processed and write back its table row.")
     pd.add_argument("--table", required=True, help="Path to the project table Markdown file.")
     pd.add_argument("--state-root", required=True, help="Directory holding the day ledger.")
@@ -715,6 +734,9 @@ def main(argv=None):
         block = cmd_next(args.state_root)
         if block is not None:
             print(json.dumps(block, ensure_ascii=False, indent=2))
+    elif args.cmd == "pending":
+        print(json.dumps(cmd_pending(args.state_root, args.repo),
+                         ensure_ascii=False, indent=2))
     elif args.cmd == "done":
         out = cmd_done(args.table, args.state_root, args.repo,
                        last_tag=args.last_tag, commit=args.commit, error=args.error)
