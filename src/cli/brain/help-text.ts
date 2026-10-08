@@ -500,13 +500,17 @@ export const VERB_HELP: Record<string, string> = {
     "events outside the retention window or beyond the newest-N cap and refolds\n" +
     "(--max-events 0 clears every retained event).\n",
   truth:
-    "usage: o2b brain truth <ingest|slots|conflicts|aggregate|collisions|sweep> [--vault <path>] [--json]\n" +
+    "usage: o2b brain truth <ingest|slots|conflicts|aggregate|collisions|events|state|sweep> [--vault <path>] [--json]\n" +
     "Operator surface over the entity claim ledger (Brain/truth/). ingest appends one\n" +
     "claim (--entity --aspect --value --source, optional --quantity-value/--quantity-unit/\n" +
-    "--quantity-action); slots renders current values with superseded history; conflicts\n" +
-    "lists contested slots (two values within the window from independent sources,\n" +
-    "resolution always ask_user); aggregate sums exact (entity, action, unit) quantity\n" +
-    "matches; collisions reports cross-agent convergence; sweep keeps the newest N events.\n",
+    "--quantity-action, optional --valid-from/--valid-until validity window); slots\n" +
+    "renders current values with superseded history; conflicts lists contested slots\n" +
+    "(two values within the window from independent sources, resolution always ask_user);\n" +
+    "aggregate sums exact (entity, action, unit) quantity matches; collisions reports\n" +
+    "cross-agent convergence; events recalls a windowed slice of the ledger (--entity,\n" +
+    "--since, --until, --limit); state grounds one agent-stated claim with an anchoring\n" +
+    "verdict (--subject --relation --object --text --source); sweep keeps the newest N\n" +
+    "events.\n",
   facts:
     "usage: o2b brain facts decompose (--file <path> | --text <text>) [--ingest --entity E] [--vault <path>] [--json]\n" +
     "Deterministically decompose text into atomic assertions via markdown structure\n" +

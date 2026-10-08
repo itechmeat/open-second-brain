@@ -600,8 +600,10 @@ function toolBrainIdeaDiscovery(
 /**
  * Operator/agent surface over the entity claim ledger: ingest one
  * claim, render slots/conflicts from the fold, aggregate exact-match
- * quantities, report cross-agent collisions. Read ops are pure folds
- * over the append-only ledger.
+ * quantities, report cross-agent collisions, recall a windowed slice of
+ * the ledger via the events operation, and commit grounded agent-stated
+ * claims via the state operation with per-claim anchoring verdicts. The
+ * read ops are pure folds over the append-only ledger.
  */
 function toolBrainTruth(
   ctx: ServerContext,
@@ -1308,8 +1310,8 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         aspect: { type: "string", description: "Aspect slot for ingest." },
         value: { type: "string", description: "Claim value for ingest." },
-        source: { type: "string", description: "Provenance wikilink/path for ingest." },
-        agent: { type: "string", description: "Agent identity override for ingest." },
+        source: { type: "string", description: "Provenance wikilink/path for ingest and state." },
+        agent: { type: "string", description: "Agent identity override for ingest and state." },
         quantity_value: { type: "number", description: "Numeric value for quantity claims." },
         quantity_unit: { type: "string", description: "Unit token for quantity claims." },
         quantity_action: { type: "string", description: "Measured action for quantity claims." },
