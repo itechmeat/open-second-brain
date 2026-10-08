@@ -52,6 +52,7 @@ import { aggregateQuantities } from "../../core/brain/truth/aggregate.ts";
 import { detectAgentCollisions } from "../../core/brain/truth/collision.ts";
 import { computeTruthStateWithConflicts } from "../../core/brain/truth/conflicts.ts";
 import { appendClaimEvent, readClaimEvents } from "../../core/brain/truth/store.ts";
+import { claimEventLimit, matchClaimEvents } from "../../core/brain/truth/events-window.ts";
 import {
   allClaims,
   buildClaimGraph,
@@ -78,6 +79,7 @@ import {
 } from "../coerce.ts";
 import { coercePositiveInteger, toolSafeguard, vaultRelativeSafe } from "./shared.ts";
 import { readableAtContextReach, readableAtContextReachOrUndefined } from "./reach-readable.ts";
+import { resolveTimeBounds } from "./time-bounds.ts";
 
 /**
  * Vault-relative locations these two handlers read BY PATH, rather than
@@ -596,16 +598,28 @@ function toolBrainTruth(
     op !== "slots" &&
     op !== "conflicts" &&
     op !== "aggregate" &&
-    op !== "collisions"
+    op !== "collisions" &&
+    op !== "events"
   ) {
     throw unknownOperationError(
-      "brain_truth: operation must be ingest|slots|conflicts|aggregate|collisions",
+      "brain_truth: operation must be ingest|slots|conflicts|aggregate|collisions|events",
     );
   }
   const requireStr = (name: string): string => {
     const value = args[name];
     if (typeof value !== "string" || value.trim() === "") {
       throw new MCPError(INVALID_PARAMS, `brain_truth ${op}: ${name} must be a non-empty string`);
+    }
+    return value;
+  };
+  // An optional string parameter is either a string or absent; any other
+  // type is refused rather than silently ignored - a mistyped bound that
+  // read as "no filter" would widen what the caller sees.
+  const optionalStr = (name: string): string | undefined => {
+    const value = args[name];
+    if (value === undefined) return undefined;
+    if (typeof value !== "string") {
+      throw new MCPError(INVALID_PARAMS, `brain_truth ${op}: ${name} must be a string`);
     }
     return value;
   };
@@ -651,6 +665,46 @@ function toolBrainTruth(
       entity: result.event.entity,
       aspect: result.event.aspect,
       path: result.path,
+    };
+  }
+
+  // Windowed recall over the ledger (truth-correctable-time-aware,
+  // Task 8). `since`/`until` filter ASSERTION `ts` only, through the
+  // shared time-range grammar; the per-claim validity windows ride on
+  // the rows verbatim and are never consulted here (contract item 1
+  // keeps the two temporal vocabularies separate). Every matched row
+  // passes the same per-row owner/reach gate `brain_claims` asks; rows
+  // the gate drops are counted in `withheld`, so the account over the
+  // window stays deterministic for a remote caller while the withheld
+  // rows themselves name nothing.
+  if (op === "events") {
+    const bounds = resolveTimeBounds(optionalStr("since"), optionalStr("until"));
+    let limit: number;
+    try {
+      limit = claimEventLimit(args["limit"]);
+    } catch (exc) {
+      throw new MCPError(INVALID_PARAMS, `brain_truth events: ${(exc as Error).message}`);
+    }
+    const entityArg = optionalStr("entity");
+    const entityFilter = entityArg !== undefined && entityArg.trim() !== "" ? entityArg : undefined;
+    const view = everyArtifactRefView(
+      gatedOwnerScopeView(ctx.vault, ctx.agentName),
+      reachView(ctx.vault, contextReach(ctx)),
+    );
+    const matched = matchClaimEvents(readClaimEvents(ctx.vault).events, {
+      ...(entityFilter !== undefined ? { entity: entityFilter } : {}),
+      sinceMs: bounds.sinceMs,
+      untilMs: bounds.untilMs,
+    });
+    const gated = view.filtersNothing ? matched : matched.filter((event) => view.row(event.source));
+    return {
+      ok: true,
+      operation: "events",
+      entity: entityFilter === undefined ? null : normalizeEntityName(entityFilter),
+      events: gated.slice(0, limit),
+      total: matched.length,
+      withheld: matched.length - gated.length,
+      truncated: gated.length > limit,
     };
   }
 
@@ -1062,18 +1116,18 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_truth",
     description:
-      "Entity claim ledger: ingest a claim, render current-truth slots with superseded history, list contested conflicts (ask_user), aggregate exact-match quantities, report cross-agent collisions.",
+      "Entity claim ledger: ingest a claim, render current-truth slots with superseded history, list contested conflicts (ask_user), aggregate exact-match quantities, report cross-agent collisions, or window recall with the events operation (since/until filter assertion time only; per-claim validity windows ride on the rows verbatim, half-open [validFrom, validUntil)).",
     inputSchema: {
       type: "object",
       properties: {
         operation: {
           type: "string",
-          enum: ["ingest", "slots", "conflicts", "aggregate", "collisions"],
+          enum: ["ingest", "slots", "conflicts", "aggregate", "collisions", "events"],
           description: "Tool operation.",
         },
         entity: {
           type: "string",
-          description: "Entity name (ingest, slots filter, aggregate filter).",
+          description: "Entity name (ingest, slots filter, aggregate filter, events filter).",
         },
         aspect: { type: "string", description: "Aspect slot for ingest." },
         value: { type: "string", description: "Claim value for ingest." },
@@ -1084,6 +1138,22 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         quantity_action: { type: "string", description: "Measured action for quantity claims." },
         action: { type: "string", description: "Measured action for aggregate." },
         unit: { type: "string", description: "Unit token for aggregate (omit for unitless)." },
+        since: {
+          type: "string",
+          description:
+            "events: inclusive lower bound on the events' assertion ts (ISO date/datetime, today/yesterday, last week/month, <n>h/<n>d/<n>w). Never a validity filter.",
+        },
+        until: {
+          type: "string",
+          description:
+            "events: inclusive upper bound on the events' assertion ts, same grammar as since. Never a validity filter.",
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          description:
+            "events: page size (default 200, capped at 1000); rows are ascending assertion ts, so tail-following paginates by advancing since.",
+        },
       },
       required: ["operation"],
       additionalProperties: false,

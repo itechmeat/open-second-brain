@@ -58,6 +58,23 @@ export interface ClaimEventSelectionResult {
 }
 
 /**
+ * Validate and cap one events page size coming from an untyped surface
+ * (MCP arguments, CLI flags). Absent asks for the default; anything that
+ * is not a positive integer is refused with a named error rather than
+ * silently coerced; anything above the hard cap is capped, which is the
+ * operation's specified bound.
+ */
+export function claimEventLimit(raw: unknown): number {
+  if (raw === undefined || raw === null) return DEFAULT_EVENT_LIST_LIMIT;
+  if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 1) {
+    throw new RangeError(
+      `claim events limit must be a positive integer, got ${JSON.stringify(raw)}`,
+    );
+  }
+  return Math.min(raw, CLAIM_EVENT_MAX_LIST_LIMIT);
+}
+
+/**
  * Resolve unix-ms window bounds into whole-second ISO-8601 UTC stamps,
  * the form the second-precision string compare below consumes. Null
  * stays null: that side of the window is open.
@@ -86,6 +103,26 @@ function eventSecond(ts: string): string {
 }
 
 /**
+ * Every event the selection's filters match, in the input's ascending
+ * `(ts, shard, line)` order - the page WITHOUT the page size, so a
+ * caller that gates rows per row (visibility, reach) can count what the
+ * gate withheld and page the survivors itself.
+ */
+export function matchClaimEvents(
+  events: ReadonlyArray<ClaimEvent>,
+  selection: ClaimEventSelection,
+): ReadonlyArray<ClaimEvent> {
+  const bounds = eventsWindowBounds(selection.sinceMs ?? null, selection.untilMs ?? null);
+  const entity = selection.entity === undefined ? "" : normalizeEntityName(selection.entity);
+  return events.filter(
+    (event) =>
+      (entity === "" || event.entity === entity) &&
+      (bounds.since === null || eventSecond(event.ts) >= bounds.since) &&
+      (bounds.until === null || eventSecond(event.ts) <= bounds.until),
+  );
+}
+
+/**
  * Slice a `ts`-ascending event array against the selection. Order is
  * preserved from the input (the store returns ascending `(ts, shard,
  * line)`), so the rows are stable across calls over an unchanged ledger.
@@ -97,24 +134,12 @@ export function selectClaimEvents(
   events: ReadonlyArray<ClaimEvent>,
   selection: ClaimEventSelection,
 ): ClaimEventSelectionResult {
-  const limit = selection.limit ?? DEFAULT_EVENT_LIST_LIMIT;
-  if (!Number.isInteger(limit) || limit < 1) {
-    throw new Error(`selectClaimEvents: limit must be a positive integer, got ${selection.limit}`);
-  }
-  const capped = Math.min(limit, CLAIM_EVENT_MAX_LIST_LIMIT);
+  const limit = claimEventLimit(selection.limit ?? DEFAULT_EVENT_LIST_LIMIT);
 
-  const bounds = eventsWindowBounds(selection.sinceMs ?? null, selection.untilMs ?? null);
-  const entity = selection.entity === undefined ? "" : normalizeEntityName(selection.entity);
-
-  const matched = events.filter(
-    (event) =>
-      (entity === "" || event.entity === entity) &&
-      (bounds.since === null || eventSecond(event.ts) >= bounds.since) &&
-      (bounds.until === null || eventSecond(event.ts) <= bounds.until),
-  );
+  const matched = matchClaimEvents(events, selection);
   return {
-    rows: matched.slice(0, capped),
+    rows: matched.slice(0, limit),
     total: matched.length,
-    truncated: matched.length > capped,
+    truncated: matched.length > limit,
   };
 }
