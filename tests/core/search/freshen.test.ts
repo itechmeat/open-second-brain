@@ -66,6 +66,13 @@ describe("decideFreshen", () => {
     ).toEqual({ action: "skip", reason: FRESHEN_SKIP.backoff });
   });
 
+  test("a fresh index is fresh even while a backoff is active", () => {
+    expect(decideFreshen({ ...base, lastIndexedAt: ago(30), backoffUntilMs: NOW + 1000 })).toEqual({
+      action: "skip",
+      reason: FRESHEN_SKIP.fresh,
+    });
+  });
+
   test("an unparseable stamp counts as due rather than fresh", () => {
     expect(decideFreshen({ ...base, lastIndexedAt: "not a date" })).toEqual({ action: "spawn" });
   });
@@ -277,6 +284,21 @@ describe("maybeFreshenIndex", () => {
       }
     },
   );
+
+  test("a fresh index is decided without the state file, so a backoff there is not consulted", () => {
+    writeFreshenState(join(vault, ".open-second-brain"), {
+      failures: 1,
+      backoffUntil: new Date(NOW + 30_000).toISOString(),
+      lastOutcome: "failed",
+      lastRunAt: ago(10),
+      lastDurationMs: 100,
+      lastError: "boom",
+      lastChanged: null,
+    });
+    expect(maybeFreshenIndex(config, { lastIndexedAt: ago(5), nowMs: NOW, spawn })).toBe(
+      FRESHEN_SKIP.fresh,
+    );
+  });
 
   test("a spawner that throws is reported as a skip and releases the claim", () => {
     const decision = maybeFreshenIndex(config, {

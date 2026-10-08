@@ -11,8 +11,9 @@
  * readers from starting a run each, and the state file the child writes its
  * outcome and backoff to.
  *
- * `maybeFreshenIndex` never throws and never waits for the run: a reader's
- * cost is one state-file read, one lock probe and one exclusive create.
+ * `maybeFreshenIndex` never throws and never waits for the run: a reader
+ * of a fresh index pays nothing; a due one pays one state-file read, one
+ * lock probe and one exclusive create.
  */
 import { randomUUID } from "node:crypto";
 import { readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
@@ -94,19 +95,20 @@ export interface DecideFreshenInput {
  * Whether a read should start a run. Pure. An index that was never
  * stamped belongs to self-heal (a missing or unbuilt index is rebuilt
  * there); an unparseable stamp is treated as due, since claiming it fresh
- * would leave the index stale forever.
+ * would leave the index stale forever. Freshness is decided before the
+ * backoff, so a reader can skip the state file while the index is fresh.
  */
 export function decideFreshen(
   input: DecideFreshenInput,
 ): { readonly action: "spawn" } | { readonly action: "skip"; readonly reason: FreshenSkip } {
   if (input.intervalSeconds <= 0) return { action: "skip", reason: FRESHEN_SKIP.off };
   if (input.lastIndexedAt === null) return { action: "skip", reason: FRESHEN_SKIP.noIndex };
-  if (input.backoffUntilMs !== null && input.backoffUntilMs > input.nowMs) {
-    return { action: "skip", reason: FRESHEN_SKIP.backoff };
-  }
   const indexedMs = Date.parse(input.lastIndexedAt);
   if (Number.isFinite(indexedMs) && input.nowMs - indexedMs < input.intervalSeconds * 1000) {
     return { action: "skip", reason: FRESHEN_SKIP.fresh };
+  }
+  if (input.backoffUntilMs !== null && input.backoffUntilMs > input.nowMs) {
+    return { action: "skip", reason: FRESHEN_SKIP.backoff };
   }
   return { action: "spawn" };
 }
@@ -364,12 +366,19 @@ export function maybeFreshenIndex(
     if (opts.readOnly === true) return FRESHEN_SKIP.readOnly;
     const nowMs = opts.nowMs ?? Date.now();
     const dir = dirname(config.dbPath);
-    const backoffUntil = readFreshenState(dir).backoffUntil;
-    const backoffMs = backoffUntil === null ? Number.NaN : Date.parse(backoffUntil);
-    const decision = decideFreshen({
+    const input = {
       nowMs,
       lastIndexedAt: opts.lastIndexedAt,
       intervalSeconds: freshen.intervalSeconds,
+    };
+    // Every search lands here: decide on the index stamp alone first and
+    // read the state file for the backoff only once the index is due.
+    const due = decideFreshen({ ...input, backoffUntilMs: null });
+    if (due.action === "skip") return due.reason;
+    const backoffUntil = readFreshenState(dir).backoffUntil;
+    const backoffMs = backoffUntil === null ? Number.NaN : Date.parse(backoffUntil);
+    const decision = decideFreshen({
+      ...input,
       backoffUntilMs: Number.isFinite(backoffMs) ? backoffMs : null,
     });
     if (decision.action === "skip") return decision.reason;
