@@ -147,6 +147,17 @@ test("entity bridges resolve on by default and follow env over config", () => {
   expect(() => resolveEntityBridgesEnabled({ env: { [ENTITY_BRIDGES_ENV]: "maybe" } })).toThrow(
     new RegExp(ENTITY_BRIDGES_ENV),
   );
+  // The refusal names the key ACTUALLY in force: a machine-config value
+  // gone bad names the config key, never the env key that lost the
+  // precedence race.
+  let configRefusal = "";
+  try {
+    resolveEntityBridgesEnabled({ env: {}, config: { [ENTITY_BRIDGES_CONFIG]: "maybe" } });
+  } catch (e) {
+    configRefusal = (e as Error).message;
+  }
+  expect(configRefusal).toContain(ENTITY_BRIDGES_CONFIG);
+  expect(configRefusal).not.toContain(ENTITY_BRIDGES_ENV);
 });
 
 /** The slice of Store the arm needs, with typed edges plus optional bridges. */

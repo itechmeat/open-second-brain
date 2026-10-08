@@ -67,10 +67,13 @@ export function resolveEntityBridgesEnabled(input: {
   const config = input.config ?? {};
   const raw = envOrConfig(env, config, ENTITY_BRIDGES_ENV, ENTITY_BRIDGES_CONFIG);
   if (raw === null) return true;
+  // The key actually in force, by the same env-over-config precedence the
+  // raw value resolved with - the refusal names the key the operator
+  // wrote, never the one that lost the precedence race.
+  const inForce = env[ENTITY_BRIDGES_ENV] ? ENTITY_BRIDGES_ENV : ENTITY_BRIDGES_CONFIG;
   try {
-    return parseBool(raw, true, ENTITY_BRIDGES_ENV);
+    return parseBool(raw, true, inForce);
   } catch (e) {
-    const inForce = env[ENTITY_BRIDGES_ENV] ? ENTITY_BRIDGES_ENV : ENTITY_BRIDGES_CONFIG;
     throw new SearchError("INVALID_INPUT", `${inForce}: ${(e as Error).message}`);
   }
 }
