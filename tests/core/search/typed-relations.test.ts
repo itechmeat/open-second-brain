@@ -73,6 +73,11 @@ test("a plain page with no relation frontmatter produces no typed edges", async 
 
 test("search surfaces a result page's declared relations inline", async () => {
   writeMd(vault, "a.md", PAGE_A);
+  // The declared successor must exist and be readable: the
+  // serve-with-correction coupling drops a retired-but-serveable page
+  // whose chain tip is unresolved, and this test's subject is inline
+  // relation surfacing, not retired-row serving.
+  writeMd(vault, "c.md", "The settled successor record for the alpha page.");
   const cfg = makeConfig({ vault, dbPath });
   await indexVault(cfg);
 

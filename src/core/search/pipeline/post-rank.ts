@@ -30,7 +30,7 @@ import { clamp01 } from "../../math.ts";
 import { isVisible, pageVisibility } from "../../graph/visibility.ts";
 import { couplingVerdict } from "../correction-coupling.ts";
 import { SUCCESSOR_CARRY } from "../relation-polarity.ts";
-import { resolvePoolFilters, type PoolFilters } from "./pool-filters.ts";
+import { applyPoolFilters, resolvePoolFilters, type PoolFilters } from "./pool-filters.ts";
 import { applyRankAdjusters, type RankAdjuster } from "../rank-adjust.ts";
 import { applyReinforceBoost, loadReinforceStrengths } from "../reinforce.ts";
 import { applyCrossEncoderRerank } from "../rerank/index.ts";
@@ -39,10 +39,7 @@ import type { DecisionRerankExtras } from "../rerank/decision-model.ts";
 import { RERANK_QUESTIONS } from "../../decision-model/questions.ts";
 import type { FrontmatterMap } from "../../types.ts";
 import {
-  applyAgentScope,
   applyReachFilter,
-  applyStatusFilter,
-  applyVisibilityScope,
   isPathOwnerVisible,
   isPathReadableAtReach,
   readCachedFrontmatter,
@@ -332,33 +329,14 @@ function applyCorrectionCoupling(
 }
 
 /**
- * The caller's post-rank filter set - status, visibility scope, agent
- * scope, reach - re-asked over a pool a post-rank phase widened. Every
- * pass is idempotent over the rows that already answered it, so
- * re-running the whole pool costs shared-cache reads and keeps one
+ * The caller's post-rank filter set re-asked over a pool a post-rank
+ * phase widened goes through {@link applyPoolFilters} - the ONE pipeline
+ * the visibility census pins as `applyVisibilityScope`'s single call
+ * site. Every pass is idempotent over the rows that already answered it,
+ * so re-running the whole pool costs shared-cache reads and keeps one
  * spelling of each rule; tracking which rows were new would be a second
  * copy of the same bookkeeping.
  */
-function applyCallerFilterSet(
-  pool: ReadonlyArray<BrainSearchResult>,
-  filters: PoolFilters,
-  vault: string,
-  frontmatterCache: FrontmatterCache,
-  store: PostRankInput["store"],
-): ReadonlyArray<BrainSearchResult> {
-  const statusFiltered = applyStatusFilter(pool, vault, frontmatterCache);
-  const visible = applyVisibilityScope(
-    statusFiltered,
-    filters.visibilityScope,
-    vault,
-    frontmatterCache,
-  );
-  const scoped =
-    filters.agentScope !== null
-      ? applyAgentScope(visible, filters.agentScope, vault, frontmatterCache)
-      : visible;
-  return applyReachFilter(scoped, filters.reach, vault, frontmatterCache, store);
-}
 
 export async function applyPostRankPhases(input: PostRankInput): Promise<PostRankOutcome> {
   const { store, config, opts, frontmatterCache } = input;
@@ -407,7 +385,11 @@ export async function applyPostRankPhases(input: PostRankInput): Promise<PostRan
   const polarityPulled = polarized.length !== excluded.length;
   const reachable =
     polarityPulled || coupled.pulledIn
-      ? applyCallerFilterSet(coupled.pool, poolFilters, config.vault, frontmatterCache, store)
+      ? applyPoolFilters(coupled.pool, poolFilters, {
+          vault: config.vault,
+          store,
+          frontmatterCache,
+        }).visible
       : applyReachFilter(coupled.pool, poolFilters.reach, config.vault, frontmatterCache, store);
   // Self-tuning reinforce (Search & Recall Quality Suite): opt-in. When
   // the caller passes a reinforce set, the persisted ledger lifts

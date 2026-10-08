@@ -43,6 +43,17 @@ function paths(results: ReadonlyArray<{ readonly path: string }>): string[] {
   return results.map((r) => r.path).toSorted();
 }
 
+/** A result's stable projection: everything the wall clock does not own. */
+function stable(r: { path: string; reasons: ReadonlyArray<string> }): {
+  path: string;
+  reasons: ReadonlyArray<string>;
+} {
+  return {
+    path: r.path,
+    reasons: r.reasons.filter((reason) => !reason.startsWith("recency:")),
+  };
+}
+
 describe("post-rank coupling", () => {
   test("a retired-but-serveable row is served beside its chain-tip correction", async () => {
     page("predecessor.md", ['superseded_by: "[[mid-step]]"'], "falcon migration corridor map.");
@@ -78,7 +89,11 @@ describe("post-rank coupling", () => {
   });
 
   test("a retired row is dropped when its correction is outside the caller's agent scope", async () => {
-    page("scoped-predecessor.md", ['superseded_by: "[[private-correction]]"'], "nickel plating bath recipe.");
+    page(
+      "scoped-predecessor.md",
+      ['superseded_by: "[[private-correction]]"'],
+      "nickel plating bath recipe.",
+    );
     page("private-correction.md", ["owner: agent-a"], "revised nickel plating bath recipe.");
     await indexVault(config);
 
@@ -95,7 +110,11 @@ describe("post-rank coupling", () => {
   });
 
   test("a retired row is dropped when its correction is outside the caller's visibility scope", async () => {
-    page("tagged-predecessor.md", ['superseded_by: "[[tagged-correction]]"'], "harbor depth survey.");
+    page(
+      "tagged-predecessor.md",
+      ['superseded_by: "[[tagged-correction]]"'],
+      "harbor depth survey.",
+    );
     page("tagged-correction.md", ["visibility: internal"], "revised harbor depth survey.");
     await indexVault(config);
 
@@ -143,10 +162,6 @@ describe("post-rank coupling", () => {
     // Recency scores carry the wall clock, so two runs compare on the
     // stable projection only: which rows, in which order, with which
     // non-clock provenance. The pin is the absence of coupling edits.
-    const stable = (r: { path: string; reasons: ReadonlyArray<string> }) => ({
-      path: r.path,
-      reasons: r.reasons.filter((reason) => !reason.startsWith("recency:")),
-    });
     expect(first.results.map(stable)).toEqual(second.results.map(stable));
   });
 });

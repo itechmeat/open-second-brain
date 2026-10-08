@@ -63,6 +63,11 @@ beforeEach(async () => {
       "The quick brown fox jumps over the lazy dog.",
     ].join("\n"),
   );
+  // The declared successor must exist and be readable: the
+  // serve-with-correction coupling drops a retired-but-serveable page
+  // whose chain tip is unresolved, and this file's subject is inline
+  // relation surfacing, not retired-row serving.
+  writeFileSync(join(vault, "notes", "gamma.md"), "The settled successor record for alpha.\n");
   ctx = { vault, configPath };
   const config = resolveSearchConfig({ vault, configPath });
   await indexVault(config, {});
