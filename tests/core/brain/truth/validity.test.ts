@@ -4,17 +4,27 @@
  * (bare dates day-snapped, datetimes, relative phrases rejected),
  * `claimWindow` is null exactly for windowless events, and
  * `windowsIntersect` is the half-open rule with null as plus/minus
- * infinity. Pure functions only - no I/O, no clock.
+ * infinity. The ingest-default cases pin the frozen-at-ingest
+ * resolution: explicit input wins outright, a readable source record's
+ * frontmatter window fills the missing bounds, an unreadable or
+ * windowless source stores a windowless event byte-identical to
+ * today's output, and mtime is never a window source.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   claimWindow,
   isValidityPoint,
+  resolveIngestWindow,
   windowsIntersect,
 } from "../../../../src/core/brain/truth/validity.ts";
 import type { ClaimEvent } from "../../../../src/core/brain/truth/types.ts";
+import { appendClaimEvent } from "../../../../src/core/brain/truth/store.ts";
+import { withDeviceId } from "../../../helpers/device-id.ts";
 
 function claim(over: Partial<ClaimEvent> = {}): ClaimEvent {
   return {
@@ -142,5 +152,158 @@ describe("isValidityPoint", () => {
     expect(isValidityPoint("  ")).toBe(false);
     expect(isValidityPoint("not a date")).toBe(false);
     expect(isValidityPoint("2026-02-30")).toBe(false);
+  });
+});
+
+describe("resolveIngestWindow", () => {
+  test("explicit input wins outright - a readable source cannot leak in", () => {
+    const resolved = resolveIngestWindow(
+      { validFrom: "2026-02-01", validUntil: "2026-03-01" },
+      { validFrom: "2026-01-01", validUntil: "2026-06-30" },
+    );
+    expect(resolved.validFrom).toBe("2026-02-01");
+    expect(resolved.validUntil).toBe("2026-03-01");
+  });
+
+  test("absent input adopts the source record's frontmatter window verbatim", () => {
+    const resolved = resolveIngestWindow(
+      {},
+      { validFrom: "2026-01-01", validUntil: "2026-06-30T23:59:59Z" },
+    );
+    expect(resolved.validFrom).toBe("2026-01-01");
+    expect(resolved.validUntil).toBe("2026-06-30T23:59:59Z");
+  });
+
+  test("resolution is per bound: an explicit from pairs with a source until", () => {
+    const resolved = resolveIngestWindow(
+      { validFrom: "2026-02-01" },
+      { validFrom: "2026-01-01", validUntil: "2026-06-30" },
+    );
+    expect(resolved.validFrom).toBe("2026-02-01");
+    expect(resolved.validUntil).toBe("2026-06-30");
+  });
+
+  test("an unreadable source (null) resolves only the explicit bounds", () => {
+    const resolved = resolveIngestWindow({ validFrom: "2026-02-01" }, null);
+    expect(resolved.validFrom).toBe("2026-02-01");
+    expect(resolved.validUntil).toBeUndefined();
+    expect(resolveIngestWindow({}, null)).toEqual({});
+  });
+
+  test("an unparseable source bound is treated as absent", () => {
+    // A malformed source window must never refuse an otherwise-valid
+    // ingest nor leak garbage into the ledger.
+    const resolved = resolveIngestWindow(
+      {},
+      { validFrom: "yesterday", validUntil: "also not a date" },
+    );
+    expect(resolved).toEqual({});
+  });
+
+  test("empty source bounds are absent", () => {
+    const resolved = resolveIngestWindow({}, { validFrom: "  ", validUntil: "" });
+    expect(resolved).toEqual({});
+  });
+
+  test("mtime-shaped source metadata is never a window source", () => {
+    // Only the two named frontmatter keys participate; any other
+    // record metadata (recorded_at, an mtime proxy) is ignored.
+    const resolved = resolveIngestWindow({}, {
+      recordedAt: "2026-05-01",
+      validUntil: "2026-06-30",
+    } as Record<string, string>);
+    expect(resolved.validFrom).toBeUndefined();
+    expect(resolved.validUntil).toBe("2026-06-30");
+  });
+});
+
+describe("ingest window defaults (appendClaimEvent)", () => {
+  let vault: string;
+
+  beforeEach(() => {
+    vault = mkdtempSync(join(tmpdir(), "osb-truth-window-"));
+  });
+
+  afterEach(() => {
+    rmSync(vault, { recursive: true, force: true });
+  });
+
+  function writeSource(rel: string, frontmatter: string): void {
+    const path = join(vault, rel);
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(path, `---\n${frontmatter}---\nbody\n`);
+  }
+
+  function firstLine(): string {
+    const shard = withDeviceId("", () => appendClaimEvent(vault, STANDUP_CLAIM)).path;
+    return readFileSync(shard, "utf8").trim();
+  }
+
+  const STANDUP_CLAIM = {
+    ts: "2026-06-01T10:00:00Z",
+    agent: "claude-dev-agent",
+    entity: "Alice Mason",
+    aspect: "employer",
+    value: "Google",
+    source: "[[Brain/notes/standup.md]]",
+  } as const;
+
+  test("a readable source's frontmatter window is stored frozen on the event", () => {
+    writeSource("Brain/notes/standup.md", "valid_from: 2026-01-01\nvalid_until: 2026-06-30\n");
+    const line = firstLine();
+    const row = JSON.parse(line) as Record<string, unknown>;
+    expect(row["validFrom"]).toBe("2026-01-01");
+    expect(row["validUntil"]).toBe("2026-06-30");
+  });
+
+  test("an extensionless wikilink source resolves through the .md variant", () => {
+    writeSource("Brain/notes/standup.md", "valid_from: 2026-01-01\n");
+    const written = withDeviceId("", () =>
+      appendClaimEvent(vault, { ...STANDUP_CLAIM, source: "[[Brain/notes/standup]]" }),
+    );
+    expect(written.event.validFrom).toBe("2026-01-01");
+    expect(written.event.validUntil).toBeUndefined();
+  });
+
+  test("an explicit window wins outright over the source record's window", () => {
+    writeSource("Brain/notes/standup.md", "valid_from: 2026-01-01\nvalid_until: 2026-06-30\n");
+    const written = withDeviceId("", () =>
+      appendClaimEvent(vault, { ...STANDUP_CLAIM, validFrom: "2026-02-01" }),
+    );
+    expect(written.event.validFrom).toBe("2026-02-01");
+    // Explicit from + no explicit until: the source's until still fills
+    // the open side (per-bound resolution).
+    expect(written.event.validUntil).toBe("2026-06-30");
+  });
+
+  test("an unreadable source stores a windowless event byte-identical to today's output", () => {
+    const line = firstLine();
+    expect(line).toBe(
+      '{"v":1,"ts":"2026-06-01T10:00:00Z","agent":"claude-dev-agent","entity":"alice mason","aspect":"employer","value":"Google","valueKind":"text","source":"[[Brain/notes/standup.md]]"}',
+    );
+  });
+
+  test("a windowless source stores a windowless event byte-identical to today's output", () => {
+    writeSource("Brain/notes/standup.md", "status: active\n");
+    expect(firstLine()).toBe(
+      '{"v":1,"ts":"2026-06-01T10:00:00Z","agent":"claude-dev-agent","entity":"alice mason","aspect":"employer","value":"Google","valueKind":"text","source":"[[Brain/notes/standup.md]]"}',
+    );
+  });
+
+  test("a source file mtime alone never produces a window", () => {
+    // The source exists and is readable but carries no validity
+    // frontmatter; its filesystem mtime is an assertion-time proxy and
+    // must not become validity.
+    writeSource("Brain/notes/standup.md", "recorded_at: 2026-05-01\n");
+    expect(firstLine()).not.toContain("validFrom");
+    expect(firstLine()).not.toContain("validUntil");
+  });
+
+  test("a source traversal escape is treated as an unreadable source", () => {
+    const written = withDeviceId("", () =>
+      appendClaimEvent(vault, { ...STANDUP_CLAIM, source: "../../outside-vault" }),
+    );
+    expect(written.event.validFrom).toBeUndefined();
+    expect(written.event.validUntil).toBeUndefined();
   });
 });

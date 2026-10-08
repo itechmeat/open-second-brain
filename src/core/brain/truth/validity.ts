@@ -130,3 +130,69 @@ export function validityWindowMs(
     untilMs: hasUntil ? validityPointMs(validUntil!, "until") : null,
   });
 }
+
+/**
+ * A validity window candidate as carried by a caller's input or by a
+ * source record's frontmatter (`valid_from` / `valid_until`).
+ */
+export interface SourceValidityWindow {
+  readonly validFrom?: string;
+  readonly validUntil?: string;
+}
+
+/** The resolved ingest window: only the bounds that survive resolution. */
+export interface ResolvedIngestWindow {
+  readonly validFrom?: string;
+  readonly validUntil?: string;
+}
+
+/**
+ * A source-side bound participates only when it is present and parses
+ * under the storable grammar. A malformed frontmatter window must
+ * never refuse an otherwise-valid ingest nor leak garbage into the
+ * ledger, so it resolves as absent; explicit input bypasses this gate
+ * verbatim, because the append boundary validates it and names the
+ * failure.
+ */
+function sourceBound(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const text = value.trim();
+  if (text === "" || !isValidityPoint(text)) return undefined;
+  return text;
+}
+
+/**
+ * Ingest window defaults, frozen at ingest (truth-correctable-time-aware,
+ * task 3): each explicit input bound wins outright; a bound the caller
+ * left open resolves from the source record's frontmatter window, and
+ * the adopted string is stored verbatim (frozen - never a live
+ * reference back to the record). A null source window (unreadable or
+ * windowless source) resolves nothing, so the event stays windowless
+ * and byte-identical to the pre-window ledger. mtime is not an input
+ * here by construction: an mtime is an assertion-time proxy, not
+ * validity. Resolution is per bound, so an explicit from pairs with a
+ * source until.
+ *
+ * Pure; the caller owns reading the source record.
+ */
+export function resolveIngestWindow(
+  input: SourceValidityWindow,
+  sourceWindow: SourceValidityWindow | null,
+): ResolvedIngestWindow {
+  const fromExplicit = input.validFrom !== undefined;
+  const untilExplicit = input.validUntil !== undefined;
+  const validFrom = fromExplicit
+    ? input.validFrom
+    : sourceWindow === null
+      ? undefined
+      : sourceBound(sourceWindow.validFrom);
+  const validUntil = untilExplicit
+    ? input.validUntil
+    : sourceWindow === null
+      ? undefined
+      : sourceBound(sourceWindow.validUntil);
+  return Object.freeze({
+    ...(validFrom !== undefined ? { validFrom } : {}),
+    ...(validUntil !== undefined ? { validUntil } : {}),
+  });
+}

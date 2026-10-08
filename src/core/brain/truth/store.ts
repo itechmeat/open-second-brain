@@ -25,6 +25,8 @@ import {
 import { join } from "node:path";
 
 import { resolveDeviceId } from "../../config.ts";
+import { parseFrontmatter } from "../../vault.ts";
+import type { FrontmatterMap } from "../../types.ts";
 import {
   JSONL_LEDGER_EXT,
   jsonlLedgerGrammar,
@@ -32,8 +34,16 @@ import {
   shardedFileName,
 } from "../ledger-shards.ts";
 import { normalizeEntityName } from "../entities/canonical.ts";
+import { VALID_FROM_KEY, VALID_UNTIL_KEY } from "../lifecycle/temporal-replace.ts";
+import { resolveNotePath } from "../note-path.ts";
+import { ANCHORED_WIKILINK_RE, stripWikilinkDecoration } from "../wikilink.ts";
 import { computeTruthState } from "./fold.ts";
-import { isValidityPoint, validityWindowMs } from "./validity.ts";
+import {
+  isValidityPoint,
+  resolveIngestWindow,
+  validityWindowMs,
+  type SourceValidityWindow,
+} from "./validity.ts";
 import type {
   ClaimEvent,
   ClaimParseWarning,
@@ -61,6 +71,54 @@ const ISO_UTC_TS_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 // ledger-shard grammar rejects them).
 const CLAIMS_STEM = "claims";
 const CLAIMS_GRAMMAR = jsonlLedgerGrammar(CLAIMS_STEM);
+
+/** Extension appended when a source target names no file as given. */
+const NOTE_EXTENSION = ".md";
+
+/**
+ * The source record's frontmatter validity window, or null when the
+ * source is unreadable or carries no validity frontmatter (the ingest
+ * default rule, truth-correctable-time-aware task 3). The source is a
+ * provenance wikilink or vault-relative path: the wikilink decoration
+ * is stripped, the target resolves inside the vault only (a traversal
+ * or symlink escape reads as unreadable), and the target is tried as
+ * given, then with a `.md` suffix (the Obsidian extensionless-link
+ * shape). Only `valid_from` / `valid_until` participate; an mtime is
+ * never consulted, because an mtime is an assertion-time proxy, not
+ * validity.
+ */
+function sourceFrontmatterWindow(vault: string, source: string): SourceValidityWindow | null {
+  // The vault path a source names: the anchored wikilink body when the
+  // source is a wikilink, else the source verbatim - then alias/anchor
+  // decoration off, folder segments and `.md` kept (the same body
+  // discipline every vault-path resolver applies).
+  const anchored = ANCHORED_WIKILINK_RE.exec(source.trim());
+  const target = stripWikilinkDecoration(anchored !== null ? anchored[1]! : source.trim());
+  if (target === "") return null;
+  const candidates = target.endsWith(NOTE_EXTENSION) ? [target] : [target, target + NOTE_EXTENSION];
+  for (const candidate of candidates) {
+    let path: string;
+    try {
+      path = resolveNotePath(vault, candidate, { mustExist: false });
+    } catch {
+      return null; // lexical traversal or symlink escape: unreadable.
+    }
+    if (!existsSync(path)) continue;
+    // parseFrontmatter never raises on an unreadable file; it yields an
+    // empty map, which reads as a windowless source.
+    const [meta] = parseFrontmatter(path);
+    const validFrom = frontmatterWindowBound(meta, VALID_FROM_KEY);
+    const validUntil = frontmatterWindowBound(meta, VALID_UNTIL_KEY);
+    if (validFrom === undefined && validUntil === undefined) return null;
+    return { validFrom, validUntil };
+  }
+  return null;
+}
+
+function frontmatterWindowBound(meta: FrontmatterMap, key: string): string | undefined {
+  const value = meta[key];
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+}
 
 export function truthDir(vault: string): string {
   return join(vault, "Brain", "truth");
@@ -96,9 +154,15 @@ export interface AppendClaimInput {
   readonly value: string;
   readonly valueKind?: ClaimEvent["valueKind"];
   readonly quantity?: ClaimQuantity;
-  /** Validity window start; absent keys mean windowless (contract item 1). */
+  /**
+   * Validity window start; absent keys mean windowless (contract item
+   * 1). An absent bound resolves from the source record's frontmatter
+   * `valid_from` when the source is readable at ingest, and the
+   * resolved value is frozen on the event; an unreadable or windowless
+   * source leaves the event windowless.
+   */
   readonly validFrom?: string;
-  /** Validity window end, exclusive; absent keys mean windowless. */
+  /** Validity window end, exclusive; resolved per bound like `validFrom`. */
   readonly validUntil?: string;
   readonly source: string;
 }
@@ -130,20 +194,33 @@ export function appendClaimEvent(
   if (!ISO_UTC_TS_RE.test(input.ts)) {
     throw new Error(`claim ts must be canonical ISO-8601 UTC: ${JSON.stringify(input.ts)}`);
   }
+  // Ingest window defaults (truth-correctable-time-aware, task 3):
+  // explicit input wins outright; a bound the caller left open resolves
+  // from the source record's frontmatter `valid_from` / `valid_until`
+  // when the source is readable at ingest, and the resolved value is
+  // frozen on the event. An unreadable or windowless source stores a
+  // windowless event - byte-identical to the pre-window ledger. The
+  // source is read only when a bound is actually missing, so the fully
+  // explicit path performs no extra I/O; mtime is never consulted.
+  const needsSourceWindow = input.validFrom === undefined || input.validUntil === undefined;
+  const resolved = resolveIngestWindow(
+    input,
+    needsSourceWindow ? sourceFrontmatterWindow(vault, input.source) : null,
+  );
   // Validity windows (contract item 1): presence-gated, strictly
   // validated, and never guessed. An unparsable bound or an empty or
   // inverted window refuses the append by name.
-  if (input.validFrom !== undefined && !isValidityPoint(input.validFrom)) {
+  if (resolved.validFrom !== undefined && !isValidityPoint(resolved.validFrom)) {
     throw new Error(
-      `claim validFrom must be a bare ISO date or canonical UTC timestamp: ${JSON.stringify(input.validFrom)}`,
+      `claim validFrom must be a bare ISO date or canonical UTC timestamp: ${JSON.stringify(resolved.validFrom)}`,
     );
   }
-  if (input.validUntil !== undefined && !isValidityPoint(input.validUntil)) {
+  if (resolved.validUntil !== undefined && !isValidityPoint(resolved.validUntil)) {
     throw new Error(
-      `claim validUntil must be a bare ISO date or canonical UTC timestamp: ${JSON.stringify(input.validUntil)}`,
+      `claim validUntil must be a bare ISO date or canonical UTC timestamp: ${JSON.stringify(resolved.validUntil)}`,
     );
   }
-  const window = validityWindowMs(input.validFrom, input.validUntil);
+  const window = validityWindowMs(resolved.validFrom, resolved.validUntil);
   if (
     window !== null &&
     window.fromMs !== null &&
@@ -151,7 +228,7 @@ export function appendClaimEvent(
     window.fromMs >= window.untilMs
   ) {
     throw new Error(
-      `claim validity window is empty or inverted: validFrom ${JSON.stringify(input.validFrom)} does not parse before validUntil ${JSON.stringify(input.validUntil)}`,
+      `claim validity window is empty or inverted: validFrom ${JSON.stringify(resolved.validFrom)} does not parse before validUntil ${JSON.stringify(resolved.validUntil)}`,
     );
   }
 
@@ -164,8 +241,8 @@ export function appendClaimEvent(
     value,
     valueKind: input.valueKind ?? "text",
     ...(input.quantity !== undefined ? { quantity: input.quantity } : {}),
-    ...(input.validFrom !== undefined ? { validFrom: input.validFrom } : {}),
-    ...(input.validUntil !== undefined ? { validUntil: input.validUntil } : {}),
+    ...(resolved.validFrom !== undefined ? { validFrom: resolved.validFrom } : {}),
+    ...(resolved.validUntil !== undefined ? { validUntil: resolved.validUntil } : {}),
     source: input.source.trim(),
   });
 
