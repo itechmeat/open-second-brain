@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, renameSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -14,8 +14,12 @@ let ctx: { vault: string; configPath: string };
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-retention-mcp-"));
   mkdirSync(vault, { recursive: true });
-  bootstrapBrain(vault, {});
+  // The vault registers itself: a config written into the vault and passed
+  // explicitly keeps this file off the machine-level config lookup, whose
+  // answer depends on which other test files share this shard's process.
   ctx = { vault, configPath: join(vault, "config.yaml") };
+  writeFileSync(ctx.configPath, `vault: ${vault}\n`);
+  bootstrapBrain(vault, { configPath: ctx.configPath });
   writeSignal(vault, {
     topic: "discarded-signal",
     signal: "negative",
