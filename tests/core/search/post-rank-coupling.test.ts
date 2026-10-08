@@ -88,6 +88,58 @@ describe("post-rank coupling", () => {
     expect(out.results.some((r) => r.path === "orphan-predecessor.md")).toBe(false);
   });
 
+  test("a retired row whose superseded_by edge is schema-blocked is dropped, not served bare", async () => {
+    // The schema pack's link constraint declares no note->receipt pair for
+    // `superseded_by`, so the indexer marks the predecessor's pointer edge
+    // blocked and the chain walk finds no typed edge to follow - while the
+    // page's own frontmatter still declares the successor. The walk then
+    // answers the start page as its own chain tip; that corner must count
+    // as unresolved, or the retired row would be served bare.
+    writeMd(
+      vault,
+      "Brain/_brain.yaml",
+      [
+        "schema_version: 1",
+        "schema:",
+        "  page_types: [note, receipt]",
+        "  link_types:",
+        "    - superseded_by",
+        "  link_constraints:",
+        "    - superseded_by=note->note",
+      ].join("\n") + "\n",
+    );
+    page(
+      "blocked-predecessor.md",
+      ["type: note", 'superseded_by: "[[blocked-correction]]"'],
+      "kestrel hovering scan notes.",
+    );
+    page("blocked-correction.md", ["type: receipt"], "revised kestrel hovering survey.");
+    const stats = await indexVault(config);
+    // The fixture pins the block: the pointer edge exists but is excluded
+    // from the typed-edge reader the chain walk uses.
+    expect(stats.relationViolations).toHaveLength(1);
+
+    const out = await search(config, { query: "kestrel hovering scan", limit: 10 });
+    expect(out.results.some((r) => r.path === "blocked-predecessor.md")).toBe(false);
+  });
+
+  test("a retired row whose pointer postdates the index is dropped, not served bare", async () => {
+    // The pointer is written AFTER the index run: the live frontmatter
+    // declares a successor the index carries no superseded_by edge for,
+    // so the chain walk again answers the start page as its own tip.
+    page("stale-predecessor.md", [], "basalt column survey grid.");
+    await indexVault(config);
+    page(
+      "stale-predecessor.md",
+      ['superseded_by: "[[stale-correction]]"'],
+      "basalt column survey grid.",
+    );
+    page("stale-correction.md", [], "revised basalt column survey grid.");
+
+    const out = await search(config, { query: "basalt column survey", limit: 10 });
+    expect(out.results.some((r) => r.path === "stale-predecessor.md")).toBe(false);
+  });
+
   test("a retired row is dropped when its correction is outside the caller's agent scope", async () => {
     page(
       "scoped-predecessor.md",

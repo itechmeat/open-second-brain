@@ -254,10 +254,16 @@ function applyCorrectionCoupling(
   }
   const pending = new Map<string, PendingCorrection>();
   for (const { result, tipDocumentId } of retired) {
+    // A blocked (schema-constrained) or stale `superseded_by` index edge
+    // leaves the walk no first hop, and the walk then answers the START
+    // document as its own tip. That is not a resolved chain - the page's
+    // frontmatter declares a successor that its own id cannot answer - so
+    // it is classified as unresolved and the row drops fail-closed: a
+    // retired row is served only beside a DISTINCT readable chain-tip
+    // correction, never bare.
+    const tipId = tipDocumentId !== result.documentId ? tipDocumentId : null;
     const representative =
-      tipDocumentId === null
-        ? undefined
-        : store.representativeChunks([tipDocumentId]).get(tipDocumentId);
+      tipId === null ? undefined : store.representativeChunks([tipId]).get(tipId);
     const successorPath = representative?.path ?? null;
     const verdict = couplingVerdict({
       predecessorPath: result.path,
@@ -278,7 +284,7 @@ function applyCorrectionCoupling(
       continue;
     }
     pending.set(verdict.correctionPath, {
-      documentId: tipDocumentId!,
+      documentId: tipId!,
       predecessors: [result.path],
       carriedScore: carried,
     });
