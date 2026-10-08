@@ -375,9 +375,20 @@ export async function search(
     }
 
     // Typed-edge relational arm (t_09b7ccea): a fourth RRF arm, engaged
-    // only for a relationship-shaped query under rrf fusion.
+    // only for a relationship-shaped query under rrf fusion. The deepened
+    // traversal rides the same composite clock every other phase answers
+    // to - the walk abandons its frontier once the deadline has fired -
+    // and gates its ordered provenance paths at the caller's transport
+    // reach (an absent reach leaves the arm's local default, what the CLI
+    // and the stdio transport effectively are). The width budgets need no
+    // threading: the arm resolves them itself from the same env and
+    // machine config this call already resolved. With the arm off this
+    // whole expression is `noRelationalArm()` exactly as before.
     const relational = isRelationalArmActive(effectiveConfig, opts)
-      ? runRelationalArm(store, effectiveConfig.vault, query)
+      ? runRelationalArm(store, effectiveConfig.vault, query, {
+          ...(deadline !== null ? { isExpired: () => deadlineExpired(deadline) } : {}),
+          ...(opts.transportReach !== undefined ? { reach: opts.transportReach } : {}),
+        })
       : noRelationalArm();
 
     // Hydrate.
@@ -573,6 +584,10 @@ export async function search(
           poolSize,
           degraded,
           corpus,
+          // The arm's reach-gated paths ride into the outcome builder so
+          // the retrieval trail renders them; empty (arm off) projects to
+          // no trail entry at all.
+          ...(relational.reachByChunk.size > 0 ? { relationalReach: relational.reachByChunk } : {}),
           ...(postRank.decisionModel?.answerable !== undefined
             ? { decisionModel: { answerable: postRank.decisionModel.answerable } }
             : {}),

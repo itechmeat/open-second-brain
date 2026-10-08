@@ -30,7 +30,7 @@ type Edge = {
 };
 
 /** Index a node list by document id. */
-function byIdOf(nodes: Array<{ documentId: number }>): Map<number, { documentId: number }> {
+function byIdOf<T extends { documentId: number }>(nodes: T[]): Map<number, T> {
   return new Map(nodes.map((n) => [n.documentId, n]));
 }
 

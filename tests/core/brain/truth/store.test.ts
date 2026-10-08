@@ -379,9 +379,9 @@ describe("claim validity windows (presence-gated, schema v1)", () => {
 
   test("a foreign extractor value refuses the append with a named error", () => {
     // Strict on write: this binary emits exactly one tag.
-    expect(() => append({ extractor: "model_mined" } as Parameters<typeof append>[0])).toThrow(
-      /extractor/,
-    );
+    expect(() =>
+      append({ extractor: "model_mined" } as unknown as Parameters<typeof append>[0]),
+    ).toThrow(/extractor/);
   });
 
   test("the reader tolerates a future extractor value and passes it through verbatim", () => {
@@ -401,7 +401,9 @@ describe("claim validity windows (presence-gated, schema v1)", () => {
     const { events, warnings } = readClaimEvents(vault);
     expect(warnings).toHaveLength(0);
     expect(events).toHaveLength(1);
-    expect(events[0]!.extractor).toBe("model_mined");
+    // A future tag is passed through verbatim, whatever it spells; the
+    // projection sidesteps the closed write-time vocabulary in the type.
+    expect(String(events[0]!.extractor)).toBe("model_mined");
   });
 
   test("an extractor that is not a non-empty string drops the line with a warning", () => {

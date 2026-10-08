@@ -42,9 +42,10 @@ describe("correctionEndState", () => {
   });
 
   test("a bare-date window end passes through verbatim", () => {
-    expect(correctionEndState(input({ windowEnd: "2026-12-31" }), "2026-06-01T10:00:00Z")).toEqual(
-      { endState: "validity_close", validUntil: "2026-12-31" },
-    );
+    expect(correctionEndState(input({ windowEnd: "2026-12-31" }), "2026-06-01T10:00:00Z")).toEqual({
+      endState: "validity_close",
+      validUntil: "2026-12-31",
+    });
   });
 
   test("an unscoped correction closes validity at the correction instant", () => {

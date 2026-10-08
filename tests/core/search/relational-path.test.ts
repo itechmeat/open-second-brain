@@ -19,6 +19,7 @@ import {
   buildRetrievalTrail,
   retrievalTrailEnvelope,
   RETRIEVAL_RELATIONAL_PATH_CODE,
+  type RelationalPathTrailEntry,
 } from "../../../src/core/search/retrieval-trail.ts";
 import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
@@ -203,6 +204,7 @@ test("the attribution reason renders hops, the withheld count and the annotation
     ],
     structured: undefined,
     activeLearned: null,
+    canonicalMatchByChunk: undefined,
     canonicalSourceIds: [],
     secondPass: undefined,
     targetedChunkIds: new Set(),
@@ -241,4 +243,126 @@ test("the trail carries the relational path with readable ids and the withheld c
     "relational_paths" in
       (retrievalTrailEnvelope({ retrievalTrail: plain }).retrieval_trail as object),
   ).toBe(false);
+});
+
+// ─── the outcome builder passes the paths to the trail (integrator wiring) ───
+
+import { buildSearchOutcome, withIndexStale } from "../../../src/core/search/pipeline/outcome.ts";
+import type { BrainSearchResult, SearchOutcome } from "../../../src/core/search/types.ts";
+
+/** A minimal result row the outcome builder and attribution both accept. */
+function row(chunkId: number, documentId: number): BrainSearchResult {
+  return {
+    documentId,
+    chunkId,
+    path: `doc-${documentId}.md`,
+    title: null,
+    content: "body",
+    startLine: 1,
+    endLine: 1,
+    score: 1,
+    keywordScore: 0,
+    semanticScore: 0,
+    linkBoost: 0,
+    recencyBoost: 0,
+    searchType: "link",
+    reasons: [],
+    breakdown: undefined,
+  };
+}
+
+test("the outcome builder projects surfaced relational rows into the trail, ranked order", async () => {
+  await buildPathVault();
+  const config = makeConfig({ vault, dbPath });
+  const store = await Store.open(config, { mode: "write", loadVec: false });
+  try {
+    const baseInput = {
+      store,
+      config,
+      opts: { query: "alpha seed document" },
+      query: "alpha seed document",
+      pathPrefix: undefined,
+      results: [row(11, 3), row(12, 2)],
+      warnings: [],
+      secondPass: undefined,
+      routedSurface: "default" as const,
+      trustReceipts: null,
+      frontmatterCache: new Map(),
+      poolSize: 3,
+      degraded: [],
+      corpus: null,
+    };
+    const reach = new Map([
+      [
+        12,
+        {
+          via: ["related"],
+          hops: 1,
+          withheld: 0,
+          path: [{ documentId: 2, relation: "related" }],
+        },
+      ],
+      [
+        11,
+        {
+          via: ["extends"],
+          hops: 2,
+          withheld: 1,
+          path: [{ documentId: 3, relation: "extends" }],
+        },
+      ],
+    ]);
+    const outcome = buildSearchOutcome({ ...baseInput, relationalReach: reach });
+    // One entry per surfaced relational row, in ranked order, carrying the
+    // readable document ids and the withheld count.
+    expect(outcome.retrievalTrail?.relationalPaths).toEqual([
+      { code: "relational-path", path: [3], withheld: 1 },
+      { code: "relational-path", path: [2], withheld: 0 },
+    ]);
+    // The arm-off shape: no reach map, no trail at all on a healthy answer.
+    const off = buildSearchOutcome(baseInput);
+    expect(off.retrievalTrail).toBeUndefined();
+    // Reach entries for rows that did not surface project to nothing.
+    const sunk = buildSearchOutcome({
+      ...baseInput,
+      results: [row(99, 9)],
+      poolSize: 1,
+      relationalReach: reach,
+    });
+    expect(sunk.retrievalTrail).toBeUndefined();
+  } finally {
+    store.close();
+  }
+});
+
+test("the stale-index rebuild carries the arm's paths and stays byte-identical without them", () => {
+  const paths: RelationalPathTrailEntry[] = [
+    { code: RETRIEVAL_RELATIONAL_PATH_CODE, path: [2, 3], withheld: 1 },
+  ];
+  const withPaths = {
+    results: [],
+    warnings: [],
+    total: 3,
+    idfWeightedCoverage: 0,
+    retrievalTrail: { retrieved: 1, pool: 3, degraded: [], relationalPaths: paths },
+  } as unknown as SearchOutcome;
+  const stale = withIndexStale(withPaths, 100_000);
+  expect(stale.retrievalTrail?.degraded.map((d) => d.code)).toEqual(["index-stale"]);
+  // Provenance is not a degradation statement: it survives the rebuild.
+  expect(stale.retrievalTrail?.relationalPaths).toEqual(paths);
+  // Without paths the rebuilt trail is exactly the pre-change shape.
+  const plain = {
+    results: [],
+    warnings: [],
+    total: 3,
+    idfWeightedCoverage: 0,
+    retrievalTrail: { retrieved: 1, pool: 3, degraded: [] },
+  } as unknown as SearchOutcome;
+  const stalePlain = withIndexStale(plain, 100_000);
+  expect(stalePlain.retrievalTrail).toEqual({
+    retrieved: 1,
+    pool: 3,
+    degraded: [{ code: "index-stale", detail: { ageSeconds: 100_000 } }],
+  });
+  expect("relationalPaths" in (stalePlain.retrievalTrail ?? {})).toBe(false);
 });

@@ -281,7 +281,7 @@ function closedSupersessionTip(
   if (window === null || window.invalid || window.validUntilMs === null) return null;
   if (window.validUntilMs > nowMs) return null;
   const wikilink = EXACT_WIKILINK_RE.exec(raw.trim());
-  return (wikilink !== null ? wikilink[1] : raw).trim();
+  return (wikilink !== null ? wikilink[1]! : raw).trim();
 }
 
 /**

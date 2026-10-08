@@ -24,6 +24,8 @@ import {
   corpusStatementFor,
   INDEX_STALE_SECONDS,
   RETRIEVAL_DEGRADATION,
+  RETRIEVAL_RELATIONAL_PATH_CODE,
+  type RelationalPathTrailEntry,
 } from "../retrieval-trail.ts";
 import { buildEvidenceVerification, coverageOverResults } from "../evidence-verification.ts";
 import { fnv1aHex } from "../feedback.ts";
@@ -33,6 +35,7 @@ import {
   isPathReadableAtReach,
   type FrontmatterCache,
 } from "../result-filters.ts";
+import type { RelationalReach } from "./relational-arm.ts";
 import type {
   CoverageIndexSnapshot,
   CoverageScope,
@@ -50,6 +53,31 @@ import type {
 } from "../types.ts";
 
 const NO_RESULTS: ReadonlyArray<BrainSearchResult> = Object.freeze([]);
+
+/**
+ * The relational arm's reach-gated ordered paths for the surfaced rows,
+ * one entry per surfaced relational row in ranked order - the projection
+ * the trail renders as `relational-path` entries. Undefined when the arm
+ * contributed nothing or none of its rows survived to this window, so an
+ * arm-off answer is byte-identical to the pre-change one.
+ */
+function relationalPathEntries(
+  reach: ReadonlyMap<number, RelationalReach> | undefined,
+  results: ReadonlyArray<BrainSearchResult>,
+): ReadonlyArray<RelationalPathTrailEntry> | undefined {
+  if (reach === undefined || reach.size === 0) return undefined;
+  const entries: RelationalPathTrailEntry[] = [];
+  for (const r of results) {
+    const node = reach.get(r.chunkId);
+    if (node === undefined) continue;
+    entries.push({
+      code: RETRIEVAL_RELATIONAL_PATH_CODE,
+      path: node.path.map((step) => step.documentId),
+      withheld: node.withheld,
+    });
+  }
+  return entries.length > 0 ? entries : undefined;
+}
 
 export interface EmptyOutcomeInput {
   readonly store: Store;
@@ -148,6 +176,15 @@ export interface OutcomeInput {
    * keeps that path free of the index reads the probe performs.
    */
   readonly corpus: RetrievalCorpusStatement | null;
+  /**
+   * The relational arm's reach map (deepened traversal,
+   * truth-correctable-time-aware), handed over so the trail renders the
+   * ordered provenance of the rows this outcome actually surfaces.
+   * Absent or empty - the arm off, or none of its rows surviving to the
+   * surfaced window - projects to no trail entry, keeping those answers
+   * byte-identical to the pre-change shape.
+   */
+  readonly relationalReach?: ReadonlyMap<number, RelationalReach>;
 }
 
 export function buildSearchOutcome(input: OutcomeInput): SearchOutcome {
@@ -212,11 +249,13 @@ export function buildSearchOutcome(input: OutcomeInput): SearchOutcome {
       ? attachTrustMetadata(config.vault, finalResults, input.frontmatterCache)
       : finalResults;
 
+  const relationalPaths = relationalPathEntries(input.relationalReach, resultsOut);
   const retrievalTrail = buildRetrievalTrail({
     retrieved: resultsOut.length,
     pool: input.poolSize,
     degraded: input.degraded,
     empty: input.corpus ?? undefined,
+    ...(relationalPaths !== undefined ? { relationalPaths } : {}),
   });
 
   const tail = {
@@ -276,6 +315,13 @@ export function withIndexStale(outcome: SearchOutcome, ageSeconds: number | null
     retrieved: trail?.retrieved ?? outcome.cards?.length ?? outcome.results.length,
     pool: trail?.pool ?? outcome.total,
     degraded: Object.freeze([stale, ...(trail?.degraded ?? [])]),
+    // The walked provenance is not a degradation statement, so unlike the
+    // corpus statement it does not give way to the stale note: the rebuilt
+    // trail is the one the pipeline would have built with this code in its
+    // sink, and that build carries the arm's ordered paths whenever the
+    // arm contributed surfaced rows. Absent stays absent, so an arm-off
+    // answer's rebuilt trail is shaped exactly as before.
+    ...(trail?.relationalPaths?.length ? { relationalPaths: trail.relationalPaths } : {}),
   });
   if (trail !== undefined) return Object.freeze({ ...outcome, retrievalTrail });
   // A healthy answer has no trail; it goes where the outcome builders put

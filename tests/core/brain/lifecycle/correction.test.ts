@@ -401,7 +401,7 @@ describe("replay convergence", () => {
       agent: "tester",
     });
 
-    expect(second.retirements[0].changed).toBe(false);
+    expect(second.retirements[0]!.changed).toBe(false);
     // The closed window stays closed at the original instant.
     expect(targetMeta()["valid_until"]).toBe(metaAfterFirst["valid_until"]);
     // The ledger keeps one correction event: a re-assertion is not a new fact.
@@ -430,7 +430,7 @@ describe("optional inputs", () => {
       agent: "tester",
     });
     expect(res.ledger).toEqual([]);
-    expect(res.retirements[0].endState).toBe("validity_close");
+    expect(res.retirements[0]!.endState).toBe("validity_close");
   });
 
   test("an explicit window end closes validity there instead of at the correction instant", () => {
@@ -446,7 +446,7 @@ describe("optional inputs", () => {
       now: NOW,
       agent: "tester",
     });
-    expect(res.retirements[0].validUntil).toBe("2026-07-01T00:00:00Z");
+    expect(res.retirements[0]!.validUntil).toBe("2026-07-01T00:00:00Z");
     expect(targetMeta()["valid_until"]).toBe("2026-07-01T00:00:00Z");
   });
 });

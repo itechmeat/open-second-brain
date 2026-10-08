@@ -247,3 +247,163 @@ test("the arm threads the traversal budgets and the deadline into the walk", () 
   const expired = runRelationalArm(store, vault, "[[seed]] related", { isExpired: () => true });
   expect(expired.rankedChunkIds).toEqual([]);
 });
+
+// ─── the search call site threads the arm's runtime options (wiring) ─────────
+//
+// The integrator's pins: the composite recall deadline and the caller's
+// transport reach actually reach the arm in production, the real Store
+// carries the bridge reader the arm's flag enables, and the arm's gated
+// paths land in the retrieval trail. Every pin holds an arm-off mirror so
+// the off shape stays byte-identical.
+
+import { Store } from "../../../src/core/search/store.ts";
+import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
+import { RETRIEVAL_DEGRADATION } from "../../../src/core/search/retrieval-trail.ts";
+import { startFakeHttp, type FakeRequest, type FakeResponseSpec } from "../../helpers/fake-http.ts";
+import { sqliteVecLoadable } from "../../helpers/sqlite-vec.ts";
+import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
+
+test("the search call site gates the arm's ordered paths at the caller's reach", async () => {
+  await build();
+  // The middle node reserves itself against remote reads; the far node is
+  // readable there. Only a call site that hands the reach to the arm can
+  // withhold the middle hop from the far row's provenance.
+  writeMd(
+    vault,
+    "neighbor.md",
+    '---\nvisibility: ["private"]\nextends: "[[far]]"\n---\n\nbeta divergent content.',
+  );
+  await indexVault(makeConfig({ vault, dbPath }));
+  const cfg = makeConfig({ vault, dbPath, fusionMode: "rrf", relationalArmEnabled: true });
+  const remote = await search(cfg, {
+    query: "alpha [[seed]] related extends",
+    transportReach: TRANSPORT_REACH.remote,
+  });
+  const far = remote.results.find((r) => r.path === "far.md");
+  expect(far).toBeDefined();
+  expect(far!.reasons.some((x) => x.includes("1 node withheld"))).toBe(true);
+  // Local reach reads every hop: the same walk withholds nothing.
+  const local = await search(cfg, { query: "alpha [[seed]] related extends" });
+  const farLocal = local.results.find((r) => r.path === "far.md");
+  expect(farLocal).toBeDefined();
+  expect(farLocal!.reasons.some((x) => x.includes("0 nodes withheld"))).toBe(true);
+});
+
+test("the arm's ordered paths land in the retrieval trail and stay absent when the arm is off", async () => {
+  await build();
+  const cfgOn = makeConfig({ vault, dbPath, fusionMode: "rrf", relationalArmEnabled: true });
+  const on = await search(cfgOn, { query: "alpha [[seed]] related" });
+  const entries = on.retrievalTrail?.relationalPaths;
+  expect(entries).toBeDefined();
+  expect(entries!.length).toBeGreaterThan(0);
+  for (const entry of entries!) {
+    expect(entry.code).toBe("relational-path");
+    expect(entry.withheld).toBe(0);
+    expect(entry.path.length).toBeGreaterThan(0);
+  }
+  // Arm off: no paths on the trail, whatever else the answer carries -
+  // the pre-change trail shape, byte for byte.
+  const cfgOff = makeConfig({ vault, dbPath, fusionMode: "rrf" });
+  const off = await search(cfgOff, { query: "alpha [[seed]] related" });
+  expect(off.retrievalTrail?.relationalPaths).toBeUndefined();
+  expect("relationalPaths" in (off.retrievalTrail ?? {})).toBe(false);
+});
+
+test("the search call site threads the composite deadline into the arm's walk", async () => {
+  if (!sqliteVecLoadable()) return;
+  await build();
+  const server = await startFakeHttp();
+  try {
+    const cfg = {
+      ...makeConfig({
+        vault,
+        dbPath,
+        fusionMode: "rrf",
+        relationalArmEnabled: true,
+        semantic: {
+          enabled: true,
+          provider: "openai-compat",
+          baseUrl: server.url,
+          model: "fake-model",
+          apiKey: FAKE_PROVIDER_KEY,
+          dimension: 4,
+          timeoutMs: 5_000,
+          concurrency: 2,
+          batchSize: 8,
+          costGateUsd: 0,
+          maxRetries: 1,
+        },
+      }),
+      hybridDeadlineMs: 300,
+    };
+    await indexVault(cfg, { embeddings: true });
+    // A semantic lane that never answers: the composite clock fires on its
+    // timer at the budget, deterministically before the arm runs, so the
+    // arm's first clock check sees a fired deadline and abandons the walk.
+    server.setHandler(() => new Promise<never>(() => {}));
+    const cut = await search(cfg, { query: "alpha [[seed]] related extends", semantic: true });
+    const codes = cut.retrievalTrail?.degraded.map((d) => d.code) ?? [];
+    expect(codes).toContain(RETRIEVAL_DEGRADATION.hybridDeadlineExceeded);
+    expect(cut.results.some((r) => r.path === "far.md")).toBe(false);
+    // The same query with the deadline off (0) runs the walk: the two-hop
+    // node the fired clock withheld is surfaced. The handler answers the
+    // embed request with the same deterministic vectors the helper's
+    // default serves, so only the clock differs between the two runs.
+    server.setHandler((req: FakeRequest): FakeResponseSpec => {
+      if (req.path.endsWith("/embeddings") && req.method === "POST") {
+        const body = (req.body ?? {}) as { input?: string[]; model?: string };
+        const inputs = Array.isArray(body.input) ? body.input : [];
+        return {
+          status: 200,
+          body: {
+            data: inputs.map((text, index) => ({
+              object: "embedding",
+              embedding: [text.split(/\s+/).filter(Boolean).length, index, text.length, 1],
+              index,
+            })),
+            model: body.model ?? "fake-model",
+          },
+        };
+      }
+      return { status: 404, body: { error: "not_found" } };
+    });
+    const unbounded = await search(
+      { ...cfg, hybridDeadlineMs: 0 },
+      {
+        query: "alpha [[seed]] related extends",
+        semantic: true,
+      },
+    );
+    expect(unbounded.results.some((r) => r.path === "far.md")).toBe(true);
+  } finally {
+    await server.close();
+  }
+});
+
+test("the real store carries the bridge reader and the arm walks it live", async () => {
+  await build();
+  const store = await Store.open(makeConfig({ vault, dbPath }), { mode: "write", loadVec: false });
+  try {
+    const seedId = store.getDocumentIdByPath("seed.md");
+    const noiseId = store.getDocumentIdByPath("noise.md");
+    expect(seedId).not.toBeNull();
+    expect(noiseId).not.toBeNull();
+    const seedChunk = store.representativeChunks([seedId!]).get(seedId!)!;
+    const noiseChunk = store.representativeChunks([noiseId!]).get(noiseId!)!;
+    store.replaceEntities(seedChunk.chunkId, ["shared-entity"]);
+    store.replaceEntities(noiseChunk.chunkId, ["shared-entity"]);
+    // The typed surface answers the deduplicated ordered pair, and the
+    // arm's store view picks the reader up from it: bridges on walks the
+    // co-occurrence edge beside the typed one; bridges off never reaches
+    // the bridged document.
+    expect(store.entityBridgesForDocuments([seedId!])).toEqual([
+      { sourceDocumentId: seedId!, targetDocumentId: noiseId! },
+    ]);
+    const on = runRelationalArm(store, vault, "[[seed]] related", { entityBridges: true });
+    expect(on.reachByChunk.get(noiseChunk.chunkId)?.via).toEqual(["entity"]);
+    const off = runRelationalArm(store, vault, "[[seed]] related", { entityBridges: false });
+    expect(off.reachByChunk.has(noiseChunk.chunkId)).toBe(false);
+  } finally {
+    store.close();
+  }
+});

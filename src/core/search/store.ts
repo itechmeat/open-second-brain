@@ -40,6 +40,7 @@ import * as chunks from "./store/chunks.ts";
 import * as census from "./store/counts.ts";
 import * as documents from "./store/documents.ts";
 import * as abi from "./store/embedding-abi.ts";
+import * as entityBridges from "./store/entity-bridges.ts";
 import * as keyword from "./store/keyword.ts";
 import * as lifecycle from "./store/lifecycle.ts";
 import * as links from "./store/links.ts";
@@ -847,6 +848,20 @@ export class Store {
     queryEntities: ReadonlyArray<string>,
   ): Map<number, number> {
     return chunkEntities.chunkEntityMatches(this.db, candidateChunkIds, queryEntities);
+  }
+
+  /**
+   * The entity bridges of the given documents (deepened traversal,
+   * truth-correctable-time-aware): the deduplicated `chunk_entities`
+   * co-occurrence pairs, ordered by source then target id. Living on the
+   * typed surface is the wiring the relational arm's store view looks
+   * for, so the bridge flag has a reader to enable - a store without this
+   * method walks typed edges only.
+   */
+  entityBridgesForDocuments(
+    documentIds: ReadonlyArray<number>,
+  ): Array<entityBridges.EntityBridgePair> {
+    return entityBridges.entityBridgesForDocuments(this.db, documentIds);
   }
 
   // ── counts ─────────────────────────────────────────────────────────────────
