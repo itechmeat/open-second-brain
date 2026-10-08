@@ -155,11 +155,14 @@ describe("an extensionless vault-page spelling", () => {
     expect(view.visible("[[Brain/notes/dual.md]]")).toBe(true);
   });
 
-  test("a spelling naming no page is judged exactly like an .md reference to it", () => {
+  test("a spelling naming no page names nothing here, and stays visible", () => {
+    // A convention like `Notes/<slug>-applied` in a log payload is not a
+    // page: with neither candidate on disk the reference resolves to
+    // nothing and the row keeps today's visibility, instead of being
+    // judged as a missing `.md` page.
     const view = hidingNotesPage();
-    expect(view.visible("[[Brain/notes/never-written]]")).toBe(
-      view.visible("[[Brain/notes/never-written.md]]"),
-    );
+    expect(view.visible("[[Brain/notes/never-written]]")).toBe(true);
+    expect(view.visible("Brain/notes/never-written")).toBe(true);
   });
 
   test("a bare id spelling is never read as a path", () => {

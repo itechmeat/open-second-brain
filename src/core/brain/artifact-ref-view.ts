@@ -30,7 +30,7 @@
  */
 
 import { join } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 
 import { pathIsInside, vaultRelative } from "../path-safety.ts";
 import type { FrontmatterCache } from "../search/result-filters.ts";
@@ -179,19 +179,31 @@ function artifactPath(vault: string, id: string): string | null {
 
 /**
  * The candidate an extensionless vault-page reference denotes: the bare
- * spelling when that file exists, else its `.md` twin - the same
- * resolution the claim ledger's write side applies to an extensionless
- * source, so the read-side gate cannot drift from the spelling the
- * writer used. When neither exists the `.md` twin is the answer, which
- * is exactly how an `.md`-suffixed reference to a missing page is
- * already judged. The bare spelling is probed only when it stays inside
- * the vault, so a traversal-shaped reference never reaches the
- * filesystem outside it: the `.md` twin fails `pathIsInside` all the
- * same, and the verdict is hidden either way.
+ * spelling when that file exists, else its `.md` twin when the twin
+ * exists - the same first-existing rule the claim ledger's write side
+ * applies to an extensionless source, so the read-side gate cannot drift
+ * from the spelling the writer used. When neither file exists the
+ * reference names nothing here (`null` reads as visible): a convention
+ * like `Notes/<slug>-applied` in a log payload is not a page, and
+ * judging it as a missing `.md` page would drop every row carrying it.
+ * Both candidates are probed only inside the vault, so a
+ * traversal-shaped reference never reaches the filesystem outside it.
  */
-function pageCandidate(vault: string, bare: string): string {
-  if (pathIsInside(join(vault, bare), vault) && existsSync(join(vault, bare))) return bare;
-  return bare + MARKDOWN_EXT;
+function pageCandidate(vault: string, bare: string): string | null {
+  if (isVaultFile(vault, bare)) return bare;
+  const twin = bare + MARKDOWN_EXT;
+  if (isVaultFile(vault, twin)) return twin;
+  return null;
+}
+
+/** The vault-relative path names a regular file, so it can name a page. */
+function isVaultFile(vault: string, rel: string): boolean {
+  if (!pathIsInside(join(vault, rel), vault)) return false;
+  try {
+    return statSync(join(vault, rel)).isFile();
+  } catch {
+    return false;
+  }
 }
 
 /**
