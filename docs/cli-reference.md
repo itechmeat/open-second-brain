@@ -2035,7 +2035,7 @@ so there is no separate lane field that could drift from it:
 
 | Code | The narrowing it reports |
 | ---- | ------------------------ |
-| `index-stale` | the index was last updated more than ten minutes ago (`detail.ageSeconds`), so notes changed since then may be missing; freshen on read has started a background run unless `search_freshen_interval_s` is `0`, a failed run is backing off, another run already holds the claim, or the index directory is not writable |
+| `index-stale` | the index was last updated more than ten minutes ago (`detail.ageSeconds`), so notes changed since then may be missing; the code reports the index age only and does not say a refresh is running: freshen on read starts a background run when it can, and starts none when it is off, a failed run is backing off, another run or writer holds the index, the index is read-only for this reader, or the run cannot be spawned |
 | `keyword-fts-match-empty` | the query tokenised to an empty FTS match, so the keyword lane never ran |
 | `keyword-trigram-lane-fault` | the trigram candidate lane could not be read; `detail.fault` carries that lane's own classification |
 | `semantic-embeddings-absent` | the index holds no compatible embedding |
@@ -2411,6 +2411,8 @@ next read sees the current vault. Only agent activity triggers it.
   row to the `index_freshen` metrics surface.
 - **Staleness is named.** A search over an index more than ten minutes
   old carries the trail code `index-stale` with `detail.ageSeconds`.
+  The code names the age only; whether a background run started is not
+  part of it (see the cases above where freshen on read starts none).
   The code is added when the answer is served, also on a query-cache
   hit, and is never stored in the cache.
 - **Never a foreign vault.** Cross-vault and recall-source reads open
