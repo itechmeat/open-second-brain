@@ -816,7 +816,12 @@ function toolBrainTruth(
         })),
       };
     } catch (exc) {
-      if (exc instanceof StatedClaimsRefusal) {
+      // Both refusal channels are mistyped-input refusals - the payload
+      // boundary's, and the store's when the stated claim's window
+      // resolves from the source record's frontmatter and inverts there
+      // - so both answer as the same failure class the ingest operation
+      // maps, never an internal error.
+      if (exc instanceof StatedClaimsRefusal || exc instanceof ClaimWindowRefusal) {
         throw new MCPError(INVALID_PARAMS, `brain_truth state: ${exc.message}`);
       }
       throw exc;

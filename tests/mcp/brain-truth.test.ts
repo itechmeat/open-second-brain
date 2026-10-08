@@ -550,6 +550,34 @@ test("state normalizes the relation token and resolves its agent override", asyn
   expect(readClaimEvents(vault).events[0]!.agent).toBe("scribe-agent");
 });
 
+test("state refuses a malformed source window as invalid params, not an internal error", async () => {
+  // The stated claim carries no explicit window, so the store resolves
+  // one from the source record's frontmatter; an inverted window there
+  // raises the store's typed refusal, which the state operation must map
+  // exactly as ingest maps it - typed INVALID_PARAMS, never an
+  // internal error escaping the handler.
+  seedRegistry();
+  mkdirSync(join(vault, "Brain", "notes"), { recursive: true });
+  writeFileSync(
+    join(vault, "Brain", "notes", "session.md"),
+    "---\nkind: note\nvalid_from: 2026-06-01\nvalid_until: 2026-01-01\n---\n\nsession page\n",
+  );
+  const server = new MCPServer({ vault, configPath });
+  await initialize(server);
+  const raw = await callRaw(server, {
+    operation: "state",
+    claims: [{ subject: "Alice Mason", relation: "related", object: "Project Atlas" }],
+    text: "Alice Mason reviewed Project Atlas today.",
+    source: "[[Brain/notes/session.md]]",
+  });
+  expect(raw.error).toBeDefined();
+  expect(raw.error!.code).toBe(-32602);
+  expect(raw.error!.data?.code).toBe("invalid_params");
+  expect(raw.error!.message).toMatch(/validity window/);
+  expect(raw.result?.isError).toBeUndefined();
+  expect(readClaimEvents(vault).events).toHaveLength(0);
+});
+
 // ----- sub-suite A integration checkpoint (Task 10) -------------------------
 
 test("ingest declares optional validity fields that win over source resolution", async () => {
