@@ -599,9 +599,11 @@ export const STATE_SURFACES: ReadonlyArray<StateSurface> = Object.freeze([
     id: STATE_SURFACE_ID.freshenState,
     label: "freshen-on-read state",
     tier: STATE_TIER.derived,
-    derive: derivedStore(FRESHEN_STATE_FILE),
-    override_env: null,
-    override_config_key: null,
+    // Beside the index, wherever the override puts it: `freshen.ts` keeps
+    // its state in `dirname(config.dbPath)`.
+    derive: (vault, override) => join(dirname(indexPath(vault, override)), FRESHEN_STATE_FILE),
+    override_env: SEARCH_DB_ENV,
+    override_config_key: SEARCH_DB_CONFIG_KEY,
     carries_memory: false,
     reason:
       "What the last background index run started by a stale read did on this device: its " +

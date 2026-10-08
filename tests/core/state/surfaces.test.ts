@@ -30,7 +30,11 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { selfHealUpgradeMarkerPath } from "../../../src/core/maintenance/self-heal-upgrade-state.ts";
-import { FRESHEN_STATE_FILE } from "../../../src/core/search/freshen.ts";
+import {
+  EMPTY_FRESHEN_STATE,
+  FRESHEN_STATE_FILE,
+  writeFreshenState,
+} from "../../../src/core/search/freshen.ts";
 import { chmodSync, existsSync, mkdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 
@@ -263,7 +267,9 @@ const RESOLVER_BINDINGS: ReadonlyArray<readonly [StateSurfaceId, (vault: string)
     ["hook_audit", (v) => hookAuditDir(v)],
     ["hook_session_state", (v) => dirname(hookStateFilePath(v, null))],
     ["self_heal_upgrade_marker", (v) => selfHealUpgradeMarkerPath(v)],
-    ["freshen_state", (v) => join(v, ".open-second-brain", FRESHEN_STATE_FILE)],
+    // `freshen.ts` takes the directory its caller hands it, always
+    // `dirname(config.dbPath)`, so the row is bound to the index resolver.
+    ["freshen_state", (v) => join(dirname(resolveIndexPath(v, null)), FRESHEN_STATE_FILE)],
     ["aider_context_artifact", (v) => resolveAiderSidecarPath({ vault: v } as InstallEnv, {})],
     // --- Under `<vault>/Brain/` --------------------------------------------
     ["brain_log", (v) => brainDirs(v).log],
@@ -456,6 +462,24 @@ describe("each row is bound to the resolver that owns it", () => {
     expect(row("search_session_focus").derive(vault, elsewhere)).toBe(
       dirname(sessionFocusPath({ vault, dbPath: elsewhere } as ResolvedSearchConfig, "scope")),
     );
+    expect(row("freshen_state").derive(vault, elsewhere)).toBe(
+      join(dirname(elsewhere), FRESHEN_STATE_FILE),
+    );
+  });
+
+  test("a relocated index moves the freshen state to where the run writes it", () => {
+    const home = tempVault();
+    const elsewhere = join(tempVault(), "brain.sqlite");
+    writeFreshenState(dirname(elsewhere), EMPTY_FRESHEN_STATE);
+    const inventory = inventoryStateSurfaces({
+      vault: home,
+      env: { OPEN_SECOND_BRAIN_SEARCH_DB: elsewhere },
+      config: EMPTY_CONFIG,
+    });
+    const state = inventory.surfaces.find((s) => s.id === "freshen_state")!;
+    expect(state.path).toBe(join(dirname(elsewhere), FRESHEN_STATE_FILE));
+    expect(state.origin).toBe(CONFIG_ORIGIN.env);
+    expect(existsSync(state.path)).toBe(true);
   });
 
   for (const binding of DRIVEN_BINDINGS) {
