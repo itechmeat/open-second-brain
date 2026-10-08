@@ -355,12 +355,21 @@ export function correct(input: CorrectInput): CorrectResult {
   const mentions = mentionScan.matched.filter((rel) => withinReach(rel, input.readable));
 
   const allEvents = readClaimEvents(input.vault).events;
-  const targetEvents = allEvents.filter((e) => idOfRel(e.source) === targetId);
+  // The target's own events name the resolved target path - the full
+  // vault-relative spelling or its extensionless form - never a bare
+  // basename: a basename fold also matched a same-named page in another
+  // folder, letting its claims bypass the reach gate below and its
+  // source spelling stand in for the target's on an applied correction.
+  const namesTarget = (e: ClaimEvent): boolean => {
+    const rel = sourceRel(e.source);
+    return rel !== null && (rel === targetRel || rel === targetRel.replace(/\.md$/i, ""));
+  };
+  const targetEvents = allEvents.filter(namesTarget);
   const slots = new Set(targetEvents.map((e) => `${e.entity}\u0000${e.aspect}`));
   const claims = allEvents.filter(
     (e) =>
       slots.has(`${e.entity}\u0000${e.aspect}`) &&
-      (idOfRel(e.source) === targetId || claimWithinReach(e, input.readable)),
+      (namesTarget(e) || claimWithinReach(e, input.readable)),
   );
 
   const blastRadius: CorrectionBlastRadius = Object.freeze({

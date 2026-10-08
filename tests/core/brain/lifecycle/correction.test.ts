@@ -329,6 +329,53 @@ describe("claims reach gate", () => {
     expect(values).toContain("45s"); // readable, extension-bearing source
     expect(values).not.toContain("15s"); // withheld source stays out
   });
+
+  test("a same-named page in another folder is never the target, reach gate or not", () => {
+    seedTarget();
+    // A second page sharing the target's basename but not its folder,
+    // seeded with a claim in the target's own slot. A basename fold of
+    // the source matched it as the target's own event, so its claim
+    // entered the blast radius without passing the reach gate and its
+    // source could stand in for the target's on an applied correction.
+    const impostor = "Brain/private/pref-old.md";
+    mkdirSync(join(vault, "Brain", "private"), { recursive: true });
+    writeFileSync(
+      join(vault, impostor),
+      ["---", "kind: note", "id: pref-old", "---", "", "An unrelated page.", ""].join("\n"),
+    );
+    appendClaimEvent(
+      vault,
+      {
+        ts: "2026-05-05T00:00:00Z",
+        agent: "tester",
+        entity: "deploy timeout",
+        aspect: "limit",
+        value: "impostor",
+        source: `[[${impostor}]]`,
+      },
+      { configPath },
+    );
+
+    const res = correct({
+      vault,
+      configPath,
+      target: TARGET,
+      successor: "pref-new",
+      reason: "the timeout changed",
+      now: NOW,
+      agent: "tester",
+      readable: (rel) => rel.endsWith(".md") && rel !== impostor,
+    });
+
+    // The impostor is not the target and is withheld: neither its claim
+    // nor any slot attribution of the target's own claim may name it.
+    const values = res.blastRadius.claims.map((c) => c.value);
+    expect(values).toContain("30s"); // the target's own claim
+    expect(values).not.toContain("impostor");
+    for (const claimRow of res.blastRadius.claims) {
+      expect(claimRow.source).not.toContain(impostor);
+    }
+  });
 });
 
 describe("applied run", () => {
