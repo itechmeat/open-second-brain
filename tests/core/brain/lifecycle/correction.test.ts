@@ -618,4 +618,45 @@ describe("optional inputs", () => {
     expect(res.retirements[0]!.validUntil).toBe("2026-07-01T00:00:00Z");
     expect(targetMeta()["valid_until"]).toBe("2026-07-01T00:00:00Z");
   });
+
+  test("a malformed window end is refused before anything is written", () => {
+    seedTarget();
+    const before = readFileSync(join(vault, TARGET), "utf8");
+    const eventsBefore = readClaimEvents(vault).events.length;
+    // The shapes the ledger append boundary refuses: relative phrases,
+    // offset-bearing datetimes, empty strings.
+    for (const bad of ["next tuesday", "2026-07-01T00:00:00+02:00", ""]) {
+      expect(() =>
+        correct({
+          vault,
+          configPath,
+          target: TARGET,
+          windowEnd: bad,
+          reason: "the timeout changed",
+          dryRun: false,
+          now: NOW,
+          agent: "tester",
+        }),
+      ).toThrow(CorrectionError);
+    }
+    expect(readFileSync(join(vault, TARGET), "utf8")).toBe(before);
+    expect(readClaimEvents(vault).events.length).toBe(eventsBefore);
+  });
+
+  test("a bare ISO date window end is accepted, matching the ledger grammar", () => {
+    seedTarget();
+    const res = correct({
+      vault,
+      configPath,
+      target: TARGET,
+      successor: "pref-new",
+      windowEnd: "2026-07-01",
+      reason: "the timeout changed",
+      dryRun: false,
+      now: NOW,
+      agent: "tester",
+    });
+    expect(res.retirements[0]!.validUntil).toBe("2026-07-01");
+    expect(targetMeta()["valid_until"]).toBe("2026-07-01");
+  });
 });

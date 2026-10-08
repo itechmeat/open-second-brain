@@ -228,6 +228,21 @@ describe("brain_lifecycle correct", () => {
     expect(retirements[0]!["valid_until"]).toBe("2026-07-01T00:00:00Z");
   });
 
+  test("a malformed window_end is refused before anything is written", async () => {
+    const { target } = seedPair();
+    const before = readFileSync(join(vault, target), "utf8");
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const res = await call(server, {
+      action: "correct",
+      target,
+      window_end: "soon after the incident",
+      dry_run: false,
+    });
+    expect(res["error"]).toBeDefined();
+    expect(readFileSync(join(vault, target), "utf8")).toBe(before);
+  });
+
   test("a target below the caller's reach is refused as missing", async () => {
     const base = mkTemp("o2b-lifecycle-correct-reach-");
     const f: ReachLogFixture = buildReachLogFixture(base, true);

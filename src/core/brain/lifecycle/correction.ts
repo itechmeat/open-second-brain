@@ -67,6 +67,7 @@ import {
 import { stripWikilinkDecoration } from "../wikilink.ts";
 import { correctionEndState, type CorrectionEndState } from "../truth/correction-policy.ts";
 import { appendClaimEvent, readClaimEvents } from "../truth/store.ts";
+import { isValidityPoint } from "../truth/validity.ts";
 import type { ClaimEvent } from "../truth/types.ts";
 
 /** The receipt reason code a validity-close retirement is recorded under. */
@@ -280,6 +281,17 @@ export function correct(input: CorrectInput): CorrectResult {
   const value = input.value?.trim();
   if (input.value !== undefined && value === "") {
     throw new CorrectionError("correct: value must not be empty when given");
+  }
+  // The window end lands in frontmatter as `valid_until` even when no
+  // ledger append runs (no corrected value supplied), so it is validated
+  // here with the SAME check the ledger append boundary applies, before
+  // anything is written - otherwise a malformed bound would sit in the
+  // record unread until a window parse found it.
+  if (input.windowEnd !== undefined && !isValidityPoint(input.windowEnd)) {
+    throw new CorrectionError(
+      `correct: window_end must be a bare ISO date or canonical ISO-8601 UTC instant: ` +
+        `${JSON.stringify(input.windowEnd)}`,
+    );
   }
   const dryRun = input.dryRun !== false;
   const now = input.now ?? new Date();

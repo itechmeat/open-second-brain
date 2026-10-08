@@ -18,9 +18,13 @@
  * non-overlapping present windows and classifies as succession under
  * contract item 1.
  *
- * `validUntil` passes through verbatim; the ledger append boundary
- * owns window-value validation and names any malformed bound. Pure,
- * deterministic, no I/O, no clock.
+ * `validUntil` passes through verbatim - this decision stays pure. The
+ * correct sweep validates `windowEnd` at its own boundary with the same
+ * check the ledger append boundary applies (a bare ISO date or a
+ * canonical UTC timestamp), and refuses a malformed bound with a
+ * CorrectionError before anything is written; the ledger append keeps
+ * naming a malformed bound it is handed directly. Pure, deterministic,
+ * no I/O, no clock.
  */
 
 /** How a corrected predecessor retires. */
