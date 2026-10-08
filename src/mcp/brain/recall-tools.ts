@@ -67,8 +67,7 @@ import {
   expandSessionRecall,
   searchSessionRecall,
 } from "../../core/brain/session-recall.ts";
-import { resolveTimeRange } from "../../core/search/time-range.ts";
-import { SearchError } from "../../core/search/types.ts";
+import { resolveTimeBounds } from "./time-bounds.ts";
 import { aggregateQueryDemand, serializeQueryDemandReport } from "../../core/brain/query-demand.ts";
 import { buildRetrievalPlan, serializeRetrievalPlan } from "../../core/brain/retrieval-plan.ts";
 import { isoSecond } from "../../core/brain/time.ts";
@@ -82,7 +81,6 @@ import {
 } from "../../core/brain/payload-registry.ts";
 import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
-import { searchErrorData } from "../search-tools.ts";
 import { contextReach } from "../tool-contract.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { vaultPathField } from "../vault-path-field.ts";
@@ -910,10 +908,11 @@ async function toolBrainSessionGrep(
   );
   // Conversation-chronology bounds (S1): `since` / `before` parse through
   // the shared time-range grammar (ISO date/datetime, today/yesterday,
-  // <n>h/<n>d/<n>w). `before` maps onto the range's inclusive upper edge.
+  // <n>h/<n>d/<n>w) via the shared time-bounds wrapper. `before` maps
+  // onto the range's inclusive upper edge.
   const since = optionalStringArg("brain_session_grep", args, "since");
   const before = optionalStringArg("brain_session_grep", args, "before");
-  const bounds = resolveSessionGrepBounds(since, before);
+  const bounds = resolveTimeBounds(since, before);
   // Inline-raw disclosure (C2): opt-in flag inlines the raw captures beside
   // each derived record and stamps an extracted discriminator. Omitted, the
   // response stays byte-identical.
@@ -940,33 +939,6 @@ async function toolBrainSessionGrep(
       ...(rawBudgetChars !== undefined ? { rawBudgetChars } : {}),
     }),
   };
-}
-
-/**
- * Resolve `since` / `before` session-grep bounds through the shared
- * time-range grammar, mapping `before` onto the inclusive upper edge. An
- * unparseable point or an inverted range surfaces as an INVALID_PARAMS
- * error rather than a silently ignored filter.
- */
-function resolveSessionGrepBounds(
-  since: string | undefined,
-  before: string | undefined,
-): { sinceMs: number | null; untilMs: number | null } {
-  if (since === undefined && before === undefined) return { sinceMs: null, untilMs: null };
-  try {
-    return resolveTimeRange(
-      {
-        ...(since !== undefined ? { since } : {}),
-        ...(before !== undefined ? { until: before } : {}),
-      },
-      Date.now(),
-    );
-  } catch (exc) {
-    if (exc instanceof SearchError) {
-      throw new MCPError(INVALID_PARAMS, exc.message, searchErrorData(exc));
-    }
-    throw exc;
-  }
 }
 
 /**
