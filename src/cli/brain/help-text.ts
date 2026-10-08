@@ -47,7 +47,7 @@ Brain verbs (observing memory):
   dream            Deterministic dreaming pass; stage/validate/apply/retriage bundles
   apply-evidence   Log a real-work application of a preference
   note             Append a one-line narrative milestone to Brain/log/today
-  lifecycle        Tombstone/supersede a memory, resolve chain tips, curator slices
+  lifecycle        Tombstone/supersede a memory, correct one record, resolve chain tips, curator slices
   expire           Set, change or clear a signal's or preference's expiration date
   note-lifecycle   Note FILES: rename/move/archive/delete one, rewriting inbound links
   scaffold-stub    Unresolved wikilink targets: list them, or materialise a stub
@@ -235,16 +235,20 @@ export const VERB_HELP: Record<string, string> = {
     "event kind. CLI mirror of the MCP `brain_note` tool — same on-disk contract.\n" +
     "Use from cron jobs and shell scripts. Multi-line text collapses to one line.\n",
   lifecycle:
-    "usage: o2b brain lifecycle <tombstone|supersede|temporal-replace|tip|curator> [...] [--vault <path>] [--json]\n" +
-    "Cross-type tombstone + supersede lifecycle. tombstone <path> --reason <r>\n" +
+    "usage: o2b brain lifecycle <tombstone|supersede|temporal-replace|tip|curator|correct> [...] [--vault <path>] [--json]\n" +
+    "Cross-type tombstone + supersede + correct lifecycle. tombstone <path> --reason <r>\n" +
     "[--superseded-by <id>] marks a memory _status: tombstoned in place (no delete);\n" +
     "supersede <predecessor> <successor> tombstones the predecessor and records the\n" +
     "replacement pointer; temporal-replace <predecessor> <successor> --at <T> closes the\n" +
     "predecessor (valid_until = T) and opens the successor (valid_from = T) at one shared\n" +
     "instant; tip <id> walks a supersede chain to its live tip; curator\n" +
     "[--high-use-min <n>] lists injected-never-used, contradicted, and high-used\n" +
-    "memories from observed-use verdicts. Tombstoned entries stay on disk for audit\n" +
-    "but are excluded from recall, inject, and active.md.\n",
+    "memories from observed-use verdicts; correct <target> [--value <v>]\n" +
+    "[--successor <id>] [--flatly-wrong] [--window-end <T>] [--reason <r>] sweeps one\n" +
+    "record's correction - blast-radius report by default, --apply retires the target\n" +
+    "(validity close, or tombstone when --flatly-wrong), retargets mentions, appends\n" +
+    "ledger correction events and bundle-correlated receipts. Tombstoned entries stay\n" +
+    "on disk for audit but are excluded from recall, inject, and active.md.\n",
   expire:
     "usage: o2b brain expire <id> --expires <YYYY-MM-DD|ISO-8601|none>\n" +
     "  [--agent <name>] [--vault <path>] [--json]\n" +
