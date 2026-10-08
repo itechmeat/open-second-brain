@@ -266,11 +266,13 @@ describe("claim validity windows (presence-gated, schema v1)", () => {
   });
 
   test("an empty or inverted window refuses the append", () => {
-    // A bare-date until day-snaps to cover its whole day, so a one-day
-    // window is fine; same-instant bounds are empty and rejected.
+    // Half-open [from, until): a bare-date until is the exclusive day
+    // start, so equal bare-date bounds are an empty window and rejected,
+    // as are same-instant bounds and any inverted pair.
     expect(() =>
       append({ validFrom: "2026-01-01T00:00:00Z", validUntil: "2026-01-01T00:00:00Z" }),
     ).toThrow();
+    expect(() => append({ validFrom: "2026-06-01", validUntil: "2026-06-01" })).toThrow();
     expect(() => append({ validFrom: "2026-06-01", validUntil: "2026-01-01" })).toThrow();
   });
 

@@ -5,13 +5,17 @@
  * A claim may carry an optional presence-gated validity window
  * (`validFrom` / `validUntil`, half-open `[validFrom, validUntil)`),
  * stored as a bare ISO date or a canonical UTC timestamp. Window
- * parsing reuses the `src/core/search/validity.ts` discipline verbatim
- * - bare dates day-snap (`from` to the day start, `until` to cover its
- * whole day), datetimes parse (a missing offset reads as UTC), and
+ * parsing shares the `src/core/search/validity.ts` grammar - the same
+ * shapes parse, datetimes with a missing offset read as UTC, and
  * relative phrases never parse, because a stored window must not be
- * clock-dependent. This module mirrors that discipline locally rather
- * than importing it, so the Brain layer keeps no dependency on the
- * search layer; the grammar is pinned identical by tests on both sides.
+ * clock-dependent - with one ledger-specific difference pinned by this
+ * module's own tests: a bare date resolves to its `T00:00:00Z` start on
+ * BOTH edges, so the exclusive until bound keeps adjacent bare-date
+ * windows (`until: 2026-09-01` then `from: 2026-09-01`) disjoint, the
+ * half-open convention `lifecycle/temporal-replace.ts` evaluates
+ * frontmatter windows by. This module mirrors that grammar locally
+ * rather than importing it, so the Brain layer keeps no dependency on
+ * the search layer.
  *
  * Pure functions; no I/O, no clock.
  */
@@ -19,15 +23,16 @@
 import type { ClaimEvent } from "./types.ts";
 
 const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Parse one validity point to unix ms, mirroring the
- * `src/core/search/validity.ts` discipline. `edge` picks the
- * day-bound snapping for bare dates. Returns null for relative
- * phrases, garbage, and impossible calendar dates - never a guess.
+ * `src/core/search/validity.ts` grammar. A bare date resolves to its
+ * day start on BOTH edges - the until bound stays exclusive, so a
+ * bare-date window is half-open and adjacent bare-date windows never
+ * intersect. Returns null for relative phrases, garbage, and impossible
+ * calendar dates - never a guess.
  */
-function validityPointMs(raw: string, edge: "from" | "until"): number | null {
+function validityPointMs(raw: string): number | null {
   const text = raw.trim();
   if (text === "") return null;
   const date = ISO_DATE_RE.exec(text);
@@ -41,7 +46,7 @@ function validityPointMs(raw: string, edge: "from" | "until"): number | null {
     ) {
       return null;
     }
-    return edge === "from" ? ms : ms + DAY_MS - 1;
+    return ms;
   }
   if (text.includes("T") || text.includes("t")) {
     const hasOffset = /(?:z|[+-]\d{2}:?\d{2})$/i.test(text);
@@ -60,10 +65,10 @@ function validityPointMs(raw: string, edge: "from" | "until"): number | null {
 export function isValidityPoint(raw: string): boolean {
   const text = raw.trim();
   if (text === "") return false;
-  if (ISO_DATE_RE.test(text)) return validityPointMs(text, "from") !== null;
+  if (ISO_DATE_RE.test(text)) return validityPointMs(text) !== null;
   // Canonical UTC only: a timestamp must end in Z (offsets are not
   // canonical and are rejected rather than normalized).
-  return /(?:z)$/i.test(text) && validityPointMs(text, "from") !== null;
+  return /(?:z)$/i.test(text) && validityPointMs(text) !== null;
 }
 
 /** The validity window of one claim, in unix ms. */
@@ -86,8 +91,8 @@ export function claimWindow(event: ClaimEvent): ClaimWindow | null {
   const hasUntil = typeof event.validUntil === "string" && event.validUntil.trim() !== "";
   if (!hasFrom && !hasUntil) return null;
   return Object.freeze({
-    fromMs: hasFrom ? validityPointMs(event.validFrom!, "from") : null,
-    untilMs: hasUntil ? validityPointMs(event.validUntil!, "until") : null,
+    fromMs: hasFrom ? validityPointMs(event.validFrom!) : null,
+    untilMs: hasUntil ? validityPointMs(event.validUntil!) : null,
   });
 }
 
@@ -126,8 +131,8 @@ export function validityWindowMs(
   if (hasFrom && !isValidityPoint(validFrom!)) return null;
   if (hasUntil && !isValidityPoint(validUntil!)) return null;
   return Object.freeze({
-    fromMs: hasFrom ? validityPointMs(validFrom!, "from") : null,
-    untilMs: hasUntil ? validityPointMs(validUntil!, "until") : null,
+    fromMs: hasFrom ? validityPointMs(validFrom!) : null,
+    untilMs: hasUntil ? validityPointMs(validUntil!) : null,
   });
 }
 

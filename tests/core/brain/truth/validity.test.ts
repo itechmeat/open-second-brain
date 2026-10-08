@@ -1,14 +1,15 @@
 /**
  * Ledger validity windows (truth-correctable-time-aware, contract item 1):
- * window parsing reuses the `src/core/search/validity.ts` discipline
- * (bare dates day-snapped, datetimes, relative phrases rejected),
- * `claimWindow` is null exactly for windowless events, and
- * `windowsIntersect` is the half-open rule with null as plus/minus
- * infinity. The ingest-default cases pin the frozen-at-ingest
- * resolution: explicit input wins outright, a readable source record's
- * frontmatter window fills the missing bounds, an unreadable or
- * windowless source stores a windowless event byte-identical to
- * today's output, and mtime is never a window source.
+ * window parsing shares the `src/core/search/validity.ts` grammar with one
+ * ledger-specific difference (bare dates resolve to their day start on
+ * BOTH edges, so the until bound is exclusive - half-open; datetimes
+ * parse; relative phrases are rejected), `claimWindow` is null exactly
+ * for windowless events, and `windowsIntersect` is the half-open rule
+ * with null as plus/minus infinity. The ingest-default cases pin the
+ * frozen-at-ingest resolution: explicit input wins outright, a readable
+ * source record's frontmatter window fills the missing bounds, an
+ * unreadable or windowless source stores a windowless event
+ * byte-identical to today's output, and mtime is never a window source.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -40,8 +41,6 @@ function claim(over: Partial<ClaimEvent> = {}): ClaimEvent {
   };
 }
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
 describe("claimWindow", () => {
   test("a windowless event has no window", () => {
     expect(claimWindow(claim())).toBeNull();
@@ -54,11 +53,20 @@ describe("claimWindow", () => {
     expect(window!.untilMs).toBeNull();
   });
 
-  test("a bare-date until day-snaps to cover its whole day", () => {
+  test("a bare-date until resolves to that day's start, exclusive", () => {
+    // Half-open [from, until): a bare-date until is the exclusive day
+    // start, never a cover of its own day, so adjacent bare-date windows
+    // (`until: 2026-01-01`, then `from: 2026-01-01`) stay disjoint.
     const window = claimWindow(claim({ validUntil: "2026-01-01" }));
     expect(window).not.toBeNull();
     expect(window!.fromMs).toBeNull();
-    expect(window!.untilMs).toBe(Date.UTC(2026, 0, 1) + DAY_MS - 1);
+    expect(window!.untilMs).toBe(Date.UTC(2026, 0, 1));
+  });
+
+  test("adjacent bare-date windows do not intersect", () => {
+    const a = claimWindow(claim({ validFrom: "2025-12-01", validUntil: "2026-01-01" }));
+    const b = claimWindow(claim({ validFrom: "2026-01-01", validUntil: "2026-02-01" }));
+    expect(windowsIntersect(a!, b!)).toBe(false);
   });
 
   test("canonical UTC datetimes parse exactly", () => {

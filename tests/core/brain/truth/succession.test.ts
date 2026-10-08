@@ -42,6 +42,22 @@ describe("isSuccessionPair", () => {
     expect(isSuccessionPair(b, a)).toBe(true);
   });
 
+  test("adjacent bare-date windows sharing a boundary day are succession", () => {
+    // Half-open [from, until): a bare-date until is the exclusive day
+    // start, so back-to-back bare-date windows (`until: 2026-06-01`,
+    // `from: 2026-06-01`) are disjoint and classify as succession - the
+    // canonical hand-written hand-over shape - never a conflict.
+    const a = claim({ validFrom: "2025-06-01", validUntil: "2026-06-01" });
+    const b = claim({
+      ts: "2026-06-10T10:00:00Z",
+      value: "Meta",
+      source: "[[Brain/notes/later.md]]",
+      validFrom: "2026-06-01",
+    });
+    expect(isSuccessionPair(a, b)).toBe(true);
+    expect(isSuccessionPair(b, a)).toBe(true);
+  });
+
   test("any windowless claim keeps the contest rule (never succession)", () => {
     const windowed = claim({ validFrom: "2025-01-01", validUntil: "2025-12-31" });
     expect(isSuccessionPair(claim(), windowed)).toBe(false);
