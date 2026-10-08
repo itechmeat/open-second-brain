@@ -379,15 +379,21 @@ export async function search(
     // traversal rides the same composite clock every other phase answers
     // to - the walk abandons its frontier once the deadline has fired -
     // and gates its ordered provenance paths at the caller's transport
-    // reach (an absent reach leaves the arm's local default, what the CLI
-    // and the stdio transport effectively are). The width budgets need no
-    // threading: the arm resolves them itself from the same env and
-    // machine config this call already resolved. With the arm off this
-    // whole expression is `noRelationalArm()` exactly as before.
+    // reach and owner scope (an absent reach leaves the arm's local
+    // default, what the CLI and the stdio transport effectively are). The
+    // width budgets need no threading: the arm resolves them itself from
+    // the same env and machine config this call already resolved. With
+    // the arm off this whole expression is `noRelationalArm()` exactly as
+    // before.
     const relational = isRelationalArmActive(effectiveConfig, opts)
       ? runRelationalArm(store, effectiveConfig.vault, query, {
           ...(deadline !== null ? { isExpired: () => deadlineExpired(deadline) } : {}),
           ...(opts.transportReach !== undefined ? { reach: opts.transportReach } : {}),
+          // The caller's owner scope gates the provenance path nodes the
+          // same way the row-level filters gate content rows: a
+          // reach-readable node another agent owns is counted as
+          // withheld, never named in the trail.
+          ...(opts.agentScope !== undefined ? { agentScope: opts.agentScope } : {}),
         })
       : noRelationalArm();
 

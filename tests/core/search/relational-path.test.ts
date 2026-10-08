@@ -116,6 +116,44 @@ test("path nodes unreadable at the caller's reach are omitted and counted", asyn
   }
 });
 
+test("path nodes outside the caller's owner scope are omitted and counted, never named", async () => {
+  // Owner scope is the same isolation the row-level filters apply: a
+  // path node that is reach-readable but owned by another agent must be
+  // withheld from the provenance exactly like an unreadable one, or its
+  // document id would ride along in the trail as an existence signal the
+  // content rows never give.
+  await buildPathVault();
+  writeMd(vault, "mid.md", '---\nowner: agent-a\nextends: "[[far]]"\n---\n\nbeta mid.');
+  await indexVault(makeConfig({ vault, dbPath }));
+  const store = await Store.open(makeConfig({ vault, dbPath }), { mode: "write", loadVec: false });
+  try {
+    const scoped = runRelationalArm(store, vault, "[[seed]] related extends", {
+      agentScope: "agent-b",
+    });
+    const farScoped = [...scoped.reachByChunk].find(([, reach]) => reach.hops === 2);
+    expect(farScoped).toBeDefined();
+    // The owner-hidden middle node is omitted from the ordered path and
+    // counted as withheld; the far node keeps only its own step.
+    expect(farScoped![1].path).toEqual([{ documentId: farScoped![0], relation: "extends" }]);
+    expect(farScoped![1].withheld).toBe(1);
+    // No step anywhere names the hidden node's document id.
+    const hiddenId = store.getDocumentIdByPath("mid.md");
+    for (const [, reach] of scoped.reachByChunk) {
+      for (const step of reach.path) {
+        expect(step.documentId).not.toBe(hiddenId);
+      }
+    }
+    // Without a requested scope the same walk keeps the whole path: the
+    // ownership gate is opt-in isolation, never a default narrowing.
+    const unscoped = runRelationalArm(store, vault, "[[seed]] related extends", {});
+    const farUnscoped = [...unscoped.reachByChunk].find(([, reach]) => reach.hops === 2);
+    expect(farUnscoped![1].withheld).toBe(0);
+    expect(farUnscoped![1].path.map((step) => step.relation)).toEqual(["related", "extends"]);
+  } finally {
+    store.close();
+  }
+});
+
 test("a readable non-tip predecessor with a closed window is annotated from frontmatter", async () => {
   // Every write and index completes before a store is opened: an open
   // write-mode store holds the writer lock the indexer needs.

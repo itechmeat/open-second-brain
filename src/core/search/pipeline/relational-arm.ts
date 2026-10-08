@@ -16,6 +16,7 @@
  */
 
 import { DEFAULT_RELATION_TYPES, normalizeRelation } from "../../graph/relation-vocab.ts";
+import { normalizeAgentScope } from "../../graph/agent-scope.ts";
 import { loadSchemaPack } from "../../brain/schema-pack.ts";
 import { rrfKey } from "../../scope-key.ts";
 import { TRANSPORT_REACH, type TransportReach } from "../../graph/transport-reach.ts";
@@ -32,6 +33,7 @@ import {
 } from "../relational-fanout.ts";
 import { parseRelationalQuery } from "../relational-query.ts";
 import {
+  isPathOwnerVisible,
   isPathReadableAtReach,
   readCachedFrontmatterEntry,
   type FrontmatterCache,
@@ -93,6 +95,14 @@ export interface RelationalArmOptions {
    * and counted. Default: local - everything readable, nothing withheld.
    */
   readonly reach?: TransportReach;
+  /**
+   * The caller's agent-ownership scope, gating provenance path nodes the
+   * same way the row-level filters gate content rows: a node whose page
+   * another agent owns is omitted from the path and counted as withheld,
+   * never named. Null / absent means no scope requested - no ownership
+   * filtering, the opt-in default every unscoped search ran with before.
+   */
+  readonly agentScope?: string | null;
 }
 
 export interface RelationalReach {
@@ -100,12 +110,13 @@ export interface RelationalReach {
   readonly hops: number;
   /**
    * The ordered steps that reached this node, gated per node at the
-   * caller's reach: a step whose page is unreadable there is omitted and
-   * counted in {@link withheld}. The provenance a row shows is exactly
-   * what the caller could read along the way.
+   * caller's reach and owner scope: a step whose page is unreadable there
+   * or owned by another agent is omitted and counted in {@link withheld}.
+   * The provenance a row shows is exactly what the caller could read
+   * along the way.
    */
   readonly path: ReadonlyArray<RelationalPathStep>;
-  /** How many path nodes the caller's reach could not read. */
+  /** How many path nodes the caller's reach or scope could not read. */
   readonly withheld: number;
   /**
    * Set when a readable path node is a non-tip superseded predecessor with
@@ -190,9 +201,12 @@ export function runRelationalArm(
     ...(opts.isExpired !== undefined ? { isExpired: opts.isExpired } : {}),
   });
   const reps = store.representativeChunks(nodes.map((n) => n.documentId));
-  // Per-node reach gating for the ordered path provenance: one titles read
-  // and one frontmatter cache per arm run, shared by every node's gate.
+  // Per-node gating for the ordered path provenance: one titles read and
+  // one frontmatter cache per arm run, shared by every node's gate. The
+  // caller's owner scope rides beside the transport reach, so a
+  // reach-readable node another agent owns is withheld the same way.
   const reach = opts.reach ?? TRANSPORT_REACH.local;
+  const agentScope = normalizeAgentScope(opts.agentScope ?? undefined);
   const frontmatterCache: FrontmatterCache = new Map();
   const titles = store.documentTitles();
   const nowMs = Date.now();
@@ -203,7 +217,7 @@ export function runRelationalArm(
     const key = rrfKey({ origin: null, path: rep.path, chunkId: rep.chunkId });
     if (seenKeys.has(key)) continue;
     seenKeys.add(key);
-    const gated = gatePath(vault, node.path, titles, reach, frontmatterCache, nowMs);
+    const gated = gatePath(vault, node.path, titles, reach, agentScope, frontmatterCache, nowMs);
     outcome.rankedChunkIds.push(rep.chunkId);
     outcome.reachByChunk.set(rep.chunkId, {
       via: node.viaLinkTypes,
@@ -285,15 +299,19 @@ function closedSupersessionTip(
 }
 
 /**
- * Gate one node's walked path at the caller's reach: unreadable steps are
- * omitted and counted; the first readable step carrying a closed
- * supersession names the reach's `supersededBy` tip.
+ * Gate one node's walked path at the caller's reach and owner scope:
+ * unreadable steps and steps another agent owns (under a requested scope)
+ * are omitted and counted alike, so a hidden node's document id is never
+ * named and never contributes the supersession annotation; the first
+ * readable, in-scope step carrying a closed supersession names the
+ * reach's `supersededBy` tip.
  */
 function gatePath(
   vault: string,
   steps: ReadonlyArray<RelationalPathStep>,
   titles: ReadonlyMap<number, { readonly path: string }>,
   reach: TransportReach,
+  agentScope: string | null,
   cache: FrontmatterCache,
   nowMs: number,
 ): {
@@ -306,7 +324,15 @@ function gatePath(
   let supersededBy: string | undefined;
   for (const step of steps) {
     const meta = titles.get(step.documentId);
-    if (meta === undefined || !isPathReadableAtReach(vault, meta.path, reach, cache)) {
+    const unreadable =
+      meta === undefined ||
+      !isPathReadableAtReach(vault, meta.path, reach, cache) ||
+      // The same owner-scope verdict the row-level filters apply to
+      // content rows: an owner-private page another agent owns is as
+      // withheld from provenance as an unreadable one. No requested
+      // scope means no ownership filtering - the opt-in default.
+      (agentScope !== null && !isPathOwnerVisible(vault, meta.path, agentScope, cache));
+    if (unreadable) {
       withheld += 1;
       continue;
     }
