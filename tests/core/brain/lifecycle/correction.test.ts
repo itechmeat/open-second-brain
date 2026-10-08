@@ -272,6 +272,65 @@ describe("reach-bounded retargeting", () => {
   });
 });
 
+describe("claims reach gate", () => {
+  test("slot claims sourced to readable extension-bearing paths stay in the blast radius", () => {
+    seedTarget();
+    // A second claim in the target's own slot, sourced to the readable
+    // mentioning page with the extension-bearing spelling every other
+    // caller hands the readable predicate (claim-graph node paths,
+    // mention-scan paths).
+    appendClaimEvent(
+      vault,
+      {
+        ts: "2026-05-03T00:00:00Z",
+        agent: "tester",
+        entity: "deploy timeout",
+        aspect: "limit",
+        value: "45s",
+        source: "[[Brain/preferences/pref-other.md]]",
+      },
+      { configPath },
+    );
+    // And one sourced to a page the caller may not read.
+    const withheldSource = "Brain/private/hidden-source.md";
+    mkdirSync(join(vault, "Brain", "private"), { recursive: true });
+    writeFileSync(
+      join(vault, withheldSource),
+      ["---", "kind: note", "id: hidden-source", "---", "", "Hidden.", ""].join("\n"),
+    );
+    appendClaimEvent(
+      vault,
+      {
+        ts: "2026-05-04T00:00:00Z",
+        agent: "tester",
+        entity: "deploy timeout",
+        aspect: "limit",
+        value: "15s",
+        source: `[[${withheldSource}]]`,
+      },
+      { configPath },
+    );
+
+    const res = correct({
+      vault,
+      configPath,
+      target: TARGET,
+      successor: "pref-new",
+      reason: "the timeout changed",
+      now: NOW,
+      agent: "tester",
+      // The predicate answers the extension-bearing spellings the other
+      // callers pass, so a claim's source must arrive in that shape.
+      readable: (rel) => rel.endsWith(".md") && rel !== withheldSource,
+    });
+
+    const values = res.blastRadius.claims.map((c) => c.value);
+    expect(values).toContain("30s"); // the target's own claim
+    expect(values).toContain("45s"); // readable, extension-bearing source
+    expect(values).not.toContain("15s"); // withheld source stays out
+  });
+});
+
 describe("applied run", () => {
   test("validity-close retires the target and retargets mentions", () => {
     seedTarget();

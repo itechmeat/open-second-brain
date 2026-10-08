@@ -237,11 +237,24 @@ function priorStatusOf(meta: Readonly<Record<string, unknown>>): string {
  * The vault-relative path a claim's source spelling names, or null when
  * it names nothing - a source that names no page is provenance text and
  * cannot be reach-gated, so it reads as within reach.
+ *
+ * The fence comes off (unlike {@link stripWikilinkDecoration}, which
+ * keeps it) and the extension stays on, so the gate is asked over the
+ * same extension-bearing vault-relative path every other caller hands
+ * the readable predicate: claim-graph node paths and mention-scan paths.
+ * The previous spelling failed on both ends - a fenced source gated on
+ * its `[[...]]` wrapper, an unfenced one on the stripped extension - and
+ * an existing, readable source page answered unreadable at remote reach,
+ * dropping its claim out of the blast radius. A source that names no
+ * page under its literal spelling gates on that spelling - withheld,
+ * which is the safe direction.
  */
 function sourceRel(source: string): string | null {
   const stripped = stripWikilinkDecoration(source);
-  if (stripped === null || stripped === "") return null;
-  return stripped.replace(/\.md$/i, "");
+  const fenced = /^\[\[([^\]]+)\]\]$/.exec(stripped);
+  const body = fenced !== null ? fenced[1]!.trim() : stripped;
+  if (body === "") return null;
+  return body;
 }
 
 /** True when the caller may read the record a claim's source names. */
