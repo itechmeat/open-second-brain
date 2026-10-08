@@ -1423,6 +1423,7 @@ export function resolveSearchConfig(opts: {
   const base: ResolvedSearchConfig = Object.freeze({
     vault: opts.vault,
     dbPath,
+    configPath: opts.configPath ?? null,
     scopeRules,
     chunkSize,
     chunkOverlap,

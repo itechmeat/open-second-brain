@@ -382,11 +382,12 @@ export async function search(
     // reach and owner scope (an absent reach leaves the arm's local
     // default, what the CLI and the stdio transport effectively are). The
     // width budgets need no threading: the arm resolves them itself from
-    // the same env and machine config this call already resolved. With
-    // the arm off this whole expression is `noRelationalArm()` exactly as
-    // before.
+    // the same env and the config file this call's resolution read (the
+    // resolved config's path, threaded through). With the arm off this
+    // whole expression is `noRelationalArm()` exactly as before.
     const relational = isRelationalArmActive(effectiveConfig, opts)
       ? runRelationalArm(store, effectiveConfig.vault, query, {
+          configPath: effectiveConfig.configPath,
           ...(deadline !== null ? { isExpired: () => deadlineExpired(deadline) } : {}),
           ...(opts.transportReach !== undefined ? { reach: opts.transportReach } : {}),
           // The caller's owner scope gates the provenance path nodes the

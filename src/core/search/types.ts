@@ -1568,6 +1568,13 @@ export interface ResolvedSearchConfig {
   readonly vault: string;
   readonly dbPath: string;
   /**
+   * The config file this resolution read, or null when it consulted no
+   * file (env-only). Carried so a per-phase re-read (the relational
+   * arm's knobs) answers the caller's own config map, never a fresh
+   * read of the default path this resolution may not have used.
+   */
+  readonly configPath?: string | null;
+  /**
    * Vault-wide scope rules, both polarities. Resolved through
    * `src/core/vault-scope` from `<vault>/Brain/_brain.yaml` →
    * `vault.ignore_paths` and `vault.include_paths`; the exclude side

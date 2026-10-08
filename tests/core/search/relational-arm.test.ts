@@ -5,6 +5,8 @@
  */
 
 import { test, expect, beforeEach, afterEach, spyOn } from "bun:test";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { search } from "../../../src/core/search/search.ts";
@@ -409,6 +411,34 @@ test("the real store carries the bridge reader and the arm walks it live", async
     const off = runRelationalArm(store, vault, "[[seed]] related", { entityBridges: false });
     expect(off.reachByChunk.has(noiseChunk.chunkId)).toBe(false);
   } finally {
-    store.close();
+    await store.close();
+  }
+});
+
+test("the arm's knobs resolve from the caller's config path, not the default file", async () => {
+  await build();
+  // A config file at a non-default path turning bridges off: the arm
+  // must consult the path its caller threaded (the resolved search
+  // config carries it), and consult no file at all when none is
+  // threaded - never a fresh read of the default config path.
+  const configPath = join(vault, "arm-config.yaml");
+  writeFileSync(configPath, "search_entity_bridges_enabled: false\n");
+  const store = await Store.open(makeConfig({ vault, dbPath }), { mode: "write", loadVec: false });
+  try {
+    const seedId = store.getDocumentIdByPath("seed.md");
+    const noiseId = store.getDocumentIdByPath("noise.md");
+    const seedChunk = store.representativeChunks([seedId!]).get(seedId!)!;
+    const noiseChunk = store.representativeChunks([noiseId!]).get(noiseId!)!;
+    store.replaceEntities(seedChunk.chunkId, ["shared-entity"]);
+    store.replaceEntities(noiseChunk.chunkId, ["shared-entity"]);
+    // The threaded path's off switch governs the walk.
+    const threaded = runRelationalArm(store, vault, "[[seed]] related", { configPath });
+    expect(threaded.reachByChunk.has(noiseChunk.chunkId)).toBe(false);
+    // No threaded path resolves env-only: the file is not consulted and
+    // the bridges default (on) applies.
+    const unthreaded = runRelationalArm(store, vault, "[[seed]] related", {});
+    expect(unthreaded.reachByChunk.get(noiseChunk.chunkId)?.via).toEqual(["entity"]);
+  } finally {
+    await store.close();
   }
 });

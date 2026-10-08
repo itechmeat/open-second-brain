@@ -10,9 +10,10 @@
  * and - when the entity-bridge flag allows and the store provides the
  * reader - walks `chunk_entities` entity bridges beside the typed edges.
  * The per-call options default to the same environment-over-machine-config
- * resolution every search knob follows; the config file was already read
- * once by the caller's config resolution, so a re-read here answers the
- * same map or fails the same way.
+ * resolution every search knob follows, resolved against the config file
+ * the caller's own resolution read (`options.configPath`, threaded from
+ * the resolved search config): the arm answers the caller's config map,
+ * never a fresh read of the default path the caller may not have used.
  */
 
 import { DEFAULT_RELATION_TYPES, normalizeRelation } from "../../graph/relation-vocab.ts";
@@ -103,6 +104,12 @@ export interface RelationalArmOptions {
    * default every unscoped search ran with before.
    */
   readonly agentScope?: string | null;
+  /**
+   * The config file the caller's own config resolution read, threaded
+   * from the resolved search config. Default: null - the knobs resolve
+   * env-only, exactly as a caller that consulted no config file did.
+   */
+  readonly configPath?: string | null;
 }
 
 export interface RelationalReach {
@@ -146,13 +153,16 @@ export function noRelationalArm(): RelationalArmOutcome {
 }
 
 /**
- * The machine config map the arm's own knobs resolve against. The config
- * file was already read by the caller's config resolution earlier in the
- * same search call, so this re-read answers the same map, or fails the
- * same way - it is deliberately not guarded into a silent default.
+ * The machine config map the arm's own knobs resolve against: the file
+ * at the caller's resolved config path, or no file at all when the
+ * caller resolved env-only - the same map the search call's own config
+ * resolution consulted, never a fresh read of the default path the
+ * caller may not have used. A present-but-unreadable caller path fails
+ * the same way here as it did there - deliberately not guarded into a
+ * silent default.
  */
-function machineConfigData(): Record<string, string> {
-  return discoverConfig().data;
+function machineConfigData(configPath: string | null | undefined): Record<string, string> {
+  return configPath ? discoverConfig(configPath).data : {};
 }
 
 /**
@@ -187,7 +197,7 @@ export function runRelationalArm(
   opts: RelationalArmOptions = {},
 ): RelationalArmOutcome {
   const outcome = noRelationalArm();
-  const config = machineConfigData();
+  const config = machineConfigData(opts.configPath);
   const budgets = opts.budgets ?? resolveTraversalBudgets({ env: process.env, config });
   const bridges = opts.entityBridges ?? resolveEntityBridgesEnabled({ env: process.env, config });
   const relQuery = parseRelationalQuery(query, relationalEdgeVocabulary(vault));
