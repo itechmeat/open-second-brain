@@ -28,6 +28,7 @@ import { trustGateAdjuster } from "../../brain/trust/retrieval-gate.ts";
 import { applyRelationPolarityPhase } from "../graph-phases.ts";
 import { clamp01 } from "../../math.ts";
 import { isVisible, pageVisibility } from "../../graph/visibility.ts";
+import { SUPERSEDED_BY_RELATION } from "../../graph/relation-vocab.ts";
 import { couplingVerdict, type CouplingVerdict } from "../correction-coupling.ts";
 import { SUCCESSOR_CARRY } from "../relation-polarity.ts";
 import {
@@ -144,12 +145,10 @@ function decisionMetaFields(meta: FrontmatterMap): Readonly<Record<string, strin
 
 // ----- Serve-with-correction coupling ---------------------------------------
 
-/**
- * The typed-relation token whose edge declares a page's successor. The
- * same word as the frontmatter key ({@link SUPERSEDED_BY_KEY}), but a
- * distinct vocabulary: this one names an indexed edge relation.
- */
-const SUPERSEDED_BY_RELATION = "superseded_by";
+// The chain walk reads its edge relation through the relation
+// vocabulary's single boundary: SUPERSEDED_BY_RELATION is the same word
+// as the frontmatter key ({@link SUPERSEDED_BY_KEY}), but a distinct
+// vocabulary - this one names an indexed edge relation.
 
 /**
  * Provenance stamped on a correction row the coupling stage pulled in,
