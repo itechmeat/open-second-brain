@@ -23,6 +23,28 @@ export interface TimeBounds {
 }
 
 /**
+ * Resolve `since` / `until` through the shared time-range grammar.
+ * Absent bounds stay open. A grammar refusal surfaces as a
+ * `SearchError` - the core type - so the per-transport mappings live
+ * with the transports: {@link resolveTimeBounds} maps it to
+ * `MCPError(INVALID_PARAMS)`, and the CLI truth verb maps the same
+ * failure to its exit-2 usage error, both surfaces refusing through
+ * this one parser instead of forking the grammar.
+ */
+export function parseTimeBounds(since: string | undefined, until: string | undefined): TimeBounds {
+  if (since === undefined && until === undefined) {
+    return { sinceMs: null, untilMs: null };
+  }
+  return resolveTimeRange(
+    {
+      ...(since !== undefined ? { since } : {}),
+      ...(until !== undefined ? { until } : {}),
+    },
+    Date.now(),
+  );
+}
+
+/**
  * Resolve `since` / `until` through the shared time-range grammar,
  * mapping `SearchError` to `MCPError(INVALID_PARAMS)`. Absent bounds
  * stay open.
@@ -31,17 +53,8 @@ export function resolveTimeBounds(
   since: string | undefined,
   until: string | undefined,
 ): TimeBounds {
-  if (since === undefined && until === undefined) {
-    return { sinceMs: null, untilMs: null };
-  }
   try {
-    return resolveTimeRange(
-      {
-        ...(since !== undefined ? { since } : {}),
-        ...(until !== undefined ? { until } : {}),
-      },
-      Date.now(),
-    );
+    return parseTimeBounds(since, until);
   } catch (exc) {
     if (exc instanceof SearchError) {
       throw new MCPError(INVALID_PARAMS, exc.message, searchErrorData(exc));

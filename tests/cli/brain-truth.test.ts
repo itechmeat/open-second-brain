@@ -178,6 +178,146 @@ test("truth with an unknown op exits 2", async () => {
   expect(res.returncode).toBe(2);
 });
 
+// ----- truth events + windowed ingest (truth-correctable-time-aware, Task 9)
+
+interface ClaimEventRow {
+  readonly ts: string;
+  readonly entity: string;
+  readonly aspect: string;
+  readonly value: string;
+  readonly source: string;
+  readonly validFrom?: string;
+  readonly validUntil?: string;
+}
+
+interface EventsBody {
+  readonly ok: boolean;
+  readonly operation: string;
+  readonly entity: string | null;
+  readonly events: ReadonlyArray<ClaimEventRow>;
+  readonly total: number;
+  readonly withheld: number;
+  readonly truncated: boolean;
+}
+
+test("truth events prints the MCP events shape over a windowed slice", async () => {
+  appendClaimEvent(vault, {
+    ts: "2026-06-01T10:00:00Z",
+    agent: "claude-dev-agent",
+    entity: "Alice Mason",
+    aspect: "employer",
+    value: "Google",
+    validFrom: "2026-06-01",
+    validUntil: "2026-09-01",
+    source: "[[Brain/notes/a.md]]",
+  });
+  appendClaimEvent(vault, {
+    ts: "2026-06-10T12:00:00Z",
+    agent: "claude-dev-agent",
+    entity: "Project Atlas",
+    aspect: "status",
+    value: "on track",
+    source: "[[Brain/notes/b.md]]",
+  });
+  const res = await runCli([
+    "brain",
+    "truth",
+    "events",
+    "--vault",
+    vault,
+    "--entity",
+    "Alice Mason",
+    "--since",
+    "2026-06-01",
+    "--json",
+  ]);
+  expect(res.returncode).toBe(0);
+  const body = JSON.parse(res.stdout) as unknown as EventsBody;
+  expect(body.ok).toBe(true);
+  expect(body.operation).toBe("events");
+  expect(body.entity).toBe("alice mason");
+  expect(body.events.map((e) => e.ts)).toEqual(["2026-06-01T10:00:00Z"]);
+  expect(body.events[0]!.validFrom).toBe("2026-06-01");
+  expect(body.events[0]!.validUntil).toBe("2026-09-01");
+  expect(body.total).toBe(1);
+  expect(body.withheld).toBe(0);
+  expect(body.truncated).toBe(false);
+});
+
+test("truth ingest accepts --valid-from and --valid-until", async () => {
+  const res = await runCli([
+    "brain",
+    "truth",
+    "ingest",
+    "--vault",
+    vault,
+    "--entity",
+    "Alice Mason",
+    "--aspect",
+    "employer",
+    "--value",
+    "Google",
+    "--source",
+    "[[Brain/notes/standup.md]]",
+    "--valid-from",
+    "2026-06-01",
+    "--valid-until",
+    "2026-09-01",
+    "--json",
+  ]);
+  expect(res.returncode).toBe(0);
+  const [event] = readClaimEvents(vault).events;
+  expect(event!.validFrom).toBe("2026-06-01");
+  expect(event!.validUntil).toBe("2026-09-01");
+});
+
+test("truth ingest refuses an empty or inverted validity window", async () => {
+  const res = await runCli([
+    "brain",
+    "truth",
+    "ingest",
+    "--vault",
+    vault,
+    "--entity",
+    "Alice Mason",
+    "--aspect",
+    "employer",
+    "--value",
+    "Google",
+    "--source",
+    "[[Brain/notes/standup.md]]",
+    "--valid-from",
+    "2026-09-01",
+    "--valid-until",
+    "2026-06-01",
+    "--json",
+  ]);
+  expect(res.returncode).toBe(1);
+  expect(readClaimEvents(vault).events).toHaveLength(0);
+});
+
+test("truth events refuses unparseable bounds with a usage error", async () => {
+  const res = await runCli([
+    "brain",
+    "truth",
+    "events",
+    "--vault",
+    vault,
+    "--since",
+    "not a date",
+    "--json",
+  ]);
+  expect(res.returncode).toBe(2);
+  expect(readClaimEvents(vault).events).toHaveLength(0);
+});
+
+test("truth events refuses a non-positive or fractional limit", async () => {
+  for (const limit of ["0", "-3", "1.5"]) {
+    const res = await runCli(["brain", "truth", "events", "--vault", vault, "--limit", limit]);
+    expect(res.returncode).toBe(2);
+  }
+});
+
 test("facts decompose splits a file into assertions", async () => {
   const file = join(tmp, "session.md");
   writeFileSync(

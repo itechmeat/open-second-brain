@@ -67,6 +67,7 @@ import {
 } from "../../core/brain/claim-graph.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { contextReach } from "../tool-contract.ts";
+import type { TransportReach } from "../../core/graph/transport-reach.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { vaultPathField } from "../vault-path-field.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
@@ -669,14 +670,8 @@ function toolBrainTruth(
   }
 
   // Windowed recall over the ledger (truth-correctable-time-aware,
-  // Task 8). `since`/`until` filter ASSERTION `ts` only, through the
-  // shared time-range grammar; the per-claim validity windows ride on
-  // the rows verbatim and are never consulted here (contract item 1
-  // keeps the two temporal vocabularies separate). Every matched row
-  // passes the same per-row owner/reach gate `brain_claims` asks; rows
-  // the gate drops are counted in `withheld`, so the account over the
-  // window stays deterministic for a remote caller while the withheld
-  // rows themselves name nothing.
+  // Task 8): the response body is the shared claimEventsReport, so the
+  // CLI subcommand answers byte-identically at the same query.
   if (op === "events") {
     const bounds = resolveTimeBounds(optionalStr("since"), optionalStr("until"));
     let limit: number;
@@ -685,27 +680,12 @@ function toolBrainTruth(
     } catch (exc) {
       throw new MCPError(INVALID_PARAMS, `brain_truth events: ${(exc as Error).message}`);
     }
-    const entityArg = optionalStr("entity");
-    const entityFilter = entityArg !== undefined && entityArg.trim() !== "" ? entityArg : undefined;
-    const view = everyArtifactRefView(
-      gatedOwnerScopeView(ctx.vault, ctx.agentName),
-      reachView(ctx.vault, contextReach(ctx)),
-    );
-    const matched = matchClaimEvents(readClaimEvents(ctx.vault).events, {
-      ...(entityFilter !== undefined ? { entity: entityFilter } : {}),
+    return claimEventsReport(ctx.vault, ctx.agentName, contextReach(ctx), {
+      entity: optionalStr("entity"),
       sinceMs: bounds.sinceMs,
       untilMs: bounds.untilMs,
+      limit,
     });
-    const gated = view.filtersNothing ? matched : matched.filter((event) => view.row(event.source));
-    return {
-      ok: true,
-      operation: "events",
-      entity: entityFilter === undefined ? null : normalizeEntityName(entityFilter),
-      events: gated.slice(0, limit),
-      total: matched.length,
-      withheld: matched.length - gated.length,
-      truncated: gated.length > limit,
-    };
   }
 
   const events = readClaimEvents(ctx.vault).events;
@@ -908,6 +888,52 @@ function toolBrainClaims(
 }
 
 // ----- brain_truth (Entity Truth & Self-Improving Dream Suite) ---------------
+
+/**
+ * One windowed events query, shared by the MCP `events` operation and
+ * the CLI `brain truth events` subcommand so the two surfaces cannot
+ * drift on shape, ordering, gating or paging. Bounds arrive already
+ * resolved (unix-ms); the page size must already be validated.
+ *
+ * Windowed recall (truth-correctable-time-aware, Tasks 8-9):
+ * `sinceMs`/`untilMs` filter ASSERTION `ts` only; the per-claim
+ * validity windows ride on the rows verbatim and are never consulted
+ * here (contract item 1 keeps the two temporal vocabularies separate).
+ * Every matched row passes the same per-row owner/reach gate
+ * `brain_claims` asks; rows the gate drops are counted in `withheld`,
+ * so the account over the window stays deterministic for a remote
+ * caller while the withheld rows themselves name nothing.
+ */
+export function claimEventsReport(
+  vault: string,
+  agentName: string | undefined,
+  reach: TransportReach,
+  query: {
+    readonly entity?: string;
+    readonly sinceMs: number | null;
+    readonly untilMs: number | null;
+    readonly limit: number;
+  },
+): Record<string, unknown> {
+  const entityFilter =
+    query.entity !== undefined && query.entity.trim() !== "" ? query.entity : undefined;
+  const view = everyArtifactRefView(gatedOwnerScopeView(vault, agentName), reachView(vault, reach));
+  const matched = matchClaimEvents(readClaimEvents(vault).events, {
+    ...(entityFilter !== undefined ? { entity: entityFilter } : {}),
+    sinceMs: query.sinceMs,
+    untilMs: query.untilMs,
+  });
+  const gated = view.filtersNothing ? matched : matched.filter((event) => view.row(event.source));
+  return {
+    ok: true,
+    operation: "events",
+    entity: entityFilter === undefined ? null : normalizeEntityName(entityFilter),
+    events: gated.slice(0, query.limit),
+    total: matched.length,
+    withheld: matched.length - gated.length,
+    truncated: gated.length > query.limit,
+  };
+}
 
 export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {

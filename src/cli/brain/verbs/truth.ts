@@ -12,6 +12,7 @@
 import { aggregateQuantities } from "../../../core/brain/truth/aggregate.ts";
 import { detectAgentCollisions } from "../../../core/brain/truth/collision.ts";
 import { computeTruthStateWithConflicts } from "../../../core/brain/truth/conflicts.ts";
+import { claimEventLimit } from "../../../core/brain/truth/events-window.ts";
 import {
   appendClaimEvent,
   CLAIM_EVENT_MAX_COUNT,
@@ -20,19 +21,26 @@ import {
 } from "../../../core/brain/truth/store.ts";
 import { normalizeEntityName } from "../../../core/brain/entities/canonical.ts";
 import { isoSecond } from "../../../core/brain/time.ts";
+import { SearchError } from "../../../core/search/types.ts";
+import { TRANSPORT_REACH } from "../../../core/graph/transport-reach.ts";
+import { resolveAgentName } from "../../../core/config.ts";
+import { claimEventsReport } from "../../../mcp/brain/knowledge-tools.ts";
+import { parseTimeBounds } from "../../../mcp/brain/time-bounds.ts";
 import { brainVerbContext, fail, ok, okJson, parse, resolveBrainAgent } from "../helpers.ts";
 
-const OPS = ["ingest", "slots", "conflicts", "aggregate", "collisions", "sweep"] as const;
+const OPS = ["ingest", "slots", "conflicts", "aggregate", "collisions", "events", "sweep"] as const;
 type TruthOp = (typeof OPS)[number];
 
 const USAGE =
-  "usage: o2b brain truth <ingest|slots|conflicts|aggregate|collisions|sweep>\n" +
+  "usage: o2b brain truth <ingest|slots|conflicts|aggregate|collisions|events|sweep>\n" +
   "  ingest     --entity E --aspect A --value V --source S [--agent N] [--ts ISO]\n" +
+  "             [--valid-from X --valid-until Y]\n" +
   "             [--quantity-value N --quantity-unit U --quantity-action W]\n" +
   "  slots      [--entity E]\n" +
   "  conflicts  [--window-days N]\n" +
   "  aggregate  --action W [--unit U] [--entity E]\n" +
   "  collisions [--window-days N]\n" +
+  "  events     [--entity E] [--since X] [--until Y] [--limit N]\n" +
   "  sweep      [--max-events N]\n" +
   "  common     [--vault <path>] [--json]";
 
@@ -55,6 +63,11 @@ export async function cmdBrainTruth(argv: string[]): Promise<number> {
     source: { type: "string" },
     agent: { type: "string" },
     ts: { type: "string" },
+    "valid-from": { type: "string" },
+    "valid-until": { type: "string" },
+    since: { type: "string" },
+    until: { type: "string" },
+    limit: { type: "string" },
     "quantity-value": { type: "string" },
     "quantity-unit": { type: "string" },
     "quantity-action": { type: "string" },
@@ -97,6 +110,8 @@ export async function cmdBrainTruth(argv: string[]): Promise<number> {
             action: (flags["quantity-action"] as string | undefined) ?? null,
           };
         }
+        const validFrom = flags["valid-from"] as string | undefined;
+        const validUntil = flags["valid-until"] as string | undefined;
         const result = appendClaimEvent(vault, {
           ts: (flags["ts"] as string | undefined) ?? isoSecond(new Date()),
           agent: resolveBrainAgent(flags, config),
@@ -105,6 +120,10 @@ export async function cmdBrainTruth(argv: string[]): Promise<number> {
           value: requireString(flags, "value"),
           valueKind,
           ...(quantity !== undefined ? { quantity } : {}),
+          // Validity windows (contract item 1): presence-gated passthrough;
+          // the store refuses an unparseable or inverted window by name.
+          ...(validFrom !== undefined ? { validFrom } : {}),
+          ...(validUntil !== undefined ? { validUntil } : {}),
           source: requireString(flags, "source"),
         });
         const body = {
@@ -113,6 +132,10 @@ export async function cmdBrainTruth(argv: string[]): Promise<number> {
           aspect: result.event.aspect,
           value: result.event.value,
           path: result.path,
+          ...(result.event.validFrom !== undefined ? { valid_from: result.event.validFrom } : {}),
+          ...(result.event.validUntil !== undefined
+            ? { valid_until: result.event.validUntil }
+            : {}),
         };
         if (asJson) okJson(body);
         else ok(`claim recorded: ${body.entity} / ${body.aspect} = ${body.value}`);
@@ -195,6 +218,60 @@ export async function cmdBrainTruth(argv: string[]): Promise<number> {
           ok(`collisions: ${collisions.length}`);
           for (const c of collisions) {
             ok(`  ${c.entity}: ${c.agents.join(" + ")} (${c.claims} claim(s))`);
+          }
+        }
+        return 0;
+      }
+      case "events": {
+        // Bounds parse through the shared time-bounds wrapper - the same
+        // parser the MCP events operation refuses with - mapped to the
+        // INVALID_PARAMS-equivalent exit-2 usage error.
+        let sinceMs: number | null;
+        let untilMs: number | null;
+        try {
+          const bounds = parseTimeBounds(
+            flags["since"] as string | undefined,
+            flags["until"] as string | undefined,
+          );
+          sinceMs = bounds.sinceMs;
+          untilMs = bounds.untilMs;
+        } catch (exc) {
+          if (exc instanceof SearchError) throw new UsageError(exc.message);
+          throw exc;
+        }
+        const limitRaw = flags["limit"] as string | undefined;
+        let limit: number;
+        try {
+          limit = claimEventLimit(limitRaw === undefined ? undefined : Number(limitRaw));
+        } catch (exc) {
+          throw new UsageError((exc as Error).message);
+        }
+        // The CLI runs at local reach (stdio child of the caller); the
+        // owner-scope gate still binds the server-resolved identity. The
+        // body is the shared claimEventsReport, so this surface answers
+        // byte-identically to the MCP operation at the same query.
+        const body = claimEventsReport(vault, resolveAgentName(config), TRANSPORT_REACH.local, {
+          entity: flags["entity"] as string | undefined,
+          sinceMs,
+          untilMs,
+          limit,
+        });
+        if (asJson) {
+          okJson(body);
+        } else {
+          const rows = body.events as ReadonlyArray<{
+            ts: string;
+            entity: string;
+            aspect: string;
+            value: string;
+            source: string;
+          }>;
+          ok(
+            `events: ${body.total} matched, ${rows.length} shown, ` +
+              `${body.withheld} withheld${body.truncated ? ", truncated" : ""}`,
+          );
+          for (const e of rows) {
+            ok(`  ${e.ts}  ${e.entity} / ${e.aspect} = ${e.value}  ${e.source}`);
           }
         }
         return 0;
