@@ -663,6 +663,12 @@ function toolBrainTruth(
     const agent =
       normalizeAgentArgument(typeof agentArg === "string" ? agentArg : null) ??
       resolveAgentName(ctx.configPath ?? undefined);
+    // Declared optional validity fields (design decision 3): explicit
+    // input wins outright, bound by bound, over what ingest resolves
+    // from the source record's frontmatter; absent fields leave every
+    // line byte-identical to the pre-window ledger.
+    const validFrom = optionalStr("valid_from");
+    const validUntil = optionalStr("valid_until");
     const result = appendClaimEvent(ctx.vault, {
       ts: isoSecond(new Date()),
       agent,
@@ -670,6 +676,8 @@ function toolBrainTruth(
       aspect: requireStr("aspect"),
       value: requireStr("value"),
       ...(quantity !== undefined ? { valueKind: "quantity" as const, quantity } : {}),
+      ...(validFrom !== undefined ? { validFrom } : {}),
+      ...(validUntil !== undefined ? { validUntil } : {}),
       source: requireStr("source"),
     });
     return {
@@ -677,6 +685,8 @@ function toolBrainTruth(
       entity: result.event.entity,
       aspect: result.event.aspect,
       path: result.path,
+      ...(result.event.validFrom !== undefined ? { valid_from: result.event.validFrom } : {}),
+      ...(result.event.validUntil !== undefined ? { valid_until: result.event.validUntil } : {}),
     };
   }
 
@@ -1267,6 +1277,16 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         quantity_value: { type: "number", description: "Numeric value for quantity claims." },
         quantity_unit: { type: "string", description: "Unit token for quantity claims." },
         quantity_action: { type: "string", description: "Measured action for quantity claims." },
+        valid_from: {
+          type: "string",
+          description:
+            "ingest: validity window start (bare ISO date or canonical UTC timestamp); wins over the source frontmatter's valid_from.",
+        },
+        valid_until: {
+          type: "string",
+          description:
+            "ingest: exclusive validity window end (bare ISO date or canonical UTC timestamp); wins over the source frontmatter's valid_until.",
+        },
         action: { type: "string", description: "Measured action for aggregate." },
         unit: { type: "string", description: "Unit token for aggregate (omit for unitless)." },
         since: {

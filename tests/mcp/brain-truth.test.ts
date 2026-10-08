@@ -11,6 +11,7 @@ import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { readClaimEvents, appendClaimEvent } from "../../src/core/brain/truth/store.ts";
+import { computeTruthStateWithConflicts } from "../../src/core/brain/truth/conflicts.ts";
 import { upsertEntity } from "../../src/core/brain/entities/registry.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
@@ -480,4 +481,86 @@ test("state normalizes the relation token and resolves its agent override", asyn
   })) as unknown as StateResponse;
   expect(body.committed[0]!.aspect).toBe("related");
   expect(readClaimEvents(vault).events[0]!.agent).toBe("scribe-agent");
+});
+
+// ----- sub-suite A integration checkpoint (Task 10) -------------------------
+
+test("ingest declares optional validity fields that win over source resolution", async () => {
+  writeSourcePage("windowed.md", '\nvalid_from: "2026-01-01"\nvalid_until: "2026-12-31"');
+  const server = new MCPServer({ vault, configPath });
+  await initialize(server);
+  const explicit = (await call(server, {
+    operation: "ingest",
+    entity: "Alice Mason",
+    aspect: "employer",
+    value: "Google",
+    source: "[[Brain/notes/windowed.md]]",
+    valid_from: "2026-06-01",
+    valid_until: "2026-09-01",
+  })) as unknown as Record<string, unknown>;
+  // Explicit input wins outright over the source's own window.
+  expect(explicit["valid_from"]).toBe("2026-06-01");
+  expect(explicit["valid_until"]).toBe("2026-09-01");
+  const [stored] = readClaimEvents(vault).events;
+  expect(stored!.validFrom).toBe("2026-06-01");
+  expect(stored!.validUntil).toBe("2026-09-01");
+});
+
+test("a windowed events call returns events ingested with resolved frozen windows", async () => {
+  // No explicit window: ingest resolves the window from the readable
+  // source record's frontmatter and freezes it on the event.
+  writeSourcePage("from-frontmatter.md", '\nvalid_from: "2026-05-01"\nvalid_until: "2026-08-01"');
+  const server = new MCPServer({ vault, configPath });
+  await initialize(server);
+  const ingested = await call(server, {
+    operation: "ingest",
+    entity: "Alice Mason",
+    aspect: "employer",
+    value: "Google",
+    source: "[[Brain/notes/from-frontmatter.md]]",
+  });
+  expect(ingested["ok"]).toBe(true);
+  const body = (await call(server, {
+    operation: "events",
+    entity: "alice mason",
+  })) as unknown as EventsResponse;
+  expect(body.events).toHaveLength(1);
+  expect(body.events[0]!.validFrom).toBe("2026-05-01");
+  expect(body.events[0]!.validUntil).toBe("2026-08-01");
+  // The succession channel and the events surface agree on the axis
+  // rule: two same-slot claims with present, non-intersecting windows
+  // classify as succession in the fold (never a conflict, never
+  // ask_user - the pinned conflicts response carries neither), and the
+  // same events return from the events operation carrying their frozen
+  // windows verbatim (contract item 1, one axis rule, two readers).
+  appendClaimEvent(vault, {
+    ts: "2026-09-02T10:00:00Z",
+    agent: "claude",
+    entity: "alice mason",
+    aspect: "employer",
+    value: "Meta",
+    validFrom: "2026-09-01",
+    // Explicit: the shared source's frontmatter window (until
+    // 2026-08-01) would invert against this from-bound if left open.
+    validUntil: "2026-12-31",
+    source: "[[Brain/notes/from-frontmatter.md]]",
+  });
+  const fold = computeTruthStateWithConflicts(readClaimEvents(vault).events);
+  expect(fold.conflicts).toHaveLength(0);
+  expect(fold.successions).toHaveLength(1);
+  expect(fold.successions![0]!.predecessor.value).toBe("Google");
+  const pinned = (await call(server, { operation: "conflicts" })) as unknown as {
+    conflicts: unknown[];
+  };
+  expect(pinned.conflicts).toHaveLength(0);
+  const both = (await call(server, { operation: "events" })) as unknown as EventsResponse;
+  // Ascending assertion ts: the fold-predecessor (Google, window closed
+  // 2026-08-01) was asserted today by the ingest above; the succession
+  // successor (Meta) was back-dated into September.
+  expect(both.total).toBe(2);
+  expect(both.events.map((e) => e.value)).toEqual(["Meta", "Google"]);
+  expect(both.events[0]!.validFrom).toBe("2026-09-01");
+  expect(both.events[0]!.validUntil).toBe("2026-12-31");
+  expect(both.events[1]!.validFrom).toBe("2026-05-01");
+  expect(both.events[1]!.validUntil).toBe("2026-08-01");
 });
