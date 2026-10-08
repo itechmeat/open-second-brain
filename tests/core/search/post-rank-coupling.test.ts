@@ -186,6 +186,40 @@ describe("post-rank coupling", () => {
     expect(outside.results.some((r) => r.path === "tagged-correction.md")).toBe(false);
   });
 
+  test("a retired row is dropped when its correction fails the caller's composite scope filter", async () => {
+    // The composite session/project scope is one of the pool filters the
+    // coupling verdict's own readability rungs do not carry: without the
+    // verdict asking it, an out-of-scope correction passes the verdict,
+    // rides into the widened pool, and only then falls to the re-filter -
+    // leaving its predecessor served bare. The verdict has to answer the
+    // same filter application the pool answers to.
+    page(
+      "coupled-predecessor.md",
+      ['superseded_by: "[[other-project-correction]]"', "project: alpha"],
+      "meadow soil drainage survey.",
+    );
+    page("other-project-correction.md", ["project: beta"], "revised meadow soil drainage survey.");
+    await indexVault(config);
+
+    // No scope requested: the pair is served coupled, proving the fixture
+    // itself is sound and the drop below is caused by the scope request.
+    const unscoped = await search(config, { query: "meadow soil drainage survey", limit: 10 });
+    expect(paths(unscoped.results)).toEqual([
+      "coupled-predecessor.md",
+      "other-project-correction.md",
+    ]);
+
+    const alpha = await search(config, {
+      query: "meadow soil drainage survey",
+      limit: 10,
+      scope: { project: "alpha" },
+    });
+    // The correction is out of scope, so the predecessor it would
+    // legitimize is dropped with it - never served bare.
+    expect(alpha.results.some((r) => r.path === "coupled-predecessor.md")).toBe(false);
+    expect(alpha.results.some((r) => r.path === "other-project-correction.md")).toBe(false);
+  });
+
   test("a tombstoned retired row stays dropped even though its correction is readable", async () => {
     page(
       "tombstoned-predecessor.md",

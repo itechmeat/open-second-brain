@@ -30,7 +30,12 @@ import { clamp01 } from "../../math.ts";
 import { isVisible, pageVisibility } from "../../graph/visibility.ts";
 import { couplingVerdict } from "../correction-coupling.ts";
 import { SUCCESSOR_CARRY } from "../relation-polarity.ts";
-import { applyPoolFilters, resolvePoolFilters, type PoolFilters } from "./pool-filters.ts";
+import {
+  applyPoolFilters,
+  resolvePoolFilters,
+  type FilterContext,
+  type PoolFilters,
+} from "./pool-filters.ts";
 import { applyRankAdjusters, type RankAdjuster } from "../rank-adjust.ts";
 import { applyReinforceBoost, loadReinforceStrengths } from "../reinforce.ts";
 import { applyCrossEncoderRerank } from "../rerank/index.ts";
@@ -48,6 +53,7 @@ import {
   type FrontmatterCache,
 } from "../result-filters.ts";
 import { applyStructuredExclusions } from "../structured-lanes.ts";
+import type { HydratedChunk } from "../store/chunks.ts";
 import {
   RETRIEVAL_DEGRADATION,
   noteDegradation,
@@ -215,11 +221,62 @@ function correctionReadableAtCaller(
 }
 
 /**
+ * The row shape both the tip probe and the appended correction are built
+ * into: a representative chunk projected into a result row - the one
+ * shape every pool filter answers, which never reads the projection's
+ * scores.
+ */
+function rowFromHead(
+  head: HydratedChunk,
+  score: number,
+  reasons: ReadonlyArray<string>,
+): BrainSearchResult {
+  return {
+    documentId: head.documentId,
+    chunkId: head.chunkId,
+    path: head.path,
+    title: head.title,
+    content: head.content,
+    startLine: head.startLine,
+    endLine: head.endLine,
+    score,
+    keywordScore: 0,
+    semanticScore: 0,
+    linkBoost: 0,
+    recencyBoost: 0,
+    searchType: "link",
+    reasons: Object.freeze([...reasons]),
+  };
+}
+
+/**
+ * Would a row for this correction page survive the caller's full filter
+ * set? {@link correctionReadableAtCaller} carries the readability, status,
+ * agent-scope, visibility-scope and reach rungs; the property, degree and
+ * composite-scope rungs are the caller's opt-in pool filters, and rather
+ * than re-spelling them as extra verdict rungs the tip candidate is
+ * probed through {@link applyPoolFilters} itself - the ONE pipeline the
+ * widened-pool re-filter runs, so the verdict and that re-filter cannot
+ * disagree. A tip the probe drops counts as unresolved, and its
+ * predecessor drops with it: a dropped correction can never leave its
+ * predecessor served bare.
+ */
+function correctionSurvivesPoolFilters(
+  head: HydratedChunk,
+  filters: PoolFilters,
+  ctx: FilterContext,
+): boolean {
+  return applyPoolFilters([rowFromHead(head, 0, [])], filters, ctx).visible.length === 1;
+}
+
+/**
  * The serve-with-correction coupling over the pool's retired-but-serveable
  * rows (truth-correctable-time-aware, contract item 3, Task 18). A row
  * whose page carries a `superseded_by` pointer but survived the status
- * filter is served only beside its resolved, readable chain-tip
- * correction - decided by {@link couplingVerdict} - and is dropped
+ * filter is served only beside its resolved chain-tip correction when the
+ * caller's FULL filter set would serve that correction - decided by
+ * {@link couplingVerdict} over the composed readability rungs plus the
+ * {@link correctionSurvivesPoolFilters} probe - and is dropped
  * otherwise, so a withheld correction takes its predecessor with it. The
  * tip arrives as a link-type row beside the row it corrects, carrying a
  * share of its score so the pair survives the final slice together.
@@ -247,6 +304,7 @@ function applyCorrectionCoupling(
   if (retired.length === 0) return { pool, pulledIn: false };
 
   const droppedChunkIds = new Set<number>();
+  const filterCtx: FilterContext = { vault, store, frontmatterCache };
   interface PendingCorrection {
     readonly documentId: number;
     readonly predecessors: string[];
@@ -270,7 +328,9 @@ function applyCorrectionCoupling(
       successorPath,
       successorReadable:
         successorPath !== null &&
-        correctionReadableAtCaller(successorPath, vault, frontmatterCache, store, filters),
+        representative !== undefined &&
+        correctionReadableAtCaller(successorPath, vault, frontmatterCache, store, filters) &&
+        correctionSurvivesPoolFilters(representative, filters, filterCtx),
     });
     if (verdict.action === "drop") {
       droppedChunkIds.add(result.chunkId);
@@ -302,24 +362,13 @@ function applyCorrectionCoupling(
     const head = representatives.get(entry.documentId);
     if (head === undefined) continue;
     appended.push(
-      Object.freeze({
-        documentId: head.documentId,
-        chunkId: head.chunkId,
-        path: head.path,
-        title: head.title,
-        content: head.content,
-        startLine: head.startLine,
-        endLine: head.endLine,
-        score: entry.carriedScore,
-        keywordScore: 0,
-        semanticScore: 0,
-        linkBoost: 0,
-        recencyBoost: 0,
-        searchType: "link" as const,
-        reasons: Object.freeze(
+      Object.freeze(
+        rowFromHead(
+          head,
+          entry.carriedScore,
           entry.predecessors.map((p) => `${CORRECTION_FOR_REASON_PREFIX} ${p}`),
         ),
-      }),
+      ),
     );
   }
   if (appended.length === 0) return { pool: kept, pulledIn: false };
