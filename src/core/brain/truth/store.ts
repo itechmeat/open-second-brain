@@ -27,6 +27,7 @@ import { join } from "node:path";
 import { resolveDeviceId } from "../../config.ts";
 import { parseFrontmatter } from "../../vault.ts";
 import type { FrontmatterMap } from "../../types.ts";
+import { vaultRelative } from "../../path-safety.ts";
 import {
   JSONL_LEDGER_EXT,
   jsonlLedgerGrammar,
@@ -87,8 +88,19 @@ const NOTE_EXTENSION = ".md";
  * shape). Only `valid_from` / `valid_until` participate; an mtime is
  * never consulted, because an mtime is an assertion-time proxy, not
  * validity.
+ *
+ * `readable` is the caller's reach gate, when the append answers at a
+ * caller reach (the MCP tools; the CLI verb runs at operator reach and
+ * passes none). A candidate the gate withholds is treated EXACTLY like
+ * an absent one - skipped like a missing file, so a source the caller
+ * cannot read resolves no window and leaves no signal distinguishing
+ * withheld from absent anywhere in the event or the response.
  */
-function sourceFrontmatterWindow(vault: string, source: string): SourceValidityWindow | null {
+function sourceFrontmatterWindow(
+  vault: string,
+  source: string,
+  readable?: (rel: string) => boolean,
+): SourceValidityWindow | null {
   // The vault path a source names: the anchored wikilink body when the
   // source is a wikilink, else the source verbatim - then alias/anchor
   // decoration off, folder segments and `.md` kept (the same body
@@ -105,6 +117,11 @@ function sourceFrontmatterWindow(vault: string, source: string): SourceValidityW
       return null; // lexical traversal or symlink escape: unreadable.
     }
     if (!existsSync(path)) continue;
+    // A page the caller may not read does not exist for them: skip it
+    // like a missing file rather than refusing, so the extensionless
+    // spelling's .md twin resolves exactly as it would had the bare
+    // candidate never existed.
+    if (readable !== undefined && !readable(vaultRelative(path, vault))) continue;
     // parseFrontmatter never raises on an unreadable file; it yields an
     // empty map, which reads as a windowless source.
     const [meta] = parseFrontmatter(path);
@@ -158,9 +175,10 @@ export interface AppendClaimInput {
   /**
    * Validity window start; absent keys mean windowless (contract item
    * 1). An absent bound resolves from the source record's frontmatter
-   * `valid_from` when the source is readable at ingest, and the
-   * resolved value is frozen on the event; an unreadable or windowless
-   * source leaves the event windowless.
+   * `valid_from` when the source is readable at the caller's reach
+   * (`AppendClaimOptions.readableSource`), and the resolved value is
+   * frozen on the event; an unreadable, withheld or windowless source
+   * leaves the event windowless.
    */
   readonly validFrom?: string;
   /** Validity window end, exclusive; resolved per bound like `validFrom`. */
@@ -172,6 +190,22 @@ export interface AppendClaimInput {
    */
   readonly extractor?: ClaimExtractor;
   readonly source: string;
+}
+
+export interface AppendClaimOptions {
+  readonly configPath?: string;
+  /**
+   * The caller's reach gate over the source page, asked with the
+   * vault-relative path of every candidate the source resolves to.
+   * Absent at operator reach (the CLI verb): every source is
+   * resolvable, today's behavior. Present on the MCP tools: a source
+   * the caller cannot read is treated exactly like an absent one - no
+   * window resolves from it, so the frozen event and the response
+   * shape carry no signal distinguishing a withheld source from a
+   * missing one (the window read must not become a frontmatter oracle
+   * over pages the caller may not see).
+   */
+  readonly readableSource?: (rel: string) => boolean;
 }
 
 export interface AppendClaimResult {
@@ -186,7 +220,7 @@ export interface AppendClaimResult {
 export function appendClaimEvent(
   vault: string,
   input: AppendClaimInput,
-  opts: { readonly configPath?: string } = {},
+  opts: AppendClaimOptions = {},
 ): AppendClaimResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
@@ -204,15 +238,16 @@ export function appendClaimEvent(
   // Ingest window defaults (truth-correctable-time-aware, task 3):
   // explicit input wins outright; a bound the caller left open resolves
   // from the source record's frontmatter `valid_from` / `valid_until`
-  // when the source is readable at ingest, and the resolved value is
-  // frozen on the event. An unreadable or windowless source stores a
+  // when the source is readable at the caller's reach, and the resolved
+  // value is frozen on the event. An unreadable, withheld (see
+  // `AppendClaimOptions.readableSource`) or windowless source stores a
   // windowless event - byte-identical to the pre-window ledger. The
   // source is read only when a bound is actually missing, so the fully
   // explicit path performs no extra I/O; mtime is never consulted.
   const needsSourceWindow = input.validFrom === undefined || input.validUntil === undefined;
   const resolved = resolveIngestWindow(
     input,
-    needsSourceWindow ? sourceFrontmatterWindow(vault, input.source) : null,
+    needsSourceWindow ? sourceFrontmatterWindow(vault, input.source, opts.readableSource) : null,
   );
   // Validity windows (contract item 1): presence-gated, strictly
   // validated, and never guessed. An unparsable bound or an empty or

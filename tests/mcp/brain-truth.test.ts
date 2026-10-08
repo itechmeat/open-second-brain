@@ -298,19 +298,31 @@ test("events withholds rows naming a page beyond the caller's reach and counts t
     value: "Meta",
     source: "[[Brain/notes/private.md]]",
   });
+  // The extensionless wikilink spelling names the SAME page: the
+  // conventional Obsidian shape the ingest window resolver accepts. A
+  // gate that resolves only the .md form fails open for this row.
+  appendClaimEvent(vault, {
+    ts: "2026-06-03T10:00:00Z",
+    agent: "claude",
+    entity: "Alice Mason",
+    aspect: "employer",
+    value: "Amazon",
+    source: "[[Brain/notes/private]]",
+  });
   const remote = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.remote });
   await initialize(remote);
   const seen = (await call(remote, { operation: "events" })) as unknown as EventsResponse;
   // A withheld row is counted, never rendered: the caller sees one event
-  // and cannot read the withheld one from the response.
-  expect(seen.total).toBe(2);
-  expect(seen.withheld).toBe(1);
+  // and cannot read the withheld ones from the response - under either
+  // spelling of the same withheld page.
+  expect(seen.total).toBe(3);
+  expect(seen.withheld).toBe(2);
   expect(seen.events.map((e) => e.value)).toEqual(["Google"]);
-  expect(JSON.stringify(seen.events)).not.toContain("private.md");
+  expect(JSON.stringify(seen.events)).not.toContain("private");
   const local = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
   await initialize(local);
   const localBody = (await call(local, { operation: "events" })) as unknown as EventsResponse;
-  expect(localBody.events).toHaveLength(2);
+  expect(localBody.events).toHaveLength(3);
   expect(localBody.withheld).toBe(0);
 });
 
@@ -563,4 +575,129 @@ test("a windowed events call returns events ingested with resolved frozen window
   expect(both.events[0]!.validUntil).toBe("2026-12-31");
   expect(both.events[1]!.validFrom).toBe("2026-05-01");
   expect(both.events[1]!.validUntil).toBe("2026-08-01");
+});
+
+// ----- withheld-source boundary (reach-gated window resolution) -------------
+
+interface IngestResponse {
+  readonly ok: boolean;
+  readonly entity: string;
+  readonly aspect: string;
+  readonly path: string;
+  readonly valid_from?: string;
+  readonly valid_until?: string;
+}
+
+/**
+ * A second single-vault fixture beside the beforeEach one, so a response
+ * over a vault where the source page exists (withheld) can be compared
+ * with the same call over a vault where it does not.
+ */
+function secondVault(): { vault: string; configPath: string; configHome: string } {
+  const vaultB = join(tmp, "vault-b");
+  const configHome = mkdtempSync(join(tmpdir(), "o2b-mcp-truth-cfg-b-"));
+  const configPath = join(configHome, "config.yaml");
+  atomicWriteFileSync(configPath, `vault: ${vaultB}\nagent_name: claude\n`);
+  bootstrapBrain(vaultB, { configPath });
+  return { vault: vaultB, configPath, configHome };
+}
+
+test("ingest treats a source beyond the caller's reach exactly like an absent one", async () => {
+  // Vault A: the source page exists, is withheld below remote reach, and
+  // carries the validity frontmatter a remote caller must not read back.
+  mkdirSync(join(vault, "Brain", "notes"), { recursive: true });
+  writeFileSync(
+    join(vault, "Brain", "notes", "hidden.md"),
+    `---\nkind: note\nvisibility: [${REMOTE_DENY_VISIBILITY_TOKEN}]\n` +
+      `valid_from: "2026-01-01"\nvalid_until: "2027-01-01"\n---\n\nhidden source page\n`,
+  );
+  const b = secondVault();
+  try {
+    const args = {
+      operation: "ingest",
+      entity: "Alice Mason",
+      aspect: "employer",
+      value: "Google",
+      source: "[[Brain/notes/hidden.md]]",
+    };
+    const remoteA = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.remote });
+    const remoteB = new MCPServer(
+      { vault: b.vault, configPath: b.configPath },
+      { reach: TRANSPORT_REACH.remote },
+    );
+    await initialize(remoteA);
+    await initialize(remoteB);
+    const withHidden = (await call(remoteA, args)) as unknown as IngestResponse;
+    const withoutPage = (await call(remoteB, args)) as unknown as IngestResponse;
+    // Byte-identical once the vault-specific shard path is set aside: no
+    // validity keys, no signal distinguishing withheld from absent.
+    expect("valid_from" in withHidden).toBe(false);
+    expect("valid_until" in withHidden).toBe(false);
+    expect("valid_from" in withoutPage).toBe(false);
+    expect(JSON.stringify({ ...withHidden, path: null })).toBe(
+      JSON.stringify({ ...withoutPage, path: null }),
+    );
+    // And the frozen event is windowless in both ledgers.
+    expect(readClaimEvents(vault).events[0]!.validFrom).toBeUndefined();
+    expect(readClaimEvents(vault).events[0]!.validUntil).toBeUndefined();
+    expect(readClaimEvents(b.vault).events[0]!.validFrom).toBeUndefined();
+    // The gate withholds exactly the unreadable: a readable source's
+    // window still resolves for the same remote caller.
+    writeSourcePage("shown.md", '\nvalid_from: "2026-05-01"\nvalid_until: "2026-08-01"');
+    const shown = (await call(remoteA, {
+      operation: "ingest",
+      entity: "Alice Mason",
+      aspect: "employer",
+      value: "Meta",
+      source: "[[Brain/notes/shown.md]]",
+    })) as unknown as IngestResponse;
+    expect(shown["valid_from"]).toBe("2026-05-01");
+    expect(shown["valid_until"]).toBe("2026-08-01");
+  } finally {
+    rmSync(b.configHome, { recursive: true, force: true });
+  }
+});
+
+test("state treats a source beyond the caller's reach exactly like an absent one", async () => {
+  mkdirSync(join(vault, "Brain", "notes"), { recursive: true });
+  writeFileSync(
+    join(vault, "Brain", "notes", "hidden.md"),
+    `---\nkind: note\nvisibility: [${REMOTE_DENY_VISIBILITY_TOKEN}]\n` +
+      `valid_from: "2026-01-01"\nvalid_until: "2027-01-01"\n---\n\nhidden source page\n`,
+  );
+  const b = secondVault();
+  try {
+    const args = {
+      operation: "state",
+      claims: [{ subject: "Alice Mason", relation: "related", object: "Project Atlas" }],
+      text: "Alice Mason and Project Atlas met this morning.",
+      source: "[[Brain/notes/hidden.md]]",
+    };
+    const remoteA = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.remote });
+    const remoteB = new MCPServer(
+      { vault: b.vault, configPath: b.configPath },
+      { reach: TRANSPORT_REACH.remote },
+    );
+    await initialize(remoteA);
+    await initialize(remoteB);
+    const withHidden = (await call(remoteA, args)) as unknown as StateResponse;
+    const withoutPage = (await call(remoteB, args)) as unknown as StateResponse;
+    // The assertion ts is per call, so it is set aside with the rest of
+    // what names the call rather than the answer; every source-derived
+    // byte must agree.
+    const stripTs = (body: StateResponse): string =>
+      JSON.stringify({
+        ...body,
+        committed: body.committed.map(({ ts: _ts, ...rest }) => rest),
+      });
+    expect(withHidden.committed).toHaveLength(1);
+    expect(withoutPage.committed).toHaveLength(1);
+    expect(stripTs(withHidden)).toBe(stripTs(withoutPage));
+    expect(withHidden.committed[0]!.validFrom).toBeUndefined();
+    expect(withHidden.committed[0]!.validUntil).toBeUndefined();
+    expect(readClaimEvents(vault).events[0]!.validFrom).toBeUndefined();
+    expect(readClaimEvents(b.vault).events[0]!.validFrom).toBeUndefined();
+  } finally {
+    rmSync(b.configHome, { recursive: true, force: true });
+  }
 });

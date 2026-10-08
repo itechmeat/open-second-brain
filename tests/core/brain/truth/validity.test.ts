@@ -306,4 +306,29 @@ describe("ingest window defaults (appendClaimEvent)", () => {
     expect(written.event.validFrom).toBeUndefined();
     expect(written.event.validUntil).toBeUndefined();
   });
+
+  test("a source the reach gate withholds stores a windowless event byte-identical to today's output", () => {
+    // The MCP tools pass the caller's readable predicate; a source page
+    // it withholds must resolve no window, exactly like an absent one -
+    // the frozen event and the response shape carry no signal
+    // distinguishing withheld from absent.
+    writeSource("Brain/notes/standup.md", "valid_from: 2026-01-01\nvalid_until: 2026-06-30\n");
+    const written = withDeviceId("", () =>
+      appendClaimEvent(vault, STANDUP_CLAIM, { readableSource: () => false }),
+    );
+    expect(readFileSync(written.path, "utf8").trim()).toBe(
+      '{"v":1,"ts":"2026-06-01T10:00:00Z","agent":"claude-dev-agent","entity":"alice mason","aspect":"employer","value":"Google","valueKind":"text","source":"[[Brain/notes/standup.md]]"}',
+    );
+  });
+
+  test("a source the reach gate admits still resolves its frontmatter window", () => {
+    writeSource("Brain/notes/standup.md", "valid_from: 2026-01-01\n");
+    const written = withDeviceId("", () =>
+      appendClaimEvent(vault, STANDUP_CLAIM, {
+        readableSource: (rel) => rel === "Brain/notes/standup.md",
+      }),
+    );
+    expect(written.event.validFrom).toBe("2026-01-01");
+    expect(written.event.validUntil).toBeUndefined();
+  });
 });

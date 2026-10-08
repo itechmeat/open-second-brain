@@ -42,9 +42,11 @@ const MARKDOWN_EXT = ".md";
 
 /**
  * A reference a report row carries: either a vault-relative path
- * (`Brain/preferences/pref-x.md`, `notes/y.md`) or a bare Brain artifact
- * id (`pref-x`, `ret-y`, `sig-2026-05-01-z`), optionally spelled as a
- * wikilink (`[[pref-x]]`, `[[notes/y.md]]`).
+ * (`Brain/preferences/pref-x.md`, `notes/y.md`), an extensionless
+ * vault-page spelling of one (`Brain/notes/private`, the conventional
+ * Obsidian wikilink body), or a bare Brain artifact id (`pref-x`,
+ * `ret-y`, `sig-2026-05-01-z`), optionally spelled as a wikilink
+ * (`[[pref-x]]`, `[[notes/y.md]]`).
  *
  * `null` / `undefined` / empty are accepted and read as "this row names
  * nothing here", which is visible: a row with no subject cannot disclose
@@ -176,6 +178,23 @@ function artifactPath(vault: string, id: string): string | null {
 }
 
 /**
+ * The candidate an extensionless vault-page reference denotes: the bare
+ * spelling when that file exists, else its `.md` twin - the same
+ * resolution the claim ledger's write side applies to an extensionless
+ * source, so the read-side gate cannot drift from the spelling the
+ * writer used. When neither exists the `.md` twin is the answer, which
+ * is exactly how an `.md`-suffixed reference to a missing page is
+ * already judged. The bare spelling is probed only when it stays inside
+ * the vault, so a traversal-shaped reference never reaches the
+ * filesystem outside it: the `.md` twin fails `pathIsInside` all the
+ * same, and the verdict is hidden either way.
+ */
+function pageCandidate(vault: string, bare: string): string {
+  if (pathIsInside(join(vault, bare), vault) && existsSync(join(vault, bare))) return bare;
+  return bare + MARKDOWN_EXT;
+}
+
+/**
  * Bind one per-path rule to one vault, as a reference-shaped view.
  *
  * `pathVisible` is handed the shared per-response frontmatter cache, the
@@ -198,13 +217,22 @@ export function artifactRefView(
     if (ref === null || ref === undefined || ref.length === 0) return true;
     const memo = verdicts.get(ref);
     if (memo !== undefined) return memo;
-    // A reference that names a path is resolved as one; anything else is
-    // a Brain artifact id, and an id with no artifact on disk names
-    // nothing that could be hidden - see {@link artifactPath} for why
-    // that reading is only true while its directory list is complete.
+    // A reference that names a path is resolved as one - including its
+    // extensionless spelling, whose .md twin is the page an Obsidian
+    // writer named (a gate that resolved only the .md form failed OPEN
+    // for exactly that spelling). A bare id is a Brain artifact id, and
+    // an id with no artifact on disk names nothing that could be hidden
+    // - see {@link artifactPath} for why that reading is only true while
+    // its directory list is complete.
     const bare = unbracket(ref);
     const rel =
-      bare.length === 0 ? null : bare.endsWith(MARKDOWN_EXT) ? bare : artifactPath(vault, bare);
+      bare.length === 0
+        ? null
+        : bare.endsWith(MARKDOWN_EXT)
+          ? bare
+          : bare.includes("/")
+            ? pageCandidate(vault, bare)
+            : artifactPath(vault, bare);
     // A reference that resolves outside the vault names no page anyone
     // could be shown, and is hidden before the rule reads anything: log
     // bodies carry strings an earlier caller wrote.

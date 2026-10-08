@@ -669,17 +669,29 @@ function toolBrainTruth(
     // line byte-identical to the pre-window ledger.
     const validFrom = optionalStr("valid_from");
     const validUntil = optionalStr("valid_until");
-    const result = appendClaimEvent(ctx.vault, {
-      ts: isoSecond(new Date()),
-      agent,
-      entity: requireStr("entity"),
-      aspect: requireStr("aspect"),
-      value: requireStr("value"),
-      ...(quantity !== undefined ? { valueKind: "quantity" as const, quantity } : {}),
-      ...(validFrom !== undefined ? { validFrom } : {}),
-      ...(validUntil !== undefined ? { validUntil } : {}),
-      source: requireStr("source"),
-    });
+    // The source's window resolves at the CALLER's reach: a source page
+    // the caller cannot read is treated exactly like an absent one -
+    // windowless claim, no validity keys in the response, no signal
+    // distinguishing withheld from absent. Without this gate the ingest
+    // response would read a withheld page's validity frontmatter back
+    // and triple as an existence oracle. (The CLI verb runs at operator
+    // reach and passes no gate.)
+    const readable = readableAtContextReachOrUndefined(ctx);
+    const result = appendClaimEvent(
+      ctx.vault,
+      {
+        ts: isoSecond(new Date()),
+        agent,
+        entity: requireStr("entity"),
+        aspect: requireStr("aspect"),
+        value: requireStr("value"),
+        ...(quantity !== undefined ? { valueKind: "quantity" as const, quantity } : {}),
+        ...(validFrom !== undefined ? { validFrom } : {}),
+        ...(validUntil !== undefined ? { validUntil } : {}),
+        source: requireStr("source"),
+      },
+      readable !== undefined ? { readableSource: readable } : {},
+    );
     return {
       ok: true,
       entity: result.event.entity,
@@ -751,6 +763,12 @@ function toolBrainTruth(
     const agent =
       normalizeAgentArgument(typeof agentArg === "string" ? agentArg : null) ??
       resolveAgentName(ctx.configPath ?? undefined);
+    // The source's frontmatter window resolves at the CALLER's reach,
+    // exactly as ingest gates it: a withheld source freezes a windowless
+    // event and the committed rows carry no validity keys, so the state
+    // response reads a withheld page's frontmatter no more than an
+    // absent one's.
+    const readable = readableAtContextReachOrUndefined(ctx);
     try {
       const outcome = appendStatedClaims(
         ctx.vault,
@@ -764,6 +782,7 @@ function toolBrainTruth(
         {
           entities: statedClaimEntities(ctx.vault),
           ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
+          ...(readable !== undefined ? { readableSource: readable } : {}),
         },
       );
       return {

@@ -63,6 +63,13 @@ export interface StatedClaimsOptions {
    */
   readonly entities?: ReadonlyArray<AtomicEntityLike>;
   readonly configPath?: string;
+  /**
+   * The caller's reach gate over the payload's source page (see
+   * `AppendClaimOptions.readableSource`): a source the caller cannot
+   * read resolves no frontmatter window, exactly like an absent one.
+   * Absent at operator reach.
+   */
+  readonly readableSource?: (rel: string) => boolean;
 }
 
 /** Machine-readable reason codes for an ungrounded claim. */
@@ -175,7 +182,12 @@ export function appendStatedClaims(
       extractor: AGENT_STATED,
       source,
     };
-    committed.push(appendClaimEvent(vault, input, { configPath: opts.configPath }));
+    committed.push(
+      appendClaimEvent(vault, input, {
+        configPath: opts.configPath,
+        ...(opts.readableSource !== undefined ? { readableSource: opts.readableSource } : {}),
+      }),
+    );
   }
   return Object.freeze({
     committed: Object.freeze(committed),

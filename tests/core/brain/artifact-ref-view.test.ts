@@ -118,6 +118,57 @@ describe("what a log entry offers the rule", () => {
   });
 });
 
+describe("an extensionless vault-page spelling", () => {
+  const HIDDEN_PAGE_REL = "Brain/notes/private";
+  const OPEN_PAGE_REL = "Brain/notes/open";
+
+  beforeEach(() => {
+    mkdirSync(join(vault, "Brain", "notes"), { recursive: true });
+    writeFileSync(join(vault, `${HIDDEN_PAGE_REL}.md`), "---\ntopic: hidden\n---\n\nhidden\n");
+    writeFileSync(join(vault, `${OPEN_PAGE_REL}.md`), "open page\n");
+  });
+
+  /** A view that hides exactly the hidden notes page above. */
+  const hidingNotesPage = () => artifactRefView(vault, (rel) => rel !== `${HIDDEN_PAGE_REL}.md`);
+
+  test("resolves to the same target as its .md form and is withheld", () => {
+    // A gate that resolved only the .md form failed OPEN for the bare
+    // wikilink shape - the conventional Obsidian spelling.
+    const view = hidingNotesPage();
+    expect(view.visible("[[Brain/notes/private]]")).toBe(false);
+    expect(view.visible("Brain/notes/private")).toBe(false);
+    expect(view.visible(`[[${HIDDEN_PAGE_REL}.md]]`)).toBe(false);
+  });
+
+  test("a readable page stays visible under the extensionless spelling", () => {
+    expect(hidingNotesPage().visible("[[Brain/notes/open]]")).toBe(true);
+  });
+
+  test("the bare spelling wins when that file exists, as the write side resolves it", () => {
+    // One extensionless file beside its .md twin: the bare candidate is
+    // the page the reference names - the same first-existing rule the
+    // ingest window resolver applies - so hiding one does not hide the
+    // other.
+    writeFileSync(join(vault, "Brain", "notes", "dual"), "bare twin\n");
+    const view = artifactRefView(vault, (rel) => rel !== "Brain/notes/dual");
+    expect(view.visible("[[Brain/notes/dual]]")).toBe(false);
+    expect(view.visible("[[Brain/notes/dual.md]]")).toBe(true);
+  });
+
+  test("a spelling naming no page is judged exactly like an .md reference to it", () => {
+    const view = hidingNotesPage();
+    expect(view.visible("[[Brain/notes/never-written]]")).toBe(
+      view.visible("[[Brain/notes/never-written.md]]"),
+    );
+  });
+
+  test("a bare id spelling is never read as a path", () => {
+    // Ids keep the artifact-directory resolution: an extensionless id
+    // that resolves to no artifact still names nothing.
+    expect(hidingView().visible("pref-never-existed")).toBe(true);
+  });
+});
+
 describe("a reference that leaves the vault", () => {
   test("is hidden without asking the rule, so nothing beside the vault is read", () => {
     const asked: string[] = [];
