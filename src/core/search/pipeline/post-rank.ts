@@ -383,16 +383,6 @@ function applyCorrectionCoupling(
   return { pool: out, pulledIn: true };
 }
 
-/**
- * The caller's post-rank filter set re-asked over a pool a post-rank
- * phase widened goes through {@link applyPoolFilters} - the ONE pipeline
- * the visibility census pins as `applyVisibilityScope`'s single call
- * site. Every pass is idempotent over the rows that already answered it,
- * so re-running the whole pool costs shared-cache reads and keeps one
- * spelling of each rule; tracking which rows were new would be a second
- * copy of the same bookkeeping.
- */
-
 export async function applyPostRankPhases(input: PostRankInput): Promise<PostRankOutcome> {
   const { store, config, opts, frontmatterCache } = input;
   const warnings: string[] = [];
@@ -438,6 +428,13 @@ export async function applyPostRankPhases(input: PostRankInput): Promise<PostRan
   // the single reach re-filter below is exactly what ran before, and a
   // pool with neither pull-in nor retired row is byte-identical.
   const polarityPulled = polarized.length !== excluded.length;
+  // The caller's post-rank filter set re-asked over a pool a post-rank
+  // phase widened goes through applyPoolFilters - the ONE pipeline the
+  // visibility census pins as applyVisibilityScope's single call site.
+  // Every pass is idempotent over the rows that already answered it, so
+  // re-running the whole pool costs shared-cache reads and keeps one
+  // spelling of each rule; tracking which rows were new would be a
+  // second copy of the same bookkeeping.
   const reachable =
     polarityPulled || coupled.pulledIn
       ? applyPoolFilters(coupled.pool, poolFilters, {

@@ -26,7 +26,14 @@ export type CouplingVerdict =
   | { readonly action: "drop" };
 
 export interface CouplingInput {
-  /** Path of the retired-but-serveable row's page. */
+  /**
+   * Path of the retired-but-serveable row's page. Caller context, not a
+   * verdict input: the predicate never reads it - the verdict turns on
+   * the successor fields alone - while callers carry the path into the
+   * receipts and records they write once the verdict is in. It stays on
+   * the input so every surface hands one shape and the pairing of
+   * predecessor to verdict is visible at the call site.
+   */
   readonly predecessorPath: string;
   /** Chain-tip successor path from resolveChainTip/buildChainLookup, null when unresolved. */
   readonly successorPath: string | null;
