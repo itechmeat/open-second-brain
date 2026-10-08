@@ -494,6 +494,97 @@ describe("replay convergence", () => {
   });
 });
 
+describe("tombstone receipts", () => {
+  test("a fresh flatly-wrong run without a successor emits exactly one retirement receipt carrying the bundle trigger", () => {
+    seedTarget();
+    const res = correct({
+      vault,
+      configPath,
+      target: TARGET,
+      value: "the number was never thirty seconds",
+      flatlyWrong: true,
+      reason: "fabricated figure",
+      dryRun: false,
+      now: NOW,
+      agent: "tester",
+    });
+
+    const receipts = readDecisionChangeReceipts(vault).receipts.filter((r) => r.subject === TARGET);
+    // The shared tombstone writer's own receipt and the sweep's bundle
+    // receipt are the SAME retirement: one receipt lands, and it carries
+    // the bundle trigger no other writer could have supplied.
+    expect(receipts.length).toBe(1);
+    expect(receipts[0]!.evidence_triggers).toContain(`correction_bundle:${res.bundleId}`);
+    expect(receipts[0]!.after).toBe("status:tombstoned");
+    expect(receipts[0]!.before).toBe("status:confirmed");
+    const retirementReceipt = res.receipts.find((r) => r.subject === TARGET);
+    expect(retirementReceipt!.appended).toBe(true);
+  });
+
+  test("a fresh flatly-wrong run with a successor emits exactly one retirement receipt carrying the bundle trigger", () => {
+    seedTarget();
+    const res = correct({
+      vault,
+      configPath,
+      target: TARGET,
+      value: "the number was never thirty seconds",
+      successor: "pref-new",
+      flatlyWrong: true,
+      reason: "fabricated figure",
+      dryRun: false,
+      now: NOW,
+      agent: "tester",
+    });
+
+    const receipts = readDecisionChangeReceipts(vault).receipts.filter((r) => r.subject === TARGET);
+    expect(receipts.length).toBe(1);
+    expect(receipts[0]!.evidence_triggers).toContain(`correction_bundle:${res.bundleId}`);
+    // The pointer spelling matches the retirement's superseded_by pointer.
+    expect(receipts[0]!.after).toBe("status:tombstoned superseded_by:[[pref-new]]");
+  });
+
+  test("an applied flatly-wrong replay reports the retirement and its receipt as not appended", () => {
+    seedTarget();
+    correct({
+      vault,
+      configPath,
+      target: TARGET,
+      value: "the number was never thirty seconds",
+      flatlyWrong: true,
+      reason: "fabricated figure",
+      dryRun: false,
+      now: NOW,
+      agent: "tester",
+    });
+    const receiptsAfterFirst = readDecisionChangeReceipts(vault).receipts.filter(
+      (r) => r.subject === TARGET,
+    );
+
+    const second = correct({
+      vault,
+      configPath,
+      target: TARGET,
+      value: "the number was never thirty seconds",
+      flatlyWrong: true,
+      reason: "fabricated figure",
+      dryRun: false,
+      now: new Date("2026-06-16T12:00:00Z"),
+      agent: "tester",
+    });
+
+    expect(second.retirements[0]!.changed).toBe(false);
+    // The replay reports the retirement receipt as not appended, instead
+    // of minting a fresh no-change receipt under a mutated idempotency key.
+    expect(second.receipts.length).toBeGreaterThan(0);
+    expect(second.receipts.some((r) => r.subject === TARGET)).toBe(true);
+    expect(second.receipts.every((r) => r.appended === false)).toBe(true);
+    const receiptsAfterSecond = readDecisionChangeReceipts(vault).receipts.filter(
+      (r) => r.subject === TARGET,
+    );
+    expect(receiptsAfterSecond.length).toBe(receiptsAfterFirst.length);
+  });
+});
+
 describe("optional inputs", () => {
   test("a correction with no corrected value appends nothing to the ledger", () => {
     seedTarget();

@@ -36,10 +36,13 @@ import { join } from "node:path";
 
 import { normalizeAgentArgument } from "../../agent-identity.ts";
 import { resolveAgentName } from "../../config.ts";
+import { sanitiseTextField } from "../../redactor.ts";
 import type { FrontmatterMap } from "../../types.ts";
 import { parseFrontmatter, writeFrontmatterAtomic } from "../../vault.ts";
 import { appendDecisionChangeReceipt } from "../decisions/receipts.ts";
 import {
+  LIFECYCLE_STATUS_KEY,
+  LIFECYCLE_STATUS_KEY_NORMALIZED,
   normalizeChainLink,
   readLifecycleState,
   SUPERSEDED_BY_KEY,
@@ -76,6 +79,14 @@ const VALID_UNTIL_KEY = "valid_until";
 
 /** The `evidence_triggers` prefix every bundle-correlated receipt carries. */
 export const CORRECTION_BUNDLE_TRIGGER_PREFIX = "correction_bundle:";
+
+/**
+ * Cap on the rationale the tombstone-path receipt carries, mirroring the
+ * shared tombstone writer's own reason cap (`REASON_MAX_LEN` in
+ * tombstone.ts): the receipt this sweep mints must be writable under the
+ * same limits the writer it stands in for would have met.
+ */
+const TOMBSTONE_RATIONALE_MAX_LEN = 512;
 
 /** Raised when a correction target or input is refused. */
 export class CorrectionError extends Error {
@@ -203,6 +214,22 @@ function resolveTarget(
 /** The id a record is mentioned and chained under: basename, no extension. */
 function idOfRel(rel: string): string {
   return normalizeChainLink(rel);
+}
+
+/**
+ * The pre-retirement status exactly as the shared tombstone writer reads
+ * it before its write (the `scalar()` chain in tombstone.ts): a
+ * non-string or empty value reads as "unknown". The sweep's retirement
+ * receipt must be spelled with the writer's own key material so the
+ * writer's ask dedupes against it - a divergent edge-case spelling here
+ * would silently turn one retirement into two receipts.
+ */
+function priorStatusOf(meta: Readonly<Record<string, unknown>>): string {
+  for (const key of [LIFECYCLE_STATUS_KEY, LIFECYCLE_STATUS_KEY_NORMALIZED]) {
+    const value = meta[key];
+    if (typeof value === "string" && value !== "") return value;
+  }
+  return "unknown";
 }
 
 /**
@@ -392,6 +419,24 @@ export function correct(input: CorrectInput): CorrectResult {
   }
 
   const retirements: CorrectionRetirement[] = [];
+  // Bundle-correlated receipts: one for the retirement decision and one
+  // per corrected slot. Asking is idempotent, so a replay reports
+  // appended: false instead of doubling the record.
+  const receipts: CorrectionReceiptRecord[] = [];
+  const askReceipt = (subject: string, before: string, after: string): void => {
+    const res = appendDecisionChangeReceipt(input.vault, {
+      subject,
+      before,
+      after,
+      actor: agent,
+      reasonCode,
+      rationale: reason,
+      evidenceTriggers: [trigger],
+      ts: correctionTs,
+      ...(input.configPath !== undefined ? { configPath: input.configPath } : {}),
+    });
+    receipts.push(Object.freeze({ subject, appended: res.appended }));
+  };
   if (alreadyRetired) {
     retirements.push(
       Object.freeze({
@@ -402,7 +447,61 @@ export function correct(input: CorrectInput): CorrectResult {
         changed: false,
       }),
     );
+    if (policy.endState === "tombstone") {
+      // Replay of a tombstone retirement: the first run's pre-retirement
+      // status is gone from the frontmatter THIS run re-read (the first
+      // run stamped `_status: tombstoned` over it), so the sweep cannot
+      // re-derive the idempotency key its first receipt was written
+      // under - asking again would mint a fresh no-change receipt under
+      // a mutated key. The receipt already stands on disk; report it as
+      // not appended.
+      receipts.push(Object.freeze({ subject: targetRel, appended: false }));
+    } else {
+      // The receipt describes the state on disk, so a replay names the
+      // SAME close instant the first run recorded and its idempotency
+      // key matches.
+      askReceipt(
+        targetRel,
+        `status:${priorStatusOf(meta)}`,
+        `validity_close until ${storedUntil as string}`,
+      );
+    }
   } else if (policy.endState === "tombstone") {
+    // Bundle-trigger carry. The shared tombstone writer appends its OWN
+    // decision-change receipt after the write, keyed on
+    // (subject, before, after) with no evidence triggers. This sweep's
+    // ask goes FIRST, spelled with the writer's exact key material and
+    // carrying correction_bundle:<bundleId>, so the writer's own ask
+    // dedupes against it and exactly ONE receipt records the retirement
+    // - the sweep's, naming the bundle. The spelling mirrors
+    // tombstone.ts's receipt block; the tombstone-receipt tests in
+    // correction.test.ts pin the coupling. Fail-soft, mirroring the
+    // writer's own receipt discipline: an accountability-log hiccup must
+    // never fail the retirement itself.
+    const pointer = successorId ? `[[${successorId}]]` : null;
+    let receiptAppended = false;
+    try {
+      const pre = appendDecisionChangeReceipt(input.vault, {
+        subject: targetRel,
+        before: `status:${priorStatusOf(meta)}`,
+        after:
+          pointer !== null ? `status:tombstoned superseded_by:${pointer}` : "status:tombstoned",
+        actor: agent,
+        reasonCode: REASON_CODE_TOMBSTONE,
+        rationale: sanitiseTextField(reason, {
+          maxLen: TOMBSTONE_RATIONALE_MAX_LEN,
+          singleLine: true,
+        }).trim(),
+        evidenceTriggers: [trigger],
+        ts: correctionTs,
+        ...(input.configPath !== undefined ? { configPath: input.configPath } : {}),
+      });
+      receiptAppended = pre.appended;
+    } catch {
+      // The writer's own receipt below still records the retirement,
+      // without the bundle trigger.
+    }
+    receipts.push(Object.freeze({ subject: targetRel, appended: receiptAppended }));
     const res = tombstone({
       vault: input.vault,
       path: targetRel,
@@ -457,6 +556,11 @@ export function correct(input: CorrectInput): CorrectResult {
         changed: true,
       }),
     );
+    askReceipt(
+      targetRel,
+      `status:${priorStatusOf(meta)}`,
+      `validity_close until ${policy.validUntil ?? correctionTs}`,
+    );
   }
 
   // Mention retargeting reuses the counting scan's own matcher with
@@ -475,45 +579,8 @@ export function correct(input: CorrectInput): CorrectResult {
     },
   );
 
-  // Bundle-correlated receipts: one for the retirement decision and one
-  // per corrected slot. Asking is idempotent, so a replay reports
-  // appended: false instead of doubling the record.
-  const receipts: CorrectionReceiptRecord[] = [];
-  const askReceipt = (subject: string, before: string, after: string): void => {
-    const res = appendDecisionChangeReceipt(input.vault, {
-      subject,
-      before,
-      after,
-      actor: agent,
-      reasonCode,
-      rationale: reason,
-      evidenceTriggers: [trigger],
-      ts: correctionTs,
-      ...(input.configPath !== undefined ? { configPath: input.configPath } : {}),
-    });
-    receipts.push(Object.freeze({ subject, appended: res.appended }));
-  };
-  const priorStatus =
-    typeof meta["_status"] === "string"
-      ? meta["_status"]
-      : typeof meta["status"] === "string"
-        ? meta["status"]
-        : "unknown";
-  // The receipt describes the state on disk, so a replay names the SAME
-  // close instant the first run recorded and its idempotency key matches.
-  const effectiveValidUntil =
-    policy.endState === "tombstone"
-      ? null
-      : alreadyRetired
-        ? (storedUntil as string)
-        : (policy.validUntil ?? correctionTs);
-  askReceipt(
-    targetRel,
-    `status:${priorStatus}`,
-    policy.endState === "tombstone"
-      ? "status:tombstoned"
-      : `validity_close until ${effectiveValidUntil}`,
-  );
+  // Bundle-correlated receipts for the corrected slots: one per slot the
+  // ledger appended to, under the same bundle trigger as the retirement.
   for (const entry of ledger) {
     askReceipt(`${entry.entity}/${entry.aspect}`, `value:${entry.source}`, `value:${entry.value}`);
   }
