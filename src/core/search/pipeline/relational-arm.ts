@@ -326,7 +326,11 @@ function gatePath(
 /**
  * Relational rerank pin (t_d9f863e9): the protect rule applied at the
  * cross-encoder hand-off. Rerank may PROMOTE relational-origin candidates,
- * never SINK them below their pre-rerank heuristic order.
+ * never SINK them below their pre-rerank heuristic order - tightened
+ * (truth-correctable-time-aware) by the direct-hit ceiling: a
+ * relational-origin row may also never cross ABOVE an organic direct hit
+ * (a row the keyword lane scored), because the traversal widens the pool
+ * and never outranks what the lanes matched.
  *
  * This is deliberately NOT a second floor beside the cross-encoder's
  * `minScore` (the premise warned against a parallel mechanism): `minScore`
@@ -334,18 +338,24 @@ function gatePath(
  * rerank stage has spoken, which makes the pin strictly weaker than
  * rerank-off - a relational candidate may rise wherever the rerank genuinely
  * scores it above peers, and never falls below the line the heuristic ranker
- * gave it.
+ * gave it unless the ceiling demands it (the ceiling wins: admission below
+ * the organic tail is the structural guarantee the pin protects).
  *
  * Mechanism: every candidate in `preRerank` carrying `relationalOrigin`
  * (stamped by the ranker from the arm's contribution set) holds the
- * position it occupied there. Candidates are processed in PRE-rerank order
- * - the floors are ordered, so honouring an earlier floor can never push a
- * later candidate past its own, and each pass is a removal plus an
- * insertion at `min(currentIndex, floor)`. A candidate already at or above
- * its floor (it rose, or the order did not change) is left untouched and
- * gains no receipt; a candidate the rule moved gains
- * `relational_pin: floored at pre-rerank position N` so the explain trail
- * shows which rows the pin held. Deterministic given the two orders.
+ * position it occupied there, and is processed in PRE-rerank order - the
+ * floors are ordered, so honouring an earlier floor can never push a later
+ * candidate past its own. Each pass removes the candidate and inserts it
+ * at its target: the pre-rerank index when it sank, else just below the
+ * deepest organic direct hit when it crossed the ceiling line (later
+ * ceiling moves land after the earlier ones and after every already-placed
+ * peer, so the relational block's pre-rerank order survives). A candidate
+ * already at or above its floor and below the ceiling line is left
+ * untouched and gains no receipt; a moved candidate gains
+ * `relational_pin: floored at pre-rerank position N` (sunk) or
+ * `relational_pin: held below the organic direct hits` (ceiling) so the
+ * explain trail shows which rows the pin held. Deterministic given the two
+ * orders.
  *
  * The pin is active only where the arm contributed something, so pools
  * without relational-origin rows return the rerank order unchanged.
@@ -364,26 +374,68 @@ export function applyRelationalRerankPin(
   if (floors.size === 0) return postRerank;
 
   // Walk the protected candidates in PRE-rerank order (floors are strictly
-  // increasing along that walk), lifting each sunk one to its floor.
+  // increasing along that walk): lift each sunk one to its floor, and hold
+  // each one below the deepest organic direct hit.
   const working: BrainSearchResult[] = [...postRerank];
   const floored = new Set<number>();
+  const ceilinged = new Set<number>();
+  // Relational rows already placed, pre-rerank order - a ceiling move must
+  // never land above one of them.
+  const placedPeers: number[] = [];
   for (const [chunkId, floor] of floors) {
     const at = working.findIndex((r) => r.chunkId === chunkId);
-    if (at === -1 || at <= floor) continue;
-    const [row] = working.splice(at, 1);
-    working.splice(floor, 0, row!);
-    floored.add(chunkId);
+    if (at === -1) {
+      placedPeers.push(chunkId);
+      continue;
+    }
+    let target = at;
+    if (target > floor) target = floor;
+    // The ceiling line: one past the deepest organic direct hit (a row the
+    // keyword lane scored that the arm did not originate). A pool with no
+    // direct hits has no line and the ceiling never fires.
+    let cut = 0;
+    for (let i = 0; i < working.length; i++) {
+      const r = working[i]!;
+      if (r.keywordScore > 0 && r.relationalOrigin !== true) cut = i + 1;
+    }
+    // Which rule moved the row is decided by which fired, never by where
+    // the row landed - a floor lift can legitimately land on the cut index.
+    let movedByCeiling = false;
+    if (target < cut) {
+      movedByCeiling = true;
+      target = cut;
+      for (const peerId of placedPeers) {
+        const pi = working.findIndex((r) => r.chunkId === peerId);
+        if (pi !== -1 && pi + 1 > target) target = pi + 1;
+      }
+    }
+    if (target !== at) {
+      const [row] = working.splice(at, 1);
+      working.splice(target, 0, row!);
+      (movedByCeiling ? ceilinged : floored).add(chunkId);
+    }
+    placedPeers.push(chunkId);
   }
-  if (floored.size === 0) return postRerank;
-  return working.map((r) =>
-    floored.has(r.chunkId)
-      ? Object.freeze({
-          ...r,
-          reasons: Object.freeze([
-            ...r.reasons,
-            `relational_pin: floored at pre-rerank position ${floors.get(r.chunkId)}`,
-          ]),
-        })
-      : r,
-  );
+  if (floored.size === 0 && ceilinged.size === 0) return postRerank;
+  return working.map((r) => {
+    if (floored.has(r.chunkId)) {
+      return Object.freeze({
+        ...r,
+        reasons: Object.freeze([
+          ...r.reasons,
+          `relational_pin: floored at pre-rerank position ${floors.get(r.chunkId)}`,
+        ]),
+      });
+    }
+    if (ceilinged.has(r.chunkId)) {
+      return Object.freeze({
+        ...r,
+        reasons: Object.freeze([
+          ...r.reasons,
+          "relational_pin: held below the organic direct hits",
+        ]),
+      });
+    }
+    return r;
+  });
 }

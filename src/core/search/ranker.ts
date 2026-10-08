@@ -541,12 +541,17 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
   // semantic) so a genuinely related node can enter the fused ranking. Only
   // in rrf mode, where the lane above already contributes their score.
   // searchType "link" - a typed-graph traversal hit. Empty lane = no
-  // additions, so ranking stays byte-identical.
+  // additions, so ranking stays byte-identical. The admitted ids are
+  // tracked separately: searchType "link" has other producers (polarity
+  // pull-in, graph traversal), so structural admission keys on THIS set,
+  // never on the searchType.
+  const relationalOnlyIds = new Set<number>();
   if (rrfByChunk !== null && inputs.relationalRankedChunkIds) {
     for (const chunkId of inputs.relationalRankedChunkIds) {
       if (candidates.has(chunkId)) continue;
       const hyd = inputs.hydrated.get(chunkId);
       if (hyd === undefined) continue;
+      relationalOnlyIds.add(chunkId);
       candidates.set(chunkId, {
         chunkId,
         documentId: hyd.documentId,
@@ -844,6 +849,16 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
   // Equal contributions (including both zero) and an absent window fall
   // straight through to the historical ladder, byte-identically.
   ranked.sort((a, b) => {
+    // Structural direct-hit precedence (truth-correctable-time-aware): a
+    // relational-only admission is admitted BELOW the organic tail in the
+    // pre-rerank fused order. The arm's lane weight is neutral, so on raw
+    // RRF a relational-only rank 1 could float above a deep keyword direct
+    // hit; this rung makes that structurally impossible - the traversal
+    // widens the pool, it never outranks what the lanes matched. With the
+    // arm off the set is empty and the rung never fires, byte-identically.
+    const aRelationalOnly = relationalOnlyIds.has(a.chunkId);
+    const bRelationalOnly = relationalOnlyIds.has(b.chunkId);
+    if (aRelationalOnly !== bRelationalOnly) return aRelationalOnly ? 1 : -1;
     if (b.score !== a.score) return b.score - a.score;
     if (temporalIntent !== null) {
       const aTemporal = a.breakdown?.temporal ?? 0;
