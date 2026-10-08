@@ -466,6 +466,36 @@ test("truth state refuses an unknown relation with a usage error", async () => {
   expect(readClaimEvents(vault).events).toHaveLength(0);
 });
 
+test("truth state refuses an inverted source window as a usage error", async () => {
+  // The stated claim carries no explicit window, so the store resolves
+  // one from the source record's frontmatter; an inverted window there
+  // raises the store's typed refusal, which - like ingest's - is a
+  // mistyped input and must answer as the usage failure class (exit 2),
+  // not the sibling ingest path's exit-2-vs-exit-1 divergence.
+  seedCliRegistry();
+  mkdirSync(join(vault, "Brain", "notes"), { recursive: true });
+  writeFileSync(
+    join(vault, "Brain", "notes", "session.md"),
+    "---\nkind: note\nvalid_from: 2026-06-01\nvalid_until: 2026-01-01\n---\n\nsession page\n",
+  );
+  const res = await runCli(
+    stateArgs(vault, [
+      "--subject",
+      "Alice Mason",
+      "--relation",
+      "related",
+      "--object",
+      "Atlas",
+      "--text",
+      "Alice Mason reviewed Atlas today.",
+      "--source",
+      "[[Brain/notes/session.md]]",
+    ]),
+  );
+  expect(res.returncode).toBe(2);
+  expect(readClaimEvents(vault).events).toHaveLength(0);
+});
+
 test("facts decompose splits a file into assertions", async () => {
   const file = join(tmp, "session.md");
   writeFileSync(

@@ -354,8 +354,12 @@ export async function cmdBrainTruth(argv: string[]): Promise<number> {
               })),
             };
           } catch (exc) {
-            if (exc instanceof StatedClaimsRefusal) {
-              throw new UsageError(exc.message);
+            // Both refusal channels are mistyped-input refusals, so both
+            // answer as the usage failure class - the same mapping the
+            // ingest case applies, so the state verb never answers a
+            // window the SOURCE record carries as an operational failure.
+            if (exc instanceof StatedClaimsRefusal || exc instanceof ClaimWindowRefusal) {
+              throw new UsageError((exc as Error).message);
             }
             throw exc;
           }
