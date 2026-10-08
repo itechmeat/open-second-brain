@@ -288,19 +288,34 @@ export function freshenCommand(
   return [...base];
 }
 
-function spawnDetached(argv: string[]): void {
-  const proc = Bun.spawn(argv, {
+/**
+ * The options the freshen child is spawned with. Detached on every
+ * platform: a non-detached child dies with its parent on Windows, and on
+ * POSIX it stays in the reader's process group, so a short-lived hook
+ * whose group is signalled on exit would take the run down with it.
+ */
+export function freshenSpawnOptions(env: NodeJS.ProcessEnv): {
+  readonly stdin: "ignore";
+  readonly stdout: "ignore";
+  readonly stderr: "ignore";
+  readonly windowsHide: true;
+  readonly detached: true;
+  readonly env: Record<string, string | undefined>;
+} {
+  return {
     stdin: "ignore",
     stdout: "ignore",
     stderr: "ignore",
     windowsHide: true,
-    // As for the self-heal reindex: a non-detached child dies with its
-    // parent on Windows, and a hook process is short-lived.
-    detached: process.platform === "win32",
+    detached: true,
     // Bun gives a child spawned without `env` the environment this process
     // STARTED with; a config chosen after start must reach the child.
-    env: { ...process.env },
-  });
+    env: { ...env },
+  };
+}
+
+function spawnDetached(argv: string[]): void {
+  const proc = Bun.spawn(argv, freshenSpawnOptions(process.env));
   proc.unref();
 }
 

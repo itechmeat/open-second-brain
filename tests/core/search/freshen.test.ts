@@ -17,6 +17,7 @@ import {
   FRESHEN_CLAIM_FILE,
   FRESHEN_SKIP,
   freshenCommand,
+  freshenSpawnOptions,
   maybeFreshenIndex,
   nextBackoffMs,
   readFreshenState,
@@ -147,6 +148,22 @@ describe("freshenCommand", () => {
       ...base,
     ]);
     expect(freshenCommand(base, () => true, "win32")).toEqual(base);
+  });
+});
+
+describe("freshenSpawnOptions", () => {
+  test("the child is detached on every platform so it outlives a short-lived hook", () => {
+    const opts = freshenSpawnOptions({ O2B_TEST: "1" });
+    expect(opts.detached).toBe(true);
+    expect(opts.windowsHide).toBe(true);
+    expect([opts.stdin, opts.stdout, opts.stderr]).toEqual(["ignore", "ignore", "ignore"]);
+  });
+
+  test("the child gets a copy of the current environment, not the start-up one", () => {
+    const env = { O2B_CONFIG: "/later/config.yaml" };
+    const opts = freshenSpawnOptions(env);
+    expect(opts.env).toEqual(env);
+    expect(opts.env).not.toBe(env);
   });
 });
 
