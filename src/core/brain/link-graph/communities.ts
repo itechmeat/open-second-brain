@@ -111,10 +111,22 @@ function detectCommunitiesRun(
   // call, so only the option-independent graph is shared.
   const snapshot = getGraphSnapshot(store);
   const pathById = snapshot.pathById;
-  const adjacency = snapshot.adjacency;
+
+  // Generated cluster digests are outputs of this pass, not inputs (#233):
+  // once indexed, a digest links to every member and would join its own
+  // community, rename it (the id follows the leading member) and keep a
+  // link to the predecessor the stale sweep deletes. The shared snapshot
+  // stays whole (search and graph stats still see the digests); only
+  // detection drops them, edges included.
+  const adjacency = new Map<number, ReadonlySet<number>>();
+  for (const [node, neighbours] of snapshot.adjacency) {
+    if (isClusterOutput(pathById.get(node)!)) continue;
+    const kept = [...neighbours].filter((n) => !isClusterOutput(pathById.get(n)!));
+    if (kept.length > 0) adjacency.set(node, new Set(kept));
+  }
 
   // Synchronous sweeps in sorted-id order; lowest label wins ties.
-  const nodes = snapshot.nodesSorted;
+  const nodes = snapshot.nodesSorted.filter((n) => adjacency.has(n));
   const labels = new Map<number, number>(nodes.map((n) => [n, n]));
   for (let iteration = 0; iteration < maxIterations; iteration++) {
     // Cooperative deadline: abort between sweeps (read-only pass).
@@ -189,6 +201,14 @@ function detectCommunitiesRun(
   }
 
   return communities.toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+/** Vault-relative prefix of the materialized cluster notes. */
+const CLUSTERS_DIR_PREFIX = "Brain/clusters/";
+
+/** True for a note under the cluster-notes output directory. */
+function isClusterOutput(relPath: string): boolean {
+  return relPath.startsWith(CLUSTERS_DIR_PREFIX);
 }
 
 /** Collision-free id: vault-relative path, `/` -> `-`, no `.md`. */

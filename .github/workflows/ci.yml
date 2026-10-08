@@ -67,8 +67,8 @@ jobs:
         run: bun install --frozen-lockfile
 
       # Per-file durations from the last run on main. `--parallel` starts the
-      # slowest files first with them, and the Windows shards split the suite
-      # by time instead of by file count. A miss only costs the ordering.
+      # slowest files first with them. A miss only costs the ordering. The
+      # Windows shards do not use these: see `windows-test-timings.json`.
       - name: Restore test timings
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -221,24 +221,37 @@ jobs:
   #
   # The suite is bound by the disk and Defender here, not by the CPU: run
   # with `--parallel` on one runner it took as long as serially (21 minutes,
-  # every test about 3.5x slower). So it is split across three runners,
-  # each with its own disk, and `--shard` balances them by the timings
-  # `validate` records on main.
+  # every test about 3.5x slower). So it is split across ten runners, each
+  # with its own disk: about 32 minutes of tests in all, about 3.5 minutes
+  # a shard. Ten and not fewer because one runner in a run is often 2 to
+  # 2.5x slower than the rest across every file it runs, and that shard
+  # sets the wall-clock.
+  #
+  # `--shard` cuts the sorted file list into runs of equal total time from a
+  # timings file. The Linux timings `validate` records are the wrong scale for
+  # that: on Windows the hook and CLI tests that spawn `bun` slow down far more
+  # than the rest, so with them three shards came out at 5, 10 and 16 minutes.
+  # The shards balance by `.github/windows-test-timings.json` instead, measured
+  # on Windows, and each uploads what it measured as `windows-timings-<shard>`;
+  # `.github/scripts/windows-timings.sh` folds a run's uploads back into the
+  # committed file. A test file the file does not list yet still runs, it just
+  # weighs a default amount.
   windows-tests:
-    name: windows (${{ matrix.shard }}/3)
+    name: windows (${{ matrix.shard }}/10)
     needs: changes
     # Runs unless the filter positively said "prose only": a failed or
     # empty filter falls back to running the shards, never to skipping them.
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: windows-latest
-    # A shard takes about a third of the old 20-45 minutes. The bound is there
-    # so a hung test cannot hold a runner for GitHub's six-hour default; the
-    # watchdog below fires first and records what was still running.
-    timeout-minutes: 30
+    # A shard takes about 4 minutes, twice that on a slow runner. The bound
+    # is there so a hung test cannot hold a runner for GitHub's six-hour
+    # default; the watchdog below fires first and records what was still
+    # running.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     steps:
       # Real-time scanning inspects every file the fixtures write and every
       # bun.exe the hook and CLI tests spawn. The runner is thrown away after
@@ -272,13 +285,13 @@ jobs:
       - name: Install JS dependencies
         run: bun install --frozen-lockfile
 
-      - name: Restore test timings
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .bun-timings.json
-          key: bun-timings-${{ github.run_id }}
-          restore-keys: bun-timings-
-          enableCrossOsArchive: true
+      # A copy, so `--update-timings` can write this shard's measurements
+      # without touching the checkout.
+      - name: Stage the Windows test timings
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/timings"
+          cp .github/windows-test-timings.json "$RUNNER_TEMP/timings/windows-timings.json"
 
       - name: Publish o2b on PATH (the anti-drift test needs the live server)
         shell: bash
@@ -338,7 +351,7 @@ jobs:
             Start-Sleep -Seconds 10
           }
 
-      # Fires at 20 minutes, well past a healthy shard and before the job's
+      # Fires at 12 minutes, well past a healthy shard and before the job's
       # timeout, and writes down every bun, node and python process with its
       # command line and age: a hang leaves the name of what was stuck.
       - name: Hang watchdog
@@ -348,7 +361,7 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: |
-          Start-Sleep -Seconds 1200
+          Start-Sleep -Seconds 720
           $out = Join-Path $env:RUNNER_TEMP 'telemetry\hang-dump.txt'
           New-Item -ItemType Directory -Force (Split-Path $out) | Out-Null
           Get-CimInstance Win32_Process |
@@ -358,7 +371,7 @@ jobs:
               CommandLine |
             Format-Table -AutoSize -Wrap | Out-String -Width 400 |
             Tee-Object -FilePath $out
-          "::warning::shard still running after 20 minutes; process dump in the windows-telemetry artifact"
+          "::warning::shard still running after 12 minutes; process dump in the windows-telemetry artifact"
 
       - name: Wait for Defender to be off
         wait: defender
@@ -366,8 +379,11 @@ jobs:
       # GitHub's Windows runners are slower than Linux over the same suite,
       # so Bun's 5 s default - which also bounds beforeEach/afterEach hooks -
       # times out tests that pass locally. Tests with their own timeout keep it.
-      - name: TypeScript test suite (shard ${{ matrix.shard }}/3)
-        run: bun test --shard=${{ matrix.shard }}/3 --timings=.bun-timings.json --timeout 30000
+      - name: TypeScript test suite (shard ${{ matrix.shard }}/10)
+        run: >-
+          bun test --shard=${{ matrix.shard }}/10
+          --timings=${{ runner.temp }}/timings/windows-timings.json --update-timings
+          --timeout 30000
 
       - name: Wait for the typecheck and the Python plugin tests
         wait: [typecheck, python-tests]
@@ -411,7 +427,18 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-  # One stable check name over the three shards, so a ruleset can require
+      # What this shard measured, for `.github/scripts/windows-timings.sh`.
+      # Only a green shard uploads, so a run that failed half-way never feeds
+      # partial numbers back.
+      - name: Upload test timings
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-timings-${{ matrix.shard }}
+          path: ${{ runner.temp }}/timings/windows-timings.json
+          retention-days: 30
+          if-no-files-found: ignore
+
+  # One stable check name over the ten shards, so a ruleset can require
   # `windows` without listing shard names. Shards skipped for a prose-only
   # pull request count as passed.
   windows:
