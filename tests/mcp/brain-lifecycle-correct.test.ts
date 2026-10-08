@@ -10,7 +10,7 @@
  * (`supersede` for validity_close, `tombstone` for tombstone).
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,6 +27,10 @@ import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts
 import { cmdBrainLifecycle } from "../../src/cli/brain/verbs/lifecycle.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { tempDirs } from "../helpers/temp-dir.ts";
+
+afterAll(() => {
+  delete process.env["OPEN_SECOND_BRAIN_CONFIG"];
+});
 
 const mkTemp = tempDirs();
 
