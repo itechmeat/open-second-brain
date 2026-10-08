@@ -39,7 +39,15 @@ import { everyArtifactRefView, type ArtifactRefView } from "./artifact-ref-view.
 import { reachView } from "./reach-view.ts";
 import { resolvedTransportReach, type TransportReach } from "../graph/transport-reach.ts";
 import { parseSignal } from "./signal.ts";
-import { isTombstoned } from "./lifecycle/tombstone.ts";
+import {
+  SUPERSEDED_BY_KEY,
+  buildChainLookup,
+  isTombstoned,
+  resolveChainTip,
+  type ChainLookup,
+} from "./lifecycle/tombstone.ts";
+import { chainVerdict } from "../search/correction-coupling.ts";
+import { vaultRelative } from "../path-safety.ts";
 import { parseFrontmatter } from "../vault.ts";
 import { normaliseWikilinkTarget } from "./wikilink.ts";
 import { BRAIN_LOG_EVENT_KIND } from "./types.ts";
@@ -273,9 +281,9 @@ export function queryByTopic(
     reachView(vault, resolvedTransportReach(options.transportReach)),
   );
   let preference: BrainPreference | BrainRetired | null = null;
-  preference = findPreferenceForTopic(dirs.preferences, want, "preference", view);
+  preference = findPreferenceForTopic(vault, dirs.preferences, want, "preference", view);
   if (!preference) {
-    preference = findPreferenceForTopic(dirs.retired, want, "retired", view);
+    preference = findPreferenceForTopic(vault, dirs.retired, want, "retired", view);
   }
   // Expiration filter (C5): an active preference past its expiration_date
   // is dropped from the default result (surfaced only under showExpired).
@@ -391,6 +399,7 @@ function collectSignals(dir: string, topic: string, out: BrainSignal[]): void {
  * `topic-key-collision` for preferences whose topics fold together.
  */
 function findPreferenceForTopic(
+  vault: string,
   dir: string,
   topic: string,
   kind: "preference" | "retired",
@@ -406,6 +415,10 @@ function findPreferenceForTopic(
   const entries = readdirSync(dir, { withFileTypes: true })
     .slice()
     .toSorted((a, b) => a.name.localeCompare(b.name));
+  // The serve-with-correction chain index, built on the first
+  // pointer-bearing record and reused for the rest of the walk: a vault
+  // whose records carry no pointer never pays for it.
+  let chainLookup: ChainLookup | null = null;
   for (const entry of entries) {
     if (!entry.isFile()) continue;
     if (!entry.name.startsWith(prefix) || !entry.name.endsWith(".md")) {
@@ -414,12 +427,32 @@ function findPreferenceForTopic(
     const path = join(dir, entry.name);
     // Belief lifecycle suite (t_7d5a3589): a tombstoned entry is excluded
     // from recall while remaining on disk for audit.
-    if (isTombstoned(parseFrontmatter(path)[0])) continue;
+    const [meta] = parseFrontmatter(path);
+    if (isTombstoned(meta)) continue;
     try {
       const parsed = kind === "preference" ? parsePreference(path) : parseRetired(path);
       // Skipped, not returned-then-dropped: see `ownerScope` on
       // {@link QueryByTopicOptions}.
-      if (parsed.topic === topic && view.visible(parsed.id)) return parsed;
+      if (parsed.topic === topic && view.visible(parsed.id)) {
+        // Serve-with-correction coupling (truth-correctable-time-aware,
+        // contract item 3): a record whose frontmatter declares a
+        // successor but which survived the tombstone filter - the
+        // serveable-retired regime the correct verb's validity-close
+        // writes - is recallable by topic only beside its resolved,
+        // readable chain-tip correction, and is skipped fail-closed
+        // otherwise. A record with no pointer is not in the predicate's
+        // regime and keeps today's behavior.
+        const pointer = meta[SUPERSEDED_BY_KEY];
+        if (typeof pointer === "string" && pointer.trim() !== "") {
+          chainLookup ??= buildChainLookup(vault, (rel) => view.visible(rel));
+          const verdict = chainVerdict(
+            vaultRelative(path, vault),
+            resolveChainTip(pointer, chainLookup),
+          );
+          if (verdict.action === "drop") continue;
+        }
+        return parsed;
+      }
     } catch {
       // Unit F, deliberately NOT converted - same reasoning as
       // collectSignals above: `parsePreference` / `parseRetired` throw on

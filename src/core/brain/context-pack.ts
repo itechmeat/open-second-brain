@@ -32,7 +32,8 @@ import {
   resolveOwnerScopeDelivery,
   type OwnerScopeDelivery,
 } from "./preferences-collect.ts";
-import { isTombstoned } from "./lifecycle/tombstone.ts";
+import { buildChainLookup, isTombstoned, resolveChainTip } from "./lifecycle/tombstone.ts";
+import { chainVerdict } from "../search/correction-coupling.ts";
 import { preferChainTips } from "./inject-governor.ts";
 import { tensionWarningsForContextItems } from "./tensions.ts";
 import { PAGE_TIER, readTier, type PageTier } from "./page-meta/tier.ts";
@@ -409,6 +410,36 @@ function withOptionalLanes(
   };
 }
 
+/**
+ * Serve-with-correction coupling over the collected candidates
+ * (truth-correctable-time-aware, contract item 3). A candidate whose
+ * frontmatter declares a successor - the serveable-retired regime the
+ * correct verb's validity-close writes - is kept only beside its
+ * resolved, readable chain-tip correction and is dropped fail-closed
+ * when a hop dangles; a candidate with no pointer is not in the
+ * predicate's regime and passes through unchanged. `visible` is the
+ * caller's per-page verdict over ABSOLUTE paths; it becomes the chain
+ * lookup's readability, so a tip the caller may not read resolves as
+ * little as nothing at all.
+ */
+function applyCouplingToCandidates(
+  vault: string,
+  candidates: ReadonlyArray<Candidate>,
+  visible: ((absPath: string) => boolean) | undefined,
+): ReadonlyArray<Candidate> {
+  if (candidates.every((c) => c.supersededBy === null)) return candidates;
+  const readable = visible === undefined ? undefined : (rel: string) => visible(join(vault, rel));
+  const chainLookup = buildChainLookup(vault, readable);
+  return candidates.filter((c) => {
+    if (c.supersededBy === null) return true;
+    const verdict = chainVerdict(
+      relative(vault, c.path),
+      resolveChainTip(c.supersededBy, chainLookup),
+    );
+    return verdict.action === "serve_coupled";
+  });
+}
+
 function collectCandidates(
   vault: string,
   delimitUntrusted: boolean,
@@ -540,9 +571,22 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
   // supersession chains passes through byte-identically.
   const ownerScope = resolveOwnerScopeDelivery(vault, opts.agentScope);
   const collected = collectCandidates(vault, delimitUntrusted, ownerScope);
+  // Serve-with-correction coupling (truth-correctable-time-aware,
+  // contract item 3): a candidate the chain-tip preference would keep -
+  // under `includeHistorical`, a superseded ancestor - is injected only
+  // beside its resolved, readable chain-tip correction and is dropped
+  // fail-closed when a hop dangles, so a historical injection cannot
+  // resurrect a predecessor whose correction is not there. The caller's
+  // visibility is the chain lookup's readability, so a withheld tip
+  // resolves exactly as little as the caller may read. Non-historical
+  // injection keeps only tips and is unchanged.
+  const coupled =
+    opts.includeHistorical === true
+      ? applyCouplingToCandidates(vault, collected.candidates, opts.visible)
+      : collected.candidates;
   // Reach filtering happens after the chain-tip preference: a withheld
   // tip must not resurrect the superseded ancestor it replaced.
-  const tips = preferChainTips(collected.candidates, {
+  const tips = preferChainTips(coupled, {
     historical: opts.includeHistorical === true,
   }).kept;
   const withheldIds = new Set<string>();

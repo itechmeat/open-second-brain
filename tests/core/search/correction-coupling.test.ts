@@ -11,7 +11,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { couplingVerdict } from "../../../src/core/search/correction-coupling.ts";
+import { chainVerdict, couplingVerdict } from "../../../src/core/search/correction-coupling.ts";
 
 const PREDECESSOR = "Brain/preferences/pref-old-rule.md";
 const SUCCESSOR = "Brain/preferences/pref-new-rule.md";
@@ -90,5 +90,26 @@ describe("couplingVerdict", () => {
         successorReadable: false,
       }),
     ).toEqual({ action: "drop" });
+  });
+});
+
+describe("chainVerdict", () => {
+  test("a fully resolved chain serves the row beside the resolved tip", () => {
+    expect(chainVerdict(PREDECESSOR, { resolvedAll: true, cycle: false, tip: SUCCESSOR })).toEqual({
+      action: "serve_coupled",
+      correctionPath: SUCCESSOR,
+    });
+  });
+
+  test("a dangling successor hop drops the row fail-closed", () => {
+    expect(chainVerdict(PREDECESSOR, { resolvedAll: false, cycle: false, tip: SUCCESSOR })).toEqual(
+      { action: "drop" },
+    );
+  });
+
+  test("a cyclic chain drops the row fail-closed", () => {
+    expect(chainVerdict(PREDECESSOR, { resolvedAll: true, cycle: true, tip: PREDECESSOR })).toEqual(
+      { action: "drop" },
+    );
   });
 });

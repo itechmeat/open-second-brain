@@ -23,7 +23,13 @@ import type {
   ScanResult,
   SignalRecord,
 } from "./dream-plan.ts";
-import { isTombstoned } from "./lifecycle/tombstone.ts";
+import {
+  isTombstoned,
+  SUPERSEDED_BY_KEY,
+  buildChainLookup,
+  resolveChainTip,
+} from "./lifecycle/tombstone.ts";
+import { chainVerdict } from "../search/correction-coupling.ts";
 import { brainDirs } from "./paths.ts";
 import { parsePreference } from "./preference.ts";
 import { parseSignal } from "./signal.ts";
@@ -170,11 +176,19 @@ function collectPreferences(
 }
 
 function collectRetired(
+  vault: string,
   files: ReadonlyArray<string>,
   retired: RetiredRecord[],
   corrupted: CorruptedEntry[],
   walk: DirectoryWalk,
 ): void {
+  // The serve-with-correction chain index, built on the first
+  // pointer-bearing record and reused for the rest of the walk: a vault
+  // whose retired records carry no pointer never pays for it. The scan
+  // runs at the operator's own reach, so every on-disk page is indexed -
+  // resolution here asks only whether the chain terminates, not who may
+  // read it.
+  let chainLookup: ReturnType<typeof buildChainLookup> | null = null;
   for (const full of files) {
     walk.step();
     // Retired files we only need for topic + id (for supersede
@@ -193,6 +207,19 @@ function collectRetired(
           ? (meta["user_rejected_reason"] as string).trim()
           : "";
       if (topic && id) {
+        // Serve-with-correction coupling (truth-correctable-time-aware,
+        // contract item 3): a retired record whose frontmatter declares
+        // a successor - the serveable-retired regime - is scanned only
+        // when that chain resolves to a tip, and is dropped fail-closed
+        // when a hop dangles, so the pass never plans over a correction
+        // that is not there. A record with no pointer is not in the
+        // predicate's regime and is scanned as before.
+        const pointer = meta[SUPERSEDED_BY_KEY];
+        if (typeof pointer === "string" && pointer.trim() !== "") {
+          chainLookup ??= buildChainLookup(vault);
+          const verdict = chainVerdict(id, resolveChainTip(pointer, chainLookup));
+          if (verdict.action === "drop") continue;
+        }
         retired.push({
           path: full,
           topic,
@@ -274,7 +301,7 @@ function scanBrainRun(
     () => collectSignals(processed, false, signals, corrupted, walk),
     () => collectSignals(archived, false, signals, corrupted, walk, true),
     () => collectPreferences(preferenceFiles, preferences, corrupted, walk),
-    () => collectRetired(retiredFiles, retired, corrupted, walk),
+    () => collectRetired(vault, retiredFiles, retired, corrupted, walk),
   ];
   for (const collect of collectors) {
     opts.safeguard?.checkpoint();

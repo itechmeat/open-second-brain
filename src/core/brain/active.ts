@@ -46,6 +46,13 @@ import {
 import { isPreferenceVisible } from "./owner-scoped-facts.ts";
 import { parseRetired } from "./preference.ts";
 import { collectPreferences, resolveOwnerScopeDelivery } from "./preferences-collect.ts";
+import {
+  SUPERSEDED_BY_KEY,
+  buildChainLookup,
+  resolveChainTip,
+  type ChainLookup,
+} from "./lifecycle/tombstone.ts";
+import { chainVerdict } from "../search/correction-coupling.ts";
 import { BRAIN_TOMBSTONE_STATUS } from "./types.ts";
 import { BRAIN_PREFERENCES_REL, BRAIN_RETIRED_REL } from "./path-constants.ts";
 import { brainActivePath, brainDirsForWrite } from "./paths.ts";
@@ -384,6 +391,10 @@ function readRecentlyRetired(
   if (!existsSync(dirs.retired)) return [];
   const scope = resolveOwnerScopeDelivery(vault, agentScope).enforcedScope;
   const out: BrainRetired[] = [];
+  // The serve-with-correction chain index, built on the first
+  // pointer-bearing record and reused for the rest of the walk: a vault
+  // whose retired records carry no pointer never pays for it.
+  let chainLookup: ChainLookup | null = null;
   for (const name of readdirSync(dirs.retired)) {
     // Filtered BEFORE the newest-first cut, so a withheld record never
     // pushes a visible one out of the list either.
@@ -392,6 +403,21 @@ function readRecentlyRetired(
     try {
       const retired = parseRetired(full);
       if (scope !== null && !isPreferenceVisible(retired, scope)) continue;
+      // Serve-with-correction coupling (truth-correctable-time-aware,
+      // contract item 3): a retired record whose frontmatter declares a
+      // successor - the serveable-retired regime - is digested only
+      // beside its resolved, readable chain-tip correction and is
+      // omitted fail-closed otherwise. A record with no pointer is not
+      // in the predicate's regime and keeps today's rendering.
+      const pointer = retired[SUPERSEDED_BY_KEY];
+      if (typeof pointer === "string" && pointer.trim() !== "") {
+        chainLookup ??= buildChainLookup(vault, readable);
+        const verdict = chainVerdict(
+          posix.join(BRAIN_RETIRED_REL, name),
+          resolveChainTip(pointer, chainLookup),
+        );
+        if (verdict.action === "drop") continue;
+      }
       out.push(retired);
     } catch {
       // Same rationale as readActivePreferences.

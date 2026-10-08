@@ -49,3 +49,38 @@ export function couplingVerdict(input: CouplingInput): CouplingVerdict {
   }
   return { action: SERVE_COUPLED, correctionPath: input.successorPath };
 }
+
+/**
+ * The slice of `resolveChainTip`'s result a verdict needs - structural,
+ * so the Brain serving surfaces can hand one over without this module
+ * importing the lifecycle's types.
+ */
+export interface ChainResolution {
+  /** False when the walk stopped at an id the lookup could not resolve. */
+  readonly resolvedAll: boolean;
+  /** True when a cycle or the depth cap short-circuited the walk. */
+  readonly cycle: boolean;
+  /** Normalized identifier of the chain tip the walk stopped on. */
+  readonly tip: string;
+}
+
+/**
+ * The one mapping from a resolved chain to the verdict, shared by every
+ * Brain serving surface: a chain that resolved on every hop to its tip
+ * serves the row beside that tip; a dangling hop, a cycle or a depth-cap
+ * stop is an unresolved correction and drops the row fail-closed. The
+ * caller's readability composition is folded into the chain lookup it
+ * built (a page the caller may not read is not indexed), so a fully
+ * resolved chain is by construction readable at the caller's reach.
+ */
+export function chainVerdict(
+  predecessorPath: string,
+  resolution: ChainResolution,
+): CouplingVerdict {
+  const resolved = resolution.resolvedAll && !resolution.cycle;
+  return couplingVerdict({
+    predecessorPath,
+    successorPath: resolved ? resolution.tip : null,
+    successorReadable: resolved,
+  });
+}
