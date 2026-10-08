@@ -190,8 +190,11 @@ function fanoutStoreFor(store: Store, bridges: boolean): RelationalFanoutStore {
 /**
  * A bounded depth-2 typed-edge fan-out from the resolved seeds. A
  * non-relational query (no wikilink seed plus schema-vocabulary edge-type
- * token) contributes nothing. Source identity from the shared key module
- * dedups the lane (federation hardening).
+ * token) contributes nothing - and the knob resolution runs only after
+ * that early return, so a non-relational query pays no config-file read
+ * and a malformed knob value fails no search the knobs cannot affect.
+ * Source identity from the shared key module dedups the lane (federation
+ * hardening).
  */
 export function runRelationalArm(
   store: Store,
@@ -200,13 +203,13 @@ export function runRelationalArm(
   opts: RelationalArmOptions = {},
 ): RelationalArmOutcome {
   const outcome = noRelationalArm();
-  const config = machineConfigData(opts.configPath);
-  const budgets = opts.budgets ?? resolveTraversalBudgets({ env: process.env, config });
-  const bridges = opts.entityBridges ?? resolveEntityBridgesEnabled({ env: process.env, config });
   const relQuery = parseRelationalQuery(query, relationalEdgeVocabulary(vault));
   if (relQuery === null) return outcome;
   const seedDocIds = resolveSeedDocumentIds(store, relQuery.seeds);
   if (seedDocIds.length === 0) return outcome;
+  const config = machineConfigData(opts.configPath);
+  const budgets = opts.budgets ?? resolveTraversalBudgets({ env: process.env, config });
+  const bridges = opts.entityBridges ?? resolveEntityBridgesEnabled({ env: process.env, config });
   const nodes = relationalFanout(fanoutStoreFor(store, bridges), seedDocIds, {
     maxDepth: RELATIONAL_MAX_DEPTH,
     edgeTypes: relQuery.edgeTypes,

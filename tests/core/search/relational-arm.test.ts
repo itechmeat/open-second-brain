@@ -128,6 +128,7 @@ import {
 } from "../../../src/core/search/pipeline/relational-arm.ts";
 import { SearchError } from "../../../src/core/search/search-error.ts";
 import type { TraversalBudgets } from "../../../src/core/search/relational-fanout.ts";
+import { TRAVERSAL_MAX_SEEDS_ENV } from "../../../src/core/search/relational-fanout.ts";
 
 test("entity bridges resolve on by default and follow env over config", () => {
   expect(resolveEntityBridgesEnabled({ env: {} })).toBe(true);
@@ -248,6 +249,23 @@ test("the arm threads the traversal budgets and the deadline into the walk", () 
   expect([...capped.reachByChunk.keys()]).toEqual([2]);
   const expired = runRelationalArm(store, vault, "[[seed]] related", { isExpired: () => true });
   expect(expired.rankedChunkIds).toEqual([]);
+});
+
+test("a malformed traversal knob value does not fail a non-relational query", () => {
+  // The config-file re-read and the budget/bridge resolution run only
+  // once the arm knows it will walk: a non-relational query pays no knob
+  // resolution, so a malformed knob value fails no search the knob
+  // cannot affect - and still refuses the relational query it governs.
+  const store = armFixtureStore({ docs: { seed: 1, near: 2 }, typed: [[1, "related", 2]] });
+  const prior = process.env[TRAVERSAL_MAX_SEEDS_ENV];
+  process.env[TRAVERSAL_MAX_SEEDS_ENV] = "maybe";
+  try {
+    expect(() => runRelationalArm(store, vault, "alpha topic", {})).not.toThrow();
+    expect(() => runRelationalArm(store, vault, "[[seed]] related", {})).toThrow(SearchError);
+  } finally {
+    if (prior === undefined) delete process.env[TRAVERSAL_MAX_SEEDS_ENV];
+    else process.env[TRAVERSAL_MAX_SEEDS_ENV] = prior;
+  }
 });
 
 // ─── the search call site threads the arm's runtime options (wiring) ─────────
