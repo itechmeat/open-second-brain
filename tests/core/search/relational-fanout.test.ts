@@ -29,6 +29,11 @@ type Edge = {
   targetDocumentId: number | null;
 };
 
+/** Index a node list by document id. */
+function byIdOf(nodes: Array<{ documentId: number }>): Map<number, { documentId: number }> {
+  return new Map(nodes.map((n) => [n.documentId, n]));
+}
+
 /** A fake store whose typed edges are a fixed adjacency list. */
 function fakeStore(edges: Edge[]): RelationalFanoutStore {
   return {
@@ -243,4 +248,153 @@ test("the walk is deterministic across repeated runs under the caps", () => {
   const first = relationalFanout(store, seeds, { maxDepth: 2 });
   const second = relationalFanout(store, seeds, { maxDepth: 2 });
   expect(JSON.stringify(second)).toBe(JSON.stringify(first));
+});
+
+// ─── entity bridges from chunk_entities (truth-correctable-time-aware) ───────
+
+/**
+ * A fake store with typed edges plus an entity-bridge adjacency list.
+ * `bridges` maps a source document id to the targets its entity set
+ * bridges to, in the order the real reader returns them (target id asc).
+ */
+function bridgedStore(edges: Edge[], bridges: Map<number, number[]>): RelationalFanoutStore {
+  return {
+    typedRelationEdgesForDocuments(ids) {
+      const set = new Set(ids);
+      return edges.filter((e) => set.has(e.sourceDocumentId));
+    },
+    entityBridgesForDocuments(ids) {
+      const out: Array<{ sourceDocumentId: number; targetDocumentId: number }> = [];
+      for (const id of [...ids].toSorted((a, b) => a - b)) {
+        for (const target of bridges.get(id) ?? [])
+          out.push({ sourceDocumentId: id, targetDocumentId: target });
+      }
+      return out;
+    },
+  };
+}
+
+test("entity bridges walk as entity-labeled edges beside the typed edges", () => {
+  // Seed 1: one typed edge to 2, one entity bridge to 3. Both are reached
+  // at hop 1; the bridge node's link type is the `entity` label.
+  const store = bridgedStore([edge(1, 2, "related")], new Map([[1, [3]]]));
+  const byId = new Map(relationalFanout(store, [1], { maxDepth: 1 }).map((n) => [n.documentId, n]));
+  expect(byId.get(2)!.viaLinkTypes).toEqual(["related"]);
+  expect(byId.get(3)!.viaLinkTypes).toEqual(["entity"]);
+  expect(byId.get(3)!.hops).toBe(1);
+});
+
+test("bridge edges count toward hub degree and consume the expansion budget", () => {
+  // Node 2 is reached by one typed edge and carries 12 typed children plus
+  // one bridge child: walked degree 13 exceeds the threshold, so none of
+  // its children - bridge child included - are reached. Node 3 carries 12
+  // typed children only, exactly at the threshold, and expands.
+  const edges: Edge[] = [edge(1, 2), edge(1, 3)];
+  for (let c = 0; c < 12; c++) edges.push(edge(2, 100 + c));
+  for (let c = 0; c < 12; c++) edges.push(edge(3, 200 + c));
+  const store = bridgedStore(edges, new Map([[2, [300]]]));
+  const byId = new Map(relationalFanout(store, [1], { maxDepth: 2 }).map((n) => [n.documentId, n]));
+  expect(byId.has(300)).toBe(false);
+  expect(byId.has(200)).toBe(true);
+  // The expansion cap spans both edge kinds: seed 1 has two typed edges
+  // and two bridges with a per-node cap of 3, so only the first bridge
+  // target is reached.
+  const capped = bridgedStore([edge(1, 2), edge(1, 3)], new Map([[1, [4, 5]]]));
+  const ids = relationalFanout(capped, [1], { maxDepth: 1, maxExpansionPerNode: 3 })
+    .map((n) => n.documentId)
+    .toSorted((a, b) => a - b);
+  expect(ids).toEqual([2, 3, 4]);
+});
+
+test("bridge targets spend the total-node cap and a bridge may reach a seed id", () => {
+  // Seed 1 with one typed edge (target 2) and bridges to 1..20: the total
+  // cap admits the first TRAVERSAL_MAX_TOTAL_NODES walked targets in edge
+  // order, and a bridge pointing back at the seed reaches it like any
+  // target (the walk is over reached ids, seeds are entry points only).
+  const store = bridgedStore([edge(1, 2)], new Map([[1, [1, 2, 3]]]));
+  const nodes = relationalFanout(store, [1], { maxDepth: 1, maxExpansionPerNode: 32 });
+  // Node 2 is reached twice (typed edge plus bridge) and outranks the
+  // once-reached pair; the seed id 1 - reached only through the bridge -
+  // surfaces among them.
+  expect(nodes.map((n) => n.documentId)).toEqual([2, 1, 3]);
+  expect(byIdOf(nodes).get(1)!.viaLinkTypes).toEqual(["entity"]);
+});
+
+test("an absent bridge reader leaves the walk byte-identical to the typed-only walk", () => {
+  // The same typed fixture, walked once by a store without the reader and
+  // once by a store whose reader answers empty: identical output, so the
+  // pre-bridge walk is a strict special case.
+  const edges: Edge[] = [edge(1, 2, "related"), edge(2, 3, "extends")];
+  const without = relationalFanout(fakeStore(edges), [1], { maxDepth: 2 });
+  const withEmpty = relationalFanout(bridgedStore(edges, new Map()), [1], { maxDepth: 2 });
+  expect(JSON.stringify(withEmpty)).toBe(JSON.stringify(without));
+});
+
+// ─── the chunk_entities bridge reader (truth-correctable-time-aware) ─────────
+
+import { Database } from "bun:sqlite";
+
+import { entityBridgesForDocuments } from "../../../src/core/search/store/entity-bridges.ts";
+
+/** Minimal `chunks` + `chunk_entities` fixture with the reader's join columns. */
+function bridgeDb(): Database {
+  const db = new Database(":memory:");
+  db.run("CREATE TABLE chunks (id INTEGER PRIMARY KEY, document_id INTEGER NOT NULL)");
+  db.run(
+    "CREATE TABLE chunk_entities (" +
+      "chunk_id INTEGER NOT NULL REFERENCES chunks(id) ON DELETE CASCADE, " +
+      "entity TEXT NOT NULL, PRIMARY KEY (chunk_id, entity))",
+  );
+  return db;
+}
+
+function bridgeFixtures(db: Database, rows: Array<[chunkId: number, documentId: number]>): void {
+  for (const [chunkId, documentId] of rows) {
+    db.run("INSERT INTO chunks (id, document_id) VALUES (?, ?)", [chunkId, documentId]);
+  }
+}
+
+function addEntities(db: Database, chunkId: number, entities: ReadonlyArray<string>): void {
+  for (const e of entities)
+    db.run("INSERT INTO chunk_entities (chunk_id, entity) VALUES (?, ?)", [chunkId, e]);
+}
+
+test("the bridge reader joins chunk_entities into deduplicated ordered pairs", () => {
+  using db = bridgeDb();
+  bridgeFixtures(db, [
+    [1, 10],
+    [2, 20],
+    [3, 30],
+    [4, 40],
+  ]);
+  // Docs 10 and 20 share TWO entities; doc 30 shares one with 10; doc 40
+  // shares nothing.
+  addEntities(db, 1, ["alpha", "beta"]);
+  addEntities(db, 2, ["alpha", "beta"]);
+  addEntities(db, 3, ["beta"]);
+  addEntities(db, 4, ["gamma"]);
+  expect(entityBridgesForDocuments(db, [10])).toEqual([
+    { sourceDocumentId: 10, targetDocumentId: 20 },
+    { sourceDocumentId: 10, targetDocumentId: 30 },
+  ]);
+  // Asking for both sources keeps the same per-source ordering.
+  expect(entityBridgesForDocuments(db, [10, 20])).toEqual([
+    { sourceDocumentId: 10, targetDocumentId: 20 },
+    { sourceDocumentId: 10, targetDocumentId: 30 },
+    { sourceDocumentId: 20, targetDocumentId: 10 },
+    { sourceDocumentId: 20, targetDocumentId: 30 },
+  ]);
+});
+
+test("the bridge reader excludes self pairs and answers empty input with empty", () => {
+  using db = bridgeDb();
+  bridgeFixtures(db, [
+    [1, 10],
+    [2, 10],
+  ]);
+  // Both chunks of document 10 carry the entity; no self pair may appear.
+  addEntities(db, 1, ["alpha"]);
+  addEntities(db, 2, ["alpha"]);
+  expect(entityBridgesForDocuments(db, [10])).toEqual([]);
+  expect(entityBridgesForDocuments(db, [])).toEqual([]);
 });

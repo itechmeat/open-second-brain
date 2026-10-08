@@ -38,6 +38,28 @@ export interface RelationalFanoutStore {
     readonly target: string;
     readonly targetDocumentId: number | null;
   }>;
+  /**
+   * Optional entity-bridge reader (truth-correctable-time-aware): the
+   * deduplicated `chunk_entities` co-occurrence pairs of the given
+   * documents, in deterministic target-id order per source. Present =
+   * every pair is walked as one directed edge labeled
+   * {@link ENTITY_BRIDGE_RELATION}, appended after the same source's
+   * typed edges and counted by every width cap. Absent (or answering
+   * empty) = the walk is byte-identical to the typed-only walk.
+   */
+  entityBridgesForDocuments?(
+    documentIds: ReadonlyArray<number>,
+  ): ReadonlyArray<RelationalBridgeEdge>;
+}
+
+/**
+ * One entity-bridge edge: two documents that mention the same normalized
+ * entity. Directed source -> target; the reader dedups (one edge per pair
+ * no matter how many entities they share).
+ */
+export interface RelationalBridgeEdge {
+  readonly sourceDocumentId: number;
+  readonly targetDocumentId: number;
 }
 
 export interface RelationalNode {
@@ -80,6 +102,14 @@ export const TRAVERSAL_MAX_TOTAL_NODES = 16;
  * expanded: its own fan-out is withheld from the frontier.
  */
 export const TRAVERSAL_HUB_DEGREE_THRESHOLD = 12;
+
+/**
+ * The relation label every entity-bridge edge walks under (design decision
+ * 11: bridges are machine-derived, never part of the query edge-type
+ * vocabulary, so the edge-type restriction does not filter them and
+ * attribution renders them as `via entity`).
+ */
+export const ENTITY_BRIDGE_RELATION = "entity";
 
 /** Environment override for {@link TRAVERSAL_MAX_SEEDS}. */
 export const TRAVERSAL_MAX_SEEDS_ENV = "OPEN_SECOND_BRAIN_SEARCH_TRAVERSAL_MAX_SEEDS";
@@ -268,53 +298,74 @@ export function relationalFanout(
     const edges = store.typedRelationEdgesForDocuments(frontier);
     // One batched edge fetch per depth; grouped per source node so the
     // per-node expansion cap and the hub-degree rule answer a per-node
-    // question without a second query.
+    // question without a second query. Entity bridges (when the store
+    // provides the reader) join the same per-source grouping, appended
+    // after the source's typed edges.
     const bySource = new Map<number, typeof edges>();
     for (const edge of edges) {
       const mine = bySource.get(edge.sourceDocumentId);
       if (mine) mine.push(edge);
       else bySource.set(edge.sourceDocumentId, [edge]);
     }
+    const bridgesBySource = new Map<number, number[]>();
+    if (store.entityBridgesForDocuments !== undefined) {
+      for (const bridge of store.entityBridgesForDocuments(frontier)) {
+        const mine = bridgesBySource.get(bridge.sourceDocumentId);
+        if (mine) mine.push(bridge.targetDocumentId);
+        else bridgesBySource.set(bridge.sourceDocumentId, [bridge.targetDocumentId]);
+      }
+    }
     const nextFrontier: number[] = [];
     for (const sourceId of frontier) {
       if (stop) break;
       const declared = bySource.get(sourceId) ?? [];
       // A node's WALKED edges: the ones the traversal could actually
-      // follow - restriction-passing with a resolvable target. Degree and
-      // expansion answer this list, so a dangling edge neither inflates a
-      // hub nor spends a node's expansion budget. A target that happens to
-      // be a seed id is walked like any target (see the module header).
+      // follow - restriction-passing with a resolvable target, then the
+      // source's entity bridges (machine-derived, exempt from the query's
+      // edge-type restriction by design). Degree and expansion answer this
+      // combined list, so a dangling edge neither inflates a hub nor
+      // spends a node's expansion budget, while a bridge counts exactly
+      // like a typed edge. A target that happens to be a seed id is walked
+      // like any target (see the module header).
       const walked = declared.filter(
         (edge) => (!restrict || allowed.has(edge.relation)) && edge.targetDocumentId !== null,
       );
+      const bridgeTargets = bridgesBySource.get(sourceId) ?? [];
       // Hub skipping: a node the walk REACHED keeps its provenance but its
       // fan-out is withheld from the frontier. A seed is exempt - it is the
       // caller's deliberate entry point, not a node the walk reached, and
       // its expansion is already bounded by the per-node cap (the cap cases
       // in the fanout test pin a 20-edge seed expanding past the threshold).
-      if (depth > 1 && walked.length > hubDegreeThreshold) continue;
+      if (depth > 1 && walked.length + bridgeTargets.length > hubDegreeThreshold) continue;
       let followed = 0;
-      for (const edge of walked) {
-        if (followed >= maxExpansionPerNode) break;
-        const targetId = edge.targetDocumentId;
-        if (targetId === null) continue;
+      const walkTarget = (targetId: number, relation: string): boolean => {
+        if (followed >= maxExpansionPerNode) return false;
         followed += 1;
         const existing = reached.get(targetId);
         if (existing === undefined) {
           if (reached.size >= maxTotalNodes) {
             stop = true;
-            break;
+            return false;
           }
           reached.set(targetId, {
             hops: depth,
             edgeRichness: 1,
-            viaLinkTypes: new Set([edge.relation]),
+            viaLinkTypes: new Set([relation]),
           });
           nextFrontier.push(targetId);
         } else {
           existing.edgeRichness += 1;
-          existing.viaLinkTypes.add(edge.relation);
+          existing.viaLinkTypes.add(relation);
           // hops keeps the minimum (first reached), which is `depth` order.
+        }
+        return true;
+      };
+      for (const edge of walked) {
+        if (!walkTarget(edge.targetDocumentId!, edge.relation)) break;
+      }
+      if (!stop) {
+        for (const targetId of bridgeTargets) {
+          if (!walkTarget(targetId, ENTITY_BRIDGE_RELATION)) break;
         }
       }
     }

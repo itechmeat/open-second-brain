@@ -113,3 +113,137 @@ test("a non-relational query is byte-identical between arm on and off (rrf)", as
   const on = await search(cfgOn, { query: "alpha topic" });
   expect(project(on)).toEqual(project(off));
 });
+
+// ─── entity bridges and arm runtime options (truth-correctable-time-aware) ───
+
+import { Database } from "bun:sqlite";
+
+import {
+  ENTITY_BRIDGES_CONFIG,
+  ENTITY_BRIDGES_ENV,
+  resolveEntityBridgesEnabled,
+  runRelationalArm,
+} from "../../../src/core/search/pipeline/relational-arm.ts";
+import { SearchError } from "../../../src/core/search/search-error.ts";
+import type { TraversalBudgets } from "../../../src/core/search/relational-fanout.ts";
+
+test("entity bridges resolve on by default and follow env over config", () => {
+  expect(resolveEntityBridgesEnabled({ env: {} })).toBe(true);
+  expect(
+    resolveEntityBridgesEnabled({ env: {}, config: { [ENTITY_BRIDGES_CONFIG]: "false" } }),
+  ).toBe(false);
+  expect(
+    resolveEntityBridgesEnabled({
+      env: { [ENTITY_BRIDGES_ENV]: "true" },
+      config: { [ENTITY_BRIDGES_CONFIG]: "false" },
+    }),
+  ).toBe(true);
+  expect(() => resolveEntityBridgesEnabled({ env: { [ENTITY_BRIDGES_ENV]: "maybe" } })).toThrow(
+    SearchError,
+  );
+  expect(() => resolveEntityBridgesEnabled({ env: { [ENTITY_BRIDGES_ENV]: "maybe" } })).toThrow(
+    new RegExp(ENTITY_BRIDGES_ENV),
+  );
+});
+
+/** The slice of Store the arm needs, with typed edges plus optional bridges. */
+function armFixtureStore(opts: {
+  docs: Record<string, number>;
+  typed: Array<[from: number, relation: string, to: number]>;
+  bridges?: Map<number, number[]>;
+  withReader?: boolean;
+}): Store {
+  const byId = new Map(Object.entries(opts.docs).map(([name, id]) => [id, `${name}.md`]));
+  return {
+    getDocumentIdByPath(path: string) {
+      for (const [id, p] of byId) if (p === path) return id;
+      return null;
+    },
+    documentTitles() {
+      return new Map([...byId].map(([id, path]) => [id, { path, title: null }]));
+    },
+    typedRelationEdgesForDocuments(ids: ReadonlyArray<number>) {
+      const set = new Set(ids);
+      return opts.typed
+        .filter(([from]) => set.has(from))
+        .map(([from, relation, to]) => ({
+          sourceDocumentId: from,
+          relation,
+          target: byId.get(to) ?? "",
+          targetDocumentId: to,
+        }));
+    },
+    ...(opts.withReader
+      ? {
+          entityBridgesForDocuments(ids: ReadonlyArray<number>) {
+            const out: Array<{ sourceDocumentId: number; targetDocumentId: number }> = [];
+            for (const id of ids) {
+              for (const target of opts.bridges?.get(id) ?? []) {
+                out.push({ sourceDocumentId: id, targetDocumentId: target });
+              }
+            }
+            return out;
+          },
+        }
+      : {}),
+    representativeChunks(ids: ReadonlyArray<number>) {
+      const out = new Map();
+      for (const id of ids) {
+        const path = byId.get(id);
+        if (path === undefined) continue;
+        out.set(id, {
+          chunkId: id,
+          documentId: id,
+          path,
+          title: null,
+          content: "",
+          startLine: 1,
+          endLine: 1,
+          mtime: 0,
+        });
+      }
+      return out;
+    },
+  } as unknown as Store;
+}
+
+test("the arm walks entity bridges only when the flag is on", () => {
+  // The per-test vault from beforeEach; the arm's own vocabulary falls
+  // back to the default relation vocabulary for an unreadable schema pack.
+  // seed --related--> typed ; seed ~entity~> bridged
+  const shared = { seed: 1, typed: 2, bridged: 3 };
+  const store = armFixtureStore({
+    docs: shared,
+    typed: [[1, "related", 2]],
+    bridges: new Map([[1, [3]]]),
+    withReader: true,
+  });
+  const on = runRelationalArm(store, vault, "[[seed]] related", { entityBridges: true });
+  expect(on.reachByChunk.get(3)?.via).toEqual(["entity"]);
+  const off = runRelationalArm(store, vault, "[[seed]] related", { entityBridges: false });
+  expect(off.reachByChunk.has(3)).toBe(false);
+  // Flag off is byte-identical to a store with no bridge reader at all.
+  const bare = armFixtureStore({ docs: shared, typed: [[1, "related", 2]] });
+  const bareRun = runRelationalArm(bare, vault, "[[seed]] related", {});
+  expect(JSON.stringify(off)).toBe(JSON.stringify(bareRun));
+});
+
+test("the arm threads the traversal budgets and the deadline into the walk", () => {
+  const store = armFixtureStore({
+    docs: { seed: 1, near: 2, far: 3 },
+    typed: [
+      [1, "related", 2],
+      [2, "related", 3],
+    ],
+  });
+  const budgets: TraversalBudgets = {
+    maxSeeds: 8,
+    maxExpansionPerNode: 4,
+    maxTotalNodes: 1,
+    hubDegreeThreshold: 12,
+  };
+  const capped = runRelationalArm(store, vault, "[[seed]] related", { budgets });
+  expect([...capped.reachByChunk.keys()]).toEqual([2]);
+  const expired = runRelationalArm(store, vault, "[[seed]] related", { isExpired: () => true });
+  expect(expired.rankedChunkIds).toEqual([]);
+});

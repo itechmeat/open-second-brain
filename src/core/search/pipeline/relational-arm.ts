@@ -3,19 +3,80 @@
  * query's wikilink seeds, fans out over typed edges, and contributes one
  * representative chunk per reached node - with the link types and hop
  * distance it was reached by, for attribution.
+ *
+ * Deepened traversal (truth-correctable-time-aware): the walk runs under
+ * the resolved traversal width budgets, abandons its frontier when the
+ * caller's deadline predicate reports the composite recall clock fired,
+ * and - when the entity-bridge flag allows and the store provides the
+ * reader - walks `chunk_entities` entity bridges beside the typed edges.
+ * The per-call options default to the same environment-over-machine-config
+ * resolution every search knob follows; the config file was already read
+ * once by the caller's config resolution, so a re-read here answers the
+ * same map or fails the same way.
  */
 
 import { DEFAULT_RELATION_TYPES, normalizeRelation } from "../../graph/relation-vocab.ts";
 import { loadSchemaPack } from "../../brain/schema-pack.ts";
 import { rrfKey } from "../../scope-key.ts";
-import { relationalFanout } from "../relational-fanout.ts";
+import { discoverConfig } from "../../config.ts";
+import { envOrConfig, parseBool } from "../../validate.ts";
+import {
+  relationalFanout,
+  resolveTraversalBudgets,
+  type RelationalFanoutStore,
+  type TraversalBudgets,
+} from "../relational-fanout.ts";
 import { parseRelationalQuery } from "../relational-query.ts";
+import { SearchError } from "../search-error.ts";
 import type { BrainSearchResult } from "../search-result.ts";
 import type { Store } from "../store.ts";
 import type { ResolvedSearchConfig, SearchOptions } from "../types.ts";
 
 /** Bounded typed-edge fan-out depth for the relational arm (t_09b7ccea). */
 const RELATIONAL_MAX_DEPTH = 2;
+
+/** Environment override for walking entity bridges. */
+export const ENTITY_BRIDGES_ENV = "OPEN_SECOND_BRAIN_SEARCH_ENTITY_BRIDGES";
+/** Machine-config key for walking entity bridges. */
+export const ENTITY_BRIDGES_CONFIG = "search_entity_bridges_enabled";
+
+/**
+ * Whether the arm walks entity bridges: on by default (design decision 11),
+ * overridable per environment or machine config. A present but invalid
+ * value is a misconfiguration and is refused with a `SearchError` naming
+ * the key in force - never silently defaulted.
+ */
+export function resolveEntityBridgesEnabled(input: {
+  readonly env?: NodeJS.ProcessEnv;
+  readonly config?: Readonly<Record<string, string>>;
+}): boolean {
+  const env = input.env ?? {};
+  const config = input.config ?? {};
+  const raw = envOrConfig(env, config, ENTITY_BRIDGES_ENV, ENTITY_BRIDGES_CONFIG);
+  if (raw === null) return true;
+  try {
+    return parseBool(raw, true, ENTITY_BRIDGES_ENV);
+  } catch (e) {
+    const inForce = env[ENTITY_BRIDGES_ENV] ? ENTITY_BRIDGES_ENV : ENTITY_BRIDGES_CONFIG;
+    throw new SearchError("INVALID_INPUT", `${inForce}: ${(e as Error).message}`);
+  }
+}
+
+/** Per-call runtime overrides for the arm; every member defaults to resolved config. */
+export interface RelationalArmOptions {
+  /** Traversal width budgets. Default: {@link resolveTraversalBudgets} over env + machine config. */
+  readonly budgets?: TraversalBudgets;
+  /**
+   * Fired-clock predicate bounding the walk (the composite recall
+   * deadline). Default: none - the width caps still bound the walk.
+   */
+  readonly isExpired?: () => boolean;
+  /**
+   * Walk entity bridges. Default: {@link resolveEntityBridgesEnabled} over
+   * env + machine config, AND the store must provide the bridge reader.
+   */
+  readonly entityBridges?: boolean;
+}
 
 export interface RelationalReach {
   readonly via: ReadonlyArray<string>;
@@ -41,20 +102,59 @@ export function noRelationalArm(): RelationalArmOutcome {
 }
 
 /**
+ * The machine config map the arm's own knobs resolve against. The config
+ * file was already read by the caller's config resolution earlier in the
+ * same search call, so this re-read answers the same map, or fails the
+ * same way - it is deliberately not guarded into a silent default.
+ */
+function machineConfigData(): Record<string, string> {
+  return discoverConfig().data;
+}
+
+/**
+ * The fanout view of the store. The walk merges bridges whenever the store
+ * view carries the reader, so this wrapper is the flag's enforcement point:
+ * bridges on AND the store carrying the reader yields a view that exposes
+ * it; anything else yields a view with typed edges only, so a flag-off run
+ * is byte-identical to a store with no reader at all.
+ */
+function fanoutStoreFor(store: Store, bridges: boolean): RelationalFanoutStore {
+  const reader = (store as Partial<RelationalFanoutStore>).entityBridgesForDocuments;
+  if (typeof reader !== "function") return store;
+  if (!bridges) {
+    return { typedRelationEdgesForDocuments: (ids) => store.typedRelationEdgesForDocuments(ids) };
+  }
+  return {
+    typedRelationEdgesForDocuments: (ids) => store.typedRelationEdgesForDocuments(ids),
+    entityBridgesForDocuments: (ids) => reader.call(store, ids),
+  };
+}
+
+/**
  * A bounded depth-2 typed-edge fan-out from the resolved seeds. A
  * non-relational query (no wikilink seed plus schema-vocabulary edge-type
  * token) contributes nothing. Source identity from the shared key module
  * dedups the lane (federation hardening).
  */
-export function runRelationalArm(store: Store, vault: string, query: string): RelationalArmOutcome {
+export function runRelationalArm(
+  store: Store,
+  vault: string,
+  query: string,
+  opts: RelationalArmOptions = {},
+): RelationalArmOutcome {
   const outcome = noRelationalArm();
+  const config = machineConfigData();
+  const budgets = opts.budgets ?? resolveTraversalBudgets({ env: process.env, config });
+  const bridges = opts.entityBridges ?? resolveEntityBridgesEnabled({ env: process.env, config });
   const relQuery = parseRelationalQuery(query, relationalEdgeVocabulary(vault));
   if (relQuery === null) return outcome;
   const seedDocIds = resolveSeedDocumentIds(store, relQuery.seeds);
   if (seedDocIds.length === 0) return outcome;
-  const nodes = relationalFanout(store, seedDocIds, {
+  const nodes = relationalFanout(fanoutStoreFor(store, bridges), seedDocIds, {
     maxDepth: RELATIONAL_MAX_DEPTH,
     edgeTypes: relQuery.edgeTypes,
+    ...budgets,
+    ...(opts.isExpired !== undefined ? { isExpired: opts.isExpired } : {}),
   });
   const reps = store.representativeChunks(nodes.map((n) => n.documentId));
   const seenKeys = new Set<string>();
