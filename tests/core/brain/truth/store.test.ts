@@ -216,3 +216,121 @@ test("the claim shard name is claims.jsonl or claims.<deviceId>.jsonl, byte for 
     join(truthDir(vault), "claims.laptop-01.jsonl"),
   );
 });
+
+describe("claim validity windows (presence-gated, schema v1)", () => {
+  const WINDOWLESS_LINE =
+    JSON.stringify({
+      v: 1,
+      ts: "2026-06-01T10:00:00Z",
+      agent: "claude-dev-agent",
+      entity: "alice mason",
+      aspect: "employer",
+      value: "Google",
+      valueKind: "text",
+      source: "[[Brain/notes/standup.md]]",
+    }) + "\n";
+
+  test("a windowless append writes a byte-identical line (no validity keys)", () => {
+    const written = append();
+    const line = readFileSync(written.path, "utf8");
+    expect(line).toBe(WINDOWLESS_LINE);
+    const row = JSON.parse(line) as Record<string, unknown>;
+    expect("validFrom" in row).toBe(false);
+    expect("validUntil" in row).toBe(false);
+  });
+
+  test("present validity fields serialize by conditional spread, before source", () => {
+    const written = append({ validFrom: "2026-01-01", validUntil: "2026-06-30T23:59:59Z" });
+    const row = JSON.parse(readFileSync(written.path, "utf8")) as Record<string, unknown>;
+    expect(row["validFrom"]).toBe("2026-01-01");
+    expect(row["validUntil"]).toBe("2026-06-30T23:59:59Z");
+    const keys = Object.keys(row);
+    expect(keys.indexOf("validUntil")).toBe(keys.indexOf("source") - 1);
+    expect(written.event.validFrom).toBe("2026-01-01");
+  });
+
+  test("an invalid validity value refuses the append with a named error", () => {
+    expect(() => append({ validFrom: "yesterday" })).toThrow(/validFrom/);
+    expect(() => append({ validUntil: "2026-01-01T10:00:00+02:00" })).toThrow(/validUntil/);
+  });
+
+  test("an empty or inverted window refuses the append", () => {
+    // A bare-date until day-snaps to cover its whole day, so a one-day
+    // window is fine; same-instant bounds are empty and rejected.
+    expect(() =>
+      append({ validFrom: "2026-01-01T00:00:00Z", validUntil: "2026-01-01T00:00:00Z" }),
+    ).toThrow();
+    expect(() => append({ validFrom: "2026-06-01", validUntil: "2026-01-01" })).toThrow();
+  });
+
+  test("the new binary reads old lines (fields absent) unchanged", () => {
+    mkdirSync(truthDir(vault), { recursive: true });
+    writeFileSync(join(truthDir(vault), "claims.jsonl"), WINDOWLESS_LINE);
+    const { events, warnings } = readClaimEvents(vault);
+    expect(warnings).toHaveLength(0);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.validFrom).toBeUndefined();
+    expect(events[0]!.validUntil).toBeUndefined();
+  });
+
+  test("the new binary reads new lines and validates the fields when present", () => {
+    mkdirSync(truthDir(vault), { recursive: true });
+    const good = {
+      v: 1,
+      ts: "2026-06-01T09:00:00Z",
+      agent: "a",
+      entity: "alice mason",
+      aspect: "employer",
+      value: "Google",
+      valueKind: "text",
+      validFrom: "2026-01-01",
+      validUntil: "2026-06-01T00:00:00Z",
+      source: "[[x]]",
+    };
+    const badFrom = { ...good, ts: "2026-06-02T09:00:00Z", validFrom: "not a date" };
+    const inverted = {
+      ...good,
+      ts: "2026-06-03T09:00:00Z",
+      validFrom: "2026-06-01T00:00:00Z",
+      validUntil: "2026-01-01T00:00:00Z",
+    };
+    writeFileSync(
+      join(truthDir(vault), "claims.jsonl"),
+      [good, badFrom, inverted].map((r) => JSON.stringify(r)).join("\n") + "\n",
+    );
+    const { events, warnings } = readClaimEvents(vault);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.validFrom).toBe("2026-01-01");
+    expect(warnings).toHaveLength(2);
+    expect(warnings.map((w) => w.message).toSorted()).toEqual([
+      "invalid claim validFrom: not a date",
+      "invalid claim validity window: validFrom must parse before validUntil",
+    ]);
+  });
+
+  test("unknown keys on a line stay ignored (old binaries read new lines verbatim)", () => {
+    // The old-binary half of the read/write matrix: an older reader
+    // rebuilds the row from known keys only, so a NEW line's validity
+    // fields (and any future field) degrade to the assertion-time axis.
+    // Pinned here against the CURRENT reader: unknown keys are dropped,
+    // not warnings.
+    mkdirSync(truthDir(vault), { recursive: true });
+    const future = {
+      v: 1,
+      ts: "2026-06-01T09:00:00Z",
+      agent: "a",
+      entity: "alice mason",
+      aspect: "employer",
+      value: "Google",
+      valueKind: "text",
+      source: "[[x]]",
+      futureField: { nested: true },
+    };
+    writeFileSync(join(truthDir(vault), "claims.jsonl"), JSON.stringify(future) + "\n");
+    const { events, warnings } = readClaimEvents(vault);
+    expect(warnings).toHaveLength(0);
+    expect(events).toHaveLength(1);
+    const row = events[0] as unknown as Record<string, unknown>;
+    expect("futureField" in row).toBe(false);
+  });
+});

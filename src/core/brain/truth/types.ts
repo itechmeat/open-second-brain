@@ -27,6 +27,16 @@ export interface ClaimQuantity {
  * (NFC, lowercase, collapsed whitespace) so slot addressing compares
  * like with like; `value` keeps its display casing and is normalized
  * only for identity comparison inside the fold.
+ *
+ * The optional validity fields carry the claim's real-world validity
+ * window, half-open `[validFrom, validUntil)` (see `validity.ts`).
+ * They are presence-gated under `TRUTH_SCHEMA_VERSION = 1`: absent
+ * keys mean windowless, and every windowless line serializes
+ * byte-identically to the pre-window ledger. Stored values are bare
+ * ISO dates or canonical UTC timestamps; comparisons run on the
+ * validity axis only when BOTH claims of a pair carry present windows
+ * (contract item 1) - a windowless or expired claim never suppresses
+ * assertion-time contestation on its own.
  */
 export interface ClaimEvent {
   readonly v: typeof TRUTH_SCHEMA_VERSION;
@@ -38,6 +48,10 @@ export interface ClaimEvent {
   readonly value: string;
   readonly valueKind: ClaimValueKind;
   readonly quantity?: ClaimQuantity;
+  /** Validity window start (bare ISO date or canonical UTC timestamp). */
+  readonly validFrom?: string;
+  /** Validity window end, exclusive (bare ISO date or canonical UTC timestamp). */
+  readonly validUntil?: string;
   /** Provenance wikilink or vault-relative path. */
   readonly source: string;
 }
@@ -53,6 +67,14 @@ export interface ClaimVersion {
   readonly source: string;
   /** How many events asserted this value. */
   readonly assertCount: number;
+  /**
+   * Validity fields tolerated on state-file versions for schema
+   * forward-compatibility. The fold does not populate them (succession
+   * reads windows from the events themselves), so they stay absent in
+   * every state this binary writes.
+   */
+  readonly validFrom?: string;
+  readonly validUntil?: string;
 }
 
 /**

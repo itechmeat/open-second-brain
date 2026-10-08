@@ -135,6 +135,10 @@ export function computeGroundingScore(
   events: ReadonlyArray<ClaimEvent>,
   opts: GroundingOptions = {},
 ): GroundingScore {
+  // Assertion-keyed by contract (truth-correctable-time-aware, item 1):
+  // the grounding balance measures assertion time only and never reads
+  // a claim's validity window, so windowed and windowless claims weigh
+  // identically here.
   const windowDays = opts.windowDays ?? CONFLICT_WINDOW_DAYS;
   const key = slotKey(slot.entity, slot.aspect);
   const currentNorm = normalizeClaimValue(slot.current.value);

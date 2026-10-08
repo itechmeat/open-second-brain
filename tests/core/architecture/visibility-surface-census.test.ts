@@ -306,7 +306,16 @@ const NOTE_CONTENT_PRODUCERS: ReadonlyArray<ProducerRule> = Object.freeze([
   { specifierIncludes: "/brain/expiration-set.ts", identifiers: ["setExpiration"] },
   {
     specifierIncludes: "/brain/truth/",
-    identifiers: ["computeTruthStateWithConflicts", "aggregateQuantities", "detectAgentCollisions"],
+    identifiers: [
+      "computeTruthStateWithConflicts",
+      "aggregateQuantities",
+      "detectAgentCollisions",
+      // Ledger validity windows (contract item 1): any surface reading
+      // the validity axis off claim events is swept in.
+      "claimWindow",
+      "windowsIntersect",
+      "isValidityPoint",
+    ],
   },
   {
     specifierIncludes: "/brain/decisions/record.ts",

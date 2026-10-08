@@ -33,6 +33,7 @@ import {
 } from "../ledger-shards.ts";
 import { normalizeEntityName } from "../entities/canonical.ts";
 import { computeTruthState } from "./fold.ts";
+import { isValidityPoint, validityWindowMs } from "./validity.ts";
 import type {
   ClaimEvent,
   ClaimParseWarning,
@@ -94,6 +95,10 @@ export interface AppendClaimInput {
   readonly value: string;
   readonly valueKind?: ClaimEvent["valueKind"];
   readonly quantity?: ClaimQuantity;
+  /** Validity window start; absent keys mean windowless (contract item 1). */
+  readonly validFrom?: string;
+  /** Validity window end, exclusive; absent keys mean windowless. */
+  readonly validUntil?: string;
   readonly source: string;
 }
 
@@ -124,6 +129,30 @@ export function appendClaimEvent(
   if (!ISO_UTC_TS_RE.test(input.ts)) {
     throw new Error(`claim ts must be canonical ISO-8601 UTC: ${JSON.stringify(input.ts)}`);
   }
+  // Validity windows (contract item 1): presence-gated, strictly
+  // validated, and never guessed. An unparsable bound or an empty or
+  // inverted window refuses the append by name.
+  if (input.validFrom !== undefined && !isValidityPoint(input.validFrom)) {
+    throw new Error(
+      `claim validFrom must be a bare ISO date or canonical UTC timestamp: ${JSON.stringify(input.validFrom)}`,
+    );
+  }
+  if (input.validUntil !== undefined && !isValidityPoint(input.validUntil)) {
+    throw new Error(
+      `claim validUntil must be a bare ISO date or canonical UTC timestamp: ${JSON.stringify(input.validUntil)}`,
+    );
+  }
+  const window = validityWindowMs(input.validFrom, input.validUntil);
+  if (
+    window !== null &&
+    window.fromMs !== null &&
+    window.untilMs !== null &&
+    window.fromMs >= window.untilMs
+  ) {
+    throw new Error(
+      `claim validity window is empty or inverted: validFrom ${JSON.stringify(input.validFrom)} does not parse before validUntil ${JSON.stringify(input.validUntil)}`,
+    );
+  }
 
   const event: ClaimEvent = Object.freeze({
     v: TRUTH_SCHEMA_VERSION,
@@ -134,6 +163,8 @@ export function appendClaimEvent(
     value,
     valueKind: input.valueKind ?? "text",
     ...(input.quantity !== undefined ? { quantity: input.quantity } : {}),
+    ...(input.validFrom !== undefined ? { validFrom: input.validFrom } : {}),
+    ...(input.validUntil !== undefined ? { validUntil: input.validUntil } : {}),
     source: input.source.trim(),
   });
 
@@ -271,6 +302,50 @@ function coerceClaim(
       action: action as string | null,
     });
   }
+  // Validity fields (contract item 1): tolerated when absent (old
+  // lines), validated when present (new lines, schema v1). Unknown
+  // keys stay ignored, so an older binary reading these lines degrades
+  // to the assertion-time axis by construction.
+  const rawValidFrom = obj["validFrom"];
+  const rawValidUntil = obj["validUntil"];
+  if (
+    rawValidFrom !== undefined &&
+    (typeof rawValidFrom !== "string" || !isValidityPoint(rawValidFrom))
+  ) {
+    warnings.push({
+      path,
+      lineNumber,
+      message: `invalid claim validFrom: ${String(rawValidFrom)}`,
+    });
+    return null;
+  }
+  if (
+    rawValidUntil !== undefined &&
+    (typeof rawValidUntil !== "string" || !isValidityPoint(rawValidUntil))
+  ) {
+    warnings.push({
+      path,
+      lineNumber,
+      message: `invalid claim validUntil: ${String(rawValidUntil)}`,
+    });
+    return null;
+  }
+  const validFrom = rawValidFrom as string | undefined;
+  const validUntil = rawValidUntil as string | undefined;
+  const window = validityWindowMs(validFrom, validUntil);
+  if (
+    window !== null &&
+    window.fromMs !== null &&
+    window.untilMs !== null &&
+    window.fromMs >= window.untilMs
+  ) {
+    warnings.push({
+      path,
+      lineNumber,
+      message: "invalid claim validity window: validFrom must parse before validUntil",
+    });
+    return null;
+  }
   return Object.freeze({
     v: TRUTH_SCHEMA_VERSION,
     ts,
@@ -280,6 +355,8 @@ function coerceClaim(
     value: obj["value"] as string,
     valueKind,
     ...(quantity !== undefined ? { quantity } : {}),
+    ...(validFrom !== undefined ? { validFrom } : {}),
+    ...(validUntil !== undefined ? { validUntil } : {}),
     source: obj["source"] as string,
   });
 }

@@ -13,6 +13,10 @@ import type { InsightCandidate } from "../triggers/types.ts";
 import type { ClaimEvent } from "./types.ts";
 
 /** Claims older than this many days never participate. */
+// Assertion-keyed by contract (truth-correctable-time-aware, item 1):
+// collision detection measures assertion time only and never reads a
+// claim's validity window, so a windowed claim collides exactly like a
+// windowless one.
 export const COLLISION_WINDOW_DAYS = 14;
 /** Cap on findings per detection pass. */
 export const COLLISION_FINDINGS_CAP = 20;
