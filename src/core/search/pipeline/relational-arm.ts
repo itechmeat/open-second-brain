@@ -18,15 +18,25 @@
 import { DEFAULT_RELATION_TYPES, normalizeRelation } from "../../graph/relation-vocab.ts";
 import { loadSchemaPack } from "../../brain/schema-pack.ts";
 import { rrfKey } from "../../scope-key.ts";
+import { TRANSPORT_REACH, type TransportReach } from "../../graph/transport-reach.ts";
+import { EXACT_WIKILINK_RE } from "../../brain/wikilink.ts";
+import { SUPERSEDED_BY_KEY } from "../../brain/lifecycle/tombstone.ts";
 import { discoverConfig } from "../../config.ts";
 import { envOrConfig, parseBool } from "../../validate.ts";
 import {
   relationalFanout,
   resolveTraversalBudgets,
   type RelationalFanoutStore,
+  type RelationalPathStep,
   type TraversalBudgets,
 } from "../relational-fanout.ts";
 import { parseRelationalQuery } from "../relational-query.ts";
+import {
+  isPathReadableAtReach,
+  readCachedFrontmatterEntry,
+  type FrontmatterCache,
+} from "../result-filters.ts";
+import { parseValidityWindow } from "../validity.ts";
 import { SearchError } from "../search-error.ts";
 import type { BrainSearchResult } from "../search-result.ts";
 import type { Store } from "../store.ts";
@@ -76,11 +86,34 @@ export interface RelationalArmOptions {
    * env + machine config, AND the store must provide the bridge reader.
    */
   readonly entityBridges?: boolean;
+  /**
+   * The caller's transport reach, gating every provenance path node
+   * (per-node gating, the `brain_derive_fact` premise-gate precedent). A
+   * node whose page is unreadable at this reach is omitted from the path
+   * and counted. Default: local - everything readable, nothing withheld.
+   */
+  readonly reach?: TransportReach;
 }
 
 export interface RelationalReach {
   readonly via: ReadonlyArray<string>;
   readonly hops: number;
+  /**
+   * The ordered steps that reached this node, gated per node at the
+   * caller's reach: a step whose page is unreadable there is omitted and
+   * counted in {@link withheld}. The provenance a row shows is exactly
+   * what the caller could read along the way.
+   */
+  readonly path: ReadonlyArray<RelationalPathStep>;
+  /** How many path nodes the caller's reach could not read. */
+  readonly withheld: number;
+  /**
+   * Set when a readable path node is a non-tip superseded predecessor with
+   * a CLOSED validity window, read from frontmatter only (`superseded_by`
+   * plus `valid_until` already past) - never from the ledger. The bare tip
+   * name the frontmatter pointer declares.
+   */
+  readonly supersededBy?: string;
 }
 
 export interface RelationalArmOutcome {
@@ -157,6 +190,12 @@ export function runRelationalArm(
     ...(opts.isExpired !== undefined ? { isExpired: opts.isExpired } : {}),
   });
   const reps = store.representativeChunks(nodes.map((n) => n.documentId));
+  // Per-node reach gating for the ordered path provenance: one titles read
+  // and one frontmatter cache per arm run, shared by every node's gate.
+  const reach = opts.reach ?? TRANSPORT_REACH.local;
+  const frontmatterCache: FrontmatterCache = new Map();
+  const titles = store.documentTitles();
+  const nowMs = Date.now();
   const seenKeys = new Set<string>();
   for (const node of nodes) {
     const rep = reps.get(node.documentId);
@@ -164,8 +203,13 @@ export function runRelationalArm(
     const key = rrfKey({ origin: null, path: rep.path, chunkId: rep.chunkId });
     if (seenKeys.has(key)) continue;
     seenKeys.add(key);
+    const gated = gatePath(vault, node.path, titles, reach, frontmatterCache, nowMs);
     outcome.rankedChunkIds.push(rep.chunkId);
-    outcome.reachByChunk.set(rep.chunkId, { via: node.viaLinkTypes, hops: node.hops });
+    outcome.reachByChunk.set(rep.chunkId, {
+      via: node.viaLinkTypes,
+      hops: node.hops,
+      ...gated,
+    });
   }
   return outcome;
 }
@@ -214,6 +258,69 @@ function resolveSeedDocumentIds(store: Store, seeds: ReadonlyArray<string>): num
     }
   }
   return out;
+}
+
+/**
+ * The bare tip a frontmatter `superseded_by` pointer names, when the page
+ * is a non-tip superseded predecessor whose validity window has CLOSED
+ * (half-open `[valid_from, valid_until)`: closed once now is at or past
+ * the end). Frontmatter only - never the ledger. A missing pointer, an
+ * unparseable window, an open side, or a window still open answers null.
+ */
+function closedSupersessionTip(
+  vault: string,
+  path: string,
+  cache: FrontmatterCache,
+  nowMs: number,
+): string | null {
+  const entry = readCachedFrontmatterEntry(cache, vault, path);
+  if (entry.unreadable) return null;
+  const raw = entry.meta[SUPERSEDED_BY_KEY];
+  if (typeof raw !== "string" || raw.trim() === "") return null;
+  const window = parseValidityWindow(entry.meta);
+  if (window === null || window.invalid || window.validUntilMs === null) return null;
+  if (window.validUntilMs > nowMs) return null;
+  const wikilink = EXACT_WIKILINK_RE.exec(raw.trim());
+  return (wikilink !== null ? wikilink[1] : raw).trim();
+}
+
+/**
+ * Gate one node's walked path at the caller's reach: unreadable steps are
+ * omitted and counted; the first readable step carrying a closed
+ * supersession names the reach's `supersededBy` tip.
+ */
+function gatePath(
+  vault: string,
+  steps: ReadonlyArray<RelationalPathStep>,
+  titles: ReadonlyMap<number, { readonly path: string }>,
+  reach: TransportReach,
+  cache: FrontmatterCache,
+  nowMs: number,
+): {
+  readonly path: ReadonlyArray<RelationalPathStep>;
+  readonly withheld: number;
+  readonly supersededBy?: string;
+} {
+  const gated: RelationalPathStep[] = [];
+  let withheld = 0;
+  let supersededBy: string | undefined;
+  for (const step of steps) {
+    const meta = titles.get(step.documentId);
+    if (meta === undefined || !isPathReadableAtReach(vault, meta.path, reach, cache)) {
+      withheld += 1;
+      continue;
+    }
+    gated.push(step);
+    if (supersededBy === undefined) {
+      const tip = closedSupersessionTip(vault, meta.path, cache, nowMs);
+      if (tip !== null) supersededBy = tip;
+    }
+  }
+  return {
+    path: Object.freeze(gated),
+    withheld,
+    ...(supersededBy !== undefined ? { supersededBy } : {}),
+  };
 }
 
 /**

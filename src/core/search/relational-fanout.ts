@@ -62,6 +62,18 @@ export interface RelationalBridgeEdge {
   readonly targetDocumentId: number;
 }
 
+/**
+ * One ordered step of the path that reached a node: the document the step
+ * arrived at, and the relation that carried the walk into it (typed
+ * relation name, or {@link ENTITY_BRIDGE_RELATION} for an entity bridge).
+ * The originating seed is not a step - the path starts at the seed's first
+ * reached neighbour.
+ */
+export interface RelationalPathStep {
+  readonly documentId: number;
+  readonly relation: string;
+}
+
 export interface RelationalNode {
   readonly documentId: number;
   /** Minimum hop distance from any seed (1 = direct neighbour). */
@@ -70,6 +82,12 @@ export interface RelationalNode {
   readonly edgeRichness: number;
   /** Distinct link types this node was reached via, sorted. */
   readonly viaLinkTypes: ReadonlyArray<string>;
+  /**
+   * The ordered steps of the walk that reached this node FIRST (minimum
+   * hops; later arrivals never rewrite it). The caller reach-gates these
+   * steps per node before provenance is rendered.
+   */
+  readonly path: ReadonlyArray<RelationalPathStep>;
   /**
    * Deterministic rank score `1/hops + min(MAX_RICHNESS_BONUS, RICHNESS_BONUS
    * * edgeRichness)`. Ranges in `(0, 1 + MAX_RICHNESS_BONUS]` (currently
@@ -251,12 +269,15 @@ interface MutableNode {
   hops: number;
   edgeRichness: number;
   viaLinkTypes: Set<string>;
+  path: RelationalPathStep[];
 }
 
 /**
  * Fan out from `seedDocumentIds` over typed edges, bounded to `maxDepth`
  * hops and the traversal width budgets, returning reached nodes (seeds
- * excluded) ranked deterministically.
+ * excluded) ranked deterministically. Each node carries the ordered steps
+ * of the path that reached it first - the raw provenance the arm
+ * reach-gates per node before anything renders it.
  *
  * Budget semantics, all deterministic in the caller's edge order:
  *   - only the first `maxSeeds` distinct seeds enter the walk;
@@ -286,6 +307,11 @@ export function relationalFanout(
 
   const seedIds = [...new Set(seedDocumentIds)].slice(0, maxSeeds);
   const reached = new Map<number, MutableNode>();
+  // The ordered steps of the first path to each id: seeds start with none,
+  // every reached node extends the path that reached its SOURCE.
+  const pathById = new Map<number, RelationalPathStep[]>(
+    seedIds.map((id) => [id, [] as RelationalPathStep[]]),
+  );
   // Set when the total-node cap ends the walk early; the depth loop then
   // keeps everything already in `reached`.
   let stop = false;
@@ -338,6 +364,7 @@ export function relationalFanout(
       // in the fanout test pin a 20-edge seed expanding past the threshold).
       if (depth > 1 && walked.length + bridgeTargets.length > hubDegreeThreshold) continue;
       let followed = 0;
+      const parentPath = pathById.get(sourceId) ?? [];
       const walkTarget = (targetId: number, relation: string): boolean => {
         if (followed >= maxExpansionPerNode) return false;
         followed += 1;
@@ -347,16 +374,20 @@ export function relationalFanout(
             stop = true;
             return false;
           }
+          const path = [...parentPath, { documentId: targetId, relation }];
+          pathById.set(targetId, path);
           reached.set(targetId, {
             hops: depth,
             edgeRichness: 1,
             viaLinkTypes: new Set([relation]),
+            path,
           });
           nextFrontier.push(targetId);
         } else {
           existing.edgeRichness += 1;
           existing.viaLinkTypes.add(relation);
-          // hops keeps the minimum (first reached), which is `depth` order.
+          // hops keeps the minimum (first reached), which is `depth` order -
+          // and so does `path`: later arrivals never rewrite it.
         }
         return true;
       };
@@ -385,6 +416,7 @@ export function relationalFanout(
         viaLinkTypes: Object.freeze(
           [...node.viaLinkTypes].toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
         ),
+        path: Object.freeze(node.path.map((step) => Object.freeze({ ...step }))),
         score,
       }),
     );

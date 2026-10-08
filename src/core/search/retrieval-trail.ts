@@ -272,6 +272,33 @@ export interface RetrievalDegradation {
 }
 
 /**
+ * The stable typed code identifying a relational ordered-path trail entry
+ * (truth-correctable-time-aware). Its own vocabulary member, NOT a
+ * {@link RETRIEVAL_DEGRADATION} code: a walked provenance path is not a
+ * narrowing, and a degradation row would make every consumer treat a
+ * healthy answer as a degraded one. It rides the trail because the trail
+ * is the one typed, machine-readable channel beside the rows - the
+ * additive `relational:` reason strings stay human provenance.
+ */
+export const RETRIEVAL_RELATIONAL_PATH_CODE = "relational-path";
+
+/**
+ * One relational row's ordered path, machine-readable: the document ids
+ * that stayed readable at the caller's reach, in walk order, plus the
+ * count of path nodes the reach withheld (they are omitted from `path`,
+ * never named). Present on the trail only when the relational arm
+ * contributed a gated path - absent otherwise, keeping a healthy
+ * arm-off answer byte-identical.
+ */
+export interface RelationalPathTrailEntry {
+  readonly code: typeof RETRIEVAL_RELATIONAL_PATH_CODE;
+  /** Readable document ids along the walked path, in walk order. */
+  readonly path: ReadonlyArray<number>;
+  /** Path nodes omitted because the caller's reach cannot read them. */
+  readonly withheld: number;
+}
+
+/**
  * What the corpus supports when nothing degraded and nothing matched -
  * the three surfaced fields of a {@link NegativeRecallVerdict}. The
  * digest-bound coverage receipt is deliberately left off: it is a
@@ -305,6 +332,12 @@ export interface RetrievalTrail {
    * the search can support.
    */
   readonly empty?: RetrievalCorpusStatement;
+  /**
+   * The relational arm's reach-gated ordered paths, one entry per surfaced
+   * relational row in ranked order. Absent (never empty) when the arm
+   * contributed nothing.
+   */
+  readonly relationalPaths?: ReadonlyArray<RelationalPathTrailEntry>;
 }
 
 /**
@@ -438,8 +471,11 @@ export function buildRetrievalTrail(input: {
   readonly pool: number;
   readonly degraded: ReadonlyArray<RetrievalDegradation>;
   readonly empty?: RetrievalCorpusStatement | undefined;
+  readonly relationalPaths?: ReadonlyArray<RelationalPathTrailEntry> | undefined;
 }): RetrievalTrail | undefined {
-  if (input.retrieved > 0 && input.degraded.length === 0) return undefined;
+  if (input.retrieved > 0 && input.degraded.length === 0 && !input.relationalPaths?.length) {
+    return undefined;
+  }
   return Object.freeze({
     retrieved: input.retrieved,
     pool: input.pool,
@@ -447,6 +483,8 @@ export function buildRetrievalTrail(input: {
     // A degradation already accounts for the empty; the corpus statement
     // is the answer only when nothing else is.
     ...(input.empty !== undefined && input.degraded.length === 0 ? { empty: input.empty } : {}),
+    // Absent, never empty: an arm-off run keeps the pre-change shape.
+    ...(input.relationalPaths?.length ? { relationalPaths: input.relationalPaths } : {}),
   });
 }
 
@@ -481,6 +519,15 @@ export function retrievalTrailEnvelope(outcome: {
                 ? { unknown_reason: trail.empty.unknownReason }
                 : {}),
             },
+          }
+        : {}),
+      ...(trail.relationalPaths?.length
+        ? {
+            relational_paths: trail.relationalPaths.map((entry) => ({
+              code: entry.code,
+              path: [...entry.path],
+              withheld: entry.withheld,
+            })),
           }
         : {}),
     },

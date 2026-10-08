@@ -90,14 +90,26 @@ export function decorateFinalResults(input: DecorationInput): ReadonlyArray<Brai
               : "second_pass: or-broadened retry";
           return Object.freeze({ ...r, reasons: Object.freeze([...r.reasons, reason]) });
         });
-  // Relational-arm attribution (t_09b7ccea): a node surfaced by the
-  // typed-edge fan-out carries a reason naming the link types and hop
-  // distance it was reached by. An empty reach map (arm off) is a no-op.
+  // Relational-arm attribution (t_09b7ccea; ordered path provenance,
+  // truth-correctable-time-aware): a node surfaced by the typed-edge
+  // fan-out carries a reason naming the link types and hop distance it was
+  // reached by, plus the count of path nodes the caller's reach could not
+  // read (per-node gating withheld them from the ordered path). A readable
+  // path node that is a non-tip superseded predecessor with a closed
+  // validity window annotates the row with the frontmatter pointer's tip.
+  // An empty reach map (arm off) is a no-op.
   if (input.relationalReach.size === 0) return withSecondPassReasons;
   return withSecondPassReasons.map((r) => {
     const reach = input.relationalReach.get(r.chunkId);
     if (reach === undefined) return r;
-    const reason = `relational: via ${reach.via.join(", ")} (${reach.hops} hop${reach.hops === 1 ? "" : "s"})`;
-    return Object.freeze({ ...r, reasons: Object.freeze([...r.reasons, reason]) });
+    const nodeNoun = reach.withheld === 1 ? "node" : "nodes";
+    const reason =
+      `relational: via ${reach.via.join(", ")} ` +
+      `(${reach.hops} hop${reach.hops === 1 ? "" : "s"}, ${reach.withheld} ${nodeNoun} withheld)`;
+    const reasons =
+      reach.supersededBy !== undefined
+        ? [...r.reasons, reason, `superseded_by: ${reach.supersededBy}`]
+        : [...r.reasons, reason];
+    return Object.freeze({ ...r, reasons: Object.freeze(reasons) });
   });
 }
