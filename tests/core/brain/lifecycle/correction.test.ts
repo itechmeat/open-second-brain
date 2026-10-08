@@ -509,6 +509,51 @@ describe("applied run", () => {
   });
 });
 
+describe("successor input", () => {
+  test("a successor that normalizes to empty is refused on a dry run", () => {
+    seedTarget();
+    // `|||` normalizes to the empty id (pipe-stripped), as does a fence
+    // with only an alias; either would otherwise flow into the pointer
+    // and retarget writes as a malformed `[[]]`.
+    for (const successor of ["|||", "[[|alias]]"]) {
+      expect(() =>
+        correct({
+          vault,
+          configPath,
+          target: TARGET,
+          successor,
+          reason: "the timeout changed",
+          now: NOW,
+          agent: "tester",
+        }),
+      ).toThrow(CorrectionError);
+    }
+  });
+
+  test("a successor that normalizes to empty is refused on an applied run and writes nothing", () => {
+    seedTarget();
+    const before = readFileSync(join(vault, TARGET), "utf8");
+    const eventsBefore = readClaimEvents(vault).events.length;
+    expect(() =>
+      correct({
+        vault,
+        configPath,
+        target: TARGET,
+        value: "two minutes",
+        successor: "|||",
+        reason: "the timeout changed",
+        dryRun: false,
+        now: NOW,
+        agent: "tester",
+      }),
+    ).toThrow(CorrectionError);
+    // The refusal precedes every write: no malformed superseded_by
+    // pointer, no ledger correction event.
+    expect(readFileSync(join(vault, TARGET), "utf8")).toBe(before);
+    expect(readClaimEvents(vault).events.length).toBe(eventsBefore);
+  });
+});
+
 describe("replay convergence", () => {
   test("a second run retires nothing, re-appends nothing and reports appended receipts", () => {
     seedTarget();

@@ -295,6 +295,14 @@ export function correct(input: CorrectInput): CorrectResult {
   if (input.value !== undefined && value === "") {
     throw new CorrectionError("correct: value must not be empty when given");
   }
+  // Same input shape as the value refusal: a successor that normalizes
+  // to empty - `|||`, a fence carrying only an alias - would otherwise
+  // flow into the `superseded_by` pointer and the mention retarget as a
+  // malformed `[[]]`. Refused before anything is written, dry or applied.
+  const successorId = input.successor === undefined ? undefined : idOfRel(input.successor);
+  if (input.successor !== undefined && successorId === "") {
+    throw new CorrectionError("correct: successor must not be empty when given");
+  }
   // The window end lands in frontmatter as `valid_until` even when no
   // ledger append runs (no corrected value supplied), so it is validated
   // here with the SAME check the ledger append boundary applies, before
@@ -330,7 +338,6 @@ export function correct(input: CorrectInput): CorrectResult {
     .map((n) => n.id)
     .toSorted();
 
-  const successorId = input.successor === undefined ? undefined : idOfRel(input.successor);
   // The counting pass of the mention scan: it writes nothing and asserts
   // no vault identity, so the blast radius stays available to a caller
   // that is only deciding whether to write at all. The readable
