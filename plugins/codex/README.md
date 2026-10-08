@@ -116,7 +116,7 @@ The full router with readiness criteria is [`install.md`](https://github.com/ite
 
 ## What is new
 
-1.76.0 keeps the search index current without a scheduler. A search or a session start that finds the index more than a minute old answers from it as it is and starts one low-priority background run, so the next read sees the current vault; nothing stays resident, and nothing runs while no agent works. A changed note now rewrites only the parts of the index that changed, so appending to a large daily log costs a fraction of what it did, and `o2b search status` shows how fresh the index is. Every release is described in the [CHANGELOG](https://github.com/itechmeat/open-second-brain/blob/main/CHANGELOG.md).
+1.77.0 makes the claim ledger time-aware and correctable. A claim can carry a validity window (`o2b brain truth ingest --valid-from`/`--valid-until`, frozen from the source record when the flags are absent), `o2b brain truth events` recalls the ledger over an assertion-time slice, `o2b brain truth state` grounds an agent's stated claims with a per-claim anchoring verdict, and `o2b brain lifecycle correct` retires what a correction touches - dry run by default, with a retired record that recall can still serve answered only beside its resolved, readable correction, never alone. The deep relational recall arm now runs under width budgets with hub skipping and entity co-occurrence bridges. Every release is described in the [CHANGELOG](https://github.com/itechmeat/open-second-brain/blob/main/CHANGELOG.md).
 
 ## Documentation
 
