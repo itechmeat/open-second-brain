@@ -157,6 +157,31 @@ function logFiles(): string[] {
     .map((name) => join(dir, name));
 }
 
+const WITHHELD_MENTION = "Brain/private/hidden-mention.md";
+
+/** Seed a page outside the test caller's reach that mentions the target. */
+function seedWithheldMention(): string {
+  mkdirSync(join(vault, "Brain", "private"), { recursive: true });
+  writeFileSync(
+    join(vault, WITHHELD_MENTION),
+    [
+      "---",
+      "kind: note",
+      "id: hidden-mention",
+      "---",
+      "",
+      "Hidden context: see [[pref-old]].",
+      "",
+    ].join("\n"),
+  );
+  return readFileSync(join(vault, WITHHELD_MENTION), "utf8");
+}
+
+/** Everything except the withheld page: the test caller's readable set. */
+function readableExceptWithheld(rel: string): boolean {
+  return rel !== WITHHELD_MENTION;
+}
+
 describe("dry run", () => {
   test("writes nothing and returns the blast-radius report", () => {
     seedTarget();
@@ -191,6 +216,59 @@ describe("dry run", () => {
       mentionBefore,
     );
     expect(readClaimEvents(vault).events.length).toBe(eventsBefore);
+  });
+});
+
+describe("reach-bounded retargeting", () => {
+  test("a restricted dry run names no out-of-reach page anywhere in the retarget report", () => {
+    seedTarget();
+    const withheldBefore = seedWithheldMention();
+
+    const res = correct({
+      vault,
+      configPath,
+      target: TARGET,
+      successor: "pref-new",
+      reason: "the timeout changed",
+      now: NOW,
+      agent: "tester",
+      readable: readableExceptWithheld,
+    });
+
+    expect(res.dryRun).toBe(true);
+    expect(res.blastRadius.mentions).not.toContain(WITHHELD_MENTION);
+    expect(res.retarget.matched).not.toContain(WITHHELD_MENTION);
+    expect(res.retarget.failed.map((f) => f.path)).not.toContain(WITHHELD_MENTION);
+    // The withheld path is not disclosed under any other key either.
+    expect(JSON.stringify(res)).not.toContain("hidden-mention");
+    expect(readFileSync(join(vault, WITHHELD_MENTION), "utf8")).toBe(withheldBefore);
+  });
+
+  test("a restricted applied run leaves out-of-reach pages unwritten and unnamed", () => {
+    seedTarget();
+    const withheldBefore = seedWithheldMention();
+
+    const res = correct({
+      vault,
+      configPath,
+      target: TARGET,
+      value: "two minutes",
+      successor: "pref-new",
+      reason: "the timeout changed",
+      dryRun: false,
+      now: NOW,
+      agent: "tester",
+      readable: readableExceptWithheld,
+    });
+
+    expect(res.retarget.matched).not.toContain(WITHHELD_MENTION);
+    expect(res.retarget.rewritten).not.toContain(WITHHELD_MENTION);
+    expect(res.retarget.failed.map((f) => f.path)).not.toContain(WITHHELD_MENTION);
+    expect(JSON.stringify(res)).not.toContain("hidden-mention");
+    // No content injection into the withheld page: its bytes are unchanged.
+    expect(readFileSync(join(vault, WITHHELD_MENTION), "utf8")).toBe(withheldBefore);
+    // In-reach mentions are still retargeted.
+    expect(res.retarget.rewritten).toContain("Brain/preferences/pref-other.md");
   });
 });
 

@@ -234,6 +234,11 @@ function nodeWithinReach(
   return readable === undefined ? true : readable(node.path);
 }
 
+/** True when a vault-relative path sits inside the caller's readable set. */
+function withinReach(rel: string, readable: ((rel: string) => boolean) | undefined): boolean {
+  return readable === undefined || readable(rel);
+}
+
 /**
  * Run the correct-verb sweep for one record. Dry by default: the applied
  * sequence runs only under `dryRun: false`.
@@ -276,16 +281,19 @@ export function correct(input: CorrectInput): CorrectResult {
   const successorId = input.successor === undefined ? undefined : idOfRel(input.successor);
   // The counting pass of the mention scan: it writes nothing and asserts
   // no vault identity, so the blast radius stays available to a caller
-  // that is only deciding whether to write at all.
+  // that is only deciding whether to write at all. The readable
+  // predicate is threaded in so a file outside the caller's reach is
+  // never opened, matched or named - the scan's report is filtered
+  // through reach again below, as a second gate on the response shape.
   const mentionScan = retargetWikilinks(
     input.vault,
     [{ from: targetId, ...(successorId !== undefined ? { to: successorId } : {}) }],
-    { apply: false },
+    {
+      apply: false,
+      ...(input.readable !== undefined ? { readable: input.readable } : {}),
+    },
   );
-  const mentions =
-    input.readable === undefined
-      ? mentionScan.matched
-      : mentionScan.matched.filter((rel) => input.readable!(rel));
+  const mentions = mentionScan.matched.filter((rel) => withinReach(rel, input.readable));
 
   const allEvents = readClaimEvents(input.vault).events;
   const targetEvents = allEvents.filter((e) => idOfRel(e.source) === targetId);
@@ -315,9 +323,12 @@ export function correct(input: CorrectInput): CorrectResult {
       blastRadius,
       retirements: Object.freeze([]),
       retarget: {
-        matched: mentionScan.matched,
+        // Reach-filtered: the raw scan names every file on disk that
+        // matches, which beside the gated blast_radius.mentions would be
+        // a one-field disclosure of exactly the withheld paths.
+        matched: mentionScan.matched.filter((rel) => withinReach(rel, input.readable)),
         rewritten: Object.freeze([]),
-        failed: mentionScan.failed,
+        failed: mentionScan.failed.filter((f) => withinReach(f.path, input.readable)),
       },
       ledger: Object.freeze([]),
       receipts: Object.freeze([]),
@@ -451,11 +462,17 @@ export function correct(input: CorrectInput): CorrectResult {
   // Mention retargeting reuses the counting scan's own matcher with
   // writes on; the applied pass is idempotent (a rewritten spelling no
   // longer matches), and Brain/log and the receipt lines are testimony
-  // that is never rewritten. Failures are carried, not thrown.
+  // that is never rewritten. Failures are carried, not thrown. The
+  // caller's readable predicate is threaded in: a page outside the
+  // caller's reach is never opened, never rewritten, never named - the
+  // applied pass may not write into files its caller cannot read.
   const appliedRetarget = retargetWikilinks(
     input.vault,
     [{ from: targetId, ...(successorId !== undefined ? { to: successorId } : {}) }],
-    { neverRewrite: [BRAIN_LOG_REL, BRAIN_DECISIONS_REL] },
+    {
+      neverRewrite: [BRAIN_LOG_REL, BRAIN_DECISIONS_REL],
+      ...(input.readable !== undefined ? { readable: input.readable } : {}),
+    },
   );
 
   // Bundle-correlated receipts: one for the retirement decision and one
@@ -507,9 +524,10 @@ export function correct(input: CorrectInput): CorrectResult {
     blastRadius,
     retirements: Object.freeze(retirements),
     retarget: {
-      matched: appliedRetarget.matched,
-      rewritten: appliedRetarget.rewritten,
-      failed: appliedRetarget.failed,
+      // Reach-filtered, like the dry run: only in-reach paths are disclosed.
+      matched: appliedRetarget.matched.filter((rel) => withinReach(rel, input.readable)),
+      rewritten: appliedRetarget.rewritten.filter((rel) => withinReach(rel, input.readable)),
+      failed: appliedRetarget.failed.filter((f) => withinReach(f.path, input.readable)),
     },
     ledger: Object.freeze(ledger),
     receipts: Object.freeze(receipts),

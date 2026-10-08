@@ -269,6 +269,160 @@ describe("brain_lifecycle correct", () => {
       rmSync(base, { recursive: true, force: true });
     }
   });
+
+  test("a remote dry run does not name a withheld mentioning page in retarget", async () => {
+    const base = mkTemp("o2b-lifecycle-correct-retarget-dry-");
+    const f: ReachLogFixture = buildReachLogFixture(base, true);
+    try {
+      const target = "Brain/preferences/pref-public.md";
+      mkdirSync(join(f.vault, "Brain", "preferences"), { recursive: true });
+      writeFileSync(
+        join(f.vault, target),
+        [
+          "---",
+          "kind: brain-preference",
+          "id: pref-public",
+          "_status: confirmed",
+          "created_at: 2026-05-01T00:00:00Z",
+          "unconfirmed_until: 2026-05-08T00:00:00Z",
+          "tags: [brain, brain/preference]",
+          "topic: public-topic",
+          "principle: Readable at remote reach.",
+          "pinned: false",
+          "---",
+          "",
+          "Public body.",
+          "",
+        ].join("\n"),
+      );
+      const withheld = "Brain/inbox/sig-hidden.md";
+      mkdirSync(join(f.vault, "Brain", "inbox"), { recursive: true });
+      writeFileSync(
+        join(f.vault, withheld),
+        [
+          "---",
+          `visibility: [${REMOTE_DENY_VISIBILITY_TOKEN}]`,
+          "kind: brain-preference",
+          "id: sig-hidden",
+          "_status: confirmed",
+          "created_at: 2026-05-01T00:00:00Z",
+          "unconfirmed_until: 2026-05-08T00:00:00Z",
+          "tags: [brain, brain/preference]",
+          "topic: hidden-topic",
+          "principle: Mentions [[pref-public]] while withheld.",
+          "pinned: false",
+          "---",
+          "",
+          "Hidden body referencing [[pref-public]].",
+          "",
+        ].join("\n"),
+      );
+      const server = reachServer(f, "remote");
+      await initialize(server);
+      const res = await call(server, { action: "correct", target });
+      const retarget = res["retarget"] as Record<string, unknown>;
+      expect(retarget["matched"] as ReadonlyArray<string>).not.toContain(withheld);
+      expect(
+        (retarget["failed"] as ReadonlyArray<Record<string, unknown>>).map((f) => f["path"]),
+      ).not.toContain(withheld);
+      // No response key discloses the withheld page.
+      expect(JSON.stringify(res)).not.toContain("sig-hidden");
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test("a remote applied run does not rewrite a withheld mentioning page", async () => {
+    const base = mkTemp("o2b-lifecycle-correct-retarget-apply-");
+    const f: ReachLogFixture = buildReachLogFixture(base, true);
+    try {
+      const target = "Brain/preferences/pref-public.md";
+      mkdirSync(join(f.vault, "Brain", "preferences"), { recursive: true });
+      writeFileSync(
+        join(f.vault, target),
+        [
+          "---",
+          "kind: brain-preference",
+          "id: pref-public",
+          "_status: confirmed",
+          "created_at: 2026-05-01T00:00:00Z",
+          "unconfirmed_until: 2026-05-08T00:00:00Z",
+          "tags: [brain, brain/preference]",
+          "topic: public-topic",
+          "principle: Readable at remote reach.",
+          "pinned: false",
+          "---",
+          "",
+          "Public body.",
+          "",
+        ].join("\n"),
+      );
+      const peer = "Brain/preferences/pref-peer.md";
+      writeFileSync(
+        join(f.vault, peer),
+        [
+          "---",
+          "kind: brain-preference",
+          "id: pref-peer",
+          "_status: confirmed",
+          "created_at: 2026-05-01T00:00:00Z",
+          "unconfirmed_until: 2026-05-08T00:00:00Z",
+          "tags: [brain, brain/preference]",
+          "topic: peer-topic",
+          "principle: Mentions [[pref-public]] in reach.",
+          "pinned: false",
+          "---",
+          "",
+          "See [[pref-public]] for the old rule.",
+          "",
+        ].join("\n"),
+      );
+      const withheld = "Brain/inbox/sig-hidden.md";
+      mkdirSync(join(f.vault, "Brain", "inbox"), { recursive: true });
+      writeFileSync(
+        join(f.vault, withheld),
+        [
+          "---",
+          `visibility: [${REMOTE_DENY_VISIBILITY_TOKEN}]`,
+          "kind: brain-preference",
+          "id: sig-hidden",
+          "_status: confirmed",
+          "created_at: 2026-05-01T00:00:00Z",
+          "unconfirmed_until: 2026-05-08T00:00:00Z",
+          "tags: [brain, brain/preference]",
+          "topic: hidden-topic",
+          "principle: Mentions [[pref-public]] while withheld.",
+          "pinned: false",
+          "---",
+          "",
+          "Hidden body referencing [[pref-public]].",
+          "",
+        ].join("\n"),
+      );
+      const bytesBefore = readFileSync(join(f.vault, withheld), "utf8");
+      const server = reachServer(f, "remote");
+      await initialize(server);
+      const res = await call(server, {
+        action: "correct",
+        target,
+        successor: "pref-public-2",
+        dry_run: false,
+      });
+      const retarget = res["retarget"] as Record<string, unknown>;
+      expect(retarget["rewritten"] as ReadonlyArray<string>).not.toContain(withheld);
+      expect(retarget["matched"] as ReadonlyArray<string>).not.toContain(withheld);
+      expect(
+        (retarget["failed"] as ReadonlyArray<Record<string, unknown>>).map((f) => f["path"]),
+      ).not.toContain(withheld);
+      // The withheld page's bytes are unchanged: no content injection.
+      expect(readFileSync(join(f.vault, withheld), "utf8")).toBe(bytesBefore);
+      // In-reach mentions are still retargeted.
+      expect(retarget["rewritten"] as ReadonlyArray<string>).toContain(peer);
+      expect(readFileSync(join(f.vault, peer), "utf8")).toContain("[[pref-public-2]]");
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("o2b brain lifecycle correct", () => {

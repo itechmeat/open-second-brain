@@ -227,6 +227,17 @@ export interface WikilinkRetargetReport {
    * Always empty when `apply` is false.
    */
   readonly failed: ReadonlyArray<WikilinkRewriteFailure>;
+  /**
+   * How many files the `readable` predicate refused. Zero when no
+   * predicate was given.
+   *
+   * A count, never paths: this pass's reports cross tool boundaries, and
+   * the filenames a caller may not read are exactly what the predicate
+   * was supplied to withhold - naming them, or even counting them out
+   * per directory, would hand the caller the existence leak the
+   * predicate exists to prevent.
+   */
+  readonly withheld: number;
 }
 
 export interface RetargetWikilinksOptions {
@@ -259,6 +270,17 @@ export interface RetargetWikilinksOptions {
    * under a new name rather than a different subject.
    */
   readonly neverRewrite?: ReadonlyArray<string>;
+  /**
+   * The vault-relative paths the caller may read. A file the predicate
+   * refuses is never opened, never matched, never rewritten and never
+   * NAMED in the report - it is counted in
+   * {@link WikilinkRetargetReport.withheld} and nothing else. This is
+   * the caller-reach gate for restricted sweeps: without it the walk
+   * reads every matching page's bytes and would rewrite them, so a
+   * restricted caller could both read the disclosure and write into
+   * pages it cannot see. Absent, every walked file may be read.
+   */
+  readonly readable?: (rel: string) => boolean;
 }
 
 /**
@@ -492,18 +514,27 @@ export function retargetWikilinks(
     matched: Object.freeze([]),
     rewritten: Object.freeze([]),
     failed: Object.freeze([]),
+    withheld: 0,
   });
   if (!existsSync(abs)) return empty;
 
   const rules = resolveVaultScope(vault).rules;
   const neverRewrite = opts.neverRewrite ?? [];
+  const readable = opts.readable;
   const ordered = [...retargets].toSorted((a, b) => b.from.length - a.from.length);
   const files: string[] = [];
   const matched: string[] = [];
   const rewritten: string[] = [];
   const failed: WikilinkRewriteFailure[] = [];
+  let withheld = 0;
 
   for (const file of markdownFilesUnder(vault, abs, rules)) {
+    // Asked BEFORE the read, so a file the caller may not read contributes
+    // nothing - not its bytes, not a match, not a rewrite, not its name.
+    if (readable !== undefined && !readable(file.rel)) {
+      withheld += 1;
+      continue;
+    }
     let raw: string;
     try {
       raw = readFileSync(file.abs, "utf8");
@@ -537,6 +568,7 @@ export function retargetWikilinks(
     failed: Object.freeze(
       failed.toSorted((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)),
     ),
+    withheld,
   });
 }
 
