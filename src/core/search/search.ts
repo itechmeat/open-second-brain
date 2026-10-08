@@ -22,6 +22,7 @@ import {
   buildSearchOutcome,
   corpusStatementForEmptyWindow,
   emptyOutcome,
+  withIndexStale,
 } from "./pipeline/outcome.ts";
 import { applyPostRankPhases } from "./pipeline/post-rank.ts";
 import { resolveQueryShape } from "./pipeline/query-shape.ts";
@@ -39,7 +40,7 @@ import { detectHybridDegrade } from "./enrich.ts";
 import { isAbortError } from "./embeddings/http-util.ts";
 import type { CacheProbe } from "./pipeline/cache-slot.ts";
 import type { RetrievalDegradationSink } from "./retrieval-trail.ts";
-import { INDEX_STALE_SECONDS, RETRIEVAL_DEGRADATION, noteDegradation } from "./retrieval-trail.ts";
+import { RETRIEVAL_DEGRADATION, noteDegradation } from "./retrieval-trail.ts";
 import { indexAgeSeconds, maybeFreshenIndex } from "./freshen.ts";
 import { LAST_INDEXED_AT_STATE_KEY } from "./store/state.ts";
 import type { FrontmatterCache } from "./result-filters.ts";
@@ -238,7 +239,8 @@ export async function search(
     // Freshen on read: an index older than the interval starts one
     // background incremental run (never into a read-only origin); this
     // answer comes from the index as it is. A badly stale index is named
-    // on the trail whether or not a run could start.
+    // on the trail whether or not a run could start, at read time on every
+    // answer, cache hits included, and never in the cached row.
     const lastIndexedAt = store.getState(LAST_INDEXED_AT_STATE_KEY);
     maybeFreshenIndex(effectiveConfig, {
       lastIndexedAt,
@@ -247,12 +249,7 @@ export async function search(
       ...(opts.freshenSpawn !== undefined ? { spawn: opts.freshenSpawn } : {}),
     });
     const indexAge = indexAgeSeconds(lastIndexedAt, nowMs);
-    if (indexAge !== null && indexAge > INDEX_STALE_SECONDS) {
-      degraded.push({
-        code: RETRIEVAL_DEGRADATION.indexStale,
-        detail: { ageSeconds: indexAge },
-      });
-    }
+    const served = (outcome: SearchOutcome): SearchOutcome => withIndexStale(outcome, indexAge);
     // Shared across every frontmatter-reading stage below (Plan 1, 1.3)
     // so a candidate path already read by one stage is not re-read
     // and re-parsed by the next.
@@ -301,7 +298,7 @@ export async function search(
           planHash: shape.basePlan.planHash,
         })
       : CACHE_BYPASSED;
-    if (cache.hit !== null) return cache.hit;
+    if (cache.hit !== null) return served(cache.hit);
     // A deadline-degraded answer is keyword-only under a key that promises
     // the hybrid one: serve it, but never cache it. A spend-gated one is
     // the same, and the key carries no gate or price either, so a cached
@@ -309,13 +306,8 @@ export async function search(
     // to its window is cached: the key carries the effective window and
     // the query prefix, so a declared or changed window re-keys it.
     const finalize = (outcome: SearchOutcome): SearchOutcome => {
-      // A stale-index answer is not cached either: a run that changes
-      // nothing does not bump the revision, so the cached code would
-      // outlive the staleness it reports.
       const configBound = degraded.some(
-        (d) =>
-          d.code === RETRIEVAL_DEGRADATION.semanticCostUnpriced ||
-          d.code === RETRIEVAL_DEGRADATION.indexStale,
+        (d) => d.code === RETRIEVAL_DEGRADATION.semanticCostUnpriced,
       );
       if (cache.slot !== null && deadline?.hasFired() !== true && !configBound) {
         persistCachedOutcome(store, cache.slot, outcome);
@@ -436,17 +428,19 @@ export async function search(
         degraded,
         opts.transportReach,
       );
-      return finalize(
-        emptyOutcome({
-          store,
-          opts,
-          query,
-          pathPrefix,
-          warnings,
-          routedSurface,
-          degraded,
-          corpus,
-        }),
+      return served(
+        finalize(
+          emptyOutcome({
+            store,
+            opts,
+            query,
+            pathPrefix,
+            warnings,
+            routedSurface,
+            degraded,
+            corpus,
+          }),
+        ),
       );
     }
 
@@ -562,26 +556,28 @@ export async function search(
     );
     const emit =
       postRank.decisionFallback === true || rerankUnavailable ? (o: SearchOutcome) => o : finalize;
-    return emit(
-      buildSearchOutcome({
-        store,
-        config: effectiveConfig,
-        opts,
-        query,
-        pathPrefix,
-        results,
-        warnings,
-        secondPass: retry.secondPass,
-        routedSurface,
-        trustReceipts: postRank.trustReceipts,
-        frontmatterCache,
-        poolSize,
-        degraded,
-        corpus,
-        ...(postRank.decisionModel?.answerable !== undefined
-          ? { decisionModel: { answerable: postRank.decisionModel.answerable } }
-          : {}),
-      }),
+    return served(
+      emit(
+        buildSearchOutcome({
+          store,
+          config: effectiveConfig,
+          opts,
+          query,
+          pathPrefix,
+          results,
+          warnings,
+          secondPass: retry.secondPass,
+          routedSurface,
+          trustReceipts: postRank.trustReceipts,
+          frontmatterCache,
+          poolSize,
+          degraded,
+          corpus,
+          ...(postRank.decisionModel?.answerable !== undefined
+            ? { decisionModel: { answerable: postRank.decisionModel.answerable } }
+            : {}),
+        }),
+      ),
     );
   } finally {
     await store.close();

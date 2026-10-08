@@ -19,7 +19,12 @@ import {
   type TransportReach,
 } from "../../graph/transport-reach.ts";
 import { buildEvidencePack, downrankTerminalEvidenceResults } from "../evidence-pack.ts";
-import { buildRetrievalTrail, corpusStatementFor } from "../retrieval-trail.ts";
+import {
+  buildRetrievalTrail,
+  corpusStatementFor,
+  INDEX_STALE_SECONDS,
+  RETRIEVAL_DEGRADATION,
+} from "../retrieval-trail.ts";
 import { buildEvidenceVerification, coverageOverResults } from "../evidence-verification.ts";
 import { fnv1aHex } from "../feedback.ts";
 import {
@@ -249,6 +254,40 @@ export function buildSearchOutcome(input: OutcomeInput): SearchOutcome {
     total: input.poolSize,
     ...tail,
   });
+}
+
+/**
+ * Name a stale index on an outcome's trail, at read time. The code is not
+ * part of the computed answer: the query cache stores outcomes without it
+ * (an index run that changes nothing keeps the cache generation, so a
+ * stored code would outlive the staleness it reports), and every answer,
+ * hit or miss, gains it here from the index age it is served at. The
+ * result is the trail the pipeline would have built with the code in its
+ * sink: the code leads, and a corpus statement gives way to it.
+ */
+export function withIndexStale(outcome: SearchOutcome, ageSeconds: number | null): SearchOutcome {
+  if (ageSeconds === null || ageSeconds <= INDEX_STALE_SECONDS) return outcome;
+  const stale = Object.freeze({
+    code: RETRIEVAL_DEGRADATION.indexStale,
+    detail: Object.freeze({ ageSeconds }),
+  });
+  const trail = outcome.retrievalTrail;
+  const retrievalTrail = Object.freeze({
+    retrieved: trail?.retrieved ?? outcome.cards?.length ?? outcome.results.length,
+    pool: trail?.pool ?? outcome.total,
+    degraded: Object.freeze([stale, ...(trail?.degraded ?? [])]),
+  });
+  if (trail !== undefined) return Object.freeze({ ...outcome, retrievalTrail });
+  // A healthy answer has no trail; it goes where the outcome builders put
+  // it, right after the match quality, so the serialized shape matches a
+  // freshly built degraded answer.
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(outcome)) {
+    out[key] = value;
+    if (key === "idfWeightedCoverage") out["retrievalTrail"] = retrievalTrail;
+  }
+  if (!("retrievalTrail" in out)) out["retrievalTrail"] = retrievalTrail;
+  return Object.freeze(out) as unknown as SearchOutcome;
 }
 
 /**

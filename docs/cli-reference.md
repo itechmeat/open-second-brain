@@ -2411,6 +2411,8 @@ next read sees the current vault. Only agent activity triggers it.
   row to the `index_freshen` metrics surface.
 - **Staleness is named.** A search over an index more than ten minutes
   old carries the trail code `index-stale` with `detail.ageSeconds`.
+  The code is added when the answer is served, also on a query-cache
+  hit, and is never stored in the cache.
 - **Never a foreign vault.** Cross-vault and recall-source reads open
   other indexes read-only and never start a run there.
 

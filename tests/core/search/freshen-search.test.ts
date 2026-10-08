@@ -2,7 +2,9 @@
  * Freshen on read at the `search()` seam: a stale index starts one
  * background run and the answer still comes from the index as it is; a
  * read-only open never starts one; an index more than ten minutes old is
- * named on the trail as `index-stale` whatever the freshen setting.
+ * named on the trail as `index-stale` whatever the freshen setting. The
+ * query cache stores answers without that code and the trail gains it at
+ * read time, so a cache hit names the index age it is served at.
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
@@ -34,9 +36,9 @@ beforeEach(async () => {
 
 afterEach(() => cleanup());
 
-function config(intervalSeconds: number): ResolvedSearchConfig {
+function config(intervalSeconds: number, cacheEnabled = false): ResolvedSearchConfig {
   return Object.freeze({
-    ...makeConfig({ vault, dbPath }),
+    ...makeConfig({ vault, dbPath, cacheEnabled }),
     freshen: { intervalSeconds, embeddings: false, configPath: null },
   });
 }
@@ -96,4 +98,56 @@ test("with freshening off a stale index is still reported but nothing starts", a
   const outcome = await search(config(0), { query: "heron", freshenSpawn: spawn });
   expect(staleCodes(outcome)).toHaveLength(1);
   expect(calls).toHaveLength(0);
+});
+
+function cachedPayloads(): string[] {
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    return db
+      .query<{ payload: string }, []>("SELECT payload FROM query_cache")
+      .all()
+      .map((r) => r.payload);
+  } finally {
+    db.close();
+  }
+}
+
+/** Mark every cached row, so an answer carrying the mark was a cache hit. */
+function markCachedRows(total: number): void {
+  const db = new Database(dbPath);
+  try {
+    db.query("UPDATE query_cache SET payload = json_set(payload, '$.total', ?)").run(total);
+  } finally {
+    db.close();
+  }
+}
+
+test("with freshening off a stale-index answer is cached without its stale code", async () => {
+  setIndexAge(11 * 60);
+  const outcome = await search(config(0, true), { query: "heron", freshenSpawn: spawn });
+  expect(staleCodes(outcome)).toHaveLength(1);
+  const rows = cachedPayloads();
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).not.toContain(RETRIEVAL_DEGRADATION.indexStale);
+});
+
+test("a cache hit over an index that has since gone stale names it", async () => {
+  await search(config(0, true), { query: "heron", freshenSpawn: spawn });
+  markCachedRows(4242);
+  setIndexAge(11 * 60);
+  const outcome = await search(config(0, true), { query: "heron", freshenSpawn: spawn });
+  expect(outcome.total).toBe(4242);
+  expect(staleCodes(outcome)).toHaveLength(1);
+  expect(outcome.retrievalTrail?.retrieved).toBe(outcome.results.length);
+});
+
+test("a cache hit over a fresh index carries no stale code", async () => {
+  setIndexAge(11 * 60);
+  await search(config(0, true), { query: "heron", freshenSpawn: spawn });
+  markCachedRows(4242);
+  setIndexAge(0);
+  const outcome = await search(config(0, true), { query: "heron", freshenSpawn: spawn });
+  expect(outcome.total).toBe(4242);
+  expect(staleCodes(outcome)).toEqual([]);
+  expect(outcome.retrievalTrail).toBeUndefined();
 });

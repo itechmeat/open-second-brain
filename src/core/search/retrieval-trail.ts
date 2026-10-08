@@ -73,7 +73,9 @@ export const RETRIEVAL_DEGRADATION = Object.freeze({
    * The index was last updated more than {@link INDEX_STALE_SECONDS} ago, so
    * notes changed since then may be missing from the answer. Detail:
    * `ageSeconds`. Freshen on read has started a background run unless it is
-   * off, backing off, or another run already holds the claim.
+   * off, backing off, another run already holds the claim, or the index
+   * directory is not writable. Added at read time (`withIndexStale`), never
+   * stored in the query cache.
    */
   indexStale: "index-stale",
   /**
