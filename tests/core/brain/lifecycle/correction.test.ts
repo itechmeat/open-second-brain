@@ -555,6 +555,64 @@ describe("successor input", () => {
 });
 
 describe("replay convergence", () => {
+  test("a flatly-wrong replay over an already-closed window is a named refusal, not an internal error", () => {
+    // First sweep validity-closes the target at the correction instant.
+    seedTarget();
+    correct({
+      vault,
+      configPath,
+      target: TARGET,
+      value: "two minutes",
+      successor: "pref-new",
+      reason: "the timeout changed",
+      dryRun: false,
+      now: NOW,
+      agent: "tester",
+    });
+    const metaAfterFirst = targetMeta();
+    const eventsAfterFirst = readClaimEvents(vault).events;
+
+    // The replay flips the end-state policy to tombstone, so the record
+    // does not read as already-retired; the ledger correction then
+    // resolves its open until-bound from the record's own frontmatter -
+    // the close this very sweep wrote - and the window inverts. The
+    // replay has converged, so the sweep must refuse by name rather
+    // than let the store's internal-class refusal escape mid-replay.
+    let refused: unknown;
+    try {
+      correct({
+        vault,
+        configPath,
+        target: TARGET,
+        value: "the number was never thirty seconds",
+        flatlyWrong: true,
+        reason: "fabricated figure",
+        dryRun: false,
+        now: new Date("2026-06-16T12:00:00Z"),
+        agent: "tester",
+      });
+    } catch (err) {
+      refused = err;
+    }
+    expect(refused).toBeInstanceOf(CorrectionError);
+    expect((refused as Error).name).toBe("CorrectionError");
+    expect((refused as Error).message).toContain("already validity-closed");
+    expect((refused as Error).message).toContain(CORRECTION_TS);
+
+    // The refusal is strict: the retirement write never ran, so the
+    // record keeps its closed window and confirmed status, and the
+    // ledger carries no correction event from the aborted replay.
+    const metaAfterSecond = targetMeta();
+    expect(metaAfterSecond["valid_until"]).toBe(metaAfterFirst["valid_until"]);
+    expect(metaAfterSecond["_status"]).toBe("confirmed");
+    expect(metaAfterSecond["superseded_by"]).toBe(metaAfterFirst["superseded_by"]);
+    const eventsAfterSecond = readClaimEvents(vault).events;
+    expect(
+      eventsAfterSecond.filter((e) => e.value === "the number was never thirty seconds"),
+    ).toHaveLength(0);
+    expect(eventsAfterSecond.length).toBe(eventsAfterFirst.length);
+  });
+
   test("a second run retires nothing, re-appends nothing and reports appended receipts", () => {
     seedTarget();
     const first = correct({

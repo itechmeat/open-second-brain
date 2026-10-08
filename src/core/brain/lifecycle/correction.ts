@@ -66,7 +66,7 @@ import {
 } from "../claim-graph.ts";
 import { stripWikilinkDecoration } from "../wikilink.ts";
 import { correctionEndState, type CorrectionEndState } from "../truth/correction-policy.ts";
-import { appendClaimEvent, readClaimEvents } from "../truth/store.ts";
+import { appendClaimEvent, ClaimWindowRefusal, readClaimEvents } from "../truth/store.ts";
 import { isValidityPoint } from "../truth/validity.ts";
 import type { ClaimEvent } from "../truth/types.ts";
 
@@ -433,19 +433,39 @@ export function correct(input: CorrectInput): CorrectResult {
     }
     for (const [key, source] of sourceBySlot) {
       const [entity, aspect] = key.split("\u0000");
-      appendClaimEvent(
-        input.vault,
-        {
-          ts: correctionTs,
-          agent,
-          entity: entity!,
-          aspect: aspect!,
-          value,
-          source,
-          validFrom: correctionTs,
-        },
-        input.configPath !== undefined ? { configPath: input.configPath } : undefined,
-      );
+      // A record already validity-closed carries a stored window end
+      // BEFORE this correction instant, and the append below resolves
+      // its open until-bound from that very frontmatter - the close a
+      // previous sweep wrote - so the store refuses the inverted window.
+      // That is the replay having CONVERGED, not an internal fault: it
+      // surfaces as the verb's named refusal class, strict (nothing was
+      // written), naming the record and the close that blocks it.
+      try {
+        appendClaimEvent(
+          input.vault,
+          {
+            ts: correctionTs,
+            agent,
+            entity: entity!,
+            aspect: aspect!,
+            value,
+            source,
+            validFrom: correctionTs,
+          },
+          input.configPath !== undefined ? { configPath: input.configPath } : undefined,
+        );
+      } catch (err) {
+        if (err instanceof ClaimWindowRefusal) {
+          throw new CorrectionError(
+            `correct: ${targetRel} is already validity-closed` +
+              (typeof storedUntil === "string" && storedUntil !== "" ? ` at ${storedUntil}` : "") +
+              `, before this correction; the replay has converged, so the ledger ` +
+              `correction is refused rather than written with an inverted window`,
+            { cause: err },
+          );
+        }
+        throw err;
+      }
       ledger.push(Object.freeze({ entity: entity!, aspect: aspect!, value, source }));
     }
   }
