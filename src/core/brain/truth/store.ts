@@ -20,6 +20,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -131,7 +132,16 @@ function sourceFrontmatterWindow(
     } catch {
       return null; // lexical traversal or symlink escape: unreadable.
     }
-    if (!existsSync(path)) continue;
+    // Only a REGULAR file names a page: a directory at the bare
+    // spelling is not the record and must not shadow its `.md` twin -
+    // the same regular-file rule the artifact-ref view's isVaultFile
+    // applies on the read side. An unreadable candidate is skipped like
+    // a missing one.
+    try {
+      if (!statSync(path).isFile()) continue;
+    } catch {
+      continue;
+    }
     // A page the caller may not read does not exist for them: skip it
     // like a missing file rather than refusing, so the extensionless
     // spelling's .md twin resolves exactly as it would had the bare

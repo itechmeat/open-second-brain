@@ -265,6 +265,21 @@ describe("ingest window defaults (appendClaimEvent)", () => {
     expect(written.event.validUntil).toBeUndefined();
   });
 
+  test("a directory at the bare spelling never shadows its .md twin", () => {
+    // The bare candidate must be a regular file to name a page: a
+    // directory where the extensionless spelling lands is not the
+    // record, and accepting it used to shadow the .md twin beside it -
+    // the same regular-file rule the artifact-ref view's isVaultFile
+    // applies to the read side.
+    mkdirSync(join(vault, "Brain", "notes", "standup"), { recursive: true });
+    writeSource("Brain/notes/standup.md", "valid_from: 2026-01-01\n");
+    const written = withDeviceId("", () =>
+      appendClaimEvent(vault, { ...STANDUP_CLAIM, source: "[[Brain/notes/standup]]" }),
+    );
+    expect(written.event.validFrom).toBe("2026-01-01");
+    expect(written.event.validUntil).toBeUndefined();
+  });
+
   test("an explicit window wins outright over the source record's window", () => {
     writeSource("Brain/notes/standup.md", "valid_from: 2026-01-01\nvalid_until: 2026-06-30\n");
     const written = withDeviceId("", () =>
