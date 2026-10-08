@@ -271,6 +271,15 @@ export async function cmdBrainTruth(argv: string[]): Promise<number> {
           throw exc;
         }
         const limitRaw = flags["limit"] as string | undefined;
+        // A non-numeric --limit reaches the shared limit guard as NaN,
+        // and that guard's refusal would stringify the NaN as "null" -
+        // naming nothing the operator typed. Validate the flag is finite
+        // here, before that message is composed, and name the raw value.
+        if (limitRaw !== undefined && !Number.isFinite(Number(limitRaw))) {
+          throw new UsageError(
+            `--limit must be a positive integer, got ${JSON.stringify(limitRaw)}`,
+          );
+        }
         let limit: number;
         try {
           limit = claimEventLimit(limitRaw === undefined ? undefined : Number(limitRaw));

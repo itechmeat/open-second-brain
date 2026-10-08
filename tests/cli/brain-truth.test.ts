@@ -344,6 +344,18 @@ test("truth events refuses a non-positive or fractional limit", async () => {
   }
 });
 
+test("truth events refuses a non-numeric limit naming the raw flag value", async () => {
+  // Number("abc") is NaN, which the shared limit guard's refusal would
+  // stringify as "null" - naming nothing the operator typed. The CLI
+  // validates the flag is finite before that message is composed and
+  // names the raw flag value it was handed.
+  for (const limit of ["abc", "many"]) {
+    const res = await runCli(["brain", "truth", "events", "--vault", vault, "--limit", limit]);
+    expect(res.returncode).toBe(2);
+    expect(res.stderr).toContain(`got ${JSON.stringify(limit)}`);
+  }
+});
+
 // ----- truth state (grounded agent-stated claims, Task 9) -------------------
 
 function seedCliRegistry(): void {
