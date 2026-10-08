@@ -11,6 +11,7 @@
  * the reserved record), so a remote answer is never empty.
  */
 
+import { afterAll } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -181,6 +182,15 @@ export function buildReachLogFixture(
     weekEnd: new Date(now + DAY_MS).toISOString().slice(0, 10),
   };
 }
+
+// reachServer points the process-level config default at the fixture so
+// nested resolvers agree with the explicit config. The pointer must not
+// outlive the importing file: a later test file in the same process would
+// resolve it into a directory an afterEach has already removed, and the
+// first default-config write would rebuild that tree as a temp leftover.
+afterAll(() => {
+  delete process.env["OPEN_SECOND_BRAIN_CONFIG"];
+});
 
 /** A server at the reach given, or with no reach minted at all (a remote caller). */
 export function reachServer(f: ReachLogFixture, reach?: TransportReach): MCPServer {
