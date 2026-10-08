@@ -6,7 +6,7 @@
 #
 # Every Windows shard uploads the durations of the files it ran as the
 # artifact `windows-timings-<shard>`. This downloads them from the given run
-# (default: the latest successful CI run on main), lays them over the
+# (default: the latest successful CI run on main), folds them into the
 # committed file, and drops entries for test files that no longer exist.
 # A file missing from the committed timings still runs: Bun gives it a
 # default weight, so a stale file costs balance, never coverage.
@@ -33,10 +33,19 @@ mapfile -t shards < <(find "$tmp" -name '*.json' | sort)
 
 git ls-files 'tests/*.test.ts' | jq -R . | jq -s . > "$tmp/present.json"
 
-# Later inputs win, so the measured values replace the committed ones. Keys
-# are normalised to forward slashes in case a Windows shard wrote its own.
+# A measured file gets the mean of its committed and its new duration, a
+# file measured for the first time gets the new one. Windows runners differ
+# by 2x and more from one run to the next, and replacing the numbers
+# outright made the heaviest shard swing from one end to the other between
+# runs. Keys are normalised to forward slashes in case a Windows shard wrote
+# its own.
 jq -s --slurpfile present "$tmp/present.json" '
-  (reduce .[] as $t ({}; . + (($t.files // {}) | with_entries(.key |= gsub("\\\\"; "/"))))) as $all
+  def norm: (.files // {}) | with_entries(.key |= gsub("\\\\"; "/"));
+  (.[0] | norm) as $base
+  | (reduce .[1:][] as $t ({}; . + ($t | norm))) as $measured
+  | ($base + ($measured | with_entries(
+      .value = (if $base[.key] == null then .value else (($base[.key] + .value) / 2 | round) end)
+    ))) as $all
   | ($present[0] | map({ (.): true }) | add // {}) as $keep
   | { version: 1,
       files: ($all | with_entries(select($keep[.key])) | to_entries | sort_by(.key) | from_entries) }
