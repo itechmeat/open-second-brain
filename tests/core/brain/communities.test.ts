@@ -182,6 +182,38 @@ describe("materializeClusterNotes", () => {
     expect(second.removed).toEqual([]);
     expect(existsSync(join(vault, "Brain", "clusters", "hand-written.md"))).toBe(true);
   });
+
+  test("generated digests never feed back into detection across reindex cycles (#233)", async () => {
+    writeTwoCommunities();
+    const cycles: Array<{ ids: string[]; members: string[][]; removed: readonly string[] }> = [];
+    for (let cycle = 0; cycle < 4; cycle++) {
+      await indexVault(config);
+      const communities = await withStore((store) => detectCommunities(store, { minSize: 4 }));
+      const result = await withStore((store) =>
+        materializeClusterNotes(vault, communities, { store, now: NOW }),
+      );
+      cycles.push({
+        ids: communities.map((c) => c.id),
+        members: communities.map((c) => c.members.map((m) => m.path).toSorted()),
+        removed: result.removed,
+      });
+      // Every member a generated digest links to must still exist after
+      // the same pass's stale sweep.
+      const dir = join(vault, "Brain", "clusters");
+      for (const file of readdirSync(dir)) {
+        const [fm] = parseFrontmatter(join(dir, file));
+        for (const member of fm["members"] as string[]) {
+          expect(existsSync(join(vault, member))).toBe(true);
+        }
+      }
+    }
+    for (const cycle of cycles) {
+      expect(cycle.ids).toEqual(cycles[0]!.ids);
+      expect(cycle.members).toEqual(cycles[0]!.members);
+      expect(cycle.removed).toEqual([]);
+    }
+    expect(cycles[0]!.members.flat().some((p) => p.startsWith("Brain/clusters/"))).toBe(false);
+  });
 });
 
 describe("materializeClusterNotes batching (t_a286135c)", () => {
