@@ -85,6 +85,7 @@ async function answer(
 describe("a malformed private preference answers as an absent one at remote reach", () => {
   for (const [tool, args] of [
     ["brain_doctor", {}],
+    ["brain_doctor", { repair: true }],
     ["schema_inspect", { view: "lint" }],
     ["schema_inspect", { view: "orphans" }],
     ["schema_inspect", { view: "stats" }],
@@ -102,6 +103,8 @@ describe("a malformed private preference answers as an absent one at remote reac
     const doctor = await answer(a, "brain_doctor", {}, TRANSPORT_REACH.local);
     expect(doctor).toContain(PREF);
     expect(doctor).toContain("tier-drift");
+    const repair = await answer(a, "brain_doctor", { repair: true }, TRANSPORT_REACH.local);
+    expect(repair).toContain("tier-drift");
     expect(await answer(a, "schema_inspect", { view: "orphans" }, TRANSPORT_REACH.local)).toContain(
       PREF,
     );

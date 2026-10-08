@@ -37,13 +37,14 @@ import {
 /**
  * Tier guard (write-time-integrity-governance): staged identity
  * hand-edits the index post-pass detected. Fail-soft index read - a
- * missing index or pre-v6 schema simply skips the check.
+ * missing index or pre-v6 schema simply skips the check. Counted over
+ * the pages the caller may read, like every check handed `readable`.
  */
 export const tierDriftCheck: DoctorCheck = {
   failSoft: false,
-  run({ dbPath }, { issues }) {
+  run({ dbPath, readable }, { issues }) {
     if (dbPath === undefined) return;
-    const driftCount = readTierDriftCount(dbPath);
+    const driftCount = readTierDriftCount(dbPath, readable);
     if (driftCount > 0) {
       issues.push({
         severity: "warning",
@@ -84,11 +85,8 @@ export const FRESHEN_FAILING_CODE = "freshen-failing";
 /** The code of the {@link tierDriftCheck} warning. */
 export const TIER_DRIFT_CODE = "tier-drift";
 
-/**
- * The {@link tierDriftCheck} warning text for `count` staged drift rows,
- * shared with a surface that recounts the rows a caller may read.
- */
-export function tierDriftMessage(count: number): string {
+/** The {@link tierDriftCheck} warning text for `count` staged drift rows. */
+function tierDriftMessage(count: number): string {
   return `${count} identity-field hand-edit(s) staged - review with: o2b brain tiers check`;
 }
 

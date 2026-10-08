@@ -1181,6 +1181,12 @@ export interface PlanRepairOptions {
    * page counts.
    */
   readonly readable?: (rel: string) => boolean;
+  /**
+   * The search-index path, when the doctor runs here, for its index-backed
+   * checks (`tier-drift`, `freshen-failing`). Absent, those checks skip,
+   * as they do in `runDoctor`.
+   */
+  readonly dbPath?: string;
 }
 
 /**
@@ -1198,7 +1204,7 @@ export interface PlanRepairOptions {
  * the same findings, each with its next-command hint.
  */
 export function planRepair(vault: string, opts: PlanRepairOptions = {}): RepairPlan {
-  const issues = opts.issues ?? collectDoctorIssues(vault, opts.readable);
+  const issues = opts.issues ?? collectDoctorIssues(vault, opts.readable, opts.dbPath);
 
   const fixes: RepairItem[] = [];
   for (const fixer of FIXERS) {
@@ -1234,8 +1240,12 @@ export function planRepair(vault: string, opts: PlanRepairOptions = {}): RepairP
 function collectDoctorIssues(
   vault: string,
   readable: ((rel: string) => boolean) | undefined,
+  dbPath: string | undefined,
 ): ReadonlyArray<DoctorIssue> {
-  const doctor = runDoctor(vault, readable !== undefined ? { readable } : {});
+  const doctor = runDoctor(vault, {
+    ...(readable !== undefined ? { readable } : {}),
+    ...(dbPath !== undefined ? { dbPath } : {}),
+  });
   return [...doctor.errors, ...doctor.warnings];
 }
 
@@ -1297,6 +1307,12 @@ export interface ApplyRepairOptions {
    * that never held them. Absent, every page counts.
    */
   readonly readable?: (rel: string) => boolean;
+  /**
+   * The search-index path for the doctor's index-backed checks, so the
+   * plan lists `tier-drift` and `freshen-failing` as the report does.
+   * Absent, those checks skip.
+   */
+  readonly dbPath?: string;
 }
 
 /** The fields a doctor finding names artifacts in. */
@@ -1373,9 +1389,12 @@ export function applyRepair(vault: string, opts: ApplyRepairOptions): RepairOutc
   // are bounded again by what each one would name, so a fix that reaches
   // a withheld page through its detail is not planned either.
   const plan = view.filtersNothing
-    ? planRepair(vault, opts.readable !== undefined ? { readable: opts.readable } : {})
+    ? planRepair(vault, {
+        ...(opts.readable !== undefined ? { readable: opts.readable } : {}),
+        ...(opts.dbPath !== undefined ? { dbPath: opts.dbPath } : {}),
+      })
     : planRepair(vault, {
-        issues: view.keep(collectDoctorIssues(vault, opts.readable), (i) =>
+        issues: view.keep(collectDoctorIssues(vault, opts.readable, opts.dbPath), (i) =>
           doctorIssueRefs(vault, i),
         ),
       });

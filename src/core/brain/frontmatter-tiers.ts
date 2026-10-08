@@ -220,12 +220,24 @@ function sameScalar(left: unknown, right: unknown): boolean {
  * Count the staged tier-drift findings straight from the index
  * database (doctor surface). Read-only, fail-soft: a missing index
  * file, a pre-v6 schema, or any read error counts as zero.
+ *
+ * With `readable`, only the rows on pages the caller may read count, so
+ * a drifted page it cannot read moves the count no more than an absent
+ * one does.
  */
-export function readTierDriftCount(dbPath: string): number {
+export function readTierDriftCount(dbPath: string, readable?: (rel: string) => boolean): number {
   if (!existsSync(dbPath)) return 0;
   let db: Database | null = null;
   try {
     db = new Database(dbPath, { readonly: true });
+    if (readable !== undefined) {
+      return db
+        .query<{ path: string }, []>(
+          "SELECT d.path FROM tier_drift t JOIN documents d ON d.id = t.document_id",
+        )
+        .all()
+        .filter((row) => readable(row.path)).length;
+    }
     return db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM tier_drift").get()?.n ?? 0;
   } catch {
     return 0;

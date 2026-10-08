@@ -105,6 +105,7 @@ export async function cmdBrainDoctor(argv: string[]): Promise<number> {
         dryRun,
         agent: resolveBrainAgent(flags, config),
         configPath: config,
+        dbPath: resolveSearchConfig({ vault, configPath: config ?? undefined }).dbPath,
       });
       return renderRepair(outcome, Boolean(flags["json"]));
     } catch (exc) {

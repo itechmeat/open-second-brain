@@ -30,10 +30,7 @@ import { findingRefs } from "./hygiene-tools.ts";
 import { everyArtifactRefView } from "../../core/brain/artifact-ref-view.ts";
 import { reachView } from "../../core/brain/reach-view.ts";
 import { contextReach } from "../tool-contract.ts";
-import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
-import { Store } from "../../core/search/store.ts";
 import { computeTrustVerdict } from "../../core/brain/trust/compute-trust-verdict.ts";
-import { TIER_DRIFT_CODE, tierDriftMessage } from "../../core/brain/doctor/store-integrity.ts";
 
 /**
  * One reported issue, as an MCP caller sees it.
@@ -70,38 +67,6 @@ const NO_VERIFICATION_DELTA = Object.freeze({
   missing_evidence: 0,
 });
 
-/**
- * The `tier-drift` warning restated over the drift rows the caller may
- * read, the rows `brain_tiers check` lists for it.
- *
- * The warning carries no path - only the count of every staged row - so
- * the reference view cannot judge it, and the count alone moves when a
- * page the caller may not read drifts. Below local reach the count is
- * taken again over the readable rows; none left drops the warning, as
- * for a vault with no drift.
- */
-async function recountTierDrift<T extends { readonly code: string; readonly message: string }>(
-  ctx: ServerContext,
-  warnings: ReadonlyArray<T>,
-): Promise<ReadonlyArray<T>> {
-  if (!warnings.some((w) => w.code === TIER_DRIFT_CODE)) return warnings;
-  const readable = readableAtContextReach(ctx);
-  const store = await Store.open(
-    resolveSearchConfig({ vault: ctx.vault, configPath: ctx.configPath ?? undefined }),
-    { mode: "read" },
-  );
-  let count: number;
-  try {
-    count = store.listTierDrift().filter((row) => readable(row.path)).length;
-  } finally {
-    await store.close();
-  }
-  return warnings.flatMap((w) => {
-    if (w.code !== TIER_DRIFT_CODE) return [w];
-    return count === 0 ? [] : [{ ...w, message: tierDriftMessage(count) }];
-  });
-}
-
 async function toolBrainDoctor(
   ctx: ServerContext,
   args: Record<string, unknown>,
@@ -130,6 +95,11 @@ async function toolBrainDoctor(
     const outcome = applyRepair(ctx.vault, {
       dryRun: !apply,
       ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
+      // The index-backed findings (`tier-drift`, `freshen-failing`) join
+      // the plan as they join the report below. `tier-drift` is counted
+      // over `readable`, so a withheld drifted page adds nothing to it.
+      dbPath: resolveSearchConfig({ vault: ctx.vault, configPath: ctx.configPath ?? undefined })
+        .dbPath,
       // The repair branch returns HERE, before the diagnostic streams
       // below are filtered - so until this argument existed a scoped
       // caller both read and REWROTE another owner's preferences
@@ -175,10 +145,10 @@ async function toolBrainDoctor(
   const visibleIssues = <T extends DoctorIssueNaming>(issues: ReadonlyArray<T>): ReadonlyArray<T> =>
     view.keep(issues, (i) => doctorIssueRefs(ctx.vault, i));
   const errors = visibleIssues(result.errors);
-  const warnings =
-    reach === TRANSPORT_REACH.local
-      ? visibleIssues(result.warnings)
-      : await recountTierDrift(ctx, visibleIssues(result.warnings));
+  // `tier-drift` names no page, so the view cannot judge it; the doctor
+  // counted it over `readable` instead, the rows `brain_tiers check`
+  // lists for this caller.
+  const warnings = visibleIssues(result.warnings);
   const uncertain = result.uncertain === undefined ? undefined : visibleIssues(result.uncertain);
   // The verdict summarises the streams, so it is taken again over the
   // streams this caller sees: a verdict computed over a dropped error

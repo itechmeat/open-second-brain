@@ -12,6 +12,8 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { runDoctor } from "../../../src/core/brain/doctor.ts";
+import { TIER_DRIFT_CODE } from "../../../src/core/brain/doctor/store-integrity.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { Store } from "../../../src/core/search/store.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
@@ -151,4 +153,20 @@ test("deleting the document drops its drift rows", async () => {
   rmSync(join(vault, "Brain", "preferences", "pref-spaces.md"));
   await indexVault(config);
   expect(await drift()).toHaveLength(0);
+});
+
+test("the doctor counts only the drift rows on pages the caller may read", async () => {
+  const config = makeConfig({ vault, dbPath });
+  writePref("pref-spaces");
+  await indexVault(config);
+  writePref("pref-tabs");
+  await indexVault(config);
+  const driftWarnings = (readable?: (rel: string) => boolean) =>
+    runDoctor(vault, { dbPath, ...(readable !== undefined ? { readable } : {}) }).warnings.filter(
+      (w) => w.code === TIER_DRIFT_CODE,
+    );
+  expect(driftWarnings()).toHaveLength(1);
+  expect(driftWarnings((rel) => rel === "Brain/preferences/pref-spaces.md")).toHaveLength(1);
+  // A caller that may not read the drifted page is told nothing about it.
+  expect(driftWarnings(() => false)).toEqual([]);
 });
