@@ -315,6 +315,9 @@ const NOTE_CONTENT_PRODUCERS: ReadonlyArray<ProducerRule> = Object.freeze([
       "claimWindow",
       "windowsIntersect",
       "isValidityPoint",
+      // Grounded agent-stated claims (task 4): a surface stating claims
+      // reads the assertion text its claims anchor in.
+      "appendStatedClaims",
     ],
   },
   {

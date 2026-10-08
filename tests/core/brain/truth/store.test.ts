@@ -356,4 +356,70 @@ describe("claim validity windows (presence-gated, schema v1)", () => {
     const row = events[0] as unknown as Record<string, unknown>;
     expect("futureField" in row).toBe(false);
   });
+
+  test("the extractor serializes by conditional spread, after source", () => {
+    const written = append({
+      extractor: "agent_stated",
+      validFrom: "2026-01-01",
+      validUntil: "2026-06-30",
+    });
+    const row = JSON.parse(readFileSync(written.path, "utf8")) as Record<string, unknown>;
+    expect(row["extractor"]).toBe("agent_stated");
+    const keys = Object.keys(row);
+    expect(keys.indexOf("extractor")).toBe(keys.length - 1);
+    // The pinned window/source adjacency is unaffected by the tag.
+    expect(keys.indexOf("source")).toBe(keys.indexOf("validUntil") + 1);
+  });
+
+  test("an extractorless append stays byte-identical (no extractor key)", () => {
+    const written = append();
+    const line = readFileSync(written.path, "utf8");
+    expect(line).toBe(WINDOWLESS_LINE);
+  });
+
+  test("a foreign extractor value refuses the append with a named error", () => {
+    // Strict on write: this binary emits exactly one tag.
+    expect(() => append({ extractor: "model_mined" } as Parameters<typeof append>[0])).toThrow(
+      /extractor/,
+    );
+  });
+
+  test("the reader tolerates a future extractor value and passes it through verbatim", () => {
+    mkdirSync(truthDir(vault), { recursive: true });
+    const futureTagged = {
+      v: 1,
+      ts: "2026-06-01T09:00:00Z",
+      agent: "a",
+      entity: "alice mason",
+      aspect: "employer",
+      value: "Google",
+      valueKind: "text",
+      source: "[[x]]",
+      extractor: "model_mined",
+    };
+    writeFileSync(join(truthDir(vault), "claims.jsonl"), JSON.stringify(futureTagged) + "\n");
+    const { events, warnings } = readClaimEvents(vault);
+    expect(warnings).toHaveLength(0);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.extractor).toBe("model_mined");
+  });
+
+  test("an extractor that is not a non-empty string drops the line with a warning", () => {
+    mkdirSync(truthDir(vault), { recursive: true });
+    const badTag = {
+      v: 1,
+      ts: "2026-06-01T09:00:00Z",
+      agent: "a",
+      entity: "alice mason",
+      aspect: "employer",
+      value: "Google",
+      valueKind: "text",
+      source: "[[x]]",
+      extractor: 42,
+    };
+    writeFileSync(join(truthDir(vault), "claims.jsonl"), JSON.stringify(badTag) + "\n");
+    const { events, warnings } = readClaimEvents(vault);
+    expect(events).toHaveLength(0);
+    expect(warnings.map((w) => w.message)).toEqual(["invalid claim extractor: 42"]);
+  });
 });

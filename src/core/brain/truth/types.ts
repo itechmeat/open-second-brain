@@ -12,6 +12,15 @@ export const TRUTH_SCHEMA_VERSION = 1;
 
 export type ClaimValueKind = "text" | "quantity";
 
+/**
+ * How a claim entered the ledger. The only writer-side value this
+ * release emits is `agent_stated` (a grounded agent-stated claim,
+ * truth-correctable-time-aware task 4); reads tolerate any non-empty
+ * string under schema v1 so a future extractor survives an upgrade
+ * cycle untouched.
+ */
+export type ClaimExtractor = "agent_stated";
+
 /** Structured payload for the quantitative fact family (t_220c313e). */
 export interface ClaimQuantity {
   readonly value: number;
@@ -52,6 +61,12 @@ export interface ClaimEvent {
   readonly validFrom?: string;
   /** Validity window end, exclusive (bare ISO date or canonical UTC timestamp). */
   readonly validUntil?: string;
+  /**
+   * Presence-gated provenance tag (schema v1): how this claim entered
+   * the ledger. Annotation only - the tag never changes which pairs
+   * contest, never re-ranks conflict priority, and never resolves one.
+   */
+  readonly extractor?: ClaimExtractor;
   /** Provenance wikilink or vault-relative path. */
   readonly source: string;
 }

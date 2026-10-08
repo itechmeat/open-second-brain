@@ -46,6 +46,7 @@ import {
 } from "./validity.ts";
 import type {
   ClaimEvent,
+  ClaimExtractor,
   ClaimParseWarning,
   ClaimQuantity,
   ClaimSlot,
@@ -164,6 +165,12 @@ export interface AppendClaimInput {
   readonly validFrom?: string;
   /** Validity window end, exclusive; resolved per bound like `validFrom`. */
   readonly validUntil?: string;
+  /**
+   * Presence-gated provenance tag (schema v1). This binary writes only
+   * `agent_stated`; reads tolerate any non-empty string for forward
+   * compatibility.
+   */
+  readonly extractor?: ClaimExtractor;
   readonly source: string;
 }
 
@@ -231,6 +238,12 @@ export function appendClaimEvent(
       `claim validity window is empty or inverted: validFrom ${JSON.stringify(resolved.validFrom)} does not parse before validUntil ${JSON.stringify(resolved.validUntil)}`,
     );
   }
+  // Extractor (truth-correctable-time-aware, task 4): presence-gated,
+  // strict on write (this binary emits exactly one tag), tolerant on
+  // read. Annotation only - the tag never touches conflict semantics.
+  if (input.extractor !== undefined && input.extractor !== "agent_stated") {
+    throw new Error(`claim extractor must be agent_stated: ${JSON.stringify(input.extractor)}`);
+  }
 
   const event: ClaimEvent = Object.freeze({
     v: TRUTH_SCHEMA_VERSION,
@@ -244,6 +257,7 @@ export function appendClaimEvent(
     ...(resolved.validFrom !== undefined ? { validFrom: resolved.validFrom } : {}),
     ...(resolved.validUntil !== undefined ? { validUntil: resolved.validUntil } : {}),
     source: input.source.trim(),
+    ...(input.extractor !== undefined ? { extractor: input.extractor } : {}),
   });
 
   mkdirSync(truthDir(vault), { recursive: true });
@@ -424,6 +438,22 @@ function coerceClaim(
     });
     return null;
   }
+  // Extractor (task 4): tolerated when absent, validated as a
+  // non-empty string when present, passed through verbatim so a future
+  // extractor value survives an upgrade cycle. Annotation only.
+  const rawExtractor = obj["extractor"];
+  if (
+    rawExtractor !== undefined &&
+    (typeof rawExtractor !== "string" || rawExtractor.trim() === "")
+  ) {
+    warnings.push({
+      path,
+      lineNumber,
+      message: `invalid claim extractor: ${String(rawExtractor)}`,
+    });
+    return null;
+  }
+  const extractor = rawExtractor as ClaimExtractor | undefined;
   return Object.freeze({
     v: TRUTH_SCHEMA_VERSION,
     ts,
@@ -435,6 +465,7 @@ function coerceClaim(
     ...(quantity !== undefined ? { quantity } : {}),
     ...(validFrom !== undefined ? { validFrom } : {}),
     ...(validUntil !== undefined ? { validUntil } : {}),
+    ...(extractor !== undefined ? { extractor } : {}),
     source: obj["source"] as string,
   });
 }

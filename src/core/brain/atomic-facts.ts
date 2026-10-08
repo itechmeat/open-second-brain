@@ -115,6 +115,29 @@ export function splitSentences(text: string): string[] {
 const MIN_ANCHOR_FORM_LENGTH = 3;
 
 /**
+ * The occurrence-anchoring kernel (truth-correctable-time-aware,
+ * task 4): the quality-gated normalized match forms that literally
+ * occur in `text`. Candidate labels pass through the quality gate
+ * (sanitize decoration, then normalize, drop structurally-invalid
+ * forms) before matching, and forms shorter than
+ * {@link MIN_ANCHOR_FORM_LENGTH} never participate. Pure: no I/O, no
+ * registry. The one kernel every occurrence-anchoring caller shares -
+ * the assertion decomposer and the agent-stated claim verdicts both
+ * anchor through it, so the two can never drift.
+ */
+export function anchorEntityForms(
+  text: string,
+  forms: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  const haystack = normalizeEntityName(text);
+  return Object.freeze(
+    entityMatchForms(forms).filter(
+      (f) => f.length >= MIN_ANCHOR_FORM_LENGTH && haystack.includes(f),
+    ),
+  );
+}
+
+/**
  * Anchor an assertion against active registry entities, sorted ids. Labels
  * pass through the quality gate (sanitise decoration, then normalise, drop
  * structurally-invalid forms) before matching - the same shared kernel the
@@ -123,14 +146,12 @@ const MIN_ANCHOR_FORM_LENGTH = 3;
  */
 function anchorEntities(text: string, entities: ReadonlyArray<AtomicEntityLike>): string[] {
   if (entities.length === 0) return [];
-  const haystack = normalizeEntityName(text);
   const ids: string[] = [];
   for (const entity of entities) {
     if (!entityStatusInScope(entity.status, ENTITY_STATUS_SCOPE.canonical)) continue;
-    const forms = entityMatchForms([entity.name, ...entity.aliases]).filter(
-      (f) => f.length >= MIN_ANCHOR_FORM_LENGTH,
-    );
-    if (forms.some((f) => haystack.includes(f))) ids.push(entity.id);
+    if (anchorEntityForms(text, [entity.name, ...entity.aliases]).length > 0) {
+      ids.push(entity.id);
+    }
   }
   return ids.toSorted();
 }
