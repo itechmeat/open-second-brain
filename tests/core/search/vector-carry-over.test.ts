@@ -288,6 +288,35 @@ describe("replaceDocumentChunks carry-over", () => {
     },
   );
 
+  for (const [what, key, value] of [
+    ["model", EMBEDDING_MODEL_STATE_KEY, "another-model"],
+    ["dimension", EMBEDDING_DIMENSION_STATE_KEY, String(STORE_DIMENSION * 2)],
+  ] as const) {
+    test.skipIf(!VEC_LOADABLE)(
+      `a chunk kept in place whose vector has another ${what} loses it and is pending again`,
+      async () => {
+        const { store, docId, oldIds } = await seededStore();
+        store.setState(key, value);
+        const replaced = store.replaceDocumentChunks(docId, [
+          chunkInput(0, "h0"),
+          chunkInput(1, "h1-edited"),
+          chunkInput(2, "h2"),
+        ]);
+        const kept = [oldIds[0]!, oldIds[2]!];
+        expect([replaced.chunkIds[0], replaced.chunkIds[2]]).toEqual(kept);
+        for (const id of kept) {
+          expect(replaced.keptChunkIds.has(id)).toBe(true);
+          expect(store.getEmbeddingHash(id)).toBeNull();
+        }
+        expect(replaced.embeddingsReused).toBe(0);
+        const pending = store.findChunksWithoutEmbeddings().map((p) => p.chunkId);
+        for (const id of kept) expect(pending).toContain(id);
+        await store.close();
+        expect(vecRowCount(dbPath)).toBe(0);
+      },
+    );
+  }
+
   test.skipIf(!VEC_LOADABLE)(
     "nothing is carried when the embedding identity is unrecorded",
     async () => {

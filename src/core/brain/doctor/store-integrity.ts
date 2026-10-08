@@ -8,12 +8,10 @@
  * all of them are conditions only a walk of the tree can see.
  */
 
-import { dirname } from "node:path";
-
-import { readFreshenState } from "../../search/freshen.ts";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { ensureInsideVault, realpathInsideVault, vaultRelative } from "../../path-safety.ts";
+import { readFreshenState } from "../../search/freshen.ts";
 import { BRAIN_LOG_AUDIT_DIRS } from "../audit-dirs.ts";
 import { continuityLogDir } from "../continuity/store.ts";
 import { scanDanglingWorkruns } from "../dream-workrun.ts";

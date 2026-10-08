@@ -511,7 +511,10 @@ export function renderFreshenStatus(s: FreshenStatus): string[] {
   } else {
     lines.push("last_freshen:        (none)");
   }
-  if (s.activeBackoffUntil !== null) lines.push(`freshen_backoff_until: ${s.activeBackoffUntil}`);
+  // The label stays within the 19 columns every status label fits in.
+  if (s.activeBackoffUntil !== null) {
+    lines.push(`freshen_backoff:     until ${s.activeBackoffUntil}`);
+  }
   return lines;
 }
 

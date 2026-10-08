@@ -40,7 +40,7 @@ test("status names the interval, the index age and that no background run happen
   expect(out.stdout).toContain("freshen:             every 60s");
   expect(out.stdout).toMatch(/index_age:\s+\d+s/);
   expect(out.stdout).toContain("last_freshen:        (none)");
-  expect(out.stdout).not.toContain("freshen_backoff_until");
+  expect(out.stdout).not.toContain("freshen_backoff");
 });
 
 test("an interval of 0 reads as off", async () => {
@@ -63,7 +63,7 @@ test("a failed run shows its error and the active backoff, in text and JSON", as
   expect(text.stdout).toContain(
     "last_freshen:        failed 2026-10-07T12:00:00.000Z (2 in a row): disk full",
   );
-  expect(text.stdout).toContain(`freshen_backoff_until: ${backoffUntil}`);
+  expect(text.stdout).toContain(`freshen_backoff:     until ${backoffUntil}`);
 
   const json = JSON.parse(
     (await runCli(["search", "status", "--json"], { env: env("60") })).stdout,
@@ -76,6 +76,25 @@ test("a failed run shows its error and the active backoff, in text and JSON", as
     backoff_until: backoffUntil,
   });
   expect(json.freshen.index_age_s).toBeGreaterThanOrEqual(0);
+});
+
+test("every freshen line keeps the 21-column value alignment of the status block", async () => {
+  writeFreshenState(join(vault, ".open-second-brain"), {
+    failures: 1,
+    backoffUntil: new Date(Date.now() + 120_000).toISOString(),
+    lastOutcome: "failed",
+    lastRunAt: "2026-10-07T12:00:00.000Z",
+    lastDurationMs: 40,
+    lastError: "disk full",
+    lastChanged: null,
+  });
+  const out = await runCli(["search", "status"], { env: env("60") });
+  const lines = out.stdout.split("\n").filter((l) => /^(freshen|index_age|last_freshen)/.test(l));
+  expect(lines).toHaveLength(4);
+  for (const line of lines) {
+    expect(line.slice(0, 21)).toMatch(/^[a-z_]+: +$/);
+    expect(line[21]).not.toBe(" ");
+  }
 });
 
 test("a completed run shows how many documents it changed", async () => {

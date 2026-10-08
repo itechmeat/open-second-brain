@@ -1880,8 +1880,8 @@ o2b search status             Index status; since v0.36.0 also reports the activ
                               in_recent_window)
                               Since v1.76.0 it prints freshen (every <n>s or off), index_age, last_freshen
                               (completed <ts> (<n> changed) / failed <ts> (<n> in a row): <error> /
-                              (none)) and freshen_backoff_until while a backoff is active; --json carries
-                              them as the freshen object (interval_s, index_age_s, last_outcome,
+                              (none)) and freshen_backoff (until <ts>) while a backoff is active; --json
+                              carries them as the freshen object (interval_s, index_age_s, last_outcome,
                               last_run_at, last_changed, last_error, failures, backoff_until)
 o2b search check              Pre-flight diagnostics: vault, index directory, SQLite/FTS5, the
                               vector extension, the embedding key, the provider, the vector ABI stamp
