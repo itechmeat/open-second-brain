@@ -39,6 +39,7 @@ import type {
   ClaimParseWarning,
   ClaimQuantity,
   ClaimSlot,
+  ClaimSuccession,
   ClaimSweepOutcome,
   ClaimVersion,
   ReadClaimEventsResult,
@@ -412,6 +413,32 @@ function isTruthConflict(v: unknown): v is TruthConflict {
   );
 }
 
+function isClaimEventLike(v: unknown): v is ClaimEvent {
+  if (v === null || typeof v !== "object") return false;
+  const row = v as Record<string, unknown>;
+  return (
+    row["v"] === TRUTH_SCHEMA_VERSION &&
+    typeof row["ts"] === "string" &&
+    ISO_UTC_TS_RE.test(row["ts"]) &&
+    (["agent", "entity", "aspect", "value", "source"] as const).every(
+      (key) => typeof row[key] === "string" && (row[key] as string).trim() !== "",
+    ) &&
+    (row["valueKind"] === "text" || row["valueKind"] === "quantity")
+  );
+}
+
+function isClaimSuccession(v: unknown): v is ClaimSuccession {
+  if (v === null || typeof v !== "object") return false;
+  const row = v as Record<string, unknown>;
+  return (
+    typeof row["entity"] === "string" &&
+    typeof row["aspect"] === "string" &&
+    isClaimEventLike(row["predecessor"]) &&
+    isClaimEventLike(row["successor"]) &&
+    typeof row["detectedAt"] === "string"
+  );
+}
+
 /**
  * Read the derived state cache; structurally invalid content (including
  * corrupt nested rows) reads as null and the caller refolds from events.
@@ -429,6 +456,15 @@ export function readTruthState(vault: string): TruthState | null {
     }
     for (const conflict of parsed.conflicts as ReadonlyArray<unknown>) {
       if (!isTruthConflict(conflict)) return null;
+    }
+    // Successions are presence-gated (contract item 1): absent is the
+    // normal windowless shape, present must validate, and a corrupt
+    // channel reads as null so the caller refolds from events.
+    if (parsed.successions !== undefined) {
+      if (!Array.isArray(parsed.successions)) return null;
+      for (const succession of parsed.successions as ReadonlyArray<unknown>) {
+        if (!isClaimSuccession(succession)) return null;
+      }
     }
     return parsed;
   } catch {

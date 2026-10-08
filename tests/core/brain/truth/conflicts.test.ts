@@ -122,3 +122,104 @@ describe("computeTruthStateWithConflicts", () => {
     expect(computeTruthStateWithConflicts([])).toEqual(computeTruthState([]));
   });
 });
+
+describe("succession channel", () => {
+  test("present non-overlapping windows classify as succession, never a conflict", () => {
+    const events = [
+      claim({ validFrom: "2025-01-01", validUntil: "2025-12-31" }),
+      claim({
+        ts: "2026-06-10T10:00:00Z",
+        value: "Meta",
+        source: "[[Brain/notes/later.md]]",
+        validFrom: "2026-01-01",
+      }),
+    ];
+    const state = computeTruthStateWithConflicts(events);
+    // Five days apart from distinct sources: the assertion-time rule
+    // would contest; the disjoint windows make it a succession.
+    expect(state.conflicts).toHaveLength(0);
+    expect(state.slots[0]!.contested).toBe(false);
+    expect(state.successions).toHaveLength(1);
+    expect(state.successions![0]!.predecessor.value).toBe("Google");
+    expect(state.successions![0]!.successor.value).toBe("Meta");
+  });
+
+  test("intersecting windows fall through to the contest rule verbatim", () => {
+    const events = [
+      claim({ validFrom: "2025-01-01", validUntil: "2026-06-01" }),
+      claim({
+        value: "Meta",
+        source: "[[Brain/notes/later.md]]",
+        validFrom: "2026-01-01",
+      }),
+    ];
+    const state = computeTruthStateWithConflicts(events);
+    expect(state.conflicts).toHaveLength(1);
+    expect(state.successions).toBeUndefined();
+  });
+
+  test("any windowless claim falls through to the contest rule verbatim", () => {
+    const events = [
+      claim({ validFrom: "2025-01-01", validUntil: "2025-12-31" }),
+      claim({ value: "Meta", source: "[[Brain/notes/later.md]]" }),
+    ];
+    const state = computeTruthStateWithConflicts(events);
+    expect(state.conflicts).toHaveLength(1);
+    expect(state.successions).toBeUndefined();
+  });
+
+  test("an expired window never suppresses contestation on its own", () => {
+    // The expired window intersects the successor's open window, so the
+    // pair keeps the assertion-time contest despite the expiry.
+    const events = [
+      claim({ validFrom: "2020-01-01", validUntil: "2021-01-01" }),
+      claim({
+        value: "Meta",
+        source: "[[Brain/notes/later.md]]",
+        validFrom: "2020-06-01",
+      }),
+    ];
+    const state = computeTruthStateWithConflicts(events);
+    expect(state.conflicts).toHaveLength(1);
+    expect(state.successions).toBeUndefined();
+  });
+
+  test("successions appear even when nothing contests", () => {
+    const events = [
+      claim({ ts: "2026-01-01T10:00:00Z", validFrom: "2025-01-01", validUntil: "2025-12-31" }),
+      claim({
+        ts: "2026-06-10T10:00:00Z",
+        value: "Meta",
+        source: "[[Brain/notes/later.md]]",
+        validFrom: "2026-01-01",
+      }),
+    ];
+    // Far apart in assertion time: no contest either way, succession still reported.
+    const state = computeTruthStateWithConflicts(events);
+    expect(state.conflicts).toHaveLength(0);
+    expect(state.successions).toHaveLength(1);
+  });
+
+  test("successions are presence-gated: absent, not empty, whenever empty", () => {
+    const state = computeTruthStateWithConflicts([
+      claim(),
+      claim({ ts: "2026-08-01T10:00:00Z", value: "Meta", source: "[[Brain/notes/later.md]]" }),
+    ]);
+    expect("successions" in state).toBe(false);
+    expect(state.successions).toBeUndefined();
+    expect(JSON.stringify(state)).not.toContain("successions");
+  });
+
+  test("a present succession serializes by conditional spread", () => {
+    const state = computeTruthStateWithConflicts([
+      claim({ validFrom: "2025-01-01", validUntil: "2025-12-31" }),
+      claim({
+        value: "Meta",
+        source: "[[Brain/notes/later.md]]",
+        validFrom: "2026-01-01",
+      }),
+    ]);
+    const round = JSON.parse(JSON.stringify(state)) as { successions?: unknown[] };
+    expect(round.successions).toHaveLength(1);
+  });
+});

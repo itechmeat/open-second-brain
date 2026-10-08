@@ -6,9 +6,19 @@
  * `resolution: ask_user`, never auto-resolved); a later value outside
  * the window supersedes silently because that is normal fact
  * evolution, not contradiction.
+ *
+ * Since the validity axis (truth-correctable-time-aware, contract
+ * item 1) the contest rule carries one exclusion: a version pair whose
+ * claims are fully succession-separated (present, non-intersecting
+ * windows on every cross-pair - see `succession.ts`) never contests.
+ * Every other pair keeps the assertion-time rule verbatim, and an
+ * expired window never suppresses contestation on its own. Successions
+ * surface on the state's own presence-gated channel, never as
+ * conflicts.
  */
 
-import { computeTruthState } from "./fold.ts";
+import { computeTruthState, slotKey } from "./fold.ts";
+import { classifyClaimSuccessions, valuesSuccessionSeparated } from "./succession.ts";
 import type { ClaimEvent, ClaimSlot, ClaimVersion, TruthConflict, TruthState } from "./types.ts";
 
 /** Two values asserted within this many days of each other contest. */
@@ -29,24 +39,33 @@ function withinWindow(aTs: string, bTs: string, windowDays: number): boolean {
 /**
  * Contesting versions for one slot: every history value whose latest
  * assertion is within the window of the current value AND whose source
- * differs (same source changing its value is self-correction). Returns
+ * differs (same source changing its value is self-correction) AND that
+ * is not succession-separated from the current value. Returns
  * chronological order ending with the current value, or null when
  * nothing contests.
  */
-function contestingValues(slot: ClaimSlot, windowDays: number): ClaimVersion[] | null {
+function contestingValues(
+  slot: ClaimSlot,
+  slotEvents: ReadonlyArray<ClaimEvent>,
+  windowDays: number,
+): ClaimVersion[] | null {
   const contesting = slot.history
-    .filter(
-      (v) => withinWindow(v.ts, slot.current.ts, windowDays) && v.source !== slot.current.source,
-    )
+    .filter((v) => {
+      if (!withinWindow(v.ts, slot.current.ts, windowDays)) return false;
+      if (v.source === slot.current.source) return false;
+      if (valuesSuccessionSeparated(slotEvents, v.value, slot.current.value)) return false;
+      return true;
+    })
     .toReversed(); // history is newest-first; conflicts read chronologically
   if (contesting.length === 0) return null;
   return [...contesting, slot.current];
 }
 
 /**
- * The full fold with conflicts materialized and `contested` flags set.
- * With no conflicting events the output is deeply equal to
- * {@link computeTruthState} - the neutral default stays bit-identical.
+ * The full fold with conflicts and successions materialized and
+ * `contested` flags set. With no conflicting or succession-separated
+ * events the output is deeply equal to {@link computeTruthState} - the
+ * neutral default stays bit-identical.
  */
 export function computeTruthStateWithConflicts(
   events: ReadonlyArray<ClaimEvent>,
@@ -54,13 +73,29 @@ export function computeTruthStateWithConflicts(
 ): TruthState {
   const windowDays = opts.windowDays ?? CONFLICT_WINDOW_DAYS;
   const base = computeTruthState(events);
+  const successions = classifyClaimSuccessions(events);
+
+  // Events grouped per slot so the contest scan can apply the
+  // succession exclusion at claim granularity (fold versions aggregate
+  // events and carry no windows themselves).
+  const eventsBySlot = new Map<string, ClaimEvent[]>();
+  for (const e of events) {
+    const key = slotKey(e.entity, e.aspect);
+    const list = eventsBySlot.get(key);
+    if (list === undefined) eventsBySlot.set(key, [e]);
+    else list.push(e);
+  }
 
   const conflicts: TruthConflict[] = [];
   const slots: ClaimSlot[] = [];
-  let changed = false;
+  let changed = successions.length > 0;
 
   for (const slot of base.slots) {
-    const values = contestingValues(slot, windowDays);
+    const values = contestingValues(
+      slot,
+      eventsBySlot.get(slotKey(slot.entity, slot.aspect)) ?? [],
+      windowDays,
+    );
     if (values === null) {
       slots.push(slot);
       continue;
@@ -83,9 +118,13 @@ export function computeTruthStateWithConflicts(
   if (!changed) return base;
   // Slots are already sorted by (entity, aspect) in the base fold, so
   // conflicts built in slot order inherit the same deterministic sort.
+  // Successions spread conditionally: an empty channel stays absent
+  // (undefined, never []), keeping windowless state files
+  // byte-identical.
   return Object.freeze({
     ...base,
     slots: Object.freeze(slots),
     conflicts: Object.freeze(conflicts),
+    ...(successions.length > 0 ? { successions: Object.freeze(successions) } : {}),
   });
 }

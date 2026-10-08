@@ -23,6 +23,7 @@ import {
   writeTruthState,
 } from "../../../../src/core/brain/truth/store.ts";
 import { computeTruthState } from "../../../../src/core/brain/truth/fold.ts";
+import { computeTruthStateWithConflicts } from "../../../../src/core/brain/truth/conflicts.ts";
 import { withDeviceId } from "../../../helpers/device-id.ts";
 
 let vault: string;
@@ -261,6 +262,28 @@ describe("claim validity windows (presence-gated, schema v1)", () => {
       append({ validFrom: "2026-01-01T00:00:00Z", validUntil: "2026-01-01T00:00:00Z" }),
     ).toThrow();
     expect(() => append({ validFrom: "2026-06-01", validUntil: "2026-01-01" })).toThrow();
+  });
+
+  test("a state file with a valid successions channel reads back; a corrupt one reads null", () => {
+    append({ validFrom: "2025-01-01", validUntil: "2025-12-31" });
+    append({
+      ts: "2026-06-10T10:00:00Z",
+      value: "Meta",
+      source: "[[Brain/notes/later.md]]",
+      validFrom: "2026-01-01",
+    });
+    const withSuccessions = computeTruthStateWithConflicts(readClaimEvents(vault).events);
+    expect(withSuccessions.successions).toHaveLength(1);
+    writeTruthState(vault, withSuccessions);
+    expect(readTruthState(vault)).toEqual(withSuccessions);
+
+    const corrupt = JSON.parse(readFileSync(truthStatePath(vault), "utf8")) as Record<
+      string,
+      unknown
+    >;
+    corrupt["successions"] = [{ entity: "alice mason", aspect: "employer", bogus: true }];
+    writeFileSync(truthStatePath(vault), JSON.stringify(corrupt));
+    expect(readTruthState(vault)).toBeNull();
   });
 
   test("the new binary reads old lines (fields absent) unchanged", () => {

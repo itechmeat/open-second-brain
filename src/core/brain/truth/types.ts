@@ -109,13 +109,38 @@ export interface TruthConflict {
   readonly detectedAt: string;
 }
 
-/** The derived fold over all retained claim events. */
+/**
+ * A superseded-by-windows transition (contract item 1): two distinct
+ * values for one slot whose claims all carry present, non-intersecting
+ * validity windows. Succession lives OUTSIDE the conflict vocabulary -
+ * it is never a {@link TruthConflict}, never `ask_user`, and never
+ * reaches hygiene findings or conflict priority. The predecessor is
+ * the claim whose window closes first; `detectedAt` is the successor's
+ * assertion timestamp.
+ */
+export interface ClaimSuccession {
+  readonly entity: string;
+  readonly aspect: string;
+  readonly predecessor: ClaimEvent;
+  readonly successor: ClaimEvent;
+  readonly detectedAt: string;
+}
+
+/**
+ * The derived fold over all retained claim events.
+ *
+ * `successions` is presence-gated: undefined (never an empty array)
+ * whenever no succession classifies, and serialized by conditional
+ * spread so windowless states stay byte-identical to the pre-window
+ * ledger.
+ */
 export interface TruthState {
   readonly version: typeof TRUTH_SCHEMA_VERSION;
   readonly events: number;
   readonly updatedAt: string | null;
   readonly slots: ReadonlyArray<ClaimSlot>;
   readonly conflicts: ReadonlyArray<TruthConflict>;
+  readonly successions?: ReadonlyArray<ClaimSuccession>;
 }
 
 export interface ClaimParseWarning {
