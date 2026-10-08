@@ -14,6 +14,13 @@ import {
   type RelationalFanoutStore,
 } from "../../../src/core/search/relational-fanout.ts";
 import { SearchError } from "../../../src/core/search/search-error.ts";
+import {
+  TRAVERSAL_HUB_DEGREE_THRESHOLD as HUB_FROM_BARREL,
+  TRAVERSAL_MAX_EXPANSION_PER_NODE as EXPANSION_FROM_BARREL,
+  TRAVERSAL_MAX_SEEDS as SEEDS_FROM_BARREL,
+  TRAVERSAL_MAX_TOTAL_NODES as TOTAL_FROM_BARREL,
+  resolveTraversalBudgets as resolveFromBarrel,
+} from "../../../src/core/search/index.ts";
 
 type Edge = {
   sourceDocumentId: number;
@@ -95,6 +102,17 @@ test("traversal budgets ship the planned defaults", () => {
   expect(TRAVERSAL_HUB_DEGREE_THRESHOLD).toBe(12);
 });
 
+test("the public search surface exposes the traversal budgets", () => {
+  // The config/documentation surface names the knobs through the same
+  // barrel every CLI and MCP consumer already imports - never a private
+  // deep import into the search internals.
+  expect(SEEDS_FROM_BARREL).toBe(TRAVERSAL_MAX_SEEDS);
+  expect(EXPANSION_FROM_BARREL).toBe(TRAVERSAL_MAX_EXPANSION_PER_NODE);
+  expect(TOTAL_FROM_BARREL).toBe(TRAVERSAL_MAX_TOTAL_NODES);
+  expect(HUB_FROM_BARREL).toBe(TRAVERSAL_HUB_DEGREE_THRESHOLD);
+  expect(resolveFromBarrel({ env: {} })).toEqual(resolveTraversalBudgets({ env: {} }));
+});
+
 test("resolveTraversalBudgets defaults to the shipped constants", () => {
   expect(resolveTraversalBudgets({ env: {} })).toEqual({
     maxSeeds: TRAVERSAL_MAX_SEEDS,
@@ -150,7 +168,9 @@ test("the seed cap bounds the walk to the first TRAVERSAL_MAX_SEEDS seeds", () =
   const nodes = relationalFanout(fakeStore(edges), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], {
     maxDepth: 1,
   });
-  expect(nodes.map((n) => n.documentId).toSorted((a, b) => a - b)).toEqual([101, 102, 103, 104, 105, 106, 107, 108]);
+  expect(nodes.map((n) => n.documentId).toSorted((a, b) => a - b)).toEqual([
+    101, 102, 103, 104, 105, 106, 107, 108,
+  ]);
 });
 
 test("the per-node cap bounds expansion to the first edges of each node", () => {
@@ -169,7 +189,9 @@ test("the total-node cap bounds the reached set", () => {
     maxExpansionPerNode: 32,
   });
   expect(nodes).toHaveLength(TRAVERSAL_MAX_TOTAL_NODES);
-  expect(nodes.map((n) => n.documentId)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+  expect(nodes.map((n) => n.documentId)).toEqual([
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+  ]);
 });
 
 test("a node past the hub degree threshold is reached but not expanded", () => {

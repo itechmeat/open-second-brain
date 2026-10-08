@@ -19,6 +19,12 @@
  * reached. All four budgets ship as named constants and are overridable
  * through the `OPEN_SECOND_BRAIN_SEARCH_TRAVERSAL_*` environment variables
  * (or their `search_traversal_*` config keys) via {@link resolveTraversalBudgets}.
+ *
+ * Seeds are special only as walk entry points (capped, deduped, never
+ * pre-seeded into the reached set). A typed edge pointing AT a seed id is
+ * walked like any other edge and reaches that id like any target - the cap
+ * cases in the fanout test pin this, so a self-loop or a cycle back to a
+ * seed surfaces the seed exactly once, at the hop distance that reached it.
  */
 
 import { SearchError } from "./search-error.ts";
@@ -131,19 +137,17 @@ function rawBudget(
  * Resolve the four traversal budgets from the environment (preferred) or
  * the machine config map, falling back to the shipped constants. A value
  * that is not an integer >= 1 is a misconfiguration and is refused with a
- * `SearchError` naming the key in force - never silently defaulted.
+ * `SearchError` naming the key in force - never silently defaulted. The
+ * environment is optional so a caller holding only a config map resolves
+ * against the constants-and-config pair.
  */
 export function resolveTraversalBudgets(input: {
-  readonly env: NodeJS.ProcessEnv;
+  readonly env?: NodeJS.ProcessEnv;
   readonly config?: Readonly<Record<string, string>>;
 }): TraversalBudgets {
-  const { env, config } = input;
-  const int = (
-    envKey: string,
-    configKey: string,
-    fallback: number,
-    label: string,
-  ): number => {
+  const env = input.env ?? {};
+  const { config } = input;
+  const int = (envKey: string, configKey: string, fallback: number, label: string): number => {
     const raw = rawBudget(env, config, envKey, configKey);
     if (raw === null) return fallback;
     try {
@@ -204,10 +208,11 @@ export interface RelationalFanoutOptions {
   readonly hubDegreeThreshold?: number;
   /**
    * Fired-clock predicate bounding the walk (the composite recall deadline).
-   * Checked before each depth round and before expanding each frontier
-   * node; once it reports true, the walk stops and every node already
-   * reached is kept. Absent means the caller takes no deadline - the
-   * width caps above still bound the walk.
+   * Checked once before each depth round; once it reports true, the walk
+   * stops and every node already reached is kept - so a node is never
+   * half-expanded by the clock, and a round the clock admits completes.
+   * Absent means the caller takes no deadline - the width caps above still
+   * bound the walk.
    */
   readonly isExpired?: () => boolean;
 }
@@ -226,7 +231,7 @@ interface MutableNode {
  * Budget semantics, all deterministic in the caller's edge order:
  *   - only the first `maxSeeds` distinct seeds enter the walk;
  *   - each node expands at most its first `maxExpansionPerNode` walked
- *     edges (restriction-passing, resolvable, non-seed targets);
+ *     edges (restriction-passing with a resolvable target);
  *   - once `maxTotalNodes` nodes have been reached the walk stops;
  *   - a reached node whose walked-edge degree exceeds
  *     `hubDegreeThreshold` is kept but never expanded;
@@ -249,23 +254,22 @@ export function relationalFanout(
   const hubDegreeThreshold = Math.max(1, opts.hubDegreeThreshold ?? TRAVERSAL_HUB_DEGREE_THRESHOLD);
   const isExpired = opts.isExpired;
 
-  if (isExpired?.() === true) return [];
-
   const seedIds = [...new Set(seedDocumentIds)].slice(0, maxSeeds);
-  const seeds = new Set(seedIds);
   const reached = new Map<number, MutableNode>();
-  // Set when the total-node cap or the deadline ends the walk early; the
-  // depth loop then keeps everything already in `reached`.
+  // Set when the total-node cap ends the walk early; the depth loop then
+  // keeps everything already in `reached`.
   let stop = false;
 
   let frontier = seedIds;
   for (let depth = 1; depth <= maxDepth && frontier.length > 0 && !stop; depth++) {
+    // The one clock check: before each depth round. A round the clock
+    // admits completes; a round it fires never starts.
     if (isExpired?.() === true) break;
+    const edges = store.typedRelationEdgesForDocuments(frontier);
     // One batched edge fetch per depth; grouped per source node so the
     // per-node expansion cap and the hub-degree rule answer a per-node
     // question without a second query.
-    const bySource = new Map<number, Array<(typeof edges)[number]>>();
-    const edges = store.typedRelationEdgesForDocuments(frontier);
+    const bySource = new Map<number, typeof edges>();
     for (const edge of edges) {
       const mine = bySource.get(edge.sourceDocumentId);
       if (mine) mine.push(edge);
@@ -273,28 +277,22 @@ export function relationalFanout(
     }
     const nextFrontier: number[] = [];
     for (const sourceId of frontier) {
-      if (isExpired?.() === true) {
-        stop = true;
-        break;
-      }
-      if (reached.size >= maxTotalNodes) {
-        stop = true;
-        break;
-      }
+      if (stop) break;
       const declared = bySource.get(sourceId) ?? [];
       // A node's WALKED edges: the ones the traversal could actually
       // follow - restriction-passing with a resolvable target. Degree and
       // expansion answer this list, so a dangling edge neither inflates a
-      // hub nor spends a node's expansion budget.
+      // hub nor spends a node's expansion budget. A target that happens to
+      // be a seed id is walked like any target (see the module header).
       const walked = declared.filter(
-        (edge) =>
-          (!restrict || allowed.has(edge.relation)) &&
-          edge.targetDocumentId !== null &&
-          !seeds.has(edge.targetDocumentId),
+        (edge) => (!restrict || allowed.has(edge.relation)) && edge.targetDocumentId !== null,
       );
-      // Hub skipping: the node stays reached (its own provenance stands)
-      // but its fan-out is withheld from the frontier.
-      if (walked.length > hubDegreeThreshold) continue;
+      // Hub skipping: a node the walk REACHED keeps its provenance but its
+      // fan-out is withheld from the frontier. A seed is exempt - it is the
+      // caller's deliberate entry point, not a node the walk reached, and
+      // its expansion is already bounded by the per-node cap (the cap cases
+      // in the fanout test pin a 20-edge seed expanding past the threshold).
+      if (depth > 1 && walked.length > hubDegreeThreshold) continue;
       let followed = 0;
       for (const edge of walked) {
         if (followed >= maxExpansionPerNode) break;

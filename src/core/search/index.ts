@@ -94,6 +94,22 @@ export {
   SEARCH_ERROR_CODES,
 } from "./types.ts";
 export {
+  resolveTraversalBudgets,
+  TRAVERSAL_MAX_SEEDS,
+  TRAVERSAL_MAX_EXPANSION_PER_NODE,
+  TRAVERSAL_MAX_TOTAL_NODES,
+  TRAVERSAL_HUB_DEGREE_THRESHOLD,
+  TRAVERSAL_MAX_SEEDS_ENV,
+  TRAVERSAL_MAX_EXPANSION_PER_NODE_ENV,
+  TRAVERSAL_MAX_TOTAL_NODES_ENV,
+  TRAVERSAL_HUB_DEGREE_THRESHOLD_ENV,
+  TRAVERSAL_MAX_SEEDS_CONFIG,
+  TRAVERSAL_MAX_EXPANSION_PER_NODE_CONFIG,
+  TRAVERSAL_MAX_TOTAL_NODES_CONFIG,
+  TRAVERSAL_HUB_DEGREE_THRESHOLD_CONFIG,
+  type TraversalBudgets,
+} from "./relational-fanout.ts";
+export {
   parseStructuredRecallQueryDocument,
   structuredRecallQueryText,
 } from "./structured-query.ts";
