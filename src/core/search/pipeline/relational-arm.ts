@@ -291,9 +291,12 @@ function resolveSeedDocumentIds(store: Store, seeds: ReadonlyArray<string>): num
 
 /**
  * The bare tip a frontmatter `superseded_by` pointer names, when the page
- * is a non-tip superseded predecessor whose validity window has CLOSED
- * (half-open `[valid_from, valid_until)`: closed once now is at or past
- * the end). Frontmatter only - never the ledger. A missing pointer, an
+ * is a non-tip superseded predecessor whose validity window has CLOSED.
+ * Closedness follows the shared frontmatter grammar's INCLUSIVE end
+ * (`parseValidityWindow` in `src/core/search/validity.ts` snaps a bare
+ * `valid_until` date to its whole final day, so the boundary instant
+ * itself is still inside the window): closed once now is strictly past
+ * the end. Frontmatter only - never the ledger. A missing pointer, an
  * unparseable window, an open side, or a window still open answers null.
  */
 function closedSupersessionTip(
@@ -308,7 +311,7 @@ function closedSupersessionTip(
   if (typeof raw !== "string" || raw.trim() === "") return null;
   const window = parseValidityWindow(entry.meta);
   if (window === null || window.invalid || window.validUntilMs === null) return null;
-  if (window.validUntilMs > nowMs) return null;
+  if (window.validUntilMs >= nowMs) return null;
   const wikilink = EXACT_WIKILINK_RE.exec(raw.trim());
   return (wikilink !== null ? wikilink[1]! : raw).trim();
 }

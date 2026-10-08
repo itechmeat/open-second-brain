@@ -8,7 +8,7 @@
  * closed validity window, and attribution renders the hop distance.
  */
 
-import { test, expect, beforeEach, afterEach } from "bun:test";
+import { test, expect, beforeEach, afterEach, spyOn } from "bun:test";
 
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { relationalFanout } from "../../../src/core/search/relational-fanout.ts";
@@ -231,6 +231,50 @@ test("a readable non-tip predecessor with a closed window is annotated from fron
     expect(openFar![1].supersededBy).toBeUndefined();
   } finally {
     await open.close();
+  }
+});
+
+test("the closed-window annotation reads the grammar's inclusive end as still inside the window", async () => {
+  // The shared frontmatter grammar (src/core/search/validity.ts) snaps a
+  // bare `valid_until` date to its whole final day - the end is
+  // inclusive - so at the boundary instant itself the window is still
+  // open and the page is not yet a closed predecessor. One millisecond
+  // past the end, the annotation appears.
+  await buildPathVault();
+  writeMd(
+    vault,
+    "mid.md",
+    '---\nextends: "[[far]]"\nsuperseded_by: "[[far]]"\nvalid_until: "2099-12-31"\n---\n\nbeta mid.',
+  );
+  await indexVault(makeConfig({ vault, dbPath }));
+  const store = await Store.open(makeConfig({ vault, dbPath }), { mode: "write", loadVec: false });
+  // The grammar's day-end edge: the last millisecond of 2099-12-31.
+  const dayEndMs = Date.UTC(2099, 11, 31) + 24 * 60 * 60 * 1000 - 1;
+  const clockAt = (ms: number): (() => void) => {
+    const spy = spyOn(Date, "now").mockReturnValue(ms);
+    return () => spy.mockRestore();
+  };
+  try {
+    const restoreAtBoundary = clockAt(dayEndMs);
+    try {
+      const atBoundary = runRelationalArm(store, vault, "[[seed]] related extends", {});
+      const farEntry = [...atBoundary.reachByChunk].find(([, reach]) => reach.hops === 2);
+      expect(farEntry).toBeDefined();
+      expect(farEntry![1].supersededBy).toBeUndefined();
+    } finally {
+      restoreAtBoundary();
+    }
+    const restorePastBoundary = clockAt(dayEndMs + 1);
+    try {
+      const pastBoundary = runRelationalArm(store, vault, "[[seed]] related extends", {});
+      const farPast = [...pastBoundary.reachByChunk].find(([, reach]) => reach.hops === 2);
+      expect(farPast).toBeDefined();
+      expect(farPast![1].supersededBy).toBe("far");
+    } finally {
+      restorePastBoundary();
+    }
+  } finally {
+    await store.close();
   }
 });
 
