@@ -2,10 +2,10 @@
  * Ordered path provenance with per-node reach gating
  * (truth-correctable-time-aware): the fan-out records the ordered
  * `{ documentId, relation }` steps that reached each node; the arm gates
- * every path node at the caller's transport reach (unreadable nodes are
- * omitted and counted), annotates a readable non-tip superseded
- * predecessor with a closed validity window, and attribution renders the
- * withheld count beside the hop distance.
+ * every path node at the caller's transport reach and owner scope
+ * (unreadable or out-of-scope nodes are omitted, never named and never
+ * counted), annotates a readable non-tip superseded predecessor with a
+ * closed validity window, and attribution renders the hop distance.
  */
 
 import { test, expect, beforeEach, afterEach } from "bun:test";
@@ -91,7 +91,7 @@ async function buildPathVault(): Promise<void> {
   await indexVault(makeConfig({ vault, dbPath }));
 }
 
-test("path nodes unreadable at the caller's reach are omitted and counted", async () => {
+test("path nodes unreadable at the caller's reach are omitted, never named and never counted", async () => {
   await buildPathVault();
   writeMd(vault, "mid.md", '---\nvisibility: ["private"]\nextends: "[[far]]"\n---\n\nbeta mid.');
   await indexVault(makeConfig({ vault, dbPath }));
@@ -102,21 +102,23 @@ test("path nodes unreadable at the caller's reach are omitted and counted", asyn
     });
     const farEntry = [...remote.reachByChunk].find(([, reach]) => reach.hops === 2);
     expect(farEntry).toBeDefined();
-    // The withheld middle node is omitted from the ordered path and
-    // counted; the far node itself is readable and keeps its own step.
+    // The withheld middle node is omitted from the ordered path; the far
+    // node itself is readable and keeps its own step.
     expect(farEntry![1].path).toEqual([{ documentId: farEntry![0], relation: "extends" }]);
-    expect(farEntry![1].withheld).toBe(1);
+    // Nothing counts it: a withheld node is dropped under the views'
+    // identical-to-absent convention, so the provenance answer is the
+    // same whether the walk crossed an unreadable document or not.
+    expect("withheld" in farEntry![1]).toBe(false);
     // At local reach the same walk keeps the whole path.
     const local = runRelationalArm(store, vault, "[[seed]] related extends", {});
     const farLocal = [...local.reachByChunk].find(([, reach]) => reach.hops === 2);
-    expect(farLocal![1].withheld).toBe(0);
     expect(farLocal![1].path.map((step) => step.relation)).toEqual(["related", "extends"]);
   } finally {
     store.close();
   }
 });
 
-test("path nodes outside the caller's owner scope are omitted and counted, never named", async () => {
+test("path nodes outside the caller's owner scope are omitted, never named and never counted", async () => {
   // Owner scope is the same isolation the row-level filters apply: a
   // path node that is reach-readable but owned by another agent must be
   // withheld from the provenance exactly like an unreadable one, or its
@@ -132,10 +134,10 @@ test("path nodes outside the caller's owner scope are omitted and counted, never
     });
     const farScoped = [...scoped.reachByChunk].find(([, reach]) => reach.hops === 2);
     expect(farScoped).toBeDefined();
-    // The owner-hidden middle node is omitted from the ordered path and
-    // counted as withheld; the far node keeps only its own step.
+    // The owner-hidden middle node is omitted from the ordered path; the
+    // far node keeps only its own step, and nothing counts the omission.
     expect(farScoped![1].path).toEqual([{ documentId: farScoped![0], relation: "extends" }]);
-    expect(farScoped![1].withheld).toBe(1);
+    expect("withheld" in farScoped![1]).toBe(false);
     // No step anywhere names the hidden node's document id.
     const hiddenId = store.getDocumentIdByPath("mid.md");
     for (const [, reach] of scoped.reachByChunk) {
@@ -147,7 +149,6 @@ test("path nodes outside the caller's owner scope are omitted and counted, never
     // ownership gate is opt-in isolation, never a default narrowing.
     const unscoped = runRelationalArm(store, vault, "[[seed]] related extends", {});
     const farUnscoped = [...unscoped.reachByChunk].find(([, reach]) => reach.hops === 2);
-    expect(farUnscoped![1].withheld).toBe(0);
     expect(farUnscoped![1].path.map((step) => step.relation)).toEqual(["related", "extends"]);
   } finally {
     store.close();
@@ -191,9 +192,9 @@ test("a readable non-tip predecessor with a closed window is annotated from fron
   }
 });
 
-// ─── attribution renders the withheld count and the annotation ───────────────
+// ─── attribution renders the hop distance and the annotation ─────────────────
 
-test("the attribution reason renders hops, the withheld count and the annotation", () => {
+test("the attribution reason renders hops and the annotation, never a withheld count", () => {
   const base = {
     documentId: 1,
     chunkId: 11,
@@ -217,7 +218,6 @@ test("the attribution reason renders hops, the withheld count and the annotation
       {
         via: ["extends"],
         hops: 2,
-        withheld: 1,
         path: [{ documentId: 3, relation: "extends" }],
       },
     ],
@@ -226,7 +226,6 @@ test("the attribution reason renders hops, the withheld count and the annotation
       {
         via: ["related"],
         hops: 1,
-        withheld: 0,
         path: [{ documentId: 2, relation: "related" }],
         supersededBy: "tip",
       },
@@ -249,27 +248,31 @@ test("the attribution reason renders hops, the withheld count and the annotation
     relationalReach: reach,
   });
   const reasons = decorated.map((r) => r.reasons);
-  expect(reasons[0]).toEqual(["relational: via extends (2 hops, 1 node withheld)"]);
-  expect(reasons[1]).toEqual([
-    "relational: via related (1 hop, 0 nodes withheld)",
-    "superseded_by: tip",
-  ]);
+  expect(reasons[0]).toEqual(["relational: via extends (2 hops)"]);
+  expect(reasons[1]).toEqual(["relational: via related (1 hop)", "superseded_by: tip"]);
+  // No reason string states how many path nodes were withheld: the
+  // omitted steps are already absent from the path, and a count would
+  // tell the caller a node it may not see exists.
+  for (const row of reasons) {
+    for (const reason of row) expect(reason).not.toContain("withheld");
+  }
 });
 
 // ─── the ordered path lands in the retrieval trail as a typed code ───────────
 
-test("the trail carries the relational path with readable ids and the withheld count", () => {
+test("the trail carries the relational path with readable ids, and never a withheld count", () => {
   const trail = buildRetrievalTrail({
     retrieved: 1,
     pool: 3,
     degraded: [],
-    relationalPaths: [{ code: RETRIEVAL_RELATIONAL_PATH_CODE, path: [2, 3], withheld: 1 }],
+    relationalPaths: [{ code: RETRIEVAL_RELATIONAL_PATH_CODE, path: [2, 3] }],
   });
-  expect(trail?.relationalPaths).toEqual([{ code: "relational-path", path: [2, 3], withheld: 1 }]);
+  expect(trail?.relationalPaths).toEqual([{ code: "relational-path", path: [2, 3] }]);
   const envelope = retrievalTrailEnvelope({ retrievalTrail: trail });
   expect(envelope.retrieval_trail).toMatchObject({
-    relational_paths: [{ code: "relational-path", path: [2, 3], withheld: 1 }],
+    relational_paths: [{ code: "relational-path", path: [2, 3] }],
   });
+  expect(JSON.stringify(envelope)).not.toContain("withheld");
   // Absent paths keep the envelope byte-identical to the pre-change shape.
   const plain = buildRetrievalTrail({
     retrieved: 1,
@@ -336,7 +339,6 @@ test("the outcome builder projects surfaced relational rows into the trail, rank
         {
           via: ["related"],
           hops: 1,
-          withheld: 0,
           path: [{ documentId: 2, relation: "related" }],
         },
       ],
@@ -345,17 +347,18 @@ test("the outcome builder projects surfaced relational rows into the trail, rank
         {
           via: ["extends"],
           hops: 2,
-          withheld: 1,
           path: [{ documentId: 3, relation: "extends" }],
         },
       ],
     ]);
     const outcome = buildSearchOutcome({ ...baseInput, relationalReach: reach });
     // One entry per surfaced relational row, in ranked order, carrying the
-    // readable document ids and the withheld count.
+    // readable document ids. A walked-but-unreadable node contributes no
+    // entry and no count: the answer reads the same as a walk that never
+    // crossed it.
     expect(outcome.retrievalTrail?.relationalPaths).toEqual([
-      { code: "relational-path", path: [3], withheld: 1 },
-      { code: "relational-path", path: [2], withheld: 0 },
+      { code: "relational-path", path: [3] },
+      { code: "relational-path", path: [2] },
     ]);
     // The arm-off shape: no reach map, no trail at all on a healthy answer.
     const off = buildSearchOutcome(baseInput);
@@ -375,7 +378,7 @@ test("the outcome builder projects surfaced relational rows into the trail, rank
 
 test("the stale-index rebuild carries the arm's paths and stays byte-identical without them", () => {
   const paths: RelationalPathTrailEntry[] = [
-    { code: RETRIEVAL_RELATIONAL_PATH_CODE, path: [2, 3], withheld: 1 },
+    { code: RETRIEVAL_RELATIONAL_PATH_CODE, path: [2, 3] },
   ];
   const withPaths = {
     results: [],

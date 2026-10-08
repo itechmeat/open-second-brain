@@ -284,18 +284,19 @@ export const RETRIEVAL_RELATIONAL_PATH_CODE = "relational-path";
 
 /**
  * One relational row's ordered path, machine-readable: the document ids
- * that stayed readable at the caller's reach, in walk order, plus the
- * count of path nodes the reach withheld (they are omitted from `path`,
- * never named). Present on the trail only when the relational arm
- * contributed a gated path - absent otherwise, keeping a healthy
- * arm-off answer byte-identical.
+ * that stayed readable at the caller's reach and owner scope, in walk
+ * order. Path nodes the gates withhold are omitted from `path` - never
+ * named, and never counted, so the entry reads the same whether the walk
+ * crossed unreadable documents or not (the views' identical-to-absent
+ * convention: a count would tell the caller that a node it may not see
+ * exists). Present on the trail only when the relational arm contributed
+ * a gated path - absent otherwise, keeping a healthy arm-off answer
+ * byte-identical.
  */
 export interface RelationalPathTrailEntry {
   readonly code: typeof RETRIEVAL_RELATIONAL_PATH_CODE;
   /** Readable document ids along the walked path, in walk order. */
   readonly path: ReadonlyArray<number>;
-  /** Path nodes omitted because the caller's reach cannot read them. */
-  readonly withheld: number;
 }
 
 /**
@@ -526,7 +527,6 @@ export function retrievalTrailEnvelope(outcome: {
             relational_paths: trail.relationalPaths.map((entry) => ({
               code: entry.code,
               path: [...entry.path],
-              withheld: entry.withheld,
             })),
           }
         : {}),

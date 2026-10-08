@@ -281,12 +281,17 @@ test("the search call site gates the arm's ordered paths at the caller's reach",
   });
   const far = remote.results.find((r) => r.path === "far.md");
   expect(far).toBeDefined();
-  expect(far!.reasons.some((x) => x.includes("1 node withheld"))).toBe(true);
-  // Local reach reads every hop: the same walk withholds nothing.
+  // The relational reason names the walk but never a withheld count: the
+  // unreadable middle hop is already absent from the provenance path.
+  expect(far!.reasons.some((x) => x.startsWith("relational: via "))).toBe(true);
+  expect(far!.reasons.some((x) => x.includes("withheld"))).toBe(false);
+  // Local reach reads every hop: the same walk withholds nothing, and
+  // the reason shape is the same either way.
   const local = await search(cfg, { query: "alpha [[seed]] related extends" });
   const farLocal = local.results.find((r) => r.path === "far.md");
   expect(farLocal).toBeDefined();
-  expect(farLocal!.reasons.some((x) => x.includes("0 nodes withheld"))).toBe(true);
+  expect(farLocal!.reasons.some((x) => x.startsWith("relational: via "))).toBe(true);
+  expect(farLocal!.reasons.some((x) => x.includes("withheld"))).toBe(false);
 });
 
 test("the arm's ordered paths land in the retrieval trail and stay absent when the arm is off", async () => {
@@ -298,7 +303,7 @@ test("the arm's ordered paths land in the retrieval trail and stay absent when t
   expect(entries!.length).toBeGreaterThan(0);
   for (const entry of entries!) {
     expect(entry.code).toBe("relational-path");
-    expect(entry.withheld).toBe(0);
+    expect("withheld" in entry).toBe(false);
     expect(entry.path.length).toBeGreaterThan(0);
   }
   // Arm off: no paths on the trail, whatever else the answer carries -

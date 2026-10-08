@@ -391,8 +391,8 @@ export async function search(
           ...(opts.transportReach !== undefined ? { reach: opts.transportReach } : {}),
           // The caller's owner scope gates the provenance path nodes the
           // same way the row-level filters gate content rows: a
-          // reach-readable node another agent owns is counted as
-          // withheld, never named in the trail.
+          // reach-readable node another agent owns is omitted from the
+          // ordered path, never named and never counted in the trail.
           ...(opts.agentScope !== undefined ? { agentScope: opts.agentScope } : {}),
         })
       : noRelationalArm();

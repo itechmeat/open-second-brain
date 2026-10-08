@@ -298,8 +298,8 @@ export async function cmdBrainTruth(argv: string[]): Promise<number> {
             source: string;
           }>;
           ok(
-            `events: ${body.total} matched, ${rows.length} shown, ` +
-              `${body.withheld} withheld${body.truncated ? ", truncated" : ""}`,
+            `events: ${body.total} matched, ${rows.length} shown` +
+              `${body.truncated ? ", truncated" : ""}`,
           );
           for (const e of rows) {
             ok(`  ${e.ts}  ${e.entity} / ${e.aspect} = ${e.value}  ${e.source}`);

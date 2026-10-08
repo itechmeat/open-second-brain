@@ -73,7 +73,6 @@ function relationalPathEntries(
     entries.push({
       code: RETRIEVAL_RELATIONAL_PATH_CODE,
       path: node.path.map((step) => step.documentId),
-      withheld: node.withheld,
     });
   }
   return entries.length > 0 ? entries : undefined;

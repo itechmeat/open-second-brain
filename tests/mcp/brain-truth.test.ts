@@ -190,7 +190,6 @@ interface EventsResponse {
   readonly entity: string | null;
   readonly events: ReadonlyArray<ClaimEventRow>;
   readonly total: number;
-  readonly withheld: number;
   readonly truncated: boolean;
 }
 
@@ -245,7 +244,6 @@ test("events returns rows in stable ascending assertion-ts order with validity f
   expect(body.operation).toBe("events");
   expect(body.entity).toBe(null);
   expect(body.total).toBe(3);
-  expect(body.withheld).toBe(0);
   expect(body.truncated).toBe(false);
   expect(body.events.map((e) => e.ts)).toEqual([
     "2026-06-01T10:00:00Z",
@@ -303,7 +301,7 @@ test("events pages with limit and reports truncation", async () => {
   expect(past.events.map((e) => e.ts)).toEqual(["2026-06-10T12:00:00Z"]);
 });
 
-test("events withholds rows naming a page beyond the caller's reach and counts them", async () => {
+test("events answers a caller denied a source page exactly as if the row were absent", async () => {
   writeSourcePage("public.md");
   writeSourcePage("private.md", `\nvisibility: [${REMOTE_DENY_VISIBILITY_TOKEN}]`);
   appendClaimEvent(vault, {
@@ -336,18 +334,51 @@ test("events withholds rows naming a page beyond the caller's reach and counts t
   const remote = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.remote });
   await initialize(remote);
   const seen = (await call(remote, { operation: "events" })) as unknown as EventsResponse;
-  // A withheld row is counted, never rendered: the caller sees one event
-  // and cannot read the withheld ones from the response - under either
-  // spelling of the same withheld page.
-  expect(seen.total).toBe(3);
-  expect(seen.withheld).toBe(2);
+  // A withheld row is dropped and NOTHING counts it (the views'
+  // identical-to-absent convention): the account covers only rows the
+  // caller may read, under either spelling of the same withheld page.
+  expect(seen.total).toBe(1);
+  expect("withheld" in seen).toBe(false);
   expect(seen.events.map((e) => e.value)).toEqual(["Google"]);
-  expect(JSON.stringify(seen.events)).not.toContain("private");
+  expect(JSON.stringify(seen)).not.toContain("private");
   const local = new MCPServer({ vault, configPath }, { reach: TRANSPORT_REACH.local });
   await initialize(local);
   const localBody = (await call(local, { operation: "events" })) as unknown as EventsResponse;
   expect(localBody.events).toHaveLength(3);
-  expect(localBody.withheld).toBe(0);
+  expect(localBody.total).toBe(3);
+  expect("withheld" in localBody).toBe(false);
+  // The identical-answer property, vault against vault: the same remote
+  // query over a vault holding only the readable row answers byte for
+  // byte what the vault with two extra withheld rows answered, so no
+  // pivot (entity, window, limit) can measure the hidden population.
+  const b = secondVault();
+  try {
+    mkdirSync(join(b.vault, "Brain", "notes"), { recursive: true });
+    writeFileSync(
+      join(b.vault, "Brain", "notes", "public.md"),
+      `---\nkind: note\n---\n\npublic.md source page\n`,
+    );
+    appendClaimEvent(b.vault, {
+      ts: "2026-06-01T10:00:00Z",
+      agent: "claude",
+      entity: "Alice Mason",
+      aspect: "employer",
+      value: "Google",
+      source: "[[Brain/notes/public.md]]",
+    });
+    const remoteB = new MCPServer(
+      { vault: b.vault, configPath: b.configPath },
+      { reach: TRANSPORT_REACH.remote },
+    );
+    await initialize(remoteB);
+    const withoutHidden = (await call(remoteB, { operation: "events" })) as unknown as Record<
+      string,
+      unknown
+    >;
+    expect(JSON.stringify(withoutHidden)).toBe(JSON.stringify({ ...seen }));
+  } finally {
+    rmSync(b.configHome, { recursive: true, force: true });
+  }
 });
 
 test("events refuses unparseable bounds and invalid limits as invalid params", async () => {

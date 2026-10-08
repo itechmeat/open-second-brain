@@ -91,16 +91,16 @@ export interface RelationalArmOptions {
   /**
    * The caller's transport reach, gating every provenance path node
    * (per-node gating, the `brain_derive_fact` premise-gate precedent). A
-   * node whose page is unreadable at this reach is omitted from the path
-   * and counted. Default: local - everything readable, nothing withheld.
+   * node whose page is unreadable at this reach is omitted from the path,
+   * never named and never counted. Default: local - everything readable.
    */
   readonly reach?: TransportReach;
   /**
    * The caller's agent-ownership scope, gating provenance path nodes the
    * same way the row-level filters gate content rows: a node whose page
-   * another agent owns is omitted from the path and counted as withheld,
-   * never named. Null / absent means no scope requested - no ownership
-   * filtering, the opt-in default every unscoped search ran with before.
+   * another agent owns is omitted from the path, never named. Null /
+   * absent means no scope requested - no ownership filtering, the opt-in
+   * default every unscoped search ran with before.
    */
   readonly agentScope?: string | null;
 }
@@ -111,13 +111,13 @@ export interface RelationalReach {
   /**
    * The ordered steps that reached this node, gated per node at the
    * caller's reach and owner scope: a step whose page is unreadable there
-   * or owned by another agent is omitted and counted in {@link withheld}.
-   * The provenance a row shows is exactly what the caller could read
-   * along the way.
+   * or owned by another agent is omitted - never named, and never
+   * counted, so the provenance a row shows reads the same whether the
+   * walk crossed unreadable documents or not (the views'
+   * identical-to-absent convention: a count would tell the caller that a
+   * node it may not see exists).
    */
   readonly path: ReadonlyArray<RelationalPathStep>;
-  /** How many path nodes the caller's reach or scope could not read. */
-  readonly withheld: number;
   /**
    * Set when a readable path node is a non-tip superseded predecessor with
    * a CLOSED validity window, read from frontmatter only (`superseded_by`
@@ -301,10 +301,13 @@ function closedSupersessionTip(
 /**
  * Gate one node's walked path at the caller's reach and owner scope:
  * unreadable steps and steps another agent owns (under a requested scope)
- * are omitted and counted alike, so a hidden node's document id is never
- * named and never contributes the supersession annotation; the first
+ * are omitted alike, so a hidden node's document id is never named, never
+ * counted, and never contributes the supersession annotation; the first
  * readable, in-scope step carrying a closed supersession names the
- * reach's `supersededBy` tip.
+ * reach's `supersededBy` tip. Nothing reports how many steps were
+ * dropped - the provenance answer must read the same whether the walk
+ * crossed unreadable documents or not (the views'
+ * identical-to-absent convention).
  */
 function gatePath(
   vault: string,
@@ -316,11 +319,9 @@ function gatePath(
   nowMs: number,
 ): {
   readonly path: ReadonlyArray<RelationalPathStep>;
-  readonly withheld: number;
   readonly supersededBy?: string;
 } {
   const gated: RelationalPathStep[] = [];
-  let withheld = 0;
   let supersededBy: string | undefined;
   for (const step of steps) {
     const meta = titles.get(step.documentId);
@@ -332,10 +333,7 @@ function gatePath(
       // withheld from provenance as an unreadable one. No requested
       // scope means no ownership filtering - the opt-in default.
       (agentScope !== null && !isPathOwnerVisible(vault, meta.path, agentScope, cache));
-    if (unreadable) {
-      withheld += 1;
-      continue;
-    }
+    if (unreadable) continue;
     gated.push(step);
     if (supersededBy === undefined) {
       const tip = closedSupersessionTip(vault, meta.path, cache, nowMs);
@@ -344,7 +342,6 @@ function gatePath(
   }
   return {
     path: Object.freeze(gated),
-    withheld,
     ...(supersededBy !== undefined ? { supersededBy } : {}),
   };
 }

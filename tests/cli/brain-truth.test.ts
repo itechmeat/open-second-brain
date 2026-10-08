@@ -197,7 +197,6 @@ interface EventsBody {
   readonly entity: string | null;
   readonly events: ReadonlyArray<ClaimEventRow>;
   readonly total: number;
-  readonly withheld: number;
   readonly truncated: boolean;
 }
 
@@ -241,7 +240,7 @@ test("truth events prints the MCP events shape over a windowed slice", async () 
   expect(body.events[0]!.validFrom).toBe("2026-06-01");
   expect(body.events[0]!.validUntil).toBe("2026-09-01");
   expect(body.total).toBe(1);
-  expect(body.withheld).toBe(0);
+  expect("withheld" in body).toBe(false);
   expect(body.truncated).toBe(false);
 });
 

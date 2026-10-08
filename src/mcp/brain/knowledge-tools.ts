@@ -1053,9 +1053,13 @@ export function statedClaimEntities(vault: string): ReadonlyArray<{
  * validity windows ride on the rows verbatim and are never consulted
  * here (contract item 1 keeps the two temporal vocabularies separate).
  * Every matched row passes the same per-row owner/reach gate
- * `brain_claims` asks; rows the gate drops are counted in `withheld`,
- * so the account over the window stays deterministic for a remote
- * caller while the withheld rows themselves name nothing.
+ * `brain_claims` asks, and the account covers ONLY the rows that pass
+ * it: a withheld row is dropped and nothing counts it (the views'
+ * identical-to-absent convention - a dropped-but-counted row would tell
+ * the caller that a claim it may not see exists, and per entity or
+ * window would let it measure the hidden population). A filtered answer
+ * is therefore byte-identical to the answer over a vault that never
+ * held the withheld rows.
  */
 export function claimEventsReport(
   vault: string,
@@ -1082,8 +1086,7 @@ export function claimEventsReport(
     operation: "events",
     entity: entityFilter === undefined ? null : normalizeEntityName(entityFilter),
     events: gated.slice(0, query.limit),
-    total: matched.length,
-    withheld: matched.length - gated.length,
+    total: gated.length,
     truncated: gated.length > query.limit,
   };
 }
