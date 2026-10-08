@@ -1,6 +1,7 @@
 /**
- * `o2b brain lifecycle <action>` - cross-type tombstone + supersede
- * lifecycle CLI (Belief lifecycle suite, Track A anchor, t_7d5a3589).
+ * `o2b brain lifecycle <action>` - cross-type tombstone + supersede +
+ * correct lifecycle CLI (Belief lifecycle suite, Track A anchor,
+ * t_7d5a3589; correct verb from truth-correctable-time-aware).
  *
  * Actions:
  *   - `tombstone <path> --reason <r> [--superseded-by <id>]`
@@ -8,12 +9,15 @@
  *   - `temporal-replace <predecessor> <successor> --at <T>`
  *   - `tip <id>`            resolve a supersede chain to its live tip
  *   - `curator [--high-use-min <n>]`  read slices over observed-use verdicts
+ *   - `correct <target> [--value <v>] [--successor <id>] [--flatly-wrong]
+ *     [--window-end <T>] [--reason <r>] [--apply]`
  *
  * CLI mirror of the `brain_lifecycle` MCP tool; both delegate to the
  * core lifecycle module so the on-disk shape cannot drift.
  */
 
 import { defaultConfigPath } from "../../../core/config.ts";
+import { correct } from "../../../core/brain/lifecycle/correction.ts";
 import { curatorSlices } from "../../../core/brain/lifecycle/curator.ts";
 import { temporalReplace } from "../../../core/brain/lifecycle/temporal-replace.ts";
 import {
@@ -54,13 +58,18 @@ export async function cmdBrainLifecycle(argv: string[]): Promise<number> {
     "superseded-by": { type: "string" },
     "high-use-min": { type: "string" },
     at: { type: "string" },
+    value: { type: "string" },
+    successor: { type: "string" },
+    "window-end": { type: "string" },
+    "flatly-wrong": { type: "boolean" },
+    apply: { type: "boolean" },
     json: { type: "boolean" },
   });
 
   const action = positional[0];
   if (action === undefined) {
     return usageError(
-      "brain lifecycle requires an action: tombstone | supersede | temporal-replace | tip | curator",
+      "brain lifecycle requires an action: tombstone | supersede | temporal-replace | tip | curator | correct",
     );
   }
 
@@ -160,6 +169,62 @@ export async function cmdBrainLifecycle(argv: string[]): Promise<number> {
           });
         } else {
           ok(`temporal-replace ${res.predecessor} -> ${res.successor} at ${res.at}`);
+        }
+        return 0;
+      }
+      case "correct": {
+        const target = positional[1];
+        if (target === undefined) {
+          return usageError("brain lifecycle correct requires a target path");
+        }
+        const value = normalizeFlagString(flags["value"]) ?? undefined;
+        const successor = normalizeFlagString(flags["successor"]) ?? undefined;
+        const windowEnd = normalizeFlagString(flags["window-end"]) ?? undefined;
+        const reason = normalizeFlagString(flags["reason"]) ?? undefined;
+        const flatlyWrong = flags["flatly-wrong"] === true;
+        // Dry run is the DEFAULT; --apply runs the sweep for real.
+        const dryRun = flags["apply"] !== true;
+        const res = correct({
+          vault,
+          target,
+          ...(value !== undefined ? { value } : {}),
+          ...(successor !== undefined ? { successor } : {}),
+          ...(windowEnd !== undefined ? { windowEnd } : {}),
+          ...(reason !== undefined ? { reason } : {}),
+          flatlyWrong,
+          dryRun,
+          ...(explicitAgent ? { agent: explicitAgent } : {}),
+          configPath: config,
+        });
+        const payload = {
+          bundle_id: res.bundleId,
+          dry_run: res.dryRun,
+          blast_radius: {
+            target: res.blastRadius.target,
+            replaced_by: res.blastRadius.replacedBy,
+            contests: res.blastRadius.contests,
+            mentions: res.blastRadius.mentions,
+            claims: res.blastRadius.claims,
+          },
+          retirements: res.retirements.map((r) => ({
+            path: r.path,
+            end_state: r.endState,
+            valid_until: r.validUntil,
+            reason_code: r.reasonCode,
+            changed: r.changed,
+          })),
+          retarget: res.retarget,
+          ledger: res.ledger,
+          receipts: res.receipts,
+        };
+        if (wantsJson) {
+          okJson(payload);
+        } else {
+          ok(
+            `${res.dryRun ? "dry run" : "applied"} correction bundle ${res.bundleId}: ` +
+              `${res.retirements.length} retirement(s), ${res.retarget.rewritten.length} mention file(s) rewritten, ` +
+              `${res.ledger.length} ledger event(s), ${res.receipts.length} receipt(s)`,
+          );
         }
         return 0;
       }

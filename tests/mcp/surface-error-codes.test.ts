@@ -500,7 +500,7 @@ describe("every operation-dispatching tool answers unknown_operation", () => {
     [
       "brain_lifecycle",
       { action: BOGUS },
-      "brain_lifecycle: 'action' must be one of tombstone, supersede, temporal-replace, tip, curator",
+      "brain_lifecycle: 'action' must be one of tombstone, supersede, temporal-replace, tip, curator, correct",
     ],
     ["brain_writes", { action: BOGUS }, "brain_writes: 'action' must be one of list, plan_revert"],
     [

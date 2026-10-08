@@ -297,7 +297,7 @@ export const REASONS_REACHING_OWNER_CONTENT: ReadonlySet<string> = new Set([REAS
  * test that reads them.
  */
 export const PROBE_ENTRY_COUNT = 101;
-export const PROBE_RECIPE_COUNT = 233;
+export const PROBE_RECIPE_COUNT = 234;
 export const PROBE_TWO_SIDED_COUNT = 32;
 
 /**
@@ -800,6 +800,15 @@ export const NON_CONTENT: ReadonlyArray<ProbeEntry> = [
           predecessor: "notes/shared.md",
           successor: "notes/renamed.md",
           at: LOG_EVENT_DATE,
+        },
+        reason: REASON.writerEcho,
+      },
+      {
+        args: {
+          action: "correct",
+          target: "notes/shared.md",
+          value: "probe",
+          reason: "probe",
         },
         reason: REASON.writerEcho,
       },
