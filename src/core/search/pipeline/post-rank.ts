@@ -28,7 +28,7 @@ import { trustGateAdjuster } from "../../brain/trust/retrieval-gate.ts";
 import { applyRelationPolarityPhase } from "../graph-phases.ts";
 import { clamp01 } from "../../math.ts";
 import { isVisible, pageVisibility } from "../../graph/visibility.ts";
-import { couplingVerdict } from "../correction-coupling.ts";
+import { couplingVerdict, type CouplingVerdict } from "../correction-coupling.ts";
 import { SUCCESSOR_CARRY } from "../relation-polarity.ts";
 import {
   applyPoolFilters,
@@ -270,6 +270,40 @@ function correctionSurvivesPoolFilters(
 }
 
 /**
+ * The coupling verdict for one retired row whose chain walk already
+ * resolved to `tipDocumentId` (null when the walk's tip is the row's own
+ * id, the unresolved corner): the tip must be a DISTINCT readable page
+ * that survives the caller's full filter set, fail-closed on every rung.
+ * The predecessor's own verdict and a chain-tip correction's verdict for
+ * itself are the same question over a different start row, so both ask
+ * it here - one spelling of the rule.
+ */
+function chainTipVerdict(
+  store: PostRankInput["store"],
+  vault: string,
+  frontmatterCache: FrontmatterCache,
+  filters: PoolFilters,
+  filterCtx: FilterContext,
+  predecessorPath: string,
+  tipDocumentId: number | null,
+): CouplingVerdict {
+  const representative =
+    tipDocumentId === null
+      ? undefined
+      : store.representativeChunks([tipDocumentId]).get(tipDocumentId);
+  const successorPath = representative?.path ?? null;
+  return couplingVerdict({
+    predecessorPath,
+    successorPath,
+    successorReadable:
+      successorPath !== null &&
+      representative !== undefined &&
+      correctionReadableAtCaller(successorPath, vault, frontmatterCache, store, filters) &&
+      correctionSurvivesPoolFilters(representative, filters, filterCtx),
+  });
+}
+
+/**
  * The serve-with-correction coupling over the pool's retired-but-serveable
  * rows (truth-correctable-time-aware, contract item 3, Task 18). A row
  * whose page carries a `superseded_by` pointer but survived the status
@@ -320,18 +354,43 @@ function applyCorrectionCoupling(
     // retired row is served only beside a DISTINCT readable chain-tip
     // correction, never bare.
     const tipId = tipDocumentId !== result.documentId ? tipDocumentId : null;
-    const representative =
-      tipId === null ? undefined : store.representativeChunks([tipId]).get(tipId);
-    const successorPath = representative?.path ?? null;
-    const verdict = couplingVerdict({
-      predecessorPath: result.path,
-      successorPath,
-      successorReadable:
-        successorPath !== null &&
-        representative !== undefined &&
-        correctionReadableAtCaller(successorPath, vault, frontmatterCache, store, filters) &&
-        correctionSurvivesPoolFilters(representative, filters, filterCtx),
-    });
+    const verdict = chainTipVerdict(
+      store,
+      vault,
+      frontmatterCache,
+      filters,
+      filterCtx,
+      result.path,
+      tipId,
+    );
+    // A chain-tip correction that is itself a retired row the pool never
+    // carried (its own pointer postdates the index, or its chain is
+    // otherwise unresolved) asks the same question for itself before it
+    // can be appended beside this row: appended bare, its own drop
+    // verdict would re-enter the pool exactly the way the branch below
+    // forbids. The drop counts as unresolved for the predecessor too,
+    // and the fail-closed branch takes the predecessor with it.
+    if (verdict.action === "serve_coupled") {
+      const tipPointer = readCachedFrontmatter(frontmatterCache, vault, verdict.correctionPath)[
+        SUPERSEDED_BY_KEY
+      ];
+      if (typeof tipPointer === "string" && tipPointer.trim() !== "") {
+        const ownTipId = resolveChainTipDocumentId(store, tipId!);
+        const ownVerdict = chainTipVerdict(
+          store,
+          vault,
+          frontmatterCache,
+          filters,
+          filterCtx,
+          verdict.correctionPath,
+          ownTipId !== tipId ? ownTipId : null,
+        );
+        if (ownVerdict.action === "drop") {
+          droppedChunkIds.add(result.chunkId);
+          continue;
+        }
+      }
+    }
     if (verdict.action === "drop") {
       droppedChunkIds.add(result.chunkId);
       continue;

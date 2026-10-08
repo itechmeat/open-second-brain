@@ -140,6 +140,33 @@ describe("post-rank coupling", () => {
     expect(out.results.some((r) => r.path === "stale-predecessor.md")).toBe(false);
   });
 
+  test("a chain-tip correction that is itself retired with an unresolved chain serves neither row bare", async () => {
+    // The predecessor's pointer edge IS indexed, so its chain resolves
+    // onto the correction - but the correction's own pointer postdates
+    // the index, so the correction's own chain walk answers the
+    // correction as its own tip: unresolved, exactly the stale-pointer
+    // corner the stage drops pool rows for. Appended bare as its
+    // predecessor's correction, the dropped verdict would re-enter the
+    // pool the way the fail-closed rule forbids, so the correction asks
+    // its own coupling question and the predecessor drops with it.
+    page(
+      "chained-predecessor.md",
+      ['superseded_by: "[[chained-correction]]"'],
+      "granite quarry output ledger.",
+    );
+    page("chained-correction.md", [], "revised granite quarry output ledger.");
+    await indexVault(config);
+    page(
+      "chained-correction.md",
+      ['superseded_by: "[[chained-ghost-tip]]"'],
+      "revised granite quarry output ledger.",
+    );
+
+    const out = await search(config, { query: "granite quarry output ledger", limit: 10 });
+    expect(out.results.some((r) => r.path === "chained-predecessor.md")).toBe(false);
+    expect(out.results.some((r) => r.path === "chained-correction.md")).toBe(false);
+  });
+
   test("a retired row is dropped when its correction is outside the caller's agent scope", async () => {
     page(
       "scoped-predecessor.md",
