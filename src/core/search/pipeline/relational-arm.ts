@@ -20,7 +20,7 @@ import { DEFAULT_RELATION_TYPES, normalizeRelation } from "../../graph/relation-
 import { normalizeAgentScope } from "../../graph/agent-scope.ts";
 import { loadSchemaPack } from "../../brain/schema-pack.ts";
 import { rrfKey } from "../../scope-key.ts";
-import { TRANSPORT_REACH, type TransportReach } from "../../graph/transport-reach.ts";
+import { resolvedTransportReach, type TransportReach } from "../../graph/transport-reach.ts";
 import { EXACT_WIKILINK_RE } from "../../brain/wikilink.ts";
 import { SUPERSEDED_BY_KEY } from "../../brain/lifecycle/tombstone.ts";
 import { discoverConfig } from "../../config.ts";
@@ -93,7 +93,10 @@ export interface RelationalArmOptions {
    * The caller's transport reach, gating every provenance path node
    * (per-node gating, the `brain_derive_fact` premise-gate precedent). A
    * node whose page is unreadable at this reach is omitted from the path,
-   * never named and never counted. Default: local - everything readable.
+   * never named and never counted. Default: the same resolution the
+   * row-level filters apply (`resolvedTransportReach`) - an absent reach
+   * answers remote, the narrowest, so provenance never names a page the
+   * row gate withholds.
    */
   readonly reach?: TransportReach;
   /**
@@ -214,8 +217,10 @@ export function runRelationalArm(
   // Per-node gating for the ordered path provenance: one titles read and
   // one frontmatter cache per arm run, shared by every node's gate. The
   // caller's owner scope rides beside the transport reach, so a
-  // reach-readable node another agent owns is withheld the same way.
-  const reach = opts.reach ?? TRANSPORT_REACH.local;
+  // reach-readable node another agent owns is withheld the same way. The
+  // absent reach resolves exactly as the row-level filters resolve it,
+  // so a withheld page is never named in provenance the rows do not show.
+  const reach = resolvedTransportReach(opts.reach);
   const agentScope = normalizeAgentScope(opts.agentScope ?? undefined);
   const frontmatterCache: FrontmatterCache = new Map();
   const titles = store.documentTitles();

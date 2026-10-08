@@ -109,10 +109,52 @@ test("path nodes unreadable at the caller's reach are omitted, never named and n
     // identical-to-absent convention, so the provenance answer is the
     // same whether the walk crossed an unreadable document or not.
     expect("withheld" in farEntry![1]).toBe(false);
-    // At local reach the same walk keeps the whole path.
-    const local = runRelationalArm(store, vault, "[[seed]] related extends", {});
+    // At an explicitly local reach the same walk keeps the whole path.
+    const local = runRelationalArm(store, vault, "[[seed]] related extends", {
+      reach: TRANSPORT_REACH.local,
+    });
     const farLocal = [...local.reachByChunk].find(([, reach]) => reach.hops === 2);
     expect(farLocal![1].path.map((step) => step.relation)).toEqual(["related", "extends"]);
+  } finally {
+    await store.close();
+  }
+});
+
+test("an absent reach behaves like remote: provenance never names a page the row gate withholds", async () => {
+  // The row-level filters resolve an absent reach to remote
+  // (`resolvedTransportReach`), so the arm's per-node provenance gate
+  // must answer the same question with the same answer: a page the
+  // remote row gate withholds is never named in an ordered path and
+  // never contributes its supersession tip - a library caller passing no
+  // reach must not learn more from provenance than the rows show.
+  await buildPathVault();
+  writeMd(
+    vault,
+    "mid.md",
+    '---\nvisibility: ["private"]\nextends: "[[far]]"\nsuperseded_by: "[[far]]"\nvalid_until: "2020-01-01"\n---\n\nbeta mid.',
+  );
+  await indexVault(makeConfig({ vault, dbPath }));
+  const store = await Store.open(makeConfig({ vault, dbPath }), { mode: "write", loadVec: false });
+  try {
+    const midId = store.getDocumentIdByPath("mid.md");
+    expect(midId).not.toBeNull();
+    const midChunk = store.representativeChunks([midId!]).get(midId!)!;
+    const absent = runRelationalArm(store, vault, "[[seed]] related extends", {});
+    const absentEntry = absent.reachByChunk.get(midChunk.chunkId);
+    expect(absentEntry).toBeDefined();
+    // The withheld middle page's id is never named and its closed-window
+    // tip never announced: provenance reads the same as the row gate.
+    expect(absentEntry!.path).toEqual([]);
+    expect(absentEntry!.supersededBy).toBeUndefined();
+    // An explicitly local reach keeps the wide walk: the local caller
+    // sees the whole path and the annotation.
+    const local = runRelationalArm(store, vault, "[[seed]] related extends", {
+      reach: TRANSPORT_REACH.local,
+    });
+    const localEntry = local.reachByChunk.get(midChunk.chunkId);
+    expect(localEntry).toBeDefined();
+    expect(localEntry!.path).toEqual([{ documentId: midId!, relation: "related" }]);
+    expect(localEntry!.supersededBy).toBe("far");
   } finally {
     await store.close();
   }

@@ -379,8 +379,9 @@ export async function search(
     // traversal rides the same composite clock every other phase answers
     // to - the walk abandons its frontier once the deadline has fired -
     // and gates its ordered provenance paths at the caller's transport
-    // reach and owner scope (an absent reach leaves the arm's local
-    // default, what the CLI and the stdio transport effectively are). The
+    // reach and owner scope (an absent reach resolves to the same remote
+    // default the row-level filters apply, so provenance never names a
+    // page those rows withhold). The
     // width budgets need no threading: the arm resolves them itself from
     // the same env and the config file this call's resolution read (the
     // resolved config's path, threaded through). With the arm off this
