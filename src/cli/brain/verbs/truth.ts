@@ -1,9 +1,12 @@
 /**
  * `o2b brain truth <op>` (Entity Truth & Self-Improving Dream Suite):
- * operator surface over the claim ledger - `ingest` appends one claim,
- * `slots` and `conflicts` render the fold (with conflict detection),
- * `aggregate` sums exact-match quantities, `collisions` reports
- * cross-agent convergence, `sweep` bounds the ledger.
+ * operator surface over the claim ledger - `ingest` appends one claim
+ * (optionally validity-windowed), `slots` and `conflicts` render the
+ * fold (with conflict detection), `aggregate` sums exact-match
+ * quantities, `collisions` reports cross-agent convergence, `events`
+ * recalls a windowed slice of the ledger, `state` grounds one
+ * agent-stated claim with an anchoring verdict, `sweep` bounds the
+ * ledger.
  *
  * Exit codes: 0 on success, 1 on an operational failure, 2 on usage
  * errors.
@@ -19,20 +22,33 @@ import {
   readClaimEvents,
   sweepClaimEvents,
 } from "../../../core/brain/truth/store.ts";
+import {
+  appendStatedClaims,
+  StatedClaimsRefusal,
+} from "../../../core/brain/truth/stated-claims.ts";
 import { normalizeEntityName } from "../../../core/brain/entities/canonical.ts";
 import { isoSecond } from "../../../core/brain/time.ts";
 import { SearchError } from "../../../core/search/types.ts";
 import { TRANSPORT_REACH } from "../../../core/graph/transport-reach.ts";
 import { resolveAgentName } from "../../../core/config.ts";
-import { claimEventsReport } from "../../../mcp/brain/knowledge-tools.ts";
+import { claimEventsReport, statedClaimEntities } from "../../../mcp/brain/knowledge-tools.ts";
 import { parseTimeBounds } from "../../../mcp/brain/time-bounds.ts";
 import { brainVerbContext, fail, ok, okJson, parse, resolveBrainAgent } from "../helpers.ts";
 
-const OPS = ["ingest", "slots", "conflicts", "aggregate", "collisions", "events", "sweep"] as const;
+const OPS = [
+  "ingest",
+  "slots",
+  "conflicts",
+  "aggregate",
+  "collisions",
+  "events",
+  "state",
+  "sweep",
+] as const;
 type TruthOp = (typeof OPS)[number];
 
 const USAGE =
-  "usage: o2b brain truth <ingest|slots|conflicts|aggregate|collisions|events|sweep>\n" +
+  "usage: o2b brain truth <ingest|slots|conflicts|aggregate|collisions|events|state|sweep>\n" +
   "  ingest     --entity E --aspect A --value V --source S [--agent N] [--ts ISO]\n" +
   "             [--valid-from X --valid-until Y]\n" +
   "             [--quantity-value N --quantity-unit U --quantity-action W]\n" +
@@ -41,6 +57,8 @@ const USAGE =
   "  aggregate  --action W [--unit U] [--entity E]\n" +
   "  collisions [--window-days N]\n" +
   "  events     [--entity E] [--since X] [--until Y] [--limit N]\n" +
+  "  state      --subject S --relation R --object O --text T --source S\n" +
+  "             [--agent N]\n" +
   "  sweep      [--max-events N]\n" +
   "  common     [--vault <path>] [--json]";
 
@@ -65,6 +83,10 @@ export async function cmdBrainTruth(argv: string[]): Promise<number> {
     ts: { type: "string" },
     "valid-from": { type: "string" },
     "valid-until": { type: "string" },
+    subject: { type: "string" },
+    relation: { type: "string" },
+    object: { type: "string" },
+    text: { type: "string" },
     since: { type: "string" },
     until: { type: "string" },
     limit: { type: "string" },
@@ -272,6 +294,68 @@ export async function cmdBrainTruth(argv: string[]): Promise<number> {
           );
           for (const e of rows) {
             ok(`  ${e.ts}  ${e.entity} / ${e.aspect} = ${e.value}  ${e.source}`);
+          }
+        }
+        return 0;
+      }
+      case "state": {
+        // One agent-stated claim per invocation, through the same
+        // grounded-claim core the MCP state operation calls: the payload
+        // boundary refuses whole (unknown relation, missing text or
+        // source) as the INVALID_PARAMS-equivalent usage error, and the
+        // anchoring verdict - committed event or reported-back reasons -
+        // is the answer.
+        const body = (() => {
+          try {
+            const outcome = appendStatedClaims(
+              vault,
+              {
+                claims: [
+                  {
+                    subject: requireString(flags, "subject"),
+                    relation: requireString(flags, "relation"),
+                    object: requireString(flags, "object"),
+                  },
+                ],
+                text: requireString(flags, "text"),
+                agent: resolveBrainAgent(flags, config),
+                ts: isoSecond(new Date()),
+                source: requireString(flags, "source"),
+              },
+              { entities: statedClaimEntities(vault), configPath: config },
+            );
+            return {
+              ok: true,
+              operation: "state" as const,
+              committed: outcome.committed.map((result) => ({ ...result.event })),
+              ungrounded: outcome.ungrounded.map(({ claim, reasons }) => ({
+                subject: claim.subject,
+                relation: claim.relation,
+                object: claim.object,
+                reasons,
+              })),
+            };
+          } catch (exc) {
+            if (exc instanceof StatedClaimsRefusal) {
+              throw new UsageError(exc.message);
+            }
+            throw exc;
+          }
+        })();
+        if (asJson) {
+          okJson(body);
+        } else {
+          if (body.committed.length > 0) {
+            for (const row of body.committed) {
+              const r = row as { entity: string; aspect: string; value: string };
+              ok(`anchored claim recorded: ${r.entity} / ${r.aspect} = ${r.value}`);
+            }
+          }
+          for (const u of body.ungrounded) {
+            ok(
+              `ungrounded claim reported back: ${u.subject} / ${u.relation} / ${u.object}` +
+                ` (${u.reasons.join(", ")})`,
+            );
           }
         }
         return 0;

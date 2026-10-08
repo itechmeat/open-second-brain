@@ -10,7 +10,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
-import { appendClaimEvent } from "../../src/core/brain/truth/store.ts";
+import { readClaimEvents, appendClaimEvent } from "../../src/core/brain/truth/store.ts";
+import { upsertEntity } from "../../src/core/brain/entities/registry.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts";
@@ -326,4 +327,157 @@ test("events refuses unparseable bounds and invalid limits as invalid params", a
   await expect(call(server, { operation: "events", limit: 0 })).rejects.toThrow(/limit/);
   await expect(call(server, { operation: "events", limit: 1.5 })).rejects.toThrow(/limit/);
   await expect(call(server, { operation: "events", limit: "many" })).rejects.toThrow(/limit/);
+});
+
+// ----- operation: "state" (grounded agent-stated claims, Task 8) ------------
+
+interface StateResponse {
+  readonly ok: boolean;
+  readonly operation: string;
+  readonly committed: ReadonlyArray<ClaimEventRow & { readonly extractor?: string }>;
+  readonly ungrounded: ReadonlyArray<{
+    readonly subject: string;
+    readonly relation: string;
+    readonly object: string;
+    readonly reasons: ReadonlyArray<string>;
+  }>;
+}
+
+function seedRegistry(): void {
+  upsertEntity(vault, {
+    category: "people",
+    name: "Alice Mason",
+    aliases: ["Alice"],
+    agent: "claude",
+    now: new Date("2026-06-01T00:00:00Z"),
+  });
+  upsertEntity(vault, {
+    category: "projects",
+    name: "Project Atlas",
+    aliases: ["Atlas"],
+    agent: "claude",
+    now: new Date("2026-06-01T00:00:00Z"),
+  });
+}
+
+test("state commits a grounded agent-stated claim as an agent_stated ledger event", async () => {
+  seedRegistry();
+  const server = new MCPServer({ vault, configPath });
+  await initialize(server);
+  const body = (await call(server, {
+    operation: "state",
+    claims: [{ subject: "Alice Mason", relation: "extends", object: "Project Atlas" }],
+    text: "Alice Mason said the Atlas extension plan refines Project Atlas scope.",
+    source: "[[Brain/notes/session.md]]",
+  })) as unknown as StateResponse;
+  expect(body.ok).toBe(true);
+  expect(body.operation).toBe("state");
+  expect(body.committed).toHaveLength(1);
+  const row = body.committed[0]!;
+  expect(row.entity).toBe("alice mason");
+  expect(row.aspect).toBe("extends");
+  expect(row.value).toBe("Project Atlas");
+  expect(row.extractor).toBe("agent_stated");
+  expect(row.source).toBe("[[Brain/notes/session.md]]");
+  expect(body.ungrounded).toHaveLength(0);
+  const [stored] = readClaimEvents(vault).events;
+  expect(stored!.extractor).toBe("agent_stated");
+});
+
+test("state anchors subjects and objects through registry aliases", async () => {
+  seedRegistry();
+  const server = new MCPServer({ vault, configPath });
+  await initialize(server);
+  // The claim names the full label, the text only the alias: anchoring
+  // goes through the registry's quality-gated match forms, not string
+  // equality between the claim and the text.
+  const body = (await call(server, {
+    operation: "state",
+    claims: [{ subject: "Alice Mason", relation: "related", object: "Project Atlas" }],
+    text: "Alice opened the Atlas kickoff deck this morning.",
+    source: "[[Brain/notes/session.md]]",
+  })) as unknown as StateResponse;
+  expect(body.committed).toHaveLength(1);
+  expect(body.committed[0]!.entity).toBe("alice mason");
+});
+
+test("state reports ungrounded claims back per claim with reasons and commits the rest", async () => {
+  seedRegistry();
+  const server = new MCPServer({ vault, configPath });
+  await initialize(server);
+  const body = (await call(server, {
+    operation: "state",
+    claims: [
+      { subject: "Alice Mason", relation: "related", object: "Project Atlas" },
+      { subject: "Alice Mason", relation: "related", object: "Project Osiris" },
+    ],
+    // The stated label itself is one anchoring form (lane 1's verdict
+    // contract), so the ungrounded claim's object must not occur in the
+    // text at all - "Osiris" alone is a different, shorter form.
+    text: "Alice walked through the Project Atlas plan all morning.",
+    source: "[[Brain/notes/session.md]]",
+  })) as unknown as StateResponse;
+  // Each event is an independent append in an append-only ledger, so the
+  // grounded claim commits and only the ungrounded one is reported back.
+  expect(body.committed).toHaveLength(1);
+  expect(body.committed[0]!.value).toBe("Project Atlas");
+  expect(body.ungrounded).toHaveLength(1);
+  expect(body.ungrounded[0]!.object).toBe("Project Osiris");
+  expect(body.ungrounded[0]!.reasons).toContain("object_unanchored");
+  expect(readClaimEvents(vault).events).toHaveLength(1);
+});
+
+test("state refuses unknown relations before any write", async () => {
+  seedRegistry();
+  const server = new MCPServer({ vault, configPath });
+  await initialize(server);
+  await expect(
+    call(server, {
+      operation: "state",
+      claims: [
+        { subject: "Alice Mason", relation: "related", object: "Project Atlas" },
+        { subject: "Alice Mason", relation: "invented_by", object: "Project Atlas" },
+      ],
+      text: "Alice Mason reviewed Project Atlas today.",
+      source: "[[Brain/notes/session.md]]",
+    }),
+  ).rejects.toThrow(/invented_by/);
+  // Refuse-before-write: nothing landed, not even the valid claim.
+  expect(readClaimEvents(vault).events).toHaveLength(0);
+});
+
+test("state refuses a missing or empty text or source before any write", async () => {
+  seedRegistry();
+  const server = new MCPServer({ vault, configPath });
+  await initialize(server);
+  const claim = [{ subject: "Alice Mason", relation: "related", object: "Project Atlas" }];
+  await expect(
+    call(server, {
+      operation: "state",
+      claims: claim,
+      text: "Alice Mason reviewed Project Atlas today.",
+    }),
+  ).rejects.toThrow(/source/);
+  await expect(
+    call(server, { operation: "state", claims: claim, source: "[[Brain/notes/a.md]]" }),
+  ).rejects.toThrow(/text/);
+  await expect(
+    call(server, { operation: "state", text: "x", source: "[[Brain/notes/a.md]]" }),
+  ).rejects.toThrow(/claims/);
+  expect(readClaimEvents(vault).events).toHaveLength(0);
+});
+
+test("state normalizes the relation token and resolves its agent override", async () => {
+  seedRegistry();
+  const server = new MCPServer({ vault, configPath });
+  await initialize(server);
+  const body = (await call(server, {
+    operation: "state",
+    claims: [{ subject: "Alice Mason", relation: "Related", object: "Project Atlas" }],
+    text: "Alice Mason and Project Atlas met.",
+    source: "[[Brain/notes/session.md]]",
+    agent: "scribe-agent",
+  })) as unknown as StateResponse;
+  expect(body.committed[0]!.aspect).toBe("related");
+  expect(readClaimEvents(vault).events[0]!.agent).toBe("scribe-agent");
 });

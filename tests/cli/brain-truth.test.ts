@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { appendClaimEvent, readClaimEvents } from "../../src/core/brain/truth/store.ts";
+import { upsertEntity } from "../../src/core/brain/entities/registry.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
 let tmp: string;
@@ -316,6 +317,116 @@ test("truth events refuses a non-positive or fractional limit", async () => {
     const res = await runCli(["brain", "truth", "events", "--vault", vault, "--limit", limit]);
     expect(res.returncode).toBe(2);
   }
+});
+
+// ----- truth state (grounded agent-stated claims, Task 9) -------------------
+
+function seedCliRegistry(): void {
+  upsertEntity(vault, {
+    category: "people",
+    name: "Alice Mason",
+    aliases: ["Alice"],
+    agent: "claude",
+    now: new Date("2026-06-01T00:00:00Z"),
+  });
+  upsertEntity(vault, {
+    category: "projects",
+    name: "Project Atlas",
+    aliases: ["Atlas"],
+    agent: "claude",
+    now: new Date("2026-06-01T00:00:00Z"),
+  });
+}
+
+interface StateBody {
+  readonly ok: boolean;
+  readonly operation: string;
+  readonly committed: ReadonlyArray<Record<string, unknown>>;
+  readonly ungrounded: ReadonlyArray<{
+    readonly subject: string;
+    readonly relation: string;
+    readonly object: string;
+    readonly reasons: ReadonlyArray<string>;
+  }>;
+}
+
+function stateArgs(vaultFlag: string, extra: ReadonlyArray<string>): string[] {
+  return ["brain", "truth", "state", "--vault", vaultFlag, ...extra, "--json"];
+}
+
+test("truth state commits a grounded claim and prints the verdict", async () => {
+  seedCliRegistry();
+  const res = await runCli(
+    stateArgs(vault, [
+      "--subject",
+      "Alice Mason",
+      "--relation",
+      "extends",
+      "--object",
+      "Atlas",
+      "--text",
+      "Alice Mason said the Atlas extension plan is ready for review today.",
+      "--source",
+      "[[Brain/notes/session.md]]",
+    ]),
+  );
+  expect(res.returncode).toBe(0);
+  const body = JSON.parse(res.stdout) as unknown as StateBody;
+  expect(body.ok).toBe(true);
+  expect(body.operation).toBe("state");
+  expect(body.committed).toHaveLength(1);
+  const row = body.committed[0] as Record<string, unknown>;
+  expect(row["entity"]).toBe("alice mason");
+  expect(row["aspect"]).toBe("extends");
+  expect(row["value"]).toBe("Atlas");
+  expect(row["extractor"]).toBe("agent_stated");
+  expect(body.ungrounded).toHaveLength(0);
+  const [stored] = readClaimEvents(vault).events;
+  expect(stored!.extractor).toBe("agent_stated");
+});
+
+test("truth state reports an ungrounded claim with reasons and writes nothing", async () => {
+  seedCliRegistry();
+  const res = await runCli(
+    stateArgs(vault, [
+      "--subject",
+      "Alice Mason",
+      "--relation",
+      "related",
+      "--object",
+      "Project Osiris",
+      "--text",
+      "Alice walked through the Project Atlas plan all morning.",
+      "--source",
+      "[[Brain/notes/session.md]]",
+    ]),
+  );
+  expect(res.returncode).toBe(0);
+  const body = JSON.parse(res.stdout) as unknown as StateBody;
+  expect(body.committed).toHaveLength(0);
+  expect(body.ungrounded).toHaveLength(1);
+  expect(body.ungrounded[0]!.reasons).toContain("object_unanchored");
+  expect(readClaimEvents(vault).events).toHaveLength(0);
+});
+
+test("truth state refuses an unknown relation with a usage error", async () => {
+  seedCliRegistry();
+  const res = await runCli(
+    stateArgs(vault, [
+      "--subject",
+      "Alice Mason",
+      "--relation",
+      "invented_by",
+      "--object",
+      "Atlas",
+      "--text",
+      "Alice Mason reviewed Atlas today.",
+      "--source",
+      "[[Brain/notes/session.md]]",
+    ]),
+  );
+  expect(res.returncode).toBe(2);
+  expect(readClaimEvents(vault).events).toHaveLength(0);
 });
 
 test("facts decompose splits a file into assertions", async () => {

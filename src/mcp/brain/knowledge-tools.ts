@@ -45,6 +45,16 @@ import { normaliseWikilinkTarget } from "../../core/brain/wikilink.ts";
 import { isoSecond } from "../../core/brain/time.ts";
 import { normalizeAgentArgument } from "../../core/agent-identity.ts";
 import { normalizeEntityName } from "../../core/brain/entities/canonical.ts";
+import { listEntities } from "../../core/brain/entities/registry.ts";
+import {
+  ENTITY_STATUS_SCOPE,
+  entityStatusInScope,
+} from "../../core/brain/entities/status-scope.ts";
+import {
+  appendStatedClaims,
+  StatedClaimsRefusal,
+  type StatedClaim,
+} from "../../core/brain/truth/stated-claims.ts";
 import { listDeadEnds, recordDeadEnd } from "../../core/brain/dead-ends.ts";
 import { buildCodegraphReport } from "../../core/partner/codegraph-report.ts";
 import { buildForesight, FORESIGHT_HORIZON_DAYS } from "../../core/brain/temporal/foresight.ts";
@@ -600,10 +610,11 @@ function toolBrainTruth(
     op !== "conflicts" &&
     op !== "aggregate" &&
     op !== "collisions" &&
-    op !== "events"
+    op !== "events" &&
+    op !== "state"
   ) {
     throw unknownOperationError(
-      "brain_truth: operation must be ingest|slots|conflicts|aggregate|collisions|events",
+      "brain_truth: operation must be ingest|slots|conflicts|aggregate|collisions|events|state",
     );
   }
   const requireStr = (name: string): string => {
@@ -686,6 +697,82 @@ function toolBrainTruth(
       untilMs: bounds.untilMs,
       limit,
     });
+  }
+
+  // Grounded agent-stated claims (truth-correctable-time-aware, Task 8),
+  // through lane 1's grounded-claim core: the payload boundary refuses
+  // WHOLE calls (unknown relation, missing text, missing source) before
+  // ANY write, and anchoring verdicts are per claim - the one
+  // partial-commit lane in this subsystem, safe because each event is an
+  // independent append in an append-only ledger and the response reports
+  // exactly what landed.
+  if (op === "state") {
+    const claims = args["claims"];
+    if (!Array.isArray(claims) || claims.length === 0) {
+      throw new MCPError(INVALID_PARAMS, "brain_truth state: claims must be a non-empty array");
+    }
+    const stated = claims.map((raw, index): StatedClaim => {
+      if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+        throw new MCPError(INVALID_PARAMS, `brain_truth state: claims[${index}] must be an object`);
+      }
+      const claim = raw as Record<string, unknown>;
+      // Type-shaped fields only; an empty subject or object is not a
+      // refusal here but a per-claim ungrounded verdict downstream.
+      const readField = (name: string): string => {
+        const value = claim[name];
+        if (typeof value !== "string") {
+          throw new MCPError(
+            INVALID_PARAMS,
+            `brain_truth state: claims[${index}].${name} must be a string`,
+          );
+        }
+        return value;
+      };
+      return {
+        subject: readField("subject"),
+        relation: readField("relation"),
+        object: readField("object"),
+      };
+    });
+    const agentArg = args["agent"];
+    if (agentArg !== undefined && typeof agentArg !== "string") {
+      throw new MCPError(INVALID_PARAMS, "brain_truth state: agent must be a string");
+    }
+    const agent =
+      normalizeAgentArgument(typeof agentArg === "string" ? agentArg : null) ??
+      resolveAgentName(ctx.configPath ?? undefined);
+    try {
+      const outcome = appendStatedClaims(
+        ctx.vault,
+        {
+          claims: stated,
+          text: requireStr("text"),
+          agent,
+          ts: isoSecond(new Date()),
+          source: requireStr("source"),
+        },
+        {
+          entities: statedClaimEntities(ctx.vault),
+          ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
+        },
+      );
+      return {
+        ok: true,
+        operation: "state",
+        committed: outcome.committed.map((result) => ({ ...result.event })),
+        ungrounded: outcome.ungrounded.map(({ claim, reasons }) => ({
+          subject: claim.subject,
+          relation: claim.relation,
+          object: claim.object,
+          reasons,
+        })),
+      };
+    } catch (exc) {
+      if (exc instanceof StatedClaimsRefusal) {
+        throw new MCPError(INVALID_PARAMS, `brain_truth state: ${exc.message}`);
+      }
+      throw exc;
+    }
   }
 
   const events = readClaimEvents(ctx.vault).events;
@@ -888,6 +975,24 @@ function toolBrainClaims(
 }
 
 // ----- brain_truth (Entity Truth & Self-Improving Dream Suite) ---------------
+
+/**
+ * The registry slice the stated-claims anchoring consumes: canonical-
+ * scope entities only (the anchoring kernel's status discipline,
+ * applied where the registry is read), narrowed to AtomicEntityLike.
+ * Shared by the MCP `state` operation and the CLI `brain truth state`
+ * subcommand so the two surfaces anchor identically.
+ */
+export function statedClaimEntities(vault: string): ReadonlyArray<{
+  readonly id: string;
+  readonly name: string;
+  readonly aliases: ReadonlyArray<string>;
+  readonly status: string;
+}> {
+  return listEntities(vault)
+    .filter((entity) => entityStatusInScope(entity.status, ENTITY_STATUS_SCOPE.canonical))
+    .map(({ id, name, aliases, status }) => ({ id, name, aliases, status }));
+}
 
 /**
  * One windowed events query, shared by the MCP `events` operation and
@@ -1142,13 +1247,13 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_truth",
     description:
-      "Entity claim ledger: ingest a claim, render current-truth slots with superseded history, list contested conflicts (ask_user), aggregate exact-match quantities, report cross-agent collisions, or window recall with the events operation (since/until filter assertion time only; per-claim validity windows ride on the rows verbatim, half-open [validFrom, validUntil)).",
+      "Entity claim ledger: ingest a claim, render current-truth slots with superseded history, list contested conflicts (ask_user), aggregate exact-match quantities, report cross-agent collisions, window recall with the events operation (since/until filter assertion time only; per-claim validity windows ride on the rows verbatim, half-open [validFrom, validUntil)), or commit grounded agent-stated claims with the state operation (per-claim anchoring verdicts against the entity registry).",
     inputSchema: {
       type: "object",
       properties: {
         operation: {
           type: "string",
-          enum: ["ingest", "slots", "conflicts", "aggregate", "collisions", "events"],
+          enum: ["ingest", "slots", "conflicts", "aggregate", "collisions", "events", "state"],
           description: "Tool operation.",
         },
         entity: {
@@ -1179,6 +1284,29 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           minimum: 1,
           description:
             "events: page size (default 200, capped at 1000); rows are ascending assertion ts, so tail-following paginates by advancing since.",
+        },
+        claims: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              subject: { type: "string", description: "Entity the claim is about." },
+              relation: {
+                type: "string",
+                description:
+                  "Relation-vocabulary token between subject and object (related, extends, depends_on, refines, contradicts, superseded_by).",
+              },
+              object: { type: "string", description: "Entity the claim points at." },
+            },
+            required: ["subject", "relation", "object"],
+            additionalProperties: false,
+          },
+          description:
+            "state: the agent-stated claims to ground; each commits only when its subject and object anchor in text.",
+        },
+        text: {
+          type: "string",
+          description: "state: the assertion text every claim is anchored against.",
         },
       },
       required: ["operation"],
