@@ -5,8 +5,9 @@
  * `agent_stated` extractor tag - entity is the normalized subject,
  * aspect the relation token (validated against the single relation
  * vocabulary), value the object display form. The payload boundary
- * refuses whole calls (unknown relation, missing text, missing source)
- * with nothing written; the anchoring verdict is per claim, so
+ * refuses whole calls (unknown relation, missing text, missing source,
+ * empty agent, malformed ts) with nothing written; the anchoring verdict
+ * is per claim, so
  * grounded claims commit while ungrounded claims are reported back
  * with machine reason codes. Anchoring uses the one occurrence kernel
  * (`anchorEntityForms`, quality-gated normalized match forms,
@@ -132,6 +133,36 @@ describe("appendStatedClaims", () => {
         appendStatedClaims(vault, { ...PAYLOAD, source: "", claims: [claim()] }),
       ),
     ).toThrow(/source/);
+    expect(readClaimEvents(vault).events).toHaveLength(0);
+  });
+
+  test("a malformed ts refuses the whole payload through the refusal channel, before any write", () => {
+    // Two grounded claims: a boundary that validated ts only inside the
+    // append loop would leave the payload's refusal to the store's plain
+    // Error - outside the documented refusal channel - instead of this
+    // whole-call refusal with nothing written.
+    expect(() =>
+      withDeviceId("", () =>
+        appendStatedClaims(vault, {
+          ...PAYLOAD,
+          ts: "2026-06-01 10:00:00",
+          claims: [claim(), claim({ object: "Meta" })],
+        }),
+      ),
+    ).toThrow(StatedClaimsRefusal);
+    expect(readClaimEvents(vault).events).toHaveLength(0);
+  });
+
+  test("an empty agent refuses the whole payload through the refusal channel, before any write", () => {
+    expect(() =>
+      withDeviceId("", () =>
+        appendStatedClaims(vault, {
+          ...PAYLOAD,
+          agent: "   ",
+          claims: [claim(), claim({ object: "Meta" })],
+        }),
+      ),
+    ).toThrow(StatedClaimsRefusal);
     expect(readClaimEvents(vault).events).toHaveLength(0);
   });
 

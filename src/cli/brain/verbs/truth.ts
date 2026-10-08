@@ -19,6 +19,7 @@ import { claimEventLimit } from "../../../core/brain/truth/events-window.ts";
 import {
   appendClaimEvent,
   CLAIM_EVENT_MAX_COUNT,
+  ClaimWindowRefusal,
   readClaimEvents,
   sweepClaimEvents,
 } from "../../../core/brain/truth/store.ts";
@@ -134,20 +135,28 @@ export async function cmdBrainTruth(argv: string[]): Promise<number> {
         }
         const validFrom = flags["valid-from"] as string | undefined;
         const validUntil = flags["valid-until"] as string | undefined;
-        const result = appendClaimEvent(vault, {
-          ts: (flags["ts"] as string | undefined) ?? isoSecond(new Date()),
-          agent: resolveBrainAgent(flags, config),
-          entity: requireString(flags, "entity"),
-          aspect: requireString(flags, "aspect"),
-          value: requireString(flags, "value"),
-          valueKind,
-          ...(quantity !== undefined ? { quantity } : {}),
-          // Validity windows (contract item 1): presence-gated passthrough;
-          // the store refuses an unparseable or inverted window by name.
-          ...(validFrom !== undefined ? { validFrom } : {}),
-          ...(validUntil !== undefined ? { validUntil } : {}),
-          source: requireString(flags, "source"),
-        });
+        // Validity windows (contract item 1): presence-gated passthrough;
+        // the store refuses an unparseable or inverted window by name,
+        // mapped to the usage failure class - a mistyped window is the
+        // same kind of mistake as --since garbage or --limit 0.
+        let result;
+        try {
+          result = appendClaimEvent(vault, {
+            ts: (flags["ts"] as string | undefined) ?? isoSecond(new Date()),
+            agent: resolveBrainAgent(flags, config),
+            entity: requireString(flags, "entity"),
+            aspect: requireString(flags, "aspect"),
+            value: requireString(flags, "value"),
+            valueKind,
+            ...(quantity !== undefined ? { quantity } : {}),
+            ...(validFrom !== undefined ? { validFrom } : {}),
+            ...(validUntil !== undefined ? { validUntil } : {}),
+            source: requireString(flags, "source"),
+          });
+        } catch (exc) {
+          if (exc instanceof ClaimWindowRefusal) throw new UsageError((exc as Error).message);
+          throw exc;
+        }
         const body = {
           ok: true,
           entity: result.event.entity,

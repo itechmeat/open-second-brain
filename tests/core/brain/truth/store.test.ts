@@ -15,6 +15,7 @@ import {
   appendClaimEvent,
   CLAIM_EVENT_MAX_COUNT,
   claimShardPath,
+  ClaimWindowRefusal,
   readClaimEvents,
   readTruthState,
   sweepClaimEvents,
@@ -253,6 +254,15 @@ describe("claim validity windows (presence-gated, schema v1)", () => {
   test("an invalid validity value refuses the append with a named error", () => {
     expect(() => append({ validFrom: "yesterday" })).toThrow(/validFrom/);
     expect(() => append({ validUntil: "2026-01-01T10:00:00+02:00" })).toThrow(/validUntil/);
+  });
+
+  test("a window refusal is typed, so tool surfaces map it to invalid params", () => {
+    // The MCP boundary maps this class to INVALID_PARAMS and the CLI
+    // verb to exit 2; the store keeps refusing strictly either way.
+    expect(() => append({ validFrom: "yesterday" })).toThrow(ClaimWindowRefusal);
+    expect(() => append({ validFrom: "2026-06-01", validUntil: "2026-01-01" })).toThrow(
+      ClaimWindowRefusal,
+    );
   });
 
   test("an empty or inverted window refuses the append", () => {

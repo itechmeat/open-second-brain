@@ -61,7 +61,11 @@ import { buildForesight, FORESIGHT_HORIZON_DAYS } from "../../core/brain/tempora
 import { aggregateQuantities } from "../../core/brain/truth/aggregate.ts";
 import { detectAgentCollisions } from "../../core/brain/truth/collision.ts";
 import { computeTruthStateWithConflicts } from "../../core/brain/truth/conflicts.ts";
-import { appendClaimEvent, readClaimEvents } from "../../core/brain/truth/store.ts";
+import {
+  appendClaimEvent,
+  ClaimWindowRefusal,
+  readClaimEvents,
+} from "../../core/brain/truth/store.ts";
 import { claimEventLimit, matchClaimEvents } from "../../core/brain/truth/events-window.ts";
 import {
   allClaims,
@@ -677,21 +681,33 @@ function toolBrainTruth(
     // and triple as an existence oracle. (The CLI verb runs at operator
     // reach and passes no gate.)
     const readable = readableAtContextReachOrUndefined(ctx);
-    const result = appendClaimEvent(
-      ctx.vault,
-      {
-        ts: isoSecond(new Date()),
-        agent,
-        entity: requireStr("entity"),
-        aspect: requireStr("aspect"),
-        value: requireStr("value"),
-        ...(quantity !== undefined ? { valueKind: "quantity" as const, quantity } : {}),
-        ...(validFrom !== undefined ? { validFrom } : {}),
-        ...(validUntil !== undefined ? { validUntil } : {}),
-        source: requireStr("source"),
-      },
-      readable !== undefined ? { readableSource: readable } : {},
-    );
+    // The store's window refusal is strict by design; here it is a
+    // mistyped parameter, so it answers as the same failure class as the
+    // sibling mistyped inputs (entity, since/until, limit) - typed
+    // INVALID_PARAMS, never an internal error.
+    let result;
+    try {
+      result = appendClaimEvent(
+        ctx.vault,
+        {
+          ts: isoSecond(new Date()),
+          agent,
+          entity: requireStr("entity"),
+          aspect: requireStr("aspect"),
+          value: requireStr("value"),
+          ...(quantity !== undefined ? { valueKind: "quantity" as const, quantity } : {}),
+          ...(validFrom !== undefined ? { validFrom } : {}),
+          ...(validUntil !== undefined ? { validUntil } : {}),
+          source: requireStr("source"),
+        },
+        readable !== undefined ? { readableSource: readable } : {},
+      );
+    } catch (exc) {
+      if (exc instanceof ClaimWindowRefusal) {
+        throw new MCPError(INVALID_PARAMS, `brain_truth ingest: ${(exc as Error).message}`);
+      }
+      throw exc;
+    }
     return {
       ok: true,
       entity: result.event.entity,
@@ -723,8 +739,9 @@ function toolBrainTruth(
 
   // Grounded agent-stated claims (truth-correctable-time-aware, Task 8),
   // through lane 1's grounded-claim core: the payload boundary refuses
-  // WHOLE calls (unknown relation, missing text, missing source) before
-  // ANY write, and anchoring verdicts are per claim - the one
+  // WHOLE calls (unknown relation, missing text, missing source, empty
+  // agent, malformed ts) before ANY write, and anchoring verdicts are
+  // per claim - the one
   // partial-commit lane in this subsystem, safe because each event is an
   // independent append in an append-only ledger and the response reports
   // exactly what landed.

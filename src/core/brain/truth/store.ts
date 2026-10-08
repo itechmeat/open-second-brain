@@ -66,7 +66,22 @@ export const CLAIM_EVENT_MAX_COUNT = 10000;
 
 // Same canonical UTC shape the log writer emits; see ISO_UTC_TS_RE in
 // log-jsonl.ts for why this stays strict.
-const ISO_UTC_TS_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
+export const ISO_UTC_TS_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
+
+/**
+ * A validity window the append boundary refuses: an unparseable bound,
+ * or an empty or inverted window. Typed so a tool surface can map it to
+ * its invalid-params failure class (MCP INVALID_PARAMS, CLI exit 2)
+ * instead of letting it answer as an internal error - the same
+ * mistyped-input discipline the since/until and limit guards follow.
+ * The refusal itself stays strict: nothing is written.
+ */
+export class ClaimWindowRefusal extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ClaimWindowRefusal";
+  }
+}
 
 // `claims.jsonl` or `claims.<deviceId>.jsonl`; device ids are lowercase
 // slugs, and Syncthing conflict copies are never shards (the shared
@@ -251,14 +266,15 @@ export function appendClaimEvent(
   );
   // Validity windows (contract item 1): presence-gated, strictly
   // validated, and never guessed. An unparsable bound or an empty or
-  // inverted window refuses the append by name.
+  // inverted window refuses the append by name - typed, so the tool
+  // surfaces answer it as invalid params rather than an internal error.
   if (resolved.validFrom !== undefined && !isValidityPoint(resolved.validFrom)) {
-    throw new Error(
+    throw new ClaimWindowRefusal(
       `claim validFrom must be a bare ISO date or canonical UTC timestamp: ${JSON.stringify(resolved.validFrom)}`,
     );
   }
   if (resolved.validUntil !== undefined && !isValidityPoint(resolved.validUntil)) {
-    throw new Error(
+    throw new ClaimWindowRefusal(
       `claim validUntil must be a bare ISO date or canonical UTC timestamp: ${JSON.stringify(resolved.validUntil)}`,
     );
   }
@@ -269,7 +285,7 @@ export function appendClaimEvent(
     window.untilMs !== null &&
     window.fromMs >= window.untilMs
   ) {
-    throw new Error(
+    throw new ClaimWindowRefusal(
       `claim validity window is empty or inverted: validFrom ${JSON.stringify(resolved.validFrom)} does not parse before validUntil ${JSON.stringify(resolved.validUntil)}`,
     );
   }

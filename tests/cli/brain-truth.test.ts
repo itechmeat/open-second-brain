@@ -272,7 +272,10 @@ test("truth ingest accepts --valid-from and --valid-until", async () => {
   expect(event!.validUntil).toBe("2026-09-01");
 });
 
-test("truth ingest refuses an empty or inverted validity window", async () => {
+test("truth ingest refuses an empty or inverted validity window as a usage error", async () => {
+  // A mistyped window is the same failure class as the sibling mistyped
+  // inputs (--since garbage, --limit 0): usage, exit 2 - not an
+  // operational failure.
   const res = await runCli([
     "brain",
     "truth",
@@ -293,7 +296,30 @@ test("truth ingest refuses an empty or inverted validity window", async () => {
     "2026-06-01",
     "--json",
   ]);
-  expect(res.returncode).toBe(1);
+  expect(res.returncode).toBe(2);
+  expect(readClaimEvents(vault).events).toHaveLength(0);
+});
+
+test("truth ingest refuses an unparseable validity bound as a usage error", async () => {
+  const res = await runCli([
+    "brain",
+    "truth",
+    "ingest",
+    "--vault",
+    vault,
+    "--entity",
+    "Alice Mason",
+    "--aspect",
+    "employer",
+    "--value",
+    "Google",
+    "--source",
+    "[[Brain/notes/standup.md]]",
+    "--valid-from",
+    "garbage",
+    "--json",
+  ]);
+  expect(res.returncode).toBe(2);
   expect(readClaimEvents(vault).events).toHaveLength(0);
 });
 

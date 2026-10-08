@@ -7,9 +7,9 @@
  * Two boundaries govern the path, with different strictness:
  *
  *   - The payload boundary refuses WHOLE calls: an unknown relation
- *     (validated against the single relation vocabulary), missing text
- *     or missing source throws {@link StatedClaimsRefusal} before
- *     anything is written.
+ *     (validated against the single relation vocabulary), missing text,
+ *     missing source, an empty agent or a malformed ts throws
+ *     {@link StatedClaimsRefusal} before anything is written.
  *   - The anchoring verdict is PER CLAIM, using the one occurrence
  *     kernel {@link anchorEntityForms} (quality-gated normalized match
  *     forms, minimum length 3): a claim whose subject and object both
@@ -30,7 +30,7 @@ import { isKnownRelation, normalizeRelation } from "../../graph/relation-vocab.t
 import { anchorEntityForms, type AtomicEntityLike } from "../atomic-facts.ts";
 import { normalizeEntityName } from "../entities/canonical.ts";
 import type { AppendClaimInput, AppendClaimResult } from "./store.ts";
-import { appendClaimEvent } from "./store.ts";
+import { appendClaimEvent, ISO_UTC_TS_RE } from "./store.ts";
 import type { ClaimExtractor } from "./types.ts";
 
 /** How this release tags agent-stated claims. */
@@ -162,6 +162,19 @@ export function appendStatedClaims(
         `stated claims: unknown relation: ${JSON.stringify(claim.relation)}`,
       );
     }
+  }
+  // The whole-call promise covers every field the committed events
+  // carry: an empty agent or a malformed ts must refuse HERE, through
+  // the typed refusal channel, before the first write - not surface
+  // mid-loop as the store's plain error outside the documented refusal
+  // channel.
+  if (payload.agent.trim() === "") {
+    throw new StatedClaimsRefusal("stated claims: agent is required");
+  }
+  if (!ISO_UTC_TS_RE.test(payload.ts)) {
+    throw new StatedClaimsRefusal(
+      `stated claims: ts must be canonical ISO-8601 UTC: ${JSON.stringify(payload.ts)}`,
+    );
   }
 
   const entities = opts.entities ?? [];

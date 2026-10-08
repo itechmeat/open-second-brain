@@ -83,6 +83,30 @@ async function call(
   return JSON.parse(res.result!.content![0]!.text!) as Record<string, unknown>;
 }
 
+/**
+ * The whole JSON-RPC response, for assertions on the failure CLASS: a
+ * handler-mapped refusal answers as a JSON-RPC error carrying the
+ * invalid-params code, while an unmapped internal error would arrive as
+ * an isError tool result (or an internal_error envelope).
+ */
+async function callRaw(
+  server: MCPServer,
+  args: Record<string, unknown>,
+): Promise<{
+  error?: { code: number; message: string; data?: { code?: string } };
+  result?: { isError?: boolean };
+}> {
+  return (await server.handleRequest({
+    jsonrpc: JSONRPC_VERSION,
+    id: 99,
+    method: "tools/call",
+    params: { name: "brain_truth", arguments: args },
+  })) as {
+    error?: { code: number; message: string; data?: { code?: string } };
+    result?: { isError?: boolean };
+  };
+}
+
 test("ingest then slots round-trips one claim through the fold", async () => {
   const server = new MCPServer({ vault, configPath });
   await initialize(server);
@@ -700,4 +724,34 @@ test("state treats a source beyond the caller's reach exactly like an absent one
   } finally {
     rmSync(b.configHome, { recursive: true, force: true });
   }
+});
+
+// ----- boundary discipline (malformed window is a param error) --------------
+
+test("ingest refuses a malformed validity bound as invalid params, not an internal error", async () => {
+  const server = new MCPServer({ vault, configPath });
+  await initialize(server);
+  for (const bad of [
+    { valid_from: "garbage" },
+    { valid_until: "also garbage" },
+    { valid_from: "2026-09-01", valid_until: "2026-06-01" },
+  ]) {
+    const raw = await callRaw(server, {
+      operation: "ingest",
+      entity: "Alice Mason",
+      aspect: "employer",
+      value: "Google",
+      source: "[[Brain/notes/standup.md]]",
+      ...bad,
+    });
+    // The sibling mistyped inputs (limit, since/until) answer as typed
+    // INVALID_PARAMS; a mistyped validity bound is the same failure
+    // class, never an internal error.
+    expect(raw.error).toBeDefined();
+    expect(raw.error!.code).toBe(-32602);
+    expect(raw.error!.data?.code).toBe("invalid_params");
+    expect(raw.error!.message).toMatch(/valid[FU]/);
+    expect(raw.result?.isError).toBeUndefined();
+  }
+  expect(readClaimEvents(vault).events).toHaveLength(0);
 });
