@@ -26,6 +26,9 @@ import {
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts";
 import { cmdBrainLifecycle } from "../../src/cli/brain/verbs/lifecycle.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import { tempDirs } from "../helpers/temp-dir.ts";
+
+const mkTemp = tempDirs();
 
 let vault: string;
 let configHome: string;
@@ -222,7 +225,7 @@ describe("brain_lifecycle correct", () => {
   });
 
   test("a target below the caller's reach is refused as missing", async () => {
-    const base = mkdtempSync(join(tmpdir(), "o2b-lifecycle-correct-reach-"));
+    const base = mkTemp("o2b-lifecycle-correct-reach-");
     const f: ReachLogFixture = buildReachLogFixture(base, true);
     const withheld = join(f.vault, "Brain", "preferences", "pref-withheld.md");
     writeFileSync(

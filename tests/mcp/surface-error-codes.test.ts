@@ -461,7 +461,7 @@ describe("every operation-dispatching tool answers unknown_operation", () => {
     [
       "brain_truth",
       { operation: BOGUS },
-      "brain_truth: operation must be ingest|slots|conflicts|aggregate|collisions",
+      "brain_truth: operation must be ingest|slots|conflicts|aggregate|collisions|events|state",
     ],
     ["brain_dead_ends", { operation: BOGUS }, "brain_dead_ends: operation must be record|list"],
     [

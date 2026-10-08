@@ -1302,8 +1302,11 @@ const DIRECT_WRITE_ROWS = 77;
  *
  * 109 -> 110: `src/core/search/freshen.ts` writes the freshen-on-read state
  * file through `atomicWriteFileSync`.
+ *
+ * 110 -> 111: `src/core/brain/lifecycle/correction.ts` retires the corrected
+ * record through `writeFrontmatterAtomic`.
  */
-const SHARED_HELPER_ROWS = 110;
+const SHARED_HELPER_ROWS = 111;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1391,8 +1394,10 @@ const UNSTAMPED_DIRECT_ROWS = 76;
  * stages hub candidates through the shared atomic JSONL writer. 105 -> 106:
  * the session focus writes through the shared atomic text writer. 106 -> 107:
  * the freshen-on-read state file writes through the shared atomic writer.
+ * 107 -> 108: the correction sweep retires its target's frontmatter through
+ * the shared atomic frontmatter writer.
  */
-const UNSTAMPED_SHARED_ROWS = 107;
+const UNSTAMPED_SHARED_ROWS = 108;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {

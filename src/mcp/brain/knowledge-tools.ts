@@ -1257,7 +1257,7 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_truth",
     description:
-      "Entity claim ledger: ingest a claim, render current-truth slots with superseded history, list contested conflicts (ask_user), aggregate exact-match quantities, report cross-agent collisions, window recall with the events operation (since/until filter assertion time only; per-claim validity windows ride on the rows verbatim, half-open [validFrom, validUntil)), or commit grounded agent-stated claims with the state operation (per-claim anchoring verdicts against the entity registry).",
+      "Entity claim ledger: ingest a claim, render current-truth slots, list conflicts, aggregate quantities, report collisions, window recall via the events operation, or commit grounded agent-stated claims via the state operation with per-claim anchoring verdicts.",
     inputSchema: {
       type: "object",
       properties: {
