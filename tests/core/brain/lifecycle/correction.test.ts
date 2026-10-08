@@ -493,6 +493,38 @@ describe("applied run", () => {
     expect(readFileSync(join(vault, TARGET), "utf8")).toBe(before);
   });
 
+  test("a receipt-ask failure is reported, not fatal: the retirement lands and the sweep succeeds", () => {
+    seedTarget();
+    // The receipt shard's path is shadowed by a directory, so every
+    // decision-change receipt ask throws (the file cannot be appended
+    // to) - the same accountability-log hiccup the tombstone
+    // pre-receipt's fail-soft discipline in this sweep anticipates.
+    mkdirSync(join(vault, "Brain", "truth", "decision-change.jsonl"), { recursive: true });
+
+    const res = correct({
+      vault,
+      configPath,
+      target: TARGET,
+      value: "two minutes",
+      successor: "pref-new",
+      reason: "the timeout changed",
+      dryRun: false,
+      now: NOW,
+      agent: "tester",
+    });
+
+    // The applied sweep completed: the retirement is on the record, the
+    // mentions are retargeted and the ledger correction event landed.
+    expect(targetMeta()["valid_until"]).toBe(CORRECTION_TS);
+    expect(targetMeta()["superseded_by"]).toBe("[[pref-new]]");
+    expect(res.retirements[0]!.changed).toBe(true);
+    expect(res.retarget.rewritten).toContain("Brain/preferences/pref-other.md");
+    expect(res.ledger).toHaveLength(1);
+    // The failed asks are reported as not appended, never thrown.
+    expect(res.receipts.length).toBeGreaterThan(0);
+    expect(res.receipts.every((r) => r.appended === false)).toBe(true);
+  });
+
   test("a target naming no file is refused", () => {
     seedTarget();
     expect(() =>

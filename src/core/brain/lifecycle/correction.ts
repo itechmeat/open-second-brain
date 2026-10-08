@@ -476,18 +476,29 @@ export function correct(input: CorrectInput): CorrectResult {
   // appended: false instead of doubling the record.
   const receipts: CorrectionReceiptRecord[] = [];
   const askReceipt = (subject: string, before: string, after: string): void => {
-    const res = appendDecisionChangeReceipt(input.vault, {
-      subject,
-      before,
-      after,
-      actor: agent,
-      reasonCode,
-      rationale: reason,
-      evidenceTriggers: [trigger],
-      ts: correctionTs,
-      ...(input.configPath !== undefined ? { configPath: input.configPath } : {}),
-    });
-    receipts.push(Object.freeze({ subject, appended: res.appended }));
+    // Fail-soft, the same discipline the tombstone pre-receipt below
+    // applies: an accountability-log hiccup must never abort an applied
+    // sweep whose writes have already landed. A failed ask is reported
+    // (it reads as not appended), never fatal.
+    let appended = false;
+    try {
+      const res = appendDecisionChangeReceipt(input.vault, {
+        subject,
+        before,
+        after,
+        actor: agent,
+        reasonCode,
+        rationale: reason,
+        evidenceTriggers: [trigger],
+        ts: correctionTs,
+        ...(input.configPath !== undefined ? { configPath: input.configPath } : {}),
+      });
+      appended = res.appended;
+    } catch {
+      // The retirement and the ledger events are already on disk; the
+      // missing receipt surfaces through the response's appended: false.
+    }
+    receipts.push(Object.freeze({ subject, appended }));
   };
   if (alreadyRetired) {
     retirements.push(
