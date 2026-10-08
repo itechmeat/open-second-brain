@@ -77,12 +77,27 @@ export function claimEventLimit(raw: unknown): number {
 /**
  * Resolve unix-ms window bounds into whole-second ISO-8601 UTC stamps,
  * the form the second-precision string compare below consumes. Null
- * stays null: that side of the window is open.
+ * stays null: that side of the window is open. A non-finite bound is
+ * refused by name - it would otherwise reach `new Date(NaN)` below and
+ * die inside `toISOString()` as an unnamed "Invalid time value" error -
+ * in the same style the limit validation uses, naming the offending
+ * argument (spelled with String rather than JSON.stringify, which
+ * renders a NaN as "null").
  */
 export function eventsWindowBounds(
   sinceMs: number | null,
   untilMs: number | null,
 ): { since: string | null; until: string | null } {
+  if (sinceMs !== null && !Number.isFinite(sinceMs)) {
+    throw new RangeError(
+      `claim events since bound must be a finite number, got ${String(sinceMs)}`,
+    );
+  }
+  if (untilMs !== null && !Number.isFinite(untilMs)) {
+    throw new RangeError(
+      `claim events until bound must be a finite number, got ${String(untilMs)}`,
+    );
+  }
   return {
     since: sinceMs === null ? null : isoSecond(new Date(floorToSecond(sinceMs))),
     until: untilMs === null ? null : isoSecond(new Date(floorToSecond(untilMs))),

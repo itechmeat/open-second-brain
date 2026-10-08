@@ -59,6 +59,20 @@ describe("eventsWindowBounds", () => {
       until: "2026-05-01T10:00:01Z",
     });
   });
+
+  test("non-finite bounds are refused by name, never reaching new Date(NaN)", () => {
+    // A NaN or infinite bound used to die inside toISOString() as an
+    // unnamed "Invalid time value" RangeError; the boundary refuses it
+    // with the same named style the limit validation uses, naming the
+    // offending argument.
+    expect(() => eventsWindowBounds(NaN, null)).toThrow(RangeError);
+    expect(() => eventsWindowBounds(NaN, null)).toThrow(/claim events since bound/);
+    expect(() => eventsWindowBounds(null, Number.POSITIVE_INFINITY)).toThrow(
+      /claim events until bound/,
+    );
+    expect(() => selectClaimEvents([], { sinceMs: NaN })).toThrow(/since/);
+    expect(() => selectClaimEvents([], { untilMs: NaN })).toThrow(/until/);
+  });
 });
 
 describe("selectClaimEvents", () => {
