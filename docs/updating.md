@@ -47,7 +47,7 @@ instruction files such as `CLAUDE.md`/`AGENTS.md`, installed
 `.claude/skills/`) and warns with the exact replacement for any stale
 reference it finds (`removed-tool-reference`).
 
-## Upgrading to 1.75.0
+## Upgrading to 1.76.0
 
 No step is required. Searches and session starts now keep the search
 index current on their own: an index older than a minute gets one

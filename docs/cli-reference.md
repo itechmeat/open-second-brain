@@ -1828,7 +1828,7 @@ o2b search reindex            Rebuild the SQLite + FTS5 index from scratch
 o2b search index              Incrementally update the index; --embeddings computes vectors, --progress watches it
                               --force-cost bypasses the embedding cost gate (since v0.36.0)
                               --freshen <token> [--freshen-state <dir>] is the background run freshen on
-                              read starts (since v1.75.0): lowered priority, no output, outcome in
+                              read starts (since v1.76.0): lowered priority, no output, outcome in
                               <dir>/freshen-state.json; meeting another index writer is a skip
 o2b search vector-backfill    Run the vector phase ALONE for indexed chunks that have no vector -
                               no vault walk, no re-chunking, no frontmatter pass (since v1.43.0).
@@ -1878,7 +1878,7 @@ o2b search status             Index status; since v0.36.0 also reports the activ
                               <n> in the last 30 days); --json carries it as the event_time object
                               (documents, with_event_time, earliest, latest, recent_window_days,
                               in_recent_window)
-                              Since v1.75.0 it prints freshen (every <n>s or off), index_age, last_freshen
+                              Since v1.76.0 it prints freshen (every <n>s or off), index_age, last_freshen
                               (completed <ts> (<n> changed) / failed <ts> (<n> in a row): <error> /
                               (none)) and freshen_backoff_until while a backoff is active; --json carries
                               them as the freshen object (interval_s, index_age_s, last_outcome,
@@ -2372,14 +2372,14 @@ Two opt-in ranking guards and one deadline join the suite:
 | `search_relational_rerank_pin`  | `OPEN_SECOND_BRAIN_SEARCH_RELATIONAL_RERANK_PIN`   | `false` | Rerank may promote a relational-origin candidate but never sink it below its pre-rerank order (the relevance floor is untouched) |
 | `search_metadata_boost_gate`    | `OPEN_SECOND_BRAIN_SEARCH_METADATA_BOOST_GATE`     | `false` | A query whose keyword lane returned no hits contributes zero from every additive metadata/structural boost layer |
 | `search_hybrid_deadline_ms`     | `OPEN_SECOND_BRAIN_SEARCH_HYBRID_DEADLINE`         | `15000` | Wall-clock budget over the whole composite hybrid path (embed, semantic top-k, rerank, second pass); on expiry the abandoned embed and rerank requests are aborted, the search completes with what it has (keyword-only, or the pre-rerank order with exclusions, trust gate and the other post-rank phases still applied), reports `hybridDeadlineExceeded` and is not cached; `0` disables |
-| `search_freshen_interval_s`     | `OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S`      | `60`    | Freshen on read (since v1.75.0): a search or a session start that finds the index older than this many seconds starts one background incremental `o2b search index` at low CPU and I/O priority, and answers from the index it has; `0` turns it off. See "Freshen on read" below |
+| `search_freshen_interval_s`     | `OPEN_SECOND_BRAIN_SEARCH_FRESHEN_INTERVAL_S`      | `60`    | Freshen on read (since v1.76.0): a search or a session start that finds the index older than this many seconds starts one background incremental `o2b search index` at low CPU and I/O priority, and answers from the index it has; `0` turns it off. See "Freshen on read" below |
 | `search_freshen_embeddings`     | `OPEN_SECOND_BRAIN_SEARCH_FRESHEN_EMBEDDINGS`      | `false` | Let that background run compute embeddings too (it costs money); off, it indexes keyword-only and leaves vectors to an explicit `--embeddings` run |
 
 Both guards are off by default and leave every score byte-identical;
 the deadline is on by default because its lane budgets already summed
 to more, and it bounds exactly the phases with no budget of their own.
 
-### Freshen on read (since v1.75.0)
+### Freshen on read (since v1.76.0)
 
 Nothing schedules index runs: no daemon, no OS timer, no Hermes job. A
 search (every reading MCP tool, the recall-inject hook, `o2b search

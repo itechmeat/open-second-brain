@@ -113,7 +113,7 @@ The full router with readiness criteria is [`install.md`](https://github.com/ite
 
 ## What is new
 
-1.75.0 keeps the search index current without a scheduler. A search or a session start that finds the index more than a minute old answers from it as it is and starts one low-priority background run, so the next read sees the current vault; nothing stays resident, and nothing runs while no agent works. A changed note now rewrites only the parts of the index that changed, so appending to a large daily log costs a fraction of what it did, and `o2b search status` shows how fresh the index is. Every release is described in the [CHANGELOG](https://github.com/itechmeat/open-second-brain/blob/main/CHANGELOG.md).
+1.76.0 keeps the search index current without a scheduler. A search or a session start that finds the index more than a minute old answers from it as it is and starts one low-priority background run, so the next read sees the current vault; nothing stays resident, and nothing runs while no agent works. A changed note now rewrites only the parts of the index that changed, so appending to a large daily log costs a fraction of what it did, and `o2b search status` shows how fresh the index is. Every release is described in the [CHANGELOG](https://github.com/itechmeat/open-second-brain/blob/main/CHANGELOG.md).
 
 ## Documentation
 

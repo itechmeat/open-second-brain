@@ -1342,7 +1342,7 @@ Full design and migration notes:
 and the matching implementation plan
 [`docs/plans/2026-05-16-brain-search-impl.md`](plans/2026-05-16-brain-search-impl.md).
 
-### Keeping the index current (since v1.75.0)
+### Keeping the index current (since v1.76.0)
 
 The index is kept current by the reads that need it. When a search or a
 session start finds `last_indexed_at` older than
