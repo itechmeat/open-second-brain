@@ -94,7 +94,7 @@ Brain verbs (observing memory):
   health-baseline     Acknowledge-before watermark for advisories (set <date>|now / get / clear)
   history             Render a preference's edit-history timeline
   activation          Activation event store: status and sweep
-  truth               Claim ledger: ingest, slots, conflicts, aggregate, collisions, sweep
+  truth               Claim ledger: ingest, slots, conflicts, aggregate, collisions, events, state, sweep
   facts               Decompose text into atomic assertions (--ingest to ledger)
   dead-end            Negative-knowledge registry: record and list failed approaches
   foresight           Forward projection: routines coming due, open commitments and questions

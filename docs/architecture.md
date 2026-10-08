@@ -417,14 +417,29 @@ implemented: reporting how many rows `fail` would withhold is itself the
 disclosure, so `warn`'s observability here is the `owner:` stamp appearing on
 new files, not a count in any response.
 
+A retirement does not always hide a record. A validity-closed predecessor
+stays serveable inside its window and a superseded non-tip stays readable;
+only a tombstoned record drops out of recall everywhere. Every surface that
+serves memory - the search pool after ranking, recall by topic, context
+packs, the `Brain/active.md` digest and the dream scan - applies one rule to
+a serveable retired row: it is served only beside its chain-tip correction,
+resolved and readable at the caller's reach, and dropped otherwise. The drop
+is fail-closed, so a row whose correction is missing or out of reach is
+indistinguishable from an absent one, and a correction pulled in beside its
+predecessor passes the full filter set - status, visibility scope, agent
+scope, reach - because a successor the caller could not read on its own must
+not enter through the correction door. The predicate in
+`src/core/search/correction-coupling.ts` is the rule's only spelling; the
+surfaces differ in what they serve, never in what the rule says.
+
 The enforcement lives in `tests/mcp/agent-scope-matrix.test.ts`, and its shape
 is the point rather than its size. One hundred and one classified tools carry
-233 call recipes - one per mode, view or operation, because one executed view
+234 call recipes - one per mode, view or operation, because one executed view
 is not an executed classification. Every recipe runs TWICE against the same
 two-owner fixture, once with the gate closed and once with it open, and the
 classification decides what the open run must show: the 32 recipes classified
 as reaching owner-taggable content must surface the marker with the gate off,
-which is what stops the closed run from passing vacuously. The other 201 carry
+which is what stops the closed run from passing vacuously. The other 202 carry
 a claim of unreachability, and that claim is executed directly - the marker
 must be absent even where nothing is hidden. The first version of this probe
 asserted only the closed half, and 81 of its entries were driven against
