@@ -114,7 +114,7 @@ test("path nodes unreadable at the caller's reach are omitted, never named and n
     const farLocal = [...local.reachByChunk].find(([, reach]) => reach.hops === 2);
     expect(farLocal![1].path.map((step) => step.relation)).toEqual(["related", "extends"]);
   } finally {
-    store.close();
+    await store.close();
   }
 });
 
@@ -151,7 +151,7 @@ test("path nodes outside the caller's owner scope are omitted, never named and n
     const farUnscoped = [...unscoped.reachByChunk].find(([, reach]) => reach.hops === 2);
     expect(farUnscoped![1].path.map((step) => step.relation)).toEqual(["related", "extends"]);
   } finally {
-    store.close();
+    await store.close();
   }
 });
 
@@ -172,7 +172,7 @@ test("a readable non-tip predecessor with a closed window is annotated from fron
     // The frontmatter pointer names the tip; the window is already past.
     expect(farEntry![1].supersededBy).toBe("far");
   } finally {
-    closed.close();
+    await closed.close();
   }
   // An open window is not a closed one: the same pointer with a future
   // validity end stays unannotated.
@@ -188,7 +188,7 @@ test("a readable non-tip predecessor with a closed window is annotated from fron
     const openFar = [...openOutcome.reachByChunk].find(([, reach]) => reach.hops === 2);
     expect(openFar![1].supersededBy).toBeUndefined();
   } finally {
-    open.close();
+    await open.close();
   }
 });
 
@@ -372,7 +372,7 @@ test("the outcome builder projects surfaced relational rows into the trail, rank
     });
     expect(sunk.retrievalTrail).toBeUndefined();
   } finally {
-    store.close();
+    await store.close();
   }
 });
 
