@@ -52,6 +52,8 @@ export const FRESHEN_SKIP = Object.freeze({
   readOnly: "read_only",
   writerLock: "writer_lock",
   claimed: "claimed",
+  /** The index directory refused the claim (read-only mount, no permission). */
+  unwritable: "unwritable",
   spawnFailed: "spawn_failed",
 } as const);
 
@@ -133,33 +135,53 @@ const CLAIM_TORN_GRACE_MS = 10_000;
 /** A takeover lock older than this belongs to a reader that died mid-takeover. */
 const TAKEOVER_STALE_MS = 30_000;
 
+/** A claim taken, or why it was not. */
+export type FreshenClaim =
+  | { readonly token: string }
+  | { readonly skip: typeof FRESHEN_SKIP.claimed | typeof FRESHEN_SKIP.unwritable };
+
 /**
- * Take the claim, or return null when a live run holds it. The claim is an
- * exclusive create, so of N readers racing on a stale index exactly one
- * wins. A claim older than {@link FRESHEN_CLAIM_ABANDONED_MS} (or torn and
- * older than {@link CLAIM_TORN_GRACE_MS}) is a run that died (a reboot, an
- * OOM kill) and is taken over - but only by the reader holding the
- * exclusive takeover lock, which re-reads the claim under it and replaces
- * it with an atomic rename, so the slot is never empty and a fresh claim
- * is never touched.
+ * Take the claim, or return null when a live run holds it or the index
+ * directory refuses it. {@link tryClaimFreshen} tells the two apart.
  */
 export function claimFreshen(dir: string, nowMs: number): string | null {
+  const claim = tryClaimFreshen(dir, nowMs);
+  return "token" in claim ? claim.token : null;
+}
+
+/**
+ * Take the claim. The claim is an exclusive create, so of N readers racing
+ * on a stale index exactly one wins; a create that fails for any reason
+ * other than an existing claim (EROFS, EACCES) is reported as unwritable,
+ * since no reader there can ever start a run. A claim older than
+ * {@link FRESHEN_CLAIM_ABANDONED_MS} (or torn and older than
+ * {@link CLAIM_TORN_GRACE_MS}) is a run that died (a reboot, an OOM kill)
+ * and is taken over - but only by the reader holding the exclusive
+ * takeover lock, which re-reads the claim under it and replaces it with an
+ * atomic rename, so the slot is never empty and a fresh claim is never
+ * touched.
+ */
+export function tryClaimFreshen(dir: string, nowMs: number): FreshenClaim {
   const path = join(dir, FRESHEN_CLAIM_FILE);
   const token = `fr-${randomUUID()}`;
   const body = JSON.stringify({ token, at: nowMs });
+  const claimed = { skip: FRESHEN_SKIP.claimed } as const;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       writeFileSync(path, body, { flag: "wx" });
-      return token;
+      return { token };
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "EEXIST") return null;
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") {
+        return { skip: FRESHEN_SKIP.unwritable };
+      }
     }
     const seen = readClaimBody(path);
     if (seen === null) continue; // released since: race the create again
-    if (!claimAbandoned(path, seen, nowMs)) return null;
-    return takeOver(path, token, body, nowMs);
+    if (!claimAbandoned(path, seen, nowMs)) return claimed;
+    const taken = takeOver(path, token, body, nowMs);
+    return taken === null ? claimed : { token: taken };
   }
-  return null;
+  return claimed;
 }
 
 function takeOver(path: string, token: string, body: string, nowMs: number): string | null {
@@ -352,8 +374,9 @@ export function maybeFreshenIndex(
     });
     if (decision.action === "skip") return decision.reason;
     if (isWriterLockHeld(config.dbPath)) return FRESHEN_SKIP.writerLock;
-    const token = claimFreshen(dir, nowMs);
-    if (token === null) return FRESHEN_SKIP.claimed;
+    const claim = tryClaimFreshen(dir, nowMs);
+    if (!("token" in claim)) return claim.skip;
+    const token = claim.token;
     const argv = freshenCommand(
       [
         ...o2bCommand(),

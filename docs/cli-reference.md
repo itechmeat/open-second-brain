@@ -2035,7 +2035,7 @@ so there is no separate lane field that could drift from it:
 
 | Code | The narrowing it reports |
 | ---- | ------------------------ |
-| `index-stale` | the index was last updated more than ten minutes ago (`detail.ageSeconds`), so notes changed since then may be missing; freshen on read has started a background run unless `search_freshen_interval_s` is `0`, a failed run is backing off, or another run already holds the claim |
+| `index-stale` | the index was last updated more than ten minutes ago (`detail.ageSeconds`), so notes changed since then may be missing; freshen on read has started a background run unless `search_freshen_interval_s` is `0`, a failed run is backing off, another run already holds the claim, or the index directory is not writable |
 | `keyword-fts-match-empty` | the query tokenised to an empty FTS match, so the keyword lane never ran |
 | `keyword-trigram-lane-fault` | the trigram candidate lane could not be read; `detail.fault` carries that lane's own classification |
 | `semantic-embeddings-absent` | the index holds no compatible embedding |
@@ -2390,8 +2390,9 @@ has and starts one detached `o2b search index --freshen <token>`, so the
 next read sees the current vault. Only agent activity triggers it.
 
 - **One run at a time.** The reader takes an exclusive claim,
-  `<index dir>/freshen.claim`, and skips when another run holds it or an
-  indexer holds the writer lock. A claim older than ten minutes belongs
+  `<index dir>/freshen.claim`, and skips when another run holds it, an
+  indexer holds the writer lock, or the index directory refuses the claim
+  (a read-only mount, no permission). A claim older than ten minutes belongs
   to a run that died and is taken over by exactly one reader, under an
   exclusive takeover lock. A run that still meets another writer ends as
   a skip, not a failure.

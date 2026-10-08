@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -26,6 +27,7 @@ import {
 } from "../../../src/core/search/freshen.ts";
 import { acquireWriterLockSync } from "../../../src/core/search/store/writer-lock.ts";
 import type { ResolvedSearchConfig } from "../../../src/core/search/types.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 
 const NOW = Date.parse("2026-10-07T12:00:00.000Z");
 const ago = (s: number): string => new Date(NOW - s * 1000).toISOString();
@@ -259,6 +261,22 @@ describe("maybeFreshenIndex", () => {
       FRESHEN_SKIP.backoff,
     );
   });
+
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "an index directory that refuses the claim is reported as unwritable, not claimed",
+    () => {
+      const dir = join(vault, ".open-second-brain");
+      chmodSync(dir, 0o555);
+      try {
+        expect(maybeFreshenIndex(config, { lastIndexedAt: ago(300), nowMs: NOW, spawn })).toBe(
+          FRESHEN_SKIP.unwritable,
+        );
+        expect(calls).toHaveLength(0);
+      } finally {
+        chmodSync(dir, 0o755);
+      }
+    },
+  );
 
   test("a spawner that throws is reported as a skip and releases the claim", () => {
     const decision = maybeFreshenIndex(config, {
