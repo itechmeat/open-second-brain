@@ -36,6 +36,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { resolveDeviceId } from "../config.ts";
+import { JSONL_LEDGER_EXT } from "./path-constants.ts";
 
 /**
  * The shard-id shape: the lowercase slug `resolveDeviceId` produces,
@@ -79,8 +80,13 @@ export interface LedgerShardGrammar {
   readonly extensions: ReadonlyArray<string>;
 }
 
-/** The extension every JSON Lines ledger writes, without the leading dot. */
-export const JSONL_LEDGER_EXT = "jsonl";
+/**
+ * The extension every JSON Lines ledger writes, without the leading dot.
+ * Declared in the leaf `path-constants.ts` (see its docblock for the import
+ * cycle that motivated the move) and re-exported here so every ledger keeps
+ * importing it from this module.
+ */
+export { JSONL_LEDGER_EXT };
 
 /**
  * The grammar of a JSON Lines ledger whose base is one fixed file stem

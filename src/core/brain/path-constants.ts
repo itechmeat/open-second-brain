@@ -191,6 +191,18 @@ export const DERIVED_STORE_FILE = "brain.sqlite";
  */
 export const HOOK_AUDIT_DIR = "hook-audit";
 
+/**
+ * The extension every JSON Lines ledger writes, without the leading dot.
+ *
+ * Declared in this leaf rather than in `ledger-shards.ts` (which re-exports
+ * it, so no importer changes) because the audit writer's week-grammar
+ * constant reads it at module-evaluation time, and `ledger-shards.ts`
+ * reaches back into `config.ts` for the device id - a cycle that TDZ-aborted
+ * `audit.ts` whenever the shard grammar module was entered first. A name
+ * this many ledgers share belongs beside the other Brain file names anyway.
+ */
+export const JSONL_LEDGER_EXT = "jsonl";
+
 /** Brain-internal artefact filenames at the root of `Brain/`. */
 export const BRAIN_CONFIG_FILE = "_brain.yaml";
 export const BRAIN_MANUAL_FILE = "_BRAIN.md";
