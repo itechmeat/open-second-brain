@@ -182,6 +182,47 @@ describe("o2b brain feedback - unroutable-capture routing hint", () => {
   });
 });
 
+describe("o2b brain feedback - success line and refusal envelope", () => {
+  test("the signal success line names the artifact vault-relative", async () => {
+    // S22: the line printed the operator-supplied vault prefix composed
+    // with the machine-derived inbox subtree - the same class of composed
+    // echo the distill surface renders vault-relative.
+    const out = await record();
+    expect(out.returncode).toBe(0);
+    const line = /^signal: (.+)$/m.exec(out.stdout)!;
+    expect(line[1]).toMatch(/^Brain[/\\]inbox[/\\]sig-/);
+    expect(existsSync(join(vault, line[1]!))).toBe(true);
+    expect(out.stdout).not.toContain(tmp);
+  });
+
+  test("a refused write in --json mode returns the ok:false envelope, not bare text", async () => {
+    // S22 nit: the text-adjacent refusal was correct but nothing
+    // machine-parseable reached stdout, unlike the sibling verbs'
+    // {ok:false, message} twin.
+    const out = await runCli(
+      [
+        "brain",
+        "feedback",
+        "--topic",
+        "unrouted",
+        "--signal",
+        "positive",
+        "--principle",
+        "recorded where it belongs",
+        "--scope",
+        "1-not-a-scope",
+        "--json",
+      ],
+      { env: env() },
+    );
+    expect(out.returncode).toBe(1);
+    const payload = JSON.parse(out.stdout) as { ok: boolean; message: string };
+    expect(payload.ok).toBe(false);
+    expect(payload.message).toContain("failed to write signal");
+    expect(payload.message).toContain("scope:");
+  });
+});
+
 /** The `id: <sig-...>` line the verb prints, read back for file assertions. */
 function bareIdOf(stdout: string): string {
   const match = /^id: (sig-[\w.-]+)$/m.exec(stdout);

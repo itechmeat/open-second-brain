@@ -35,6 +35,26 @@ function write(rel: string): void {
 
 const ENV = () => ({ OPEN_SECOND_BRAIN_CONFIG: configPath });
 
+describe("o2b brain batch-plan source-dir contract", () => {
+  test("an absolute source dir refuses with the vault-relative contract, not a false non-existence", async () => {
+    // S20: the absolute argument was joined INSIDE the vault path, so a
+    // directory the operator had just listed was refused as missing - and
+    // the message never stated the real contract, that the argument is
+    // vault-relative.
+    write("sources/note.md");
+    const res = await runCli(["brain", "batch-plan", join(vault, "sources")], {
+      env: ENV(),
+    });
+    expect(res.returncode).toBe(1);
+    expect(res.stderr).toContain(
+      "planBatches: source dir must be a vault-relative path inside the vault " +
+        `(got "${join(vault, "sources")}")`,
+    );
+    expect(res.stderr).toContain("rerun with the directory path relative to the vault root");
+    expect(res.stderr).not.toContain("is not an existing directory");
+  });
+});
+
 describe("o2b brain batch-plan scoping flags", () => {
   test("--src-subpath restricts discovery to the subtree", async () => {
     write("mono/pkg/a/one.md");

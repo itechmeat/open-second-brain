@@ -11,8 +11,8 @@
  *  4. A missing topic is a usage error (exit 2), and the verb has its own
  *     `--help`.
  *  5. The MCP tool answers over the same core, both phases, and the path
- *     it reports is vault-relative - no MCP response carries the
- *     absolute host path.
+ *     it reports is vault-relative - no MCP response or CLI output carries
+ *     the absolute host path.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -107,8 +107,19 @@ test("the commit phase --json names the note and its one recommendation", async 
   expect(payload.ok).toBe(true);
   expect(payload.recommended).toBe("option-1");
   expect(payload.alternative_count).toBe(2);
-  expect(existsSync(payload.path)).toBe(true);
-  expect(payload.path).toContain(join("Brain", "decisions"));
+  // Vault-relative, matching the distill house style and the MCP twin:
+  // the absolute host path is the operator-supplied vault prefix composed
+  // with a machine-derived subtree, and neither belongs in output that
+  // lands in model context.
+  expect(payload.path).toMatch(/^Brain[/\\]decisions[/\\]/);
+  expect(existsSync(join(vault, payload.path))).toBe(true);
+});
+
+test("text mode names the note vault-relative on the wrote line", async () => {
+  const r = await run([TOPIC, "--payload", JSON.stringify(note(false, true))]);
+  expect(r.returncode).toBe(0);
+  expect(r.stdout).toMatch(/^wrote Brain[/\\]decisions[/\\]design-/m);
+  expect(r.stdout).not.toContain(tmp);
 });
 
 test("a payload recommending nothing exits 1, names the count, and writes nothing", async () => {
@@ -155,9 +166,8 @@ test("the MCP tool answers both phases over the same core", async () => {
   };
   expect(committed.phase).toBe("commit");
   expect(committed.recommended).toBe("option-0");
-  // Vault-relative on the MCP surface, and the response carries the host
-  // path nowhere - an MCP payload lands in model context. The CLI keeps
-  // the absolute path it has always printed; that one runs on the host.
+  // Vault-relative on both surfaces, and neither response carries the host
+  // path - the CLI's output and an MCP payload alike land in model context.
   expect(committed.path).toMatch(/^Brain[/\\]decisions[/\\]/);
   expect(existsSync(join(vault, committed.path))).toBe(true);
   expect(JSON.stringify(committed)).not.toContain(vault);
@@ -190,7 +200,7 @@ describe("think-block strip (t_dac8bf7e)", () => {
     expect(payload.ok).toBe(true);
     expect(payload.note).toContain("<think>");
     expect(payload.recommended).toBe("option-1");
-    expect(existsSync(payload.path)).toBe(true);
+    expect(existsSync(join(vault, payload.path))).toBe(true);
   });
 
   test("text mode names the strip too - never a silent strip", async () => {

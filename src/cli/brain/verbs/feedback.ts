@@ -1,4 +1,7 @@
 import { readFileSync } from "node:fs";
+import { relative } from "node:path";
+
+import { canonicalNotePath } from "../../../core/path-safety.ts";
 import {
   mirrorReportFields,
   mirrorSignal,
@@ -112,7 +115,15 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
   try {
     sigResult = writeSignal(vault, signalInput, writeOpts);
   } catch (exc) {
-    return fail(`failed to write signal: ${(exc as Error).message ?? exc}`);
+    const message = `failed to write signal: ${(exc as Error).message ?? exc}`;
+    // The ok:false twin a --json caller parses, matching the sibling verbs
+    // (capture, design-note); bare text on stdout-starved --json leaves
+    // automation with nothing machine-parseable.
+    if (flags["json"]) {
+      okJson({ ok: false, message });
+      return 1;
+    }
+    return fail(message);
   }
   // t_936a1a61: fail-soft mirror into the shared namespace AFTER the
   // primary write; surfaced only when the key is configured.
@@ -190,7 +201,12 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
         { overwrite: false, configPath: config },
       );
     } catch (exc) {
-      return fail(`failed to force-confirm preference: ${(exc as Error).message ?? exc}`);
+      const message = `failed to force-confirm preference: ${(exc as Error).message ?? exc}`;
+      if (flags["json"]) {
+        okJson({ ok: false, message });
+        return 1;
+      }
+      return fail(message);
     }
     try {
       appendLogEvent(vault, {
@@ -222,7 +238,10 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
     });
     return 0;
   }
-  ok(`signal: ${sigResult.path}`);
+  // Vault-relative, matching the distill house style: the absolute host
+  // path is the operator-supplied vault prefix composed with a
+  // machine-derived subtree.
+  ok(`signal: ${canonicalNotePath(relative(vault, sigResult.path))}`);
   ok(`id: ${sigResult.id}`);
   if (mirror !== undefined) {
     ok(`mirror: ${mirror.outcome}`);
@@ -255,7 +274,7 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
     emitNextStep(routingHint.code, stream);
   }
   if (prefResult) {
-    ok(`preference: ${prefResult.path}`);
+    ok(`preference: ${canonicalNotePath(relative(vault, prefResult.path))}`);
     ok(`status: confirmed`);
   }
   return 0;

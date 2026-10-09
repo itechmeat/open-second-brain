@@ -14,6 +14,9 @@
  */
 
 import { readFileSync } from "node:fs";
+import { relative } from "node:path";
+
+import { canonicalNotePath } from "../../../core/path-safety.ts";
 
 import {
   commitDesignNote,
@@ -135,7 +138,11 @@ export async function cmdBrainDesignNote(argv: string[]): Promise<number> {
         ok: true,
         topic: res.topic,
         slug: res.slug,
-        path: res.path,
+        // Vault-relative, like the distill surface and the MCP twin: the
+        // absolute host path is the operator-supplied vault prefix composed
+        // with a machine-derived subtree, and this output lands in model
+        // context.
+        path: canonicalNotePath(relative(vault, res.path)),
         recommended: res.recommended,
         alternative_count: res.alternativeCount,
         // Present only when a leading <think> block was stripped (t_dac8bf7e).
@@ -143,7 +150,7 @@ export async function cmdBrainDesignNote(argv: string[]): Promise<number> {
       });
       return 0;
     }
-    ok(`wrote ${res.path}`);
+    ok(`wrote ${canonicalNotePath(relative(vault, res.path))}`);
     ok(`recommended: ${res.recommended} (of ${res.alternativeCount} alternative(s))`);
     if (strip !== undefined) ok(payloadStripNote(strip));
     return 0;

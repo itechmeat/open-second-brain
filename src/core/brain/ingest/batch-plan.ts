@@ -44,7 +44,7 @@
  */
 
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { join, posix, relative } from "node:path";
+import { isAbsolute, join, posix, relative } from "node:path";
 
 import {
   buildRepositoryBaseScope,
@@ -286,6 +286,17 @@ export function planBatches(vault: string, sourceDir: string, opts: BatchPlanOpt
   }
 
   const dirRel = canonicalNotePath(sourceDir);
+  // Refuse an absolute argument BEFORE the existence check: `join` treats
+  // an absolute second operand as relative text, so `join(vault, "/abs")`
+  // nests the path inside the vault and the directory the operator can
+  // list comes out "not an existing directory" - a falsehood, and one that
+  // never states the actual contract, that the argument is vault-relative.
+  if (isAbsolute(sourceDir)) {
+    throw new Error(
+      `planBatches: source dir must be a vault-relative path inside the vault ` +
+        `(got "${sourceDir}"); rerun with the directory path relative to the vault root`,
+    );
+  }
   const dirAbs = ensureInsideVault(join(vault, dirRel), vault);
   if (!existsSync(dirAbs) || !statSync(dirAbs).isDirectory()) {
     throw new Error(`planBatches: source dir is not an existing directory: ${sourceDir}`);
