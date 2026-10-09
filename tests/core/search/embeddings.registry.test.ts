@@ -3,7 +3,13 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { setSecret } from "../../../src/core/brain/secrets/store.ts";
+import { setSecret, secretsDir } from "../../../src/core/brain/secrets/store.ts";
+import { loadOrCreateKey } from "../../../src/core/brain/secrets/crypto.ts";
+import {
+  clearHeldKey,
+  wrapKeyfile,
+  SecretStoreLockedError,
+} from "../../../src/core/brain/secrets/envelope.ts";
 import { resolveSearchConfig } from "../../../src/core/search/index.ts";
 import {
   loadProviderRegistry,
@@ -150,6 +156,7 @@ test("a malformed registry file degrades to empty, never throws", () => {
 
 const STORED_PROBE_KEY = fakeCredential("stored-", "probe-8d31");
 const ENV_PROBE_KEY = fakeCredential("env-", "probe-2e77");
+const LOCK_PASSPHRASE = fakeCredential("registry-wrap-", "phrase-71bd");
 const PROBE_NOW = new Date("2026-06-05T10:00:00Z");
 /** The fixture profile, pointed at the probe name the store entry uses. */
 const probeProfile = { ...nim, envKey: "embed_key" };
@@ -159,9 +166,9 @@ function storeProbeKey(name = "embed_key"): void {
 }
 
 /** A machine config selecting `provider`, so the resolver expands the registry. */
-function configWithProvider(provider: string): string {
+function configWithProvider(provider: string, extra = ""): string {
   const configPath = join(vault, "machine-config.yaml");
-  writeFileSync(configPath, `embedding_provider: "${provider}"\n`, "utf8");
+  writeFileSync(configPath, `embedding_provider: "${provider}"\n${extra}`, "utf8");
   return configPath;
 }
 
@@ -262,6 +269,79 @@ describe("resolveSearchConfig probes a registered provider through the store", (
     withEnvKey("embed_key", ENV_PROBE_KEY, () => {
       const cfg = resolveSearchConfig({ vault, configPath: configWithProvider("nvidia-nim") });
       expect(cfg.semantic.apiKey).toBe(ENV_PROBE_KEY);
+    });
+  });
+
+  test("a locked store behind the probe surfaces the named locked error, not 'not a registered provider'", () => {
+    // The swallowing catch used to convert the resolver's named refusal
+    // into a null expansion, so `parseProvider` then claimed the name was
+    // not registered - for a name that IS registered, with the remedy
+    // (fix the provider name) pointing the wrong way.
+    addProviderProfile(vault, probeProfile);
+    storeProbeKey();
+    const kp = join(secretsDir(vault), "keyfile");
+    wrapKeyfile(kp, LOCK_PASSPHRASE, loadOrCreateKey(kp));
+    clearHeldKey(kp);
+    try {
+      expect(() =>
+        resolveSearchConfig({ vault, configPath: configWithProvider("nvidia-nim") }),
+      ).toThrow(SecretStoreLockedError);
+    } finally {
+      clearHeldKey(kp);
+    }
+  });
+
+  test("a malformed reference probe surfaces the named reference error through the full resolution", () => {
+    addProviderProfile(vault, { ...probeProfile, envKey: "$secret:has space" });
+    expect(() =>
+      resolveSearchConfig({ vault, configPath: configWithProvider("nvidia-nim") }),
+    ).toThrow(SecretReferenceError);
+  });
+
+  test("the explicit embedding_api_key resolves a $secret: reference like its siblings", () => {
+    // The explicit key used to pass a reference through verbatim - a
+    // dead endpoint auth with nothing naming why - while the registry
+    // probe beside it resolved.
+    storeProbeKey();
+    const cfg = resolveSearchConfig({
+      vault,
+      configPath: configWithProvider(
+        "openai-compat",
+        `embedding_base_url: "https://embed.example/v1"\nembedding_api_key: "$secret:embed_key"\n`,
+      ),
+    });
+    expect(cfg.semantic.provider).toBe("openai-compat");
+    expect(cfg.semantic.apiKey).toBe(STORED_PROBE_KEY);
+    expect(cfg.semantic.apiKeys).toEqual([STORED_PROBE_KEY]);
+  });
+
+  test("the cross-encoder rerank env key resolves a $secret: reference like its siblings", () => {
+    storeProbeKey();
+    withEnvKey("rerank_key_var", "$secret:embed_key", () => {
+      const cfg = resolveSearchConfig({
+        vault,
+        configPath: configWithProvider(
+          "openai-compat",
+          `search_rerank_enabled: "true"\nsearch_rerank_env_key: rerank_key_var\n`,
+        ),
+      });
+      expect(cfg.rerank.enabled).toBe(true);
+      expect(cfg.rerank.apiKey).toBe(STORED_PROBE_KEY);
+    });
+  });
+
+  test("a plain explicit and rerank key pass through byte-identically", () => {
+    withEnvKey("rerank_key_var", ENV_PROBE_KEY, () => {
+      const cfg = resolveSearchConfig({
+        vault,
+        configPath: configWithProvider(
+          "openai-compat",
+          `embedding_api_key: "${ENV_PROBE_KEY}"\n` +
+            `search_rerank_enabled: "true"\nsearch_rerank_env_key: rerank_key_var\n`,
+        ),
+      });
+      expect(cfg.semantic.apiKey).toBe(ENV_PROBE_KEY);
+      expect(cfg.rerank.apiKey).toBe(ENV_PROBE_KEY);
     });
   });
 });
