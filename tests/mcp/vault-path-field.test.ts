@@ -21,6 +21,10 @@ import { loadOrCreateKey } from "../../src/core/brain/secrets/crypto.ts";
 import { clearHeldKey, wrapKeyfile } from "../../src/core/brain/secrets/envelope.ts";
 import { secretsDir, setSecret } from "../../src/core/brain/secrets/store.ts";
 import { fakeCredential } from "../helpers/fake-credentials.ts";
+// Registers the named-secret resolver port config resolves references
+// through; without it the reference branch takes the unwired, generic
+// refusal and the per-cause degradations below cannot be exercised.
+import "../../src/core/secret-resolver.ts";
 import {
   hostPathReference,
   SECRET_REFERENCE_UNRESOLVED_REASON,
