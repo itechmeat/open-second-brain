@@ -66,6 +66,7 @@
  */
 
 import { MAX_REDACTOR_INPUT, redactStructured, type RedactRawOutputOptions } from "../redactor.ts";
+import { sortedDistinctLiterals } from "../secret-ref.ts";
 import { EGRESS_SITES, type EgressSiteId } from "./registry.ts";
 
 /** How a payload offered to the boundary came back. */
@@ -171,6 +172,34 @@ export interface EgressPolicy {
    * is right for every vault-authored export.
    */
   readonly foreignIdentifiers?: boolean;
+  /**
+   * Values already resolved from `$secret:` references at a use site
+   * (the named-secret resolver). The structural passes judge SHAPES - a
+   * key name, a vendor prefix - and a resolved credential under a quiet
+   * key name carries neither, so the boundary needs the values themselves.
+   * Each occurrence is replaced with the standard marker, longest value
+   * first so a value containing another cannot have its match destroyed
+   * and leak its head as a fragment, and before the truncation guard so
+   * no cut leaves a partial credential in the kept prefix. Absent (the
+   * default) the composition is byte-identical to the pre-literal guard.
+   */
+  readonly resolvedLiterals?: ReadonlyArray<string>;
+}
+
+/**
+ * The one policy plus what the call site may vary. The literals pass
+ * through the shared substitution-safety ordering
+ * ({@link sortedDistinctLiterals}); the redactor applies them verbatim
+ * ahead of every pattern pass.
+ */
+function composeRedactionOptions(policy: EgressPolicy): RedactRawOutputOptions {
+  return {
+    ...EGRESS_REDACTION_OPTIONS,
+    ...(policy.foreignIdentifiers === true ? { foreignIdentifiers: true } : {}),
+    ...(policy.resolvedLiterals === undefined
+      ? {}
+      : { literals: sortedDistinctLiterals(policy.resolvedLiterals) }),
+  };
 }
 
 /**
@@ -183,10 +212,7 @@ export function redactForEgress<T>(
   payload: T,
   policy: EgressPolicy = {},
 ): EgressVerdict<T> {
-  const scanned = redactStructured(payload, {
-    ...EGRESS_REDACTION_OPTIONS,
-    ...(policy.foreignIdentifiers === true ? { foreignIdentifiers: true } : {}),
-  });
+  const scanned = redactStructured(payload, composeRedactionOptions(policy));
   if (scanned.truncated) {
     return {
       outcome: EGRESS_OUTCOME.refusedScanTruncated,
@@ -240,6 +266,7 @@ export function redactForEgress<T>(
  */
 export function redactConfigMapping(
   data: Readonly<Record<string, unknown>>,
+  policy: EgressPolicy = {},
 ): Record<string, unknown> {
-  return redactStructured(data, EGRESS_REDACTION_OPTIONS).value as Record<string, unknown>;
+  return redactStructured(data, composeRedactionOptions(policy)).value as Record<string, unknown>;
 }

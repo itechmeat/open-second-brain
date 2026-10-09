@@ -20,6 +20,7 @@ import { homedir, tmpdir } from "node:os";
 
 import { TRANSPORT_REACH, type TransportReach } from "../core/graph/transport-reach.ts";
 import { redactRawOutput } from "../core/redactor.ts";
+import { sortedDistinctLiterals } from "../core/secret-ref.ts";
 
 function withRealpath(path: string): string[] {
   const out = [path];
@@ -40,9 +41,26 @@ function withRealpath(path: string): string[] {
  * that already holds filesystem-equivalent access - only the vault root
  * is redacted, as it always was; at remote reach the home and temp roots
  * are replaced too, and every root becomes a named placeholder.
+ *
+ * `resolvedLiterals` carries values already resolved from `$secret:`
+ * references at a use site (the named-secret resolver). A refused
+ * operation may name a credential in its prose - a fetch failure echoing
+ * the URL it was handed, for instance - and the shape passes behind the
+ * shared redactor cannot see a value with no vendor prefix and a quiet
+ * surrounding key. Each occurrence is scrubbed verbatim, longest value
+ * first. Omitting it (or passing an empty list) keeps the output
+ * byte-identical to the pre-literal signature.
  */
-export function redactErrorForCaller(raw: string, vault: string, reach: TransportReach): string {
-  if (reach === TRANSPORT_REACH.local) return redactRawOutput(raw, { literals: [vault] });
+export function redactErrorForCaller(
+  raw: string,
+  vault: string,
+  reach: TransportReach,
+  resolvedLiterals: ReadonlyArray<string> = [],
+): string {
+  const literals = sortedDistinctLiterals(resolvedLiterals);
+  if (reach === TRANSPORT_REACH.local) {
+    return redactRawOutput(raw, { literals: [vault, ...literals] });
+  }
   const roots: Array<readonly [string, string]> = [];
   for (const [path, label] of [
     [vault, "<vault>"],
@@ -62,5 +80,7 @@ export function redactErrorForCaller(raw: string, vault: string, reach: Transpor
     const escaped = root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     text = text.replace(new RegExp(`${escaped}(?=$|[\\\\/\\s'"\`:,;)\\]])`, "g"), label);
   }
-  return redactRawOutput(text, {});
+  // The roots keep their segment-boundary handling above; the resolved
+  // literals are ordinary substrings and go through the shared scrub.
+  return redactRawOutput(text, literals.length === 0 ? {} : { literals });
 }

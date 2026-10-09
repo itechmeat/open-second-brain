@@ -64,21 +64,32 @@ export function listSecretReferences(
   return Object.freeze(out);
 }
 
+/**
+ * Dedupe, drop empties, and order longest-first. The order is the
+ * substitution-safety rule, not cosmetics: when one resolved value
+ * contains another, a shorter-first replacement would destroy the longer
+ * value's match and leak its head as a fragment, so every caller that
+ * substitutes literal values into text goes through this.
+ */
+export function sortedDistinctLiterals(values: Iterable<string>): string[] {
+  return [...new Set(values)]
+    .filter((value) => value.length > 0)
+    .sort((a, b) => b.length - a.length);
+}
+
 export function redactKnownSecretValues(
   text: string,
   references: ReadonlyArray<string>,
   provider: SecretProvider = process.env,
 ): string {
   let out = text;
-  const values = Array.from(
-    new Set(
-      references
-        .map((raw) => parseSecretReference(raw))
-        .filter((ref): ref is SecretReference => ref !== null)
-        .map((ref) => provider[ref.name])
-        .filter((value): value is string => Boolean(value)),
-    ),
-  ).sort((a, b) => b.length - a.length);
+  const values = sortedDistinctLiterals(
+    references
+      .map((raw) => parseSecretReference(raw))
+      .filter((ref): ref is SecretReference => ref !== null)
+      .map((ref) => provider[ref.name])
+      .filter((value): value is string => Boolean(value)),
+  );
   for (const value of values) {
     out = out.replaceAll(value, REDACTED);
   }
