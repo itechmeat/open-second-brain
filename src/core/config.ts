@@ -15,8 +15,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import lockfile from "proper-lockfile";
 
 import { atomicWriteFileSync, sleepSync } from "./fs-atomic.ts";
-import { isSecretReferenceValue, resolveNamedSecret } from "./secret-resolver.ts";
-import { SecretReferenceError } from "./secret-ref.ts";
+import { isSecretReferenceValue, SecretReferenceError } from "./secret-ref.ts";
 import { APP_DIR_NAME, configBaseDir } from "./platform-dirs.ts";
 import { resolveActiveProfileVault } from "./brain/portability/profiles.ts";
 import { resolvePointerVault } from "./brain/portability/pointer.ts";
@@ -27,6 +26,52 @@ import {
 } from "./brain/link-graph/format-wikilink.ts";
 import type { LinkOutputFormat } from "./brain/wikilink.ts";
 import type { ConfigDiscovery } from "./types.ts";
+
+/**
+ * The named-secret resolver port (trust-surface-hardening, t_e5807974).
+ *
+ * A `$secret:` reference in a config value resolves through the vault's
+ * custody store, whose own import neighbourhood reaches back into THIS
+ * module (store -> audit -> ledger-shards -> config), so a static import
+ * of the resolver here closed the six-module cycle config ->
+ * secret-resolver -> custody store -> audit -> ledger-shards -> config,
+ * whose initialisation order is undefined. Config is the base layer and
+ * carries only the PORT; the resolver plane is the adapter and fills it
+ * through {@link installNamedSecretResolver} when `secret-resolver.ts`
+ * loads - which every production entry (the CLI's `main.ts`, the MCP
+ * server, the OpenClaw bridge) does statically at startup, before any
+ * command dispatch.
+ */
+export interface NamedSecretResolver {
+  /** Resolve one `$secret:` reference against `vault`'s custody store. */
+  resolveNamedSecret(vault: string, value: string): string;
+}
+
+let namedSecretResolver: NamedSecretResolver | undefined;
+
+/** Fill the {@link NamedSecretResolver} port; see its docblock for the wiring. */
+export function installNamedSecretResolver(resolver: NamedSecretResolver): void {
+  namedSecretResolver = resolver;
+}
+
+/**
+ * Resolve one reference through the installed resolver. The refusal is
+ * unreachable in a wired process (see the port's docblock); failing
+ * closed by name keeps an unwired one from ever treating a stored
+ * reference as literal text - for the installation secret that mistake
+ * would self-heal a fresh key right over the reference.
+ */
+function resolveThroughNamedSecretResolver(vault: string, reference: string): string {
+  const resolver = namedSecretResolver;
+  if (resolver === undefined) {
+    throw new SecretReferenceError(
+      "no named-secret resolver is installed in this process; the $secret: reference " +
+        "cannot be resolved against the vault's custody store",
+      reference,
+    );
+  }
+  return resolver.resolveNamedSecret(vault, reference);
+}
 
 const CONFIG_VALUE_REJECTED_CHARS = ['"', "\\", "\n", "\r"] as const;
 
@@ -581,7 +626,7 @@ export function resolveInstallationSecret(configPath?: string, secretsVault?: st
           reference,
         );
       }
-      const resolvedValue = resolveNamedSecret(secretsVault, reference);
+      const resolvedValue = resolveThroughNamedSecretResolver(secretsVault, reference);
       if (!isValidInstallationSecret(resolvedValue)) {
         throw new SecretReferenceError(
           "installation_secret is a $secret: reference that resolves to a value which is " +
@@ -1544,7 +1589,7 @@ export function resolveTelegramBotToken(configPath?: string, secretsVault?: stri
   // vault's custody store (read-only); without the vault the value is
   // taken as-is, exactly as before the resolver routing existed.
   if (secretsVault !== undefined && isSecretReferenceValue(raw)) {
-    return resolveNamedSecret(secretsVault, raw);
+    return resolveThroughNamedSecretResolver(secretsVault, raw);
   }
   return raw;
 }

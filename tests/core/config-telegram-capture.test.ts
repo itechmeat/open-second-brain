@@ -14,6 +14,10 @@ import { resolveTelegramBotToken, resolveTelegramCaptureAllowlist } from "../../
 import { redactConfigMapping } from "../../src/core/egress/guard.ts";
 import { SecretReferenceError } from "../../src/core/secret-ref.ts";
 import { REDACTION_PLACEHOLDER } from "../../src/core/redactor.ts";
+// The entry scripts load the named-secret resolver at startup, which is
+// what fills config's resolver port; the `$secret:` cases below need the
+// same wiring in this process.
+import "../../src/core/secret-resolver.ts";
 import { fakeCredential } from "../helpers/fake-credentials.ts";
 
 let tmp: string;

@@ -22,12 +22,21 @@
 
 import { existsSync } from "node:fs";
 
+import { installNamedSecretResolver } from "./config.ts";
 import {
+  isSecretReferenceValue,
   parseSecretReference,
   resolveSecretReference,
   type SecretProvider,
   type SecretReferenceStatus,
 } from "./secret-ref.ts";
+
+/**
+ * The `$secret:` syntax check lives in the leaf `secret-ref.ts` beside the
+ * rest of the reference grammar; re-exported here so this module's
+ * consumers keep one import path.
+ */
+export { isSecretReferenceValue } from "./secret-ref.ts";
 
 /**
  * The custody store, joined at CALL time rather than at module load.
@@ -54,23 +63,11 @@ function custodyStore(): CustodyStore {
   return custodyStoreModule;
 }
 
-/** The syntax prefix every named-secret reference starts with. */
-const REFERENCE_PREFIX = "$secret:";
-
 /**
- * Whether a config value claims to be a reference. `$secret:` with a
- * malformed body is still reference-shaped - it resolves to a
- * `SecretReferenceError`, never to the literal text.
- */
-export function isSecretReferenceValue(value: unknown): boolean {
-  return typeof value === "string" && value.trimStart().startsWith(REFERENCE_PREFIX);
-}
-
-/**
- * The store's answer for one name, or undefined when the store does not
- * hold it. A store-held name always answers from the store - even when
- * the environment carries the same name - and decryption under a locked
- * envelope surfaces the store's named locked error.
+ * The merged provider: custody store ahead of the process environment.
+ * Probing is on demand - a name the store does not hold costs one
+ * metadata read and never decrypts; the store's plaintext is handed to
+ * the caller exactly where the value is used.
  */
 function storeValue(vault: string, name: string): string | undefined {
   const held = custodyStore()
@@ -215,3 +212,17 @@ export function resolvedSecretLiterals(vault: string): string[] {
   }
   return out;
 }
+
+/**
+ * Install THIS module as the adapter behind config's resolver port (see
+ * {@link installNamedSecretResolver}). Config values carrying a
+ * `$secret:` reference resolve through the custody store from here, and
+ * the dependency points resolver -> config - the direction that keeps
+ * the six-module cycle (config -> resolver -> custody store -> audit ->
+ * ledger-shards -> config) cut. Every production entry (the CLI's
+ * `main.ts`, the MCP server, the OpenClaw bridge) imports this module
+ * statically at startup, which is what wires the port before any command
+ * dispatch; a test exercising the reference branch of a config resolver
+ * imports this module for the same side effect.
+ */
+installNamedSecretResolver({ resolveNamedSecret });

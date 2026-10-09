@@ -22,6 +22,8 @@ export class SecretReferenceError extends Error {
 }
 
 const SECRET_REFERENCE_RE = /^\$secret:([A-Za-z_][A-Za-z0-9_]*)$/;
+/** The syntax prefix every named-secret reference starts with. */
+const REFERENCE_PREFIX = "$secret:";
 const REDACTED = "***REDACTED***";
 
 export function parseSecretReference(value: unknown): SecretReference | null {
@@ -29,6 +31,15 @@ export function parseSecretReference(value: unknown): SecretReference | null {
   const match = SECRET_REFERENCE_RE.exec(value.trim());
   if (!match) return null;
   return Object.freeze({ raw: value.trim(), name: match[1]! });
+}
+
+/**
+ * Whether a config value claims to be a reference. `$secret:` with a
+ * malformed body is still reference-shaped - it resolves to a
+ * `SecretReferenceError`, never to the literal text.
+ */
+export function isSecretReferenceValue(value: unknown): boolean {
+  return typeof value === "string" && value.trimStart().startsWith(REFERENCE_PREFIX);
 }
 
 export function resolveSecretReference(

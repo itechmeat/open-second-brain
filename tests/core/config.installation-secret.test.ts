@@ -31,6 +31,10 @@ import {
 } from "../../src/core/config.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { SecretReferenceError } from "../../src/core/secret-ref.ts";
+// The entry scripts load the named-secret resolver at startup, which is
+// what fills config's resolver port; the `$secret:` cases below need the
+// same wiring in this process.
+import "../../src/core/secret-resolver.ts";
 import { fakeCredential } from "../helpers/fake-credentials.ts";
 
 /** A stored value of the wrong shape: not 32 lowercase hex characters. */
