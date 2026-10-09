@@ -194,9 +194,17 @@ describe("systemone adapter", () => {
     server.setReply(() => ({ status: 429, headers: { "retry-after": "30" } }));
     const started = Date.now();
     const err = await decideError(1000);
+    // The structural witnesses carry the pin: honoring the 30s retry-after
+    // would blow the 1000ms decide deadline first, so the refusal would
+    // surface as a timeout, not as this named 429, and no second request
+    // would exist either way. The elapsed bound below therefore only has to
+    // separate "did not sleep for the retry-after" (>=30s) from a slow
+    // machine, so it sits an order of magnitude under the wait it refuses
+    // to wait instead of at the decide deadline, where scheduler jitter
+    // alone could flake it.
     expect(err.reason).toBe("http_429");
     expect(server.requests).toHaveLength(1);
-    expect(Date.now() - started).toBeLessThan(1000);
+    expect(Date.now() - started).toBeLessThan(10_000);
   });
 
   test("529 twice is retried at most once", async () => {

@@ -243,11 +243,13 @@ describe("unlock/lock lifecycle", () => {
     clearHeldKey(join(secretsDir(vault), "keyfile"));
   });
 
-  test("a racer whose check predates the winner's wrap unlocks instead of failing locked", () => {
-    // The loser of the wrap race re-checks under the lock: the keyfile
-    // it saw as raw is an envelope by the time it holds the lock, so it
-    // takes the unlock path with its own passphrase check rather than
-    // minting over the winner's envelope.
+  test("a second unlock over the winner's envelope unlocks instead of failing locked", () => {
+    // The shape check re-runs UNDER the writer lock, so the loser of a
+    // wrap race - the keyfile it saw as raw is an envelope by the time it
+    // holds the lock - takes the unlock path with its own passphrase check
+    // rather than minting over the winner's envelope or refusing it
+    // locked. Sequenced here as the second of two awaited unlocks: the
+    // interleaving itself is pinned by the writer-lock test above.
     set();
     unlockSecretKeyfile(vault, PASSPHRASE, { agent: "tester", now: NOW });
     // A second unlock over the now-wrapped store with the SAME
