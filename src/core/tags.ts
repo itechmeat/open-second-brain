@@ -6,9 +6,10 @@
  * `src/core/search/links.ts` so that both consumers - the search index
  * (link-table rows) and the vault-hygiene `tags` detector - read ONE
  * definition, not two spellings. This is also the seam board sibling
- * t_11ee559f (write-time tag syntax validation, not in this wave; the
- * overlap is recorded as a coordination note) must consume: it should
- * validate against the rule defined HERE, never against a copy.
+ * t_11ee559f (write-time tag syntax validation, trust-surface-hardening
+ * wave) consumes: the composers validate against the rule defined HERE
+ * ({@link isObsidianTagValue}, via `src/core/brain/tag-syntax.ts`),
+ * never against a copy.
  *
  * The index-side rule: `#word` where word starts with a letter/`_` and
  * may contain letters, digits, dashes, underscores, and `/` for
@@ -23,10 +24,34 @@
  */
 
 /**
+ * The value-level rule the index regex and the write-time predicate
+ * share, spelled ONCE below: a value starts with a letter/underscore and
+ * continues with letters, digits, dashes, underscores, and `/`
+ * (nesting). By the shared onset a value may not begin with a slash and
+ * may never be purely numeric. {@link TAG_RE} wraps this source with the
+ * prose boundary and the `#`; {@link isObsidianTagValue} matches it
+ * anchored - one spelling, two anchors.
+ */
+const TAG_VALUE_SOURCE = "[A-Za-z_][\\w\\-/]*";
+
+/**
  * Obsidian-style tag: #word where word starts with a letter/_ and may contain
  * letters, digits, dashes, underscores, and '/' for hierarchy.
  */
-export const TAG_RE = /(^|[^\w/])#([A-Za-z_][\w\-/]*)/g;
+export const TAG_RE = new RegExp(`(^|[^\\w/])#(${TAG_VALUE_SOURCE})`, "g");
+
+/** Matches a whole tag value: the same rule TAG_RE captures, anchored. */
+const TAG_VALUE_RE = new RegExp(`^${TAG_VALUE_SOURCE}$`);
+
+/**
+ * Does `value` (WITHOUT its `#`) satisfy the one tag rule - the rule the
+ * search index extracts with, the hygiene detectors report against, and
+ * board sibling t_11ee559f validates composed tags at the write sites
+ * with (consumed via `src/core/brain/tag-syntax.ts`, never re-copied).
+ */
+export function isObsidianTagValue(value: string): boolean {
+  return TAG_VALUE_RE.test(value);
+}
 
 // A fenced block runs from an opening line of three or more backticks or
 // tildes to the first later line that starts with a run of the SAME

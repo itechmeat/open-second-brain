@@ -1,3 +1,5 @@
+import { requireObsidianTagValue } from "./tag-syntax.ts";
+
 export interface RenderMemoryInput {
   readonly name: string;
   readonly description: string;
@@ -61,9 +63,14 @@ export function renderPreferenceFromMemory(input: RenderMemoryInput): string {
       `claude-memory: cannot derive a slug from name ${JSON.stringify(input.name)}; rename the memory entry to include at least one alphanumeric character`,
     );
   }
+  // The derived topic/scope are validated against the one shared tag rule
+  // (t_11ee559f). Both are slugified by construction, so this is a pin -
+  // except a purely numeric name, whose slug still fails the rule and
+  // refuses here with the field named rather than landing an unparseable
+  // frontmatter tag.
   const prefId = `pref-${slug}`;
-  const topic = slug;
-  const scope = extractScope(input.body);
+  const topic = requireObsidianTagValue(slug, "topic");
+  const scope = requireObsidianTagValue(extractScope(input.body), "scope");
   // The import lands UNDER TRIAL, not confirmed. MEMORY.md is
   // session-derived - agent-writable from conversation content - so a
   // poisoned entry must not become a live rule on landing; it gets the

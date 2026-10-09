@@ -3,6 +3,7 @@ import {
   renderPreferenceFromMemory,
   slugifyMemoryName,
 } from "../../../src/core/brain/claude-memory-render.ts";
+import { TagSyntaxError, isObsidianTagValue } from "../../../src/core/brain/tag-syntax.ts";
 
 describe("renderPreferenceFromMemory", () => {
   test("emits frontmatter + body + Origin block, under trial (t_sec_memory_trial)", () => {
@@ -75,5 +76,58 @@ describe("slugifyMemoryName", () => {
   test("leading and trailing dashes are trimmed", () => {
     expect(slugifyMemoryName("  hello  ")).toBe("hello");
     expect(slugifyMemoryName("--hello--")).toBe("hello");
+  });
+});
+
+// ── t_11ee559f: the rendered frontmatter tags always parse-shaped ────────────
+
+describe("renderPreferenceFromMemory — tag syntax (t_11ee559f)", () => {
+  const baseRender = (
+    overrides: Partial<Parameters<typeof renderPreferenceFromMemory>[0]> = {},
+  ) => {
+    const input = {
+      name: "no-em-dashes",
+      description: "No em-dashes in Russian writing for this user.",
+      body: "Body text.",
+      memoryPath: "/m.md",
+      importedAt: "2026-05-18T10:00:00Z",
+      unconfirmedUntil: "2026-06-01T10:00:00Z",
+      bodySha256: "a".repeat(64),
+      ...overrides,
+    };
+    return input;
+  };
+
+  test("every frontmatter tags value is parse-shaped for messy names and scopes", () => {
+    const out = renderPreferenceFromMemory(
+      baseRender({
+        name: "Phase-by-phase approval: don't conflate plan/code",
+        body: "First line.\nscope: testing\nrest.",
+      }),
+    );
+    const tagsLine = out.split("\n").find((line) => line.startsWith("tags:"));
+    expect(tagsLine).toBeDefined();
+    const values = tagsLine!
+      .slice("tags: [".length, tagsLine!.lastIndexOf("]"))
+      .split(", ")
+      .map((v) => v.trim());
+    expect(values).toEqual([
+      "brain",
+      "brain/preference",
+      "brain/topic/phase-by-phase-approval-don-t-conflate-plan-code",
+      "brain/scope/testing",
+    ]);
+    for (const value of values) expect(isObsidianTagValue(value)).toBe(true);
+  });
+
+  test("a name that slugifies to a purely numeric topic refuses, naming the field", () => {
+    let thrown: unknown;
+    try {
+      renderPreferenceFromMemory(baseRender({ name: "2024" }));
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(TagSyntaxError);
+    expect((thrown as TagSyntaxError).field).toBe("topic");
   });
 });

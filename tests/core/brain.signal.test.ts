@@ -9,6 +9,7 @@ import {
   writeSignal,
   type WriteSignalInput,
 } from "../../src/core/brain/signal.ts";
+import { TagSyntaxError } from "../../src/core/brain/tag-syntax.ts";
 
 let tmp: string;
 
@@ -295,23 +296,43 @@ describe("writeSignal — a lost race retries instead of dropping the event (#16
 });
 
 describe("writeSignal — sanitisation (§7)", () => {
-  test("redacts secrets in principle / scope / raw", () => {
+  test("redacts secrets in principle / raw", () => {
     const r = writeSignal(
       tmp,
       baseInput({
         slug: "sec",
         principle: "do not put api_key=hunter2 anywhere",
-        scope: "writing token: abcd",
         raw: 'config = {"client_secret": "shhh"}',
       }),
     );
     const round = parseSignal(r.path);
     expect(round.principle).toContain("***REDACTED***");
     expect(round.principle).not.toContain("hunter2");
-    expect(round.scope).toContain("***REDACTED***");
-    expect(round.scope).not.toContain("abcd");
     expect(round.raw).toContain("***REDACTED***");
     expect(round.raw).not.toContain("shhh");
+  });
+
+  test("a secret-bearing scope refuses at the tag gate, carrying the REDACTED value", () => {
+    // t_11ee559f: a scope segment is refused unrewritten when it fails the
+    // tag rule, so a spaced scope can no longer land a broken tag - even
+    // one whose spaces surround a redacted credential. Sanitisation runs
+    // first, so the refusal token carries the redacted value and the raw
+    // secret reaches neither disk nor the error.
+    let thrown: unknown;
+    try {
+      writeSignal(
+        tmp,
+        baseInput({
+          slug: "sec-scope",
+          scope: "writing token: abcd",
+        }),
+      );
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(TagSyntaxError);
+    expect((thrown as TagSyntaxError).token).not.toContain("abcd");
+    expect(existsSync(join(tmp, "Brain", "inbox", "sig-2026-05-14-sec-scope.md"))).toBe(false);
   });
 
   test("strips C0 controls and folds U+2028/U+2029 in principle", () => {
@@ -416,5 +437,56 @@ describe("writeSignal — capture-extension fields (§9/§16)", () => {
         }),
       ),
     ).toThrow(/source_type/);
+  });
+});
+
+// ── t_11ee559f: composed tags obey the one shared tag rule ───────────────────
+
+describe("writeSignal — tag syntax (t_11ee559f)", () => {
+  test("a spaced topic yields the slugified tag; the topic field stays as typed", () => {
+    const r = writeSignal(tmp, baseInput({ topic: "foo bar", slug: "spaced-topic" }));
+    const parsed = parseSignal(r.path);
+    expect(parsed.topic).toBe("foo bar");
+    expect(parsed.tags).toContain("brain/topic/foo-bar");
+    const raw = readFileSync(r.path, "utf8");
+    expect(raw).toContain("brain/topic/foo-bar");
+    expect(raw).not.toContain("brain/topic/foo bar");
+  });
+
+  test("a topic that even slugified fails the rule refuses, naming the field", () => {
+    let thrown: unknown;
+    try {
+      writeSignal(tmp, baseInput({ topic: "2024 retrospective", slug: "numeric-topic" }));
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(TagSyntaxError);
+    expect((thrown as TagSyntaxError).field).toBe("topic");
+  });
+
+  test("a bad extraTags entry refuses, naming the field, and writes no file", () => {
+    let thrown: unknown;
+    try {
+      writeSignal(tmp, baseInput({ extraTags: ["not a tag"] }));
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(TagSyntaxError);
+    expect((thrown as TagSyntaxError).field).toBe("extraTags");
+    expect(existsSync(join(tmp, "Brain", "inbox", "sig-2026-05-14-no-internal-abbrev.md"))).toBe(
+      false,
+    );
+  });
+
+  test("a scope segment is rejected unrewritten, naming the field", () => {
+    expect(() => writeSignal(tmp, baseInput({ scope: "two words" }))).toThrow(TagSyntaxError);
+  });
+
+  test("clean inputs keep the incumbent tags line byte-for-byte", () => {
+    const r = writeSignal(tmp, baseInput());
+    const raw = readFileSync(r.path, "utf8");
+    expect(raw).toContain(
+      "tags: [brain, brain/signal, brain/topic/no-internal-abbrev, brain/scope/writing]",
+    );
   });
 });

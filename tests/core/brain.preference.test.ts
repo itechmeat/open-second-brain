@@ -12,6 +12,7 @@ import {
   type WritePreferenceInput,
 } from "../../src/core/brain/preference.ts";
 import { brainDirs, preferencePath, retiredPath } from "../../src/core/brain/paths.ts";
+import { TagSyntaxError } from "../../src/core/brain/tag-syntax.ts";
 
 let tmp: string;
 
@@ -494,5 +495,56 @@ describe("moveToRetired carries _-prefixed shape forward (§24)", () => {
     expect(raw).not.toMatch(/^applied_count: /m);
     // 'status:' on the retired file is identity (always 'retired'), not derived.
     expect(raw).toMatch(/^_status: retired$/m);
+  });
+});
+
+// ── t_11ee559f: composed tags obey the one shared tag rule ───────────────────
+
+describe("writePreference — tag syntax (t_11ee559f)", () => {
+  test("a spaced topic yields the slugified tag; the topic field stays as typed", () => {
+    const res = writePreference(tmp, basePrefInput({ topic: "foo bar", slug: "spaced-topic" }));
+    const parsed = parsePreference(res.path);
+    expect(parsed.topic).toBe("foo bar");
+    expect(parsed.tags).toContain("brain/topic/foo-bar");
+    const raw = readFileSync(res.path, "utf8");
+    expect(raw).toContain("brain/topic/foo-bar");
+    expect(raw).not.toContain("brain/topic/foo bar");
+  });
+
+  test("a topic that even slugified fails the rule refuses, naming the field", () => {
+    let thrown: unknown;
+    try {
+      writePreference(tmp, basePrefInput({ topic: "2024 retrospective", slug: "numeric-topic" }));
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(TagSyntaxError);
+    expect((thrown as TagSyntaxError).field).toBe("topic");
+  });
+
+  test("a bad extraTags entry refuses, naming the field, and writes no file", () => {
+    let thrown: unknown;
+    try {
+      writePreference(tmp, basePrefInput({ extraTags: ["not a tag"] }));
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(TagSyntaxError);
+    expect((thrown as TagSyntaxError).field).toBe("extraTags");
+    expect(existsSync(preferencePath(tmp, "no-internal-abbrev"))).toBe(false);
+  });
+
+  test("a scope segment is rejected unrewritten, naming the field", () => {
+    expect(() => writePreference(tmp, basePrefInput({ scope: "two words" }))).toThrow(
+      TagSyntaxError,
+    );
+  });
+
+  test("clean inputs keep the incumbent tags line byte-for-byte", () => {
+    const res = writePreference(tmp, basePrefInput());
+    const raw = readFileSync(res.path, "utf8");
+    expect(raw).toContain(
+      "tags: [brain, brain/preference, brain/topic/no-internal-abbrev, brain/scope/writing]",
+    );
   });
 });

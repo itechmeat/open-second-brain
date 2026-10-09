@@ -43,7 +43,8 @@ import {
   type OriginChannelStamp,
 } from "../origin-channel.ts";
 import { EXPIRATION_DATE_FIELD, normalizeExpirationDate } from "./expiration.ts";
-import { writeFrontmatterAtomic, parseFrontmatter } from "../vault.ts";
+import { writeFrontmatterAtomic, parseFrontmatter, slugify } from "../vault.ts";
+import { requireObsidianTagValue } from "./tag-syntax.ts";
 import { compress, expand, CODEC_VERSION } from "./portability/codec.ts";
 import { allocateAndCreate, brainDirsForWrite, validateIsoDate } from "./paths.ts";
 import {
@@ -793,6 +794,13 @@ function readOptionalTrimmedString(
  * and (optionally) per-scope tags. Any `extraTags` supplied by the
  * caller are appended after dedup. We preserve insertion order so the
  * file is byte-stable across writes with identical input.
+ *
+ * Every composed value obeys the ONE shared tag rule (`src/core/tags.ts`,
+ * via `tag-syntax.ts`): the topic segment is slugified - the same
+ * treatment the filename slug gets - and refused only if even the slug
+ * fails the rule; scope segments and `extraTags` entries are
+ * caller-controlled input and are refused unrewritten, with the field
+ * named (`TagSyntaxError`).
  */
 function composeSignalTags(input: WriteSignalInput): string[] {
   const out: string[] = [];
@@ -805,9 +813,9 @@ function composeSignalTags(input: WriteSignalInput): string[] {
   };
   push("brain");
   push("brain/signal");
-  push(`brain/topic/${input.topic.trim()}`);
+  push(`brain/topic/${requireObsidianTagValue(slugify(input.topic.trim()), "topic")}`);
   if (input.scope && input.scope.trim()) {
-    push(`brain/scope/${input.scope.trim()}`);
+    push(`brain/scope/${requireObsidianTagValue(input.scope.trim(), "scope")}`);
   }
   // Non-default source_type gets its own tag so Obsidian users can
   // filter `tag:brain/source/inline` etc. `live` is the implicit
@@ -816,7 +824,7 @@ function composeSignalTags(input: WriteSignalInput): string[] {
     push(`brain/source/${input.source_type}`);
   }
   for (const t of input.extraTags ?? []) {
-    if (t.trim()) push(t.trim());
+    if (t.trim()) push(requireObsidianTagValue(t.trim(), "extraTags"));
   }
   return out;
 }
