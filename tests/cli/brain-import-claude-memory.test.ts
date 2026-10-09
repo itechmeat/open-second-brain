@@ -327,3 +327,71 @@ describe("o2b brain import-claude-memory — per-entry disposition (t_11ee559f)"
     }
   });
 });
+
+describe("o2b brain import-claude-memory — help and not-found refusals", () => {
+  test("verb help names --approval-digest and --from and states the full apply requirement", async () => {
+    // S10: the usage line listed every flag the verb silently accepts
+    // except the two the scripted path actually needs, and the closing
+    // sentence promised --yes alone, contradicting the refusal the verb
+    // itself prints in non-interactive mode.
+    const res = await runCli(["brain", "import-claude-memory", "--help"]);
+    expect(res.returncode).toBe(0);
+    expect(res.stdout).toContain("[--from <backend>]");
+    expect(res.stdout).toContain("[--approval-digest <hex>]");
+    expect(res.stdout).toContain(
+      "--apply requires --yes and --approval-digest in\nnon-interactive mode",
+    );
+  });
+
+  test("missing --memory directory refusal names the remedy", async () => {
+    // S9: the refusal stopped at the missing path, leaving the operator to
+    // guess whether to create it or repoint --memory.
+    const tmp = mkdtempSync(join(tmpdir(), "o2b-cm-cli-missing-"));
+    const vault = join(tmp, "vault");
+    const config = join(tmp, "config.yaml");
+    const env = { OPEN_SECOND_BRAIN_CONFIG: config };
+    try {
+      await runCli(["init", "--vault", vault, "--name", "Test"], { env });
+      await runCli(["brain", "init", "--vault", vault], { env });
+      const res = await runCli(
+        [
+          "brain",
+          "import-claude-memory",
+          "--vault",
+          vault,
+          "--memory",
+          join(tmp, "nowhere"),
+          "--allow-arbitrary-memory-path",
+        ],
+        { env },
+      );
+      expect(res.returncode).toBe(1);
+      expect(res.stderr).toContain("memory directory not found");
+      expect(res.stderr).toContain("(pass --memory with an existing directory, or create it)");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("default-discovery miss names the location home-relative, not absolute", async () => {
+    // S9: the default location is derived from homedir(), so the refusal
+    // must not expand the operator's home into output - the sibling
+    // refusal already spells the directory as ~/.claude/projects/.
+    const tmp = mkdtempSync(join(tmpdir(), "o2b-cm-cli-home-"));
+    const vault = join(tmp, "vault");
+    const config = join(tmp, "config.yaml");
+    const home = mkdtempSync(join(tmpdir(), "o2b-cm-cli-home-dir-"));
+    const env = { OPEN_SECOND_BRAIN_CONFIG: config, HOME: home };
+    try {
+      await runCli(["init", "--vault", vault, "--name", "Test"], { env });
+      await runCli(["brain", "init", "--vault", vault], { env });
+      const res = await runCli(["brain", "import-claude-memory", "--vault", vault], { env });
+      expect(res.returncode).toBe(1);
+      expect(res.stderr).toContain("memory directory not found: ~/.claude/projects/");
+      expect(res.stderr).not.toContain(home);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});

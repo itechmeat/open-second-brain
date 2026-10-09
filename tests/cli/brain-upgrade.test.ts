@@ -89,6 +89,12 @@ describe("brain upgrade", () => {
     expect(r.returncode).toBe(0);
     expect(r.stdout).toMatch(/run_id: upgrade-/);
     expect(r.stdout).toContain("Brain/_BRAIN.md");
+    // The snapshot line names the artifact vault-relative: the absolute
+    // location is machine-derived (state the vault never supplied), and
+    // the run id printed directly above already pins the file name.
+    const runId = /run_id: (upgrade-\S+)/.exec(r.stdout)![1]!;
+    expect(r.stdout).toContain(`snapshot: Brain/.snapshots/${runId}.tar.zst`);
+    expect(r.stdout).not.toContain(tmp);
     // Post-apply: the file is now the canonical template body, not
     // the stale copy.
     const body = readFileSync(join(vault, "Brain", "_BRAIN.md"), "utf8");

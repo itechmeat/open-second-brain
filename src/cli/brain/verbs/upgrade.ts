@@ -4,6 +4,7 @@ import {
   BrainUpgradeError,
   type UpgradePlan,
 } from "../../../core/brain/upgrade.ts";
+import { basename } from "node:path";
 import {
   brainVerbContext,
   describeErrorChain,
@@ -172,7 +173,11 @@ export async function cmdBrainUpgrade(argv: string[]): Promise<number> {
     });
   } else {
     ok(`run_id: ${result.run_id}`);
-    ok(`snapshot: ${result.snapshot_path}`);
+    // Vault-relative, not the resolved path: the snapshot location is
+    // machine-derived, and the file name is already pinned by the run id
+    // printed directly above. The JSON twin keeps `snapshot_path` for
+    // consumers that need the resolved location.
+    ok(`snapshot: Brain/.snapshots/${basename(result.snapshot_path)}`);
     for (const p of result.files_updated) ok(`  updated: ${p}`);
   }
   return 0;

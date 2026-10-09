@@ -12,7 +12,7 @@ import { DEFAULT_BRAIN_CONFIG } from "./policy/defaults.ts";
 import { resolveAgentName } from "../config.ts";
 import { loadManifest, saveManifest } from "./claude-memory-manifest.ts";
 import { planAction, type PlannedFile } from "./claude-memory-plan.ts";
-import { assertSafeMemoryPath } from "./claude-memory-paths.ts";
+import { assertSafeMemoryPath, homeRelativePath } from "./claude-memory-paths.ts";
 import { claudeMemoryBackend } from "./agent-backend/claude.ts";
 import type { MemorySourceBackend } from "./agent-backend/types.ts";
 import { BRAIN_PREFERENCES_REL, preferencePath } from "./paths.ts";
@@ -154,7 +154,10 @@ export function importClaudeMemory(opts: ImportClaudeMemoryOpts): ImportClaudeMe
   const backend = opts.backend ?? claudeMemoryBackend;
   assertSafeMemoryPath(opts.memoryDir, opts.allowArbitraryMemoryPath ?? false);
   if (!existsSync(opts.memoryDir)) {
-    throw new Error(`memory directory not found: ${opts.memoryDir}`);
+    throw new Error(
+      `memory directory not found: ${homeRelativePath(opts.memoryDir)} ` +
+        `(pass --memory with an existing directory, or create it)`,
+    );
   }
   const now = opts.now ?? new Date();
   const importedAt = isoSecond(now);

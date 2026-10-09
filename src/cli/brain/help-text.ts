@@ -780,6 +780,7 @@ export const VERB_HELP: Record<string, string> = {
     "always skipped.\n",
   "import-claude-memory":
     "usage: o2b brain import-claude-memory [--vault <path>] [--memory <path>]\n" +
+    "                                       [--from <backend>] [--approval-digest <hex>]\n" +
     "                                       [--dry-run | --apply] [--yes] [--json]\n" +
     "                                       [--allow-arbitrary-memory-path]\n" +
     "Read metadata.type:feedback entries from a Claude Code memory directory and\n" +
@@ -787,7 +788,8 @@ export const VERB_HELP: Record<string, string> = {
     "Brain/.imports/claude-memory.json tracks idempotency. UPDATE preserves\n" +
     "accumulated evidence fields. CONFLICT (preference exists without a manifest\n" +
     "entry) exits 2 — never silent overwrites.\n" +
-    "Default is --dry-run; --apply requires --yes in non-interactive mode.\n",
+    "Default is --dry-run; --apply requires --yes and --approval-digest in\n" +
+    "non-interactive mode.\n",
   entity:
     "usage: o2b brain entity <set|get|list|relate|archive|prune> [args]\n" +
     "  set <category> <name> [--alias <a>]... [--body <md>] [--confidence <c>] [--json]\n" +

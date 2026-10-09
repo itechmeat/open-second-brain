@@ -16,6 +16,22 @@ export function defaultMemoryDir(vault: string): string {
 }
 
 /**
+ * Render a path under the operator's home directory home-relative (`~/...`),
+ * any other path verbatim. The default memory location is derived from
+ * `homedir()`, so a refusal about that location must not expand the home
+ * into output - the sibling safety refusal already spells the directory as
+ * `~/.claude/projects/`, and operator-supplied arguments keep their verbatim
+ * echo.
+ */
+export function homeRelativePath(p: string): string {
+  const home = resolve(homedir());
+  const abs = resolve(p);
+  if (abs === home) return "~";
+  if (abs.startsWith(home + sep)) return `~${abs.slice(home.length)}`;
+  return p;
+}
+
+/**
  * Refuse to import from anywhere outside `~/.claude/projects/`. The
  * comparison runs after `realpathSync` so a symlink pointing to a
  * sensitive system directory cannot smuggle reads — the realpath is
