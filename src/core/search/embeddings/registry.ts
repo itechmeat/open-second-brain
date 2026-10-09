@@ -17,6 +17,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+import { resolveMergedValue } from "../../secret-resolver.ts";
 import { SearchError } from "../types.ts";
 
 /** A registered OpenAI-compatible provider profile. */
@@ -171,6 +172,17 @@ export interface ExpandedProvider {
   readonly apiKeys: ReadonlyArray<string>;
 }
 
+/** Options for expanding a registered name against merged key sources. */
+export interface ExpandRegisteredProviderOptions {
+  /**
+   * Vault whose custody store joins the probe ahead of `env`: a probe
+   * name the store holds answers first, and a probe entry written as a
+   * `$secret:NAME` reference resolves through the same store (read-only,
+   * no usage stamp). Absent, the probe reads `env` exactly as before.
+   */
+  readonly secretsVault?: string;
+}
+
 /**
  * Expand a registered provider name into `openai-compat` config, resolving
  * the API key(s) from the profile's `envKey` probe list (first-present
@@ -182,11 +194,16 @@ export function expandRegisteredProvider(
   name: string,
   registry: ReadonlyArray<ProviderProfile>,
   env: Readonly<Record<string, string | undefined>>,
+  opts: ExpandRegisteredProviderOptions = {},
 ): ExpandedProvider | null {
   const profile = registry.find((p) => p.name === name);
   if (!profile) return null;
   const present = envKeyList(profile.envKey)
-    .map((varName) => env[varName])
+    .map((varName) =>
+      opts.secretsVault === undefined
+        ? env[varName]
+        : resolveMergedValue(opts.secretsVault, env, varName),
+    )
     .filter((v): v is string => v !== undefined && v !== "");
   return Object.freeze({
     provider: "openai-compat" as const,

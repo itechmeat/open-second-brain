@@ -11,10 +11,16 @@ import { tmpdir } from "node:os";
 
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
+import { setSecret } from "../../../../src/core/brain/secrets/store.ts";
+import { SecretReferenceError } from "../../../../src/core/secret-ref.ts";
 import {
   writeResearchReport,
   ResearchValidationError,
+  resolveResearchPoolEnv,
+  BRAVE_API_KEY_ENV,
+  TAVILY_API_KEY_ENV,
 } from "../../../../src/core/brain/research/research.ts";
+import { fakeCredential } from "../../../helpers/fake-credentials.ts";
 
 let vault: string;
 let configHome: string;
@@ -101,5 +107,42 @@ describe("writeResearchReport", () => {
     expect(first.created).toBe(true);
     expect(second.created).toBe(false);
     expect(second.reportPath).toBe(first.reportPath);
+  });
+});
+
+// ----- Provider keys through the custody store (t_e5807974 / B2) -------------
+//
+// A provider key env value may be a `$secret:NAME` reference; with the
+// custody vault passed it resolves store-first at pool wiring time. Plain
+// env values keep today's path byte-identically, and an unresolvable
+// reference surfaces the named resolver error instead of quietly yielding
+// an empty pool.
+
+describe("resolveResearchPoolEnv", () => {
+  const STORED_BRAVE_KEY = fakeCredential("stored-", "brave-5f9a");
+  const NOW = new Date("2026-06-13T12:00:00Z");
+
+  test("a reference as a provider key resolves through the custody store", () => {
+    setSecret(vault, { name: "brave_key", value: STORED_BRAVE_KEY, agent: "tester", now: NOW });
+    const resolved = resolveResearchPoolEnv(
+      { [BRAVE_API_KEY_ENV]: "$secret:brave_key", [TAVILY_API_KEY_ENV]: "" },
+      vault,
+    );
+    expect(resolved.braveApiKey).toBe(STORED_BRAVE_KEY);
+    expect(resolved.tavilyApiKey).toBeNull();
+  });
+
+  test("plain env values pass through byte-identically", () => {
+    const resolved = resolveResearchPoolEnv(
+      { [BRAVE_API_KEY_ENV]: "  b  ", [TAVILY_API_KEY_ENV]: "t" },
+      vault,
+    );
+    expect(resolved).toEqual({ braveApiKey: "b", tavilyApiKey: "t" });
+  });
+
+  test("an unresolvable reference throws the named resolver error", () => {
+    expect(() =>
+      resolveResearchPoolEnv({ [BRAVE_API_KEY_ENV]: "$secret:absent_name" }, vault),
+    ).toThrow(SecretReferenceError);
   });
 });

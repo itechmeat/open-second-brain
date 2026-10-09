@@ -10,11 +10,12 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { createHmac } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import { join, resolve } from "node:path";
 
+import { setSecret } from "../../src/core/brain/secrets/store.ts";
 import {
   INSTALLATION_SECRET_ENV_KEY,
   isValidInstallationSecret,
@@ -23,6 +24,7 @@ import {
   VAULT_STORE_REF_PREFIX,
 } from "../../src/core/config.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import { SecretReferenceError } from "../../src/core/secret-ref.ts";
 
 /** A stored value of the wrong shape: not 32 lowercase hex characters. */
 const CORRUPT_VALUE = "not-a-valid-secret";
@@ -33,6 +35,7 @@ let configHome: string;
 let configPath: string;
 let savedSecret: string | undefined;
 let savedDeviceId: string | undefined;
+const custodyVaults: string[] = [];
 
 beforeEach(() => {
   configHome = mkdtempSync(join(tmpdir(), "o2b-install-secret-"));
@@ -44,6 +47,7 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(configHome, { recursive: true, force: true });
+  for (const vault of custodyVaults.splice(0)) rmSync(vault, { recursive: true, force: true });
   if (savedSecret === undefined) delete process.env[INSTALLATION_SECRET_ENV_KEY];
   else process.env[INSTALLATION_SECRET_ENV_KEY] = savedSecret;
   if (savedDeviceId === undefined) delete process.env["O2B_DEVICE_ID"];
@@ -96,6 +100,52 @@ describe("resolveInstallationSecret", () => {
     expect(isValidInstallationSecret("0123456789ABCDEF0123456789ABCDEF")).toBe(false); // uppercase
     expect(isValidInstallationSecret("0123456789abcdef0123456789abcdefff")).toBe(false); // too long
   });
+
+  // ----- Reference routing (trust-surface-hardening, t_e5807974 / B2) --------
+  //
+  // A persisted value written as a `$secret:NAME` reference resolves through
+  // the custody store of the vault the caller passes. Plain values keep
+  // today's path byte-identically, and an unresolvable reference refuses
+  // with the named resolver error instead of self-healing a fresh key over
+  // the reference (which would silently change every vault:// reference).
+  describe("reference routing", () => {
+    const STORED_KEY = randomBytes(16).toString("hex");
+    const NOW = new Date("2026-06-05T10:00:00Z");
+
+    function storeInstallationKey(): string {
+      const vault = mkdtempSync(join(tmpdir(), "o2b-install-custody-"));
+      custodyVaults.push(vault);
+      mkdirSync(join(vault, "Brain"), { recursive: true });
+      setSecret(vault, {
+        name: "installation_secret",
+        value: STORED_KEY,
+        agent: "tester",
+        now: NOW,
+      });
+      return vault;
+    }
+
+    test("a reference value resolves through the custody store", () => {
+      const vault = storeInstallationKey();
+      atomicWriteFileSync(configPath, 'installation_secret: "$secret:installation_secret"\n');
+      expect(resolveInstallationSecret(configPath, vault)).toBe(STORED_KEY);
+    });
+
+    test("an unresolvable reference refuses with the named error, never self-heals", () => {
+      const vault = storeInstallationKey();
+      atomicWriteFileSync(configPath, 'installation_secret: "$secret:absent_name"\n');
+      expect(() => resolveInstallationSecret(configPath, vault)).toThrow(SecretReferenceError);
+      // The reference is still in the config: no fresh key was written over it.
+      expect(readFileSync(configPath, "utf8")).toContain("absent_name");
+    });
+
+    test("plain values keep resolving byte-identically with a vault passed", () => {
+      const vault = storeInstallationKey();
+      const secret = resolveInstallationSecret(configPath);
+      expect(resolveInstallationSecret(configPath, vault)).toBe(secret);
+      expect(secret).toMatch(HEX32);
+    });
+  });
 });
 
 describe("vaultStoreReference (keyed HMAC)", () => {
@@ -144,5 +194,23 @@ describe("vaultStoreReference (keyed HMAC)", () => {
     const withRealDevice = vaultStoreReference("/tmp/vault-kat", configPath);
     expect(withEmptyDevice).toBe(withRealDevice);
     expect(withEmptyDevice).toBe(KAT_REF);
+  });
+
+  test("threads the referenced vault so a reference key resolves through its custody store", () => {
+    const vault = mkdtempSync(join(tmpdir(), "o2b-install-custody-"));
+    custodyVaults.push(vault);
+    mkdirSync(join(vault, "Brain"), { recursive: true });
+    const storedKey = randomBytes(16).toString("hex");
+    setSecret(vault, {
+      name: "installation_secret",
+      value: storedKey,
+      agent: "tester",
+      now: new Date("2026-06-05T10:00:00Z"),
+    });
+    atomicWriteFileSync(configPath, 'installation_secret: "$secret:installation_secret"\n');
+    const expected =
+      VAULT_STORE_REF_PREFIX +
+      createHmac("sha256", storedKey).update(resolve(vault)).digest("hex").slice(0, 32);
+    expect(vaultStoreReference(vault, configPath)).toBe(expected);
   });
 });

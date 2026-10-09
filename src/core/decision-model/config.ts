@@ -30,6 +30,9 @@
  */
 
 import { assertHttpEgressEndpoint } from "../search/embeddings/http-util.ts";
+import { SecretStoreLockedError } from "../brain/secrets/envelope.ts";
+import { SecretReferenceError } from "../secret-ref.ts";
+import { isSecretReferenceValue, resolveNamedSecret } from "../secret-resolver.ts";
 import { envOrConfig } from "../validate.ts";
 import {
   DECISION_MODEL_USES,
@@ -134,6 +137,33 @@ function setting(
   return envOrConfig(env, config, `${ENV_PREFIX}${suffix.toUpperCase()}`, key);
 }
 
+/**
+ * The key value for presence, with reference routing. A value written as
+ * a `$secret:NAME` reference resolves through the custody store of
+ * `secretsVault` (store first, env fallback); an unresolvable reference
+ * or a store-held name under a locked envelope lands in `errors` as the
+ * named refusal - with the status turning `invalid` - never as a silent
+ * empty key. Without a vault the value is taken as-is, exactly as before
+ * the routing existed, and resolution still never throws.
+ */
+function resolveKeyValue(
+  raw: string | undefined,
+  secretsVault: string | null | undefined,
+  errors: string[],
+): string | undefined {
+  if (typeof raw !== "string" || secretsVault === null || secretsVault === undefined) return raw;
+  if (!isSecretReferenceValue(raw)) return raw;
+  try {
+    return resolveNamedSecret(secretsVault, raw.trim());
+  } catch (err) {
+    if (err instanceof SecretReferenceError || err instanceof SecretStoreLockedError) {
+      errors.push(err.message);
+      return undefined;
+    }
+    throw err;
+  }
+}
+
 const ALL_OFF: DecisionModelUses = Object.freeze(
   Object.fromEntries(DECISION_MODEL_USES.map((use) => [use, "off"])) as Record<
     DecisionModelUse,
@@ -222,6 +252,12 @@ export interface ResolveDecisionModelOptions {
   /** Vault whose `_brain.yaml` may opt out; null when there is none. */
   readonly vault: string | null;
   /**
+   * Vault whose custody store backs `$secret:` references in the key
+   * value; absent, a reference-shaped key value is taken as-is, exactly
+   * as before the resolver routing existed.
+   */
+  readonly secretsVault?: string | null;
+  /**
    * Reads the vault opt-out. Injected so this module never imports the
    * whole policy loader at startup; defaults to the real loader.
    */
@@ -271,7 +307,11 @@ export function resolveDecisionModelConfig(
   const envKeyValid = envKeyRaw === null || ENV_VAR_NAME_RE.test(envKeyRaw);
   // An invalid name is never looked up and never reported back.
   const envKey = envKeyValid ? envKeyRaw : null;
-  const keyValue = envKey !== null ? env[envKey] : undefined;
+  const keyValue = resolveKeyValue(
+    envKey !== null ? env[envKey] : undefined,
+    opts.secretsVault,
+    errors,
+  );
   const keyPresent = typeof keyValue === "string" && keyValue.trim() !== "";
   const configuredUses = parseDecisionModelUses(setting(env, config, "uses"), []);
 

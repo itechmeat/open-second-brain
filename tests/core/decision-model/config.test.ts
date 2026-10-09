@@ -13,8 +13,9 @@ import {
   decisionModelModeFor,
   resolveDecisionModelConfig,
 } from "../../../src/core/decision-model/config.ts";
+import { setSecret } from "../../../src/core/brain/secrets/store.ts";
 import { loadBrainConfigDetailed } from "../../../src/core/brain/policy.ts";
-import { FAKE_DECISION_KEY } from "../../helpers/fake-credentials.ts";
+import { FAKE_DECISION_KEY, fakeCredential } from "../../helpers/fake-credentials.ts";
 
 const KEY_VAR = "O2B_TEST_DECISION_MODEL_KEY";
 const ENABLED = {
@@ -252,5 +253,66 @@ describe("vault opt-out", () => {
     const vault = vaultWithBrainYaml("schema_version: 99\n");
     const cfg = resolveDecisionModelConfig({ env: WITH_KEY, config: ENABLED, vault });
     expect(cfg.status).toBe("disabled_by_vault");
+  });
+});
+
+// ----- Key resolution through the custody store (t_e5807974 / B2) ------------
+//
+// The value of the variable `decision_model_env_key` names may itself be a
+// `$secret:NAME` reference; with `secretsVault` set it resolves through the
+// custody store at resolution time. Resolution still never throws: an
+// unresolvable reference lands in `errors` (status `invalid`) instead of
+// silently reading as an unset key, and a plain value keeps today's path.
+
+describe("decision-model key through the custody store", () => {
+  const STORED_DM_KEY = fakeCredential("stored-dm-", "key-88ac");
+  const REF_VALUE = "$secret:dm_key";
+  const NOW = new Date("2026-06-05T10:00:00Z");
+
+  function tempCustodyVault(): string {
+    const vault = mkdtempSync(join(tmpdir(), "osb-dm-custody-"));
+    dirs.push(vault);
+    mkdirSync(join(vault, "Brain"), { recursive: true });
+    return vault;
+  }
+
+  test("a reference as the key value resolves through the store and activates", () => {
+    const vault = tempCustodyVault();
+    setSecret(vault, { name: "dm_key", value: STORED_DM_KEY, agent: "tester", now: NOW });
+    const cfg = resolveDecisionModelConfig({
+      env: { [KEY_VAR]: REF_VALUE } as NodeJS.ProcessEnv,
+      config: ENABLED,
+      vault: null,
+      secretsVault: vault,
+    });
+    expect(cfg.status).toBe("active");
+    expect(cfg.keyPresent).toBe(true);
+    expect(cfg.errors).toEqual([]);
+  });
+
+  test("a plain key value keeps resolving exactly as before", () => {
+    const vault = tempCustodyVault();
+    const without = resolveDecisionModelConfig({ env: WITH_KEY, config: ENABLED, vault: null });
+    const withVaultOpt = resolveDecisionModelConfig({
+      env: WITH_KEY,
+      config: ENABLED,
+      vault: null,
+      secretsVault: vault,
+    });
+    expect(withVaultOpt).toEqual(without);
+    expect(withVaultOpt.status).toBe("active");
+  });
+
+  test("an unresolvable reference is a named error, not a silent empty key", () => {
+    const vault = tempCustodyVault();
+    const cfg = resolveDecisionModelConfig({
+      env: { [KEY_VAR]: "$secret:absent_name" } as NodeJS.ProcessEnv,
+      config: ENABLED,
+      vault: null,
+      secretsVault: vault,
+    });
+    expect(cfg.status).toBe("invalid");
+    expect(cfg.keyPresent).toBe(false);
+    expect(cfg.errors.join("\n")).toContain("absent_name");
   });
 });

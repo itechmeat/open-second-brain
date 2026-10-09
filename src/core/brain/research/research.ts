@@ -31,6 +31,7 @@ import {
   assertResponseShape,
 } from "../response-shape.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
+import { isSecretReferenceValue, resolveNamedSecret } from "../../secret-resolver.ts";
 import { renderProvenanceSection, type Provenance } from "../provenance/provenance.ts";
 import {
   CAPTURE_SCOPE,
@@ -293,16 +294,31 @@ export interface ResearchPoolEnv {
   readonly tavilyApiKey: string | null;
 }
 
-/** Read the provider key envs. An injected map keeps this deterministic in tests. */
+/** Read the provider key envs. An injected map keeps this deterministic in tests.
+ * A key env value written as a `$secret:NAME` reference resolves through the
+ * custody store of `secretsVault` (store first, env fallback); without a vault
+ * the values are taken as-is, exactly as before the resolver routing existed.
+ * An unresolvable reference surfaces the named resolver error instead of
+ * quietly yielding an empty pool.
+ */
 export function resolveResearchPoolEnv(
   env: Readonly<Record<string, string | undefined>> = process.env,
+  secretsVault?: string,
 ): ResearchPoolEnv {
-  const brave = env[BRAVE_API_KEY_ENV]?.trim();
-  const tavily = env[TAVILY_API_KEY_ENV]?.trim();
   return {
-    braveApiKey: brave !== undefined && brave.length > 0 ? brave : null,
-    tavilyApiKey: tavily !== undefined && tavily.length > 0 ? tavily : null,
+    braveApiKey: researchKey(env[BRAVE_API_KEY_ENV], secretsVault),
+    tavilyApiKey: researchKey(env[TAVILY_API_KEY_ENV], secretsVault),
   };
+}
+
+/** One provider key: trimmed and non-empty, with references resolved. */
+function researchKey(raw: string | undefined, secretsVault: string | undefined): string | null {
+  const trimmed = raw?.trim();
+  if (trimmed === undefined || trimmed.length === 0) return null;
+  if (secretsVault !== undefined && isSecretReferenceValue(trimmed)) {
+    return resolveNamedSecret(secretsVault, trimmed);
+  }
+  return trimmed;
 }
 
 export interface BuildResearchPoolOptions {

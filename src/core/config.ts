@@ -15,6 +15,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import lockfile from "proper-lockfile";
 
 import { atomicWriteFileSync, sleepSync } from "./fs-atomic.ts";
+import { isSecretReferenceValue, resolveNamedSecret } from "./secret-resolver.ts";
 import { APP_DIR_NAME, configBaseDir } from "./platform-dirs.ts";
 import { resolveActiveProfileVault } from "./brain/portability/profiles.ts";
 import { resolvePointerVault } from "./brain/portability/pointer.ts";
@@ -549,7 +550,7 @@ export function isValidInstallationSecret(value: string): boolean {
   return INSTALLATION_SECRET_RE.test(value);
 }
 
-export function resolveInstallationSecret(configPath?: string): string {
+export function resolveInstallationSecret(configPath?: string, secretsVault?: string): string {
   // Env override exists for deterministic tests only, and is accepted solely
   // as a full 32-hex key so it can never make the secret empty or guessable.
   const env = process.env[INSTALLATION_SECRET_ENV_KEY];
@@ -557,7 +558,16 @@ export function resolveInstallationSecret(configPath?: string): string {
   const resolved = configPath ?? defaultConfigPath();
 
   const read = (): string | null => {
-    const value = discoverConfig(resolved).data[INSTALLATION_SECRET_CONFIG_KEY];
+    const raw = discoverConfig(resolved).data[INSTALLATION_SECRET_CONFIG_KEY];
+    // A persisted value written as a `$secret:NAME` reference resolves
+    // through the passed vault's custody store; an unresolvable reference
+    // surfaces the named resolver error here - it must never self-heal a
+    // fresh key over the reference, which would silently change every
+    // vault:// reference agents correlate by.
+    const value =
+      secretsVault !== undefined && isSecretReferenceValue(raw)
+        ? resolveNamedSecret(secretsVault, String(raw).trim())
+        : raw;
     return value && isValidInstallationSecret(value) ? value : null;
   };
 
@@ -613,7 +623,9 @@ const VAULT_STORE_REF_HEX_LEN = 32;
  *   `vaultPathField` in `src/mcp/tools.ts`.
  */
 export function vaultStoreReference(vaultPath: string, configPath?: string): string {
-  const key = resolveInstallationSecret(configPath);
+  // The referenced vault's custody store backs a `$secret:` reference in
+  // the persisted key; a plain key resolves exactly as before.
+  const key = resolveInstallationSecret(configPath, vaultPath);
   const digest = createHmac("sha256", key)
     .update(resolve(vaultPath))
     .digest("hex")
@@ -1494,15 +1506,23 @@ export function resolveSessionCaptureRoles(configPath?: string): SessionCaptureR
 /**
  * Inbound Telegram capture bot token (Knowledge intake suite, t_f8f5ef6a).
  * Order: `TELEGRAM_BOT_TOKEN` env -> `telegram_bot_token` config -> null.
- * The key contains "token", so `redactConfigMapping` (src/core/egress)
- * redacts it from any config snapshot. `null` (the default) means the
- * capture runner exits with a typed error rather than starting; nothing
- * runs without an explicit token.
+ * A value written as a `$secret:NAME` reference resolves through the passed
+ * vault's custody store. The key contains "token", so `redactConfigMapping`
+ * (src/core/egress) redacts it from any config snapshot. `null` (the
+ * default) means the capture runner exits with a typed error rather than
+ * starting; nothing runs without an explicit token.
  */
-export function resolveTelegramBotToken(configPath?: string): string | null {
+export function resolveTelegramBotToken(configPath?: string, secretsVault?: string): string | null {
   const env = process.env["TELEGRAM_BOT_TOKEN"]?.trim();
   const raw = env || discoverConfig(configPath).data["telegram_bot_token"]?.trim();
-  return raw !== undefined && raw.length > 0 ? raw : null;
+  if (raw === undefined || raw.length === 0) return null;
+  // A token written as a `$secret:NAME` reference resolves through the
+  // vault's custody store (read-only); without the vault the value is
+  // taken as-is, exactly as before the resolver routing existed.
+  if (secretsVault !== undefined && isSecretReferenceValue(raw)) {
+    return resolveNamedSecret(secretsVault, raw);
+  }
+  return raw;
 }
 
 /**

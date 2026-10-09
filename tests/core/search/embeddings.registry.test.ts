@@ -1,8 +1,9 @@
 import { test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { setSecret } from "../../../src/core/brain/secrets/store.ts";
 import {
   loadProviderRegistry,
   addProviderProfile,
@@ -13,6 +14,7 @@ import {
   RESERVED_PROVIDER_NAMES,
 } from "../../../src/core/search/embeddings/registry.ts";
 import { SearchError } from "../../../src/core/search/types.ts";
+import { SecretReferenceError } from "../../../src/core/secret-ref.ts";
 import { fakeCredential } from "../../helpers/fake-credentials.ts";
 
 const NIM_KEY = fakeCredential("secret-", "123");
@@ -134,4 +136,86 @@ test("a malformed registry file degrades to empty, never throws", () => {
   mkdirSync(join(vault, "Brain", "search"), { recursive: true });
   writeFileSync(providerRegistryPath(vault), "{ not json");
   expect(loadProviderRegistry(vault)).toEqual([]);
+});
+
+// ----- Custody-store probing (trust-surface-hardening, t_e5807974 / B2) ------
+//
+// The probe map is the merged provider: a name the custody store holds
+// answers ahead of the environment, and a probe entry written as a
+// `$secret:NAME` reference resolves through the same store. Resolution is
+// read-only (no `last_used_at` stamp, no store mutation), and with no
+// store entry and no reference the probing is byte-identical to the
+// plain-env behavior.
+
+const STORED_PROBE_KEY = fakeCredential("stored-", "probe-8d31");
+const ENV_PROBE_KEY = fakeCredential("env-", "probe-2e77");
+const PROBE_NOW = new Date("2026-06-05T10:00:00Z");
+/** The fixture profile, pointed at the probe name the store entry uses. */
+const probeProfile = { ...nim, envKey: "embed_key" };
+
+function storeProbeKey(name = "embed_key"): void {
+  setSecret(vault, { name, value: STORED_PROBE_KEY, agent: "tester", now: PROBE_NOW });
+}
+
+function withEnvKey(name: string, value: string, run: () => void): void {
+  const saved = process.env[name];
+  process.env[name] = value;
+  try {
+    run();
+  } finally {
+    if (saved === undefined) delete process.env[name];
+    else process.env[name] = saved;
+  }
+}
+
+test("a store-held probe name answers ahead of the environment", () => {
+  storeProbeKey();
+  withEnvKey("embed_key", ENV_PROBE_KEY, () => {
+    const expanded = expandRegisteredProvider("nvidia-nim", [probeProfile], process.env, {
+      secretsVault: vault,
+    });
+    expect(expanded?.apiKey).toBe(STORED_PROBE_KEY);
+    expect(expanded?.apiKeys).toEqual([STORED_PROBE_KEY]);
+  });
+});
+
+test("a probe entry written as a reference resolves through the store", () => {
+  storeProbeKey();
+  const expanded = expandRegisteredProvider(
+    "nvidia-nim",
+    [{ ...nim, envKey: "$secret:embed_key" }],
+    {},
+    { secretsVault: vault },
+  );
+  expect(expanded?.apiKey).toBe(STORED_PROBE_KEY);
+});
+
+test("plain env probing is byte-identical with and without a custody vault", () => {
+  withEnvKey("embed_key", ENV_PROBE_KEY, () => {
+    const plain = expandRegisteredProvider("nvidia-nim", [probeProfile], process.env);
+    const routed = expandRegisteredProvider("nvidia-nim", [probeProfile], process.env, {
+      secretsVault: vault,
+    });
+    expect(routed).toEqual(plain);
+    expect(routed?.apiKey).toBe(ENV_PROBE_KEY);
+  });
+});
+
+test("an unresolvable reference probe surfaces the named resolver error", () => {
+  expect(() =>
+    expandRegisteredProvider(
+      "nvidia-nim",
+      [{ ...nim, envKey: "$secret:absent_name" }],
+      {},
+      { secretsVault: vault },
+    ),
+  ).toThrow(SecretReferenceError);
+});
+
+test("resolution through the probe does not mutate the custody store", () => {
+  storeProbeKey();
+  const storePath = join(vault, ".open-second-brain", "secrets", "secrets.json");
+  const before = readFileSync(storePath, "utf8");
+  expandRegisteredProvider("nvidia-nim", [probeProfile], process.env, { secretsVault: vault });
+  expect(readFileSync(storePath, "utf8")).toBe(before);
 });
