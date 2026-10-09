@@ -24,6 +24,7 @@ import {
   updateManifest,
   writeManifestAtomic,
 } from "../../../../src/core/brain/ingest/content-manifest.ts";
+import { planBatches } from "../../../../src/core/brain/ingest/batch-plan.ts";
 import { deleteBySource } from "../../../../src/core/brain/source-cleanup.ts";
 
 let vault: string;
@@ -204,6 +205,44 @@ describe("extraction contract (t_586d5d8b)", () => {
     expect(manifest.contract).toBeNull();
   });
 
+  test("readManifest reports the schema version the FILE carries, not the write version", () => {
+    // No file yet: the current shape is the honest answer (nothing older exists).
+    expect(readManifest(vault).schema_version).toBe(2);
+
+    // An accepted v1 manifest must report itself as v1 - a diagnostic asking
+    // "which version is on disk" gets the truth, not the write constant.
+    writeManifestBytes(JSON.stringify({ schema_version: 1, entries: {} }));
+    expect(readManifest(vault).schema_version).toBe(1);
+
+    writeManifestBytes(
+      JSON.stringify({ schema_version: 2, entries: {}, contract: { fingerprint: "f".repeat(64) } }),
+    );
+    expect(readManifest(vault).schema_version).toBe(2);
+  });
+
+  test("an explicitly-null contract writes the v1 shape; the omitted form stays the live upgrade", () => {
+    // Explicit null is a v1 read being round-tripped: it serializes back as
+    // v1, contract-less, keeping the changed-contract marker alive.
+    writeManifestAtomic(vault, { "a.md": "z".repeat(64) }, null);
+    const onDisk = JSON.parse(readFileSync(manifestPath(vault), "utf8")) as {
+      schema_version: number;
+      contract?: unknown;
+    };
+    expect(onDisk.schema_version).toBe(1);
+    expect("contract" in onDisk).toBe(false);
+    expect(readManifest(vault).contract).toBeNull();
+
+    // Omitted is the post-extraction write: it records the LIVE contract
+    // and lands as v2 - the one-time upgrade a real reprocessing pass makes true.
+    writeManifestAtomic(vault, { "a.md": "z".repeat(64) });
+    const upgraded = JSON.parse(readFileSync(manifestPath(vault), "utf8")) as {
+      schema_version: number;
+      contract: { fingerprint: string } | null;
+    };
+    expect(upgraded.schema_version).toBe(2);
+    expect(upgraded.contract?.fingerprint).toBe(computeExtractionContractFingerprint(vault));
+  });
+
   test("a v1 manifest's next write lands as v2 with the fingerprint", () => {
     writeSource("a.md", "a");
     writeManifestBytes(
@@ -230,6 +269,49 @@ describe("extraction contract (t_586d5d8b)", () => {
     const after = readManifest(vault);
     expect(after.entries["doc.md"]).toBeUndefined();
     expect(after.contract).toEqual(recorded);
+  });
+
+  test("cleanup on a not-yet-reprocessed v1 manifest keeps the owed contract-changed reprocess", () => {
+    // The v1 manifest's remaining entry was extracted under the
+    // pre-fingerprint contract and never reprocessed. A cleanup that
+    // upgraded the file to v2 under the live contract would classify it
+    // `unchanged` forever - the owed one-time reprocess forfeited, silently.
+    writeSource("Inbox/a.md", "doomed source");
+    writeSource("Inbox/b.md", "surviving source");
+    writeManifestBytes(
+      JSON.stringify({
+        schema_version: 1,
+        entries: {
+          "Inbox/a.md": hashFile(join(vault, "Inbox", "a.md")),
+          "Inbox/b.md": hashFile(join(vault, "Inbox", "b.md")),
+        },
+      }),
+    );
+
+    const plan = deleteBySource(vault, "Inbox/a.md", { confirm: true });
+    expect(plan.manifestEntryRemoved).toBe(true);
+
+    // The round-trip is lossless: still the v1 shape, contract-less, so the
+    // changed-contract marker survives until a real reprocessing write.
+    const onDisk = JSON.parse(readFileSync(manifestPath(vault), "utf8")) as {
+      schema_version: number;
+      contract?: unknown;
+    };
+    expect(onDisk.schema_version).toBe(1);
+    expect("contract" in onDisk).toBe(false);
+    const after = readManifest(vault);
+    expect(after.contract).toBeNull();
+    expect(after.entries["Inbox/b.md"]).toBeDefined();
+
+    // The owed reprocess is still owed: the surviving byte-identical source
+    // reprocesses as contract-changed, never as an `unchanged` skip. (The
+    // deleted source itself is still on disk - originals go only with
+    // includeOriginals - and classifies `new` again, which is correct.)
+    const batches = planBatches(vault, "Inbox", { maxBatchBytes: 10_000, maxBatchFiles: 100 });
+    expect(batches.contractChanged).toBe(true);
+    expect(batches.skipped).toEqual([]);
+    const survivor = batches.batches.flatMap((b) => b.files).find((f) => f.path === "Inbox/b.md");
+    expect(survivor?.status).toBe("contract-changed");
   });
 });
 

@@ -46,8 +46,14 @@ import { computeExtractionContractFingerprint } from "./contract.ts";
 /** The schema version this module writes. Earlier versions are read, not written. */
 const SCHEMA_VERSION = 2 as const;
 
+/** Every on-disk schema version this module reads; anything else is refused. */
+type ManifestSchemaVersion = 1 | typeof SCHEMA_VERSION;
+
 /** Every schema version {@link readManifest} accepts. Anything else is refused. */
-const SUPPORTED_SCHEMA_VERSIONS: readonly number[] = Object.freeze([1, SCHEMA_VERSION]);
+const SUPPORTED_SCHEMA_VERSIONS: readonly ManifestSchemaVersion[] = Object.freeze([
+  1,
+  SCHEMA_VERSION,
+]);
 
 /** Vault-relative directory holding OSB machine artifacts (not curated memory). */
 const MACHINE_ARTIFACT_DIR = ".open-second-brain";
@@ -67,17 +73,30 @@ export interface ManifestContract {
  * extraction contract the recorded state answers under.
  */
 export interface ContentManifest {
-  readonly schema_version: typeof SCHEMA_VERSION;
+  /**
+   * The schema version the MANIFEST FILE carries: the version actually on
+   * disk for a read file, and the current {@link SCHEMA_VERSION} for the
+   * missing-file empty manifest (no file exists, so the current shape is the
+   * honest answer). Deliberately not the write constant - an accepted v1
+   * manifest that reported itself as v2 would make every "which version is
+   * on disk" diagnostic lie about exactly the one legacy shape this module
+   * supports.
+   */
+  readonly schema_version: ManifestSchemaVersion;
   /** Canonical vault-relative path → 64-char lowercase SHA-256 hex of content. */
   readonly entries: Readonly<Record<string, string>>;
   /**
    * The extraction contract the recorded state answers under, or `null` when
    * none is recorded - a v1 manifest written before the fingerprint existed.
    * `null` is the changed-contract marker: every consumer treats it as
-   * "reprocess once under the live contract", and the next write lands as v2
-   * with the fingerprint. A manifest file that does not exist reads back as
-   * current-shaped under the LIVE contract - an empty manifest was never
-   * written under an older one, so nothing in it can be stale.
+   * "reprocess once under the live contract". The marker survives until a
+   * write that actually RECORDS EXTRACTION under the live contract
+   * ({@link updateManifest}) lands the manifest as v2 with the fingerprint;
+   * a round-tripping edit write passes the `null` back in and the file stays
+   * v1, so the owed reprocess is never forfeited by a write that reprocessed
+   * nothing. A manifest file that does not exist reads back as current-shaped
+   * under the LIVE contract - an empty manifest was never written under an
+   * older one, so nothing in it can be stale.
    */
   readonly contract: ManifestContract | null;
 }
@@ -192,7 +211,7 @@ export function readManifest(vault: string): ContentManifest {
       if (typeof value === "string") entries[key] = value;
     }
   }
-  return { schema_version: SCHEMA_VERSION, entries, contract: readContractField(obj) };
+  return { schema_version: sv as ManifestSchemaVersion, entries, contract: readContractField(obj) };
 }
 
 /**
@@ -212,16 +231,22 @@ function readContractField(obj: Record<string, unknown>): ManifestContract | nul
 /**
  * Serialize `entries` to the canonical manifest bytes: keys sorted so the
  * output is deterministic regardless of insertion order, `schema_version` and
- * the contract field first, trailing newline.
+ * the contract field first, trailing newline. A `null` contract serializes
+ * the V1 shape - no contract field - so a round-tripped v1 manifest stays v1.
  */
-function serializeManifest(entries: Record<string, string>, contract: ManifestContract): string {
+function serializeManifest(
+  entries: Record<string, string>,
+  contract: ManifestContract | null,
+): string {
   const sorted: Record<string, string> = {};
   for (const key of Object.keys(entries).toSorted()) {
     sorted[key] = entries[key]!;
   }
-  return (
-    JSON.stringify({ schema_version: SCHEMA_VERSION, contract, entries: sorted }, null, 2) + "\n"
-  );
+  const body =
+    contract === null
+      ? { schema_version: 1, entries: sorted }
+      : { schema_version: SCHEMA_VERSION, contract, entries: sorted };
+  return JSON.stringify(body, null, 2) + "\n";
 }
 
 /**
@@ -231,12 +256,19 @@ function serializeManifest(entries: Record<string, string>, contract: ManifestCo
  * nothing (and leaves the file's mtime alone).
  *
  * `contract` is what the written manifest records as the extraction contract
- * its entries answer under. Omitted (or unrecorded) it is the LIVE contract:
- * the writers that call without one have just recorded extraction under the
- * current contract. A caller round-tripping an edit passes the contract it
- * read, so its write cannot re-stamp entries that predate the live contract;
- * a v1 caller's `null` upgrades the manifest to v2 under the live contract -
- * the one-time upgrade the planner's reprocessing pass makes true.
+ * its entries answer under:
+ *
+ *   - Omitted: the LIVE contract. The writers that call without one have just
+ *     recorded extraction under the current contract, so this is the one-time
+ *     v1→v2 upgrade - legitimate exactly because the named paths were
+ *     reprocessed under it.
+ *   - A contract object: round-tripped verbatim, so an edit write cannot
+ *     re-stamp entries that predate the live contract.
+ *   - Explicit `null` (a v1 read): serialized back as V1, contract-less. The
+ *     remaining entries were never reprocessed under any fingerprint, so the
+ *     changed-contract marker must survive the write - stamping the live
+ *     contract here would let them classify `unchanged` forever and silently
+ *     forfeit the owed one-time reprocess (t_586d5d8b).
  */
 export function writeManifestAtomic(
   vault: string,
@@ -248,7 +280,9 @@ export function writeManifestAtomic(
   const path = manifestPath(vault);
   const next = serializeManifest(
     entries,
-    contract ?? { fingerprint: computeExtractionContractFingerprint(vault) },
+    contract === undefined
+      ? { fingerprint: computeExtractionContractFingerprint(vault) }
+      : contract,
   );
   if (existsSync(path) && readFileSync(path, "utf8") === next) {
     return false;
