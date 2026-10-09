@@ -275,13 +275,14 @@ export function listSessionSummaries(
 }
 
 function sessionDigestRecords(vault: string): ReadonlyArray<ContinuityRecord> {
+  // `toSorted` is stable, so records the store reads in the same
+  // created_at instant keep the store's own arrival order - the tie-break
+  // that says which of two same-instant writes was written second. An id
+  // tie-break here would order same-instant digests by content hash,
+  // which is arbitrary, and "latest wins" would answer randomly.
   return listContinuityRecords(vault, { kind: KIND }).toSorted((left, right) =>
-    compareByCreatedThenId(left, right),
+    left.createdAt.localeCompare(right.createdAt),
   );
-}
-
-function compareByCreatedThenId(left: ContinuityRecord, right: ContinuityRecord): number {
-  return left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id);
 }
 
 function buildSourceRefs(

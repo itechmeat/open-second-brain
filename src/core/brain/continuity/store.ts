@@ -407,11 +407,14 @@ function readAllRecords(vault: string, filter: ContinuityRecordFilter = {}): Con
       line++;
     }
   }
-  return mergeShardedRows(
-    rows,
-    (record) => record.createdAt,
-    (record) => record.id,
-  );
+  // The append-only file is the authority when timestamps tie: rows the
+  // same writer appended within one timestamp precision read in append
+  // order, never in the arbitrary order of their content-hash ids (two
+  // same-instant records hash to ids whose lexical order says nothing
+  // about which was written first - "latest wins" reads would answer
+  // randomly). Cross-shard ties still order by shard id below, because
+  // two devices' arrival orders genuinely cannot be known.
+  return mergeShardedRows(rows, (record) => record.createdAt);
 }
 
 function matches(record: ContinuityRecord, filter: ContinuityRecordFilter): boolean {
