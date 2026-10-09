@@ -16,7 +16,7 @@ o2b-mcp                       Console-script alias for `o2b mcp`, forwards all f
 o2b doctor                    Run vault + adapter checks
 o2b index                     Rebuild the Markdown page index
 o2b export-config             Write a redacted config snapshot
-o2b secrets list|status       Inspect $secret:NAME references without printing values
+o2b secrets list|status       Inspect $secret:NAME references without printing values; `--vault <path>` joins that vault's custody store (names and availability only, never a decrypt; without the flag both commands are byte-identical to the store-less report)
 o2b mcp                       Run the MCP tool server (stdio by default; --transport http binds loopback, and a key - --api-key or, kept out of the process list, OPEN_SECOND_BRAIN_MCP_API_KEY - is required only for a non-loopback --host); --scope full|writer|catalog, --tool-profile full|writer|catalog|recall|minimal (an unknown profile exits 2 rather than serving the full surface), --host-target <runtime>, --harness <id>, --probe, --allow-tool, --disable-tool, --max-tools
 o2b state status|migrate|rollback
                               Inventory the state this vault holds, move it to another directory, or put it back (see "State surfaces" below)
@@ -640,7 +640,7 @@ o2b brain label               <path> <dimension>=<value> | --remove <dimension> 
 o2b brain label               <path> --suggest [--dimensions a,b] - read-only advisory suggestions from the optional `labels` decision-model use; never assigns; `available: false` while the use is off; a private note is refused (see docs/decision-models/labels.md)
 o2b brain attr                <path> <field>=<value> | --remove <field> | --show - per-type attribute fields; an undeclared field error lists the declared fields WITH descriptions
 o2b brain tiers               check | restore <path> [--field F] --apply | accept <path> [--field F] - staged repair for identity-tier frontmatter hand-edits
-o2b brain secret              set <name> [--env-var V] [--allow PATTERN]... [--from-env SRC] | list | rm <name> | run <name> -- <command...> - capability-gated custody; the value enters via stdin, never argv
+o2b brain secret              set <name> [--env-var V] [--allow PATTERN]... [--from-env SRC] | list | rm <name> | run <name> -- <command...> | lock | unlock [--passphrase-from-env SRC] | export --out FILE [--passphrase-from-env SRC] | import FILE [--replace] [--passphrase-from-env SRC] [--vault <path>] - capability-gated custody; the value enters via stdin, never argv. `unlock` wraps the keyfile under a passphrase (read from stdin or --passphrase-from-env, never argv) and holds the key for this process only; `lock` clears that holder; `export` writes every entry as one passphrase-encrypted bundle to `--out` (values re-encrypted, names and env-var mappings travel in the clear past the shared egress redactor); `import` restores a bundle, refusing names the store already holds unless --replace
 o2b brain maintenance         run [--force] [--retry <task|custom:name>] [--force-cost] [--window H-H] [--tz ZONE] [--busy-minutes N] [--busy-threshold N] [--progress] | status [--limit N] - quiet-window lease-guarded lane for dream, reindex, bridges, clusters and declared custom tasks
 o2b brain maintenance         run --cron-template [--interval N] [--format cron|systemd] [--window H-H --tz ZONE] - print the cron or systemd recipe that schedules the lane (default interval 1h); prints and installs nothing
 ```
