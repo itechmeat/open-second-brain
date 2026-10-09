@@ -2781,6 +2781,7 @@ __export(exports_envelope, {
   heldUnlockedKey: () => heldUnlockedKey,
   isEnvelopeBytes: () => isEnvelopeBytes,
   isEnvelopeFile: () => isEnvelopeFile,
+  kdfCostCurveRefusal: () => kdfCostCurveRefusal,
   readEnvelope: () => readEnvelope,
   unlockKeyfile: () => unlockKeyfile,
   verifyKeyfilePassphrase: () => verifyKeyfilePassphrase,
@@ -2789,6 +2790,25 @@ __export(exports_envelope, {
 import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { chmodSync, readFileSync as readFileSync4, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { resolve as resolve6 } from "node:path";
+function kdfCostCurveRefusal(kdf) {
+  if (kdf.n > SCRYPT_N_MAX) {
+    return `kdf n ${String(kdf.n)} exceeds this build's ceiling ${String(SCRYPT_N_MAX)}`;
+  }
+  if (kdf.r > SCRYPT_R_MAX) {
+    return `kdf r ${String(kdf.r)} exceeds this build's ceiling ${String(SCRYPT_R_MAX)}`;
+  }
+  if (kdf.p > SCRYPT_P_MAX) {
+    return `kdf p ${String(kdf.p)} exceeds this build's ceiling ${String(SCRYPT_P_MAX)}`;
+  }
+  if (kdf.maxmem > SCRYPT_MAXMEM_MAX) {
+    return `kdf maxmem ${String(kdf.maxmem)} exceeds this build's ceiling ${String(SCRYPT_MAXMEM_MAX)}`;
+  }
+  const needed = 128 * kdf.n * kdf.r;
+  if (kdf.maxmem < needed) {
+    return `kdf maxmem ${String(kdf.maxmem)} is below the ${String(needed)} bytes ` + `these n/r parameters need`;
+  }
+  return null;
+}
 function holderSlot(keyPath) {
   const resolved = resolve6(keyPath);
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
@@ -2861,6 +2881,10 @@ function readEnvelope(keyPath) {
   }
   if (!Number.isInteger(parsed.kdf.n) || parsed.kdf.n <= 0 || !Number.isInteger(parsed.kdf.r) || parsed.kdf.r <= 0 || !Number.isInteger(parsed.kdf.p) || parsed.kdf.p <= 0 || !Number.isInteger(parsed.kdf.maxmem) || parsed.kdf.maxmem <= 0) {
     throw new SecretEnvelopeError(ENVELOPE_REFUSAL_CODES.malformed, keyPath, "kdf parameters must be positive integers");
+  }
+  const costRefusal = kdfCostCurveRefusal(parsed.kdf);
+  if (costRefusal !== null) {
+    throw new SecretEnvelopeError(ENVELOPE_REFUSAL_CODES.kdfCost, keyPath, costRefusal);
   }
   return parsed;
 }
@@ -2948,16 +2972,19 @@ function unlockKeyfile(keyPath, passphrase) {
   HELD_KEYS.set(slot, dek);
   return dek;
 }
-var KEYFILE_ENVELOPE_SCHEMA_VERSION = 1, KDF_ALGO = "scrypt", WRAP_KEY_BYTES = 32, DEK_BYTES = 32, SALT_BYTES = 16, SCRYPT_N, SCRYPT_R = 8, SCRYPT_P = 1, SCRYPT_MAXMEM, ENVELOPE_REFUSAL_CODES, SecretEnvelopeError, SECRET_STORE_LOCKED_CODE = "secret_store_locked", SecretStoreLockedError, HELD_KEYS;
+var KEYFILE_ENVELOPE_SCHEMA_VERSION = 1, KDF_ALGO = "scrypt", WRAP_KEY_BYTES = 32, DEK_BYTES = 32, SALT_BYTES = 16, SCRYPT_N, SCRYPT_R = 8, SCRYPT_P = 1, SCRYPT_MAXMEM, SCRYPT_N_MAX, SCRYPT_R_MAX = 16, SCRYPT_P_MAX = 8, SCRYPT_MAXMEM_MAX, ENVELOPE_REFUSAL_CODES, SecretEnvelopeError, SECRET_STORE_LOCKED_CODE = "secret_store_locked", SecretStoreLockedError, HELD_KEYS;
 var init_envelope = __esm(() => {
   init_fs_atomic();
   init_crypto();
   init_owner_acl();
   SCRYPT_N = 2 ** 15;
   SCRYPT_MAXMEM = 128 * 1024 * 1024;
+  SCRYPT_N_MAX = 2 ** 18;
+  SCRYPT_MAXMEM_MAX = 256 * 1024 * 1024;
   ENVELOPE_REFUSAL_CODES = Object.freeze({
     version: "keyfile_envelope_version_refused",
     kdfAlgo: "keyfile_envelope_kdf_algo_refused",
+    kdfCost: "keyfile_envelope_kdf_params_refused",
     passphrase: "keyfile_envelope_passphrase_refused",
     malformed: "keyfile_envelope_malformed"
   });
@@ -2975,7 +3002,7 @@ var init_envelope = __esm(() => {
     code = SECRET_STORE_LOCKED_CODE;
     keyPath;
     constructor(keyPath) {
-      super(`the secret store is locked (the keyfile is passphrase-wrapped): run ` + `"o2b brain secret unlock" to unwrap it for this process: ${keyPath}`);
+      super(`the secret store is locked (the keyfile is passphrase-wrapped): run ` + `"o2b brain secret unlock" to unwrap it for this process`);
       this.name = "SecretStoreLockedError";
       this.keyPath = keyPath;
     }
@@ -3094,6 +3121,7 @@ __export(exports_store, {
   keyPath: () => keyPath,
   listSecrets: () => listSecrets,
   lockSecretKeyfile: () => lockSecretKeyfile,
+  normalizeAllowPatterns: () => normalizeAllowPatterns,
   readStore: () => readStore,
   removeSecret: () => removeSecret,
   resolveSecretForExec: () => resolveSecretForExec,
@@ -3120,6 +3148,14 @@ function isValidSecretName(name) {
 }
 function isValidSecretEnvVar(envVar) {
   return ENV_VAR_RE.test(envVar);
+}
+function normalizeAllowPatterns(patterns) {
+  return patterns.map((pattern) => {
+    const trimmed = pattern.trim();
+    if (trimmed.length === 0)
+      throw new Error("allow pattern must not be empty");
+    return trimmed;
+  });
 }
 function withSecretsLock(vault, fn) {
   loadOrCreateKey(keyPath(vault));
@@ -3160,12 +3196,7 @@ function setSecret(vault, input) {
   if (!ENV_VAR_RE.test(envVar)) {
     throw new Error(`secret env var must match ${ENV_VAR_RE}: ${JSON.stringify(envVar)}`);
   }
-  const allow = (input.allow ?? []).map((pattern) => {
-    const trimmed = pattern.trim();
-    if (trimmed.length === 0)
-      throw new Error("allow pattern must not be empty");
-    return trimmed;
-  });
+  const allow = normalizeAllowPatterns(input.allow ?? []);
   const key = loadOrCreateKey(keyPath(vault));
   if (process.platform === "win32") {
     const results = custodyTargets(vault).map(([path, kind]) => restrictToOwner(path, kind));
@@ -3255,7 +3286,11 @@ function unlockSecretKeyfile(vault, passphrase, ctx) {
   if (wrapped) {
     unlockKeyfile(kp, passphrase);
   } else {
-    wrapKeyfile(kp, passphrase, loadOrCreateKey(kp));
+    withSecretsLock(vault, () => {
+      if (!isEnvelopeFile(kp))
+        wrapKeyfile(kp, passphrase, loadOrCreateKey(kp));
+    });
+    unlockKeyfile(kp, passphrase);
   }
   audit(vault, ctx, "secret_unlocked", "keyfile", { keyfile_was_wrapped: wrapped });
 }
@@ -3664,8 +3699,18 @@ function resolveInstallationSecret(configPath, secretsVault) {
   const resolved = configPath ?? defaultConfigPath();
   const read = () => {
     const raw = discoverConfig(resolved).data[INSTALLATION_SECRET_CONFIG_KEY];
-    const value = secretsVault !== undefined && isSecretReferenceValue(raw) ? resolveNamedSecret(secretsVault, String(raw).trim()) : raw;
-    return value && isValidInstallationSecret(value) ? value : null;
+    if (isSecretReferenceValue(raw)) {
+      const reference = String(raw).trim();
+      if (secretsVault === undefined) {
+        throw new SecretReferenceError("installation_secret is a $secret: reference but no vault was passed to resolve " + "it against; pass the vault (or set O2B_INSTALLATION_SECRET to a 32-hex key)", reference);
+      }
+      const resolvedValue = resolveNamedSecret(secretsVault, reference);
+      if (!isValidInstallationSecret(resolvedValue)) {
+        throw new SecretReferenceError("installation_secret is a $secret: reference that resolves to a value which is " + "not a 32-hex installation key; fix the stored value - the reference in the " + "device config is never overwritten", reference);
+      }
+      return resolvedValue;
+    }
+    return raw && isValidInstallationSecret(raw) ? raw : null;
   };
   const existing = read();
   if (existing !== null)
@@ -3728,6 +3773,7 @@ var import_proper_lockfile3, CONFIG_VALUE_REJECTED_CHARS, UNSUPPORTED_CONFIG_PLA
 var init_config = __esm(() => {
   init_fs_atomic();
   init_secret_resolver();
+  init_secret_ref();
   init_platform_dirs();
   init_profiles();
   init_pointer();
