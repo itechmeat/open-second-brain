@@ -13,6 +13,9 @@ import { CHOICE_MAX_OPTIONS } from "./answers.ts";
 import { DECISION_MODEL_USES, isDecisionModelUse, type DecisionModelUse } from "./contract.ts";
 import { resolveDecisionModelConfig, type ResolvedDecisionModelConfig } from "./config.ts";
 import { makeDecisionProvider } from "./provider.ts";
+import type { DecisionProvider } from "./contract.ts";
+import { SecretReferenceError } from "../secret-ref.ts";
+import { SecretStoreLockedError } from "../brain/secrets/envelope.ts";
 import {
   DECISION_MODEL_CALL_KIND,
   emitDecisionModelCall,
@@ -147,7 +150,17 @@ export async function buildDecisionModelCheck(
   opts: DecisionModelCheckOptions,
 ): Promise<DecisionModelCheckReport> {
   const env = opts.env ?? process.env;
-  const cfg = resolveDecisionModelConfig({ env, config: opts.config, vault: opts.vault });
+  // The vault's own custody store backs a `$secret:` reference in the key
+  // value: without this thread the check reported `active` for a reference
+  // it could not resolve, deferring the failure to the use site - and the
+  // ping below built a provider whose Bearer key was the raw `$secret:`
+  // literal.
+  const cfg = resolveDecisionModelConfig({
+    env,
+    config: opts.config,
+    vault: opts.vault,
+    secretsVault: opts.vault ?? undefined,
+  });
   const warnings: string[] = [];
   const notes: string[] = [];
   const sendsData = DECISION_MODEL_USES.some((use) => cfg.uses[use] !== "off");
@@ -252,7 +265,20 @@ export async function buildDecisionModelCheck(
   };
 
   if (opts.ping !== true) return report;
-  const provider = makeDecisionProvider(cfg, env);
+  // The ping resolves the key the way the real request path does (the
+  // factory re-resolves at call time). A store that locks between the
+  // config probe and here raises the named refusal - degraded into the
+  // ping's reason, never sent as a Bearer key and never left to escape
+  // the check as an exception.
+  let provider: DecisionProvider | null;
+  try {
+    provider = makeDecisionProvider(cfg, env, opts.vault ?? undefined);
+  } catch (err) {
+    if (err instanceof SecretStoreLockedError || err instanceof SecretReferenceError) {
+      return { ...report, ping: { ok: false, reason: `not sent: ${err.message}` } };
+    }
+    throw err;
+  }
   if (provider === null) {
     return { ...report, ping: { ok: false, reason: `not sent: status ${cfg.status}` } };
   }

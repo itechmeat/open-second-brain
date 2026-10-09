@@ -22,6 +22,7 @@ import {
 import { loadOrCreateKey } from "../../../src/core/brain/secrets/crypto.ts";
 import { SecretReferenceError } from "../../../src/core/secret-ref.ts";
 import { makeDecisionProvider } from "../../../src/core/decision-model/provider.ts";
+import { buildDecisionModelCheck } from "../../../src/core/decision-model/diagnostics.ts";
 import type { DecisionRequest } from "../../../src/core/decision-model/contract.ts";
 import { loadBrainConfigDetailed } from "../../../src/core/brain/policy.ts";
 import { startFakeSystemOne } from "../../helpers/fake-decision-provider.ts";
@@ -324,6 +325,87 @@ describe("decision-model key through the custody store", () => {
     expect(cfg.status).toBe("invalid");
     expect(cfg.keyPresent).toBe(false);
     expect(cfg.errors.join("\n")).toContain("absent_name");
+  });
+});
+
+// ----- The diagnostics surface joins the custody store ----------------------
+//
+// `o2b decision-model check` builds its report and its ping. Without the
+// custody thread, a reference-shaped key value reported `active`
+// everywhere and the ping built a provider whose Bearer key was the raw
+// `$secret:NAME` literal - the doctor could probe an endpoint with it.
+
+function diagnosticsCustodyVault(): string {
+  const vault = mkdtempSync(join(tmpdir(), "osb-dm-check-"));
+  dirs.push(vault);
+  mkdirSync(join(vault, "Brain"), { recursive: true });
+  return vault;
+}
+
+describe("decision-model check (diagnostics) through the custody store", () => {
+  const NOW = new Date("2026-06-05T10:00:00Z");
+  const REF_ENV = { [KEY_VAR]: "$secret:dm_key" } as NodeJS.ProcessEnv;
+  const CHECK_KEY = fakeCredential("stored-dm-check-", "key-4c02");
+
+  test("a reference the store resolves activates the check and the ping sends the resolved key", async () => {
+    const vault = diagnosticsCustodyVault();
+    setSecret(vault, { name: "dm_key", value: CHECK_KEY, agent: "tester", now: NOW });
+    const fake = await startFakeSystemOne();
+    try {
+      const report = await buildDecisionModelCheck({
+        env: REF_ENV,
+        config: { ...ENABLED, decision_model_base_url: fake.url },
+        vault,
+        ping: true,
+      });
+      expect(report.status).toBe("active");
+      expect(report.key_set).toBe(true);
+      expect(report.ping?.ok).toBe(true);
+      expect(fake.requests).toHaveLength(1);
+      expect(fake.requests[0]!.headers["authorization"]).toBe(`Bearer ${CHECK_KEY}`);
+    } finally {
+      await fake.close();
+    }
+  });
+
+  test("an unresolvable reference degrades the check to invalid with the named error", async () => {
+    const vault = diagnosticsCustodyVault();
+    const report = await buildDecisionModelCheck({
+      env: { [KEY_VAR]: "$secret:absent_name" } as NodeJS.ProcessEnv,
+      config: ENABLED,
+      vault,
+    });
+    // Before the custody thread this reported `active` with key_set true,
+    // deferring the failure to the use site.
+    expect(report.status).toBe("invalid");
+    expect(report.key_set).toBe(false);
+    expect(report.errors.join("\n")).toContain("absent_name");
+  });
+
+  test("a locked store degrades the ping to the named state and never sends the raw literal", async () => {
+    const vault = diagnosticsCustodyVault();
+    setSecret(vault, { name: "dm_key", value: CHECK_KEY, agent: "tester", now: NOW });
+    const kp = join(secretsDir(vault), "keyfile");
+    wrapKeyfile(kp, fakeCredential("dm-check-", "phrase-5f27"), loadOrCreateKey(kp));
+    clearHeldKey(kp);
+    const fake = await startFakeSystemOne();
+    try {
+      const report = await buildDecisionModelCheck({
+        env: REF_ENV,
+        config: { ...ENABLED, decision_model_base_url: fake.url },
+        vault,
+        ping: true,
+      });
+      expect(report.status).toBe("invalid");
+      expect(report.errors.join("\n")).toContain("locked");
+      expect(report.ping?.ok).toBe(false);
+      // The decisive assertion: no request left for the endpoint, so the
+      // raw `$secret:` literal never went out as a Bearer key.
+      expect(fake.requests).toHaveLength(0);
+    } finally {
+      await fake.close();
+      clearHeldKey(kp);
+    }
   });
 });
 
