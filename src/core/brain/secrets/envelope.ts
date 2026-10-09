@@ -32,7 +32,7 @@ import { chmodSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { renameWithRetry } from "../../fs-atomic.ts";
-import { type EncryptedValue, decryptValue, encryptValue } from "./crypto.ts";
+import { type EncryptedValue, decryptValue, encryptValue } from "./value-cipher.ts";
 import { restrictToOwner } from "./owner-acl.ts";
 
 /** Envelope schema version. Bumped only on an incompatible field change. */
