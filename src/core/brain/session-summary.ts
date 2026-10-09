@@ -171,12 +171,74 @@ export function appendSessionSummary(
 
 /** Latest digest for a session, or null when none was ever written. */
 export function getSessionSummary(vault: string, sessionId: string): SessionSummaryDigest | null {
+  return getSessionSummaryReport(vault, sessionId)?.digest ?? null;
+}
+
+/**
+ * How many divergence records the report samples, at most. The count is
+ * always the honest total; the sample keeps the NEWEST entries so the list
+ * reads as "the digests behind the latest answer", never a payload echo.
+ */
+export const DIVERGENCE_RECORD_SAMPLE_LIMIT = 20;
+
+/** One divergent digest, named by identity and content hash, never its payload. */
+export interface SessionSummaryRecordRef {
+  readonly id: string;
+  readonly createdAt: string;
+  readonly contentHash: string;
+}
+
+export interface SessionSummaryReport {
+  /** The sorted-latest digest - the same answer {@link getSessionSummary} gives. */
+  readonly digest: SessionSummaryDigest;
+  /** How many digests exist for this session id, dedupe applied. */
+  readonly digestCount: number;
+  /** Present, always `true`, only when `digestCount` exceeds one. */
+  readonly divergent?: true;
+  /**
+   * Bounded newest-first-sample of the session's digests, oldest first,
+   * present only alongside `divergent`.
+   */
+  readonly records?: ReadonlyArray<SessionSummaryRecordRef>;
+}
+
+/**
+ * Divergence-aware single-session read (t_59d4c919). The continuity store
+ * is append-only, so one session id can hold several content-differing
+ * digests; the plain read answers latest-wins without saying so. This read
+ * names the fact: the sorted-latest digest plus `digest_count`, and, only
+ * when the count exceeds one, `divergent: true` plus a bounded
+ * id/created_at/content_hash sample. Divergence is REPORTED here - never
+ * merged, deleted, or reconciled.
+ */
+export function getSessionSummaryReport(
+  vault: string,
+  sessionId: string,
+): SessionSummaryReport | null {
   const id = sessionId.trim();
   const records = sessionDigestRecords(vault).filter(
     (record) => String(record.payload["session_id"] ?? "") === id,
   );
   if (records.length === 0) return null;
-  return toDigest(records[records.length - 1]!);
+  const digestCount = records.length;
+  return Object.freeze({
+    digest: toDigest(records[records.length - 1]!),
+    digestCount,
+    ...(digestCount > 1
+      ? {
+          divergent: true as const,
+          records: Object.freeze(
+            records.slice(-DIVERGENCE_RECORD_SAMPLE_LIMIT).map((record) =>
+              Object.freeze({
+                id: record.id,
+                createdAt: record.createdAt,
+                contentHash: String(record.payload["content_hash"] ?? ""),
+              }),
+            ),
+          ),
+        }
+      : {}),
+  });
 }
 
 export interface ListSessionSummariesOptions {

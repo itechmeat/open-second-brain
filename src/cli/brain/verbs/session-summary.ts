@@ -14,10 +14,12 @@
 
 import {
   appendSessionSummary,
-  getSessionSummary,
+  getSessionSummaryReport,
   listSessionSummaries,
   SessionSummaryError,
   type SessionSummaryDigest,
+  type SessionSummaryRecordRef,
+  type SessionSummaryReport,
 } from "../../../core/brain/session-summary.ts";
 import { brainVerbContext, fail, parse, usageError } from "../helpers.ts";
 
@@ -77,6 +79,21 @@ function writeSummary(argv: string[]): number {
   }
 }
 
+/**
+ * The one note line text mode appends when the session holds more than one
+ * content-differing digest (t_59d4c919). Token-shaped so an operator can
+ * grep it; the count is the honest total, the shown digest stays the
+ * sorted-latest. Divergence is reported here, never merged away.
+ */
+function divergenceNoteLine(count: number): string {
+  return `note: digest_count=${count} divergent=true (showing the sorted-latest digest)`;
+}
+
+/** Wire shape of one divergence record: identity and hash, never a payload echo. */
+function serializeRecordRef(record: SessionSummaryRecordRef): Record<string, unknown> {
+  return { id: record.id, created_at: record.createdAt, content_hash: record.contentHash };
+}
+
 function getSummary(argv: string[]): number {
   const { flags } = parse(argv, {
     vault: { type: "string" },
@@ -87,19 +104,36 @@ function getSummary(argv: string[]): number {
   if (session.length === 0) return usageError("brain session-summary get: --session is required");
 
   const vault = brainVerbContext(flags).vault;
-  const digest = getSessionSummary(vault, session);
+  const report = getSessionSummaryReport(vault, session);
   if (flags["json"] === true) {
-    process.stdout.write(
-      `${JSON.stringify(digest === null ? { found: false } : { found: true, digest: serialize(digest) }, null, 2)}\n`,
-    );
+    process.stdout.write(`${JSON.stringify(serializeReport(report), null, 2)}\n`);
     return 0;
   }
-  if (digest === null) {
+  if (report === null) {
     process.stdout.write(`no session summary for ${session}\n`);
     return 0;
   }
-  process.stdout.write(renderDigest(digest));
+  process.stdout.write(renderDigest(report.digest));
+  if (report.divergent === true) {
+    process.stdout.write(`${divergenceNoteLine(report.digestCount)}\n`);
+  }
   return 0;
+}
+
+/** The get envelope: additive divergence fields only when the session diverges. */
+function serializeReport(report: SessionSummaryReport | null): Record<string, unknown> {
+  if (report === null) return { found: false };
+  return {
+    found: true,
+    digest: serialize(report.digest),
+    digest_count: report.digestCount,
+    ...(report.divergent === true
+      ? {
+          divergent: true,
+          records: (report.records ?? []).map(serializeRecordRef),
+        }
+      : {}),
+  };
 }
 
 function listSummaries(argv: string[]): number {
@@ -143,6 +177,9 @@ function serialize(digest: SessionSummaryDigest): Record<string, unknown> {
     next_steps: digest.nextSteps,
     created_at: digest.createdAt,
     ...(digest.host !== undefined ? { host: digest.host } : {}),
+    // Same field the MCP serializer carries; dropping it here was the
+    // verified CLI/MCP drift (t_59d4c919).
+    ...(digest.project !== undefined ? { project: digest.project } : {}),
   };
 }
 

@@ -86,6 +86,44 @@ describe("brain_session_summary tool", () => {
     expect(got["digest"]).toBeUndefined();
   });
 
+  test("found:false is byte-identical (no divergence keys on the miss)", async () => {
+    const response = await call({ operation: "get", session_id: "missing" });
+    const result = response.result as { content: ReadonlyArray<{ type: string; text: string }> };
+    // The wire text is the structured payload serialized with indent 2;
+    // byte-identity means exactly this string and nothing else.
+    expect(result.content[0]!.text).toBe(JSON.stringify({ found: false }, null, 2));
+  });
+
+  test("get after two differing writes carries the additive divergence keys", async () => {
+    await call({ operation: "write", session_id: "dv", decisions: ["first take"] });
+    await call({ operation: "write", session_id: "dv", decisions: ["second take"] });
+
+    const got = payload(await call({ operation: "get", session_id: "dv" }));
+    expect(got["found"]).toBe(true);
+    expect(got["digest_count"]).toBe(2);
+    expect(got["divergent"]).toBe(true);
+    const records = got["records"] as Array<Record<string, unknown>>;
+    expect(records.length).toBe(2);
+    for (const record of records) {
+      expect(typeof record["id"]).toBe("string");
+      expect(typeof record["created_at"]).toBe("string");
+      expect(typeof record["content_hash"]).toBe("string");
+    }
+    // id/hash lists, never full payload echoes.
+    expect(JSON.stringify(records)).not.toContain("first take");
+    const digest = got["digest"] as Record<string, unknown>;
+    expect(digest["decisions"]).toEqual(["second take"]);
+  });
+
+  test("a single-record get adds digest_count and no divergence keys", async () => {
+    await call({ operation: "write", session_id: "solo", decisions: ["only take"] });
+    const got = payload(await call({ operation: "get", session_id: "solo" }));
+    expect(got["found"]).toBe(true);
+    expect(got["digest_count"]).toBe(1);
+    expect("divergent" in got).toBe(false);
+    expect("records" in got).toBe(false);
+  });
+
   test("write with no categories is an invalid-params error", async () => {
     const response = await call({ operation: "write", session_id: "empty" });
     expect(response.error).toBeDefined();

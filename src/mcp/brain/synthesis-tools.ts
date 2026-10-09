@@ -8,10 +8,11 @@
 
 import {
   appendSessionSummary,
-  getSessionSummary,
+  getSessionSummaryReport,
   listSessionSummaries,
   SessionSummaryError,
   type SessionSummaryDigest,
+  type SessionSummaryRecordRef,
 } from "../../core/brain/session-summary.ts";
 import {
   saveSessionCheckpoint,
@@ -84,6 +85,11 @@ function serializeDigest(digest: SessionSummaryDigest): Record<string, unknown> 
   };
 }
 
+/** Wire shape of one divergence record: identity and hash, never a payload echo. */
+function serializeDivergenceRecord(record: SessionSummaryRecordRef): Record<string, unknown> {
+  return { id: record.id, created_at: record.createdAt, content_hash: record.contentHash };
+}
+
 async function toolBrainSessionSummary(
   ctx: ServerContext,
   args: Record<string, unknown>,
@@ -124,8 +130,23 @@ async function toolBrainSessionSummary(
 
   if (operation === "get") {
     const sessionId = requiredSessionId(args);
-    const digest = getSessionSummary(ctx.vault, sessionId);
-    return digest === null ? { found: false } : { found: true, digest: serializeDigest(digest) };
+    const report = getSessionSummaryReport(ctx.vault, sessionId);
+    if (report === null) return { found: false };
+    // Additive divergence fields (t_59d4c919): the count always; the
+    // divergent flag and the bounded id/hash sample only when the session
+    // holds more than one content-differing digest. `{ found: false }` is
+    // untouched.
+    return {
+      found: true,
+      digest: serializeDigest(report.digest),
+      digest_count: report.digestCount,
+      ...(report.divergent === true
+        ? {
+            divergent: true,
+            records: (report.records ?? []).map(serializeDivergenceRecord),
+          }
+        : {}),
+    };
   }
 
   // operation === "list"

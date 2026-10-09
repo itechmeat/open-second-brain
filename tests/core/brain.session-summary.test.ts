@@ -6,9 +6,12 @@ import { join } from "node:path";
 
 import {
   appendSessionSummary,
+  DIVERGENCE_RECORD_SAMPLE_LIMIT,
   getSessionSummary,
+  getSessionSummaryReport,
   listSessionSummaries,
   SessionSummaryError,
+  type SessionSummaryRecordRef,
 } from "../../src/core/brain/session-summary.ts";
 import {
   resolveSessionScope,
@@ -118,6 +121,97 @@ describe("byte-identical when unused", () => {
     expect(getSessionSummary(vault, "never")).toBeNull();
     expect(listSessionSummaries(vault).length).toBe(0);
     expect(listContinuityRecords(vault).length).toBe(0);
+  });
+});
+
+describe("divergence-aware read (t_59d4c919)", () => {
+  test("two content-differing digests for one session report count 2, divergent, and the sorted-latest", () => {
+    const older = appendSessionSummary(vault, {
+      sessionId: "sess-div",
+      decisions: ["older decision"],
+      createdAt: "2026-06-14T09:00:00.000Z",
+    });
+    const newer = appendSessionSummary(vault, {
+      sessionId: "sess-div",
+      decisions: ["newer decision"],
+      createdAt: "2026-06-14T11:00:00.000Z",
+    });
+
+    const report = getSessionSummaryReport(vault, "sess-div");
+    expect(report).not.toBeNull();
+    // The read still answers with the sorted-latest digest.
+    expect(report!.digest.id).toBe(newer.id);
+    expect(report!.digest.decisions).toEqual(["newer decision"]);
+    expect(report!.digestCount).toBe(2);
+    expect(report!.divergent).toBe(true);
+    const records = report!.records ?? [];
+    expect(records.map((r) => r.id)).toEqual([older.id, newer.id]);
+    for (const record of records as ReadonlyArray<SessionSummaryRecordRef>) {
+      expect(typeof record.createdAt).toBe("string");
+      expect(record.contentHash.length).toBeGreaterThan(0);
+    }
+    // Divergence is computed over content-differing records.
+    expect(new Set(records.map((r) => r.contentHash)).size).toBe(2);
+  });
+
+  test("a single digest reports count 1 and carries no divergent key", () => {
+    appendSessionSummary(vault, {
+      sessionId: "sess-one",
+      decisions: ["the only decision"],
+      createdAt: "2026-06-14T10:00:00.000Z",
+    });
+    const report = getSessionSummaryReport(vault, "sess-one");
+    expect(report).not.toBeNull();
+    expect(report!.digestCount).toBe(1);
+    expect("divergent" in report!).toBe(false);
+    expect("records" in report!).toBe(false);
+    // Additive only: the report's own key set is pinned.
+    expect(Object.keys(report!).toSorted()).toEqual(["digest", "digestCount"]);
+  });
+
+  test("a duplicate-content re-append still dedupes to count 1 (no divergence)", () => {
+    const input = {
+      sessionId: "sess-dup-report",
+      decisions: ["one decision"],
+      createdAt: "2026-06-14T10:00:00.000Z",
+    } as const;
+    appendSessionSummary(vault, input);
+    appendSessionSummary(vault, input);
+    const report = getSessionSummaryReport(vault, "sess-dup-report");
+    expect(report!.digestCount).toBe(1);
+    expect("divergent" in report!).toBe(false);
+  });
+
+  test("an unknown session still reads as null", () => {
+    expect(getSessionSummaryReport(vault, "never")).toBeNull();
+  });
+
+  test("getSessionSummary stays a thin wrapper over the report's digest", () => {
+    appendSessionSummary(vault, {
+      sessionId: "sess-wrap",
+      decisions: ["wrapped"],
+      createdAt: "2026-06-14T10:00:00.000Z",
+    });
+    const report = getSessionSummaryReport(vault, "sess-wrap");
+    expect(getSessionSummary(vault, "sess-wrap")!.id).toBe(report!.digest.id);
+  });
+
+  test("the divergence record list is bounded to the newest entries", () => {
+    const total = DIVERGENCE_RECORD_SAMPLE_LIMIT + 2;
+    let last: { id: string } | null = null;
+    for (let i = 0; i < total; i++) {
+      last = appendSessionSummary(vault, {
+        sessionId: "sess-bound",
+        decisions: [`decision-${i}`],
+        createdAt: `2026-06-14T00:${String(i).padStart(2, "0")}:00.000Z`,
+      });
+    }
+    const report = getSessionSummaryReport(vault, "sess-bound");
+    expect(report!.digestCount).toBe(total);
+    const records = report!.records ?? [];
+    expect(records.length).toBe(DIVERGENCE_RECORD_SAMPLE_LIMIT);
+    // The newest records are the ones kept, oldest first within the sample.
+    expect(records[records.length - 1]!.id).toBe(last!.id);
   });
 });
 
