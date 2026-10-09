@@ -24,6 +24,12 @@ import { brainDirsForWrite } from "../paths.ts";
 import { isoSecond } from "../time.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { decryptValue, encryptValue, loadOrCreateKey, type EncryptedValue } from "./crypto.ts";
+import {
+  clearHeldKey,
+  isEnvelopeFile,
+  unlockKeyfile as unlockKeyfileAtPath,
+  wrapKeyfile as wrapKeyfileAtPath,
+} from "./envelope.ts";
 import { restrictToOwner } from "./owner-acl.ts";
 
 export const SECRETS_SCHEMA_VERSION = 1;
@@ -250,6 +256,82 @@ export function resolveSecretForExec(
   touchLastUsed(vault, normalized, ctx.now);
   audit(vault, ctx, "secret_resolved_for_exec", normalized, { env_var: stored.env_var });
   return { name: normalized, env_var: stored.env_var, allow: stored.allow, value };
+}
+
+/**
+ * Decrypt one secret WITHOUT the exec path's write half: no `last_used_at`
+ * stamp, no custody audit record, no vault-identity guard (it writes
+ * nothing). The read-only resolve the config-side secret resolver composes
+ * with (t_e5807974): a config read must not take the write path, and it
+ * must not look like an exec. Same shape as the exec resolve's answer, so
+ * a consumer sees one secret record either way.
+ *
+ * A name the store holds under a locked envelope surfaces the named
+ * locked-store refusal - never a silent fallback, which would hide the
+ * locked state from the caller. An unknown name fails with the same
+ * no-enumeration error the exec resolve uses.
+ */
+export function resolveSecretReadOnly(vault: string, name: string): ResolvedSecret {
+  const file = readStore(vault);
+  const normalized = name.trim().toLowerCase();
+  const stored = file.secrets[normalized];
+  if (stored === undefined) {
+    // Same discipline as {@link resolveSecretForExec}: `list` is the
+    // discovery surface, so a wrong name learns nothing.
+    throw new Error(`unknown secret "${normalized}"`);
+  }
+  const key = loadOrCreateKey(keyPath(vault));
+  return {
+    name: normalized,
+    env_var: stored.env_var,
+    allow: stored.allow,
+    value: decryptValue(key, stored),
+  };
+}
+
+/**
+ * Unlock the store's wrapped keyfile for THIS PROCESS: verify the
+ * passphrase, hold the DEK in the envelope module's memory-only holder,
+ * and land the no-values custody record. On a store whose keyfile is
+ * still raw, this IS the opt-in: the raw 32 bytes are wrapped under the
+ * passphrase on first unlock, so unlocking is what creates the envelope.
+ *
+ * The passphrase is never persisted, logged, or audited, and a lost
+ * passphrase is unrecoverable - the verb's help says so in plain terms.
+ */
+export function unlockSecretKeyfile(
+  vault: string,
+  passphrase: string,
+  ctx: SecretAuditContext,
+): void {
+  // Guard ahead of the first byte: the wrap below replaces the keyfile.
+  assertVaultIdentityForWrite(vault);
+  const kp = keyPath(vault);
+  const wrapped = isEnvelopeFile(kp);
+  if (wrapped) {
+    unlockKeyfileAtPath(kp, passphrase);
+  } else {
+    wrapKeyfileAtPath(kp, passphrase, loadOrCreateKey(kp));
+  }
+  audit(vault, ctx, "secret_unlocked", "keyfile", { keyfile_was_wrapped: wrapped });
+}
+
+/**
+ * Lock: clear this process's held key and land the no-values custody
+ * record. Strictly process-local - there is no daemon, so every other
+ * CLI invocation and the MCP server were already locked. A store whose
+ * keyfile was never wrapped has nothing to lock, and saying `secret
+ * locked` there would record a protection that does not exist, so it
+ * refuses by name.
+ */
+export function lockSecretKeyfile(vault: string, ctx: SecretAuditContext): void {
+  assertVaultIdentityForWrite(vault);
+  const kp = keyPath(vault);
+  if (!isEnvelopeFile(kp)) {
+    throw new Error(`secret lock: the keyfile is not passphrase-wrapped, nothing to lock: ${kp}`);
+  }
+  clearHeldKey(kp);
+  audit(vault, ctx, "secret_locked", "keyfile", {});
 }
 
 /**

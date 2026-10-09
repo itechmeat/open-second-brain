@@ -12,6 +12,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -24,8 +25,12 @@ import { join } from "node:path";
 import { runDoctor } from "../../../../src/core/brain/doctor.ts";
 import { SECRETS_SYNC_EXPOSED_CODE } from "../../../../src/core/brain/doctor/secrets-sync-check.ts";
 import { loadOrCreateKey } from "../../../../src/core/brain/secrets/crypto.ts";
-import { secretsSyncExposure } from "../../../../src/core/brain/secrets/sync-exposure.ts";
+import {
+  formatWrappedKeyfileExposure,
+  secretsSyncExposure,
+} from "../../../../src/core/brain/secrets/sync-exposure.ts";
 import { secretsDir } from "../../../../src/core/brain/secrets/store.ts";
+import { fakeCredential } from "../../../helpers/fake-credentials.ts";
 import { runCli } from "../../../helpers/run-cli.ts";
 
 let tmp: string;
@@ -143,6 +148,45 @@ test("secret set warns on stderr when a Syncthing folder would carry the keyfile
   });
   expect(again.returncode).toBe(0);
   expect(again.stderr).not.toContain(".stignore");
+});
+
+describe("wrapped-keyfile messaging (t_e6667a56)", () => {
+  test("the wrapped message names the passphrase as the only protection left on a peer", () => {
+    const message = formatWrappedKeyfileExposure({
+      folderRoot: join(tmp, "sync"),
+      stignorePath: join(tmp, "sync", ".stignore"),
+      suggestedPattern: "/.open-second-brain/secrets",
+    });
+    expect(message).toContain("passphrase");
+    expect(message).toContain(".stignore");
+    expect(message).toContain("/.open-second-brain/secrets");
+  });
+
+  test("unlock warns when a Syncthing folder would carry the wrapped keyfile", async () => {
+    syncthingFolder(vault, null);
+    const set = await runCli(["brain", "secret", "set", "api-key", "--vault", vault], {
+      stdin: "sk-sync-wrap-1\n",
+    });
+    expect(set.returncode).toBe(0);
+    const passphrase = fakeCredential("wrap-pass", "-sync", "-42");
+    const unlock = await runCli(["brain", "secret", "unlock", "--vault", vault], {
+      stdin: `${passphrase}\n`,
+    });
+    expect(unlock.returncode).toBe(0);
+    expect(unlock.stderr).toContain("passphrase-wrapped");
+    expect(unlock.stderr).toContain(".stignore");
+    expect(existsSync(join(vault, ".stignore"))).toBe(false);
+    // And a peer holding the wrapped keyfile has the ciphertext only: the
+    // passphrase itself appears nowhere on disk.
+    const walk = (dir: string): string =>
+      readdirSync(dir, { withFileTypes: true })
+        .map((e) => {
+          const abs = join(dir, e.name);
+          return e.isDirectory() ? walk(abs) : readFileSync(abs, "utf8");
+        })
+        .join("");
+    expect(walk(vault)).not.toContain(passphrase);
+  });
 });
 
 describe("a vault reached through a symbolic link", () => {

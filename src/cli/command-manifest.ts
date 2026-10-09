@@ -303,7 +303,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("label", "Assign, remove, show or suggest controlled-vocabulary labels"),
         command("attr", "Assign, remove, or show typed-page attribute fields"),
         command("tiers", "Check, restore, or accept identity-field drift"),
-        command("secret", "Capability-gated secret custody: set, list, rm, run"),
+        command("secret", "Capability-gated secret custody: set, list, rm, run, lock, unlock"),
         command(
           "maintenance",
           "Quiet-window, lease-guarded heavy maintenance lane",

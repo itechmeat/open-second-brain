@@ -108,7 +108,7 @@ Brain verbs (observing memory):
   tune                Self-tuning recall: grid-evaluate, persist, inspect, reset
   attr                Typed-page attribute fields: assign, remove, show (schema-pack declared)
   tiers               Frontmatter tier guard: check identity-field drift, restore or accept
-  secret              Capability-gated secret custody: set, list, rm, run (use w/o exposure)
+  secret              Capability-gated secret custody: set, list, rm, run, lock, unlock (use w/o exposure)
   maintenance         Quiet-window, lease-guarded lane (dream, reindex, bridges, clusters, custom tasks)
   audit               Render a preference's full mutation audit trail
   morning-brief       Session-start summary: top prefs, open questions, recent notes
@@ -610,7 +610,7 @@ export const VERB_HELP: Record<string, string> = {
     "lists open findings; restore writes the expected value back (--apply);\n" +
     "accept adopts the hand-edit as the new baseline. Nothing auto-resolves.\n",
   secret:
-    "usage: o2b brain secret set <name> [--env-var V] [--allow PATTERN]... [--from-env SRC] [--agent N] | list | rm <name> | run <name> [--agent N] [--vault <path>] [--json] -- <command...>\n" +
+    "usage: o2b brain secret set <name> [--env-var V] [--allow PATTERN]... [--from-env SRC] [--agent N] | list | rm <name> | lock | unlock [--passphrase-from-env SRC] | run <name> [--agent N] [--vault <path>] [--json] -- <command...>\n" +
     "Capability-gated secret custody under the vault-local state dir:\n" +
     "per-value AES-256-GCM ciphertext, 0600 keyfile, no surface ever prints\n" +
     "the value. set reads the value from stdin or --from-env (never argv);\n" +
@@ -618,7 +618,12 @@ export const VERB_HELP: Record<string, string> = {
     "matches the allowlist declared at set time, and the captured output is\n" +
     "redacted before it reaches the caller. Every operation lands a\n" +
     "no-values record in Brain/log/secret-custody/. Protects against\n" +
-    "context leakage and vault sync exposure - not against root.\n",
+    "context leakage and vault sync exposure - not against root.\n" +
+    "unlock wraps the keyfile under a passphrase (read from stdin or\n" +
+    "--passphrase-from-env, never argv) and holds the key for this process\n" +
+    "only; lock clears it, and every other process must unlock separately.\n" +
+    "WARNING: a lost passphrase is unrecoverable - every stored value stays\n" +
+    "unreadable forever, and nothing recovers it.\n",
   maintenance:
     MAINTENANCE_USAGE +
     "\n" +

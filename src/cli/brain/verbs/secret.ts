@@ -1,10 +1,17 @@
 /**
- * `o2b brain secret <set|list|rm|run>` (t_0b134404): capability-gated
- * secret custody. `set` ingests the value from stdin or --from-env -
- * NEVER from argv, where it would land in shell history and process
- * lists; `list` shows metadata only; `run <name> -- cmd...` injects
- * the secret into an allowlisted subprocess env and returns redacted
- * output. No surface ever prints the value.
+ * `o2b brain secret <set|list|rm|run|lock|unlock>` (t_0b134404,
+ * t_e6667a56): capability-gated secret custody. `set` ingests the value
+ * from stdin or --from-env - NEVER from argv, where it would land in
+ * shell history and process lists; `list` shows metadata only; `run
+ * <name> -- cmd...` injects the secret into an allowlisted subprocess
+ * env and returns redacted output; `unlock` wraps the keyfile under a
+ * passphrase (first unlock) and holds the key for this process only;
+ * `lock` clears that holder. No surface ever prints a value or a
+ * passphrase.
+ *
+ * A LOST PASSPHRASE IS UNRECOVERABLE: after `unlock` has wrapped the
+ * keyfile, the stored values stay unreadable forever without it. There
+ * is no recovery path and none is pretended.
  *
  * Exit codes: 0 on success (run: the subprocess exit code), 1 on an
  * operational failure, 2 on usage errors.
@@ -12,9 +19,16 @@
 
 import { resolveAgentName } from "../../../core/config.ts";
 import { runWithSecret, SecretExecDeniedError } from "../../../core/brain/secrets/exec.ts";
-import { listSecrets, removeSecret, setSecret } from "../../../core/brain/secrets/store.ts";
+import {
+  listSecrets,
+  lockSecretKeyfile,
+  removeSecret,
+  setSecret,
+  unlockSecretKeyfile,
+} from "../../../core/brain/secrets/store.ts";
 import {
   formatSecretsSyncExposure,
+  formatWrappedKeyfileExposure,
   secretsSyncExposure,
 } from "../../../core/brain/secrets/sync-exposure.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
@@ -23,7 +37,41 @@ import { readStdinText } from "../../stdin.ts";
 const USAGE =
   "usage: o2b brain secret set <name> [--env-var V] [--allow PATTERN]... [--from-env SRC] [--agent N] [--vault <path>] [--json] | " +
   "list [--vault <path>] [--json] | rm <name> [--vault <path>] | " +
+  "lock [--vault <path>] | unlock [--passphrase-from-env SRC] [--vault <path>] | " +
   "run <name> [--agent N] [--vault <path>] [--json] -- <command...>";
+
+/** Success notes, hoisted: stdout is contract, not prose. */
+const UNLOCKED_NOTE =
+  "keyfile unlocked for this process; the passphrase is held in memory only and never written";
+const LOCKED_NOTE = "keyfile locked; this process's unlocked-key holder is cleared";
+
+/**
+ * Ingest the passphrase the way `set` ingests a value: `--passphrase-from-env`
+ * or stdin, never argv. The passphrase must never land in shell history or a
+ * process list - it protects every stored value after the first unlock.
+ */
+async function ingestPassphrase(
+  op: string,
+  flags: Record<string, string | boolean | string[] | undefined>,
+): Promise<{ passphrase: string } | { exitCode: number }> {
+  const fromEnv = flags["passphrase-from-env"] as string | undefined;
+  if (fromEnv !== undefined) {
+    const value = process.env[fromEnv];
+    if (value === undefined || value.length === 0) {
+      process.stderr.write(`brain secret ${op}: env var ${fromEnv} is unset or empty\n`);
+      return { exitCode: 2 };
+    }
+    return { passphrase: value };
+  }
+  const passphrase = (await readStdinText()).replace(/\r?\n$/, "");
+  if (passphrase.trim().length === 0) {
+    process.stderr.write(
+      `brain secret ${op}: pipe the passphrase via stdin or pass --passphrase-from-env SRC\n`,
+    );
+    return { exitCode: 2 };
+  }
+  return { passphrase };
+}
 
 export async function cmdBrainSecret(argv: string[]): Promise<number> {
   // `run <name> -- cmd...`: everything after `--` belongs to the
@@ -37,17 +85,26 @@ export async function cmdBrainSecret(argv: string[]): Promise<number> {
     "env-var": { type: "string" },
     allow: { type: "string-array" },
     "from-env": { type: "string" },
+    "passphrase-from-env": { type: "string" },
     agent: { type: "string" },
     json: { type: "boolean" },
   });
   const op = positional[0];
   const asJson = flags["json"] === true;
-  if (op !== "set" && op !== "list" && op !== "rm" && op !== "run") {
+  if (
+    op !== "set" &&
+    op !== "list" &&
+    op !== "rm" &&
+    op !== "run" &&
+    op !== "lock" &&
+    op !== "unlock"
+  ) {
     process.stderr.write(`${USAGE}\n`);
     return 2;
   }
   const name = positional[1];
-  if (op !== "list" && !name) {
+  const needsName = op === "set" || op === "rm" || op === "run";
+  if (needsName && !name) {
     process.stderr.write(`brain secret ${op}: a secret name is required\n${USAGE}\n`);
     return 2;
   }
@@ -114,6 +171,29 @@ export async function cmdBrainSecret(argv: string[]): Promise<number> {
         if (!removed) return fail(`secret rm: unknown secret "${name}"`);
         if (asJson) okJson({ removed: name });
         else ok(`secret removed: ${name}`);
+        return 0;
+      }
+      case "unlock": {
+        const ingested = await ingestPassphrase("unlock", flags);
+        if ("exitCode" in ingested) return ingested.exitCode;
+        // Wrap-on-first-unlock: on a store whose keyfile is still raw,
+        // THIS is the opt-in. From then on the passphrase is the only key
+        // to every stored value, and losing it loses them.
+        unlockSecretKeyfile(vault, ingested.passphrase, { agent, now });
+        // Say what a synced folder now carries: the envelope travels to
+        // every peer, where the passphrase is the protection left.
+        const exposure = secretsSyncExposure(vault);
+        if (exposure !== null) {
+          process.stderr.write(`warning: ${formatWrappedKeyfileExposure(exposure)}\n`);
+        }
+        if (asJson) okJson({ unlocked: true });
+        else ok(UNLOCKED_NOTE);
+        return 0;
+      }
+      case "lock": {
+        lockSecretKeyfile(vault, { agent, now });
+        if (asJson) okJson({ locked: true });
+        else ok(LOCKED_NOTE);
         return 0;
       }
       case "run": {

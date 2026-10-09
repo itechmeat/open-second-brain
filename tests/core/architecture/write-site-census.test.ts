@@ -793,6 +793,17 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "`chmodSync` re-applies that 0600 on load to a store that arrived with a copied " +
       "or restored vault, the same custody repair the keyfile beside it gets.",
   },
+  "src/core/brain/secrets/envelope.ts": {
+    categories: [C.machineArtifact],
+    calls: ["chmodSync", "renameSync", "unlinkSync", "writeFileSync"],
+    reason:
+      "replaces the raw keyfile with the passphrase-wrapped envelope via " +
+      "tmp-plus-rename at mode 0600, the custody-boundary twin of the store " +
+      "row beside it: a torn wrap would destroy the only copy of the key, so " +
+      "the swap is atomic and the shared writer's 0644 default is wrong here. " +
+      "The unlink clears the tmp when the rename is refused; `chmodSync` " +
+      "re-asserts the 0600 on the envelope the keyfile it replaced carried.",
+  },
   "src/core/brain/truth/store.ts": {
     categories: [C.appendOnlyLedger, C.machineArtifact, C.retentionDelete],
     calls: ["appendFileSync", "rmSync", "writeFileSync"],
@@ -1235,8 +1246,12 @@ const DIRECT_ROWS = ROWS.filter((row) => row.directCalls.length > 0);
  * temp storage and removes the tree when the run ends.
  * 76 -> 77: `src/core/search/freshen.ts` claims and releases the
  * freshen-on-read claim (an exclusive create) in `.open-second-brain/`.
+ *
+ * 77 -> 78: `src/core/brain/secrets/envelope.ts` replaces the raw keyfile
+ * with the passphrase-wrapped envelope (tmp-plus-rename at 0600), the
+ * custody-boundary twin of the store and keyfile rows beside it.
  */
-const DIRECT_WRITE_ROWS = 77;
+const DIRECT_WRITE_ROWS = 78;
 
 /**
  * Measured modules reaching a write through a shared helper. An equality.
@@ -1378,8 +1393,9 @@ const STAMPED_PATHS: ReadonlySet<string> = new Set(
  * 73 -> 74: the automatic-upgrade lock and marker removal (state, not notes).
  * 74 -> 75: the doctor self-test's throwaway-store writes (temp storage).
  * 75 -> 76: the freshen-on-read claim and its release (state, not notes).
+ * 76 -> 77: the secrets keyfile envelope swap (custody bytes, not notes).
  */
-const UNSTAMPED_DIRECT_ROWS = 76;
+const UNSTAMPED_DIRECT_ROWS = 77;
 
 /**
  * Shared-helper write sites the stamp does not reach, measured the same

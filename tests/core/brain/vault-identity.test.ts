@@ -78,10 +78,13 @@ import { writeRollupLedger } from "../../../src/core/brain/rollup-ladder.ts";
 import { parseSchemaPack } from "../../../src/core/brain/schema-pack.ts";
 import { applySchemaMutations } from "../../../src/core/brain/schema-mutate.ts";
 import {
+  lockSecretKeyfile,
   removeSecret,
   resolveSecretForExec,
   setSecret,
+  unlockSecretKeyfile,
 } from "../../../src/core/brain/secrets/store.ts";
+import { fakeCredential } from "../../helpers/fake-credentials.ts";
 import { writeSignal } from "../../../src/core/brain/signal.ts";
 import { retireSignal } from "../../../src/core/brain/signal-retire.ts";
 import { learnSkillProposals } from "../../../src/core/brain/skill-proposals.ts";
@@ -266,6 +269,8 @@ describe("the guard fires on Brain write paths", () => {
     agent: "test-agent",
     now: NOW,
   } as const;
+
+  const WRAP_PASSPHRASE = fakeCredential("guard-wrap", "-phrase-", "42");
 
   const GUARD_PAGE_REL = posix.join("notes", "guard-page.md");
 
@@ -636,6 +641,20 @@ describe("the guard fires on Brain write paths", () => {
       seed: (v) => void setSecret(v, SECRET_INPUT),
       write: (v) =>
         void resolveSecretForExec(v, SECRET_INPUT.name, { agent: "test-agent", now: NOW }),
+    },
+    {
+      // The wrap-on-first-unlock conversion: writes the envelope over the
+      // raw keyfile and lands the unlock custody record.
+      name: "unlockSecretKeyfile",
+      seed: (v) => void setSecret(v, SECRET_INPUT),
+      write: (v) => void unlockSecretKeyfile(v, WRAP_PASSPHRASE, { agent: "test-agent", now: NOW }),
+    },
+    {
+      // lock clears the holder and lands the locked custody record; on a
+      // never-wrapped store the refusal still comes from the guard, ahead
+      // of any keyfile read.
+      name: "lockSecretKeyfile",
+      write: (v) => void lockSecretKeyfile(v, { agent: "test-agent", now: NOW }),
     },
     {
       name: "applySchemaMutations",

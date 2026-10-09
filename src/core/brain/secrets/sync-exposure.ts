@@ -183,3 +183,19 @@ export function formatSecretsSyncExposure(exposure: SecretsSyncExposure): string
     `${exposure.stignorePath}: ${exposure.suggestedPattern}`
   );
 }
+
+/**
+ * The same gap, stated for a PASSPHRASE-WRAPPED keyfile (t_e6667a56): the
+ * envelope that syncs to every peer is not the raw key material, but the
+ * passphrase is now the only thing between a peer and offline guessing,
+ * so the warning names that residual protection instead of implying the
+ * wrap removed the exposure.
+ */
+export function formatWrappedKeyfileExposure(exposure: SecretsSyncExposure): string {
+  return (
+    `the passphrase-wrapped keyfile sits inside a Syncthing folder (${exposure.folderRoot}) ` +
+    `whose ${STIGNORE_FILE} does not ignore it, so the envelope syncs to every peer and the ` +
+    `passphrase is the only protection left against offline guessing there. Add this line to ` +
+    `${exposure.stignorePath}: ${exposure.suggestedPattern}`
+  );
+}

@@ -29,12 +29,14 @@ import {
   system32Tool,
 } from "../../../../src/core/brain/secrets/owner-acl.ts";
 import { loadOrCreateKey } from "../../../../src/core/brain/secrets/crypto.ts";
+import { wrapKeyfile } from "../../../../src/core/brain/secrets/envelope.ts";
 import {
   custodyTargets,
   listSecrets,
   secretsDir,
   setSecret,
 } from "../../../../src/core/brain/secrets/store.ts";
+import { fakeCredential } from "../../../helpers/fake-credentials.ts";
 import { IS_WINDOWS } from "../../../helpers/platform.ts";
 
 const SID = "S-1-5-21-1111111111-2222222222-3333333333-1001";
@@ -244,6 +246,19 @@ describe.skipIf(!IS_WINDOWS)("the secrets keyfile ACL on Windows", () => {
     expect(others(join(dir, "secrets.json"))).toEqual([]);
   });
 
+  test("the wrapped keyfile grants the current user alone after the envelope replaces it", () => {
+    const dir = secretsDir(vault);
+    const keyPath = join(dir, "keyfile");
+    const dek = loadOrCreateKey(keyPath);
+    wrapKeyfile(keyPath, fakeCredential("acl-wrap", "-phrase-", "42"), dek);
+    const identity = currentWindowsIdentity();
+    expect(identity).not.toBeNull();
+    const principal = identity!.name.toLowerCase();
+    const entries = aclEntries(keyPath);
+    expect(lower(entries).filter((e) => e.includes("(i)"))).toEqual([]);
+    expect(withoutMachineAdmins(entries)).toEqual([`${principal}:(f)`]);
+  });
+
   test("a failed icacls warns and leaves the caller running", () => {
     const writes: string[] = [];
     const spy = spyOn(process.stderr, "write").mockImplementation((chunk) => {
@@ -311,5 +326,13 @@ describe.skipIf(IS_WINDOWS)("keyfile modes and the sync-exclusion marker on POSI
     // this asserts the content is stable rather than the write count).
     loadOrCreateKey(join(secretsDir(vault), "keyfile"));
     expect(readFileSync(marker, "utf8")).toBe("*\n!.gitignore\n");
+  });
+
+  test("the wrapped keyfile keeps owner-only modes after the envelope replaces it", () => {
+    const keyPath = join(secretsDir(vault), "keyfile");
+    const dek = loadOrCreateKey(keyPath);
+    wrapKeyfile(keyPath, fakeCredential("acl-wrap", "-phrase-", "42"), dek);
+    expect(statSync(keyPath).mode & 0o777).toBe(0o600);
+    expect(statSync(secretsDir(vault)).mode & 0o777).toBe(0o700);
   });
 });

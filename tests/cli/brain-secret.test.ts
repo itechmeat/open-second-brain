@@ -6,10 +6,11 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { fakeCredential } from "../helpers/fake-credentials.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
 let tmp: string;
@@ -112,4 +113,62 @@ test("set without stdin value or --from-env is a usage error", async () => {
   });
   expect(result.returncode).toBe(2);
   expect(result.stderr).toContain("stdin");
+});
+
+test("unlock wraps the raw keyfile; a fresh process sees the locked refusal until re-unlock", async () => {
+  await runCli(["brain", "secret", "set", "api-key", "--vault", vault], {
+    stdin: "sk-lock-test-13579\n",
+  });
+  const keyfile = join(vault, ".open-second-brain", "secrets", "keyfile");
+  expect(readFileSync(keyfile).length).toBe(32);
+
+  const passphrase = fakeCredential("cli-unlock", "-pass", "-42");
+  const unlock = await runCli(["brain", "secret", "unlock", "--vault", vault], {
+    stdin: `${passphrase}\n`,
+  });
+  expect(unlock.returncode).toBe(0);
+  expect(unlock.stdout).toContain("unlocked");
+  // The raw 32 bytes are gone: the keyfile is a JSON envelope now.
+  expect(readFileSync(keyfile, "utf8").startsWith("{")).toBe(true);
+
+  // A fresh process holds no unlocked key: the store refuses by name.
+  const locked = await runCli(["brain", "secret", "set", "other", "--vault", vault], {
+    stdin: "sk-other-24680\n",
+  });
+  expect(locked.returncode).toBe(1);
+  expect(locked.stderr).toContain("locked");
+
+  // The right passphrase unlocks again; a wrong one refuses by name.
+  const again = await runCli(["brain", "secret", "unlock", "--vault", vault], {
+    stdin: `${passphrase}\n`,
+  });
+  expect(again.returncode).toBe(0);
+  const wrong = await runCli(["brain", "secret", "unlock", "--vault", vault], {
+    stdin: `${fakeCredential("no-such", "-pass", "-42")}\n`,
+  });
+  expect(wrong.returncode).toBe(1);
+  expect(wrong.stderr).toContain("passphrase");
+});
+
+test("lock refuses a store that was never wrapped, creating nothing; lock after unlock reports cleared", async () => {
+  const lock = await runCli(["brain", "secret", "lock", "--vault", vault]);
+  expect(lock.returncode).toBe(1);
+  expect(lock.stderr).toContain("not passphrase-wrapped");
+  // Locking must not mint a keyfile or the secrets directory.
+  expect(existsSync(join(vault, ".open-second-brain", "secrets"))).toBe(false);
+
+  const passphrase = fakeCredential("cli-lock", "-pass", "-42");
+  const unlock = await runCli(["brain", "secret", "unlock", "--vault", vault], {
+    stdin: `${passphrase}\n`,
+  });
+  expect(unlock.returncode).toBe(0);
+  const locked = await runCli(["brain", "secret", "lock", "--vault", vault, "--json"]);
+  expect(locked.returncode).toBe(0);
+  expect(JSON.parse(locked.stdout)).toMatchObject({ locked: true });
+});
+
+test("unlock without a passphrase is a usage error", async () => {
+  const result = await runCli(["brain", "secret", "unlock", "--vault", vault], { stdin: "" });
+  expect(result.returncode).toBe(2);
+  expect(result.stderr).toContain("passphrase");
 });

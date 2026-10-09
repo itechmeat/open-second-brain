@@ -30,6 +30,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 
+import { heldKeyOrRefusal, isEnvelopeBytes } from "./envelope.ts";
 import { restrictToOwner } from "./owner-acl.ts";
 
 const ALGORITHM = "aes-256-gcm";
@@ -111,6 +112,13 @@ export function loadOrCreateKey(keyPath: string): Buffer {
     }
     ensureSyncExclusionMarker(keyDir);
     const key = readFileSync(keyPath);
+    // The passphrase-wrapped envelope replaces the raw file at the SAME
+    // path and carries the same ACL discipline (all of the above applies
+    // to it unchanged). There is nothing to create and nothing to mint:
+    // the key comes from this process's unlock holder, and an empty
+    // holder is the named locked-store refusal - never a fresh random
+    // key, which would silently orphan every stored value.
+    if (isEnvelopeBytes(key)) return heldKeyOrRefusal(keyPath);
     if (key.length !== KEY_BYTES) {
       throw new Error(`secrets keyfile is corrupt (expected ${KEY_BYTES} bytes): ${keyPath}`);
     }

@@ -103,6 +103,11 @@ const UNGUARDED_WITH_REASON: Readonly<Record<string, string>> = Object.freeze({
   "src/core/brain/secrets/crypto.ts":
     "takes a keyfile path, not a vault. The three public entry points in " +
     "`secrets/store.ts` that reach it are guarded ahead of their first byte.",
+  "src/core/brain/secrets/envelope.ts":
+    "takes a keyfile path, not a vault, like its sibling `crypto.ts`. The " +
+    "vault-level entry points in `secrets/store.ts` that reach it (the " +
+    "wrap-on-first-unlock and the lock) are guarded ahead of their first " +
+    "byte, and the holder lookups write nothing at all.",
   "src/core/brain/sync-lockfile.ts":
     "lock primitive over a caller-supplied path; the writers that acquire it " +
     "are guarded at their own entry points.",

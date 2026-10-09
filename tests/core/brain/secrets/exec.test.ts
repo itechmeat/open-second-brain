@@ -11,12 +11,17 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { loadOrCreateKey } from "../../../../src/core/brain/secrets/crypto.ts";
+import {
+  SecretStoreLockedError,
+  wrapKeyfile,
+} from "../../../../src/core/brain/secrets/envelope.ts";
 import {
   matchesAllowlist,
   runWithSecret,
   SecretExecDeniedError,
 } from "../../../../src/core/brain/secrets/exec.ts";
-import { setSecret } from "../../../../src/core/brain/secrets/store.ts";
+import { secretsDir, setSecret } from "../../../../src/core/brain/secrets/store.ts";
 import { fakeCredential } from "../../../helpers/fake-credentials.ts";
 
 const NOW = new Date("2026-06-05T10:00:00Z");
@@ -213,5 +218,28 @@ describe("runWithSecret", () => {
     });
     const result = await runWithSecret(vault, "api-key", ["bun", "-e", "process.exit(3)"], CTX);
     expect(result.exitCode).toBe(3);
+  });
+
+  test("exec under a locked store refuses by name before the allowlist is consulted", async () => {
+    setSecret(vault, {
+      name: "api-key",
+      value: "sk-redact-me-12345",
+      allow: ["bun -e *"],
+      agent: "tester",
+      now: NOW,
+    });
+    const keyPath = join(secretsDir(vault), "keyfile");
+    wrapKeyfile(keyPath, fakeCredential("exec-wrap", "-phrase-", "42"), loadOrCreateKey(keyPath));
+    await expect(runWithSecret(vault, "api-key", ["echo", "hi"], CTX)).rejects.toThrow(
+      SecretStoreLockedError,
+    );
+    // No exec decision was reached, so no exec record lands: the refusal is
+    // the custody lock's, not the allowlist's.
+    const auditDir = join(vault, "Brain", "log", "secret-custody");
+    const raw = readdirSync(auditDir)
+      .map((f) => readFileSync(join(auditDir, f), "utf8"))
+      .join("");
+    expect(raw).not.toContain("secret_exec_started");
+    expect(raw).not.toContain("secret_exec_denied");
   });
 });
