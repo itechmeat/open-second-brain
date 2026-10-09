@@ -107,6 +107,13 @@ export const SECRET_STORE_LOCKED_CODE = "secret_store_locked";
 /**
  * A key-bearing operation met a wrapped keyfile and this process holds no
  * unlocked key for it. The remedy is the unlock op, named in the message.
+ *
+ * The MESSAGE is path-free by construction: the prose travels into model
+ * context through consumers that surface error text verbatim (a config
+ * probe's error list, a search refusal, a CLI catch), and the keyfile
+ * path under the vault is exactly what `src/mcp/vault-path-field.ts`
+ * degrades to keep out. The structured `keyPath` field stays for the
+ * callers that legitimately name the file.
  */
 export class SecretStoreLockedError extends Error {
   readonly code = SECRET_STORE_LOCKED_CODE;
@@ -115,7 +122,7 @@ export class SecretStoreLockedError extends Error {
   constructor(keyPath: string) {
     super(
       `the secret store is locked (the keyfile is passphrase-wrapped): run ` +
-        `"o2b brain secret unlock" to unwrap it for this process: ${keyPath}`,
+        `"o2b brain secret unlock" to unwrap it for this process`,
     );
     this.name = "SecretStoreLockedError";
     this.keyPath = keyPath;

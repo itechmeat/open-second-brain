@@ -324,7 +324,21 @@ export function unlockSecretKeyfile(
   if (wrapped) {
     unlockKeyfileAtPath(kp, passphrase);
   } else {
-    wrapKeyfileAtPath(kp, passphrase, loadOrCreateKey(kp));
+    // The wrap replaces the only copy of the DEK, so it serialises
+    // through the same writer lock every other read-modify-write of the
+    // custody directory takes: two concurrent first-unlocks must not
+    // interleave on the tmp path the swap writes. The shape check runs
+    // again UNDER the lock, so the loser of the race finds the envelope
+    // the winner just wrote and takes the unlock path instead of minting
+    // over it.
+    withSecretsLock(vault, () => {
+      if (!isEnvelopeFile(kp)) wrapKeyfileAtPath(kp, passphrase, loadOrCreateKey(kp));
+    });
+    // The wrap wrote the envelope but held nothing: verify-and-hold the
+    // key here, so the first unlock leaves THIS process unlocked - an
+    // unlock that left the process locked would fail the very remedy the
+    // locked-store refusal names.
+    unlockKeyfileAtPath(kp, passphrase);
   }
   audit(vault, ctx, "secret_unlocked", "keyfile", { keyfile_was_wrapped: wrapped });
 }

@@ -10,10 +10,13 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import lockfile from "proper-lockfile";
 
 import { loadOrCreateKey } from "../../../../src/core/brain/secrets/crypto.ts";
 import {
   clearHeldKey,
+  heldUnlockedKey,
+  isEnvelopeFile,
   SecretStoreLockedError,
   unlockKeyfile,
   wrapKeyfile,
@@ -25,6 +28,7 @@ import {
   resolveSecretReadOnly,
   setSecret,
   secretsDir,
+  unlockSecretKeyfile,
 } from "../../../../src/core/brain/secrets/store.ts";
 import { fakeCredential } from "../../../helpers/fake-credentials.ts";
 import { IS_WINDOWS } from "../../../helpers/platform.ts";
@@ -197,5 +201,87 @@ describe("a wrapped store (t_e6667a56)", () => {
     const stamped = readFileSync(join(secretsDir(vault), "secrets.json"), "utf8");
     expect(stamped).not.toContain('"last_used_at": null');
     clearHeldKey(keyPath);
+  });
+});
+
+describe("unlock/lock lifecycle", () => {
+  const PASSPHRASE = fakeCredential("lifecycle-wrap-", "phrase-3f08");
+
+  test("the FIRST unlock on a raw keyfile leaves this process unlocked", () => {
+    // The wrap-on-first-unlock writes the envelope but used to hold
+    // nothing: the same process - the one the verb's success note
+    // addresses, and the one the locked-store remedy sends to `unlock` -
+    // still read as locked afterwards.
+    set();
+    unlockSecretKeyfile(vault, PASSPHRASE, { agent: "tester", now: NOW });
+    const keyPath = join(secretsDir(vault), "keyfile");
+    expect(isEnvelopeFile(keyPath)).toBe(true);
+    expect(heldUnlockedKey(keyPath)).not.toBeNull();
+    expect(resolveSecretReadOnly(vault, "embed-key").value).toBe("sk-super-secret-value");
+    clearHeldKey(keyPath);
+  });
+
+  test("the first-unlock wrap holds the store writer lock", () => {
+    // Every other read-modify-write of the custody directory serialises
+    // through the writer lock; the wrap that replaces the only copy of
+    // the DEK must too, so two racers cannot interleave on the shared
+    // tmp path. Holding the lock the way a concurrent first unlock
+    // would, the wrap refuses instead of proceeding.
+    set();
+    const release = lockfile.lockSync(secretsDir(vault), { stale: 10_000, realpath: false });
+    try {
+      expect(() => unlockSecretKeyfile(vault, PASSPHRASE, { agent: "tester", now: NOW })).toThrow(
+        /secrets store lock/,
+      );
+      expect(isEnvelopeFile(join(secretsDir(vault), "keyfile"))).toBe(false);
+    } finally {
+      void release();
+    }
+    // With the lock free, the same call wraps AND unlocks this process.
+    unlockSecretKeyfile(vault, PASSPHRASE, { agent: "tester", now: NOW });
+    expect(isEnvelopeFile(join(secretsDir(vault), "keyfile"))).toBe(true);
+    clearHeldKey(join(secretsDir(vault), "keyfile"));
+  });
+
+  test("a racer whose check predates the winner's wrap unlocks instead of failing locked", () => {
+    // The loser of the wrap race re-checks under the lock: the keyfile
+    // it saw as raw is an envelope by the time it holds the lock, so it
+    // takes the unlock path with its own passphrase check rather than
+    // minting over the winner's envelope.
+    set();
+    unlockSecretKeyfile(vault, PASSPHRASE, { agent: "tester", now: NOW });
+    // A second unlock over the now-wrapped store with the SAME
+    // passphrase succeeds and keeps the same key held.
+    unlockSecretKeyfile(vault, PASSPHRASE, { agent: "tester", now: NOW });
+    const keyPath = join(secretsDir(vault), "keyfile");
+    expect(resolveSecretReadOnly(vault, "embed-key").value).toBe("sk-super-secret-value");
+    clearHeldKey(keyPath);
+  });
+
+  test("the locked-store refusal names the remedy without the keyfile path", () => {
+    // The refusal travels into model context through consumers that
+    // surface error prose (a config-probe error list, a search refusal);
+    // the path under the vault is exactly what
+    // `src/mcp/vault-path-field.ts` degrades to keep out. The remedy is
+    // named; the structured `keyPath` field stays for the callers that
+    // may name it.
+    set();
+    const keyPath = join(secretsDir(vault), "keyfile");
+    wrapKeyfile(keyPath, PASSPHRASE, loadOrCreateKey(keyPath));
+    try {
+      let refusal: unknown;
+      try {
+        resolveSecretReadOnly(vault, "embed-key");
+        throw new Error("expected the locked-store refusal");
+      } catch (err) {
+        refusal = err;
+      }
+      expect(refusal).toBeInstanceOf(SecretStoreLockedError);
+      const message = (refusal as Error).message;
+      expect(message).not.toContain(keyPath);
+      expect(message).toContain("o2b brain secret unlock");
+    } finally {
+      clearHeldKey(keyPath);
+    }
   });
 });
