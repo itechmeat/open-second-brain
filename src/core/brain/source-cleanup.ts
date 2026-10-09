@@ -774,10 +774,14 @@ export function deleteBySource(
       }
 
       if (manifestKey !== null && existsSync(manifestPath(vault))) {
-        const entries = { ...readManifest(vault).entries };
+        const manifest = readManifest(vault);
+        const entries = { ...manifest.entries };
         if (entries[manifestKey] !== undefined) {
           delete entries[manifestKey];
-          manifestEntryRemoved = writeManifestAtomic(vault, entries);
+          // Round-trip the contract the manifest was read with (t_586d5d8b):
+          // a cleanup that only removes an entry must not re-stamp the
+          // extraction contract the remaining entries were recorded under.
+          manifestEntryRemoved = writeManifestAtomic(vault, entries, manifest.contract);
         }
       }
     } catch (err) {

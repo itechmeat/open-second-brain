@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
 import { ingestSource } from "../../../../src/core/brain/ingest/ingest.ts";
+import { computeExtractionContractFingerprint } from "../../../../src/core/brain/ingest/contract.ts";
 import {
   classifyPaths,
   hashFile,
@@ -23,6 +24,7 @@ import {
   updateManifest,
   writeManifestAtomic,
 } from "../../../../src/core/brain/ingest/content-manifest.ts";
+import { deleteBySource } from "../../../../src/core/brain/source-cleanup.ts";
 
 let vault: string;
 let configHome: string;
@@ -150,6 +152,84 @@ describe("manifest persistence", () => {
     expect(writeManifestAtomic(vault, { "a.md": "x".repeat(64) })).toBe(false);
     // Different entries → write.
     expect(writeManifestAtomic(vault, { "a.md": "y".repeat(64) })).toBe(true);
+  });
+
+  test("an unknown schema_version is still refused by name", () => {
+    writeManifestBytes(JSON.stringify({ schema_version: 999, entries: {} }));
+    expect(() => readManifest(vault)).toThrow(/ingest manifest schema_version 999 not supported/);
+  });
+});
+
+/** Write raw bytes as the content manifest, for the versioned-fixture cases. */
+function writeManifestBytes(bytes: string): void {
+  const path = manifestPath(vault);
+  mkdirSync(join(path, ".."), { recursive: true });
+  writeFileSync(path, bytes, "utf8");
+}
+
+describe("extraction contract (t_586d5d8b)", () => {
+  test("the manifest records the contract fingerprint and reads it back", () => {
+    writeSource("a.md", "a");
+    updateManifest(vault, ["a.md"]);
+
+    const manifest = readManifest(vault);
+    expect(manifest.contract).toEqual({
+      fingerprint: computeExtractionContractFingerprint(vault),
+    });
+
+    // The field is on disk, manifest-wide, under the bumped schema version.
+    const onDisk = JSON.parse(readFileSync(manifestPath(vault), "utf8")) as {
+      schema_version: number;
+      contract: { fingerprint: string } | null;
+    };
+    expect(onDisk.schema_version).toBe(2);
+    expect(onDisk.contract?.fingerprint).toBe(computeExtractionContractFingerprint(vault));
+  });
+
+  test("the fingerprint is stable across calls and sensitive to its inputs", () => {
+    // Stable across calls: the recording is deterministic, not clocked.
+    expect(computeExtractionContractFingerprint(vault)).toBe(
+      computeExtractionContractFingerprint(vault),
+    );
+    // Sensitive to the allowlist: changing `extractable` changes the contract.
+    const before = computeExtractionContractFingerprint(vault);
+    writeSource("Brain/_brain.yaml", "schema_version: 1\nschema:\n  extractable:\n    - paper\n");
+    expect(computeExtractionContractFingerprint(vault)).not.toBe(before);
+  });
+
+  test("a v1 manifest (no contract field) is accepted and degrades to changed-contract", () => {
+    writeManifestBytes(JSON.stringify({ schema_version: 1, entries: { "a.md": "z".repeat(64) } }));
+    const manifest = readManifest(vault);
+    expect(manifest.entries["a.md"]).toBe("z".repeat(64));
+    expect(manifest.contract).toBeNull();
+  });
+
+  test("a v1 manifest's next write lands as v2 with the fingerprint", () => {
+    writeSource("a.md", "a");
+    writeManifestBytes(
+      JSON.stringify({ schema_version: 1, entries: { "a.md": hashFile(join(vault, "a.md")) } }),
+    );
+    expect(readManifest(vault).contract).toBeNull();
+
+    updateManifest(vault, ["a.md"]);
+    const manifest = readManifest(vault);
+    expect(manifest.schema_version).toBe(2);
+    expect(manifest.contract).toEqual({
+      fingerprint: computeExtractionContractFingerprint(vault),
+    });
+  });
+
+  test("cleanup preserves the recorded contract (the direct write round-trips the field)", () => {
+    writeSource("doc.md", "the source bytes");
+    updateManifest(vault, ["doc.md"]);
+    const recorded = readManifest(vault).contract;
+
+    const plan = deleteBySource(vault, "doc.md", { confirm: true });
+    expect(plan.manifestEntryRemoved).toBe(true);
+
+    const after = readManifest(vault);
+    expect(after.entries["doc.md"]).toBeUndefined();
+    expect(after.contract).toEqual(recorded);
   });
 });
 

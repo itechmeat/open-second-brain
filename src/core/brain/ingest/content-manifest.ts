@@ -18,6 +18,11 @@
  * that case. Comparing content hashes instead means only a real byte change
  * re-triggers ingestion.
  *
+ * The manifest also carries ONE manifest-wide field beyond the entries: the
+ * extraction contract ({@link ./contract.ts}) the recorded state answers
+ * under, so a changed extraction contract reprocesses every source once even
+ * when its bytes did not move (t_586d5d8b).
+ *
  * The manifest lives at `<vault>/.open-second-brain/ingest-manifest.json`, a
  * MACHINE artifact - not curated memory, so NOT under `Brain/`. This mirrors the
  * existing `<vault>/.open-second-brain/` location used by the search index and
@@ -36,9 +41,13 @@ import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { canonicalNotePath } from "../../path-safety.ts";
 import { acquireLockSyncWithRetry, ingestLockRemedy } from "../sync-lockfile.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
+import { computeExtractionContractFingerprint } from "./contract.ts";
 
-/** Only schema version currently understood. Unknown versions are refused. */
-const SCHEMA_VERSION = 1 as const;
+/** The schema version this module writes. Earlier versions are read, not written. */
+const SCHEMA_VERSION = 2 as const;
+
+/** Every schema version {@link readManifest} accepts. Anything else is refused. */
+const SUPPORTED_SCHEMA_VERSIONS: readonly number[] = Object.freeze([1, SCHEMA_VERSION]);
 
 /** Vault-relative directory holding OSB machine artifacts (not curated memory). */
 const MACHINE_ARTIFACT_DIR = ".open-second-brain";
@@ -46,14 +55,31 @@ const MACHINE_ARTIFACT_DIR = ".open-second-brain";
 /** Basename of the ingest content-hash manifest. */
 const MANIFEST_FILE = "ingest-manifest.json";
 
+/** The manifest-wide extraction-contract record (t_586d5d8b). */
+export interface ManifestContract {
+  /** {@link computeExtractionContractFingerprint} of the pass that wrote it. */
+  readonly fingerprint: string;
+}
+
 /**
  * The persisted manifest: a map from a canonical vault-relative source path to
- * the SHA-256 hex of its content at last ingest.
+ * the SHA-256 hex of its content at last ingest, plus the manifest-wide
+ * extraction contract the recorded state answers under.
  */
 export interface ContentManifest {
   readonly schema_version: typeof SCHEMA_VERSION;
   /** Canonical vault-relative path → 64-char lowercase SHA-256 hex of content. */
   readonly entries: Readonly<Record<string, string>>;
+  /**
+   * The extraction contract the recorded state answers under, or `null` when
+   * none is recorded - a v1 manifest written before the fingerprint existed.
+   * `null` is the changed-contract marker: every consumer treats it as
+   * "reprocess once under the live contract", and the next write lands as v2
+   * with the fingerprint. A manifest file that does not exist reads back as
+   * current-shaped under the LIVE contract - an empty manifest was never
+   * written under an older one, so nothing in it can be stale.
+   */
+  readonly contract: ManifestContract | null;
 }
 
 /** Result of classifying a set of paths against a manifest. */
@@ -123,15 +149,23 @@ export function hashPath(absPath: string): string {
 }
 
 /**
- * Read the manifest for a vault. A missing file is an empty manifest (every
- * path then classifies `new`). A corrupted file or an unknown `schema_version`
- * is a hard error - never a silent reset that would masquerade every source as
- * unchanged or force a full re-ingest without saying so.
+ * Read the manifest for a vault. A missing file is an empty, current-shaped
+ * manifest under the live contract (every path then classifies `new`). A
+ * corrupted file is a hard error, and so is an unknown `schema_version` -
+ * never a silent reset that would masquerade every source as unchanged or
+ * force a full re-ingest without saying so. A v1 manifest (a known previous
+ * version, written before the contract field existed) is accepted and reads
+ * back with `contract: null`: the changed-contract marker that makes every
+ * source reprocess once before the rewrite lands as v2.
  */
 export function readManifest(vault: string): ContentManifest {
   const path = manifestPath(vault);
   if (!existsSync(path)) {
-    return { schema_version: SCHEMA_VERSION, entries: {} };
+    return {
+      schema_version: SCHEMA_VERSION,
+      entries: {},
+      contract: { fingerprint: computeExtractionContractFingerprint(vault) },
+    };
   }
   const raw = readFileSync(path, "utf8");
   let parsed: unknown;
@@ -145,9 +179,10 @@ export function readManifest(vault: string): ContentManifest {
   }
   const obj = parsed as Record<string, unknown>;
   const sv = obj["schema_version"];
-  if (sv !== SCHEMA_VERSION) {
+  if (!(SUPPORTED_SCHEMA_VERSIONS as readonly unknown[]).includes(sv)) {
     throw new Error(
-      `ingest manifest schema_version ${String(sv)} not supported (expected ${SCHEMA_VERSION}): ${path}`,
+      `ingest manifest schema_version ${String(sv)} not supported ` +
+        `(expected ${SUPPORTED_SCHEMA_VERSIONS.join(" or ")}): ${path}`,
     );
   }
   const rawEntries = obj["entries"];
@@ -157,20 +192,36 @@ export function readManifest(vault: string): ContentManifest {
       if (typeof value === "string") entries[key] = value;
     }
   }
-  return { schema_version: SCHEMA_VERSION, entries };
+  return { schema_version: SCHEMA_VERSION, entries, contract: readContractField(obj) };
+}
+
+/**
+ * The manifest's recorded contract field, or `null` when none is recorded.
+ * Only `{ fingerprint: <string> }` counts; anything else a v2 write could
+ * never have produced (and a v1 manifest never carries) degrades to `null`,
+ * the changed-contract marker - a malformed field self-heals into one
+ * reprocessing pass rather than refusing a manifest whose entries are fine.
+ */
+function readContractField(obj: Record<string, unknown>): ManifestContract | null {
+  const raw = obj["contract"];
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const fingerprint = (raw as Record<string, unknown>)["fingerprint"];
+  return typeof fingerprint === "string" ? { fingerprint } : null;
 }
 
 /**
  * Serialize `entries` to the canonical manifest bytes: keys sorted so the
- * output is deterministic regardless of insertion order, `schema_version`
- * first, trailing newline.
+ * output is deterministic regardless of insertion order, `schema_version` and
+ * the contract field first, trailing newline.
  */
-function serializeManifest(entries: Record<string, string>): string {
+function serializeManifest(entries: Record<string, string>, contract: ManifestContract): string {
   const sorted: Record<string, string> = {};
   for (const key of Object.keys(entries).toSorted()) {
     sorted[key] = entries[key]!;
   }
-  return JSON.stringify({ schema_version: SCHEMA_VERSION, entries: sorted }, null, 2) + "\n";
+  return (
+    JSON.stringify({ schema_version: SCHEMA_VERSION, contract, entries: sorted }, null, 2) + "\n"
+  );
 }
 
 /**
@@ -178,12 +229,27 @@ function serializeManifest(entries: Record<string, string>): string {
  * what is already on disk. Returns `true` when a write happened, `false` on a
  * no-op. The byte-identity check is what makes an all-unchanged rerun rewrite
  * nothing (and leaves the file's mtime alone).
+ *
+ * `contract` is what the written manifest records as the extraction contract
+ * its entries answer under. Omitted (or unrecorded) it is the LIVE contract:
+ * the writers that call without one have just recorded extraction under the
+ * current contract. A caller round-tripping an edit passes the contract it
+ * read, so its write cannot re-stamp entries that predate the live contract;
+ * a v1 caller's `null` upgrades the manifest to v2 under the live contract -
+ * the one-time upgrade the planner's reprocessing pass makes true.
  */
-export function writeManifestAtomic(vault: string, entries: Record<string, string>): boolean {
+export function writeManifestAtomic(
+  vault: string,
+  entries: Record<string, string>,
+  contract?: ManifestContract | null,
+): boolean {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
   const path = manifestPath(vault);
-  const next = serializeManifest(entries);
+  const next = serializeManifest(
+    entries,
+    contract ?? { fingerprint: computeExtractionContractFingerprint(vault) },
+  );
   if (existsSync(path) && readFileSync(path, "utf8") === next) {
     return false;
   }
