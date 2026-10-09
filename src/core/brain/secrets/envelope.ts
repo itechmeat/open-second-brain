@@ -155,6 +155,13 @@ export const SECRET_STORE_LOCKED_CODE = "secret_store_locked";
  * A key-bearing operation met a wrapped keyfile and this process holds no
  * unlocked key for it. The remedy is the unlock op, named in the message.
  *
+ * The remedy is honest about the surface that prints it: the unlocked key
+ * lives in this module's per-process, memory-only holder, so the unlock
+ * the message names applies to THIS process only and the passphrase is
+ * never persisted - a one-shot CLI command cannot carry the unlock into
+ * the next command, and the text says so rather than pointing at a
+ * remedy that silently cannot work across processes.
+ *
  * The MESSAGE is path-free by construction: the prose travels into model
  * context through consumers that surface error text verbatim (a config
  * probe's error list, a search refusal, a CLI catch), and the keyfile
@@ -169,7 +176,9 @@ export class SecretStoreLockedError extends Error {
   constructor(keyPath: string) {
     super(
       `the secret store is locked (the keyfile is passphrase-wrapped): run ` +
-        `"o2b brain secret unlock" to unwrap it for this process`,
+        `"o2b brain secret unlock" to unwrap it for this process - the unlock ` +
+        `applies to this process only and the passphrase is never persisted, ` +
+        `so a key-bearing command must run in the same process that unlocked it`,
     );
     this.name = "SecretStoreLockedError";
     this.keyPath = keyPath;

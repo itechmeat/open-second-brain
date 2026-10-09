@@ -131,12 +131,18 @@ test("unlock wraps the raw keyfile; a fresh process sees the locked refusal unti
   // The raw 32 bytes are gone: the keyfile is a JSON envelope now.
   expect(readFileSync(keyfile, "utf8").startsWith("{")).toBe(true);
 
-  // A fresh process holds no unlocked key: the store refuses by name.
+  // A fresh process holds no unlocked key: the store refuses by name, and
+  // the remedy it names is honest about the surface that prints it - the
+  // unlock applies to one process and the passphrase is never persisted,
+  // so a one-shot command cannot carry the unlock into the next command.
   const locked = await runCli(["brain", "secret", "set", "other", "--vault", vault], {
     stdin: "sk-other-24680\n",
   });
   expect(locked.returncode).toBe(1);
   expect(locked.stderr).toContain("locked");
+  expect(locked.stderr).toContain("o2b brain secret unlock");
+  expect(locked.stderr).toContain("this process only");
+  expect(locked.stderr).toContain("never persisted");
 
   // The right passphrase unlocks again; a wrong one refuses by name.
   const again = await runCli(["brain", "secret", "unlock", "--vault", vault], {
