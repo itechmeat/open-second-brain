@@ -70,11 +70,10 @@ describe("redactForEgress with resolved literals", () => {
     const bare = redactStructured(payload, { redactTokens: true, redactUrlCredentials: true });
     for (const policy of [{}, { resolvedLiterals: [] }]) {
       const verdict = redactForEgress("config-export", payload, policy);
-      expect(verdict).toEqual({
-        outcome: "released",
-        payload: bare.value,
-        redacted: bare.redacted,
-      });
+      expect(verdict.outcome).toBe("released");
+      if (verdict.outcome !== "released") return;
+      expect(verdict.payload).toEqual(bare.value as typeof payload);
+      expect(verdict.redacted).toBe(bare.redacted);
     }
   });
 });
