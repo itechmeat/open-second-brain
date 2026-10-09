@@ -67,7 +67,9 @@ export function renderPreferenceFromMemory(input: RenderMemoryInput): string {
   // (t_11ee559f). Both are slugified by construction, so this is a pin -
   // except a purely numeric name, whose slug still fails the rule and
   // refuses here with the field named rather than landing an unparseable
-  // frontmatter tag.
+  // frontmatter tag. The import loop treats that refusal as a per-entry
+  // disposition - a named skip row, import continues - so one legacy
+  // MEMORY file cannot abort the whole run.
   const prefId = `pref-${slug}`;
   const topic = requireObsidianTagValue(slug, "topic");
   const scope = requireObsidianTagValue(extractScope(input.body), "scope");

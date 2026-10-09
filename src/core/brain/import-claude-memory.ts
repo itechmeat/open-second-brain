@@ -17,6 +17,7 @@ import { claudeMemoryBackend } from "./agent-backend/claude.ts";
 import type { MemorySourceBackend } from "./agent-backend/types.ts";
 import { BRAIN_PREFERENCES_REL, preferencePath } from "./paths.ts";
 import { resolvedOwnerFor } from "./preference.ts";
+import { TagSyntaxError } from "./tag-syntax.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 export interface ImportClaudeMemoryOpts {
@@ -215,9 +216,43 @@ export function importClaudeMemory(opts: ImportClaudeMemoryOpts): ImportClaudeMe
         });
         return;
       }
-      seenPrefIds.set(prefId, entryKey);
       // preferencePath adds pref- prefix itself, so pass just the slug
       const prefFile = preferencePath(opts.vault, slug);
+      // Render BEFORE any plan row exists. A render that refuses THIS entry -
+      // a name whose slug fails the one shared tag rule, e.g. a purely
+      // numeric memory name (t_11ee559f) - is a per-entry data problem like a
+      // skip parse or a duplicate id: it lands a named skip row (file and
+      // rule both named) and the import continues. Rendering first keeps the
+      // refusal out of `plans`, so the sealed approval body never offers a
+      // file that would not land, and one legacy MEMORY file cannot abort the
+      // whole run with a message that names only the field.
+      let body: string;
+      try {
+        // This module renders its own frontmatter and writes it with
+        // `atomicWriteFileSync`, so it never reaches `writePreference`
+        // and never got the ownership stamp every other preference
+        // writer applies (a-label-is-not-a-boundary, U3). Asking the
+        // shared resolver is the fix; rendering a second copy of the
+        // rule here is how the next writer would get it wrong again.
+        // `prefFile` is passed so an UPDATE carries the existing owner
+        // forward instead of re-owning the page, exactly as a rewrite
+        // through `writePreference` does.
+        body = backend.renderPreference({
+          name: parsed.name,
+          description: parsed.description,
+          body: parsed.body,
+          memoryPath: join(baseDir, name),
+          importedAt,
+          unconfirmedUntil,
+          bodySha256: parsed.bodySha256,
+          owner: resolvedOwnerFor(opts.vault, prefFile, undefined, undefined),
+        });
+      } catch (err) {
+        if (!(err instanceof TagSyntaxError)) throw err;
+        skipped.push({ basename: entryKey, reason: err.message });
+        return;
+      }
+      seenPrefIds.set(prefId, entryKey);
       const manifestEntry = manifest.imports[entryKey];
       const plan = planAction({
         basename: entryKey,
@@ -228,25 +263,6 @@ export function importClaudeMemory(opts: ImportClaudeMemoryOpts): ImportClaudeMe
       });
       plans.push(plan);
       if (plan.action === "CREATE" || plan.action === "RECREATE" || plan.action === "UPDATE") {
-        // This module renders its own frontmatter and writes it with
-        // `atomicWriteFileSync`, so it never reaches `writePreference`
-        // and never got the ownership stamp every other preference
-        // writer applies (a-label-is-not-a-boundary, U3). Asking the
-        // shared resolver is the fix; rendering a second copy of the
-        // rule here is how the next writer would get it wrong again.
-        // `prefFile` is passed so an UPDATE carries the existing owner
-        // forward instead of re-owning the page, exactly as a rewrite
-        // through `writePreference` does.
-        const body = backend.renderPreference({
-          name: parsed.name,
-          description: parsed.description,
-          body: parsed.body,
-          memoryPath: join(baseDir, name),
-          importedAt,
-          unconfirmedUntil,
-          bodySha256: parsed.bodySha256,
-          owner: resolvedOwnerFor(opts.vault, prefFile, undefined, undefined),
-        });
         filesToWrite.push({ plan, body, sha256: parsed.bodySha256, slug });
       }
     });

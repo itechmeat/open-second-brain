@@ -155,88 +155,154 @@ describe("o2b brain import-claude-memory CLI", () => {
   });
 });
 
-describe("o2b brain import-claude-memory --approval-digest (t_18fda844)", () => {
-  function setup(tmpPrefix: string): {
-    tmp: string;
-    vault: string;
-    mem: string;
-    env: Record<string, string>;
-  } {
-    const tmp = mkdtempSync(join(tmpdir(), tmpPrefix));
-    const vault = join(tmp, "vault");
-    const config = join(tmp, "config.yaml");
-    const env = { OPEN_SECOND_BRAIN_CONFIG: config };
-    const mem = join(tmp, "memory");
-    mkdirSync(mem, { recursive: true });
-    writeFileSync(
-      join(mem, "feedback_a.md"),
-      "---\nname: a\ndescription: A.\nmetadata:\n  type: feedback\n---\n\nb.\n",
-      "utf8",
-    );
-    return { tmp, vault, mem, env };
+/**
+ * A temp vault plus a memory dir holding the given files, wired through one
+ * config env. Shared by the digest and per-entry-disposition describes; kept
+ * at module scope so the linter does not flag re-scoped helpers.
+ */
+function setupImport(
+  tmpPrefix: string,
+  memoryFiles: Record<string, string>,
+): { tmp: string; vault: string; mem: string; env: Record<string, string> } {
+  const tmp = mkdtempSync(join(tmpdir(), tmpPrefix));
+  const vault = join(tmp, "vault");
+  const config = join(tmp, "config.yaml");
+  const env = { OPEN_SECOND_BRAIN_CONFIG: config };
+  const mem = join(tmp, "memory");
+  mkdirSync(mem, { recursive: true });
+  for (const [name, bytes] of Object.entries(memoryFiles)) {
+    writeFileSync(join(mem, name), bytes, "utf8");
   }
+  return { tmp, vault, mem, env };
+}
 
-  const baseArgs = (vault: string, mem: string): string[] => [
-    "brain",
-    "import-claude-memory",
-    "--vault",
-    vault,
-    "--memory",
-    mem,
-    "--allow-arbitrary-memory-path",
-  ];
+/** A minimal Claude feedback memory file with the given name/description. */
+function feedbackMd(name: string, description: string): string {
+  return `---\nname: ${name}\ndescription: ${description}.\nmetadata:\n  type: feedback\n---\n\nbody.\n`;
+}
 
+const baseArgs = (vault: string, mem: string): string[] => [
+  "brain",
+  "import-claude-memory",
+  "--vault",
+  vault,
+  "--memory",
+  mem,
+  "--allow-arbitrary-memory-path",
+];
+
+describe("o2b brain import-claude-memory --approval-digest (t_18fda844)", () => {
   test("non-interactive --apply without a digest refuses by name, before any write", async () => {
-    const s = setup("o2b-cm-cli-nodigest-");
-    await runCli(["init", "--vault", s.vault, "--name", "Test"], { env: s.env });
-    await runCli(["brain", "init", "--vault", s.vault], { env: s.env });
-    const res = await runCli([...baseArgs(s.vault, s.mem), "--apply", "--yes"], { env: s.env });
-    expect(res.returncode).toBe(2);
-    expect(res.stderr).toContain("--approval-digest");
-    expect(existsSync(join(s.vault, "Brain", "preferences", "pref-a.md"))).toBe(false);
-    rmSync(s.tmp, { recursive: true });
+    const s = setupImport("o2b-cm-cli-nodigest-", { "feedback_a.md": feedbackMd("a", "A") });
+    try {
+      await runCli(["init", "--vault", s.vault, "--name", "Test"], { env: s.env });
+      await runCli(["brain", "init", "--vault", s.vault], { env: s.env });
+      const res = await runCli([...baseArgs(s.vault, s.mem), "--apply", "--yes"], { env: s.env });
+      expect(res.returncode).toBe(2);
+      expect(res.stderr).toContain("--approval-digest");
+      expect(existsSync(join(s.vault, "Brain", "preferences", "pref-a.md"))).toBe(false);
+    } finally {
+      rmSync(s.tmp, { recursive: true, force: true });
+    }
   });
 
   test("the dry-run JSON exposes the digest and apply with it lands the plan", async () => {
-    const s = setup("o2b-cm-cli-digest-");
-    await runCli(["init", "--vault", s.vault, "--name", "Test"], { env: s.env });
-    await runCli(["brain", "init", "--vault", s.vault], { env: s.env });
-    const dry = await runCli([...baseArgs(s.vault, s.mem), "--dry-run", "--json"], { env: s.env });
-    expect(dry.returncode).toBe(0);
-    const plan = JSON.parse(dry.stdout) as {
-      digest: string;
-      plans: Array<{ basename: string; prefId: string; action: string }>;
-    };
-    expect(plan.digest).toMatch(/^[0-9a-f]{64}$/);
-    expect(plan.plans).toEqual([{ basename: "feedback_a.md", prefId: "pref-a", action: "CREATE" }]);
+    const s = setupImport("o2b-cm-cli-digest-", { "feedback_a.md": feedbackMd("a", "A") });
+    try {
+      await runCli(["init", "--vault", s.vault, "--name", "Test"], { env: s.env });
+      await runCli(["brain", "init", "--vault", s.vault], { env: s.env });
+      const dry = await runCli([...baseArgs(s.vault, s.mem), "--dry-run", "--json"], {
+        env: s.env,
+      });
+      expect(dry.returncode).toBe(0);
+      const plan = JSON.parse(dry.stdout) as {
+        digest: string;
+        plans: Array<{ basename: string; prefId: string; action: string }>;
+      };
+      expect(plan.digest).toMatch(/^[0-9a-f]{64}$/);
+      expect(plan.plans).toEqual([
+        { basename: "feedback_a.md", prefId: "pref-a", action: "CREATE" },
+      ]);
 
-    const apply = await runCli(
-      [...baseArgs(s.vault, s.mem), "--apply", "--yes", "--approval-digest", plan.digest],
-      { env: s.env },
-    );
-    expect(apply.returncode).toBe(0);
-    expect(existsSync(join(s.vault, "Brain", "preferences", "pref-a.md"))).toBe(true);
-    rmSync(s.tmp, { recursive: true });
+      const apply = await runCli(
+        [...baseArgs(s.vault, s.mem), "--apply", "--yes", "--approval-digest", plan.digest],
+        { env: s.env },
+      );
+      expect(apply.returncode).toBe(0);
+      expect(existsSync(join(s.vault, "Brain", "preferences", "pref-a.md"))).toBe(true);
+    } finally {
+      rmSync(s.tmp, { recursive: true, force: true });
+    }
   });
 
   test("apply with a stale digest refuses with the re-run remedy and writes nothing", async () => {
-    const s = setup("o2b-cm-cli-staledigest-");
-    await runCli(["init", "--vault", s.vault, "--name", "Test"], { env: s.env });
-    await runCli(["brain", "init", "--vault", s.vault], { env: s.env });
-    const dry = await runCli([...baseArgs(s.vault, s.mem), "--dry-run", "--json"], { env: s.env });
-    const plan = JSON.parse(dry.stdout) as { digest: string };
-    // The approved plan goes stale: the target preference appears.
-    writeFileSync(join(s.vault, "Brain", "preferences", "pref-a.md"), "hand-made\n", "utf8");
-    const apply = await runCli(
-      [...baseArgs(s.vault, s.mem), "--apply", "--yes", "--approval-digest", plan.digest],
-      { env: s.env },
-    );
-    expect(apply.returncode).toBe(1);
-    expect(apply.stderr).toContain("approval digest mismatch");
-    expect(apply.stderr).toContain("o2b brain import-claude-memory --dry-run");
-    expect(readFileSync(join(s.vault, "Brain", "preferences", "pref-a.md"), "utf8")).toBe(
-      "hand-made\n",
-    );
-    rmSync(s.tmp, { recursive: true });
+    const s = setupImport("o2b-cm-cli-staledigest-", { "feedback_a.md": feedbackMd("a", "A") });
+    try {
+      await runCli(["init", "--vault", s.vault, "--name", "Test"], { env: s.env });
+      await runCli(["brain", "init", "--vault", s.vault], { env: s.env });
+      const dry = await runCli([...baseArgs(s.vault, s.mem), "--dry-run", "--json"], {
+        env: s.env,
+      });
+      const plan = JSON.parse(dry.stdout) as { digest: string };
+      // The approved plan goes stale: the target preference appears.
+      writeFileSync(join(s.vault, "Brain", "preferences", "pref-a.md"), "hand-made\n", "utf8");
+      const apply = await runCli(
+        [...baseArgs(s.vault, s.mem), "--apply", "--yes", "--approval-digest", plan.digest],
+        { env: s.env },
+      );
+      expect(apply.returncode).toBe(1);
+      expect(apply.stderr).toContain("approval digest mismatch");
+      expect(apply.stderr).toContain("o2b brain import-claude-memory --dry-run");
+      expect(readFileSync(join(s.vault, "Brain", "preferences", "pref-a.md"), "utf8")).toBe(
+        "hand-made\n",
+      );
+    } finally {
+      rmSync(s.tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("o2b brain import-claude-memory — per-entry disposition (t_11ee559f)", () => {
+  test("a numeric memory name skips its own row with the file and rule named; the other entries land", async () => {
+    // One well-named entry and one whose name slugifies to a purely numeric
+    // topic - exactly the value the shared tag rule refuses.
+    const s = setupImport("o2b-cm-cli-numericskip-", {
+      "feedback_good.md": feedbackMd("good-feedback", "Good"),
+      "feedback_2024.md": feedbackMd("2024", "Numeric"),
+    });
+    try {
+      await runCli(["init", "--vault", s.vault, "--name", "Test"], { env: s.env });
+      await runCli(["brain", "init", "--vault", s.vault], { env: s.env });
+      const dry = await runCli([...baseArgs(s.vault, s.mem), "--dry-run", "--json"], {
+        env: s.env,
+      });
+      expect(dry.returncode).toBe(0);
+      const plan = JSON.parse(dry.stdout) as {
+        digest: string;
+        plans: Array<{ basename: string; prefId: string; action: string }>;
+        skipped: Array<{ basename: string; reason: string }>;
+      };
+      // The good entry is planned; the numeric one is a named skip row, and
+      // no contradictory plan row exists for it.
+      expect(plan.plans).toEqual([
+        { basename: "feedback_good.md", prefId: "pref-good-feedback", action: "CREATE" },
+      ]);
+      expect(plan.skipped).toHaveLength(1);
+      expect(plan.skipped[0]!.basename).toBe("feedback_2024.md");
+      expect(plan.skipped[0]!.reason).toContain("topic:");
+      expect(plan.skipped[0]!.reason).toContain("must start with a letter or underscore");
+      expect(plan.skipped[0]!.reason).toContain("never only digits");
+      expect(plan.digest).toMatch(/^[0-9a-f]{64}$/);
+
+      const apply = await runCli(
+        [...baseArgs(s.vault, s.mem), "--apply", "--yes", "--approval-digest", plan.digest],
+        { env: s.env },
+      );
+      expect(apply.returncode).toBe(0);
+      expect(existsSync(join(s.vault, "Brain", "preferences", "pref-good-feedback.md"))).toBe(true);
+      expect(existsSync(join(s.vault, "Brain", "preferences", "pref-2024.md"))).toBe(false);
+    } finally {
+      rmSync(s.tmp, { recursive: true, force: true });
+    }
   });
 });
