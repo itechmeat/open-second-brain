@@ -158,6 +158,13 @@ function storeProbeKey(name = "embed_key"): void {
   setSecret(vault, { name, value: STORED_PROBE_KEY, agent: "tester", now: PROBE_NOW });
 }
 
+/** A machine config selecting `provider`, so the resolver expands the registry. */
+function configWithProvider(provider: string): string {
+  const configPath = join(vault, "machine-config.yaml");
+  writeFileSync(configPath, `embedding_provider: "${provider}"\n`, "utf8");
+  return configPath;
+}
+
 function withEnvKey(name: string, value: string, run: () => void): void {
   const saved = process.env[name];
   process.env[name] = value;
@@ -229,12 +236,6 @@ test("resolution through the probe does not mutate the custody store", () => {
 // called directly.
 
 describe("resolveSearchConfig probes a registered provider through the store", () => {
-  function configWithProvider(provider: string): string {
-    const configPath = join(vault, "machine-config.yaml");
-    writeFileSync(configPath, `embedding_provider: "${provider}"\n`, "utf8");
-    return configPath;
-  }
-
   test("a store-held key name answers through the full config resolution", () => {
     addProviderProfile(vault, probeProfile);
     storeProbeKey();
