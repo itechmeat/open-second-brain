@@ -1737,6 +1737,9 @@ function parseSecretReference(value) {
     return null;
   return Object.freeze({ raw: value.trim(), name: match[1] });
 }
+function isSecretReferenceValue(value) {
+  return typeof value === "string" && value.trimStart().startsWith(REFERENCE_PREFIX);
+}
 function resolveSecretReference(value, provider = process.env) {
   const ref = parseSecretReference(value);
   if (!ref) {
@@ -1751,7 +1754,7 @@ function resolveSecretReference(value, provider = process.env) {
 function sortedDistinctLiterals(values) {
   return [...new Set(values)].filter((value) => value.length > 0).sort((a, b) => b.length - a.length);
 }
-var SecretReferenceError, SECRET_REFERENCE_RE;
+var SecretReferenceError, SECRET_REFERENCE_RE, REFERENCE_PREFIX = "$secret:";
 var init_secret_ref = __esm(() => {
   SecretReferenceError = class SecretReferenceError extends Error {
     nameValue;
@@ -1762,6 +1765,361 @@ var init_secret_ref = __esm(() => {
     }
   };
   SECRET_REFERENCE_RE = /^\$secret:([A-Za-z_][A-Za-z0-9_]*)$/;
+});
+
+// src/core/platform-dirs.ts
+import { homedir } from "node:os";
+import { join as join2, win32 } from "node:path";
+function processDirsEnv() {
+  return { platform: process.platform, home: homedir(), env: process.env };
+}
+function isWindows(source = process) {
+  return source.platform === "win32";
+}
+function nonEmpty(value) {
+  return value !== undefined && value.length > 0 ? value : null;
+}
+function windowsLocalAppData(source) {
+  return nonEmpty(source.env["LOCALAPPDATA"]) ?? win32.join(source.home, "AppData", "Local");
+}
+function baseDir(kind, source) {
+  const xdg = nonEmpty(source.env[XDG_VARIABLE[kind]]);
+  if (xdg)
+    return xdg;
+  if (isWindows(source))
+    return windowsLocalAppData(source);
+  return join2(source.home, ...POSIX_DEFAULT[kind]);
+}
+function configBaseDir(source = processDirsEnv()) {
+  return baseDir("config", source);
+}
+var APP_DIR_NAME = "open-second-brain", XDG_VARIABLE, POSIX_DEFAULT;
+var init_platform_dirs = __esm(() => {
+  XDG_VARIABLE = Object.freeze({
+    config: "XDG_CONFIG_HOME",
+    data: "XDG_DATA_HOME",
+    state: "XDG_STATE_HOME",
+    cache: "XDG_CACHE_HOME"
+  });
+  POSIX_DEFAULT = Object.freeze({
+    config: [".config"],
+    data: [".local", "share"],
+    state: [".local", "state"],
+    cache: [".cache"]
+  });
+});
+
+// src/core/brain/portability/profiles.ts
+var import_proper_lockfile;
+var init_profiles = __esm(() => {
+  init_fs_atomic();
+  import_proper_lockfile = __toESM(require_proper_lockfile(), 1);
+});
+
+// src/core/fs-utils.ts
+import { statSync } from "node:fs";
+function statOrAbsent(p) {
+  return statSync(p, { throwIfNoEntry: false });
+}
+function isDir(p) {
+  try {
+    return statOrAbsent(p)?.isDirectory() ?? false;
+  } catch {
+    return false;
+  }
+}
+function stem(filename) {
+  const dot = filename.lastIndexOf(".");
+  return dot > 0 ? filename.slice(0, dot) : filename;
+}
+var init_fs_utils = () => {};
+
+// src/core/brain/portability/pointer.ts
+var init_pointer = __esm(() => {
+  init_fs_atomic();
+  init_fs_utils();
+});
+
+// src/core/brain/wikilink.ts
+var init_wikilink = () => {};
+
+// src/core/brain/link-graph/format-wikilink.ts
+var WIKI_LINK_FORMATS, SUFFIX_INDEX_MEMO;
+var init_format_wikilink = __esm(() => {
+  init_wikilink();
+  WIKI_LINK_FORMATS = Object.freeze([
+    "preserve",
+    "full",
+    "short"
+  ]);
+  SUFFIX_INDEX_MEMO = new WeakMap;
+});
+
+// src/core/config.ts
+import { mkdirSync as mkdirSync2, readFileSync as readFileSync2, statSync as statSync2 } from "node:fs";
+import { createHmac, randomBytes } from "node:crypto";
+import { homedir as homedir2 } from "node:os";
+import { dirname as dirname2, isAbsolute, join as join3, resolve as resolve2 } from "node:path";
+function installNamedSecretResolver(resolver) {
+  namedSecretResolver = resolver;
+}
+function resolveThroughNamedSecretResolver(vault, reference) {
+  const resolver = namedSecretResolver;
+  if (resolver === undefined) {
+    throw new SecretReferenceError("no named-secret resolver is installed in this process; the $secret: reference " + "cannot be resolved against the vault's custody store", reference);
+  }
+  return resolver.resolveNamedSecret(vault, reference);
+}
+function resolveDefaultConfigPath(source) {
+  const override = source.env["OPEN_SECOND_BRAIN_CONFIG"];
+  if (override)
+    return expandTilde(override, source.platform, source.home);
+  const xdg = source.env["XDG_CONFIG_HOME"];
+  if (xdg)
+    return join3(expandTilde(xdg, source.platform, source.home), APP_DIR_NAME, "config.yaml");
+  if (UNSUPPORTED_CONFIG_PLATFORMS.includes(source.platform)) {
+    throw new UnsupportedPlatformError(source.platform);
+  }
+  return join3(configBaseDir(source), APP_DIR_NAME, "config.yaml");
+}
+function defaultConfigPath() {
+  return resolveDefaultConfigPath({
+    platform: process.platform,
+    home: homedir2(),
+    env: process.env
+  });
+}
+function parseSimpleYaml(text) {
+  const data = {};
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#"))
+      continue;
+    const idx = line.indexOf(":");
+    if (idx === -1)
+      continue;
+    const key = line.slice(0, idx).trim();
+    if (!key)
+      continue;
+    let value = line.slice(idx + 1).trim();
+    if (value.length >= 2 && (value.startsWith('"') && value.endsWith('"') || value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    data[key] = value;
+  }
+  return data;
+}
+function discoverConfig(path) {
+  const resolved = path ?? defaultConfigPath();
+  const stat = statConfigPath(resolved);
+  if (stat === undefined) {
+    return { path: resolved, exists: false, data: {} };
+  }
+  if (!stat.isFile()) {
+    throw new ConfigReadError(resolved, "path exists but is not a regular file");
+  }
+  return { path: resolved, exists: true, data: parseSimpleYaml(readConfigText(resolved)) };
+}
+function statConfigPath(resolved) {
+  try {
+    return statSync2(resolved, { throwIfNoEntry: false });
+  } catch (err) {
+    throw new ConfigReadError(resolved, err.message ?? String(err));
+  }
+}
+function readConfigText(resolved) {
+  let bytes;
+  try {
+    bytes = readFileSync2(resolved);
+  } catch (err) {
+    throw new ConfigReadError(resolved, err.message ?? String(err));
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch (err) {
+    throw new ConfigReadError(resolved, `not valid UTF-8: ${err.message ?? String(err)}`);
+  }
+}
+function setConfigValue(key, value, path) {
+  if (typeof value !== "string") {
+    throw new TypeError(`config value for ${JSON.stringify(key)} must be a string`);
+  }
+  for (const bad of CONFIG_VALUE_REJECTED_CHARS) {
+    if (value.includes(bad)) {
+      throw new Error(`config value for ${JSON.stringify(key)} contains a disallowed character ` + `(${JSON.stringify(bad)}); reject rather than silently corrupting on read-back`);
+    }
+  }
+  const resolved = path ?? defaultConfigPath();
+  const discovery = discoverConfig(resolved);
+  const data = { ...discovery.data, [key]: value };
+  const body = Object.entries(data).map(([k, v]) => `${k}: "${v}"`).join(`
+`) + `
+`;
+  atomicWriteFileSync(resolved, body);
+  return resolved;
+}
+function resolveAgentName(configPath) {
+  const env = process.env["VAULT_AGENT_NAME"];
+  if (env)
+    return env;
+  const data = discoverConfig(configPath).data;
+  const value = data["agent_name"] ?? data["agentName"];
+  if (value)
+    return value;
+  return UNCONFIGURED_AGENT_NAME;
+}
+function isValidDeviceId(value) {
+  return DEVICE_ID_RE.test(value) && !value.startsWith("sync-conflict");
+}
+function resolveDeviceId(configPath) {
+  const env = process.env["O2B_DEVICE_ID"];
+  if (env !== undefined && (env === "" || isValidDeviceId(env)))
+    return env;
+  const resolved = configPath ?? defaultConfigPath();
+  const read = () => {
+    const value = discoverConfig(resolved).data["device_id"];
+    return value && isValidDeviceId(value) ? value : null;
+  };
+  const existing = read();
+  if (existing !== null)
+    return existing;
+  const dir = dirname2(resolved);
+  mkdirSync2(dir, { recursive: true });
+  let release;
+  try {
+    for (let attempt = 0;attempt < 10; attempt++) {
+      try {
+        release = import_proper_lockfile2.default.lockSync(dir, { stale: 1e4, realpath: false });
+        break;
+      } catch (err) {
+        if (err.code !== "ELOCKED")
+          break;
+        sleepSync(50);
+      }
+    }
+    const won = read();
+    if (won !== null)
+      return won;
+    const generated = randomBytes(4).toString("hex");
+    setConfigValue("device_id", generated, resolved);
+    return generated;
+  } finally {
+    release?.();
+  }
+}
+function resolveExposeHostPaths(configPath) {
+  return resolveConfigFlag("OPEN_SECOND_BRAIN_EXPOSE_HOST_PATHS", "expose_host_paths", configPath);
+}
+function isValidInstallationSecret(value) {
+  return INSTALLATION_SECRET_RE.test(value);
+}
+function resolveInstallationSecret(configPath, secretsVault) {
+  const env = process.env[INSTALLATION_SECRET_ENV_KEY];
+  if (env !== undefined && isValidInstallationSecret(env))
+    return env;
+  const resolved = configPath ?? defaultConfigPath();
+  const read = () => {
+    const raw = discoverConfig(resolved).data[INSTALLATION_SECRET_CONFIG_KEY];
+    if (isSecretReferenceValue(raw)) {
+      const reference = String(raw).trim();
+      if (secretsVault === undefined) {
+        throw new SecretReferenceError("installation_secret is a $secret: reference but no vault was passed to resolve " + "it against; pass the vault (or set O2B_INSTALLATION_SECRET to a 32-hex key)", reference);
+      }
+      const resolvedValue = resolveThroughNamedSecretResolver(secretsVault, reference);
+      if (!isValidInstallationSecret(resolvedValue)) {
+        throw new SecretReferenceError("installation_secret is a $secret: reference that resolves to a value which is " + "not a 32-hex installation key; fix the stored value - the reference in the " + "device config is never overwritten", reference);
+      }
+      return resolvedValue;
+    }
+    return raw && isValidInstallationSecret(raw) ? raw : null;
+  };
+  const existing = read();
+  if (existing !== null)
+    return existing;
+  const dir = dirname2(resolved);
+  mkdirSync2(dir, { recursive: true });
+  let release;
+  try {
+    for (let attempt = 0;attempt < 10; attempt++) {
+      try {
+        release = import_proper_lockfile2.default.lockSync(dir, { stale: 1e4, realpath: false });
+        break;
+      } catch (err) {
+        if (err.code !== "ELOCKED")
+          break;
+        sleepSync(50);
+      }
+    }
+    const won = read();
+    if (won !== null)
+      return won;
+    const generated = randomBytes(16).toString("hex");
+    setConfigValue(INSTALLATION_SECRET_CONFIG_KEY, generated, resolved);
+    return generated;
+  } finally {
+    release?.();
+  }
+}
+function vaultStoreReference(vaultPath, configPath) {
+  const key = resolveInstallationSecret(configPath, vaultPath);
+  const digest = createHmac("sha256", key).update(resolve2(vaultPath)).digest("hex").slice(0, VAULT_STORE_REF_HEX_LEN);
+  return `${VAULT_STORE_REF_PREFIX}${digest}`;
+}
+function readSetting(envKey, configKey, data) {
+  const env = process.env[envKey]?.trim();
+  if (env)
+    return env;
+  const raw = (typeof data === "function" ? data() : data)[configKey]?.trim();
+  return raw ? raw : undefined;
+}
+function resolveConfigFlag(envKey, configKey, configPath) {
+  return isFlagOn(readSetting(envKey, configKey, () => discoverConfig(configPath).data));
+}
+function isFlagOn(raw) {
+  return raw === "true" || raw === "1";
+}
+function resolvePartnerCodegraphDisabled(configPath) {
+  return resolveConfigFlag(PARTNER_CODEGRAPH_DISABLED_ENV, PARTNER_CODEGRAPH_DISABLED_CONFIG_KEY, configPath);
+}
+function expandTilde(p, platform = process.platform, home = homedir2()) {
+  if (p === "~")
+    return home;
+  if (p.startsWith("~/"))
+    return join3(home, p.slice(2));
+  if (platform === "win32" && p.startsWith("~\\"))
+    return join3(home, p.slice(2));
+  return p;
+}
+var import_proper_lockfile2, namedSecretResolver, CONFIG_VALUE_REJECTED_CHARS, UNSUPPORTED_CONFIG_PLATFORMS, UnsupportedPlatformError, ConfigReadError, UNCONFIGURED_AGENT_NAME = "agent", DEVICE_ID_RE, INSTALLATION_SECRET_CONFIG_KEY = "installation_secret", INSTALLATION_SECRET_ENV_KEY = "O2B_INSTALLATION_SECRET", INSTALLATION_SECRET_RE, VAULT_STORE_REF_PREFIX = "vault://", VAULT_STORE_REF_HEX_LEN = 32, PARTNER_CODEGRAPH_DISABLED_ENV = "OPEN_SECOND_BRAIN_PARTNER_CODEGRAPH_DISABLED", PARTNER_CODEGRAPH_DISABLED_CONFIG_KEY = "partner_codegraph_disabled";
+var init_config = __esm(() => {
+  init_fs_atomic();
+  init_secret_ref();
+  init_platform_dirs();
+  init_profiles();
+  init_pointer();
+  init_format_wikilink();
+  import_proper_lockfile2 = __toESM(require_proper_lockfile(), 1);
+  CONFIG_VALUE_REJECTED_CHARS = ['"', "\\", `
+`, "\r"];
+  UNSUPPORTED_CONFIG_PLATFORMS = Object.freeze([]);
+  UnsupportedPlatformError = class UnsupportedPlatformError extends Error {
+    platform;
+    constructor(platform) {
+      super(`open-second-brain has no configuration layout for platform '${platform}': ` + "this build does not know where per-user configuration lives there. Set " + "OPEN_SECOND_BRAIN_CONFIG to an explicit config file, or XDG_CONFIG_HOME " + "to a configuration root, to choose the location yourself.");
+      this.name = "UnsupportedPlatformError";
+      this.platform = platform;
+    }
+  };
+  ConfigReadError = class ConfigReadError extends Error {
+    path;
+    constructor(path, reason) {
+      super(`failed to read plugin config ${path}: ${reason}. The file is present, so its ` + "settings are NOT in force and are not read as absent; make it readable " + `(chmod u+r "${path}") or set OPEN_SECOND_BRAIN_CONFIG to a readable config file.`);
+      this.name = "ConfigReadError";
+      this.path = path;
+    }
+  };
+  DEVICE_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
+  INSTALLATION_SECRET_RE = /^[0-9a-f]{32}$/;
 });
 
 // src/core/redactor.ts
@@ -2206,15 +2564,15 @@ var init_ledger_shards = __esm(() => {
 });
 
 // src/core/reliability/audit.ts
-import { closeSync as closeSync2, fsyncSync as fsyncSync2, mkdirSync as mkdirSync2, openSync as openSync2, writeFileSync } from "node:fs";
-import { join as join2 } from "node:path";
+import { closeSync as closeSync2, fsyncSync as fsyncSync2, mkdirSync as mkdirSync3, openSync as openSync2, writeFileSync } from "node:fs";
+import { join as join4 } from "node:path";
 function appendAuditRecord(auditRoot, record) {
   const timestamp = new Date(record.timestamp);
   if (!Number.isFinite(timestamp.getTime())) {
     throw new Error(`invalid audit timestamp: ${record.timestamp}`);
   }
-  mkdirSync2(auditRoot, { recursive: true });
-  const path = join2(auditRoot, shardedFileName(isoWeekLabel(timestamp), resolveAppendShardId(), JSONL_LEDGER_EXT));
+  mkdirSync3(auditRoot, { recursive: true });
+  const path = join4(auditRoot, shardedFileName(isoWeekLabel(timestamp), resolveAppendShardId(), JSONL_LEDGER_EXT));
   const line = redactRawOutput(JSON.stringify(record), {
     maxInput: Number.POSITIVE_INFINITY
   });
@@ -2259,11 +2617,11 @@ var init_audit_dirs = __esm(() => {
 });
 
 // src/core/path-safety.ts
-import { existsSync as existsSync2, realpathSync, statSync } from "node:fs";
-import { basename as basename2, dirname as dirname2, join as join3, posix as posix2, relative, resolve as resolve2, sep } from "node:path";
+import { existsSync as existsSync2, realpathSync, statSync as statSync3 } from "node:fs";
+import { basename as basename2, dirname as dirname3, join as join5, posix as posix2, relative, resolve as resolve3, sep } from "node:path";
 function ensureInsideVault(target, vault) {
-  const resolvedTarget = resolve2(target);
-  const resolvedVault = resolve2(vault);
+  const resolvedTarget = resolve3(target);
+  const resolvedVault = resolve3(vault);
   if (!isLexicallyInside(resolvedTarget, resolvedVault)) {
     throw new VaultEscapeError(`path escapes vault: ${target}`);
   }
@@ -2273,11 +2631,11 @@ function ensureInsideVault(target, vault) {
   return resolvedTarget;
 }
 function realpathInsideVault(target, vault) {
-  const resolvedVault = resolve2(vault);
+  const resolvedVault = resolve3(vault);
   if (!existsSync2(resolvedVault))
     return true;
   const realVault = safeRealpath(resolvedVault);
-  const realAncestor = safeRealpath(deepestExistingAncestor(resolve2(target)));
+  const realAncestor = safeRealpath(deepestExistingAncestor(resolve3(target)));
   return isLexicallyInside(realAncestor, realVault);
 }
 function isLexicallyInside(target, root) {
@@ -2288,7 +2646,7 @@ function isLexicallyInside(target, root) {
 function deepestExistingAncestor(target) {
   let cur = target;
   while (!existsSync2(cur)) {
-    const parent = dirname2(cur);
+    const parent = dirname3(cur);
     if (parent === cur)
       return cur;
     cur = parent;
@@ -2305,7 +2663,7 @@ function safeRealpath(p) {
   }
 }
 function vaultRelative(target, vault) {
-  const rel = relative(resolve2(vault), resolve2(target));
+  const rel = relative(resolve3(vault), resolve3(target));
   return rel.split(/[\\/]/).filter((p) => p.length > 0).join(posix2.sep);
 }
 var VAULT_ESCAPE_CODE = "ESCAPE", VaultEscapeError;
@@ -2424,16 +2782,16 @@ var init_stamp = __esm(() => {
 });
 
 // src/core/brain/freeze-marker.ts
-import { existsSync as existsSync3, readFileSync as readFileSync2, statSync as statSync2 } from "node:fs";
-import { join as join4, resolve as resolve3 } from "node:path";
+import { existsSync as existsSync3, readFileSync as readFileSync3, statSync as statSync4 } from "node:fs";
+import { join as join6, resolve as resolve4 } from "node:path";
 function frozenMarkerPath(vault) {
-  return ensureInsideVault(join4(vault, BRAIN_INTERNAL_STATE_REL, FROZEN_MARKER_FILE), vault);
+  return ensureInsideVault(join6(vault, BRAIN_INTERNAL_STATE_REL, FROZEN_MARKER_FILE), vault);
 }
 function parseMarker(path) {
   reloadCount += 1;
   let parsed;
   try {
-    parsed = JSON.parse(readFileSync2(path, "utf8"));
+    parsed = JSON.parse(readFileSync3(path, "utf8"));
   } catch {
     return UNREADABLE_MARKER;
   }
@@ -2450,7 +2808,7 @@ function parseMarker(path) {
   });
 }
 function readFreezeMarker(vault) {
-  const root = resolve3(vault);
+  const root = resolve4(vault);
   let path = MARKER_PATHS.get(root);
   if (path === undefined) {
     path = frozenMarkerPath(root);
@@ -2458,7 +2816,7 @@ function readFreezeMarker(vault) {
   }
   let stat;
   try {
-    stat = statSync2(path, { throwIfNoEntry: false });
+    stat = statSync4(path, { throwIfNoEntry: false });
   } catch {
     stat = undefined;
   }
@@ -2484,7 +2842,7 @@ function vaultFrozenNotice(vault, marker) {
   return degradationNotice({
     code: DEGRADATION_CODE.vaultFrozen,
     site: SITE,
-    path: resolve3(vault),
+    path: resolve4(vault),
     detail: `refusing to write: this vault was frozen at ${marker.frozen_at} by ` + `${marker.by === "" ? "an unnamed agent" : marker.by} (${why}). ` + `Run \`${FREEZE_NEXT_COMMAND}\` to lift it`
   });
 }
@@ -2531,17 +2889,17 @@ var init_freeze_marker = __esm(() => {
 });
 
 // src/core/brain/vault-identity.ts
-import { existsSync as existsSync4, readFileSync as readFileSync3, statSync as statSync3 } from "node:fs";
-import { join as join5, resolve as resolve4 } from "node:path";
+import { existsSync as existsSync4, readFileSync as readFileSync4, statSync as statSync5 } from "node:fs";
+import { join as join7, resolve as resolve5 } from "node:path";
 function vaultIdentityPath(vault) {
-  return ensureInsideVault(join5(vault, BRAIN_ROOT_REL, VAULT_IDENTITY_FILE), vault);
+  return ensureInsideVault(join7(vault, BRAIN_ROOT_REL, VAULT_IDENTITY_FILE), vault);
 }
 function readVaultIdentity(vault) {
   const path = vaultIdentityPath(vault);
   if (!existsSync4(path))
     return null;
   try {
-    const parsed = JSON.parse(readFileSync3(path, "utf8"));
+    const parsed = JSON.parse(readFileSync4(path, "utf8"));
     if (typeof parsed.vault_id !== "string" || parsed.vault_id.length === 0)
       return null;
     return Object.freeze({
@@ -2561,7 +2919,7 @@ function currentVaultId(root) {
   }
   let stat;
   try {
-    stat = statSync3(path, { throwIfNoEntry: false });
+    stat = statSync5(path, { throwIfNoEntry: false });
   } catch {
     stat = undefined;
   }
@@ -2587,7 +2945,7 @@ function currentVaultId(root) {
   return identity.vault_id;
 }
 function vaultMarkerAbsentNotice(vault) {
-  const root = resolve4(vault);
+  const root = resolve5(vault);
   if (currentVaultId(root) !== null)
     return null;
   return degradationNotice({
@@ -2598,7 +2956,7 @@ function vaultMarkerAbsentNotice(vault) {
   });
 }
 function assertVaultIdentityForWrite(vault, sink, lane = WRITE_LANE.content) {
-  const root = resolve4(vault);
+  const root = resolve5(vault);
   if (lane === WRITE_LANE.content)
     assertVaultNotFrozen(root);
   const vaultId = currentVaultId(root);
@@ -2650,21 +3008,21 @@ var init_vault_identity = __esm(() => {
 });
 
 // src/core/brain/paths.ts
-import { join as join6 } from "node:path";
+import { join as join8 } from "node:path";
 function brainDirs(vault) {
-  const brain = ensureInsideVault(join6(vault, BRAIN_ROOT_REL), vault);
+  const brain = ensureInsideVault(join8(vault, BRAIN_ROOT_REL), vault);
   return {
     brain,
-    inbox: ensureInsideVault(join6(vault, BRAIN_INBOX_REL), vault),
-    processed: ensureInsideVault(join6(vault, BRAIN_PROCESSED_REL), vault),
-    archived: ensureInsideVault(join6(vault, BRAIN_ARCHIVED_SIGNALS_REL), vault),
-    pending: ensureInsideVault(join6(vault, BRAIN_PENDING_REL), vault),
-    preferences: ensureInsideVault(join6(vault, BRAIN_PREFERENCES_REL), vault),
-    retired: ensureInsideVault(join6(vault, BRAIN_RETIRED_REL), vault),
-    log: ensureInsideVault(join6(vault, BRAIN_LOG_REL), vault),
-    entities: ensureInsideVault(join6(vault, BRAIN_ENTITIES_REL), vault),
-    bases: ensureInsideVault(join6(vault, BRAIN_BASES_REL), vault),
-    snapshots: ensureInsideVault(join6(vault, BRAIN_SNAPSHOTS_REL), vault)
+    inbox: ensureInsideVault(join8(vault, BRAIN_INBOX_REL), vault),
+    processed: ensureInsideVault(join8(vault, BRAIN_PROCESSED_REL), vault),
+    archived: ensureInsideVault(join8(vault, BRAIN_ARCHIVED_SIGNALS_REL), vault),
+    pending: ensureInsideVault(join8(vault, BRAIN_PENDING_REL), vault),
+    preferences: ensureInsideVault(join8(vault, BRAIN_PREFERENCES_REL), vault),
+    retired: ensureInsideVault(join8(vault, BRAIN_RETIRED_REL), vault),
+    log: ensureInsideVault(join8(vault, BRAIN_LOG_REL), vault),
+    entities: ensureInsideVault(join8(vault, BRAIN_ENTITIES_REL), vault),
+    bases: ensureInsideVault(join8(vault, BRAIN_BASES_REL), vault),
+    snapshots: ensureInsideVault(join8(vault, BRAIN_SNAPSHOTS_REL), vault)
   };
 }
 function brainDirsForWrite(vault, notices, lane) {
@@ -2688,12 +3046,36 @@ function isoSecond(d = new Date) {
 }
 var init_time = () => {};
 
+// src/core/brain/secrets/value-cipher.ts
+import { createCipheriv, createDecipheriv, randomBytes as randomBytes2 } from "node:crypto";
+function encryptValue(key, plaintext) {
+  const iv = randomBytes2(IV_BYTES);
+  const cipher = createCipheriv(ALGORITHM, key, iv);
+  const ciphertext = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
+  return {
+    ciphertext: ciphertext.toString("base64"),
+    iv: iv.toString("base64"),
+    tag: cipher.getAuthTag().toString("base64")
+  };
+}
+function decryptValue(key, encrypted) {
+  const decipher = createDecipheriv(ALGORITHM, key, Buffer.from(encrypted.iv, "base64"));
+  decipher.setAuthTag(Buffer.from(encrypted.tag, "base64"));
+  const plaintext = Buffer.concat([
+    decipher.update(Buffer.from(encrypted.ciphertext, "base64")),
+    decipher.final()
+  ]);
+  return plaintext.toString("utf8");
+}
+var ALGORITHM = "aes-256-gcm", IV_BYTES = 12;
+var init_value_cipher = () => {};
+
 // src/core/brain/secrets/owner-acl.ts
 import { spawnSync } from "node:child_process";
-import { resolve as resolve5, win32 } from "node:path";
+import { resolve as resolve6, win32 as win322 } from "node:path";
 function system32Tool(name, env = process.env) {
   const root = env["SystemRoot"] || env["windir"] || "C:\\Windows";
-  return win32.join(root, "System32", name);
+  return win322.join(root, "System32", name);
 }
 function parseWhoamiUser(stdout) {
   const m = /^\s*"([^"]+)","(S-1-\d+(?:-\d+)+)"\s*$/m.exec(stdout);
@@ -2721,7 +3103,7 @@ function ownerOnlyAclArgv(path, sid, kind) {
 function restrictToOwner(path, kind, platform = process.platform) {
   if (platform !== "win32")
     return true;
-  const key = `${kind}:${resolve5(path).toLowerCase()}`;
+  const key = `${kind}:${resolve6(path).toLowerCase()}`;
   if (restricted.has(key))
     return true;
   let detail;
@@ -2757,31 +3139,9 @@ var init_owner_acl = __esm(() => {
 });
 
 // src/core/brain/secrets/envelope.ts
-var exports_envelope = {};
-__export(exports_envelope, {
-  ENVELOPE_REFUSAL_CODES: () => ENVELOPE_REFUSAL_CODES,
-  KEYFILE_ENVELOPE_SCHEMA_VERSION: () => KEYFILE_ENVELOPE_SCHEMA_VERSION,
-  SECRET_STORE_KEYFILE_MISSING_CODE: () => SECRET_STORE_KEYFILE_MISSING_CODE,
-  SECRET_STORE_LOCKED_CODE: () => SECRET_STORE_LOCKED_CODE,
-  SecretEnvelopeError: () => SecretEnvelopeError,
-  SecretStoreKeyfileMissingError: () => SecretStoreKeyfileMissingError,
-  SecretStoreLockedError: () => SecretStoreLockedError,
-  clearHeldKey: () => clearHeldKey,
-  deriveWrapKey: () => deriveWrapKey,
-  freshWrapKdfParams: () => freshWrapKdfParams,
-  heldKeyOrRefusal: () => heldKeyOrRefusal,
-  heldUnlockedKey: () => heldUnlockedKey,
-  isEnvelopeBytes: () => isEnvelopeBytes,
-  isEnvelopeFile: () => isEnvelopeFile,
-  kdfCostCurveRefusal: () => kdfCostCurveRefusal,
-  readEnvelope: () => readEnvelope,
-  unlockKeyfile: () => unlockKeyfile,
-  verifyKeyfilePassphrase: () => verifyKeyfilePassphrase,
-  wrapKeyfile: () => wrapKeyfile
-});
-import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import { chmodSync, readFileSync as readFileSync4, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
-import { resolve as resolve6 } from "node:path";
+import { randomBytes as randomBytes3, scryptSync, timingSafeEqual } from "node:crypto";
+import { chmodSync, readFileSync as readFileSync5, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { resolve as resolve7 } from "node:path";
 function kdfCostCurveRefusal(kdf) {
   if (kdf.n > SCRYPT_N_MAX) {
     return `kdf n ${String(kdf.n)} exceeds this build's ceiling ${String(SCRYPT_N_MAX)}`;
@@ -2802,11 +3162,8 @@ function kdfCostCurveRefusal(kdf) {
   return null;
 }
 function holderSlot(keyPath) {
-  const resolved = resolve6(keyPath);
+  const resolved = resolve7(keyPath);
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-}
-function heldUnlockedKey(keyPath) {
-  return HELD_KEYS.get(holderSlot(keyPath)) ?? null;
 }
 function heldKeyOrRefusal(keyPath) {
   const held = HELD_KEYS.get(holderSlot(keyPath));
@@ -2842,7 +3199,7 @@ function hasEnvelopeShape(parsed) {
 function isEnvelopeFile(keyPath) {
   let bytes;
   try {
-    bytes = readFileSync4(keyPath);
+    bytes = readFileSync5(keyPath);
   } catch {
     return false;
   }
@@ -2858,7 +3215,7 @@ function isEnvelopeBytes(bytes) {
 function readEnvelope(keyPath) {
   let parsed;
   try {
-    parsed = JSON.parse(readFileSync4(keyPath, "utf8"));
+    parsed = JSON.parse(readFileSync5(keyPath, "utf8"));
   } catch (err) {
     throw new SecretEnvelopeError(ENVELOPE_REFUSAL_CODES.malformed, keyPath, `not parseable as an envelope: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -2883,7 +3240,7 @@ function readEnvelope(keyPath) {
 function freshWrapKdfParams() {
   return {
     algo: KDF_ALGO,
-    salt: randomBytes(SALT_BYTES).toString("base64"),
+    salt: randomBytes3(SALT_BYTES).toString("base64"),
     n: SCRYPT_N,
     r: SCRYPT_R,
     p: SCRYPT_P,
@@ -2910,10 +3267,6 @@ function unwrapWith(derived, envelope, keyPath) {
     throw new SecretEnvelopeError(ENVELOPE_REFUSAL_CODES.malformed, keyPath, `unwrapped key material is ${String(dek.length)} bytes, expected ${String(DEK_BYTES)}`);
   }
   return dek;
-}
-function verifyKeyfilePassphrase(keyPath, passphrase) {
-  const envelope = readEnvelope(keyPath);
-  unwrapWith(deriveWrapKey(passphrase, envelope.kdf), envelope, keyPath);
 }
 function wrapKeyfile(keyPath, passphrase, dek) {
   if (passphrase.length === 0) {
@@ -2967,7 +3320,7 @@ function unlockKeyfile(keyPath, passphrase) {
 var KEYFILE_ENVELOPE_SCHEMA_VERSION = 1, KDF_ALGO = "scrypt", WRAP_KEY_BYTES = 32, DEK_BYTES = 32, SALT_BYTES = 16, SCRYPT_N, SCRYPT_R = 8, SCRYPT_P = 1, SCRYPT_MAXMEM, SCRYPT_N_MAX, SCRYPT_R_MAX = 16, SCRYPT_P_MAX = 8, SCRYPT_MAXMEM_MAX, ENVELOPE_REFUSAL_CODES, SecretEnvelopeError, SECRET_STORE_LOCKED_CODE = "secret_store_locked", SecretStoreLockedError, SECRET_STORE_KEYFILE_MISSING_CODE = "secret_store_keyfile_missing", SecretStoreKeyfileMissingError, HELD_KEYS;
 var init_envelope = __esm(() => {
   init_fs_atomic();
-  init_crypto();
+  init_value_cipher();
   init_owner_acl();
   SCRYPT_N = 2 ** 15;
   SCRYPT_MAXMEM = 128 * 1024 * 1024;
@@ -2984,7 +3337,7 @@ var init_envelope = __esm(() => {
     code;
     keyPath;
     constructor(code, keyPath, detail) {
-      super(`keyfile envelope refused (${code}): ${detail}: ${keyPath}`);
+      super(`keyfile envelope refused (${code}): ${detail}`);
       this.name = "SecretEnvelopeError";
       this.code = code;
       this.keyPath = keyPath;
@@ -2994,7 +3347,7 @@ var init_envelope = __esm(() => {
     code = SECRET_STORE_LOCKED_CODE;
     keyPath;
     constructor(keyPath) {
-      super(`the secret store is locked (the keyfile is passphrase-wrapped): run ` + `"o2b brain secret unlock" to unwrap it for this process`);
+      super(`the secret store is locked (the keyfile is passphrase-wrapped): run ` + `"o2b brain secret unlock" to unwrap it for this process - the unlock ` + `applies to this process only and the passphrase is never persisted, ` + `so a key-bearing command must run in the same process that unlocked it`);
       this.name = "SecretStoreLockedError";
       this.keyPath = keyPath;
     }
@@ -3012,26 +3365,20 @@ var init_envelope = __esm(() => {
 });
 
 // src/core/brain/secrets/crypto.ts
-import { createCipheriv, createDecipheriv, randomBytes as randomBytes2 } from "node:crypto";
+import { randomBytes as randomBytes4 } from "node:crypto";
 import {
   chmodSync as chmodSync2,
   closeSync as closeSync3,
   existsSync as existsSync5,
-  mkdirSync as mkdirSync3,
+  mkdirSync as mkdirSync4,
   openSync as openSync3,
-  readFileSync as readFileSync5,
+  readFileSync as readFileSync6,
   writeFileSync as writeFileSync3,
   writeSync as writeSync2
 } from "node:fs";
-import { dirname as dirname3, join as join7 } from "node:path";
-function keyfileEnvelope() {
-  if (envelopeModule === undefined) {
-    envelopeModule = (init_envelope(), __toCommonJS(exports_envelope));
-  }
-  return envelopeModule;
-}
+import { dirname as dirname4, join as join9 } from "node:path";
 function ensureSyncExclusionMarker(dir) {
-  const marker = join7(dir, ".gitignore");
+  const marker = join9(dir, ".gitignore");
   if (existsSync5(marker))
     return;
   try {
@@ -3044,7 +3391,7 @@ function ensureSyncExclusionMarker(dir) {
   }
 }
 function loadOrCreateKey(keyPath) {
-  const keyDir = dirname3(keyPath);
+  const keyDir = dirname4(keyPath);
   if (existsSync5(keyPath)) {
     restrictToOwner(keyDir, "directory");
     restrictToOwner(keyPath, "file");
@@ -3058,18 +3405,18 @@ function loadOrCreateKey(keyPath) {
       }
     }
     ensureSyncExclusionMarker(keyDir);
-    const key2 = readFileSync5(keyPath);
-    if (keyfileEnvelope().isEnvelopeBytes(key2))
-      return keyfileEnvelope().heldKeyOrRefusal(keyPath);
+    const key2 = readFileSync6(keyPath);
+    if (isEnvelopeBytes(key2))
+      return heldKeyOrRefusal(keyPath);
     if (key2.length !== KEY_BYTES) {
       throw new Error(`secrets keyfile is corrupt (expected ${KEY_BYTES} bytes): ${keyPath}`);
     }
     return key2;
   }
-  mkdirSync3(keyDir, { recursive: true, mode: 448 });
+  mkdirSync4(keyDir, { recursive: true, mode: 448 });
   restrictToOwner(keyDir, "directory");
   ensureSyncExclusionMarker(keyDir);
-  const key = randomBytes2(KEY_BYTES);
+  const key = randomBytes4(KEY_BYTES);
   let fd;
   try {
     fd = openSync3(keyPath, "wx", 384);
@@ -3086,30 +3433,13 @@ function loadOrCreateKey(keyPath) {
   restrictToOwner(keyPath, "file");
   return key;
 }
-function encryptValue(key, plaintext) {
-  const iv = randomBytes2(IV_BYTES);
-  const cipher = createCipheriv(ALGORITHM, key, iv);
-  const ciphertext = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
-  return {
-    ciphertext: ciphertext.toString("base64"),
-    iv: iv.toString("base64"),
-    tag: cipher.getAuthTag().toString("base64")
-  };
-}
-function decryptValue(key, encrypted) {
-  const decipher = createDecipheriv(ALGORITHM, key, Buffer.from(encrypted.iv, "base64"));
-  decipher.setAuthTag(Buffer.from(encrypted.tag, "base64"));
-  const plaintext = Buffer.concat([
-    decipher.update(Buffer.from(encrypted.ciphertext, "base64")),
-    decipher.final()
-  ]);
-  return plaintext.toString("utf8");
-}
-var envelopeModule, ALGORITHM = "aes-256-gcm", KEY_BYTES = 32, IV_BYTES = 12, SYNC_EXCLUSION_CONTENT = `*
+var KEY_BYTES = 32, SYNC_EXCLUSION_CONTENT = `*
 !.gitignore
 `;
 var init_crypto = __esm(() => {
+  init_envelope();
   init_owner_acl();
+  init_value_cipher();
 });
 
 // src/core/brain/secrets/store.ts
@@ -3133,16 +3463,16 @@ __export(exports_store, {
   withSecretsLock: () => withSecretsLock,
   writeStore: () => writeStore
 });
-import { chmodSync as chmodSync3, existsSync as existsSync6, readFileSync as readFileSync6, statSync as statSync4, writeFileSync as writeFileSync4 } from "node:fs";
-import { join as join8 } from "node:path";
+import { chmodSync as chmodSync3, existsSync as existsSync6, readFileSync as readFileSync7, statSync as statSync6, writeFileSync as writeFileSync4 } from "node:fs";
+import { join as join10 } from "node:path";
 function secretsDir(vault) {
-  return join8(vault, ".open-second-brain", "secrets");
+  return join10(vault, ".open-second-brain", "secrets");
 }
 function storePath(vault) {
-  return join8(secretsDir(vault), "secrets.json");
+  return join10(secretsDir(vault), "secrets.json");
 }
 function keyPath(vault) {
-  return join8(secretsDir(vault), "keyfile");
+  return join10(secretsDir(vault), "keyfile");
 }
 function isValidSecretName(name) {
   return NAME_RE.test(name);
@@ -3165,7 +3495,7 @@ function withSecretsLock(vault, fn) {
   let lastError;
   for (let attempt = 0;attempt < maxAttempts && release === null; attempt++) {
     try {
-      release = import_proper_lockfile.default.lockSync(secretsDir(vault), { stale: 1e4, realpath: false });
+      release = import_proper_lockfile3.default.lockSync(secretsDir(vault), { stale: 1e4, realpath: false });
     } catch (exc) {
       if (exc.code !== "ELOCKED")
         throw exc;
@@ -3332,14 +3662,14 @@ function readStore(vault) {
   restrictToOwner(path, "file");
   if (process.platform !== "win32") {
     try {
-      if ((statSync4(path).mode & 511) !== 384)
+      if ((statSync6(path).mode & 511) !== 384)
         chmodSync3(path, 384);
     } catch (err) {
       process.stderr.write(`warning: could not re-apply owner-only mode to the secrets store: ` + `${path}: ${err instanceof Error ? err.message : String(err)}
 `);
     }
   }
-  const parsed = JSON.parse(readFileSync6(path, "utf8"));
+  const parsed = JSON.parse(readFileSync7(path, "utf8"));
   if (parsed === null || typeof parsed !== "object" || parsed.version !== SECRETS_SCHEMA_VERSION) {
     throw new Error(`secrets store is corrupt or from a newer version: ${path}`);
   }
@@ -3373,7 +3703,7 @@ function touchLastUsed(vault, name, now) {
   });
 }
 function audit(vault, ctx, action, name, details) {
-  appendAuditRecord(join8(brainDirsForWrite(vault).log, SECRET_CUSTODY_AUDIT_DIR), {
+  appendAuditRecord(join10(brainDirsForWrite(vault).log, SECRET_CUSTODY_AUDIT_DIR), {
     timestamp: ctx.now.toISOString(),
     actor: ctx.agent,
     action,
@@ -3382,7 +3712,7 @@ function audit(vault, ctx, action, name, details) {
     details
   });
 }
-var import_proper_lockfile, SECRETS_SCHEMA_VERSION = 1, NAME_RE, ENV_VAR_RE;
+var import_proper_lockfile3, SECRETS_SCHEMA_VERSION = 1, NAME_RE, ENV_VAR_RE;
 var init_store = __esm(() => {
   init_fs_atomic();
   init_audit();
@@ -3393,417 +3723,9 @@ var init_store = __esm(() => {
   init_crypto();
   init_envelope();
   init_owner_acl();
-  import_proper_lockfile = __toESM(require_proper_lockfile(), 1);
+  import_proper_lockfile3 = __toESM(require_proper_lockfile(), 1);
   NAME_RE = /^[a-z0-9][a-z0-9_-]*$/;
   ENV_VAR_RE = /^[A-Z_][A-Z0-9_]*$/;
-});
-
-// src/core/secret-resolver.ts
-import { existsSync as existsSync7 } from "node:fs";
-function custodyStore() {
-  if (custodyStoreModule === undefined) {
-    custodyStoreModule = (init_store(), __toCommonJS(exports_store));
-  }
-  return custodyStoreModule;
-}
-function isSecretReferenceValue(value) {
-  return typeof value === "string" && value.trimStart().startsWith(REFERENCE_PREFIX);
-}
-function storeValue(vault, name) {
-  const held = custodyStore().listSecrets(vault).some((meta) => meta.name === name);
-  if (!held)
-    return;
-  return custodyStore().resolveSecretReadOnly(vault, name).value;
-}
-function secretProvider(vault) {
-  const env = process.env;
-  return new Proxy(env, {
-    get(_target, prop) {
-      if (typeof prop !== "string")
-        return;
-      return storeValue(vault, prop) ?? env[prop];
-    },
-    has(_target, prop) {
-      if (typeof prop !== "string")
-        return Reflect.has(env, prop);
-      return storeValue(vault, prop) !== undefined || Reflect.has(env, prop);
-    }
-  });
-}
-function resolveNamedSecret(vault, value) {
-  if (!isSecretReferenceValue(value))
-    return value;
-  return resolveSecretReference(value.trim(), secretProvider(vault));
-}
-function resolvedSecretLiterals(vault) {
-  const store = custodyStore();
-  let held;
-  try {
-    held = store.listSecrets(vault);
-  } catch {
-    return [];
-  }
-  if (held.length === 0)
-    return [];
-  if (!existsSync7(store.keyPath(vault)))
-    return [];
-  const out = [];
-  for (const meta of held) {
-    try {
-      out.push(store.resolveSecretReadOnly(vault, meta.name).value);
-    } catch {}
-  }
-  return out;
-}
-var custodyStoreModule, REFERENCE_PREFIX = "$secret:";
-var init_secret_resolver = __esm(() => {
-  init_secret_ref();
-});
-
-// src/core/platform-dirs.ts
-import { homedir } from "node:os";
-import { join as join9, win32 as win322 } from "node:path";
-function processDirsEnv() {
-  return { platform: process.platform, home: homedir(), env: process.env };
-}
-function isWindows(source = process) {
-  return source.platform === "win32";
-}
-function nonEmpty(value) {
-  return value !== undefined && value.length > 0 ? value : null;
-}
-function windowsLocalAppData(source) {
-  return nonEmpty(source.env["LOCALAPPDATA"]) ?? win322.join(source.home, "AppData", "Local");
-}
-function baseDir(kind, source) {
-  const xdg = nonEmpty(source.env[XDG_VARIABLE[kind]]);
-  if (xdg)
-    return xdg;
-  if (isWindows(source))
-    return windowsLocalAppData(source);
-  return join9(source.home, ...POSIX_DEFAULT[kind]);
-}
-function configBaseDir(source = processDirsEnv()) {
-  return baseDir("config", source);
-}
-var APP_DIR_NAME = "open-second-brain", XDG_VARIABLE, POSIX_DEFAULT;
-var init_platform_dirs = __esm(() => {
-  XDG_VARIABLE = Object.freeze({
-    config: "XDG_CONFIG_HOME",
-    data: "XDG_DATA_HOME",
-    state: "XDG_STATE_HOME",
-    cache: "XDG_CACHE_HOME"
-  });
-  POSIX_DEFAULT = Object.freeze({
-    config: [".config"],
-    data: [".local", "share"],
-    state: [".local", "state"],
-    cache: [".cache"]
-  });
-});
-
-// src/core/brain/portability/profiles.ts
-var import_proper_lockfile2;
-var init_profiles = __esm(() => {
-  init_fs_atomic();
-  import_proper_lockfile2 = __toESM(require_proper_lockfile(), 1);
-});
-
-// src/core/fs-utils.ts
-import { statSync as statSync5 } from "node:fs";
-function statOrAbsent(p) {
-  return statSync5(p, { throwIfNoEntry: false });
-}
-function isDir(p) {
-  try {
-    return statOrAbsent(p)?.isDirectory() ?? false;
-  } catch {
-    return false;
-  }
-}
-function stem(filename) {
-  const dot = filename.lastIndexOf(".");
-  return dot > 0 ? filename.slice(0, dot) : filename;
-}
-var init_fs_utils = () => {};
-
-// src/core/brain/portability/pointer.ts
-var init_pointer = __esm(() => {
-  init_fs_atomic();
-  init_fs_utils();
-});
-
-// src/core/brain/wikilink.ts
-var init_wikilink = () => {};
-
-// src/core/brain/link-graph/format-wikilink.ts
-var WIKI_LINK_FORMATS, SUFFIX_INDEX_MEMO;
-var init_format_wikilink = __esm(() => {
-  init_wikilink();
-  WIKI_LINK_FORMATS = Object.freeze([
-    "preserve",
-    "full",
-    "short"
-  ]);
-  SUFFIX_INDEX_MEMO = new WeakMap;
-});
-
-// src/core/config.ts
-import { mkdirSync as mkdirSync4, readFileSync as readFileSync7, statSync as statSync6 } from "node:fs";
-import { createHmac, randomBytes as randomBytes3 } from "node:crypto";
-import { homedir as homedir2 } from "node:os";
-import { dirname as dirname4, isAbsolute, join as join10, resolve as resolve7 } from "node:path";
-function resolveDefaultConfigPath(source) {
-  const override = source.env["OPEN_SECOND_BRAIN_CONFIG"];
-  if (override)
-    return expandTilde(override, source.platform, source.home);
-  const xdg = source.env["XDG_CONFIG_HOME"];
-  if (xdg)
-    return join10(expandTilde(xdg, source.platform, source.home), APP_DIR_NAME, "config.yaml");
-  if (UNSUPPORTED_CONFIG_PLATFORMS.includes(source.platform)) {
-    throw new UnsupportedPlatformError(source.platform);
-  }
-  return join10(configBaseDir(source), APP_DIR_NAME, "config.yaml");
-}
-function defaultConfigPath() {
-  return resolveDefaultConfigPath({
-    platform: process.platform,
-    home: homedir2(),
-    env: process.env
-  });
-}
-function parseSimpleYaml(text) {
-  const data = {};
-  for (const rawLine of text.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#"))
-      continue;
-    const idx = line.indexOf(":");
-    if (idx === -1)
-      continue;
-    const key = line.slice(0, idx).trim();
-    if (!key)
-      continue;
-    let value = line.slice(idx + 1).trim();
-    if (value.length >= 2 && (value.startsWith('"') && value.endsWith('"') || value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    data[key] = value;
-  }
-  return data;
-}
-function discoverConfig(path) {
-  const resolved = path ?? defaultConfigPath();
-  const stat = statConfigPath(resolved);
-  if (stat === undefined) {
-    return { path: resolved, exists: false, data: {} };
-  }
-  if (!stat.isFile()) {
-    throw new ConfigReadError(resolved, "path exists but is not a regular file");
-  }
-  return { path: resolved, exists: true, data: parseSimpleYaml(readConfigText(resolved)) };
-}
-function statConfigPath(resolved) {
-  try {
-    return statSync6(resolved, { throwIfNoEntry: false });
-  } catch (err) {
-    throw new ConfigReadError(resolved, err.message ?? String(err));
-  }
-}
-function readConfigText(resolved) {
-  let bytes;
-  try {
-    bytes = readFileSync7(resolved);
-  } catch (err) {
-    throw new ConfigReadError(resolved, err.message ?? String(err));
-  }
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  } catch (err) {
-    throw new ConfigReadError(resolved, `not valid UTF-8: ${err.message ?? String(err)}`);
-  }
-}
-function setConfigValue(key, value, path) {
-  if (typeof value !== "string") {
-    throw new TypeError(`config value for ${JSON.stringify(key)} must be a string`);
-  }
-  for (const bad of CONFIG_VALUE_REJECTED_CHARS) {
-    if (value.includes(bad)) {
-      throw new Error(`config value for ${JSON.stringify(key)} contains a disallowed character ` + `(${JSON.stringify(bad)}); reject rather than silently corrupting on read-back`);
-    }
-  }
-  const resolved = path ?? defaultConfigPath();
-  const discovery = discoverConfig(resolved);
-  const data = { ...discovery.data, [key]: value };
-  const body = Object.entries(data).map(([k, v]) => `${k}: "${v}"`).join(`
-`) + `
-`;
-  atomicWriteFileSync(resolved, body);
-  return resolved;
-}
-function resolveAgentName(configPath) {
-  const env = process.env["VAULT_AGENT_NAME"];
-  if (env)
-    return env;
-  const data = discoverConfig(configPath).data;
-  const value = data["agent_name"] ?? data["agentName"];
-  if (value)
-    return value;
-  return UNCONFIGURED_AGENT_NAME;
-}
-function isValidDeviceId(value) {
-  return DEVICE_ID_RE.test(value) && !value.startsWith("sync-conflict");
-}
-function resolveDeviceId(configPath) {
-  const env = process.env["O2B_DEVICE_ID"];
-  if (env !== undefined && (env === "" || isValidDeviceId(env)))
-    return env;
-  const resolved = configPath ?? defaultConfigPath();
-  const read = () => {
-    const value = discoverConfig(resolved).data["device_id"];
-    return value && isValidDeviceId(value) ? value : null;
-  };
-  const existing = read();
-  if (existing !== null)
-    return existing;
-  const dir = dirname4(resolved);
-  mkdirSync4(dir, { recursive: true });
-  let release;
-  try {
-    for (let attempt = 0;attempt < 10; attempt++) {
-      try {
-        release = import_proper_lockfile3.default.lockSync(dir, { stale: 1e4, realpath: false });
-        break;
-      } catch (err) {
-        if (err.code !== "ELOCKED")
-          break;
-        sleepSync(50);
-      }
-    }
-    const won = read();
-    if (won !== null)
-      return won;
-    const generated = randomBytes3(4).toString("hex");
-    setConfigValue("device_id", generated, resolved);
-    return generated;
-  } finally {
-    release?.();
-  }
-}
-function resolveExposeHostPaths(configPath) {
-  return resolveConfigFlag("OPEN_SECOND_BRAIN_EXPOSE_HOST_PATHS", "expose_host_paths", configPath);
-}
-function isValidInstallationSecret(value) {
-  return INSTALLATION_SECRET_RE.test(value);
-}
-function resolveInstallationSecret(configPath, secretsVault) {
-  const env = process.env[INSTALLATION_SECRET_ENV_KEY];
-  if (env !== undefined && isValidInstallationSecret(env))
-    return env;
-  const resolved = configPath ?? defaultConfigPath();
-  const read = () => {
-    const raw = discoverConfig(resolved).data[INSTALLATION_SECRET_CONFIG_KEY];
-    if (isSecretReferenceValue(raw)) {
-      const reference = String(raw).trim();
-      if (secretsVault === undefined) {
-        throw new SecretReferenceError("installation_secret is a $secret: reference but no vault was passed to resolve " + "it against; pass the vault (or set O2B_INSTALLATION_SECRET to a 32-hex key)", reference);
-      }
-      const resolvedValue = resolveNamedSecret(secretsVault, reference);
-      if (!isValidInstallationSecret(resolvedValue)) {
-        throw new SecretReferenceError("installation_secret is a $secret: reference that resolves to a value which is " + "not a 32-hex installation key; fix the stored value - the reference in the " + "device config is never overwritten", reference);
-      }
-      return resolvedValue;
-    }
-    return raw && isValidInstallationSecret(raw) ? raw : null;
-  };
-  const existing = read();
-  if (existing !== null)
-    return existing;
-  const dir = dirname4(resolved);
-  mkdirSync4(dir, { recursive: true });
-  let release;
-  try {
-    for (let attempt = 0;attempt < 10; attempt++) {
-      try {
-        release = import_proper_lockfile3.default.lockSync(dir, { stale: 1e4, realpath: false });
-        break;
-      } catch (err) {
-        if (err.code !== "ELOCKED")
-          break;
-        sleepSync(50);
-      }
-    }
-    const won = read();
-    if (won !== null)
-      return won;
-    const generated = randomBytes3(16).toString("hex");
-    setConfigValue(INSTALLATION_SECRET_CONFIG_KEY, generated, resolved);
-    return generated;
-  } finally {
-    release?.();
-  }
-}
-function vaultStoreReference(vaultPath, configPath) {
-  const key = resolveInstallationSecret(configPath, vaultPath);
-  const digest = createHmac("sha256", key).update(resolve7(vaultPath)).digest("hex").slice(0, VAULT_STORE_REF_HEX_LEN);
-  return `${VAULT_STORE_REF_PREFIX}${digest}`;
-}
-function readSetting(envKey, configKey, data) {
-  const env = process.env[envKey]?.trim();
-  if (env)
-    return env;
-  const raw = (typeof data === "function" ? data() : data)[configKey]?.trim();
-  return raw ? raw : undefined;
-}
-function resolveConfigFlag(envKey, configKey, configPath) {
-  return isFlagOn(readSetting(envKey, configKey, () => discoverConfig(configPath).data));
-}
-function isFlagOn(raw) {
-  return raw === "true" || raw === "1";
-}
-function resolvePartnerCodegraphDisabled(configPath) {
-  return resolveConfigFlag(PARTNER_CODEGRAPH_DISABLED_ENV, PARTNER_CODEGRAPH_DISABLED_CONFIG_KEY, configPath);
-}
-function expandTilde(p, platform = process.platform, home = homedir2()) {
-  if (p === "~")
-    return home;
-  if (p.startsWith("~/"))
-    return join10(home, p.slice(2));
-  if (platform === "win32" && p.startsWith("~\\"))
-    return join10(home, p.slice(2));
-  return p;
-}
-var import_proper_lockfile3, CONFIG_VALUE_REJECTED_CHARS, UNSUPPORTED_CONFIG_PLATFORMS, UnsupportedPlatformError, ConfigReadError, UNCONFIGURED_AGENT_NAME = "agent", DEVICE_ID_RE, INSTALLATION_SECRET_CONFIG_KEY = "installation_secret", INSTALLATION_SECRET_ENV_KEY = "O2B_INSTALLATION_SECRET", INSTALLATION_SECRET_RE, VAULT_STORE_REF_PREFIX = "vault://", VAULT_STORE_REF_HEX_LEN = 32, PARTNER_CODEGRAPH_DISABLED_ENV = "OPEN_SECOND_BRAIN_PARTNER_CODEGRAPH_DISABLED", PARTNER_CODEGRAPH_DISABLED_CONFIG_KEY = "partner_codegraph_disabled";
-var init_config = __esm(() => {
-  init_fs_atomic();
-  init_secret_resolver();
-  init_secret_ref();
-  init_platform_dirs();
-  init_profiles();
-  init_pointer();
-  init_format_wikilink();
-  import_proper_lockfile3 = __toESM(require_proper_lockfile(), 1);
-  CONFIG_VALUE_REJECTED_CHARS = ['"', "\\", `
-`, "\r"];
-  UNSUPPORTED_CONFIG_PLATFORMS = Object.freeze([]);
-  UnsupportedPlatformError = class UnsupportedPlatformError extends Error {
-    platform;
-    constructor(platform) {
-      super(`open-second-brain has no configuration layout for platform '${platform}': ` + "this build does not know where per-user configuration lives there. Set " + "OPEN_SECOND_BRAIN_CONFIG to an explicit config file, or XDG_CONFIG_HOME " + "to a configuration root, to choose the location yourself.");
-      this.name = "UnsupportedPlatformError";
-      this.platform = platform;
-    }
-  };
-  ConfigReadError = class ConfigReadError extends Error {
-    path;
-    constructor(path, reason) {
-      super(`failed to read plugin config ${path}: ${reason}. The file is present, so its ` + "settings are NOT in force and are not read as absent; make it readable " + `(chmod u+r "${path}") or set OPEN_SECOND_BRAIN_CONFIG to a readable config file.`);
-      this.name = "ConfigReadError";
-      this.path = path;
-    }
-  };
-  DEVICE_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
-  INSTALLATION_SECRET_RE = /^[0-9a-f]{32}$/;
 });
 
 // src/openclaw/index.ts
@@ -3975,8 +3897,65 @@ function redactConfigMapping(data, policy = {}) {
   return redactStructured(data, composeRedactionOptions(policy)).value;
 }
 
-// src/openclaw/index.ts
-init_secret_resolver();
+// src/core/secret-resolver.ts
+init_config();
+init_secret_ref();
+init_secret_ref();
+import { existsSync as existsSync7 } from "node:fs";
+var custodyStoreModule;
+function custodyStore() {
+  if (custodyStoreModule === undefined) {
+    custodyStoreModule = (init_store(), __toCommonJS(exports_store));
+  }
+  return custodyStoreModule;
+}
+function storeValue(vault, name) {
+  const held = custodyStore().listSecrets(vault).some((meta) => meta.name === name);
+  if (!held)
+    return;
+  return custodyStore().resolveSecretReadOnly(vault, name).value;
+}
+function secretProvider(vault) {
+  const env = process.env;
+  return new Proxy(env, {
+    get(_target, prop) {
+      if (typeof prop !== "string")
+        return;
+      return storeValue(vault, prop) ?? env[prop];
+    },
+    has(_target, prop) {
+      if (typeof prop !== "string")
+        return Reflect.has(env, prop);
+      return storeValue(vault, prop) !== undefined || Reflect.has(env, prop);
+    }
+  });
+}
+function resolveNamedSecret(vault, value) {
+  if (!isSecretReferenceValue(value))
+    return value;
+  return resolveSecretReference(value.trim(), secretProvider(vault));
+}
+function resolvedSecretLiterals(vault) {
+  const store = custodyStore();
+  let held;
+  try {
+    held = store.listSecrets(vault);
+  } catch {
+    return [];
+  }
+  if (held.length === 0)
+    return [];
+  if (!existsSync7(store.keyPath(vault)))
+    return [];
+  const out = [];
+  for (const meta of held) {
+    try {
+      out.push(store.resolveSecretReadOnly(vault, meta.name).value);
+    } catch {}
+  }
+  return out;
+}
+installNamedSecretResolver({ resolveNamedSecret });
 
 // src/core/vault-presence.ts
 init_fs_utils();
