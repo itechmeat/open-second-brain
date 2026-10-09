@@ -13,8 +13,9 @@
  * # Layout
  *
  *   - `./help-text.ts`        — `BRAIN_HELP` + per-verb `VERB_HELP`.
- *   - `./upgrade-render.ts`   — `renderUpgradePlanJson`,
- *                               `printUpgradePlanText`,
+ *   - `./upgrade-render.ts`   — `renderUpgradePlanJson` (the row-level
+ *                               projection; this barrel wraps it to add
+ *                               the plan digest), `printUpgradePlanText`,
  *                               `renderUnifiedDiff`.
  *   - `./query-render.ts`     — text renderers for `brain query`.
  *   - `./rollback-prompt.ts`  — `diffSummary`, `readSingleLine`.
@@ -31,9 +32,11 @@ import {
 } from "../../core/config.ts";
 import { formatLocalTimestamp } from "../../core/brain/present-time.ts";
 import { isoSecond } from "../../core/brain/time.ts";
+import type { UpgradePlan } from "../../core/brain/upgrade.ts";
 
 import { CliError, parseFlags, type FlagsSchema } from "../argparse.ts";
 import { NO_VAULT_ERROR, normalizeFlagString } from "../helpers.ts";
+import { renderUpgradePlanJson as renderUpgradePlanJsonRows } from "./upgrade-render.ts";
 
 // ── Vault resolution ────────────────────────────────────────────────────────
 
@@ -111,11 +114,22 @@ export { ISO_8601_RE, parseOptionalIsoDate } from "../coerce.ts";
 export { NO_VAULT_ERROR, normalizeFlagString } from "../helpers.ts";
 
 export { BRAIN_HELP, MAINTENANCE_USAGE, VERB_HELP } from "./help-text.ts";
-export {
-  renderUpgradePlanJson,
-  printUpgradePlanText,
-  renderUnifiedDiff,
-} from "./upgrade-render.ts";
+export { printUpgradePlanText, renderUnifiedDiff } from "./upgrade-render.ts";
+
+/**
+ * The plan JSON an operator reads, with its seal (t_18fda844): the
+ * digest carried from `--dry-run` to `--apply`, so what lands is what
+ * was reviewed. Emitted unconditionally - a `planUpgrade` result is
+ * always sealed - and the row projection stays in
+ * `./upgrade-render.ts` (imported above under an alias); the barrel is
+ * where the seal becomes visible, because this is the module every
+ * verb imports its renderers through.
+ */
+export function renderUpgradePlanJson(
+  plan: UpgradePlan,
+): ReturnType<typeof renderUpgradePlanJsonRows> & { digest: string } {
+  return { ...renderUpgradePlanJsonRows(plan), digest: plan.digest };
+}
 export {
   renderQueryPreferenceText,
   renderQueryTopicText,

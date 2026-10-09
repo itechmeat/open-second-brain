@@ -19,6 +19,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { atomicWriteFileSync, fileMatchesExpected, isFileDrift } from "../fs-atomic.ts";
+import { digestVerifies, sealWithDigest } from "../integrity/digest.ts";
 import { formatFrontmatter, parseFrontmatterText } from "../vault.ts";
 import { sanitisePrinciple } from "./text/sanitize-principle.ts";
 import { defaultConfigPath, resolveAgentName } from "../config.ts";
@@ -62,6 +63,15 @@ export interface UpgradePlan {
   readonly pending: number;
   /** Count of `status === "error"` files. */
   readonly errors: number;
+  /**
+   * The plan's seal (t_18fda844): the integrity module's
+   * `sealWithDigest` over the rows, pending and errors above. Sealed
+   * inside {@link planUpgrade} and verified at the top of
+   * {@link applyUpgrade}, so a plan object edited after it was shown is
+   * refused instead of applied. The body carries no wall-clock field,
+   * so the same managed-file state seals identically on every run.
+   */
+  readonly digest: string;
 }
 
 export interface UpgradeApplyResult {
@@ -126,11 +136,7 @@ export function planUpgrade(vault: string): UpgradePlan {
   ];
   const pending = files.filter((f) => f.status === "update").length;
   const errors = files.filter((f) => f.status === "error").length;
-  return Object.freeze({
-    files: Object.freeze(files),
-    pending,
-    errors,
-  });
+  return Object.freeze(sealWithDigest({ files: Object.freeze(files), pending, errors }));
 }
 
 // ----- applyUpgrade --------------------------------------------------------
@@ -140,8 +146,10 @@ export function planUpgrade(vault: string): UpgradePlan {
  * {@link planUpgrade} when no plan is given.
  *
  * Sequence:
- *   1. Take the plan. If `errors > 0`, throw — never touch disk
- *      when the schema source is malformed.
+ *   1. Take the plan. Verify its digest against its body (t_18fda844)
+ *      - a caller-supplied plan that fails the seal is refused before
+ *      anything about it is trusted. Then, if `errors > 0`, throw —
+ *      never touch disk when the schema source is malformed.
  *   2. If `pending === 0`, return early without taking a snapshot or
  *      appending a log row. Idempotent re-run is free.
  *   3. Check every `update` row against the disk. A file that no
@@ -158,10 +166,33 @@ export function planUpgrade(vault: string): UpgradePlan {
  * On any write failure mid-step we throw — the snapshot already
  * persisted is the recovery path (`o2b brain rollback upgrade-<ts>`).
  */
+/**
+ * The refusal for a caller-supplied plan whose digest no longer
+ * describes its body (t_18fda844) - the seam where a plan object edited
+ * after it was shown used to be trusted as-is. Distinct from the
+ * byte-drift refusal below: nothing drifted ON DISK, the PLAN is what
+ * failed its own seal, and the remedy is the same fresh dry run.
+ */
+const UPGRADE_SEAL_REFUSAL =
+  "upgrade refused: the upgrade plan does not match its own digest, so the plan object was " +
+  "edited or assembled after it was sealed. A plan nobody measured cannot be applied. Nothing " +
+  "was written and no snapshot was taken; re-run `o2b brain upgrade --dry-run` to get a sealed " +
+  "plan, then apply it.";
+
 export function applyUpgrade(vault: string, opts: ApplyUpgradeOptions = {}): UpgradeApplyResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
   const plan = opts.plan ?? planUpgrade(vault);
+  // The seal is checked FIRST - before the error rows, the no-op
+  // return, the byte-drift check and the snapshot. A plan object that
+  // fails its own digest is a plan somebody edited after it was shown;
+  // its rows are not consulted at all, not even to report their errors.
+  // A self-computed plan verifies trivially, so this changes nothing
+  // for the caller who plans and applies in one breath.
+  const { digest: _digest, ...planBody } = plan;
+  if (!digestVerifies(planBody, plan.digest)) {
+    throw new BrainUpgradeError(UPGRADE_SEAL_REFUSAL);
+  }
   if (plan.errors > 0) {
     const messages = plan.files
       .filter((f) => f.status === "error")

@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { applyUpgrade, mergeBrainYaml, planUpgrade } from "../../../src/core/brain/upgrade.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
+import { digestVerifies } from "../../../src/core/integrity/digest.ts";
 import { brainConfigPath, brainManualPath } from "../../../src/core/brain/paths.ts";
 import { listSnapshots } from "../../../src/core/brain/snapshot.ts";
 
@@ -147,6 +148,16 @@ describe("planUpgrade", () => {
     for (const f of plan.files) {
       expect(f.status).toBe("noop");
     }
+  });
+
+  test("the plan is sealed: its digest describes exactly its own body (t_18fda844)", () => {
+    const plan = planUpgrade(vault);
+    expect(plan.digest).toMatch(/^[0-9a-f]{64}$/);
+    const { digest: _digest, ...body } = plan;
+    expect(digestVerifies(body, plan.digest)).toBe(true);
+    // The seal binds the plan content, not the moment it was planned.
+    const replan = planUpgrade(vault);
+    expect(replan.digest).toBe(plan.digest);
   });
 
   test("file ordering is _brain.yaml, _BRAIN.md", () => {

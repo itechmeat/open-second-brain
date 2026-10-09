@@ -26,8 +26,10 @@ import {
   BrainUpgradeError,
   applyUpgrade,
   planUpgrade,
+  type UpgradeFilePlan,
   type UpgradePlan,
 } from "../../../src/core/brain/upgrade.ts";
+import { sealWithDigest } from "../../../src/core/integrity/digest.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 
 let vault: string;
@@ -63,6 +65,16 @@ function upgradeError(fn: () => unknown): BrainUpgradeError {
 
 function snapshotCount(): number {
   return listSnapshots(vault).snapshots.length;
+}
+
+/**
+ * A plan a caller recomputed for its own rows: the body changes, so the
+ * seal must be recomputed with it. This is what an honest caller does;
+ * the seal test below covers the dishonest one who skips it.
+ */
+function reseal(plan: UpgradePlan, files: ReadonlyArray<UpgradeFilePlan>): UpgradePlan {
+  const { digest: _stale, ...body } = plan;
+  return Object.freeze(sealWithDigest({ ...body, files: Object.freeze(files) }));
 }
 
 /**
@@ -132,12 +144,12 @@ describe("applyUpgrade applies the plan it is handed", () => {
   test("the given plan's bytes are written, not a re-plan", () => {
     writeFileSync(brainManualPath(vault), "stale\n");
     const plan = planUpgrade(vault);
-    const shown: UpgradePlan = Object.freeze({
-      ...plan,
-      files: plan.files.map((f) =>
+    const shown = reseal(
+      plan,
+      plan.files.map((f) =>
         f.path === "Brain/_BRAIN.md" ? Object.freeze({ ...f, after: "the shown body\n" }) : f,
       ),
-    });
+    );
     const res = applyUpgrade(vault, { plan: shown, agent: "test-agent" });
     expect(res.files_updated).toEqual(["Brain/_BRAIN.md"]);
     expect(readFileSync(brainManualPath(vault), "utf8")).toBe("the shown body\n");
@@ -183,6 +195,53 @@ describe("a managed file holding invalid UTF-8", () => {
 
     expect(err.drifted).toEqual(["Brain/_BRAIN.md"]);
     expect(readFileSync(brainManualPath(vault))).toEqual(edited);
+  });
+});
+
+describe("a caller-supplied plan that does not verify (t_18fda844)", () => {
+  test("a tampered plan is refused by its seal BEFORE the byte-drift check", () => {
+    writeFileSync(brainManualPath(vault), "stale\n");
+    const plan = planUpgrade(vault);
+    // The plan was edited after it was sealed and never re-sealed: the
+    // carried digest describes a different body.
+    const { digest: _carried, ...body } = plan;
+    const tampered: UpgradePlan = Object.freeze({
+      ...body,
+      files: body.files.map((f) =>
+        f.path === "Brain/_BRAIN.md" ? Object.freeze({ ...f, after: "tampered\n" }) : f,
+      ),
+      digest: plan.digest,
+    });
+    // Real disk drift too, so the ORDER of the two refusals is what the
+    // assertion observes: the seal is checked first.
+    writeFileSync(brainManualPath(vault), "hand edit after the plan\n");
+    const before = snapshotCount();
+
+    const err = upgradeError(() => applyUpgrade(vault, { plan: tampered, agent: "test-agent" }));
+
+    expect(err.runId).toBeNull();
+    expect(err.drifted).toEqual([]);
+    expect(err.message).toContain("digest");
+    expect(err.message).not.toContain("changed on disk");
+    expect(err.message).toContain("o2b brain upgrade --dry-run");
+    expect(snapshotCount()).toBe(before);
+    expect(readFileSync(brainManualPath(vault), "utf8")).toBe("hand edit after the plan\n");
+  });
+
+  test("a plan whose digest is missing is refused the same way", () => {
+    writeFileSync(brainManualPath(vault), "stale\n");
+    const plan = planUpgrade(vault);
+    const { digest: _none, ...unsealed } = plan;
+    const before = snapshotCount();
+
+    const err = upgradeError(() =>
+      applyUpgrade(vault, { plan: unsealed as UpgradePlan, agent: "test-agent" }),
+    );
+
+    expect(err.runId).toBeNull();
+    expect(err.message).toContain("digest");
+    expect(snapshotCount()).toBe(before);
+    expect(readFileSync(brainManualPath(vault), "utf8")).toBe("stale\n");
   });
 });
 

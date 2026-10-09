@@ -167,6 +167,22 @@ describe("brain upgrade", () => {
     );
   });
 
+  test("--json --dry-run carries the plan digest (t_18fda844)", async () => {
+    await bootstrap();
+    writeFileSync(join(vault, "Brain", "_BRAIN.md"), "stale\n");
+    const first = await runCli(["brain", "upgrade", "--vault", vault, "--dry-run", "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(first.returncode).toBe(0);
+    const payload = JSON.parse(first.stdout) as { digest: string };
+    expect(payload.digest).toMatch(/^[0-9a-f]{64}$/);
+    // The seal binds the plan, not the moment it was rendered.
+    const second = await runCli(["brain", "upgrade", "--vault", vault, "--dry-run", "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect((JSON.parse(second.stdout) as { digest: string }).digest).toBe(payload.digest);
+  });
+
   test("a missing _BRAIN.md renders as an update from absent (text and JSON)", async () => {
     await bootstrap();
     rmSync(join(vault, "Brain", "_BRAIN.md"), { force: true });
