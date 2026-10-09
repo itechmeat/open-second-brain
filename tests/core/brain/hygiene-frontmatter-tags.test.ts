@@ -28,7 +28,10 @@ import { tmpdir } from "node:os";
 import { isObsidianTagValue } from "../../../src/core/tags.ts";
 import { runHygieneScan } from "../../../src/core/brain/hygiene/scan.ts";
 import { hygieneFindingId } from "../../../src/core/brain/hygiene/detectors/id.ts";
-import { detectFrontmatterTags } from "../../../src/core/brain/hygiene/detectors/frontmatter-tags.ts";
+import {
+  MALFORMED_REASON,
+  detectFrontmatterTags,
+} from "../../../src/core/brain/hygiene/detectors/frontmatter-tags.ts";
 import type { HygieneFinding } from "../../../src/core/brain/hygiene/types.ts";
 
 let vault: string;
@@ -79,8 +82,13 @@ describe("frontmatter-tags detector - malformed values", () => {
     expect(finding.proposed_action).toBe("review");
     expect(finding.evidence.tag).toBe("foo bar");
     expect(finding.evidence.field).toBe("tags");
-    expect(typeof finding.evidence.reason).toBe("string");
-    expect((finding.evidence.reason as string).length).toBeGreaterThan(0);
+    // Acceptance C2(a): the finding's evidence names BOTH the offending
+    // value and the rule - a reason that said only "check this" would not
+    // be reviewable without re-deriving why the value is malformed.
+    expect(finding.evidence.reason).toBe(`"foo bar" ${MALFORMED_REASON}`);
+    expect(finding.evidence.reason).toContain("foo bar");
+    expect(finding.evidence.reason).toContain("must start with a letter or underscore");
+    expect(finding.evidence.reason).toContain("never only digits");
     expect(finding.targets).toEqual(["Brain/notes/a.md", "foo bar"]);
     expect(finding.title).toContain("foo bar");
     expect(finding.id).toBe(hygieneFindingId("frontmatter-tags", finding.targets));

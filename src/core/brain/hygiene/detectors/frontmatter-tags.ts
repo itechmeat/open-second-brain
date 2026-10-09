@@ -40,9 +40,14 @@ import type { HygieneFinding } from "../types.ts";
 /** The one frontmatter field this detector audits. */
 const TAGS_FIELD = "tags";
 
-/** One mechanical story behind every finding, stated in evidence. */
-const MALFORMED_REASON =
-  "not a parseable Obsidian tag value: must start with a letter or underscore and contain only letters, numbers, dashes, underscores, or slashes (never only digits)";
+/**
+ * One mechanical story behind every finding, stated in evidence - the RULE
+ * half of it. The VALUE half is prepended by the finding itself, so the
+ * reason an operator reads names both (`"foo bar" is not a parseable ...`).
+ * Exported for the test that pins that composition.
+ */
+export const MALFORMED_REASON =
+  "is not a parseable Obsidian tag value: must start with a letter or underscore and contain only letters, numbers, dashes, underscores, or slashes (never only digits)";
 
 function compareStrings(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
@@ -85,7 +90,7 @@ export function detectFrontmatterTags(vault: string): ReadonlyArray<HygieneFindi
           class: "malformed",
           field: TAGS_FIELD,
           tag: value,
-          reason: MALFORMED_REASON,
+          reason: `${JSON.stringify(value)} ${MALFORMED_REASON}`,
         }),
       }),
     );
