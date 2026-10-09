@@ -7,8 +7,17 @@
  * archive path helpers, and the read/write/list/archive functions.
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -244,4 +253,106 @@ test("empty guidance is refused by name rather than stored as an empty section",
   expect(() =>
     writeCaptureNote(vault, { body: "text", provenance: prov(), guidance: "   " }),
   ).toThrow(CaptureContractError);
+});
+
+// ── t_151a564c: the stamped kind obeys a declared page_types vocabulary ──────
+
+describe("writeCaptureNote — declared page_types vocabulary (t_151a564c)", () => {
+  function writeConfig(pageTypes: string[] | null): void {
+    if (pageTypes === null) return;
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      `schema:\n  page_types: [${pageTypes.join(", ")}]\n`,
+      "utf8",
+    );
+  }
+
+  test("a pack declaring page_types without brain-capture refuses before any file exists and before a name is consumed", () => {
+    writeConfig(["note"]);
+    let thrown: unknown;
+    try {
+      writeCaptureNote(vault, { body: "capture a thought", provenance: prov() });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(CaptureContractError);
+    // The refusal precedes every filesystem effect: the captures directory
+    // is never created, so no file landed and no allocator name was consumed.
+    expect(existsSync(capturesDir(vault))).toBe(false);
+  });
+
+  test("the refusal leaves an existing staging area untouched", () => {
+    writeCaptureNote(vault, { body: "earlier capture", provenance: prov() });
+    writeConfig(["note"]);
+    expect(() => writeCaptureNote(vault, { body: "a second capture", provenance: prov() })).toThrow(
+      CaptureContractError,
+    );
+    const staged = listStagedCaptures(vault);
+    expect(staged).toHaveLength(1);
+    expect(staged[0]!.body).toBe("earlier capture");
+  });
+
+  test("the refusal names the kind, the declared set, and the remedy", () => {
+    writeConfig(["note"]);
+    let thrown: unknown;
+    try {
+      writeCaptureNote(vault, { body: "capture a thought", provenance: prov() });
+    } catch (err) {
+      thrown = err;
+    }
+    const message = (thrown as CaptureContractError).message;
+    expect(message).toContain("brain-capture");
+    expect(message).toContain("note");
+    expect(message).toContain("_brain.yaml");
+  });
+
+  test("a declared set containing brain-capture passes", () => {
+    writeConfig(["note", "brain-capture"]);
+    const note = writeCaptureNote(vault, { body: "capture a thought", provenance: prov() });
+    expect(listStagedCaptures(vault)).toHaveLength(1);
+    expect(readCaptureNote(vault, note.id)!.body).toBe("capture a thought");
+  });
+
+  test("absent config fails open with byte-identical output", () => {
+    writeConfig(null);
+    const open = writeCaptureNote(vault, { body: "capture a thought", provenance: prov() });
+    const declaredVault = mkdtempSync(join(tmpdir(), "osb-capture-note-declared-"));
+    try {
+      mkdirSync(join(declaredVault, "Brain"), { recursive: true });
+      writeFileSync(
+        join(declaredVault, "Brain", "_brain.yaml"),
+        "schema:\n  page_types: [note, brain-capture]\n",
+        "utf8",
+      );
+      const gated = writeCaptureNote(declaredVault, {
+        body: "capture a thought",
+        provenance: prov(),
+      });
+      expect(readFileSync(join(vault, open.path), "utf8")).toBe(
+        readFileSync(join(declaredVault, gated.path), "utf8"),
+      );
+    } finally {
+      rmSync(declaredVault, { recursive: true, force: true });
+    }
+  });
+
+  test("a config without a page_types declaration fails open", () => {
+    writeFileSync(join(vault, "Brain", "_brain.yaml"), "schema_version: 1\n", "utf8");
+    const note = writeCaptureNote(vault, { body: "capture a thought", provenance: prov() });
+    expect(readCaptureNote(vault, note.id)!.provenance.source).toBe("telegram");
+  });
+
+  test("the kind stays the frontmatter key and a refused-then-fixed capture reads back", () => {
+    writeConfig(["note"]);
+    expect(() =>
+      writeCaptureNote(vault, { body: "capture a thought", provenance: prov() }),
+    ).toThrow(CaptureContractError);
+    // The operator declares the kind; the same capture now lands and the
+    // contract's reader still round-trips it through the `kind` key.
+    writeConfig(["note", "brain-capture"]);
+    const note = writeCaptureNote(vault, { body: "capture a thought", provenance: prov() });
+    const read = readCaptureNote(vault, note.id)!;
+    expect(read.body).toBe("capture a thought");
+    expect(read.provenance.capturedAt).toBe("2026-07-19T12:00:00Z");
+  });
 });

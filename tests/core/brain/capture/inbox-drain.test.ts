@@ -8,7 +8,7 @@
  * default and writes nothing; a rerun after apply is a no-op.
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   existsSync,
   mkdirSync,
@@ -22,6 +22,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  CAPTURED_IDEA_KIND,
   CAPTURE_OBLIGATION_MARKER,
   CAPTURED_NOTES_DIR_REL,
   drainInbox,
@@ -172,4 +173,59 @@ test("an obligation marker defaults the cadence when none is given", () => {
   const report = drainInbox(vault, { apply: true, agent: "tester", now: NOW });
   expect(report.items[0]!.action).toBe("open-obligation");
   expect(listObligations(vault, { now: NOW }).map((o) => o.title)).toContain("tidy the desk");
+});
+
+// ── t_151a564c: the drained idea's stamped kind obeys a declared vocabulary ──
+
+describe("writeIdeaNote — declared page_types vocabulary (t_151a564c)", () => {
+  function writeConfig(pageTypes: string[] | null): void {
+    if (pageTypes === null) return;
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      `schema:\n  page_types: [${pageTypes.join(", ")}]\n`,
+      "utf8",
+    );
+  }
+
+  function seedIdea(): void {
+    writeCaptureNote(vault, { body: "a standalone atomic idea", provenance: prov(1) });
+  }
+
+  test("a pack declaring page_types without captured-idea refuses the route and leaves the capture staged", () => {
+    seedIdea();
+    writeConfig(["note"]);
+    const report = drainInbox(vault, { apply: true, agent: "tester", now: NOW });
+    expect(report.routed).toBe(0);
+    expect(report.items).toHaveLength(1);
+    const item = report.items[0]!;
+    expect(item.classification).toBe("unroutable");
+    expect(item.reason).toContain("captured-idea");
+    expect(item.reason).toContain("_brain.yaml");
+    // No idea note landed and the capture is still staged for a rerun
+    // after the operator declares the kind.
+    expect(existsSync(join(vault, CAPTURED_NOTES_DIR_REL))).toBe(false);
+    expect(listStagedCaptures(vault)).toHaveLength(1);
+  });
+
+  test("a declared set containing captured-idea routes as before", () => {
+    seedIdea();
+    writeConfig(["note", "captured-idea"]);
+    const report = drainInbox(vault, { apply: true, agent: "tester", now: NOW });
+    expect(report.routed).toBe(1);
+    expect(report.items[0]!.classification).toBe("idea");
+    expect(existsSync(join(vault, CAPTURED_NOTES_DIR_REL))).toBe(true);
+    expect(listStagedCaptures(vault)).toHaveLength(0);
+  });
+
+  test("absent config fails open and the idea note is byte-shaped as today", () => {
+    seedIdea();
+    const report = drainInbox(vault, { apply: true, agent: "tester", now: NOW });
+    expect(report.routed).toBe(1);
+    const dir = join(vault, CAPTURED_NOTES_DIR_REL);
+    const files = readdirSync(dir);
+    expect(files).toHaveLength(1);
+    const raw = readFileSync(join(dir, files[0]!), "utf8");
+    expect(raw).toContain(`kind: ${CAPTURED_IDEA_KIND}`);
+    expect(raw).toContain("a standalone atomic idea");
+  });
 });

@@ -46,7 +46,12 @@ import {
   stageHubSelection,
   type HubPagePool,
 } from "../link-graph/hub-candidates.ts";
-import { archiveCapture, listStagedCaptures, type CaptureNote } from "./capture-note.ts";
+import {
+  archiveCapture,
+  listStagedCaptures,
+  requireDeclaredCaptureKind,
+  type CaptureNote,
+} from "./capture-note.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 /** Explicit leading token that classifies a capture as an obligation. */
@@ -196,13 +201,25 @@ function planIdea(vault: string, body: string, opts: DrainOptions): RoutePlan {
     action: "note",
     reason: merge ? "atomic idea (merge into existing note)" : "atomic idea (create note)",
     execute: () => {
-      writeIdeaNote(abs, body, opts, merge);
+      writeIdeaNote(vault, abs, body, opts, merge);
       return relPath;
     },
   };
 }
 
-function writeIdeaNote(abs: string, body: string, opts: DrainOptions, merge: boolean): void {
+function writeIdeaNote(
+  vault: string,
+  abs: string,
+  body: string,
+  opts: DrainOptions,
+  merge: boolean,
+): void {
+  // Pack vocabulary gate (t_151a564c), before ANY filesystem effect: the
+  // idea route stamps `captured-idea`, so a vault that declares page_types
+  // without it refuses here - the capture stays staged and a rerun after
+  // the operator declares the kind converges. Same gate, same refusal, as
+  // the staging contract's own writer.
+  requireDeclaredCaptureKind(vault, CAPTURED_IDEA_KIND);
   const stamp = isoSecond(opts.now);
   // `ensureInsideVault` hands back a native path, so the parent comes from
   // `dirname`: a hand-rolled split on "/" found no separator in a Windows

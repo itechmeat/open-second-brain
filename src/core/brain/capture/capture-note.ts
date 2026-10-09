@@ -47,6 +47,7 @@ import {
   vaultRelative,
 } from "../paths.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
+import { declaredPageTypes } from "../schema-pack.ts";
 
 /** Frontmatter `kind:` marker of a staged inbound capture. */
 export const BRAIN_CAPTURE_KIND = "brain-capture";
@@ -113,6 +114,30 @@ function requireNonEmpty(value: string, label: string): string {
     throw new CaptureContractError(`capture ${label} must not be empty`);
   }
   return trimmed;
+}
+
+/** Remedy carried by every undeclared-kind refusal. */
+const DECLARE_KIND_REMEDY = "declare it in Brain/_brain.yaml under schema.page_types to accept it";
+
+/**
+ * Refuse a stamped `kind` the vault's pack does not declare
+ * (trust-surface-hardening wave; kanban t_151a564c).
+ *
+ * Consulted only where the vault made a declaration: {@link declaredPageTypes}
+ * returns `null` for an absent or declaration-free config, and that fails
+ * open - today's behavior, byte for byte. A non-null declaration that omits
+ * the kind refuses with this module's typed error naming the kind, the
+ * declared set, and the remedy. Callers run this BEFORE any filesystem
+ * effect, so a refused capture never creates a directory and never
+ * consumes an allocator name.
+ */
+export function requireDeclaredCaptureKind(vault: string, kind: string): void {
+  const declared = declaredPageTypes(vault);
+  if (declared === null || declared.includes(kind)) return;
+  throw new CaptureContractError(
+    `capture kind '${kind}' is not declared in this vault's schema.page_types ` +
+      `(declared: ${declared.join(", ")}); ${DECLARE_KIND_REMEDY}`,
+  );
 }
 
 /**
@@ -216,6 +241,10 @@ export function writeCaptureNote(vault: string, input: WriteCaptureInput): Captu
   // something and sent whitespace, which is the shape a silent drop hides.
   const guidance =
     input.guidance === undefined ? null : requireNonEmpty(input.guidance, "guidance");
+
+  // Pack vocabulary gate (t_151a564c), before ANY filesystem effect: a
+  // refused capture creates no directory and consumes no allocator name.
+  requireDeclaredCaptureKind(vault, BRAIN_CAPTURE_KIND);
 
   const dir = capturesDir(vault);
   mkdirSync(dir, { recursive: true });

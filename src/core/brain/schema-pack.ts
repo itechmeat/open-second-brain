@@ -86,6 +86,27 @@ export function loadSchemaPack(vault: string): SchemaPack {
   return readSchemaPackSource(vault).pack;
 }
 
+/**
+ * The page types this vault DECLARED, or `null` when it made no
+ * declaration (trust-surface-hardening wave; kanban t_151a564c).
+ *
+ * `null` is the fail-open answer and it covers every undeclaring shape:
+ * no config file at all, and a config that omits or empties
+ * `page_types`. A non-null answer means the config is present and names
+ * at least one page type - the one shape a writer must treat as a
+ * closed vocabulary. The merged vocabulary (see
+ * {@link resolveSchemaVocabulary}) always contains `note`, so the
+ * declared list, not the merged one, is what tells a writer whether the
+ * vault said anything at all.
+ */
+export function declaredPageTypes(vault: string): ReadonlyArray<string> | null {
+  const source = readSchemaPackSource(vault);
+  if (!source.present) return null;
+  const declared = source.pack.declarations.page_types;
+  if (declared === undefined || declared.length === 0) return null;
+  return declared;
+}
+
 export function parseSchemaPack(configText: string): SchemaPack {
   const lines = extractSchemaLines(configText);
   const partial: Partial<Record<SchemaVocabularyCategory, ReadonlyArray<string>>> = {};

@@ -9,7 +9,7 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -23,6 +23,7 @@ import {
   type TelegramUpdate,
 } from "../../../../src/core/brain/capture/telegram-capture.ts";
 import {
+  CaptureContractError,
   listStagedCaptures,
   readCatchupWatermark,
 } from "../../../../src/core/brain/capture/capture-note.ts";
@@ -309,4 +310,23 @@ test("two capture hosts append to their own decision shards (t_774dea61)", () =>
   expect(existsSync(join(logDir, "capture-decisions.a.jsonl"))).toBe(true);
   expect(existsSync(join(logDir, "capture-decisions.b.jsonl"))).toBe(true);
   expect(existsSync(join(logDir, "capture-decisions.jsonl"))).toBe(false);
+});
+
+// ── t_151a564c: the typed vocabulary refusal surfaces through this lane ──────
+
+test("a pack declaring page_types without brain-capture surfaces the contract refusal", () => {
+  // The vault made a declaration that omits the kind this lane stamps, so
+  // the capture contract refuses - and the refusal surfaces here exactly as
+  // every other contract refusal does: the named CaptureContractError, with
+  // no capture written behind it.
+  writeFileSync(join(vault, "Brain", "_brain.yaml"), "schema:\n  page_types: [note]\n", "utf8");
+  let thrown: unknown;
+  try {
+    handleCaptureUpdate(vault, textUpdate(1, "100", "an idea worth keeping"), baseOpts());
+  } catch (err) {
+    thrown = err;
+  }
+  expect(thrown).toBeInstanceOf(CaptureContractError);
+  expect((thrown as Error).name).toBe("CaptureContractError");
+  expect(listStagedCaptures(vault)).toHaveLength(0);
 });
