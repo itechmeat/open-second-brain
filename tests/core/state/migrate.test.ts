@@ -41,7 +41,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
-import { canonicalJson, sha256Hex } from "../../../src/core/integrity/digest.ts";
+import { canonicalJson, sealWithDigest, sha256Hex } from "../../../src/core/integrity/digest.ts";
 import {
   applyStateMigration,
   applyStateRollback,
@@ -199,6 +199,17 @@ describe("state migration plan", () => {
     const p = plan(vault, join(tempDir(), "moved"));
     const { digest, ...bound } = p.manifest;
     expect(digest).toBe(sha256Hex(canonicalJson(bound)));
+  });
+
+  test("the manifest seal is the integrity module's seal, byte for byte", () => {
+    // The module's private seal became a thin alias over the lifted
+    // `sealWithDigest`; this pins the aliasing as behavior-preserving:
+    // the sealed manifest is exactly what the shared primitive returns
+    // for the same bound body.
+    const vault = seedVault();
+    const p = plan(vault, join(tempDir(), "moved"));
+    const { digest: _digest, ...bound } = p.manifest;
+    expect(sealWithDigest(bound)).toEqual(p.manifest);
   });
 });
 

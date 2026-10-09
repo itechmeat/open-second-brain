@@ -21,6 +21,27 @@
  * a short form slices its own result and owns that decision - and it
  * never inspects natural language: text is opaque bytes on the way in and
  * hex on the way out.
+ *
+ * ## The persisted-digest doctrine, and the seal built on it
+ *
+ * {@link sealWithDigest} and {@link digestVerifies} are the one way a
+ * structured record is bound to a digest over itself: the seal is
+ * `sha256Hex(canonicalJson(body))` of exactly the body given, appended to
+ * the copy that carries the `digest` field, and verification recomputes
+ * the same value over the body WITHOUT the field. The state-migration
+ * manifest sealed this way first; content adoption plans - a dry run the
+ * operator approves in one process and a later apply re-checks in
+ * another - follow, and every future sealed record joins them rather
+ * than growing a private spelling.
+ *
+ * What belongs in a sealed body follows from who re-checks it. A record
+ * whose seal must be reproducible across time - an approval compared
+ * against a re-computation - keeps wall-clock fields out of the body and
+ * injects its clock at the write instead, so the same content seals to
+ * the same digest whenever it is planned. A point-in-time record such as
+ * the migration manifest MAY bind its timestamp, because the seal there
+ * answers "are these still the bytes that were measured", and when they
+ * were measured is part of that answer.
  */
 
 import { createHash } from "node:crypto";
@@ -70,4 +91,30 @@ export function canonicalJson(value: unknown): string {
     return `{${entries.join(",")}}`;
   }
   return JSON.stringify(value) ?? "null";
+}
+
+/**
+ * Bind a JSON body to its digest: the body with a `digest` field
+ * appended, whose value is the hash of the body WITHOUT that field.
+ *
+ * This is the persisted-digest doctrine made callable - the same shape
+ * the state-migration manifest has always written. The field is named
+ * `digest` on every sealed record, so a reader can strip it by name and
+ * re-verify with {@link digestVerifies} without knowing the record
+ * otherwise.
+ */
+export function sealWithDigest<B extends object>(body: B): B & { readonly digest: string } {
+  return { ...body, digest: sha256Hex(canonicalJson(body)) };
+}
+
+/**
+ * Whether `digest` is still the seal of `body`.
+ *
+ * `body` is the record WITHOUT its `digest` field - the same body
+ * {@link sealWithDigest} hashed. A `false` here is never repaired or
+ * resynced by a caller: a body that does not verify is a body nobody
+ * measured, and the refusal is the feature.
+ */
+export function digestVerifies(body: unknown, digest: string): boolean {
+  return sha256Hex(canonicalJson(body)) === digest;
 }

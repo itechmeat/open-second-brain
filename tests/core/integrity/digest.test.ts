@@ -18,7 +18,12 @@ import { createHash } from "node:crypto";
 
 import { describe, expect, test } from "bun:test";
 
-import { canonicalJson, sha256Hex } from "../../../src/core/integrity/digest.ts";
+import {
+  canonicalJson,
+  digestVerifies,
+  sealWithDigest,
+  sha256Hex,
+} from "../../../src/core/integrity/digest.ts";
 
 /** Independently recomputed, so the test does not restate the implementation. */
 function referenceSha256(input: string | Uint8Array): string {
@@ -120,5 +125,82 @@ describe("canonicalJson", () => {
 
   test("is a stable hash input across key order", () => {
     expect(sha256Hex(canonicalJson({ b: 1, a: 2 }))).toBe(sha256Hex(canonicalJson({ a: 2, b: 1 })));
+  });
+});
+
+describe("sealWithDigest / digestVerifies", () => {
+  // The shape every caller of the seal shares: a body of plain JSON
+  // values, bound by one digest appended beside it.
+  interface ExampleBody {
+    readonly name: string;
+    readonly entries: ReadonlyArray<{ path: string; bytes: number }>;
+    readonly total: number;
+  }
+  const body: ExampleBody = {
+    name: "plan",
+    entries: [
+      { path: "a.md", bytes: 3 },
+      { path: "b.md", bytes: 5 },
+    ],
+    total: 8,
+  };
+
+  test("seal-then-verify round-trips", () => {
+    const sealed = sealWithDigest(body);
+    expect(sealed.digest).toBe(sha256Hex(canonicalJson(body)));
+    expect(digestVerifies(body, sealed.digest)).toBe(true);
+  });
+
+  test("the sealed value is the body plus the digest, nothing else moved", () => {
+    expect(sealWithDigest(body)).toEqual({ ...body, digest: sha256Hex(canonicalJson(body)) });
+  });
+
+  test("the digest is insensitive to key order in the sealed body", () => {
+    const reordered = {
+      total: body.total,
+      entries: body.entries.map((e) => ({ bytes: e.bytes, path: e.path })),
+      name: body.name,
+    };
+    expect(sealWithDigest(body).digest).toBe(sealWithDigest(reordered).digest);
+  });
+
+  test("any body mutation fails verification", () => {
+    const sealed = sealWithDigest(body);
+    const mutations: Array<ExampleBody> = [
+      { ...body, name: "plan " },
+      { ...body, total: 9 },
+      { ...body, entries: [...body.entries, { path: "c.md", bytes: 1 }] },
+      {
+        ...body,
+        entries: [
+          { path: "b.md", bytes: 5 },
+          { path: "a.md", bytes: 3 },
+        ],
+      },
+      {
+        ...body,
+        entries: [
+          { path: "a.md", bytes: 4 },
+          { path: "b.md", bytes: 5 },
+        ],
+      },
+    ];
+    const survivors = mutations.filter((candidate) => digestVerifies(candidate, sealed.digest));
+    expect(survivors.map((s) => canonicalJson(s)).join("\n")).toBe("");
+  });
+
+  test("verification refuses a digest from a different body", () => {
+    const other = sealWithDigest({ ...body, total: 9 });
+    expect(digestVerifies(body, other.digest)).toBe(false);
+  });
+
+  test("the digest is lowercase hex of the declared length", () => {
+    const sealed = sealWithDigest(body);
+    expect(sealed.digest).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  test("omits undefined entries from the sealed body exactly as canonicalJson does", () => {
+    const withOptional = sealWithDigest({ a: 1, b: undefined });
+    expect(withOptional.digest).toBe(sealWithDigest({ a: 1 }).digest);
   });
 });

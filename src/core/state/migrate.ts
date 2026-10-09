@@ -48,12 +48,12 @@
  *
  * ## What the manifest binds
  *
- * Through {@link sha256Hex} and {@link canonicalJson}, the one digest
- * encoding in this project: the source type, the canonical roots, the
- * full path inventory, a byte count per file and a SHA-256 per file, and
- * a digest over all of it. A manifest that does not verify is refused
- * rather than repaired - a rollback driven by a manifest somebody edited
- * is a restore of something nobody measured.
+ * Through {@link sha256Hex} and the digest module's `canonicalJson` -
+ * the one digest encoding in this project: the source type, the
+ * canonical roots, the full path inventory, a byte count per file and a
+ * SHA-256 per file, and a digest over all of it. A manifest that does
+ * not verify is refused rather than repaired - a rollback driven by a
+ * manifest somebody edited is a restore of something nobody measured.
  *
  * ## What this module does NOT enumerate
  *
@@ -82,7 +82,12 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
-import { canonicalJson, DIGEST_ALGORITHM, sha256Hex } from "../integrity/digest.ts";
+import {
+  DIGEST_ALGORITHM,
+  digestVerifies,
+  sealWithDigest,
+  sha256Hex,
+} from "../integrity/digest.ts";
 import { isWriterLockHeld } from "../search/store/writer-lock.ts";
 import {
   inventoryStateSurfaces,
@@ -182,15 +187,20 @@ export interface MigrationManifest {
   readonly digest: string;
 }
 
-/** Bind a manifest body to its digest. The one place either is computed. */
+/**
+ * Bind a manifest body to its digest. The one place either is computed:
+ * a thin alias over the integrity module's {@link sealWithDigest}, which
+ * is the same `sha256Hex(canonicalJson(body))` this module has always
+ * written - lifted, not changed.
+ */
 function sealManifest(body: Omit<MigrationManifest, "digest">): MigrationManifest {
-  return { ...body, digest: sha256Hex(canonicalJson(body)) };
+  return sealWithDigest(body);
 }
 
 /** Whether a manifest's digest still describes its body. */
 function manifestVerifies(manifest: MigrationManifest): boolean {
   const { digest, ...body } = manifest;
-  return sha256Hex(canonicalJson(body)) === digest;
+  return digestVerifies(body, digest);
 }
 
 // ----- Planning a migration -------------------------------------------------
