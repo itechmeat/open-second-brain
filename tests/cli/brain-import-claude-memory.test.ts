@@ -203,7 +203,10 @@ describe("o2b brain import-claude-memory --approval-digest (t_18fda844)", () => 
     await runCli(["brain", "init", "--vault", s.vault], { env: s.env });
     const dry = await runCli([...baseArgs(s.vault, s.mem), "--dry-run", "--json"], { env: s.env });
     expect(dry.returncode).toBe(0);
-    const plan = JSON.parse(dry.stdout) as { digest: string; plans: Array<{ action: string }> };
+    const plan = JSON.parse(dry.stdout) as {
+      digest: string;
+      plans: Array<{ basename: string; prefId: string; action: string }>;
+    };
     expect(plan.digest).toMatch(/^[0-9a-f]{64}$/);
     expect(plan.plans).toEqual([{ basename: "feedback_a.md", prefId: "pref-a", action: "CREATE" }]);
 

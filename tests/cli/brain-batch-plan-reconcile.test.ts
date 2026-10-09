@@ -81,7 +81,7 @@ describe("o2b brain batch-plan — extraction contract reporting (t_586d5d8b)", 
     const plan = JSON.parse(res.stdout) as {
       contract_changed?: boolean;
       contract_changed_files?: number;
-      batches: Array<{ files: Array<{ path: string; status: string }> }>;
+      batches: Array<{ files: Array<{ path: string; bytes: number; status: string }> }>;
     };
     expect(plan.contract_changed).toBe(true);
     expect(plan.contract_changed_files).toBe(1);
