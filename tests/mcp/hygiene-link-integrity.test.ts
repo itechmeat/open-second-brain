@@ -74,6 +74,7 @@ test("the detector tuple and its input-schema enum stay in lockstep", () => {
     "usefulness",
     "slug-collisions",
     "tags",
+    "frontmatter-tags",
     "capture-scope",
   ]);
   const schema = HYGIENE_TOOLS[0]!.inputSchema as any;
