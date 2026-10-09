@@ -27,7 +27,11 @@ export function homeRelativePath(p: string): string {
   const home = resolve(homedir());
   const abs = resolve(p);
   if (abs === home) return "~";
-  if (abs.startsWith(home + sep)) return `~${abs.slice(home.length)}`;
+  if (abs.startsWith(home + sep)) {
+    // Display form: forward slashes on every platform, matching the
+    // `~/.claude/projects/` spelling this refusal's siblings use.
+    return `~${abs.slice(home.length).split(sep).join("/")}`;
+  }
   return p;
 }
 

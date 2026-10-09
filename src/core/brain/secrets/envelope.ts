@@ -475,9 +475,12 @@ export function wrapKeyfile(keyPath: string, passphrase: string, dek: Buffer): K
     throw err;
   }
   // The envelope now IS the keyfile: the same owner-only treatment the raw
-  // file carried. `restrictToOwner` is the Windows discipline and a no-op
-  // elsewhere, where the mode below is the whole story.
-  restrictToOwner(keyPath, "file");
+  // file carried. The rename replaced the file behind this path, so the
+  // restriction runs against the idempotence memo - the renamed file
+  // inherited the directory's ACL, which must not survive. `restrictToOwner`
+  // is the Windows discipline and a no-op elsewhere, where the mode below is
+  // the whole story.
+  restrictToOwner(keyPath, "file", process.platform, true);
   if (process.platform !== "win32") {
     try {
       chmodSync(keyPath, 0o600);

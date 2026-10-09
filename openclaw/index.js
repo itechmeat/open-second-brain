@@ -3100,11 +3100,11 @@ function ownerOnlyAclArgv(path, sid, kind) {
   const rights = kind === "directory" ? "(OI)(CI)F" : "F";
   return [path, "/inheritance:r", "/grant:r", `*${sid}:${rights}`];
 }
-function restrictToOwner(path, kind, platform = process.platform) {
+function restrictToOwner(path, kind, platform = process.platform, force = false) {
   if (platform !== "win32")
     return true;
   const key = `${kind}:${resolve6(path).toLowerCase()}`;
-  if (restricted.has(key))
+  if (!force && restricted.has(key))
     return true;
   let detail;
   try {
@@ -3295,7 +3295,7 @@ function wrapKeyfile(keyPath, passphrase, dek) {
     } catch {}
     throw err;
   }
-  restrictToOwner(keyPath, "file");
+  restrictToOwner(keyPath, "file", process.platform, true);
   if (process.platform !== "win32") {
     try {
       chmodSync(keyPath, 384);

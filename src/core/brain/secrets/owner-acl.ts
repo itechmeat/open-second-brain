@@ -117,10 +117,11 @@ export function restrictToOwner(
   path: string,
   kind: "file" | "directory",
   platform: NodeJS.Platform = process.platform,
+  force = false,
 ): boolean {
   if (platform !== "win32") return true;
   const key = `${kind}:${resolve(path).toLowerCase()}`;
-  if (restricted.has(key)) return true;
+  if (!force && restricted.has(key)) return true;
   let detail: string;
   try {
     const identity = currentWindowsIdentity();
