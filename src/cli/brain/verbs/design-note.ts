@@ -21,6 +21,12 @@ import {
   planDesignNote,
 } from "../../../core/brain/design-note.ts";
 import { gatedOwnerScopeView } from "../../../core/brain/owner-scope-view.ts";
+import {
+  parsePayloadJson,
+  PayloadJsonError,
+  payloadStripNote,
+  type PayloadStrip,
+} from "../../../core/brain/payload-json.ts";
 import { ResponseCheckError } from "../../../core/brain/response-checks.ts";
 import { ResponseShapeError } from "../../../core/brain/response-shape.ts";
 import {
@@ -103,13 +109,22 @@ export async function cmdBrainDesignNote(argv: string[]): Promise<number> {
     }
 
     let payload: unknown;
+    let strip: PayloadStrip | undefined;
     try {
-      payload = JSON.parse(rawPayload);
-    } catch {
-      const message = "payload must be valid JSON";
-      if (!asJson) return fail(message);
-      okJson({ ok: false, message });
-      return 1;
+      const parsed = parsePayloadJson(rawPayload);
+      payload = parsed.payload;
+      strip = parsed.strip;
+    } catch (error) {
+      // Reported here rather than by the ingress: at this point the mistake
+      // is the JSON the operator typed, and a path inside a payload the CLI
+      // never parsed would not tell them what to fix. A refusal after a
+      // strip attempt names the attempt (t_dac8bf7e).
+      if (error instanceof PayloadJsonError) {
+        if (!asJson) return fail(error.message);
+        okJson({ ok: false, message: error.message });
+        return 1;
+      }
+      throw error;
     }
     const res = commitDesignNote(vault, topic, payload, {
       agent: resolveBrainAgent(flags, config),
@@ -123,11 +138,14 @@ export async function cmdBrainDesignNote(argv: string[]): Promise<number> {
         path: res.path,
         recommended: res.recommended,
         alternative_count: res.alternativeCount,
+        // Present only when a leading <think> block was stripped (t_dac8bf7e).
+        ...(strip !== undefined ? { note: payloadStripNote(strip) } : {}),
       });
       return 0;
     }
     ok(`wrote ${res.path}`);
     ok(`recommended: ${res.recommended} (of ${res.alternativeCount} alternative(s))`);
+    if (strip !== undefined) ok(payloadStripNote(strip));
     return 0;
   } catch (err) {
     const message = isNamedRefusal(err)

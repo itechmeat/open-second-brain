@@ -28,6 +28,12 @@ import { resolveTokenImpactLedgerEnabled } from "../../../core/config.ts";
 import { ResponseCheckError } from "../../../core/brain/response-checks.ts";
 import { ResponseShapeError } from "../../../core/brain/response-shape.ts";
 import {
+  parsePayloadJson,
+  PayloadJsonError,
+  payloadStripNote,
+  type PayloadStrip,
+} from "../../../core/brain/payload-json.ts";
+import {
   brainVerbContext,
   fail,
   ok,
@@ -127,16 +133,22 @@ export async function cmdBrainExtractSignals(argv: string[]): Promise<number> {
     }
 
     let payload: unknown;
+    let strip: PayloadStrip | undefined;
     try {
-      payload = JSON.parse(rawPayload);
-    } catch {
+      const parsed = parsePayloadJson(rawPayload);
+      payload = parsed.payload;
+      strip = parsed.strip;
+    } catch (error) {
       // Reported here rather than by the ingress: at this point the mistake
       // is the JSON the operator typed, and a path inside a payload the CLI
-      // never parsed would not tell them what to fix.
-      const message = "payload must be valid JSON";
-      if (!asJson) return fail(message);
-      okJson({ ok: false, message });
-      return 1;
+      // never parsed would not tell them what to fix. A refusal after a
+      // strip attempt names the attempt (t_dac8bf7e).
+      if (error instanceof PayloadJsonError) {
+        if (!asJson) return fail(error.message);
+        okJson({ ok: false, message: error.message });
+        return 1;
+      }
+      throw error;
     }
     const now = new Date();
     const res = commitExtractedSignals(vault, sessionRef, payload, {
@@ -156,6 +168,8 @@ export async function cmdBrainExtractSignals(argv: string[]): Promise<number> {
         deduped: res.deduped,
         durability_rejected: res.durabilityRejected,
         rejected: res.rejected.map((r) => ({ topic: r.topic, reason: r.reason })),
+        // Present only when a leading <think> block was stripped (t_dac8bf7e).
+        ...(strip !== undefined ? { note: payloadStripNote(strip) } : {}),
       });
       return 0;
     }
@@ -164,6 +178,7 @@ export async function cmdBrainExtractSignals(argv: string[]): Promise<number> {
         (res.staged > 0 ? ` (staged for approval)` : "") +
         `, deduped ${res.deduped}, durability-rejected ${res.durabilityRejected}`,
     );
+    if (strip !== undefined) ok(payloadStripNote(strip));
     for (const r of res.rejected) ok(`rejected: ${r.topic} (${r.reason})`);
     return 0;
   } catch (err) {

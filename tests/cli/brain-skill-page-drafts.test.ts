@@ -12,7 +12,7 @@
  *     skills root.
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -143,4 +143,52 @@ test("the MCP tool plans, drafts, and accepts into the configured skills root", 
   const skillFile = join(skillsRoot, DRAFT.name, "SKILL.md");
   expect(accepted.skillPath).toBe(skillFile);
   expect(readFileSync(skillFile, "utf8")).toContain(`name: ${DRAFT.name}`);
+});
+
+describe("page-draft think-block strip (t_dac8bf7e)", () => {
+  test("a <think>-prefixed payload succeeds, names the strip, and stages the same draft", async () => {
+    const r = await run([
+      "page-draft",
+      PAGE,
+      "--payload",
+      `<think>shaping the draft</think>${JSON.stringify(DRAFT)}`,
+      "--json",
+    ]);
+    expect(r.returncode).toBe(0);
+    const payload = JSON.parse(r.stdout) as { outcome: string; slug: string; note?: string };
+    expect(payload.outcome).toBe("created");
+    expect(payload.note).toContain("<think>");
+    // Staged inside the vault only - the SKILL.md is still not materialized.
+    expect(existsSync(join(skillsRoot, DRAFT.name, "SKILL.md"))).toBe(false);
+  });
+
+  test("text mode names the strip too - never a silent strip", async () => {
+    const r = await run([
+      "page-draft",
+      PAGE,
+      "--payload",
+      `<think>shaping the draft</think>${JSON.stringify(DRAFT)}`,
+    ]);
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("<think>");
+  });
+
+  test("garbage still refuses with the plain message", async () => {
+    const r = await run(["page-draft", PAGE, "--payload", "not json", "--json"]);
+    expect(r.returncode).not.toBe(0);
+    expect(r.stderr).toContain("brain skill-proposals page-draft: payload must be valid JSON");
+  });
+
+  test("a payload that still does not parse after the strip names the attempt", async () => {
+    const r = await run(["page-draft", PAGE, "--payload", "<think>r</think>not json", "--json"]);
+    expect(r.returncode).not.toBe(0);
+    expect(r.stderr).toContain("<think>");
+  });
+
+  test("a clean payload's --json output carries no note key", async () => {
+    const r = await run(["page-draft", PAGE, "--payload", JSON.stringify(DRAFT), "--json"]);
+    expect(r.returncode).toBe(0);
+    const payload = JSON.parse(r.stdout) as Record<string, unknown>;
+    expect("note" in payload).toBe(false);
+  });
 });

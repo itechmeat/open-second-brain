@@ -15,7 +15,7 @@
  *     absolute host path.
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -170,4 +170,59 @@ test("the MCP tool answers both phases over the same core", async () => {
 test("is a full-tier tool, absent from the writer surface", () => {
   expect(buildToolTable("full").find((t) => t.name === "brain_design_note")).toBeDefined();
   expect(buildToolTable("writer").find((t) => t.name === "brain_design_note")).toBeUndefined();
+});
+
+describe("think-block strip (t_dac8bf7e)", () => {
+  test("a <think>-prefixed payload succeeds, names the strip, and commits the same note", async () => {
+    const r = await run([
+      TOPIC,
+      "--payload",
+      `<think>weighing the options</think>${JSON.stringify(note(false, true))}`,
+      "--json",
+    ]);
+    expect(r.returncode).toBe(0);
+    const payload = JSON.parse(r.stdout) as {
+      ok: boolean;
+      note?: string;
+      recommended: string;
+      path: string;
+    };
+    expect(payload.ok).toBe(true);
+    expect(payload.note).toContain("<think>");
+    expect(payload.recommended).toBe("option-1");
+    expect(existsSync(payload.path)).toBe(true);
+  });
+
+  test("text mode names the strip too - never a silent strip", async () => {
+    const r = await run([
+      TOPIC,
+      "--payload",
+      `<think>weighing the options</think>${JSON.stringify(note(false, true))}`,
+    ]);
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("<think>");
+  });
+
+  test("garbage still exits 1 with the plain ok:false refusal", async () => {
+    const r = await run([TOPIC, "--payload", "not json", "--json"]);
+    expect(r.returncode).toBe(1);
+    const payload = JSON.parse(r.stdout) as { ok: boolean; message: string };
+    expect(payload.ok).toBe(false);
+    expect(payload.message).toBe("payload must be valid JSON");
+  });
+
+  test("a payload that still does not parse after the strip names the attempt and exits 1", async () => {
+    const r = await run([TOPIC, "--payload", "<think>r</think>not json", "--json"]);
+    expect(r.returncode).toBe(1);
+    const payload = JSON.parse(r.stdout) as { ok: boolean; message: string };
+    expect(payload.ok).toBe(false);
+    expect(payload.message).toContain("<think>");
+  });
+
+  test("a clean payload's --json output carries no note key", async () => {
+    const r = await run([TOPIC, "--payload", JSON.stringify(note(false, true)), "--json"]);
+    expect(r.returncode).toBe(0);
+    const payload = JSON.parse(r.stdout) as Record<string, unknown>;
+    expect("note" in payload).toBe(false);
+  });
 });

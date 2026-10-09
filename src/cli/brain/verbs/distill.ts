@@ -35,6 +35,12 @@ import {
 } from "../../../core/brain/provenance/capture-scope.ts";
 import { ResponseShapeError } from "../../../core/brain/response-shape.ts";
 import {
+  parsePayloadJson,
+  PayloadJsonError,
+  payloadStripNote,
+  type PayloadStrip,
+} from "../../../core/brain/payload-json.ts";
+import {
   INTAKE_TRUST,
   UNTRUSTED_SOURCE_FRONTMATTER_KEY,
   type IntakeTrust,
@@ -81,24 +87,23 @@ const CLAIMS_SHAPE_HINT = "claims must be a JSON array of { text, block? } objec
  * array) and hand it to the shared shape-checked ingress, so the CLI and the
  * MCP tool accept exactly the same payload under exactly the same rules.
  *
- * The unwrap failure is reported HERE rather than by the ingress: at this
- * point the operator's mistake is the wrapper they typed, and a path inside a
- * payload the CLI never found does not tell them what to type instead. Once a
- * list is in hand, the ingress owns every complaint about its items.
+ * The parse goes through the shared strip-and-note parser (t_dac8bf7e): a
+ * leading `<think>` block is stripped once and the fact returned, while a
+ * refusal - plain or naming the strip attempt - propagates as the
+ * {@link PayloadJsonError} the operator-input catch reports. The unwrap
+ * failure is still reported HERE rather than by the ingress: at this point
+ * the operator's mistake is the wrapper they typed, and a path inside a
+ * payload the CLI never found does not tell them what to type instead. Once
+ * a list is in hand, the ingress owns every complaint about its items.
  */
-function parseClaims(raw: string): DistillClaim[] {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error("claims must be valid JSON");
-  }
-  const payload =
+function parseClaims(raw: string): { claims: DistillClaim[]; strip?: PayloadStrip } {
+  const { payload: parsed, strip } = parsePayloadJson(raw);
+  const claims =
     !Array.isArray(parsed) && parsed !== null && typeof parsed === "object"
       ? (parsed as { claims?: unknown }).claims
       : parsed;
-  if (!Array.isArray(payload)) throw new Error(CLAIMS_SHAPE_HINT);
-  return parseDistillClaims(payload);
+  if (!Array.isArray(claims)) throw new Error(CLAIMS_SHAPE_HINT);
+  return { claims: parseDistillClaims(claims), ...(strip !== undefined ? { strip } : {}) };
 }
 
 /**
@@ -177,7 +182,24 @@ export async function cmdBrainDistill(argv: string[]): Promise<number> {
       typeof flags["claims"] === "string"
         ? (flags["claims"] as string)
         : readFileSync(flags["claims-file"] as string, "utf8");
-    const claims = parseClaims(claimsRaw);
+    let claims: DistillClaim[];
+    let strip: PayloadStrip | undefined;
+    try {
+      const parsed = parseClaims(claimsRaw);
+      claims = parsed.claims;
+      strip = parsed.strip;
+    } catch (error) {
+      // Reported here rather than by the ingress: at this point the mistake
+      // is the JSON the operator typed, and a path inside a payload the CLI
+      // never parsed would not tell them what to fix. The refusal rides the
+      // verb's own `distill: <message>` stderr line; after a strip attempt
+      // the message names the attempt (t_dac8bf7e).
+      if (error instanceof PayloadJsonError) {
+        process.stderr.write(`distill: ${error.message}\n`);
+        return 1;
+      }
+      throw error;
+    }
     // Read verbatim: the excerpt is stored byte for byte and its digest is
     // taken over exactly these bytes.
     const excerpt =
@@ -208,10 +230,13 @@ export async function cmdBrainDistill(argv: string[]): Promise<number> {
         trust: res.trust,
         capture_scope: res.captureScope,
         ...(res.quotes !== undefined ? { quotes: res.quotes } : {}),
+        // Present only when a leading <think> block was stripped (t_dac8bf7e).
+        ...(strip !== undefined ? { note: payloadStripNote(strip) } : {}),
       });
       return 0;
     }
     ok(successLine(res));
+    if (strip !== undefined) ok(payloadStripNote(strip));
     return 0;
   } catch (err) {
     if (OPERATOR_ERROR_CLASSES.some((cls) => err instanceof cls)) {

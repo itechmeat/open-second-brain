@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { nestedCommand } from "../../src/cli/command-manifest.ts";
 import { readExcerptSection } from "../../src/core/brain/provenance/capture-scope.ts";
 import { BRAIN_DISTILLATIONS_REL } from "../../src/core/brain/path-constants.ts";
+import { PAYLOAD_UNPARSEABLE_MESSAGE } from "../../src/core/brain/payload-json.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
 let tmp: string;
@@ -300,5 +301,67 @@ describe("o2b brain distill - quote check and capture scope", () => {
     const names = (nestedCommand("brain", "distill")?.flags ?? []).map((f) => f.name);
     expect(names).toContain("strict-quotes");
     expect(names).toContain("excerpt-file");
+  });
+});
+
+describe("o2b brain distill - think-block strip (t_dac8bf7e)", () => {
+  test("a <think>-prefixed claims payload succeeds, names the strip, and distills the same claims", async () => {
+    const claims = `<think>weighing the spans</think>${JSON.stringify([
+      { text: "First atomic claim.", block: "abc" },
+    ])}`;
+    const res = await runCli(
+      ["brain", "distill", "Articles/src.md", "--claims", claims, "--vault", vault, "--json"],
+      { env },
+    );
+    expect(res.returncode).toBe(0);
+    const out = JSON.parse(res.stdout) as {
+      claim_count: number;
+      distillation_path: string;
+      note?: string;
+    };
+    expect(out.claim_count).toBe(1);
+    expect(out.note).toContain("<think>");
+    expect(existsSync(join(vault, out.distillation_path))).toBe(true);
+  });
+
+  test("the human line names the strip too - never a silent strip", async () => {
+    const claims = `<think>weighing the spans</think>${JSON.stringify([{ text: "A claim." }])}`;
+    const res = await runCli(
+      ["brain", "distill", "Articles/src.md", "--claims", claims, "--vault", vault],
+      { env },
+    );
+    expect(res.returncode).toBe(0);
+    expect(res.stdout).toContain("<think>");
+  });
+
+  test("garbage claims still exit 1 with the plain refusal", async () => {
+    const res = await distillWithClaims("not json");
+    expect(res.returncode).toBe(1);
+    expect(res.stderr).toBe(`distill: ${PAYLOAD_UNPARSEABLE_MESSAGE}\n`);
+  });
+
+  test("claims that still do not parse after the strip name the attempt and exit 1", async () => {
+    const res = await distillWithClaims("<think>r</think>not json");
+    expect(res.returncode).toBe(1);
+    expect(res.stderr).toContain("<think>");
+  });
+
+  test("clean claims output carries no note key", async () => {
+    const res = await runCli(
+      [
+        "brain",
+        "distill",
+        "Articles/src.md",
+        "--claims",
+        JSON.stringify([{ text: "A claim." }]),
+        "--vault",
+        vault,
+        "--json",
+      ],
+      { env },
+    );
+    expect(res.returncode).toBe(0);
+    const out = JSON.parse(res.stdout) as Record<string, unknown>;
+    expect("note" in out).toBe(false);
   });
 });

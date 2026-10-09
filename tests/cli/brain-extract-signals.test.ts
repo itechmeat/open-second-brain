@@ -11,7 +11,7 @@
  *  5. The verb has its own `--help`, not a dump of the whole brain help.
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -132,4 +132,58 @@ test("--help prints the verb's own usage", async () => {
   expect(r.returncode).toBe(0);
   expect(r.stdout.startsWith("usage:")).toBe(true);
   expect(r.stdout).toContain("o2b brain extract-signals");
+});
+
+describe("think-block strip (t_dac8bf7e)", () => {
+  test("a <think>-prefixed payload succeeds, names the strip, and writes the clean case's items", async () => {
+    const r = await run([
+      SESSION,
+      "--payload",
+      `<think>weighing the turns</think>${JSON.stringify({ items: [ITEM] })}`,
+      "--json",
+    ]);
+    expect(r.returncode).toBe(0);
+    const payload = JSON.parse(r.stdout) as {
+      ok: boolean;
+      note?: string;
+      written: Array<{ id: string; topic: string }>;
+    };
+    expect(payload.ok).toBe(true);
+    expect(payload.note).toContain("<think>");
+    // Identical to the clean case's pinned written items.
+    expect(payload.written.map((w) => w.topic)).toEqual(["heading-style"]);
+  });
+
+  test("text mode names the strip too - never a silent strip", async () => {
+    const r = await run([
+      SESSION,
+      "--payload",
+      `<think>weighing the turns</think>${JSON.stringify({ items: [ITEM] })}`,
+    ]);
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("<think>");
+  });
+
+  test("garbage still exits 1 with the plain ok:false refusal", async () => {
+    const r = await run([SESSION, "--payload", "not json", "--json"]);
+    expect(r.returncode).toBe(1);
+    const payload = JSON.parse(r.stdout) as { ok: boolean; message: string };
+    expect(payload.ok).toBe(false);
+    expect(payload.message).toBe("payload must be valid JSON");
+  });
+
+  test("a payload that still does not parse after the strip names the attempt and exits 1", async () => {
+    const r = await run([SESSION, "--payload", "<think>r</think>not json", "--json"]);
+    expect(r.returncode).toBe(1);
+    const payload = JSON.parse(r.stdout) as { ok: boolean; message: string };
+    expect(payload.ok).toBe(false);
+    expect(payload.message).toContain("<think>");
+  });
+
+  test("a clean payload's --json output carries no note key", async () => {
+    const r = await run([SESSION, "--payload", JSON.stringify({ items: [ITEM] }), "--json"]);
+    expect(r.returncode).toBe(0);
+    const payload = JSON.parse(r.stdout) as Record<string, unknown>;
+    expect("note" in payload).toBe(false);
+  });
 });

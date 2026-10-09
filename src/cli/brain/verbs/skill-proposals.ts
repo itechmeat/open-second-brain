@@ -14,6 +14,12 @@ import {
   rejectSkillProposal,
 } from "../../../core/brain/skill-proposals.ts";
 import { deriveSkillUsage } from "../../../core/brain/skill-usage.ts";
+import {
+  parsePayloadJson,
+  PayloadJsonError,
+  payloadStripNote,
+  type PayloadStrip,
+} from "../../../core/brain/payload-json.ts";
 import { CliError, brainVerbContext, failWith, parse } from "../helpers.ts";
 
 export async function cmdBrainSkillProposals(argv: string[]): Promise<number> {
@@ -118,21 +124,39 @@ function pageDraft(argv: string[]): number {
     throw new CliError("brain skill-proposals page-draft: --payload or --payload-file is required");
   }
   let payload: unknown;
+  let strip: PayloadStrip | undefined;
   try {
-    payload = JSON.parse(raw);
-  } catch {
-    throw new CliError("brain skill-proposals page-draft: payload must be valid JSON");
+    const parsed = parsePayloadJson(raw);
+    payload = parsed.payload;
+    strip = parsed.strip;
+  } catch (error) {
+    // Reported here rather than by the ingress: at this point the mistake
+    // is the JSON the operator typed. A refusal after a strip attempt names
+    // the attempt (t_dac8bf7e); plain garbage keeps the plain refusal.
+    if (!(error instanceof PayloadJsonError)) throw error;
+    throw new CliError(`brain skill-proposals page-draft: ${error.message}`);
   }
   const vault = brainVerbContext(flags).vault;
   const result = commitSkillPageDraft(vault, page, payload, { now: new Date() });
 
   if (flags["json"]) {
-    process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+    process.stdout.write(
+      JSON.stringify(
+        {
+          ...result,
+          // Present only when a leading <think> block was stripped (t_dac8bf7e).
+          ...(strip !== undefined ? { note: payloadStripNote(strip) } : {}),
+        },
+        null,
+        2,
+      ) + "\n",
+    );
     return 0;
   }
   process.stdout.write(
     `${result.outcome} ${result.id}` + ("reason" in result ? ` (${result.reason})` : "") + `\n`,
   );
+  if (strip !== undefined) process.stdout.write(`${payloadStripNote(strip)}\n`);
   return 0;
 }
 
