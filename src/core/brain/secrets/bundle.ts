@@ -6,8 +6,10 @@
  * through the keyfile envelope's KDF (`./envelope.ts` - same scrypt
  * cost curve, fresh salt, parameters recorded inside the bundle). Import
  * verifies, decrypts EVERY value before writing anything, reuses the
- * store's name and env-var validation, and lands the entries through the
- * store's lock and writer with `removeSecret`'s exactness on collisions.
+ * store's name, env-var AND allow-pattern validation (so a rewritten
+ * bundle cannot land entries the store's own writer would refuse), and
+ * lands the entries through the store's lock and writer with
+ * `removeSecret`'s exactness on collisions.
  *
  * What the envelope carries in the clear, by design: the schema version,
  * the wall-clock stamp, the KDF parameters, and each entry's name,
@@ -40,6 +42,7 @@ import {
   isValidSecretEnvVar,
   isValidSecretName,
   keyPath,
+  normalizeAllowPatterns,
   readStore,
   SECRETS_SCHEMA_VERSION,
   type SecretAuditContext,
@@ -267,6 +270,20 @@ export function importSecretBundle(
           JSON.stringify(entry.env_var),
       );
     }
+    // The third rule `set` enforces, applied to the imported allowlist:
+    // trim each pattern, refuse empty ones. The allow list rides in the
+    // clear, so without this a rewritten bundle could land entries the
+    // store's own writer would refuse.
+    let allow: string[];
+    try {
+      allow = normalizeAllowPatterns(entry.allow);
+    } catch {
+      throw new SecretBundleError(
+        BUNDLE_REFUSAL_CODES.entry,
+        `entry "${name}" has an allow pattern that fails the store's rule: ` +
+          "patterns must be non-empty",
+      );
+    }
     let value: string;
     try {
       value = decryptValue(derived, entry.value);
@@ -277,7 +294,7 @@ export function importSecretBundle(
         "the passphrase does not open this bundle (wrong passphrase, or the bundle is corrupt); nothing was written",
       );
     }
-    decrypted.set(name, { value, env_var: entry.env_var, allow: [...entry.allow] });
+    decrypted.set(name, { value, env_var: entry.env_var, allow });
   }
 
   const replaced = withSecretsLock(vault, () => {
@@ -385,6 +402,9 @@ function parseBundle(bundle: unknown): SecretBundleFile {
       fields === null ||
       typeof fields.env_var !== "string" ||
       !Array.isArray(fields.allow) ||
+      // Element types are checked here, not at match time: a non-string
+      // pattern must never reach the exec allowlist matcher.
+      !fields.allow.every((pattern) => typeof pattern === "string") ||
       typeof fields.value !== "object" ||
       fields.value === null ||
       typeof (fields.value as EncryptedValue).ciphertext !== "string" ||

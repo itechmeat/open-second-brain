@@ -100,6 +100,21 @@ export function isValidSecretEnvVar(envVar: string): boolean {
 }
 
 /**
+ * The allow-pattern rule `set` enforces: every pattern trims, and an
+ * empty one refuses. Shared with the bundle importer, so an imported
+ * entry can never carry an allowlist the store's own writer would have
+ * refused - a crafted bundle cannot broaden exec capability into a state
+ * `secret set` cannot have produced.
+ */
+export function normalizeAllowPatterns(patterns: ReadonlyArray<string>): string[] {
+  return patterns.map((pattern) => {
+    const trimmed = pattern.trim();
+    if (trimmed.length === 0) throw new Error("allow pattern must not be empty");
+    return trimmed;
+  });
+}
+
+/**
  * Serialise every read-modify-write of `secrets.json` across
  * processes (CLI + MCP). proper-lockfile with retries, matching the
  * search store's writer-lock discipline; the keyfile creation also
@@ -153,11 +168,7 @@ export function setSecret(vault: string, input: SetSecretInput): SecretMetadata 
   if (!ENV_VAR_RE.test(envVar)) {
     throw new Error(`secret env var must match ${ENV_VAR_RE}: ${JSON.stringify(envVar)}`);
   }
-  const allow = (input.allow ?? []).map((pattern) => {
-    const trimmed = pattern.trim();
-    if (trimmed.length === 0) throw new Error("allow pattern must not be empty");
-    return trimmed;
-  });
+  const allow = normalizeAllowPatterns(input.allow ?? []);
 
   const key = loadOrCreateKey(keyPath(vault));
   // Custody is a precondition, not a stderr line: on Windows, a keyfile

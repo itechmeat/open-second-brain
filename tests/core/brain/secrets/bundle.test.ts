@@ -155,6 +155,54 @@ describe("the credential bundle", () => {
     expect(listSecrets(other)).toHaveLength(2);
   });
 
+  test("import validates allow patterns exactly as `set` refuses them", () => {
+    // The allow list rides in the clear, so a bundle rewritten in transit
+    // cannot land entries the store's own writer would refuse - and a
+    // non-string pattern cannot reach the exec allowlist matcher.
+    seed(vault);
+    const bundle = exportSecretBundle(vault, PASSPHRASE, CTX) as unknown as {
+      entries: Record<string, { allow: unknown[] }>;
+    };
+    for (const bad of [[""], ["   "]]) {
+      const tampered = structuredClone(bundle);
+      tampered.entries["beta-key"]!.allow = bad;
+      try {
+        importSecretBundle(other, tampered, {
+          passphrase: PASSPHRASE,
+          replace: false,
+          agent: "tester",
+          now: LATER,
+        });
+        throw new Error(`expected the allow-pattern refusal for ${JSON.stringify(bad)}`);
+      } catch (err) {
+        expect(err).toBeInstanceOf(SecretBundleError);
+        expect((err as SecretBundleError).code).toBe(BUNDLE_REFUSAL_CODES.entry);
+      }
+      expect(listSecrets(other)).toHaveLength(0);
+    }
+    const typed = structuredClone(bundle);
+    typed.entries["beta-key"]!.allow = [42];
+    expect(() =>
+      importSecretBundle(other, typed, {
+        passphrase: PASSPHRASE,
+        replace: false,
+        agent: "tester",
+        now: LATER,
+      }),
+    ).toThrow(SecretBundleError);
+    expect(listSecrets(other)).toHaveLength(0);
+    // A valid pattern trims exactly as `set` trims it.
+    const padded = structuredClone(bundle);
+    padded.entries["beta-key"]!.allow = ["  curl *  "];
+    importSecretBundle(other, padded, {
+      passphrase: PASSPHRASE,
+      replace: false,
+      agent: "tester",
+      now: LATER,
+    });
+    expect(listSecrets(other).find((s) => s.name === "beta-key")?.allow).toEqual(["curl *"]);
+  });
+
   test("the exported bytes carry none of the values or the passphrase; KDF rides inside", () => {
     seed(vault);
     const bundle = exportSecretBundle(vault, PASSPHRASE, CTX);
