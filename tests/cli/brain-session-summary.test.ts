@@ -91,6 +91,16 @@ test("get --json after two differing writes carries the divergence keys and the 
   expect(payload.digest.id).toBe(newer.id);
   expect(payload.digest_count).toBe(2);
   expect(payload.divergent).toBe(true);
+  // The additive key set is frozen: no key may appear or disappear from the
+  // divergent envelope silently (the single-record envelope carries exactly
+  // found/digest/digest_count; divergence adds exactly these two).
+  expect(Object.keys(payload).toSorted()).toEqual([
+    "digest",
+    "digest_count",
+    "divergent",
+    "found",
+    "records",
+  ]);
   expect(payload.records?.length).toBe(2);
   for (const record of payload.records ?? []) {
     expect(typeof record["id"]).toBe("string");
