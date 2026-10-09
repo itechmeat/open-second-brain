@@ -156,6 +156,9 @@ test("a malformed registry file degrades to empty, never throws", () => {
 // plain-env behavior.
 
 const STORED_PROBE_KEY = fakeCredential("stored-", "probe-8d31");
+const EMBED_KEY_REF = "$secret:embed_key";
+const ABSENT_EMBED_REF = "$secret:absent_name";
+const SPACED_EMBED_REF = "$secret:has space";
 const ENV_PROBE_KEY = fakeCredential("env-", "probe-2e77");
 const LOCK_PASSPHRASE = fakeCredential("registry-wrap-", "phrase-71bd");
 const PROBE_NOW = new Date("2026-06-05T10:00:00Z");
@@ -199,7 +202,7 @@ test("a probe entry written as a reference resolves through the store", () => {
   storeProbeKey();
   const expanded = expandRegisteredProvider(
     "nvidia-nim",
-    [{ ...nim, envKey: "$secret:embed_key" }],
+    [{ ...nim, envKey: EMBED_KEY_REF }],
     {},
     { secretsVault: vault },
   );
@@ -221,7 +224,7 @@ test("an unresolvable reference probe surfaces the named resolver error", () => 
   expect(() =>
     expandRegisteredProvider(
       "nvidia-nim",
-      [{ ...nim, envKey: "$secret:absent_name" }],
+      [{ ...nim, envKey: ABSENT_EMBED_REF }],
       {},
       { secretsVault: vault },
     ),
@@ -259,7 +262,7 @@ describe("resolveSearchConfig probes a registered provider through the store", (
   });
 
   test("a reference-shaped envKey resolves through the full config resolution", () => {
-    addProviderProfile(vault, { ...probeProfile, envKey: "$secret:embed_key" });
+    addProviderProfile(vault, { ...probeProfile, envKey: EMBED_KEY_REF });
     storeProbeKey();
     const cfg = resolveSearchConfig({ vault, configPath: configWithProvider("nvidia-nim") });
     expect(cfg.semantic.apiKey).toBe(STORED_PROBE_KEY);
@@ -293,7 +296,7 @@ describe("resolveSearchConfig probes a registered provider through the store", (
   });
 
   test("a malformed reference probe surfaces the named reference error through the full resolution", () => {
-    addProviderProfile(vault, { ...probeProfile, envKey: "$secret:has space" });
+    addProviderProfile(vault, { ...probeProfile, envKey: SPACED_EMBED_REF });
     expect(() =>
       resolveSearchConfig({ vault, configPath: configWithProvider("nvidia-nim") }),
     ).toThrow(SecretReferenceError);
@@ -321,7 +324,7 @@ describe("resolveSearchConfig probes a registered provider through the store", (
       vault,
       configPath: configWithProvider(
         "openai-compat",
-        `embedding_base_url: "https://embed.example/v1"\nembedding_api_key: "$secret:embed_key"\n`,
+        `embedding_base_url: "https://embed.example/v1"\nembedding_api_key: "${EMBED_KEY_REF}"\n`,
       ),
     });
     expect(cfg.semantic.provider).toBe("openai-compat");
@@ -331,7 +334,7 @@ describe("resolveSearchConfig probes a registered provider through the store", (
 
   test("the cross-encoder rerank env key resolves a $secret: reference like its siblings", () => {
     storeProbeKey();
-    withEnvKey("rerank_key_var", "$secret:embed_key", () => {
+    withEnvKey("rerank_key_var", EMBED_KEY_REF, () => {
       const cfg = resolveSearchConfig({
         vault,
         configPath: configWithProvider(

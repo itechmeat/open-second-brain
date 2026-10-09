@@ -87,6 +87,9 @@ test("redactConfigMapping hides the bot token but keeps the allowlist", () => {
   expect(out["telegram_chat_allowlist"]).toBe("100");
 });
 
+const STORED_TOKEN_REF = "$secret:telegram_bot_token";
+const ABSENT_TOKEN_REF = "$secret:absent_name";
+
 // ----- Token through the custody store (trust-surface-hardening, B2) ---------
 //
 // A token written as a `$secret:NAME` reference resolves through the vault's
@@ -109,16 +112,13 @@ function storeBotToken(): void {
 test("a reference token resolves through the custody store from config", () => {
   storeBotToken();
   expect(
-    resolveTelegramBotToken(
-      cfg('telegram_bot_token: "$secret:telegram_bot_token"\n'),
-      custodyVault,
-    ),
+    resolveTelegramBotToken(cfg(`telegram_bot_token: "${STORED_TOKEN_REF}"\n`), custodyVault),
   ).toBe(STORED_TOKEN);
 });
 
 test("a reference token resolves through the custody store from env", () => {
   storeBotToken();
-  process.env["TELEGRAM_BOT_TOKEN"] = "$secret:telegram_bot_token";
+  process.env["TELEGRAM_BOT_TOKEN"] = STORED_TOKEN_REF;
   expect(resolveTelegramBotToken(cfg("vault: /x\n"), custodyVault)).toBe(STORED_TOKEN);
 });
 
@@ -132,6 +132,6 @@ test("a plain token keeps resolving byte-identically with a custody vault passed
 
 test("an unresolvable reference token refuses with the named resolver error", () => {
   expect(() =>
-    resolveTelegramBotToken(cfg('telegram_bot_token: "$secret:absent_name"\n'), custodyVault),
+    resolveTelegramBotToken(cfg(`telegram_bot_token: "${ABSENT_TOKEN_REF}"\n`), custodyVault),
   ).toThrow(SecretReferenceError);
 });

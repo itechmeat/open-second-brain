@@ -43,6 +43,8 @@ test("run without a configured token exits with a typed error", async () => {
   expect(res.stderr.toLowerCase()).toContain("token");
 });
 
+const ABSENT_TG_TOKEN_REF = "$secret:absent_tg_token";
+
 test("a $secret: token reference resolves through the vault's custody store", async () => {
   // The name is absent from the vault's store and the environment, so the
   // resolver refuses BY NAME before any transport is built - the raw
@@ -50,7 +52,7 @@ test("a $secret: token reference resolves through the vault's custody store", as
   // never touches the network).
   writeFileSync(
     config,
-    `vault: "${vault}"\ntelegram_bot_token: "$secret:absent_tg_token"\n`,
+    `vault: "${vault}"\ntelegram_bot_token: "${ABSENT_TG_TOKEN_REF}"\n`,
     "utf8",
   );
   const res = await runCli(["brain", "telegram-capture", "run"], {

@@ -37,6 +37,9 @@ import { SecretReferenceError } from "../../src/core/secret-ref.ts";
 import "../../src/core/secret-resolver.ts";
 import { fakeCredential } from "../helpers/fake-credentials.ts";
 
+const INSTALLED_REF = "$secret:installation_secret";
+const ABSENT_REF = "$secret:absent_name";
+
 /** A stored value of the wrong shape: not 32 lowercase hex characters. */
 const CORRUPT_VALUE = "not-a-valid-secret";
 
@@ -138,13 +141,13 @@ describe("resolveInstallationSecret", () => {
 
     test("a reference value resolves through the custody store", () => {
       const vault = storeInstallationKey();
-      atomicWriteFileSync(configPath, 'installation_secret: "$secret:installation_secret"\n');
+      atomicWriteFileSync(configPath, `installation_secret: "${INSTALLED_REF}"\n`);
       expect(resolveInstallationSecret(configPath, vault)).toBe(STORED_KEY);
     });
 
     test("an unresolvable reference refuses with the named error, never self-heals", () => {
       const vault = storeInstallationKey();
-      atomicWriteFileSync(configPath, 'installation_secret: "$secret:absent_name"\n');
+      atomicWriteFileSync(configPath, `installation_secret: "${ABSENT_REF}"\n`);
       expect(() => resolveInstallationSecret(configPath, vault)).toThrow(SecretReferenceError);
       // The reference is still in the config: no fresh key was written over it.
       expect(readFileSync(configPath, "utf8")).toContain("absent_name");
@@ -156,7 +159,7 @@ describe("resolveInstallationSecret", () => {
       // the invalid value read as a miss and the self-heal minted a fresh
       // key over the persisted reference.
       const vault = storeInstallationKey("not-a-32-hex-key");
-      atomicWriteFileSync(configPath, 'installation_secret: "$secret:installation_secret"\n');
+      atomicWriteFileSync(configPath, `installation_secret: "${INSTALLED_REF}"\n`);
       expect(() => resolveInstallationSecret(configPath, vault)).toThrow(SecretReferenceError);
       // The reference survives untouched, and the HMAC input never rotated.
       expect(readFileSync(configPath, "utf8")).toContain("$secret:installation_secret");
@@ -165,7 +168,7 @@ describe("resolveInstallationSecret", () => {
     test("a persisted reference refuses by name when no vault is available, never self-heals", () => {
       // The exported signature allows omitting the vault; that must turn
       // into the named refusal, not into a fresh key over the reference.
-      atomicWriteFileSync(configPath, 'installation_secret: "$secret:installation_secret"\n');
+      atomicWriteFileSync(configPath, `installation_secret: "${INSTALLED_REF}"\n`);
       expect(() => resolveInstallationSecret(configPath)).toThrow(SecretReferenceError);
       expect(readFileSync(configPath, "utf8")).toContain("$secret:installation_secret");
     });
@@ -177,7 +180,7 @@ describe("resolveInstallationSecret", () => {
       const kp = join(secretsDir(vault), "keyfile");
       wrapKeyfile(kp, fakeCredential("install-wrap-", "phrase-8e31"), loadOrCreateKey(kp));
       clearHeldKey(kp);
-      atomicWriteFileSync(configPath, 'installation_secret: "$secret:installation_secret"\n');
+      atomicWriteFileSync(configPath, `installation_secret: "${INSTALLED_REF}"\n`);
       expect(() => resolveInstallationSecret(configPath, vault)).toThrow(SecretStoreLockedError);
       expect(readFileSync(configPath, "utf8")).toContain("$secret:installation_secret");
     });
@@ -250,7 +253,7 @@ describe("vaultStoreReference (keyed HMAC)", () => {
       agent: "tester",
       now: new Date("2026-06-05T10:00:00Z"),
     });
-    atomicWriteFileSync(configPath, 'installation_secret: "$secret:installation_secret"\n');
+    atomicWriteFileSync(configPath, `installation_secret: "${INSTALLED_REF}"\n`);
     const expected =
       VAULT_STORE_REF_PREFIX +
       createHmac("sha256", storedKey).update(resolve(vault)).digest("hex").slice(0, 32);
