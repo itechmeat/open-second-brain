@@ -1,24 +1,37 @@
 /**
- * `o2b brain secret <set|list|rm|run|lock|unlock>` (t_0b134404,
- * t_e6667a56): capability-gated secret custody. `set` ingests the value
- * from stdin or --from-env - NEVER from argv, where it would land in
- * shell history and process lists; `list` shows metadata only; `run
- * <name> -- cmd...` injects the secret into an allowlisted subprocess
- * env and returns redacted output; `unlock` wraps the keyfile under a
- * passphrase (first unlock) and holds the key for this process only;
- * `lock` clears that holder. No surface ever prints a value or a
- * passphrase.
+ * `o2b brain secret <set|list|rm|run|lock|unlock|export|import>`
+ * (t_0b134404, t_e6667a56, t_592d9e91): capability-gated secret custody.
+ * `set` ingests the value from stdin or --from-env - NEVER from argv,
+ * where it would land in shell history and process lists; `list` shows
+ * metadata only; `run <name> -- cmd...` injects the secret into an
+ * allowlisted subprocess env and returns redacted output; `unlock` wraps
+ * the keyfile under a passphrase (first unlock) and holds the key for
+ * this process only; `lock` clears that holder; `export` writes every
+ * entry as one passphrase-encrypted bundle to an operator-named `--out`,
+ * with the shared egress redactor run over the bundle's non-ciphertext
+ * metadata tree; `import` restores a bundle. No surface ever prints a
+ * value or a passphrase.
  *
  * A LOST PASSPHRASE IS UNRECOVERABLE: after `unlock` has wrapped the
- * keyfile, the stored values stay unreadable forever without it. There
- * is no recovery path and none is pretended.
+ * keyfile, the stored values stay unreadable forever without it - and a
+ * lost bundle passphrase loses the bundle. There is no recovery path and
+ * none is pretended.
  *
  * Exit codes: 0 on success (run: the subprocess exit code), 1 on an
  * operational failure, 2 on usage errors.
  */
 
+import { readFileSync } from "node:fs";
+
 import { resolveAgentName } from "../../../core/config.ts";
+import { atomicWriteFileSync } from "../../../core/fs-atomic.ts";
 import { runWithSecret, SecretExecDeniedError } from "../../../core/brain/secrets/exec.ts";
+import {
+  bundleEgressScanTree,
+  bundleFromEgressScan,
+  exportSecretBundle,
+  importSecretBundle,
+} from "../../../core/brain/secrets/bundle.ts";
 import {
   listSecrets,
   lockSecretKeyfile,
@@ -31,6 +44,7 @@ import {
   formatWrappedKeyfileExposure,
   secretsSyncExposure,
 } from "../../../core/brain/secrets/sync-exposure.ts";
+import { EGRESS_REDACTION_NOTICE, redactForEgress } from "../../../core/egress/guard.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 import { readStdinText } from "../../stdin.ts";
 
@@ -38,12 +52,17 @@ const USAGE =
   "usage: o2b brain secret set <name> [--env-var V] [--allow PATTERN]... [--from-env SRC] [--agent N] [--vault <path>] [--json] | " +
   "list [--vault <path>] [--json] | rm <name> [--vault <path>] | " +
   "lock [--vault <path>] | unlock [--passphrase-from-env SRC] [--vault <path>] | " +
+  "export --out FILE [--passphrase-from-env SRC] [--vault <path>] | " +
+  "import FILE [--replace] [--passphrase-from-env SRC] [--vault <path>] | " +
   "run <name> [--agent N] [--vault <path>] [--json] -- <command...>";
 
 /** Success notes, hoisted: stdout is contract, not prose. */
 const UNLOCKED_NOTE =
   "keyfile unlocked for this process; the passphrase is held in memory only and never written";
 const LOCKED_NOTE = "keyfile locked; this process's unlocked-key holder is cleared";
+
+/** The declared egress site of the bundle export (src/core/egress/registry.ts). */
+const BUNDLE_EGRESS_SITE = "brain-secret-bundle-export" as const;
 
 /**
  * Ingest the passphrase the way `set` ingests a value: `--passphrase-from-env`
@@ -86,6 +105,8 @@ export async function cmdBrainSecret(argv: string[]): Promise<number> {
     allow: { type: "string-array" },
     "from-env": { type: "string" },
     "passphrase-from-env": { type: "string" },
+    out: { type: "string" },
+    replace: { type: "boolean" },
     agent: { type: "string" },
     json: { type: "boolean" },
   });
@@ -97,15 +118,18 @@ export async function cmdBrainSecret(argv: string[]): Promise<number> {
     op !== "rm" &&
     op !== "run" &&
     op !== "lock" &&
-    op !== "unlock"
+    op !== "unlock" &&
+    op !== "export" &&
+    op !== "import"
   ) {
     process.stderr.write(`${USAGE}\n`);
     return 2;
   }
   const name = positional[1];
-  const needsName = op === "set" || op === "rm" || op === "run";
+  const needsName = op === "set" || op === "rm" || op === "run" || op === "import";
   if (needsName && !name) {
-    process.stderr.write(`brain secret ${op}: a secret name is required\n${USAGE}\n`);
+    const what = op === "import" ? "a bundle file path is required" : "a secret name is required";
+    process.stderr.write(`brain secret ${op}: ${what}\n${USAGE}\n`);
     return 2;
   }
 
@@ -194,6 +218,57 @@ export async function cmdBrainSecret(argv: string[]): Promise<number> {
         lockSecretKeyfile(vault, { agent, now });
         if (asJson) okJson({ locked: true });
         else ok(LOCKED_NOTE);
+        return 0;
+      }
+      case "export": {
+        const out = flags["out"] as string | undefined;
+        if (out === undefined || out.length === 0) {
+          process.stderr.write(`brain secret export: --out FILE is required\n${USAGE}\n`);
+          return 2;
+        }
+        const ingested = await ingestPassphrase("export", flags);
+        if ("exitCode" in ingested) return ingested.exitCode;
+        const bundle = exportSecretBundle(vault, ingested.passphrase, { agent, now });
+        // The destination is operator-named and leaves the machine, so the
+        // shared egress guard runs before any byte is written - over the
+        // bundle's metadata inventory (see bundleEgressScanTree for what is
+        // deliberately out of the tree). A redacted allow pattern merges;
+        // a rewritten entry identifier refuses.
+        const verdict = redactForEgress(BUNDLE_EGRESS_SITE, bundleEgressScanTree(bundle));
+        if (verdict.outcome !== "released") {
+          return fail(`secret export: ${verdict.detail}`);
+        }
+        const payload = verdict.redacted ? bundleFromEgressScan(bundle, verdict.payload) : bundle;
+        atomicWriteFileSync(out, `${JSON.stringify(payload, null, 2)}\n`);
+        if (verdict.redacted) process.stderr.write(EGRESS_REDACTION_NOTICE);
+        if (asJson) okJson({ out, exported: Object.keys(bundle.entries).length });
+        else ok(`secret bundle exported: ${Object.keys(bundle.entries).length} entries -> ${out}`);
+        return 0;
+      }
+      case "import": {
+        const ingested = await ingestPassphrase("import", flags);
+        if ("exitCode" in ingested) return ingested.exitCode;
+        let bundle: unknown;
+        try {
+          bundle = JSON.parse(readFileSync(name!, "utf8"));
+        } catch (err) {
+          return fail(
+            `secret import: the bundle file is unreadable or not JSON: ${name!}: ` +
+              `${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        const result = importSecretBundle(vault, bundle, {
+          passphrase: ingested.passphrase,
+          replace: flags["replace"] === true,
+          agent,
+          now,
+        });
+        if (asJson) okJson({ imported: result.imported, replaced: result.replaced });
+        else
+          ok(
+            `secret bundle imported: ${result.imported.length} entries ` +
+              `(${result.replaced.length} replaced)`,
+          );
         return 0;
       }
       case "run": {

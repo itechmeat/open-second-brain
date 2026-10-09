@@ -84,17 +84,30 @@ function storePath(vault: string): string {
   return join(secretsDir(vault), "secrets.json");
 }
 
-function keyPath(vault: string): string {
+/** The keyfile path - exported for `./bundle.ts`'s wrap and import paths. */
+export function keyPath(vault: string): string {
   return join(secretsDir(vault), "keyfile");
+}
+
+/** The name rule `set` enforces, shared with the bundle importer. */
+export function isValidSecretName(name: string): boolean {
+  return NAME_RE.test(name);
+}
+
+/** The env-var rule `set` enforces, shared with the bundle importer. */
+export function isValidSecretEnvVar(envVar: string): boolean {
+  return ENV_VAR_RE.test(envVar);
 }
 
 /**
  * Serialise every read-modify-write of `secrets.json` across
  * processes (CLI + MCP). proper-lockfile with retries, matching the
  * search store's writer-lock discipline; the keyfile creation also
- * creates the directory the lock anchors on.
+ * creates the directory the lock anchors on. Exported for
+ * `./bundle.ts`, whose import path holds the same lock around its own
+ * read-collision-write sequence.
  */
-function withSecretsLock<T>(vault: string, fn: () => T): T {
+export function withSecretsLock<T>(vault: string, fn: () => T): T {
   loadOrCreateKey(keyPath(vault));
   // The sync lockfile API has no retry option; spin briefly the same
   // way the search store's writer lock does.
@@ -366,7 +379,7 @@ function toMetadata(name: string, stored: StoredSecret): SecretMetadata {
   };
 }
 
-function readStore(vault: string): SecretsFile {
+export function readStore(vault: string): SecretsFile {
   const path = storePath(vault);
   if (!existsSync(path)) return { version: SECRETS_SCHEMA_VERSION, secrets: {} };
   // Windows: a store that came in with a copied vault may carry an ACL
@@ -403,7 +416,7 @@ function readStore(vault: string): SecretsFile {
   };
 }
 
-function writeStore(vault: string, file: SecretsFile): void {
+export function writeStore(vault: string, file: SecretsFile): void {
   // Key creation also creates the 0700 directory.
   loadOrCreateKey(keyPath(vault));
   const path = storePath(vault);

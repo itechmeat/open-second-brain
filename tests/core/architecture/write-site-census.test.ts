@@ -1320,8 +1320,12 @@ const DIRECT_WRITE_ROWS = 78;
  *
  * 110 -> 111: `src/core/brain/lifecycle/correction.ts` retires the corrected
  * record through `writeFrontmatterAtomic`.
+ *
+ * 111 -> 112: `src/cli/brain/verbs/secret.ts` writes the exported
+ * credential bundle to the operator-named `--out` through
+ * `atomicWriteFileSync` (an egress destination, not a vault note).
  */
-const SHARED_HELPER_ROWS = 111;
+const SHARED_HELPER_ROWS = 112;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1411,9 +1415,11 @@ const UNSTAMPED_DIRECT_ROWS = 77;
  * the session focus writes through the shared atomic text writer. 106 -> 107:
  * the freshen-on-read state file writes through the shared atomic writer.
  * 107 -> 108: the correction sweep retires its target's frontmatter through
- * the shared atomic frontmatter writer.
+ * the shared atomic frontmatter writer. 108 -> 109: the credential-bundle
+ * export writes the operator-named `--out` through the shared atomic writer
+ * (an egress destination, and no origin stamp on exports).
  */
-const UNSTAMPED_SHARED_ROWS = 108;
+const UNSTAMPED_SHARED_ROWS = 109;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {

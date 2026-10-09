@@ -441,6 +441,26 @@ describe("egress site census", () => {
   });
 });
 
+describe("the credential-bundle export site (t_592d9e91)", () => {
+  const BUNDLE_SITE: EgressSite = EGRESS_SITES["brain-secret-bundle-export"];
+
+  test("is declared over the verb that names the destination", () => {
+    expect(BUNDLE_SITE.id).toBe("brain-secret-bundle-export");
+    expect(BUNDLE_SITE.module).toBe("src/cli/brain/verbs/secret.ts");
+    expect(BUNDLE_SITE.verb).toBe("o2b brain secret export");
+    // The payload is ciphertext by construction, so the declaration is
+    // the honest middle: the shared guard runs over the envelope's
+    // NON-ciphertext metadata tree, never over the wrapped values.
+    expect(BUNDLE_SITE.redaction).toBe(EGRESS_REDACTION.sharedRedactor);
+  });
+
+  test("the verb declares the --out destination and the guard call stands beside it", () => {
+    const text = moduleText(BUNDLE_SITE.module);
+    expect(DESTINATION_FLAG_RE.test(text)).toBe(true);
+    expect(EGRESS_GUARD_CALL_RE.test(text)).toBe(true);
+  });
+});
+
 describe("the census cannot pass by finding nothing", () => {
   /**
    * Run the REAL census over the real tree plus one synthetic module, and

@@ -45,6 +45,7 @@ import {
 import { writeHandoffNote } from "../../../src/core/brain/handoff.ts";
 import { appendEditHistory } from "../../../src/core/brain/health/edit-history.ts";
 import { recordThesis } from "../../../src/core/brain/health/thesis.ts";
+import { exportSecretBundle, importSecretBundle } from "../../../src/core/brain/secrets/bundle.ts";
 import { applyHygienePlan } from "../../../src/core/brain/hygiene/apply.ts";
 import type { HygienePlan } from "../../../src/core/brain/hygiene/plan.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
@@ -271,6 +272,10 @@ describe("the guard fires on Brain write paths", () => {
   } as const;
 
   const WRAP_PASSPHRASE = fakeCredential("guard-wrap", "-phrase-", "42");
+  const BUNDLE_PASSPHRASE = fakeCredential("guard-bundle", "-phrase-", "42");
+
+  /** The bundle the importGuard entry hands to the writer, built in the seed. */
+  let bundleForGuard: ReturnType<typeof exportSecretBundle>;
 
   const GUARD_PAGE_REL = posix.join("notes", "guard-page.md");
 
@@ -655,6 +660,34 @@ describe("the guard fires on Brain write paths", () => {
       // of any keyfile read.
       name: "lockSecretKeyfile",
       write: (v) => void lockSecretKeyfile(v, { agent: "test-agent", now: NOW }),
+    },
+    {
+      // The bundle export appends its custody record and reads ciphertext;
+      // the guard sits ahead of the first byte.
+      name: "exportSecretBundle",
+      seed: (v) => void setSecret(v, SECRET_INPUT),
+      write: (v) =>
+        void exportSecretBundle(v, BUNDLE_PASSPHRASE, { agent: "test-agent", now: NOW }),
+    },
+    {
+      // The bundle import writes entries under the store's lock and lands
+      // its custody record. The bundle itself is built in the seed, so the
+      // write's first byte is the import's, not the export's.
+      name: "importSecretBundle",
+      seed: (v) => {
+        setSecret(v, SECRET_INPUT);
+        bundleForGuard = exportSecretBundle(v, BUNDLE_PASSPHRASE, {
+          agent: "test-agent",
+          now: NOW,
+        });
+      },
+      write: (v) =>
+        void importSecretBundle(v, bundleForGuard, {
+          passphrase: BUNDLE_PASSPHRASE,
+          replace: true,
+          agent: "test-agent",
+          now: NOW,
+        }),
     },
     {
       name: "applySchemaMutations",

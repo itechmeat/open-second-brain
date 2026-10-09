@@ -225,6 +225,25 @@ export const EGRESS_SITES = Object.freeze({
       "recipient's integrity check verifies the redacted copy, not the vault. Preference " +
       "rows leave without their evidence links and rendered body.",
   },
+  "brain-secret-bundle-export": {
+    id: "brain-secret-bundle-export",
+    verb: "o2b brain secret export",
+    module: "src/cli/brain/verbs/secret.ts",
+    redaction: R.sharedRedactor,
+    reason:
+      "the operator-named file carries every stored credential value RE-ENCRYPTED " +
+      "under a passphrase-derived key, so the shared guard runs over the bundle's " +
+      "METADATA INVENTORY and never over the wrapped values, whose base64 bodies a " +
+      "structural scan could only mangle. The inventory is scanned as an ARRAY of " +
+      "entries - a name like `api-key` as a mapping KEY is the redactor's credential-" +
+      "assignment shape and would replace the whole entry - and the KDF block is " +
+      "excluded, because its random salt is exactly the high-entropy shape the token " +
+      "pass exists to catch. Allow patterns are free text and scan in full; a " +
+      "REWRITTEN entry name or env-var mapping refuses the export, since an " +
+      "identifier is never rewritten into the file that has to carry it. What the " +
+      "status does NOT claim: the file's secrecy is exactly the passphrase's " +
+      "strength against offline guessing wherever the file travels.",
+  },
   "search-embedding-openai-compat": {
     id: "search-embedding-openai-compat",
     verb: "o2b search index (embedding provider)",
