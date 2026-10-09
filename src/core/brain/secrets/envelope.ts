@@ -176,6 +176,36 @@ export class SecretStoreLockedError extends Error {
   }
 }
 
+/** Stable code every missing-keyfile refusal carries. */
+export const SECRET_STORE_KEYFILE_MISSING_CODE = "secret_store_keyfile_missing";
+
+/**
+ * A key-bearing read met a store that still holds entries whose keyfile
+ * is gone. The sibling state of the locked refusal, and resolved the same
+ * way: minting a fresh key over the surviving ciphertext would orphan
+ * every stored value silently, with no error naming the mint, so a read
+ * refuses by name and only a restored keyfile recovers the store.
+ *
+ * The MESSAGE is path-free for the same reason the locked refusal's is:
+ * the prose travels into model context through consumers that surface
+ * error text verbatim (a config probe's error list, a search refusal, a
+ * CLI catch). The structured `keyPath` field stays for the callers that
+ * legitimately name the file.
+ */
+export class SecretStoreKeyfileMissingError extends Error {
+  readonly code = SECRET_STORE_KEYFILE_MISSING_CODE;
+  readonly keyPath: string;
+
+  constructor(keyPath: string) {
+    super(
+      `the secret store's keyfile is missing while the store still holds entries: ` +
+        `refusing to mint a fresh key over them - restore the keyfile to read the stored secrets`,
+    );
+    this.name = "SecretStoreKeyfileMissingError";
+    this.keyPath = keyPath;
+  }
+}
+
 // ----- The memory-only unlock holder -----------------------------------------
 
 /**

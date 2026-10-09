@@ -15,7 +15,10 @@ import { resolveDecisionModelConfig, type ResolvedDecisionModelConfig } from "./
 import { makeDecisionProvider } from "./provider.ts";
 import type { DecisionProvider } from "./contract.ts";
 import { SecretReferenceError } from "../secret-ref.ts";
-import { SecretStoreLockedError } from "../brain/secrets/envelope.ts";
+import {
+  SecretStoreKeyfileMissingError,
+  SecretStoreLockedError,
+} from "../brain/secrets/envelope.ts";
 import {
   DECISION_MODEL_CALL_KIND,
   emitDecisionModelCall,
@@ -267,14 +270,19 @@ export async function buildDecisionModelCheck(
   if (opts.ping !== true) return report;
   // The ping resolves the key the way the real request path does (the
   // factory re-resolves at call time). A store that locks between the
-  // config probe and here raises the named refusal - degraded into the
-  // ping's reason, never sent as a Bearer key and never left to escape
-  // the check as an exception.
+  // config probe and here - or whose keyfile is missing while entries
+  // survive - raises the named refusal, degraded into the ping's reason,
+  // never sent as a Bearer key and never left to escape the check as an
+  // exception.
   let provider: DecisionProvider | null;
   try {
     provider = makeDecisionProvider(cfg, env, opts.vault ?? undefined);
   } catch (err) {
-    if (err instanceof SecretStoreLockedError || err instanceof SecretReferenceError) {
+    if (
+      err instanceof SecretStoreLockedError ||
+      err instanceof SecretStoreKeyfileMissingError ||
+      err instanceof SecretReferenceError
+    ) {
       return { ...report, ping: { ok: false, reason: `not sent: ${err.message}` } };
     }
     throw err;

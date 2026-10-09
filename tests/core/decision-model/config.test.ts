@@ -407,6 +407,31 @@ describe("decision-model check (diagnostics) through the custody store", () => {
       clearHeldKey(kp);
     }
   });
+
+  test("a missing keyfile degrades the ping by name instead of minting over the store", async () => {
+    // The locked refusal's sibling state on the same factory path: the
+    // read-only resolve now refuses a store whose keyfile is gone while
+    // entries survive, and the check degrades it into the ping's reason
+    // exactly like the locked state.
+    const vault = diagnosticsCustodyVault();
+    setSecret(vault, { name: "dm_key", value: CHECK_KEY, agent: "tester", now: NOW });
+    rmSync(join(secretsDir(vault), "keyfile"));
+    const fake = await startFakeSystemOne();
+    try {
+      const report = await buildDecisionModelCheck({
+        env: REF_ENV,
+        config: { ...ENABLED, decision_model_base_url: fake.url },
+        vault,
+        ping: true,
+      });
+      expect(report.status).toBe("invalid");
+      expect(report.errors.join("\n")).toContain("missing");
+      expect(report.ping?.ok).toBe(false);
+      expect(fake.requests).toHaveLength(0);
+    } finally {
+      await fake.close();
+    }
+  });
 });
 
 // ----- The provider factory resolves the key at the use site -----------------

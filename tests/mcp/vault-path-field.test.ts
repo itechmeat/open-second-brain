@@ -13,7 +13,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -24,6 +24,7 @@ import { fakeCredential } from "../helpers/fake-credentials.ts";
 import {
   hostPathReference,
   SECRET_REFERENCE_UNRESOLVED_REASON,
+  SECRET_STORE_KEYFILE_MISSING_REASON,
   SECRET_STORE_LOCKED_REASON,
 } from "../../src/mcp/vault-path-field.ts";
 
@@ -82,6 +83,28 @@ describe("vault_path on a $secret: installation secret", () => {
     expect(field).toEqual({ error: SECRET_REFERENCE_UNRESOLVED_REASON });
     expect(JSON.stringify(field)).not.toContain(vault);
     expect(JSON.stringify(field)).not.toContain("absent_install_key");
+  });
+
+  test("a missing keyfile over held entries degrades to the named missing-keyfile reason", () => {
+    // The locked refusal's sibling state on the same resolution path: the
+    // read-only resolve now refuses instead of minting a fresh key over
+    // the surviving ciphertext, and the field degrades it like every other
+    // named store refusal.
+    configWithInstallationSecret("$secret:install_key");
+    setSecret(vault, {
+      name: "install_key",
+      value: fakeCredential("stored-install-", "key-91cd"),
+      agent: "tester",
+      now: new Date("2026-06-05T10:00:00Z"),
+    });
+    const keyPath = join(secretsDir(vault), "keyfile");
+    rmSync(keyPath);
+
+    const field = hostPathReference(vault, { configPath });
+    expect(field).toEqual({ error: SECRET_STORE_KEYFILE_MISSING_REASON });
+    // The refusal left no custody state behind.
+    expect(existsSync(keyPath)).toBe(false);
+    expect(JSON.stringify(field)).not.toContain(vault);
   });
 
   test("a plain installation secret still resolves to the opaque reference", () => {

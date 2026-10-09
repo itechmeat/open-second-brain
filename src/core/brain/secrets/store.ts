@@ -27,6 +27,7 @@ import { decryptValue, encryptValue, loadOrCreateKey, type EncryptedValue } from
 import {
   clearHeldKey,
   isEnvelopeFile,
+  SecretStoreKeyfileMissingError,
   unlockKeyfile as unlockKeyfileAtPath,
   wrapKeyfile as wrapKeyfileAtPath,
 } from "./envelope.ts";
@@ -291,9 +292,14 @@ export function resolveSecretForExec(
  * a consumer sees one secret record either way.
  *
  * A name the store holds under a locked envelope surfaces the named
- * locked-store refusal - never a silent fallback, which would hide the
- * locked state from the caller. An unknown name fails with the same
- * no-enumeration error the exec resolve uses.
+ * locked-store refusal, and a store whose keyfile is MISSING while entries
+ * survive surfaces the named missing-keyfile refusal - never a silent
+ * fallback in either case, which would hide the store's real state from
+ * the caller. The missing-keyfile refusal is also what keeps this resolve
+ * read-only in fact and not just in name: `loadOrCreateKey` would mint a
+ * fresh key over the surviving ciphertext, silently orphaning every
+ * stored value. An unknown name fails with the same no-enumeration error
+ * the exec resolve uses.
  */
 export function resolveSecretReadOnly(vault: string, name: string): ResolvedSecret {
   const file = readStore(vault);
@@ -304,7 +310,9 @@ export function resolveSecretReadOnly(vault: string, name: string): ResolvedSecr
     // discovery surface, so a wrong name learns nothing.
     throw new Error(`unknown secret "${normalized}"`);
   }
-  const key = loadOrCreateKey(keyPath(vault));
+  const kp = keyPath(vault);
+  if (!existsSync(kp)) throw new SecretStoreKeyfileMissingError(kp);
+  const key = loadOrCreateKey(kp);
   return {
     name: normalized,
     env_var: stored.env_var,

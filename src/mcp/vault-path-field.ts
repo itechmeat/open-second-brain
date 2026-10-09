@@ -36,7 +36,10 @@
  */
 
 import { ConfigReadError, resolveExposeHostPaths, vaultStoreReference } from "../core/config.ts";
-import { SecretStoreLockedError } from "../core/brain/secrets/envelope.ts";
+import {
+  SecretStoreKeyfileMissingError,
+  SecretStoreLockedError,
+} from "../core/brain/secrets/envelope.ts";
 import { SecretReferenceError } from "../core/secret-ref.ts";
 import { escapeRegex } from "../core/strings.ts";
 import type { UnresolvedField } from "../core/vault-presence.ts";
@@ -144,6 +147,20 @@ export const SECRET_STORE_LOCKED_REASON =
   'reference cannot be resolved; run "o2b brain secret unlock" and retry';
 
 /**
+ * What the degraded field says when the vault's credential store still
+ * holds entries but its keyfile is gone: the read-only resolve refuses
+ * rather than minting a fresh key over the surviving ciphertext.
+ *
+ * The named error's message is already path-free, but this field degrades
+ * every store refusal to its own short reason for the same reason the
+ * locked state does: the field is a path field, and its error arm is a
+ * named state, not a channel for the store's prose.
+ */
+export const SECRET_STORE_KEYFILE_MISSING_REASON =
+  "the vault's credential store is missing its keyfile, so the installation " +
+  "secret reference cannot be resolved; restore the keyfile and retry";
+
+/**
  * What the degraded field says when the persisted installation secret is a
  * `$secret:` reference the vault's custody store cannot answer: the name
  * is absent from the store and the environment, or the reference is
@@ -169,6 +186,9 @@ export function hostPathReference(
   } catch (err) {
     if (err instanceof ConfigReadError) return { error: CONFIG_UNREADABLE_REASON };
     if (err instanceof SecretStoreLockedError) return { error: SECRET_STORE_LOCKED_REASON };
+    if (err instanceof SecretStoreKeyfileMissingError) {
+      return { error: SECRET_STORE_KEYFILE_MISSING_REASON };
+    }
     if (err instanceof SecretReferenceError) return { error: SECRET_REFERENCE_UNRESOLVED_REASON };
     throw err;
   }

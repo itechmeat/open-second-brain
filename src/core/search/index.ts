@@ -41,7 +41,10 @@ import {
 import { SearchError } from "./types.ts";
 import { isSecretReferenceValue, resolveNamedSecret } from "../secret-resolver.ts";
 import { SecretReferenceError } from "../secret-ref.ts";
-import { SecretStoreLockedError } from "../brain/secrets/envelope.ts";
+import {
+  SecretStoreKeyfileMissingError,
+  SecretStoreLockedError,
+} from "../brain/secrets/envelope.ts";
 import type {
   ResolvedEmbeddingConfig,
   ResolvedFreshenConfig,
@@ -740,12 +743,18 @@ function resolveRegistryProvider(
     });
   } catch (err) {
     // The resolver's named refusals are ANSWERS, not expansion misses: a
-    // locked store or a malformed reference in a probe entry surfaces by
-    // name, because swallowing it here returned null and made
-    // `parseProvider` claim "not a registered provider" for a name that
+    // locked store, a missing keyfile, or a malformed reference in a probe
+    // entry surfaces by name, because swallowing it here returned null and
+    // made `parseProvider` claim "not a registered provider" for a name that
     // IS registered - with the implied remedy (fix the name) wrong. Only
     // a genuinely broken registry file stays fail-soft.
-    if (err instanceof SecretStoreLockedError || err instanceof SecretReferenceError) throw err;
+    if (
+      err instanceof SecretStoreLockedError ||
+      err instanceof SecretStoreKeyfileMissingError ||
+      err instanceof SecretReferenceError
+    ) {
+      throw err;
+    }
     return null;
   }
 }

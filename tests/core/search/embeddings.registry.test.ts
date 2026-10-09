@@ -8,6 +8,7 @@ import { loadOrCreateKey } from "../../../src/core/brain/secrets/crypto.ts";
 import {
   clearHeldKey,
   wrapKeyfile,
+  SecretStoreKeyfileMissingError,
   SecretStoreLockedError,
 } from "../../../src/core/brain/secrets/envelope.ts";
 import { resolveSearchConfig } from "../../../src/core/search/index.ts";
@@ -296,6 +297,19 @@ describe("resolveSearchConfig probes a registered provider through the store", (
     expect(() =>
       resolveSearchConfig({ vault, configPath: configWithProvider("nvidia-nim") }),
     ).toThrow(SecretReferenceError);
+  });
+
+  test("a missing keyfile behind the probe surfaces the named refusal, not 'not a registered provider'", () => {
+    // The missing-keyfile refusal is the locked refusal's sibling state on
+    // the same probe path, so it propagates for the same reason: a
+    // fail-soft null here would misreport a registered provider as
+    // unregistered, with the remedy pointing the wrong way.
+    addProviderProfile(vault, probeProfile);
+    storeProbeKey();
+    rmSync(join(secretsDir(vault), "keyfile"));
+    expect(() =>
+      resolveSearchConfig({ vault, configPath: configWithProvider("nvidia-nim") }),
+    ).toThrow(SecretStoreKeyfileMissingError);
   });
 
   test("the explicit embedding_api_key resolves a $secret: reference like its siblings", () => {

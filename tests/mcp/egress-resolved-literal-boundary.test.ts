@@ -19,11 +19,11 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { setSecret } from "../../src/core/brain/secrets/store.ts";
+import { setSecret, secretsDir } from "../../src/core/brain/secrets/store.ts";
 import { lockSecretKeyfile, unlockSecretKeyfile } from "../../src/core/brain/secrets/store.ts";
 import { redactErrorForCaller } from "../../src/mcp/error-redaction.ts";
 import { internalErrorResponse, MCPServer } from "../../src/mcp/server.ts";
@@ -136,6 +136,22 @@ describe("the JSON-RPC internal error boundary (real composition)", () => {
       `internal error: ${redactErrorForCaller(raw, vault, TRANSPORT_REACH.remote)}`,
     );
     expect(response.error?.message).toContain(STORED);
+  });
+
+  test("a missing keyfile contributes nothing and the scan mints no keyfile", () => {
+    // The locked state's sibling: the per-secret resolve now refuses the
+    // missing-keyfile state by name, the scan swallows it like any other
+    // per-entry refusal, and the boundary answers byte-identically to the
+    // bare redactor - leaving no custody state behind.
+    storeCredential();
+    rmSync(join(secretsDir(vault), "keyfile"));
+    const raw = `upstream probe failed: ${STORED} refused`;
+    const response = internalErrorResponse("err-3", new Error(raw), vault, TRANSPORT_REACH.remote);
+    expect(response.error?.message).toBe(
+      `internal error: ${redactErrorForCaller(raw, vault, TRANSPORT_REACH.remote)}`,
+    );
+    expect(response.error?.message).toContain(STORED);
+    expect(existsSync(join(secretsDir(vault), "keyfile"))).toBe(false);
   });
 
   test("an empty store contributes nothing: the answer is byte-identical to the bare redactor", () => {

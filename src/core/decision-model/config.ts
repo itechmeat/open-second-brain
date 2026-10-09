@@ -30,7 +30,10 @@
  */
 
 import { assertHttpEgressEndpoint } from "../search/embeddings/http-util.ts";
-import { SecretStoreLockedError } from "../brain/secrets/envelope.ts";
+import {
+  SecretStoreKeyfileMissingError,
+  SecretStoreLockedError,
+} from "../brain/secrets/envelope.ts";
 import { SecretReferenceError } from "../secret-ref.ts";
 import { isSecretReferenceValue, resolveNamedSecret } from "../secret-resolver.ts";
 import { envOrConfig } from "../validate.ts";
@@ -140,11 +143,12 @@ function setting(
 /**
  * The key value for presence, with reference routing. A value written as
  * a `$secret:NAME` reference resolves through the custody store of
- * `secretsVault` (store first, env fallback); an unresolvable reference
- * or a store-held name under a locked envelope lands in `errors` as the
- * named refusal - with the status turning `invalid` - never as a silent
- * empty key. Without a vault the value is taken as-is, exactly as before
- * the routing existed, and resolution still never throws.
+ * `secretsVault` (store first, env fallback); an unresolvable reference, a
+ * store-held name under a locked envelope, or a store whose keyfile is
+ * missing while entries survive lands in `errors` as the named refusal -
+ * with the status turning `invalid` - never as a silent empty key.
+ * Without a vault the value is taken as-is, exactly as before the routing
+ * existed, and resolution still never throws.
  */
 function resolveKeyValue(
   raw: string | undefined,
@@ -156,7 +160,11 @@ function resolveKeyValue(
   try {
     return resolveNamedSecret(secretsVault, raw.trim());
   } catch (err) {
-    if (err instanceof SecretReferenceError || err instanceof SecretStoreLockedError) {
+    if (
+      err instanceof SecretReferenceError ||
+      err instanceof SecretStoreLockedError ||
+      err instanceof SecretStoreKeyfileMissingError
+    ) {
       errors.push(err.message);
       return undefined;
     }

@@ -7,7 +7,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import lockfile from "proper-lockfile";
@@ -17,6 +25,7 @@ import {
   clearHeldKey,
   heldUnlockedKey,
   isEnvelopeFile,
+  SecretStoreKeyfileMissingError,
   SecretStoreLockedError,
   unlockKeyfile,
   wrapKeyfile,
@@ -285,5 +294,34 @@ describe("unlock/lock lifecycle", () => {
     } finally {
       clearHeldKey(keyPath);
     }
+  });
+
+  test("a missing keyfile over held entries refuses by name instead of minting", () => {
+    // The read-only resolve composes loadOrCreateKey, which CREATES a fresh
+    // key on first use. Over a store that still holds entries, that mint
+    // silently orphaned every stored value - the resolve answered a raw
+    // cipher error and left a new keyfile on disk, with nothing naming the
+    // destruction. The named refusal is the locked refusal's sibling state,
+    // and it must be equally path-free in the prose that travels into model
+    // context.
+    set();
+    const keyPath = join(secretsDir(vault), "keyfile");
+    const storeBefore = readFileSync(join(secretsDir(vault), "secrets.json"), "utf8");
+    rmSync(keyPath);
+    let refusal: unknown;
+    try {
+      resolveSecretReadOnly(vault, "embed-key");
+      throw new Error("expected the missing-keyfile refusal");
+    } catch (err) {
+      refusal = err;
+    }
+    expect(refusal).toBeInstanceOf(SecretStoreKeyfileMissingError);
+    expect((refusal as { code: string }).code).toBe("secret_store_keyfile_missing");
+    const message = (refusal as Error).message;
+    expect(message).not.toContain(keyPath);
+    // The refusal left no custody state behind: no keyfile was minted, and
+    // the stored ciphertext is exactly as it was.
+    expect(existsSync(keyPath)).toBe(false);
+    expect(readFileSync(join(secretsDir(vault), "secrets.json"), "utf8")).toBe(storeBefore);
   });
 });
