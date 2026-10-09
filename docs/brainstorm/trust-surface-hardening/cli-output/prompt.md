@@ -4,10 +4,10 @@ You are brainstorming architectural variants for the following task. Do not writ
 
 Ship one release of Open Second Brain whose argument is "trust-surface hardening": every surface an operator or agent has to trust - the credential store, the write path, the read path and the resumability artifacts - states what it verified, refuses what it cannot, and names what it did. Nine tracker cards feed it. Reconnaissance against the live source has already been done and is recorded in four files that are the shared context for this brainstorm; treat their findings as fact, not conjecture, and do not re-litigate them:
 
-- /home/techmeat/.cache/osb-run.Dc0T/recon-secrets.md (cards 1-3)
-- /home/techmeat/.cache/osb-run.Dc0T/recon-validation.md (cards 4, 6, 7)
-- /home/techmeat/.cache/osb-run.Dc0T/recon-sessions.md (cards 5, 8)
-- /home/techmeat/.cache/osb-run.Dc0T/recon-ingest.md (card 9)
+- ~/.cache/osb-run.Dc0T/recon-secrets.md (cards 1-3)
+- ~/.cache/osb-run.Dc0T/recon-validation.md (cards 4, 6, 7)
+- ~/.cache/osb-run.Dc0T/recon-sessions.md (cards 5, 8)
+- ~/.cache/osb-run.Dc0T/recon-ingest.md (card 9)
 
 **Card 1 (t_e6667a56) - passphrase-wrapped secret-store key.** The secret store under `src/core/brain/secrets/` encrypts values with per-value AES-256-GCM around a raw 32-byte 0600 keyfile (`crypto.ts:86-142`). The card adds an opt-in envelope: a scrypt-derived key wraps the file key, the passphrase-derived key lives only in process memory (the repo has no daemon, so every CLI invocation and the MCP server unlock separately), and `lock`/`unlock` ops join the verb switch in `src/cli/brain/verbs/secret.ts`. There is no TTY password infrastructure anywhere, so passphrases arrive via stdin or `--passphrase-from-env` following the `set` pattern; MCP keeps `brain_secrets` to `list|run` only, and the admin-tools refusal of set/get (:295-299) is the precedent for refusing unlock there too.
 

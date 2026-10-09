@@ -1,6 +1,6 @@
 # Trust-Surface Hardening — implementation plan
 
-Implemented via TDD on branch `feat/trust-surface-hardening` in the worktree `/home/techmeat/projects/tools/osb-worktrees/cycle-20261009`. Six lanes run with **disjoint file ownership**: a lane never creates, modifies, or deletes a file another lane owns. The combined design is at `docs/brainstorm/trust-surface-hardening/design.md` (same branch).
+Implemented via TDD on branch `feat/trust-surface-hardening` in the worktree `~/projects/tools/osb-worktrees/cycle-20261009`. Six lanes run with **disjoint file ownership**: a lane never creates, modifies, or deletes a file another lane owns. The combined design is at `docs/brainstorm/trust-surface-hardening/design.md` (same branch).
 
 ## Cross-lane contract (binding for every lane)
 
