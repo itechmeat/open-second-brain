@@ -16,6 +16,7 @@ import lockfile from "proper-lockfile";
 
 import { atomicWriteFileSync, sleepSync } from "./fs-atomic.ts";
 import { isSecretReferenceValue, resolveNamedSecret } from "./secret-resolver.ts";
+import { SecretReferenceError } from "./secret-ref.ts";
 import { APP_DIR_NAME, configBaseDir } from "./platform-dirs.ts";
 import { resolveActiveProfileVault } from "./brain/portability/profiles.ts";
 import { resolvePointerVault } from "./brain/portability/pointer.ts";
@@ -559,16 +560,39 @@ export function resolveInstallationSecret(configPath?: string, secretsVault?: st
 
   const read = (): string | null => {
     const raw = discoverConfig(resolved).data[INSTALLATION_SECRET_CONFIG_KEY];
-    // A persisted value written as a `$secret:NAME` reference resolves
-    // through the passed vault's custody store; an unresolvable reference
-    // surfaces the named resolver error here - it must never self-heal a
-    // fresh key over the reference, which would silently change every
-    // vault:// reference agents correlate by.
-    const value =
-      secretsVault !== undefined && isSecretReferenceValue(raw)
-        ? resolveNamedSecret(secretsVault, String(raw).trim())
-        : raw;
-    return value && isValidInstallationSecret(value) ? value : null;
+    // A persisted value written as a `$secret:NAME` reference NEVER
+    // self-heals. The reference is the operator's stored intent, and the
+    // self-heal below would mint a fresh key over it - silently
+    // destroying the reference AND rotating the HMAC key, which changes
+    // every `vault://` reference agents correlate by, with no error
+    // naming anything. So every reference outcome is either the resolved
+    // key or a named refusal: unresolvable (the store and the
+    // environment cannot answer), locked (the store refuses), resolves
+    // but not a 32-hex key (the stored value is not an installation
+    // secret), or no vault passed to resolve against. Self-heal only
+    // ever mints when NO reference exists - a missing or plain corrupt
+    // value, exactly as before.
+    if (isSecretReferenceValue(raw)) {
+      const reference = String(raw).trim();
+      if (secretsVault === undefined) {
+        throw new SecretReferenceError(
+          "installation_secret is a $secret: reference but no vault was passed to resolve " +
+            "it against; pass the vault (or set O2B_INSTALLATION_SECRET to a 32-hex key)",
+          reference,
+        );
+      }
+      const resolvedValue = resolveNamedSecret(secretsVault, reference);
+      if (!isValidInstallationSecret(resolvedValue)) {
+        throw new SecretReferenceError(
+          "installation_secret is a $secret: reference that resolves to a value which is " +
+            "not a 32-hex installation key; fix the stored value - the reference in the " +
+            "device config is never overwritten",
+          reference,
+        );
+      }
+      return resolvedValue;
+    }
+    return raw && isValidInstallationSecret(raw) ? raw : null;
   };
 
   const existing = read();

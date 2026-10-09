@@ -15,7 +15,13 @@ import { tmpdir } from "node:os";
 import { createHmac, randomBytes } from "node:crypto";
 import { join, resolve } from "node:path";
 
-import { setSecret } from "../../src/core/brain/secrets/store.ts";
+import { setSecret, secretsDir } from "../../src/core/brain/secrets/store.ts";
+import { loadOrCreateKey } from "../../src/core/brain/secrets/crypto.ts";
+import {
+  clearHeldKey,
+  SecretStoreLockedError,
+  wrapKeyfile,
+} from "../../src/core/brain/secrets/envelope.ts";
 import {
   INSTALLATION_SECRET_ENV_KEY,
   isValidInstallationSecret,
@@ -25,6 +31,7 @@ import {
 } from "../../src/core/config.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { SecretReferenceError } from "../../src/core/secret-ref.ts";
+import { fakeCredential } from "../helpers/fake-credentials.ts";
 
 /** A stored value of the wrong shape: not 32 lowercase hex characters. */
 const CORRUPT_VALUE = "not-a-valid-secret";
@@ -112,13 +119,13 @@ describe("resolveInstallationSecret", () => {
     const STORED_KEY = randomBytes(16).toString("hex");
     const NOW = new Date("2026-06-05T10:00:00Z");
 
-    function storeInstallationKey(): string {
+    function storeInstallationKey(value: string = STORED_KEY): string {
       const vault = mkdtempSync(join(tmpdir(), "o2b-install-custody-"));
       custodyVaults.push(vault);
       mkdirSync(join(vault, "Brain"), { recursive: true });
       setSecret(vault, {
         name: "installation_secret",
-        value: STORED_KEY,
+        value,
         agent: "tester",
         now: NOW,
       });
@@ -137,6 +144,38 @@ describe("resolveInstallationSecret", () => {
       expect(() => resolveInstallationSecret(configPath, vault)).toThrow(SecretReferenceError);
       // The reference is still in the config: no fresh key was written over it.
       expect(readFileSync(configPath, "utf8")).toContain("absent_name");
+    });
+
+    test("a reference that resolves to a non-key value refuses by name, never self-heals", () => {
+      // The reference RESOLVES - the store answers - but what it answers
+      // is not a 32-hex key. This is the case the shipped code got wrong:
+      // the invalid value read as a miss and the self-heal minted a fresh
+      // key over the persisted reference.
+      const vault = storeInstallationKey("not-a-32-hex-key");
+      atomicWriteFileSync(configPath, 'installation_secret: "$secret:installation_secret"\n');
+      expect(() => resolveInstallationSecret(configPath, vault)).toThrow(SecretReferenceError);
+      // The reference survives untouched, and the HMAC input never rotated.
+      expect(readFileSync(configPath, "utf8")).toContain("$secret:installation_secret");
+    });
+
+    test("a persisted reference refuses by name when no vault is available, never self-heals", () => {
+      // The exported signature allows omitting the vault; that must turn
+      // into the named refusal, not into a fresh key over the reference.
+      atomicWriteFileSync(configPath, 'installation_secret: "$secret:installation_secret"\n');
+      expect(() => resolveInstallationSecret(configPath)).toThrow(SecretReferenceError);
+      expect(readFileSync(configPath, "utf8")).toContain("$secret:installation_secret");
+    });
+
+    test("a reference that resolves to a locked store-held key refuses by name", () => {
+      const vault = storeInstallationKey();
+      // Wrap the keyfile and drop this process's holder: the store is
+      // locked, so the reference cannot resolve.
+      const kp = join(secretsDir(vault), "keyfile");
+      wrapKeyfile(kp, fakeCredential("install-wrap-", "phrase-8e31"), loadOrCreateKey(kp));
+      clearHeldKey(kp);
+      atomicWriteFileSync(configPath, 'installation_secret: "$secret:installation_secret"\n');
+      expect(() => resolveInstallationSecret(configPath, vault)).toThrow(SecretStoreLockedError);
+      expect(readFileSync(configPath, "utf8")).toContain("$secret:installation_secret");
     });
 
     test("plain values keep resolving byte-identically with a vault passed", () => {
