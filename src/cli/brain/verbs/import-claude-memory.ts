@@ -91,6 +91,18 @@ export async function cmdBrainImportClaudeMemory(argv: string[]): Promise<number
     return 2;
   }
 
+  // A dry run COMPUTES a digest; it cannot consume one. A digest paired with
+  // a dry run (the default mode included) is an operator mistake whose exit
+  // code would otherwise suggest the value was honored when it was silently
+  // dropped - refuse the pairing by name instead.
+  if (mode !== "apply" && approvalDigest !== undefined) {
+    process.stderr.write(
+      "o2b brain import-claude-memory: --approval-digest applies to --apply; " +
+        "a dry run computes a digest, it does not consume one\n",
+    );
+    return 2;
+  }
+
   if (mode === "apply" && !yes && !process.stdin.isTTY) {
     process.stderr.write(
       "o2b brain import-claude-memory: --apply requires --yes in non-interactive mode\n",

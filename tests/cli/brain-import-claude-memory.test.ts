@@ -235,6 +235,27 @@ describe("o2b brain import-claude-memory --approval-digest (t_18fda844)", () => 
     }
   });
 
+  test("--approval-digest paired with --dry-run refuses the conflicting pairing", async () => {
+    // A dry run COMPUTES a digest; it cannot consume one. Accepting and
+    // dropping the value would let a mis-piped script read a successful
+    // dry-run exit code as "the digest was honored".
+    const s = setupImport("o2b-cm-cli-digestdryrun-", { "feedback_a.md": feedbackMd("a", "A") });
+    try {
+      await runCli(["init", "--vault", s.vault, "--name", "Test"], { env: s.env });
+      await runCli(["brain", "init", "--vault", s.vault], { env: s.env });
+      const res = await runCli(
+        [...baseArgs(s.vault, s.mem), "--dry-run", "--approval-digest", "f".repeat(64)],
+        { env: s.env },
+      );
+      expect(res.returncode).toBe(2);
+      expect(res.stderr).toContain("--approval-digest");
+      expect(res.stderr).toContain("--apply");
+      expect(existsSync(join(s.vault, "Brain", "preferences", "pref-a.md"))).toBe(false);
+    } finally {
+      rmSync(s.tmp, { recursive: true, force: true });
+    }
+  });
+
   test("apply with a stale digest refuses with the re-run remedy and writes nothing", async () => {
     const s = setupImport("o2b-cm-cli-staledigest-", { "feedback_a.md": feedbackMd("a", "A") });
     try {

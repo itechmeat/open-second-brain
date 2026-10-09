@@ -207,6 +207,27 @@ describe("writeIdeaNote — declared page_types vocabulary (t_151a564c)", () => 
     expect(listStagedCaptures(vault)).toHaveLength(1);
   });
 
+  test("the dry-run plan reports the same declared-vocabulary refusal apply will", () => {
+    // The refusal is deterministic from config, so the preview must show it:
+    // a dry run that calls the idea route routable while apply refuses it
+    // per item is a report the operator cannot act on.
+    seedIdea();
+    writeConfig(["note"]);
+    const report = drainInbox(vault, { apply: false, agent: "tester", now: NOW });
+    expect(report.mode).toBe("dry-run");
+    expect(report.routed).toBe(0);
+    expect(report.unroutable).toBe(1);
+    const item = report.items[0]!;
+    expect(item.classification).toBe("unroutable");
+    expect(item.action).toBe("skip");
+    expect(item.routed).toBe(false);
+    expect(item.reason).toContain("captured-idea");
+    expect(item.reason).toContain("_brain.yaml");
+    // Nothing written, capture still staged.
+    expect(existsSync(join(vault, CAPTURED_NOTES_DIR_REL))).toBe(false);
+    expect(listStagedCaptures(vault)).toHaveLength(1);
+  });
+
   test("a declared set containing captured-idea routes as before", () => {
     seedIdea();
     writeConfig(["note", "captured-idea"]);

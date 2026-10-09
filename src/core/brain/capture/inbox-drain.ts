@@ -48,6 +48,7 @@ import {
 } from "../link-graph/hub-candidates.ts";
 import {
   archiveCapture,
+  CaptureContractError,
   listStagedCaptures,
   requireDeclaredCaptureKind,
   type CaptureNote,
@@ -191,7 +192,19 @@ function planSource(vault: string, url: string, opts: DrainOptions): RoutePlan {
   };
 }
 
-function planIdea(vault: string, body: string, opts: DrainOptions): RoutePlan {
+function planIdea(vault: string, body: string, opts: DrainOptions): RoutePlan | UnroutableCapture {
+  // Pack vocabulary gate (t_151a564c), consulted at PLAN time so a dry run is
+  // a faithful preview: the idea route stamps `captured-idea`, so a vault
+  // that declares page_types without it is unroutable in BOTH modes with the
+  // same named refusal - the capture stays staged and a rerun after the
+  // operator declares the kind converges. Same gate, same refusal text, as
+  // the staging contract's own writer.
+  try {
+    requireDeclaredCaptureKind(vault, CAPTURED_IDEA_KIND);
+  } catch (err) {
+    if (!(err instanceof CaptureContractError)) throw err;
+    return new UnroutableCapture(err.message);
+  }
   const slug = slugify(body);
   const relPath = `${CAPTURED_NOTES_DIR_REL}/${slug}.md`;
   const abs = ensureInsideVault(join(vault, relPath), vault);
@@ -214,12 +227,9 @@ function writeIdeaNote(
   opts: DrainOptions,
   merge: boolean,
 ): void {
-  // Pack vocabulary gate (t_151a564c), before ANY filesystem effect: the
-  // idea route stamps `captured-idea`, so a vault that declares page_types
-  // without it refuses here - the capture stays staged and a rerun after
-  // the operator declares the kind converges. Same gate, same refusal, as
-  // the staging contract's own writer.
-  requireDeclaredCaptureKind(vault, CAPTURED_IDEA_KIND);
+  // The declared-vocabulary gate lives in `planIdea`, the classifier, so the
+  // dry-run plan and the apply see the same refusal (t_151a564c); by execute
+  // time the route is known declared, and nothing here writes before it.
   const stamp = isoSecond(opts.now);
   // `ensureInsideVault` hands back a native path, so the parent comes from
   // `dirname`: a hand-rolled split on "/" found no separator in a Windows
