@@ -169,3 +169,35 @@ describe("sortedMembers", () => {
     },
   );
 });
+
+describe("the entries the snapshot family never touches", () => {
+  /**
+   * `.snapshots` and `.artifacts` are documented as never archived: the first
+   * because archiving the archive home makes every snapshot carry its
+   * predecessors and grow without bound, the second because it is ephemeral
+   * cache nobody wants restored. The exclusion is a string comparison against
+   * `readdirSync`'s buffer entries - which Bun returns as `Uint8Array`, whose
+   * `.toString()` is comma-joined byte values, not the name. Decoded that way
+   * nothing ever matched and the archive carried its own directory.
+   */
+  test("the archive carries neither .snapshots nor .artifacts", () => {
+    const dirs = brainDirs(vault);
+    const snapshots = join(dirs.brain, ".snapshots");
+    const artifacts = join(dirs.brain, ".artifacts");
+    mkdirSync(snapshots, { recursive: true });
+    writeFileSync(join(snapshots, "dream-prior.tar.zst"), "a prior archive");
+    mkdirSync(artifacts, { recursive: true });
+    writeFileSync(join(artifacts, "cache.json"), "{}");
+    writeFileSync(join(dirs.brain, "kept.md"), "kept");
+
+    const res = createSnapshot(vault, "dream-excluded", { reason: DREAM });
+    const members = listSnapshotArchive(res.path)
+      .split(/\r?\n/)
+      .map((l) => l.replace(/\/$/, ""))
+      .filter(Boolean);
+
+    expect(members).toContain("Brain/kept.md");
+    expect(members.filter((m) => m.includes(".snapshots"))).toEqual([]);
+    expect(members.filter((m) => m.includes(".artifacts"))).toEqual([]);
+  });
+});

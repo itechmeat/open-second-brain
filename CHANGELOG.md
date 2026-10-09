@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.77.1] - 2026-10-10
+
+### Fixed
+
+- **The snapshot archive no longer carries its own home.** `createSnapshot` lists the top-level `Brain/` entries with `readdirSync(dir, { encoding: "buffer" })` and drops the ones `BRAIN_SNAPSHOT_EXCLUDED_ENTRIES` names, so `.snapshots` and `.artifacts` are never archived. On Bun that call returns a `Uint8Array`, not a `Buffer`, and `Uint8Array.prototype.toString()` renders comma-joined byte values (`"46,100,..."`) rather than the name, so every comparison missed and the exclusion never fired. Both entries were therefore packed into each archive: `.artifacts` churn, and `.snapshots` the archive home itself, which made every snapshot carry its predecessors and grow without bound. Dream snapshots doubled daily from single-digit megabytes to gigabytes until the run exceeded its timeout and died mid-write, leaving partial archives behind. One `bufferEntryName` helper decodes either shape and the filter uses it; the members are unchanged otherwise. A test asserts the archive carries neither excluded entry.
+
 ## [1.77.0] - 2026-10-08
 
 Open Second Brain now keeps its claim ledger in time and correctable: a claim can carry a validity window frozen from its source at ingest, the events recall reads the ledger over an assertion-time slice, an agent's stated claims commit only when they anchor in their assertion text, and two same-slot claims with disjoint windows stand in a succession channel instead of a conflict. One correct verb discovers a correction's blast radius and retires what it touches, and every serving surface serves a retired-but-serveable record only beside its resolved, readable chain-tip correction, fail-closed. The deep relational recall arm runs under width budgets with hub skipping, walks entity co-occurrence bridges, reports per-node path provenance gated at the caller's reach, and never lets a traversal-only row outrank what the lanes matched.

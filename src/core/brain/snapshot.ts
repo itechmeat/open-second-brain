@@ -776,7 +776,7 @@ export function createSnapshot(
   let topEntries: Buffer[];
   try {
     topEntries = readdirSync(dirs.brain, { encoding: "buffer" }).filter(
-      (e) => !isSnapshotExcludedEntry(e.toString()),
+      (e) => !isSnapshotExcludedEntry(bufferEntryName(e)),
     );
   } catch (err) {
     discardStoreArchive(derivedStore, vault, runId);
@@ -901,6 +901,20 @@ function logSnapshotEvent(
         `${(err as Error).message ?? String(err)}; the archive itself is intact.\n`,
     );
   }
+}
+
+/**
+ * Decode one `readdirSync(..., { encoding: "buffer" })` entry to its UTF-8
+ * name.
+ *
+ * Bun returns a `Uint8Array` here, not a `Buffer`, and `Uint8Array.toString()`
+ * yields comma-joined byte values (`"46,100,..."`) instead of text. Every
+ * exclusion comparison therefore missed, and `.snapshots` - this archive's
+ * own directory - got packed into every archive, which is the exponential
+ * growth. `Buffer.from` decodes either shape.
+ */
+function bufferEntryName(e: Uint8Array | Buffer): string {
+  return Buffer.isBuffer(e) ? e.toString("utf8") : Buffer.from(e).toString("utf8");
 }
 
 /** True for a top-level `Brain/` entry the snapshot family never touches. */
