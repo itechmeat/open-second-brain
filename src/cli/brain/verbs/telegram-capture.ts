@@ -45,7 +45,9 @@ export async function cmdBrainTelegramCapture(argv: string[]): Promise<number> {
   // action === "run"
   let token: string;
   try {
-    token = requireTelegramToken(resolveTelegramBotToken(config));
+    // The vault's custody store backs a `$secret:NAME` token reference; a
+    // plain token (env or config) resolves exactly as before.
+    token = requireTelegramToken(resolveTelegramBotToken(config, vault));
   } catch (err) {
     return fail((err as Error).message);
   }

@@ -234,6 +234,7 @@ export class DecisionModelRerankProvider implements RerankProvider {
       },
       {
         config: this.cfg,
+        ...(this.cfg.vault !== null ? { secretsVault: this.cfg.vault } : {}),
         ...(this.opts.provider !== undefined ? { provider: this.opts.provider } : {}),
         ...(this.opts.env !== undefined ? { env: this.opts.env } : {}),
         ...(this.opts.modeOverride !== undefined ? { modeOverride: this.opts.modeOverride } : {}),

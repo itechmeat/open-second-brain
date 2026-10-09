@@ -228,7 +228,7 @@ export async function planExtractSignalsPrefiltered(
 ): Promise<PrefilteredSignalExtractionPlan> {
   const cfg = opts.decisionModel;
   if (!extractPrefilterActive(cfg)) return planExtractSignals(vault, sessionId, { now: opts.now });
-  const provider = opts.provider ?? makeDecisionProvider(cfg, opts.env ?? process.env);
+  const provider = opts.provider ?? makeDecisionProvider(cfg, opts.env ?? process.env, vault);
   if (provider === null) return planExtractSignals(vault, sessionId, { now: opts.now });
 
   const full = planExtractSignals(vault, sessionId, { now: opts.now, sourceTurnHint: true });
@@ -271,6 +271,7 @@ export async function planExtractSignalsPrefiltered(
       {
         config: cfg,
         provider,
+        secretsVault: vault,
         ...(opts.env !== undefined ? { env: opts.env } : {}),
         now: () => opts.now,
         recordDetails: (response) =>

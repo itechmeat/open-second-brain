@@ -361,6 +361,7 @@ export async function buildSkillAttachmentWithDecision(
     {
       config: cfg,
       timeoutMs: cfg.timeoutMs,
+      ...(cfg.vault !== null ? { secretsVault: cfg.vault } : {}),
       ...(opts.provider !== undefined ? { provider: opts.provider } : {}),
       ...(opts.env !== undefined ? { env: opts.env } : {}),
       recordDetails: (response, context) => {
@@ -469,6 +470,7 @@ export async function buildSkillAttachmentWithDecision(
     {
       config: cfg,
       timeoutMs: Math.max(1, deadline - clock()),
+      ...(cfg.vault !== null ? { secretsVault: cfg.vault } : {}),
       ...(opts.provider !== undefined ? { provider: opts.provider } : {}),
       ...(opts.env !== undefined ? { env: opts.env } : {}),
       recordDetails: (response, context) => {

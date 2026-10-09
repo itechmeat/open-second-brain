@@ -729,7 +729,12 @@ function resolveRegistryProvider(
 ): ExpandedProvider | null {
   if (rawProvider === null || BUILTIN_PROVIDERS.has(rawProvider)) return null;
   try {
-    return expandRegisteredProvider(rawProvider, loadProviderRegistry(vault), env);
+    // The vault's custody store joins the probe (store first, reference-
+    // shaped probe entries resolved) so a registered provider's key can
+    // live in the store; without it the probe reads env exactly as before.
+    return expandRegisteredProvider(rawProvider, loadProviderRegistry(vault), env, {
+      secretsVault: vault,
+    });
   } catch {
     return null;
   }

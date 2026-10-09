@@ -13,8 +13,18 @@ import {
   decisionModelModeFor,
   resolveDecisionModelConfig,
 } from "../../../src/core/decision-model/config.ts";
-import { setSecret } from "../../../src/core/brain/secrets/store.ts";
+import { setSecret, secretsDir } from "../../../src/core/brain/secrets/store.ts";
+import {
+  clearHeldKey,
+  SecretStoreLockedError,
+  wrapKeyfile,
+} from "../../../src/core/brain/secrets/envelope.ts";
+import { loadOrCreateKey } from "../../../src/core/brain/secrets/crypto.ts";
+import { SecretReferenceError } from "../../../src/core/secret-ref.ts";
+import { makeDecisionProvider } from "../../../src/core/decision-model/provider.ts";
+import type { DecisionRequest } from "../../../src/core/decision-model/contract.ts";
 import { loadBrainConfigDetailed } from "../../../src/core/brain/policy.ts";
+import { startFakeSystemOne } from "../../helpers/fake-decision-provider.ts";
 import { FAKE_DECISION_KEY, fakeCredential } from "../../helpers/fake-credentials.ts";
 
 const KEY_VAR = "O2B_TEST_DECISION_MODEL_KEY";
@@ -314,5 +324,115 @@ describe("decision-model key through the custody store", () => {
     expect(cfg.status).toBe("invalid");
     expect(cfg.keyPresent).toBe(false);
     expect(cfg.errors.join("\n")).toContain("absent_name");
+  });
+});
+
+// ----- The provider factory resolves the key at the use site -----------------
+//
+// Config resolution only PROBES a `$secret:NAME` reference for presence;
+// the factory re-reads the raw variable at call time, so it must resolve
+// the reference itself when handed the vault. A loopback fake records the
+// `authorization` header, which is the only honest witness of what the
+// adapter would actually send.
+
+function factoryCustodyVault(): string {
+  const vault = mkdtempSync(join(tmpdir(), "osb-dm-factory-"));
+  dirs.push(vault);
+  mkdirSync(join(vault, "Brain"), { recursive: true });
+  return vault;
+}
+
+/** Active config for the reference env value, pointed at an explicit base URL. */
+function activeReferenceConfig(baseUrl: string) {
+  return resolveDecisionModelConfig({
+    env: { [KEY_VAR]: "$secret:dm_key" } as NodeJS.ProcessEnv,
+    config: { ...ENABLED, decision_model_base_url: baseUrl },
+    vault: null,
+    secretsVault: undefined,
+  });
+}
+
+describe("decision-model provider factory through the custody store", () => {
+  const STORED_DM_KEY = fakeCredential("stored-dm-", "key-99be");
+  const NOW = new Date("2026-06-05T10:00:00Z");
+  const REQUEST: DecisionRequest = {
+    use: "rerank",
+    state: { query: "q", passages: { P0: "alpha" } },
+    questions: { yes: { type: "noul", instructions: "Does `passages.P0` help?" } },
+  };
+
+  test("a reference key value reaches the adapter resolved, not raw", async () => {
+    const vault = factoryCustodyVault();
+    setSecret(vault, { name: "dm_key", value: STORED_DM_KEY, agent: "tester", now: NOW });
+    const fake = await startFakeSystemOne();
+    try {
+      const cfg = activeReferenceConfig(fake.url);
+      expect(cfg.status).toBe("active");
+      const provider = makeDecisionProvider(
+        cfg,
+        { [KEY_VAR]: "$secret:dm_key" } as NodeJS.ProcessEnv,
+        vault,
+      );
+      expect(provider).not.toBeNull();
+      await provider!.decide(REQUEST, { timeoutMs: 2000 });
+      expect(fake.requests[0]!.headers["authorization"]).toBe(`Bearer ${STORED_DM_KEY}`);
+    } finally {
+      await fake.close();
+    }
+  });
+
+  test("without a vault the raw value is sent exactly as before", async () => {
+    const fake = await startFakeSystemOne();
+    try {
+      const cfg = activeReferenceConfig(fake.url);
+      const provider = makeDecisionProvider(cfg, {
+        [KEY_VAR]: "$secret:dm_key",
+      } as NodeJS.ProcessEnv);
+      expect(provider).not.toBeNull();
+      await provider!.decide(REQUEST, { timeoutMs: 2000 });
+      expect(fake.requests[0]!.headers["authorization"]).toBe("Bearer $secret:dm_key");
+    } finally {
+      await fake.close();
+    }
+  });
+
+  test("a plain key value is byte-identical with and without a vault", async () => {
+    const vault = factoryCustodyVault();
+    const fake = await startFakeSystemOne();
+    try {
+      const cfg = resolveDecisionModelConfig({
+        env: { [KEY_VAR]: FAKE_DECISION_KEY } as NodeJS.ProcessEnv,
+        config: { ...ENABLED, decision_model_base_url: fake.url },
+        vault: null,
+      });
+      expect(cfg.status).toBe("active");
+      const env = { [KEY_VAR]: FAKE_DECISION_KEY } as NodeJS.ProcessEnv;
+      await makeDecisionProvider(cfg, env)!.decide(REQUEST, { timeoutMs: 2000 });
+      await makeDecisionProvider(cfg, env, vault)!.decide(REQUEST, { timeoutMs: 2000 });
+      expect(fake.requests[0]!.headers["authorization"]).toBe(`Bearer ${FAKE_DECISION_KEY}`);
+      expect(fake.requests[1]!.headers["authorization"]).toBe(`Bearer ${FAKE_DECISION_KEY}`);
+    } finally {
+      await fake.close();
+    }
+  });
+
+  test("an unresolvable reference raises the named resolver error at the use site", () => {
+    const vault = factoryCustodyVault();
+    const cfg = activeReferenceConfig("http://127.0.0.1:9");
+    expect(() =>
+      makeDecisionProvider(cfg, { [KEY_VAR]: "$secret:absent_name" } as NodeJS.ProcessEnv, vault),
+    ).toThrow(SecretReferenceError);
+  });
+
+  test("a store-held name under a locked envelope raises the named locked error", () => {
+    const vault = factoryCustodyVault();
+    setSecret(vault, { name: "dm_key", value: STORED_DM_KEY, agent: "tester", now: NOW });
+    const keyPath = join(secretsDir(vault), "keyfile");
+    wrapKeyfile(keyPath, fakeCredential("dm-wrap", "-phrase-", "42"), loadOrCreateKey(keyPath));
+    clearHeldKey(keyPath);
+    const cfg = activeReferenceConfig("http://127.0.0.1:9");
+    expect(() =>
+      makeDecisionProvider(cfg, { [KEY_VAR]: "$secret:dm_key" } as NodeJS.ProcessEnv, vault),
+    ).toThrow(SecretStoreLockedError);
   });
 });

@@ -1,9 +1,10 @@
-import { test, expect, beforeEach, afterEach } from "bun:test";
+import { test, expect, beforeEach, afterEach, describe } from "bun:test";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { setSecret } from "../../../src/core/brain/secrets/store.ts";
+import { resolveSearchConfig } from "../../../src/core/search/index.ts";
 import {
   loadProviderRegistry,
   addProviderProfile,
@@ -218,4 +219,48 @@ test("resolution through the probe does not mutate the custody store", () => {
   const before = readFileSync(storePath, "utf8");
   expandRegisteredProvider("nvidia-nim", [probeProfile], process.env, { secretsVault: vault });
   expect(readFileSync(storePath, "utf8")).toBe(before);
+});
+
+// ----- The search config resolver joins the custody store (t_e5807974) -------
+//
+// `resolveRegistryProvider` hands `expandRegisteredProvider` the vault, so
+// a registered `embedding_provider` resolves its key through
+// `resolveSearchConfig` itself - not only when the registry module is
+// called directly.
+
+describe("resolveSearchConfig probes a registered provider through the store", () => {
+  function configWithProvider(provider: string): string {
+    const configPath = join(vault, "machine-config.yaml");
+    writeFileSync(configPath, `embedding_provider: "${provider}"\n`, "utf8");
+    return configPath;
+  }
+
+  test("a store-held key name answers through the full config resolution", () => {
+    addProviderProfile(vault, probeProfile);
+    storeProbeKey();
+    // An env value under the same name makes the precedence claim, not
+    // just the resolution claim: the store answers ahead of the
+    // environment through the full config resolution too.
+    withEnvKey("embed_key", ENV_PROBE_KEY, () => {
+      const cfg = resolveSearchConfig({ vault, configPath: configWithProvider("nvidia-nim") });
+      expect(cfg.semantic.provider).toBe("openai-compat");
+      expect(cfg.semantic.apiKey).toBe(STORED_PROBE_KEY);
+      expect(cfg.semantic.apiKeys).toEqual([STORED_PROBE_KEY]);
+    });
+  });
+
+  test("a reference-shaped envKey resolves through the full config resolution", () => {
+    addProviderProfile(vault, { ...probeProfile, envKey: "$secret:embed_key" });
+    storeProbeKey();
+    const cfg = resolveSearchConfig({ vault, configPath: configWithProvider("nvidia-nim") });
+    expect(cfg.semantic.apiKey).toBe(STORED_PROBE_KEY);
+  });
+
+  test("a plain env key resolves identically through the vault-joined probe", () => {
+    addProviderProfile(vault, probeProfile);
+    withEnvKey("embed_key", ENV_PROBE_KEY, () => {
+      const cfg = resolveSearchConfig({ vault, configPath: configWithProvider("nvidia-nim") });
+      expect(cfg.semantic.apiKey).toBe(ENV_PROBE_KEY);
+    });
+  });
 });

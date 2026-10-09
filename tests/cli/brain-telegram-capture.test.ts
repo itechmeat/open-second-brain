@@ -43,6 +43,24 @@ test("run without a configured token exits with a typed error", async () => {
   expect(res.stderr.toLowerCase()).toContain("token");
 });
 
+test("a $secret: token reference resolves through the vault's custody store", async () => {
+  // The name is absent from the vault's store and the environment, so the
+  // resolver refuses BY NAME before any transport is built - the raw
+  // reference never reaches the Telegram API as a token (and this test
+  // never touches the network).
+  writeFileSync(
+    config,
+    `vault: "${vault}"\ntelegram_bot_token: "$secret:absent_tg_token"\n`,
+    "utf8",
+  );
+  const res = await runCli(["brain", "telegram-capture", "run"], {
+    env: env({ TELEGRAM_BOT_TOKEN: "" }),
+  });
+  expect(res.returncode).not.toBe(0);
+  expect(res.stderr).toContain("absent_tg_token");
+  expect(res.stderr).not.toContain("$secret:");
+});
+
 test("catchup renders staged captures without needing a token or network", async () => {
   writeCaptureNote(vault, {
     body: "first captured idea",

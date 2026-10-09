@@ -234,6 +234,7 @@ export async function suggestNoteLabels(
     () => questions,
     {
       config: cfg,
+      secretsVault: vault,
       ...(opts.provider !== undefined ? { provider: opts.provider } : {}),
       ...(opts.env !== undefined ? { env: opts.env } : {}),
       recordDetails: (response) => ({

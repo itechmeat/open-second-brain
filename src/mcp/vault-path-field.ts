@@ -36,6 +36,8 @@
  */
 
 import { ConfigReadError, resolveExposeHostPaths, vaultStoreReference } from "../core/config.ts";
+import { SecretStoreLockedError } from "../core/brain/secrets/envelope.ts";
+import { SecretReferenceError } from "../core/secret-ref.ts";
 import { escapeRegex } from "../core/strings.ts";
 import type { UnresolvedField } from "../core/vault-presence.ts";
 import type { OutputSchema } from "./output-contract.ts";
@@ -126,6 +128,37 @@ export const CONFIG_UNREADABLE_REASON =
   "the device-local config could not be read, so this reference cannot be " +
   "resolved; call second_brain_status for the file and the remedy";
 
+/**
+ * What the degraded field says when the installation secret resolves
+ * through the vault's custody store and the store refuses: the keyfile is
+ * passphrase-wrapped and this process holds no unlocked key.
+ *
+ * The named error's own message carries the keyfile path under the vault -
+ * the same host path this field exists to keep out of model context - so
+ * the remedy is restated here without it, exactly as
+ * {@link CONFIG_UNREADABLE_REASON} restates its remedy without the config
+ * path.
+ */
+export const SECRET_STORE_LOCKED_REASON =
+  "the vault's credential store is locked, so the installation secret " +
+  'reference cannot be resolved; run "o2b brain secret unlock" and retry';
+
+/**
+ * What the degraded field says when the persisted installation secret is a
+ * `$secret:` reference the vault's custody store cannot answer: the name
+ * is absent from the store and the environment, or the reference is
+ * malformed.
+ *
+ * The named error's message repeats the reference name or the raw value;
+ * neither belongs in model context. The operator inspects the device
+ * config and the store through the surfaces that may name them
+ * (`second_brain_status`, `o2b secrets list`).
+ */
+export const SECRET_REFERENCE_UNRESOLVED_REASON =
+  "the installation secret is a $secret: reference the vault's credential " +
+  "store cannot resolve; inspect the device config and the store with " +
+  "`o2b secrets list`";
+
 export function hostPathReference(
   path: string,
   source: HostPathPolicySource,
@@ -135,6 +168,8 @@ export function hostPathReference(
     return resolveExposeHostPaths(configPath) ? path : vaultStoreReference(path, configPath);
   } catch (err) {
     if (err instanceof ConfigReadError) return { error: CONFIG_UNREADABLE_REASON };
+    if (err instanceof SecretStoreLockedError) return { error: SECRET_STORE_LOCKED_REASON };
+    if (err instanceof SecretReferenceError) return { error: SECRET_REFERENCE_UNRESOLVED_REASON };
     throw err;
   }
 }

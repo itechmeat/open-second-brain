@@ -87,6 +87,12 @@ export interface RunDecisionOptions<C> {
   /** Injected provider (tests). Defaults to the configured adapter. */
   readonly provider?: DecisionProvider;
   readonly env?: Readonly<Record<string, string | undefined>>;
+  /**
+   * Vault whose custody store backs a `$secret:NAME` key value at the use
+   * site. Absent, the key value is read from `env` exactly as before the
+   * resolver routing existed.
+   */
+  readonly secretsVault?: string | null;
   /** Overrides `decision_model_timeout_ms` (e.g. a hook sub-budget). */
   readonly timeoutMs?: number;
   /**
@@ -120,7 +126,8 @@ export async function runDecision<C>(
   const configured = decisionModelModeFor(cfg, use);
   if (configured === "off" || cfg === null || cfg === undefined) return { status: "off" };
   const mode = opts.modeOverride ?? configured;
-  const provider = opts.provider ?? makeDecisionProvider(cfg, opts.env ?? process.env);
+  const provider =
+    opts.provider ?? makeDecisionProvider(cfg, opts.env ?? process.env, opts.secretsVault);
   if (provider === null) return { status: "off" };
   const now = opts.now ?? (() => new Date());
 

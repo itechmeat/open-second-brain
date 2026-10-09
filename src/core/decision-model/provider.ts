@@ -11,20 +11,37 @@
  * another one, and `llm-emulation` in particular is never a fallback.
  *
  * The key is read here, from the environment, at call time. It is handed
- * to the adapter instance and never stored in any config object.
+ * to the adapter instance and never stored in any config object. When the
+ * caller passes `secretsVault`, a key value written as a `$secret:NAME`
+ * reference resolves through that vault's custody store at this use site
+ * (store first, env fallback) - the config resolver only probes the
+ * reference for presence, so the factory must resolve the value it
+ * actually sends. Without a vault, or with a plain value, the raw value
+ * is taken exactly as before. An unresolvable reference or a store-held
+ * name under a locked envelope raises the named resolver error rather
+ * than silently reading as no key (the same refusal `research.ts` makes).
  */
 
+import { resolveNamedSecret } from "../secret-resolver.ts";
 import type { DecisionProvider } from "./contract.ts";
 import type { ResolvedDecisionModelConfig } from "./config.ts";
 
 export function makeDecisionProvider(
   cfg: ResolvedDecisionModelConfig | null | undefined,
   env: Readonly<Record<string, string | undefined>> = process.env,
+  secretsVault?: string | null,
 ): DecisionProvider | null {
   if (cfg === null || cfg === undefined || cfg.status !== "active") return null;
   if (cfg.baseUrl === null || cfg.model === null) return null;
   const raw = cfg.envKey !== null ? env[cfg.envKey] : undefined;
-  const apiKey = typeof raw === "string" && raw.trim() !== "" ? raw.trim() : null;
+  // Reference-shaped values resolve through the custody store; `null`
+  // (no vault) and plain values pass through untouched, byte-identical
+  // to the pre-routing factory.
+  const keyValue =
+    secretsVault !== undefined && secretsVault !== null && typeof raw === "string"
+      ? resolveNamedSecret(secretsVault, raw.trim())
+      : raw;
+  const apiKey = typeof keyValue === "string" && keyValue.trim() !== "" ? keyValue.trim() : null;
   // Only a loopback server whose preset allows it runs without a key.
   if (apiKey === null && cfg.keyRequired !== false) return null;
   const common = {

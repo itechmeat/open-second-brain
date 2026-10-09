@@ -187,6 +187,7 @@ export function createRecallInjectDecisionFilter(
         {
           config: cfg,
           timeoutMs: budgetMs,
+          secretsVault: opts.vault,
           ...(opts.provider !== undefined ? { provider: opts.provider } : {}),
           ...(opts.env !== undefined ? { env: opts.env } : {}),
           recordDetails: (response, context) => {
