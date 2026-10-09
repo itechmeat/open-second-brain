@@ -208,3 +208,30 @@ describe("reconcilePlan - the post-import read-back census", () => {
     expect(report.census.outcome).toBe("complete");
   });
 });
+
+describe("reconcilePlan under a contract change (t_586d5d8b)", () => {
+  test("a live contract change turns an ingested source into a named gap", () => {
+    write("Docs/a.md", "---\ntitle: a\nschema_type: paper\n---\n\nbody\n");
+    const allowlist = (tokens: string[]): string =>
+      `schema_version: 1\nschema:\n  page_types:\n${tokens.map((t) => `    - ${t}`).join("\n")}\n` +
+      `  extractable:\n${tokens.map((t) => `    - ${t}`).join("\n")}\n`;
+    writeFileSync(join(vault, "Brain", "_brain.yaml"), allowlist(["paper"]), "utf8");
+
+    const first = planBatches(vault, "Docs", CAPS);
+    ingest("Docs/a.md", first.planId);
+    // Under the contract the ingest ran under, the plan reconciles clean.
+    expect(reconcilePlan(vault, planBatches(vault, "Docs", CAPS)).complete).toBe(true);
+
+    // Widen the allowlist: the live contract changes, the plan id changes with
+    // it, and the old checkpoint cannot vouch for work extracted under the old
+    // contract - the source is named as never ingested until it reprocesses.
+    writeFileSync(join(vault, "Brain", "_brain.yaml"), allowlist(["paper", "memo"]), "utf8");
+    const changed = planBatches(vault, "Docs", CAPS);
+    expect(changed.planId).not.toBe(first.planId);
+
+    const report = reconcilePlan(vault, changed);
+    expect(report.dispatched).toEqual(["Docs/a.md"]);
+    expect(report.missing).toEqual(["Docs/a.md"]);
+    expect(report.complete).toBe(false);
+  });
+});

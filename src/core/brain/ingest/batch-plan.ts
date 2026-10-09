@@ -59,6 +59,7 @@ import {
   type IgnoreWarning,
 } from "../../fs/ignore.ts";
 import { canonicalNotePath, ensureInsideVault } from "../../path-safety.ts";
+import { computeExtractionContractFingerprint } from "./contract.ts";
 import { computePlanId, readCheckpoint } from "./checkpoint.ts";
 import { classifyPaths, readManifest } from "./content-manifest.ts";
 import {
@@ -86,6 +87,24 @@ import {
  * historical name so nothing that iterates it reorders.
  */
 export { DEFAULT_INGESTIBLE_EXTENSIONS };
+
+/**
+ * The closed vocabulary of why-a-file-is-planned tokens (the wire `status`).
+ * Bytes-changed and contract-changed are deliberately DISTINCT tokens
+ * (t_586d5d8b): a source reprocessing because the extraction contract moved,
+ * not because its bytes moved, reports that fact instead of masquerading as an
+ * edit.
+ */
+export const PLANNED_FILE_STATUS = Object.freeze({
+  /** On disk, absent from the manifest. */
+  NEW: "new",
+  /** On disk, manifest bytes differ. */
+  BYTES_CHANGED: "modified",
+  /** On disk, manifest bytes identical, but the extraction contract changed. */
+  CONTRACT_CHANGED: "contract-changed",
+} as const);
+
+export type PlannedFileStatus = (typeof PLANNED_FILE_STATUS)[keyof typeof PLANNED_FILE_STATUS];
 
 export interface BatchPlanOptions {
   /** Hard upper bound on the summed bytes of one batch (must be > 0). */
@@ -138,8 +157,8 @@ export interface PlannedFile {
   readonly path: string;
   /** File size in bytes (drives the byte-cap packing). */
   readonly bytes: number;
-  /** Why the file is being ingested: absent from / differing in the manifest. */
-  readonly status: "new" | "modified";
+  /** Why the file is being ingested: see {@link PLANNED_FILE_STATUS}. */
+  readonly status: PlannedFileStatus;
   /**
    * The file's registered format when it is not `text` (HTML, CSV, TSV, or a
    * named format a caller's `extensions` override admitted). Absent for text
@@ -206,6 +225,19 @@ export interface BatchPlan {
   readonly totalFiles: number;
   /** Total bytes across all batches. */
   readonly totalBytes: number;
+  /**
+   * Whether the manifest's recorded extraction contract
+   * ({@link ./contract.ts}) differs from the live one - including a v1
+   * manifest, which recorded none. Every `unchanged` source reprocesses once
+   * under the new contract (see {@link PLANNED_FILE_STATUS.CONTRACT_CHANGED});
+   * an unchanged contract plans exactly as before.
+   */
+  readonly contractChanged: boolean;
+  /**
+   * How many of the planned files reprocess because the contract changed
+   * rather than their bytes. Zero unless {@link BatchPlan.contractChanged}.
+   */
+  readonly contractChangedFiles: number;
   /**
    * Stable id for this plan (t_ba1fa5f6), derived from the source dir and the
    * full discovered path set. The key an interrupted run resumes against.
@@ -336,9 +368,12 @@ export function planBatches(vault: string, sourceDir: string, opts: BatchPlanOpt
     ...partition.skipped,
   ];
 
-  // The plan id keys on the FULL discovered set, so it is identical before and
-  // after an interruption regardless of how many items have completed.
-  const planId = computePlanId(dirRel, relPaths);
+  // The plan id keys on the FULL discovered set plus the LIVE extraction
+  // contract (t_586d5d8b), so it is identical before and after an interruption
+  // and a contract change gets a fresh id - the old checkpoint then orphans
+  // instead of resume-skipping work extracted under the old contract.
+  const contractFingerprint = computeExtractionContractFingerprint(vault);
+  const planId = computePlanId(dirRel, relPaths, contractFingerprint);
 
   // On resume, drop items this plan's checkpoint already recorded completed
   // BEFORE classification, so those items are not re-hashed at all - the
@@ -351,15 +386,25 @@ export function planBatches(vault: string, sourceDir: string, opts: BatchPlanOpt
   const toClassify = relPaths.filter((p) => !completed.has(p));
   const resumedCompleted = relPaths.length - toClassify.length;
 
-  // Consult A1's manifest: only `new`/`modified` sources are worth ingesting.
-  const classification = classifyPaths(vault, toClassify, readManifest(vault));
-  const skipped = [...classification.unchanged].toSorted();
+  // Consult A1's manifest, then compare its recorded extraction contract
+  // against the live one IMMEDIATELY after the read (t_586d5d8b): a manifest
+  // written under an older contract - or a v1 one, which recorded none - must
+  // not keep serving `unchanged` skips shaped by that contract.
+  const manifest = readManifest(vault);
+  const classification = classifyPaths(vault, toClassify, manifest);
+  const contractChanged =
+    manifest.contract === null || manifest.contract.fingerprint !== contractFingerprint;
 
   // Build the planned-file list, tagging each with why it was selected, in
   // sorted-by-path order so packing (and the whole plan) is deterministic.
-  const status = new Map<string, "new" | "modified">();
-  for (const p of classification.new) status.set(p, "new");
-  for (const p of classification.modified) status.set(p, "modified");
+  // Under a changed contract the byte-identical sources reprocess too, with
+  // the distinct contract-changed token - "bytes changed" stays "modified".
+  const status = new Map<string, PlannedFileStatus>();
+  for (const p of classification.new) status.set(p, PLANNED_FILE_STATUS.NEW);
+  for (const p of classification.modified) status.set(p, PLANNED_FILE_STATUS.BYTES_CHANGED);
+  if (contractChanged) {
+    for (const p of classification.unchanged) status.set(p, PLANNED_FILE_STATUS.CONTRACT_CHANGED);
+  }
   const planned: PlannedFile[] = [...status.keys()].toSorted().map((path) => {
     const format = sourceFormatOf(path);
     return {
@@ -377,12 +422,16 @@ export function planBatches(vault: string, sourceDir: string, opts: BatchPlanOpt
     maxBatchBytes: opts.maxBatchBytes,
     maxBatchFiles: opts.maxBatchFiles,
     batches,
-    skipped,
+    // Nothing skips under a changed contract: every unchanged source is in the
+    // reprocessing list above, so the skip list is empty by construction.
+    skipped: contractChanged ? [] : [...classification.unchanged].toSorted(),
     skippedNonExtractable,
     skipReasonCounts: countSkipReasons(skippedNonExtractable),
     unclassifiable: aggregateUnclassifiable(unclassifiable),
     totalFiles: planned.length,
     totalBytes: planned.reduce((sum, f) => sum + f.bytes, 0),
+    contractChanged,
+    contractChangedFiles: contractChanged ? classification.unchanged.length : 0,
     planId,
     resumedCompleted,
     // Sorted so the plan is fully deterministic: the walk visits directories in

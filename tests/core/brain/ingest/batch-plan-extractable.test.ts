@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
+import { updateManifest } from "../../../../src/core/brain/ingest/content-manifest.ts";
 import { planBatches } from "../../../../src/core/brain/ingest/batch-plan.ts";
 
 let vault: string;
@@ -82,5 +83,22 @@ describe("extractable gate in planBatches", () => {
     planBatches(vault, "Sources", CAPS);
     const after = readFileSync(join(vault, "Brain", "_brain.yaml"), "utf8");
     expect(after).toBe(before);
+  });
+});
+
+describe("extractable gate × contract change (t_586d5d8b)", () => {
+  test("a changed contract reprocesses an extractable page and still gates a non-extractable one", () => {
+    page("Sources/a.md", "paper");
+    page("Sources/b.md", "memo");
+    setExtractable(["paper", "memo"]); // both extractable
+    updateManifest(vault, ["Sources/a.md", "Sources/b.md"]);
+    setExtractable(["paper"]); // the contract changes; memo pages now gate out
+
+    const plan = planBatches(vault, "Sources", CAPS);
+    // a.md: unchanged bytes, changed contract, still extractable → reprocess.
+    expect(plannedPaths(plan)).toEqual(["Sources/a.md"]);
+    expect(plan.batches[0]!.files[0]!.status).toBe("contract-changed");
+    // b.md: the gate excludes it before any contract question arises.
+    expect(plan.skippedNonExtractable.map((s) => s.path)).toEqual(["Sources/b.md"]);
   });
 });

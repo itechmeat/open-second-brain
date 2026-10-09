@@ -26,7 +26,8 @@ import {
   PRE_EXTRACT_MAX_SOURCE_BYTES,
   readSourceBounded,
 } from "../../../../src/core/brain/ingest/ingest.ts";
-import { manifestPath } from "../../../../src/core/brain/ingest/content-manifest.ts";
+import { manifestPath, hashBytes } from "../../../../src/core/brain/ingest/content-manifest.ts";
+import { computeExtractionContractFingerprint } from "../../../../src/core/brain/ingest/contract.ts";
 import { computePlanId, readCheckpoint } from "../../../../src/core/brain/ingest/checkpoint.ts";
 
 let vault: string;
@@ -138,7 +139,11 @@ describe("ingestSource", () => {
   test("planId records the ingested vault-file source into the plan checkpoint (t_ba1fa5f6)", () => {
     // The checkpoint is only recorded for a real vault file, so materialize it.
     seedSourceFile();
-    const planId = computePlanId("Articles", ["Articles/restaking-primer.md"]);
+    const planId = computePlanId(
+      "Articles",
+      ["Articles/restaking-primer.md"],
+      computeExtractionContractFingerprint(vault),
+    );
     ingestSource(vault, INPUT, { agent: "claude", now: NOW, planId });
     const cp = readCheckpoint(vault, planId);
     expect(cp?.completed).toEqual(["Articles/restaking-primer.md"]);
@@ -146,7 +151,11 @@ describe("ingestSource", () => {
 
   test("without planId no checkpoint is written", () => {
     seedSourceFile();
-    const planId = computePlanId("Articles", ["Articles/restaking-primer.md"]);
+    const planId = computePlanId(
+      "Articles",
+      ["Articles/restaking-primer.md"],
+      computeExtractionContractFingerprint(vault),
+    );
     ingestSource(vault, INPUT, { agent: "claude", now: NOW });
     expect(readCheckpoint(vault, planId)).toBeNull();
   });
@@ -440,5 +449,33 @@ describe("readSourceBounded", () => {
       text: null,
       unread: "not a regular file",
     });
+  });
+});
+
+describe("ingestSource — extraction contract (t_586d5d8b)", () => {
+  test("ingesting under a v1 manifest rewrites the summary and lands the manifest as v2", () => {
+    seedSourceFile();
+    // Pre-fingerprint era manifest: the source's live hash recorded, no
+    // contract. The ingest records the source under the live contract, so the
+    // manifest it rewrites must land as v2 stamped with the fingerprint.
+    writeManifestBytes(
+      JSON.stringify({
+        schema_version: 1,
+        entries: {
+          [INPUT.sourcePath]: hashBytes(readFileSync(join(vault, INPUT.sourcePath))),
+        },
+      }),
+    );
+
+    const res = ingestSource(vault, INPUT, { agent: "claude", now: NOW });
+    expect(res.created).toBe(true);
+    expect(readSummary(res.summaryPath)).toContain("kind: brain-source");
+
+    const onDisk = JSON.parse(readFileSync(manifestPath(vault), "utf8")) as {
+      schema_version: number;
+      contract: { fingerprint: string } | null;
+    };
+    expect(onDisk.schema_version).toBe(2);
+    expect(onDisk.contract?.fingerprint).toBe(computeExtractionContractFingerprint(vault));
   });
 });

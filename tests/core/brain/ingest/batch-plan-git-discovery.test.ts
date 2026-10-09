@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 import { planBatches } from "../../../../src/core/brain/ingest/batch-plan.ts";
 import { computePlanId } from "../../../../src/core/brain/ingest/checkpoint.ts";
+import { computeExtractionContractFingerprint } from "../../../../src/core/brain/ingest/contract.ts";
 import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
 import { CHMOD_CANNOT_DENY } from "../../../helpers/platform.ts";
 
@@ -283,7 +284,13 @@ describe("byte-identical no-git path", () => {
     expect(plannedPaths(plan)).toEqual(["mono/a.md", "mono/sub/b.md"]);
     // Pinned against the documented derivation rather than against the walk, so
     // the assertion cannot drift with the discovery implementation.
-    expect(plan.planId).toBe(computePlanId(SOURCE, ["mono/a.md", "mono/sub/b.md"]));
+    expect(plan.planId).toBe(
+      computePlanId(
+        SOURCE,
+        ["mono/a.md", "mono/sub/b.md"],
+        computeExtractionContractFingerprint(vault),
+      ),
+    );
     expect(plan.ignoreWarnings).toEqual([]);
   });
 

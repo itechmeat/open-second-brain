@@ -10,12 +10,13 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import { hashFile, manifestPath } from "../../src/core/brain/ingest/content-manifest.ts";
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { MCPServer } from "../../src/mcp/server.ts";
 
@@ -103,5 +104,35 @@ describe("format skips at remote reach", () => {
     expect(local["skipped_non_extractable"]).toEqual(remote["skipped_non_extractable"]);
     expect(JSON.stringify(local["batches"])).toContain(PRIVATE_PATH);
     expect(JSON.stringify(remote["batches"])).not.toContain(PRIVATE_PATH);
+  });
+});
+
+describe("wire emission of the extraction contract (t_586d5d8b)", () => {
+  test("an unchanged contract emits no contract keys", async () => {
+    // No manifest on disk reads back as current-shaped under the live
+    // contract, so nothing about the contract may reach the wire.
+    const result = structured(await plan(fixture(false)));
+    expect(result["contract_changed"]).toBeUndefined();
+    expect(result["contract_changed_files"]).toBeUndefined();
+  });
+
+  test("a v1 manifest surfaces contract_changed with the reprocess count", async () => {
+    const f = fixture(false, TRANSPORT_REACH.local);
+    const path = manifestPath(f.vault);
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(
+      path,
+      JSON.stringify({
+        schema_version: 1,
+        entries: { "Clips/open.md": hashFile(join(f.vault, "Clips", "open.md")) },
+      }),
+      "utf8",
+    );
+    // readFileSync pins that the fixture really wrote the bytes it hashes.
+    expect(readFileSync(join(f.vault, "Clips", "open.md"), "utf8")).toContain("Open");
+
+    const result = structured(await plan(f));
+    expect(result["contract_changed"]).toBe(true);
+    expect(result["contract_changed_files"]).toBe(1);
   });
 });

@@ -292,6 +292,13 @@ export function serializeBatchPlan(plan: BatchPlan): Record<string, unknown> {
     total_files: plan.totalFiles,
     total_bytes: plan.totalBytes,
     skipped: [...plan.skipped],
+    // Only emitted when the manifest's recorded extraction contract differs
+    // from the live one (t_586d5d8b), so a plan under an unchanged contract
+    // serializes byte-identically to before. The count names how many files
+    // reprocess because of the contract rather than their bytes.
+    ...(plan.contractChanged
+      ? { contract_changed: true, contract_changed_files: plan.contractChangedFiles }
+      : {}),
     // Only emitted when the extractable gate skipped something, so a plan with
     // no extractable declaration serializes byte-identically to before. The
     // reason is the typed token (P4) and `detail` carries the value behind

@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
-import { updateManifest } from "../../../../src/core/brain/ingest/content-manifest.ts";
+import { hashFile, updateManifest } from "../../../../src/core/brain/ingest/content-manifest.ts";
 import {
   DEFAULT_INGESTIBLE_EXTENSIONS as PLANNER_DEFAULT_EXTENSIONS,
   planBatches,
@@ -433,5 +433,106 @@ describe("planBatches — source formats", () => {
 
   test("the planner re-exports the registry's default extensions", () => {
     expect(PLANNER_DEFAULT_EXTENSIONS).toBe(DEFAULT_INGESTIBLE_EXTENSIONS);
+  });
+});
+
+describe("planBatches — extraction contract (t_586d5d8b)", () => {
+  test("a changed contract reprocesses `unchanged` files with the distinct reason", () => {
+    page("Inbox/a.md", "paper");
+    setExtractable(["paper"]);
+    updateManifest(vault, ["Inbox/a.md"]); // stamped under the live contract
+    // Widen the allowlist: the contract changes while the file's bytes and
+    // its gate outcome stay exactly the same.
+    setExtractable(["paper", "memo"]);
+
+    const plan = planBatches(vault, "Inbox", CAPS);
+    expect(plan.contractChanged).toBe(true);
+    expect(plan.contractChangedFiles).toBe(1);
+    expect(plan.skipped).toEqual([]); // nothing skips under a changed contract
+    expect(allPlannedPaths(plan)).toEqual(["Inbox/a.md"]);
+    expect(plan.batches[0]!.files[0]!.status).toBe("contract-changed");
+  });
+
+  test("bytes-changed and contract-changed stay distinct tokens in one plan", () => {
+    page("Inbox/same.md", "paper");
+    page("Inbox/edited.md", "paper");
+    setExtractable(["paper"]);
+    updateManifest(vault, ["Inbox/same.md", "Inbox/edited.md"]);
+    writeFileSync(
+      join(vault, "Inbox/edited.md"),
+      "---\ntitle: edited\nschema_type: paper\n---\n\nnew body\n",
+      "utf8",
+    );
+    setExtractable(["paper", "memo"]);
+
+    const plan = planBatches(vault, "Inbox", CAPS);
+    const byStatus = new Map(
+      plan.batches.flatMap((b) => b.files.map((f) => [f.status, f.path] as const)),
+    );
+    expect(byStatus.get("modified")).toBe("Inbox/edited.md"); // bytes changed
+    expect(byStatus.get("contract-changed")).toBe("Inbox/same.md"); // contract only
+    expect(plan.contractChangedFiles).toBe(1);
+  });
+
+  test("a v1 manifest (never contract-stamped) reprocesses unchanged bytes once", () => {
+    page("Inbox/a.md", "paper");
+    setExtractable(["paper"]);
+    const manifest = join(vault, ".open-second-brain", "ingest-manifest.json");
+    mkdirSync(join(manifest, ".."), { recursive: true });
+    writeFileSync(
+      manifest,
+      JSON.stringify({
+        schema_version: 1,
+        entries: { "Inbox/a.md": hashFile(join(vault, "Inbox", "a.md")) },
+      }),
+      "utf8",
+    );
+
+    const plan = planBatches(vault, "Inbox", CAPS);
+    expect(plan.contractChanged).toBe(true);
+    expect(plan.batches[0]!.files[0]!.status).toBe("contract-changed");
+  });
+
+  test("an unchanged contract skips exactly as before and emits no contract keys", () => {
+    page("Inbox/a.md", "paper");
+    setExtractable(["paper"]);
+    updateManifest(vault, ["Inbox/a.md"]);
+
+    const plan = planBatches(vault, "Inbox", CAPS);
+    expect(plan.contractChanged).toBe(false);
+    expect(plan.contractChangedFiles).toBe(0);
+    expect(plan.skipped).toEqual(["Inbox/a.md"]);
+    expect(JSON.stringify(serializeBatchPlan(plan))).not.toContain("contract_changed");
+  });
+
+  test("serializeBatchPlan emits the contract fields only when the contract changed", () => {
+    page("Inbox/a.md", "paper");
+    setExtractable(["paper"]);
+    updateManifest(vault, ["Inbox/a.md"]);
+    setExtractable(["paper", "memo"]);
+
+    const wire = serializeBatchPlan(planBatches(vault, "Inbox", CAPS));
+    expect(wire["contract_changed"]).toBe(true);
+    expect(wire["contract_changed_files"]).toBe(1);
+  });
+
+  test("resume does not consume a checkpoint recorded under the old contract", () => {
+    page("Inbox/a.md", "paper");
+    setExtractable(["paper"]);
+    updateManifest(vault, ["Inbox/a.md"]);
+    const before = planBatches(vault, "Inbox", CAPS);
+    recordCompleted(
+      vault,
+      before.planId,
+      "Inbox",
+      ["Inbox/a.md"],
+      new Date("2026-06-13T12:00:00Z"),
+    );
+
+    setExtractable(["paper", "memo"]); // the contract, hence the plan id, changes
+    const resumed = planBatches(vault, "Inbox", { ...CAPS, resume: true });
+    expect(resumed.planId).not.toBe(before.planId);
+    expect(resumed.resumedCompleted).toBe(0); // the old checkpoint cannot resume-skip
+    expect(resumed.batches[0]!.files[0]!.status).toBe("contract-changed");
   });
 });

@@ -95,6 +95,12 @@ export async function cmdBrainBatchPlan(argv: string[]): Promise<number> {
         `${plan.skipped.length} unchanged skipped` +
         (plan.resumedCompleted > 0 ? `; ${plan.resumedCompleted} resumed (checkpointed)` : ""),
     );
+    if (plan.contractChanged) {
+      info(
+        `  extraction contract changed: ${plan.contractChangedFiles} unchanged file(s) ` +
+          "reprocess under the new contract",
+      );
+    }
     for (const b of plan.batches) {
       ok(`  batch ${b.index}: ${b.files.length} file(s), ${b.totalBytes} byte(s)`);
       for (const f of b.files) {

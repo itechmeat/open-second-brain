@@ -73,11 +73,19 @@ export interface IngestCheckpoint {
 }
 
 /**
- * Deterministic plan id: a short SHA-256 hex over the canonical source dir and
- * the sorted full discovered path set. Keying on the FULL set (not the remaining
- * work) keeps the id stable across a resume even as items complete.
+ * Deterministic plan id: a short SHA-256 hex over the canonical source dir, the
+ * sorted full discovered path set, and the extraction contract
+ * ({@link ./contract.ts}) the plan runs under. Keying on the FULL set (not the
+ * remaining work) keeps the id stable across a resume even as items complete;
+ * keying on the CONTRACT means a changed contract gets a fresh id, so a stale
+ * checkpoint recorded under the old contract cannot resume-skip work extracted
+ * under the new one - the old file orphans harmlessly.
  */
-export function computePlanId(sourceDir: string, discoveredPaths: readonly string[]): string {
+export function computePlanId(
+  sourceDir: string,
+  discoveredPaths: readonly string[],
+  contractFingerprint: string,
+): string {
   const dir = canonicalNotePath(sourceDir);
   const paths = discoveredPaths.map((p) => canonicalNotePath(p)).toSorted();
   const hash = createHash("sha256");
@@ -87,6 +95,8 @@ export function computePlanId(sourceDir: string, discoveredPaths: readonly strin
     hash.update(p);
     hash.update("\n");
   }
+  hash.update("\0");
+  hash.update(contractFingerprint);
   return hash.digest("hex").slice(0, 16);
 }
 
