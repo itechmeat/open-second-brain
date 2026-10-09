@@ -65,10 +65,13 @@ function custodyStore(): CustodyStore {
 }
 
 /**
- * The merged provider: custody store ahead of the process environment.
- * Probing is on demand - a name the store does not hold costs one
- * metadata read and never decrypts; the store's plaintext is handed to
- * the caller exactly where the value is used.
+ * The store leg of the merged provider: one name's custody answer, or
+ * undefined when the store does not hold it (the caller falls back to the
+ * environment). Probing is on demand - a name the store does not hold costs
+ * one metadata read and never decrypts; the store's plaintext is handed to
+ * the caller exactly where the value is used. A name the store holds under
+ * a locked envelope raises the named locked-store refusal, never a silent
+ * env fallback.
  */
 function storeValue(vault: string, name: string): string | undefined {
   const held = custodyStore()

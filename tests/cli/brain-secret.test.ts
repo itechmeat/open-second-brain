@@ -179,6 +179,28 @@ test("unlock without a passphrase is a usage error", async () => {
   expect(result.stderr).toContain("passphrase");
 });
 
+test("a blank --passphrase-from-env value is the usage error a blank stdin passphrase is", async () => {
+  // The stdin ingestion refuses a passphrase that is empty after trim; the
+  // env ingestion enforces the SAME rule, so `SECRET_PASS="   "` cannot wrap
+  // the keyfile under what is almost certainly an unset-variable accident.
+  const result = await runCli(
+    [
+      "brain",
+      "secret",
+      "unlock",
+      "--vault",
+      vault,
+      "--passphrase-from-env",
+      "O2B_TEST_BLANK_PASSPHRASE",
+    ],
+    { env: { O2B_TEST_BLANK_PASSPHRASE: "   " } },
+  );
+  expect(result.returncode).toBe(2);
+  expect(result.stderr).toContain("passphrase");
+  // The refusal precedes any custody effect: nothing was wrapped or minted.
+  expect(existsSync(join(vault, ".open-second-brain", "secrets"))).toBe(false);
+});
+
 test("export --out writes the bundle; import restores it; collisions need --replace", async () => {
   await runCli(
     [
@@ -261,7 +283,7 @@ describe("secret refusals and help accuracy", () => {
       { stdin: "" },
     );
     expect(r.returncode).toBe(2);
-    expect(r.stderr).toContain("env var OSB_TEST_MISSING_PW is unset or empty");
+    expect(r.stderr).toContain("env var OSB_TEST_MISSING_PW is unset, empty, or blank");
     expect(r.stderr).toContain("set it to a passphrase, or pipe the passphrase via stdin");
   });
 

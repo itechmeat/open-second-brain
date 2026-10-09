@@ -64,7 +64,10 @@ const BUNDLE_EGRESS_SITE = "brain-secret-bundle-export" as const;
 /**
  * Ingest the passphrase the way `set` ingests a value: `--passphrase-from-env`
  * or stdin, never argv. The passphrase must never land in shell history or a
- * process list - it protects every stored value after the first unlock.
+ * process list - it protects every stored value after the first unlock. Both
+ * routes enforce ONE blankness rule - a value that is empty after trim is not
+ * a passphrase - so `SECRET_PASS="   "` cannot wrap the keyfile the way an
+ * unset-variable accident through the stdin route cannot.
  */
 async function ingestPassphrase(
   op: string,
@@ -73,9 +76,9 @@ async function ingestPassphrase(
   const fromEnv = flags["passphrase-from-env"] as string | undefined;
   if (fromEnv !== undefined) {
     const value = process.env[fromEnv];
-    if (value === undefined || value.length === 0) {
+    if (value === undefined || value.trim().length === 0) {
       process.stderr.write(
-        `brain secret ${op}: env var ${fromEnv} is unset or empty; set it to a passphrase, or pipe the passphrase via stdin\n`,
+        `brain secret ${op}: env var ${fromEnv} is unset, empty, or blank; set it to a passphrase, or pipe the passphrase via stdin\n`,
       );
       return { exitCode: 2 };
     }
