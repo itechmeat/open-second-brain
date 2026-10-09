@@ -157,6 +157,39 @@ describe("the keyfile envelope", () => {
     expect(() => loadOrCreateKey(keyPath)).toThrow(SecretStoreLockedError);
   });
 
+  test("a hand-edited envelope whose kdf cost exceeds this build's curve refuses by name", () => {
+    const dek = loadOrCreateKey(keyPath);
+    wrapKeyfile(keyPath, PASSPHRASE, dek);
+    // n = 2**31 would send scryptSync off to a terabyte-scale allocation
+    // before this fix: validation checked positivity only.
+    const absurd = JSON.parse(readFileSync(keyPath, "utf8")) as Record<string, unknown>;
+    (absurd["kdf"] as Record<string, unknown>)["n"] = 2 ** 31;
+    (absurd["kdf"] as Record<string, unknown>)["maxmem"] = 10 ** 12;
+    const absurdPath = join(secretsDir(vault), "tampered-absurd-cost.json");
+    writeFileSync(absurdPath, JSON.stringify(absurd));
+    try {
+      verifyKeyfilePassphrase(absurdPath, PASSPHRASE);
+      throw new Error("expected the kdf-cost refusal");
+    } catch (err) {
+      expect(err).toBeInstanceOf(SecretEnvelopeError);
+      expect((err as SecretEnvelopeError).code).toBe(ENVELOPE_REFUSAL_CODES.kdfCost);
+    }
+    // A stored maxmem SMALLER than the parameters' own need used to
+    // surface as node's raw "memory limit exceeded" instead of the named
+    // refusal.
+    const starved = JSON.parse(readFileSync(keyPath, "utf8")) as Record<string, unknown>;
+    (starved["kdf"] as Record<string, unknown>)["maxmem"] = 1024;
+    const starvedPath = join(secretsDir(vault), "tampered-starved-maxmem.json");
+    writeFileSync(starvedPath, JSON.stringify(starved));
+    try {
+      verifyKeyfilePassphrase(starvedPath, PASSPHRASE);
+      throw new Error("expected the kdf-cost refusal");
+    } catch (err) {
+      expect(err).toBeInstanceOf(SecretEnvelopeError);
+      expect((err as SecretEnvelopeError).code).toBe(ENVELOPE_REFUSAL_CODES.kdfCost);
+    }
+  });
+
   test("the passphrase is never written anywhere under the vault", () => {
     const dek = loadOrCreateKey(keyPath);
     wrapKeyfile(keyPath, PASSPHRASE, dek);

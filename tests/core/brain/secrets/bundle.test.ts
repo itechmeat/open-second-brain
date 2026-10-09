@@ -260,4 +260,28 @@ describe("the credential bundle", () => {
     }
     expect(listSecrets(other)).toHaveLength(0);
   });
+
+  test("a crafted kdf cost block refuses by name before scrypt allocates", () => {
+    seed(vault);
+    const bundle = exportSecretBundle(vault, PASSPHRASE, CTX);
+    // The bundle's kdf block rides in the clear, so a rewritten one is
+    // the same unbounded-cost knob a hand-edited keyfile envelope is;
+    // the same build curve bounds it.
+    const absurd = JSON.parse(JSON.stringify(bundle)) as Record<string, unknown>;
+    (absurd["kdf"] as Record<string, unknown>)["n"] = 2 ** 31;
+    (absurd["kdf"] as Record<string, unknown>)["maxmem"] = 10 ** 12;
+    try {
+      importSecretBundle(other, absurd, {
+        passphrase: PASSPHRASE,
+        replace: false,
+        agent: "tester",
+        now: LATER,
+      });
+      throw new Error("expected the kdf-cost refusal");
+    } catch (err) {
+      expect(err).toBeInstanceOf(SecretBundleError);
+      expect((err as SecretBundleError).code).toBe(BUNDLE_REFUSAL_CODES.kdfCost);
+    }
+    expect(listSecrets(other)).toHaveLength(0);
+  });
 });

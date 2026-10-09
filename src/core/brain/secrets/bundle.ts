@@ -30,7 +30,12 @@ import { brainDirsForWrite } from "../paths.ts";
 import { isoSecond } from "../time.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { decryptValue, encryptValue, loadOrCreateKey, type EncryptedValue } from "./crypto.ts";
-import { deriveWrapKey, freshWrapKdfParams, type EnvelopeKdfParams } from "./envelope.ts";
+import {
+  deriveWrapKey,
+  freshWrapKdfParams,
+  kdfCostCurveRefusal,
+  type EnvelopeKdfParams,
+} from "./envelope.ts";
 import {
   isValidSecretEnvVar,
   isValidSecretName,
@@ -54,6 +59,8 @@ export const BUNDLE_REFUSAL_CODES = Object.freeze({
   version: "secret_bundle_version_refused",
   /** The bundle names a KDF this build does not implement. */
   kdfAlgo: "secret_bundle_kdf_algo_refused",
+  /** The stored KDF parameters exceed (or fall below) this build's cost curve. */
+  kdfCost: "secret_bundle_kdf_params_refused",
   /** The passphrase did not decrypt the entries (wrong passphrase, corrupt). */
   passphrase: "secret_bundle_passphrase_refused",
   /** The file is bundle-shaped but does not parse as one. */
@@ -359,6 +366,13 @@ function parseBundle(bundle: unknown): SecretBundleFile {
       BUNDLE_REFUSAL_CODES.malformed,
       "kdf parameters must be positive integers",
     );
+  }
+  // The same cost-curve bound the keyfile envelope enforces: a crafted
+  // bundle's kdf block reaches `deriveWrapKey` verbatim, and an absurd
+  // cost is refused by name before scrypt allocates.
+  const costRefusal = kdfCostCurveRefusal(kdf as EnvelopeKdfParams);
+  if (costRefusal !== null) {
+    throw new SecretBundleError(BUNDLE_REFUSAL_CODES.kdfCost, costRefusal);
   }
   const entries = candidate.entries;
   if (typeof entries !== "object" || entries === null || Array.isArray(entries)) {

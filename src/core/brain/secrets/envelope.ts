@@ -51,6 +51,51 @@ const SCRYPT_P = 1;
 // ceiling sits exactly at that line, so the headroom is set explicitly.
 const SCRYPT_MAXMEM = 128 * 1024 * 1024;
 
+/**
+ * The cost CEILING this build accepts from a stored envelope or bundle.
+ * The stored parameters are honored (not re-derived) - that is what makes
+ * migration possible - but honored UNBOUNDED they are a memory-pressure
+ * knob for anyone who can write the 0600 keyfile: a hand-edited
+ * `n: 2**31` sent scryptSync off to a terabyte-scale allocation. These
+ * caps leave 8x headroom over the build's own curve (which is ~8x under
+ * them); a curve that genuinely needs more ships as a new schema version.
+ */
+const SCRYPT_N_MAX = 2 ** 18;
+const SCRYPT_R_MAX = 16;
+const SCRYPT_P_MAX = 8;
+const SCRYPT_MAXMEM_MAX = 256 * 1024 * 1024;
+
+/**
+ * Why the stored KDF parameters fall outside this build's cost curve, or
+ * null when they are within it. Runs BEFORE scrypt sees the parameters,
+ * on every stored-params reader (the keyfile envelope and the bundle
+ * alike): an absurd cost is refused by name instead of allocated, and a
+ * `maxmem` below the parameters' own `128*n*r` need is the named refusal
+ * rather than node's raw memory error.
+ */
+export function kdfCostCurveRefusal(kdf: EnvelopeKdfParams): string | null {
+  if (kdf.n > SCRYPT_N_MAX) {
+    return `kdf n ${String(kdf.n)} exceeds this build's ceiling ${String(SCRYPT_N_MAX)}`;
+  }
+  if (kdf.r > SCRYPT_R_MAX) {
+    return `kdf r ${String(kdf.r)} exceeds this build's ceiling ${String(SCRYPT_R_MAX)}`;
+  }
+  if (kdf.p > SCRYPT_P_MAX) {
+    return `kdf p ${String(kdf.p)} exceeds this build's ceiling ${String(SCRYPT_P_MAX)}`;
+  }
+  if (kdf.maxmem > SCRYPT_MAXMEM_MAX) {
+    return `kdf maxmem ${String(kdf.maxmem)} exceeds this build's ceiling ${String(SCRYPT_MAXMEM_MAX)}`;
+  }
+  const needed = 128 * kdf.n * kdf.r;
+  if (kdf.maxmem < needed) {
+    return (
+      `kdf maxmem ${String(kdf.maxmem)} is below the ${String(needed)} bytes ` +
+      `these n/r parameters need`
+    );
+  }
+  return null;
+}
+
 /** The KDF parameters recorded inside an envelope, so they can migrate. */
 export interface EnvelopeKdfParams {
   readonly algo: string;
@@ -79,6 +124,8 @@ export const ENVELOPE_REFUSAL_CODES = Object.freeze({
   version: "keyfile_envelope_version_refused",
   /** The envelope names a KDF this build does not implement. */
   kdfAlgo: "keyfile_envelope_kdf_algo_refused",
+  /** The stored KDF parameters exceed ( or fall below) this build's cost curve. */
+  kdfCost: "keyfile_envelope_kdf_params_refused",
   /** The passphrase did not unwrap the DEK (wrong passphrase, or corrupt). */
   passphrase: "keyfile_envelope_passphrase_refused",
   /** The file is envelope-shaped but does not parse as one. */
@@ -227,8 +274,9 @@ export function isEnvelopeBytes(bytes: Buffer): boolean {
 
 /**
  * Strict read: parse, then refuse an unknown version or KDF algo BY NAME.
- * The parameters are validated before scrypt sees them, so a hand-edited
- * envelope cannot hand the KDF an absurd cost.
+ * The parameters are validated - shape, and this build's cost curve -
+ * before scrypt sees them, so a hand-edited envelope can neither hand the
+ * KDF an absurd cost nor starve it below its own memory need.
  */
 export function readEnvelope(keyPath: string): KeyfileEnvelope {
   let parsed: unknown;
@@ -273,6 +321,10 @@ export function readEnvelope(keyPath: string): KeyfileEnvelope {
       keyPath,
       "kdf parameters must be positive integers",
     );
+  }
+  const costRefusal = kdfCostCurveRefusal(parsed.kdf);
+  if (costRefusal !== null) {
+    throw new SecretEnvelopeError(ENVELOPE_REFUSAL_CODES.kdfCost, keyPath, costRefusal);
   }
   return parsed;
 }
