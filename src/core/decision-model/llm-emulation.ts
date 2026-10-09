@@ -275,10 +275,20 @@ export class LlmEmulationDecisionProvider implements DecisionProvider {
     );
     if (limit !== null) throw new DecisionProviderError("budget", limit);
 
-    const verdict = redactForEgress(LLM_EMULATION_EGRESS_SITE, {
-      state: req.state,
-      questions: req.questions,
-    });
+    // This adapter holds the resolved key it is about to send as a Bearer
+    // credential, so it is a wired boundary: the body scan also carries
+    // the key VALUE as a literal, scrubbing an occurrence that leaked
+    // into the vault text the state is built from - a quiet string the
+    // shape passes cannot see. The key is required here (no keyless
+    // route), so the literal pass always has its value.
+    const verdict = redactForEgress(
+      LLM_EMULATION_EGRESS_SITE,
+      {
+        state: req.state,
+        questions: req.questions,
+      },
+      { resolvedLiterals: [this.endpoint.apiKey] },
+    );
     if (verdict.outcome !== "released") {
       throw new DecisionProviderError(
         "egress_refused",

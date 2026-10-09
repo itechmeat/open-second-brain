@@ -138,10 +138,20 @@ export class SystemOneDecisionProvider implements DecisionProvider {
     );
     if (limit !== null) throw new DecisionProviderError("budget", limit);
 
-    const verdict = redactForEgress(SYSTEMONE_EGRESS_SITE, {
-      state: req.state,
-      questions: req.questions,
-    });
+    // This adapter holds the resolved key it is about to send as a Bearer
+    // credential, so it is a wired boundary: the body scan also carries
+    // the key VALUE as a literal, scrubbing an occurrence that leaked
+    // into the vault text the state and questions are built from - a
+    // quiet string the shape passes cannot see. No key, no literal pass
+    // (byte-identical to the bare guard).
+    const verdict = redactForEgress(
+      SYSTEMONE_EGRESS_SITE,
+      {
+        state: req.state,
+        questions: req.questions,
+      },
+      this.endpoint.apiKey ? { resolvedLiterals: [this.endpoint.apiKey] } : {},
+    );
     if (verdict.outcome !== "released") {
       throw new DecisionProviderError(
         "egress_refused",

@@ -23,6 +23,7 @@
 
 import { ConfigReadError, discoverConfig } from "../core/config.ts";
 import { redactConfigMapping } from "../core/egress/guard.ts";
+import { resolvedSecretLiterals } from "../core/secret-resolver.ts";
 import type { ConfigDiscovery } from "../core/types.ts";
 import { REMOVED_TOOLS } from "../core/removed-surfaces.ts";
 import { computeBrainStatus } from "../core/brain/status.ts";
@@ -175,7 +176,17 @@ async function toolStatus(ctx: ServerContext): Promise<Record<string, unknown>> 
     config_path: String(discovery.path),
     config_exists: discovery.exists,
     config_keys: configKeys,
-    config: broken === null ? redactConfigMapping(discovery.data) : unresolvedField(broken),
+    // The mapping passes with the vault's KNOWN resolved values: a
+    // credential the custody store holds, echoed under a quiet config key
+    // the shape passes cannot see, is scrubbed by the literal pass. An
+    // absent, empty or locked store contributes nothing, and the mapping
+    // is byte-identical to the bare single-argument call.
+    config:
+      broken === null
+        ? redactConfigMapping(discovery.data, {
+            resolvedLiterals: resolvedSecretLiterals(ctx.vault),
+          })
+        : unresolvedField(broken),
     vault_path: vaultPathField(ctx),
     // `boolean | { error }`. Both answerable cases keep their exact literal
     // - `true` when the directory is there, `false` when it is genuinely

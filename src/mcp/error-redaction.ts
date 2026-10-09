@@ -59,7 +59,12 @@ export function redactErrorForCaller(
 ): string {
   const literals = sortedDistinctLiterals(resolvedLiterals);
   if (reach === TRANSPORT_REACH.local) {
-    return redactRawOutput(raw, { literals: [vault, ...literals] });
+    // The vault goes through the same longest-first ordering as the
+    // literals: a resolved value that CONTAINS the vault path would have
+    // its match destroyed by an unsorted vault substitution first, and
+    // leak the residue - the exact failure the longest-first rule exists
+    // to prevent.
+    return redactRawOutput(raw, { literals: sortedDistinctLiterals([vault, ...literals]) });
   }
   const roots: Array<readonly [string, string]> = [];
   for (const [path, label] of [

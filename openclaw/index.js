@@ -3360,6 +3360,7 @@ var init_store = __esm(() => {
 });
 
 // src/core/secret-resolver.ts
+import { existsSync as existsSync7 } from "node:fs";
 function custodyStore() {
   if (custodyStoreModule === undefined) {
     custodyStoreModule = (init_store(), __toCommonJS(exports_store));
@@ -3394,6 +3395,26 @@ function resolveNamedSecret(vault, value) {
   if (!isSecretReferenceValue(value))
     return value;
   return resolveSecretReference(value.trim(), secretProvider(vault));
+}
+function resolvedSecretLiterals(vault) {
+  const store = custodyStore();
+  let held;
+  try {
+    held = store.listSecrets(vault);
+  } catch {
+    return [];
+  }
+  if (held.length === 0)
+    return [];
+  if (!existsSync7(store.keyPath(vault)))
+    return [];
+  const out = [];
+  for (const meta of held) {
+    try {
+      out.push(store.resolveSecretReadOnly(vault, meta.name).value);
+    } catch {}
+  }
+  return out;
 }
 var custodyStoreModule, REFERENCE_PREFIX = "$secret:";
 var init_secret_resolver = __esm(() => {
@@ -3904,6 +3925,9 @@ function redactConfigMapping(data, policy = {}) {
   return redactStructured(data, composeRedactionOptions(policy)).value;
 }
 
+// src/openclaw/index.ts
+init_secret_resolver();
+
 // src/core/vault-presence.ts
 init_fs_utils();
 function vaultUnexaminable(vault, err) {
@@ -3924,7 +3948,7 @@ function probeVaultDirectory(vault) {
 init_config();
 init_fs_utils();
 import {
-  existsSync as existsSync8,
+  existsSync as existsSync9,
   mkdirSync as mkdirSync5,
   openSync as openSync4,
   readFileSync as readFileSync8,
@@ -3937,7 +3961,7 @@ import { dirname as dirname6, join as join12 } from "node:path";
 // src/core/partner/codegraph.ts
 init_config();
 init_fs_utils();
-import { existsSync as existsSync7, readdirSync, realpathSync as realpathSync2 } from "node:fs";
+import { existsSync as existsSync8, readdirSync, realpathSync as realpathSync2 } from "node:fs";
 import { dirname as dirname5, join as join11, resolve as resolve8 } from "node:path";
 
 // src/core/project-manifests.ts
@@ -4041,11 +4065,11 @@ function codegraphInitCommand(projectPath) {
 }
 function isCodeProject(dir) {
   try {
-    if (!existsSync7(dir))
+    if (!existsSync8(dir))
       return false;
     if (!isDir(join11(dir, ".git")))
       return false;
-    return CODE_MANIFEST_FILES.some((m) => existsSync7(join11(dir, m)));
+    return CODE_MANIFEST_FILES.some((m) => existsSync8(join11(dir, m)));
   } catch {
     return false;
   }
@@ -4302,7 +4326,7 @@ function resolveRealpath(value) {
 // src/core/doctor.ts
 var MANIFEST_FIX = "o2b update";
 function checkVaultWriteable(vault) {
-  if (!existsSync8(vault)) {
+  if (!existsSync9(vault)) {
     return {
       name: "vault_writeable",
       ok: false,
@@ -4329,7 +4353,7 @@ function checkConfigWriteable(config) {
   let createdForCheck = false;
   try {
     mkdirSync5(dirname6(config), { recursive: true });
-    if (!existsSync8(config))
+    if (!existsSync9(config))
       createdForCheck = true;
     const fd = openSync4(config, "a");
     writeSync3(fd, "");
@@ -5118,7 +5142,9 @@ var openclaw_default = definePluginEntry({
           config_path: discovery.path,
           config_exists: discovery.exists,
           config_keys: Object.keys(discovery.data).toSorted(),
-          config: redactConfigMapping(discovery.data),
+          config: redactConfigMapping(discovery.data, {
+            resolvedLiterals: resolvedSecretLiterals(vault)
+          }),
           vault_path: vaultPathField({ vault }),
           vault_exists: presence.unexaminable ?? presence.present
         };

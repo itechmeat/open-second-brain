@@ -14,6 +14,8 @@ import {
   SystemOneDecisionProvider,
 } from "../../../src/core/decision-model/systemone.ts";
 import { FAKE_DECISION_KEY, FAKE_VENDOR_KEY } from "../../helpers/fake-credentials.ts";
+import { REDACTION_PLACEHOLDER } from "../../../src/core/redactor.ts";
+import { fakeCredential } from "../../helpers/fake-credentials.ts";
 import {
   answerAll,
   startFakeSystemOne,
@@ -88,6 +90,40 @@ describe("systemone adapter", () => {
     expect(res.answers["level"]!.confidence).toBeCloseTo(0.55, 6);
     expect(res.usage).toEqual({ inputTokens: 42, outputTokens: 3, costUsd: 0.000002 });
     expect(res.stateHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  test("the request body scrubs an occurrence of the bearer key itself (wired resolved literal)", async () => {
+    server.setReply(() => ({
+      json: {
+        model: "m",
+        answers: {
+          rel_0: { type: "noul", noul: 0.9 },
+          pick: { type: "choice", choice: "a", probabilities: { a: 0.9, b: 0.1 }, confidence: 0.8 },
+          level: { type: "score", score: 1, probabilities: { "0": 0.5, "1": 0.5, "2": 0 } },
+        },
+      },
+    }));
+    // A quiet key the shape passes cannot see, leaked into the vault text
+    // the state was built from: the adapter knows the value it is about
+    // to send as the Bearer credential, so its egress scan carries that
+    // value as a resolved literal.
+    const quiet = fakeCredential("quiet-key-", "alpha-bravo");
+    const leaked = new SystemOneDecisionProvider({
+      name: "compatible",
+      baseUrl: server.url,
+      model: "fake-model-1",
+      envKey: "QUIET_KEY_VAR",
+      apiKey: quiet,
+      calibrated: true,
+      timeoutMs: 2000,
+    });
+    await leaked.decide(
+      { ...REQUEST, state: { query: `echo ${quiet}`, passages: { P0: "alpha" } } },
+      { timeoutMs: 2000 },
+    );
+    const body = JSON.stringify(server.requests[0]!.body);
+    expect(body).not.toContain(quiet);
+    expect(body).toContain(REDACTION_PLACEHOLDER);
   });
 
   test("an invalid item is marked invalid without failing the batch", async () => {

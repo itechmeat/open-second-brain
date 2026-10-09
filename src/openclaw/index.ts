@@ -13,6 +13,7 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
 import { discoverConfig, resolveAgentName } from "../core/config.ts";
 import { redactConfigMapping } from "../core/egress/guard.ts";
+import { resolvedSecretLiterals } from "../core/secret-resolver.ts";
 import { probeVaultDirectory } from "../core/vault-presence.ts";
 import { doctor } from "../core/doctor.ts";
 import { buildReminder } from "../core/identity-reminder.ts";
@@ -94,7 +95,13 @@ export default definePluginEntry({
           config_path: discovery.path,
           config_exists: discovery.exists,
           config_keys: Object.keys(discovery.data).toSorted(),
-          config: redactConfigMapping(discovery.data),
+          config: redactConfigMapping(discovery.data, {
+            // The vault's known resolved values join the scan: a custody-
+            // store credential under a quiet config key is scrubbed here
+            // exactly as the primary runtime's status tool scrubs it. A
+            // locked or absent store contributes nothing.
+            resolvedLiterals: resolvedSecretLiterals(vault),
+          }),
           vault_path: vaultPathField({ vault }),
           vault_exists: presence.unexaminable ?? presence.present,
         };

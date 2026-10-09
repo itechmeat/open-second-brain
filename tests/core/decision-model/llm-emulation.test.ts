@@ -18,7 +18,12 @@ import {
   resetDecisionSpendCache,
 } from "../../../src/core/decision-model/record.ts";
 import { runDecision } from "../../../src/core/decision-model/run.ts";
-import { FAKE_DECISION_KEY, FAKE_VENDOR_KEY } from "../../helpers/fake-credentials.ts";
+import {
+  FAKE_DECISION_KEY,
+  FAKE_VENDOR_KEY,
+  fakeCredential,
+} from "../../helpers/fake-credentials.ts";
+import { REDACTION_PLACEHOLDER } from "../../../src/core/redactor.ts";
 import { startFakeSystemOne, type FakeSystemOne } from "../../helpers/fake-decision-provider.ts";
 import { createTempVault } from "../../helpers/search-fixtures.ts";
 
@@ -178,6 +183,30 @@ describe("llm-emulation adapter", () => {
     const user = (server.requests[0]!.body as { messages: Array<{ content: string }> }).messages[1]!
       .content;
     expect(user.split("</untrusted_source>")).toHaveLength(2);
+  });
+
+  test("the prompt scrubs an occurrence of the bearer key itself (wired resolved literal)", async () => {
+    server.setReply(() => chatReply({ yes: { p: 0.5 } }));
+    // A quiet key the shape passes cannot see, leaked into the vault text
+    // the state was built from: the adapter always knows the key it is
+    // about to send, so its egress scan carries it as a resolved literal.
+    const quiet = fakeCredential("quiet-key-", "gamma-delta");
+    const leaked = new LlmEmulationDecisionProvider({
+      name: "llm-emulation",
+      baseUrl: `${server.url}/v1`,
+      model: "fake-chat-1",
+      envKey: KEY_VAR,
+      apiKey: quiet,
+      timeoutMs: 2000,
+    });
+    await leaked.decide(
+      { use: "rerank", state: `echo ${quiet}`, questions: { yes: REQUEST.questions["yes"]! } },
+      { timeoutMs: 2000 },
+    );
+    const user2 = (server.requests[0]!.body as { messages: Array<{ content: string }> })
+      .messages[1]!.content;
+    expect(user2).not.toContain(quiet);
+    expect(user2).toContain(REDACTION_PLACEHOLDER);
   });
 
   test("an endpoint that refuses response_format gets the schema in the prompt", async () => {

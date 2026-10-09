@@ -60,6 +60,7 @@ import { ArtifactStore } from "./artifact-store.ts";
 import { applyPreviewBudget } from "./preview-budget.ts";
 import { evaluateToolCapabilities, type RuntimeCapabilityWindow } from "./capabilities.ts";
 import { redactErrorForCaller } from "./error-redaction.ts";
+import { resolvedSecretLiterals } from "../core/secret-resolver.ts";
 import type { InstallTargetId } from "../core/runtime/host-facts.ts";
 import type { HarnessId } from "../core/brain/scoped-rules.ts";
 import { resolveHarnessScope } from "../core/brain/scope-identity.ts";
@@ -520,7 +521,7 @@ export class MCPServer {
       const message =
         this.reach === TRANSPORT_REACH.local
           ? raw
-          : redactErrorForCaller(raw, this.vault, this.reach);
+          : redactedErrorMessage(raw, this.vault, this.reach);
       // ValueError/TypeError semantics in Python → tool-level error envelope.
       // OSError in Python → "filesystem error" prefix. We collapse both to a
       // single tool-level error since JS doesn't distinguish.
@@ -711,10 +712,25 @@ export function internalErrorResponse(
   reach: TransportReach,
 ): JsonRpcResponse {
   const raw = (exc as Error).message ?? String(exc);
-  const message = redactErrorForCaller(raw, vault, reach);
+  const message = redactedErrorMessage(raw, vault, reach);
   return errorResponse(requestId, INTERNAL_ERROR, `${INTERNAL_ERROR_PREFIX}${message}`, {
     code: codeForError(exc),
   });
+}
+
+/**
+ * Error prose for a caller, with the vault's KNOWN credential values
+ * scrubbed. The fourth composition this redaction gained: the shapes-only
+ * passes cannot see a resolved credential under a quiet key name, and an
+ * exception is exactly where one travels (a fetch failure echoing the URL
+ * it was handed, a refusal naming the field it rejected). The values come
+ * from {@link resolvedSecretLiterals}, which contributes NOTHING when the
+ * store is absent, empty, unreadable or locked - so a boundary that
+ * cannot know the values answers byte-identically to the pre-literal
+ * redactor instead of pretending to redact.
+ */
+function redactedErrorMessage(raw: string, vault: string, reach: TransportReach): string {
+  return redactErrorForCaller(raw, vault, reach, resolvedSecretLiterals(vault));
 }
 
 // Re-exports so callers that previously imported these names from

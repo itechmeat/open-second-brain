@@ -182,6 +182,13 @@ export interface EgressPolicy {
    * and leak its head as a fragment, and before the truncation guard so
    * no cut leaves a partial credential in the kept prefix. Absent (the
    * default) the composition is byte-identical to the pre-literal guard.
+   *
+   * The wired boundaries are the ones that KNOW the values: the MCP
+   * error redaction and the config-mapping status surfaces feed
+   * `resolvedSecretLiterals(vault)` for the vault they serve, and the
+   * decision-model adapters pass the key they hold. A boundary that
+   * cannot know the vault must not pretend to redact: for those the
+   * option stays absent, which is the named decision, not an omission.
    */
   readonly resolvedLiterals?: ReadonlyArray<string>;
 }

@@ -20,6 +20,8 @@
  * (correctness first); caching stays deferred until measured.
  */
 
+import { existsSync } from "node:fs";
+
 import {
   parseSecretReference,
   resolveSecretReference,
@@ -163,4 +165,53 @@ export function listNamedSecretAvailability(
   }
   out.sort((a, b) => a.configKey.localeCompare(b.configKey));
   return Object.freeze(out);
+}
+
+/**
+ * The VALUES the vault's custody store can currently answer with - the
+ * input the egress boundaries need to scrub resolved credentials (the
+ * `resolvedLiterals` option on `EgressPolicy` and the MCP error
+ * redactor's fourth parameter). This is the one production join between
+ * the store and the redactor plane; without it the literal passes were
+ * plumbed but never fed, and a resolved credential under a quiet key
+ * name stayed as invisible to the boundary as before the wave.
+ *
+ * Wired boundaries, and only these: the MCP error redaction (both the
+ * tools/call catch and the one builder every JSON-RPC error answer
+ * passes through), the config-mapping status surfaces, and the
+ * decision-model adapters that hold the key they are about to send. A
+ * boundary that cannot know the vault (the CLI export verbs run
+ * vault-scoped already but scan vault-authored content the structural
+ * passes cover) must not pretend - the absent option stays byte-
+ * identical there, and this docblock is where the next wiring decision
+ * starts.
+ *
+ * Degradation is the point: a store that is absent, empty, unreadable,
+ * LOCKED (the named locked refusal), or missing its keyfile contributes
+ * NOTHING - the boundary then answers exactly as the pre-literal
+ * redactor did. Redaction never blocks, never surfaces a refusal, and
+ * never mints: a lost keyfile is skipped rather than regenerated, so a
+ * scan leaves no custody state behind.
+ */
+export function resolvedSecretLiterals(vault: string): string[] {
+  const store = custodyStore();
+  let held: ReadonlyArray<{ readonly name: string }>;
+  try {
+    held = store.listSecrets(vault);
+  } catch {
+    // An unreadable store is not a redactable store: contribute nothing.
+    return [];
+  }
+  if (held.length === 0) return [];
+  if (!existsSync(store.keyPath(vault))) return [];
+  const out: string[] = [];
+  for (const meta of held) {
+    try {
+      out.push(store.resolveSecretReadOnly(vault, meta.name).value);
+    } catch {
+      // The locked envelope lands here (the named refusal), as does an
+      // entry that cannot be decrypted; each contributes nothing.
+    }
+  }
+  return out;
 }
