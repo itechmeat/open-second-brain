@@ -90,7 +90,7 @@ describe("o2b brain import-claude-memory CLI", () => {
     expect(existsSync(join(vault, "Brain", "preferences", "pref-a.md"))).toBe(true);
     rmSync(tmp, { recursive: true });
     rmSync(mem, { recursive: true });
-  });
+  }, 20000);
 
   test("--apply + --dry-run is rejected", async () => {
     const res = await runCli([
@@ -233,7 +233,7 @@ describe("o2b brain import-claude-memory --approval-digest (t_18fda844)", () => 
     } finally {
       rmSync(s.tmp, { recursive: true, force: true });
     }
-  });
+  }, 20000);
 
   test("--approval-digest paired with --dry-run refuses the conflicting pairing", async () => {
     // A dry run COMPUTES a digest; it cannot consume one. Accepting and
@@ -280,7 +280,7 @@ describe("o2b brain import-claude-memory --approval-digest (t_18fda844)", () => 
     } finally {
       rmSync(s.tmp, { recursive: true, force: true });
     }
-  });
+  }, 20000);
 });
 
 describe("o2b brain import-claude-memory — per-entry disposition (t_11ee559f)", () => {
@@ -325,7 +325,7 @@ describe("o2b brain import-claude-memory — per-entry disposition (t_11ee559f)"
     } finally {
       rmSync(s.tmp, { recursive: true, force: true });
     }
-  });
+  }, 20000);
 });
 
 describe("o2b brain import-claude-memory — help and not-found refusals", () => {

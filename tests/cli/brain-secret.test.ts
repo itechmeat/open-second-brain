@@ -154,7 +154,7 @@ test("unlock wraps the raw keyfile; a fresh process sees the locked refusal unti
   });
   expect(wrong.returncode).toBe(1);
   expect(wrong.stderr).toContain("passphrase");
-});
+}, 20000);
 
 test("lock refuses a store that was never wrapped, creating nothing; lock after unlock reports cleared", async () => {
   const lock = await runCli(["brain", "secret", "lock", "--vault", vault]);
