@@ -30,8 +30,33 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { heldKeyOrRefusal, isEnvelopeBytes } from "./envelope.ts";
 import { restrictToOwner } from "./owner-acl.ts";
+
+/**
+ * The keyfile envelope, joined at CALL time rather than at module load.
+ *
+ * `envelope.ts` encrypts the keyfile's DEK through THIS module's
+ * `encryptValue`/`decryptValue`, so a static import back from here closed
+ * a two-module cycle whose initialisation order is undefined. The lazy
+ * require is the sanctioned cure (see
+ * `tests/core/architecture/import-cycles.test.ts`): the envelope branch
+ * of {@link loadOrCreateKey} runs only when a wrapped keyfile is actually
+ * on disk, and `require` caches the module after the first call.
+ */
+interface KeyfileEnvelope {
+  isEnvelopeBytes: typeof import("./envelope.ts").isEnvelopeBytes;
+  heldKeyOrRefusal: typeof import("./envelope.ts").heldKeyOrRefusal;
+}
+
+let envelopeModule: KeyfileEnvelope | undefined;
+
+function keyfileEnvelope(): KeyfileEnvelope {
+  if (envelopeModule === undefined) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    envelopeModule = require("./envelope.ts") as KeyfileEnvelope;
+  }
+  return envelopeModule;
+}
 
 const ALGORITHM = "aes-256-gcm";
 const KEY_BYTES = 32;
@@ -118,7 +143,7 @@ export function loadOrCreateKey(keyPath: string): Buffer {
     // the key comes from this process's unlock holder, and an empty
     // holder is the named locked-store refusal - never a fresh random
     // key, which would silently orphan every stored value.
-    if (isEnvelopeBytes(key)) return heldKeyOrRefusal(keyPath);
+    if (keyfileEnvelope().isEnvelopeBytes(key)) return keyfileEnvelope().heldKeyOrRefusal(keyPath);
     if (key.length !== KEY_BYTES) {
       throw new Error(`secrets keyfile is corrupt (expected ${KEY_BYTES} bytes): ${keyPath}`);
     }

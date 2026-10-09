@@ -26,7 +26,31 @@ import {
   type SecretProvider,
   type SecretReferenceStatus,
 } from "./secret-ref.ts";
-import { listSecrets, resolveSecretReadOnly } from "./brain/secrets/store.ts";
+
+/**
+ * The custody store, joined at CALL time rather than at module load.
+ *
+ * The store's own import neighbourhood reaches back into `config.ts`
+ * (store → audit → ledger-shards → config), and `config.ts` resolves
+ * credentials through THIS module, so a static import here closed the
+ * six-module cycle whose initialisation order is undefined - it aborted
+ * `audit.ts` at module scope with a TDZ error whenever the shard-grammar
+ * module was entered first. The lazy require is the sanctioned cure (see
+ * `tests/core/architecture/import-cycles.test.ts`); the store is needed
+ * only when a reference or a probe actually resolves, and `require`
+ * caches the module after the first call.
+ */
+type CustodyStore = typeof import("./brain/secrets/store.ts");
+
+let custodyStoreModule: CustodyStore | undefined;
+
+function custodyStore(): CustodyStore {
+  if (custodyStoreModule === undefined) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    custodyStoreModule = require("./brain/secrets/store.ts") as CustodyStore;
+  }
+  return custodyStoreModule;
+}
 
 /** The syntax prefix every named-secret reference starts with. */
 const REFERENCE_PREFIX = "$secret:";
@@ -47,9 +71,11 @@ export function isSecretReferenceValue(value: unknown): boolean {
  * envelope surfaces the store's named locked error.
  */
 function storeValue(vault: string, name: string): string | undefined {
-  const held = listSecrets(vault).some((meta) => meta.name === name);
+  const held = custodyStore()
+    .listSecrets(vault)
+    .some((meta) => meta.name === name);
   if (!held) return undefined;
-  return resolveSecretReadOnly(vault, name).value;
+  return custodyStore().resolveSecretReadOnly(vault, name).value;
 }
 
 /**
@@ -103,7 +129,11 @@ export function resolveMergedValue(
  * decrypt), or the environment carries it. Backs `o2b secrets status`.
  */
 export function namedSecretAvailable(vault: string, name: string): boolean {
-  return listSecrets(vault).some((meta) => meta.name === name) || Boolean(process.env[name]);
+  return (
+    custodyStore()
+      .listSecrets(vault)
+      .some((meta) => meta.name === name) || Boolean(process.env[name])
+  );
 }
 
 /**
@@ -116,7 +146,11 @@ export function listNamedSecretAvailability(
   vault: string,
   data: Readonly<Record<string, unknown>>,
 ): ReadonlyArray<SecretReferenceStatus> {
-  const held = new Set(listSecrets(vault).map((meta) => meta.name));
+  const held = new Set(
+    custodyStore()
+      .listSecrets(vault)
+      .map((meta) => meta.name),
+  );
   const out: SecretReferenceStatus[] = [];
   for (const [configKey, value] of Object.entries(data)) {
     const ref = parseSecretReference(value);

@@ -3,15 +3,17 @@ import { join } from "node:path";
 
 import { redactRawOutput } from "../redactor.ts";
 import {
+  JSONL_LEDGER_EXT,
   resolveAppendShardId,
   shardedFileName,
   type LedgerShardGrammar,
 } from "../brain/ledger-shards.ts";
-// The one value this module reads at module-evaluation time comes from the
-// leaf constants module, not from `ledger-shards.ts` (which re-exports it):
-// `ledger-shards.ts` imports `config.ts` for the device id, and reading a
-// shard-grammar value from it here re-entered that cycle mid-evaluation.
-import { JSONL_LEDGER_EXT } from "../brain/path-constants.ts";
+// The one value this module reads at module-evaluation time is declared in
+// the leaf `path-constants.ts` and re-exported by `ledger-shards.ts` (see
+// that constant's docblock for the import cycle that motivated the move).
+// Reading it through the re-export is what keeps this module safe: a
+// re-exported binding resolves to the declaring leaf module, so it is
+// initialized even when `ledger-shards.ts` itself is still mid-cycle.
 
 /**
  * The file-name layout of every per-device ISO-week audit directory:
