@@ -156,6 +156,21 @@ describe("scan composition", () => {
     expect(report.generated_at).toBe(NOW.toISOString());
   });
 
+  test("an explicit subset composes the two opt-in tag detectors (t_11ee559f)", () => {
+    writePref("never-recalled", "2026-01-01T00:00:00Z");
+    writeFileSync(
+      join(vault, "Brain", "preferences", "pref-fm.md"),
+      "---\nid: pref-fm\ntags: [bad tag]\n---\n\nbody\n",
+      "utf8",
+    );
+    const report = runHygieneScan(vault, { detectors: ["tags", "frontmatter-tags"], now: NOW });
+    expect(report.detectors_run).toEqual(["tags", "frontmatter-tags"]);
+    expect(report.counts["frontmatter-tags"]).toBe(1);
+    expect(report.counts.tags).toBe(0);
+    expect(report.findings.filter((f) => f.detector === "frontmatter-tags")).toHaveLength(1);
+    expect(report.errors).toHaveLength(0);
+  });
+
   test("finding ids are deterministic across runs", () => {
     writePref("never-recalled", "2026-01-01T00:00:00Z");
     const first = runHygieneScan(vault, { detectors: ["usefulness"], now: NOW });

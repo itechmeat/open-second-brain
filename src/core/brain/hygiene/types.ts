@@ -16,6 +16,7 @@ export const HYGIENE_DETECTOR_IDS = [
   "usefulness",
   "slug-collisions",
   "tags",
+  "frontmatter-tags",
   "capture-scope",
 ] as const;
 
@@ -28,9 +29,12 @@ export type HygieneDetectorId = (typeof HYGIENE_DETECTOR_IDS)[number];
  * OUT of the default sweep when it is too noisy to run uninvited. One
  * mechanism, two explicit policies: `slug-collisions` is default-on
  * (fires only on actual same-stem groups), `tags` is opt-in (noisy on
- * vaults that tag loosely), and further noisy detectors register as
- * opt-in by staying out of this list. `capture-scope` is default-on: it
- * fires only on retrievable knowledge whose every source is url-only.
+ * vaults that tag loosely), `frontmatter-tags` is opt-in for the same
+ * reason (legacy vaults with hand-written frontmatter are exactly the
+ * vaults that hold malformed entries), and further noisy detectors
+ * register as opt-in by staying out of this list. `capture-scope` is
+ * default-on: it fires only on retrievable knowledge whose every
+ * source is url-only.
  *
  * Members are compile-checked against the registered tuple; a registered
  * id missing here is simply default-off, never an error.

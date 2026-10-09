@@ -14,6 +14,7 @@ import { detectCaptureScope } from "./detectors/capture-scope.ts";
 import { detectConflicts } from "./detectors/conflicts.ts";
 import { detectDedup } from "./detectors/dedup.ts";
 import { detectFreshness } from "./detectors/freshness.ts";
+import { detectFrontmatterTags } from "./detectors/frontmatter-tags.ts";
 import { detectSlugCollisions } from "./detectors/slug-collisions.ts";
 import { detectTags } from "./detectors/tags.ts";
 import { detectUsefulness } from "./detectors/usefulness.ts";
@@ -34,6 +35,7 @@ const DETECTORS: Readonly<Record<HygieneDetectorId, HygieneDetector>> = Object.f
   usefulness: (vault, ctx) => detectUsefulness(vault, ctx),
   "slug-collisions": (vault) => detectSlugCollisions(vault),
   tags: (vault) => detectTags(vault),
+  "frontmatter-tags": (vault) => detectFrontmatterTags(vault),
   "capture-scope": (vault, ctx) => detectCaptureScope(vault, ctx.readable),
 });
 

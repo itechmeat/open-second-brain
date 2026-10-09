@@ -8,8 +8,10 @@
  * rule rejects (reported as the diff: the index will never match them);
  * inconsistent - the same tag differing by case or hierarchy depth;
  * orphan - a tag value on exactly one document. Frontmatter `tags:`
- * arrays are OUT of scope (recorded refusal), and the detector is
- * opt-in: registered but excluded from `DEFAULT_SCAN_IDS`.
+ * arrays are OUT of scope here (recorded refusal) - the trust-surface-
+ * hardening wave gives them their own opt-in `frontmatter-tags`
+ * detector - and this detector is opt-in too: registered but excluded
+ * from `DEFAULT_SCAN_IDS`.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -234,12 +236,24 @@ describe("tags scan integration", () => {
     expect(HYGIENE_DETECTOR_IDS).toContain("tags");
   });
 
+  test("the frontmatter sibling is registered in the closed tuple (t_11ee559f)", () => {
+    expect(HYGIENE_DETECTOR_IDS).toContain("frontmatter-tags");
+  });
+
   test("the default sweep excludes tags (opt-in only)", () => {
     writeNote("Brain/notes/a.md", "#2024notes malformed");
     const report = runHygieneScan(vault, { now: NOW });
     expect(report.detectors_run).not.toContain("tags");
     expect(report.counts.tags).toBeUndefined();
     expect(report.findings.find((f) => f.detector === "tags")).toBeUndefined();
+  });
+
+  test("the default sweep excludes the frontmatter sibling too (t_11ee559f)", () => {
+    writeNote("Brain/notes/fm.md", "body", "tags: [bad tag]");
+    const report = runHygieneScan(vault, { now: NOW });
+    expect(report.detectors_run).not.toContain("frontmatter-tags");
+    expect(report.counts["frontmatter-tags"]).toBeUndefined();
+    expect(report.findings.find((f) => f.detector === "frontmatter-tags")).toBeUndefined();
   });
 
   test("an explicit subset runs tags alone", () => {
