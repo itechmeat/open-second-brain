@@ -17,6 +17,7 @@ export async function cmdBrainImportClaudeMemory(argv: string[]): Promise<number
   let asJson = false;
   let vaultFlag: string | undefined;
   let backendId: string | undefined;
+  let approvalDigest: string | undefined;
 
   const consumeValue = (flag: string, next: string | undefined): string | null => {
     if (next === undefined || next.startsWith("--")) {
@@ -72,6 +73,12 @@ export async function cmdBrainImportClaudeMemory(argv: string[]): Promise<number
       yes = true;
       continue;
     }
+    if (a === "--approval-digest") {
+      const v = consumeValue("--approval-digest", argv[++i]);
+      if (v === null) return 2;
+      approvalDigest = v;
+      continue;
+    }
     if (a === "--json") {
       asJson = true;
       continue;
@@ -87,6 +94,17 @@ export async function cmdBrainImportClaudeMemory(argv: string[]): Promise<number
   if (mode === "apply" && !yes && !process.stdin.isTTY) {
     process.stderr.write(
       "o2b brain import-claude-memory: --apply requires --yes in non-interactive mode\n",
+    );
+    return 2;
+  }
+
+  // t_18fda844: a script that applies must apply the plan it approved.
+  // The digest comes from a prior `--dry-run`; an interactive operator
+  // keeps the human escape hatch, exactly as with `--yes`.
+  if (mode === "apply" && approvalDigest === undefined && !process.stdin.isTTY) {
+    process.stderr.write(
+      "o2b brain import-claude-memory: --apply requires --approval-digest in non-interactive " +
+        "mode (run --dry-run first, then apply with the digest it prints)\n",
     );
     return 2;
   }
@@ -107,6 +125,7 @@ export async function cmdBrainImportClaudeMemory(argv: string[]): Promise<number
       memoryDir: memDir,
       mode,
       allowArbitraryMemoryPath: allowArbitrary,
+      approvalDigest,
       backend,
     });
     if (asJson) {
@@ -115,6 +134,7 @@ export async function cmdBrainImportClaudeMemory(argv: string[]): Promise<number
     }
     if (mode === "dry-run") {
       process.stdout.write(`plan: ${res.plans.length} actionable, ${res.skipped.length} skipped\n`);
+      process.stdout.write(`approval-digest: ${res.digest}\n`);
       for (const p of res.plans)
         process.stdout.write(`  ${p.action} ${p.prefId} (${p.basename})\n`);
       for (const s of res.skipped) process.stdout.write(`  SKIP  ${s.basename}: ${s.reason}\n`);

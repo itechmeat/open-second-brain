@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { digestVerifies, sealWithDigest } from "../integrity/digest.ts";
 import { appendLogEvent } from "./log.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_SNAPSHOT_REASON } from "./types.ts";
 import { createSnapshot } from "./snapshot.ts";
@@ -25,6 +26,15 @@ export interface ImportClaudeMemoryOpts {
   readonly allowArbitraryMemoryPath?: boolean;
   readonly now?: Date;
   /**
+   * The plan digest a dry run computed and an operator approved (the CLI
+   * plumbing is `--approval-digest`). Absent, apply behaves exactly as
+   * it did before approval digests existed - the interactive path's
+   * escape hatch. Present, it is checked against the freshly computed
+   * plan BEFORE the snapshot or any write, and a mismatch is an
+   * {@link ApprovalDigestError} that leaves the vault untouched.
+   */
+  readonly approvalDigest?: string;
+  /**
    * Memory-format adapter (t_53f9f67f). Defaults to the Claude Code
    * backend - byte-identical to the pre-seam behavior. Resolve via
    * `resolveMemoryBackend()` to honor the `memory_backend` config key.
@@ -41,6 +51,59 @@ export interface ImportClaudeMemoryResult {
   readonly skippedUnchanged: ReadonlyArray<PlannedFile>;
   readonly snapshotRunId: string | null;
   readonly localDate: string;
+  /**
+   * The seal of the adoption plan (t_18fda844): sha256 of the plans,
+   * skips, conflicts and unchanged rows, via the integrity module's
+   * `sealWithDigest`. Wall-clock fields (`localDate`, the import
+   * timestamps) are deliberately OUTSIDE the sealed body, so a dry run
+   * and a later apply of the same content seal identically and an
+   * approval binds the plan, never the moment it was printed.
+   */
+  readonly digest: string;
+}
+
+/**
+ * The body an approval covers: what will land, what will not, and what
+ * refuses. The one spelling of "the plan", shared by the dry run that
+ * seals it and the apply that re-checks it.
+ */
+function planApprovalBody(parts: {
+  plans: ReadonlyArray<PlannedFile>;
+  skipped: ReadonlyArray<{ basename: string; reason: string }>;
+  conflicts: ReadonlyArray<PlannedFile>;
+  skippedUnchanged: ReadonlyArray<PlannedFile>;
+}): Record<string, unknown> {
+  return {
+    conflicts: parts.conflicts,
+    plans: parts.plans,
+    skipped: parts.skipped,
+    skipped_unchanged: parts.skippedUnchanged,
+  };
+}
+
+/**
+ * The apply-time refusal when the plan an operator approved no longer
+ * matches the plan this run computed. Nothing has been written and no
+ * snapshot has been taken; the remedy is a fresh dry run, whose digest
+ * is what the next apply must carry.
+ */
+export class ApprovalDigestError extends Error {
+  /** The digest the caller asked to apply against. */
+  readonly approvalDigest: string;
+  /** The digest of the plan this run just computed. */
+  readonly planDigest: string;
+
+  constructor(approvalDigest: string, planDigest: string) {
+    super(
+      `approval digest mismatch: the plan changed since the approved dry run ` +
+        `(approved ${approvalDigest}, current plan ${planDigest}); nothing was written and ` +
+        "no snapshot was taken. Re-run `o2b brain import-claude-memory --dry-run` to review " +
+        "the current plan, then apply with its digest.",
+    );
+    this.name = "ApprovalDigestError";
+    this.approvalDigest = approvalDigest;
+    this.planDigest = planDigest;
+  }
 }
 
 /**
@@ -192,6 +255,12 @@ export function importClaudeMemory(opts: ImportClaudeMemoryOpts): ImportClaudeMe
   const conflicts = plans.filter((p) => p.action === "CONFLICT");
   const skippedUnchanged = plans.filter((p) => p.action === "SKIP_UNCHANGED");
 
+  // Seal the adoption plan (t_18fda844). The apply below re-checks the
+  // operator's approval against THIS seal before the snapshot or any
+  // write, so what lands is what was approved or nothing is.
+  const approvalBody = planApprovalBody({ plans, skipped, conflicts, skippedUnchanged });
+  const planDigest = sealWithDigest(approvalBody).digest;
+
   if (opts.mode === "dry-run") {
     return {
       mode: "dry-run",
@@ -202,7 +271,16 @@ export function importClaudeMemory(opts: ImportClaudeMemoryOpts): ImportClaudeMe
       skippedUnchanged,
       snapshotRunId: null,
       localDate,
+      digest: planDigest,
     };
+  }
+
+  // The approved plan is checked against the one just computed BEFORE
+  // the snapshot/write loop. Drift between dry run and apply is the
+  // case this exists for: a vault or memory source that moved in
+  // between must be re-reviewed, never written over.
+  if (opts.approvalDigest !== undefined && !digestVerifies(approvalBody, opts.approvalDigest)) {
+    throw new ApprovalDigestError(opts.approvalDigest, planDigest);
   }
 
   // §E design: process the non-conflict files first; throw `ConflictsError`
@@ -292,6 +370,7 @@ export function importClaudeMemory(opts: ImportClaudeMemoryOpts): ImportClaudeMe
     skippedUnchanged,
     snapshotRunId,
     localDate,
+    digest: planDigest,
   };
 }
 
