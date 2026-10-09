@@ -196,6 +196,66 @@ Common flags:
   --help           Per-verb help (run \`o2b brain <verb> --help\`)
 `;
 
+/**
+ * `brain secret` per-op flag tables and the usage line assembled from
+ * them. One source, two surfaces: the USAGE the verb prints on a usage
+ * error and the line `o2b brain secret --help` shows are both built here,
+ * so they cannot drift apart - and an op that never documents a flag
+ * refuses it by name (via {@link secretOpAccepts}) instead of silently
+ * swallowing it while the flag's effect never happens.
+ */
+const SECRET_OP_FLAGS: Record<string, ReadonlyArray<string>> = {
+  set: ["env-var", "allow", "from-env", "agent"],
+  list: [],
+  rm: [],
+  run: ["agent"],
+  lock: [],
+  unlock: ["passphrase-from-env"],
+  export: ["out", "passphrase-from-env"],
+  import: ["replace", "passphrase-from-env"],
+};
+
+/** The usage spelling of every flag, keyed by its parsed name. */
+const SECRET_FLAG_USAGE: Record<string, string> = {
+  "env-var": "[--env-var V]",
+  allow: "[--allow PATTERN]...",
+  "from-env": "[--from-env SRC]",
+  agent: "[--agent N]",
+  "passphrase-from-env": "[--passphrase-from-env SRC]",
+  out: "--out FILE",
+  replace: "[--replace]",
+  vault: "[--vault <path>]",
+  json: "[--json]",
+};
+
+/** Every op answers `--vault` and `--json`; the rest are per-op. */
+const SECRET_COMMON_FLAGS: ReadonlyArray<string> = ["vault", "json"];
+
+/** Whether `op` documents `flag` - the parse-time acceptance contract. */
+export function secretOpAccepts(op: string, flag: string): boolean {
+  return SECRET_COMMON_FLAGS.includes(flag) || (SECRET_OP_FLAGS[op] ?? []).includes(flag);
+}
+
+function secretOpUsage(op: string, lead: string, tail = ""): string {
+  const flags = [...(SECRET_OP_FLAGS[op] ?? []), ...SECRET_COMMON_FLAGS]
+    .map((flag) => SECRET_FLAG_USAGE[flag])
+    .join(" ");
+  return `${lead} ${flags}${tail}`;
+}
+
+export const SECRET_VERB_USAGE =
+  "usage: o2b brain secret " +
+  [
+    secretOpUsage("set", "set <name>"),
+    secretOpUsage("list", "list"),
+    secretOpUsage("rm", "rm <name>"),
+    secretOpUsage("lock", "lock"),
+    secretOpUsage("unlock", "unlock"),
+    secretOpUsage("export", "export"),
+    secretOpUsage("import", "import FILE"),
+    secretOpUsage("run", "run <name>", " -- <command...>"),
+  ].join(" | ");
+
 export const VERB_HELP: Record<string, string> = {
   "forget-source":
     "usage: o2b brain forget-source <source> [--confirm] [--include-originals] [--vault <path>] [--json]\n" +
@@ -610,7 +670,10 @@ export const VERB_HELP: Record<string, string> = {
     "lists open findings; restore writes the expected value back (--apply);\n" +
     "accept adopts the hand-edit as the new baseline. Nothing auto-resolves.\n",
   secret:
-    "usage: o2b brain secret set <name> [--env-var V] [--allow PATTERN]... [--from-env SRC] [--agent N] | list | rm <name> | lock | unlock [--passphrase-from-env SRC] | export --out FILE | import FILE [--replace] | run <name> [--agent N] [--vault <path>] [--json] -- <command...>\n" +
+    // Assembled from the per-op flag tables above - the same string the
+    // verb prints on a usage error, so the two surfaces cannot disagree.
+    SECRET_VERB_USAGE +
+    "\n" +
     "Capability-gated secret custody under the vault-local state dir:\n" +
     "per-value AES-256-GCM ciphertext, 0600 keyfile, no surface ever prints\n" +
     "the value. set reads the value from stdin or --from-env (never argv);\n" +

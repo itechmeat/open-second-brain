@@ -612,7 +612,13 @@ async function cmdExportConfig(argv: string[]): Promise<number> {
 
 async function cmdSecrets(argv: string[]): Promise<number> {
   if (argv.length === 0 || argv[0] === "-h" || argv[0] === "--help") {
-    process.stdout.write("usage: o2b secrets list|status [args...]\n");
+    // The one clarification the two surfaces cannot state inline: without
+    // --vault the fallback reads the reference name itself, so a store
+    // name and its env-var spelling can disagree without either lying.
+    process.stdout.write(
+      "usage: o2b secrets list|status [args...]\n" +
+        "Without --vault, the env fallback reads the reference name verbatim, case-sensitively.\n",
+    );
     return argv.length === 0 ? 2 : 0;
   }
   const verb = argv[0]!;
@@ -659,6 +665,10 @@ function cmdSecretsList(argv: string[]): number {
             config_key: ref.configKey,
             name: ref.name,
             available: ref.available,
+            // Present only on a reference the grammar cannot spell - a
+            // value that refuses at use time no matter what the store or
+            // the environment holds (additive-only row shape).
+            ...(ref.invalid === true ? { invalid: true } : {}),
           })),
         },
         null,
@@ -668,9 +678,9 @@ function cmdSecretsList(argv: string[]): number {
     return 0;
   }
   for (const ref of refs) {
-    process.stdout.write(
-      `${ref.configKey}: ${ref.name} (${ref.available ? "available" : "missing"})\n`,
-    );
+    const state =
+      ref.invalid === true ? "invalid reference" : ref.available ? "available" : "missing";
+    process.stdout.write(`${ref.configKey}: ${ref.name} (${state})\n`);
   }
   return 0;
 }
@@ -1233,7 +1243,10 @@ export async function main(argv: ReadonlyArray<string>): Promise<number> {
     (rest[0] === "-h" || rest[0] === "--help") &&
     command !== "aider" &&
     command !== "brain" &&
-    command !== "vault"
+    command !== "vault" &&
+    // `secrets` has its own two-line help (the env fallback's name read
+    // is spelled there), so the generic URL stub would only bury it.
+    command !== "secrets"
   ) {
     process.stdout.write(`${command}: see https://github.com/itechmeat/open-second-brain\n`);
     if (command === "uninstall") {

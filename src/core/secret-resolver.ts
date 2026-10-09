@@ -29,6 +29,7 @@ import {
   resolveSecretReference,
   type SecretProvider,
   type SecretReferenceStatus,
+  invalidSecretReferenceBody,
 } from "./secret-ref.ts";
 
 /**
@@ -153,7 +154,18 @@ export function listNamedSecretAvailability(
   const out: SecretReferenceStatus[] = [];
   for (const [configKey, value] of Object.entries(data)) {
     const ref = parseSecretReference(value);
-    if (!ref) continue;
+    if (!ref) {
+      // A reference-SHAPED value the grammar cannot spell (a dashed store
+      // name, say) resolves to a `SecretReferenceError` at use time and
+      // can never be answered by the store or the env - report it instead
+      // of silently dropping it while `secrets status` answers the same
+      // name from metadata alone.
+      const body = invalidSecretReferenceBody(value);
+      if (body !== null) {
+        out.push({ configKey, name: body, available: false, invalid: true });
+      }
+      continue;
+    }
     out.push({
       configKey,
       name: ref.name,

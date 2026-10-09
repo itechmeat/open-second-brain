@@ -45,16 +45,13 @@ import {
   secretsSyncExposure,
 } from "../../../core/brain/secrets/sync-exposure.ts";
 import { EGRESS_REDACTION_NOTICE, redactForEgress } from "../../../core/egress/guard.ts";
+import { SECRET_VERB_USAGE, secretOpAccepts } from "../help-text.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 import { readStdinText } from "../../stdin.ts";
 
-const USAGE =
-  "usage: o2b brain secret set <name> [--env-var V] [--allow PATTERN]... [--from-env SRC] [--agent N] [--vault <path>] [--json] | " +
-  "list [--vault <path>] [--json] | rm <name> [--vault <path>] | " +
-  "lock [--vault <path>] | unlock [--passphrase-from-env SRC] [--vault <path>] | " +
-  "export --out FILE [--passphrase-from-env SRC] [--vault <path>] | " +
-  "import FILE [--replace] [--passphrase-from-env SRC] [--vault <path>] | " +
-  "run <name> [--agent N] [--vault <path>] [--json] -- <command...>";
+// Assembled from the same per-op flag tables `o2b brain secret --help`
+// renders (help-text.ts), so the two surfaces cannot drift apart.
+const USAGE = SECRET_VERB_USAGE;
 
 /** Success notes, hoisted: stdout is contract, not prose. */
 const UNLOCKED_NOTE =
@@ -77,7 +74,9 @@ async function ingestPassphrase(
   if (fromEnv !== undefined) {
     const value = process.env[fromEnv];
     if (value === undefined || value.length === 0) {
-      process.stderr.write(`brain secret ${op}: env var ${fromEnv} is unset or empty\n`);
+      process.stderr.write(
+        `brain secret ${op}: env var ${fromEnv} is unset or empty; set it to a passphrase, or pipe the passphrase via stdin\n`,
+      );
       return { exitCode: 2 };
     }
     return { passphrase: value };
@@ -125,6 +124,16 @@ export async function cmdBrainSecret(argv: string[]): Promise<number> {
     process.stderr.write(`${USAGE}\n`);
     return 2;
   }
+  // An op that never documents a flag refuses it by name instead of
+  // silently swallowing it while its effect never happens: the parse
+  // table is op-independent, so without this check `lock
+  // --passphrase-from-env SRC` would exit 0 having read nothing.
+  for (const flag of Object.keys(flags)) {
+    if (!secretOpAccepts(op, flag)) {
+      process.stderr.write(`brain secret ${op}: unknown flag --${flag}\n${USAGE}\n`);
+      return 2;
+    }
+  }
   const name = positional[1];
   const needsName = op === "set" || op === "rm" || op === "run" || op === "import";
   if (needsName && !name) {
@@ -145,7 +154,9 @@ export async function cmdBrainSecret(argv: string[]): Promise<number> {
         if (fromEnv !== undefined) {
           const fromEnvValue = process.env[fromEnv];
           if (fromEnvValue === undefined || fromEnvValue.length === 0) {
-            process.stderr.write(`brain secret set: env var ${fromEnv} is unset or empty\n`);
+            process.stderr.write(
+              `brain secret set: env var ${fromEnv} is unset or empty; set it to a value, or pipe the value via stdin\n`,
+            );
             return 2;
           }
           value = fromEnvValue;

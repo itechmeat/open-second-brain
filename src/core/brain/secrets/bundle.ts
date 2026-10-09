@@ -305,7 +305,7 @@ export function importSecretBundle(
     if (collisions.length > 0) {
       throw new SecretBundleError(
         BUNDLE_REFUSAL_CODES.nameExists,
-        `the store already holds: ${collisions.join(", ")}; replace them explicitly to import over them`,
+        `the store already holds: ${collisions.join(", ")}; pass --replace to import over them`,
       );
     }
     const key = loadOrCreateKey(keyPath(vault));

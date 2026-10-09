@@ -452,6 +452,68 @@ describe("secrets", () => {
       available: false,
     });
   });
+
+  test("list reports a reference-shaped value the grammar cannot spell as invalid", async () => {
+    // S5/S6 dashed-name asymmetry: the store accepts `tg-token` but the
+    // reference grammar cannot spell a dash, so the reference can never
+    // resolve (it throws `invalid secret reference` at use time). The
+    // inspection surface must show that instead of silently dropping the
+    // row while `secrets status` answers from the store metadata.
+    const config = join(tmp, "config.yaml");
+    writeFileSync(config, 'probe_dash: "$secret:tg-token"\n');
+    const vault = join(tmp, "vault");
+    mkdirSync(vault, { recursive: true });
+
+    const withVault = await runCli(
+      ["secrets", "list", "--config", config, "--vault", vault, "--json"],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(withVault.returncode).toBe(0);
+    expect(JSON.parse(withVault.stdout).secrets).toEqual([
+      { config_key: "probe_dash", name: "tg-token", available: false, invalid: true },
+    ]);
+    const withVaultText = await runCli(["secrets", "list", "--config", config, "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(withVaultText.stdout).toContain("probe_dash: tg-token (invalid reference)");
+
+    // The env-only surface answers for the same value: a reference that
+    // can never resolve is not "absent", it is broken.
+    const envOnly = await runCli(["secrets", "list", "--config", config, "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(envOnly.returncode).toBe(0);
+    expect(JSON.parse(envOnly.stdout).secrets).toEqual([
+      { config_key: "probe_dash", name: "tg-token", available: false, invalid: true },
+    ]);
+  });
+
+  test("well-formed reference rows carry no invalid key (additive-only shape)", async () => {
+    const config = join(tmp, "config.yaml");
+    writeFileSync(config, `github_token: ${JSON.stringify(GITHUB_REF)}\n`);
+    const r = await runCli(["secrets", "list", "--config", config, "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(r.returncode).toBe(0);
+    const row = (JSON.parse(r.stdout).secrets as Array<Record<string, unknown>>)[0]!;
+    expect("invalid" in row).toBe(false);
+  });
+
+  test("--help prints the usage line, not the generic URL stub", async () => {
+    const r = await runCli(["secrets", "--help"]);
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("usage: o2b secrets list|status");
+    expect(r.stdout).not.toContain("see https://");
+  });
+
+  test("help states the env fallback's verbatim, case-sensitive name read", async () => {
+    const r = await runCli(["secrets", "--help"]);
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain(
+      "Without --vault, the env fallback reads the reference name verbatim",
+    );
+    expect(r.stdout).toContain("case-sensitively");
+  });
 });
 
 describe("mcp subcommand", () => {

@@ -7,6 +7,15 @@ export interface SecretReferenceStatus {
   readonly configKey: string;
   readonly name: string;
   readonly available: boolean;
+  /**
+   * Present (true) only on a value that is reference-SHAPED but fails the
+   * reference grammar - `$secret:tg-token` with a dashed name the grammar
+   * cannot spell. Such a value resolves to a `SecretReferenceError` at
+   * use time no matter what the store or the environment holds, so the
+   * inspection surfaces must show it rather than silently drop it.
+   * Optional so well-formed rows keep their exact shape.
+   */
+  readonly invalid?: boolean;
 }
 
 export type SecretProvider = Readonly<Record<string, string | undefined>>;
@@ -42,6 +51,20 @@ export function isSecretReferenceValue(value: unknown): boolean {
   return typeof value === "string" && value.trimStart().startsWith(REFERENCE_PREFIX);
 }
 
+/**
+ * The reference body of a reference-SHAPED value the grammar cannot spell
+ * (e.g. the dashed `tg-token` in `$secret:tg-token`), or null when the
+ * value is not reference-shaped at all. This is the name the runtime
+ * refusal names, so the inspection surfaces can show the same identifier
+ * the operator must fix (rename the store entry, or change the config
+ * value to a spellable reference).
+ */
+export function invalidSecretReferenceBody(value: unknown): string | null {
+  if (!isSecretReferenceValue(value)) return null;
+  const body = (value as string).trim().slice(REFERENCE_PREFIX.length);
+  return body.length > 0 ? body : null;
+}
+
 export function resolveSecretReference(
   value: string,
   provider: SecretProvider = process.env,
@@ -64,7 +87,13 @@ export function listSecretReferences(
   const out: SecretReferenceStatus[] = [];
   for (const [configKey, value] of Object.entries(data)) {
     const ref = parseSecretReference(value);
-    if (!ref) continue;
+    if (!ref) {
+      const body = invalidSecretReferenceBody(value);
+      if (body !== null) {
+        out.push({ configKey, name: body, available: false, invalid: true });
+      }
+      continue;
+    }
     out.push({
       configKey,
       name: ref.name,

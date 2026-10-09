@@ -141,7 +141,13 @@ export class SecretEnvelopeError extends Error {
   readonly keyPath: string;
 
   constructor(code: EnvelopeRefusalCode, keyPath: string, detail: string) {
-    super(`keyfile envelope refused (${code}): ${detail}: ${keyPath}`);
+    // Path-free by construction, like the sibling locked-store and
+    // missing-keyfile refusals: the prose travels into model context
+    // through consumers that surface error text verbatim, and the keyfile
+    // path is machine-derived - the operator named --vault, never the
+    // keyfile. The path stays on `keyPath` for callers allowed to name
+    // the file.
+    super(`keyfile envelope refused (${code}): ${detail}`);
     this.name = "SecretEnvelopeError";
     this.code = code;
     this.keyPath = keyPath;

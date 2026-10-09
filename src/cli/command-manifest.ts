@@ -122,9 +122,13 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
       [
         command("list", "List $secret:NAME references found in the config", [
           flag("config", "string"),
+          flag("vault", "string"),
+          flag("json", "boolean"),
         ]),
         command("status", "Report whether each referenced secret resolves", [
           flag("config", "string"),
+          flag("vault", "string"),
+          flag("json", "boolean"),
         ]),
       ],
     ),

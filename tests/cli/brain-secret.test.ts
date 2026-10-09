@@ -5,7 +5,7 @@
  * removes irrecoverably.
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -242,4 +242,157 @@ test("export --out writes the bundle; import restores it; collisions need --repl
   expect(wrong.returncode).toBe(1);
   expect(wrong.stderr).toContain("passphrase");
   expect(existsSync(join(empty, ".open-second-brain", "secrets", "secrets.json"))).toBe(false);
+});
+
+describe("secret refusals and help accuracy", () => {
+  test("an unset --passphrase-from-env var names both ingestion routes", async () => {
+    // S1/S3/S4: the refusal named the variable but no remedy and no other
+    // route, while the sibling empty-stdin refusal names both.
+    const r = await runCli(
+      [
+        "brain",
+        "secret",
+        "unlock",
+        "--passphrase-from-env",
+        "OSB_TEST_MISSING_PW",
+        "--vault",
+        vault,
+      ],
+      { stdin: "" },
+    );
+    expect(r.returncode).toBe(2);
+    expect(r.stderr).toContain("env var OSB_TEST_MISSING_PW is unset or empty");
+    expect(r.stderr).toContain("set it to a passphrase, or pipe the passphrase via stdin");
+  });
+
+  test("an unset --from-env var on set names both ingestion routes", async () => {
+    const r = await runCli(
+      ["brain", "secret", "set", "env-one", "--from-env", "OSB_TEST_MISSING_PW", "--vault", vault],
+      { stdin: "" },
+    );
+    expect(r.returncode).toBe(2);
+    expect(r.stderr).toContain("env var OSB_TEST_MISSING_PW is unset or empty");
+    expect(r.stderr).toContain("set it to a value, or pipe the value via stdin");
+  });
+
+  test("a wrong unlock passphrase refuses without naming the keyfile path", async () => {
+    // S1: the sibling locked-store and missing-keyfile refusals are
+    // path-free because the prose travels into model context; this one
+    // leaked the machine-derived keyfile path the operator never supplied
+    // (they named --vault, not the keyfile).
+    await runCli(["brain", "secret", "set", "api-key", "--vault", vault], {
+      stdin: "sk-pathfree-11223\n",
+    });
+    const unlock = await runCli(["brain", "secret", "unlock", "--vault", vault], {
+      stdin: "right-pass-12345\n",
+    });
+    expect(unlock.returncode).toBe(0);
+    const wrong = await runCli(["brain", "secret", "unlock", "--vault", vault], {
+      stdin: "wrong-pass-67890\n",
+    });
+    expect(wrong.returncode).toBe(1);
+    expect(wrong.stderr).toContain("keyfile_envelope_passphrase_refused");
+    expect(wrong.stderr).toContain("does not unwrap this envelope");
+    expect(wrong.stderr).not.toContain(join(vault, ".open-second-brain"));
+    expect(wrong.stderr).not.toContain(tmp);
+  });
+
+  test("an import collision names the --replace flag", async () => {
+    // S4: collisions were named, but the literal flag never was, leaving
+    // the spelling for the operator to guess.
+    await runCli(["brain", "secret", "set", "dup-key", "--vault", vault], {
+      stdin: "sk-collision-33445\n",
+    });
+    const bundlePath = join(tmp, "collision-bundle.json");
+    const passphrase = fakeCredential("cli-collision", "-pass", "-42");
+    const exported = await runCli(
+      ["brain", "secret", "export", "--out", bundlePath, "--vault", vault],
+      { stdin: `${passphrase}\n` },
+    );
+    expect(exported.returncode).toBe(0);
+    const again = await runCli(["brain", "secret", "import", bundlePath, "--vault", vault], {
+      stdin: `${passphrase}\n`,
+    });
+    expect(again.returncode).toBe(1);
+    expect(again.stderr).toContain("the store already holds: dup-key");
+    expect(again.stderr).toContain("pass --replace to import over them");
+  });
+
+  test("the --help usage line and the usage-error line agree, and name every op's flags", async () => {
+    // S7a: --help showed a shorter usage line than the USAGE constant the
+    // usage-error path prints - two surfaces, two truths.
+    const help = await runCli(["brain", "secret", "--help"]);
+    expect(help.returncode).toBe(0);
+    const usageError = await runCli(["brain", "secret", "no-such-op"]);
+    expect(usageError.returncode).toBe(2);
+    const helpUsage = /^usage: .+$/m.exec(help.stdout)![0]!;
+    const errorUsage = /^usage: .+$/m.exec(usageError.stderr)![0]!;
+    expect(helpUsage).toBe(errorUsage);
+    expect(helpUsage).toContain(
+      "set <name> [--env-var V] [--allow PATTERN]... [--from-env SRC] [--agent N] [--vault <path>] [--json]",
+    );
+    expect(helpUsage).toContain("list [--vault <path>] [--json]");
+    expect(helpUsage).toContain("rm <name> [--vault <path>]");
+    expect(helpUsage).toContain("lock [--vault <path>]");
+    expect(helpUsage).toContain("unlock [--passphrase-from-env SRC] [--vault <path>]");
+    expect(helpUsage).toContain("export --out FILE [--passphrase-from-env SRC] [--vault <path>]");
+    expect(helpUsage).toContain(
+      "import FILE [--replace] [--passphrase-from-env SRC] [--vault <path>]",
+    );
+    expect(helpUsage).toContain("run <name> [--agent N] [--vault <path>] [--json] -- <command...>");
+  });
+
+  test("an op refuses flags it never documents, by name", async () => {
+    // S7b: the parse table was op-independent, so lock swallowed
+    // --passphrase-from-env (and its env read never happened) with exit 0.
+    const r = await runCli([
+      "brain",
+      "secret",
+      "lock",
+      "--passphrase-from-env",
+      "OSB_TEST_MISSING_PW",
+      "--vault",
+      vault,
+    ]);
+    expect(r.returncode).toBe(2);
+    expect(r.stderr).toContain("brain secret lock: unknown flag --passphrase-from-env");
+    expect(r.stderr).toContain("usage: o2b brain secret");
+  });
+
+  test("run still accepts its own flags and refuses another op's", async () => {
+    await runCli(["brain", "secret", "set", "run-flag", "--allow", "bun -e *", "--vault", vault], {
+      stdin: "sk-runflag-44556\n",
+    });
+    const ok = await runCli([
+      "brain",
+      "secret",
+      "run",
+      "run-flag",
+      "--agent",
+      "tester",
+      "--vault",
+      vault,
+      "--",
+      "bun",
+      "-e",
+      "process.exit(0)",
+    ]);
+    expect(ok.returncode).toBe(0);
+    const refused = await runCli([
+      "brain",
+      "secret",
+      "run",
+      "run-flag",
+      "--out",
+      "somewhere",
+      "--vault",
+      vault,
+      "--",
+      "bun",
+      "-e",
+      "process.exit(0)",
+    ]);
+    expect(refused.returncode).toBe(2);
+    expect(refused.stderr).toContain("brain secret run: unknown flag --out");
+  });
 });
