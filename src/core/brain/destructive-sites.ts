@@ -362,6 +362,17 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
         "is deliberately outside every snapshot archive, so its safety comes from the " +
         "atomicity of the swap and not from a recovery point.",
     },
+    "src/core/brain/secrets/envelope.ts": {
+      calls: ["renameSync", "unlinkSync"],
+      recovery: UNARCHIVED_OUTSIDE,
+      reason:
+        "wraps the plaintext keyfile into a passphrase-verified envelope through a " +
+        "tmp-plus-rename swap that lands at mode 0600, and the unlink is only the tmp " +
+        "whose wrap failed, so the displaced bytes are the keyfile the envelope just " +
+        "replaced and the wrapping passphrase re-derives the key it protects - a lost " +
+        "passphrase is the documented, permanent loss. The custody state sits outside " +
+        "every snapshot archive by design.",
+    },
 
     // --- Two-phase accept with a journalled rollback ---------------------
     "src/core/brain/skill-proposals.ts": {
