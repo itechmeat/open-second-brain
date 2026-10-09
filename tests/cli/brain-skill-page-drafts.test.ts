@@ -109,8 +109,40 @@ test("page-draft --json stages a pending proposal inside the vault", async () =>
   expect(r.returncode).toBe(0);
   const payload = JSON.parse(r.stdout) as { outcome: string; slug: string; path: string };
   expect(payload.outcome).toBe("created");
-  expect(payload.path.startsWith(join(vault, "Brain"))).toBe(true);
-  expect(existsSync(join(skillsRoot, DRAFT.name, "SKILL.md"))).toBe(false);
+  // Vault-relative, like the distill and MCP surfaces: the absolute host
+  // path is the vault prefix (operator-supplied) composed with a
+  // machine-derived subtree, and output that lands in model context
+  // carries neither.
+  expect(payload.path.startsWith("Brain/skill-proposals/pending/")).toBe(true);
+  expect(existsSync(join(vault, payload.path))).toBe(true);
+});
+
+test("a blank required payload field refuses with the stable prefix and no stack trace", async () => {
+  // S17: a core refusal on the commit path escaped uncaught, and the
+  // runner dumped a raw stack trace with machine-derived source paths -
+  // no stable prefix, no refusal an agent could match on.
+  const r = await run([
+    "page-draft",
+    PAGE,
+    "--payload",
+    JSON.stringify({ ...DRAFT, description: "" }),
+  ]);
+  expect(r.returncode).toBe(1);
+  expect(r.stderr).toContain("brain skill-proposals page-draft:");
+  expect(r.stderr).toContain("$.description");
+  expect(r.stderr).toContain("must be a non-empty string");
+  expect(r.stderr).not.toContain("\n    at ");
+  expect(r.stderr).not.toContain("response-shape.ts");
+});
+
+test("a page that does not exist refuses with the stable prefix and no stack trace", async () => {
+  const r = await run(["page-draft", "notes/absent-page.md", "--payload", JSON.stringify(DRAFT)]);
+  expect(r.returncode).toBe(1);
+  expect(r.stderr).toContain(
+    "brain skill-proposals page-draft: no such vault page: notes/absent-page.md",
+  );
+  expect(r.stderr).not.toContain("\n    at ");
+  expect(r.stderr).not.toContain("skill-page-drafts.ts");
 });
 
 test("page-draft without a payload is a usage error", async () => {

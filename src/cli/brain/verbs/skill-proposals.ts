@@ -1,7 +1,9 @@
 import { readFileSync } from "node:fs";
+import { relative } from "node:path";
 
 import { resolveSkillsDir } from "../../../core/config.ts";
 import {
+  SkillPageDraftError,
   commitSkillPageDraft,
   planSkillPageDrafts,
 } from "../../../core/brain/skill-page-drafts.ts";
@@ -14,12 +16,15 @@ import {
   rejectSkillProposal,
 } from "../../../core/brain/skill-proposals.ts";
 import { deriveSkillUsage } from "../../../core/brain/skill-usage.ts";
+import { ResponseShapeError } from "../../../core/brain/response-shape.ts";
+import { ResponseCheckError } from "../../../core/brain/response-checks.ts";
 import {
   parsePayloadJson,
   PayloadJsonError,
   payloadStripNote,
   type PayloadStrip,
 } from "../../../core/brain/payload-json.ts";
+import { canonicalNotePath } from "../../../core/path-safety.ts";
 import { CliError, brainVerbContext, failWith, parse } from "../helpers.ts";
 
 export async function cmdBrainSkillProposals(argv: string[]): Promise<number> {
@@ -137,13 +142,33 @@ function pageDraft(argv: string[]): number {
     throw new CliError(`brain skill-proposals page-draft: ${error.message}`);
   }
   const vault = brainVerbContext(flags).vault;
-  const result = commitSkillPageDraft(vault, page, payload, { now: new Date() });
+  // The commit path's refusals are operator mistakes (a blank field, a page
+  // that is not there), not crashes: caught here and rethrown with the same
+  // stable prefix the parse path uses, so the runner never dumps a stack
+  // trace with machine-derived source paths where a refusal belongs.
+  let result: ReturnType<typeof commitSkillPageDraft>;
+  try {
+    result = commitSkillPageDraft(vault, page, payload, { now: new Date() });
+  } catch (error) {
+    if (
+      error instanceof SkillPageDraftError ||
+      error instanceof ResponseShapeError ||
+      error instanceof ResponseCheckError
+    ) {
+      throw new CliError(`brain skill-proposals page-draft: ${error.message}`);
+    }
+    throw error;
+  }
 
   if (flags["json"]) {
     process.stdout.write(
       JSON.stringify(
         {
           ...result,
+          // Vault-relative, like the distill and MCP surfaces: the absolute
+          // host path is the operator-supplied vault prefix composed with a
+          // machine-derived subtree, and this output lands in model context.
+          path: canonicalNotePath(relative(vault, result.path)),
           // Present only when a leading <think> block was stripped (t_dac8bf7e).
           ...(strip !== undefined ? { note: payloadStripNote(strip) } : {}),
         },
