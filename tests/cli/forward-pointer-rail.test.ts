@@ -133,6 +133,38 @@ const SANCTIONED: Readonly<Record<string, SanctionedPointer>> = Object.freeze({
       "command that does not run. It sits beside the manifest path in the same receipt for the " +
       "same reason: both are facts about the move that just happened.",
   },
+  "src/cli/bootstrap/run.ts :: o2b bootstrap": {
+    count: 1,
+    reason:
+      "the failed-registration receipt beside a mint that already landed: `re-run o2b bootstrap " +
+      "--target <the target this run provisioned>`. The target is runtime state, the rail resolves " +
+      "one structural command per code with no parameter channel, so a registered signal could " +
+      "only advise bootstrapping a target other than the one that just failed.",
+  },
+  "src/cli/bootstrap/run.ts :: o2b mcp token revoke": {
+    count: 1,
+    reason:
+      "the cleanup half of that same failed-registration receipt: `o2b mcp token revoke --name " +
+      "<the token minted seconds ago>`. The name exists only in this run and is printed once, in " +
+      "the line above; the rail's structural registry cannot carry it, and an unparameterized " +
+      "revoke could only name the wrong credential.",
+  },
+  "src/cli/bootstrap/run.ts :: o2b install is removed with": {
+    count: 1,
+    reason:
+      "prose on the nothing-to-remove receipt: `a registration written by o2b install is removed " +
+      "with: o2b uninstall --target <target> --apply`. The detector reads the sentence's first `o2b` " +
+      "token run as the invocation; the pointer it frames is the runtime-parameterized uninstall " +
+      "named in the sibling entry, which the rail cannot carry.",
+  },
+  "src/cli/bootstrap/run.ts :: o2b uninstall": {
+    count: 1,
+    reason:
+      "the command half of that same nothing-to-remove receipt line: `o2b uninstall --target " +
+      "<target> --apply`. Runtime-parameterized like its prose sibling and counted separately, so " +
+      "a new hand-written pointer naming this verb in this module cannot hide behind the prose " +
+      "entry.",
+  },
 });
 
 /** A reason has to say something; a placeholder cannot reach this. */
@@ -293,11 +325,13 @@ describe("the rail is the only forward-pointer mechanism", () => {
 
   test("the sanctioned table stays an exception", () => {
     // Every measured site is sanctioned (test one), so the table's size
-    // IS the number of unmigrated sites. Four was the ceiling that change
-    // left behind; the fifth is `state migrate`'s undo line, which the
-    // rail structurally cannot carry because it interpolates the
-    // destination the operator just named. A sixth needs its own argument.
-    expect(Object.keys(SANCTIONED).length).toBeLessThanOrEqual(5);
+    // IS the number of unmigrated sites. Five was the ceiling this change
+    // inherited; 6-9 are the bootstrap receipt's four measured literals,
+    // each interpolating runtime state (`--target`, `--name`) the rail
+    // structurally cannot carry because it resolves one structural command
+    // per code with no parameter channel - the same argument the `state
+    // migrate` undo line makes. A tenth needs its own argument.
+    expect(Object.keys(SANCTIONED).length).toBeLessThanOrEqual(9);
   });
 });
 
