@@ -46,7 +46,11 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join, posix, sep, win32 } from "node:path";
 
+import { resolveAgentName } from "../../config.ts";
 import type { FrontmatterMap } from "../../types.ts";
+import { normalizeAgentArgument } from "../../agent-identity.ts";
+import { normalizeAgentScope } from "../../graph/agent-scope.ts";
+import { GATE_MODE } from "../../integrity/stamp.ts";
 import { ensureInsideVault, realVaultRelative } from "../../path-safety.ts";
 import {
   ORIGIN_CHANNEL_FIELD,
@@ -63,7 +67,10 @@ import {
 } from "../../vault-scope/index.ts";
 import { BRAIN_CONFIG_FILE, BRAIN_ROOT_REL, isUnderBrainRoot } from "../paths.ts";
 import { requireNextStep } from "../next-step.ts";
-import { BrainConfigError } from "../policy.ts";
+import { BrainConfigError, loadIntegrityConfigSafe } from "../policy.ts";
+import { loadPermissionsDocument } from "../permissions/document.ts";
+import { appendDecisionLedger } from "../permissions/ledger.ts";
+import { OWNER_SCOPE_WRITES_KEY, refuseCrossOwnerWrite } from "../trust/owner-write-gate.ts";
 import { loadSchemaPack } from "../schema-pack.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { checkWriteBinding } from "../../write-binding/index.ts";
@@ -98,7 +105,15 @@ export type CreateNoteErrorCode =
   // Distinct from every other code here because it is NOT about the path
   // the caller named: no argument the caller could send would succeed,
   // and the operator - not the caller - holds the fix.
-  | "config_invalid";
+  | "config_invalid"
+  // write-side-trust, Task 13. The caller's frontmatter names an `owner`
+  // the owner-write gate refuses: a foreign token under
+  // `integrity.owner_scope_writes: fail`, or an `owner_write` verdict the
+  // permissions document resolved to deny/ask. Distinct from every other
+  // code because it is about the OWNERSHIP CLAIM, not the path - the
+  // guard runs before any existence check, so the refusal cannot answer
+  // whether the target exists.
+  | "owner_write_refused";
 
 export class CreateNoteError extends Error {
   readonly code: CreateNoteErrorCode;
@@ -546,6 +561,148 @@ function assertValidDocument(vault: string, frontmatter: FrontmatterMap, body: s
 }
 
 /**
+ * The `owner:` frontmatter key a caller may name on a note - gated, not
+ * reserved: under `integrity.owner_scope_writes: off` it writes exactly
+ * as it always did, and the gate (`../trust/owner-write-gate.ts`)
+ * decides when it refuses. Named once here because both note-lane call
+ * sites - this create guard and the batch's update guard - read the same
+ * key.
+ */
+export const NOTE_OWNER_FRONTMATTER_KEY = "owner";
+
+/** The outcome of the note-lane owner gate. `refused` carries `reason`. */
+export interface NoteOwnerGateResult {
+  readonly refused: boolean;
+  /** The predicate's verdict sentence, present only on a refusal. */
+  readonly reason?: string;
+}
+
+/**
+ * What the gate decided about one caller-named `owner:` claim, before any
+ * row is logged: the two-state answer a PROJECTION phase needs, so an
+ * all-or-nothing caller can refuse before any byte and still log the warn
+ * row exactly once, at the commit.
+ */
+export interface NoteOwnerGateOutcome extends NoteOwnerGateResult {
+  /** True when the mode is `warn` and the claim is one `fail` would refuse. */
+  readonly watch: boolean;
+  /** The owner token as the caller named it, when one was named. */
+  readonly named: string;
+  /** The identity the process resolved for the caller. */
+  readonly resolvedIdentity: string;
+}
+
+/**
+ * Consult the owner-write gate for the note lane (write-side-trust,
+ * Task 13), shared by every call site that takes caller-authored note
+ * frontmatter. A caller-named `owner:` is the same claim on a note that
+ * it is on a preference, and one lane honouring what the other refuses
+ * would be an isolation boundary with a door in it.
+ *
+ * Gate off with no owner named refuses nothing and reads nothing - not
+ * one byte of legacy behavior moves, and no config or document read is
+ * spent on it. With an owner named, the gate mode reads through the safe
+ * integrity loader (absent config resolves `off`; an UNREADABLE one
+ * resolves the strict `fail`, which can close this gate but never open
+ * it) and the permissions document through the permissions loader
+ * (absent is null; unreadable raises with the field named - that
+ * document's own fail-closed contract).
+ *
+ * Writes nothing: a caller can run this ahead of every existence check
+ * and refuse a foreign claim without ever answering whether the target
+ * exists.
+ */
+export function noteOwnerGateVerdict(
+  vault: string,
+  frontmatter: FrontmatterMap | undefined,
+  configPath: string | undefined,
+): NoteOwnerGateOutcome {
+  const claim = frontmatter?.[NOTE_OWNER_FRONTMATTER_KEY];
+  if (claim === undefined || claim === null) {
+    return { refused: false, watch: false, named: "", resolvedIdentity: "" };
+  }
+  const named = typeof claim === "string" ? claim : String(claim);
+  const resolved = resolveAgentName(configPath);
+  const gateMode = loadIntegrityConfigSafe(vault).owner_scope_writes;
+  const { document } = loadPermissionsDocument(vault);
+  const verdict = refuseCrossOwnerWrite({
+    frontmatterOwner: named,
+    resolvedIdentity: resolved,
+    gateMode,
+    document,
+    subject: { agent: resolved, via: "config" },
+  });
+  if (verdict.refused)
+    return {
+      refused: true,
+      reason: verdict.reason,
+      watch: false,
+      named,
+      resolvedIdentity: resolved,
+    };
+  return {
+    refused: false,
+    watch: gateMode === GATE_MODE.warn,
+    named,
+    resolvedIdentity: resolved,
+  };
+}
+
+/**
+ * The note-lane owner gate for a single writer: consult, refuse, and -
+ * under `warn` - log the one decision-ledger row with the gate key as
+ * its source, so the operator can watch what `fail` would refuse. The
+ * write this call guards proceeds only when the result says so.
+ */
+export function gateNoteOwnerFrontmatter(
+  vault: string,
+  relPath: string,
+  frontmatter: FrontmatterMap | undefined,
+  configPath: string | undefined,
+): NoteOwnerGateResult {
+  const outcome = noteOwnerGateVerdict(vault, frontmatter, configPath);
+  if (outcome.refused) return { refused: true, reason: outcome.reason };
+  if (outcome.watch) {
+    logWatchedNoteOwnerWrite(vault, relPath, outcome.named, outcome.resolvedIdentity);
+  }
+  return { refused: false };
+}
+
+/**
+ * The one `warn` ledger row for an owner-carrying note write, or nothing
+ * when the named owner agrees with the resolved identity (the one case
+ * `fail` would not refuse is the one case there is nothing to watch).
+ * The comparison is the same normalised token comparison the predicate
+ * makes; the predicate module stays pure, so the row lives with its
+ * callers. Exported for the batch kernel, which consults the verdict at
+ * projection and logs at the commit so a later operation's refusal never
+ * leaves a row behind for a write that never happened.
+ */
+export function logWatchedNoteOwnerWrite(
+  vault: string,
+  target: string,
+  named: string,
+  resolved: string,
+): void {
+  const token = normalizeAgentScope(named);
+  const identity = normalizeAgentScope(normalizeAgentArgument(resolved) ?? undefined);
+  if (token === null || identity === null || token === identity) return;
+  appendDecisionLedger(vault, {
+    ts: new Date().toISOString(),
+    actor: resolved,
+    via: "config",
+    action: "owner_write",
+    target,
+    verdict: GATE_MODE.warn,
+    source: OWNER_SCOPE_WRITES_KEY,
+    reason:
+      `frontmatter owner ${JSON.stringify(named)} allowed under ${GATE_MODE.warn}; ` +
+      `${OWNER_SCOPE_WRITES_KEY}=${GATE_MODE.fail} would refuse it ` +
+      `(resolved identity ${JSON.stringify(resolved)})`,
+  });
+}
+
+/**
  * Create one Markdown note in the vault. Returns a discriminated
  * {@link CreateNoteResult}; throws {@link CreateNoteError} on any
  * refusal.
@@ -557,6 +714,20 @@ export function createNote(vault: string, input: CreateNoteInput): CreateNoteRes
   assertVaultIdentityForWrite(vault);
   const { relPath, abs, originChannel } = resolveNoteTarget(vault, input.path);
   const callerFrontmatter = input.frontmatter ?? {};
+  // The owner-write gate runs BEFORE the body resolves, before validation,
+  // and before any existence or staging decision: a refused claim must
+  // cost no bytes anywhere - the publish target, the pending queue, and
+  // the refusal's own information content included. The refusal reads the
+  // same whether the target is free, occupied or already staged-for-
+  // review, so a caller probing foreign owners learns nothing about which
+  // paths are real.
+  const ownerGate = gateNoteOwnerFrontmatter(vault, relPath, callerFrontmatter, input.configPath);
+  if (ownerGate.refused) {
+    throw new CreateNoteError(
+      "owner_write_refused",
+      `note create at ${relPath}: ${ownerGate.reason}`,
+    );
+  }
   const body = resolveBody(input);
   // Validation judges the INPUT, so it runs before the target is
   // consulted: a caller must not learn that its document is invalid
