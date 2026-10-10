@@ -23,7 +23,7 @@
  *      exactly that before this unit.
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
@@ -42,6 +42,7 @@ import {
 } from "../../src/mcp/owner-scope-refusal.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
 import type { ServerContext, ToolDefinition } from "../../src/mcp/tool-contract.ts";
+import { MCPServer, type JsonRpcResponse } from "../../src/mcp/server.ts";
 import { toPosix } from "../../src/core/path-safety.ts";
 
 const OWNER_A = "agent-a";
@@ -336,4 +337,64 @@ test("the tools that stamp a caller-supplied agent are enumerated from the tool 
   // boundary in prose only.
   const scoped = new Set(toolsDeclaring(AGENT_SCOPE_ARG_NAME));
   expect(declaring.filter((name) => scoped.has(name))).toEqual([]);
+});
+
+// ----- identity-positive: the request-scoped token identity (write-side-trust, Task 7)
+
+/**
+ * The same refusal, driven through `handleRequest` with a transport-minted
+ * identity riding the request as a PARAMETER. Nothing here touches the
+ * enumerations above: those derive from `src/mcp` sources and the census
+ * they pin must pass unmodified.
+ */
+describe("a request-scoped identity threads through the dispatcher", () => {
+  let server: MCPServer;
+
+  beforeEach(() => {
+    server = new MCPServer({ vault, configPath: null, repoRoot: null });
+  });
+
+  async function rpcCall(
+    args: Record<string, unknown>,
+    identity?: { agent: string; via: "token" | "shared-key" },
+  ): Promise<JsonRpcResponse> {
+    return (await server.handleRequest(
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "brain_context_pack",
+          arguments: { max_tokens: 4000, ...args },
+        },
+      },
+      identity,
+    )) as JsonRpcResponse;
+  }
+
+  test("a token identity makes the fail gate per-caller real", async () => {
+    setGate(GATE_MODE.fail);
+    const refused = await rpcCall({ agent_scope: OWNER_B }, { agent: OWNER_A, via: "token" });
+    const message = (refused.error as { message: string } | undefined)?.message ?? "";
+    expect(message).toContain(OWNER_SCOPE_REFUSAL.foreignOwner);
+    expect(message).toContain(OWNER_A);
+    expect(message).toContain(OWNER_B);
+    // And the caller's own scope is answered, isolated to its own pages.
+    const own = await rpcCall({ agent_scope: OWNER_A }, { agent: OWNER_A, via: "token" });
+    const payload = JSON.stringify(own.result);
+    expect(payload).toContain(SHARED_ID);
+    expect(payload).toContain(PRIVATE_ID);
+  });
+
+  test("no identity on the request falls back to the config-derived context", async () => {
+    setGate(GATE_MODE.fail);
+    const refused = await rpcCall({ agent_scope: OWNER_A });
+    const message = (refused.error as { message: string } | undefined)?.message ?? "";
+    // The fixture vault has no config behind this server (configPath null),
+    // so the fallback identity is the placeholder the identity chain bottoms
+    // out at - the unresolved refusal, exactly as the pre-token dispatcher
+    // answered. Absent identity changes nothing.
+    expect(message).toContain(OWNER_SCOPE_REFUSAL.unresolvedIdentity);
+    expect(message).not.toContain(PRIVATE_ID);
+  });
 });

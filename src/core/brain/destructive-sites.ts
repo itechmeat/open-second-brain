@@ -373,6 +373,16 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
         "passphrase is the documented, permanent loss. The custody state sits outside " +
         "every snapshot archive by design.",
     },
+    "src/core/brain/secrets/token-store.ts": {
+      calls: ["renameSync"],
+      recovery: UNARCHIVED_OUTSIDE,
+      reason:
+        "the tmp-plus-rename half of the per-agent MCP token store's write, which must " +
+        "land at mode 0600 at creation, so no shared writer serves it. The store is " +
+        "hash-at-rest by design: the bytes a rotation displaces are the previous hash " +
+        "and non-secret prefix, never a credential, and overwriting them is the rotate " +
+        "or revoke doing its job. Custody state sits outside every snapshot archive.",
+    },
 
     // --- Two-phase accept with a journalled rollback ---------------------
     "src/core/brain/skill-proposals.ts": {

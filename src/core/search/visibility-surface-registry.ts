@@ -1400,4 +1400,14 @@ export const DIRECT_VAULT_READ_REGISTRY: ReadonlyArray<DirectVaultReadEntry> = O
       "local reach through CLI_TRANSPORT_REACH, so the reserved-token rule admits every page " +
       "here by construction rather than by omission.",
   },
+  {
+    file: "src/cli/bootstrap/receipt.ts",
+    category: D.discloses_nothing,
+    reason:
+      "reads and writes the bootstrap receipt at .open-second-brain/bootstrap.lock.json: " +
+      "schema version, target names, owned keys, a token NAME and non-secret PREFIX, and a " +
+      "timestamp - never page content, and never token material. It runs in the operator's " +
+      "own shell, so the reach question does not arise, and no page's reservation could " +
+      "cover what it hands back.",
+  },
 ]);

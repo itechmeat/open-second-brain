@@ -26,6 +26,8 @@ o2b help --json               Print the command/flag manifest as JSON
 o2b completions --shell zsh   Print completions for bash|zsh|fish|elvish|nushell|powershell
 o2b uninstall                 Print uninstall plan; --apply-local cleans config; --remove-cli removes symlinks
 o2b update                    Update Open Second Brain across all detected runtimes; --target <name> / --dry-run / --force / --json
+o2b bootstrap                 One-command harness provisioning for --target <name> (codex, grok, opencode run the adapter's idempotent apply; generic prints the payload plus manual steps; claude-code and zcode are plugin verify-only). --token mints mcp_token_<target> and prints the material exactly once - never on argv, never in a harness config; a second identical run is a byte-identical no-op; --rotate re-mints under the same name (effective on the next request, no restart); --check verifies drift; receipt at <vault>/.open-second-brain/bootstrap.lock.json
+o2b mcp token                 Per-agent MCP token management over the vault's hash-at-rest store: mint (derives mcp_token_<agent> unless --name), rotate, revoke, list; mint and rotate print the material exactly once with a shown-once notice, list shows metadata only
 ```
 
 ### `o2b version` (since v1.56.0)

@@ -152,6 +152,23 @@ export interface JsonRpcResponse {
 }
 
 /**
+ * The per-request identity a transport resolved from a credential
+ * (write-side-trust, Task 7). The HTTP transport mints it from the
+ * presented bearer token or shared key; stdio and the CLI bridge pass
+ * none and keep the config-derived identity.
+ *
+ * It threads as a PARAMETER from `handleRequest` through
+ * `handleToolsCall` and `invokeToolHandler` into `contextFor`, never as
+ * instance state: one MCPServer serves concurrent HTTP requests, and an
+ * identity parked on `this` would let two callers read each other's
+ * scope.
+ */
+export interface RequestIdentity {
+  readonly agent: string;
+  readonly via: "token" | "shared-key";
+}
+
+/**
  * The `error` member of a JSON-RPC answer. `data` is always present and
  * always carries the string code, because {@link errorResponse} is the
  * one builder and adds it when the thrower did not.
@@ -221,6 +238,17 @@ export class MCPServer {
   }
 
   get context(): ServerContext {
+    return this.contextFor();
+  }
+
+  /**
+   * The server context for ONE request. `identity` is what the transport
+   * resolved from the request's credential; when it is absent (stdio,
+   * the CLI bridge, a probe) the context falls back to the process
+   * config identity exactly as the plain getter always did - including
+   * deferring `resolveAgentName`'s refusal to the point of use.
+   */
+  private contextFor(identity?: RequestIdentity): ServerContext {
     const configPath = this.configPath ?? undefined;
     return {
       vault: this.vault,
@@ -232,7 +260,8 @@ export class MCPServer {
       ruleScope: this.ruleScope,
       // Owner-scope isolation (context-integrity-gates, Unit A): the
       // only source of identity for `brain_context`, which takes no
-      // arguments. Resolved per access, like `resolveAgentName`'s other
+      // arguments. A transport-minted credential wins; otherwise the
+      // config is resolved per access, like `resolveAgentName`'s other
       // callers, so a config edit takes effect without a restart.
       //
       // A GETTER, not a value, and that is the whole separation this
@@ -247,7 +276,7 @@ export class MCPServer {
       // handlers that need an identity (as a tool-level error carrying the
       // file name), and the handlers that never ask answer normally.
       get agentName(): string {
-        return resolveAgentName(configPath);
+        return identity?.agent ?? resolveAgentName(configPath);
       },
     };
   }
@@ -255,7 +284,7 @@ export class MCPServer {
   /** Public method for CLI tool-call bridge — the legacy code reached into `_tools`. */
   async callTool(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
     const tool = findTool(this.tools, name);
-    return toolResult(tool, await this.invokeToolHandler(tool, args));
+    return toolResult(tool, await this.invokeToolHandler(tool, args, undefined, undefined));
   }
 
   /**
@@ -284,6 +313,7 @@ export class MCPServer {
     tool: ToolDefinition,
     args: Record<string, unknown>,
     onProgress?: ProgressSink,
+    identity?: RequestIdentity,
   ): Promise<unknown> {
     // Before the unknown-argument gate: a caller naming the visibility
     // boundary is told about the boundary, not offered a typo suggestion
@@ -293,19 +323,21 @@ export class MCPServer {
     assertKnownArguments(tool, args);
     if (!this.routeMetricsEnabled) {
       try {
-        return await tool.handler(this.context, args, onProgress);
+        return await tool.handler(this.contextFor(identity), args, onProgress);
       } catch (exc) {
-        throw this.mapFrozen(tool, exc);
+        throw this.mapFrozen(tool, exc, identity);
       }
     }
     const start = performance.now();
     let status: McpRouteStatus = "ok";
     const routeScope = createRouteScope();
     try {
-      return await routeScope.run(async () => tool.handler(this.context, args, onProgress));
+      return await routeScope.run(async () =>
+        tool.handler(this.contextFor(identity), args, onProgress),
+      );
     } catch (exc) {
       status = "error";
-      throw this.mapFrozen(tool, exc);
+      throw this.mapFrozen(tool, exc, identity);
     } finally {
       emitMcpRouteLatency(
         this.vault,
@@ -333,7 +365,7 @@ export class MCPServer {
    * cover the ones somebody remembered. Every other exception passes
    * through untouched.
    */
-  private mapFrozen(tool: ToolDefinition, exc: unknown): unknown {
+  private mapFrozen(tool: ToolDefinition, exc: unknown, identity?: RequestIdentity): unknown {
     if (!(exc instanceof VaultFrozenError)) return exc;
     // `agentName` is optional on the context - a transport may supply
     // none - so an absent identity is recorded as the named absence
@@ -342,12 +374,15 @@ export class MCPServer {
       this.vault,
       tool.name,
       exc,
-      () => this.context.agentName ?? UNRESOLVED_AGENT,
+      () => this.contextFor(identity).agentName ?? UNRESOLVED_AGENT,
     );
   }
 
   /** Process one JSON-RPC request or notification. Returns null for notifications. */
-  async handleRequest(request: JsonRpcRequest): Promise<JsonRpcResponse | null> {
+  async handleRequest(
+    request: JsonRpcRequest,
+    identity?: RequestIdentity,
+  ): Promise<JsonRpcResponse | null> {
     if (typeof request !== "object" || request === null) {
       return errorResponse(null, INVALID_REQUEST, "request must be an object");
     }
@@ -388,13 +423,13 @@ export class MCPServer {
       } else if (method === "tools/list") {
         result = this.handleToolsList();
       } else if (method === "tools/call") {
-        result = await this.handleToolsCall(params);
+        result = await this.handleToolsCall(params, identity);
       } else if (method === "resources/list") {
         result = this.handleResourcesList();
       } else if (method === "resources/templates/list") {
         result = this.handleResourcesTemplatesList();
       } else if (method === "resources/read") {
-        result = this.handleResourcesRead(params);
+        result = this.handleResourcesRead(params, identity);
       } else if (method.startsWith("notifications/")) {
         return null;
       } else {
@@ -470,19 +505,29 @@ export class MCPServer {
     return { resourceTemplates: listResourceTemplates() };
   }
 
-  private handleResourcesRead(params: Record<string, unknown>): Record<string, unknown> {
+  private handleResourcesRead(
+    params: Record<string, unknown>,
+    identity?: RequestIdentity,
+  ): Record<string, unknown> {
     const uri = params["uri"];
     if (typeof uri !== "string") {
       throw new MCPError(INVALID_PARAMS, "resources/read requires a string `uri`");
     }
     const content = readResource(
-      { vault: this.vault, agentName: this.context.agentName, reach: this.reach },
+      {
+        vault: this.vault,
+        agentName: this.contextFor(identity).agentName,
+        reach: this.reach,
+      },
       uri,
     );
     return { contents: [content] };
   }
 
-  private async handleToolsCall(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  private async handleToolsCall(
+    params: Record<string, unknown>,
+    identity?: RequestIdentity,
+  ): Promise<Record<string, unknown>> {
     const name = params["name"];
     if (typeof name !== "string") {
       throw new MCPError(INVALID_PARAMS, "tools/call requires a string name");
@@ -506,7 +551,7 @@ export class MCPServer {
         ? progressRefusal(token, PROGRESS_REASON.transportSingleResponse)
         : undefined;
     try {
-      const structured = await this.invokeToolHandler(tool, args, onProgress);
+      const structured = await this.invokeToolHandler(tool, args, onProgress, identity);
       return withProgressRefusal(buildMcpToolResult(tool, structured, this.artifactStore), refusal);
     } catch (exc) {
       if (exc instanceof MCPError) {

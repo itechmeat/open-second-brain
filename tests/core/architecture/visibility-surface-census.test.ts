@@ -960,7 +960,7 @@ const SURFACE_SOURCE_TREE = SURFACE_TREES.flatMap((root) => readTree(root));
 const DIRECT_VAULT_READERS = directVaultReadFiles(SURFACE_SOURCE_TREE);
 
 /** Measured: files in the surface trees that read a vault path directly. */
-const DIRECT_VAULT_READ_POPULATION_SIZE = 4;
+const DIRECT_VAULT_READ_POPULATION_SIZE = 5;
 
 /**
  * ## What this sweep cannot see, stated rather than implied

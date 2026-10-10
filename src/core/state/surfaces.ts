@@ -118,6 +118,7 @@ export const STATE_SURFACE_ID = Object.freeze({
   sessionImportLedger: "session_import_ledger",
   installManifest: "install_manifest",
   protectManifest: "protect_manifest",
+  bootstrapReceipt: "bootstrap_receipt",
   maintenanceLease: "maintenance_lease",
   maintenanceJournal: "maintenance_journal",
   hookAudit: "hook_audit",
@@ -283,6 +284,7 @@ const DEAD_LETTER_DIR = "dead-letters";
 const SESSION_LEDGER_FILE = "session-import-ledger.json";
 const INSTALL_MANIFEST_FILE = "install.lock.json";
 const PROTECT_MANIFEST_FILE = "protect.lock.json";
+const BOOTSTRAP_RECEIPT_FILE = "bootstrap.lock.json";
 const MAINTENANCE_LEASE_FILE = "maintenance.sqlite";
 const MAINTENANCE_JOURNAL_FILE = `${MAINTENANCE_JOURNAL_STEM}.${JSONL_LEDGER_EXT}`;
 const HOOK_STATE_DIR = "hook-state";
@@ -524,6 +526,21 @@ export const STATE_SURFACES: ReadonlyArray<StateSurface> = Object.freeze([
       "install manifest and the same cost: without it `brain unprotect` cannot tell a fence it " +
       "wrote from one an operator typed.",
     sources: ["src/core/brain/protect.ts"],
+  },
+  {
+    id: STATE_SURFACE_ID.bootstrapReceipt,
+    label: "bootstrap receipt",
+    tier: STATE_TIER.derived,
+    derive: derivedStore(BOOTSTRAP_RECEIPT_FILE),
+    override_env: null,
+    override_config_key: null,
+    carries_memory: false,
+    reason:
+      "What `o2b bootstrap` provisioned per harness target: the owned entries, the token NAME " +
+      "and non-secret prefix (never the material), and applied_at. Losing it makes the next " +
+      "bootstrap re-provision honestly and `--check` report the receipt missing; it is never a " +
+      "credential.",
+    sources: ["src/cli/bootstrap/receipt.ts"],
   },
   {
     id: STATE_SURFACE_ID.maintenanceLease,
