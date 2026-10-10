@@ -9,6 +9,7 @@ Open Second Brain records what it did - learning events, recall decisions, serve
 | Brain log | `Brain/log/<date>[.<device-id>].md` + JSONL sidecar | `appendLogEvent()` in `src/core/brain/log.ts` | Markdown line + JSONL row per event |
 | Continuity store | `Brain/log/continuity/<month>[.<device-id>].jsonl` | `appendContinuityRecord()` in `src/core/brain/continuity/store.ts` | one JSON record per line |
 | Idempotency ledger | `Brain/logs/idempotency/<month>[.<device-id>].jsonl` | `rememberKey()` in `src/core/brain/idempotency-ledger.ts` | one `key -> content hash` record per line |
+| Decision ledger | `Brain/logs/decisions/<month>[.<device-id>].jsonl` | `appendDecisionLedger()` in `src/core/brain/permissions/ledger.ts`; read back by `o2b brain permissions ledger` | one JSON decision row per line (see "The decision ledger" below) |
 | Preference mutation audit | `Brain/log/pref-audit/<pref-id>/device[.<device-id>].jsonl` (legacy flat `Brain/log/pref-audit/<pref-id>[.<device-id>].jsonl` still read) | `appendPrefAudit()` in `src/core/brain/pref-audit.ts` | one JSON record per line |
 | Session lineage ledger | `Brain/.state/session-lineage[.<device-id>].jsonl` (+ `session-lineage-gaps[.<device-id>].jsonl`) | `recordLineageObservation()` in `src/core/brain/lineage/ledger.ts` | one JSON record per line, sequence-numbered and hash-chained per file |
 | Session lifecycle audit | `Brain/log/session-lifecycle/<ISO-week>[.<device-id>].jsonl` | `captureSessionLifecycleEvent()` in `src/core/brain/session-lifecycle.ts` | JSONL audit rows |
@@ -51,6 +52,10 @@ The `prompt_prefix` metric surface measures STRUCTURAL prompt-prefix stability (
 | `note` | a narrative milestone is recorded (`brain_note`) |
 | `note-write` | a vault note is created, updated, appended to, or reverted |
 | `session-lifecycle` | a captured lifecycle event also produced Brain writes |
+| `decision-open` | a question was parked with enumerated options at `Brain/decisions/open-<slug>.md`, ahead of the decision it may become. Payload carries the `open` wikilink, the `title`, the option `count` and the `agent`. Distinct from `decision-record` because nothing has been decided yet |
+| `decision-resolved` | an open decision was closed by choosing one of its options, minting a real `type: decision` page. Payload carries the `open` wikilink, the minted `decision` wikilink, the `choice` and the `agent`. The minted page itself carries the usual `decision-record` event; this event records the transition |
+| `decision-discarded` | an open decision was closed WITHOUT a decision. Payload carries the `open` wikilink, the `reason` and the `agent`. Separated from `decision-resolved` so "never decided" is machine-filterable against "decided as X" |
+| `ambient-withheld` | an ambient extraction capture was suppressed by operator consent (`guardrails.ambient_writeback: false`). One event per suppressed capture, carrying the count of signals the capture would have written - never their content. Keys absent log nothing, because the lane ran as today |
 
 ### Note writes
 
@@ -102,6 +107,25 @@ Once the log is the attribution record for every write, a line someone deleted o
 `o2b brain log verify [--json]` walks every shard and reports the first break in each, by path and line: `hash-mismatch` (the line was edited after it was written), `prev-mismatch` (a line between it and its predecessor was removed or reordered), `malformed` (the line carries no usable chain link where the chain had already started). It exits 1 when any shard does not link up. `o2b brain doctor` emits one `log-chain-broken` warning per broken shard with the same next command. Neither repairs anything: the only way to make a broken chain verify is to rewrite the history it records, which is the act the chain exists to detect.
 
 Rows written before the chain shipped carry no `h`. They are counted as **legacy** and are clean while they precede the chain — the first chained line after them anchors the shard with `prev: null`. The same shape *after* a chained line is not history but a line whose links were stripped, and it is reported. The head of a shard is not exempt either: the Brain log never compacts, so a first chained line naming a predecessor means the head of the file was cut off. Sync-conflict copies are excluded from verification — they are the doctor's separate `sync-conflict-log` finding, and their chain never held by construction.
+
+## The decision ledger
+
+The Brain log, the pref-audit, the idempotency ledger and the continuity store each record what happened; none of them answers "which rule allowed, asked or denied this write". The decision ledger (`Brain/logs/decisions/`, write-side-trust wave) is the queryable record of that answer: one JSONL row per gate disposition that was not a plain publish, written by the gate that produced the verdict. `appendDecisionLedger()` (`src/core/brain/permissions/ledger.ts`) appends to the month/device shards on the shared shard grammar - the per-device rule and the merged `(timestamp, shard id, line)` read order are exactly the ones "The per-device shard rule" above states.
+
+The row shape is closed: `ts`, `actor` (the resolved principal), `via` (`token`, `config` or `operator` - where the identity came from), `action` (`write`, `ingest` or `owner_write`), `target`, `verdict` (the disposition - `allow`, `ask`, `deny`, a gate mode such as `warn`, or a refusal token), `source` (the deciding rule: an entry id, an agent or role name, `default`, or a gate key such as `integrity.owner_scope_writes`), `reason` (the named token), and the optional `tool` and `correlation_id` that join a row to the other trails the way `event-trace.ts` joins log events.
+
+When rows land is deliberately quiet:
+
+| Trigger | Rows |
+|---|---|
+| No permissions document, every gate key off | none - default-silent like every ledger |
+| A permissions document resolves `ask` or `deny` for a staged-lane write | one row naming the entry, role or default that decided |
+| A permissions document resolves `allow` | one row ONLY when the document sets `ledger.record_allows: true` |
+| `integrity.owner_scope_writes: warn` allows a caller-named foreign owner on the preference lane | one row carrying the gate key as `source` |
+
+The append contract is absolute: a failed append NEVER throws and never blocks the verdict it records. The ledger rides behind gates that must refuse or stage a write even when accountability cannot be written, so every failure - an unwritable directory, a lock another writer holds - comes back as `{ logged: false, audit_reason }` that the caller surfaces; the receipt carries the reason rather than claiming a record that does not exist.
+
+`o2b brain permissions ledger --actor <name> --action <a> --verdict <v> --since <iso> --until <iso> --limit <n>` reads the merged rows back (`--json` for the raw rows); every filter is optional and applied after the deterministic sort, so two devices listing the same shards agree on the order. The ledger is append-only and has no prune verb: retention follows the same open question as every sharded ledger in the vault.
 
 ## Continuity record kinds
 
