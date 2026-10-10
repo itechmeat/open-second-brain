@@ -144,7 +144,10 @@ export const CONFIG_UNREADABLE_REASON =
  */
 export const SECRET_STORE_LOCKED_REASON =
   "the vault's credential store is locked, so the installation secret " +
-  'reference cannot be resolved; run "o2b brain secret unlock" and retry';
+  "reference cannot be resolved; set OPEN_SECOND_BRAIN_SECRETS_PASSPHRASE " +
+  "for the server process, pass --passphrase-from-env or the passphrase on " +
+  "stdin to any key-bearing verb, or run `o2b brain secret unwrap` to " +
+  "return the store to its raw state";
 
 /**
  * What the degraded field says when the vault's credential store still
