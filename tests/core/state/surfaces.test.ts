@@ -57,6 +57,7 @@ import {
   writeImagesDir,
 } from "../../../src/core/brain/paths.ts";
 import { deadLetterDir } from "../../../src/core/brain/dead-letter.ts";
+import { decisionLedgerDir } from "../../../src/core/brain/permissions/ledger.ts";
 import { checkpointPath } from "../../../src/core/brain/ingest/checkpoint.ts";
 import { sessionCheckpointPath } from "../../../src/core/brain/sessions/checkpoint.ts";
 import { manifestPath as ingestManifestPath } from "../../../src/core/brain/ingest/content-manifest.ts";
@@ -297,6 +298,7 @@ const RESOLVER_BINDINGS: ReadonlyArray<readonly [StateSurfaceId, (vault: string)
     ["skill_accept_journal", (v) => dirname(skillAcceptJournalPath(v, "probe"))],
     ["claim_graph", (v) => claimGraphPath(v)],
     ["rollup_ledger", (v) => rollupLedgerPath(v)],
+    ["decision_ledger", (v) => decisionLedgerDir(v)],
   ]);
 
 /**
