@@ -16,6 +16,7 @@ import {
   defaultConfigPath,
   discoverConfig,
   resolveMcpToolProfile,
+  resolveVault,
   setConfigValue,
   validateTimezoneName,
 } from "../core/config.ts";
@@ -84,7 +85,8 @@ import { CLI_COMMAND_MANIFEST, ROOT_VERSION_FLAG, manifestForJson } from "./comm
 import { COMPLETION_SHELLS, isCompletionShell, renderCompletions } from "./completions.ts";
 import { MCPServer } from "../mcp/server.ts";
 import { CLI_TRANSPORT_REACH } from "./transport-reach.ts";
-import { startHttp, isLoopbackHost } from "../mcp/http.ts";
+import { isLoopbackHost, resolveMcpTokensRequired, startHttp } from "../mcp/http.ts";
+import { hasAnyAgentToken } from "../core/brain/secrets/token-store.ts";
 import { serveStdio } from "../mcp/stdio.ts";
 import { SERVER_VERSION } from "../mcp/protocol.ts";
 import { buildToolTable } from "../mcp/tools.ts";
@@ -865,11 +867,23 @@ async function cmdMcp(argv: string[]): Promise<number> {
     process.env["OPEN_SECOND_BRAIN_MCP_API_KEY"] ??
     undefined;
   // Bearer is optional on a loopback bind (the loopback bind + Host/Origin
-  // rebinding guard are the baseline defence) but mandatory on a non-loopback
-  // host, which would otherwise expose the Brain unauthenticated on the network.
-  if (transport === "http" && !isLoopbackHost(host) && (apiKey === undefined || apiKey === "")) {
+  // rebinding guard are the baseline defence) but a credential source is
+  // mandatory on a non-loopback host, which would otherwise expose the Brain
+  // unauthenticated on the network: the shared key, or a non-empty per-agent
+  // token map (write-side-trust, Task 7). The vault resolves without
+  // throwing here so the pre-check keeps its answer (and its exit code) on
+  // a machine with no vault at all.
+  const mapVault = (flags["vault"] as string | undefined) ?? resolveVault(config) ?? "";
+  const mintedTokens = mapVault !== "" && hasAnyAgentToken(mapVault);
+  if (
+    transport === "http" &&
+    !isLoopbackHost(host) &&
+    (apiKey === undefined || apiKey === "") &&
+    !mintedTokens
+  ) {
     process.stderr.write(
-      "o2b mcp: --api-key (or OPEN_SECOND_BRAIN_MCP_API_KEY) is required when --transport http binds a non-loopback --host\n",
+      "o2b mcp: --api-key (or OPEN_SECOND_BRAIN_MCP_API_KEY) or at least one minted agent token " +
+        "is required when --transport http binds a non-loopback --host\n",
     );
     return 2;
   }
@@ -936,6 +950,17 @@ async function cmdMcp(argv: string[]): Promise<number> {
     }
 
     if (transport === "http") {
+      // Enforcement needs both halves: the operator key AND a map to
+      // enforce against. With the key on but nothing minted yet the server
+      // starts and only says so - an outage would be the wrong answer for
+      // an operator one mint away from the posture they asked for.
+      if (resolveMcpTokensRequired(config) && !hasAnyAgentToken(vault)) {
+        process.stderr.write(
+          "o2b mcp: mcp_tokens_required is on, but no agent token is minted for this vault yet; " +
+            "credential-less requests are not refused until one exists " +
+            "(mint one with `o2b mcp token mint <name> <agent>`)\n",
+        );
+      }
       const handle = await startHttp(
         { vault, configPath: config, repoRoot },
         { host, port, apiKey, faultCounts: () => faults.counts() },

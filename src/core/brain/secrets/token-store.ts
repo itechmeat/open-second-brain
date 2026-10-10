@@ -204,6 +204,17 @@ export function listAgentTokens(vault: string): McpTokenRecord[] {
 }
 
 /**
+ * Whether any token is minted at all - the non-empty-map half of the
+ * transport's `mcp_tokens_required` enforcement and of the non-loopback
+ * bind rule. Read behind the same mtime cache as
+ * {@link resolveAgentForToken}, so minting the first token tightens a
+ * running server without a restart.
+ */
+export function hasAnyAgentToken(vault: string): boolean {
+  return activeHashIndex(vault).size > 0;
+}
+
+/**
  * Resolve a presented credential to its agent, or null when nothing
  * active matches. The presented material is hashed and compared against
  * every stored hash with timingSafeEqual (fixed 32-byte digests), so no
