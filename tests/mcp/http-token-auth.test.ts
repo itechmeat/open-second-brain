@@ -124,6 +124,13 @@ function makePref(slug: string, owner?: string): void {
   });
 }
 
+/** Replace the token store's bytes with something that cannot parse. */
+function corruptTokenStore(): void {
+  const dir = join(vault, ".open-second-brain", "secrets");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "mcp-tokens.json"), "{not json", "utf8");
+}
+
 describe("HTTP token authentication", () => {
   test("a valid token authenticates with per-caller identity", async () => {
     const { tokenMaterial } = mintAgentToken(vault, "mcp_token_edge", "edge-agent");
@@ -279,6 +286,66 @@ describe("HTTP token authentication", () => {
     await start({ tokensRequired: true });
     const res = await post(rpc("ping", 1), { key: tokenMaterial, header: "x-api-key" });
     expect(res.status).toBe(200);
+  });
+
+  test("a corrupt token store never widens the gate: the token fails closed, the key still answers", async () => {
+    const sharedKey = fakeCredential("shared", "-master-", "77f1");
+    const { tokenMaterial } = mintAgentToken(vault, "mcp_token_edge", "edge-agent");
+    corruptTokenStore();
+    const warnings: string[] = [];
+    const original = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array): boolean => {
+      warnings.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      await start({ apiKey: sharedKey });
+      // The presented token can no longer be matched (the store cannot be
+      // read), so it fails the way any unmatched credential does: the
+      // generic 401, no oracle.
+      const presented = await post(rpc("ping", 1), { key: tokenMaterial });
+      expect(presented.status).toBe(401);
+      // The operator's master credential is not locked out with it.
+      const keyed = await post(rpc("ping", 2), { key: sharedKey });
+      expect(keyed.status).toBe(200);
+    } finally {
+      process.stderr.write = original;
+    }
+    // The loss is named, never silent: token matching is off and the
+    // reason is on stderr.
+    expect(warnings.join("")).toContain("the MCP token store could not be read");
+  });
+
+  test("a corrupt map never opens a key-less exposed bind: the bind refuses to start", async () => {
+    mintAgentToken(vault, "mcp_token_edge", "edge-agent");
+    corruptTokenStore();
+    const warnings: string[] = [];
+    const original = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array): boolean => {
+      warnings.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      // A non-loopback bind requires a credential source by itself; an
+      // unreadable map is not "no tokens, come on in" - the bind fails
+      // closed at startup instead of exposing an unauthenticated endpoint.
+      await expect(startHttp({ vault }, { host: "0.0.0.0", port: 0 })).rejects.toThrow();
+    } finally {
+      process.stderr.write = original;
+    }
+  });
+
+  test("a map that turns unreadable after the bind never re-opens anonymous access", async () => {
+    // The bind-time probe passes on a healthy map; the store then corrupts
+    // under the running server. The exposed bind's requirement is the bind
+    // itself, not the map's current readability, so credential-less calls
+    // stay refused.
+    mintAgentToken(vault, "mcp_token_edge", "edge-agent");
+    handle = await startHttp({ vault }, { host: "0.0.0.0", port: 0 });
+    corruptTokenStore();
+    const anonymous = await post(rpc("ping", 1));
+    expect(anonymous.status).toBe(401);
+    expect(await anonymous.text()).toBe("Unauthorized\n");
   });
 });
 

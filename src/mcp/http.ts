@@ -81,6 +81,11 @@ export interface ServeHttpOptions {
    * explicit at the surface that warns about it.
    */
   readonly tokensRequired?: boolean;
+  /**
+   * Where the transport writes its named warnings (a token store that
+   * cannot be read, for one). Defaults to the process stderr; injected
+   * so tests can pin what a degraded bind says.
+   */
   readonly stderr?: Writable;
   /**
    * How long {@link HttpServerHandle.close} waits for in-flight requests.
@@ -173,7 +178,17 @@ export async function startHttp(
     // shutdown then waits for a client that is waiting for it.
     res.on("close", finish);
     try {
-      await handleHttpRequest(mcp, apiKey, tokensRequired, host, drain, opts.faultCounts, req, res);
+      await handleHttpRequest(
+        mcp,
+        apiKey,
+        tokensRequired,
+        host,
+        drain,
+        opts.faultCounts,
+        opts.stderr ?? process.stderr,
+        req,
+        res,
+      );
     } catch (exc) {
       // This promise used to be floated. A throw from the dispatch left
       // the socket open with no response on it and no record anywhere;
@@ -283,6 +298,7 @@ async function handleHttpRequest(
   boundHost: string,
   drain: RequestDrain,
   faultCounts: (() => McpFaultCounts) | undefined,
+  stderr: Writable,
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
@@ -345,7 +361,7 @@ async function handleHttpRequest(
   // then the shared key, which keeps the process config identity. The
   // generic 401 body is unchanged, and no answer distinguishes a revoked
   // token from an unknown one.
-  const auth = authenticateHttpRequest(mcp, apiKey, configTokensRequired, boundHost, req);
+  const auth = authenticateHttpRequest(mcp, apiKey, configTokensRequired, boundHost, stderr, req);
   if (auth.refused) {
     res.writeHead(401, { "content-type": "text/plain; charset=utf-8" });
     res.end("Unauthorized\n");
@@ -450,8 +466,15 @@ interface HttpAuth {
  *   absence would let a stale or forged bearer ride the loopback's
  *   anonymous posture;
  * - a credential-less request proceeds anonymous unless tokens are
- *   required - which is the config key AND a non-empty map, or the
- *   implicit requirement of a key-less non-loopback bind.
+ *   required - which is the config key AND a non-empty map, or a key-less
+ *   non-loopback bind, where the requirement is the bind itself and
+ *   holds whatever the map holds: revoking the last token must not
+ *   re-open anonymous access an exposed bind never promised.
+ *
+ * A token store that cannot be READ never widens this gate: the probe
+ * answers "no tokens" and the presented-credential check falls through
+ * to the shared key, with the failure named on stderr - a corrupt store
+ * must not lock the operator's master credential out of its own server.
  *
  * The store probes sit behind the flags that need them: a loopback bind
  * with no requirement and no presented credential reads nothing.
@@ -461,22 +484,48 @@ function authenticateHttpRequest(
   apiKey: string | null,
   configTokensRequired: boolean,
   boundHost: string,
+  stderr: Writable,
   req: IncomingMessage,
 ): HttpAuth {
   const hasKey = apiKey !== null && apiKey !== "";
   const networkBare = !isLoopbackHost(boundHost) && !hasKey;
-  const mapNonEmpty = configTokensRequired || networkBare ? hasAnyAgentToken(mcp.vault) : false;
-  const enforced = (configTokensRequired && mapNonEmpty) || (networkBare && mapNonEmpty);
+  let mapNonEmpty = false;
+  if (configTokensRequired || networkBare) {
+    try {
+      mapNonEmpty = hasAnyAgentToken(mcp.vault);
+    } catch (err) {
+      warnTokenStoreUnreadable(stderr, err);
+    }
+  }
+  const enforced = networkBare || (configTokensRequired && mapNonEmpty);
   const presented = presentedCredential(req);
   const identity = authenticateRequest(req, {
     apiKey,
-    resolveToken: (candidate) => resolveAgentForToken(mcp.vault, candidate),
+    resolveToken: (candidate) => {
+      try {
+        return resolveAgentForToken(mcp.vault, candidate);
+      } catch (err) {
+        warnTokenStoreUnreadable(stderr, err);
+        // Null, not a throw: the presented credential then fails the way
+        // any unmatched one does (the generic 401, no oracle), and a
+        // matching shared key still authenticates.
+        return null;
+      }
+    },
     sharedKeyAgent: resolveAgentName(mcp.configPath ?? undefined),
   });
   return {
     identity,
     refused: identity === null && (presented !== undefined || enforced || hasKey),
   };
+}
+
+/** The one named stderr line a failed token-store read produces. */
+function warnTokenStoreUnreadable(stderr: Writable, err: unknown): void {
+  stderr.write(
+    `warning: the MCP token store could not be read; token matching is off for this ` +
+      `request and the shared key still answers: ${(err as Error).message}\n`,
+  );
 }
 
 export interface AuthenticateRequestOptions {
