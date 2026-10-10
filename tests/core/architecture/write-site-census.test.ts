@@ -820,12 +820,12 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
   },
   "src/core/brain/secrets/envelope.ts": {
     categories: [C.machineArtifact],
-    calls: ["chmodSync", "renameSync", "unlinkSync", "writeFileSync"],
+    calls: ["chmodSync", "renameSync", "unlinkSync", "writeSync"],
     reason:
-      "replaces the raw keyfile with the passphrase-wrapped envelope via " +
-      "tmp-plus-rename at mode 0600, the custody-boundary twin of the store " +
-      "row beside it: a torn wrap would destroy the only copy of the key, so " +
-      "the swap is atomic and the shared writer's 0644 default is wrong here. " +
+      "restores the raw keyfile bytes when the written envelope fails its read-back " +
+      "unwrap: a partial-write-safe `writeSync` loop into a tmp file renamed over " +
+      "the only copy of the key at 0600 - custody bytes the shared writer must not " +
+      "own (the envelope write itself now routes through the shared atomic writer). " +
       "The unlink clears the tmp when the rename is refused; `chmodSync` " +
       "re-asserts the 0600 on the envelope the keyfile it replaced carried.",
   },
@@ -1362,8 +1362,13 @@ const DIRECT_WRITE_ROWS = 80;
  *
  * 113 -> 114: the decision ledger appends its month/device JSONL shard
  * through the shared atomic writer (write-side-trust Task 2).
+ *
+ * 114 -> 115: `src/core/brain/secrets/envelope.ts` writes the unwrapped
+ * envelope through `atomicWriteText` at 0600 (the unwrap round-trip gained a
+ * second-process path), moving it into BOTH classes - the raw-keyfile
+ * restore beside it stays direct and keeps its exclusion.
  */
-const SHARED_HELPER_ROWS = 114;
+const SHARED_HELPER_ROWS = 115;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1461,9 +1466,11 @@ const UNSTAMPED_DIRECT_ROWS = 79;
  * bootstrap receipt writes `<vault>/.open-second-brain/bootstrap.lock.json`
  * through the shared atomic writer (custody state, not notes). 110 -> 111:
  * the decision ledger appends its month/device JSONL shard through the shared
- * atomic writer (write-side-trust Task 2).
+ * atomic writer (write-side-trust Task 2). 111 -> 112: the envelope swap
+ * writes its custody bytes through the shared atomic writer (custody state,
+ * not notes).
  */
-const UNSTAMPED_SHARED_ROWS = 111;
+const UNSTAMPED_SHARED_ROWS = 112;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {
