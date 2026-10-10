@@ -82,8 +82,9 @@ const STORE_DIR_IDENTIFIER = "DERIVED_STORE_DIR";
 const SWEPT_POPULATION_SIZE = 24;
 
 /** Declared surfaces today. Pinned for the same reason. */
-// 48: the bootstrap receipt row (write-side-trust Task 14).
-const DECLARED_SURFACE_COUNT = 48;
+// 49: the decisions-ledger row (Task 2) and the bootstrap receipt row
+// (Task 14) both join the population.
+const DECLARED_SURFACE_COUNT = 49;
 
 /** An exclusion reason has to be an argument, not a label. */
 const MIN_REASON_LENGTH = 80;

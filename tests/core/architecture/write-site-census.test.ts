@@ -1278,8 +1278,12 @@ const DIRECT_ROWS = ROWS.filter((row) => row.directCalls.length > 0);
  *
  * 78 -> 79: `src/core/brain/secrets/token-store.ts` writes the per-agent
  * MCP token store (tmp-plus-rename at 0600), the third custody row.
+ *
+ * 79 -> 80: the note-lane owner-frontmatter guard (write-side-trust Task 13)
+ * gives `src/core/brain/notes/create-note.ts` a direct-fs write site for the
+ * decision-ledger warn row.
  */
-const DIRECT_WRITE_ROWS = 79;
+const DIRECT_WRITE_ROWS = 80;
 
 /**
  * Measured modules reaching a write through a shared helper. An equality.
@@ -1355,8 +1359,11 @@ const DIRECT_WRITE_ROWS = 79;
  *
  * 112 -> 113: `src/cli/bootstrap/receipt.ts` writes the bootstrap receipt
  * through `atomicWriteFileSync` (custody state, not a vault note).
+ *
+ * 113 -> 114: the decision ledger appends its month/device JSONL shard
+ * through the shared atomic writer (write-side-trust Task 2).
  */
-const SHARED_HELPER_ROWS = 113;
+const SHARED_HELPER_ROWS = 114;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1432,7 +1439,7 @@ const STAMPED_PATHS: ReadonlySet<string> = new Set(
  * 77 -> 78: the per-agent MCP token store's custody swap (hash-at-rest
  *   state, not notes).
  */
-const UNSTAMPED_DIRECT_ROWS = 78;
+const UNSTAMPED_DIRECT_ROWS = 79;
 
 /**
  * Shared-helper write sites the stamp does not reach, measured the same
@@ -1452,9 +1459,11 @@ const UNSTAMPED_DIRECT_ROWS = 78;
  * export writes the operator-named `--out` through the shared atomic writer
  * (an egress destination, and no origin stamp on exports). 109 -> 110: the
  * bootstrap receipt writes `<vault>/.open-second-brain/bootstrap.lock.json`
- * through the shared atomic writer (custody state, not notes).
+ * through the shared atomic writer (custody state, not notes). 110 -> 111:
+ * the decision ledger appends its month/device JSONL shard through the shared
+ * atomic writer (write-side-trust Task 2).
  */
-const UNSTAMPED_SHARED_ROWS = 110;
+const UNSTAMPED_SHARED_ROWS = 111;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {
