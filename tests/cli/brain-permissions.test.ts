@@ -217,3 +217,51 @@ describe("the doctor finding", () => {
     expect(`${result.stdout}${result.stderr}`).toContain("o2b brain permissions show");
   });
 });
+
+describe("the permissions-agent-denied finding", () => {
+  test("a document that denies the locally configured agent's write fires by name", async () => {
+    writeDoc("version: 1\ndefault_action: deny\n");
+    const result = await runCli(["brain", "doctor", "--vault", vault, "--json"], {
+      env: { VAULT_AGENT_NAME: "codex" },
+    });
+    const payload = JSON.parse(result.stdout) as {
+      warnings: Array<{ code: string; message: string; next_command?: string }>;
+      errors: Array<{ code: string }>;
+    };
+    const findings = payload.warnings.filter((w) => w.code === "permissions-agent-denied");
+    expect(findings).toHaveLength(1);
+    // By name: the finding names the agent the document denies.
+    expect(findings[0]!.message).toContain('"codex"');
+    expect(findings[0]!.message).toContain("o2b brain permissions show");
+    expect(findings[0]!.next_command).toBe("o2b brain permissions show");
+    expect(payload.errors.map((e) => e.code)).not.toContain("permissions-agent-denied");
+  });
+
+  test("an agent override out of the deny keeps the finding silent", async () => {
+    writeDoc("version: 1\ndefault_action: deny\nagents:\n  codex:\n    write: allow\n");
+    const result = await runCli(["brain", "doctor", "--vault", vault, "--json"], {
+      env: { VAULT_AGENT_NAME: "codex" },
+    });
+    const payload = JSON.parse(result.stdout) as {
+      warnings: Array<{ code: string }>;
+      errors: Array<{ code: string }>;
+    };
+    expect(
+      [...payload.errors, ...payload.warnings].filter((e) => e.code === "permissions-agent-denied"),
+    ).toEqual([]);
+  });
+
+  test("an ask verdict is not a denial", async () => {
+    writeDoc("version: 1\ndefault_action: ask\n");
+    const result = await runCli(["brain", "doctor", "--vault", vault, "--json"], {
+      env: { VAULT_AGENT_NAME: "codex" },
+    });
+    const payload = JSON.parse(result.stdout) as {
+      warnings: Array<{ code: string }>;
+      errors: Array<{ code: string }>;
+    };
+    expect(
+      [...payload.errors, ...payload.warnings].filter((e) => e.code === "permissions-agent-denied"),
+    ).toEqual([]);
+  });
+});

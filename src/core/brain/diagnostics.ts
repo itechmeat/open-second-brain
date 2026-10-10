@@ -553,6 +553,22 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
+        // Write-side trust, the design's foot-gun note on `default_action:
+        // deny`. The document loaded and its policy is IN FORCE - but it
+        // denies the locally configured agent the write action, so every
+        // write this machine's agent attempts is refused. Deliberate for a
+        // read-only agent; a surprise for the one-agent document that denies
+        // everything else by construction. The exit is the same `show` loop
+        // as the unreadable finding above - its dry-run decision table makes
+        // the denial visible before the first refusal does - and
+        // `autoRepairable` stays false because editing a policy file is the
+        // operator's act, never a fixer's.
+        code: "permissions-agent-denied",
+        issueClass: "permissions document denies the locally configured agent's write",
+        nextCommand: "o2b brain permissions show",
+        autoRepairable: false,
+      },
+      {
         // Write-side trust, Task 12. A permissions document rule DENIED a
         // write. The refusal names the principal, the action and the rule
         // that decided; the exit is the same `show` loop, because the fix
