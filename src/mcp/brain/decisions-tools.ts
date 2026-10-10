@@ -367,6 +367,12 @@ async function toolBrainDecision(
         const id = coerceStr(args, "id", true)!;
         const choice = coerceStr(args, "choice", true)!;
         const rationale = coerceStr(args, "rationale", false) ?? undefined;
+        // Reach boundary: a record below the caller's reach is answered
+        // exactly like an absent one, before anything is written - the
+        // same predicate rate and outcome answer their reads with.
+        if (showOpenDecision(ctx.vault, id, reads) === null) {
+          throw new OpenDecisionError(`no open decision: ${id}`);
+        }
         const res = resolveOpenDecision(ctx.vault, id, {
           choice,
           ...(rationale ? { rationale } : {}),
@@ -377,6 +383,11 @@ async function toolBrainDecision(
       case "discard": {
         const id = coerceStr(args, "id", true)!;
         const reason = coerceStr(args, "reason", true)!;
+        // Reach boundary: same as resolve - a below-reach id is an
+        // absent id, with no existence leak.
+        if (showOpenDecision(ctx.vault, id, reads) === null) {
+          throw new OpenDecisionError(`no open decision: ${id}`);
+        }
         discardOpenDecision(ctx.vault, id, {
           reason,
           ...(agent ? { actor: agent } : {}),
@@ -421,7 +432,10 @@ export const DECISIONS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         title: {
           type: "string",
-          description: "record/similar: the decision question / statement.",
+          description:
+            "record/similar: the decision question / statement. open: short label that drives " +
+            "the open-decision id; a title with no ASCII letters or digits hashes to an " +
+            "unnamed-<hash> id (the slug grammar is ASCII).",
         },
         chosen: {
           type: "string",
@@ -477,7 +491,10 @@ export const DECISIONS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         prompt: { type: "string", description: "recall: the incoming prompt to match." },
         question: {
           type: "string",
-          description: "open: the full question being parked. Dedup key across open records.",
+          description:
+            "open: the full question being parked. Dedup key across open records: a twin " +
+            "question with an open record refuses; the same wording may be re-parked after " +
+            "the twin resolves or discards.",
         },
         options: {
           type: "array",

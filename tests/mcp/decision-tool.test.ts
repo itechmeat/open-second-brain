@@ -5,6 +5,8 @@ import { join } from "node:path";
 
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
+import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts";
 
 let vault: string;
 
@@ -44,6 +46,10 @@ async function call(
 function payload(response: { result?: unknown }): Record<string, unknown> {
   const result = response.result as { content: ReadonlyArray<{ type: string; text: string }> };
   return JSON.parse(result.content[0]!.text);
+}
+
+function errorMessage(response: { error?: unknown }): string {
+  return (response.error as { message?: string } | undefined)?.message ?? "";
 }
 
 describe("brain_decision tool", () => {
@@ -371,6 +377,56 @@ describe("brain_decision open-decision actions", () => {
       choice: "kafka",
     });
     expect(res.error).toBeDefined();
+  });
+
+  test("resolve and discard answer a below-reach id exactly like an absent one", async () => {
+    const { readFileSync, writeFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const local = new MCPServer({ vault, configPath: null }, { reach: TRANSPORT_REACH.local });
+    await initialize(local);
+    const opened = payload(
+      await call(local, {
+        action: "open",
+        title: "Reach-gated question",
+        question: "May a below-reach caller act on this record?",
+        options: ["yes", "no"],
+      }),
+    );
+    // Reserve the record against remote reads, the dead-ends-reach way.
+    const path = join(vault, "Brain", "decisions", `${opened["id"] as string}.md`);
+    const text = readFileSync(path, "utf8");
+    const close = text.indexOf("\n---\n", "---\n".length);
+    writeFileSync(
+      path,
+      `${text.slice(0, close)}\nvisibility: [${REMOTE_DENY_VISIBILITY_TOKEN}]${text.slice(close)}`,
+      "utf8",
+    );
+
+    // A server with no reach minted is a remote caller: both transitions
+    // answer with the absent id's error, never a reach distinction.
+    const remote = new MCPServer({ vault, configPath: null });
+    await initialize(remote);
+    const gatedResolve = await call(remote, {
+      action: "resolve",
+      id: opened["id"],
+      choice: "yes",
+    });
+    expect(gatedResolve.error).toBeDefined();
+    expect(errorMessage(gatedResolve)).toBe(
+      `brain_decision: no open decision: ${opened["id"] as string}`,
+    );
+    const gatedDiscard = await call(remote, { action: "discard", id: opened["id"], reason: "x" });
+    expect(errorMessage(gatedDiscard)).toBe(
+      `brain_decision: no open decision: ${opened["id"] as string}`,
+    );
+
+    // The record was not touched, and a local caller can still act on it.
+    const listed = payload(await call(local, { action: "list_open", status: "open" }));
+    expect((listed["open_decisions"] as unknown[]).length).toBe(1);
+    const resolved = payload(
+      await call(local, { action: "resolve", id: opened["id"], choice: "yes" }),
+    );
+    expect(resolved["decision"]).toBe("decision-reach-gated-question");
   });
 
   test("no new tool was added: the open actions ride the existing brain_decision tool", async () => {
