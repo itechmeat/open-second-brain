@@ -19,7 +19,12 @@ import lockfile from "proper-lockfile";
 import { readLogDay } from "../../../../src/core/brain/log-jsonl.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../../../src/core/brain/types.ts";
 import { queryDecisionChangeHistory } from "../../../../src/core/brain/decisions/receipts.ts";
-import { listDecisions, showDecision } from "../../../../src/core/brain/decisions/record.ts";
+import {
+  listDecisions,
+  recordDecision,
+  showDecision,
+} from "../../../../src/core/brain/decisions/record.ts";
+import { slugify } from "../../../../src/core/vault.ts";
 import { BRAIN_DECISIONS_REL } from "../../../../src/core/brain/path-constants.ts";
 import { decisionsDir } from "../../../../src/core/brain/paths.ts";
 import {
@@ -449,6 +454,86 @@ describe("resolveOpenDecision", () => {
     expect(showDecision(vault, "pick-db-open-pick-db-2")!.chosen).toBe("undici");
     expect(listDecisions(vault)).toHaveLength(2);
   });
+
+  test("a cap-length title with a foreign page on its slug still resolves, minting at the head-plus-id slug", () => {
+    // A title whose slug fills the cap exactly: the derived candidates'
+    // distinguishing tail must sit INSIDE that cap, or every candidate
+    // slugifies identically and the mint walk never terminates.
+    const longTitle =
+      "Decide the retention window for transient session checkpoints across " +
+      "every managed device and offline co-editor before the next quarterly storage review";
+    expect(slugify(longTitle).length).toBe(64);
+    // A foreign decision page (no provenance of this record) occupies the
+    // bare title slug the mint walk tries first.
+    recordDecision(vault, {
+      title: longTitle,
+      chosen: "keep",
+      assumption: "prior art",
+      reviewDate: "2026-10-01",
+      agent: "tester",
+      now: T0,
+    });
+    const rec = openDecision(
+      vault,
+      baseInput({ title: longTitle, question: "A different long question entirely?" }),
+    );
+    const res = resolveOpenDecision(vault, rec.id, {
+      choice: "bun's fetch",
+      actor: "tester",
+      now: T2,
+    });
+    // The mint landed beside the foreign page, not on it, with the record's
+    // own id riding inside the cap: head slug first, then the open id.
+    const mintedSlug = res.decision.slice("decision-".length);
+    expect(mintedSlug).not.toBe(slugify(longTitle));
+    expect(mintedSlug.length).toBeLessThanOrEqual(64);
+    expect(mintedSlug).toContain("open-");
+    expect(mintedSlug.startsWith("decide-the-retention-window-for-")).toBe(true);
+    const page = showDecision(vault, mintedSlug);
+    expect(page).not.toBeNull();
+    expect(page!.chosen).toBe("bun's fetch");
+    expect(page!.notes).toContain(`[[${rec.id}]]`);
+    const stamped = showOpenDecision(vault, rec.id)!;
+    expect(stamped.status).toBe("resolved");
+    expect(stamped.decision).toBe(`[[${res.decision}]]`);
+  }, 20000);
+
+  test("two same-titled cap-length questions both resolve, each minting its own page", () => {
+    const longTitle =
+      "Decide the retention window for transient session checkpoints across " +
+      "every managed device and offline co-editor before the next quarterly storage review";
+    const first = openDecision(
+      vault,
+      baseInput({ title: longTitle, question: "Question one under the long title?" }),
+    );
+    const second = openDecision(
+      vault,
+      baseInput({
+        title: longTitle,
+        question: "Question two under the long title?",
+        now: T1,
+      }),
+    );
+    const r1 = resolveOpenDecision(vault, first.id, {
+      choice: "bun's fetch",
+      actor: "tester",
+      now: T1,
+    });
+    // The bare title slug is taken by the first record's page, so the
+    // second mints from a candidate carrying its own record id inside the
+    // slug cap - never a refusal, never a hang.
+    const r2 = resolveOpenDecision(vault, second.id, {
+      choice: "undici",
+      actor: "tester",
+      now: T2,
+    });
+    expect(r1.decision).not.toBe(r2.decision);
+    expect(showOpenDecision(vault, first.id)!.status).toBe("resolved");
+    expect(showOpenDecision(vault, second.id)!.status).toBe("resolved");
+    expect(showDecision(vault, r1.decision.slice("decision-".length))!.chosen).toBe("bun's fetch");
+    expect(showDecision(vault, r2.decision.slice("decision-".length))!.chosen).toBe("undici");
+    expect(listDecisions(vault)).toHaveLength(2);
+  }, 20000);
 
   test("a resolve that crashed after minting the page converges on the next attempt", () => {
     const rec = openDecision(vault, baseInput());

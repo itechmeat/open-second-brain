@@ -101,7 +101,14 @@ const KEY_VALUE_RE = new RegExp(`^(${FRONTMATTER_KEY_PATTERN})\\s*:\\s*(.*?)\\s*
 const DASH_ITEM_RE = /^-(?:\s+(.*))?$/;
 const PLAIN_SCALAR_RE = /^[A-Za-z0-9_./-](?:[A-Za-z0-9_./ -]*[A-Za-z0-9_./-])?$/;
 const SLUG_INVALID_RE = /[^a-z0-9]+/g;
-const SLUG_MAX_LEN = 64;
+
+/**
+ * Hard cap on one slug, enforced by {@link slugify} by truncating from the
+ * START of the string. Exported so slug-deriving callers can budget a tail
+ * (a collision suffix, a per-record id) to sit INSIDE the cap instead of
+ * after it, where truncation would silently drop it.
+ */
+export const SLUG_MAX_LEN = 64;
 
 const MEDIA_EXTENSIONS = new Set([
   ".png",

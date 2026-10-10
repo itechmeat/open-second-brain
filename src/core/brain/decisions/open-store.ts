@@ -46,7 +46,7 @@ import { normalizeAgentArgument } from "../../agent-identity.ts";
 import { resolveAgentName } from "../../config.ts";
 import { sanitiseTextField } from "../../redactor.ts";
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
-import { parseFrontmatterText, slugify } from "../../vault.ts";
+import { parseFrontmatterText, SLUG_MAX_LEN, slugify } from "../../vault.ts";
 import { appendLogEvent } from "../log.ts";
 import { BRAIN_DECISIONS_REL } from "../path-constants.ts";
 import { decisionsDir, decisionPath } from "../paths.ts";
@@ -713,23 +713,65 @@ function mintNotes(record: OpenDecisionRecord): string {
   return [record.context, mintProvenance(record)].filter((part) => part !== "").join("\n\n");
 }
 
-/** The title exactly as `recordDecision` will sanitise it, so the
- * occupy-check below tests the slug the mint will actually write. */
+/** The minted page's title exactly as `recordDecision` will sanitise it, so
+ * the occupy-check below tests the slug the mint will actually write. */
 function sanitiseMintTitle(value: string): string {
   return sanitiseTextField(value, { maxLen: TITLE_MAX_LEN, singleLine: true }).trim();
 }
 
 /**
- * A fallback mint title deriving from the open record's OWN id (unique
- * among records, so two parked questions under one title can never fight
- * for one page). `suffix` 0 appends just the id; 2, 3, ... number it
- * further. The base is pre-shaved so the tail survives the field cap and
- * each candidate slug stays distinct.
+ * The slug budget the mint head keeps to: long enough to carry the
+ * question's opening words, short enough that the per-record tail that
+ * follows it - the record's own id, and from the second candidate on a
+ * counter - fits inside {@link SLUG_MAX_LEN} beside it.
  */
-function derivedMintTitle(record: OpenDecisionRecord, suffix: number): string {
-  const tail = suffix === 0 ? ` (${record.id})` : ` (${record.id} ${suffix})`;
-  const base = record.title.slice(0, Math.max(0, TITLE_MAX_LEN - tail.length));
-  return `${base}${tail}`;
+const MINT_HEAD_MAX = 40;
+
+/**
+ * The head every derived mint candidate is built on: the longest
+ * word-prefix of the title whose slug stays within {@link MINT_HEAD_MAX}.
+ * Working word by word keeps the head on a word boundary; a single word
+ * longer than the budget yields an empty head, and the derived candidates
+ * then carry the id alone.
+ */
+function mintHead(title: string): string {
+  let head = "";
+  for (const word of title.split(/\s+/u)) {
+    if (word === "") continue;
+    const next = head === "" ? word : `${head} ${word}`;
+    if (slugify(next).length > MINT_HEAD_MAX) break;
+    head = next;
+  }
+  return head;
+}
+
+/**
+ * A derived mint title: `<head> (<id>)`, numbered `<head> (<id> N)` from
+ * the second candidate on. The id - unique among records - is PRE-SHAVED
+ * so the whole tail sits INSIDE the slug cap: `slugify` truncates from the
+ * START of the slug, so a tail appended past the cap is silently dropped
+ * and every candidate would slugify identically - an occupied slug then
+ * wedges the mint walk forever. With the tail budgeted inside the cap the
+ * numbered candidates keep their counter on the slug too (the id's slice
+ * shrinks as the counter grows), so successive candidates slugify
+ * distinctly and the walk terminates by construction.
+ */
+function derivedMintTitle(sanitisedTitle: string, id: string, suffix: number): string {
+  const counter = suffix === 0 ? "" : ` ${suffix}`;
+  const counterLen = suffix === 0 ? 0 : 1 + String(suffix).length;
+  const head = mintHead(sanitisedTitle);
+  const headLen = head === "" ? 0 : slugify(head).length + 1;
+  let budget = SLUG_MAX_LEN - headLen - counterLen;
+  let effectiveHead = head;
+  if (budget < 1) {
+    // The head leaves no room for even a one-character id slice: the
+    // candidate drops it rather than pushing the tail past the cap.
+    effectiveHead = "";
+    budget = SLUG_MAX_LEN - counterLen;
+  }
+  const tailId = id.slice(0, Math.max(1, budget)).replace(/-+$/u, "");
+  const tail = `(${tailId}${counter})`;
+  return effectiveHead === "" ? tail : `${effectiveHead} ${tail}`;
 }
 
 interface ResolveMintTarget {
@@ -747,23 +789,27 @@ interface ResolveMintTarget {
 
 /**
  * Plan the page one resolve mints. The bare title slug first; if that is
- * occupied by a page that does not reference this record, fall through
- * the per-record derived titles, numbered on collision - the same
- * occupy-check `openDecision` runs for the record filename. Never the
- * bare title alone: `recordDecision` refuses an existing slug, so a
+ * occupied by a page that does not reference this record, fall through the
+ * per-record derived titles (head plus id, numbered on collision) - the
+ * same occupy-check `openDecision` runs for the record filename. The
+ * derived candidates keep their distinguishing tail INSIDE the slug cap
+ * (see {@link derivedMintTitle}), so a title whose slug fills the cap
+ * still walks onto fresh slugs instead of spinning on the same one. Never
+ * the bare title alone: `recordDecision` refuses an existing slug, so a
  * second "Pick DB" question would otherwise be wedged open forever (and
  * a crash between minting and stamping would wedge the first one too).
  */
 function resolveMintTarget(vault: string, record: OpenDecisionRecord): ResolveMintTarget {
   const reference = `[[${record.id}]]`;
-  let title = sanitiseMintTitle(record.title);
+  const sanitised = sanitiseMintTitle(record.title);
+  let title = sanitised;
   let slug = slugify(title);
   let suffix = 0;
   for (;;) {
     const path = decisionPath(vault, slug);
     if (!existsSync(path)) return { title, slug, ours: false };
     if (readFileSync(path, "utf8").includes(reference)) return { title, slug, ours: true };
-    title = sanitiseMintTitle(derivedMintTitle(record, suffix));
+    title = sanitiseMintTitle(derivedMintTitle(sanitised, record.id, suffix));
     slug = slugify(title);
     suffix = suffix === 0 ? 2 : suffix + 1;
   }
