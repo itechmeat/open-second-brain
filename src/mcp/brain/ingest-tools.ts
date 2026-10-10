@@ -46,6 +46,7 @@ import {
 import { nextCommandField } from "../../core/brain/next-step.ts";
 import { enforceCountGuard, readCountGuardArgs, wrapToolErrors } from "./shared.ts";
 import type { IngestSourceResult } from "../../core/brain/ingest/ingest.ts";
+import { refuseAgentClaim } from "./agent-claim.ts";
 
 const TOOL = "brain_ingest_source";
 const SEARCH_TOOL = "brain_search_by_source";
@@ -82,10 +83,14 @@ async function toolBrainIngestSource(
   // shared parser building a provenance out of an argument this schema never
   // declared and this handler never read.
   const parsed = parseExtractionIntakeArgs(args, TOOL, "absent");
+  // The transport-minted identity wins over the config fallback, and a
+  // token caller claiming another agent is refused outright
+  // (write-side-trust, Task 7). resolveAgentName stays the stdio/CLI
+  // fallback.
+  const claimedAgent = parsed.agent && parsed.agent.trim().length > 0 ? parsed.agent : undefined;
+  refuseAgentClaim(ctx.requestIdentity, claimedAgent ?? null, TOOL);
   const agent =
-    parsed.agent && parsed.agent.trim().length > 0
-      ? parsed.agent
-      : resolveAgentName(ctx.configPath ?? undefined);
+    claimedAgent ?? ctx.requestIdentity?.agent ?? resolveAgentName(ctx.configPath ?? undefined);
 
   return wrapToolErrors(TOOL, [IntakeValidationError], async () => {
     let res: IngestSourceResult;
@@ -98,6 +103,9 @@ async function toolBrainIngestSource(
           now: new Date(),
           // A page the caller may not read at its reach answers as an absent one.
           readable: readableAtContextReach(ctx),
+          // The review disposition answers for the credential-minted
+          // subject, never for the caller-named agent.
+          ...(ctx.requestIdentity !== undefined ? { subject: ctx.requestIdentity } : {}),
           ...(planId !== undefined ? { planId } : {}),
           ...(preExtract ? { preExtract: true } : {}),
         },

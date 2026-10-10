@@ -85,6 +85,7 @@ import { NOTE_WRITE_OP, recordNoteWrite } from "./write-record.ts";
 import { ROUTE_STAGE, timeStageSync } from "../../route-scope.ts";
 import { REVIEW_LANE } from "../write-gate.ts";
 import { resolveWriteDisposition, stageForReview } from "../pending/pending-lanes.ts";
+import { substrateSubject, type WriteSubject } from "../write-disposition.ts";
 
 /** Machine-readable reason a {@link createNote} call was refused. */
 export type CreateNoteErrorCode =
@@ -164,6 +165,17 @@ export interface CreateNoteInput {
    * is, not the one the machine default happens to name.
    */
   readonly configPath?: string;
+  /**
+   * The credential-minted subject of the caller (write-side-trust, Task
+   * 7), when the transport resolved one. When present it WINS over the
+   * config resolution in both gates this primitive consults - the
+   * owner-write gate's resolved identity and the review disposition's
+   * permission subject - so a token whose agent a document denies is
+   * refused, and the decision ledger names the token's agent, whatever
+   * the process config says. Absent (stdio, the CLI) keeps the
+   * config-derived subject.
+   */
+  readonly subject?: WriteSubject;
 }
 
 /** What a {@link createNote} call actually did. `staged` means the review gate parked the bytes in the queue. */
@@ -616,13 +628,17 @@ export function noteOwnerGateVerdict(
   vault: string,
   frontmatter: FrontmatterMap | undefined,
   configPath: string | undefined,
+  subject?: WriteSubject,
 ): NoteOwnerGateOutcome {
   const claim = frontmatter?.[NOTE_OWNER_FRONTMATTER_KEY];
   if (claim === undefined || claim === null) {
     return { refused: false, watch: false, named: "", resolvedIdentity: "" };
   }
   const named = typeof claim === "string" ? claim : String(claim);
-  const resolved = resolveAgentName(configPath);
+  // The credential-minted subject wins over the config resolution
+  // (write-side-trust, Task 7): a token's owner gate answers for the
+  // token's agent, never for whoever the process config names.
+  const resolved = subject?.agent ?? resolveAgentName(configPath);
   const gateMode = loadIntegrityConfigSafe(vault).owner_scope_writes;
   const { document } = loadPermissionsDocument(vault);
   const verdict = refuseCrossOwnerWrite({
@@ -630,7 +646,7 @@ export function noteOwnerGateVerdict(
     resolvedIdentity: resolved,
     gateMode,
     document,
-    subject: { agent: resolved, via: "config" },
+    subject: substrateSubject(subject ?? { agent: resolved, via: "config" }),
   });
   if (verdict.refused)
     return {
@@ -659,11 +675,18 @@ export function gateNoteOwnerFrontmatter(
   relPath: string,
   frontmatter: FrontmatterMap | undefined,
   configPath: string | undefined,
+  subject?: WriteSubject,
 ): NoteOwnerGateResult {
-  const outcome = noteOwnerGateVerdict(vault, frontmatter, configPath);
+  const outcome = noteOwnerGateVerdict(vault, frontmatter, configPath, subject);
   if (outcome.refused) return { refused: true, reason: outcome.reason };
   if (outcome.watch) {
-    logWatchedNoteOwnerWrite(vault, relPath, outcome.named, outcome.resolvedIdentity);
+    logWatchedNoteOwnerWrite(
+      vault,
+      relPath,
+      outcome.named,
+      outcome.resolvedIdentity,
+      subject?.via ?? "config",
+    );
   }
   return { refused: false };
 }
@@ -683,6 +706,7 @@ export function logWatchedNoteOwnerWrite(
   target: string,
   named: string,
   resolved: string,
+  via: WriteSubject["via"] = "config",
 ): void {
   const token = normalizeAgentScope(named);
   const identity = normalizeAgentScope(normalizeAgentArgument(resolved) ?? undefined);
@@ -690,7 +714,7 @@ export function logWatchedNoteOwnerWrite(
   appendDecisionLedger(vault, {
     ts: new Date().toISOString(),
     actor: resolved,
-    via: "config",
+    via,
     action: "owner_write",
     target,
     verdict: GATE_MODE.warn,
@@ -721,7 +745,13 @@ export function createNote(vault: string, input: CreateNoteInput): CreateNoteRes
   // same whether the target is free, occupied or already staged-for-
   // review, so a caller probing foreign owners learns nothing about which
   // paths are real.
-  const ownerGate = gateNoteOwnerFrontmatter(vault, relPath, callerFrontmatter, input.configPath);
+  const ownerGate = gateNoteOwnerFrontmatter(
+    vault,
+    relPath,
+    callerFrontmatter,
+    input.configPath,
+    input.subject,
+  );
   if (ownerGate.refused) {
     throw new CreateNoteError(
       "owner_write_refused",
@@ -775,7 +805,10 @@ export function createNote(vault: string, input: CreateNoteInput): CreateNoteRes
   const disposition = resolveWriteDisposition(
     vault,
     REVIEW_LANE.notes,
-    { agent: resolveAgentName(input.configPath), via: "config" },
+    // The credential-minted subject wins over the config resolution
+    // (write-side-trust, Task 7); resolveAgentName stays the stdio and
+    // CLI fallback.
+    input.subject ?? { agent: resolveAgentName(input.configPath), via: "config" },
     { target: relPath },
   );
   if (disposition.verdict === "stage") {

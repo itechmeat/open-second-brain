@@ -57,6 +57,7 @@ import {
 import { appendBrainNote, type AppendBrainNoteInput } from "./note.ts";
 import { ORIGIN_CHANNEL_FIELD } from "../origin-channel.ts";
 import { preferencePath, validateSlug } from "./paths.ts";
+import { type WriteSubject } from "./write-disposition.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { BRAIN_APPLY_RESULT } from "./types.ts";
 import { ROUTE_STAGE, timeStageSync } from "../route-scope.ts";
@@ -408,6 +409,17 @@ export interface ApplyWriteBatchOptions {
    */
   readonly configPath?: string;
   /**
+   * The credential-minted subject of the caller (write-side-trust, Task
+   * 7), when the transport resolved one. It WINS over the config
+   * resolution in every gate the batch consults: the owner-write gate's
+   * resolved identity, the review disposition's subject on a staged
+   * create, and the deny-only document consult every mutation runs
+   * (write-side trust: a denied agent cannot rewrite or append to a note
+   * by updating what an allowed create once published). Absent (stdio,
+   * the CLI) keeps the config-derived subject.
+   */
+  readonly subject?: WriteSubject;
+  /**
    * Client-supplied request ID (t_b34439d9). Supplied, the batch consults
    * the idempotency ledger BEFORE any validation or write: the same ID with
    * the same semantic payload returns the retained original receipt marked
@@ -670,7 +682,7 @@ function projectCreateNote(
   // consults the same gate again at commit - that arm covers the
   // single-note callers, and this one exists so a batch never leaves
   // earlier operations committed behind a refused claim.
-  const ownerGate = noteOwnerGateVerdict(vault, op.frontmatter, opts.configPath);
+  const ownerGate = noteOwnerGateVerdict(vault, op.frontmatter, opts.configPath, opts.subject);
   if (ownerGate.refused) {
     throw new WriteBatchError(
       "owner_write_refused",
@@ -697,6 +709,7 @@ function projectCreateNote(
           ...(op.frontmatter !== undefined ? { frontmatter: op.frontmatter } : {}),
           ...(op.content !== undefined ? { content: op.content } : {}),
           ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
+          ...(opts.subject !== undefined ? { subject: opts.subject } : {}),
         });
         if (res.outcome === "staged") {
           // The review gate staged the create (write-side trust, Task 9).
@@ -793,7 +806,7 @@ function projectUpdateNote(
   // projection must stay row-free so a later operation's refusal never
   // leaves a row for a write that never happened, and a byte-identical
   // skip is such a write too.
-  const ownerGate = noteOwnerGateVerdict(vault, op.frontmatter, opts.configPath);
+  const ownerGate = noteOwnerGateVerdict(vault, op.frontmatter, opts.configPath, opts.subject);
   if (ownerGate.refused) {
     throw new WriteBatchError(
       "owner_write_refused",
@@ -859,6 +872,7 @@ function projectUpdateNote(
           target.relPath,
           ownerGate.named,
           ownerGate.resolvedIdentity,
+          opts.subject?.via ?? "config",
         );
       }
       // The flag is the write's own verdict, not a hardcoded success: a

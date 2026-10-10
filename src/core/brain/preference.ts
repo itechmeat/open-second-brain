@@ -65,6 +65,7 @@ import { loadIntegrityConfigForWrite, loadIntegrityConfigSafe } from "./policy.t
 import { loadPermissionsDocument } from "./permissions/document.ts";
 import { appendDecisionLedger } from "./permissions/ledger.ts";
 import { OWNER_SCOPE_WRITES_KEY, refuseCrossOwnerWrite } from "./trust/owner-write-gate.ts";
+import { substrateSubject, type WriteSubject } from "./write-disposition.ts";
 import { asProvenanceLevel, type ProvenanceLevel } from "./provenance/provenance.ts";
 import { sanitisePrinciple } from "./text/sanitize-principle.ts";
 import {
@@ -306,6 +307,16 @@ export interface WritePreferenceOptions {
    * the stamped owner is the identity that surface answers under.
    */
   readonly configPath?: string;
+  /**
+   * The credential-minted subject of the caller (write-side-trust, Task
+   * 7), when the transport resolved one. When present it WINS over the
+   * config resolution everywhere this writer resolves an identity: the
+   * owner-write gate's resolved identity, the subject the permissions
+   * document is consulted under, and the owner stamped onto a newly
+   * created preference. Absent (stdio, the CLI) keeps the
+   * config-derived identity.
+   */
+  readonly subject?: WriteSubject;
 }
 
 export interface ParsePreferenceOptions {
@@ -408,7 +419,7 @@ export function writePreference(
   // idempotency hash so a write that changes the owner cannot dedupe
   // against one that did not - the hash already folds `owner` in for
   // exactly that reason.
-  const owned = withResolvedOwner(vault, path, input, options.configPath);
+  const owned = withResolvedOwner(vault, path, input, options.configPath, options.subject);
 
   // Idempotency consult (C1): a repeat with the same key + same payload
   // dedupes; the same key + a different payload throws before any write.
@@ -523,8 +534,9 @@ function withResolvedOwner(
   path: string,
   input: WritePreferenceInput,
   configPath: string | undefined,
+  subject?: WriteSubject,
 ): WritePreferenceInput {
-  const owner = resolvedOwnerFor(vault, path, input.owner, configPath);
+  const owner = resolvedOwnerFor(vault, path, input.owner, configPath, subject);
   return owner === undefined ? input : { ...input, owner };
 }
 
@@ -549,9 +561,10 @@ export function resolvedOwnerFor(
   path: string,
   explicit: string | undefined,
   configPath: string | undefined,
+  subject?: WriteSubject,
 ): string | undefined {
   const given = explicit?.trim();
-  if (given) return gateNamedOwner(vault, path, given, configPath);
+  if (given) return gateNamedOwner(vault, path, given, configPath, subject);
   let mode: string;
   try {
     mode = loadIntegrityConfigForWrite(vault).owner_scope_delivery;
@@ -568,7 +581,7 @@ export function resolvedOwnerFor(
   }
   if (mode === GATE_MODE.off) return undefined;
   if (existsSync(path)) return carriedOwner(path).owner;
-  const agent = resolveAgentName(configPath);
+  const agent = subject?.agent ?? resolveAgentName(configPath);
   const stamp = ownerStampFor(agent);
   if (stamp === null) {
     throw new Error(
@@ -620,8 +633,12 @@ function gateNamedOwner(
   path: string,
   given: string,
   configPath: string | undefined,
+  subject?: WriteSubject,
 ): string {
-  const resolved = resolveAgentName(configPath);
+  // The credential-minted subject wins over the config resolution
+  // (write-side-trust, Task 7): a token's owner gate answers for the
+  // token's agent, never for whoever the process config names.
+  const resolved = subject?.agent ?? resolveAgentName(configPath);
   const gateMode = loadIntegrityConfigSafe(vault).owner_scope_writes;
   const { document } = loadPermissionsDocument(vault);
   const verdict = refuseCrossOwnerWrite({
@@ -629,12 +646,14 @@ function gateNamedOwner(
     resolvedIdentity: resolved,
     gateMode,
     document,
-    subject: { agent: resolved, via: "config" },
+    subject: substrateSubject(subject ?? { agent: resolved, via: "config" }),
   });
   if (verdict.refused) {
     throw new Error(`preference write at ${relative(vault, path)}: ${verdict.reason}`);
   }
-  if (gateMode === GATE_MODE.warn) logWatchedOwnerWrite(vault, path, given, resolved);
+  if (gateMode === GATE_MODE.warn) {
+    logWatchedOwnerWrite(vault, path, given, resolved, subject?.via ?? "config");
+  }
   return given;
 }
 
@@ -644,14 +663,20 @@ function gateNamedOwner(
  * one case `fail` would not refuse is the one case there is nothing to
  * watch).
  */
-function logWatchedOwnerWrite(vault: string, path: string, given: string, resolved: string): void {
+function logWatchedOwnerWrite(
+  vault: string,
+  path: string,
+  given: string,
+  resolved: string,
+  via: WriteSubject["via"] = "config",
+): void {
   const named = normalizeAgentScope(given);
   const identity = normalizeAgentScope(normalizeAgentArgument(resolved) ?? undefined);
   if (named === null || identity === null || named === identity) return;
   appendDecisionLedger(vault, {
     ts: new Date().toISOString(),
     actor: resolved,
-    via: "config",
+    via,
     action: "owner_write",
     target: relative(vault, path),
     verdict: GATE_MODE.warn,

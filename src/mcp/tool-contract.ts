@@ -126,6 +126,21 @@ export interface RuleScopeSources {
   readonly harness: HarnessId | null;
 }
 
+/**
+ * The per-request identity a transport resolved from a credential
+ * (write-side-trust, Task 7). The HTTP transport mints it from the
+ * presented bearer token or shared key; stdio and the CLI bridge pass
+ * none and keep the config-derived identity.
+ *
+ * It lives on this leaf module because the context carries it and every
+ * writer tool reads it off the context; `./server.ts` re-exports the
+ * type so the transport-facing spelling does not move.
+ */
+export interface RequestIdentity {
+  readonly agent: string;
+  readonly via: "token" | "shared-key";
+}
+
 export interface ServerContext {
   readonly vault: string;
   readonly configPath: string | null;
@@ -167,6 +182,20 @@ export interface ServerContext {
    * Optional so a manually-built context stays valid and unscoped.
    */
   readonly agentName?: string;
+  /**
+   * The credential-minted identity of the ONE request this context was
+   * built for (write-side-trust, Task 7), when the transport resolved
+   * one. `undefined` for stdio, the CLI bridge and every hand-built
+   * context: there, `agentName`'s config resolution is the caller's
+   * identity and nothing about the request contradicts it.
+   *
+   * A property of the per-request context, never of the server: one
+   * MCPServer serves concurrent HTTP requests, and this is what makes a
+   * token's write-side decisions - the permission subjects, the
+   * owner-write gate, the agent a signal or preference is stamped under
+   * - answer for the token's agent instead of the process config's.
+   */
+  readonly requestIdentity?: RequestIdentity;
   /**
    * Where the scoped standing rules look for their scope. Optional so a
    * manually-built context stays valid; absent resolves no project and

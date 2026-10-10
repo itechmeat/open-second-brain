@@ -49,6 +49,7 @@ import { PROGRESS_REASON, type ProgressSink } from "../core/brain/progress.ts";
 import { listResources, listResourceTemplates, readResource } from "./resources.ts";
 import { buildToolTable, findTool } from "./tools.ts";
 import type {
+  RequestIdentity,
   RuleScopeSources,
   ServerContext,
   ToolCapabilityReport,
@@ -153,20 +154,12 @@ export interface JsonRpcResponse {
 
 /**
  * The per-request identity a transport resolved from a credential
- * (write-side-trust, Task 7). The HTTP transport mints it from the
- * presented bearer token or shared key; stdio and the CLI bridge pass
- * none and keep the config-derived identity.
- *
- * It threads as a PARAMETER from `handleRequest` through
- * `handleToolsCall` and `invokeToolHandler` into `contextFor`, never as
- * instance state: one MCPServer serves concurrent HTTP requests, and an
- * identity parked on `this` would let two callers read each other's
- * scope.
+ * (write-side-trust, Task 7). Declared on the tool-contract leaf beside
+ * {@link ServerContext.requestIdentity} - the context carries it and
+ * every writer tool reads it there - and re-exported here so the
+ * transport-facing spelling does not move.
  */
-export interface RequestIdentity {
-  readonly agent: string;
-  readonly via: "token" | "shared-key";
-}
+export type { RequestIdentity };
 
 /**
  * The `error` member of a JSON-RPC answer. `data` is always present and
@@ -246,7 +239,9 @@ export class MCPServer {
    * resolved from the request's credential; when it is absent (stdio,
    * the CLI bridge, a probe) the context falls back to the process
    * config identity exactly as the plain getter always did - including
-   * deferring `resolveAgentName`'s refusal to the point of use.
+   * deferring `resolveAgentName`'s refusal to the point of use. The
+   * identity rides the context as `requestIdentity`, so a writer tool
+   * can answer for the credential's agent rather than the config's.
    */
   private contextFor(identity?: RequestIdentity): ServerContext {
     const configPath = this.configPath ?? undefined;
@@ -258,6 +253,10 @@ export class MCPServer {
       artifactStore: this.artifactStore,
       reach: this.reach,
       ruleScope: this.ruleScope,
+      // Present only when a transport minted one: the two nulls (no
+      // credential, no identity) stay spelled as absence, and a
+      // hand-built context keeps its validity.
+      ...(identity !== undefined ? { requestIdentity: identity } : {}),
       // Owner-scope isolation (context-integrity-gates, Unit A): the
       // only source of identity for `brain_context`, which takes no
       // arguments. A transport-minted credential wins; otherwise the

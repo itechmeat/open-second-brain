@@ -67,6 +67,7 @@ import {
 } from "./pre-extract.ts";
 import { REVIEW_LANE } from "../write-gate.ts";
 import { resolveWriteDisposition, stageForReview } from "../pending/pending-lanes.ts";
+import type { WriteSubject } from "../write-disposition.ts";
 
 /** Frontmatter `kind:` marker of an ingested source summary page. */
 export const BRAIN_SOURCE_KIND = "brain-source";
@@ -114,6 +115,15 @@ export interface IngestSourceOptions {
    * nothing.
    */
   readonly readable?: (rel: string) => boolean;
+  /**
+   * The credential-minted subject of the caller (write-side-trust, Task
+   * 7), when the transport resolved one. It WINS over `agent` as the
+   * permission subject the review disposition consults - a caller-supplied
+   * agent is content attribution, never the identity a document's rules
+   * answer. Absent (stdio, the CLI) the disposition falls back to
+   * `agent`, then to the config identity.
+   */
+  readonly subject?: WriteSubject;
 }
 
 export interface IngestSourceResult {
@@ -228,7 +238,7 @@ export function ingestSource(
   const disposition = resolveWriteDisposition(
     vault,
     REVIEW_LANE.ingest,
-    opts.agent !== undefined ? { agent: opts.agent, via: "config" } : undefined,
+    opts.subject ?? (opts.agent !== undefined ? { agent: opts.agent, via: "config" } : undefined),
     { target: summaryPath, ...(opts.now !== undefined ? { now: opts.now } : {}) },
   );
   const preExtract =

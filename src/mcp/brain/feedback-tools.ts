@@ -79,12 +79,15 @@ import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
 import {
   PENDING_STAGED_DIAGNOSTIC_CODE,
   WRITE_REFUSAL_CODES,
+  WriteRefusedError,
 } from "../../core/brain/pending/pending-lanes.ts";
 import { nextCommandField, requireNextStep } from "../../core/brain/next-step.ts";
 import { loadPermissionsDocument } from "../../core/brain/permissions/document.ts";
 import { resolvePermission } from "../../core/brain/permissions/resolve.ts";
+import { substrateSubject } from "../../core/brain/write-disposition.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
+import { refuseAgentClaim } from "./agent-claim.ts";
 import { codeForError } from "../tool-error-codes.ts";
 import {
   emitObservedUse,
@@ -110,6 +113,22 @@ import { readableAtContextReach, readableAtContextReachOrUndefined } from "./rea
 const FORCE_CONFIRMED_EXIT = requireNextStep(
   WRITE_REFUSAL_CODES.forceConfirmedRequiresAllow,
 ).nextCommand;
+
+/**
+ * The MCP mapping of a document-deny refusal (write-side trust, Task
+ * 12): named code, the rule that decided, the principal it named, and
+ * the operator exit - the write never landed, so the refusal is the
+ * whole answer. Shared by the writers on this surface that let the
+ * disposition layer refuse through a typed error.
+ */
+function writeRefusedToMcp(tool: string, err: WriteRefusedError): MCPError {
+  return new MCPError(INVALID_PARAMS, `${tool}: ${err.message}`, {
+    code: err.code,
+    rule: err.rule,
+    agent: err.agent,
+    next_command: err.nextCommand,
+  });
+}
 
 /**
  * Build the slug used in the signal / preference filename. We never let
@@ -145,12 +164,17 @@ async function toolBrainFeedback(
   } = validated.value;
   const forceConfirmed = force_confirmed ?? false;
 
-  // Agent-fallback stays MCP-side: validator just hands back the user-
-  // supplied value (or undefined); the live path resolves via config
-  // when absent.
-  const agent =
-    normalizeAgentArgument(validated.value.agent ?? null) ??
-    resolveAgentName(ctx.configPath ?? undefined);
+  // Identity, resolved once (write-side trust, Task 7). The
+  // transport-minted identity WINS over the config resolution, and under
+  // a token a caller-supplied `agent` that claims somebody else is
+  // refused outright; resolveAgentName stays the stdio and CLI fallback.
+  const identity = ctx.requestIdentity;
+  const claimedAgent = normalizeAgentArgument(validated.value.agent ?? null);
+  refuseAgentClaim(identity, claimedAgent, "brain_feedback");
+  const agent = claimedAgent ?? identity?.agent ?? resolveAgentName(ctx.configPath ?? undefined);
+  // The subject the write-side gates answer for: the credential-minted
+  // one when the transport minted it, the config-shaped one otherwise.
+  const subject = identity ?? { agent, via: "config" as const };
 
   // The force-confirmed rule (write-side trust, Task 12). `force_confirmed`
   // skips the dream trial window - the one write whose whole point is to
@@ -160,11 +184,13 @@ async function toolBrainFeedback(
   // write. With no document this block never runs, so the document-absent
   // behavior is byte-identically the pre-Task-12 one. The verdict consult
   // is the substrate resolver directly - no disposition row - because the
-  // write it guards has its own gate; this check only polices the bypass.
+  // write it guards has its own gate; this check only polices the bypass,
+  // and it answers for the credential-minted subject, never for a name
+  // the request argued for.
   if (forceConfirmed) {
     const { document } = loadPermissionsDocument(ctx.vault);
     if (document !== null) {
-      const decision = resolvePermission(document, { agent, via: "config" }, "write");
+      const decision = resolvePermission(document, substrateSubject(subject), "write");
       if (decision.verdict !== "allow") {
         throw new MCPError(
           INVALID_PARAMS,
@@ -172,13 +198,13 @@ async function toolBrainFeedback(
             "force_confirmed skips the dream trial window, which the permissions " +
             `document reserves for allow-verdict callers. Rule ${decision.source} ` +
             `(${decision.reason}) decided ${decision.verdict} for agent ` +
-            `${JSON.stringify(agent)}. The operator can review the policy: ` +
+            `${JSON.stringify(subject.agent)}. The operator can review the policy: ` +
             FORCE_CONFIRMED_EXIT,
           {
             code: WRITE_REFUSAL_CODES.forceConfirmedRequiresAllow,
             rule: decision.source,
             verdict: decision.verdict,
-            agent,
+            agent: subject.agent,
           },
         );
       }
@@ -229,7 +255,10 @@ async function toolBrainFeedback(
   // 1. Always write the signal to inbox/. Mirrors the CLI handler so the
   //    audit trail in `Brain/log/` and `inbox/processed/` stays consistent
   //    across CLI and MCP entry points. `--force-confirmed` ADDITIONALLY
-  //    creates a confirmed pref below.
+  //    creates a confirmed pref below. The transport-minted identity
+  //    rides to the review gate as its subject (write-side-trust, Task
+  //    7): a document that denies the token's agent refuses this write
+  //    before any byte exists.
   const signalInput = {
     topic,
     signal: signalRaw as BrainSignalSign,
@@ -247,7 +276,22 @@ async function toolBrainFeedback(
     ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
     ...(expires !== undefined ? { expiration_date: expires } : {}),
   };
-  const sigResult = writeSignal(ctx.vault, signalInput, writeOpts);
+  let sigResult;
+  try {
+    sigResult = writeSignal(ctx.vault, signalInput, {
+      ...writeOpts,
+      // The review disposition always answers for THIS tool's resolved
+      // identity: the credential-minted subject when the transport minted
+      // one, the config-shaped subject this tool resolved (config path
+      // honored, caller claim refused) otherwise. Leaving the subject off
+      // would make the disposition re-resolve the agent without this
+      // context's config path and answer for a stranger.
+      subject,
+    });
+  } catch (err) {
+    if (err instanceof WriteRefusedError) throw writeRefusedToMcp("brain_feedback", err);
+    throw err;
+  }
   // A deduped signal means this whole feedback call is a retry of one
   // already recorded — skip the log event, the shared-namespace mirror,
   // and any force-confirmed pref so the retry stays a true no-op.
@@ -353,8 +397,14 @@ async function toolBrainFeedback(
         // Ownership is resolved by the writer, never echoed from `agent`:
         // that argument is caller-supplied, and a caller must not be able to
         // name whose memory this becomes. The server's config path is handed
-        // over rather than a resolved name for the same reason.
-        ctx.configPath !== null ? { configPath: ctx.configPath } : {},
+        // over rather than a resolved name for the same reason, and the
+        // transport-minted identity rides as the credential-minted subject
+        // (write-side-trust, Task 7) so the gate and the stamp answer for
+        // the token's agent.
+        {
+          ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
+          ...(identity !== undefined ? { subject: identity } : {}),
+        },
       ),
     );
     try {
@@ -889,7 +939,13 @@ async function toolBrainApplyEvidence(
     );
   }
 
-  const agent = normalizeAgentArgument(agentArg) ?? resolveAgentName(ctx.configPath ?? undefined);
+  // The evidence row names who applied the rule; a token caller cannot
+  // file that attribution under another agent's name.
+  refuseAgentClaim(ctx.requestIdentity, agentArg, "brain_apply_evidence");
+  const agent =
+    normalizeAgentArgument(agentArg) ??
+    ctx.requestIdentity?.agent ??
+    resolveAgentName(ctx.configPath ?? undefined);
 
   const input: AppendApplyEvidenceInput = {
     pref_id: prefId,
@@ -998,6 +1054,9 @@ async function toolBrainNote(
 ): Promise<Record<string, unknown>> {
   const rawText = coerceStr(args, "text", true)!;
   const agentArg = coerceStr(args, "agent", false);
+  // A token caller's log line is attributed to the token's agent; a
+  // claim on somebody else's name is refused before anything is written.
+  refuseAgentClaim(ctx.requestIdentity, agentArg, "brain_note");
 
   let res;
   try {
@@ -1044,6 +1103,9 @@ async function toolBrainExpire(
   const id = coerceStr(args, "id", true)!;
   const expires = coerceStr(args, "expires", true)!;
   const agent = coerceStr(args, "agent", false);
+  // The expiration's audit stamp names who set it; a token caller cannot
+  // sign another agent's name to it.
+  refuseAgentClaim(ctx.requestIdentity, agent, "brain_expire");
   // A record the caller may not read is refused as an unknown id, before
   // anything is written.
   const readable = readableAtContextReachOrUndefined(ctx);

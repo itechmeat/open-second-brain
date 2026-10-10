@@ -34,6 +34,7 @@ import {
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { noteWriteResult, parseFrontmatterArg, writeBatchErrorToMcp } from "./notes-tools.ts";
+import { refuseAgentClaim } from "./agent-claim.ts";
 import { readableAtContextReach } from "./reach-readable.ts";
 import { vaultRelativeSafe } from "./shared.ts";
 import { unknownOperationError } from "../coerce.ts";
@@ -236,16 +237,30 @@ async function toolBrainWriteBatch(
   if (!Array.isArray(rawOps)) {
     throw new MCPError(INVALID_PARAMS, "brain_write_batch: 'operations' must be an array");
   }
-  const resolveAgent = (override?: string): string =>
-    normalizeAgentArgument(override ?? null) ?? resolveAgentName(ctx.configPath ?? undefined);
+  // The log-writing ops stamp their agent attribution from the caller's
+  // override, then the config. A token caller claims neither: the
+  // mismatch is refused, and the identity fills the absent override
+  // (write-side-trust, Task 7).
+  const resolveAgent = (override?: string): string => {
+    refuseAgentClaim(ctx.requestIdentity, override ?? null, "brain_write_batch");
+    return (
+      normalizeAgentArgument(override ?? null) ??
+      ctx.requestIdentity?.agent ??
+      resolveAgentName(ctx.configPath ?? undefined)
+    );
+  };
   const operations = rawOps.map((raw, index) => mapOperation(raw, index, resolveAgent));
   const requestId = optionalStr(args, "request_id");
 
   // An update or append whose target the caller may not read at its
-  // reach is refused exactly as a missing one.
+  // reach is refused exactly as a missing one. The transport-minted
+  // identity rides as the batch's subject (write-side-trust, Task 7),
+  // covering the owner gate and the deny-only document consult on the
+  // update and append ops.
   const baseOpts = {
     readable: readableAtContextReach(ctx),
     ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
+    ...(ctx.requestIdentity !== undefined ? { subject: ctx.requestIdentity } : {}),
   };
   let batch: WriteBatchResult;
   // Set exactly when a request ID was supplied: the core's receipted

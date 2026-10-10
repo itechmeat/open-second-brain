@@ -298,6 +298,10 @@ async function toolBrainCreateNote(
       // is the one THIS config declares - not the one a machine-default
       // discovery would find (who-wrote-what, Task A).
       ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
+      // The transport-minted identity wins as the permission subject and
+      // the owner gate's resolved identity (write-side-trust, Task 7): a
+      // token's create answers for the token's agent.
+      ...(ctx.requestIdentity !== undefined ? { subject: ctx.requestIdentity } : {}),
     });
     // `outcome` is the discriminant; `created` is the boolean this tool
     // has always returned and stays in lockstep with it, so a skip can
@@ -497,10 +501,14 @@ function runSingleWrite<K extends SingleNoteOperation["kind"]>(
   let batch;
   try {
     // A target the caller may not read at its reach is refused exactly
-    // as a missing one.
+    // as a missing one. The transport-minted identity rides along as the
+    // batch's subject (write-side-trust, Task 7): a token's update or
+    // append answers for the token's agent, in the owner gate and the
+    // deny-only document consult alike.
     batch = applyWriteBatch(ctx.vault, [op], {
       readable: readableAtContextReach(ctx),
       ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
+      ...(ctx.requestIdentity !== undefined ? { subject: ctx.requestIdentity } : {}),
     });
   } catch (err) {
     throw writeBatchErrorToMcp(err, tool);
