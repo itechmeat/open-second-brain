@@ -95,13 +95,22 @@ describe("brain_session_summary tool", () => {
     expect(result.content[0]!.text).toBe(JSON.stringify({ found: false }, null, 2));
   });
 
-  test("get after two differing writes stays quiet (revisions, not divergence)", async () => {
-    // The tool's two writes land at distinct instants, so the later digest
-    // wins deterministically: a revision stream, not a conflict (v1.78.0
-    // review round). The divergent envelope has its own test below, seeded
-    // at one instant.
-    await call({ operation: "write", session_id: "dv", decisions: ["first take"] });
-    await call({ operation: "write", session_id: "dv", decisions: ["second take"] });
+  test("get after sequential revisions stays quiet (revisions, not divergence)", async () => {
+    // Two differing writes at distinct instants are a revision stream - the
+    // later digest wins deterministically - not a conflict (v1.78.0 review
+    // round). The instants are seeded explicitly because the tool's write
+    // path stamps its own clock, and two rapid writes can land inside one
+    // millisecond, which is the divergent shape the next test pins.
+    appendSessionSummary(vault, {
+      sessionId: "dv",
+      decisions: ["first take"],
+      createdAt: "2026-06-14T09:00:00.000Z",
+    });
+    appendSessionSummary(vault, {
+      sessionId: "dv",
+      decisions: ["second take"],
+      createdAt: "2026-06-14T11:00:00.000Z",
+    });
 
     const got = payload(await call({ operation: "get", session_id: "dv" }));
     expect(got["found"]).toBe(true);
