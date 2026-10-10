@@ -388,7 +388,9 @@ function runCheck(input: CheckInput): number {
  * (the name now exists, so nothing is minted), so it prints here, exactly
  * once, on stdout, beside the failure notice and the retry and revoke
  * paths - returning or rethrowing without it would orphan a live
- * credential behind a failed run.
+ * credential behind a failed run. The retry and revoke tail is spelled
+ * here, on the write itself, so the forward-pointer rail keeps counting
+ * the two invocation literals this receipt carries.
  */
 function printOrphanedTokenMaterial(input: {
   readonly target: string;
@@ -405,7 +407,9 @@ function printOrphanedTokenMaterial(input: {
       `  ${input.material}\n` +
       `  ${SHOWN_ONCE_NOTICE}\n` +
       `  ${HTTP_BOUNDARY_NOTICE}\n` +
-      `  ${input.failure}\n`,
+      `  ${input.failure}\n` +
+      `  Re-run o2b bootstrap --target ${input.target} to apply the registration alone, ` +
+      `or revoke with: o2b mcp token revoke --name ${input.name}\n`,
   );
 }
 
@@ -526,9 +530,8 @@ function runProvision(input: ProvisionInput): number {
         // live credential behind a failed registration - so it prints
         // here, exactly once, beside the failure and the retry path.
         rescueMaterial(
-          `The registration half failed (the error above); the token is live in the store. ` +
-            `Fix the cause and re-run o2b bootstrap --target ${target} to apply the ` +
-            `registration alone, or revoke with: o2b mcp token revoke --name ${name}`,
+          "The registration half failed (the error above); the token is live in the store. " +
+            "Fix the cause, then take the retry or revoke path below.",
         );
         return e.kind === "user-modified-block"
           ? BOOTSTRAP_EXIT.userModifiedBlock
@@ -539,9 +542,8 @@ function runProvision(input: ProvisionInput): number {
       // apply above, so the material prints here too - before the usage
       // refusal or the rethrow.
       rescueMaterial(
-        `The run failed before its registration could report; the token is live in the store. ` +
-          `Re-run o2b bootstrap --target ${target} to apply the registration alone, ` +
-          `or revoke with: o2b mcp token revoke --name ${name}`,
+        "The run failed before its registration could report; the token is live in the store. " +
+          "The retry or revoke path below finishes or undoes it.",
       );
       if (e instanceof PayloadError) return usageRefusal(e.message);
       throw e;
