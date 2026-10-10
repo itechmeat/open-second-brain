@@ -23,12 +23,12 @@
  */
 
 import { discoverConfig, resolveAgentName } from "../config.ts";
-import { requireNextStep } from "./next-step.ts";
 import type { PermissionAction } from "./permissions/document.ts";
 import { loadPermissionsDocument } from "./permissions/document.ts";
 import { appendDecisionLedger } from "./permissions/ledger.ts";
 import type { PermissionDecision, PermissionSubject } from "./permissions/resolve.ts";
 import { resolvePermission } from "./permissions/resolve.ts";
+import { WRITE_REFUSAL_NEXT_COMMAND } from "./write-refusal-exit.ts";
 import {
   WRITE_APPROVAL_ENABLED_CONFIG_KEY,
   WRITE_APPROVAL_ENABLED_ENV_KEY,
@@ -72,24 +72,17 @@ export function isWriteRefusalCode(value: unknown): value is WriteRefusalCode {
 }
 
 /**
- * The registered exit a document-deny refusal names. Resolved lazily, on
- * first refusal: this module sits inside the diagnostics import cycle
- * (`next-step.ts` reads `diagnostics.ts`, which reaches the doctor checks
- * that reach the signals parser and this module back), so resolving at
- * module scope would call into `next-step.ts` while its registry is still
- * initializing - a TDZ crash whose trigger depends on which test file or
- * entry point loaded first. The registry census pins the code's
- * registration at test time, so drift still fails there rather than
- * inside this lazy read.
+ * The registered exit a document-deny refusal names, read straight from
+ * the leaf the diagnostics registry builds its own entries from: this
+ * module sits inside the diagnostics import cycle (`next-step.ts` reads
+ * `diagnostics.ts`, which reaches the doctor checks that reach the
+ * signals parser and this module back), so resolving through
+ * `requireNextStep` - at module scope OR on first refusal - would either
+ * crash on the registry's initialization order or paper over the cycle
+ * the graph ratchet refuses. The leaf keeps the string at one
+ * definition; the census pins the codes against it.
  */
-let writeRefusedExit: string | undefined;
-
-function writeRefusedNextCommand(): string {
-  if (writeRefusedExit === undefined) {
-    writeRefusedExit = requireNextStep(WRITE_REFUSAL_CODES.documentDeny).nextCommand;
-  }
-  return writeRefusedExit;
-}
+const WRITE_REFUSED_EXIT = WRITE_REFUSAL_NEXT_COMMAND;
 
 /** The fields a document-deny refusal carries beside its message. */
 export interface WriteRefusedFields {
@@ -123,7 +116,7 @@ export class WriteRefusedError extends Error {
       `write refused (${WRITE_REFUSAL_CODES.documentDeny}): agent ` +
         `${JSON.stringify(fields.agent)} (via ${fields.via}) may not ${fields.action} ` +
         `${JSON.stringify(fields.target)} - rule ${fields.rule} denied it. ` +
-        `The operator can review the policy: ${writeRefusedNextCommand()}`,
+        `The operator can review the policy: ${WRITE_REFUSED_EXIT}`,
     );
     this.name = "WriteRefusedError";
     this.code = WRITE_REFUSAL_CODES.documentDeny;
@@ -132,7 +125,7 @@ export class WriteRefusedError extends Error {
     this.action = fields.action;
     this.rule = fields.rule;
     this.target = fields.target;
-    this.nextCommand = writeRefusedNextCommand();
+    this.nextCommand = WRITE_REFUSED_EXIT;
   }
 }
 

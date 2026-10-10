@@ -26,6 +26,8 @@ import { atomicWriteFileSync, FileAlreadyExistsError } from "../../../src/core/f
 import { PermissionsDocumentError } from "../../../src/core/brain/permissions/document.ts";
 import { queryDecisionLedger } from "../../../src/core/brain/permissions/ledger.ts";
 import { freezeVault } from "../../../src/core/brain/freeze.ts";
+import { requireNextStep } from "../../../src/core/brain/next-step.ts";
+import { WRITE_REFUSAL_NEXT_COMMAND } from "../../../src/core/brain/write-refusal-exit.ts";
 import { createNote } from "../../../src/core/brain/notes/create-note.ts";
 import {
   InvalidPendingIdError,
@@ -34,6 +36,7 @@ import {
   PendingStageConflictError,
   PendingTargetPathError,
   WRITE_APPROVAL_SOURCES,
+  WRITE_REFUSAL_CODES,
   WriteRefusedError,
   applyPendingLane,
   decodePendingTargetPath,
@@ -852,5 +855,21 @@ describe("the review door's resolution rows", () => {
       verdict: "resolved",
       source: "review-door",
     });
+  });
+});
+
+describe("the write refusal's registered exit", () => {
+  test("the registry entries and the refusal both name the leaf's one command", () => {
+    // The exit lives in a leaf the diagnostics registry builds its entries
+    // from, because resolving it through requireNextStep from the
+    // disposition layer closes the diagnostics import cycle. This pin is
+    // what keeps the leaf and the registry from drifting apart.
+    expect(requireNextStep(WRITE_REFUSAL_CODES.documentDeny).nextCommand).toBe(
+      WRITE_REFUSAL_NEXT_COMMAND,
+    );
+    expect(requireNextStep(WRITE_REFUSAL_CODES.forceConfirmedRequiresAllow).nextCommand).toBe(
+      WRITE_REFUSAL_NEXT_COMMAND,
+    );
+    expect(WRITE_REFUSAL_NEXT_COMMAND).toBe("o2b brain permissions show");
   });
 });

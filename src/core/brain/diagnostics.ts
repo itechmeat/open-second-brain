@@ -72,6 +72,7 @@ import { BRAIN_LOG_EVENT_KIND, type DoctorIssue } from "./types.ts";
 import { isBrainArtifactId, normaliseWikilinkTarget } from "./wikilink.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { recordRefs } from "./log-events-at-reach.ts";
+import { WRITE_REFUSAL_NEXT_COMMAND } from "./write-refusal-exit.ts";
 import { extractId } from "./temporal/period-common.ts";
 
 // ----- Diagnostics-signal model --------------------------------------------
@@ -576,7 +577,7 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         // fixer's - so `autoRepairable` stays false.
         code: "write-refused",
         issueClass: "write refused by a permissions document rule",
-        nextCommand: "o2b brain permissions show",
+        nextCommand: WRITE_REFUSAL_NEXT_COMMAND,
         autoRepairable: false,
       },
       {
@@ -589,7 +590,7 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         code: "force-confirmed-requires-allow",
         issueClass:
           "force_confirmed refused: the permissions document does not allow this caller's write",
-        nextCommand: "o2b brain permissions show",
+        nextCommand: WRITE_REFUSAL_NEXT_COMMAND,
         autoRepairable: false,
       },
       {
