@@ -17,7 +17,7 @@
  * that shells out on a real host.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import {
   existsSync,
   mkdirSync,
@@ -46,6 +46,28 @@ import {
 } from "../../src/core/brain/secrets/token-store.ts";
 import { startHttp, type HttpServerHandle } from "../../src/mcp/index.ts";
 import { JSONRPC_VERSION } from "../../src/mcp/protocol.ts";
+
+// The payload-refusal test below needs buildPayload to throw a PayloadError
+// AFTER the mint, on demand and portably (the real builder refuses only on
+// an empty vault or a Windows-metacharacter path), so the module is wrapped
+// in a forwarding mock (captured before the mock is installed, or the
+// forward would recurse) that fails only while a flag is set.
+import * as payloadModule from "../../src/core/install/payload.ts";
+
+const realBuildPayload = payloadModule.buildPayload;
+let failPayloadBuild = false;
+
+mock.module("../../src/core/install/payload.ts", () => ({
+  ...payloadModule,
+  buildPayload: (
+    ...args: Parameters<typeof realBuildPayload>
+  ): ReturnType<typeof realBuildPayload> => {
+    if (failPayloadBuild) {
+      throw new payloadModule.PayloadError("injected: the payload build refused");
+    }
+    return realBuildPayload(...args);
+  },
+}));
 
 let tempRoot: string;
 let vault: string;
@@ -743,5 +765,39 @@ describe("o2b bootstrap when the adapter apply fails after a mint (opencode)", (
     const entry = readReceipt()["entries"]["opencode"];
     expect(entry["token"]).toEqual({ name: "mcp_token_opencode", prefix: record.token_prefix });
     expect(entry["agent"]).toBe(OPENCODE_AGENT);
+  }, 20000);
+});
+
+/**
+ * The payload build refusing AFTER the mint (the run's other pre-apply
+ * exit): the material is live in the store and a re-run would never show
+ * it, so the rescue print must fire here too - exactly once, on stdout,
+ * beside the failure notice - instead of orphaning the credential.
+ */
+describe("o2b bootstrap when the payload build refuses after a mint (generic)", () => {
+  test("a payload refusal after a mint still shows the material exactly once, on stdout only", async () => {
+    failPayloadBuild = true;
+    try {
+      const r = await runCli(
+        bootstrapArgs(["--target", "generic", "--agent", OPENCODE_AGENT, "--token"]),
+        {},
+      );
+      expect(r.returncode).toBe(2);
+      expect(r.stderr).toContain("injected: the payload build refused");
+      // The mint happened, so the material prints - exactly once, on
+      // stdout, beside the failure notice naming the retry and revoke
+      // paths, with stderr carrying none of it.
+      const material = printedMaterial(r.stdout);
+      expect(countOccurrences(r.stdout, material)).toBe(1);
+      expect(r.stdout).toContain("live in the store");
+      expect(r.stdout).toContain("o2b mcp token revoke --name mcp_token_generic");
+      expect(r.stderr).not.toContain(material);
+      expect(resolveAgentForToken(vault, material)).toEqual({
+        agent: OPENCODE_AGENT,
+        name: "mcp_token_generic",
+      });
+    } finally {
+      failPayloadBuild = false;
+    }
   }, 20000);
 });

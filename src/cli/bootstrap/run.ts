@@ -26,8 +26,9 @@
  * Idempotency contract: a second identical run is a byte-identical
  * no-op. When the token already exists and the adapter verifies clean,
  * bootstrap writes nothing at all - not the config, not the install
- * manifest, not the receipt - and says so. When the apply fails after a
- * mint or rotation, the material still prints exactly once beside the
+ * manifest, not the receipt - and says so. When the run fails after a
+ * mint or rotation - the payload build, the apply, anything in the
+ * registration half - the material still prints exactly once beside the
  * failure: the credential is live in the store, a re-run would mint
  * nothing, and the output names the retry and revoke paths.
  *
@@ -380,6 +381,34 @@ function runCheck(input: CheckInput): number {
   return BOOTSTRAP_EXIT.ok;
 }
 
+/**
+ * The rescue print for a token that was minted or rotated and then lost
+ * its showing because the run exited without its success report. The
+ * material is live in the store and will never be shown again by a re-run
+ * (the name now exists, so nothing is minted), so it prints here, exactly
+ * once, on stdout, beside the failure notice and the retry and revoke
+ * paths - returning or rethrowing without it would orphan a live
+ * credential behind a failed run.
+ */
+function printOrphanedTokenMaterial(input: {
+  readonly target: string;
+  readonly name: string;
+  readonly agent: string;
+  readonly event: "minted" | "rotated";
+  readonly material: string;
+  readonly failure: string;
+}): void {
+  process.stdout.write(
+    `bootstrap: ${input.target}\n` +
+      `  token: ${input.name} (agent ${JSON.stringify(input.agent)}) ${input.event} - ` +
+      "shown exactly once, stored only as a hash\n" +
+      `  ${input.material}\n` +
+      `  ${SHOWN_ONCE_NOTICE}\n` +
+      `  ${HTTP_BOUNDARY_NOTICE}\n` +
+      `  ${input.failure}\n`,
+  );
+}
+
 interface ProvisionInput {
   readonly args: ParsedBootstrapArgs;
   readonly target: string;
@@ -457,22 +486,35 @@ function runProvision(input: ProvisionInput): number {
       }
     }
 
-    let payload;
-    try {
-      payload = buildBootstrapPayload(vault, args.config);
-    } catch (e) {
-      if (e instanceof PayloadError) return usageRefusal(e.message);
-      throw e;
-    }
-    const capture = captureStream();
-    const opts: ApplyOpts = {
-      dryRun: false,
-      force: args.force,
-      stdout: capture.stream,
-      stderr: process.stderr,
+    // The rescue print for a mint whose run then exits without its
+    // success report: every failure below - a refused payload build, a
+    // failed apply, a throw from either - leaves the material live in
+    // the store and unshown by any re-run, so it prints here, exactly
+    // once, before the run returns or rethrows.
+    const rescueMaterial = (failure: string): void => {
+      if (tokenMaterial === null) return;
+      printOrphanedTokenMaterial({
+        target,
+        name,
+        agent,
+        event: tokenEvent ?? "minted",
+        material: tokenMaterial,
+        failure,
+      });
     };
+
+    let payload;
+    let capture;
     let result;
     try {
+      payload = buildBootstrapPayload(vault, args.config);
+      capture = captureStream();
+      const opts: ApplyOpts = {
+        dryRun: false,
+        force: args.force,
+        stdout: capture.stream,
+        stderr: process.stderr,
+      };
       result = adapter.apply(adapter.plan(payload, env), payload, env, opts);
     } catch (e) {
       if (e instanceof InstallError) {
@@ -483,23 +525,25 @@ function runProvision(input: ProvisionInput): number {
         // exists, so nothing is minted). Returning without it orphans a
         // live credential behind a failed registration - so it prints
         // here, exactly once, beside the failure and the retry path.
-        if (tokenMaterial !== null) {
-          process.stdout.write(
-            `bootstrap: ${target}\n` +
-              `  token: ${name} (agent ${JSON.stringify(agent)}) ${tokenEvent} - ` +
-              "shown exactly once, stored only as a hash\n" +
-              `  ${tokenMaterial}\n` +
-              `  ${SHOWN_ONCE_NOTICE}\n` +
-              `  ${HTTP_BOUNDARY_NOTICE}\n` +
-              `  The registration half failed (the error above); the token is live in the store. ` +
-              `Fix the cause and re-run o2b bootstrap --target ${target} to apply the ` +
-              `registration alone, or revoke with: o2b mcp token revoke --name ${name}\n`,
-          );
-        }
+        rescueMaterial(
+          `The registration half failed (the error above); the token is live in the store. ` +
+            `Fix the cause and re-run o2b bootstrap --target ${target} to apply the ` +
+            `registration alone, or revoke with: o2b mcp token revoke --name ${name}`,
+        );
         return e.kind === "user-modified-block"
           ? BOOTSTRAP_EXIT.userModifiedBlock
           : BOOTSTRAP_EXIT.runtimeError;
       }
+      // The payload build refused, or the registration half threw
+      // something else entirely: the same orphan problem as the failed
+      // apply above, so the material prints here too - before the usage
+      // refusal or the rethrow.
+      rescueMaterial(
+        `The run failed before its registration could report; the token is live in the store. ` +
+          `Re-run o2b bootstrap --target ${target} to apply the registration alone, ` +
+          `or revoke with: o2b mcp token revoke --name ${name}`,
+      );
+      if (e instanceof PayloadError) return usageRefusal(e.message);
       throw e;
     }
     manifest = result.manifest;
