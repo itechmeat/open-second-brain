@@ -356,20 +356,19 @@ export function routeExtractedFacts(vault: string, input: RouteFactsInput): Rout
   // decides. Unlike the A2/A3 seams below, the config is consulted on dry
   // runs too, deliberately: consent changes what a rehearsal may forecast,
   // so a dry run against a consent-off vault must forecast nothing rather
-  // than promise writes the operator withheld. A config that cannot be
-  // read never breaks capture: both knobs fall open to today's behaviour
-  // (lane on, no stamp), the same tolerance the durability and staging
-  // seams apply - a bad VALUE is the parser's hard, field-named error.
+  // than promise writes the operator withheld. An ABSENT config falls open
+  // to today's behaviour (lane on, no stamp) inside the loader itself; a
+  // PRESENT-but-unreadable one raises the named BrainConfigError like at
+  // every other consumer of the safe loaders - an unreadable file is where
+  // an explicit `ambient_writeback: false` would most likely live, and
+  // answering with the default would silently open the lane the operator
+  // closed.
   let ambientWriteback = input.ambientWriteback ?? true;
   let ambientTtlDays = input.ambientTtlDays ?? 0;
   if (input.ambientWriteback === undefined || input.ambientTtlDays === undefined) {
-    try {
-      const guardrails = loadGuardrailsConfigSafe(vault);
-      if (input.ambientWriteback === undefined) ambientWriteback = guardrails.ambient_writeback;
-      if (input.ambientTtlDays === undefined) ambientTtlDays = guardrails.ambient_ttl_days;
-    } catch {
-      // Consent falls open to today's behaviour; capture must not break.
-    }
+    const guardrails = loadGuardrailsConfigSafe(vault);
+    if (input.ambientWriteback === undefined) ambientWriteback = guardrails.ambient_writeback;
+    if (input.ambientTtlDays === undefined) ambientTtlDays = guardrails.ambient_ttl_days;
   }
 
   // Consent boundary: an explicit `ambient_writeback: false` withholds the

@@ -267,6 +267,20 @@ describe("routeExtractedFacts - ambient consent", () => {
     expect(result.ambientWithheld).toBe(0);
     expect(ambientWithheldEvents().length).toBe(0);
   });
+
+  test("a present-but-unreadable config raises the named error and writes nothing", () => {
+    // A config that parses but fails validation is PRESENT: its operator
+    // settings exist and are not the defaults, so the loader raises rather
+    // than answering with `ambient_writeback: true` - the fall-open that
+    // would capture on a vault where consent may have been withheld.
+    writeVaultGuardrails('ambient_writeback: "no"');
+    const dedup = new Map<string, DedupIndexEntry>();
+    expect(() => route(DURABLE_FACTS, dedup)).toThrow(BrainConfigError);
+    expect(inboxSignalNames().length).toBe(0);
+    expect(ambientWithheldEvents().length).toBe(0);
+    // Nothing was consumed either: the capture is stopped, not dropped.
+    expect(dedup.size).toBe(0);
+  });
 });
 
 // ----- Ambient TTL (ambient_ttl_days) -----------------------------------------
