@@ -553,6 +553,30 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
+        // Write-side trust, Task 12. A permissions document rule DENIED a
+        // write. The refusal names the principal, the action and the rule
+        // that decided; the exit is the same `show` loop, because the fix
+        // is editing the policy, which is the operator's act - never a
+        // fixer's - so `autoRepairable` stays false.
+        code: "write-refused",
+        issueClass: "write refused by a permissions document rule",
+        nextCommand: "o2b brain permissions show",
+        autoRepairable: false,
+      },
+      {
+        // Write-side trust, Task 12. `force_confirmed` skips the dream
+        // trial window, and under a permissions document that skip is
+        // reserved for callers whose `write` verdict is allow. Same exit
+        // and the same operator-held fix as `write-refused` above; the
+        // distinct code is what tells a caller the document did not
+        // refuse its write outright - it refused the bypass.
+        code: "force-confirmed-requires-allow",
+        issueClass:
+          "force_confirmed refused: the permissions document does not allow this caller's write",
+        nextCommand: "o2b brain permissions show",
+        autoRepairable: false,
+      },
+      {
         // Inbox signals that left the contradiction window unconsumed
         // (issue #195). Spelled as a literal for the same reason
         // `vault-frozen` above is. The exit is the pass that archives
@@ -640,6 +664,15 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         code: "write-binding-refused",
         issueClass: "caller-named write outside the declared write binding",
         nextCommand: "o2b vault inspect <relpath>",
+        autoRepairable: false,
+      },
+      {
+        // Write-side trust, Task 9. A gated write landed in the review
+        // queue instead of its publish lane. The receipt carries the
+        // pending id; the exit is the queue command that publishes it.
+        code: "pending-staged",
+        issueClass: "write staged into the review queue, awaiting an operator apply",
+        nextCommand: "o2b brain pending apply <pending-id>",
         autoRepairable: false,
       },
       {

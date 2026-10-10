@@ -1070,3 +1070,99 @@ describe("bootstrap path", () => {
     expect(notices).toHaveLength(0);
   });
 });
+
+/**
+ * The signal-lane review gate (write-side trust, Task 6). Resolved inside
+ * `writeSignal` when the caller names no `targetDir`; `stagePendingSignal`
+ * passes one explicitly and must never re-enter the gate. The gate reads
+ * the process config path, so these cases drive it through the env twin.
+ */
+describe("writeSignal review gate", () => {
+  const GATED_INPUT = {
+    topic: "gate-topic",
+    signal: "positive",
+    agent: "test-agent",
+    principle: "stage me for review",
+    created_at: "2026-07-26T00:00:00Z",
+    date: "2026-07-26",
+    slug: "gate-topic",
+  } as const;
+
+  const MASTER_ENV = "OPEN_SECOND_BRAIN_WRITE_APPROVAL_ENABLED";
+  let savedMaster: string | undefined;
+
+  function setGate(on: boolean): void {
+    if (savedMaster === undefined) savedMaster = process.env[MASTER_ENV];
+    if (on) process.env[MASTER_ENV] = "true";
+    else delete process.env[MASTER_ENV];
+  }
+
+  afterEach(() => {
+    if (savedMaster === undefined) delete process.env[MASTER_ENV];
+    else process.env[MASTER_ENV] = savedMaster;
+    savedMaster = undefined;
+  });
+
+  test("gate off writes to the inbox with staged false", () => {
+    setGate(false);
+    const res = writeSignal(vault, GATED_INPUT);
+    expect(res.staged).toBe(false);
+    expect(res.path.startsWith(brainDirs(vault).inbox)).toBe(true);
+    expect(existsSync(brainDirs(vault).pending)).toBe(false);
+  });
+
+  test("gate on stages into Brain/pending with staged true", () => {
+    setGate(true);
+    const res = writeSignal(vault, GATED_INPUT);
+    expect(res.staged).toBe(true);
+    expect(res.path.startsWith(brainDirs(vault).pending)).toBe(true);
+    expect(readdirSync(brainDirs(vault).pending).filter((f) => f.endsWith(".md"))).toEqual([
+      `${res.id}.md`,
+    ]);
+    expect(existsSync(join(brainDirs(vault).inbox, `${res.id}.md`))).toBe(false);
+    // The gate lives below the queue: the staged document is listed by the
+    // ordinary pending listing and apply consumes it unchanged.
+    expect(listPending(vault).map((entry) => entry.id)).toEqual([res.id]);
+    const applied = applyPending(vault, res.id);
+    expect(applied.path.startsWith(brainDirs(vault).inbox)).toBe(true);
+  });
+
+  test("the staged document is byte-identical to the inbox document", () => {
+    setGate(false);
+    const direct = writeSignal(vault, { ...GATED_INPUT, slug: "byte-compare" });
+    setGate(true);
+    const staged = writeSignal(vault, { ...GATED_INPUT, slug: "byte-compare" });
+    expect(staged.id).toBe(direct.id);
+    expect(readFileSync(staged.path, "utf8")).toBe(readFileSync(direct.path, "utf8"));
+  });
+
+  test("a deduped retry under the gate reports staged false and deduped true", () => {
+    setGate(true);
+    const first = writeSignal(vault, {
+      ...GATED_INPUT,
+      slug: "dedup-under-gate",
+      idempotency_key: "gate-dedup-1",
+    });
+    expect(first.staged).toBe(true);
+    const second = writeSignal(vault, {
+      ...GATED_INPUT,
+      slug: "dedup-under-gate",
+      idempotency_key: "gate-dedup-1",
+    });
+    expect(second.deduped).toBe(true);
+    expect(second.staged).toBe(false);
+  });
+
+  test("stagePendingSignal never re-enters the gate", () => {
+    setGate(true);
+    const res = stagePendingSignal(vault, { ...GATED_INPUT, slug: "explicit-stage" });
+    // Exactly one staged document, written by the explicit path: the gate
+    // would have routed an ungated write to the same directory, but the
+    // explicit stage must not depend on (or double-fire through) it.
+    expect(res.path.startsWith(brainDirs(vault).pending)).toBe(true);
+    expect(readdirSync(brainDirs(vault).pending).filter((f) => f.endsWith(".md"))).toEqual([
+      `${res.id}.md`,
+    ]);
+    expect(existsSync(join(brainDirs(vault).inbox, `${res.id}.md`))).toBe(false);
+  });
+});

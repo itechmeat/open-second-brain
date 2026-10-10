@@ -512,13 +512,26 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "archives a closed obligation; the fallback arm writes the copy through " +
       "`atomicWriteFileSync` and removes the source.",
   },
-  "src/core/brain/pending.ts": {
+  "src/core/brain/pending/pending-lanes.ts": {
     categories: [C.lifecycleMove],
     calls: ["unlinkSync"],
     reason:
-      "removes the source only AFTER `atomicCreateFileSyncExclusive` landed the " +
-      "destination, so the exclusive create is the real gate and the unlink cannot " +
-      "lose the record.",
+      "the multi-lane queue's two exits, generalized from the A3 applier: apply " +
+      "exclusive-creates the decoded publish target and refuses an occupied name " +
+      "BEFORE the unlink, so the record exists twice at that instant and never zero " +
+      "times; reject lands the retire-shaped render through `writeFrontmatterAtomic` " +
+      "refusing an occupied retired name before the staged copy goes. Its write half " +
+      "is the shared writer class (`atomicWriteFileSync`, `atomicCreateFileSyncExclusive`); " +
+      "the unlink is the only direct call.",
+  },
+  "src/core/brain/permissions/ledger.ts": {
+    categories: [C.appendOnlyLedger, C.lockPrimitive],
+    calls: ["writeFileSync"],
+    reason:
+      "`writeFileSync(..., { flag: 'a' })` inside the per-shard `proper-lockfile`: one " +
+      "decision-ledger row per gate verdict, appended to the device's month shard. " +
+      "Append-only on the idempotency-ledger model - nothing is ever rewritten, so " +
+      "the shared writer class has no rewrite to route.",
   },
   "src/core/brain/preference.ts": {
     categories: [C.lifecycleMove],

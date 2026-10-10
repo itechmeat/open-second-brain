@@ -29,6 +29,17 @@ import {
 import { manifestPath, hashBytes } from "../../../../src/core/brain/ingest/content-manifest.ts";
 import { computeExtractionContractFingerprint } from "../../../../src/core/brain/ingest/contract.ts";
 import { computePlanId, readCheckpoint } from "../../../../src/core/brain/ingest/checkpoint.ts";
+import {
+  applyPendingLane,
+  WriteRefusedError,
+} from "../../../../src/core/brain/pending/pending-lanes.ts";
+import { queryDecisionLedger } from "../../../../src/core/brain/permissions/ledger.ts";
+import { deleteBySource } from "../../../../src/core/brain/source-cleanup.ts";
+import { readManifest } from "../../../../src/core/brain/ingest/content-manifest.ts";
+
+function readManifestEntries(): string[] {
+  return Object.keys(readManifest(vault).entries);
+}
 
 let vault: string;
 let configHome: string;
@@ -477,5 +488,128 @@ describe("ingestSource — extraction contract (t_586d5d8b)", () => {
     };
     expect(onDisk.schema_version).toBe(2);
     expect(onDisk.contract?.fingerprint).toBe(computeExtractionContractFingerprint(vault));
+  });
+});
+
+/**
+ * The review gate (write-side trust, Task 9): the FIRST publish of a
+ * summary page stages under the ingest lane while registration (the
+ * intake, the manifest, the plan checkpoint) completes; a re-ingest of
+ * an already-published page stays direct; and a source cleanup removes
+ * the staged page the way it removes a published one.
+ */
+describe("ingestSource under the ingest review gate", () => {
+  const INGEST_ENV = "OPEN_SECOND_BRAIN_WRITE_APPROVAL_INGEST_ENABLED";
+  let saved: string | undefined;
+
+  beforeEach(() => {
+    saved = process.env[INGEST_ENV];
+    process.env[INGEST_ENV] = "true";
+  });
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env[INGEST_ENV];
+    else process.env[INGEST_ENV] = saved;
+    saved = undefined;
+  });
+
+  test("a first ingest stages the summary page while registration completes", () => {
+    seedSourceFile();
+    const res = ingestSource(vault, INPUT, { agent: "claude", now: NOW });
+    expect(res.staged).toBe(true);
+    expect(res.pendingId).toBeDefined();
+    // The publish target is untouched; the bytes sit in the queue.
+    expect(existsSync(join(vault, res.summaryPath))).toBe(false);
+    const stagedPath = join(vault, "Brain/pending/ingest", `${res.pendingId}.md`);
+    const stagedBytes = readFileSync(stagedPath, "utf8");
+    expect(stagedBytes).toContain("kind: brain-source");
+    expect(stagedBytes).toContain("An overview of restaking");
+    // Registration completed: the manifest records the source and the
+    // entities exist.
+    expect(readManifestEntries()).toContain(INPUT.sourcePath);
+    expect(listEntities(vault, { category: "concept" })).toHaveLength(2);
+  });
+
+  test("an apply of the staged page publishes byte-identical bytes", () => {
+    seedSourceFile();
+    const res = ingestSource(vault, INPUT, { agent: "claude", now: NOW });
+    const stagedBytes = readFileSync(
+      join(vault, "Brain/pending/ingest", `${res.pendingId}.md`),
+      "utf8",
+    );
+    const applied = applyPendingLane(vault, res.pendingId!);
+    expect(applied.path).toBe(join(vault, res.summaryPath));
+    expect(readFileSync(applied.path, "utf8")).toBe(stagedBytes);
+  });
+
+  test("a re-ingest of an already-published page stays direct", () => {
+    seedSourceFile();
+    const first = ingestSource(vault, INPUT, { agent: "claude", now: NOW });
+    applyPendingLane(vault, first.pendingId!);
+    const second = ingestSource(vault, INPUT, { agent: "claude", now: LATER });
+    expect(second.staged).toBeUndefined();
+    expect(existsSync(join(vault, second.summaryPath))).toBe(true);
+    // The queue is empty: nothing re-staged behind the published page.
+    expect(existsSync(join(vault, "Brain/pending/ingest", `${first.pendingId}.md`))).toBe(false);
+  });
+
+  test("a source cleanup removes the staged page like a published one", () => {
+    seedSourceFile();
+    const res = ingestSource(vault, INPUT, { agent: "claude", now: NOW });
+    expect(existsSync(join(vault, "Brain/pending/ingest", `${res.pendingId}.md`))).toBe(true);
+    const plan = deleteBySource(vault, INPUT.sourcePath, { confirm: true });
+    // The staged page is derived solely from this source (its bytes carry
+    // the same `source_path` the published page would), so the cleanup's
+    // trace finds it under Brain/pending/ingest/ and removes it.
+    expect(plan.deleted).toContain(
+      join(vault, "Brain/pending/ingest", `${res.pendingId}.md`).slice(vault.length + 1),
+    );
+    expect(existsSync(join(vault, "Brain/pending/ingest", `${res.pendingId}.md`))).toBe(false);
+  });
+});
+
+/**
+ * The document-backed disposition (write-side trust, Task 12): a
+ * permissions document that denies the ingest action refuses
+ * `brain_ingest_source` BEFORE any write - no entity page, no manifest
+ * row, no summary page, no queue entry - and lands exactly one
+ * decision-ledger row naming the rule that decided.
+ */
+describe("ingestSource under a denying permissions document", () => {
+  test("a deny default refuses the ingest before any write", () => {
+    seedSourceFile();
+    writeFileSync(join(vault, "Brain/_permissions.yaml"), "version: 1\ndefault_action: deny\n");
+    expect(() => ingestSource(vault, INPUT, { agent: "claude", now: NOW })).toThrow(
+      WriteRefusedError,
+    );
+    // Nothing was written: not the summary page, not the queue, not the
+    // entities, not the manifest.
+    expect(listEntities(vault, { category: "concept" })).toHaveLength(0);
+    expect(readManifestEntries()).toEqual([]);
+    expect(existsSync(join(vault, "Brain/pending/ingest"))).toBe(false);
+    const sourcesDir = join(vault, "Brain", "sources");
+    const summaryFiles = existsSync(sourcesDir)
+      ? fs.readdirSync(sourcesDir).filter((n) => n.endsWith(".md"))
+      : [];
+    expect(summaryFiles).toEqual([]);
+    // Exactly one ledger row, naming the default rule and the ingest action.
+    const rows = queryDecisionLedger(vault, { verdict: "deny" });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      actor: "claude",
+      action: "ingest",
+      verdict: "deny",
+      source: "default",
+    });
+  });
+
+  test("an ask default stages the first publish and records exactly one row", () => {
+    seedSourceFile();
+    writeFileSync(join(vault, "Brain/_permissions.yaml"), "version: 1\ndefault_action: ask\n");
+    const res = ingestSource(vault, INPUT, { agent: "claude", now: NOW });
+    expect(res.staged).toBe(true);
+    const rows = queryDecisionLedger(vault, { verdict: "ask" });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ action: "ingest", verdict: "ask", source: "default" });
   });
 });

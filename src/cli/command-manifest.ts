@@ -745,14 +745,21 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           "Review the write-approval queue: list, apply, reject",
           [],
           [
-            command("list", "List the staged signals awaiting approval", [flag("vault", "string")]),
-            command("apply", "Move one staged signal into the inbox unchanged", [
+            command("list", "List the staged entries awaiting approval, all lanes", [
+              flag("vault", "string"),
+              flag("lane", "string"),
+              flag("json", "boolean"),
+            ]),
+            command("apply", "Move one staged entry into its publish target unchanged", [
               flag("vault", "string"),
               flag("dry-run", "boolean"),
+              flag("json", "boolean"),
             ]),
-            command("reject", "Retire one staged signal with a recorded reason", [
+            command("reject", "Retire one staged entry with a recorded reason", [
               flag("vault", "string"),
               flag("reason", "string"),
+              flag("dry-run", "boolean"),
+              flag("json", "boolean"),
             ]),
           ],
         ),

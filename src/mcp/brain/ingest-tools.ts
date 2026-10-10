@@ -39,7 +39,13 @@ import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { parseExtractionIntakeArgs } from "./intake-args.ts";
 import { readableAtContextReach } from "./reach-readable.ts";
+import {
+  PENDING_STAGED_DIAGNOSTIC_CODE,
+  WriteRefusedError,
+} from "../../core/brain/pending/pending-lanes.ts";
+import { nextCommandField } from "../../core/brain/next-step.ts";
 import { enforceCountGuard, readCountGuardArgs, wrapToolErrors } from "./shared.ts";
+import type { IngestSourceResult } from "../../core/brain/ingest/ingest.ts";
 
 const TOOL = "brain_ingest_source";
 const SEARCH_TOOL = "brain_search_by_source";
@@ -82,18 +88,34 @@ async function toolBrainIngestSource(
       : resolveAgentName(ctx.configPath ?? undefined);
 
   return wrapToolErrors(TOOL, [IntakeValidationError], async () => {
-    const res = ingestSource(
-      ctx.vault,
-      { sourcePath, summary, extraction: parsed.intake },
-      {
-        agent,
-        now: new Date(),
-        // A page the caller may not read at its reach answers as an absent one.
-        readable: readableAtContextReach(ctx),
-        ...(planId !== undefined ? { planId } : {}),
-        ...(preExtract ? { preExtract: true } : {}),
-      },
-    );
+    let res: IngestSourceResult;
+    try {
+      res = ingestSource(
+        ctx.vault,
+        { sourcePath, summary, extraction: parsed.intake },
+        {
+          agent,
+          now: new Date(),
+          // A page the caller may not read at its reach answers as an absent one.
+          readable: readableAtContextReach(ctx),
+          ...(planId !== undefined ? { planId } : {}),
+          ...(preExtract ? { preExtract: true } : {}),
+        },
+      );
+    } catch (err) {
+      // Write-side trust (Task 12): a permissions document rule denied the
+      // ingest. Named code, the rule that decided, and the operator exit -
+      // never an internal error a caller would retry into the same wall.
+      if (err instanceof WriteRefusedError) {
+        throw new MCPError(INVALID_PARAMS, `${TOOL}: ${err.message}`, {
+          code: err.code,
+          rule: err.rule,
+          agent: err.agent,
+          next_command: err.nextCommand,
+        });
+      }
+      throw err;
+    }
     return {
       summary_path: res.summaryPath,
       created: res.created,
@@ -104,6 +126,17 @@ async function toolBrainIngestSource(
       // it. Always present: absence would read as "full-local" to a caller
       // that never learned the key exists.
       capture_scope: res.captureScope,
+      // Write-side trust (Task 9): a first publish of the summary page
+      // stages under the review gate while registration completes. The
+      // receipt names the queue entry and the command that publishes it,
+      // so a staged ingest reads as staged, never as missing.
+      ...(res.staged === true && res.pendingId !== undefined
+        ? {
+            staged: true,
+            pending_id: res.pendingId,
+            ...nextCommandField(PENDING_STAGED_DIAGNOSTIC_CODE),
+          }
+        : {}),
       // Only for an HTML or CSV/TSV source, so a text source's payload is
       // byte-identical to before. Counts and tokens only, never content.
       ...(res.parts !== undefined ? { parts: serializeParts(res.parts) } : {}),
