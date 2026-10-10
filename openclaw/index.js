@@ -3459,6 +3459,7 @@ __export(exports_store, {
   resolveSecretReadOnly: () => resolveSecretReadOnly,
   secretsDir: () => secretsDir,
   setSecret: () => setSecret,
+  tokenStorePath: () => tokenStorePath,
   unlockSecretKeyfile: () => unlockSecretKeyfile,
   withSecretsLock: () => withSecretsLock,
   writeStore: () => writeStore
@@ -3473,6 +3474,9 @@ function storePath(vault) {
 }
 function keyPath(vault) {
   return join10(secretsDir(vault), "keyfile");
+}
+function tokenStorePath(vault) {
+  return join10(secretsDir(vault), "mcp-tokens.json");
 }
 function isValidSecretName(name) {
   return NAME_RE.test(name);
@@ -3644,6 +3648,8 @@ function custodyTargets(vault) {
   ];
   if (existsSync6(storePath(vault)))
     targets.push([storePath(vault), "file"]);
+  if (existsSync6(tokenStorePath(vault)))
+    targets.push([tokenStorePath(vault), "file"]);
   return targets;
 }
 function toMetadata(name, stored) {
