@@ -966,7 +966,7 @@ async function cmdMcp(argv: string[]): Promise<number> {
         process.stderr.write(
           "o2b mcp: mcp_tokens_required is on, but no agent token is minted for this vault yet; " +
             "credential-less requests are not refused until one exists " +
-            "(mint one with `o2b mcp token mint <name> <agent>`)\n",
+            "(mint one with `o2b mcp token mint --agent <name>`)\n",
         );
       }
       const handle = await startHttp(
