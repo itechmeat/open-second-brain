@@ -11,11 +11,18 @@
  * ({@link isObsidianTagValue}, via `src/core/brain/tag-syntax.ts`),
  * never against a copy.
  *
- * The index-side rule: `#word` where word starts with a letter/`_` and
- * may contain letters, digits, dashes, underscores, and `/` for
- * hierarchy. The regex is deliberately NOT widened this wave - a
- * looser rule is an index-semantics change with reindex gating; the
- * tags detector reports the diff instead of the index absorbing it.
+ * The index-side rule is Obsidian's documented tag grammar: `#word`
+ * where word may contain letters from ANY script, digits, dashes,
+ * underscores, and `/` for hierarchy, must carry at least one non-digit
+ * character (a bare number is a number, not a tag), and may not begin
+ * with a slash. It was deliberately NOT widened in the wave that
+ * introduced it (an index-semantics change with reindex gating; the
+ * tags detector reported the diff instead) - the review round of
+ * v1.78.0 superseded that refusal after the ASCII letter/underscore
+ * onset proved narrower than Obsidian: it refused Unicode tags
+ * (`#кодинг`) and digit-led non-numeric tags (`#2fa`, `#2024-notes`)
+ * at the write sites and froze every dream refresh carrying such a
+ * scope over.
  *
  * The code-fence / inline-code stripping lives here too because the
  * tag rules are defined over cleaned text: the detector must apply
@@ -24,24 +31,38 @@
  */
 
 /**
- * The value-level rule the index regex and the write-time predicate
- * share, spelled ONCE below: a value starts with a letter/underscore and
- * continues with letters, digits, dashes, underscores, and `/`
- * (nesting). By the shared onset a value may not begin with a slash and
- * may never be purely numeric. {@link TAG_RE} wraps this source with the
- * prose boundary and the `#`; {@link isObsidianTagValue} matches it
- * anchored - one spelling, two anchors.
+ * One tag character, per Obsidian's documented grammar: letters from any
+ * script (`\p{L}`), numbers (`\p{N}`), underscores, dashes, and `/`
+ * (nesting).
  */
-const TAG_VALUE_SOURCE = "[A-Za-z_][\\w\\-/]*";
+const TAG_VALUE_CLASS = "\\p{L}\\p{N}_\\-/";
+
+/** A maximal tag value: one or more tag characters. */
+const TAG_VALUE_SOURCE = `[${TAG_VALUE_CLASS}]+`;
 
 /**
- * Obsidian-style tag: #word where word starts with a letter/_ and may contain
- * letters, digits, dashes, underscores, and '/' for hierarchy.
+ * The value-shape guards both anchorings share, keeping the old onset's
+ * two guarantees without its ASCII narrowness: a value may not BEGIN
+ * with a slash (an empty first nested-tag segment is no tag in Obsidian
+ * either), and it is never purely numeric - a bare number is not a tag.
+ * The digit guard is a lookahead rather than an onset so digit-led
+ * values like `2fa` and `2024-notes` stay valid: it refuses only a run
+ * of digits (`\p{Nd}`, so non-ASCII numerals refuse too) followed by NO
+ * further tag character, which anchors the run at the end of the value -
+ * end of string for the anchored predicate, the first non-tag character
+ * in prose.
  */
-export const TAG_RE = new RegExp(`(^|[^\\w/])#(${TAG_VALUE_SOURCE})`, "g");
+const TAG_VALUE_GUARDS = `(?!/)(?!\\p{Nd}+(?![${TAG_VALUE_CLASS}]))`;
+
+/**
+ * Obsidian-style tag: #word where word may contain letters from any
+ * script, digits, underscores, dashes, and '/' for hierarchy, never is
+ * purely numeric, and never begins with a slash.
+ */
+export const TAG_RE = new RegExp(`(^|[^\\w/])#${TAG_VALUE_GUARDS}(${TAG_VALUE_SOURCE})`, "gu");
 
 /** Matches a whole tag value: the same rule TAG_RE captures, anchored. */
-const TAG_VALUE_RE = new RegExp(`^${TAG_VALUE_SOURCE}$`);
+const TAG_VALUE_RE = new RegExp(`^${TAG_VALUE_GUARDS}${TAG_VALUE_SOURCE}$`, "u");
 
 /**
  * Does `value` (WITHOUT its `#`) satisfy the one tag rule - the rule the

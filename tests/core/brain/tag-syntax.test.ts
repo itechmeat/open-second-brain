@@ -6,7 +6,9 @@
  * derived from `TAG_RE`). These tests pin three things:
  *
  *  1. the rule itself: `/` nesting accepted, spaces and other specials
- *     rejected, leading slash rejected, pure-numeric values rejected;
+ *     rejected, leading slash rejected, pure-numeric values rejected,
+ *     while Obsidian-valid Unicode tags and digit-led non-numeric tags
+ *     (the v1.78.0 review round) are accepted;
  *  2. the predicate is DERIVED from the index rule, not a parallel
  *     spelling: over a battery of values it agrees exactly with what
  *     `TAG_RE` captures, and `tag-syntax.ts` imports the shared
@@ -36,6 +38,12 @@ describe("isObsidianTagValue — the one shared rule", () => {
     expect(isObsidianTagValue("Foo_1-b/c")).toBe(true);
   });
 
+  test("accepts Unicode and digit-led non-numeric values (v1.78.0 review round)", () => {
+    expect(isObsidianTagValue("кодинг")).toBe(true);
+    expect(isObsidianTagValue("2fa")).toBe(true);
+    expect(isObsidianTagValue("2024-notes")).toBe(true);
+  });
+
   test("rejects spaces and other specials", () => {
     expect(isObsidianTagValue("foo bar")).toBe(false);
     expect(isObsidianTagValue("foo bar/baz")).toBe(false);
@@ -47,7 +55,6 @@ describe("isObsidianTagValue — the one shared rule", () => {
   test("rejects a leading slash and pure-numeric values", () => {
     expect(isObsidianTagValue("/leading")).toBe(false);
     expect(isObsidianTagValue("2024")).toBe(false);
-    expect(isObsidianTagValue("2024-notes")).toBe(false);
   });
 
   test("the predicate agrees exactly with what TAG_RE captures (derived, not copied)", () => {
@@ -57,12 +64,14 @@ describe("isObsidianTagValue — the one shared rule", () => {
       "a/b/c",
       "_under",
       "Foo_1-b/c",
+      "кодинг",
+      "2fa",
+      "2024-notes",
       "foo bar",
       "foo bar/baz",
       "foo.bar",
       "/leading",
       "2024",
-      "2024-notes",
       "",
       "trail-",
       "UPPER",
