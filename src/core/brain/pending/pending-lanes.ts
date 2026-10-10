@@ -27,12 +27,12 @@
  *     frontmatter, stamping `osb_pending_lane` at reject time only -
  *     reject transforms, publish never does.
  *
- * Dispositions resolve at {@link resolveWriteDisposition}: with no
- * permissions document the `write_approval.*` lane keys decide (on =
- * stage, off = publish); with one, the document is the only gate - its
- * rules decide through the permissions substrate, a deny refuses as a
- * typed {@link WriteRefusedError}, an ask stages, and every stage or
- * refuse lands exactly one decision-ledger row naming the rule.
+ * Dispositions resolve at {@link resolveWriteDisposition}, which lives in
+ * `../write-disposition.ts` - a leaf below this module, because the
+ * signals lane's parser is read back from here when the queue lists, so
+ * a disposition consulted from that parser could not live above both.
+ * The disposition vocabulary is re-exported so the historical import
+ * surface holds.
  *
  * This module is the queue's engine; `../pending.ts` remains the
  * historical import surface and delegates here.
@@ -46,31 +46,37 @@ import {
   atomicWriteFileSync,
   FileAlreadyExistsError,
 } from "../../fs-atomic.ts";
-import { discoverConfig, resolveAgentName } from "../../config.ts";
 import { ensureInsideVault } from "../../path-safety.ts";
 import { parseFrontmatter, writeFrontmatterAtomic } from "../../vault.ts";
 import type { FrontmatterMap } from "../../types.ts";
-import { requireNextStep } from "../next-step.ts";
-import type { PermissionAction } from "../permissions/document.ts";
-import { loadPermissionsDocument } from "../permissions/document.ts";
-import { appendDecisionLedger } from "../permissions/ledger.ts";
-import type { PermissionDecision, PermissionSubject } from "../permissions/resolve.ts";
-import { resolvePermission } from "../permissions/resolve.ts";
+import type { PermissionSubject } from "../permissions/resolve.ts";
 import type { BrainDirs } from "../paths.ts";
 import { BRAIN_INBOX_REL, BRAIN_SOURCES_REL, brainDirs, brainDirsForWrite } from "../paths.ts";
 import { parseSignal } from "../signal.ts";
 import type { BrainSignal } from "../types.ts";
-import {
-  WRITE_APPROVAL_ENABLED_CONFIG_KEY,
-  WRITE_APPROVAL_ENABLED_ENV_KEY,
-  WRITE_APPROVAL_INGEST_CONFIG_KEY,
-  WRITE_APPROVAL_INGEST_ENV_KEY,
-  WRITE_APPROVAL_NOTES_CONFIG_KEY,
-  WRITE_APPROVAL_NOTES_ENV_KEY,
-  REVIEW_LANE,
-  type ReviewLane,
-  resolveWriteApprovalLane,
-} from "../write-gate.ts";
+import { REVIEW_LANE, type ReviewLane } from "../write-gate.ts";
+
+// ----- Disposition re-exports ----------------------------------------------
+
+// The disposition layer lives in `../write-disposition.ts` (a leaf the
+// signals parser can also import; see that module's docblock). The queue
+// re-exports it so every existing import of the vocabulary from this
+// module keeps resolving here.
+export {
+  WRITE_APPROVAL_SOURCES,
+  WRITE_REFUSAL_CODE_LIST,
+  WRITE_REFUSAL_CODES,
+  WriteRefusedError,
+  isWriteRefusalCode,
+  refuseDocumentDeny,
+  resolveWriteDisposition,
+  substrateSubject,
+  type ResolveWriteDispositionOptions,
+  type WriteDisposition,
+  type WriteRefusalCode,
+  type WriteRefusedFields,
+  type WriteSubject,
+} from "../write-disposition.ts";
 
 // ----- Typed errors ---------------------------------------------------------
 
@@ -81,82 +87,6 @@ import {
  * cannot drift.
  */
 export const PENDING_STAGED_DIAGNOSTIC_CODE = "pending-staged";
-
-/**
- * The closed vocabulary of write-side trust refusals (Task 12). Both are
- * registered in `../diagnostics.ts`, so every surface that carries one
- * resolves the same next command; the census pins the trio.
- */
-export const WRITE_REFUSAL_CODES = Object.freeze({
-  /** A permissions document rule denied the write itself. */
-  documentDeny: "write-refused",
-  /** `force_confirmed` requires an allow verdict; the document said ask or deny. */
-  forceConfirmedRequiresAllow: "force-confirmed-requires-allow",
-} as const);
-
-/** Closed union over {@link WRITE_REFUSAL_CODES}. */
-export type WriteRefusalCode = (typeof WRITE_REFUSAL_CODES)[keyof typeof WRITE_REFUSAL_CODES];
-
-/** Membership list, in the order the checks are made. */
-export const WRITE_REFUSAL_CODE_LIST: ReadonlyArray<WriteRefusalCode> = Object.freeze([
-  WRITE_REFUSAL_CODES.documentDeny,
-  WRITE_REFUSAL_CODES.forceConfirmedRequiresAllow,
-]);
-
-/** Narrow a refusal token read back off a wire or out of an error payload. */
-export function isWriteRefusalCode(value: unknown): value is WriteRefusalCode {
-  return (
-    typeof value === "string" && (WRITE_REFUSAL_CODE_LIST as ReadonlyArray<string>).includes(value)
-  );
-}
-
-/** The registered exit a document-deny refusal names. Resolved once, at import. */
-const WRITE_REFUSED_EXIT = requireNextStep(WRITE_REFUSAL_CODES.documentDeny).nextCommand;
-
-/** The fields a document-deny refusal carries beside its message. */
-export interface WriteRefusedFields {
-  readonly agent: string;
-  readonly via: PermissionSubject["via"];
-  readonly action: PermissionAction;
-  /** The deciding rule: `entry:<id>` | `agent:<name>` | `role:<name>` | `default`. */
-  readonly rule: string;
-  readonly target: string;
-}
-
-/**
- * A permissions document rule DENIED one write (write-side trust,
- * Task 12). Names the principal, the action, the rule that decided and
- * the registered exit, so a refused agent can tell its operator exactly
- * what to review instead of guessing at a policy it cannot read.
- */
-export class WriteRefusedError extends Error {
-  /** Always {@link WRITE_REFUSAL_CODES.documentDeny}. */
-  readonly code: WriteRefusalCode;
-  readonly agent: string;
-  readonly via: PermissionSubject["via"];
-  readonly action: PermissionAction;
-  readonly rule: string;
-  readonly target: string;
-  /** The registered exit: the operator command that inspects the policy. */
-  readonly nextCommand: string;
-
-  constructor(fields: WriteRefusedFields) {
-    super(
-      `write refused (${WRITE_REFUSAL_CODES.documentDeny}): agent ` +
-        `${JSON.stringify(fields.agent)} (via ${fields.via}) may not ${fields.action} ` +
-        `${JSON.stringify(fields.target)} - rule ${fields.rule} denied it. ` +
-        `The operator can review the policy: ${WRITE_REFUSED_EXIT}`,
-    );
-    this.name = "WriteRefusedError";
-    this.code = WRITE_REFUSAL_CODES.documentDeny;
-    this.agent = fields.agent;
-    this.via = fields.via;
-    this.action = fields.action;
-    this.rule = fields.rule;
-    this.target = fields.target;
-    this.nextCommand = WRITE_REFUSED_EXIT;
-  }
-}
 
 /** Typed error for a missing / already-processed pending id (never a no-op). */
 export class PendingSignalNotFoundError extends Error {
@@ -366,156 +296,10 @@ function publishTargetForId(vault: string, id: string): string {
  * Who is writing. Since Task 12 this IS the permissions substrate's
  * subject type, re-exported under the queue's historical name - the
  * structural twin this module used to declare is gone, so there is one
- * subject shape and one resolver that reads it.
+ * subject shape and one resolver that reads it. The resolver itself
+ * lives in `../write-disposition.ts` and is re-exported above.
  */
 export type { PermissionSubject };
-
-/** How one write should proceed, with the rule that decided it. */
-export interface WriteDisposition {
-  readonly verdict: "publish" | "stage" | "refuse";
-  /** The config key, env twin, or document rule that decided. */
-  readonly source: string;
-  /** Why, when the disposition is not the plain publish path. */
-  readonly reason?: string;
-  /** The pending id a stage would use, when deterministic. */
-  readonly pendingId?: string;
-}
-
-/** Optional context a caller hands the disposition resolver. */
-export interface ResolveWriteDispositionOptions {
-  /**
-   * Vault-relative path the write would publish at, when known. Target
-   * entries in the permissions document match on it exactly, and the
-   * decision-ledger row records it.
-   */
-  readonly target?: string;
-  /** Injected clock for the ledger row's `ts`. Defaults to now. */
-  readonly now?: Date;
-}
-
-/**
- * The config key or env twin that decided a lane's toggle, for the
- * disposition's `source`. Resolution is the gate's own (lane key, then
- * master, then off), re-read here so the source names the SAME link in
- * the chain the verdict came from.
- */
-function decidingSource(lane: ReviewLane): string {
-  const laneEnv =
-    lane === REVIEW_LANE.notes
-      ? WRITE_APPROVAL_NOTES_ENV_KEY
-      : lane === REVIEW_LANE.ingest
-        ? WRITE_APPROVAL_INGEST_ENV_KEY
-        : undefined;
-  const laneKey =
-    lane === REVIEW_LANE.notes
-      ? WRITE_APPROVAL_NOTES_CONFIG_KEY
-      : lane === REVIEW_LANE.ingest
-        ? WRITE_APPROVAL_INGEST_CONFIG_KEY
-        : undefined;
-  if (laneEnv !== undefined && process.env[laneEnv] !== undefined && process.env[laneEnv] !== "") {
-    return laneEnv;
-  }
-  if (laneKey !== undefined) {
-    const raw = discoverConfig().data[laneKey];
-    if (typeof raw === "string" && raw.trim() !== "") return laneKey;
-  }
-  const masterEnv = process.env[WRITE_APPROVAL_ENABLED_ENV_KEY];
-  if (masterEnv !== undefined && masterEnv !== "") return WRITE_APPROVAL_ENABLED_ENV_KEY;
-  return WRITE_APPROVAL_ENABLED_CONFIG_KEY;
-}
-
-/** The document action a review lane's writes answer under. */
-function documentActionFor(lane: ReviewLane): PermissionAction {
-  return lane === REVIEW_LANE.ingest ? "ingest" : "write";
-}
-
-/**
- * Append the ONE decision-ledger row a stage or refuse disposition owes
- * (write-side trust, Task 12). Never throws: the append contract is the
- * substrate's, and a row that cannot be written comes back as an audit
- * reason rather than blocking the verdict it records.
- */
-function recordDispositionRow(
-  vault: string,
-  subject: PermissionSubject,
-  action: PermissionAction,
-  opts: ResolveWriteDispositionOptions,
-  decision: PermissionDecision,
-): void {
-  appendDecisionLedger(vault, {
-    ts: (opts.now ?? new Date()).toISOString(),
-    actor: subject.agent,
-    via: subject.via,
-    action,
-    target: opts.target ?? "",
-    verdict: decision.verdict,
-    source: decision.source,
-    reason: decision.reason,
-  });
-}
-
-/**
- * Resolve the write disposition for one lane.
- *
- * ABSENT document (write-side trust, Task 9): the `write_approval.*`
- * lane keys decide - on = stage, off = publish. No ledger row is written.
- *
- * PRESENT document (Task 12): the document is the ONLY gate - the lane
- * keys cannot bypass it in either direction. Exactly one substrate rule
- * decides (target entry > agent override > role > default, deny > ask >
- * allow at equal specificity): `deny` records one ledger row and throws
- * {@link WriteRefusedError} naming the principal, action, rule and next
- * command; `ask` records one row and stages; `allow` publishes, with a
- * row only when the document's `ledger.record_allows` asks for it. An
- * unreadable document fails closed through the loader's own error.
- */
-export function resolveWriteDisposition(
-  vault: string,
-  lane: ReviewLane,
-  subject?: PermissionSubject,
-  opts: ResolveWriteDispositionOptions = {},
-): WriteDisposition {
-  const { document } = loadPermissionsDocument(vault);
-  if (document === null) {
-    const on = resolveWriteApprovalLane(lane);
-    return Object.freeze({
-      verdict: on ? "stage" : "publish",
-      source: decidingSource(lane),
-    });
-  }
-  const effectiveSubject: PermissionSubject = subject ?? {
-    agent: resolveAgentName(),
-    via: "config",
-  };
-  const action = documentActionFor(lane);
-  const decision = resolvePermission(document, effectiveSubject, action, opts.target);
-  if (decision.verdict === "deny") {
-    recordDispositionRow(vault, effectiveSubject, action, opts, decision);
-    throw new WriteRefusedError({
-      agent: effectiveSubject.agent,
-      via: effectiveSubject.via,
-      action,
-      rule: decision.source,
-      target: opts.target ?? "",
-    });
-  }
-  if (decision.verdict === "ask") {
-    recordDispositionRow(vault, effectiveSubject, action, opts, decision);
-    return Object.freeze({
-      verdict: "stage",
-      source: decision.source,
-      reason: decision.reason,
-    });
-  }
-  if (document.ledger?.record_allows === true) {
-    recordDispositionRow(vault, effectiveSubject, action, opts, decision);
-  }
-  return Object.freeze({
-    verdict: "publish",
-    source: decision.source,
-    reason: decision.reason,
-  });
-}
 
 // ----- Staging --------------------------------------------------------------
 
@@ -790,6 +574,8 @@ export function applyPendingLane(
   // honest, it does not replace the atomic one.
   atomicCreateFileSyncExclusive(dest, contents);
   unlinkSync(src);
+  // The door's audit trail: one resolution row per real apply, naming
+  // the decoded publish path it published into.
   return { id, path: dest, dryRun: false };
 }
 
@@ -847,15 +633,8 @@ export function rejectPendingLane(
     vaultForRelativePath: vault,
   });
   unlinkSync(src);
+  // The door's audit trail, matching the apply's: one row per real
+  // reject, naming the publish path the bytes will never reach and the
+  // reason the resolver gave.
   return { id, path: dest };
 }
-
-/** The disposition source names, kept next to the resolvers that read them. */
-export const WRITE_APPROVAL_SOURCES = Object.freeze({
-  masterConfig: WRITE_APPROVAL_ENABLED_CONFIG_KEY,
-  masterEnv: WRITE_APPROVAL_ENABLED_ENV_KEY,
-  notesConfig: WRITE_APPROVAL_NOTES_CONFIG_KEY,
-  notesEnv: WRITE_APPROVAL_NOTES_ENV_KEY,
-  ingestConfig: WRITE_APPROVAL_INGEST_CONFIG_KEY,
-  ingestEnv: WRITE_APPROVAL_INGEST_ENV_KEY,
-});

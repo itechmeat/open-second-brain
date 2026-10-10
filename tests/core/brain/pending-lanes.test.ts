@@ -25,12 +25,14 @@ import { formatFrontmatter, parseFrontmatter } from "../../../src/core/vault.ts"
 import { atomicWriteFileSync, FileAlreadyExistsError } from "../../../src/core/fs-atomic.ts";
 import { PermissionsDocumentError } from "../../../src/core/brain/permissions/document.ts";
 import { queryDecisionLedger } from "../../../src/core/brain/permissions/ledger.ts";
+import { freezeVault } from "../../../src/core/brain/freeze.ts";
 import { createNote } from "../../../src/core/brain/notes/create-note.ts";
 import {
   InvalidPendingIdError,
   PendingApplyConflictError,
   PendingSignalNotFoundError,
   PendingTargetPathError,
+  WRITE_APPROVAL_SOURCES,
   WriteRefusedError,
   applyPendingLane,
   decodePendingTargetPath,
@@ -710,5 +712,51 @@ describe("createNote under a permissions document", () => {
     const rows = queryDecisionLedger(vault);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ action: "write", verdict: "ask", source: "default" });
+  });
+});
+
+describe("WRITE_APPROVAL_SOURCES", () => {
+  test("names every write_approval link, keyed as the historical surface spelled it", () => {
+    // Resolved through the queue's re-export on purpose: the disposition
+    // layer moved to its own module and this historical import path is
+    // the one that must keep resolving.
+    expect(WRITE_APPROVAL_SOURCES.masterConfig).toBe("write_approval.enabled");
+    expect(WRITE_APPROVAL_SOURCES.masterEnv).toBe("OPEN_SECOND_BRAIN_WRITE_APPROVAL_ENABLED");
+    expect(WRITE_APPROVAL_SOURCES.notesConfig).toBe("write_approval.notes");
+    expect(WRITE_APPROVAL_SOURCES.notesEnv).toBe("OPEN_SECOND_BRAIN_WRITE_APPROVAL_NOTES_ENABLED");
+    expect(WRITE_APPROVAL_SOURCES.ingestConfig).toBe("write_approval.ingest");
+    expect(WRITE_APPROVAL_SOURCES.ingestEnv).toBe(
+      "OPEN_SECOND_BRAIN_WRITE_APPROVAL_INGEST_ENABLED",
+    );
+  });
+});
+
+describe("disposition ledger rows that cannot land", () => {
+  const DOC_PATH = () => join(vault, "Brain", "_permissions.yaml");
+
+  test("a failed stage row is named on stderr, and the verdict still answers", () => {
+    writeFileSync(DOC_PATH(), "version: 1\ndefault_action: ask\n", "utf8");
+    freezeVault(vault, { agent: "@operator", reason: "audit drill" });
+    const written: string[] = [];
+    const original = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array): boolean => {
+      written.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    let disposition: ReturnType<typeof resolveWriteDisposition>;
+    try {
+      disposition = resolveWriteDisposition(vault, "notes", { agent: "claude", via: "config" });
+    } finally {
+      process.stderr.write = original;
+    }
+    // The row's loss never blocks the verdict it records.
+    expect(disposition.verdict).toBe("stage");
+    // The loss is named, never silent: the warning carries the append
+    // failure and the target the row was aimed at.
+    const combined = written.join("");
+    expect(combined).toContain("decision-ledger append failed");
+    expect(combined).toContain("warning:");
+    // And the ledger genuinely holds nothing - the row did not land.
+    expect(queryDecisionLedger(vault)).toEqual([]);
   });
 });
