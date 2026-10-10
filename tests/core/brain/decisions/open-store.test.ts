@@ -137,6 +137,25 @@ describe("openDecision", () => {
     expect(dup.existingId).toBe("open-which-http-client-for-the-ingest-lane");
   });
 
+  test("the same wording parks again once its twin has resolved", () => {
+    const first = openDecision(vault, baseInput());
+    resolveOpenDecision(vault, first.id, { choice: "bun's fetch", actor: "tester", now: T1 });
+    const second = openDecision(vault, baseInput({ now: T2 }));
+    expect(second.id).not.toBe(first.id);
+    expect(second.status).toBe("open");
+    expect(
+      listOpenDecisions(vault, { status: OPEN_DECISION_STATUS.open }).records.map((r) => r.id),
+    ).toEqual([second.id]);
+  });
+
+  test("the same wording parks again once its twin was discarded", () => {
+    const first = openDecision(vault, baseInput());
+    discardOpenDecision(vault, first.id, { reason: "not ours to make", actor: "tester", now: T1 });
+    const second = openDecision(vault, baseInput({ now: T2 }));
+    expect(second.id).not.toBe(first.id);
+    expect(second.status).toBe("open");
+  });
+
   test("a distinct question under the same title slug gets a suffixed filename, not a duplicate refusal", () => {
     const first = openDecision(vault, baseInput());
     const second = openDecision(
@@ -335,6 +354,69 @@ describe("resolveOpenDecision", () => {
     expect(
       log.entries.filter((e) => e.eventType === BRAIN_LOG_EVENT_KIND.decisionResolved),
     ).toHaveLength(1);
+  });
+
+  test("two same-titled questions both resolve, each minting its own page", () => {
+    const first = openDecision(
+      vault,
+      baseInput({ title: "Pick DB", question: "Which database for the core lane?" }),
+    );
+    const second = openDecision(
+      vault,
+      baseInput({ title: "Pick DB", question: "Which database for the analytics lane?", now: T1 }),
+    );
+    const r1 = resolveOpenDecision(vault, first.id, {
+      choice: "bun's fetch",
+      actor: "tester",
+      now: T1,
+    });
+    // The title slug is taken by the first record's page, so the second
+    // mints from a title carrying its own record id - never a refusal.
+    const r2 = resolveOpenDecision(vault, second.id, {
+      choice: "undici",
+      actor: "tester",
+      now: T2,
+    });
+    expect(r1.decision).toBe("decision-pick-db");
+    expect(r2.decision).toBe("decision-pick-db-open-pick-db-2");
+    expect(showOpenDecision(vault, second.id)!.status).toBe("resolved");
+    expect(showDecision(vault, "pick-db")!.chosen).toBe("bun's fetch");
+    expect(showDecision(vault, "pick-db-open-pick-db-2")!.chosen).toBe("undici");
+    expect(listDecisions(vault)).toHaveLength(2);
+  });
+
+  test("a resolve that crashed after minting the page converges on the next attempt", () => {
+    const rec = openDecision(vault, baseInput());
+    resolveOpenDecision(vault, rec.id, {
+      choice: "bun's fetch",
+      actor: "tester",
+      rationale: "zero extra dependency",
+      now: T1,
+    });
+    // Simulate the crash: rewind the record to its open shape, leaving the
+    // minted page (whose body names this record) in place.
+    writeFileSync(
+      rec.path,
+      readFileSync(rec.path, "utf8")
+        .replace("status: resolved", "status: open")
+        .replace(/^resolved_at: .*\n/mu, "")
+        .replace(/^choice: .*\n/mu, "")
+        .replace(/^decision: .*\n/mu, ""),
+      "utf8",
+    );
+    expect(showOpenDecision(vault, rec.id)!.status).toBe("open");
+
+    const again = resolveOpenDecision(vault, rec.id, {
+      choice: "bun's fetch",
+      actor: "tester",
+      now: T2,
+    });
+    expect(again.decision).toBe("decision-which-http-client-for-the-ingest-lane");
+    const stamped = showOpenDecision(vault, rec.id)!;
+    expect(stamped.status).toBe("resolved");
+    expect(stamped.decision).toBe("[[decision-which-http-client-for-the-ingest-lane]]");
+    // The crashed attempt minted the one page; the retry minted no second.
+    expect(listDecisions(vault)).toHaveLength(1);
   });
 
   test("a choice outside the enumerated options refuses naming the options", () => {

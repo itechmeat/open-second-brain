@@ -474,6 +474,134 @@ describe("o2b brain decision", () => {
     expect(dup.stderr).toContain("open-pick-a-queue");
   });
 
+  test("two same-titled questions both resolve to distinct decision pages", async () => {
+    for (const question of [
+      "Which database for the core lane?",
+      "Which database for the analytics lane?",
+    ]) {
+      const opened = await runCli(
+        [
+          "brain",
+          "decision",
+          "open",
+          "--config",
+          configPath,
+          "--title",
+          "Pick DB",
+          "--question",
+          question,
+          "--option",
+          "postgres",
+          "--option",
+          "sqlite",
+          "--json",
+        ],
+        { env },
+      );
+      expect(opened.returncode).toBe(0);
+    }
+    const first = await runCli(
+      [
+        "brain",
+        "decision",
+        "resolve",
+        "open-pick-db",
+        "--config",
+        configPath,
+        "--choice",
+        "postgres",
+        "--json",
+      ],
+      { env },
+    );
+    expect(first.returncode).toBe(0);
+    expect(JSON.parse(first.stdout).decision).toBe("decision-pick-db");
+
+    const second = await runCli(
+      [
+        "brain",
+        "decision",
+        "resolve",
+        "open-pick-db-2",
+        "--config",
+        configPath,
+        "--choice",
+        "sqlite",
+        "--json",
+      ],
+      { env },
+    );
+    expect(second.returncode).toBe(0);
+    expect(JSON.parse(second.stdout).decision).toBe("decision-pick-db-open-pick-db-2");
+
+    const page = await runCli(
+      ["brain", "decision", "show", "pick-db-open-pick-db-2", "--config", configPath, "--json"],
+      { env },
+    );
+    expect(page.returncode).toBe(0);
+    expect(JSON.parse(page.stdout).chosen).toBe("sqlite");
+  });
+
+  test("the same wording can be parked again after the twin was discarded", async () => {
+    const first = await runCli(
+      [
+        "brain",
+        "decision",
+        "open",
+        "--config",
+        configPath,
+        "--title",
+        "Pick a queue",
+        "--question",
+        "Which queue backs the worker?",
+        "--option",
+        "postgres",
+        "--option",
+        "rabbit",
+        "--json",
+      ],
+      { env },
+    );
+    expect(first.returncode).toBe(0);
+    const discarded = await runCli(
+      [
+        "brain",
+        "decision",
+        "discard",
+        "open-pick-a-queue",
+        "--config",
+        configPath,
+        "--reason",
+        "superseded",
+      ],
+      { env },
+    );
+    expect(discarded.returncode).toBe(0);
+
+    const second = await runCli(
+      [
+        "brain",
+        "decision",
+        "open",
+        "--config",
+        configPath,
+        "--title",
+        "Pick a queue",
+        "--question",
+        "Which queue backs the worker?",
+        "--option",
+        "postgres",
+        "--option",
+        "rabbit",
+        "--json",
+      ],
+      { env },
+    );
+    expect(second.returncode).toBe(0);
+    expect(JSON.parse(second.stdout).id).toBe("open-pick-a-queue-2");
+    expect(JSON.parse(second.stdout).status).toBe("open");
+  });
+
   test("discard records the reason and list_open partitions by status", async () => {
     await runCli(
       [

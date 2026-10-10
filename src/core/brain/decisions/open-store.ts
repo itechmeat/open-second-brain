@@ -19,7 +19,13 @@
  * change trail all happen exactly once, in the one place that owns
  * them), then stamps the open record `resolved` with a
  * `[[decision-<slug>]]` pointer and appends exactly one `open_resolved`
- * receipt to the decision-change trail. Creating an open decision is
+ * receipt to the decision-change trail. The minted page's slug is
+ * planned per record (the title slug first, then a title carrying the
+ * record's own unique id, numbered on collision): two parked questions
+ * under one title must never fight for one page, and a page that already
+ * carries this record's `[[open-<slug>]]` provenance is a crashed
+ * earlier attempt the next resolve converges against instead of
+ * failing. Creating an open decision is
  * exempt from the write gate by design: accountability lanes stay
  * writable when content lanes are gated, the same principle that keeps
  * the audit lane appending under freeze.
@@ -43,7 +49,7 @@ import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { parseFrontmatterText, slugify } from "../../vault.ts";
 import { appendLogEvent } from "../log.ts";
 import { BRAIN_DECISIONS_REL } from "../path-constants.ts";
-import { decisionsDir } from "../paths.ts";
+import { decisionsDir, decisionPath } from "../paths.ts";
 import { isoDate, isoSecond } from "../time.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
@@ -138,10 +144,11 @@ export class OpenDecisionError extends Error {
 }
 
 /**
- * A question that is already parked refuses to park twice. Dedup is on
- * the sha16 of the NORMALIZED question, so rephrased whitespace or
- * casing cannot mint a second record for one question - and the refusal
- * names the existing id so the caller can go straight to it.
+ * A question that already has an OPEN record refuses to park twice. Dedup
+ * is on the sha16 of the NORMALIZED question and scoped to open records -
+ * the dedup key runs across open records only, so the same wording may be
+ * parked again once its twin has settled (resolved or discarded). The
+ * refusal names the existing id so the caller can go straight to it.
  */
 export class OpenDecisionDuplicateError extends OpenDecisionError {
   /** The id of the record already carrying this question. */
@@ -152,8 +159,8 @@ export class OpenDecisionDuplicateError extends OpenDecisionError {
   constructor(existingId: string, existingPath: string) {
     super(
       `open decision: this question is already parked as ${existingId} ` +
-        `(${existingPath}); resolve or discard an open twin, or word the ` +
-        `question differently when the twin has already settled`,
+        `(${existingPath}); resolve or discard it first, or word the ` +
+        `question differently`,
     );
     this.name = "OpenDecisionDuplicateError";
     this.existingId = existingId;
@@ -547,11 +554,11 @@ function withOpenDirLock<T>(vault: string, body: () => T): T {
 
 /**
  * Park a question with its enumerated options. Dedup is on the sha16 of
- * the normalized question: a twin question (same words, different
- * whitespace or casing) refuses with
- * {@link OpenDecisionDuplicateError} naming the existing id. A DISTINCT
- * question under an occupied slug gets a suffixed filename, never a
- * clobber.
+ * the normalized question, scoped to OPEN records: a twin question (same
+ * words, different whitespace or casing) with an open record refuses with
+ * {@link OpenDecisionDuplicateError} naming the existing id; the same
+ * wording parks again once the twin has settled. A DISTINCT question
+ * under an occupied slug gets a suffixed filename, never a clobber.
  */
 export function openDecision(vault: string, input: OpenDecisionInput): OpenDecisionRecord {
   // Vault-identity write guard (context-integrity-gates, Unit J).
@@ -570,7 +577,11 @@ export function openDecision(vault: string, input: OpenDecisionInput): OpenDecis
   const questionHash = openQuestionHash(question);
 
   return withOpenDirLock(vault, () => {
-    const existing = listOpenDecisions(vault).records.find((r) => r.questionHash === questionHash);
+    // Dedup is scoped to open records: a settled (resolved / discarded)
+    // twin is history, and the same wording must be parkable again.
+    const existing = listOpenDecisions(vault, { status: OPEN_DECISION_STATUS.open }).records.find(
+      (r) => r.questionHash === questionHash,
+    );
     if (existing !== undefined) {
       throw new OpenDecisionDuplicateError(existing.id, existing.path);
     }
@@ -662,12 +673,88 @@ function actorFor(input: { actor?: string; configPath?: string }, fallback: stri
 }
 
 /**
+ * The provenance a minted page always carries: the wikilink naming the
+ * open record it came from, in the body, so a resolve that crashed
+ * between minting the page and stamping the record can be recognized and
+ * converged on the next attempt.
+ */
+function mintProvenance(record: OpenDecisionRecord): string {
+  return `resolved from [[${record.id}]]`;
+}
+
+/** The minted page's body: the open record's context plus the provenance. */
+function mintNotes(record: OpenDecisionRecord): string {
+  return [record.context, mintProvenance(record)].filter((part) => part !== "").join("\n\n");
+}
+
+/** The title exactly as `recordDecision` will sanitise it, so the
+ * occupy-check below tests the slug the mint will actually write. */
+function sanitiseMintTitle(value: string): string {
+  return sanitiseTextField(value, { maxLen: TITLE_MAX_LEN, singleLine: true }).trim();
+}
+
+/**
+ * A fallback mint title deriving from the open record's OWN id (unique
+ * among records, so two parked questions under one title can never fight
+ * for one page). `suffix` 0 appends just the id; 2, 3, ... number it
+ * further. The base is pre-shaved so the tail survives the field cap and
+ * each candidate slug stays distinct.
+ */
+function derivedMintTitle(record: OpenDecisionRecord, suffix: number): string {
+  const tail = suffix === 0 ? ` (${record.id})` : ` (${record.id} ${suffix})`;
+  const base = record.title.slice(0, Math.max(0, TITLE_MAX_LEN - tail.length));
+  return `${base}${tail}`;
+}
+
+interface ResolveMintTarget {
+  /** The title to pass to `recordDecision`; its slug is `slug`. */
+  readonly title: string;
+  /** The slug the page occupies, or will occupy. */
+  readonly slug: string;
+  /**
+   * True when `slug` is already occupied by a page carrying this
+   * record's `[[open-<slug>]]` provenance - a crashed earlier attempt
+   * the resolve converges against by stamping, not by minting again.
+   */
+  readonly ours: boolean;
+}
+
+/**
+ * Plan the page one resolve mints. The bare title slug first; if that is
+ * occupied by a page that does not reference this record, fall through
+ * the per-record derived titles, numbered on collision - the same
+ * occupy-check `openDecision` runs for the record filename. Never the
+ * bare title alone: `recordDecision` refuses an existing slug, so a
+ * second "Pick DB" question would otherwise be wedged open forever (and
+ * a crash between minting and stamping would wedge the first one too).
+ */
+function resolveMintTarget(vault: string, record: OpenDecisionRecord): ResolveMintTarget {
+  const reference = `[[${record.id}]]`;
+  let title = sanitiseMintTitle(record.title);
+  let slug = slugify(title);
+  let suffix = 0;
+  for (;;) {
+    const path = decisionPath(vault, slug);
+    if (!existsSync(path)) return { title, slug, ours: false };
+    if (readFileSync(path, "utf8").includes(reference)) return { title, slug, ours: true };
+    title = sanitiseMintTitle(derivedMintTitle(record, suffix));
+    slug = slugify(title);
+    suffix = suffix === 0 ? 2 : suffix + 1;
+  }
+}
+
+/**
  * Close a parked question by CHOOSING: mint the real `type: decision`
  * page through {@link recordDecision} (review obligation, log event and
  * the B4 change trail included - the one place that owns them), stamp
  * the open record `resolved` with the `[[decision-<slug>]]` pointer, and
  * append exactly one `open_resolved` receipt. The open record stays in
  * place: history is a status filter.
+ *
+ * Idempotent-safe: when the planned page already exists and carries this
+ * record's `[[open-<slug>]]` provenance - a previous attempt that minted
+ * the page and crashed before stamping - the resolve converges by
+ * stamping against that page instead of failing.
  */
 export function resolveOpenDecision(
   vault: string,
@@ -698,24 +785,36 @@ export function resolveOpenDecision(
     // owns the slug, the review obligation, the log event and the
     // decision-record receipt. When the operator gave no rationale the
     // assumption names the provenance (which open record decided this)
-    // rather than inventing a belief.
-    const minted = recordDecision(vault, {
-      title: record.title,
-      chosen: choice,
-      assumption: rationale || `resolved from [[${record.id}]]`,
-      reviewDate: isoDate(now),
-      ...(record.context ? { notes: record.context } : {}),
-      agent: actor,
-      now,
-      ...(input.configPath !== undefined ? { configPath: input.configPath } : {}),
-    });
+    // rather than inventing a belief, and the body always carries the
+    // provenance link so a crashed resolve can converge (see
+    // {@link resolveMintTarget}).
+    const target = resolveMintTarget(vault, record);
+    let decisionId: string;
+    if (target.ours) {
+      // A previous attempt minted this page and crashed before stamping
+      // the record: the page is already authoritative, so only the stamp
+      // (and its mirrors) remain.
+      decisionId = `decision-${target.slug}`;
+    } else {
+      const minted = recordDecision(vault, {
+        title: target.title,
+        chosen: choice,
+        assumption: rationale || mintProvenance(record),
+        reviewDate: isoDate(now),
+        notes: mintNotes(record),
+        agent: actor,
+        now,
+        ...(input.configPath !== undefined ? { configPath: input.configPath } : {}),
+      });
+      decisionId = minted.record.id;
+    }
 
     const stamped: OpenDecisionRecord = Object.freeze({
       ...record,
       status: OPEN_DECISION_STATUS.resolved,
       resolvedAt: isoSecond(now),
       choice,
-      decision: `[[${minted.record.id}]]`,
+      decision: `[[${decisionId}]]`,
     });
     atomicWriteFileSync(record.path, renderRecord(stamped));
 
@@ -725,7 +824,7 @@ export function resolveOpenDecision(
       agent: actor,
       body: {
         open: `[[${record.id}]]`,
-        decision: `[[${minted.record.id}]]`,
+        decision: `[[${decisionId}]]`,
         choice,
         agent: actor,
       },
@@ -740,8 +839,8 @@ export function resolveOpenDecision(
       appendDecisionChangeReceipt(vault, {
         subject: `[[${record.id}]]`,
         before: OPEN_DECISION_STATUS.open,
-        after: `${OPEN_DECISION_STATUS.resolved} -> [[${minted.record.id}]]`,
-        evidenceTriggers: [`[[${minted.record.id}]]`],
+        after: `${OPEN_DECISION_STATUS.resolved} -> [[${decisionId}]]`,
+        evidenceTriggers: [`[[${decisionId}]]`],
         actor,
         ...(rationale ? { rationale } : {}),
         reasonCode: DECISION_CHANGE_REASON.openResolved,
@@ -752,7 +851,7 @@ export function resolveOpenDecision(
       // Best-effort accountability; the stamped record is authoritative.
     }
 
-    return { decision: minted.record.id };
+    return { decision: decisionId };
   });
 }
 
