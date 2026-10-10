@@ -42,7 +42,10 @@ import {
 } from "../../core/brain/write-batch.ts";
 import type { ReadableRef } from "../../core/brain/near-duplicate.ts";
 import { nextCommandField } from "../../core/brain/next-step.ts";
-import { PENDING_STAGED_DIAGNOSTIC_CODE } from "../../core/brain/pending/pending-lanes.ts";
+import {
+  PENDING_STAGED_DIAGNOSTIC_CODE,
+  WriteRefusedError,
+} from "../../core/brain/pending/pending-lanes.ts";
 import {
   lintWrittenPages,
   pageLintField,
@@ -231,6 +234,18 @@ export function writeBatchErrorToMcp(err: unknown, tool: string): MCPError {
       ...err.details,
     });
   }
+  // Write-side trust (Task 12): a permissions document rule denied one of
+  // the batch's ops. Named code, the rule that decided, and the operator
+  // exit - the batch aborted before any commit, so the refusal is the
+  // whole answer.
+  if (err instanceof WriteRefusedError) {
+    return new MCPError(INVALID_PARAMS, `${tool}: ${err.message}`, {
+      code: err.code,
+      rule: err.rule,
+      agent: err.agent,
+      next_command: err.nextCommand,
+    });
+  }
   return new MCPError(INTERNAL_ERROR, err instanceof Error ? err.message : String(err));
 }
 
@@ -325,6 +340,16 @@ async function toolBrainCreateNote(
         code: err.code,
         ...advisoryFields(err.code),
         ...(err.violations.length > 0 ? { violations: err.violations } : {}),
+      });
+    }
+    // Write-side trust (Task 12): a permissions document rule denied the
+    // create. Named code, the rule that decided, and the operator exit.
+    if (err instanceof WriteRefusedError) {
+      throw new MCPError(INVALID_PARAMS, `brain_create_note: ${err.message}`, {
+        code: err.code,
+        rule: err.rule,
+        agent: err.agent,
+        next_command: err.nextCommand,
       });
     }
     rethrowVaultFrozen(err);

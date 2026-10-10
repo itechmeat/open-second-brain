@@ -400,6 +400,11 @@ import {
   OWNER_SCOPE_REFUSALS,
 } from "../../../src/mcp/owner-scope-refusal.ts";
 import {
+  isWriteRefusalCode,
+  WRITE_REFUSAL_CODES,
+  WRITE_REFUSAL_CODE_LIST,
+} from "../../../src/core/brain/pending/pending-lanes.ts";
+import {
   isOriginReach,
   isOriginReachReason,
   ORIGIN_REACH,
@@ -1284,6 +1289,17 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     guard: isOwnerScopeRefusal,
   },
   {
+    // Write-side trust, Task 12. The named tokens a refused write-side
+    // trust call carries: a permissions document rule denied the write
+    // outright, or refused the force_confirmed bypass for a caller whose
+    // write verdict is not allow. Registered so the tokens a client
+    // branches on cannot drift from the guard that narrows them.
+    name: "WRITE_REFUSAL_CODES",
+    values: WRITE_REFUSAL_CODES,
+    members: WRITE_REFUSAL_CODE_LIST,
+    guard: isWriteRefusalCode,
+  },
+  {
     // private-is-not-a-suggestion, U2. How far the caller of this process
     // had to reach to get here. Minted by the transport and never parsed
     // out of a request, so the guard is for a value read back off a
@@ -1785,7 +1801,7 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
  * How many four-piece vocabularies `src/` currently holds. Measured, and
  * kept as an equality rather than a floor - see the population test.
  */
-const VOCABULARY_POPULATION = 93;
+const VOCABULARY_POPULATION = 94;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {

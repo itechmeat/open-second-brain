@@ -524,6 +524,15 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "is the shared writer class (`atomicWriteFileSync`, `atomicCreateFileSyncExclusive`); " +
       "the unlink is the only direct call.",
   },
+  "src/core/brain/permissions/ledger.ts": {
+    categories: [C.appendOnlyLedger, C.lockPrimitive],
+    calls: ["writeFileSync"],
+    reason:
+      "`writeFileSync(..., { flag: 'a' })` inside the per-shard `proper-lockfile`: one " +
+      "decision-ledger row per gate verdict, appended to the device's month shard. " +
+      "Append-only on the idempotency-ledger model - nothing is ever rewritten, so " +
+      "the shared writer class has no rewrite to route.",
+  },
   "src/core/brain/preference.ts": {
     categories: [C.lifecycleMove],
     calls: ["unlinkSync"],
@@ -1255,7 +1264,7 @@ const DIRECT_ROWS = ROWS.filter((row) => row.directCalls.length > 0);
  * with the passphrase-wrapped envelope (tmp-plus-rename at 0600), the
  * custody-boundary twin of the store and keyfile rows beside it.
  */
-const DIRECT_WRITE_ROWS = 78;
+const DIRECT_WRITE_ROWS = 79;
 
 /**
  * Measured modules reaching a write through a shared helper. An equality.
@@ -1403,7 +1412,7 @@ const STAMPED_PATHS: ReadonlySet<string> = new Set(
  * 75 -> 76: the freshen-on-read claim and its release (state, not notes).
  * 76 -> 77: the secrets keyfile envelope swap (custody bytes, not notes).
  */
-const UNSTAMPED_DIRECT_ROWS = 77;
+const UNSTAMPED_DIRECT_ROWS = 78;
 
 /**
  * Shared-helper write sites the stamp does not reach, measured the same

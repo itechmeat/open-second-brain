@@ -29,7 +29,11 @@ import {
 import { manifestPath, hashBytes } from "../../../../src/core/brain/ingest/content-manifest.ts";
 import { computeExtractionContractFingerprint } from "../../../../src/core/brain/ingest/contract.ts";
 import { computePlanId, readCheckpoint } from "../../../../src/core/brain/ingest/checkpoint.ts";
-import { applyPendingLane } from "../../../../src/core/brain/pending/pending-lanes.ts";
+import {
+  applyPendingLane,
+  WriteRefusedError,
+} from "../../../../src/core/brain/pending/pending-lanes.ts";
+import { queryDecisionLedger } from "../../../../src/core/brain/permissions/ledger.ts";
 import { deleteBySource } from "../../../../src/core/brain/source-cleanup.ts";
 import { readManifest } from "../../../../src/core/brain/ingest/content-manifest.ts";
 
@@ -561,5 +565,51 @@ describe("ingestSource under the ingest review gate", () => {
       join(vault, "Brain/pending/ingest", `${res.pendingId}.md`).slice(vault.length + 1),
     );
     expect(existsSync(join(vault, "Brain/pending/ingest", `${res.pendingId}.md`))).toBe(false);
+  });
+});
+
+/**
+ * The document-backed disposition (write-side trust, Task 12): a
+ * permissions document that denies the ingest action refuses
+ * `brain_ingest_source` BEFORE any write - no entity page, no manifest
+ * row, no summary page, no queue entry - and lands exactly one
+ * decision-ledger row naming the rule that decided.
+ */
+describe("ingestSource under a denying permissions document", () => {
+  test("a deny default refuses the ingest before any write", () => {
+    seedSourceFile();
+    writeFileSync(join(vault, "Brain/_permissions.yaml"), "version: 1\ndefault_action: deny\n");
+    expect(() => ingestSource(vault, INPUT, { agent: "claude", now: NOW })).toThrow(
+      WriteRefusedError,
+    );
+    // Nothing was written: not the summary page, not the queue, not the
+    // entities, not the manifest.
+    expect(listEntities(vault, { category: "concept" })).toHaveLength(0);
+    expect(readManifestEntries()).toEqual([]);
+    expect(existsSync(join(vault, "Brain/pending/ingest"))).toBe(false);
+    const sourcesDir = join(vault, "Brain", "sources");
+    const summaryFiles = existsSync(sourcesDir)
+      ? fs.readdirSync(sourcesDir).filter((n) => n.endsWith(".md"))
+      : [];
+    expect(summaryFiles).toEqual([]);
+    // Exactly one ledger row, naming the default rule and the ingest action.
+    const rows = queryDecisionLedger(vault, { verdict: "deny" });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      actor: "claude",
+      action: "ingest",
+      verdict: "deny",
+      source: "default",
+    });
+  });
+
+  test("an ask default stages the first publish and records exactly one row", () => {
+    seedSourceFile();
+    writeFileSync(join(vault, "Brain/_permissions.yaml"), "version: 1\ndefault_action: ask\n");
+    const res = ingestSource(vault, INPUT, { agent: "claude", now: NOW });
+    expect(res.staged).toBe(true);
+    const rows = queryDecisionLedger(vault, { verdict: "ask" });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ action: "ingest", verdict: "ask", source: "default" });
   });
 });

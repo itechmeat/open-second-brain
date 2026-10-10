@@ -76,8 +76,13 @@ import {
   resolveSharedNamespace,
 } from "../../core/brain/shared-namespace.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
-import { PENDING_STAGED_DIAGNOSTIC_CODE } from "../../core/brain/pending/pending-lanes.ts";
-import { nextCommandField } from "../../core/brain/next-step.ts";
+import {
+  PENDING_STAGED_DIAGNOSTIC_CODE,
+  WRITE_REFUSAL_CODES,
+} from "../../core/brain/pending/pending-lanes.ts";
+import { nextCommandField, requireNextStep } from "../../core/brain/next-step.ts";
+import { loadPermissionsDocument } from "../../core/brain/permissions/document.ts";
+import { resolvePermission } from "../../core/brain/permissions/resolve.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { codeForError } from "../tool-error-codes.ts";
@@ -95,6 +100,16 @@ import {
 } from "./shared.ts";
 import { OPERATION } from "../../core/brain/safeguard.ts";
 import { readableAtContextReach, readableAtContextReachOrUndefined } from "./reach-readable.ts";
+
+/**
+ * The registered exit the force-confirmed refusal names (write-side
+ * trust, Task 12). Resolved at module scope on the write-binding
+ * precedent: an unregistered code is registry drift and fails at import
+ * rather than inside the refusal it was meant to explain.
+ */
+const FORCE_CONFIRMED_EXIT = requireNextStep(
+  WRITE_REFUSAL_CODES.forceConfirmedRequiresAllow,
+).nextCommand;
 
 /**
  * Build the slug used in the signal / preference filename. We never let
@@ -136,6 +151,40 @@ async function toolBrainFeedback(
   const agent =
     normalizeAgentArgument(validated.value.agent ?? null) ??
     resolveAgentName(ctx.configPath ?? undefined);
+
+  // The force-confirmed rule (write-side trust, Task 12). `force_confirmed`
+  // skips the dream trial window - the one write whose whole point is to
+  // bypass a review - so under a permissions document that bypass belongs
+  // to the operator, not the caller: the caller's `write` verdict must be
+  // `allow`, and anything else refuses with the named token BEFORE any
+  // write. With no document this block never runs, so the document-absent
+  // behavior is byte-identically the pre-Task-12 one. The verdict consult
+  // is the substrate resolver directly - no disposition row - because the
+  // write it guards has its own gate; this check only polices the bypass.
+  if (forceConfirmed) {
+    const { document } = loadPermissionsDocument(ctx.vault);
+    if (document !== null) {
+      const decision = resolvePermission(document, { agent, via: "config" }, "write");
+      if (decision.verdict !== "allow") {
+        throw new MCPError(
+          INVALID_PARAMS,
+          `brain_feedback refused (${WRITE_REFUSAL_CODES.forceConfirmedRequiresAllow}): ` +
+            "force_confirmed skips the dream trial window, which the permissions " +
+            `document reserves for allow-verdict callers. Rule ${decision.source} ` +
+            `(${decision.reason}) decided ${decision.verdict} for agent ` +
+            `${JSON.stringify(agent)}. The operator can review the policy: ` +
+            FORCE_CONFIRMED_EXIT,
+          {
+            code: WRITE_REFUSAL_CODES.forceConfirmedRequiresAllow,
+            rule: decision.source,
+            verdict: decision.verdict,
+            agent,
+          },
+        );
+      }
+    }
+  }
+
   // Per-row event-time (A2 / t_7526e8d3): an optional caller-supplied
   // `event_time` lets a backfilled / imported "remember" carry when it
   // actually happened instead of the wall-clock. When present and valid,

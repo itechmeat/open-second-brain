@@ -12,7 +12,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -21,6 +29,7 @@ import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { NOTES_TOOLS } from "../../src/mcp/brain/notes-tools.ts";
 import { WRITE_BATCH_TOOLS } from "../../src/mcp/brain/write-batch-tools.ts";
 import { INGEST_TOOLS } from "../../src/mcp/brain/ingest-tools.ts";
+import { MCPError } from "../../src/mcp/protocol.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
 const NOTES_ENV = "OPEN_SECOND_BRAIN_WRITE_APPROVAL_NOTES_ENABLED";
@@ -130,5 +139,58 @@ describe("brain_ingest_source staged receipt", () => {
       "utf8",
     );
     expect(stagedBytes).toContain("Ethereum scaling overview.");
+  });
+});
+
+/**
+ * The deny arm (write-side trust, Task 12): under a permissions document
+ * rule that refuses the write, the tool answers with the NAMED refusal -
+ * the `write-refused` code, the rule that decided, and the operator
+ * command - never as an internal error a caller would retry into the
+ * same wall. Nothing is written and no queue entry exists.
+ */
+describe("document-denied writes answer as named refusals", () => {
+  const DOC = () => join(vault, "Brain", "_permissions.yaml");
+
+  test("brain_create_note carries the write-refused code and the rule", async () => {
+    writeFileSync(DOC(), "version: 1\ndefault_action: deny\n");
+    let refused: MCPError | undefined;
+    try {
+      await createNote(ctx, { path: "Notes/Denied.md", content: "x" });
+    } catch (err) {
+      refused = err instanceof MCPError ? err : undefined;
+    }
+    expect(refused).toBeInstanceOf(MCPError);
+    expect((refused?.data as { code?: string } | undefined)?.code).toBe("write-refused");
+    expect((refused?.data as { rule?: string } | undefined)?.rule).toBe("default");
+    expect((refused?.data as { next_command?: string } | undefined)?.next_command).toBe(
+      "o2b brain permissions show",
+    );
+    expect(existsSync(join(vault, "Notes/Denied.md"))).toBe(false);
+    expect(existsSync(join(vault, "Brain/pending/notes"))).toBe(false);
+  });
+
+  test("brain_ingest_source carries the write-refused code before any write", async () => {
+    writeFileSync(DOC(), "version: 1\ndefault_action: deny\n");
+    mkdirSync(join(vault, "Articles"), { recursive: true });
+    writeFileSync(join(vault, "Articles/eth.md"), "source bytes\n", "utf8");
+    let refused: MCPError | undefined;
+    try {
+      await ingestSource(ctx, {
+        source_path: "Articles/eth.md",
+        summary: "Ethereum scaling overview.",
+        entities: [{ category: "concept", name: "Rollups" }],
+      });
+    } catch (err) {
+      refused = err instanceof MCPError ? err : undefined;
+    }
+    expect(refused).toBeInstanceOf(MCPError);
+    expect((refused?.data as { code?: string } | undefined)?.code).toBe("write-refused");
+    expect(String(refused?.message)).toContain("write refused");
+    // The refusal precedes registration: no entity page exists either
+    // (the starter bundle leaves the entities directory empty).
+    const entitiesDir = join(vault, "Brain", "entities");
+    expect(existsSync(entitiesDir) ? readdirSync(entitiesDir).length : 0).toBe(0);
+    expect(existsSync(join(vault, "Brain/pending/ingest"))).toBe(false);
   });
 });

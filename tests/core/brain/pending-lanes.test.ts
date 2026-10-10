@@ -23,11 +23,15 @@ import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { brainDirs } from "../../../src/core/brain/paths.ts";
 import { formatFrontmatter, parseFrontmatter } from "../../../src/core/vault.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
+import { PermissionsDocumentError } from "../../../src/core/brain/permissions/document.ts";
+import { queryDecisionLedger } from "../../../src/core/brain/permissions/ledger.ts";
+import { createNote } from "../../../src/core/brain/notes/create-note.ts";
 import {
   InvalidPendingIdError,
   PendingApplyConflictError,
   PendingSignalNotFoundError,
   PendingTargetPathError,
+  WriteRefusedError,
   applyPendingLane,
   decodePendingTargetPath,
   encodePendingTargetPath,
@@ -457,5 +461,210 @@ describe("lane directories", () => {
     stageForReview(vault, "notes", "Notes/Late.md", () => "n");
     // No ingest directory appears behind a notes-only stage.
     expect(existsSync(join(brainDirs(vault).pending, "ingest"))).toBe(false);
+  });
+});
+
+// ----- document-backed dispositions (write-side trust, Task 12) --------------
+
+/**
+ * When `Brain/_permissions.yaml` exists it is the ONLY gate: the lane
+ * keys cannot bypass it, every verdict names the one rule that decided,
+ * and a stage or refuse lands exactly one decision-ledger row whose
+ * source names the entry, role or default. With no document the Task 9
+ * arm is unchanged and the ledger stays empty.
+ */
+describe("resolveWriteDisposition under a permissions document", () => {
+  const DOC_PATH = () => join(vault, "Brain", "_permissions.yaml");
+
+  function writeDoc(text: string): void {
+    writeFileSync(DOC_PATH(), text, "utf8");
+  }
+
+  function rowsFor(filter: { verdict?: string } = {}): ReturnType<typeof queryDecisionLedger> {
+    return queryDecisionLedger(vault, filter);
+  }
+
+  test("a deny default refuses by name and records exactly one row naming the rule", () => {
+    writeDoc("version: 1\ndefault_action: deny\n");
+    const subject = { agent: "claude", via: "config" as const };
+    let refused: WriteRefusedError | undefined;
+    try {
+      resolveWriteDisposition(vault, "notes", subject, { target: "Notes/X.md" });
+    } catch (err) {
+      refused = err instanceof WriteRefusedError ? err : undefined;
+    }
+    expect(refused).toBeInstanceOf(WriteRefusedError);
+    expect(refused?.agent).toBe("claude");
+    expect(refused?.via).toBe("config");
+    expect(refused?.action).toBe("write");
+    expect(refused?.rule).toBe("default");
+    expect(refused?.target).toBe("Notes/X.md");
+    expect(refused?.nextCommand).toBe("o2b brain permissions show");
+    const rows = rowsFor({ verdict: "deny" });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      actor: "claude",
+      via: "config",
+      action: "write",
+      target: "Notes/X.md",
+      verdict: "deny",
+      source: "default",
+    });
+  });
+
+  test("an ask default stages and records exactly one row naming the rule", () => {
+    writeDoc("version: 1\ndefault_action: ask\n");
+    const disposition = resolveWriteDisposition(vault, "notes", {
+      agent: "claude",
+      via: "config",
+    });
+    expect(disposition.verdict).toBe("stage");
+    expect(disposition.source).toBe("default");
+    const rows = rowsFor({ verdict: "ask" });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ action: "write", source: "default", verdict: "ask" });
+  });
+
+  test("an allow publishes with no row unless the document records allows", () => {
+    writeDoc("version: 1\ndefault_action: allow\n");
+    const subject = { agent: "claude", via: "config" as const };
+    const quiet = resolveWriteDisposition(vault, "notes", subject, { target: "Notes/Quiet.md" });
+    expect(quiet.verdict).toBe("publish");
+    expect(quiet.source).toBe("default");
+    expect(queryDecisionLedger(vault)).toHaveLength(0);
+    writeDoc("version: 1\ndefault_action: allow\nledger:\n  record_allows: true\n");
+    const loud = resolveWriteDisposition(vault, "notes", subject, { target: "Notes/Loud.md" });
+    expect(loud.verdict).toBe("publish");
+    const rows = queryDecisionLedger(vault);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      target: "Notes/Loud.md",
+      verdict: "allow",
+      source: "default",
+    });
+  });
+
+  test("a target entry overrides the default and the row names the entry", () => {
+    writeDoc(
+      [
+        "version: 1",
+        "default_action: deny",
+        "ledger:",
+        "  record_allows: true",
+        "entries:",
+        "  - id: admit-zed",
+        "    agent: claude",
+        "    action: write",
+        "    target: Notes/Zed.md",
+        "    verdict: allow",
+      ].join("\n") + "\n",
+    );
+    const subject = { agent: "claude", via: "config" as const };
+    const admitted = resolveWriteDisposition(vault, "notes", subject, { target: "Notes/Zed.md" });
+    expect(admitted.verdict).toBe("publish");
+    expect(admitted.source).toBe("entry:admit-zed");
+    // A different target stays under the default and refuses.
+    let refused: WriteRefusedError | undefined;
+    try {
+      resolveWriteDisposition(vault, "notes", subject, { target: "Notes/Other.md" });
+    } catch (err) {
+      refused = err instanceof WriteRefusedError ? err : undefined;
+    }
+    expect(refused?.rule).toBe("default");
+    // Both consults recorded exactly their own row: the allow names the
+    // entry, the deny names the default.
+    const allowRows = rowsFor({ verdict: "allow" });
+    expect(allowRows).toHaveLength(1);
+    expect(allowRows[0]!.source).toBe("entry:admit-zed");
+    const denyRows = rowsFor({ verdict: "deny" });
+    expect(denyRows).toHaveLength(1);
+    expect(denyRows[0]!.source).toBe("default");
+  });
+
+  test("a role mapping decides and the row names the role", () => {
+    writeDoc(
+      [
+        "version: 1",
+        "default_action: deny",
+        "roles:",
+        "  reviewers:",
+        "    write: ask",
+        "agents:",
+        "  claude:",
+        "    role: reviewers",
+      ].join("\n") + "\n",
+    );
+    const disposition = resolveWriteDisposition(vault, "notes", {
+      agent: "claude",
+      via: "config",
+    });
+    expect(disposition.verdict).toBe("stage");
+    expect(disposition.source).toBe("role:reviewers");
+    const rows = queryDecisionLedger(vault);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.source).toBe("role:reviewers");
+  });
+
+  test("a document cannot be bypassed by the lane keys in either direction", () => {
+    // Lane key on, document allow: the document alone decides, so publish.
+    enableNotes();
+    writeDoc("version: 1\ndefault_action: allow\n");
+    expect(
+      resolveWriteDisposition(vault, "notes", { agent: "claude", via: "config" }).verdict,
+    ).toBe("publish");
+    // Lane key on, document ask: still stage, but the deciding source is
+    // the document's rule, never the lane key.
+    writeDoc("version: 1\ndefault_action: ask\n");
+    const staged = resolveWriteDisposition(vault, "notes", { agent: "claude", via: "config" });
+    expect(staged.verdict).toBe("stage");
+    expect(staged.source).toBe("default");
+  });
+
+  test("an unreadable document fails closed instead of publishing", () => {
+    writeDoc("version: 2\ndefault_action: allow\n");
+    expect(() =>
+      resolveWriteDisposition(vault, "notes", { agent: "claude", via: "config" }),
+    ).toThrow(PermissionsDocumentError);
+    expect(queryDecisionLedger(vault)).toHaveLength(0);
+  });
+
+  test("an absent document keeps the Task 9 arm and writes no rows", () => {
+    enableNotes();
+    const disposition = resolveWriteDisposition(vault, "notes", { agent: "claude", via: "config" });
+    expect(disposition.verdict).toBe("stage");
+    expect(disposition.source).toBe("OPEN_SECOND_BRAIN_WRITE_APPROVAL_NOTES_ENABLED");
+    expect(queryDecisionLedger(vault)).toHaveLength(0);
+  });
+});
+
+// ----- consumer refusals (write-side trust, Task 12) -------------------------
+
+describe("createNote under a permissions document", () => {
+  const DOC_PATH = () => join(vault, "Brain", "_permissions.yaml");
+
+  test("a deny default refuses the create before any byte", () => {
+    writeFileSync(DOC_PATH(), "version: 1\ndefault_action: deny\n", "utf8");
+    expect(() => createNote(vault, { path: "Notes/Denied.md", content: "x" })).toThrow(
+      WriteRefusedError,
+    );
+    expect(existsSync(join(vault, "Notes/Denied.md"))).toBe(false);
+    expect(existsSync(join(vault, "Brain/pending/notes"))).toBe(false);
+    // Exactly one row: the refusal, naming the default rule.
+    const rows = queryDecisionLedger(vault, { verdict: "deny" });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.source).toBe("default");
+  });
+
+  test("an ask default stages the create and records exactly one row", () => {
+    writeFileSync(DOC_PATH(), "version: 1\ndefault_action: ask\n", "utf8");
+    const res = createNote(vault, { path: "Notes/Ask First.md", content: "reviewed bytes" });
+    expect(res.outcome).toBe("staged");
+    if (res.outcome !== "staged") throw new Error("unreachable");
+    expect(existsSync(join(vault, "Notes/Ask First.md"))).toBe(false);
+    const stagedBytes = readFileSync(res.pendingPath, "utf8");
+    expect(stagedBytes).toContain("reviewed bytes");
+    const rows = queryDecisionLedger(vault);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ action: "write", verdict: "ask", source: "default" });
   });
 });

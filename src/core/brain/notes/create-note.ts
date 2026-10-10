@@ -76,6 +76,7 @@ import {
 } from "./note-template.ts";
 import { NOTE_WRITE_OP, recordNoteWrite } from "./write-record.ts";
 import { ROUTE_STAGE, timeStageSync } from "../../route-scope.ts";
+import { resolveAgentName } from "../../config.ts";
 import { REVIEW_LANE } from "../write-gate.ts";
 import { resolveWriteDisposition, stageForReview } from "../pending/pending-lanes.ts";
 
@@ -591,15 +592,22 @@ export function createNote(vault: string, input: CreateNoteInput): CreateNoteRes
     return skippedResult(relPath);
   }
 
-  // Review gate (write-side trust, Task 9). A CREATE stages under the
-  // notes lane's disposition; updates and appends never reach this
+  // Review gate (write-side trust, Tasks 9 and 12). A CREATE stages under
+  // the notes lane's disposition; updates and appends never reach this
   // primitive. The review boundary is ENTRY, not mutation: a target that
   // already exists was admitted when it was published, so the ordinary
   // refusal stands and only a first publish can be staged. The staged
   // bytes are byte-for-byte what the write below would have published -
   // the origin-channel stamp included - so apply reproduces the published
-  // document exactly.
-  const disposition = resolveWriteDisposition(vault, REVIEW_LANE.notes);
+  // document exactly. Under a permissions document the document alone
+  // decides for the caller the write record would have named, and a deny
+  // refuses here as a typed WriteRefusedError before any byte exists.
+  const disposition = resolveWriteDisposition(
+    vault,
+    REVIEW_LANE.notes,
+    { agent: resolveAgentName(input.configPath), via: "config" },
+    { target: relPath },
+  );
   if (disposition.verdict === "stage") {
     if (existsSync(abs)) {
       throw new CreateNoteError("exists", `note already exists: ${relPath}`);
