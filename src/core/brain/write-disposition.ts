@@ -71,8 +71,25 @@ export function isWriteRefusalCode(value: unknown): value is WriteRefusalCode {
   );
 }
 
-/** The registered exit a document-deny refusal names. Resolved once, at import. */
-const WRITE_REFUSED_EXIT = requireNextStep(WRITE_REFUSAL_CODES.documentDeny).nextCommand;
+/**
+ * The registered exit a document-deny refusal names. Resolved lazily, on
+ * first refusal: this module sits inside the diagnostics import cycle
+ * (`next-step.ts` reads `diagnostics.ts`, which reaches the doctor checks
+ * that reach the signals parser and this module back), so resolving at
+ * module scope would call into `next-step.ts` while its registry is still
+ * initializing - a TDZ crash whose trigger depends on which test file or
+ * entry point loaded first. The registry census pins the code's
+ * registration at test time, so drift still fails there rather than
+ * inside this lazy read.
+ */
+let writeRefusedExit: string | undefined;
+
+function writeRefusedNextCommand(): string {
+  if (writeRefusedExit === undefined) {
+    writeRefusedExit = requireNextStep(WRITE_REFUSAL_CODES.documentDeny).nextCommand;
+  }
+  return writeRefusedExit;
+}
 
 /** The fields a document-deny refusal carries beside its message. */
 export interface WriteRefusedFields {
@@ -106,7 +123,7 @@ export class WriteRefusedError extends Error {
       `write refused (${WRITE_REFUSAL_CODES.documentDeny}): agent ` +
         `${JSON.stringify(fields.agent)} (via ${fields.via}) may not ${fields.action} ` +
         `${JSON.stringify(fields.target)} - rule ${fields.rule} denied it. ` +
-        `The operator can review the policy: ${WRITE_REFUSED_EXIT}`,
+        `The operator can review the policy: ${writeRefusedNextCommand()}`,
     );
     this.name = "WriteRefusedError";
     this.code = WRITE_REFUSAL_CODES.documentDeny;
@@ -115,7 +132,7 @@ export class WriteRefusedError extends Error {
     this.action = fields.action;
     this.rule = fields.rule;
     this.target = fields.target;
-    this.nextCommand = WRITE_REFUSED_EXIT;
+    this.nextCommand = writeRefusedNextCommand();
   }
 }
 
