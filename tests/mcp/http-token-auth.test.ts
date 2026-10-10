@@ -30,7 +30,11 @@ import { brainConfigPath } from "../../src/core/brain/paths.ts";
 import { GATE_MODE } from "../../src/core/integrity/stamp.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
 import { BRAIN_CONFIDENCE, BRAIN_PREFERENCE_STATUS } from "../../src/core/brain/types.ts";
-import { mintAgentToken, rotateAgentToken } from "../../src/core/brain/secrets/token-store.ts";
+import {
+  mintAgentToken,
+  revokeAgentToken,
+  rotateAgentToken,
+} from "../../src/core/brain/secrets/token-store.ts";
 
 let vault: string;
 let handle: HttpServerHandle | null = null;
@@ -218,7 +222,9 @@ describe("HTTP token authentication", () => {
     const sharedKey = fakeCredential("shared", "-master-", "77f1");
     const minted = mintAgentToken(vault, "mcp_token_edge", "edge-agent");
     await start({ apiKey: sharedKey });
-    rotateAgentToken(vault, "mcp_token_edge");
+    // Revocation, not rotation: the rotation grace window does not apply
+    // here - a withdrawn credential dies immediately.
+    revokeAgentToken(vault, "mcp_token_edge");
     const revoked = await post(rpc("ping", 1), { key: minted.tokenMaterial });
     const unknown = await post(rpc("ping", 2), {
       key: fakeCredential("osbt_", "never-minted"),
@@ -261,7 +267,10 @@ describe("HTTP token authentication", () => {
     await start({ tokensRequired: true });
     expect((await post(rpc("ping", 1), { key: first.tokenMaterial })).status).toBe(200);
     const second = rotateAgentToken(vault, "mcp_token_edge");
-    expect((await post(rpc("ping", 2), { key: first.tokenMaterial })).status).toBe(401);
+    // Inside the rotation grace window the PREVIOUS material keeps
+    // authenticating beside the new one, so the caller holding it does
+    // not fail while the new material is being placed.
+    expect((await post(rpc("ping", 2), { key: first.tokenMaterial })).status).toBe(200);
     expect((await post(rpc("ping", 3), { key: second.tokenMaterial })).status).toBe(200);
   });
 
