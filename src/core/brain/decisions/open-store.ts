@@ -319,6 +319,32 @@ function sectionText(body: string, heading: string): string {
   return body.slice(start, end).trim();
 }
 
+/**
+ * A line of free-text body prose whose first non-space character is `#`
+ * would read back as a section heading: a question carrying its own
+ * `## Options` line re-partitions the body on parse, and its bullets
+ * become the record's options. The writer indents such a line by one
+ * space (breaking the `^## ` anchors the section reader matches); the
+ * reader dedents exactly the lines the writer could have indented - a
+ * line the writer left alone never has `#` as its first non-space
+ * character, because that shape is what the writer escapes - so the
+ * round trip is byte-faithful for every input the writer accepts,
+ * including a question line that was already indented.
+ */
+function escapeBodyProse(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => (/^\s*#/u.test(line) ? ` ${line}` : line))
+    .join("\n");
+}
+
+function unescapeBodyProse(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => (line.startsWith(" ") && /^\s*#/u.test(line) ? line.slice(1) : line))
+    .join("\n");
+}
+
 function renderRecord(record: OpenDecisionRecord): string {
   const lines = [
     "---",
@@ -343,7 +369,7 @@ function renderRecord(record: OpenDecisionRecord): string {
     "",
     "## Question",
     "",
-    record.question,
+    escapeBodyProse(record.question),
     "",
     "## Options",
     "",
@@ -351,7 +377,7 @@ function renderRecord(record: OpenDecisionRecord): string {
   for (const option of record.options) lines.push(`- ${option}`);
   lines.push("");
   if (record.context.length > 0) {
-    lines.push("## Context", "", record.context, "");
+    lines.push("## Context", "", escapeBodyProse(record.context), "");
   }
   return lines.join("\n");
 }
@@ -395,7 +421,7 @@ function parseOpenRecord(vault: string, fileName: string): OpenDecisionRecord | 
       presentButUnreadable(`not one of ${OPEN_DECISION_STATUSES.join(", ")}`, status),
     );
   }
-  const question = sectionText(body, "Question");
+  const question = unescapeBodyProse(sectionText(body, "Question"));
   if (!question) {
     throw new OpenDecisionFieldError(
       path,
@@ -460,7 +486,7 @@ function parseOpenRecord(vault: string, fileName: string): OpenDecisionRecord | 
     title: typeof titleMeta === "string" ? titleMeta : id,
     question,
     options: Object.freeze(options),
-    context: sectionText(body, "Context"),
+    context: unescapeBodyProse(sectionText(body, "Context")),
     questionHash,
     createdAt,
     resolvedAt: textOrNull(OPEN_KEY.resolvedAt),
@@ -818,17 +844,21 @@ export function resolveOpenDecision(
     });
     atomicWriteFileSync(record.path, renderRecord(stamped));
 
-    appendLogEvent(vault, {
-      timestamp: isoSecond(now),
-      eventType: BRAIN_LOG_EVENT_KIND.decisionResolved,
-      agent: actor,
-      body: {
-        open: `[[${record.id}]]`,
-        decision: `[[${decisionId}]]`,
-        choice,
+    try {
+      appendLogEvent(vault, {
+        timestamp: isoSecond(now),
+        eventType: BRAIN_LOG_EVENT_KIND.decisionResolved,
         agent: actor,
-      },
-    });
+        body: {
+          open: `[[${record.id}]]`,
+          decision: `[[${decisionId}]]`,
+          choice,
+          agent: actor,
+        },
+      });
+    } catch {
+      // The record file is authoritative; the timeline mirror is best-effort.
+    }
 
     // Exactly one open_resolved receipt per resolution (the receipts
     // module's idempotency key makes a replay a no-op). Fail-soft like

@@ -188,6 +188,50 @@ describe("openDecision", () => {
   });
 });
 
+describe("heading-shaped free text", () => {
+  test("a heading-shaped line in the question or context cannot re-partition the body", () => {
+    const rec = openDecision(
+      vault,
+      baseInput({
+        question: "Pick one\n## Options\n- evil",
+        context: "Background\n## Question\n- also evil",
+      }),
+    );
+    // The writer indented the injected headings, so the real sections stay put.
+    const raw = readFileSync(rec.path, "utf8");
+    expect(raw).toContain("Pick one\n ## Options\n- evil");
+    expect(raw).toContain("Background\n ## Question\n- also evil");
+
+    const back = showOpenDecision(vault, rec.id)!;
+    expect(back.question).toBe("Pick one\n## Options\n- evil");
+    expect(back.context).toBe("Background\n## Question\n- also evil");
+    expect([...back.options]).toEqual(["bun's fetch", "undici"]);
+
+    // The record resolves by its REAL options, not the injected ones.
+    const res = resolveOpenDecision(vault, rec.id, {
+      choice: "bun's fetch",
+      actor: "tester",
+      now: T1,
+    });
+    expect(res.decision).toBe("decision-which-http-client-for-the-ingest-lane");
+  });
+
+  test("a question that begins with a heading round-trips", () => {
+    const rec = openDecision(vault, baseInput({ question: "# Not a heading\nbody line" }));
+    const back = showOpenDecision(vault, rec.id)!;
+    expect(back.question).toBe("# Not a heading\nbody line");
+  });
+
+  test("a heading-shaped line that was already indented round-trips byte-faithfully", () => {
+    const question = "Pick one\n indented\n ## Sub\n- still prose";
+    const rec = openDecision(vault, baseInput({ question }));
+    const raw = readFileSync(rec.path, "utf8");
+    // The writer indents it one more space; the reader removes exactly that one.
+    expect(raw).toContain("indented\n  ## Sub");
+    expect(showOpenDecision(vault, rec.id)!.question).toBe(question);
+  });
+});
+
 describe("hand-edit tolerance", () => {
   test("a hand-edited file with YAML-significant characters round-trips", () => {
     const rec = openDecision(
