@@ -27,6 +27,7 @@ import {
   isSecretReferenceValue,
   parseSecretReference,
   resolveSecretReference,
+  storeSecretName,
   type SecretProvider,
   type SecretReferenceStatus,
   invalidSecretReferenceBody,
@@ -65,6 +66,25 @@ function custodyStore(): CustodyStore {
 }
 
 /**
+ * The device config, joined at CALL time rather than at module load - the
+ * same sanctioned lazy require as the custody store above (`config.ts`
+ * resolves credentials through THIS module, so a static import here would
+ * close the same cycle). Needed only when the env legs of the config's
+ * `$secret:` references feed the egress literal set.
+ */
+type ConfigModule = typeof import("./config.ts");
+
+let configModule: ConfigModule | undefined;
+
+function discoverDeviceConfig(): ReturnType<ConfigModule["discoverConfig"]> {
+  if (configModule === undefined) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    configModule = require("./config.ts") as ConfigModule;
+  }
+  return configModule.discoverConfig();
+}
+
+/**
  * The store leg of the merged provider: one name's custody answer, or
  * undefined when the store does not hold it (the caller falls back to the
  * environment). Probing is on demand - a name the store does not hold costs
@@ -82,21 +102,26 @@ function storeValue(vault: string, name: string): string | undefined {
 }
 
 /**
- * The merged provider: custody store ahead of the process environment.
- * Probing is on demand - a name the store does not hold costs one
- * metadata read and never decrypts; the store's plaintext is handed to
- * the caller exactly where the value is used.
+ * The merged provider: custody store ahead of the process environment. The
+ * STORE leg normalizes the requested name the way the store normalizes names
+ * at set time ({@link storeSecretName}: trim, lowercase - so
+ * `$secret:BRAVE` answers store entry `brave` and `$secret:openai-key`
+ * answers the dashed entry `set openai-key` wrote); the ENVIRONMENT leg
+ * answers the name verbatim, case-sensitively. Probing is on demand - a
+ * name the store does not hold costs one metadata read and never decrypts;
+ * the store's plaintext is handed to the caller exactly where the value is
+ * used.
  */
 export function secretProvider(vault: string): SecretProvider {
   const env = process.env;
   return new Proxy(env as SecretProvider, {
     get(_target, prop) {
       if (typeof prop !== "string") return undefined;
-      return storeValue(vault, prop) ?? env[prop];
+      return storeValue(vault, storeSecretName(prop)) ?? env[prop];
     },
     has(_target, prop) {
       if (typeof prop !== "string") return Reflect.has(env, prop);
-      return storeValue(vault, prop) !== undefined || Reflect.has(env, prop);
+      return storeValue(vault, storeSecretName(prop)) !== undefined || Reflect.has(env, prop);
     },
   });
 }
@@ -127,15 +152,17 @@ export function resolveMergedValue(
 }
 
 /**
- * Whether one named secret is usable by this process: the store holds
- * the name (metadata only - a locked envelope still counts, no
- * decrypt), or the environment carries it. Backs `o2b secrets status`.
+ * Whether one named secret is usable by this process: the store holds the
+ * name (metadata only - a locked envelope still counts, no decrypt; the
+ * name is normalized for the store leg the way the store normalizes at set
+ * time), or the environment carries it verbatim, case-sensitively. Backs
+ * `o2b secrets status`.
  */
 export function namedSecretAvailable(vault: string, name: string): boolean {
   return (
     custodyStore()
       .listSecrets(vault)
-      .some((meta) => meta.name === name) || Boolean(process.env[name])
+      .some((meta) => meta.name === storeSecretName(name)) || Boolean(process.env[name])
   );
 }
 
@@ -158,11 +185,11 @@ export function listNamedSecretAvailability(
   for (const [configKey, value] of Object.entries(data)) {
     const ref = parseSecretReference(value);
     if (!ref) {
-      // A reference-SHAPED value the grammar cannot spell (a dashed store
-      // name, say) resolves to a `SecretReferenceError` at use time and
-      // can never be answered by the store or the env - report it instead
-      // of silently dropping it while `secrets status` answers the same
-      // name from metadata alone.
+      // A reference-SHAPED value the grammar cannot spell (a spaced body,
+      // say) resolves to a `SecretReferenceError` at use time and can never
+      // be answered by the store or the env - report it instead of silently
+      // dropping it while `secrets status` answers the same name from
+      // metadata alone.
       const body = invalidSecretReferenceBody(value);
       if (body !== null) {
         out.push({ configKey, name: body, available: false, invalid: true });
@@ -172,7 +199,7 @@ export function listNamedSecretAvailability(
     out.push({
       configKey,
       name: ref.name,
-      available: held.has(ref.name) || Boolean(process.env[ref.name]),
+      available: held.has(storeSecretName(ref.name)) || Boolean(process.env[ref.name]),
     });
   }
   out.sort((a, b) => a.configKey.localeCompare(b.configKey));
@@ -180,13 +207,28 @@ export function listNamedSecretAvailability(
 }
 
 /**
- * The VALUES the vault's custody store can currently answer with - the
- * input the egress boundaries need to scrub resolved credentials (the
- * `resolvedLiterals` option on `EgressPolicy` and the MCP error
- * redactor's fourth parameter). This is the one production join between
- * the store and the redactor plane; without it the literal passes were
- * plumbed but never fed, and a resolved credential under a quiet key
- * name stayed as invisible to the boundary as before the wave.
+ * The VALUES the vault's custody store can currently answer with, plus the
+ * environment legs of the device config's `$secret:` references - the input
+ * the egress boundaries need to scrub resolved credentials (the
+ * `resolvedLiterals` option on `EgressPolicy` and the MCP error redactor's
+ * fourth parameter). This is the one production join between the store and
+ * the redactor plane; without it the literal passes were plumbed but never
+ * fed, and a resolved credential under a quiet key name stayed as invisible
+ * to the boundary as before the wave.
+ *
+ * The env legs: a reference the store does not hold resolves, at use time,
+ * from the environment under the reference body verbatim - that value is
+ * exactly as egress-relevant as a store value and was invisible here before.
+ * A name the store DOES hold never falls back to the environment (store
+ * first; a locked envelope refuses rather than falling back), so its env
+ * entry, if any, is not a resolved credential and is excluded. The config is
+ * discovered the way every default-path consumer discovers it
+ * (`discoverConfig()`, honoring `OPEN_SECOND_BRAIN_CONFIG`); a boundary
+ * handed an explicit config path that differs is a wiring decision this
+ * docblock hands to the next change. Candidates shorter than
+ * `MIN_REDACTED_LITERAL_LENGTH` are dropped downstream by
+ * {@link sortedDistinctLiterals} - the over-redaction guard, with its
+ * trade-off stated there.
  *
  * Wired boundaries, and only these: the MCP error redaction (both the
  * tools/call catch and the one builder every JSON-RPC error answer
@@ -195,12 +237,11 @@ export function listNamedSecretAvailability(
  * boundary that cannot know the vault (the CLI export verbs run
  * vault-scoped already but scan vault-authored content the structural
  * passes cover) must not pretend - the absent option stays byte-
- * identical there, and this docblock is where the next wiring decision
- * starts.
+ * identical there.
  *
  * Degradation is the point: a store that is absent, empty, unreadable,
  * LOCKED (the named locked refusal), or missing its keyfile contributes
- * NOTHING - the boundary then answers exactly as the pre-literal
+ * nothing - the boundary then answers exactly as the pre-literal
  * redactor did. Redaction never blocks, never surfaces a refusal, and
  * never mints: a lost keyfile is skipped rather than regenerated, so a
  * scan leaves no custody state behind.
@@ -214,16 +255,47 @@ export function resolvedSecretLiterals(vault: string): string[] {
     // An unreadable store is not a redactable store: contribute nothing.
     return [];
   }
-  if (held.length === 0) return [];
-  if (!existsSync(store.keyPath(vault))) return [];
+  const heldNames = new Set(held.map((meta) => meta.name));
   const out: string[] = [];
-  for (const meta of held) {
-    try {
-      out.push(store.resolveSecretReadOnly(vault, meta.name).value);
-    } catch {
-      // The locked envelope lands here (the named refusal), as does an
-      // entry that cannot be decrypted; each contributes nothing.
+  if (held.length > 0 && existsSync(store.keyPath(vault))) {
+    for (const meta of held) {
+      try {
+        out.push(store.resolveSecretReadOnly(vault, meta.name).value);
+      } catch {
+        // The locked envelope lands here (the named refusal), as does an
+        // entry that cannot be decrypted; each contributes nothing.
+      }
     }
+  }
+  out.push(...envReferenceLiterals(vault, heldNames));
+  return out;
+}
+
+/**
+ * The environment legs of the device config's `$secret:` references: for a
+ * reference-shaped config value whose name the store does not hold, the
+ * environment value the use-site resolution would answer with. An unreadable
+ * or absent config contributes nothing - degradation, not refusal - exactly
+ * like the store legs above.
+ */
+function envReferenceLiterals(vault: string, heldNames: ReadonlySet<string>): string[] {
+  let data: Readonly<Record<string, unknown>>;
+  try {
+    const discovery = discoverDeviceConfig();
+    if (!discovery.exists) return [];
+    data = discovery.data;
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  for (const value of Object.values(data)) {
+    const ref = parseSecretReference(value);
+    if (!ref) continue;
+    // Store first: a store-held name never resolves from the environment,
+    // so the env entry under that name is not a resolved credential.
+    if (heldNames.has(storeSecretName(ref.name))) continue;
+    const envValue = process.env[ref.name];
+    if (envValue !== undefined) out.push(envValue);
   }
   return out;
 }

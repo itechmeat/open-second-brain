@@ -16,16 +16,27 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { listSecrets, secretsDir, setSecret } from "../../src/core/brain/secrets/store.ts";
 import { lockSecretKeyfile, unlockSecretKeyfile } from "../../src/core/brain/secrets/store.ts";
 import { SecretReferenceError } from "../../src/core/secret-ref.ts";
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
+import { redactErrorForCaller } from "../../src/mcp/error-redaction.ts";
 import {
   listNamedSecretAvailability,
   resolveNamedSecret,
+  resolvedSecretLiterals,
   secretProvider,
 } from "../../src/core/secret-resolver.ts";
 import { fakeCredential } from "../helpers/fake-credentials.ts";
@@ -36,11 +47,20 @@ const ENV_VALUE = fakeCredential("env", "-value-", "77b3d0");
 const REF = "$secret:embed_key";
 
 let vault: string;
+let configPath: string;
 const savedEnv: Record<string, string | undefined> = {};
-const ENV_KEYS = ["embed_key", "fallback_key"] as const;
+const ENV_KEYS = [
+  "embed_key",
+  "fallback_key",
+  "ENV_CASE",
+  "env_case",
+  "QUIET_ENV",
+  "OPEN_SECOND_BRAIN_CONFIG",
+] as const;
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-secret-resolver-"));
+  configPath = join(vault, "..", "o2b-secret-resolver-config.yaml");
   mkdirSync(join(vault, "Brain"), { recursive: true });
   for (const key of ENV_KEYS) {
     savedEnv[key] = process.env[key];
@@ -50,11 +70,18 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(vault, { recursive: true, force: true });
+  rmSync(configPath, { force: true });
   for (const key of ENV_KEYS) {
     if (savedEnv[key] === undefined) delete process.env[key];
     else process.env[key] = savedEnv[key];
   }
 });
+
+/** Point the default config discovery at a one-line config file. */
+function writeDeviceConfig(body: string): void {
+  writeFileSync(configPath, body, "utf8");
+  process.env["OPEN_SECOND_BRAIN_CONFIG"] = configPath;
+}
 
 function storeBytes(): string {
   return readFileSync(join(secretsDir(vault), "secrets.json"), "utf8");
@@ -89,6 +116,30 @@ describe("resolveNamedSecret", () => {
   test("falls back to the environment when the store does not hold the name", () => {
     process.env["embed_key"] = ENV_VALUE;
     expect(resolveNamedSecret(vault, REF)).toBe(ENV_VALUE);
+  });
+
+  test("a dashed store-slug reference resolves the entry `set` wrote", () => {
+    // Write-side trust review: the store accepts `set openai-key` while the
+    // old reference grammar refused `$secret:openai-key` outright - the two
+    // name spaces must agree.
+    setSecret(vault, { name: "openai-key", value: STORE_VALUE, agent: "tester", now: NOW });
+    expect(resolveNamedSecret(vault, "$secret:openai-key")).toBe(STORE_VALUE);
+  });
+
+  test("store lookup normalizes the reference body; the env fallback stays case-sensitive", () => {
+    setSecret(vault, { name: "brave", value: STORE_VALUE, agent: "tester", now: NOW });
+    // The store holds `brave`; the upper-case reference resolves through it,
+    // and the store shadows any same-named environment variable.
+    process.env["brave"] = ENV_VALUE;
+    expect(resolveNamedSecret(vault, "$secret:BRAVE")).toBe(STORE_VALUE);
+
+    // The environment leg keeps its case rules: an upper-case env var
+    // answers an upper-case reference, a lower-case env var does not.
+    process.env["ENV_CASE"] = ENV_VALUE;
+    expect(resolveNamedSecret(vault, "$secret:ENV_CASE")).toBe(ENV_VALUE);
+    delete process.env["ENV_CASE"];
+    process.env["env_case"] = ENV_VALUE;
+    expect(() => resolveNamedSecret(vault, "$secret:ENV_CASE")).toThrow(SecretReferenceError);
   });
 
   test("a locked store surfaces the named locked error, never the env value", () => {
@@ -175,6 +226,57 @@ describe("listNamedSecretAvailability", () => {
     } finally {
       unlockVaultStoreForTest();
     }
+  });
+});
+
+describe("resolvedSecretLiterals", () => {
+  test("includes the env legs of the config's references so errors scrub them", () => {
+    // Write-side trust review: a reference the store does not hold resolves
+    // from the environment at use time, and that value used to be invisible
+    // to the egress literal set.
+    writeDeviceConfig(`quiet_ref: "$secret:QUIET_ENV"\n`);
+    process.env["QUIET_ENV"] = ENV_VALUE;
+
+    const literals = resolvedSecretLiterals(vault);
+    expect(literals).toContain(ENV_VALUE);
+    const out = redactErrorForCaller(
+      `upstream refused: ${ENV_VALUE}`,
+      vault,
+      TRANSPORT_REACH.remote,
+      literals,
+    );
+    expect(out).not.toContain(ENV_VALUE);
+    expect(out).toContain("***REDACTED***");
+  });
+
+  test("a store-held name excludes its env entry (the store never falls back)", () => {
+    setStoreKey();
+    process.env["embed_key"] = ENV_VALUE;
+    writeDeviceConfig(`ref: "$secret:embed_key"\n`);
+
+    // Store first: the use-site resolution can never answer this reference
+    // from the environment, so the env value is not a resolved credential.
+    expect(resolvedSecretLiterals(vault)).toEqual([STORE_VALUE]);
+  });
+
+  test("a 2-char stored value no longer blanks error text", () => {
+    // The over-redaction guard: a 1-2 char literal used to substitute every
+    // occurrence of those characters in the surrounding prose. The trade-off
+    // (short values are not scrubbed) is stated in the source.
+    setSecret(vault, { name: "tiny", value: "ok", agent: "tester", now: NOW });
+    writeDeviceConfig(`tiny_ref: "$secret:tiny"\n`);
+
+    const literals = resolvedSecretLiterals(vault);
+    expect(literals).toEqual(["ok"]);
+    // Neutral prose: no secret-shaped key name for the structural passes to
+    // react to, so the assertion isolates the literal mechanism.
+    const out = redactErrorForCaller(
+      "found ok and ok here",
+      vault,
+      TRANSPORT_REACH.remote,
+      literals,
+    );
+    expect(out).toBe("found ok and ok here");
   });
 });
 

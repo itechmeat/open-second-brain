@@ -9,11 +9,11 @@ export interface SecretReferenceStatus {
   readonly available: boolean;
   /**
    * Present (true) only on a value that is reference-SHAPED but fails the
-   * reference grammar - `$secret:tg-token` with a dashed name the grammar
-   * cannot spell. Such a value resolves to a `SecretReferenceError` at
-   * use time no matter what the store or the environment holds, so the
-   * inspection surfaces must show it rather than silently drop it.
-   * Optional so well-formed rows keep their exact shape.
+   * reference grammar - `$secret:has space` with a body the grammar cannot
+   * spell. Such a value resolves to a `SecretReferenceError` at use time no
+   * matter what the store or the environment holds, so the inspection
+   * surfaces must show it rather than silently drop it. Optional so
+   * well-formed rows keep their exact shape.
    */
   readonly invalid?: boolean;
 }
@@ -30,10 +30,29 @@ export class SecretReferenceError extends Error {
   }
 }
 
-const SECRET_REFERENCE_RE = /^\$secret:([A-Za-z_][A-Za-z0-9_]*)$/;
+/**
+ * The reference body spells every name the custody store can hold (its
+ * slugs are lowercase with `-` and `_`, starting alphanumeric) plus the
+ * uppercase env-style names the environment fallback answers with. The
+ * body's CASE is preserved: the store leg of a resolution normalizes it
+ * ({@link storeSecretName}); the environment leg stays case-sensitive.
+ */
+const SECRET_REFERENCE_RE = /^\$secret:([A-Za-z0-9_][A-Za-z0-9_-]*)$/;
 /** The syntax prefix every named-secret reference starts with. */
 const REFERENCE_PREFIX = "$secret:";
 const REDACTED = "***REDACTED***";
+
+/**
+ * The name a reference resolves through the custody STORE under: the store
+ * normalizes names at set time (trim, lowercase - a slug), so the store leg
+ * of a lookup normalizes the reference body the same way. Deliberately NOT
+ * applied to the environment leg: env lookup is case-sensitive, so
+ * `$secret:BRAVE` answers store entry `brave` but environment variable
+ * `BRAVE` and nothing else.
+ */
+export function storeSecretName(name: string): string {
+  return name.trim().toLowerCase();
+}
 
 export function parseSecretReference(value: unknown): SecretReference | null {
   if (typeof value !== "string") return null;
@@ -53,7 +72,7 @@ export function isSecretReferenceValue(value: unknown): boolean {
 
 /**
  * The reference body of a reference-SHAPED value the grammar cannot spell
- * (e.g. the dashed `tg-token` in `$secret:tg-token`), or null when the
+ * (e.g. the spaced `has space` in `$secret:has space`), or null when the
  * value is not reference-shaped at all. This is the name the runtime
  * refusal names, so the inspection surfaces can show the same identifier
  * the operator must fix (rename the store entry, or change the config
@@ -105,15 +124,24 @@ export function listSecretReferences(
 }
 
 /**
- * Dedupe, drop empties, and order longest-first. The order is the
- * substitution-safety rule, not cosmetics: when one resolved value
- * contains another, a shorter-first replacement would destroy the longer
- * value's match and leak its head as a fragment, so every caller that
- * substitutes literal values into text goes through this.
+ * Dedupe, drop sub-floor entries, and order longest-first. The order is the
+ * substitution-safety rule, not cosmetics: when one resolved value contains
+ * another, a shorter-first replacement would destroy the longer value's
+ * match and leak its head as a fragment, so every caller that substitutes
+ * literal values into text goes through this.
+ *
+ * The minimum length is the over-redaction guard: a one- or two-character
+ * resolved value would blank EVERY occurrence of those characters in the
+ * surrounding text, destroying the diagnostic it rides on. The trade-off is
+ * stated, not hidden: a credential shorter than the floor is NOT scrubbed
+ * from egress text - accepted, because real credentials clear the floor and
+ * the collateral damage of a short literal dwarfs its leak value.
  */
+export const MIN_REDACTED_LITERAL_LENGTH = 8;
+
 export function sortedDistinctLiterals(values: Iterable<string>): string[] {
   return [...new Set(values)]
-    .filter((value) => value.length > 0)
+    .filter((value) => value.length >= MIN_REDACTED_LITERAL_LENGTH)
     .sort((a, b) => b.length - a.length);
 }
 

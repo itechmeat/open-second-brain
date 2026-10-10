@@ -454,13 +454,13 @@ describe("secrets", () => {
   });
 
   test("list reports a reference-shaped value the grammar cannot spell as invalid", async () => {
-    // S5/S6 dashed-name asymmetry: the store accepts `tg-token` but the
-    // reference grammar cannot spell a dash, so the reference can never
-    // resolve (it throws `invalid secret reference` at use time). The
+    // A body no store name or env name could carry (`has space`) refuses at
+    // use time no matter what the store or the environment holds; the
     // inspection surface must show that instead of silently dropping the
-    // row while `secrets status` answers from the store metadata.
+    // row. A dashed body like `tg-token` is spellable now - the store and
+    // the reference grammar agree - see the resolution test below.
     const config = join(tmp, "config.yaml");
-    writeFileSync(config, 'probe_dash: "$secret:tg-token"\n');
+    writeFileSync(config, 'probe_space: "$secret:has space"\n');
     const vault = join(tmp, "vault");
     mkdirSync(vault, { recursive: true });
 
@@ -470,12 +470,12 @@ describe("secrets", () => {
     );
     expect(withVault.returncode).toBe(0);
     expect(JSON.parse(withVault.stdout).secrets).toEqual([
-      { config_key: "probe_dash", name: "tg-token", available: false, invalid: true },
+      { config_key: "probe_space", name: "has space", available: false, invalid: true },
     ]);
     const withVaultText = await runCli(["secrets", "list", "--config", config, "--vault", vault], {
       env: { OPEN_SECOND_BRAIN_CONFIG: config },
     });
-    expect(withVaultText.stdout).toContain("probe_dash: tg-token (invalid reference)");
+    expect(withVaultText.stdout).toContain("probe_space: has space (invalid reference)");
 
     // The env-only surface answers for the same value: a reference that
     // can never resolve is not "absent", it is broken.
@@ -484,7 +484,43 @@ describe("secrets", () => {
     });
     expect(envOnly.returncode).toBe(0);
     expect(JSON.parse(envOnly.stdout).secrets).toEqual([
-      { config_key: "probe_dash", name: "tg-token", available: false, invalid: true },
+      { config_key: "probe_space", name: "has space", available: false, invalid: true },
+    ]);
+  });
+
+  test("a dashed reference joins the vault's store entry under its normalized name", async () => {
+    // Write-side trust review: `set tg-token` stores a dashed slug the old
+    // reference grammar could not spell, so `$secret:tg-token` could never
+    // resolve and `secrets list` reported the row broken. The store leg now
+    // normalizes the reference body the way the store normalizes names at
+    // set time, so the row reports the stored entry as available.
+    const config = join(tmp, "config.yaml");
+    writeFileSync(config, 'probe_dash: "$secret:tg-token"\n');
+    const vault = join(tmp, "vault");
+    mkdirSync(vault, { recursive: true });
+
+    const before = await runCli(
+      ["secrets", "list", "--config", config, "--vault", vault, "--json"],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(before.returncode).toBe(0);
+    expect(JSON.parse(before.stdout).secrets).toEqual([
+      { config_key: "probe_dash", name: "tg-token", available: false },
+    ]);
+
+    const stored = await runCli(["brain", "secret", "set", "tg-token", "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+      stdin: "fake-stored-value-9d11c2\n",
+    });
+    expect(stored.returncode).toBe(0);
+
+    const after = await runCli(
+      ["secrets", "list", "--config", config, "--vault", vault, "--json"],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(after.returncode).toBe(0);
+    expect(JSON.parse(after.stdout).secrets).toEqual([
+      { config_key: "probe_dash", name: "tg-token", available: true },
     ]);
   });
 
