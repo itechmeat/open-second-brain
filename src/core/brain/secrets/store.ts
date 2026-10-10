@@ -90,6 +90,17 @@ export function keyPath(vault: string): string {
   return join(secretsDir(vault), "keyfile");
 }
 
+/**
+ * The MCP token store path (write-side-trust, Task 3). Declared here so
+ * the custody targets below cover it with the same owner-only ACL sweep
+ * `setSecret` performs, and so `./token-store.ts` - which owns everything
+ * else about that file - shares one spelling of its location without
+ * this module importing back.
+ */
+export function tokenStorePath(vault: string): string {
+  return join(secretsDir(vault), "mcp-tokens.json");
+}
+
 /** The name rule `set` enforces, shared with the bundle importer. */
 export function isValidSecretName(name: string): boolean {
   return NAME_RE.test(name);
@@ -397,6 +408,10 @@ export function custodyTargets(
     [keyPath(vault), "file"],
   ];
   if (existsSync(storePath(vault))) targets.push([storePath(vault), "file"]);
+  // Same rule as the ciphertext store: absent until the first mint, and
+  // a target from then on, so every later custody write re-applies the
+  // owner-only ACL to both files.
+  if (existsSync(tokenStorePath(vault))) targets.push([tokenStorePath(vault), "file"]);
   return targets;
 }
 
