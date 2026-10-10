@@ -162,6 +162,7 @@ import {
   cmdBrainStale,
   cmdBrainDaily,
   cmdBrainWeekly,
+  cmdBrainPermissions,
 } from "./brain/verbs/index.ts";
 
 /**
@@ -527,6 +528,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainDaily(rest);
       case "weekly":
         return await cmdBrainWeekly(rest);
+      case "permissions":
+        return await cmdBrainPermissions(rest);
       default:
         process.stderr.write(`error: unknown brain verb: ${verb}\n`);
         process.stdout.write(BRAIN_HELP);

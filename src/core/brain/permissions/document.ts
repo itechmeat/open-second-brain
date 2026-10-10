@@ -98,7 +98,9 @@ export class PermissionsDocumentError extends Error {}
 type YamlScalar = string | number | boolean | null;
 type YamlValue = YamlScalar | YamlMapping | YamlValue[];
 /** Insertion-ordered mapping; key order drives the deterministic warnings. */
-type YamlMapping = Record<string, YamlValue>;
+interface YamlMapping {
+  [key: string]: YamlValue;
+}
 
 interface Line {
   readonly indent: number;
@@ -295,27 +297,33 @@ function warn(path: string, field: string): void {
   process.stderr.write(`warning: ${path}: ${field}: unknown field ignored (forward-compat)\n`);
 }
 
+function isVerdict(value: YamlValue): value is PermissionVerdict {
+  return typeof value === "string" && (VERDICTS as ReadonlyArray<string>).includes(value);
+}
+
 function requireVerdict(path: string, field: string, value: YamlValue): PermissionVerdict {
-  if (typeof value !== "string" || !(VERDICTS as ReadonlyArray<string>).includes(value)) {
+  if (!isVerdict(value)) {
     throw fail(path, field, `must be one of ${VERDICTS.join(", ")}; got ${describeValue(value)}`);
   }
   return value;
 }
 
-function requireString(
-  path: string,
-  field: string,
-  value: YamlValue | undefined,
-  opts: { required: boolean },
-): string | undefined {
-  if (value === undefined) {
-    if (opts.required) throw fail(path, field, "is required");
-    return undefined;
-  }
+/** A required string field: absent, non-string or blank all refuse by name. */
+function requireString(path: string, field: string, value: YamlValue | undefined): string {
+  if (value === undefined) throw fail(path, field, "is required");
   if (typeof value !== "string" || value.trim() === "") {
     throw fail(path, field, `must be a non-empty string; got ${describeValue(value)}`);
   }
   return value;
+}
+
+/** An optional string field: absent stays absent, present must be a real string. */
+function optionalString(
+  path: string,
+  field: string,
+  value: YamlValue | undefined,
+): string | undefined {
+  return value === undefined ? undefined : requireString(path, field, value);
 }
 
 function parseActionMapping(
@@ -367,7 +375,7 @@ function validateAgents(
     const agent: PermissionsDocument["agents"][string] = {};
     for (const [key, inner] of Object.entries(value)) {
       if (key === "role") {
-        agent.role = requireString(path, `agents.${name}.role`, inner, { required: true });
+        agent.role = requireString(path, `agents.${name}.role`, inner);
         continue;
       }
       if ((AGENT_ACTION_KEYS as ReadonlyArray<string>).includes(key)) {
@@ -387,7 +395,7 @@ function validateEntries(path: string, raw: YamlValue, warnings: string[]): Perm
   for (const [index, item] of raw.entries()) {
     const field = `entries[${index}]`;
     if (!isMapping(item)) throw fail(path, field, `must be a mapping; got ${describeValue(item)}`);
-    const id = requireString(path, `${field}.id`, item["id"], { required: true });
+    const id = requireString(path, `${field}.id`, item["id"]);
     const actionRaw = item["action"];
     if (actionRaw === undefined) {
       throw fail(path, `${field}.action`, "is required");
@@ -404,8 +412,8 @@ function validateEntries(path: string, raw: YamlValue, warnings: string[]): Perm
       throw fail(path, `${field}.verdict`, "is required");
     }
     const verdict = requireVerdict(path, `${field}.verdict`, verdictRaw);
-    const agent = requireString(path, `${field}.agent`, item["agent"], { required: false });
-    const role = requireString(path, `${field}.role`, item["role"], { required: false });
+    const agent = optionalString(path, `${field}.agent`, item["agent"]);
+    const role = optionalString(path, `${field}.role`, item["role"]);
     if (agent !== undefined && role !== undefined) {
       throw fail(
         path,
@@ -413,7 +421,7 @@ function validateEntries(path: string, raw: YamlValue, warnings: string[]): Perm
         "declares both agent and role; an entry names one principal, never two",
       );
     }
-    const target = requireString(path, `${field}.target`, item["target"], { required: false });
+    const target = optionalString(path, `${field}.target`, item["target"]);
     for (const key of Object.keys(item)) {
       if (
         !(["id", "action", "verdict", "agent", "role", "target"] as ReadonlyArray<string>).includes(

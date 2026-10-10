@@ -56,6 +56,7 @@ import { entityRegistryCheck } from "./doctor/entity-checks.ts";
 import { brokenBacklinkCheck } from "./doctor/link-checks.ts";
 import { mergeChainDanglingCheck } from "./doctor/merge-chain-check.ts";
 import { orphanSessionCheck } from "./doctor/orphan-session-check.ts";
+import { permissionsDocumentCheck } from "./doctor/permissions-check.ts";
 import { evidenceRangeCheck, logShardCheck, orphanEvidenceCheck } from "./doctor/log-checks.ts";
 import {
   contentHashDriftCheck,
@@ -215,6 +216,7 @@ const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = Object.freeze([
   embeddingsHealthCheck,
   rerankHealthCheck,
   payloadRegistryCheck,
+  permissionsDocumentCheck,
 ]);
 
 // ----- Entry point ----------------------------------------------------------
