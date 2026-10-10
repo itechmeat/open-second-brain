@@ -178,6 +178,7 @@ const WRITE_BATCH_CODES = exhaustiveMembers<WriteBatchErrorCode>()([
   "target_frontmatter_lossy",
   "blank_overwrite_refused",
   "reserved_frontmatter_key",
+  "owner_write_refused",
   "duplicate_target",
   "too_many_operations",
   "preference_not_found",
@@ -196,6 +197,7 @@ const CREATE_NOTE_CODES = exhaustiveMembers<CreateNoteErrorCode>()([
   "invalid_template",
   "write_binding",
   "config_invalid",
+  "owner_write_refused",
 ]);
 
 const NOTE_LIFECYCLE_CODES = exhaustiveMembers<NoteLifecycleErrorCode>()([

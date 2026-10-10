@@ -107,6 +107,7 @@ const TYPE_ONLY_MEMBERS = [
   "target_frontmatter_lossy",
   "blank_overwrite_refused",
   "reserved_frontmatter_key",
+  "owner_write_refused",
   "duplicate_target",
   "too_many_operations",
   "preference_not_found",
