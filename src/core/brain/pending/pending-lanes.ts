@@ -310,6 +310,15 @@ export interface StageForReviewResult {
 }
 
 /**
+ * The MCP-boundary code a staged-target conflict answers under (see
+ * {@link PendingStageConflictError}): a write retried while its first run
+ * is still pending names the queue entry holding the target, never a
+ * generic internal error a caller would retry into the same wall. One
+ * spelling here so the tools and the error registry cannot drift.
+ */
+export const PENDING_STAGE_CONFLICT_CODE = "pending-stage-conflict";
+
+/**
  * The publish target of the new stage is already staged for review under
  * another OPEN queue entry. Named rather than silently replaced: two
  * entries decoding to one target would apply into a conflict (the second
@@ -319,6 +328,8 @@ export interface StageForReviewResult {
  * operator has to apply or reject first.
  */
 export class PendingStageConflictError extends Error {
+  /** Always {@link PENDING_STAGE_CONFLICT_CODE}. */
+  readonly code: string;
   /** The pending id already holding the target. */
   readonly existingId: string;
   readonly target: string;
@@ -329,6 +340,7 @@ export class PendingStageConflictError extends Error {
         "new bytes for the same target",
     );
     this.name = "PendingStageConflictError";
+    this.code = PENDING_STAGE_CONFLICT_CODE;
     this.existingId = existingId;
     this.target = target;
   }

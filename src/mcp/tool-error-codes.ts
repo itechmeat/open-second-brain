@@ -63,7 +63,10 @@ import { WriteBatchError } from "../core/brain/write-batch.ts";
 import { ConfigReadError } from "../core/config.ts";
 import { SEARCH_ERROR_CODES, SearchError } from "../core/search/search-error.ts";
 import { WRITE_BINDING_REFUSED_CODE } from "../core/write-binding/index.ts";
-import { WRITE_REFUSAL_CODES } from "../core/brain/pending/pending-lanes.ts";
+import {
+  WRITE_REFUSAL_CODES,
+  PENDING_STAGE_CONFLICT_CODE,
+} from "../core/brain/pending/pending-lanes.ts";
 import { VAULT_FROZEN_REFUSAL } from "./frozen-refusal.ts";
 import { OWNER_SCOPE_REFUSALS } from "./owner-scope-refusal.ts";
 import {
@@ -272,6 +275,10 @@ export const TOOL_ERROR_CODES = Object.freeze([
     VAULT_FROZEN_REFUSAL,
     WRITE_BINDING_REFUSED_CODE,
     ...Object.values(WRITE_REFUSAL_CODES),
+    // A write retried while its first run is still staged: the queue's
+    // own refusal code, carried by `PendingStageConflictError` beside the
+    // `WriteRefusedError` handlers that answer it.
+    PENDING_STAGE_CONFLICT_CODE,
     REACH_REFUSAL,
     ...OWNER_SCOPE_REFUSALS,
     ...WRITE_BATCH_CODES,

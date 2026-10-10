@@ -44,6 +44,7 @@ import type { ReadableRef } from "../../core/brain/near-duplicate.ts";
 import { nextCommandField } from "../../core/brain/next-step.ts";
 import {
   PENDING_STAGED_DIAGNOSTIC_CODE,
+  PendingStageConflictError,
   WriteRefusedError,
 } from "../../core/brain/pending/pending-lanes.ts";
 import {
@@ -246,6 +247,16 @@ export function writeBatchErrorToMcp(err: unknown, tool: string): MCPError {
       next_command: err.nextCommand,
     });
   }
+  // A staged op retried while its first run is still pending: the queue
+  // refuses by name, so the answer names the queue entry holding the
+  // target instead of an internal error a caller would retry into.
+  if (err instanceof PendingStageConflictError) {
+    return new MCPError(INVALID_PARAMS, `${tool}: ${err.message}`, {
+      code: err.code,
+      existing_id: err.existingId,
+      target: err.target,
+    });
+  }
   return new MCPError(INTERNAL_ERROR, err instanceof Error ? err.message : String(err));
 }
 
@@ -354,6 +365,16 @@ async function toolBrainCreateNote(
         rule: err.rule,
         agent: err.agent,
         next_command: err.nextCommand,
+      });
+    }
+    // A create retried while its first run is still staged: the queue
+    // refuses by name, so the answer names the queue entry holding the
+    // target instead of an internal error a caller would retry into.
+    if (err instanceof PendingStageConflictError) {
+      throw new MCPError(INVALID_PARAMS, `brain_create_note: ${err.message}`, {
+        code: err.code,
+        existing_id: err.existingId,
+        target: err.target,
       });
     }
     rethrowVaultFrozen(err);

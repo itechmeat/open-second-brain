@@ -29,7 +29,7 @@ import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { NOTES_TOOLS } from "../../src/mcp/brain/notes-tools.ts";
 import { WRITE_BATCH_TOOLS } from "../../src/mcp/brain/write-batch-tools.ts";
 import { INGEST_TOOLS } from "../../src/mcp/brain/ingest-tools.ts";
-import { MCPError } from "../../src/mcp/protocol.ts";
+import { INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
 const NOTES_ENV = "OPEN_SECOND_BRAIN_WRITE_APPROVAL_NOTES_ENABLED";
@@ -192,5 +192,64 @@ describe("document-denied writes answer as named refusals", () => {
     const entitiesDir = join(vault, "Brain", "entities");
     expect(existsSync(entitiesDir) ? readdirSync(entitiesDir).length : 0).toBe(0);
     expect(existsSync(join(vault, "Brain/pending/ingest"))).toBe(false);
+  });
+});
+
+/**
+ * A write RETRIED while its first run is still pending: the queue refuses
+ * the second stage by name (PendingStageConflictError), and the tool
+ * answers with that named code - the pending id already holding the
+ * target, and the target itself - never as an internal error a caller
+ * would retry into the same wall.
+ */
+describe("a retried write over a still-pending stage answers the named code", () => {
+  test("brain_create_note carries pending-stage-conflict with the holding pending id", async () => {
+    const first = (await createNote(ctx, {
+      path: "Notes/Retried.md",
+      content: "first",
+    })) as Record<string, unknown>;
+    expect(first["staged"]).toBe(true);
+    const holdingId = first["pending_id"] as string;
+    let refused: MCPError | undefined;
+    try {
+      await createNote(ctx, { path: "Notes/Retried.md", content: "second" });
+    } catch (err) {
+      refused = err instanceof MCPError ? err : undefined;
+    }
+    expect(refused).toBeInstanceOf(MCPError);
+    expect(refused?.code).toBe(INVALID_PARAMS);
+    const data = (refused?.data ?? {}) as Record<string, unknown>;
+    expect(data["code"]).toBe("pending-stage-conflict");
+    expect(data["existing_id"]).toBe(holdingId);
+    expect(data["target"]).toBe("Notes/Retried.md");
+    expect(String(refused?.message)).toContain("already staged for review");
+  });
+
+  test("brain_ingest_source carries pending-stage-conflict for a still-pending summary", async () => {
+    mkdirSync(join(vault, "Articles"), { recursive: true });
+    writeFileSync(join(vault, "Articles/dup.md"), "source bytes\n", "utf8");
+    const first = (await ingestSource(ctx, {
+      source_path: "Articles/dup.md",
+      summary: "First ingest summary.",
+      entities: [{ category: "concept", name: "Rollups" }],
+    })) as Record<string, unknown>;
+    expect(first["staged"]).toBe(true);
+    const holdingId = first["pending_id"] as string;
+    let refused: MCPError | undefined;
+    try {
+      await ingestSource(ctx, {
+        source_path: "Articles/dup.md",
+        summary: "Second ingest summary.",
+        entities: [{ category: "concept", name: "Rollups" }],
+      });
+    } catch (err) {
+      refused = err instanceof MCPError ? err : undefined;
+    }
+    expect(refused).toBeInstanceOf(MCPError);
+    expect(refused?.code).toBe(INVALID_PARAMS);
+    const data = (refused?.data ?? {}) as Record<string, unknown>;
+    expect(data["code"]).toBe("pending-stage-conflict");
+    expect(data["existing_id"]).toBe(holdingId);
+    expect(data["target"]).toBe(first["summary_path"]);
   });
 });

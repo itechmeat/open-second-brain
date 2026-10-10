@@ -301,6 +301,11 @@ through unchanged:
   uses. The owner-write gate refuses with `owner_write_refused` (below)
   and names the fix in its message: name the caller's own resolved
   identity, or write without an explicit owner;
+- the staged-target conflict `pending-stage-conflict` (since 1.79.0): a
+  write retried while its first run is still staged, answered with the
+  queue entry holding the target (`existing_id`) and the `target` itself,
+  so a caller applies or rejects that entry instead of retrying into the
+  same wall;
 - the codes of write batches (`budget_exceeded`, `invalid_action`,
   `invalid_target`, ..., and since 1.79.0 the frontmatter
   `owner_write_refused` guard), note creation (which carries the same

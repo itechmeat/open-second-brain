@@ -41,6 +41,7 @@ import { parseExtractionIntakeArgs } from "./intake-args.ts";
 import { readableAtContextReach } from "./reach-readable.ts";
 import {
   PENDING_STAGED_DIAGNOSTIC_CODE,
+  PendingStageConflictError,
   WriteRefusedError,
 } from "../../core/brain/pending/pending-lanes.ts";
 import { nextCommandField } from "../../core/brain/next-step.ts";
@@ -120,6 +121,17 @@ async function toolBrainIngestSource(
           rule: err.rule,
           agent: err.agent,
           next_command: err.nextCommand,
+        });
+      }
+      // An ingest retried while its first run is still staged: the queue
+      // refuses by name, so the answer names the queue entry holding the
+      // summary target instead of an internal error a caller would retry
+      // into the same wall.
+      if (err instanceof PendingStageConflictError) {
+        throw new MCPError(INVALID_PARAMS, `${TOOL}: ${err.message}`, {
+          code: err.code,
+          existing_id: err.existingId,
+          target: err.target,
         });
       }
       throw err;

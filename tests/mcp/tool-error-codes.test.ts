@@ -36,7 +36,10 @@ import { WriteBatchError } from "../../src/core/brain/write-batch.ts";
 import { ConfigReadError } from "../../src/core/config.ts";
 import { SEARCH_ERROR_CODES, SearchError } from "../../src/core/search/search-error.ts";
 import { WRITE_BINDING_REFUSED_CODE } from "../../src/core/write-binding/index.ts";
-import { WRITE_REFUSAL_CODES } from "../../src/core/brain/pending/pending-lanes.ts";
+import {
+  PENDING_STAGE_CONFLICT_CODE,
+  WRITE_REFUSAL_CODES,
+} from "../../src/core/brain/pending/pending-lanes.ts";
 import { VAULT_FROZEN_REFUSAL } from "../../src/mcp/frozen-refusal.ts";
 import { OutputContractError } from "../../src/mcp/output-contract.ts";
 import { OWNER_SCOPE_REFUSALS } from "../../src/mcp/owner-scope-refusal.ts";
@@ -180,6 +183,7 @@ describe("TOOL_ERROR_CODES", () => {
       VAULT_FROZEN_REFUSAL,
       WRITE_BINDING_REFUSED_CODE,
       ...Object.values(WRITE_REFUSAL_CODES),
+      PENDING_STAGE_CONFLICT_CODE,
       REACH_REFUSAL,
       ...OWNER_SCOPE_REFUSALS,
       ...TYPE_ONLY_MEMBERS,
