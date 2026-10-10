@@ -118,12 +118,14 @@ export { printUpgradePlanText, renderUnifiedDiff } from "./upgrade-render.ts";
 
 /**
  * The plan JSON an operator reads, with its seal (t_18fda844): the
- * digest carried from `--dry-run` to `--apply`, so what lands is what
- * was reviewed. Emitted unconditionally - a `planUpgrade` result is
- * always sealed - and the row projection stays in
- * `./upgrade-render.ts` (imported above under an alias); the barrel is
- * where the seal becomes visible, because this is the module every
- * verb imports its renderers through.
+ * digest carried from `--dry-run` to `--apply` via `--approval-digest`
+ * (`brain upgrade --apply` requires it in non-interactive mode and
+ * verifies it against the freshly computed plan, exactly as
+ * import-claude-memory's does), so what lands is what was reviewed.
+ * Emitted unconditionally - a `planUpgrade` result is always sealed -
+ * and the row projection stays in `./upgrade-render.ts` (imported above
+ * under an alias); the barrel is where the seal becomes visible, because
+ * this is the module every verb imports its renderers through.
  */
 export function renderUpgradePlanJson(
   plan: UpgradePlan,

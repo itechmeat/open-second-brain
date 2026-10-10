@@ -83,9 +83,14 @@ describe("brain upgrade", () => {
   test("--apply --yes rewrites pending files and creates upgrade-<ts> snapshot", async () => {
     await bootstrap();
     writeFileSync(join(vault, "Brain", "_BRAIN.md"), "stale\n");
-    const r = await runCli(["brain", "upgrade", "--vault", vault, "--apply", "--yes"], {
-      env: { OPEN_SECOND_BRAIN_CONFIG: config },
-    });
+    // Non-interactive apply carries the approval digest (t_18fda844):
+    // the plan is deterministic for the drifted state, so the digest
+    // here is what a prior --dry-run would have printed.
+    const digest = upgradeModule.planUpgrade(vault).digest;
+    const r = await runCli(
+      ["brain", "upgrade", "--vault", vault, "--apply", "--yes", "--approval-digest", digest],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
     expect(r.returncode).toBe(0);
     expect(r.stdout).toMatch(/run_id: upgrade-/);
     expect(r.stdout).toContain("Brain/_BRAIN.md");
@@ -112,6 +117,60 @@ describe("brain upgrade", () => {
     });
     expect(r.returncode).toBe(1);
     expect(r.stderr).toContain("--yes");
+  });
+
+  test("--apply in non-interactive mode without --approval-digest refuses before writing", async () => {
+    await bootstrap();
+    writeFileSync(join(vault, "Brain", "_BRAIN.md"), "stale\n");
+    // `brain init` pre-creates the snapshots directory; the refusal must
+    // not add an archive to it.
+    const snapsBefore = existsSync(join(vault, "Brain", ".snapshots"))
+      ? require("node:fs").readdirSync(join(vault, "Brain", ".snapshots")).length
+      : 0;
+    const r = await runCli(["brain", "upgrade", "--vault", vault, "--apply", "--yes"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(r.returncode).toBe(1);
+    expect(r.stderr).toContain("--approval-digest");
+    // Nothing was written and no snapshot was taken.
+    expect(readFileSync(join(vault, "Brain", "_BRAIN.md"), "utf8")).toBe("stale\n");
+    const snapsAfter = existsSync(join(vault, "Brain", ".snapshots"))
+      ? require("node:fs").readdirSync(join(vault, "Brain", ".snapshots")).length
+      : 0;
+    expect(snapsAfter).toBe(snapsBefore);
+  });
+
+  test("--apply with the matching dry-run digest lands; a stale digest refuses", async () => {
+    await bootstrap();
+    writeFileSync(join(vault, "Brain", "_BRAIN.md"), "stale\n");
+    const dry = await runCli(["brain", "upgrade", "--vault", vault, "--dry-run", "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    const digest = (JSON.parse(dry.stdout) as { digest: string }).digest;
+    const ok = await runCli(
+      ["brain", "upgrade", "--vault", vault, "--apply", "--yes", "--approval-digest", digest],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(ok.returncode).toBe(0);
+    expect(readFileSync(join(vault, "Brain", "_BRAIN.md"), "utf8")).not.toBe("stale\n");
+
+    // A second drift, a fresh approval, then the file moves again before
+    // the apply: the approved plan no longer describes the vault, and the
+    // refusal says so before anything is written.
+    writeFileSync(join(vault, "Brain", "_BRAIN.md"), "stale again\n");
+    const secondDry = await runCli(["brain", "upgrade", "--vault", vault, "--dry-run", "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    const approved = (JSON.parse(secondDry.stdout) as { digest: string }).digest;
+    writeFileSync(join(vault, "Brain", "_BRAIN.md"), "moved after approval\n");
+    const stale = await runCli(
+      ["brain", "upgrade", "--vault", vault, "--apply", "--yes", "--approval-digest", approved],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(stale.returncode).toBe(1);
+    expect(stale.stderr).toContain("approval digest mismatch");
+    expect(stale.stderr).toContain("nothing was written");
+    expect(readFileSync(join(vault, "Brain", "_BRAIN.md"), "utf8")).toBe("moved after approval\n");
   });
 
   test("--apply on clean vault → no snapshot, no log, exit 0", async () => {
@@ -228,6 +287,9 @@ describe("brain upgrade --apply applies the plan it printed", () => {
     await bootstrap();
     writeFileSync(join(vault, "Brain", "_BRAIN.md"), "stale\n");
     const realPlan = upgradeModule.planUpgrade;
+    // The approval digest of the plan the CLI is about to compute itself:
+    // same drifted state, same deterministic seal.
+    const digest = realPlan(vault).digest;
     const shown: UpgradePlan[] = [];
     const planSpy = spyOn(upgradeModule, "planUpgrade").mockImplementation((v) => {
       const plan = realPlan(v);
@@ -237,7 +299,15 @@ describe("brain upgrade --apply applies the plan it printed", () => {
     const applySpy = spyOn(upgradeModule, "applyUpgrade");
     const out = spyOn(process.stdout, "write").mockImplementation(() => true);
     try {
-      const code = await cmdBrainUpgrade(["--vault", vault, "--apply", "--yes", "--json"]);
+      const code = await cmdBrainUpgrade([
+        "--vault",
+        vault,
+        "--apply",
+        "--yes",
+        "--approval-digest",
+        digest,
+        "--json",
+      ]);
       out.mockRestore();
       expect(code).toBe(0);
       expect(shown).toHaveLength(1);
@@ -256,6 +326,9 @@ describe("brain upgrade --apply applies the plan it printed", () => {
     const manual = join(vault, "Brain", "_BRAIN.md");
     writeFileSync(manual, "stale\n");
     const realPlan = upgradeModule.planUpgrade;
+    // The digest of the plan the mocked planning is about to return (the
+    // file is still "stale\n" at that moment; the hand edit lands after).
+    const digest = realPlan(vault).digest;
     // The hand edit lands between the plan and the apply.
     const planSpy = spyOn(upgradeModule, "planUpgrade").mockImplementation((v) => {
       const plan = realPlan(v);
@@ -269,7 +342,15 @@ describe("brain upgrade --apply applies the plan it printed", () => {
     });
     let code: number;
     try {
-      code = await cmdBrainUpgrade(["--vault", vault, "--apply", "--yes", "--json"]);
+      code = await cmdBrainUpgrade([
+        "--vault",
+        vault,
+        "--apply",
+        "--yes",
+        "--approval-digest",
+        digest,
+        "--json",
+      ]);
     } finally {
       out.mockRestore();
       planSpy.mockRestore();
