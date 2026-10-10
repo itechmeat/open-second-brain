@@ -6,15 +6,17 @@
  * "which rule decided this" has exactly one answer and the decision ledger
  * can record it. The precedence table is fixed:
  *
- *   1. a target-scoped entry (`entry:<id>`)
- *   2. any other matching entry, most specific first
- *   3. the agent's per-action override (`agent:<name>`)
- *   4. the agent's role mapping (`role:<name>`)
- *   5. `default_action` (`default`)
+ *   1. the matching entries (`entry:<id>`): target-scoped ones above
+ *      blanket ones, then the tightest verdict (deny > ask > allow),
+ *      then document order
+ *   2. the agent's per-action override (`agent:<name>`)
+ *   3. the agent's role mapping (`role:<name>`)
+ *   4. `default_action` (`default`)
  *
- * and among rules of equal specificity deny beats ask beats allow - deny
- * wins every tie, so an operator composing a strict document from several
- * angles never has one lenient line open what the rest closed.
+ * Deny wins every tie at equal scope - a blanket deny closes what an
+ * agent-specific allow would open - so an operator composing a strict
+ * document from several angles never has one lenient line open what the
+ * rest closed.
  *
  * PURE LEAF: no I/O, no clock, no config. The `via` half of the subject
  * never changes a verdict - it rides the decision into the ledger row the
@@ -92,8 +94,8 @@ export function resolvePermission(
   action: PermissionAction,
   target?: string,
 ): PermissionDecision {
-  // Entries first, most specific matching entry wins: target-scoped above
-  // blanket, then the tightest verdict, then document order for stability.
+  // Entries first: target-scoped above blanket, then the tightest
+  // verdict, then document order for stability.
   const matching = doc.entries
     .filter((entry) => entryMatches(doc, entry, subject, action, target))
     .map((entry, order) => ({

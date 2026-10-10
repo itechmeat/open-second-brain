@@ -103,10 +103,11 @@ export function decisionLedgerDir(vault: string): string {
 }
 
 /**
- * One month's shard for one device: `<month>[.<shardId>].jsonl`. Exported
- * for the lock and the doctor probes; the append path derives it itself.
+ * One month's shard for one device: `<month>[.<shardId>].jsonl`. The
+ * append path derives its shard file through this; the query side lists
+ * the directory instead of precomputing names.
  */
-export function decisionLedgerShardPath(vault: string, month: string, shardId: string): string {
+export function decisionLedgerShardPath(month: string, shardId: string): string {
   if (!MONTH_RE.test(month)) throw new Error(`invalid decision ledger month: ${month}`);
   return shardedFileName(month, shardId, JSONL_LEDGER_EXT);
 }
@@ -130,7 +131,7 @@ export function appendDecisionLedger(
     const shardId = resolveAppendShardId();
     const dir = decisionLedgerDir(vault);
     mkdirSync(dir, { recursive: true });
-    const shardPath = join(dir, decisionLedgerShardPath(vault, month, shardId));
+    const shardPath = join(dir, decisionLedgerShardPath(month, shardId));
     withShardLock(shardPath, () => {
       writeFileSync(shardPath, `${JSON.stringify(stripEmptyOptionals(row))}\n`, {
         encoding: "utf8",

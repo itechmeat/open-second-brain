@@ -498,12 +498,6 @@ export function loadPermissionsDocument(vault: string): {
       `${path}: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
-  if (!isMapping(raw)) {
-    // A top-level list or scalar cannot carry a schema.
-    throw new PermissionsDocumentError(
-      `${path}: expected a mapping at the top level; got ${describeValue(raw)}`,
-    );
-  }
 
   const warnings: string[] = [];
   for (const key of Object.keys(raw)) {
