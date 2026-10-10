@@ -801,7 +801,12 @@ function projectUpdateNote(
   // denies cannot rewrite it either - mutation is not a door around the
   // rule that refused the create. An ask and an allow change nothing
   // here: no row, no stage, the update proceeds exactly as before.
-  refuseDocumentDeny(vault, REVIEW_LANE.notes, opts.subject, { target: target.relPath });
+  refuseDocumentDeny(vault, REVIEW_LANE.notes, opts.subject, {
+    target: target.relPath,
+    // The no-subject fallback answers for the principal THIS config
+    // declares - the same one the owner gate below resolves against.
+    ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
+  });
   // The owner gate rides the update seam AHEAD of the existing-note read
   // (write-side-trust, Task 13): a caller-named `owner:` the gate refuses
   // is refused with the same error whether the target exists or not, so
@@ -927,7 +932,12 @@ function projectAppendNote(
   // The same deny-only consult the update runs (write-side trust): an
   // append mutates an admitted note, so the document's deny refuses it,
   // while an ask and an allow leave the append exactly as it was.
-  refuseDocumentDeny(vault, REVIEW_LANE.notes, opts.subject, { target: target.relPath });
+  refuseDocumentDeny(vault, REVIEW_LANE.notes, opts.subject, {
+    target: target.relPath,
+    // The no-subject fallback answers for the principal THIS config
+    // declares, like the update's consult above.
+    ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
+  });
   const state = readExistingNote(target.abs, target.relPath, index, opts.readable);
   const appended = op.content.trim();
   const body = state.body.length > 0 ? `${state.body}${APPEND_SEPARATOR}${appended}` : appended;

@@ -179,6 +179,15 @@ export interface ResolveWriteDispositionOptions {
    * decision-ledger row records it.
    */
   readonly target?: string;
+  /**
+   * Path of the config file the caller resolved its identity against, when
+   * it has one. The no-subject fallback resolves the ambient agent through
+   * it, so a document consult on an explicit-configPath run answers the
+   * SAME principal the owner gate does - a document rule naming that
+   * agent refuses, and the ledger row names it - instead of answering for
+   * whatever the ambient discovery finds.
+   */
+  readonly configPath?: string;
   /** Injected clock for the ledger row's `ts`. Defaults to now. */
   readonly now?: Date;
 }
@@ -295,7 +304,7 @@ export function resolveWriteDisposition(
     });
   }
   const effectiveSubject: WriteSubject = subject ?? {
-    agent: resolveAgentName(),
+    agent: resolveAgentName(opts.configPath),
     via: "config",
   };
   const action = documentActionFor(lane);
@@ -358,7 +367,7 @@ export function refuseDocumentDeny(
   const { document } = loadPermissionsDocument(vault);
   if (document === null) return;
   const effectiveSubject: WriteSubject = subject ?? {
-    agent: resolveAgentName(),
+    agent: resolveAgentName(opts.configPath),
     via: "config",
   };
   const action = documentActionFor(lane);

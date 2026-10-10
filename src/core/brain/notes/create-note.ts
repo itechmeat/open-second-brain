@@ -809,7 +809,9 @@ export function createNote(vault: string, input: CreateNoteInput): CreateNoteRes
     // (write-side-trust, Task 7); resolveAgentName stays the stdio and
     // CLI fallback.
     input.subject ?? { agent: resolveAgentName(input.configPath), via: "config" },
-    { target: relPath },
+    // The no-subject fallback (unused while a subject always arrives, and
+    // honest if that ever changes) resolves through this caller's config.
+    { target: relPath, configPath: input.configPath },
   );
   if (disposition.verdict === "stage") {
     if (existsSync(abs)) {

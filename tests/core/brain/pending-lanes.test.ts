@@ -29,6 +29,7 @@ import { freezeVault } from "../../../src/core/brain/freeze.ts";
 import { requireNextStep } from "../../../src/core/brain/next-step.ts";
 import { WRITE_REFUSAL_NEXT_COMMAND } from "../../../src/core/brain/write-refusal-exit.ts";
 import { createNote } from "../../../src/core/brain/notes/create-note.ts";
+import { applyWriteBatch } from "../../../src/core/brain/write-batch.ts";
 import {
   InvalidPendingIdError,
   PendingApplyConflictError,
@@ -42,6 +43,7 @@ import {
   decodePendingTargetPath,
   encodePendingTargetPath,
   listPendingLane,
+  refuseDocumentDeny,
   resolveWriteDisposition,
   rejectPendingLane,
   stageForReview,
@@ -676,6 +678,108 @@ describe("resolveWriteDisposition under a permissions document", () => {
     expect(disposition.verdict).toBe("stage");
     expect(disposition.source).toBe("OPEN_SECOND_BRAIN_WRITE_APPROVAL_NOTES_ENABLED");
     expect(queryDecisionLedger(vault)).toHaveLength(0);
+  });
+});
+
+/**
+ * The no-subject fallback (write-side trust, Task 12): a caller that
+ * carries no transport identity - the stdio and CLI surfaces - must be
+ * consulted as the principal ITS config declares, the same one the owner
+ * gate answers for, so a document rule naming that agent refuses a run
+ * launched with an explicit configPath instead of fail-opening against
+ * whatever the ambient discovery finds.
+ */
+describe("the no-subject fallback resolves the caller's configPath", () => {
+  const DOC_PATH = () => join(vault, "Brain", "_permissions.yaml");
+
+  function writeDoc(text: string): void {
+    writeFileSync(DOC_PATH(), text, "utf8");
+  }
+
+  function writeAltConfig(): string {
+    const altConfig = join(tmp, "alt-config.yaml");
+    writeFileSync(altConfig, `vault: ${vault}\nagent_name: config-agent\n`);
+    return altConfig;
+  }
+
+  test("refuseDocumentDeny consults the document as the configPath agent", () => {
+    setEnv("VAULT_AGENT_NAME", undefined);
+    const altConfig = writeAltConfig();
+    writeDoc(
+      [
+        "version: 1",
+        "default_action: allow",
+        "entries:",
+        "  - id: deny-config-agent",
+        "    agent: config-agent",
+        "    action: write",
+        "    verdict: deny",
+      ].join("\n") + "\n",
+    );
+    let refused: WriteRefusedError | undefined;
+    try {
+      refuseDocumentDeny(vault, "notes", undefined, {
+        target: "Notes/X.md",
+        configPath: altConfig,
+      });
+    } catch (err) {
+      refused = err instanceof WriteRefusedError ? err : undefined;
+    }
+    expect(refused).toBeInstanceOf(WriteRefusedError);
+    expect(refused?.agent).toBe("config-agent");
+    expect(refused?.rule).toBe("entry:deny-config-agent");
+    const rows = queryDecisionLedger(vault, { verdict: "deny" });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.actor).toBe("config-agent");
+  });
+
+  test("resolveWriteDisposition's fallback consults through the configPath too", () => {
+    setEnv("VAULT_AGENT_NAME", undefined);
+    const altConfig = writeAltConfig();
+    writeDoc("version: 1\ndefault_action: deny\n");
+    let refused: WriteRefusedError | undefined;
+    try {
+      resolveWriteDisposition(vault, "notes", undefined, {
+        target: "Notes/Y.md",
+        configPath: altConfig,
+      });
+    } catch (err) {
+      refused = err instanceof WriteRefusedError ? err : undefined;
+    }
+    expect(refused).toBeInstanceOf(WriteRefusedError);
+    expect(refused?.agent).toBe("config-agent");
+  });
+
+  test("a write-batch update without a subject refuses naming the configPath agent", () => {
+    setEnv("VAULT_AGENT_NAME", undefined);
+    const altConfig = writeAltConfig();
+    writeDoc(
+      [
+        "version: 1",
+        "default_action: allow",
+        "entries:",
+        "  - id: deny-config-agent",
+        "    agent: config-agent",
+        "    action: write",
+        "    verdict: deny",
+      ].join("\n") + "\n",
+    );
+    // The deny-only consult rides ahead of the existing-note read, so the
+    // refusal needs no target on disk.
+    let refused: WriteRefusedError | undefined;
+    try {
+      applyWriteBatch(vault, [{ kind: "update_note", path: "Notes/Any.md", body: "rewritten" }], {
+        configPath: altConfig,
+      });
+    } catch (err) {
+      refused = err instanceof WriteRefusedError ? err : undefined;
+    }
+    expect(refused).toBeInstanceOf(WriteRefusedError);
+    expect(refused?.agent).toBe("config-agent");
+    const rows = queryDecisionLedger(vault, { verdict: "deny" });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.actor).toBe("config-agent");
+    expect(rows[0]!.target).toBe("Notes/Any.md");
   });
 });
 
