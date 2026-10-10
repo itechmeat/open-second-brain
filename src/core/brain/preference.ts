@@ -56,11 +56,15 @@ import {
 } from "./schema-vocab.ts";
 import { brainDirsForWrite, preferencePath, retiredPath, validateSlug } from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
-import { OWNER_UNRESOLVED, ownerStampFor } from "../graph/agent-scope.ts";
+import { OWNER_UNRESOLVED, normalizeAgentScope, ownerStampFor } from "../graph/agent-scope.ts";
+import { normalizeAgentArgument } from "../agent-identity.ts";
 import { resolveAgentName, UNCONFIGURED_AGENT_NAME } from "../config.ts";
 import { DEGRADATION_CODE } from "../integrity/degradation.ts";
 import { GATE_MODE } from "../integrity/stamp.ts";
-import { loadIntegrityConfigForWrite } from "./policy.ts";
+import { loadIntegrityConfigForWrite, loadIntegrityConfigSafe } from "./policy.ts";
+import { loadPermissionsDocument } from "./permissions/document.ts";
+import { appendDecisionLedger } from "./permissions/ledger.ts";
+import { OWNER_SCOPE_WRITES_KEY, refuseCrossOwnerWrite } from "./trust/owner-write-gate.ts";
 import { asProvenanceLevel, type ProvenanceLevel } from "./provenance/provenance.ts";
 import { sanitisePrinciple } from "./text/sanitize-principle.ts";
 import {
@@ -473,9 +477,13 @@ export function writePreference(
  *
  * Three sources, in this order, and the order is the whole rule:
  *
- *   1. **The caller's explicit token.** Unchanged from before this
- *      existed - an importer restoring a page, or a surface that knows
- *      better, still decides.
+ *   1. **The caller's explicit token** - after the owner-write gate has
+ *      had its say ({@link gateNamedOwner}): the token still decides,
+ *      but under `integrity.owner_scope_writes` a name that disagrees
+ *      with the resolved identity is refused rather than honoured, so
+ *      the claim a write records is one the caller was allowed to make.
+ *      An absent explicit token skips the gate entirely, which is what
+ *      keeps the restore and import paths byte-identical.
  *   2. **What the file already says.** A rewrite NEVER re-owns. Ownership
  *      is a property of the agent that created the memory, so a dream
  *      pass, a merge or a refresh run by anyone cannot quietly transfer
@@ -543,7 +551,7 @@ export function resolvedOwnerFor(
   configPath: string | undefined,
 ): string | undefined {
   const given = explicit?.trim();
-  if (given) return given;
+  if (given) return gateNamedOwner(vault, path, given, configPath);
   let mode: string;
   try {
     mode = loadIntegrityConfigForWrite(vault).owner_scope_delivery;
@@ -575,6 +583,84 @@ export function resolvedOwnerFor(
     );
   }
   return stamp;
+}
+
+/**
+ * The owner-write gate (write-side-trust, Task 8), consulted ONLY on the
+ * explicit-owner arm: a caller-named owner is a claim, and
+ * `integrity.owner_scope_writes` decides whether this caller may make it.
+ * An absent explicit token never reaches here, so the restore and import
+ * paths are byte-identical whatever the gate says.
+ *
+ * The gate mode reads through {@link loadIntegrityConfigSafe}, NOT the
+ * writer loader the stamp arm uses, and the difference is the same
+ * reader/writer asymmetry the stamp arm documents, resolved the other way
+ * for a refusal gate. Strict here means REFUSE - the unreadable config
+ * cannot loosen this gate, it can only close it - so failing closed to
+ * `fail` is the conservative direction and the operator's typo stops the
+ * foreign-owner write instead of waving it through. An unreadable
+ * permissions document raises through Lane A's loader with the field
+ * named, which is that document's own fail-closed contract.
+ *
+ * Under `warn` a cross-owner write passes and exactly one decision-ledger
+ * row is appended with the gate key as its source: warn exists so an
+ * operator can watch what `fail` would refuse, and the row IS the
+ * watching. The row condition recomputes the same normalised comparison
+ * the predicate makes - the module exposes only the pinned predicate and
+ * key - and only the case `fail` would refuse logs, so a matching-owner
+ * write stays silent.
+ *
+ * A failed ledger append never fails the write: the append contract
+ * returns `audit_reason` instead of throwing, and the verdict the caller
+ * already received must not be retroactively withdrawn because
+ * accountability could not be recorded.
+ */
+function gateNamedOwner(
+  vault: string,
+  path: string,
+  given: string,
+  configPath: string | undefined,
+): string {
+  const resolved = resolveAgentName(configPath);
+  const gateMode = loadIntegrityConfigSafe(vault).owner_scope_writes;
+  const { document } = loadPermissionsDocument(vault);
+  const verdict = refuseCrossOwnerWrite({
+    explicitOwner: given,
+    resolvedIdentity: resolved,
+    gateMode,
+    document,
+    subject: { agent: resolved, via: "config" },
+  });
+  if (verdict.refused) {
+    throw new Error(`preference write at ${relative(vault, path)}: ${verdict.reason}`);
+  }
+  if (gateMode === GATE_MODE.warn) logWatchedOwnerWrite(vault, path, given, resolved);
+  return given;
+}
+
+/**
+ * The one `warn` ledger row for an explicit-owner preference write, or
+ * nothing when the named owner agrees with the resolved identity (the
+ * one case `fail` would not refuse is the one case there is nothing to
+ * watch).
+ */
+function logWatchedOwnerWrite(vault: string, path: string, given: string, resolved: string): void {
+  const named = normalizeAgentScope(given);
+  const identity = normalizeAgentScope(normalizeAgentArgument(resolved) ?? undefined);
+  if (named === null || identity === null || named === identity) return;
+  appendDecisionLedger(vault, {
+    ts: new Date().toISOString(),
+    actor: resolved,
+    via: "config",
+    action: "owner_write",
+    target: relative(vault, path),
+    verdict: GATE_MODE.warn,
+    source: OWNER_SCOPE_WRITES_KEY,
+    reason:
+      `explicit owner ${JSON.stringify(given)} allowed under ${GATE_MODE.warn}; ` +
+      `${OWNER_SCOPE_WRITES_KEY}=${GATE_MODE.fail} would refuse it ` +
+      `(resolved identity ${JSON.stringify(resolved)})`,
+  });
 }
 
 /** Attribution recorded on the notices the ownership carry-forward reads produce. */

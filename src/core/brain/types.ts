@@ -2222,6 +2222,16 @@ export interface BrainIntegrityConfig {
    */
   readonly owner_scope_delivery?: GateMode;
   /**
+   * Where caller-named ownership begins to be refused on the WRITE lanes
+   * (write-side-trust). Defaults to `off` because every existing vault
+   * has callers naming owners freely - importers restoring pages,
+   * surfaces that know better - and a default that refused would break
+   * them on upgrade. A sibling of `owner_scope_delivery`, not a mode on
+   * it: the two gates stay separable because their `warn` semantics
+   * already differ (stamp-and-allow here versus allow-and-log there).
+   */
+  readonly owner_scope_writes?: GateMode;
+  /**
    * Where the embedding-store ABI/model/dimension check begins on the
    * read path. Defaults to `warn` because the sqlite-vec version is not
    * stable across environments: two peers on different builds would each
@@ -2244,6 +2254,7 @@ export interface BrainIntegrityConfig {
  */
 export interface ResolvedBrainIntegrityConfig {
   readonly owner_scope_delivery: GateMode;
+  readonly owner_scope_writes: GateMode;
   readonly embedding_abi: GateMode;
   readonly pack_validity_seconds: number;
 }

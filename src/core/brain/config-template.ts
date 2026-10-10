@@ -431,6 +431,10 @@ export const BRAIN_CONFIG_TEMPLATE: ReadonlyArray<BrainTemplateBlock> = Object.f
     emit: "commented-default",
     keys: [
       def("owner_scope_delivery", I.owner_scope_delivery),
+      def("owner_scope_writes", I.owner_scope_writes, [
+        "The write-side sibling: under fail, an explicit owner that",
+        "disagrees with the resolved identity refuses the write.",
+      ]),
       def("embedding_abi", I.embedding_abi),
       def("pack_validity_seconds", I.pack_validity_seconds),
     ],
