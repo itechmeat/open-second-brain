@@ -1521,7 +1521,11 @@ format characters), when it contains NUL, or when it exceeds the cap.
   `brain_lifecycle` (tombstone / supersede / temporal-replace / tip /
   curator), `brain_claims` (claim-graph queries: current truth,
   truth-at-instant, replaced-by, contested-by), `brain_decision`
-  (record / outcome / rate / list / compare / similar / history / recall),
+  (record / outcome / rate / list / compare / similar / history / recall,
+  plus the open-decision actions open / list_open / show_open / resolve /
+  discard that park a question with enumerated options at
+  `Brain/decisions/open-<slug>.md` and later mint the real decision page
+  through `resolve`),
   and `brain_tension` (detect / list / show / confirm / dismiss / resolve).
   Decision-change receipts store only accountable provenance; free-text
   hidden-reasoning fields are rejected by the closed schema.

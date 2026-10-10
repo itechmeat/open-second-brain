@@ -53,11 +53,16 @@ export const RECEIPT_ABSENT_STATE = "(absent)";
  * Closed reason-code vocabulary for decision-record change receipts. A
  * decision mutation stamps exactly one of these so the change trail is
  * machine-filterable alongside the lifecycle codes (supersede/tombstone).
+ * `openResolved` (write-side-trust wave, Task 10) stamps the transition
+ * that closed an open decision by minting a real decision page: the
+ * receipt's subject is the OPEN record, so the trail answers "which
+ * parked question became this decision".
  */
 export const DECISION_CHANGE_REASON = Object.freeze({
   record: "decision-record",
   outcome: "decision-outcome",
   rating: "decision-rating",
+  openResolved: "open-resolved",
 } as const);
 
 /** Same canonical UTC shape the truth ledger and log writer emit. */

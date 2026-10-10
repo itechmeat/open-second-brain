@@ -416,6 +416,34 @@ export const BRAIN_LOG_EVENT_KIND = {
    */
   decisionChangeReceipt: "decision-change-receipt",
   /**
+   * `decision-open` (write-side-trust wave, Task 10) - a question was
+   * parked with enumerated options at `Brain/decisions/open-<slug>.md`,
+   * ahead of the decision it may become. Payload carries the `open`
+   * wikilink, the `title`, the option `count`, and the `agent`. Distinct
+   * from `decision-record` because nothing has been decided yet: an open
+   * question and a made decision are different beliefs at different
+   * lifecycle stages.
+   */
+  decisionOpen: "decision-open",
+  /**
+   * `decision-resolved` (write-side-trust wave, Task 10) - an open
+   * decision was closed by choosing one of its options, minting a real
+   * `type: decision` page. Payload carries the `open` wikilink, the
+   * minted `decision` wikilink, the `choice`, and the `agent`. The
+   * minted page itself carries the usual `decision-record` event; this
+   * event records the transition so the open record's history stays in
+   * the merged timeline.
+   */
+  decisionResolved: "decision-resolved",
+  /**
+   * `decision-discarded` (write-side-trust wave, Task 10) - an open
+   * decision was closed WITHOUT a decision. Payload carries the `open`
+   * wikilink, the `reason`, and the `agent`. Separated from
+   * `decision-resolved` so "never decided" is machine-filterable against
+   * "decided as X" in the merged timeline.
+   */
+  decisionDiscarded: "decision-discarded",
+  /**
    * `authored-at-backfill` (conversation chronology, S1 / t_347e8224) -
    * the idempotent backfill stamped the `authored_at` frontmatter field
    * onto session-imported signals that preserved a transcript turn
