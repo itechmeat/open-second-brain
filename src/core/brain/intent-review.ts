@@ -1,6 +1,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
+import { isExpired } from "./expiration.ts";
 import { brainDirs, vaultRelative } from "./paths.ts";
 import { loadBrainConfig } from "./policy.ts";
 import { parseRetired } from "./preference.ts";
@@ -58,9 +59,16 @@ export function buildIntentReview(
   const now = options.now ?? new Date();
   const config = loadBrainConfig(vault);
   const admit = options.readable;
+  // Expiration filter (C5): a signal past its caller-set `expiration_date`
+  // counts toward no topic here, the same window the query read path honours
+  // and the consolidation pass drops on before clustering. Without it, an
+  // ambient fact whose TTL lapsed inside the contradiction window keeps a
+  // topic "ready for main review" on evidence the vault no longer recalls.
   const records = collectActiveSignals(vault).filter(
     (record) =>
       (admit === undefined || admit(record.path)) &&
+      (record.signal.expiration_date === undefined ||
+        !isExpired(record.signal.expiration_date, now)) &&
       isWithinWindow(record.signal.created_at, config.dream.contradiction_window_days, now),
   );
   // Clustered by RAW topic, deliberately and not yet reconciled: the dream

@@ -24,6 +24,7 @@
  */
 
 import { strictestVisibilityOf } from "../graph/visibility.ts";
+import { isExpired } from "./expiration.ts";
 import { applySelfApprovalGuardrail } from "./trust/self-approval-guardrail.ts";
 import {
   emptyPlan,
@@ -62,6 +63,18 @@ export function planTopics(scan: ScanResult, cfg: BrainConfig, now: Date): PlanS
   const plan = emptyPlan();
   const reservedSlugs = collectReservedPreferenceSlugs(scan);
 
+  // Expiration filter (C5), plan-side. The query read path drops a signal
+  // past its caller-set `expiration_date` from recall; the consolidation
+  // pass honours the same window here, or an ambient fact whose TTL lapsed
+  // inside the contradiction window is still clustered, still counted
+  // toward the candidate threshold, and finally consolidated into a
+  // preference that carries no expiration of its own. Dropped BEFORE
+  // clustering, a lapsed signal takes no part in grouping, promotion,
+  // suppression or sign derivation; the file is never moved, exactly as on
+  // the read path - the archive step treats it like any other unconsumed
+  // signal.
+  const signals = dropExpiredSignals(scan.signals, now);
+
   // Group active signals by folded topic key. We only consider active
   // signals for the create/rebut decisions; processed signals stay in the
   // global log via `evidenced_by` already.
@@ -71,7 +84,7 @@ export function planTopics(scan: ScanResult, cfg: BrainConfig, now: Date): PlanS
   // group. Kept per key so it still does: archiving must not change which
   // way a preference points (see `deriveActiveSign`).
   const archivedByTopic = new Map<string, SignalRecord[]>();
-  for (const rec of scan.signals) {
+  for (const rec of signals) {
     if (rec.archived) {
       const key = topicKey(rec.signal.topic);
       const arr = archivedByTopic.get(key);
@@ -124,7 +137,7 @@ export function planTopics(scan: ScanResult, cfg: BrainConfig, now: Date): PlanS
         plan,
         cfg,
         now,
-        scan.signals,
+        signals,
         reservedSlugs,
       );
       continue;
@@ -149,6 +162,20 @@ export function planTopics(scan: ScanResult, cfg: BrainConfig, now: Date): PlanS
 interface TopicGroup {
   display: string;
   readonly sigs: SignalRecord[];
+}
+
+/**
+ * The same expired-signal filter the query read path applies, lifted to the
+ * plan's record shape: `SignalRecord` carries the date one level down, on the
+ * parsed signal. `isExpired` fails OPEN on an unparseable date (a corrupted
+ * value never silently hides a signal here, exactly as it never does on
+ * recall), and a record without `expiration_date` is always kept.
+ */
+function dropExpiredSignals(records: ReadonlyArray<SignalRecord>, now: Date): SignalRecord[] {
+  return records.filter(
+    (rec) =>
+      rec.signal.expiration_date === undefined || !isExpired(rec.signal.expiration_date, now),
+  );
 }
 
 /**
