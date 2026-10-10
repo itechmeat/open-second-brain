@@ -9,7 +9,7 @@
  * stay in place so history is a status filter.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -36,6 +36,27 @@ import {
   resolveOpenDecision,
   showOpenDecision,
 } from "../../../../src/core/brain/decisions/open-store.ts";
+
+// The log mirror is best-effort by contract; the mirror-failure test below
+// needs the real appendLogEvent to throw for ONE event kind while every
+// other event still lands, so the module is wrapped in a forwarding mock
+// (captured before the mock is installed, or the forward would recurse).
+import * as logModule from "../../../../src/core/brain/log.ts";
+
+const realAppendLogEvent = logModule.appendLogEvent;
+let failResolvedLogMirror = false;
+
+mock.module("../../../../src/core/brain/log.ts", () => ({
+  ...logModule,
+  appendLogEvent: (
+    ...args: Parameters<typeof realAppendLogEvent>
+  ): ReturnType<typeof realAppendLogEvent> => {
+    if (failResolvedLogMirror && args[1]!.eventType === BRAIN_LOG_EVENT_KIND.decisionResolved) {
+      throw new Error("log shard unwritable");
+    }
+    return realAppendLogEvent(...args);
+  },
+}));
 
 let vault: string;
 
@@ -461,6 +482,30 @@ describe("resolveOpenDecision", () => {
     expect(stamped.decision).toBe("[[decision-which-http-client-for-the-ingest-lane]]");
     // The crashed attempt minted the one page; the retry minted no second.
     expect(listDecisions(vault)).toHaveLength(1);
+  });
+
+  test("a throwing decision-resolved log mirror does not fail the resolve nor skip the receipt", () => {
+    const rec = openDecision(vault, baseInput());
+    failResolvedLogMirror = true;
+    try {
+      const res = resolveOpenDecision(vault, rec.id, {
+        choice: "bun's fetch",
+        actor: "tester",
+        now: T1,
+      });
+      expect(res.decision).toBe("decision-which-http-client-for-the-ingest-lane");
+      expect(showOpenDecision(vault, rec.id)!.status).toBe("resolved");
+      const history = queryDecisionChangeHistory(vault, { subject: rec.id, limit: 50 });
+      expect(history.receipts.filter((r) => r.reason_code === "open-resolved")).toHaveLength(1);
+    } finally {
+      failResolvedLogMirror = false;
+    }
+    // The mirror alone went down: the log day carries the mint's
+    // decision-record event but no decision_resolved one.
+    const log = readLogDay(vault, "2026-10-02");
+    expect(
+      log.entries.filter((e) => e.eventType === BRAIN_LOG_EVENT_KIND.decisionResolved),
+    ).toHaveLength(0);
   });
 
   test("a choice outside the enumerated options refuses naming the options", () => {
