@@ -72,6 +72,16 @@ export const WINDOWS_LAUNCHER_ENV: Readonly<Record<string, string>> = Object.fre
   NoDefaultCurrentDirectoryInExePath: "1",
 });
 
+/**
+ * The two registrations every adapter writes, verbatim.
+ *
+ * The entries register a STDIO server - `o2b mcp --vault <vault>` - and
+ * carry no credential: the env block names identity and timezone only.
+ * That is why a minted MCP token changes nothing for a harness
+ * bootstrapped with this payload: stdio identity is config-derived (one
+ * caller per process that already owns the process tree), and the token
+ * authenticates the HTTP transport's hand-configured clients instead.
+ */
 export function buildPayload(cfg: PayloadConfig, platform: string = process.platform): McpPayload {
   if (!cfg.vault || typeof cfg.vault !== "string") {
     throw new PayloadError("buildPayload: vault is required");

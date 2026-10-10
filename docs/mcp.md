@@ -748,9 +748,13 @@ state, so concurrent callers with different tokens never observe each other's
 identity. The token map is consulted before the shared key; the shared key
 keeps authenticating with the process's configured agent name; and a revoked
 or unknown token gets the same generic `401` body as a missing credential, so
-no oracle distinguishes them. Rotation and revocation take effect on the next
-request with no server restart (the store is read per request behind an mtime
-cache; the shared key keeps its launch-time capture). The gate
+no oracle distinguishes them. Rotation lands on the next request with no
+server restart and keeps the PREVIOUS material authenticating for a
+ten-minute placement window (`ROTATION_GRACE_MS` in the token store) so the
+caller holding it does not fail while the new one is being placed; after the
+window the old material dies on its own, with no revoke. Revocation itself
+stays immediate. Both are read per request behind an mtime cache; the shared
+key keeps its launch-time capture. The gate
 `mcp_tokens_required` (device config key or
 `OPEN_SECOND_BRAIN_MCP_TOKENS_REQUIRED`, default `false`) makes the endpoint
 refuse credential-less requests whenever a non-empty token map exists; with
@@ -763,6 +767,15 @@ stays config-derived (one caller per
 process that already owns the process tree). A token mints identity only,
 never reach: tool profiles and the reach ceiling still bind every caller
 regardless of credential.
+
+That boundary extends to `o2b bootstrap --token`: the registration bootstrap
+writes is the stdio payload above (`o2b mcp --vault ...`), which presents no
+credential, so the bootstrapped harness keeps its config-derived identity
+and the minted token changes nothing for it. The material authenticates
+HTTP MCP clients an operator configures by hand (`Authorization: Bearer` or
+`X-API-Key`) - the bootstrap output says the same beside every mint, and
+`o2b bootstrap --remove <target>` tears a provision down again (adapter
+uninstall, token revoked, receipt entry dropped).
 
 ## Shutdown and draining (since v1.50.0)
 

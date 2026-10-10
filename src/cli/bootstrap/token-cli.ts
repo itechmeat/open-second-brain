@@ -27,6 +27,7 @@ import {
   McpTokenStoreError,
   mintAgentToken,
   revokeAgentToken,
+  ROTATION_GRACE_MS,
   rotateAgentToken,
 } from "../../core/brain/secrets/token-store.ts";
 import { CliError, parseFlags } from "../argparse.ts";
@@ -54,6 +55,20 @@ export const MCP_TOKEN_VERBS: ReadonlyArray<string> = Object.freeze([
 export const SHOWN_ONCE_NOTICE =
   "Copy it now; reference it from the agent's environment or a $secret:NAME store entry. " +
   "Never a harness config file.";
+
+/**
+ * The identity boundary printed beside every piece of minted material,
+ * here and in `bootstrap` alike: the token authenticates HTTP MCP
+ * clients an operator configures BY HAND, while a stdio registration -
+ * what bootstrap writes - presents no credential and keeps its
+ * config-derived identity (`buildPayload` registers `o2b mcp --vault
+ * ...`), so minting a token changes nothing for the bootstrapped harness.
+ * One constant because the boundary is a property of the credential, not
+ * of the verb that happens to be minting it.
+ */
+export const HTTP_BOUNDARY_NOTICE =
+  "This token authenticates HTTP MCP clients you configure by hand (Authorization: Bearer or X-API-Key). " +
+  "A stdio server keeps its config-derived identity and presents no token - minting changes nothing for it.";
 
 function usage(message: string): number {
   process.stderr.write(`error: ${message}\n`);
@@ -155,7 +170,8 @@ function tokenMint(argv: string[]): number {
     `token: ${record.name} minted for agent ${JSON.stringify(record.agent)} - ` +
       "shown exactly once, stored only as a hash\n" +
       `  ${tokenMaterial}\n` +
-      `  ${SHOWN_ONCE_NOTICE}\n`,
+      `  ${SHOWN_ONCE_NOTICE}\n` +
+      `  ${HTTP_BOUNDARY_NOTICE}\n`,
   );
   return TOKEN_EXIT.ok;
 }
@@ -185,10 +201,12 @@ function tokenRotate(argv: string[]): number {
   }
   process.stdout.write(
     `token: ${record.name} rotated for agent ${JSON.stringify(record.agent)} - the previous ` +
-      "material stops authenticating on the next request; the new material is shown exactly " +
-      "once, stored only as a hash\n" +
+      `material keeps authenticating for ${ROTATION_GRACE_MS / 60_000} minutes while you place ` +
+      "the new one, then stops on its own; the new material is shown exactly once, stored only " +
+      "as a hash\n" +
       `  ${tokenMaterial}\n` +
-      `  ${SHOWN_ONCE_NOTICE}\n`,
+      `  ${SHOWN_ONCE_NOTICE}\n` +
+      `  ${HTTP_BOUNDARY_NOTICE}\n`,
   );
   return TOKEN_EXIT.ok;
 }

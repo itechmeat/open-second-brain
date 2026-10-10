@@ -6,6 +6,7 @@
  *   o2b bootstrap --target codex --check                 # drift from InstallEnv alone
  *   o2b bootstrap --target generic --token               # print-and-paste
  *   o2b bootstrap --target claude-code --token           # plugin verify-only
+ *   o2b bootstrap --remove codex                         # receipt-driven teardown
  *
  * One idempotent command per harness: it runs the target adapter's
  * existing apply (which is itself idempotent), mints the per-agent MCP
@@ -16,10 +17,26 @@
  * env block stays credential-free: the token reaches the agent through
  * its environment or a `$secret:` reference.
  *
+ * The credential boundary, stated where the material is shown: the
+ * minted token authenticates HTTP MCP clients an operator configures by
+ * hand; the registration bootstrap writes is stdio (`o2b mcp --vault
+ * ...`), whose identity is config-derived by design, so the token
+ * changes nothing for the bootstrapped harness itself.
+ *
  * Idempotency contract: a second identical run is a byte-identical
  * no-op. When the token already exists and the adapter verifies clean,
  * bootstrap writes nothing at all - not the config, not the install
- * manifest, not the receipt - and says so.
+ * manifest, not the receipt - and says so. When the apply fails after a
+ * mint or rotation, the material still prints exactly once beside the
+ * failure: the credential is live in the store, a re-run would mint
+ * nothing, and the output names the retry and revoke paths.
+ *
+ * `--remove <target>` tears down what the receipt says bootstrap
+ * established: the adapter's own uninstall removes the registered
+ * entries, the receipt's token is revoked (immediately - removal is not
+ * a rotation, nobody is placing new material), and the receipt entry is
+ * dropped the way the install manifest models removal. A second remove
+ * finds nothing and exits clean.
  *
  * Exit codes ({@link BOOTSTRAP_EXIT}), the `INSTALL_EXIT` table style:
  *   0  success / no drift
@@ -31,26 +48,29 @@
  */
 
 import { defaultConfigPath, discoverConfig, resolveVault } from "../../core/config.ts";
+import { normalizeAgentArgument } from "../../core/agent-identity.ts";
 import "../../core/install/adapters/all.ts";
 import { buildInstallEnv, VAULT_NOT_CONFIGURED_REASON } from "../../core/install/env.ts";
 import { buildPayload, PayloadError } from "../../core/install/payload.ts";
 import { defaultRegistry } from "../../core/install/registry.ts";
 import { InstallError } from "../../core/install/types.ts";
-import type { ApplyOpts, ManifestEntry } from "../../core/install/types.ts";
+import type { ApplyOpts, ManifestEntry, UninstallResult } from "../../core/install/types.ts";
 import {
   listAgentTokens,
   mintAgentToken,
+  revokeAgentToken,
   rotateAgentToken,
 } from "../../core/brain/secrets/token-store.ts";
 import { McpTokenStoreError } from "../../core/brain/secrets/token-store.ts";
 import { parseFlags } from "../argparse.ts";
-import { SHOWN_ONCE_NOTICE } from "./token-cli.ts";
+import { HTTP_BOUNDARY_NOTICE, SHOWN_ONCE_NOTICE } from "./token-cli.ts";
 import {
   receiptEntryEqualsExcludingTimestamp,
   receiptTokenMatches,
   BootstrapReceiptError,
   bootstrapReceiptPath,
   readBootstrapReceipt,
+  removeBootstrapReceiptEntry,
   upsertBootstrapReceiptEntry,
   type BootstrapReceiptEntry,
 } from "./receipt.ts";
@@ -84,6 +104,7 @@ interface ParsedBootstrapArgs {
   readonly rotate: boolean;
   readonly check: boolean;
   readonly force: boolean;
+  readonly remove: string | null;
   readonly vault: string | null;
   readonly config: string;
 }
@@ -96,6 +117,7 @@ function parseBootstrapArgs(argv: string[]): ParsedBootstrapArgs {
     rotate: { type: "boolean" },
     check: { type: "boolean" },
     force: { type: "boolean" },
+    remove: { type: "string" },
     vault: { type: "string" },
     config: { type: "string" },
   });
@@ -111,6 +133,7 @@ function parseBootstrapArgs(argv: string[]): ParsedBootstrapArgs {
     rotate: Boolean(flags["rotate"]),
     check: Boolean(flags["check"]),
     force: Boolean(flags["force"]),
+    remove: (flags["remove"] as string | undefined) ?? null,
     vault: (flags["vault"] as string | undefined) ?? null,
     config: (flags["config"] as string | undefined) ?? defaultConfigPath(),
   };
@@ -161,12 +184,12 @@ export async function cmdBootstrap(argv: string[]): Promise<number> {
 
   const resolved: BootstrapTarget | null =
     args.target === null ? null : resolveBootstrapTarget(args.target);
-  if (args.target === null) {
+  if (args.target === null && args.remove === null) {
     return usageRefusal(
-      `o2b bootstrap requires --target <name>. Available: ${BOOTSTRAP_TARGET_LIST}`,
+      `o2b bootstrap requires --target <name> (or --remove <name>). Available: ${BOOTSTRAP_TARGET_LIST}`,
     );
   }
-  if (resolved === null) {
+  if (args.target !== null && resolved === null) {
     return usageRefusal(
       `unknown bootstrap target: ${args.target}. Available: ${BOOTSTRAP_TARGET_LIST}`,
     );
@@ -174,15 +197,57 @@ export async function cmdBootstrap(argv: string[]): Promise<number> {
   if (args.check && (args.token || args.rotate)) {
     return usageRefusal("--check verifies only; drop --token/--rotate, or drop --check");
   }
+  if (args.remove !== null) {
+    const mixed =
+      args.target !== null ||
+      args.agent !== null ||
+      args.token ||
+      args.rotate ||
+      args.check ||
+      args.force;
+    if (mixed) {
+      return usageRefusal(
+        "--remove tears a target down and takes no other provision flag; pass just --remove <target>",
+      );
+    }
+  }
 
   const vault = resolveBootstrapVault(args.vault, args.config);
   if (vault === "") {
     return usageRefusal(`o2b bootstrap: ${VAULT_NOT_CONFIGURED_REASON}`);
   }
 
+  // `--remove <target>` names its own target and never reaches the
+  // provision grammar below; its receipt half is read inside the same
+  // clean-error wrapper the provision path uses.
+  if (args.remove !== null) {
+    const removeResolved = resolveBootstrapTarget(args.remove);
+    if (removeResolved === null) {
+      return usageRefusal(
+        `unknown bootstrap target: ${args.remove}. Available: ${BOOTSTRAP_TARGET_LIST}`,
+      );
+    }
+    try {
+      return runRemove({ target: removeResolved.target, vault, configPath: args.config });
+    } catch (e) {
+      if (e instanceof BootstrapReceiptError || e instanceof McpTokenStoreError) {
+        process.stderr.write(`error: ${e.message}\n`);
+        return BOOTSTRAP_EXIT.runtimeError;
+      }
+      throw e;
+    }
+  }
+
+  // A remove-only invocation returned above, so what is left named
+  // --target; an unknown one was refused there. The named refusal stays
+  // for the flow the compiler cannot see, and narrows `resolved`.
+  if (resolved === null) {
+    return usageRefusal(
+      `o2b bootstrap requires --target <name> (or --remove <name>). Available: ${BOOTSTRAP_TARGET_LIST}`,
+    );
+  }
   const target = resolved.target;
   const mode = resolved.mode;
-  const agent = args.agent ?? target;
   const name = tokenNameForTarget(target);
   const now = new Date().toISOString();
 
@@ -190,12 +255,35 @@ export async function cmdBootstrap(argv: string[]): Promise<number> {
   // bound to a DIFFERENT agent refuses: bootstrap would silently rewrite
   // a credential's identity underneath a running agent.
   const existing = listAgentTokens(vault).find((t) => t.name === name) ?? null;
+
+  // The agent identity this run names. Explicit --agent wins; without
+  // one, an existing token keeps the identity it was minted under (a
+  // plain re-run must not turn into an identity conflict), and a fresh
+  // mint falls back to the target name - which for several targets IS a
+  // placeholder the identity layer treats as absent, and which the mint
+  // refusal below catches.
+  const agent = args.agent ?? existing?.agent ?? target;
   if (existing !== null && existing.agent !== agent) {
     process.stderr.write(
       `error: token ${name} already belongs to agent ${JSON.stringify(existing.agent)}, ` +
         `not ${JSON.stringify(agent)}; mint a separate name with \`o2b mcp token mint\`\n`,
     );
     return BOOTSTRAP_EXIT.runtimeError;
+  }
+
+  // A mint needs a real agent identity. The placeholder vocabulary is the
+  // identity layer's own bottom (`normalizeAgentArgument` answers null
+  // for these), and several bootstrap targets ARE placeholder strings:
+  // minting mcp_token_codex with agent "codex" would hand out a live
+  // credential whose owner the server cannot name. Named refusal, exit 2,
+  // consistent with the mint verb's `requires --agent` grammar; the plain
+  // (no --token) provision path never mints and keeps working without
+  // --agent.
+  if (args.token && existing === null && normalizeAgentArgument(agent) === null) {
+    return usageRefusal(
+      `minting ${name} requires a real agent identity: ${JSON.stringify(agent)} is a ` +
+        "placeholder name the identity layer treats as absent. Re-run with --agent <name>.",
+    );
   }
 
   // Both paths read the receipt, so both owe the operator the same clean
@@ -390,6 +478,24 @@ function runProvision(input: ProvisionInput): number {
       if (e instanceof InstallError) {
         process.stderr.write(`error: ${e.message}\n`);
         if (e.hint !== undefined) process.stderr.write(`hint: ${e.hint}\n`);
+        // The mint already happened: the material is live in the store
+        // and will never be shown again by a re-run (the name now
+        // exists, so nothing is minted). Returning without it orphans a
+        // live credential behind a failed registration - so it prints
+        // here, exactly once, beside the failure and the retry path.
+        if (tokenMaterial !== null) {
+          process.stdout.write(
+            `bootstrap: ${target}\n` +
+              `  token: ${name} (agent ${JSON.stringify(agent)}) ${tokenEvent} - ` +
+              "shown exactly once, stored only as a hash\n" +
+              `  ${tokenMaterial}\n` +
+              `  ${SHOWN_ONCE_NOTICE}\n` +
+              `  ${HTTP_BOUNDARY_NOTICE}\n` +
+              `  The registration half failed (the error above); the token is live in the store. ` +
+              `Fix the cause and re-run o2b bootstrap --target ${target} to apply the ` +
+              `registration alone, or revoke with: o2b mcp token revoke --name ${name}\n`,
+          );
+        }
         return e.kind === "user-modified-block"
           ? BOOTSTRAP_EXIT.userModifiedBlock
           : BOOTSTRAP_EXIT.runtimeError;
@@ -443,6 +549,10 @@ function runProvision(input: ProvisionInput): number {
     );
     out.push(`  ${tokenMaterial}`);
     out.push(`  ${SHOWN_ONCE_NOTICE}`);
+    // The credential boundary: what the minted token authenticates, and
+    // what it does not - the registered stdio harness presents no
+    // credential, so this material never changes its behavior.
+    out.push(`  ${HTTP_BOUNDARY_NOTICE}`);
   }
   if (mode !== "verify-only" || refreshed !== null) {
     out.push(`  receipt: ${receiptPath}`);
@@ -486,4 +596,85 @@ function composeEntry(input: {
     ...(token !== undefined ? { token } : {}),
     applied_at: now,
   };
+}
+
+interface RemoveInput {
+  readonly target: string;
+  readonly vault: string;
+  readonly configPath: string;
+}
+
+/**
+ * `--remove <target>`: receipt-driven teardown. The receipt is the
+ * record of what bootstrap established, so it drives all three halves:
+ * the registration goes through the adapter's own `uninstall` - the
+ * remove path the install machinery already models and the same
+ * idempotent apply machinery wrote - the receipt's token name is revoked
+ * (immediately; removal is not a rotation, nobody is placing new
+ * material), and the receipt entry is dropped the way the install
+ * manifest models removal. Print and verify-only targets wrote no
+ * harness config, so only the token and receipt halves apply. A second
+ * remove finds no entry and exits clean; a failed uninstall keeps the
+ * entry so a retry can find it.
+ */
+function runRemove(input: RemoveInput): number {
+  const { target, vault, configPath } = input;
+  const entry = readBootstrapReceipt(vault).entries[target];
+  if (entry === undefined) {
+    process.stdout.write(
+      `bootstrap remove: ${target} has no bootstrap receipt entry; nothing to remove\n` +
+        `  (a registration written by o2b install is removed with: o2b uninstall --target ${target} --apply)\n`,
+    );
+    return BOOTSTRAP_EXIT.ok;
+  }
+  const out: string[] = [`bootstrap remove: ${target}`];
+
+  if (entry.mode === "adapter") {
+    const adapter = defaultRegistry.get(target);
+    if (adapter === undefined) {
+      return usageRefusal(
+        `bootstrap target ${target} has no install adapter. Available: ${BOOTSTRAP_TARGET_LIST}`,
+      );
+    }
+    const env = buildInstallEnv({ vault, configPath });
+    let result: UninstallResult;
+    try {
+      result = adapter.uninstall(env, {
+        dryRun: false,
+        force: false,
+        stdout: process.stdout as NodeJS.WriteStream,
+        stderr: process.stderr as NodeJS.WriteStream,
+      });
+    } catch (e) {
+      if (e instanceof InstallError) {
+        process.stderr.write(`error: ${e.message}\n`);
+        if (e.hint !== undefined) process.stderr.write(`hint: ${e.hint}\n`);
+        // The receipt entry survives so a retry can find what is left.
+        return BOOTSTRAP_EXIT.runtimeError;
+      }
+      throw e;
+    }
+    const removed = [...result.removed_keys, ...result.removed_paths];
+    out.push(
+      removed.length > 0
+        ? `  registration: removed ${removed.join(", ")}`
+        : "  registration: nothing left to remove",
+    );
+    for (const [what, why] of result.skipped) out.push(`  skipped: ${what} (${why})`);
+  } else if (entry.mode === "print") {
+    out.push("  registration: print-and-paste wrote no harness config; nothing to remove");
+  } else {
+    out.push("  registration: plugin-managed; bootstrap wrote no harness config to remove");
+  }
+
+  if (entry.token !== undefined) {
+    const revoked = revokeAgentToken(vault, entry.token.name);
+    out.push(
+      `  token: ${entry.token.name} ${revoked ? "revoked" : "was already revoked or absent"}`,
+    );
+  }
+  removeBootstrapReceiptEntry(vault, target);
+  out.push(`  receipt: entry removed from ${bootstrapReceiptPath(vault)}`);
+  process.stdout.write(out.join("\n") + "\n");
+  return BOOTSTRAP_EXIT.ok;
 }

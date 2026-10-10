@@ -7,7 +7,9 @@
  * non-secret prefix, and `applied_at`. Modeled on `install.lock.json`
  * and `protect.lock.json` - the receipt is the durable, credential-free
  * answer to "what did bootstrap do to this machine", which is also why
- * the minted material appears nowhere in it.
+ * the minted material appears nowhere in it. The token a receipt names
+ * authenticates hand-configured HTTP clients only; the registered stdio
+ * harness keeps its config-derived identity.
  *
  * Schema (`schema_version: 1`):
  *
@@ -114,6 +116,28 @@ export function upsertBootstrapReceiptEntry(vault: string, entry: BootstrapRecei
   const dir = dirname(path);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   atomicWriteFileSync(path, JSON.stringify(next, null, 2) + "\n");
+}
+
+/**
+ * Drop one target's entry, preserving every other entry verbatim. This
+ * is how `--remove` rewrites the receipt: the entry goes away entirely,
+ * the way the install manifest models removal (the entry is dropped,
+ * the file stays), so a second remove finds nothing and says so.
+ * Answers false when the entry was already absent - a no-op, not an
+ * error.
+ */
+export function removeBootstrapReceiptEntry(vault: string, target: string): boolean {
+  assertVaultIdentityForWrite(vault);
+  const current = readBootstrapReceipt(vault);
+  if (current.entries[target] === undefined) return false;
+  const entries = { ...current.entries };
+  delete entries[target];
+  const path = bootstrapReceiptPath(vault);
+  atomicWriteFileSync(
+    path,
+    JSON.stringify({ schema_version: BOOTSTRAP_SCHEMA_VERSION, entries }, null, 2) + "\n",
+  );
+  return true;
 }
 
 /**

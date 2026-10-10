@@ -25,6 +25,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -49,11 +50,13 @@ import { JSONRPC_VERSION } from "../../src/mcp/protocol.ts";
 let tempRoot: string;
 let vault: string;
 let codexHome: string;
+let opencodeHome: string;
 
 beforeEach(() => {
   tempRoot = mkdtempSync(join(tmpdir(), "o2b-bootstrap-"));
   vault = join(tempRoot, "brain vault");
   codexHome = join(tempRoot, "codex-home");
+  opencodeHome = join(tempRoot, "opencode-home");
   mkdirSync(vault, { recursive: true });
   // Both subprocess seams are injected for the whole suite: the codex
   // adapter must take its file-fallback path (no binary), and the host
@@ -114,6 +117,23 @@ function bootstrapArgs(extra: ReadonlyArray<string>): string[] {
 }
 
 /**
+ * Real agent identities for the mints. The targets themselves (`codex`,
+ * `claude-code`) are PLACEHOLDER_AGENT_VALUES - names the identity layer
+ * treats as absent - so a mint under them is refused (see the refusals
+ * suite); every provisioning case names its agent explicitly.
+ */
+const CODEX_AGENT = "codex-workstation";
+const CLAUDE_AGENT = "claude-workstation";
+const OPENCODE_AGENT = "opencode-workstation";
+
+/** The single osbt-shaped line a mint or rotate prints, trimmed. */
+function printedMaterial(stdout: string): string {
+  const start = stdout.indexOf("osbt_");
+  expect(start).toBeGreaterThanOrEqual(0);
+  return stdout.slice(start, stdout.indexOf("\n", start)).trim();
+}
+
+/**
  * A `codex` binary that registers like the real one: `mcp add` appends the
  * server's table to `$CODEX_HOME/config.toml` in the host's own layout, so
  * apply takes the subprocess path and `verify` asks the declared host probe.
@@ -136,16 +156,19 @@ function fakeCodexHost(): CodexRunner {
 
 describe("o2b bootstrap --target codex (adapter model)", () => {
   test("mints the named token, applies the adapter, and prints the material exactly once", async () => {
-    const r = await runCli(bootstrapArgs(["--target", "codex", "--agent", "codex", "--token"]), {
-      env: { CODEX_HOME: codexHome },
-    });
+    const r = await runCli(
+      bootstrapArgs(["--target", "codex", "--agent", CODEX_AGENT, "--token"]),
+      {
+        env: { CODEX_HOME: codexHome },
+      },
+    );
     expect(r.returncode).toBe(0);
 
     const store = listAgentTokens(vault);
     expect(store).toHaveLength(1);
     const record = store[0]!;
     expect(record.name).toBe("mcp_token_codex");
-    expect(record.agent).toBe("codex");
+    expect(record.agent).toBe(CODEX_AGENT);
     expect(record.status).toBe("active");
 
     // The material exists in exactly one output channel, once, with the
@@ -156,6 +179,10 @@ describe("o2b bootstrap --target codex (adapter model)", () => {
     const tokenMaterial = r.stdout.slice(materialStart, lineEnd).trim();
     expect(countOccurrences(r.stdout, tokenMaterial)).toBe(1);
     expect(r.stdout).toContain("shown exactly once");
+    // The credential boundary beside the material: what the token
+    // authenticates (hand-configured HTTP clients) and what it does not
+    // (the registered stdio harness keeps its config-derived identity).
+    expect(r.stdout).toContain("config-derived identity");
     expect(r.stderr).not.toContain(tokenMaterial);
 
     // The harness config carries the registration and never the
@@ -184,14 +211,14 @@ describe("o2b bootstrap --target codex (adapter model)", () => {
     // The minted material authenticates, via the same resolution the
     // transport performs per request.
     expect(resolveAgentForToken(vault, tokenMaterial)).toEqual({
-      agent: "codex",
+      agent: CODEX_AGENT,
       name: "mcp_token_codex",
     });
   }, 20000);
 
   test("a second identical run is a byte-identical no-op: exit 0, no receipt churn", async () => {
     const first = await runCli(
-      bootstrapArgs(["--target", "codex", "--agent", "codex", "--token"]),
+      bootstrapArgs(["--target", "codex", "--agent", CODEX_AGENT, "--token"]),
       { env: { CODEX_HOME: codexHome } },
     );
     expect(first.returncode).toBe(0);
@@ -205,7 +232,7 @@ describe("o2b bootstrap --target codex (adapter model)", () => {
     const installBefore = bytesOf(join(vault, ".open-second-brain", "install.lock.json"));
 
     const second = await runCli(
-      bootstrapArgs(["--target", "codex", "--agent", "codex", "--token"]),
+      bootstrapArgs(["--target", "codex", "--agent", CODEX_AGENT, "--token"]),
       { env: { CODEX_HOME: codexHome } },
     );
     expect(second.returncode).toBe(0);
@@ -220,7 +247,7 @@ describe("o2b bootstrap --target codex (adapter model)", () => {
 
   test("--rotate re-mints under the same name, audits replaced, and the new material authenticates on the next request with no server restart", async () => {
     const first = await runCli(
-      bootstrapArgs(["--target", "codex", "--agent", "codex", "--token"]),
+      bootstrapArgs(["--target", "codex", "--agent", CODEX_AGENT, "--token"]),
       { env: { CODEX_HOME: codexHome } },
     );
     const materialStart = first.stdout.indexOf("osbt_");
@@ -286,9 +313,12 @@ describe("o2b bootstrap --target codex (adapter model)", () => {
         oldMaterial.slice(0, store[0]!.token_prefix.length),
       );
 
-      // No restart: the old material is refused and the new one
-      // authenticates on the very next requests of the same server.
-      expect((await post(oldMaterial)).status).toBe(401);
+      // No restart: both materials authenticate on the very next
+      // requests of the same server - the new one from here on, the old
+      // one through the rotation grace window while the new material is
+      // being placed (the store suite walks the window's expiry with an
+      // injected clock).
+      expect((await post(oldMaterial)).status).toBe(200);
       expect((await post(newMaterial)).status).toBe(200);
       expect(
         resolveAgentForToken(vault, fakeCredential("osbt_", "never-minted-material")),
@@ -306,7 +336,7 @@ describe("o2b bootstrap --target codex (adapter model)", () => {
     expect(fresh.stdout).toContain("not-installed");
 
     const first = await runCli(
-      bootstrapArgs(["--target", "codex", "--agent", "codex", "--token"]),
+      bootstrapArgs(["--target", "codex", "--agent", CODEX_AGENT, "--token"]),
       { env: { CODEX_HOME: codexHome } },
     );
     expect(first.returncode).toBe(0);
@@ -332,7 +362,7 @@ describe("o2b bootstrap --target codex (adapter model)", () => {
 
   test("--check refuses a revoked or missing token as drift, naming the provisioning command", async () => {
     const first = await runCli(
-      bootstrapArgs(["--target", "codex", "--agent", "codex", "--token"]),
+      bootstrapArgs(["--target", "codex", "--agent", CODEX_AGENT, "--token"]),
       { env: { CODEX_HOME: codexHome } },
     );
     expect(first.returncode).toBe(0);
@@ -348,7 +378,7 @@ describe("o2b bootstrap --target codex (adapter model)", () => {
 
   test("a revoked token refuses every provision form instead of a healthy no-op, matching --check", async () => {
     const first = await runCli(
-      bootstrapArgs(["--target", "codex", "--agent", "codex", "--token"]),
+      bootstrapArgs(["--target", "codex", "--agent", CODEX_AGENT, "--token"]),
       { env: { CODEX_HOME: codexHome } },
     );
     expect(first.returncode).toBe(0);
@@ -389,7 +419,7 @@ describe("o2b bootstrap --target codex (adapter model)", () => {
     });
 
     const first = await runCli(
-      bootstrapArgs(["--target", "codex", "--agent", "codex", "--token"]),
+      bootstrapArgs(["--target", "codex", "--agent", CODEX_AGENT, "--token"]),
       { env: { CODEX_HOME: codexHome } },
     );
     expect(first.returncode).toBe(0);
@@ -456,7 +486,7 @@ describe("o2b bootstrap --target generic (print-and-paste)", () => {
 describe("o2b bootstrap --target claude-code (plugin verify-only)", () => {
   test("mints and records the token, writes no harness config, and points at the plugin's own verify", async () => {
     const r = await runCli(
-      bootstrapArgs(["--target", "claude-code", "--agent", "claude-code", "--token"]),
+      bootstrapArgs(["--target", "claude-code", "--agent", CLAUDE_AGENT, "--token"]),
       { env: { CODEX_HOME: codexHome } },
     );
     expect(r.returncode).toBe(0);
@@ -534,6 +564,58 @@ describe("o2b bootstrap refusals", () => {
     expect(r.returncode).toBe(2);
   });
 
+  test("a mint under a placeholder agent identity refuses by name; the plain path keeps working", async () => {
+    // No --agent at all: the target name itself is the placeholder the
+    // identity layer treats as absent, so the mint refuses before
+    // anything is written.
+    const noAgent = await runCli(bootstrapArgs(["--target", "codex", "--token"]), {
+      env: { CODEX_HOME: codexHome },
+    });
+    expect(noAgent.returncode).toBe(2);
+    expect(noAgent.stderr).toContain("mcp_token_codex");
+    expect(noAgent.stderr).toContain("--agent");
+    expect(listAgentTokens(vault)).toHaveLength(0);
+    expect(existsSync(codexConfigPath())).toBe(false);
+
+    // An explicit placeholder is the same refusal.
+    const explicit = await runCli(
+      bootstrapArgs(["--target", "codex", "--agent", "codex", "--token"]),
+      { env: { CODEX_HOME: codexHome } },
+    );
+    expect(explicit.returncode).toBe(2);
+    expect(explicit.stderr).toContain("placeholder");
+
+    // Any target minting under a placeholder name refuses the same way.
+    const generic = await runCli(
+      bootstrapArgs(["--target", "generic", "--agent", "bot", "--token"]),
+      { env: { CODEX_HOME: codexHome } },
+    );
+    expect(generic.returncode).toBe(2);
+    expect(listAgentTokens(vault)).toHaveLength(0);
+
+    // The plain (no --token) provision path never mints, so it keeps
+    // working without --agent.
+    const plain = await runCli(bootstrapArgs(["--target", "codex"]), {
+      env: { CODEX_HOME: codexHome },
+    });
+    expect(plain.returncode).toBe(0);
+    expect(existsSync(codexConfigPath())).toBe(true);
+    expect(listAgentTokens(vault)).toHaveLength(0);
+
+    // Once a token exists under a real name, a plain re-run adopts the
+    // minted identity instead of refusing.
+    const minted = await runCli(
+      bootstrapArgs(["--target", "codex", "--agent", CODEX_AGENT, "--token"]),
+      { env: { CODEX_HOME: codexHome } },
+    );
+    expect(minted.returncode).toBe(0);
+    const rerun = await runCli(bootstrapArgs(["--target", "codex"]), {
+      env: { CODEX_HOME: codexHome },
+    });
+    expect(rerun.returncode).toBe(0);
+    expect(listAgentTokens(vault)).toHaveLength(1);
+  }, 20000);
+
   test("a corrupted receipt refuses --check through the clean error path, not a crash", async () => {
     mkdirSync(join(vault, ".open-second-brain"), { recursive: true });
     writeFileSync(receiptPath(), "{ not json");
@@ -546,5 +628,120 @@ describe("o2b bootstrap refusals", () => {
     expect(r.stderr).toContain("bootstrap receipt is corrupted JSON");
     expect(r.stderr).not.toContain("BootstrapReceiptError");
     expect(r.stderr).not.toMatch(/^\s+at /m);
+  }, 20000);
+});
+
+describe("o2b bootstrap --remove (receipt-driven teardown)", () => {
+  test("revokes the receipt's token, removes the owned registration, drops the receipt entry, and is idempotent", async () => {
+    const first = await runCli(
+      bootstrapArgs(["--target", "codex", "--agent", CODEX_AGENT, "--token"]),
+      { env: { CODEX_HOME: codexHome } },
+    );
+    expect(first.returncode).toBe(0);
+    const material = printedMaterial(first.stdout);
+    expect(existsSync(codexConfigPath())).toBe(true);
+    expect(readReceipt()["entries"]["codex"]).toBeDefined();
+
+    const removed = await runCli(bootstrapArgs(["--remove", "codex"]), {
+      env: { CODEX_HOME: codexHome },
+    });
+    expect(removed.returncode).toBe(0);
+    // The registration the adapter wrote is gone...
+    expect(existsSync(codexConfigPath())).toBe(true);
+    expect(bytesOf(codexConfigPath())).not.toContain("mcp_servers.open-second-brain");
+    // ...the receipt's token is revoked - immediately, no grace: removal
+    // is not a rotation, nobody is placing new material...
+    expect(listAgentTokens(vault)[0]!.status).toBe("revoked");
+    expect(resolveAgentForToken(vault, material)).toBeNull();
+    expect(removed.stdout).toContain("revoked");
+    expect(removed.stdout).toContain("removed");
+    // ...and the receipt entry is dropped the way the install manifest
+    // models removal: the entry goes, the file stays.
+    expect(readReceipt()["entries"]["codex"]).toBeUndefined();
+
+    // A second remove finds nothing and exits clean.
+    const again = await runCli(bootstrapArgs(["--remove", "codex"]), {
+      env: { CODEX_HOME: codexHome },
+    });
+    expect(again.returncode).toBe(0);
+    expect(again.stdout).toContain("nothing to remove");
+    expect(bytesOf(codexConfigPath())).not.toContain("mcp_servers.open-second-brain");
+    expect(listAgentTokens(vault)[0]!.status).toBe("revoked");
+  }, 20000);
+
+  test("an unknown target and provision-flag combinations are usage refusals", async () => {
+    const unknown = await runCli(bootstrapArgs(["--remove", "nonsense"]), {
+      env: { CODEX_HOME: codexHome },
+    });
+    expect(unknown.returncode).toBe(2);
+    expect(unknown.stderr).toContain("claude-code, codex, generic, grok, opencode, zcode");
+
+    const mixed = await runCli(bootstrapArgs(["--target", "codex", "--remove", "codex"]), {
+      env: { CODEX_HOME: codexHome },
+    });
+    expect(mixed.returncode).toBe(2);
+    expect(mixed.stderr).toContain("--remove");
+
+    const withToken = await runCli(bootstrapArgs(["--remove", "codex", "--token"]), {
+      env: { CODEX_HOME: codexHome },
+    });
+    expect(withToken.returncode).toBe(2);
+  });
+});
+
+describe("o2b bootstrap when the adapter apply fails after a mint (opencode)", () => {
+  /** `$XDG_CONFIG_HOME/opencode/opencode.json`, the adapter's config. */
+  function opencodeConfigPath(): string {
+    return join(opencodeHome, "opencode", "opencode.json");
+  }
+
+  test("a rotate into a hand-edited config still shows the material exactly once and names the retry path", async () => {
+    mkdirSync(opencodeHome, { recursive: true });
+    const env = { XDG_CONFIG_HOME: opencodeHome };
+    const first = await runCli(
+      bootstrapArgs(["--target", "opencode", "--agent", OPENCODE_AGENT, "--token"]),
+      { env },
+    );
+    expect(first.returncode).toBe(0);
+    const firstMaterial = printedMaterial(first.stdout);
+
+    // Hand-edit: keep the OSB keys but change a value, and stamp an mtime
+    // newer than the manifest's applied_at - exactly what the adapter's
+    // user-modified-block safety net refuses to overwrite.
+    const edited = bytesOf(opencodeConfigPath()).replace("o2b", "not-o2b");
+    writeFileSync(opencodeConfigPath(), edited);
+    const future = new Date(Date.now() + 10_000);
+    utimesSync(opencodeConfigPath(), future, future);
+
+    const rotated = await runCli(bootstrapArgs(["--target", "opencode", "--rotate"]), { env });
+    expect(rotated.returncode).toBe(4);
+    expect(rotated.stderr).toContain("hand-edited");
+
+    // The mint happened, so the material prints - exactly once, on
+    // stdout, beside the failure notice naming the retry and revoke
+    // paths. Losing it silently would orphan a live credential whose
+    // name a re-run would refuse to re-mint.
+    const newMaterial = printedMaterial(rotated.stdout);
+    expect(newMaterial).not.toBe(firstMaterial);
+    expect(countOccurrences(rotated.stdout, newMaterial)).toBe(1);
+    expect(rotated.stderr).not.toContain(newMaterial);
+    expect(rotated.stdout).toContain("live in the store");
+    expect(rotated.stdout).toContain("o2b mcp token revoke --name mcp_token_opencode");
+    expect(resolveAgentForToken(vault, newMaterial)).toEqual({
+      agent: OPENCODE_AGENT,
+      name: "mcp_token_opencode",
+    });
+
+    // The named retry path finishes the job: a plain re-run (no --token,
+    // so nothing re-mints) forced past the hand-edit block applies the
+    // registration and the receipt catches up to the rotated token.
+    const retry = await runCli(bootstrapArgs(["--target", "opencode", "--force"]), { env });
+    expect(retry.returncode).toBe(0);
+    expect(retry.stdout).not.toContain(newMaterial);
+    const record = listAgentTokens(vault).find((t) => t.name === "mcp_token_opencode")!;
+    expect(record.token_prefix).not.toBe(firstMaterial.slice(0, record.token_prefix.length));
+    const entry = readReceipt()["entries"]["opencode"];
+    expect(entry["token"]).toEqual({ name: "mcp_token_opencode", prefix: record.token_prefix });
+    expect(entry["agent"]).toBe(OPENCODE_AGENT);
   }, 20000);
 });

@@ -27,12 +27,14 @@ import lockfile from "proper-lockfile";
 
 import {
   MCP_TOKENS_SCHEMA_VERSION,
+  ROTATION_GRACE_MS,
   TOKEN_PREFIX_LENGTH,
   listAgentTokens,
   mintAgentToken,
   resolveAgentForToken,
   revokeAgentToken,
   rotateAgentToken,
+  setTokenStoreClock,
 } from "../../../../src/core/brain/secrets/token-store.ts";
 import {
   secretsDir,
@@ -54,6 +56,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Tests that walk the rotation grace window substitute the store
+  // clock; every test restores the real one on the way out.
+  setTokenStoreClock(null);
   rmSync(tempRoot, { recursive: true, force: true });
 });
 
@@ -190,17 +195,57 @@ describe("resolveAgentForToken", () => {
     expect(listAgentTokens(vault)[0]?.status).toBe("revoked");
   });
 
-  test("a rotation takes effect on the next call without any restart", () => {
+  test("a rotation takes effect on the next call without any restart, with the previous material alive through the grace window", () => {
     const first = mint();
     expect(resolveAgentForToken(vault, first.tokenMaterial)?.agent).toBe("codex");
     const second = rotateAgentToken(vault, "mcp_token_codex");
     expect(second.record.status).toBe("active");
     expect(second.record.rotated_at).toEqual(expect.any(String));
+    // The store records the hash it replaced, so the old material can
+    // stay resolvable for a bounded window.
+    expect(second.record.rotated_from_hash).toBe(first.record.token_hash);
+
+    // No restart: the new material authenticates on the very next
+    // resolve - and the old one keeps authenticating beside it, so the
+    // caller holding it does not fail while the new one is placed.
+    expect(resolveAgentForToken(vault, second.tokenMaterial)).toEqual({
+      agent: "codex",
+      name: "mcp_token_codex",
+    });
+    expect(resolveAgentForToken(vault, first.tokenMaterial)).toEqual({
+      agent: "codex",
+      name: "mcp_token_codex",
+    });
+
+    // The window is bounded: past rotated_at + ROTATION_GRACE_MS the old
+    // material resolves exactly like an unknown one, and the new one is
+    // untouched.
+    setTokenStoreClock(() => Date.now() + ROTATION_GRACE_MS + 1_000);
     expect(resolveAgentForToken(vault, first.tokenMaterial)).toBeNull();
     expect(resolveAgentForToken(vault, second.tokenMaterial)).toEqual({
       agent: "codex",
       name: "mcp_token_codex",
     });
+  });
+
+  test("a second rotation moves the grace to the newest replaced hash; the older material dies at once", () => {
+    const first = mint();
+    const second = rotateAgentToken(vault, "mcp_token_codex");
+    const third = rotateAgentToken(vault, "mcp_token_codex");
+    expect(third.record.rotated_from_hash).toBe(second.record.token_hash);
+    // Only the PREVIOUS hash is kept: the first material, already two
+    // generations old, resolves like an unknown one immediately.
+    expect(resolveAgentForToken(vault, first.tokenMaterial)).toBeNull();
+    expect(resolveAgentForToken(vault, second.tokenMaterial)?.agent).toBe("codex");
+    expect(resolveAgentForToken(vault, third.tokenMaterial)?.agent).toBe("codex");
+  });
+
+  test("revocation stays immediate across a rotation's grace window", () => {
+    const first = mint();
+    const second = rotateAgentToken(vault, "mcp_token_codex");
+    expect(revokeAgentToken(vault, "mcp_token_codex")).toBe(true);
+    expect(resolveAgentForToken(vault, first.tokenMaterial)).toBeNull();
+    expect(resolveAgentForToken(vault, second.tokenMaterial)).toBeNull();
   });
 
   test("a store rewritten by another process is picked up through the mtime cache", () => {

@@ -61,6 +61,9 @@ describe("o2b mcp token mint", () => {
     expect(r.returncode).toBe(0);
     expect(r.stdout).toContain("mcp_token_codex");
     expect(r.stdout).toContain("shown exactly once");
+    // The identity boundary: the material authenticates hand-configured
+    // HTTP clients; a stdio server presents no token.
+    expect(r.stdout).toContain("config-derived identity");
 
     const tokenMaterial = printedMaterial(r.stdout);
     expect(countOccurrences(r.stdout, tokenMaterial)).toBe(1);
@@ -108,7 +111,7 @@ describe("o2b mcp token mint", () => {
 });
 
 describe("o2b mcp token rotate", () => {
-  test("replaces the material under the same name; the old material stops resolving", async () => {
+  test("replaces the material under the same name; the previous material stays live through the grace window named in the output", async () => {
     const first = await runCli(tokenArgs(["mint", "--agent", "codex"]));
     const oldMaterial = printedMaterial(first.stdout);
     const before = listAgentTokens(vault)[0]!;
@@ -119,12 +122,22 @@ describe("o2b mcp token rotate", () => {
     expect(newMaterial).not.toBe(oldMaterial);
     expect(countOccurrences(second.stdout, newMaterial)).toBe(1);
     expect(second.stdout).toContain("shown exactly once");
+    // The rotation output names the placement window, so an operator
+    // holding the old material knows it keeps working briefly.
+    expect(second.stdout).toContain("keeps authenticating");
+    expect(second.stdout).toContain("minutes");
 
     const after = listAgentTokens(vault)[0]!;
     expect(after.name).toBe("mcp_token_codex");
     expect(after.token_hash).not.toBe(before.token_hash);
     expect(after.rotated_at).toBeDefined();
-    expect(resolveAgentForToken(vault, oldMaterial)).toBeNull();
+    // Placement grace: the old material still authenticates right after
+    // the rotation (the store suite walks its expiry with an injected
+    // clock); the new one authenticates beside it.
+    expect(resolveAgentForToken(vault, oldMaterial)).toEqual({
+      agent: "codex",
+      name: "mcp_token_codex",
+    });
     expect(resolveAgentForToken(vault, newMaterial)).toEqual({
       agent: "codex",
       name: "mcp_token_codex",

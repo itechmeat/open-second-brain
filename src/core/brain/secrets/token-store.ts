@@ -38,6 +38,23 @@ export const MCP_TOKENS_SCHEMA_VERSION = 1;
 /** How much of the material the non-secret display prefix keeps. */
 export const TOKEN_PREFIX_LENGTH = 12;
 
+/**
+ * How long the PREVIOUS material keeps authenticating after a rotation.
+ *
+ * Rotation replaces the stored hash in place, and the caller that holds
+ * the old material learns the new one only when its operator places it -
+ * an environment variable, a `$secret:` entry, a hand-edited HTTP client.
+ * Killing the old hash at the instant of rotation turned every placement
+ * window into an authentication outage on the caller's side, with the
+ * new material printed and nowhere safe to put it yet. The hash a
+ * rotation replaced therefore stays resolvable for this long after
+ * `rotated_at`, then stops resolving on its own - no revoke needed, and
+ * a second rotation moves the window to the newest replaced hash.
+ * Revocation itself stays immediate: the window is a rotation courtesy
+ * for placing new material, never a reprieve for a withdrawn credential.
+ */
+export const ROTATION_GRACE_MS = 10 * 60 * 1000;
+
 /** The material prefix: short, recognisable in a config, not a secret. */
 const MATERIAL_PREFIX = "osbt_";
 
@@ -60,6 +77,15 @@ export interface McpTokenRecord {
   token_prefix: string;
   created_at: string;
   rotated_at?: string;
+  /**
+   * The hash a rotation replaced, kept resolvable beside the current one
+   * for {@link ROTATION_GRACE_MS} past `rotated_at`. Optional so the file
+   * format stays additive and version-tolerant: a store written before
+   * the field existed reads unchanged, and an older build reading a store
+   * that carries it simply ignores the unknown member. Never a secret -
+   * the same sha256 at-rest form as `token_hash`.
+   */
+  rotated_from_hash?: string;
 }
 
 interface TokenStoreFile {
@@ -128,10 +154,13 @@ export function mintAgentToken(
 
 /**
  * Re-mint the material under an existing name: new hash, new prefix,
- * `rotated_at` stamped, `created_at` kept. The old material stops
- * resolving on the NEXT resolve (the mtime cache re-reads), so a server
- * process needs no restart. A revoked record refuses - revocation is
- * terminal; mint a new name to start over.
+ * `rotated_at` stamped, `created_at` kept. The PREVIOUS hash stays
+ * resolvable beside the new one for {@link ROTATION_GRACE_MS} (recorded
+ * as `rotated_from_hash`), so the caller still holding the old material
+ * authenticates while the new one is being placed and dies when the
+ * window closes - the next resolve picks all of this up with no server
+ * restart (the mtime cache re-reads). A revoked record refuses -
+ * revocation is terminal; mint a new name to start over.
  */
 export function rotateAgentToken(
   vault: string,
@@ -162,6 +191,7 @@ export function rotateAgentToken(
           token_hash: hashOf(tokenMaterial),
           token_prefix: tokenMaterial.slice(0, TOKEN_PREFIX_LENGTH),
           rotated_at: isoSecond(),
+          rotated_from_hash: existing.token_hash,
         },
       },
     });
@@ -220,7 +250,9 @@ export function hasAnyAgentToken(vault: string): boolean {
  * every stored hash with timingSafeEqual (fixed 32-byte digests), so no
  * byte of a wrong answer leaks through early exit. The store is read
  * behind an mtime cache, which is what lets a CLI-side rotation take
- * effect here on the next request without a restart.
+ * effect here on the next request without a restart; a hash carried over
+ * from a rotation resolves beside the current one until its
+ * {@link ROTATION_GRACE_MS} window closes and is skipped once it has.
  */
 export function resolveAgentForToken(
   vault: string,
@@ -229,12 +261,31 @@ export function resolveAgentForToken(
   if (typeof presented !== "string" || presented.length === 0) return null;
   const index = activeHashIndex(vault);
   const digest = hashOf(presented);
+  const now = nowMs();
   for (const [storedHash, entry] of index) {
+    // A grace-window entry past its window answers exactly like an
+    // unknown hash - the material is dead, not erroring.
+    if (entry.graceUntil !== undefined && now >= entry.graceUntil) continue;
     if (timingSafeEqual(Buffer.from(storedHash, "hex"), Buffer.from(digest, "hex"))) {
       return { agent: entry.agent, name: entry.name };
     }
   }
   return null;
+}
+
+// ----- Clock seam ------------------------------------------------------------
+
+/**
+ * Milliseconds since the epoch, read once per resolve. A module-level
+ * seam rather than a threaded argument because the readers are the
+ * transport's per-request path; tests walk the grace window by
+ * substituting the clock and restore it with `null`.
+ */
+let nowMs: () => number = () => Date.now();
+
+/** Test seam: replace the store clock (pass `null` to restore the real one). */
+export function setTokenStoreClock(read: (() => number) | null): void {
+  nowMs = read ?? (() => Date.now());
 }
 
 // ----- Store file ------------------------------------------------------------
@@ -291,7 +342,11 @@ function readTokenStore(vault: string): TokenStoreFile {
       typeof record.agent !== "string" ||
       (record.status !== "active" && record.status !== "revoked") ||
       typeof record.token_hash !== "string" ||
-      !/^[0-9a-f]{64}$/.test(record.token_hash)
+      !/^[0-9a-f]{64}$/.test(record.token_hash) ||
+      (record.rotated_from_hash !== undefined &&
+        !/^[0-9a-f]{64}$/.test(record.rotated_from_hash)) ||
+      (record.rotated_at !== undefined &&
+        (typeof record.rotated_at !== "string" || Number.isNaN(Date.parse(record.rotated_at))))
     ) {
       throw new McpTokenStoreError(
         `MCP token store entry ${JSON.stringify(key)} is corrupt: ${path}`,
@@ -319,15 +374,23 @@ function writeTokenStore(vault: string, file: TokenStoreFile): void {
 interface CacheEntry {
   readonly mtimeMs: number;
   readonly size: number;
-  readonly index: ReadonlyMap<string, { agent: string; name: string }>;
+  readonly index: ReadonlyMap<string, HashIndexEntry>;
+}
+
+/** One resolvable hash: the live credential, or a rotation's grace entry. */
+interface HashIndexEntry {
+  readonly agent: string;
+  readonly name: string;
+  /** Epoch ms when a grace-window entry dies; absent for the current hash. */
+  readonly graceUntil?: number;
 }
 
 /** The active-token hash index per store path, refreshed when the file changes. */
 const cacheByPath = new Map<string, CacheEntry>();
 
-const EMPTY_INDEX: ReadonlyMap<string, { agent: string; name: string }> = new Map();
+const EMPTY_INDEX: ReadonlyMap<string, HashIndexEntry> = new Map();
 
-function activeHashIndex(vault: string): ReadonlyMap<string, { agent: string; name: string }> {
+function activeHashIndex(vault: string): ReadonlyMap<string, HashIndexEntry> {
   const path = tokenStorePath(vault);
   if (!existsSync(path)) {
     cacheByPath.delete(path);
@@ -338,10 +401,29 @@ function activeHashIndex(vault: string): ReadonlyMap<string, { agent: string; na
   if (cached !== undefined && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size) {
     return cached.index;
   }
-  const index = new Map<string, { agent: string; name: string }>();
+  const index = new Map<string, HashIndexEntry>();
   for (const record of Object.values(readTokenStore(vault).tokens)) {
     if (record.status !== "active") continue;
-    index.set(record.token_hash, { agent: record.agent, name: record.name });
+    const entry: HashIndexEntry = { agent: record.agent, name: record.name };
+    index.set(record.token_hash, entry);
+    // The rotation grace: the hash this record replaced resolves beside
+    // the current one until its window closes. A second rotation
+    // overwrites the carried hash, so only the PREVIOUS material is ever
+    // kept; skipping a self-equal value keeps a corrupt record from
+    // demoting the live hash to a windowed one.
+    if (
+      record.rotated_from_hash !== undefined &&
+      record.rotated_from_hash !== record.token_hash &&
+      record.rotated_at !== undefined
+    ) {
+      const rotatedAt = Date.parse(record.rotated_at);
+      if (Number.isFinite(rotatedAt)) {
+        index.set(record.rotated_from_hash, {
+          ...entry,
+          graceUntil: rotatedAt + ROTATION_GRACE_MS,
+        });
+      }
+    }
   }
   cacheByPath.set(path, { mtimeMs: stats.mtimeMs, size: stats.size, index });
   return index;
