@@ -152,7 +152,8 @@ export class OpenDecisionDuplicateError extends OpenDecisionError {
   constructor(existingId: string, existingPath: string) {
     super(
       `open decision: this question is already parked as ${existingId} ` +
-        `(${existingPath}); resolve or discard it instead of opening a twin`,
+        `(${existingPath}); resolve or discard an open twin, or word the ` +
+        `question differently when the twin has already settled`,
     );
     this.name = "OpenDecisionDuplicateError";
     this.existingId = existingId;
@@ -434,7 +435,17 @@ function parseOpenRecord(vault: string, fileName: string): OpenDecisionRecord | 
     const v = meta[key];
     return typeof v === "string" ? v : null;
   };
+  // The title is derived data like the dedup hash: a hand-edit that
+  // dropped the key falls back to the id, but a PRESENT value that cannot
+  // be read refuses rather than standing in for the operator's bytes.
   const titleMeta = meta[OPEN_KEY.title];
+  if (titleMeta !== undefined && typeof titleMeta !== "string") {
+    throw new OpenDecisionFieldError(
+      path,
+      OPEN_KEY.title,
+      presentButUnreadable("not a string", titleMeta),
+    );
+  }
   return Object.freeze({
     id,
     slug: id.slice(OPEN_FILE_PREFIX.length),
