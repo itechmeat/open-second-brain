@@ -563,10 +563,12 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         // as the unreadable finding above - its dry-run decision table makes
         // the denial visible before the first refusal does - and
         // `autoRepairable` stays false because editing a policy file is the
-        // operator's act, never a fixer's.
+        // operator's act, never a fixer's. Built from the same constant as
+        // the two refusal findings below, keeping the string at one
+        // definition.
         code: "permissions-agent-denied",
         issueClass: "permissions document denies the locally configured agent's write",
-        nextCommand: "o2b brain permissions show",
+        nextCommand: WRITE_REFUSAL_NEXT_COMMAND,
         autoRepairable: false,
       },
       {

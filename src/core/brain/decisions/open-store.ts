@@ -328,8 +328,13 @@ function sectionText(body: string, heading: string): string {
  * reader dedents exactly the lines the writer could have indented - a
  * line the writer left alone never has `#` as its first non-space
  * character, because that shape is what the writer escapes - so the
- * round trip is byte-faithful for every input the writer accepts,
- * including a question line that was already indented.
+ * round trip is byte-faithful for every line the section reader's own
+ * trim leaves alone, an already-indented heading-shaped line included.
+ * The exception is the section's opening line: the reader's trim strips
+ * a section's leading whitespace - the writer's escape with it - before
+ * the dedent runs, so a question OPENING with an indented heading-shaped
+ * line reads back dedented. (It re-escapes on the next render, so the
+ * shape is stable; the first round trip just is not byte-faithful there.)
  */
 function escapeBodyProse(text: string): string {
   return text
