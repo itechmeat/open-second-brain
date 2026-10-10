@@ -593,7 +593,20 @@ export function wrapKeyfile(
       );
     }
   } catch (err) {
-    writeRawKeyfileBytes(keyPath, dek);
+    // The rename replaced the raw keyfile, so this restore is the only
+    // copy of the DEK left to write - but a restore that fails must not
+    // replace the refusal the caller needs: the ORIGINAL error names the
+    // read-back fault that actually happened first, so the restore runs
+    // inside its own guard and its failure is demoted to a named warning
+    // beside the original error, never instead of it.
+    try {
+      writeRawKeyfileBytes(keyPath, dek);
+    } catch (restoreErr) {
+      process.stderr.write(
+        `warning: could not restore the raw keyfile after a failed read-back check: ` +
+          `${keyPath}: ${restoreErr instanceof Error ? restoreErr.message : String(restoreErr)}\n`,
+      );
+    }
     throw err;
   }
   // The envelope now IS the keyfile: the same owner-only treatment the raw

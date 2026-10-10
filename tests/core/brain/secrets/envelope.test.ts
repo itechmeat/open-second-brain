@@ -6,7 +6,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { readdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  readdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -247,6 +255,37 @@ describe("the keyfile envelope", () => {
     if (process.platform !== "win32") {
       expect((statSync(keyPath).mode & 0o777).toString(8)).toBe("600");
     }
+  });
+
+  test("a restore that itself fails reports the ORIGINAL read-back refusal, not the restore's", () => {
+    const dek = loadOrCreateKey(keyPath);
+    // The write lands bytes that are not the envelope (the read-back will
+    // refuse), and the restore's own temp path is occupied by a directory,
+    // so the restore cannot write the raw bytes back either. The thrown
+    // refusal must still be the read-back one - the fault that actually
+    // happened first - with the restore's own failure demoted to stderr.
+    mkdirSync(`${keyPath}.raw-tmp`);
+    const warnings: string[] = [];
+    const original = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array): boolean => {
+      warnings.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    let refused: unknown;
+    try {
+      wrapKeyfile(keyPath, PASSPHRASE, dek, {
+        write: (target) => writeFileSync(target, '{"version": 1, "kdf": {"n": 1'),
+      });
+    } catch (err) {
+      refused = err;
+    } finally {
+      process.stderr.write = original;
+    }
+    expect(refused).toBeInstanceOf(SecretEnvelopeError);
+    expect((refused as Error).message).not.toContain("raw-tmp");
+    // The restore failed, so the mangled envelope is what sits at the path.
+    expect(readFileSync(keyPath).equals(dek)).toBe(false);
+    expect(warnings.join("")).toContain("could not restore the raw keyfile");
   });
 
   test("a wrapped store unlocks from the environment once and the variable is consumed", () => {
