@@ -92,7 +92,14 @@ describe("tags detector - malformed", () => {
     writeNote("Brain/notes/a.md", "#2024notes one");
     writeNote("Brain/notes/b.md", "#2024notes two");
     writeNote("Brain/notes/c.md", "#3d-print two");
-    expect(tagsFindings()).toHaveLength(0);
+    const findings = tagsFindings();
+    // The malformed class is empty: both digit-led tokens ride the index.
+    // #2024notes is shared across two documents; #3d-print sits on one,
+    // so the orphan class - not the malformed class - owns the finding.
+    expect(byClass(findings, "malformed")).toHaveLength(0);
+    const orphans = byClass(findings, "orphan");
+    expect(orphans).toHaveLength(1);
+    expect(orphans[0]!.evidence.tag).toBe("#3d-print");
   });
 
   test("code fences and inline code spans are never audited", () => {
