@@ -44,6 +44,7 @@ import {
 } from "../../core/brain/secrets/token-store.ts";
 import { McpTokenStoreError } from "../../core/brain/secrets/token-store.ts";
 import { parseFlags } from "../argparse.ts";
+import { SHOWN_ONCE_NOTICE } from "./token-cli.ts";
 import {
   receiptEntryEqualsExcludingTimestamp,
   receiptTokenMatches,
@@ -149,10 +150,6 @@ function buildBootstrapPayload(vault: string, configPath: string) {
   });
 }
 
-const SHOWN_ONCE_NOTICE =
-  "Copy it now; reference it from the agent's environment or a $secret:NAME store entry. " +
-  "Never a harness config file.";
-
 export async function cmdBootstrap(argv: string[]): Promise<number> {
   let args: ParsedBootstrapArgs;
   try {
@@ -201,16 +198,18 @@ export async function cmdBootstrap(argv: string[]): Promise<number> {
     return BOOTSTRAP_EXIT.runtimeError;
   }
 
-  if (args.check)
-    return runCheck({
-      target,
-      mode,
-      vault,
-      name,
-      env: buildInstallEnv({ vault, configPath: args.config }),
-    });
-
+  // Both paths read the receipt, so both owe the operator the same clean
+  // refusal when it is unreadable - a corrupt bootstrap.lock.json is a
+  // named error, never a raw stack.
   try {
+    if (args.check)
+      return runCheck({
+        target,
+        mode,
+        vault,
+        name,
+        env: buildInstallEnv({ vault, configPath: args.config }),
+      });
     return runProvision({ args, target, mode, agent, name, vault, existing, now });
   } catch (e) {
     if (e instanceof BootstrapReceiptError) {
@@ -239,7 +238,12 @@ interface CheckInput {
 function runCheck(input: CheckInput): number {
   const { target, mode, vault, name, env } = input;
   const lines: string[] = [];
-  let verdict: "ok" | "drift" | "mcp-unreachable" = "ok";
+  // The two halves rank at the return: an unreachable runtime means the
+  // registration half never ran at all, so it keeps exit 5 ("could not
+  // check") even where the token half drifted - exit 3 is reserved for
+  // "checked, and it disagreed".
+  let drifted = false;
+  let unreachable = false;
 
   if (mode === "adapter") {
     const adapter = defaultRegistry.get(target);
@@ -253,8 +257,8 @@ function runCheck(input: CheckInput): number {
     const result = adapter.verify(env);
     lines.push(`  registration: ${result.status} - ${result.details[0] ?? ""}`);
     if (result.fix_hint !== null) lines.push(`  fix: ${result.fix_hint}`);
-    if (result.status === "drift" || result.status === "not-installed") verdict = "drift";
-    else if (result.status === "mcp-unreachable") verdict = "mcp-unreachable";
+    if (result.status === "drift" || result.status === "not-installed") drifted = true;
+    else if (result.status === "mcp-unreachable") unreachable = true;
   } else if (mode === "print") {
     lines.push("  registration: print-and-paste; nothing on disk to verify");
   } else {
@@ -264,7 +268,7 @@ function runCheck(input: CheckInput): number {
   const record = listAgentTokens(vault).find((t) => t.name === name) ?? null;
   if (record === null || record.status !== "active") {
     lines.push(`  token: ${name} is not active; run o2b bootstrap --target ${target} --token`);
-    verdict = "drift";
+    drifted = true;
   } else {
     lines.push(`  token: ${name} active (prefix ${record.token_prefix})`);
   }
@@ -272,19 +276,19 @@ function runCheck(input: CheckInput): number {
   const entry = readBootstrapReceipt(vault).entries[target];
   if (entry === undefined) {
     lines.push(`  receipt: no bootstrap receipt; run o2b bootstrap --target ${target} --token`);
-    verdict = "drift";
+    drifted = true;
   } else if (!receiptTokenMatches(entry, record ?? undefined)) {
     lines.push(
       `  receipt: the receipt disagrees with the token store; run o2b bootstrap --target ${target} --token`,
     );
-    verdict = "drift";
+    drifted = true;
   } else {
     lines.push("  receipt: ok");
   }
 
   process.stdout.write(`bootstrap check: ${target}\n${lines.join("\n")}\n`);
-  if (verdict === "drift") return BOOTSTRAP_EXIT.drift;
-  if (verdict === "mcp-unreachable") return BOOTSTRAP_EXIT.mcpUnreachable;
+  if (unreachable) return BOOTSTRAP_EXIT.mcpUnreachable;
+  if (drifted) return BOOTSTRAP_EXIT.drift;
   return BOOTSTRAP_EXIT.ok;
 }
 
@@ -318,7 +322,12 @@ function runProvision(input: ProvisionInput): number {
     } else if (args.token && existing === null) {
       tokenMaterial = mintAgentToken(vault, name, agent).tokenMaterial;
       tokenEvent = "minted";
-    } else if (args.token && existing !== null && existing.status === "revoked") {
+    } else if (existing !== null && existing.status === "revoked") {
+      // Revoked is refused for EVERY provision form, not just --token: the
+      // store refuses to rotate a revoked name, so bootstrap cannot re-mint
+      // it, and falling through would let the no-churn gate below report a
+      // healthy "already provisioned" for a credential that no longer
+      // authenticates - the exact state `--check` calls drift.
       process.stderr.write(
         `error: token ${name} is revoked; mint a new name with \`o2b mcp token mint\` instead\n`,
       );

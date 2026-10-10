@@ -45,7 +45,13 @@ export const MCP_TOKEN_VERBS: ReadonlyArray<string> = Object.freeze([
   "list",
 ]);
 
-const SHOWN_ONCE_NOTICE =
+/**
+ * The sentence printed beside every piece of token material this CLI ever
+ * shows - `mcp token` here and `bootstrap` in `run.ts` alike. One constant
+ * because the custody rule is a property of the material, not of the verb
+ * that happens to be minting it.
+ */
+export const SHOWN_ONCE_NOTICE =
   "Copy it now; reference it from the agent's environment or a $secret:NAME store entry. " +
   "Never a harness config file.";
 

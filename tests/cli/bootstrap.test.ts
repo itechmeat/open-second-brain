@@ -18,13 +18,25 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runCli } from "../helpers/run-cli.ts";
 import { fakeCredential } from "../helpers/fake-credentials.ts";
-import { resetCodexRunner, setCodexRunner } from "../../src/core/install/adapters/codex.ts";
+import {
+  resetCodexRunner,
+  setCodexRunner,
+  type CodexRunner,
+} from "../../src/core/install/adapters/codex.ts";
 import { resetHostProbeRunner, setHostProbeRunner } from "../../src/core/install/host-probe.ts";
 import {
   listAgentTokens,
@@ -99,6 +111,27 @@ function custodyAuditActions(): Array<Record<string, any>> {
 /** The bootstrap argv every provisioning case starts from. */
 function bootstrapArgs(extra: ReadonlyArray<string>): string[] {
   return ["bootstrap", "--vault", vault, ...extra];
+}
+
+/**
+ * A `codex` binary that registers like the real one: `mcp add` appends the
+ * server's table to `$CODEX_HOME/config.toml` in the host's own layout, so
+ * apply takes the subprocess path and `verify` asks the declared host probe.
+ * Anything else (the best-effort `mcp remove`) exits non-zero.
+ */
+function fakeCodexHost(): CodexRunner {
+  return {
+    available: () => true,
+    run(home, args) {
+      const [, action, name] = args;
+      if (action !== "add" || typeof name !== "string") {
+        return { exitCode: 1, stdout: "", stderr: `unknown command: ${args.join(" ")}` };
+      }
+      mkdirSync(home, { recursive: true });
+      writeFileSync(codexConfigPath(), `[mcp_servers.${name}]\ncommand = "o2b"\n`, { flag: "a" });
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+  };
 }
 
 describe("o2b bootstrap --target codex (adapter model)", () => {
@@ -313,6 +346,72 @@ describe("o2b bootstrap --target codex (adapter model)", () => {
     expect(checked.stdout).toContain("--token");
   }, 20000);
 
+  test("a revoked token refuses every provision form instead of a healthy no-op, matching --check", async () => {
+    const first = await runCli(
+      bootstrapArgs(["--target", "codex", "--agent", "codex", "--token"]),
+      { env: { CODEX_HOME: codexHome } },
+    );
+    expect(first.returncode).toBe(0);
+    expect(revokeAgentToken(vault, "mcp_token_codex")).toBe(true);
+
+    // The same vault that --check calls drift (exit 3) must not read as
+    // healthy to the provision path: the receipt still carries the
+    // revoked token's name and prefix, so the no-churn gate would
+    // otherwise answer "already provisioned" exit 0.
+    const checked = await runCli(bootstrapArgs(["--target", "codex", "--check"]), {
+      env: { CODEX_HOME: codexHome },
+    });
+    expect(checked.returncode).toBe(3);
+
+    const plain = await runCli(bootstrapArgs(["--target", "codex"]), {
+      env: { CODEX_HOME: codexHome },
+    });
+    expect(plain.returncode).toBe(1);
+    expect(plain.stderr).toContain("is revoked");
+    expect(plain.stderr).toContain("o2b mcp token mint");
+    expect(plain.stdout).not.toContain("already provisioned");
+
+    const withToken = await runCli(bootstrapArgs(["--target", "codex", "--token"]), {
+      env: { CODEX_HOME: codexHome },
+    });
+    expect(withToken.returncode).toBe(1);
+    expect(withToken.stderr).toContain("is revoked");
+  }, 20000);
+
+  test("--check keeps the unreachable verdict when the token half also drifted", async () => {
+    setCodexRunner(fakeCodexHost());
+    // The host answers the declared probe but names neither OSB server:
+    // the configuration is right and the runtime has not loaded it, which
+    // is the unreachable verdict, not drift.
+    setHostProbeRunner({
+      available: () => true,
+      run: () => ({ exitCode: 0, stdout: "Name\n", stderr: "" }),
+    });
+
+    const first = await runCli(
+      bootstrapArgs(["--target", "codex", "--agent", "codex", "--token"]),
+      { env: { CODEX_HOME: codexHome } },
+    );
+    expect(first.returncode).toBe(0);
+
+    const unreachable = await runCli(bootstrapArgs(["--target", "codex", "--check"]), {
+      env: { CODEX_HOME: codexHome },
+    });
+    expect(unreachable.returncode).toBe(5);
+    expect(unreachable.stdout).toContain("registration: mcp-unreachable");
+
+    // The token half drifts on top of it. The runtime could not be asked,
+    // so the check did not actually run: exit 5 ("could not check")
+    // survives, with both findings named on stdout.
+    expect(revokeAgentToken(vault, "mcp_token_codex")).toBe(true);
+    const after = await runCli(bootstrapArgs(["--target", "codex", "--check"]), {
+      env: { CODEX_HOME: codexHome },
+    });
+    expect(after.returncode).toBe(5);
+    expect(after.stdout).toContain("registration: mcp-unreachable");
+    expect(after.stdout).toContain("not active");
+  }, 20000);
+
   test("--rotate with nothing to rotate is a runtime error naming the mint command", async () => {
     const r = await runCli(bootstrapArgs(["--target", "codex", "--rotate"]), {
       env: { CODEX_HOME: codexHome },
@@ -434,4 +533,18 @@ describe("o2b bootstrap refusals", () => {
     });
     expect(r.returncode).toBe(2);
   });
+
+  test("a corrupted receipt refuses --check through the clean error path, not a crash", async () => {
+    mkdirSync(join(vault, ".open-second-brain"), { recursive: true });
+    writeFileSync(receiptPath(), "{ not json");
+    const r = await runCli(bootstrapArgs(["--target", "codex", "--check"]), {
+      env: { CODEX_HOME: codexHome },
+    });
+    // The same named refusal the provision path gives: an exit code and a
+    // one-line error, never a raw stack.
+    expect(r.returncode).toBe(1);
+    expect(r.stderr).toContain("bootstrap receipt is corrupted JSON");
+    expect(r.stderr).not.toContain("BootstrapReceiptError");
+    expect(r.stderr).not.toMatch(/^\s+at /m);
+  }, 20000);
 });
