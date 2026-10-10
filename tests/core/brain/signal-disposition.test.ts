@@ -126,7 +126,7 @@ describe("writeSignal under a permissions document", () => {
     writeDoc("version: 1\ndefault_action: ask\n");
     const res = writeSignal(vault, INPUT);
     expect(res.staged).toBe(true);
-    expect(res.path).toContain("Brain/pending");
+    expect(res.path.replaceAll("\\", "/")).toContain("Brain/pending");
     expect(existsSync(res.path)).toBe(true);
     expect(inboxFiles()).toEqual([]);
     const rows = queryDecisionLedger(vault, { verdict: "ask" });
