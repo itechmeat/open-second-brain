@@ -160,6 +160,11 @@ import {
   TRIGGER_STATUSES,
 } from "../../../src/core/brain/triggers/types.ts";
 import {
+  isOpenDecisionStatus,
+  OPEN_DECISION_STATUS,
+  OPEN_DECISION_STATUSES,
+} from "../../../src/core/brain/decisions/open-store.ts";
+import {
   BRAIN_SNAPSHOT_REASON,
   BRAIN_SNAPSHOT_REASONS,
   isBrainSnapshotReason,
@@ -610,6 +615,16 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: TRIGGER_STATUS,
     members: TRIGGER_STATUSES,
     guard: isTriggerStatus,
+  },
+  {
+    // write-side-trust wave (Task 10). The lifecycle of a parked
+    // question: open while the options are being weighed, then resolved
+    // (into a real decision page) or discarded. History is a status
+    // filter, so the trio must survive the round trip off disk.
+    name: "OPEN_DECISION_STATUS",
+    values: OPEN_DECISION_STATUS,
+    members: OPEN_DECISION_STATUSES,
+    guard: isOpenDecisionStatus,
   },
   {
     // U2. Three vocabularies, because a corpus verdict, the reason it

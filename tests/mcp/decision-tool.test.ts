@@ -263,3 +263,127 @@ describe("brain_decision tool", () => {
     expect(res.error).toBeDefined();
   });
 });
+
+describe("brain_decision open-decision actions", () => {
+  test("open parks a question, list_open and show_open read it, resolve mints the page", async () => {
+    const server = new MCPServer({ vault, configPath: null });
+    await initialize(server);
+    const opened = payload(
+      await call(server, {
+        action: "open",
+        title: "Which HTTP client for ingest",
+        question: "Which HTTP client should the ingest lane adopt?",
+        options: ["bun fetch", "undici"],
+        context: "Needs pooling.",
+      }),
+    );
+    expect(opened["id"]).toBe("open-which-http-client-for-ingest");
+    expect(opened["status"]).toBe("open");
+
+    const listed = payload(await call(server, { action: "list_open" }));
+    expect((listed["open_decisions"] as unknown[]).length).toBe(1);
+    expect(listed["unreadable"]).toEqual([]);
+
+    const shown = payload(await call(server, { action: "show_open", id: opened["id"] }));
+    expect(shown["question"]).toBe("Which HTTP client should the ingest lane adopt?");
+    expect(shown["options"]).toEqual(["bun fetch", "undici"]);
+
+    const resolved = payload(
+      await call(server, { action: "resolve", id: opened["id"], choice: "bun fetch" }),
+    );
+    expect(resolved["decision"]).toBe("decision-which-http-client-for-ingest");
+
+    // The minted page is a real decision page, readable via `show`.
+    const page = payload(
+      await call(server, { action: "show", slug: "which-http-client-for-ingest" }),
+    );
+    expect(page["chosen"]).toBe("bun fetch");
+
+    // The open record is terminal now: the open filter shows nothing,
+    // and resolving again refuses.
+    const after = payload(await call(server, { action: "list_open", status: "open" }));
+    expect(after["open_decisions"]).toEqual([]);
+    const again = await call(server, {
+      action: "resolve",
+      id: opened["id"],
+      choice: "undici",
+    });
+    expect(again.error).toBeDefined();
+  });
+
+  test("list_open partitions by status and names unreadable records", async () => {
+    const { readFileSync, writeFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const server = new MCPServer({ vault, configPath: null });
+    await initialize(server);
+    const openRec = payload(
+      await call(server, {
+        action: "open",
+        title: "Keep the legacy importer",
+        question: "Do we keep the legacy importer?",
+        options: ["keep", "drop"],
+      }),
+    );
+    const discardRec = payload(
+      await call(server, {
+        action: "open",
+        title: "Retry budget for ingest",
+        question: "Which retry budget for ingest?",
+        options: ["3", "5"],
+      }),
+    );
+    payload(await call(server, { action: "discard", id: discardRec["id"], reason: "superseded" }));
+
+    const openList = payload(await call(server, { action: "list_open", status: "open" }));
+    expect((openList["open_decisions"] as Array<{ id: string }>).map((r) => r.id)).toEqual([
+      openRec["id"] as string,
+    ]);
+    const discarded = payload(await call(server, { action: "list_open", status: "discarded" }));
+    expect((discarded["open_decisions"] as Array<{ id: string }>).map((r) => r.id)).toEqual([
+      discardRec["id"] as string,
+    ]);
+
+    // A hand-edited status is confined to its record: named, not fatal,
+    // and it never hides the readable sibling.
+    const path = join(vault, "Brain", "decisions", `${openRec["id"] as string}.md`);
+    writeFileSync(path, readFileSync(path, "utf8").replace("status: open", "status: gone"), "utf8");
+    const broken = payload(await call(server, { action: "list_open" }));
+    expect((broken["open_decisions"] as Array<{ id: string }>).map((r) => r.id)).toEqual([
+      discardRec["id"] as string,
+    ]);
+    expect((broken["unreadable"] as unknown[]).length).toBe(1);
+  });
+
+  test("resolving a choice outside the enumerated options refuses", async () => {
+    const server = new MCPServer({ vault, configPath: null });
+    await initialize(server);
+    const opened = payload(
+      await call(server, {
+        action: "open",
+        title: "Pick a queue",
+        question: "Which queue backs the worker?",
+        options: ["postgres", "rabbit"],
+      }),
+    );
+    const res = await call(server, {
+      action: "resolve",
+      id: opened["id"],
+      choice: "kafka",
+    });
+    expect(res.error).toBeDefined();
+  });
+
+  test("no new tool was added: the open actions ride the existing brain_decision tool", async () => {
+    const { buildToolTable } = await import("../../src/mcp/tools.ts");
+    const table = buildToolTable("full");
+    expect(table.find((t) => t.name === "brain_decision")).toBeDefined();
+    const action = (
+      table.find((t) => t.name === "brain_decision")!.inputSchema as {
+        properties: { action: { enum: string[] } };
+      }
+    ).properties.action.enum;
+    for (const wanted of ["open", "list_open", "show_open", "resolve", "discard"]) {
+      expect(action).toContain(wanted);
+    }
+  });
+});

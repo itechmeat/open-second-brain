@@ -316,6 +316,21 @@ export const BRAIN_LOG_EVENT_KIND = {
    */
   durabilitySkip: "durability-skip",
   /**
+   * `ambient-withheld` (write-side-trust wave, Task 11) - the ambient
+   * fact-extraction capture ran under an explicit
+   * `guardrails.ambient_writeback: false`, so the WHOLE capture was
+   * withheld before any signal was written and no dedup entry was
+   * consumed. One event per capture, never per fact: the payload carries
+   * the withheld `count`, the `session_ref` provenance pointer, and the
+   * `agent` - and deliberately NOT the fact text, because consent-off
+   * means the operator asked for the content not to be captured, and a
+   * redacted excerpt would still be captured content. The skip is never
+   * silent: this dedicated, queryable event kind IS the visibility
+   * surface, so a withheld lane is discoverable through the log without
+   * a separate aggregator.
+   */
+  ambientWithheld: "ambient-withheld",
+  /**
    * `write-conflict-advisory` (A4, t_f79b4fe0) - a feedback signal was
    * written whose principle closely resembles one or more confirmed
    * same-scope preferences. The advisory NEVER blocks the write; this
@@ -415,6 +430,34 @@ export const BRAIN_LOG_EVENT_KIND = {
    * merged timeline never double-counts a change.
    */
   decisionChangeReceipt: "decision-change-receipt",
+  /**
+   * `decision-open` (write-side-trust wave, Task 10) - a question was
+   * parked with enumerated options at `Brain/decisions/open-<slug>.md`,
+   * ahead of the decision it may become. Payload carries the `open`
+   * wikilink, the `title`, the option `count`, and the `agent`. Distinct
+   * from `decision-record` because nothing has been decided yet: an open
+   * question and a made decision are different beliefs at different
+   * lifecycle stages.
+   */
+  decisionOpen: "decision-open",
+  /**
+   * `decision-resolved` (write-side-trust wave, Task 10) - an open
+   * decision was closed by choosing one of its options, minting a real
+   * `type: decision` page. Payload carries the `open` wikilink, the
+   * minted `decision` wikilink, the `choice`, and the `agent`. The
+   * minted page itself carries the usual `decision-record` event; this
+   * event records the transition so the open record's history stays in
+   * the merged timeline.
+   */
+  decisionResolved: "decision-resolved",
+  /**
+   * `decision-discarded` (write-side-trust wave, Task 10) - an open
+   * decision was closed WITHOUT a decision. Payload carries the `open`
+   * wikilink, the `reason`, and the `agent`. Separated from
+   * `decision-resolved` so "never decided" is machine-filterable against
+   * "decided as X" in the merged timeline.
+   */
+  decisionDiscarded: "decision-discarded",
   /**
    * `authored-at-backfill` (conversation chronology, S1 / t_347e8224) -
    * the idempotent backfill stamped the `authored_at` frontmatter field
@@ -1697,6 +1740,29 @@ export interface BrainGuardrailConfig {
    * only the dry-run report path (which never writes) is available.
    */
   readonly marker_writeback?: boolean;
+  /**
+   * Ambient extraction consent (write-side-trust wave, Task 11). Governs
+   * the deterministic fact-extraction lane (`routeExtractedFacts`) that
+   * captures url/email/quantity signals from user turns without an
+   * explicit write. Absent or `true` is today's behaviour: ambient
+   * extraction runs. An explicit `false` withholds the whole capture -
+   * no signal is written, no dedup entry is consumed, and one counted,
+   * logged `ambient-withheld` event per capture records the withholding
+   * (the count only, never the fact text, because withheld content must
+   * not be captured even redacted). Present-but-non-boolean is a hard,
+   * field-named config error.
+   */
+  readonly ambient_writeback?: boolean;
+  /**
+   * Time-to-live, in days, stamped on ambient-extracted signals
+   * (write-side-trust wave, Task 11): each signal carries
+   * `expiration_date = created + N`, so the default read/list path
+   * drops it once the window lapses (`filterExpired`). `0` (the
+   * default) disables the stamp: ambient signals never expire on their
+   * own, byte-identical to pre-Task-11 behaviour. A negative or
+   * non-integer value is a hard, field-named config error.
+   */
+  readonly ambient_ttl_days?: number;
 }
 
 /**
@@ -2049,6 +2115,10 @@ export interface ResolvedBrainGuardrailConfig {
   readonly provenance_trust_ordering: boolean;
   readonly owner_scoped_facts: boolean;
   readonly marker_writeback: boolean;
+  /** Ambient extraction consent; `false` only when the operator wrote it. */
+  readonly ambient_writeback: boolean;
+  /** Ambient signal TTL in days; `0` stamps nothing. */
+  readonly ambient_ttl_days: number;
 }
 
 /**

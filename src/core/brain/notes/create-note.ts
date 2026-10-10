@@ -83,7 +83,6 @@ import {
 } from "./note-template.ts";
 import { NOTE_WRITE_OP, recordNoteWrite } from "./write-record.ts";
 import { ROUTE_STAGE, timeStageSync } from "../../route-scope.ts";
-import { resolveAgentName } from "../../config.ts";
 import { REVIEW_LANE } from "../write-gate.ts";
 import { resolveWriteDisposition, stageForReview } from "../pending/pending-lanes.ts";
 

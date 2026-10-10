@@ -14,6 +14,7 @@ import { join } from "node:path";
 
 import { parseSignal, writeSignal, type WriteSignalInput } from "../../../src/core/brain/signal.ts";
 import { queryByTopic } from "../../../src/core/brain/query.ts";
+import { filterExpired } from "../../../src/core/brain/expiration.ts";
 
 let vault: string;
 
@@ -89,5 +90,28 @@ describe("queryByTopic — default drops expired signals, showExpired re-include
     const res = writeSignal(vault, baseSignal("expired-sig", { expiration_date: "2026-07-15" }));
     queryByTopic(vault, "deploy", { now });
     expect(existsSync(res.path)).toBe(true);
+  });
+
+  test("an ambient-extracted signal stamped with a full-timestamp TTL expires at that instant", () => {
+    // The ambient lane (Task 11) stamps `expiration_date = created + N` as a
+    // full ISO timestamp through this same writer; the read side must drop it
+    // at the exact instant, not at end of day.
+    const res = writeSignal(
+      vault,
+      baseSignal("ambient-ttl", {
+        source_type: "extracted",
+        expiration_date: "2026-07-15T09:30:00Z",
+      }),
+    );
+    const parsed = parseSignal(res.path);
+    expect(parsed.source_type).toBe("extracted");
+    expect(filterExpired([parsed], { now: new Date("2026-07-15T09:29:59Z") }).length).toBe(1);
+    expect(filterExpired([parsed], { now: new Date("2026-07-15T09:30:01Z") }).length).toBe(0);
+    const query = queryByTopic(vault, "deploy", { now: new Date("2026-08-01T00:00:00Z") });
+    expect(query.signals.length).toBe(0);
+    expect(
+      queryByTopic(vault, "deploy", { now: new Date("2026-08-01T00:00:00Z"), showExpired: true })
+        .signals.length,
+    ).toBe(1);
   });
 });

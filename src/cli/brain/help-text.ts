@@ -52,7 +52,7 @@ Brain verbs (observing memory):
   note-lifecycle   Note FILES: rename/move/archive/delete one, rewriting inbound links
   scaffold-stub    Unresolved wikilink targets: list them, or materialise a stub
   claims           Claim-graph query: current truth, truth-at-T, replaced-by, contested-by
-  decision         Capture/review decisions: record/outcome/show/list/similar
+  decision         Decisions: record/outcome/show/list/similar + open questions: open/list_open/show_open/resolve/discard
   tension          Detect + triage persisted contradictions: detect/list/show/confirm/dismiss/resolve
   digest           Render the recent-changes digest (markdown or --json)
   intent-review    Read-only pre-dream review of active signal clusters
@@ -358,7 +358,7 @@ export const VERB_HELP: Record<string, string> = {
     "--replaced <id> follows the supersede chain to the live tip; --contests <id>\n" +
     "lists contesting claims; --rebuild rebuilds and persists Brain/claim-graph.json.\n",
   decision:
-    "usage: o2b brain decision <record|outcome|rate|show|list|compare|similar|history|recall> [...] [--vault <path>] [--json]\n" +
+    "usage: o2b brain decision <record|outcome|rate|show|list|compare|similar|history|recall|open|list_open|show_open|resolve|discard> [...] [--vault <path>] [--json]\n" +
     "Decision-record note family under Brain/decisions/. record --title <t> --chosen <c>\n" +
     "--assumption <a> --review-date <YYYY-MM-DD> [--premortem <p>] [--notes <n>]\n" +
     "[--rating <1-5>] [--rationale <r>] captures a type: decision note and opens one review\n" +
@@ -372,7 +372,14 @@ export const VERB_HELP: Record<string, string> = {
     "[--turn <n>] [--count <n>] [--last-turn <n>] [--surfaced-ids <id> ...]\n" +
     "deterministically resurfaces a rated decision matching the prompt when\n" +
     "decision_recall.max_per_session is configured (byte-identical when unset); the\n" +
-    "count/last-turn/surfaced-ids flags thread the per-session cap and spacing state.\n",
+    "count/last-turn/surfaced-ids flags thread the per-session cap and spacing state.\n" +
+    "Open decisions (parked questions with enumerated options) live beside them as\n" +
+    "open-<slug>.md: open --title <t> --question <q> --option <o> [--option <o>...]\n" +
+    "[--context <c>] parks one (a duplicate question refuses, naming the existing id);\n" +
+    "list_open [--status open|resolved|discarded] lists them (unreadable records named);\n" +
+    "show_open <id> reads one; resolve <id> --choice <c> [--rationale <r>] mints the real\n" +
+    "type: decision page and stamps the pointer; discard <id> --reason <r> closes the\n" +
+    "question without deciding. Terminal records stay in place.\n",
   tension:
     "usage: o2b brain tension <detect|list|show|confirm|dismiss|resolve|verify> [...] [--vault <path>] [--json]\n" +
     "Triage persisted contradictions under Brain/tensions/. detect [--jaccard <n>] scans\n" +

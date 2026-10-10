@@ -365,6 +365,14 @@ export const BRAIN_CONFIG_TEMPLATE: ReadonlyArray<BrainTemplateBlock> = Object.f
       def("provenance_trust_ordering", G.provenance_trust_ordering),
       def("owner_scoped_facts", G.owner_scoped_facts),
       def("marker_writeback", G.marker_writeback),
+      def("ambient_writeback", G.ambient_writeback, [
+        "Consent switch for ambient fact extraction. An explicit false",
+        "withholds the whole capture behind one ambient-withheld log event.",
+      ]),
+      def("ambient_ttl_days", G.ambient_ttl_days, [
+        "Days an ambient-extracted signal stays live (created + N).",
+        "0 stamps no expiration date, so ambient signals never expire.",
+      ]),
     ],
   },
   {

@@ -32,6 +32,7 @@ import { BRAIN_LOG_EVENT_KIND, BRAIN_SIGNAL_SOURCE_TYPE } from "./types.ts";
 import { sanitiseTextField } from "../redactor.ts";
 import { classifyDurability, resolveDurabilityDenylist } from "./gates/durability.ts";
 import { resolveWriteApprovalEnabled } from "./pending.ts";
+import { loadGuardrailsConfigSafe } from "./policy.ts";
 import { brainDirsForWrite } from "./paths.ts";
 import type { DedupIndexEntry } from "./dedup-hash.ts";
 import { buildEntityIndex } from "./entities/index-builder.ts";
@@ -54,6 +55,9 @@ export interface ExtractedFact {
 }
 
 const MAX_FACT_CHARS = 200;
+
+/** Milliseconds in one day - the ambient TTL granularity (`ambient_ttl_days`). */
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 // Defence-in-depth cap: extractFacts runs on raw user turns, so a single
 // pathologically long line is never scanned in full. A real fact lives well
@@ -214,6 +218,25 @@ export interface RouteFactsInput {
    * exactly as before (byte-for-byte).
    */
   readonly writeApprovalEnabled?: boolean;
+  /**
+   * Ambient extraction consent (Task 11). When omitted the router
+   * resolves `guardrails.ambient_writeback` from the vault guardrails
+   * config on the capture; tests inject the boolean directly. An explicit
+   * `false` withholds the WHOLE capture before any gate runs: no signal
+   * is written, no dedup entry is consumed, and one counted, logged
+   * `ambient-withheld` event records the withholding (real runs only).
+   * Absent/`true` keeps the lane running.
+   */
+  readonly ambientWriteback?: boolean;
+  /**
+   * Ambient signal TTL in days (Task 11). When omitted the router
+   * resolves `guardrails.ambient_ttl_days` from the vault guardrails
+   * config; tests inject the number directly. `N > 0` stamps
+   * `expiration_date = created + N` on every ambient-extracted signal
+   * through the validated `writeSignal` chokepoint, so `filterExpired`
+   * drops it at read; `0` (the default) stamps nothing, byte-identical.
+   */
+  readonly ambientTtlDays?: number;
 }
 
 export interface RouteFactsResult {
@@ -232,6 +255,14 @@ export interface RouteFactsResult {
    * surface, never a silent drop.
    */
   readonly durabilityRejected: number;
+  /**
+   * Facts withheld by ambient consent (Task 11) - the whole capture when
+   * `guardrails.ambient_writeback: false` is in force, before any gate
+   * ran. Each suppressed capture also logs one `ambient-withheld` event
+   * carrying the same count (real runs only), so a withheld lane is
+   * counted, never silent. Always zero when consent is on.
+   */
+  readonly ambientWithheld: number;
 }
 
 /** Max length of the redacted fact text carried onto a `durability-skip` log. */
@@ -313,12 +344,57 @@ function entityAnchors(anchorables: ReadonlyArray<AnchorableEntity>, factText: s
  */
 export function routeExtractedFacts(vault: string, input: RouteFactsInput): RouteFactsResult {
   if (input.facts.length === 0) {
-    return { created: 0, withheld: 0, deduped: 0, durabilityRejected: 0 };
+    return { created: 0, withheld: 0, deduped: 0, durabilityRejected: 0, ambientWithheld: 0 };
   }
   let created = 0;
   let withheld = 0;
   let deduped = 0;
   let durabilityRejected = 0;
+
+  // Ambient consent and TTL (Task 11), resolved once per capture. An
+  // injected value wins (tests); otherwise the vault guardrails config
+  // decides. Unlike the A2/A3 seams below, the config is consulted on dry
+  // runs too, deliberately: consent changes what a rehearsal may forecast,
+  // so a dry run against a consent-off vault must forecast nothing rather
+  // than promise writes the operator withheld. A config that cannot be
+  // read never breaks capture: both knobs fall open to today's behaviour
+  // (lane on, no stamp), the same tolerance the durability and staging
+  // seams apply - a bad VALUE is the parser's hard, field-named error.
+  let ambientWriteback = input.ambientWriteback ?? true;
+  let ambientTtlDays = input.ambientTtlDays ?? 0;
+  if (input.ambientWriteback === undefined || input.ambientTtlDays === undefined) {
+    try {
+      const guardrails = loadGuardrailsConfigSafe(vault);
+      if (input.ambientWriteback === undefined) ambientWriteback = guardrails.ambient_writeback;
+      if (input.ambientTtlDays === undefined) ambientTtlDays = guardrails.ambient_ttl_days;
+    } catch {
+      // Consent falls open to today's behaviour; capture must not break.
+    }
+  }
+
+  // Consent boundary: an explicit `ambient_writeback: false` withholds the
+  // whole capture BEFORE any gate or dedup consumption - no signal is
+  // written and the dedup index is left untouched, so a later consent-on
+  // capture writes the facts instead of silently skipping them as seen.
+  // One counted, logged event per capture (never per fact), carrying the
+  // count only: withheld content must not be captured even redacted.
+  if (!ambientWriteback) {
+    const count = input.facts.length;
+    if (!input.dryRun) {
+      try {
+        appendLogEvent(vault, {
+          timestamp: isoSecond(input.now),
+          eventType: BRAIN_LOG_EVENT_KIND.ambientWithheld,
+          agent: input.agent,
+          body: { count: String(count), session_ref: input.sessionRef, agent: input.agent },
+        });
+      } catch {
+        // A withheld capture that cannot be logged must still stay withheld.
+      }
+    }
+    return { created: 0, withheld: 0, deduped: 0, durabilityRejected: 0, ambientWithheld: count };
+  }
+
   // A dry run never touches `input.dedup`, so a fact repeated within one
   // rehearsal has to be recognised here to be forecast once.
   const withheldHashes = new Set<string>();
@@ -425,6 +501,15 @@ export function routeExtractedFacts(vault: string, input: RouteFactsInput): Rout
           source_type: BRAIN_SIGNAL_SOURCE_TYPE.extracted,
           dedup_hash: hash,
           session_ref: input.sessionRef,
+          // Ambient TTL (Task 11): `created + N` through the validated
+          // writeSignal chokepoint, so the read side's `filterExpired`
+          // drops the signal once the window lapses. `0` stamps nothing
+          // and keeps the write byte-identical.
+          ...(ambientTtlDays > 0
+            ? {
+                expiration_date: isoSecond(new Date(input.now.getTime() + ambientTtlDays * DAY_MS)),
+              }
+            : {}),
           ...(anchors.length > 0 ? { raw: `entities: ${anchors.join(", ")}` } : {}),
         },
         targetDir !== undefined ? { targetDir } : {},
@@ -435,5 +520,11 @@ export function routeExtractedFacts(vault: string, input: RouteFactsInput): Rout
       // One unwritable fact must not break capture; the next turn retries.
     }
   }
-  return { created, withheld, deduped, durabilityRejected };
+  return {
+    created,
+    withheld,
+    deduped,
+    durabilityRejected,
+    ambientWithheld: 0,
+  };
 }

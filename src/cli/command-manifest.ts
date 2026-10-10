@@ -633,7 +633,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         ),
         command(
           "decision",
-          "Decision records: record, outcome, rate, show, list, compare, similar, history, recall",
+          "Decision records: record, outcome, rate, show, list, compare, similar, history, recall, open, list_open, show_open, resolve, discard",
         ),
         command(
           "tension",
