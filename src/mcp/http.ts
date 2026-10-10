@@ -471,7 +471,6 @@ function authenticateHttpRequest(
   const identity = authenticateRequest(req, {
     apiKey,
     resolveToken: (candidate) => resolveAgentForToken(mcp.vault, candidate),
-    tokensRequired: enforced,
     sharedKeyAgent: resolveAgentName(mcp.configPath ?? undefined),
   });
   return {
@@ -491,14 +490,6 @@ export interface AuthenticateRequestOptions {
    * revocation lands on the next request without a restart.
    */
   resolveToken: (presented: string) => { agent: string } | null;
-  /**
-   * The caller's enforcement decision (`mcp_tokens_required` AND a
-   * non-empty map, or the implicit network-bind requirement). The
-   * 401 itself stays at the call site - this function answers identity,
-   * `null` meaning "no identity", and the caller refuses exactly when
-   * that null coincides with enforcement or a configured key.
-   */
-  tokensRequired: boolean;
   /**
    * The process config identity a shared-key match carries. Optional;
    * without it the ambient `resolveAgentName()` answers, which is the

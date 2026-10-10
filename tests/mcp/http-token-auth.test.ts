@@ -286,7 +286,6 @@ describe("authenticateRequest", () => {
     const base = {
       apiKey: "key-material-2",
       resolveToken,
-      tokensRequired: false,
     };
     expect(
       authenticateRequest(reqWith({ authorization: `Bearer ${RESOLVED_TOKEN}` }), base),
@@ -315,7 +314,7 @@ describe("authenticateRequest", () => {
   });
 
   test("an empty shared key never matches; x-api-key carries a token too", () => {
-    const base = { apiKey: "", resolveToken, tokensRequired: true };
+    const base = { apiKey: "", resolveToken };
     expect(authenticateRequest(reqWith({ "x-api-key": RESOLVED_TOKEN }), base)).toEqual({
       agent: "edge-agent",
       via: "token",
@@ -331,7 +330,6 @@ describe("authenticateRequest", () => {
         seen.push(presented);
         return null;
       },
-      tokensRequired: false,
     });
     expect(seen).toEqual([RESOLVED_TOKEN]);
   });
