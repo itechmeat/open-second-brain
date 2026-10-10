@@ -13,9 +13,13 @@
  *     target and the exclusive create as the real race gate).
  *   - The pending id is self-describing. `sig-` ids keep the A3 grammar;
  *     a `note-` id carries the REVERSIBLE percent-encoding of the publish
- *     target without its final `.md`; an `ing-` id carries the
- *     deterministic publish basename (the ingest publish path is a pure
- *     function of the source identity, so the basename suffices).
+ *     target, minus its final `.md` only where that suffix is exactly
+ *     lowercase and nothing shorter would be ambiguous - any other
+ *     spelling rides whole, so apply publishes into the caller's exact
+ *     target (`Notes/Foo.MD` stays `Notes/Foo.MD`, the file createNote
+ *     would have written); an `ing-` id carries the deterministic publish
+ *     basename (the ingest publish path is a pure function of the source
+ *     identity, so the basename suffices).
  *   - {@link listPendingLane} sorts deterministically and PARTITIONS
  *     unreadable entries: a corrupt or mis-named file is named with a
  *     reason instead of breaking the listing or vanishing.
@@ -37,7 +41,11 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
-import { atomicCreateFileSyncExclusive, atomicWriteFileSync } from "../../fs-atomic.ts";
+import {
+  atomicCreateFileSyncExclusive,
+  atomicWriteFileSync,
+  FileAlreadyExistsError,
+} from "../../fs-atomic.ts";
 import { discoverConfig, resolveAgentName } from "../../config.ts";
 import { ensureInsideVault } from "../../path-safety.ts";
 import { parseFrontmatter, writeFrontmatterAtomic } from "../../vault.ts";
@@ -164,10 +172,7 @@ export class PendingSignalNotFoundError extends Error {
 export class InvalidPendingIdError extends Error {
   readonly id: string;
   constructor(id: string) {
-    super(
-      `invalid pending id ${JSON.stringify(id)} - expected ` +
-        `${PENDING_LANE_ID_SOURCE}:${PENDING_LANE_ID_SOURCE.slice(0, -1)}-<date>-<name>`,
-    );
+    super(`invalid pending id ${JSON.stringify(id)} - expected ${PENDING_LANE_ID_SOURCE}`);
     this.name = "InvalidPendingIdError";
     this.id = id;
   }
@@ -235,8 +240,11 @@ function laneOfId(id: string): ReviewLane {
 /**
  * Longest publish-target suffix one pending filename can carry. The
  * classic filesystem bound is 255 bytes per filename component; the
- * longest composed name is `note-<YYYY-MM-DD>-<encoded>.md`
- * (15 + 3 + suffix), so the suffix itself is bounded at 231 bytes.
+ * longest composed name is `note-<YYYY-MM-DD>-<encoded>.md`, whose fixed
+ * part is 19 bytes (`note-` + the 10-byte date + the separating dash +
+ * `.md`), so the arithmetic allows 236. This bound sits conservatively
+ * below that; the composed-name check in {@link stageForReview} is the
+ * exact 255-byte gate.
  */
 const MAX_ENCODED_SUFFIX_BYTES = 231;
 
@@ -341,7 +349,14 @@ function publishTargetForId(vault: string, id: string): string {
     lane === REVIEW_LANE.signals ? "sig-" : lane === REVIEW_LANE.notes ? "note-" : "ing-";
   const suffix = id.slice(prefix.length + "YYYY-MM-DD-".length);
   if (lane === REVIEW_LANE.signals) return `${BRAIN_INBOX_REL}/${id}.md`;
-  if (lane === REVIEW_LANE.notes) return `${decodePendingTargetPath(suffix)}.md`;
+  if (lane === REVIEW_LANE.notes) {
+    const decoded = decodePendingTargetPath(suffix);
+    // Suffixes staged before the extension could ride the encoding - and
+    // suffixes of exactly-lowercase targets today - carry the publish
+    // target WITHOUT its `.md`; a decode that still ends in one, whatever
+    // its case, is the caller's own spelling and publishes verbatim.
+    return MARKDOWN_SUFFIX_RE.test(decoded) ? decoded : `${decoded}.md`;
+  }
   return `${BRAIN_SOURCES_REL}/${suffix}.md`;
 }
 
@@ -563,9 +578,23 @@ export function stageForReview(
   return { pendingId, path: stagedPath };
 }
 
-/** Strip one trailing `.md` (case-insensitive) from a publish target. */
+/** A trailing `.md` in any casing - the extension a note target ends in. */
+const MARKDOWN_SUFFIX_RE = /\.md$/i;
+
+/**
+ * Strip the publish target's trailing `.md` before it encodes into a
+ * `note-` pending id - but only where the strip is REVERSIBLE at publish
+ * time: exactly-lowercase, and only when the remainder cannot itself be
+ * read as ending in a `.md` (any casing), which would be ambiguous with a
+ * target carried whole. Every other spelling stays in the id verbatim,
+ * so `Notes/Foo.MD` applies into `Notes/Foo.MD` - the file createNote
+ * would have written - instead of folding into a different `Notes/Foo.md`
+ * on a case-sensitive vault.
+ */
 function stripMarkdownSuffix(target: string): string {
-  return target.replace(/\.md$/i, "");
+  if (!target.endsWith(".md")) return target;
+  const stripped = target.slice(0, -".md".length);
+  return MARKDOWN_SUFFIX_RE.test(stripped) ? target : stripped;
 }
 
 // ----- Listing --------------------------------------------------------------
@@ -770,7 +799,10 @@ export function applyPendingLane(
  * `retired_reason`), keeping the original fields for the audit trail and
  * stamping `osb_pending_lane` with the lane the entry came from - at
  * reject time only; publish never transforms. A missing id is a typed
- * error. `dryRun` runs the same checks and writes nothing.
+ * error. `dryRun` runs the same checks and writes nothing, the occupied
+ * retire target included: the real run's exclusive create refuses one,
+ * so the preview refuses it too rather than forecasting a retire the
+ * reject would then reject.
  */
 export function rejectPendingLane(
   vault: string,
@@ -803,6 +835,11 @@ export function rejectPendingLane(
 
   const retiredDir = (dryRun ? brainDirs(vault) : brainDirsForWrite(vault)).retired;
   const dest = ensureInsideVault(join(retiredDir, `${id}.md`), vault);
+  // The same occupancy refusal the real run's exclusive create raises,
+  // checked in the preview too. The exclusive create below stays the
+  // actual race gate - this makes the preview honest, it does not
+  // replace the atomic one.
+  if (existsSync(dest)) throw new FileAlreadyExistsError(dest);
   if (dryRun) return { id, path: dest, dryRun: true };
 
   writeFrontmatterAtomic(dest, nextMeta, body, {

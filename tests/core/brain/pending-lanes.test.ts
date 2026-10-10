@@ -22,7 +22,7 @@ import { join } from "node:path";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { brainDirs } from "../../../src/core/brain/paths.ts";
 import { formatFrontmatter, parseFrontmatter } from "../../../src/core/vault.ts";
-import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
+import { atomicWriteFileSync, FileAlreadyExistsError } from "../../../src/core/fs-atomic.ts";
 import { PermissionsDocumentError } from "../../../src/core/brain/permissions/document.ts";
 import { queryDecisionLedger } from "../../../src/core/brain/permissions/ledger.ts";
 import { createNote } from "../../../src/core/brain/notes/create-note.ts";
@@ -210,6 +210,32 @@ describe("stageForReview", () => {
     const second = stageForReview(vault, "notes", "Notes/Replace.md", () => "second");
     expect(second.pendingId).toBe(first.pendingId);
     expect(readFileSync(first.path, "utf8")).toBe("second");
+  });
+
+  test("a non-lowercase .md target keeps its spelling through the queue", () => {
+    // createNote admits a `.MD` spelling and writes it as given, so the
+    // queue must apply into the caller's exact target - not fold it into
+    // a different lowercase file on a case-sensitive vault.
+    enableNotes();
+    const bytes = formatFrontmatter({ title: "Case" }, "body");
+    const staged = stageForReview(vault, "notes", "Notes/Foo.MD", () => bytes);
+    const listed = listPendingLane(vault, "notes").entries[0]!;
+    expect(listed.publishTarget).toBe("Notes/Foo.MD");
+    const applied = applyPendingLane(vault, staged.pendingId);
+    expect(applied.path).toBe(join(vault, "Notes/Foo.MD"));
+    expect(readFileSync(applied.path, "utf8")).toBe(bytes);
+  });
+
+  test("compound markdown suffixes round-trip exactly too", () => {
+    // A target whose remainder would be mistaken for a carried extension
+    // rides whole: the id cannot drop a `.md` it could not re-attach
+    // unambiguously.
+    enableNotes();
+    const staged = stageForReview(vault, "notes", "Notes/X.md.md", () => "twice");
+    const listed = listPendingLane(vault, "notes").entries[0]!;
+    expect(listed.publishTarget).toBe("Notes/X.md.md");
+    const applied = applyPendingLane(vault, staged.pendingId);
+    expect(applied.path).toBe(join(vault, "Notes/X.md.md"));
   });
 
   test("refuses the signals lane by name (the allocator owns that lane)", () => {
@@ -418,6 +444,24 @@ describe("rejectPendingLane", () => {
     expect(preview.path.startsWith(brainDirs(vault).retired)).toBe(true);
     expect(existsSync(staged.path)).toBe(true);
     expect(existsSync(join(brainDirs(vault).retired, `${staged.pendingId}.md`))).toBe(false);
+  });
+
+  test("a dry run refuses an occupied retire target exactly as the reject would", () => {
+    // The real run's exclusive create throws FileAlreadyExistsError on a
+    // taken retire path; the preview performs the same occupancy check, so
+    // it cannot forecast a retire the reject would refuse.
+    enableNotes();
+    const staged = stageForReview(vault, "notes", "Notes/Taken.md", () => "b");
+    const retired = join(brainDirs(vault).retired, `${staged.pendingId}.md`);
+    writeFileSync(retired, "already retired");
+    expect(() => rejectPendingLane(vault, staged.pendingId, "maybe", { dryRun: true })).toThrow(
+      FileAlreadyExistsError,
+    );
+    expect(() => rejectPendingLane(vault, staged.pendingId, "maybe")).toThrow(
+      FileAlreadyExistsError,
+    );
+    expect(existsSync(staged.path)).toBe(true);
+    expect(readFileSync(retired, "utf8")).toBe("already retired");
   });
 
   test("rejecting a missing id is a typed error", () => {
