@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runCli } from "../helpers/run-cli.ts";
+import { VERB_HELP } from "../../src/cli/brain/help-text.ts";
 
 let tmp: string;
 let configDir: string;
@@ -472,6 +473,14 @@ describe("o2b brain decision", () => {
     );
     expect(dup.returncode).not.toBe(0);
     expect(dup.stderr).toContain("open-pick-a-queue");
+  });
+
+  test("the verb help states that non-Latin titles hash to an unnamed id", () => {
+    // The slug grammar is ASCII-locked; a title it cannot spell must be
+    // explained at the surface that asks for the title.
+    expect(VERB_HELP["decision"]).toContain(
+      "a title with no ASCII letters or digits hashes to an unnamed-<hash> id",
+    );
   });
 
   test("two same-titled questions both resolve to distinct decision pages", async () => {

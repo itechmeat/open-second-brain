@@ -378,10 +378,12 @@ export const VERB_HELP: Record<string, string> = {
     "Open decisions (parked questions with enumerated options) live beside them as\n" +
     "open-<slug>.md: open --title <t> --question <q> --option <o> [--option <o>...]\n" +
     "[--context <c>] parks one (a duplicate question refuses, naming the existing id);\n" +
-    "list_open [--status open|resolved|discarded] lists them (unreadable records named);\n" +
-    "show_open <id> reads one; resolve <id> --choice <c> [--rationale <r>] mints the real\n" +
-    "type: decision page and stamps the pointer; discard <id> --reason <r> closes the\n" +
-    "question without deciding. Terminal records stay in place.\n",
+    "a title with no ASCII letters or digits hashes to an unnamed-<hash> id (the slug\n" +
+    "grammar is ASCII); list_open [--status open|resolved|discarded] lists them\n" +
+    "(unreadable records named); show_open <id> reads one; resolve <id> --choice <c>\n" +
+    "[--rationale <r>] mints the real type: decision page and stamps the pointer;\n" +
+    "discard <id> --reason <r> closes the question without deciding. Terminal records\n" +
+    "stay in place.\n",
   tension:
     "usage: o2b brain tension <detect|list|show|confirm|dismiss|resolve|verify> [...] [--vault <path>] [--json]\n" +
     "Triage persisted contradictions under Brain/tensions/. detect [--jaccard <n>] scans\n" +
