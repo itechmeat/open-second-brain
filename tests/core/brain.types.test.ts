@@ -97,6 +97,8 @@ describe("BRAIN_* const enums", () => {
       "attribute-write",
       // A2 (t_375e98fd) durability gate transient-content skip
       "durability-skip",
+      // write-side-trust wave (Task 11) ambient capture withheld by consent
+      "ambient-withheld",
       // A4 (t_f79b4fe0) write-time conflict advisory
       "write-conflict-advisory",
       // signals-that-survive unit 4 (t_75597bb9) unroutable-capture hint

@@ -92,6 +92,8 @@ describe("runDoctor - trust integration", () => {
         provenance_trust_ordering: false,
         owner_scoped_facts: false,
         marker_writeback: false,
+        ambient_writeback: true,
+        ambient_ttl_days: 0,
       },
     });
     expect(result.instruction_file_warnings ?? []).toHaveLength(1);

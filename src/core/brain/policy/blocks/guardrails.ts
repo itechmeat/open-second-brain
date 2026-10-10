@@ -30,6 +30,10 @@ export const INSTRUCTION_FILE_MAX_LINES_CEILING = 10000;
  * Knowledge Provenance opt-in boolean flags (v1.7). Present → must be
  * boolean, else hard error. Named once so the parser, the forward-compat
  * unknown-key warning and the resolver read the same list.
+ *
+ * `ambient_writeback` (write-side-trust wave, Task 11) is the one flag
+ * whose absent-behaviour is ON: ambient extraction is today's lane, so
+ * its default is `true` and only an explicit `false` suppresses.
  */
 const BOOLEAN_KEYS = [
   "untrusted_source_delimiting",
@@ -37,6 +41,7 @@ const BOOLEAN_KEYS = [
   "provenance_trust_ordering",
   "owner_scoped_facts",
   "marker_writeback",
+  "ambient_writeback",
 ] as const;
 
 const KNOWN_KEYS = [
@@ -44,6 +49,7 @@ const KNOWN_KEYS = [
   "promotion_min_distinct_agents",
   "promotion_min_age_days",
   "instruction_file_max_lines",
+  "ambient_ttl_days",
   ...BOOLEAN_KEYS,
 ] as const;
 
@@ -66,6 +72,11 @@ const KNOWN_KEYS = [
  *   - `promotion_min_age_days: 0` disables the age gate.
  *   - `instruction_file_max_lines: 200` matches the documented
  *     compliance ceiling.
+ *   - `ambient_writeback: true` keeps the ambient extraction lane
+ *     running (write-side-trust wave, Task 11); only an explicit
+ *     `false` suppresses a capture.
+ *   - `ambient_ttl_days: 0` stamps no expiration date, so ambient
+ *     signals never expire on their own.
  */
 export const BRAIN_GUARDRAIL_DEFAULTS: ResolvedBrainGuardrailConfig = Object.freeze({
   promotion_min_signals: 1,
@@ -77,6 +88,8 @@ export const BRAIN_GUARDRAIL_DEFAULTS: ResolvedBrainGuardrailConfig = Object.fre
   provenance_trust_ordering: false,
   owner_scoped_facts: false,
   marker_writeback: false,
+  ambient_writeback: true,
+  ambient_ttl_days: 0,
 }) as ResolvedBrainGuardrailConfig;
 
 /**
@@ -104,6 +117,8 @@ export function resolveGuardrails(cfg: BrainConfig): ResolvedBrainGuardrailConfi
       g.provenance_trust_ordering ?? BRAIN_GUARDRAIL_DEFAULTS.provenance_trust_ordering,
     owner_scoped_facts: g.owner_scoped_facts ?? BRAIN_GUARDRAIL_DEFAULTS.owner_scoped_facts,
     marker_writeback: g.marker_writeback ?? BRAIN_GUARDRAIL_DEFAULTS.marker_writeback,
+    ambient_writeback: g.ambient_writeback ?? BRAIN_GUARDRAIL_DEFAULTS.ambient_writeback,
+    ambient_ttl_days: g.ambient_ttl_days ?? BRAIN_GUARDRAIL_DEFAULTS.ambient_ttl_days,
   };
 }
 
@@ -122,11 +137,13 @@ export function parseGuardrailsBlock(ctx: BlockParseContext): BrainGuardrailConf
     promotion_min_distinct_agents?: number;
     promotion_min_age_days?: number;
     instruction_file_max_lines?: number;
+    ambient_ttl_days?: number;
     untrusted_source_delimiting?: boolean;
     derived_fact_synthesis?: boolean;
     provenance_trust_ordering?: boolean;
     owner_scoped_facts?: boolean;
     marker_writeback?: boolean;
+    ambient_writeback?: boolean;
   } = {};
 
   if ("promotion_min_signals" in rawMap) {
@@ -168,6 +185,14 @@ export function parseGuardrailsBlock(ctx: BlockParseContext): BrainGuardrailConf
       );
     }
     partial.instruction_file_max_lines = v;
+  }
+  if ("ambient_ttl_days" in rawMap) {
+    requireNonNegativeInteger(
+      "guardrails.ambient_ttl_days",
+      rawMap["ambient_ttl_days"],
+      ctx.source,
+    );
+    partial.ambient_ttl_days = rawMap["ambient_ttl_days"] as number;
   }
   for (const key of BOOLEAN_KEYS) {
     if (!(key in rawMap)) continue;

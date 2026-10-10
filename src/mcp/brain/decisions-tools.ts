@@ -395,7 +395,7 @@ export const DECISIONS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
     description:
-      "Decision-record family. action: record captures a `type: decision` note (chosen, assumption, review_date, optional premortem/rating); outcome backfills; rate sets a rating; show/list/compare read; similar finds past decisions; history reads receipts; recall resurfaces a rated decision; open parks a question with enumerated options; list_open/show_open read parked questions; resolve mints the decision page; discard closes without deciding.",
+      "Decision tool. record captures a decision note (chosen, assumption, review date); outcome backfills it; rate rates it; show, list, compare and similar read past ones; history reads receipts; recall resurfaces a rated one; open parks a question with its options; resolve picks one; discard closes it.",
     inputSchema: {
       type: "object",
       properties: {
