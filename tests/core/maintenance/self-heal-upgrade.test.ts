@@ -305,9 +305,21 @@ describe("operator surfaces after a failure", () => {
     failOnce();
     repairSnapshots();
 
-    const r = await runCli(["brain", "upgrade", "--vault", vault, "--apply", "--yes"], {
+    // t_18fda844: a non-interactive apply must carry the plan digest a
+    // prior --dry-run printed, so the operator surface under test is the
+    // two-step one: review, then apply the reviewed plan.
+    const dry = await runCli(["brain", "upgrade", "--vault", vault, "--dry-run", "--json"], {
       env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
     });
+    expect(dry.returncode).toBe(0);
+    const { digest } = JSON.parse(dry.stdout) as { digest: string };
+
+    const r = await runCli(
+      ["brain", "upgrade", "--vault", vault, "--apply", "--yes", "--approval-digest", digest],
+      {
+        env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
+      },
+    );
 
     expect(r.returncode).toBe(0);
     expect(readSelfHealUpgradeFailure(vault)).toBeNull();
