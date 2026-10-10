@@ -77,10 +77,14 @@ const STORE_DIR_IDENTIFIER = "DERIVED_STORE_DIR";
  * glob that stopped matching would sweep an empty set clean and every
  * assertion below would pass over nothing.
  */
-const SWEPT_POPULATION_SIZE = 23;
+// 24: the bootstrap receipt writer joins the population with its row
+// (write-side-trust Task 14), the same join install.lock.json made.
+const SWEPT_POPULATION_SIZE = 24;
 
 /** Declared surfaces today. Pinned for the same reason. */
-const DECLARED_SURFACE_COUNT = 47;
+// 49: the decisions-ledger row (Task 2) and the bootstrap receipt row
+// (Task 14) both join the population.
+const DECLARED_SURFACE_COUNT = 49;
 
 /** An exclusion reason has to be an argument, not a label. */
 const MIN_REASON_LENGTH = 80;

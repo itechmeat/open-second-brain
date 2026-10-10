@@ -31,7 +31,13 @@ import { dirname, join, relative } from "node:path";
 
 import type { FrontmatterMap } from "../types.ts";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
-import { CreateNoteError, createNote, resolveNoteTarget } from "./notes/create-note.ts";
+import {
+  CreateNoteError,
+  createNote,
+  logWatchedNoteOwnerWrite,
+  noteOwnerGateVerdict,
+  resolveNoteTarget,
+} from "./notes/create-note.ts";
 import { refuseBlankOverwrite } from "./notes/blank-overwrite-guard.ts";
 import {
   NOTE_WRITE_OP,
@@ -242,7 +248,15 @@ export type WriteBatchErrorCode =
   // neither the vault scope nor the write binding can be determined.
   // Propagated from the same envelope: no operation in the batch can be
   // projected, and the operator - not the caller - holds the fix.
-  | "config_invalid";
+  | "config_invalid"
+  // write-side-trust, Task 13. An operation's frontmatter names an
+  // `owner` the owner-write gate refuses (`integrity.owner_scope_writes`:
+  // fail, or a permissions-document `owner_write` verdict of deny/ask) -
+  // the same claim the create envelope refuses, carried under the same
+  // token so the two note-lane refusals read as one rule. The gate runs
+  // before the existing note is read, so the refusal answers the claim
+  // and never the question of whether the target exists.
+  | "owner_write_refused";
 
 /**
  * All-or-nothing failure for {@link applyWriteBatch}. Thrown during the
@@ -305,6 +319,12 @@ export type NoteWriteAdvisory = WritePathAdvisoryField;
  * there is no null that could be mistaken for a lost one, the same shape
  * the create skip spells. Both arms carry the advisory: the caller
  * authored that content either way.
+ *
+ * The create arm splits the same way since the review gate (write-side
+ * trust, Task 9): `created: true` published; `created: false` with
+ * `staged: true` staged the exact bytes into the review queue under
+ * `pending_id` - a staged create never touches the real path, which is
+ * why the validate-all-then-commit kernel is untouched by it.
  */
 export type WriteBatchOpResult =
   | ({
@@ -313,6 +333,15 @@ export type WriteBatchOpResult =
       readonly created: true;
     } & NoteWriteAudit &
       NoteWriteAdvisory)
+  | ({
+      readonly kind: "create_note";
+      readonly path: string;
+      /** The create was staged for review, not published. */
+      readonly created: false;
+      readonly staged: true;
+      /** Id of the pending queue entry holding the staged bytes. */
+      readonly pending_id: string;
+    } & NoteWriteAdvisory)
   | ({
       readonly kind: "update_note";
       readonly path: string;
@@ -635,6 +664,20 @@ function projectCreateNote(
   opts: ApplyWriteBatchOptions,
 ): PlannedOperation {
   const target = reserveNoteTarget(vault, op.path, index, noteTargets);
+  // The owner gate at PROJECTION (write-side-trust, Task 13): a
+  // foreign-owner create is refused before ANY operation commits, which
+  // is the all-or-nothing contract the kernel sells. The create writer
+  // consults the same gate again at commit - that arm covers the
+  // single-note callers, and this one exists so a batch never leaves
+  // earlier operations committed behind a refused claim.
+  const ownerGate = noteOwnerGateVerdict(vault, op.frontmatter, opts.configPath);
+  if (ownerGate.refused) {
+    throw new WriteBatchError(
+      "owner_write_refused",
+      index,
+      `operation ${index}: create_note at ${target.relPath}: ${ownerGate.reason}`,
+    );
+  }
   // Pre-check existence so a clobber aborts the batch before any commit.
   // The commit still goes through the exclusive create-note writer, whose
   // link(2) exclusivity closes the residual TOCTOU race race-free.
@@ -655,6 +698,19 @@ function projectCreateNote(
           ...(op.content !== undefined ? { content: op.content } : {}),
           ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
         });
+        if (res.outcome === "staged") {
+          // The review gate staged the create (write-side trust, Task 9).
+          // No bytes exist at the target, so there is no audit half and
+          // no page to lint - the pending id is the receipt.
+          return {
+            kind: "create_note",
+            path: res.path,
+            created: false,
+            staged: true,
+            pending_id: res.pendingId,
+            ...writePathAdvisoryField(op.content, res.path),
+          };
+        }
         if (res.outcome !== "created") {
           // Unreachable by construction: the batch exposes none of the
           // authoring modes, so `ifExists` is never sent and an occupied
@@ -725,6 +781,26 @@ function projectUpdateNote(
     );
   }
   const target = reserveNoteTarget(vault, op.path, index, noteTargets);
+  // The owner gate rides the update seam AHEAD of the existing-note read
+  // (write-side-trust, Task 13): a caller-named `owner:` the gate refuses
+  // is refused with the same error whether the target exists or not, so
+  // probing foreign owners learns nothing about which paths are real.
+  // Under the gate's `off` mode the predicate refuses nothing and the
+  // update writes exactly as it did before this wave - which is why
+  // `owner` is gated here rather than joining the unconditionally
+  // reserved keys above. The warn row, when the verdict says to watch,
+  // is logged at the COMMIT below and only when the rewrite lands:
+  // projection must stay row-free so a later operation's refusal never
+  // leaves a row for a write that never happened, and a byte-identical
+  // skip is such a write too.
+  const ownerGate = noteOwnerGateVerdict(vault, op.frontmatter, opts.configPath);
+  if (ownerGate.refused) {
+    throw new WriteBatchError(
+      "owner_write_refused",
+      index,
+      `operation ${index}: update_note at ${target.relPath}: ${ownerGate.reason}`,
+    );
+  }
   const state = readExistingNote(target.abs, target.relPath, index, opts.readable);
   // The one seam the blank-overwrite guard is wired at - it covers both
   // callers, `brain_update_note` and `brain_write_batch`'s update op,
@@ -772,6 +848,19 @@ function projectUpdateNote(
         NOTE_WRITE_OP.update,
         opts,
       );
+      // The warn row the projection's verdict asked for, logged only when
+      // the write actually commits - never during projection, where a
+      // later operation could still abort the batch, and never for a
+      // byte-identical skip, which is a write that did not happen and so
+      // owes no ledger row.
+      if (audit.wrote && ownerGate.watch) {
+        logWatchedNoteOwnerWrite(
+          vault,
+          target.relPath,
+          ownerGate.named,
+          ownerGate.resolvedIdentity,
+        );
+      }
       // The flag is the write's own verdict, not a hardcoded success: a
       // byte-identical re-apply skipped the write and says so, carrying
       // no audit half because nothing was recorded.

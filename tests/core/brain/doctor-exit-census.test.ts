@@ -195,6 +195,7 @@ const DOCTOR_REGISTERED_CODES: ReadonlyArray<string> = [
   "orphan-evidence",
   "orphan-session-ref",
   "payload-orphan",
+  "permissions-unreadable",
   "principle-corrupted",
   "recall-channel-silent",
   "recovery-point-stale",

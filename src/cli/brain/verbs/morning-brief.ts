@@ -9,6 +9,7 @@ import {
   renderTriggerQueueFailures,
   unreadableTriggerJson,
 } from "../../../core/brain/triggers/store.ts";
+import { renderOpenDecisionsBriefSection } from "../../../core/brain/decisions/brief.ts";
 import { parseOptionalNumberFlag } from "../../coerce.ts";
 import { brainVerbContext, fail, localTimeFields, parse } from "../helpers.ts";
 
@@ -89,6 +90,12 @@ export async function cmdBrainMorningBrief(argv: string[]): Promise<number> {
   if (triggerSection !== null && triggerSection.triggers.length > 0) {
     deliverBriefTriggers(vault, triggerSection, now);
   }
+
+  // Open-decisions section (write-side-trust wave, Task 10): render-only
+  // - a parked question is a standing question with no cooldown, so
+  // unlike the trigger section there is no delivery marking to run.
+  const openDecisions = renderOpenDecisionsBriefSection(vault);
+
   if (flags["json"]) {
     const payload = {
       ...brief,
@@ -106,6 +113,18 @@ export async function cmdBrainMorningBrief(argv: string[]): Promise<number> {
         ? { triggers_unreadable: triggerFailures.unreadable.map(unreadableTriggerJson) }
         : {}),
       ...(queueError !== null ? { trigger_queue_error: queueError } : {}),
+      ...(openDecisions.records.length > 0
+        ? {
+            open_decisions: openDecisions.records.map((r) => ({
+              id: r.id,
+              question: r.question,
+              status: r.status,
+            })),
+          }
+        : {}),
+      ...(openDecisions.unreadable.length > 0
+        ? { open_decisions_unreadable: openDecisions.unreadable }
+        : {}),
     };
     process.stdout.write(
       JSON.stringify({ ...payload, ...localTimeFields(config) }, null, 2) + "\n",
@@ -119,6 +138,7 @@ export async function cmdBrainMorningBrief(argv: string[]): Promise<number> {
       brief.text,
       triggerSection !== null ? triggerSection.text : "",
       failureText,
+      openDecisions.text,
     ].filter((section) => section !== "");
     // The placeholder stands for a brief with nothing in it, so it must
     // not stand in for one whose trigger queue could not be read.

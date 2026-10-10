@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { brainDirs } from "../../src/core/brain/paths.ts";
 import { stagePendingSignal } from "../../src/core/brain/pending.ts";
+import { stageForReview } from "../../src/core/brain/pending/pending-lanes.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
 let tmp: string;
@@ -110,6 +111,91 @@ describe("o2b brain pending", () => {
   test("list on an empty queue reports nothing", async () => {
     const out = await runCli(["brain", "pending", "list"], { env: env() });
     expect(out.returncode).toBe(0);
-    expect(out.stdout).toContain("no pending signals");
+    expect(out.stdout).toContain("no entries in any review lane");
+  });
+});
+
+/**
+ * The multi-lane queue (write-side trust, Task 9): list shows every lane
+ * sorted with a lane column, `--lane` filters one, unreadable entries are
+ * named with a reason, and both appliers preview honestly under
+ * `--dry-run`.
+ */
+describe("o2b brain pending across lanes", () => {
+  test("list shows all lanes sorted with lane columns and publish targets", async () => {
+    stage("fact-url");
+    stageForReview(vault, "notes", "Notes/Zed.md", () => "zed");
+    stageForReview(vault, "ingest", "Brain/sources/src-a-bcdef1234567.md", () => "summary");
+    const out = await runCli(["brain", "pending", "list", "--json"], { env: env() });
+    expect(out.returncode).toBe(0);
+    const payload = JSON.parse(out.stdout) as {
+      pending: Array<{ id: string; lane: string; publish_target?: string }>;
+      total: number;
+    };
+    expect(payload.total).toBe(3);
+    const ids = payload.pending.map((e) => e.id);
+    expect(ids).toEqual(ids.toSorted());
+    expect(payload.pending.map((e) => e.lane)).toEqual(["ingest", "notes", "signals"]);
+    const note = payload.pending.find((e) => e.lane === "notes")!;
+    expect(note.publish_target).toBe("Notes/Zed.md");
+    const ingest = payload.pending.find((e) => e.lane === "ingest")!;
+    expect(ingest.publish_target).toBe("Brain/sources/src-a-bcdef1234567.md");
+  });
+
+  test("--lane filters one lane", async () => {
+    stageForReview(vault, "notes", "Notes/Only.md", () => "n");
+    stageForReview(vault, "ingest", "Brain/sources/src-only-abcd12345678.md", () => "i");
+    const out = await runCli(["brain", "pending", "list", "--lane", "notes", "--json"], {
+      env: env(),
+    });
+    expect(out.returncode).toBe(0);
+    const payload = JSON.parse(out.stdout) as {
+      pending: Array<{ lane: string }>;
+      unreadable: unknown[];
+    };
+    expect(payload.pending.map((e) => e.lane)).toEqual(["notes"]);
+  });
+
+  test("an unknown --lane value is a usage error naming the choices", async () => {
+    const out = await runCli(["brain", "pending", "list", "--lane", "squid"], { env: env() });
+    expect(out.returncode).not.toBe(0);
+    expect(out.stderr).toContain("signals, notes, ingest, all");
+  });
+
+  test("an unreadable queue file is listed with a reason instead of vanishing", async () => {
+    stage("fact-url");
+    mkdirSync(join(brainDirs(vault).pending, "notes"), { recursive: true });
+    writeFileSync(join(brainDirs(vault).pending, "notes", "stray-notes.md"), "stray");
+    const out = await runCli(["brain", "pending", "list", "--json"], { env: env() });
+    expect(out.returncode).toBe(0);
+    const payload = JSON.parse(out.stdout) as {
+      unreadable: Array<{ path: string; reason: string }>;
+    };
+    expect(payload.unreadable).toHaveLength(1);
+    expect(payload.unreadable[0]!.path.endsWith("stray-notes.md")).toBe(true);
+    expect(payload.unreadable[0]!.reason.length).toBeGreaterThan(0);
+  });
+
+  test("apply of a note- id publishes the decoded target", async () => {
+    const staged = stageForReview(vault, "notes", "Notes/From CLI.md", () => "bytes");
+    const out = await runCli(["brain", "pending", "apply", staged.pendingId, "--json"], {
+      env: env(),
+    });
+    expect(out.returncode).toBe(0);
+    expect(existsSync(join(vault, "Notes/From CLI.md"))).toBe(true);
+    expect(existsSync(staged.path)).toBe(false);
+  });
+
+  test("reject --dry-run previews the retire and writes nothing", async () => {
+    const staged = stageForReview(vault, "notes", "Notes/Keep.md", () => "keep");
+    const out = await runCli(
+      ["brain", "pending", "reject", staged.pendingId, "--reason", "maybe", "--dry-run", "--json"],
+      { env: env() },
+    );
+    expect(out.returncode).toBe(0);
+    const payload = JSON.parse(out.stdout) as { status: string };
+    expect(payload.status).toBe("would-reject");
+    expect(existsSync(staged.path)).toBe(true);
+    expect(existsSync(join(brainDirs(vault).retired, `${staged.pendingId}.md`))).toBe(false);
   });
 });

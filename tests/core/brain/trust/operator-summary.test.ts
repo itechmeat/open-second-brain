@@ -66,6 +66,8 @@ describe("buildOperatorSummary - structural envelope", () => {
         provenance_trust_ordering: false,
         owner_scoped_facts: false,
         marker_writeback: false,
+        ambient_writeback: true,
+        ambient_ttl_days: 0,
       },
     });
     expect(r.instruction_file_warnings).toHaveLength(1);
@@ -113,6 +115,8 @@ describe("renderOperatorSummaryMarkdown", () => {
         provenance_trust_ordering: false,
         owner_scoped_facts: false,
         marker_writeback: false,
+        ambient_writeback: true,
+        ambient_ttl_days: 0,
       },
     });
     const md = renderOperatorSummaryMarkdown(r);

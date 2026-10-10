@@ -1,6 +1,7 @@
 /**
  * `o2b brain decision <action>` - decision-record note family CLI
- * (Belief lifecycle suite, Track B anchor, t_ac03214d).
+ * (Belief lifecycle suite, Track B anchor, t_ac03214d; open-decision
+ * vault actions added by the write-side-trust wave, Task 10).
  *
  * Actions:
  *   - `record --title <t> --chosen <c> --assumption <a> --review-date <d>
@@ -12,6 +13,13 @@
  *   - `recall --prompt <t> [--turn <n>] [--count <n>] [--last-turn <n>]
  *              [--surfaced-ids <id> ...]`  resurface a rated decision,
  *              threading the per-session cap and spacing state
+ *   - `open --title <t> --question <q> --option <o> [--option <o>...]
+ *              [--context <c>]`            park a question with options
+ *   - `list_open [--status <s>]`            parked questions by status
+ *   - `show_open <id>`                      one parked question
+ *   - `resolve <id> --choice <c> [--rationale <r>]`
+ *              choose an option; mints the real decision page
+ *   - `discard <id> --reason <r>`           close without deciding
  *
  * CLI mirror of the `brain_decision` MCP tool; both delegate to the core
  * decision module so the on-disk shape cannot drift.
@@ -29,6 +37,15 @@ import {
   updateRating,
 } from "../../../core/brain/decisions/record.ts";
 import type { BrainCommitmentTier } from "../../../core/brain/types.ts";
+import {
+  discardOpenDecision,
+  isOpenDecisionStatus,
+  listOpenDecisions,
+  OPEN_DECISION_STATUSES,
+  openDecision,
+  resolveOpenDecision,
+  showOpenDecision,
+} from "../../../core/brain/decisions/open-store.ts";
 import { queryDecisionChangeHistory } from "../../../core/brain/decisions/receipts.ts";
 import { recallRatedDecisions } from "../../../core/brain/decisions/recall.ts";
 import { normalizeFlagString, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
@@ -64,13 +81,19 @@ export async function cmdBrainDecision(argv: string[]): Promise<number> {
     count: { type: "string" },
     "last-turn": { type: "string" },
     "surfaced-ids": { type: "string-array" },
+    question: { type: "string" },
+    option: { type: "string-array" },
+    context: { type: "string" },
+    status: { type: "string" },
+    choice: { type: "string" },
+    reason: { type: "string" },
     json: { type: "boolean" },
   });
 
   const action = positional[0];
   if (action === undefined) {
     return usageError(
-      "brain decision requires an action: record | outcome | rate | show | list | compare | similar | history | recall",
+      "brain decision requires an action: record | outcome | rate | show | list | compare | similar | history | recall | open | list_open | show_open | resolve | discard",
     );
   }
 
@@ -372,6 +395,133 @@ export async function cmdBrainDecision(argv: string[]): Promise<number> {
           ok("no decision recalled");
         } else {
           ok(res.text);
+        }
+        return 0;
+      }
+      case "open": {
+        const title = normalizeFlagString(flags["title"]);
+        const question = normalizeFlagString(flags["question"]);
+        const options = Array.isArray(flags["option"]) ? (flags["option"] as string[]) : [];
+        if (!title || !question || options.length === 0) {
+          return usageError("brain decision open requires --title, --question, --option");
+        }
+        const context = normalizeFlagString(flags["context"]);
+        const rec = openDecision(vault, {
+          title,
+          question,
+          options,
+          ...(context ? { context } : {}),
+          ...(explicitAgent ? { agent: explicitAgent } : {}),
+          configPath: config,
+        });
+        if (wantsJson) {
+          okJson({ id: rec.id, slug: rec.slug, status: rec.status, options: options.length });
+        } else {
+          ok(`opened ${rec.id} (${options.length} options)`);
+        }
+        return 0;
+      }
+      case "list_open": {
+        const statusRaw = normalizeFlagString(flags["status"]);
+        if (statusRaw !== null && !isOpenDecisionStatus(statusRaw)) {
+          return usageError(
+            `brain decision list_open --status must be one of ${OPEN_DECISION_STATUSES.join(", ")}`,
+          );
+        }
+        const listed = listOpenDecisions(vault, statusRaw !== null ? { status: statusRaw } : {});
+        if (wantsJson) {
+          okJson({
+            open_decisions: listed.records.map((r) => ({
+              id: r.id,
+              slug: r.slug,
+              title: r.title,
+              question: r.question,
+              status: r.status,
+              options: [...r.options],
+              created_at: r.createdAt,
+            })),
+            unreadable: listed.unreadable,
+          });
+        } else if (listed.records.length === 0 && listed.unreadable.length === 0) {
+          ok("no open decisions");
+        } else {
+          for (const r of listed.records) {
+            ok(`${r.id} [${r.status}]: ${r.question} (${r.options.length} options)`);
+          }
+          for (const u of listed.unreadable) {
+            process.stdout.write(`unreadable: ${u.reason}\n`);
+          }
+        }
+        return 0;
+      }
+      case "show_open": {
+        const id = positional[1];
+        if (id === undefined) return usageError("brain decision show_open requires an id");
+        const res = showOpenDecision(vault, id);
+        if (res === null) {
+          process.stderr.write(`error: no open decision: ${id}\n`);
+          return 1;
+        }
+        if (wantsJson) {
+          okJson({
+            id: res.id,
+            slug: res.slug,
+            title: res.title,
+            question: res.question,
+            options: [...res.options],
+            context: res.context,
+            status: res.status,
+            created_at: res.createdAt,
+            resolved_at: res.resolvedAt,
+            discarded_at: res.discardedAt,
+            choice: res.choice,
+            decision: res.decision,
+            discard_reason: res.discardReason,
+          });
+        } else {
+          ok(`${res.id} [${res.status}]: ${res.question}`);
+          for (const option of res.options) ok(`  - ${option}`);
+          if (res.choice !== null) ok(`  choice: ${res.choice}`);
+          if (res.decision !== null) ok(`  decision: ${res.decision}`);
+          if (res.discardReason !== null) ok(`  reason: ${res.discardReason}`);
+        }
+        return 0;
+      }
+      case "resolve": {
+        const id = positional[1];
+        const choice = normalizeFlagString(flags["choice"]);
+        if (id === undefined || !choice) {
+          return usageError("brain decision resolve requires <id> --choice <option>");
+        }
+        const rationale = normalizeFlagString(flags["rationale"]);
+        const res = resolveOpenDecision(vault, id, {
+          choice,
+          ...(rationale ? { rationale } : {}),
+          ...(explicitAgent ? { actor: explicitAgent } : {}),
+          configPath: config,
+        });
+        if (wantsJson) {
+          okJson({ id, decision: res.decision });
+        } else {
+          ok(`resolved ${id} -> ${res.decision}`);
+        }
+        return 0;
+      }
+      case "discard": {
+        const id = positional[1];
+        const reason = normalizeFlagString(flags["reason"]);
+        if (id === undefined || !reason) {
+          return usageError("brain decision discard requires <id> --reason <text>");
+        }
+        discardOpenDecision(vault, id, {
+          reason,
+          ...(explicitAgent ? { actor: explicitAgent } : {}),
+          configPath: config,
+        });
+        if (wantsJson) {
+          okJson({ id, status: "discarded" });
+        } else {
+          ok(`discarded ${id}`);
         }
         return 0;
       }

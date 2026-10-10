@@ -65,6 +65,8 @@ import {
   preExtractCodeStructure,
   type PreExtractResult,
 } from "./pre-extract.ts";
+import { REVIEW_LANE } from "../write-gate.ts";
+import { resolveWriteDisposition, stageForReview } from "../pending/pending-lanes.ts";
 
 /** Frontmatter `kind:` marker of an ingested source summary page. */
 export const BRAIN_SOURCE_KIND = "brain-source";
@@ -152,6 +154,18 @@ export interface IngestSourceResult {
    * format.
    */
   readonly table?: TableOutcome;
+  /**
+   * True when the review gate staged this FIRST publish of the summary
+   * page into `Brain/pending/ingest/` instead of `Brain/sources/`
+   * (write-side trust, Task 9). Registration - the intake, the manifest,
+   * the plan checkpoint - completes exactly as before; only the page's
+   * directory changes, and {@link pendingId} names the queue entry an
+   * operator applies to publish it. A re-ingest of an already-published
+   * page never stages: the review boundary is entry, not mutation.
+   */
+  readonly staged?: boolean;
+  /** Id of the pending queue entry holding the staged summary page. */
+  readonly pendingId?: string;
 }
 
 /**
@@ -191,6 +205,32 @@ export function ingestSource(
   // producing two summary pages for one source against this pipeline's
   // documented idempotency.
   const canonicalSource = normalizeSourceIdentity(input.sourcePath);
+  // The page filename keys on the source-identity hash, not just the slug:
+  // two distinct non-ASCII / symbol-only source paths can slugify to the same
+  // fallback, which would silently clobber one summary with another. A hash
+  // suffix keeps distinct sources distinct while staying idempotent (the same
+  // source path always yields the same hash, hence the same file). Computed
+  // BEFORE the intake so the review disposition (write-side trust, Task 12)
+  // can name the exact target a deny refuses before anything is written.
+  const sourceHash = sourceIdentityHash([canonicalSource]);
+  const absPath = sourcePagePath(vault, `${slugify(canonicalSource)}-${sourceHash.slice(0, 12)}`);
+  // A summary page the caller may not read (it inherited a reserved
+  // source's visibility) is neither read nor rewritten, and the answer is
+  // the one an absent page gets: its path is deterministic, so `created`
+  // would otherwise tell the caller the page exists.
+  const summaryPath = canonicalNotePath(relative(vault, absPath));
+  // Review disposition (write-side trust, Tasks 9 and 12), resolved BEFORE
+  // the intake so a refusal lands before ANY write - no entity page, no
+  // manifest row, no summary page. With no permissions document the ingest
+  // lane's toggle decides (off = publish); with one, the document alone
+  // decides and a deny throws WriteRefusedError here, one ledger row behind
+  // it. The stage verdict is consumed at the page write below.
+  const disposition = resolveWriteDisposition(
+    vault,
+    REVIEW_LANE.ingest,
+    opts.agent !== undefined ? { agent: opts.agent, via: "config" } : undefined,
+    { target: summaryPath, ...(opts.now !== undefined ? { now: opts.now } : {}) },
+  );
   const preExtract =
     opts.preExtract === true ? runPreExtract(vault, canonicalSource, opts.readable) : undefined;
   const sourceLink = `[[${canonicalSource}]]`;
@@ -214,18 +254,6 @@ export function ingestSource(
   // source only in the trusted lane and only at the caller's reach.
   const derivation = deriveSourceSection(vault, canonicalSource, trust, opts.readable);
 
-  // The page filename keys on the source-identity hash, not just the slug:
-  // two distinct non-ASCII / symbol-only source paths can slugify to the same
-  // fallback, which would silently clobber one summary with another. A hash
-  // suffix keeps distinct sources distinct while staying idempotent (the same
-  // source path always yields the same hash, hence the same file).
-  const sourceHash = sourceIdentityHash([canonicalSource]);
-  const absPath = sourcePagePath(vault, `${slugify(canonicalSource)}-${sourceHash.slice(0, 12)}`);
-  // A summary page the caller may not read (it inherited a reserved
-  // source's visibility) is neither read nor rewritten, and the answer is
-  // the one an absent page gets: its path is deterministic, so `created`
-  // would otherwise tell the caller the page exists.
-  const summaryPath = canonicalNotePath(relative(vault, absPath));
   const withheld = existsSync(absPath) && opts.readable?.(summaryPath) === false;
   const existed = !withheld && existsSync(absPath);
   const stamp = isoSecond(opts.now);
@@ -274,7 +302,22 @@ export function ingestSource(
   // unchanged source truly inert.
   const nextContents = formatFrontmatter(meta, body);
   const unchanged = existed && readFileSync(absPath, "utf8") === nextContents;
-  if (!withheld && !unchanged) {
+  // Review gate (write-side trust, Task 9): a FIRST publish of the summary
+  // page stages under the ingest lane while registration completes. The
+  // disposition itself was resolved BEFORE the intake (Task 12), so a deny
+  // refused the whole ingest before any write. A page that already exists
+  // was admitted when it was first ingested, so a re-ingest rewrites it
+  // directly - the review boundary is entry, not mutation. A withheld page
+  // is left exactly as an absent one, staged or not: the caller must not
+  // learn a page it cannot read exists.
+  let stagedFields: { readonly pendingId: string } | undefined;
+  if (!withheld && !unchanged && !existed && disposition.verdict === "stage") {
+    stagedFields = {
+      pendingId: stageForReview(vault, REVIEW_LANE.ingest, summaryPath, () => nextContents)
+        .pendingId,
+    };
+  }
+  if (stagedFields === undefined && !withheld && !unchanged) {
     mkdirSync(dirname(absPath), { recursive: true });
     writeFrontmatterAtomic(absPath, meta, body, { overwrite: true });
   }
@@ -323,6 +366,7 @@ export function ingestSource(
     entitiesUpdated: intake.entitiesUpdated,
     connections,
     captureScope,
+    ...(stagedFields !== undefined ? { staged: true, pendingId: stagedFields.pendingId } : {}),
     ...(preExtract !== undefined ? { preExtract } : {}),
     ...(derivation?.parts !== undefined ? { parts: derivation.parts } : {}),
     ...(derivation?.table !== undefined ? { table: derivation.table } : {}),

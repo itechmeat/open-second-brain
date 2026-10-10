@@ -64,20 +64,56 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
       flag("output", "string"),
     ]),
     command("index", "Regenerate the vault index from discovered pages", [flag("vault", "string")]),
-    command("mcp", "Run the optional MCP tool server", [
-      flag("vault", "string"),
-      flag("config", "string"),
-      flag("repo", "string"),
-      flag("scope", "string"),
-      flag("writer-only", "boolean"),
-      flag("tool-profile", "string"),
-      flag("host-target", "string"),
-      flag("harness", "string"),
-      flag("probe", "boolean"),
-      flag("allow-tool", "string-array"),
-      flag("disable-tool", "string-array"),
-      flag("max-tools", "string"),
-    ]),
+    command(
+      "mcp",
+      "Run the optional MCP tool server",
+      [
+        flag("vault", "string"),
+        flag("config", "string"),
+        flag("repo", "string"),
+        flag("scope", "string"),
+        flag("writer-only", "boolean"),
+        flag("tool-profile", "string"),
+        flag("host-target", "string"),
+        flag("harness", "string"),
+        flag("probe", "boolean"),
+        flag("allow-tool", "string-array"),
+        flag("disable-tool", "string-array"),
+        flag("max-tools", "string"),
+      ],
+      [
+        // The management sub-dispatcher: routed before the server starts,
+        // so it is modelled here for help and completions even though it
+        // never reaches dispatchCommand as its own case.
+        command(
+          "token",
+          "Mint, rotate, revoke, or list per-agent MCP tokens",
+          [],
+          [
+            command("mint", "Mint one named token; the material is shown exactly once", [
+              flag("agent", "string"),
+              flag("name", "string"),
+              flag("vault", "string"),
+              flag("config", "string"),
+            ]),
+            command("rotate", "Re-mint one named token; the new material is shown exactly once", [
+              flag("name", "string"),
+              flag("vault", "string"),
+              flag("config", "string"),
+            ]),
+            command("revoke", "Revoke one named token; the material stops authenticating", [
+              flag("name", "string"),
+              flag("vault", "string"),
+              flag("config", "string"),
+            ]),
+            command("list", "List tokens: names, agents, statuses, non-secret prefixes", [
+              flag("vault", "string"),
+              flag("config", "string"),
+            ]),
+          ],
+        ),
+      ],
+    ),
     command("version", "Print the installed Open Second Brain version"),
     command("help", "Print command help or the command manifest"),
     command("completions", "Print shell completion script for o2b", [flag("shell", "string")]),
@@ -105,6 +141,23 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
       flag("dry-run", "boolean"),
       flag("force", "boolean"),
     ]),
+    // The whole parseFlags schema, for the reason the `o2b install`
+    // entry above gives: the human help renders from this list, so an
+    // unmodelled flag is a flag neither help nor completions can offer.
+    command(
+      "bootstrap",
+      "One-command harness provisioning: idempotent MCP registration, a named per-agent MCP token shown exactly once, and a bootstrap receipt; --rotate re-mints",
+      [
+        flag("target", "string"),
+        flag("agent", "string"),
+        flag("token", "boolean"),
+        flag("rotate", "boolean"),
+        flag("check", "boolean"),
+        flag("force", "boolean"),
+        flag("vault", "string"),
+        flag("config", "string"),
+      ],
+    ),
     command("uninstall", "Print or apply an uninstall plan", [
       flag("config", "string"),
       flag("apply-local", "boolean"),
@@ -244,6 +297,27 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           flag("vault", "string"),
           flag("json", "boolean"),
         ]),
+        command(
+          "permissions",
+          "Show the trust policy document and query the decision ledger",
+          [],
+          [
+            command("show", "Render the permissions document and a dry-run decision table", [
+              flag("vault", "string"),
+              flag("json", "boolean"),
+            ]),
+            command("ledger", "List decision ledger rows with filters", [
+              flag("vault", "string"),
+              flag("actor", "string"),
+              flag("action", "string"),
+              flag("verdict", "string"),
+              flag("since", "string"),
+              flag("until", "string"),
+              flag("limit", "string"),
+              flag("json", "boolean"),
+            ]),
+          ],
+        ),
         command(
           "log",
           "Inspect Brain/log itself: verify (per-shard hash chain)",
@@ -559,7 +633,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         ),
         command(
           "decision",
-          "Decision records: record, outcome, rate, show, list, compare, similar, history, recall",
+          "Decision records: record, outcome, rate, show, list, compare, similar, history, recall, open, list_open, show_open, resolve, discard",
         ),
         command(
           "tension",
@@ -671,14 +745,21 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           "Review the write-approval queue: list, apply, reject",
           [],
           [
-            command("list", "List the staged signals awaiting approval", [flag("vault", "string")]),
-            command("apply", "Move one staged signal into the inbox unchanged", [
+            command("list", "List the staged entries awaiting approval, all lanes", [
+              flag("vault", "string"),
+              flag("lane", "string"),
+              flag("json", "boolean"),
+            ]),
+            command("apply", "Move one staged entry into its publish target unchanged", [
               flag("vault", "string"),
               flag("dry-run", "boolean"),
+              flag("json", "boolean"),
             ]),
-            command("reject", "Retire one staged signal with a recorded reason", [
+            command("reject", "Retire one staged entry with a recorded reason", [
               flag("vault", "string"),
               flag("reason", "string"),
+              flag("dry-run", "boolean"),
+              flag("json", "boolean"),
             ]),
           ],
         ),

@@ -18,6 +18,7 @@ import {
   unreadableTriggerJson,
   type TriggerQueueFailures,
 } from "../../core/brain/triggers/store.ts";
+import { renderOpenDecisionsBriefSection } from "../../core/brain/decisions/brief.ts";
 import { buildTimelineIndex } from "../../core/brain/temporal/build-index.ts";
 import {
   collectSourcePointers,
@@ -148,10 +149,19 @@ async function toolBrainMorningBrief(
     unreadable: triggerFailures.unreadable,
     queueError: triggerQueueError,
   });
+  // Open-decisions section (write-side-trust wave, Task 10): render-only
+  // - unlike the trigger section there is no delivery marking, because a
+  // parked question is a standing question with no cooldown. Same
+  // operator-queue boundary as the triggers: a reader below local reach
+  // is shown neither the questions nor the unreadable records.
+  const openDecisions = operatorQueue
+    ? renderOpenDecisionsBriefSection(ctx.vault)
+    : { text: "", records: [], unreadable: [] };
   const sections = [
     brief.text,
     triggerSection !== null ? triggerSection.text : "",
     failureText,
+    openDecisions.text,
   ].filter((section) => section !== "");
   return {
     text: sections.join("\n\n"),
@@ -173,6 +183,18 @@ async function toolBrainMorningBrief(
       ? { triggers_unreadable: triggerFailures.unreadable.map(unreadableTriggerJson) }
       : {}),
     ...(triggerQueueError !== null ? { trigger_queue_error: triggerQueueError } : {}),
+    ...(openDecisions.records.length > 0
+      ? {
+          open_decisions: openDecisions.records.map((r) => ({
+            id: r.id,
+            question: r.question,
+            status: r.status,
+          })),
+        }
+      : {}),
+    ...(openDecisions.unreadable.length > 0
+      ? { open_decisions_unreadable: openDecisions.unreadable }
+      : {}),
   };
 }
 

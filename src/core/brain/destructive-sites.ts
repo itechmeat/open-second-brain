@@ -125,13 +125,19 @@ const UNARCHIVED_EXCLUDED: RecoverabilityFacts = Object.freeze({
 export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclaration>> =
   Object.freeze({
     // --- Moves whose destination is proved before the source goes -------
-    "src/core/brain/pending.ts": {
+    // (`src/core/brain/pending.ts` stopped being a site when the
+    // multi-lane queue moved the engine into `pending/pending-lanes.ts`
+    // and the module became a pure delegation surface.)
+    "src/core/brain/pending/pending-lanes.ts": {
       calls: ["unlinkSync"],
       recovery: UNARCHIVED_BRAIN,
       reason:
-        "`atomicCreateFileSyncExclusive` lands the inbox copy and throws on a name " +
-        "collision BEFORE the unlink runs, so the record exists twice at the moment " +
-        "the source is removed and never zero times.",
+        "the multi-lane queue's apply and reject, generalized from the A3 applier: " +
+        "apply exclusive-creates the decoded publish target and throws on an occupied " +
+        "name BEFORE the staged copy is unlinked, so the document exists twice at that " +
+        "instant and never zero times; reject writes the retire-shaped render through " +
+        "`writeFrontmatterAtomic` and refuses an occupied retired name before the " +
+        "staged copy goes, preserving every original field beside the retire stamps.",
     },
     "src/core/brain/preference.ts": {
       calls: ["unlinkSync"],
@@ -372,6 +378,16 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
         "replaced and the wrapping passphrase re-derives the key it protects - a lost " +
         "passphrase is the documented, permanent loss. The custody state sits outside " +
         "every snapshot archive by design.",
+    },
+    "src/core/brain/secrets/token-store.ts": {
+      calls: ["renameSync"],
+      recovery: UNARCHIVED_OUTSIDE,
+      reason:
+        "the tmp-plus-rename half of the per-agent MCP token store's write, which must " +
+        "land at mode 0600 at creation, so no shared writer serves it. The store is " +
+        "hash-at-rest by design: the bytes a rotation displaces are the previous hash " +
+        "and non-secret prefix, never a credential, and overwriting them is the rotate " +
+        "or revoke doing its job. Custody state sits outside every snapshot archive.",
     },
 
     // --- Two-phase accept with a journalled rollback ---------------------

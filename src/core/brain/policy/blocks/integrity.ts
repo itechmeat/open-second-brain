@@ -25,7 +25,11 @@ const BLOCK = "integrity";
  * once and reused by the validator, the unknown-key list, and the
  * resolver so the three can never disagree about what the block holds.
  */
-const INTEGRITY_GATE_KEYS = ["owner_scope_delivery", "embedding_abi"] as const;
+const INTEGRITY_GATE_KEYS = [
+  "owner_scope_delivery",
+  "embedding_abi",
+  "owner_scope_writes",
+] as const;
 
 /**
  * How long a context pack stays servable after it was built, when
@@ -52,7 +56,7 @@ export const PACK_VALIDITY_SECONDS_DEFAULT = 900;
  * Default `integrity:` block (context-integrity-gates). Absent block (or
  * absent individual keys) falls back here via `resolveIntegrity`.
  *
- * Both gate defaults are the modes that leave every existing vault
+ * Every gate default is the mode that leaves every existing vault
  * byte-identical:
  *   - `owner_scope_delivery: off` - the delivery path documents a "null
  *     scope is byte-identical" contract throughout, so defaulting a
@@ -62,9 +66,14 @@ export const PACK_VALIDITY_SECONDS_DEFAULT = 900;
  *     environments, so two peers on different sqlite-vec builds would
  *     each see a mismatch. Refusing by default risks a rebuild loop on a
  *     synced vault; reporting cannot.
+ *   - `owner_scope_writes: off` - callers name owners freely today
+ *     (importers restoring pages, surfaces that know better), and a
+ *     default that refused a foreign owner would break them on upgrade
+ *     instead of offering the operator a boundary to switch on.
  */
 export const BRAIN_INTEGRITY_DEFAULTS: ResolvedBrainIntegrityConfig = Object.freeze({
   owner_scope_delivery: GATE_MODE.off,
+  owner_scope_writes: GATE_MODE.off,
   embedding_abi: GATE_MODE.warn,
   pack_validity_seconds: PACK_VALIDITY_SECONDS_DEFAULT,
 }) as ResolvedBrainIntegrityConfig;
@@ -85,6 +94,7 @@ export const BRAIN_INTEGRITY_DEFAULTS: ResolvedBrainIntegrityConfig = Object.fre
  */
 export const BRAIN_INTEGRITY_STRICT_FALLBACK: ResolvedBrainIntegrityConfig = Object.freeze({
   owner_scope_delivery: GATE_MODE.fail,
+  owner_scope_writes: GATE_MODE.fail,
   embedding_abi: GATE_MODE.fail,
   pack_validity_seconds: PACK_VALIDITY_SECONDS_DEFAULT,
 }) as ResolvedBrainIntegrityConfig;
@@ -101,6 +111,7 @@ export function resolveIntegrity(cfg: BrainConfig): ResolvedBrainIntegrityConfig
   if (it === undefined) return BRAIN_INTEGRITY_DEFAULTS;
   return {
     owner_scope_delivery: it.owner_scope_delivery ?? BRAIN_INTEGRITY_DEFAULTS.owner_scope_delivery,
+    owner_scope_writes: it.owner_scope_writes ?? BRAIN_INTEGRITY_DEFAULTS.owner_scope_writes,
     embedding_abi: it.embedding_abi ?? BRAIN_INTEGRITY_DEFAULTS.embedding_abi,
     pack_validity_seconds:
       it.pack_validity_seconds ?? BRAIN_INTEGRITY_DEFAULTS.pack_validity_seconds,
@@ -111,6 +122,7 @@ export function resolveIntegrity(cfg: BrainConfig): ResolvedBrainIntegrityConfig
  * Shape:
  *   integrity:
  *     owner_scope_delivery: off | warn | fail   # default off
+ *     owner_scope_writes: off | warn | fail     # default off
  *     embedding_abi: off | warn | fail          # default warn
  *     pack_validity_seconds: 900                # positive integer
  *

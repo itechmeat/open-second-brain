@@ -36,6 +36,7 @@ import { mergePreferences } from "../../../src/core/brain/merge.ts";
 import { brainConfigPath, brainDirs, preferencePath } from "../../../src/core/brain/paths.ts";
 import { brainConfigKnownKeys } from "../../../src/core/brain/policy.ts";
 import { parsePreference, writePreference } from "../../../src/core/brain/preference.ts";
+import { queryDecisionLedger } from "../../../src/core/brain/permissions/ledger.ts";
 import { PLACEHOLDER_AGENT_VALUES } from "../../../src/core/agent-identity.ts";
 import { ownerStampFor } from "../../../src/core/graph/agent-scope.ts";
 import { writePreferenceTxn } from "../../../src/core/brain/preference-txn.ts";
@@ -99,14 +100,17 @@ afterEach(() => {
 });
 
 /** A bare vault: Brain directories and a `_brain.yaml`, nothing else. */
-function makeVault(name: string, gate: string | null, agent = SELF): string {
+function makeVault(name: string, gate: string | null, agent = SELF, writesGate?: string): string {
   const vault = join(tmp, name);
   for (const sub of ["preferences", "retired", "inbox", "log"]) {
     mkdirSync(join(vault, "Brain", sub), { recursive: true });
   }
+  const integrityLines =
+    (gate === null ? "" : `  owner_scope_delivery: ${gate}\n`) +
+    (writesGate === undefined ? "" : `  owner_scope_writes: ${writesGate}\n`);
   atomicWriteFileSync(
     brainConfigPath(vault),
-    `schema_version: 1\n${gate === null ? "" : `integrity:\n  owner_scope_delivery: ${gate}\n`}`,
+    `schema_version: 1\n${integrityLines === "" ? "" : `integrity:\n${integrityLines}`}`,
   );
   const configPath = join(tmp, `${name}-config.yaml`);
   atomicWriteFileSync(configPath, `vault: ${vault}\nagent_name: ${agent}\n`);
@@ -332,13 +336,124 @@ test("gate off vs gate fail: the only files that differ are the preferences", ()
   expect(differing.length).toBeGreaterThan(0);
 });
 
+// ----- The owner-write gate (write-side-trust): a named owner is a claim ------
+//
+// `integrity.owner_scope_writes` is the write-side sibling of the delivery
+// gate above: under `fail` an explicit `owner:` that disagrees with the
+// resolved identity refuses, under `warn` it passes with one decision-ledger
+// row, and under `off` (or with no document) nothing here changes - which is
+// why every test above still runs with the key absent and passes untouched.
+
+test("owner-write gate fail: an explicit owner other than the resolved identity refuses", () => {
+  const vault = makeVault("ow-fail", GATE_MODE.fail, SELF, GATE_MODE.fail);
+  let message = "";
+  try {
+    writePreference(vault, { ...prefInput("claimed"), owner: OTHER });
+  } catch (err) {
+    message = (err as Error).message;
+  }
+  expect(message).toContain("owner-write-refused");
+  expect(message).toContain(OTHER);
+  expect(message).toContain(SELF);
+  expect(message).toContain("integrity.owner_scope_writes");
+  expect(existsSync(preferencePath(vault, "claimed"))).toBe(false);
+});
+
+test("owner-write gate warn: a cross-owner write is allowed with exactly one ledger row", () => {
+  const vault = makeVault("ow-warn", GATE_MODE.off, SELF, GATE_MODE.warn);
+  writePreference(vault, { ...prefInput("watched"), owner: OTHER });
+  expect(ownerOf(vault, "watched")).toBe(OTHER);
+
+  const rows = queryDecisionLedger(vault, { action: "owner_write" });
+  expect(rows.length).toBe(1);
+  expect(rows[0]!.source).toBe("integrity.owner_scope_writes");
+  expect(rows[0]!.verdict).toBe(GATE_MODE.warn);
+  expect(rows[0]!.actor).toBe(SELF);
+  expect(rows[0]!.target.replaceAll("\\", "/")).toBe("Brain/preferences/pref-watched.md");
+  expect(rows[0]!.reason).toContain(OTHER);
+});
+
+test("owner-write gate warn: a matching-identity explicit owner logs no ledger row", () => {
+  const vault = makeVault("ow-warn-self", GATE_MODE.off, SELF, GATE_MODE.warn);
+  writePreference(vault, { ...prefInput("own-claim"), owner: SELF });
+  expect(ownerOf(vault, "own-claim")).toBe(SELF);
+  expect(queryDecisionLedger(vault, {})).toEqual([]);
+});
+
+test("owner-write gate: an unreadable Brain config fails closed on a cross-owner claim", () => {
+  const vault = makeVault("ow-unreadable", GATE_MODE.off, SELF, GATE_MODE.warn);
+  atomicWriteFileSync(brainConfigPath(vault), "schema_version: 1\nintegrity: [ this is not yaml\n");
+
+  let message = "";
+  try {
+    writePreference(vault, { ...prefInput("closed"), owner: OTHER });
+  } catch (err) {
+    message = (err as Error).message;
+  }
+  expect(message).toContain("owner-write-refused");
+  expect(existsSync(preferencePath(vault, "closed"))).toBe(false);
+});
+
+test("owner-write gate: an unreadable Brain config still passes the caller's own owner", () => {
+  // The strict fallback resolves the gate to `fail`, and `fail` refuses
+  // only the disagreement - a claim that agrees is not a boundary case,
+  // so the fallback must not turn every explicit owner into a refusal.
+  const vault = makeVault("ow-unreadable-own", GATE_MODE.off, SELF, GATE_MODE.warn);
+  atomicWriteFileSync(brainConfigPath(vault), "schema_version: 1\nintegrity: [ this is not yaml\n");
+
+  writePreference(vault, { ...prefInput("agreeing"), owner: SELF });
+  expect(ownerOf(vault, "agreeing")).toBe(SELF);
+});
+
+test("owner-write gate: a document denying owner_write refuses even with the gate off", () => {
+  const vault = makeVault("ow-doc-deny", GATE_MODE.off, SELF);
+  atomicWriteFileSync(
+    join(vault, "Brain", "_permissions.yaml"),
+    "version: 1\ndefault_action: deny\n",
+  );
+
+  let message = "";
+  try {
+    writePreference(vault, { ...prefInput("denied"), owner: OTHER });
+  } catch (err) {
+    message = (err as Error).message;
+  }
+  expect(message).toContain("owner-write-refused");
+  expect(existsSync(preferencePath(vault, "denied"))).toBe(false);
+});
+
+test("owner-write gate: a document allow cannot talk a fail gate out of the refusal", () => {
+  const vault = makeVault("ow-doc-allow", GATE_MODE.off, SELF, GATE_MODE.fail);
+  atomicWriteFileSync(
+    join(vault, "Brain", "_permissions.yaml"),
+    `version: 1\ndefault_action: allow\nagents:\n  ${SELF}:\n    owner_write: allow\n`,
+  );
+
+  let message = "";
+  try {
+    writePreference(vault, { ...prefInput("still-refused"), owner: OTHER });
+  } catch (err) {
+    message = (err as Error).message;
+  }
+  expect(message).toContain("owner-write-refused");
+  expect(existsSync(preferencePath(vault, "still-refused"))).toBe(false);
+});
+
 // ----- No new config key ------------------------------------------------------
 
+/**
+ * Owner stamping itself adds no config key: it rides
+ * `integrity.owner_scope_delivery`, which predates it. The block holds one
+ * further gate key since write-side-trust (`owner_scope_writes`, the
+ * write-side sibling this file's gate-on cases exercise); the list here is
+ * the whole block, so that key is pinned alongside rather than hidden.
+ */
 test("owner stamping adds no config key: the integrity block is unchanged", () => {
   const known = brainConfigKnownKeys();
   expect([...(known.subKeys.get("integrity") ?? [])].toSorted()).toEqual([
     "embedding_abi",
     "owner_scope_delivery",
+    "owner_scope_writes",
     "pack_validity_seconds",
   ]);
 });

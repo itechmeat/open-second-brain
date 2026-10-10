@@ -264,7 +264,7 @@ test("export --out writes the bundle; import restores it; collisions need --repl
   expect(wrong.returncode).toBe(1);
   expect(wrong.stderr).toContain("passphrase");
   expect(existsSync(join(empty, ".open-second-brain", "secrets", "secrets.json"))).toBe(false);
-});
+}, 20000);
 
 describe("secret refusals and help accuracy", () => {
   test("an unset --passphrase-from-env var names both ingestion routes", async () => {

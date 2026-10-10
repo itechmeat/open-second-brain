@@ -210,7 +210,7 @@ describe("states this task deliberately leaves silent", () => {
       env: { OPEN_SECOND_BRAIN_CONFIG: config },
     });
     expect(r.returncode).toBe(0);
-    expect(r.stdout).toBe("no pending signals\n");
+    expect(r.stdout).toBe("no entries in any review lane\n");
   });
 
   test("a query that matched nothing on a healthy index names nothing", async () => {

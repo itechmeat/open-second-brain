@@ -292,8 +292,19 @@ through unchanged:
 - the frozen-vault refusal `vault_frozen`, the write-binding refusal
   `write-binding-refused`, the reach refusal `caller-supplied-reach`, and
   the owner-scope refusals `foreign-owner` and `unresolved-identity`;
+- the permissions-document write refusals (since 1.79.0): `write-refused`
+  (a document rule denied the write) and
+  `force-confirmed-requires-allow` (`force_confirmed` skipped the dream
+  trial window while the caller's document `write` verdict is not
+  `allow`); both resolve `next_command: "o2b brain permissions show"`,
+  the same re-derive loop the `permissions-unreadable` doctor finding
+  uses. The owner-write gate refuses with `owner_write_refused` (below)
+  and names the fix in its message: name the caller's own resolved
+  identity, or write without an explicit owner;
 - the codes of write batches (`budget_exceeded`, `invalid_action`,
-  `invalid_target`, ...), note creation, note lifecycle, note revert,
+  `invalid_target`, ..., and since 1.79.0 the frontmatter
+  `owner_write_refused` guard), note creation (which carries the same
+  `owner_write_refused` guard), note lifecycle, note revert,
   stub scaffolding, note title resolution, note templates, pinned
   context, exact state, host memory writes, the count guard
   (`count_guard`), and the shared `config_invalid` and
@@ -307,7 +318,8 @@ The canonical list is `TOOL_ERROR_CODES` in `src/mcp/tool-error-codes.ts`.
 
 **Casing follows the vocabulary.** New tokens are lower snake_case. A
 code that was already on the wire keeps its spelling: search codes stay
-UPPER_SNAKE, the write-binding, reach and owner-scope refusals stay
+UPPER_SNAKE, the write-binding, reach, owner-scope and permissions-document
+write refusals stay
 kebab-case, and the `brain_expire` refusals keep their class names. Nothing was
 renamed, so a client that already matched `vault_frozen` or
 `budget_exceeded` keeps working.
@@ -714,8 +726,9 @@ Optional flags:
 
 The stdio server logs its banner to `stderr` and only writes JSON-RPC frames to
 `stdout`, so it is safe to use as a subprocess in any MCP client. HTTP refuses
-to start when `--host` is not loopback and no key was given (`--api-key` or
-`OPEN_SECOND_BRAIN_MCP_API_KEY`); with a key
+to start when `--host` is not loopback and neither a key (`--api-key` or
+`OPEN_SECOND_BRAIN_MCP_API_KEY`) nor a non-empty agent-token map is present;
+with a key
 configured it checks that key on every request using a generic constant-time
 comparison, and returns the same `401 Unauthorized` body for a
 missing or wrong key. JSON responses are the default; clients that send
@@ -723,6 +736,33 @@ missing or wrong key. JSON responses are the default; clients that send
 JSON-RPC response — one event, then the connection closes, which is why a
 progress token sent over HTTP is refused by name rather than honoured (see
 "Progress notifications" above).
+
+Since 1.79.0 the HTTP transport also answers per-agent credentials. `o2b mcp
+token mint` (or `o2b bootstrap --token`) mints a named token per agent into
+the vault's hash-at-rest store (`.open-second-brain/secrets/mcp-tokens.json`;
+only a sha-256 hash and a non-secret prefix are stored, the material is shown
+exactly once). A request whose `Authorization: Bearer` or `X-API-Key`
+credential matches a stored token authenticates as that token's agent for
+that one request - identity threads as a request parameter, never as server
+state, so concurrent callers with different tokens never observe each other's
+identity. The token map is consulted before the shared key; the shared key
+keeps authenticating with the process's configured agent name; and a revoked
+or unknown token gets the same generic `401` body as a missing credential, so
+no oracle distinguishes them. Rotation and revocation take effect on the next
+request with no server restart (the store is read per request behind an mtime
+cache; the shared key keeps its launch-time capture). The gate
+`mcp_tokens_required` (device config key or
+`OPEN_SECOND_BRAIN_MCP_TOKENS_REQUIRED`, default `false`) makes the endpoint
+refuse credential-less requests whenever a non-empty token map exists; with
+the key absent every credential-less posture - loopback keyless, non-loopback
+keyed - is unchanged, and one corner tightens everywhere: a presented
+credential that matches neither the token map nor the shared key is refused
+with the same generic `401` instead of degrading to anonymous, so a stale or
+forged bearer can never ride the keyless loopback posture. stdio identity
+stays config-derived (one caller per
+process that already owns the process tree). A token mints identity only,
+never reach: tool profiles and the reach ceiling still bind every caller
+regardless of credential.
 
 ## Shutdown and draining (since v1.50.0)
 
@@ -1521,7 +1561,11 @@ format characters), when it contains NUL, or when it exceeds the cap.
   `brain_lifecycle` (tombstone / supersede / temporal-replace / tip /
   curator), `brain_claims` (claim-graph queries: current truth,
   truth-at-instant, replaced-by, contested-by), `brain_decision`
-  (record / outcome / rate / list / compare / similar / history / recall),
+  (record / outcome / rate / list / compare / similar / history / recall,
+  plus the open-decision actions open / list_open / show_open / resolve /
+  discard that park a question with enumerated options at
+  `Brain/decisions/open-<slug>.md` and later mint the real decision page
+  through `resolve`),
   and `brain_tension` (detect / list / show / confirm / dismiss / resolve).
   Decision-change receipts store only accountable provenance; free-text
   hidden-reasoning fields are rejected by the closed schema.

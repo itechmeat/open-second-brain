@@ -6,6 +6,8 @@ import { join } from "node:path";
 
 import { JSONRPC_VERSION, PROTOCOL_VERSION, startHttp } from "../../src/mcp/index.ts";
 import { MCPServer } from "../../src/mcp/server.ts";
+import { mintAgentToken } from "../../src/core/brain/secrets/token-store.ts";
+import { fakeCredential } from "../helpers/fake-credentials.ts";
 
 interface RawResponse {
   readonly status: number;
@@ -67,13 +69,16 @@ function rpc(method: string, id: number, params: Record<string, unknown> = {}) {
 async function post(
   url: string,
   body: unknown,
-  opts: { key?: string; accept?: string } = {},
+  opts: { key?: string; accept?: string; header?: "authorization" | "x-api-key" } = {},
 ): Promise<Response> {
   const headers: Record<string, string> = {
     "content-type": "application/json",
     accept: opts.accept ?? "application/json",
   };
-  if (opts.key !== undefined) headers.authorization = `Bearer ${opts.key}`;
+  if (opts.key !== undefined) {
+    if (opts.header === "x-api-key") headers["x-api-key"] = opts.key;
+    else headers.authorization = `Bearer ${opts.key}`;
+  }
   return fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
 }
 
@@ -313,6 +318,53 @@ describe("Streamable HTTP MCP transport", () => {
     } finally {
       stderr.mockRestore();
       dispatch.mockRestore();
+      await handle.close();
+    }
+  });
+});
+
+// Identity-positive cases only (write-side-trust, Task 7): a minted
+// per-agent token authenticates exactly where the shared key does. The
+// per-caller identity behaviour lives in `http-token-auth.test.ts` and
+// the owner-scope suite; this block pins only the transport acceptance.
+describe("HTTP transport with a minted agent token", () => {
+  test("a minted token round-trips initialize and tools/list like the shared key", async () => {
+    const { tokenMaterial } = mintAgentToken(vault, "mcp_token_transport", "transport-agent");
+    const handle = await startHttp({ vault }, { host: "127.0.0.1", port: 0 });
+    try {
+      const initRes = await post(
+        handle.url,
+        rpc("initialize", 1, { protocolVersion: PROTOCOL_VERSION, capabilities: {} }),
+        { key: tokenMaterial },
+      );
+      expect(initRes.status).toBe(200);
+      const init = await responseJson(initRes);
+      expect(init.result.protocolVersion).toBe(PROTOCOL_VERSION);
+      const listRes = await post(handle.url, rpc("tools/list", 2), { key: tokenMaterial });
+      const list = await responseJson(listRes);
+      expect(Array.isArray(list.result.tools)).toBe(true);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  test("a token through x-api-key authenticates; an unknown credential does not", async () => {
+    const { tokenMaterial } = mintAgentToken(vault, "mcp_token_transport", "transport-agent");
+    const handle = await startHttp(
+      { vault },
+      { apiKey: fakeCredential("hdr", "-key-", "44b2"), host: "127.0.0.1", port: 0 },
+    );
+    try {
+      const viaHeader = await post(handle.url, rpc("ping", 1), {
+        key: tokenMaterial,
+        header: "x-api-key",
+      });
+      expect(viaHeader.status).toBe(200);
+      const unknown = await post(handle.url, rpc("ping", 2), {
+        key: fakeCredential("osbt_", "unknown-transport"),
+      });
+      expect(unknown.status).toBe(401);
+    } finally {
       await handle.close();
     }
   });

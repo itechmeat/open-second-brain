@@ -63,6 +63,7 @@ import { WriteBatchError } from "../core/brain/write-batch.ts";
 import { ConfigReadError } from "../core/config.ts";
 import { SEARCH_ERROR_CODES, SearchError } from "../core/search/search-error.ts";
 import { WRITE_BINDING_REFUSED_CODE } from "../core/write-binding/index.ts";
+import { WRITE_REFUSAL_CODES } from "../core/brain/pending/pending-lanes.ts";
 import { VAULT_FROZEN_REFUSAL } from "./frozen-refusal.ts";
 import { OWNER_SCOPE_REFUSALS } from "./owner-scope-refusal.ts";
 import {
@@ -177,6 +178,7 @@ const WRITE_BATCH_CODES = exhaustiveMembers<WriteBatchErrorCode>()([
   "target_frontmatter_lossy",
   "blank_overwrite_refused",
   "reserved_frontmatter_key",
+  "owner_write_refused",
   "duplicate_target",
   "too_many_operations",
   "preference_not_found",
@@ -195,6 +197,7 @@ const CREATE_NOTE_CODES = exhaustiveMembers<CreateNoteErrorCode>()([
   "invalid_template",
   "write_binding",
   "config_invalid",
+  "owner_write_refused",
 ]);
 
 const NOTE_LIFECYCLE_CODES = exhaustiveMembers<NoteLifecycleErrorCode>()([
@@ -268,6 +271,7 @@ export const TOOL_ERROR_CODES = Object.freeze([
     ...Object.values(SEMANTIC_VIOLATION_CODES),
     VAULT_FROZEN_REFUSAL,
     WRITE_BINDING_REFUSED_CODE,
+    ...Object.values(WRITE_REFUSAL_CODES),
     REACH_REFUSAL,
     ...OWNER_SCOPE_REFUSALS,
     ...WRITE_BATCH_CODES,

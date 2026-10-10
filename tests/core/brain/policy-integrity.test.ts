@@ -36,11 +36,15 @@ function validate(yaml: string) {
 }
 
 const HEAD = `schema_version: 1\n`;
-const GATE_KEYS = ["owner_scope_delivery", "embedding_abi"] as const;
+const GATE_KEYS = ["owner_scope_delivery", "embedding_abi", "owner_scope_writes"] as const;
 
 describe("BRAIN_INTEGRITY_DEFAULTS", () => {
   test("owner_scope_delivery defaults to off so no existing vault narrows", () => {
     expect(BRAIN_INTEGRITY_DEFAULTS.owner_scope_delivery).toBe(GATE_MODE.off);
+  });
+
+  test("owner_scope_writes defaults to off so callers naming owners freely keep working", () => {
+    expect(BRAIN_INTEGRITY_DEFAULTS.owner_scope_writes).toBe(GATE_MODE.off);
   });
 
   test("embedding_abi defaults to warn (vec_version is not stable across peers)", () => {
@@ -79,21 +83,24 @@ describe("integrity config block", () => {
     expect(warnings.length).toBe(0);
   });
 
-  test("present with all three fields → loaded fully", () => {
+  test("present with all fields → loaded fully", () => {
     const { config } = validate(
       HEAD +
         `integrity:\n` +
         `  owner_scope_delivery: fail\n` +
+        `  owner_scope_writes: warn\n` +
         `  embedding_abi: off\n` +
         `  pack_validity_seconds: 60\n`,
     );
     expect(config.integrity).toEqual({
       owner_scope_delivery: "fail",
+      owner_scope_writes: "warn",
       embedding_abi: "off",
       pack_validity_seconds: 60,
     });
     expect(resolveIntegrity(config)).toEqual({
       owner_scope_delivery: "fail",
+      owner_scope_writes: "warn",
       embedding_abi: "off",
       pack_validity_seconds: 60,
     });
@@ -113,8 +120,10 @@ describe("integrity config block", () => {
     const { config } = validate(HEAD + `integrity:\n  owner_scope_delivery: warn\n`);
     expect(config.integrity?.owner_scope_delivery).toBe("warn");
     expect(config.integrity?.embedding_abi).toBeUndefined();
+    expect(config.integrity?.owner_scope_writes).toBeUndefined();
     const resolved = resolveIntegrity(config);
     expect(resolved.owner_scope_delivery).toBe("warn");
+    expect(resolved.owner_scope_writes).toBe(BRAIN_INTEGRITY_DEFAULTS.owner_scope_writes);
     expect(resolved.embedding_abi).toBe(BRAIN_INTEGRITY_DEFAULTS.embedding_abi);
     expect(resolved.pack_validity_seconds).toBe(BRAIN_INTEGRITY_DEFAULTS.pack_validity_seconds);
   });
@@ -240,6 +249,15 @@ describe("loadIntegrityConfigSafe distinguishes absent from unreadable", () => {
     const resolved = loadIntegrityConfigSafe(vault);
     expect(resolved.owner_scope_delivery).not.toBe(GATE_MODE.off);
     expect(resolved).toEqual(BRAIN_INTEGRITY_STRICT_FALLBACK);
+  });
+
+  test("an unreadable config closes the write gate too, never opens it", () => {
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\nnotes: [ nope\n",
+      "utf8",
+    );
+    expect(loadIntegrityConfigSafe(vault).owner_scope_writes).toBe(GATE_MODE.fail);
   });
 
   test("an unreadable config is nameable rather than silent", () => {

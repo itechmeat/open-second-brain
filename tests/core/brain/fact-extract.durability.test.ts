@@ -152,4 +152,28 @@ describe("routeExtractedFacts durability gate", () => {
     expect(result.created).toBe(2);
     expect(result.durabilityRejected).toBe(0);
   });
+
+  test("ambient consent off short-circuits the capture BEFORE the durability gate", () => {
+    // Suppression is a capture-boundary decision (Task 11), not a per-fact
+    // gate: with `guardrails.ambient_writeback: false` nothing is classified,
+    // so even a transient fact is never durability-counted or skip-logged -
+    // the whole capture is withheld under one `ambient-withheld` event.
+    const result = routeExtractedFacts(vault, {
+      facts: [
+        { family: "quantity", text: "load 500ms render 200ms", line: 1 }, // transient
+        { family: "url", text: "https://techmeat.dev", line: 2 }, // durable
+      ],
+      agent: "claude-dev-agent",
+      now: NOW,
+      sessionRef: "session#turn-5",
+      dedup: new Map(),
+      ambientWriteback: false,
+    });
+    expect(result.created).toBe(0);
+    expect(result.durabilityRejected).toBe(0);
+    expect(result.ambientWithheld).toBe(2);
+    const log = readLogDay(vault, "2026-07-18");
+    expect(log.entries.some((e) => e.eventType === "durability-skip")).toBe(false);
+    expect(log.entries.filter((e) => e.eventType === "ambient-withheld").length).toBe(1);
+  });
 });

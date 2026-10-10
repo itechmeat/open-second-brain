@@ -512,13 +512,26 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "archives a closed obligation; the fallback arm writes the copy through " +
       "`atomicWriteFileSync` and removes the source.",
   },
-  "src/core/brain/pending.ts": {
+  "src/core/brain/pending/pending-lanes.ts": {
     categories: [C.lifecycleMove],
     calls: ["unlinkSync"],
     reason:
-      "removes the source only AFTER `atomicCreateFileSyncExclusive` landed the " +
-      "destination, so the exclusive create is the real gate and the unlink cannot " +
-      "lose the record.",
+      "the multi-lane queue's two exits, generalized from the A3 applier: apply " +
+      "exclusive-creates the decoded publish target and refuses an occupied name " +
+      "BEFORE the unlink, so the record exists twice at that instant and never zero " +
+      "times; reject lands the retire-shaped render through `writeFrontmatterAtomic` " +
+      "refusing an occupied retired name before the staged copy goes. Its write half " +
+      "is the shared writer class (`atomicWriteFileSync`, `atomicCreateFileSyncExclusive`); " +
+      "the unlink is the only direct call.",
+  },
+  "src/core/brain/permissions/ledger.ts": {
+    categories: [C.appendOnlyLedger, C.lockPrimitive],
+    calls: ["writeFileSync"],
+    reason:
+      "`writeFileSync(..., { flag: 'a' })` inside the per-shard `proper-lockfile`: one " +
+      "decision-ledger row per gate verdict, appended to the device's month shard. " +
+      "Append-only on the idempotency-ledger model - nothing is ever rewritten, so " +
+      "the shared writer class has no rewrite to route.",
   },
   "src/core/brain/preference.ts": {
     categories: [C.lifecycleMove],
@@ -792,6 +805,18 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "would leave the secrets file world-readable for the length of the swap. " +
       "`chmodSync` re-applies that 0600 on load to a store that arrived with a copied " +
       "or restored vault, the same custody repair the keyfile beside it gets.",
+  },
+  "src/core/brain/secrets/token-store.ts": {
+    categories: [C.machineArtifact],
+    calls: ["renameSync", "writeFileSync"],
+    reason:
+      "hand-rolled tmp-plus-rename for the same reason its sibling store uses one: " +
+      "the mcp-tokens.json swap must land at mode 0600 at CREATION, which " +
+      "`atomicWriteFileSync` cannot express, and routing it through the shared " +
+      "writer would leave the hash-at-rest store world-readable for the length of " +
+      "the swap. The write also drops the module's own mtime-cache entry - the " +
+      "invalidation that lets a CLI-side rotation reach a running server on its " +
+      "next resolve - which no shared writer knows to do.",
   },
   "src/core/brain/secrets/envelope.ts": {
     categories: [C.machineArtifact],
@@ -1250,8 +1275,15 @@ const DIRECT_ROWS = ROWS.filter((row) => row.directCalls.length > 0);
  * 77 -> 78: `src/core/brain/secrets/envelope.ts` replaces the raw keyfile
  * with the passphrase-wrapped envelope (tmp-plus-rename at 0600), the
  * custody-boundary twin of the store and keyfile rows beside it.
+ *
+ * 78 -> 79: `src/core/brain/secrets/token-store.ts` writes the per-agent
+ * MCP token store (tmp-plus-rename at 0600), the third custody row.
+ *
+ * 79 -> 80: the note-lane owner-frontmatter guard (write-side-trust Task 13)
+ * gives `src/core/brain/notes/create-note.ts` a direct-fs write site for the
+ * decision-ledger warn row.
  */
-const DIRECT_WRITE_ROWS = 78;
+const DIRECT_WRITE_ROWS = 80;
 
 /**
  * Measured modules reaching a write through a shared helper. An equality.
@@ -1324,8 +1356,14 @@ const DIRECT_WRITE_ROWS = 78;
  * 111 -> 112: `src/cli/brain/verbs/secret.ts` writes the exported
  * credential bundle to the operator-named `--out` through
  * `atomicWriteFileSync` (an egress destination, not a vault note).
+ *
+ * 112 -> 113: `src/cli/bootstrap/receipt.ts` writes the bootstrap receipt
+ * through `atomicWriteFileSync` (custody state, not a vault note).
+ *
+ * 113 -> 114: the decision ledger appends its month/device JSONL shard
+ * through the shared atomic writer (write-side-trust Task 2).
  */
-const SHARED_HELPER_ROWS = 112;
+const SHARED_HELPER_ROWS = 114;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1398,8 +1436,10 @@ const STAMPED_PATHS: ReadonlySet<string> = new Set(
  * 74 -> 75: the doctor self-test's throwaway-store writes (temp storage).
  * 75 -> 76: the freshen-on-read claim and its release (state, not notes).
  * 76 -> 77: the secrets keyfile envelope swap (custody bytes, not notes).
+ * 77 -> 78: the per-agent MCP token store's custody swap (hash-at-rest
+ *   state, not notes).
  */
-const UNSTAMPED_DIRECT_ROWS = 77;
+const UNSTAMPED_DIRECT_ROWS = 79;
 
 /**
  * Shared-helper write sites the stamp does not reach, measured the same
@@ -1417,9 +1457,13 @@ const UNSTAMPED_DIRECT_ROWS = 77;
  * 107 -> 108: the correction sweep retires its target's frontmatter through
  * the shared atomic frontmatter writer. 108 -> 109: the credential-bundle
  * export writes the operator-named `--out` through the shared atomic writer
- * (an egress destination, and no origin stamp on exports).
+ * (an egress destination, and no origin stamp on exports). 109 -> 110: the
+ * bootstrap receipt writes `<vault>/.open-second-brain/bootstrap.lock.json`
+ * through the shared atomic writer (custody state, not notes). 110 -> 111:
+ * the decision ledger appends its month/device JSONL shard through the shared
+ * atomic writer (write-side-trust Task 2).
  */
-const UNSTAMPED_SHARED_ROWS = 109;
+const UNSTAMPED_SHARED_ROWS = 111;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {
