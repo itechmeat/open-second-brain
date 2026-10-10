@@ -3871,7 +3871,12 @@ function wrapKeyfile(keyPath, passphrase, dek, seams = {}) {
       throw new SecretEnvelopeError(ENVELOPE_REFUSAL_CODES.malformed, keyPath, "the written envelope does not unwrap to the key it wraps");
     }
   } catch (err) {
-    writeRawKeyfileBytes(keyPath, dek);
+    try {
+      writeRawKeyfileBytes(keyPath, dek);
+    } catch (restoreErr) {
+      process.stderr.write(`warning: could not restore the raw keyfile after a failed read-back check: ` + `${keyPath}: ${restoreErr instanceof Error ? restoreErr.message : String(restoreErr)}
+`);
+    }
     throw err;
   }
   restrictToOwner(keyPath, "file", process.platform, true);
