@@ -241,7 +241,12 @@ describe("the keyfile envelope", () => {
     expect(readFileSync(keyPath).equals(dek)).toBe(true);
     expect(isEnvelopeFile(keyPath)).toBe(false);
     expect(loadOrCreateKey(keyPath).equals(dek)).toBe(true);
-    expect((statSync(keyPath).mode & 0o777).toString(8)).toBe("600");
+    // Windows reports every mode as 666 and enforces none: the owner-only
+    // mode is a POSIX property of the restore, pinned only where the
+    // platform honours file modes.
+    if (process.platform !== "win32") {
+      expect((statSync(keyPath).mode & 0o777).toString(8)).toBe("600");
+    }
   });
 
   test("a wrapped store unlocks from the environment once and the variable is consumed", () => {

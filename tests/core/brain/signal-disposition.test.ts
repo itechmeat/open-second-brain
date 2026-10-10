@@ -99,7 +99,7 @@ describe("writeSignal under a permissions document", () => {
     // The config identity is allowed: the signal publishes.
     const res = writeSignal(vault, INPUT);
     expect(res.staged).toBe(false);
-    expect(res.path).toContain("Brain/inbox");
+    expect(res.path.replaceAll("\\", "/")).toContain("Brain/inbox");
     // A credential-minted subject the document denies is refused with the
     // same typed refusal, one row naming ITS agent.
     let refused: WriteRefusedError | undefined;
@@ -144,7 +144,7 @@ describe("writeSignal under a permissions document", () => {
     writeDoc("version: 1\ndefault_action: allow\n");
     const res = writeSignal(vault, INPUT);
     expect(res.staged).toBe(false);
-    expect(res.path).toContain("Brain/inbox");
+    expect(res.path.replaceAll("\\", "/")).toContain("Brain/inbox");
     expect(queryDecisionLedger(vault)).toEqual([]);
     writeDoc("version: 1\ndefault_action: allow\nledger:\n  record_allows: true\n");
     const second = writeSignal(vault, { ...INPUT, slug: "prefer-tests-2" });

@@ -26,6 +26,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+
+const IS_WINDOWS = process.platform === "win32";
 import { join } from "node:path";
 
 import { listSecrets, secretsDir, setSecret } from "../../src/core/brain/secrets/store.ts";
@@ -139,7 +141,15 @@ describe("resolveNamedSecret", () => {
     expect(resolveNamedSecret(vault, "$secret:ENV_CASE")).toBe(ENV_VALUE);
     delete process.env["ENV_CASE"];
     process.env["env_case"] = ENV_VALUE;
-    expect(() => resolveNamedSecret(vault, "$secret:ENV_CASE")).toThrow(SecretReferenceError);
+    // Windows resolves environment names case-insensitively at the OS level,
+    // so the lower-case variable answers the upper-case reference there; the
+    // case-sensitive contract is a POSIX property and is pinned only where
+    // the platform honours it.
+    if (!IS_WINDOWS) {
+      expect(() => resolveNamedSecret(vault, "$secret:ENV_CASE")).toThrow(SecretReferenceError);
+    } else {
+      expect(resolveNamedSecret(vault, "$secret:ENV_CASE")).toBe(ENV_VALUE);
+    }
   });
 
   test("a locked store surfaces the named locked error, never the env value", () => {
