@@ -49,6 +49,7 @@ import {
 import { ensureInsideVault } from "../../path-safety.ts";
 import { parseFrontmatter, writeFrontmatterAtomic } from "../../vault.ts";
 import type { FrontmatterMap } from "../../types.ts";
+import { appendDecisionLedger } from "../permissions/ledger.ts";
 import type { PermissionSubject } from "../permissions/resolve.ts";
 import type { BrainDirs } from "../paths.ts";
 import { BRAIN_INBOX_REL, BRAIN_SOURCES_REL, brainDirs, brainDirsForWrite } from "../paths.ts";
@@ -309,11 +310,36 @@ export interface StageForReviewResult {
 }
 
 /**
+ * The publish target of the new stage is already staged for review under
+ * another OPEN queue entry. Named rather than silently replaced: two
+ * entries decoding to one target would apply into a conflict (the second
+ * apply refuses an occupied target the first created), and two same-day
+ * stagings of one path would otherwise overwrite each other's bytes with
+ * nothing naming the lost proposal. The refusal names the open entry the
+ * operator has to apply or reject first.
+ */
+export class PendingStageConflictError extends Error {
+  /** The pending id already holding the target. */
+  readonly existingId: string;
+  readonly target: string;
+  constructor(target: string, existingId: string) {
+    super(
+      `publish target ${JSON.stringify(target)} is already staged for review as ` +
+        `${JSON.stringify(existingId)}; apply or reject that entry before staging ` +
+        "new bytes for the same target",
+    );
+    this.name = "PendingStageConflictError";
+    this.existingId = existingId;
+    this.target = target;
+  }
+}
+
+/**
  * Stage one write for review: write `render()`'s bytes VERBATIM into the
  * lane's pending directory under the vault-identity write guard, named
- * by the lane's deterministic pending id. Re-staging the same target
- * replaces the staged bytes - the pending document always holds the
- * latest proposed bytes, and apply publishes exactly what is on disk.
+ * by the lane's deterministic pending id. A target already held by an
+ * open entry refuses with {@link PendingStageConflictError} - the queue
+ * never silently replaces one proposal with another.
  */
 export function stageForReview(
   vault: string,
@@ -347,6 +373,17 @@ export function stageForReview(
         "the queue could not list or apply",
       publishTarget,
     );
+  }
+  // One open entry per publish target. The comparison is on the DECODED
+  // target, so it catches the two-day case (two ids, one target) as well
+  // as the same-day one (one id, silently rewritten bytes); an unreadable
+  // entry names no target and so holds none.
+  for (const path of laneDirFiles(laneDir)) {
+    const entry = readLaneEntry(vault, lane, path);
+    if (entry.unreadableReason !== undefined) continue;
+    if (entry.publishTarget === publishTarget) {
+      throw new PendingStageConflictError(publishTarget, entry.id);
+    }
   }
   const stagedPath = ensureInsideVault(join(laneDir, `${pendingId}.md`), vault);
   const composed = `${pendingId}.md`;
@@ -495,6 +532,15 @@ export function listPendingLane(vault: string, lane: ReviewLane | "all"): Pendin
 export interface PendingLaneApplyOptions {
   /** True previews the move and writes nothing; false performs it. */
   readonly dryRun?: boolean;
+  /**
+   * The identity resolving the door, for the resolution row the apply
+   * appends. Absent means the operator surface answered and the row
+   * records that; a caller that resolved a credential hands its agent
+   * through (`via` beside it).
+   */
+  readonly actor?: string;
+  /** The credential path `actor` arrived by. Absent means the operator. */
+  readonly via?: PermissionSubject["via"];
 }
 
 export interface PendingLaneApplyResult {
@@ -509,6 +555,10 @@ export interface PendingLaneRejectOptions {
   readonly dryRun?: boolean;
   /** Injected clock for a deterministic `retired_at`. Defaults to now. */
   readonly now?: Date;
+  /** The identity resolving the door, for the resolution row. See {@link PendingLaneApplyOptions.actor}. */
+  readonly actor?: string;
+  /** The credential path `actor` arrived by. Absent means the operator. */
+  readonly via?: PermissionSubject["via"];
 }
 
 export interface PendingLaneRejectResult {
@@ -531,6 +581,44 @@ function pendingLaneFilePath(vault: string, id: string, forWrite: boolean): stri
   const dirs = forWrite ? brainDirsForWrite(vault) : brainDirs(vault);
   const laneDir = pendingLaneDirIn(dirs, laneOfId(id));
   return ensureInsideVault(join(laneDir, `${id}.md`), vault);
+}
+
+/** The `source` spelling every resolution row carries. */
+const REVIEW_DOOR_SOURCE = "review-door";
+
+/**
+ * Append the ONE decision-ledger resolution row a real apply or reject
+ * owes (the audit trail of the approval door). A preview writes nothing,
+ * so it records nothing either. Never throws: a row that cannot land
+ * surfaces as a named stderr line, the same treatment the disposition
+ * rows get - an unrecorded resolution must not read, in every later
+ * audit, like a publish or retire nobody resolved.
+ */
+function recordResolutionRow(
+  vault: string,
+  id: string,
+  target: string,
+  verdict: "resolved" | "rejected",
+  opts: { readonly actor?: string; readonly via?: PermissionSubject["via"] },
+  reason: string,
+  ts?: Date,
+): void {
+  const appended = appendDecisionLedger(vault, {
+    ts: (ts ?? new Date()).toISOString(),
+    actor: opts.actor ?? "operator",
+    via: opts.via ?? "operator",
+    action: "resolution",
+    target,
+    verdict,
+    source: REVIEW_DOOR_SOURCE,
+    reason,
+  });
+  if (!appended.logged) {
+    process.stderr.write(
+      `warning: decision-ledger append failed for the ${verdict} row on ` +
+        `${JSON.stringify(target)}: ${appended.audit_reason ?? "unknown reason"}\n`,
+    );
+  }
 }
 
 /**
@@ -576,6 +664,7 @@ export function applyPendingLane(
   unlinkSync(src);
   // The door's audit trail: one resolution row per real apply, naming
   // the decoded publish path it published into.
+  recordResolutionRow(vault, id, target, "resolved", opts, `pending ${JSON.stringify(id)} applied`);
   return { id, path: dest, dryRun: false };
 }
 
@@ -636,5 +725,14 @@ export function rejectPendingLane(
   // The door's audit trail, matching the apply's: one row per real
   // reject, naming the publish path the bytes will never reach and the
   // reason the resolver gave.
+  recordResolutionRow(
+    vault,
+    id,
+    publishTargetForId(vault, id),
+    "rejected",
+    opts,
+    `pending ${JSON.stringify(id)} rejected: ${reason}`,
+    now,
+  );
   return { id, path: dest };
 }

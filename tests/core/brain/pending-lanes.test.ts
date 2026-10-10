@@ -31,6 +31,7 @@ import {
   InvalidPendingIdError,
   PendingApplyConflictError,
   PendingSignalNotFoundError,
+  PendingStageConflictError,
   PendingTargetPathError,
   WRITE_APPROVAL_SOURCES,
   WriteRefusedError,
@@ -204,14 +205,6 @@ describe("stageForReview", () => {
     expect(staged.pendingId).toMatch(/^ing-\d{4}-\d{2}-\d{2}-src-my-source-abc123456789$/);
     expect(staged.path.startsWith(join(brainDirs(vault).pending, "ingest"))).toBe(true);
     expect(readFileSync(staged.path, "utf8")).toBe("summary bytes");
-  });
-
-  test("re-staging the same target replaces the staged bytes", () => {
-    enableNotes();
-    const first = stageForReview(vault, "notes", "Notes/Replace.md", () => "first");
-    const second = stageForReview(vault, "notes", "Notes/Replace.md", () => "second");
-    expect(second.pendingId).toBe(first.pendingId);
-    expect(readFileSync(first.path, "utf8")).toBe("second");
   });
 
   test("a non-lowercase .md target keeps its spelling through the queue", () => {
@@ -758,5 +751,106 @@ describe("disposition ledger rows that cannot land", () => {
     expect(combined).toContain("warning:");
     // And the ledger genuinely holds nothing - the row did not land.
     expect(queryDecisionLedger(vault)).toEqual([]);
+  });
+});
+
+describe("stageForReview one open entry per publish target", () => {
+  test("a second staged entry for one target refuses, naming the open entry", () => {
+    enableNotes();
+    const first = stageForReview(vault, "notes", "Notes/Once.md", () => "first bytes");
+    let conflict: PendingStageConflictError | undefined;
+    try {
+      stageForReview(vault, "notes", "Notes/Once.md", () => "second bytes");
+    } catch (err) {
+      conflict = err instanceof PendingStageConflictError ? err : undefined;
+    }
+    expect(conflict).toBeInstanceOf(PendingStageConflictError);
+    expect(conflict?.existingId).toBe(first.pendingId);
+    expect(conflict?.target).toBe("Notes/Once.md");
+    // The refusal replaced nothing: the first proposal keeps its bytes and
+    // the queue holds exactly one open entry for the target.
+    expect(readFileSync(first.path, "utf8")).toBe("first bytes");
+    expect(listPendingLane(vault, "notes").entries).toHaveLength(1);
+  });
+
+  test("the decoded comparison catches a later-day id for the same target", () => {
+    enableNotes();
+    // Hand-place a yesteryear entry whose decoded target is the one about
+    // to be staged: two ids, one target, on different days.
+    const olderId = "note-2026-01-01-Notes%2FOnce.md";
+    const notesDir = join(brainDirs(vault).pending, "notes");
+    mkdirSync(notesDir, { recursive: true });
+    writeFileSync(join(notesDir, `${olderId}.md`), "older proposal");
+    let conflict: PendingStageConflictError | undefined;
+    try {
+      stageForReview(vault, "notes", "Notes/Once.md", () => "today bytes");
+    } catch (err) {
+      conflict = err instanceof PendingStageConflictError ? err : undefined;
+    }
+    expect(conflict).toBeInstanceOf(PendingStageConflictError);
+    expect(conflict?.existingId).toBe(olderId);
+    expect(conflict?.target).toBe("Notes/Once.md");
+    expect(readFileSync(join(notesDir, `${olderId}.md`), "utf8")).toBe("older proposal");
+  });
+});
+
+describe("the review door's resolution rows", () => {
+  function stageNote(rel: string, bytes: string) {
+    enableNotes();
+    return stageForReview(vault, "notes", rel, () => bytes);
+  }
+
+  test("a real apply appends one resolution row naming the decoded publish path", () => {
+    const staged = stageNote("Notes/Rowed.md", "door bytes");
+    applyPendingLane(vault, staged.pendingId);
+    const rows = queryDecisionLedger(vault, { action: "resolution" });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      actor: "operator",
+      via: "operator",
+      action: "resolution",
+      target: "Notes/Rowed.md",
+      verdict: "resolved",
+      source: "review-door",
+      reason: `pending "${staged.pendingId}" applied`,
+    });
+  });
+
+  test("a real reject appends one row naming the path the bytes will never reach", () => {
+    const staged = stageNote("Notes/Refused.md", "retired bytes");
+    rejectPendingLane(vault, staged.pendingId, "not wanted", {
+      now: new Date("2026-07-18T12:00:00Z"),
+    });
+    const rows = queryDecisionLedger(vault, { action: "resolution" });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      actor: "operator",
+      via: "operator",
+      action: "resolution",
+      target: "Notes/Refused.md",
+      verdict: "rejected",
+      source: "review-door",
+      reason: `pending "${staged.pendingId}" rejected: not wanted`,
+    });
+  });
+
+  test("a preview of either door moves writes no row", () => {
+    const staged = stageNote("Notes/Previewed.md", "preview bytes");
+    applyPendingLane(vault, staged.pendingId, { dryRun: true });
+    rejectPendingLane(vault, staged.pendingId, "not yet", { dryRun: true });
+    expect(queryDecisionLedger(vault)).toEqual([]);
+  });
+
+  test("a resolving credential names its agent in the row", () => {
+    const staged = stageNote("Notes/Credited.md", "credited bytes");
+    applyPendingLane(vault, staged.pendingId, { actor: "@resolver", via: "token" });
+    const rows = queryDecisionLedger(vault, { action: "resolution" });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      actor: "@resolver",
+      via: "token",
+      verdict: "resolved",
+      source: "review-door",
+    });
   });
 });

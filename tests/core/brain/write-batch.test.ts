@@ -45,6 +45,8 @@ import {
   WriteBatchError,
   type WriteOperation,
 } from "../../../src/core/brain/write-batch.ts";
+import { WriteRefusedError } from "../../../src/core/brain/pending/pending-lanes.ts";
+import { queryDecisionLedger } from "../../../src/core/brain/permissions/ledger.ts";
 import * as ledger from "../../../src/core/brain/idempotency-ledger.ts";
 import {
   IdempotencyKeyError,
@@ -837,5 +839,71 @@ describe("applyWriteBatch staged creates (review gate)", () => {
     expect(() =>
       applyWriteBatch(vault, [{ kind: "create_note", path: "Notes/Taken.md", content: "x" }]),
     ).toThrow(WriteBatchError);
+  });
+});
+
+describe("applyWriteBatch under a permissions document", () => {
+  const DOC = () => join(vault, "Brain", "_permissions.yaml");
+
+  function writeDoc(text: string): void {
+    mkdirSync(join(vault, "Brain"), { recursive: true });
+    writeFileSync(DOC(), text, "utf8");
+  }
+
+  test("a deny refuses an update of an admitted note, by name, before any byte", () => {
+    seedNote("Notes/Admitted.md", "original body");
+    writeDoc("version: 1\ndefault_action: deny\n");
+    let refused: WriteRefusedError | undefined;
+    try {
+      applyWriteBatch(vault, [
+        { kind: "update_note", path: "Notes/Admitted.md", body: "rewritten" },
+      ]);
+    } catch (err) {
+      refused = err instanceof WriteRefusedError ? err : undefined;
+    }
+    expect(refused).toBeInstanceOf(WriteRefusedError);
+    expect(refused?.action).toBe("write");
+    expect(refused?.target).toBe("Notes/Admitted.md");
+    expect(refused?.rule).toBe("default");
+    // Mutation is not a door around the rule: the note keeps its bytes,
+    // and exactly one deny row records the refusal.
+    expect(readFileSync(join(vault, "Notes/Admitted.md"), "utf8")).toContain("original body");
+    const rows = queryDecisionLedger(vault, { verdict: "deny" });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ action: "write", target: "Notes/Admitted.md" });
+  });
+
+  test("a deny refuses an append the same way", () => {
+    seedNote("Notes/Appended.md", "first line");
+    writeDoc("version: 1\ndefault_action: deny\n");
+    expect(() =>
+      applyWriteBatch(vault, [{ kind: "append_note", path: "Notes/Appended.md", content: "more" }]),
+    ).toThrow(WriteRefusedError);
+    expect(readFileSync(join(vault, "Notes/Appended.md"), "utf8")).not.toContain("more");
+    expect(queryDecisionLedger(vault, { verdict: "deny" })).toHaveLength(1);
+  });
+
+  test("an ask mutates without staging and without a row", () => {
+    seedNote("Notes/Asked.md", "before");
+    writeDoc("version: 1\ndefault_action: ask\n");
+    const res = applyWriteBatch(vault, [
+      { kind: "update_note", path: "Notes/Asked.md", body: "after" },
+    ]);
+    expect(res.results[0]).toMatchObject({ kind: "update_note", updated: true });
+    expect(readFileSync(join(vault, "Notes/Asked.md"), "utf8")).toContain("after");
+    // The review boundary is ENTRY: a mutation never re-stages and the
+    // consult that ran is deny-only, so an ask leaves no ledger row.
+    expect(queryDecisionLedger(vault)).toEqual([]);
+  });
+
+  test("an allow mutates exactly as it did before the consult existed", () => {
+    seedNote("Notes/Allowed.md", "before");
+    writeDoc("version: 1\ndefault_action: allow\n");
+    const res = applyWriteBatch(vault, [
+      { kind: "append_note", path: "Notes/Allowed.md", content: "tail" },
+    ]);
+    expect(res.results[0]).toMatchObject({ kind: "append_note", appended: true });
+    expect(readFileSync(join(vault, "Notes/Allowed.md"), "utf8")).toContain("tail");
+    expect(queryDecisionLedger(vault)).toEqual([]);
   });
 });

@@ -57,7 +57,8 @@ import {
 import { appendBrainNote, type AppendBrainNoteInput } from "./note.ts";
 import { ORIGIN_CHANNEL_FIELD } from "../origin-channel.ts";
 import { preferencePath, validateSlug } from "./paths.ts";
-import { type WriteSubject } from "./write-disposition.ts";
+import { refuseDocumentDeny, type WriteSubject } from "./write-disposition.ts";
+import { REVIEW_LANE } from "./write-gate.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { BRAIN_APPLY_RESULT } from "./types.ts";
 import { ROUTE_STAGE, timeStageSync } from "../route-scope.ts";
@@ -794,6 +795,13 @@ function projectUpdateNote(
     );
   }
   const target = reserveNoteTarget(vault, op.path, index, noteTargets);
+  // The document-deny consult rides the same seam ahead of the
+  // existing-note read (write-side trust): the review boundary is ENTRY,
+  // so an admitted note is never re-staged, but a caller the document
+  // denies cannot rewrite it either - mutation is not a door around the
+  // rule that refused the create. An ask and an allow change nothing
+  // here: no row, no stage, the update proceeds exactly as before.
+  refuseDocumentDeny(vault, REVIEW_LANE.notes, opts.subject, { target: target.relPath });
   // The owner gate rides the update seam AHEAD of the existing-note read
   // (write-side-trust, Task 13): a caller-named `owner:` the gate refuses
   // is refused with the same error whether the target exists or not, so
@@ -916,6 +924,10 @@ function projectAppendNote(
     );
   }
   const target = reserveNoteTarget(vault, op.path, index, noteTargets);
+  // The same deny-only consult the update runs (write-side trust): an
+  // append mutates an admitted note, so the document's deny refuses it,
+  // while an ask and an allow leave the append exactly as it was.
+  refuseDocumentDeny(vault, REVIEW_LANE.notes, opts.subject, { target: target.relPath });
   const state = readExistingNote(target.abs, target.relPath, index, opts.readable);
   const appended = op.content.trim();
   const body = state.body.length > 0 ? `${state.body}${APPEND_SEPARATOR}${appended}` : appended;
