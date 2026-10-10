@@ -69,6 +69,10 @@ const RUNTIME_OVERRIDABLE_ENV = [
   // The codegraph partner switch, for the same reason and with a default
   // of its own below.
   PARTNER_CODEGRAPH_DISABLED_ENV,
+  // The secret store's environment unlock is consumed-once; a developer
+  // shell that happens to carry it must not turn a locked-store test into
+  // an unlocked one (or steal the value mid-run).
+  "OPEN_SECOND_BRAIN_SECRETS_PASSPHRASE",
 ] as const;
 
 export interface RunCliOptions {

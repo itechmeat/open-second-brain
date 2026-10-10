@@ -206,12 +206,13 @@ Common flags:
  * swallowing it while the flag's effect never happens.
  */
 const SECRET_OP_FLAGS: Record<string, ReadonlyArray<string>> = {
-  set: ["env-var", "allow", "from-env", "agent"],
+  set: ["env-var", "allow", "from-env", "passphrase-from-env", "agent"],
   list: [],
-  rm: [],
-  run: ["agent"],
+  rm: ["passphrase-from-env"],
+  run: ["passphrase-from-env", "agent"],
   lock: [],
   unlock: ["passphrase-from-env"],
+  unwrap: ["passphrase-from-env"],
   export: ["out", "passphrase-from-env"],
   import: ["replace", "passphrase-from-env"],
 };
@@ -252,6 +253,7 @@ export const SECRET_VERB_USAGE =
     secretOpUsage("rm", "rm <name>"),
     secretOpUsage("lock", "lock"),
     secretOpUsage("unlock", "unlock"),
+    secretOpUsage("unwrap", "unwrap"),
     secretOpUsage("export", "export"),
     secretOpUsage("import", "import FILE"),
     secretOpUsage("run", "run <name>", " -- <command...>"),
@@ -696,11 +698,17 @@ export const VERB_HELP: Record<string, string> = {
     "context leakage and vault sync exposure - not against root.\n" +
     "unlock wraps the keyfile under a passphrase (read from stdin or\n" +
     "--passphrase-from-env, never argv) and holds the key for this process\n" +
-    "only; lock clears it, and every other process must unlock separately.\n" +
-    "export writes every entry as one passphrase-encrypted bundle to the\n" +
-    "--out file (values re-encrypted; names and env-var mappings travel in\n" +
-    "the clear past the shared egress redactor); import restores a bundle,\n" +
-    "refusing names the store already holds unless --replace is given.\n" +
+    "only; lock clears it. A wrapped store reaches every key-bearing verb:\n" +
+    "each accepts --passphrase-from-env (or stdin, where its own work does\n" +
+    "not occupy stdin) and unlocks before it runs, and a non-interactive\n" +
+    "host sets OPEN_SECOND_BRAIN_SECRETS_PASSPHRASE, which the first key\n" +
+    "operation consumes and deletes. unwrap writes the raw keyfile back,\n" +
+    "ending the passphrase protection. export writes every entry as one\n" +
+    "passphrase-encrypted bundle to the --out file (values re-encrypted and\n" +
+    "authenticated against their entry metadata; names and env-var mappings\n" +
+    "travel in the clear past the shared egress redactor); import restores a\n" +
+    "bundle, refusing names the store already holds unless --replace is\n" +
+    "given.\n" +
     "WARNING: a lost passphrase is unrecoverable - every stored value and\n" +
     "every exported bundle stays unreadable forever, and nothing recovers\n" +
     "them.\n",

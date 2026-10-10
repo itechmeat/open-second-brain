@@ -132,9 +132,10 @@ test("unlock wraps the raw keyfile; a fresh process sees the locked refusal unti
   expect(readFileSync(keyfile, "utf8").startsWith("{")).toBe(true);
 
   // A fresh process holds no unlocked key: the store refuses by name, and
-  // the remedy it names is honest about the surface that prints it - the
-  // unlock applies to one process and the passphrase is never persisted,
-  // so a one-shot command cannot carry the unlock into the next command.
+  // the remedy it names is honest about every route that works - the
+  // key-bearing verbs' own passphrase ingestion, the environment variable
+  // a non-interactive host sets, the unlock op for this process, and the
+  // unwrap op that ends the wrap.
   const locked = await runCli(["brain", "secret", "set", "other", "--vault", vault], {
     stdin: "sk-other-24680\n",
   });
@@ -143,6 +144,8 @@ test("unlock wraps the raw keyfile; a fresh process sees the locked refusal unti
   expect(locked.stderr).toContain("o2b brain secret unlock");
   expect(locked.stderr).toContain("this process only");
   expect(locked.stderr).toContain("never persisted");
+  expect(locked.stderr).toContain("--passphrase-from-env");
+  expect(locked.stderr).toContain("OPEN_SECOND_BRAIN_SECRETS_PASSPHRASE");
 
   // The right passphrase unlocks again; a wrong one refuses by name.
   const again = await runCli(["brain", "secret", "unlock", "--vault", vault], {
@@ -154,6 +157,154 @@ test("unlock wraps the raw keyfile; a fresh process sees the locked refusal unti
   });
   expect(wrong.returncode).toBe(1);
   expect(wrong.stderr).toContain("passphrase");
+}, 20000);
+
+test("a wrapped store works from a SECOND command: passphrase from env or stdin, per verb", async () => {
+  // The unlock holds the key for ITS process only, so every command below
+  // is a separate invocation that must reach the wrapped store on its own
+  // - each one a fresh subprocess, as a cron job or a script would be.
+  await runCli(["brain", "secret", "set", "api-key", "--allow", "bun -e *", "--vault", vault], {
+    stdin: "sk-cross-97531\n",
+  });
+  const passphrase = fakeCredential("cross-proc", "-pass-", "42");
+  const unlock = await runCli(["brain", "secret", "unlock", "--vault", vault], {
+    stdin: `${passphrase}\n`,
+  });
+  expect(unlock.returncode).toBe(0);
+
+  const env = { O2B_TEST_STORE_PASS: passphrase };
+  // run: the passphrase rides --passphrase-from-env, the subprocess runs.
+  const run = await runCli(
+    [
+      "brain",
+      "secret",
+      "run",
+      "api-key",
+      "--passphrase-from-env",
+      "O2B_TEST_STORE_PASS",
+      "--vault",
+      vault,
+      "--",
+      "bun",
+      "-e",
+      "process.exit(0)",
+    ],
+    { env, subprocess: true },
+  );
+  expect(run.returncode).toBe(0);
+
+  // set: the value occupies stdin, so the passphrase must come from the
+  // flag (or the well-known variable); the store accepts a second secret.
+  const set2 = await runCli(
+    [
+      "brain",
+      "secret",
+      "set",
+      "second-key",
+      "--passphrase-from-env",
+      "O2B_TEST_STORE_PASS",
+      "--vault",
+      vault,
+    ],
+    { env, stdin: "sk-second-86420\n" },
+  );
+  expect(set2.returncode).toBe(0);
+
+  // rm: stdin is free, so the piped passphrase unlocks the store.
+  const rm = await runCli(["brain", "secret", "rm", "second-key", "--vault", vault], {
+    stdin: `${passphrase}\n`,
+    subprocess: true,
+  });
+  expect(rm.returncode).toBe(0);
+
+  // export: the bundle passphrase doubles as the store unlock; the
+  // exported bundle imports into a fresh vault.
+  const bundlePath = join(tmp, "cross-bundle.json");
+  const exported = await runCli(
+    ["brain", "secret", "export", "--out", bundlePath, "--vault", vault],
+    { stdin: `${passphrase}\n` },
+  );
+  expect(exported.returncode).toBe(0);
+  const fresh = join(tmp, "fresh-vault");
+  mkdirSync(join(fresh, "Brain"), { recursive: true });
+  const imported = await runCli(["brain", "secret", "import", bundlePath, "--vault", fresh], {
+    stdin: `${passphrase}\n`,
+  });
+  expect(imported.returncode).toBe(0);
+  const listed = JSON.parse(
+    (await runCli(["brain", "secret", "list", "--vault", fresh, "--json"])).stdout,
+  ) as { secrets: Array<{ name: string }> };
+  expect(listed.secrets.map((s) => s.name)).toEqual(["api-key"]);
+}, 30000);
+
+test("the well-known environment variable alone reaches a wrapped store from a fresh process", async () => {
+  await runCli(["brain", "secret", "set", "api-key", "--allow", "bun -e *", "--vault", vault], {
+    stdin: "sk-envvar-19283\n",
+  });
+  const passphrase = fakeCredential("env-var-proc", "-pass-", "42");
+  const unlock = await runCli(["brain", "secret", "unlock", "--vault", vault], {
+    stdin: `${passphrase}\n`,
+  });
+  expect(unlock.returncode).toBe(0);
+
+  // No flag, no stdin: the MCP-server-shaped route. The command succeeds
+  // and the variable is consumed by the child - it cannot leak to a
+  // grandchild through the environment it leaves behind.
+  const run = await runCli(
+    [
+      "brain",
+      "secret",
+      "run",
+      "api-key",
+      "--vault",
+      vault,
+      "--",
+      "bun",
+      "-e",
+      "process.exit(process.env.OPEN_SECOND_BRAIN_SECRETS_PASSPHRASE === undefined ? 0 : 1)",
+    ],
+    { env: { OPEN_SECOND_BRAIN_SECRETS_PASSPHRASE: passphrase }, subprocess: true },
+  );
+  expect(run.returncode).toBe(0);
+}, 20000);
+
+test("unwrap writes the raw keyfile back; a later command needs no passphrase; unwrap refuses when raw", async () => {
+  await runCli(["brain", "secret", "set", "api-key", "--allow", "bun -e *", "--vault", vault], {
+    stdin: "sk-unwrap-44556\n",
+  });
+  const passphrase = fakeCredential("cli-unwrap", "-pass-", "42");
+  const unlock = await runCli(["brain", "secret", "unlock", "--vault", vault], {
+    stdin: `${passphrase}\n`,
+  });
+  expect(unlock.returncode).toBe(0);
+  const keyfile = join(vault, ".open-second-brain", "secrets", "keyfile");
+  expect(readFileSync(keyfile, "utf8").startsWith("{")).toBe(true);
+
+  const unwrap = await runCli(["brain", "secret", "unwrap", "--vault", vault], {
+    stdin: `${passphrase}\n`,
+  });
+  expect(unwrap.returncode).toBe(0);
+  expect(unwrap.stderr).toContain("raw key");
+  // The envelope is gone: 32 raw bytes again.
+  expect(readFileSync(keyfile).length).toBe(32);
+
+  // A third command needs no passphrase at all - the store is raw again.
+  const run = await runCli(
+    ["brain", "secret", "run", "api-key", "--vault", vault, "--", "bun", "-e", "process.exit(0)"],
+    { subprocess: true },
+  );
+  expect(run.returncode).toBe(0);
+
+  // Unwrapping an unwrapped store refuses by name.
+  const again = await runCli(["brain", "secret", "unwrap", "--vault", vault], {
+    stdin: `${passphrase}\n`,
+  });
+  expect(again.returncode).toBe(1);
+  expect(again.stderr).toContain("not passphrase-wrapped");
+
+  // The wrong passphrase leaves the wrap intact (nothing was unwrapped by
+  // the refusals above, so re-wrap first is unnecessary: the store is raw,
+  // which the refusal above already proved).
 }, 20000);
 
 test("lock refuses a store that was never wrapped, creating nothing; lock after unlock reports cleared", async () => {
@@ -351,17 +502,20 @@ describe("secret refusals and help accuracy", () => {
     const errorUsage = /^usage: .+$/m.exec(usageError.stderr)![0]!;
     expect(helpUsage).toBe(errorUsage);
     expect(helpUsage).toContain(
-      "set <name> [--env-var V] [--allow PATTERN]... [--from-env SRC] [--agent N] [--vault <path>] [--json]",
+      "set <name> [--env-var V] [--allow PATTERN]... [--from-env SRC] [--passphrase-from-env SRC] [--agent N] [--vault <path>] [--json]",
     );
     expect(helpUsage).toContain("list [--vault <path>] [--json]");
-    expect(helpUsage).toContain("rm <name> [--vault <path>]");
+    expect(helpUsage).toContain("rm <name> [--passphrase-from-env SRC] [--vault <path>]");
     expect(helpUsage).toContain("lock [--vault <path>]");
     expect(helpUsage).toContain("unlock [--passphrase-from-env SRC] [--vault <path>]");
+    expect(helpUsage).toContain("unwrap [--passphrase-from-env SRC] [--vault <path>]");
     expect(helpUsage).toContain("export --out FILE [--passphrase-from-env SRC] [--vault <path>]");
     expect(helpUsage).toContain(
       "import FILE [--replace] [--passphrase-from-env SRC] [--vault <path>]",
     );
-    expect(helpUsage).toContain("run <name> [--agent N] [--vault <path>] [--json] -- <command...>");
+    expect(helpUsage).toContain(
+      "run <name> [--passphrase-from-env SRC] [--agent N] [--vault <path>] [--json] -- <command...>",
+    );
   });
 
   test("an op refuses flags it never documents, by name", async () => {

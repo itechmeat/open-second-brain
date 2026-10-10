@@ -26,9 +26,11 @@ import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { decryptValue, encryptValue, loadOrCreateKey, type EncryptedValue } from "./crypto.ts";
 import {
   clearHeldKey,
+  heldUnlockedKey,
   isEnvelopeFile,
   SecretStoreKeyfileMissingError,
   unlockKeyfile as unlockKeyfileAtPath,
+  unwrapKeyfileToRaw,
   wrapKeyfile as wrapKeyfileAtPath,
 } from "./envelope.ts";
 import { restrictToOwner } from "./owner-acl.ts";
@@ -389,6 +391,49 @@ export function lockSecretKeyfile(vault: string, ctx: SecretAuditContext): void 
   }
   clearHeldKey(kp);
   audit(vault, ctx, "secret_locked", "keyfile", {});
+}
+
+/**
+ * Whether a key-bearing operation over this vault would refuse as
+ * locked in THIS process: the keyfile is an envelope and the holder is
+ * empty. The CLI's key-bearing verbs consult it to decide whether the
+ * passphrase they are about to ingest is needed as the store unlock
+ * (and not, say, only the bundle passphrase).
+ */
+export function storeLockedForThisProcess(vault: string): boolean {
+  const kp = keyPath(vault);
+  return isEnvelopeFile(kp) && heldUnlockedKey(kp) === null;
+}
+
+/**
+ * Unwrap: replace the passphrase-wrapped keyfile with the raw 32-byte
+ * DEK it holds, the way back from a wrapped store. The passphrase is
+ * verified against the envelope BEFORE the swap, so a wrong passphrase
+ * leaves the wrap intact; a torn write is impossible (fsync'd atomic
+ * rename) and the raw bytes land at mode 0600.
+ *
+ * Refuses a store that was never wrapped - unwrapping there would mint
+ * nothing and say something false. This write puts key material back on
+ * disk in the clear; the verb that calls it says so on stderr, and the
+ * custody record below marks the state change.
+ */
+export function unwrapSecretKeyfile(
+  vault: string,
+  passphrase: string,
+  ctx: SecretAuditContext,
+): void {
+  assertVaultIdentityForWrite(vault);
+  const kp = keyPath(vault);
+  if (!isEnvelopeFile(kp)) {
+    throw new Error(
+      `secret unwrap: the keyfile is not passphrase-wrapped, nothing to unwrap: ${kp}`,
+    );
+  }
+  unwrapKeyfileToRaw(kp, passphrase);
+  // The holder is cleared with the wrap: this process reverts to plain
+  // raw-keyfile behavior, where the file itself is the key.
+  clearHeldKey(kp);
+  audit(vault, ctx, "secret_unwrapped", "keyfile", { keyfile_was_wrapped: true });
 }
 
 /**

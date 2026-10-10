@@ -1,16 +1,25 @@
 /**
- * `o2b brain secret <set|list|rm|run|lock|unlock|export|import>`
+ * `o2b brain secret <set|list|rm|run|lock|unlock|unwrap|export|import>`
  * (t_0b134404, t_e6667a56, t_592d9e91): capability-gated secret custody.
  * `set` ingests the value from stdin or --from-env - NEVER from argv,
  * where it would land in shell history and process lists; `list` shows
  * metadata only; `run <name> -- cmd...` injects the secret into an
  * allowlisted subprocess env and returns redacted output; `unlock` wraps
  * the keyfile under a passphrase (first unlock) and holds the key for
- * this process only; `lock` clears that holder; `export` writes every
+ * this process only; `lock` clears that holder; `unwrap` writes the raw
+ * keyfile back (the way back from a wrapped store); `export` writes every
  * entry as one passphrase-encrypted bundle to an operator-named `--out`,
  * with the shared egress redactor run over the bundle's non-ciphertext
  * metadata tree; `import` restores a bundle. No surface ever prints a
  * value or a passphrase.
+ *
+ * A wrapped store reaches every key-bearing verb (set, rm, run, export,
+ * import): the verb ingests a passphrase the way `unlock` does - via
+ * `--passphrase-from-env` or stdin - and unlocks before the operation,
+ * so one command can carry both the passphrase and its work. A host that
+ * cannot answer a prompt (the MCP server, a cron job) sets
+ * OPEN_SECOND_BRAIN_SECRETS_PASSPHRASE instead; the first key operation
+ * consumes it, holds the key, and deletes the variable.
  *
  * A LOST PASSPHRASE IS UNRECOVERABLE: after `unlock` has wrapped the
  * keyfile, the stored values stay unreadable forever without it - and a
@@ -31,14 +40,18 @@ import {
   bundleFromEgressScan,
   exportSecretBundle,
   importSecretBundle,
+  resealBundleMetadata,
 } from "../../../core/brain/secrets/bundle.ts";
 import {
   listSecrets,
   lockSecretKeyfile,
   removeSecret,
   setSecret,
+  storeLockedForThisProcess,
   unlockSecretKeyfile,
+  unwrapSecretKeyfile,
 } from "../../../core/brain/secrets/store.ts";
+import { SECRET_STORE_PASSPHRASE_ENV } from "../../../core/brain/secrets/envelope.ts";
 import {
   formatSecretsSyncExposure,
   formatWrappedKeyfileExposure,
@@ -57,6 +70,11 @@ const USAGE = SECRET_VERB_USAGE;
 const UNLOCKED_NOTE =
   "keyfile unlocked for this process; the passphrase is held in memory only and never written";
 const LOCKED_NOTE = "keyfile locked; this process's unlocked-key holder is cleared";
+const UNWRAPPED_NOTE =
+  "keyfile unwrapped; the raw key is on disk again and the passphrase wrap is gone";
+const UNWRAPPED_WARNING =
+  "warning: the keyfile holds raw key material again and the passphrase no longer protects " +
+  `it - re-run "o2b brain secret unlock" to wrap it when the raw key is no longer needed\n`;
 
 /** The declared egress site of the bundle export (src/core/egress/registry.ts). */
 const BUNDLE_EGRESS_SITE = "brain-secret-bundle-export" as const;
@@ -94,6 +112,53 @@ async function ingestPassphrase(
   return { passphrase };
 }
 
+/**
+ * Unlock a wrapped store ahead of a key-bearing operation, so one
+ * command invocation can carry the passphrase AND its work. No-op when
+ * the store is not wrapped, this process already holds the key, or the
+ * well-known environment variable is set - in the last case the first
+ * key operation consumes the variable itself, and an ingestion here
+ * would read an empty source and refuse a store that is about to unlock.
+ * `stdinFree` is false where the verb's own work occupies stdin (`set`
+ * reads the VALUE from it): without a route the caller proceeds and the
+ * store's named locked refusal, whose remedy text names every route, is
+ * what the operator sees.
+ */
+async function ensureStoreUnlocked(
+  vault: string,
+  op: string,
+  flags: Record<string, string | boolean | string[] | undefined>,
+  stdinFree: boolean,
+  ctx: { agent: string; now: Date },
+): Promise<number | null> {
+  if (!storeLockedForThisProcess(vault)) return null;
+  if (process.env[SECRET_STORE_PASSPHRASE_ENV] !== undefined) return null;
+  if (flags["passphrase-from-env"] === undefined && !stdinFree) return null;
+  const ingested = await ingestPassphrase(op, flags);
+  if ("exitCode" in ingested) return ingested.exitCode;
+  unlockSecretKeyfile(vault, ingested.passphrase, ctx);
+  return null;
+}
+
+/**
+ * The store unlock a wrapped store needs from export/import: the SAME
+ * passphrase the verb already ingested for the bundle, unless the
+ * environment variable is set, in which case the key operation unlocks
+ * from there and the ingested passphrase stays the bundle's alone.
+ * Passphrase-protected store and bundle are one secret per invocation
+ * here; an operator who keeps them apart sets the environment variable
+ * to the keyfile passphrase.
+ */
+async function unlockStoreForBundleOp(
+  vault: string,
+  passphrase: string,
+  ctx: { agent: string; now: Date },
+): Promise<void> {
+  if (!storeLockedForThisProcess(vault)) return;
+  if (process.env[SECRET_STORE_PASSPHRASE_ENV] !== undefined) return;
+  unlockSecretKeyfile(vault, passphrase, ctx);
+}
+
 export async function cmdBrainSecret(argv: string[]): Promise<number> {
   // `run <name> -- cmd...`: everything after `--` belongs to the
   // subprocess verbatim and must not be flag-parsed.
@@ -121,6 +186,7 @@ export async function cmdBrainSecret(argv: string[]): Promise<number> {
     op !== "run" &&
     op !== "lock" &&
     op !== "unlock" &&
+    op !== "unwrap" &&
     op !== "export" &&
     op !== "import"
   ) {
@@ -172,6 +238,14 @@ export async function cmdBrainSecret(argv: string[]): Promise<number> {
             return 2;
           }
         }
+        // A wrapped store unlocks first; the value occupies stdin here,
+        // so the passphrase must come from --passphrase-from-env or the
+        // well-known environment variable (see ensureStoreUnlocked).
+        const unlocked = await ensureStoreUnlocked(vault, "set", flags, fromEnv !== undefined, {
+          agent,
+          now,
+        });
+        if (unlocked !== null) return unlocked;
         const metadata = setSecret(vault, {
           name: name!,
           value,
@@ -205,6 +279,8 @@ export async function cmdBrainSecret(argv: string[]): Promise<number> {
         return 0;
       }
       case "rm": {
+        const unlocked = await ensureStoreUnlocked(vault, "rm", flags, true, { agent, now });
+        if (unlocked !== null) return unlocked;
         const removed = removeSecret(vault, name!, { agent, now });
         if (!removed) return fail(`secret rm: unknown secret "${name}"`);
         if (asJson) okJson({ removed: name });
@@ -228,6 +304,21 @@ export async function cmdBrainSecret(argv: string[]): Promise<number> {
         else ok(UNLOCKED_NOTE);
         return 0;
       }
+      case "unwrap": {
+        const ingested = await ingestPassphrase("unwrap", flags);
+        if ("exitCode" in ingested) return ingested.exitCode;
+        // The way back from a wrapped store: the passphrase is verified
+        // against the envelope first, then the raw key is written over it
+        // (fsync'd atomic rename, 0600). A store that was never wrapped
+        // refuses by name.
+        unwrapSecretKeyfile(vault, ingested.passphrase, { agent, now });
+        // The raw key material is back on disk - say so before the
+        // success note, so the state change is what the operator reads.
+        process.stderr.write(UNWRAPPED_WARNING);
+        if (asJson) okJson({ unwrapped: true });
+        else ok(UNWRAPPED_NOTE);
+        return 0;
+      }
       case "lock": {
         lockSecretKeyfile(vault, { agent, now });
         if (asJson) okJson({ locked: true });
@@ -242,6 +333,10 @@ export async function cmdBrainSecret(argv: string[]): Promise<number> {
         }
         const ingested = await ingestPassphrase("export", flags);
         if ("exitCode" in ingested) return ingested.exitCode;
+        // Exporting needs the plaintext values, so a wrapped store
+        // unlocks first - with the same passphrase the bundle is sealed
+        // under, unless the environment variable carries the keyfile's.
+        await unlockStoreForBundleOp(vault, ingested.passphrase, { agent, now });
         const bundle = exportSecretBundle(vault, ingested.passphrase, { agent, now });
         // The destination is operator-named and leaves the machine, so the
         // shared egress guard runs before any byte is written - over the
@@ -252,7 +347,16 @@ export async function cmdBrainSecret(argv: string[]): Promise<number> {
         if (verdict.outcome !== "released") {
           return fail(`secret export: ${verdict.detail}`);
         }
-        const payload = verdict.redacted ? bundleFromEgressScan(bundle, verdict.payload) : bundle;
+        // A redaction that edited an allow pattern changes the metadata
+        // the values are authenticated against, so the merged bundle is
+        // re-sealed under the metadata that actually ships.
+        const payload = verdict.redacted
+          ? resealBundleMetadata(
+              bundleFromEgressScan(bundle, verdict.payload),
+              ingested.passphrase,
+              bundle,
+            )
+          : bundle;
         atomicWriteFileSync(out, `${JSON.stringify(payload, null, 2)}\n`);
         if (verdict.redacted) process.stderr.write(EGRESS_REDACTION_NOTICE);
         if (asJson) okJson({ out, exported: Object.keys(bundle.entries).length });
@@ -262,6 +366,11 @@ export async function cmdBrainSecret(argv: string[]): Promise<number> {
       case "import": {
         const ingested = await ingestPassphrase("import", flags);
         if ("exitCode" in ingested) return ingested.exitCode;
+        // Importing writes into the target store's ciphertext, so a
+        // wrapped target unlocks first - with the same passphrase the
+        // bundle opens under, unless the environment variable carries the
+        // keyfile's.
+        await unlockStoreForBundleOp(vault, ingested.passphrase, { agent, now });
         let bundle: unknown;
         try {
           bundle = JSON.parse(readFileSync(name!, "utf8"));
@@ -290,6 +399,12 @@ export async function cmdBrainSecret(argv: string[]): Promise<number> {
           process.stderr.write(`brain secret run: a command is required after --\n${USAGE}\n`);
           return 2;
         }
+        // A wrapped store unlocks first. The subprocess inherits this
+        // process's stdin, so an operator piping the passphrase should
+        // know the child sees the drained pipe; --passphrase-from-env is
+        // the route that leaves stdin alone.
+        const unlocked = await ensureStoreUnlocked(vault, "run", flags, true, { agent, now });
+        if (unlocked !== null) return unlocked;
         const result = await runWithSecret(vault, name!, commandArgs, { agent, now });
         if (asJson) {
           okJson({ exit_code: result.exitCode, stdout: result.stdout, stderr: result.stderr });

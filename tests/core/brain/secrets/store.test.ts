@@ -25,6 +25,7 @@ import {
   clearHeldKey,
   heldUnlockedKey,
   isEnvelopeFile,
+  SECRET_STORE_PASSPHRASE_ENV,
   SecretStoreKeyfileMissingError,
   SecretStoreLockedError,
   unlockKeyfile,
@@ -37,7 +38,9 @@ import {
   resolveSecretReadOnly,
   setSecret,
   secretsDir,
+  storeLockedForThisProcess,
   unlockSecretKeyfile,
+  unwrapSecretKeyfile,
 } from "../../../../src/core/brain/secrets/store.ts";
 import { fakeCredential } from "../../../helpers/fake-credentials.ts";
 import { IS_WINDOWS } from "../../../helpers/platform.ts";
@@ -274,8 +277,11 @@ describe("unlock/lock lifecycle", () => {
     // surface error prose (a config-probe error list, a search refusal);
     // the path under the vault is exactly what
     // `src/mcp/vault-path-field.ts` degrades to keep out. The remedy is
-    // named; the structured `keyPath` field stays for the callers that
-    // may name it.
+    // named - and honest about every route that works: the key-bearing
+    // verbs' passphrase ingestion, the environment variable a
+    // non-interactive host sets, the unlock op for this process, and the
+    // unwrap op that ends the wrap. The structured `keyPath` field stays
+    // for the callers that may name it.
     set();
     const keyPath = join(secretsDir(vault), "keyfile");
     wrapKeyfile(keyPath, PASSPHRASE, loadOrCreateKey(keyPath));
@@ -291,6 +297,9 @@ describe("unlock/lock lifecycle", () => {
       const message = (refusal as Error).message;
       expect(message).not.toContain(keyPath);
       expect(message).toContain("o2b brain secret unlock");
+      expect(message).toContain("--passphrase-from-env");
+      expect(message).toContain(SECRET_STORE_PASSPHRASE_ENV);
+      expect(message).toContain("o2b brain secret unwrap");
     } finally {
       clearHeldKey(keyPath);
     }
@@ -323,5 +332,84 @@ describe("unlock/lock lifecycle", () => {
     // the stored ciphertext is exactly as it was.
     expect(existsSync(keyPath)).toBe(false);
     expect(readFileSync(join(secretsDir(vault), "secrets.json"), "utf8")).toBe(storeBefore);
+  });
+});
+
+describe("a wrapped store reachable from a second process (t_e6667a56)", () => {
+  const PASSPHRASE = fakeCredential("reach-wrap-", "phrase-7c21");
+  const WRONG_PASSPHRASE = fakeCredential("reach-wrong-", "phrase-7c21");
+
+  test("the environment variable unlocks the store for a read-only resolve and is consumed", () => {
+    // The non-interactive host's route: no prompt is answerable there, so
+    // the launch environment carries the passphrase and the first key
+    // operation turns it into a held key, dropping the variable.
+    set();
+    const keyPath = join(secretsDir(vault), "keyfile");
+    wrapKeyfile(keyPath, PASSPHRASE, loadOrCreateKey(keyPath));
+    clearHeldKey(keyPath);
+    process.env[SECRET_STORE_PASSPHRASE_ENV] = PASSPHRASE;
+    try {
+      expect(resolveSecretReadOnly(vault, "embed-key").value).toBe("sk-super-secret-value");
+      expect(process.env[SECRET_STORE_PASSPHRASE_ENV]).toBeUndefined();
+    } finally {
+      delete process.env[SECRET_STORE_PASSPHRASE_ENV];
+      clearHeldKey(keyPath);
+    }
+  });
+
+  test("storeLockedForThisProcess tracks the envelope and this process's holder", () => {
+    set();
+    expect(storeLockedForThisProcess(vault)).toBe(false);
+    const keyPath = join(secretsDir(vault), "keyfile");
+    wrapKeyfile(keyPath, PASSPHRASE, loadOrCreateKey(keyPath));
+    clearHeldKey(keyPath);
+    expect(storeLockedForThisProcess(vault)).toBe(true);
+    unlockKeyfile(keyPath, PASSPHRASE);
+    expect(storeLockedForThisProcess(vault)).toBe(false);
+    clearHeldKey(keyPath);
+    expect(storeLockedForThisProcess(vault)).toBe(true);
+  });
+});
+
+describe("unwrap lifecycle", () => {
+  const PASSPHRASE = fakeCredential("unwrap-wrap-", "phrase-51aa");
+  const WRONG_PASSPHRASE = fakeCredential("unwrap-wrong-", "phrase-51aa");
+
+  test("unwrap refuses a store that was never wrapped, creating nothing", () => {
+    expect(() => unwrapSecretKeyfile(vault, PASSPHRASE, { agent: "tester", now: NOW })).toThrow(
+      /not passphrase-wrapped/,
+    );
+  });
+
+  test("unwrap writes the raw key back; a wrong passphrase leaves the wrap intact", () => {
+    set();
+    const keyPath = join(secretsDir(vault), "keyfile");
+    const dek = loadOrCreateKey(keyPath);
+    wrapKeyfile(keyPath, PASSPHRASE, dek);
+    clearHeldKey(keyPath);
+
+    expect(() =>
+      unwrapSecretKeyfile(vault, WRONG_PASSPHRASE, { agent: "tester", now: NOW }),
+    ).toThrow();
+    expect(isEnvelopeFile(keyPath)).toBe(true);
+
+    unwrapSecretKeyfile(vault, PASSPHRASE, { agent: "tester", now: NOW });
+    expect(isEnvelopeFile(keyPath)).toBe(false);
+    expect(readFileSync(keyPath).equals(dek)).toBe(true);
+    // The store reopens with the same key; the stored values survive.
+    expect(loadOrCreateKey(keyPath).equals(dek)).toBe(true);
+    expect(resolveSecretReadOnly(vault, "embed-key").value).toBe("sk-super-secret-value");
+
+    const auditDir = join(vault, "Brain", "log", "secret-custody");
+    const raw = readdirSync(auditDir)
+      .map((f) => readFileSync(join(auditDir, f), "utf8"))
+      .join("");
+    const actions = raw
+      .split("\n")
+      .filter((l) => l.trim().length > 0)
+      .map((l) => (JSON.parse(l) as { action: string }).action);
+    expect(actions).toContain("secret_unwrapped");
+    expect(raw).not.toContain(PASSPHRASE);
+    clearHeldKey(keyPath);
   });
 });

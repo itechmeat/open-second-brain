@@ -19,7 +19,12 @@
  * this module. There is no daemon: every CLI invocation and the MCP server
  * unlock separately, `lock` clears this process's holder, and a second
  * context over the same vault gets the named locked-store refusal. The
- * passphrase itself is never persisted, logged, or audited.
+ * one cross-process bridge is the environment: a host launched with
+ * `OPEN_SECOND_BRAIN_SECRETS_PASSPHRASE` set unwraps with it at the first
+ * key operation, holds the DEK, and deletes the variable, so a
+ * non-interactive host that cannot answer a prompt still reaches its
+ * wrapped store. The passphrase itself is never persisted, logged, or
+ * audited.
  *
  * Honest warning, stated here because there is no recovery path and none
  * is pretended: a lost passphrase makes every stored secret permanently
@@ -28,10 +33,18 @@
  */
 
 import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import { chmodSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import {
+  chmodSync,
+  closeSync,
+  fsyncSync,
+  openSync,
+  readFileSync,
+  unlinkSync,
+  writeSync,
+} from "node:fs";
+import { dirname, resolve } from "node:path";
 
-import { renameWithRetry } from "../../fs-atomic.ts";
+import { atomicWriteText, renameWithRetry } from "../../fs-atomic.ts";
 import { type EncryptedValue, decryptValue, encryptValue } from "./value-cipher.ts";
 import { restrictToOwner } from "./owner-acl.ts";
 
@@ -158,15 +171,25 @@ export class SecretEnvelopeError extends Error {
 export const SECRET_STORE_LOCKED_CODE = "secret_store_locked";
 
 /**
+ * The environment variable a non-interactive host (the MCP server, a
+ * cron-driven CLI) sets to hand the store its passphrase: the FIRST
+ * key-bearing operation that meets the wrapped keyfile unwraps with it,
+ * holds the DEK for the process, and DELETES the variable, so the
+ * passphrase never lingers in the environment nor rides into a child
+ * process. The value is consumed once per process whether or not it
+ * unwraps.
+ */
+export const SECRET_STORE_PASSPHRASE_ENV = "OPEN_SECOND_BRAIN_SECRETS_PASSPHRASE";
+
+/**
  * A key-bearing operation met a wrapped keyfile and this process holds no
- * unlocked key for it. The remedy is the unlock op, named in the message.
- *
- * The remedy is honest about the surface that prints it: the unlocked key
- * lives in this module's per-process, memory-only holder, so the unlock
- * the message names applies to THIS process only and the passphrase is
- * never persisted - a one-shot CLI command cannot carry the unlock into
- * the next command, and the text says so rather than pointing at a
- * remedy that silently cannot work across processes.
+ * unlocked key for it. The remedy is one of: give the passphrase to the
+ * key-bearing command itself (`--passphrase-from-env` or stdin - the
+ * key-bearing verbs ingest it), set
+ * {@link SECRET_STORE_PASSPHRASE_ENV} for a non-interactive host such as
+ * the MCP server (read once at the first key operation, then dropped),
+ * run the unlock op for this process, or unwrap the store back to a raw
+ * keyfile.
  *
  * The MESSAGE is path-free by construction: the prose travels into model
  * context through consumers that surface error text verbatim (a config
@@ -181,10 +204,12 @@ export class SecretStoreLockedError extends Error {
 
   constructor(keyPath: string) {
     super(
-      `the secret store is locked (the keyfile is passphrase-wrapped): run ` +
-        `"o2b brain secret unlock" to unwrap it for this process - the unlock ` +
-        `applies to this process only and the passphrase is never persisted, ` +
-        `so a key-bearing command must run in the same process that unlocked it`,
+      `the secret store is locked (the keyfile is passphrase-wrapped): pass the ` +
+        `passphrase to this command via --passphrase-from-env or stdin, or set ` +
+        `${SECRET_STORE_PASSPHRASE_ENV} for this process (a non-interactive host such ` +
+        `as the MCP server reads it once and drops it), or run ` +
+        `"o2b brain secret unlock" to unlock this process only - the passphrase is ` +
+        `never persisted; "o2b brain secret unwrap" writes the raw keyfile back`,
     );
     this.name = "SecretStoreLockedError";
     this.keyPath = keyPath;
@@ -246,11 +271,53 @@ export function heldUnlockedKey(keyPath: string): Buffer | null {
 /**
  * The held key, or the named locked-store refusal. This is the branch
  * `loadOrCreateKey` takes when the keyfile on disk is an envelope.
+ *
+ * Before refusing, the holder consults the environment once: a host that
+ * launched this process with {@link SECRET_STORE_PASSPHRASE_ENV} set
+ * (the MCP server, a cron-driven command) unwraps with it at the FIRST
+ * key operation - which is the whole of that host's startup story, since
+ * the value is consumed and deleted there, whether or not it unwraps. A
+ * wrong or absent value leaves the named locked-store refusal standing;
+ * a wrong value that was offered is the named passphrase refusal, which
+ * says what to fix.
  */
 export function heldKeyOrRefusal(keyPath: string): Buffer {
   const held = HELD_KEYS.get(holderSlot(keyPath));
-  if (held === undefined) throw new SecretStoreLockedError(keyPath);
-  return held;
+  if (held !== undefined) return held;
+  const fromEnvironment = unlockFromEnvironmentOffer(keyPath);
+  if (fromEnvironment !== null) return fromEnvironment;
+  throw new SecretStoreLockedError(keyPath);
+}
+
+/**
+ * Consume-once environment unlock. Reads
+ * {@link SECRET_STORE_PASSPHRASE_ENV}, DELETES it (so the passphrase
+ * neither lingers in the environment of this process nor reaches a child
+ * it would later spawn), and unwraps the envelope with the value. Null
+ * when the variable is unset - or set empty, which is treated as not
+ * offered the same way the CLI's ingestion treats a blank as no
+ * passphrase. A non-empty value that does not unwrap is the named
+ * passphrase refusal naming the variable; any other envelope refusal
+ * (version, cost curve) propagates as itself.
+ */
+function unlockFromEnvironmentOffer(keyPath: string): Buffer | null {
+  const offered = process.env[SECRET_STORE_PASSPHRASE_ENV];
+  if (offered === undefined) return null;
+  delete process.env[SECRET_STORE_PASSPHRASE_ENV];
+  if (offered.length === 0) return null;
+  try {
+    return unlockKeyfile(keyPath, offered);
+  } catch (err) {
+    if (err instanceof SecretEnvelopeError && err.code === ENVELOPE_REFUSAL_CODES.passphrase) {
+      throw new SecretEnvelopeError(
+        ENVELOPE_REFUSAL_CODES.passphrase,
+        keyPath,
+        `the passphrase in ${SECRET_STORE_PASSPHRASE_ENV} does not unwrap this envelope ` +
+          "(wrong passphrase, or the envelope is corrupt)",
+      );
+    }
+    throw err;
+  }
 }
 
 /** Lock: drop this process's held key, overwriting its bytes first. */
@@ -431,13 +498,46 @@ export function verifyKeyfilePassphrase(keyPath: string, passphrase: string): vo
   unwrapWith(deriveWrapKey(passphrase, envelope.kdf), envelope, keyPath);
 }
 
+/** Test seams of {@link wrapKeyfile}, so its failure paths are drivable. */
+export interface WrapKeyfileSeams {
+  /**
+   * Test-only replacement for the seal step, so a test can produce an
+   * envelope that does not unwrap to the DEK it claims to wrap (the
+   * refusal that must fire BEFORE anything touches the keyfile).
+   */
+  readonly seal?: (wrapKey: Buffer, plaintextBase64: string) => EncryptedValue;
+  /**
+   * Test-only replacement for the atomic write, so a test can land bytes
+   * that do not parse as the envelope that was built - the read-back
+   * verification's restore path.
+   */
+  readonly write?: (target: string, envelopeText: string) => void;
+}
+
 /**
  * Replace the raw keyfile at `keyPath` with the envelope wrapping `dek`
- * under `passphrase`. The swap is atomic and lands at mode 0600: a torn
- * wrap would destroy the only copy of the DEK, and the file this replaces
- * was owner-only, so the envelope must inherit exactly that discipline.
+ * under `passphrase`. This swap replaces the ONLY copy of the DEK, so it
+ * is armored twice:
+ *
+ * 1. The in-memory envelope is unwrapped and compared against `dek`
+ *    BEFORE any byte touches the filesystem - a seal that does not
+ *    round-trip refuses with the raw keyfile untouched.
+ * 2. The write goes through the repo's atomic write (temp file, fsync,
+ *    rename, parent-dir fsync) at mode 0600, and the file is read back
+ *    and unwrapped after the rename; a read-back that fails restores the
+ *    raw keyfile bytes (fsync'd, 0600) before refusing, so the wrap can
+ *    never leave the key less recoverable than it was.
+ *
+ * The swapped-in file carries the same owner-only discipline the raw
+ * file had: `restrictToOwner` (the Windows ACL) and a 0600 mode on
+ * POSIX.
  */
-export function wrapKeyfile(keyPath: string, passphrase: string, dek: Buffer): KeyfileEnvelope {
+export function wrapKeyfile(
+  keyPath: string,
+  passphrase: string,
+  dek: Buffer,
+  seams: WrapKeyfileSeams = {},
+): KeyfileEnvelope {
   if (passphrase.length === 0) {
     throw new SecretEnvelopeError(
       ENVELOPE_REFUSAL_CODES.passphrase,
@@ -453,25 +553,47 @@ export function wrapKeyfile(keyPath: string, passphrase: string, dek: Buffer): K
     );
   }
   const kdf = freshWrapKdfParams();
+  const derived = deriveWrapKey(passphrase, kdf);
+  const seal = seams.seal ?? ((key: Buffer, plaintext: string) => encryptValue(key, plaintext));
   const envelope: KeyfileEnvelope = {
     version: KEYFILE_ENVELOPE_SCHEMA_VERSION,
     kdf,
-    wrapped: encryptValue(deriveWrapKey(passphrase, kdf), dek.toString("base64")),
+    wrapped: seal(derived, dek.toString("base64")),
   };
-  const tmp = `${keyPath}.wrap-tmp`;
-  try {
-    writeFileSync(tmp, `${JSON.stringify(envelope, null, 2)}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
+  // The produced envelope must unwrap to the exact key it wraps, BEFORE
+  // the rename replaces the only copy of the raw key with it. A seal
+  // that fails this check refuses here and the raw keyfile is untouched.
+  const unwrapped = unwrapWith(derived, envelope, keyPath);
+  if (!timingSafeEqual(unwrapped, dek)) {
+    throw new SecretEnvelopeError(
+      ENVELOPE_REFUSAL_CODES.malformed,
+      keyPath,
+      "the produced envelope does not unwrap to the key it wraps; the raw keyfile was left untouched",
+    );
+  }
+  const envelopeText = `${JSON.stringify(envelope, null, 2)}\n`;
+  const write =
+    seams.write ??
+    ((target: string, text: string) => {
+      atomicWriteText(target, text, { mode: 0o600 });
     });
-    renameWithRetry(tmp, keyPath);
-  } catch (err) {
-    try {
-      unlinkSync(tmp);
-    } catch {
-      // The tmp may never have been created; the original error is what
-      // the caller needs.
+  write(keyPath, envelopeText);
+  // Read back what actually landed and unwrap it. The rename replaced
+  // the raw keyfile, so a mangled or foreign envelope at the path is the
+  // destruction of the only copy of the DEK: restore those raw bytes
+  // (fsync'd, 0600) before refusing.
+  try {
+    const landed = readEnvelope(keyPath);
+    const restored = unwrapWith(derived, landed, keyPath);
+    if (!timingSafeEqual(restored, dek)) {
+      throw new SecretEnvelopeError(
+        ENVELOPE_REFUSAL_CODES.malformed,
+        keyPath,
+        "the written envelope does not unwrap to the key it wraps",
+      );
     }
+  } catch (err) {
+    writeRawKeyfileBytes(keyPath, dek);
     throw err;
   }
   // The envelope now IS the keyfile: the same owner-only treatment the raw
@@ -492,6 +614,80 @@ export function wrapKeyfile(keyPath: string, passphrase: string, dek: Buffer): K
     }
   }
   return envelope;
+}
+
+/**
+ * Atomically write the raw DEK bytes over whatever sits at `keyPath`:
+ * the restore half of {@link wrapKeyfile}'s read-back check, and the
+ * write half of `secret unwrap` (the envelope's way back to a raw
+ * keyfile). fsync'd temp file, mode 0600, rename, parent-dir fsync.
+ */
+export function writeRawKeyfileBytes(keyPath: string, dek: Buffer): void {
+  if (dek.length !== DEK_BYTES) {
+    throw new SecretEnvelopeError(
+      ENVELOPE_REFUSAL_CODES.malformed,
+      keyPath,
+      `refusing to write ${String(dek.length)} bytes of key material, expected ${String(DEK_BYTES)}`,
+    );
+  }
+  const tmp = `${keyPath}.raw-tmp`;
+  let fd: number | null = null;
+  try {
+    fd = openSync(tmp, "wx", 0o600);
+    let written = 0;
+    while (written < dek.byteLength) {
+      written += writeSync(fd, dek, written, dek.byteLength - written);
+    }
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = null;
+    renameWithRetry(tmp, keyPath);
+  } catch (err) {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {
+        // The first close already ran or the fd is dead; the error below
+        // is what the caller needs.
+      }
+    }
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // The tmp may never have been created.
+    }
+    throw err;
+  }
+  // Best-effort parent-dir fsync, the same durability the repo's atomic
+  // write gives every rename: the raw key must survive a crash right
+  // after this returns.
+  try {
+    const dfd = openSync(dirname(keyPath), "r");
+    try {
+      fsyncSync(dfd);
+    } finally {
+      closeSync(dfd);
+    }
+  } catch {
+    // Not every platform supports a directory fsync; the rename itself is
+    // already atomic.
+  }
+}
+
+/**
+ * Verify the passphrase, then replace the envelope at `keyPath` with the
+ * raw DEK bytes it wraps - the way back from a wrapped store to the
+ * plain keyfile, and the only recovery when a host cannot carry a
+ * passphrase (or the operator wants to retire the wrap). The envelope is
+ * only overwritten after the passphrase has unwrapped it, so a wrong
+ * passphrase leaves the wrap intact. The raw key material on disk is the
+ * caller's warning to give, not this module's.
+ */
+export function unwrapKeyfileToRaw(keyPath: string, passphrase: string): Buffer {
+  const envelope = readEnvelope(keyPath);
+  const dek = unwrapWith(deriveWrapKey(passphrase, envelope.kdf), envelope, keyPath);
+  writeRawKeyfileBytes(keyPath, dek);
+  return dek;
 }
 
 /**
