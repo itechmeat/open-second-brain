@@ -369,7 +369,7 @@ test("owner-write gate warn: a cross-owner write is allowed with exactly one led
   expect(rows[0]!.source).toBe("integrity.owner_scope_writes");
   expect(rows[0]!.verdict).toBe(GATE_MODE.warn);
   expect(rows[0]!.actor).toBe(SELF);
-  expect(rows[0]!.target).toBe("Brain/preferences/pref-watched.md");
+  expect(rows[0]!.target.replaceAll("\\", "/")).toBe("Brain/preferences/pref-watched.md");
   expect(rows[0]!.reason).toContain(OTHER);
 });
 

@@ -81,9 +81,11 @@ export interface CrossOwnerWriteInput {
  * gate refuses one way only - and a reason naming both owner tokens, the
  * deciding rule, and what would change the answer.
  */
+export const OWNER_WRITE_REFUSAL = "owner-write-refused";
+
 export type CrossOwnerWriteVerdict =
   | { refused: false }
-  | { refused: true; token: "owner-write-refused"; reason: string };
+  | { refused: true; token: typeof OWNER_WRITE_REFUSAL; reason: string };
 
 const NOT_REFUSED: CrossOwnerWriteVerdict = Object.freeze({
   refused: false,
@@ -97,7 +99,7 @@ function namedOwner(value: string | undefined): string | null {
 }
 
 function refused(reason: string): CrossOwnerWriteVerdict {
-  return Object.freeze({ refused: true, token: "owner-write-refused", reason });
+  return Object.freeze({ refused: true, token: OWNER_WRITE_REFUSAL, reason });
 }
 
 /**

@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { startHttp, type HttpServerHandle } from "../../src/mcp/index.ts";
+import { fakeCredential } from "../helpers/fake-credentials.ts";
 import {
   MCP_TOKENS_REQUIRED_CONFIG_KEY,
   authenticateRequest,
@@ -30,7 +31,6 @@ import { GATE_MODE } from "../../src/core/integrity/stamp.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
 import { BRAIN_CONFIDENCE, BRAIN_PREFERENCE_STATUS } from "../../src/core/brain/types.ts";
 import { mintAgentToken, rotateAgentToken } from "../../src/core/brain/secrets/token-store.ts";
-import { fakeCredential } from "../helpers/fake-credentials.ts";
 
 let vault: string;
 let handle: HttpServerHandle | null = null;
@@ -276,7 +276,7 @@ describe("HTTP token authentication", () => {
 /** A minimal request double: authenticateRequest reads only `headers`. */
 const reqWith = (headers: Record<string, string>) => ({ headers }) as unknown as IncomingMessage;
 
-const RESOLVED_TOKEN = "token-material-1";
+const RESOLVED_TOKEN = fakeCredential("token-material", "-1");
 
 const resolveToken = (presented: string) =>
   presented === RESOLVED_TOKEN ? { agent: "edge-agent" } : null;
@@ -284,7 +284,7 @@ const resolveToken = (presented: string) =>
 describe("authenticateRequest", () => {
   test("the token map answers first, then the shared key, then null", () => {
     const base = {
-      apiKey: "key-material-2",
+      apiKey: fakeCredential("key-material-", "2"),
       resolveToken,
     };
     expect(
@@ -294,10 +294,13 @@ describe("authenticateRequest", () => {
       via: "token",
     });
     expect(
-      authenticateRequest(reqWith({ authorization: "Bearer key-material-2" }), {
-        ...base,
-        sharedKeyAgent: "operator",
-      }),
+      authenticateRequest(
+        reqWith({ authorization: `Bearer ${fakeCredential("key-material-", "2")}` }),
+        {
+          ...base,
+          sharedKeyAgent: "operator",
+        },
+      ),
     ).toEqual({ agent: "operator", via: "shared-key" });
     expect(authenticateRequest(reqWith({ authorization: "Bearer neither" }), base)).toBeNull();
     expect(authenticateRequest(reqWith({}), base)).toBeNull();

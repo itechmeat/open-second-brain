@@ -120,7 +120,7 @@ Lane D provides (`src/core/brain/trust/owner-write-gate.ts`, consumed by Lane C 
 ```ts
 export const OWNER_SCOPE_WRITES_KEY = "integrity.owner_scope_writes";   // in INTEGRITY_GATE_KEYS; strict fallback = fail
 export interface CrossOwnerWriteInput { explicitOwner?: string; frontmatterOwner?: string; resolvedIdentity: string; gateMode: "off" | "warn" | "fail"; document?: PermissionsDocument | null; subject?: PermissionSubject }
-export type CrossOwnerWriteVerdict = { refused: false } | { refused: true; token: "owner-write-refused"; reason: string };
+export type CrossOwnerWriteVerdict = { refused: false } | { refused: true; token: OwnerWriteRefusal; reason: string };
 export function refuseCrossOwnerWrite(input: CrossOwnerWriteInput): CrossOwnerWriteVerdict;
 // composition: document verdict (most restrictive) with gate mode; warn -> { refused: false } + caller logs one ledger row; off with no document -> { refused: false } byte-identically
 ```

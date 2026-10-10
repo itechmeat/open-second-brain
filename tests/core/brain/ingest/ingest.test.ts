@@ -561,7 +561,8 @@ describe("ingestSource under the ingest review gate", () => {
     // The staged page is derived solely from this source (its bytes carry
     // the same `source_path` the published page would), so the cleanup's
     // trace finds it under Brain/pending/ingest/ and removes it.
-    expect(plan.deleted).toContain(
+    const deleted = plan.deleted.map((path) => path.replaceAll("\\", "/"));
+    expect(deleted).toContain(
       join(vault, "Brain/pending/ingest", `${res.pendingId}.md`).slice(vault.length + 1),
     );
     expect(existsSync(join(vault, "Brain/pending/ingest", `${res.pendingId}.md`))).toBe(false);
