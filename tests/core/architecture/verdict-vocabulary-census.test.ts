@@ -147,6 +147,7 @@ import {
   SNAPSHOT_PRUNE_REFUSALS,
 } from "../../../src/core/brain/snapshot.ts";
 import { GATE_MODE, GATE_MODES, isGateMode } from "../../../src/core/integrity/stamp.ts";
+import { REVIEW_LANE, REVIEW_LANES, isReviewLane } from "../../../src/core/brain/write-gate.ts";
 import { isToolScope, TOOL_SCOPE, TOOL_SCOPES } from "../../../src/mcp/tool-contract.ts";
 import {
   isRuntimeTarget,
@@ -1511,6 +1512,15 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     members: HARNESS_IDS,
     guard: isHarnessId,
   },
+  {
+    // The review lanes a write can be staged through (write-side trust):
+    // the lane name selects the `write_approval.*` key and names the
+    // `Brain/pending/` subdirectory a staged document lands in.
+    name: "REVIEW_LANE",
+    values: REVIEW_LANE,
+    members: REVIEW_LANES,
+    guard: isReviewLane,
+  },
 ]);
 
 // ---------------------------------------------------------------------------
@@ -1775,7 +1785,7 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
  * How many four-piece vocabularies `src/` currently holds. Measured, and
  * kept as an equality rather than a floor - see the population test.
  */
-const VOCABULARY_POPULATION = 92;
+const VOCABULARY_POPULATION = 93;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {

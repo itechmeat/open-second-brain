@@ -204,6 +204,8 @@ async function toolBrainFeedback(
     return {
       kind: "signal",
       deduped: true,
+      // A dedup wrote nothing, so it staged nothing.
+      staged: false,
       signal_path: vaultRelativeSafe(ctx.vault, sigResult.path),
       signal_absolute_path: resolve(sigResult.path),
       signal_id: sigResult.id,
@@ -334,6 +336,11 @@ async function toolBrainFeedback(
     // the one composer: an agent that learns the exit on one surface
     // reads it on the other.
     ...captureRoutingHintField(routingHint),
+    // Write-side trust (Task 6): the gate resolved inside writeSignal, so
+    // the receipt says which directory the bytes actually landed in. An
+    // agent that reads `staged: true` knows the signal is awaiting review
+    // under `Brain/pending/`, not recalled from `Brain/inbox/`.
+    staged: sigResult.staged,
     signal_path: vaultRelativeSafe(ctx.vault, sigResult.path),
     signal_absolute_path: resolve(sigResult.path),
     signal_id: sigResult.id,

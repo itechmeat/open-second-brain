@@ -26,29 +26,34 @@ import { existsSync, readFileSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
 import { atomicCreateFileSyncExclusive } from "../fs-atomic.ts";
-import { discoverConfig } from "../config.ts";
 import type { FrontmatterMap } from "../types.ts";
 import { parseFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
 import { brainDirs, brainDirsForWrite, ensureInsideVault } from "./paths.ts";
 import { parseSignal, writeSignal, type WriteSignalInput } from "./signal.ts";
 import type { BrainSignal } from "./types.ts";
-
-/** Config key / env twin for the opt-in write-approval queue (default off). */
-export const WRITE_APPROVAL_ENABLED_CONFIG_KEY = "write_approval.enabled";
-export const WRITE_APPROVAL_ENABLED_ENV_KEY = "OPEN_SECOND_BRAIN_WRITE_APPROVAL_ENABLED";
+import {
+  WRITE_APPROVAL_ENABLED_CONFIG_KEY,
+  WRITE_APPROVAL_ENABLED_ENV_KEY,
+  resolveWriteApprovalLane,
+} from "./write-gate.ts";
 
 /**
- * Resolve the write-approval toggle (env wins over config file), mirroring
- * the A1/A2 flat-key resolvers. Default OFF: absent / any non-`true` value
- * keeps the direct-to-inbox behaviour byte-for-byte.
+ * Config key / env twin for the opt-in write-approval queue (default off).
+ * Declared in `write-gate.ts` beside the per-lane keys and re-exported here
+ * so the historical import path keeps working.
+ */
+export { WRITE_APPROVAL_ENABLED_CONFIG_KEY, WRITE_APPROVAL_ENABLED_ENV_KEY };
+
+/**
+ * Resolve the write-approval toggle (env wins over config file).
+ *
+ * The signals lane of the write-side-trust gate - the master key IS the
+ * signals key, so this is `resolveWriteApprovalLane("signals")` spelled
+ * the way every existing caller imports it. Default OFF: absent / any
+ * non-`true` value keeps the direct-to-inbox behaviour byte-for-byte.
  */
 export function resolveWriteApprovalEnabled(configPath?: string): boolean {
-  const env = process.env[WRITE_APPROVAL_ENABLED_ENV_KEY];
-  const raw =
-    env !== undefined && env !== ""
-      ? env
-      : discoverConfig(configPath).data[WRITE_APPROVAL_ENABLED_CONFIG_KEY];
-  return typeof raw === "string" && raw.trim().toLowerCase() === "true";
+  return resolveWriteApprovalLane("signals", configPath);
 }
 
 /** A signal basename shape: `sig-<YYYY-MM-DD>-<slug>` (no path separators). */

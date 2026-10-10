@@ -45,6 +45,7 @@ import {
 import { EXPIRATION_DATE_FIELD, normalizeExpirationDate } from "./expiration.ts";
 import { writeFrontmatterAtomic, parseFrontmatter, slugify } from "../vault.ts";
 import { requireObsidianTagValue } from "./tag-syntax.ts";
+import { resolveWriteApprovalLane, REVIEW_LANE } from "./write-gate.ts";
 import { compress, expand, CODEC_VERSION } from "./portability/codec.ts";
 import { allocateAndCreate, brainDirsForWrite, validateIsoDate } from "./paths.ts";
 import {
@@ -239,6 +240,15 @@ export interface WriteSignalResult {
   readonly path: string;
   readonly id: string;
   /**
+   * True when the write-approval review gate resolved ON for the signals
+   * lane and the signal was staged into `Brain/pending/` instead of
+   * `Brain/inbox/` (write-side trust, Task 6). The document is
+   * byte-for-byte identical either way - staging is purely a change of
+   * directory - and apply moves it verbatim. False on every direct
+   * write, and false on a deduped no-op (a dedup staged nothing).
+   */
+  readonly staged: boolean;
+  /**
    * Set to `true` when an `idempotency_key` matched a prior write with an
    * identical payload, so this call was a deduped no-op (no new file). The
    * returned `path`/`id` point at the ORIGINAL signal. Absent on a normal
@@ -345,6 +355,7 @@ export function writeSignal(
         return {
           path: ref.path ? join(vault, ref.path) : "",
           id: ref.id ?? "",
+          staged: false,
           deduped: true,
         };
       }
@@ -356,6 +367,16 @@ export function writeSignal(
   // materializes a mis-resolved root, so it asserts the vault identity
   // before allocating a filename under it.
   const dirs = brainDirsForWrite(vault);
+  // Review gate (write-side trust, Task 6). Resolved ONLY when the caller
+  // named no targetDir: an explicit target is the staging path itself
+  // (`stagePendingSignal`), and it must never re-enter the gate it feeds.
+  // When the signals lane resolves on, the signal stages into
+  // `Brain/pending/` with byte-identical bytes; every ungated caller
+  // (MCP and CLI feedback, inline scan, session import, session
+  // lifecycle, session checkpoint) inherits the gate here at the
+  // chokepoint with no change of its own.
+  const gateStaged =
+    options.targetDir === undefined && resolveWriteApprovalLane(REVIEW_LANE.signals);
   const prefix = signalPrefix(sanitised.date);
 
   // Allocation and creation are one step (#161): a signal write is the
@@ -367,7 +388,7 @@ export function writeSignal(
     allocateAndCreate(
       {
         vault,
-        targetDir: options.targetDir ?? dirs.inbox,
+        targetDir: options.targetDir ?? (gateStaged ? dirs.pending : dirs.inbox),
         prefix,
         slug: sanitised.slug,
         maxAttempts: options.maxSlugAttempts,
@@ -406,7 +427,7 @@ export function writeSignal(
     );
   }
 
-  return { path: allocated.path, id };
+  return { path: allocated.path, id, staged: gateStaged };
 }
 
 /**
