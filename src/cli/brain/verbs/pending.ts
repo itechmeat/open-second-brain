@@ -90,7 +90,11 @@ function pendingList(argv: string[]): number {
         total: listing.entries.length,
       });
     } else if (listing.entries.length === 0 && listing.unreadable.length === 0) {
-      ok("no pending signals");
+      ok(
+        lane === null || lane === "all"
+          ? "no entries in any review lane"
+          : `no entries in the ${lane} review lane`,
+      );
     } else {
       for (const e of listing.entries) {
         const what =

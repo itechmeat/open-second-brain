@@ -111,7 +111,7 @@ describe("o2b brain pending", () => {
   test("list on an empty queue reports nothing", async () => {
     const out = await runCli(["brain", "pending", "list"], { env: env() });
     expect(out.returncode).toBe(0);
-    expect(out.stdout).toContain("no pending signals");
+    expect(out.stdout).toContain("no entries in any review lane");
   });
 });
 
