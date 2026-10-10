@@ -76,6 +76,8 @@ import {
 } from "./note-template.ts";
 import { NOTE_WRITE_OP, recordNoteWrite } from "./write-record.ts";
 import { ROUTE_STAGE, timeStageSync } from "../../route-scope.ts";
+import { REVIEW_LANE } from "../write-gate.ts";
+import { resolveWriteDisposition, stageForReview } from "../pending/pending-lanes.ts";
 
 /** Machine-readable reason a {@link createNote} call was refused. */
 export type CreateNoteErrorCode =
@@ -149,8 +151,8 @@ export interface CreateNoteInput {
   readonly configPath?: string;
 }
 
-/** What a {@link createNote} call actually did. */
-export type CreateNoteOutcome = "created" | "skipped";
+/** What a {@link createNote} call actually did. `staged` means the review gate parked the bytes in the queue. */
+export type CreateNoteOutcome = "created" | "skipped" | "staged";
 
 /** A note written by this call. */
 export interface CreatedNoteResult {
@@ -190,12 +192,35 @@ export interface SkippedNoteResult {
 }
 
 /**
+ * A create STAGED into the review queue instead of published (write-side
+ * trust, Task 9). The notes lane's disposition resolved to `stage`, so
+ * the exact bytes this call would have published sit in
+ * `Brain/pending/notes/` under a `note-` id; nothing exists at the
+ * target yet.
+ *
+ * Deliberately WITHOUT a `write_id`, for the same reason the skip is: no
+ * note was written, so there is no write to attribute. The pending id is
+ * the handle an operator (or the applying agent's operator) uses to
+ * publish or reject the staged bytes.
+ */
+export interface StagedNoteResult {
+  /** Vault-relative POSIX path the note will land at when applied. */
+  readonly path: string;
+  readonly outcome: "staged";
+  readonly created: false;
+  /** Id of the pending queue entry holding the staged bytes. */
+  readonly pendingId: string;
+  /** Absolute path of the staged document. */
+  readonly pendingPath: string;
+}
+
+/**
  * Discriminated on `outcome`. `created` is the boolean the MCP surface
  * has returned since the tool shipped and is kept in lockstep with it;
  * `outcome` is what new callers should branch on, because it stays
  * readable if a third disposition is ever added.
  */
-export type CreateNoteResult = CreatedNoteResult | SkippedNoteResult;
+export type CreateNoteResult = CreatedNoteResult | SkippedNoteResult | StagedNoteResult;
 
 /** A note path resolved through the shared write safety envelope. */
 export interface ResolvedNoteTarget {
@@ -564,6 +589,30 @@ export function createNote(vault: string, input: CreateNoteInput): CreateNoteRes
   // refusal below, which closes the residual TOCTOU race race-free.
   if (skipOccupied && existsSync(abs)) {
     return skippedResult(relPath);
+  }
+
+  // Review gate (write-side trust, Task 9). A CREATE stages under the
+  // notes lane's disposition; updates and appends never reach this
+  // primitive. The review boundary is ENTRY, not mutation: a target that
+  // already exists was admitted when it was published, so the ordinary
+  // refusal stands and only a first publish can be staged. The staged
+  // bytes are byte-for-byte what the write below would have published -
+  // the origin-channel stamp included - so apply reproduces the published
+  // document exactly.
+  const disposition = resolveWriteDisposition(vault, REVIEW_LANE.notes);
+  if (disposition.verdict === "stage") {
+    if (existsSync(abs)) {
+      throw new CreateNoteError("exists", `note already exists: ${relPath}`);
+    }
+    const bytes = formatFrontmatter(frontmatter, body);
+    const staged = stageForReview(vault, REVIEW_LANE.notes, relPath, () => bytes);
+    return {
+      path: relPath,
+      outcome: "staged",
+      created: false,
+      pendingId: staged.pendingId,
+      pendingPath: staged.path,
+    };
   }
 
   mkdirSync(dirname(abs), { recursive: true });

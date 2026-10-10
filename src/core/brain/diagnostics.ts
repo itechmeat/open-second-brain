@@ -630,6 +630,15 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
+        // Write-side trust, Task 9. A gated write landed in the review
+        // queue instead of its publish lane. The receipt carries the
+        // pending id; the exit is the queue command that publishes it.
+        code: "pending-staged",
+        issueClass: "write staged into the review queue, awaiting an operator apply",
+        nextCommand: "o2b brain pending apply <pending-id>",
+        autoRepairable: false,
+      },
+      {
         code: "cli-config-absent",
         issueClass: "no machine configuration file",
         nextCommand: "o2b init --vault <path> --name <name>",

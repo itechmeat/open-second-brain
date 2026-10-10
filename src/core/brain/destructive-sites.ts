@@ -125,13 +125,19 @@ const UNARCHIVED_EXCLUDED: RecoverabilityFacts = Object.freeze({
 export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclaration>> =
   Object.freeze({
     // --- Moves whose destination is proved before the source goes -------
-    "src/core/brain/pending.ts": {
+    // (`src/core/brain/pending.ts` stopped being a site when the
+    // multi-lane queue moved the engine into `pending/pending-lanes.ts`
+    // and the module became a pure delegation surface.)
+    "src/core/brain/pending/pending-lanes.ts": {
       calls: ["unlinkSync"],
       recovery: UNARCHIVED_BRAIN,
       reason:
-        "`atomicCreateFileSyncExclusive` lands the inbox copy and throws on a name " +
-        "collision BEFORE the unlink runs, so the record exists twice at the moment " +
-        "the source is removed and never zero times.",
+        "the multi-lane queue's apply and reject, generalized from the A3 applier: " +
+        "apply exclusive-creates the decoded publish target and throws on an occupied " +
+        "name BEFORE the staged copy is unlinked, so the document exists twice at that " +
+        "instant and never zero times; reject writes the retire-shaped render through " +
+        "`writeFrontmatterAtomic` and refuses an occupied retired name before the " +
+        "staged copy goes, preserving every original field beside the retire stamps.",
     },
     "src/core/brain/preference.ts": {
       calls: ["unlinkSync"],

@@ -42,6 +42,7 @@ import {
 } from "../../core/brain/write-batch.ts";
 import type { ReadableRef } from "../../core/brain/near-duplicate.ts";
 import { nextCommandField } from "../../core/brain/next-step.ts";
+import { PENDING_STAGED_DIAGNOSTIC_CODE } from "../../core/brain/pending/pending-lanes.ts";
 import {
   lintWrittenPages,
   pageLintField,
@@ -286,7 +287,20 @@ async function toolBrainCreateNote(
     // `outcome` is the discriminant; `created` is the boolean this tool
     // has always returned and stays in lockstep with it, so a skip can
     // never be read as a create by either field. A skip authored no
-    // bytes, so it names no page for the lint.
+    // bytes, so it names no page for the lint. A STAGED create (review
+    // gate on) also authored nothing at the target: its receipt carries
+    // the pending id and the queue command that publishes it, and names
+    // no page for the lint because nothing was published.
+    if (res.outcome === "staged") {
+      return await noteWriteResult(ctx, [], {
+        created: false,
+        outcome: "staged",
+        staged: true,
+        path: res.path,
+        pending_id: res.pendingId,
+        ...nextCommandField(PENDING_STAGED_DIAGNOSTIC_CODE),
+      });
+    }
     return await noteWriteResult(ctx, res.created ? [res.path] : [], {
       created: res.created,
       outcome: res.outcome,

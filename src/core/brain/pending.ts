@@ -1,10 +1,10 @@
 /**
- * Write-approval pending queue (A3 / t_e540b093).
+ * Write-approval pending queue (A3 / t_e540b093; write-side trust Task 9).
  *
- * When `write_approval.enabled` is on, extracted signals are STAGED into
- * `Brain/pending/` instead of `Brain/inbox/` (the frontmatter document is
- * byte-for-byte identical - staging is purely a change of directory). An
- * operator then reviews the queue:
+ * When the signals lane of the write-approval gate is on, extracted
+ * signals are STAGED into `Brain/pending/` instead of `Brain/inbox/` (the
+ * frontmatter document is byte-for-byte identical - staging is purely a
+ * change of directory). An operator then reviews the queue:
  *
  *   - {@link listPending}    enumerate staged signals;
  *   - {@link applyPending}   move a staged file into `Brain/inbox/` UNCHANGED
@@ -20,22 +20,38 @@
  *
  * The document schema is unchanged - staging and applying reuse the exact
  * signal file that `writeSignal` produces.
+ *
+ * Since the multi-lane queue (Task 9) the LISTING, APPLY and REJECT
+ * engines live in `./pending/pending-lanes.ts` and this module is the
+ * historical import surface: same exports, same id grammar, same
+ * behaviour for `sig-` ids, with the `note-` and `ing-` lanes sharing
+ * the engine.
  */
 
-import { existsSync, readFileSync, readdirSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
-
-import { atomicCreateFileSyncExclusive } from "../fs-atomic.ts";
-import type { FrontmatterMap } from "../types.ts";
-import { parseFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
-import { brainDirs, brainDirsForWrite, ensureInsideVault } from "./paths.ts";
-import { parseSignal, writeSignal, type WriteSignalInput } from "./signal.ts";
+import { brainDirsForWrite } from "./paths.ts";
+import { writeSignal, type WriteSignalInput } from "./signal.ts";
 import type { BrainSignal } from "./types.ts";
 import {
   WRITE_APPROVAL_ENABLED_CONFIG_KEY,
   WRITE_APPROVAL_ENABLED_ENV_KEY,
+  REVIEW_LANE,
   resolveWriteApprovalLane,
 } from "./write-gate.ts";
+import {
+  InvalidPendingIdError,
+  PendingApplyConflictError,
+  PendingSignalNotFoundError,
+  applyPendingLane,
+  listPendingLane,
+  rejectPendingLane,
+} from "./pending/pending-lanes.ts";
+
+/**
+ * The queue's typed errors and id grammar moved to the lanes engine
+ * (Task 9); re-exported here so every existing import path keeps
+ * resolving.
+ */
+export { InvalidPendingIdError, PendingApplyConflictError, PendingSignalNotFoundError };
 
 /**
  * Config key / env twin for the opt-in write-approval queue (default off).
@@ -54,50 +70,6 @@ export { WRITE_APPROVAL_ENABLED_CONFIG_KEY, WRITE_APPROVAL_ENABLED_ENV_KEY };
  */
 export function resolveWriteApprovalEnabled(configPath?: string): boolean {
   return resolveWriteApprovalLane("signals", configPath);
-}
-
-/** A signal basename shape: `sig-<YYYY-MM-DD>-<slug>` (no path separators). */
-const SIGNAL_ID_RE = /^sig-\d{4}-\d{2}-\d{2}-[A-Za-z0-9][A-Za-z0-9._-]*$/;
-
-/** Typed error for a missing / already-processed pending id (never a no-op). */
-export class PendingSignalNotFoundError extends Error {
-  readonly id: string;
-  constructor(id: string) {
-    super(`pending signal not found: ${JSON.stringify(id)}`);
-    this.name = "PendingSignalNotFoundError";
-    this.id = id;
-  }
-}
-
-/** Typed error for an id whose shape could not be a signal basename. */
-export class InvalidPendingIdError extends Error {
-  readonly id: string;
-  constructor(id: string) {
-    super(`invalid pending signal id ${JSON.stringify(id)} - expected sig-<date>-<slug>`);
-    this.name = "InvalidPendingIdError";
-    this.id = id;
-  }
-}
-
-/**
- * The inbox slot this id would move into is already occupied.
- *
- * The exclusive create in {@link applyPending} has always refused this,
- * as a raw filesystem error. It is a named error now because the dry run
- * added in no-dead-ends task 11 has to refuse it too: a preview that
- * reported a move the apply would then reject would be a preview that
- * lied, which is the defect class this release exists to remove. The
- * exclusive create stays as the actual race gate.
- */
-export class PendingApplyConflictError extends Error {
-  readonly id: string;
-  readonly path: string;
-  constructor(id: string, path: string) {
-    super(`inbox already holds a signal named ${JSON.stringify(id)}: ${path}`);
-    this.name = "PendingApplyConflictError";
-    this.id = id;
-    this.path = path;
-  }
 }
 
 /** One staged signal: its id, absolute path, and parsed frontmatter. */
@@ -123,35 +95,15 @@ export function stagePendingSignal(vault: string, input: WriteSignalInput): Stag
 }
 
 /**
- * Validate a pending id and resolve its absolute path inside
- * `Brain/pending/`.
- *
- * `forWrite` selects the guarded directory resolver, following the one
- * rule the appliers share: the vault-identity assertion runs only when
- * the call will write (see the write-guard section of
- * `applier-capability.ts`). A dry run resolves the same paths ungated,
- * because gating a preview refuses the surface an operator reaches for
- * to find out what is wrong.
+ * List the staged signals in `Brain/pending/`, sorted by id. Delegates to
+ * the lanes engine; corrupt files are partitioned as unreadable there, so
+ * this historical surface keeps skipping them.
  */
-function pendingFilePath(vault: string, id: string, forWrite: boolean): string {
-  if (!SIGNAL_ID_RE.test(id)) throw new InvalidPendingIdError(id);
-  const dirs = forWrite ? brainDirsForWrite(vault) : brainDirs(vault);
-  return ensureInsideVault(join(dirs.pending, `${id}.md`), vault);
-}
-
-/** List the staged signals in `Brain/pending/`, sorted by id. */
 export function listPending(vault: string): PendingEntry[] {
-  const dir = brainDirs(vault).pending;
-  if (!existsSync(dir)) return [];
   const out: PendingEntry[] = [];
-  for (const file of readdirSync(dir).toSorted()) {
-    if (!file.startsWith("sig-") || !file.endsWith(".md")) continue;
-    const path = join(dir, file);
-    try {
-      out.push({ id: file.slice(0, -".md".length), path, signal: parseSignal(path) });
-    } catch {
-      // A corrupt staged file must not break the whole listing; skip it.
-    }
+  for (const entry of listPendingLane(vault, REVIEW_LANE.signals).entries) {
+    if (entry.signal !== undefined)
+      out.push({ id: entry.id, path: entry.path, signal: entry.signal });
   }
   return out;
 }
@@ -172,33 +124,17 @@ export interface PendingApplyResult extends StageResult {
  * removed only after the inbox copy lands. A missing id is a typed error.
  *
  * `dryRun` reports the move and writes nothing (no-dead-ends, task 11).
- * This was the only applier in the codebase without a preview, so an
- * operator working the approval queue could apply a staged signal but
- * could not be told what applying would do first. The preview runs every
- * check the apply runs - id shape, staged file present, destination free
- * - and stops before the two calls that touch disk, so the report it
- * gives is the move the apply would make rather than a guess at it.
+ * The preview runs every check the apply runs - id shape, staged file
+ * present, destination free - and stops before the two calls that touch
+ * disk, so the report it gives is the move the apply would make rather
+ * than a guess at it. Delegates to {@link applyPendingLane}.
  */
 export function applyPending(
   vault: string,
   id: string,
   opts: PendingApplyOptions = {},
 ): PendingApplyResult {
-  const dryRun = opts.dryRun === true;
-  const src = pendingFilePath(vault, id, !dryRun);
-  if (!existsSync(src)) throw new PendingSignalNotFoundError(id);
-  const dirs = dryRun ? brainDirs(vault) : brainDirsForWrite(vault);
-  const dest = ensureInsideVault(join(dirs.inbox, `${id}.md`), vault);
-  if (existsSync(dest)) throw new PendingApplyConflictError(id, dest);
-  if (dryRun) return { id, path: dest, dryRun: true };
-
-  const contents = readFileSync(src, "utf8");
-  // Exclusive create: never clobber an existing inbox file with the same
-  // id. This is the real gate - the check above makes the preview honest,
-  // it does not replace the atomic one.
-  atomicCreateFileSyncExclusive(dest, contents);
-  unlinkSync(src);
-  return { id, path: dest, dryRun: false };
+  return applyPendingLane(vault, id, opts);
 }
 
 export interface RejectPendingOptions {
@@ -211,7 +147,8 @@ export interface RejectPendingOptions {
  * frontmatter (`_status: "retired"`, `retired_at`, `retired_reason`), keeping
  * the original signal fields for the audit trail. A missing id is a typed
  * error. The `brain/signal` tag is swapped for `brain/retired` so the moved
- * file reads as a retired artifact.
+ * file reads as a retired artifact, and the queue stamps `osb_pending_lane`
+ * with the lane the entry came from. Delegates to {@link rejectPendingLane}.
  */
 export function rejectPending(
   vault: string,
@@ -219,30 +156,5 @@ export function rejectPending(
   reason: string,
   opts: RejectPendingOptions = {},
 ): StageResult {
-  const src = pendingFilePath(vault, id, true);
-  if (!existsSync(src)) throw new PendingSignalNotFoundError(id);
-  const now = opts.now ?? new Date();
-
-  const [meta, body] = parseFrontmatter(src);
-  const nextMeta: FrontmatterMap = {};
-  for (const [k, v] of Object.entries(meta)) {
-    if (k === "_status" || k === "retired_at" || k === "retired_reason") continue;
-    if (k === "tags") {
-      const arr = Array.isArray(v) ? [...v] : [];
-      nextMeta["tags"] = arr.map((t) => (t === "brain/signal" ? "brain/retired" : t));
-      continue;
-    }
-    nextMeta[k] = v as never;
-  }
-  nextMeta["_status"] = "retired";
-  nextMeta["retired_at"] = now.toISOString();
-  nextMeta["retired_reason"] = reason;
-
-  const dest = ensureInsideVault(join(brainDirsForWrite(vault).retired, `${id}.md`), vault);
-  writeFrontmatterAtomic(dest, nextMeta, body, {
-    overwrite: false,
-    vaultForRelativePath: vault,
-  });
-  unlinkSync(src);
-  return { id, path: dest };
+  return rejectPendingLane(vault, id, reason, opts);
 }

@@ -27,16 +27,14 @@ import {
 
 const toCleanup: string[] = [];
 const envSaved = new Map<string, string | undefined>();
-const ENV_KEYS = [
-  "OPEN_SECOND_BRAIN_WRITE_APPROVAL_ENABLED",
-  WRITE_APPROVAL_NOTES_ENV_KEY,
-  WRITE_APPROVAL_INGEST_ENV_KEY,
-  "OPEN_SECOND_BRAIN_CONFIG",
-];
 
 afterEach(() => {
-  for (const key of ENV_KEYS) {
-    const saved = envSaved.get(key);
+  // Restore ONLY the keys this file actually overrode. Iterating the full
+  // ENV_KEYS list deleted entries it never saved - including the
+  // `OPEN_SECOND_BRAIN_CONFIG` default tests/setup.ts installs for the
+  // whole run - so any later file in the same process that relies on the
+  // hermetic default failed with "plugin config not found".
+  for (const [key, saved] of envSaved) {
     if (saved === undefined) delete process.env[key];
     else process.env[key] = saved;
   }
