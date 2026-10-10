@@ -225,6 +225,14 @@ export interface ImportSessionResult {
   /** Facts a dry run would have written. Always 0 on an applied run. */
   readonly facts_withheld: number;
   readonly facts_deduped: number;
+  /**
+   * Facts the ambient extraction lane withheld whole captures of, because
+   * `guardrails.ambient_writeback: false` is in force (Task 11). Each
+   * suppressed capture also logs one `ambient-withheld` event carrying the
+   * same count, so a consent-off import reports 0 facts written AND the
+   * count it declined to capture - never a silent zero.
+   */
+  readonly facts_ambient_withheld: number;
   readonly recall_turns_imported: number;
   readonly recall_summary_nodes: number;
   /**
@@ -336,6 +344,7 @@ export async function importSession(
   let factsExtracted = 0;
   let factsWithheld = 0;
   let factsDeduped = 0;
+  let factsAmbientWithheld = 0;
   /**
    * Hashes a dry run has already forecast. The dedup index only learns a
    * hash when a signal actually lands, so without this a marker repeated
@@ -459,6 +468,7 @@ export async function importSession(
       facts_extracted: 0,
       facts_withheld: 0,
       facts_deduped: 0,
+      facts_ambient_withheld: 0,
       recall_turns_imported: 0,
       recall_summary_nodes: 0,
       turns_resumed: 0,
@@ -576,6 +586,7 @@ export async function importSession(
       factsExtracted += routed.created;
       factsWithheld += routed.withheld;
       factsDeduped += routed.deduped;
+      factsAmbientWithheld += routed.ambientWithheld;
     }
 
     // Path A — markers in text.
@@ -733,6 +744,7 @@ export async function importSession(
     facts_extracted: factsExtracted,
     facts_withheld: factsWithheld,
     facts_deduped: factsDeduped,
+    facts_ambient_withheld: factsAmbientWithheld,
     filtered_turns: filteredTurns,
     recall_turns_imported: recallTurnsImported,
     recall_summary_nodes: recallSummaryNodes,

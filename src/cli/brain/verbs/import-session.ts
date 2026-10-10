@@ -500,6 +500,7 @@ function emitImportReport(
         signals_deduped: f.signals_deduped,
         facts_extracted: f.facts_extracted,
         facts_withheld: f.facts_withheld,
+        facts_ambient_withheld: f.facts_ambient_withheld,
         tool_replays: f.tool_replays,
         malformed: f.malformed,
         filtered_turns: f.filtered_turns,
@@ -528,6 +529,11 @@ function emitImportReport(
       ok(`  facts_withheld: ${f.facts_withheld}`);
     }
     ok(`  signals_deduped: ${f.signals_deduped}`);
+    // Printed only when consent actually withheld something: with the lane
+    // on the count is zero by construction, and a first import's output is
+    // unchanged. Without this line a consent-off import reported 0 facts
+    // and no reason - the count is what tells the operator the lane is off.
+    if (f.facts_ambient_withheld > 0) ok(`  facts_ambient_withheld: ${f.facts_ambient_withheld}`);
     ok(`  tool_replays: ${f.tool_replays}`);
     ok(`  filtered_turns: ${f.filtered_turns}`);
     // Printed only when a checkpoint actually changed what the run did, so a
