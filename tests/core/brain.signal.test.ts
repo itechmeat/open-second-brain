@@ -456,7 +456,7 @@ describe("writeSignal — tag syntax (t_11ee559f)", () => {
   test("a topic that even slugified fails the rule refuses, naming the field", () => {
     let thrown: unknown;
     try {
-      writeSignal(tmp, baseInput({ topic: "2024 retrospective", slug: "numeric-topic" }));
+      writeSignal(tmp, baseInput({ topic: "42", slug: "numeric-topic" }));
     } catch (err) {
       thrown = err;
     }

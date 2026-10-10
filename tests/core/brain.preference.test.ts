@@ -514,7 +514,7 @@ describe("writePreference — tag syntax (t_11ee559f)", () => {
   test("a topic that even slugified fails the rule refuses, naming the field", () => {
     let thrown: unknown;
     try {
-      writePreference(tmp, basePrefInput({ topic: "2024 retrospective", slug: "numeric-topic" }));
+      writePreference(tmp, basePrefInput({ topic: "42", slug: "numeric-topic" }));
     } catch (err) {
       thrown = err;
     }

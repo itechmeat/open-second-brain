@@ -210,7 +210,7 @@ describe("o2b brain feedback - success line and refusal envelope", () => {
         "--principle",
         "recorded where it belongs",
         "--scope",
-        "1-not-a-scope",
+        "42",
         "--json",
       ],
       { env: env() },
