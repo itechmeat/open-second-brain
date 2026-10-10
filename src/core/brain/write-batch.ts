@@ -789,9 +789,10 @@ function projectUpdateNote(
   // update writes exactly as it did before this wave - which is why
   // `owner` is gated here rather than joining the unconditionally
   // reserved keys above. The warn row, when the verdict says to watch,
-  // is logged at the COMMIT below: projection must stay row-free so a
-  // later operation's refusal never leaves a row for a write that never
-  // happened.
+  // is logged at the COMMIT below and only when the rewrite lands:
+  // projection must stay row-free so a later operation's refusal never
+  // leaves a row for a write that never happened, and a byte-identical
+  // skip is such a write too.
   const ownerGate = noteOwnerGateVerdict(vault, op.frontmatter, opts.configPath);
   if (ownerGate.refused) {
     throw new WriteBatchError(
@@ -839,17 +840,6 @@ function projectUpdateNote(
   const contents = formatFrontmatter(frontmatter, body);
   return {
     commit: () => {
-      // The warn row the projection's verdict asked for, logged once the
-      // commit is actually running - never during projection, where a
-      // later operation could still abort the batch.
-      if (ownerGate.watch) {
-        logWatchedNoteOwnerWrite(
-          vault,
-          target.relPath,
-          ownerGate.named,
-          ownerGate.resolvedIdentity,
-        );
-      }
       const audit = commitNoteRewrite(
         vault,
         target,
@@ -858,6 +848,19 @@ function projectUpdateNote(
         NOTE_WRITE_OP.update,
         opts,
       );
+      // The warn row the projection's verdict asked for, logged only when
+      // the write actually commits - never during projection, where a
+      // later operation could still abort the batch, and never for a
+      // byte-identical skip, which is a write that did not happen and so
+      // owes no ledger row.
+      if (audit.wrote && ownerGate.watch) {
+        logWatchedNoteOwnerWrite(
+          vault,
+          target.relPath,
+          ownerGate.named,
+          ownerGate.resolvedIdentity,
+        );
+      }
       // The flag is the write's own verdict, not a hardcoded success: a
       // byte-identical re-apply skipped the write and says so, carrying
       // no audit half because nothing was recorded.

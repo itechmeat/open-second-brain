@@ -193,6 +193,25 @@ describe("two-state probe: an update naming a foreign owner", () => {
     expect(rows[0]!.reason).toContain(CROSS_OWNER_MARKER);
   });
 
+  test("a byte-identical re-apply under warn leaves the one row it already wrote", () => {
+    // The skipped rewrite is a write that did not happen, so it owes no
+    // warn row: the ledger counts watched WRITES, not watched attempts.
+    const vault = makeVault("probe-warn-skip", GATE_MODE.warn);
+    const opts = { configPath: process.env["OPEN_SECOND_BRAIN_CONFIG"] };
+    applyWriteBatch(vault, [createOp("notes/probe.md")], opts);
+    applyWriteBatch(vault, [updateOp("notes/probe.md", { owner: CROSS_OWNER_MARKER })], opts);
+    expect(gateRows(vault).length).toBe(1);
+
+    const again = applyWriteBatch(
+      vault,
+      [updateOp("notes/probe.md", { owner: CROSS_OWNER_MARKER })],
+      opts,
+    );
+    expect(again.applied).toBe(1);
+    expect(ownerOf(vault, "notes/probe.md")).toBe(CROSS_OWNER_MARKER);
+    expect(gateRows(vault).length).toBe(1);
+  });
+
   test("leaves every legacy byte in place under off: written as named, no row", () => {
     const vault = makeVault("probe-off");
     applyWriteBatch(vault, [createOp("notes/probe.md")], {
