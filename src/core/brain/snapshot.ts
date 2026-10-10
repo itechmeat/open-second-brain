@@ -913,12 +913,12 @@ function logSnapshotEvent(
  * own directory - got packed into every archive, which is the exponential
  * growth. `Buffer.from` decodes either shape.
  */
-function bufferEntryName(e: Uint8Array | Buffer): string {
+export function bufferEntryName(e: Uint8Array | Buffer): string {
   return Buffer.isBuffer(e) ? e.toString("utf8") : Buffer.from(e).toString("utf8");
 }
 
 /** True for a top-level `Brain/` entry the snapshot family never touches. */
-function isSnapshotExcludedEntry(name: string): boolean {
+export function isSnapshotExcludedEntry(name: string): boolean {
   return BRAIN_SNAPSHOT_EXCLUDED_ENTRIES.includes(name);
 }
 

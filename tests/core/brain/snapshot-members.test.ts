@@ -33,7 +33,9 @@ import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { brainDirs } from "../../../src/core/brain/paths.ts";
 import {
   BrainSnapshotError,
+  bufferEntryName,
   createSnapshot,
+  isSnapshotExcludedEntry,
   sortedMembers,
 } from "../../../src/core/brain/snapshot.ts";
 import { system32Tool } from "../../../src/core/brain/secrets/owner-acl.ts";
@@ -199,5 +201,32 @@ describe("the entries the snapshot family never touches", () => {
     expect(members).toContain("Brain/kept.md");
     expect(members.filter((m) => m.includes(".snapshots"))).toEqual([]);
     expect(members.filter((m) => m.includes(".artifacts"))).toEqual([]);
+  });
+
+  /**
+   * Bun's `readdirSync(..., { encoding: "buffer" })` hands back `Buffer`
+   * instances, so the archive test above only ever reaches the
+   * `Buffer.isBuffer(e)` arm. The `Uint8Array` arm - the one that actually
+   * exists to decode byte values instead of comma-joined numbers - would
+   * stay untested, and reverting the fix to `e.toString()` would leave that
+   * test green. These two feed a bare `Uint8Array` straight to the decoders
+   * so the arm is pinned rather than merely assumed.
+   */
+  test("a bare Uint8Array entry decodes to its name, not to byte values", () => {
+    const excluded = new Uint8Array(new TextEncoder().encode(".snapshots"));
+    expect(Buffer.isBuffer(excluded)).toBe(false);
+    expect(bufferEntryName(excluded)).toBe(".snapshots");
+    expect(isSnapshotExcludedEntry(bufferEntryName(excluded))).toBe(true);
+
+    const kept = new Uint8Array(new TextEncoder().encode("kept.md"));
+    expect(bufferEntryName(kept)).toBe("kept.md");
+    expect(isSnapshotExcludedEntry(bufferEntryName(kept))).toBe(false);
+  });
+
+  test("a bare Uint8Array holding multibyte UTF-8 decodes whole", () => {
+    const name = "笔记-2026.md";
+    const arr = new Uint8Array(new TextEncoder().encode(name));
+    expect(bufferEntryName(arr)).toBe(name);
+    expect(isSnapshotExcludedEntry(bufferEntryName(arr))).toBe(false);
   });
 });

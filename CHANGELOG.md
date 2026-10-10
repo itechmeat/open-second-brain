@@ -8347,6 +8347,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.77.1]: https://github.com/itechmeat/open-second-brain/compare/v1.77.0...v1.77.1
 [1.77.0]: https://github.com/itechmeat/open-second-brain/compare/v1.76.0...v1.77.0
 [1.76.0]: https://github.com/itechmeat/open-second-brain/compare/v1.75.0...v1.76.0
 [1.75.0]: https://github.com/itechmeat/open-second-brain/compare/v1.74.1...v1.75.0
