@@ -3,8 +3,9 @@
  * Claims pinned here:
  *
  *  1. `get --json` carries the digest plus the additive `digest_count`, and
- *     the divergence keys (`divergent`, `records`) only when more than one
- *     content-differing digest exists for the session.
+ *     the divergence keys (`divergent`, `records`) only when distinct
+ *     content hashes meet at one created_at instant; sequential revisions
+ *     (distinct instants) stay quiet (v1.78.0 review round).
  *  2. The divergence records are an id/created_at/content_hash list, never
  *     a payload echo.
  *  3. The CLI serializer now carries `project`, matching the MCP serializer
@@ -67,16 +68,19 @@ test("get --json carries the digest plus digest_count for a single record", asyn
   expect("records" in payload).toBe(false);
 });
 
-test("get --json after two differing writes carries the divergence keys and the latest digest", async () => {
+test("get --json after two differing writes at one instant carries the divergence keys", async () => {
+  // Same created_at instant, different content: the one shape the store
+  // cannot order, so the read names it divergent. Sequential revisions
+  // (distinct instants) stay quiet - the next test pins that.
   appendSessionSummary(vault, {
     sessionId: "sess-div",
-    decisions: ["older decision"],
-    createdAt: "2026-06-14T09:00:00.000Z",
+    decisions: ["device a take"],
+    createdAt: "2026-06-14T10:00:00.000Z",
   });
   const newer = appendSessionSummary(vault, {
     sessionId: "sess-div",
-    decisions: ["newer decision"],
-    createdAt: "2026-06-14T11:00:00.000Z",
+    decisions: ["device b take"],
+    createdAt: "2026-06-14T10:00:00.000Z",
   });
   const r = await run(["get", "--session", "sess-div", "--json"]);
   expect(r.returncode).toBe(0);
@@ -108,7 +112,38 @@ test("get --json after two differing writes carries the divergence keys and the 
     expect(typeof record["content_hash"]).toBe("string");
   }
   // id/hash lists, never a payload echo.
-  expect(JSON.stringify(payload.records)).not.toContain("newer decision");
+  expect(JSON.stringify(payload.records)).not.toContain("device b take");
+});
+
+test("get --json for sequential revisions stays quiet (no divergence keys)", async () => {
+  // A session re-summarized as it evolves is a revision stream: the later
+  // digest wins deterministically, so the envelope must not claim
+  // divergence (v1.78.0 review round). The digest still answers latest.
+  appendSessionSummary(vault, {
+    sessionId: "sess-rev",
+    decisions: ["older decision"],
+    createdAt: "2026-06-14T09:00:00.000Z",
+  });
+  const newer = appendSessionSummary(vault, {
+    sessionId: "sess-rev",
+    decisions: ["newer decision"],
+    createdAt: "2026-06-14T11:00:00.000Z",
+  });
+  const r = await run(["get", "--session", "sess-rev", "--json"]);
+  expect(r.returncode).toBe(0);
+  const payload = JSON.parse(r.stdout) as {
+    found: boolean;
+    digest: Record<string, unknown>;
+    digest_count: number;
+    divergent?: boolean;
+    records?: Array<Record<string, unknown>>;
+  };
+  expect(payload.found).toBe(true);
+  expect(payload.digest.id).toBe(newer.id);
+  expect(payload.digest_count).toBe(2);
+  expect("divergent" in payload).toBe(false);
+  expect("records" in payload).toBe(false);
+  expect(Object.keys(payload).toSorted()).toEqual(["digest", "digest_count", "found"]);
 });
 
 test("get --json serializes project, matching the MCP serializer", async () => {
@@ -125,23 +160,41 @@ test("get --json serializes project, matching the MCP serializer", async () => {
 });
 
 test("text mode get appends exactly one note line when the session diverges", async () => {
+  // Same-instant distinct contents: the divergent shape.
   appendSessionSummary(vault, {
     sessionId: "sess-text",
-    decisions: ["older decision"],
-    createdAt: "2026-06-14T09:00:00.000Z",
+    decisions: ["device a take"],
+    createdAt: "2026-06-14T10:00:00.000Z",
   });
   appendSessionSummary(vault, {
     sessionId: "sess-text",
-    decisions: ["newer decision"],
-    createdAt: "2026-06-14T11:00:00.000Z",
+    decisions: ["device b take"],
+    createdAt: "2026-06-14T10:00:00.000Z",
   });
   const r = await run(["get", "--session", "sess-text"]);
   expect(r.returncode).toBe(0);
   expect(r.stdout).toContain("session sess-text");
-  expect(r.stdout).toContain("newer decision");
+  expect(r.stdout).toContain("device b take");
   const noteLines = r.stdout.split("\n").filter((line) => line.includes("divergent=true"));
   expect(noteLines.length).toBe(1);
   expect(noteLines[0]).toContain("digest_count=2");
+});
+
+test("text mode get for sequential revisions stays free of a divergence note", async () => {
+  appendSessionSummary(vault, {
+    sessionId: "sess-rev-text",
+    decisions: ["older decision"],
+    createdAt: "2026-06-14T09:00:00.000Z",
+  });
+  appendSessionSummary(vault, {
+    sessionId: "sess-rev-text",
+    decisions: ["newer decision"],
+    createdAt: "2026-06-14T11:00:00.000Z",
+  });
+  const r = await run(["get", "--session", "sess-rev-text"]);
+  expect(r.returncode).toBe(0);
+  expect(r.stdout).toContain("newer decision");
+  expect(r.stdout).not.toContain("divergent");
 });
 
 test("text mode get for a single record stays free of a divergence note", async () => {

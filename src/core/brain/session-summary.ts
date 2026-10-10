@@ -191,25 +191,48 @@ export interface SessionSummaryRecordRef {
 export interface SessionSummaryReport {
   /** The sorted-latest digest - the same answer {@link getSessionSummary} gives. */
   readonly digest: SessionSummaryDigest;
-  /** How many digests exist for this session id, dedupe applied. */
+  /**
+   * How many DISTINCT digests exist for this session id, content-hash
+   * dedupe applied. The same digest appended twice - the shape two
+   * devices produce when both summarized a session before their vaults
+   * synced - counts once.
+   */
   readonly digestCount: number;
-  /** Present, always `true`, only when `digestCount` exceeds one. */
+  /**
+   * How many digest records exist for this session id BEFORE the
+   * content-hash dedupe - the revision count. A session re-summarized as
+   * it evolves accumulates rows without disagreeing; this keeps that
+   * stream visible without calling it divergence.
+   */
+  readonly revisions: number;
+  /**
+   * Present, always `true`, only when DISTINCT content hashes coexist at
+   * one `created_at` instant - the one shape the store's read model
+   * cannot order (two devices distilled the session differently before
+   * syncing, or two contents landed in the same second), so
+   * latest-wins is not a safe answer. A later revision wins
+   * deterministically and is a revision (counted in {@link revisions}),
+   * not divergence.
+   */
   readonly divergent?: true;
   /**
-   * Bounded newest-first-sample of the session's digests, oldest first,
-   * present only alongside `divergent`.
+   * Bounded newest-first-sample of the session's distinct digests, oldest
+   * first, present only alongside `divergent`.
    */
   readonly records?: ReadonlyArray<SessionSummaryRecordRef>;
 }
 
 /**
  * Divergence-aware single-session read (t_59d4c919). The continuity store
- * is append-only, so one session id can hold several content-differing
- * digests; the plain read answers latest-wins without saying so. This read
- * names the fact: the sorted-latest digest plus `digest_count`, and, only
- * when the count exceeds one, `divergent: true` plus a bounded
- * id/created_at/content_hash sample. Divergence is REPORTED here - never
- * merged, deleted, or reconciled.
+ * is append-only, so one session id can hold several digest records; the
+ * plain read answers latest-wins without saying so. This read names the
+ * fact: the sorted-latest digest, `digest_count` over DISTINCT content
+ * (two devices writing the same digest before their vaults sync count
+ * once), `revisions` for the honest record count, and, only when distinct
+ * content hashes meet at one instant - the one shape the store cannot
+ * order - `divergent: true` plus a bounded id/created_at/content_hash
+ * sample. Divergence is REPORTED here - never merged, deleted, or
+ * reconciled.
  */
 export function getSessionSummaryReport(
   vault: string,
@@ -220,15 +243,39 @@ export function getSessionSummaryReport(
     (record) => String(record.payload["session_id"] ?? "") === id,
   );
   if (records.length === 0) return null;
-  const digestCount = records.length;
+  const revisions = records.length;
+
+  // Dedupe by content hash on read, keeping the newest record per hash -
+  // the store order is the tie-break the latest-wins answer already
+  // trusts. What survives is one entry per distinct digest content, in
+  // store order. The project axis joins the key because the write-side
+  // contract files the same content under two projects as two digests.
+  const newestPerKey = new Map<string, ContinuityRecord>();
+  for (const record of records) newestPerKey.set(readDedupeKey(record), record);
+  const distinct = records.filter((record) => newestPerKey.get(readDedupeKey(record)) === record);
+
+  // Divergence = distinct content hashes meeting at one created_at
+  // instant. Anything ordered by distinct instants is a revision stream
+  // (latest wins deterministically); only the same-instant meeting is a
+  // genuine "which one is the answer" conflict.
+  const hashesByInstant = new Map<string, Set<string>>();
+  for (const record of distinct) {
+    const instant = instantKey(record.createdAt);
+    const hashes = hashesByInstant.get(instant) ?? new Set<string>();
+    hashes.add(contentHashOf(record));
+    hashesByInstant.set(instant, hashes);
+  }
+  const divergent = [...hashesByInstant.values()].some((hashes) => hashes.size > 1);
+
   return Object.freeze({
     digest: toDigest(records[records.length - 1]!),
-    digestCount,
-    ...(digestCount > 1
+    digestCount: distinct.length,
+    revisions,
+    ...(divergent
       ? {
           divergent: true as const,
           records: Object.freeze(
-            records.slice(-DIVERGENCE_RECORD_SAMPLE_LIMIT).map((record) =>
+            distinct.slice(-DIVERGENCE_RECORD_SAMPLE_LIMIT).map((record) =>
               Object.freeze({
                 id: record.id,
                 createdAt: record.createdAt,
@@ -239,6 +286,28 @@ export function getSessionSummaryReport(
         }
       : {}),
   });
+}
+
+/** The read-side dedupe key: content hash within the digest's project scope. */
+function readDedupeKey(record: ContinuityRecord): string {
+  return `${readProject(record.payload) ?? ""}\u0000${contentHashOf(record)}`;
+}
+
+/** The record's content hash as stored; legacy or clipped records read as "". */
+function contentHashOf(record: ContinuityRecord): string {
+  return String(record.payload["content_hash"] ?? "");
+}
+
+/**
+ * The instant a record was created at, at millisecond precision, so the
+ * second- and millisecond-precision spellings both on disk compare equal.
+ * A shape Date cannot parse compares as its raw string - records are
+ * canonical-UTC-validated at the store boundary, so this is a floorslip,
+ * not a path.
+ */
+function instantKey(createdAt: string): string {
+  const ms = Date.parse(createdAt);
+  return Number.isFinite(ms) ? String(ms) : createdAt;
 }
 
 export interface ListSessionSummariesOptions {

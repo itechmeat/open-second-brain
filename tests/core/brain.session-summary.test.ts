@@ -17,7 +17,10 @@ import {
   resolveSessionScope,
   SESSION_SCOPE_MAX_LENGTH,
 } from "../../src/core/brain/session-scope.ts";
-import { listContinuityRecords } from "../../src/core/brain/continuity/store.ts";
+import {
+  listContinuityRecords,
+  appendContinuityRecord,
+} from "../../src/core/brain/continuity/store.ts";
 
 let vault: string;
 
@@ -125,7 +128,10 @@ describe("byte-identical when unused", () => {
 });
 
 describe("divergence-aware read (t_59d4c919)", () => {
-  test("two content-differing digests for one session report count 2, divergent, and the sorted-latest", () => {
+  test("sequential revisions stay quiet: digest_count counts distinct content, revisions counts rows", () => {
+    // A session re-summarized as it evolves is a revision stream, not a
+    // conflict: the later digest wins deterministically, so flagging it
+    // divergent was noise (v1.78.0 review round).
     const older = appendSessionSummary(vault, {
       sessionId: "sess-div",
       decisions: ["older decision"],
@@ -143,18 +149,69 @@ describe("divergence-aware read (t_59d4c919)", () => {
     expect(report!.digest.id).toBe(newer.id);
     expect(report!.digest.decisions).toEqual(["newer decision"]);
     expect(report!.digestCount).toBe(2);
+    expect(report!.revisions).toBe(2);
+    expect("divergent" in report!).toBe(false);
+    expect("records" in report!).toBe(false);
+    expect(older.id).not.toBe(newer.id);
+  });
+
+  test("distinct content hashes meeting at one instant report divergent with the sample", () => {
+    // The one shape the store cannot order: two contents in the same
+    // created_at instant (two devices distilling differently before their
+    // vaults sync, or a same-second race) - latest-wins is not a safe
+    // answer, so the read names it.
+    const first = appendSessionSummary(vault, {
+      sessionId: "sess-conflict",
+      decisions: ["device a take"],
+      createdAt: "2026-06-14T10:00:00.000Z",
+    });
+    const second = appendSessionSummary(vault, {
+      sessionId: "sess-conflict",
+      decisions: ["device b take"],
+      createdAt: "2026-06-14T10:00:00.000Z",
+    });
+
+    const report = getSessionSummaryReport(vault, "sess-conflict");
+    expect(report).not.toBeNull();
+    expect(report!.digestCount).toBe(2);
+    expect(report!.revisions).toBe(2);
     expect(report!.divergent).toBe(true);
     const records = report!.records ?? [];
-    expect(records.map((r) => r.id)).toEqual([older.id, newer.id]);
+    expect(records.map((r) => r.id).toSorted()).toEqual([first.id, second.id].toSorted());
+    expect(new Set(records.map((r) => r.contentHash)).size).toBe(2);
     for (const record of records as ReadonlyArray<SessionSummaryRecordRef>) {
       expect(typeof record.createdAt).toBe("string");
       expect(record.contentHash.length).toBeGreaterThan(0);
     }
-    // Divergence is computed over content-differing records.
-    expect(new Set(records.map((r) => r.contentHash)).size).toBe(2);
   });
 
-  test("a single digest reports count 1 and carries no divergent key", () => {
+  test("the same digest written by two devices before sync counts once, as revisions", () => {
+    // Two vaults summarize identically before syncing; after the sync the
+    // store holds two rows with one content hash. Content agrees, so the
+    // read dedupes to one digest and keeps the row count as revisions.
+    const input = {
+      sessionId: "sess-two-devices",
+      decisions: ["one decision"],
+      createdAt: "2026-06-14T10:00:00.000Z",
+    } as const;
+    appendSessionSummary(vault, input);
+    const stored = listContinuityRecords(vault, { kind: "session_summary_digest" })[0]!;
+    appendContinuityRecord(vault, {
+      kind: "session_summary_digest",
+      // Device B wrote before the sync: same content, different instant.
+      createdAt: "2026-06-14T12:00:00.000Z",
+      sourceRefs: stored.sourceRefs,
+      payload: stored.payload,
+    });
+
+    const report = getSessionSummaryReport(vault, "sess-two-devices");
+    expect(report).not.toBeNull();
+    expect(report!.digestCount).toBe(1);
+    expect(report!.revisions).toBe(2);
+    expect("divergent" in report!).toBe(false);
+  });
+
+  test("a single digest reports count 1, revisions 1, and carries no divergent key", () => {
     appendSessionSummary(vault, {
       sessionId: "sess-one",
       decisions: ["the only decision"],
@@ -163,10 +220,11 @@ describe("divergence-aware read (t_59d4c919)", () => {
     const report = getSessionSummaryReport(vault, "sess-one");
     expect(report).not.toBeNull();
     expect(report!.digestCount).toBe(1);
+    expect(report!.revisions).toBe(1);
     expect("divergent" in report!).toBe(false);
     expect("records" in report!).toBe(false);
     // Additive only: the report's own key set is pinned.
-    expect(Object.keys(report!).toSorted()).toEqual(["digest", "digestCount"]);
+    expect(Object.keys(report!).toSorted()).toEqual(["digest", "digestCount", "revisions"]);
   });
 
   test("a duplicate-content re-append still dedupes to count 1 (no divergence)", () => {
@@ -179,6 +237,7 @@ describe("divergence-aware read (t_59d4c919)", () => {
     appendSessionSummary(vault, input);
     const report = getSessionSummaryReport(vault, "sess-dup-report");
     expect(report!.digestCount).toBe(1);
+    expect(report!.revisions).toBe(1);
     expect("divergent" in report!).toBe(false);
   });
 
@@ -197,17 +256,21 @@ describe("divergence-aware read (t_59d4c919)", () => {
   });
 
   test("the divergence record list is bounded to the newest entries", () => {
+    // Same-instant distinct contents: every append is a distinct digest,
+    // and the whole set is one unresolved conflict.
     const total = DIVERGENCE_RECORD_SAMPLE_LIMIT + 2;
     let last: { id: string } | null = null;
     for (let i = 0; i < total; i++) {
       last = appendSessionSummary(vault, {
         sessionId: "sess-bound",
         decisions: [`decision-${i}`],
-        createdAt: `2026-06-14T00:${String(i).padStart(2, "0")}:00.000Z`,
+        createdAt: "2026-06-14T00:00:00.000Z",
       });
     }
     const report = getSessionSummaryReport(vault, "sess-bound");
+    expect(report!.divergent).toBe(true);
     expect(report!.digestCount).toBe(total);
+    expect(report!.revisions).toBe(total);
     const records = report!.records ?? [];
     expect(records.length).toBe(DIVERGENCE_RECORD_SAMPLE_LIMIT);
     // The newest records are the ones kept, oldest first within the sample.
