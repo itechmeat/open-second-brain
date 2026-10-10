@@ -433,9 +433,8 @@ export const DECISIONS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         title: {
           type: "string",
           description:
-            "record/similar: the decision question / statement. open: short label that drives " +
-            "the open-decision id; a title with no ASCII letters or digits hashes to an " +
-            "unnamed-<hash> id (the slug grammar is ASCII).",
+            "record/similar: the decision question / statement. open: short label driving " +
+            "the open-decision id; non-ASCII titles hash to unnamed-<hash>.",
         },
         chosen: {
           type: "string",
@@ -492,9 +491,8 @@ export const DECISIONS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         question: {
           type: "string",
           description:
-            "open: the full question being parked. Dedup key across open records: a twin " +
-            "question with an open record refuses; the same wording may be re-parked after " +
-            "the twin resolves or discards.",
+            "open: the full question being parked. Dedup key: a twin with an open record " +
+            "refuses; the same wording may re-park after it resolves or discards.",
         },
         options: {
           type: "array",
