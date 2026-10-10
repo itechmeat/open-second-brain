@@ -151,14 +151,16 @@ export function refuseCrossOwnerWrite(input: CrossOwnerWriteInput): CrossOwnerWr
     );
   }
 
-  const cross =
-    (explicit !== null && explicit !== resolved) ||
-    (fromFrontmatter !== null && fromFrontmatter !== resolved);
-  if (!cross) return NOT_REFUSED;
+  const crossExplicit = explicit !== null && explicit !== resolved;
+  const crossFrontmatter = fromFrontmatter !== null && fromFrontmatter !== resolved;
+  if (!crossExplicit && !crossFrontmatter) return NOT_REFUSED;
 
+  // Name the token that actually disagrees: when one spelling agrees and
+  // the other does not, the refusal must point at the foreign one.
+  const foreign = crossExplicit ? explicit! : fromFrontmatter!;
   return refused(
     `write refused (owner-write-refused): the caller-named owner ` +
-      `${JSON.stringify(named)} names an owner other than the identity resolved for ` +
+      `${JSON.stringify(foreign)} names an owner other than the identity resolved for ` +
       `this caller, ${JSON.stringify(resolved)}. ${OWNER_SCOPE_WRITES_KEY}=${GATE_MODE.fail} ` +
       `makes the resolved identity authoritative for writes, so the write is refused ` +
       `rather than published under a foreign owner. Name ${JSON.stringify(resolved)}, ` +

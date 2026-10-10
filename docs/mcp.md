@@ -754,8 +754,12 @@ cache; the shared key keeps its launch-time capture). The gate
 `mcp_tokens_required` (device config key or
 `OPEN_SECOND_BRAIN_MCP_TOKENS_REQUIRED`, default `false`) makes the endpoint
 refuse credential-less requests whenever a non-empty token map exists; with
-the key absent every existing posture - loopback keyless, non-loopback keyed
-- is unchanged, and stdio identity stays config-derived (one caller per
+the key absent every credential-less posture - loopback keyless, non-loopback
+keyed - is unchanged, and one corner tightens everywhere: a presented
+credential that matches neither the token map nor the shared key is refused
+with the same generic `401` instead of degrading to anonymous, so a stale or
+forged bearer can never ride the keyless loopback posture. stdio identity
+stays config-derived (one caller per
 process that already owns the process tree). A token mints identity only,
 never reach: tool profiles and the reach ceiling still bind every caller
 regardless of credential.

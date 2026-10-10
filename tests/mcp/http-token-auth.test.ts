@@ -302,6 +302,16 @@ describe("authenticateRequest", () => {
     ).toEqual({ agent: "operator", via: "shared-key" });
     expect(authenticateRequest(reqWith({ authorization: "Bearer neither" }), base)).toBeNull();
     expect(authenticateRequest(reqWith({}), base)).toBeNull();
+    // A credential matching BOTH the token map and the shared key resolves
+    // through the token map: the minted agent wins and the shared key never
+    // overrides it - the consultation order itself is pinned here.
+    expect(
+      authenticateRequest(reqWith({ authorization: `Bearer ${RESOLVED_TOKEN}` }), {
+        ...base,
+        apiKey: RESOLVED_TOKEN,
+        sharedKeyAgent: "operator",
+      }),
+    ).toEqual({ agent: "edge-agent", via: "token" });
   });
 
   test("an empty shared key never matches; x-api-key carries a token too", () => {

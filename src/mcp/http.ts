@@ -443,9 +443,12 @@ interface HttpAuth {
  *   process config identity, `via: "shared-key"` - the operator master
  *   credential, byte-identical to the pre-token gate except that the
  *   identity now rides the request;
- * - a presented credential matching neither is refused whenever a key is
- *   configured (the pre-existing rule) or tokens are required, and falls
- *   through to anonymous otherwise (the loopback posture, unchanged);
+ * - a presented credential matching neither is refused outright: a wrong
+ *   credential never degrades to anonymous, whatever the bind. The
+ *   pre-token gate refused it whenever a key was configured; this gate
+ *   refuses it everywhere, because treating a presented credential as
+ *   absence would let a stale or forged bearer ride the loopback's
+ *   anonymous posture;
  * - a credential-less request proceeds anonymous unless tokens are
  *   required - which is the config key AND a non-empty map, or the
  *   implicit requirement of a key-less non-loopback bind.
