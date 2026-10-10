@@ -464,11 +464,11 @@ describe("readSourceBounded", () => {
 });
 
 describe("ingestSource — extraction contract (t_586d5d8b)", () => {
-  test("ingesting under a v1 manifest rewrites the summary and lands the manifest as v2", () => {
+  test("ingesting under a v1 manifest rewrites the summary and lands the manifest as v3", () => {
     seedSourceFile();
     // Pre-fingerprint era manifest: the source's live hash recorded, no
     // contract. The ingest records the source under the live contract, so the
-    // manifest it rewrites must land as v2 stamped with the fingerprint.
+    // manifest it rewrites must land as v3 stamped with the fingerprint.
     writeManifestBytes(
       JSON.stringify({
         schema_version: 1,
@@ -486,7 +486,7 @@ describe("ingestSource — extraction contract (t_586d5d8b)", () => {
       schema_version: number;
       contract: { fingerprint: string } | null;
     };
-    expect(onDisk.schema_version).toBe(2);
+    expect(onDisk.schema_version).toBe(3);
     expect(onDisk.contract?.fingerprint).toBe(computeExtractionContractFingerprint(vault));
   });
 });
