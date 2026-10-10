@@ -73,6 +73,7 @@ import { windowsPathHint } from "./windows-path-hint.ts";
 import { cmdUpdate } from "./update.ts";
 import { ROOT_VERSION_FLAG_TOKEN, cmdVersion } from "./version.ts";
 import { planUninstall, renderPlan } from "./uninstall.ts";
+import { cmdBootstrap, handleMcpTokenCommand } from "./bootstrap/index.ts";
 import { cmdInstall } from "./install/install.ts";
 import { cmdUninstallTarget } from "./install/uninstall-target.ts";
 import { cmdInitInteractive } from "./install/init-interactive.ts";
@@ -768,6 +769,13 @@ function quoteRefusedValue(value: string): string {
 }
 
 async function cmdMcp(argv: string[]): Promise<number> {
+  // `o2b mcp token` is a management sub-dispatcher, not the server: it
+  // mints, rotates, revokes and lists the named per-agent tokens in the
+  // vault's store. Routed before any flag parsing - the server's schema
+  // would read `token` as a stray positional and start serving - and it
+  // is dispatched through the same switch-case-visible `mcp` command, so
+  // the manifest census stays untouched.
+  if (argv[0] === "token") return handleMcpTokenCommand(argv.slice(1));
   const { flags } = parseFlags(argv, {
     vault: { type: "string" },
     config: { type: "string" },
@@ -1315,6 +1323,8 @@ async function dispatchCommand(command: string, rest: string[]): Promise<number>
         return await cmdInstallCli(rest);
       case "install":
         return await cmdInstall(rest);
+      case "bootstrap":
+        return await cmdBootstrap(rest);
       case "update":
         return await cmdUpdate(rest);
       case "uninstall":

@@ -389,7 +389,10 @@ async function handleHttpRequest(
   }
 
   const jsonReq = request as Record<string, unknown>;
-  const response = await mcp.handleRequest(jsonReq, auth.identity);
+  // `HttpAuth.identity` is null for an anonymous request; the server's
+  // parameter is optional, and the two nulls are the same fact spelled
+  // in each module's own grammar.
+  const response = await mcp.handleRequest(jsonReq, auth.identity ?? undefined);
   if (response === null) {
     res.writeHead(204);
     res.end();

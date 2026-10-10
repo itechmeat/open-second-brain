@@ -63,6 +63,7 @@ import { manifestPath as ingestManifestPath } from "../../../src/core/brain/inge
 import { sessionLedgerPath } from "../../../src/core/brain/sessions/discover.ts";
 import { secretsDir } from "../../../src/core/brain/secrets/store.ts";
 import { manifestPath as installManifestPath } from "../../../src/core/install/manifest.ts";
+import { bootstrapReceiptPath } from "../../../src/cli/bootstrap/receipt.ts";
 import { receiptsDir } from "../../../src/core/brain/decisions/receipts.ts";
 import { anticipatoryCachePath } from "../../../src/core/brain/anticipatory-cache.ts";
 import { continuityLogPath } from "../../../src/core/brain/continuity/store.ts";
@@ -264,6 +265,7 @@ const RESOLVER_BINDINGS: ReadonlyArray<readonly [StateSurfaceId, (vault: string)
     ["write_dead_letters", (v) => deadLetterDir(v)],
     ["session_import_ledger", (v) => sessionLedgerPath(v)],
     ["install_manifest", (v) => installManifestPath(v)],
+    ["bootstrap_receipt", (v) => bootstrapReceiptPath(v)],
     ["hook_audit", (v) => hookAuditDir(v)],
     ["hook_session_state", (v) => dirname(hookStateFilePath(v, null))],
     ["self_heal_upgrade_marker", (v) => selfHealUpgradeMarkerPath(v)],

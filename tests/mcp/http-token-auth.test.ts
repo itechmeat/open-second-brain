@@ -369,5 +369,8 @@ describe("resolveMcpTokensRequired", () => {
 
 // The identity type is part of the pinned surface; a shape check keeps
 // the import honest even where the tests above only build one inline.
+// The compared value is deliberately outside the `via` vocabulary, so
+// the check reads through `string`: a member named here would make the
+// comparison look intentional to the compiler and vacuous at runtime.
 const SAMPLE_IDENTITY: RequestIdentity = { agent: "edge-agent", via: "token" };
-if (SAMPLE_IDENTITY.via === "never") throw new Error("unreachable");
+if ((SAMPLE_IDENTITY.via as string) === "never") throw new Error("unreachable");
