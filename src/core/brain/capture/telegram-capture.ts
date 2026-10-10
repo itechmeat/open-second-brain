@@ -9,8 +9,10 @@
  *
  * Design invariants:
  *   - every accepted text update becomes exactly one capture note;
- *   - every rejected or malformed update is one explicit logged decision -
- *     never a silent drop;
+ *   - every rejected, refused, or malformed update is one explicit logged
+ *     decision - never a silent drop, and never a crash that stops the run
+ *     before the offset advances past it (a contract refusal records
+ *     `refused-contract` and the loop continues with the next update);
  *   - `/catchup` replies with captures since the last acknowledged one,
  *     using the existing MarkdownV2 escaping;
  *   - a missing bot token is a typed error at startup, surfaced by
@@ -26,6 +28,7 @@ import { escapeMarkdownV2 } from "../../discipline/telegram.ts";
 import { isoSecond } from "../time.ts";
 import { captureDecisionLogPath } from "../paths.ts";
 import {
+  CaptureContractError,
   capturesSince,
   readCatchupWatermark,
   writeCaptureNote,
@@ -103,6 +106,7 @@ export type CaptureDecisionResult =
   | "captured"
   | "catchup"
   | "rejected-chat"
+  | "refused-contract"
   | "malformed"
   | "transport-error";
 
@@ -293,11 +297,27 @@ export function handleCaptureUpdate(
   // done with it. Splitting a message on a convention this bot invented
   // would put words in the sender's mouth. Guidance reaches the contract
   // from surfaces that have a field for it - see `o2b brain capture`.
-  const note = writeCaptureNote(vault, {
-    body: trimmed,
-    provenance: { source, sender: chatId, capturedAt: at },
-  });
-  return finish("captured", "text captured", chatId, note.path, null);
+  //
+  // A contract refusal (an undeclared capture kind, today) is one named
+  // decision, not a crash - the same refusal message the drain lane
+  // records for an unroutable capture. Letting it throw would reject the
+  // whole poll before the offset advanced, so every restart would
+  // re-fetch the refused update and die on it again, blocking every
+  // later message behind it. The reply names the remedy, escaped for the
+  // MarkdownV2 send the catchup path already uses.
+  try {
+    const note = writeCaptureNote(vault, {
+      body: trimmed,
+      provenance: { source, sender: chatId, capturedAt: at },
+    });
+    return finish("captured", "text captured", chatId, note.path, null);
+  } catch (err) {
+    if (!(err instanceof CaptureContractError)) throw err;
+    return finish("refused-contract", err.message, chatId, null, {
+      chatId,
+      text: escapeMarkdownV2(`capture refused: ${err.message}`),
+    });
+  }
 }
 
 export interface RunTelegramCaptureOptions {
