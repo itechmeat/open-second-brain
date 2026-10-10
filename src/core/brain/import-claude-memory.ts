@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
-import { digestVerifies, sealWithDigest } from "../integrity/digest.ts";
+import { digestVerifies, sealWithDigest, sha256Hex } from "../integrity/digest.ts";
 import { appendLogEvent } from "./log.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_SNAPSHOT_REASON } from "./types.ts";
 import { createSnapshot } from "./snapshot.ts";
@@ -54,29 +54,68 @@ export interface ImportClaudeMemoryResult {
   readonly localDate: string;
   /**
    * The seal of the adoption plan (t_18fda844): sha256 of the plans,
-   * skips, conflicts and unchanged rows, via the integrity module's
-   * `sealWithDigest`. Wall-clock fields (`localDate`, the import
-   * timestamps) are deliberately OUTSIDE the sealed body, so a dry run
-   * and a later apply of the same content seal identically and an
-   * approval binds the plan, never the moment it was printed.
+   * skips, conflicts and unchanged rows - each plan row bound to the
+   * sha256 of its SOURCE entry and of its RENDERED body, clock fields
+   * normalized out of the latter (see {@link renderedBodySeal}) - via
+   * the integrity module's `sealWithDigest`. Wall-clock fields
+   * (`localDate`, the import timestamps) are deliberately OUTSIDE the
+   * sealed body, so a dry run and a later apply of the same content
+   * seal identically and an approval binds the plan, never the moment
+   * it was printed.
    */
   readonly digest: string;
 }
 
 /**
+ * A plan row's content binding, sealed alongside the row: the sha256 of
+ * the SOURCE entry the row was parsed from and the sha256 of the RENDERED
+ * preference body the row would land, rendered under a fixed clock so the
+ * seal stays wall-clock-free.
+ */
+interface RenderedRowSeal {
+  readonly source_sha256: string;
+  readonly body_sha256: string;
+}
+
+/**
+ * The fixed clock the seal's render runs under. The rendered body embeds
+ * the run's clock (`created_at`, `unconfirmed_until`, `_imported_at`, the
+ * prose day); sealed as-written, a dry run and its later apply would seal
+ * differently on every tick and the approval could never carry. Re-
+ * rendered with both clock inputs pinned to this constant, the same
+ * content produces the same seal body whenever it is planned - while a
+ * source file rewritten between the two runs still changes the rendered
+ * body, which is the binding the approval exists for.
+ */
+const SEAL_RENDER_CLOCK = "1970-01-01T00:00:00Z";
+
+/**
  * The body an approval covers: what will land, what will not, and what
  * refuses. The one spelling of "the plan", shared by the dry run that
- * seals it and the apply that re-checks it.
+ * seals it and the apply that re-checks it. Each plan row carries its
+ * content binding ({@link RenderedRowSeal}) so a source file rewritten
+ * after the approved dry run no longer verifies, even when its action
+ * would come out the same.
  */
 function planApprovalBody(parts: {
   plans: ReadonlyArray<PlannedFile>;
   skipped: ReadonlyArray<{ basename: string; reason: string }>;
   conflicts: ReadonlyArray<PlannedFile>;
   skippedUnchanged: ReadonlyArray<PlannedFile>;
+  seals: ReadonlyMap<string, RenderedRowSeal>;
 }): Record<string, unknown> {
   return {
     conflicts: parts.conflicts,
-    plans: parts.plans,
+    plans: parts.plans.map((plan) => {
+      const seal = parts.seals.get(plan.basename);
+      return {
+        basename: plan.basename,
+        prefId: plan.prefId,
+        action: plan.action,
+        source_sha256: seal?.source_sha256 ?? null,
+        body_sha256: seal?.body_sha256 ?? null,
+      };
+    }),
     skipped: parts.skipped,
     skipped_unchanged: parts.skippedUnchanged,
   };
@@ -176,6 +215,11 @@ export function importClaudeMemory(opts: ImportClaudeMemoryOpts): ImportClaudeMe
   const plans: PlannedFile[] = [];
   const skipped: Array<{ basename: string; reason: string }> = [];
   const filesToWrite: Array<{ plan: PlannedFile; body: string; sha256: string; slug: string }> = [];
+  // The content binding per plan row, keyed by the row's basename: the
+  // source entry's sha256 and the rendered body's sha256 (clock fields
+  // normalized out). Every plan row is pushed immediately after its
+  // render, so every row the seal below reads has an entry here.
+  const rowSeals = new Map<string, RenderedRowSeal>();
   // Two MEMORY files with different basenames can slugify to the same
   // preference id (e.g. `feedback_no_em_dashes.md` and
   // `feedback no-em-dashes.md`). Without this guard, both would land
@@ -230,6 +274,16 @@ export function importClaudeMemory(opts: ImportClaudeMemoryOpts): ImportClaudeMe
       // file that would not land, and one legacy MEMORY file cannot abort the
       // whole run with a message that names only the field.
       let body: string;
+      const renderInput = {
+        name: parsed.name,
+        description: parsed.description,
+        body: parsed.body,
+        memoryPath: join(baseDir, name),
+        importedAt,
+        unconfirmedUntil,
+        bodySha256: parsed.bodySha256,
+        owner: resolvedOwnerFor(opts.vault, prefFile, undefined, undefined),
+      };
       try {
         // This module renders its own frontmatter and writes it with
         // `atomicWriteFileSync`, so it never reaches `writePreference`
@@ -240,22 +294,25 @@ export function importClaudeMemory(opts: ImportClaudeMemoryOpts): ImportClaudeMe
         // `prefFile` is passed so an UPDATE carries the existing owner
         // forward instead of re-owning the page, exactly as a rewrite
         // through `writePreference` does.
-        body = backend.renderPreference({
-          name: parsed.name,
-          description: parsed.description,
-          body: parsed.body,
-          memoryPath: join(baseDir, name),
-          importedAt,
-          unconfirmedUntil,
-          bodySha256: parsed.bodySha256,
-          owner: resolvedOwnerFor(opts.vault, prefFile, undefined, undefined),
-        });
+        body = backend.renderPreference(renderInput);
       } catch (err) {
         if (!(err instanceof TagSyntaxError)) throw err;
         skipped.push({ basename: entryKey, reason: err.message });
         return;
       }
       seenPrefIds.set(prefId, entryKey);
+      rowSeals.set(entryKey, {
+        source_sha256: parsed.bodySha256,
+        // The seal's render of the SAME entry under a fixed clock: the
+        // approval covers the content, never the moment.
+        body_sha256: sha256Hex(
+          backend.renderPreference({
+            ...renderInput,
+            importedAt: SEAL_RENDER_CLOCK,
+            unconfirmedUntil: SEAL_RENDER_CLOCK,
+          }),
+        ),
+      });
       const manifestEntry = manifest.imports[entryKey];
       const plan = planAction({
         basename: entryKey,
@@ -276,8 +333,17 @@ export function importClaudeMemory(opts: ImportClaudeMemoryOpts): ImportClaudeMe
 
   // Seal the adoption plan (t_18fda844). The apply below re-checks the
   // operator's approval against THIS seal before the snapshot or any
-  // write, so what lands is what was approved or nothing is.
-  const approvalBody = planApprovalBody({ plans, skipped, conflicts, skippedUnchanged });
+  // write, so what lands is what was approved or nothing is. Each row is
+  // sealed with its content binding, so a source file rewritten after the
+  // dry run fails the apply even when its plan action would come out the
+  // same.
+  const approvalBody = planApprovalBody({
+    plans,
+    skipped,
+    conflicts,
+    skippedUnchanged,
+    seals: rowSeals,
+  });
   const planDigest = sealWithDigest(approvalBody).digest;
 
   if (opts.mode === "dry-run") {

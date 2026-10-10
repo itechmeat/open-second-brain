@@ -278,4 +278,51 @@ describe("importClaudeMemory approval digest (t_18fda844)", () => {
       rmSync(mem, { recursive: true });
     }
   });
+
+  test("a memory file rewritten after the dry run fails the apply with the named digest error", () => {
+    // The plan rows alone (basename, prefId, action) do not move when a
+    // NEW file's body is rewritten - the action stays CREATE - so the
+    // seal must bind the content itself: each row carries the sha256 of
+    // its source entry and of its rendered body, and a rewrite between
+    // the approved dry run and the apply no longer verifies.
+    const vault = setupVault();
+    const mem = setupMemory();
+    try {
+      const dry = importClaudeMemory({
+        vault,
+        memoryDir: mem,
+        mode: "dry-run",
+        allowArbitraryMemoryPath: true,
+      });
+      const before = treeDigests(vault);
+      writeFileSync(
+        join(mem, "feedback_a.md"),
+        "---\nname: rule-a\ndescription: Rule A.\nmetadata:\n  type: feedback\n---\n\nBody A, rewritten after the approval.\n",
+        "utf8",
+      );
+
+      let refusal: ApprovalDigestError | null = null;
+      try {
+        importClaudeMemory({
+          vault,
+          memoryDir: mem,
+          mode: "apply",
+          allowArbitraryMemoryPath: true,
+          approvalDigest: dry.digest,
+          now: new Date("2026-05-18T10:00:00Z"),
+        });
+      } catch (err) {
+        expect(err).toBeInstanceOf(ApprovalDigestError);
+        refusal = err as ApprovalDigestError;
+      }
+      expect(refusal).not.toBeNull();
+      expect(refusal!.message).toContain("approval digest mismatch");
+      // Nothing was written and no snapshot was taken.
+      expect(treeDigests(vault)).toBe(before);
+      expect(existsSync(join(vault, "Brain", "preferences", "pref-rule-a.md"))).toBe(false);
+    } finally {
+      rmSync(vault, { recursive: true });
+      rmSync(mem, { recursive: true });
+    }
+  });
 });
