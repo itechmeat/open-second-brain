@@ -540,6 +540,19 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
+        // An unreadable permissions document: the operator's trust policy
+        // exists and is not in force, and every gate fails closed until
+        // the field the loader named is repaired. The exit is the same
+        // re-derive loop `config-invalid` uses - `show` prints the same
+        // field-named error after each edit, so the operator can see the
+        // repair land - and `autoRepairable` stays false because editing
+        // a policy file is the operator's act, never a fixer's.
+        code: "permissions-unreadable",
+        issueClass: "unreadable permissions document",
+        nextCommand: "o2b brain permissions show",
+        autoRepairable: false,
+      },
+      {
         // Inbox signals that left the contradiction window unconsumed
         // (issue #195). Spelled as a literal for the same reason
         // `vault-frozen` above is. The exit is the pass that archives

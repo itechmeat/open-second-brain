@@ -72,6 +72,7 @@ Brain verbs (observing memory):
   set-primary      Declare or clear primary_agent in _brain.yaml (--clear)
   protect          Emit / apply native deny rules for Brain/ (--target {claudecode|codex} [--apply])
   unprotect        Remove OSB-managed deny rules for the chosen target (--target)
+  permissions      Show the trust policy document and query the decision ledger (show | ledger)
   merge            Merge two near-duplicate preferences (<keep> <drop>; --dry-run, --force)
   upgrade          Migrate release-owned files forward (--dry-run by default; --apply --yes)
   export           Dump preferences or a transcript dataset
@@ -455,6 +456,10 @@ export const VERB_HELP: Record<string, string> = {
   unfreeze:
     "usage: o2b brain unfreeze [--vault <path>] [--json]\n" +
     "Remove the freeze marker and reopen the content lane. The unfreeze log event records who lifted it and what the marker said, which is the only place that survives the file. Idempotent.\n",
+  permissions:
+    "usage: o2b brain permissions show [--vault <path>] [--json]\n" +
+    "       o2b brain permissions ledger [--actor <name>] [--action <write|ingest|owner_write>] [--verdict <allow|ask|deny>] [--since <iso>] [--until <iso>] [--limit <n>] [--vault <path>] [--json]\n" +
+    "Show the vault's permissions document (Brain/_permissions.yaml) with a dry-run decision table resolving every agent it declares against every action, or query the decision ledger rows the gates append. With no document every write is ungated. A document that cannot be read fails closed: show names the field and the file, and `o2b brain doctor` reports the same fault as permissions-unreadable.\n",
   pin:
     "usage: o2b brain pin --id <pref-id> [--vault <path>] [--json]\n" +
     "Set pinned: true. Idempotent. Exempts the preference from automatic retire.\n",

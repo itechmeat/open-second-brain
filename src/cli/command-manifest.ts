@@ -245,6 +245,27 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           flag("json", "boolean"),
         ]),
         command(
+          "permissions",
+          "Show the trust policy document and query the decision ledger",
+          [],
+          [
+            command("show", "Render the permissions document and a dry-run decision table", [
+              flag("vault", "string"),
+              flag("json", "boolean"),
+            ]),
+            command("ledger", "List decision ledger rows with filters", [
+              flag("vault", "string"),
+              flag("actor", "string"),
+              flag("action", "string"),
+              flag("verdict", "string"),
+              flag("since", "string"),
+              flag("until", "string"),
+              flag("limit", "string"),
+              flag("json", "boolean"),
+            ]),
+          ],
+        ),
+        command(
           "log",
           "Inspect Brain/log itself: verify (per-shard hash chain)",
           [],
