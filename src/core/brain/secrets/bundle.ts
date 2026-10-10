@@ -4,19 +4,28 @@
  * Export turns the store's entries into ONE schema-versioned envelope
  * each entry's value re-encrypted under a key the passphrase derives
  * through the keyfile envelope's KDF (`./envelope.ts` - same scrypt
- * cost curve, fresh salt, parameters recorded inside the bundle). Import
- * verifies, decrypts EVERY value before writing anything, reuses the
- * store's name, env-var AND allow-pattern validation (so a rewritten
- * bundle cannot land entries the store's own writer would refuse), and
- * lands the entries through the store's lock and writer with
- * `removeSecret`'s exactness on collisions.
+ * cost curve, fresh salt, parameters recorded inside the bundle). Each
+ * value is sealed under GCM associated data that binds it to the
+ * metadata it travels with - its name, env-var mapping, allowlist, the
+ * bundle version and the KDF parameters - so a bundle edited after
+ * export (an allow pattern widened, two entries' ciphertexts swapped)
+ * fails the authentication tag on import and refuses before any write.
+ * Import verifies, decrypts EVERY value before writing anything, reuses
+ * the store's name, env-var AND allow-pattern validation (so a
+ * rewritten bundle cannot land entries the store's own writer would
+ * refuse), and lands the entries through the store's lock and writer
+ * with `removeSecret`'s exactness on collisions.
  *
  * What the envelope carries in the clear, by design: the schema version,
  * the wall-clock stamp, the KDF parameters, and each entry's name,
- * env-var mapping and allowlist - the same metadata `list` exposes. What
- * it never carries in the clear: any value, and the passphrase. The
- * export path's egress declaration (`src/core/egress/registry.ts`) runs
- * the shared redactor over exactly this non-ciphertext metadata tree.
+ * env-var mapping and allowlist - the same metadata `list` exposes,
+ * authenticated but not hidden. What it never carries in the clear: any
+ * value, and the passphrase. The export path's egress declaration
+ * (`src/core/egress/registry.ts`) runs the shared redactor over exactly
+ * this non-ciphertext metadata tree; a redaction that edits an allow
+ * pattern is followed by {@link resealBundleMetadata}, which re-seals
+ * the affected values under the metadata that actually ships, so the
+ * redacted export still imports.
  *
  * Honest warning, as for the keyfile envelope: the bundle's secrecy is
  * the passphrase's strength against offline guessing wherever the file
@@ -27,6 +36,7 @@
 import { join } from "node:path";
 
 import { appendAuditRecord } from "../../reliability/audit.ts";
+import { canonicalJson } from "../../integrity/digest.ts";
 import { SECRET_CUSTODY_AUDIT_DIR } from "../audit-dirs.ts";
 import { brainDirsForWrite } from "../paths.ts";
 import { isoSecond } from "../time.ts";
@@ -51,7 +61,7 @@ import {
 } from "./store.ts";
 
 /** Bundle schema version. Bumped only on an incompatible field change. */
-export const SECRET_BUNDLE_SCHEMA_VERSION = 1;
+export const SECRET_BUNDLE_SCHEMA_VERSION = 2;
 
 /**
  * Closed refusal table for every named failure shape of the bundle.
@@ -105,6 +115,32 @@ export interface SecretBundleFile {
 }
 
 /**
+ * The associated data every entry's value is sealed under: the entry's
+ * own metadata (name, env-var mapping, allowlist) plus the bundle
+ * version and the KDF parameters, canonicalized. The GCM tag covers it,
+ * so a bundle whose metadata is edited after export - an allow pattern
+ * widened, a ciphertext moved between entries, a version or KDF block
+ * rewritten - fails the tag on import and refuses before any write. The
+ * allow list is bound EXACTLY as exported: even a whitespace edit
+ * refuses, and the store's own trim rule stays as the post-decrypt
+ * invariant.
+ */
+function bundleEntryAad(
+  version: number,
+  kdf: EnvelopeKdfParams,
+  name: string,
+  entry: { env_var: string; allow: ReadonlyArray<string> },
+): string {
+  return canonicalJson({
+    version,
+    kdf,
+    name,
+    env_var: entry.env_var,
+    allow: [...entry.allow],
+  });
+}
+
+/**
  * Export every stored entry as a bundle. Reads under the store's lock for
  * one consistent snapshot; decrypts in memory and re-encrypts each value
  * under the bundle's own derived key. A locked store refuses with the
@@ -131,10 +167,14 @@ export function exportSecretBundle(
     const entries: Record<string, SecretBundleEntry> = {};
     for (const name of Object.keys(file.secrets).toSorted()) {
       const stored = file.secrets[name]!;
+      const metadata = { env_var: stored.env_var, allow: [...stored.allow] };
       entries[name] = {
-        env_var: stored.env_var,
-        allow: [...stored.allow],
-        value: encryptValue(derived, decryptValue(key, stored)),
+        ...metadata,
+        value: encryptValue(
+          derived,
+          decryptValue(key, stored),
+          bundleEntryAad(SECRET_BUNDLE_SCHEMA_VERSION, kdf, name, metadata),
+        ),
       };
     }
     return {
@@ -224,6 +264,47 @@ export function bundleFromEgressScan(bundle: SecretBundleFile, scanned: unknown)
   return { ...bundle, entries: out };
 }
 
+/**
+ * Re-seal a merged bundle's values under the metadata that actually
+ * ships. The egress guard may redact an allow pattern
+ * ({@link bundleFromEgressScan} merges it), but every value is
+ * authenticated against the metadata it travels with - so a merged
+ * bundle whose allow lists no longer match the seal would refuse its
+ * own import. Given the merged bundle, the export passphrase, and the
+ * PRE-merge bundle the values were sealed in, this decrypts each value
+ * under its original binding and re-encrypts it under the merged
+ * entry's. Names and env-var mappings are refused-on-rewrite by the
+ * merge, so the name mapping between the two bundles is exact.
+ */
+export function resealBundleMetadata(
+  merged: SecretBundleFile,
+  passphrase: string,
+  original: SecretBundleFile,
+): SecretBundleFile {
+  const derived = deriveWrapKey(passphrase, merged.kdf);
+  const entries: Record<string, SecretBundleEntry> = {};
+  for (const name of Object.keys(merged.entries).toSorted()) {
+    const next = merged.entries[name]!;
+    const prior = original.entries[name];
+    if (prior === undefined) {
+      throw new SecretBundleError(
+        BUNDLE_REFUSAL_CODES.entry,
+        `entry "${name}" has no sealed value from the export to re-seal`,
+      );
+    }
+    const value = decryptValue(
+      derived,
+      prior.value,
+      bundleEntryAad(original.version, original.kdf, name, prior),
+    );
+    entries[name] = {
+      ...next,
+      value: encryptValue(derived, value, bundleEntryAad(merged.version, merged.kdf, name, next)),
+    };
+  }
+  return { ...merged, entries };
+}
+
 export interface ImportSecretBundleInput {
   readonly passphrase: string;
   /** Overwrite entries whose names the target store already holds. */
@@ -286,12 +367,23 @@ export function importSecretBundle(
     }
     let value: string;
     try {
-      value = decryptValue(derived, entry.value);
+      value = decryptValue(
+        derived,
+        entry.value,
+        // The metadata as READ from the file - the exact bytes the export
+        // sealed. A rewritten allow pattern, a moved ciphertext, a touched
+        // version or KDF block all land here: the tag no longer matches.
+        bundleEntryAad(parsed.version, parsed.kdf, name, entry),
+      );
     } catch {
-      // The GCM tag is the passphrase check. Nothing has been written.
+      // The GCM tag is the passphrase check AND the metadata check - the
+      // cipher cannot tell a wrong passphrase from an edited bundle, and
+      // neither is answered. Nothing has been written.
       throw new SecretBundleError(
         BUNDLE_REFUSAL_CODES.passphrase,
-        "the passphrase does not open this bundle (wrong passphrase, or the bundle is corrupt); nothing was written",
+        "the passphrase does not open this bundle, or the bundle was edited after it was " +
+          "exported (wrong passphrase, or entry metadata does not match the sealed values); " +
+          "nothing was written - re-export the bundle and import the new file",
       );
     }
     decrypted.set(name, { value, env_var: entry.env_var, allow });
@@ -360,7 +452,8 @@ function parseBundle(bundle: unknown): SecretBundleFile {
   if (candidate.version !== SECRET_BUNDLE_SCHEMA_VERSION) {
     throw new SecretBundleError(
       BUNDLE_REFUSAL_CODES.version,
-      `version ${String(candidate.version)} is not read by this build`,
+      `version ${String(candidate.version)} is not read by this build; ` +
+        "re-export the bundle with this build (`o2b brain secret export`) and import the new file",
     );
   }
   if (kdf.algo !== "scrypt") {

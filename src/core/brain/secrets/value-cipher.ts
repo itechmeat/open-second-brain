@@ -3,7 +3,11 @@
  *
  * Random 12-byte IV per encryption, authentication tag verified on every
  * decrypt, so a tampered ciphertext fails closed instead of decoding
- * garbage. This module is the LEAF both halves of the keyfile custody
+ * garbage. An optional associated-data string binds the ciphertext to
+ * context that travels OUTSIDE it (the credential bundle binds each
+ * value to its entry metadata this way); a decrypt that names different
+ * associated data than the encrypt did fails the tag exactly like a
+ * wrong key. This module is the LEAF both halves of the keyfile custody
  * share: `crypto.ts` (the keyfile kernel) and `envelope.ts` (the
  * passphrase-wrapped keyfile) each encrypt and decrypt values through it,
  * so neither imports the other - the static back-edge the envelope once
@@ -25,9 +29,10 @@ export interface EncryptedValue {
   readonly tag: string;
 }
 
-export function encryptValue(key: Buffer, plaintext: string): EncryptedValue {
+export function encryptValue(key: Buffer, plaintext: string, aad?: string): EncryptedValue {
   const iv = randomBytes(IV_BYTES);
   const cipher = createCipheriv(ALGORITHM, key, iv);
+  if (aad !== undefined) cipher.setAAD(Buffer.from(aad, "utf8"));
   const ciphertext = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
   return {
     ciphertext: ciphertext.toString("base64"),
@@ -36,10 +41,15 @@ export function encryptValue(key: Buffer, plaintext: string): EncryptedValue {
   };
 }
 
-/** Decrypt one value; a wrong key or tampered payload throws. */
-export function decryptValue(key: Buffer, encrypted: EncryptedValue): string {
+/**
+ * Decrypt one value; a wrong key, a tampered payload, or ciphertext that
+ * was sealed under different associated data throws. `aad` must be the
+ * exact string the encryption side passed - the GCM tag covers it.
+ */
+export function decryptValue(key: Buffer, encrypted: EncryptedValue, aad?: string): string {
   const decipher = createDecipheriv(ALGORITHM, key, Buffer.from(encrypted.iv, "base64"));
   decipher.setAuthTag(Buffer.from(encrypted.tag, "base64"));
+  if (aad !== undefined) decipher.setAAD(Buffer.from(aad, "utf8"));
   const plaintext = Buffer.concat([
     decipher.update(Buffer.from(encrypted.ciphertext, "base64")),
     decipher.final(),

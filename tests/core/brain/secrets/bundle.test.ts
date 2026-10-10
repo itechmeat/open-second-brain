@@ -17,6 +17,7 @@ import {
   bundleFromEgressScan,
   exportSecretBundle,
   importSecretBundle,
+  resealBundleMetadata,
   SECRET_BUNDLE_SCHEMA_VERSION,
   SecretBundleError,
 } from "../../../../src/core/brain/secrets/bundle.ts";
@@ -191,16 +192,111 @@ describe("the credential bundle", () => {
       }),
     ).toThrow(SecretBundleError);
     expect(listSecrets(other)).toHaveLength(0);
-    // A valid pattern trims exactly as `set` trims it.
+    // A whitespace edit to an allow pattern no longer lands (the value is
+    // authenticated against the metadata exactly as exported); the store's
+    // trim rule stays as the post-decrypt invariant for values that DO
+    // verify.
     const padded = structuredClone(bundle);
     padded.entries["beta-key"]!.allow = ["  curl *  "];
-    importSecretBundle(other, padded, {
+    try {
+      importSecretBundle(other, padded, {
+        passphrase: PASSPHRASE,
+        replace: false,
+        agent: "tester",
+        now: LATER,
+      });
+      throw new Error("expected the edited-metadata refusal");
+    } catch (err) {
+      expect(err).toBeInstanceOf(SecretBundleError);
+      expect((err as SecretBundleError).code).toBe(BUNDLE_REFUSAL_CODES.passphrase);
+    }
+    expect(listSecrets(other)).toHaveLength(0);
+  });
+
+  test("a bundle edited after export refuses before any write", () => {
+    // Every value is sealed under GCM associated data covering its name,
+    // env-var mapping, allowlist, the bundle version and the KDF block, so
+    // the two edits below - a widened allowlist and two ciphertexts swapped
+    // between entries - fail the authentication tag instead of landing.
+    seed(vault);
+    const bundle = exportSecretBundle(vault, PASSPHRASE, CTX);
+
+    const widened = structuredClone(bundle) as unknown as {
+      entries: Record<string, { allow: string[] }>;
+    };
+    widened.entries["beta-key"]!.allow = ["curl *", "bun -e *"];
+    try {
+      importSecretBundle(other, widened, {
+        passphrase: PASSPHRASE,
+        replace: false,
+        agent: "tester",
+        now: LATER,
+      });
+      throw new Error("expected the widened-allow refusal");
+    } catch (err) {
+      expect(err).toBeInstanceOf(SecretBundleError);
+      expect((err as SecretBundleError).code).toBe(BUNDLE_REFUSAL_CODES.passphrase);
+      expect((err as SecretBundleError).message).toContain("edited after it was exported");
+    }
+    expect(listSecrets(other)).toHaveLength(0);
+    expect(existsSync(join(secretsDir(other), "secrets.json"))).toBe(false);
+
+    const swapped = structuredClone(bundle) as unknown as {
+      entries: Record<string, { value: { ciphertext: string; iv: string; tag: string } }>;
+    };
+    const alphaValue = swapped.entries["alpha-key"]!.value;
+    swapped.entries["alpha-key"]!.value = swapped.entries["beta-key"]!.value;
+    swapped.entries["beta-key"]!.value = alphaValue;
+    try {
+      importSecretBundle(other, swapped, {
+        passphrase: PASSPHRASE,
+        replace: false,
+        agent: "tester",
+        now: LATER,
+      });
+      throw new Error("expected the swapped-ciphertext refusal");
+    } catch (err) {
+      expect(err).toBeInstanceOf(SecretBundleError);
+      expect((err as SecretBundleError).code).toBe(BUNDLE_REFUSAL_CODES.passphrase);
+    }
+    expect(listSecrets(other)).toHaveLength(0);
+    expect(existsSync(join(secretsDir(other), "secrets.json"))).toBe(false);
+  });
+
+  test("a merged (egress-redacted) bundle re-seals under the shipped metadata and imports", () => {
+    seed(vault);
+    const bundle = exportSecretBundle(vault, PASSPHRASE, CTX);
+    const scanTree = bundleEgressScanTree(bundle) as {
+      entries: Array<Record<string, unknown>>;
+    };
+    const alpha = scanTree.entries.find((e) => e["name"] === "alpha-key")!;
+    alpha["allow"] = ["curl * (redacted)"];
+    const merged = bundleFromEgressScan(bundle, scanTree);
+    // The merged bundle alone refuses its own import: alpha's value is
+    // sealed under the pre-merge metadata.
+    expect(() =>
+      importSecretBundle(other, merged, {
+        passphrase: PASSPHRASE,
+        replace: false,
+        agent: "tester",
+        now: LATER,
+      }),
+    ).toThrow(SecretBundleError);
+    // The re-seal binds the values to the metadata that actually ships.
+    const resealed = resealBundleMetadata(merged, PASSPHRASE, bundle);
+    expect(resealed.entries["alpha-key"]!.allow).toEqual(["curl * (redacted)"]);
+    const result = importSecretBundle(other, resealed, {
       passphrase: PASSPHRASE,
       replace: false,
       agent: "tester",
       now: LATER,
     });
-    expect(listSecrets(other).find((s) => s.name === "beta-key")?.allow).toEqual(["curl *"]);
+    expect(result.imported.toSorted()).toEqual(["alpha-key", "beta-key"]);
+    expect(listSecrets(other).find((s) => s.name === "alpha-key")?.allow).toEqual([
+      "curl * (redacted)",
+    ]);
+    expect(resolveSecretReadOnly(other, "alpha-key").value).toBe(VALUE_A);
+    expect(resolveSecretReadOnly(other, "beta-key").value).toBe(VALUE_B);
   });
 
   test("the exported bytes carry none of the values or the passphrase; KDF rides inside", () => {
@@ -305,6 +401,25 @@ describe("the credential bundle", () => {
         expect(err).toBeInstanceOf(SecretBundleError);
         expect((err as SecretBundleError).code).toBe(code);
       }
+    }
+    expect(listSecrets(other)).toHaveLength(0);
+    // The AAD binding moved the schema to v2: a bundle from a build before
+    // it refuses by name with the re-export remedy, not with a cipher
+    // error a wrong passphrase would also produce.
+    const older = JSON.parse(JSON.stringify(bundle)) as Record<string, unknown>;
+    older["version"] = SECRET_BUNDLE_SCHEMA_VERSION - 1;
+    try {
+      importSecretBundle(other, older, {
+        passphrase: PASSPHRASE,
+        replace: false,
+        agent: "tester",
+        now: LATER,
+      });
+      throw new Error("expected the version refusal");
+    } catch (err) {
+      expect(err).toBeInstanceOf(SecretBundleError);
+      expect((err as SecretBundleError).code).toBe(BUNDLE_REFUSAL_CODES.version);
+      expect((err as SecretBundleError).message).toContain("re-export the bundle");
     }
     expect(listSecrets(other)).toHaveLength(0);
   });
