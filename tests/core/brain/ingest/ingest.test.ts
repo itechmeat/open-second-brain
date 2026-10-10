@@ -562,9 +562,10 @@ describe("ingestSource under the ingest review gate", () => {
     // the same `source_path` the published page would), so the cleanup's
     // trace finds it under Brain/pending/ingest/ and removes it.
     const deleted = plan.deleted.map((path) => path.replaceAll("\\", "/"));
-    expect(deleted).toContain(
-      join(vault, "Brain/pending/ingest", `${res.pendingId}.md`).slice(vault.length + 1),
-    );
+    const stagedRelPath = join(vault, "Brain/pending/ingest", `${res.pendingId}.md`)
+      .slice(vault.length + 1)
+      .replaceAll("\\", "/");
+    expect(deleted).toContain(stagedRelPath);
     expect(existsSync(join(vault, "Brain/pending/ingest", `${res.pendingId}.md`))).toBe(false);
   });
 });
