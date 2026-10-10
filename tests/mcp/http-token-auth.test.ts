@@ -260,6 +260,30 @@ describe("HTTP token authentication", () => {
     expect(res.status).toBe(200);
   });
 
+  test("mcp_tokens_required with a corrupt map still refuses credential-less calls", async () => {
+    // Enforcement was REQUESTED by config; an unreadable store is not "no
+    // tokens, come on in" - the probe fails closed, so the anonymous
+    // request is refused with the same generic 401, and the loss is named
+    // on stderr.
+    mintAgentToken(vault, "mcp_token_edge", "edge-agent");
+    corruptTokenStore();
+    const warnings: string[] = [];
+    const original = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array): boolean => {
+      warnings.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      await start({ tokensRequired: true });
+      const missing = await post(rpc("ping", 1));
+      expect(missing.status).toBe(401);
+      expect(await missing.text()).toBe("Unauthorized\n");
+    } finally {
+      process.stderr.write = original;
+    }
+    expect(warnings.join("")).toContain("the MCP token store could not be read");
+  });
+
   test("a non-loopback bind accepts a token map without an api key", async () => {
     const { tokenMaterial } = mintAgentToken(vault, "mcp_token_edge", "edge-agent");
     handle = await startHttp({ vault }, { host: "0.0.0.0", port: 0 });

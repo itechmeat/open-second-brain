@@ -471,10 +471,14 @@ interface HttpAuth {
  *   holds whatever the map holds: revoking the last token must not
  *   re-open anonymous access an exposed bind never promised.
  *
- * A token store that cannot be READ never widens this gate: the probe
- * answers "no tokens" and the presented-credential check falls through
- * to the shared key, with the failure named on stderr - a corrupt store
- * must not lock the operator's master credential out of its own server.
+ * A token store that cannot be READ never widens this gate for a
+ * PRESENTED credential: the match falls through to the shared key with
+ * the failure named on stderr - a corrupt store must not lock the
+ * operator's master credential out of its own server. The enforcement
+ * probe fails the other way: when enforcement was requested (the config
+ * key or a key-less exposed bind), an unreadable map is treated as
+ * non-empty, so a credential-less request is refused rather than waved
+ * through - the requirement must not depend on the store's readability.
  *
  * The store probes sit behind the flags that need them: a loopback bind
  * with no requirement and no presented credential reads nothing.
@@ -495,6 +499,11 @@ function authenticateHttpRequest(
       mapNonEmpty = hasAnyAgentToken(mcp.vault);
     } catch (err) {
       warnTokenStoreUnreadable(stderr, err);
+      // Enforcement was REQUESTED (the config key, or the exposed bind),
+      // so an unreadable map must not read as an empty one: fail closed
+      // and refuse what the requirement would have refused. The shared
+      // key still answers - see the presented-credential catch below.
+      mapNonEmpty = true;
     }
   }
   const enforced = networkBare || (configTokensRequired && mapNonEmpty);
