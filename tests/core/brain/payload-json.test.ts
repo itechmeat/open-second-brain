@@ -82,6 +82,42 @@ describe("parsePayloadJson", () => {
     expect(parsed.strip?.prefixChars).toBe(think.length);
   });
 
+  test("the strip is case-insensitive over the think tag (v1.78.0 review round)", () => {
+    const upper = "<THINK>deliberating</THINK>";
+    const parsed = parsePayloadJson(`${upper}{"a":1}`);
+    expect(parsed.payload).toEqual({ a: 1 });
+    expect(parsed.strip).toEqual({ kind: THINK_BLOCK_STRIP_KIND, prefixChars: upper.length });
+
+    const mixed = "<Think>r</Think>";
+    const mixedParsed = parsePayloadJson(`${mixed}{"a":1}`);
+    expect(mixedParsed.payload).toEqual({ a: 1 });
+    expect(mixedParsed.strip?.kind).toBe(THINK_BLOCK_STRIP_KIND);
+  });
+
+  test("the <thinking> spelling strips like <think>, fenced body included", () => {
+    const parsed = parsePayloadJson('<thinking>r</thinking>{"a":1}');
+    expect(parsed.payload).toEqual({ a: 1 });
+    expect(parsed.strip?.kind).toBe(THINK_BLOCK_STRIP_KIND);
+
+    const fenced = '<thinking>r</thinking>\n```json\n{"a":1}\n```\n';
+    const fencedParsed = parsePayloadJson(fenced);
+    expect(fencedParsed.payload).toEqual({ a: 1 });
+    expect(fencedParsed.strip?.kind).toBe(FENCED_THINK_BLOCK_STRIP_KIND);
+    expect(fencedParsed.strip?.prefixChars).toBe(fenced.indexOf('{"a":1}'));
+  });
+
+  test("an unclosed think block keeps the plain refusal", () => {
+    const error = parseFailing('<THINK>reasoning without an end {"a":1}');
+    expect(error.message).toBe(PAYLOAD_UNPARSEABLE_MESSAGE);
+  });
+
+  test("mismatched and non-tag spellings keep the plain refusal", () => {
+    // The closing tag must repeat the opening spelling...
+    expect(parseFailing('<think>x</thinking>{"a":1}').message).toBe(PAYLOAD_UNPARSEABLE_MESSAGE);
+    // ...and a word that merely starts with "think" is not a think tag.
+    expect(parseFailing('<thinker>{"a":1}').message).toBe(PAYLOAD_UNPARSEABLE_MESSAGE);
+  });
+
   test("a fenced body with no think block is not this module's rescue", () => {
     // The module strips think blocks; a bare fenced payload was refused
     // before this module existed and still is, with the plain message.

@@ -9,14 +9,16 @@
  * is fine.
  *
  * This module is the one shared parser: try the plain parse first; only
- * on failure strip ONE leading `<think>` block - unwrapping a wholly
- * fenced body per the `decision-model/llm-emulation.ts` precedent - and
- * retry. Every strip is REPORTED: the result carries the strip fact
- * (`kind`, `prefixChars`) so the surface can name it on the success
- * envelope. The strip never rescues genuinely malformed JSON: a payload
- * that still does not parse after the strip keeps a named error whose
- * message says the strip was attempted, and a payload with no leading
- * think block keeps the plain refusal. No I/O; pure text in, verdict out.
+ * on failure strip ONE leading think block - the `<think>` and
+ * `<thinking>` spellings, case-insensitive (reasoning models disagree
+ * about the tag they emit), unwrapping a wholly fenced body per the
+ * `decision-model/llm-emulation.ts` precedent - and retry. Every strip is
+ * REPORTED: the result carries the strip fact (`kind`, `prefixChars`) so
+ * the surface can name it on the success envelope. The strip never
+ * rescues genuinely malformed JSON: a payload that still does not parse
+ * after the strip keeps a named error whose message says the strip was
+ * attempted, and a payload with no leading think block keeps the plain
+ * refusal. No I/O; pure text in, verdict out.
  */
 
 export const THINK_BLOCK_STRIP_KIND = "think_block";
@@ -54,8 +56,14 @@ export interface ParsedPayload {
   readonly strip?: PayloadStrip;
 }
 
-/** One LEADING think block, whitespace tolerated ahead of it. */
-const LEADING_THINK_BLOCK = /^\s*<think>[\s\S]*?<\/think>/;
+/**
+ * One LEADING think block, whitespace tolerated ahead of it. Both spellings
+ * reasoning models emit - `<think>` and `<thinking>` - in any case; the
+ * closing tag must repeat the opening spelling, so `<think>x</thinking>`
+ * is no block and an unclosed one never matches (both keep the plain
+ * refusal).
+ */
+const LEADING_THINK_BLOCK = /^\s*<(think|thinking)>[\s\S]*?<\/\1>/i;
 
 /**
  * A body wholly wrapped in one code fence, the
