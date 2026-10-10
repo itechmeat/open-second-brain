@@ -305,6 +305,12 @@ export type NoteWriteAdvisory = WritePathAdvisoryField;
  * there is no null that could be mistaken for a lost one, the same shape
  * the create skip spells. Both arms carry the advisory: the caller
  * authored that content either way.
+ *
+ * The create arm splits the same way since the review gate (write-side
+ * trust, Task 9): `created: true` published; `created: false` with
+ * `staged: true` staged the exact bytes into the review queue under
+ * `pending_id` - a staged create never touches the real path, which is
+ * why the validate-all-then-commit kernel is untouched by it.
  */
 export type WriteBatchOpResult =
   | ({
@@ -313,6 +319,15 @@ export type WriteBatchOpResult =
       readonly created: true;
     } & NoteWriteAudit &
       NoteWriteAdvisory)
+  | ({
+      readonly kind: "create_note";
+      readonly path: string;
+      /** The create was staged for review, not published. */
+      readonly created: false;
+      readonly staged: true;
+      /** Id of the pending queue entry holding the staged bytes. */
+      readonly pending_id: string;
+    } & NoteWriteAdvisory)
   | ({
       readonly kind: "update_note";
       readonly path: string;
@@ -655,6 +670,19 @@ function projectCreateNote(
           ...(op.content !== undefined ? { content: op.content } : {}),
           ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
         });
+        if (res.outcome === "staged") {
+          // The review gate staged the create (write-side trust, Task 9).
+          // No bytes exist at the target, so there is no audit half and
+          // no page to lint - the pending id is the receipt.
+          return {
+            kind: "create_note",
+            path: res.path,
+            created: false,
+            staged: true,
+            pending_id: res.pendingId,
+            ...writePathAdvisoryField(op.content, res.path),
+          };
+        }
         if (res.outcome !== "created") {
           // Unreachable by construction: the batch exposes none of the
           // authoring modes, so `ifExists` is never sent and an occupied

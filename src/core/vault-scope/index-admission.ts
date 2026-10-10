@@ -15,7 +15,7 @@
  * canonicalises). The predicate is pure and does no I/O.
  */
 
-import { BRAIN_PAYLOADS_REL, BRAIN_STATE_REL } from "../brain/paths.ts";
+import { BRAIN_PENDING_REL, BRAIN_PAYLOADS_REL, BRAIN_STATE_REL } from "../brain/paths.ts";
 import { pathCovers } from "./defaults.ts";
 
 export interface AdmissionVerdict {
@@ -47,6 +47,18 @@ export function admitToIndex(relPath: string): AdmissionVerdict {
   // exclusion a stated rule rather than an accident of the extension.
   if (pathCovers(BRAIN_PAYLOADS_REL, relPath)) {
     return Object.freeze({ admit: false, reason: "payload-store" });
+  }
+  // The write-approval review lane: a document staged into `Brain/pending/`
+  // is exactly the content no operator has admitted yet, so recall must not
+  // surface it (write-side trust, Task 5). Before this exclusion a staged
+  // signal or note rode the index straight back into `brain_search` and
+  // recall-inject, which silently undid the gate - staging is a change of
+  // directory, and this is the directory the change has to close. The
+  // boundary is the shared `pathCovers` question: `Brain/pending` and
+  // `Brain/pending/x.md` are inside, `Brain/pendingfoo/x.md` merely shares
+  // the name prefix and stays ordinary indexed content.
+  if (pathCovers(BRAIN_PENDING_REL, relPath)) {
+    return Object.freeze({ admit: false, reason: "review-pending" });
   }
   return ADMIT;
 }

@@ -65,6 +65,8 @@ import {
   preExtractCodeStructure,
   type PreExtractResult,
 } from "./pre-extract.ts";
+import { REVIEW_LANE } from "../write-gate.ts";
+import { resolveWriteDisposition, stageForReview } from "../pending/pending-lanes.ts";
 
 /** Frontmatter `kind:` marker of an ingested source summary page. */
 export const BRAIN_SOURCE_KIND = "brain-source";
@@ -152,6 +154,18 @@ export interface IngestSourceResult {
    * format.
    */
   readonly table?: TableOutcome;
+  /**
+   * True when the review gate staged this FIRST publish of the summary
+   * page into `Brain/pending/ingest/` instead of `Brain/sources/`
+   * (write-side trust, Task 9). Registration - the intake, the manifest,
+   * the plan checkpoint - completes exactly as before; only the page's
+   * directory changes, and {@link pendingId} names the queue entry an
+   * operator applies to publish it. A re-ingest of an already-published
+   * page never stages: the review boundary is entry, not mutation.
+   */
+  readonly staged?: boolean;
+  /** Id of the pending queue entry holding the staged summary page. */
+  readonly pendingId?: string;
 }
 
 /**
@@ -274,7 +288,23 @@ export function ingestSource(
   // unchanged source truly inert.
   const nextContents = formatFrontmatter(meta, body);
   const unchanged = existed && readFileSync(absPath, "utf8") === nextContents;
-  if (!withheld && !unchanged) {
+  // Review gate (write-side trust, Task 9): a FIRST publish of the summary
+  // page stages under the ingest lane while registration completes. A page
+  // that already exists was admitted when it was first ingested, so a
+  // re-ingest rewrites it directly - the review boundary is entry, not
+  // mutation. A withheld page is left exactly as an absent one, staged or
+  // not: the caller must not learn a page it cannot read exists.
+  let stagedFields: { readonly pendingId: string } | undefined;
+  if (!withheld && !unchanged && !existed) {
+    const disposition = resolveWriteDisposition(vault, REVIEW_LANE.ingest);
+    if (disposition.verdict === "stage") {
+      stagedFields = {
+        pendingId: stageForReview(vault, REVIEW_LANE.ingest, summaryPath, () => nextContents)
+          .pendingId,
+      };
+    }
+  }
+  if (stagedFields === undefined && !withheld && !unchanged) {
     mkdirSync(dirname(absPath), { recursive: true });
     writeFrontmatterAtomic(absPath, meta, body, { overwrite: true });
   }
@@ -323,6 +353,7 @@ export function ingestSource(
     entitiesUpdated: intake.entitiesUpdated,
     connections,
     captureScope,
+    ...(stagedFields !== undefined ? { staged: true, pendingId: stagedFields.pendingId } : {}),
     ...(preExtract !== undefined ? { preExtract } : {}),
     ...(derivation?.parts !== undefined ? { parts: derivation.parts } : {}),
     ...(derivation?.table !== undefined ? { table: derivation.table } : {}),

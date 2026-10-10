@@ -150,7 +150,7 @@ Brain verbs (observing memory):
   agenda              Synthesize agenda conflicts/focus blocks from provided events
   today               Today dashboard: due obligations, open loops, recent activity, totals
   apply-markers       Apply @osb set frontmatter write-backs (report by default; --apply writes)
-  pending             Review the write-approval queue: list | apply <id> | reject <id>
+  pending             Review the write-approval queues (signals/notes/ingest): list | apply <id> | reject <id>
   signal              Fact signal lifecycle: retire <id> --reason <text>
   capture             Stage one capture from the terminal: body, source, sender, guidance
   telegram-capture    Inbound Telegram capture bot: run (long-poll) | catchup
@@ -1117,15 +1117,20 @@ export const VERB_HELP: Record<string, string> = {
     "and the run continues with the next marker. Source files\n" +
     "come from --path (repeatable) or notes.read_paths.\n",
   pending:
-    "usage: o2b brain pending list [--vault <path>] [--json]\n" +
-    "       o2b brain pending apply <id> [--vault <path>] [--json]\n" +
-    "       o2b brain pending reject <id> --reason <text> [--vault <path>] [--json]\n" +
-    "Review the opt-in write-approval queue (write_approval.enabled). When the\n" +
-    "toggle is on, extracted signals are staged into Brain/pending/ instead of\n" +
-    "Brain/inbox/. list shows the staged signals; apply moves one into\n" +
-    "Brain/inbox/ unchanged (entity anchors and dedup hash preserved); reject\n" +
-    "moves it to Brain/retired/ with retire-shaped frontmatter. Applying or\n" +
-    "rejecting a missing id exits 2 (never a silent no-op).\n",
+    "usage: o2b brain pending list [--lane signals|notes|ingest|all] [--vault <path>] [--json]\n" +
+    "       o2b brain pending apply <id> [--dry-run] [--vault <path>] [--json]\n" +
+    "       o2b brain pending reject <id> --reason <text> [--dry-run] [--vault <path>] [--json]\n" +
+    "Review the write-approval queues (write_approval.enabled plus the\n" +
+    "per-lane keys). Signals stage flat into Brain/pending/ (sig- ids), note\n" +
+    "creates under Brain/pending/notes/ (note- ids carrying the encoded\n" +
+    "publish target) and ingest summary pages under Brain/pending/ingest/\n" +
+    "(ing- ids). list shows every lane sorted (--lane filters one; files\n" +
+    "that cannot be read as queue entries are named with a reason, never\n" +
+    "silently skipped); apply moves one into its decoded publish target\n" +
+    "unchanged (--dry-run previews the move and writes nothing); reject\n" +
+    "renders it into Brain/retired/ with retire-shaped frontmatter (the\n" +
+    "same --dry-run honesty). Applying or rejecting a missing id exits 2\n" +
+    "(never a silent no-op).\n",
   signal:
     "usage: o2b brain signal retire <id> --reason <text> [--superseded-by <id>] [--vault <path>] [--json]\n" +
     "Retire an extracted fact signal: move Brain/inbox/sig-*.md into\n" +

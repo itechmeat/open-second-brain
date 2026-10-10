@@ -674,7 +674,7 @@ Wikilinks to frontmatter `aliases:` resolve at index materialization (schema v7)
 ### Write-path integrity and store safety (since v1.32.0)
 
 ```text
-o2b brain pending             list | apply <id> | reject <id> --reason <text> - review the opt-in write-approval queue (`write_approval.enabled`); staged extracted signals live in Brain/pending/, apply moves the unchanged document to the inbox, reject moves it to Brain/retired/ with the reason
+o2b brain pending             list [--lane signals|notes|ingest|all] | apply <id> [--dry-run] | reject <id> --reason <text> [--dry-run] - review the write-approval queues (`write_approval.enabled` plus the per-lane keys); signals stage flat in Brain/pending/ (sig- ids), note creates under Brain/pending/notes/ (note- ids carrying the encoded publish target), ingest summary pages under Brain/pending/ingest/ (ing- ids); list shows every lane sorted and names unreadable entries with a reason, apply moves the unchanged document to its decoded publish target (--dry-run previews and writes nothing), reject renders it into Brain/retired/ with the reason
 o2b brain signal retire       <id> --reason <text> [--superseded-by <id>] - move an inbox signal to Brain/retired/ with retire frontmatter (_status, retired_at, retired_reason, optional superseded_by, old-id alias); retired signals leave dream intake but stay queryable
 o2b brain entity prune        [--confirm] [--json] - list entity nodes whose labels fail the structural quality gate (dry-run default); --confirm removes nodes and their edges behind the snapshot gate and reports the recovery point
 o2b brain forget-source       --confirm now snapshots Brain/ before any deletion and reports the snapshot run id; dry runs take no snapshot

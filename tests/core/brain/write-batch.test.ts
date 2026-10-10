@@ -57,6 +57,7 @@ import {
   pruneWriteImages,
 } from "../../../src/core/brain/notes/write-record.ts";
 import { writeImagePath } from "../../../src/core/brain/paths.ts";
+import { applyPendingLane } from "../../../src/core/brain/pending/pending-lanes.ts";
 import { sha256Hex } from "../../../src/core/integrity/digest.ts";
 import { CHMOD_CANNOT_DENY, IS_WINDOWS } from "../../helpers/platform.ts";
 
@@ -748,5 +749,93 @@ describe("applyWriteBatch request receipt integrity (t_b34439d9 audit)", () => {
         }),
       ).toThrow(WriteBatchError);
     }
+  });
+});
+
+/**
+ * The review gate (write-side trust, Task 9): a create op stages per-op
+ * under the notes lane's disposition while update and append ops stay
+ * direct. The kernel is untouched - a staged create never touches the
+ * real path, so validate-all-then-commit still projects every op against
+ * the same pre-batch state.
+ */
+describe("applyWriteBatch staged creates (review gate)", () => {
+  const NOTES_ENV = "OPEN_SECOND_BRAIN_WRITE_APPROVAL_NOTES_ENABLED";
+  let saved: string | undefined;
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env[NOTES_ENV];
+    else process.env[NOTES_ENV] = saved;
+    saved = undefined;
+  });
+
+  function gateOn(): void {
+    saved = process.env[NOTES_ENV];
+    process.env[NOTES_ENV] = "true";
+  }
+
+  test("a create op stages and reports receipt status staged with the pending id", () => {
+    gateOn();
+    const res = applyWriteBatch(vault, [
+      { kind: "create_note", path: "Notes/Staged.md", content: "reviewed bytes" },
+    ]);
+    expect(res.applied).toBe(1);
+    const only = res.results[0]!;
+    expect(only).toMatchObject({
+      kind: "create_note",
+      path: "Notes/Staged.md",
+      created: false,
+      staged: true,
+    });
+    if (only.kind !== "create_note" || only.created !== false) throw new Error("unreachable");
+    const stagedPath = join(vault, "Brain/pending/notes", `${only.pending_id}.md`);
+    expect(readFileSync(stagedPath, "utf8")).toContain("reviewed bytes");
+    // Nothing exists at the publish target: the review boundary is entry.
+    expect(existsSync(join(vault, "Notes/Staged.md"))).toBe(false);
+  });
+
+  test("update and append ops against published notes stay direct under the gate", () => {
+    gateOn();
+    seedNote("Notes/Direct.md", "existing body");
+    const res = applyWriteBatch(vault, [
+      { kind: "create_note", path: "Notes/Staged.md", content: "staged" },
+      { kind: "append_note", path: "Notes/Direct.md", content: "appended text" },
+    ]);
+    const staged = res.results[0]!;
+    const appended = res.results[1]!;
+    expect(
+      staged.kind === "create_note" && staged.created === false && staged.staged === true,
+    ).toBe(true);
+    expect(appended.kind === "append_note" && appended.appended).toBe(true);
+    expect(readFileSync(join(vault, "Notes/Direct.md"), "utf8")).toContain("appended text");
+  });
+
+  test("an apply of the staged create publishes the exact bytes the batch staged", () => {
+    gateOn();
+    const res = applyWriteBatch(vault, [
+      {
+        kind: "create_note",
+        path: "Notes/Round.md",
+        frontmatter: { title: "Round" },
+        content: "round trip",
+      },
+    ]);
+    const only = res.results[0]!;
+    if (only.kind !== "create_note" || only.created !== false) throw new Error("unreachable");
+    const stagedBytes = readFileSync(
+      join(vault, "Brain/pending/notes", `${only.pending_id}.md`),
+      "utf8",
+    );
+    const applied = applyPendingLane(vault, only.pending_id);
+    expect(readFileSync(applied.path, "utf8")).toBe(stagedBytes);
+    expect(applied.path).toBe(join(vault, "Notes/Round.md"));
+  });
+
+  test("an occupied target refuses as exists even under the gate", () => {
+    gateOn();
+    seedNote("Notes/Taken.md", "already here");
+    expect(() =>
+      applyWriteBatch(vault, [{ kind: "create_note", path: "Notes/Taken.md", content: "x" }]),
+    ).toThrow(WriteBatchError);
   });
 });

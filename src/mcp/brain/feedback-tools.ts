@@ -76,6 +76,8 @@ import {
   resolveSharedNamespace,
 } from "../../core/brain/shared-namespace.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
+import { PENDING_STAGED_DIAGNOSTIC_CODE } from "../../core/brain/pending/pending-lanes.ts";
+import { nextCommandField } from "../../core/brain/next-step.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { codeForError } from "../tool-error-codes.ts";
@@ -204,6 +206,8 @@ async function toolBrainFeedback(
     return {
       kind: "signal",
       deduped: true,
+      // A dedup wrote nothing, so it staged nothing.
+      staged: false,
       signal_path: vaultRelativeSafe(ctx.vault, sigResult.path),
       signal_absolute_path: resolve(sigResult.path),
       signal_id: sigResult.id,
@@ -334,6 +338,19 @@ async function toolBrainFeedback(
     // the one composer: an agent that learns the exit on one surface
     // reads it on the other.
     ...captureRoutingHintField(routingHint),
+    // Write-side trust (Task 6): the gate resolved inside writeSignal, so
+    // the receipt says which directory the bytes actually landed in. An
+    // agent that reads `staged: true` knows the signal is awaiting review
+    // under `Brain/pending/`, not recalled from `Brain/inbox/`. The
+    // pending id and the queue command (Task 9) give that agent the
+    // handle and the exit, since applying is an operator's move.
+    staged: sigResult.staged,
+    ...(sigResult.staged
+      ? {
+          pending_id: sigResult.id,
+          ...nextCommandField(PENDING_STAGED_DIAGNOSTIC_CODE),
+        }
+      : {}),
     signal_path: vaultRelativeSafe(ctx.vault, sigResult.path),
     signal_absolute_path: resolve(sigResult.path),
     signal_id: sigResult.id,

@@ -37,6 +37,9 @@ import { noteWriteResult, parseFrontmatterArg, writeBatchErrorToMcp } from "./no
 import { readableAtContextReach } from "./reach-readable.ts";
 import { vaultRelativeSafe } from "./shared.ts";
 import { unknownOperationError } from "../coerce.ts";
+import { PENDING_STAGED_DIAGNOSTIC_CODE } from "../../core/brain/pending/pending-lanes.ts";
+import { nextCommandField } from "../../core/brain/next-step.ts";
+import { WRITE_PATH_ADVISORY_KEY } from "../../core/brain/write-path-advisory.ts";
 
 /** Recognised batch operation discriminators. */
 const OP_KINDS = [
@@ -157,7 +160,10 @@ function mapOperation(
 
 /**
  * Serialize one core op result, mapping absolute log paths to
- * vault-relative form so the response never leaks the machine root.
+ * vault-relative form so the response never leaks the machine root. A
+ * STAGED create (review gate on) carries its pending id and the queue
+ * command that publishes it, so an agent sees the review boundary
+ * rather than reading `created: false` as a refusal.
  */
 function serializeResult(
   ctx: ServerContext,
@@ -168,6 +174,19 @@ function serializeResult(
       kind: result.kind,
       logged_at: result.logged_at,
       log_path: vaultRelativeSafe(ctx.vault, result.log_path),
+    };
+  }
+  if (result.kind === "create_note" && result.created === false) {
+    return {
+      kind: result.kind,
+      path: result.path,
+      created: false,
+      staged: true,
+      pending_id: result.pending_id,
+      ...(result[WRITE_PATH_ADVISORY_KEY] !== undefined
+        ? { [WRITE_PATH_ADVISORY_KEY]: result[WRITE_PATH_ADVISORY_KEY] }
+        : {}),
+      ...nextCommandField(PENDING_STAGED_DIAGNOSTIC_CODE),
     };
   }
   return { ...result };
