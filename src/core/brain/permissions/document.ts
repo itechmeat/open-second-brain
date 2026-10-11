@@ -58,7 +58,10 @@ export const PERMISSIONS_SCHEMA_VERSION = 1;
  * spelled the way the writing host spells paths (`Notes\a.md`,
  * `.\Notes\a.md`, `./Notes/a.md`) must reach the same rule the stored
  * spelling does. Idempotent: an already-canonical target returns
- * byte-identical.
+ * byte-identical. A `..` segment deliberately survives: the resolver
+ * matches canonical identities exactly, so such a target is inert by
+ * construction, and the loader warns rather than second-guessing the
+ * operator's spelling.
  */
 export function canonicalPermissionTarget(target: string): string {
   const folded = target
@@ -573,6 +576,20 @@ export function loadPermissionsDocument(vault: string): {
         path,
         `entries[${index}].target`,
         `non-canonical target ${JSON.stringify(entry.target)}; it matches as ${JSON.stringify(canonical)}`,
+      );
+    }
+    // `..` survives canonicalization on purpose - the resolver matches
+    // canonical identities exactly, and a stored note path is
+    // vault-relative, so such a rule is silently inert. That silence is
+    // the hazard: an operator who wrote `../secrets/a.md` believes they
+    // closed a gate they never reached. Warn, and leave the exact-match
+    // semantics alone.
+    if (canonical.split("/").includes("..")) {
+      warn(
+        path,
+        `entries[${index}].target`,
+        `target ${JSON.stringify(entry.target)} still contains a '..' segment; ` +
+          "stored note paths are vault-relative, so this rule can never match",
       );
     }
   }

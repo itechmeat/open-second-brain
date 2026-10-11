@@ -121,6 +121,21 @@ describe("permission target canonicalization", () => {
   test("canonicalPermissionTarget is idempotent on canonical input", () => {
     expect(canonicalPermissionTarget("Notes/a.md")).toBe("Notes/a.md");
   });
+
+  test("a `..`-segment target stays inert: exact match, never the path it climbs to", () => {
+    // Exact-match semantics are unchanged on purpose: the resolver
+    // compares canonical identities byte for byte, and a stored note path
+    // is vault-relative, so an entry spelled with `..` can never match
+    // the real note it seems to reach.
+    const decision = resolvePermission(
+      docWithTarget("../secrets/a.md"),
+      SUBJECT,
+      "write",
+      "secrets/a.md",
+    );
+    expect(decision.verdict).toBe("allow");
+    expect(decision.source).toBe("default");
+  });
 });
 
 describe("loadPermissionsDocument target warnings", () => {
@@ -164,5 +179,31 @@ describe("loadPermissionsDocument target warnings", () => {
     );
     const warning = captureWarnings(() => loadPermissionsDocument(vault));
     expect(warning).not.toContain("entries[0].target");
+  });
+
+  test("a `..`-segment target still loads but warns that it can never match", () => {
+    writeFileSync(
+      docPath,
+      [
+        "version: 1",
+        "default_action: allow",
+        "entries:",
+        "  - id: t1",
+        "    agent: codex",
+        "    action: write",
+        "    target: ../secrets/a.md",
+        "    verdict: deny",
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    const warning = captureWarnings(() => loadPermissionsDocument(vault));
+    expect(warning).toContain("entries[0].target");
+    expect(warning).toContain("..");
+    // The document still loads; the entry stays inert by exact match.
+    const { document } = loadPermissionsDocument(vault);
+    expect(document!.entries[0]!.target).toBe("../secrets/a.md");
+    const decision = resolvePermission(document!, SUBJECT, "write", "secrets/a.md");
+    expect(decision.verdict).toBe("allow");
+    expect(decision.source).toBe("default");
   });
 });
