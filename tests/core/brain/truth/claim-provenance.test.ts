@@ -222,10 +222,27 @@ describe("listContextReceipts receiptId filter", () => {
   test("the receiptId match is applied BEFORE the limit", () => {
     // Pinning the order: a receipt lookup with a page bound answers with
     // the NAMED receipt, never with whichever receipts happen to be
-    // newest. The oldest receipt is findable at limit 1.
-    const oldest = emitSampleReceipt();
-    emitSampleReceipt();
-    emitSampleReceipt();
+    // newest. The oldest receipt is findable at limit 1. The three
+    // fixtures stamp DISTINCT createdAt values on DISTINCT payloads so
+    // they derive distinct record ids - byte-identical fixtures would
+    // collapse into one id and the pin would pass even for a filter
+    // applied after the slice, which returns whichever receipt is
+    // newest.
+    const oldest = emitContextReceipt(vault, {
+      options: { host: "mcp", trigger: "context_pack", createdAt: "2026-06-02T09:00:00.000Z" },
+      items: [{ id: "note-oldest" }],
+      finalText: "oldest",
+    });
+    emitContextReceipt(vault, {
+      options: { host: "mcp", trigger: "context_pack", createdAt: "2026-06-02T09:05:00.000Z" },
+      items: [{ id: "note-middle" }],
+      finalText: "middle",
+    });
+    emitContextReceipt(vault, {
+      options: { host: "mcp", trigger: "context_pack", createdAt: "2026-06-02T09:10:00.000Z" },
+      items: [{ id: "note-newest" }],
+      finalText: "newest",
+    });
     const matched = listContextReceipts(vault, { receiptId: oldest.id, limit: 1 });
     expect(matched).toHaveLength(1);
     expect(matched[0]!.id).toBe(oldest.id);
