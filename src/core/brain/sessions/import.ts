@@ -255,6 +255,22 @@ export interface ImportSessionResult {
   readonly mined_secret_refused: number;
   /** Turns carrying a private region, withheld whole from mining. */
   readonly mined_private_withheld: number;
+  /**
+   * Mentions whose ledger append THREW this run - the miner's telemetry-grade
+   * tolerance keeps the import alive, and this slot carries the failure past
+   * `mineAndRecordTurn`'s `ledgerFailed` outcome so no import surface can
+   * report a clean run over a ledger it could not write. A failed mention
+   * stays unseen, so the next import re-folds it.
+   */
+  readonly mined_ledger_failed: number;
+  /**
+   * Mentions dropped because a session already holds the miner's
+   * `MAX_MINED_KEYS_PER_SESSION` (512) distinct keys - the cap
+   * `mineAndRecordTurn` enforces, surfaced here through its `capOverflow`
+   * outcome so an over-cap import reports the overflow instead of a quietly
+   * truncated mention set.
+   */
+  readonly mined_cap_overflow: number;
   readonly recall_turns_imported: number;
   readonly recall_summary_nodes: number;
   /**
@@ -372,6 +388,8 @@ export async function importSession(
   let minedWithheld = 0;
   let minedSecretRefused = 0;
   let minedPrivateWithheld = 0;
+  let minedLedgerFailed = 0;
+  let minedCapOverflow = 0;
   /**
    * The run's mined-mention dedupe set, keyed at (family, key,
    * sessionRef) - owned here across turns so one session folds to one
@@ -507,6 +525,8 @@ export async function importSession(
       mined_withheld: 0,
       mined_secret_refused: 0,
       mined_private_withheld: 0,
+      mined_ledger_failed: 0,
+      mined_cap_overflow: 0,
       recall_turns_imported: 0,
       recall_summary_nodes: 0,
       turns_resumed: 0,
@@ -648,6 +668,8 @@ export async function importSession(
       minedWithheld += mined.withheld;
       minedSecretRefused += mined.secretRefused;
       minedPrivateWithheld += mined.privateWithheld;
+      minedLedgerFailed += mined.ledgerFailed;
+      minedCapOverflow += mined.capOverflow;
     }
 
     // Path A — markers in text.
@@ -811,6 +833,8 @@ export async function importSession(
     mined_withheld: minedWithheld,
     mined_secret_refused: minedSecretRefused,
     mined_private_withheld: minedPrivateWithheld,
+    mined_ledger_failed: minedLedgerFailed,
+    mined_cap_overflow: minedCapOverflow,
     filtered_turns: filteredTurns,
     recall_turns_imported: recallTurnsImported,
     recall_summary_nodes: recallSummaryNodes,

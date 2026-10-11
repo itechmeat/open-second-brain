@@ -17,8 +17,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
-import { listContinuityRecords } from "../../../../src/core/brain/continuity/store.ts";
 import {
+  continuityLogDir,
+  listContinuityRecords,
+} from "../../../../src/core/brain/continuity/store.ts";
+import {
+  MAX_MINED_KEYS_PER_SESSION,
   SESSION_ENTITY_MENTION_KIND,
   type SessionMiningFamily,
   miningDedupeId,
@@ -170,6 +174,8 @@ describe("importSession - session entity mining", () => {
     expect(result.mined_withheld).toBe(0);
     expect(result.mined_secret_refused).toBe(0);
     expect(result.mined_private_withheld).toBe(0);
+    expect(result.mined_ledger_failed).toBe(0);
+    expect(result.mined_cap_overflow).toBe(0);
     expect(ledgerMentions()).toEqual([]);
   });
 
@@ -205,5 +211,37 @@ describe("importSession - session entity mining", () => {
       ),
     );
     expect(folded.size).toBe(1);
+  });
+
+  test("a sabotaged ledger mid-import names the failure through the import result", async () => {
+    // Sabotage: a regular file where the continuity ledger's directory must
+    // be, so every mention append throws. The import itself still succeeds
+    // (telemetry-grade tolerance), but the result's counters must say so -
+    // the miner's ledgerFailed slot surfaced, never swallowed between the
+    // miner and the import report.
+    writeFileSync(continuityLogDir(vault), "not a directory\n");
+    const path = writeUserSession("mining-ledger-fail.jsonl", ["pin `SessionStore` here"]);
+
+    const result = await importSession(vault, path, { agent: "tester", now: NOW });
+
+    expect(result.mined_extracted).toBe(0);
+    expect(result.mined_ledger_failed).toBe(1);
+    expect(result.errors).toEqual([]);
+    // Repair the read side, then confirm nothing landed while it was down.
+    rmSync(continuityLogDir(vault), { force: true });
+    expect(ledgerMentions()).toEqual([]);
+  });
+
+  test("an over-cap session reports the overflow through the import result", async () => {
+    const overCap = MAX_MINED_KEYS_PER_SESSION + 3;
+    const text = Array.from({ length: overCap }, (_, i) => `\`Import_cap_key_${i}\``).join("\n");
+    const path = writeUserSession("mining-cap.jsonl", [text]);
+
+    const result = await importSession(vault, path, { agent: "tester", now: NOW });
+
+    expect(result.mined_extracted).toBe(MAX_MINED_KEYS_PER_SESSION);
+    expect(result.mined_cap_overflow).toBe(3);
+    expect(result.mined_ledger_failed).toBe(0);
+    expect(ledgerMentions().length).toBe(MAX_MINED_KEYS_PER_SESSION);
   });
 });
