@@ -20,6 +20,7 @@ import {
   isAnswerQuoteVerdict,
   mergeAnswerQuoteVerdicts,
   type AnswerQuoteEvidence,
+  type AnswerQuoteVerdict,
 } from "../../../../src/core/brain/answer-quotes/check.ts";
 import { QUOTE_SPAN_PREVIEW_MAX_CHARS } from "../../../../src/core/brain/distill/quote-verdict.ts";
 import { findQuoteSpans } from "../../../../src/core/brain/distill/quote-spans.ts";
@@ -210,6 +211,55 @@ describe("checkAnswerQuotes - the distill suite's verified spans verify here", (
   test("a fabricated quote in CJK running text does not verify", () => {
     expect(verdictOf("他说「完全捏造」。", TEXT)).toBe(ANSWER_QUOTE_VERDICT.notInNote);
   });
+});
+
+describe("checkAnswerQuotes - the degradation matrix, table-style", () => {
+  // The matrix end-to-end: each evidence state with a span that occurs
+  // and one that does not. Degradation never upgrades a verdict - a
+  // truncated source can under-deliver evidence but never acquits a
+  // span, and "we could not check" is a finding, not an all-clear.
+  const tail = SOURCE.split("\n").slice(0, 8).join("\n");
+  const table: ReadonlyArray<
+    readonly [
+      string,
+      AnswerQuoteEvidence,
+      readonly [string, AnswerQuoteVerdict],
+      readonly [string, AnswerQuoteVerdict],
+    ]
+  > = [
+    [
+      "complete text",
+      { kind: "text", text: SOURCE, truncated: false },
+      ["reuses staked capital", ANSWER_QUOTE_VERDICT.verified],
+      ["reuses pooled capital", ANSWER_QUOTE_VERDICT.notInNote],
+    ],
+    [
+      "truncated prefix",
+      { kind: "text", text: tail, truncated: true },
+      ["reuses staked capital", ANSWER_QUOTE_VERDICT.verified],
+      ["Café prices", ANSWER_QUOTE_VERDICT.sourceTruncated],
+    ],
+    [
+      "unavailable",
+      { kind: "unavailable" },
+      ["reuses staked capital", ANSWER_QUOTE_VERDICT.noteUnavailable],
+      ["nothing of this", ANSWER_QUOTE_VERDICT.noteUnavailable],
+    ],
+    [
+      "not-text",
+      { kind: "not-text" },
+      ["reuses staked capital", ANSWER_QUOTE_VERDICT.notText],
+      ["nothing of this", ANSWER_QUOTE_VERDICT.notText],
+    ],
+  ];
+  for (const [name, evidence, hit, miss] of table) {
+    test(`${name}: a hit is ${hit[1]}, a miss is ${miss[1]}`, () => {
+      const res = checkAnswerQuotes({ spans: [hit[0], miss[0]], evidence });
+      expect(res.outcomes.map((o) => o.verdict)).toEqual([hit[1], miss[1]]);
+      expect(res.verified).toBe(hit[1] === ANSWER_QUOTE_VERDICT.verified ? 1 : 0);
+      expect(res.unverified).toBe(hit[1] === ANSWER_QUOTE_VERDICT.verified ? 1 : 2);
+    });
+  }
 });
 
 describe("mergeAnswerQuoteVerdicts - the no-citation candidate ladder", () => {

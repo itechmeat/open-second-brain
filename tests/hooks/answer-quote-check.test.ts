@@ -367,6 +367,66 @@ describe("answer-quote-check hook - phase gating", () => {
   });
 });
 
+describe("answer-quote-check hook - the enforce trail", () => {
+  /** Lines of the vault's Brain-log JSONL sidecars naming the hook. */
+  function enforceLines(): ReadonlyArray<string> {
+    const logDir = join(vault, "Brain", "log");
+    if (!existsSync(logDir)) return [];
+    return readdirSync(logDir)
+      .filter((name) => name.endsWith(".jsonl"))
+      .flatMap((name) => readFileSync(join(logDir, name), "utf8").split(/\r?\n/))
+      .filter((line) => line.includes("answer-quote-check"));
+  }
+
+  test("enforce appends exactly one Brain-log event per turn, beside the annotation", async () => {
+    writeConfig("enforce");
+    writeNote("Brain/notes/restaking.md", "Restaking reuses staked capital.\n");
+    writeTranscript([
+      ccUser("what does the note say?"),
+      ccAssistant('The note states "reuses pooled capital" plainly (Brain/notes/restaking.md).'),
+    ]);
+    const run = await runHook();
+    expect(run.exit).toBe(0);
+    expect(run.stderr).toBe("");
+    expect(annotations(run).length).toBe(1);
+    const lines = enforceLines();
+    expect(lines.length).toBe(1);
+    expect(lines[0]).toContain("[not-in-note]");
+    expect(lines[0]).toContain("reuses pooled capital");
+    expect(lines[0]).toContain("recall");
+  });
+
+  test("enforce with every span verified writes nothing", async () => {
+    writeConfig("enforce");
+    writeNote("Brain/notes/restaking.md", "Restaking reuses staked capital to secure services.\n");
+    writeTranscript([
+      ccUser("what does the note say?"),
+      ccAssistant('The note states "reuses staked capital" plainly (Brain/notes/restaking.md).'),
+    ]);
+    const run = await runHook();
+    expect(run.exit).toBe(0);
+    expect(annotations(run)).toEqual([]);
+    expect(enforceLines()).toEqual([]);
+    expect(logDays()).toEqual([]);
+  });
+
+  test("a failed append names itself on one stderr line; the annotation still goes out, exit 0", async () => {
+    writeConfig("enforce");
+    // A FILE where the log directory belongs: every append fails.
+    writeFileSync(join(vault, "Brain", "log"), "not a directory\n");
+    writeTranscript([
+      ccUser("what does the note say?"),
+      ccAssistant('The note states "reuses pooled capital" plainly (Brain/notes/restaking.md).'),
+    ]);
+    const run = await runHook();
+    expect(run.exit).toBe(0);
+    const lines = run.stderr.split(/\r?\n/).filter((line) => line.length > 0);
+    expect(lines.length).toBe(1);
+    expect(lines[0]!.startsWith("answer-quote-check:")).toBe(true);
+    expect(annotations(run).length).toBe(1);
+  });
+});
+
 describe("answer-quote-check hook - fail-open arms", () => {
   test("an unreadable transcript exits 0 with exactly one stderr audit line", async () => {
     writeConfig("shadow");
