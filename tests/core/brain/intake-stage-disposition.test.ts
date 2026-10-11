@@ -243,6 +243,32 @@ describe("the manifest row owes the disposition verdict too", () => {
     expect(recorded).toBe(false);
   });
 
+  test("a staged ingest stages its created entity pages too - nothing publishes", () => {
+    seed(SOURCE);
+    const res = ingestSource(
+      vault,
+      { sourcePath: SOURCE, summary: "A summary.", extraction: SAMPLE },
+      { agent: "ingest-agent", now: NOW },
+    );
+    // The stage arm engaged for the summary page.
+    expect(res.staged).toBe(true);
+    // End-to-end regression (the manifest-row half is pinned above): the
+    // entity half owes the same verdict. The created pages must sit in the
+    // notes review queue - never in the canonical registry beside a summary
+    // that is itself only staged.
+    expect(listEntities(vault, { category: "concept" })).toHaveLength(0);
+    expect(listEntities(vault, { category: "concept", status: "quarantine" })).toHaveLength(0);
+    const notesEntries = listPendingLane(vault, REVIEW_LANE.notes).entries;
+    expect(notesEntries).toHaveLength(2);
+    expect(notesEntries.map((e) => e.publishTarget).toSorted()).toEqual(
+      res.entitiesCreated.map((id) => canonicalPage("concept", id)).toSorted(),
+    );
+    // Applying the staged entries publishes exactly what a publish-disposition
+    // ingest would have left behind.
+    for (const entry of notesEntries) applyPendingLane(vault, entry.id);
+    expect(listEntities(vault, { category: "concept" })).toHaveLength(2);
+  });
+
   test("a published ingest still records the manifest row", () => {
     delete process.env[INGEST_ENV];
     seed(SOURCE);

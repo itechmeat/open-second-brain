@@ -250,11 +250,19 @@ export function ingestSource(
   // It used to be classified here as well and handed down as an argument,
   // which meant the same source was read twice and the second answer could be
   // overridden by the caller - see `intake/extract-intake.ts`.
+  // The disposition verdict rides along (the intake's disposition contract):
+  // on a `stage` verdict the intake stages the entity pages it CREATES into
+  // review beside the summary page, so a staged ingest publishes nothing -
+  // not the summary, not an entity page, not the manifest row below. The
+  // verdict was resolved ONCE above and is only forwarded here, never
+  // re-consulted. `refuse` is not expressible at this boundary: a deny threw
+  // at the resolution itself, before any write.
   const intake = intakeExtraction(vault, input.extraction, {
     agent: opts.agent,
     now: opts.now,
     provenance,
     ...(opts.readable !== undefined ? { readable: opts.readable } : {}),
+    ...(disposition.verdict === "stage" ? { disposition: "stage" as const } : {}),
   });
   const trust = intake.trust;
   const captureScope = captureScopeForTrust(trust);
