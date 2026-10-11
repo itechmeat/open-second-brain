@@ -896,8 +896,12 @@ test("events hydrate provenance for claims carrying a sample_id", async () => {
   writeSourcePage("session.md");
   const server = new MCPServer({ vault, configPath });
   await initialize(server);
+  // An explicit past stamp: a defaulted `now` receipt can land up to a
+  // second AFTER the claim's floored assertion stamp, which is a genuine
+  // timestamp inversion the join must flag - the fixture keeps the
+  // receipt unambiguously before the claim.
   const receipt = emitContextReceipt(vault, {
-    options: { host: "mcp", trigger: "context_pack" },
+    options: { host: "mcp", trigger: "context_pack", createdAt: "2026-06-02T09:00:00.000Z" },
     items: [{ id: "note-alpha", path: "Brain/notes/alpha.md", tokens: 40 }],
     finalText: "the final answer text",
   });

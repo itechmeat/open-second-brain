@@ -130,6 +130,35 @@ describe("resolveClaimProvenance", () => {
     expect(provenance.timestamp_inverted).toBe(false);
   });
 
+  test("a sub-second claim stamp after its receipt's second is not inverted", () => {
+    // The compare is between parsed instants, not strings. Lexically, a
+    // millis claim stamp (`...:00.500Z`) sorts before a second-precision
+    // receipt stamp (`...:00Z`) - "." < "Z" - so a string compare flags
+    // a claim written half a second AFTER its receipt as an inversion.
+    // The receipts the continuity boundary stamps at second precision
+    // are exactly the shape that hits this.
+    const receipt = emitContextReceipt(vault, {
+      options: { host: "mcp", trigger: "context_pack", createdAt: "2026-06-02T09:00:00Z" },
+      items: [{ id: "note-alpha", path: "Brain/notes/alpha.md", tokens: 40 }],
+      finalText: "the final answer text",
+    });
+    const provenance = resolveClaimProvenance(vault, receipt.id, "2026-06-02T09:00:00.500Z");
+    expect(provenance.receipt).not.toBeNull();
+    expect(provenance.timestamp_inverted).toBe(false);
+  });
+
+  test("a sub-second claim stamp before its receipt's second is inverted", () => {
+    // The parsed-instant form must not weaken the flag either direction:
+    // a claim half a second BEFORE the receipt still predates it.
+    const receipt = emitContextReceipt(vault, {
+      options: { host: "mcp", trigger: "context_pack", createdAt: "2026-06-02T09:00:00Z" },
+      items: [{ id: "note-alpha", path: "Brain/notes/alpha.md", tokens: 40 }],
+      finalText: "the final answer text",
+    });
+    const provenance = resolveClaimProvenance(vault, receipt.id, "2026-06-02T08:59:59.500Z");
+    expect(provenance.timestamp_inverted).toBe(true);
+  });
+
   test("a private receipt is known but its items are never unfolded", () => {
     // The receipts-fold rule, applied at the join: redacted content must
     // not re-enter the vault through a claim's provenance.

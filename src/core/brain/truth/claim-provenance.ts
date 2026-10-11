@@ -137,13 +137,21 @@ function joinOutcome(vault: string, record: ContinuityRecord): ClaimProvenanceOu
  * Resolve one claim's `sample_id` to its receipt and outcome halves.
  *
  * `claimTs` is the claim's canonical UTC assertion timestamp, compared
- * LEXICALLY against the receipt's `created_at` - correct for the
- * canonical form on both sides (the store validates the claim ts; the
- * continuity store stamps the receipt), the same comparison the
- * receipts-fold window bounds use.
+ * against the receipt's `created_at` as PARSED INSTANTS. The lexical
+ * compare this replaces mis-orders a sub-second claim stamp against a
+ * second-precision receipt stamp - `...:00.500Z` sorts before `...:00Z`
+ * because "." < "Z" - and flagged a claim written half a second after
+ * its receipt as inverted. Strict: a claim AT its receipt's instant was
+ * informed by it; only a claim written BEFORE the receipt existed is an
+ * inversion.
  *
  * @throws when `sampleId` is blank - the same never-coerced discipline
  *   the write boundary applies, so silence can never read as an answer.
+ *   A stamp that parses to no instant is refused by name too: both sides
+ *   are boundary-validated canonical (the claim store validates the
+ *   claim ts; the continuity store validates the receipt's `createdAt`),
+ *   so an unparseable stamp means a corrupted ledger, never a caller
+ *   mistake to silently report as "not inverted".
  */
 export function resolveClaimProvenance(
   vault: string,
@@ -161,8 +169,25 @@ export function resolveClaimProvenance(
     ...(outcomeRecord !== null
       ? { outcome: joinOutcome(vault, outcomeRecord) }
       : { outcome: null }),
-    // Strict: a claim AT its receipt's second was informed by it; only a
-    // claim written BEFORE the receipt existed is an inversion.
-    timestamp_inverted: receiptRecord !== null && claimTs < receiptRecord.createdAt,
+    timestamp_inverted:
+      receiptRecord !== null &&
+      stampInstant("claim", claimTs) < stampInstant("receipt", receiptRecord.createdAt),
   });
+}
+
+/**
+ * Parse one side of the inversion compare into its instant, refusing a
+ * stamp that has none. Both sides reaching here were validated canonical
+ * by their write boundaries, so a parse failure names the side whose
+ * ledger is corrupt rather than answering the compare with `NaN`'s
+ * silent "false".
+ */
+function stampInstant(side: string, ts: string): number {
+  const instant = Date.parse(ts);
+  if (Number.isNaN(instant)) {
+    throw new Error(
+      `claim provenance: ${side} timestamp is not a parseable UTC instant: ${JSON.stringify(ts)}`,
+    );
+  }
+  return instant;
 }

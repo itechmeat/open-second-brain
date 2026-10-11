@@ -624,8 +624,12 @@ test("truth state refuses a blank --sample-id as a usage error, writing nothing"
 test("truth events hydrates provenance for a claim carrying a sample id", async () => {
   seedCliRegistry();
   writeCliSourcePage("session.md");
+  // An explicit past stamp: a defaulted `now` receipt can land up to a
+  // second AFTER the claim's floored assertion stamp, which is a genuine
+  // timestamp inversion the join must flag - the fixture keeps the
+  // receipt unambiguously before the claim.
   const receipt = emitContextReceipt(vault, {
-    options: { host: "cli", trigger: "context_pack" },
+    options: { host: "cli", trigger: "context_pack", createdAt: "2026-06-02T09:00:00.000Z" },
     items: [{ id: "note-alpha", path: "Brain/notes/alpha.md", tokens: 40 }],
     finalText: "the final answer text",
   });
