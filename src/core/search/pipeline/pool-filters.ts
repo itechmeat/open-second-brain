@@ -10,6 +10,7 @@
 import { normalizeAgentScope } from "../../graph/agent-scope.ts";
 import { normalizeVisibilityScope } from "../../graph/visibility.ts";
 import { resolvedTransportReach, type TransportReach } from "../../graph/transport-reach.ts";
+import { normalizeSchemaToken } from "../../brain/schema-vocab.ts";
 import { normalizeScopeFilter } from "../../scope-key.ts";
 import {
   resolvePropertyPushdown,
@@ -24,6 +25,7 @@ import {
   applyStatusFilter,
   applyReachFilter,
   applyVisibilityScope,
+  readCachedFrontmatter,
   type FrontmatterCache,
 } from "../result-filters.ts";
 import type { Store } from "../store.ts";
@@ -201,13 +203,28 @@ export function applyPoolFilters(
     filters.promoted !== null && propFiltered.some((r) => r.searchType === "link")
       ? gateTraversalRows(propFiltered, filters.promoted, ctx)
       : propFiltered;
+  // Shape gate (recall-quality review): documents.page_type records only
+  // scalar-STRING `type` frontmatter, so the pushed clause is conditionally
+  // faithful - its NULL arm keeps every row whose shape the column cannot
+  // speak for (an array `type` most notably, which the live filter matches
+  // element-wise), and THIS stage arbitrates exactly those rows under the
+  // live filter's type key, in the caller's own spelling. Rows the SQL
+  // legitimately decided (a scalar-string type) keep their as-indexed
+  // verdict; nothing is re-read for them beyond the shared frontmatter
+  // cache probe that recognises the blind shapes.
+  const shapeGated =
+    filters.promoted !== null &&
+    filters.promoted.has("type") &&
+    filters.pushdown?.pageTypes !== undefined
+      ? gateBlindShapeRows(traversalGated, filters.promoted.get("type")!, ctx)
+      : traversalGated;
   // Graph-degree cardinality predicates (t_9bee8f0b): drop rows whose
   // backlink/outlink counts fail the predicates, backed by the
   // link-graph degree index. No-op when no predicate was requested.
   const degreeFiltered =
     filters.degreeFilters.length > 0
-      ? applyDegreeFilter(traversalGated, filters.degreeFilters, ctx.store)
-      : traversalGated;
+      ? applyDegreeFilter(shapeGated, filters.degreeFilters, ctx.store)
+      : shapeGated;
   // Root A, and it runs BEFORE the trail's baseline is taken. The
   // caller's own scopes are counted below, because "did my scope remove
   // my results" is a question the caller may ask about a filter it
@@ -271,4 +288,43 @@ function gateTraversalRows(
     applyPropertyFilter(linkRows, promoted, ctx.vault, ctx.frontmatterCache).map((r) => r.chunkId),
   );
   return ranked.filter((r) => r.searchType !== "link" || kept.has(r.chunkId));
+}
+
+/**
+ * The rows whose `type` frontmatter the page_type column cannot speak for
+ * - the key absent, or present in a non-scalar shape (an array; the
+ * parser keeps YAML scalars as strings, so a string whose token is empty
+ * is the remaining blind case) - judged under the live filter's type key
+ * and spliced back in rank order. A scalar-string type keeps its SQL
+ * verdict: the column stored it, and that as-indexed answer is the C4
+ * contract for the shapes the SQL reproduces exactly.
+ */
+function gateBlindShapeRows(
+  ranked: ReadonlyArray<BrainSearchResult>,
+  typeValues: ReadonlyArray<string>,
+  ctx: FilterContext,
+): ReadonlyArray<BrainSearchResult> {
+  const blind: BrainSearchResult[] = [];
+  for (const r of ranked) {
+    const meta = readCachedFrontmatter(ctx.frontmatterCache, ctx.vault, r.path) as Record<
+      string,
+      unknown
+    >;
+    if (!Object.prototype.hasOwnProperty.call(meta, "type")) {
+      blind.push(r);
+      continue;
+    }
+    const value = meta["type"];
+    if (typeof value !== "string" || normalizeSchemaToken(value).length === 0) blind.push(r);
+  }
+  if (blind.length === 0) return ranked;
+  const kept = new Set(
+    applyPropertyFilter(
+      blind,
+      new Map([["type", typeValues]]),
+      ctx.vault,
+      ctx.frontmatterCache,
+    ).map((r) => r.chunkId),
+  );
+  return ranked.filter((r) => !blind.includes(r) || kept.has(r.chunkId));
 }

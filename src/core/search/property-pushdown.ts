@@ -49,6 +49,16 @@
  *     normalizes to the empty token is unpushable (the stored column is
  *     never the empty string, while the live filter could still match an
  *     empty frontmatter scalar), and the whole key falls back;
+ *   - `type` is CONDITIONALLY faithful over value shapes (recall-quality
+ *     review): `documents.page_type` is written only for scalar-string
+ *     frontmatter, so the pushed clause reads
+ *     `page_type IN (...) OR page_type IS NULL`. The IN arm answers the
+ *     scalar shapes as-indexed; the NULL arm keeps every row whose shape
+ *     the column cannot speak for - an array `type` most notably, which
+ *     the live filter matches element-wise - as a candidate, and the
+ *     assembly's post-rank shape gate arbitrates exactly those rows under
+ *     the live filter (`pipeline/pool-filters.ts`), so a non-scalar shape
+ *     never silently narrows;
  *   - a key with no accepted values matches nothing under the live
  *     filter's semantics, which is the post-rank path's exact behaviour.
  */
@@ -252,7 +262,13 @@ export function pushdownSqlFragment(
   const clauses: string[] = [];
   const bindings: string[] = [];
   if (pushdown.pageTypes !== undefined) {
-    clauses.push(`d.page_type IN (${placeholders(pushdown.pageTypes.length)})`);
+    // Conditionally faithful (see the module header): the IN arm answers
+    // the scalar-string shapes the column stores; the NULL arm keeps every
+    // row whose `type` shape the column cannot speak for - the post-rank
+    // shape gate arbitrates those under the live filter.
+    clauses.push(
+      `(d.page_type IN (${placeholders(pushdown.pageTypes.length)}) OR d.page_type IS NULL)`,
+    );
     bindings.push(...pushdown.pageTypes);
   }
   if (pushdown.pinned === true) {

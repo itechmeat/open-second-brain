@@ -445,6 +445,11 @@ describe("end-to-end over an indexed vault", () => {
     expect(sql).not.toContain("link_type");
   });
 
+  test("the pushed type clause keeps the rows the column cannot speak for", () => {
+    const sql = keywordTopKSql({ pushdown: { pageTypes: ["report"] } });
+    expect(sql).toContain("(d.page_type IN (?) OR d.page_type IS NULL)");
+  });
+
   test("a mixed map filters by both halves: promoted in SQL, the rest post-rank", async () => {
     const cfg = makeConfig({ vault, dbPath });
     await seedVault();
@@ -515,6 +520,71 @@ describe("the promoted filter gates traversal-arm candidates", () => {
       visibility: ["public"],
     });
     expect(unfiltered.results.map((r) => r.path)).toContain("linked/bravo.md");
+  });
+});
+
+/**
+ * A mixed-shape corpus for the type pushdown's conditional faithfulness:
+ * `documents.page_type` is written only for scalar-STRING frontmatter, so
+ * an array, a number, a null or an object `type` leaves the column NULL
+ * and the SQL cannot reproduce the live filter's verdict for them. Those
+ * rows must stay post-rank (the live filter is the arbiter); only the
+ * scalar-string shape answers as-indexed.
+ */
+async function seedMixedShapeVault(): Promise<void> {
+  writeMd(vault, "mixed/string.md", note("String", "type: report\n", "delta scalar verdict"));
+  writeMd(vault, "mixed/array.md", note("Array", "type: [report, misc]\n", "delta array verdict"));
+  writeMd(vault, "mixed/number.md", note("Number", "type: 42\n", "delta numeric verdict"));
+  writeMd(vault, "mixed/null.md", note("Null", "type:\n", "delta null verdict"));
+  writeMd(vault, "mixed/absent.md", note("Absent", "status: active\n", "delta untyped verdict"));
+  await indexVault(makeConfig({ vault, dbPath }));
+}
+
+describe("the type pushdown is shape-faithful over a mixed-shape corpus", () => {
+  test("an array-typed page survives a filter naming one of its elements", async () => {
+    // The defect: page_type is NULL for `type: [report, misc]`, so the bare
+    // IN dropped a page the live filter matches element-wise.
+    const cfg = makeConfig({ vault, dbPath });
+    await seedMixedShapeVault();
+    const reports = await search(cfg, {
+      query: "delta",
+      keywordOnly: true,
+      visibility: ["public"],
+      properties: new Map([["type", ["report"]]]),
+    });
+    expect(reports.results.map((r) => r.path).toSorted()).toEqual([
+      "mixed/array.md",
+      "mixed/string.md",
+    ]);
+  });
+
+  test("a numeric-looking scalar answers as-indexed through its stored token", async () => {
+    // This parser keeps YAML scalars as strings, so `type: 42` stores
+    // page_type "42" - a scalar shape the SQL reproduces exactly.
+    const cfg = makeConfig({ vault, dbPath });
+    await seedMixedShapeVault();
+    const numeric = await search(cfg, {
+      query: "delta",
+      keywordOnly: true,
+      visibility: ["public"],
+      properties: new Map([["type", ["42"]]]),
+    });
+    expect(numeric.results.map((r) => r.path)).toEqual(["mixed/number.md"]);
+  });
+
+  test("absent and null types stay excluded - the live filter's own verdict", async () => {
+    const cfg = makeConfig({ vault, dbPath });
+    await seedMixedShapeVault();
+    for (const accepted of [["report"], ["42"], ["misc"]] as const) {
+      const out = await search(cfg, {
+        query: "delta",
+        keywordOnly: true,
+        visibility: ["public"],
+        properties: new Map([["type", [...accepted]]]),
+      });
+      expect(out.results.map((r) => r.path)).not.toContain("mixed/absent.md");
+      expect(out.results.map((r) => r.path)).not.toContain("mixed/null.md");
+    }
   });
 });
 
