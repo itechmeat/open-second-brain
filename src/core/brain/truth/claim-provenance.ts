@@ -153,7 +153,7 @@ function payloadSampleId(record: ContinuityRecord): string | null {
  */
 function newestWinsById(
   records: ReadonlyArray<ContinuityRecord>,
-  keyOf: (record: ContinuityRecord) => string,
+  keyOf: (record: ContinuityRecord) => string | null,
 ): ReadonlyMap<string, ContinuityRecord> {
   const index = new Map<string, ContinuityRecord>();
   for (const record of records) {
