@@ -73,6 +73,8 @@ import { withDestructiveSnapshot } from "./snapshot-gate.ts";
 import { stringArrayField, wikilinkTarget } from "./source-links.ts";
 import { BRAIN_SNAPSHOT_REASON } from "./types.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import { refuseDocumentDeny, type WriteSubject } from "./write-disposition.ts";
+import { REVIEW_LANE } from "./write-gate.ts";
 
 /** How a page was found to trace back to the source. */
 export type SourceCleanupMatch = "source_path" | "session_ref" | "wikilink" | "evidenced_by";
@@ -193,6 +195,15 @@ export interface DeleteBySourceOptions {
    * directly).
    */
   readonly include?: (rel: string) => boolean;
+  /**
+   * The credential-minted subject of the caller (write-side-trust, Task
+   * 7), when the transport resolved one. It WINS over `agent` as the
+   * identity the permissions document consult answers - a caller-supplied
+   * agent is content attribution, never the identity a document's rules
+   * answer. Absent (stdio, the CLI) the consult falls back to the config
+   * identity, exactly like every other lane.
+   */
+  readonly subject?: WriteSubject;
 }
 
 /**
@@ -687,6 +698,21 @@ export function deleteBySource(
   // Vault-identity write guard (context-integrity-gates, Unit J).
   // Dry-run (the default) plans and writes nothing, so it stays ungated.
   if (confirm) assertVaultIdentityForWrite(vault);
+  // Deny-consulted evidence (write-side trust, Task 12): a confirmed
+  // cleanup is a mutation lane like update or append - it removes the
+  // derived entries and the ingest manifest entry - so the document is
+  // resolved against the credential subject and a deny refuses with the
+  // SAME typed error BEFORE anything is read for deletion, snapshotted,
+  // or removed, one decision-ledger row behind it. A dry run (the
+  // default) writes nothing, so it stays a read and stays ungated. With
+  // no permissions document this is a no-op and the cleanup proceeds
+  // exactly as before.
+  if (confirm) {
+    refuseDocumentDeny(vault, REVIEW_LANE.ingest, opts.subject, {
+      target: canonical,
+      ...(opts.now !== undefined ? { now: opts.now } : {}),
+    });
+  }
 
   // A page or a source the caller may not read is planned, counted and
   // left on disk exactly as an absent one: a remote caller can neither

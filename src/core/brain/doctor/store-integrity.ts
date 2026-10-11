@@ -11,6 +11,7 @@
 import { dirname, join } from "node:path";
 
 import { ensureInsideVault, realpathInsideVault, vaultRelative } from "../../path-safety.ts";
+import { resolveAgentName } from "../../config.ts";
 import { readFreshenState } from "../../search/freshen.ts";
 import { BRAIN_LOG_AUDIT_DIRS } from "../audit-dirs.ts";
 import { continuityLogDir } from "../continuity/store.ts";
@@ -22,6 +23,12 @@ import { JSONL_LEDGER_EXT, listSyncConflictFiles } from "../ledger-shards.ts";
 import { brainStateDirPath } from "../lineage/ledger.ts";
 import { metricsDir } from "../metrics.ts";
 import { BRAIN_SKILL_PROPOSALS_REL } from "../path-constants.ts";
+import {
+  loadPermissionsDocument,
+  PERMISSIONS_DOCUMENT_REL,
+  PermissionsDocumentError,
+} from "../permissions/document.ts";
+import { resolvePermission } from "../permissions/resolve.ts";
 import { brainDirs, hookAuditDir, prefAuditDir } from "../paths.ts";
 import { schemaMutationAuditDir } from "../schema-integrity.ts";
 import { watchdogFallbackAuditDir } from "../watchdog.ts";
@@ -263,6 +270,54 @@ export const syncConflictLogCheck: DoctorCheck = {
 
 /** Subsystem name the sync-conflict listing reports an unreadable path under. */
 const SYNC_CONFLICT_SITE = "brain.doctor.syncConflictLog";
+
+/** The code of the {@link denyConsultedLanesCheck} finding. */
+export const DENY_CONSULTED_LANES_CODE = "deny-consulted-lanes";
+
+/**
+ * Write-side trust (PR #247 review M3 residual): which mutation lanes a
+ * document deny actually closes.
+ *
+ * The deny consult spread across lanes one release at a time - update and
+ * append first, then the signal and feedback lanes, now the destructive
+ * source-cleanup lane - while the release notes named only the first two.
+ * When the document in force DENIES the locally configured agent the
+ * `ingest` action, the cleanup refusals are therefore easy to misread as
+ * faults rather than policy. This check names the covered lanes at the one
+ * surface an operator runs to find out what is wrong, resolving the SAME
+ * subject the consults fall back to (`resolveAgentName`, `via: config`,
+ * the blanket `ingest` action, the resolver's own precedence table), so it
+ * fires only when a real cleanup from this machine would actually be
+ * refused. An unreadable document is the permissions check's finding, not
+ * this one's, so it stays silent here.
+ */
+export const denyConsultedLanesCheck: DoctorCheck = {
+  failSoft: true,
+  run({ vault, configPath }, { issues }) {
+    let document: ReturnType<typeof loadPermissionsDocument>["document"];
+    try {
+      document = loadPermissionsDocument(vault).document;
+    } catch (err) {
+      if (!(err instanceof PermissionsDocumentError)) throw err;
+      return;
+    }
+    if (document === null) return;
+    const agent = resolveAgentName(configPath);
+    const decision = resolvePermission(document, { agent, via: "config" }, "ingest");
+    if (decision.verdict !== "deny") return;
+    issues.push({
+      severity: "warning",
+      code: DENY_CONSULTED_LANES_CODE,
+      path: join(vault, PERMISSIONS_DOCUMENT_REL),
+      message:
+        `a permissions document denies ${JSON.stringify(agent)} the ingest action ` +
+        `(rule ${decision.source}). The lanes that consult the document and refuse on ` +
+        "deny include: source ingest (brain_ingest_source), the destructive source cleanup " +
+        "(delete_by_source: derived entries and the ingest manifest entry), and the " +
+        "ingest-lane review gate. Review the policy: o2b brain permissions show",
+    });
+  },
+};
 
 /**
  * The conflict copies under one ledger directory, or none plus a named

@@ -92,6 +92,7 @@ import { logChainCheck } from "./doctor/log-chain-check.ts";
 import { checkSemanticHealth } from "./doctor/semantic-health-check.ts";
 import {
   danglingWorkrunCheck,
+  denyConsultedLanesCheck,
   freshenFailureCheck,
   symlinkEscapeCheck,
   syncConflictLogCheck,
@@ -217,6 +218,7 @@ const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = Object.freeze([
   rerankHealthCheck,
   payloadRegistryCheck,
   permissionsDocumentCheck,
+  denyConsultedLanesCheck,
 ]);
 
 // ----- Entry point ----------------------------------------------------------

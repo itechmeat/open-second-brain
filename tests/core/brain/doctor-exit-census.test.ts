@@ -183,6 +183,7 @@ const DOCTOR_REGISTERED_CODES: ReadonlyArray<string> = [
   "content-hash-drift",
   "contradictory-preferences",
   "dangling-workrun",
+  "deny-consulted-lanes",
   "duplicate-preferences",
   "embedding-model-sunset-announced",
   "embeddings-backlog",

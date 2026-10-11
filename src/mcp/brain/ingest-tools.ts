@@ -312,6 +312,9 @@ async function toolBrainDeleteBySource(
     includeOriginals,
     now,
     include: readableAtContextReach(ctx),
+    // The deny consult answers for the credential-minted subject, never
+    // for the caller-named agent (write-side-trust, Task 7).
+    ...(ctx.requestIdentity !== undefined ? { subject: ctx.requestIdentity } : {}),
     ...(agent !== undefined ? { agent } : {}),
   };
 
@@ -325,10 +328,26 @@ async function toolBrainDeleteBySource(
     willMutate: confirm,
     matchList: planMatchList(preview),
   });
-  const plan = confirm
-    ? deleteBySource(ctx.vault, sourceFile, { confirm: true, ...baseOpts })
-    : preview;
-  return serializePlan(plan);
+  try {
+    const plan = confirm
+      ? deleteBySource(ctx.vault, sourceFile, { confirm: true, ...baseOpts })
+      : preview;
+    return serializePlan(plan);
+  } catch (err) {
+    // Write-side trust (Task 12): a permissions document rule denied the
+    // confirmed cleanup. Named code, the rule that decided, and the
+    // operator exit - never an internal error a caller would retry into
+    // the same wall.
+    if (err instanceof WriteRefusedError) {
+      throw new MCPError(INVALID_PARAMS, `${DELETE_TOOL}: ${err.message}`, {
+        code: err.code,
+        rule: err.rule,
+        agent: err.agent,
+        next_command: err.nextCommand,
+      });
+    }
+    throw err;
+  }
 }
 
 /**

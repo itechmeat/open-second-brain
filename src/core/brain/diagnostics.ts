@@ -583,6 +583,20 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
+        // Write-side trust, PR #247 review M3 residual. The destructive
+        // source-cleanup lane consults the permissions document like
+        // update and append do, and the document in force denies this
+        // machine's agent the ingest action those consults answer - so
+        // cleanups will be refused by policy, not by fault. The finding
+        // names the covered lanes; the exit is the same `show` loop as
+        // the other permission findings, and `autoRepairable` stays
+        // false because editing a policy file is the operator's act.
+        code: "deny-consulted-lanes",
+        issueClass: "permissions document denies the ingest action the mutation lanes consult",
+        nextCommand: WRITE_REFUSAL_NEXT_COMMAND,
+        autoRepairable: false,
+      },
+      {
         // Write-side trust, Task 12. `force_confirmed` skips the dream
         // trial window, and under a permissions document that skip is
         // reserved for callers whose `write` verdict is allow. Same exit
