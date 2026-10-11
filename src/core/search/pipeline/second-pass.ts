@@ -12,6 +12,7 @@ import {
   significantTerms,
 } from "../coverage.ts";
 import { coverageOverChunks } from "../evidence-verification.ts";
+import type { PropertyPushdown } from "../property-pushdown.ts";
 import { runFtsQueryDetailed } from "../fts.ts";
 import { semanticPoolSize } from "../semantic-phase.ts";
 import { eventTimeInRange, type ValidityWindow } from "../validity.ts";
@@ -28,6 +29,9 @@ export interface SecondPassInput {
   readonly query: string;
   readonly limit: number;
   readonly pathPrefix: string | undefined;
+  /** Same pushdown the first-pass lanes ran (recall-quality, C4). */
+  readonly kind?: "page" | "section";
+  readonly pushdown?: PropertyPushdown;
   readonly timeRange: ResolvedTimeRange | null;
   readonly validityWindowFor: (path: string) => ValidityWindow | null;
   readonly keywordHits: KeywordHit[];
@@ -82,6 +86,8 @@ function runBroadenedRetry(input: SecondPassInput): SecondPassOutcome {
     expandedTerms: terms.slice(1),
     limit: semanticPoolSize(limit),
     pathPrefix: pathPrefix ?? null,
+    ...(input.kind !== undefined ? { kind: input.kind } : {}),
+    ...(input.pushdown !== undefined ? { pushdown: input.pushdown } : {}),
   });
   const warnings = [...broadened.warnings];
   if (broadened.hits.length === 0) {
@@ -136,6 +142,8 @@ function runTargetedRetry(input: SecondPassInput): SecondPassOutcome {
     expandedTerms: retryPlan.terms.slice(1),
     limit: semanticPoolSize(limit),
     pathPrefix: pathPrefix ?? null,
+    ...(input.kind !== undefined ? { kind: input.kind } : {}),
+    ...(input.pushdown !== undefined ? { pushdown: input.pushdown } : {}),
   });
   const warnings = [...targeted.warnings];
   const newHits = targeted.hits.filter((h) => !chunkIds.has(h.chunkId));

@@ -26,6 +26,7 @@ import {
 import { normalizeSessionFocus, parseStructuredRecallQueryDocument } from "../core/search/index.ts";
 import type { BrainSearchResult, SearchOutcome } from "../core/search/index.ts";
 import { parseDegreePredicate, type DegreePredicate } from "../core/search/property-filter.ts";
+import { SEARCH_KINDS, isSearchKind } from "../core/search/property-pushdown.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN, normToken } from "../core/graph/visibility.ts";
 import { searchAcrossVaults } from "../core/search/cross-vault.ts";
 import { RECALL_PROFILE_NAMES } from "../core/search/profiles.ts";
@@ -289,11 +290,17 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
     properties: {
       type: "object",
       description:
-        "Optional frontmatter property filter (v0.10.17). Each key maps to one or more accepted scalar values; multi-value within a key is OR, multiple keys is AND.",
+        "Optional frontmatter property filter (v0.10.17). Each key maps to one or more accepted scalar values; multi-value within a key is OR, multiple keys is AND. The promoted keys (type, tags, pinned, visibility) filter the indexed snapshot in its stored form; every other key filters the live file post-rank.",
       additionalProperties: {
         type: "array",
         items: { type: "string" },
       },
+    },
+    kind: {
+      type: "string",
+      enum: [...SEARCH_KINDS],
+      description:
+        "Restrict candidates by chunk kind: 'page' matches each document's frontmatter/head chunk (chunk 0), 'section' everything after it. Absent searches all chunks.",
     },
     degree: {
       type: "array",
@@ -980,6 +987,14 @@ async function toolBrainSearch(
     );
   }
   const matchMode = matchModeRaw;
+  // Chunk-kind pushdown (recall-quality, C4). Same enum-gate shape as the
+  // match mode above: any present value outside the two kinds, whatever
+  // its type or length, is refused with the accepted list.
+  const kindRaw = args["kind"] ?? undefined;
+  if (kindRaw !== undefined && !isSearchKind(kindRaw)) {
+    throw new MCPError(INVALID_PARAMS, `argument 'kind' must be one of ${SEARCH_KINDS.join(", ")}`);
+  }
+  const kind = kindRaw as "page" | "section" | undefined;
   const explain = coerceBoolOptional(args, "explain") ?? false;
   const trust = coerceBoolOptional(args, "trust") ?? false;
   const rerank = coerceBoolOptional(args, "rerank") ?? false;
@@ -1071,6 +1086,7 @@ async function toolBrainSearch(
     ...(profile !== undefined ? { profile } : {}),
     ...(disclosure === DISCLOSURE_MODE.cards ? { disclosure } : {}),
     ...(properties !== undefined ? { properties } : {}),
+    ...(kind !== undefined ? { kind } : {}),
     ...(degreeFilters !== undefined ? { degreeFilters } : {}),
     ...(visibility !== undefined ? { visibility } : {}),
     // The reach the transport minted for this caller. Carried into the

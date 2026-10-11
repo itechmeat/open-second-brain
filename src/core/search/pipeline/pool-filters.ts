@@ -11,6 +11,7 @@ import { normalizeAgentScope } from "../../graph/agent-scope.ts";
 import { normalizeVisibilityScope } from "../../graph/visibility.ts";
 import { resolvedTransportReach, type TransportReach } from "../../graph/transport-reach.ts";
 import { normalizeScopeFilter } from "../../scope-key.ts";
+import { resolvePropertyPushdown, type PropertyPushdown } from "../property-pushdown.ts";
 import {
   applyAgentScope,
   applyDegreeFilter,
@@ -26,7 +27,15 @@ import type { DegreePredicate } from "../property-filter.ts";
 import type { BrainSearchResult, SearchOptions } from "../types.ts";
 
 export interface PoolFilters {
+  /**
+   * The UNPROMOTED property keys (recall-quality, C4): the half of the
+   * caller's map no index storage can answer faithfully, applied post-rank
+   * against the live file. The promoted half is compiled to SQL
+   * ({@link pushdown}) by the lanes before ranking.
+   */
   readonly properties: ReadonlyMap<string, ReadonlyArray<string>> | null;
+  /** The promoted half of the property map, pushed into the lanes' SQL. */
+  readonly pushdown: PropertyPushdown | null;
   readonly degreeFilters: ReadonlyArray<DegreePredicate>;
   readonly visibilityScope: ReturnType<typeof normalizeVisibilityScope>;
   /**
@@ -51,8 +60,14 @@ export function resolvePoolFilters(opts: SearchOptions): PoolFilters {
   // top-`limit` ranked hits can lose all their property-matching
   // candidates to the filter and surface zero results even when
   // matches exist deeper in the rank.
-  const properties =
-    opts.properties !== undefined && opts.properties.size > 0 ? opts.properties : null;
+  //
+  // The split (recall-quality, C4): the promoted half is already answered
+  // inside the lanes' SQL, so only the fallback half can still drop a
+  // ranked row here - a fully promoted map needs no overfetch, a mixed
+  // one keeps it for the keys that remain.
+  const split = resolvePropertyPushdown(opts.properties);
+  const properties = split.fallback;
+  const pushdown = split.pushdown;
   // Graph-degree cardinality predicates (t_9bee8f0b): a post-rank filter
   // that can drop ranked rows, so it shares the frontmatter-filter
   // overfetch. Absent / empty leaves the pool and results byte-identical.
@@ -86,6 +101,7 @@ export function resolvePoolFilters(opts: SearchOptions): PoolFilters {
       : null;
   return {
     properties,
+    pushdown,
     degreeFilters,
     visibilityScope,
     reach,

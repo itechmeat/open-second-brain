@@ -25,6 +25,7 @@ import {
   withIndexStale,
 } from "./pipeline/outcome.ts";
 import { applyPostRankPhases } from "./pipeline/post-rank.ts";
+import { resolvePoolFilters } from "./pipeline/pool-filters.ts";
 import { resolveQueryShape } from "./pipeline/query-shape.ts";
 import {
   isRelationalArmActive,
@@ -32,6 +33,7 @@ import {
   runRelationalArm,
 } from "./pipeline/relational-arm.ts";
 import { resolveSearchRequest } from "./pipeline/request.ts";
+import { resolveKindFilter } from "./property-pushdown.ts";
 import { noSecondPass, runSecondPassRecall } from "./pipeline/second-pass.ts";
 import { runSemanticLane, type SemanticLaneOutcome } from "./pipeline/semantic-lane.ts";
 import { openReadOrSelfHeal } from "./pipeline/store-open.ts";
@@ -222,6 +224,15 @@ export async function search(
     hybridDeadlineMs,
   } = request;
 
+  // Pushdown resolution (recall-quality, C4). The chunk kind and the
+  // promoted half of the property map are answered by the lanes' SQL;
+  // both resolve up front, beside the other request-level validation, so
+  // invalid input fails before the index opens. The fallback property
+  // half is resolved inside the assembly's own `resolvePoolFilters`, from
+  // the same split.
+  const kind = resolveKindFilter(opts.kind);
+  const { pushdown } = resolvePoolFilters(opts);
+
   // Read-only origins (cross-vault search) disable self-healing: a
   // rebuild would write an index INTO the external vault. Default
   // (selfHeal absent) keeps the legacy heal-and-retry behaviour.
@@ -328,6 +339,8 @@ export async function search(
       basePlan: shape.basePlan,
       limit,
       pathPrefix,
+      ...(kind !== undefined ? { kind } : {}),
+      ...(pushdown !== null ? { pushdown } : {}),
       matchMode: request.matchMode,
     });
     let keywordHits = keywordLane.hits;
@@ -350,6 +363,8 @@ export async function search(
       semanticLaneQuery: shape.semanticLaneQuery,
       limit,
       pathPrefix,
+      ...(kind !== undefined ? { kind } : {}),
+      ...(pushdown !== null ? { pushdown } : {}),
       keywordHitCount: keywordHits.length,
       ...(opts.transportReach !== undefined ? { transportReach: opts.transportReach } : {}),
     };
@@ -427,6 +442,8 @@ export async function search(
           query,
           limit,
           pathPrefix,
+          ...(kind !== undefined ? { kind } : {}),
+          ...(pushdown !== null ? { pushdown } : {}),
           timeRange,
           validityWindowFor: eventTime.validityWindowFor,
           keywordHits,

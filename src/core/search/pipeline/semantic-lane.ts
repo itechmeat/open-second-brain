@@ -10,6 +10,7 @@ import { contradictedAbiFields, formatEmbeddingAbiDrift } from "../store.ts";
 import { RETRIEVAL_DEGRADATION, noteDegradation } from "../retrieval-trail.ts";
 import type { RetrievalDegradationSink } from "../retrieval-trail.ts";
 import type { SemanticPolicy } from "../semantic-phase.ts";
+import type { PropertyPushdown } from "../property-pushdown.ts";
 import type { Store } from "../store.ts";
 import type { TransportReach } from "../../graph/transport-reach.ts";
 import type { ResolvedSearchConfig } from "../types.ts";
@@ -23,6 +24,10 @@ export interface SemanticLaneInput {
   readonly semanticLaneQuery: string | null;
   readonly limit: number;
   readonly pathPrefix: string | undefined;
+  /** Chunk-kind pushdown (recall-quality, C4); absent leaves the lane unfiltered. */
+  readonly kind?: "page" | "section";
+  /** Promoted property pushdown (recall-quality, C4); absent leaves it unfiltered. */
+  readonly pushdown?: PropertyPushdown;
   /** Keyword pool size, the other half of the hybrid-degrade signal. */
   readonly keywordHitCount: number;
   /** The composite deadline's cancellation; absent when no deadline runs. */
@@ -58,6 +63,8 @@ export async function runSemanticLane(input: SemanticLaneInput): Promise<Semanti
     const semOutcome = await runSemanticPhase(store, config, semanticLaneQuery ?? query, {
       limit: semanticPoolSize(limit),
       pathPrefix,
+      ...(input.kind !== undefined ? { kind: input.kind } : {}),
+      ...(input.pushdown !== undefined ? { pushdown: input.pushdown } : {}),
       explicit: policy.explicit,
       ...(input.signal !== undefined ? { signal: input.signal } : {}),
       ...(input.transportReach !== undefined ? { transportReach: input.transportReach } : {}),

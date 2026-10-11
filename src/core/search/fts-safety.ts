@@ -1,3 +1,4 @@
+import type { PropertyPushdown } from "./property-pushdown.ts";
 import type { KeywordHit, Store } from "./store.ts";
 import { SearchError } from "./types.ts";
 
@@ -27,7 +28,12 @@ function rebuildWarning(cause: string): string {
 export function keywordTopKWithFtsSafety(
   store: Store,
   fts5Query: string,
-  opts: { readonly limit: number; readonly pathPrefix?: string | null },
+  opts: {
+    readonly limit: number;
+    readonly pathPrefix?: string | null;
+    readonly kind?: "page" | "section" | null;
+    readonly pushdown?: PropertyPushdown | null;
+  },
 ): SafeKeywordOutcome {
   try {
     const hits = store.keywordTopK(fts5Query, opts);

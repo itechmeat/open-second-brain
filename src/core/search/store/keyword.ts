@@ -6,6 +6,9 @@
 
 import { Database } from "bun:sqlite";
 
+import type { PropertyPushdown } from "../property-pushdown.ts";
+import type { SearchKind } from "../property-pushdown.ts";
+import { pushdownSqlFragment } from "../property-pushdown.ts";
 import { SearchError } from "../types.ts";
 import { pathPrefixRange } from "./path-prefix.ts";
 import { acquireWriterLockSync } from "./writer-lock.ts";
@@ -94,46 +97,73 @@ export function rebuildFtsIndexWithWriterLock(
 /**
  * Top-K BM25 keyword hits. `fts5Query` is an already-escaped FTS5
  * MATCH expression; building it is fts.ts's job.
+ *
+ * `kind` and `pushdown` (recall-quality, C4) extend the WHERE clause:
+ * the kind discriminator on the v14 generated column, and the promoted
+ * property predicates compiled by `pushdownSqlFragment`. Both are absent
+ * from the SQL unless asked for - the default and prefix-only strings are
+ * byte-identical to pre-C4, which `keywordTopKSql` pins.
  */
+export interface KeywordTopKOptions {
+  readonly limit: number;
+  readonly pathPrefix?: string | null;
+  readonly kind?: SearchKind | null;
+  readonly pushdown?: PropertyPushdown | null;
+}
+
+export function keywordTopKSql(opts: KeywordTopKOptions = {}): string {
+  const prefix = opts.pathPrefix && opts.pathPrefix.length > 0 ? opts.pathPrefix : null;
+  const pushFrag = pushdownSqlFragment(opts.pushdown ?? null);
+  const kind = opts.kind ?? null;
+  const select = `SELECT c.id AS chunk_id, c.document_id AS document_id, ${CHUNK_FTS_BM25} AS bm25 `;
+  if (prefix === null && kind === null && pushFrag === null) {
+    return (
+      select +
+      "FROM chunk_fts JOIN chunks c ON c.id = chunk_fts.rowid " +
+      `WHERE chunk_fts MATCH ? ${CHUNK_ORDER} LIMIT ?`
+    );
+  }
+  const filters = [
+    "chunk_fts MATCH ?",
+    ...(prefix !== null ? ["d.path >= ?", "d.path < ?"] : []),
+    ...(pushFrag !== null ? [pushFrag.sql] : []),
+    ...(kind !== null ? ["c.chunk_kind = ?"] : []),
+  ];
+  return (
+    select +
+    "FROM chunk_fts " +
+    "JOIN chunks c ON c.id = chunk_fts.rowid " +
+    "JOIN documents d ON d.id = c.document_id " +
+    `WHERE ${filters.join(" AND ")} ${CHUNK_ORDER} LIMIT ?`
+  );
+}
+
 export function keywordTopK(
   db: Database,
   fts5Query: string,
-  opts: { readonly limit: number; readonly pathPrefix?: string | null },
+  opts: KeywordTopKOptions,
 ): KeywordHit[] {
   const limit = Math.max(1, opts.limit | 0);
   const prefix = opts.pathPrefix && opts.pathPrefix.length > 0 ? opts.pathPrefix : null;
-
-  if (prefix) {
-    // Sargable prefix range (C1): answered by idx_documents_path instead of
-    // a per-row `substr` expression. Same rows; see path-prefix.ts.
-    const { lo, hi } = pathPrefixRange(prefix);
-    const rows = db
-      .query<
-        { chunk_id: number; document_id: number; bm25: number },
-        [string, string, string, number]
-      >(
-        `SELECT c.id AS chunk_id, c.document_id AS document_id, ${CHUNK_FTS_BM25} AS bm25 ` +
-          "FROM chunk_fts " +
-          "JOIN chunks c ON c.id = chunk_fts.rowid " +
-          "JOIN documents d ON d.id = c.document_id " +
-          "WHERE chunk_fts MATCH ? AND d.path >= ? AND d.path < ? " +
-          `${CHUNK_ORDER} LIMIT ?`,
-      )
-      .all(fts5Query, lo, hi, limit);
-    return rows.map((r) => ({
-      chunkId: r.chunk_id,
-      documentId: r.document_id,
-      bm25: r.bm25,
-    }));
-  }
+  const pushFrag = pushdownSqlFragment(opts.pushdown ?? null);
+  const kind = opts.kind ?? null;
 
   const rows = db
-    .query<{ chunk_id: number; document_id: number; bm25: number }, [string, number]>(
-      `SELECT c.id AS chunk_id, c.document_id AS document_id, ${CHUNK_FTS_BM25} AS bm25 ` +
-        "FROM chunk_fts JOIN chunks c ON c.id = chunk_fts.rowid " +
-        `WHERE chunk_fts MATCH ? ${CHUNK_ORDER} LIMIT ?`,
+    .query<{ chunk_id: number; document_id: number; bm25: number }, unknown[]>(
+      keywordTopKSql({ pathPrefix: prefix, kind, pushdown: opts.pushdown ?? null }),
     )
-    .all(fts5Query, limit);
+    .all(
+      fts5Query,
+      ...(prefix !== null
+        ? (() => {
+            const { lo, hi } = pathPrefixRange(prefix);
+            return [lo, hi];
+          })()
+        : []),
+      ...(pushFrag !== null ? pushFrag.bindings : []),
+      ...(kind !== null ? [kind] : []),
+      limit,
+    );
   return rows.map((r) => ({
     chunkId: r.chunk_id,
     documentId: r.document_id,

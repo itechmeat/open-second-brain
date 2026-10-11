@@ -30,6 +30,7 @@ import {
 } from "../helpers.ts";
 import { CLI_TRANSPORT_REACH } from "../../transport-reach.ts";
 import { FTS_MATCH_MODES, isFtsMatchMode } from "../../../core/search/fts-match-mode.ts";
+import { SEARCH_KINDS, isSearchKind } from "../../../core/search/property-pushdown.ts";
 import {
   DISCLOSURE_MODE,
   DISCLOSURE_MODES,
@@ -48,6 +49,7 @@ export async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<numbe
     semantic: { type: "boolean" },
     "keyword-only": { type: "boolean" },
     "match-mode": { type: "string" },
+    kind: { type: "string" },
     path: { type: "string" },
     "keyword-weight": { type: "string" },
     "semantic-weight": { type: "string" },
@@ -101,6 +103,11 @@ export async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<numbe
     throw new CliError(`--match-mode must be one of ${FTS_MATCH_MODES.join(", ")}`);
   }
   const matchMode = matchModeRaw;
+  const kindRaw = flagString(flags, "kind");
+  if (kindRaw !== undefined && !isSearchKind(kindRaw)) {
+    throw new CliError(`--kind must be one of ${SEARCH_KINDS.join(", ")}`);
+  }
+  const kind = kindRaw;
 
   const cfg = resolveConfig(flags);
 
@@ -137,6 +144,7 @@ export async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<numbe
     semantic: semanticOverride,
     keywordOnly: flagBoolean(flags, "keyword-only"),
     pathPrefix: flagString(flags, "path"),
+    ...(kind !== undefined ? { kind } : {}),
     ...(matchMode !== undefined ? { matchMode } : {}),
     ...(properties !== undefined ? { properties } : {}),
     ...(degreeFilters !== undefined ? { degreeFilters } : {}),

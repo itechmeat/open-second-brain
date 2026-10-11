@@ -127,6 +127,12 @@ export function buildCacheKey(
     // default key (and every row cached before the mode existed) stays
     // byte-identical.
     matchMode: opts.matchMode === FTS_MATCH_MODE.any ? FTS_MATCH_MODE.any : undefined,
+    // Kind (recall-quality, C4) partitions the cache the same way: a
+    // `page` outcome holds rows a kindless query would not. Folded in only
+    // when set, so the default key stays byte-identical. The pushed
+    // promoted properties need no separate input - they are part of
+    // `properties`, already canonicalized above.
+    kind: opts.kind ?? undefined,
     structuredQuery: canonicalStructuredQuery(opts),
     sessionFocus: canonicalSessionFocus(opts),
     plan: planHash,

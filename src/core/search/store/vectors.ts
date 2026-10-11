@@ -17,6 +17,8 @@ import {
 } from "../capability-tier.ts";
 import { LOCAL_EMBEDDING_MODEL } from "../embeddings/signature.ts";
 import { dropVecTable, ensureVecTable } from "../schema.ts";
+import type { PropertyPushdown, SearchKind } from "../property-pushdown.ts";
+import { pushdownSqlFragment } from "../property-pushdown.ts";
 import { SearchError, type ResolvedEmbeddingConfig, type SearchErrorCode } from "../types.ts";
 import { assertValidVector } from "../vector-guard.ts";
 import {
@@ -599,11 +601,49 @@ const VEC_ORDER = "ORDER BY v.distance ASC, m.chunk_id ASC";
  */
 const VEC_KNN_OVERFETCH = 4;
 
+/**
+ * The composed semantic-lane query (recall-quality, C4). With no prefix,
+ * kind or pushed predicates this is byte-identical to the pre-C4 string;
+ * every active filter extends the WHERE clause beside the KNN, inside the
+ * same overfetch the prefixed branch has always shared. Exported so the
+ * default strings stay pinned by test.
+ */
+export interface SemanticTopKOptions {
+  readonly limit: number;
+  readonly pathPrefix?: string | null;
+  readonly kind?: SearchKind | null;
+  readonly pushdown?: PropertyPushdown | null;
+}
+
+export function semanticTopKSql(opts: SemanticTopKOptions = {}): string {
+  const prefix = opts.pathPrefix && opts.pathPrefix.length > 0 ? opts.pathPrefix : null;
+  const pushFrag = pushdownSqlFragment(opts.pushdown ?? null);
+  const kind = opts.kind ?? null;
+  const needsDocuments = prefix !== null || kind !== null || pushFrag !== null;
+  const documentsJoin = needsDocuments ? "JOIN documents d ON d.id = c.document_id " : "";
+  const filters = [
+    "v.embedding MATCH ?",
+    "k = ?",
+    ...(prefix !== null ? ["d.path >= ?", "d.path < ?"] : []),
+    ...(pushFrag !== null ? [pushFrag.sql] : []),
+    ...(kind !== null ? ["c.chunk_kind = ?"] : []),
+  ];
+  return (
+    "SELECT m.chunk_id AS chunk_id, c.document_id AS document_id, v.distance AS distance " +
+    "FROM chunk_vec v " +
+    "JOIN chunk_vec_map m ON m.vec_rowid = v.rowid " +
+    "JOIN chunks c ON c.id = m.chunk_id " +
+    documentsJoin +
+    `WHERE ${filters.join(" AND ")} ` +
+    VEC_ORDER
+  );
+}
+
 export function semanticTopK(
   db: Database,
   vecLoaded: boolean,
   queryVector: ReadonlyArray<number> | Float32Array,
-  opts: { readonly limit: number; readonly pathPrefix?: string | null },
+  opts: SemanticTopKOptions,
 ): SemanticHit[] {
   if (!vecLoaded) {
     throw new SearchError(
@@ -614,44 +654,28 @@ export function semanticTopK(
   const limit = Math.max(1, opts.limit | 0);
   const knn = limit * VEC_KNN_OVERFETCH;
   const prefix = opts.pathPrefix && opts.pathPrefix.length > 0 ? opts.pathPrefix : null;
+  const pushFrag = pushdownSqlFragment(opts.pushdown ?? null);
+  const kind = opts.kind ?? null;
 
   assertValidVector(queryVector, "semanticTopK");
   const buf = vecToBuffer(queryVector);
-  if (prefix) {
-    // Sargable prefix range (C1): answered by idx_documents_path instead of
-    // a per-row `substr` expression. Same rows; see path-prefix.ts.
-    const { lo, hi } = pathPrefixRange(prefix);
-    const rows = db
-      .query<
-        { chunk_id: number; document_id: number; distance: number },
-        [Buffer, number, string, string]
-      >(
-        "SELECT m.chunk_id AS chunk_id, c.document_id AS document_id, v.distance AS distance " +
-          "FROM chunk_vec v " +
-          "JOIN chunk_vec_map m ON m.vec_rowid = v.rowid " +
-          "JOIN chunks c ON c.id = m.chunk_id " +
-          "JOIN documents d ON d.id = c.document_id " +
-          "WHERE v.embedding MATCH ? AND k = ? AND d.path >= ? AND d.path < ? " +
-          VEC_ORDER,
-      )
-      .all(buf, knn, lo, hi);
-    return rows.slice(0, limit).map((r) => ({
-      chunkId: r.chunk_id,
-      documentId: r.document_id,
-      distance: r.distance,
-    }));
-  }
-
   const rows = db
-    .query<{ chunk_id: number; document_id: number; distance: number }, [Buffer, number]>(
-      "SELECT m.chunk_id AS chunk_id, c.document_id AS document_id, v.distance AS distance " +
-        "FROM chunk_vec v " +
-        "JOIN chunk_vec_map m ON m.vec_rowid = v.rowid " +
-        "JOIN chunks c ON c.id = m.chunk_id " +
-        "WHERE v.embedding MATCH ? AND k = ? " +
-        VEC_ORDER,
+    .query<{ chunk_id: number; document_id: number; distance: number }, unknown[]>(
+      semanticTopKSql({ pathPrefix: prefix, kind, pushdown: opts.pushdown ?? null }),
     )
-    .all(buf, knn);
+    .all(
+      buf,
+      knn,
+      ...(prefix !== null
+        ? (() => {
+            // Sargable prefix range (C1); see path-prefix.ts.
+            const { lo, hi } = pathPrefixRange(prefix);
+            return [lo, hi];
+          })()
+        : []),
+      ...(pushFrag !== null ? pushFrag.bindings : []),
+      ...(kind !== null ? [kind] : []),
+    );
   return rows.slice(0, limit).map((r) => ({
     chunkId: r.chunk_id,
     documentId: r.document_id,

@@ -33,6 +33,7 @@ import { SearchError } from "./types.ts";
 import type { ResolvedSearchConfig } from "./types.ts";
 import type { EventAnchor } from "./event-anchor.ts";
 import { readSchemaVersion, type DocumentAttribute } from "./schema.ts";
+import type { PropertyPushdown } from "./property-pushdown.ts";
 
 import * as aliases from "./store/aliases.ts";
 import * as chunkEntities from "./store/chunk-entities.ts";
@@ -569,7 +570,7 @@ export class Store {
 
   semanticTopK(
     queryVector: ReadonlyArray<number> | Float32Array,
-    opts: { readonly limit: number; readonly pathPrefix?: string | null },
+    opts: vectors.SemanticTopKOptions,
   ): vectors.SemanticHit[] {
     return vectors.semanticTopK(this.db, this.vecExtensionLoaded, queryVector, opts);
   }
@@ -810,10 +811,7 @@ export class Store {
    * Top-K BM25 keyword hits. `fts5Query` is an already-escaped FTS5
    * MATCH expression; building it is fts.ts's job.
    */
-  keywordTopK(
-    fts5Query: string,
-    opts: { readonly limit: number; readonly pathPrefix?: string | null },
-  ): keyword.KeywordHit[] {
+  keywordTopK(fts5Query: string, opts: keyword.KeywordTopKOptions): keyword.KeywordHit[] {
     return keyword.keywordTopK(this.db, fts5Query, opts);
   }
 
@@ -826,7 +824,12 @@ export class Store {
    */
   trigramCandidates(
     trigramQuery: string,
-    opts: { readonly limit: number; readonly pathPrefix?: string | null },
+    opts: {
+      readonly limit: number;
+      readonly pathPrefix?: string | null;
+      readonly kind?: "page" | "section" | null;
+      readonly pushdown?: PropertyPushdown | null;
+    },
   ): trigram.TrigramCandidateOutcome {
     return trigram.trigramCandidates(this.db, trigramQuery, opts);
   }

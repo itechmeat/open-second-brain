@@ -8,6 +8,9 @@ import { Database } from "bun:sqlite";
 
 import { RETRIEVAL_DEGRADATION } from "../retrieval-trail.ts";
 import type { RetrievalDegradation } from "../retrieval-trail.ts";
+import type { PropertyPushdown, SearchKind } from "../property-pushdown.ts";
+import { pushdownSqlFragment } from "../property-pushdown.ts";
+import { pathPrefixRange } from "./path-prefix.ts";
 import type { KeywordHit } from "./keyword.ts";
 
 /**
@@ -112,25 +115,50 @@ function degradation(fault: TrigramFault): RetrievalDegradation {
 export function trigramCandidates(
   db: Database,
   trigramQuery: string,
-  opts: { readonly limit: number; readonly pathPrefix?: string | null },
+  opts: {
+    readonly limit: number;
+    readonly pathPrefix?: string | null;
+    /**
+     * The same pushdown the keyword lane ran (recall-quality, C4). The
+     * lane only ADDS to the keyword pool, so it must not re-admit rows
+     * the lane's own SQL excluded - a kind or promoted-property filter
+     * leaks here otherwise.
+     */
+    readonly kind?: SearchKind | null;
+    readonly pushdown?: PropertyPushdown | null;
+  },
 ): TrigramCandidateOutcome {
   const limit = Math.max(1, opts.limit | 0);
   const prefix = opts.pathPrefix && opts.pathPrefix.length > 0 ? opts.pathPrefix : null;
+  const pushFrag = pushdownSqlFragment(opts.pushdown ?? null);
+  const kind = opts.kind ?? null;
+  const extraFilters = [
+    ...(pushFrag !== null ? [pushFrag.sql] : []),
+    ...(kind !== null ? ["c.chunk_kind = ?"] : []),
+  ];
+  const extraBindings: unknown[] = [
+    ...(pushFrag !== null ? pushFrag.bindings : []),
+    ...(kind !== null ? [kind] : []),
+  ];
   try {
-    if (prefix) {
+    if (prefix !== null || extraFilters.length > 0) {
+      // The sargable prefix range every other scoped reader uses
+      // (path-prefix.ts); absent scope leaves the bounds unbound.
+      const { lo, hi } = prefix !== null ? pathPrefixRange(prefix) : { lo: "", hi: "" };
+      const filters = [
+        "chunk_trigram MATCH ?",
+        ...(prefix !== null ? ["d.path >= ?", "d.path < ?"] : []),
+        ...extraFilters,
+      ];
       const rows = db
-        .query<
-          { chunk_id: number; document_id: number; bm25: number },
-          [string, string, string, number]
-        >(
+        .query<{ chunk_id: number; document_id: number; bm25: number }, unknown[]>(
           "SELECT c.id AS chunk_id, c.document_id AS document_id, bm25(chunk_trigram) AS bm25 " +
             "FROM chunk_trigram " +
             "JOIN chunks c ON c.id = chunk_trigram.rowid " +
             "JOIN documents d ON d.id = c.document_id " +
-            "WHERE chunk_trigram MATCH ? AND substr(d.path, 1, length(?)) = ? " +
-            `${CHUNK_ORDER} LIMIT ?`,
+            `WHERE ${filters.join(" AND ")} ${CHUNK_ORDER} LIMIT ?`,
         )
-        .all(trigramQuery, prefix, prefix, limit);
+        .all(trigramQuery, ...(prefix !== null ? [lo, hi] : []), ...extraBindings, limit);
       return {
         hits: rows.map((r) => ({ chunkId: r.chunk_id, documentId: r.document_id, bm25: r.bm25 })),
         warnings: NO_WARNINGS,

@@ -14,6 +14,7 @@
 import type { KeywordHit, Store } from "./store.ts";
 import { containsCjk, tokenizeCjkSearchText } from "./cjk-tokenizer.ts";
 import { keywordTopKWithFtsSafety, type SafeKeywordOutcome } from "./fts-safety.ts";
+import type { PropertyPushdown } from "./property-pushdown.ts";
 import { RETRIEVAL_DEGRADATION, noteDegradation } from "./retrieval-trail.ts";
 import type { RetrievalDegradationSink } from "./retrieval-trail.ts";
 import { FTS_MATCH_MODE, type FtsMatchMode } from "./fts-match-mode.ts";
@@ -68,6 +69,17 @@ export function buildExpandedFtsMatch(
 export interface RunFtsOptions {
   readonly limit: number;
   readonly pathPrefix?: string | null;
+  /**
+   * Chunk-kind pushdown (recall-quality, C4): forwarded to the store's
+   * keyword top-K WHERE clause. Absent leaves the SQL byte-identical.
+   */
+  readonly kind?: "page" | "section" | null;
+  /**
+   * Promoted property pushdown (recall-quality, C4): the compiled
+   * predicates from `resolvePropertyPushdown`, forwarded beside the kind
+   * filter. Absent leaves the SQL byte-identical.
+   */
+  readonly pushdown?: PropertyPushdown | null;
   /**
    * Optional synonym-expansion terms (v0.20.0). When present and
    * non-empty they are OR'd onto the original AND group to broaden

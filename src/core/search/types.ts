@@ -867,8 +867,23 @@ export interface SearchOptions {
    * keys it is AND. The filter is applied as a post-rank phase
    * against the source frontmatter of each result. Absent map = no
    * filter (existing behaviour).
+   *
+   * The PROMOTED keys (`type`, `tags`, `pinned`, `visibility`) are also
+   * pushed into the lanes' SQL against their indexed storage
+   * (recall-quality, C4), in the stored canonical form - those keys
+   * answer AS INDEXED, while every other key keeps the live-file
+   * post-rank filter. See `property-pushdown.ts` for the faithful-value
+   * rules and `pool-filters.ts` for the split.
    */
   readonly properties?: ReadonlyMap<string, ReadonlyArray<string>>;
+  /**
+   * Chunk-kind filter (v14, recall-quality): `page` restricts candidates
+   * to each document's chunk 0 (the frontmatter/head chunk), `section` to
+   * everything after it. Pushed into the keyword lane's WHERE clause and
+   * the semantic lane's post-KNN filter. Absent = no filter,
+   * byte-identical to prior behaviour.
+   */
+  readonly kind?: "page" | "section";
   /**
    * Graph-degree cardinality predicates (t_9bee8f0b). Each predicate
    * selects notes by backlink/outlink count (orphans `backlinks = 0`,

@@ -7,6 +7,7 @@
 
 import { runFtsQueryDetailed } from "../fts.ts";
 import type { FtsMatchMode } from "../fts-match-mode.ts";
+import type { PropertyPushdown, SearchKind } from "../property-pushdown.ts";
 import { buildQueryPlan } from "../query-plan.ts";
 import type { RetrievalDegradationSink } from "../retrieval-trail.ts";
 import { DEFAULT_EXPANSION, deriveExpansionTerms, tokenizeForExpansion } from "../synonyms.ts";
@@ -39,6 +40,10 @@ export interface KeywordLaneInput {
   readonly basePlan: QueryPlan;
   readonly limit: number;
   readonly pathPrefix: string | undefined;
+  /** Chunk-kind pushdown (recall-quality, C4); absent leaves the lane unfiltered. */
+  readonly kind?: SearchKind;
+  /** Promoted property pushdown (recall-quality, C4); absent leaves it unfiltered. */
+  readonly pushdown?: PropertyPushdown;
   /** The caller's FTS match breadth (`all` default, `any` OR-joins). */
   readonly matchMode?: FtsMatchMode;
 }
@@ -64,6 +69,8 @@ export function runKeywordLane(input: KeywordLaneInput): KeywordLaneOutcome {
   const kwOutcome = runFtsQueryDetailed(store, keywordQuery, {
     limit: limit * recall.poolMultiplier,
     pathPrefix,
+    ...(input.kind !== undefined ? { kind: input.kind } : {}),
+    ...(input.pushdown !== undefined ? { pushdown: input.pushdown } : {}),
     matchMode: input.matchMode,
     degraded,
   });
@@ -126,6 +133,8 @@ function expandWithSynonyms(
   const kwOutcome = runFtsQueryDetailed(store, keywordQuery, {
     limit: limit * recall.poolMultiplier,
     pathPrefix,
+    ...(input.kind !== undefined ? { kind: input.kind } : {}),
+    ...(input.pushdown !== undefined ? { pushdown: input.pushdown } : {}),
     expandedTerms,
     matchMode: input.matchMode,
   });
@@ -150,6 +159,8 @@ function mergeTrigramCandidates(
   const outcome = store.trigramCandidates(trigramPlan.ftsQuery, {
     limit: limit * recall.poolMultiplier,
     pathPrefix,
+    ...(input.kind !== undefined ? { kind: input.kind } : {}),
+    ...(input.pushdown !== undefined ? { pushdown: input.pushdown } : {}),
   });
   for (const w of outcome.warnings) warnings.push(w);
   for (const d of outcome.degraded) degraded.push(d);
