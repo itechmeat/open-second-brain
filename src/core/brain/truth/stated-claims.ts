@@ -59,6 +59,15 @@ export interface StatedClaimsPayload {
   readonly ts: string;
   /** Provenance wikilink or vault-relative path. */
   readonly source: string;
+  /**
+   * Optional attribution id (answer-trust, task B2): the recall/
+   * context-pack quality-sample id these claims were stated against.
+   * Trimmed and required non-empty when present - a blank value is a
+   * named refusal, never coerced to absent - and threaded verbatim onto
+   * every committed event as `sample_id`. Opaque: treated as an opaque
+   * token end to end and never logged beside answer or source text.
+   */
+  readonly sampleId?: string;
 }
 
 export interface StatedClaimsOptions {
@@ -187,6 +196,15 @@ export function appendStatedClaims(
       `stated claims: ts must be canonical ISO-8601 UTC: ${JSON.stringify(payload.ts)}`,
     );
   }
+  // Sample id (answer-trust, task B2): presence-gated, part of the
+  // whole-call promise. The value is trimmed and must be non-empty when
+  // present - a blank id is a named refusal, never coerced to absent -
+  // so the refusal fires HERE, before the first write, like the agent
+  // and ts checks above.
+  const sampleId = payload.sampleId === undefined ? undefined : payload.sampleId.trim();
+  if (payload.sampleId !== undefined && sampleId === "") {
+    throw new StatedClaimsRefusal("stated claims: sample_id must be a non-empty string");
+  }
 
   const entities = opts.entities ?? [];
   // The same store-learned lexicon the creation gate resolves (fail-open
@@ -211,6 +229,7 @@ export function appendStatedClaims(
       value: claim.object.trim(),
       extractor: AGENT_STATED,
       source,
+      ...(sampleId !== undefined ? { sample_id: sampleId } : {}),
     };
     committed.push(
       appendClaimEvent(vault, input, {

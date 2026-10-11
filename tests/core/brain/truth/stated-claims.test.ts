@@ -15,7 +15,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -268,5 +268,60 @@ describe("appendStatedClaims", () => {
     expect(outcome.committed).toEqual([]);
     expect(outcome.ungrounded).toEqual([]);
     expect(readClaimEvents(vault).events).toHaveLength(0);
+  });
+});
+
+describe("payload sampleId (answer-trust, task B2)", () => {
+  test("a present sampleId is trimmed and threads onto every committed event", () => {
+    const outcome = withDeviceId("", () =>
+      appendStatedClaims(vault, {
+        ...PAYLOAD,
+        sampleId: "  rcpt-2026-0601-abcd  ",
+        claims: [claim()],
+      }),
+    );
+    expect(outcome.committed).toHaveLength(1);
+    expect(outcome.committed[0]!.event.sample_id).toBe("rcpt-2026-0601-abcd");
+    const events = readClaimEvents(vault).events;
+    expect(events[0]!.sample_id).toBe("rcpt-2026-0601-abcd");
+  });
+
+  test("a multi-claim payload threads the same sampleId onto each commit", () => {
+    const outcome = withDeviceId("", () =>
+      appendStatedClaims(vault, {
+        ...PAYLOAD,
+        sampleId: "rcpt-1",
+        claims: [claim(), claim({ subject: "Bob Stone", object: "Meta" })],
+      }),
+    );
+    // The text anchors Alice Mason and Meta but not Bob Stone, so the
+    // second claim reports back and only the first commits.
+    expect(outcome.committed).toHaveLength(1);
+    expect(outcome.committed[0]!.event.sample_id).toBe("rcpt-1");
+  });
+
+  test("an empty or whitespace-only sampleId refuses the whole payload, before any write", () => {
+    // Named refusal, never coerced: a blank id is not an absent one.
+    expect(() =>
+      withDeviceId("", () =>
+        appendStatedClaims(vault, { ...PAYLOAD, sampleId: "", claims: [claim()] }),
+      ),
+    ).toThrow(StatedClaimsRefusal);
+    expect(() =>
+      withDeviceId("", () =>
+        appendStatedClaims(vault, { ...PAYLOAD, sampleId: "   ", claims: [claim()] }),
+      ),
+    ).toThrow(/sample_id/);
+    expect(readClaimEvents(vault).events).toHaveLength(0);
+  });
+
+  test("an absent sampleId leaves the committed events byte-identical to today", () => {
+    const outcome = withDeviceId("", () =>
+      appendStatedClaims(vault, { ...PAYLOAD, claims: [claim()] }),
+    );
+    expect(outcome.committed).toHaveLength(1);
+    expect("sample_id" in outcome.committed[0]!.event).toBe(false);
+    const line = readFileSync(join(vault, "Brain", "truth", "claims.jsonl"), "utf8");
+    expect(line).not.toContain("sample_id");
   });
 });
