@@ -44,7 +44,12 @@
  *   - `pinned` is pushed only for the accepted set {"true"}. The column
  *     folds "absent" and "not pinned" into 0, and `parsePinned` refuses
  *     exotic spellings to false, so a filter for "false" (or "yes", or a
- *     number) must judge the live frontmatter;
+ *     number) must judge the live frontmatter; the pushed clause reads
+ *     `(pinned = 1 OR pinned IS NULL)` because an in-place upgrade leaves
+ *     every carried-over row unmeasured (the v13 lazy story never
+ *     backfilled it) - those rows are admitted as candidates and the
+ *     post-rank promoted-NULL gate judges each by the live pinned filter,
+ *     per row, never from SQL (`pipeline/pool-filters.ts`);
  *   - `type` and `visibility` values are pushed normalized; a value that
  *     normalizes to the empty token is unpushable (the stored column is
  *     never the empty string, while the live filter could still match an
@@ -113,7 +118,7 @@ export function resolveKindFilter(raw: unknown): SearchKind | undefined {
 export interface PropertyPushdown {
   /** `documents.page_type` membership, normalized tokens. */
   readonly pageTypes?: ReadonlyArray<string>;
-  /** `documents.pinned = 1`, pushed only for the accepted set {"true"}. */
+  /** `(d.pinned = 1 OR d.pinned IS NULL)`, pushed only for {"true"}. */
   readonly pinned?: boolean;
   /** `json_each(documents.visibility)` membership, normalized tokens. */
   readonly visibilityTokens?: ReadonlyArray<string>;
@@ -356,7 +361,13 @@ export function pushdownSqlFragment(
     bindings.push(...pushdown.pageTypes);
   }
   if (pushdown.pinned === true) {
-    clauses.push("d.pinned = 1");
+    // The v13 column is NULL on every row an in-place upgrade carried over
+    // (the lazy story never backfilled it), so the bare equality answered
+    // an upgraded index with zero results where the live filter matched.
+    // The NULL arm admits those rows as candidates; the post-rank
+    // promoted-NULL gate judges each of them by the live pinned filter,
+    // never from SQL (pool-filters.ts).
+    clauses.push("(d.pinned = 1 OR d.pinned IS NULL)");
   }
   if (pushdown.visibilityTokens !== undefined) {
     clauses.push(

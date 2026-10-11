@@ -109,3 +109,34 @@ describe("the type pushdown arbitrates stale-NULL rows by the live filter", () =
     expect(reports.results.map((r) => r.path)).toEqual(["fresh/c.md"]);
   });
 });
+
+describe("the pinned pushdown arbitrates upgraded-index NULL rows by the live filter", () => {
+  test("an all-NULL pinned column answers from the live frontmatter, not zero results", async () => {
+    writeMd(vault, "pin/yes1.md", note("Yes1", "pinned: true\n", "delta pinned alpha"));
+    writeMd(vault, "pin/yes2.md", note("Yes2", 'pinned: "true"\n', "delta pinned beta"));
+    writeMd(vault, "pin/no1.md", note("No1", "pinned: false\n", "delta unpinned gamma"));
+    writeMd(vault, "pin/no2.md", note("No2", "status: draft\n", "delta unpinned delta"));
+    const cfg = makeConfig({ vault, dbPath });
+    await indexVault(cfg);
+    // The in-place-upgrade index: the v13 column exists and the lazy
+    // backfill has not run, so every carried-over row is NULL - the state
+    // the bare `d.pinned = 1` pushdown answered with zero results.
+    const db = new Database(dbPath);
+    try {
+      db.query("UPDATE documents SET pinned = NULL").run();
+    } finally {
+      db.close(true);
+    }
+
+    const pinned = await search(cfg, {
+      query: "delta",
+      keywordOnly: true,
+      visibility: ["public"],
+      properties: new Map([["pinned", ["true"]]]),
+    });
+    // Exactly the pages whose live frontmatter pins them - measured-spelling
+    // "true" and quoted "true" alike - while the live false and the absent
+    // key stay out.
+    expect(pinned.results.map((r) => r.path).toSorted()).toEqual(["pin/yes1.md", "pin/yes2.md"]);
+  });
+});
