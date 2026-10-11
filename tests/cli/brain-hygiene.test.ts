@@ -325,3 +325,74 @@ describe("the capture-scope archive finding on the CLI scan", () => {
     expect(digestVaultTree(vault)).toBe(before);
   });
 });
+
+/**
+ * The doctor's informational archive section (answer trust, Task C6):
+ * count-only - entry count, total bytes, missing/mismatched counts - always
+ * present in the JSON, a line in the human output only when there is
+ * something to describe, and no fix verb anywhere.
+ */
+describe("the doctor archive section", () => {
+  interface ArchivesJson {
+    readonly archives: {
+      readonly entries: number;
+      readonly totalBytes: number;
+      readonly missing: number;
+      readonly mismatched: number;
+    };
+  }
+  const doctorJson = async (): Promise<ArchivesJson> => {
+    const out = await runCli(["brain", "doctor", "--vault", vault, "--json"], { env: env() });
+    expect(out.returncode).toBe(0);
+    return JSON.parse(out.stdout) as ArchivesJson;
+  };
+
+  const ingestOne = (contents: string): { hash: string } => {
+    mkdirSync(join(vault, "Articles"), { recursive: true });
+    writeFileSync(join(vault, "Articles/counted.md"), contents, "utf8");
+    const res = ingestCore(
+      vault,
+      {
+        sourcePath: "Articles/counted.md",
+        summary: "Counted.",
+        extraction: { entities: [{ category: "concept", name: "Counted" }], relations: [] },
+      },
+      { agent: "test-agent", now: new Date("2026-02-03T00:00:00Z") },
+    );
+    if (res.sourceArchiveHash === undefined) throw new Error("expected an archive stamp");
+    return { hash: res.sourceArchiveHash };
+  };
+
+  test("a vault that never archived reports an all-zero section, and prints no line", async () => {
+    expect(await doctorJson()).toMatchObject({
+      archives: { entries: 0, totalBytes: 0, missing: 0, mismatched: 0 },
+    });
+    const human = await runCli(["brain", "doctor", "--vault", vault], { env: env() });
+    expect(human.returncode).toBe(0);
+    expect(human.stdout).not.toContain("archives:");
+  });
+
+  test("an ingested source is one entry with its bytes, on both surfaces", async () => {
+    ingestOne("counted bytes\n");
+    const payload = await doctorJson();
+    expect(payload.archives.entries).toBe(1);
+    expect(payload.archives.totalBytes).toBe(Buffer.byteLength("counted bytes\n", "utf8"));
+    expect(payload.archives.missing).toBe(0);
+
+    const human = await runCli(["brain", "doctor", "--vault", vault], { env: env() });
+    expect(human.stdout).toContain(
+      `archives: 1 entries, ${Buffer.byteLength("counted bytes\n", "utf8")} bytes, 0 missing, 0 mismatched`,
+    );
+  });
+
+  test("a removed entry counts as missing; a tampered one as mismatched", async () => {
+    const { hash } = ingestOne("audited bytes\n");
+    const entry = join(vault, "Brain", ".archives", `${hash}.txt`);
+
+    rmSync(entry);
+    expect((await doctorJson()).archives).toMatchObject({ entries: 0, missing: 1 });
+
+    writeFileSync(entry, "rewritten", "utf8");
+    expect((await doctorJson()).archives).toMatchObject({ entries: 1, mismatched: 1 });
+  });
+});

@@ -20,6 +20,7 @@ import { HEALTH_TOOLS } from "../../src/mcp/brain/health-tools.ts";
 import { INGEST_TOOLS } from "../../src/mcp/brain/ingest-tools.ts";
 import { HYGIENE_TOOLS } from "../../src/mcp/brain/hygiene-tools.ts";
 import { RESEARCH_TOOLS } from "../../src/mcp/brain/research-tools.ts";
+import { MCPError } from "../../src/mcp/protocol.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 
@@ -186,5 +187,74 @@ describe("brain_hygiene capture-scope archive findings", () => {
       detectors: [CAPTURE_SCOPE_DETECTOR_ID],
     })) as { findings: ReadonlyArray<{ targets: ReadonlyArray<string> }> };
     expect(res.findings.some((f) => f.targets.includes(url.summary_path))).toBe(false);
+  });
+});
+
+/**
+ * The `archive_get` read on the existing tool (answer trust, Task C6),
+ * with `brain_artifact_get`'s bounded-fetch posture and the wave's
+ * visibility rule: LOCAL reach only. A remote caller gets the answer an
+ * absent entry gives - the named miss, no bytes - whether or not an entry
+ * is there, so the response is never an existence oracle and never carries
+ * archived source bytes off the host.
+ */
+describe("brain_hygiene archive_get", () => {
+  const ingest = INGEST_TOOLS[0]!.handler;
+  const SOURCE = "Articles/fetchable.md";
+  let hash: string;
+  let entryPath: string;
+
+  const archiveGet = (reachCtx: ServerContext, args: Record<string, unknown>) =>
+    hygiene(reachCtx, { mode: "archive_get", ...args }) as Promise<Record<string, unknown>>;
+
+  beforeEach(async () => {
+    mkdirSync(join(vault, "Articles"), { recursive: true });
+    writeFileSync(join(vault, SOURCE), "fetchable bytes\n", "utf8");
+    const res = (await ingest(ctx, {
+      source_path: SOURCE,
+      summary: "Fetchable.",
+      entities: [{ category: "concept", name: "Fetchable" }],
+    })) as { source_archive_hash: string };
+    hash = res.source_archive_hash;
+    entryPath = join(vault, "Brain", ".archives", `${hash}.txt`);
+  });
+
+  test("at local reach a known hash resolves the archived bytes", async () => {
+    const res = await archiveGet({ ...ctx, reach: TRANSPORT_REACH.local }, { hash });
+    expect(res).toEqual({
+      hash,
+      archive: "verified",
+      bytes: Buffer.byteLength("fetchable bytes\n", "utf8"),
+      content: "fetchable bytes\n",
+    });
+  });
+
+  test("an unknown hash is a named miss, not an error", async () => {
+    const res = await archiveGet(
+      { ...ctx, reach: TRANSPORT_REACH.local },
+      { hash: "b".repeat(64) },
+    );
+    expect(res).toEqual({ hash: "b".repeat(64), archive: "missing" });
+  });
+
+  test("a mismatched entry says so and returns the bytes it actually holds", async () => {
+    writeFileSync(entryPath, "rewritten after the stamp", "utf8");
+    const res = await archiveGet({ ...ctx, reach: TRANSPORT_REACH.local }, { hash });
+    expect(res["archive"]).toBe("mismatched");
+    expect(res["content"]).toBe("rewritten after the stamp");
+  });
+
+  test("a malformed hash is the caller's named refusal", async () => {
+    await expect(
+      archiveGet({ ...ctx, reach: TRANSPORT_REACH.local }, { hash: "../../etc/passwd" }),
+    ).rejects.toThrow(MCPError);
+  });
+
+  test("a remote caller gets the absent entry's answer, never the bytes", async () => {
+    // The entry EXISTS; the response must be identical to its absence.
+    const res = await archiveGet(ctx, { hash });
+    expect(res).toEqual({ hash, archive: "missing" });
+    expect(res).not.toHaveProperty("content");
+    expect(res).not.toHaveProperty("bytes");
   });
 });

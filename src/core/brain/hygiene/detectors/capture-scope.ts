@@ -265,3 +265,36 @@ export function detectCaptureScope(
   }
   return Object.freeze(findings);
 }
+
+/** What {@link auditArchiveStamps} counted. */
+export interface ArchiveStampAudit {
+  /** Stamped pages whose archive entry is absent. */
+  readonly missing: number;
+  /** Stamped pages whose entry is there but re-hashes differently. */
+  readonly mismatched: number;
+}
+
+/**
+ * Count every stamped ingest summary page whose archive entry is gone or
+ * disagrees - the number behind the doctor's informational archive section.
+ * One walk over `Brain/sources/`, every stamp counted: unlike the scan's
+ * finding list, no page is skipped for quarantine or reach, because the
+ * doctor runs locally and reports a count, not a disclosure. Two integers,
+ * never a page list - recapture and pruning are operator calls made from
+ * the hygiene scan's findings, not from this number.
+ */
+export function auditArchiveStamps(vault: string): ArchiveStampAudit {
+  const counts = { missing: 0, mismatched: 0 };
+  const abs = join(vault, BRAIN_SOURCES_REL);
+  if (!existsSync(abs)) return counts;
+  for (const rel of listVaultNotePaths(abs)) {
+    const page = posix.join(BRAIN_SOURCES_REL, rel.split("\\").join("/"));
+    const [meta] = parseFrontmatter(join(vault, page));
+    const hash = stringValue(meta, SOURCE_ARCHIVE_HASH_KEY);
+    if (hash === null) continue;
+    const state = verifySourceArchive(vault, hash).state;
+    if (state === ARCHIVE_VERIFICATION.missing) counts.missing += 1;
+    else if (state === ARCHIVE_VERIFICATION.mismatched) counts.mismatched += 1;
+  }
+  return counts;
+}

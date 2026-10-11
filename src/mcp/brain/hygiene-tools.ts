@@ -1,16 +1,22 @@
 /**
- * Hygiene surface: scan / apply / refresh over the findings pipeline
- * (continuity-hygiene-freshness suite; kanban t_698db8f7, t_da3f138f,
- * t_db375a60, t_d9624ef6, t_fe490119).
+ * Hygiene surface: scan / apply / refresh / archive_get over the findings
+ * pipeline (continuity-hygiene-freshness suite; kanban t_698db8f7,
+ * t_da3f138f, t_db375a60, t_d9624ef6, t_fe490119; archive_get from the
+ * answer-trust wave).
  *
- * One tool, three modes:
+ * One tool, four modes:
  *   - `scan` (default): read-only digest of detector findings, with
  *     resolver verdicts attached when the operator configured
  *     `hygiene.resolver_cmd` in `_brain.yaml`;
  *   - `apply`: execute an explicit plan selected by finding ids -
  *     ids are REQUIRED, a bare apply never runs everything blindly;
  *   - `refresh`: the targeted-recompile path for stale derived pages
- *     (`dry_run` previews with zero writes).
+ *     (`dry_run` previews with zero writes);
+ *   - `archive_get`: resolve an ingest summary's `source_archive_hash` to
+ *     the archived (redacted) source bytes. LOCAL reach only - a remote
+ *     caller gets the answer an absent entry gives, never the bytes, so
+ *     the archive can never make a withheld source more reachable than
+ *     the digest that names it.
  *
  * The resolver command comes exclusively from operator config - it is
  * never accepted as a tool argument, so an MCP caller cannot make this
@@ -43,12 +49,17 @@ import {
 import { executeRecompile, planRecompile } from "../../core/brain/recompile.ts";
 import { resolveSearchConfig } from "../../core/search/index.ts";
 import {
+  ARCHIVE_VERIFICATION,
+  isArchiveHash,
+  readSourceArchiveEntry,
+} from "../../core/brain/provenance/source-archive.ts";
+import {
   DANGLING_LINK_DEFINITION,
   measureFromIndex,
   type LinkRatchetMeasurement,
   type LinkRatchetUnmeasurableReason,
 } from "../../core/search/link-ratchet.ts";
-import { coerceBool } from "../coerce.ts";
+import { coerceBool, coerceStr } from "../coerce.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
@@ -225,9 +236,34 @@ async function toolBrainHygiene(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const mode = args["mode"] ?? "scan";
-  if (mode !== "scan" && mode !== "apply" && mode !== "refresh") {
-    throw new MCPError(INVALID_PARAMS, "'mode' must be one of: scan, apply, refresh");
+  if (mode !== "scan" && mode !== "apply" && mode !== "refresh" && mode !== "archive_get") {
+    throw new MCPError(INVALID_PARAMS, "'mode' must be one of: scan, apply, refresh, archive_get");
   }
+
+  if (mode === "archive_get") {
+    // The bounded-fetch posture of brain_artifact_get, one visibility rule
+    // tighter: the hash is the caller's argument and is validated as one
+    // before it names a path, an unknown hash is a NAMED miss (never an
+    // error a caller would retry), and the store answers at LOCAL reach
+    // only - a remote caller gets the answer an absent entry gives, so the
+    // response can neither confirm an entry's existence nor carry bytes.
+    const hash = coerceStr(args, "hash", true)!;
+    if (!isArchiveHash(hash)) {
+      throw new MCPError(INVALID_PARAMS, "'hash' must be a 64-hex sha-256 digest");
+    }
+    if (contextReach(ctx) !== TRANSPORT_REACH.local) {
+      return { hash, archive: ARCHIVE_VERIFICATION.missing };
+    }
+    const entry = readSourceArchiveEntry(ctx.vault, hash);
+    if (entry === null) return { hash, archive: ARCHIVE_VERIFICATION.missing };
+    return {
+      hash,
+      archive: entry.state,
+      bytes: entry.bytes,
+      content: entry.text,
+    };
+  }
+
   const now = new Date();
   const dryRun = coerceBool(args, "dry_run") === true;
 
@@ -375,14 +411,19 @@ export const HYGIENE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_hygiene",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
-      "Memory hygiene pipeline. `scan`: read-only digest of contested truth slots, near-duplicate preferences, stale/orphaned pages, low-usefulness candidates, knowledge resting on url-only sources. `apply`: run selected finding ids (review findings never run). `refresh`: recompile stale pages.",
+      "Memory hygiene. `scan`: contested truth slots, near-duplicate preferences, stale or orphaned pages, low-usefulness candidates, knowledge resting on url-only sources. `apply`: run selected finding ids. `refresh`: recompile stale pages. `archive_get`: archived source bytes by hash, local only.",
     inputSchema: {
       type: "object",
       properties: {
         mode: {
           type: "string",
-          enum: ["scan", "apply", "refresh"],
-          description: "Pipeline stage. Default `scan` (read-only).",
+          enum: ["scan", "apply", "refresh", "archive_get"],
+          description: "Pipeline stage: scan, apply, refresh, archive_get. Default `scan`.",
+        },
+        hash: {
+          type: "string",
+          description:
+            "The source_archive_hash to fetch (archive_get mode): the digest an ingest summary page stamps.",
         },
         detectors: {
           type: "array",

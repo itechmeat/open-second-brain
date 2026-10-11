@@ -1,5 +1,11 @@
 import { resolveSearchConfig } from "../../../core/search/index.ts";
 import { runDoctor } from "../../../core/brain/doctor.ts";
+import { auditArchiveStamps } from "../../../core/brain/hygiene/detectors/capture-scope.ts";
+import {
+  sourceArchiveStats,
+  type ArchiveStampAudit,
+  type ArchiveStats,
+} from "../../../core/brain/provenance/source-archive.ts";
 import { annotateEntityAliasIssues } from "../../../core/brain/doctor/entity-alias-verdicts.ts";
 import { verdictFields, verdictLine } from "../../../core/decision-model/pair-verdict.ts";
 import { applyRepair, type RepairOutcome } from "../../../core/brain/diagnostics.ts";
@@ -70,6 +76,19 @@ function renderIssueLine(
 function explainMissingExits(codes: Iterable<string>, stream: AdvisoryStream): void {
   if (!advisoryIsLegal(stream)) return;
   for (const [code, reason] of noExitReasons(codes)) info(`no exit: ${code} - ${reason}`);
+}
+
+/**
+ * The informational archive section (answer trust): counts only - how many
+ * entries the durable source archive holds, their combined size, and how
+ * many stamped pages lost their entry or disagree with it. No fix verb: an
+ * archive is evidence, so pruning and recapture are operator calls, and the
+ * named findings live on the hygiene scan. Count-only also keeps this
+ * section from becoming a second finding surface the scans would have to
+ * agree with.
+ */
+function archiveSection(vault: string): ArchiveStats & ArchiveStampAudit {
+  return { ...sourceArchiveStats(vault), ...auditArchiveStamps(vault) };
 }
 
 export async function cmdBrainDoctor(argv: string[]): Promise<number> {
@@ -201,6 +220,10 @@ export async function cmdBrainDoctor(argv: string[]): Promise<number> {
           // every issue record: a reason is about a CLASS, unlike a next
           // command, and two hundred malformed timestamps share one.
           ...(noExit.size > 0 ? { [NO_EXIT_KEY]: Object.fromEntries(noExit) } : {}),
+          // Count-only informational archive section (answer trust): the
+          // key is always present, so a caller never infers the section's
+          // existence from a missing key.
+          archives: archiveSection(vault),
         },
         null,
         2,
@@ -216,6 +239,15 @@ export async function cmdBrainDoctor(argv: string[]): Promise<number> {
     for (const u of uncertain) process.stdout.write(renderIssueLine("[UNSURE]", u));
     if (result.errors.length === 0 && result.warnings.length === 0 && uncertain.length === 0) {
       ok("brain doctor: clean");
+    }
+    // One line, and only when there is something to describe: a vault that
+    // has never archived a source gains no line at all.
+    const archives = archiveSection(vault);
+    if (archives.entries > 0 || archives.missing > 0 || archives.mismatched > 0) {
+      process.stdout.write(
+        `archives: ${archives.entries} entries, ${archives.totalBytes} bytes, ` +
+          `${archives.missing} missing, ${archives.mismatched} mismatched\n`,
+      );
     }
   }
 
