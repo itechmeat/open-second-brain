@@ -13,7 +13,11 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { FAKE_VENDOR_KEY, fakeCredential } from "../../../helpers/fake-credentials.ts";
+import {
+  FAKE_QUERY_KEY,
+  FAKE_VENDOR_KEY,
+  fakeCredential,
+} from "../../../helpers/fake-credentials.ts";
 import { extractFacts } from "../../../../src/core/brain/fact-extract.ts";
 import {
   MINED_KEY_MAX_LENGTH,
@@ -171,6 +175,41 @@ describe("secret-shaped refusal", () => {
     const url = `https://osb.example/pull?token=${tok}`;
     expect(isSecretShapedMention("url", url)).toBe(true);
     expect(mined(`fetch ${url} today`)).toEqual([]);
+  });
+
+  test("a credential query parameter refuses the URL whole, by name", () => {
+    // The redactor's exact-name pass catches `token=`/`key=`; the sibling
+    // spellings a mined URL meets in the wild must refuse too - the ledger
+    // keeps the mention id verbatim in sourceRefs[].id, so the
+    // credential-bearing URL must never be minted at all.
+    const url = `https://osb.example/v1/data?api_key=${FAKE_QUERY_KEY}&dry=1`;
+    expect(isSecretShapedMention("url", url)).toBe(true);
+    expect(mined(`fetch ${url} today`)).toEqual([]);
+  });
+
+  test("the sibling credential spellings refuse too: apikey, api-key, access_token, auth_token", () => {
+    for (const name of ["apikey", "api-key", "access_token", "auth_token"]) {
+      const url = `https://osb.example/v1/data?${name}=${FAKE_QUERY_KEY}`;
+      expect(isSecretShapedMention("url", url)).toBe(true);
+      expect(mined(`fetch ${url} today`)).toEqual([]);
+    }
+  });
+
+  test("the credential-param refusal is case-insensitive", () => {
+    expect(isSecretShapedMention("url", `https://osb.example/?API_KEY=${FAKE_QUERY_KEY}`)).toBe(
+      true,
+    );
+    expect(isSecretShapedMention("url", `https://osb.example/?Auth-Token=${FAKE_QUERY_KEY}`)).toBe(
+      true,
+    );
+  });
+
+  test("a name-shaped path or parameter is not a credential: no over-refusal", () => {
+    expect(isSecretShapedMention("url", "https://osb.example/settings/api_keys?page=2")).toBe(
+      false,
+    );
+    expect(isSecretShapedMention("url", "https://osb.example/?api_key_version=2")).toBe(false);
+    expect(isSecretShapedMention("url", "https://osb.example/run?dry=1")).toBe(false);
   });
 
   test("a plain public URL is not refused", () => {

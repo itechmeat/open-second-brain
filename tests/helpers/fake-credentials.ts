@@ -24,3 +24,6 @@ export const FAKE_GITHUB_SECRET = fakeCredential("ghp_", "secret_value");
 
 /** The key handed to fake decision-model servers (issue #213). */
 export const FAKE_DECISION_KEY = fakeCredential("dm", "-test-", "key-7c1e");
+
+/** A credential value for query-parameter refusal cases (`?api_key=` et al). */
+export const FAKE_QUERY_KEY = fakeCredential("qk", "-", "9f8e7d6c5b4a3210");

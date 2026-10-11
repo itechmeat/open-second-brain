@@ -28,10 +28,14 @@
  * are case-sensitive.
  *
  * Security: a secret-shaped candidate is REFUSED, never written - URLs
- * with `user:pass@host` userinfo or `token=`/`key=` query forms
- * (`redactSpecifierCredentials`), and vendor-prefixed / high-entropy /
- * JWT-shaped tokens in code spans (`redactRawOutput` with
- * `redactTokens`). A refused candidate is counted, never silent.
+ * with `user:pass@host` userinfo or credential-named query parameters
+ * (`token=`/`key=` through `redactSpecifierCredentials`, plus the sibling
+ * {@link CREDENTIAL_MENTION_QUERY_PARAMS} spellings), and vendor-prefixed
+ * / high-entropy / JWT-shaped tokens in code spans (`redactRawOutput` with
+ * `redactTokens`). A refused candidate is counted, never silent. The URL
+ * refusal is WHOLE: the ledger keeps the mention id verbatim in
+ * `sourceRefs[].id` - only the payload is redacted at the store boundary -
+ * so a credential-bearing URL must never be minted at all.
  *
  * The ledger write is one `session_entity_mention` continuity record per
  * (family, key, sessionRef), deduped within an import run through the
@@ -157,9 +161,40 @@ function codeTokens(content: string): string[] {
   return content.split(/[^A-Za-z0-9_.$:/\\@-]+/u).filter((t) => t.length >= 2);
 }
 
+/**
+ * Query parameter names whose value is a credential in a mined URL. The
+ * redactor's exact-name pass ({@link CREDENTIAL_QUERY_KEYS} in the
+ * redactor) covers the generic spellings - `token`, `key`, `secret`,
+ * `password` - and the redaction-implies-refusal check below turns each
+ * into a refusal. These are the SIBLING spellings an exact-name list
+ * misses: `api_key`, `apikey`, `access_token`, `auth_token`, and their
+ * hyphenated / fused forms. Matched case-insensitively, name-anchored (a
+ * `?`/`&` boundary then the name then `=`), so `settings/api_keys` and
+ * `?api_key_version=2` stay legitimate URLs. A URL carrying one is
+ * refused whole - never minted, never written, counted as refused.
+ */
+export const CREDENTIAL_MENTION_QUERY_PARAMS: ReadonlyArray<string> = Object.freeze([
+  "api_key",
+  "apikey",
+  "api-key",
+  "access_token",
+  "accesstoken",
+  "access-token",
+  "auth_token",
+  "authtoken",
+  "auth-token",
+]);
+
+const CREDENTIAL_QUERY_PARAM_RE = new RegExp(
+  `[?&](?:${CREDENTIAL_MENTION_QUERY_PARAMS.join("|")})=`,
+  "i",
+);
+
 /** Whether a candidate should be refused as secret-shaped (see module header). */
 export function isSecretShapedMention(family: SessionMiningFamily, raw: string): boolean {
-  if (family === "url") return redactSpecifierCredentials(raw) !== raw;
+  if (family === "url") {
+    return redactSpecifierCredentials(raw) !== raw || CREDENTIAL_QUERY_PARAM_RE.test(raw);
+  }
   return redactRawOutput(raw, { redactTokens: true }) !== raw;
 }
 
