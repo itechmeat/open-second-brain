@@ -21,11 +21,13 @@
  * HONESTY CONTRACT. Telemetry is opt-in (gate off by default) and
  * records only the surfaced top rows per query, so "dead" is provable
  * only as "never surfaced in recorded history within the window". The
- * report therefore states the observation window from the records
- * themselves (earliest and latest matching `createdAt` - the log has no
- * retention policy, so records begin where recording began) and carries
- * {@link DEAD_WEIGHT_GATE_CAVEAT} verbatim. It never claims "never
- * read".
+ * report therefore states the observation window from the caller's
+ * view-filtered record set - the earliest and latest `createdAt` among
+ * the matched records the caller's reach view admits (a record whose
+ * every surfaced path is hidden cannot widen or shift the window; the
+ * log has no retention policy, so records begin where recording began)
+ * - and carries {@link DEAD_WEIGHT_GATE_CAVEAT} verbatim. It never
+ * claims "never read".
  *
  * READ-ONLY AND DETERMINISTIC. The fold emits nothing, writes nothing,
  * consults no clock, and two runs over the same inputs return equal
@@ -63,7 +65,10 @@ export interface DeadWeightOptions {
    * BEFORE any count, so a hidden page is dropped from `pages_total`,
    * `dead` and every count in the same stroke - a total that still
    * included the hidden rows would leak their number, the analytics
-   * rule. Absent (a local caller, the owner) keeps every walked page.
+   * rule - and to the record set BEFORE the window, so a record whose
+   * every surfaced path is hidden cannot widen or shift the reported
+   * window either. Absent (a local caller, the owner) keeps every walked
+   * page and every record.
    */
   readonly includePath?: (rel: string) => boolean;
 }
@@ -71,9 +76,10 @@ export interface DeadWeightOptions {
 export interface DeadWeightReport {
   /**
    * The observation window the fold actually covered, read off the
-   * matched records (earliest `createdAt`, latest `createdAt`). Both
-   * null when no record matched: with no telemetry history there is no
-   * window to state.
+   * matched records the caller's view admits (earliest `createdAt`,
+   * latest `createdAt` - a record surfaced only hidden paths cannot
+   * shape it). Both null when no record matched: with no telemetry
+   * history there is no window to state.
    */
   readonly window: { readonly since: string | null; readonly until: string | null };
   /** Pages currently in scope (the live `.md` population of the walk). */
@@ -118,13 +124,21 @@ function foldRecords(
     ...(opts.since !== undefined ? { since: opts.since } : {}),
     ...(opts.until !== undefined ? { until: opts.until } : {}),
   });
+  const include = opts.includePath;
   for (const record of records) {
+    const paths = surfacedPaths(record);
+    for (const path of paths) retrieved.add(path);
+    // The window rides the caller's view, the same reach/owner boundary
+    // the counts use: a record whose every surfaced path is hidden to
+    // this caller disclosed nothing it may see, so its timestamp must
+    // not widen or shift the reported window. A record naming nothing
+    // leaks nothing and keeps its span.
+    if (include !== undefined && paths.length > 0 && !paths.some(include)) continue;
     const at = record.createdAt;
     if (typeof at === "string" && at.length > 0) {
       if (window.since === null || at < window.since) window.since = at;
       if (window.until === null || at > window.until) window.until = at;
     }
-    for (const path of surfacedPaths(record)) retrieved.add(path);
   }
 }
 

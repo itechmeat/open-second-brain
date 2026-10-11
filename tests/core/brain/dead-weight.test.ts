@@ -138,6 +138,57 @@ describe("computeDeadWeight", () => {
     expect(onlyEarly.window.until).toBe("2026-05-20T16:00:00.000Z");
   });
 
+  test("hidden-page-only telemetry never widens or shifts the window at remote reach", () => {
+    // The caller's reach: everything under sub/ is hidden to this view,
+    // exactly the predicate the surfaces compose from requestRefView and
+    // the gated owner scope.
+    const view = (rel: string) => !rel.startsWith("sub/");
+    // A hidden-only record BEFORE the visible one, the visible one, and a
+    // hidden-only record AFTER it: only the visible record may shape the
+    // remote window, from either side.
+    emitRecallTelemetry(vault, {
+      createdAt: "2026-05-01T00:00:00.000Z",
+      host: "fold-test",
+      channel: RECALL_CHANNEL.cli,
+      mode: "search",
+      status: "ok",
+      durationMs: 5,
+      resultCount: 1,
+      topArtifacts: [{ id: "doc-d:0", path: "sub/d.md" }],
+    });
+    emitRecallTelemetry(vault, {
+      createdAt: "2026-05-20T16:00:00.000Z",
+      host: "fold-test",
+      channel: RECALL_CHANNEL.cli,
+      mode: "search",
+      status: "ok",
+      durationMs: 5,
+      resultCount: 1,
+      topArtifacts: [{ id: "doc-a:0", path: "a.md" }],
+    });
+    emitObservedUse(vault, {
+      createdAt: "2026-05-25T23:59:00.000Z",
+      host: "fold-test",
+      entries: [{ id: "doc-d:1", path: "sub/d.md", verdict: "USED" }],
+    });
+
+    const remote = computeDeadWeight(vault, { includePath: view });
+    // Counts were already clean: the hidden page drops before totals.
+    expect(remote.pages_total).toBe(3);
+    expect(remote.pages_retrieved).toBe(1);
+    expect(remote.dead.map((d) => d.path)).toEqual(["b.md", "c.md"]);
+    // The window rides the same view: the hidden-page records' earlier and
+    // later timestamps must not widen or shift it.
+    expect(remote.window.since).toBe("2026-05-20T16:00:00.000Z");
+    expect(remote.window.until).toBe("2026-05-20T16:00:00.000Z");
+
+    // Owner reach filters nothing, so the owner still sees the full span.
+    const owner = computeDeadWeight(vault);
+    expect(owner.pages_total).toBe(4);
+    expect(owner.window.since).toBe("2026-05-01T00:00:00.000Z");
+    expect(owner.window.until).toBe("2026-05-25T23:59:00.000Z");
+  });
+
   test("a vault with no records reports an empty window and everything dead", () => {
     const report = computeDeadWeight(vault);
     expect(report.pages_total).toBe(4);
