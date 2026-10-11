@@ -355,6 +355,15 @@ export interface MinedTurnOutcome {
   readonly secretRefused: number;
   /** 1 when the turn carried a private region and was withheld whole. */
   readonly privateWithheld: number;
+  /**
+   * Mentions whose ledger append THREW - the telemetry-grade tolerance
+   * never fails the import for one unwritable record, but the never-silent
+   * convention demands the failure be counted, not swallowed (the
+   * `mined_ledger_failed` slot of the import report's `mined_*` family,
+   * beside `mined_secret_refused`). A failed mention is left unseen, so it
+   * re-folds on a later run.
+   */
+  readonly ledgerFailed: number;
 }
 
 const EMPTY_OUTCOME: MinedTurnOutcome = Object.freeze({
@@ -363,6 +372,7 @@ const EMPTY_OUTCOME: MinedTurnOutcome = Object.freeze({
   withheld: 0,
   secretRefused: 0,
   privateWithheld: 0,
+  ledgerFailed: 0,
 });
 
 /**
@@ -377,6 +387,7 @@ export function mineAndRecordTurn(vault: string, input: MineTurnInput): MinedTur
   let extracted = 0;
   let deduped = 0;
   let withheld = 0;
+  let ledgerFailed = 0;
   const scan = scanTurn(input.text);
   const secretRefused = scan.secretRefused;
   for (const mention of scan.mentions) {
@@ -406,13 +417,22 @@ export function mineAndRecordTurn(vault: string, input: MineTurnInput): MinedTur
       });
     } catch {
       // Telemetry-grade lane: one unwritable record never fails the
-      // import; the mention re-folds on a later run.
+      // import; the mention re-folds on a later run. Counted, never
+      // silent - and left unseen, so the retry below really re-folds.
+      ledgerFailed++;
       continue;
     }
     input.seen.add(id);
     extracted++;
   }
-  return Object.freeze({ extracted, deduped, withheld, secretRefused, privateWithheld: 0 });
+  return Object.freeze({
+    extracted,
+    deduped,
+    withheld,
+    secretRefused,
+    ledgerFailed,
+    privateWithheld: 0,
+  });
 }
 
 /**

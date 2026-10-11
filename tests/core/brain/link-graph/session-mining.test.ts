@@ -11,7 +11,10 @@
  * lowercase fold is promotion's business, not the ledger's.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   FAKE_QUERY_KEY,
@@ -19,10 +22,13 @@ import {
   fakeCredential,
 } from "../../../helpers/fake-credentials.ts";
 import { extractFacts } from "../../../../src/core/brain/fact-extract.ts";
+import { continuityLogDir } from "../../../../src/core/brain/continuity/store.ts";
+import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 import {
   MINED_KEY_MAX_LENGTH,
   SESSION_MINING_FAMILIES,
   isSecretShapedMention,
+  mineAndRecordTurn,
   mineTurnEntities,
   miningDedupeId,
   miningKey,
@@ -229,5 +235,86 @@ describe("dedupe granularity", () => {
     expect(miningDedupeId("symbol", "SessionStore", "s1.jsonl")).toBe(a);
     expect(miningDedupeId("symbol", "SessionStore", "s2.jsonl")).not.toBe(a);
     expect(miningDedupeId("path", "SessionStore", "s1.jsonl")).not.toBe(a);
+  });
+});
+
+describe("mineAndRecordTurn", () => {
+  // bootstrapBrain(vault) bare is the shape the sibling link-graph tests use.
+  let vault: string;
+
+  beforeEach(() => {
+    vault = mkdtempSync(join(tmpdir(), "o2b-mine-record-"));
+    bootstrapBrain(vault);
+  });
+
+  afterEach(() => {
+    rmSync(vault, { recursive: true, force: true });
+  });
+
+  const NOW = new Date("2026-06-13T12:00:00Z");
+
+  function input(
+    overrides: Partial<Parameters<typeof mineAndRecordTurn>[1]> = {},
+  ): Parameters<typeof mineAndRecordTurn>[1] {
+    return {
+      text: "touch `SessionStore` and src/core/store.ts today",
+      sessionRef: "s1.jsonl",
+      turnId: "t1",
+      now: NOW,
+      seen: new Set(),
+      ...overrides,
+    };
+  }
+
+  function ledgerLines(): number {
+    const dir = continuityLogDir(vault);
+    let isDir = false;
+    try {
+      isDir = statSync(dir).isDirectory();
+    } catch {
+      isDir = false;
+    }
+    if (!isDir) return 0;
+    let count = 0;
+    for (const entry of readdirSync(dir)) {
+      if (!entry.endsWith(".jsonl")) continue;
+      count += readFileSync(join(dir, entry), "utf8").trim().split("\n").filter(Boolean).length;
+    }
+    return count;
+  }
+
+  test("an applied turn writes its mentions and counts them extracted", () => {
+    const seen = new Set<string>();
+    const out = mineAndRecordTurn(vault, input({ seen }));
+    expect(out.extracted).toBe(2);
+    expect(out.ledgerFailed).toBe(0);
+    expect(out.secretRefused).toBe(0);
+    expect(ledgerLines()).toBe(2);
+    // The written mentions are marked seen, so a re-fold dedupes.
+    expect(seen.size).toBe(2);
+  });
+
+  test("a failed ledger append is counted by name, never silent", () => {
+    // Sabotage: a regular file where the continuity ledger's directory must
+    // be, so every append throws. The telemetry-grade tolerance holds - the
+    // turn must never fail - but the never-silent convention demands the
+    // failures be COUNTED, not swallowed.
+    writeFileSync(continuityLogDir(vault), "not a directory\n");
+    const out = mineAndRecordTurn(vault, input());
+    expect(out.extracted).toBe(0);
+    expect(out.ledgerFailed).toBe(2);
+    expect(ledgerLines()).toBe(0);
+  });
+
+  test("a failed append leaves the mention unseen, so it re-folds on a later run", () => {
+    writeFileSync(continuityLogDir(vault), "not a directory\n");
+    const seen = new Set<string>();
+    mineAndRecordTurn(vault, input({ seen }));
+    expect(seen.size).toBe(0);
+    // Repair the ledger: the same mention re-folds and lands.
+    rmSync(continuityLogDir(vault), { force: true });
+    const retried = mineAndRecordTurn(vault, input({ seen }));
+    expect(retried.extracted).toBe(2);
+    expect(retried.ledgerFailed).toBe(0);
   });
 });
