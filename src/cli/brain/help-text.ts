@@ -127,7 +127,7 @@ Brain verbs (observing memory):
   scan-inline         Capture @osb markers from folders listed under notes.read_paths in _brain.yaml
   scan-citations      Promote inline [Source: <name>, YYYY-MM-DD] markers to dated provenance events
   import-session      Replay signals from a registered agent session .jsonl (or directory)
-  entity              Canonical entity registry: set, get, list, relate, archive, prune
+  entity              Canonical entity registry: set, get, list, relate, archive, prune, lexicon
   session-hook        Capture one runtime hook payload from stdin (internal hook bridge)
   import-claude-memory  Import metadata.type:feedback MEMORY entries as confirmed preferences
   page-dedup          Detect (and optionally merge) near-duplicate vault pages
@@ -876,16 +876,20 @@ export const VERB_HELP: Record<string, string> = {
     "Default is --dry-run; --apply requires --yes and --approval-digest in\n" +
     "non-interactive mode.\n",
   entity:
-    "usage: o2b brain entity <set|get|list|relate|archive|prune> [args]\n" +
+    "usage: o2b brain entity <set|get|list|relate|archive|prune|lexicon> [args]\n" +
     "  set <category> <name> [--alias <a>]... [--body <md>] [--confidence <c>] [--json]\n" +
     "  get <name-or-alias> [--category <c>] [--json]      exit 2 when not found\n" +
     "  list [--category <c>] [--status active|archived] [--json]\n" +
     "  relate <from> <relation> <to> [--from-category <c>] [--to-category <c>] [--json]\n" +
     "  archive <name-or-alias> [--restore] [--category <c>] [--json]\n" +
     "  prune [--confirm] [--json]                         dry-run default; snapshot before removal\n" +
+    "  lexicon rebuild [--apply] [--json]                 dry-run default; writes only the\n" +
+    "                                                     derived Brain/entities/lexicon.json\n" +
     "One canonical entity per (category, name); aliases resolve to the canonical record.\n" +
     "Labels are decoration-stripped and quality-gated on set; prune removes historical\n" +
-    "malformed nodes and their edges. Denylist: entities.label_denylist config key.",
+    "malformed nodes and their edges. Denylist: entities.label_denylist config key. The\n" +
+    "store-learned lexicon artifact feeds the tightened creation verdicts; rebuild it\n" +
+    "after corpus edits (a stale artifact degrades admission fail-open, never mis-rejects).",
   "design-note":
     "usage: o2b brain design-note <topic> [--vault <vault>] [--agent <name>]\n" +
     "                              [--payload <json> | --payload-file <path>] [--json]\n" +

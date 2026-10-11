@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -144,5 +144,74 @@ describe("o2b brain entity", () => {
     const payload = JSON.parse(out.stdout) as { confirmed: boolean; candidates: unknown[] };
     expect(payload.confirmed).toBe(false);
     expect(payload.candidates).toEqual([]);
+  });
+});
+
+/**
+ * Recall-quality A4: `o2b brain entity lexicon rebuild` derives the
+ * store-learned lexicon artifact. Dry-run report by default; a derived
+ * write is not destructive, so writing takes `--apply`, never `--confirm`
+ * - and the verb writes ONLY the derived artifact, never entity nodes.
+ */
+describe("o2b brain entity lexicon rebuild (recall-quality A4)", () => {
+  /** A corpus page whose tokens teach the artifact; caseful, `notes` common. */
+  function seedCorpus(): void {
+    writeFileSync(
+      join(vault, "corpus-page.md"),
+      "Notes about the setup. The runner kept notes. Notes ran, notes ran again.\n",
+    );
+  }
+
+  test("dry-run by default: reports, writes nothing", async () => {
+    seedCorpus();
+    const out = await runCli(["brain", "entity", "lexicon", "rebuild", "--json"], {
+      env: env(),
+    });
+    expect(out.returncode).toBe(0);
+    const payload = JSON.parse(out.stdout) as Record<string, unknown>;
+    expect(payload["applied"]).toBe(false);
+    expect(Number(payload["entries"])).toBeGreaterThan(0);
+    expect(payload["schema"]).toBe("o2b.entity-lexicon.v1");
+    expect(existsSync(join(vault, "Brain", "entities", "lexicon.json"))).toBe(false);
+  });
+
+  test("--apply writes only the derived artifact (no --confirm needed)", async () => {
+    seedCorpus();
+    const out = await runCli(["brain", "entity", "lexicon", "rebuild", "--apply", "--json"], {
+      env: env(),
+    });
+    expect(out.returncode).toBe(0);
+    const payload = JSON.parse(out.stdout) as Record<string, unknown>;
+    expect(payload["applied"]).toBe(true);
+    const artifactPath = join(vault, "Brain", "entities", "lexicon.json");
+    expect(existsSync(artifactPath)).toBe(true);
+    const doc = JSON.parse(readFileSync(artifactPath, "utf8")) as Record<string, unknown>;
+    expect(doc["schema"]).toBe("o2b.entity-lexicon.v1");
+    expect(typeof doc["corpus_scope"]).toBe("string");
+    expect(typeof doc["dataset_hash"]).toBe("string");
+    // Only the derived artifact: no entity nodes were minted by the rebuild.
+    expect(readdirSync(join(vault, "Brain", "entities")).filter((f) => f.endsWith(".md"))).toEqual(
+      [],
+    );
+  });
+
+  test("a rebuilt lexicon gates creation end to end: a learned common word is refused", async () => {
+    seedCorpus();
+    const rebuild = await runCli(["brain", "entity", "lexicon", "rebuild", "--apply"], {
+      env: env(),
+    });
+    expect(rebuild.returncode).toBe(0);
+    expect(rebuild.stdout).toContain("lexicon");
+    const refused = await runCli(["brain", "entity", "set", "people", "Notes"], { env: env() });
+    expect(refused.returncode).not.toBe(0);
+    expect(refused.stderr).toContain("function-word-run");
+    // A code-shaped label still admits beside the lexicon.
+    const code = await runCli(["brain", "entity", "set", "systems", "FTS5"], { env: env() });
+    expect(code.returncode).toBe(0);
+  });
+
+  test("an unknown lexicon subcommand is a usage error", async () => {
+    const out = await runCli(["brain", "entity", "lexicon", "polish"], { env: env() });
+    expect(out.returncode).not.toBe(0);
   });
 });
