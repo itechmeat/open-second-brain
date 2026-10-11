@@ -12,7 +12,7 @@
  *   - otherwise the notes the injection ledger says entered context this
  *     session, across the four phase keys (recall keys, the active
  *     digest's emitted paths plus its queued re-delivery parts, and the
- *     sub-agent carrier's member strings).
+ *     note paths the sub-agent carrier recorded with its deliveries).
  *
  * Each span gets one verdict from
  * `src/core/brain/answer-quotes/check.ts` - `verified`, `not-in-note`,
@@ -74,7 +74,7 @@ import {
   LEDGER_KEY_REGROUND,
   readActiveEmittedPaths,
   readRecallInjected,
-  readSubagentDeliveredIds,
+  readSubagentDeliveredPaths,
 } from "./lib/injection-ledger.ts";
 import { readHookStamp } from "./lib/session-state.ts";
 
@@ -359,9 +359,12 @@ function pathTokens(member: string): ReadonlyArray<string> {
 /**
  * The candidate note paths of one phase's ledger: recall keys parse to
  * path + line range, the active ledger names paths directly, the queued
- * re-delivery parts and sub-agent member strings are prose scanned for
- * path tokens. Sorted, deduplicated; empty when the session has no
- * ledger (a sessionless host has none at all).
+ * re-delivery parts are prose scanned for path tokens, and the sub-agent
+ * delivery ledger names the paths the delivered payloads were built from
+ * (a row recorded before that field existed contributes nothing - an old
+ * ledger row is silence for this phase, never an error). Sorted,
+ * deduplicated; empty when the session has no ledger (a sessionless host
+ * has none at all).
  */
 function ledgerCandidates(
   vault: string,
@@ -395,8 +398,8 @@ function ledgerCandidates(
     }
   }
   if (phase === "subagent") {
-    for (const id of readSubagentDeliveredIds(vault, sessionId, nowMs)) {
-      for (const path of pathTokens(id)) candidates.set(path, {});
+    for (const path of readSubagentDeliveredPaths(vault, sessionId, nowMs)) {
+      candidates.set(path, {});
     }
   }
   return [...candidates.entries()]

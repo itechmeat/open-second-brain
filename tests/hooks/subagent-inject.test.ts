@@ -28,8 +28,10 @@ import { fileURLToPath } from "node:url";
 
 import {
   LEDGER_KEY_SUBAGENT_INJECT,
+  SUBAGENT_PATHS_MAX,
   SUBAGENT_SET_MAX,
   readSubagentDeliveredIds,
+  readSubagentDeliveredPaths,
   recordSubagentDeliveredId,
 } from "../../hooks/lib/injection-ledger.ts";
 import { renderStandingBlock } from "../../hooks/lib/standing-block.ts";
@@ -572,5 +574,91 @@ describe("capped subagent delivered-id ledger", () => {
     expect(delivered.size).toBe(SUBAGENT_SET_MAX);
     expect(delivered.has("agent-0000")).toBe(false);
     expect(delivered.has(`agent-${String(total - 1).padStart(4, "0")}`)).toBe(true);
+  });
+});
+
+describe("subagent delivered-evidence paths", () => {
+  test("records and reads back paths beside the ids, deduplicated", () => {
+    expect(
+      recordSubagentDeliveredId(vault, SESSION, AGENT, [
+        "Brain/standing-rules.md",
+        "Brain/active.md",
+      ]),
+    ).toBe(true);
+    expect(
+      recordSubagentDeliveredId(vault, SESSION, "agent-bbbb", [
+        "Brain/active.md",
+        "Brain/lessons.md",
+      ]),
+    ).toBe(true);
+    expect(readSubagentDeliveredPaths(vault, SESSION)).toEqual(
+      new Set(["Brain/standing-rules.md", "Brain/active.md", "Brain/lessons.md"]),
+    );
+    expect(readSubagentDeliveredIds(vault, SESSION)).toEqual(new Set([AGENT, "agent-bbbb"]));
+  });
+
+  test("a record without paths reads as an empty path set - the legacy row shape", () => {
+    expect(recordSubagentDeliveredId(vault, SESSION, AGENT)).toBe(true);
+    expect(readSubagentDeliveredIds(vault, SESSION)).toEqual(new Set([AGENT]));
+    expect(readSubagentDeliveredPaths(vault, SESSION)).toEqual(new Set());
+  });
+
+  test("a re-delivery without paths keeps the paths an earlier delivery merged", () => {
+    expect(recordSubagentDeliveredId(vault, SESSION, AGENT, ["Brain/active.md"])).toBe(true);
+    expect(recordSubagentDeliveredId(vault, SESSION, AGENT)).toBe(true);
+    expect(readSubagentDeliveredPaths(vault, SESSION)).toEqual(new Set(["Brain/active.md"]));
+  });
+
+  test("keeps only the most recent paths past the cap", () => {
+    const total = SUBAGENT_PATHS_MAX + 5;
+    const all = Array.from(
+      { length: total },
+      (_, i) => `Brain/notes/n${String(i).padStart(4, "0")}.md`,
+    );
+    expect(recordSubagentDeliveredId(vault, SESSION, AGENT, all)).toBe(true);
+    const paths = readSubagentDeliveredPaths(vault, SESSION);
+    expect(paths.size).toBe(SUBAGENT_PATHS_MAX);
+    expect(paths.has("Brain/notes/n0000.md")).toBe(false);
+    expect(paths.has(`Brain/notes/n${String(total - 1).padStart(4, "0")}.md`)).toBe(true);
+  });
+
+  test("the carrier records the note paths its payload was built from", async () => {
+    writeRules("Always run the test suite before committing.");
+    writeActive(ACTIVE_BODY);
+    writeLessons(LESSONS_BODY);
+    const delivering = await runHook(subagentStartPayload({ agentId: AGENT }));
+    expect(delivering.exit).toBe(0);
+    expect(deliveredContext(delivering.stdout).additionalContext).not.toBe("");
+    expect(readSubagentDeliveredPaths(vault, SESSION)).toEqual(
+      new Set(["Brain/standing-rules.md", "Brain/active.md", "Brain/lessons.md"]),
+    );
+  });
+
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "a delivery whose rules read failed records no standing-rules path",
+    async () => {
+      // The failure block names the path; the payload never carried the
+      // file's content, so the path is not delivered evidence.
+      const path = writeRules("rules that exist but cannot be read");
+      writeActive(ACTIVE_BODY);
+      chmodSync(path, 0o000);
+      try {
+        const delivering = await runHook(subagentStartPayload({ agentId: AGENT }));
+        expect(delivering.exit).toBe(0);
+        expect(deliveredContext(delivering.stdout).additionalContext).toContain("UNAVAILABLE:");
+      } finally {
+        chmodSync(path, 0o644);
+      }
+      expect(readSubagentDeliveredPaths(vault, SESSION)).toEqual(new Set(["Brain/active.md"]));
+    },
+  );
+
+  test("an absent memory body records only the lanes that rendered", async () => {
+    writeRules("Always run the test suite before committing.");
+    const delivering = await runHook(subagentStartPayload({ agentId: AGENT }));
+    expect(delivering.exit).toBe(0);
+    expect(readSubagentDeliveredPaths(vault, SESSION)).toEqual(
+      new Set(["Brain/standing-rules.md"]),
+    );
   });
 });

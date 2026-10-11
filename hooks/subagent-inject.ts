@@ -58,10 +58,13 @@
  *
  * The delivered agent ids live in the per-session hook-state ledger
  * (`osb.subagent_inject.delivered`, capped, 24 h TTL); the fallback
- * consults it before emitting, the primary channel does not. The id is
- * recorded AFTER the stdout write on both channels - lose-not-duplicate,
- * like every carrier in this tree - so a crash between write and record
- * re-delivers rather than losing the payload.
+ * consults it before emitting, the primary channel does not. Each record
+ * also names the vault-relative note paths the delivered payload was
+ * built from, so the answer-time quote check (answer-trust wave) can
+ * verify that sub-agent's quoted spans against the evidence it actually
+ * had. The id is recorded AFTER the stdout write on both channels -
+ * lose-not-duplicate, like every carrier in this tree - so a crash
+ * between write and record re-delivers rather than losing the payload.
  *
  * Silent on every empty-handed path, exit 0: no non-empty `agent_id`
  * (the main thread is served by active-inject), on PostToolUse a tool
@@ -80,6 +83,7 @@
  */
 
 import { writeSync } from "node:fs";
+import { posix } from "node:path";
 
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { isArtifactToolName } from "./lib/detect.ts";
@@ -90,6 +94,8 @@ import {
 } from "./lib/injection-ledger.ts";
 import { renderStandingBlock } from "./lib/standing-block.ts";
 import {
+  SOURCE_ACTIVE_BODY,
+  SOURCE_LESSONS_BODY,
   assembleActiveContext,
   createInjectionMeter,
   joinBlocks,
@@ -97,6 +103,15 @@ import {
   resolveInjectionLimits,
   scopedSectionCap,
 } from "./lib/active-context.ts";
+import {
+  BRAIN_ACTIVE_FILE,
+  BRAIN_LESSONS_FILE,
+  BRAIN_ROOT_REL,
+  BRAIN_STANDING_RULES_FILE,
+} from "../src/core/brain/path-constants.ts";
+import { readScopedRules } from "../src/core/brain/scoped-rules.ts";
+import { resolveHostScope, resolveProjectScope } from "../src/core/brain/scope-identity.ts";
+import { readStandingRules } from "../src/core/brain/standing-rules.ts";
 import { resolveVault } from "../src/core/config.ts";
 
 /**
@@ -140,16 +155,77 @@ function subagentInjectOutput(event: CarrierEvent, block: string): SubagentInjec
 }
 
 /**
+ * The carrier's payload plus the note evidence it was built from. The
+ * evidence paths feed the delivery ledger so the answer-time quote check
+ * can verify this sub-agent's quoted spans against the notes the payload
+ * actually carried (answer-trust wave).
+ */
+interface CarrierPayload {
+  readonly block: string;
+  /** Vault-relative note paths whose content the payload carries. */
+  readonly evidencePaths: ReadonlyArray<string>;
+}
+
+/**
+ * The vault-relative standing-rules path, when a real read fed the
+ * block. An absent or empty file renders no block at all, and a read
+ * that FAILED renders the explicit failure block - the payload then
+ * carries a notice ABOUT the file, not the file's content, so neither
+ * case is delivered evidence.
+ */
+function standingEvidencePaths(vault: string, maxChars: number): ReadonlyArray<string> {
+  try {
+    return readStandingRules(vault, { maxChars }) === null
+      ? []
+      : [posix.join(BRAIN_ROOT_REL, BRAIN_STANDING_RULES_FILE)];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The vault-relative scoped-rule file paths this session's scope
+ * matched. The identity mirrors `renderScopedBlock`'s so the reported
+ * paths and the delivered block cannot disagree; the harness axis is
+ * always null on this surface (both injection lanes are shared by Claude
+ * Code and Codex through one `o2b-hook` shim and have no harness signal).
+ */
+function scopedEvidencePaths(
+  vault: string,
+  workspaceDir: string,
+  maxChars: number,
+): ReadonlyArray<string> {
+  try {
+    let host: { readonly host: string | null; readonly unreadable: boolean };
+    try {
+      host = resolveHostScope(undefined);
+    } catch {
+      host = { host: null, unreadable: true };
+    }
+    return readScopedRules(
+      vault,
+      { project: resolveProjectScope(workspaceDir, vault), harness: null, host: host.host },
+      { maxChars, hostUnreadable: host.unreadable },
+    ).files.map((file) => file.path);
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Compose the carrier's payload: the same three lanes, joined the same
  * way, as the session-start preamble. The meter exists because the
- * assembly records its sub-bodies there; the carrier never reads it
- * back - it feeds the session-start receipt, not a carrier emission.
+ * assembly records its sub-bodies there - the memory note paths are read
+ * back off it (a rendered `Brain/active.md` or `Brain/lessons.md` body is
+ * delivered evidence), while the rules lanes report their consumed paths
+ * directly. Runtime notices are generated state, not a note.
  */
-function composeCarrierPayload(vault: string, workspaceDir: string): string {
+function composeCarrierPayload(vault: string, workspaceDir: string): CarrierPayload {
   const limits = resolveInjectionLimits(vault);
   const meter = createInjectionMeter(limits.injectBudgetChars);
   const standingBlock = renderStandingBlock(vault, limits.standingRulesMaxChars, meter);
-  const scopedBlock = renderScopedBlock(vault, workspaceDir, scopedSectionCap(limits), meter);
+  const sectionCap = scopedSectionCap(limits);
+  const scopedBlock = renderScopedBlock(vault, workspaceDir, sectionCap, meter);
   const memoryBudget = Math.max(0, limits.injectBudgetChars - scopedBlock.length);
   // No last-good cache on this surface: a genuine read error inside the
   // assembly degrades the memory lane to empty rather than emitting a
@@ -160,7 +236,16 @@ function composeCarrierPayload(vault: string, workspaceDir: string): string {
   } catch {
     memoryContext = "";
   }
-  return joinBlocks([standingBlock, scopedBlock, memoryContext]);
+  const emitted = (name: string): boolean => meter.sources.some((s) => s.name === name);
+  return {
+    block: joinBlocks([standingBlock, scopedBlock, memoryContext]),
+    evidencePaths: [
+      ...standingEvidencePaths(vault, limits.standingRulesMaxChars),
+      ...scopedEvidencePaths(vault, workspaceDir, sectionCap),
+      ...(emitted(SOURCE_ACTIVE_BODY) ? [posix.join(BRAIN_ROOT_REL, BRAIN_ACTIVE_FILE)] : []),
+      ...(emitted(SOURCE_LESSONS_BODY) ? [posix.join(BRAIN_ROOT_REL, BRAIN_LESSONS_FILE)] : []),
+    ],
+  };
 }
 
 async function main(): Promise<void> {
@@ -220,10 +305,10 @@ async function main(): Promise<void> {
   // resolves the same field the same way).
   const workspaceDir =
     typeof payload.cwd === "string" && payload.cwd.length > 0 ? payload.cwd : process.cwd();
-  const block = composeCarrierPayload(vault, workspaceDir);
+  const carrier = composeCarrierPayload(vault, workspaceDir);
   // Silent only when the ENTIRE payload is empty: an absent rules file is
   // no longer silence on a vault whose operator has learned preferences.
-  if (block.length === 0) return;
+  if (carrier.block.length === 0) return;
 
   // One blocking write to fd 1, not process.stdout.write: a write error
   // must surface HERE, at the emit. Bun and Node deliver stdout errors
@@ -233,13 +318,16 @@ async function main(): Promise<void> {
   // instead, the id is never recorded, and the next carrier event for
   // this sub-agent re-delivers - the lose-not-duplicate order made real,
   // not just ordered.
-  writeSync(1, `${JSON.stringify(subagentInjectOutput(event, block))}\n`);
+  writeSync(1, `${JSON.stringify(subagentInjectOutput(event, carrier.block))}\n`);
 
   // Recorded after stdout on both channels: a crash or a failed state
   // write in between re-delivers the payload on the next carrier event,
   // and on the primary channel the record is what keeps the PostToolUse
-  // fallback silent once this sub-agent's payload has landed.
-  recordSubagentDeliveredId(vault, payload.session_id, agentId);
+  // fallback silent once this sub-agent's payload has landed. The record
+  // names the note paths the payload was built from, so the answer-time
+  // quote check can verify this sub-agent's quoted spans against the
+  // evidence it actually had.
+  recordSubagentDeliveredId(vault, payload.session_id, agentId, carrier.evidencePaths);
 }
 
 main().catch(() => {

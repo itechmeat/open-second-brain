@@ -24,7 +24,13 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { beginInjectionEpoch, recordRecallInjected } from "../../hooks/lib/injection-ledger.ts";
+import {
+  beginInjectionEpoch,
+  LEDGER_KEY_SUBAGENT_INJECT,
+  recordRecallInjected,
+  recordSubagentDeliveredId,
+} from "../../hooks/lib/injection-ledger.ts";
+import { hookStateFilePath } from "../../hooks/lib/session-state.ts";
 
 const HOOK = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -59,10 +65,20 @@ function writeNote(rel: string, body: string): string {
 
 /** `quote_check` config for the hook's vault, plus any extra YAML keys. */
 function writeConfig(mode: string): void {
+  writeConfigFor({ recall: mode, active: mode, subagent: mode });
+}
+
+/** `quote_check` config with a per-phase mode. */
+function writeConfigFor(modes: { recall: string; active: string; subagent: string }): void {
   writeFileSync(
     join(vault, "Brain", "_brain.yaml"),
-    `schema_version: 2\n\nquote_check:\n  recall: ${mode}\n  active: ${mode}\n  subagent: ${mode}\n`,
+    `schema_version: 2\n\nquote_check:\n  recall: ${modes.recall}\n  active: ${modes.active}\n  subagent: ${modes.subagent}\n`,
   );
+}
+
+/** The subagent phase alone: recall and active off, subagent as given. */
+function subagentOnlyConfig(mode: string): void {
+  writeConfigFor({ recall: "off", active: "off", subagent: mode });
 }
 
 function ccUser(text: string): string {
@@ -311,6 +327,83 @@ describe("answer-quote-check hook - ledger membership", () => {
       ccAssistant('The digest says the operator "prefers terse answers".'),
     ]);
     const run = await runHook();
+    expect(annotations(run)).toEqual([]);
+  });
+});
+
+describe("answer-quote-check hook - the subagent phase", () => {
+  test("a quoted span inside a delivered row's evidence paths verifies silently", async () => {
+    subagentOnlyConfig("shadow");
+    writeNote(
+      "Brain/notes/restaking.md",
+      "Restaking reuses staked capital to secure additional services.\n",
+    );
+    expect(recordSubagentDeliveredId(vault, SESSION, "agent-1", ["Brain/notes/restaking.md"])).toBe(
+      true,
+    );
+    writeTranscript([
+      ccUser("summarize"),
+      ccAssistant('As delivered, restaking "reuses staked capital to secure additional services".'),
+    ]);
+    const run = await runHook();
+    expect(run.exit).toBe(0);
+    expect(run.stderr).toBe("");
+    expect(annotations(run)).toEqual([]);
+  });
+
+  test("a span the delivered evidence does not contain is annotated - the phase runs", async () => {
+    subagentOnlyConfig("shadow");
+    writeNote("Brain/notes/restaking.md", "Restaking reuses staked capital.\n");
+    expect(recordSubagentDeliveredId(vault, SESSION, "agent-1", ["Brain/notes/restaking.md"])).toBe(
+      true,
+    );
+    writeTranscript([
+      ccUser("summarize"),
+      ccAssistant('As delivered, restaking "secures pooled validators".'),
+    ]);
+    const run = await runHook();
+    expect(run.exit).toBe(0);
+    const found = annotations(run);
+    expect(found.length).toBe(1);
+    expect(found[0]).toContain("[not-in-note]");
+  });
+
+  test("a legacy delivered row without paths keeps the phase silent", async () => {
+    subagentOnlyConfig("shadow");
+    // A row recorded before the wave carried agent ids and nothing else.
+    mkdirSync(join(vault, ".open-second-brain", "hook-state"), { recursive: true });
+    writeFileSync(
+      hookStateFilePath(vault, SESSION),
+      JSON.stringify({
+        [LEDGER_KEY_SUBAGENT_INJECT]: {
+          expiresAt: Date.now() + 3_600_000,
+          data: { ids: ["agent-legacy"] },
+        },
+      }),
+    );
+    writeTranscript([
+      ccUser("summarize"),
+      ccAssistant('As delivered, restaking "secures pooled validators".'),
+    ]);
+    const run = await runHook();
+    expect(run.exit).toBe(0);
+    expect(run.stderr).toBe("");
+    expect(annotations(run)).toEqual([]);
+  });
+
+  test("quote_check.subagent off stays silent even with delivered paths", async () => {
+    subagentOnlyConfig("off");
+    writeNote("Brain/notes/restaking.md", "Restaking reuses staked capital.\n");
+    expect(recordSubagentDeliveredId(vault, SESSION, "agent-1", ["Brain/notes/restaking.md"])).toBe(
+      true,
+    );
+    writeTranscript([
+      ccUser("summarize"),
+      ccAssistant('As delivered, restaking "secures pooled validators".'),
+    ]);
+    const run = await runHook();
+    expect(run.exit).toBe(0);
+    expect(run.stderr).toBe("");
     expect(annotations(run)).toEqual([]);
   });
 });
