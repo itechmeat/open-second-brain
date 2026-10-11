@@ -189,6 +189,31 @@ describe("the hallways artifact", () => {
     writeHallwaysArtifact(vault, current, { generatedAt: "2026-09-18T11:00:00Z" });
     expect(readHallwaysArtifact(vault, current.datasetHash)).not.toBeNull();
   });
+
+  test("a changed dismissal set expires the hash too: it is one of the hashed inputs", () => {
+    // The derivation's `keys` list excludes dismissed ids, so the dismissal
+    // set is an input the artifact is a function of. Hashed inputs are the
+    // folded mention set AND the dismissals - otherwise two artifacts with
+    // different key lists could carry the same dataset_hash and the hash
+    // would not describe the bytes it stamps.
+    mention("symbol", "SessionStore", "s1.jsonl");
+    mention("symbol", "PayloadRegistry", "s1.jsonl");
+    const plain = computeHallways(vault);
+    writeHallwaysArtifact(vault, plain, { generatedAt: "2026-09-18T10:00:00Z" });
+
+    dismissHallwayKey(vault, "symbol", "SessionStore");
+    const dismissedOnly = computeHallways(vault, { dismissed: readDismissedHallwayKeys(vault) });
+
+    // Same ledger, different derivation: the hash must move with it.
+    expect(dismissedOnly.datasetHash).not.toBe(plain.datasetHash);
+    expect(readHallwaysArtifact(vault, dismissedOnly.datasetHash)).toBeNull();
+    writeHallwaysArtifact(vault, dismissedOnly, { generatedAt: "2026-09-18T11:00:00Z" });
+    // The written artifact now answers its own ask...
+    expect(readHallwaysArtifact(vault, dismissedOnly.datasetHash)).not.toBeNull();
+    // ...and the dismissal-free ask stays expired: re-deriving without the
+    // overlay is a different question, not the stored artifact's.
+    expect(readHallwaysArtifact(vault, plain.datasetHash)).toBeNull();
+  });
 });
 
 describe("the proposals file and dismissals", () => {

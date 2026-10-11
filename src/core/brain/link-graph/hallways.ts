@@ -23,6 +23,15 @@
  * REVIEWABLE proposals file with persisted dismissals (the bridges
  * pattern); nothing here promotes anything - promotion is a separate,
  * explicit step through the entity registry.
+ *
+ * What the dataset hash describes, exactly. The derivation's `keys` list
+ * EXCLUDES dismissed ids, so the dismissal set is one of the inputs the
+ * artifact is a function of - and the hash is taken over both: the folded
+ * (family, key, session) incidence AND the dismissed key ids. Hashing the
+ * ledger alone would let two derivations with different key lists carry
+ * the same `dataset_hash`, and the hash would no longer describe the bytes
+ * it stamps. Dismissal silences proposals either way; here it is also
+ * named in the fingerprint of what this artifact was derived from.
  */
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
@@ -94,7 +103,11 @@ export interface HallwaysPair {
 
 export interface HallwaysResult {
   readonly schema: string;
-  /** Hash of the folded mention set the derivation is a function of. */
+  /**
+   * Hash of the inputs the derivation is a function of: the folded mention
+   * set AND the dismissal overlay (see the module header - the `keys` list
+   * excludes dismissed ids, so both belong in the fingerprint).
+   */
   readonly datasetHash: string;
   /** Distinct sessions that contributed at least one mention. */
   readonly sessionCount: number;
@@ -293,11 +306,17 @@ function computeHallwaysRun(
       (a.right < b.right ? -1 : a.right > b.right ? 1 : 0),
   );
 
-  const datasetHash = deriveDatasetHash(
-    [...folded.incidence].flatMap(([id, sessions]) =>
+  // The hashed input set is everything the artifact below is a function
+  // of: the folded (family, key, session) incidence lines AND the
+  // dismissed key ids, each under its own separator prefix so the two
+  // input spaces can never collide. A dismissal changes `keys`, so it
+  // must change the fingerprint too.
+  const datasetHash = deriveDatasetHash([
+    ...[...folded.incidence].flatMap(([id, sessions]) =>
       [...sessions].map((session) => `${id}${PAIR_SEPARATOR}${session}`),
     ),
-  );
+    ...[...opts.dismissed].map((id) => `dismissed${PAIR_SEPARATOR}${id}`),
+  ]);
 
   return Object.freeze({
     schema: HALLWAYS_SCHEMA_VERSION,
