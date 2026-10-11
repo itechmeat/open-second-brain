@@ -425,3 +425,69 @@ describe("project scope (Task 18)", () => {
     expect(() => listSessionSummaries(vault, { project: "***" })).toThrow(SessionSummaryError);
   });
 });
+
+describe("explicit no-session semantics (t_22d58fa7)", () => {
+  /**
+   * Seed one digest record whose payload names no session, the way a
+   * writer that stamps `session_id` conditionally leaves the key absent.
+   * `sessionId` replaces the identity wholesale, so a test can also seed a
+   * non-string value - the coercion the reads used to perform.
+   */
+  function seedDigest(sessionId: unknown): ContinuityRecord {
+    return appendContinuityRecord(vault, {
+      kind: "session_summary_digest",
+      createdAt: "2026-06-14T10:00:00.000Z",
+      sourceRefs: [{ id: "s-x", kind: "session" }],
+      payload: {
+        decisions: ["unattributed"],
+        content_hash: "0123456789abcdef",
+        ...(sessionId !== undefined ? { session_id: sessionId } : {}),
+      },
+    });
+  }
+
+  test("no-session records are skipped by the reads, never matched against the empty string", () => {
+    seedDigest(undefined);
+    seedDigest(undefined);
+
+    // The reads used to coerce the missing key to "" and answer a report
+    // that lumped every unrelated no-session digest into one phantom
+    // session; "" asks for a session that no writer ever named.
+    expect(getSessionSummaryReport(vault, "")).toBeNull();
+    expect(listSessionSummaries(vault, { sessionId: "" })).toEqual([]);
+  });
+
+  test("a non-string session_id is excluded, not coerced into a scope match", () => {
+    const numeric = seedDigest(7);
+
+    // The read used to stringify 7 and match a scope asked for as "7".
+    expect(listSessionSummaries(vault, { sessionId: "7" })).toEqual([]);
+
+    // Unscoped reads still return the record.
+    expect(listSessionSummaries(vault).map((digest) => digest.id)).toEqual([numeric.id]);
+  });
+
+  test("a no-session digest carries no sessionId key, and a session digest keeps its own", () => {
+    const blank = seedDigest(undefined);
+    const attributed = appendSessionSummary(vault, {
+      sessionId: "s-present",
+      decisions: ["attributed"],
+      createdAt: "2026-06-14T11:00:00.000Z",
+    });
+
+    const digests = listSessionSummaries(vault);
+    const blankDigest = digests.find((digest) => digest.id === blank.id)!;
+    expect("sessionId" in blankDigest).toBe(false);
+    expect(Object.keys(blankDigest).toSorted()).toEqual([
+      "createdAt",
+      "decisions",
+      "id",
+      "learnings",
+      "nextSteps",
+      "request",
+    ]);
+
+    const presentDigest = digests.find((digest) => digest.id === attributed.id)!;
+    expect(presentDigest.sessionId).toBe("s-present");
+  });
+});

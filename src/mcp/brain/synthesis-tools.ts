@@ -74,7 +74,9 @@ const PROJECT_SCOPE_MAX_LEN = 128;
 function serializeDigest(digest: SessionSummaryDigest): Record<string, unknown> {
   return {
     id: digest.id,
-    session_id: digest.sessionId,
+    // Presence-gated with the digest shape (t_22d58fa7): a record naming
+    // no session carries no session_id key, never a fabricated "".
+    ...(digest.sessionId !== undefined ? { session_id: digest.sessionId } : {}),
     request: digest.request,
     decisions: digest.decisions,
     learnings: digest.learnings,

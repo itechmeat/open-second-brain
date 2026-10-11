@@ -29,6 +29,14 @@ const USAGE =
   "       o2b brain session-summary get --session <id> [--json]\n" +
   "       o2b brain session-summary list [--session <id>] [--json]";
 
+/**
+ * The text-mode stand-in for a digest whose record names no session
+ * (t_22d58fa7). A dash, not an id and not the empty string the old
+ * `String(... ?? "")` coercion manufactured - a no-session record is
+ * rendered as having none, never as belonging to some session.
+ */
+const NO_SESSION_RENDER = "-";
+
 export async function cmdBrainSessionSummary(argv: string[]): Promise<number> {
   const subcommand = argv[0];
   if (subcommand === "write") return writeSummary(argv.slice(1));
@@ -160,8 +168,9 @@ function listSummaries(argv: string[]): number {
   }
   process.stdout.write(`${digests.length} session summary record(s)\n`);
   for (const digest of digests) {
+    const session = digest.sessionId ?? NO_SESSION_RENDER;
     process.stdout.write(
-      `  ${digest.createdAt}  ${digest.sessionId}  d=${digest.decisions.length} l=${digest.learnings.length} n=${digest.nextSteps.length}\n`,
+      `  ${digest.createdAt}  ${session}  d=${digest.decisions.length} l=${digest.learnings.length} n=${digest.nextSteps.length}\n`,
     );
   }
   return 0;
@@ -170,7 +179,9 @@ function listSummaries(argv: string[]): number {
 function serialize(digest: SessionSummaryDigest): Record<string, unknown> {
   return {
     id: digest.id,
-    session_id: digest.sessionId,
+    // Presence-gated with the digest shape (t_22d58fa7): a record naming
+    // no session carries no session_id key, never a fabricated "".
+    ...(digest.sessionId !== undefined ? { session_id: digest.sessionId } : {}),
     request: digest.request,
     decisions: digest.decisions,
     learnings: digest.learnings,
@@ -184,7 +195,7 @@ function serialize(digest: SessionSummaryDigest): Record<string, unknown> {
 }
 
 function renderDigest(digest: SessionSummaryDigest): string {
-  const lines = [`session ${digest.sessionId}  (${digest.createdAt})`];
+  const lines = [`session ${digest.sessionId ?? NO_SESSION_RENDER}  (${digest.createdAt})`];
   if (digest.request !== null) lines.push(`  request: ${digest.request}`);
   appendCategory(lines, "decisions", digest.decisions);
   appendCategory(lines, "learnings", digest.learnings);

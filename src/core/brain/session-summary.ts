@@ -36,6 +36,7 @@ import { createHash } from "node:crypto";
 import { compositeScopeKey } from "../scope-key.ts";
 import { appendContinuityRecord, listContinuityRecords } from "./continuity/store.ts";
 import type { ContinuityRecord, ContinuitySourceRef } from "./continuity/types.ts";
+import { sessionIdOf } from "./session-recall.ts";
 import { resolveSessionScope, SessionScopeError } from "./session-scope.ts";
 
 export class SessionSummaryError extends Error {
@@ -67,7 +68,14 @@ export interface SessionSummaryInput {
 
 export interface SessionSummaryDigest {
   readonly id: string;
-  readonly sessionId: string;
+  /**
+   * The session the digest is scoped to, presence-gated (t_22d58fa7):
+   * omitted when the record names no session - the key absent, a
+   * non-string value, or the empty string. Absence stays absence; the
+   * `String(... ?? "")` coercion this replaces manufactured a `""`
+   * identity no writer ever stamped.
+   */
+  readonly sessionId?: string;
   readonly request: string | null;
   readonly decisions: ReadonlyArray<string>;
   readonly learnings: ReadonlyArray<string>;
@@ -239,8 +247,11 @@ export function getSessionSummaryReport(
   sessionId: string,
 ): SessionSummaryReport | null {
   const id = sessionId.trim();
+  // A record naming no session is skipped, never matched: the reads used
+  // to coerce the missing key to "" and answer a `""`-scoped read with
+  // every unrelated no-session digest lumped into one phantom session.
   const records = sessionDigestRecords(vault).filter(
-    (record) => String(record.payload["session_id"] ?? "") === id,
+    (record) => sessionIdOf(record.payload) === id,
   );
   if (records.length === 0) return null;
   const revisions = records.length;
@@ -335,9 +346,10 @@ export function listSessionSummaries(
   const project = normalizeProject(opts.project);
   return Object.freeze(
     sessionDigestRecords(vault)
-      .filter(
-        (record) => scope === undefined || String(record.payload["session_id"] ?? "") === scope,
-      )
+      // Same skip-not-match rule as the single-session read: a record
+      // naming no session is not in the asked-for session, and a coerced
+      // "" must never make it look like it is.
+      .filter((record) => scope === undefined || sessionIdOf(record.payload) === scope)
       .filter((record) => project === undefined || readProject(record.payload) === project)
       .map(toDigest),
   );
@@ -370,9 +382,10 @@ function toDigest(record: ContinuityRecord): SessionSummaryDigest {
   const payload = record.payload;
   const host = typeof payload["host"] === "string" ? (payload["host"] as string) : undefined;
   const project = readProject(payload);
+  const sessionId = sessionIdOf(payload);
   return Object.freeze({
     id: record.id,
-    sessionId: String(payload["session_id"] ?? ""),
+    ...(sessionId !== undefined ? { sessionId } : {}),
     request: typeof payload["request"] === "string" ? (payload["request"] as string) : null,
     decisions: readList(payload["decisions"]),
     learnings: readList(payload["learnings"]),

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
 import { appendSessionSummary } from "../../src/core/brain/session-summary.ts";
+import { appendContinuityRecord } from "../../src/core/brain/continuity/store.ts";
 
 let vault: string;
 
@@ -245,5 +246,22 @@ describe("brain_session_summary project scope (Task 18)", () => {
     const tool = buildToolTable("full").find((entry) => entry.name === "brain_session_summary");
     const properties = (tool!.inputSchema as { properties: Record<string, unknown> }).properties;
     expect(properties["project_scope"]).toBeDefined();
+  });
+
+  test("list renders a no-session digest without a fabricated session_id", async () => {
+    // Seeded directly, the way a writer that stamps `session_id`
+    // conditionally leaves the key absent.
+    appendContinuityRecord(vault, {
+      kind: "session_summary_digest",
+      createdAt: "2026-06-14T10:00:00.000Z",
+      sourceRefs: [{ id: "s-none", kind: "session" }],
+      payload: { decisions: ["unattributed"], content_hash: "0123456789abcdef" },
+    });
+
+    const listed = payload(await call({ operation: "list" }));
+    expect(listed["count"]).toBe(1);
+    const digest = (listed["digests"] as Array<Record<string, unknown>>)[0]!;
+    expect("session_id" in digest).toBe(false);
+    expect(digest["decisions"]).toEqual(["unattributed"]);
   });
 });

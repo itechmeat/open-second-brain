@@ -21,6 +21,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { appendSessionSummary } from "../../src/core/brain/session-summary.ts";
+import { appendContinuityRecord } from "../../src/core/brain/continuity/store.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
 let tmp: string;
@@ -213,4 +214,32 @@ test("get for an unknown session --json prints exactly the found:false envelope"
   const r = await run(["get", "--session", "missing", "--json"]);
   expect(r.returncode).toBe(0);
   expect(r.stdout).toBe(`${JSON.stringify({ found: false }, null, 2)}\n`);
+});
+
+test("list renders a no-session digest without crashing and without fabricating an id", async () => {
+  // Seeded directly, the way a writer that stamps `session_id`
+  // conditionally leaves the key absent.
+  appendContinuityRecord(vault, {
+    kind: "session_summary_digest",
+    createdAt: "2026-06-14T10:00:00.000Z",
+    sourceRefs: [{ id: "s-none", kind: "session" }],
+    payload: { decisions: ["unattributed"], content_hash: "0123456789abcdef" },
+  });
+
+  const json = await run(["list", "--json"]);
+  expect(json.returncode).toBe(0);
+  const payload = JSON.parse(json.stdout) as {
+    count: number;
+    digests: Array<Record<string, unknown>>;
+  };
+  expect(payload.count).toBe(1);
+  expect("session_id" in payload.digests[0]!).toBe(false);
+  expect(payload.digests[0]!.decisions).toEqual(["unattributed"]);
+
+  const text = await run(["list"]);
+  expect(text.returncode).toBe(0);
+  expect(text.stdout).toContain("1 session summary record(s)");
+  // The session column holds the no-session stand-in, never a fabricated
+  // id and never the empty string the old coercion produced.
+  expect(text.stdout).toContain("  -  d=1");
 });
