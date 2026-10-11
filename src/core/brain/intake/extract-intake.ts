@@ -30,11 +30,41 @@
  * lane: the entities it introduces land quarantined and marked, and they are
  * records of what an untrusted source claimed rather than edits to what the
  * operator already holds.
+ *
+ * Disposition contract (write-side trust, Task 12): the CALLING lane resolves
+ * the review disposition ONCE for the logical write this intake belongs to and
+ * hands the verdict in through {@link IntakeOptions.disposition}. The arms:
+ *
+ *   - deny never reaches this primitive - the caller's gate refuses the whole
+ *     write (no entity page, no manifest row, no summary page) before the
+ *     intake runs, and this module performs no consult of its own, so two
+ *     consultations of one write can never disagree;
+ *   - `publish` (the default when the option is absent) is byte-identical to
+ *     the behavior before the contract existed;
+ *   - `stage` stages: every page the intake CREATES lands in the review queue
+ *     (`Brain/pending/notes/`, the one lane whose publish target can address
+ *     the entity tree) instead of staying in the canonical registry, carrying
+ *     the relations applied before staging, so the operator reviews and the
+ *     queue's apply publishes exactly the page a publish intake would have
+ *     written. The UPDATE arm is untouched - already-admitted records are
+ *     mutations, and the review boundary is entry, not mutation.
+ *
+ * The contract covers what this primitive writes. Every OTHER registration
+ * row of the same logical write - the ingest pipeline's manifest row above
+ * all - owes the same verdict at its own write site, so a staged ingest does
+ * not record itself as done while its output awaits review.
  */
 
+import { readFileSync, unlinkSync } from "node:fs";
+import { relative } from "node:path";
+
+import { canonicalNotePath } from "../../path-safety.ts";
 import { isKnownRelation, normalizeRelation } from "../../graph/relation-vocab.ts";
 import { TRANSPORT_REACH } from "../../graph/transport-reach.ts";
 import { isPathReadableAtReach, type FrontmatterCache } from "../../search/result-filters.ts";
+import { entityPath } from "../paths.ts";
+import { stageForReview } from "../pending/pending-lanes.ts";
+import { REVIEW_LANE } from "../write-gate.ts";
 import { validateEntityCategory, normalizeEntityName } from "../entities/canonical.ts";
 import { relateEntities, upsertEntity } from "../entities/registry.ts";
 import { renderProvenanceSection, type Provenance } from "../provenance/provenance.ts";
@@ -93,6 +123,27 @@ export interface IntakeOptions {
    * (untrusted lane, no digest), exactly like an absent file.
    */
   readonly readable?: (rel: string) => boolean;
+  /**
+   * The review disposition the CALLING lane already resolved for the logical
+   * write this intake belongs to (write-side trust, Task 12) - resolved once,
+   * by the caller that knows the subject and the target, never re-consulted
+   * here. Absent means `publish`, which is byte-identical to the behavior
+   * before this option existed. `deny` is not expressible: the caller's gate
+   * refused the whole write before the intake runs. On `stage` the pages this
+   * intake CREATES stage into review (`Brain/pending/notes/`) instead of
+   * staying published - see the module docblock for the full contract.
+   */
+  readonly disposition?: "publish" | "stage";
+}
+
+/** One created entity page this intake staged into review instead of publishing. */
+export interface StagedEntityPage {
+  /** Id of the created (and now staged) entity. */
+  readonly entityId: string;
+  /** Id of the pending queue entry holding the staged page. */
+  readonly pendingId: string;
+  /** Vault-relative canonical path the queue's apply publishes the page at. */
+  readonly publishTarget: string;
 }
 
 export interface IntakeResult {
@@ -108,6 +159,13 @@ export interface IntakeResult {
    * source a second time and reporting an answer that could disagree.
    */
   readonly trust: IntakeTrust;
+  /**
+   * Present only under a `stage` disposition ({@link IntakeOptions.disposition}):
+   * the created entity pages that went to the review queue instead of staying
+   * in the canonical registry, in creation order. Absent for a publish intake,
+   * which leaves every created page in place.
+   */
+  readonly stagedEntityPages?: ReadonlyArray<StagedEntityPage>;
 }
 
 /** A typed extraction failed structural validation; nothing was written. */
@@ -248,6 +306,9 @@ export function intakeExtraction(
 
   const entitiesCreated: string[] = [];
   const entitiesUpdated: string[] = [];
+  // Categories of the created records, beside their ids: the staging step
+  // below needs both to name a created page's canonical path.
+  const createdPages: { readonly id: string; readonly category: string }[] = [];
 
   for (const entity of intake.entities) {
     const category = validateEntityCategory(entity.category);
@@ -269,8 +330,12 @@ export function intakeExtraction(
       ...(untrustedOrigin ? { untrustedOrigin } : {}),
       ...(origin.contentHash !== undefined ? { sourceContentHash: origin.contentHash } : {}),
     });
-    if (res.created) entitiesCreated.push(res.entity.id);
-    else entitiesUpdated.push(res.entity.id);
+    if (res.created) {
+      entitiesCreated.push(res.entity.id);
+      createdPages.push({ id: res.entity.id, category: res.entity.category });
+    } else {
+      entitiesUpdated.push(res.entity.id);
+    }
   }
 
   let relationsApplied = 0;
@@ -291,5 +356,34 @@ export function intakeExtraction(
     relationsApplied += 1;
   }
 
-  return { entitiesCreated, entitiesUpdated, relationsApplied, trust: origin.trust };
+  // Disposition contract, stage arm: AFTER the relations, so the staged bytes
+  // are the finished pages a publish intake would have left behind. Each
+  // created page is staged FIRST and only then removed from the canonical
+  // tree - a crash between the two leaves both copies (the queue's apply
+  // names the occupied target) and never a lost page.
+  const stagedEntityPages =
+    opts.disposition === "stage" && createdPages.length > 0
+      ? createdPages.map((page) => {
+          const publishTarget = canonicalNotePath(
+            relative(vault, entityPath(vault, page.category, page.id)),
+          );
+          const bytes = readFileSync(entityPath(vault, page.category, page.id), "utf8");
+          const { pendingId } = stageForReview(
+            vault,
+            REVIEW_LANE.notes,
+            publishTarget,
+            () => bytes,
+          );
+          unlinkSync(entityPath(vault, page.category, page.id));
+          return { entityId: page.id, pendingId, publishTarget };
+        })
+      : undefined;
+
+  return {
+    entitiesCreated,
+    entitiesUpdated,
+    relationsApplied,
+    trust: origin.trust,
+    ...(stagedEntityPages !== undefined ? { stagedEntityPages } : {}),
+  };
 }
