@@ -237,7 +237,7 @@ describe("answer-quote-check hook - annotation rendering", () => {
     const found = annotations(run);
     // One aggregate annotation, never one annotation per span.
     expect(found.length).toBe(1);
-    const lines = found[0].split("\n");
+    const lines = found[0]!.split("\n");
     expect(lines).toHaveLength(4); // header + two findings + footer
     expect(lines[1]).toContain("[not-in-note]");
     expect(lines[1]).toContain("reuses pooled capital");
@@ -257,7 +257,7 @@ describe("answer-quote-check hook - annotation rendering", () => {
     const run = await runHook();
     const found = annotations(run);
     expect(found.length).toBe(1);
-    const lines = found[0].split("\n");
+    const lines = found[0]!.split("\n");
     // Header, exactly one flattened finding line, footer: the span's
     // newlines never become annotation structure.
     expect(lines).toHaveLength(3);
@@ -277,7 +277,7 @@ describe("answer-quote-check hook - annotation rendering", () => {
     const run = await runHook();
     const found = annotations(run);
     expect(found.length).toBe(1);
-    const finding = found[0].split("\n")[1]!;
+    const finding = found[0]!.split("\n")[1]!;
     expect(finding.startsWith('- [not-in-note] "')).toBe(true);
     expect(finding.length).toBeLessThan(QUOTE_SPAN_PREVIEW_MAX_CHARS + 40);
   });
@@ -296,7 +296,7 @@ describe("answer-quote-check hook - annotation rendering", () => {
     const run = await runHook();
     const found = annotations(run);
     expect(found.length).toBe(1);
-    const lines = found[0].split("\n");
+    const lines = found[0]!.split("\n");
     // Header + the capped findings + one overflow line + footer.
     expect(lines).toHaveLength(ANSWER_QUOTE_MAX_FINDINGS + 3);
     expect(lines[0]).toContain(`${spans.length} quoted span(s)`);
