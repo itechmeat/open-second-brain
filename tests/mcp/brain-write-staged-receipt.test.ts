@@ -21,11 +21,15 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { tmpdir } from "node:os";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import { entityPath } from "../../src/core/brain/paths.ts";
+import { canonicalNotePath } from "../../src/core/path-safety.ts";
+import { listPendingLane } from "../../src/core/brain/pending/pending-lanes.ts";
+import { REVIEW_LANE } from "../../src/core/brain/write-gate.ts";
 import { NOTES_TOOLS } from "../../src/mcp/brain/notes-tools.ts";
 import { WRITE_BATCH_TOOLS } from "../../src/mcp/brain/write-batch-tools.ts";
 import { INGEST_TOOLS } from "../../src/mcp/brain/ingest-tools.ts";
@@ -225,7 +229,7 @@ describe("a retried write over a still-pending stage answers the named code", ()
     expect(String(refused?.message)).toContain("already staged for review");
   });
 
-  test("brain_ingest_source carries pending-stage-conflict for a still-pending summary", async () => {
+  test("brain_ingest_source carries pending-stage-conflict for a still-pending stage", async () => {
     mkdirSync(join(vault, "Articles"), { recursive: true });
     writeFileSync(join(vault, "Articles/dup.md"), "source bytes\n", "utf8");
     const first = (await ingestSource(ctx, {
@@ -234,7 +238,15 @@ describe("a retried write over a still-pending stage answers the named code", ()
       entities: [{ category: "concept", name: "Rollups" }],
     })) as Record<string, unknown>;
     expect(first["staged"]).toBe(true);
-    const holdingId = first["pending_id"] as string;
+    // A staged ingest queues its created entity pages beside the summary,
+    // so the retry's FIRST collision is the still-pending entity page at
+    // its canonical publish target - not the summary entry.
+    const created = (first["entities_created"] as ReadonlyArray<string>)[0]!;
+    const entityTarget = canonicalNotePath(relative(vault, entityPath(vault, "concept", created)));
+    const holdingEntry = listPendingLane(vault, REVIEW_LANE.notes).entries.find(
+      (e) => e.publishTarget === entityTarget,
+    );
+    expect(holdingEntry).toBeDefined();
     let refused: MCPError | undefined;
     try {
       await ingestSource(ctx, {
@@ -249,7 +261,7 @@ describe("a retried write over a still-pending stage answers the named code", ()
     expect(refused?.code).toBe(INVALID_PARAMS);
     const data = (refused?.data ?? {}) as Record<string, unknown>;
     expect(data["code"]).toBe("pending-stage-conflict");
-    expect(data["existing_id"]).toBe(holdingId);
-    expect(data["target"]).toBe(first["summary_path"]);
+    expect(data["existing_id"]).toBe(holdingEntry?.id);
+    expect(data["target"]).toBe(entityTarget);
   });
 });
