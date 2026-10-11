@@ -31,9 +31,16 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { sqliteVecLoadable } from "../../helpers/sqlite-vec.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
-import { applyMigrations, ensureVecTable } from "../../../src/core/search/schema.ts";
+import {
+  ATTRIBUTE_MAX_KEYS_PER_DOCUMENT,
+  applyMigrations,
+  ensureVecTable,
+} from "../../../src/core/search/schema.ts";
 import { search } from "../../../src/core/search/search.ts";
-import { buildCacheKey } from "../../../src/core/search/query-cache.ts";
+import {
+  buildCacheKey,
+  canonicalAttributeNarrowing,
+} from "../../../src/core/search/query-cache.ts";
 import { keywordTopK, keywordTopKSql } from "../../../src/core/search/store/keyword.ts";
 import { semanticTopK, semanticTopKSql } from "../../../src/core/search/store/vectors.ts";
 import { resolvePoolFilters } from "../../../src/core/search/pipeline/pool-filters.ts";
@@ -81,6 +88,25 @@ async function seedVault(): Promise<void> {
     vault,
     "projects/plan.md",
     note("Plan", "type: note\nstatus: active\n", "lattice delta plan #urgent"),
+  );
+  await indexVault(makeConfig({ vault, dbPath }));
+}
+
+/**
+ * A linked pair for the traversal-arm gate: alpha (type note) links bravo
+ * (type report), whose body never matches the query - so bravo can only
+ * enter the pool through link expansion, never through a lane's SQL.
+ */
+async function seedLinkedVault(): Promise<void> {
+  writeMd(
+    vault,
+    "linked/alpha.md",
+    note("Alpha", "type: note\nstatus: active\n", "delta bridge anchor\n\nsee [[linked/bravo.md]]"),
+  );
+  writeMd(
+    vault,
+    "linked/bravo.md",
+    note("Bravo", "type: report\nstatus: active\n", "unrelated inventory body"),
   );
   await indexVault(makeConfig({ vault, dbPath }));
 }
@@ -167,7 +193,12 @@ describe("the promoted-key split", () => {
         ["status", ["active"]],
       ]),
     );
-    expect(split.pushdown).toEqual({ pageTypes: ["note"] });
+    // The unpromoted half also narrows candidates against the attributes
+    // side table while keeping its post-rank arbiter (narrowing wave).
+    expect(split.pushdown).toEqual({
+      pageTypes: ["note"],
+      attributeNarrowing: [{ key: "status", values: ["active"] }],
+    });
     expect(split.fallback).not.toBeNull();
     expect([...split.fallback!.keys()]).toEqual(["status"]);
   });
@@ -430,6 +461,34 @@ describe("end-to-end over an indexed vault", () => {
   });
 });
 
+describe("the promoted filter gates traversal-arm candidates", () => {
+  test("a type filter drops a link-expanded note of another kind", async () => {
+    const cfg = makeConfig({ vault, dbPath });
+    await seedLinkedVault();
+    // Default maxHops is 1: bravo matches nothing, so the ONLY way it can
+    // surface is link expansion off alpha - a candidate source the lanes'
+    // SQL never judged. The live property filter must gate it anyway.
+    const filtered = await search(cfg, {
+      query: "delta",
+      keywordOnly: true,
+      visibility: ["public"],
+      properties: new Map([["type", ["note"]]]),
+    });
+    expect(filtered.results.map((r) => r.path)).toEqual(["linked/alpha.md"]);
+  });
+
+  test("without the filter the expansion still surfaces (the gate is the filter's)", async () => {
+    const cfg = makeConfig({ vault, dbPath });
+    await seedLinkedVault();
+    const unfiltered = await search(cfg, {
+      query: "delta",
+      keywordOnly: true,
+      visibility: ["public"],
+    });
+    expect(unfiltered.results.map((r) => r.path)).toContain("linked/bravo.md");
+  });
+});
+
 describe("the query cache key grows for kind", () => {
   const base = { query: "delta", limit: 5 };
   test("a kind partitions the key; absent stays byte-identical", () => {
@@ -518,6 +577,205 @@ describe("the MCP and CLI surfaces", () => {
       "payload",
     ]);
     expect(code).toBe(0);
+  });
+});
+
+describe("the unpromoted attribute narrowing (document_attributes)", () => {
+  test("the split keeps unpromoted keys in the live fallback AND compiles them to narrowing", () => {
+    const split = resolvePropertyPushdown(new Map([["status", ["active"]]]));
+    // The live post-rank filter stays the arbiter: the key remains in the
+    // fallback half, so the pool keeps its property-filter overfetch and
+    // every surfaced row is re-judged against the live file.
+    expect(split.fallback).not.toBeNull();
+    expect([...split.fallback!.keys()]).toEqual(["status"]);
+    expect(split.pushdown).toEqual({
+      attributeNarrowing: [{ key: "status", values: ["active"] }],
+    });
+  });
+
+  test("an unpushable promoted spelling never becomes narrowing", () => {
+    // The attributes side table skips the promoted keys entirely, so a
+    // promoted key has no narrowing rows to read: it stays a pure
+    // post-rank filter, exactly as before the narrowing existed.
+    const split = resolvePropertyPushdown(new Map([["pinned", ["false"]]]));
+    expect(split.pushdown).toBeNull();
+    expect([...split.fallback!.keys()]).toEqual(["pinned"]);
+  });
+
+  test("absent and empty maps narrow nothing", () => {
+    expect(resolvePropertyPushdown(undefined).pushdown).toBeNull();
+    expect(resolvePropertyPushdown(new Map()).pushdown).toBeNull();
+    expect(resolvePropertyPushdown(new Map()).fallback).toBeNull();
+  });
+
+  test("the keyword lane WHERE gains the attributes EXISTS; the default string stays byte-identical", () => {
+    expect(keywordTopKSql({})).not.toContain("document_attributes");
+    const sql = keywordTopKSql({
+      pushdown: { attributeNarrowing: [{ key: "status", values: ["active", "draft"] }] },
+    });
+    const where = sql.indexOf("WHERE");
+    const exists = sql.indexOf("document_attributes");
+    expect(exists).toBeGreaterThan(where);
+    expect(exists).toBeLessThan(sql.indexOf("ORDER BY"));
+    expect(sql).toContain("an0.key = ?");
+    expect(sql).toContain("NOT EXISTS");
+  });
+
+  test("the lane narrows provable mismatches and keeps documents the table cannot speak for", () => {
+    const db = new Database(":memory:");
+    try {
+      applyMigrations(db);
+      const insertDoc = db.query<{ id: number }, [string]>(
+        "INSERT INTO documents(path, content_hash, mtime, size, created_at, updated_at, indexed_at) " +
+          "VALUES (?, 'h', 0, 0, 'n', 'n', 'n') RETURNING id",
+      );
+      const insertChunk = db.query(
+        "INSERT INTO chunks(document_id, chunk_index, content, fts_content, content_hash, start_line, end_line, token_count, created_at, updated_at) " +
+          "VALUES (?, 0, ?, ?, 'h', 1, 1, 3, 'n', 'n')",
+      );
+      const insertAttr = db.query(
+        "INSERT OR IGNORE INTO document_attributes(document_id, key, value) VALUES (?, ?, ?)",
+      );
+      const doc = (path: string, text: string): number => {
+        const id = insertDoc.get(path)!.id;
+        insertChunk.run(id, text, text);
+        return id;
+      };
+      const a = doc("notes/a.md", "lattice delta active");
+      insertAttr.run(a, "status", "active");
+      const b = doc("notes/b.md", "lattice delta archived");
+      insertAttr.run(b, "status", "archived");
+      // No attribute rows at all: the table cannot speak for this document.
+      const c = doc("notes/c.md", "lattice delta plain");
+      // Attributes at the key bound: the table holds key00..key63 and the
+      // frontmatter may have declared more, so key63 has no stored verdict.
+      const d = doc("notes/d.md", "lattice delta overflow");
+      for (let i = 0; i < ATTRIBUTE_MAX_KEYS_PER_DOCUMENT; i++) {
+        insertAttr.run(d, `key${String(i).padStart(2, "0")}`, `v${i}`);
+      }
+
+      const all = keywordTopK(db, '"delta"', { limit: 10 });
+      expect(all.length).toBe(4);
+      const narrowed = keywordTopK(db, '"delta"', {
+        limit: 10,
+        pushdown: { attributeNarrowing: [{ key: "status", values: ["active"] }] },
+      });
+      // b is a provable mismatch (stored rows, none accepted) and drops out
+      // in SQL; a matches a stored row; c and d stay candidates because the
+      // table cannot speak for them - the live post-rank filter decides
+      // their fate over a pool one candidate smaller.
+      expect(narrowed.length).toBe(3);
+      expect(narrowed.map((h) => h.documentId)).not.toContain(b);
+      expect(narrowed.map((h) => h.documentId).toSorted()).toEqual([a, c, d].toSorted());
+      const unspoken = keywordTopK(db, '"delta"', {
+        limit: 10,
+        pushdown: { attributeNarrowing: [{ key: "key63", values: ["v63"] }] },
+      });
+      // key63 is over the bound: no document carries a stored verdict for
+      // it, so SQL alone may drop nothing.
+      expect(unspoken.length).toBe(4);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("end-to-end: narrowed candidates keep the post-rank-only answers and an over-bound key resolves live", async () => {
+    const cfg = makeConfig({ vault, dbPath });
+    writeMd(vault, "notes/note-a.md", note("Note A", "status: active\n", "lattice delta anchor"));
+    writeMd(vault, "notes/note-b.md", note("Note B", "status: archived\n", "lattice delta report"));
+    writeMd(vault, "notes/note-c.md", "# Note C\n\nlattice delta archive");
+    const keys = Array.from({ length: 70 }, (_, i) => `key${String(i).padStart(2, "0")}: v${i}`);
+    writeMd(vault, "notes/wide.md", `---\n${keys.join("\n")}\n---\n\n# Wide\n\nlattice delta wide`);
+    await indexVault(cfg);
+
+    // Differential pin: the answer equals the post-rank-only set - note-b
+    // is narrowed away in SQL (provable mismatch), note-c only ever falls
+    // to the live filter, and note-a passes both.
+    const active = await search(cfg, {
+      query: "delta",
+      keywordOnly: true,
+      visibility: ["public"],
+      properties: new Map([["status", ["active"]]]),
+    });
+    expect(active.results.map((r) => r.path)).toEqual(["notes/note-a.md"]);
+
+    // The 65th key is past the 64-key bound: the table holds no verdict for
+    // it, so the narrowing keeps wide.md and the live filter resolves it.
+    const over = await search(cfg, {
+      query: "delta",
+      keywordOnly: true,
+      visibility: ["public"],
+      properties: new Map([["key64", ["v64"]]]),
+    });
+    expect(over.results.map((r) => r.path)).toEqual(["notes/wide.md"]);
+
+    // AND across keys: no document satisfies both halves.
+    const none = await search(cfg, {
+      query: "delta",
+      keywordOnly: true,
+      visibility: ["public"],
+      properties: new Map([
+        ["status", ["active"]],
+        ["key64", ["v64"]],
+      ]),
+    });
+    expect(none.results).toEqual([]);
+  });
+});
+
+describe("the query cache key grows for unpromoted attribute filters", () => {
+  const base = { query: "delta", limit: 5 };
+  test("the narrowing fold is present only for unpromoted keys", () => {
+    expect(canonicalAttributeNarrowing(undefined)).toBeNull();
+    expect(canonicalAttributeNarrowing(new Map())).toBeNull();
+    expect(canonicalAttributeNarrowing(new Map([["type", ["note"]]]))).toBeNull();
+    expect(canonicalAttributeNarrowing(new Map([["pinned", ["false"]]]))).toBeNull();
+    expect(
+      canonicalAttributeNarrowing(
+        new Map([
+          ["priority", ["3"]],
+          ["status", ["active", "draft"]],
+        ]),
+      ),
+    ).toEqual([
+      { key: "priority", values: ["3"] },
+      { key: "status", values: ["active", "draft"] },
+    ]);
+  });
+
+  test("an unpromoted filter partitions the key and stays order-independent", () => {
+    const status = buildCacheKey(
+      { ...base, properties: new Map([["status", ["active"]]]) },
+      "plan",
+      "cfg",
+    );
+    expect(buildCacheKey(base, "plan", "cfg")).not.toBe(status);
+    expect(
+      buildCacheKey({ ...base, properties: new Map([["status", ["active"]]]) }, "plan", "cfg"),
+    ).toBe(status);
+    const both = buildCacheKey(
+      {
+        ...base,
+        properties: new Map([
+          ["status", ["active"]],
+          ["priority", ["3"]],
+        ]),
+      },
+      "plan",
+      "cfg",
+    );
+    const reordered = buildCacheKey(
+      {
+        ...base,
+        properties: new Map([
+          ["priority", ["3"]],
+          ["status", ["active"]],
+        ]),
+      },
+      "plan",
+      "cfg",
+    );
+    expect(both).toBe(reordered);
   });
 });
 

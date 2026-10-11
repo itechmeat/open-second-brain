@@ -19,6 +19,16 @@
  * itself, the materialized bounds) has. Unpromoted keys keep the post-rank
  * live-file filter, so a mixed map deliberately straddles the two tiers.
  *
+ * The unpromoted keys get a third treatment on top of their post-rank
+ * filter (recall-quality, the attribute-narrowing wave): the v14
+ * `document_attributes` side table lets them NARROW the candidate pool in
+ * SQL. A narrowing never decides the answer - the bounded table can
+ * silently lack rows for over-bound documents, so a document the table
+ * cannot speak for is kept and the live post-rank filter stays the
+ * arbiter; the narrowing only shrinks what gets hydrated and reranked.
+ * The promoted keys never narrow: the side table deliberately skips them,
+ * so there are no rows to read.
+ *
  * A promoted key is pushed only when the push is FAITHFUL to the live
  * filter's verdict for every value the caller asked for; anything else
  * falls back rather than silently diverging:
@@ -36,6 +46,8 @@
  */
 
 import { normalizeSchemaToken } from "../brain/schema-vocab.ts";
+import { PROMOTED_ATTRIBUTE_KEYS } from "./schema.ts";
+import { attributeNarrowingFragment, type AttributeNarrowing } from "./store/documents.ts";
 import { SearchError } from "./search-error.ts";
 
 /** The chunk kinds a `kind` filter may name, and the only valid values. */
@@ -74,12 +86,28 @@ export interface PropertyPushdown {
   readonly tags?: ReadonlyArray<string>;
   /** `json_each(documents.visibility)` membership, normalized tokens. */
   readonly visibilityTokens?: ReadonlyArray<string>;
+  /**
+   * The unpromoted keys' candidate-narrowing predicates against
+   * `document_attributes` (see {@link attributeNarrowingFragment}). These
+   * keys ALSO stay in the post-rank fallback half: the narrowing only
+   * shrinks the pool, the live filter still decides every row.
+   */
+  readonly attributeNarrowing?: ReadonlyArray<AttributeNarrowing>;
 }
 
 /** The result of splitting a caller's property filter map. */
 export interface PropertyFilterSplit {
   /** The promoted half, already compiled to storage predicates; null if none. */
   readonly pushdown: PropertyPushdown | null;
+  /**
+   * The promoted half AS THE CALLER WROTE IT (raw keys and values, the
+   * live-filter shape), or null when nothing was promoted. The post-rank
+   * gate re-judges the candidate sources the lanes' SQL never saw -
+   * traversal-arm rows - with the same live predicate the fallback half
+   * runs, so a promoted filter constrains every result regardless of where
+   * the candidate entered the pool.
+   */
+  readonly promoted: PropertyFilterMap | null;
   /**
    * The remaining keys for the post-rank live-file filter; null when
    * nothing is left (the pool then needs no filter overfetch for
@@ -98,6 +126,31 @@ function pushableNormalized(values: ReadonlyArray<string>): ReadonlyArray<string
 }
 
 /**
+ * The unpromoted keys of a property filter map, as the attribute-narrowing
+ * read consumes them: keys in the NFC spelling the indexer stores, values
+ * verbatim (the stored scalar form is the exact string the live filter
+ * compares). Promoted keys never narrow - the side table skips them at
+ * extraction, so there is nothing there to read - and a key with no
+ * accepted values narrows nothing (the post-rank half answers its
+ * match-nothing semantics faithfully). Null when no key qualifies.
+ *
+ * Shared with the query-cache key builder so the cache and the lanes read
+ * one definition of "narrowing-eligible".
+ */
+export function attributeNarrowingEntries(
+  properties: PropertyFilterMap | undefined,
+): ReadonlyArray<AttributeNarrowing> | null {
+  if (!properties || properties.size === 0) return null;
+  const out: AttributeNarrowing[] = [];
+  for (const [key, values] of properties) {
+    if (PROMOTED_ATTRIBUTE_KEYS.has(key)) continue;
+    if (values.length === 0) continue;
+    out.push(Object.freeze({ key: key.normalize("NFC"), values: Object.freeze([...values]) }));
+  }
+  return out.length > 0 ? Object.freeze(out) : null;
+}
+
+/**
  * Split a property filter map into its pushable (promoted, as-indexed) and
  * post-rank (live-file) halves. Absent/empty maps split to null/null: no
  * predicate is pushed and no post-rank filter runs, byte-identical to a
@@ -106,13 +159,16 @@ function pushableNormalized(values: ReadonlyArray<string>): ReadonlyArray<string
 export function resolvePropertyPushdown(
   properties: PropertyFilterMap | undefined,
 ): PropertyFilterSplit {
-  if (!properties || properties.size === 0) return { pushdown: null, fallback: null };
+  if (!properties || properties.size === 0) {
+    return { pushdown: null, promoted: null, fallback: null };
+  }
   const acc: {
     pageTypes?: ReadonlyArray<string>;
     pinned?: boolean;
     tags?: ReadonlyArray<string>;
     visibilityTokens?: ReadonlyArray<string>;
   } = {};
+  const promotedMap = new Map<string, string[]>();
   const fallback = new Map<string, string[]>();
   for (const [key, values] of properties) {
     const accepted = [...values];
@@ -121,12 +177,14 @@ export function resolvePropertyPushdown(
       const normalized = pushableNormalized(accepted);
       if (normalized !== null) {
         acc.pageTypes = normalized;
+        promotedMap.set(key, accepted);
         pushed = true;
       }
     } else if (key === "visibility") {
       const normalized = pushableNormalized(accepted);
       if (normalized !== null) {
         acc.visibilityTokens = normalized;
+        promotedMap.set(key, accepted);
         pushed = true;
       }
     } else if (key === "pinned") {
@@ -135,6 +193,7 @@ export function resolvePropertyPushdown(
       // parser folds exotic spellings to false on the live side too.
       if (accepted.length > 0 && accepted.every((v) => v === "true")) {
         acc.pinned = true;
+        promotedMap.set(key, accepted);
         pushed = true;
       }
     } else if (key === "tags") {
@@ -142,26 +201,41 @@ export function resolvePropertyPushdown(
       // matches nothing, which the post-rank path answers faithfully.
       if (accepted.length > 0) {
         acc.tags = accepted;
+        promotedMap.set(key, accepted);
         pushed = true;
       }
     }
     if (!pushed) fallback.set(key, accepted);
   }
+  // The unpromoted half also narrows the candidate pool against the v14
+  // attributes side table (`attributeNarrowingFragment` for the
+  // arbitration shape): SQL may exclude only a provable mismatch, and the
+  // keys stay in `fallback` above, so the live post-rank filter still
+  // judges every surfaced row.
+  const narrowing = attributeNarrowingEntries(properties);
+  const promoted =
+    acc.pageTypes !== undefined ||
+    acc.pinned === true ||
+    acc.tags !== undefined ||
+    acc.visibilityTokens !== undefined;
   return {
     pushdown:
-      acc.pageTypes !== undefined ||
-      acc.pinned === true ||
-      acc.tags !== undefined ||
-      acc.visibilityTokens !== undefined
+      promoted || narrowing !== null
         ? Object.freeze({
-            ...(acc.pageTypes !== undefined ? { pageTypes: acc.pageTypes } : {}),
-            ...(acc.pinned === true ? { pinned: true } : {}),
-            ...(acc.tags !== undefined ? { tags: acc.tags } : {}),
-            ...(acc.visibilityTokens !== undefined
-              ? { visibilityTokens: acc.visibilityTokens }
+            ...(promoted
+              ? {
+                  ...(acc.pageTypes !== undefined ? { pageTypes: acc.pageTypes } : {}),
+                  ...(acc.pinned === true ? { pinned: true } : {}),
+                  ...(acc.tags !== undefined ? { tags: acc.tags } : {}),
+                  ...(acc.visibilityTokens !== undefined
+                    ? { visibilityTokens: acc.visibilityTokens }
+                    : {}),
+                }
               : {}),
+            ...(narrowing !== null ? { attributeNarrowing: narrowing } : {}),
           })
         : null,
+    promoted: promotedMap.size > 0 ? promotedMap : null,
     fallback: fallback.size > 0 ? fallback : null,
   };
 }
@@ -203,6 +277,16 @@ export function pushdownSqlFragment(
         `WHERE pvis.value IN (${placeholders(pushdown.visibilityTokens.length)}))`,
     );
     bindings.push(...pushdown.visibilityTokens);
+  }
+  if (pushdown.attributeNarrowing !== undefined) {
+    // Candidate narrowing only (recall-quality): the fragment keeps every
+    // document the bounded table cannot speak for, and the keys stay in the
+    // post-rank fallback, so this never decides a row on its own.
+    const narrowing = attributeNarrowingFragment(pushdown.attributeNarrowing);
+    if (narrowing !== null) {
+      clauses.push(narrowing.sql);
+      bindings.push(...narrowing.bindings);
+    }
   }
   if (clauses.length === 0) return null;
   return { sql: clauses.join(" AND "), bindings };

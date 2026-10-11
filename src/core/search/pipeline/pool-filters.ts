@@ -11,7 +11,11 @@ import { normalizeAgentScope } from "../../graph/agent-scope.ts";
 import { normalizeVisibilityScope } from "../../graph/visibility.ts";
 import { resolvedTransportReach, type TransportReach } from "../../graph/transport-reach.ts";
 import { normalizeScopeFilter } from "../../scope-key.ts";
-import { resolvePropertyPushdown, type PropertyPushdown } from "../property-pushdown.ts";
+import {
+  resolvePropertyPushdown,
+  type PropertyFilterMap,
+  type PropertyPushdown,
+} from "../property-pushdown.ts";
 import {
   applyAgentScope,
   applyDegreeFilter,
@@ -36,6 +40,17 @@ export interface PoolFilters {
   readonly properties: ReadonlyMap<string, ReadonlyArray<string>> | null;
   /** The promoted half of the property map, pushed into the lanes' SQL. */
   readonly pushdown: PropertyPushdown | null;
+  /**
+   * The promoted half AS THE CALLER WROTE IT (recall-quality review), or
+   * null when nothing was promoted. The lanes' SQL constrains only the
+   * candidates that ran through it; traversal-arm rows (searchType "link"
+   * - link-graph expansions and relational-only admissions) bypassed the
+   * SQL entirely, so the post-rank stage re-judges them with this map
+   * under the same live predicate the fallback half runs. Without it, a
+   * `type: report` note surfaces under a `type: note` filter by riding a
+   * link in from a matching page.
+   */
+  readonly promoted: PropertyFilterMap | null;
   readonly degreeFilters: ReadonlyArray<DegreePredicate>;
   readonly visibilityScope: ReturnType<typeof normalizeVisibilityScope>;
   /**
@@ -68,6 +83,7 @@ export function resolvePoolFilters(opts: SearchOptions): PoolFilters {
   const split = resolvePropertyPushdown(opts.properties);
   const properties = split.fallback;
   const pushdown = split.pushdown;
+  const promoted = split.promoted;
   // Graph-degree cardinality predicates (t_9bee8f0b): a post-rank filter
   // that can drop ranked rows, so it shares the frontmatter-filter
   // overfetch. Absent / empty leaves the pool and results byte-identical.
@@ -102,6 +118,7 @@ export function resolvePoolFilters(opts: SearchOptions): PoolFilters {
   return {
     properties,
     pushdown,
+    promoted,
     degreeFilters,
     visibilityScope,
     reach,
@@ -171,13 +188,26 @@ export function applyPoolFilters(
     filters.properties !== null
       ? applyPropertyFilter(statusFiltered, filters.properties, ctx.vault, ctx.frontmatterCache)
       : statusFiltered;
+  // Traversal-arm gate (recall-quality review): rows whose candidate source
+  // bypassed the lanes' SQL - searchType "link": the link-graph expansions
+  // and the relational-only admissions - never met the promoted half's
+  // pushdown, so the live property filter must judge them here or a
+  // filtered query surfaces pages the filter excludes by riding a link in
+  // from a matching one. The SAME predicate the fallback half runs, keyed
+  // by the promoted half as the caller wrote it; lane rows keep their SQL
+  // verdict untouched. No-op (same array) when nothing was promoted or no
+  // traversal row is in the pool.
+  const traversalGated =
+    filters.promoted !== null && propFiltered.some((r) => r.searchType === "link")
+      ? gateTraversalRows(propFiltered, filters.promoted, ctx)
+      : propFiltered;
   // Graph-degree cardinality predicates (t_9bee8f0b): drop rows whose
   // backlink/outlink counts fail the predicates, backed by the
   // link-graph degree index. No-op when no predicate was requested.
   const degreeFiltered =
     filters.degreeFilters.length > 0
-      ? applyDegreeFilter(propFiltered, filters.degreeFilters, ctx.store)
-      : propFiltered;
+      ? applyDegreeFilter(traversalGated, filters.degreeFilters, ctx.store)
+      : traversalGated;
   // Root A, and it runs BEFORE the trail's baseline is taken. The
   // caller's own scopes are counted below, because "did my scope remove
   // my results" is a question the caller may ask about a filter it
@@ -220,4 +250,25 @@ export function applyPoolFilters(
     prePoolFilters: degreeFiltered.length,
     visible: compositeScoped,
   };
+}
+
+/**
+ * Judge the traversal-arm rows (searchType "link") under the promoted
+ * property filter with the same live predicate every other row's fallback
+ * keys run through, and splice the verdict back in rank order: kept rows
+ * stay exactly where the ranker put them, dropped ones leave the pool.
+ * Non-link rows pass through untouched - their promoted verdict is the
+ * lanes' SQL's to make.
+ */
+function gateTraversalRows(
+  ranked: ReadonlyArray<BrainSearchResult>,
+  promoted: PropertyFilterMap,
+  ctx: FilterContext,
+): ReadonlyArray<BrainSearchResult> {
+  const linkRows = ranked.filter((r) => r.searchType === "link");
+  if (linkRows.length === 0) return ranked;
+  const kept = new Set(
+    applyPropertyFilter(linkRows, promoted, ctx.vault, ctx.frontmatterCache).map((r) => r.chunkId),
+  );
+  return ranked.filter((r) => r.searchType !== "link" || kept.has(r.chunkId));
 }
