@@ -1935,6 +1935,276 @@ var init_pointer = __esm(() => {
   init_fs_utils();
 });
 
+// src/core/brain/yaml-parse.ts
+function parseBrainYaml(text) {
+  const lines = splitLines(text);
+  const out = {};
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (line.indent !== 0) {
+      throw new Error(`line ${line.lineNumber}: unexpected indentation at top level`);
+    }
+    const kv = splitKeyValue(line);
+    if (kv.value === "") {
+      const child = {};
+      i++;
+      const blockIndent = detectBlockIndent(lines, i);
+      while (i < lines.length && lines[i].indent >= blockIndent && blockIndent > 0) {
+        const inner = lines[i];
+        if (inner.indent !== blockIndent) {
+          throw new Error(`line ${inner.lineNumber}: inconsistent indentation in block '${kv.key}' ` + `(expected ${blockIndent} spaces, got ${inner.indent})`);
+        }
+        const innerKv = splitKeyValue(inner);
+        if (innerKv.value === "") {
+          i++;
+          const listIndent = detectBlockIndent(lines, i);
+          if (listIndent <= blockIndent) {
+            if (innerKv.key in child) {
+              throw new Error(`line ${inner.lineNumber}: duplicate key '${innerKv.key}' in block '${kv.key}'`);
+            }
+            child[innerKv.key] = [];
+            continue;
+          }
+          const items = [];
+          while (i < lines.length && lines[i].indent >= listIndent) {
+            const listLine = lines[i];
+            if (listLine.indent !== listIndent) {
+              throw new Error(`line ${listLine.lineNumber}: inconsistent indentation in list '${innerKv.key}' ` + `(expected ${listIndent} spaces, got ${listLine.indent})`);
+            }
+            if (!listLine.content.startsWith("- ") && listLine.content !== "-") {
+              if (/^[A-Za-z_][A-Za-z0-9_-]*\s*:/.test(listLine.content)) {
+                throw new Error(`line ${listLine.lineNumber}: nested blocks deeper than one level are not supported`);
+              }
+              throw new Error(`line ${listLine.lineNumber}: expected list item starting with '- ' ` + `in '${kv.key}.${innerKv.key}'`);
+            }
+            const itemText = listLine.content.startsWith("- ") ? listLine.content.slice(2).trim() : "";
+            const item = parseScalar(itemText, listLine.lineNumber);
+            if (Array.isArray(item)) {
+              throw new Error(`line ${listLine.lineNumber}: nested inline arrays are not supported`);
+            }
+            items.push(item);
+            i++;
+          }
+          if (innerKv.key in child) {
+            throw new Error(`line ${inner.lineNumber}: duplicate key '${innerKv.key}' in block '${kv.key}'`);
+          }
+          child[innerKv.key] = items;
+          continue;
+        }
+        if (innerKv.key in child) {
+          throw new Error(`line ${inner.lineNumber}: duplicate key '${innerKv.key}' in block '${kv.key}'`);
+        }
+        child[innerKv.key] = parseScalar(innerKv.value, inner.lineNumber);
+        i++;
+      }
+      if (kv.key in out) {
+        throw new Error(`duplicate top-level key '${kv.key}'`);
+      }
+      out[kv.key] = child;
+      continue;
+    }
+    if (kv.key in out) {
+      throw new Error(`duplicate top-level key '${kv.key}'`);
+    }
+    out[kv.key] = parseScalar(kv.value, line.lineNumber);
+    i++;
+  }
+  return out;
+}
+function splitLines(text) {
+  const out = [];
+  let lineNumber = 0;
+  for (const raw of text.split(/\r?\n/)) {
+    lineNumber++;
+    const stripped = raw.replace(/\s+$/, "");
+    if (stripped.trim() === "")
+      continue;
+    if (stripped.trimStart().startsWith("#"))
+      continue;
+    let content = stripped;
+    if (!/['"]/.test(stripped)) {
+      const hashIdx = stripped.indexOf(" #");
+      if (hashIdx >= 0)
+        content = stripped.slice(0, hashIdx).replace(/\s+$/, "");
+    }
+    const indent = content.length - content.trimStart().length;
+    out.push({
+      raw,
+      indent,
+      content: content.slice(indent),
+      lineNumber
+    });
+  }
+  return out;
+}
+function splitKeyValue(line) {
+  const idx = line.content.indexOf(":");
+  if (idx <= 0) {
+    throw new Error(`line ${line.lineNumber}: expected 'key: value', got: ${JSON.stringify(line.raw)}`);
+  }
+  const key = line.content.slice(0, idx).trim();
+  if (!/^[A-Za-z_][A-Za-z0-9_-]*$/.test(key)) {
+    throw new Error(`line ${line.lineNumber}: invalid key name: ${JSON.stringify(key)}`);
+  }
+  if (key === "__proto__" || key === "constructor" || key === "prototype") {
+    throw new Error(`line ${line.lineNumber}: reserved key name: ${JSON.stringify(key)}`);
+  }
+  const value = line.content.slice(idx + 1).trim();
+  return { key, value };
+}
+function detectBlockIndent(lines, cursor) {
+  if (cursor >= lines.length)
+    return 0;
+  const first = lines[cursor];
+  if (first.indent === 0)
+    return 0;
+  return first.indent;
+}
+function parseScalar(text, lineNumber) {
+  if (text.startsWith("[") && text.endsWith("]")) {
+    return parseInlineArray(text.slice(1, -1), lineNumber);
+  }
+  if (text.length >= 2 && (text.startsWith('"') && text.endsWith('"') || text.startsWith("'") && text.endsWith("'"))) {
+    return text.slice(1, -1);
+  }
+  if (text === "true")
+    return true;
+  if (text === "false")
+    return false;
+  if (text === "null" || text === "~")
+    return null;
+  if (/^-?\d+$/.test(text)) {
+    const n = parseInt(text, 10);
+    return n;
+  }
+  if (/^-?\d+\.\d+$/.test(text)) {
+    const n = parseFloat(text);
+    if (!Number.isFinite(n)) {
+      throw new Error(`line ${lineNumber}: non-finite number: ${text}`);
+    }
+    return n;
+  }
+  return text;
+}
+function parseInlineArray(innerRaw, lineNumber) {
+  const inner = innerRaw.trim();
+  if (inner === "")
+    return [];
+  const out = [];
+  let current = "";
+  let inQuote = false;
+  let quoteChar = "";
+  for (let i = 0;i < inner.length; i++) {
+    const ch = inner[i];
+    if (inQuote) {
+      current += ch;
+      if (ch === quoteChar) {
+        inQuote = false;
+        quoteChar = "";
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      inQuote = true;
+      quoteChar = ch;
+      current += ch;
+      continue;
+    }
+    if (ch === ",") {
+      out.push(parseInlineArrayItem(current, lineNumber));
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+  if (inQuote) {
+    throw new Error(`line ${lineNumber}: unterminated quoted string in inline array`);
+  }
+  out.push(parseInlineArrayItem(current, lineNumber));
+  return out;
+}
+function parseInlineArrayItem(text, lineNumber) {
+  const trimmed = text.trim();
+  if (trimmed === "") {
+    throw new Error(`line ${lineNumber}: empty item in inline array`);
+  }
+  const parsed = parseScalar(trimmed, lineNumber);
+  if (Array.isArray(parsed)) {
+    throw new Error(`line ${lineNumber}: nested inline arrays are not supported`);
+  }
+  return parsed;
+}
+
+// src/core/brain/policy/errors.ts
+var BrainConfigError;
+var init_errors = __esm(() => {
+  BrainConfigError = class BrainConfigError extends Error {
+    field;
+    source;
+    constructor(message, field, source) {
+      super(field ? `${source ?? "<config>"}: ${field}: ${message}` : `${source ?? "<config>"}: ${message}`);
+      this.name = "BrainConfigError";
+      this.field = field;
+      this.source = source;
+    }
+  };
+});
+
+// src/core/brain/path-constants.ts
+import { posix } from "node:path";
+var BRAIN_ROOT_REL = "Brain", BRAIN_INBOX_REL, BRAIN_PROCESSED_REL, BRAIN_ARCHIVED_SIGNALS_REL, BRAIN_PENDING_REL, BRAIN_PREFERENCES_REL, BRAIN_RETIRED_REL, BRAIN_SKILL_PROPOSALS_REL, BRAIN_SKILL_PROPOSALS_PENDING_REL, BRAIN_SKILL_PROPOSALS_ACCEPTED_REL, BRAIN_SKILL_PROPOSALS_REJECTED_REL, BRAIN_SKILL_ACCEPT_JOURNAL_REL, BRAIN_PROCEDURES_REL, BRAIN_PROCEDURAL_MEMORY_REL, BRAIN_ATTENTION_REL, BRAIN_OBLIGATIONS_REL, BRAIN_THESES_REL, BRAIN_DECISIONS_REL, BRAIN_GAP_TASKS_REL, BRAIN_TENSIONS_REL, BRAIN_LOG_DIR = "log", BRAIN_LOG_REL, BRAIN_CAPTURES_REL, BRAIN_CAPTURES_PROCESSED_REL, BRAIN_ENTITIES_REL, BRAIN_STATE_REL, BRAIN_INTERNAL_STATE_DIR = ".state", BRAIN_INTERNAL_STATE_REL, BRAIN_BASES_REL, BRAIN_SOURCES_REL, BRAIN_REPORTS_REL, BRAIN_DISTILLATIONS_REL, BRAIN_SNAPSHOTS_DIR = ".snapshots", BRAIN_SNAPSHOTS_REL, BRAIN_ARTIFACTS_DIR = ".artifacts", BRAIN_ARTIFACTS_REL, BRAIN_ARCHIVES_DIR = ".archives", BRAIN_ARCHIVES_REL, BRAIN_PAYLOADS_DIR = ".payloads", BRAIN_PAYLOADS_REL, BRAIN_WRITE_IMAGES_DIR = "write-images", BRAIN_WRITE_IMAGES_REL, BRAIN_SNAPSHOT_EXCLUDED_ENTRIES, JSONL_LEDGER_EXT = "jsonl", BRAIN_CONFIG_FILE = "_brain.yaml", BRAIN_ACTIVE_FILE = "active.md", BRAIN_LESSONS_FILE = "lessons.md", BRAIN_COMPILED_DIGEST_RELS, BRAIN_INDEX_FILE = "_INDEX.md", BRAIN_INDEX_REL, BRAIN_PAGE_LANES_REL;
+var init_path_constants = __esm(() => {
+  BRAIN_INBOX_REL = posix.join(BRAIN_ROOT_REL, "inbox");
+  BRAIN_PROCESSED_REL = posix.join(BRAIN_INBOX_REL, "processed");
+  BRAIN_ARCHIVED_SIGNALS_REL = posix.join(BRAIN_INBOX_REL, "archived");
+  BRAIN_PENDING_REL = posix.join(BRAIN_ROOT_REL, "pending");
+  BRAIN_PREFERENCES_REL = posix.join(BRAIN_ROOT_REL, "preferences");
+  BRAIN_RETIRED_REL = posix.join(BRAIN_ROOT_REL, "retired");
+  BRAIN_SKILL_PROPOSALS_REL = posix.join(BRAIN_ROOT_REL, "skill-proposals");
+  BRAIN_SKILL_PROPOSALS_PENDING_REL = posix.join(BRAIN_SKILL_PROPOSALS_REL, "pending");
+  BRAIN_SKILL_PROPOSALS_ACCEPTED_REL = posix.join(BRAIN_SKILL_PROPOSALS_REL, "accepted");
+  BRAIN_SKILL_PROPOSALS_REJECTED_REL = posix.join(BRAIN_SKILL_PROPOSALS_REL, "rejected");
+  BRAIN_SKILL_ACCEPT_JOURNAL_REL = posix.join(BRAIN_SKILL_PROPOSALS_REL, "accept-journal");
+  BRAIN_PROCEDURES_REL = posix.join(BRAIN_ROOT_REL, "procedures");
+  BRAIN_PROCEDURAL_MEMORY_REL = posix.join(BRAIN_ROOT_REL, "procedural-memory");
+  BRAIN_ATTENTION_REL = posix.join(BRAIN_ROOT_REL, "attention");
+  BRAIN_OBLIGATIONS_REL = posix.join(BRAIN_ROOT_REL, "obligations");
+  BRAIN_THESES_REL = posix.join(BRAIN_ROOT_REL, "theses");
+  BRAIN_DECISIONS_REL = posix.join(BRAIN_ROOT_REL, "decisions");
+  BRAIN_GAP_TASKS_REL = posix.join(BRAIN_ROOT_REL, "gap-tasks");
+  BRAIN_TENSIONS_REL = posix.join(BRAIN_ROOT_REL, "tensions");
+  BRAIN_LOG_REL = posix.join(BRAIN_ROOT_REL, BRAIN_LOG_DIR);
+  BRAIN_CAPTURES_REL = posix.join(BRAIN_ROOT_REL, "captures");
+  BRAIN_CAPTURES_PROCESSED_REL = posix.join(BRAIN_CAPTURES_REL, "processed");
+  BRAIN_ENTITIES_REL = posix.join(BRAIN_ROOT_REL, "entities");
+  BRAIN_STATE_REL = posix.join(BRAIN_ROOT_REL, "state");
+  BRAIN_INTERNAL_STATE_REL = posix.join(BRAIN_ROOT_REL, BRAIN_INTERNAL_STATE_DIR);
+  BRAIN_BASES_REL = posix.join(BRAIN_ROOT_REL, "bases");
+  BRAIN_SOURCES_REL = posix.join(BRAIN_ROOT_REL, "sources");
+  BRAIN_REPORTS_REL = posix.join(BRAIN_ROOT_REL, "reports");
+  BRAIN_DISTILLATIONS_REL = posix.join(BRAIN_ROOT_REL, "distillations");
+  BRAIN_SNAPSHOTS_REL = posix.join(BRAIN_ROOT_REL, BRAIN_SNAPSHOTS_DIR);
+  BRAIN_ARTIFACTS_REL = posix.join(BRAIN_ROOT_REL, BRAIN_ARTIFACTS_DIR);
+  BRAIN_ARCHIVES_REL = posix.join(BRAIN_ROOT_REL, BRAIN_ARCHIVES_DIR);
+  BRAIN_PAYLOADS_REL = posix.join(BRAIN_ROOT_REL, BRAIN_PAYLOADS_DIR);
+  BRAIN_WRITE_IMAGES_REL = posix.join(BRAIN_INTERNAL_STATE_REL, BRAIN_WRITE_IMAGES_DIR);
+  BRAIN_SNAPSHOT_EXCLUDED_ENTRIES = Object.freeze([
+    BRAIN_SNAPSHOTS_DIR,
+    BRAIN_ARTIFACTS_DIR
+  ]);
+  BRAIN_COMPILED_DIGEST_RELS = Object.freeze([
+    posix.join(BRAIN_ROOT_REL, BRAIN_ACTIVE_FILE),
+    posix.join(BRAIN_ROOT_REL, BRAIN_LESSONS_FILE)
+  ]);
+  BRAIN_INDEX_REL = posix.join(BRAIN_ROOT_REL, BRAIN_INDEX_FILE);
+  BRAIN_PAGE_LANES_REL = Object.freeze([
+    BRAIN_SOURCES_REL,
+    BRAIN_REPORTS_REL,
+    BRAIN_DISTILLATIONS_REL
+  ]);
+});
+
 // src/core/brain/wikilink.ts
 var init_wikilink = () => {};
 
@@ -1956,6 +2226,8 @@ var init_format_wikilink = __esm(() => {
 // src/core/config.ts
 var exports_config = {};
 __export(exports_config, {
+  ANSWER_QUOTE_CHECK_MODES: () => ANSWER_QUOTE_CHECK_MODES,
+  ANSWER_QUOTE_CHECK_PHASES: () => ANSWER_QUOTE_CHECK_PHASES,
   ConfigReadError: () => ConfigReadError,
   DECISION_RECALL_MAX_PER_SESSION_CONFIG_KEY: () => DECISION_RECALL_MAX_PER_SESSION_CONFIG_KEY,
   DECISION_RECALL_MAX_PER_SESSION_ENV_KEY: () => DECISION_RECALL_MAX_PER_SESSION_ENV_KEY,
@@ -1979,11 +2251,15 @@ __export(exports_config, {
   defaultConfigPath: () => defaultConfigPath,
   discoverConfig: () => discoverConfig,
   installNamedSecretResolver: () => installNamedSecretResolver,
+  isAnswerQuoteCheckMode: () => isAnswerQuoteCheckMode,
   isConfiguredAgentName: () => isConfiguredAgentName,
   isValidDeviceId: () => isValidDeviceId,
   isValidInstallationSecret: () => isValidInstallationSecret,
   parseSimpleYaml: () => parseSimpleYaml,
   resolveAgentName: () => resolveAgentName,
+  resolveAnswerQuoteCheckActive: () => resolveAnswerQuoteCheckActive,
+  resolveAnswerQuoteCheckRecall: () => resolveAnswerQuoteCheckRecall,
+  resolveAnswerQuoteCheckSubagent: () => resolveAnswerQuoteCheckSubagent,
   resolveBenchJudgeCmd: () => resolveBenchJudgeCmd,
   resolveContextPackOutcomeEnabled: () => resolveContextPackOutcomeEnabled,
   resolveDecisionRecallMaxPerSession: () => resolveDecisionRecallMaxPerSession,
@@ -2436,6 +2712,76 @@ function resolveContextPackOutcomeEnabled(configPath) {
 function resolveRecallInjectEnabled(configPath) {
   return resolveConfigFlag("OPEN_SECOND_BRAIN_RECALL_INJECT_ENABLED", "recall_inject_enabled", configPath);
 }
+function isAnswerQuoteCheckMode(value) {
+  return typeof value === "string" && ANSWER_QUOTE_CHECK_MODES.includes(value);
+}
+function readQuoteCheckBlock(path) {
+  let stat;
+  try {
+    const probed = statSync3(path, { throwIfNoEntry: false });
+    if (probed === undefined)
+      return null;
+    stat = probed;
+  } catch (err) {
+    throw new BrainConfigError(`failed to stat: ${err.message}`, QUOTE_CHECK_BLOCK, path);
+  }
+  if (!stat.isFile()) {
+    throw new BrainConfigError("path exists but is not a regular file; its settings are not in force and are not read as absent", QUOTE_CHECK_BLOCK, path);
+  }
+  let parsed;
+  try {
+    parsed = parseBrainYaml(new TextDecoder("utf-8", { fatal: true }).decode(readFileSync4(path)));
+  } catch (err) {
+    throw new BrainConfigError(`failed to parse: ${err.message}`, QUOTE_CHECK_BLOCK, path);
+  }
+  const block = parsed[QUOTE_CHECK_BLOCK];
+  if (block === undefined)
+    return null;
+  if (typeof block !== "object" || block === null || Array.isArray(block)) {
+    throw new BrainConfigError(`expected a block of per-phase modes, got ${Array.isArray(block) ? "an array" : typeof block}`, QUOTE_CHECK_BLOCK, path);
+  }
+  return block;
+}
+function warnUnknownQuoteCheckKeys(path, block) {
+  for (const key of Object.keys(block)) {
+    if (ANSWER_QUOTE_CHECK_PHASES.includes(key))
+      continue;
+    const stamp = `${path}\x00${key}`;
+    if (quoteCheckWarnedUnknownKeys.has(stamp))
+      continue;
+    quoteCheckWarnedUnknownKeys.add(stamp);
+    process.stderr.write(`${QUOTE_CHECK_BLOCK}.${key}: unknown field ignored (forward-compat)
+`);
+  }
+}
+function resolveAnswerQuoteCheckPhase(phase, path) {
+  if (path === null)
+    return QUOTE_CHECK_DEFAULT;
+  const block = readQuoteCheckBlock(path);
+  if (block === null)
+    return QUOTE_CHECK_DEFAULT;
+  warnUnknownQuoteCheckKeys(path, block);
+  const raw = block[phase];
+  if (raw === undefined)
+    return QUOTE_CHECK_DEFAULT;
+  if (!isAnswerQuoteCheckMode(raw)) {
+    throw new BrainConfigError(`unsupported value ${JSON.stringify(raw)}; expected one of ${ANSWER_QUOTE_CHECK_MODES.join(", ")}`, `${QUOTE_CHECK_BLOCK}.${phase}`, path);
+  }
+  return raw;
+}
+function defaultAnswerQuoteCheckConfigPath() {
+  const vault = resolveVault();
+  return vault === null ? null : join5(vault, BRAIN_ROOT_REL, BRAIN_CONFIG_FILE);
+}
+function resolveAnswerQuoteCheckRecall(configPath) {
+  return resolveAnswerQuoteCheckPhase("recall", configPath ?? defaultAnswerQuoteCheckConfigPath());
+}
+function resolveAnswerQuoteCheckActive(configPath) {
+  return resolveAnswerQuoteCheckPhase("active", configPath ?? defaultAnswerQuoteCheckConfigPath());
+}
+function resolveAnswerQuoteCheckSubagent(configPath) {
+  return resolveAnswerQuoteCheckPhase("subagent", configPath ?? defaultAnswerQuoteCheckConfigPath());
+}
 function parseBounded(raw, min, max, integer) {
   const value = Number(raw);
   if (!Number.isFinite(value) || integer && !Number.isInteger(value))
@@ -2592,13 +2938,15 @@ function expandTilde(p, platform = process.platform, home = homedir2()) {
     return join5(home, p.slice(2));
   return p;
 }
-var import_proper_lockfile2, namedSecretResolver, CONFIG_VALUE_REJECTED_CHARS, UNSUPPORTED_CONFIG_PLATFORMS, UnsupportedPlatformError, ConfigReadError, UNCONFIGURED_AGENT_NAME = "agent", SHARED_NAMESPACE_KEY = "shared_namespace", DEVICE_ID_RE, INSTALLATION_SECRET_CONFIG_KEY = "installation_secret", INSTALLATION_SECRET_ENV_KEY = "O2B_INSTALLATION_SECRET", INSTALLATION_SECRET_RE, VAULT_STORE_REF_PREFIX = "vault://", VAULT_STORE_REF_HEX_LEN = 32, DECISION_RECALL_MAX_PER_SESSION_CONFIG_KEY = "decision_recall.max_per_session", DECISION_RECALL_MAX_PER_SESSION_ENV_KEY = "OPEN_SECOND_BRAIN_DECISION_RECALL_MAX_PER_SESSION", DECISION_RECALL_MIN_SPACING_TURNS_CONFIG_KEY = "decision_recall.min_spacing_turns", DECISION_RECALL_MIN_SPACING_TURNS_ENV_KEY = "OPEN_SECOND_BRAIN_DECISION_RECALL_MIN_SPACING_TURNS", RECALL_INJECT_CAP_SPECS, REGROUND_PART_CHARS_DEFAULT = 9000, MAINTENANCE_EMBEDDINGS_ENV = "OPEN_SECOND_BRAIN_MAINTENANCE_EMBEDDINGS", MAINTENANCE_EMBEDDINGS_CONFIG_KEY = "maintenance_embeddings", MAINTENANCE_CUSTOM_TASKS_ENV = "OPEN_SECOND_BRAIN_MAINTENANCE_CUSTOM_TASKS", MAINTENANCE_CUSTOM_TASKS_CONFIG_KEY = "maintenance_custom_tasks", PARTNER_CODEGRAPH_DISABLED_ENV = "OPEN_SECOND_BRAIN_PARTNER_CODEGRAPH_DISABLED", PARTNER_CODEGRAPH_DISABLED_CONFIG_KEY = "partner_codegraph_disabled", SESSION_CAPTURE_ROLES;
+var import_proper_lockfile2, namedSecretResolver, CONFIG_VALUE_REJECTED_CHARS, UNSUPPORTED_CONFIG_PLATFORMS, UnsupportedPlatformError, ConfigReadError, UNCONFIGURED_AGENT_NAME = "agent", SHARED_NAMESPACE_KEY = "shared_namespace", DEVICE_ID_RE, INSTALLATION_SECRET_CONFIG_KEY = "installation_secret", INSTALLATION_SECRET_ENV_KEY = "O2B_INSTALLATION_SECRET", INSTALLATION_SECRET_RE, VAULT_STORE_REF_PREFIX = "vault://", VAULT_STORE_REF_HEX_LEN = 32, DECISION_RECALL_MAX_PER_SESSION_CONFIG_KEY = "decision_recall.max_per_session", DECISION_RECALL_MAX_PER_SESSION_ENV_KEY = "OPEN_SECOND_BRAIN_DECISION_RECALL_MAX_PER_SESSION", DECISION_RECALL_MIN_SPACING_TURNS_CONFIG_KEY = "decision_recall.min_spacing_turns", DECISION_RECALL_MIN_SPACING_TURNS_ENV_KEY = "OPEN_SECOND_BRAIN_DECISION_RECALL_MIN_SPACING_TURNS", ANSWER_QUOTE_CHECK_MODES, QUOTE_CHECK_BLOCK = "quote_check", ANSWER_QUOTE_CHECK_PHASES, QUOTE_CHECK_DEFAULT = "shadow", quoteCheckWarnedUnknownKeys, RECALL_INJECT_CAP_SPECS, REGROUND_PART_CHARS_DEFAULT = 9000, MAINTENANCE_EMBEDDINGS_ENV = "OPEN_SECOND_BRAIN_MAINTENANCE_EMBEDDINGS", MAINTENANCE_EMBEDDINGS_CONFIG_KEY = "maintenance_embeddings", MAINTENANCE_CUSTOM_TASKS_ENV = "OPEN_SECOND_BRAIN_MAINTENANCE_CUSTOM_TASKS", MAINTENANCE_CUSTOM_TASKS_CONFIG_KEY = "maintenance_custom_tasks", PARTNER_CODEGRAPH_DISABLED_ENV = "OPEN_SECOND_BRAIN_PARTNER_CODEGRAPH_DISABLED", PARTNER_CODEGRAPH_DISABLED_CONFIG_KEY = "partner_codegraph_disabled", SESSION_CAPTURE_ROLES;
 var init_config = __esm(() => {
   init_fs_atomic();
   init_secret_ref();
   init_platform_dirs();
   init_profiles();
   init_pointer();
+  init_errors();
+  init_path_constants();
   init_format_wikilink();
   import_proper_lockfile2 = __toESM(require_proper_lockfile(), 1);
   CONFIG_VALUE_REJECTED_CHARS = ['"', "\\", `
@@ -2622,6 +2970,9 @@ var init_config = __esm(() => {
   };
   DEVICE_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
   INSTALLATION_SECRET_RE = /^[0-9a-f]{32}$/;
+  ANSWER_QUOTE_CHECK_MODES = Object.freeze(["off", "shadow", "enforce"]);
+  ANSWER_QUOTE_CHECK_PHASES = Object.freeze(["recall", "active", "subagent"]);
+  quoteCheckWarnedUnknownKeys = new Set;
   RECALL_INJECT_CAP_SPECS = [
     {
       field: "maxNotes",
@@ -3022,59 +3373,6 @@ ${SCAN_TRUNCATED_SENTINEL} [redactor scan window exceeded (> 1 MiB); the unscann
   IDENTIFIER_KEY_RE = /(^|[_-])(id|ids|uuid|uuids|guid|path|paths|slug|slugs|filename|filenames|basename)$/i;
   PATH_ANCHOR_RE = /^(?:[/\\]|~[/\\]|\.{1,2}[/\\]|[A-Za-z]:[/\\])/;
   VENDOR_TOKEN_TEST_RE = new RegExp(VENDOR_TOKEN_RE.source);
-});
-
-// src/core/brain/path-constants.ts
-import { posix } from "node:path";
-var BRAIN_ROOT_REL = "Brain", BRAIN_INBOX_REL, BRAIN_PROCESSED_REL, BRAIN_ARCHIVED_SIGNALS_REL, BRAIN_PENDING_REL, BRAIN_PREFERENCES_REL, BRAIN_RETIRED_REL, BRAIN_SKILL_PROPOSALS_REL, BRAIN_SKILL_PROPOSALS_PENDING_REL, BRAIN_SKILL_PROPOSALS_ACCEPTED_REL, BRAIN_SKILL_PROPOSALS_REJECTED_REL, BRAIN_SKILL_ACCEPT_JOURNAL_REL, BRAIN_PROCEDURES_REL, BRAIN_PROCEDURAL_MEMORY_REL, BRAIN_ATTENTION_REL, BRAIN_OBLIGATIONS_REL, BRAIN_THESES_REL, BRAIN_DECISIONS_REL, BRAIN_GAP_TASKS_REL, BRAIN_TENSIONS_REL, BRAIN_LOG_DIR = "log", BRAIN_LOG_REL, BRAIN_CAPTURES_REL, BRAIN_CAPTURES_PROCESSED_REL, BRAIN_ENTITIES_REL, BRAIN_STATE_REL, BRAIN_INTERNAL_STATE_DIR = ".state", BRAIN_INTERNAL_STATE_REL, BRAIN_BASES_REL, BRAIN_SOURCES_REL, BRAIN_REPORTS_REL, BRAIN_DISTILLATIONS_REL, BRAIN_SNAPSHOTS_DIR = ".snapshots", BRAIN_SNAPSHOTS_REL, BRAIN_ARTIFACTS_DIR = ".artifacts", BRAIN_ARTIFACTS_REL, BRAIN_PAYLOADS_DIR = ".payloads", BRAIN_PAYLOADS_REL, BRAIN_WRITE_IMAGES_DIR = "write-images", BRAIN_WRITE_IMAGES_REL, BRAIN_SNAPSHOT_EXCLUDED_ENTRIES, JSONL_LEDGER_EXT = "jsonl", BRAIN_ACTIVE_FILE = "active.md", BRAIN_LESSONS_FILE = "lessons.md", BRAIN_COMPILED_DIGEST_RELS, BRAIN_INDEX_FILE = "_INDEX.md", BRAIN_INDEX_REL, BRAIN_PAGE_LANES_REL;
-var init_path_constants = __esm(() => {
-  BRAIN_INBOX_REL = posix.join(BRAIN_ROOT_REL, "inbox");
-  BRAIN_PROCESSED_REL = posix.join(BRAIN_INBOX_REL, "processed");
-  BRAIN_ARCHIVED_SIGNALS_REL = posix.join(BRAIN_INBOX_REL, "archived");
-  BRAIN_PENDING_REL = posix.join(BRAIN_ROOT_REL, "pending");
-  BRAIN_PREFERENCES_REL = posix.join(BRAIN_ROOT_REL, "preferences");
-  BRAIN_RETIRED_REL = posix.join(BRAIN_ROOT_REL, "retired");
-  BRAIN_SKILL_PROPOSALS_REL = posix.join(BRAIN_ROOT_REL, "skill-proposals");
-  BRAIN_SKILL_PROPOSALS_PENDING_REL = posix.join(BRAIN_SKILL_PROPOSALS_REL, "pending");
-  BRAIN_SKILL_PROPOSALS_ACCEPTED_REL = posix.join(BRAIN_SKILL_PROPOSALS_REL, "accepted");
-  BRAIN_SKILL_PROPOSALS_REJECTED_REL = posix.join(BRAIN_SKILL_PROPOSALS_REL, "rejected");
-  BRAIN_SKILL_ACCEPT_JOURNAL_REL = posix.join(BRAIN_SKILL_PROPOSALS_REL, "accept-journal");
-  BRAIN_PROCEDURES_REL = posix.join(BRAIN_ROOT_REL, "procedures");
-  BRAIN_PROCEDURAL_MEMORY_REL = posix.join(BRAIN_ROOT_REL, "procedural-memory");
-  BRAIN_ATTENTION_REL = posix.join(BRAIN_ROOT_REL, "attention");
-  BRAIN_OBLIGATIONS_REL = posix.join(BRAIN_ROOT_REL, "obligations");
-  BRAIN_THESES_REL = posix.join(BRAIN_ROOT_REL, "theses");
-  BRAIN_DECISIONS_REL = posix.join(BRAIN_ROOT_REL, "decisions");
-  BRAIN_GAP_TASKS_REL = posix.join(BRAIN_ROOT_REL, "gap-tasks");
-  BRAIN_TENSIONS_REL = posix.join(BRAIN_ROOT_REL, "tensions");
-  BRAIN_LOG_REL = posix.join(BRAIN_ROOT_REL, BRAIN_LOG_DIR);
-  BRAIN_CAPTURES_REL = posix.join(BRAIN_ROOT_REL, "captures");
-  BRAIN_CAPTURES_PROCESSED_REL = posix.join(BRAIN_CAPTURES_REL, "processed");
-  BRAIN_ENTITIES_REL = posix.join(BRAIN_ROOT_REL, "entities");
-  BRAIN_STATE_REL = posix.join(BRAIN_ROOT_REL, "state");
-  BRAIN_INTERNAL_STATE_REL = posix.join(BRAIN_ROOT_REL, BRAIN_INTERNAL_STATE_DIR);
-  BRAIN_BASES_REL = posix.join(BRAIN_ROOT_REL, "bases");
-  BRAIN_SOURCES_REL = posix.join(BRAIN_ROOT_REL, "sources");
-  BRAIN_REPORTS_REL = posix.join(BRAIN_ROOT_REL, "reports");
-  BRAIN_DISTILLATIONS_REL = posix.join(BRAIN_ROOT_REL, "distillations");
-  BRAIN_SNAPSHOTS_REL = posix.join(BRAIN_ROOT_REL, BRAIN_SNAPSHOTS_DIR);
-  BRAIN_ARTIFACTS_REL = posix.join(BRAIN_ROOT_REL, BRAIN_ARTIFACTS_DIR);
-  BRAIN_PAYLOADS_REL = posix.join(BRAIN_ROOT_REL, BRAIN_PAYLOADS_DIR);
-  BRAIN_WRITE_IMAGES_REL = posix.join(BRAIN_INTERNAL_STATE_REL, BRAIN_WRITE_IMAGES_DIR);
-  BRAIN_SNAPSHOT_EXCLUDED_ENTRIES = Object.freeze([
-    BRAIN_SNAPSHOTS_DIR,
-    BRAIN_ARTIFACTS_DIR
-  ]);
-  BRAIN_COMPILED_DIGEST_RELS = Object.freeze([
-    posix.join(BRAIN_ROOT_REL, BRAIN_ACTIVE_FILE),
-    posix.join(BRAIN_ROOT_REL, BRAIN_LESSONS_FILE)
-  ]);
-  BRAIN_INDEX_REL = posix.join(BRAIN_ROOT_REL, BRAIN_INDEX_FILE);
-  BRAIN_PAGE_LANES_REL = Object.freeze([
-    BRAIN_SOURCES_REL,
-    BRAIN_REPORTS_REL,
-    BRAIN_DISTILLATIONS_REL
-  ]);
 });
 
 // src/core/brain/ledger-shards.ts
