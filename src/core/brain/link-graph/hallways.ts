@@ -62,10 +62,12 @@ import { SESSION_ENTITY_MENTION_KIND } from "./session-mining.ts";
 
 export const HALLWAYS_SCHEMA_VERSION = "o2b.hallways.v1";
 
-/** Relative paths, all posix-joined (the vault-portability rule). */
-export const HALLWAYS_ARTIFACT_REL = join("Brain", "link-graph", "hallways.json");
-export const HALLWAYS_PROPOSALS_REL = join("Brain", "proposals", "hallways.md");
-export const HALLWAYS_DISMISSED_REL = join("Brain", "proposals", "hallways-dismissed.json");
+/** Relative paths, all posix-joined (the vault-portability rule): a
+ * posix literal, not node:path join, whose Windows separators would leak
+ * into the artifact hash and every string comparison against the rel. */
+export const HALLWAYS_ARTIFACT_REL = "Brain/link-graph/hallways.json";
+export const HALLWAYS_PROPOSALS_REL = "Brain/proposals/hallways.md";
+export const HALLWAYS_DISMISSED_REL = "Brain/proposals/hallways-dismissed.json";
 
 /**
  * The promotion floor a key must clear before it is OFFERED: distinct
