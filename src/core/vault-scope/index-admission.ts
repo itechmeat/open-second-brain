@@ -15,7 +15,12 @@
  * canonicalises). The predicate is pure and does no I/O.
  */
 
-import { BRAIN_PENDING_REL, BRAIN_PAYLOADS_REL, BRAIN_STATE_REL } from "../brain/paths.ts";
+import {
+  BRAIN_ARCHIVES_REL,
+  BRAIN_PENDING_REL,
+  BRAIN_PAYLOADS_REL,
+  BRAIN_STATE_REL,
+} from "../brain/paths.ts";
 import { pathCovers } from "./defaults.ts";
 
 export interface AdmissionVerdict {
@@ -47,6 +52,16 @@ export function admitToIndex(relPath: string): AdmissionVerdict {
   // exclusion a stated rule rather than an accident of the extension.
   if (pathCovers(BRAIN_PAYLOADS_REL, relPath)) {
     return Object.freeze({ admit: false, reason: "payload-store" });
+  }
+  // The durable source archive, same extension situation as the payload
+  // store above: its entries are `<sha256>.txt`, which the `.md` walkers
+  // skip anyway, so this is the stated rule rather than the accident. The
+  // store holds the redacted bytes an ingest summary page was read from -
+  // evidence a re-verification consults directly, never a note recall
+  // should surface, and the dot-directory the walker skips is the same
+  // exclusion by the other route.
+  if (pathCovers(BRAIN_ARCHIVES_REL, relPath)) {
+    return Object.freeze({ admit: false, reason: "source-archive-store" });
   }
   // The write-approval review lane: a document staged into `Brain/pending/`
   // is exactly the content no operator has admitted yet, so recall must not

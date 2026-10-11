@@ -156,6 +156,7 @@ export const STATE_SURFACE_ID = Object.freeze({
   proposalWatermark: "proposal_watermark",
   captureWatermark: "capture_watermark",
   decisionLedger: "decision_ledger",
+  sourceArchives: "source_archives",
 } as const);
 
 export type StateSurfaceId = (typeof STATE_SURFACE_ID)[keyof typeof STATE_SURFACE_ID];
@@ -1066,6 +1067,22 @@ export const STATE_SURFACES: ReadonlyArray<StateSurface> = Object.freeze([
       "the only queryable record of why a write was refused, so nothing regenerates a row that " +
       "was never appended.",
     sources: ["src/core/brain/permissions/ledger.ts"],
+  },
+  {
+    id: STATE_SURFACE_ID.sourceArchives,
+    label: "source archives",
+    tier: STATE_TIER.vaultContent,
+    derive: (vault) => join(vault, BRAIN_ARCHIVES_REL),
+    override_env: null,
+    override_config_key: null,
+    carries_memory: true,
+    reason:
+      "The redacted bytes an ingest summary page's knowledge was read from, one content-addressed " +
+      "file per distinct source text. This is durable evidence, not scratch: deleting an entry " +
+      "destroys the ability to re-verify the page against its source - the current vault content " +
+      "is untouched, which is exactly what separates it from a rebuildable derived store, and " +
+      "there is no TTL to bring it back.",
+    sources: ["src/core/brain/provenance/source-archive.ts"],
   },
 ]);
 
