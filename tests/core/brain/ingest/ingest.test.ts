@@ -493,10 +493,12 @@ describe("ingestSource — extraction contract (t_586d5d8b)", () => {
 
 /**
  * The review gate (write-side trust, Task 9): the FIRST publish of a
- * summary page stages under the ingest lane while registration (the
- * intake, the manifest, the plan checkpoint) completes; a re-ingest of
- * an already-published page stays direct; and a source cleanup removes
- * the staged page the way it removes a published one.
+ * summary page stages under the ingest lane while the rest of the write
+ * completes - except the manifest row, which owes the stage verdict like
+ * every other registration row of the write and stays unrecorded until a
+ * publish arm lands; a re-ingest of an already-published page stays
+ * direct; and a source cleanup removes the staged page the way it
+ * removes a published one.
  */
 describe("ingestSource under the ingest review gate", () => {
   const INGEST_ENV = "OPEN_SECOND_BRAIN_WRITE_APPROVAL_INGEST_ENABLED";
@@ -524,9 +526,11 @@ describe("ingestSource under the ingest review gate", () => {
     const stagedBytes = readFileSync(stagedPath, "utf8");
     expect(stagedBytes).toContain("kind: brain-source");
     expect(stagedBytes).toContain("An overview of restaking");
-    // Registration completed: the manifest records the source and the
-    // entities exist.
-    expect(readManifestEntries()).toContain(INPUT.sourcePath);
+    // The entities publish (the review boundary is entry, not mutation),
+    // but the manifest row owes the stage verdict like every other
+    // registration row of this write: a staged ingest must not record
+    // itself as done while its output awaits review.
+    expect(readManifestEntries()).not.toContain(INPUT.sourcePath);
     expect(listEntities(vault, { category: "concept" })).toHaveLength(2);
   });
 

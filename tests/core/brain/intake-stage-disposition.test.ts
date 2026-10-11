@@ -203,6 +203,63 @@ describe("intakeExtraction under a stage disposition", () => {
   });
 });
 
+describe("the manifest row owes the disposition verdict too", () => {
+  // No permissions document: the ingest lane's write-approval toggle alone
+  // decides, and `true` yields the stage verdict the manifest row must share.
+  const INGEST_ENV = "OPEN_SECOND_BRAIN_WRITE_APPROVAL_INGEST_ENABLED";
+  let saved: string | undefined;
+
+  beforeEach(() => {
+    saved = process.env[INGEST_ENV];
+    process.env[INGEST_ENV] = "true";
+  });
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env[INGEST_ENV];
+    else process.env[INGEST_ENV] = saved;
+    saved = undefined;
+  });
+
+  test("a staged ingest records no manifest row while its output awaits review", () => {
+    seed(SOURCE);
+    const res = ingestSource(
+      vault,
+      { sourcePath: SOURCE, summary: "A summary.", extraction: SAMPLE },
+      { agent: "ingest-agent", now: NOW },
+    );
+    // The stage arm engaged: the summary went to the review queue.
+    expect(res.staged).toBe(true);
+    expect(res.pendingId).toBeDefined();
+    expect(listPendingLane(vault, REVIEW_LANE.ingest).entries).toHaveLength(1);
+    // The manifest would vouch that this source is ingested current; a
+    // staged ingest must not record itself as done while its output
+    // awaits review - the row shares the page's verdict. Nothing else in
+    // this flow creates the manifest, so its absence is the strongest
+    // form of "no row recorded".
+    const manifestPath = join(vault, ".open-second-brain", "ingest-manifest.json");
+    const recorded = existsSync(manifestPath)
+      ? readFileSync(manifestPath, "utf8").includes(canonicalNotePath(SOURCE))
+      : false;
+    expect(recorded).toBe(false);
+  });
+
+  test("a published ingest still records the manifest row", () => {
+    delete process.env[INGEST_ENV];
+    seed(SOURCE);
+    const res = ingestSource(
+      vault,
+      { sourcePath: SOURCE, summary: "A summary.", extraction: SAMPLE },
+      { agent: "ingest-agent", now: NOW },
+    );
+    expect(res.staged).toBeUndefined();
+    const manifest = readFileSync(
+      join(vault, ".open-second-brain", "ingest-manifest.json"),
+      "utf8",
+    );
+    expect(manifest).toContain(canonicalNotePath(SOURCE));
+  });
+});
+
 describe("the deny arm publishes nothing (pinned at the ingest pipeline)", () => {
   test("a denying document refuses the whole ingest before any write", () => {
     writePermissionsDoc("version: 1\ndefault_action: deny\n");

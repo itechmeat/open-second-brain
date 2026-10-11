@@ -345,8 +345,16 @@ export function ingestSource(
   // digest anywhere, the manifest included.
   // Nor when the page was withheld: the manifest would then record a
   // summary as current that this call did not write.
+  // Nor on a `stage` disposition: the manifest row is a registration row of
+  // the same logical write as the summary and entity pages, so it owes the
+  // verdict they got (the intake's disposition contract) - a staged ingest
+  // must not record itself as done while its output awaits review. The row
+  // stays unrecorded until a publish arm actually writes; a re-ingest then
+  // re-classifies the source as new and re-runs, which is the fail-safe
+  // direction.
   if (
     !withheld &&
+    disposition.verdict !== "stage" &&
     trust === INTAKE_TRUST.trusted &&
     resolvesInsideVault(vault, canonicalSource) &&
     existsSync(join(vault, canonicalSource))
