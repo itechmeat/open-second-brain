@@ -278,7 +278,7 @@ describe("brain recall-telemetry dead-weight CLI", () => {
   });
 
   test("dead-weight rejects record-only filters like cost does", async () => {
-    for (const flag of ["--mode", "--status", "--channel", "--host", "--limit"]) {
+    for (const flag of ["--mode", "--status", "--channel", "--host"]) {
       const res = await runCli([
         "brain",
         "recall-telemetry",
@@ -355,6 +355,15 @@ describe("brain_recall_telemetry dead_weight op", () => {
     expect(response.error?.message).toContain("mode");
   });
 
+  test("record-only filters other than limit are refused on dead_weight too", async () => {
+    const server = await initializedServer(TRANSPORT_REACH.local);
+    for (const name of ["status", "channel", "host"] as const) {
+      const response = await callTelemetryTool(server, { operation: "dead_weight", [name]: "x" });
+      expect(response.error?.code).toBe(INVALID_PARAMS);
+      expect(response.error?.message).toContain(name);
+    }
+  });
+
   test("remote reach drops hidden pages BEFORE total", async () => {
     writeFileSync(
       join(vault, "secret.md"),
@@ -395,4 +404,69 @@ describe("brain_recall_telemetry dead_weight op", () => {
       dead: [],
     });
   });
+});
+
+/**
+ * The bounded `limit` on the dead preview (PR #248 review L10). The dead
+ * list used to be pinned at 50 with no way to page, so the full list could
+ * never be seen; both surfaces now take a limit that maps onto the fold's
+ * `deadLimit`, bounded by the same maximum. 505 dead pages make every
+ * claim observable: the default preview holds 50, a larger limit returns
+ * more, and a limit above the maximum clamps to it.
+ */
+describe("dead-weight limit bounds the preview, both surfaces", () => {
+  const DEAD_PAGES = 505;
+
+  function seedWideDeadVault(): void {
+    writeFileSync(join(vault, "a.md"), "# A\n\nalpha beta gamma.\n");
+    emitRecallTelemetry(vault, {
+      createdAt: "2026-05-20T16:00:00.000Z",
+      host: "dw-limit-test",
+      channel: RECALL_CHANNEL.cli,
+      mode: "search",
+      status: "ok",
+      durationMs: 5,
+      resultCount: 1,
+      topArtifacts: [{ id: "doc-a:0", path: "a.md" }],
+    });
+    for (let i = 0; i < DEAD_PAGES; i++) {
+      writeFileSync(
+        join(vault, `dw-${String(i).padStart(3, "0")}.md`),
+        `# DW ${i}\n\nquiet page body.\n`,
+      );
+    }
+  }
+
+  test("the CLI default holds 50, a larger limit returns more, over the max clamps", async () => {
+    seedWideDeadVault();
+    const args = ["brain", "recall-telemetry", "dead-weight", "--vault", vault, "--json"];
+    const def = JSON.parse((await runCli(args)).stdout) as {
+      dead_count: number;
+      dead: ReadonlyArray<unknown>;
+    };
+    expect(def.dead_count).toBe(DEAD_PAGES);
+    expect(def.dead).toHaveLength(50);
+
+    const wider = JSON.parse((await runCli([...args, "--limit", "300"])).stdout) as {
+      dead: ReadonlyArray<unknown>;
+    };
+    expect(wider.dead).toHaveLength(300);
+
+    const clamped = JSON.parse((await runCli([...args, "--limit", "5000"])).stdout) as {
+      dead: ReadonlyArray<unknown>;
+    };
+    expect(clamped.dead).toHaveLength(500);
+  }, 30000);
+
+  test("the dead_weight op maps limit onto the same fold", async () => {
+    seedWideDeadVault();
+    const server = await initializedServer(TRANSPORT_REACH.local);
+    // The op accepts limit where it used to refuse it, and the value bites:
+    // two rows of the 505-dead fold instead of the preview's full head. The
+    // >default and clamp scales are pinned on the CLI above - past ~45 rows
+    // the MCP preview budget truncates the payload, so a 300-row response
+    // is not readable through this surface.
+    const page = await callTelemetryResult(server, { operation: "dead_weight", limit: 2 });
+    expect(page["dead"]).toHaveLength(2);
+  }, 30000);
 });

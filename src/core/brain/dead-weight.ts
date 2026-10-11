@@ -54,6 +54,14 @@ export const DEAD_WEIGHT_GATE_CAVEAT =
  */
 export const DEAD_WEIGHT_DEFAULT_LIMIT = 50;
 
+/**
+ * The cap on a caller-raised preview limit (PR #248 review L10): both
+ * surfaces (the MCP `dead_weight` op and the CLI subcommand) clamp their
+ * limit here, so the full list is reachable in bounded pages without one
+ * unbounded request. Shared, so the two surfaces cannot drift.
+ */
+export const DEAD_WEIGHT_MAX_LIMIT = 500;
+
 export interface DeadWeightOptions {
   /** Inclusive lower bound on the `createdAt` of the records folded. */
   readonly since?: string;

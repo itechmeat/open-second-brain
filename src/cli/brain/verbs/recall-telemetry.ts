@@ -9,7 +9,7 @@ import {
   summarizeRecallTelemetry,
   type RecallTelemetryFilter,
 } from "../../../core/brain/recall-telemetry.ts";
-import { computeDeadWeight } from "../../../core/brain/dead-weight.ts";
+import { computeDeadWeight, DEAD_WEIGHT_MAX_LIMIT } from "../../../core/brain/dead-weight.ts";
 import { listGateTelemetry, summarizeGateTelemetry } from "../../../core/brain/gate-telemetry.ts";
 import { computeMemoryCostMeter } from "../../../core/brain/memory-cost-meter.ts";
 import { CliError, brainVerbContext, parse } from "../helpers.ts";
@@ -201,8 +201,10 @@ function costMeter(argv: string[]): number {
 function deadWeight(argv: string[]): number {
   const { flags } = parseTelemetryFlags(argv);
   // Record-only filters have no complement meaning; reject rather than
-  // silently ignore, mirroring the cost verb above.
-  for (const name of ["mode", "status", "channel", "host", "limit"]) {
+  // silently ignore, mirroring the cost verb above. `--limit` is the one
+  // exception (PR #248 review L10): it bounds the dead preview, which is
+  // otherwise pinned at the fold's 50-row default.
+  for (const name of ["mode", "status", "channel", "host"]) {
     if (flags[name] !== undefined) {
       throw new CliError(
         `brain recall-telemetry dead-weight: --${name} is not supported for dead weight`,
@@ -212,9 +214,15 @@ function deadWeight(argv: string[]): number {
   const vault = brainVerbContext(flags).vault;
   const since = trimOrUndefined(flags["since"]);
   const until = trimOrUndefined(flags["until"]);
+  const rawLimit = parsePositiveInteger(
+    trimOrUndefined(flags["limit"]),
+    "brain recall-telemetry dead-weight",
+    "--limit",
+  );
   const report = computeDeadWeight(vault, {
     ...(since !== undefined ? { since } : {}),
     ...(until !== undefined ? { until } : {}),
+    ...(rawLimit !== undefined ? { deadLimit: Math.min(rawLimit, DEAD_WEIGHT_MAX_LIMIT) } : {}),
   });
 
   if (flags["json"]) {

@@ -14,7 +14,7 @@ import { loadTunedParameters, resetTuning } from "../../core/search/tuning-store
 import { listGateTelemetry, summarizeGateTelemetry } from "../../core/brain/gate-telemetry.ts";
 import { computeMemoryCostMeter } from "../../core/brain/memory-cost-meter.ts";
 import { observedReuseRates } from "../../core/brain/observed-use.ts";
-import { computeDeadWeight } from "../../core/brain/dead-weight.ts";
+import { computeDeadWeight, DEAD_WEIGHT_MAX_LIMIT } from "../../core/brain/dead-weight.ts";
 import { everyArtifactRefView } from "../../core/brain/artifact-ref-view.ts";
 import { gatedOwnerScopeView } from "../../core/brain/owner-scope-view.ts";
 import {
@@ -304,10 +304,13 @@ async function toolBrainRecallTelemetry(
   // seventh operation on this tool - an operation, never a new tool, so
   // the tool-count pin does not move.
   if (operation === "dead_weight") {
-    // Record-only filters (mode/status/channel/host/limit) have no
-    // meaning for the complement; reject them rather than silently
-    // ignore, mirroring the cost op and the CLI's fail-closed verb.
-    for (const name of ["mode", "status", "channel", "host", "limit"] as const) {
+    // Record-only filters (mode/status/channel/host) have no meaning for
+    // the complement; reject them rather than silently ignore, mirroring
+    // the cost op and the CLI's fail-closed verb. `limit` is the one
+    // exception (PR #248 review L10): it bounds the dead preview, which
+    // is otherwise pinned at the fold's 50-row default, clamped to the
+    // shared maximum so the full list is reachable in bounded pages.
+    for (const name of ["mode", "status", "channel", "host"] as const) {
       if (args[name] !== undefined) {
         throw new MCPError(
           INVALID_PARAMS,
@@ -327,6 +330,9 @@ async function toolBrainRecallTelemetry(
     const report = computeDeadWeight(ctx.vault, {
       ...(filter.since !== undefined ? { since: filter.since } : {}),
       ...(filter.until !== undefined ? { until: filter.until } : {}),
+      ...(filter.limit !== undefined
+        ? { deadLimit: Math.min(filter.limit, DEAD_WEIGHT_MAX_LIMIT) }
+        : {}),
       ...(refs.filtersNothing ? {} : { includePath: (rel: string) => refs.visible(rel) }),
     });
     return { vault_path: vaultPathField(ctx), ...report };
@@ -1145,7 +1151,7 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_recall_telemetry",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
-      "List recall telemetry records or summarize recall coverage and gaps; cost folds write volume against reads per period; dead_weight reports in-scope pages no recorded recall ever surfaced, window stated and hidden pages dropped before totals. Opt-in emit; read-only.",
+      "List recall telemetry records or summarize recall coverage and gaps; cost folds write volume against reads per period; dead_weight reports in-scope pages no recall ever surfaced, hidden pages dropped before totals, dead list capped (limit; default 50, max 500). Opt-in emit; read-only.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1193,7 +1199,8 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         limit: {
           type: "integer",
           minimum: 1,
-          description: "Optional maximum record count for list.",
+          description:
+            "Optional maximum record count for list; dead_weight: the dead preview cap (default 50, max 500).",
         },
         write_cost: {
           type: "number",
