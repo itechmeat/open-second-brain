@@ -290,8 +290,20 @@ function scanTurn(text: string): TurnScan {
 
   // Ranges claimed by an earlier family; later passes never re-read them.
   const claimed: Span[] = [];
-  const offsetOf = (lineIndex: number, column: number): number =>
-    lines.slice(0, lineIndex).reduce((sum, line) => sum + line.length + 1, 0) + column;
+  // Prefix-sum offset table, built once per turn: line i starts at
+  // `lineOffsets[i]` inside `joined`, so a match's absolute offset is one
+  // lookup. The per-match reduction it replaces re-summed every preceding
+  // line for every URL hit - O(lines) per match, quadratic per turn, on
+  // the capture hot path. Same arithmetic, same answers.
+  const lineOffsets: number[] = [];
+  {
+    let acc = 0;
+    for (let i = 0; i < lines.length; i++) {
+      lineOffsets[i] = acc;
+      acc += lines[i]!.length + 1;
+    }
+  }
+  const offsetOf = (lineIndex: number, column: number): number => lineOffsets[lineIndex]! + column;
 
   // 1. URLs - the fact-extract family, on every line.
   for (let i = 0; i < lines.length; i++) {

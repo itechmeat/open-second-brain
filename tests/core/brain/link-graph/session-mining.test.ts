@@ -125,6 +125,24 @@ describe("session-mining families", () => {
     expect(out).toEqual([["url", "https://osb.example/repo.git"]]);
   });
 
+  test("span offsets stay aligned across a long turn: the URL claim lands where it must", () => {
+    // A long turn pushes the URL (and the code span beside it) far past the
+    // first line, so the claimed-range bookkeeping must hold its
+    // lines->joined offsets over hundreds of lines: a drifted offset would
+    // misplace the URL's claim and let the prose passes re-read inside it
+    // or swallow the code span.
+    const filler = Array.from({ length: 400 }, (_, i) => `filler line ${i} of plain prose`);
+    const text = [
+      ...filler,
+      "see https://osb.example/deep/link and `OffsetPinStore`",
+      ...filler,
+    ].join("\n");
+    const out = mined(text);
+    expect(out).toContainEqual(["url", "https://osb.example/deep/link"]);
+    expect(out).toContainEqual(["symbol", "OffsetPinStore"]);
+    expect(out.filter(([family]) => family === "url")).toHaveLength(1);
+  });
+
   test("code spans own their content: a path in a code span is a symbol, not a path", () => {
     const out = mined("run `src/core/store.ts` first");
     expect(out).toEqual([["symbol", "src/core/store.ts"]]);
