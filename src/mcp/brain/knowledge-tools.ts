@@ -1399,7 +1399,7 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         sample_id: {
           type: "string",
           description:
-            "state: the recall/context-pack quality-sample id these claims were stated against (a context receipt id or an opaque request hash). Frozen on each committed claim; events reads hydrate it into receipt/outcome provenance.",
+            "state: the quality-sample id (a context receipt id or opaque hash) these claims were stated against; frozen per claim, reads hydrate it into provenance.",
         },
       },
       required: ["operation"],
