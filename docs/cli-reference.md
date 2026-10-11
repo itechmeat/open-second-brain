@@ -558,6 +558,7 @@ o2b brain trigger             scan | list [--status S] | ack <id> | dismiss <id>
 o2b brain deep-synthesis      <topic> [--limit N] [--triggers] [--json] - deterministic topic dossier: agreements, contradictions, stale claims, knowledge gaps, plus a strongest-objection steelman
 o2b brain ideas               [--cap N] [--triggers] [--json] - ranked next-direction candidates from open questions, orphan notes, aging signals
 o2b brain recall-telemetry    gate-list | gate-summary [--host <name>] [--since <iso>] [--until <iso>] [--limit <n>] [--json] - recall-gate decision telemetry (recall_gate_telemetry, default off)
+o2b brain recall-telemetry    dead-weight [--since <iso>] [--until <iso>] [--json] - pages currently in scope that no recorded recall ever surfaced (since v1.80.0): the complement of the telemetry window's retrieved set against the vault walk, with the window, the dead-page cap and the gate caveat in the report; record-only filters are refused by name rather than ignored (see "Memory observability")
 o2b search <query> --global   Cross-vault union over profiles + read-only sources; origin-labelled results; external vaults are never written to
 ```
 
@@ -679,11 +680,12 @@ Wikilinks to frontmatter `aliases:` resolve at index materialization (schema v7)
 o2b brain pending             list [--lane signals|notes|ingest|all] | apply <id> [--dry-run] | reject <id> --reason <text> [--dry-run] - review the write-approval queues (`write_approval.enabled` plus the per-lane keys); signals stage flat in Brain/pending/ (sig- ids), note creates under Brain/pending/notes/ (note- ids carrying the encoded publish target), ingest summary pages under Brain/pending/ingest/ (ing- ids); list shows every lane sorted and names unreadable entries with a reason, apply moves the unchanged document to its decoded publish target (--dry-run previews and writes nothing), reject renders it into Brain/retired/ with the reason; everything staged under Brain/pending/ stays out of the search index (admission reason `review-pending`), so recall cannot surface an unreviewed document
 o2b brain signal retire       <id> --reason <text> [--superseded-by <id>] - move an inbox signal to Brain/retired/ with retire frontmatter (_status, retired_at, retired_reason, optional superseded_by, old-id alias); retired signals leave dream intake but stay queryable
 o2b brain entity prune        [--confirm] [--json] - list entity nodes whose labels fail the structural quality gate (dry-run default); --confirm removes nodes and their edges behind the snapshot gate and reports the recovery point
+o2b brain entity lexicon rebuild [--apply] [--json] - rebuild the store-learned label lexicon from the vault's own pages (dry-run default; --apply writes only the derived Brain/entities/lexicon.json)
 o2b brain forget-source       --confirm now snapshots Brain/ before any deletion and reports the snapshot run id; dry runs take no snapshot
 o2b brain doctor              gains the `symlink-escape` error (vault-internal symlink resolving outside the vault root) and the `entity-label-malformed` warning (prune candidates); `--remediate` gains the auto-safe `harden-permissions` step (owner-only chmod for existing Brain/ files, idempotent, step-capped, dry-run first)
 ```
 
-Extracted facts pass a deterministic durability gate before persisting: structural signals only (temp paths, progress counters, run-id and timestamp shapes, measurement-token dominance, exit-status shapes), extendable with `durability.denylist` regexes; rejections log `durability-skip` events and are surfaced by count in the route result. Entity labels are sanitized (`**Foo**` becomes `Foo`) and structurally validated at every intake boundary, with `entities.label_denylist` as the only vocabulary source. Feedback writes that closely resemble a confirmed same-scope preference return a conflict advisory (and log `write-conflict-advisory`) while the write proceeds. Embedding-side: `embedding_prefix_query`/`embedding_prefix_passage` (env twins, e5 preset defaults) control instruction prefixes, invalid vectors are rejected with `EMBEDDING_INVALID_VECTOR`, and quota exhaustion surfaces as non-retriable `EMBEDDING_QUOTA_EXHAUSTED` with Retry-After-aware backoff for plain rate limits.
+Extracted facts pass a deterministic durability gate before persisting: structural signals only (temp paths, progress counters, run-id and timestamp shapes, measurement-token dominance, exit-status shapes), extendable with `durability.denylist` regexes; rejections log `durability-skip` events and are surfaced by count in the route result. Entity labels are sanitized (`**Foo**` becomes `Foo`) and structurally validated at every intake boundary, with `entities.label_denylist` as the only vocabulary source. Since v1.80.0 the structural gate also learns from the store: entity creation consults the derived lexicon (`Brain/entities/lexicon.json`, dataset-hashed over the vault's own pages - no word list ships with the binary) and two more verdicts feed the existing heal triangle (`entity-label-malformed` findings plus `o2b brain entity prune`): a multi-token all-caps label with no prior stored occurrence (`shouted-heading`) and a caseful label whose every token is a learned common word (`function-word-run`) are refused at creation, while code-shaped labels (containing `_`, `.`, `/`, a digit, or internal uppercase) bypass both case rules, and labels in caseless scripts admit on the structural gate alone. The verdicts are advisory after admission: existing records are heal candidates, never auto-removed. Rebuild the lexicon with `o2b brain entity lexicon rebuild` after corpus edits; a stale, torn or expired artifact reads as absent, so admission degrades to today's structural behavior and never mis-rejects. Feedback writes that closely resemble a confirmed same-scope preference return a conflict advisory (and log `write-conflict-advisory`) while the write proceeds. Embedding-side: `embedding_prefix_query`/`embedding_prefix_passage` (env twins, e5 preset defaults) control instruction prefixes, invalid vectors are rejected with `EMBEDDING_INVALID_VECTOR`, and quota exhaustion surfaces as non-retriable `EMBEDDING_QUOTA_EXHAUSTED` with Retry-After-aware backoff for plain rate limits.
 
 ### Belief lifecycle and decision memory (since v1.33.0)
 
@@ -1296,6 +1298,36 @@ note: no conversation matched; <scanned> transcript file(s) scanned, <n> from an
 
 The four reasons sum to `scanned` minus the exported records, so an empty
 file under exit `0` can never be read as a machine that recorded nothing.
+
+### Session hallways (since v1.80.0)
+
+```text
+o2b brain hallways mine      [--min-co N] [--min-score X] [--limit N] [--min-sessions N] [--progress] - fold the mined-mention ledger into entity-to-session incidence and pairwise PMI; writes Brain/link-graph/hallways.json and the reviewable Brain/proposals/hallways.md
+o2b brain hallways show      read the proposals back
+o2b brain hallways promote   <family> <key> [--min-sessions N] - promote one association into the entity registry
+o2b brain hallways dismiss   <family> <key> - silence one key across future runs
+```
+
+While session import runs, a precision detector mines structured mentions
+from transcript turns - code symbols from spans, fences and
+qualified-identifier shapes, URLs, file paths in both slash directions,
+qualified identifiers - and refuses secret-shaped tokens (credential URLs,
+token or key query forms) outright, deduplicating at
+`(family, key, session)` granularity in a side ledger. The hallways pass
+folds that ledger into the associations of entities that keep turning up in
+the same imported transcripts even when no vault page links them, scored by
+pairwise PMI - the same math the vault-derived co-occurrence pass uses over
+a different corpus. The two graphs stay separate artifacts: hallways writes
+`Brain/link-graph/hallways.json` (dataset-hashed, fail-soft on a torn or
+stale read) beside, never merged into, the co-occurrence graph.
+
+Mining itself never writes an entity. `promote` is the only bridge into the
+registry, offered solely for keys seen in at least N distinct sessions
+(`--min-sessions`, default 3), and a promoted label still answers to the
+entity admission gate - one that fails the structural or lexicon verdicts is
+refused by the registry with its reason, not waved through. `dismiss`
+records the key in the artifact's dismissal set, and future mine runs skip
+it.
 
 ### Source distillation
 
@@ -1985,6 +2017,12 @@ o2b search rerank-eval        Rerank eval gate over a labelled dataset: runs the
                               --dataset PATH (required) --k N --compare-local --json. The
                               decision-model arm runs in enforce and needs an active decision-model
                               config; every query then sends its top candidates to that endpoint.
+                              Dataset queries may carry an optional `lang` field (since v1.80.0,
+                              non-empty string when present, default `en`, validated like
+                              `answer`); the report adds a per-language split beside the overall
+                              aggregates, each language folded with the same reduce over its
+                              per-query rows, so a bilingual dataset shows per-script lifts the
+                              blended number would average away.
 ```
 
 `search_rerank_kind` is `openai-compat` (default), `local` or
@@ -2425,6 +2463,46 @@ next read sees the current vault. Only agent activity triggers it.
 cron recipes of `o2b search reindex --cron-template` and the maintenance
 lane are still printed, but keyword freshness no longer needs them; a
 scheduled run remains the way to compute embeddings periodically.
+
+### Kind and property pushdown (since v1.80.0)
+
+```text
+o2b search query --kind page|section   narrow results to whole pages (the first chunk) or their sections (later chunks)
+```
+
+The v14 store migration adds a virtual `chunks.chunk_kind` column (`page`
+for chunk index 0, else `section`) with taxonomy indexes, a bounded
+`document_attributes` side table backfilled from each document's first
+chunk, and sargable path-prefix predicates (`path >= prefix AND path <
+prefix || U+FFFF`, with the caller prefix canonicalized, so a Windows
+backslash prefix now matches the same rows the POSIX spelling does). A
+`kind` filter pushes into the SQL of both lanes: the keyword lane filters
+before `ORDER BY`/`LIMIT`, the semantic lane filters inside its overfetch
+window. It is exposed as the MCP `brain_search`/`brain_query` `kind`
+argument and the CLI `--kind`.
+
+Promoted frontmatter keys push too. `type`, `tags`, `pinned` and
+`visibility` each already have exactly one indexed storage - the
+`page_type` column, the inline tag-link corpus the index holds,
+the `pinned` column, the `visibility` column - and a filter on one of them
+compiles to SQL against that storage instead of a per-row live-file read
+after ranking; the attributes side table deliberately does not carry them,
+so no key gains a second source of truth. Other property keys keep the
+post-rank live-file filter, so a mixed filter map straddles the two tiers
+by design.
+
+**The divergence this buys, stated plainly:** a pushed filter answers AS
+INDEXED, not as the file on disk this instant. That is the same
+relationship to the live vault every other indexed facet has - the content
+itself is the indexed snapshot - but it is new for filters, so it is
+documented rather than implied: a page whose frontmatter changed after the
+last index run is judged by its indexed frontmatter until the next run
+indexes it, while an unpromoted key would judge the live file. Tags push
+against the inline tag corpus exactly as indexed; `pinned` pushes only for
+the value `true` (the column folds absent and not-pinned together, so any
+other spelling judges the live frontmatter); `type` and `visibility`
+values are normalized the way the index stores them. Absent filters
+compile byte-identical SQL to before this wave.
 
 ### The reserved visibility token (since v1.54.0)
 

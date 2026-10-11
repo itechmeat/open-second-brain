@@ -378,12 +378,12 @@ flags for a narrower per-process full server.
 | `brain_audit`               | Read-only per-preference mutation trail (create / promote / update / retire / merge) with agent, reason, revision + content-hash before/after. | `pref_id`                                      |
 | `brain_brief`               | Read-only Brain summary for any window: `view: morning \| daily \| weekly \| monthly \| operator \| digest`.                                   | `view`                                         |
 | `brain_analytics`           | Read-only Brain analytics for any lens: `view: timeline \| attention_flows \| belief_evolution \| concept_synthesis \| dedup`. `view=dedup` summarises the persisted exact-hash ingest dedup records into a trend plus a per-source re-ingest ranking; every count is an exact sha-256 drop, never a semantic figure (the semantic detectors nominate merge candidates and never drop). | `view`                                         |
-| `brain_search`              | Read-only vault search with optional structured query lanes, explicit focus hints, time ranges, evidence-pack diagnostics, a selectable recall `profile` (`fast \| balanced \| thorough`), and an FTS `match_mode` (`all` \| `any`). | `query`                                        |
+| `brain_search`              | Read-only vault search with optional structured query lanes, explicit focus hints, time ranges, evidence-pack diagnostics, a selectable recall `profile` (`fast \| balanced \| thorough`), an FTS `match_mode` (`all` \| `any`), and since v1.80.0 a pushed `kind` filter (`page` \| `section`) plus SQL pushdown for the promoted `properties` keys. | `query`                                        |
 | `brain_recall_feedback`     | Record explicit up/down recall feedback for one search result; feeds the deterministic learned-weight fold.                                     | `query`, `result_path`, `verdict`              |
 | `brain_recall_gate`         | Read-only classifier for whether an automatic recall attempt should run; returns `retrieve` plus a stable reason. When the caller passes `scores` AND `match_quality` (the `idf_weighted_coverage` a search outcome reports - the two stand or fall together, and an incomplete pair is refused), also attaches an adequacy verdict (`sufficient` \| `weak` \| `insufficient`), a recommended action (`proceed` \| `re_recall` \| `abstain`), and an optional `escalate` flag. The LEVEL is decided by `match_quality` alone; the scores decide only the usable-result count. Thresholds via `recall_adequacy_sufficient` / `recall_adequacy_weak` / `recall_adequacy_min_results`.                              | `prompt`                                       |
 | `brain_context_pack`        | Budgeted context slice; pass `lanes: true` to return directives, constraints, and consider lanes. Filtered items include `safety.reasons`. Each item carries a structural `epistemic` status (`observed` \| `derived` \| `hypothesis` \| `plan` \| `unknown`) plus `evidence_refs` derived from existing graph metadata; fields are absent when the status is `unknown`. Takes the same adequacy pair as `brain_recall_gate` under its own spelling, `recall_scores` AND `match_quality`: both or neither, an incomplete pair is refused, and the schema states it as `dependentRequired` keyed on this tool's own scores name. | `max_tokens`                                   |
 | `brain_context_receipts`    | List or show opt-in prompt context receipt continuity records with budgets, hashes, source refs, safety/redaction metadata, and item IDs.      | `operation`                                    |
-| `brain_recall_telemetry`    | List or summarise opt-in recall telemetry records for search, context-pack, and pre-compress calls.                                            | `operation`                                    |
+| `brain_recall_telemetry`    | List or summarise opt-in recall telemetry records for search, context-pack, and pre-compress calls; since v1.80.0 the `dead_weight` operation reports in-scope pages no recorded recall ever surfaced. | `operation`                                    |
 | `brain_route_metrics`       | List or summarise opt-in route-level MCP tool latency (`mcp_route_latency` records); `summary` rolls each tool up into count, error count, and min/avg/max + p50/p95/p99 latency, slowest-first, plus a per-stage count/avg/p95 for a route whose records carry write stages. Emitted only when `mcp_route_metrics_enabled` is on; payload-safe (tool, scope, status, duration, arg key names, stage names). Read-only. | `operation`                                    |
 | `brain_retrieval_plan`      | Shadow-only retrieval advisor for one `question`: composes query intent/weights, the summary-surface route, the context-pack density allocation, the token-impact ledger, and observed route p95 latency into a strategy, token-budget allocation, graph-expansion advice, reliability, and a marginal-value stop. Optional `token_budget`. Read-only; exposes no mutating parameters and changes no ranking. | `question`                                     |
 | `brain_token_impact`        | Durable value-of-memory ledger: `record` posts a context pack's tokenizer-exact prompt-token delta (`baseline` − `packed`, `method` exact/fallback) plus an optional modeled inference-avoidance estimate; `outcome` posts first-pass/repair/retry to calibrate the model; `summary` keeps EXACT prompt-token savings strictly separate from the MODELED (outcome-calibrated) figure; `list` reads raw samples. Writes gated on `token_impact_ledger_enabled` (default off); payload-safe (counts + opaque pack id only). Reads ignore the gate. | `operation`                                    |
@@ -484,6 +484,17 @@ than it handed you. Read it as candidates ranked, not as a corpus
 statistic: the pool is capped at roughly three times the requested
 `limit`, so it moves with `limit` and saturates on a large vault, and
 link traversal can add a document that matched no term at all.
+Since v1.80.0 `brain_search` accepts `kind: "page"|"section"`, pushed into
+the store's SQL on both lanes (keyword: before `ORDER BY`/`LIMIT`;
+semantic: inside the overfetch window), and the promoted property keys
+`type`, `tags`, `pinned` and `visibility` in a `properties` filter map
+compile to SQL against their dedicated indexed storage instead of a
+post-rank live-file read. A pushed filter answers AS INDEXED - the indexed
+snapshot, like the content itself - so a page edited after the last index
+run is judged by its indexed frontmatter until the next run, while
+unpromoted keys keep the live-file filter; other values of `pinned` than
+`true` fall back rather than approximate. See
+[`docs/cli-reference.md`](cli-reference.md#kind-and-property-pushdown-since-v1800).
 A deterministic summary-search router (t_7b96f242) inspects each query for
 structural summary signals - a source-targeted `source:<path>` token, or a
 `kind:<t>`/`type:<t>` token whose value is a declared artifact kind in the
@@ -501,7 +512,14 @@ and `telemetry`. `brain_context_receipts` supports `operation: "list"|"show"`;
 `brain_recall_telemetry` supports `operation: "list"|"summary"|"cost"` (`cost`
 folds write volume - feedback/apply-evidence/note plus host-bridge writes -
 against reads into a write-vs-read ratio, a `write_heavy` flag, and a rough
-weighted cost signal per period; tune with `write_cost`/`read_cost`/`write_heavy_ratio`);
+weighted cost signal per period; tune with `write_cost`/`read_cost`/`write_heavy_ratio`).
+Since v1.80.0 the same tool also answers `operation: "dead_weight"`: pages
+currently in scope that no recorded recall within the telemetry window ever
+surfaced - the complement of the recorded retrieved set against the vault
+walk, windowed by `since`/`until`, with the observation window, a capped
+dead-page list, and the gate caveat (telemetry is opt-in and records only
+surfaced top rows, so the report claims "no recorded retrieval surface",
+never absolute never) in every payload.
 `brain_context_presets` supports `operation: "show"|"suggest"|"diff"`; and
 `brain_generation_reports` supports `action: "record"|"list"|"summary"` -
 `record` is gated (default off) by a per-call `enable` flag or the
