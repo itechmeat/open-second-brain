@@ -602,6 +602,38 @@ const VEC_ORDER = "ORDER BY v.distance ASC, m.chunk_id ASC";
 const VEC_KNN_OVERFETCH = 4;
 
 /**
+ * How often a starved FILTERED lane widens its window before it gives up
+ * (recall-quality review M2). The kind, pushdown and prefix predicates
+ * run AFTER vec0's k-selection, so a selective filter can drop most of
+ * the naive window - `kind=page` worst of all, one page chunk per
+ * document - and answer with little or nothing. Each escalation asks
+ * again with `k` multiplied by {@link VEC_KNN_OVERFETCH}, at most this
+ * many times, and {@link VEC_KNN_MAX} binds every window: it is
+ * sqlite-vec's own k ceiling, past which the extension refuses the query.
+ * An unfiltered lane never escalates - a short answer there is an
+ * exhausted corpus, not a starved filter.
+ */
+const VEC_KNN_ESCALATIONS = 2;
+const VEC_KNN_MAX = 4096;
+
+/** The named stderr notice a still-starved filtered lane emits. */
+const VEC_FILTER_STARVED_NOTICE = "semantic-lane-filter-starved";
+
+/**
+ * How many embedded chunks the KNN draws from. Read only on the starved
+ * path, and only to tell the two short answers apart: a window that
+ * already reaches the whole population judged every chunk in the store,
+ * so coming up short is the corpus's own shape and no widening can help;
+ * a window still below the population was truncated, and rows it never
+ * selected might have passed the filter - that, and only that, is
+ * starvation. `chunk_vec_map` is the plain rowid bridge, one row per
+ * stored vector, so counting it answers without scanning the vtable.
+ */
+function countVecPopulation(db: Database): number {
+  return db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM chunk_vec_map").get()?.n ?? 0;
+}
+
+/**
  * The composed semantic-lane query (recall-quality, C4). With no prefix,
  * kind or pushed predicates this is byte-identical to the pre-C4 string;
  * every active filter extends the WHERE clause beside the KNN, inside the
@@ -666,31 +698,58 @@ export function semanticTopK(
     );
   }
   const limit = Math.max(1, opts.limit | 0);
-  const knn = limit * VEC_KNN_OVERFETCH;
   const prefix = opts.pathPrefix && opts.pathPrefix.length > 0 ? opts.pathPrefix : null;
   const pushFrag = pushdownSqlFragment(opts.pushdown ?? null);
   const kind = opts.kind ?? null;
+  const filtered = prefix !== null || pushFrag !== null || kind !== null;
 
   assertValidVector(queryVector, "semanticTopK");
   const buf = vecToBuffer(queryVector);
-  const rows = db
-    .query<{ chunk_id: number; document_id: number; distance: number }, SQLQueryBindings[]>(
-      semanticTopKSql({ pathPrefix: prefix, kind, pushdown: opts.pushdown ?? null }),
-    )
-    .all(
-      buf,
-      knn,
-      ...(prefix !== null
-        ? (() => {
-            // Sargable prefix range (C1); see path-prefix.ts. A null bound
-            // (last code point cannot increment) runs lower-bound-only.
-            const { lo, hi } = pathPrefixRange(prefix);
-            return hi !== null ? [lo, hi] : [lo];
-          })()
-        : []),
-      ...(pushFrag !== null ? pushFrag.bindings : []),
-      ...(kind !== null ? [kind] : []),
-    );
+  const statement = db.query<
+    { chunk_id: number; document_id: number; distance: number },
+    SQLQueryBindings[]
+  >(semanticTopKSql({ pathPrefix: prefix, kind, pushdown: opts.pushdown ?? null }));
+  const bindings = (): SQLQueryBindings[] => [
+    ...(prefix !== null
+      ? (() => {
+          // Sargable prefix range (C1); see path-prefix.ts. A null bound
+          // (last code point cannot increment) runs lower-bound-only.
+          const { lo, hi } = pathPrefixRange(prefix);
+          return hi !== null ? [lo, hi] : [lo];
+        })()
+      : []),
+    ...(pushFrag !== null ? pushFrag.bindings : []),
+    ...(kind !== null ? [kind] : []),
+  ];
+  let knn = Math.min(limit * VEC_KNN_OVERFETCH, VEC_KNN_MAX);
+  let rows = statement.all(buf, knn, ...bindings());
+  // Filtered starvation (recall-quality review M2): the predicates above
+  // judge rows vec0 already selected, so a selective filter can empty the
+  // window. Widen it - bounded, see VEC_KNN_ESCALATIONS - before giving
+  // up; a window that already reaches the whole population needs no
+  // widening, and a widening that still came short names the starvation.
+  if (filtered && rows.length < limit) {
+    const population = countVecPopulation(db);
+    for (
+      let escalation = 0;
+      escalation < VEC_KNN_ESCALATIONS && rows.length < limit;
+      escalation++
+    ) {
+      if (knn >= population) break;
+      const widened = Math.min(knn * VEC_KNN_OVERFETCH, VEC_KNN_MAX);
+      if (widened <= knn) break;
+      knn = widened;
+      rows = statement.all(buf, knn, ...bindings());
+    }
+    if (rows.length < limit && knn < population) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `${VEC_FILTER_STARVED_NOTICE}: the filtered nearest-neighbour window widened to ` +
+          `${knn} of ${population} embedded chunks and still kept ${rows.length} of the ` +
+          `requested ${limit} row(s); results may be incomplete while this filter is so selective`,
+      );
+    }
+  }
   return rows.slice(0, limit).map((r) => ({
     chunkId: r.chunk_id,
     documentId: r.document_id,
