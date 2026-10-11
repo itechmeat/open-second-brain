@@ -366,6 +366,35 @@ function refuseFile(relPath: string, rules: VaultScopeRules): ExcludedEntry | nu
 }
 
 export function walkVaultScope(vault: string, scope: VaultScope): VaultScopeWalk {
+  const detail = walkVaultScopeDetail(vault, scope);
+  return Object.freeze({
+    includedFiles: detail.includedFiles,
+    includedDirs: detail.includedDirs,
+    excludedDirs: detail.excludedDirs,
+    excludedFiles: detail.excludedFiles,
+  });
+}
+
+/**
+ * The same walk, answering with the INCLUDED paths themselves (t_1ee67e5b).
+ *
+ * `walkVaultScope` deliberately reports counts only - the MCP status
+ * payload stays small - but a utilization fold needs the population, not
+ * its size. This accessor shares the one walk implementation (same scope
+ * predicates, same admission, same symlink guards), so the two answers
+ * cannot drift: `paths.length === walkVaultScope(...).includedFiles` for
+ * the same vault and scope. Walk order, hence the array order, is
+ * lexicographic (per-directory sorted readdir, depth-first).
+ */
+export function walkVaultScopePaths(vault: string, scope: VaultScope): ReadonlyArray<string> {
+  return walkVaultScopeDetail(vault, scope).includedPaths;
+}
+
+interface VaultScopeWalkDetail extends VaultScopeWalk {
+  readonly includedPaths: ReadonlyArray<string>;
+}
+
+function walkVaultScopeDetail(vault: string, scope: VaultScope): VaultScopeWalkDetail {
   const vaultReal = (() => {
     try {
       return realpathSync(vault);
@@ -375,6 +404,7 @@ export function walkVaultScope(vault: string, scope: VaultScope): VaultScopeWalk
   })();
   const excludedDirs: ExcludedEntry[] = [];
   const excludedFiles: ExcludedEntry[] = [];
+  const includedPaths: string[] = [];
   let includedFiles = 0;
   let includedDirs = 0;
   const seenDirs = new Set<string>([vaultReal]);
@@ -437,6 +467,7 @@ export function walkVaultScope(vault: string, scope: VaultScope): VaultScopeWalk
         continue;
       }
       includedFiles++;
+      includedPaths.push(rel);
     }
   }
 
@@ -447,6 +478,7 @@ export function walkVaultScope(vault: string, scope: VaultScope): VaultScopeWalk
     includedDirs,
     excludedDirs: Object.freeze(excludedDirs),
     excludedFiles: Object.freeze(excludedFiles),
+    includedPaths: Object.freeze(includedPaths),
   });
 }
 
