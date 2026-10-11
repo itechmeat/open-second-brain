@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { appendContinuityRecord } from "../../../src/core/brain/continuity/store.ts";
-import type { ContinuityRecordKind } from "../../../src/core/brain/continuity/types.ts";
+import type { AppendContinuityRecordInput } from "../../../src/core/brain/continuity/types.ts";
 import { runDoctor } from "../../../src/core/brain/doctor.ts";
 import {
   SESSION_IDENTITY_CHECK_CODE,
@@ -41,7 +41,10 @@ afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
-function seed(payload: Record<string, unknown>, kind: ContinuityRecordKind = "session_turn"): void {
+function seed(
+  payload: Record<string, unknown>,
+  kind: AppendContinuityRecordInput["kind"] = "session_turn",
+): void {
   appendContinuityRecord(vault, {
     kind,
     createdAt: "2026-06-01T00:00:00.000Z",

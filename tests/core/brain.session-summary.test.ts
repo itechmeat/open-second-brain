@@ -21,6 +21,7 @@ import {
   listContinuityRecords,
   appendContinuityRecord,
 } from "../../src/core/brain/continuity/store.ts";
+import type { ContinuityRecord } from "../../src/core/brain/continuity/types.ts";
 
 let vault: string;
 
