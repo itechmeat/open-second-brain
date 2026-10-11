@@ -99,6 +99,9 @@ const DIRECT_STORE_READERS: Readonly<Record<string, string>> = Object.freeze({
     "session_ref resolves against the same universe the writers stamp.",
   "src/core/brain/link-graph/repair-lane.ts":
     "reads the WHOLE store to harvest `sourceRefs` paths for link repair.",
+  "src/core/brain/link-graph/session-mining.ts":
+    "reads `session_entity_mention` to seed a re-import's dedupe set, so a " +
+    "repeated transcript cannot re-mint its rows.",
   "src/core/brain/link-graph/hallways.ts":
     "reads `session_entity_mention` for the mined-mention ledger the hallways " +
     "fold turns into incidence and pairwise PMI.",
@@ -148,7 +151,7 @@ const DIRECT_STORE_READERS: Readonly<Record<string, string>> = Object.freeze({
  * nothing extra to keep true.
  */
 const READ_MODEL_READER_COUNT = 4;
-const DIRECT_STORE_READER_COUNT = 25;
+const DIRECT_STORE_READER_COUNT = 26;
 
 /** A file the classifier must see, and that `grep` alone does not. */
 

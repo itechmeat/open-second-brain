@@ -357,6 +357,13 @@ export const OUT_OF_VAULT_SWEEP_EXCLUSIONS: ReadonlyMap<string, string> = new Ma
       "outlives the run outside the vault",
   ],
   [
+    "src/core/brain/link-graph/session-mining.ts",
+    "it reads the home root only to replace it with a `~` prefix inside a mined " +
+      "path key, so a session transcript can never mint a host-absolute path " +
+      "with the operator's username into the ledger; it builds no out-of-vault " +
+      "path to write, read or create, and every artifact it writes lands in the vault",
+  ],
+  [
     "src/mcp/error-redaction.ts",
     "it reads the home and temp roots only to REDACT them out of error prose sent to a remote " +
       "MCP caller; it builds no path to write, read or create, so it leaves nothing on the " +
