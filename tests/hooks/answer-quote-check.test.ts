@@ -489,6 +489,41 @@ describe("answer-quote-check hook - ledger membership", () => {
     const run = await runHook();
     expect(annotations(run)).toEqual([]);
   });
+
+  test("a slash-bearing origin label is stripped from a recall key naming a same-vault note", async () => {
+    writeConfig("shadow");
+    writeNote(
+      "Brain/notes/restaking.md",
+      "First line about staking.\nSecond line: reuses staked capital.\n",
+    );
+    expect(
+      recordRecallInjected(vault, SESSION, ["profile/alice:Brain/notes/restaking.md#L1-L9"]),
+    ).toBe(true);
+    writeTranscript([
+      ccUser("summarize"),
+      ccAssistant('As the context showed, restaking "reuses staked capital".'),
+    ]);
+    const run = await runHook();
+    expect(run.exit).toBe(0);
+    expect(annotations(run)).toEqual([]);
+  });
+
+  test("a recall key whose note the active vault does not contain is note-unavailable, deliberately", async () => {
+    // The cross-origin note lives in another vault; the active vault
+    // cannot read it, and "could not check" is the honest verdict.
+    writeConfig("shadow");
+    expect(
+      recordRecallInjected(vault, SESSION, ["profile/alice:Brain/notes/elsewhere.md#L1-L9"]),
+    ).toBe(true);
+    writeTranscript([
+      ccUser("summarize"),
+      ccAssistant('As the context showed, restaking "reuses staked capital".'),
+    ]);
+    const run = await runHook();
+    const found = annotations(run);
+    expect(found.length).toBe(1);
+    expect(found[0]).toContain("[note-unavailable]");
+  });
 });
 
 describe("answer-quote-check hook - the subagent phase", () => {

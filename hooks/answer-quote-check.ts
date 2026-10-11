@@ -406,7 +406,20 @@ export function evidenceFor(
 
 // ----- the injection ledger's candidate notes ------------------------------
 
-/** Note paths one recall ledger key names, with its line range. */
+/**
+ * Note path + line range one recall ledger key names. Recall keys render
+ * `<origin>:<vault-relative path>#L<start>-L<end>` (`recallInjectNoteKey`),
+ * where the origin is a search-origin label
+ * (`src/core/brain/portability/origins.ts`): the bare `local` of the
+ * active vault, or a kind-namespaced origin whose label carries a slash -
+ * `profile/<name>`, `source/<alias>` - for a note recalled from another
+ * vault. Splitting on the LAST colon before the `#L` anchor puts the
+ * whole label on the left, slash-bearing or not, and the path - always
+ * carrying a `/` - on the right; the label is dropped. The cross-origin
+ * note itself still cannot be read under the active vault - it is
+ * evidence outside this vault - so its spans resolve as
+ * `note-unavailable` deliberately, never as an all-clear.
+ */
 function recallKeyCandidate(
   key: string,
 ): { readonly path: string; readonly startLine: number; readonly endLine: number } | null {
@@ -415,10 +428,13 @@ function recallKeyCandidate(
   const range = /^L(\d+)-L(\d+)$/.exec(key.slice(hash + 1));
   if (range === null) return null;
   const body = key.slice(0, hash);
-  const colon = body.indexOf(":");
-  // `<origin>:<path>` with a slug origin; a vault-relative path always
-  // carries a `/`, an origin never does.
-  const path = colon !== -1 && !body.slice(0, colon).includes("/") ? body.slice(colon + 1) : body;
+  const colon = body.lastIndexOf(":");
+  const label = colon === -1 ? null : body.slice(0, colon);
+  const rest = colon === -1 ? body : body.slice(colon + 1);
+  // `<origin>:<path>`: the right side is a vault-relative path, whatever
+  // the left side looks like. A colon with no slash on either side is
+  // not a recognized key shape and the body stays whole.
+  const path = rest.includes("/") || (label !== null && label.includes("/")) ? rest : body;
   return { path, startLine: Number(range[1]), endLine: Number(range[2]) };
 }
 
