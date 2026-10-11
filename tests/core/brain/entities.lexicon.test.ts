@@ -27,6 +27,7 @@ import {
   ENTITY_LEXICON_TOP_K,
   __clearEntityLexiconCache,
   deriveEntityLexicon,
+  deriveEntityLexiconFromPaths,
   entityLexiconDatasetHash,
   loadEntityLexicon,
   resolveEntityLexicon,
@@ -216,5 +217,47 @@ describe("resolveEntityLexicon handle", () => {
       valid: false,
       reason: "shouted-heading",
     });
+  });
+});
+
+describe("deriveEntityLexicon mid-derive races", () => {
+  test("a corpus file removed between enumeration and fold does not poison the artifact", () => {
+    writeCorpusPage("keep.md", "atlas kept notes about the setup.");
+    writeCorpusPage("vanish.md", "orphanword vanishes mid derive.");
+    // The race, reproduced deterministically: enumerate the corpus the way
+    // the derive does, then lose a file BEFORE the fold reads it.
+    const enumerated = [join(vault, "keep.md"), join(vault, "vanish.md")];
+    rmSync(join(vault, "vanish.md"));
+
+    const doc = deriveEntityLexiconFromPaths(vault, enumerated, { now: NOW });
+
+    // The fold reflects what was enumerated and still readable: the
+    // vanished file's tokens are gone by absence, the survivor's remain -
+    // skipped by name, never folded as a silent empty page while the hash
+    // vouches for its bytes.
+    expect(doc.entries["atlas"]).toBeDefined();
+    expect(doc.entries["orphanword"]).toBeUndefined();
+
+    // The hash fingerprints the enumerated set with the vanished file
+    // skipped, so it agrees with the fingerprint a fresh walk computes now:
+    // the artifact does not fail freshness on every read until re-derived.
+    expect(doc.dataset_hash).toBe(entityLexiconDatasetHash(vault));
+
+    // End to end: the persisted artifact validates at resolve time.
+    writeEntityLexicon(vault, doc);
+    expect(loadEntityLexicon(vault, entityLexiconDatasetHash(vault))).not.toBeNull();
+    expect(resolveEntityLexicon(vault)).not.toBeNull();
+  });
+
+  test("deriving over a fresh enumeration is the single-pass derive", () => {
+    writeCorpusPage("alpha.md", "the runner kept notes about the setup.");
+    const doc = deriveEntityLexicon(vault, { now: NOW });
+    // The one-walk derive and the explicit-paths derive over the same
+    // corpus agree on everything but are driven by the same enumeration.
+    const paths = [join(vault, "alpha.md")];
+    const explicit = deriveEntityLexiconFromPaths(vault, paths, { now: NOW });
+    expect(explicit.entries).toEqual(doc.entries);
+    expect(explicit.dataset_hash).toBe(doc.dataset_hash);
+    expect(explicit.caseful).toBe(doc.caseful);
   });
 });

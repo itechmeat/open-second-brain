@@ -139,44 +139,68 @@ function foldCorpus(paths: ReadonlyArray<string>): {
 }
 
 /**
- * The dataset fingerprint: one part per walked corpus page, carrying its
- * vault-relative path, mtime and size. The artifact lives under the Brain
- * root, which the walk excludes, so writing it never stales itself.
+ * The dataset fingerprint over an EXPLICIT enumeration: one part per
+ * enumerated corpus page, carrying its vault-relative path, mtime and
+ * size. A page that vanished between the enumeration and the stat is
+ * SKIPPED BY NAME - it contributes no part - so a derive that raced a
+ * deletion bakes the fingerprint of the corpus it actually saw, and the
+ * fingerprint a later freshness check computes over the same surviving
+ * corpus agrees. Stamping a vanished page "unreadable" instead would bake
+ * a part no fresh walk can ever reproduce and fail freshness on every
+ * read until a re-derive - the poison this convention removes.
+ */
+function entityLexiconDatasetHashForPaths(vault: string, paths: ReadonlyArray<string>): string {
+  const parts: string[] = [];
+  for (const path of paths) {
+    const rel = path.slice(vault.length).replace(/\\/g, "/").replace(/^\//, "");
+    let stamp: string;
+    try {
+      const st = statSync(path, { bigint: true });
+      stamp = `${st.mtimeNs}:${st.size}`;
+    } catch {
+      continue;
+    }
+    parts.push(`${rel}\u0000${stamp}`);
+  }
+  return deriveDatasetHash(parts);
+}
+
+/**
+ * The dataset fingerprint of the corpus as it stands NOW: one fresh walk,
+ * one part per page ({@link entityLexiconDatasetHashForPaths}). This is
+ * the freshness side only - a derive must fingerprint the enumeration it
+ * actually folded, not this re-walk, or a mid-derive change bakes a hash
+ * that vouches for bytes the entries never read.
  */
 export function entityLexiconDatasetHash(vault: string): string {
   const pages = listVaultPages(vault, {
     skipDirs: [...EXCLUDED_DIRS, BRAIN_ROOT_REL],
     reach: MAINTENANCE_LANE_REACH,
   });
-  const parts = pages.map((page) => {
-    const rel = page.path.slice(vault.length).replace(/\\/g, "/").replace(/^\//, "");
-    let stamp = "unreadable";
-    try {
-      const st = statSync(page.path, { bigint: true });
-      stamp = `${st.mtimeNs}:${st.size}`;
-    } catch {
-      stamp = "unreadable";
-    }
-    return `${rel}\u0000${stamp}`;
-  });
-  return deriveDatasetHash(parts);
+  return entityLexiconDatasetHashForPaths(
+    vault,
+    pages.map((page) => page.path),
+  );
 }
 
 /**
- * Derive the lexicon from the current corpus. Deterministic for a fixed
- * vault and clock: the same pages fold to the same entries, ranking and
- * hash. Reads only - the walk is a read, and the write is a separate,
- * explicit step ({@link writeEntityLexicon}).
+ * Derive the lexicon from an EXPLICIT enumeration of corpus pages - the
+ * single-pass core {@link deriveEntityLexicon} delegates to. The dataset
+ * hash is computed over THIS path list, the same list the fold reads, so
+ * the artifact's hash always fingerprints the input its entries came
+ * from. A page that vanishes before its read is folded as nothing and
+ * skipped in the hash by name (see the hash helper): the artifact then
+ * reflects the surviving corpus exactly, and a freshness check over that
+ * same surviving corpus validates it. Deterministic for a fixed path
+ * list and clock.
  */
-export function deriveEntityLexicon(
+export function deriveEntityLexiconFromPaths(
   vault: string,
+  paths: ReadonlyArray<string>,
   opts: DeriveEntityLexiconOptions = {},
 ): EntityLexiconDocument {
-  const pages = listVaultPages(vault, {
-    skipDirs: [...EXCLUDED_DIRS, BRAIN_ROOT_REL],
-    reach: MAINTENANCE_LANE_REACH,
-  });
-  const { entries, caseful } = foldCorpus(pages.map((page) => page.path));
+  const dataset_hash = entityLexiconDatasetHashForPaths(vault, paths);
+  const { entries, caseful } = foldCorpus(paths);
   const topK = Math.min(
     Math.max(0, Math.floor(opts.topK ?? ENTITY_LEXICON_TOP_K)),
     ENTITY_LEXICON_TOP_K,
@@ -190,11 +214,35 @@ export function deriveEntityLexicon(
   return {
     schema: ENTITY_LEXICON_SCHEMA_VERSION,
     generated_at: isoSecond(opts.now ?? new Date()),
-    dataset_hash: entityLexiconDatasetHash(vault),
+    dataset_hash,
     corpus_scope: ENTITY_LEXICON_CORPUS_SCOPE,
     caseful,
     entries: capped,
   };
+}
+
+/**
+ * Derive the lexicon from the current corpus. ONE walk: the enumeration
+ * feeds both the dataset hash and the fold, so the baked hash always
+ * describes the corpus the entries were read from - the previous
+ * two-walk shape hashed a re-walk that could observe a corpus the fold
+ * never saw, and a mid-derive deletion then baked a fingerprint the
+ * artifact could never validate against again. Reads only - the write is
+ * a separate, explicit step ({@link writeEntityLexicon}).
+ */
+export function deriveEntityLexicon(
+  vault: string,
+  opts: DeriveEntityLexiconOptions = {},
+): EntityLexiconDocument {
+  const pages = listVaultPages(vault, {
+    skipDirs: [...EXCLUDED_DIRS, BRAIN_ROOT_REL],
+    reach: MAINTENANCE_LANE_REACH,
+  });
+  return deriveEntityLexiconFromPaths(
+    vault,
+    pages.map((page) => page.path),
+    opts,
+  );
 }
 
 /**
