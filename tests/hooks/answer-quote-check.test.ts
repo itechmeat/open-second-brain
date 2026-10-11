@@ -270,9 +270,12 @@ describe("answer-quote-check hook - annotation rendering", () => {
     writeConfig("shadow");
     writeNote("Brain/notes/restaking.md", "Restaking reuses staked capital.\n");
     const long = "fabricated padding word after fabricated padding word ";
+    // Three repetitions put the raw span well PAST the preview cap (117
+    // chars, one repeat short of QUOTE_SPAN_PREVIEW_MAX_CHARS, would pass
+    // for a hook that rendered the raw span instead of the preview).
     writeTranscript([
       ccUser("summarize"),
-      ccAssistant(`Per Brain/notes/restaking.md, it "${long}${long} and more" holds.`),
+      ccAssistant(`Per Brain/notes/restaking.md, it "${long.repeat(3)} and more" holds.`),
     ]);
     const run = await runHook();
     const found = annotations(run);
