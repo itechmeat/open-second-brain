@@ -6,9 +6,11 @@
  * reranker actually improves recall/ranking quality on that store's own
  * labelled queries. It runs the existing recall-benchmark twice - rerank
  * OFF then ON - over the same dataset and compares the metric families
- * (hit@k, MRR). Reranking is recommended only when it lifts ranking without
- * regressing hit@k, so a store where the reranker does not help never
- * silently enables one that hurts.
+ * (hit@k, MRR), pooled and per language. Reranking is recommended only
+ * when it lifts ranking without regressing hit@k in the pooled numbers
+ * OR in any single language (t_693fa22a review, M14), so a store where
+ * the reranker helps one language and hurts another never silently
+ * enables on the pooled delta.
  *
  * Reuses `runRecallBenchmark` for the metrics rather than a bespoke scorer,
  * and is deterministic and offline when the store and reranker are (the
@@ -26,9 +28,9 @@ export interface RerankEvalGateOptions {
   readonly k?: number;
   /** Reranker kind to evaluate (defaults to "local", the offline reranker). */
   readonly kind?: ResolvedRerankConfig["kind"];
-  /** Minimum MRR lift required to recommend enabling. Default 0.01. */
+  /** Minimum pooled MRR lift required to recommend enabling. Default 0.01. */
   readonly minMrrDelta?: number;
-  /** Minimum hit@k lift that alone justifies enabling. Default 0.01. */
+  /** Minimum pooled hit@k lift that alone justifies enabling. Default 0.01. */
   readonly minHitDelta?: number;
   /**
    * The decision-model config for `kind: "decision-model"`, when the
@@ -67,6 +69,63 @@ export interface RerankEvalDeltas {
   readonly mrr: number;
   /** The same difference folded per language group. */
   readonly byLang: Readonly<Record<string, RerankDelta>>;
+}
+
+/**
+ * Slack for float noise between two folds of the same orders: identical
+ * rankings fold to bit-identical fractions, and a real demotion moves a
+ * fraction by far more than this, so only genuine dust lands inside it.
+ */
+const VERDICT_FP_NOISE = 1e-9;
+
+/**
+ * The gate's verdict rule, pure so a constructed pair of reports pins it
+ * unit-wise (t_693fa22a review, M14). Enables reranking only when the
+ * POOLED numbers lift - hit@k does not regress and either MRR or hit@k
+ * gains at least the requested margin - AND no single language regresses
+ * on either family: a reranker that helps EN and hurts ZH must not be
+ * recommended on the pooled delta. The per-language check subsumes the
+ * pooled hit@k floor (a pooled regression is always some language's
+ * regression), and both stay so the rule reads as the contract it keeps.
+ */
+export function rerankEvalVerdict(
+  baseline: RecallBenchmarkReport,
+  reranked: RecallBenchmarkReport,
+  minMrrDelta: number,
+  minHitDelta: number,
+): {
+  improves: boolean;
+  recommendation: "enable" | "keep-disabled";
+  deltas: RerankEvalDeltas;
+} {
+  const hitDelta = reranked.hitAtK - baseline.hitAtK;
+  const mrrDelta = reranked.mrr - baseline.mrr;
+
+  // The per-language fold of the same difference (M14): one entry per
+  // language group of the baseline, so a verdict consumer sees which
+  // language moved which way. The keys are the baseline's, and both arms
+  // ran the same dataset, so the groups always pair up.
+  const byLang: Record<string, RerankDelta> = {};
+  let languageRegressed = false;
+  for (const [lang, before] of Object.entries(baseline.byLang)) {
+    const after = reranked.byLang[lang];
+    const hitAtK = (after?.hitAtK ?? before.hitAtK) - before.hitAtK;
+    const mrr = (after?.mrr ?? before.mrr) - before.mrr;
+    byLang[lang] = Object.freeze({ hitAtK, mrr });
+    if (hitAtK < -VERDICT_FP_NOISE || mrr < -VERDICT_FP_NOISE) languageRegressed = true;
+  }
+
+  // Never recommend a reranker that drops hit@k pooled or in any one
+  // language; among non-regressing candidates, require a real pooled MRR
+  // or hit@k lift.
+  const improves =
+    !languageRegressed && hitDelta >= 0 && (mrrDelta >= minMrrDelta || hitDelta >= minHitDelta);
+
+  return {
+    improves,
+    recommendation: improves ? "enable" : "keep-disabled",
+    deltas: Object.freeze({ hitAtK: hitDelta, mrr: mrrDelta, byLang: Object.freeze(byLang) }),
+  };
 }
 
 function withRerank(
@@ -114,9 +173,8 @@ function decisionModelFor(
 
 /**
  * Evaluate whether reranking helps this store. Runs the benchmark with
- * rerank off and on and compares. Recommends enabling only when MRR lifts
- * by at least `minMrrDelta` (or hit@k by `minHitDelta`) AND hit@k does not
- * regress - a strictly safe promotion rule.
+ * rerank off and on and compares through {@link rerankEvalVerdict} - the
+ * pooled lift with the no-regression rule, pooled and per language.
  */
 export async function runRerankEvalGate(
   config: ResolvedSearchConfig,
@@ -147,31 +205,18 @@ export async function runRerankEvalGate(
     },
   );
 
-  const hitDelta = reranked.hitAtK - baseline.hitAtK;
-  const mrrDelta = reranked.mrr - baseline.mrr;
-
-  // The per-language fold of the same difference (M14): one entry per
-  // language group of the baseline, so a verdict consumer sees which
-  // language moved which way. The keys are the baseline's, and both arms
-  // ran the same dataset, so the groups always pair up.
-  const byLang: Record<string, RerankDelta> = {};
-  for (const [lang, before] of Object.entries(baseline.byLang)) {
-    const after = reranked.byLang[lang];
-    byLang[lang] = Object.freeze({
-      hitAtK: (after?.hitAtK ?? before.hitAtK) - before.hitAtK,
-      mrr: (after?.mrr ?? before.mrr) - before.mrr,
-    });
-  }
-
-  // Never recommend a reranker that drops hit@k; among non-regressing
-  // candidates, require a real MRR or hit@k lift.
-  const improves = hitDelta >= 0 && (mrrDelta >= minMrrDelta || hitDelta >= minHitDelta);
+  const { improves, recommendation, deltas } = rerankEvalVerdict(
+    baseline,
+    reranked,
+    minMrrDelta,
+    minHitDelta,
+  );
 
   return Object.freeze({
     improves,
-    recommendation: improves ? "enable" : "keep-disabled",
+    recommendation,
     baseline,
     reranked,
-    deltas: Object.freeze({ hitAtK: hitDelta, mrr: mrrDelta, byLang: Object.freeze(byLang) }),
+    deltas,
   });
 }

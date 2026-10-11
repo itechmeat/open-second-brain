@@ -22,9 +22,11 @@ import { join } from "node:path";
 import {
   parseRecallBenchmarkDataset,
   runRecallBenchmark,
+  type RecallBenchmarkLanguageReport,
   type RecallBenchmarkQueryResult,
+  type RecallBenchmarkReport,
 } from "../../../src/core/search/benchmark.ts";
-import { runRerankEvalGate } from "../../../src/core/search/rerank-eval-gate.ts";
+import { rerankEvalVerdict, runRerankEvalGate } from "../../../src/core/search/rerank-eval-gate.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { SearchError, type ResolvedSearchConfig } from "../../../src/core/search/types.ts";
 import { makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
@@ -264,6 +266,86 @@ describe("runRerankEvalGate per-language deltas", () => {
     // The combined deltas stay the pooled ones the report always had.
     expect(gate.deltas.hitAtK).toBe(gate.reranked.hitAtK - gate.baseline.hitAtK);
     expect(gate.deltas.mrr).toBe(gate.reranked.mrr - gate.baseline.mrr);
+  });
+});
+
+// ----- the verdict rule blocks on a one-language regression (M14 part 3) -----
+
+describe("rerankEvalVerdict blocks on a one-language regression", () => {
+  // Hand-built reports: the rule is pure, so constructed runs pin it
+  // exactly where a full two-arm offline run would need a reranker that
+  // behaves differently per language. Each group has 2 queries, so the
+  // pooled numbers are the plain average of the two groups'.
+  const group = (hitAtK: number, mrr: number): RecallBenchmarkLanguageReport => ({
+    total: 2,
+    hitAtK,
+    mrr,
+    answerQueries: 0,
+    answerContainmentAtK: 1,
+    sourceUtilizationAtK: 1,
+    citationDepth: 0,
+    sourceWarnings: Math.round(2 * (1 - hitAtK)),
+  });
+  const report = (
+    hitAtK: number,
+    mrr: number,
+    byLang: Record<string, RecallBenchmarkLanguageReport>,
+  ): RecallBenchmarkReport => ({
+    total: 4,
+    k: 5,
+    expand: false,
+    hitAtK,
+    mrr,
+    answerQueries: 0,
+    answerContainmentAtK: 1,
+    sourceUtilizationAtK: 1,
+    citationDepth: 0,
+    sourceWarnings: 0,
+    degraded: [],
+    perQuery: [],
+    byLang,
+  });
+  // Baseline: en weak (the reranker has room to help), zh already perfect.
+  const baseline = report(0.75, 0.75, { en: group(0.5, 0.5), zh: group(1, 1) });
+
+  test("a zh MRR regression blocks enable despite a pooled lift on both families", () => {
+    // en doubles its numbers; zh loses 0.2 MRR. The pooled delta is
+    // +0.25 hit@k and +0.15 MRR - the pooled-only rule read this as
+    // enable, which is exactly the M14 hole.
+    const reranked = report(1, 0.9, { en: group(1, 1), zh: group(1, 0.8) });
+    const v = rerankEvalVerdict(baseline, reranked, 0.01, 0.01);
+    expect(v.deltas.hitAtK).toBeGreaterThan(0.01);
+    expect(v.deltas.mrr).toBeGreaterThan(0.01);
+    expect(v.deltas.byLang["zh"]!.mrr).toBeCloseTo(-0.2, 12);
+    expect(v.improves).toBe(false);
+    expect(v.recommendation).toBe("keep-disabled");
+  });
+
+  test("a zh hit@k regression blocks enable despite a pooled MRR lift", () => {
+    const reranked = report(0.875, 0.9, { en: group(1, 1), zh: group(0.75, 0.8) });
+    const v = rerankEvalVerdict(baseline, reranked, 0.01, 0.01);
+    expect(v.deltas.mrr).toBeGreaterThan(0.01);
+    expect(v.deltas.byLang["zh"]!.hitAtK).toBeCloseTo(-0.25, 12);
+    expect(v.improves).toBe(false);
+    expect(v.recommendation).toBe("keep-disabled");
+  });
+
+  test("every language lifting enables", () => {
+    const reranked = report(1, 1, { en: group(1, 1), zh: group(1, 1) });
+    const v = rerankEvalVerdict(baseline, reranked, 0.01, 0.01);
+    expect(v.improves).toBe(true);
+    expect(v.recommendation).toBe("enable");
+  });
+
+  test("a flat language is not a regression", () => {
+    // zh stays exactly where it was while en lifts: no regression, so
+    // the pooled hit@k lift is enough to enable.
+    const reranked = report(0.875, 0.875, { en: group(1, 1), zh: group(1, 1) });
+    const v = rerankEvalVerdict(baseline, reranked, 0.01, 0.01);
+    expect(v.deltas.byLang["zh"]!.hitAtK).toBe(0);
+    expect(v.deltas.byLang["zh"]!.mrr).toBe(0);
+    expect(v.improves).toBe(true);
+    expect(v.recommendation).toBe("enable");
   });
 });
 
