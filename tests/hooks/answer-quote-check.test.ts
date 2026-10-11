@@ -31,7 +31,15 @@ import {
   recordSubagentDeliveredId,
 } from "../../hooks/lib/injection-ledger.ts";
 import { hookStateFilePath } from "../../hooks/lib/session-state.ts";
-import { ANSWER_QUOTE_MAX_FINDINGS } from "../../hooks/answer-quote-check.ts";
+import {
+  ANSWER_QUOTE_MAX_FINDINGS,
+  ANSWER_QUOTE_NOTE_MAX_BYTES,
+  evidenceFor,
+} from "../../hooks/answer-quote-check.ts";
+import {
+  checkAnswerQuotes,
+  type AnswerQuoteEvidence,
+} from "../../src/core/brain/answer-quotes/check.ts";
 import { QUOTE_SPAN_PREVIEW_MAX_CHARS } from "../../src/core/brain/distill/quote-verdict.ts";
 
 const HOOK = resolve(
@@ -81,6 +89,11 @@ function writeConfigFor(modes: { recall: string; active: string; subagent: strin
 /** The subagent phase alone: recall and active off, subagent as given. */
 function subagentOnlyConfig(mode: string): void {
   writeConfigFor({ recall: "off", active: "off", subagent: mode });
+}
+
+/** One span's verdict under evidence, through the same check the hook runs. */
+function verdictOf(evidence: AnswerQuoteEvidence, span: string): string {
+  return checkAnswerQuotes({ spans: [span], evidence }).outcomes[0]!.verdict;
 }
 
 function ccUser(text: string): string {
@@ -289,6 +302,66 @@ describe("answer-quote-check hook - annotation rendering", () => {
       `and ${spans.length - ANSWER_QUOTE_MAX_FINDINGS} more`,
     );
     expect(lines[lines.length - 1]).toContain("Advisory only");
+  });
+});
+
+describe("answer-quote-check hook - the bounded cited-note read", () => {
+  test("the ceiling is the 1 MiB-scale named constant", () => {
+    expect(ANSWER_QUOTE_NOTE_MAX_BYTES).toBe(1_048_576);
+  });
+
+  test("a note past the ceiling reads its head only, as truncated evidence", () => {
+    writeNote(
+      "Brain/notes/big.md",
+      "Restaking reuses staked capital.\n" +
+        "filler line about staking economics.\n".repeat(200) +
+        "Tail marker sentence about slashing only.\n",
+    );
+    const evidence = evidenceFor(vault, { at: 0, path: "Brain/notes/big.md" }, 1024);
+    expect(evidence).toEqual({ kind: "text", truncated: true, text: expect.any(String) });
+    if (evidence.kind !== "text") throw new Error("expected text evidence");
+    expect(evidence.text).toContain("reuses staked capital");
+    expect(evidence.text).not.toContain("slashing only");
+    expect(verdictOf(evidence, "reuses staked capital")).toBe("verified");
+    expect(verdictOf(evidence, "slashing only")).toBe("source-truncated");
+  });
+
+  test("a line-range pointer past the ceiling is refused as unavailable", () => {
+    writeNote(
+      "Brain/notes/big.md",
+      "Restaking reuses staked capital.\n" +
+        "filler line about staking economics.\n".repeat(200) +
+        "Tail marker sentence about slashing only.\n",
+    );
+    // The named lines may sit past the bounded read; the evidence is
+    // refused rather than a slice of the prefix served as the range.
+    expect(
+      evidenceFor(vault, { at: 0, path: "Brain/notes/big.md", startLine: 1, endLine: 9 }, 1024),
+    ).toEqual({ kind: "unavailable" });
+  });
+
+  test("a note under the ceiling reads whole, and a line range still slices it", () => {
+    writeNote(
+      "Brain/notes/restaking.md",
+      "First line about staking.\nSecond line: reuses staked capital.\nThird line.\n",
+    );
+    const whole = evidenceFor(vault, { at: 0, path: "Brain/notes/restaking.md" });
+    expect(whole).toEqual({
+      kind: "text",
+      text: "First line about staking.\nSecond line: reuses staked capital.\nThird line.\n",
+      truncated: false,
+    });
+    const range = evidenceFor(vault, {
+      at: 0,
+      path: "Brain/notes/restaking.md",
+      startLine: 2,
+      endLine: 2,
+    });
+    expect(range).toEqual({
+      kind: "text",
+      text: "Second line: reuses staked capital.",
+      truncated: true,
+    });
   });
 });
 

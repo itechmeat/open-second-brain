@@ -42,7 +42,15 @@
  * hook) the hook exits 0 silently.
  */
 
-import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  fstatSync,
+  openSync,
+  readFileSync,
+  readSync,
+  statSync,
+} from "node:fs";
 
 import {
   resolveAnswerQuoteCheckActive,
@@ -107,6 +115,16 @@ export const ANSWER_QUOTE_MAX_FINDINGS = 20;
  */
 export const ANSWER_QUOTE_TAIL_BYTES = 262_144;
 
+/**
+ * Ceiling on how much of one cited note the check reads, on the 1 MiB
+ * scale of the ingest archive ceiling. Past it only the head of the file
+ * is read and the evidence is named truncated - a miss against it is
+ * `source-truncated`, never `not-in-note` - and a pointer that names a
+ * line range is refused as `unavailable` rather than served a slice of
+ * the prefix as if it were the named lines.
+ */
+export const ANSWER_QUOTE_NOTE_MAX_BYTES = 1_048_576;
+
 /** Stderr audit prefix: every error arm prints exactly one line with it. */
 const AUDIT_PREFIX = "answer-quote-check:";
 
@@ -142,6 +160,22 @@ const PATH_TOKEN_RE = /(?:[^\s:|[\]()#]+\/)+[^\s:|[\]()#]*\.md/g;
 // ----- transcript tail -----------------------------------------------------
 
 /**
+ * Fill `length` bytes of `fd` from `start`, looping on `readSync` until
+ * the window is filled or EOF: a single positional read may return
+ * short, and a short read would silently shrink the window.
+ */
+function readWindow(fd: number, start: number, length: number): Buffer {
+  const buffer = Buffer.alloc(length);
+  let filled = 0;
+  while (filled < buffer.length) {
+    const moved = readSync(fd, buffer, filled, buffer.length - filled, start + filled);
+    if (moved <= 0) break;
+    filled += moved;
+  }
+  return filled === buffer.length ? buffer : buffer.subarray(0, filled);
+}
+
+/**
  * The last {@link ANSWER_QUOTE_TAIL_BYTES} of the transcript as text. One
  * bounded positional read; the caller drops the line the window may have
  * cut in half.
@@ -151,9 +185,7 @@ function readTail(path: string): { readonly text: string; readonly cutStart: boo
   try {
     const size = fstatSync(fd).size;
     const start = Math.max(0, size - ANSWER_QUOTE_TAIL_BYTES);
-    const buffer = Buffer.alloc(size - start);
-    readSync(fd, buffer, 0, buffer.length, start);
-    return { text: buffer.toString("utf8"), cutStart: start > 0 };
+    return { text: readWindow(fd, start, size - start).toString("utf8"), cutStart: start > 0 };
   } finally {
     closeSync(fd);
   }
@@ -320,23 +352,53 @@ function resolveNotePath(vault: string, relativePath: string): string | null {
  * The evidence one cited note offers: the exact bytes the context had -
  * the named line range when the pointer carries one (truncated: a
  * pointer that names a range names a partial view), the whole file
- * otherwise. Every failure to read names itself as
- * `unavailable` / `not-text` evidence rather than throwing.
+ * otherwise, and past `maxBytes` only the head of the file, decoded
+ * non-fatally and named truncated. Every failure to read names itself as
+ * `unavailable` / `not-text` evidence rather than throwing. Exported for
+ * the bounded-read pins; the ceiling is injectable so a test needs no
+ * multi-megabyte fixture.
  */
-function evidenceFor(vault: string, mark: CitationMark): AnswerQuoteEvidence {
+export function evidenceFor(
+  vault: string,
+  mark: CitationMark,
+  maxBytes: number = ANSWER_QUOTE_NOTE_MAX_BYTES,
+): AnswerQuoteEvidence {
   const absolute = resolveNotePath(vault, mark.path);
   if (absolute === null || !existsSync(absolute)) {
     return { kind: "unavailable" };
   }
+  let limited: boolean;
+  try {
+    const stat = statSync(absolute);
+    if (!stat.isFile()) return { kind: "unavailable" };
+    limited = stat.size > maxBytes;
+  } catch {
+    return { kind: "unavailable" };
+  }
   let whole: string;
   try {
-    whole = new TextDecoder("utf-8", { fatal: true }).decode(readFileSync(absolute));
+    if (limited) {
+      const fd = openSync(absolute, "r");
+      try {
+        // Non-fatal: a ceiling cut can split a multi-byte character, and
+        // a valid UTF-8 note must not read as not-text for it.
+        whole = new TextDecoder("utf-8").decode(readWindow(fd, 0, maxBytes));
+      } finally {
+        closeSync(fd);
+      }
+    } else {
+      whole = new TextDecoder("utf-8", { fatal: true }).decode(readFileSync(absolute));
+    }
   } catch {
     return { kind: "not-text" };
   }
   if (mark.startLine === undefined || mark.endLine === undefined) {
-    return { kind: "text", text: whole, truncated: false };
+    return { kind: "text", text: whole, truncated: limited };
   }
+  // A pointer that names a line range past the ceiling names lines the
+  // bounded read did not fetch: refuse the evidence rather than serve a
+  // slice of the prefix as if it were the named range.
+  if (limited) return { kind: "unavailable" };
   const lines = whole.split("\n");
   const slice = lines.slice(mark.startLine - 1, mark.endLine).join("\n");
   return { kind: "text", text: slice, truncated: true };
