@@ -8,10 +8,12 @@ import { Database } from "bun:sqlite";
 
 import { isEventAnchorSource, type EventAnchor } from "../event-anchor.ts";
 import {
+  DOCUMENT_ATTRIBUTES_TABLE,
   DOCUMENT_VISIBILITY_COLUMN,
   EVENT_TIME_MAX_COLUMN,
   EVENT_TIME_MIN_COLUMN,
   PINNED_COLUMN,
+  type DocumentAttribute,
   documentBasename,
   encodeDocumentVisibility,
 } from "../schema.ts";
@@ -276,6 +278,38 @@ export function upsertDocument(db: Database, doc: DocumentInput): number {
     throw new SearchError("INDEX_UNREADABLE", `upsertDocument returned no id for '${doc.path}'`);
   }
   return row.id;
+}
+
+/**
+ * Replace a document's stored frontmatter attributes (v14) wholesale: the
+ * previous set is deleted and the new one inserted in one transaction, so
+ * an interrupted write cannot leave a half-updated filter surface.
+ *
+ * The caller derives the rows with `documentAttributesFromFrontmatter`
+ * (schema.ts) from the SAME parsed frontmatter that feeds the degradation
+ * notices - the extractor
+ * owns the promoted-key skips and the bounds, so this function is a pure
+ * writer. The FK cascade removes the rows when the document goes.
+ */
+export function replaceDocumentAttributes(
+  db: Database,
+  documentId: number,
+  attrs: ReadonlyArray<DocumentAttribute>,
+): void {
+  db.exec("BEGIN");
+  try {
+    db.run(`DELETE FROM ${DOCUMENT_ATTRIBUTES_TABLE} WHERE document_id = ?`, [documentId]);
+    if (attrs.length > 0) {
+      const insert = db.prepare<undefined, [number, string, string]>(
+        `INSERT OR IGNORE INTO ${DOCUMENT_ATTRIBUTES_TABLE}(document_id, key, value) VALUES (?, ?, ?)`,
+      );
+      for (const attr of attrs) insert.run(documentId, attr.key, attr.value);
+    }
+    db.exec("COMMIT");
+  } catch (e) {
+    db.exec("ROLLBACK");
+    throw e;
+  }
 }
 
 /**

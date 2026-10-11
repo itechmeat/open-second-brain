@@ -25,6 +25,7 @@
  */
 
 import { Database } from "bun:sqlite";
+import { rmSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { sqliteVecLoadable } from "../../helpers/sqlite-vec.ts";
@@ -383,6 +384,63 @@ describe("v14 touches nothing it does not own", () => {
     const before = snapshotUntouchedTables();
     migrate();
     expect(snapshotUntouchedTables().get("chunk_vec")).toBe(before.get("chunk_vec"));
+  });
+});
+
+describe("the indexer attribute writes", () => {
+  test("writes attributes on every upsert, from the same frontmatter parse as the notices", async () => {
+    await seedVault();
+    // No rewind, no backfill: these rows come from the indexer itself.
+    expect(attributesFor("typed.md")).toEqual([
+      { key: "projects", value: "alpha" },
+      { key: "projects", value: "beta" },
+      { key: "status", value: "active" },
+    ]);
+  });
+
+  test("the content_hash fastpath skips unchanged documents exactly as today", async () => {
+    const cfg = makeConfig({ vault, dbPath });
+    writeMd(vault, "typed.md", typedFrontmatter());
+    await indexVault(cfg);
+    const before = attributesFor("typed.md");
+    const stats = await indexVault(cfg);
+    expect(stats.unchanged).toBe(1);
+    expect(attributesFor("typed.md")).toEqual(before);
+  });
+
+  test("an update replaces the stored attribute set wholesale", async () => {
+    const cfg = makeConfig({ vault, dbPath });
+    writeMd(vault, "typed.md", typedFrontmatter());
+    await indexVault(cfg);
+    writeMd(
+      vault,
+      "typed.md",
+      "---\nstatus: archived\nprojects: [gamma]\n---\n\n# Typed\n\nlattice typed widget",
+    );
+    const stats = await indexVault(cfg);
+    expect(stats.unchanged).toBe(0);
+    expect(attributesFor("typed.md")).toEqual([
+      { key: "projects", value: "gamma" },
+      { key: "status", value: "archived" },
+    ]);
+  });
+
+  test("a delete takes the attribute rows with the document", async () => {
+    const cfg = makeConfig({ vault, dbPath });
+    writeMd(vault, "typed.md", typedFrontmatter());
+    await indexVault(cfg);
+    rmSync(`${vault}/typed.md`);
+    await indexVault(cfg);
+    expect(attributesFor("typed.md")).toEqual([]);
+    expect(attributeRows().length).toBe(0);
+  });
+
+  test("the write path is bounded like the backfill", async () => {
+    const cfg = makeConfig({ vault, dbPath });
+    const many = Array.from({ length: 70 }, (_, i) => `key${String(i).padStart(2, "0")}: v${i}`);
+    writeMd(vault, "many.md", `---\n${many.join("\n")}\n---\n\n# Many\n\nlattice many widget`);
+    await indexVault(cfg);
+    expect(attributesFor("many.md").length).toBe(64);
   });
 });
 

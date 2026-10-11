@@ -106,7 +106,7 @@ import {
   LAST_INDEXED_AT_STATE_KEY,
   LINK_RESOLUTION_PENDING_STATE_KEY,
 } from "./store.ts";
-import { LATEST_SCHEMA_VERSION } from "./schema.ts";
+import { LATEST_SCHEMA_VERSION, documentAttributesFromFrontmatter } from "./schema.ts";
 import { chunkWindowDiagnosticCode, SearchError } from "./types.ts";
 import { walkVault } from "./walker.ts";
 import {
@@ -610,6 +610,15 @@ async function indexIntoRun(
         // declared aliases so the post-pass can materialize alias
         // wikilink targets.
         store.replaceDocAliases(docId, aliasesFromFrontmatter(frontmatter));
+        // Bounded frontmatter attributes (v14, t_82851eda): replace this
+        // document's side-table rows from the SAME parsed frontmatter
+        // above - the parse that already fed the degradation notices, so
+        // an unterminated block yields no attributes and records no new
+        // notice. The extractor owns the promoted-key skips and the
+        // bounds; this call is a pure writer. Only a content change
+        // reaches this line, so the write cost rides the same lazy
+        // refresh every other materialized column pays.
+        store.replaceDocumentAttributes(docId, documentAttributesFromFrontmatter(frontmatter));
 
         const chunkInputs: ChunkInput[] = chunkResult.chunks.map((c) => ({
           chunkIndex: c.chunkIndex,

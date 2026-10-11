@@ -32,7 +32,7 @@ import {
 import { SearchError } from "./types.ts";
 import type { ResolvedSearchConfig } from "./types.ts";
 import type { EventAnchor } from "./event-anchor.ts";
-import { readSchemaVersion } from "./schema.ts";
+import { readSchemaVersion, type DocumentAttribute } from "./schema.ts";
 
 import * as aliases from "./store/aliases.ts";
 import * as chunkEntities from "./store/chunk-entities.ts";
@@ -655,6 +655,18 @@ export class Store {
   /** Normalised aliases of one document, sorted. */
   aliasesForDocument(documentId: number): ReadonlyArray<string> {
     return aliases.aliasesForDocument(this.db, documentId);
+  }
+
+  // ── document attributes (v14, recall-quality) ───────────────────────────────
+
+  /**
+   * Replace one document's stored frontmatter attributes wholesale. The
+   * caller derives the bounded, promoted-key-free rows with
+   * `documentAttributesFromFrontmatter` (schema.ts) from the same parsed
+   * frontmatter that fed the upsert's other columns.
+   */
+  replaceDocumentAttributes(documentId: number, attrs: ReadonlyArray<DocumentAttribute>): void {
+    documents.replaceDocumentAttributes(this.db, documentId, attrs);
   }
 
   /**
