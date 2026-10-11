@@ -23,10 +23,18 @@
  *      sentence says only what is true of both: this tool does not run it.
  */
 
+import { existsSync } from "node:fs";
+
+import { BRAVE_API_KEY_ENV, TAVILY_API_KEY_ENV } from "../brain/research/research.ts";
+import { keyPath, listSecrets, storeLockedForThisProcess } from "../brain/secrets/store.ts";
 import { resolveTelegramBotToken } from "../config.ts";
 import { pathIsInside, realpathInsideVault } from "../path-safety.ts";
-import { SecretReferenceError } from "../secret-ref.ts";
-import { resolveResearchPoolEnv } from "../brain/research/research.ts";
+import {
+  invalidSecretReferenceBody,
+  isSecretReferenceValue,
+  parseSecretReference,
+  storeSecretName,
+} from "../secret-ref.ts";
 import { resolveSearchConfig } from "../search/index.ts";
 import type { ResolvedSearchConfig } from "../search/types.ts";
 import {
@@ -84,6 +92,76 @@ function measureSearchIndex(vault: string, dbPath: string): SearchIndexVerdict {
     state: inside ? SEARCH_INDEX_LOCATION.insideVault : SEARCH_INDEX_LOCATION.outsideVault,
     path: dbPath,
     reason: null,
+  };
+}
+
+/**
+ * One research key env's presence, decided from METADATA alone - never a
+ * decrypt.
+ *
+ * A measurement is a presence check, and a presence check that decrypts
+ * turns `o2b install` into a key-bearing operation: the resolver route
+ * used here before answered a `$secret:NAME` reference through
+ * `resolveSecretReadOnly`, so a wrapped (locked) store threw the named
+ * locked refusal out of the statement and aborted install and
+ * onboarding. The probe below therefore reads the custody store's name
+ * set (normalized the way the store normalizes at set time) joined with
+ * the environment fallback, and never touches ciphertext:
+ *
+ *   - a plain value answers as before;
+ *   - a reference the store holds answers `configured` - the store
+ *     normalizes names, so the probe normalizes the reference body the
+ *     same way - unless the store cannot answer a key-bearing read right
+ *     now (locked, or its keyfile missing while entries survive), which
+ *     is `unchecked` with that reason rather than a guess in either
+ *     direction;
+ *   - a reference the store does not hold answers from the environment
+ *     leg (case-sensitive, as the resolver answers it), and a reference
+ *     that resolves nowhere keeps a refusal that names it - the v1.78.0
+ *     claim - as `unchecked`.
+ *
+ * Note the vault-configured half this keeps from the earlier fix: the
+ * raw reference no longer counts as a configured key. The wiring at the
+ * research call site itself remains open (PR #248 review M12); this
+ * measurement never decrypts (PR #248 review M11).
+ */
+function researchKeyPresence(
+  envValue: string | undefined,
+  vault: string,
+): { readonly present: boolean; readonly refusal: string | null } {
+  const trimmed = envValue?.trim();
+  if (trimmed === undefined || trimmed.length === 0) return { present: false, refusal: null };
+  if (!isSecretReferenceValue(trimmed)) return { present: true, refusal: null };
+  const ref = parseSecretReference(trimmed);
+  if (ref === null) {
+    const body = invalidSecretReferenceBody(trimmed) ?? trimmed;
+    return {
+      present: false,
+      refusal: `the research key reference "$secret:${body}" is not a spellable reference and resolves to an error at use time`,
+    };
+  }
+  const storeHolds = listSecrets(vault).some((meta) => meta.name === storeSecretName(ref.name));
+  if (storeHolds) {
+    // Store first, as the resolver answers it: a held name never falls
+    // back to the environment, so the store's readability decides.
+    if (storeLockedForThisProcess(vault)) {
+      return {
+        present: false,
+        refusal: `the research key reference "$secret:${ref.name}" names a store entry, but the secret store is locked (the keyfile is passphrase-wrapped), so the presence check cannot confirm the key without decrypting; unlock the store for this process to complete the statement`,
+      };
+    }
+    if (!existsSync(keyPath(vault))) {
+      return {
+        present: false,
+        refusal: `the research key reference "$secret:${ref.name}" names a store entry, but the secret store's keyfile is missing, so the stored key cannot be confirmed; restore the keyfile to complete the statement`,
+      };
+    }
+    return { present: true, refusal: null };
+  }
+  if (process.env[ref.name]) return { present: true, refusal: null };
+  return {
+    present: false,
+    refusal: `the research key reference "$secret:${ref.name}" resolves nowhere: no custody store entry, no environment fallback`,
   };
 }
 
@@ -165,24 +243,32 @@ export function measureDataOwnership(opts: MeasureDataOwnershipOptions): DataOwn
     };
   }
 
-  // The vault-resolved configuration, not raw `process.env` alone: a key
-  // env written as a `$secret:NAME` reference resolves the way the runtime
-  // resolves it - the custody store of THIS vault first, the environment
-  // fallback second - so a raw reference no longer counts as a configured
-  // research key, and a reference that resolves nowhere surfaces the
-  // resolver's named error instead of quietly yielding a pool. The
-  // measurement reports that refusal as `unchecked` with the reason the
-  // resolver gave: the row names the unresolved reference, which is the
-  // v1.78.0 claim, now true on the live path.
+  // The vault-resolved configuration, metadata only: a key env written as
+  // a `$secret:NAME` reference answers through the custody store of THIS
+  // vault (name set first, environment fallback second), so a raw
+  // reference no longer counts as a configured research key, and a
+  // reference that resolves nowhere surfaces as `unchecked` with a reason
+  // naming the unresolved reference - the v1.78.0 claim. Nothing here
+  // decrypts: the store's name set is the evidence, and a store the
+  // process cannot read right now (locked, keyfile missing) is reported
+  // as `unchecked` with that reason instead of aborting the statement.
   let researchRow: OutboundMeasurement;
   try {
-    const research = resolveResearchPoolEnv(process.env, opts.vault);
-    researchRow = present(research.braveApiKey !== null || research.tavilyApiKey !== null);
+    const brave = researchKeyPresence(process.env[BRAVE_API_KEY_ENV], opts.vault);
+    const tavily = researchKeyPresence(process.env[TAVILY_API_KEY_ENV], opts.vault);
+    const refusals = [brave, tavily].filter((k) => !k.present && k.refusal !== null);
+    if (refusals.length > 0) {
+      researchRow = {
+        state: OUTBOUND_STATE.unchecked,
+        reason: refusals.map((k) => k.refusal).join("; "),
+      };
+    } else {
+      researchRow = present(brave.present || tavily.present);
+    }
   } catch (err) {
-    if (!(err instanceof SecretReferenceError)) throw err;
     researchRow = {
       state: OUTBOUND_STATE.unchecked,
-      reason: `the research key could not be resolved: ${err.message}`,
+      reason: `the research key could not be read: ${(err as Error).message}`,
     };
   }
 

@@ -1,25 +1,34 @@
 /**
  * The research-pool measurement reads the vault-resolved configuration
- * (PR #244 review M10/L1).
+ * (PR #244 review M10/L1) and never decrypts (PR #248 review M11).
  *
  * `measureDataOwnership` handed `resolveResearchPoolEnv` raw
  * `process.env` and no vault, so a key env written as a `$secret:NAME`
  * reference was taken as-is - the raw reference counted as a CONFIGURED
  * research key in the ownership statement, and the v1.78.0 claim that
  * "research names the refusal instead of quietly yielding an empty pool"
- * was not true on the live path. The measure now passes the vault, so a
- * reference resolves the way the runtime resolves it (custody store of
- * this vault first, environment fallback), and a reference that resolves
- * nowhere is reported as unchecked with the resolver's named error - the
- * refusal names the unresolved reference - never as configured.
+ * was not true on the live path. The measure then passed the vault, but
+ * through the DECRYPTING resolver: a presence check that decrypts turned
+ * `o2b install` into a key-bearing operation, so a wrapped (locked)
+ * store threw `SecretStoreLockedError` out of the statement and aborted
+ * install and onboarding. The measure now answers from metadata alone -
+ * the store's name set joined with the environment - and reports a store
+ * it cannot read right now (locked, or missing its keyfile while
+ * entries survive) as unchecked with the reason, never as configured
+ * and never as a throw.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { fakeCredential } from "../../../tests/helpers/fake-credentials.ts";
+import {
+  lockSecretKeyfile,
+  setSecret,
+  unlockSecretKeyfile,
+} from "../../../src/core/brain/secrets/store.ts";
 import { measureDataOwnership } from "../../../src/core/install/ownership-measure.ts";
 import { OUTBOUND_SERVICE, OUTBOUND_STATE } from "../../../src/core/install/ownership.ts";
 
@@ -97,5 +106,39 @@ describe("the research outbound measurement", () => {
     expect(researchRow().state).toBe(OUTBOUND_STATE.configured);
     delete process.env["TAVILY_API_KEY"];
     expect(researchRow().state).toBe(OUTBOUND_STATE.absent);
+  });
+});
+
+describe("the research measurement never decrypts (PR #248 review M11)", () => {
+  const NOW = new Date("2026-06-05T10:00:00Z");
+  const VAULT_PASSPHRASE = fakeCredential("vault-passphrase-", "fixture-9f8e");
+
+  /** A custody store holding the research key, plus the reference env. */
+  function storeKeyAndReference(): void {
+    mkdirSync(join(tempVault, "Brain"), { recursive: true });
+    setSecret(tempVault, {
+      name: "research-key",
+      value: FAKE_RESEARCH_KEY,
+      agent: "tester",
+      now: NOW,
+    });
+    process.env["TAVILY_API_KEY"] = REFERENCE;
+  }
+
+  test("a store-held key counts as configured through metadata alone", () => {
+    storeKeyAndReference();
+    expect(researchRow().state).toBe(OUTBOUND_STATE.configured);
+  });
+
+  test("a wrapped (locked) store answers unchecked with a reason, never a throw", () => {
+    storeKeyAndReference();
+    // Wrap the keyfile under the passphrase, then drop the held key: the
+    // state after `secret unlock` followed by a process restart. The
+    // measurement used to decrypt here and abort with the locked refusal.
+    unlockSecretKeyfile(tempVault, VAULT_PASSPHRASE, { agent: "tester", now: NOW });
+    lockSecretKeyfile(tempVault, { agent: "tester", now: NOW });
+    const row = researchRow();
+    expect(row.state).toBe(OUTBOUND_STATE.unchecked);
+    expect(row.reason ?? "").toContain("locked");
   });
 });
