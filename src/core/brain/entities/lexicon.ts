@@ -16,6 +16,16 @@
  * missing, torn, or stale artifact reads as `null` and every consumer
  * degrades to the pre-lexicon structural gate. It never mis-rejects.
  *
+ * The dataset hash is a deliberately COARSE corpus signature (recall-quality
+ * review M5): the sorted page set plus a per-page TOKEN-COUNT bucket, with
+ * no mtimes. A learned lexicon is a snapshot of statistics, not a cache of
+ * bytes: a small in-place edit keeps the gate resolving while the entries
+ * lag the live corpus slightly, and that lag is what a learned lexicon IS.
+ * Real corpus shifts - pages added or removed, a page's token count
+ * crossing its bucket - expire the artifact honestly, and the fail-open
+ * read then degrades every verdict to the structural gate until the next
+ * `entity lexicon rebuild`.
+ *
  * Corpus scope, asserted in the artifact header: `listVaultPages` at
  * `MAINTENANCE_LANE_REACH` with the Brain root excluded - which excludes
  * session transcripts, the continuity ledger and every other
@@ -56,6 +66,16 @@ export const ENTITY_LEXICON_TOP_K = 5000;
 export const ENTITY_LEXICON_CORPUS_SCOPE =
   "operator pages at maintenance-lane reach; the Brain root is excluded, " +
   "which excludes session transcripts and derived artifacts with it";
+
+/**
+ * Width of one per-page token-count bucket in the corpus signature. A
+ * page contributes `floor(tokens / width)` to its signature part, so an
+ * in-place edit of a few words keeps the bucket - and the artifact's
+ * freshness - while a genuine growth or prune of a page's prose crosses
+ * it. Fixed width rather than logarithmic so the smallest pages (the
+ * ones an everyday edit touches) do not cross a bucket every few words.
+ */
+export const ENTITY_LEXICON_TOKEN_BUCKET = 64;
 
 /** Per-token case evidence, keyed by the LOWERCASED token. */
 export interface EntityLexiconEntry {
@@ -104,20 +124,61 @@ function bucketOf(token: string): keyof EntityLexiconEntry {
 }
 
 /**
+ * One page's foldable tokens: the body below the frontmatter, code
+ * fences and inline spans stripped. Null when the page could not be
+ * read - it vanished between the enumeration and the read, or the
+ * bytes are unreadable - and it is then skipped BY NAME in both the
+ * fold and the corpus signature, so a derive that raced a deletion
+ * bakes the signature of the corpus it actually saw.
+ */
+type CorpusPageTokens = ReadonlyArray<string> | null;
+
+/**
+ * Read one corpus page down to its foldable tokens. A page that does
+ * not exist - it vanished between the enumeration and the read - reads
+ * as null and is skipped BY NAME in both the fold and the corpus
+ * signature, exactly as the freshness walk (which cannot enumerate it
+ * anymore) sees the corpus; `parseFrontmatter` never throws on a
+ * missing or unreadable file, so the existence gate has to be explicit
+ * here. Pure with respect to its input path; the caller owns error
+ * policy (null, never throw).
+ */
+function readCorpusPage(path: string): CorpusPageTokens {
+  try {
+    statSync(path);
+  } catch {
+    return null;
+  }
+  try {
+    const [, body] = parseFrontmatter(path);
+    return body.replace(FENCED_CODE_RE, " ").replace(INLINE_CODE_RE, " ").match(TOKEN_RE) ?? [];
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Fold the case statistics over the corpus pages. Body prose only: a
  * page's filename stem is not authored text and would couple the
- * learned vocabulary to how files are named. Pure with respect to its
- * inputs; the caller owns the walk. Entries accumulate in first-seen
- * order - the caller ranks and caps them.
+ * learned vocabulary to how files are named. Entries accumulate in
+ * first-seen order - the caller ranks and caps them. Per-page token
+ * arrays are returned alongside so the dataset signature is computed
+ * from the SAME reads the entries came from - one read per page, never
+ * two.
  */
 function foldCorpus(paths: ReadonlyArray<string>): {
   entries: Map<string, { lower: number; capitalised: number; upper: number }>;
   caseful: boolean;
+  pageTokens: CorpusPageTokens[];
 } {
   const entries = new Map<string, { lower: number; capitalised: number; upper: number }>();
   let caseful = false;
-  const count = (text: string): void => {
-    for (const token of text.match(TOKEN_RE) ?? []) {
+  const pageTokens: CorpusPageTokens[] = [];
+  for (const path of paths) {
+    const tokens = readCorpusPage(path);
+    pageTokens.push(tokens);
+    if (tokens === null) continue;
+    for (const token of tokens) {
       const bucket = bucketOf(token);
       if (bucket !== "lower") caseful = true;
       const key = token.toLowerCase();
@@ -125,82 +186,75 @@ function foldCorpus(paths: ReadonlyArray<string>): {
       entry[bucket] += 1;
       entries.set(key, entry);
     }
-  };
-  for (const path of paths) {
-    let body = "";
-    try {
-      [, body] = parseFrontmatter(path);
-    } catch {
-      body = "";
-    }
-    count(body.replace(FENCED_CODE_RE, " ").replace(INLINE_CODE_RE, " "));
   }
-  return { entries, caseful };
+  return { entries, caseful, pageTokens };
 }
 
 /**
- * The dataset fingerprint over an EXPLICIT enumeration: one part per
- * enumerated corpus page, carrying its vault-relative path, mtime and
- * size. A page that vanished between the enumeration and the stat is
- * SKIPPED BY NAME - it contributes no part - so a derive that raced a
- * deletion bakes the fingerprint of the corpus it actually saw, and the
- * fingerprint a later freshness check computes over the same surviving
- * corpus agrees. Stamping a vanished page "unreadable" instead would bake
- * a part no fresh walk can ever reproduce and fail freshness on every
- * read until a re-derive - the poison this convention removes.
+ * The corpus signature over one read of the enumerated pages: a part
+ * per READABLE page carrying its vault-relative path and its
+ * token-count bucket - `floor(tokens / ENTITY_LEXICON_TOKEN_BUCKET)` -
+ * and NO timestamps. The page SET and the prose VOLUME are what a
+ * learned vocabulary is statistics over; an mtime is not, and folding
+ * one into the freshness check expired the artifact on every small
+ * edit, switching the gate off in any vault that was being used
+ * (recall-quality review M5). A page whose read failed contributes no
+ * part - the same skip-by-name rule the fold applies, so the derive
+ * and the freshness check agree over the corpus each actually saw.
  */
-function entityLexiconDatasetHashForPaths(vault: string, paths: ReadonlyArray<string>): string {
+function corpusSignatureForReads(
+  vault: string,
+  paths: ReadonlyArray<string>,
+  pageTokens: ReadonlyArray<CorpusPageTokens>,
+): string {
   const parts: string[] = [];
-  for (const path of paths) {
-    const rel = path.slice(vault.length).replace(/\\/g, "/").replace(/^\//, "");
-    let stamp: string;
-    try {
-      const st = statSync(path, { bigint: true });
-      stamp = `${st.mtimeNs}:${st.size}`;
-    } catch {
-      continue;
-    }
-    parts.push(`${rel}\u0000${stamp}`);
+  for (let i = 0; i < paths.length; i++) {
+    const tokens = pageTokens[i];
+    if (tokens === null || tokens === undefined) continue;
+    const rel = paths[i]!.slice(vault.length).replace(/\\/g, "/").replace(/^\//, "");
+    parts.push(`${rel}\u0000${Math.floor(tokens.length / ENTITY_LEXICON_TOKEN_BUCKET)}`);
   }
   return deriveDatasetHash(parts);
 }
 
 /**
- * The dataset fingerprint of the corpus as it stands NOW: one fresh walk,
- * one part per page ({@link entityLexiconDatasetHashForPaths}). This is
- * the freshness side only - a derive must fingerprint the enumeration it
- * actually folded, not this re-walk, or a mid-derive change bakes a hash
- * that vouches for bytes the entries never read.
+ * The corpus signature of the vault's operator pages as they stand NOW:
+ * one fresh walk, one read per page, one part per readable page
+ * ({@link corpusSignatureForReads}). This is the freshness side only -
+ * a derive must fingerprint the enumeration it actually folded, which
+ * {@link deriveEntityLexiconFromPaths} computes from its own reads.
  */
 export function entityLexiconDatasetHash(vault: string): string {
   const pages = listVaultPages(vault, {
     skipDirs: [...EXCLUDED_DIRS, BRAIN_ROOT_REL],
     reach: MAINTENANCE_LANE_REACH,
   });
-  return entityLexiconDatasetHashForPaths(
+  const paths = pages.map((page) => page.path);
+  return corpusSignatureForReads(
     vault,
-    pages.map((page) => page.path),
+    paths,
+    paths.map((path) => readCorpusPage(path)),
   );
 }
 
 /**
  * Derive the lexicon from an EXPLICIT enumeration of corpus pages - the
- * single-pass core {@link deriveEntityLexicon} delegates to. The dataset
- * hash is computed over THIS path list, the same list the fold reads, so
- * the artifact's hash always fingerprints the input its entries came
- * from. A page that vanishes before its read is folded as nothing and
- * skipped in the hash by name (see the hash helper): the artifact then
- * reflects the surviving corpus exactly, and a freshness check over that
- * same surviving corpus validates it. Deterministic for a fixed path
- * list and clock.
+ * single-pass core {@link deriveEntityLexicon} delegates to. Each page is
+ * read ONCE: the dataset signature is computed from the same reads the
+ * entries were folded from, so the artifact's hash always describes the
+ * corpus its statistics came from. A page that vanishes before its read
+ * is folded as nothing and skipped in the signature by name (see the
+ * signature helper): the artifact then reflects the surviving corpus
+ * exactly, and a freshness check over that same surviving corpus
+ * validates it. Deterministic for a fixed path list and clock.
  */
 export function deriveEntityLexiconFromPaths(
   vault: string,
   paths: ReadonlyArray<string>,
   opts: DeriveEntityLexiconOptions = {},
 ): EntityLexiconDocument {
-  const dataset_hash = entityLexiconDatasetHashForPaths(vault, paths);
-  const { entries, caseful } = foldCorpus(paths);
+  const { entries, caseful, pageTokens } = foldCorpus(paths);
+  const dataset_hash = corpusSignatureForReads(vault, paths, pageTokens);
   const topK = Math.min(
     Math.max(0, Math.floor(opts.topK ?? ENTITY_LEXICON_TOP_K)),
     ENTITY_LEXICON_TOP_K,

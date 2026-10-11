@@ -220,6 +220,64 @@ describe("resolveEntityLexicon handle", () => {
   });
 });
 
+/**
+ * Recall-quality review M5: the freshness signature must be a COARSE
+ * corpus fingerprint - the page set plus per-page token-count buckets,
+ * with no mtimes - so an edited vault keeps the gate resolving instead
+ * of silently switching it off until a manual rebuild. Real corpus
+ * shifts (pages added or removed, a token-count bucket crossed) still
+ * expire the artifact honestly.
+ */
+describe("the corpus signature survives small edits (recall-quality M5)", () => {
+  const BODY = "the runner kept notes about the setup. ";
+
+  test("editing one page's body keeps the gate resolving", () => {
+    writeCorpusPage("alpha.md", BODY.repeat(30));
+    rebuild();
+    expect(resolveEntityLexicon(vault)).not.toBeNull();
+    // A small in-place edit: reword every sentence (the content changes,
+    // the learned entries lag) without moving the page's token-count
+    // bucket. A fresh process - the cleared cache - must still resolve.
+    writeCorpusPage("alpha.md", "a runner kept notes about the setup. ".repeat(30));
+    __clearEntityLexiconCache();
+    expect(resolveEntityLexicon(vault)).not.toBeNull();
+  });
+
+  test("a small append that stays in the token-count bucket keeps it too", () => {
+    writeCorpusPage("alpha.md", BODY.repeat(30));
+    rebuild();
+    writeCorpusPage("alpha.md", BODY.repeat(32));
+    __clearEntityLexiconCache();
+    expect(resolveEntityLexicon(vault)).not.toBeNull();
+  });
+
+  test("an edit that crosses the token-count bucket expires the artifact", () => {
+    writeCorpusPage("alpha.md", BODY.repeat(30));
+    rebuild();
+    expect(resolveEntityLexicon(vault)).not.toBeNull();
+    // Well past the next bucket boundary: the corpus genuinely shifted.
+    writeCorpusPage("alpha.md", BODY.repeat(95));
+    __clearEntityLexiconCache();
+    expect(resolveEntityLexicon(vault)).toBeNull();
+  });
+
+  test("removing a page expires the artifact", () => {
+    writeCorpusPage("alpha.md", BODY.repeat(30));
+    writeCorpusPage("beta.md", "another page about the runner.");
+    rebuild();
+    expect(resolveEntityLexicon(vault)).not.toBeNull();
+    rmSync(join(vault, "beta.md"));
+    __clearEntityLexiconCache();
+    expect(resolveEntityLexicon(vault)).toBeNull();
+  });
+
+  test("the derive and freshness signatures agree without stat calls", () => {
+    writeCorpusPage("alpha.md", BODY);
+    const doc = deriveEntityLexicon(vault, { now: NOW });
+    expect(doc.dataset_hash).toBe(entityLexiconDatasetHash(vault));
+  });
+});
+
 describe("deriveEntityLexicon mid-derive races", () => {
   test("a corpus file removed between enumeration and fold does not poison the artifact", () => {
     writeCorpusPage("keep.md", "atlas kept notes about the setup.");
