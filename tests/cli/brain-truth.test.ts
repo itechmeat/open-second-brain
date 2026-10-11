@@ -672,3 +672,41 @@ test("truth events hydrates provenance for a claim carrying a sample id", async 
   expect(provenance.outcome).toBeNull();
   expect(provenance.timestamp_inverted).toBe(false);
 });
+
+test("truth state without --sample-id leaves the row and events byte-identical to today", async () => {
+  // The CLI mirror of the MCP-side pin: omitting the flag commits a row
+  // carrying NO sample_id, and the events payload for that row carries
+  // neither sample_id nor a provenance key - the join hydrates nothing
+  // for a claim with no attribution id.
+  seedCliRegistry();
+  writeCliSourcePage("session.md");
+  const res = await runCli(
+    stateArgs(vault, [
+      "--subject",
+      "Alice Mason",
+      "--relation",
+      "extends",
+      "--object",
+      "Atlas",
+      "--text",
+      "Alice Mason said the Atlas extension plan is ready for review today.",
+      "--source",
+      "[[Brain/notes/session.md]]",
+    ]),
+  );
+  expect(res.returncode).toBe(0);
+  const body = JSON.parse(res.stdout) as unknown as StateBody;
+  expect(body.committed).toHaveLength(1);
+  const row = body.committed[0] as Record<string, unknown>;
+  expect("sample_id" in row).toBe(false);
+  const [stored] = readClaimEvents(vault).events;
+  expect("sample_id" in stored!).toBe(false);
+  const events = await runCli(["brain", "truth", "events", "--vault", vault, "--json"]);
+  expect(events.returncode).toBe(0);
+  const eventsBody = JSON.parse(events.stdout) as unknown as {
+    events: ReadonlyArray<Record<string, unknown>>;
+  };
+  expect(eventsBody.events).toHaveLength(1);
+  expect("sample_id" in eventsBody.events[0]!).toBe(false);
+  expect("provenance" in eventsBody.events[0]!).toBe(false);
+});
