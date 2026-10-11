@@ -19,6 +19,9 @@ import { isSecretReferenceValue, SecretReferenceError } from "./secret-ref.ts";
 import { APP_DIR_NAME, configBaseDir } from "./platform-dirs.ts";
 import { resolveActiveProfileVault } from "./brain/portability/profiles.ts";
 import { resolvePointerVault } from "./brain/portability/pointer.ts";
+import { parseBrainYaml } from "./brain/yaml-parse.ts";
+import { BrainConfigError } from "./brain/policy/errors.ts";
+import { BRAIN_CONFIG_FILE, BRAIN_ROOT_REL } from "./brain/path-constants.ts";
 import {
   isWikiLinkFormat,
   WIKI_LINK_FORMATS,
@@ -1187,6 +1190,178 @@ export function resolveRecallInjectEnabled(configPath?: string): boolean {
     "OPEN_SECOND_BRAIN_RECALL_INJECT_ENABLED",
     "recall_inject_enabled",
     configPath,
+  );
+}
+
+/**
+ * The per-phase answer-time quote-check modes (answer-trust wave, Lane A).
+ *
+ * Three keys - `quote_check.recall`, `quote_check.active`,
+ * `quote_check.subagent` - live in the `quote_check` block of
+ * `Brain/_brain.yaml`, each `off|shadow|enforce`, default `shadow`, each
+ * with its own resolver and no second reader. The shape follows the
+ * decision-model per-use mode switch
+ * (`src/core/decision-model/contract.ts`, `DECISION_MODEL_MODES`).
+ */
+export const ANSWER_QUOTE_CHECK_MODES = Object.freeze(["off", "shadow", "enforce"] as const);
+
+/** Closed union over {@link ANSWER_QUOTE_CHECK_MODES}. */
+export type AnswerQuoteCheckMode = (typeof ANSWER_QUOTE_CHECK_MODES)[number];
+
+/** Narrow a mode read back off a payload or a fixture. */
+export function isAnswerQuoteCheckMode(value: unknown): value is AnswerQuoteCheckMode {
+  return (
+    typeof value === "string" && (ANSWER_QUOTE_CHECK_MODES as ReadonlyArray<string>).includes(value)
+  );
+}
+
+/** The `_brain.yaml` block the three keys live in, and its phase keys. */
+const QUOTE_CHECK_BLOCK = "quote_check";
+
+/** The phases the quote check runs on, in their pinned listing order. */
+export const ANSWER_QUOTE_CHECK_PHASES = Object.freeze(["recall", "active", "subagent"] as const);
+
+/** Closed union over {@link ANSWER_QUOTE_CHECK_PHASES}. */
+export type AnswerQuoteCheckPhase = (typeof ANSWER_QUOTE_CHECK_PHASES)[number];
+
+/** The mode every phase resolves to when nothing is configured. */
+const QUOTE_CHECK_DEFAULT: AnswerQuoteCheckMode = "shadow";
+
+/** Paths and keys whose unknown-field warning already fired in this process. */
+const quoteCheckWarnedUnknownKeys = new Set<string>();
+
+/**
+ * The `quote_check` block parsed off `path`, or `null` when the file or
+ * the block is absent - the one condition resolved to defaults, because
+ * there are no operator settings to contradict. A file (or block) that
+ * EXISTS but cannot be honored raises by name instead: read like
+ * `loadBrainConfig`'s absent/present split, so a typo can never silently
+ * turn a configured `enforce` into the default.
+ */
+function readQuoteCheckBlock(path: string): Record<string, unknown> | null {
+  let stat: Stats;
+  try {
+    const probed = statSync(path, { throwIfNoEntry: false });
+    if (probed === undefined) return null;
+    stat = probed;
+  } catch (err) {
+    throw new BrainConfigError(
+      `failed to stat: ${(err as Error).message}`,
+      QUOTE_CHECK_BLOCK,
+      path,
+    );
+  }
+  if (!stat.isFile()) {
+    throw new BrainConfigError(
+      "path exists but is not a regular file; its settings are not in force and are not read as absent",
+      QUOTE_CHECK_BLOCK,
+      path,
+    );
+  }
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = parseBrainYaml(
+      new TextDecoder("utf-8", { fatal: true }).decode(readFileSync(path)),
+    ) as Record<string, unknown>;
+  } catch (err) {
+    throw new BrainConfigError(
+      `failed to parse: ${(err as Error).message}`,
+      QUOTE_CHECK_BLOCK,
+      path,
+    );
+  }
+  const block = parsed[QUOTE_CHECK_BLOCK];
+  if (block === undefined) return null;
+  if (typeof block !== "object" || block === null || Array.isArray(block)) {
+    throw new BrainConfigError(
+      `expected a block of per-phase modes, got ${Array.isArray(block) ? "an array" : typeof block}`,
+      QUOTE_CHECK_BLOCK,
+      path,
+    );
+  }
+  return block as Record<string, unknown>;
+}
+
+/**
+ * Unknown keys inside the `quote_check` block warn per the strict-block
+ * convention (`warnUnknownKeys` in the policy validator), once per key
+ * per process on stderr - the audit channel every consumer of these
+ * resolvers (the Stop hook) already keeps. A warning never changes the
+ * resolved mode.
+ */
+function warnUnknownQuoteCheckKeys(path: string, block: Record<string, unknown>): void {
+  for (const key of Object.keys(block)) {
+    if ((ANSWER_QUOTE_CHECK_PHASES as ReadonlyArray<string>).includes(key)) continue;
+    const stamp = `${path}\0${key}`;
+    if (quoteCheckWarnedUnknownKeys.has(stamp)) continue;
+    quoteCheckWarnedUnknownKeys.add(stamp);
+    process.stderr.write(`${QUOTE_CHECK_BLOCK}.${key}: unknown field ignored (forward-compat)\n`);
+  }
+}
+
+/** One phase's mode off the block; every exported resolver is this read. */
+function resolveAnswerQuoteCheckPhase(
+  phase: AnswerQuoteCheckPhase,
+  path: string | null,
+): AnswerQuoteCheckMode {
+  if (path === null) return QUOTE_CHECK_DEFAULT;
+  const block = readQuoteCheckBlock(path);
+  if (block === null) return QUOTE_CHECK_DEFAULT;
+  warnUnknownQuoteCheckKeys(path, block);
+  const raw = block[phase];
+  if (raw === undefined) return QUOTE_CHECK_DEFAULT;
+  if (!isAnswerQuoteCheckMode(raw)) {
+    throw new BrainConfigError(
+      `unsupported value ${JSON.stringify(raw)}; expected one of ${ANSWER_QUOTE_CHECK_MODES.join(
+        ", ",
+      )}`,
+      `${QUOTE_CHECK_BLOCK}.${phase}`,
+      path,
+    );
+  }
+  return raw;
+}
+
+/**
+ * The brain config file the resolvers read when the caller names none:
+ * the standard vault's `Brain/_brain.yaml`. `null` when no vault
+ * resolves, which leaves every phase at its default - a vaultless install
+ * has no operator settings to contradict.
+ */
+function defaultAnswerQuoteCheckConfigPath(): string | null {
+  const vault = resolveVault();
+  return vault === null ? null : join(vault, BRAIN_ROOT_REL, BRAIN_CONFIG_FILE);
+}
+
+/**
+ * Mode of `quote_check.recall` (answer-trust wave, Lane A): whether the
+ * Stop hook checks quoted spans against recall-injected notes, and what
+ * it may do about them. See {@link resolveAnswerQuoteCheckPhase} for the
+ * shared semantics; the hook additionally gates this phase on
+ * {@link resolveRecallInjectEnabled}.
+ */
+export function resolveAnswerQuoteCheckRecall(configPath?: string): AnswerQuoteCheckMode {
+  return resolveAnswerQuoteCheckPhase("recall", configPath ?? defaultAnswerQuoteCheckConfigPath());
+}
+
+/**
+ * Mode of `quote_check.active`: the same check over the notes the
+ * SessionStart active digest emitted. The hook gates this phase on a live
+ * active-injection ledger (`osb.active_inject.emitted`).
+ */
+export function resolveAnswerQuoteCheckActive(configPath?: string): AnswerQuoteCheckMode {
+  return resolveAnswerQuoteCheckPhase("active", configPath ?? defaultAnswerQuoteCheckConfigPath());
+}
+
+/**
+ * Mode of `quote_check.subagent`: the same check over the context the
+ * sub-agent carrier delivered. The hook gates this phase on a live
+ * sub-agent delivery ledger.
+ */
+export function resolveAnswerQuoteCheckSubagent(configPath?: string): AnswerQuoteCheckMode {
+  return resolveAnswerQuoteCheckPhase(
+    "subagent",
+    configPath ?? defaultAnswerQuoteCheckConfigPath(),
   );
 }
 
