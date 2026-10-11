@@ -418,11 +418,9 @@ describe("o2b search rerank-eval language split", () => {
       expect(d).toHaveProperty("delta_mrr");
       // Correctness: each language's delta is that group's arm difference,
       // not the pooled one.
-      expect(d["delta_hit_at_k"]).toBeCloseTo(
-        d["hit_at_k"] - baselineByLang[lang]!["hit_at_k"],
-        12,
-      );
-      expect(d["delta_mrr"]).toBeCloseTo(d["mrr"] - baselineByLang[lang]!["mrr"], 12);
+      const base = baselineByLang[lang]! as Record<string, number>;
+      expect(d["delta_hit_at_k"]).toBeCloseTo(d["hit_at_k"]! - base["hit_at_k"]!, 12);
+      expect(d["delta_mrr"]).toBeCloseTo(d["mrr"]! - base["mrr"]!, 12);
     }
   });
 

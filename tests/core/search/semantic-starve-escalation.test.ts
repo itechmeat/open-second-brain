@@ -69,7 +69,7 @@ function seedStarvedStore(nearSections: number): Database {
 
 function seedPageChunk(db: Database): void {
   const docId = db
-    .query<{ id: number }, [string]>(
+    .query<{ id: number }, []>(
       "INSERT INTO documents(path, content_hash, mtime, size, created_at, updated_at, indexed_at) " +
         "VALUES ('notes/the-page.md', 'h', 0, 0, 'n', 'n', 'n') RETURNING id",
     )
