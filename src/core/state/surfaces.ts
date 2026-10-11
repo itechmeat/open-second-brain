@@ -72,6 +72,7 @@ import { lstatSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import {
+  BRAIN_ARCHIVES_REL,
   BRAIN_ARTIFACTS_REL,
   BRAIN_CAPTURES_REL,
   BRAIN_CLAIM_GRAPH_FILE,
