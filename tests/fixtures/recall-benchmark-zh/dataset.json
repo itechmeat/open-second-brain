@@ -1,0 +1,79 @@
+{
+  "queries": [
+    {
+      "id": "canary",
+      "query": "金丝雀发布 流量",
+      "expected": ["zh-deploy-canary.md"],
+      "lang": "zh"
+    },
+    {
+      "id": "bluegreen",
+      "query": "蓝绿部署 切换 冒烟",
+      "expected": ["zh-deploy-bluegreen.md"],
+      "lang": "zh"
+    },
+    {
+      "id": "oauth",
+      "query": "oauth 令牌刷新",
+      "expected": ["zh-auth-oauth.md"],
+      "answer": "泄露的第一时间是吊销而不是轮换",
+      "lang": "zh"
+    },
+    {
+      "id": "passwords",
+      "query": "密码 哈希 盐",
+      "expected": ["zh-auth-passwords.md"],
+      "lang": "zh"
+    },
+    {
+      "id": "backups",
+      "query": "每日备份 保留",
+      "expected": ["zh-db-backups.md"],
+      "answer": "异地保留最近三十天",
+      "lang": "zh"
+    },
+    {
+      "id": "indexing",
+      "query": "慢查询 复合索引",
+      "expected": ["zh-db-indexing.md"],
+      "lang": "zh"
+    },
+    {
+      "id": "incident",
+      "query": "故障复盘 超时 根因",
+      "expected": ["zh-incident-0803.md"],
+      "answer": "根因是发布窗口重叠造成连接泄漏",
+      "lang": "zh"
+    },
+    {
+      "id": "aurora",
+      "query": "极光项目 里程碑",
+      "expected": ["zh-project-aurora.md"],
+      "lang": "zh"
+    },
+    {
+      "id": "embeddings",
+      "query": "向量检索 嵌入 索引",
+      "expected": ["zh-embeddings.md"],
+      "lang": "zh"
+    },
+    {
+      "id": "tuning",
+      "query": "召回 调参 基线",
+      "expected": ["zh-search-tuning.md"],
+      "lang": "zh"
+    },
+    {
+      "id": "standup",
+      "query": "站会 阻塞 预发",
+      "expected": ["zh-standup.md"],
+      "lang": "zh"
+    },
+    {
+      "id": "style",
+      "query": "写作约定 主动语态",
+      "expected": ["zh-style-guide.md"],
+      "lang": "zh"
+    }
+  ]
+}
