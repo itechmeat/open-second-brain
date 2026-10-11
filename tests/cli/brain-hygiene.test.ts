@@ -14,12 +14,13 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { brainDirs } from "../../src/core/brain/paths.ts";
+import { ingestSource as ingestCore } from "../../src/core/brain/ingest/ingest.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { resetVaultIdentityPins } from "../../src/core/brain/vault-identity.ts";
 import { HYGIENE_TOOLS } from "../../src/mcp/brain/hygiene-tools.ts";
@@ -272,5 +273,55 @@ describe("the capture-scope detector on the hygiene surfaces", () => {
     expect(props["detectors"]!.description.length).toBeLessThanOrEqual(PROPERTY_DESCRIPTION_MAX);
     expect(tool.description).toContain("url-only");
     expect(tool.description.length).toBeLessThanOrEqual(TOOL_DESCRIPTION_MAX);
+  });
+});
+
+/**
+ * The archive finding (answer trust, Task C5) rides the same CLI scan: a
+ * summary page stamped with an archive digest whose entry is gone is a
+ * named finding in the default sweep, and the scan stays read-only about
+ * it. An intact entry and an unstamped page are not findings.
+ */
+describe("the capture-scope archive finding on the CLI scan", () => {
+  const DETECTOR = "capture-scope";
+  const SOURCE = "Articles/keep.md";
+  const ingestSource = (contents: string): { summaryPath: string; hash: string } => {
+    mkdirSync(join(vault, "Articles"), { recursive: true });
+    writeFileSync(join(vault, SOURCE), contents, "utf8");
+    const res = ingestCore(
+      vault,
+      {
+        sourcePath: SOURCE,
+        summary: "Kept durable.",
+        extraction: { entities: [{ category: "concept", name: "Keep" }], relations: [] },
+      },
+      { agent: "test-agent", now: new Date("2026-02-02T00:00:00Z") },
+    );
+    if (res.sourceArchiveHash === undefined) throw new Error("expected an archive stamp");
+    return { summaryPath: res.summaryPath, hash: res.sourceArchiveHash };
+  };
+
+  test("a missing entry is a finding in the default sweep; an intact one is not", async () => {
+    const { hash } = ingestSource("kept bytes\n");
+    expect((await scan()).findings).toEqual([]);
+
+    rmSync(join(vault, "Brain", ".archives", `${hash}.txt`));
+    const report = await scan();
+    const finding = report.findings.find((f) => f.detector === DETECTOR);
+    expect(finding).toBeDefined();
+    expect(finding!.proposed_action).toBe("review");
+    expect(report.counts[DETECTOR]).toBeGreaterThanOrEqual(1);
+  });
+
+  test("the finding names the summary page and the scan stays read-only", async () => {
+    const { summaryPath, hash } = ingestSource("other bytes\n");
+    rmSync(join(vault, "Brain", ".archives", `${hash}.txt`));
+    const before = digestVaultTree(vault);
+
+    const report = await scan("--detectors", DETECTOR);
+    const finding = report.findings.find((f) => f.detector === DETECTOR);
+    expect(finding).toBeDefined();
+    expect(JSON.stringify(finding)).toContain(summaryPath);
+    expect(digestVaultTree(vault)).toBe(before);
   });
 });

@@ -8,7 +8,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -17,6 +17,7 @@ import { CAPTURE_SCOPE_DETECTOR_ID } from "../../src/core/brain/hygiene/detector
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
 import { HEALTH_TOOLS } from "../../src/mcp/brain/health-tools.ts";
+import { INGEST_TOOLS } from "../../src/mcp/brain/ingest-tools.ts";
 import { HYGIENE_TOOLS } from "../../src/mcp/brain/hygiene-tools.ts";
 import { RESEARCH_TOOLS } from "../../src/mcp/brain/research-tools.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
@@ -105,4 +106,85 @@ describe("brain_hygiene capture-scope at the caller's reach", () => {
       }
     },
   );
+});
+
+/**
+ * The archive arm (answer trust, Task C5): a summary page stamped with an
+ * archive digest claims durable evidence, and a stamp whose entry is absent
+ * or re-hashes differently is a named finding - one per page, review
+ * proposed action. An intact entry is not a finding, and a page with no
+ * stamp means exactly "not captured", never a finding either. The
+ * verification is a fact about the store, so the finding reaches every
+ * caller who may read the page, at either reach.
+ */
+describe("brain_hygiene capture-scope archive findings", () => {
+  const ingest = INGEST_TOOLS[0]!.handler;
+  const SOURCE = "Articles/archived.md";
+  let summaryPath: string;
+  let archiveFile: string;
+
+  /** The capture-scope findings at this reach, with their evidence. */
+  const findingsAt = async (reach: TransportReach) => {
+    const res = (await hygiene(
+      { ...ctx, reach },
+      { mode: "scan", detectors: [CAPTURE_SCOPE_DETECTOR_ID] },
+    )) as {
+      findings: ReadonlyArray<{
+        targets: ReadonlyArray<string>;
+        proposed_action: string;
+        title: string;
+        evidence: Record<string, unknown>;
+      }>;
+    };
+    return res.findings.filter((f) => f.targets.includes(summaryPath));
+  };
+
+  beforeEach(async () => {
+    mkdirSync(join(vault, "Articles"), { recursive: true });
+    writeFileSync(join(vault, SOURCE), "archived bytes\n", "utf8");
+    const res = (await ingest(ctx, {
+      source_path: SOURCE,
+      summary: "Durable.",
+      entities: [{ category: "concept", name: "Durable" }],
+    })) as { summary_path: string; source_archive_hash: string };
+    summaryPath = res.summary_path;
+    archiveFile = join(vault, "Brain", ".archives", `${res.source_archive_hash}.txt`);
+    expect(existsSync(archiveFile)).toBe(true);
+  });
+
+  test("an intact entry is not a finding, at either reach", async () => {
+    expect(await findingsAt(TRANSPORT_REACH.local)).toEqual([]);
+    expect(await findingsAt(TRANSPORT_REACH.remote)).toEqual([]);
+  });
+
+  test("a deleted entry is a missing-archive finding naming the page", async () => {
+    rmSync(archiveFile);
+    const findings = await findingsAt(TRANSPORT_REACH.local);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.proposed_action).toBe("review");
+    expect(findings[0]!.evidence["archive"]).toBe("missing");
+    // The same fact reaches a remote caller who may read the page.
+    expect(await findingsAt(TRANSPORT_REACH.remote)).toEqual(findings);
+  });
+
+  test("a tampered entry is a mismatched-archive finding, not a missing one", async () => {
+    writeFileSync(archiveFile, "rewritten after the stamp", "utf8");
+    const findings = await findingsAt(TRANSPORT_REACH.local);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.evidence["archive"]).toBe("mismatched");
+  });
+
+  test("a page with no stamp is never an archive finding", async () => {
+    const url = (await ingest(ctx, {
+      source_path: "https://example.test/unarchived",
+      summary: "Remote.",
+      entities: [{ category: "concept", name: "Unarchived" }],
+    })) as { summary_path: string; source_archive_hash: string | null };
+    expect(url.source_archive_hash).toBeNull();
+    const res = (await hygiene(ctx, {
+      mode: "scan",
+      detectors: [CAPTURE_SCOPE_DETECTOR_ID],
+    })) as { findings: ReadonlyArray<{ targets: ReadonlyArray<string> }> };
+    expect(res.findings.some((f) => f.targets.includes(url.summary_path))).toBe(false);
+  });
 });
