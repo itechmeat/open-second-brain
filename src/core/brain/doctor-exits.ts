@@ -289,6 +289,18 @@ const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
       "the operator's call, and no command makes it for them",
   },
   {
+    // The blank-session-identity count (t_22d58fa7). A session no writer
+    // stamped cannot be restored from the record: assigning one would
+    // fabricate provenance over append-only history.
+    code: "blank-session-identity",
+    reason:
+      "the finding is a count of records whose payload names no session, which is a fact about " +
+      "the writers, not a defect in any one row. Stamping an identity after the fact would " +
+      "fabricate provenance over append-only history that peers merge by content id, so the " +
+      "only honest exit is the count itself - the condition is worth knowing about, and any " +
+      "rewrite belongs to a restore from backup, not to a command this table could name",
+  },
+  {
     code: "recovery-point-unmeasured",
     reason:
       "the recovery-point history is there and the walk over it was refused. What repairs that " +
