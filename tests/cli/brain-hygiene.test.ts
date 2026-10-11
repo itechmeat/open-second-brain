@@ -339,6 +339,7 @@ describe("the doctor archive section", () => {
       readonly totalBytes: number;
       readonly missing: number;
       readonly mismatched: number;
+      readonly uncited: number;
     };
   }
   const doctorJson = async (): Promise<ArchivesJson> => {
@@ -347,25 +348,28 @@ describe("the doctor archive section", () => {
     return JSON.parse(out.stdout) as ArchivesJson;
   };
 
-  const ingestOne = (contents: string): { hash: string } => {
-    mkdirSync(join(vault, "Articles"), { recursive: true });
-    writeFileSync(join(vault, "Articles/counted.md"), contents, "utf8");
+  const ingestOne = (
+    contents: string,
+    rel = "Articles/counted.md",
+  ): { hash: string; summaryPath: string } => {
+    mkdirSync(join(vault, rel, ".."), { recursive: true });
+    writeFileSync(join(vault, rel), contents, "utf8");
     const res = ingestCore(
       vault,
       {
-        sourcePath: "Articles/counted.md",
+        sourcePath: rel,
         summary: "Counted.",
         extraction: { entities: [{ category: "concept", name: "Counted" }], relations: [] },
       },
       { agent: "test-agent", now: new Date("2026-02-03T00:00:00Z") },
     );
     if (res.sourceArchiveHash === undefined) throw new Error("expected an archive stamp");
-    return { hash: res.sourceArchiveHash };
+    return { hash: res.sourceArchiveHash, summaryPath: res.summaryPath };
   };
 
   test("a vault that never archived reports an all-zero section, and prints no line", async () => {
     expect(await doctorJson()).toMatchObject({
-      archives: { entries: 0, totalBytes: 0, missing: 0, mismatched: 0 },
+      archives: { entries: 0, totalBytes: 0, missing: 0, mismatched: 0, uncited: 0 },
     });
     const human = await runCli(["brain", "doctor", "--vault", vault], { env: env() });
     expect(human.returncode).toBe(0);
@@ -374,14 +378,19 @@ describe("the doctor archive section", () => {
 
   test("an ingested source is one entry with its bytes, on both surfaces", async () => {
     ingestOne("counted bytes\n");
-    const payload = await doctorJson();
-    expect(payload.archives.entries).toBe(1);
-    expect(payload.archives.totalBytes).toBe(Buffer.byteLength("counted bytes\n", "utf8"));
-    expect(payload.archives.missing).toBe(0);
+    // Whole-object, not a subset match: a key smuggled into the section
+    // (or an old shape drifting back) fails here.
+    expect((await doctorJson()).archives).toEqual({
+      entries: 1,
+      totalBytes: Buffer.byteLength("counted bytes\n", "utf8"),
+      missing: 0,
+      mismatched: 0,
+      uncited: 0,
+    });
 
     const human = await runCli(["brain", "doctor", "--vault", vault], { env: env() });
     expect(human.stdout).toContain(
-      `archives: 1 entries, ${Buffer.byteLength("counted bytes\n", "utf8")} bytes, 0 missing, 0 mismatched`,
+      `archives: 1 entries, ${Buffer.byteLength("counted bytes\n", "utf8")} bytes, 0 missing, 0 mismatched, 0 uncited`,
     );
   });
 
@@ -394,5 +403,26 @@ describe("the doctor archive section", () => {
 
     writeFileSync(entry, "rewritten", "utf8");
     expect((await doctorJson()).archives).toMatchObject({ entries: 1, mismatched: 1 });
+  });
+
+  test("a page deleted out-of-band leaves its entry counted as uncited", async () => {
+    // Two sources, two distinct entries. Removing the first summary page
+    // out-of-band - the state a re-stamped page or a review-rejected staged
+    // ingest leaves behind - leaves its entry in the store, cited by
+    // nothing, while the second entry keeps its page.
+    const first = ingestOne("orphaned bytes\n", "Articles/orphaned.md");
+    const second = ingestOne("still cited bytes\n", "Articles/cited.md");
+    expect(first.hash).not.toBe(second.hash);
+    rmSync(join(vault, first.summaryPath));
+
+    expect((await doctorJson()).archives).toMatchObject({
+      entries: 2,
+      uncited: 1,
+      missing: 0,
+      mismatched: 0,
+    });
+
+    const human = await runCli(["brain", "doctor", "--vault", vault], { env: env() });
+    expect(human.stdout).toContain(", 1 uncited");
   });
 });

@@ -236,7 +236,7 @@ describe("brain doctor - byte-identical when there is nothing to point at", () =
         {
           warnings: [],
           errors: [],
-          archives: { entries: 0, totalBytes: 0, missing: 0, mismatched: 0 },
+          archives: { entries: 0, totalBytes: 0, missing: 0, mismatched: 0, uncited: 0 },
         },
         null,
         2,

@@ -82,12 +82,12 @@ function explainMissingExits(codes: Iterable<string>, stream: AdvisoryStream): v
 
 /**
  * The informational archive section (answer trust): counts only - how many
- * entries the durable source archive holds, their combined size, and how
- * many stamped pages lost their entry or disagree with it. No fix verb: an
- * archive is evidence, so pruning and recapture are operator calls, and the
- * named findings live on the hygiene scan. Count-only also keeps this
- * section from becoming a second finding surface the scans would have to
- * agree with.
+ * entries the durable source archive holds, their combined size, how many
+ * stamped pages lost their entry or disagree with it, and how many entries
+ * no page cites anymore. No fix verb: an archive is evidence, so pruning
+ * and recapture are operator calls, and the named findings live on the
+ * hygiene scan. Count-only also keeps this section from becoming a second
+ * finding surface the scans would have to agree with.
  */
 function archiveSection(vault: string): ArchiveStats & ArchiveStampAudit {
   return { ...sourceArchiveStats(vault), ...auditArchiveStamps(vault) };
@@ -243,12 +243,19 @@ export async function cmdBrainDoctor(argv: string[]): Promise<number> {
       ok("brain doctor: clean");
     }
     // One line, and only when there is something to describe: a vault that
-    // has never archived a source gains no line at all.
+    // has never archived a source gains no line at all, and an orphaned
+    // entry - evidence no page cites - is something to describe.
     const archives = archiveSection(vault);
-    if (archives.entries > 0 || archives.missing > 0 || archives.mismatched > 0) {
+    if (
+      archives.entries > 0 ||
+      archives.missing > 0 ||
+      archives.mismatched > 0 ||
+      archives.uncited > 0
+    ) {
       process.stdout.write(
         `archives: ${archives.entries} entries, ${archives.totalBytes} bytes, ` +
-          `${archives.missing} missing, ${archives.mismatched} mismatched\n`,
+          `${archives.missing} missing, ${archives.mismatched} mismatched, ` +
+          `${archives.uncited} uncited\n`,
       );
     }
   }

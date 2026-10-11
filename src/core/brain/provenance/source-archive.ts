@@ -49,6 +49,7 @@ import { ensureInsideVault } from "../../path-safety.ts";
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { redactRawOutput } from "../../redactor.ts";
 import { listVaultNotePaths, parseFrontmatter } from "../../vault.ts";
+import type { FrontmatterMap } from "../../types.ts";
 import { BRAIN_ARCHIVES_REL, BRAIN_PENDING_REL, BRAIN_SOURCES_REL } from "../path-constants.ts";
 
 /**
@@ -297,18 +298,23 @@ export function discardSourceArchive(vault: string, hash: string): boolean {
 }
 
 /**
- * Every ingest summary page stamping `hash` as its archive digest,
- * vault-relative and sorted. The stamp is written by exactly one writer -
- * the ingest lane, on `Brain/sources/` pages and their staged counterparts
- * under `Brain/pending/ingest/` - so the citation probe walks those two
- * directories: the inverse index of the stamp, for the delete path that
- * must remove an entry only when its LAST citing page goes. A staged page
- * counts as citing: rejecting it removes the citation with the page, but
- * publishing it would revive a stamp whose entry must still be there.
+ * The only pages a stamp is written on: `Brain/sources/` and its staged
+ * counterparts under `Brain/pending/`. The citation probe walks exactly
+ * these, which makes the one-writer assumption load-bearing: a stamped
+ * page anywhere else would cite an entry the probe cannot see. That
+ * assumption is architecture, not convention - it is pinned by the
+ * source-archive stamp census (`tests/core/architecture/source-archive-
+ * stamp-census.test.ts`), which fails by name when a second writer of
+ * the `source_archive_hash` key appears outside the ingest lane.
  */
-export function sourceArchiveCitingPages(vault: string, hash: string): ReadonlyArray<string> {
-  const pages: string[] = [];
-  for (const root of [BRAIN_SOURCES_REL, BRAIN_PENDING_REL]) {
+const STAMP_ROOTS: ReadonlyArray<string> = Object.freeze([BRAIN_SOURCES_REL, BRAIN_PENDING_REL]);
+
+/** Visit every stampable page's frontmatter, once per page. */
+function walkStampedPages(
+  vault: string,
+  visit: (root: string, rel: string, meta: FrontmatterMap) => void,
+): void {
+  for (const root of STAMP_ROOTS) {
     const dir = join(vault, root);
     if (!existsSync(dir)) continue;
     for (const rel of listVaultNotePaths(dir)) {
@@ -318,10 +324,67 @@ export function sourceArchiveCitingPages(vault: string, hash: string): ReadonlyA
       // parse falls out as citing nothing - the fail-safe answer for an
       // entry-removal decision.
       const [meta] = parseFrontmatter(abs);
-      if (meta[SOURCE_ARCHIVE_HASH_KEY] === hash) {
-        pages.push(posix.join(root, rel.split("\\").join("/")));
-      }
+      visit(root, rel, meta);
     }
   }
+}
+
+/**
+ * Every ingest summary page stamping `hash` as its archive digest,
+ * vault-relative and sorted. The inverse index of the stamp, for the
+ * delete path that must remove an entry only when its LAST citing page
+ * goes. A staged page counts as citing: rejecting it removes the citation
+ * with the page, but publishing it would revive a stamp whose entry must
+ * still be there.
+ */
+export function sourceArchiveCitingPages(vault: string, hash: string): ReadonlyArray<string> {
+  const pages: string[] = [];
+  walkStampedPages(vault, (root, rel, meta) => {
+    if (meta[SOURCE_ARCHIVE_HASH_KEY] === hash) {
+      pages.push(posix.join(root, rel.split("\\").join("/")));
+    }
+  });
   return pages.toSorted();
+}
+
+/**
+ * The digests of every entry the store holds, sorted - the entry stems of
+ * the `<64-hex>.txt` files {@link sourceArchiveStats} counts, so a stray
+ * file is never mistaken for an entry and a vanished one is never named.
+ */
+export function sourceArchiveEntryHashes(vault: string): ReadonlyArray<string> {
+  const root = sourceArchivesDir(vault);
+  if (!existsSync(root)) return [];
+  const hashes: string[] = [];
+  for (const name of readdirSync(root)) {
+    if (!name.endsWith(ARCHIVE_ENTRY_EXT)) continue;
+    const stem = name.slice(0, -ARCHIVE_ENTRY_EXT.length);
+    if (!isArchiveHash(stem)) continue;
+    try {
+      if (!statSync(join(root, name)).isFile()) continue;
+    } catch {
+      continue; // Vanished or unreadable mid-walk: not an entry this run named.
+    }
+    hashes.push(stem);
+  }
+  return hashes.toSorted();
+}
+
+/**
+ * The store's entries that NO page cites - the leftovers the citation
+ * probe cannot reach through a page: a re-stamped page orphans the entry
+ * the old stamp named, and a staged ingest rejected by review leaves its
+ * entry behind. One walk over the stamp roots builds the set of stamps
+ * any page carries, so the verdict is the exact answer the per-entry
+ * probe ({@link sourceArchiveCitingPages} empty) would give, without
+ * re-walking the pages once per entry. Sorted, so audit output is
+ * deterministic.
+ */
+export function sourceArchiveUncitedHashes(vault: string): ReadonlyArray<string> {
+  const cited = new Set<string>();
+  walkStampedPages(vault, (_root, _rel, meta) => {
+    const value = meta[SOURCE_ARCHIVE_HASH_KEY];
+    if (typeof value === "string") cited.add(value);
+  });
+  return sourceArchiveEntryHashes(vault).filter((hash) => !cited.has(hash));
 }

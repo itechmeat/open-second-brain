@@ -82,6 +82,7 @@ import {
 import {
   ARCHIVE_VERIFICATION,
   SOURCE_ARCHIVE_HASH_KEY,
+  sourceArchiveUncitedHashes,
   verifySourceArchive,
 } from "../../provenance/source-archive.ts";
 import { SourceTrustError, isSourceHidden } from "../../intake/source-trust.ts";
@@ -272,19 +273,33 @@ export interface ArchiveStampAudit {
   readonly missing: number;
   /** Stamped pages whose entry is there but re-hashes differently. */
   readonly mismatched: number;
+  /**
+   * Store entries NO page cites - the structurally unreachable leftovers
+   * the two counts above cannot see: a re-stamped page orphans the entry
+   * the old stamp named, and a staged ingest rejected by review leaves
+   * its entry behind. Evidence, not scratch, so the audit names them
+   * rather than pruning them; release is an operator call made through
+   * delete-by-source cleanup.
+   */
+  readonly uncited: number;
 }
 
 /**
- * Count every stamped ingest summary page whose archive entry is gone or
- * disagrees - the number behind the doctor's informational archive section.
- * One walk over `Brain/sources/`, every stamp counted: unlike the scan's
- * finding list, no page is skipped for quarantine or reach, because the
- * doctor runs locally and reports a count, not a disclosure. Two integers,
- * never a page list - recapture and pruning are operator calls made from
- * the hygiene scan's findings, not from this number.
+ * Count the archive's rot, on both of its populations: the stamped pages
+ * whose entry is gone or disagrees, and the store entries no page cites.
+ * One walk over `Brain/sources/` for the stamps, one over the stamp roots
+ * and the store for the uncited entries. Every stamp counted: unlike the
+ * scan's finding list, no page is skipped for quarantine or reach,
+ * because the doctor runs locally and reports a count, not a disclosure.
+ * Integers, never a page list - recapture and pruning are operator calls
+ * made from the hygiene scan's findings, not from these numbers.
  */
 export function auditArchiveStamps(vault: string): ArchiveStampAudit {
-  const counts = { missing: 0, mismatched: 0 };
+  const counts = {
+    missing: 0,
+    mismatched: 0,
+    uncited: sourceArchiveUncitedHashes(vault).length,
+  };
   const abs = join(vault, BRAIN_SOURCES_REL);
   if (!existsSync(abs)) return counts;
   for (const rel of listVaultNotePaths(abs)) {
