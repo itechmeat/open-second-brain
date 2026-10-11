@@ -85,6 +85,14 @@ export interface ContextReceiptFilter {
   readonly trigger?: ContextReceiptTrigger;
   readonly host?: string;
   readonly sessionId?: string;
+  /**
+   * Exact receipt id (answer-trust, task B3): the one-record lookup the
+   * claim-provenance join uses to resolve a claim's `sample_id` to the
+   * receipt it names. Matched BEFORE the limit, like every other filter
+   * field, so a receipt lookup answers the store's answer for that id
+   * and never whichever receipts happen to be newest.
+   */
+  readonly receiptId?: string;
   readonly limit?: number;
   /**
    * Receipts the caller may not see at all. They are left out before the
@@ -514,6 +522,7 @@ export const CONTEXT_RECEIPT_TRIGGERS: ReadonlyArray<ContextReceiptTrigger> = Ob
 
 function matchesReceiptFilter(record: ContinuityRecord, filter: ContextReceiptFilter): boolean {
   const payload = record.payload;
+  if (filter.receiptId !== undefined && record.id !== filter.receiptId) return false;
   if (filter.trigger !== undefined && payload["trigger"] !== filter.trigger) return false;
   if (filter.host !== undefined && payload["host"] !== filter.host) return false;
   if (filter.sessionId !== undefined && payload["session_id"] !== filter.sessionId) return false;
