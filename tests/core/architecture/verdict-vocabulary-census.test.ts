@@ -505,6 +505,11 @@ import {
   ANSWER_QUOTE_VERDICTS,
   isAnswerQuoteVerdict,
 } from "../../../src/core/brain/answer-quotes/check.ts";
+import {
+  ARCHIVE_VERIFICATION,
+  ARCHIVE_VERIFICATIONS,
+  isArchiveVerification,
+} from "../../../src/core/brain/provenance/source-archive.ts";
 
 interface VocabularyUnderCensus {
   /** Identifies the vocabulary in a failure message. */
@@ -1569,6 +1574,18 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     members: ANSWER_QUOTE_VERDICTS,
     guard: isAnswerQuoteVerdict,
   },
+  {
+    // What comparing a stamped archive digest against the entry it names
+    // concluded (answer-trust wave, Lane C). It rides the capture-scope
+    // detector's finding evidence and the archive read op, and the pair it
+    // separates is the unit: `missing` (the evidence is gone) and
+    // `mismatched` (the evidence disagrees with the page) are different
+    // repairs, and a boolean would collapse them.
+    name: "ARCHIVE_VERIFICATION",
+    values: ARCHIVE_VERIFICATION,
+    members: ARCHIVE_VERIFICATIONS,
+    guard: isArchiveVerification,
+  },
 ]);
 
 // ---------------------------------------------------------------------------
@@ -1833,7 +1850,9 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
  * How many four-piece vocabularies `src/` currently holds. Measured, and
  * kept as an equality rather than a floor - see the population test.
  */
-const VOCABULARY_POPULATION = 96;
+// 97: Lane C's ARCHIVE_VERIFICATION (answer trust) joins the scanned
+// population, the same append Lane A's ANSWER_QUOTE_VERDICT made.
+const VOCABULARY_POPULATION = 97;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {

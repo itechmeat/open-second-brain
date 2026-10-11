@@ -57,6 +57,7 @@ import {
   writeImagesDir,
 } from "../../../src/core/brain/paths.ts";
 import { deadLetterDir } from "../../../src/core/brain/dead-letter.ts";
+import { sourceArchivesDir } from "../../../src/core/brain/provenance/source-archive.ts";
 import { decisionLedgerDir } from "../../../src/core/brain/permissions/ledger.ts";
 import { checkpointPath } from "../../../src/core/brain/ingest/checkpoint.ts";
 import { sessionCheckpointPath } from "../../../src/core/brain/sessions/checkpoint.ts";
@@ -301,6 +302,7 @@ const RESOLVER_BINDINGS: ReadonlyArray<readonly [StateSurfaceId, (vault: string)
     ["claim_graph", (v) => claimGraphPath(v)],
     ["rollup_ledger", (v) => rollupLedgerPath(v)],
     ["decision_ledger", (v) => decisionLedgerDir(v)],
+    ["source_archives", (v) => sourceArchivesDir(v)],
   ]);
 
 /**
