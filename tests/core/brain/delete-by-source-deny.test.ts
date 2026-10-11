@@ -308,14 +308,18 @@ describe("the doctor reports the covered lanes", () => {
     return out;
   }
 
+  function findings(): DoctorFindings["issues"] {
+    return run().issues.filter((i) => i.code === DENY_CONSULTED_LANES_CODE);
+  }
+
   test("a document whose ingest verdict denies the local agent names the covered lanes", () => {
     writeDoc("version: 1\ndefault_action: deny\n");
     const { issues } = run();
-    const findings = issues.filter((i) => i.code === DENY_CONSULTED_LANES_CODE);
-    expect(findings).toHaveLength(1);
-    expect(findings[0]!.severity).toBe("warning");
-    expect(findings[0]!.message).toContain("delete_by_source");
-    expect(findings[0]!.message).toContain("o2b brain permissions show");
+    const found = issues.filter((i) => i.code === DENY_CONSULTED_LANES_CODE);
+    expect(found).toHaveLength(1);
+    expect(found[0]!.severity).toBe("warning");
+    expect(found[0]!.message).toContain("delete_by_source");
+    expect(found[0]!.message).toContain("o2b brain permissions show");
   });
 
   test("an allow or ask ingest verdict stays silent, as does an absent document", () => {
@@ -324,6 +328,64 @@ describe("the doctor reports the covered lanes", () => {
     writeDoc("version: 1\ndefault_action: ask\n");
     expect(run().issues).toEqual([]);
     rmSync(join(vault, "Brain", "_permissions.yaml"));
+    expect(run().issues).toEqual([]);
+  });
+
+  test("the blanket finding registers the session lane's honest status", () => {
+    writeDoc("version: 1\ndefault_action: deny\n");
+    const found = findings();
+    expect(found).toHaveLength(1);
+    // write_session consults no permissions document today: the finding
+    // says so instead of counting the lane as covered.
+    expect(found[0]!.message).toContain("brain_write_session");
+    expect(found[0]!.message).toContain("no permissions document");
+  });
+
+  test("a blanket deny stays one finding - the target scopes are implied", () => {
+    writeDoc(
+      "version: 1\ndefault_action: allow\nentries:\n  - id: guard-source\n    agent: codex\n" +
+        `    action: ingest\n    target: ${SOURCE}\n    verdict: deny\n`,
+    );
+    writeDoc("version: 1\ndefault_action: deny\n");
+    expect(findings()).toHaveLength(1);
+  });
+
+  test("a target-scoped deny on the schema pack names the schema lane", () => {
+    // default allow, one target-scoped deny: the untargeted resolution
+    // stayed silent here, yet every schema batch from this machine refuses.
+    writeDoc(
+      "version: 1\ndefault_action: allow\nentries:\n  - id: freeze-pack\n    agent: codex\n" +
+        "    action: ingest\n    target: Brain/_brain.yaml\n    verdict: deny\n",
+    );
+    const found = findings();
+    expect(found).toHaveLength(1);
+    expect(found[0]!.severity).toBe("warning");
+    expect(found[0]!.path).toContain("_permissions.yaml");
+    expect(found[0]!.message).toContain("brain_schema_mutate");
+    expect(found[0]!.message).toContain("Brain/_brain.yaml");
+    expect(found[0]!.message).toContain("entry:freeze-pack");
+    expect(found[0]!.message).toContain("o2b brain permissions show");
+  });
+
+  test("a target-scoped deny on a source names the destructive cleanup", () => {
+    writeDoc(
+      "version: 1\ndefault_action: allow\nentries:\n  - id: guard-source\n    agent: codex\n" +
+        `    action: ingest\n    target: ${SOURCE}\n    verdict: deny\n`,
+    );
+    const found = findings();
+    expect(found).toHaveLength(1);
+    expect(found[0]!.message).toContain("delete_by_source");
+    expect(found[0]!.message).toContain(SOURCE);
+    // The cleanup for OTHER sources still works - the finding names this
+    // target's refusal, not a blanket closure.
+    expect(found[0]!.message).not.toContain("every source");
+  });
+
+  test("a target-scoped deny for another agent stays silent", () => {
+    writeDoc(
+      "version: 1\ndefault_action: allow\nentries:\n  - id: guard-gemini\n    agent: gemini\n" +
+        "    action: ingest\n    target: Brain/_brain.yaml\n    verdict: deny\n",
+    );
     expect(run().issues).toEqual([]);
   });
 });

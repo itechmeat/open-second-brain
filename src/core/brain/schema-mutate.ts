@@ -107,7 +107,7 @@ export type SchemaMutation =
     };
 
 /** The vault-relative pack path the deny consult and the audit record name. */
-const BRAIN_CONFIG_TARGET = "Brain/_brain.yaml";
+export const BRAIN_CONFIG_TARGET = "Brain/_brain.yaml";
 
 export interface ApplySchemaMutationsOptions {
   readonly actor: string;
