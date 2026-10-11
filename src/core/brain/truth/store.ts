@@ -214,6 +214,16 @@ export interface AppendClaimInput {
    * compatibility.
    */
   readonly extractor?: ClaimExtractor;
+  /**
+   * Presence-gated attribution id (schema v1): the caller-supplied
+   * recall/context-pack quality-sample id this claim was stated against.
+   * Opaque - stored verbatim, never normalized, never logged beside
+   * answer or source text. A present-but-blank value refuses the append
+   * by name (a blank id means nothing and is not coerced to absent);
+   * an absent one serializes nothing, byte-identical to the
+   * pre-attribution ledger.
+   */
+  readonly sample_id?: string;
   readonly source: string;
 }
 
@@ -305,6 +315,14 @@ export function appendClaimEvent(
   if (input.extractor !== undefined && input.extractor !== "agent_stated") {
     throw new Error(`claim extractor must be agent_stated: ${JSON.stringify(input.extractor)}`);
   }
+  // Sample id (answer-trust, task B1): presence-gated, opaque. A
+  // present-but-blank value refuses the append by name - the same
+  // never-coerced discipline the other identity fields follow - while a
+  // present value is stored verbatim and an absent one serializes
+  // nothing.
+  if (input.sample_id !== undefined && input.sample_id.trim() === "") {
+    throw new Error("claim sample_id must be a non-empty string");
+  }
 
   const event: ClaimEvent = Object.freeze({
     v: TRUTH_SCHEMA_VERSION,
@@ -319,6 +337,7 @@ export function appendClaimEvent(
     ...(resolved.validUntil !== undefined ? { validUntil: resolved.validUntil } : {}),
     source: input.source.trim(),
     ...(input.extractor !== undefined ? { extractor: input.extractor } : {}),
+    ...(input.sample_id !== undefined ? { sample_id: input.sample_id } : {}),
   });
 
   mkdirSync(truthDir(vault), { recursive: true });
@@ -515,6 +534,19 @@ function coerceClaim(
     return null;
   }
   const extractor = rawExtractor as ClaimExtractor | undefined;
+  // Sample id (answer-trust, task B1): tolerated when absent (old
+  // lines), validated as a non-empty string when present, passed through
+  // verbatim - the id is opaque. Annotation only.
+  const rawSampleId = obj["sample_id"];
+  if (rawSampleId !== undefined && (typeof rawSampleId !== "string" || rawSampleId.trim() === "")) {
+    warnings.push({
+      path,
+      lineNumber,
+      message: `invalid claim sample_id: ${String(rawSampleId)}`,
+    });
+    return null;
+  }
+  const sampleId = rawSampleId as string | undefined;
   return Object.freeze({
     v: TRUTH_SCHEMA_VERSION,
     ts,
@@ -528,6 +560,7 @@ function coerceClaim(
     ...(validUntil !== undefined ? { validUntil } : {}),
     ...(extractor !== undefined ? { extractor } : {}),
     source: obj["source"] as string,
+    ...(sampleId !== undefined ? { sample_id: sampleId } : {}),
   });
 }
 
