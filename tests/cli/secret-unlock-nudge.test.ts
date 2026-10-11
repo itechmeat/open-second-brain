@@ -20,6 +20,9 @@ import { runCli } from "../helpers/run-cli.ts";
 let tmp: string;
 let vault: string;
 const PASSPHRASE = fakeCredential("nudge", "-pass-", "73");
+/** Placeholder seeded values, assembled so no line carries a key-shaped literal. */
+const SEEDED_VALUE = fakeCredential("sk-", "nudge-fixture-2468");
+const PLAIN_VALUE = fakeCredential("sk-", "nudge-plain-1357");
 
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "o2b-cli-secret-nudge-"));
@@ -33,7 +36,7 @@ afterEach(() => {
 
 async function seedSecret(): Promise<void> {
   const set = await runCli(["brain", "secret", "set", "api-key", "--vault", vault], {
-    stdin: "sk-nudge-fixture-2468\n",
+    stdin: `${SEEDED_VALUE}\n`,
   });
   expect(set.returncode).toBe(0);
 }
@@ -65,7 +68,7 @@ describe("the unlock nudge", () => {
 
   test("the other custody ops are unchanged: set prints no nudge", async () => {
     const set = await runCli(["brain", "secret", "set", "plain", "--vault", vault], {
-      stdin: "sk-nudge-plain-1357\n",
+      stdin: `${PLAIN_VALUE}\n`,
     });
     expect(set.returncode).toBe(0);
     expect(set.stderr).not.toContain("o2b brain secret export");

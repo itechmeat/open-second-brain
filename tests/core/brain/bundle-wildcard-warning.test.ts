@@ -22,6 +22,8 @@ import { runCli } from "../../helpers/run-cli.ts";
 let tmp: string;
 let vault: string;
 const BUNDLE_PASSPHRASE = fakeCredential("bundle", "-pass-", "91");
+/** The placeholder secret value, assembled so no line carries a key-shaped literal. */
+const SECRET_VALUE = fakeCredential("sk-", "wildcard-fixture-1357");
 
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "o2b-bundle-wildcard-"));
@@ -36,7 +38,7 @@ afterEach(() => {
 async function setSecret(name: string, allow: string[]): Promise<void> {
   const args = ["brain", "secret", "set", name, "--vault", vault];
   for (const pattern of allow) args.push("--allow", pattern);
-  const set = await runCli(args, { stdin: "sk-wildcard-fixture-1357\n" });
+  const set = await runCli(args, { stdin: `${SECRET_VALUE}\n` });
   expect(set.returncode).toBe(0);
 }
 
