@@ -164,7 +164,7 @@ describe("o2b brain hallways promote", () => {
     expect(entityFiles()).toEqual([]);
   });
 
-  test("refuses a dismissed key", async () => {
+  test("refuses a dismissed key and names the real remedy", async () => {
     seedPair(3);
     dismissHallwayKey(vault, "symbol", "SessionStore");
 
@@ -174,6 +174,12 @@ describe("o2b brain hallways promote", () => {
 
     expect(out.returncode).toBe(1);
     expect(out.stderr).toContain("dismissed");
+    // The refusal names the working state, not a verb that does not exist:
+    // a dismissal is final for this artifact, and the way back is the
+    // persisted dismissal set itself.
+    expect(out.stderr).toContain("final for this artifact");
+    expect(out.stderr).toContain("Brain/proposals/hallways-dismissed.json");
+    expect(out.stderr).not.toContain("to be undone first");
     expect(entityFiles()).toEqual([]);
   });
 

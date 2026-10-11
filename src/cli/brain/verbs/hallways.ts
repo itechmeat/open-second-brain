@@ -246,8 +246,9 @@ function promote(
   if (dismissed.has(hallwaysKeyId(args.family, args.key))) {
     return refuse(
       args.asJson,
-      `promote refused: '${args.key}' (${args.family}) is dismissed - ` +
-        "re-promotion needs `o2b brain hallways dismiss` to be undone first",
+      `promote refused: '${args.key}' (${args.family}) is dismissed - a dismissal is final ` +
+        "for this artifact (re-mining keeps the key silenced), so there is no undo verb: " +
+        "the way back is removing its id from Brain/proposals/hallways-dismissed.json by hand",
     );
   }
 

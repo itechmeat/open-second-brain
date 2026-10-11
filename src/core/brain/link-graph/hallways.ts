@@ -278,8 +278,10 @@ function computeHallwaysRun(
   for (const [pairId, co] of coCount) {
     if (co < opts.minCoSessions) continue;
     const [left, right] = splitHallwaysPairKey(pairId);
-    const dfLeft = documentFrequency.get(left) ?? 1;
-    const dfRight = documentFrequency.get(right) ?? 1;
+    // No fallback: a pair id is built only from keys the fold saw, so both
+    // document frequencies are always present.
+    const dfLeft = documentFrequency.get(left)!;
+    const dfRight = documentFrequency.get(right)!;
     const score = round6(Math.log2((co * sessionCount) / (dfLeft * dfRight)));
     if (score < opts.minScore) continue;
     pairs.push({ left, right, coSessionCount: co, score });
@@ -418,6 +420,17 @@ export function readHallwaysArtifact(vault: string, datasetHash: string): Hallwa
 // ----- Proposals and dismissals (the bridges pattern) ---------------------------
 
 /**
+ * One Markdown table cell. A mined key can legitimately carry a `|` (a
+ * URL query value, a path segment); rendered raw inside a table row it
+ * spawns a phantom cell and corrupts every row after it, so pipes are
+ * escaped as `\|` on render. The escape touches nothing else - the cell
+ * text stays copy-pasteable modulo the one escaped character.
+ */
+function proposalsCell(text: string): string {
+  return text.replaceAll("|", "\\|");
+}
+
+/**
  * Regenerate the reviewable proposals artifact. Derived file: the whole
  * document is replaced on every run. Promotion candidates are the
  * surviving keys at or above `minSessions`; pairs are the ranked
@@ -461,7 +474,7 @@ export function writeHallwaysProposals(
     lines.push("| family | key | sessions |");
     lines.push("| --- | --- | --- |");
     for (const k of candidates) {
-      lines.push(`| ${k.family} | ${k.key} | ${k.sessionCount} |`);
+      lines.push(`| ${proposalsCell(k.family)} | ${proposalsCell(k.key)} | ${k.sessionCount} |`);
     }
   }
   if (visiblePairs.length > 0) {
@@ -469,7 +482,9 @@ export function writeHallwaysProposals(
     lines.push("| left | right | co-sessions | score |");
     lines.push("| --- | --- | --- | --- |");
     for (const p of visiblePairs) {
-      lines.push(`| ${p.left} | ${p.right} | ${p.coSessionCount} | ${p.score.toFixed(3)} |`);
+      lines.push(
+        `| ${proposalsCell(p.left)} | ${proposalsCell(p.right)} | ${p.coSessionCount} | ${p.score.toFixed(3)} |`,
+      );
     }
   }
   const content = formatFrontmatter(

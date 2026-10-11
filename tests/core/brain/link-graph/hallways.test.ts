@@ -241,6 +241,36 @@ describe("the proposals file and dismissals", () => {
     expect(readFileSync(path, "utf8")).not.toContain("SessionStore");
   });
 
+  test("a key containing a pipe renders as an escaped cell, not a broken table", () => {
+    // A URL key can legitimately carry a pipe (some APIs separate query
+    // values with one). Rendered raw inside a Markdown table row it spawns
+    // a phantom cell and corrupts every row after it.
+    const pipedA = "https://x.example/?a=1|b=2";
+    const pipedB = "https://x.example/?c=3|d=4";
+    for (const session of ["s1.jsonl", "s2.jsonl", "s3.jsonl"]) {
+      mention("url", pipedA, session);
+      mention("url", pipedB, session);
+    }
+    const result = computeHallways(vault);
+
+    const path = writeHallwaysProposals(vault, result, {
+      now: new Date("2026-09-18T10:00:00Z"),
+    });
+
+    const body = readFileSync(path, "utf8");
+    // The candidates table escapes the pipe; the raw form never appears.
+    expect(body).toContain("a=1\\|b=2");
+    expect(body).toContain("c=3\\|d=4");
+    expect(body).not.toContain("a=1|b=2");
+    expect(body).not.toContain("c=3|d=4");
+    // The pairs table interpolates family-scoped ids, which embed the key:
+    // its cells escape too.
+    const pairRow = body.split("\n").find((line) => line.startsWith("| url:https"));
+    expect(pairRow).toBeDefined();
+    expect(pairRow).toContain("\\|");
+    expect(pairRow).not.toMatch(/\| https:[^|]*\| https:/u);
+  });
+
   test("a dismissal also silences the pair rows a dismissed key took part in", () => {
     mention("symbol", "SessionStore", "s1.jsonl");
     mention("symbol", "PayloadRegistry", "s1.jsonl");

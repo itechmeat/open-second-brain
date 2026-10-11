@@ -446,8 +446,11 @@ function isCasefulLabel(sanitized: string): boolean {
  * so implementations do exact lookups against lowercase keys.
  */
 function isCommonWordRun(sanitized: string, lexicon: EntityLexiconHandle): boolean {
+  // `split` always yields at least one element (an empty string yields
+  // one empty token), so there is no empty-result guard to write; the
+  // per-token emptiness check below is what actually fires, on the empty
+  // edge tokens a leading/trailing separator produces.
   const tokens = sanitized.split(WHITESPACE_RUN_RE);
-  if (tokens.length === 0) return false;
   return tokens.every((token) => token.length > 0 && lexicon.isCommonWord(token.toLowerCase()));
 }
 
