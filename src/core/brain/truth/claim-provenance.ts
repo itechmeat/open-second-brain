@@ -24,7 +24,10 @@
  * existing visibility and widens nothing: a receipt whose record is
  * private or redacted is reported KNOWN but its items are never
  * unfolded (the receipts-fold rule), so redacted content cannot
- * re-enter the vault through a claim's provenance.
+ * re-enter the vault through a claim's provenance. What the caller may
+ * not see at its reach arrives as the caller's own filters - the same
+ * `exclude` / `excludeItem` hooks the receipts list and fold take - so
+ * the join never needs transport vocabulary of its own.
  *
  * The sample id is OPAQUE throughout: echoed verbatim, never
  * normalized, never logged beside answer or source text.
@@ -82,11 +85,94 @@ export interface ClaimProvenance {
   readonly timestamp_inverted: boolean;
 }
 
-function receiptItems(record: ContinuityRecord): ReadonlyArray<ClaimProvenanceReceiptItem> {
+/**
+ * What the caller may not see, as filters rather than as a reach level.
+ * Both hooks take the shape the receipts list and receipts fold already
+ * define, so a surface binds its transport's rules once and the join
+ * stays reach-blind.
+ */
+export interface ClaimProvenanceOptions {
+  /**
+   * Receipts the caller may not see at all. An excluded receipt renders
+   * as the unknown-id answer - `receipt` is null, exactly as a store
+   * without that receipt answers - never a `withheld` marker that would
+   * confirm the receipt exists.
+   */
+  readonly exclude?: (record: ContinuityRecord) => boolean;
+  /**
+   * Receipt items the caller may not see. They leave the unfolded items
+   * before the answer is built, so a claim's provenance never discloses
+   * an item the caller could not read at its reach.
+   */
+  readonly excludeItem?: (item: unknown) => boolean;
+}
+
+/**
+ * The three ledgers the join composes, read once and indexed for many
+ * resolutions. The maps keep, per key, the same record the filtered
+ * list functions answer first - they list newest-first, so the index is
+ * built newest-wins - making an indexed resolution row-for-row the
+ * single-call answer. Hydrating a page of claims through one index
+ * costs one read per ledger instead of three full-ledger reads per
+ * claim.
+ */
+export interface ClaimProvenanceIndex {
+  /** Receipts by their record id (the receiptId lookup's key). */
+  readonly receiptsByReceiptId: ReadonlyMap<string, ContinuityRecord>;
+  /** Outcome rows by the sample id their payload posts against. */
+  readonly outcomesBySampleId: ReadonlyMap<string, ContinuityRecord>;
+  /** Evidence rows by the sample id their payload posts against. */
+  readonly evidenceBySampleId: ReadonlyMap<string, ContinuityRecord>;
+}
+
+/**
+ * Read each provenance ledger once and index it. Newest-wins per key:
+ * the list functions answer newest-first, so the FIRST record under a
+ * key is the one a filtered lookup returns, and later (older) records
+ * under the same key never displace it.
+ */
+export function loadClaimProvenanceIndex(vault: string): ClaimProvenanceIndex {
+  const receiptsByReceiptId = newestWinsById(listContextReceipts(vault), (record) => record.id);
+  const outcomesBySampleId = newestWinsById(listContextPackOutcomes(vault), (record) =>
+    payloadSampleId(record),
+  );
+  const evidenceBySampleId = newestWinsById(listContextPackEvidence(vault), (record) =>
+    payloadSampleId(record),
+  );
+  return { receiptsByReceiptId, outcomesBySampleId, evidenceBySampleId };
+}
+
+function payloadSampleId(record: ContinuityRecord): string | null {
+  const sampleId = record.payload["sample_id"];
+  return typeof sampleId === "string" ? sampleId : null;
+}
+
+/**
+ * Index one newest-first record list by key, keeping the first record
+ * under each key - the same record a filtered lookup answers first.
+ */
+function newestWinsById(
+  records: ReadonlyArray<ContinuityRecord>,
+  keyOf: (record: ContinuityRecord) => string,
+): ReadonlyMap<string, ContinuityRecord> {
+  const index = new Map<string, ContinuityRecord>();
+  for (const record of records) {
+    const key = keyOf(record);
+    if (key === null || index.has(key)) continue;
+    index.set(key, record);
+  }
+  return index;
+}
+
+function receiptItems(
+  record: ContinuityRecord,
+  excludeItem: ((item: unknown) => boolean) | undefined,
+): ReadonlyArray<ClaimProvenanceReceiptItem> {
   const stored = record.payload["items"];
   if (!Array.isArray(stored)) return [];
+  const visible = excludeItem === undefined ? stored : stored.filter((item) => !excludeItem(item));
   const items: ClaimProvenanceReceiptItem[] = [];
-  for (const raw of stored) {
+  for (const raw of visible) {
     if (raw === null || typeof raw !== "object") continue;
     const item = raw as Record<string, unknown>;
     const id = item["id"];
@@ -104,7 +190,10 @@ function receiptItems(record: ContinuityRecord): ReadonlyArray<ClaimProvenanceRe
   return Object.freeze(items);
 }
 
-function joinReceipt(record: ContinuityRecord): ClaimProvenanceReceipt {
+function joinReceipt(
+  record: ContinuityRecord,
+  excludeItem: ((item: unknown) => boolean) | undefined,
+): ClaimProvenanceReceipt {
   const withheld = record.private || record.redacted;
   return Object.freeze({
     id: record.id,
@@ -112,24 +201,75 @@ function joinReceipt(record: ContinuityRecord): ClaimProvenanceReceipt {
     trigger: isContextReceiptTrigger(record.payload["trigger"]) ? record.payload["trigger"] : null,
     // A withheld receipt stays known but is never unfolded, so its item
     // list cannot carry private content back to the reader.
-    items: withheld ? Object.freeze([]) : receiptItems(record),
+    items: withheld ? Object.freeze([]) : receiptItems(record, excludeItem),
     withheld,
   });
 }
 
-function joinOutcome(vault: string, record: ContinuityRecord): ClaimProvenanceOutcome {
-  const sampleId = record.payload["sample_id"];
+function joinOutcome(
+  record: ContinuityRecord,
+  evidence: ContinuityRecord | undefined,
+): ClaimProvenanceOutcome {
   // The evidence verdict is read off its own row, joined on the same
   // sample id; absent when no evidence row exists - never inferred from
   // the outcome row.
-  const evidence =
-    typeof sampleId === "string" ? listContextPackEvidence(vault, { sampleId })[0] : undefined;
   const evidenceVerdict = evidence?.payload["verdict"];
   return Object.freeze({
     id: record.id,
     created_at: record.createdAt,
     first_pass_success: record.payload["first_pass_success"] === true,
     ...(typeof evidenceVerdict === "string" ? { evidence_verdict: evidenceVerdict } : {}),
+  });
+}
+
+/**
+ * Resolve one claim's `sample_id` from a prebuilt {@link ClaimProvenanceIndex}.
+ *
+ * The row-for-row equivalent of {@link resolveClaimProvenance} at a
+ * fraction of the cost whenever more than a claim or two needs
+ * resolving: one index build (one read per ledger) covers every
+ * resolution taken from it.
+ *
+ * @throws when `sampleId` is blank - the same never-coerced discipline
+ *   the write boundary applies, so silence can never read as an answer.
+ *   A stamp that parses to no instant is refused by name too: both sides
+ *   are boundary-validated canonical (the claim store validates the
+ *   claim ts; the continuity store validates the receipt's `createdAt`),
+ *   so an unparseable stamp means a corrupted ledger, never a caller
+ *   mistake to silently report as "not inverted".
+ */
+export function resolveClaimProvenanceFromIndex(
+  index: ClaimProvenanceIndex,
+  sampleId: string,
+  claimTs: string,
+  options?: ClaimProvenanceOptions,
+): ClaimProvenance {
+  if (sampleId.trim() === "") {
+    throw new Error("claim provenance: sample_id must be a non-empty string");
+  }
+  let receiptRecord = index.receiptsByReceiptId.get(sampleId) ?? null;
+  if (receiptRecord !== null && options?.exclude !== undefined && options.exclude(receiptRecord)) {
+    // The excluded receipt is not the caller's answer at all: a store
+    // without it answers "no receipt names this id", so the receipt
+    // half renders unknown - never a marker confirming it exists.
+    receiptRecord = null;
+  }
+  const outcomeRecord = index.outcomesBySampleId.get(sampleId) ?? null;
+  const outcomeEvidence =
+    outcomeRecord === null
+      ? undefined
+      : index.evidenceBySampleId.get(payloadSampleId(outcomeRecord) ?? sampleId);
+  return Object.freeze({
+    sample_id: sampleId,
+    ...(receiptRecord !== null
+      ? { receipt: joinReceipt(receiptRecord, options?.excludeItem) }
+      : { receipt: null }),
+    ...(outcomeRecord !== null
+      ? { outcome: joinOutcome(outcomeRecord, outcomeEvidence) }
+      : { outcome: null }),
+    timestamp_inverted:
+      receiptRecord !== null &&
+      stampInstant("claim", claimTs) < stampInstant("receipt", receiptRecord.createdAt),
   });
 }
 
@@ -144,35 +284,19 @@ function joinOutcome(vault: string, record: ContinuityRecord): ClaimProvenanceOu
  * its receipt as inverted. Strict: a claim AT its receipt's instant was
  * informed by it; only a claim written BEFORE the receipt existed is an
  * inversion.
- *
- * @throws when `sampleId` is blank - the same never-coerced discipline
- *   the write boundary applies, so silence can never read as an answer.
- *   A stamp that parses to no instant is refused by name too: both sides
- *   are boundary-validated canonical (the claim store validates the
- *   claim ts; the continuity store validates the receipt's `createdAt`),
- *   so an unparseable stamp means a corrupted ledger, never a caller
- *   mistake to silently report as "not inverted".
  */
 export function resolveClaimProvenance(
   vault: string,
   sampleId: string,
   claimTs: string,
+  options?: ClaimProvenanceOptions,
 ): ClaimProvenance {
-  if (sampleId.trim() === "") {
-    throw new Error("claim provenance: sample_id must be a non-empty string");
-  }
-  const receiptRecord = listContextReceipts(vault, { receiptId: sampleId })[0] ?? null;
-  const outcomeRecord = listContextPackOutcomes(vault, { sampleId })[0] ?? null;
-  return Object.freeze({
-    sample_id: sampleId,
-    ...(receiptRecord !== null ? { receipt: joinReceipt(receiptRecord) } : { receipt: null }),
-    ...(outcomeRecord !== null
-      ? { outcome: joinOutcome(vault, outcomeRecord) }
-      : { outcome: null }),
-    timestamp_inverted:
-      receiptRecord !== null &&
-      stampInstant("claim", claimTs) < stampInstant("receipt", receiptRecord.createdAt),
-  });
+  return resolveClaimProvenanceFromIndex(
+    loadClaimProvenanceIndex(vault),
+    sampleId,
+    claimTs,
+    options,
+  );
 }
 
 /**

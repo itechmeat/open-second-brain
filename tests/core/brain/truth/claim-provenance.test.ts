@@ -19,7 +19,11 @@ import {
 } from "../../../../src/core/brain/context-receipts.ts";
 import { appendContinuityRecord } from "../../../../src/core/brain/continuity/store.ts";
 import type { ContinuityRecord } from "../../../../src/core/brain/continuity/types.ts";
-import { resolveClaimProvenance } from "../../../../src/core/brain/truth/claim-provenance.ts";
+import {
+  resolveClaimProvenanceFromIndex,
+  resolveClaimProvenance,
+  loadClaimProvenanceIndex,
+} from "../../../../src/core/brain/truth/claim-provenance.ts";
 
 let tmp: string;
 let vault: string;
@@ -182,6 +186,41 @@ describe("resolveClaimProvenance", () => {
     expect(JSON.stringify(provenance)).not.toContain("note-secret");
   });
 
+  test("an excluded receipt renders as the unknown-id answer", () => {
+    // The caller's receipt-visibility rule (the receipts list's exclude
+    // hook, bound below local reach by the surfaces): a store without
+    // the excluded receipt answers "no receipt names this id", so the
+    // receipt half renders null - never a marker confirming it exists.
+    const receipt = emitSampleReceipt();
+    emitContextPackOutcome(
+      vault,
+      { createdAt: "2026-06-03T09:00:00.000Z", sampleId: receipt.id, firstPassSuccess: true },
+      true,
+    );
+    const provenance = resolveClaimProvenance(vault, receipt.id, CLAIM_TS_AFTER, {
+      exclude: (record) => record.id === receipt.id,
+    });
+    expect(provenance.receipt).toBeNull();
+    // The outcome half is the caller's to keep: the exclusion is a
+    // receipt-visibility rule, not an outcome one.
+    expect(provenance.outcome).not.toBeNull();
+    expect(provenance.timestamp_inverted).toBe(false);
+  });
+
+  test("items the caller may not see leave the unfolded items", () => {
+    // The receipts fold's excludeItem hook shape: a surface binds its
+    // reach's item rule and the join drops those items before the
+    // answer is built, so provenance never discloses an item the caller
+    // could not read directly.
+    const receipt = emitSampleReceipt();
+    const provenance = resolveClaimProvenance(vault, receipt.id, CLAIM_TS_AFTER, {
+      excludeItem: (item) => (item as { id?: unknown })["id"] === "note-alpha",
+    });
+    expect(provenance.receipt!.items).toEqual([
+      { id: "note-beta", path: "Brain/notes/beta.md", trimmed: true },
+    ]);
+  });
+
   test("an evidence row that never posted leaves the evidence verdict absent", () => {
     // The outcome row's first-pass verdict is the row's own field; the
     // evidence verdict exists only when its own row exists.
@@ -251,5 +290,75 @@ describe("listContextReceipts receiptId filter", () => {
   test("an unknown receipt id answers empty", () => {
     emitSampleReceipt();
     expect(listContextReceipts(vault, { receiptId: "rcpt-absent" })).toHaveLength(0);
+  });
+});
+
+describe("loadClaimProvenanceIndex + resolveClaimProvenanceFromIndex", () => {
+  test("resolves every sample id exactly as the single-call join does", () => {
+    const first = emitSampleReceipt();
+    const second = emitContextReceipt(vault, {
+      options: { host: "mcp", trigger: "pre_compress", createdAt: "2026-06-02T11:00:00.000Z" },
+      items: [{ id: "note-gamma", path: "Brain/notes/gamma.md", trimmed: false }],
+      finalText: "gamma text",
+    });
+    emitContextPackOutcome(
+      vault,
+      {
+        createdAt: "2026-06-03T09:00:00.000Z",
+        sampleId: first.id,
+        firstPassSuccess: true,
+        evidenceClaim: { itemCount: 2 },
+      },
+      true,
+    );
+    const index = loadClaimProvenanceIndex(vault);
+    for (const id of [first.id, second.id, "rcpt-absent"]) {
+      expect(resolveClaimProvenanceFromIndex(index, id, CLAIM_TS_AFTER)).toEqual(
+        resolveClaimProvenance(vault, id, CLAIM_TS_AFTER),
+      );
+    }
+  });
+
+  test("keeps the newest record per sample id when a ledger holds duplicates", () => {
+    // The filtered list functions answer newest-first, so the NEWEST
+    // row under a key is the answer; an index that let an older row win
+    // would resolve a different join than the single call.
+    emitContextPackOutcome(
+      vault,
+      {
+        createdAt: "2026-06-02T09:00:00.000Z",
+        sampleId: "req-hash:duplicate",
+        firstPassSuccess: true,
+      },
+      true,
+    );
+    emitContextPackOutcome(
+      vault,
+      {
+        createdAt: "2026-06-03T09:00:00.000Z",
+        sampleId: "req-hash:duplicate",
+        firstPassSuccess: false,
+      },
+      true,
+    );
+    const index = loadClaimProvenanceIndex(vault);
+    expect(
+      resolveClaimProvenanceFromIndex(index, "req-hash:duplicate", CLAIM_TS_AFTER).outcome!
+        .first_pass_success,
+    ).toBe(false);
+    expect(
+      resolveClaimProvenance(vault, "req-hash:duplicate", CLAIM_TS_AFTER).outcome!
+        .first_pass_success,
+    ).toBe(false);
+  });
+
+  test("carries the caller's exclusion hooks to the indexed resolution", () => {
+    const receipt = emitSampleReceipt();
+    const index = loadClaimProvenanceIndex(vault);
+    const provenance = resolveClaimProvenanceFromIndex(index, receipt.id, CLAIM_TS_AFTER, {
+      exclude: (record) => record.id === receipt.id,
+      excludeItem: (item) => (item as { id?: unknown })["id"] === "note-beta",
+    });
+    expect(provenance.receipt).toBeNull();
   });
 });

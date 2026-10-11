@@ -16,7 +16,7 @@ import { upsertEntity } from "../../src/core/brain/entities/registry.ts";
 import { emitContextPackOutcome } from "../../src/core/brain/context-pack-outcome.ts";
 import { emitContextReceipt } from "../../src/core/brain/context-receipts.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
-import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
+import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 
@@ -894,6 +894,10 @@ test("state refuses a blank sample_id through the named refusal, before any writ
 test("events hydrate provenance for claims carrying a sample_id", async () => {
   seedRegistry();
   writeSourcePage("session.md");
+  // The receipt item's path is filtered at the caller's reach, and a
+  // path naming no page fails closed like any unreadable one - back the
+  // item with a real page so the join may unfold it.
+  writeSourcePage("alpha.md");
   const server = new MCPServer({ vault, configPath });
   await initialize(server);
   // An explicit past stamp: a defaulted `now` receipt can land up to a
@@ -980,4 +984,109 @@ test("events hydrate a posted outcome row with its first-pass and evidence verdi
   expect(provenance.outcome).not.toBeNull();
   expect(provenance.outcome!.first_pass_success).toBe(false);
   expect(provenance.outcome!.evidence_verdict).toBe("unclaimed");
+});
+
+// ----- provenance at the caller's reach (answer-trust repair M2/F3) -----
+
+const RULE_RECEIPT_STAMP = "2026-06-02T09:00:00.000Z";
+
+function emitClaimOnReceipt(receiptId: string): void {
+  appendClaimEvent(vault, {
+    ts: "2026-06-02T10:00:00Z",
+    agent: "claude",
+    entity: "Alice Mason",
+    aspect: "employer",
+    value: "Google",
+    source: "[[Brain/notes/session.md]]",
+    sample_id: receiptId,
+  });
+}
+
+async function eventsProvenanceAt(
+  reach: TransportReach,
+): Promise<ReadonlyArray<ClaimProvenanceRow | undefined>> {
+  const server = new MCPServer({ vault, configPath }, { reach });
+  await initialize(server);
+  const body = (await call(server, { operation: "events" })) as unknown as {
+    events: ReadonlyArray<{ provenance?: ClaimProvenanceRow }>;
+  };
+  expect(body.events).toHaveLength(1);
+  return body.events.map((event) => event.provenance);
+}
+
+test("a rule-only injection receipt answers provenance as an unknown id below local reach", async () => {
+  writeSourcePage("session.md");
+  const receipt = emitContextReceipt(vault, {
+    options: { host: "mcp", trigger: "session_inject", createdAt: RULE_RECEIPT_STAMP },
+    items: [{ id: "standing-rules" }, { id: "scoped-rules" }],
+    finalText: "constitution and scoped rules",
+  });
+  emitClaimOnReceipt(receipt.id);
+  const [remoteProvenance] = await eventsProvenanceAt(TRANSPORT_REACH.remote);
+  // The unknown-id answer: `brain_context_receipts show` refuses this
+  // receipt below local reach and `list` leaves it out, so a claim's
+  // provenance must not answer for it either - even a withheld-shaped
+  // row would confirm the operator's rules were injected.
+  expect(remoteProvenance!.receipt).toBeNull();
+  expect(JSON.stringify(remoteProvenance)).not.toContain("standing-rules");
+  const [localProvenance] = await eventsProvenanceAt(TRANSPORT_REACH.local);
+  expect(localProvenance!.receipt).not.toBeNull();
+  expect(localProvenance!.receipt!.items).toEqual([
+    { id: "standing-rules" },
+    { id: "scoped-rules" },
+  ]);
+});
+
+test("a mixed receipt keeps its non-rule items and drops the rule items below local reach", async () => {
+  writeSourcePage("session.md");
+  writeSourcePage("alpha.md");
+  const receipt = emitContextReceipt(vault, {
+    options: { host: "mcp", trigger: "session_inject", createdAt: RULE_RECEIPT_STAMP },
+    items: [
+      { id: "standing-rules" },
+      { id: "note-alpha", path: "Brain/notes/alpha.md", tokens: 40 },
+    ],
+    finalText: "rules plus a note",
+  });
+  emitClaimOnReceipt(receipt.id);
+  const [remoteProvenance] = await eventsProvenanceAt(TRANSPORT_REACH.remote);
+  // Not rule-only, so the receipt stays known - shaped as the receipts
+  // surface shapes it, with the rule items and nothing else removed.
+  expect(remoteProvenance!.receipt).not.toBeNull();
+  expect(remoteProvenance!.receipt!.items).toEqual([
+    { id: "note-alpha", path: "Brain/notes/alpha.md" },
+  ]);
+  const [localProvenance] = await eventsProvenanceAt(TRANSPORT_REACH.local);
+  expect(localProvenance!.receipt!.items).toEqual([
+    { id: "standing-rules" },
+    { id: "note-alpha", path: "Brain/notes/alpha.md" },
+  ]);
+});
+
+test("a receipt item whose path is withheld at the caller's reach leaves the provenance", async () => {
+  writeSourcePage("session.md");
+  writeSourcePage("alpha.md");
+  writeSourcePage("secret.md", `\nvisibility: [${REMOTE_DENY_VISIBILITY_TOKEN}]`);
+  const receipt = emitContextReceipt(vault, {
+    options: { host: "mcp", trigger: "context_pack", createdAt: RULE_RECEIPT_STAMP },
+    items: [
+      { id: "note-secret", path: "Brain/notes/secret.md" },
+      { id: "note-alpha", path: "Brain/notes/alpha.md" },
+    ],
+    finalText: "two notes",
+  });
+  emitClaimOnReceipt(receipt.id);
+  const [remoteProvenance] = await eventsProvenanceAt(TRANSPORT_REACH.remote);
+  // The same visibility rule the event rows of this report are gated
+  // by, applied to the items the join unfolds: a path the caller may
+  // not read drops exactly like a row naming it would.
+  expect(remoteProvenance!.receipt!.items).toEqual([
+    { id: "note-alpha", path: "Brain/notes/alpha.md" },
+  ]);
+  expect(JSON.stringify(remoteProvenance)).not.toContain("secret");
+  const [localProvenance] = await eventsProvenanceAt(TRANSPORT_REACH.local);
+  expect(localProvenance!.receipt!.items).toEqual([
+    { id: "note-secret", path: "Brain/notes/secret.md" },
+    { id: "note-alpha", path: "Brain/notes/alpha.md" },
+  ]);
 });

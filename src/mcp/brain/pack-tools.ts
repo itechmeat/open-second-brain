@@ -516,7 +516,13 @@ const OPERATOR_RULE_ITEM_IDS: ReadonlySet<string> = new Set([
   RECEIPT_ITEM_SCOPED_RULES,
 ]);
 
-const isOperatorRuleItem = itemIdIn(OPERATOR_RULE_ITEM_IDS);
+/**
+ * One operator-rule receipt item. Exported beside
+ * {@link isRuleOnlyInjection} for the brain_truth provenance join, which
+ * strips these items from a mixed receipt below local reach - the same
+ * shaping `receiptAtReach` applies to the receipts this tool serves.
+ */
+export const isOperatorRuleItem = itemIdIn(OPERATOR_RULE_ITEM_IDS);
 
 /**
  * A measured injection receipt whose every item was an operator-rule
@@ -524,8 +530,13 @@ const isOperatorRuleItem = itemIdIn(OPERATOR_RULE_ITEM_IDS);
  * no `active.md` body to inject). Below local reach it
  * is withheld whole - left out of list and summary, refused by show -
  * since even its empty remainder would say that rules applied.
+ *
+ * Exported for the surfaces that must answer the same question the
+ * receipts surface answers: the brain_truth provenance join excludes
+ * these receipts below local reach, so a claim's provenance confirms no
+ * more about the operator's rules than this tool does.
  */
-function isRuleOnlyInjection(record: ContinuityRecord): boolean {
+export function isRuleOnlyInjection(record: ContinuityRecord): boolean {
   if (record.payload["trigger"] !== "session_inject") return false;
   // A degraded injection that served a cached body beside the rules is
   // recorded whether or not rules applied: it stays, emptied of them. One

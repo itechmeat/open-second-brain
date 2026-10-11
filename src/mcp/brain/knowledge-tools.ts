@@ -38,7 +38,7 @@ import { diarize, DiarizationError } from "../../core/brain/diarization.ts";
 import { discoverIdeas, ideaCandidates } from "../../core/brain/idea-discovery.ts";
 import { auditMoc, MocAuditError } from "../../core/brain/link-graph/moc-audit.ts";
 import { reachView } from "../../core/brain/reach-view.ts";
-import { everyArtifactRefView } from "../../core/brain/artifact-ref-view.ts";
+import { everyArtifactRefView, type ArtifactRefView } from "../../core/brain/artifact-ref-view.ts";
 import { gatedOwnerScopeView } from "../../core/brain/owner-scope-view.ts";
 import { recordRefs } from "../../core/brain/log-events-at-reach.ts";
 import { normaliseWikilinkTarget } from "../../core/brain/wikilink.ts";
@@ -67,7 +67,13 @@ import {
   readClaimEvents,
 } from "../../core/brain/truth/store.ts";
 import { claimEventLimit, matchClaimEvents } from "../../core/brain/truth/events-window.ts";
-import { resolveClaimProvenance } from "../../core/brain/truth/claim-provenance.ts";
+import {
+  loadClaimProvenanceIndex,
+  resolveClaimProvenanceFromIndex,
+  type ClaimProvenance,
+  type ClaimProvenanceOptions,
+} from "../../core/brain/truth/claim-provenance.ts";
+import type { ClaimEvent } from "../../core/brain/truth/types.ts";
 import {
   allClaims,
   buildClaimGraph,
@@ -82,7 +88,7 @@ import {
 } from "../../core/brain/claim-graph.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { contextReach } from "../tool-contract.ts";
-import type { TransportReach } from "../../core/graph/transport-reach.ts";
+import { TRANSPORT_REACH, type TransportReach } from "../../core/graph/transport-reach.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { vaultPathField } from "../vault-path-field.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
@@ -95,6 +101,7 @@ import {
 } from "../coerce.ts";
 import { coercePositiveInteger, toolSafeguard, vaultRelativeSafe } from "./shared.ts";
 import { readableAtContextReach, readableAtContextReachOrUndefined } from "./reach-readable.ts";
+import { isOperatorRuleItem, isRuleOnlyInjection } from "./pack-tools.ts";
 import { resolveTimeBounds } from "./time-bounds.ts";
 
 /**
@@ -1073,7 +1080,8 @@ export function statedClaimEntities(vault: string): ReadonlyArray<{
  * the caller that a claim it may not see exists, and per entity or
  * window would let it measure the hidden population). A filtered answer
  * is therefore byte-identical to the answer over a vault that never
- * held the withheld rows.
+ * held the withheld rows. The same reach governs the provenance join
+ * (see {@link claimProvenanceForPage}).
  */
 export function claimEventsReport(
   vault: string,
@@ -1095,12 +1103,14 @@ export function claimEventsReport(
     untilMs: query.untilMs,
   });
   const gated = view.filtersNothing ? matched : matched.filter((event) => view.row(event.source));
+  const page = gated.slice(0, query.limit);
+  const provenance = claimProvenanceForPage(vault, reach, view, page);
   return {
     ok: true,
     operation: "events",
     entity: entityFilter === undefined ? null : normalizeEntityName(entityFilter),
-    events: gated.slice(0, query.limit).map((event) =>
-      event.sample_id === undefined
+    events: page.map((event) =>
+      event.sample_id === undefined || provenance === null
         ? // A claim without a sample id renders exactly as today: no
           // provenance key, byte-identical row.
           event
@@ -1110,12 +1120,72 @@ export function claimEventsReport(
             // its receipt and outcome halves at read time. A missing
             // outcome half is null - "receipt known, outcome unknown" -
             // never a fabricated verdict.
-            provenance: resolveClaimProvenance(vault, event.sample_id, event.ts),
+            provenance: provenance.get(event.sample_id),
           },
     ),
     total: gated.length,
     truncated: gated.length > query.limit,
   };
+}
+
+/** A page event whose claim carries the attribution id the join resolves. */
+type SampledClaim = ClaimEvent & { readonly sample_id: string };
+
+/**
+ * The provenance half of one events page, resolved at the CALLER's
+ * reach over ONE read per ledger.
+ *
+ * The receipts surface withholds the operator's rule injections below
+ * local reach (list excludes them, show refuses them, receipts are
+ * stripped of their items); this join answers for the same records, so
+ * it binds the same rules here instead of leaking through a claim's
+ * `sample_id` what `brain_context_receipts` refuses to say directly. A
+ * rule-only receipt renders as the unknown-id answer; a mixed receipt
+ * keeps its non-rule items; and a receipt item whose recorded path
+ * names a page the caller may not read at its reach leaves the items
+ * under the same visibility rule the event rows of this report are
+ * gated by.
+ *
+ * Null when no row on the page carries a sample id: the ledgers are
+ * never read and every row renders byte-identically to the
+ * pre-attribution answer.
+ */
+function claimProvenanceForPage(
+  vault: string,
+  reach: TransportReach,
+  view: ArtifactRefView,
+  page: ReadonlyArray<ClaimEvent>,
+): ReadonlyMap<string, ClaimProvenance> | null {
+  const sampled = page.filter((event): event is SampledClaim => event.sample_id !== undefined);
+  if (sampled.length === 0) return null;
+  const local = reach === TRANSPORT_REACH.local;
+  const options: ClaimProvenanceOptions = {
+    ...(local ? {} : { exclude: isRuleOnlyInjection }),
+    ...(view.filtersNothing
+      ? {}
+      : {
+          excludeItem: (item: unknown): boolean =>
+            (!local && isOperatorRuleItem(item)) || itemPathHidden(item, view),
+        }),
+  };
+  const index = loadClaimProvenanceIndex(vault);
+  return new Map(
+    sampled.map((event) => [
+      event.sample_id,
+      resolveClaimProvenanceFromIndex(index, event.sample_id, event.ts, options),
+    ]),
+  );
+}
+
+/**
+ * A receipt item whose recorded path names a page the caller may not
+ * read at its reach. An item with no path names no page and stays; an
+ * extensionless or wikilink spelling resolves through the same
+ * reference grammar the event-row gate uses.
+ */
+function itemPathHidden(item: unknown, view: ArtifactRefView): boolean {
+  const path = (item as { path?: unknown } | null)?.path;
+  return typeof path === "string" && path !== "" && !view.visible(path);
 }
 
 export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
