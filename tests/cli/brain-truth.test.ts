@@ -590,7 +590,8 @@ test("truth state --sample-id threads the id and the ledger freezes it", async (
   expect(res.returncode).toBe(0);
   const body = JSON.parse(res.stdout) as unknown as StateBody;
   expect(body.committed).toHaveLength(1);
-  expect(body.committed[0]["sample_id"]).toBe("rcpt-2026-0601-abcd");
+  const row = body.committed[0] as Record<string, unknown>;
+  expect(row["sample_id"]).toBe("rcpt-2026-0601-abcd");
   const [stored] = readClaimEvents(vault).events;
   expect(stored!.sample_id).toBe("rcpt-2026-0601-abcd");
 });
