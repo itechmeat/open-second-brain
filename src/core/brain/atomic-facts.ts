@@ -10,7 +10,12 @@
  * missed one costs nothing.
  */
 
-import { entityMatchForms, normalizeEntityName } from "./entities/canonical.ts";
+import {
+  entityMatchForms,
+  normalizeEntityName,
+  type EntityLexiconHandle,
+  type ValidateEntityLabelOptions,
+} from "./entities/canonical.ts";
 import { ENTITY_STATUS_SCOPE, entityStatusInScope } from "./entities/status-scope.ts";
 
 /** Cap on one assertion's text length. */
@@ -44,6 +49,12 @@ export interface AtomicAssertion {
 export interface DecomposeOptions {
   /** Registry entities to anchor against (active only). */
   readonly entities?: ReadonlyArray<AtomicEntityLike>;
+  /**
+   * Label-gate options (denylist, store-learned lexicon) threaded into the
+   * shared anchoring kernel (recall-quality A2). Absent keeps every verdict
+   * byte-identical to the pre-lexicon behavior.
+   */
+  readonly lexicon?: EntityLexiconHandle | null;
 }
 
 // Abbreviations a period may follow without ending the sentence.
@@ -123,15 +134,19 @@ const MIN_ANCHOR_FORM_LENGTH = 3;
  * {@link MIN_ANCHOR_FORM_LENGTH} never participate. Pure: no I/O, no
  * registry. The one kernel every occurrence-anchoring caller shares -
  * the assertion decomposer and the agent-stated claim verdicts both
- * anchor through it, so the two can never drift.
+ * anchor through it, so the two can never drift. `opts` threads the
+ * admission vocabularies (denylist, store-learned lexicon) into the
+ * gate; absent, every verdict is byte-identical to the pre-lexicon
+ * behavior.
  */
 export function anchorEntityForms(
   text: string,
   forms: ReadonlyArray<string>,
+  opts: ValidateEntityLabelOptions = {},
 ): ReadonlyArray<string> {
   const haystack = normalizeEntityName(text);
   return Object.freeze(
-    entityMatchForms(forms).filter(
+    entityMatchForms(forms, opts).filter(
       (f) => f.length >= MIN_ANCHOR_FORM_LENGTH && haystack.includes(f),
     ),
   );
@@ -144,12 +159,16 @@ export function anchorEntityForms(
  * fact-extract path uses. Pure: no I/O, so a junk stored label is simply
  * skipped (the fact-extract path is the one that logs the skip).
  */
-function anchorEntities(text: string, entities: ReadonlyArray<AtomicEntityLike>): string[] {
+function anchorEntities(
+  text: string,
+  entities: ReadonlyArray<AtomicEntityLike>,
+  opts: ValidateEntityLabelOptions = {},
+): string[] {
   if (entities.length === 0) return [];
   const ids: string[] = [];
   for (const entity of entities) {
     if (!entityStatusInScope(entity.status, ENTITY_STATUS_SCOPE.canonical)) continue;
-    if (anchorEntityForms(text, [entity.name, ...entity.aliases]).length > 0) {
+    if (anchorEntityForms(text, [entity.name, ...entity.aliases], opts).length > 0) {
       ids.push(entity.id);
     }
   }
@@ -180,7 +199,7 @@ export function decomposeAtomicFacts(text: string, opts: DecomposeOptions = {}):
         line,
         headingPath: Object.freeze(headingStack.map((h) => h.text)),
         kind,
-        entities: Object.freeze(anchorEntities(stripped, entities)),
+        entities: Object.freeze(anchorEntities(stripped, entities, { lexicon: opts.lexicon })),
       }),
     );
   };

@@ -42,6 +42,7 @@ import {
   sanitizeEntityLabel,
   validateEntityLabel,
 } from "./entities/canonical.ts";
+import { resolveEntityLexicon } from "./entities/lexicon.ts";
 import { ENTITY_STATUS_SCOPE, entityStatusInScope } from "./entities/status-scope.ts";
 
 export type FactFamily = "url" | "email" | "quantity";
@@ -272,7 +273,7 @@ const DURABILITY_LOG_TEXT_MAX_LEN = 200;
 const MIN_ANCHOR_FORM_LENGTH = 3;
 
 /** A registry entity reduced to its clean, matchable label forms. */
-interface AnchorableEntity {
+export interface AnchorableEntity {
   readonly id: string;
   readonly forms: ReadonlyArray<string>;
 }
@@ -280,23 +281,28 @@ interface AnchorableEntity {
 /**
  * Reduce the active registry to anchorable entities: sanitise each label
  * (name + aliases) through the quality gate before normalisation and keep
- * only the valid forms. When the stored NAME fails the gate the skip is
+ * only the valid forms. The store-learned lexicon is resolved beside the
+ * structural gate (recall-quality A2), so a stored junk form the lexicon
+ * refuses is dropped here exactly as the creation gate refuses it; a null
+ * handle (no fresh artifact) keeps every verdict byte-identical to the
+ * pre-lexicon behavior. When the stored NAME fails the gate the skip is
  * logged (via a dedicated event kind) and contained - a logging failure
  * never aborts the enclosing capture, and `doctor` surfaces the same node
  * as a prune candidate. The entity is still anchored on its remaining
  * VALID forms (aliases that pass the gate): a node with at least one valid
  * form is never silently excluded, matching the atomic-facts anchoring path.
  */
-function buildAnchorables(
+export function buildAnchorables(
   vault: string,
   index: ReturnType<typeof buildEntityIndex>,
   agent: string,
   now: Date,
 ): AnchorableEntity[] {
+  const lexicon = resolveEntityLexicon(vault);
   const out: AnchorableEntity[] = [];
   for (const entity of index.entities) {
     if (!entityStatusInScope(entity.status, ENTITY_STATUS_SCOPE.canonical)) continue;
-    const nameVerdict = validateEntityLabel(sanitizeEntityLabel(entity.name));
+    const nameVerdict = validateEntityLabel(sanitizeEntityLabel(entity.name), { lexicon });
     if (!nameVerdict.valid) {
       try {
         appendLogEvent(vault, {
@@ -310,7 +316,7 @@ function buildAnchorables(
       // Fall through: entityMatchForms drops the junk name form itself, so a
       // valid alias still yields an anchorable form.
     }
-    const forms = entityMatchForms([entity.name, ...entity.aliases]).filter(
+    const forms = entityMatchForms([entity.name, ...entity.aliases], { lexicon }).filter(
       (f) => f.length >= MIN_ANCHOR_FORM_LENGTH,
     );
     if (forms.length === 0) continue;

@@ -30,10 +30,15 @@ import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import {
   assertValidEntityLabel,
   entityIdentityKey,
+  InvalidEntityLabelError,
   normalizeEntityName,
   quoteVariantCollisionTail,
   validateEntityCategory,
+  validateEntityLabel,
+  type EntityLabelInvalidReason,
+  type EntityLexiconHandle,
 } from "./canonical.ts";
+import { resolveEntityLexicon } from "./lexicon.ts";
 import { resolveEntityLabelDenylist } from "./label-hygiene.ts";
 import {
   buildEntityIndex,
@@ -442,6 +447,51 @@ function assertIdentityKeyUncontested(index: EntityIndex, key: string, category:
 
 // ----- Operations ------------------------------------------------------------
 
+/**
+ * Whether one of the tightened, lexicon-backed verdicts (recall-quality
+ * A2) refuses `name` at a CREATION boundary, and which. The policy split
+ * lives here, not in the predicate: a learned verdict is only precise
+ * enough to refuse when it cannot be a coincidence -
+ *
+ *   - `function-word-run` refuses for a SINGLE token: a label that is
+ *     nothing but one learned common word. A MULTI-token run can be a
+ *     legitimate title in a lexically poor corpus, so it stays advisory
+ *     (the doctor and the prune report it store-wide instead).
+ *   - `shouted-heading` refuses only when the store holds no prior
+ *     occurrence of the label (as any record's name or alias): an
+ *     all-caps form the registry itself already vouches for is a brand
+ *     or an acronym-in-expansion, not a pasted heading residue.
+ *
+ * Everything else - a stale or absent artifact, a caseless corpus, a
+ * code-shaped label - returns null and the creation proceeds exactly as
+ * before the lexicon existed.
+ */
+function tightenedCreateRefusal(
+  name: string,
+  index: EntityIndex,
+  lexicon: EntityLexiconHandle,
+): EntityLabelInvalidReason | null {
+  const verdict = validateEntityLabel(name, { lexicon });
+  if (verdict.valid) return null;
+  if (verdict.reason === "function-word-run") {
+    return name.split(/\s+/).length === 1 ? "function-word-run" : null;
+  }
+  if (verdict.reason === "shouted-heading") {
+    return hasPriorStoredOccurrence(index, name) ? null : "shouted-heading";
+  }
+  return null;
+}
+
+/** True when any stored record (any status) already answers to `name`. */
+function hasPriorStoredOccurrence(index: EntityIndex, name: string): boolean {
+  const query = normalizeEntityName(name);
+  return index.entities.some(
+    (e) =>
+      normalizeEntityName(e.name) === query ||
+      e.aliases.some((a) => normalizeEntityName(a) === query),
+  );
+}
+
 export function upsertEntity(vault: string, input: UpsertEntityInput): UpsertEntityResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
@@ -452,6 +502,11 @@ export function upsertEntity(vault: string, input: UpsertEntityInput): UpsertEnt
   // sanitised form; for a clean label sanitisation is a no-op, so the
   // identity key stays byte-identical to before (backward compatibility).
   const denylist = resolveEntityLabelDenylist(input.configPath);
+  // recall-quality A2: the store-learned lexicon is resolved beside the
+  // denylist. A null handle (no artifact yet, or one that failed its
+  // freshness re-validation) degrades every verdict below to the
+  // pre-lexicon structural gate - it can never mis-reject.
+  const lexicon = resolveEntityLexicon(vault);
   const name = assertValidEntityLabel(input.name, { denylist });
   const index = buildEntityIndex(vault);
   const stamp = isoSecond(input.now);
@@ -475,6 +530,13 @@ export function upsertEntity(vault: string, input: UpsertEntityInput): UpsertEnt
         `entity '${name}' (${category}) exists but is archived: ${archivedHolder.id}. ` +
           "Restore it (entity archive --restore) or choose another name.",
       );
+    }
+    // Tightened verdicts (recall-quality A2) are hard at CREATION only:
+    // the update arm above re-admits whatever the store already holds,
+    // and a refused label never reaches a write below this point.
+    if (lexicon !== null) {
+      const refusal = tightenedCreateRefusal(name, index, lexicon);
+      if (refusal !== null) throw new InvalidEntityLabelError(input.name, name, refusal);
     }
   }
 

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -13,6 +13,11 @@ import {
   relateEntities,
   upsertEntity,
 } from "../../../src/core/brain/entities/registry.ts";
+import { InvalidEntityLabelError } from "../../../src/core/brain/entities/canonical.ts";
+import {
+  deriveEntityLexicon,
+  writeEntityLexicon,
+} from "../../../src/core/brain/entities/lexicon.ts";
 
 let vault: string;
 let configHome: string;
@@ -175,6 +180,151 @@ describe("upsertEntity", () => {
         now: NOW,
       }),
     ).toThrow(/invalid entity label/i);
+  });
+});
+
+describe("lexicon-gated creation (recall-quality A2)", () => {
+  /**
+   * Teach the lexicon from a corpus page, then rebuild the artifact. The
+   * only vocabulary in these tests is what the corpus teaches - no
+   * hardcoded word list anywhere.
+   */
+  function seedLexicon(corpus: string): void {
+    writeFileSync(join(vault, "corpus-page.md"), `${corpus}\n`);
+    writeEntityLexicon(vault, deriveEntityLexicon(vault, { now: NOW }));
+  }
+
+  test("a single learned-common-word label is refused at creation with function-word-run", () => {
+    // The corpus is caseful (capitalised sightings) - a caseless corpus
+    // suppresses both case verdicts - and keeps `notes` lowercase-dominant,
+    // so the handle learns it as a common word and nothing is hardcoded.
+    seedLexicon("Notes about the setup. The runner kept notes. Notes ran, notes ran.");
+    try {
+      upsertEntity(vault, {
+        category: "people",
+        name: "Notes",
+        agent: "claude-dev-agent",
+        now: NOW,
+      });
+      throw new Error("expected the lexicon gate to refuse 'Notes'");
+    } catch (exc) {
+      expect(exc).toBeInstanceOf(InvalidEntityLabelError);
+      expect((exc as InvalidEntityLabelError).reason).toBe("function-word-run");
+    }
+    expect(listEntities(vault)).toHaveLength(0);
+  });
+
+  test("a multi-token common-word run is advisory at creation, not a refusal", () => {
+    // Caseful corpus (so the verdicts are live) where BOTH tokens of the
+    // label are learned common words - the run fires, and the create-arm
+    // policy still admits it because it spans more than one token.
+    seedLexicon("the runner kept notes about the setup. The runner ran.");
+    const out = upsertEntity(vault, {
+      category: "people",
+      name: "The Notes",
+      agent: "claude-dev-agent",
+      now: NOW,
+    });
+    expect(out.created).toBe(true);
+  });
+
+  test("an all-caps heading label is refused at creation with shouted-heading", () => {
+    seedLexicon("Atlas kept the weekly meeting notes about the setup.");
+    try {
+      upsertEntity(vault, {
+        category: "projects",
+        name: "MEETING NOTES",
+        agent: "claude-dev-agent",
+        now: NOW,
+      });
+      throw new Error("expected the lexicon gate to refuse 'MEETING NOTES'");
+    } catch (exc) {
+      expect(exc).toBeInstanceOf(InvalidEntityLabelError);
+      expect((exc as InvalidEntityLabelError).reason).toBe("shouted-heading");
+    }
+  });
+
+  test("an all-caps label with a prior stored occurrence is admitted", () => {
+    seedLexicon("Atlas kept the weekly meeting notes about the setup.");
+    // The lowercase form first: a multi-token run is advisory, so it is
+    // created - and it is the prior occurrence that vouches for the form.
+    upsertEntity(vault, {
+      category: "people",
+      name: "meeting notes",
+      agent: "claude-dev-agent",
+      now: NOW,
+    });
+    const out = upsertEntity(vault, {
+      category: "org",
+      name: "MEETING NOTES",
+      agent: "claude-dev-agent",
+      now: NOW,
+    });
+    expect(out.created).toBe(true);
+  });
+
+  test("the update arm is unaffected by the tightened verdicts", () => {
+    // No artifact yet: the structural gate alone, so the name is created.
+    const seeded = upsertEntity(vault, {
+      category: "people",
+      name: "Meeting Notes",
+      agent: "claude-dev-agent",
+      now: NOW,
+    });
+    expect(seeded.created).toBe(true);
+    // The lexicon lands and would refuse a NEW common-word label (caseful
+    // corpus; `meeting` and `notes` both lowercase-dominant).
+    seedLexicon("The meeting ran about notes and setup. Notes ran, notes ran again.");
+    const updated = upsertEntity(vault, {
+      category: "people",
+      name: "Meeting Notes",
+      agent: "claude-dev-agent",
+      now: LATER,
+    });
+    expect(updated.created).toBe(false);
+    expect(updated.entity.id).toBe(seeded.entity.id);
+    // A NEW single-token learned-common-word label is refused on the create
+    // arm. The label is caseful ("Notes"): the pinned predicate runs the
+    // case-based verdicts for caseful labels only, so an all-lowercase
+    // label admits on the structural gate alone.
+    expect(() =>
+      upsertEntity(vault, {
+        category: "people",
+        name: "Notes",
+        agent: "claude-dev-agent",
+        now: LATER,
+      }),
+    ).toThrow(InvalidEntityLabelError);
+  });
+
+  test("code-shaped labels still admit beside the lexicon", () => {
+    // Caseful corpus so the case verdicts are live; the code shapes bypass
+    // them regardless.
+    seedLexicon("Notes about the setup. The runner kept notes.");
+    const fts = upsertEntity(vault, {
+      category: "systems",
+      name: "FTS5",
+      agent: "claude-dev-agent",
+      now: NOW,
+    });
+    const snake = upsertEntity(vault, {
+      category: "systems",
+      name: "foo_bar",
+      agent: "claude-dev-agent",
+      now: NOW,
+    });
+    expect(fts.created).toBe(true);
+    expect(snake.created).toBe(true);
+  });
+
+  test("without a lexicon artifact the creation gate is unchanged (fail-open)", () => {
+    const out = upsertEntity(vault, {
+      category: "people",
+      name: "Notes",
+      agent: "claude-dev-agent",
+      now: NOW,
+    });
+    expect(out.created).toBe(true);
   });
 });
 

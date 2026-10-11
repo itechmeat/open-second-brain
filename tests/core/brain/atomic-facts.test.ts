@@ -7,13 +7,29 @@
  * code, quotes, and frontmatter never produce assertions.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
+  anchorEntityForms,
   decomposeAtomicFacts,
   MAX_ASSERTION_CHARS,
   type AtomicEntityLike,
 } from "../../../src/core/brain/atomic-facts.ts";
+import { bootstrapBrain } from "../../../src/core/brain/init.ts";
+import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
+import { writeFrontmatterAtomic } from "../../../src/core/vault.ts";
+import { brainDirs } from "../../../src/core/brain/paths.ts";
+import { buildEntityIndex } from "../../../src/core/brain/entities/index-builder.ts";
+import { buildAnchorables } from "../../../src/core/brain/fact-extract.ts";
+import {
+  __clearEntityLexiconCache,
+  deriveEntityLexicon,
+  resolveEntityLexicon,
+  writeEntityLexicon,
+} from "../../../src/core/brain/entities/lexicon.ts";
 
 const ENTITIES: ReadonlyArray<AtomicEntityLike> = [
   { id: "ent-people-alice-mason", name: "Alice Mason", aliases: ["Alice"], status: "active" },
@@ -138,5 +154,115 @@ describe("decomposeAtomicFacts", () => {
       entities: [{ ...ENTITIES[0]!, status: "archived" }],
     });
     expect(out[0]!.entities).toEqual([]);
+  });
+});
+
+/**
+ * Recall-quality A2: the store-learned lexicon gates the anchoring forms
+ * the same way it gates creation. The only vocabulary in play is what a
+ * corpus page teaches the artifact - nothing is hardcoded.
+ */
+describe("lexicon-gated anchoring (recall-quality A2)", () => {
+  let vault: string;
+  let configHome: string;
+  const NOW = new Date("2026-10-11T12:00:00Z");
+
+  beforeEach(() => {
+    vault = mkdtempSync(join(tmpdir(), "o2b-atomic-lexicon-"));
+    configHome = mkdtempSync(join(tmpdir(), "o2b-atomic-lexicon-cfg-"));
+    const configPath = join(configHome, "config.yaml");
+    atomicWriteFileSync(configPath, `vault: ${vault}\n`);
+    bootstrapBrain(vault, { configPath });
+  });
+
+  afterEach(() => {
+    rmSync(vault, { recursive: true, force: true });
+    rmSync(configHome, { recursive: true, force: true });
+    __clearEntityLexiconCache();
+  });
+
+  /** Write an entity node by hand, bypassing the creation gate. */
+  function seedEntityNode(id: string, name: string, aliases: string[]): void {
+    const dir = join(brainDirs(vault).entities, "people");
+    mkdirSync(dir, { recursive: true });
+    writeFrontmatterAtomic(
+      join(dir, `${id}.md`),
+      {
+        kind: "brain-entity",
+        entity_id: id,
+        category: "people",
+        name,
+        ...(aliases.length > 0 ? { aliases } : {}),
+        status: "active",
+        created_at: "2026-10-11T00:00:00Z",
+        updated_at: "2026-10-11T00:00:00Z",
+        tags: ["brain", "brain/entity"],
+      },
+      `# ${name}`,
+      { overwrite: true },
+    );
+  }
+
+  /** Teach the lexicon from one corpus page and rebuild the artifact. */
+  function seedLexicon(corpus: string): void {
+    atomicWriteFileSync(join(vault, "corpus-page.md"), `${corpus}\n`);
+    writeEntityLexicon(vault, deriveEntityLexicon(vault, { now: NOW }));
+  }
+
+  /** A stored junk-run name with a valid alias, plus the taught artifact. */
+  function seedJunkEntityWithValidAlias(): void {
+    // The junk name is CASEFUL ("The Of And"): the pinned predicate runs
+    // the case-based verdicts for caseful labels only, and an
+    // all-lowercase label admits on the structural gate alone. Its
+    // normalised form is still "the of and", so the matchable text is
+    // unchanged.
+    seedEntityNode("ent-people-junk", "The Of And", ["Atlas Prime"]);
+    // "Of" appears capitalised once, which makes the corpus caseful while
+    // keeping every taught token lowercase-dominant (a learned common word).
+    seedLexicon("the of and the Of and.");
+  }
+
+  test("anchorEntityForms skips a lexicon-rejected junk form; opt-in only", () => {
+    seedJunkEntityWithValidAlias();
+    const handle = resolveEntityLexicon(vault);
+    expect(handle).not.toBeNull();
+    const forms = ["The Of And", "Atlas Prime"];
+    const text = "Atlas Prime and the of and were recorded today.";
+    expect(anchorEntityForms(text, forms, { lexicon: handle })).toEqual(["atlas prime"]);
+    // Without a handle the gate is byte-identical to the pre-lexicon form.
+    expect(anchorEntityForms(text, forms)).toEqual(["the of and", "atlas prime"]);
+  });
+
+  test("decomposeAtomicFacts anchors junk-named entities only on valid aliases", () => {
+    seedJunkEntityWithValidAlias();
+    seedEntityNode("ent-people-ada", "Ada", []);
+    const entities: ReadonlyArray<AtomicEntityLike> = buildEntityIndex(vault).entities.map((e) => ({
+      id: e.id,
+      name: e.name,
+      aliases: e.aliases,
+      status: e.status,
+    }));
+    const handle = resolveEntityLexicon(vault);
+    const out = decomposeAtomicFacts("Atlas Prime met Ada and the of and were recorded today.", {
+      entities,
+      lexicon: handle,
+    });
+    const anchored = out.find((a) => a.entities.includes("ent-people-junk"));
+    expect(anchored).toBeDefined(); // the valid alias still anchors the node
+    expect(anchored!.entities).toContain("ent-people-ada");
+    // The junk form alone never anchors its node.
+    const junkOnly = decomposeAtomicFacts("the of and were recorded today.", {
+      entities,
+      lexicon: handle,
+    });
+    expect(junkOnly.every((a) => !a.entities.includes("ent-people-junk"))).toBe(true);
+  });
+
+  test("buildAnchorables keeps the alias forms and drops the junk name form", () => {
+    seedJunkEntityWithValidAlias();
+    const anchorables = buildAnchorables(vault, buildEntityIndex(vault), "test-agent", NOW);
+    expect(anchorables).toHaveLength(1);
+    expect(anchorables[0]!.id).toBe("ent-people-junk");
+    expect(anchorables[0]!.forms).toEqual(["atlas prime"]);
   });
 });
