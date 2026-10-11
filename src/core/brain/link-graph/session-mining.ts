@@ -28,14 +28,17 @@
  * are case-sensitive.
  *
  * Security: a secret-shaped candidate is REFUSED, never written - URLs
- * with `user:pass@host` userinfo or credential-named query parameters
- * (`token=`/`key=` through `redactSpecifierCredentials`, plus the sibling
- * {@link CREDENTIAL_MENTION_QUERY_PARAMS} spellings), and vendor-prefixed
- * / high-entropy / JWT-shaped tokens in code spans (`redactRawOutput` with
- * `redactTokens`). A refused candidate is counted, never silent. The URL
- * refusal is WHOLE: the ledger keeps the mention id verbatim in
- * `sourceRefs[].id` - only the payload is redacted at the store boundary -
- * so a credential-bearing URL must never be minted at all.
+ * with `user:pass@host` userinfo, credential-named query OR FRAGMENT
+ * parameters (`token=`/`key=` through `redactSpecifierCredentials`, plus
+ * the sibling {@link CREDENTIAL_MENTION_QUERY_PARAMS} spellings), anything
+ * the house token pass redacts (`redactRawOutput` with `redactTokens`:
+ * vendor-prefixed / high-entropy / JWT-shaped tokens, wherever in the URL
+ * they sit - a bot token in a path segment, a webhook id, a bearer in a
+ * fragment), and the same token pass for every other family. A refused
+ * candidate is counted, never silent. The URL refusal is WHOLE: the ledger
+ * keeps the mention id verbatim in `sourceRefs[].id` - only the payload is
+ * redacted at the store boundary - so a credential-bearing URL must never
+ * be minted at all.
  *
  * The ledger write is one `session_entity_mention` continuity record per
  * (family, key, sessionRef), deduped within an import run through the
@@ -209,10 +212,11 @@ function codeTokens(content: string): string[] {
  * redactor) covers the generic spellings - `token`, `key`, `secret`,
  * `password` - and the redaction-implies-refusal check below turns each
  * into a refusal. These are the SIBLING spellings an exact-name list
- * misses: `api_key`, `apikey`, `access_token`, `auth_token`, and their
+ * misses: `api_key`, `apikey`, `access_token`, `auth_token`,
+ * `private_token`, `client_secret`, `refresh_token`, `sig`, and their
  * hyphenated / fused forms. Matched case-insensitively, name-anchored (a
- * `?`/`&` boundary then the name then `=`), so `settings/api_keys` and
- * `?api_key_version=2` stay legitimate URLs. A URL carrying one is
+ * `?`/`&`/`#` boundary then the name then `=`), so `settings/api_keys`
+ * and `?api_key_version=2` stay legitimate URLs. A URL carrying one is
  * refused whole - never minted, never written, counted as refused.
  */
 export const CREDENTIAL_MENTION_QUERY_PARAMS: ReadonlyArray<string> = Object.freeze([
@@ -225,17 +229,34 @@ export const CREDENTIAL_MENTION_QUERY_PARAMS: ReadonlyArray<string> = Object.fre
   "auth_token",
   "authtoken",
   "auth-token",
+  "client_secret",
+  "clientsecret",
+  "client-secret",
+  "private_token",
+  "privatetoken",
+  "private-token",
+  "refresh_token",
+  "refreshtoken",
+  "refresh-token",
+  "sig",
 ]);
 
+const CREDENTIAL_PARAM_BOUNDARY = "[?&#]";
 const CREDENTIAL_QUERY_PARAM_RE = new RegExp(
-  `[?&](?:${CREDENTIAL_MENTION_QUERY_PARAMS.join("|")})=`,
+  `${CREDENTIAL_PARAM_BOUNDARY}(?:${CREDENTIAL_MENTION_QUERY_PARAMS.join("|")})=`,
   "i",
 );
 
 /** Whether a candidate should be refused as secret-shaped (see module header). */
 export function isSecretShapedMention(family: SessionMiningFamily, raw: string): boolean {
   if (family === "url") {
-    return redactSpecifierCredentials(raw) !== raw || CREDENTIAL_QUERY_PARAM_RE.test(raw);
+    if (redactSpecifierCredentials(raw) !== raw) return true;
+    if (CREDENTIAL_QUERY_PARAM_RE.test(raw)) return true;
+    // The house token pass is the catch-all: a vendor-prefixed,
+    // high-entropy or JWT-shaped credential anywhere in the URL - a bot
+    // token in a path segment, a webhook id, an implicit-flow bearer in
+    // the fragment - redacts, and redaction implies refusal.
+    return redactRawOutput(raw, { redactTokens: true }) !== raw;
   }
   return redactRawOutput(raw, { redactTokens: true }) !== raw;
 }

@@ -238,6 +238,44 @@ describe("secret-shaped refusal", () => {
     expect(isSecretShapedMention("url", "https://osb.example/run?dry=1")).toBe(false);
   });
 
+  test("a credential URL with the token in its PATH is refused: Telegram bot shape", () => {
+    // The ledger keeps a mention's sourceRefs[].id verbatim, so a
+    // credential-bearing URL must never be minted at all - whichever
+    // segment carries the credential. A bot token lives in the path.
+    const bot = fakeCredential("123456789:", "AAHxyzABCdefGHIjklMNOpqrsTUVwxyz12345");
+    const url = `https://api.telegram.org/bot${bot}/sendMessage`;
+    expect(isSecretShapedMention("url", url)).toBe(true);
+    expect(mined(`post ${url} now`)).toEqual([]);
+  });
+
+  test("a vendor webhook URL is refused: Slack incoming-hook shape", () => {
+    const hook = fakeCredential("Xx1", "9f8e7d6c5b4a3210011223344");
+    const url = `https://hooks.slack.com/services/T0000000/B0000000/${hook}`;
+    expect(isSecretShapedMention("url", url)).toBe(true);
+    expect(mined(`post ${url} now`)).toEqual([]);
+  });
+
+  test("credential query spellings refuse too: private_token and client_secret", () => {
+    for (const name of ["private_token", "client_secret"]) {
+      const url = `https://osb.example/v1/data?${name}=${FAKE_QUERY_KEY}`;
+      expect(isSecretShapedMention("url", url)).toBe(true);
+      expect(mined(`fetch ${url} today`)).toEqual([]);
+    }
+  });
+
+  test("a fragment parameter refuses the URL: the implicit-flow shape", () => {
+    // `#access_token=...` never reaches the query-pass boundary (`?`/`&`),
+    // so the fragment separator is a boundary too.
+    const url = `https://app.example.com/cb#access_token=${FAKE_QUERY_KEY}`;
+    expect(isSecretShapedMention("url", url)).toBe(true);
+    expect(mined(`open ${url} today`)).toEqual([]);
+  });
+
+  test("a fragment that names no credential keeps the URL: no over-refusal", () => {
+    expect(isSecretShapedMention("url", "https://osb.example/docs#section-2")).toBe(false);
+    expect(isSecretShapedMention("url", "https://osb.example/run?dry=1#top")).toBe(false);
+  });
+
   test("a plain public URL is not refused", () => {
     expect(isSecretShapedMention("url", "https://osb.example/run?dry=1")).toBe(false);
   });
