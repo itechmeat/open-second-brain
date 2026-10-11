@@ -19,7 +19,7 @@ import { closeDatabase } from "../sqlite-close.ts";
  * this raises `SCHEMA_MISMATCH` on open — the operator must reindex
  * with a newer binary.
  */
-export const LATEST_SCHEMA_VERSION = 13;
+export const LATEST_SCHEMA_VERSION = 14;
 
 /**
  * The one command that rebuilds an index this binary cannot read. Every
@@ -644,6 +644,74 @@ export const MIGRATIONS: ReadonlyArray<Migration> = Object.freeze([
       }
     },
   },
+  {
+    // v14 (recall-quality, t_71cbf5bf + t_82851eda) - the query-path
+    // taxonomy: a kind discriminator on chunks, two indexes the pushed
+    // predicates read, and the bounded document-attributes side table.
+    //
+    //   - `chunks.chunk_kind`: a VIRTUAL generated column - 'page' for
+    //     `chunk_index = 0` (the frontmatter/head chunk), 'section' for
+    //     everything else. Pure function of existing columns, so the
+    //     ALTER is metadata-only, stores nothing, and needs no backfill;
+    //     STORED generated columns are deliberately avoided because they
+    //     would rewrite every row. Indexed by `idx_chunks_kind` for the
+    //     `kind` filter pushdown.
+    //
+    //   - `idx_documents_page_type`: the `type` frontmatter key has been
+    //     materialized in `documents.page_type` since v6; the index lets
+    //     a promoted `type` property filter become a b-tree range instead
+    //     of a per-row judgement.
+    //
+    //   - `document_attributes(document_id, key, value)`: the bounded,
+    //     sanitized frontmatter snapshot (t_82851eda). Backfilled from
+    //     chunk 0 by the v12 recipe - the frontmatter is already IN the
+    //     index, so the backfill is one table scan and a parse per
+    //     document, with no vault walk. The PROMOTED keys (`type`,
+    //     `tags`, `pinned`, `visibility`, `aliases`) are skipped: each
+    //     keeps its dedicated column or table as the single source of
+    //     truth, and a second copy of the same fact is drift waiting to
+    //     happen. Bounds are mandatory or a hostile frontmatter bloats
+    //     the index; exceeding one DECREMENTS the attribute set and never
+    //     fails the index (see
+    //     {@link documentAttributesFromFrontmatter}).
+    //
+    // Reindex-safe: existing rows keep every pre-v14 answer; the new
+    // predicates only sharpen reads that ask for them. The migration runs
+    // inside `applyMigrations`' single open transaction, so a crash
+    // mid-backfill rolls the whole entry back atomically.
+    version: 14,
+    up(db) {
+      // A generated column is invisible to `PRAGMA table_info` on some
+      // SQLite builds; `table_xinfo` lists every column including the
+      // generated ones, so the guard cannot double-ALTER.
+      const chunkCols = db.query<{ name: string }, []>("PRAGMA table_xinfo(chunks)").all();
+      if (!chunkCols.some((c) => c.name === CHUNK_KIND_COLUMN)) {
+        db.exec(
+          `ALTER TABLE chunks ADD COLUMN ${CHUNK_KIND_COLUMN} TEXT GENERATED ALWAYS AS ` +
+            `(CASE WHEN chunk_index = ${FRONTMATTER_CHUNK_INDEX} ` +
+            `THEN '${CHUNK_KIND_PAGE}' ELSE '${CHUNK_KIND_SECTION}' END) VIRTUAL`,
+        );
+      }
+      db.exec("CREATE INDEX IF NOT EXISTS idx_chunks_kind ON chunks(chunk_kind)");
+      db.exec("CREATE INDEX IF NOT EXISTS idx_documents_page_type ON documents(page_type)");
+      // Child-table shape per the doc_aliases (v7) precedent; the FK
+      // cascade removes a document's attributes with the document, and
+      // `replaceDocumentAttributes` replaces them wholesale on reindex.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS document_attributes (
+          document_id  INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+          key          TEXT NOT NULL,
+          value        TEXT NOT NULL,
+          UNIQUE(document_id, key, value)
+        );
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_document_attributes_key_value " +
+          "ON document_attributes(key, value)",
+      );
+      backfillDocumentAttributes(db);
+    },
+  },
 ]);
 
 /**
@@ -671,6 +739,102 @@ export const DOCUMENT_VISIBILITY_NONE = "[]";
 export const EVENT_TIME_MIN_COLUMN = "event_time_min";
 export const EVENT_TIME_MAX_COLUMN = "event_time_max";
 export const PINNED_COLUMN = "pinned";
+
+/**
+ * The `chunks` kind discriminator (v14): a VIRTUAL generated column that
+ * names the page-level chunk ('page' - the frontmatter/head chunk at index
+ * 0) versus every section chunk ('section'). Named once: the migration,
+ * the indexer-side constants and the query-path pushdown all spell it from
+ * here.
+ */
+export const CHUNK_KIND_COLUMN = "chunk_kind";
+export const CHUNK_KIND_PAGE = "page";
+export const CHUNK_KIND_SECTION = "section";
+
+/** The `document_attributes` table (v14), named once for the same reason. */
+export const DOCUMENT_ATTRIBUTES_TABLE = "document_attributes";
+
+/**
+ * The frontmatter keys the attributes extractor never copies: each keeps a
+ * dedicated column or table as the single source of truth (`type` ->
+ * `documents.page_type`, `tags` -> the tag `links`, `pinned` ->
+ * `documents.pinned`, `visibility` -> `documents.visibility`, `aliases` ->
+ * `doc_aliases`), and a second stored copy of the same fact is drift
+ * waiting to happen.
+ */
+export const PROMOTED_ATTRIBUTE_KEYS: ReadonlySet<string> = Object.freeze(
+  new Set(["type", "tags", "pinned", "visibility", "aliases"]),
+);
+
+/**
+ * Hard bounds for {@link DOCUMENT_ATTRIBUTES_TABLE}. They exist because a
+ * hostile frontmatter must not be able to bloat the index; exceeding one
+ * DECREMENTS the stored attribute set and never fails the index - a page
+ * with too many keys still indexes, it just filters on fewer of them.
+ * Named once so the extractor and every test spell the same numbers.
+ */
+export const ATTRIBUTE_MAX_KEYS_PER_DOCUMENT = 64;
+export const ATTRIBUTE_MAX_VALUES_PER_KEY = 16;
+export const ATTRIBUTE_MAX_VALUE_BYTES = 256;
+
+/** One stored frontmatter attribute: the NFC key spelling and its scalar value. */
+export interface DocumentAttribute {
+  readonly key: string;
+  readonly value: string;
+}
+
+/**
+ * The bounded attribute set a parsed frontmatter map yields, in
+ * frontmatter key order.
+ *
+ * Mirrors the property filter's value semantics exactly, so a stored row
+ * answers only what the live filter would have answered:
+ *
+ *   - scalar strings store verbatim; numbers and booleans store
+ *     `String(value)` - the same string form `matchesAny` compares;
+ *   - arrays store their STRING elements one row each. Non-string array
+ *     elements are skipped because the live filter skips them too, so
+ *     storing their string form would fabricate a match;
+ *   - null, undefined and non-array objects store nothing - the live
+ *     filter drops such rows unconditionally;
+ *   - keys keep their exact NFC spelling (round-trips the filter's
+ *     `hasOwnProperty` semantics; they are NOT lower-cased);
+ *   - the bounds above truncate: at most
+ *     {@link ATTRIBUTE_MAX_KEYS_PER_DOCUMENT} distinct keys per document,
+ *     at most {@link ATTRIBUTE_MAX_VALUES_PER_KEY} values per key, and a
+ *     value over {@link ATTRIBUTE_MAX_VALUE_BYTES} UTF-8 bytes is dropped
+ *     (a truncated value would equal a string the true value never was).
+ */
+export function documentAttributesFromFrontmatter(
+  meta: Record<string, unknown>,
+): DocumentAttribute[] {
+  const out: DocumentAttribute[] = [];
+  let keyCount = 0;
+  for (const rawKey of Object.keys(meta)) {
+    if (keyCount >= ATTRIBUTE_MAX_KEYS_PER_DOCUMENT) break;
+    const key = rawKey.normalize("NFC");
+    if (PROMOTED_ATTRIBUTE_KEYS.has(key)) continue;
+    const value = meta[rawKey];
+    const values: string[] = [];
+    if (typeof value === "string") {
+      values.push(value);
+    } else if (typeof value === "number" || typeof value === "boolean") {
+      // The scalar string form the property filter compares.
+      values.push(String(value));
+    } else if (Array.isArray(value)) {
+      for (const element of value) {
+        if (values.length >= ATTRIBUTE_MAX_VALUES_PER_KEY) break;
+        if (typeof element !== "string") continue;
+        values.push(element);
+      }
+    }
+    const stored = values.filter((v) => Buffer.byteLength(v, "utf8") <= ATTRIBUTE_MAX_VALUE_BYTES);
+    if (stored.length === 0) continue;
+    keyCount++;
+    for (const value of stored) out.push({ key, value });
+  }
+  return out;
+}
 
 /** The `chunk_index` a page's frontmatter block lands at, when it has one. */
 const FRONTMATTER_CHUNK_INDEX = 0;
@@ -710,6 +874,38 @@ function backfillDocumentVisibility(db: Database): void {
     if (row.content === null) continue;
     const [meta] = parseFrontmatterText(row.content);
     update.run(encodeDocumentVisibility(pageVisibility(meta)), row.id);
+  }
+}
+
+/**
+ * Fill {@link DOCUMENT_ATTRIBUTES_TABLE} for every document that has no
+ * attribute rows yet, from the frontmatter chunk the index already holds -
+ * the v12 recipe exactly: one table scan, one parse per document, no vault
+ * walk. A document with no chunk zero gets no rows, which is the honest
+ * "the index holds nothing to read".
+ *
+ * The "no rows yet" gate is what makes the backfill re-runnable inside its
+ * transaction without duplicating: a document already extracted (including
+ * one whose frontmatter legitimately yields zero attributes) is skipped.
+ */
+function backfillDocumentAttributes(db: Database): void {
+  const rows = db
+    .query<{ id: number; content: string | null }, [number]>(
+      `SELECT d.id AS id, c.content AS content FROM documents d ` +
+        `LEFT JOIN chunks c ON c.document_id = d.id AND c.chunk_index = ?1 ` +
+        `WHERE NOT EXISTS (SELECT 1 FROM document_attributes a WHERE a.document_id = d.id)`,
+    )
+    .all(FRONTMATTER_CHUNK_INDEX);
+  if (rows.length === 0) return;
+  const insert = db.query<never, [number, string, string]>(
+    `INSERT OR IGNORE INTO ${DOCUMENT_ATTRIBUTES_TABLE}(document_id, key, value) VALUES (?1, ?2, ?3)`,
+  );
+  for (const row of rows) {
+    if (row.content === null) continue;
+    const [meta] = parseFrontmatterText(row.content);
+    for (const attr of documentAttributesFromFrontmatter(meta)) {
+      insert.run(row.id, attr.key, attr.value);
+    }
   }
 }
 
