@@ -268,13 +268,24 @@ function homeRelativizedPath(candidate: string): string {
   return textual === null ? candidate : `~${candidate.slice(textual[0].length)}`;
 }
 
-/** The structural code cue an identifier must carry to be worth mining. */
+/**
+ * The structural code cue an identifier must carry to be worth mining -
+ * the SAME definition `hasStructuralCodeShape` applies at the entity
+ * kernel: canonical.ts's `CODE_SHAPE_CHAR_RE` (`[_./\p{N}]` - underscore,
+ * dot, slash, or a digit of ANY script) plus a camel hump, an uppercase
+ * whose preceding character is a lowercase LETTER. Colons, dollars,
+ * at-signs and backslashes carry no cue: a `$HOME` or `MCP::SERVER` would
+ * fail the doctor's shouted-heading verdict, and minting a key the kernel's
+ * own code-shape test rejects defeats the promotion bypass mining feeds.
+ */
+const CODE_CUE_CHAR_RE = /[_./\p{N}]/u;
+
 function hasCodeCue(token: string): boolean {
-  if (/[_./\\:$@\d]/u.test(token)) return true;
+  if (CODE_CUE_CHAR_RE.test(token)) return true;
   for (let i = 1; i < token.length; i++) {
     const ch = token[i]!;
     const prev = token[i - 1]!;
-    if (ch !== ch.toLowerCase() && prev === prev.toLowerCase()) return true;
+    if (ch !== ch.toLowerCase() && prev !== prev.toUpperCase()) return true;
   }
   return false;
 }

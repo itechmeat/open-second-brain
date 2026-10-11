@@ -73,6 +73,18 @@ describe("session-mining families", () => {
     expect(mined("the rule is `keep it simple` today")).toEqual([]);
   });
 
+  test("the code cue is canonical's: $HOME and MCP::SERVER are not symbols", () => {
+    // The two code-shape definitions must agree. canonical.ts's
+    // CODE_SHAPE_CHAR_RE is `[_./\p{N}]` and its camel-hump test wants a
+    // lowercase-LETTER predecessor, so `$HOME` and `MCP::SERVER` carry no
+    // code shape there - the doctor's shouted-heading verdict rejects
+    // them, and a mined key the doctor rejects defeats the promotion
+    // bypass mining was meant to feed.
+    expect(mined("export `$HOME` and point `MCP::SERVER` at it")).toEqual([]);
+    // The cue the canonical class does carry keeps mining.
+    expect(mined("wire `MCP_Server` up today")).toContainEqual(["symbol", "MCP_Server"]);
+  });
+
   test("qualified-ident: dotted and double-colon shapes of two or more segments", () => {
     const out = mined("wire osb.core.SessionStore through my_pkg::loader next");
     expect(out).toContainEqual(["qualified-ident", "osb.core.SessionStore"]);
