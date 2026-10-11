@@ -261,10 +261,22 @@ describe("the category reaches the telemetry event", () => {
         status: "error",
         category: "malformed",
       });
+      // What this repo contributes is the WRAPPER: the `malformed` category
+      // and the `rerank response not JSON: ` prefix with the runtime's own
+      // parse-error message preserved verbatim behind it - never swallowed,
+      // never replaced. The prose after the prefix belongs to the runtime,
+      // and it changed between the CI-pinned Bun 1.4.0 ("Failed to parse
+      // JSON") and later Bun releases ("JSON Parse error: ..."), so it is
+      // resolved here rather than pinned.
+      const runtimeMessage = await new Response("<html>not json</html>").json().then(
+        () => null,
+        (e: unknown) => (e instanceof Error ? e.message : String(e)),
+      );
+      expect(runtimeMessage).toBeTruthy();
       expectEndpointError(
         await thrownBy(fake.url),
         "malformed",
-        "rerank response not JSON: Failed to parse JSON",
+        `rerank response not JSON: ${runtimeMessage}`,
       );
     } finally {
       globalThis.fetch = realFetch;
