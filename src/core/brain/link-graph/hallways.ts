@@ -25,7 +25,7 @@
  * explicit step through the entity registry.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
@@ -497,6 +497,9 @@ export function dismissHallwayKey(vault: string, family: string, key: string): b
   dismissed.add(id);
   const path = join(vault, HALLWAYS_DISMISSED_REL);
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify({ keys: [...dismissed].toSorted() }, null, 2) + "\n");
+  // Through the shared atomic writer, not a raw writeFileSync: an
+  // interrupted swap leaves the old dismissal set or the new one, and
+  // the file stays out of the direct-fs write-site census population.
+  atomicWriteFileSync(path, `${JSON.stringify({ keys: [...dismissed].toSorted() }, null, 2)}\n`);
   return true;
 }
