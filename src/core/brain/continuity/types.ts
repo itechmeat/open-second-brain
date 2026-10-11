@@ -84,7 +84,19 @@ export type ContinuityRecordKind =
    * (issue #213, Part 4). Session id and turn ids only; feeds the
    * pre-filter's regret metric.
    */
-  | "decision_model_extract_commit";
+  | "decision_model_extract_commit"
+  /**
+   * One mined entity mention from a session turn (recall-quality wave,
+   * Lane B): one record per (family, key, sessionRef), where family is a
+   * precision detector family (`symbol` | `url` | `path` |
+   * `qualified-ident`) and the key is family-scoped and case-preserving.
+   * Provenance-grade ONLY - promotion into the entity registry is a
+   * separate, explicit step, so this record never mints a page. Written
+   * inside the import loop where the raw turn text predates payload
+   * externalization; turns carrying a private region are withheld whole.
+   * Additive kind, no schema bump.
+   */
+  | "session_entity_mention";
 
 export type ContinuityPayload = Readonly<Record<string, unknown>>;
 

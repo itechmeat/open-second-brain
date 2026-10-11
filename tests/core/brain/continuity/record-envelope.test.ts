@@ -41,7 +41,9 @@ import {
   appendContinuityRecord,
   buildContinuityRecord,
   continuityLogPath,
+  listContinuityRecords,
 } from "../../../../src/core/brain/continuity/store.ts";
+import { CONTINUITY_SCHEMA_VERSION } from "../../../../src/core/brain/continuity/types.ts";
 import { loadNormalizedContinuityRecords } from "../../../../src/core/brain/continuity/read-model.ts";
 import type {
   AppendContinuityRecordInput,
@@ -149,5 +151,49 @@ describe("continuity record envelope", () => {
     expect(normalized).toBeDefined();
     expect(normalized!.id).toBe(GOLDEN_RECORD.id);
     expect("scope" in normalized!).toBe(false);
+  });
+});
+
+describe("the session_entity_mention kind (recall-quality, B1)", () => {
+  /**
+   * The mined-mention record the session import loop appends. Its shape
+   * lives entirely in the payload; the envelope around it is the one
+   * every other writer uses.
+   */
+  const MENTION_INPUT: AppendContinuityRecordInput = Object.freeze({
+    kind: "session_entity_mention",
+    createdAt: "2026-06-14T09:30:00Z",
+    sourceRefs: Object.freeze([Object.freeze({ id: "s1.jsonl:u-0:symbol:SessionStore" })]),
+    payload: Object.freeze({
+      family: "symbol",
+      key: "SessionStore",
+      session_ref: "s1.jsonl",
+      turn_id: "u-0",
+    }),
+  });
+
+  test("the new kind rides the same nine-field envelope, on disk byte for byte", () => {
+    const record = appendContinuityRecord(vault, MENTION_INPUT);
+
+    expect(Object.keys(record)).toEqual([...GOLDEN_KEYS]);
+    const lines = shardLines();
+    expect(lines.length).toBe(1);
+    const onDisk = JSON.parse(lines[0]!) as Record<string, unknown>;
+    expect(Object.keys(onDisk)).toEqual([...GOLDEN_KEYS]);
+    expect(onDisk["kind"]).toBe("session_entity_mention");
+    expect(lines[0]).toContain('"kind":"session_entity_mention"');
+  });
+
+  test("an additive record kind does not bump the continuity schema version", () => {
+    const record = appendContinuityRecord(vault, MENTION_INPUT);
+    expect(record.schema).toBe(CONTINUITY_SCHEMA_VERSION);
+    expect(CONTINUITY_SCHEMA_VERSION).toBe("o2b.continuity.v1");
+  });
+
+  test("the kind round-trips through the typed filter", () => {
+    appendContinuityRecord(vault, MENTION_INPUT);
+    const filtered = listContinuityRecords(vault, { kind: "session_entity_mention" });
+    expect(filtered.length).toBe(1);
+    expect(filtered[0]!.payload["key"]).toBe("SessionStore");
   });
 });

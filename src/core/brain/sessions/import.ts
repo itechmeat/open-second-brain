@@ -20,6 +20,12 @@
  *      input via {@link validateBrainFeedbackInput}, compute the
  *      same hash; dedup-check; create signal.
  *
+ * Mined mentions (recall-quality, B1) ride the same loop: admitted
+ * turns of either role are scanned by {@link mineAndRecordTurn} while
+ * the raw text still exists, folding one `session_entity_mention`
+ * continuity record per (family, key, session). Provenance-grade only -
+ * nothing here writes an entity page.
+ *
  * Idempotency: dedup index is built once at the start of each
  * `importSession` run by reading the inbox and processed dirs. A
  * second run on the same file finds every hash already present.
@@ -88,6 +94,7 @@ import { validateBrainFeedbackInput } from "./validate-feedback.ts";
 import { buildCaptureBoundary, type SessionCaptureDecision } from "../capture-boundary.ts";
 import { emitIngestDedupReport } from "../dedup-telemetry.ts";
 import { extractFacts, routeExtractedFacts } from "../fact-extract.ts";
+import { mineAndRecordTurn } from "../link-graph/session-mining.ts";
 import { readLineageLedger } from "../lineage/ledger.ts";
 import { resolveSessionLineage } from "../lineage/resolve.ts";
 import type { SessionLineage } from "../lineage/types.ts";
@@ -233,6 +240,21 @@ export interface ImportSessionResult {
    * count it declined to capture - never a silent zero.
    */
   readonly facts_ambient_withheld: number;
+  /**
+   * Mined-mention records the session-mining lane wrote (recall-quality,
+   * B1): one continuity record per (family, key, sessionRef), folded
+   * across the run. Provenance-grade only - nothing here mints an entity
+   * page; promotion is a separate, explicit step.
+   */
+  readonly mined_extracted: number;
+  /** Mentions already folded for this (family, key, session) this run. */
+  readonly mined_deduped: number;
+  /** Mentions a dry run would have written. Always 0 on an applied run. */
+  readonly mined_withheld: number;
+  /** Secret-shaped candidates (credential URLs, token forms) refused. */
+  readonly mined_secret_refused: number;
+  /** Turns carrying a private region, withheld whole from mining. */
+  readonly mined_private_withheld: number;
   readonly recall_turns_imported: number;
   readonly recall_summary_nodes: number;
   /**
@@ -345,6 +367,17 @@ export async function importSession(
   let factsWithheld = 0;
   let factsDeduped = 0;
   let factsAmbientWithheld = 0;
+  let minedExtracted = 0;
+  let minedDeduped = 0;
+  let minedWithheld = 0;
+  let minedSecretRefused = 0;
+  let minedPrivateWithheld = 0;
+  /**
+   * The run's mined-mention dedupe set, keyed at (family, key,
+   * sessionRef) - owned here across turns so one session folds to one
+   * record per (family, key).
+   */
+  const minedSeen = new Set<string>();
   /**
    * Hashes a dry run has already forecast. The dedup index only learns a
    * hash when a signal actually lands, so without this a marker repeated
@@ -469,6 +502,11 @@ export async function importSession(
       facts_withheld: 0,
       facts_deduped: 0,
       facts_ambient_withheld: 0,
+      mined_extracted: 0,
+      mined_deduped: 0,
+      mined_withheld: 0,
+      mined_secret_refused: 0,
+      mined_private_withheld: 0,
       recall_turns_imported: 0,
       recall_summary_nodes: 0,
       turns_resumed: 0,
@@ -587,6 +625,29 @@ export async function importSession(
       factsWithheld += routed.withheld;
       factsDeduped += routed.deduped;
       factsAmbientWithheld += routed.ambientWithheld;
+    }
+
+    // Mined mentions (recall-quality, B1): provenance-grade, from BOTH
+    // roles, here in the loop where the raw turn text predates payload
+    // externalization. A dry run forecasts; a stateless scan never gets
+    // here (mayWrite is capture-only). Secret-shaped candidates are
+    // refused and counted inside the miner.
+    if (mayWrite && turn.text) {
+      const mined = mineAndRecordTurn(vault, {
+        vault,
+        text: turn.text,
+        sessionRef: sessionKey,
+        turnId: turn.turnId,
+        turnTimestamp: turn.timestamp,
+        now,
+        seen: minedSeen,
+        ...(opts.dryRun === true ? { dryRun: true } : {}),
+      });
+      minedExtracted += mined.extracted;
+      minedDeduped += mined.deduped;
+      minedWithheld += mined.withheld;
+      minedSecretRefused += mined.secretRefused;
+      minedPrivateWithheld += mined.privateWithheld;
     }
 
     // Path A — markers in text.
@@ -745,6 +806,11 @@ export async function importSession(
     facts_withheld: factsWithheld,
     facts_deduped: factsDeduped,
     facts_ambient_withheld: factsAmbientWithheld,
+    mined_extracted: minedExtracted,
+    mined_deduped: minedDeduped,
+    mined_withheld: minedWithheld,
+    mined_secret_refused: minedSecretRefused,
+    mined_private_withheld: minedPrivateWithheld,
     filtered_turns: filteredTurns,
     recall_turns_imported: recallTurnsImported,
     recall_summary_nodes: recallSummaryNodes,
