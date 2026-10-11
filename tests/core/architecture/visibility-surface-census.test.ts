@@ -596,8 +596,16 @@ function reasonProblems(entries: ReadonlyArray<VisibilitySurfaceEntry>): {
  * receipt envelope. The four new names are `brain_create_note`,
  * `brain_update_note`, `brain_append_note` and `brain_write_batch`, whose
  * near-duplicate hint named sibling pages the caller could not read.
+ *
+ * 80 before the ingest suite's cleanup began reading page frontmatter for
+ * the archive-orphan decision (answer trust), which made
+ * `ingest-tools.ts` itself a note-content importer and swept in every tool
+ * it registers on the file-level rule. The four new names are
+ * `brain_ingest_source`, `brain_search_by_source`, `brain_delete_by_source`
+ * and `brain_ingest_batch_plan`; each was already asking a read root at its
+ * read site, so all four classify as covered.
  */
-const MCP_TOOL_POPULATION_SIZE = 80;
+const MCP_TOOL_POPULATION_SIZE = 84;
 /** Measured: MCP resources + templates. */
 const MCP_RESOURCE_POPULATION_SIZE = 8;
 /** Measured: hand-enumerated CLI verb mirrors. */
@@ -668,6 +676,7 @@ describe("visibility surface census", () => {
         "brain_dead_ends",
         "brain_decision",
         "brain_deep_synthesis",
+        "brain_delete_by_source",
         "brain_derive_fact",
         "brain_diarize",
         "brain_doctor",
@@ -680,6 +689,8 @@ describe("visibility surface census", () => {
         "brain_health",
         "brain_hygiene",
         "brain_idea_discovery",
+        "brain_ingest_batch_plan",
+        "brain_ingest_source",
         "brain_intent_review",
         "brain_intention",
         "brain_labels",
@@ -695,6 +706,7 @@ describe("visibility surface census", () => {
         "brain_review_candidates",
         "brain_scaffold_stub",
         "brain_search",
+        "brain_search_by_source",
         "brain_search_expand",
         "brain_skill_proposals",
         "brain_stale_scan",

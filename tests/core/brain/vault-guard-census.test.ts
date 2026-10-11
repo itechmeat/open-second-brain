@@ -105,6 +105,12 @@ const UNGUARDED_WITH_REASON: Readonly<Record<string, string>> = Object.freeze({
   "src/core/brain/portability/recall-sources.ts":
     "machine-local recall-source registry under the config directory, not " +
     "vault content. Keyed by `configPath`; no vault is in scope.",
+  "src/core/brain/provenance/source-archive.ts":
+    "every path it writes or removes is derived inside this module from the " +
+    "entry's own sha-256 and validated before the join, so the store cannot be " +
+    "aimed anywhere but `Brain/.archives/`; its two vault-reaching callers (the " +
+    "ingest trusted branch and the confirmed delete-by-source) assert vault " +
+    "identity ahead of the first byte and ahead of the removal.",
   "src/core/brain/secrets/crypto.ts":
     "takes a keyfile path, not a vault. The three public entry points in " +
     "`secrets/store.ts` that reach it are guarded ahead of their first byte.",

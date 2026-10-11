@@ -206,6 +206,54 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "and the reader never looks at a general vault page.",
   },
   {
+    // The four source-ingest-suite tools joined the swept population when
+    // ingest-tools.ts began reading page frontmatter for the archive-orphan
+    // decision (answer trust), which made the whole file a note-content
+    // importer under the census's file-level rule. All four were already
+    // asking a read root at their read sites; the rows below are that fact
+    // written down per surface, not a behavior change.
+    surface: "brain_ingest_source",
+    kind: K.mcpTool,
+    category: C.covered,
+    reason:
+      "the handler hands the ingest `readable: readableAtContextReach(ctx)` " +
+      "(ingest-tools.ts), so a summary page the caller may not read at its reach " +
+      "answers exactly as an absent one - never staged, never named in the " +
+      "result, and the review-queue disposition is decided for the credential-" +
+      "minted subject rather than the caller-named agent.",
+  },
+  {
+    surface: "brain_search_by_source",
+    kind: K.mcpTool,
+    category: C.covered,
+    reason:
+      "every hit is filtered through the same `readable(entry.path)` predicate " +
+      "before serialization, then through `isPathOwnerVisible` under the caller's " +
+      "owner scope with a fail-closed frontmatter parse, and `total` counts only " +
+      "what is returned, so a hidden page contributes neither an entry nor a count.",
+  },
+  {
+    surface: "brain_delete_by_source",
+    kind: K.mcpTool,
+    category: C.covered,
+    reason:
+      "the plan is built with `include: readableAtContextReach(ctx)`, so an " +
+      "original or derived page the caller may not read at its reach is planned " +
+      "and deleted exactly as an absent one - never confirmed, never named in " +
+      "match_list, never removed; the archive-orphan decision reads only stamps " +
+      "on pages this same run is already deleting.",
+  },
+  {
+    surface: "brain_ingest_batch_plan",
+    kind: K.mcpTool,
+    category: C.covered,
+    reason:
+      "`planBatches` and its reconcile pass take the same " +
+      "`readableAtContextReach(ctx)` predicate, so a source file the caller may " +
+      "not read at its reach is planned as an absent one - not batched, not " +
+      "counted, and not named in any batch's file list.",
+  },
+  {
     surface: "brain_audit",
     kind: K.mcpTool,
     category: C.excluded,

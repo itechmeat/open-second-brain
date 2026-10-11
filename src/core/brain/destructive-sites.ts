@@ -441,6 +441,18 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
         "PARTIAL rather than covered because `--include-originals` removes the imported file " +
         "outside `Brain/`, which no archive has ever held.",
     },
+    "src/core/brain/provenance/source-archive.ts": {
+      calls: ["rmSync"],
+      recovery: UNARCHIVED_BRAIN,
+      reason:
+        "`discardSourceArchive` removes one content-addressed entry from `Brain/.archives/` " +
+        "only when delete-by-source has established that its LAST citing page is in the same " +
+        "confirmed deletion - the caller owns that decision and this module cannot check it, " +
+        "which is the claim written down here. The confirmed delete-by-source run beside which " +
+        "the discard fires takes its D1 snapshot first, and `Brain/.archives/` is deliberately " +
+        "NOT a snapshot-excluded entry, so the bytes the removal takes are inside that run's " +
+        "recovery point even though this primitive never takes one of its own.",
+    },
     "src/core/brain/notes/write-record.ts": {
       calls: ["unlinkSync"],
       recovery: UNARCHIVED_BRAIN,

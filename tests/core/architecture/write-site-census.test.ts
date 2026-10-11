@@ -604,6 +604,16 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "mechanism here; the surviving records' rewrites go through " +
       "`writeFrontmatterAtomic` in the same block.",
   },
+  "src/core/brain/provenance/source-archive.ts": {
+    categories: [C.retentionDelete],
+    calls: ["rmSync"],
+    reason:
+      "discards one content-addressed archive entry when delete-by-source has established " +
+      "its last citing page is in the same confirmed deletion - the store's write half (the " +
+      "redacted put) routes through `atomicWriteFileSync`, and a removal is not a write any " +
+      "shared writer has a form for. The path is derived from the entry's own sha-256 and " +
+      "validated before the join, so the only file this call can address is the entry named.",
+  },
   "src/core/brain/exact-state.ts": {
     categories: [C.retentionDelete],
     calls: ["rmSync"],
@@ -1298,8 +1308,14 @@ const DIRECT_ROWS = ROWS.filter((row) => row.directCalls.length > 0);
  * page into the review queue - stage, then unlink the canonical copy. A
  * lifecycle move authors no content; the unlink is the site's only
  * direct call.
+ *
+ * 81 -> 82: the source archive (`src/core/brain/provenance/
+ * source-archive.ts`) discards an entry whose last citing page a
+ * confirmed delete-by-source removed - an evidence-store prune whose
+ * only direct call is the rmSync; its write half routes through the
+ * shared atomic writer.
  */
-const DIRECT_WRITE_ROWS = 81;
+const DIRECT_WRITE_ROWS = 82;
 
 /**
  * Measured modules reaching a write through a shared helper. An equality.
@@ -1390,8 +1406,15 @@ const DIRECT_WRITE_ROWS = 81;
  * hallways pass (`src/core/brain/link-graph/hallways.ts`) writes
  * `Brain/link-graph/hallways.json` and its dismissal keys through the
  * same helper class.
+ *
+ * 117 -> 119, from the answer-trust wave and nothing else: the source
+ * archive (`src/core/brain/provenance/source-archive.ts`) persists its
+ * redacted entries through `atomicWriteFileSync`, and `src/core/config.ts`
+ * joins the population through its new `path-constants.ts` import (the
+ * quote_check resolvers) carrying the config write it already made
+ * through the same shared writer.
  */
-const SHARED_HELPER_ROWS = 117;
+const SHARED_HELPER_ROWS = 119;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1467,9 +1490,12 @@ const STAMPED_PATHS: ReadonlySet<string> = new Set(
  * 77 -> 78: the per-agent MCP token store's custody swap (hash-at-rest
  *   state, not notes).
  * 78 -> 79: the intake's stage-disposition page move (a lifecycle move
- *   whose only direct call is the unlink; it stamps no channel).
+ * whose only direct call is the unlink; it stamps no channel).
+ * 79 -> 80: the source archive's entry discard (answer trust) - a
+ * content-addressed evidence prune whose last citing page the same
+ * confirmed delete-by-source removed; no origin stamp on archive cleanup.
  */
-const UNSTAMPED_DIRECT_ROWS = 80;
+const UNSTAMPED_DIRECT_ROWS = 81;
 
 /**
  * Shared-helper write sites the stamp does not reach, measured the same
@@ -1496,9 +1522,14 @@ const UNSTAMPED_DIRECT_ROWS = 80;
  * not notes). 112 -> 114: the recall-quality wave's derived artifacts - the
  * shared derived-artifact helper and the hallways artifact with its
  * dismissal keys - write machine JSON through the shared atomic writer
- * (derived state, not notes; no origin stamp on either).
+ * (derived state, not notes; no origin stamp on either). 114 -> 116: the
+ * answer-trust wave - the source archive persists its redacted entries
+ * through the shared atomic writer (evidence bytes; no origin stamp on an
+ * archive put), and the config writer joins the population through its new
+ * path-constants import carrying the config write it already made (module
+ * state, not notes).
  */
-const UNSTAMPED_SHARED_ROWS = 114;
+const UNSTAMPED_SHARED_ROWS = 116;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {
