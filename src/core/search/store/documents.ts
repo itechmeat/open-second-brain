@@ -494,10 +494,19 @@ export function countDocuments(db: Database): number {
 /**
  * How many documents sit under one raw path prefix, matched with the same
  * sargable range form the pending-vector census and the two query lanes
- * use (`path-prefix.ts`), so every prefix reader agrees on one row set.
+ * use (`path-prefix.ts`), so every prefix reader agrees on one row set. A
+ * null bound (the prefix's last code point cannot increment) runs the
+ * census lower-bound-only.
  */
 export function countDocumentsUnderPrefix(db: Database, prefix: string): number {
   const { lo, hi } = pathPrefixRange(prefix);
+  if (hi === null) {
+    return (
+      db
+        .query<{ c: number }, [string]>("SELECT count(*) AS c FROM documents WHERE path >= ?")
+        .get(lo)?.c ?? 0
+    );
+  }
   return (
     db
       .query<{ c: number }, [string, string]>(

@@ -3,17 +3,27 @@
  *
  * Every prefix predicate the store ran was `substr(d.path, 1, length(?)) = ?`,
  * which cannot use `idx_documents_path`: SQLite must evaluate the expression
- * per row. The range form `d.path >= ?1 AND d.path < ?2` with
- * `?2 = prefix || U+FFFF` is exact for the same set of rows - `documents.path`
- * is vault-relative POSIX + NFC under BINARY collation, and U+FFFF is a
- * noncharacter that cannot occur in one - and the b-tree answers it as a
- * range scan.
+ * per row. The range form `d.path >= ?1 AND d.path < ?2` is exact for the
+ * same set of rows - `documents.path` is vault-relative POSIX + NFC under
+ * BINARY collation, so strings compare as UTF-8 bytes - and the b-tree
+ * answers it as a range scan.
+ *
+ * The bound (recall-quality review): `?2` is the prefix with its LAST code
+ * point incremented by one, so every string starting with the prefix holds
+ * the old code point where the bound holds the incremented one and sorts
+ * strictly below it, while the bound itself does not start with the prefix
+ * (tight). A `prefix || U+FFFF` bound is WRONG under byte ordering: an
+ * astral continuation (emoji filenames, U+1F300+) encodes with a leading
+ * byte above U+FFFF's 0xEF and sorts ABOVE the bound, dropping rows the
+ * substr form matched. When the last code point is U+10FFFF and cannot
+ * increment, the bound is null and the read runs lower-bound-only.
  *
  * This file pins three things:
  *
  *   1. the four prefixed reads (keyword lane, semantic lane, the prefix
  *      document census, the pending-vector census) return exactly the rows
- *      the historical `substr` form returns on the same fixture store;
+ *      the historical `substr` form returns on the same fixture store -
+ *      including astral-plane continuations and the no-increment fallback;
  *   2. the caller prefix passes through `canonicalNotePath`, so a win32
  *      backslash prefix now matches the stored POSIX paths it names;
  *   3. `assertSafePathPrefix` refusals are unchanged - the range form
@@ -28,7 +38,8 @@ import { canonicalNotePath } from "../../../src/core/path-safety.ts";
 import { applyMigrations, ensureVecTable } from "../../../src/core/search/schema.ts";
 import { assertSafePathPrefix } from "../../../src/core/search/pipeline/request.ts";
 import { countDocumentsUnderPrefix } from "../../../src/core/search/store/documents.ts";
-import { keywordTopK } from "../../../src/core/search/store/keyword.ts";
+import { pathPrefixRange } from "../../../src/core/search/store/path-prefix.ts";
+import { keywordTopK, keywordTopKSql } from "../../../src/core/search/store/keyword.ts";
 import {
   countChunksWithoutEmbeddings,
   findChunksWithoutEmbeddings,
@@ -50,6 +61,13 @@ const DOCS: ReadonlyArray<SeedDoc> = [
   { path: "notes/sub/beta.md", chunkText: "apple beta rind" },
   { path: "notes/alphabetic.md", chunkText: "apple alphabetic rind" },
   { path: "other/gamma.md", chunkText: "apple gamma rind" },
+  // Astral-plane continuations (recall-quality review): an emoji directly
+  // after the prefix sorts above any `prefix || U+FFFF` bound byte-wise,
+  // and an emoji after an emoji does too. The U+10FFFF sentinel is the
+  // no-increment case: its prefix has no incremented bound at all.
+  { path: "notes/\u{1F680}-launch.md", chunkText: "apple launch rind" },
+  { path: "notes/\u{1F680}\u{1F680}.md", chunkText: "apple twin rind" },
+  { path: "notes/launch\u{10FFFF}.md", chunkText: "apple sentinel rind" },
 ];
 
 let db: Database;
@@ -131,6 +149,44 @@ describe("keyword lane prefix pushdown", () => {
     expect(keywordPaths("notes/alpha.md")).toEqual(["notes/alpha.md"]);
   });
 
+  test("an emoji continuation is not dropped (differential vs substr)", () => {
+    // The defect: `notes/` + U+FFFF sorts BELOW `notes/<emoji>` under
+    // BINARY (UTF-8 byte) collation, so the launch note vanished while the
+    // substr form matched it. Byte-identical row sets, and the row is there.
+    for (const prefix of ["notes/", "notes/\u{1F680}", "notes/\u{1F680}-launch.md"]) {
+      expect(keywordPaths(prefix)).toEqual(keywordPathsUnderSubstr(prefix));
+    }
+    expect(keywordPaths("notes/")).toContain("notes/\u{1F680}-launch.md");
+  });
+
+  test("an astral last-char prefix with an astral continuation (differential vs substr)", () => {
+    // Prefix `notes/<emoji>`: the increment bound moves the emoji itself
+    // (U+1F680 -> U+1F681), so the twin-emoji note - which the U+FFFF form
+    // dropped - stays strictly below the bound.
+    for (const prefix of ["notes/\u{1F680}", "notes/\u{1F680}\u{1F680}"]) {
+      expect(keywordPaths(prefix)).toEqual(keywordPathsUnderSubstr(prefix));
+    }
+    expect(keywordPaths("notes/\u{1F680}")).toContain("notes/\u{1F680}\u{1F680}.md");
+  });
+
+  test("a U+10FFFF-final prefix bounds through the last incrementable code point", () => {
+    // U+10FFFF cannot increment, but nothing sorts above it either, so the
+    // bound steps back to the last incrementable code point and stays exact
+    // AND tight - byte-identical to the substr form, not a wide scan.
+    const prefix = "notes/launch\u{10FFFF}";
+    expect(pathPrefixRange(prefix)).toEqual({ lo: prefix, hi: "notes/launci" });
+    expect(keywordTopKSql({ pathPrefix: prefix })).toContain("d.path < ?");
+    expect(keywordPaths(prefix)).toEqual(keywordPathsUnderSubstr(prefix));
+    expect(keywordPaths(prefix)).toEqual(["notes/launch\u{10FFFF}.md"]);
+  });
+
+  test("an all-U+10FFFF prefix has no bound and runs lower-bound-only", () => {
+    const prefix = "\u{10FFFF}\u{10FFFF}";
+    expect(pathPrefixRange(prefix).hi).toBeNull();
+    expect(keywordTopKSql({ pathPrefix: prefix })).not.toContain("d.path < ?");
+    expect(keywordTopKSql({ pathPrefix: prefix })).toContain("d.path >= ?");
+  });
+
   test("a win32 backslash prefix is canonicalized and matches", () => {
     expect(keywordPaths("notes\\sub")).toEqual(["notes/sub/beta.md"]);
   });
@@ -153,6 +209,24 @@ describe("prefix document census", () => {
     }
   });
 
+  test("astral prefixes count the same rows the substr form counts", () => {
+    const substrCount = (prefix: string): number =>
+      db
+        .query<{ c: number }, [string, string]>(
+          "SELECT count(*) AS c FROM documents WHERE substr(path, 1, length(?)) = ?",
+        )
+        .get(prefix, prefix)!.c;
+    for (const prefix of [
+      "notes/",
+      "notes/\u{1F680}",
+      "notes/\u{1F680}\u{1F680}.md",
+      "notes/launch\u{10FFFF}",
+    ]) {
+      expect(countDocumentsUnderPrefix(db, prefix)).toBe(substrCount(prefix));
+    }
+    expect(countDocumentsUnderPrefix(db, "notes/\u{1F680}")).toBe(2);
+  });
+
   test("a win32 backslash prefix is canonicalized and matches", () => {
     expect(countDocumentsUnderPrefix(db, "notes\\sub")).toBe(1);
   });
@@ -168,7 +242,7 @@ describe("pending-vector census prefix scope", () => {
             "WHERE e.chunk_id IS NULL AND substr(d.path, 1, length(?)) = ?",
         )
         .get(prefix, prefix)!.n;
-    for (const prefix of ["notes", "notes/sub", "other"]) {
+    for (const prefix of ["notes", "notes/sub", "other", "notes/\u{1F680}"]) {
       expect(countChunksWithoutEmbeddings(db, { pathPrefixes: [prefix] })).toBe(
         substrPending(prefix),
       );
@@ -201,6 +275,12 @@ describe.skipIf(!VEC_AVAILABLE)("semantic lane prefix pushdown", () => {
     // beta carries no embedding (it keeps the pending census populated),
     // so the win32 case targets the alph* pair instead.
     expect(semanticPaths(vector, "notes\\alph")).toEqual(["notes/alphabetic.md", "notes/alpha.md"]);
+  });
+
+  test("an emoji continuation survives the prefixed KNN (differential vs substr)", () => {
+    const vector = unitVector(0.5);
+    expect(semanticPaths(vector, "notes/")).toEqual(semanticPathsUnderSubstr(vector, "notes/"));
+    expect(semanticPaths(vector, "notes/")).toContain("notes/\u{1F680}-launch.md");
   });
 });
 

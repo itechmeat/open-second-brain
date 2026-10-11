@@ -626,6 +626,10 @@ export type SemanticTopKSqlOptions = Omit<SemanticTopKOptions, "limit"> & {
 
 export function semanticTopKSql(opts: SemanticTopKSqlOptions = {}): string {
   const prefix = opts.pathPrefix && opts.pathPrefix.length > 0 ? opts.pathPrefix : null;
+  // The bound is null when the prefix's last code point cannot increment
+  // (path-prefix.ts): the read runs lower-bound-only, never bound to a
+  // stand-in upper value.
+  const range = prefix !== null ? pathPrefixRange(prefix) : null;
   const pushFrag = pushdownSqlFragment(opts.pushdown ?? null);
   const kind = opts.kind ?? null;
   const needsDocuments = prefix !== null || kind !== null || pushFrag !== null;
@@ -633,7 +637,8 @@ export function semanticTopKSql(opts: SemanticTopKSqlOptions = {}): string {
   const filters = [
     "v.embedding MATCH ?",
     "k = ?",
-    ...(prefix !== null ? ["d.path >= ?", "d.path < ?"] : []),
+    ...(range !== null ? ["d.path >= ?"] : []),
+    ...(range !== null && range.hi !== null ? ["d.path < ?"] : []),
     ...(pushFrag !== null ? [pushFrag.sql] : []),
     ...(kind !== null ? ["c.chunk_kind = ?"] : []),
   ];
@@ -677,9 +682,10 @@ export function semanticTopK(
       knn,
       ...(prefix !== null
         ? (() => {
-            // Sargable prefix range (C1); see path-prefix.ts.
+            // Sargable prefix range (C1); see path-prefix.ts. A null bound
+            // (last code point cannot increment) runs lower-bound-only.
             const { lo, hi } = pathPrefixRange(prefix);
-            return [lo, hi];
+            return hi !== null ? [lo, hi] : [lo];
           })()
         : []),
       ...(pushFrag !== null ? pushFrag.bindings : []),

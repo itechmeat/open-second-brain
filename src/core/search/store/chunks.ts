@@ -344,7 +344,8 @@ const PENDING_ANTI_JOIN =
  * census joins `documents` and matches each prefix with the sargable
  * range form every other prefix reader uses (`path-prefix.ts`), which
  * needs no LIKE wildcard escaping and lets `idx_documents_path` answer
- * the match.
+ * the match. A prefix whose last code point cannot increment has a null
+ * bound and contributes its lower-bound-only clause.
  */
 function pendingCensusClause(scope: PendingVectorScope | undefined): {
   sql: string;
@@ -352,16 +353,16 @@ function pendingCensusClause(scope: PendingVectorScope | undefined): {
 } {
   const prefixes = scope?.pathPrefixes ?? [];
   if (prefixes.length === 0) return { sql: PENDING_ANTI_JOIN, bindings: [] };
-  const matches = prefixes.map(() => "(d.path >= ? AND d.path < ?)").join(" OR ");
+  const ranges = prefixes.map((prefix) => pathPrefixRange(prefix));
+  const matches = ranges
+    .map((range) => (range.hi !== null ? "(d.path >= ? AND d.path < ?)" : "(d.path >= ?)"))
+    .join(" OR ");
   return {
     sql:
       "FROM chunks c JOIN documents d ON d.id = c.document_id " +
       "LEFT JOIN embeddings e ON e.chunk_id = c.id " +
       `WHERE e.chunk_id IS NULL AND (${matches})`,
-    bindings: prefixes.flatMap((prefix) => {
-      const { lo, hi } = pathPrefixRange(prefix);
-      return [lo, hi];
-    }),
+    bindings: ranges.flatMap((range) => (range.hi !== null ? [range.lo, range.hi] : [range.lo])),
   };
 }
 
