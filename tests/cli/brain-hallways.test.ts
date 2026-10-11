@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   existsSync,
   mkdtempSync,
+  mkdirSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -244,18 +245,24 @@ describe("o2b brain hallways promote", () => {
   test("a promoted label failing the tightened admission gate is refused BY THE GATE", async () => {
     // The pinned coupling: promotion's only writer is the registry's
     // admission path, so a mined key the tightened gate rejects
-    // (recall-quality A2 - here an ALL-CAPS heading residue under a
-    // caseful lexicon) never becomes an entity page, however many
-    // sessions mention it.
-    for (let i = 1; i <= 3; i++) mention("symbol", "THE", `s${i}.jsonl`);
-    writeEntityLexicon(vault, {
-      ...deriveEntityLexicon(vault),
-      caseful: true,
-      entries: { the: { lower: 9, capitalised: 0, upper: 0 } },
-    });
+    // (recall-quality A2 - here a multi-token ALL-CAPS heading
+    // residue, refused structurally regardless of the lexicon) never
+    // becomes an entity page, however many sessions mention it.
+    for (let i = 1; i <= 3; i++) mention("symbol", "QUICK BROWN FOX", `s${i}.jsonl`);
+    // A resolving caseful handle is what arms the structural shout
+    // verdict: seed one capitalised corpus page so the derived
+    // artifact carries caseful=true and its own honest hash.
+    mkdirSync(join(vault, "Notes"), { recursive: true });
+    writeFileSync(
+      join(vault, "Notes", "seed-corpus.md"),
+      "# Corpus\nNarrative prose where Words arrive Capitalised.",
+    );
+    writeEntityLexicon(vault, deriveEntityLexicon(vault));
     __clearEntityLexiconCache();
 
-    const out = await runCli(["brain", "hallways", "promote", "symbol", "THE"], { env: env() });
+    const out = await runCli(["brain", "hallways", "promote", "symbol", "QUICK BROWN FOX"], {
+      env: env(),
+    });
 
     expect(out.returncode).toBe(1);
     expect(out.stderr).toContain("shouted-heading");
