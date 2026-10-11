@@ -113,6 +113,10 @@ const VAULT_PATH_SCHEMA_DESCRIPTOR = "VAULT_PATH_OUTPUT_SCHEMA";
  * 44 to 46: `second_brain_wiring` joined the surface and emits the field
  * once per view, through the producer.
  *
+ * 46 to 47: the recall-telemetry `dead_weight` view joined the surface
+ * and emits the field through the same producer, once per operation
+ * result, like every other aggregate on that tool.
+ *
  * That tool is also where this census's reach ends, so the limit is
  * stated rather than left to be discovered. The population is keyed on
  * the FIELD NAME `vault_path`, and the tool carries three other
@@ -126,7 +130,7 @@ const VAULT_PATH_SCHEMA_DESCRIPTOR = "VAULT_PATH_OUTPUT_SCHEMA";
  * future view that adds a fourth path-bearing member under a fourth
  * name needs its own assertion there, because this count will not move.
  */
-const EMITTING_SITES = 46;
+const EMITTING_SITES = 47;
 
 /** One `vault_path:` property found in the source. */
 interface FieldSite {
