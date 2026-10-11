@@ -141,7 +141,7 @@ describe("the hallways artifact", () => {
       generatedAt: "2026-09-18T10:00:00Z",
     });
 
-    expect(path.endsWith(HALLWAYS_ARTIFACT_REL.split("\\").join("/"))).toBe(true);
+    expect(path.replaceAll("\\", "/").endsWith(HALLWAYS_ARTIFACT_REL)).toBe(true);
     const raw = JSON.parse(
       readFileSync(join(vault, "Brain", "link-graph", "hallways.json"), "utf8"),
     ) as Record<string, unknown>;
@@ -230,7 +230,7 @@ describe("the proposals file and dismissals", () => {
       now: new Date("2026-09-18T10:00:00Z"),
     });
 
-    expect(path.endsWith(HALLWAYS_PROPOSALS_REL.split("\\").join("/"))).toBe(true);
+    expect(path.replaceAll("\\", "/").endsWith(HALLWAYS_PROPOSALS_REL)).toBe(true);
     const body = readFileSync(path, "utf8");
     expect(body).toContain("SessionStore");
     expect(body).toContain("PayloadRegistry");
