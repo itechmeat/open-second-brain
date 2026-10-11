@@ -50,6 +50,8 @@ import {
   type IntakeRelation,
 } from "../intake/extract-intake.ts";
 import {
+  SourceTrustError,
+  errnoCode,
   isSourceHidden,
   normalizeSourceIdentity,
   readSourceOrigin,
@@ -67,6 +69,7 @@ import {
 import {
   SOURCE_ARCHIVE_BYTES_KEY,
   SOURCE_ARCHIVE_HASH_KEY,
+  SourceArchiveError,
   putSourceArchive,
 } from "../provenance/source-archive.ts";
 import type { FrontmatterCache } from "../../search/result-filters.ts";
@@ -189,6 +192,9 @@ export interface IngestSourceResult {
    * not a failed capture. Nor is this field ever present when the source
    * was simply not capture-eligible (untrusted, non-local, withheld from
    * remote readers): those behave exactly as before this field existed.
+   * The text is identifiers only - a vault-relative source identity, byte
+   * counts, an errno code - never a host path, since the field crosses to
+   * the wire (see {@link archiveRefusalMessage}).
    */
   readonly sourceArchiveRefusal?: string;
   /**
@@ -510,6 +516,22 @@ function remotelyReadable(vault: string): (rel: string) => boolean {
 }
 
 /**
+ * The refusal text the capture records. `SourceArchiveError` and
+ * `SourceTrustError` carry identifiers and integers only, by contract;
+ * anything else reaching this catch is a host fs error whose own message
+ * embeds the absolute path the call failed on, so only its errno code (or
+ * error class) is kept - the same identifiers-only composition
+ * `source-trust`'s refusals use. The refusal rides the ingest result, so
+ * it never names a host path.
+ */
+function archiveRefusalMessage(error: unknown): string {
+  if (error instanceof SourceArchiveError || error instanceof SourceTrustError) {
+    return error.message;
+  }
+  return `source archive failed (${errnoCode(error)})`;
+}
+
+/**
  * Archive the trusted source's bytes for re-verification, or say why not.
  *
  * Eligibility is the digest's own visibility rule, inherited: a trusted
@@ -543,7 +565,7 @@ function captureTrustedSourceArchive(
     const put = putSourceArchive(vault, origin.bytes);
     return { hash: put.hash, bytes: put.bytes };
   } catch (error) {
-    return { refusal: error instanceof Error ? error.message : String(error) };
+    return { refusal: archiveRefusalMessage(error) };
   }
 }
 

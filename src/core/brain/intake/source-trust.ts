@@ -311,8 +311,13 @@ function isAbsenceErrno(cause: unknown): boolean {
   return code === ERRNO_NO_SUCH_ENTRY || code === ERRNO_NOT_A_DIRECTORY;
 }
 
-/** The errno code alone, or the error's class when the kernel named none. */
-function errnoCode(cause: unknown): string {
+/**
+ * The errno code alone, or the error's class when the kernel named none.
+ * Exported for sibling refusals that must name a host fs failure without
+ * its message: a Node fs error's `message` embeds the absolute path the
+ * call failed on, which never crosses a wire surface.
+ */
+export function errnoCode(cause: unknown): string {
   const code = (cause as NodeJS.ErrnoException | null)?.code;
   if (typeof code === "string" && code.length > 0) return code;
   const name = (cause as Error | null)?.name;

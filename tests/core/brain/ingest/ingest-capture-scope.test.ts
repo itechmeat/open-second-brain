@@ -220,8 +220,11 @@ describe("ingestSource durable archive stamp", () => {
     expect(result.created).toBe(true);
     expect(result.sourceArchiveHash).toBeUndefined();
     expect(result.sourceArchiveBytes).toBeUndefined();
-    // What the fs-error arm actually records: the host's own errno line.
+    // What the fs-error arm actually records: the host's errno line only -
+    // identifiers, never the host path the raw fs message embeds (the
+    // refusal crosses to the wire, so it cannot name the machine).
     expect(result.sourceArchiveRefusal).toContain("EEXIST");
+    expect(result.sourceArchiveRefusal).not.toContain(vault);
     const [meta] = parseFrontmatter(join(vault, result.summaryPath));
     expect(meta[SOURCE_ARCHIVE_HASH_KEY]).toBeUndefined();
     expect(meta[SOURCE_ARCHIVE_BYTES_KEY]).toBeUndefined();
