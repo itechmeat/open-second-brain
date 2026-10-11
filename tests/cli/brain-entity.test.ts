@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -213,5 +221,91 @@ describe("o2b brain entity lexicon rebuild (recall-quality A4)", () => {
   test("an unknown lexicon subcommand is a usage error", async () => {
     const out = await runCli(["brain", "entity", "lexicon", "polish"], { env: env() });
     expect(out.returncode).not.toBe(0);
+  });
+});
+
+/**
+ * Recall-quality review M3: `entity prune --confirm` must agree with the
+ * A2 creation policy. The advisory verdict classes - a single-token shout
+ * (NASA, a brand or acronym) and a function-word run (Meeting, a topic) -
+ * stay in place unless the operator opts in with `--include-advisory`;
+ * structural junk still prunes by default.
+ */
+describe("o2b brain entity prune - advisory classes are opt-in (recall-quality M3)", () => {
+  function seedCorpus(): void {
+    writeFileSync(
+      join(vault, "corpus-page.md"),
+      "Meeting notes about the setup. The weekly meeting ran. " +
+        "Notes ran, the meeting kept notes, notes ran again.\n",
+    );
+  }
+
+  /** Write an entity node directly, bypassing the creation quality gate. */
+  function writeNode(category: string, id: string, name: string): string {
+    const dir = join(vault, "Brain", "entities", category);
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, `${id}.md`);
+    writeFileSync(
+      path,
+      [
+        "---",
+        "kind: brain-entity",
+        `entity_id: ${id}`,
+        `category: ${category}`,
+        `name: ${name}`,
+        "status: active",
+        "created_at: 2026-07-18T00:00:00Z",
+        "updated_at: 2026-07-18T00:00:00Z",
+        "tags:",
+        "  - brain",
+        "  - brain/entity",
+        "---",
+        "",
+        `# ${name}`,
+        "",
+      ].join("\n"),
+    );
+    return path;
+  }
+
+  /** A caseful lexicon plus one advisory acronym, one advisory topic, one junk node. */
+  async function seedAdvisoryStore(): Promise<{ nasa: string; meeting: string; junk: string }> {
+    seedCorpus();
+    const rebuild = await runCli(["brain", "entity", "lexicon", "rebuild", "--apply"], {
+      env: env(),
+    });
+    expect(rebuild.returncode).toBe(0);
+    return {
+      nasa: writeNode("projects", "ent-projects-nasa", "NASA"),
+      meeting: writeNode("people", "ent-people-meeting", "Meeting"),
+      junk: writeNode("people", "ent-people-junk", "***"),
+    };
+  }
+
+  test("prune --confirm keeps the acronym and the topic, removes structural junk", async () => {
+    const { nasa, meeting, junk } = await seedAdvisoryStore();
+    const out = await runCli(["brain", "entity", "prune", "--confirm", "--json"], { env: env() });
+    expect(out.returncode).toBe(0);
+    const payload = JSON.parse(out.stdout) as { removed: string[]; advisory_skipped: number };
+    expect(payload.removed).toEqual([junk]);
+    expect(payload.advisory_skipped).toBe(2);
+    expect(existsSync(nasa)).toBe(true);
+    expect(existsSync(meeting)).toBe(true);
+  });
+
+  test("--include-advisory removes the advisory classes too", async () => {
+    const { nasa, meeting, junk } = await seedAdvisoryStore();
+    const out = await runCli(
+      ["brain", "entity", "prune", "--confirm", "--include-advisory", "--json"],
+      { env: env() },
+    );
+    expect(out.returncode).toBe(0);
+    const payload = JSON.parse(out.stdout) as { removed: string[]; advisory_skipped: number };
+    expect(payload.advisory_skipped).toBe(0);
+    // All three findings go: the structural junk alongside the advisory classes.
+    expect([...payload.removed].sort()).toEqual([nasa, meeting, junk].sort());
+    expect(existsSync(nasa)).toBe(false);
+    expect(existsSync(meeting)).toBe(false);
+    expect(existsSync(junk)).toBe(false);
   });
 });

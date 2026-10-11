@@ -77,8 +77,8 @@ export async function cmdBrainEntity(argv: string[]): Promise<number> {
     default:
       return usageError(
         "brain entity requires a subcommand: set <category> <name> | get <name> | list | " +
-          "relate <from> <relation> <to> | archive <name> [--restore] | prune [--confirm] | " +
-          "lexicon rebuild [--apply]",
+          "relate <from> <relation> <to> | archive <name> [--restore] | " +
+          "prune [--confirm] [--include-advisory] | lexicon rebuild [--apply]",
       );
   }
 }
@@ -218,12 +218,14 @@ function entityPrune(argv: string[]): number {
   const { flags } = parse(argv, {
     vault: { type: "string" },
     confirm: { type: "boolean" },
+    "include-advisory": { type: "boolean" },
     json: { type: "boolean" },
   });
   const { vault } = brainVerbContext(flags);
   const confirm = flags["confirm"] === true;
+  const includeAdvisory = flags["include-advisory"] === true;
   try {
-    const result = pruneEntityLabels(vault, { confirm, now: new Date() });
+    const result = pruneEntityLabels(vault, { confirm, includeAdvisory, now: new Date() });
     if (flags["json"]) {
       okJson({
         confirmed: result.confirmed,
@@ -233,9 +235,11 @@ function entityPrune(argv: string[]): number {
           name: c.name,
           status: c.status,
           reason: c.reason,
+          advisory: c.advisory,
           path: c.path,
           inbound_references: [...c.inboundReferences],
         })),
+        advisory_skipped: result.advisorySkipped,
         removed: [...result.removed],
         edges_stripped: result.edgesStripped,
         snapshot_run_id: result.snapshotRunId,
@@ -243,12 +247,22 @@ function entityPrune(argv: string[]): number {
       });
       return 0;
     }
+    const advisoryNote =
+      result.advisorySkipped > 0
+        ? ` (${result.advisorySkipped} advisory finding(s) skipped - a single-token shout ` +
+          "or a common-word run; the doctor reports them)"
+        : "";
     if (result.candidates.length === 0) {
-      ok("entity prune: no malformed labels found");
+      if (result.advisorySkipped > 0) {
+        ok(`entity prune: no structural malformed labels found${advisoryNote}`);
+        info("  re-run with --include-advisory to prune the advisory classes too");
+      } else {
+        ok("entity prune: no malformed labels found");
+      }
       return 0;
     }
     if (result.confirmed) {
-      ok(`entity prune: removed ${result.removed.length} node(s)`);
+      ok(`entity prune: removed ${result.removed.length} node(s)${advisoryNote}`);
       for (const c of result.candidates) ok(`  - ${c.id} (${c.reason}) ${JSON.stringify(c.name)}`);
       if (result.edgesStripped > 0) ok(`  stripped ${result.edgesStripped} inbound edge(s)`);
       if (result.snapshotRunId) {
@@ -257,7 +271,10 @@ function entityPrune(argv: string[]): number {
       }
       return 0;
     }
-    ok(`entity prune (DRY RUN): ${result.candidates.length} malformed label(s) WOULD be removed:`);
+    ok(
+      `entity prune (DRY RUN): ${result.candidates.length} malformed label(s) WOULD be ` +
+        `removed${advisoryNote}:`,
+    );
     for (const c of result.candidates) {
       const edges =
         c.inboundReferences.length > 0

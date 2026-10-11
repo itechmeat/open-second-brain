@@ -113,6 +113,9 @@ describe("findMalformedEntityLabels", () => {
     const malformed = findMalformedEntityLabels(vault);
     expect(malformed.map((m) => m.id)).toEqual(["ent-people-junk"]);
     expect(malformed[0]!.reason).toBe("empty");
+    // A structural verdict is never advisory: it has always been prune-
+    // eligible, at creation and on the heal side alike.
+    expect(malformed[0]!.advisory).toBe(false);
   });
 
   test("flags a denylisted label", () => {
@@ -136,8 +139,11 @@ describe("findMalformedEntityLabels", () => {
 /**
  * Recall-quality A3: the store-wide re-admission pass resolves the same
  * store-learned lexicon the creation gate does, so a tightened verdict
- * automatically becomes the idempotent heal - reported advisory (doctor +
- * prune), never auto-removed. The only vocabulary is what a corpus page
+ * automatically becomes the idempotent heal. Recall-quality review M3:
+ * the ADVISORY classes (a single-token shout, a common-word run) are
+ * doctor-visible but excluded from the prune set unless the operator
+ * opts in with `--include-advisory` - the destructive default clears
+ * structural junk only. The only vocabulary is what a corpus page
  * teaches the artifact.
  */
 describe("findMalformedEntityLabels - lexicon-aware re-admission (recall-quality A3)", () => {
@@ -155,32 +161,54 @@ describe("findMalformedEntityLabels - lexicon-aware re-admission (recall-quality
     const malformed = findMalformedEntityLabels(vault);
     expect(malformed.map((m) => m.id)).toEqual(["ent-people-junk"]);
     expect(malformed[0]!.reason).toBe("function-word-run");
+    expect(malformed[0]!.advisory).toBe(true);
   });
 
-  test("reports a stored shouted heading with shouted-heading", () => {
+  test("reports a stored MULTI-token shout as a structural finding", () => {
+    // A two-word all-caps run is pasted '# HEADING' residue - prune-eligible
+    // as today; only the SINGLE-token shout is the advisory class.
     writeEntityNode("projects", "ent-projects-junk", "MEETING NOTES");
     seedLexicon("Atlas kept the weekly meeting notes about the setup.");
     const malformed = findMalformedEntityLabels(vault);
     expect(malformed.map((m) => m.id)).toEqual(["ent-projects-junk"]);
     expect(malformed[0]!.reason).toBe("shouted-heading");
+    expect(malformed[0]!.advisory).toBe(false);
   });
 
-  test("a multi-token run is advisory: reported, never silently removed", () => {
-    // Creation would admit this label (the multi-token policy split), yet
-    // the store-wide pass still surfaces it - advisory, dry-run first.
+  test("marks a SINGLE-token shout advisory - a brand or acronym (NASA)", () => {
+    writeEntityNode("projects", "ent-projects-nasa", "NASA");
+    seedLexicon("Atlas kept the weekly meeting notes about the setup.");
+    const malformed = findMalformedEntityLabels(vault);
+    expect(malformed.map((m) => m.id)).toEqual(["ent-projects-nasa"]);
+    expect(malformed[0]!.reason).toBe("shouted-heading");
+    expect(malformed[0]!.advisory).toBe(true);
+  });
+
+  test("a common-word run is advisory: doctor-visible, outside the prune set", () => {
+    // Creation would admit this label (the multi-token policy split), and
+    // the heal side must agree: the finding is reported but stays OUT of
+    // the prune candidate set unless the operator opts in.
     writeEntityNode("people", "ent-people-title", "The Notes");
     seedLexicon("the runner kept notes about the setup. The runner ran.");
     const malformed = findMalformedEntityLabels(vault);
     expect(malformed.map((m) => m.id)).toEqual(["ent-people-title"]);
     expect(malformed[0]!.reason).toBe("function-word-run");
 
-    // The dry-run prune lists it and mutates nothing; confirm removes it
-    // behind the snapshot gate.
     const dry = pruneEntityLabels(vault, { confirm: false, now: NOW });
     expect(dry.confirmed).toBe(false);
-    expect(dry.candidates.map((c) => c.id)).toEqual(["ent-people-title"]);
+    expect(dry.candidates).toEqual([]);
+    expect(dry.advisorySkipped).toBe(1);
     expect(dry.snapshotRunId).toBeNull();
     expect(dry.removed).toEqual([]);
+
+    // The opt-in puts the advisory class back into the candidate set.
+    const optedIn = pruneEntityLabels(vault, {
+      confirm: false,
+      includeAdvisory: true,
+      now: NOW,
+    });
+    expect(optedIn.candidates.map((c) => c.id)).toEqual(["ent-people-title"]);
+    expect(optedIn.advisorySkipped).toBe(0);
   });
 
   test("without a lexicon artifact the pass is unchanged (fail-open)", () => {
@@ -188,24 +216,65 @@ describe("findMalformedEntityLabels - lexicon-aware re-admission (recall-quality
     expect(findMalformedEntityLabels(vault)).toEqual([]);
   });
 
-  test("the prune removes a lexicon-reason node behind a snapshot, doctor-clean", () => {
-    writeEntityNode("people", "ent-people-junk", "The Of And");
+  test("prune --confirm keeps NASA-style and Meeting-style entities; --include-advisory removes them", () => {
+    const nasa = writeEntityNode("projects", "ent-projects-nasa", "NASA");
+    const notes = writeEntityNode("people", "ent-people-notes", "Notes");
+    const junk = writeEntityNode("people", "ent-people-junk", "***");
+    // An edge pointing at an advisory survivor must survive the default run.
     writeEntityNode("people", "ent-people-ada", "Ada", {
-      related: ["[[ent-people-junk]]"],
+      related: ["[[ent-people-notes]]"],
     });
-    seedLexicon("the of and the Of and.");
+    seedLexicon("Atlas kept the weekly meeting notes about the setup.");
+
+    // The destructive default clears only structural junk: the acronym and
+    // the common-word topic stay in place, still reported by the doctor,
+    // and no edge pointing at them is stripped.
+    const structural = pruneEntityLabels(vault, { confirm: true, now: NOW });
+    expect(structural.confirmed).toBe(true);
+    expect(structural.removed).toEqual([junk]);
+    expect(structural.advisorySkipped).toBe(2);
+    expect(structural.edgesStripped).toBe(0);
+    expect(existsSync(nasa)).toBe(true);
+    expect(existsSync(notes)).toBe(true);
+
+    const doctor = runDoctor(vault);
+    const advisoryLints = doctor.warnings.filter((i) => i.code === "entity-label-malformed");
+    expect(advisoryLints).toHaveLength(2);
+    const doctorCodes = [...doctor.warnings, ...doctor.errors].map((i) => i.code);
+    expect(doctorCodes).not.toContain("broken-entity-relation");
+
+    // Opting in removes the advisory classes too, behind the same snapshot
+    // gate, and strips the inbound edge so the store ends up doctor-clean.
+    const all = pruneEntityLabels(vault, { confirm: true, includeAdvisory: true, now: NOW });
+    expect(all.confirmed).toBe(true);
+    expect([...all.removed].sort()).toEqual([nasa, notes].sort());
+    expect(all.advisorySkipped).toBe(0);
+    expect(all.edgesStripped).toBe(1);
+    expect(all.snapshotRunId).toMatch(/^entity-prune-/);
+    expect(existsSync(nasa)).toBe(false);
+    expect(existsSync(notes)).toBe(false);
+
+    const clean = runDoctor(vault);
+    const codes = [...clean.warnings, ...clean.errors].map((i) => i.code);
+    expect(codes).not.toContain("entity-label-malformed");
+    expect(codes).not.toContain("broken-entity-relation");
+  });
+
+  test("a MULTI-token shout is structural: the default confirm still prunes it", () => {
+    const junk = writeEntityNode("projects", "ent-projects-junk", "MEETING NOTES");
+    writeEntityNode("people", "ent-people-ada", "Ada", {
+      related: ["[[ent-projects-junk]]"],
+    });
+    seedLexicon("Atlas kept the weekly meeting notes about the setup.");
 
     const result = pruneEntityLabels(vault, { confirm: true, now: NOW });
     expect(result.confirmed).toBe(true);
-    expect(result.candidates[0]!.reason).toBe("function-word-run");
-    expect(result.removed).toHaveLength(1);
+    expect(result.candidates[0]!.reason).toBe("shouted-heading");
+    expect(result.candidates[0]!.advisory).toBe(false);
+    expect(result.advisorySkipped).toBe(0);
+    expect(result.removed).toEqual([junk]);
     expect(result.edgesStripped).toBe(1);
     expect(result.snapshotRunId).toMatch(/^entity-prune-/);
-
-    const doctor = runDoctor(vault);
-    const codes = [...doctor.warnings, ...doctor.errors].map((i) => i.code);
-    expect(codes).not.toContain("entity-label-malformed");
-    expect(codes).not.toContain("broken-entity-relation");
   });
 });
 
