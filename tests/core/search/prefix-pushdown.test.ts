@@ -66,12 +66,12 @@ beforeEach(() => {
   let chunkId = 0;
   for (const doc of DOCS) {
     const docId = db
-      .query<{ id: number }, [string]>(
+      .query<{ id: number }, [string, string, number, number, string, string, string]>(
         "INSERT INTO documents(path, content_hash, mtime, size, created_at, updated_at, indexed_at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
       )
       .get(doc.path, `hash-${doc.path}`, 0, 0, NOW, NOW, NOW)!.id;
     const row = db
-      .query<{ id: number }, [number, string, string, string]>(
+      .query<{ id: number }, [number, string, string, string, string, string]>(
         "INSERT INTO chunks(document_id, chunk_index, content, fts_content, content_hash, start_line, end_line, token_count, created_at, updated_at) " +
           "VALUES (?, 0, ?, ?, ?, 1, 1, 3, ?, ?) RETURNING id",
       )

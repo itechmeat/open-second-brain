@@ -108,10 +108,10 @@ export function resolvePropertyPushdown(
 ): PropertyFilterSplit {
   if (!properties || properties.size === 0) return { pushdown: null, fallback: null };
   const acc: {
-    pageTypes?: string[];
+    pageTypes?: ReadonlyArray<string>;
     pinned?: boolean;
-    tags?: string[];
-    visibilityTokens?: string[];
+    tags?: ReadonlyArray<string>;
+    visibilityTokens?: ReadonlyArray<string>;
   } = {};
   const fallback = new Map<string, string[]>();
   for (const [key, values] of properties) {

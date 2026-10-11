@@ -238,7 +238,7 @@ describe("kind pushdown on the keyword lane", () => {
     try {
       applyMigrations(db);
       const docId = db
-        .query<{ id: number }, [string]>(
+        .query<{ id: number }, []>(
           "INSERT INTO documents(path, content_hash, mtime, size, created_at, updated_at, indexed_at) " +
             "VALUES ('notes/a.md', 'h', 0, 0, 'n', 'n', 'n') RETURNING id",
         )
@@ -456,7 +456,7 @@ describe("the MCP and CLI surfaces", () => {
       };
     };
     const tool = findTool(buildToolTable("full") as unknown[], "brain_search");
-    const kind = tool.inputSchema.properties["kind"];
+    const kind = tool.inputSchema.properties["kind"]!;
     expect(kind).toBeDefined();
     expect(kind.enum).toEqual(["page", "section"]);
   });

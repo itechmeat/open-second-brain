@@ -23,7 +23,7 @@ import { RETRIEVAL_DEGRADATION, noteDegradation } from "./retrieval-trail.ts";
 import { Store } from "./store.ts";
 import { EMBEDDING_QUOTA_MESSAGE, SearchError } from "./types.ts";
 import type { TransportReach } from "../graph/transport-reach.ts";
-import type { PropertyPushdown } from "../property-pushdown.ts";
+import type { PropertyPushdown } from "./property-pushdown.ts";
 import type { RetrievalDegradationSink } from "./retrieval-trail.ts";
 import type { ResolvedSearchConfig, SearchOptions } from "./types.ts";
 

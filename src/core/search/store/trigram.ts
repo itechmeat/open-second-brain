@@ -4,7 +4,7 @@
  * matches the word tokenizer misses.
  */
 
-import { Database } from "bun:sqlite";
+import { Database, type SQLQueryBindings } from "bun:sqlite";
 
 import { RETRIEVAL_DEGRADATION } from "../retrieval-trail.ts";
 import type { RetrievalDegradation } from "../retrieval-trail.ts";
@@ -136,7 +136,7 @@ export function trigramCandidates(
     ...(pushFrag !== null ? [pushFrag.sql] : []),
     ...(kind !== null ? ["c.chunk_kind = ?"] : []),
   ];
-  const extraBindings: unknown[] = [
+  const extraBindings: SQLQueryBindings[] = [
     ...(pushFrag !== null ? pushFrag.bindings : []),
     ...(kind !== null ? [kind] : []),
   ];
@@ -151,7 +151,7 @@ export function trigramCandidates(
         ...extraFilters,
       ];
       const rows = db
-        .query<{ chunk_id: number; document_id: number; bm25: number }, unknown[]>(
+        .query<{ chunk_id: number; document_id: number; bm25: number }, SQLQueryBindings[]>(
           "SELECT c.id AS chunk_id, c.document_id AS document_id, bm25(chunk_trigram) AS bm25 " +
             "FROM chunk_trigram " +
             "JOIN chunks c ON c.id = chunk_trigram.rowid " +

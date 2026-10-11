@@ -8,7 +8,7 @@
  * document and chunk modules delete through this one.
  */
 
-import { Database } from "bun:sqlite";
+import { Database, type SQLQueryBindings } from "bun:sqlite";
 
 import {
   BLOCKED_TIER_ERROR_CODE,
@@ -615,7 +615,16 @@ export interface SemanticTopKOptions {
   readonly pushdown?: PropertyPushdown | null;
 }
 
-export function semanticTopKSql(opts: SemanticTopKOptions = {}): string {
+/**
+ * The SQL builder reads everything but the overfetch row cap - the KNN
+ * `k = ?` placeholder is positional - so the default-argument form needs
+ * no limit, while the executor keeps it required.
+ */
+export type SemanticTopKSqlOptions = Omit<SemanticTopKOptions, "limit"> & {
+  readonly limit?: number;
+};
+
+export function semanticTopKSql(opts: SemanticTopKSqlOptions = {}): string {
   const prefix = opts.pathPrefix && opts.pathPrefix.length > 0 ? opts.pathPrefix : null;
   const pushFrag = pushdownSqlFragment(opts.pushdown ?? null);
   const kind = opts.kind ?? null;
@@ -660,7 +669,7 @@ export function semanticTopK(
   assertValidVector(queryVector, "semanticTopK");
   const buf = vecToBuffer(queryVector);
   const rows = db
-    .query<{ chunk_id: number; document_id: number; distance: number }, unknown[]>(
+    .query<{ chunk_id: number; document_id: number; distance: number }, SQLQueryBindings[]>(
       semanticTopKSql({ pathPrefix: prefix, kind, pushdown: opts.pushdown ?? null }),
     )
     .all(

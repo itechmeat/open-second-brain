@@ -4,7 +4,7 @@
  * integrity counts and rebuild that repair it.
  */
 
-import { Database } from "bun:sqlite";
+import { Database, type SQLQueryBindings } from "bun:sqlite";
 
 import type { PropertyPushdown } from "../property-pushdown.ts";
 import type { SearchKind } from "../property-pushdown.ts";
@@ -111,7 +111,16 @@ export interface KeywordTopKOptions {
   readonly pushdown?: PropertyPushdown | null;
 }
 
-export function keywordTopKSql(opts: KeywordTopKOptions = {}): string {
+/**
+ * The SQL builder reads everything but the row cap - the `LIMIT ?`
+ * placeholder is positional - so the default-argument form needs no
+ * limit, while the executor keeps it required.
+ */
+export type KeywordTopKSqlOptions = Omit<KeywordTopKOptions, "limit"> & {
+  readonly limit?: number;
+};
+
+export function keywordTopKSql(opts: KeywordTopKSqlOptions = {}): string {
   const prefix = opts.pathPrefix && opts.pathPrefix.length > 0 ? opts.pathPrefix : null;
   const pushFrag = pushdownSqlFragment(opts.pushdown ?? null);
   const kind = opts.kind ?? null;
@@ -149,7 +158,7 @@ export function keywordTopK(
   const kind = opts.kind ?? null;
 
   const rows = db
-    .query<{ chunk_id: number; document_id: number; bm25: number }, unknown[]>(
+    .query<{ chunk_id: number; document_id: number; bm25: number }, SQLQueryBindings[]>(
       keywordTopKSql({ pathPrefix: prefix, kind, pushdown: opts.pushdown ?? null }),
     )
     .all(
