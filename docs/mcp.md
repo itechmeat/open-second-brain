@@ -394,7 +394,7 @@ flags for a narrower per-process full server.
 | `brain_agenda`              | Stateless agenda synthesis over caller-provided calendar events (the host fetches them; the Brain never calls a calendar API): overlap conflicts, free focus blocks (optionally clipped to a workday window), and events organised outside the operator's own email domain(s). No vault writes. | `events`                                       |
 | `brain_context_presets`     | Show, suggest, or diff read-only context budget presets (`tight-context`, `long-context`) without writing config.                              | `operation`                                    |
 | `brain_pre_compact_extract` | Extract decision/commitment/outcome/rule/open-question records from bounded text into continuity storage.                                      | `session_id`, `turn_start`, `turn_end`, `text` |
-| `brain_hygiene`             | Memory hygiene: `scan` findings (conflicts, dedup, freshness, usefulness; since v1.64.0 `slug-collisions` is default-on — same-stem allocation residue such as `topic.md` beside `topic-2.md` — and `tags` is opt-in, auditing inline body tags only, never frontmatter tags arrays; since v1.67.0 `capture-scope` is default-on and warns when active knowledge rests only on `url-only` sources; the default is the sweep of every registered detector except the opt-in ones), `apply` selected ids, `refresh` stale pages. Resolver command comes from `_brain.yaml` only. When `hygiene_digest_enabled` is on in the machine config, the same default-sweep findings are also pushed at turn end as a one-line digest (Stop hook, once per change), so this pull surface doubles as a push channel. With the optional `dedup` decision-model use in enforce, `scan` dedup findings carry an advisory `decision_model` verdict; `apply` never reads it. | `mode`                                         |
+| `brain_hygiene`             | Memory hygiene: `scan` findings (conflicts, dedup, freshness, usefulness; since v1.64.0 `slug-collisions` is default-on — same-stem allocation residue such as `topic.md` beside `topic-2.md` — and `tags` is opt-in, auditing inline body tags only, never frontmatter tags arrays; since v1.67.0 `capture-scope` is default-on and warns when active knowledge rests only on `url-only` sources; the default is the sweep of every registered detector except the opt-in ones), `apply` selected ids, `refresh` stale pages; since v1.81.0 `archive_get` resolves an ingest summary's `source_archive_hash` to its archived bytes under `Brain/.archives/` (local reach only, and the `capture-scope` scan also names a cited source whose archive entry is missing or mismatched). Resolver command comes from `_brain.yaml` only. When `hygiene_digest_enabled` is on in the machine config, the same default-sweep findings are also pushed at turn end as a one-line digest (Stop hook, once per change), so this pull surface doubles as a push channel. With the optional `dedup` decision-model use in enforce, `scan` dedup findings carry an advisory `decision_model` verdict; `apply` never reads it. | `mode`                                         |
 | `brain_anticipatory_context` | Turn-specific context bundle kept warm by lifecycle hooks, keyed by the session's lineage root; reports `cache_state` warm / stale / miss.   | `session_id`                                   |
 | `brain_session_grep`        | Search imported session recall raw turns and deterministic summary nodes.                                                                      | `query`                                        |
 | `brain_session_describe`    | Describe raw-turn counts and summary depths for one imported session recall DAG.                                                               | `session_id`                                   |
@@ -523,6 +523,22 @@ walk, windowed by `since`/`until`, with the observation window, a capped
 dead-page list, and the gate caveat (telemetry is opt-in and records only
 surfaced top rows, so the report claims "no recorded retrieval surface",
 never absolute never) in every payload.
+Since v1.81.0 `brain_truth` `state` accepts an optional opaque `sample_id`
+(echoed verbatim on the committed event) and the `events` report hydrates
+the provenance behind it: the named context receipt's items plus the
+context-pack outcome row, resolved at the caller's reach - below local
+reach, receipt items whose injections came from operator rules stay
+hidden, a claim whose outcome never arrived renders "receipt known,
+outcome unknown", and rows without a `sample_id` stay byte-identical to
+before. `brain_ingest_source` in the trusted local lane archives the
+source's bytes content-addressed under `Brain/.archives/` (redacted
+before persist, refused past 1 MiB rather than truncated, never
+TTL-pruned), stamps `source_archive_hash` and `source_archive_bytes` on
+the summary page and returns `source_archive_hash`; delete-by-source
+cleanup removes the source's orphaned archive entries best-effort, and
+`brain_session_summary` `get` and `list` omit the `session_id` key of a
+digest that has no session instead of answering `""`, matching the
+no-session read rule every continuity reader applies.
 `brain_context_presets` supports `operation: "show"|"suggest"|"diff"`; and
 `brain_generation_reports` supports `action: "record"|"list"|"summary"` -
 `record` is gated (default off) by a per-call `enable` flag or the
