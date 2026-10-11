@@ -302,6 +302,26 @@ function orphanedArchiveEntries(
   return out;
 }
 
+/**
+ * Best-effort removal of one orphaned entry: false both when there was
+ * nothing to remove and when the removal itself failed. The confirmed
+ * deletion has already completed by the time this runs, so a cleanup that
+ * throws - a permission denial, an entry replaced by something rmSync
+ * cannot remove - must not fail the tool after the fact, and its error
+ * message carries a host path this surface never reports. What is
+ * tolerated here is exactly the transient half: the page deletion is done
+ * and correct, and the leftover entry is durable evidence, not a lost
+ * deletion - the doctor's archive section names it in its `uncited`
+ * count, and a retry of the cleanup is harmless.
+ */
+function discardOrphanedArchiveEntry(vault: string, hash: string): boolean {
+  try {
+    return discardSourceArchive(vault, hash);
+  } catch {
+    return false;
+  }
+}
+
 function serializePlan(
   plan: SourceCleanupPlan,
   archiveEntries: ReadonlyArray<ArchiveCleanupEntry>,
@@ -425,7 +445,7 @@ async function toolBrainDeleteBySource(
     if (confirm) {
       const plan = deleteBySource(ctx.vault, sourceFile, { confirm: true, ...baseOpts });
       archiveEntries = orphanedArchiveEntries(ctx.vault, stamped, new Set(plan.deleted)).filter(
-        (entry) => discardSourceArchive(ctx.vault, entry.hash),
+        (entry) => discardOrphanedArchiveEntry(ctx.vault, entry.hash),
       );
       return serializePlan(plan, archiveEntries);
     }

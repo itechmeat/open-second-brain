@@ -424,6 +424,27 @@ describe("brain_delete_by_source - archive entry cleanup", () => {
     expect(existsSync(join(vault, "Brain", ".archives", file))).toBe(false);
     expect(readdirSync(join(vault, "Brain", ".archives"))).toEqual([]);
   });
+
+  test("an undeletable entry is omitted from archive_entries and the confirmed deletion still succeeds", async () => {
+    // Down to one citing page, so the confirmed deletion below orphans the
+    // shared entry - then the entry itself is replaced by a non-empty
+    // DIRECTORY of the same name: a deterministic, root-proof stand-in for
+    // an undeletable entry (rmSync raises ERR_FS_EISDIR on it).
+    await cleanup(TWIN_A, true);
+    const file = readdirSync(join(vault, "Brain", ".archives"))[0]!;
+    const entryPath = join(vault, "Brain", ".archives", file);
+    rmSync(entryPath);
+    mkdirSync(join(entryPath, "junk"), { recursive: true });
+
+    const res = await cleanup(TWIN_B, true);
+    // The tool succeeds: the page deletion completed, the failed cleanup
+    // neither fails it nor leaks the host path, and the entry is simply
+    // omitted from the reported kinds (the doctor's uncited count names
+    // the leftover).
+    expect(res.archive_entries).toBeUndefined();
+    expect(res.deleted.length).toBeGreaterThan(0);
+    expect(existsSync(entryPath)).toBe(true);
+  });
 });
 
 /**
