@@ -9,6 +9,7 @@ import {
   summarizeRecallTelemetry,
   type RecallTelemetryFilter,
 } from "../../../core/brain/recall-telemetry.ts";
+import { computeDeadWeight } from "../../../core/brain/dead-weight.ts";
 import { listGateTelemetry, summarizeGateTelemetry } from "../../../core/brain/gate-telemetry.ts";
 import { computeMemoryCostMeter } from "../../../core/brain/memory-cost-meter.ts";
 import { CliError, brainVerbContext, parse } from "../helpers.ts";
@@ -23,8 +24,12 @@ export async function cmdBrainRecallTelemetry(argv: string[]): Promise<number> {
   if (subcommand === "gate-summary") return summarizeGate(rest);
   // Write-vs-read cost meter (memory cost meter).
   if (subcommand === "cost") return costMeter(rest);
+  // Dead-weight utilization fold (recall-quality, t_1ee67e5b). Every
+  // aggregate on this tool ships over MCP and CLI alike; this keeps the
+  // parity (the MCP op is `dead_weight`).
+  if (subcommand === "dead-weight") return deadWeight(rest);
   throw new CliError(
-    "brain recall-telemetry: expected list, summary, gate-list, gate-summary, or cost",
+    "brain recall-telemetry: expected list, summary, gate-list, gate-summary, cost, or dead-weight",
   );
 }
 
@@ -185,6 +190,46 @@ function costMeter(argv: string[]): number {
     `cost (write=${meter.weights.write}, read=${meter.weights.read}): ` +
       `write=${meter.cost.write} read=${meter.cost.read} total=${meter.cost.total}\n`,
   );
+  return 0;
+}
+
+/**
+ * Dead weight (t_1ee67e5b): pages currently in scope that no recorded
+ * recall ever surfaced. The CLI is the owner reach, so the fold is
+ * unfiltered by construction - no visibility predicate is passed.
+ */
+function deadWeight(argv: string[]): number {
+  const { flags } = parseTelemetryFlags(argv);
+  // Record-only filters have no complement meaning; reject rather than
+  // silently ignore, mirroring the cost verb above.
+  for (const name of ["mode", "status", "channel", "host", "limit"]) {
+    if (flags[name] !== undefined) {
+      throw new CliError(
+        `brain recall-telemetry dead-weight: --${name} is not supported for dead weight`,
+      );
+    }
+  }
+  const vault = brainVerbContext(flags).vault;
+  const since = trimOrUndefined(flags["since"]);
+  const until = trimOrUndefined(flags["until"]);
+  const report = computeDeadWeight(vault, {
+    ...(since !== undefined ? { since } : {}),
+    ...(until !== undefined ? { until } : {}),
+  });
+
+  if (flags["json"]) {
+    process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+    return 0;
+  }
+  process.stdout.write(`pages: ${report.pages_total} total, ${report.pages_retrieved} retrieved\n`);
+  process.stdout.write(
+    `window: ${report.window.since ?? "none"} .. ${report.window.until ?? "none"}\n`,
+  );
+  process.stdout.write(
+    `dead: ${report.dead_count} page(s) never surfaced in recorded recall history\n`,
+  );
+  for (const row of report.dead) process.stdout.write(`  ${row.path}\n`);
+  process.stdout.write(`caveat: ${report.gate_caveat}\n`);
   return 0;
 }
 

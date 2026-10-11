@@ -14,6 +14,9 @@ import { loadTunedParameters, resetTuning } from "../../core/search/tuning-store
 import { listGateTelemetry, summarizeGateTelemetry } from "../../core/brain/gate-telemetry.ts";
 import { computeMemoryCostMeter } from "../../core/brain/memory-cost-meter.ts";
 import { observedReuseRates } from "../../core/brain/observed-use.ts";
+import { computeDeadWeight } from "../../core/brain/dead-weight.ts";
+import { everyArtifactRefView } from "../../core/brain/artifact-ref-view.ts";
+import { gatedOwnerScopeView } from "../../core/brain/owner-scope-view.ts";
 import {
   isRecallChannel,
   isRecallTelemetryMode,
@@ -82,6 +85,7 @@ import {
 import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { contextReach } from "../tool-contract.ts";
+import { requestRefView } from "./reach-events.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { vaultPathField } from "../vault-path-field.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
@@ -294,8 +298,41 @@ async function toolBrainRecallTelemetry(
     });
     return { vault_path: vaultPathField(ctx), ...meter };
   }
+  // Dead weight (recall-quality, t_1ee67e5b): the complement fold over
+  // the vault's live in-scope pages and every path recorded recall ever
+  // surfaced (telemetry top artifacts + observed-use source refs). The
+  // seventh operation on this tool - an operation, never a new tool, so
+  // the tool-count pin does not move.
+  if (operation === "dead_weight") {
+    // Record-only filters (mode/status/channel/host/limit) have no
+    // meaning for the complement; reject them rather than silently
+    // ignore, mirroring the cost op and the CLI's fail-closed verb.
+    for (const name of ["mode", "status", "channel", "host", "limit"] as const) {
+      if (args[name] !== undefined) {
+        throw new MCPError(
+          INVALID_PARAMS,
+          `brain_recall_telemetry: ${name} is not supported for dead_weight`,
+        );
+      }
+    }
+    // Hidden rows are dropped BEFORE total: the request's reach/ownership
+    // boundary is applied to the FULL SET, so `pages_total`, `dead` and
+    // every count answer only what this caller may see - a total that
+    // still included the hidden rows would leak their number (the
+    // analytics rule). A local caller filters nothing, by construction.
+    const refs = everyArtifactRefView(
+      requestRefView(ctx),
+      gatedOwnerScopeView(ctx.vault, ctx.agentName),
+    );
+    const report = computeDeadWeight(ctx.vault, {
+      ...(filter.since !== undefined ? { since: filter.since } : {}),
+      ...(filter.until !== undefined ? { until: filter.until } : {}),
+      ...(refs.filtersNothing ? {} : { includePath: (rel: string) => refs.visible(rel) }),
+    });
+    return { vault_path: vaultPathField(ctx), ...report };
+  }
   throw unknownOperationError(
-    "brain_recall_telemetry: operation must be list, summary, gate_list, gate_summary, observed_reuse, or cost",
+    "brain_recall_telemetry: operation must be list, summary, gate_list, gate_summary, observed_reuse, cost, or dead_weight",
   );
 }
 
@@ -1108,15 +1145,23 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_recall_telemetry",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
-      "List recall telemetry records or summarize recall coverage and gaps; cost folds write volume (feedback/apply-evidence/note/host writes) against reads into a write-vs-read ratio, a write-heavy flag, and a rough cost signal per period. Emitted only by opt-in callers. Read-only.",
+      "List recall telemetry records or summarize recall coverage and gaps; cost folds write volume (feedback/apply-evidence/note/host writes) against reads into a write-vs-read ratio, a write-heavy flag, and a rough cost signal per period; dead_weight folds the vault's in-scope pages against every path recorded recall ever surfaced into the never-surfaced complement (window and telemetry opt-in caveat stated, hidden pages dropped before totals). Emitted only by opt-in callers. Read-only.",
     inputSchema: {
       type: "object",
       properties: {
         operation: {
           type: "string",
-          enum: ["list", "summary", "gate_list", "gate_summary", "observed_reuse", "cost"],
+          enum: [
+            "list",
+            "summary",
+            "gate_list",
+            "gate_summary",
+            "observed_reuse",
+            "cost",
+            "dead_weight",
+          ],
           description:
-            "list/summary for recall telemetry; gate_list/gate_summary for gate decisions; observed_reuse for the observed-use ranking signal; cost for the cost meter.",
+            "list/summary for recall telemetry; gate_list/gate_summary for gate decisions; observed_reuse for the observed-use ranking signal; cost for the cost meter; dead_weight for the never-surfaced complement.",
         },
         mode: {
           type: "string",

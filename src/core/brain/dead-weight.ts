@@ -56,6 +56,16 @@ export interface DeadWeightOptions {
   readonly until?: string;
   /** Cap on the `dead` path preview (default {@link DEAD_WEIGHT_DEFAULT_LIMIT}). */
   readonly deadLimit?: number;
+  /**
+   * The caller's visibility boundary over the FULL SET, bound by the
+   * surface above this fold (the tool layer's requestRefView /
+   * gatedOwnerScopeView composition). Applied to the walked population
+   * BEFORE any count, so a hidden page is dropped from `pages_total`,
+   * `dead` and every count in the same stroke - a total that still
+   * included the hidden rows would leak their number, the analytics
+   * rule. Absent (a local caller, the owner) keeps every walked page.
+   */
+  readonly includePath?: (rel: string) => boolean;
 }
 
 export interface DeadWeightReport {
@@ -125,9 +135,11 @@ function foldRecords(
 export function computeDeadWeight(vault: string, opts: DeadWeightOptions = {}): DeadWeightReport {
   // The walk counts every extension; recall surfaces pages, so the
   // denominator is the included `.md` population.
-  const full = new Set(
-    walkVaultScopePaths(vault, resolveVaultScope(vault)).filter((p) => p.endsWith(".md")),
+  const walked = walkVaultScopePaths(vault, resolveVaultScope(vault)).filter((p) =>
+    p.endsWith(".md"),
   );
+  const include = opts.includePath;
+  const full = new Set(include === undefined ? walked : walked.filter(include));
   const retrieved = new Set<string>();
   const window: { since: string | null; until: string | null } = { since: null, until: null };
   foldRecords(vault, "recall_telemetry", opts, retrieved, window);

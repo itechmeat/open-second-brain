@@ -1,9 +1,14 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { emitObservedUse } from "../../src/core/brain/observed-use.ts";
 import { emitRecallTelemetry, RECALL_CHANNEL } from "../../src/core/brain/recall-telemetry.ts";
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
+import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
+import { INVALID_PARAMS } from "../../src/mcp/protocol.ts";
+import { buildToolTable } from "../../src/mcp/tools.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
 let vault: string;
@@ -159,4 +164,235 @@ test("brain recall-telemetry accepts every recorded mode, `query` included", asy
   ]);
   expect(list.returncode).toBe(0);
   expect(JSON.parse(list.stdout).total).toBe(1);
+});
+
+// ----- dead_weight (recall-quality, t_1ee67e5b / task D4) --------------------
+
+/** Two pages, one recorded as surfaced once, one observed-used once. */
+function seedDeadWeightVault(): void {
+  writeFileSync(join(vault, "a.md"), "# A\n\nalpha beta gamma.\n");
+  writeFileSync(join(vault, "b.md"), "# B\n\nalpha beta delta.\n");
+  writeFileSync(join(vault, "c.md"), "# C\n\nalpha epsilon zeta.\n");
+  emitRecallTelemetry(vault, {
+    createdAt: "2026-05-20T16:00:00.000Z",
+    host: "dw-test",
+    channel: RECALL_CHANNEL.cli,
+    mode: "search",
+    status: "ok",
+    durationMs: 5,
+    resultCount: 1,
+    topArtifacts: [{ id: "doc-a:0", path: "a.md" }],
+  });
+  emitObservedUse(vault, {
+    createdAt: "2026-05-21T09:00:00.000Z",
+    host: "dw-test",
+    entries: [{ id: "doc-b:0", path: "b.md", verdict: "USED" }],
+  });
+}
+
+async function callTelemetryTool(
+  server: MCPServer,
+  args: Record<string, unknown>,
+): Promise<{ result?: unknown; error?: { code: number; message: string } }> {
+  const response = (await server.handleRequest({
+    jsonrpc: JSONRPC_VERSION,
+    id: 9,
+    method: "tools/call",
+    params: { name: "brain_recall_telemetry", arguments: args },
+  })) as { result?: unknown; error?: { code: number; message: string } };
+  return response;
+}
+
+async function callTelemetryResult(
+  server: MCPServer,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const response = (await callTelemetryTool(server, args)) as {
+    result?: { content: ReadonlyArray<{ type: string; text: string }> };
+  };
+  return JSON.parse(response.result!.content[0]!.text) as Record<string, unknown>;
+}
+
+async function initializedServer(reach: TRANSPORT_REACH | undefined): Promise<MCPServer> {
+  const configPath = join(vault, "config.yaml");
+  writeFileSync(configPath, `vault: ${vault}\n`);
+  // `reach` is a runtime option (the transport's own fact), not a plain
+  // server option - it rides the second constructor argument.
+  const server = new MCPServer({ vault, configPath }, reach !== undefined ? { reach } : {});
+  await server.handleRequest({
+    jsonrpc: JSONRPC_VERSION,
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: PROTOCOL_VERSION,
+      capabilities: {},
+      clientInfo: { name: "dead-weight-test", version: "0" },
+    },
+  });
+  await server.handleRequest({ jsonrpc: JSONRPC_VERSION, method: "notifications/initialized" });
+  return server;
+}
+
+describe("brain recall-telemetry dead-weight CLI", () => {
+  test("reports the complement envelope and honors --since/--until", async () => {
+    seedDeadWeightVault();
+    const res = await runCli([
+      "brain",
+      "recall-telemetry",
+      "dead-weight",
+      "--vault",
+      vault,
+      "--json",
+    ]);
+    expect(res.returncode).toBe(0);
+    const report = JSON.parse(res.stdout);
+    expect(report).toMatchObject({
+      pages_total: 3,
+      pages_retrieved: 2,
+      dead_count: 1,
+      dead: [{ path: "c.md" }],
+      window: { since: "2026-05-20T16:00:00.000Z", until: "2026-05-21T09:00:00.000Z" },
+    });
+    expect(String(report["gate_caveat"]).length).toBeGreaterThan(0);
+
+    const bounded = await runCli([
+      "brain",
+      "recall-telemetry",
+      "dead-weight",
+      "--vault",
+      vault,
+      "--since",
+      "2026-05-21T00:00:00.000Z",
+      "--json",
+    ]);
+    expect(JSON.parse(bounded.stdout)).toMatchObject({
+      pages_total: 3,
+      pages_retrieved: 1,
+      window: { since: "2026-05-21T09:00:00.000Z" },
+    });
+
+    const text = await runCli(["brain", "recall-telemetry", "dead-weight", "--vault", vault]);
+    expect(text.returncode).toBe(0);
+    expect(text.stdout).toContain("pages: 3 total");
+    expect(text.stdout).toContain("c.md");
+  });
+
+  test("dead-weight rejects record-only filters like cost does", async () => {
+    for (const flag of ["--mode", "--status", "--channel", "--host", "--limit"]) {
+      const res = await runCli([
+        "brain",
+        "recall-telemetry",
+        "dead-weight",
+        "--vault",
+        vault,
+        flag,
+        "search",
+      ]);
+      expect(res.returncode).not.toBe(0);
+      expect(res.stderr).toContain(flag);
+    }
+  });
+});
+
+describe("brain_recall_telemetry dead_weight op", () => {
+  test("the operation union grows to seven, in the schema enum and the refusal", async () => {
+    const tool = buildToolTable("full").find((t) => t.name === "brain_recall_telemetry");
+    expect(tool).toBeDefined();
+    const opEnum = (
+      (tool!.inputSchema as { properties: { operation: { enum: string[] } } }).properties
+        .operation as { enum: string[] }
+    ).enum;
+    expect(opEnum).toEqual([
+      "list",
+      "summary",
+      "gate_list",
+      "gate_summary",
+      "observed_reuse",
+      "cost",
+      "dead_weight",
+    ]);
+
+    const server = await initializedServer(TRANSPORT_REACH.local);
+    const response = await callTelemetryTool(server, { operation: "nope" });
+    expect(response.error?.code).toBe(INVALID_PARAMS);
+    expect(response.error?.message).toContain("dead_weight");
+  });
+
+  test("follows the observed_reuse envelope with since/until honored at local reach", async () => {
+    seedDeadWeightVault();
+    const server = await initializedServer(TRANSPORT_REACH.local);
+    const report = await callTelemetryResult(server, { operation: "dead_weight" });
+    // The vault_path field renders the opaque vault id, not the raw path.
+    expect(String(report["vault_path"])).toStartWith("vault://");
+    expect(report).toMatchObject({
+      pages_total: 3,
+      pages_retrieved: 2,
+      dead_count: 1,
+      dead: [{ path: "c.md" }],
+      window: { since: "2026-05-20T16:00:00.000Z", until: "2026-05-21T09:00:00.000Z" },
+    });
+    expect(String(report["gate_caveat"]).length).toBeGreaterThan(0);
+
+    const bounded = await callTelemetryResult(server, {
+      operation: "dead_weight",
+      since: "2026-05-21T00:00:00.000Z",
+      until: "2026-05-22T00:00:00.000Z",
+    });
+    expect(bounded).toMatchObject({
+      pages_total: 3,
+      pages_retrieved: 1,
+      window: { since: "2026-05-21T09:00:00.000Z", until: "2026-05-21T09:00:00.000Z" },
+    });
+  });
+
+  test("record-only filters are refused, mirroring the cost op", async () => {
+    const server = await initializedServer(TRANSPORT_REACH.local);
+    const response = await callTelemetryTool(server, {
+      operation: "dead_weight",
+      mode: "search",
+    });
+    expect(response.error?.code).toBe(INVALID_PARAMS);
+    expect(response.error?.message).toContain("mode");
+  });
+
+  test("remote reach drops hidden pages BEFORE total", async () => {
+    writeFileSync(
+      join(vault, "secret.md"),
+      "---\nvisibility: private\n---\n\n# Secret\n\nhidden from remote callers.\n",
+    );
+    writeFileSync(join(vault, "open.md"), "# Open\n\nvisible everywhere.\n");
+    emitRecallTelemetry(vault, {
+      createdAt: "2026-05-20T16:00:00.000Z",
+      host: "dw-test",
+      channel: RECALL_CHANNEL.cli,
+      mode: "search",
+      status: "ok",
+      durationMs: 5,
+      resultCount: 1,
+      topArtifacts: [{ id: "doc-open:0", path: "open.md" }],
+    });
+
+    const local = await callTelemetryResult(await initializedServer(TRANSPORT_REACH.local), {
+      operation: "dead_weight",
+    });
+    expect(local).toMatchObject({
+      pages_total: 2,
+      pages_retrieved: 1,
+      dead_count: 1,
+      dead: [{ path: "secret.md" }],
+    });
+
+    // No transport reach minted resolves to the narrowest: the private
+    // page is dropped before any count, so nothing - total, dead list,
+    // or their sizes - discloses that it exists.
+    const remote = await callTelemetryResult(await initializedServer(undefined), {
+      operation: "dead_weight",
+    });
+    expect(remote).toMatchObject({
+      pages_total: 1,
+      pages_retrieved: 1,
+      dead_count: 0,
+      dead: [],
+    });
+  });
 });
