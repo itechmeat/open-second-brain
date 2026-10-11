@@ -45,6 +45,8 @@ import { InvalidEntityLabelError } from "../../../core/brain/entities/canonical.
 import { isoSecond } from "../../../core/brain/time.ts";
 import { parseFrontmatter } from "../../../core/vault.ts";
 import { attachProgress, reportProgressRefusal } from "../../progress-rail.ts";
+import { emitNextStep, type AdvisoryStream } from "../../advisory-rail.ts";
+import { nextCommandField } from "../../../core/brain/next-step.ts";
 import { brainVerbContext, fail, ok, okJson, parse, resolveBrainAgent } from "../helpers.ts";
 
 const USAGE =
@@ -74,6 +76,10 @@ export async function cmdBrainHallways(argv: string[]): Promise<number> {
   }
 
   const { config, vault } = brainVerbContext(flags);
+
+  // The advisory stream, for the one forward pointer this verb can emit
+  // (the absent-artifact case below): the rail owns what reaches stdout.
+  const stream: AdvisoryStream = { command: "brain", argv: ["hallways"], jsonRequested: asJson };
 
   // `promote` names a mined family: the ledger is family-scoped, so a
   // family that never mines is a typo, not a refusal.
@@ -105,8 +111,11 @@ export async function cmdBrainHallways(argv: string[]): Promise<number> {
     const path = join(vault, HALLWAYS_PROPOSALS_REL);
     if (!existsSync(path)) {
       if (asJson) {
-        okJson({ exists: false, proposals: 0 });
-      } else ok("no proposals artifact yet: run `o2b brain hallways mine` first");
+        okJson({ exists: false, proposals: 0, ...nextCommandField("hallways-proposals-absent") });
+      } else ok("no proposals artifact yet");
+      // Fail-soft, but not silent about the fix: the pointer rides the
+      // advisory rail like every other one.
+      emitNextStep("hallways-proposals-absent", stream);
       return 0;
     }
     const [meta, body] = parseFrontmatter(path);

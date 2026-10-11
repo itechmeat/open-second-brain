@@ -20,6 +20,7 @@ import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 import { listContinuityRecords } from "../../../../src/core/brain/continuity/store.ts";
 import {
   SESSION_ENTITY_MENTION_KIND,
+  type SessionMiningFamily,
   miningDedupeId,
 } from "../../../../src/core/brain/link-graph/session-mining.ts";
 import { importSession } from "../../../../src/core/brain/sessions/import.ts";
@@ -195,7 +196,9 @@ describe("importSession - session entity mining", () => {
     const folded = new Set(
       records.map((r) =>
         miningDedupeId(
-          String(r.payload["family"]),
+          // The import loop writes only mined families; the record's
+          // payload reads back unknown, so the fold narrows by contract.
+          r.payload["family"] as SessionMiningFamily,
           String(r.payload["key"]),
           String(r.payload["session_ref"]),
         ),

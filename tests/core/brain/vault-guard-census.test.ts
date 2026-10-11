@@ -74,6 +74,11 @@ const UNGUARDED_WITH_REASON: Readonly<Record<string, string>> = Object.freeze({
     "never writes. It names `openSync` only to open a source read-only " +
     "(O_RDONLY | O_NOFOLLOW | O_NONBLOCK) through one descriptor so the read " +
     "is bounded, so there is no write to guard.",
+  "src/core/brain/intake/extract-intake.ts":
+    "its one direct removal is the stage arm's unlink of a canonical entity " +
+    "page the same intake call created through the guarded registry; the " +
+    "staged copy lands through the review queue's guarded writer, and every " +
+    "persistent write the module makes routes through those guarded writers.",
   "src/core/brain/init.ts":
     "bootstrap. This is the path that CREATES the tree and stamps the marker; " +
     "gating it on the marker it is about to write would refuse `o2b brain init` " +

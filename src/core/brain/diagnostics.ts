@@ -688,6 +688,12 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
+        code: "hallways-proposals-absent",
+        issueClass: "no hallways proposals artifact yet",
+        nextCommand: "o2b brain hallways mine",
+        autoRepairable: false,
+      },
+      {
         // provenance-at-the-boundary, unit B. A caller-named write
         // landed outside the `write_binding.path_prefixes` the operator
         // declared. The exit is the per-path policy inspector, which

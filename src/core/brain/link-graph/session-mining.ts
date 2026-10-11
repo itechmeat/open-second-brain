@@ -55,8 +55,13 @@ export const SESSION_MINING_FAMILIES = Object.freeze([
 
 export type SessionMiningFamily = (typeof SESSION_MINING_FAMILIES)[number];
 
-/** The continuity record kind one mined mention is written as. */
-export const SESSION_ENTITY_MENTION_KIND: ContinuityRecordKind = "session_entity_mention";
+/**
+ * The continuity record kind one mined mention is written as. Typed at the
+ * append input's narrowed kind union (every appendable kind), so the kind
+ * the miner writes stays assignable where the record is appended.
+ */
+export const SESSION_ENTITY_MENTION_KIND: Exclude<ContinuityRecordKind, "source_invalidation"> =
+  "session_entity_mention";
 
 /**
  * Upper bound on a mined key. Mirrors ENTITY_LABEL_MAX_LENGTH's

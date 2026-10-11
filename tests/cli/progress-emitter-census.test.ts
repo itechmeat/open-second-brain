@@ -270,6 +270,16 @@ const EMITTERS: Readonly<Record<string, EmitterSite>> = Object.freeze({
     operation: OPERATION.sessions,
     stage: "hash",
   },
+  // The hallways fold (recall-quality B2/B3). Its ledger is filled by a
+  // separate import the fixture runs first, so both of the fold's stages
+  // have denominators on the driven path: one advance per mined mention
+  // row, one per session carrying keys. `mentions` is the discriminator;
+  // `sessions` rides the same stream.
+  "core/brain/link-graph/hallways.ts#computeHallways": {
+    entryPoint: "o2b brain hallways mine --progress",
+    operation: OPERATION.sessions,
+    stage: "mentions",
+  },
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -288,6 +298,8 @@ let archVault: string;
 /** A temp HOME holding a synthetic Claude Code store, plus a vault to sweep into. */
 let sessionHome: string;
 let sessionVault: string;
+/** A vault whose continuity ledger holds mined mentions, for the hallways fold. */
+let hallwaysVault: string;
 
 /**
  * One run of one entry point, with `--progress` on.
@@ -325,6 +337,8 @@ const ENTRY_POINTS: Readonly<Record<string, () => Promise<RunResult>>> = Object.
     runCli(["brain", "import-session", "--status", "--vault", sessionVault, "--progress"], {
       env: { HOME: sessionHome },
     }),
+  "o2b brain hallways mine --progress": () =>
+    runCli(["brain", "hallways", "mine", "--vault", hallwaysVault, "--progress"]),
 });
 
 beforeAll(async () => {
@@ -398,6 +412,44 @@ beforeAll(async () => {
   }
   sessionVault = join(tmp, "session-vault");
   mkdirSync(join(sessionVault, "Brain"), { recursive: true });
+
+  // The hallways fixture: a vault whose continuity ledger holds mined
+  // mentions, so the fold's two stages both advance on the driven path.
+  // One Claude-format transcript with two user turns carrying code-span
+  // symbols, imported through the shipped verb (the same importSession
+  // the path form calls), then read back by the hallways fold.
+  hallwaysVault = join(tmp, "hallways-vault");
+  mkdirSync(join(hallwaysVault, "Brain"), { recursive: true });
+  const hallwaysConfig = join(tmp, "hallways-config.yaml");
+  atomicWriteFileSync(hallwaysConfig, `vault: ${hallwaysVault}\n`);
+  bootstrapBrain(hallwaysVault, { configPath: hallwaysConfig });
+  const hallwaysSessions = join(tmp, "hallways-sessions");
+  mkdirSync(hallwaysSessions, { recursive: true });
+  const hallwaysTurns = [
+    "We tuned `parse_ledger` and then `fold_mentions` for hours.",
+    "The path /srv/data/ingest.log kept rotating under us.",
+  ];
+  const hallwaysLines = hallwaysTurns.map((text, i) =>
+    JSON.stringify({
+      type: "user",
+      parentUuid: null,
+      entrypoint: "cli",
+      sessionId: "s1",
+      uuid: `u-${i}`,
+      timestamp: "2026-09-18T09:00:00.000Z",
+      message: { role: "user", content: [{ type: "text", text }] },
+    }),
+  );
+  const hallwaysTranscript = join(hallwaysSessions, "probe.jsonl");
+  writeFileSync(hallwaysTranscript, hallwaysLines.join("\n") + "\n", "utf8");
+  const imported = await runCli([
+    "brain",
+    "import-session",
+    hallwaysTranscript,
+    "--vault",
+    hallwaysVault,
+  ]);
+  expect(imported.returncode).toBe(0);
 });
 
 afterAll(() => {
