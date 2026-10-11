@@ -498,6 +498,16 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "renames a whole staged bundle DIRECTORY into `applied/` - a directory move has " +
       "no file-writer form - and discards a bundle the operator dropped.",
   },
+  "src/core/brain/intake/extract-intake.ts": {
+    categories: [C.lifecycleMove],
+    calls: ["unlinkSync"],
+    reason:
+      "the stage arm of the intake's disposition contract moves each CREATED entity page " +
+      "into the review queue: `stageForReview` lands the page's exact bytes on the staged " +
+      "entry first and the canonical copy is unlinked second, so a crash between the two " +
+      "leaves both copies and never zero. The page is not rewritten - the queue's apply " +
+      "publishes the staged bytes verbatim - so no content is authored here.",
+  },
   "src/core/brain/intentions.ts": {
     categories: [C.lifecycleMove],
     calls: ["renameSync", "rmSync"],
@@ -1282,8 +1292,14 @@ const DIRECT_ROWS = ROWS.filter((row) => row.directCalls.length > 0);
  * 79 -> 80: the note-lane owner-frontmatter guard (write-side-trust Task 13)
  * gives `src/core/brain/notes/create-note.ts` a direct-fs write site for the
  * decision-ledger warn row.
+ *
+ * 80 -> 81: the intake's stage disposition
+ * (`src/core/brain/intake/extract-intake.ts`) moves each created entity
+ * page into the review queue - stage, then unlink the canonical copy. A
+ * lifecycle move authors no content; the unlink is the site's only
+ * direct call.
  */
-const DIRECT_WRITE_ROWS = 80;
+const DIRECT_WRITE_ROWS = 81;
 
 /**
  * Measured modules reaching a write through a shared helper. An equality.
@@ -1367,8 +1383,15 @@ const DIRECT_WRITE_ROWS = 80;
  * envelope through `atomicWriteText` at 0600 (the unwrap round-trip gained a
  * second-process path), moving it into BOTH classes - the raw-keyfile
  * restore beside it stays direct and keeps its exclusion.
+ *
+ * 115 -> 117, from the recall-quality wave and nothing else: the shared
+ * derived-artifact IO helper (`src/core/brain/derived-artifact.ts`) writes
+ * its schema-stamped artifacts through `atomicWriteFileSync`, and the
+ * hallways pass (`src/core/brain/link-graph/hallways.ts`) writes
+ * `Brain/link-graph/hallways.json` and its dismissal keys through the
+ * same helper class.
  */
-const SHARED_HELPER_ROWS = 115;
+const SHARED_HELPER_ROWS = 117;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1443,8 +1466,10 @@ const STAMPED_PATHS: ReadonlySet<string> = new Set(
  * 76 -> 77: the secrets keyfile envelope swap (custody bytes, not notes).
  * 77 -> 78: the per-agent MCP token store's custody swap (hash-at-rest
  *   state, not notes).
+ * 78 -> 79: the intake's stage-disposition page move (a lifecycle move
+ *   whose only direct call is the unlink; it stamps no channel).
  */
-const UNSTAMPED_DIRECT_ROWS = 79;
+const UNSTAMPED_DIRECT_ROWS = 80;
 
 /**
  * Shared-helper write sites the stamp does not reach, measured the same
@@ -1468,9 +1493,12 @@ const UNSTAMPED_DIRECT_ROWS = 79;
  * the decision ledger appends its month/device JSONL shard through the shared
  * atomic writer (write-side-trust Task 2). 111 -> 112: the envelope swap
  * writes its custody bytes through the shared atomic writer (custody state,
- * not notes).
+ * not notes). 112 -> 114: the recall-quality wave's derived artifacts - the
+ * shared derived-artifact helper and the hallways artifact with its
+ * dismissal keys - write machine JSON through the shared atomic writer
+ * (derived state, not notes; no origin stamp on either).
  */
-const UNSTAMPED_SHARED_ROWS = 112;
+const UNSTAMPED_SHARED_ROWS = 114;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {

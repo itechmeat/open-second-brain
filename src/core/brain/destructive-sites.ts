@@ -139,6 +139,16 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
         "`writeFrontmatterAtomic` and refuses an occupied retired name before the " +
         "staged copy goes, preserving every original field beside the retire stamps.",
     },
+    "src/core/brain/intake/extract-intake.ts": {
+      calls: ["unlinkSync"],
+      recovery: UNARCHIVED_BRAIN,
+      reason:
+        "the stage arm of the intake's disposition contract moves each CREATED entity page " +
+        "into the review queue: `stageForReview` lands the page's exact bytes on the staged " +
+        "entry FIRST and the canonical copy is unlinked second, so a crash between the two " +
+        "leaves both copies - the queue's apply names the occupied target - and never zero; " +
+        "the update arm never reaches this call.",
+    },
     "src/core/brain/preference.ts": {
       calls: ["unlinkSync"],
       recovery: UNARCHIVED_BRAIN,
