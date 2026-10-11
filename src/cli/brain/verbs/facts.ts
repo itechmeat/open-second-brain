@@ -13,6 +13,7 @@ import { readFileSync } from "node:fs";
 
 import { decomposeAtomicFacts } from "../../../core/brain/atomic-facts.ts";
 import { buildEntityIndex } from "../../../core/brain/entities/index-builder.ts";
+import { resolveEntityLexicon } from "../../../core/brain/entities/lexicon.ts";
 import { isoSecond } from "../../../core/brain/time.ts";
 import { claimsFromAssertion } from "../../../core/brain/truth/ingest.ts";
 import { appendClaimEvent } from "../../../core/brain/truth/store.ts";
@@ -68,7 +69,15 @@ export async function cmdBrainFacts(argv: string[]): Promise<number> {
     } catch {
       registryEntities = [];
     }
-    const assertions = decomposeAtomicFacts(text, { entities: registryEntities });
+    // The same store-learned lexicon the fact-extract capture path
+    // resolves, threaded into the shared anchoring kernel so this verb
+    // never anchors a form the creation gate refuses (recall-quality
+    // M6). Fail-open: no fresh artifact resolves to null and every
+    // verdict is byte-identical to the pre-lexicon behavior.
+    const assertions = decomposeAtomicFacts(text, {
+      entities: registryEntities,
+      lexicon: resolveEntityLexicon(vault),
+    });
 
     let ingested = 0;
     if (ingest) {

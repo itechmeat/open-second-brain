@@ -24,6 +24,7 @@ import { posix, relative } from "node:path";
 import { sha256Hex } from "../integrity/digest.ts";
 import { decomposeAtomicFacts, type AtomicEntityLike } from "./atomic-facts.ts";
 import { hasEvidenceIdentity, type EvidenceIdentity } from "./deep-synthesis.ts";
+import { resolveEntityLexicon } from "./entities/lexicon.ts";
 import { getEntity } from "./entities/registry.ts";
 import type { EntityRef } from "./entities/types.ts";
 import { getIngestedSource, listIngestedSources } from "./ingest/sources-registry.ts";
@@ -171,11 +172,21 @@ export function diarize(
     contentHash: sha256Hex(entity.body),
   });
 
+  // The same store-learned lexicon the creation gate resolves (fail-open
+  // null), threaded into the shared anchoring kernel so the stated-claim
+  // and evidence verdicts skip exactly the junk forms creation refuses
+  // (recall-quality M6). No artifact, and every verdict is byte-identical
+  // to the pre-lexicon behavior.
+  const lexicon = resolveEntityLexicon(vault);
+
   // STATED claims: atomic assertions decomposed from the subject's own
   // registered body that anchor the subject. No claim-text matching
   // against evidence - that would be language analysis.
   const statedClaims: string[] = [];
-  for (const assertion of decomposeAtomicFacts(entity.body, { entities: [entityLike] })) {
+  for (const assertion of decomposeAtomicFacts(entity.body, {
+    entities: [entityLike],
+    lexicon,
+  })) {
     if (assertion.entities.includes(entity.id)) statedClaims.push(assertion.text);
   }
 
@@ -189,8 +200,8 @@ export function diarize(
     if (opts.readable !== undefined && !opts.readable(listed.path)) continue;
     const detail = getIngestedSource(vault, listed.path);
     if (detail === null) continue;
-    const anchored = decomposeAtomicFacts(detail.body, { entities: [entityLike] }).some((a) =>
-      a.entities.includes(entity.id),
+    const anchored = decomposeAtomicFacts(detail.body, { entities: [entityLike], lexicon }).some(
+      (a) => a.entities.includes(entity.id),
     );
     if (!anchored) continue;
     evidencedSources.push({

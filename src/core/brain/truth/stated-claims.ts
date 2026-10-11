@@ -15,6 +15,11 @@
  *     forms, minimum length 3): a claim whose subject and object both
  *     anchor in the text commits with `extractor: "agent_stated"`; an
  *     ungrounded claim is reported back with machine reason codes.
+ *     The store-learned lexicon is resolved beside the gate
+ *     (`resolveEntityLexicon`, fail-open null), so a verdict here
+ *     never anchors a form the creation gate refuses; with no fresh
+ *     artifact every verdict is byte-identical to the pre-lexicon
+ *     behavior.
  *     Per-claim partial commit is safe here because each event is an
  *     independent append in an append-only ledger and the outcome
  *     reports exactly what landed.
@@ -28,7 +33,8 @@
 
 import { isKnownRelation, normalizeRelation } from "../../graph/relation-vocab.ts";
 import { anchorEntityForms, type AtomicEntityLike } from "../atomic-facts.ts";
-import { normalizeEntityName } from "../entities/canonical.ts";
+import { normalizeEntityName, type EntityLexiconHandle } from "../entities/canonical.ts";
+import { resolveEntityLexicon } from "../entities/lexicon.ts";
 import type { AppendClaimInput, AppendClaimResult } from "./store.ts";
 import { appendClaimEvent, ISO_UTC_TS_RE } from "./store.ts";
 import type { ClaimExtractor } from "./types.ts";
@@ -123,16 +129,21 @@ function ungroundedReasons(
   claim: StatedClaim,
   text: string,
   entities: ReadonlyArray<AtomicEntityLike>,
+  lexicon: EntityLexiconHandle | null,
 ): ReadonlyArray<StatedClaimRefusalReason> {
   const reasons: StatedClaimRefusalReason[] = [];
   if (normalizeEntityName(claim.subject) === "") {
     reasons.push("missing_subject");
-  } else if (anchorEntityForms(text, statedAnchorForms(claim.subject, entities)).length === 0) {
+  } else if (
+    anchorEntityForms(text, statedAnchorForms(claim.subject, entities), { lexicon }).length === 0
+  ) {
     reasons.push("subject_unanchored");
   }
   if (claim.object.trim() === "") {
     reasons.push("missing_object");
-  } else if (anchorEntityForms(text, statedAnchorForms(claim.object, entities)).length === 0) {
+  } else if (
+    anchorEntityForms(text, statedAnchorForms(claim.object, entities), { lexicon }).length === 0
+  ) {
     reasons.push("object_unanchored");
   }
   return reasons;
@@ -178,10 +189,16 @@ export function appendStatedClaims(
   }
 
   const entities = opts.entities ?? [];
+  // The same store-learned lexicon the creation gate resolves (fail-open
+  // null), threaded into the shared anchoring kernel so a stated value
+  // whose only forms the gate refuses is reported unanchored exactly as
+  // the creation boundary refuses it (recall-quality M6). No artifact,
+  // and every verdict is byte-identical to the pre-lexicon behavior.
+  const lexicon = resolveEntityLexicon(vault);
   const committed: AppendClaimResult[] = [];
   const ungrounded: UngroundedStatedClaim[] = [];
   for (const claim of payload.claims) {
-    const reasons = ungroundedReasons(claim, payload.text, entities);
+    const reasons = ungroundedReasons(claim, payload.text, entities, lexicon);
     if (reasons.length > 0) {
       ungrounded.push(Object.freeze({ claim, reasons: Object.freeze(reasons) }));
       continue;

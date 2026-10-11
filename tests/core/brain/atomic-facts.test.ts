@@ -22,14 +22,18 @@ import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { writeFrontmatterAtomic } from "../../../src/core/vault.ts";
 import { brainDirs } from "../../../src/core/brain/paths.ts";
+import { assertValidEntityLabel } from "../../../src/core/brain/entities/canonical.ts";
 import { buildEntityIndex } from "../../../src/core/brain/entities/index-builder.ts";
-import { buildAnchorables } from "../../../src/core/brain/fact-extract.ts";
 import {
   __clearEntityLexiconCache,
   deriveEntityLexicon,
   resolveEntityLexicon,
   writeEntityLexicon,
 } from "../../../src/core/brain/entities/lexicon.ts";
+import { buildAnchorables } from "../../../src/core/brain/fact-extract.ts";
+import { diarize } from "../../../src/core/brain/diarization.ts";
+import { appendStatedClaims } from "../../../src/core/brain/truth/stated-claims.ts";
+import { withDeviceId } from "../../helpers/device-id.ts";
 
 const ENTITIES: ReadonlyArray<AtomicEntityLike> = [
   { id: "ent-people-alice-mason", name: "Alice Mason", aliases: ["Alice"], status: "active" },
@@ -264,5 +268,115 @@ describe("lexicon-gated anchoring (recall-quality A2)", () => {
     expect(anchorables).toHaveLength(1);
     expect(anchorables[0]!.id).toBe("ent-people-junk");
     expect(anchorables[0]!.forms).toEqual(["atlas prime"]);
+  });
+});
+
+/**
+ * Recall-quality M6: the store-learned lexicon reaches the SECOND
+ * anchoring path too. The vault-aware callers (the decomposer verb, the
+ * diarizer, the agent-stated claim verdicts) resolve the same handle
+ * through `resolveEntityLexicon` and thread it into the shared kernel,
+ * so no path anchors a form the creation gate refuses. With no artifact
+ * every verdict stays byte-identical to the pre-lexicon behavior.
+ */
+describe("lexicon reaches the second anchoring paths (recall-quality M6)", () => {
+  let vault: string;
+  let configHome: string;
+  const NOW = new Date("2026-10-11T12:00:00Z");
+
+  beforeEach(() => {
+    vault = mkdtempSync(join(tmpdir(), "o2b-atomic-m6-"));
+    configHome = mkdtempSync(join(tmpdir(), "o2b-atomic-m6-cfg-"));
+    const configPath = join(configHome, "config.yaml");
+    atomicWriteFileSync(configPath, `vault: ${vault}\n`);
+    bootstrapBrain(vault, { configPath });
+  });
+
+  afterEach(() => {
+    rmSync(vault, { recursive: true, force: true });
+    rmSync(configHome, { recursive: true, force: true });
+    __clearEntityLexiconCache();
+  });
+
+  /**
+   * Seed a stored junk SINGLE-TOKEN label ("Meeting": caseful, one
+   * common word is already a run) by hand, bypassing the creation gate.
+   */
+  function seedMeetingEntity(): void {
+    const dir = join(brainDirs(vault).entities, "people");
+    mkdirSync(dir, { recursive: true });
+    writeFrontmatterAtomic(
+      join(dir, "ent-people-meeting.md"),
+      {
+        kind: "brain-entity",
+        entity_id: "ent-people-meeting",
+        category: "people",
+        name: "Meeting",
+        status: "active",
+        created_at: "2026-10-11T00:00:00Z",
+        updated_at: "2026-10-11T00:00:00Z",
+        tags: ["brain", "brain/entity"],
+      },
+      "Meeting happens every Friday morning and reviews the week.",
+      { overwrite: true },
+    );
+  }
+
+  /** Teach the artifact that "meeting" is a common word; "Ada" makes the corpus caseful. */
+  function seedMeetingLexicon(): void {
+    atomicWriteFileSync(
+      join(vault, "corpus-page.md"),
+      "Ada said the meeting ran long. The meeting notes list every meeting.\n",
+    );
+    writeEntityLexicon(vault, deriveEntityLexicon(vault, { now: NOW }));
+  }
+
+  const STATED_PAYLOAD = {
+    claims: [{ subject: "Meeting", relation: "extends", object: "Planning" }],
+    text: "Meeting covers the planning agenda for the week.",
+    agent: "test-agent",
+    ts: "2026-10-11T12:00:00Z",
+    source: "[[Brain/notes/standup.md]]",
+  } as const;
+
+  test("diarize drops the stated claim a junk label alone anchors, behind the resolved handle", () => {
+    seedMeetingEntity();
+    seedMeetingLexicon();
+    const handle = resolveEntityLexicon(vault);
+    expect(handle).not.toBeNull();
+    // The resolved handle refuses the label exactly like the creation gate...
+    expect(() => assertValidEntityLabel("Meeting", { lexicon: handle })).toThrow(
+      /function-word-run/,
+    );
+    // ...so the diarization path skips the junk-form anchor as well.
+    const report = diarize(vault, { query: "Meeting" }, { now: NOW, ownerScope: null });
+    expect(report.statedVsEvidenced).toEqual([]);
+  });
+
+  test("diarize without an artifact keeps the pre-lexicon verdict byte-identical", () => {
+    seedMeetingEntity();
+    expect(resolveEntityLexicon(vault)).toBeNull();
+    const report = diarize(vault, { query: "Meeting" }, { now: NOW, ownerScope: null });
+    expect(report.statedVsEvidenced).toHaveLength(1);
+    expect(report.statedVsEvidenced[0]!.kind).toBe("stated_unevidenced");
+  });
+
+  test("appendStatedClaims reports a junk-labeled subject unanchored, behind the resolved handle", () => {
+    seedMeetingLexicon();
+    const handle = resolveEntityLexicon(vault);
+    expect(handle).not.toBeNull();
+    const outcome = withDeviceId("", () => appendStatedClaims(vault, STATED_PAYLOAD));
+    expect(outcome.committed).toEqual([]);
+    expect(outcome.ungrounded).toHaveLength(1);
+    expect(outcome.ungrounded[0]!.claim.subject).toBe("Meeting");
+    expect(outcome.ungrounded[0]!.reasons).toEqual(["subject_unanchored"]);
+  });
+
+  test("appendStatedClaims without an artifact commits the same claim byte-identically", () => {
+    expect(resolveEntityLexicon(vault)).toBeNull();
+    const outcome = withDeviceId("", () => appendStatedClaims(vault, STATED_PAYLOAD));
+    expect(outcome.ungrounded).toEqual([]);
+    expect(outcome.committed).toHaveLength(1);
+    expect(outcome.committed[0]!.event.entity).toBe("meeting");
   });
 });

@@ -51,8 +51,10 @@ export interface DecomposeOptions {
   readonly entities?: ReadonlyArray<AtomicEntityLike>;
   /**
    * Label-gate options (denylist, store-learned lexicon) threaded into the
-   * shared anchoring kernel (recall-quality A2). Absent keeps every verdict
-   * byte-identical to the pre-lexicon behavior.
+   * shared anchoring kernel (recall-quality A2). Vault-aware callers
+   * resolve the handle through `resolveEntityLexicon` (recall-quality M6);
+   * null or absent keeps every verdict byte-identical to the pre-lexicon
+   * behavior.
    */
   readonly lexicon?: EntityLexiconHandle | null;
 }
@@ -132,12 +134,16 @@ const MIN_ANCHOR_FORM_LENGTH = 3;
  * (sanitize decoration, then normalize, drop structurally-invalid
  * forms) before matching, and forms shorter than
  * {@link MIN_ANCHOR_FORM_LENGTH} never participate. Pure: no I/O, no
- * registry. The one kernel every occurrence-anchoring caller shares -
- * the assertion decomposer and the agent-stated claim verdicts both
- * anchor through it, so the two can never drift. `opts` threads the
- * admission vocabularies (denylist, store-learned lexicon) into the
- * gate; absent, every verdict is byte-identical to the pre-lexicon
- * behavior.
+ * registry - so this layer never resolves the lexicon itself. The one
+ * kernel every occurrence-anchoring caller shares - the assertion
+ * decomposer and the agent-stated claim verdicts both anchor through
+ * it, and each vault-aware caller resolves the SAME store-learned
+ * lexicon through `resolveEntityLexicon` and threads it in here
+ * (recall-quality M6), so no path can drift back to anchoring a form
+ * the creation gate refuses. `opts` threads the admission vocabularies
+ * (denylist, store-learned lexicon) into the gate; with the handle
+ * null (no fresh artifact) every verdict is byte-identical to the
+ * pre-lexicon behavior.
  */
 export function anchorEntityForms(
   text: string,
