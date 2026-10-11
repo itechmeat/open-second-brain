@@ -16,6 +16,7 @@ import {
   encodeDocumentVisibility,
 } from "../schema.ts";
 import { SearchError } from "../types.ts";
+import { pathPrefixRange } from "./path-prefix.ts";
 import { nowIso } from "./sql.ts";
 import { purgeVecRowsForDocument } from "./vectors.ts";
 
@@ -457,15 +458,17 @@ export function countDocuments(db: Database): number {
 }
 
 /**
- * How many documents sit under one raw path prefix, matched with the
- * same `substr` form the pending-vector census uses so the two agree.
+ * How many documents sit under one raw path prefix, matched with the same
+ * sargable range form the pending-vector census and the two query lanes
+ * use (`path-prefix.ts`), so every prefix reader agrees on one row set.
  */
 export function countDocumentsUnderPrefix(db: Database, prefix: string): number {
+  const { lo, hi } = pathPrefixRange(prefix);
   return (
     db
       .query<{ c: number }, [string, string]>(
-        "SELECT count(*) AS c FROM documents WHERE substr(path, 1, length(?)) = ?",
+        "SELECT count(*) AS c FROM documents WHERE path >= ? AND path < ?",
       )
-      .get(prefix, prefix)?.c ?? 0
+      .get(lo, hi)?.c ?? 0
   );
 }

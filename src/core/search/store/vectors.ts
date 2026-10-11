@@ -29,6 +29,7 @@ import {
   getState,
   setState,
 } from "./state.ts";
+import { pathPrefixRange } from "./path-prefix.ts";
 import { nowIso, sqlPlaceholders } from "./sql.ts";
 
 /** The query/passage instruction prefixes active for an index run. */
@@ -617,6 +618,9 @@ export function semanticTopK(
   assertValidVector(queryVector, "semanticTopK");
   const buf = vecToBuffer(queryVector);
   if (prefix) {
+    // Sargable prefix range (C1): answered by idx_documents_path instead of
+    // a per-row `substr` expression. Same rows; see path-prefix.ts.
+    const { lo, hi } = pathPrefixRange(prefix);
     const rows = db
       .query<
         { chunk_id: number; document_id: number; distance: number },
@@ -627,10 +631,10 @@ export function semanticTopK(
           "JOIN chunk_vec_map m ON m.vec_rowid = v.rowid " +
           "JOIN chunks c ON c.id = m.chunk_id " +
           "JOIN documents d ON d.id = c.document_id " +
-          "WHERE v.embedding MATCH ? AND k = ? AND substr(d.path, 1, length(?)) = ? " +
+          "WHERE v.embedding MATCH ? AND k = ? AND d.path >= ? AND d.path < ? " +
           VEC_ORDER,
       )
-      .all(buf, knn, prefix, prefix);
+      .all(buf, knn, lo, hi);
     return rows.slice(0, limit).map((r) => ({
       chunkId: r.chunk_id,
       documentId: r.document_id,

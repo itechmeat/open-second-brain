@@ -7,6 +7,7 @@
 import { Database } from "bun:sqlite";
 
 import { SearchError } from "../types.ts";
+import { pathPrefixRange } from "./path-prefix.ts";
 import { acquireWriterLockSync } from "./writer-lock.ts";
 
 export interface KeywordHit {
@@ -103,6 +104,9 @@ export function keywordTopK(
   const prefix = opts.pathPrefix && opts.pathPrefix.length > 0 ? opts.pathPrefix : null;
 
   if (prefix) {
+    // Sargable prefix range (C1): answered by idx_documents_path instead of
+    // a per-row `substr` expression. Same rows; see path-prefix.ts.
+    const { lo, hi } = pathPrefixRange(prefix);
     const rows = db
       .query<
         { chunk_id: number; document_id: number; bm25: number },
@@ -112,10 +116,10 @@ export function keywordTopK(
           "FROM chunk_fts " +
           "JOIN chunks c ON c.id = chunk_fts.rowid " +
           "JOIN documents d ON d.id = c.document_id " +
-          "WHERE chunk_fts MATCH ? AND substr(d.path, 1, length(?)) = ? " +
+          "WHERE chunk_fts MATCH ? AND d.path >= ? AND d.path < ? " +
           `${CHUNK_ORDER} LIMIT ?`,
       )
-      .all(fts5Query, prefix, prefix, limit);
+      .all(fts5Query, lo, hi, limit);
     return rows.map((r) => ({
       chunkId: r.chunk_id,
       documentId: r.document_id,

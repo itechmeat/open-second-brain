@@ -8,6 +8,7 @@
 import { Database } from "bun:sqlite";
 
 import { SearchError } from "../types.ts";
+import { pathPrefixRange } from "./path-prefix.ts";
 import { nowIso, sqlPlaceholders } from "./sql.ts";
 import {
   matchCarriedVectors,
@@ -340,9 +341,10 @@ const PENDING_ANTI_JOIN =
 
 /**
  * The anti-join's FROM/WHERE text and bindings for a scope. A scoped
- * census joins `documents` and matches each prefix with the
- * `substr(path, 1, length(?)) = ?` form the vector prefix filter uses,
- * which needs no LIKE wildcard escaping.
+ * census joins `documents` and matches each prefix with the sargable
+ * range form every other prefix reader uses (`path-prefix.ts`), which
+ * needs no LIKE wildcard escaping and lets `idx_documents_path` answer
+ * the match.
  */
 function pendingCensusClause(scope: PendingVectorScope | undefined): {
   sql: string;
@@ -350,13 +352,16 @@ function pendingCensusClause(scope: PendingVectorScope | undefined): {
 } {
   const prefixes = scope?.pathPrefixes ?? [];
   if (prefixes.length === 0) return { sql: PENDING_ANTI_JOIN, bindings: [] };
-  const matches = prefixes.map(() => "substr(d.path, 1, length(?)) = ?").join(" OR ");
+  const matches = prefixes.map(() => "(d.path >= ? AND d.path < ?)").join(" OR ");
   return {
     sql:
       "FROM chunks c JOIN documents d ON d.id = c.document_id " +
       "LEFT JOIN embeddings e ON e.chunk_id = c.id " +
       `WHERE e.chunk_id IS NULL AND (${matches})`,
-    bindings: prefixes.flatMap((prefix) => [prefix, prefix]),
+    bindings: prefixes.flatMap((prefix) => {
+      const { lo, hi } = pathPrefixRange(prefix);
+      return [lo, hi];
+    }),
   };
 }
 
