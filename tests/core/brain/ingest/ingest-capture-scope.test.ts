@@ -205,6 +205,28 @@ describe("ingestSource durable archive stamp", () => {
     expect(existsSync(archivesDir(vault))).toBe(false);
   });
 
+  test("an unwritable archive store leaves the page unstamped and the ingest whole", () => {
+    seedSource(vault, LOCAL_SOURCE, "bytes\n");
+    // A regular file where the archives directory belongs: the capture's
+    // mkdir fails for a reason that is not the source's fault (the same
+    // seed pattern the session-identity check's unreadable-ledger case
+    // uses). Task C3's write-failure arm.
+    writeFileSync(archivesDir(vault), "not a directory\n");
+
+    const result = ingestSource(vault, input(LOCAL_SOURCE), { agent: "claude", now: NOW });
+
+    // The design contract: an archive failure never fails an ingest that
+    // already committed its knowledge - the page lands, unstamped.
+    expect(result.created).toBe(true);
+    expect(result.sourceArchiveHash).toBeUndefined();
+    expect(result.sourceArchiveBytes).toBeUndefined();
+    // What the fs-error arm actually records: the host's own errno line.
+    expect(result.sourceArchiveRefusal).toContain("EEXIST");
+    const [meta] = parseFrontmatter(join(vault, result.summaryPath));
+    expect(meta[SOURCE_ARCHIVE_HASH_KEY]).toBeUndefined();
+    expect(meta[SOURCE_ARCHIVE_BYTES_KEY]).toBeUndefined();
+  });
+
   test("a source withheld from remote readers is never archived, though it stays full-local", () => {
     seedSource(vault, "Notes/private.md", "---\nvisibility: private\n---\nThe code is ZX8.\n");
     const result = ingestSource(vault, input("Notes/private.md"), { agent: "claude", now: NOW });
