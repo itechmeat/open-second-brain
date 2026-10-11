@@ -41,6 +41,7 @@ export { cmdBrainBridges } from "./bridges.ts";
 export { cmdBrainClusters } from "./clusters.ts";
 export { cmdBrainVitals } from "./vitals.ts";
 export { cmdBrainCoOccurrence } from "./co-occurrence.ts";
+export { cmdBrainHallways } from "./hallways.ts";
 export { cmdBrainFileContext } from "./file-context.ts";
 export { cmdBrainBenchmark } from "./benchmark.ts";
 export { cmdBrainTune } from "./tune.ts";

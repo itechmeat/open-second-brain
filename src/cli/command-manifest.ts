@@ -542,6 +542,10 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           "co-occurrence",
           "Suggest edges between entities co-referenced from the same notes",
         ),
+        command(
+          "hallways",
+          "Session-mined association pass over the mention ledger: mine, show, promote, dismiss",
+        ),
         command("file-context", "Surface prior vault work that mentions a file path"),
         command("benchmark", "Score recall quality against a fixed query dataset"),
         command("tune", "Grid-evaluate and persist self-tuning recall parameters"),

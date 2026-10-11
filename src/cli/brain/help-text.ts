@@ -104,6 +104,7 @@ Brain verbs (observing memory):
   clusters            Link-graph communities: detect and materialize cluster notes
   vitals              Aggregate governance scorecard: diversity, connectivity, gap pressure
   co-occurrence       Suggest edges between entities co-referenced from the same notes
+  hallways            Session-mined associations: mine, show, promote, dismiss
   file-context        Surface prior vault work that mentions a file path
   benchmark           Recall quality benchmark: hit@k and MRR over a fixed dataset
   tune                Self-tuning recall: grid-evaluate, persist, inspect, reset
@@ -651,6 +652,17 @@ export const VERB_HELP: Record<string, string> = {
     "by default; --write persists the Brain/link-graph/co-occurrence.json\n" +
     "artifact. Already directly-linked pairs are never re-suggested; notes are\n" +
     "never mutated.\n",
+  hallways:
+    "usage: o2b brain hallways mine [--min-co N] [--min-score X] [--limit N] [--min-sessions N] [--progress] | show | promote <family> <key> [--min-sessions N] | dismiss <family> <key>  [--vault <path>] [--json]\n" +
+    "The session hallways: entities that keep turning up in the same imported\n" +
+    "transcripts are associated even when no vault page links them. mine folds\n" +
+    "the mined-mention ledger (from session import) into incidence and pairwise\n" +
+    "PMI, persists Brain/link-graph/hallways.json and the reviewable\n" +
+    "Brain/proposals/hallways.md; show reads the proposals back; promote is the\n" +
+    "only bridge into the entity registry, offered solely for keys seen in >= N\n" +
+    "distinct sessions (default 3) and refused by the registry's own admission\n" +
+    "gate when the label fails it - mining itself never writes an entity;\n" +
+    "dismiss silences a key across future runs.\n",
   "file-context":
     "usage: o2b brain file-context <file-path> [--limit N] [--min-bytes N]  [--vault <path>] [--json]\n" +
     "Surface prior vault work that mentions a file (decisions, bug notes, refactor\n" +
