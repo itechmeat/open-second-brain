@@ -402,6 +402,25 @@ export async function cmdBrainSecret(argv: string[]): Promise<number> {
           agent,
           now,
         });
+        // The wildcard-allowlist warning (PR #244 review L2): an entry
+        // carried with the open exec allowlist `*` lets `secret run`
+        // execute ANY command. The bundle's AAD already proved the list
+        // is exactly what was exported - what it cannot say is whether
+        // exporting it was wise - so the import names every entry it
+        // restored whose allowlist is the open one. A non-wildcard
+        // bundle prints nothing and imports byte-identically.
+        const restored = new Set([...result.imported, ...result.replaced]);
+        const openAllowed = listSecrets(vault)
+          .filter((s) => restored.has(s.name) && s.allow.includes("*"))
+          .map((s) => s.name)
+          .toSorted();
+        if (openAllowed.length > 0) {
+          process.stderr.write(
+            `warning: secret import: ${openAllowed.map((n) => JSON.stringify(n)).join(", ")} ` +
+              'carries the open exec allowlist "*" - every command is allowed. Narrow it ' +
+              `("brain secret rm" + "brain secret set") if that is not intended.\n`,
+          );
+        }
         if (asJson) okJson({ imported: result.imported, replaced: result.replaced });
         else
           ok(
