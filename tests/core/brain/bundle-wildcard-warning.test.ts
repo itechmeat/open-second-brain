@@ -104,3 +104,27 @@ describe("the bundle import wildcard-allowlist warning", () => {
     expect(result.stderr).toContain("refus");
   }, 20000);
 });
+
+/**
+ * The MCP surface (PR #248 review L14): the wildcard warning lives in the
+ * CLI import verb because that verb is the ONLY import surface - the MCP
+ * `brain_secrets` tool deliberately carries no import (its custody is the
+ * agent-facing list/run subset; material enters through the operator's
+ * CLI), and no other MCP tool imports a secret bundle. This pins that
+ * surface shape: if an import operation ever appears over MCP, it must
+ * carry the same named warning, and this test fails first.
+ */
+describe("the MCP secret surface has no import for the warning to cover", () => {
+  test("brain_secrets exposes list and run only - no bundle import", () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { buildToolTable } = require("../../../src/mcp/tools.ts") as {
+      buildToolTable(scope?: string): ReadonlyArray<{
+        name: string;
+        inputSchema: { properties: { operation?: { enum?: string[] } } };
+      }>;
+    };
+    const tool = buildToolTable("full").find((t) => t.name === "brain_secrets");
+    expect(tool).toBeDefined();
+    expect(tool!.inputSchema.properties.operation?.enum).toEqual(["list", "run"]);
+  });
+});
