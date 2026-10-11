@@ -218,11 +218,29 @@ describe("brain doctor - byte-identical when there is nothing to point at", () =
     expect(r.stdout).toBe("brain doctor: clean\n");
   });
 
-  test("a clean vault's JSON payload is the pre-task shape", async () => {
+  test("a clean vault's JSON payload carries no findings and the count-only archive section", async () => {
     const r = await runCli(["brain", "doctor", "--vault", vault, "--json"], {
       env: { OPEN_SECOND_BRAIN_CONFIG: config },
     });
     expect(r.returncode).toBe(0);
-    expect(r.stdout).toBe(JSON.stringify({ warnings: [], errors: [] }, null, 2) + "\n");
+    // The answer-trust wave adds one informational, count-only archive
+    // section to the doctor's JSON payload, and its key is deliberately
+    // ALWAYS present (the capture_scope field pattern: a caller never
+    // infers the section's existence from a missing key). What the
+    // byte-identical promise continues to guard is the finding surface: a
+    // clean vault carries no warnings, no errors, and none of the
+    // next-command or no-exit noise - and the human-readable path stays
+    // fully byte-identical (the test above).
+    expect(r.stdout).toBe(
+      JSON.stringify(
+        {
+          warnings: [],
+          errors: [],
+          archives: { entries: 0, totalBytes: 0, missing: 0, mismatched: 0 },
+        },
+        null,
+        2,
+      ) + "\n",
+    );
   });
 });
