@@ -113,7 +113,11 @@ describe("brain_ingest_source on a table source", () => {
       redacted_cells: 0,
     });
     const keys = Object.keys(result);
-    expect(keys.indexOf("table")).toBe(keys.indexOf("capture_scope") + 1);
+    // The archive stamp (answer trust) follows capture_scope's field
+    // pattern: the hash is always present, the byte count rides only with
+    // a hash, and the ingest-specific block keeps its place after them.
+    expect(keys.indexOf("source_archive_hash")).toBe(keys.indexOf("capture_scope") + 1);
+    expect(keys.indexOf("table")).toBe(keys.indexOf("source_archive_bytes") + 1);
 
     const page = pageOf(f, result);
     const fm = frontmatterKeys(page);

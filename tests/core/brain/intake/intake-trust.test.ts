@@ -104,6 +104,12 @@ const GOLDEN_TRUSTED_SUMMARY_PAGE =
   "source_path: Articles/primer.md\n" +
   "source_hash: 51b0f811072b41378ce56e723de332a315cd3c2841915c355606b294f1304019\n" +
   "provenance: stated\n" +
+  // The two lines the answer-trust wave adds to a trusted-local summary
+  // page: the content-addressed archive entry the trusted branch persisted
+  // (its address IS the digest of the redacted source bytes, so it equals
+  // TRUSTED_SOURCE_HASH here) with its byte count beside it.
+  `source_archive_hash: ${TRUSTED_SOURCE_HASH}\n` +
+  "source_archive_bytes: 17\n" +
   'created_at: "2026-06-13T12:00:00Z"\n' +
   'updated_at: "2026-06-13T12:00:00Z"\n' +
   "tags: [brain, brain/source]\n" +
@@ -258,7 +264,7 @@ describe("intakeExtraction - the untrusted path", () => {
 describe("ingestSource derives trust from the source identity", () => {
   const INPUT = { summary: "An overview.", extraction: EXTRACTION };
 
-  test("a vault-relative source writes the pre-change summary bytes", () => {
+  test("a vault-relative source writes the summary bytes with the archive stamp", () => {
     seed(TRUSTED_SOURCE);
     const res = ingestSource(
       vault,

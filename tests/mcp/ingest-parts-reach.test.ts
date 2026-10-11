@@ -100,7 +100,11 @@ describe("brain_ingest_source on an HTML source", () => {
     const result = await ingest(f, HTML_PATH);
     expect(result["parts"]).toEqual({ extracted: true, count: 2 });
     const keys = Object.keys(result);
-    expect(keys.indexOf("parts")).toBe(keys.indexOf("capture_scope") + 1);
+    // The archive stamp (answer trust) follows capture_scope's field
+    // pattern: the hash is always present, the byte count rides only with
+    // a hash, and the ingest-specific block keeps its place after them.
+    expect(keys.indexOf("source_archive_hash")).toBe(keys.indexOf("capture_scope") + 1);
+    expect(keys.indexOf("parts")).toBe(keys.indexOf("source_archive_bytes") + 1);
     expect("table" in result).toBe(false);
 
     const page = pageOf(f, result);
