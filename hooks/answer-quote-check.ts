@@ -59,6 +59,7 @@ import {
   ANSWER_QUOTE_VERDICT,
   checkAnswerQuotes,
   mergeAnswerQuoteVerdicts,
+  previewAnswerQuoteSpan,
   type AnswerQuoteEvidence,
   type AnswerQuoteVerdict,
 } from "../src/core/brain/answer-quotes/check.ts";
@@ -89,6 +90,14 @@ export const ANSWER_QUOTE_MAX_CHARS = 4000;
 
 /** Wall-clock budget for the whole check; past it, unchecked spans are dropped. */
 export const ANSWER_QUOTE_BUDGET_MS = 1500;
+
+/**
+ * Ceiling on findings rendered in one annotation - and in one enforce
+ * event: past it the tail of the list collapses into one "and N more"
+ * line, so a pathological answer annotates its first spans instead of
+ * flooding the context channel.
+ */
+export const ANSWER_QUOTE_MAX_FINDINGS = 20;
 
 /**
  * Byte window of the bounded transcript tail read. Small enough that a
@@ -413,6 +422,17 @@ function ledgerCandidates(
 
 // ----- the check ------------------------------------------------------------
 
+/** One span's outcome under the resolved evidence, inside the budget. */
+interface SpanOutcome {
+  readonly verdict: AnswerQuoteVerdict;
+  /**
+   * The span as the check module previews it - length-capped, code-point
+   * safe. Findings render only this form, never the raw span: a span is
+   * answer text, and the annotation's line structure is the hook's voice.
+   */
+  readonly preview: string;
+}
+
 /** One span's verdict under the resolved evidence, inside the budget. */
 function checkSpan(
   span: QuotedSpan,
@@ -424,7 +444,7 @@ function checkSpan(
   }>,
   vault: string,
   deadline: number,
-): AnswerQuoteVerdict {
+): SpanOutcome {
   // The cited note: the nearest mark before the span, else the first one
   // after it. A mark inside the span is span content, never a citation.
   const before = marks.filter((mark) => mark.at < span.open);
@@ -435,17 +455,21 @@ function checkSpan(
       spans: [span.inner],
       evidence: evidenceFor(vault, mark),
     });
-    return outcomes[0]!.verdict;
+    return { verdict: outcomes[0]!.verdict, preview: outcomes[0]!.span };
   }
-  if (candidates.length === 0) return mergeAnswerQuoteVerdicts([]);
+  if (candidates.length === 0) {
+    return {
+      verdict: mergeAnswerQuoteVerdicts([]),
+      preview: previewAnswerQuoteSpan(span.inner),
+    };
+  }
   const verdicts: AnswerQuoteVerdict[] = [];
+  let preview = previewAnswerQuoteSpan(span.inner);
   for (const candidate of candidates) {
     if (Date.now() > deadline) {
       // Budget spent with unread candidates left: the check did not
       // finish, so it never reports a readable-miss verdict.
-      return verdicts.includes(ANSWER_QUOTE_VERDICT.verified)
-        ? ANSWER_QUOTE_VERDICT.verified
-        : ANSWER_QUOTE_VERDICT.noteUnavailable;
+      return { verdict: ANSWER_QUOTE_VERDICT.noteUnavailable, preview };
     }
     const mark: CitationMark = {
       at: -1,
@@ -458,15 +482,21 @@ function checkSpan(
       evidence: evidenceFor(vault, mark),
     });
     const verdict = outcomes[0]!.verdict;
+    preview = outcomes[0]!.span;
     verdicts.push(verdict);
     if (verdict === ANSWER_QUOTE_VERDICT.verified) break;
   }
-  return mergeAnswerQuoteVerdicts(verdicts);
+  return { verdict: mergeAnswerQuoteVerdicts(verdicts), preview };
 }
 
-/** One rendered finding line of the annotation. */
+/**
+ * One rendered finding line. The span renders flattened - CR/LF and
+ * whitespace runs collapsed to single spaces, inside the check module's
+ * preview cap - so answer text can never introduce annotation-shaped
+ * lines of its own.
+ */
 function findingLine(span: string, verdict: AnswerQuoteVerdict): string {
-  return `- [${verdict}] "${span}"`;
+  return `- [${verdict}] "${span.replace(/\s+/g, " ").trim()}"`;
 }
 
 /** One unverified span, as the annotation and the enforce trail name it. */
@@ -491,15 +521,34 @@ function dedupeFindings(
 }
 
 /**
+ * The findings one annotation - and one enforce event - render: the
+ * first {@link ANSWER_QUOTE_MAX_FINDINGS}, answer order kept. The header
+ * and the enforce counters still state the true total.
+ */
+function listedFindings(
+  findings: ReadonlyArray<AnswerQuoteSpanFinding>,
+): ReadonlyArray<AnswerQuoteSpanFinding> {
+  return findings.slice(0, ANSWER_QUOTE_MAX_FINDINGS);
+}
+
+/**
  * The annotation: exactly one line block listing the unverified spans
- * with their verdicts, duplicate-free, in answer order.
+ * with their verdicts, duplicate-free, in answer order, under the
+ * findings cap.
  */
 function annotation(findings: ReadonlyArray<AnswerQuoteSpanFinding>): string {
-  return [
+  const listed = listedFindings(findings);
+  const lines = [
     `Open Second Brain quote check: ${findings.length} quoted span(s) were not found in the notes this turn had:`,
-    ...findings.map((finding) => findingLine(finding.span, finding.verdict)),
+    ...listed.map((finding) => findingLine(finding.span, finding.verdict)),
+  ];
+  if (listed.length < findings.length) {
+    lines.push(`... and ${findings.length - listed.length} more unverified span(s) not listed.`);
+  }
+  lines.push(
     "Advisory only; the answer is not blocked. Verify the quotes against the note, or reword.",
-  ].join("\n");
+  );
+  return lines.join("\n");
 }
 
 async function main(): Promise<void> {
@@ -572,9 +621,9 @@ async function main(): Promise<void> {
         open: span.open,
         close: span.close,
       };
-      const verdict = checkSpan(quoted, marks, candidates, vault, deadline);
-      if (verdict !== ANSWER_QUOTE_VERDICT.verified) {
-        findings.push({ span: span.inner, verdict });
+      const outcome = checkSpan(quoted, marks, candidates, vault, deadline);
+      if (outcome.verdict !== ANSWER_QUOTE_VERDICT.verified) {
+        findings.push({ span: outcome.preview, verdict: outcome.verdict });
       }
     }
   }
@@ -585,6 +634,8 @@ async function main(): Promise<void> {
   if (enforce) {
     // Exactly one Brain-log event per turn, best-effort: a failed append
     // names itself on the audit line and the annotation still goes out.
+    // The findings ride the same capped, flattened lines the annotation
+    // renders; the counter states the true total.
     try {
       appendLogEvent(vault, {
         timestamp: isoSecond(new Date()),
@@ -595,7 +646,9 @@ async function main(): Promise<void> {
           phases: running.join(","),
           checked: String(checked),
           unverified: String(unique.length),
-          findings: unique.map((finding) => findingLine(finding.span, finding.verdict)),
+          findings: listedFindings(unique).map((finding) =>
+            findingLine(finding.span, finding.verdict),
+          ),
         },
       });
     } catch (err) {
@@ -610,7 +663,11 @@ async function main(): Promise<void> {
   );
 }
 
-main().catch((err: unknown) => {
-  // Never deadlock on a hook crash: one stderr audit line, exit 0.
-  process.stderr.write(`${AUDIT_PREFIX} ${err instanceof Error ? err.message : String(err)}\n`);
-});
+// Run only as the hook process itself (the `o2b-hook` shim execs this
+// file), not when the module is imported for its constants in tests.
+if (import.meta.main) {
+  main().catch((err: unknown) => {
+    // Never deadlock on a hook crash: one stderr audit line, exit 0.
+    process.stderr.write(`${AUDIT_PREFIX} ${err instanceof Error ? err.message : String(err)}\n`);
+  });
+}

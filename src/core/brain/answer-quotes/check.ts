@@ -109,8 +109,13 @@ export interface AnswerQuoteCheckResult {
   readonly unverified: number;
 }
 
-/** The span's own text, cut at the preview cap without splitting a code point. */
-function preview(inner: string): string {
+/**
+ * The span's own text, cut at the preview cap without splitting a code
+ * point. This is the only form a span renders in - the outcome's `span`
+ * field, and anything a consumer prints about a span - so answer text is
+ * bounded wherever it is echoed back.
+ */
+export function previewAnswerQuoteSpan(inner: string): string {
   const codePoints = Array.from(inner);
   return codePoints.length <= QUOTE_SPAN_PREVIEW_MAX_CHARS
     ? inner
@@ -139,7 +144,7 @@ export function checkAnswerQuotes(input: AnswerQuoteCheckInput): AnswerQuoteChec
         : evidence.kind === "unavailable"
           ? ANSWER_QUOTE_VERDICT.noteUnavailable
           : ANSWER_QUOTE_VERDICT.notText;
-    return { index, span: preview(span), verdict };
+    return { index, span: previewAnswerQuoteSpan(span), verdict };
   });
   const verified = outcomes.filter((o) => o.verdict === ANSWER_QUOTE_VERDICT.verified).length;
   return { outcomes, verified, unverified: outcomes.length - verified };

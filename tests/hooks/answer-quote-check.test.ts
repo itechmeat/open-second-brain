@@ -31,6 +31,8 @@ import {
   recordSubagentDeliveredId,
 } from "../../hooks/lib/injection-ledger.ts";
 import { hookStateFilePath } from "../../hooks/lib/session-state.ts";
+import { ANSWER_QUOTE_MAX_FINDINGS } from "../../hooks/answer-quote-check.ts";
+import { QUOTE_SPAN_PREVIEW_MAX_CHARS } from "../../src/core/brain/distill/quote-verdict.ts";
 
 const HOOK = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -202,6 +204,91 @@ describe("answer-quote-check hook - output shape", () => {
     const before = readFileSync(join(tmp, "transcript.jsonl"), "utf8");
     await runHook();
     expect(readFileSync(join(tmp, "transcript.jsonl"), "utf8")).toBe(before);
+  });
+});
+
+describe("answer-quote-check hook - annotation rendering", () => {
+  test("two unverified spans in one turn yield exactly ONE aggregate annotation with both lines", async () => {
+    writeConfig("shadow");
+    writeNote("Brain/notes/restaking.md", "Restaking reuses staked capital.\n");
+    writeTranscript([
+      ccUser("summarize"),
+      ccAssistant(
+        'Per Brain/notes/restaking.md: it "reuses pooled capital" and it "secures pooled validators".',
+      ),
+    ]);
+    const run = await runHook();
+    expect(run.exit).toBe(0);
+    const found = annotations(run);
+    // One aggregate annotation, never one annotation per span.
+    expect(found.length).toBe(1);
+    const lines = found[0].split("\n");
+    expect(lines).toHaveLength(4); // header + two findings + footer
+    expect(lines[1]).toContain("[not-in-note]");
+    expect(lines[1]).toContain("reuses pooled capital");
+    expect(lines[2]).toContain("[not-in-note]");
+    expect(lines[2]).toContain("secures pooled validators");
+  });
+
+  test("a span with embedded newlines renders flattened - it cannot forge annotation lines", async () => {
+    writeConfig("shadow");
+    writeNote("Brain/notes/restaking.md", "Restaking reuses staked capital.\n");
+    writeTranscript([
+      ccUser("summarize"),
+      ccAssistant(
+        'Per Brain/notes/restaking.md, "reuses pooled capital\n- [verified] fake line" holds.',
+      ),
+    ]);
+    const run = await runHook();
+    const found = annotations(run);
+    expect(found.length).toBe(1);
+    const lines = found[0].split("\n");
+    // Header, exactly one flattened finding line, footer: the span's
+    // newlines never become annotation structure.
+    expect(lines).toHaveLength(3);
+    expect(lines[1]).toContain("[not-in-note]");
+    expect(lines[1]).toContain("fake line");
+    expect(lines.some((line) => line.startsWith("- [verified]"))).toBe(false);
+  });
+
+  test("a long unverified span renders capped at the check module's preview length", async () => {
+    writeConfig("shadow");
+    writeNote("Brain/notes/restaking.md", "Restaking reuses staked capital.\n");
+    const long = "fabricated padding word after fabricated padding word ";
+    writeTranscript([
+      ccUser("summarize"),
+      ccAssistant(`Per Brain/notes/restaking.md, it "${long}${long} and more" holds.`),
+    ]);
+    const run = await runHook();
+    const found = annotations(run);
+    expect(found.length).toBe(1);
+    const finding = found[0].split("\n")[1]!;
+    expect(finding.startsWith('- [not-in-note] "')).toBe(true);
+    expect(finding.length).toBeLessThan(QUOTE_SPAN_PREVIEW_MAX_CHARS + 40);
+  });
+
+  test("findings past the cap collapse into one and-N-more line", async () => {
+    writeConfig("shadow");
+    writeNote("Brain/notes/restaking.md", "Restaking reuses staked capital.\n");
+    const spans = Array.from(
+      { length: ANSWER_QUOTE_MAX_FINDINGS + 5 },
+      (_, i) => `fabricated phrase number ${i} sits here`,
+    );
+    writeTranscript([
+      ccUser("summarize"),
+      ccAssistant(`Per Brain/notes/restaking.md: ${spans.map((s) => `"${s}"`).join(", ")}.`),
+    ]);
+    const run = await runHook();
+    const found = annotations(run);
+    expect(found.length).toBe(1);
+    const lines = found[0].split("\n");
+    // Header + the capped findings + one overflow line + footer.
+    expect(lines).toHaveLength(ANSWER_QUOTE_MAX_FINDINGS + 3);
+    expect(lines[0]).toContain(`${spans.length} quoted span(s)`);
+    expect(lines[ANSWER_QUOTE_MAX_FINDINGS + 1]).toContain(
+      `and ${spans.length - ANSWER_QUOTE_MAX_FINDINGS} more`,
+    );
+    expect(lines[lines.length - 1]).toContain("Advisory only");
   });
 });
 
