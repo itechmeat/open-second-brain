@@ -13,7 +13,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
@@ -118,6 +118,29 @@ describe("session-mining families", () => {
 
   test("path: a separator without an extension is not a path", () => {
     expect(mined("look in src/core for it")).toEqual([]);
+  });
+
+  test("path: a host home path mines home-relative, never with the username", () => {
+    // The design's "never a host absolute path" rule: a username in a
+    // mined key reaches hallways.md and promoted pages, so the home
+    // directory is replaced by `~` before the key is minted.
+    const home = homedir();
+    const out = mined(
+      `see ${home}/notes/todo.md, /home/alice/notes/x.md and C:\\Users\\bob\\docs\\plan.md`,
+    );
+    expect(out).toContainEqual(["path", "~/notes/todo.md"]);
+    expect(out).toContainEqual(["path", "~/notes/x.md"]);
+    expect(out).toContainEqual(["path", "~\\docs\\plan.md"]);
+    expect(out.some(([, key]) => key.includes("alice") || key.includes("bob"))).toBe(false);
+    expect(out.some(([, key]) => key.startsWith("/home/") || key.includes("\\Users\\"))).toBe(
+      false,
+    );
+  });
+
+  test("path: a non-home path keeps its form", () => {
+    const out = mined("edit src/core/store.ts and /usr/local/bin/run.sh today");
+    expect(out).toContainEqual(["path", "src/core/store.ts"]);
+    expect(out).toContainEqual(["path", "/usr/local/bin/run.sh"]);
   });
 
   test("families do not re-read inside each other: a URL is one mention, not three", () => {

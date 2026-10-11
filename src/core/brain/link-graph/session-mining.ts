@@ -14,7 +14,11 @@
  *                         raw turn text (pinned equivalent in
  *                         session-mining.test.ts);
  *   - `path`            - separator-plus-extension shapes, in BOTH slash
- *                         directions;
+ *                         directions, relativized against the home
+ *                         directory before the key is minted (never a
+ *                         host absolute path - the design's rule, which
+ *                         also keeps host usernames out of the ledger,
+ *                         the hallways artifact and promoted pages);
  *   - `qualified-ident` - dotted / double-colon shapes of two or more
  *                         segments carrying a structural cue (a digit, an
  *                         underscore, an internal uppercase, or a third
@@ -49,6 +53,8 @@
  * re-imported transcript folds to the same mention set either way - the
  * seed keeps the ledger itself from growing on every re-import.
  */
+
+import { homedir } from "node:os";
 
 import { privateRegionTexts, redactRawOutput, redactSpecifierCredentials } from "../../redactor.ts";
 import { appendContinuityRecord, listContinuityRecords } from "../continuity/store.ts";
@@ -234,6 +240,34 @@ const QUALIFIED_IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*(?:(?:\.|::)[A-Za-z_][A-Za-z0
 /** At least one letter in any script - a bare number or hash is not a name. */
 const HAS_LETTER_RE = /\p{L}/u;
 
+/**
+ * A host home prefix a transcript path can carry, spelled for the
+ * platforms that matter: the POSIX `/home/<user>` and macOS `/Users/<user>`
+ * conventions, and the Windows `C:\Users\<user>` drive-user form.
+ */
+const HOST_HOME_RE = /^(?:\/(?:home|Users)\/[^/\\]+|[A-Za-z]:\\Users\\[^\\]+)(?=[\\/])/u;
+
+/**
+ * Replace a candidate path's host home prefix with `~` before the key is
+ * minted: the design forbids host absolute paths in mined keys, and a
+ * username inside one would reach `hallways.md` and promoted pages.
+ * The caller's actual home directory counts first (it covers /root, /Users
+ * under a matching env and every custom HOME); the textual conventions
+ * above catch a home spelled for another user or another machine. A path
+ * under no home - a project-relative one, or /usr/... - keeps its form.
+ */
+function homeRelativizedPath(candidate: string): string {
+  const home = homedir();
+  if (home.length > 1) {
+    for (const sep of ["/", "\\"]) {
+      const prefix = `${home}${sep}`;
+      if (candidate.startsWith(prefix)) return `~${sep}${candidate.slice(prefix.length)}`;
+    }
+  }
+  const textual = HOST_HOME_RE.exec(candidate);
+  return textual === null ? candidate : `~${candidate.slice(textual[0].length)}`;
+}
+
 /** The structural code cue an identifier must carry to be worth mining. */
 function hasCodeCue(token: string): boolean {
   if (/[_./\\:$@\d]/u.test(token)) return true;
@@ -414,7 +448,7 @@ function scanTurn(text: string): TurnScan {
     const pathCandidate = run.replace(/\.+$/u, "");
     const tail = pathCandidate.split(/[\\/]/u).pop() ?? "";
     if (/[\\/]/u.test(pathCandidate) && /\.[A-Za-z0-9]{1,12}$/u.test(tail)) {
-      push("path", pathCandidate);
+      push("path", homeRelativizedPath(pathCandidate));
       continue;
     }
     // A qualified identifier: two or more segments joined by dots or a
