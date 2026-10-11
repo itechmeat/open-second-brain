@@ -32,6 +32,14 @@
  * the same `dataset_hash`, and the hash would no longer describe the bytes
  * it stamps. Dismissal silences proposals either way; here it is also
  * named in the fingerprint of what this artifact was derived from.
+ *
+ * A dismissal removes the key AND every pair it took part in. The pairs
+ * are the promote verb's roadmap - each surviving pair whose other half
+ * is already an entity gains a `related` edge - so a pair with a
+ * dismissed side must never be offered, or promote would relate a
+ * partner the operator silenced. The proposals table filters the same
+ * rows again (an overlay the caller may pass separately), but the
+ * derivation itself offers none.
  */
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
@@ -297,6 +305,9 @@ function computeHallwaysRun(
     const dfRight = documentFrequency.get(right)!;
     const score = round6(Math.log2((co * sessionCount) / (dfLeft * dfRight)));
     if (score < opts.minScore) continue;
+    // A pair with a dismissed side is never offered: these pairs are
+    // promote's roadmap, and a dismissed partner must not gain an edge.
+    if (opts.dismissed.has(left) || opts.dismissed.has(right)) continue;
     pairs.push({ left, right, coSessionCount: co, score });
   }
   pairs.sort(
@@ -453,8 +464,9 @@ function proposalsCell(text: string): string {
  * Regenerate the reviewable proposals artifact. Derived file: the whole
  * document is replaced on every run. Promotion candidates are the
  * surviving keys at or above `minSessions`; pairs are the ranked
- * associations, with every row a DISMISSED key took part in silenced -
- * the bridges pattern, where a dismissed proposal stops reappearing.
+ * associations - the derivation already drops pairs with a dismissed
+ * side, and this filter keeps the file honest even when the caller's
+ * overlay is fresher than the one the derivation saw.
  */
 export function writeHallwaysProposals(
   vault: string,

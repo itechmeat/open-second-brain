@@ -242,6 +242,28 @@ describe("o2b brain hallways promote", () => {
     expect(page).toContain("[[ent-symbol-sessionstore]]");
   });
 
+  test("a promoted key never relates a dismissed partner", async () => {
+    seedPair(3);
+    await runCli(["brain", "hallways", "promote", "symbol", "SessionStore"], { env: env() });
+    dismissHallwayKey(vault, "symbol", "SessionStore");
+
+    const out = await runCli(
+      ["brain", "hallways", "promote", "symbol", "PayloadRegistry", "--json"],
+      { env: env() },
+    );
+
+    expect(out.returncode).toBe(0);
+    const payload = JSON.parse(out.stdout) as Record<string, unknown>;
+    // The dismissed partner is already an entity, but the pair with a
+    // dismissed side is not offered, so promote adds no edge to it.
+    expect(payload["related"]).toEqual([]);
+    const page = readFileSync(
+      join(vault, "Brain", "entities", "symbol", "ent-symbol-payloadregistry.md"),
+      "utf8",
+    );
+    expect(page).not.toContain("[[ent-symbol-sessionstore]]");
+  });
+
   test("promotes under the same bounded-wait deadline the mine fold carries", async () => {
     seedPair(3);
     // A clock that jumps a full day per reading, so any budget the safeguard

@@ -91,7 +91,7 @@ describe("computeHallways - incidence and PMI", () => {
     expect(pair!.score).toBe(0.584963);
   });
 
-  test("a pair below the co-session floor stays out; a dismissed key drops from keys only", () => {
+  test("a pair below the co-session floor stays out; a dismissed key drops from keys and pairs", () => {
     mention("symbol", "SessionStore", "s1.jsonl");
     mention("symbol", "PayloadRegistry", "s1.jsonl");
 
@@ -103,8 +103,10 @@ describe("computeHallways - incidence and PMI", () => {
       dismissed: readDismissedHallwayKeys(vault),
     });
     expect(result.keys.map((k) => k.key)).toEqual(["PayloadRegistry"]);
-    // Pairs stay the pure derivation; dismissal silences proposals, not math.
-    expect(result.pairs.length).toBe(1);
+    // The derivation offers no pair with a dismissed side: promote walks
+    // these pairs to relate partners, and a dismissed partner must never
+    // gain an edge.
+    expect(result.pairs).toEqual([]);
   });
 
   test("a mention row flagged private never reaches the incidence", () => {
@@ -296,7 +298,7 @@ describe("the proposals file and dismissals", () => {
     expect(pairRow).not.toMatch(/\| https:[^|]*\| https:/u);
   });
 
-  test("a dismissal also silences the pair rows a dismissed key took part in", () => {
+  test("a dismissal also drops the pair rows a dismissed key took part in", () => {
     mention("symbol", "SessionStore", "s1.jsonl");
     mention("symbol", "PayloadRegistry", "s1.jsonl");
     mention("symbol", "SessionStore", "s2.jsonl");
@@ -308,20 +310,19 @@ describe("the proposals file and dismissals", () => {
     const result = computeHallways(vault, {
       dismissed: readDismissedHallwayKeys(vault),
     });
-    // The math stays pure: the pair survives the derivation...
-    expect(result.pairs.length).toBe(1);
+    // No pair with a dismissed side survives the derivation...
+    expect(result.pairs).toEqual([]);
 
     const path = writeHallwaysProposals(vault, result, {
       now: new Date("2026-09-18T10:00:00Z"),
       dismissed: readDismissedHallwayKeys(vault),
     });
 
-    // ...but the reviewable file silences every row the dismissal took
-    // part in, exactly like a silenced bridge pair stops reappearing.
+    // ...and the reviewable file silences the rows all the same: the
+    // surviving key still reviews as a promotion candidate, the pair
+    // section is gone with its dismissed half.
     const body = readFileSync(path, "utf8");
     expect(body).not.toContain("SessionStore");
-    // The surviving key still reviews as a promotion candidate; the pair
-    // section is gone with its dismissed half.
     expect(body).toContain("PayloadRegistry");
     expect(body).not.toContain("Associated pairs");
   });
