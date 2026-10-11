@@ -73,6 +73,15 @@ export interface RecallBenchmarkQuery {
    * hit@k / MRR only, so existing datasets stay valid.
    */
   readonly answer?: string;
+  /**
+   * Optional language tag for the per-language report split (t_693fa22a).
+   * Operator-supplied and free-form (an ISO-639-ish code such as `en` or
+   * `zh` works, but nothing parses it); validated like `answer` - a
+   * non-empty string when present - and defaulted to `"en"` when absent,
+   * so every existing dataset folds under the `en` key unchanged. It only
+   * partitions the report; no scoring or detection logic reads it.
+   */
+  readonly lang?: string;
 }
 
 export interface RecallBenchmarkDataset {
@@ -109,6 +118,11 @@ export interface RecallBenchmarkOptions {
 export interface RecallBenchmarkQueryResult {
   readonly id: string;
   readonly query: string;
+  /**
+   * The language group this query folds into: the query's `lang`, or
+   * `"en"` when the dataset entry declared none.
+   */
+  readonly lang: string;
   readonly hit: boolean;
   /** 1-based rank of the first expected path, null on a miss. */
   readonly rank: number | null;
@@ -181,6 +195,33 @@ export interface RecallBenchmarkReport {
    */
   readonly capabilityTier?: BlockedCapabilityTier;
   readonly perQuery: ReadonlyArray<RecallBenchmarkQueryResult>;
+  /**
+   * The per-language split (t_693fa22a): the SAME aggregate fold applied
+   * to each `lang` group of `perQuery`, keyed by the query-declared tag
+   * (`"en"` for entries that declared none). Additive to the return
+   * value - the benchmark emits no record, so no schema version moves -
+   * and a single-language dataset reports exactly one group whose numbers
+   * equal the top-level ones.
+   */
+  readonly byLang: Readonly<Record<string, RecallBenchmarkLanguageReport>>;
+}
+
+/**
+ * The aggregate metrics for one language group of a benchmark run - the
+ * overall report's fold applied to the group's slice of `perQuery`.
+ */
+export interface RecallBenchmarkLanguageReport {
+  readonly total: number;
+  /** Fraction of the group's queries with an expected path in the top k. */
+  readonly hitAtK: number;
+  /** Mean reciprocal rank over the group's queries (misses contribute 0). */
+  readonly mrr: number;
+  /** The group's answer-containment denominator. */
+  readonly answerQueries: number;
+  readonly answerContainmentAtK: number;
+  readonly sourceUtilizationAtK: number;
+  readonly citationDepth: number;
+  readonly sourceWarnings: number;
 }
 
 /** Narrow a trail detail value to a blocked rung, without a cast. */
@@ -218,6 +259,7 @@ export function parseRecallBenchmarkDataset(raw: unknown): RecallBenchmarkDatase
       expected?: unknown;
       k?: unknown;
       answer?: unknown;
+      lang?: unknown;
     };
     if (typeof q.id !== "string" || q.id.trim().length === 0) {
       throw new SearchError("INVALID_INPUT", `benchmark query #${i} needs a non-empty string id`);
@@ -248,15 +290,70 @@ export function parseRecallBenchmarkDataset(raw: unknown): RecallBenchmarkDatase
         `benchmark query '${q.id}' answer must be a non-empty string when present`,
       );
     }
+    if (q.lang !== undefined && (typeof q.lang !== "string" || q.lang.trim().length === 0)) {
+      throw new SearchError(
+        "INVALID_INPUT",
+        `benchmark query '${q.id}' lang must be a non-empty string when present`,
+      );
+    }
     return Object.freeze({
       id: q.id,
       query: q.query,
       expected: Object.freeze([...(q.expected as string[])]) as ReadonlyArray<string>,
       ...(q.k !== undefined ? { k: q.k as number } : {}),
       ...(q.answer !== undefined ? { answer: q.answer as string } : {}),
+      // Present on every parsed entry: the default lives here so the
+      // report split never has to re-derive it. Hand-built datasets (the
+      // type allows omitting the field) fall back in the runner instead.
+      ...(q.lang !== undefined ? { lang: q.lang as string } : { lang: "en" }),
     });
   });
   return Object.freeze({ queries: Object.freeze(parsed) });
+}
+
+/**
+ * The ONE aggregate fold, applied to the whole run and to each language
+ * group alike: a per-language number is never a second scorer, it is this
+ * reduce over the group's slice of `perQuery`.
+ */
+function foldQueryResults(
+  perQuery: ReadonlyArray<RecallBenchmarkQueryResult>,
+): RecallBenchmarkLanguageReport {
+  const hits = perQuery.filter((r) => r.hit).length;
+  const answerScored = perQuery.filter((r) => r.answerContained !== null);
+  const answerHits = answerScored.filter((r) => r.answerContained === true).length;
+  const expectedFoundTotal = perQuery.reduce((sum, r) => sum + r.expectedFound, 0);
+  const expectedDeclaredTotal = perQuery.reduce((sum, r) => sum + r.expectedTotal, 0);
+  const hitRanks = perQuery.filter((r) => r.rank !== null).map((r) => r.rank!);
+  return {
+    total: perQuery.length,
+    hitAtK: hits / perQuery.length,
+    mrr: perQuery.reduce((sum, r) => sum + r.reciprocalRank, 0) / perQuery.length,
+    answerQueries: answerScored.length,
+    answerContainmentAtK: answerScored.length === 0 ? 1 : answerHits / answerScored.length,
+    sourceUtilizationAtK:
+      expectedDeclaredTotal === 0 ? 1 : expectedFoundTotal / expectedDeclaredTotal,
+    citationDepth:
+      hitRanks.length === 0 ? 0 : hitRanks.reduce((sum, r) => sum + r, 0) / hitRanks.length,
+    sourceWarnings: perQuery.length - hits,
+  };
+}
+
+/** Group `perQuery` by language, key order sorted, so the split is stable. */
+function foldByLang(
+  perQuery: ReadonlyArray<RecallBenchmarkQueryResult>,
+): Readonly<Record<string, RecallBenchmarkLanguageReport>> {
+  const groups = new Map<string, RecallBenchmarkQueryResult[]>();
+  for (const row of perQuery) {
+    const group = groups.get(row.lang);
+    if (group !== undefined) group.push(row);
+    else groups.set(row.lang, [row]);
+  }
+  const byLang: Record<string, RecallBenchmarkLanguageReport> = {};
+  for (const lang of [...groups.keys()].toSorted()) {
+    byLang[lang] = foldQueryResults(groups.get(lang)!);
+  }
+  return Object.freeze(byLang);
 }
 
 /**
@@ -329,6 +426,9 @@ export async function runRecallBenchmark(
       return Object.freeze({
         id: q.id,
         query: q.query,
+        // A hand-built dataset (the gate unit tests build theirs inline)
+        // may omit the tag; the parsed form always carries it.
+        lang: q.lang ?? "en",
         hit: rank !== null,
         rank,
         reciprocalRank: rank === null ? 0 : 1 / rank,
@@ -340,29 +440,14 @@ export async function runRecallBenchmark(
     }),
   );
 
-  const hits = perQuery.filter((r) => r.hit).length;
-  const mrr = perQuery.reduce((sum, r) => sum + r.reciprocalRank, 0) / perQuery.length;
-  const answerScored = perQuery.filter((r) => r.answerContained !== null);
-  const answerHits = answerScored.filter((r) => r.answerContained === true).length;
-  const expectedFoundTotal = perQuery.reduce((sum, r) => sum + r.expectedFound, 0);
-  const expectedDeclaredTotal = perQuery.reduce((sum, r) => sum + r.expectedTotal, 0);
-  const hitRanks = perQuery.filter((r) => r.rank !== null).map((r) => r.rank!);
   const degraded = [...new Set(perQuery.flatMap((r) => r.degraded ?? []))].toSorted();
   return Object.freeze({
-    total: perQuery.length,
+    ...foldQueryResults(perQuery),
     k,
     expand,
-    hitAtK: hits / perQuery.length,
-    mrr,
-    answerQueries: answerScored.length,
-    answerContainmentAtK: answerScored.length === 0 ? 1 : answerHits / answerScored.length,
-    sourceUtilizationAtK:
-      expectedDeclaredTotal === 0 ? 1 : expectedFoundTotal / expectedDeclaredTotal,
-    citationDepth:
-      hitRanks.length === 0 ? 0 : hitRanks.reduce((sum, r) => sum + r, 0) / hitRanks.length,
-    sourceWarnings: perQuery.length - hits,
     degraded: Object.freeze(degraded),
     ...(capabilityTier !== undefined ? { capabilityTier } : {}),
     perQuery: Object.freeze(perQuery),
+    byLang: foldByLang(perQuery),
   });
 }
