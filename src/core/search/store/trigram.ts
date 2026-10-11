@@ -143,11 +143,16 @@ export function trigramCandidates(
   try {
     if (prefix !== null || extraFilters.length > 0) {
       // The sargable prefix range every other scoped reader uses
-      // (path-prefix.ts); absent scope leaves the bounds unbound.
+      // (path-prefix.ts); absent scope leaves the bounds unbound, and a
+      // boundless prefix (empty or all U+10FFFFs) runs lower-bound-only -
+      // honouring the module's contract to omit the `path < ?` clause
+      // exactly when `hi` is null, never bind a stand-in for it
+      // (`path < NULL` matches nothing).
       const { lo, hi } = prefix !== null ? pathPrefixRange(prefix) : { lo: "", hi: "" };
       const filters = [
         "chunk_trigram MATCH ?",
-        ...(prefix !== null ? ["d.path >= ?", "d.path < ?"] : []),
+        ...(prefix !== null ? ["d.path >= ?"] : []),
+        ...(prefix !== null && hi !== null ? ["d.path < ?"] : []),
         ...extraFilters,
       ];
       const rows = db
@@ -158,7 +163,12 @@ export function trigramCandidates(
             "JOIN documents d ON d.id = c.document_id " +
             `WHERE ${filters.join(" AND ")} ${CHUNK_ORDER} LIMIT ?`,
         )
-        .all(trigramQuery, ...(prefix !== null ? [lo, hi] : []), ...extraBindings, limit);
+        .all(
+          trigramQuery,
+          ...(prefix !== null ? (hi !== null ? [lo, hi] : [lo]) : []),
+          ...extraBindings,
+          limit,
+        );
       return {
         hits: rows.map((r) => ({ chunkId: r.chunk_id, documentId: r.document_id, bm25: r.bm25 })),
         warnings: NO_WARNINGS,

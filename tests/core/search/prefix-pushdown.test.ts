@@ -40,6 +40,7 @@ import { assertSafePathPrefix } from "../../../src/core/search/pipeline/request.
 import { countDocumentsUnderPrefix } from "../../../src/core/search/store/documents.ts";
 import { pathPrefixRange } from "../../../src/core/search/store/path-prefix.ts";
 import { keywordTopK, keywordTopKSql } from "../../../src/core/search/store/keyword.ts";
+import { trigramCandidates } from "../../../src/core/search/store/trigram.ts";
 import {
   countChunksWithoutEmbeddings,
   findChunksWithoutEmbeddings,
@@ -193,6 +194,42 @@ describe("keyword lane prefix pushdown", () => {
 
   test("absent prefix scans the whole vault as before", () => {
     expect(keywordPaths(null).length).toBe(DOCS.length);
+  });
+});
+
+describe("trigram lane prefix pushdown", () => {
+  test("an all-U+10FFFF prefix runs the lane lower-bound-only", () => {
+    // Seed a document under the boundless prefix directly: its row is only
+    // reachable through the lower-bound scan the null bound demands.
+    const docId = db
+      .query<{ id: number }, [string, string, number, number, string, string, string]>(
+        "INSERT INTO documents(path, content_hash, mtime, size, created_at, updated_at, indexed_at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
+      )
+      .get("\u{10FFFF}\u{10FFFF}sentinel.md", "hash-sentinel", 0, 0, NOW, NOW, NOW)!.id;
+    db.query(
+      "INSERT INTO chunks(document_id, chunk_index, content, fts_content, content_hash, start_line, end_line, token_count, created_at, updated_at) " +
+        "VALUES (?, 0, 'apple sentinel rind', 'apple sentinel rind', 'chash-sentinel', 1, 1, 3, ?, ?)",
+    ).run(docId, NOW, NOW);
+
+    expect(pathPrefixRange("\u{10FFFF}\u{10FFFF}").hi).toBeNull();
+    const outcome = trigramCandidates(db, '"apple"', {
+      limit: 50,
+      pathPrefix: "\u{10FFFF}\u{10FFFF}",
+    });
+    // The defect: the lane bound `d.path < ?` unconditionally, so the
+    // boundless prefix's null bound went into the scan as NULL and the
+    // read answered an empty candidate list.
+    expect(outcome.warnings).toEqual([]);
+    expect(outcome.hits.length).toBe(1);
+    expect(outcome.hits[0]!.documentId).toBe(docId);
+  });
+
+  test("a bounded prefix still binds both ends of the trigram range", () => {
+    const seeded = keywordPaths("notes");
+    expect(seeded.length).toBeGreaterThan(0);
+    const outcome = trigramCandidates(db, '"apple"', { limit: 50, pathPrefix: "notes" });
+    expect(outcome.warnings).toEqual([]);
+    expect(outcome.hits.length).toBe(seeded.length);
   });
 });
 
