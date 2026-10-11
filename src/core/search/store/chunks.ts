@@ -235,12 +235,34 @@ export function replaceDocumentChunks(
       db.run(`DELETE FROM chunks WHERE id IN (${sqlPlaceholders(removed)})`, removed);
     }
 
+    // The page-head rule (schema v14's backfill twin): chunk 0 carries the
+    // frontmatter block when it starts with the `---` fence, and the head is
+    // then the first content chunk - unless the document has no content
+    // chunk at all, in which case chunk 0 is all the page there is. A
+    // document without frontmatter starts its content at chunk 0.
+    const headIndex =
+      chunks[0] !== undefined && chunks[0].content.startsWith("---")
+        ? Math.min(1, chunks.length - 1)
+        : 0;
     const insert = db.prepare<
       { id: number },
-      [number, number, string, string, string, number, number, number, string, string, string]
+      [
+        number,
+        number,
+        string,
+        string,
+        string,
+        number,
+        number,
+        number,
+        string,
+        string,
+        string,
+        string,
+      ]
     >(
-      "INSERT INTO chunks(document_id, chunk_index, content, fts_content, content_hash, start_line, end_line, token_count, heading_path, created_at, updated_at) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+      "INSERT INTO chunks(document_id, chunk_index, content, fts_content, content_hash, start_line, end_line, token_count, heading_path, created_at, updated_at, chunk_kind) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
     );
     const now = nowIso();
     chunks.forEach((c, position) => {
@@ -261,6 +283,7 @@ export function replaceDocumentChunks(
         c.headingPath ?? "",
         now,
         now,
+        position === headIndex ? "page" : "section",
       );
       if (!row) throw new SearchError("INDEX_UNREADABLE", "chunk insert returned no id");
       ids.push(row.id);

@@ -4,7 +4,8 @@
  *
  * Two filters move from post-rank row drops into the lanes' SQL:
  *
- *   - `kind` - the v14 `chunks.chunk_kind` generated column. The keyword
+ *   - `kind` - the v14 `chunks.chunk_kind` column (written by the indexer;
+ *     'page' is the page-head chunk). The keyword
  *     lane takes it into the WHERE clause before ORDER BY/LIMIT; the
  *     semantic lane filters beside the path predicate, inside the same 4x
  *     KNN overfetch the prefix branch has always shared.
@@ -81,7 +82,7 @@ async function seedVault(): Promise<void> {
     note(
       "Note A",
       "type: note\nstatus: active\npinned: true\nvisibility: [public]\n",
-      "lattice delta anchor\n\n## Deeper\n\nlattice delta payload section",
+      "lattice delta anchor\n\n## Deeper\n\nlattice payload section",
     ),
   );
   writeMd(
@@ -94,6 +95,24 @@ async function seedVault(): Promise<void> {
     vault,
     "projects/plan.md",
     note("Plan", "type: note\nstatus: active\n", "lattice delta plan #urgent"),
+  );
+  // A genuinely split document: the Deeper sections are padded past the
+  // chunker's budget so they land in real section chunks, with a term
+  // ("kiln") that exists only in a section body - never in the page head
+  // or a heading the section context would carry.
+  const filler = Array.from(
+    { length: 400 },
+    (_, i) => `kiln row ${i} padding the section body`,
+  ).join("\n");
+  writeMd(
+    vault,
+    "notes/deep.md",
+    note(
+      "Deep",
+      "type: report\n",
+      "lattice delta deep head\n\n## First\n\nlattice payload section\n\n" +
+        `## Bay Two\n\nkiln charge one\n\n${filler}\n\nkiln charge two`,
+    ),
   );
   await indexVault(makeConfig({ vault, dbPath }));
 }
@@ -278,14 +297,14 @@ describe("kind pushdown on the keyword lane", () => {
             "VALUES ('notes/a.md', 'h', 0, 0, 'n', 'n', 'n') RETURNING id",
         )
         .get()!.id;
-      for (const [index, text] of [
-        [0, "lattice delta anchor head"],
-        [1, "lattice delta payload section"],
+      for (const [index, text, kind] of [
+        [0, "lattice delta anchor head", "page"],
+        [1, "lattice delta payload section", "section"],
       ] as const) {
         db.query(
-          "INSERT INTO chunks(document_id, chunk_index, content, fts_content, content_hash, start_line, end_line, token_count, created_at, updated_at) " +
-            "VALUES (?, ?, ?, ?, ?, 1, 1, 3, 'n', 'n')",
-        ).run(docId, index, text, text, `h${index}`);
+          "INSERT INTO chunks(document_id, chunk_index, chunk_kind, content, fts_content, content_hash, start_line, end_line, token_count, created_at, updated_at) " +
+            "VALUES (?, ?, ?, ?, ?, ?, 1, 1, 3, 'n', 'n')",
+        ).run(docId, index, kind, text, text, `h${index}`);
       }
       const pages = keywordTopK(db, '"delta"', { limit: 10, kind: "page" });
       const sections = keywordTopK(db, '"delta"', { limit: 10, kind: "section" });
@@ -325,8 +344,8 @@ describe.skipIf(!VEC_AVAILABLE)("kind and pushdown on the semantic lane", () => 
           .get(path, type)!.id;
         const row = db
           .query<{ id: number }, [number]>(
-            "INSERT INTO chunks(document_id, chunk_index, content, fts_content, content_hash, start_line, end_line, token_count, created_at, updated_at) " +
-              "VALUES (?, 0, 'x', 'x', 'h', 1, 1, 1, 'n', 'n') RETURNING id",
+            "INSERT INTO chunks(document_id, chunk_index, chunk_kind, content, fts_content, content_hash, start_line, end_line, token_count, created_at, updated_at) " +
+              "VALUES (?, 0, 'page', 'x', 'x', 'h', 1, 1, 1, 'n', 'n') RETURNING id",
           )
           .get(docId)!;
         db.query(
@@ -357,26 +376,47 @@ describe.skipIf(!VEC_AVAILABLE)("kind and pushdown on the semantic lane", () => 
 });
 
 describe("end-to-end over an indexed vault", () => {
+  test("kind:page finds the page head of a frontmatter note, not its YAML block", async () => {
+    const cfg = makeConfig({ vault, dbPath });
+    await seedVault();
+    // The page head of note-a is chunk 1 - the intro ("lattice delta anchor"
+    // sits there; the YAML block at chunk 0 is a section-under-the-head no
+    // longer). Before the structural kind, kind:page answered only the YAML
+    // chunk and a note's intro was unreachable through the page filter.
+    const pages = await search(cfg, {
+      query: "anchor",
+      kind: "page",
+      keywordOnly: true,
+      visibility: ["public"],
+    });
+    expect(pages.results.map((r) => r.path)).toEqual(["notes/note-a.md"]);
+    expect(pages.results.every((r) => !r.content.startsWith("---"))).toBe(true);
+  });
+
   test("kind scopes the answer to page or section chunks", async () => {
     const cfg = makeConfig({ vault, dbPath });
     await seedVault();
-    // "payload" exists only in note-a's section chunk.
+    // "kiln" exists only in deep.md's section bodies - never in its page
+    // head or a heading the section context could carry.
     const sections = await search(cfg, {
-      query: "payload",
+      query: "kiln",
       kind: "section",
       keywordOnly: true,
       visibility: ["public"],
     });
     expect(sections.results.length).toBeGreaterThan(0);
-    expect(sections.results.every((r) => r.path === "notes/note-a.md")).toBe(true);
-    expect(sections.results.every((r) => r.content.includes("payload"))).toBe(true);
+    expect(sections.results.every((r) => r.path === "notes/deep.md")).toBe(true);
+    expect(sections.results.every((r) => r.content.includes("kiln"))).toBe(true);
     const pages = await search(cfg, {
-      query: "payload",
+      query: "kiln",
       kind: "page",
       keywordOnly: true,
       visibility: ["public"],
     });
-    expect(pages.results.length).toBe(0);
+    // The second pass answers at the document level: a kiln hit in a
+    // section may surface deep.md's page head, but it never surfaces a
+    // document whose own chunks did not match.
+    expect(pages.results.every((r) => r.path === "notes/deep.md")).toBe(true);
   });
 
   test("promoted type pushes as the stored normalized token", async () => {
@@ -640,7 +680,9 @@ describe("the MCP and CLI surfaces", () => {
       visibility: ["public"],
       kind: "section",
     })) as { results: ReadonlyArray<{ path: string }> };
-    expect(out.results.map((r) => r.path)).toEqual(["notes/note-a.md"]);
+    // "payload" in note-a lives in the page-head chunk; the section-scoped
+    // answer is deep.md's padded First section.
+    expect(out.results.map((r) => r.path)).toEqual(["notes/deep.md"]);
   });
 
   test("brain_search refuses an unknown kind before any store I/O", async () => {

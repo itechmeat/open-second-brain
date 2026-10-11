@@ -2467,7 +2467,7 @@ scheduled run remains the way to compute embeddings periodically.
 ### Kind and property pushdown (since v1.80.0)
 
 ```text
-o2b search query --kind page|section   narrow results to whole pages (the first chunk) or their sections (later chunks)
+o2b search query --kind page|section   narrow results to the page head (frontmatter plus the content before the first heading) or the heading sections under it
 ```
 
 The v14 store migration adds a virtual `chunks.chunk_kind` column (`page`

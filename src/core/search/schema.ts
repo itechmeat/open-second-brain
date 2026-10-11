@@ -649,13 +649,16 @@ export const MIGRATIONS: ReadonlyArray<Migration> = Object.freeze([
     // taxonomy: a kind discriminator on chunks, two indexes the pushed
     // predicates read, and the bounded document-attributes side table.
     //
-    //   - `chunks.chunk_kind`: a VIRTUAL generated column - 'page' for
-    //     `chunk_index = 0` (the frontmatter/head chunk), 'section' for
-    //     everything else. Pure function of existing columns, so the
-    //     ALTER is metadata-only, stores nothing, and needs no backfill;
-    //     STORED generated columns are deliberately avoided because they
-    //     would rewrite every row. Indexed by `idx_chunks_kind` for the
-    //     `kind` filter pushdown.
+    //   - `chunks.chunk_kind`: a plain column - 'page' for the page-HEAD
+    //     chunk (the first content chunk: chunk 1 when the document has a
+    //     frontmatter block at chunk 0, chunk 0 itself otherwise), 'section'
+    //     for everything else. A VIRTUAL expression over chunk_index alone
+    //     (the first draft) would have made `kind: page` match the YAML
+    //     block and miss the note's intro, so the writer now decides from
+    //     structure (the same head rule {@link pageHeadIndex} encodes) and
+    //     the migration backfills existing rows by measuring chunk 0's
+    //     content; a re-index rewrites the column authoritatively. Indexed
+    //     by `idx_chunks_kind` for the `kind` filter pushdown.
     //
     //   - `idx_documents_page_type`: the `type` frontmatter key has been
     //     materialized in `documents.page_type` since v6; the index lets
@@ -686,12 +689,9 @@ export const MIGRATIONS: ReadonlyArray<Migration> = Object.freeze([
       // generated ones, so the guard cannot double-ALTER.
       const chunkCols = db.query<{ name: string }, []>("PRAGMA table_xinfo(chunks)").all();
       if (!chunkCols.some((c) => c.name === CHUNK_KIND_COLUMN)) {
-        db.exec(
-          `ALTER TABLE chunks ADD COLUMN ${CHUNK_KIND_COLUMN} TEXT GENERATED ALWAYS AS ` +
-            `(CASE WHEN chunk_index = ${FRONTMATTER_CHUNK_INDEX} ` +
-            `THEN '${CHUNK_KIND_PAGE}' ELSE '${CHUNK_KIND_SECTION}' END) VIRTUAL`,
-        );
+        db.exec(`ALTER TABLE chunks ADD COLUMN ${CHUNK_KIND_COLUMN} TEXT`);
       }
+      backfillChunkKind(db);
       db.exec("CREATE INDEX IF NOT EXISTS idx_chunks_kind ON chunks(chunk_kind)");
       db.exec("CREATE INDEX IF NOT EXISTS idx_documents_page_type ON documents(page_type)");
       // Child-table shape per the doc_aliases (v7) precedent; the FK
@@ -857,6 +857,51 @@ export function documentAttributesFromFrontmatter(
 
 /** The `chunk_index` a page's frontmatter block lands at, when it has one. */
 const FRONTMATTER_CHUNK_INDEX = 0;
+
+/**
+ * The chunk a document's page head lives at, measured from the indexed
+ * chunks: chunk 0 carries the frontmatter block when it starts with the
+ * `---` fence, and the head is then the first content chunk - unless the
+ * document has no content chunk at all, in which case the frontmatter
+ * block is all the page there is. A document without frontmatter starts
+ * its content at chunk 0. The chunks store applies the same rule at
+ * insert time; this backfill exists for rows written before v14, and a
+ * re-index rewrites the column authoritatively either way.
+ */
+function backfillChunkKind(db: Database): void {
+  const rows = db
+    .query<
+      { document_id: number; has_frontmatter: number; first_content_index: number | null },
+      []
+    >(
+      `SELECT d.id AS document_id,
+         CASE WHEN c0.content LIKE '---%' THEN 1 ELSE 0 END AS has_frontmatter,
+         (SELECT MIN(c1.chunk_index) FROM chunks c1
+            WHERE c1.document_id = d.id AND c1.chunk_index > ${FRONTMATTER_CHUNK_INDEX}
+         ) AS first_content_index
+       FROM documents d
+       LEFT JOIN chunks c0 ON c0.document_id = d.id AND c0.chunk_index = ${FRONTMATTER_CHUNK_INDEX}`,
+    )
+    .all();
+  if (rows.length === 0) return;
+  const page = db.query<never, [string, number, number]>(
+    `UPDATE chunks SET ${CHUNK_KIND_COLUMN} = ?1 ` +
+      `WHERE document_id = ?2 AND chunk_index = ?3 AND ${CHUNK_KIND_COLUMN} IS NULL`,
+  );
+  const section = db.query<never, [string, number]>(
+    `UPDATE chunks SET ${CHUNK_KIND_COLUMN} = ?1 ` +
+      `WHERE document_id = ?2 AND ${CHUNK_KIND_COLUMN} IS NULL`,
+  );
+  for (const row of rows) {
+    // Head = the first content chunk when the document has frontmatter and
+    // content, chunk 0 otherwise (no frontmatter, or frontmatter is all
+    // the document holds).
+    const headIndex =
+      row.has_frontmatter === 1 && row.first_content_index !== null ? row.first_content_index : 0;
+    page.run(CHUNK_KIND_PAGE, row.document_id, headIndex);
+    section.run(CHUNK_KIND_SECTION, row.document_id);
+  }
+}
 
 /**
  * Encode a page's normalised visibility tokens for the column.

@@ -5,10 +5,12 @@
  * The v14 entry appends to the frozen `MIGRATIONS` array and therefore runs
  * inside `applyMigrations`' single open transaction. It adds:
  *
- *   - `chunks.chunk_kind`, a VIRTUAL generated column ('page' for
- *     `chunk_index = 0`, else 'section') with `idx_chunks_kind` - a pure
- *     function of existing columns, so the upgrade is metadata-only and
- *     stores nothing;
+ *   - `chunks.chunk_kind`, a plain column - 'page' for the page-HEAD
+ *     chunk (the first content chunk: chunk 1 when the document has a
+ *     frontmatter block at chunk 0, chunk 0 itself otherwise), 'section'
+ *     for everything else - with `idx_chunks_kind`. The indexer writes it
+ *     at insert and the migration backfills existing rows by measuring
+ *     chunk 0's content (a re-index rewrites it authoritatively);
  *   - `idx_documents_page_type` over the already-materialized `type`
  *     column;
  *   - `document_attributes(document_id, key, value)`, backfilled from
@@ -239,7 +241,7 @@ describe("the v14 entry", () => {
 });
 
 describe("chunk_kind", () => {
-  test("is a VIRTUAL generated column with an index", async () => {
+  test("is a stored column backfilled by the page-head rule, with an index", async () => {
     await seedVault();
     rewindToPreV14Schema();
     migrate();
@@ -251,26 +253,34 @@ describe("chunk_kind", () => {
         )
         .all()
         .find((c) => c.name === "chunk_kind");
-      // hidden = 2 marks a VIRTUAL generated column: computed on read,
-      // stored nowhere.
-      expect(col?.hidden).toBe(2);
+      // hidden = 0: a plain stored column the writer and the backfill fill
+      // (the old position-only VIRTUAL draft made kind:page match the YAML
+      // block instead of the page head).
+      expect(col?.hidden).toBe(0);
       expect(
         db
           .query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'index'")
           .all()
           .map((r) => r.name),
       ).toContain("idx_chunks_kind");
-      const kinds = db
-        .query<{ chunk_index: number; chunk_kind: string }, []>(
-          "SELECT chunk_index, chunk_kind FROM chunks ORDER BY document_id, chunk_index",
+      const rows = db
+        .query<{ path: string; chunk_index: number; chunk_kind: string; content: string }, []>(
+          "SELECT d.path AS path, c.chunk_index AS chunk_index, c.chunk_kind AS chunk_kind, " +
+            "c.content AS content FROM chunks c JOIN documents d ON d.id = c.document_id " +
+            "ORDER BY d.path, c.chunk_index",
         )
         .all();
-      expect(kinds.filter((k) => k.chunk_index === 0).every((k) => k.chunk_kind === "page")).toBe(
-        true,
-      );
-      expect(
-        kinds.filter((k) => k.chunk_index !== 0).every((k) => k.chunk_kind === "section"),
-      ).toBe(true);
+      // The head rule, measured per document: the page chunk is the first
+      // content chunk (chunk 1 when chunk 0 is the `---` fence, chunk 0
+      // otherwise); every other chunk is a section.
+      for (const path of [...new Set(rows.map((r) => r.path))]) {
+        const doc = rows.filter((r) => r.path === path);
+        const head = doc[0]!.content.startsWith("---") ? Math.min(1, doc.length - 1) : 0;
+        for (const row of doc) {
+          expect(row.chunk_kind).toBe(row.chunk_index === head ? "page" : "section");
+        }
+        expect(doc.filter((r) => r.chunk_kind === "page").length).toBe(1);
+      }
     } finally {
       db.close();
     }
