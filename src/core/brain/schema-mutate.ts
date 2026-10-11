@@ -1,3 +1,14 @@
+/**
+ * The schema mutation lane: apply (or preview) a batch of vocabulary
+ * changes to the `Brain/_brain.yaml` pack, with an audit record and a
+ * pack digest per apply.
+ *
+ * DENY COUPLING (PR #248 review L9): this lane consults the permissions
+ * document under the `ingest` action, so a deny on ingest also blocks
+ * schema batches and there is no way to deny schema changes alone - a
+ * dedicated action is a design change, not made here.
+ */
+
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
