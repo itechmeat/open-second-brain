@@ -32,7 +32,9 @@ import {
 } from "../../hooks/lib/injection-ledger.ts";
 import { hookStateFilePath } from "../../hooks/lib/session-state.ts";
 import {
+  ANSWER_QUOTE_MAX_CHARS,
   ANSWER_QUOTE_MAX_FINDINGS,
+  ANSWER_QUOTE_MAX_MESSAGES,
   ANSWER_QUOTE_NOTE_MAX_BYTES,
   evidenceFor,
 } from "../../hooks/answer-quote-check.ts";
@@ -309,7 +311,6 @@ describe("answer-quote-check hook - the bounded cited-note read", () => {
   test("the ceiling is the 1 MiB-scale named constant", () => {
     expect(ANSWER_QUOTE_NOTE_MAX_BYTES).toBe(1_048_576);
   });
-
   test("a note past the ceiling reads its head only, as truncated evidence", () => {
     writeNote(
       "Brain/notes/big.md",
@@ -362,6 +363,48 @@ describe("answer-quote-check hook - the bounded cited-note read", () => {
       text: "Second line: reuses staked capital.",
       truncated: true,
     });
+  });
+});
+
+describe("answer-quote-check hook - the read bounds", () => {
+  test("a quoted span outside the message window is never checked", async () => {
+    writeConfig("shadow");
+    writeNote("Brain/notes/restaking.md", "Restaking reuses staked capital.\n");
+    // More assistant messages than the window reads; only the OLDEST one
+    // quotes a span, and the window keeps the newest
+    // ANSWER_QUOTE_MAX_MESSAGES - so the span is never seen.
+    expect(8).toBeGreaterThan(ANSWER_QUOTE_MAX_MESSAGES);
+    const messages: string[] = [
+      ccAssistant('The note claims "fabricated outside the window entirely".'),
+      ...Array.from({ length: 7 }, (_, i) => ccAssistant(`Clean answer ${i} without quotes.`)),
+    ];
+    writeTranscript([ccUser("summarize"), ...messages]);
+    const run = await runHook();
+    expect(run.exit).toBe(0);
+    expect(run.stderr).toBe("");
+    expect(annotations(run)).toEqual([]);
+  });
+
+  test("a quoted span past the char clamp is never checked; the clamped body is", async () => {
+    writeConfig("shadow");
+    writeNote("Brain/notes/restaking.md", "Restaking reuses staked capital.\n");
+    const head =
+      'Per Brain/notes/restaking.md, the note says "pooled capital in full view" plainly. ';
+    const filler = "No quotation marks in this filler sentence at all. ";
+    const tail =
+      'The note also says "fabricated past the clamp entirely" (Brain/notes/restaking.md).';
+    const body =
+      head +
+      filler.repeat(Math.ceil((ANSWER_QUOTE_MAX_CHARS + 200 - head.length) / filler.length)) +
+      tail;
+    expect(body.length).toBeGreaterThan(ANSWER_QUOTE_MAX_CHARS);
+    writeTranscript([ccUser("summarize"), ccAssistant(body)]);
+    const run = await runHook();
+    expect(run.exit).toBe(0);
+    const found = annotations(run);
+    expect(found.length).toBe(1);
+    expect(found[0]).toContain("pooled capital in full view");
+    expect(found[0]).not.toContain("fabricated past the clamp");
   });
 });
 
