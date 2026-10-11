@@ -9,6 +9,8 @@ import {
   importSessionRecall,
   searchSessionRecall,
 } from "../../../src/core/brain/session-recall.ts";
+import { appendContinuityRecord } from "../../../src/core/brain/continuity/store.ts";
+import type { ContinuityRecord } from "../../../src/core/brain/continuity/types.ts";
 import type { SessionTurn } from "../../../src/core/brain/sessions/types.ts";
 
 let vault: string;
@@ -261,5 +263,86 @@ describe("session recall — since/before time bounds (S1 / t_347e8224)", () => 
   test("no bounds is byte-identical to the unbounded search (all three turns)", () => {
     seed();
     expect(turnIdsFor({}).toSorted(byString)).toEqual(["t1", "t2", "t3"]);
+  });
+});
+
+describe("session recall - explicit no-session semantics (t_22d58fa7)", () => {
+  /**
+   * Seed one raw turn whose payload names no session, the way the
+   * conditional telemetry writers leave the key absent. `override`
+   * replaces the identity wholesale, so a test can also seed a non-string
+   * value - the coercion the read path used to perform.
+   */
+  function seedUnattributedTurn(sessionId: unknown): ContinuityRecord {
+    return appendContinuityRecord(vault, {
+      kind: "session_turn",
+      createdAt: "2026-05-20T17:30:00.000Z",
+      payload: {
+        turn_id: "tno",
+        role: "user",
+        text: "unattributed needle",
+        ...(sessionId !== undefined ? { session_id: sessionId } : {}),
+      },
+    });
+  }
+
+  function seedAttributedSession(): void {
+    importSessionRecall(vault, {
+      sessionId: "session-a",
+      turns: [turn("t1", "user", "attributed needle")],
+      summaryGroupSize: 2,
+      createdAt: "2026-05-20T17:00:00.000Z",
+    });
+  }
+
+  test("a record without session_id is excluded from scoped recall and kept by unscoped search", () => {
+    seedAttributedSession();
+    seedUnattributedTurn(undefined);
+
+    const scoped = searchSessionRecall(vault, { query: "needle", sessionId: "session-a" });
+    expect(scoped.hits.map((hit) => hit.turn_id)).toEqual(["t1"]);
+
+    const unscoped = searchSessionRecall(vault, { query: "needle" });
+    expect(unscoped.hits.map((hit) => hit.turn_id).toSorted()).toEqual(["t1", "tno"]);
+  });
+
+  test("a non-string session_id is excluded, not coerced into a scope match", () => {
+    seedAttributedSession();
+    const numeric = seedUnattributedTurn(42);
+    const nulled = seedUnattributedTurn(null);
+
+    // The read used to coerce 42 to "42" and match a scope asked for as
+    // "42"; a number names no session and must never match one.
+    const scoped = searchSessionRecall(vault, { query: "needle", sessionId: "42" });
+    expect(scoped.hits).toHaveLength(0);
+
+    const unscoped = searchSessionRecall(vault, { query: "needle" });
+    const unscopedIds = unscoped.hits.map((hit) => hit.id);
+    expect(unscopedIds).toContain(numeric.id);
+    expect(unscopedIds).toContain(nulled.id);
+  });
+
+  test("the lineage ledger's blank-id omission is pinned: a blank record contributes no link", () => {
+    seedAttributedSession();
+    appendContinuityRecord(vault, {
+      kind: "session_turn",
+      createdAt: "2026-05-20T17:40:00.000Z",
+      payload: {
+        turn_id: "tblank",
+        role: "user",
+        text: "blank lineage needle",
+        root_session_id: "root-blank",
+        parent_session_id: "root-blank",
+      },
+    });
+
+    // The blank record stamps a root but no session id, so it joins no
+    // lineage map and cannot turn the flat session into a chain.
+    const described = describeSessionRecall(vault, { sessionId: "session-a" });
+    expect("lineage_root" in described).toBe(false);
+    expect("segments" in described).toBe(false);
+
+    const scoped = searchSessionRecall(vault, { query: "needle", sessionId: "session-a" });
+    expect(scoped.hits.every((hit) => hit.turn_id !== "tblank")).toBe(true);
   });
 });

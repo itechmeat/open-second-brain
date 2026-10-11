@@ -10,6 +10,8 @@ import {
 } from "./continuity/store.ts";
 import {
   CONTINUITY_AGENT_ID_KEY,
+  CONTINUITY_SESSION_ID_KEY,
+  type ContinuityPayload,
   type ContinuityRecord,
   type ContinuitySourceRef,
 } from "./continuity/types.ts";
@@ -187,6 +189,21 @@ export interface ExpandSessionRecallResult {
 const DEFAULT_GROUP_SIZE = 8;
 const DEFAULT_LIMIT = 10;
 const DEFAULT_SNIPPET_CHARS = 160;
+
+/**
+ * The session id a continuity payload names, or `undefined` when it names
+ * no session: the key absent, a non-string value, or the empty string
+ * (t_22d58fa7). Absence stays absence - the reader-side reading of the
+ * orphan-session precedent, where `session:unknown` is a statement that
+ * there was no session rather than a pointer to a missing one. The
+ * `String(... ?? "")` coercion this replaces manufactured both a phantom
+ * `""` identity for unattributed records and a string match for a
+ * non-string one.
+ */
+export function sessionIdOf(payload: ContinuityPayload): string | undefined {
+  const value = payload[CONTINUITY_SESSION_ID_KEY];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
 
 export function importSessionRecall(
   vault: string,
@@ -574,7 +591,15 @@ function sessionRecallRecords(
   let scoped = records;
   if (sessionId !== undefined) {
     const scope = lineageScope(vault, records, sessionId);
-    scoped = records.filter((record) => scope.has(String(record.payload["session_id"] ?? "")));
+    // A record naming no session is excluded from a scoped read: the scope
+    // set only ever holds real ids (the lineage ledger omits blank
+    // declarations), so matching against a coerced "" or a stringified
+    // non-string could only ever exclude by accident or match by invention.
+    // Unscoped reads still return the record.
+    scoped = records.filter((record) => {
+      const sid = sessionIdOf(record.payload);
+      return sid !== undefined && scope.has(sid);
+    });
   }
   return scoped.sort((left, right) => compareRecords(left, right));
 }
