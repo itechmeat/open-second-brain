@@ -30,7 +30,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { sqliteVecLoadable } from "../../helpers/sqlite-vec.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
-import { documentIdsExcludedByAttributeNarrowing } from "../../../src/core/search/store/documents.ts";
+import { documentIdsExcludedByAttributeNarrowing } from "../../../src/core/search/property-pushdown.ts";
 import {
   LATEST_SCHEMA_VERSION,
   MIGRATIONS,
