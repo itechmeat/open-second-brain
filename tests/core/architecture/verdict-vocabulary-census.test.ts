@@ -500,6 +500,11 @@ import {
   MANIFEST_STATUS,
   MANIFEST_STATUSES,
 } from "../../../src/core/brain/architect/manifests.ts";
+import {
+  ANSWER_QUOTE_VERDICT,
+  ANSWER_QUOTE_VERDICTS,
+  isAnswerQuoteVerdict,
+} from "../../../src/core/brain/answer-quotes/check.ts";
 
 interface VocabularyUnderCensus {
   /** Identifies the vocabulary in a failure message. */
@@ -1552,6 +1557,18 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     members: REVIEW_LANES,
     guard: isReviewLane,
   },
+  {
+    // The verdict on one quoted span of a host answer (answer-trust wave,
+    // Lane A). It rides the Stop hook's annotation and the enforce trail's
+    // Brain-log event, and its degradation members are the point: a
+    // truncated note can under-deliver evidence but never acquits a span
+    // (`source-truncated`), and "we could not check" is a finding, not an
+    // all-clear (`note-unavailable`).
+    name: "ANSWER_QUOTE_VERDICT",
+    values: ANSWER_QUOTE_VERDICT,
+    members: ANSWER_QUOTE_VERDICTS,
+    guard: isAnswerQuoteVerdict,
+  },
 ]);
 
 // ---------------------------------------------------------------------------
@@ -1816,7 +1833,7 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
  * How many four-piece vocabularies `src/` currently holds. Measured, and
  * kept as an equality rather than a floor - see the population test.
  */
-const VOCABULARY_POPULATION = 95;
+const VOCABULARY_POPULATION = 96;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {
