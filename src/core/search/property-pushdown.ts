@@ -8,11 +8,19 @@
  *
  *   - `type`    -> `documents.page_type` (v6), stored as the normalized
  *                  token (`normalizeSchemaToken`: NFC + trim + lower);
- *   - `tags`    -> the tag links (`links.link_type = 'tag'`, the inline tag
- *                  corpus the index holds);
  *   - `pinned`  -> `documents.pinned` (v13), 1/0;
  *   - `visibility` -> `documents.visibility` (v12), the JSON array of
  *                  normalized tokens.
+ *
+ * `tags` does NOT push (recall-quality review). The only tag rows the
+ * index holds are the inline #hashtags: the indexer extracts links from
+ * the CHUNK BODIES and frontmatter is stripped before chunking, so
+ * `links.link_type = 'tag'` never sees a frontmatter tag - while the live
+ * filter reads frontmatter `tags`. A tags EXISTS therefore answered a
+ * corpus the live filter never reads and produced false negatives for
+ * every frontmatter-tagged note. Making it faithful would need new
+ * storage for frontmatter tags; until that exists the key is DEMOTED to
+ * the post-rank live filter, which is the arbiter.
  *
  * Pushed keys answer AS INDEXED, in their stored canonical form - the same
  * relationship to the live file that every other indexed facet (the content
@@ -82,8 +90,6 @@ export interface PropertyPushdown {
   readonly pageTypes?: ReadonlyArray<string>;
   /** `documents.pinned = 1`, pushed only for the accepted set {"true"}. */
   readonly pinned?: boolean;
-  /** The tag-link EXISTS, values matched exactly as the index stored them. */
-  readonly tags?: ReadonlyArray<string>;
   /** `json_each(documents.visibility)` membership, normalized tokens. */
   readonly visibilityTokens?: ReadonlyArray<string>;
   /**
@@ -165,7 +171,6 @@ export function resolvePropertyPushdown(
   const acc: {
     pageTypes?: ReadonlyArray<string>;
     pinned?: boolean;
-    tags?: ReadonlyArray<string>;
     visibilityTokens?: ReadonlyArray<string>;
   } = {};
   const promotedMap = new Map<string, string[]>();
@@ -196,15 +201,10 @@ export function resolvePropertyPushdown(
         promotedMap.set(key, accepted);
         pushed = true;
       }
-    } else if (key === "tags") {
-      // Exact match against the stored tag text; an empty accepted list
-      // matches nothing, which the post-rank path answers faithfully.
-      if (accepted.length > 0) {
-        acc.tags = accepted;
-        promotedMap.set(key, accepted);
-        pushed = true;
-      }
     }
+    // `tags` deliberately has no push branch: the only stored tag corpus is
+    // the inline-hashtag links, the live filter reads frontmatter tags, and
+    // the key is demoted to the post-rank half (see the module header).
     if (!pushed) fallback.set(key, accepted);
   }
   // The unpromoted half also narrows the candidate pool against the v14
@@ -214,10 +214,7 @@ export function resolvePropertyPushdown(
   // judges every surfaced row.
   const narrowing = attributeNarrowingEntries(properties);
   const promoted =
-    acc.pageTypes !== undefined ||
-    acc.pinned === true ||
-    acc.tags !== undefined ||
-    acc.visibilityTokens !== undefined;
+    acc.pageTypes !== undefined || acc.pinned === true || acc.visibilityTokens !== undefined;
   return {
     pushdown:
       promoted || narrowing !== null
@@ -226,7 +223,6 @@ export function resolvePropertyPushdown(
               ? {
                   ...(acc.pageTypes !== undefined ? { pageTypes: acc.pageTypes } : {}),
                   ...(acc.pinned === true ? { pinned: true } : {}),
-                  ...(acc.tags !== undefined ? { tags: acc.tags } : {}),
                   ...(acc.visibilityTokens !== undefined
                     ? { visibilityTokens: acc.visibilityTokens }
                     : {}),
@@ -247,9 +243,7 @@ function placeholders(count: number): string {
 /**
  * Compile a pushdown to the WHERE fragment (AND-joined, no leading AND)
  * and its bindings, or null when nothing is pushed. Every predicate is
- * written against the `d` alias of the documents table, and the tag EXISTS
- * aliases its own link row (`ptag`) so it cannot collide with a caller of
- * the enclosing query.
+ * written against the `d` alias of the documents table.
  */
 export function pushdownSqlFragment(
   pushdown: PropertyPushdown | null | undefined,
@@ -263,13 +257,6 @@ export function pushdownSqlFragment(
   }
   if (pushdown.pinned === true) {
     clauses.push("d.pinned = 1");
-  }
-  if (pushdown.tags !== undefined) {
-    clauses.push(
-      `EXISTS (SELECT 1 FROM links ptag WHERE ptag.source_document_id = d.id ` +
-        `AND ptag.link_type = 'tag' AND ptag.link_text IN (${placeholders(pushdown.tags.length)}))`,
-    );
-    bindings.push(...pushdown.tags);
   }
   if (pushdown.visibilityTokens !== undefined) {
     clauses.push(

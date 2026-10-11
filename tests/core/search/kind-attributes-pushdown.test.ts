@@ -9,14 +9,20 @@
  *     semantic lane filters beside the path predicate, inside the same 4x
  *     KNN overfetch the prefix branch has always shared.
  *   - the promoted property keys - `type` (documents.page_type, values
- *     normalized via `normalizeSchemaToken`), `tags` (the tag-link EXISTS),
- *     `pinned` (documents.pinned, pushed only for the unambiguous "true"
- *     spelling) and `visibility` (the JSON column via `json_each`). Their
- *     values are pushed AS INDEXED: `type` and `visibility` are matched in
- *     their stored canonical form, and `tags` matches the tag corpus the
- *     index holds (the inline tag links), not the live file - the same
- *     as-indexed vs as-on-disk divergence every other indexed facet has.
- *     Every UNPROMOTED key stays a post-rank live-file filter.
+ *     normalized via `normalizeSchemaToken`), `pinned` (documents.pinned,
+ *     pushed only for the unambiguous "true" spelling) and `visibility`
+ *     (the JSON column via `json_each`). Their values are pushed AS
+ *     INDEXED, matched in their stored canonical form.
+ *
+ * `tags` does NOT push (recall-quality review): the only tag rows the
+ * index stores are the inline #hashtag links - frontmatter is stripped
+ * before chunking, so `links.link_type = 'tag'` never sees a frontmatter
+ * tag - while the live filter reads frontmatter `tags`. Pushing answered
+ * a corpus the live filter never reads and dropped frontmatter-tagged
+ * notes, so `tags` stays a post-rank live-file filter. Every UNPROMOTED
+ * key stays post-rank too, and the promoted half also re-judges the
+ * traversal-arm candidates (searchType "link") that never met the lanes'
+ * SQL.
  *
  * Pinned here: the SQL builders' default and prefix-only strings are
  * byte-identical to pre-C4 (an absent filter never rewrites a query), a
@@ -388,7 +394,7 @@ describe("end-to-end over an indexed vault", () => {
     ]);
   });
 
-  test("promoted pinned, visibility and tags push through their storage", async () => {
+  test("promoted pinned and visibility push through their storage", async () => {
     const cfg = makeConfig({ vault, dbPath });
     await seedVault();
     const pinned = await search(cfg, {
@@ -405,13 +411,38 @@ describe("end-to-end over an indexed vault", () => {
       properties: new Map([["visibility", ["public"]]]),
     });
     expect(visible.results.map((r) => r.path)).toEqual(["notes/note-a.md"]);
+  });
+
+  test("a tags filter answers the live frontmatter, not the inline-hashtag links", async () => {
+    // The only tag rows the index stores are the inline #hashtags (frontmatter
+    // is stripped before chunking, so `links.link_type = 'tag'` never sees a
+    // frontmatter tag) - pushing a tags EXISTS answered a corpus the live
+    // filter never reads and dropped frontmatter-tagged notes. Demoted to the
+    // post-rank live filter, the arbiter: the frontmatter-tagged note-b
+    // resolves, and plan.md - whose #urgent is inline only, so its
+    // frontmatter has no `tags` key at all - is correctly excluded.
+    const cfg = makeConfig({ vault, dbPath });
+    await seedVault();
     const tagged = await search(cfg, {
       query: "delta",
       keywordOnly: true,
       visibility: ["public"],
       properties: new Map([["tags", ["urgent"]]]),
     });
-    expect(tagged.results.map((r) => r.path)).toEqual(["projects/plan.md"]);
+    expect(tagged.results.map((r) => r.path)).toEqual(["notes/note-b.md"]);
+  });
+
+  test("the tags key never pushes: it stays in the post-rank fallback half", () => {
+    const split = resolvePropertyPushdown(new Map([["tags", ["urgent"]]]));
+    expect(split.pushdown).toBeNull();
+    expect(split.promoted).toBeNull();
+    expect([...split.fallback!.keys()]).toEqual(["tags"]);
+    const sql = keywordTopKSql({
+      pathPrefix: "notes",
+      pushdown: { pageTypes: ["note"] },
+    });
+    expect(sql).not.toContain("ptag");
+    expect(sql).not.toContain("link_type");
   });
 
   test("a mixed map filters by both halves: promoted in SQL, the rest post-rank", async () => {
