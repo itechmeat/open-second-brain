@@ -290,7 +290,7 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
     properties: {
       type: "object",
       description:
-        "Optional frontmatter property filter (v0.10.17). Each key maps to one or more accepted scalar values; multi-value within a key is OR, multiple keys is AND. The promoted keys (type, tags, pinned, visibility) filter the indexed snapshot in its stored form; every other key filters the live file post-rank.",
+        "Optional frontmatter filter; values within a key OR, keys AND. Promoted keys (type, tags, pinned, visibility) answer as indexed; others filter the live file.",
       additionalProperties: {
         type: "array",
         items: { type: "string" },

@@ -70,7 +70,7 @@ describe("the bundle import wildcard-allowlist warning", () => {
     expect(result.stderr).toContain("warning");
     expect(result.stderr).toContain('"open-entry"');
     expect(result.stderr).not.toContain('"narrow-entry"');
-  });
+  }, 20000);
 
   test("a non-wildcard bundle imports silently and works", async () => {
     await setSecret("narrow-entry", ["bun -e *"]);
@@ -84,7 +84,7 @@ describe("the bundle import wildcard-allowlist warning", () => {
     const list = await runCli(["brain", "secret", "list", "--vault", vault]);
     expect(list.returncode).toBe(0);
     expect(list.stdout).toContain("narrow-entry");
-  });
+  }, 20000);
 
   test("an edited (widened) bundle still refuses on its AAD, warning or not", async () => {
     await setSecret("narrow-entry", ["bun -e *"]);
@@ -100,5 +100,5 @@ describe("the bundle import wildcard-allowlist warning", () => {
     const result = await importBundle(bundle);
     expect(result.returncode).toBe(1);
     expect(result.stderr).toContain("refus");
-  });
-}, 20000);
+  }, 20000);
+});

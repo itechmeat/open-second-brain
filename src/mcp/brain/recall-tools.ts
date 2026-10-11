@@ -1145,7 +1145,7 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_recall_telemetry",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
-      "List recall telemetry records or summarize recall coverage and gaps; cost folds write volume (feedback/apply-evidence/note/host writes) against reads into a write-vs-read ratio, a write-heavy flag, and a rough cost signal per period; dead_weight folds the vault's in-scope pages against every path recorded recall ever surfaced into the never-surfaced complement (window and telemetry opt-in caveat stated, hidden pages dropped before totals). Emitted only by opt-in callers. Read-only.",
+      "List recall telemetry records or summarize recall coverage and gaps; cost folds write volume against reads per period; dead_weight reports in-scope pages no recorded recall ever surfaced, window stated and hidden pages dropped before totals. Opt-in emit; read-only.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1161,7 +1161,7 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
             "dead_weight",
           ],
           description:
-            "list/summary for recall telemetry; gate_list/gate_summary for gate decisions; observed_reuse for the observed-use ranking signal; cost for the cost meter; dead_weight for the never-surfaced complement.",
+            "list/summary telemetry; gate_list/gate_summary gate decisions; observed_reuse use ranking; cost the cost meter; dead_weight the never-surfaced view.",
         },
         mode: {
           type: "string",

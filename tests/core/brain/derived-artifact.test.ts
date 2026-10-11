@@ -110,7 +110,7 @@ describe("writeDerivedArtifact", () => {
     // The atomic writer renames a sibling temp file over the target: the
     // directory holds the artifact and nothing else, and the bytes under
     // the name are always one complete JSON document, never a hybrid.
-    expect(readdirSync(dir).toSorted()).toEqual([REL.split(/[\\/]/).pop()]);
+    expect(readdirSync(dir).toSorted()).toEqual([REL.split(/[\\/]/).pop()!]);
     expect(JSON.parse(readFileSync(join(vault, REL), "utf8"))).toEqual(
       artifact({ items: ["second"] }),
     );

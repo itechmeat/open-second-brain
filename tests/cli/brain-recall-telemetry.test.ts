@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { emitObservedUse } from "../../src/core/brain/observed-use.ts";
 import { emitRecallTelemetry, RECALL_CHANNEL } from "../../src/core/brain/recall-telemetry.ts";
-import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
+import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { INVALID_PARAMS } from "../../src/mcp/protocol.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
@@ -213,7 +213,7 @@ async function callTelemetryResult(
   return JSON.parse(response.result!.content[0]!.text) as Record<string, unknown>;
 }
 
-async function initializedServer(reach: TRANSPORT_REACH | undefined): Promise<MCPServer> {
+async function initializedServer(reach: TransportReach | undefined): Promise<MCPServer> {
   const configPath = join(vault, "config.yaml");
   writeFileSync(configPath, `vault: ${vault}\n`);
   // `reach` is a runtime option (the transport's own fact), not a plain
