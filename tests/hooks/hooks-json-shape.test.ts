@@ -119,7 +119,7 @@ describe("hooks.json Stop hygiene-digest entry", () => {
       }
     ).hooks["Stop"] ?? [];
 
-  test("exactly one Stop * group carries exactly one hygiene-digest entry, after stop-log-guardrail", () => {
+  test("exactly one Stop * group carries exactly one hygiene-digest entry, last in the group", () => {
     const stars = stopGroups.filter((group) => group.matcher === "*");
     expect(stars.length).toBe(1);
     const hooks = stars[0]!.hooks;
@@ -129,7 +129,30 @@ describe("hooks.json Stop hygiene-digest entry", () => {
       .map((h, i) => (h.command.includes("o2b-hook hygiene-digest") ? i : -1))
       .filter((i) => i >= 0);
     expect(digestIndices).toEqual([hooks.length - 1]);
-    expect(digestIndices[0]).toBe(guardrail + 1);
+  });
+
+  test("the Stop * group carries exactly one answer-quote-check entry, after stop-log-guardrail", () => {
+    const stars = stopGroups.filter((group) => group.matcher === "*");
+    expect(stars.length).toBe(1);
+    const hooks = stars[0]!.hooks;
+    const guardrail = hooks.findIndex((h) => h.command.includes("o2b-hook stop-log-guardrail"));
+    const digest = hooks.findIndex((h) => h.command.includes("o2b-hook hygiene-digest"));
+    const quoteChecks = hooks
+      .map((h, i) => (h.command.includes("o2b-hook answer-quote-check") ? i : -1))
+      .filter((i) => i >= 0);
+    expect(quoteChecks).toEqual([guardrail + 1]);
+    expect(quoteChecks[0]).toBeLessThan(digest);
+    // The annotation can never block the agent: same resilient shape as
+    // every sibling, and the dispatch target resolves to an existing hook.
+    const entry = hooks[quoteChecks[0]!]!;
+    expect(entry.timeout).toBe(10);
+    expect(entry.statusMessage).toBeDefined();
+    expect(entry.type).toBe("command");
+    const tail = entry.command.trimEnd();
+    expect(tail.endsWith("exit 0")).toBe(true);
+    const match = /exec o2b-hook ([a-z0-9-]+); exit 0$/.exec(tail);
+    expect(match).not.toBeNull();
+    expect(existsSync(join(REPO, "hooks", match![1]! + ".ts"))).toBe(true);
   });
 
   test("the hygiene-digest dispatch target resolves to an existing hook file with the sibling timeout and fail-soft shape", () => {

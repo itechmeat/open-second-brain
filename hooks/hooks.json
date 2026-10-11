@@ -127,6 +127,12 @@
           },
           {
             "type": "command",
+            "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" answer-quote-check; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook answer-quote-check; exit 0",
+            "timeout": 10,
+            "statusMessage": "OSB: verifying quoted spans against this turn's notes"
+          },
+          {
+            "type": "command",
             "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" hygiene-digest; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook hygiene-digest; exit 0",
             "timeout": 10,
             "statusMessage": "OSB: surfacing pending hygiene findings (opt-in)"
