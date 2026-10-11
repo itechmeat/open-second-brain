@@ -25,6 +25,7 @@
 
 import { resolveTelegramBotToken } from "../config.ts";
 import { pathIsInside, realpathInsideVault } from "../path-safety.ts";
+import { SecretReferenceError } from "../secret-ref.ts";
 import { resolveResearchPoolEnv } from "../brain/research/research.ts";
 import { resolveSearchConfig } from "../search/index.ts";
 import type { ResolvedSearchConfig } from "../search/types.ts";
@@ -164,15 +165,32 @@ export function measureDataOwnership(opts: MeasureDataOwnershipOptions): DataOwn
     };
   }
 
-  const research = resolveResearchPoolEnv(process.env);
+  // The vault-resolved configuration, not raw `process.env` alone: a key
+  // env written as a `$secret:NAME` reference resolves the way the runtime
+  // resolves it - the custody store of THIS vault first, the environment
+  // fallback second - so a raw reference no longer counts as a configured
+  // research key, and a reference that resolves nowhere surfaces the
+  // resolver's named error instead of quietly yielding a pool. The
+  // measurement reports that refusal as `unchecked` with the reason the
+  // resolver gave: the row names the unresolved reference, which is the
+  // v1.78.0 claim, now true on the live path.
+  let researchRow: OutboundMeasurement;
+  try {
+    const research = resolveResearchPoolEnv(process.env, opts.vault);
+    researchRow = present(research.braveApiKey !== null || research.tavilyApiKey !== null);
+  } catch (err) {
+    if (!(err instanceof SecretReferenceError)) throw err;
+    researchRow = {
+      state: OUTBOUND_STATE.unchecked,
+      reason: `the research key could not be resolved: ${err.message}`,
+    };
+  }
 
   const outbound: Record<OutboundServiceId, OutboundMeasurement> = {
     [OUTBOUND_SERVICE.embedding]: fromSearch.embedding,
     [OUTBOUND_SERVICE.rerank]: fromSearch.rerank,
     [OUTBOUND_SERVICE.telegram]: telegram,
-    [OUTBOUND_SERVICE.research]: present(
-      research.braveApiKey !== null || research.tavilyApiKey !== null,
-    ),
+    [OUTBOUND_SERVICE.research]: researchRow,
   };
 
   return buildDataOwnership({
