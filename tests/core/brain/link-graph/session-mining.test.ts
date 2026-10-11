@@ -353,6 +353,20 @@ describe("mineAndRecordTurn", () => {
     expect(seen.size).toBe(2);
   });
 
+  test("a fresh run seeds its dedupe set from the ledger: a re-import dedupes", () => {
+    // A re-import starts from an empty caller-owned set - the shape every
+    // new process has. The first turn of the run reads the existing
+    // mention rows once and seeds the set from them, so the re-import
+    // folds to dedupe counters instead of appending duplicate rows.
+    mineAndRecordTurn(vault, input());
+    expect(ledgerLines()).toBe(2);
+
+    const reimport = mineAndRecordTurn(vault, input({ seen: new Set() }));
+    expect(reimport.extracted).toBe(0);
+    expect(reimport.deduped).toBe(2);
+    expect(ledgerLines()).toBe(2);
+  });
+
   test("a failed ledger append is counted by name, never silent", () => {
     // Sabotage: a regular file where the continuity ledger's directory must
     // be, so every append throws. The telemetry-grade tolerance holds - the

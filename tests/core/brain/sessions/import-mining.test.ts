@@ -24,8 +24,6 @@ import {
 import {
   MAX_MINED_KEYS_PER_SESSION,
   SESSION_ENTITY_MENTION_KIND,
-  type SessionMiningFamily,
-  miningDedupeId,
 } from "../../../../src/core/brain/link-graph/session-mining.ts";
 import { importSession } from "../../../../src/core/brain/sessions/import.ts";
 import { brainConfigPath } from "../../../../src/core/brain/paths.ts";
@@ -190,27 +188,23 @@ describe("importSession - session entity mining", () => {
     expect(ledgerMentions()).toEqual([]);
   });
 
-  test("re-importing the session with mining folds to the same mention set", async () => {
+  test("re-importing the session appends no duplicate mention rows", async () => {
     const path = writeUserSession("mining-reimport.jsonl", ["pin `SessionStore` here"]);
     await importSession(vault, path, { agent: "tester", now: NOW });
-    // A second run appends rows whose identity folds identically; the
-    // (family, key, sessionRef) fold below is the dedupe contract the
-    // hallways pass reads through.
-    await importSession(vault, path, { agent: "tester", now: NOW });
+    // A run's dedupe set is seeded from the ledger rows already on disk,
+    // so a re-import folds every mention to its (family, key, sessionRef)
+    // row instead of appending a duplicate: the ledger stays one row per
+    // mention no matter how often the directory import repeats.
+    const second = await importSession(vault, path, { agent: "tester", now: NOW });
 
-    const records = ledgerMentions();
-    const folded = new Set(
-      records.map((r) =>
-        miningDedupeId(
-          // The import loop writes only mined families; the record's
-          // payload reads back unknown, so the fold narrows by contract.
-          r.payload["family"] as SessionMiningFamily,
-          String(r.payload["key"]),
-          String(r.payload["session_ref"]),
-        ),
-      ),
-    );
-    expect(folded.size).toBe(1);
+    expect(second.mined_extracted).toBe(0);
+    expect(second.mined_deduped).toBe(1);
+    expect(ledgerMentions().length).toBe(1);
+
+    const third = await importSession(vault, path, { agent: "tester", now: NOW });
+    expect(third.mined_extracted).toBe(0);
+    expect(third.mined_deduped).toBe(1);
+    expect(ledgerMentions().length).toBe(1);
   });
 
   test("a sabotaged ledger mid-import names the failure through the import result", async () => {

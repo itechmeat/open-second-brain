@@ -42,13 +42,16 @@
  *
  * The ledger write is one `session_entity_mention` continuity record per
  * (family, key, sessionRef), deduped within an import run through the
- * caller-owned `seen` set. Rows are append-only; the hallways pass folds
- * duplicates out at the same granularity, so a re-imported transcript
- * folds to the same mention set.
+ * caller-owned `seen` set - SEEDED from the mention rows already on disk
+ * on the run's first turn, so a re-imported transcript folds to dedupe
+ * counters instead of appending duplicate rows. Rows are append-only; the
+ * hallways pass folds duplicates out at the same granularity, so a
+ * re-imported transcript folds to the same mention set either way - the
+ * seed keeps the ledger itself from growing on every re-import.
  */
 
 import { privateRegionTexts, redactRawOutput, redactSpecifierCredentials } from "../../redactor.ts";
-import { appendContinuityRecord } from "../continuity/store.ts";
+import { appendContinuityRecord, listContinuityRecords } from "../continuity/store.ts";
 import type { ContinuityRecordKind } from "../continuity/types.ts";
 import { isoSecond } from "../time.ts";
 
@@ -116,6 +119,47 @@ function sessionBudgets(seen: Set<string>): Map<string, number> {
     sessionKeyBudgets.set(seen, budgets);
   }
   return budgets;
+}
+
+/**
+ * Run-scoped seed marker: a dedupe set that has already read the ledger
+ * once never reads it again, so the seeding cost is one fold per
+ * importing run, not per session or per turn.
+ */
+const seededRuns = new WeakSet<Set<string>>();
+
+/**
+ * Seed a fresh run's dedupe set from the mention rows already on disk.
+ * Without this, `minedSeen` starts empty on every run and every
+ * re-imported transcript appended its full mention set again - up to the
+ * per-session cap of duplicate rows each time, growing the ledger without
+ * limit under repeated directory imports. The seed restores the
+ * caller-owned set to the state the first run left it in: one id per
+ * (family, key, sessionRef), and per-session budgets that count the rows
+ * already written. Seeding is fail-open: a broken read leaves the run
+ * acting like the first, and the appends surface their own failures
+ * through `ledgerFailed` as usual.
+ */
+function seedSeenFromLedger(vault: string, seen: Set<string>, budgets: Map<string, number>): void {
+  try {
+    for (const record of listContinuityRecords(vault, { kind: SESSION_ENTITY_MENTION_KIND })) {
+      if (record.private) continue;
+      const family = record.payload["family"];
+      const key = record.payload["key"];
+      const sessionRef = record.payload["session_ref"];
+      if (typeof family !== "string" || typeof key !== "string" || typeof sessionRef !== "string") {
+        continue;
+      }
+      // A hand-planted row under a non-mined family is not a mention the
+      // scan can re-reach; it consumes no dedupe id and no budget.
+      if (!(SESSION_MINING_FAMILIES as readonly string[]).includes(family)) continue;
+      const id = miningDedupeId(family as SessionMiningFamily, key, sessionRef);
+      seen.add(id);
+      budgets.set(sessionRef, (budgets.get(sessionRef) ?? 0) + 1);
+    }
+  } catch {
+    // Fail-open: see the doc comment.
+  }
 }
 
 /** Count a set's dedupe ids naming one sessionRef (the seed scan). */
@@ -475,6 +519,10 @@ export function mineAndRecordTurn(vault: string, input: MineTurnInput): MinedTur
   let ledgerFailed = 0;
   let capOverflow = 0;
   const budgets = sessionBudgets(input.seen);
+  if (!seededRuns.has(input.seen)) {
+    seededRuns.add(input.seen);
+    seedSeenFromLedger(input.vault, input.seen, budgets);
+  }
   const cached = budgets.get(input.sessionRef);
   let budget = cached ?? countSeenKeysForSession(input.seen, input.sessionRef);
   budgets.set(input.sessionRef, budget);
