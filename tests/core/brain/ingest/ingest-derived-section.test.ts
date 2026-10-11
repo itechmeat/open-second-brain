@@ -26,9 +26,15 @@ import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
 import { hashBytes } from "../../../../src/core/brain/ingest/content-manifest.ts";
 import { ingestSource } from "../../../../src/core/brain/ingest/ingest.ts";
 import { INGEST_TOOLS } from "../../../../src/mcp/brain/ingest-tools.ts";
+import { createHash } from "node:crypto";
+
 import { IS_WINDOWS } from "../../../helpers/platform.ts";
+import { redactRawOutput } from "../../../../src/core/redactor.ts";
 
 const NOW = new Date("2026-06-13T12:00:00Z");
+
+const sha256Text = (text: string): string =>
+  createHash("sha256").update(text, "utf8").digest("hex");
 const LATER = new Date("2026-06-14T09:00:00Z");
 
 const PAGE_HTML =
@@ -286,6 +292,11 @@ describe("a text source", () => {
         "source_path: Notes/a.md",
         "source_hash: 4764013adda2ade4813ac7dddb5f4deb453cff19f705e137c07e0beddb9ef7c2",
         "provenance: stated",
+        // The durable archive stamp (answer trust, Task C3): the digest of
+        // the archived (redacted) source bytes and their count, computed
+        // here rather than remembered.
+        `source_archive_hash: ${sha256Text(redactRawOutput("# A\n\nBody.\n"))}`,
+        `source_archive_bytes: ${Buffer.byteLength("# A\n\nBody.\n", "utf8")}`,
         'created_at: "2026-06-13T12:00:00Z"',
         'updated_at: "2026-06-13T12:00:00Z"',
         "tags: [brain, brain/source]",
