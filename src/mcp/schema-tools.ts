@@ -10,6 +10,7 @@ import {
   reviewSchemaOrphans,
 } from "../core/brain/schema-admin.ts";
 import { previewSchemaMutations, type SchemaMutation } from "../core/brain/schema-mutate.ts";
+import { WriteRefusedError } from "../core/brain/write-disposition.ts";
 import { buildSchemaReport, type SchemaReportFinding } from "../core/brain/schema-report.ts";
 import { reachView } from "../core/brain/reach-view.ts";
 import { TRANSPORT_REACH } from "../core/graph/transport-reach.ts";
@@ -164,10 +165,30 @@ export const SCHEMA_TOOLS: ReadonlyArray<ToolDefinition> = [
       // The preview shape carries no `audit_path` and no `applied` count, so
       // a dry run can never be read back as a mutation that landed.
       if (dryRun) return previewSchemaMutations(ctx.vault, mutations);
-      return await applySchemaAdminMutations(ctx.vault, mutations, {
-        actor,
-        reason,
-      });
+      try {
+        return await applySchemaAdminMutations(ctx.vault, mutations, {
+          actor,
+          reason,
+          // The deny consult answers for the credential-minted subject,
+          // never for the caller-named actor label (write-side-trust,
+          // Task 7) - the same discipline as the delete tool.
+          ...(ctx.requestIdentity !== undefined ? { subject: ctx.requestIdentity } : {}),
+        });
+      } catch (err) {
+        // Write-side trust (Task 12): a permissions document rule denied
+        // the schema batch. Named code, the rule that decided, and the
+        // operator exit - never an internal error a caller would retry
+        // into the same wall.
+        if (err instanceof WriteRefusedError) {
+          throw new MCPError(INVALID_PARAMS, `schema_apply_mutations: ${err.message}`, {
+            code: err.code,
+            rule: err.rule,
+            agent: err.agent,
+            next_command: err.nextCommand,
+          });
+        }
+        throw err;
+      }
     },
   },
 ];

@@ -6,6 +6,8 @@ import { atomicWriteText } from "../fs-atomic.ts";
 import { withFileLock } from "../reliability/lock.ts";
 import { brainConfigPath, brainDirsForWrite } from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import { REVIEW_LANE } from "./write-gate.ts";
+import { refuseDocumentDeny, type WriteSubject } from "./write-disposition.ts";
 import {
   computeSchemaPackDigest,
   SCHEMA_MUTATION_AUDIT_ACTION,
@@ -104,11 +106,22 @@ export type SchemaMutation =
       readonly field: string;
     };
 
+/** The vault-relative pack path the deny consult and the audit record name. */
+const BRAIN_CONFIG_TARGET = "Brain/_brain.yaml";
+
 export interface ApplySchemaMutationsOptions {
   readonly actor: string;
   readonly now?: Date;
   readonly reason?: string;
   readonly lockStaleMs?: number;
+  /**
+   * The credential subject the deny consult answers for (write-side trust,
+   * Task 12). Absent - stdio, the CLI - the consult falls back to the
+   * principal this process's config declares, exactly like the other
+   * deny-consulted mutation lanes. Never the caller-named `actor`: that
+   * label is an audit field, not an identity a policy can answer on.
+   */
+  readonly subject?: WriteSubject;
 }
 
 export interface ApplySchemaMutationsResult {
@@ -192,6 +205,21 @@ export async function applySchemaMutations(
   // of the `_brain.yaml` rewrite - the trailing audit append is far too
   // late to stop a schema landing in the wrong store.
   assertVaultIdentityForWrite(vault);
+  // Deny-consulted evidence (write-side trust, PR #247 review M3 residual,
+  // schema sibling): a schema batch rewrites the operator's vocabulary pack
+  // - the same mutation-lane shape as update, append and delete_by_source -
+  // so the document is resolved against the credential subject and a deny
+  // refuses with the SAME typed error BEFORE the config is read for
+  // rewriting or any audit record exists, one decision-ledger row behind
+  // it. The pack shapes what every later ingest and note write admits, so
+  // a caller a document closed must not reach it around the rule. An ask
+  // and an allow change nothing: no row, no stage, the apply proceeds
+  // exactly as before. With no permissions document this is a no-op. The
+  // dry-run preview below stays a read and stays ungated.
+  refuseDocumentDeny(vault, REVIEW_LANE.ingest, opts.subject, {
+    target: BRAIN_CONFIG_TARGET,
+    ...(opts.now !== undefined ? { now: opts.now } : {}),
+  });
   const configPath = brainConfigPath(vault);
   const now = opts.now ?? new Date();
   return await withFileLock(configPath, { staleMs: opts.lockStaleMs ?? 30_000, retries: 3 }, () => {
@@ -216,7 +244,7 @@ export async function applySchemaMutations(
         timestamp: now.toISOString(),
         actor: opts.actor,
         action: SCHEMA_MUTATION_AUDIT_ACTION,
-        target: "Brain/_brain.yaml",
+        target: BRAIN_CONFIG_TARGET,
         ok: true,
         details: {
           applied: mutations.length,

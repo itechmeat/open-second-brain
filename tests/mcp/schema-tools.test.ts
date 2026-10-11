@@ -15,7 +15,8 @@ import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
-import { INVALID_PARAMS } from "../../src/mcp/protocol.ts";
+import { SCHEMA_TOOLS } from "../../src/mcp/schema-tools.ts";
+import { INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
 import { toPosix } from "../../src/core/path-safety.ts";
 
 /** Schema tokens used by the cases below. */
@@ -129,6 +130,42 @@ describe("schema MCP tools", () => {
     expect((pack as any).result.structuredContent.pack.declarations.preference_types).toContain(
       "decision",
     );
+  });
+
+  test("a document deny rides the request identity and answers the named envelope", async () => {
+    // A document closing `codex` (the token's agent) out of the ingest
+    // action the schema consult answers; the config declares `claude`, so
+    // only the credential-minted subject can be what this refusal names.
+    atomicWriteFileSync(
+      join(vault, "Brain", "_permissions.yaml"),
+      "version: 1\ndefault_action: allow\nentries:\n  - id: freeze\n    agent: codex\n" +
+        "    action: ingest\n    verdict: deny\n",
+    );
+    const packBefore = readFileSync(join(vault, "Brain", "_brain.yaml"), "utf8");
+    const tool = SCHEMA_TOOLS.find((t) => t.name === "schema_apply_mutations")!;
+    const ctx = {
+      vault,
+      configPath,
+      repoRoot: null,
+      requestIdentity: { agent: "codex", via: "token" as const },
+    };
+    try {
+      await tool.handler(ctx as any, {
+        mutations: [{ op: "add_type", category: "preference_types", token: UNDECLARED }],
+      });
+      throw new Error("expected MCPError");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MCPError);
+      const refused = err as MCPError;
+      expect(refused.code).toBe(INVALID_PARAMS);
+      expect(refused.data).toMatchObject({
+        code: "write-refused",
+        rule: "entry:freeze",
+        agent: "codex",
+      });
+    }
+    // The pack is untouched: the consult ran before the rewrite.
+    expect(readFileSync(join(vault, "Brain", "_brain.yaml"), "utf8")).toBe(packBefore);
   });
 
   test("schema graph namespaces link type node ids", async () => {

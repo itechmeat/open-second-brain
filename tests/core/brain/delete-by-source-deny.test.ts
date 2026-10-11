@@ -20,7 +20,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -28,6 +36,10 @@ import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { listEntities } from "../../../src/core/brain/entities/registry.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { deleteBySource } from "../../../src/core/brain/source-cleanup.ts";
+import {
+  applySchemaMutations,
+  previewSchemaMutations,
+} from "../../../src/core/brain/schema-mutate.ts";
 import { readManifest } from "../../../src/core/brain/ingest/content-manifest.ts";
 import { ingestSource } from "../../../src/core/brain/ingest/ingest.ts";
 import {
@@ -167,6 +179,111 @@ describe("deleteBySource deny consult", () => {
     expect(plan.confirmed).toBe(true);
     expect(plan.manifestEntryRemoved).toBe(true);
     expect(listEntities(vault, { category: "concept" })).toHaveLength(0);
+  });
+});
+
+describe("the schema-mutation lane owes the same consult", () => {
+  /** One benign mutation, enough to prove an apply went through. */
+  function batch(): Parameters<typeof applySchemaMutations>[1] {
+    return [{ op: "add_type", category: "page_types", token: "dossier" }];
+  }
+
+  function brainYaml(): string {
+    return readFileSync(join(vault, "Brain", "_brain.yaml"), "utf8");
+  }
+
+  test("a document deny refuses the apply before any write", async () => {
+    writeDoc(
+      "version: 1\ndefault_action: allow\nentries:\n  - id: freeze\n    agent: codex\n" +
+        "    action: ingest\n    verdict: deny\n",
+    );
+    const before = brainYaml();
+    await expect(
+      applySchemaMutations(vault, batch(), { actor: "codex", subject: SUBJECT, now: NOW }),
+    ).rejects.toThrow(WriteRefusedError);
+    // The pack is untouched and no audit record was written for an apply
+    // that mutated nothing.
+    expect(brainYaml()).toBe(before);
+    const auditDir = join(vault, "Brain", "log", "schema-mutations");
+    expect(existsSync(auditDir) ? readdirSync(auditDir) : []).toEqual([]);
+  });
+
+  test("the refusal names the subject, the ingest action, the rule and the pack target", async () => {
+    writeDoc(
+      "version: 1\ndefault_action: allow\nentries:\n  - id: freeze\n    agent: codex\n" +
+        "    action: ingest\n    verdict: deny\n",
+    );
+    try {
+      await applySchemaMutations(vault, batch(), {
+        actor: "codex",
+        subject: SUBJECT,
+        now: NOW,
+      });
+      throw new Error("expected WriteRefusedError");
+    } catch (err) {
+      expect(err).toBeInstanceOf(WriteRefusedError);
+      const refused = err as WriteRefusedError;
+      expect(refused.agent).toBe("codex");
+      expect(refused.via).toBe("token");
+      expect(refused.action).toBe("ingest");
+      expect(refused.rule).toBe("entry:freeze");
+      expect(refused.target).toBe("Brain/_brain.yaml");
+    }
+  });
+
+  test("a deny for another agent leaves the schema mutation applying", async () => {
+    writeDoc(
+      "version: 1\ndefault_action: allow\nentries:\n  - id: freeze-gemini\n    agent: gemini\n" +
+        "    action: ingest\n    verdict: deny\n",
+    );
+    const result = await applySchemaMutations(vault, batch(), {
+      actor: "codex",
+      subject: SUBJECT,
+      now: NOW,
+    });
+    expect(result.applied).toBe(1);
+    expect(result.pack.declarations.page_types).toContain("dossier");
+  });
+
+  test("an absent document keeps the apply byte-identical", async () => {
+    const result = await applySchemaMutations(vault, batch(), {
+      actor: "codex",
+      subject: SUBJECT,
+      now: NOW,
+    });
+    expect(result.applied).toBe(1);
+    expect(result.pack.declarations.page_types).toContain("dossier");
+  });
+
+  test("a dry-run preview stays a read and is not gated", () => {
+    writeDoc("version: 1\ndefault_action: deny\n");
+    const preview = previewSchemaMutations(vault, batch());
+    expect(preview.dry_run).toBe(true);
+    expect(preview.would_apply).toBe(1);
+    expect(preview.diff.length).toBeGreaterThan(0);
+  });
+
+  test("the doctor's deny-consulted finding names the schema lane", () => {
+    writeDoc("version: 1\ndefault_action: deny\n");
+    const out: DoctorFindings = { issues: [], uncertain: [] };
+    denyConsultedLanesCheck.run(
+      {
+        vault,
+        now: NOW,
+        config: undefined,
+        dbPath: undefined,
+        configPath: undefined,
+        knownBasenames: new Set(),
+        idIndex: new Map(),
+        preferences: [],
+        logs: [],
+      },
+      out,
+    );
+    const findings = out.issues.filter((i) => i.code === DENY_CONSULTED_LANES_CODE);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.message).toContain("brain_schema_mutate");
+    expect(findings[0]!.message).toContain("Brain/_brain.yaml");
   });
 });
 

@@ -279,8 +279,9 @@ export const DENY_CONSULTED_LANES_CODE = "deny-consulted-lanes";
  * document deny actually closes.
  *
  * The deny consult spread across lanes one release at a time - update and
- * append first, then the signal and feedback lanes, now the destructive
- * source-cleanup lane - while the release notes named only the first two.
+ * append first, then the signal and feedback lanes, then the destructive
+ * source-cleanup lane, now the schema-mutation lane - while the release
+ * notes named only the first two.
  * When the document in force DENIES the locally configured agent the
  * `ingest` action, the cleanup refusals are therefore easy to misread as
  * faults rather than policy. This check names the covered lanes at the one
@@ -313,7 +314,8 @@ export const denyConsultedLanesCheck: DoctorCheck = {
         `a permissions document denies ${JSON.stringify(agent)} the ingest action ` +
         `(rule ${decision.source}). The lanes that consult the document and refuse on ` +
         "deny include: source ingest (brain_ingest_source), the destructive source cleanup " +
-        "(delete_by_source: derived entries and the ingest manifest entry), and the " +
+        "(delete_by_source: derived entries and the ingest manifest entry), the schema " +
+        "mutation lane (brain_schema_mutate: the Brain/_brain.yaml pack), and the " +
         "ingest-lane review gate. Review the policy: o2b brain permissions show",
     });
   },
