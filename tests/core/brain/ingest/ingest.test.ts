@@ -31,14 +31,23 @@ import { computeExtractionContractFingerprint } from "../../../../src/core/brain
 import { computePlanId, readCheckpoint } from "../../../../src/core/brain/ingest/checkpoint.ts";
 import {
   applyPendingLane,
+  listPendingLane,
   WriteRefusedError,
 } from "../../../../src/core/brain/pending/pending-lanes.ts";
+import { REVIEW_LANE } from "../../../../src/core/brain/write-gate.ts";
+import { entityPath } from "../../../../src/core/brain/paths.ts";
+import { canonicalNotePath } from "../../../../src/core/path-safety.ts";
 import { queryDecisionLedger } from "../../../../src/core/brain/permissions/ledger.ts";
 import { deleteBySource } from "../../../../src/core/brain/source-cleanup.ts";
 import { readManifest } from "../../../../src/core/brain/ingest/content-manifest.ts";
 
 function readManifestEntries(): string[] {
   return Object.keys(readManifest(vault).entries);
+}
+
+/** The canonical vault-relative path of a created entity's page. */
+function canonicalPage(category: string, id: string): string {
+  return canonicalNotePath(relative(vault, entityPath(vault, category, id)));
 }
 
 let vault: string;
@@ -493,12 +502,13 @@ describe("ingestSource — extraction contract (t_586d5d8b)", () => {
 
 /**
  * The review gate (write-side trust, Task 9): the FIRST publish of a
- * summary page stages under the ingest lane while the rest of the write
- * completes - except the manifest row, which owes the stage verdict like
- * every other registration row of the write and stays unrecorded until a
- * publish arm lands; a re-ingest of an already-published page stays
- * direct; and a source cleanup removes the staged page the way it
- * removes a published one.
+ * summary page stages under the ingest lane and the intake's created
+ * entity pages stage beside it, so a staged ingest publishes nothing -
+ * except the manifest row, which owes the stage verdict like every other
+ * registration row of the write and stays unrecorded until a publish arm
+ * lands; a re-ingest of an already-published page stays direct; and a
+ * source cleanup removes the staged page the way it removes a published
+ * one.
  */
 describe("ingestSource under the ingest review gate", () => {
   const INGEST_ENV = "OPEN_SECOND_BRAIN_WRITE_APPROVAL_INGEST_ENABLED";
@@ -526,12 +536,18 @@ describe("ingestSource under the ingest review gate", () => {
     const stagedBytes = readFileSync(stagedPath, "utf8");
     expect(stagedBytes).toContain("kind: brain-source");
     expect(stagedBytes).toContain("An overview of restaking");
-    // The entities publish (the review boundary is entry, not mutation),
-    // but the manifest row owes the stage verdict like every other
-    // registration row of this write: a staged ingest must not record
-    // itself as done while its output awaits review.
+    // Nothing of a staged ingest publishes ahead of review (the intake's
+    // disposition contract): the created entity pages stage beside the
+    // summary at their canonical publish targets instead of entering the
+    // registry, and the manifest row owes the stage verdict like every
+    // other registration row of this write - a staged ingest must not
+    // record itself as done while its output awaits review.
+    expect(listEntities(vault, { category: "concept" })).toHaveLength(0);
+    const notesEntries = listPendingLane(vault, REVIEW_LANE.notes).entries;
+    expect(notesEntries.map((e) => e.publishTarget).toSorted()).toEqual(
+      res.entitiesCreated.map((id) => canonicalPage("concept", id)).toSorted(),
+    );
     expect(readManifestEntries()).not.toContain(INPUT.sourcePath);
-    expect(listEntities(vault, { category: "concept" })).toHaveLength(2);
   });
 
   test("an apply of the staged page publishes byte-identical bytes", () => {
@@ -549,7 +565,12 @@ describe("ingestSource under the ingest review gate", () => {
   test("a re-ingest of an already-published page stays direct", () => {
     seedSourceFile();
     const first = ingestSource(vault, INPUT, { agent: "claude", now: NOW });
+    // A staged ingest queues the summary AND its created entity pages, so
+    // "already published" means the operator applied every staged entry.
     applyPendingLane(vault, first.pendingId!);
+    for (const entry of listPendingLane(vault, REVIEW_LANE.notes).entries) {
+      applyPendingLane(vault, entry.id);
+    }
     const second = ingestSource(vault, INPUT, { agent: "claude", now: LATER });
     expect(second.staged).toBeUndefined();
     expect(existsSync(join(vault, second.summaryPath))).toBe(true);
