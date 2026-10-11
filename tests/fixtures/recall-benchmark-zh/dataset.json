@@ -74,6 +74,66 @@
       "query": "写作约定 主动语态",
       "expected": ["zh-style-guide.md"],
       "lang": "zh"
+    },
+    {
+      "id": "zh-canary-paraphrase",
+      "query": "灰度放量 观察错误率 再扩量",
+      "expected": ["zh-deploy-canary.md"],
+      "lang": "zh"
+    },
+    {
+      "id": "zh-bluegreen-synonym",
+      "query": "双环境发布 流量切换",
+      "expected": ["zh-deploy-bluegreen.md"],
+      "lang": "zh"
+    },
+    {
+      "id": "zh-rollback-synonym",
+      "query": "发布失败 撤回版本",
+      "expected": ["zh-deploy-canary.md"],
+      "lang": "zh"
+    },
+    {
+      "id": "zh-oauth-mixed",
+      "query": "refresh token 过期怎么办",
+      "expected": ["zh-auth-oauth.md"],
+      "lang": "zh"
+    },
+    {
+      "id": "zh-backup-synonym",
+      "query": "容灾 数据副本 保存期",
+      "expected": ["zh-db-backups.md"],
+      "lang": "zh"
+    },
+    {
+      "id": "zh-sql-mixed",
+      "query": "MySQL 查询慢 加索引",
+      "expected": ["zh-db-indexing.md"],
+      "lang": "zh"
+    },
+    {
+      "id": "zh-incident-paraphrase",
+      "query": "线上事故 连接池 满了",
+      "expected": ["zh-incident-0803.md"],
+      "lang": "zh"
+    },
+    {
+      "id": "zh-embeddings-mixed",
+      "query": "embedding 模型升级 向量重建",
+      "expected": ["zh-embeddings.md"],
+      "lang": "zh"
+    },
+    {
+      "id": "zh-tuning-paraphrase",
+      "query": "搜索质量 实验参数 怎么调",
+      "expected": ["zh-search-tuning.md"],
+      "lang": "zh"
+    },
+    {
+      "id": "zh-standup-paraphrase",
+      "query": "每日晨会 当前卡点",
+      "expected": ["zh-standup.md"],
+      "lang": "zh"
     }
   ]
 }

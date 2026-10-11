@@ -24,6 +24,7 @@ import {
   runRecallBenchmark,
   type RecallBenchmarkQueryResult,
 } from "../../../src/core/search/benchmark.ts";
+import { runRerankEvalGate } from "../../../src/core/search/rerank-eval-gate.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { SearchError, type ResolvedSearchConfig } from "../../../src/core/search/types.ts";
 import { makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
@@ -105,6 +106,28 @@ function foldExpected(rows: ReadonlyArray<RecallBenchmarkQueryResult>) {
   };
 }
 
+/** The mixed en/zh dataset every gate and fold test below scores. */
+const mixedDataset = () =>
+  parseRecallBenchmarkDataset({
+    queries: [
+      {
+        id: "en-canary",
+        query: "canary rollout error budget",
+        expected: ["deploy-canary.md"],
+        answer: "expand the rollout gradually",
+      },
+      { id: "en-garden", query: "compost tomato balcony", expected: ["garden.md"] },
+      {
+        id: "zh-canary",
+        query: "金丝雀发布 错误预算",
+        expected: ["zh-canary.md"],
+        answer: "错误预算",
+        lang: "zh",
+      },
+      { id: "zh-garden", query: "阳台种植 番茄", expected: ["zh-garden.md"], lang: "zh" },
+    ],
+  });
+
 describe("runRecallBenchmark byLang fold", () => {
   let vault: string;
   let config: ResolvedSearchConfig;
@@ -143,27 +166,6 @@ describe("runRecallBenchmark byLang fold", () => {
   });
 
   afterAll(() => rmSync(vault, { recursive: true, force: true }));
-
-  const mixedDataset = () =>
-    parseRecallBenchmarkDataset({
-      queries: [
-        {
-          id: "en-canary",
-          query: "canary rollout error budget",
-          expected: ["deploy-canary.md"],
-          answer: "expand the rollout gradually",
-        },
-        { id: "en-garden", query: "compost tomato balcony", expected: ["garden.md"] },
-        {
-          id: "zh-canary",
-          query: "金丝雀发布 错误预算",
-          expected: ["zh-canary.md"],
-          answer: "错误预算",
-          lang: "zh",
-        },
-        { id: "zh-garden", query: "阳台种植 番茄", expected: ["zh-garden.md"], lang: "zh" },
-      ],
-    });
 
   test("perQuery rows carry their language and untagged rows read en", async () => {
     const report = await runRecallBenchmark(config, mixedDataset(), { k: 5 });
@@ -206,6 +208,62 @@ describe("runRecallBenchmark byLang fold", () => {
     const first = await runRecallBenchmark(config, mixedDataset(), { k: 5 });
     const second = await runRecallBenchmark(config, mixedDataset(), { k: 5 });
     expect(second).toEqual(first);
+  });
+});
+
+// ----- per-language rerank deltas (t_693fa22a review, M14 part 2) ------------
+
+describe("runRerankEvalGate per-language deltas", () => {
+  let vault: string;
+  let config: ResolvedSearchConfig;
+
+  beforeAll(async () => {
+    vault = mkdtempSync(join(tmpdir(), "o2b-rerank-lang-"));
+    // The same two-language mini corpus the byLang fold above uses: one
+    // hit and one miss candidate per group, so each language's delta is
+    // its own number, never a pooled one.
+    writeMd(
+      vault,
+      "deploy-canary.md",
+      "# Canary rollouts\n\nExpand the rollout gradually and watch the error budget before widening.",
+    );
+    writeMd(
+      vault,
+      "garden.md",
+      "# Balcony garden\n\nTomatoes and basil move to the south planter in spring; turn the compost two weeks ahead.",
+    );
+    writeMd(
+      vault,
+      "zh-canary.md",
+      "# 灰度发布笔记\n\n金丝雀发布先把小部分流量切到新版本，再逐步扩大范围，扩量之前要盯住错误预算并演练一次回滚。",
+    );
+    writeMd(
+      vault,
+      "zh-garden.md",
+      "# 阳台种植笔记\n\n春季把番茄和罗勒移到朝南的花箱，堆肥提前两周翻一次，浇水选在清晨进行。",
+    );
+    config = makeConfig({
+      vault,
+      dbPath: join(vault, "index.sqlite"),
+      semantic: { enabled: true, provider: "local", dimension: 256 },
+    });
+    await indexVault(config, { embeddings: true });
+  });
+
+  afterAll(() => rmSync(vault, { recursive: true, force: true }));
+
+  test("deltas.byLang carries a hit and MRR delta per language, each equal to the arm difference", async () => {
+    const gate = await runRerankEvalGate(config, mixedDataset(), { kind: "local", k: 5 });
+    expect(Object.keys(gate.deltas.byLang).toSorted()).toEqual(["en", "zh"]);
+    for (const lang of ["en", "zh"]) {
+      const before = gate.baseline.byLang[lang]!;
+      const after = gate.reranked.byLang[lang]!;
+      expect(gate.deltas.byLang[lang]!.hitAtK).toBeCloseTo(after.hitAtK - before.hitAtK, 12);
+      expect(gate.deltas.byLang[lang]!.mrr).toBeCloseTo(after.mrr - before.mrr, 12);
+    }
+    // The combined deltas stay the pooled ones the report always had.
+    expect(gate.deltas.hitAtK).toBe(gate.reranked.hitAtK - gate.baseline.hitAtK);
+    expect(gate.deltas.mrr).toBe(gate.reranked.mrr - gate.baseline.mrr);
   });
 });
 
@@ -262,6 +320,36 @@ describe("o2b search rerank-eval language split", () => {
       en: { total: 1 },
       zh: { total: 1 },
     });
+  });
+
+  test("--json carries per-language deltas on the reranked arms, none on the baseline", async () => {
+    const res = await runCli(args(["--json"]), { env: { OPEN_SECOND_BRAIN_CONFIG: configPath } });
+    expect(res.returncode).toBe(0);
+    const out = JSON.parse(res.stdout) as Record<string, Record<string, unknown>>;
+    const baselineByLang = out["baseline"]!["by_lang"] as Record<string, Record<string, number>>;
+    // The baseline arm is the reference: absolute numbers only.
+    expect(baselineByLang["zh"]).not.toHaveProperty("delta_mrr");
+    const armByLang = out["local"]!["by_lang"] as Record<string, Record<string, number>>;
+    for (const lang of ["en", "zh"]) {
+      const d = armByLang[lang]!;
+      expect(d).toHaveProperty("delta_hit_at_k");
+      expect(d).toHaveProperty("delta_mrr");
+      // Correctness: each language's delta is that group's arm difference,
+      // not the pooled one.
+      expect(d["delta_hit_at_k"]).toBeCloseTo(
+        d["hit_at_k"] - baselineByLang[lang]!["hit_at_k"],
+        12,
+      );
+      expect(d["delta_mrr"]).toBeCloseTo(d["mrr"] - baselineByLang[lang]!["mrr"], 12);
+    }
+  });
+
+  test("text output renders the per-language delta on each reranked-arm language line", async () => {
+    const res = await runCli(args(), { env: { OPEN_SECOND_BRAIN_CONFIG: configPath } });
+    expect(res.returncode).toBe(0);
+    // The arm lines carry a signed per-language delta; the off line does not.
+    expect(res.stdout).toContain("(delta hit@k +0.0000, MRR +0.0000)");
+    expect(res.stdout.match(/\(delta hit@k/g)?.length).toBe(2);
   });
 
   test("text output renders one line per language per arm", async () => {

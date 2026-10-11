@@ -39,13 +39,34 @@ export interface RerankEvalGateOptions {
   readonly decisionModel?: ResolvedDecisionModelConfig;
 }
 
+/** The rerank-arm minus baseline difference of one metric family. */
+export interface RerankDelta {
+  readonly hitAtK: number;
+  readonly mrr: number;
+}
+
 export interface RerankEvalGateResult {
   /** Whether reranking is recommended for this store. */
   readonly improves: boolean;
   readonly recommendation: "enable" | "keep-disabled";
   readonly baseline: RecallBenchmarkReport;
   readonly reranked: RecallBenchmarkReport;
-  readonly deltas: { readonly hitAtK: number; readonly mrr: number };
+  /**
+   * Rerank-arm minus baseline, combined over the whole run and (t_693fa22a
+   * review, M14) per language: `byLang` carries one entry per `byLang`
+   * group of the two arms, so a reranker that helps one language and hurts
+   * another is visible per language instead of washing out in the pooled
+   * numbers. Same keys as `baseline.byLang`, sorted.
+   */
+  readonly deltas: RerankEvalDeltas;
+}
+
+export interface RerankEvalDeltas {
+  /** The pooled delta over every query. */
+  readonly hitAtK: number;
+  readonly mrr: number;
+  /** The same difference folded per language group. */
+  readonly byLang: Readonly<Record<string, RerankDelta>>;
 }
 
 function withRerank(
@@ -129,6 +150,19 @@ export async function runRerankEvalGate(
   const hitDelta = reranked.hitAtK - baseline.hitAtK;
   const mrrDelta = reranked.mrr - baseline.mrr;
 
+  // The per-language fold of the same difference (M14): one entry per
+  // language group of the baseline, so a verdict consumer sees which
+  // language moved which way. The keys are the baseline's, and both arms
+  // ran the same dataset, so the groups always pair up.
+  const byLang: Record<string, RerankDelta> = {};
+  for (const [lang, before] of Object.entries(baseline.byLang)) {
+    const after = reranked.byLang[lang];
+    byLang[lang] = Object.freeze({
+      hitAtK: (after?.hitAtK ?? before.hitAtK) - before.hitAtK,
+      mrr: (after?.mrr ?? before.mrr) - before.mrr,
+    });
+  }
+
   // Never recommend a reranker that drops hit@k; among non-regressing
   // candidates, require a real MRR or hit@k lift.
   const improves = hitDelta >= 0 && (mrrDelta >= minMrrDelta || hitDelta >= minHitDelta);
@@ -138,6 +172,6 @@ export async function runRerankEvalGate(
     recommendation: improves ? "enable" : "keep-disabled",
     baseline,
     reranked,
-    deltas: { hitAtK: hitDelta, mrr: mrrDelta },
+    deltas: Object.freeze({ hitAtK: hitDelta, mrr: mrrDelta, byLang: Object.freeze(byLang) }),
   });
 }
