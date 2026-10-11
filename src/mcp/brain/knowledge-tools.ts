@@ -67,6 +67,7 @@ import {
   readClaimEvents,
 } from "../../core/brain/truth/store.ts";
 import { claimEventLimit, matchClaimEvents } from "../../core/brain/truth/events-window.ts";
+import { resolveClaimProvenance } from "../../core/brain/truth/claim-provenance.ts";
 import {
   allClaims,
   buildClaimGraph,
@@ -782,6 +783,13 @@ function toolBrainTruth(
     const agent =
       normalizeAgentArgument(typeof agentArg === "string" ? agentArg : null) ??
       resolveAgentName(ctx.configPath ?? undefined);
+    // Sample id (answer-trust, task B4): an optional call-level id naming
+    // the recall/context-pack quality-sample these claims were stated
+    // against. A non-string type is refused here as a mistyped parameter;
+    // a blank string flows to the payload boundary's named refusal below
+    // (mapped to the same failure class), so an empty id is never coerced
+    // to an absent one. Committed events echo the id verbatim.
+    const sampleId = optionalStr("sample_id");
     // The source's frontmatter window resolves at the CALLER's reach,
     // exactly as ingest gates it: a withheld source freezes a windowless
     // event and the committed rows carry no validity keys, so the state
@@ -797,6 +805,7 @@ function toolBrainTruth(
           agent,
           ts: isoSecond(new Date()),
           source: requireStr("source"),
+          ...(sampleId !== undefined ? { sampleId } : {}),
         },
         {
           entities: statedClaimEntities(ctx.vault),
@@ -1090,7 +1099,20 @@ export function claimEventsReport(
     ok: true,
     operation: "events",
     entity: entityFilter === undefined ? null : normalizeEntityName(entityFilter),
-    events: gated.slice(0, query.limit),
+    events: gated.slice(0, query.limit).map((event) =>
+      event.sample_id === undefined
+        ? // A claim without a sample id renders exactly as today: no
+          // provenance key, byte-identical row.
+          event
+        : {
+            ...event,
+            // Answer-trust (task B4): the claim's sample id resolves to
+            // its receipt and outcome halves at read time. A missing
+            // outcome half is null - "receipt known, outcome unknown" -
+            // never a fabricated verdict.
+            provenance: resolveClaimProvenance(vault, event.sample_id, event.ts),
+          },
+    ),
     total: gated.length,
     truncated: gated.length > query.limit,
   };
@@ -1373,6 +1395,11 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         text: {
           type: "string",
           description: "state: the assertion text every claim is anchored against.",
+        },
+        sample_id: {
+          type: "string",
+          description:
+            "state: the recall/context-pack quality-sample id these claims were stated against (a context receipt id or an opaque request hash). Frozen on each committed claim; events reads hydrate it into receipt/outcome provenance.",
         },
       },
       required: ["operation"],
