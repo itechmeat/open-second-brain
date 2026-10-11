@@ -32,7 +32,7 @@
  */
 
 import { Database } from "bun:sqlite";
-import { writeFileSync } from "node:fs";
+import { utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
@@ -50,11 +50,13 @@ import {
 } from "../../../src/core/search/query-cache.ts";
 import { keywordTopK, keywordTopKSql } from "../../../src/core/search/store/keyword.ts";
 import { semanticTopK, semanticTopKSql } from "../../../src/core/search/store/vectors.ts";
+import { indexedSnapshotStale } from "../../../src/core/search/store.ts";
 import { resolvePoolFilters } from "../../../src/core/search/pipeline/pool-filters.ts";
 import {
   isSearchKind,
   resolveKindFilter,
   resolvePropertyPushdown,
+  withoutAttributeNarrowing,
 } from "../../../src/core/search/property-pushdown.ts";
 import { SearchError } from "../../../src/core/search/search-error.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
@@ -861,6 +863,139 @@ describe("the unpromoted attribute narrowing (document_attributes)", () => {
       ]),
     });
     expect(none.results).toEqual([]);
+  });
+});
+
+/**
+ * A fixed instant far from "now", so a forced mtime is deterministic.
+ */
+const EDITED_MTIME_MS = 1_700_000_000_000;
+
+/**
+ * The freshness gate's corpus: two draft pages whose snapshots start in
+ * sync with their files.
+ */
+async function seedFlipVault(): Promise<void> {
+  writeMd(vault, "notes/flip.md", note("Flip", "status: draft\n", "lattice delta flipgate"));
+  writeMd(vault, "notes/hold.md", note("Hold", "status: draft\n", "lattice delta holdgate"));
+  await indexVault(makeConfig({ vault, dbPath }));
+}
+
+/** Rewrite a note's frontmatter and force a stat the index contradicts. */
+function editNote(relPath: string, frontmatter: string, body: string): void {
+  const abs = writeMd(vault, relPath, note(relPath, frontmatter, body));
+  const edited = new Date(EDITED_MTIME_MS);
+  utimesSync(abs, edited, edited);
+}
+
+/**
+ * The freshness gate on attribute narrowing (answer-trust repair, M1).
+ *
+ * The narrowing fragment excludes a document when the attributes side
+ * table holds rows for a key and none of them is accepted - but those rows
+ * are a SNAPSHOT taken at index time. A document indexed `status: draft`
+ * and edited to `status: done` must not vanish from a `status=done` query:
+ * the advertised contract is "narrow on the attribute snapshot, judged
+ * live" (the brain_search `properties` schema), so a candidate whose
+ * indexed snapshot may be stale falls through to the live post-rank
+ * filter instead of being dropped in SQL.
+ *
+ * The gate rides the stat fingerprint the index already maintains
+ * (`documents.mtime` + `documents.size`, the exact pair the indexer's
+ * fastpath treats as "content unchanged"): a candidate the narrowing would
+ * exclude gets one stat, and only a live stat that still matches the
+ * indexed fingerprint proves the snapshot current. It never reads file
+ * contents - that read is the live filter's own, paid for every surfaced
+ * row exactly as before.
+ */
+describe("the freshness gate on attribute narrowing", () => {
+  test("a document indexed draft and edited to done is returned under status=done", async () => {
+    const cfg = makeConfig({ vault, dbPath });
+    await seedFlipVault();
+    editNote("notes/flip.md", "status: done\n", "lattice delta flipgate");
+
+    // Before the gate: the narrowing fragment saw stored rows for `status`
+    // with no accepted value and dropped flip.md in SQL, so the answer was
+    // empty even though the live file says done - the snapshot silently
+    // overrode the "judged live" contract.
+    const done = await search(cfg, {
+      query: "flipgate",
+      keywordOnly: true,
+      visibility: ["public"],
+      properties: new Map([["status", ["done"]]]),
+    });
+    expect(done.results.map((r) => r.path)).toEqual(["notes/flip.md"]);
+  });
+
+  test("a rescued stale candidate is still judged by the live filter, not admitted", async () => {
+    const cfg = makeConfig({ vault, dbPath });
+    await seedFlipVault();
+    // Only the body changes; the live status stays draft. The gate must
+    // fall the document through to the live filter, which reads draft and
+    // excludes it - falling through is a re-judgement, never an admission.
+    editNote("notes/flip.md", "status: draft\n", "lattice delta flipgate edited body");
+
+    const done = await search(cfg, {
+      query: "flipgate",
+      keywordOnly: true,
+      visibility: ["public"],
+      properties: new Map([["status", ["done"]]]),
+    });
+    expect(done.results).toEqual([]);
+  });
+
+  test("a fresh snapshot keeps the narrowed SQL answer unchanged", async () => {
+    const cfg = makeConfig({ vault, dbPath });
+    await seedFlipVault();
+    editNote("notes/flip.md", "status: done\n", "lattice delta flipgate");
+    // Reindex: the snapshot and the file agree again, so the exclusion the
+    // narrowing now states about hold.md is provable and stands - the gate
+    // adds no widening once freshness is established.
+    await indexVault(cfg);
+
+    const done = await search(cfg, {
+      query: "delta",
+      keywordOnly: true,
+      visibility: ["public"],
+      properties: new Map([["status", ["done"]]]),
+    });
+    expect(done.results.map((r) => r.path)).toEqual(["notes/flip.md"]);
+    const draft = await search(cfg, {
+      query: "delta",
+      keywordOnly: true,
+      visibility: ["public"],
+      properties: new Map([["status", ["draft"]]]),
+    });
+    expect(draft.results.map((r) => r.path)).toEqual(["notes/hold.md"]);
+  });
+
+  test("the freshness verdict is a stat-fingerprint comparison, never a content read", () => {
+    // The gate's whole liveness judgement is this pure function over the
+    // indexed (mtime, size) pair and the live stat: its signature admits no
+    // file read, which is the no-per-row-file-read pin. The floor matches
+    // the indexer's own (`Math.floor(mtimeMs / 1000)` at upsert time).
+    expect(
+      indexedSnapshotStale({ mtime: 1700000000, size: 10 }, { mtimeMs: 1700000000_500, size: 10 }),
+    ).toBe(false);
+    expect(
+      indexedSnapshotStale({ mtime: 1700000000, size: 10 }, { mtimeMs: 1700000005_000, size: 10 }),
+    ).toBe(true);
+    expect(
+      indexedSnapshotStale({ mtime: 1700000000, size: 10 }, { mtimeMs: 1700000000_500, size: 11 }),
+    ).toBe(true);
+  });
+
+  test("the freshness probe strips the narrowing and keeps the promoted half", () => {
+    expect(
+      withoutAttributeNarrowing({ attributeNarrowing: [{ key: "status", values: ["done"] }] }),
+    ).toBeNull();
+    expect(
+      withoutAttributeNarrowing({
+        pageTypes: ["note"],
+        attributeNarrowing: [{ key: "status", values: ["done"] }],
+      }),
+    ).toEqual({ pageTypes: ["note"] });
+    expect(withoutAttributeNarrowing({ pinned: true })).toEqual({ pinned: true });
   });
 });
 

@@ -37,6 +37,17 @@
  * The promoted keys never narrow: the side table deliberately skips them,
  * so there are no rows to read.
  *
+ * The narrowing's exclusion arm carries one further bound, the freshness
+ * gate (answer-trust repair, M1): the stored rows are a snapshot taken at
+ * index time, so an exclusion is only provable while the live file still
+ * matches the snapshot it was taken from. The gate lives at the store
+ * facade ({@link withoutAttributeNarrowing} names the probe half): a
+ * candidate the fragment would exclude is kept anyway when its live stat
+ * fingerprint no longer matches the indexed one, and the live post-rank
+ * filter - which reads the file and owns the "judged live" contract - gets
+ * the final word. This module stays pure SQL: the fragment never touches
+ * the filesystem.
+ *
  * A promoted key is pushed only when the push is FAITHFUL to the live
  * filter's verdict for every value the caller asked for; anything else
  * falls back rather than silently diverging:
@@ -291,8 +302,11 @@ function placeholders(count: number): string {
  * Values are matched verbatim in the stored scalar `String(value)` form
  * (`documentAttributesFromFrontmatter` stores numbers and booleans exactly
  * as the live filter stringifies them), so a stored row answers only what
- * the live filter would have answered for the same row. Null when there is
- * nothing to narrow with.
+ * the live filter would have answered for the same row. The exclusion arm
+ * is further bounded by the store-level freshness gate - see
+ * {@link withoutAttributeNarrowing} - which keeps every candidate whose
+ * indexed snapshot may be stale. Null when there is nothing to narrow
+ * with.
  */
 export function attributeNarrowingFragment(
   entries: ReadonlyArray<AttributeNarrowing>,
@@ -312,6 +326,40 @@ export function attributeNarrowingFragment(
     bindings.push(entry.key, ...entry.values, entry.key);
   }
   return { sql: clauses.join(" AND "), bindings };
+}
+
+/**
+ * The freshness gate's probe half (answer-trust repair, M1): the pushdown
+ * with its attribute narrowing stripped, or null when nothing is left.
+ *
+ * The narrowing fragment excludes on the attribute SNAPSHOT, and a
+ * snapshot can silently lag its file - a document indexed `status: draft`
+ * and edited to `status: done` must not vanish from a `status=done` query
+ * when the contract says "narrow on the attribute snapshot, judged live"
+ * (`brain_search`'s own `properties` schema). So the store facade re-runs
+ * the lane read through this probe (the promoted predicates unchanged, the
+ * narrowing lifted, the same window) and treats the difference as the set
+ * of candidates the narrowing would exclude; each of those gets one
+ * liveness check against the indexed stat fingerprint (the Store's
+ * freshness gate in `src/core/search/store.ts`), and the stale ones fall
+ * through to the live post-rank filter as candidates. A candidate whose
+ * fingerprint still matches is proven fresh, its SQL exclusion stands, and
+ * the path is byte-identical to the ungated read - the gate never reads
+ * file contents, and neither does this half.
+ */
+export function withoutAttributeNarrowing(pushdown: PropertyPushdown): PropertyPushdown | null {
+  const promoted: PropertyPushdown = {
+    ...(pushdown.pageTypes !== undefined ? { pageTypes: pushdown.pageTypes } : {}),
+    ...(pushdown.pinned === true ? { pinned: true } : {}),
+    ...(pushdown.visibilityTokens !== undefined
+      ? { visibilityTokens: pushdown.visibilityTokens }
+      : {}),
+  };
+  const hasPromoted =
+    promoted.pageTypes !== undefined ||
+    promoted.pinned === true ||
+    promoted.visibilityTokens !== undefined;
+  return hasPromoted ? Object.freeze(promoted) : null;
 }
 
 /**
@@ -382,7 +430,12 @@ export function pushdownSqlFragment(
   if (pushdown.attributeNarrowing !== undefined) {
     // Candidate narrowing only (recall-quality): the fragment keeps every
     // document the bounded table cannot speak for, and the keys stay in the
-    // post-rank fallback, so this never decides a row on its own.
+    // post-rank fallback, so this never decides a row on its own. The
+    // snapshot the rows hold can also lag the file it was taken from; the
+    // store's freshness gate ({@link withoutAttributeNarrowing}) re-runs
+    // the lane read without this fragment and falls stale candidates
+    // through to the live filter instead of letting the SQL exclusion
+    // stand. This module stays pure SQL - no filesystem access here.
     const narrowing = attributeNarrowingFragment(pushdown.attributeNarrowing);
     if (narrowing !== null) {
       clauses.push(narrowing.sql);
