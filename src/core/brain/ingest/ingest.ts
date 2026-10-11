@@ -180,12 +180,15 @@ export interface IngestSourceResult {
   /** UTF-8 byte count of the archived (redacted) entry, with the hash. */
   readonly sourceArchiveBytes?: number;
   /**
-   * The named reason capture did not happen for a source that WAS eligible
-   * - a past-ceiling input refused by the archive, or bytes that could not
-   * be read at capture time. Recorded so the skip is not silent; the page
-   * stays unstamped either way. Never present when the source was simply
-   * not capture-eligible (untrusted, non-local, withheld from remote
-   * readers): those behave exactly as before this field existed.
+   * The named reason an ELIGIBLE capture FAILED - a past-ceiling input the
+   * archive refused, or an archive write that could not land. Recorded so
+   * the skip is not silent; the page stays unstamped either way. A source
+   * that vanished between classification and the capture read is the
+   * deliberate silent arm: neither stamp nor refusal (absence stays
+   * absence), because a source that is gone is no longer trusted-local,
+   * not a failed capture. Nor is this field ever present when the source
+   * was simply not capture-eligible (untrusted, non-local, withheld from
+   * remote readers): those behave exactly as before this field existed.
    */
   readonly sourceArchiveRefusal?: string;
   /**
@@ -533,7 +536,10 @@ function captureTrustedSourceArchive(
   if (isSourceHidden(vault, canonicalSource, remotelyReadable(vault))) return {};
   try {
     const origin = readSourceOrigin(vault, canonicalSource);
-    if (origin.bytes === undefined) return {}; // Vanished between classify and read.
+    // The silent arm: a vanished source is no longer trusted-local, not a
+    // failed capture - so neither stamp nor refusal (absence stays
+    // absence; see `sourceArchiveRefusal`'s contract).
+    if (origin.bytes === undefined) return {};
     const put = putSourceArchive(vault, origin.bytes);
     return { hash: put.hash, bytes: put.bytes };
   } catch (error) {
