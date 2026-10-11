@@ -35,6 +35,9 @@
  * records). Emission policy belongs to the surfaces above this fold.
  */
 
+import { basename, isAbsolute, relative, sep } from "node:path";
+
+import { canonicalNotePath } from "../path-safety.ts";
 import { resolveVaultScope, walkVaultScopePaths } from "../vault-scope/index.ts";
 import { listContinuityRecords } from "./continuity/store.ts";
 import type { ContinuityRecord } from "./continuity/types.ts";
@@ -90,10 +93,17 @@ export interface DeadWeightReport {
   readonly dead_count: number;
   /** Path-sorted preview of the complement, capped at the limit. */
   readonly dead: ReadonlyArray<{ readonly path: string }>;
+  /**
+   * Surfaced entries that name no walked page: an id-only reference whose
+   * stem matches nothing (or matches two pages, which the fold refuses to
+   * guess between). Counted, never silently dropped - but neither retrieved
+   * nor dead, because no page is provably named.
+   */
+  readonly unresolved_ids: number;
   readonly gate_caveat: string;
 }
 
-/** Paths this record surfaced, by the two spellings the emitters use. */
+/** Paths this record surfaced, by the spellings the emitters use. */
 function surfacedPaths(record: ContinuityRecord): ReadonlyArray<string> {
   const out: string[] = [];
   for (const ref of record.sourceRefs) {
@@ -111,13 +121,44 @@ function surfacedPaths(record: ContinuityRecord): ReadonlyArray<string> {
   return out;
 }
 
+/** Id-only surfaced entries (an emitter that records `{ id }` rows). */
+function surfacedIds(record: ContinuityRecord): ReadonlyArray<string> {
+  const out: string[] = [];
+  const top = record.payload["top_artifacts"];
+  if (Array.isArray(top)) {
+    for (const row of top) {
+      if (row !== null && typeof row === "object") {
+        const path = (row as { path?: unknown }).path;
+        const id = (row as { id?: unknown }).id;
+        if (typeof id === "string" && id.length > 0 && typeof path !== "string") out.push(id);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * A surfaced spelling as the walk spells pages: vault-relative posix NFC.
+ * An absolute path inside the vault relativizes; separators normalize; a
+ * path leaving the vault normalizes to nothing it could match.
+ */
+function normalizeSurfaced(vault: string, path: string): string {
+  const rel = isAbsolute(path) ? relative(vault, path) : path;
+  if (rel === "" || rel.startsWith("..")) return "";
+  // Records arrive from every device shard: both separators normalize,
+  // not just this host's.
+  return canonicalNotePath(rel.replaceAll("\\", "/").split(sep).join("/"));
+}
+
 /** Fold one continuity kind into the retrieved set and the window span. */
 function foldRecords(
   vault: string,
   kind: "recall_telemetry" | "recall_observed_use",
   opts: DeadWeightOptions,
+  stems: ReadonlyMap<string, string[]>,
   retrieved: Set<string>,
   window: { since: string | null; until: string | null },
+  unresolved: { count: number },
 ): void {
   const records = listContinuityRecords(vault, {
     kind,
@@ -126,14 +167,38 @@ function foldRecords(
   });
   const include = opts.includePath;
   for (const record of records) {
-    const paths = surfacedPaths(record);
-    for (const path of paths) retrieved.add(path);
+    const visible: string[] = [];
+    for (const raw of surfacedPaths(record)) {
+      const path = normalizeSurfaced(vault, raw);
+      if (path !== "") {
+        retrieved.add(path);
+        if (include === undefined || include(path)) visible.push(path);
+      }
+    }
+    for (const id of surfacedIds(record)) {
+      // An id-only entry names a page through its unique file stem. A stem
+      // matching nothing - or matching two pages, which the fold refuses to
+      // guess between - counts as unresolved and names nothing.
+      const hits = stems.get(id) ?? stems.get(id.toLowerCase());
+      const path = hits?.[0];
+      if (hits === undefined || hits.length !== 1 || path === undefined) {
+        unresolved.count += 1;
+        continue;
+      }
+      retrieved.add(path);
+      if (include === undefined || include(path)) visible.push(path);
+    }
     // The window rides the caller's view, the same reach/owner boundary
-    // the counts use: a record whose every surfaced path is hidden to
-    // this caller disclosed nothing it may see, so its timestamp must
-    // not widen or shift the reported window. A record naming nothing
-    // leaks nothing and keeps its span.
-    if (include !== undefined && paths.length > 0 && !paths.some(include)) continue;
+    // the counts use: a record that named pages but none this caller may
+    // see disclosed nothing it may see, so its timestamp must not widen
+    // or shift the reported window. A record naming nothing keeps its span.
+    if (
+      include !== undefined &&
+      visible.length === 0 &&
+      (surfacedPaths(record).length > 0 || surfacedIds(record).length > 0)
+    ) {
+      continue;
+    }
     const at = record.createdAt;
     if (typeof at === "string" && at.length > 0) {
       if (window.since === null || at < window.since) window.since = at;
@@ -156,8 +221,23 @@ export function computeDeadWeight(vault: string, opts: DeadWeightOptions = {}): 
   const full = new Set(include === undefined ? walked : walked.filter(include));
   const retrieved = new Set<string>();
   const window: { since: string | null; until: string | null } = { since: null, until: null };
-  foldRecords(vault, "recall_telemetry", opts, retrieved, window);
-  foldRecords(vault, "recall_observed_use", opts, retrieved, window);
+  // The stem index id-only entries resolve through: file stem -> the walked
+  // pages carrying it, in walk order. One page resolves; zero or two do not.
+  const stems = new Map<string, string[]>();
+  for (const path of walked) {
+    const stem = basename(path).replace(/\.md$/i, "");
+    const stemKey = stem.toLowerCase();
+    const hits = stems.get(stemKey);
+    if (hits === undefined) {
+      stems.set(stemKey, [path]);
+      if (stem !== stemKey) stems.set(stem, [path]);
+    } else {
+      hits.push(path);
+    }
+  }
+  const unresolved = { count: 0 };
+  foldRecords(vault, "recall_telemetry", opts, stems, retrieved, window, unresolved);
+  foldRecords(vault, "recall_observed_use", opts, stems, retrieved, window, unresolved);
 
   let pagesRetrieved = 0;
   for (const path of retrieved) {
@@ -173,6 +253,7 @@ export function computeDeadWeight(vault: string, opts: DeadWeightOptions = {}): 
     pages_retrieved: pagesRetrieved,
     dead_count: dead.length,
     dead: Object.freeze(dead.slice(0, limit).map((path) => Object.freeze({ path }))),
+    unresolved_ids: unresolved.count,
     gate_caveat: DEAD_WEIGHT_GATE_CAVEAT,
   });
 }

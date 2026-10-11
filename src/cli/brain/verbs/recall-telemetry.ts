@@ -228,6 +228,11 @@ function deadWeight(argv: string[]): number {
   process.stdout.write(
     `dead: ${report.dead_count} page(s) never surfaced in recorded recall history\n`,
   );
+  if (report.unresolved_ids > 0) {
+    process.stdout.write(
+      `unresolved ids: ${report.unresolved_ids} surfaced entry(ies) name no walked page\n`,
+    );
+  }
   for (const row of report.dead) process.stdout.write(`  ${row.path}\n`);
   process.stdout.write(`caveat: ${report.gate_caveat}\n`);
   return 0;

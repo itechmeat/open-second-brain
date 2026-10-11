@@ -237,3 +237,112 @@ describe("computeDeadWeight", () => {
     );
   });
 });
+
+/**
+ * The emitters spell surfaced pages in more than the vault-relative way
+ * the fold originally compared (PR #248 review M10): context packs record
+ * `join(dir, name)` - absolute - and a Windows writer leaves backslashes
+ * in the spelling; pre-compress records the active page as an absolute
+ * path and its preference items as ids only. Every spelling names a page
+ * the walk holds, so every one must count as retrieved; an id that names
+ * no walked page counts as neither retrieved nor dead and lands in the
+ * `unresolved_ids` bucket instead of vanishing.
+ */
+describe("surfaced spellings beyond the relative one", () => {
+  test("a page a context pack surfaces by absolute path is not dead weight", () => {
+    emitRecallTelemetry(vault, {
+      createdAt: "2026-05-20T16:00:00.000Z",
+      host: "fold-test",
+      channel: RECALL_CHANNEL.cli,
+      mode: "context_pack",
+      status: "ok",
+      durationMs: 5,
+      resultCount: 1,
+      // The shape context-pack.ts emits: `path` is the absolute file path.
+      topArtifacts: [{ id: "pref-a:0", path: join(vault, "a.md") }],
+    });
+    const report = computeDeadWeight(vault);
+    expect(report.pages_retrieved).toBe(1);
+    expect(report.dead.map((d) => d.path)).toEqual(["b.md", "c.md", "sub/d.md"]);
+    expect(report.unresolved_ids).toBe(0);
+  });
+
+  test("a backslash-spelled relative path matches the walked page", () => {
+    emitRecallTelemetry(vault, {
+      createdAt: "2026-05-20T16:00:00.000Z",
+      host: "fold-test",
+      channel: RECALL_CHANNEL.cli,
+      mode: "search",
+      status: "ok",
+      durationMs: 5,
+      resultCount: 1,
+      topArtifacts: [{ id: "doc-d:0", path: "sub\\d.md" }],
+    });
+    const report = computeDeadWeight(vault);
+    expect(report.pages_retrieved).toBe(1);
+    expect(report.dead.map((d) => d.path)).toEqual(["a.md", "b.md", "c.md"]);
+  });
+
+  test("pre-compress records: the active page by absolute path, items by id", () => {
+    writeMd("Brain/active.md", "# Active\n\nthe digest page\n");
+    writeMd("Brain/preferences/pref-keep-short.md", "# Keep it short\n\nstatus: confirmed\n");
+    emitRecallTelemetry(vault, {
+      createdAt: "2026-05-20T16:00:00.000Z",
+      host: "fold-test",
+      channel: RECALL_CHANNEL.hook,
+      mode: "pre_compress",
+      status: "ok",
+      durationMs: 5,
+      resultCount: 2,
+      // The shape pre-compress-pack.ts emits: the active head as an
+      // absolute path, each ranked preference item as its id only.
+      topArtifacts: [
+        { id: "__active__", path: join(vault, "Brain", "active.md") },
+        { id: "pref-keep-short" },
+      ],
+    });
+    const report = computeDeadWeight(vault);
+    // The walk now holds six pages; the two the pack surfaced count as
+    // retrieved, resolved from the absolute path and from the id.
+    expect(report.pages_total).toBe(6);
+    expect(report.pages_retrieved).toBe(2);
+    expect(report.dead.map((d) => d.path)).toEqual(["a.md", "b.md", "c.md", "sub/d.md"]);
+    expect(report.unresolved_ids).toBe(0);
+  });
+
+  test("an id that names no walked page counts in the unresolved bucket", () => {
+    emitRecallTelemetry(vault, {
+      createdAt: "2026-05-20T16:00:00.000Z",
+      host: "fold-test",
+      channel: RECALL_CHANNEL.hook,
+      mode: "pre_compress",
+      status: "ok",
+      durationMs: 5,
+      resultCount: 1,
+      topArtifacts: [{ id: "pref-gone" }],
+    });
+    const report = computeDeadWeight(vault);
+    expect(report.pages_retrieved).toBe(0);
+    expect(report.dead_count).toBe(4);
+    expect(report.unresolved_ids).toBe(1);
+  });
+
+  test("an ambiguous stem is unresolved, never a guess between two pages", () => {
+    writeMd("sub/a.md", "# A again\n");
+    emitRecallTelemetry(vault, {
+      createdAt: "2026-05-20T16:00:00.000Z",
+      host: "fold-test",
+      channel: RECALL_CHANNEL.hook,
+      mode: "pre_compress",
+      status: "ok",
+      durationMs: 5,
+      resultCount: 1,
+      topArtifacts: [{ id: "a" }],
+    });
+    const report = computeDeadWeight(vault);
+    // Both `a.md` and `sub/a.md` stay dead: the fold does not pick one.
+    expect(report.pages_retrieved).toBe(0);
+    expect(report.dead_count).toBe(5);
+    expect(report.unresolved_ids).toBe(1);
+  });
+});
