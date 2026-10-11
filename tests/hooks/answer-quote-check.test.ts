@@ -653,6 +653,26 @@ describe("answer-quote-check hook - phase gating", () => {
     expect(run.exit).toBe(0);
     expect(run.stdout).toBe("");
   });
+
+  test("an unparseable stdin payload exits 0 with exactly one stderr audit line", async () => {
+    writeConfig("shadow");
+    const proc = Bun.spawn(["bun", "run", HOOK], {
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, VAULT_DIR: vault, OPEN_SECOND_BRAIN_RECALL_INJECT_ENABLED: "true" },
+    });
+    proc.stdin.write("this is not json");
+    await proc.stdin.end();
+    const stdout = await new Response(proc.stdout).text();
+    const stderr = await new Response(proc.stderr).text();
+    const exit = await proc.exited;
+    expect(exit).toBe(0);
+    expect(stdout).toBe("");
+    const lines = stderr.split(/\r?\n/).filter((line) => line.length > 0);
+    expect(lines.length).toBe(1);
+    expect(lines[0]!.startsWith("answer-quote-check:")).toBe(true);
+  });
 });
 
 describe("answer-quote-check hook - the enforce trail", () => {
@@ -679,6 +699,10 @@ describe("answer-quote-check hook - the enforce trail", () => {
     expect(annotations(run).length).toBe(1);
     const lines = enforceLines();
     expect(lines.length).toBe(1);
+    // The `note` kind is the Brain log's designated audit-line home; the
+    // hook does not borrow the pinned session-lifecycle shape.
+    expect(lines[0]).toContain('"kind":"note"');
+    expect(lines[0]).not.toContain("session-lifecycle");
     expect(lines[0]).toContain("[not-in-note]");
     expect(lines[0]).toContain("reuses pooled capital");
     expect(lines[0]).toContain("recall");

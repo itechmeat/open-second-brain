@@ -1202,6 +1202,13 @@ export function resolveRecallInjectEnabled(configPath?: string): boolean {
  * with its own resolver and no second reader. The shape follows the
  * decision-model per-use mode switch
  * (`src/core/decision-model/contract.ts`, `DECISION_MODEL_MODES`).
+ *
+ * Channel honesty: the Stop hook's annotation renders on Claude Code
+ * only. The other registered runtimes render no Stop annotation - and
+ * grok ships no `transcript_path` at all - so there the check is
+ * silently inert, and a non-`off` mode promises findings that only a
+ * Claude Code session (or the `enforce` Brain-log trail, where a
+ * transcript is read at all) delivers.
  */
 export const ANSWER_QUOTE_CHECK_MODES = Object.freeze(["off", "shadow", "enforce"] as const);
 

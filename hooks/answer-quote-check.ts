@@ -30,6 +30,13 @@
  * Brain-log event per turn with the unverified spans, so findings survive
  * the session - and never blocks.
  *
+ * Channel. The annotation rides `hookSpecificOutput.additionalContext`
+ * on the Stop event, which Claude Code renders into the turn. Codex and
+ * grok accept the registration but render no Stop annotation - and grok
+ * ships no `transcript_path` at all - so the check is silently inert on
+ * them: fail-open silence, kept deliberately, with the `enforce`
+ * Brain-log trail as the one finding surface that survives the session.
+ *
  * Bounded, fail-open. The step reads at most
  * {@link ANSWER_QUOTE_TAIL_BYTES} of the transcript, the last
  * {@link ANSWER_QUOTE_MAX_MESSAGES} assistant messages of the turn,
@@ -633,7 +640,10 @@ async function main(): Promise<void> {
   let payload;
   try {
     payload = asHookPayload(await readHookInput());
-  } catch {
+  } catch (err) {
+    // An unparseable payload is a host fault: one audit line, the same
+    // prefix as every other error arm, and never a block.
+    process.stderr.write(`${AUDIT_PREFIX} ${err instanceof Error ? err.message : String(err)}\n`);
     return;
   }
   // Once per turn: the runtime already continued this turn on a Stop
@@ -717,7 +727,10 @@ async function main(): Promise<void> {
     try {
       appendLogEvent(vault, {
         timestamp: isoSecond(new Date()),
-        eventType: BRAIN_LOG_EVENT_KIND.sessionLifecycle,
+        // The `note` kind is the Brain log's designated audit-line home;
+        // the pinned `session-lifecycle` shape belongs to the lifecycle
+        // capture and is not this event's shape to borrow.
+        eventType: BRAIN_LOG_EVENT_KIND.note,
         agent: resolveAgentName(),
         body: {
           hook: "answer-quote-check",
