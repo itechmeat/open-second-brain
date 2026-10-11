@@ -65,7 +65,11 @@ import { isPathReadableAtReach, type FrontmatterCache } from "../../search/resul
 import { entityPath } from "../paths.ts";
 import { stageForReview } from "../pending/pending-lanes.ts";
 import { REVIEW_LANE } from "../write-gate.ts";
-import { validateEntityCategory, normalizeEntityName } from "../entities/canonical.ts";
+import {
+  validateEntityCategory,
+  normalizeEntityName,
+  InvalidEntityLabelError,
+} from "../entities/canonical.ts";
 import { relateEntities, upsertEntity } from "../entities/registry.ts";
 import { renderProvenanceSection, type Provenance } from "../provenance/provenance.ts";
 import { INTAKE_TRUST, type IntakeTrust } from "../trust/untrusted-provenance.ts";
@@ -154,6 +158,18 @@ export interface IntakeResult {
   /** Count of relations applied (idempotent; an already-linked edge is a no-op). */
   readonly relationsApplied: number;
   /**
+   * Count of entities this intake SKIPPED because the store-learned label
+   * admission gate refused the name at creation (`function-word-run`,
+   * `shouted-heading` - review M4). One refused label used to abort the
+   * whole batch partway: the entities before it created, the relations
+   * skipped, and every retry hitting the same label. The skip is counted
+   * so a caller can see it; a structural verdict or a denylist refusal is
+   * still a hard error that fails the intake.
+   */
+  readonly entitiesSkipped: number;
+  /** Count of relations NOT applied because an endpoint's label was skipped. */
+  readonly relationsSkipped: number;
+  /**
    * The lane this intake committed in. Returned so the MCP boundary reports
    * the verdict this primitive actually used instead of classifying the same
    * source a second time and reporting an answer that could disagree.
@@ -175,6 +191,22 @@ export class IntakeValidationError extends Error {
     this.name = "IntakeValidationError";
   }
 }
+
+/**
+ * The label refusals an intake SKIPS rather than dies on (review M4): the
+ * two store-learned admission verdicts the registry's creation gate can
+ * raise. They are statistics over the corpus, so one learned-common word
+ * in an otherwise good batch must not wedge intake forever - the skip is
+ * counted on the result and the batch carries on. Every OTHER refusal -
+ * a structural verdict, the operator denylist - stays a hard error: those
+ * are admissions the operator actually made, not evidence the store
+ * learned, and a skipped denylist row would be a gate that only sometimes
+ * gates.
+ */
+const SKIPPED_LABEL_REASONS: ReadonlySet<string> = new Set([
+  "function-word-run",
+  "shouted-heading",
+]);
 
 /** Validate the whole payload before any write, so a bad intake never writes. */
 function validateIntake(intake: ExtractionIntake): void {
@@ -309,6 +341,11 @@ export function intakeExtraction(
   // Categories of the created records, beside their ids: the staging step
   // below needs both to name a created page's canonical path.
   const createdPages: { readonly id: string; readonly category: string }[] = [];
+  // Normalised names the admission gate refused: their relations cannot
+  // resolve an endpoint and are skipped by name instead of crashing.
+  const skippedNames = new Set<string>();
+  let entitiesSkipped = 0;
+  let relationsSkipped = 0;
 
   for (const entity of intake.entities) {
     const category = validateEntityCategory(entity.category);
@@ -319,17 +356,31 @@ export function intakeExtraction(
     const bodyOnCreate = provenanceSection
       ? `# ${entity.name.trim()}\n\n${provenanceSection}`
       : undefined;
-    const res = upsertEntity(vault, {
-      category,
-      name: entity.name,
-      ...(entity.aliases !== undefined ? { aliases: entity.aliases } : {}),
-      agent: opts.agent,
-      now: opts.now,
-      ...(entity.confidence !== undefined ? { confidence: entity.confidence } : {}),
-      ...(bodyOnCreate !== undefined ? { bodyOnCreate } : {}),
-      ...(untrustedOrigin ? { untrustedOrigin } : {}),
-      ...(origin.contentHash !== undefined ? { sourceContentHash: origin.contentHash } : {}),
-    });
+    let res;
+    try {
+      res = upsertEntity(vault, {
+        category,
+        name: entity.name,
+        ...(entity.aliases !== undefined ? { aliases: entity.aliases } : {}),
+        agent: opts.agent,
+        now: opts.now,
+        ...(entity.confidence !== undefined ? { confidence: entity.confidence } : {}),
+        ...(bodyOnCreate !== undefined ? { bodyOnCreate } : {}),
+        ...(untrustedOrigin ? { untrustedOrigin } : {}),
+        ...(origin.contentHash !== undefined ? { sourceContentHash: origin.contentHash } : {}),
+      });
+    } catch (exc) {
+      // Review M4: a store-learned admission verdict refuses one label, not
+      // the batch. Skip it, count it, and let the rest of the extraction
+      // commit - a retry then meets the same skip, idempotently, instead of
+      // failing on the same word forever. Any other refusal propagates.
+      if (exc instanceof InvalidEntityLabelError && SKIPPED_LABEL_REASONS.has(exc.reason)) {
+        skippedNames.add(normalizeEntityName(entity.name));
+        entitiesSkipped += 1;
+        continue;
+      }
+      throw exc;
+    }
     if (res.created) {
       entitiesCreated.push(res.entity.id);
       createdPages.push({ id: res.entity.id, category: res.entity.category });
@@ -340,6 +391,16 @@ export function intakeExtraction(
 
   let relationsApplied = 0;
   for (const rel of intake.relations ?? []) {
+    // An endpoint whose label was skipped does not resolve anywhere (the
+    // refusal fires only when no record answers to the name), so its edges
+    // are skipped and counted rather than crashed on.
+    if (
+      skippedNames.has(normalizeEntityName(rel.from)) ||
+      skippedNames.has(normalizeEntityName(rel.to))
+    ) {
+      relationsSkipped += 1;
+      continue;
+    }
     relateEntities(vault, {
       from: {
         query: rel.from,
@@ -383,6 +444,8 @@ export function intakeExtraction(
     entitiesCreated,
     entitiesUpdated,
     relationsApplied,
+    entitiesSkipped,
+    relationsSkipped,
     trust: origin.trust,
     ...(stagedEntityPages !== undefined ? { stagedEntityPages } : {}),
   };

@@ -24,6 +24,10 @@ import { join, relative } from "node:path";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { canonicalNotePath } from "../../../src/core/path-safety.ts";
 import { getEntity, listEntities } from "../../../src/core/brain/entities/registry.ts";
+import {
+  deriveEntityLexicon,
+  writeEntityLexicon,
+} from "../../../src/core/brain/entities/lexicon.ts";
 import { entityPath } from "../../../src/core/brain/paths.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import {
@@ -44,6 +48,7 @@ let vault: string;
 let configHome: string;
 
 const NOW = new Date("2026-06-13T12:00:00Z");
+const LATER = new Date("2026-06-14T09:00:00Z");
 const SOURCE = "Articles/restaking-primer.md";
 
 const SAMPLE: ExtractionIntake = {
@@ -283,6 +288,104 @@ describe("the manifest row owes the disposition verdict too", () => {
       "utf8",
     );
     expect(manifest).toContain(canonicalNotePath(SOURCE));
+  });
+});
+
+describe("a refused label does not abort the intake batch (review M4)", () => {
+  /**
+   * Teach the lexicon from a corpus page, then rebuild the artifact - the
+   * same store-learned vocabulary the registry's creation gate refuses
+   * with. The source file is seeded FIRST so the corpus signature it is
+   * validated against is the one the intake runs under.
+   */
+  function seedLexicon(corpus: string): void {
+    seed(SOURCE);
+    writeFileSync(join(vault, "corpus-page.md"), `${corpus}\n`, "utf8");
+    writeEntityLexicon(vault, deriveEntityLexicon(vault, { now: NOW }));
+  }
+
+  const JUNK_BATCH: ExtractionIntake = {
+    entities: [
+      { category: "concept", name: "Restaking" },
+      // A single learned common word: the registry's creation gate refuses
+      // it with `function-word-run`.
+      { category: "concept", name: "Notes" },
+      { category: "concept", name: "Validators" },
+    ],
+    relations: [{ from: "Restaking", relation: "related", to: "Validators" }],
+  };
+
+  test("a batch with one junk label completes: the skip is counted and the other entities are created", () => {
+    seedLexicon(
+      "Notes about the setup. The runner kept notes. Notes ran, notes ran. Restaking wraps staking. Restaking compounds. Restaking again.",
+    );
+    const res = intakeExtraction(vault, JUNK_BATCH, opts());
+    // The refused label is skipped and counted - it never aborts the batch.
+    expect(res.entitiesSkipped).toBe(1);
+    expect(res.entitiesCreated).toHaveLength(2);
+    expect(res.relationsApplied).toBe(1);
+    expect(res.relationsSkipped).toBe(0);
+    // The refused label wrote nothing, under any name.
+    const names = listEntities(vault, { category: "concept" }).map((e) => e.name);
+    expect(names).not.toContain("Notes");
+    expect(names).not.toContain("notes");
+  });
+
+  test("a relation touching a skipped label is skipped and counted too", () => {
+    seedLexicon(
+      "Notes about the setup. The runner kept notes. Notes ran, notes ran. Restaking wraps staking. Restaking compounds. Restaking again.",
+    );
+    const res = intakeExtraction(
+      vault,
+      {
+        entities: [
+          { category: "concept", name: "Restaking" },
+          { category: "concept", name: "Notes" },
+        ],
+        relations: [{ from: "Restaking", relation: "related", to: "Notes" }],
+      },
+      opts(),
+    );
+    expect(res.entitiesSkipped).toBe(1);
+    expect(res.entitiesCreated).toHaveLength(1);
+    // The edge cannot resolve its refused endpoint; it is skipped by name,
+    // not a crash the batch dies on.
+    expect(res.relationsApplied).toBe(0);
+    expect(res.relationsSkipped).toBe(1);
+  });
+
+  test("a retry is idempotent: the same skip, no duplicates", () => {
+    seedLexicon(
+      "Notes about the setup. The runner kept notes. Notes ran, notes ran. Restaking wraps staking. Restaking compounds. Restaking again.",
+    );
+    const first = intakeExtraction(vault, JUNK_BATCH, opts());
+    const second = intakeExtraction(vault, JUNK_BATCH, opts({ now: LATER }));
+    expect(second.entitiesCreated).toHaveLength(0);
+    expect(second.entitiesUpdated).toHaveLength(2);
+    expect(second.entitiesSkipped).toBe(1);
+    expect(second.relationsApplied).toBe(1);
+    expect(second.relationsSkipped).toBe(0);
+    expect(listEntities(vault, { category: "concept" })).toHaveLength(2);
+    expect(first.entitiesCreated).toHaveLength(2);
+  });
+
+  test("a non-admission label refusal still refuses the batch", () => {
+    // No lexicon: the structural gate alone. A label past the length bound
+    // is a hard refusal - only the store-learned admission verdicts skip.
+    seed(SOURCE);
+    expect(() =>
+      intakeExtraction(
+        vault,
+        {
+          entities: [
+            { category: "concept", name: `X`.repeat(201) },
+            { category: "concept", name: "Restaking" },
+          ],
+        },
+        opts(),
+      ),
+    ).toThrow(/invalid entity label/);
+    expect(listEntities(vault, { category: "concept" })).toHaveLength(0);
   });
 });
 
