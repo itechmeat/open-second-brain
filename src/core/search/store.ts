@@ -344,6 +344,18 @@ export class Store {
   }
 
   /**
+   * The stored promoted-column verdicts of a candidate pool; see
+   * `documents.promotedColumnStates`. The post-rank promoted-key gate
+   * consumes this to arbitrate the rows the lanes' SQL admitted through a
+   * NULL column: judged live, never trusted from SQL.
+   */
+  promotedColumnStates(
+    documentIds: ReadonlyArray<number>,
+  ): Map<number, documents.PromotedColumnState> {
+    return documents.promotedColumnStates(this.db, documentIds);
+  }
+
+  /**
    * The materialised event anchor of one path (v11), or null when the
    * document is absent or declared no readable date. The query-side
    * event-time resolver consults this instead of re-scanning the note's

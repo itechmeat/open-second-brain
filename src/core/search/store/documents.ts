@@ -337,6 +337,49 @@ export function pinnedDocumentIds(db: Database, documentIds: ReadonlyArray<numbe
 }
 
 /**
+ * The stored verdict of the promoted filter columns for one document: the
+ * `page_type` token (v6) and the measured `pinned` flag (v13). Either side
+ * is null when the column cannot speak for the row - `page_type` is written
+ * only for scalar-string `type` frontmatter, and `pinned` is NULL on every
+ * row an in-place upgrade carried over without re-examining.
+ */
+export interface PromotedColumnState {
+  readonly pageType: string | null;
+  readonly pinned: boolean | null;
+}
+
+/**
+ * The promoted-column verdicts of a candidate pool, keyed by document id.
+ *
+ * The post-rank promoted-key gate reads this to arbitrate exactly the rows
+ * the lanes' SQL admitted through a NULL arm (`column IS NULL`): the arm
+ * that admitted such a row proves nothing about the filter, so a NULL
+ * column is judged by the live filter and never trusted from SQL, while a
+ * non-NULL column keeps its as-indexed SQL verdict. One bounded query per
+ * filtered search - the pool is the post-rank window, not the corpus.
+ */
+export function promotedColumnStates(
+  db: Database,
+  documentIds: ReadonlyArray<number>,
+): Map<number, PromotedColumnState> {
+  const out = new Map<number, PromotedColumnState>();
+  if (documentIds.length === 0) return out;
+  const rows = db
+    .query<{ id: number; page_type: string | null; pinned: number | null }, [string]>(
+      `SELECT id, page_type, ${PINNED_COLUMN} AS pinned FROM documents ` +
+        `WHERE id IN (SELECT value FROM json_each(?))`,
+    )
+    .all(JSON.stringify([...new Set(documentIds)]));
+  for (const r of rows) {
+    out.set(r.id, {
+      pageType: r.page_type,
+      pinned: r.pinned === null ? null : r.pinned === PINNED_YES,
+    });
+  }
+  return out;
+}
+
+/**
  * The materialised event anchor of one path, or null when the document is
  * absent from the index or declared no readable date (v11).
  *

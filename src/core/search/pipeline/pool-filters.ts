@@ -10,7 +10,6 @@
 import { normalizeAgentScope } from "../../graph/agent-scope.ts";
 import { normalizeVisibilityScope } from "../../graph/visibility.ts";
 import { resolvedTransportReach, type TransportReach } from "../../graph/transport-reach.ts";
-import { normalizeSchemaToken } from "../../brain/schema-vocab.ts";
 import { normalizeScopeFilter } from "../../scope-key.ts";
 import {
   resolvePropertyPushdown,
@@ -25,7 +24,6 @@ import {
   applyStatusFilter,
   applyReachFilter,
   applyVisibilityScope,
-  readCachedFrontmatter,
   type FrontmatterCache,
 } from "../result-filters.ts";
 import type { Store } from "../store.ts";
@@ -203,28 +201,29 @@ export function applyPoolFilters(
     filters.promoted !== null && propFiltered.some((r) => r.searchType === "link")
       ? gateTraversalRows(propFiltered, filters.promoted, ctx)
       : propFiltered;
-  // Shape gate (recall-quality review): documents.page_type records only
-  // scalar-STRING `type` frontmatter, so the pushed clause is conditionally
-  // faithful - its NULL arm keeps every row whose shape the column cannot
-  // speak for (an array `type` most notably, which the live filter matches
-  // element-wise), and THIS stage arbitrates exactly those rows under the
-  // live filter's type key, in the caller's own spelling. Rows the SQL
-  // legitimately decided (a scalar-string type) keep their as-indexed
-  // verdict; nothing is re-read for them beyond the shared frontmatter
-  // cache probe that recognises the blind shapes.
-  const shapeGated =
+  // Promoted-NULL arbitration (recall-quality): the pushed type and pinned
+  // clauses each carry an `... OR column IS NULL` arm for the rows the
+  // columns cannot speak for - a non-scalar `type` shape, and every row an
+  // in-place upgrade carried over without re-examining. The SQL arm that
+  // admitted such a row proves nothing about the filter, so THIS stage
+  // judges each NULL-column row under the live filter, PER ROW regardless
+  // of the query's shape, and lets a non-NULL column keep its as-indexed
+  // SQL verdict. The old shape gate arbitrated by the live frontmatter's
+  // shape instead, so a stale-NULL row whose file had meanwhile become a
+  // speakable scalar kept the SQL verdict it never received and surfaced
+  // under a filter its own frontmatter fails.
+  const arbitrated =
     filters.promoted !== null &&
-    filters.promoted.has("type") &&
-    filters.pushdown?.pageTypes !== undefined
-      ? gateBlindShapeRows(traversalGated, filters.promoted.get("type")!, ctx)
+    (filters.pushdown?.pageTypes !== undefined || filters.pushdown?.pinned === true)
+      ? gateUnspokenPromotedRows(traversalGated, filters, ctx)
       : traversalGated;
   // Graph-degree cardinality predicates (t_9bee8f0b): drop rows whose
   // backlink/outlink counts fail the predicates, backed by the
   // link-graph degree index. No-op when no predicate was requested.
   const degreeFiltered =
     filters.degreeFilters.length > 0
-      ? applyDegreeFilter(shapeGated, filters.degreeFilters, ctx.store)
-      : shapeGated;
+      ? applyDegreeFilter(arbitrated, filters.degreeFilters, ctx.store)
+      : arbitrated;
   // Root A, and it runs BEFORE the trail's baseline is taken. The
   // caller's own scopes are counted below, because "did my scope remove
   // my results" is a question the caller may ask about a filter it
@@ -291,40 +290,39 @@ function gateTraversalRows(
 }
 
 /**
- * The rows whose `type` frontmatter the page_type column cannot speak for
- * - the key absent, or present in a non-scalar shape (an array; the
- * parser keeps YAML scalars as strings, so a string whose token is empty
- * is the remaining blind case) - judged under the live filter's type key
- * and spliced back in rank order. A scalar-string type keeps its SQL
- * verdict: the column stored it, and that as-indexed answer is the C4
- * contract for the shapes the SQL reproduces exactly.
+ * The rows a promoted column cannot speak for - stored `page_type` NULL
+ * (the key absent, or present in a non-scalar shape, at index time) or
+ * stored `pinned` NULL (a row an in-place upgrade carried over) - judged
+ * under the live filter for exactly the keys that are NULL on them, and
+ * spliced back in rank order. A non-NULL column keeps its SQL verdict: the
+ * column stored it, and that as-indexed answer is the C4 contract for the
+ * shapes the SQL reproduces exactly. A document row missing from the index
+ * entirely is judged live too - there is nothing stored to trust.
  */
-function gateBlindShapeRows(
+function gateUnspokenPromotedRows(
   ranked: ReadonlyArray<BrainSearchResult>,
-  typeValues: ReadonlyArray<string>,
+  filters: PoolFilters,
   ctx: FilterContext,
 ): ReadonlyArray<BrainSearchResult> {
-  const blind: BrainSearchResult[] = [];
-  for (const r of ranked) {
-    const meta = readCachedFrontmatter(ctx.frontmatterCache, ctx.vault, r.path) as Record<
-      string,
-      unknown
-    >;
-    if (!Object.prototype.hasOwnProperty.call(meta, "type")) {
-      blind.push(r);
-      continue;
-    }
-    const value = meta["type"];
-    if (typeof value !== "string" || normalizeSchemaToken(value).length === 0) blind.push(r);
-  }
-  if (blind.length === 0) return ranked;
+  const typeValues = filters.promoted?.get("type");
+  const judgeType = typeValues !== undefined && filters.pushdown?.pageTypes !== undefined;
+  const pinnedValues = filters.promoted?.get("pinned");
+  const judgePinned = pinnedValues !== undefined && filters.pushdown?.pinned === true;
+  if (!judgeType && !judgePinned) return ranked;
+  const states = ctx.store.promotedColumnStates([...new Set(ranked.map((r) => r.documentId))]);
+  const unspoken = ranked.filter((r) => {
+    const state = states.get(r.documentId);
+    if (state === undefined) return true;
+    if (judgeType && state.pageType === null) return true;
+    if (judgePinned && state.pinned === null) return true;
+    return false;
+  });
+  if (unspoken.length === 0) return ranked;
+  const live = new Map<string, ReadonlyArray<string>>();
+  if (judgeType) live.set("type", typeValues);
+  if (judgePinned) live.set("pinned", pinnedValues);
   const kept = new Set(
-    applyPropertyFilter(
-      blind,
-      new Map([["type", typeValues]]),
-      ctx.vault,
-      ctx.frontmatterCache,
-    ).map((r) => r.chunkId),
+    applyPropertyFilter(unspoken, live, ctx.vault, ctx.frontmatterCache).map((r) => r.chunkId),
   );
-  return ranked.filter((r) => !blind.includes(r) || kept.has(r.chunkId));
+  return ranked.filter((r) => !unspoken.includes(r) || kept.has(r.chunkId));
 }

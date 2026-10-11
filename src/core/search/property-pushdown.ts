@@ -56,9 +56,13 @@
  *     scalar shapes as-indexed; the NULL arm keeps every row whose shape
  *     the column cannot speak for - an array `type` most notably, which
  *     the live filter matches element-wise - as a candidate, and the
- *     assembly's post-rank shape gate arbitrates exactly those rows under
- *     the live filter (`pipeline/pool-filters.ts`), so a non-scalar shape
- *     never silently narrows;
+ *     post-rank promoted-NULL gate arbitrates exactly those rows under
+ *     the live filter (`pipeline/pool-filters.ts`), per row by the
+ *     STORED column: a NULL page_type is judged live whatever the query
+ *     and whatever the live shape (the arm that admitted the row proves
+ *     nothing - a stale-NULL row whose file meanwhile says a speakable
+ *     scalar must not inherit a SQL verdict it never received), while a
+ *     non-NULL page_type keeps its SQL verdict;
  *   - a key with no accepted values matches nothing under the live
  *     filter's semantics, which is the post-rank path's exact behaviour.
  */
@@ -345,7 +349,7 @@ export function pushdownSqlFragment(
     // Conditionally faithful (see the module header): the IN arm answers
     // the scalar-string shapes the column stores; the NULL arm keeps every
     // row whose `type` shape the column cannot speak for - the post-rank
-    // shape gate arbitrates those under the live filter.
+    // promoted-NULL gate arbitrates those under the live filter.
     clauses.push(
       `(d.page_type IN (${placeholders(pushdown.pageTypes.length)}) OR d.page_type IS NULL)`,
     );
