@@ -415,13 +415,18 @@ function scanTurn(text: string): TurnScan {
   }
   const offsetOf = (lineIndex: number, column: number): number => lineOffsets[lineIndex]! + column;
 
-  // 1. URLs - the fact-extract family, on every line.
+  // 1. URLs - the fact-extract family, on every line. The claimed spans
+  //    are kept beside the generic claim set: the fence pass masks them
+  //    out instead of surrendering the whole block (see below).
+  const urlSpans: Span[] = [];
   for (let i = 0; i < lines.length; i++) {
     const re = new RegExp(URL_SPAN_RE.source, "giu");
     for (const m of lines[i]!.matchAll(re)) {
       const start = offsetOf(i, m.index ?? 0);
       const end = start + m[0]!.length;
-      claimed.push({ start, end });
+      const span = { start, end };
+      claimed.push(span);
+      urlSpans.push(span);
       push("url", m[0]!);
     }
   }
@@ -430,11 +435,29 @@ function scanTurn(text: string): TurnScan {
   //    is identifier-shaped is one candidate; a fenced block is harvested
   //    token by token. A region holding no candidate is still claimed, so
   //    prose-in-backticks never leaks into the prose passes.
+  //
+  //    A URL inside a fence stays the URL pass's - claimed, minted or
+  //    refused there - but it must not eat the block whole: the symbol
+  //    tokens around it are still mined, from the fence text with every
+  //    URL span masked out so a refused URL's own text cannot re-enter
+  //    the ledger as a symbol key (a refusal must stay a refusal).
   for (const m of joined.matchAll(FENCED_BLOCK_RE)) {
     const span = { start: m.index ?? 0, end: (m.index ?? 0) + m[0]!.length };
     claimed.push(span);
-    if (overlaps(span, claimed.slice(0, -1))) continue;
-    for (const token of codeTokens(m[0]!.slice(3, -3))) {
+    const inner = m[0]!.slice(3, -3);
+    const innerStart = span.start + 3;
+    const innerEnd = span.end - 3;
+    let masked = "";
+    let cursor = 0;
+    for (const url of urlSpans) {
+      if (url.end <= innerStart || url.start >= innerEnd) continue;
+      const from = Math.max(url.start, innerStart) - innerStart;
+      const to = Math.min(url.end, innerEnd) - innerStart;
+      if (from > cursor) masked += `${inner.slice(cursor, from)} `;
+      cursor = Math.max(cursor, to);
+    }
+    masked += inner.slice(cursor);
+    for (const token of codeTokens(masked)) {
       if (HAS_LETTER_RE.test(token) && hasCodeCue(token)) push("symbol", token);
     }
   }

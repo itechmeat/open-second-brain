@@ -425,6 +425,25 @@ describe("mineAndRecordTurn", () => {
     expect(retried.extracted).toBe(2);
     expect(retried.ledgerFailed).toBe(0);
   });
+
+  test("a fence holding a refused URL still mines the symbols around it", () => {
+    // The old fence pass skipped a block WHOLE when the URL pass claimed
+    // anything inside it, so one link silently deleted every symbol in the
+    // fence. The URL stays the URL pass's - refused here, counted - and
+    // the tokens around it are still mined, with the URL's own text masked
+    // out so a refusal cannot re-enter the ledger as a symbol key.
+    const text = [
+      "```",
+      "const hook = loadWebhook();",
+      `see https://osb.example/pull?token=${FAKE_QUERY_KEY} inside`,
+      "```",
+    ].join("\n");
+    const seen = new Set<string>();
+    const out = mineAndRecordTurn(vault, input({ text, seen }));
+    expect(out.secretRefused).toBe(1);
+    expect(out.extracted).toBe(1);
+    expect(mined(text)).toEqual([["symbol", "loadWebhook"]]);
+  });
 });
 
 describe("the per-session key cap", () => {
