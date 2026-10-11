@@ -32,7 +32,7 @@
  */
 
 import { Database } from "bun:sqlite";
-import { utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
@@ -50,7 +50,7 @@ import {
 } from "../../../src/core/search/query-cache.ts";
 import { keywordTopK, keywordTopKSql } from "../../../src/core/search/store/keyword.ts";
 import { semanticTopK, semanticTopKSql } from "../../../src/core/search/store/vectors.ts";
-import { indexedSnapshotStale } from "../../../src/core/search/store.ts";
+import { Store, indexedSnapshotStale } from "../../../src/core/search/store.ts";
 import { resolvePoolFilters } from "../../../src/core/search/pipeline/pool-filters.ts";
 import {
   isSearchKind,
@@ -996,6 +996,61 @@ describe("the freshness gate on attribute narrowing", () => {
       }),
     ).toEqual({ pageTypes: ["note"] });
     expect(withoutAttributeNarrowing({ pinned: true })).toEqual({ pinned: true });
+  });
+
+  test("an index row whose path escapes the vault is ruled stale, never statted outside", async () => {
+    const cfg = makeConfig({ vault, dbPath });
+    await seedFlipVault();
+    // Repoint flip.md's index row at a path that escapes the vault - where
+    // a real file waits with the exact stat fingerprint the row records.
+    // A gate that statted outside would read that twin, call the snapshot
+    // FRESH, and keep the SQL exclusion standing; the lexical containment
+    // rules the row stale without touching the filesystem at all. The
+    // twin lives one directory up from the vault, so the `..` traversal
+    // is real, and the directory is taken back before the test ends.
+    const escapedRoot = join(vault, "..", "escaped-twin");
+    mkdirSync(escapedRoot, { recursive: true });
+    try {
+      const outside = join(escapedRoot, "outside.md");
+      const db = new Database(dbPath);
+      let row: { id: number; mtime: number; size: number };
+      try {
+        row = db
+          .query<{ id: number; mtime: number; size: number }, [string]>(
+            "SELECT id, mtime, size FROM documents WHERE path = ?",
+          )
+          .get("notes/flip.md")!;
+        expect(row).toBeDefined();
+        db.query("UPDATE documents SET path = '../escaped-twin/outside.md' WHERE id = ?").run(
+          row.id,
+        );
+      } finally {
+        db.close();
+      }
+      // The outside twin: same bytes (same size) as the indexed file,
+      // forced to the indexed mtime, so it answers every stat the unfixed
+      // gate would have paid.
+      writeFileSync(outside, readFileSync(join(vault, "notes/flip.md")));
+      const indexed = new Date(row.mtime * 1000);
+      utimesSync(outside, indexed, indexed);
+
+      const store = await Store.open(cfg, { mode: "read", loadVec: false });
+      let narrowed;
+      try {
+        narrowed = store.keywordTopK('"flipgate"', {
+          limit: 10,
+          pushdown: { attributeNarrowing: [{ key: "status", values: ["done"] }] },
+        });
+      } finally {
+        await store.close();
+      }
+      // Ruled stale: the narrowed SQL dropped the row, and the gate
+      // appends it back for the live filter to arbitrate - the safe arm.
+      // A fresh verdict (the unfixed outcome) would have left it excluded.
+      expect(narrowed.map((hit) => hit.documentId)).toContain(row.id);
+    } finally {
+      rmSync(escapedRoot, { recursive: true, force: true });
+    }
   });
 });
 

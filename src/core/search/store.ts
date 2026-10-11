@@ -36,6 +36,7 @@ import type { ResolvedSearchConfig } from "./types.ts";
 import type { EventAnchor } from "./event-anchor.ts";
 import { readSchemaVersion, type DocumentAttribute } from "./schema.ts";
 import { withoutAttributeNarrowing, type PropertyPushdown } from "./property-pushdown.ts";
+import { pathIsInside } from "../path-safety.ts";
 
 import * as aliases from "./store/aliases.ts";
 import * as chunkEntities from "./store/chunk-entities.ts";
@@ -637,7 +638,13 @@ export class Store {
    *
    * The gate's filesystem budget is one `statSync` per would-be-excluded
    * candidate inside the lane window, bounded by the window itself; it
-   * never reads file contents. An unstatable file cannot be proven
+   * never reads file contents. The `path` column is the index's own
+   * record, and it is trusted only as far as the vault it serves: a row
+   * whose path does not resolve inside the vault is never statted at all -
+   * the same lexical containment the live filter applies - and is ruled
+   * STALE by the shared rule below, which is the safe arm (the candidate
+   * falls through to the live filter and is judged by its unreadable-file
+   * semantics). An unstatable file cannot be proven
    * current either, so its verdict is STALE by the same rule - that is a
    * named arbitration, not a swallowed error: the live filter's
    * unreadable-file semantics (`CachedFrontmatter.unreadable`, an empty
@@ -681,6 +688,16 @@ export class Store {
       .all(...documentIds);
     const stale = new Set<number>();
     for (const row of rows) {
+      // The index's path column is not trusted past the vault it serves: a
+      // row whose path escapes the vault is not a file this gate may stat,
+      // so it is ruled stale without touching the filesystem - the same
+      // lexical containment the live filter applies, and the safe arm (the
+      // candidate falls through to the live filter, which judges it
+      // unreadable rather than reading outside the vault).
+      if (!pathIsInside(join(this.config.vault, row.path), this.config.vault)) {
+        stale.add(row.id);
+        continue;
+      }
       let liveSize: number;
       let liveMtimeMs: number;
       try {
