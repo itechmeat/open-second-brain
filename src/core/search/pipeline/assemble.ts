@@ -63,6 +63,15 @@ export interface AssemblyInput {
   readonly keywordHits: ReadonlyArray<KeywordHit>;
   readonly semanticHits: ReadonlyArray<SemanticHit>;
   readonly hydrated: ReadonlyMap<number, HydratedChunk>;
+  /**
+   * The content tier of the two-tier hydration cut (recall-quality, C5):
+   * hydrate `c.content` for the RANKED rows only - bounded by the rank
+   * cap, never the candidate pool - before the first content consumer
+   * (MMR) reads a row. The pool map arrives from `hydrateChunkRefs` with
+   * the `content` placeholder; absent callback, the pool map is assumed
+   * to carry real content (pre-cut shape, tests).
+   */
+  readonly hydrateContents?: (chunkIds: ReadonlyArray<number>) => ReadonlyMap<number, string>;
   readonly signals: CandidateSignals;
   readonly relationalRankedChunkIds: ReadonlyArray<number>;
   readonly weightProfile: WeightProfile | undefined;
@@ -267,6 +276,23 @@ export function assembleRankedResults(input: AssemblyInput): ReadonlyArray<Brain
     const probed = rankCandidates(input, rankCap + CAP_PROBE_ROW);
     const capHit = probed.length > rankCap;
     let ranked = capHit ? probed.slice(0, rankCap) : probed;
+    // Content tier (recall-quality, C5): the ranked rows - and only they
+    // - get their real bodies before any content-consuming phase below
+    // (MMR, the relevance rerank). The rows the cap sliced away never
+    // cost a body. Rebuilding a row whose placeholder already matches is
+    // a no-op, so a full-content pool map (pre-cut shape) passes through
+    // byte-identically.
+    if (input.hydrateContents !== undefined && ranked.length > 0) {
+      const contentById = input.hydrateContents(ranked.map((r) => r.chunkId));
+      if (contentById.size > 0) {
+        ranked = ranked.map((r) => {
+          const content = contentById.get(r.chunkId);
+          return content === undefined || content === r.content
+            ? r
+            : Object.freeze({ ...r, content });
+        });
+      }
+    }
     // Retrieval-time staleness barrier (t_b0c9d0a3): drop any exact-state
     // lane artifact a stale/older index may still hold, before any later
     // phase can surface it. No-op (same reference) when the pool has none,

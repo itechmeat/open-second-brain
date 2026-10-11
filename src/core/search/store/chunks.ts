@@ -450,6 +450,69 @@ export function hydrateChunks(
 }
 
 /**
+ * The METADATA-ONLY pool hydration (recall-quality, C5): the same
+ * projection as {@link hydrateChunks} minus `c.content` - the one column
+ * the candidate pool never consumes before ranking (scoring reads ids,
+ * paths, hashes, mtimes and authored instants), and by far the most
+ * expensive one to pull for every candidate.
+ *
+ * The rows type as {@link HydratedChunk} with `content: ""` so the
+ * downstream signatures do not fork; the assembly's content tier replaces
+ * the placeholder for the ranked rows before the first content consumer
+ * (MMR) reads it. A consumer reading `content` off the pool map directly
+ * would get the placeholder - which is why the pool map flows only to the
+ * scoring stages.
+ */
+export function hydrateChunkRefs(
+  db: Database,
+  chunkIds: ReadonlyArray<number>,
+): Map<number, HydratedChunk> {
+  const out = new Map<number, HydratedChunk>();
+  if (chunkIds.length === 0) return out;
+  const placeholders = sqlPlaceholders(chunkIds);
+  const rows = db
+    .query<
+      {
+        chunk_id: number;
+        document_id: number;
+        path: string;
+        title: string | null;
+        start_line: number;
+        end_line: number;
+        mtime: number;
+        authored_at: number | null;
+        content_hash: string;
+        document_hash: string;
+      },
+      number[]
+    >(
+      "SELECT c.id AS chunk_id, c.document_id, d.path AS path, d.title AS title, " +
+        "       c.start_line AS start_line, c.end_line AS end_line, d.mtime AS mtime, " +
+        "       d.authored_at AS authored_at, c.content_hash AS content_hash, " +
+        "       d.content_hash AS document_hash " +
+        "FROM chunks c JOIN documents d ON d.id = c.document_id " +
+        `WHERE c.id IN (${placeholders})`,
+    )
+    .all(...(chunkIds as number[]));
+  for (const r of rows) {
+    out.set(r.chunk_id, {
+      chunkId: r.chunk_id,
+      documentId: r.document_id,
+      path: r.path,
+      title: r.title,
+      content: "",
+      startLine: r.start_line,
+      endLine: r.end_line,
+      mtime: r.mtime,
+      authoredAt: r.authored_at,
+      contentHash: r.content_hash,
+      documentHash: r.document_hash,
+    });
+  }
+  return out;
+}
+
+/**
  * One representative chunk per document - the lowest `chunk_index`,
  * which for markdown is the document head (title / opening section).
  * The traversal layer surfaces this when a linked document is not

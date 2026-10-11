@@ -457,6 +457,16 @@ export class Store {
   }
 
   /**
+   * Metadata-only pool hydration (recall-quality, C5): the pool's rows
+   * without `c.content` - content is hydrated for the ranked rows only,
+   * by {@link hydrateChunks}, inside the assembly. See
+   * `chunks.hydrateChunkRefs`.
+   */
+  hydrateChunkRefs(chunkIds: ReadonlyArray<number>): Map<number, chunks.HydratedChunk> {
+    return chunks.hydrateChunkRefs(this.db, chunkIds);
+  }
+
+  /**
    * One representative chunk per document - the lowest `chunk_index`,
    * which for markdown is the document head (title / opening section).
    * The traversal layer surfaces this when a linked document is not

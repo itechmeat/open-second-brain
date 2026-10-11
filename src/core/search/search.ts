@@ -480,7 +480,12 @@ export async function search(
       );
     }
 
-    const hydrated = store.hydrateChunks(idsList);
+    // Two-tier hydration (recall-quality, C5): the pool hydrates
+    // metadata-only - scoring reads ids, paths, hashes and instants,
+    // never bodies - and the assembly's content tier pulls bodies for the
+    // ranked rows (bounded by the rank cap) before MMR reads them. Peak
+    // content memory drops from O(candidates) to O(rankCap).
+    const hydrated = store.hydrateChunkRefs(idsList);
 
     if (timeRange !== null) {
       const inRange = filterCandidatesInRange({
@@ -514,6 +519,12 @@ export async function search(
       keywordHits,
       semanticHits,
       hydrated,
+      hydrateContents: (ids) => {
+        const rows = store.hydrateChunks(ids);
+        const contents = new Map<number, string>();
+        for (const [id, row] of rows) contents.set(id, row.content);
+        return contents;
+      },
       signals,
       relationalRankedChunkIds: relational.rankedChunkIds,
       degraded,
