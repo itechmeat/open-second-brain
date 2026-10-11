@@ -307,6 +307,14 @@ const TRAILING_PUNCT_RE = /\p{P}+$/u;
 /** At least one letter or digit in ANY script - the "carries meaning" test. */
 const HAS_LETTER_OR_DIGIT_RE = /[\p{L}\p{N}]/u;
 
+/**
+ * One arm of the structural code-shape test: a character that only code
+ * (or a path, or a numeric identifier) plants inside a label - underscore,
+ * dot, slash, or a digit of ANY script. The letters are checked separately
+ * so word-position can be honoured for case.
+ */
+const CODE_SHAPE_CHAR_RE = /[_./\p{N}]/u;
+
 /** Peel one matched emphasis/code wrapper pair, if present. */
 function stripSurroundingEmphasis(s: string): string {
   for (const [open, close] of EMPHASIS_WRAPPERS) {
@@ -340,12 +348,47 @@ export function sanitizeEntityLabel(raw: string): string {
   return s;
 }
 
-/** Why a label was rejected by {@link validateEntityLabel}. */
-export type EntityLabelInvalidReason = "empty" | "too-long" | "no-letter-or-digit" | "denylisted";
+/**
+ * Why a label was rejected by {@link validateEntityLabel}.
+ *
+ * `shouted-heading` and `function-word-run` are the recall-quality growth:
+ * case-based verdicts that fire ONLY behind an {@link EntityLexiconHandle}
+ * (see {@link ValidateEntityLabelOptions.lexicon}) - with the handle null
+ * or absent the predicate is byte-identical to its pre-lexicon behavior.
+ */
+export type EntityLabelInvalidReason =
+  | "empty"
+  | "too-long"
+  | "no-letter-or-digit"
+  | "denylisted"
+  | "shouted-heading"
+  | "function-word-run";
 
 export interface EntityLabelValidation {
   readonly valid: boolean;
   readonly reason?: EntityLabelInvalidReason;
+}
+
+/**
+ * The store-learned vocabulary the case-based verdicts consult, resolved
+ * by the entity-lexicon module and threaded in beside the denylist.
+ * Declared here - not imported - because this module is a leaf of the
+ * import graph and must keep importing nothing.
+ */
+export interface EntityLexiconHandle {
+  /**
+   * False for a caseless-script corpus (a script whose letters carry no
+   * upper/lower distinction): case statistics learned over such a corpus
+   * are meaningless, so a false handle suppresses BOTH case-based
+   * verdicts - `shouted-heading` and `function-word-run` never fire.
+   */
+  readonly caseful: boolean;
+  /**
+   * Whether `token` is a store-learned common word. Tokens are handed
+   * over LOWERCASED by the predicate, so implementations do exact
+   * lookups against their learned lowercase keys.
+   */
+  isCommonWord(token: string): boolean;
 }
 
 export interface ValidateEntityLabelOptions {
@@ -355,6 +398,57 @@ export interface ValidateEntityLabelOptions {
    * vocabulary source; empty/absent means no name-based rejection.
    */
   readonly denylist?: ReadonlySet<string>;
+  /**
+   * The store-learned lexicon behind the case-based verdicts
+   * (`shouted-heading`, `function-word-run`). Null or absent keeps the
+   * predicate byte-identical to its pre-lexicon behavior: those two
+   * reasons never fire.
+   */
+  readonly lexicon?: EntityLexiconHandle | null;
+}
+
+/**
+ * True when the label has a structural CODE shape: it contains `_`, `.`,
+ * `/`, any digit, or an INTERNAL uppercase letter - a camelCase hump, an
+ * uppercase whose preceding character is a lowercase LETTER (`OpenAI`,
+ * `TheAnd`, `McDonald`). An uppercase that starts the label or follows a
+ * word boundary is Title Case, and the letters of an ALL-CAPS word follow
+ * their own uppercase, so neither reads as code - `Open Second Brain`
+ * stays a name and `MEETING NOTES` stays eligible for the case verdicts,
+ * while `FTS5`, `foo_bar`, `Node.js` and `path/to/x` are identifiers.
+ */
+function hasStructuralCodeShape(sanitized: string): boolean {
+  if (CODE_SHAPE_CHAR_RE.test(sanitized)) return true;
+  for (let i = 1; i < sanitized.length; i++) {
+    const ch = sanitized[i]!;
+    const prev = sanitized[i - 1]!;
+    if (ch !== ch.toLowerCase() && prev !== prev.toUpperCase()) return true;
+  }
+  return false;
+}
+
+/**
+ * True when some letter carries case - `l !== l.toLowerCase()`. Only a
+ * CASEFUL label is eligible for the case-based verdicts; a caseless one
+ * (CJK, all-lowercase text, digits-only) admits on the structural gate
+ * alone.
+ */
+function isCasefulLabel(sanitized: string): boolean {
+  for (const ch of sanitized) {
+    if (ch !== ch.toLowerCase()) return true;
+  }
+  return false;
+}
+
+/**
+ * True when every token of the (already whitespace-collapsed) label is a
+ * store-learned common word. Tokens are handed to the handle LOWERCASED,
+ * so implementations do exact lookups against lowercase keys.
+ */
+function isCommonWordRun(sanitized: string, lexicon: EntityLexiconHandle): boolean {
+  const tokens = sanitized.split(WHITESPACE_RUN_RE);
+  if (tokens.length === 0) return false;
+  return tokens.every((token) => token.length > 0 && lexicon.isCommonWord(token.toLowerCase()));
 }
 
 /**
@@ -366,8 +460,24 @@ export interface ValidateEntityLabelOptions {
  *                             punctuation/symbols);
  *   - `denylisted`          - normalised form is in the operator denylist.
  *
+ * Behind a lexicon ({@link ValidateEntityLabelOptions.lexicon}) two
+ * CASE-BASED verdicts join, in this order after the four above:
+ *   - `shouted-heading`     - every letter is uppercase (a `# HEADING`
+ *                             residue), checked first;
+ *   - `function-word-run`   - every token is a store-learned common word
+ *                             (a single common token is already a run).
+ * Both run ONLY for a caseful label (some letter where `l !==
+ * l.toLowerCase()`) under a caseful handle, and BOTH are bypassed by a
+ * structural code shape ({@link hasStructuralCodeShape}) - `FTS5` and
+ * `foo_bar` admit even when they shout. The four structural verdicts are
+ * kept unconditionally; a caseless label admits on the structural gate
+ * alone. With the lexicon null or absent the two new reasons never fire
+ * and the verdicts are byte-identical to the pre-lexicon behavior.
+ *
  * The single source of truth for label validity - creation (typed error),
- * anchoring (logged skip), doctor, and prune all route through it.
+ * anchoring (logged skip), doctor, and prune all route through it. The
+ * hard-at-create vs advisory-heal POLICY over these verdicts lives in the
+ * callers, not here.
  */
 export function validateEntityLabel(
   sanitized: string,
@@ -380,6 +490,12 @@ export function validateEntityLabel(
   if (opts.denylist && opts.denylist.has(normalizeEntityName(sanitized))) {
     return { valid: false, reason: "denylisted" };
   }
+  const lexicon = opts.lexicon;
+  if (!lexicon || !lexicon.caseful) return { valid: true };
+  if (!isCasefulLabel(sanitized)) return { valid: true };
+  if (hasStructuralCodeShape(sanitized)) return { valid: true };
+  if (sanitized === sanitized.toUpperCase()) return { valid: false, reason: "shouted-heading" };
+  if (isCommonWordRun(sanitized, lexicon)) return { valid: false, reason: "function-word-run" };
   return { valid: true };
 }
 

@@ -12,6 +12,10 @@ import {
   validateEntityCategory,
   validateEntityLabel,
 } from "../../../src/core/brain/entities/canonical.ts";
+import type {
+  EntityLabelValidation,
+  EntityLexiconHandle,
+} from "../../../src/core/brain/entities/canonical.ts";
 
 describe("normalizeEntityName", () => {
   test("lowercases and trims", () => {
@@ -203,5 +207,198 @@ describe("entityMatchForms", () => {
 
   test("clean forms normalize exactly as before (backward compatible)", () => {
     expect(entityMatchForms(["Open Second Brain"])).toEqual(["open second brain"]);
+  });
+});
+
+// ----- Lexicon verdict growth (recall-quality wave, S1) ----------------------
+//
+// The predicate grows two case-based refusal reasons behind an optional
+// EntityLexiconHandle. With the handle null or absent the verdicts are
+// byte-identical to v1.79.0 - pinned by the describe block at the bottom.
+
+/**
+ * A deterministic stand-in for the store-learned handle the lexicon
+ * module resolves: EXACT lowercase-set lookup, so every test here also
+ * pins that the predicate hands the handle lowercased tokens rather
+ * than making the handle do the case folding.
+ */
+function lexiconOf(common: ReadonlySet<string>, caseful = true): EntityLexiconHandle {
+  return { caseful, isCommonWord: (token) => common.has(token) };
+}
+const COMMON = new Set(["the", "and", "of", "meeting", "notes"]);
+
+describe("validateEntityLabel - lexicon verdict growth", () => {
+  test("an all-uppercase label refuses with shouted-heading behind a lexicon", () => {
+    expect(validateEntityLabel("MEETING NOTES", { lexicon: lexiconOf(COMMON) })).toEqual({
+      valid: false,
+      reason: "shouted-heading",
+    });
+    expect(validateEntityLabel("TODO", { lexicon: lexiconOf(COMMON) })).toEqual({
+      valid: false,
+      reason: "shouted-heading",
+    });
+  });
+
+  test("a run of store-learned common words refuses with function-word-run", () => {
+    expect(validateEntityLabel("The And", { lexicon: lexiconOf(COMMON) })).toEqual({
+      valid: false,
+      reason: "function-word-run",
+    });
+    // A single common token is already a run; refusing it at creation is
+    // the create-arm policy the registry wires on top of this verdict.
+    expect(validateEntityLabel("The", { lexicon: lexiconOf(COMMON) })).toEqual({
+      valid: false,
+      reason: "function-word-run",
+    });
+  });
+
+  test("shouted-heading wins when a label is both all-caps and all common words", () => {
+    expect(validateEntityLabel("THE AND", { lexicon: lexiconOf(COMMON) })).toEqual({
+      valid: false,
+      reason: "shouted-heading",
+    });
+  });
+
+  test("a caseful label whose word forms are not all common admits", () => {
+    expect(validateEntityLabel("Ada", { lexicon: lexiconOf(COMMON) })).toEqual({ valid: true });
+    expect(validateEntityLabel("Open Second Brain", { lexicon: lexiconOf(COMMON) })).toEqual({
+      valid: true,
+    });
+  });
+
+  test("a structural code shape bypasses both case verdicts", () => {
+    for (const label of ["foo_bar", "FTS5", "Node.js", "path/to/x", "MEETING_NOTES", "OpenAI"]) {
+      expect(validateEntityLabel(label, { lexicon: lexiconOf(COMMON) })).toEqual({ valid: true });
+    }
+  });
+
+  test("word-initial uppercase is Title Case, not a code shape; mid-word uppercase is", () => {
+    // Every uppercase sits at a word start, so the label is eligible for
+    // the case verdicts - and every token is a learned common word.
+    expect(validateEntityLabel("The And Of", { lexicon: lexiconOf(COMMON) })).toEqual({
+      valid: false,
+      reason: "function-word-run",
+    });
+    // The uppercase run crosses a word boundary: identifier-shaped, bypassed.
+    expect(validateEntityLabel("TheAndOf", { lexicon: lexiconOf(COMMON) })).toEqual({
+      valid: true,
+    });
+  });
+
+  test("the code-shape bypass keeps the four structural verdicts", () => {
+    const lx = lexiconOf(COMMON);
+    expect(validateEntityLabel("", { lexicon: lx })).toEqual({ valid: false, reason: "empty" });
+    expect(validateEntityLabel("___", { lexicon: lx })).toEqual({
+      valid: false,
+      reason: "no-letter-or-digit",
+    });
+    // too-long precedes the case verdicts even for an all-caps label.
+    expect(validateEntityLabel("A".repeat(ENTITY_LABEL_MAX_LENGTH + 1), { lexicon: lx })).toEqual({
+      valid: false,
+      reason: "too-long",
+    });
+    expect(validateEntityLabel("a_".repeat(ENTITY_LABEL_MAX_LENGTH), { lexicon: lx })).toEqual({
+      valid: false,
+      reason: "too-long",
+    });
+    const denylist = new Set([normalizeEntityName("foo_bar")]);
+    expect(validateEntityLabel("foo_bar", { lexicon: lx, denylist })).toEqual({
+      valid: false,
+      reason: "denylisted",
+    });
+  });
+
+  test("caseless labels admit on the structural gate alone", () => {
+    const lx = lexiconOf(COMMON);
+    // Every token common, but no letter carries case: the case-based
+    // verdicts do not run for caseless labels.
+    expect(validateEntityLabel("the and of", { lexicon: lx })).toEqual({ valid: true });
+    expect(validateEntityLabel("会議 notes", { lexicon: lx })).toEqual({ valid: true });
+    expect(validateEntityLabel("ада", { lexicon: lx })).toEqual({ valid: true });
+  });
+
+  test("a caseless-script handle suppresses both case verdicts", () => {
+    const lx = lexiconOf(COMMON, false);
+    expect(validateEntityLabel("MEETING NOTES", { lexicon: lx })).toEqual({ valid: true });
+    expect(validateEntityLabel("The And", { lexicon: lx })).toEqual({ valid: true });
+  });
+
+  test("tokens reach the handle lowercased", () => {
+    const seen: string[] = [];
+    const lx: EntityLexiconHandle = {
+      caseful: true,
+      isCommonWord: (token: string) => {
+        seen.push(token);
+        return true;
+      },
+    };
+    expect(validateEntityLabel("The And", { lexicon: lx })).toEqual({
+      valid: false,
+      reason: "function-word-run",
+    });
+    expect(seen).toEqual(["the", "and"]);
+  });
+
+  test("the typed creation error carries the new reason", () => {
+    try {
+      assertValidEntityLabel("MEETING NOTES", { lexicon: lexiconOf(COMMON) });
+      throw new Error("expected assertValidEntityLabel to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(InvalidEntityLabelError);
+      expect((err as InvalidEntityLabelError).reason).toBe("shouted-heading");
+    }
+  });
+
+  test("entityMatchForms drops forms the grown verdicts refuse", () => {
+    const opts = { lexicon: lexiconOf(COMMON) };
+    expect(entityMatchForms(["MEETING NOTES", "The And", "Ada", "foo_bar"], opts)).toEqual([
+      "ada",
+      "foo_bar",
+    ]);
+  });
+});
+
+describe("validateEntityLabel - v1.79.0 byte identity with lexicon null or absent", () => {
+  const DENYLIST = new Set([normalizeEntityName("Blocked Name")]);
+  // One row per v1.79.0 verdict, plus caseful labels that the grown
+  // verdicts WOULD refuse behind a lexicon - all must stay valid without one.
+  const ROWS: ReadonlyArray<readonly [string, EntityLabelValidation]> = [
+    ["Ada", { valid: true }],
+    ["MEETING NOTES", { valid: true }],
+    ["The And", { valid: true }],
+    ["THE AND", { valid: true }],
+    ["the and", { valid: true }],
+    ["Node.js", { valid: true }],
+    ["", { valid: false, reason: "empty" }],
+    ["a".repeat(ENTITY_LABEL_MAX_LENGTH + 1), { valid: false, reason: "too-long" }],
+    ["$$$", { valid: false, reason: "no-letter-or-digit" }],
+  ];
+
+  test("every v1.79.0 verdict is unchanged with no options", () => {
+    for (const [label, expected] of ROWS) {
+      expect(validateEntityLabel(label)).toEqual(expected);
+    }
+  });
+
+  test("every v1.79.0 verdict is unchanged with an empty options object", () => {
+    for (const [label, expected] of ROWS) {
+      expect(validateEntityLabel(label, {})).toEqual(expected);
+    }
+  });
+
+  test("every v1.79.0 verdict is unchanged with lexicon: null", () => {
+    for (const [label, expected] of ROWS) {
+      expect(validateEntityLabel(label, { lexicon: null })).toEqual(expected);
+    }
+  });
+
+  test("the denylisted verdict is unchanged with lexicon: null beside the denylist", () => {
+    expect(validateEntityLabel("blocked name", { denylist: DENYLIST, lexicon: null })).toEqual({
+      valid: false,
+      reason: "denylisted",
+    });
+    expect(validateEntityLabel("Allowed", { denylist: DENYLIST, lexicon: null })).toEqual({
+      valid: true,
+    });
   });
 });
