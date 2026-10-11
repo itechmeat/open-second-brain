@@ -138,6 +138,7 @@ export async function cmdBrainHallways(argv: string[]): Promise<number> {
       key: positional[2]!,
       minSessions: minSessions ?? DEFAULT_PROMOTION_MIN_SESSIONS,
       agent: resolveBrainAgent(flags, config ?? ""),
+      config,
       asJson,
     });
   }
@@ -239,6 +240,8 @@ function promote(
     readonly key: string;
     readonly minSessions: number;
     readonly agent: string;
+    /** Config path the safeguard ladder resolves promote's deadline from. */
+    readonly config: string | null;
     readonly asJson: boolean;
   },
 ): number {
@@ -253,8 +256,22 @@ function promote(
   }
 
   // The threshold is read off the CURRENT ledger fold, never the stored
-  // artifact: the artifact is a cache, the gate is a decision.
-  const derivation = computeHallways(vault, { dismissed });
+  // artifact: the artifact is a cache, the gate is a decision. The fold is
+  // the same O(k^2) pass `mine` runs, so it carries mine's bounded-wait
+  // deadline too - a promote over a huge ledger stops at a checkpoint and
+  // reports the timeout instead of owning the thread.
+  let derivation: ReturnType<typeof computeHallways>;
+  try {
+    derivation = computeHallways(vault, {
+      dismissed,
+      safeguard: createSafeguard({
+        operation: OPERATION.sessions,
+        timeoutMs: resolveSafeguardTimeoutMs(OPERATION.sessions, args.config ?? undefined),
+      }),
+    });
+  } catch (exc) {
+    return fail(`brain hallways promote failed: ${(exc as Error).message}`);
+  }
   const stat = derivation.keys.find((k) => k.family === args.family && k.key === args.key);
   if (stat === undefined || stat.sessionCount < args.minSessions) {
     return refuse(

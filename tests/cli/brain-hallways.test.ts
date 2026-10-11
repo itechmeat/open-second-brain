@@ -7,7 +7,7 @@
  * key. Ambient mining never writes an entity page - only promote does.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import {
   existsSync,
   mkdtempSync,
@@ -107,7 +107,7 @@ describe("o2b brain hallways mine", () => {
     expect(existsSync(join(vault, "Brain", "link-graph", "co-occurrence.json"))).toBe(false);
   });
 
-  test("an empty ledger mines a empty derivation and still says so", async () => {
+  test("an empty ledger mines an empty derivation and still says so", async () => {
     const out = await runCli(["brain", "hallways", "mine", "--json"], { env: env() });
     expect(out.returncode).toBe(0);
     const payload = JSON.parse(out.stdout) as Record<string, unknown>;
@@ -240,6 +240,31 @@ describe("o2b brain hallways promote", () => {
     );
     expect(page).toContain("related:");
     expect(page).toContain("[[ent-symbol-sessionstore]]");
+  });
+
+  test("promotes under the same bounded-wait deadline the mine fold carries", async () => {
+    seedPair(3);
+    // A clock that jumps a full day per reading, so any budget the safeguard
+    // ladder resolves has elapsed by the fold's first checkpoint - the same
+    // deterministic arm the MCP long-running-tools tests use against a real
+    // createSafeguard. The fold is the expensive half of promote (it is the
+    // same O(k^2) pass mine runs), so it takes the same deadline.
+    let tick = 0;
+    const spy = spyOn(Date, "now").mockImplementation(() => {
+      tick += 1;
+      return tick * 86_400_000;
+    });
+    try {
+      const out = await runCli(["brain", "hallways", "promote", "symbol", "SessionStore"], {
+        env: env(),
+      });
+      expect(out.returncode).toBe(1);
+      expect(out.stderr).toContain("safeguard timeout");
+      expect(out.stderr).toContain("sessions");
+      expect(entityFiles()).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   test("a promoted label failing the tightened admission gate is refused BY THE GATE", async () => {
