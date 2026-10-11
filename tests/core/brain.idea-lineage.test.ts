@@ -126,6 +126,59 @@ describe("traceIdeaLineage over the continuity source graph", () => {
   });
 });
 
+describe("idea lineage no-session semantics (t_22d58fa7)", () => {
+  test("two no-session records never merge through a fabricated scope key", () => {
+    // Store order decides the global turn index, so the string-session
+    // turn is appended first. The second turn carries a NUMERIC session
+    // id - the value the turn index used to stringify into a "5" scope,
+    // merging two unrelated records into one group.
+    const stringTurn = appendContinuityRecord(vault, {
+      kind: "session_turn",
+      createdAt: "2026-06-14T09:00:00.000Z",
+      payload: { session_id: "real", turn_id: "t1", role: "user", text: "string session" },
+    });
+    appendContinuityRecord(vault, {
+      kind: "session_turn",
+      createdAt: "2026-06-14T09:30:00.000Z",
+      payload: { session_id: 5, turn_id: "t1", role: "user", text: "numeric session" },
+    });
+    const referrer = appendContinuityRecord(vault, {
+      kind: "session_summary_node",
+      createdAt: "2026-06-14T10:00:00.000Z",
+      sourceRefs: [{ id: "t1", kind: "session_turn" }],
+      payload: { session_id: 5, depth: 1, summary: "numeric referrer" },
+    });
+
+    // A number names no session, so the referrer resolves through the
+    // global turn index (store order), never through a fabricated "5"
+    // scope that would bind it to the other numeric record.
+    const result = traceIdeaLineage(vault, { id: referrer.id });
+    expect(
+      result.edges.some((edge) => edge.from === referrer.id && edge.to === stringTurn.id),
+    ).toBe(true);
+    const numericTurn = result.nodes.find((node) => node.label.includes("numeric session"));
+    expect(numericTurn).toBeUndefined();
+  });
+
+  test("a record with no session still resolves its sources through the global turn index", () => {
+    const orphanTurn = appendContinuityRecord(vault, {
+      kind: "session_turn",
+      createdAt: "2026-06-14T09:00:00.000Z",
+      payload: { turn_id: "t9", role: "user", text: "unattributed observation" },
+    });
+    const orphanDigest = appendContinuityRecord(vault, {
+      kind: "session_summary_digest",
+      createdAt: "2026-06-14T10:00:00.000Z",
+      sourceRefs: [{ id: "t9", kind: "session_turn" }],
+      payload: { decisions: ["unattributed conclusion"], content_hash: "0123456789abcdef" },
+    });
+
+    const result = traceIdeaLineage(vault, { id: orphanDigest.id });
+    expect(result.edges.some((edge) => edge.to === orphanTurn.id)).toBe(true);
+    expect(result.truncated).toBe(false);
+  });
+});
+
 describe("traceIdeaLineage for a preference (belief evolution)", () => {
   test("traces creation then promotion of a preference", () => {
     writeDream("2026-05-01", { run_id: "r1", new_unconfirmed: ["[[pref-foo|First rule]]"] });

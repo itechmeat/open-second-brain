@@ -24,6 +24,7 @@
 
 import { listContinuityRecords } from "./continuity/store.ts";
 import type { ContinuityRecord } from "./continuity/types.ts";
+import { sessionIdOf } from "./session-recall.ts";
 import { buildTimelineIndex } from "./temporal/build-index.ts";
 import { buildBeliefEvolution } from "./temporal/belief-evolution.ts";
 
@@ -117,8 +118,11 @@ function continuityLineage(
       const turnId = String(record.payload["turn_id"] ?? "");
       if (turnId.length === 0) continue;
       if (!byTurnId.has(turnId)) byTurnId.set(turnId, record);
-      const sessionId = String(record.payload["session_id"] ?? "");
-      if (sessionId.length > 0) {
+      // A record naming no session joins only the global turn index -
+      // never the session-scoped one, where a coerced "" or a stringified
+      // non-string id would merge unrelated records into one group.
+      const sessionId = sessionIdOf(record.payload);
+      if (sessionId !== undefined) {
         const scoped = sessionTurnKey(sessionId, turnId);
         if (!bySessionTurnId.has(scoped)) bySessionTurnId.set(scoped, record);
       }
@@ -195,7 +199,10 @@ function sessionTurnKey(sessionId: string, turnId: string): string {
 function resolveSources(record: ContinuityRecord, lookup: Lookup): ResolvedSource[] {
   const sources: ResolvedSource[] = [];
   const claimed = new Set<string>();
-  const recordSessionId = String(record.payload["session_id"] ?? "");
+  // Undefined - never "" - when the record names no session: the scoped
+  // lookup is then unreachable and the global turn index (first record in
+  // store order) is the documented fallback for an unknown session.
+  const recordSessionId = sessionIdOf(record.payload);
   for (const ref of record.sourceRefs) {
     const refId = typeof ref.id === "string" ? ref.id : "";
     if (refId.length === 0 || refId === record.id) continue;
@@ -203,7 +210,7 @@ function resolveSources(record: ContinuityRecord, lookup: Lookup): ResolvedSourc
     // referring record's own session before falling back to the global
     // turn index (only reachable when the session is unknown).
     const scoped =
-      recordSessionId.length > 0
+      recordSessionId !== undefined
         ? lookup.bySessionTurnId.get(sessionTurnKey(recordSessionId, refId))
         : undefined;
     const candidate = lookup.byId.get(refId) ?? scoped ?? lookup.byTurnId.get(refId);
