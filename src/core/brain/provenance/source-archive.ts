@@ -134,8 +134,12 @@ export function sourceArchivesDir(vault: string): string {
  */
 export function sourceArchiveEntryRel(hash: string): string {
   if (!isArchiveHash(hash)) {
+    // The negative branch of the guard narrows a `string` parameter to
+    // `never`; widen before quoting so the refusal can still name the
+    // argument, truncated, without echoing arbitrary length.
+    const shown = String(hash);
     throw new SourceArchiveError(
-      `archive entry refused: ${JSON.stringify(hash.slice(0, 72))} is not a 64-hex sha-256 digest`,
+      `archive entry refused: ${JSON.stringify(shown.slice(0, 72))} is not a 64-hex sha-256 digest`,
     );
   }
   return posix.join(BRAIN_ARCHIVES_REL, `${hash}${ARCHIVE_ENTRY_EXT}`);

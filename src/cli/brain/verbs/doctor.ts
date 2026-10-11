@@ -1,9 +1,11 @@
 import { resolveSearchConfig } from "../../../core/search/index.ts";
 import { runDoctor } from "../../../core/brain/doctor.ts";
-import { auditArchiveStamps } from "../../../core/brain/hygiene/detectors/capture-scope.ts";
+import {
+  auditArchiveStamps,
+  type ArchiveStampAudit,
+} from "../../../core/brain/hygiene/detectors/capture-scope.ts";
 import {
   sourceArchiveStats,
-  type ArchiveStampAudit,
   type ArchiveStats,
 } from "../../../core/brain/provenance/source-archive.ts";
 import { annotateEntityAliasIssues } from "../../../core/brain/doctor/entity-alias-verdicts.ts";

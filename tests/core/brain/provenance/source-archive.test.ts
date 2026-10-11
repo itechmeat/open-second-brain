@@ -223,7 +223,7 @@ describe("the archive store is refused to the search index", () => {
 
 describe("the verification vocabulary", () => {
   test("the guard accepts exactly the three members", () => {
-    expect([...Object.values(ARCHIVE_VERIFICATION)].toSorted()).toEqual([
+    expect(Object.values(ARCHIVE_VERIFICATION).toSorted()).toEqual([
       "mismatched",
       "missing",
       "verified",
