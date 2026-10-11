@@ -25,7 +25,9 @@ import { extractFacts } from "../../../../src/core/brain/fact-extract.ts";
 import { continuityLogDir } from "../../../../src/core/brain/continuity/store.ts";
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 import {
+  MAX_MINED_KEYS_PER_SESSION,
   MINED_KEY_MAX_LENGTH,
+  SESSION_ENTITY_MENTION_KIND,
   SESSION_MINING_FAMILIES,
   isSecretShapedMention,
   mineAndRecordTurn,
@@ -316,5 +318,93 @@ describe("mineAndRecordTurn", () => {
     const retried = mineAndRecordTurn(vault, input({ seen }));
     expect(retried.extracted).toBe(2);
     expect(retried.ledgerFailed).toBe(0);
+  });
+});
+
+describe("the per-session key cap", () => {
+  // Same harness shape as the mineAndRecordTurn block above.
+  let vault: string;
+
+  beforeEach(() => {
+    vault = mkdtempSync(join(tmpdir(), "o2b-mining-cap-"));
+    bootstrapBrain(vault);
+  });
+
+  afterEach(() => {
+    rmSync(vault, { recursive: true, force: true });
+  });
+
+  const NOW = new Date("2026-06-13T12:00:00Z");
+
+  function ledgerMentionRows(): number {
+    const dir = continuityLogDir(vault);
+    let count = 0;
+    for (const entry of readdirSync(dir)) {
+      if (!entry.endsWith(".jsonl")) continue;
+      for (const line of readFileSync(join(dir, entry), "utf8").trim().split("\n")) {
+        if (line.includes(SESSION_ENTITY_MENTION_KIND)) count++;
+      }
+    }
+    return count;
+  }
+
+  test("an over-cap session stops minting and counts the overflow, never silently", () => {
+    const seen = new Set<string>();
+    // One hostile turn carrying more distinct keys than a session may
+    // hold, one span per line (each line stays under the per-line scan
+    // cap, so every span is really scanned).
+    const overCap = MAX_MINED_KEYS_PER_SESSION + 10;
+    const text = Array.from({ length: overCap }, (_, i) => `\`Cap_key_${i}\``).join("\n");
+    const first = mineAndRecordTurn(vault, {
+      vault,
+      text,
+      sessionRef: "hostile.jsonl",
+      turnId: "u-1",
+      now: NOW,
+      seen,
+    });
+    expect(first.extracted).toBe(MAX_MINED_KEYS_PER_SESSION);
+    expect(first.capOverflow).toBe(10);
+    expect(ledgerMentionRows()).toBe(MAX_MINED_KEYS_PER_SESSION);
+
+    // A later turn of the SAME session mints nothing: every fresh key is
+    // overflow now, counted by name.
+    const second = mineAndRecordTurn(vault, {
+      vault,
+      text: "`Cap_after_a` `Cap_after_b`",
+      sessionRef: "hostile.jsonl",
+      turnId: "u-2",
+      now: NOW,
+      seen,
+    });
+    expect(second.extracted).toBe(0);
+    expect(second.capOverflow).toBe(2);
+    expect(ledgerMentionRows()).toBe(MAX_MINED_KEYS_PER_SESSION);
+  });
+
+  test("the cap is per session: another session in the run keeps its own budget", () => {
+    const seen = new Set<string>();
+    const hostile = Array.from(
+      { length: MAX_MINED_KEYS_PER_SESSION },
+      (_, i) => `\`Cap_full_${i}\``,
+    ).join("\n");
+    mineAndRecordTurn(vault, {
+      vault,
+      text: hostile,
+      sessionRef: "hostile.jsonl",
+      turnId: "u-1",
+      now: NOW,
+      seen,
+    });
+    const other = mineAndRecordTurn(vault, {
+      vault,
+      text: "`Cap_calm_key`",
+      sessionRef: "calm.jsonl",
+      turnId: "u-1",
+      now: NOW,
+      seen,
+    });
+    expect(other.extracted).toBe(1);
+    expect(other.capOverflow).toBe(0);
   });
 });

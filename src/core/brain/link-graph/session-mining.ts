@@ -81,6 +81,48 @@ export const MINED_KEY_MAX_LENGTH = 200;
  */
 export const MAX_MINING_SCAN_CHARS = 4000;
 
+/**
+ * Upper bound on DISTINCT keys recorded per session. A hostile or
+ * pathological transcript can carry tens of thousands of distinct
+ * identifiers; unbounded minting grows the append-only ledger on every
+ * re-import and turns the hallways pairwise fold into an O(k^2) sink. A
+ * few hundred is far past any real session's vocabulary. Once a session
+ * reaches the cap, further NEW keys are not minted - the turn's outcome
+ * counts each in `capOverflow` (counted, never silent), while
+ * already-seen keys keep deduping as usual. The count is per
+ * (family, key) within one sessionRef, tracked across the importing
+ * run's turns through the caller-owned dedupe set.
+ */
+export const MAX_MINED_KEYS_PER_SESSION = 512;
+
+/**
+ * Per-session distinct-key counts for caller-owned dedupe sets, keyed by
+ * the set itself (one importing run owns one set; a new run brings a
+ * fresh one, so nothing leaks across runs). A count is seeded by one
+ * scan of the set and then maintained by THIS module's writes - a caller
+ * that mutated the set behind the module's back would read a stale
+ * count, and nothing in the tree does.
+ */
+const sessionKeyBudgets = new WeakMap<Set<string>, Map<string, number>>();
+
+/** The budget map for one dedupe set, created on first use. */
+function sessionBudgets(seen: Set<string>): Map<string, number> {
+  let budgets = sessionKeyBudgets.get(seen);
+  if (budgets === undefined) {
+    budgets = new Map();
+    sessionKeyBudgets.set(seen, budgets);
+  }
+  return budgets;
+}
+
+/** Count a set's dedupe ids naming one sessionRef (the seed scan). */
+function countSeenKeysForSession(seen: ReadonlySet<string>, sessionRef: string): number {
+  const suffix = `\u0000${sessionRef}`;
+  let count = 0;
+  for (const id of seen) if (id.endsWith(suffix)) count++;
+  return count;
+}
+
 /** One mined mention: a family-scoped, case-preserving key. */
 export interface MinedMention {
   readonly family: SessionMiningFamily;
@@ -364,6 +406,15 @@ export interface MinedTurnOutcome {
    * re-folds on a later run.
    */
   readonly ledgerFailed: number;
+  /**
+   * Mentions dropped because the session already holds
+   * {@link MAX_MINED_KEYS_PER_SESSION} distinct keys - the named,
+   * counted signal that a run hit the per-session cap (the
+   * `mined_cap_overflow` slot beside `mined_ledger_failed`). An overflow
+   * mention is left unseen, so a later run re-considers it under a
+   * raised cap rather than silently forgetting it.
+   */
+  readonly capOverflow: number;
 }
 
 const EMPTY_OUTCOME: MinedTurnOutcome = Object.freeze({
@@ -373,6 +424,7 @@ const EMPTY_OUTCOME: MinedTurnOutcome = Object.freeze({
   secretRefused: 0,
   privateWithheld: 0,
   ledgerFailed: 0,
+  capOverflow: 0,
 });
 
 /**
@@ -388,6 +440,11 @@ export function mineAndRecordTurn(vault: string, input: MineTurnInput): MinedTur
   let deduped = 0;
   let withheld = 0;
   let ledgerFailed = 0;
+  let capOverflow = 0;
+  const budgets = sessionBudgets(input.seen);
+  const cached = budgets.get(input.sessionRef);
+  let budget = cached ?? countSeenKeysForSession(input.seen, input.sessionRef);
+  budgets.set(input.sessionRef, budget);
   const scan = scanTurn(input.text);
   const secretRefused = scan.secretRefused;
   for (const mention of scan.mentions) {
@@ -396,8 +453,16 @@ export function mineAndRecordTurn(vault: string, input: MineTurnInput): MinedTur
       deduped++;
       continue;
     }
+    if (budget >= MAX_MINED_KEYS_PER_SESSION) {
+      // The session's ledger budget is spent: stop minting, say so by
+      // count. The mention stays unseen, so a later run re-folds it.
+      capOverflow++;
+      continue;
+    }
     if (input.dryRun === true) {
       input.seen.add(id);
+      budget++;
+      budgets.set(input.sessionRef, budget);
       withheld++;
       continue;
     }
@@ -423,6 +488,8 @@ export function mineAndRecordTurn(vault: string, input: MineTurnInput): MinedTur
       continue;
     }
     input.seen.add(id);
+    budget++;
+    budgets.set(input.sessionRef, budget);
     extracted++;
   }
   return Object.freeze({
@@ -431,6 +498,7 @@ export function mineAndRecordTurn(vault: string, input: MineTurnInput): MinedTur
     withheld,
     secretRefused,
     ledgerFailed,
+    capOverflow,
     privateWithheld: 0,
   });
 }

@@ -62,6 +62,16 @@ const DEFAULT_MIN_CO_SESSIONS = 2;
 const DEFAULT_MIN_SCORE = 0;
 const DEFAULT_LIMIT = 100;
 
+/**
+ * Cooperative-deadline yield interval INSIDE one session's pairwise
+ * fold. The fold is O(k^2) in a session's distinct keys, so the stage
+ * boundary between sessions can be arbitrarily far away: a single
+ * hostile session must not own the thread between checkpoints. Every
+ * this many entities the fold offers a checkpoint, keeping
+ * `hallways mine` interruptible over a large session.
+ */
+export const PAIRWISE_CHECKPOINT_EVERY = 256;
+
 /** One mined key's incidence over the ledger. */
 export interface HallwaysKeyStat {
   readonly family: string;
@@ -248,10 +258,13 @@ function computeHallwaysRun(
   const coCount = new Map<string, number>();
   progress.start("sessions", sessionKeys.size);
   for (const keys of sessionKeys.values()) {
-    // Cooperative deadline: abort between sessions (read-only fold).
+    // Cooperative deadline: abort between sessions (read-only fold) -
+    // and, every PAIRWISE_CHECKPOINT_EVERY entities, inside one: a
+    // single large session is itself O(k^2) work.
     opts.safeguard?.checkpoint();
     const unique = [...keys].toSorted();
     for (let i = 0; i < unique.length; i++) {
+      if (i > 0 && i % PAIRWISE_CHECKPOINT_EVERY === 0) opts.safeguard?.checkpoint();
       for (let j = i + 1; j < unique.length; j++) {
         const pairId = hallwaysPairKey(unique[i]!, unique[j]!);
         coCount.set(pairId, (coCount.get(pairId) ?? 0) + 1);

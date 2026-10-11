@@ -19,7 +19,11 @@ import { join } from "node:path";
 
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 import { appendContinuityRecord } from "../../../../src/core/brain/continuity/store.ts";
-import { createSafeguard, SafeguardAbortError } from "../../../../src/core/brain/safeguard.ts";
+import {
+  createSafeguard,
+  SafeguardAbortError,
+  type Safeguard,
+} from "../../../../src/core/brain/safeguard.ts";
 import { SESSION_ENTITY_MENTION_KIND } from "../../../../src/core/brain/link-graph/session-mining.ts";
 import {
   DEFAULT_PROMOTION_MIN_SESSIONS,
@@ -27,6 +31,7 @@ import {
   HALLWAYS_DISMISSED_REL,
   HALLWAYS_PROPOSALS_REL,
   HALLWAYS_SCHEMA_VERSION,
+  PAIRWISE_CHECKPOINT_EVERY,
   computeHallways,
   dismissHallwayKey,
   hallwaysKeyId,
@@ -275,6 +280,29 @@ describe("the cooperative deadline", () => {
     const guard = createSafeguard({ operation: "sessions", signal: controller.signal });
 
     expect(() => computeHallways(vault, { safeguard: guard })).toThrow(SafeguardAbortError);
+  });
+
+  test("a large single-session fold checkpoints INSIDE the session and completes", () => {
+    // One hostile session with far more keys than one checkpoint interval:
+    // the pairwise fold is O(k^2) within a session, so a deadline checked
+    // only between sessions could never stop it. The fold must yield at
+    // every interval boundary and still complete over the whole session.
+    const keys = PAIRWISE_CHECKPOINT_EVERY * 2 + 150;
+    for (let i = 0; i < keys; i++) mention("symbol", `Checkpoint_key_${i}`, "hostile.jsonl");
+
+    let checkpoints = 0;
+    const counting: Safeguard = {
+      checkpoint: () => {
+        checkpoints++;
+      },
+    };
+    const result = computeHallways(vault, { safeguard: counting });
+
+    expect(result.sessionCount).toBe(1);
+    expect(result.keys.length).toBe(keys);
+    // Strictly more than the one between-sessions checkpoint: the fold
+    // yielded at least twice inside the single session.
+    expect(checkpoints).toBeGreaterThanOrEqual(3);
   });
 });
 
