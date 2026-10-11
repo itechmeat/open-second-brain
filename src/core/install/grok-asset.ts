@@ -113,7 +113,20 @@ const HOOK_SPEC: ReadonlyArray<{ event: string; groups: ReadonlyArray<HookGroupS
   },
   {
     event: "Stop",
-    groups: [{ hooks: ["session-capture", "stop-log-guardrail", "hygiene-digest"] }],
+    groups: [
+      {
+        hooks: [
+          "session-capture",
+          "stop-log-guardrail",
+          // The answer-trust quote check rides the same Stop pipeline: it is
+          // annotation-only, fail-open exit 0, and reads the transcript the
+          // same way the guardrail does, so grok gets the same unverified-
+          // quote annotation Claude Code does.
+          "answer-quote-check",
+          "hygiene-digest",
+        ],
+      },
+    ],
   },
   // The delegated sub-agent's close. Without it a grok install records the
   // parent's turns and drops every sub-agent's, and a sub-agent transcript

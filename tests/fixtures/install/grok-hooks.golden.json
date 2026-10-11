@@ -131,6 +131,14 @@
           },
           {
             "type": "command",
+            "command": "<BUN> run <REPO>/hooks/answer-quote-check.ts",
+            "env": {
+              "VAULT_AGENT_NAME": "grok-dev-agent"
+            },
+            "timeout": 10
+          },
+          {
+            "type": "command",
             "command": "<BUN> run <REPO>/hooks/hygiene-digest.ts",
             "env": {
               "VAULT_AGENT_NAME": "grok-dev-agent"
