@@ -49,7 +49,7 @@ import { ensureInsideVault } from "../../path-safety.ts";
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { redactRawOutput } from "../../redactor.ts";
 import { listVaultNotePaths, parseFrontmatter } from "../../vault.ts";
-import { BRAIN_ARCHIVES_REL, BRAIN_SOURCES_REL } from "../path-constants.ts";
+import { BRAIN_ARCHIVES_REL, BRAIN_PENDING_REL, BRAIN_SOURCES_REL } from "../path-constants.ts";
 
 /**
  * Largest input an archive entry will hold, in UTF-8 bytes: 1 MiB, the
@@ -128,17 +128,26 @@ export function sourceArchivesDir(vault: string): string {
 }
 
 /**
- * One entry's path. The digest is validated BEFORE the join, so a
- * caller-supplied hash cannot traverse out of the store the way an
- * unvalidated filename could.
+ * Vault-relative path of one entry, from its digest - the spelling every
+ * wire surface reports, so no host path and no second suffix spelling can
+ * drift. The digest is validated before the join.
  */
-export function sourceArchivePath(vault: string, hash: string): string {
+export function sourceArchiveEntryRel(hash: string): string {
   if (!isArchiveHash(hash)) {
     throw new SourceArchiveError(
       `archive entry refused: ${JSON.stringify(hash.slice(0, 72))} is not a 64-hex sha-256 digest`,
     );
   }
-  return ensureInsideVault(join(sourceArchivesDir(vault), `${hash}${ARCHIVE_ENTRY_EXT}`), vault);
+  return posix.join(BRAIN_ARCHIVES_REL, `${hash}${ARCHIVE_ENTRY_EXT}`);
+}
+
+/**
+ * One entry's path. The digest is validated BEFORE the join, so a
+ * caller-supplied hash cannot traverse out of the store the way an
+ * unvalidated filename could.
+ */
+export function sourceArchivePath(vault: string, hash: string): string {
+  return ensureInsideVault(join(vault, sourceArchiveEntryRel(hash)), vault);
 }
 
 /** What {@link putSourceArchive} persisted. */
@@ -286,23 +295,28 @@ export function discardSourceArchive(vault: string, hash: string): boolean {
 /**
  * Every ingest summary page stamping `hash` as its archive digest,
  * vault-relative and sorted. The stamp is written by exactly one writer -
- * the ingest lane, on `Brain/sources/` pages - so the citation probe walks
- * that one directory: the inverse index of the stamp, for the delete path
- * that must remove an entry only when its LAST citing page goes.
+ * the ingest lane, on `Brain/sources/` pages and their staged counterparts
+ * under `Brain/pending/ingest/` - so the citation probe walks those two
+ * directories: the inverse index of the stamp, for the delete path that
+ * must remove an entry only when its LAST citing page goes. A staged page
+ * counts as citing: rejecting it removes the citation with the page, but
+ * publishing it would revive a stamp whose entry must still be there.
  */
 export function sourceArchiveCitingPages(vault: string, hash: string): ReadonlyArray<string> {
-  const dir = join(vault, BRAIN_SOURCES_REL);
-  if (!existsSync(dir)) return [];
   const pages: string[] = [];
-  for (const rel of listVaultNotePaths(dir)) {
-    const abs = join(dir, rel);
-    // `parseFrontmatter` never throws (it reads inside its own try and
-    // answers an empty map for a failed read), so a page that will not
-    // parse falls out as citing nothing - the fail-safe answer for an
-    // entry-removal decision.
-    const [meta] = parseFrontmatter(abs);
-    if (meta[SOURCE_ARCHIVE_HASH_KEY] === hash) {
-      pages.push(posix.join(BRAIN_SOURCES_REL, rel.split("\\").join("/")));
+  for (const root of [BRAIN_SOURCES_REL, BRAIN_PENDING_REL]) {
+    const dir = join(vault, root);
+    if (!existsSync(dir)) continue;
+    for (const rel of listVaultNotePaths(dir)) {
+      const abs = join(dir, rel);
+      // `parseFrontmatter` never throws (it reads inside its own try and
+      // answers an empty map for a failed read), so a page that will not
+      // parse falls out as citing nothing - the fail-safe answer for an
+      // entry-removal decision.
+      const [meta] = parseFrontmatter(abs);
+      if (meta[SOURCE_ARCHIVE_HASH_KEY] === hash) {
+        pages.push(posix.join(root, rel.split("\\").join("/")));
+      }
     }
   }
   return pages.toSorted();

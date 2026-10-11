@@ -9,6 +9,9 @@
  * Idempotent on the source path.
  */
 
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
 import { serializeImportCensus } from "../../core/brain/import-census.ts";
 import { planBatches, type BatchPlan } from "../../core/brain/ingest/batch-plan.ts";
 import { clearCheckpoint, PLAN_ID_LABEL } from "../../core/brain/ingest/checkpoint.ts";
@@ -18,6 +21,14 @@ import type { PartsOutcome, TableOutcome } from "../../core/brain/ingest/extract
 import type { CodeEdgeSeed, PreExtractResult } from "../../core/brain/ingest/pre-extract.ts";
 import { reconcilePlan } from "../../core/brain/ingest/reconcile.ts";
 import { IntakeValidationError } from "../../core/brain/intake/extract-intake.ts";
+import {
+  discardSourceArchive,
+  isArchiveHash,
+  SOURCE_ARCHIVE_HASH_KEY,
+  sourceArchiveCitingPages,
+  sourceArchiveEntryRel,
+} from "../../core/brain/provenance/source-archive.ts";
+import { parseFrontmatter } from "../../core/vault.ts";
 import {
   deleteBySource,
   searchBySourceFile,
@@ -146,6 +157,19 @@ async function toolBrainIngestSource(
       // it. Always present: absence would read as "full-local" to a caller
       // that never learned the key exists.
       capture_scope: res.captureScope,
+      // The durable archive stamp (answer trust, Task C4), following the
+      // capture_scope pattern: the hash is ALWAYS present, null when the
+      // source was not archived, so absence never reads as a missing key.
+      // The byte count rides only with a hash, mirroring the page's
+      // frontmatter; the named refusal rides only when an ELIGIBLE source
+      // could not be archived.
+      source_archive_hash: res.sourceArchiveHash ?? null,
+      ...(res.sourceArchiveHash !== undefined
+        ? { source_archive_bytes: res.sourceArchiveBytes }
+        : {}),
+      ...(res.sourceArchiveRefusal !== undefined
+        ? { source_archive_refusal: res.sourceArchiveRefusal }
+        : {}),
       // Write-side trust (Task 9): a first publish of the summary page
       // stages under the review gate while registration completes. The
       // receipt names the queue entry and the command that publishes it,
@@ -226,7 +250,62 @@ function serializeEntry(entry: SourceCleanupEntry): Record<string, unknown> {
   };
 }
 
-function serializePlan(plan: SourceCleanupPlan): Record<string, unknown> {
+/**
+ * One archive entry a source cleanup takes with it (answer trust, Task C4),
+ * reported as its own kind beside the page entries - the hash and the
+ * vault-relative path, never a host path.
+ */
+interface ArchiveCleanupEntry {
+  readonly hash: string;
+  readonly path: string;
+}
+
+/**
+ * Harvest the archive digests stamped on the plan's summary pages, sorted.
+ * Read BEFORE a confirmed deletion runs: once the pages are gone their
+ * stamps are gone with them, and the entry orphan decision needs them.
+ */
+function stampedArchiveHashes(vault: string, plan: SourceCleanupPlan): ReadonlyArray<string> {
+  const hashes = new Set<string>();
+  for (const entry of plan.derived) {
+    if (entry.kind !== "summary" || !existsSync(join(vault, entry.path))) continue;
+    const [meta] = parseFrontmatter(join(vault, entry.path));
+    const value = meta[SOURCE_ARCHIVE_HASH_KEY];
+    if (typeof value === "string" && isArchiveHash(value)) hashes.add(value);
+  }
+  return [...hashes].toSorted();
+}
+
+/**
+ * Which of the plan's stamped entries this deletion orphans: an entry goes
+ * only when EVERY page citing it is in the deleted set - removing a source
+ * whose summary shares an entry with another source's page (identical
+ * bytes, content-addressed dedup) leaves the entry standing. Vacuously
+ * true when no citing page remains: the hash got here from the plan's own
+ * pages, so an empty citation list means the last citing page is exactly
+ * what this run deleted. A page the caller may not read is not in the
+ * deleted set, so a hidden citation keeps the entry too: the fail-safe
+ * direction.
+ */
+function orphanedArchiveEntries(
+  vault: string,
+  hashes: ReadonlyArray<string>,
+  deletedPaths: ReadonlySet<string>,
+): ReadonlyArray<ArchiveCleanupEntry> {
+  const out: ArchiveCleanupEntry[] = [];
+  for (const hash of hashes) {
+    const citing = sourceArchiveCitingPages(vault, hash);
+    if (citing.every((page) => deletedPaths.has(page))) {
+      out.push({ hash, path: sourceArchiveEntryRel(hash) });
+    }
+  }
+  return out;
+}
+
+function serializePlan(
+  plan: SourceCleanupPlan,
+  archiveEntries: ReadonlyArray<ArchiveCleanupEntry>,
+): Record<string, unknown> {
   return {
     source: plan.source,
     confirmed: plan.confirmed,
@@ -243,6 +322,14 @@ function serializePlan(plan: SourceCleanupPlan): Record<string, unknown> {
     deleted: [...plan.deleted],
     manifest_entry_removed: plan.manifestEntryRemoved,
     audit_record_id: plan.auditRecordId,
+    // The archive-entry cleanup kind (answer trust, Task C4), reported as
+    // its own kind rather than folded into the page entries: on a dry run,
+    // the entries removing the source's last citing page WOULD orphan; on
+    // confirm, the entries actually removed. They are deterministic
+    // consequences of the page deletion, never targets of their own, so
+    // they sit outside the count guard's blast radius. Emitted only when
+    // non-empty, so a plan over an unstamped source is byte-identical.
+    ...(archiveEntries.length > 0 ? { archive_entries: archiveEntries } : {}),
     // The D1 recovery point. Only the run id is surfaced here (not the
     // absolute archive path) so the response stays free of host paths; the
     // archive lives at the deterministic `Brain/.snapshots/<run_id>.tar.zst`.
@@ -328,11 +415,26 @@ async function toolBrainDeleteBySource(
     willMutate: confirm,
     matchList: planMatchList(preview),
   });
+  // The stamps must be read BEFORE a confirmed deletion erases the pages
+  // that carry them; the orphan decision then runs against whichever set
+  // this run actually removed (a dry run answers with what confirm would
+  // remove).
+  const stamped = stampedArchiveHashes(ctx.vault, preview);
   try {
-    const plan = confirm
-      ? deleteBySource(ctx.vault, sourceFile, { confirm: true, ...baseOpts })
-      : preview;
-    return serializePlan(plan);
+    let archiveEntries: ReadonlyArray<ArchiveCleanupEntry> = [];
+    if (confirm) {
+      const plan = deleteBySource(ctx.vault, sourceFile, { confirm: true, ...baseOpts });
+      archiveEntries = orphanedArchiveEntries(ctx.vault, stamped, new Set(plan.deleted)).filter(
+        (entry) => discardSourceArchive(ctx.vault, entry.hash),
+      );
+      return serializePlan(plan, archiveEntries);
+    }
+    archiveEntries = orphanedArchiveEntries(
+      ctx.vault,
+      stamped,
+      new Set(preview.derived.map((entry) => entry.path)),
+    );
+    return serializePlan(preview, archiveEntries);
   } catch (err) {
     // Write-side trust (Task 12): a permissions document rule denied the
     // confirmed cleanup. Named code, the rule that decided, and the

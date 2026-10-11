@@ -305,6 +305,128 @@ describe("brain_ingest_source - capture_scope", () => {
 });
 
 /**
+ * The durable-archive result fields (answer trust, Task C4), following the
+ * capture_scope pattern: `source_archive_hash` is always present, null when
+ * the source was not archived, and the named refusal rides only when an
+ * ELIGIBLE source could not be.
+ */
+describe("brain_ingest_source - source_archive_hash", () => {
+  interface ArchiveResult {
+    readonly source_archive_hash: string | null;
+    readonly source_archive_bytes?: number;
+    readonly source_archive_refusal?: string;
+  }
+  const ingest = (sourcePath: string, extra: Record<string, unknown> = {}) =>
+    handler(ctx, {
+      source_path: sourcePath,
+      summary: "Archived?",
+      entities: [{ category: "concept", name: "Archived" }],
+      ...extra,
+    }) as Promise<ArchiveResult>;
+
+  test("a trusted source reports the entry digest and byte count", async () => {
+    seed("Articles/held.md");
+    const res = await ingest("Articles/held.md");
+    expect(res.source_archive_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(res.source_archive_bytes).toBe(Buffer.byteLength("bytes of Articles/held.md\n", "utf8"));
+    expect(res.source_archive_refusal).toBeUndefined();
+  });
+
+  test("a url source reports a null hash, never a missing key", async () => {
+    const res = await ingest("https://example.test/post");
+    expect(res.source_archive_hash).toBeNull();
+    expect(res.source_archive_bytes).toBeUndefined();
+    expect(res.source_archive_refusal).toBeUndefined();
+  });
+
+  test("an oversized trusted source reports a null hash and the named refusal", async () => {
+    mkdirSync(join(vault, "Articles"), { recursive: true });
+    writeFileSync(join(vault, "Articles", "big.md"), "y".repeat(1_048_577), "utf8");
+    const res = await ingest("Articles/big.md");
+    expect(res.source_archive_hash).toBeNull();
+    expect(res.source_archive_bytes).toBeUndefined();
+    expect(res.source_archive_refusal).toContain("1048576-byte ceiling");
+  });
+
+  test("a source withheld at the caller's reach reports a null hash and no refusal", async () => {
+    mkdirSync(join(vault, "Notes"), { recursive: true });
+    writeFileSync(
+      join(vault, "Notes", "quiet.md"),
+      "---\nvisibility: private\n---\nThe code is ZX8.\n",
+      "utf8",
+    );
+    const res = await ingest("Notes/quiet.md");
+    // The caller's reach makes it untrusted: not capture-eligible, so no
+    // stamp, no refusal, and nothing on disk.
+    expect(res.source_archive_hash).toBeNull();
+    expect(res.source_archive_refusal).toBeUndefined();
+    expect(existsSync(join(vault, "Brain", ".archives"))).toBe(false);
+  });
+});
+
+/**
+ * Delete-by-source takes the source's archive entry with it once the last
+ * citing page goes (answer trust, Task C4), reported as its own kind. Two
+ * sources with identical bytes share one content-addressed entry, so the
+ * first deletion must leave it standing.
+ */
+describe("brain_delete_by_source - archive entry cleanup", () => {
+  const deleteTool = INGEST_TOOLS.find((t) => t.name === "brain_delete_by_source")!.handler;
+  const TWIN_A = "Articles/twin-a.md";
+  const TWIN_B = "Articles/twin-b.md";
+
+  interface CleanupResult {
+    readonly archive_entries?: ReadonlyArray<{ hash: string; path: string }>;
+    readonly deleted: ReadonlyArray<string>;
+  }
+  const cleanup = (source: string, confirm: boolean) =>
+    deleteTool(ctx, { source_file: source, confirm }) as Promise<CleanupResult>;
+
+  beforeEach(async () => {
+    mkdirSync(join(vault, "Articles"), { recursive: true });
+    writeFileSync(join(vault, TWIN_A), "twin bytes\n", "utf8");
+    writeFileSync(join(vault, TWIN_B), "twin bytes\n", "utf8");
+    const a = (await handler(ctx, {
+      source_path: TWIN_A,
+      summary: "Twin A.",
+      entities: [{ category: "concept", name: "TwinA" }],
+    })) as { source_archive_hash: string };
+    const b = (await handler(ctx, {
+      source_path: TWIN_B,
+      summary: "Twin B.",
+      entities: [{ category: "concept", name: "TwinB" }],
+    })) as { source_archive_hash: string };
+    expect(b.source_archive_hash).toBe(a.source_archive_hash);
+  });
+
+  test("a dry run over one of two citing sources names no archive entry", async () => {
+    const res = await cleanup(TWIN_A, false);
+    expect(res.archive_entries).toBeUndefined();
+  });
+
+  test("removing the first citing source leaves the shared entry on disk", async () => {
+    const res = await cleanup(TWIN_A, true);
+    expect(res.archive_entries).toBeUndefined();
+    expect(readdirSync(join(vault, "Brain", ".archives"))).toHaveLength(1);
+  });
+
+  test("removing the LAST citing source removes the entry, reported as its own kind", async () => {
+    await cleanup(TWIN_A, true);
+    const dry = await cleanup(TWIN_B, false);
+    // readdirSync names the file WITH its extension; the entry hash is the stem.
+    const file = readdirSync(join(vault, "Brain", ".archives"))[0]!;
+    const hash = file.replace(/\.txt$/, "");
+    expect(dry.archive_entries).toEqual([{ hash, path: `Brain/.archives/${file}` }]);
+
+    const res = await cleanup(TWIN_B, true);
+    expect(res.archive_entries).toEqual([{ hash, path: `Brain/.archives/${file}` }]);
+    // The entry file is gone; the (now empty) store directory may remain.
+    expect(existsSync(join(vault, "Brain", ".archives", file))).toBe(false);
+    expect(readdirSync(join(vault, "Brain", ".archives"))).toEqual([]);
+  });
+});
+
+/**
  * A page the caller cannot read at its reach is ingested exactly like an
  * absent one: untrusted lane, `url-only`, and no digest on any page.
  */
