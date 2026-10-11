@@ -44,7 +44,11 @@ import {
 import { isoSecond } from "../time.ts";
 import { sourcePagePath } from "../paths.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
-import { intakeExtraction, type ExtractionIntake } from "../intake/extract-intake.ts";
+import {
+  intakeExtraction,
+  type ExtractionIntake,
+  type IntakeRelation,
+} from "../intake/extract-intake.ts";
 import { normalizeSourceIdentity } from "../intake/source-trust.ts";
 import { INTAKE_TRUST, untrustedSourceFrontmatter } from "../trust/untrusted-provenance.ts";
 import {
@@ -66,7 +70,11 @@ import {
   type PreExtractResult,
 } from "./pre-extract.ts";
 import { REVIEW_LANE } from "../write-gate.ts";
-import { resolveWriteDisposition, stageForReview } from "../pending/pending-lanes.ts";
+import {
+  listPendingLane,
+  resolveWriteDisposition,
+  stageForReview,
+} from "../pending/pending-lanes.ts";
 import type { WriteSubject } from "../write-disposition.ts";
 
 /** Frontmatter `kind:` marker of an ingested source summary page. */
@@ -176,6 +184,16 @@ export interface IngestSourceResult {
   readonly staged?: boolean;
   /** Id of the pending queue entry holding the staged summary page. */
   readonly pendingId?: string;
+  /**
+   * Present only on a staged ingest, and only when non-empty (review M13):
+   * extracted relations the intake deferred because applying one would have
+   * written `[[staged-id]]` into an already-published entity page - a link
+   * to an entity that exists only in the review queue, left behind for good
+   * if the operator rejects the staged page. They ride this result verbatim;
+   * the re-ingest a held-back manifest row guarantees applies them through
+   * the ordinary idempotent path once both endpoints are published.
+   */
+  readonly deferredRelations?: ReadonlyArray<IntakeRelation>;
 }
 
 /**
@@ -330,9 +348,18 @@ export function ingestSource(
   // learn a page it cannot read exists.
   let stagedFields: { readonly pendingId: string } | undefined;
   if (!withheld && !unchanged && !existed && disposition.verdict === "stage") {
+    // One open entry per publish target (review M13): a re-ingest of a
+    // source whose summary is still staged re-renders the same page and
+    // used to refuse with a staged-target conflict. The open entry IS the
+    // staged summary - it is reused, never duplicated.
+    const open = listPendingLane(vault, REVIEW_LANE.ingest).entries.find(
+      (entry) => entry.publishTarget === summaryPath,
+    );
     stagedFields = {
-      pendingId: stageForReview(vault, REVIEW_LANE.ingest, summaryPath, () => nextContents)
-        .pendingId,
+      pendingId:
+        open !== undefined
+          ? open.id
+          : stageForReview(vault, REVIEW_LANE.ingest, summaryPath, () => nextContents).pendingId,
     };
   }
   if (stagedFields === undefined && !withheld && !unchanged) {
@@ -393,6 +420,9 @@ export function ingestSource(
     connections,
     captureScope,
     ...(stagedFields !== undefined ? { staged: true, pendingId: stagedFields.pendingId } : {}),
+    ...(intake.deferredRelations !== undefined
+      ? { deferredRelations: intake.deferredRelations }
+      : {}),
     ...(preExtract !== undefined ? { preExtract } : {}),
     ...(derivation?.parts !== undefined ? { parts: derivation.parts } : {}),
     ...(derivation?.table !== undefined ? { table: derivation.table } : {}),

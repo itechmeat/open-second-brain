@@ -14,6 +14,13 @@
  * entry publishes exactly the page a publish-disposition intake would
  * have written. The update arm is untouched - the review boundary is
  * entry, not mutation.
+ *
+ * Two review follow-ups pin here too: a store-learned label refusal
+ * skips one entity and is counted instead of aborting the batch (M4),
+ * and a staged intake defers a relation pointing into a staged page
+ * from a published one, so no published page ever carries a link to an
+ * entity that exists only in the queue (M13) - while a re-ingest of a
+ * source still staged dedupes onto the open queue entries.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -35,6 +42,7 @@ import {
   IntakeValidationError,
   type ExtractionIntake,
   type IntakeOptions,
+  type IntakeResult,
 } from "../../../src/core/brain/intake/extract-intake.ts";
 import { ingestSource } from "../../../src/core/brain/ingest/ingest.ts";
 import {
@@ -386,6 +394,89 @@ describe("a refused label does not abort the intake batch (review M4)", () => {
       ),
     ).toThrow(/invalid entity label/);
     expect(listEntities(vault, { category: "concept" })).toHaveLength(0);
+  });
+});
+
+describe("staged intake defers relations into published pages (review M13)", () => {
+  /**
+   * Validators is admitted by a publish intake first, so it is a published
+   * page; the batch under `stage` then re-states it (an update - it stays
+   * published) and creates Restaking, relating the published entity to the
+   * staged one - the shape that used to write `[[new-id]]` into the
+   * published page before review.
+   */
+  const ANCHORED_BATCH: ExtractionIntake = {
+    entities: [
+      { category: "concept", name: "Validators" },
+      { category: "concept", name: "Restaking" },
+    ],
+    relations: [{ from: "Validators", relation: "related", to: "Restaking" }],
+  };
+
+  function stageValidatorsToRestaking(): IntakeResult {
+    intakeExtraction(vault, { entities: [{ category: "concept", name: "Validators" }] }, opts());
+    return intakeExtraction(vault, ANCHORED_BATCH, opts({ disposition: "stage" }));
+  }
+
+  test("a relation from a published entity into a staged one writes no dangling link", () => {
+    const res = stageValidatorsToRestaking();
+    expect(res.entitiesCreated).toHaveLength(1);
+    expect(res.stagedEntityPages).toHaveLength(1);
+    // The published page never names the entity that exists only in the
+    // queue - a rejection of the staged page must not leave a dead link.
+    const validators = getEntity(vault, { category: "concept", query: "Validators" });
+    expect(validators?.relations ?? []).toEqual([]);
+    // The deferral surfaces in the disposition result, so the publish flow
+    // can apply the edge once the staged page is admitted.
+    expect(res.deferredRelations).toEqual([
+      { from: "Validators", relation: "related", to: "Restaking" },
+    ]);
+  });
+
+  test("a relation between two created pages still rides the staged bytes", () => {
+    // Both endpoints stage together, so the edge is written before staging
+    // exactly as before - it publishes with the pages it lives on.
+    const res = intakeExtraction(vault, SAMPLE, opts({ disposition: "stage" }));
+    expect(res.deferredRelations).toBeUndefined();
+    expect(res.relationsApplied).toBe(1);
+  });
+
+  test("after the queue applies, a re-run of the same intake applies the deferred relation", () => {
+    const res = stageValidatorsToRestaking();
+    const staged = res.stagedEntityPages?.[0];
+    expect(staged).toBeDefined();
+    applyPendingLane(vault, staged!.pendingId);
+    // The same extraction again - the re-run the held-back manifest row
+    // guarantees. Both endpoints are published now, so nothing is deferred
+    // and the edge lands on the published page.
+    const rerun = intakeExtraction(vault, ANCHORED_BATCH, opts({ disposition: "stage" }));
+    expect(rerun.entitiesCreated).toHaveLength(0);
+    expect(rerun.deferredRelations).toBeUndefined();
+    expect(rerun.relationsApplied).toBe(1);
+    const validators = getEntity(vault, { category: "concept", query: "Validators" });
+    expect(validators?.relations).toEqual([{ relation: "related", target: staged!.entityId }]);
+    // And the re-run staged nothing: the queue is empty.
+    expect(listPendingLane(vault, REVIEW_LANE.notes).entries).toHaveLength(0);
+  });
+
+  test("a re-ingest while the staged pages are still pending dedupes onto the open entries", () => {
+    const first = intakeExtraction(vault, SAMPLE, opts({ disposition: "stage" }));
+    // A different day, so a duplicate staging would carry a different id.
+    const second = intakeExtraction(vault, SAMPLE, opts({ now: LATER, disposition: "stage" }));
+    // One open entry per publish target - not a second pair.
+    const entries = listPendingLane(vault, REVIEW_LANE.notes).entries;
+    expect(entries).toHaveLength(2);
+    expect(entries.map((e) => e.publishTarget).toSorted()).toEqual(
+      (first.stagedEntityPages ?? []).map((s) => s.publishTarget).toSorted(),
+    );
+    // The re-ingest reports the SAME open entries instead of staging
+    // duplicates of its own.
+    expect((second.stagedEntityPages ?? []).map((s) => s.pendingId).toSorted()).toEqual(
+      (first.stagedEntityPages ?? []).map((s) => s.pendingId).toSorted(),
+    );
+    // And the duplicate the re-ingest re-created left no canonical orphan.
+    expect(listEntities(vault, { category: "concept" })).toHaveLength(0);
+    expect(listEntities(vault, { category: "concept", status: "quarantine" })).toHaveLength(0);
   });
 });
 

@@ -593,6 +593,78 @@ describe("ingestSource under the ingest review gate", () => {
     expect(deleted).toContain(stagedRelPath);
     expect(existsSync(join(vault, "Brain/pending/ingest", `${res.pendingId}.md`))).toBe(false);
   });
+
+  /**
+   * Review M13: a relation from a PUBLISHED entity into one of this
+   * batch's staged pages used to be applied before staging, writing
+   * `[[new-id]]` into the published page - a link to an entity that
+   * exists only in the queue, left behind for good when the operator
+   * rejects the staged page. The staged ingest defers it instead, and a
+   * re-ingest while the first is still pending dedupes onto the open
+   * queue entries instead of staging duplicates.
+   */
+  const ANCHORED_INPUT = {
+    sourcePath: INPUT.sourcePath,
+    summary: "A summary anchoring a published entity.",
+    extraction: {
+      entities: [
+        { category: "concept", name: "Anchor" },
+        { category: "concept", name: "Fresh" },
+      ],
+      relations: [{ from: "Anchor", relation: "related", to: "Fresh" }],
+    },
+  };
+
+  function seedPublishedAnchor(): void {
+    seedSourceFile();
+    upsertEntity(vault, { category: "concept", name: "Anchor", agent: "claude", now: NOW });
+  }
+
+  test("a staged ingest defers a relation into a published page - no dangling link", () => {
+    seedPublishedAnchor();
+    const res = ingestSource(vault, ANCHORED_INPUT, { agent: "claude", now: NOW });
+    expect(res.staged).toBe(true);
+    // The published Anchor page names no entity that exists only in the queue.
+    const anchor = getEntity(vault, { category: "concept", query: "Anchor" });
+    expect(anchor?.relations ?? []).toEqual([]);
+    // The deferral surfaces on the ingest result for the publish flow.
+    expect(res.deferredRelations).toEqual([{ from: "Anchor", relation: "related", to: "Fresh" }]);
+    // One open entry per publish target: the summary and the one entity page.
+    expect(listPendingLane(vault, REVIEW_LANE.ingest).entries).toHaveLength(1);
+    expect(listPendingLane(vault, REVIEW_LANE.notes).entries).toHaveLength(1);
+  });
+
+  test("a re-ingest while the first is still pending dedupes the pending entries", () => {
+    seedPublishedAnchor();
+    const first = ingestSource(vault, ANCHORED_INPUT, { agent: "claude", now: NOW });
+    const second = ingestSource(vault, ANCHORED_INPUT, { agent: "claude", now: LATER });
+    // No duplicate entries: still one summary entry and one entity entry.
+    expect(listPendingLane(vault, REVIEW_LANE.ingest).entries).toHaveLength(1);
+    expect(listPendingLane(vault, REVIEW_LANE.notes).entries).toHaveLength(1);
+    // The re-ingest reports the SAME open entries, not new ones.
+    expect(second.pendingId).toBe(first.pendingId);
+    // The published page is still clean, and the re-created duplicate left
+    // no canonical orphan.
+    expect(getEntity(vault, { category: "concept", query: "Anchor" })?.relations ?? []).toEqual([]);
+    expect(getEntity(vault, { category: "concept", query: "Fresh" })).toBeNull();
+  });
+
+  test("after the queue applies, a re-ingest applies the deferred relation", () => {
+    seedPublishedAnchor();
+    const first = ingestSource(vault, ANCHORED_INPUT, { agent: "claude", now: NOW });
+    const freshId = first.entitiesCreated[0]!;
+    applyPendingLane(vault, first.pendingId!);
+    for (const entry of listPendingLane(vault, REVIEW_LANE.notes).entries) {
+      applyPendingLane(vault, entry.id);
+    }
+    // Both endpoints are published now: the same extraction applies the
+    // edge instead of deferring it.
+    const second = ingestSource(vault, ANCHORED_INPUT, { agent: "claude", now: LATER });
+    expect(second.deferredRelations).toBeUndefined();
+    expect(second.staged).toBeUndefined();
+    const anchor = getEntity(vault, { category: "concept", query: "Anchor" });
+    expect(anchor?.relations).toEqual([{ relation: "related", target: freshId }]);
+  });
 });
 
 /**
