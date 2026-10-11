@@ -23,6 +23,7 @@
  * calling gate appends.
  */
 
+import { canonicalPermissionTarget } from "./document.ts";
 import type {
   PermissionAction,
   PermissionEntry,
@@ -55,7 +56,11 @@ function roleOf(doc: PermissionsDocument, agent: string): string | undefined {
  * Whether `entry` reaches this subject at this target. An entry naming an
  * agent reaches that agent; an entry naming a role reaches every agent
  * holding it; an entry naming neither reaches everyone. A target-scoped
- * entry reaches only its exact target and never a target-less query.
+ * entry reaches only a query whose canonical note path equals the
+ * entry's canonical target ({@link canonicalPermissionTarget} on BOTH
+ * sides, so a target written with backslash separators or a `.` segment
+ * reaches the stored POSIX spelling it names) and never a target-less
+ * query.
  */
 function entryMatches(
   doc: PermissionsDocument,
@@ -70,8 +75,9 @@ function entryMatches(
   } else if (entry.role !== undefined) {
     if (entry.role !== roleOf(doc, subject.agent)) return false;
   }
-  if (entry.target !== undefined && (target === undefined || entry.target !== target)) {
-    return false;
+  if (entry.target !== undefined) {
+    if (target === undefined) return false;
+    if (canonicalPermissionTarget(entry.target) !== canonicalPermissionTarget(target)) return false;
   }
   return true;
 }
