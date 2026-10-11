@@ -57,6 +57,7 @@ import { isoSecond } from "../time.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { OPERATION, type Safeguard } from "../safeguard.ts";
 import { progressCounter, withProgress, type ProgressSink } from "../progress.ts";
+import { acquireLockSyncWithRetry } from "../sync-lockfile.ts";
 import { listContinuityRecords } from "../continuity/store.ts";
 import { SESSION_ENTITY_MENTION_KIND } from "./session-mining.ts";
 
@@ -497,7 +498,7 @@ export function writeHallwaysProposals(
     "",
   ];
   if (result.keys.length === 0) {
-    lines.push(`No mined keys in the ledger yet: import sessions with mining enabled first.`);
+    lines.push("No mined keys in the ledger yet: mining runs on every writable import.");
   } else if (candidates.length === 0) {
     lines.push(
       `No promotion candidates: no key is mentioned in >= ${minSessions} distinct sessions yet.`,
@@ -549,18 +550,30 @@ export function readDismissedHallwayKeys(vault: string): Set<string> {
   }
 }
 
-/** Persist one dismissal; returns true when it was new. */
+/**
+ * Persist one dismissal; returns true when it was new.
+ *
+ * The whole read-modify-write runs under the brain's lockfile: two
+ * concurrent dismissals (CLI beside MCP server, or two agents) would
+ * otherwise both read the same set, each write back what it first read,
+ * and one dismissal would be silently lost. Contention waits its bounded
+ * turn; an expired wait is a loud refusal, never an unlocked write.
+ */
 export function dismissHallwayKey(vault: string, family: string, key: string): boolean {
   assertVaultIdentityForWrite(vault);
   const id = hallwaysKeyId(family, key);
-  const dismissed = readDismissedHallwayKeys(vault);
-  if (dismissed.has(id)) return false;
-  dismissed.add(id);
   const path = join(vault, HALLWAYS_DISMISSED_REL);
-  mkdirSync(dirname(path), { recursive: true });
-  // Through the shared atomic writer, not a raw writeFileSync: an
-  // interrupted swap leaves the old dismissal set or the new one, and
-  // the file stays out of the direct-fs write-site census population.
-  atomicWriteFileSync(path, `${JSON.stringify({ keys: [...dismissed].toSorted() }, null, 2)}\n`);
-  return true;
+  const lock = acquireLockSyncWithRetry(path);
+  try {
+    const dismissed = readDismissedHallwayKeys(vault);
+    if (dismissed.has(id)) return false;
+    dismissed.add(id);
+    // Through the shared atomic writer, not a raw writeFileSync: an
+    // interrupted swap leaves the old dismissal set or the new one, and
+    // the file stays out of the direct-fs write-site census population.
+    atomicWriteFileSync(path, `${JSON.stringify({ keys: [...dismissed].toSorted() }, null, 2)}\n`);
+    return true;
+  } finally {
+    lock.release();
+  }
 }

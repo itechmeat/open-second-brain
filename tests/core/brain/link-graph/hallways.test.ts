@@ -19,6 +19,7 @@ import { join } from "node:path";
 
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 import { appendContinuityRecord } from "../../../../src/core/brain/continuity/store.ts";
+import { acquireLockSync } from "../../../../src/core/brain/sync-lockfile.ts";
 import {
   createSafeguard,
   SafeguardAbortError,
@@ -250,6 +251,40 @@ describe("the proposals file and dismissals", () => {
     expect(HALLWAYS_DISMISSED_REL.split("\\").join("/")).toBe(
       "Brain/proposals/hallways-dismissed.json",
     );
+  });
+
+  test("a dismissal serializes through the lockfile rails: a held lock refuses it", () => {
+    // Concurrent dismissals read-modify-write one JSON file; unlocked, two
+    // racing `dismiss` calls each write back the set they first read and
+    // one dismissal is lost. Hold the lock the way a racing writer would:
+    // the dismissal must say so - loudly, never clobber - and land once
+    // the lock is free.
+    const path = join(vault, HALLWAYS_DISMISSED_REL);
+    const holder = acquireLockSync(path);
+    const previousWait = process.env.OPEN_SECOND_BRAIN_LOCK_WAIT_MS;
+    process.env.OPEN_SECOND_BRAIN_LOCK_WAIT_MS = "0";
+    try {
+      expect(() => dismissHallwayKey(vault, "symbol", "SessionStore")).toThrow(/lock busy/u);
+    } finally {
+      if (previousWait === undefined) delete process.env.OPEN_SECOND_BRAIN_LOCK_WAIT_MS;
+      else process.env.OPEN_SECOND_BRAIN_LOCK_WAIT_MS = previousWait;
+      holder.release();
+    }
+    expect(dismissHallwayKey(vault, "symbol", "SessionStore")).toBe(true);
+    expect([...readDismissedHallwayKeys(vault)]).toEqual([hallwaysKeyId("symbol", "SessionStore")]);
+  });
+
+  test("the empty-ledger note names no mining switch: there is none to enable", () => {
+    // Mining runs on every writable import; a note telling operators to
+    // import "with mining enabled" pointed at a control that does not
+    // exist.
+    const path = writeHallwaysProposals(vault, computeHallways(vault), {
+      now: new Date("2026-09-18T10:00:00Z"),
+    });
+    const body = readFileSync(path, "utf8");
+    expect(body).toContain("No mined keys in the ledger yet");
+    expect(body).not.toContain("mining enabled");
+    expect(body).toContain("mining runs on every writable import");
   });
 
   test("a dismissed key does not appear in a regenerated proposals file", () => {
