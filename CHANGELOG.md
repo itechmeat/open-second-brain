@@ -261,7 +261,7 @@ Open Second Brain now prices embedding spend honestly: every estimate names wher
 
 ### Changed
 
-- **An unknown price reads as unknown, never as $0.** The maintenance banner, the backfill dry run and `search status` print `price unknown` where they used to print `$0.0000` for an unlisted model, and the JSON estimates (`estimated_cost_usd`, `estimated_usd`, the status refresh estimate) are `null`. The backfill's `estimated_cost_usd`used to be omitted for an unknown price and is now always present. A fully embedded index has nothing pending, so`search status`then prints no`refresh_cost_est`line and its JSON estimate is`0`.
+- **An unknown price reads as unknown, never as $0.** The maintenance banner, the backfill dry run and `search status` print `price unknown` where they used to print `$0.0000` for an unlisted model, and the JSON estimates (`estimated_cost_usd`, `estimated_usd`, the status refresh estimate) are `null`. The backfill's `estimated_cost_usd` used to be omitted for an unknown price and is now always present. A fully embedded index has nothing pending, so `search status` then prints no `refresh_cost_est` line and its JSON estimate is `0`.
 - **A positive cost gate now refuses an unpriced model.** Before this release a model missing from the price table was priced at $0, so a positive `embedding_cost_gate_usd` never stopped it; local servers (Ollama, LM Studio, llama.cpp) and any unlisted model are now refused with `EMBEDDING_COST_UNPRICED` until their price is declared or the run is forced. With the gate at 0, the default, nothing is refused.
 - **Spend receipts carry the price source.** Receipts, the `maintenance_spend` metric, the backfill JSON and the status JSON (`refresh_price_source`) gain `price_source`, and `o2b brain maintenance status` lists each receipt with it; journal rows written before this release read `unrecorded`, and a journaled receipt without a numeric estimate reads `price unknown` instead of failing the whole listing. `brain_maintenance` spend receipts carry a null `estimated_usd` for an unknown price.
 - **`brain_context_pack` caps `query` at 2000 characters.** The cap is declared in the schema and enforced in every query mode, counted in Unicode code points as the schema's `maxLength` counts them, and a blank `query` is refused with `INVALID_PARAMS` in `semantic` mode. `brain_search` now counts its 2000-character cap the same way, so a query of characters outside the Basic Multilingual Plane is no longer refused at half the advertised length. `brain_recall_feedback`, which advertised the same `maxLength` without checking it, now refuses a longer `query` with the same `INVALID_PARAMS` error before it records anything.
@@ -2447,7 +2447,7 @@ byte-identical until opted in. The kernel still calls no LLM.
   re-asserted via `appendPinnedContext`, so survivors cost zero tokens.
   Fail-open throughout (every recoverable error lands in `errors`, never
   thrown), with a bounded drift log. Surfaced as the `o2b brain
-post-compact-audit` CLI verb and gated by `post_compact_survival_audit`
+  post-compact-audit` CLI verb and gated by `post_compact_survival_audit`
   (default OFF, env/config), with `--force` for diagnostics; unchanged
   installs stay byte-identical.
 
