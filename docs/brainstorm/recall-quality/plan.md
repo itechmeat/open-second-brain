@@ -106,7 +106,7 @@ Lanes A and B wait on the substrate; C, D, E wait on nothing. A waiting lane sta
 
 #### Task A2: Creation gate + anchoring wiring
 - **Files**: `src/core/brain/entities/registry.ts`, `src/core/brain/fact-extract.ts`, `src/core/brain/atomic-facts.ts`, `tests/core/brain/entities.registry.test.ts`, `tests/core/brain/atomic-facts.test.ts`
-- **Acceptance**: `entities.registry.test.ts` proves `upsertEntity` resolves the lexicon beside the denylist and applies the tightened verdicts on the CREATE arm only (single-token `function-word-run` and prior-occurrence-free `shouted-heading` refuse with the new reasons; the update arm is unaffected; a code-shaped label such as `foo_bar`/`FTS5` still admits). `atomic-facts.test.ts` proves `buildAnchorables`/`anchorEntityForms` skip junk forms while valid aliases still anchor.
+- **Acceptance**: `entities.registry.test.ts` proves `upsertEntity` resolves the lexicon beside the denylist and applies the tightened verdicts on the CREATE arm only (single-token `function-word-run` and multi-token prior-occurrence-free `shouted-heading` refuse with the new reasons; a single-token shout is a brand/acronym and stays advisory per design.md; the update arm is unaffected; a code-shaped label such as `foo_bar`/`FTS5` still admits). `atomic-facts.test.ts` proves `buildAnchorables`/`anchorEntityForms` skip junk forms while valid aliases still anchor.
 - **Depends on**: S1, A1
 
 #### Task A3: Store-wide heal wiring

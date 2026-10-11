@@ -228,7 +228,26 @@ describe("lexicon-gated creation (recall-quality A2)", () => {
     expect(out.created).toBe(true);
   });
 
-  test("an all-caps heading label is refused at creation with shouted-heading", () => {
+  test("a single-token all-caps brand label admits at creation (NASA-style)", () => {
+    // Caseful corpus so the case verdicts are live, and the store holds no
+    // prior occurrence of the label. `NASA` shouts, but a SINGLE-token shout
+    // is a brand or an acronym-in-expansion, not pasted heading residue:
+    // per the design split the hard gate keeps the MULTI-token shape and the
+    // single-token shout stays advisory (the heal/doctor path), so creation
+    // admits.
+    seedLexicon("Atlas kept the weekly meeting notes about the setup.");
+    const out = upsertEntity(vault, {
+      category: "org",
+      name: "NASA",
+      agent: "claude-dev-agent",
+      now: NOW,
+    });
+    expect(out.created).toBe(true);
+  });
+
+  test("a multi-token all-caps heading label is refused at creation with shouted-heading", () => {
+    // The hard gate keeps the MULTI-token, prior-occurrence-free shout: a
+    // two-word all-caps run is pasted `# HEADING` residue, not a brand.
     seedLexicon("Atlas kept the weekly meeting notes about the setup.");
     try {
       upsertEntity(vault, {

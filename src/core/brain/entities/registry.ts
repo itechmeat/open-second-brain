@@ -457,10 +457,12 @@ function assertIdentityKeyUncontested(index: EntityIndex, key: string, category:
  *     nothing but one learned common word. A MULTI-token run can be a
  *     legitimate title in a lexically poor corpus, so it stays advisory
  *     (the doctor and the prune report it store-wide instead).
- *   - `shouted-heading` refuses only when the store holds no prior
- *     occurrence of the label (as any record's name or alias): an
- *     all-caps form the registry itself already vouches for is a brand
- *     or an acronym-in-expansion, not a pasted heading residue.
+ *   - `shouted-heading` refuses only a MULTI-token label the store holds
+ *     no prior occurrence of (as any record's name or alias): a two-word
+ *     all-caps run is pasted `# HEADING` residue. A SINGLE-token shout is
+ *     a brand or an acronym-in-expansion (NASA) and stays advisory - the
+ *     doctor and the prune report it store-wide; when the store itself
+ *     already vouches for the form, even a multi-token shout admits.
  *
  * Everything else - a stale or absent artifact, a caseless corpus, a
  * code-shaped label - returns null and the creation proceeds exactly as
@@ -477,6 +479,10 @@ function tightenedCreateRefusal(
     return name.split(/\s+/).length === 1 ? "function-word-run" : null;
   }
   if (verdict.reason === "shouted-heading") {
+    // The design split (recall-quality design.md): the hard gate keeps the
+    // MULTI-token, prior-occurrence-free shout; a single-token shout is a
+    // brand or acronym-in-expansion and stays advisory via heal/doctor.
+    if (name.split(/\s+/).length === 1) return null;
     return hasPriorStoredOccurrence(index, name) ? null : "shouted-heading";
   }
   return null;
