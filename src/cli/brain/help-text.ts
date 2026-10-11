@@ -894,7 +894,8 @@ export const VERB_HELP: Record<string, string> = {
     "  list [--category <c>] [--status active|archived] [--json]\n" +
     "  relate <from> <relation> <to> [--from-category <c>] [--to-category <c>] [--json]\n" +
     "  archive <name-or-alias> [--restore] [--category <c>] [--json]\n" +
-    "  prune [--confirm] [--json]                         dry-run default; snapshot before removal\n" +
+    "  prune [--confirm] [--include-advisory] [--json]    dry-run default; snapshot before removal;\n" +
+    "                                                     advisory verdicts need the opt-in\n" +
     "  lexicon rebuild [--apply] [--json]                 dry-run default; writes only the\n" +
     "                                                     derived Brain/entities/lexicon.json\n" +
     "One canonical entity per (category, name); aliases resolve to the canonical record.\n" +

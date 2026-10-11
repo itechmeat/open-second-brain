@@ -21,13 +21,11 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
-import { entityPath } from "../../src/core/brain/paths.ts";
-import { canonicalNotePath } from "../../src/core/path-safety.ts";
 import { listPendingLane } from "../../src/core/brain/pending/pending-lanes.ts";
 import { REVIEW_LANE } from "../../src/core/brain/write-gate.ts";
 import { NOTES_TOOLS } from "../../src/mcp/brain/notes-tools.ts";
@@ -238,30 +236,20 @@ describe("a retried write over a still-pending stage answers the named code", ()
       entities: [{ category: "concept", name: "Rollups" }],
     })) as Record<string, unknown>;
     expect(first["staged"]).toBe(true);
-    // A staged ingest queues its created entity pages beside the summary,
-    // so the retry's FIRST collision is the still-pending entity page at
-    // its canonical publish target - not the summary entry.
-    const created = (first["entities_created"] as ReadonlyArray<string>)[0]!;
-    const entityTarget = canonicalNotePath(relative(vault, entityPath(vault, "concept", created)));
-    const holdingEntry = listPendingLane(vault, REVIEW_LANE.notes).entries.find(
-      (e) => e.publishTarget === entityTarget,
-    );
-    expect(holdingEntry).toBeDefined();
-    let refused: MCPError | undefined;
-    try {
-      await ingestSource(ctx, {
-        source_path: "Articles/dup.md",
-        summary: "Second ingest summary.",
-        entities: [{ category: "concept", name: "Rollups" }],
-      });
-    } catch (err) {
-      refused = err instanceof MCPError ? err : undefined;
-    }
-    expect(refused).toBeInstanceOf(MCPError);
-    expect(refused?.code).toBe(INVALID_PARAMS);
-    const data = (refused?.data ?? {}) as Record<string, unknown>;
-    expect(data["code"]).toBe("pending-stage-conflict");
-    expect(data["existing_id"]).toBe(holdingEntry?.id);
-    expect(data["target"]).toBe(entityTarget);
+    // A staged ingest dedupes its pending entries by publish target, so a
+    // retry of the same source reuses the still-open entries instead of
+    // colliding: the second ingest succeeds idempotently and the pending
+    // lane holds no duplicates for it.
+    const laneBefore = listPendingLane(vault, REVIEW_LANE.notes).entries.length;
+    const second = (await ingestSource(ctx, {
+      source_path: "Articles/dup.md",
+      summary: "Second ingest summary.",
+      entities: [{ category: "concept", name: "Rollups" }],
+    })) as Record<string, unknown>;
+    expect(second["staged"]).toBe(true);
+    const laneAfter = listPendingLane(vault, REVIEW_LANE.notes).entries;
+    expect(laneAfter.length).toBe(laneBefore);
+    const targets = laneAfter.map((e) => e.publishTarget).toSorted();
+    expect(new Set(targets).size).toBe(targets.length);
   });
 });
