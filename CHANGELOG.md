@@ -15,7 +15,7 @@ Open Second Brain 1.80.0 raises what recall can reach and what the store can ans
 - **Two tightened creation verdicts, advisory after admission.** Entity creation (`upsertEntity`, the one choke point every minter shares) now refuses a multi-token all-caps label with no prior stored occurrence (`shouted-heading`) and a caseful label whose every token the lexicon learned as a common word (`function-word-run`), while structural code shapes (a `_`, `.`, `/`, a digit, or internal uppercase - the symbols the session miner exists for) bypass both case rules, and caseless-script labels admit on the structural gate alone. The verdicts feed the existing heal triangle - the doctor's `entity-label-malformed` findings and the snapshot-gated, dry-run-default `o2b brain entity prune` - so already-admitted records are repair candidates, never auto-removed, and anchoring (`buildAnchorables`, `anchorEntityForms`) resolves the same handle so junk forms stop anchoring facts.
 - **Session hallways.** Session import mines a precision-mention side ledger - code symbols from spans, fences and qualified-identifier shapes, URLs, file paths in both slash directions, qualified identifiers - refusing secret-shaped tokens outright and deduplicating at `(family, key, session)` granularity with provenance keyed on the transcript basename, never a host absolute path. `o2b brain hallways mine|show|promote|dismiss` folds that ledger into pairwise-PMI associations written to `Brain/link-graph/hallways.json` beside, never merged into, the vault-derived co-occurrence graph, with a reviewable proposals file and cross-run dismissals. Mining itself never writes an entity: `promote` is the only bridge into the registry, offered solely for keys seen in at least N distinct sessions (`--min-sessions`, default 3), and a promoted label still answers to the tightened admission gate.
 - **The v14 store migration.** One crash-safe first-open transaction adds a virtual generated `chunks.chunk_kind` column (`page` for chunk 0, else `section`) with taxonomy indexes, a bounded `document_attributes` side table backfilled from chunk 0 (64 keys per document, 16 values per key, 256 bytes per value; overflow decrements the set and never fails the index; the promoted keys are skipped, so none of them gains a second source of truth), and sargable path-prefix predicates (`path >= prefix AND path < prefix || U+FFFF` over the canonical POSIX spelling, which also fixes a latent Windows backslash prefix mismatch). The migration never rewrites the embedding tables.
-- **Kind and promoted-key pushdown on the query path.** A `kind` filter (`page`/`section`, MCP argument and CLI `--kind`) pushes into the SQL of both lanes - before `ORDER BY`/`LIMIT` on the keyword lane, inside the overfetch window on the semantic lane - and the promoted frontmatter keys `type`, `tags`, `pinned` and `visibility` compile to SQL against their dedicated indexed storage instead of a post-rank live-file read; other property keys keep the live-file filter, and absent filters compile byte-identical SQL. Pushed filters answer AS INDEXED - the indexed snapshot, like the content itself - a divergence from on-disk state that is documented rather than implied, and a push happens only when it is faithful to the live filter's verdict (`pinned` pushes only for `true`).
+- **Kind and property filter pushdown on the query path.** A `kind` filter (`page`/`section`, MCP argument and CLI `--kind`) pushes into the SQL of both lanes - before `ORDER BY`/`LIMIT` on the keyword lane, inside the overfetch window on the semantic lane - and the promoted frontmatter keys compile to SQL against their dedicated indexed storage where the push is faithful to the live filter's verdict: `type` pushes the scalar declared values as the one normalized token the index stores, `pinned` pushes only for `true`, and `visibility` pushes its normalized tokens. `tags` and every non-scalar shape stay post-rank filters judged against the live file, because the indexed tag corpus and a single token column cannot answer for what the frontmatter array says. Other property keys narrow the candidate pool in SQL against the bounded `document_attributes` snapshot - only a provable mismatch drops out, since the bounded table can be silent about an over-bound document - and the live filter still judges every surfaced row, so answers stay identical to the post-rank filter alone while a filtered query hydrates and reranks fewer candidates. Pushed filters answer AS INDEXED, a documented divergence from the file on disk, and absent filters compile byte-identical SQL.
 - **A two-tier hydration cut.** The candidate pool hydrates metadata only; content hydrates for the rank cap after assembly, with final results byte-identical and peak hydration bounded by the rank cap rather than the pool.
 - **Per-language rerank eval.** Benchmark dataset queries may carry a `lang` field (default `en`, validated like `answer`), and `o2b search rerank-eval` reports a per-language split beside the overall aggregates, each language folded with the same reduce over its per-query rows, so a bilingual dataset shows per-script lifts the blended number would average away. A bundled self-authored ZH fixture (separate from the untouched EN fixture, whose denominators and pins are preserved) gates Chinese tokenization, indexing and rerank ordering in CI on the offline stack.
 - **The dead-weight telemetry view.** `brain_recall_telemetry` grows a seventh operation, `dead_weight` (CLI `o2b brain recall-telemetry dead-weight`), reporting pages currently in scope that no recorded recall within the telemetry window ever surfaced. The denominator is the vault walk's included paths - current on-disk truth, never the stale document table - so a deleted-but-indexed page is never reported; the retrieved set is the union of recorded recall artifacts and observed-use references, `since`/`until`-windowed; the payload carries the window, the counts, a capped dead list behind the usual `vault_path` envelope, and the gate caveat: telemetry is opt-in and records only surfaced top rows, so the report claims "no recorded retrieval surface within telemetry history", never absolute never. No new MCP tool - the tool-count pin holds.
@@ -169,6 +169,7 @@ The bundled opencode plugin loads and works on OpenCode V2 hosts from the same i
 
 - **The opencode plugin supports the V1 and V2 plugin APIs from one file.** The module now default-exports `{ id, server, setup }`: OpenCode V1 keeps calling `server()` exactly as before, and OpenCode V2 loads the same installed copy through `setup()`, which feature-detects every capability it needs (`location.directory`, `session.hook` / `get` / `context`, `tool.hook`, `event.subscribe`) and does nothing when one is missing, so hosts without a hook stay unaffected. Under V2, active-context injection rides the session `context` hook, the post-write reminder rides `tool.hook("execute.after")`, and session capture subscribes to the event stream and merges each snapshot with the earlier turns so history survives compactions; a committed revert removes the saved boundary and the turns after it, rebuilding from active context when the boundary was never captured. Verified live against opencode 2.0.24: plugin load, context hook, capture spool and post-write reminder.
 - **V2 capture listens on the turn-end events a released opencode emits.** opencode 2.0.24 never fires `session.idle`; a finished turn emits `session.execution.succeeded` (failed and interrupted runs likewise). The capture set now covers those names alongside the v2-tree names, plus `session.compaction.failed`, so a turn that ends or fails on a released V2 host still lands its spool snapshot.
+
 ## [1.74.0] - 2026-10-07
 
 Open Second Brain now defends against near-duplicate memory at the points a fact enters or leaves the vault: one reach-aware near-duplicate kernel scores the note-write receipt hint, the feedback advisory and a new retire-sibling list, so a context-driven retire names the active paraphrases that would otherwise survive it; the receipt hint can look beyond the written page's directory through the keyword index; every receipt lint finding answers at the caller's reach; extract-signals grounds time bounds in each turn's timestamp and refuses a payload that repeats a topic; and route metrics time each write stage without carrying any content.
@@ -192,6 +193,7 @@ Open Second Brain now defends against near-duplicate memory at the points a fact
 ### Fixed
 
 - **Every receipt lint finding answers at the caller's reach.** Note-write receipts used to apply the caller's reach to the near-duplicate check only; the broken-wikilink and merged-link checks now treat a withheld page as absent too, so a wikilink to it reads as broken and a merge chain ends at its first withheld hop.
+
 ## [1.73.1] - 2026-10-07
 
 Sturdier input handling in three places, and a faster CI.
@@ -259,7 +261,7 @@ Open Second Brain now prices embedding spend honestly: every estimate names wher
 
 ### Changed
 
-- **An unknown price reads as unknown, never as $0.** The maintenance banner, the backfill dry run and `search status` print `price unknown` where they used to print `$0.0000` for an unlisted model, and the JSON estimates (`estimated_cost_usd`, `estimated_usd`, the status refresh estimate) are `null`. The backfill's `estimated_cost_usd` used to be omitted for an unknown price and is now always present. A fully embedded index has nothing pending, so `search status` then prints no `refresh_cost_est` line and its JSON estimate is `0`.
+- **An unknown price reads as unknown, never as $0.** The maintenance banner, the backfill dry run and `search status` print `price unknown` where they used to print `$0.0000` for an unlisted model, and the JSON estimates (`estimated_cost_usd`, `estimated_usd`, the status refresh estimate) are `null`. The backfill's `estimated_cost_usd`used to be omitted for an unknown price and is now always present. A fully embedded index has nothing pending, so`search status`then prints no`refresh_cost_est`line and its JSON estimate is`0`.
 - **A positive cost gate now refuses an unpriced model.** Before this release a model missing from the price table was priced at $0, so a positive `embedding_cost_gate_usd` never stopped it; local servers (Ollama, LM Studio, llama.cpp) and any unlisted model are now refused with `EMBEDDING_COST_UNPRICED` until their price is declared or the run is forced. With the gate at 0, the default, nothing is refused.
 - **Spend receipts carry the price source.** Receipts, the `maintenance_spend` metric, the backfill JSON and the status JSON (`refresh_price_source`) gain `price_source`, and `o2b brain maintenance status` lists each receipt with it; journal rows written before this release read `unrecorded`, and a journaled receipt without a numeric estimate reads `price unknown` instead of failing the whole listing. `brain_maintenance` spend receipts carry a null `estimated_usd` for an unknown price.
 - **`brain_context_pack` caps `query` at 2000 characters.** The cap is declared in the schema and enforced in every query mode, counted in Unicode code points as the schema's `maxLength` counts them, and a blank `query` is refused with `INVALID_PARAMS` in `semantic` mode. `brain_search` now counts its 2000-character cap the same way, so a query of characters outside the Basic Multilingual Plane is no longer refused at half the advertised length. `brain_recall_feedback`, which advertised the same `maxLength` without checking it, now refuses a longer `query` with the same `INVALID_PARAMS` error before it records anything.
@@ -922,6 +924,7 @@ Open Second Brain now runs natively on Windows 10 and 11. Until this release the
   - a drive-letter git remote parsed as a URL scheme.
 
   Each now uses `node:path` or the existing containment helpers, and each has a test.
+
 - **Snapshots failed under Git for Windows' tar.** Inside Git Bash, and on GitHub's Windows runners, the `tar` first on PATH is MSYS GNU tar, which cannot extract into a backslashed `C:\...` directory. Every path handed to tar is now written with forward slashes, which it and `System32\tar.exe` both accept.
 - **Updating a note with the Windows read-only attribute** failed with a raw EPERM after the before-image was stored. It is now refused up front as `target_unreadable`, the code POSIX already produces for EACCES.
 - **Piped stdin could be lost on Windows** (`capture`, `codec`, `secret`): the process exited before the pipe drained. It is now read through one helper that waits for EOF.
@@ -1801,8 +1804,6 @@ A context-integrity wave: ten units that convert a silent failure in the read an
 - The link-ratchet gate no longer passes on a subject that measures nothing: an empty or fully-excluded subject is an explicit unmeasurable state rather than a ceiling of zero.
 - Four source files carried literal NUL bytes that made git treat them as binary and made `grep` skip them silently.
 
-
-
 A semantic-health baselining release ([#147](https://github.com/itechmeat/open-second-brain/issues/147)): an optional acknowledge-before watermark lets an operator declare "I have seen and accepted the state up to this date", so a one-time bulk seed of preferences no longer pins the health verdict at `watch` forever through the `concept-gap` and `batch-concept-inflation` advisories. Detection and storage are unchanged; the watermark only filters which findings are surfaced, the verdict is computed from the surfaced set, and suppression is always reported explicitly. With no watermark set, every output is byte-identical to 1.37.0.
 
 ### Added
@@ -2027,8 +2028,6 @@ A retrieval and ranking quality release: embedding-layer robustness, faster and 
 
 - **Multi-key fallback for the embeddings API key.** A provider profile's `envKey` may now be an ordered probe list (a single string still works and stays byte-identical); resolution takes the first present key and the `OpenAICompatProvider` fails over to the next on an HTTP 401/403, pinning the first that authenticates. `o2b search provider add --env-key A,B` registers a probe list. Rerank stays single-key. Removes the single point of failure in the only networked path without touching the LLM-free kernel.
 - **Outcome-validated procedural recall.** Procedural entries and their usage sidecar gain additive success / failure counters (outcome-free vaults stay byte-identical), a host-supplied `recordProceduralOutcome` (deterministic, no LLM), and success-rate ranking that surfaces proven procedures and sinks failing ones, with the usage count as the neutral prior for unproven ones. Exposed via `brain_procedural_memory mark_outcome` and `list ranked:true`.
-
-
 
 ### Fixed
 
@@ -2448,7 +2447,7 @@ byte-identical until opted in. The kernel still calls no LLM.
   re-asserted via `appendPinnedContext`, so survivors cost zero tokens.
   Fail-open throughout (every recoverable error lands in `errors`, never
   thrown), with a bounded drift log. Surfaced as the `o2b brain
-  post-compact-audit` CLI verb and gated by `post_compact_survival_audit`
+post-compact-audit` CLI verb and gated by `post_compact_survival_audit`
   (default OFF, env/config), with `--force` for diagnostics; unchanged
   installs stay byte-identical.
 
@@ -2621,8 +2620,6 @@ calls no LLM.
   fields are additive; existing `IndexStats` fields are byte-identical when no
   option changes.
 
-
-
 Memory subsystem alignment: the write paths the Hermes memory provider
 declares now match the live host memory semantics. The release makes
 pinned-context budget handling honest, adds atomic batch writes for
@@ -2762,7 +2759,7 @@ storage model stays vault-first Markdown and JSONL.
 
 - **Strongest-objection steelman in synthesis outputs.** Both the
   `osb://topic/{slug}` resource and `brain_deep_synthesis` now surface
-  the single best-formed argument *against* their own implicit
+  the single best-formed argument _against_ their own implicit
   conclusion, rather than only enumerating tensions within the source
   material. Inspired by obsidian-wiki's steelman section, adapted to
   Open Second Brain's deterministic-core contract (no generated prose —
@@ -3223,7 +3220,7 @@ storage model stays vault-first Markdown and JSONL.
 ### Added
 
 - **Native Grok Build (xAI `grok`) integration.** `o2b install --target grok
-  --apply` registers the two Open Second Brain MCP servers in
+--apply` registers the two Open Second Brain MCP servers in
   `${GROK_HOME:-~/.grok}/config.toml` under `[mcp_servers.*]` (grok's
   highest-priority MCP source) and writes lifecycle hooks to
   `${GROK_HOME:-~/.grok}/hooks/open-second-brain.json` (grok's native hooks
@@ -3293,7 +3290,7 @@ logging reminder.
 - **Bundled opencode plugin** (`plugins/opencode/open-second-brain.ts`):
   a single zero-dependency file installed into
   `~/.config/opencode/plugins/` by `o2b install --target opencode
-  --apply`. On each chat request it appends the rendered
+--apply`. On each chat request it appends the rendered
   `Brain/active.md` digest to the system prompt (via the same
   `o2b-hook active-inject` shim the Claude Code and Codex hook layers
   use, cached with a 5 minute TTL); on `session.idle` /
@@ -3354,7 +3351,7 @@ logging reminder.
   finding ids through existing primitives (preference merge, claim
   append, targeted recompile, archive-never-delete) with an audit
   record per run. New `brain_hygiene` MCP tool and `o2b brain hygiene
-  scan|apply` verbs.
+scan|apply` verbs.
 - **Advisory conflict resolution** through the shared external-command
   bridge: when the operator configures `hygiene.resolver_cmd`, contested
   truth slots get supersede / merge / flag verdicts with recorded
@@ -3383,12 +3380,11 @@ logging reminder.
 
 ### Fixed
 
-
 - **opencode install adapter targeted a file opencode does not read.**
   The adapter now merges the two Open Second Brain servers into
   `~/.config/opencode/opencode.json` under the `mcp` key using
   opencode's entry schema (`{type: "local", command: [bin, ...args],
-  environment, enabled: true}`), honouring `XDG_CONFIG_HOME`. Apply
+environment, enabled: true}`), honouring `XDG_CONFIG_HOME`. Apply
   also migrates the stale `~/.config/opencode/mcp.json` written by
   earlier releases: the two Open Second Brain keys are removed, and the
   file is deleted when nothing else remains.
@@ -3568,7 +3564,7 @@ break with a migration table in `docs/updating.md`.
   advertised list and the callable surface are the same set. Calling
   a removed name answers an INVALID_PARAMS tombstone naming the
   replacement (`brain_digest was removed in 1.0.0; call brain_brief
-  with view="digest"`). Full table in `docs/updating.md`.
+with view="digest"`). Full table in `docs/updating.md`.
 
 ### Added
 
@@ -3588,7 +3584,7 @@ break with a migration table in `docs/updating.md`.
   task results classify `timed_out`; persisted error strings cap at
   4096 bytes with an explicit marker.
 - **Staged dream pipeline.** `o2b brain dream stage | validate
-  <run-id> | apply <run-id> | discard <run-id> | list` (MCP
+<run-id> | apply <run-id> | discard <run-id> | list` (MCP
   `brain_dream` gains an `action` parameter - no new tools). Stage
   persists a reviewable bundle under `Brain/dream/staged/<run-id>/`
   (manifest with schema `o2b.dream-stage.v1`, human REPORT.md,
@@ -3866,10 +3862,10 @@ MCP tool count grows 66 -> 69.
   independent sources materialize a `value_conflict` with
   `resolution: ask_user` - never auto-resolved - while a later value
   outside the window supersedes silently. `o2b brain truth
-  ingest|slots|conflicts|aggregate|collisions|sweep` and the
+ingest|slots|conflicts|aggregate|collisions|sweep` and the
   `brain_truth` MCP tool are the operator surface.
 - **Atomic-fact decomposition and the quantity family**. `o2b brain
-  facts decompose` deterministically splits session text into discrete
+facts decompose` deterministically splits session text into discrete
   assertions via markdown structure (heading paths, list items,
   sentence boundaries with an abbreviation guard) anchored to
   canonical entities - no model calls; `--ingest` bridges
@@ -3950,7 +3946,7 @@ ranks bit-identically. MCP tool count is unchanged (66).
   and antipatterns never decay, projects ~120d, handoffs/sessions
   ~30d, notes 60d. Reinforcement is miss-driven: a query-cache hit
   returns early and records nothing. `o2b brain activation
-  status|sweep` inspects and compacts the event store
+status|sweep` inspects and compacts the event store
   (`search_activation_enabled` is the kill switch).
 - **Co-access reinforcement edges**. Documents habitually surfaced
   together gain pairwise counts in the same fold; when one appears in
@@ -3977,7 +3973,7 @@ ranks bit-identically. MCP tool count is unchanged (66).
   zero-candidate first pass (implicit-AND too strict) triggers exactly
   one broadened OR retry; recovered results carry a `second_pass`
   reason and the envelope reports `secondPass: {triggered, reason,
-  added}` (`search_two_pass_enabled` is the kill switch).
+added}` (`search_two_pass_enabled` is the kill switch).
 
 ### Changed
 
@@ -4068,8 +4064,8 @@ stays at 65 tools.
   caller-supplied sha against the full-40-hex grammar before it can
   reach git.
 - **Git history query** (`o2b brain git find [text] [--file F]
-  [--author A] [--since/--until] [--repo K]`, `o2b brain git
-  status`). Answers "why and when did this file change" and "which
+[--author A] [--since/--until] [--repo K]`, `o2b brain git
+status`). Answers "why and when did this file change" and "which
   release carried it" purely from the store - no live git on the
   query path, so the answers survive checkout deletion. A
   deterministic per-repo digest note (releases, recent commits, hot
@@ -4088,7 +4084,7 @@ stays at 65 tools.
   new regions, and fails closed (no partial rewrite) on unbalanced,
   duplicate, nested, or mismatched sentinels.
 - **Architecture docs generator** (`o2b brain architect
-  <project-path>`). A deterministic stdlib-only scanner (module
+<project-path>`). A deterministic stdlib-only scanner (module
   layout, language mix, entry points, manifest, test layout - no LLM,
   no network) renders an overview plus per-module notes under
   `Brain/projects/arch/<repo-key>/` through the region engine:
@@ -4129,7 +4125,7 @@ stays default-off.
   test). Evolution rule documented: additive fields never bump the
   version, renames/removals/semantic changes do.
 - **Lazy gated telemetry emit kernel.** One `emitGatedTelemetry(gate,
-  build)` helper now carries every gated telemetry surface
+build)` helper now carries every gated telemetry surface
   (context-pack receipts and telemetry, pre-compress, `brain_search`
   telemetry, recall-gate telemetry): with the gate off the payload
   thunk is never invoked and nothing reaches the continuity store; a
@@ -4144,14 +4140,14 @@ stays default-off.
   un-masks redacted text - the single normalization layer every
   read-side consumer shares.
 - **ATOF/ATIF trajectory export.** `o2b brain continuity export
-  --format atof|atif [--session <id>] [--month YYYY-MM]` renders the
+--format atof|atif [--session <id>] [--month YYYY-MM]` renders the
   store as standard trajectory formats: ATOF JSONL events (recall
   telemetry as `retriever` scope pairs with a marked synthetic start,
   other kinds as marks) and ATIF v1.7 documents (one per session,
   memory-layer events as `llm_call_count: 0` system steps). Read-only
   over the read-model; private records never reach an export file.
 - **Memory quality benchmark.** `o2b brain bench memory --fixture
-  <name|path>` ingests a fixture into a disposable vault inside the
+<name|path>` ingests a fixture into a disposable vault inside the
   runs directory (never the configured vault), indexes, retrieves,
   evaluates, and reports - quality (pass rate per category), latency,
   and context cost as separate families, never one collapsed score.
@@ -4193,7 +4189,7 @@ behaviour-changing pieces are off by default or per-call explicit.
   beside the config; malformed pointers and dangling targets fail soft
   and are reported, never thrown.
 - **Read-only recall sources.** `o2b brain source add <vault> --alias
-  <name>` attaches an external vault as a read-only recall origin of
+<name>` attaches an external vault as a read-only recall origin of
   the active Brain. The registry is keyed by owning vault (switching
   profiles never leaks sources), validation concentrates in one place
   (alias and path uniqueness, self-links, direct circular links), and
@@ -4211,25 +4207,25 @@ behaviour-changing pieces are off by default or per-call explicit.
   key selects `preserve` (default, byte-identical), `full`
   (vault-relative key path), or `short` (shortest unambiguous suffix)
   for generated and normalized links. `o2b brain links normalize
-  [path] [--mode M] [--write]` rewrites wikilinks across Brain notes -
+[path] [--mode M] [--write]` rewrites wikilinks across Brain notes -
   dry-run by default, decorations and code blocks preserved verbatim,
   ambiguous and unknown targets left as typed and reported.
 - **Shell-native Brain surface.** `o2b brain profile` materializes a
   compact `Brain/profile.md` digest (facts, top preferences, recent
   activity; age-gated regeneration) plus a `.o2bfs` root marker so
   shell wrappers can detect a Brain root safely. `o2b brain sgrep
-  <query> [path]` is a grep-shaped semantic search - `path:line:`
+<query> [path]` is a grep-shaped semantic search - `path:line:`
   output lines, path scoping, `--json`, exit 1 on no matches - with no
   MCP and no OSB-specific knowledge required.
 - **Grounded trigger queue with anti-nag lifecycle.** `o2b brain
-  trigger scan` turns existing semantic-health and retention findings
+trigger scan` turns existing semantic-health and retention findings
   into Markdown trigger records under `Brain/triggers/` (urgency,
   reason, suggested action, source artifacts, context snippets).
   Stable cooldown keys make repeated scans idempotent: an open twin
   blocks recreation, a dismissed/acted twin blocks for
   `trigger_cooldown_days` (default 7), an expired twin allows.
   Lifecycle is a strict machine (`pending → delivered → acknowledged →
-  acted`, dismiss from any open state) over `list`, `ack`, `dismiss`,
+acted`, dismiss from any open state) over `list`, `ack`, `dismiss`,
   `act`, and `history` verbs plus one consolidated `brain_trigger` MCP
   tool. The morning brief surfaces capped pending triggers and marks
   them delivered, so the same prompt shows at most once per cooldown
@@ -4304,7 +4300,7 @@ behaviour-changing pieces are off by default.
   Absent captures every role; an explicit flag wins; an unknown role
   fails fast.
 - **Session-scoped search focus.** `o2b search focus set|status|clear
-  --session <id>` binds a focus to one session's file under
+--session <id>` binds a focus to one session's file under
   `search-focus/` beside the global file; a bound session focus wins
   over the global one, `brain_search` gains an optional
   `focus_session` input, and SessionEnd lifecycle capture auto-clears
@@ -4312,13 +4308,13 @@ behaviour-changing pieces are off by default.
   (default off), `brain_context_pack` promotes focus-matching memories
   within their tier.
 - **Operator-readable handoff notes.** `o2b brain handoff
-  <session-file>` (and, when `session_handoff` is true, SessionEnd
+<session-file>` (and, when `session_handoff` is true, SessionEnd
   lifecycle capture) writes `Brain/handoffs/<date>-<scope>.md` with
   request, completed work, changed files, learned context, and next
   steps - extracted by deterministic regex from the recorded turns, no
   LLM.
 - **Scoped current-intention chains.** `o2b brain intention
-  set|show|list|move` (and the consolidated `brain_intention` MCP
+set|show|list|move` (and the consolidated `brain_intention` MCP
   tool) maintain per-workstream now-documents at
   `Brain/intentions/<scope>.md`: every update bumps `version` and
   appends the superseded text to an in-file history trail; `move`
@@ -4339,8 +4335,7 @@ off-by-default where they could change behaviour.
 - **Offline local embedder.** A new `local` embedding provider produces
   deterministic vectors with no cloud call, no API key, and no model
   download: token unigrams and character trigrams are feature-hashed
-  (FNV-1a, signed buckets) into a configurable fixed dimension (default
-  256) and unit-normalised, so the existing cosine ranker math is
+  (FNV-1a, signed buckets) into a configurable fixed dimension (default 256) and unit-normalised, so the existing cosine ranker math is
   unchanged. Set `embedding_provider: local` (and
   `search_semantic_enabled: true`) for a privacy-first, no-cloud recall
   path; both indexing and query embedding run without a key. It is a
@@ -4348,7 +4343,7 @@ off-by-default where they could change behaviour.
   semantic depth.
 - **CLI provider registry.** Register OpenAI-compatible embedding
   endpoints at runtime with `o2b search provider add | list | show |
-  remove`, persisted to `Brain/search/embedding-providers.json` (base
+remove`, persisted to `Brain/search/embedding-providers.json` (base
   URL, default model, and the NAME of the environment variable holding
   the key - never the key itself, so the file is safe to sync). A
   registered name resolves to `openai-compat` config during config
@@ -4390,7 +4385,7 @@ anchors.
   `category`, `name`, `aliases`, `status`, lifecycle stamps). The identity
   index rebuilds from the Markdown files on every read - nothing to persist,
   nothing to sync-conflict. `o2b brain entity set | get | list | relate |
-  archive` drives the registry from the CLI (upsert resolves names AND
+archive` drives the registry from the CLI (upsert resolves names AND
   aliases before creating anything and refuses duplicate claims; archive
   removes from active lookup, `--restore` returns); the read-only
   `brain_entity` MCP tool (`view: get | list`) serves lookups to agents.
@@ -4551,7 +4546,7 @@ path.
   `OPEN_SECOND_BRAIN_SEARCH_RELATION_POLARITY` (default on; vaults without
   typed relations rank identically either way).
 - **Retrieval feedback loop with learned recall weights.** `o2b search
-  feedback --query <q> --result <path> --verdict up|down` and the new MCP
+feedback --query <q> --result <path> --verdict up|down` and the new MCP
   tool `brain_recall_feedback` record one JSON event per feedback under
   `Brain/search/feedback/` (the conflict-free one-file-per-signal pattern).
   A deterministic, order-insensitive fold derives per-layer multipliers
@@ -7082,16 +7077,16 @@ eagerly via `o2b brain migrate-frontmatter --apply --yes`.
   vault markdown file. Two shapes are recognised: a single line
   (`@osb feedback negative topic=... principle="..."`) and a
   fenced ` `osb ```block with YAML body. Markers create a
-signal in`Brain/inbox/`via the same writer as`brain_feedback`,
-with `source_type: inline`, the source-file wikilink in `source`,
-and a `dedup_hash`over the normalised payload. After capture
-the source line is annotated`@osb✓ [[sig-...]]`(inline form)
-or the info-string flips to`osb-checked`with a`<!-- @osb✓
-                              [[sig-...]] -->`comment line (block form), making re-runs
-idempotent. Default ignore set covers`Brain/`, `.git`,
-`node_modules`, `.obsidian`, `.trash`, `.stversions`,
-`.open-second-brain`; additional excludes via `--exclude`,
-scope narrowing via `--path`, dry-run via `--dry-run`.
+  signal in`Brain/inbox/`via the same writer as`brain_feedback`,
+  with `source_type: inline`, the source-file wikilink in `source`,
+  and a `dedup_hash`over the normalised payload. After capture
+  the source line is annotated`@osb✓ [[sig-...]]`(inline form)
+  or the info-string flips to`osb-checked`with a`<!-- @osb✓
+                            [[sig-...]] -->`comment line (block form), making re-runs
+  idempotent. Default ignore set covers`Brain/`, `.git`,
+  `node_modules`, `.obsidian`, `.trash`, `.stversions`,
+  `.open-second-brain`; additional excludes via `--exclude`,
+  scope narrowing via `--path`, dry-run via `--dry-run`.
 - **`o2b brain import-session <path>`** — extract signals from a
   Claude Code / Codex CLI / Hermes session JSONL (or a directory
   of session files). Two extraction paths run in parallel:
