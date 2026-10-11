@@ -278,12 +278,15 @@ function placeholders(count: number): string {
  * This is a CANDIDATE-NARROWING predicate, never a faithful row drop, and
  * the shape says so: a document is excluded only when the table holds rows
  * for the key AND none of them is accepted. The `NOT EXISTS` arm keeps a
- * document the table is silent about, because the bounded table can
- * silently lack rows for over-bound documents (64 keys per document, 16
- * values per key, decrement-only) and a value past the per-value byte cap
- * is dropped individually - silence is not a verdict. The live post-rank
- * filter stays the arbiter over the narrowed pool: nothing here may decide
- * the answer alone, it only shrinks what gets hydrated and reranked.
+ * document the table is silent about, because silence has two honest
+ * causes: the document never declared the key, or the extractor silenced
+ * the WHOLE key because one of its values passed a bound (64 keys per
+ * document, 16 values per key, 256 bytes per value -
+ * `documentAttributesFromFrontmatter` stores no rows for a partly stored
+ * key, recall-quality review H2) - silence is not a verdict. The live
+ * post-rank filter stays the arbiter over the narrowed pool: nothing here
+ * may decide the answer alone, it only shrinks what gets hydrated and
+ * reranked.
  *
  * Values are matched verbatim in the stored scalar `String(value)` form
  * (`documentAttributesFromFrontmatter` stores numbers and booleans exactly

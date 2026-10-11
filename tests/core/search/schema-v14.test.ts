@@ -32,6 +32,7 @@ import { sqliteVecLoadable } from "../../helpers/sqlite-vec.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { documentIdsExcludedByAttributeNarrowing } from "../../../src/core/search/property-pushdown.ts";
 import {
+  ATTRIBUTE_MAX_VALUE_BYTES,
   LATEST_SCHEMA_VERSION,
   MIGRATIONS,
   REINDEX_COMMAND,
@@ -39,6 +40,7 @@ import {
   findSchemaGaps,
   readSchemaVersion,
 } from "../../../src/core/search/schema.ts";
+import { search } from "../../../src/core/search/search.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 
 const PRE_V14_SCHEMA_VERSION = 13;
@@ -341,18 +343,85 @@ describe("document_attributes backfill", () => {
     expect(attributesFor("many.md").length).toBe(64);
   });
 
-  test("caps values per key at 16 and drops over-long values", async () => {
+  test("a partly-stored key stores no rows: a drop silences the whole key", async () => {
+    // H2 (recall-quality review): the narrowing may only rule documents IN
+    // ("silence is not a verdict"). A key with SOME rows stored and some
+    // values dropped would act as proof of a mismatch for a value the
+    // extractor never kept - so any dropped value (an element past the
+    // 16-value cap, a value over the 256-byte cap) stores NO rows for the
+    // key at all, and the NOT EXISTS arm of the narrowing keeps the
+    // document for the live filter.
     writeMd(
       vault,
       "wide.md",
-      `---\nletters: [${Array.from({ length: 20 }, (_, i) => `v${i}`).join(", ")}]\nbig: ${OVERSIZED_VALUE}\n---\n\n# Wide\n\nlattice wide widget`,
+      `---\nletters: [${Array.from({ length: 20 }, (_, i) => `v${i}`).join(", ")}]\nsource: [${OVERSIZED_VALUE}, x]\nbig: ${OVERSIZED_VALUE}\n---\n\n# Wide\n\nlattice wide widget`,
     );
     await indexVault(makeConfig({ vault, dbPath }));
     rewindToPreV14Schema();
     migrate();
     const rows = attributesFor("wide.md");
-    expect(rows.filter((r) => r.key === "letters").length).toBe(16);
+    expect(rows.some((r) => r.key === "letters")).toBe(false);
+    expect(rows.some((r) => r.key === "source")).toBe(false);
     expect(rows.some((r) => r.key === "big")).toBe(false);
+  });
+
+  test("a key under the bounds still stores its rows", async () => {
+    writeMd(
+      vault,
+      "ok.md",
+      `---\nletters: [${Array.from({ length: 16 }, (_, i) => `v${i}`).join(", ")}]\nbig: ${"x".repeat(ATTRIBUTE_MAX_VALUE_BYTES)}\n---\n\n# Ok\n\nlattice ok widget`,
+    );
+    await indexVault(makeConfig({ vault, dbPath }));
+    rewindToPreV14Schema();
+    migrate();
+    const rows = attributesFor("ok.md");
+    expect(rows.filter((r) => r.key === "letters").length).toBe(16);
+    expect(rows.some((r) => r.key === "big")).toBe(true);
+  });
+});
+
+describe("the narrowing never excludes a document at the storage bounds (H2)", () => {
+  test("an over-cap value and an element past the value cap answer through the live filter", async () => {
+    const longUrl = `https://example.invalid/${"p".repeat(320)}`;
+    writeMd(
+      vault,
+      "bounds.md",
+      `---\nsource: [${longUrl}, x]\nrefs: [${Array.from({ length: 20 }, (_, i) => `r${i}`).join(", ")}]\n---\n\n# Bounds\n\nlattice bounds widget`,
+    );
+    writeMd(vault, "plain.md", "# Plain\n\nlattice plain widget");
+    await indexVault(makeConfig({ vault, dbPath }));
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      // The narrowing's own exclusion set: both filters must exclude
+      // nothing - the extractor stored no rows for either key, so the
+      // table cannot speak against the document.
+      for (const entry of [
+        { key: "source", values: [longUrl] },
+        { key: "refs", values: ["r19"] },
+      ]) {
+        expect([...documentIdsExcludedByAttributeNarrowing(db, [entry])]).toEqual([]);
+      }
+    } finally {
+      db.close();
+    }
+    // End to end: before the fix the SQL narrowed both notes away and the
+    // live filter never saw them; now they survive to the live filter,
+    // which accepts both.
+    const cfg = makeConfig({ vault, dbPath });
+    const bySource = await search(cfg, {
+      query: "bounds",
+      keywordOnly: true,
+      visibility: ["public"],
+      properties: new Map([["source", [longUrl]]]),
+    });
+    expect(bySource.results.map((r) => r.path)).toEqual(["bounds.md"]);
+    const byRefs = await search(cfg, {
+      query: "bounds",
+      keywordOnly: true,
+      visibility: ["public"],
+      properties: new Map([["refs", ["r19"]]]),
+    });
+    expect(byRefs.results.map((r) => r.path)).toEqual(["bounds.md"]);
   });
 });
 

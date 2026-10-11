@@ -803,7 +803,15 @@ export interface DocumentAttribute {
  *     {@link ATTRIBUTE_MAX_KEYS_PER_DOCUMENT} distinct keys per document,
  *     at most {@link ATTRIBUTE_MAX_VALUES_PER_KEY} values per key, and a
  *     value over {@link ATTRIBUTE_MAX_VALUE_BYTES} UTF-8 bytes is dropped
- *     (a truncated value would equal a string the true value never was).
+ *     (a truncated value would equal a string the true value never was);
+ *   - a key with ANY dropped value stores NO rows at all. A partly stored
+ *     key is a lie the attribute narrowing would weaponize: rows for the
+ *     kept values read as proof of a mismatch for the dropped ones, and
+ *     the narrowing would exclude a document the live filter accepts.
+ *     Zero rows leaves the key silent, and silence never excludes (the
+ *     narrowing's `NOT EXISTS` arm). A silenced key spends none of the
+ *     per-document key budget, so a hostile frontmatter cannot push
+ *     honest keys out by over-running its own bounds.
  */
 export function documentAttributesFromFrontmatter(
   meta: Record<string, unknown>,
@@ -816,6 +824,7 @@ export function documentAttributesFromFrontmatter(
     if (PROMOTED_ATTRIBUTE_KEYS.has(key)) continue;
     const value = meta[rawKey];
     const values: string[] = [];
+    let dropped = false;
     if (typeof value === "string") {
       values.push(value);
     } else if (typeof value === "number" || typeof value === "boolean") {
@@ -823,13 +832,23 @@ export function documentAttributesFromFrontmatter(
       values.push(String(value));
     } else if (Array.isArray(value)) {
       for (const element of value) {
-        if (values.length >= ATTRIBUTE_MAX_VALUES_PER_KEY) break;
+        if (values.length >= ATTRIBUTE_MAX_VALUES_PER_KEY) {
+          dropped = true;
+          break;
+        }
         if (typeof element !== "string") continue;
         values.push(element);
       }
     }
-    const stored = values.filter((v) => Buffer.byteLength(v, "utf8") <= ATTRIBUTE_MAX_VALUE_BYTES);
-    if (stored.length === 0) continue;
+    const stored: string[] = [];
+    for (const v of values) {
+      if (Buffer.byteLength(v, "utf8") > ATTRIBUTE_MAX_VALUE_BYTES) {
+        dropped = true;
+        continue;
+      }
+      stored.push(v);
+    }
+    if (dropped || stored.length === 0) continue;
     keyCount++;
     for (const value of stored) out.push({ key, value });
   }
