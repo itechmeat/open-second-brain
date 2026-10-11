@@ -81,7 +81,7 @@ async function seedVault(): Promise<void> {
   writeMd(
     vault,
     "notes/note-b.md",
-    note("Note B", "type: report\nstatus: active\n", "lattice delta report"),
+    note("Note B", "type: report\nstatus: active\ntags: [urgent]\n", "lattice delta report"),
   );
   writeMd(vault, "notes/note-c.md", note("Note C", "status: archived\n", "lattice delta archive"));
   writeMd(
@@ -161,7 +161,6 @@ describe("SQL builders keep the default strings byte-identical", () => {
       new Map([
         ["type", ["Note"]],
         ["pinned", ["true"]],
-        ["tags", ["urgent"]],
         ["visibility", ["Public"]],
       ]),
     );
@@ -174,7 +173,6 @@ describe("SQL builders keep the default strings byte-identical", () => {
       "d.path >= ?",
       "d.page_type IN (?)",
       "d.pinned = 1",
-      "ptag.link_type = 'tag'",
       "json_each(d.visibility)",
       "c.chunk_kind = ?",
     ]) {

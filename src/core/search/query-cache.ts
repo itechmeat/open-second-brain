@@ -19,6 +19,7 @@ import { normalizeScopeFilter } from "../scope-key.ts";
 import { resolvedTransportReach } from "../graph/transport-reach.ts";
 import { DISCLOSURE_MODE } from "./disclosure-mode.ts";
 import { FTS_MATCH_MODE } from "./fts-match-mode.ts";
+import { attributeNarrowingEntries } from "./property-pushdown.ts";
 import type { Store } from "./store.ts";
 import type { SearchOptions, SearchOutcome } from "./types.ts";
 
@@ -40,6 +41,29 @@ function canonicalProperties(
   return [...props.entries()]
     .map(([k, v]) => [k, [...v].toSorted()] as [string, string[]])
     .toSorted((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+}
+
+/**
+ * Canonicalise the UNPROMOTED attribute-narrowing half of a property
+ * filter map (recall-quality): keys in the NFC spelling the lanes narrow
+ * with, values sorted, keys sorted. Null when no key narrows, so the
+ * default key - and every row cached before the narrowing existed - stays
+ * byte-identical.
+ *
+ * The fold exists because the narrowing changes the candidate pool, and
+ * the pool width is what the retrieval trail counts: a row written by a
+ * pre-narrowing binary must not be served under a key this binary computes
+ * with narrowing on. The raw `properties` fold above cannot provide that
+ * partition - it names the same map on both sides of the upgrade.
+ */
+export function canonicalAttributeNarrowing(
+  props: ReadonlyMap<string, ReadonlyArray<string>> | undefined,
+): Array<{ key: string; values: string[] }> | null {
+  const entries = attributeNarrowingEntries(props);
+  if (entries === null) return null;
+  return entries
+    .map((e) => ({ key: e.key, values: [...e.values].toSorted() }))
+    .toSorted((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 }
 
 function canonicalStructuredQuery(opts: SearchOptions): unknown {
@@ -101,6 +125,10 @@ export function buildCacheKey(
     maxHops: opts.maxHops ?? null,
     evidencePack: opts.evidencePack === true,
     properties: canonicalProperties(opts.properties),
+    // The unpromoted attribute-narrowing fold partitions pre-narrowing
+    // cache rows from post-narrowing ones; absent (no unpromoted key)
+    // keeps the key byte-identical. See `canonicalAttributeNarrowing`.
+    attributeNarrowing: canonicalAttributeNarrowing(opts.properties) ?? undefined,
     visibility: opts.visibility ? [...opts.visibility].toSorted() : null,
     agentScope: opts.agentScope ?? null,
     // The transport reach partitions the cache, and unconditionally.

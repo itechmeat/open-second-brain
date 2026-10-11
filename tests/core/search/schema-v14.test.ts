@@ -30,6 +30,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { sqliteVecLoadable } from "../../helpers/sqlite-vec.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
+import { documentIdsExcludedByAttributeNarrowing } from "../../../src/core/search/store/documents.ts";
 import {
   LATEST_SCHEMA_VERSION,
   MIGRATIONS,
@@ -441,6 +442,44 @@ describe("the indexer attribute writes", () => {
     writeMd(vault, "many.md", `---\n${many.join("\n")}\n---\n\n# Many\n\nlattice many widget`);
     await indexVault(cfg);
     expect(attributesFor("many.md").length).toBe(64);
+  });
+});
+
+describe("the attribute narrowing read (query path)", () => {
+  test("the stored scalar String form answers the narrowing; silence never excludes", async () => {
+    const cfg = makeConfig({ vault, dbPath });
+    writeMd(
+      vault,
+      "scalars.md",
+      "---\npriority: 3\nflag: true\nstatus: active\n---\n\n# Scalars\n\nlattice scalars widget",
+    );
+    writeMd(vault, "other.md", "---\npriority: 9\n---\n\n# Other\n\nlattice other widget");
+    await indexVault(cfg);
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      const idByPath = new Map(
+        db
+          .query<{ path: string; id: number }, []>("SELECT path, id FROM documents")
+          .all()
+          .map((r) => [r.path, r.id] as const),
+      );
+      const scalars = idByPath.get("scalars.md")!;
+      const other = idByPath.get("other.md")!;
+      const excluded = documentIdsExcludedByAttributeNarrowing(db, [
+        { key: "priority", values: ["3"] },
+      ]);
+      // other.md stores priority as "9": a provable mismatch. scalars.md
+      // stores the number as the same "3" the live filter compares, so it
+      // matches; plain.md stores no priority at all, and a table with no
+      // rows for a key may never speak against a document.
+      expect([...excluded].toSorted()).toEqual([other].toSorted());
+      expect(excluded.has(scalars)).toBe(false);
+      expect(
+        documentIdsExcludedByAttributeNarrowing(db, [{ key: "absent-key", values: ["x"] }]).size,
+      ).toBe(0);
+    } finally {
+      db.close();
+    }
   });
 });
 

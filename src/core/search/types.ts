@@ -872,7 +872,11 @@ export interface SearchOptions {
    * pushed into the lanes' SQL against their indexed storage
    * (recall-quality, C4), in the stored canonical form - those keys
    * answer AS INDEXED, while every other key keeps the live-file
-   * post-rank filter. See `property-pushdown.ts` for the faithful-value
+   * post-rank filter and additionally NARROWS the candidate pool against
+   * the v14 `document_attributes` snapshot: a provable mismatch drops out
+   * of the pool in SQL, and the live filter still judges every surfaced
+   * row, because the bounded table can be silent about an over-bound
+   * document. See `property-pushdown.ts` for the faithful-value
    * rules and `pool-filters.ts` for the split.
    */
   readonly properties?: ReadonlyMap<string, ReadonlyArray<string>>;
