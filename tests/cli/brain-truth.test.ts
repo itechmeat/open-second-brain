@@ -12,6 +12,7 @@ import { join } from "node:path";
 
 import { appendClaimEvent, readClaimEvents } from "../../src/core/brain/truth/store.ts";
 import { upsertEntity } from "../../src/core/brain/entities/registry.ts";
+import { emitContextReceipt } from "../../src/core/brain/context-receipts.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
 let tmp: string;
@@ -558,4 +559,111 @@ test("facts decompose without --ingest leaves the ledger untouched", async () =>
   ]);
   expect(res.returncode).toBe(0);
   expect(readClaimEvents(vault).events).toHaveLength(0);
+});
+
+// ----- --sample-id + provenance-hydrated reads (answer-trust, task B5) -----
+
+function writeCliSourcePage(name: string): void {
+  const dir = join(vault, "Brain", "notes");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, name), `---\nkind: note\n---\n\n${name} source page\n`);
+}
+
+test("truth state --sample-id threads the id and the ledger freezes it", async () => {
+  seedCliRegistry();
+  const res = await runCli(
+    stateArgs(vault, [
+      "--subject",
+      "Alice Mason",
+      "--relation",
+      "extends",
+      "--object",
+      "Atlas",
+      "--text",
+      "Alice Mason said the Atlas extension plan is ready for review today.",
+      "--source",
+      "[[Brain/notes/session.md]]",
+      "--sample-id",
+      "rcpt-2026-0601-abcd",
+    ]),
+  );
+  expect(res.returncode).toBe(0);
+  const body = JSON.parse(res.stdout) as unknown as StateBody;
+  expect(body.committed).toHaveLength(1);
+  expect(body.committed[0]["sample_id"]).toBe("rcpt-2026-0601-abcd");
+  const [stored] = readClaimEvents(vault).events;
+  expect(stored!.sample_id).toBe("rcpt-2026-0601-abcd");
+});
+
+test("truth state refuses a blank --sample-id as a usage error, writing nothing", async () => {
+  // The same named refusal the MCP path answers, mapped to the
+  // usage-error class; a blank id is never coerced to an absent one.
+  seedCliRegistry();
+  const res = await runCli(
+    stateArgs(vault, [
+      "--subject",
+      "Alice Mason",
+      "--relation",
+      "extends",
+      "--object",
+      "Atlas",
+      "--text",
+      "Alice Mason said the Atlas extension plan is ready for review today.",
+      "--source",
+      "[[Brain/notes/session.md]]",
+      "--sample-id",
+      "   ",
+    ]),
+  );
+  expect(res.returncode).toBe(2);
+  expect(res.stderr).toMatch(/sample_id/);
+  expect(readClaimEvents(vault).events).toHaveLength(0);
+});
+
+test("truth events hydrates provenance for a claim carrying a sample id", async () => {
+  seedCliRegistry();
+  writeCliSourcePage("session.md");
+  const receipt = emitContextReceipt(vault, {
+    options: { host: "cli", trigger: "context_pack" },
+    items: [{ id: "note-alpha", path: "Brain/notes/alpha.md", tokens: 40 }],
+    finalText: "the final answer text",
+  });
+  const stated = await runCli(
+    stateArgs(vault, [
+      "--subject",
+      "Alice Mason",
+      "--relation",
+      "extends",
+      "--object",
+      "Atlas",
+      "--text",
+      "Alice Mason said the Atlas extension plan is ready for review today.",
+      "--source",
+      "[[Brain/notes/session.md]]",
+      "--sample-id",
+      receipt.id,
+    ]),
+  );
+  expect(stated.returncode).toBe(0);
+  const res = await runCli(["brain", "truth", "events", "--vault", vault, "--json"]);
+  expect(res.returncode).toBe(0);
+  const body = JSON.parse(res.stdout) as unknown as {
+    events: ReadonlyArray<
+      Record<string, unknown> & {
+        provenance?: {
+          sample_id: string;
+          receipt: { id: string } | null;
+          outcome: unknown | null;
+          timestamp_inverted: boolean;
+        };
+      }
+    >;
+  };
+  expect(body.events).toHaveLength(1);
+  const provenance = body.events[0]!.provenance!;
+  expect(provenance.sample_id).toBe(receipt.id);
+  expect(provenance.receipt!.id).toBe(receipt.id);
+  // Outcome unknown - absent, never invented.
+  expect(provenance.outcome).toBeNull();
+  expect(provenance.timestamp_inverted).toBe(false);
 });

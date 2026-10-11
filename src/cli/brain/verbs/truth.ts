@@ -59,7 +59,7 @@ const USAGE =
   "  collisions [--window-days N]\n" +
   "  events     [--entity E] [--since X] [--until Y] [--limit N]\n" +
   "  state      --subject S --relation R --object O --text T --source S\n" +
-  "             [--agent N]\n" +
+  "             [--agent N] [--sample-id ID]\n" +
   "  sweep      [--max-events N]\n" +
   "  common     [--vault <path>] [--json]";
 
@@ -88,6 +88,7 @@ export async function cmdBrainTruth(argv: string[]): Promise<number> {
     relation: { type: "string" },
     object: { type: "string" },
     text: { type: "string" },
+    "sample-id": { type: "string" },
     since: { type: "string" },
     until: { type: "string" },
     limit: { type: "string" },
@@ -339,6 +340,13 @@ export async function cmdBrainTruth(argv: string[]): Promise<number> {
                 agent: resolveBrainAgent(flags, config),
                 ts: isoSecond(new Date()),
                 source: requireString(flags, "source"),
+                // Answer-trust (task B5): an optional attribution id,
+                // validated by the same payload-boundary refusal the MCP
+                // state operation answers (mapped to the usage-error
+                // class below); committed events echo it verbatim.
+                ...(flags["sample-id"] !== undefined
+                  ? { sampleId: flags["sample-id"] as string }
+                  : {}),
               },
               { entities: statedClaimEntities(vault), configPath: config },
             );
