@@ -325,6 +325,8 @@ describe("the cooperative deadline", () => {
       checkpoint: () => {
         checkpoints++;
       },
+      timeoutMs: null,
+      operation: "sessions",
     };
     const result = computeHallways(vault, { safeguard: counting });
 

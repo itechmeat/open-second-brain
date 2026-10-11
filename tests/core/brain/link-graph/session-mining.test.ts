@@ -259,6 +259,7 @@ describe("mineAndRecordTurn", () => {
     overrides: Partial<Parameters<typeof mineAndRecordTurn>[1]> = {},
   ): Parameters<typeof mineAndRecordTurn>[1] {
     return {
+      vault,
       text: "touch `SessionStore` and src/core/store.ts today",
       sessionRef: "s1.jsonl",
       turnId: "t1",
