@@ -296,6 +296,9 @@ export function parseRecallBenchmarkDataset(raw: unknown): RecallBenchmarkDatase
         `benchmark query '${q.id}' lang must be a non-empty string when present`,
       );
     }
+    // A language group is a spelling-insensitive fold: " ZH" and "zh" are
+    // one group, never two.
+    const lang = q.lang !== undefined ? (q.lang as string).trim().toLowerCase() : undefined;
     return Object.freeze({
       id: q.id,
       query: q.query,
@@ -305,7 +308,7 @@ export function parseRecallBenchmarkDataset(raw: unknown): RecallBenchmarkDatase
       // Present on every parsed entry: the default lives here so the
       // report split never has to re-derive it. Hand-built datasets (the
       // type allows omitting the field) fall back in the runner instead.
-      ...(q.lang !== undefined ? { lang: q.lang as string } : { lang: "en" }),
+      ...(lang !== undefined ? { lang } : { lang: "en" }),
     });
   });
   return Object.freeze({ queries: Object.freeze(parsed) });

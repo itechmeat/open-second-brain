@@ -319,7 +319,23 @@ function isMapping(value: YamlValue | undefined): value is YamlMapping {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+/**
+ * Loader diagnostics write once per UNIQUE warning, not once per consult:
+ * the resolver runs on every gate check, and a permission write consults
+ * the document it just loaded, so the same warning repeated per write
+ * reads like a fresh defect - while a document with several distinct
+ * findings still reports each of them. A reset hook keeps it testable.
+ */
+const warned = new Set<string>();
+
+export function resetPermissionWarnings(): void {
+  warned.clear();
+}
+
 function warn(path: string, field: string, message: string): void {
+  const key = `${path}\u0000${field}\u0000${message}`;
+  if (warned.has(key)) return;
+  warned.add(key);
   process.stderr.write(`warning: ${path}: ${field}: ${message}\n`);
 }
 

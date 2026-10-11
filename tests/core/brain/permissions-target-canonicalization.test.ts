@@ -21,6 +21,7 @@ import {
   canonicalPermissionTarget,
   loadPermissionsDocument,
   type PermissionsDocument,
+  resetPermissionWarnings,
 } from "../../../src/core/brain/permissions/document.ts";
 import {
   resolvePermission,
@@ -154,6 +155,7 @@ describe("loadPermissionsDocument target warnings", () => {
       ].join("\n") + "\n",
       "utf8",
     );
+    resetPermissionWarnings();
     const warning = captureWarnings(() => loadPermissionsDocument(vault));
     expect(warning).toContain("entries[0].target");
     expect(warning).toContain("Notes/a.md");
@@ -196,6 +198,7 @@ describe("loadPermissionsDocument target warnings", () => {
       ].join("\n") + "\n",
       "utf8",
     );
+    resetPermissionWarnings();
     const warning = captureWarnings(() => loadPermissionsDocument(vault));
     expect(warning).toContain("entries[0].target");
     expect(warning).toContain("..");

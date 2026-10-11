@@ -33,6 +33,21 @@ import { runCli } from "../../helpers/run-cli.ts";
 // The CLI section below drives the real `o2b` command line.
 setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
+describe("lang group folding", () => {
+  test("spelling variants of one language fold into one group", () => {
+    const dataset = {
+      queries: [
+        { id: "q1", query: "a", expected: ["a.md"], lang: " ZH" },
+        { id: "q2", query: "b", expected: ["b.md"], lang: "zh" },
+        { id: "q3", query: "c", expected: ["c.md"], lang: "ZH" },
+      ],
+    };
+    const parsed = parseRecallBenchmarkDataset(dataset);
+    const langs = new Set(parsed.queries.map((q) => q.lang));
+    expect([...langs]).toEqual(["zh"]);
+  });
+});
+
 describe("parseRecallBenchmarkDataset lang field", () => {
   test("an absent lang defaults to en", () => {
     const dataset = parseRecallBenchmarkDataset({

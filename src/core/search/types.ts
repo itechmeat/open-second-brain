@@ -868,10 +868,11 @@ export interface SearchOptions {
    * against the source frontmatter of each result. Absent map = no
    * filter (existing behaviour).
    *
-   * The PROMOTED keys (`type`, `tags`, `pinned`, `visibility`) are also
+   * The PROMOTED keys (`type`, `pinned`, `visibility`) are also
    * pushed into the lanes' SQL against their indexed storage
    * (recall-quality, C4), in the stored canonical form - those keys
-   * answer AS INDEXED, while every other key keeps the live-file
+   * answer AS INDEXED, while every other key (including `tags`, which
+   * never pushes - the live filter reads the file) keeps the live-file
    * post-rank filter and additionally NARROWS the candidate pool against
    * the v14 `document_attributes` snapshot: a provable mismatch drops out
    * of the pool in SQL, and the live filter still judges every surfaced
