@@ -74,22 +74,22 @@ The full router with readiness criteria is [`install.md`](https://github.com/ite
 
 ## Supported clients
 
-| Client | Integration | Guide |
-| --- | --- | --- |
-| Claude Code | Marketplace plugin: MCP servers and hooks | [`install/claudecode.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/claudecode.md) |
-| OpenAI Codex | Marketplace plugin, then `o2b install --target codex --apply` | [`install/codex.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/codex.md) |
-| Hermes Agent | Plugin and memory provider | [`install/hermes.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/hermes.md) |
-| OpenClaw | Native plugin, no MCP | [`install/openclaw.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/openclaw.md) |
-| opencode | `o2b install --target opencode --apply`: MCP servers and a native plugin | [`install/opencode.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/opencode.md) |
-| Grok Build | `o2b install --target grok --apply`: MCP servers and hooks | [`install/grok.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/grok.md) |
-| Cursor | `o2b install --target cursor --apply` | [`install/cursor.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/cursor.md) |
-| kiro | `o2b install --target kiro --apply` | [`install/kiro.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/kiro.md) |
-| GitHub Copilot CLI | `o2b install --target copilot-cli --apply` | [`install/copilot-cli.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/copilot-cli.md) |
-| Gemini CLI | `o2b install --target gemini-cli --apply` | [`install/gemini-cli.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/gemini-cli.md) |
-| ZCode | MCP servers added to its config by hand | [`install/zcode.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/zcode.md) |
-| Aider | `o2b install --target aider --apply`: context file, no MCP | [`install/aider.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/aider.md) |
-| Pi | `o2b install --target pi --apply`: skill over the CLI | [`install/pi.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/pi.md) |
-| Any other MCP host | `o2b install --target generic --apply --out -` prints the server entries | [`install/generic.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/generic.md) |
+| Client             | Integration                                                              | Guide                                              |
+| ------------------ | ------------------------------------------------------------------------ | -------------------------------------------------- |
+| Claude Code        | Marketplace plugin: MCP servers and hooks                                | [`install/claudecode.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/claudecode.md)   |
+| OpenAI Codex       | Marketplace plugin, then `o2b install --target codex --apply`            | [`install/codex.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/codex.md)             |
+| Hermes Agent       | Plugin and memory provider                                               | [`install/hermes.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/hermes.md)           |
+| OpenClaw           | Native plugin, no MCP                                                    | [`install/openclaw.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/openclaw.md)       |
+| opencode           | `o2b install --target opencode --apply`: MCP servers and a native plugin | [`install/opencode.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/opencode.md)       |
+| Grok Build         | `o2b install --target grok --apply`: MCP servers and hooks               | [`install/grok.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/grok.md)               |
+| Cursor             | `o2b install --target cursor --apply`                                    | [`install/cursor.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/cursor.md)           |
+| kiro               | `o2b install --target kiro --apply`                                      | [`install/kiro.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/kiro.md)               |
+| GitHub Copilot CLI | `o2b install --target copilot-cli --apply`                               | [`install/copilot-cli.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/copilot-cli.md) |
+| Gemini CLI         | `o2b install --target gemini-cli --apply`                                | [`install/gemini-cli.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/gemini-cli.md)   |
+| ZCode              | MCP servers added to its config by hand                                  | [`install/zcode.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/zcode.md)             |
+| Aider              | `o2b install --target aider --apply`: context file, no MCP               | [`install/aider.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/aider.md)             |
+| Pi                 | `o2b install --target pi --apply`: skill over the CLI                    | [`install/pi.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/pi.md)                   |
+| Any other MCP host | `o2b install --target generic --apply --out -` prints the server entries | [`install/generic.md`](https://github.com/itechmeat/open-second-brain/blob/main/install/generic.md)         |
 
 `o2b uninstall --target <name> --apply` removes what `o2b install` wrote; the vault is never touched ([`install.md`](https://github.com/itechmeat/open-second-brain/blob/main/install.md#uninstall)).
 
@@ -123,23 +123,23 @@ The full router with readiness criteria is [`install.md`](https://github.com/ite
 
 ## What is new
 
-1.80.0 raises what recall can reach and what the store can answer for itself. Entity creation learns from the vault: a store-learned lexicon (`o2b brain entity lexicon rebuild`) feeds tightened admission verdicts for all-caps headings and common-word labels, while code-shaped and caseless-script labels keep admitting, and a stale artifact degrades fail-open. Session imports mine precision mentions - code symbols, URLs, paths, qualified identifiers - into a ledger that `o2b brain hallways mine|show|promote|dismiss` folds into reviewable associations; promotion through the admission gate is the only bridge into the registry. Search's v14 store migration pushes `kind` (`page`/`section`) and the promoted frontmatter keys (`type`, `tags`, `pinned`, `visibility`) into SQL on both lanes - answered as indexed, a documented divergence from the live file that unpromoted keys still read - with sargable path prefixes and a two-tier hydration cut. `o2b search rerank-eval` splits its report per language for bilingual datasets, and `brain_recall_telemetry` gains a `dead_weight` view (CLI `o2b brain recall-telemetry dead-weight`) naming in-scope pages no recorded recall ever surfaced. A repair lane closes the outstanding review findings: permission-rule targets canonicalize across path spellings, an ingest `stage` verdict now stages the entity pages and the manifest row it creates (not just the summary page), `delete_by_source` and schema mutations consult the permissions document and refuse on deny, the research pool reads the vault-resolved configuration, the unlock flow nudges toward export-before-wrap, and a bundle allowlist of `*` warns by name. Every release is described in the [CHANGELOG](https://github.com/itechmeat/open-second-brain/blob/main/CHANGELOG.md).
+1.80.0 raises what recall can reach and what the store can answer for itself. Entity creation learns from the vault: a store-learned lexicon (`o2b brain entity lexicon rebuild`) feeds tightened admission verdicts for all-caps headings and common-word labels, while code-shaped and caseless-script labels keep admitting, and a stale artifact degrades fail-open. Session imports mine precision mentions - code symbols, URLs, paths, qualified identifiers - into a ledger that `o2b brain hallways mine|show|promote|dismiss` folds into reviewable associations; promotion through the admission gate is the only bridge into the registry. Open Second Brain's v14 store migration pushes `kind` (`page`/`section`) into SQL on both lanes and pushes the promoted frontmatter keys where the push is faithful to the live filter (`type` scalar values, `pinned: true`, `visibility`; `tags` and non-scalar shapes stay post-rank), while unpromoted property keys narrow the candidate pool against the indexed attribute snapshot with the live file as the arbiter - answered as indexed, a documented divergence - with sargable path prefixes and a two-tier hydration cut. `o2b search rerank-eval` splits its report per language for bilingual datasets, and `brain_recall_telemetry` gains a `dead_weight` view (CLI `o2b brain recall-telemetry dead-weight`) naming in-scope pages no recorded recall ever surfaced. A repair lane closes the outstanding review findings: permission-rule targets canonicalize across path spellings, an ingest `stage` verdict now stages the entity pages and the manifest row it creates (not just the summary page), `delete_by_source` and schema mutations consult the permissions document and refuse on deny, the research pool reads the vault-resolved configuration, the unlock flow nudges toward export-before-wrap, and a bundle allowlist of `*` warns by name. Every release is described in the [CHANGELOG](https://github.com/itechmeat/open-second-brain/blob/main/CHANGELOG.md).
 
 ## Documentation
 
-| Topic | Page |
-| --- | --- |
-| Mental model, vault layout, dream pass, safety properties | [`docs/how-it-works.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/how-it-works.md) |
-| Every CLI verb and flag | [`docs/cli-reference.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/cli-reference.md) |
-| MCP protocol, tools, writer split | [`docs/mcp.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/mcp.md) |
-| Architecture and configuration model | [`docs/architecture.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/architecture.md) |
-| Updating (`o2b update`) and upgrade notes | [`docs/updating.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/updating.md) |
-| Observability events | [`docs/observability.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/observability.md) |
-| Metrics data contract | [`docs/metrics.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/metrics.md) |
-| Cross-project pointer | [`docs/cross-project-pointer.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/cross-project-pointer.md) |
-| Scheduled Brain digest (Hermes cron) | [`docs/hermes-cron.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/hermes-cron.md) |
-| Stability policy | [`docs/stability.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/stability.md) |
-| Origin of the idea | [`docs/idea.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/idea.md) |
+| Topic                                                     | Page                                                             |
+| --------------------------------------------------------- | ---------------------------------------------------------------- |
+| Mental model, vault layout, dream pass, safety properties | [`docs/how-it-works.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/how-it-works.md)                   |
+| Every CLI verb and flag                                   | [`docs/cli-reference.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/cli-reference.md)                 |
+| MCP protocol, tools, writer split                         | [`docs/mcp.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/mcp.md)                                     |
+| Architecture and configuration model                      | [`docs/architecture.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/architecture.md)                   |
+| Updating (`o2b update`) and upgrade notes                 | [`docs/updating.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/updating.md)                           |
+| Observability events                                      | [`docs/observability.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/observability.md)                 |
+| Metrics data contract                                     | [`docs/metrics.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/metrics.md)                             |
+| Cross-project pointer                                     | [`docs/cross-project-pointer.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/cross-project-pointer.md) |
+| Scheduled Brain digest (Hermes cron)                      | [`docs/hermes-cron.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/hermes-cron.md)                     |
+| Stability policy                                          | [`docs/stability.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/stability.md)                         |
+| Origin of the idea                                        | [`docs/idea.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/idea.md)                                   |
 
 ## Project
 
