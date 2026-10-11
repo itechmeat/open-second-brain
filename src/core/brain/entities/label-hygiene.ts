@@ -25,6 +25,7 @@ import {
   type EntityLabelInvalidReason,
 } from "./canonical.ts";
 import { buildEntityIndex, type EntityIndex } from "./index-builder.ts";
+import { resolveEntityLexicon } from "./lexicon.ts";
 import type { BrainEntity } from "./types.ts";
 import { BRAIN_SNAPSHOT_REASON } from "../types.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
@@ -86,18 +87,26 @@ function inboundReferenceIndex(index: EntityIndex): Map<string, string[]> {
 /**
  * Re-run the label validator over every stored entity node (any status) and
  * return the failing ones as prune candidates. Uses the SAME validator as
- * creation and anchoring - one source of truth.
+ * creation and anchoring - one source of truth - and resolves the same
+ * store-learned lexicon beside the denylist (recall-quality A3), so the
+ * tightened verdicts (`shouted-heading`, `function-word-run`) surface here
+ * too. This pass is the ADVISORY half of the policy split: a multi-token
+ * common-word run that creation admits is still reported, because the
+ * remedy is the operator-run, dry-run-default prune behind a snapshot. A
+ * null handle (no fresh artifact) keeps every verdict byte-identical to
+ * the pre-lexicon pass - it can never mis-report.
  */
 export function findMalformedEntityLabels(
   vault: string,
   opts: { readonly denylist?: ReadonlySet<string>; readonly configPath?: string } = {},
 ): MalformedEntityLabel[] {
   const denylist = opts.denylist ?? resolveEntityLabelDenylist(opts.configPath);
+  const lexicon = resolveEntityLexicon(vault);
   const index = buildEntityIndex(vault);
   const inbound = inboundReferenceIndex(index);
   const out: MalformedEntityLabel[] = [];
   for (const entity of index.entities) {
-    const verdict = validateEntityLabel(sanitizeEntityLabel(entity.name), { denylist });
+    const verdict = validateEntityLabel(sanitizeEntityLabel(entity.name), { denylist, lexicon });
     if (verdict.valid) continue;
     out.push(
       Object.freeze({

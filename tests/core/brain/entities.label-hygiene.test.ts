@@ -15,6 +15,11 @@ import { brainDirs } from "../../../src/core/brain/paths.ts";
 import { runDoctor } from "../../../src/core/brain/doctor.ts";
 import { __clearEntityIndexCache } from "../../../src/core/brain/entities/index-builder.ts";
 import {
+  deriveEntityLexicon,
+  writeEntityLexicon,
+  __clearEntityLexiconCache,
+} from "../../../src/core/brain/entities/lexicon.ts";
+import {
   ENTITY_LABEL_DENYLIST_ENV_KEY,
   findMalformedEntityLabels,
   pruneEntityLabels,
@@ -43,6 +48,7 @@ afterEach(() => {
   rmSync(vault, { recursive: true, force: true });
   rmSync(configHome, { recursive: true, force: true });
   __clearEntityIndexCache();
+  __clearEntityLexiconCache();
   // Restore any pre-existing env value so this suite does not contaminate
   // other tests sharing the process.
   if (originalDenylist === undefined) {
@@ -124,6 +130,82 @@ describe("findMalformedEntityLabels", () => {
     });
     const malformed = findMalformedEntityLabels(vault);
     expect(malformed[0]!.inboundReferences).toEqual(["ent-people-ada"]);
+  });
+});
+
+/**
+ * Recall-quality A3: the store-wide re-admission pass resolves the same
+ * store-learned lexicon the creation gate does, so a tightened verdict
+ * automatically becomes the idempotent heal - reported advisory (doctor +
+ * prune), never auto-removed. The only vocabulary is what a corpus page
+ * teaches the artifact.
+ */
+describe("findMalformedEntityLabels - lexicon-aware re-admission (recall-quality A3)", () => {
+  /** Teach the lexicon from one corpus page, then rebuild the artifact. */
+  function seedLexicon(corpus: string): void {
+    atomicWriteFileSync(join(vault, "corpus-page.md"), `${corpus}\n`);
+    writeEntityLexicon(vault, deriveEntityLexicon(vault, { now: NOW }));
+  }
+
+  test("reports a stored caseful common-word run with function-word-run", () => {
+    // "The Of And" passes the structural gate, so only the lexicon sees it.
+    writeEntityNode("people", "ent-people-junk", "The Of And");
+    writeEntityNode("people", "ent-people-ada", "Ada");
+    seedLexicon("the of and the Of and.");
+    const malformed = findMalformedEntityLabels(vault);
+    expect(malformed.map((m) => m.id)).toEqual(["ent-people-junk"]);
+    expect(malformed[0]!.reason).toBe("function-word-run");
+  });
+
+  test("reports a stored shouted heading with shouted-heading", () => {
+    writeEntityNode("projects", "ent-projects-junk", "MEETING NOTES");
+    seedLexicon("Atlas kept the weekly meeting notes about the setup.");
+    const malformed = findMalformedEntityLabels(vault);
+    expect(malformed.map((m) => m.id)).toEqual(["ent-projects-junk"]);
+    expect(malformed[0]!.reason).toBe("shouted-heading");
+  });
+
+  test("a multi-token run is advisory: reported, never silently removed", () => {
+    // Creation would admit this label (the multi-token policy split), yet
+    // the store-wide pass still surfaces it - advisory, dry-run first.
+    writeEntityNode("people", "ent-people-title", "The Notes");
+    seedLexicon("the runner kept notes about the setup. The runner ran.");
+    const malformed = findMalformedEntityLabels(vault);
+    expect(malformed.map((m) => m.id)).toEqual(["ent-people-title"]);
+    expect(malformed[0]!.reason).toBe("function-word-run");
+
+    // The dry-run prune lists it and mutates nothing; confirm removes it
+    // behind the snapshot gate.
+    const dry = pruneEntityLabels(vault, { confirm: false, now: NOW });
+    expect(dry.confirmed).toBe(false);
+    expect(dry.candidates.map((c) => c.id)).toEqual(["ent-people-title"]);
+    expect(dry.snapshotRunId).toBeNull();
+    expect(dry.removed).toEqual([]);
+  });
+
+  test("without a lexicon artifact the pass is unchanged (fail-open)", () => {
+    writeEntityNode("people", "ent-people-junk", "The Of And");
+    expect(findMalformedEntityLabels(vault)).toEqual([]);
+  });
+
+  test("the prune removes a lexicon-reason node behind a snapshot, doctor-clean", () => {
+    writeEntityNode("people", "ent-people-junk", "The Of And");
+    writeEntityNode("people", "ent-people-ada", "Ada", {
+      related: ["[[ent-people-junk]]"],
+    });
+    seedLexicon("the of and the Of and.");
+
+    const result = pruneEntityLabels(vault, { confirm: true, now: NOW });
+    expect(result.confirmed).toBe(true);
+    expect(result.candidates[0]!.reason).toBe("function-word-run");
+    expect(result.removed).toHaveLength(1);
+    expect(result.edgesStripped).toBe(1);
+    expect(result.snapshotRunId).toMatch(/^entity-prune-/);
+
+    const doctor = runDoctor(vault);
+    const codes = [...doctor.warnings, ...doctor.errors].map((i) => i.code);
+    expect(codes).not.toContain("entity-label-malformed");
+    expect(codes).not.toContain("broken-entity-relation");
   });
 });
 
