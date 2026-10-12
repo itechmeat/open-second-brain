@@ -24,8 +24,22 @@ import {
   RETRIEVAL_CATEGORIES,
 } from "./types.ts";
 
+/**
+ * Named relaxations of the canonical fixture invariants. Each option is
+ * an opt-in a caller must vouch for explicitly - never a looser default.
+ */
+export interface ParseBenchFixtureOptions {
+  /**
+   * Accept `notes: []`. The replay converter passes this: a recorded
+   * session with no ingested notes has nothing to materialize, and its
+   * prompts are judged against an empty vault. Committed fixture files
+   * keep the non-empty requirement.
+   */
+  readonly allowEmptyNotes?: boolean;
+}
+
 /** Parse and validate a raw fixture document. Throws named errors. */
-export function parseBenchFixture(raw: unknown): BenchFixture {
+export function parseBenchFixture(raw: unknown, opts?: ParseBenchFixtureOptions): BenchFixture {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
     throw new Error("bench fixture: expected a JSON object");
   }
@@ -35,7 +49,7 @@ export function parseBenchFixture(raw: unknown): BenchFixture {
   const description = nonEmptyString(record["description"]);
 
   const notesRaw = record["notes"];
-  if (!Array.isArray(notesRaw) || notesRaw.length === 0) {
+  if (!Array.isArray(notesRaw) || (notesRaw.length === 0 && opts?.allowEmptyNotes !== true)) {
     throw new Error("bench fixture: notes must be a non-empty array");
   }
   const notes = notesRaw.map(parseNote);

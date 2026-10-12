@@ -11,14 +11,30 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { ContinuityRecord } from "../../../src/core/brain/continuity/types.ts";
 import { runMemoryBench } from "../../../src/core/bench/phases.ts";
-import { parseReplayFixture } from "../../../src/core/bench/replay-fixture.ts";
+import {
+  parseReplayFixture,
+  sessionTurnsToReplayFixture,
+} from "../../../src/core/bench/replay-fixture.ts";
 import { loadReplayBenchFixture, replayToBenchFixture } from "../../../src/core/bench/replay.ts";
 import { benchSuite } from "../../../src/cli/brain/verbs/bench.ts";
+
+function sessionTurn(overrides: Partial<ContinuityRecord> & { id: string }): ContinuityRecord {
+  return {
+    kind: "session_turn",
+    createdAt: "2026-06-01T00:00:00.000Z",
+    sourceRefs: [],
+    payload: { text: "a recorded prompt" },
+    private: false,
+    redacted: false,
+    ...overrides,
+  };
+}
 
 /** Same repo-relative convention as `locomo.test.ts`'s SAMPLE path. */
 const SAMPLE = join("tests", "fixtures", "bench", "surfacing-replay-sample.json");
@@ -70,6 +86,72 @@ test("conversion round-trips the loader's shape through the canonical parser", (
     "/help",
   ]);
 });
+
+test("a committed replay fixture without notes converts through the CLI loader", () => {
+  // The loader accepts an absent notes key ("Empty is valid": a session
+  // of purely structural prompts has nothing to say about them), so the
+  // conversion the registry hands runMemoryBench must accept it too -
+  // questions only, no evidence notes.
+  const path = join(runsDir, "notesless-replay.json");
+  writeFileSync(
+    path,
+    JSON.stringify({
+      name: "notesless",
+      turns: [
+        { id: "a", text: "Who owns the billing migration?", expect: "inject" },
+        { id: "b", text: "/help", expect: "abstain" },
+      ],
+    }),
+  );
+  const fixture = loadReplayBenchFixture(path);
+  expect(fixture.name).toBe("surfacing-replay-notesless");
+  expect(fixture.notes).toHaveLength(0);
+  expect(fixture.continuity).toHaveLength(0);
+  expect(fixture.questions.map((q) => q.category)).toEqual([
+    "proactive_recall",
+    "proactive_recall",
+  ]);
+  expect(fixture.questions.map((q) => q.expect_inject)).toEqual([true, false]);
+});
+
+test("sessionTurnsToReplayFixture output (always notes-less) converts", () => {
+  const replay = sessionTurnsToReplayFixture({
+    name: "vault-lane",
+    records: [
+      sessionTurn({ id: "t-1", payload: { text: "Who owns the billing migration?" } }),
+      sessionTurn({ id: "t-2", createdAt: "2026-06-01T00:01:00.000Z", payload: { text: "/help" } }),
+    ],
+    expectations: { "t-1": "inject", "t-2": "abstain" },
+  });
+  const fixture = replayToBenchFixture(replay);
+  expect(fixture.name).toBe("surfacing-replay-vault-lane");
+  expect(fixture.notes).toHaveLength(0);
+  expect(fixture.questions.map((q) => q.prompt)).toEqual([
+    "Who owns the billing migration?",
+    "/help",
+  ]);
+});
+
+test("a notes-less fixture runs end to end: an empty vault can only miss or abstain", async () => {
+  const replay = parseReplayFixture({
+    name: "notesless-e2e",
+    turns: [
+      { id: "a", text: "Who owns the billing migration?", expect: "inject" },
+      { id: "b", text: "/help", expect: "abstain" },
+    ],
+  });
+  const report = await runMemoryBench({ fixture: replayToBenchFixture(replay), runsDir });
+  expect(report.quality.total).toBe(2);
+  // Nothing in the vault, so nothing is injected: the abstain turn costs
+  // zero and passes, the inject turn is an honest silent miss, and no
+  // decision can false-fire.
+  const byId = new Map(report.questions.map((q) => [q.id, q]));
+  expect(byId.get("b")?.pass).toBe(true);
+  expect(byId.get("b")?.injected_tokens).toBe(0);
+  expect(byId.get("a")?.pass).toBe(false);
+  expect(report.failure_modes.false_fire_rate).toBe(0);
+  expect(report.failure_modes.know_to_ask_failure_rate).toBe(0.5);
+}, 30_000);
 
 test("the calibrated gate posts zero false fires; a permissive zero floor false-fires", async () => {
   const fixture = loadReplayBenchFixture(SAMPLE);
