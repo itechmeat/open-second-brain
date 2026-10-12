@@ -121,10 +121,6 @@ export function claimIterativeToken(
 }
 
 /**
- * What a decision-model rerank passage carries. Part of the decision-model
- * fingerprint only, so the keys of every other rerank kind are unchanged.
- */
-/**
  * Release a claim this call made and can no longer honor: a commit whose
  * round failed keeps the retry semantics the post-execution mark had -
  * the caller may re-commit the same token - while racing commits stay
@@ -139,6 +135,10 @@ export function releaseIterativeToken(store: Store, token: string): void {
   }
 }
 
+/**
+ * What a decision-model rerank passage carries. Part of the decision-model
+ * fingerprint only, so the keys of every other rerank kind are unchanged.
+ */
 const DECISION_RERANK_STATE_SHAPE = "passage:title,status,updated,text;skip:frontmatter";
 
 /** Fingerprint placeholder for a state source the query did not consult. */

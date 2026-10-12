@@ -10,10 +10,12 @@
  * `../coverage.ts`), pulls each group through the same scoped FTS call
  * the round-two retry uses, and merges only the NEW candidates.
  *
- * The kernel stays deterministic and model-free: every sub-query here is
- * coverage-derived. The caller-executed decider step (the one model
- * round the card asks for) is layered on top by `../../search/
- * decider-step.ts` and consumes this module's rounds and stop verdict.
+ * The kernel stays deterministic and model-free: every sub-query the
+ * deterministic rounds pull is coverage-derived. The caller-executed
+ * decider step (the one model round the card asks for) layers on top of
+ * these rounds via `../decider-step.ts`: the pause envelope hands the
+ * caller the surviving gaps, and the committed payload's sub-queries
+ * drive the next round's pulls ({@link runDeciderRound}).
  *
  * Four bounds close the loop, in the order they are checked:
  *   1. the composite hybrid deadline (the caller's clock, already
@@ -31,7 +33,7 @@
  *
  * When measurable gaps survive those bounds and the clock still runs,
  * the outcome PAUSES: it carries the caller-executed decider step (the
- * one model round the card asks for, built by `../../decider-step.ts`)
+ * one model round the card asks for, built by `../decider-step.ts`)
  * as a plan-phase envelope plus an opaque single-use round token. A
  * committed payload drives exactly one further round via
  * {@link runDeciderRound} - the decider round is additive to the cap,
@@ -301,7 +303,7 @@ export interface DeciderRoundInput {
   readonly keywordHits: KeywordHit[];
   /** The candidate id set; the round adds to it in place. */
   readonly chunkIds: Set<number>;
-  /** Same rule as the driver's {@link RunIterativeInput.filterReachableIds}. */
+  /** Same rule as the driver's {@link IterativeLoopInput.filterReachableIds}. */
   readonly filterReachableIds?: (ids: ReadonlyArray<number>) => ReadonlyArray<number>;
   readonly priorRounds: ReadonlyArray<IterativeRoundRecord>;
   /** The loop's clock; injectable so the round record is testable. */

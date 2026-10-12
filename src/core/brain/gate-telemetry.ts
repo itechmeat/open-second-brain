@@ -40,7 +40,10 @@ export interface GateTelemetryInput {
    * The graded surfacing key (t_107a3249), recorded only when the call
    * carried a measured quality - an unmeasured structural verdict is
    * already described by `decision` and `reason`. Numbers and closed
-   * values only; `key` is null exactly where nothing was measurable.
+   * values only; `key` is null exactly where the graded admission key is
+   * null: where nothing was measurable, or where a structural outcome
+   * (`suppressed`, `explicit`) decided the call without grading the
+   * carried measurement.
    */
   readonly surfacing?: {
     readonly key: number | null;
