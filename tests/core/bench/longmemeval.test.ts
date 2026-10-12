@@ -334,6 +334,17 @@ describe("the longmemeval suite", () => {
     expect(report.longmemeval).toEqual({ recall_all_at_5: 1, abstention_excluded: 1 });
   }, 30_000);
 
+  test("without a suite receipt the exclusion count is null, never a manufactured 0", async () => {
+    const { fixture } = loadLongMemEvalFixture(SAMPLE);
+    const runsDir = mkdtempSync(join(tmpdir(), "o2b-longmemeval-runs-"));
+    dirs.push(runsDir);
+    const report = await runMemoryBench({ fixture, runsDir, suite: "longmemeval" });
+    // A direct caller that skips the conversion receipt must not get a
+    // report asserting zero exclusions: unknown is null, and a reader
+    // can tell the two apart.
+    expect(report.longmemeval).toEqual({ recall_all_at_5: 1, abstention_excluded: null });
+  }, 30_000);
+
   test("the report family stays absent without the suite name", async () => {
     const { fixture } = loadLongMemEvalFixture(SAMPLE);
     const runsDir = mkdtempSync(join(tmpdir(), "o2b-longmemeval-runs-"));

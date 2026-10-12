@@ -258,8 +258,12 @@ export interface BenchEmbeddingReceipt {
 export interface BenchLongMemEvalFamily {
   /** Share of scored questions with every gold note inside the cutoff. */
   readonly recall_all_at_5: number;
-  /** Abstention questions the conversion excluded from scoring. */
-  readonly abstention_excluded: number;
+  /**
+   * Abstention questions the conversion excluded from scoring, taken
+   * from the run's conversion receipt. Null when the run carries no
+   * receipt - the count is then unknown, never a manufactured 0.
+   */
+  readonly abstention_excluded: number | null;
 }
 
 export interface BenchQuestionResult {
