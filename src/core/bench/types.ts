@@ -108,6 +108,35 @@ export interface BenchFixture {
   readonly questions: ReadonlyArray<BenchQuestion>;
 }
 
+/**
+ * What a registered suite may do inside one bench run.
+ *
+ * Declared at suite registration and carried on {@link BenchRunOptions}
+ * by the CLI verb from the suite registry, so "what a suite may do" is a
+ * property of the suite in code - never of a flag a caller forgot.
+ * A capability declaration alone is inert: the feature also has to be
+ * enabled through the run's knob pin.
+ */
+export interface BenchSuiteCapabilities {
+  /**
+   * Whether the suite may build the disposable vault index with
+   * embeddings (through the apply-gated indexer options) and run the
+   * semantic lane.
+   */
+  readonly embeddings: boolean;
+}
+
+/**
+ * One registered suite: how a dataset file becomes a {@link BenchFixture}
+ * and what the suite may do inside a run. Suites register through the
+ * registry map in the bench verb - an appendable registration point, not
+ * a hard-coded branch chain.
+ */
+export interface BenchSuiteRegistration {
+  readonly loader: (fixturePath: string) => BenchFixture;
+  readonly capabilities: BenchSuiteCapabilities;
+}
+
 export interface BenchQuestionResult {
   readonly id: string;
   readonly category: BenchCategory;

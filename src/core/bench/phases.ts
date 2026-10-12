@@ -53,6 +53,7 @@ import {
   type BenchQuestion,
   type BenchQuestionResult,
   type BenchReport,
+  type BenchSuiteCapabilities,
 } from "./types.ts";
 
 /**
@@ -67,6 +68,14 @@ const BENCH_REACH = TRANSPORT_REACH.local;
 export interface BenchRunOptions {
   readonly fixture: BenchFixture;
   readonly runsDir: string;
+  /** Registered suite name, when the run goes through a named suite. */
+  readonly suite?: string;
+  /**
+   * What the run's suite may do, set by the CLI verb from the suite
+   * registry. Inert on its own: a capability is exercised only when the
+   * run's knob pin enables the feature too.
+   */
+  readonly capabilities?: BenchSuiteCapabilities;
   /** Resume an existing run id; validates the fixture hash first. */
   readonly resume?: string;
   /** Optional external judge command (config bench_judge_cmd). */

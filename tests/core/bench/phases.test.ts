@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { parseBenchFixture } from "../../../src/core/bench/fixture.ts";
-import { runMemoryBench } from "../../../src/core/bench/phases.ts";
+import { benchSearchConfig, runMemoryBench } from "../../../src/core/bench/phases.ts";
 import { BENCH_REPORT_SCHEMA } from "../../../src/core/bench/types.ts";
 
 let runsDir: string;
@@ -101,6 +101,13 @@ const FIXTURE = parseBenchFixture({
 });
 
 describe("runMemoryBench", () => {
+  test("the default bench config pins the semantic lane off", () => {
+    // The resolved config is where network-freedom is real: the pin must
+    // hold whatever the surrounding environment configures.
+    const config = benchSearchConfig(runsDir);
+    expect(config.semantic.enabled).toBe(false);
+  });
+
   test("full pipeline produces a diffable report with separate metric families", async () => {
     const report = await runMemoryBench({ fixture: FIXTURE, runsDir });
     expect(report.schema).toBe(BENCH_REPORT_SCHEMA);

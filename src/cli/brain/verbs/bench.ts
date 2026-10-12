@@ -16,14 +16,65 @@ import { join, resolve } from "node:path";
 import { loadBenchFixture } from "../../../core/bench/fixture.ts";
 import { loadLocomoFixture } from "../../../core/bench/locomo.ts";
 import { runMemoryBench } from "../../../core/bench/phases.ts";
+import type { BenchFixture, BenchSuiteRegistration } from "../../../core/bench/types.ts";
 import { defaultConfigPath, resolveBenchJudgeCmd } from "../../../core/config.ts";
 import { fail, parse } from "../helpers.ts";
 
 const USAGE =
-  "usage: o2b brain bench memory --fixture <name|path> [--suite locomo] [--resume <run-id>] [--runs-dir <dir>] [--json]";
+  "usage: o2b brain bench memory --fixture <name|path> [--suite <name>] [--resume <run-id>] [--runs-dir <dir>] [--json]";
 
 const DEFAULT_RUNS_DIR = join(".open-second-brain", "bench-runs");
 const REPO_FIXTURE_DIR = join("tests", "fixtures", "bench");
+
+/** A suite name must be safe to echo into errors, reports and run ids. */
+const SUITE_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
+
+/**
+ * The path with no `--suite`: a native fixture loads directly. Not a
+ * named suite - it is the byte-identical default the registry must
+ * preserve.
+ */
+const DEFAULT_SUITE_REGISTRATION: BenchSuiteRegistration = Object.freeze({
+  loader: (fixturePath: string): BenchFixture => loadBenchFixture(fixturePath),
+  capabilities: Object.freeze({ embeddings: false }),
+});
+
+/**
+ * Suite registry: maps a `--suite` name to its loader and declared
+ * capabilities. This map is the appendable registration point - suite
+ * modules add their own entries here (or through
+ * {@link registerBenchSuite}), never a new branch in the verb body.
+ */
+const BENCH_SUITES = new Map<string, BenchSuiteRegistration>([
+  [
+    "locomo",
+    Object.freeze({
+      loader: (fixturePath: string): BenchFixture => loadLocomoFixture(fixturePath),
+      capabilities: Object.freeze({ embeddings: false }),
+    }),
+  ],
+]);
+
+/** Register a bench suite. Refuses an invalid or already-taken name. */
+export function registerBenchSuite(name: string, registration: BenchSuiteRegistration): void {
+  if (!SUITE_NAME_PATTERN.test(name)) {
+    throw new Error(`bench suite name is invalid: '${name}'`);
+  }
+  if (BENCH_SUITES.has(name)) {
+    throw new Error(`bench suite already registered: ${name}`);
+  }
+  BENCH_SUITES.set(name, registration);
+}
+
+/** Look up a registered suite by name. */
+export function benchSuite(name: string): BenchSuiteRegistration | undefined {
+  return BENCH_SUITES.get(name);
+}
+
+/** Registered suite names, sorted for stable listings. */
+export function benchSuiteNames(): ReadonlyArray<string> {
+  return [...BENCH_SUITES.keys()].toSorted();
+}
 
 export async function cmdBrainBench(argv: string[]): Promise<number> {
   if (argv[0] !== "memory") return fail(USAGE);
@@ -37,8 +88,15 @@ export async function cmdBrainBench(argv: string[]): Promise<number> {
   const fixtureFlag = typeof flags["fixture"] === "string" ? flags["fixture"].trim() : "";
   if (fixtureFlag === "") return fail(USAGE);
   const suite = typeof flags["suite"] === "string" ? flags["suite"].trim() : "";
-  if (suite !== "" && suite !== "locomo") {
-    return fail(`brain bench memory: unknown --suite '${suite}' (supported: locomo)`);
+  let registration = DEFAULT_SUITE_REGISTRATION;
+  if (suite !== "") {
+    const known = BENCH_SUITES.get(suite);
+    if (known === undefined) {
+      return fail(
+        `brain bench memory: unknown --suite '${suite}' (supported: ${benchSuiteNames().join(", ")})`,
+      );
+    }
+    registration = known;
   }
   const fixturePath = resolveFixturePath(fixtureFlag);
   if (fixturePath === null) {
@@ -47,10 +105,9 @@ export async function cmdBrainBench(argv: string[]): Promise<number> {
     );
   }
 
-  // The LoCoMo suite loads a LoCoMo-shaped dataset and converts it to a
-  // BenchFixture; the default path loads a native fixture directly.
-  const fixture =
-    suite === "locomo" ? loadLocomoFixture(fixturePath) : loadBenchFixture(fixturePath);
+  // One dispatch for every suite: the registry entry owns loading and
+  // declares what the suite may do; the capabilities ride BenchRunOptions.
+  const fixture = registration.loader(fixturePath);
   const runsDir = resolve(
     typeof flags["runs-dir"] === "string" && flags["runs-dir"].trim() !== ""
       ? flags["runs-dir"].trim()
@@ -62,6 +119,8 @@ export async function cmdBrainBench(argv: string[]): Promise<number> {
   const report = await runMemoryBench({
     fixture,
     runsDir,
+    ...(suite !== "" ? { suite } : {}),
+    capabilities: registration.capabilities,
     ...(resume !== undefined && resume !== "" ? { resume } : {}),
     ...(judgeCmd !== undefined ? { judgeCmd } : {}),
   });
