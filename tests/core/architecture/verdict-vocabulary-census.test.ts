@@ -510,6 +510,16 @@ import {
   ARCHIVE_VERIFICATIONS,
   isArchiveVerification,
 } from "../../../src/core/brain/provenance/source-archive.ts";
+import {
+  REPLAY_EXPECTATION,
+  REPLAY_EXPECTATIONS,
+  isReplayExpectation,
+} from "../../../src/core/bench/replay-fixture.ts";
+import {
+  SURFACING_TIER,
+  SURFACING_TIERS,
+  isSurfacingTier,
+} from "../../../src/core/search/surfacing-key.ts";
 
 interface VocabularyUnderCensus {
   /** Identifies the vocabulary in a failure message. */
@@ -1586,6 +1596,26 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     members: ARCHIVE_VERIFICATIONS,
     guard: isArchiveVerification,
   },
+  {
+    // What a recorded surfacing-replay prompt expected memory to do
+    // (recall-quality wave, Lane C): `inject` (speak up) vs `abstain`
+    // (stay quiet) is the pair the replay corpus scores the gate on, and
+    // a boolean would collapse outcomes the fixture round-trips by name.
+    name: "REPLAY_EXPECTATION",
+    values: REPLAY_EXPECTATION,
+    members: REPLAY_EXPECTATIONS,
+    guard: isReplayExpectation,
+  },
+  {
+    // The graded-surfacing admission verdict (recall-quality wave,
+    // Lane C): explicit, suppressed, admitted, below_floor and
+    // unmeasurable_quality are distinct outcomes the gate telemetry and
+    // the replay corpus both render, not a boolean admitted/not.
+    name: "SURFACING_TIER",
+    values: SURFACING_TIER,
+    members: SURFACING_TIERS,
+    guard: isSurfacingTier,
+  },
 ]);
 
 // ---------------------------------------------------------------------------
@@ -1850,9 +1880,10 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
  * How many four-piece vocabularies `src/` currently holds. Measured, and
  * kept as an equality rather than a floor - see the population test.
  */
-// 97: Lane C's ARCHIVE_VERIFICATION (answer trust) joins the scanned
-// population, the same append Lane A's ANSWER_QUOTE_VERDICT made.
-const VOCABULARY_POPULATION = 97;
+// 99: Lane C's REPLAY_EXPECTATION (replay corpus) and SURFACING_TIER
+// (graded surfacing) join the scanned population, the same append Lane
+// C's ARCHIVE_VERIFICATION made.
+const VOCABULARY_POPULATION = 99;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {

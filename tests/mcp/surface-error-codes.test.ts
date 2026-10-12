@@ -513,6 +513,11 @@ describe("every operation-dispatching tool answers unknown_operation", () => {
       { action: BOGUS },
       "brain_scaffold_stub: 'action' must be one of list, write",
     ],
+    [
+      "brain_session_grep",
+      { operation: BOGUS },
+      "brain_session_grep: operation must be 'match' or 'coverage'",
+    ],
   ];
 
   for (const [tool, args, message] of CASES) {

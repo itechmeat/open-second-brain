@@ -950,10 +950,10 @@ async function toolBrainSessionGrep(
   const operation = args["operation"] ?? "match";
   if (operation === "coverage") return toolBrainSessionGrepCoverage(ctx, args);
   if (operation !== "match") {
-    throw new MCPError(
-      INVALID_PARAMS,
-      "brain_session_grep: operation must be 'match' or 'coverage'",
-    );
+    // The dispatch contract (surface-error-codes census): every tool whose
+    // schema declares a dispatch enum answers an unknown value with the
+    // shared `unknown_operation` code, message unchanged.
+    throw unknownOperationError("brain_session_grep: operation must be 'match' or 'coverage'");
   }
   const limit = coercePositiveInteger("brain_session_grep", "limit", args["limit"]);
   const snippetChars = coercePositiveInteger(
@@ -1568,7 +1568,7 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_session_grep",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
-      "Search imported session recall raw turns and summary nodes, optionally bounded to a time window (since/before). With operation=coverage, run the coverage-first thread selection instead: facets detected from the thread itself, fanned out under the adaptive topic budget (floor 12, cap 16), selected under char_budget, and returned chronologically with selection diagnostics.",
+      "Search imported session recall raw turns and summary nodes, bounded by an optional time window (since/before). With operation=coverage, runs the coverage-first thread selection instead: facets fanned out under the topic budget, selected under char_budget, returned chronologically with diagnostics.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1576,7 +1576,7 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "string",
           enum: ["match", "coverage"],
           description:
-            "match (default) greps records for `query` (required here). coverage runs the coverage-first thread selection: `query` must be absent and `char_budget` is required.",
+            "match (default) greps records for `query` (required here). coverage runs coverage-first selection: `query` must be absent and `char_budget` is required.",
         },
         query: { type: "string", description: "Search text (operation=match)." },
         session_id: {
@@ -1587,7 +1587,7 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "integer",
           minimum: 1,
           description:
-            "With operation=coverage: total character budget for the selected evidence. A budget that cannot hold the floor-weighted selection is refused (INVALID_PARAMS) naming the required chars, never silently truncated.",
+            "With operation=coverage: total character budget for the selected evidence. A budget that cannot hold the selection is refused, naming the required chars.",
         },
         limit: {
           type: "integer",

@@ -334,18 +334,18 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
     iterative: {
       type: "boolean",
       description:
-        "Opt in to the bounded iterative recall loop (default false): the deterministic gap-driven rounds run past the single second pass, and when measurable gaps survive them the response pauses with a needs-llm-step plan (envelope + single-use round token); resubmit the token with iterative_payload to execute the decider round. Inert unless the operator's search_iterative_recall_enabled knob is on.",
+        "Opt in to the bounded iterative recall loop (default off). Surviving gaps pause with a plan; resume via iterative_payload. Inert unless the knob is on.",
     },
     iterative_token: {
       type: "string",
       maxLength: 128,
       description:
-        "The round token from a plan-phase response, submitted on the commit call beside iterative_payload. Requires iterative: true; single use - a replayed token is refused by name.",
+        "The round token from a plan-phase response, submitted beside iterative_payload. Requires iterative: true; single use - a replayed token is refused by name.",
     },
     iterative_payload: {
       type: "object",
       description:
-        "The decider payload answering a plan-phase envelope: { evidence: [chunkId, ...], subQueries: [string, ...] } - evidence ids chosen from the plan's pool, 1-4 unique sub-queries of at most 200 characters. Requires iterative_token; validated before any pull runs.",
+        "Decider payload answering a plan-phase envelope: { evidence: [chunkId, ...], subQueries: [...] }, validated before any pull runs. Requires iterative_token.",
     },
   },
   required: ["query"],
