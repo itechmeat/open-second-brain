@@ -167,8 +167,12 @@ export interface ArchivePutResult {
  * Redact, then persist, then return the address. Idempotent by
  * construction: the address is the digest of the persisted bytes, so the
  * second put of the same bytes finds its own entry already there and
- * leaves it untouched - one file per distinct source text, however many
- * pages cite it.
+ * leaves it untouched when it still verifies - one file per distinct
+ * source text, however many pages cite it. An entry that no longer
+ * verifies (truncated or edited on disk, the state the hygiene scan
+ * reports as `mismatched`) is rewritten with the same atomic write: the
+ * re-ingest of the source is the natural repair, and skipping the write
+ * behind an existing entry would leave the mismatch standing forever.
  *
  * The redaction is the artifact-store posture: the whole input scanned
  * with no scan-window cap (the archive IS the recoverable bytes), and the
@@ -194,8 +198,22 @@ export function putSourceArchive(vault: string, bytes: Uint8Array | string): Arc
     // entry's mtime (and never doubles it under concurrency - the bytes
     // an idempotent re-land would write are the bytes already on disk).
     atomicWriteFileSync(path, redacted);
+  } else if (entryMismatched(path, hash)) {
+    // The repair arm: same address, disagreeing bytes. Written with the
+    // store's atomic write, so the entry is never observed half-replaced.
+    atomicWriteFileSync(path, redacted);
   }
   return { hash, bytes: persisted.length };
+}
+
+/**
+ * Does the entry file at `path` still hash to the digest it is addressed
+ * by? A file that vanished mid-check is no mismatch - there is nothing
+ * here to repair, and the next put will find the store empty.
+ */
+function entryMismatched(path: string, hash: string): boolean {
+  const text = readFileSync(path, "utf8");
+  return createHash("sha256").update(text, "utf8").digest("hex") !== hash;
 }
 
 /** What {@link verifySourceArchive} concluded. */

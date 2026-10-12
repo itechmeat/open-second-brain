@@ -17,6 +17,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -71,6 +72,32 @@ describe("putSourceArchive", () => {
     expect(second.hash).toBe(first.hash);
     const store = join(vault, "Brain", ".archives");
     expect(readdirSync(store)).toEqual([`${first.hash}.txt`]);
+  });
+
+  test("a re-ingest of an intact entry leaves it untouched - no mtime churn", () => {
+    const first = putSourceArchive(vault, "stable bytes");
+    const entry = join(vault, "Brain", ".archives", `${first.hash}.txt`);
+    const before = statSync(entry).mtimeMs;
+
+    putSourceArchive(vault, "stable bytes");
+
+    expect(statSync(entry).mtimeMs).toBe(before);
+  });
+
+  test("a re-ingest repairs an entry corrupted on disk", () => {
+    // The natural repair of the `mismatched` state the hygiene scan
+    // reports: the same source lands the same address, re-verifies the
+    // entry it finds there, and rewrites it when the bytes disagree.
+    const first = putSourceArchive(vault, "original");
+    const entry = join(vault, "Brain", ".archives", `${first.hash}.txt`);
+    writeFileSync(entry, "tampered after the stamp", "utf8");
+    expect(verifySourceArchive(vault, first.hash).state).toBe(ARCHIVE_VERIFICATION.mismatched);
+
+    const second = putSourceArchive(vault, "original");
+
+    expect(second.hash).toBe(first.hash);
+    expect(verifySourceArchive(vault, first.hash).state).toBe(ARCHIVE_VERIFICATION.verified);
+    expect(readFileSync(entry, "utf8")).toBe("original");
   });
 
   test("a credential-shaped input never lands on disk unredacted", () => {
