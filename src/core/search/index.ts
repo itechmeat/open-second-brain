@@ -13,6 +13,10 @@ import {
 } from "../validate.ts";
 import { resolveVaultScope } from "../vault-scope/index.ts";
 import { DEFAULT_HYBRID_DEADLINE_MS } from "./pipeline/request.ts";
+import {
+  ITERATIVE_RECALL_MAX_ROUNDS_CAP,
+  ITERATIVE_RECALL_MAX_ROUNDS_DEFAULT,
+} from "./pipeline/iterative-recall.ts";
 import { resolveIndexPath, SEARCH_DB_CONFIG_KEY, SEARCH_DB_ENV } from "./paths.ts";
 import { buildFtsTokenize } from "./schema.ts";
 import { isFusionMode, DEFAULT_RRF_K } from "./fusion.ts";
@@ -1326,6 +1330,27 @@ export function resolveSearchConfig(opts: {
     true,
     "search_two_pass_enabled",
   );
+  const iterativeRecallEnabled = parseBool(
+    envOrConfig(
+      env,
+      config,
+      "OPEN_SECOND_BRAIN_SEARCH_ITERATIVE",
+      "search_iterative_recall_enabled",
+    ),
+    false,
+    "search_iterative_recall_enabled",
+  );
+  const iterativeRecallMaxRounds = parseInteger(
+    envOrConfig(
+      env,
+      config,
+      "OPEN_SECOND_BRAIN_SEARCH_ITERATIVE_MAX_ROUNDS",
+      "search_iterative_recall_max_rounds",
+    ),
+    ITERATIVE_RECALL_MAX_ROUNDS_DEFAULT,
+    "search_iterative_recall_max_rounds",
+    { min: 1, max: ITERATIVE_RECALL_MAX_ROUNDS_CAP },
+  );
   const poolMultiplier = parseInteger(
     envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_POOL_MULTIPLIER", "search_pool_multiplier"),
     3,
@@ -1434,6 +1459,8 @@ export function resolveSearchConfig(opts: {
     learnedWeightsEnabled,
     activationEnabled,
     twoPassEnabled,
+    iterativeRecallEnabled,
+    iterativeRecallMaxRounds,
     poolMultiplier,
     selfTuningEnabled,
     chainStopEnabled,

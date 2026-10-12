@@ -1,0 +1,372 @@
+/**
+ * Bounded iterative recall loop (recall-quality wave, lane A): the
+ * single-fire second pass generalized into a bounded N-round driver.
+ * With the opt-in knob on, gap-proposal rounds 2..N run deterministic
+ * sub-query pulls over the same pool-merging discipline as round 2,
+ * bounded by the round cap and the composite deadline; the extracted
+ * marginal-value stop retires rounds that stop paying. Knob off (or the
+ * request flag absent) the pipeline is byte-identical to the pre-change
+ * one, including a mode-on-but-inert comparison.
+ */
+
+import { test, expect, beforeEach, afterEach, describe, setSystemTime } from "bun:test";
+
+import {
+  ITERATIVE_RECALL_MAX_ROUNDS_CAP,
+  ITERATIVE_RECALL_MAX_ROUNDS_DEFAULT,
+  runIterativeRecall,
+} from "../../../src/core/search/pipeline/iterative-recall.ts";
+import { Store } from "../../../src/core/search/store.ts";
+import { runFtsQueryDetailed } from "../../../src/core/search/fts.ts";
+import { indexVault } from "../../../src/core/search/indexer.ts";
+import { resolveSearchConfig } from "../../../src/core/search/index.ts";
+import { search } from "../../../src/core/search/search.ts";
+import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
+import type {
+  ResolvedSearchConfig,
+  StructuredRecallQueryDocument,
+} from "../../../src/core/search/types.ts";
+
+let vault: string;
+let dbPath: string;
+let cleanup: () => void;
+
+/** Six common-term docs give warehouse/rotation a low IDF; the loop's floor stays honest. */
+async function seed(): Promise<void> {
+  for (let i = 1; i <= 6; i++) {
+    writeMd(vault, `Brain/notes/wh${i}.md`, `# WH${i}\n\nWarehouse rotation schedule, bay ${i}.\n`);
+  }
+  writeMd(
+    vault,
+    "Brain/notes/chandelier.md",
+    "# Chandelier\n\nChandelier handoff log, east hall.\n",
+  );
+  writeMd(
+    vault,
+    "Brain/notes/candelabra.md",
+    "# Candelabra\n\nCandelabra restoration notes, west hall.\n",
+  );
+  writeMd(vault, "Brain/notes/zircon.md", "# Zircon\n\nZircon inventory tag, north vault.\n");
+  await indexVault(makeConfig({ vault, dbPath, maxHops: 0, mmrLambda: 1 }));
+}
+
+/** A vault of 60 uniquely-termed docs, so pulls saturate the pool width before gaps close. */
+async function seedWide(): Promise<void> {
+  for (let i = 1; i <= 6; i++) {
+    writeMd(vault, `Brain/notes/wh${i}.md`, `# WH${i}\n\nWarehouse rotation schedule, bay ${i}.\n`);
+  }
+  for (let i = 1; i <= 60; i++) {
+    const term = `relic${String(i).padStart(2, "0")}`;
+    writeMd(vault, `Brain/notes/${term}.md`, `# ${term}\n\n${term} provenance record.\n`);
+  }
+  await indexVault(makeConfig({ vault, dbPath, maxHops: 0, mmrLambda: 1 }));
+}
+
+/** The lex lane is pinned to the common terms, so first-pass pools miss every rare term. */
+const structuredFor = (): StructuredRecallQueryDocument =>
+  Object.freeze({
+    intent: null,
+    lex: Object.freeze({
+      include: Object.freeze(["warehouse", "rotation"]) as ReadonlyArray<string>,
+      exclude: Object.freeze([]) as ReadonlyArray<string>,
+    }),
+    vec: Object.freeze(["warehouse rotation"]) as ReadonlyArray<string>,
+    hyde: Object.freeze([]) as ReadonlyArray<string>,
+  });
+
+function withIterative(config: ResolvedSearchConfig, maxRounds?: number): ResolvedSearchConfig {
+  return {
+    ...config,
+    recall: {
+      ...config.recall,
+      iterativeRecallEnabled: true,
+      ...(maxRounds !== undefined ? { iterativeRecallMaxRounds: maxRounds } : {}),
+    },
+  };
+}
+
+const COMMON = ["chandelier", "candelabra", "zircon"];
+
+/**
+ * Pin the wall clock for the byte-identity comparisons: the recency boost
+ * reads Date.now() per call, so two searches a millisecond apart differ in
+ * float noise that has nothing to do with the loop. One pinned instant is
+ * the honest "same request" for a full serialized comparison.
+ */
+function withPinnedClock(run: () => Promise<void>): Promise<void> {
+  const restored = Date.now();
+  setSystemTime(restored);
+  return run().finally(() => setSystemTime());
+}
+
+beforeEach(() => {
+  ({ vault, dbPath, cleanup } = createTempVault("iterative-recall"));
+});
+afterEach(() => cleanup());
+
+describe("iterative round driver over a seeded vault", () => {
+  test("the knob off and the flag on leave the outcome byte-identical to the flag off", async () => {
+    await seed();
+    const config = makeConfig({ vault, dbPath, maxHops: 0, mmrLambda: 1, twoPassEnabled: false });
+    const query = `warehouse rotation ${COMMON.join(" ")}`;
+    const structured = structuredFor();
+    await withPinnedClock(async () => {
+      const plain = await search(config, { query, structuredQuery: structured });
+      const flagged = await search(config, { query, structuredQuery: structured, iterative: true });
+      expect(JSON.stringify(plain)).toBe(JSON.stringify(flagged));
+    });
+    const plain = await search(config, { query, structuredQuery: structured });
+    expect(plain.results.map((r) => r.path)).not.toContain("Brain/notes/chandelier.md");
+  });
+
+  test("mode on with no gaps is inert and byte-identical to mode off", async () => {
+    await seed();
+    const config = makeConfig({ vault, dbPath, maxHops: 0, mmrLambda: 1, twoPassEnabled: false });
+    const iterative = withIterative(config);
+    const query = "warehouse rotation";
+    await withPinnedClock(async () => {
+      const off = await search(config, { query });
+      const on = await search(iterative, { query, iterative: true });
+      expect(JSON.stringify(off)).toBe(JSON.stringify(on));
+    });
+    const on = await search(iterative, { query, iterative: true });
+    expect(on.results.length).toBeGreaterThan(0);
+  });
+
+  test("bounded rounds merge pools and recover chunks the first pass missed", async () => {
+    await seed();
+    const config = makeConfig({ vault, dbPath, maxHops: 0, mmrLambda: 1, twoPassEnabled: false });
+    const outcome = await search(withIterative(config), {
+      query: `warehouse rotation ${COMMON.join(" ")}`,
+      structuredQuery: structuredFor(),
+      iterative: true,
+    });
+    const paths = outcome.results.map((r) => r.path);
+    expect(paths).toContain("Brain/notes/chandelier.md");
+    expect(paths).toContain("Brain/notes/candelabra.md");
+    expect(paths).toContain("Brain/notes/zircon.md");
+  });
+
+  test("an expired deadline degrades the looped search exactly like the plain one", async () => {
+    await seed();
+    const config = {
+      ...makeConfig({ vault, dbPath, maxHops: 0, mmrLambda: 1, twoPassEnabled: false }),
+      hybridDeadlineMs: 1,
+    } as ResolvedSearchConfig;
+    const query = `warehouse rotation ${COMMON.join(" ")}`;
+    const structured = structuredFor();
+    const off = await search(config, { query, structuredQuery: structured });
+    const on = await search(withIterative(config), {
+      query,
+      structuredQuery: structured,
+      iterative: true,
+    });
+    // Same keyword-only answer, same named degradation, and no loop round.
+    expect(on.results.map((r) => r.path)).toEqual(off.results.map((r) => r.path));
+    expect(on.warnings.some((w) => w.startsWith("hybrid deadline 1ms exceeded"))).toBe(true);
+    expect(JSON.stringify(on.retrievalTrail)).toBe(JSON.stringify(off.retrievalTrail));
+    expect(pathsMissing(on, COMMON)).toBe(true);
+  });
+});
+
+function pathsMissing(
+  outcome: { results: ReadonlyArray<{ path: string }> },
+  rare: ReadonlyArray<string>,
+): boolean {
+  return rare.every((term) => !outcome.results.some((r) => r.path.includes(term)));
+}
+
+describe("runIterativeRecall (driver, over an open store)", () => {
+  /**
+   * 60 seeded relic docs plus 20 query-only ghost terms (in the query,
+   * nowhere in the corpus): the relics are recoverable, the ghosts are
+   * not, and their IDF mass holds the weighted coverage below the
+   * completeness threshold no matter how many relics the loop recovers -
+   * which is what lets these tests observe the cap and the marginal stop
+   * rather than an early coverage-complete exit.
+   */
+  const GHOSTS = Array.from({ length: 20 }, (_, i) => `wyrm${String(i + 1).padStart(2, "0")}`);
+  const wideQuery = () =>
+    `warehouse rotation ${Array.from({ length: 60 }, (_, i) => `relic${String(i + 1).padStart(2, "0")}`).join(" ")} ${GHOSTS.join(" ")}`;
+
+  test("respects the round cap and merges each round's pulls into one pool", async () => {
+    await seedWide();
+    const config = makeConfig({ vault, dbPath, maxHops: 0, mmrLambda: 1, twoPassEnabled: false });
+    const store = await Store.open(config, { mode: "read", loadVec: false });
+    try {
+      const query = wideQuery();
+      const base = runFtsQueryDetailed(store, "warehouse rotation", { limit: 10 });
+      const chunkIds = new Set(base.hits.map((h) => h.chunkId));
+      const loop = (maxRounds: number) =>
+        runIterativeRecall({
+          store,
+          query,
+          limit: 10,
+          pathPrefix: undefined,
+          timeRange: null,
+          validityWindowFor: () => null,
+          keywordHits: base.hits,
+          chunkIds: new Set(chunkIds),
+          ids: [...chunkIds],
+          maxRounds,
+          firstRoundNumber: 2,
+          isExpired: () => false,
+          nowMs: () => 0,
+        });
+      const one = loop(1);
+      expect(one.rounds).toHaveLength(1);
+      expect(one.stopReason).toBe("round_cap");
+      const two = loop(2);
+      expect(two.rounds).toHaveLength(2);
+      // The ghosts keep the coverage below the completeness threshold, so
+      // the second run stops because the cap said so, not because the
+      // gaps closed.
+      expect(two.stopReason).toBe("round_cap");
+      // Each round only ever ADDS candidates.
+      expect(two.ids.length).toBeGreaterThan(one.ids.length);
+      expect(two.keywordHits.length).toBeGreaterThanOrEqual(one.keywordHits.length);
+      for (const round of two.rounds) {
+        expect(round.round).toBe(2 + two.rounds.indexOf(round));
+        expect(round.author).toBe("deterministic");
+        expect(round.added).toBeGreaterThan(0);
+      }
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("the marginal-value stop retires rounds that stop paying", async () => {
+    await seedWide();
+    const config = makeConfig({ vault, dbPath, maxHops: 0, mmrLambda: 1, twoPassEnabled: false });
+    const store = await Store.open(config, { mode: "read", loadVec: false });
+    try {
+      const query = wideQuery();
+      const base = runFtsQueryDetailed(store, "warehouse rotation", { limit: 10 });
+      // Round 2 saturates the pull width; round 3 recovers the relic tail,
+      // a yield far below the 0.25 floor fraction of round 2's, so the
+      // extracted stop retires round 4 even though ghosts keep the
+      // coverage incomplete and the cap allows more rounds.
+      const loop = runIterativeRecall({
+        store,
+        query,
+        limit: 10,
+        pathPrefix: undefined,
+        timeRange: null,
+        validityWindowFor: () => null,
+        keywordHits: base.hits,
+        chunkIds: new Set(base.hits.map((h) => h.chunkId)),
+        ids: base.hits.map((h) => h.chunkId),
+        maxRounds: 4,
+        firstRoundNumber: 2,
+        isExpired: () => false,
+        nowMs: () => 0,
+      });
+      expect(loop.stopReason).toBe("marginal_value");
+      expect(loop.rounds).toHaveLength(2);
+      expect(loop.lastCoverage).not.toBeNull();
+      expect(loop.lastCoverage!.uncoveredRareTerms.length).toBeGreaterThan(0);
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("a zero-yield round stops the loop as no progress", async () => {
+    await seed();
+    const config = makeConfig({ vault, dbPath, maxHops: 0, mmrLambda: 1, twoPassEnabled: false });
+    const store = await Store.open(config, { mode: "read", loadVec: false });
+    try {
+      const base = runFtsQueryDetailed(store, "warehouse rotation", { limit: 10 });
+      const loop = runIterativeRecall({
+        store,
+        query: "warehouse rotation ghostterm",
+        limit: 10,
+        pathPrefix: undefined,
+        timeRange: null,
+        validityWindowFor: () => null,
+        keywordHits: base.hits,
+        chunkIds: new Set(base.hits.map((h) => h.chunkId)),
+        ids: base.hits.map((h) => h.chunkId),
+        maxRounds: 3,
+        firstRoundNumber: 2,
+        isExpired: () => false,
+        nowMs: () => 0,
+      });
+      expect(loop.rounds).toHaveLength(1);
+      expect(loop.stopReason).toBe("no_progress");
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("a complete pool needs no round and an expired clock never starts one", async () => {
+    await seed();
+    const config = makeConfig({ vault, dbPath, maxHops: 0, mmrLambda: 1, twoPassEnabled: false });
+    const store = await Store.open(config, { mode: "read", loadVec: false });
+    try {
+      const base = runFtsQueryDetailed(store, "warehouse rotation", { limit: 10 });
+      const complete = runIterativeRecall({
+        store,
+        query: "warehouse rotation",
+        limit: 10,
+        pathPrefix: undefined,
+        timeRange: null,
+        validityWindowFor: () => null,
+        keywordHits: base.hits,
+        chunkIds: new Set(base.hits.map((h) => h.chunkId)),
+        ids: base.hits.map((h) => h.chunkId),
+        maxRounds: 3,
+        firstRoundNumber: 2,
+        isExpired: () => false,
+        nowMs: () => 0,
+      });
+      expect(complete.rounds).toHaveLength(0);
+      expect(complete.stopReason).toBe("coverage_complete");
+      const expired = runIterativeRecall({
+        store,
+        query: "warehouse rotation chandelier",
+        limit: 10,
+        pathPrefix: undefined,
+        timeRange: null,
+        validityWindowFor: () => null,
+        keywordHits: base.hits,
+        chunkIds: new Set(base.hits.map((h) => h.chunkId)),
+        ids: base.hits.map((h) => h.chunkId),
+        maxRounds: 3,
+        firstRoundNumber: 2,
+        isExpired: () => true,
+        nowMs: () => 0,
+      });
+      expect(expired.rounds).toHaveLength(0);
+      expect(expired.stopReason).toBe("deadline");
+    } finally {
+      await store.close();
+    }
+  });
+});
+
+describe("iterative knob resolution", () => {
+  test("defaults off and resolves the env pair, refusing an out-of-range cap by name", () => {
+    const config = resolveSearchConfig({ vault });
+    expect(config.recall.iterativeRecallEnabled ?? false).toBe(false);
+    const saved = { ...process.env };
+    try {
+      process.env["OPEN_SECOND_BRAIN_SEARCH_ITERATIVE"] = "true";
+      process.env["OPEN_SECOND_BRAIN_SEARCH_ITERATIVE_MAX_ROUNDS"] = "4";
+      const on = resolveSearchConfig({ vault });
+      expect(on.recall.iterativeRecallEnabled).toBe(true);
+      expect(on.recall.iterativeRecallMaxRounds).toBe(4);
+      expect(ITERATIVE_RECALL_MAX_ROUNDS_DEFAULT).toBe(2);
+      expect(ITERATIVE_RECALL_MAX_ROUNDS_CAP).toBe(8);
+      // The resolver refuses rather than clamps, like every knob bound.
+      process.env["OPEN_SECOND_BRAIN_SEARCH_ITERATIVE_MAX_ROUNDS"] = "99";
+      expect(() => resolveSearchConfig({ vault })).toThrow(/search_iterative_recall_max_rounds/);
+      process.env["OPEN_SECOND_BRAIN_SEARCH_ITERATIVE_MAX_ROUNDS"] = "0";
+      expect(() => resolveSearchConfig({ vault })).toThrow(/search_iterative_recall_max_rounds/);
+    } finally {
+      for (const key of Object.keys(saved)) {
+        if (saved[key as keyof typeof saved] === undefined) delete process.env[key];
+        else process.env[key] = saved[key as keyof typeof saved]!;
+      }
+    }
+  });
+});

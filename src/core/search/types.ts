@@ -1005,6 +1005,15 @@ export interface SearchOptions {
   /** Opt-in verified evidence pack diagnostics. Omitted preserves the legacy search outcome shape. */
   readonly evidencePack?: boolean;
   /**
+   * Opt-in iterative recall loop (recall-quality wave). When true AND the
+   * operator's `iterativeRecallEnabled` knob is on, gap-driven rounds run
+   * after the (single) second pass, bounded by the round cap and the
+   * composite deadline. Absent or false leaves the pipeline byte-identical;
+   * with the knob off the flag is inert rather than an error - the knob is
+   * the operator's master switch, the flag the caller's per-query one.
+   */
+  readonly iterative?: boolean;
+  /**
    * Access recording (Time-Aware Recall & Activation Suite). When true,
    * the surfaced result paths are recorded as one activation access
    * event AFTER ranking completes - the current query's own ranking is
@@ -1519,6 +1528,26 @@ export interface ResolvedRecallConfig {
    * (non-evidence-pack) searches never retry either way.
    */
   readonly twoPassEnabled: boolean;
+  /**
+   * Bounded iterative recall loop (recall-quality wave). Off by default.
+   * When true, gap-proposal rounds may run past the single second pass:
+   * each round re-measures pool coverage, emits up to k follow-up
+   * sub-query groups (the generalized targeted-retry planner) and merges
+   * the recovered candidates, until coverage completes, a round stops
+   * paying (the extracted marginal-value stop), the round cap or the
+   * composite deadline is reached, or a round recovers nothing. Off keeps
+   * the pipeline byte-identical; the documented "at most one retry"
+   * contract of `twoPassEnabled` is untouched - the loop owns the rounds
+   * AFTER it.
+   */
+  readonly iterativeRecallEnabled?: boolean;
+  /**
+   * Round cap for the iterative recall loop: the number of gap-driven
+   * rounds it may run per query, regardless of remaining coverage gaps.
+   * Absent reads as the module default
+   * ({@link ./pipeline/iterative-recall.ts}).
+   */
+  readonly iterativeRecallMaxRounds?: number;
   /**
    * Keyword candidate-pool width as a multiple of the requested limit
    * (link-recall-intelligence, t_ae973491). Default 3 preserves the

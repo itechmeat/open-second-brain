@@ -33,6 +33,7 @@ import {
   runRelationalArm,
 } from "./pipeline/relational-arm.ts";
 import { resolveSearchRequest } from "./pipeline/request.ts";
+import { resolveIterativeRequest, runIterativeRecall } from "./pipeline/iterative-recall.ts";
 import { resolveKindFilter } from "./property-pushdown.ts";
 import { noSecondPass, runSecondPassRecall } from "./pipeline/second-pass.ts";
 import { runSemanticLane, type SemanticLaneOutcome } from "./pipeline/semantic-lane.ts";
@@ -453,7 +454,37 @@ export async function search(
       : noSecondPass({ keywordHits, ids: Array.from(allChunkIds) });
     keywordHits = retry.keywordHits;
     for (const w of retry.warnings) warnings.push(w);
-    const idsList = retry.ids;
+    let idsList = retry.ids;
+
+    // Bounded iterative recall (recall-quality wave): with the caller's
+    // per-query flag and the operator's knob both on, gap-proposal rounds
+    // run past the single second pass over the same pool-merging
+    // discipline, bounded by the round cap and the composite deadline the
+    // second pass itself answers to. The loop is deterministic and
+    // model-free; the caller-executed decider round rides this seam too
+    // (decider-step.ts). Flag absent, or knob off, this block is never
+    // entered and the pipeline is byte-identical.
+    const iterativeRequest = resolveIterativeRequest(opts, effectiveConfig);
+    if (iterativeRequest !== null && !deadlineExpired(deadline)) {
+      const loop = runIterativeRecall({
+        store,
+        query,
+        limit,
+        pathPrefix,
+        ...(kind !== undefined ? { kind } : {}),
+        ...(pushdown !== null ? { pushdown } : {}),
+        timeRange,
+        validityWindowFor: eventTime.validityWindowFor,
+        keywordHits,
+        chunkIds: allChunkIds,
+        ids: idsList,
+        maxRounds: iterativeRequest.maxRounds,
+        firstRoundNumber: retry.secondPass !== undefined ? 3 : 2,
+        isExpired: () => deadlineExpired(deadline),
+      });
+      keywordHits = loop.keywordHits;
+      idsList = loop.ids;
+    }
 
     if (idsList.length === 0) {
       // Nothing to rank, so this answer owes an explanation: the lanes

@@ -21,7 +21,7 @@ import {
 import { coverageOverChunks } from "../evidence-verification.ts";
 import type { PropertyPushdown } from "../property-pushdown.ts";
 import { runFtsQueryDetailed } from "../fts.ts";
-import type { SafeKeywordOutcome } from "../fts.ts";
+import type { SafeKeywordOutcome } from "../fts-safety.ts";
 import { semanticPoolSize } from "../semantic-phase.ts";
 import { eventTimeInRange, type ValidityWindow } from "../validity.ts";
 import type { KeywordHit, Store } from "../store.ts";
@@ -94,12 +94,13 @@ export function poolCoverageForRetry(input: {
   readonly validityWindowFor: (path: string) => ValidityWindow | null;
 }) {
   let coverageIds = input.ids;
-  if (input.timeRange !== null) {
+  const timeRange = input.timeRange;
+  if (timeRange !== null) {
     const hydratedForCoverage = input.store.hydrateChunks(input.ids);
     coverageIds = input.ids.filter((chunkId) => {
       const chunk = hydratedForCoverage.get(chunkId);
       if (chunk === undefined) return false;
-      return eventTimeInRange(input.validityWindowFor(chunk.path), chunk.mtime, input.timeRange);
+      return eventTimeInRange(input.validityWindowFor(chunk.path), chunk.mtime, timeRange);
     });
   }
   return coverageOverChunks(input.store, input.query, coverageIds);
