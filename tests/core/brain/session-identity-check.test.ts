@@ -40,7 +40,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, posix } from "node:path";
+import { join, relative, sep } from "node:path";
 
 import { lexSource } from "../../helpers/source-lexer.ts";
 import { emitGateTelemetry } from "../../../src/core/brain/gate-telemetry.ts";
@@ -390,7 +390,7 @@ function srcModulePaths(): ReadonlyArray<string> {
         walk(abs);
         continue;
       }
-      if (name.endsWith(".ts")) out.push(posix.relative(SRC_ROOT, abs));
+      if (name.endsWith(".ts")) out.push(relative(SRC_ROOT, abs).split(sep).join("/"));
     }
   };
   walk(SRC_ROOT);
