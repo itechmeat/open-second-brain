@@ -11,6 +11,10 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import {
+  benchEmbeddingSignature,
+  benchVectorCacheKey,
+} from "../../../src/core/bench/embedding-cache.ts";
 import { parseBenchFixture } from "../../../src/core/bench/fixture.ts";
 import { benchSearchConfig, runMemoryBench } from "../../../src/core/bench/phases.ts";
 import {
@@ -333,7 +337,7 @@ describe("the embeddings capability path", () => {
     expect(receipt).toBeDefined();
     expect(receipt!.provider).toBe("local");
     expect(receipt!.model).toBe(LOCAL_EMBEDDING_MODEL);
-    expect(receipt!.signature).toBe(`local:${LOCAL_EMBEDDING_MODEL}:${LOCAL_DEFAULT_DIMENSION}`);
+    expect(receipt!.signature).toBe(`local:${LOCAL_EMBEDDING_MODEL}:${LOCAL_DEFAULT_DIMENSION}::`);
     expect(receipt!.planned).toBeGreaterThan(0);
     expect(receipt!.cache_hits).toBe(0);
     expect(receipt!.cache_misses).toBe(receipt!.planned);
@@ -356,6 +360,20 @@ describe("the embeddings capability path", () => {
       expect(cache.entries[key]!.length).toBe(LOCAL_DEFAULT_DIMENSION);
     }
   }, 30_000);
+
+  test("vector cache keys differ when only the prefix pins differ", () => {
+    // The stored bytes depend on the prefixes the provider prepends, so
+    // two arms that differ only in prefix pins must never share an entry.
+    const base = benchEmbeddingSignature("local", "m", 384, "", "");
+    const prefixed = benchEmbeddingSignature("local", "m", 384, "search: ", "passage: ");
+    expect(base).not.toBe(prefixed);
+    expect(benchVectorCacheKey(base, "same text")).not.toBe(
+      benchVectorCacheKey(prefixed, "same text"),
+    );
+    // Case and surrounding whitespace canonicalize away, as everywhere
+    // else the signature tokens are compared.
+    expect(benchEmbeddingSignature("Local", "m", 384, "", "")).toBe(base);
+  });
 
   test("a second arm reuses the shared cache and stores byte-identical vectors", async () => {
     const t0 = new Date("2026-06-01T00:00:00.000Z");

@@ -52,21 +52,31 @@ function canonicalSignatureToken(raw: string): string {
 }
 
 /**
- * The bench's own rendering of the embedding identity triple
- * `<provider>:<model>:<dimension>`, canonicalized exactly like the
- * store's identity so cache keys match across runs. Rendered here
+ * The bench's own rendering of the embedding identity: the
+ * `<provider>:<model>:<dimension>` triple plus the resolved
+ * query/passage prefixes, canonicalized exactly like the store's
+ * identity so cache keys match across runs. Rendered here
  * rather than imported because the module that exports the shared
  * renderer also carries a token estimator, and the bench pins exactly
  * one estimator - the census is on the import path.
  */
-function benchEmbeddingSignature(
+export function benchEmbeddingSignature(
   provider: string,
   model: string | null,
   dimension: number | null,
+  queryPrefix: string,
+  passagePrefix: string,
 ): string {
   const modelField = model === null ? SIGNATURE_SENTINEL : canonicalSignatureToken(model);
   const dimensionField = dimension === null ? SIGNATURE_SENTINEL : String(dimension);
-  return `${canonicalSignatureToken(provider)}:${modelField}:${dimensionField}`;
+  // The prefixes join the signature because the stored bytes depend on
+  // them as much as on the model: the provider input is the prefixed
+  // text, and BenchPinnedKnobs.semantic can pin either prefix. Two arms
+  // that differ only in prefix pins must never share an entry.
+  return (
+    `${canonicalSignatureToken(provider)}:${modelField}:${dimensionField}:` +
+    `${canonicalSignatureToken(queryPrefix)}:${canonicalSignatureToken(passagePrefix)}`
+  );
 }
 
 /** Cache file shared by every bench run under one runs directory. */
@@ -181,6 +191,8 @@ export async function embedBenchVaultIndex(opts: {
     config.semantic.provider,
     model,
     provider.dimension ?? null,
+    config.semantic.queryPrefix ?? "",
+    config.semantic.passagePrefix ?? "",
   );
   const store = await Store.open(config, { mode: "write" });
   try {
