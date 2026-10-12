@@ -543,6 +543,52 @@ describe("typed floor-violation infeasibility", () => {
     expect(coverage.diagnostics.dropped_turn_ids).toEqual(["t4"]);
   });
 
+  test("requiredChars speaks the spender's unit: astral turns are priced in code points", () => {
+    // The infeasibility diagnostics must price the rank-ordered selection
+    // the way applyCharBudget spends it - code points, not UTF-16 units -
+    // or the retry bound it reports is not the honest one for astral
+    // content: the UTF-16 arithmetic overcounts every astral character
+    // twice and reports a bound above the real requirement.
+    const emojiText = "\u{1F600}".repeat(200); // 400 UTF-16 units, 200 code points
+    importSessionRecall(vault, {
+      sessionId: "astral-floor-seg",
+      turns: [
+        turn("t1", "user", emojiText, 1),
+        turn("t2", "assistant", emojiText, 2),
+        turn("t3", "user", "short floor-topic evidence", 3),
+        turn("t4", "assistant", "more short floor-topic evidence", 4),
+      ],
+      summaryGroupSize: 2,
+      createdAt: "2026-07-05T10:00:00.000Z",
+    });
+    const serialized = listSessionRawTurns(vault, "astral-floor-seg").map((t) => JSON.stringify(t));
+    const utf16Requirement = serialized[0]!.length + serialized[1]!.length + serialized[2]!.length;
+    const codePointRequirement =
+      [...serialized[0]!].length + [...serialized[1]!].length + [...serialized[2]!].length;
+    expect(utf16Requirement).toBeGreaterThan(codePointRequirement);
+
+    let probe: SessionCoverageInfeasibleError | null = null;
+    try {
+      coverageSessionRecall(vault, { sessionId: "astral-floor-seg", charBudget: 1 });
+    } catch (err) {
+      probe = err as SessionCoverageInfeasibleError;
+    }
+    expect(probe).toBeInstanceOf(SessionCoverageInfeasibleError);
+    expect(probe!.requiredChars).toBe(codePointRequirement);
+    // The bound stays exact: at it the floor holds, one below it fails.
+    const at = coverageSessionRecall(vault, {
+      sessionId: "astral-floor-seg",
+      charBudget: probe!.requiredChars,
+    });
+    expect(at.turns.map((t) => t.turn_id)).toEqual(["t1", "t2", "t3"]);
+    expect(() =>
+      coverageSessionRecall(vault, {
+        sessionId: "astral-floor-seg",
+        charBudget: probe!.requiredChars - 1,
+      }),
+    ).toThrow(SessionCoverageInfeasibleError);
+  });
+
   test("requiredChars is the exact retry bound: at it, no error; one below, the error", () => {
     importLineageThread();
     let requiredChars: number;

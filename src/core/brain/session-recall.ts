@@ -781,12 +781,13 @@ interface FloorRequirement {
    */
   readonly topRanks: ReadonlyArray<number>;
   /**
-   * Characters the rank-ordered selection consumes through the deepest
-   * floor-top rank: the budget that GUARANTEES every floor topic's top
-   * turn is kept (every prefix of it fits, and the floor's own top-turn
-   * sum does not - a higher-ranked turn of another topic can spend the
-   * budget before a floor topic's top turn is ever reached). This is the
-   * honest retry bound the floor guard reports.
+   * Code points the rank-ordered selection consumes through the deepest
+   * floor-top rank - the unit {@link applyCharBudget} spends (not UTF-16
+   * units), so the reported budget that GUARANTEES every floor topic's
+   * top turn is kept is the spender's own unit (every prefix of it fits,
+   * and the floor's own top-turn sum does not - a higher-ranked turn of
+   * another topic can spend the budget before a floor topic's top turn is
+   * ever reached). This is the honest retry bound the floor guard reports.
    */
   readonly requiredChars: number;
 }
@@ -808,10 +809,13 @@ function floorRequirement(
     const rank = topRank.get(topic.key);
     if (rank !== undefined) topRanks.push(rank);
   }
+  // Priced in code points, the unit the real selection spends.
   let requiredChars = 0;
   if (topRanks.length > 0) {
     const deepest = Math.max(...topRanks);
-    for (let index = 0; index <= deepest; index += 1) requiredChars += serialized[index]!.length;
+    for (let index = 0; index <= deepest; index += 1) {
+      requiredChars += [...serialized[index]!].length;
+    }
   }
   return { topRanks, requiredChars };
 }
