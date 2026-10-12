@@ -501,6 +501,20 @@ export async function search(
     // (decider-step.ts). Flag absent, or knob off, this block is never
     // entered and the pipeline is byte-identical.
     let iterativeMarker: SearchOutcomeIterative | null = null;
+    if (
+      iterativeRequest !== null &&
+      iterativeRequest.phase === "commit" &&
+      deadlineExpired(deadline)
+    ) {
+      // A commit whose clock died before the block is refused by name,
+      // exactly like a commit against moved state: silence here would
+      // spend nothing it named and return a plain answer the caller
+      // would read as its commit's outcome.
+      throw new SearchError(
+        "INVALID_INPUT",
+        "iterative commit refused: no decider round is pending for this query state; run the plan phase again",
+      );
+    }
     if (iterativeRequest !== null && !deadlineExpired(deadline)) {
       const loop = runIterativeRecall({
         store,
