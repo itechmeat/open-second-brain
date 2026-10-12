@@ -87,6 +87,16 @@ export interface IterativeLoopInput {
   readonly keywordHits: KeywordHit[];
   /** The candidate id set; each round adds to it in place. */
   readonly chunkIds: Set<number>;
+  /**
+   * Judges which pool ids the decider pause may name: the caller's reach
+   * rule applied to the pause pool before the envelope is built, so
+   * pool_ids never names a candidate the boundary would withhold.
+   * Without it the gap between pool_ids and the post-reach trail would
+   * publish how many withheld pages matched - the existence oracle
+   * FilteredPool.preVisibility exists to close. Absent (local reach):
+   * the pool passes through unchanged.
+   */
+  readonly filterReachableIds?: (ids: ReadonlyArray<number>) => ReadonlyArray<number>;
   readonly ids: ReadonlyArray<number>;
   readonly maxRounds: number;
   /** Round number the loop's first round takes (2, or 3 after a fired second pass). */
@@ -235,6 +245,9 @@ export function runIterativeRecall(input: IterativeLoopInput): IterativeLoopOutc
   // model round. buildDeciderStep re-checks the same fire gate the block
   // above reads, so the two can never drift apart silently.
   let pause: DeciderPause | null = null;
+  const reachablePoolIds = input.filterReachableIds
+    ? input.filterReachableIds(Array.from(input.chunkIds))
+    : Array.from(input.chunkIds);
   if (
     stop !== "coverage_complete" &&
     stop !== "no_sub_query" &&
@@ -242,13 +255,14 @@ export function runIterativeRecall(input: IterativeLoopInput): IterativeLoopOutc
     !input.isExpired() &&
     lastCoverage !== null &&
     input.chunkIds.size > 0 &&
+    reachablePoolIds.length > 0 &&
     planSubQueryGroups(lastCoverage, 1).fire
   ) {
     pause = buildDeciderStep({
       query: input.query,
       round: input.firstRoundNumber + rounds.length,
       coverage: lastCoverage,
-      poolIds: Array.from(input.chunkIds),
+      poolIds: reachablePoolIds,
     });
   }
   return Object.freeze({

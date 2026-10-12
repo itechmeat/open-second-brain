@@ -21,6 +21,7 @@ import { runFtsQueryDetailed } from "../../../src/core/search/fts.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { resolveSearchConfig } from "../../../src/core/search/index.ts";
 import { search } from "../../../src/core/search/search.ts";
+import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 import type {
   ResolvedSearchConfig,
@@ -145,6 +146,67 @@ describe("iterative round driver over a seeded vault", () => {
     expect(paths).toContain("Brain/notes/chandelier.md");
     expect(paths).toContain("Brain/notes/candelabra.md");
     expect(paths).toContain("Brain/notes/zircon.md");
+  });
+
+  test("the decider pause pool never names a page the reach rule withholds", async () => {
+    // The private twin ranks into the seeded pool (it matches the query
+    // terms better than its public sibling), so at local reach the pause
+    // names it. At remote reach the same call must name no withheld
+    // path: pool_ids is post-reach, so the gap between it and the trail
+    // can never count a withheld match - the existence oracle
+    // FilteredPool.preVisibility exists to close.
+    await seed();
+    writeMd(
+      vault,
+      "Brain/notes/private-chandelier.md",
+      "---\nvisibility: private\n---\n\n# Private chandelier\n\nChandelier handoff log, sealed wing.\n",
+    );
+    await indexVault(makeConfig({ vault, dbPath, maxHops: 0, mmrLambda: 1 }));
+    const config = makeConfig({ vault, dbPath, maxHops: 0, mmrLambda: 1, twoPassEnabled: false });
+    // Ghost terms the corpus never matches hold the weighted coverage
+    // below the completeness threshold at both reaches, so the loop
+    // always pauses instead of finishing coverage-complete.
+    const query = `chandelier handoff wyrmshade velkriss`;
+    const structured: StructuredRecallQueryDocument = Object.freeze({
+      intent: null,
+      lex: Object.freeze({
+        include: Object.freeze(["chandelier", "handoff"]) as ReadonlyArray<string>,
+        exclude: Object.freeze([]) as ReadonlyArray<string>,
+      }),
+      vec: Object.freeze(["chandelier handoff"]) as ReadonlyArray<string>,
+      hyde: Object.freeze([]) as ReadonlyArray<string>,
+    });
+
+    const poolPathsAt = async (reach: (typeof TRANSPORT_REACH)["remote" | "local"]) => {
+      const outcome = await search(withIterative(config), {
+        query,
+        structuredQuery: structured,
+        iterative: true,
+        transportReach: reach,
+      });
+      const plan = outcome.iterative;
+      if (plan === undefined || plan.phase !== "needs-llm-step") {
+        throw new Error(`expected a decider pause at reach ${reach}`);
+      }
+      const store = await Store.open(config, { mode: "read", loadVec: false });
+      const paths = [...(await store.hydrateChunks([...plan.poolIds])).values()]
+        .map((c) => c.path)
+        .sort();
+      store.close();
+      return paths;
+    };
+
+    const localPaths = await poolPathsAt(TRANSPORT_REACH.local);
+    expect(localPaths).toContain("Brain/notes/private-chandelier.md");
+
+    const remotePaths = await poolPathsAt(TRANSPORT_REACH.remote);
+    expect(remotePaths).not.toContain("Brain/notes/private-chandelier.md");
+    // The filter removes exactly the withheld candidates; every path a
+    // local pause may name is still eligible, and none appears twice.
+    expect(new Set(remotePaths).size).toBe(remotePaths.length);
+    expect(
+      remotePaths.every((p) => localPaths.includes(p) || p === "Brain/notes/private-chandelier.md"),
+    ).toBe(true);
   });
 
   test("an expired deadline degrades the looped search exactly like the plain one", async () => {

@@ -59,7 +59,7 @@ import type { RetrievalDegradationSink } from "./retrieval-trail.ts";
 import { RETRIEVAL_DEGRADATION, noteDegradation } from "./retrieval-trail.ts";
 import { indexAgeSeconds, maybeFreshenIndex } from "./freshen.ts";
 import { LAST_INDEXED_AT_STATE_KEY } from "./store/state.ts";
-import type { FrontmatterCache } from "./result-filters.ts";
+import { isPathReadableAtReach, type FrontmatterCache } from "./result-filters.ts";
 import { Store } from "./store.ts";
 import { SearchError } from "./types.ts";
 import type {
@@ -516,6 +516,29 @@ export async function search(
         maxRounds: iterativeRequest.maxRounds,
         firstRoundNumber: retry.secondPass !== undefined ? 3 : 2,
         isExpired: () => deadlineExpired(deadline),
+        ...(opts.transportReach !== undefined && opts.transportReach !== "local"
+          ? {
+              filterReachableIds: (ids: ReadonlyArray<number>) => {
+                const hydrated = store.hydrateChunks(ids);
+                const indexed = store.indexedVisibilityByPaths(
+                  [...hydrated.values()].map((c) => c.path),
+                );
+                return ids.filter((id) => {
+                  const chunk = hydrated.get(id);
+                  return (
+                    chunk !== undefined &&
+                    isPathReadableAtReach(
+                      effectiveConfig.vault,
+                      chunk.path,
+                      opts.transportReach!,
+                      frontmatterCache,
+                      indexed.get(chunk.path),
+                    )
+                  );
+                });
+              },
+            }
+          : {}),
       });
       keywordHits = loop.keywordHits;
       idsList = loop.ids;
