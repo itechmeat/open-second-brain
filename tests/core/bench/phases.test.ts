@@ -7,7 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -258,6 +258,26 @@ describe("runMemoryBench", () => {
     expect(resumed.run_id).toBe(first.run_id);
     expect(resumed.quality).toEqual(first.quality);
   }, 30_000);
+
+  test("an out-of-range recallFloor is refused by name before any run starts", async () => {
+    // Each of these used to finish a FULL run: the floor routes into the
+    // shared surfacing calculator, whose own contract refuses out-of-range
+    // values per question, so the report came back complete with a
+    // retrievalError on every proactive decision - paid after ingest and
+    // index, instead of one named error up front (pr-250 review, L9).
+    for (const floor of [-1, 1.5, Number.POSITIVE_INFINITY, Number.NaN]) {
+      await expect(
+        runMemoryBench({ fixture: FIXTURE, runsDir, recallFloor: floor }),
+      ).rejects.toThrow(/recallFloor .* is outside \[0, 1\]/);
+    }
+    // Refused before any run state exists.
+    expect(readdirSync(runsDir)).toHaveLength(0);
+    // The interval's ends are legal calibration points: zero is the
+    // maximally permissive sweep arm, one admits only a perfect match.
+    await expect(
+      runMemoryBench({ fixture: FIXTURE, runsDir, recallFloor: 1 }),
+    ).resolves.toBeDefined();
+  }, 60_000);
 });
 
 describe("the embeddings capability path", () => {

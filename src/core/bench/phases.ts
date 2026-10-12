@@ -200,6 +200,22 @@ export function benchSearchConfig(
 }
 
 export async function runMemoryBench(opts: BenchRunOptions): Promise<BenchReport> {
+  // Refused BEFORE any run state exists (pr-250 review, L9): the floor
+  // routes into the shared surfacing calculator, whose own contract
+  // refuses out-of-range values per question - so an out-of-range floor
+  // used to buy a full run whose every proactive decision was a
+  // retrievalError, paid after ingest and index, instead of this one
+  // named error. The bound is the calculator's own: a finite number in
+  // [0, 1]. Zero stays legal - the replay suite's permissive sweep arm
+  // uses it as the maximally permissive calibration point.
+  if (
+    opts.recallFloor !== undefined &&
+    !(Number.isFinite(opts.recallFloor) && opts.recallFloor >= 0 && opts.recallFloor <= 1)
+  ) {
+    throw new Error(
+      `bench run refused: recallFloor ${opts.recallFloor} is outside [0, 1]; the admission floor must be a finite number in the unit interval`,
+    );
+  }
   const pinnedKnobs = opts.pinnedKnobs ?? DEFAULT_BENCH_KNOB_PIN;
   const run: BenchRunHandle =
     opts.resume !== undefined
