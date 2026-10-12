@@ -12,6 +12,10 @@ import { join } from "node:path";
 import { SEARCH_TOOLS } from "../../src/mcp/search-tools.ts";
 import { indexVault, resolveSearchConfig } from "../../src/core/search/index.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import { fakeCredential } from "../helpers/fake-credentials.ts";
+
+/** A round commit token shared by the partition probes; assembled from parts. */
+const COMMIT_TOKEN = fakeCredential("drt", "-3-abc");
 
 let vault: string;
 let configHome: string;
@@ -116,13 +120,13 @@ describe("brain_search iterative cache keys", () => {
     const commit = await keyFor({
       query: "quick fox",
       iterative: true,
-      iterativeToken: "drt-3-abc",
+      iterativeToken: COMMIT_TOKEN,
       iterativePayload: { evidence: [1], subQueries: ["q"] },
     });
     const commitOtherPayload = await keyFor({
       query: "quick fox",
       iterative: true,
-      iterativeToken: "drt-3-abc",
+      iterativeToken: COMMIT_TOKEN,
       iterativePayload: { evidence: [2], subQueries: ["q"] },
     });
     // Three disjoint rows: plain, plan, commit - and a different payload
