@@ -13,7 +13,7 @@ Open Second Brain 1.82.0 is the recall-quality release: it widens what recall ca
 
 - **A bounded iterative recall loop behind `brain_search`'s plan/commit round-trip.** With the operator knob `search_iterative_recall_enabled` on (`OPEN_SECOND_BRAIN_SEARCH_ITERATIVE`; the round cap `search_iterative_recall_max_rounds` / `OPEN_SECOND_BRAIN_SEARCH_ITERATIVE_MAX_ROUNDS` defaults to 2 and clamps to 8), a query marked `iterative: true` runs gap-driven rounds past the single second pass: each round re-measures pool coverage, emits follow-up sub-queries from the uncovered rare-term groups, and merges what they recover into the same ranked pool, stopping on coverage completeness, a round that recovers nothing, the marginal-value stop extracted from the retrieval advisor, the round cap or the composite deadline. The deterministic k-group coverage planner is the always-available floor - the mode is useful with no model in the loop - and the decider rounds are additive: when measurable gaps survive the deterministic budget, the call pauses with an `iterative` marker at `phase: "needs-llm-step"` carrying the decider envelope, the candidate pool ids, the uncovered gaps and an opaque single-use round token, and the caller re-invokes with `iterative_token` plus `iterative_payload` (`{evidence, subQueries}`), validated in full before any pull runs - unknown chunk ids, oversized or over-limit sub-queries, sub-queries carrying no significant terms, a replayed token (`token_used`), a mismatched one (`token_mismatch`) and a fully-formed commit arriving while the loop is disabled are typed refusals surfaced as caller errors. The round-trip runs on the single-vault path only: any `iterative` field combined with `global: true` is refused by name at the argument layer, so no iterative field ever reaches the federated legs. Every loop that ran at least one round - a committed call, or a plain final - answers with the same marker at `phase: "final"`, carrying the per-round records (terms, groups, added, elapsed, and whether the deterministic floor or the decider authored the sub-queries) and the `stop_reason` (`coverage_complete`, `no_sub_query`, `no_progress`, `round_cap`, `marginal_value`, `deadline`, `decider_round`); with the knob off, and on any call the mode did nothing for, the response and the query-cache keys are byte-identical, because the cache suffix that separates iterative rows exists only in the opt-in mode.
 - **Coverage-first session recall on `brain_session_grep`, with CLI parity.** `operation: "coverage"` replaces the grep's term matching with thread coverage over the same lineage-scoped record set: facets are the thread's own - distinct mined entity keys and depth-1 summary clusters, never a word list - and fan out under the adaptive topic budget `clamp(distinct facets, floor 12, cap 16)`, the selection returns in chronological order under the required `char_budget` beside recomputable diagnostics that report the realized topic count honestly, and `entity_key` optionally seeds the fan-out from the `session_entity_mention` rows an import already mined - no new mining, no new record kind - with an entity no record mentions refused by name instead of answered with an empty result. The operations keep their arguments to themselves: `char_budget` under `match`, and `query`, `since`, `before`, `limit`, `snippet_chars`, `include_raw` and `raw_budget_chars` under `coverage`, are each refused as not applicable. A budget that cannot hold the floor-weighted selection is a typed infeasibility mapped to `INVALID_PARAMS`, naming the requested topics, the kept ones and the required characters - a retry bound, never a silent truncation, with the floor enforced again after the real budget pass so a crowded-out floor topic cannot slip through the pre-check. `brain_session_describe` accepts `topics: true`, adding the `topic_report` the coverage operation fans out under (detected facets, the budget, the realized topics); without it the response is byte-identical. The CLI mirrors both surfaces: `o2b brain session-grep --operation coverage --char-budget <n> [--entity-key <key>]` and `o2b brain session-describe --topics`, with the same refusals.
-- **A bench suite registry, with LongMemEval and surfacing-replay suites.** `o2b brain bench memory --suite <name>` resolves through a registry mapping each suite name to its loader plus a declared capability set (`{embeddings: boolean}`), so what a suite may do is explicit in code rather than flag-implied; omitting `--suite` stays the byte-identical default path. `--suite longmemeval` adds the benchmark the memory field reports recall_all@5 on: a fail-fast parser over the official dataset shape with named parse errors, a converter into the unchanged bench fixture that drops abstention questions at conversion with the count recorded and joins gold sessions by direct id membership (an unknown id is a named parse error, and `expected_text` is never set, so nothing silently scores nothing), a committed sample fixture certifying CI with the full dataset an operator-supplied path that is never downloaded at run time, and the strict named report family `longmemeval: {recall_all_at_5, abstention_excluded}` beside the untouched quality, latency and context_cost families. The judge glue reuses `bench_judge_cmd`: when the suite provides them, the stdin payload's questions carry `question`, `answer` and `gold` beside the usual result fields, and the official prompt text ships as module constants pinned to a named upstream revision, so the external command stays a dumb model call; suites without judge input keep the payload byte for byte. Embeddings are a per-suite capability: the semantic lane is reachable only for a suite that declared it, the index builds through the apply-gated embedding path with the spend plan surfaced and never silently bypassed, a shared vector cache under the runs dir keyed by provider, model and text hash lets both arms compare byte-identical vectors, and arming the pin is an API-only move this wave - the CLI exposes no knob or floor flag. `--suite surfacing-replay` replays a recorded prompt corpus - a committed session fixture, or a vault's own session turns converted to the same shape - through the shipped decision core and scores the graded surfacing gate's know_to_ask and false_fire rates under the same denominations the proactive-recall metric uses, with per-turn `injected_tokens`, checkpoint and resume, and the abstain-costs-zero invariant asserted: the calibration becomes a measured number a re-run re-measures.
+- **A bench suite registry, with LongMemEval and surfacing-replay suites.** `o2b brain bench memory --suite <name>` resolves through a registry mapping each suite name to its loader plus a declared capability set (`{embeddings: boolean}`), so what a suite may do is explicit in code rather than flag-implied; omitting `--suite` stays the byte-identical default path. `--suite longmemeval` adds the benchmark the memory field reports recall_all@5 on: a fail-fast parser over the official dataset shape with named parse errors, a converter into the unchanged bench fixture that drops abstention questions at conversion with the count recorded and joins gold sessions by direct id membership (an unknown id is a named parse error, and `expected_text` is never set, so nothing silently scores nothing), a committed sample fixture certifying CI with the full dataset an operator-supplied path that is never downloaded at run time, and the strict named report family `longmemeval: {recall_all_at_5, abstention_excluded}` beside the untouched quality, latency and context_cost families. The judge glue reuses `bench_judge_cmd`: when the suite provides them, the stdin payload's questions carry `question`, `answer`, `gold` and the evidence the run actually injected (path plus a bounded excerpt per retrieved note, in rank order) beside the usual result fields, and the judge prompts are house-written in the spirit of upstream's `evaluate_qa.py` rather than transcribed from it, so the external command stays a dumb model call; suites without judge input keep the payload byte for byte. Embeddings are a per-suite capability: the semantic lane is reachable only for a suite that declared it, the index builds through the apply-gated embedding path with the spend plan surfaced and never silently bypassed, a shared vector cache under the runs dir keyed by provider, model, dimension, prefixes and text hash lets both arms compare byte-identical vectors, and `--pin <json>` plus `--recall-floor <n>` expose pinning and the admission floor from the CLI. `--suite surfacing-replay` replays a recorded prompt corpus - a committed session fixture in the replay shape, carrying each prompt's recorded predecessor for the structural gate - through the shipped decision core and scores the graded surfacing gate's know_to_ask and false_fire rates under the same denominations the proactive-recall metric uses, with per-turn `injected_tokens`, checkpoint and resume, and the abstain-costs-zero invariant asserted: the calibration becomes a measured number a re-run re-measures.
 - **Bench runs carry their configuration in the run identity.** A `SearchConfigOverrides`-shaped knob pin applies last through `resolveSearchConfig` and folds into the checkpoint hash beside the fixture hash and the proactive-recall admission floor, so a resumed run that would mix configurations fails the identity guard by name instead of silently comparing two pipelines, and two runs with different pins get different run ids. The default pin is the semantic-off override the harness always applied, so locomo report numbers stay identical; the one-time consequence is that in-flight runs started before this change fail the resume guard loudly and restart.
 
 ### Changed
@@ -3274,7 +3274,7 @@ storage model stays vault-first Markdown and JSONL.
 ### Added
 
 - **Native Grok Build (xAI `grok`) integration.** `o2b install --target grok
---apply` registers the two Open Second Brain MCP servers in
+  --apply` registers the two Open Second Brain MCP servers in
   `${GROK_HOME:-~/.grok}/config.toml` under `[mcp_servers.*]` (grok's
   highest-priority MCP source) and writes lifecycle hooks to
   `${GROK_HOME:-~/.grok}/hooks/open-second-brain.json` (grok's native hooks
@@ -3344,7 +3344,7 @@ logging reminder.
 - **Bundled opencode plugin** (`plugins/opencode/open-second-brain.ts`):
   a single zero-dependency file installed into
   `~/.config/opencode/plugins/` by `o2b install --target opencode
---apply`. On each chat request it appends the rendered
+  --apply`. On each chat request it appends the rendered
   `Brain/active.md` digest to the system prompt (via the same
   `o2b-hook active-inject` shim the Claude Code and Codex hook layers
   use, cached with a 5 minute TTL); on `session.idle` /
@@ -3405,7 +3405,7 @@ logging reminder.
   finding ids through existing primitives (preference merge, claim
   append, targeted recompile, archive-never-delete) with an audit
   record per run. New `brain_hygiene` MCP tool and `o2b brain hygiene
-scan|apply` verbs.
+  scan|apply` verbs.
 - **Advisory conflict resolution** through the shared external-command
   bridge: when the operator configures `hygiene.resolver_cmd`, contested
   truth slots get supersede / merge / flag verdicts with recorded
@@ -3438,7 +3438,7 @@ scan|apply` verbs.
   The adapter now merges the two Open Second Brain servers into
   `~/.config/opencode/opencode.json` under the `mcp` key using
   opencode's entry schema (`{type: "local", command: [bin, ...args],
-environment, enabled: true}`), honouring `XDG_CONFIG_HOME`. Apply
+  environment, enabled: true}`), honouring `XDG_CONFIG_HOME`. Apply
   also migrates the stale `~/.config/opencode/mcp.json` written by
   earlier releases: the two Open Second Brain keys are removed, and the
   file is deleted when nothing else remains.
@@ -3618,7 +3618,7 @@ break with a migration table in `docs/updating.md`.
   advertised list and the callable surface are the same set. Calling
   a removed name answers an INVALID_PARAMS tombstone naming the
   replacement (`brain_digest was removed in 1.0.0; call brain_brief
-with view="digest"`). Full table in `docs/updating.md`.
+  with view="digest"`). Full table in `docs/updating.md`.
 
 ### Added
 
@@ -3638,7 +3638,7 @@ with view="digest"`). Full table in `docs/updating.md`.
   task results classify `timed_out`; persisted error strings cap at
   4096 bytes with an explicit marker.
 - **Staged dream pipeline.** `o2b brain dream stage | validate
-<run-id> | apply <run-id> | discard <run-id> | list` (MCP
+  <run-id> | apply <run-id> | discard <run-id> | list` (MCP
   `brain_dream` gains an `action` parameter - no new tools). Stage
   persists a reviewable bundle under `Brain/dream/staged/<run-id>/`
   (manifest with schema `o2b.dream-stage.v1`, human REPORT.md,
@@ -3916,10 +3916,10 @@ MCP tool count grows 66 -> 69.
   independent sources materialize a `value_conflict` with
   `resolution: ask_user` - never auto-resolved - while a later value
   outside the window supersedes silently. `o2b brain truth
-ingest|slots|conflicts|aggregate|collisions|sweep` and the
+  ingest|slots|conflicts|aggregate|collisions|sweep` and the
   `brain_truth` MCP tool are the operator surface.
 - **Atomic-fact decomposition and the quantity family**. `o2b brain
-facts decompose` deterministically splits session text into discrete
+  facts decompose` deterministically splits session text into discrete
   assertions via markdown structure (heading paths, list items,
   sentence boundaries with an abbreviation guard) anchored to
   canonical entities - no model calls; `--ingest` bridges
@@ -4000,7 +4000,7 @@ ranks bit-identically. MCP tool count is unchanged (66).
   and antipatterns never decay, projects ~120d, handoffs/sessions
   ~30d, notes 60d. Reinforcement is miss-driven: a query-cache hit
   returns early and records nothing. `o2b brain activation
-status|sweep` inspects and compacts the event store
+  status|sweep` inspects and compacts the event store
   (`search_activation_enabled` is the kill switch).
 - **Co-access reinforcement edges**. Documents habitually surfaced
   together gain pairwise counts in the same fold; when one appears in
@@ -4027,7 +4027,7 @@ status|sweep` inspects and compacts the event store
   zero-candidate first pass (implicit-AND too strict) triggers exactly
   one broadened OR retry; recovered results carry a `second_pass`
   reason and the envelope reports `secondPass: {triggered, reason,
-added}` (`search_two_pass_enabled` is the kill switch).
+  added}` (`search_two_pass_enabled` is the kill switch).
 
 ### Changed
 
@@ -4118,8 +4118,8 @@ stays at 65 tools.
   caller-supplied sha against the full-40-hex grammar before it can
   reach git.
 - **Git history query** (`o2b brain git find [text] [--file F]
-[--author A] [--since/--until] [--repo K]`, `o2b brain git
-status`). Answers "why and when did this file change" and "which
+  [--author A] [--since/--until] [--repo K]`, `o2b brain git
+  status`). Answers "why and when did this file change" and "which
   release carried it" purely from the store - no live git on the
   query path, so the answers survive checkout deletion. A
   deterministic per-repo digest note (releases, recent commits, hot
@@ -4138,7 +4138,7 @@ status`). Answers "why and when did this file change" and "which
   new regions, and fails closed (no partial rewrite) on unbalanced,
   duplicate, nested, or mismatched sentinels.
 - **Architecture docs generator** (`o2b brain architect
-<project-path>`). A deterministic stdlib-only scanner (module
+  <project-path>`). A deterministic stdlib-only scanner (module
   layout, language mix, entry points, manifest, test layout - no LLM,
   no network) renders an overview plus per-module notes under
   `Brain/projects/arch/<repo-key>/` through the region engine:
@@ -4179,7 +4179,7 @@ stays default-off.
   test). Evolution rule documented: additive fields never bump the
   version, renames/removals/semantic changes do.
 - **Lazy gated telemetry emit kernel.** One `emitGatedTelemetry(gate,
-build)` helper now carries every gated telemetry surface
+  build)` helper now carries every gated telemetry surface
   (context-pack receipts and telemetry, pre-compress, `brain_search`
   telemetry, recall-gate telemetry): with the gate off the payload
   thunk is never invoked and nothing reaches the continuity store; a
@@ -4194,14 +4194,14 @@ build)` helper now carries every gated telemetry surface
   un-masks redacted text - the single normalization layer every
   read-side consumer shares.
 - **ATOF/ATIF trajectory export.** `o2b brain continuity export
---format atof|atif [--session <id>] [--month YYYY-MM]` renders the
+  --format atof|atif [--session <id>] [--month YYYY-MM]` renders the
   store as standard trajectory formats: ATOF JSONL events (recall
   telemetry as `retriever` scope pairs with a marked synthetic start,
   other kinds as marks) and ATIF v1.7 documents (one per session,
   memory-layer events as `llm_call_count: 0` system steps). Read-only
   over the read-model; private records never reach an export file.
 - **Memory quality benchmark.** `o2b brain bench memory --fixture
-<name|path>` ingests a fixture into a disposable vault inside the
+  <name|path>` ingests a fixture into a disposable vault inside the
   runs directory (never the configured vault), indexes, retrieves,
   evaluates, and reports - quality (pass rate per category), latency,
   and context cost as separate families, never one collapsed score.
@@ -4243,7 +4243,7 @@ behaviour-changing pieces are off by default or per-call explicit.
   beside the config; malformed pointers and dangling targets fail soft
   and are reported, never thrown.
 - **Read-only recall sources.** `o2b brain source add <vault> --alias
-<name>` attaches an external vault as a read-only recall origin of
+  <name>` attaches an external vault as a read-only recall origin of
   the active Brain. The registry is keyed by owning vault (switching
   profiles never leaks sources), validation concentrates in one place
   (alias and path uniqueness, self-links, direct circular links), and
@@ -4261,25 +4261,25 @@ behaviour-changing pieces are off by default or per-call explicit.
   key selects `preserve` (default, byte-identical), `full`
   (vault-relative key path), or `short` (shortest unambiguous suffix)
   for generated and normalized links. `o2b brain links normalize
-[path] [--mode M] [--write]` rewrites wikilinks across Brain notes -
+  [path] [--mode M] [--write]` rewrites wikilinks across Brain notes -
   dry-run by default, decorations and code blocks preserved verbatim,
   ambiguous and unknown targets left as typed and reported.
 - **Shell-native Brain surface.** `o2b brain profile` materializes a
   compact `Brain/profile.md` digest (facts, top preferences, recent
   activity; age-gated regeneration) plus a `.o2bfs` root marker so
   shell wrappers can detect a Brain root safely. `o2b brain sgrep
-<query> [path]` is a grep-shaped semantic search - `path:line:`
+  <query> [path]` is a grep-shaped semantic search - `path:line:`
   output lines, path scoping, `--json`, exit 1 on no matches - with no
   MCP and no OSB-specific knowledge required.
 - **Grounded trigger queue with anti-nag lifecycle.** `o2b brain
-trigger scan` turns existing semantic-health and retention findings
+  trigger scan` turns existing semantic-health and retention findings
   into Markdown trigger records under `Brain/triggers/` (urgency,
   reason, suggested action, source artifacts, context snippets).
   Stable cooldown keys make repeated scans idempotent: an open twin
   blocks recreation, a dismissed/acted twin blocks for
   `trigger_cooldown_days` (default 7), an expired twin allows.
   Lifecycle is a strict machine (`pending → delivered → acknowledged →
-acted`, dismiss from any open state) over `list`, `ack`, `dismiss`,
+  acted`, dismiss from any open state) over `list`, `ack`, `dismiss`,
   `act`, and `history` verbs plus one consolidated `brain_trigger` MCP
   tool. The morning brief surfaces capped pending triggers and marks
   them delivered, so the same prompt shows at most once per cooldown
@@ -4354,7 +4354,7 @@ behaviour-changing pieces are off by default.
   Absent captures every role; an explicit flag wins; an unknown role
   fails fast.
 - **Session-scoped search focus.** `o2b search focus set|status|clear
---session <id>` binds a focus to one session's file under
+  --session <id>` binds a focus to one session's file under
   `search-focus/` beside the global file; a bound session focus wins
   over the global one, `brain_search` gains an optional
   `focus_session` input, and SessionEnd lifecycle capture auto-clears
@@ -4362,13 +4362,13 @@ behaviour-changing pieces are off by default.
   (default off), `brain_context_pack` promotes focus-matching memories
   within their tier.
 - **Operator-readable handoff notes.** `o2b brain handoff
-<session-file>` (and, when `session_handoff` is true, SessionEnd
+  <session-file>` (and, when `session_handoff` is true, SessionEnd
   lifecycle capture) writes `Brain/handoffs/<date>-<scope>.md` with
   request, completed work, changed files, learned context, and next
   steps - extracted by deterministic regex from the recorded turns, no
   LLM.
 - **Scoped current-intention chains.** `o2b brain intention
-set|show|list|move` (and the consolidated `brain_intention` MCP
+  set|show|list|move` (and the consolidated `brain_intention` MCP
   tool) maintain per-workstream now-documents at
   `Brain/intentions/<scope>.md`: every update bumps `version` and
   appends the superseded text to an in-file history trail; `move`
@@ -4397,7 +4397,7 @@ off-by-default where they could change behaviour.
   semantic depth.
 - **CLI provider registry.** Register OpenAI-compatible embedding
   endpoints at runtime with `o2b search provider add | list | show |
-remove`, persisted to `Brain/search/embedding-providers.json` (base
+  remove`, persisted to `Brain/search/embedding-providers.json` (base
   URL, default model, and the NAME of the environment variable holding
   the key - never the key itself, so the file is safe to sync). A
   registered name resolves to `openai-compat` config during config
@@ -4439,7 +4439,7 @@ anchors.
   `category`, `name`, `aliases`, `status`, lifecycle stamps). The identity
   index rebuilds from the Markdown files on every read - nothing to persist,
   nothing to sync-conflict. `o2b brain entity set | get | list | relate |
-archive` drives the registry from the CLI (upsert resolves names AND
+  archive` drives the registry from the CLI (upsert resolves names AND
   aliases before creating anything and refuses duplicate claims; archive
   removes from active lookup, `--restore` returns); the read-only
   `brain_entity` MCP tool (`view: get | list`) serves lookups to agents.
@@ -4600,7 +4600,7 @@ path.
   `OPEN_SECOND_BRAIN_SEARCH_RELATION_POLARITY` (default on; vaults without
   typed relations rank identically either way).
 - **Retrieval feedback loop with learned recall weights.** `o2b search
-feedback --query <q> --result <path> --verdict up|down` and the new MCP
+  feedback --query <q> --result <path> --verdict up|down` and the new MCP
   tool `brain_recall_feedback` record one JSON event per feedback under
   `Brain/search/feedback/` (the conflict-free one-file-per-signal pattern).
   A deterministic, order-insensitive fold derives per-layer multipliers
@@ -5078,13 +5078,13 @@ install stays byte-identical.
   routed through the resolver. Inspect with `o2b vault map`.
 - Named multi-vault profiles (`portability/profiles.ts`). A registry in
   `profiles.json` beside the config with `o2b vault profile list / create
-/ switch` and a `brain_switch_vault` MCP tool; activation is a pointer
+  / switch` and a `brain_switch_vault` MCP tool; activation is a pointer
   (no symlinks). `resolveVault` consults the active profile before the
   bare config `vault` key; with no registry, resolution is unchanged.
 - Vault graph export/import (`portability/graph.ts`). `o2b brain
-graph-export` serialises the user's pages (wikilinks + typed relations)
+  graph-export` serialises the user's pages (wikilinks + typed relations)
   to a stable, byte-identical `graph.json`; `o2b brain graph-import
---mode skip|overwrite|merge` reconstructs page stubs, every write
+  --mode skip|overwrite|merge` reconstructs page stubs, every write
   guarded by `ensureInsideVault`.
 
 ### Notes
@@ -5403,7 +5403,7 @@ under the stricter workflow. No runtime behaviour changes.
 - `oxlint.json` and `.oxfmtrc.json` configs, plus `lint`, `lint:fix`,
   `fmt`, `fmt:check`, `validate`, and `validate:fix` package scripts.
   `bun run validate` is the main verification command; `bun run
-validate:fix` is the single autofix path for lint and formatting.
+  validate:fix` is the single autofix path for lint and formatting.
 - `scripts/test` wrapper so `bun test` runs through the shared bun and
   sqlite prechecks.
 - `tests/cli/coerce.test.ts`, `tests/core/validate.test.ts`, and
@@ -5588,7 +5588,7 @@ weak signal when the operator opts in via config.
   `would_promote`, `would_retire`, `would_supersede`,
   `clusters_below_threshold`, `gated_retires`. No state mutates.
 - Path helpers `dreamRunsDir(vault)` and `dreamWorkrunPath(vault,
-runId)` in `src/core/brain/paths.ts`.
+  runId)` in `src/core/brain/paths.ts`.
 
 ### Changed
 
@@ -5741,7 +5741,7 @@ agent assembles into prose externally.
 - `src/core/brain/temporal/belief-evolution.ts` -
   `buildBeliefEvolution(index, vault, target)` for `prefId` or
   `topic`. Returns frozen `{target, transitions, evidence,
-retirements, generatedAt}`. Transitions derived from dream
+  retirements, generatedAt}`. Transitions derived from dream
   summary arrays (`new_unconfirmed` / `confirmed` / `retired`);
   evidence rollup carries per-row running counts; retirement chain
   walked via `supersedes` / `superseded_by` with a visited-set
@@ -5763,7 +5763,7 @@ retirements, generatedAt}`. Transitions derived from dream
   window ending at `weekEnd`. Same counters as daily plus
   `retired-in-window` list and `contradictions` (`signal-suppressed`
   events combined with `apply-evidence` rows where `result ===
-"violated"`).
+  "violated"`).
 - `src/core/brain/temporal/period-common.ts` - shared helpers
   consumed by both briefs: `countByKind`, `collectTransitions`,
   `computeVaultDelta`, `collectSourcePointers`, `extractId`. One
@@ -5973,7 +5973,7 @@ dream, and vault metadata into a single operator dashboard.
   Surfaces as a quality gate at `brain_feedback` time.
 - `src/core/brain/trust/self-approval-guardrail.ts` -
   `applySelfApprovalGuardrail({signal_count, distinct_agents,
-age_days}, config)`. Promotes only when all three thresholds
+  age_days}, config)`. Promotes only when all three thresholds
   pass; quarantines otherwise. Defaults
   (`promotion_min_signals: 2`, `promotion_min_distinct_agents: 1`,
   `promotion_min_age_days: 0`) keep pre-v0.10.16 dream behaviour
@@ -5989,7 +5989,7 @@ age_days}, config)`. Promotes only when all three thresholds
   `AGENTS.md`, `GEMINI.md`) exceeds the configured ceiling.
 - `src/core/brain/trust/compute-trust-verdict.ts` -
   `computeTrustVerdict({ doctorWarnings, doctorErrors,
-dreamWarnings, verification, driftWatchThreshold? })`. Returns
+  dreamWarnings, verification, driftWatchThreshold? })`. Returns
   one of `clean`, `watch`, `investigate`.
 - `src/core/brain/trust/operator-summary.ts` -
   `buildOperatorSummary(vault, opts)` and
@@ -6002,18 +6002,18 @@ dreamWarnings, verification, driftWatchThreshold? })`. Returns
   `guardrails:` block in `_brain.yaml` overrides any subset.
 - `DreamRunSummary.uncertain: ReadonlyArray<DreamUncertainEntry>`
   and `DreamRunSummary.quarantined:
-ReadonlyArray<DreamQuarantinedEntry>` (empty on every clean run).
+  ReadonlyArray<DreamQuarantinedEntry>` (empty on every clean run).
 - `RunDoctorResult.trust_verdict` (always populated),
   `RunDoctorResult.verification_delta_summary` (present when a
   dream summary is threaded through), `RunDoctorResult.
-instruction_file_warnings`, and `RunDoctorResult.uncertain`.
+  instruction_file_warnings`, and `RunDoctorResult.uncertain`.
 - `DigestJson.trust_verdict?`, `DigestJson.uncertain_count`,
   `DigestJson.quarantined_count`. Markdown digest gains a `##
-Trust` section when doctor or dream input is supplied.
+  Trust` section when doctor or dream input is supplied.
 - `brain_operator_summary` MCP tool in the full scope. Returns
   the structured envelope from `buildOperatorSummary`.
 - `o2b brain summary [--skip-dream] [--top-actions <n>]
-[--vault <path>] [--json]` CLI verb. Markdown by default, JSON
+  [--vault <path>] [--json]` CLI verb. Markdown by default, JSON
   on demand.
 - `BrainRolePermissionError` thrown by
   `appendApplyEvidence(vault, input, { role })` when the role is
@@ -6312,7 +6312,7 @@ Companion design and impl plan at
 - `o2b mcp --probe` flag — in-process MCP handshake used by
   `o2b install --check` to confirm the server starts cleanly.
 - `_brain.yaml` block `active.{most_applied_window_days,
-most_applied_limit}` (defaults 30 / 10; bounds 1..365 / 1..50).
+  most_applied_limit}` (defaults 30 / 10; bounds 1..365 / 1..50).
   Both `Brain/active.md` and `brain_digest` honour the values;
   defaults unchanged from prior behaviour.
 - `Most-applied (Nd)` section in `brain_digest` Markdown plus a
@@ -6629,8 +6629,8 @@ tracks ship together under one release.
     do not collide). No LLM in the report path.
 - §30 §E - Claude Code MEMORY to Brain bridge. New verb
   `o2b brain import-claude-memory [--memory <path>]
-[--dry-run | --apply] [--yes] [--json]
-[--allow-arbitrary-memory-path]` reads `metadata.type: feedback`
+  [--dry-run | --apply] [--yes] [--json]
+  [--allow-arbitrary-memory-path]` reads `metadata.type: feedback`
   entries from a Claude Code memory directory and writes them as
   confirmed Brain preferences with a sidecar manifest
   `Brain/.imports/claude-memory.json` for idempotency.
@@ -6701,7 +6701,7 @@ sidecar that powers drift detection.
 ### Added
 
 - §22 — `o2b brain upgrade [--dry-run] [--apply] [--yes] [--check]
-[--json]` migrates the three release-owned files
+  [--json]` migrates the three release-owned files
   (`Brain/_brain.yaml`, `Brain/_BRAIN.md`,
   `AI Wiki/_OPEN_SECOND_BRAIN.md`) forward when the installed
   open-second-brain version changes them. `_brain.yaml` merge is
@@ -6721,7 +6721,7 @@ sidecar that powers drift detection.
   warning. `pruneSnapshots` removes the sidecar alongside the
   archive; `listSnapshots` surfaces `manifest_path`.
 - §28 — `o2b brain export --format json|llms-txt [--out <path>]
-[--force]` produces a read-only dump of active preferences
+  [--force]` produces a read-only dump of active preferences
   (`confirmed | unconfirmed | quarantine`) from
   `Brain/preferences/`. Retired and signal artifacts are not
   included. Default sink is stdout; `--out` writes a file
@@ -6762,7 +6762,7 @@ sidecar that powers drift detection.
 - §30 §C — `skills/brain-memory/SKILL.md` description and "When NOT
   to call" section reformulate the trigger: when a preference
   plausibly applies but you are unsure, record with `note:
-"speculative; <reason>"` instead of skipping. The dream pass
+  "speculative; <reason>"` instead of skipping. The dream pass
   filters single-event speculative entries that do not recur, so
   coverage costs less than missing the signal.
   `hooks/lib/messages.ts:postWriteReminder` mirrors the new wording.
@@ -6836,7 +6836,7 @@ runs `o2b brain merge`.
 - §14 — `o2b brain explorer` launches a loopback HTTP server (default
   port `7777`, `--port <n>` to override) that renders preferences and
   retired entries as a force-directed graph. `o2b brain explorer
---export <path>` writes the same view as a single offline HTML file
+  --export <path>` writes the same view as a single offline HTML file
   with inlined data; `--force` overwrites an existing file. Live and
   export modes share one template at `templates/brain-explorer.html`.
   Zero backend, no LLM, no network. Markdown is parsed in the browser
@@ -6846,7 +6846,7 @@ runs `o2b brain merge`.
   whose `principle` tokens reach jaccard ≥ `0.6`. Pairs ≥ doctor's
   own duplicate threshold continue to trip the
   `duplicate-preferences` doctor lint. `o2b brain merge <keep>
-<drop>` is the explicit resolver: `keep` retains its frontmatter,
+  <drop>` is the explicit resolver: `keep` retains its frontmatter,
   picks up the deduped union of `evidenced_by`, the summed
   `applied_count` and `violated_count`, and `max(last_evidence_at)`;
   `drop` retires under reason `merged-into` with a `superseded_by`
@@ -6863,7 +6863,7 @@ runs `o2b brain merge`.
   `session_id`/`cwd`/`tool_use_id` triple). `stopGuardrailReason`
   follows the same pattern.
 - §15 (completes deferred D4 from v0.10.4) — `skills/brain-memory/
-SKILL.md` gains an `## Examples — good vs bad` section: four
+  SKILL.md` gains an `## Examples — good vs bad` section: four
   contrastive pairs covering weak vs strong `principle`,
   too-general vs precise `topic`, and `note` with versus without
   the "why" line.
@@ -7012,7 +7012,7 @@ without an explicit declaration keep their current behaviour.
 - **`_brain.yaml.confidence.medium_min` (default 0.40) and
   `high_min` (default 0.75)** — derived-band thresholds on the
   numeric value. Validated to lie in `[0, 1]` with `medium_min <
-high_min`.
+  high_min`.
 - **`Brain/_brain.yaml.primary_agent`** declarative field. When set,
   dream runs invoked from a different agent emit a stderr warning,
   a `warnings` array entry on the MCP `brain_dream` response, and a
@@ -7024,7 +7024,7 @@ high_min`.
   during the fresh bootstrap; on re-runs the flag is a no-op (use
   `set-primary` instead).
 - **`src/core/brain/set-primary.ts`** — `setPrimaryAgent(vault,
-name | null): SetPrimaryAgentResult`. Validates the rewritten
+  name | null): SetPrimaryAgentResult`. Validates the rewritten
   YAML before persisting; surfaces a typed `BrainConfigError` when
   the on-disk file is malformed.
 - **`renderPrefLink({ id, principle })`** in `src/core/brain/wikilink.ts`
@@ -7059,7 +7059,7 @@ name | null): SetPrimaryAgentResult`. Validates the rewritten
 - **`brain_query` MCP response** carries `confidence_value` next to
   `confidence` on every preference and retired result row.
 - **`brain_dream` MCP response** carries a `warnings: [{code,
-message}]` array. CLI `o2b brain dream` writes the same warnings
+  message}]` array. CLI `o2b brain dream` writes the same warnings
   to `stderr`.
 - **`brain_dream` MCP schema** accepts an optional `agent` argument
   for the primary-agent check.
@@ -7264,7 +7264,7 @@ in place.
   every preference and retired file. Dream collects the last 5
   applied + last 3 violated rows from `Brain/log/` on every pass and
   writes them as bulleted `[[artifact:lines]] — timestamp (agent)
-[result] — note` entries. The data was already on disk in the
+  [result] — note` entries. The data was already on disk in the
   daily log; v0.10.1 joins it back to the rule.
 - **`src/core/brain/evidence.ts`** — read-only log scanner used by
   dream and `moveToRetired`. Returns newest-first slices for a given
@@ -7455,7 +7455,7 @@ negative without yet crossing the rebuttal threshold.
 - **`quarantine` preference status** (closes design summary §20).
   Entry: a `confirmed` preference whose recomputed counters satisfy
   `violated_count ≥ applied_count AND applied_count >
-confidence.low_max_applied` transitions to `quarantine`. The rule
+  confidence.low_max_applied` transitions to `quarantine`. The rule
   is still listed in `Brain/active.md` (under its own section), but
   the digest surfaces it separately. Exit: a new `violated`
   evidence event since the last `dream` snapshot retires the rule
@@ -7475,7 +7475,7 @@ confidence.low_max_applied` transitions to `quarantine`. The rule
   surfaces.
 - **`brain_backlinks` MCP tool** + `o2b brain backlinks <id>` CLI verb.
   Returns the count plus a list of `{source, source_kind, field,
-timestamp?}` records for any Brain artifact id (preference,
+  timestamp?}` records for any Brain artifact id (preference,
   retired, or signal).
 - **`osb://backlinks/{id}` MCP resource template** — markdown render
   of inbound references grouped by source kind. Same data as the
@@ -7500,7 +7500,7 @@ timestamp?}` records for any Brain artifact id (preference,
   — the source artifact's pointer just went stale.
 - **`brain` section in `second_brain_status`**. The existing MCP
   tool now includes a `brain: { present, counts, last_dream_at,
-last_apply_evidence_at, sanity }` field. Counts cover
+  last_apply_evidence_at, sanity }` field. Counts cover
   inbox/preferences (split by status)/retired/log_days/snapshots.
   `sanity.signals_awaiting_dream` is non-zero when inbox signals
   predate the `unconfirmed_window_days` cutoff — a one-glance "you
@@ -7549,7 +7549,7 @@ last_apply_evidence_at, sanity }` field. Counts cover
   `[[src/cli/main.ts:42]]` (single line). New
   `parseArtifactRef(value)` helper in
   `src/core/brain/wikilink.ts` extracts `{target, range?,
-malformedRange?}`. The writer accepts the syntax verbatim; the
+  malformedRange?}`. The writer accepts the syntax verbatim; the
   parser is used by downstream readers (lint, future fragment
   display).
 - **`brain_doctor` hygiene lints** (closes the remaining §11 items
@@ -7603,7 +7603,7 @@ an orthogonal audit layer for paid actions.
   `contradiction_window_days`, `stale_evidence_days`,
   `high_freshness_factor`, `snapshots.retention_count`) and
   `_BRAIN.md` (agent-facing operating manual, rendered by `o2b
-brain init`, kept under 200 lines).
+  brain init`, kept under 200 lines).
 - **CLI namespace `o2b brain *`** with 11 verbs: `init`,
   `feedback`, `dream`, `apply-evidence`, `digest`, `query`,
   `reject`, `pin`, `unpin`, `rollback`, `doctor`.
@@ -7806,7 +7806,7 @@ records what happened.
     `renderPaymentDigestTelegram`) for cron-friendly 4-line summaries;
   - **approval workflow** (`pending-payment-request` artifact under
     `AI Wiki/payments/_pending/`) with `pending → approved/rejected →
-consumed` state machine.
+    consumed` state machine.
 - **Path-safety helpers** (`src/core/path-safety.ts`): `ensureInsideVault`
   and `vaultRelative` use `path.sep` so the prefix check works on Windows
   too; replaces the duplicated POSIX-only versions previously inlined in
@@ -7872,7 +7872,7 @@ parallel Python implementation under `src/open_second_brain/*.py` are gone.
 - `bun:test` suite (176 cases) + Python shim tests (13 cases). Includes a
   12-worker multi-process append-event lock test.
 - Per-runtime install flows for local marketplaces (Claude `claude plugin
-marketplace add <path>`, Codex `codex plugin marketplace add <path>`,
+  marketplace add <path>`, Codex `codex plugin marketplace add <path>`,
   Hermes via plugin-dir symlink, OpenClaw `openclaw plugins install <path>`).
 - `agent-event-log` skill: stronger trigger description and a language
   policy that follows the user's session language.
@@ -8024,7 +8024,7 @@ Hermes / Claude Code / Codex / OpenClaw configurations do not change.
   path is `codex plugin marketplace add <source>`, which validates a
   marketplace catalog at this exact location. Without this file the
   install fails with `marketplace root does not contain a supported
-manifest`. The manifest declares the repository as a one-plugin
+  manifest`. The manifest declares the repository as a one-plugin
   marketplace pointing at itself (`path: "."`), so the same Git URL
   that worked for `hermes plugins install` works for the new Codex
   flow without restructuring the repo.
@@ -8111,7 +8111,7 @@ manifest`. The manifest declares the repository as a one-plugin
   the success line `appended: Daily/...` gave no signal that the
   entry had landed in the wrong place. Now every one of these entry
   points resolves the vault via `--vault → VAULT_DIR → persisted
-plugin config (vault field)`, and exits with a clear
+  plugin config (vault field)`, and exits with a clear
   `error: no vault configured. Pass --vault ... or run o2b init ...`
   if none of those is set. The shared resolver lives in
   `cli._require_vault`; the `vault-log` and standalone-`o2b mcp`
@@ -8391,7 +8391,7 @@ plugin config (vault field)`, and exits with a clear
 - Reworded the `--args` guidance in `after-install.md` and `docs/mcp.md` so
   the docs no longer contain a literal copyable quoted-args anti-example.
   The corrected `hermes mcp add open-second-brain --command o2b --args mcp
---vault /path/to/vault` example stays; the negative case is now described
+  --vault /path/to/vault` example stays; the negative case is now described
   in prose ("do not wrap all of those arguments into one quoted shell
   string and do not repeat `--args` per token") so a careless copy/paste
   cannot pick up the wrong form.
