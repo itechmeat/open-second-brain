@@ -986,6 +986,102 @@ test("events hydrate a posted outcome row with its first-pass and evidence verdi
   expect(provenance.outcome!.evidence_verdict).toBe("unclaimed");
 });
 
+test("two claims sharing a sample_id carry per-event inversion flags", async () => {
+  // H2 regression: the inversion flag compares EACH claim's own ts
+  // against the claimed receipt's created_at. Resolving per sample_id
+  // instead of per event let one page row's verdict overwrite the
+  // other's in the per-id map, so with one claim stated before its
+  // receipt and one after, both rows rendered the same flag - the
+  // earlier claim's inversion disappeared. Resolution is per event now,
+  // attached by page position; the page itself still renders in the
+  // ledger's ts-ascending order, so the flag must follow each row's ts
+  // whichever way the ledger was appended.
+  const receiptAt = "2026-06-02T09:00:00.000Z";
+
+  const pageInversionFlags = async (
+    server: MCPServer,
+  ): Promise<ReadonlyArray<{ ts: string; inverted: boolean }>> => {
+    const body = (await call(server, { operation: "events" })) as unknown as {
+      events: ReadonlyArray<{ ts: string; provenance?: ClaimProvenanceRow }>;
+    };
+    expect(body.events).toHaveLength(2);
+    return body.events.map((event) => ({
+      ts: event.ts,
+      inverted: event.provenance?.timestamp_inverted === true,
+    }));
+  };
+
+  // Order 1: the inverted claim appended first.
+  writeSourcePage("a.md");
+  const receipt = emitContextReceipt(vault, {
+    options: { host: "mcp", trigger: "context_pack", createdAt: receiptAt },
+    items: [{ id: "note-a", path: "Brain/notes/a.md", tokens: 40 }],
+    finalText: "the final answer text",
+  });
+  appendClaimEvent(vault, {
+    ts: "2026-06-02T08:00:00Z",
+    agent: "claude",
+    entity: "Entity Early",
+    aspect: "employer",
+    value: "Google",
+    source: "[[Brain/notes/a.md]]",
+    sample_id: receipt.id,
+  });
+  appendClaimEvent(vault, {
+    ts: "2026-06-02T10:00:00Z",
+    agent: "claude",
+    entity: "Entity Late",
+    aspect: "employer",
+    value: "Meta",
+    source: "[[Brain/notes/a.md]]",
+    sample_id: receipt.id,
+  });
+  const server = new MCPServer({ vault, configPath });
+  await initialize(server);
+  expect(await pageInversionFlags(server)).toEqual([
+    { ts: "2026-06-02T08:00:00Z", inverted: true },
+    { ts: "2026-06-02T10:00:00Z", inverted: false },
+  ]);
+
+  // Order 2: the inverted claim appended last, in a fresh ledger.
+  const b = secondVault();
+  try {
+    mkdirSync(join(b.vault, "Brain", "notes"), { recursive: true });
+    writeFileSync(join(b.vault, "Brain", "notes", "a.md"), "---\nkind: note\n---\n\na page\n");
+    const receiptB = emitContextReceipt(b.vault, {
+      options: { host: "mcp", trigger: "context_pack", createdAt: receiptAt },
+      items: [{ id: "note-a", path: "Brain/notes/a.md", tokens: 40 }],
+      finalText: "the final answer text",
+    });
+    appendClaimEvent(b.vault, {
+      ts: "2026-06-02T10:00:00Z",
+      agent: "claude",
+      entity: "Entity Late",
+      aspect: "employer",
+      value: "Meta",
+      source: "[[Brain/notes/a.md]]",
+      sample_id: receiptB.id,
+    });
+    appendClaimEvent(b.vault, {
+      ts: "2026-06-02T08:00:00Z",
+      agent: "claude",
+      entity: "Entity Early",
+      aspect: "employer",
+      value: "Google",
+      source: "[[Brain/notes/a.md]]",
+      sample_id: receiptB.id,
+    });
+    const serverB = new MCPServer({ vault: b.vault, configPath: b.configPath });
+    await initialize(serverB);
+    expect(await pageInversionFlags(serverB)).toEqual([
+      { ts: "2026-06-02T08:00:00Z", inverted: true },
+      { ts: "2026-06-02T10:00:00Z", inverted: false },
+    ]);
+  } finally {
+    rmSync(b.configHome, { recursive: true, force: true });
+  }
+});
+
 // ----- provenance at the caller's reach (answer-trust repair M2/F3) -----
 
 const RULE_RECEIPT_STAMP = "2026-06-02T09:00:00.000Z";

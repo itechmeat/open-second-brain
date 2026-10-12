@@ -1109,7 +1109,7 @@ export function claimEventsReport(
     ok: true,
     operation: "events",
     entity: entityFilter === undefined ? null : normalizeEntityName(entityFilter),
-    events: page.map((event) =>
+    events: page.map((event, position) =>
       event.sample_id === undefined || provenance === null
         ? // A claim without a sample id renders exactly as today: no
           // provenance key, byte-identical row.
@@ -1120,7 +1120,7 @@ export function claimEventsReport(
             // its receipt and outcome halves at read time. A missing
             // outcome half is null - "receipt known, outcome unknown" -
             // never a fabricated verdict.
-            provenance: provenance.get(event.sample_id),
+            provenance: provenance[position]!,
           },
     ),
     total: gated.length,
@@ -1128,12 +1128,18 @@ export function claimEventsReport(
   };
 }
 
-/** A page event whose claim carries the attribution id the join resolves. */
-type SampledClaim = ClaimEvent & { readonly sample_id: string };
-
 /**
  * The provenance half of one events page, resolved at the CALLER's
  * reach over ONE read per ledger.
+ *
+ * The resolutions come back aligned with the page by POSITION, one per
+ * row: the inversion flag compares each claim's OWN assertion ts
+ * against the claimed receipt, so two claims sharing one `sample_id`
+ * (one stated before the receipt it names, one after) must resolve
+ * independently - a per-id cache would hand both rows the last
+ * claim's flag. Resolution from the prebuilt index is map lookups, so
+ * resolving per event keeps the one-read-per-ledger bound the scans
+ * suite pins.
  *
  * The receipts surface withholds the operator's rule injections below
  * local reach (list excludes them, show refuses them, receipts are
@@ -1148,16 +1154,16 @@ type SampledClaim = ClaimEvent & { readonly sample_id: string };
  *
  * Null when no row on the page carries a sample id: the ledgers are
  * never read and every row renders byte-identically to the
- * pre-attribution answer.
+ * pre-attribution answer. Otherwise the array holds one entry per page
+ * row, null at the unsampled positions.
  */
 function claimProvenanceForPage(
   vault: string,
   reach: TransportReach,
   view: ArtifactRefView,
   page: ReadonlyArray<ClaimEvent>,
-): ReadonlyMap<string, ClaimProvenance> | null {
-  const sampled = page.filter((event): event is SampledClaim => event.sample_id !== undefined);
-  if (sampled.length === 0) return null;
+): ReadonlyArray<ClaimProvenance | null> | null {
+  if (!page.some((event) => event.sample_id !== undefined)) return null;
   const local = reach === TRANSPORT_REACH.local;
   const options: ClaimProvenanceOptions = {
     ...(local ? {} : { exclude: isRuleOnlyInjection }),
@@ -1169,11 +1175,10 @@ function claimProvenanceForPage(
         }),
   };
   const index = loadClaimProvenanceIndex(vault);
-  return new Map(
-    sampled.map((event) => [
-      event.sample_id,
-      resolveClaimProvenanceFromIndex(index, event.sample_id, event.ts, options),
-    ]),
+  return page.map((event) =>
+    event.sample_id === undefined
+      ? null
+      : resolveClaimProvenanceFromIndex(index, event.sample_id, event.ts, options),
   );
 }
 
