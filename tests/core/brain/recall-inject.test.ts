@@ -535,7 +535,7 @@ describe("decideRecallInject grades admission through the shared surfacing key",
     return decideRecallInject(
       "receipts",
       async () => ({ candidates: [candidate()], total: 1, idfWeightedCoverage: quality }),
-      { ...(floor !== undefined ? { confidenceFloor: floor } : {}) },
+      floor === undefined ? {} : { confidenceFloor: floor },
     );
   }
 
