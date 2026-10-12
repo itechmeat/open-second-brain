@@ -9,12 +9,20 @@
  * unchanged `runMemoryBench` consumes.
  *
  * Network-free by design: the loader is pure over its input file. The
- * committed sample fixture (`tests/fixtures/bench/longmemeval-sample.json`)
- * certifies CI; the full dataset arrives as an operator-supplied path
+ * committed sample fixtures certify CI: `longmemeval-official-sample.json`
+ * pins the OFFICIAL dataset shape, `longmemeval-sample.json` the legacy
+ * sample shape; the full dataset arrives as an operator-supplied path
  * resolved by the bench verb's literal-then-repo-fixture-dir logic. The
  * official download lives at https://github.com/xiaowu0162/LongMemEval
- * (data / longmemeval_s.py / longmemeval_m.py) - never fetched at run
- * time.
+ * (the dataset ships as JSON: longmemeval_s.json, longmemeval_m.json,
+ * longmemeval_oracle.json) - never fetched at run time.
+ *
+ * Both dataset shapes are accepted, official first: the official files
+ * spell the keys `question_id` / `haystack_session_ids` /
+ * `haystack_sessions`, mark abstention by a question id ending in
+ * `_abs`, and use the six official question types; the legacy sample
+ * shape uses `q_id` / `haystack_session_id` / `haystack_session`, an
+ * explicit `abstention` question type, and the pre-wave type spellings.
  *
  * Two traps are handled HERE, at conversion, not downstream:
  *
@@ -47,15 +55,13 @@ import {
 export const LONGMEMEVAL_SUITE_NAME = "longmemeval";
 
 /**
- * The upstream source the official prompt constants below follow: the
- * LongMemEval repository path and dataset release the question shape
- * and the judging template were transcribed from. The pin names the
- * upstream path, not an immutable snapshot - the constant in this tree
- * is the canonical copy. The full dataset is downloaded from this
- * release by operators - never at run time.
+ * The upstream source the dataset shape follows: the LongMemEval
+ * repository. The dataset ships there as JSON (longmemeval_s.json,
+ * longmemeval_m.json, longmemeval_oracle.json) and is downloaded by
+ * operators - never at run time.
  */
 export const LONGMEMEVAL_PROMPT_REVISION =
-  "github.com/xiaowu0162/LongMemEval, data/longmemeval_s.py (arXiv:2410.10813)";
+  "github.com/xiaowu0162/LongMemEval (arXiv:2410.10813); dataset ships as longmemeval_s.json / longmemeval_m.json / longmemeval_oracle.json";
 
 /**
  * Official answer-judging prompt, system half, pinned to
@@ -97,6 +103,12 @@ export interface LongMemEvalEntry {
   readonly question_type: string;
   readonly question: string;
   readonly answer?: string;
+  /**
+   * The date the question was asked (official `question_date`). An
+   * entry that states none is dated by its last haystack session - the
+   * question follows the sessions it was built from.
+   */
+  readonly question_date: string;
   readonly haystack_session_id: ReadonlyArray<string>;
   readonly haystack_session: ReadonlyArray<ReadonlyArray<LongMemEvalTurn>>;
   readonly haystack_dates: ReadonlyArray<string>;
@@ -121,8 +133,26 @@ export interface LongMemEvalConversion {
 
 class LongMemEvalParseError extends Error {}
 
-/** The question type whose entries measure abstention and are excluded. */
+/** The explicit legacy-shape question type whose entries measure abstention. */
 export const LONGMEMEVAL_ABSTENTION_TYPE = "abstention";
+
+/** Suffix the official dataset puts on abstention question ids. */
+const OFFICIAL_ABSTENTION_SUFFIX = "_abs";
+
+/**
+ * True when an entry measures abstention and is excluded from scoring.
+ * The official dataset marks abstention by a `question_id` ending in
+ * `_abs`; the legacy sample shape uses the explicit `abstention`
+ * question type. Both paths stay live.
+ */
+export function isLongMemEvalAbstention(
+  entry: Pick<LongMemEvalEntry, "q_id" | "question_type">,
+): boolean {
+  return (
+    entry.question_type === LONGMEMEVAL_ABSTENTION_TYPE ||
+    entry.q_id.endsWith(OFFICIAL_ABSTENTION_SUFFIX)
+  );
+}
 
 /**
  * The recall cutoff the suite scores at: a question passes retrieval
@@ -132,17 +162,24 @@ export const LONGMEMEVAL_ABSTENTION_TYPE = "abstention";
 export const LONGMEMEVAL_RECALL_CUTOFF = 5;
 
 /**
- * Official question types -> OSB's canonical retrieval categories. The
- * category is a label for the by-category report; scoring is identical
- * expected_paths containment for all of them. `abstention` maps to
- * nothing: those entries are excluded, never converted.
+ * Question types -> OSB's canonical retrieval categories. The official
+ * dataset's six types come first (`single-session-*` all read as the
+ * single-hop category - each asks about one session, only the turn
+ * role or preference focus differs, and scoring is identical
+ * expected_paths containment for all of them); the legacy sample
+ * shape's spellings follow. Abstention entries map to nothing: they
+ * are excluded, never converted.
  */
 const QUESTION_TYPE_TO_CATEGORY: Readonly<Record<string, BenchCategory>> = Object.freeze({
+  "single-session-user": "single_hop",
+  "single-session-assistant": "single_hop",
+  "single-session-preference": "single_hop",
+  "multi-session": "multi_evidence",
+  "temporal-reasoning": "temporal",
+  "knowledge-update": "contradiction",
   "single-hop": "single_hop",
   "multi-hop": "multi_evidence",
-  "temporal-reasoning": "temporal",
   "open-domain": "single_hop",
-  "knowledge-update": "contradiction",
 });
 
 /** Every question type the parser accepts, abstention included. */
@@ -195,6 +232,16 @@ export function parseLongMemEvalDataset(raw: unknown): LongMemEvalDataset {
   return { ...(name !== undefined ? { name } : {}), entries };
 }
 
+/**
+ * Read a field under both dataset spellings: the official files spell
+ * it `official`, the legacy sample shape `legacy`. Official first; a
+ * legacy key is read only when the official one is absent.
+ */
+function readKey(r: Record<string, unknown>, official: string, legacy: string): unknown {
+  const value = r[official];
+  return value !== undefined ? value : r[legacy];
+}
+
 function parseEntry(
   raw: unknown,
   index: number,
@@ -204,7 +251,10 @@ function parseEntry(
     throw new LongMemEvalParseError(`LongMemEval dataset: questions[${index}] must be an object`);
   }
   const r = raw as Record<string, unknown>;
-  const qId = asString(r["q_id"], `questions[${index}].q_id`);
+  const qId = asString(
+    readKey(r, "question_id", "q_id"),
+    `questions[${index}].question_id (legacy q_id)`,
+  );
   const questionType = asString(r["question_type"], `questions[${index}] (${qId}).question_type`);
   if (!(LONGMEMEVAL_QUESTION_TYPES as ReadonlyArray<string>).includes(questionType)) {
     throw new LongMemEvalParseError(
@@ -212,17 +262,19 @@ function parseEntry(
         `(expected one of ${LONGMEMEVAL_QUESTION_TYPES.join(", ")})`,
     );
   }
+  const abstention = isLongMemEvalAbstention({ q_id: qId, question_type: questionType });
   const question = asString(r["question"], `questions[${index}] (${qId}).question`);
 
   const sessionIds = stringArray(
-    r["haystack_session_id"],
-    `questions[${index}] (${qId}).haystack_session_id`,
+    readKey(r, "haystack_session_ids", "haystack_session_id"),
+    `questions[${index}] (${qId}).haystack_session_ids (legacy haystack_session_id)`,
     true,
   );
-  const sessionsRaw = r["haystack_session"];
+  const sessionsRaw = readKey(r, "haystack_sessions", "haystack_session");
   if (!Array.isArray(sessionsRaw) || sessionsRaw.length !== sessionIds.length) {
     throw new LongMemEvalParseError(
-      `LongMemEval dataset: question '${qId}' haystack_session must be an array aligned with haystack_session_id`,
+      `LongMemEval dataset: question '${qId}' haystack_sessions (legacy haystack_session) ` +
+        `must be an array aligned with haystack_session_ids`,
     );
   }
   const dates = stringArray(
@@ -232,19 +284,22 @@ function parseEntry(
   );
   if (dates.length !== sessionIds.length) {
     throw new LongMemEvalParseError(
-      `LongMemEval dataset: question '${qId}' haystack_dates must be an array aligned with haystack_session_id`,
+      `LongMemEval dataset: question '${qId}' haystack_dates must be an array aligned with haystack_session_ids`,
     );
   }
   const localIds = new Set<string>();
   sessionIds.forEach((sessionId, j) => {
     localIds.add(sessionId);
-    const turns = parseTurns(sessionsRaw[j], `questions[${index}] (${qId}).haystack_session[${j}]`);
+    const turns = parseTurns(
+      sessionsRaw[j],
+      `questions[${index}] (${qId}).haystack_sessions[${j}]`,
+    );
     const date = asValidDate(dates[j]!, `questions[${index}] (${qId}).haystack_dates[${j}]`);
     mergeSession(sessions, sessionId, date, turns, qId);
   });
 
   let gold: ReadonlyArray<string> = [];
-  if (questionType !== LONGMEMEVAL_ABSTENTION_TYPE) {
+  if (!abstention) {
     gold = stringArray(
       r["answer_session_ids"],
       `questions[${index}] (${qId}).answer_session_ids`,
@@ -263,14 +318,25 @@ function parseEntry(
       }
     }
   }
+  // The official entries carry question_date; an entry that states none
+  // is dated by its last haystack session.
+  const questionDateRaw = r["question_date"];
+  const questionDate =
+    questionDateRaw === undefined
+      ? dates[dates.length - 1]!
+      : asValidDate(
+          asString(questionDateRaw, `questions[${index}] (${qId}).question_date`),
+          `questions[${index}] (${qId}).question_date`,
+        );
   return {
     q_id: qId,
     question_type: questionType,
     question,
     ...(typeof r["answer"] === "string" && r["answer"] !== "" ? { answer: r["answer"] } : {}),
+    question_date: questionDate,
     haystack_session_id: sessionIds,
     haystack_session: sessionIds.map((_, j) =>
-      parseTurns(sessionsRaw[j], `haystack_session[${j}]`),
+      parseTurns(sessionsRaw[j], `haystack_sessions[${j}]`),
     ),
     haystack_dates: dates,
     answer_session_ids: gold,
@@ -405,7 +471,7 @@ export function longMemEvalToBenchFixture(dataset: LongMemEvalDataset): LongMemE
   let abstentionExcluded = 0;
   const questions: BenchQuestion[] = [];
   for (const entry of dataset.entries) {
-    if (entry.question_type === LONGMEMEVAL_ABSTENTION_TYPE) {
+    if (isLongMemEvalAbstention(entry)) {
       abstentionExcluded += 1;
       continue;
     }

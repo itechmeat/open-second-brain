@@ -1,0 +1,102 @@
+[
+  {
+    "question_id": "single-session-user_1",
+    "question_type": "single-session-user",
+    "question": "What codename did we pick for the spring launch?",
+    "answer": "Blue Heron",
+    "question_date": "2023/05/20 (Sat) 02:21",
+    "haystack_session_ids": ["answer_1", "noans_1"],
+    "haystack_dates": ["2023/05/01 (Mon) 09:15", "2023/05/02 (Tue) 10:30"],
+    "haystack_sessions": [
+      [
+        {
+          "role": "user",
+          "content": "We picked Blue Heron as the codename for the spring launch."
+        },
+        { "role": "assistant", "content": "Noted: the spring launch codename is Blue Heron." }
+      ],
+      [
+        {
+          "role": "user",
+          "content": "I booked a cabin near Lake Alpine for the August hiking trip."
+        },
+        {
+          "role": "assistant",
+          "content": "Sounds great - the Lake Alpine cabin is booked for August."
+        }
+      ]
+    ],
+    "answer_session_ids": ["answer_1"]
+  },
+  {
+    "question_id": "multi-session_2",
+    "question_type": "multi-session",
+    "question": "Which password manager did we settle on for the team?",
+    "answer": "Vaultwarden",
+    "question_date": "2023/05/20 (Sat) 02:25",
+    "haystack_session_ids": ["answer_2a", "answer_2b", "noans_2"],
+    "haystack_dates": [
+      "2023/05/03 (Wed) 11:00",
+      "2023/05/04 (Thu) 12:30",
+      "2023/05/05 (Fri) 13:45"
+    ],
+    "haystack_sessions": [
+      [
+        {
+          "role": "user",
+          "content": "We evaluated Vaultwarden and Keeweb for the team password vault."
+        },
+        {
+          "role": "assistant",
+          "content": "Comparison saved: Vaultwarden self-hosting versus Keeweb portable."
+        }
+      ],
+      [
+        { "role": "user", "content": "We settled on Vaultwarden for the team password vault." },
+        { "role": "assistant", "content": "Decided: Vaultwarden is the team password manager." }
+      ],
+      [
+        {
+          "role": "user",
+          "content": "The book club picked a novel about lighthouse keepers this month."
+        },
+        {
+          "role": "assistant",
+          "content": "Noted: this month's book club novel features lighthouse keepers."
+        }
+      ]
+    ],
+    "answer_session_ids": ["answer_2a", "answer_2b"]
+  },
+  {
+    "question_id": "single-session-user_3_abs",
+    "question_type": "single-session-user",
+    "question": "What is my sister's favorite coffee order?",
+    "question_date": "2023/05/20 (Sat) 02:30",
+    "haystack_session_ids": ["noans_1", "noans_2"],
+    "haystack_dates": ["2023/05/02 (Tue) 10:30", "2023/05/05 (Fri) 13:45"],
+    "haystack_sessions": [
+      [
+        {
+          "role": "user",
+          "content": "I booked a cabin near Lake Alpine for the August hiking trip."
+        },
+        {
+          "role": "assistant",
+          "content": "Sounds great - the Lake Alpine cabin is booked for August."
+        }
+      ],
+      [
+        {
+          "role": "user",
+          "content": "The book club picked a novel about lighthouse keepers this month."
+        },
+        {
+          "role": "assistant",
+          "content": "Noted: this month's book club novel features lighthouse keepers."
+        }
+      ]
+    ],
+    "answer_session_ids": []
+  }
+]

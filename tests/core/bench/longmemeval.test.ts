@@ -26,6 +26,7 @@ import { runMemoryBench } from "../../../src/core/bench/phases.ts";
 import { BENCH_REPORT_SCHEMA } from "../../../src/core/bench/types.ts";
 
 const SAMPLE = join("tests", "fixtures", "bench", "longmemeval-sample.json");
+const OFFICIAL_SAMPLE = join("tests", "fixtures", "bench", "longmemeval-official-sample.json");
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -77,6 +78,109 @@ test("session ids that sanitize to one note path are a named parse error", () =>
     }),
   ]);
   expect(() => longMemEvalToBenchFixture(dataset)).toThrow(/same note path/);
+});
+
+describe("the official dataset shape", () => {
+  test("the committed official-shape sample parses (official keys, types, _abs, question_date)", () => {
+    const raw: unknown = JSON.parse(readFileSync(OFFICIAL_SAMPLE, "utf8"));
+    const dataset = parseLongMemEvalDataset(raw);
+    expect(dataset.entries.map((e) => e.q_id)).toEqual([
+      "single-session-user_1",
+      "multi-session_2",
+      "single-session-user_3_abs",
+    ]);
+    expect(dataset.entries[0]!.question_type).toBe("single-session-user");
+    expect(dataset.entries[0]!.question_date).toBe("2023/05/20 (Sat) 02:21");
+  });
+
+  test("official key spellings are read; the legacy sample shape keeps working", () => {
+    const official = parseLongMemEvalDataset([
+      {
+        question_id: "q-official",
+        question_type: "single-session-user",
+        question: "launch codename",
+        question_date: "2023/05/20 (Sat) 02:21",
+        haystack_session_ids: ["s1"],
+        haystack_sessions: [
+          [{ role: "user", content: "We picked Blue Heron as the launch codename." }],
+        ],
+        haystack_dates: ["2023/05/01 (Mon) 09:15"],
+        answer_session_ids: ["s1"],
+      },
+    ]);
+    expect(official.entries[0]!.q_id).toBe("q-official");
+    expect(official.entries[0]!.haystack_session_id).toEqual(["s1"]);
+    expect(official.entries[0]!.haystack_session).toHaveLength(1);
+    const legacy = parseLongMemEvalDataset([entry({})]);
+    expect(legacy.entries[0]!.q_id).toBe("q1");
+    expect(legacy.entries[0]!.haystack_session_id).toEqual(["s1"]);
+  });
+
+  test("every official question type maps to a bench category", () => {
+    const types = [
+      ["single-session-user", "single_hop"],
+      ["single-session-assistant", "single_hop"],
+      ["single-session-preference", "single_hop"],
+      ["multi-session", "multi_evidence"],
+      ["temporal-reasoning", "temporal"],
+      ["knowledge-update", "contradiction"],
+    ] as const;
+    const dataset = parseLongMemEvalDataset(
+      types.map(([type], i) =>
+        entry({
+          q_id: `q-type-${i}`,
+          question_type: type,
+          haystack_session_id: [`s-type-${i}`],
+          haystack_dates: ["2026-03-02T10:00:00Z"],
+          haystack_session: [[{ role: "user", content: `type marker ${i} zebra.` }]],
+          answer_session_ids: [`s-type-${i}`],
+        }),
+      ),
+    );
+    const { fixture } = longMemEvalToBenchFixture(dataset);
+    expect(fixture.questions.map((q) => q.category)).toEqual(types.map(([, category]) => category));
+  });
+
+  test("abstention is the _abs question-id suffix; the explicit type keeps working", () => {
+    const dataset = parseLongMemEvalDataset([
+      entry({
+        q_id: "single-session-user_9_abs",
+        question_type: "single-session-user",
+        answer_session_ids: [],
+      }),
+      entry({ q_id: "abstain-legacy", question_type: "abstention", answer_session_ids: [] }),
+      entry({}),
+    ]);
+    const { fixture, receipt } = longMemEvalToBenchFixture(dataset);
+    expect(fixture.questions.map((q) => q.id)).toEqual(["q1"]);
+    expect(receipt.abstention_excluded).toBe(2);
+  });
+
+  test("question_date is read, falling back to the last haystack date", () => {
+    const dataset = parseLongMemEvalDataset([
+      entry({ question_date: "2023/05/20 (Sat) 02:21" }),
+      entry({ q_id: "q2" }),
+    ]);
+    expect(dataset.entries[0]!.question_date).toBe("2023/05/20 (Sat) 02:21");
+    expect(dataset.entries[1]!.question_date).toBe("2026-03-02T10:00:00Z");
+  });
+
+  test("a non-date question_date is a named error", () => {
+    expect(() => parseLongMemEvalDataset([entry({ question_date: "eventually" })])).toThrow(
+      /question_date/,
+    );
+  });
+
+  test("the official-shape sample converts with the _abs exclusion", () => {
+    const raw: unknown = JSON.parse(readFileSync(OFFICIAL_SAMPLE, "utf8"));
+    const { fixture, receipt } = longMemEvalToBenchFixture(parseLongMemEvalDataset(raw));
+    expect(receipt.abstention_excluded).toBe(1);
+    expect(fixture.questions.map((q) => q.id)).toEqual([
+      "single-session-user_1",
+      "multi-session_2",
+    ]);
+    expect(fixture.questions.map((q) => q.category)).toEqual(["single_hop", "multi_evidence"]);
+  });
 });
 
 describe("parseLongMemEvalDataset", () => {
