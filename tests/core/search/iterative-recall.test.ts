@@ -348,7 +348,12 @@ describe("iterative knob resolution", () => {
   test("defaults off and resolves the env pair, refusing an out-of-range cap by name", () => {
     const config = resolveSearchConfig({ vault });
     expect(config.recall.iterativeRecallEnabled ?? false).toBe(false);
-    const saved = { ...process.env };
+    // Snapshot the twins themselves, not the whole env: keys this test
+    // ADDS are absent from a whole-env snapshot, so a keys-of-saved
+    // restore loop can never delete them and they leak into every later
+    // file of a same-process directory run.
+    const savedIterative = process.env["OPEN_SECOND_BRAIN_SEARCH_ITERATIVE"];
+    const savedMaxRounds = process.env["OPEN_SECOND_BRAIN_SEARCH_ITERATIVE_MAX_ROUNDS"];
     try {
       process.env["OPEN_SECOND_BRAIN_SEARCH_ITERATIVE"] = "true";
       process.env["OPEN_SECOND_BRAIN_SEARCH_ITERATIVE_MAX_ROUNDS"] = "4";
@@ -363,9 +368,15 @@ describe("iterative knob resolution", () => {
       process.env["OPEN_SECOND_BRAIN_SEARCH_ITERATIVE_MAX_ROUNDS"] = "0";
       expect(() => resolveSearchConfig({ vault })).toThrow(/search_iterative_recall_max_rounds/);
     } finally {
-      for (const key of Object.keys(saved)) {
-        if (saved[key as keyof typeof saved] === undefined) delete process.env[key];
-        else process.env[key] = saved[key as keyof typeof saved]!;
+      if (savedIterative === undefined) {
+        delete process.env["OPEN_SECOND_BRAIN_SEARCH_ITERATIVE"];
+      } else {
+        process.env["OPEN_SECOND_BRAIN_SEARCH_ITERATIVE"] = savedIterative;
+      }
+      if (savedMaxRounds === undefined) {
+        delete process.env["OPEN_SECOND_BRAIN_SEARCH_ITERATIVE_MAX_ROUNDS"];
+      } else {
+        process.env["OPEN_SECOND_BRAIN_SEARCH_ITERATIVE_MAX_ROUNDS"] = savedMaxRounds;
       }
     }
   });
