@@ -388,15 +388,16 @@ describe("iterative round driver over a seeded vault", () => {
     // structural semantic-skip note depends on which deadline check
     // fires first inside the run - a diagnostics-order coin flip under
     // an always-expired clock - so the lists are compared as
-    // vocabularies with the deadline entry required on both, never
-    // byte-for-byte.
-    const onDegraded = degradedOf(on.retrievalTrail);
-    const offDegraded = degradedOf(off.retrievalTrail);
+    // vocabularies: the coin-flip note is dropped from both, the
+    // deadline entry is required on both, and the remaining
+    // vocabularies must agree as sets, never byte-for-byte nor in a
+    // fixed subset direction.
+    const STRUCTURED_SKIP_NOTE = "semantic-structured-lanes-skipped";
+    const onDegraded = degradedOf(on.retrievalTrail).filter((d) => d !== STRUCTURED_SKIP_NOTE);
+    const offDegraded = degradedOf(off.retrievalTrail).filter((d) => d !== STRUCTURED_SKIP_NOTE);
     expect(onDegraded).toContain("hybrid-deadline-exceeded:1");
     expect(offDegraded).toContain("hybrid-deadline-exceeded:1");
-    for (const d of onDegraded) {
-      expect(offDegraded).toContain(d);
-    }
+    expect(new Set(onDegraded)).toEqual(new Set(offDegraded));
     expect(onDegraded.length).toBeGreaterThan(0);
     // A deadline exit never mints a pause: the looped answer carries no
     // decider envelope, so the flag added nothing observable.
