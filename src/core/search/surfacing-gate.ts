@@ -154,7 +154,14 @@ export function evaluateSurfacingGate(input: SurfacingGateInput): SurfacingGateD
 export function evaluateGradedSurfacing(input: SurfacingGateInput): GradedSurfacingDecision {
   const structural = evaluateSurfacingGate(input);
   if (structural.reason === "explicit") {
-    const key = input.matchQuality === undefined ? null : assertMeasuredQuality(input.matchQuality);
+    // Both "no measurement offered" and "measured, nothing was
+    // measurable" grade as null keys on the default branch; the explicit
+    // branch treats them the same instead of handing a legitimate null
+    // report to the validator as a shape violation.
+    const key =
+      input.matchQuality === undefined || input.matchQuality === null
+        ? null
+        : assertMeasuredQuality(input.matchQuality);
     return Object.freeze({
       key,
       tier: SURFACING_TIER.explicit,

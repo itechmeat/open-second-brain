@@ -167,6 +167,18 @@ test("evaluateGradedSurfacing grades a fail-open prompt through the shared calcu
   });
 });
 
+test("an explicit request grades a measured null report as a null key, not an error", () => {
+  // null is a legitimate measurement ("nothing was measurable"); the
+  // explicit branch grades it like the default branch does instead of
+  // handing it to the validator as a shape violation.
+  expect(evaluateGradedSurfacing({ prompt: "hello", explicit: true, matchQuality: null })).toEqual({
+    key: null,
+    tier: "explicit",
+    admit: true,
+    reason: "explicit",
+  });
+});
+
 test("evaluateGradedSurfacing without a measurement fails open as default_retrieve", () => {
   // Absent quality is not an unmeasurable report: the structural
   // projection failed open, and the reason records that it was a default.
