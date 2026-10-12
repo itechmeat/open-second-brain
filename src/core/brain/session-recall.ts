@@ -981,6 +981,10 @@ function scopedMentions(
   }
   const mentions: ThreadFacetMention[] = [];
   for (const record of listContinuityRecords(vault, { kind: "session_entity_mention" })) {
+    // The same private-row rule the entity-seed reader applies: a
+    // `<private>` mention never seeds a facet, so its key string cannot
+    // surface through the diagnostics or the topic report.
+    if (record.private) continue;
     const family = record.payload["family"];
     const key = record.payload["key"];
     const sessionRef = record.payload["session_ref"];
