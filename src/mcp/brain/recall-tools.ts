@@ -1603,7 +1603,7 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "string",
           enum: ["match", "coverage"],
           description:
-            "match (default) greps records for `query` (required here). coverage runs coverage-first selection: `query` must be absent and `char_budget` is required; `entity_key` optionally seeds the fan-out.",
+            "match (default) greps records for `query` (required here). coverage: `query` absent, `char_budget` required, `entity_key` optionally seeds the fan-out.",
         },
         query: { type: "string", description: "Search text (operation=match)." },
         session_id: {
