@@ -43,7 +43,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { loadBenchFixture } from "../../../src/core/bench/fixture.ts";
+import { fixtureHash, loadBenchFixture } from "../../../src/core/bench/fixture.ts";
 import { runMemoryBench } from "../../../src/core/bench/phases.ts";
 import { loadReplayBenchFixture } from "../../../src/core/bench/replay.ts";
 import type { BenchReport } from "../../../src/core/bench/types.ts";
@@ -98,8 +98,11 @@ describe("failure-mode baseline", () => {
       fixture_hash: string;
       schema: string;
     };
-    expect(baseline.fixture_hash).toMatch(/^[0-9a-f]{16}$/);
     expect(baseline.schema).toBe("o2b.bench.v2");
+    // Hash-shaped is not enough: the committed hash must be the CURRENT
+    // fixture's, so an edited-but-never-re-measured fixture names itself
+    // here instead of failing somewhere confusing downstream.
+    expect(baseline.fixture_hash).toBe(fixtureHash(loadBenchFixture(FIXTURE_PATH)));
   });
 
   test("the graded gate is scoreable: the replay corpus bounds its false-fire rate", async () => {
