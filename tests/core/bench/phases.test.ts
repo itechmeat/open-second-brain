@@ -7,7 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -399,5 +399,28 @@ describe("the embeddings capability path", () => {
     // Arm 2 rewrote the cache from its own store read-back: identical
     // bytes prove the stored vectors equal arm 1's, element for element.
     expect(readFileSync(join(runsDir, "embedding-cache.json"), "utf8")).toBe(cacheAfterFirst);
+  }, 30_000);
+
+  test("a shared cache written under another schema is refused, never honored", async () => {
+    const cachePath = join(runsDir, "embedding-cache.json");
+    const run = () =>
+      runMemoryBench({
+        fixture: SEMANTIC_FIXTURE,
+        runsDir,
+        capabilities: CAPABILITIES,
+        pinnedKnobs: SEMANTIC_PIN,
+      });
+    writeFileSync(
+      cachePath,
+      `${JSON.stringify({ schema: "some.other.vectors.v9", entries: {} }, null, 2)}\n`,
+      "utf8",
+    );
+    await expect(run()).rejects.toThrow(
+      /schema 'some\.other\.vectors\.v9', expected 'o2b\.bench\.vectors\.v1'/,
+    );
+    // Every writer stamps the schema, so a missing one is foreign state
+    // too - not an older generation to silently adopt.
+    writeFileSync(cachePath, `${JSON.stringify({ entries: {} }, null, 2)}\n`, "utf8");
+    await expect(run()).rejects.toThrow(/schema 'undefined'/);
   }, 30_000);
 });

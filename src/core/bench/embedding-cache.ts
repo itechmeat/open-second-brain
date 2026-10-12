@@ -111,6 +111,8 @@ export function benchVectorCacheKey(signature: string, text: string): string {
  * Load the shared cache. An absent file is an empty cache; a malformed
  * one is a named error - the cache is repo-owned state, and silently
  * re-embedding over a corrupt file would hide why two arms disagreed.
+ * A file stamped with another schema is foreign state by the same rule:
+ * its vectors are never served as hits.
  */
 function loadVectorCache(runsDir: string): Record<string, ReadonlyArray<number>> {
   const path = benchVectorCachePath(runsDir);
@@ -125,6 +127,16 @@ function loadVectorCache(runsDir: string): Record<string, ReadonlyArray<number>>
   }
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
     throw new BenchEmbeddingError(`bench vector cache at ${path} must be an object`);
+  }
+  // Every writer stamps the schema, so a missing or foreign one means the
+  // file was not written by this module's generation: applying its bytes
+  // as cache hits would compare vectors across incomparable identities.
+  const schema = (raw as Record<string, unknown>)["schema"];
+  if (schema !== BENCH_VECTOR_CACHE_SCHEMA) {
+    throw new BenchEmbeddingError(
+      `bench vector cache at ${path} has schema '${String(schema)}', expected ` +
+        `'${BENCH_VECTOR_CACHE_SCHEMA}' - refusing to serve vectors across cache generations`,
+    );
   }
   const entries = (raw as Record<string, unknown>)["entries"];
   if (entries === undefined) return {};
