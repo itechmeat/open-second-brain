@@ -20,11 +20,33 @@
 
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, posix } from "node:path";
+import { join, posix, relative, sep, win32 } from "node:path";
 
 import { lexSource } from "../../helpers/source-lexer.ts";
 
 const SRC_ROOT = join(import.meta.dir, "..", "..", "..", "src");
+
+/**
+ * One walked entry, as a POSIX path relative to `root`.
+ *
+ * The PLATFORM `relative`, never `posix.relative`: a walker on Windows
+ * yields drive-prefixed absolute entries (`D:\a\...`), which
+ * `posix.relative` treats as one segment - it answered `../D:\a\...`, and
+ * `join(SRC_ROOT, ...)` doubled the root back on, naming files that do
+ * not exist (`...\open-second-brain\D:\a\...\src\...`) and red on every
+ * shard. The platform answer is split on the platform separator and
+ * re-joined with `/`, so every consumer - on either platform - sees the
+ * POSIX spellings the closed sets below are written in. Both arguments
+ * are absolute on the host, and an absolute path is exactly what the
+ * walker hands over, so the same call relativizes it.
+ */
+function relativize(
+  root: string,
+  abs: string,
+  path: Pick<typeof posix, "relative" | "sep"> = { relative, sep },
+): string {
+  return path.relative(root, abs).split(path.sep).join("/");
+}
 
 /** The frontmatter key, in both of its spellings. */
 const STAMP_KEY_IDENTIFIER = "SOURCE_ARCHIVE_HASH_KEY";
@@ -71,7 +93,7 @@ function srcModulePaths(): ReadonlyArray<string> {
         walk(abs);
         continue;
       }
-      if (name.endsWith(".ts")) out.push(posix.relative(SRC_ROOT, abs));
+      if (name.endsWith(".ts")) out.push(relativize(SRC_ROOT, abs));
     }
   };
   walk(SRC_ROOT);
@@ -121,5 +143,29 @@ describe("source-archive stamp census", () => {
     expect(writers).toEqual([STAMP_WRITER]);
     const writerCode = lexSource(readFileSync(join(SRC_ROOT, STAMP_WRITER), "utf8")).code;
     expect(writerCode.includes(STAMP_KEY_IDENTIFIER)).toBe(true);
+  });
+});
+
+describe("the sweep's relativization", () => {
+  test("a drive-letter absolute entry relativizes to its POSIX walk path", () => {
+    // The windows (2/10) CI failure, replayed through path.win32: a
+    // walker under a drive-letter SRC_ROOT yields `D:\...` entries, and
+    // the `posix.relative` spelling - pinned failing below - never
+    // answers the plain walk for one. The platform flavor does, and the
+    // separator re-join spells the answer POSIX.
+    const root = win32.join("D:\\a\\open-second-brain", "src");
+    const abs = win32.join(root, "cli", "advisory-rail.ts");
+    expect(win32.isAbsolute(abs)).toBe(true);
+    expect(posix.relative(root, abs)).not.toBe("cli/advisory-rail.ts");
+    expect(relativize(root, abs, win32)).toBe("cli/advisory-rail.ts");
+  });
+
+  test("an absolute entry handed over by this platform's walker relativizes identically", () => {
+    // The sweep is robust to a walker that yields absolute paths: the
+    // same call relativizes one, to the spelling every consumer reads.
+    const abs = join(SRC_ROOT, "core", "brain", "provenance", "source-archive.ts");
+    expect(relativize(SRC_ROOT, abs)).toBe(
+      posix.join("core", "brain", "provenance", "source-archive.ts"),
+    );
   });
 });
