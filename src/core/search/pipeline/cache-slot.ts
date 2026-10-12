@@ -85,29 +85,35 @@ export function iterativeTokenSpent(
 }
 
 /**
- * Mark a round token spent after its commit executed. Best-effort, like
- * every write on this table: a marker that failed to land costs a
- * deterministic re-run of the same commit on replay (the validator
- * re-checks the token against the state), never a wrong answer.
+ * Claim a round token as spent in one atomic insert: the claim, not a
+ * later check, arbitrates single use, so two commits racing on the same
+ * token cannot both pass (the plain check-then-put let the second
+ * overwrite the first's marker). False means the token is already
+ * claimed in this generation inside its TTL - the call site refuses
+ * that commit by name. A registry write that failed lands on the
+ * documented best-effort trade: it costs a deterministic re-run of the
+ * same commit on replay (the validator re-checks the token against the
+ * state), never a wrong answer.
  */
-export function markIterativeTokenSpent(
+export function claimIterativeToken(
   store: Store,
   config: ResolvedSearchConfig,
   token: string,
   nowMs: number = Date.now(),
-): void {
+): boolean {
   try {
     const generation = store.corpusGeneration();
     const ttlMs = config.recall.cacheTtlSeconds * MILLISECONDS_PER_SECOND;
     store.queryCacheSweep(generation, nowMs - ttlMs);
-    store.queryCachePut(
+    return store.queryCachePutIfAbsent(
       `${ITERATIVE_TOKEN_KEY_PREFIX}${token}`,
       generation,
       JSON.stringify({ spent: true }),
       nowMs,
     );
   } catch {
-    // Marker persistence is best-effort; never fail a committed search on it.
+    // Registry persistence is best-effort; never fail a committed search on it.
+    return true;
   }
 }
 
@@ -115,6 +121,21 @@ export function markIterativeTokenSpent(
  * What a decision-model rerank passage carries. Part of the decision-model
  * fingerprint only, so the keys of every other rerank kind are unchanged.
  */
+/**
+ * Release a claim this call made and can no longer honor: a commit whose
+ * round failed keeps the retry semantics the post-execution mark had -
+ * the caller may re-commit the same token - while racing commits stay
+ * mutually exclusive, because a release only ever removes the row the
+ * failing call itself claimed.
+ */
+export function releaseIterativeToken(store: Store, token: string): void {
+  try {
+    store.queryCacheDelete(`${ITERATIVE_TOKEN_KEY_PREFIX}${token}`);
+  } catch {
+    // Release is best-effort; a stuck claim costs a fresh plan phase.
+  }
+}
+
 const DECISION_RERANK_STATE_SHAPE = "passage:title,status,updated,text;skip:frontmatter";
 
 /** Fingerprint placeholder for a state source the query did not consult. */

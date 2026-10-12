@@ -143,14 +143,16 @@ describe("brain_search iterative cache keys", () => {
 
   test("a spent round token is visible across registry reads until the TTL ends", async () => {
     const { Store } = await import("../../src/core/search/store.ts");
-    const { iterativeTokenSpent, markIterativeTokenSpent } =
+    const { claimIterativeToken, iterativeTokenSpent } =
       await import("../../src/core/search/pipeline/cache-slot.ts");
     const config = resolveSearchConfig({ vault, configPath: ctx.configPath });
     const store = await Store.open(config, { mode: "read", loadVec: false });
     try {
       const now = 1_750_000_000_000;
       expect(iterativeTokenSpent(store, config, "drt-3-unspent", now)).toBe(false);
-      markIterativeTokenSpent(store, config, "drt-3-unspent", now);
+      // The claim is insert-once: the second racing commit's claim loses.
+      expect(claimIterativeToken(store, config, "drt-3-unspent", now)).toBe(true);
+      expect(claimIterativeToken(store, config, "drt-3-unspent", now)).toBe(false);
       expect(iterativeTokenSpent(store, config, "drt-3-unspent", now)).toBe(true);
       // The marker dies with the TTL: a token whose plan phase expired
       // cannot be replayed against a live registry row.

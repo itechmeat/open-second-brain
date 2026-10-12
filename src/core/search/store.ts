@@ -340,6 +340,21 @@ export class Store {
     queryCache.queryCachePut(this.db, key, generation, payload, createdAtMs);
   }
 
+  /** Insert-only put: false when the key already held a row. */
+  queryCachePutIfAbsent(
+    key: string,
+    generation: string,
+    payload: string,
+    createdAtMs: number,
+  ): boolean {
+    return queryCache.queryCachePutIfAbsent(this.db, key, generation, payload, createdAtMs);
+  }
+
+  /** Delete one query-cache row by key; idempotent. */
+  queryCacheDelete(key: string): void {
+    queryCache.queryCacheDelete(this.db, key);
+  }
+
   /** Delete rows from a stale generation or created before the cutoff. */
   queryCacheSweep(currentGeneration: string, expiredBeforeMs: number): void {
     queryCache.queryCacheSweep(this.db, currentGeneration, expiredBeforeMs);

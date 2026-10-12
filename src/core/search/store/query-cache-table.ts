@@ -42,6 +42,33 @@ export function queryCachePut(
   );
 }
 
+/**
+ * Insert-only put: false when the key already holds a row. This is the
+ * one write a single-use registry needs - the claim, not a later check,
+ * arbitrates the use, because a plain put would let a racing second
+ * writer overwrite the first writer's marker.
+ */
+export function queryCachePutIfAbsent(
+  db: Database,
+  key: string,
+  generation: string,
+  payload: string,
+  createdAtMs: number,
+): boolean {
+  return (
+    db.run(
+      "INSERT INTO query_cache(cache_key, generation, payload, created_at) VALUES (?, ?, ?, ?) " +
+        "ON CONFLICT(cache_key) DO NOTHING",
+      [key, generation, payload, createdAtMs],
+    ).changes > 0
+  );
+}
+
+/** Delete one row by key; idempotent. */
+export function queryCacheDelete(db: Database, key: string): void {
+  db.run("DELETE FROM query_cache WHERE cache_key = ?", [key]);
+}
+
 /** Delete rows from a stale generation or created before the cutoff. */
 export function queryCacheSweep(
   db: Database,

@@ -17,7 +17,8 @@ import { decorateFinalResults } from "./pipeline/attribution.ts";
 import {
   isCacheEligible,
   iterativeTokenSpent,
-  markIterativeTokenSpent,
+  claimIterativeToken,
+  releaseIterativeToken,
   persistCachedOutcome,
   probeQueryCache,
 } from "./pipeline/cache-slot.ts";
@@ -553,9 +554,21 @@ export async function search(
             "iterative commit refused: no decider round is pending for this query state; run the plan phase again",
           );
         }
+        // The claim, not the entry check, arbitrates single use: two
+        // commits racing the same token both pass the entry read, and
+        // one atomic insert lets exactly one of them run the round.
+        let claimed = false;
         try {
-          // The cross-call single-use registry was checked at entry; the
-          // in-call set is empty because one call commits at most once.
+          if (!claimIterativeToken(store, effectiveConfig, opts.iterativeToken!, nowMs)) {
+            throw new SearchError(
+              "INVALID_INPUT",
+              `iterative commit refused (token_used): round token ${JSON.stringify(opts.iterativeToken)} was already claimed; a round token is single use`,
+            );
+          }
+          claimed = true;
+          // One call commits at most once, so the in-call spent set the
+          // validator sees stays empty; cross-call single use is the
+          // claim above.
           const committed = runDeciderRound({
             store,
             query,
@@ -580,8 +593,8 @@ export async function search(
             rounds: committed.rounds,
             stopReason: committed.stopReason,
           };
-          markIterativeTokenSpent(store, effectiveConfig, committed.token, nowMs);
         } catch (e) {
+          if (claimed) releaseIterativeToken(store, opts.iterativeToken!);
           if (e instanceof DeciderStepError) {
             throw new SearchError(
               "INVALID_INPUT",
