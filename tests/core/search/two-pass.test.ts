@@ -95,6 +95,10 @@ describe("two-pass recall", () => {
 // ----- Iterative outcome observability (recall-quality wave, lane A) ------
 
 describe("iterative outcome observability", () => {
+  // A pinned clock must never outlive the test that pinned it: this file
+  // runs in the same process as every other suite, and a shifted wall
+  // clock would poison theirs.
+  afterEach(() => setSystemTime());
   /** Six common docs anchor the match; the relic docs are the loop's recoverable mass. */
   async function seedRelic(): Promise<void> {
     for (let i = 1; i <= 6; i++) {
@@ -172,12 +176,15 @@ describe("iterative outcome observability", () => {
     // Pin the wall clock: the recency boost reads Date.now() per call, so
     // two searches a millisecond apart differ in float noise that has
     // nothing to do with the mode.
-    setSystemTime(1_750_000_000_000);
-    const off = await search(base, { query });
-    setSystemTime(1_750_000_000_000);
-    const on = await search(config, { query, iterative: true });
-    setSystemTime();
-    expect(on.iterative).toBeUndefined();
-    expect(JSON.stringify(on)).toBe(JSON.stringify(off));
+    try {
+      setSystemTime(1_750_000_000_000);
+      const off = await search(base, { query });
+      setSystemTime(1_750_000_000_000);
+      const on = await search(config, { query, iterative: true });
+      expect(on.iterative).toBeUndefined();
+      expect(JSON.stringify(on)).toBe(JSON.stringify(off));
+    } finally {
+      setSystemTime();
+    }
   });
 });

@@ -508,19 +508,22 @@ test("brain_search with the knob on but the flag omitted is byte-identical to th
   // Pin the wall clock: the recency boost reads Date.now() per call, so
   // two searches a millisecond apart differ in float noise that has
   // nothing to do with the mode.
-  setSystemTime(1_750_000_000_000);
-  // record_access off on both legs: the first call's activation record
-  // would otherwise feed the second call's usage-aware ranking - a real
-  // effect, but one that has nothing to do with the mode under test.
-  const off = extractToolResult(
-    await call(server, "brain_search", { query, limit: 5, record_access: false }),
-  );
-  expect(off["iterative"]).toBeUndefined();
-  setSystemTime(1_750_000_000_000);
   savedEnv["OPEN_SECOND_BRAIN_SEARCH_ITERATIVE"] =
     process.env["OPEN_SECOND_BRAIN_SEARCH_ITERATIVE"];
   process.env["OPEN_SECOND_BRAIN_SEARCH_ITERATIVE"] = "true";
   try {
+    // Pin the wall clock: the recency boost reads Date.now() per call, so
+    // two searches a millisecond apart differ in float noise that has
+    // nothing to do with the mode. The pin never outlives this test.
+    setSystemTime(1_750_000_000_000);
+    // record_access off on both legs: the first call's activation record
+    // would otherwise feed the second call's usage-aware ranking - a real
+    // effect, but one that has nothing to do with the mode under test.
+    const off = extractToolResult(
+      await call(server, "brain_search", { query, limit: 5, record_access: false }),
+    );
+    expect(off["iterative"]).toBeUndefined();
+    setSystemTime(1_750_000_000_000);
     // Mode on (the operator knob), operation not requested (no flag):
     // the same request must serialize identically, no phase marker.
     const inert = extractToolResult(
@@ -528,6 +531,7 @@ test("brain_search with the knob on but the flag omitted is byte-identical to th
     );
     expect(JSON.stringify(inert)).toBe(JSON.stringify(off));
   } finally {
+    setSystemTime();
     if (savedEnv["OPEN_SECOND_BRAIN_SEARCH_ITERATIVE"] === undefined) {
       delete process.env["OPEN_SECOND_BRAIN_SEARCH_ITERATIVE"];
     } else {
