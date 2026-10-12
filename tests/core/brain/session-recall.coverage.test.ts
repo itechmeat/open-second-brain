@@ -153,7 +153,7 @@ describe("coverage-first selection core", () => {
   test("a non-positive character budget is refused by name", () => {
     importLineageThread();
     expect(() => coverageSessionRecall(vault, { sessionId: "root-seg", charBudget: 0 })).toThrow(
-      /charBudget/,
+      /must be a positive finite number/,
     );
   });
 });
