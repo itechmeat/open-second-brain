@@ -396,7 +396,8 @@ describe("typed floor-violation infeasibility", () => {
     // The budget holds the long cluster's turns exactly plus one char:
     // the greedy rank-order pass keeps t1 and t2 and drops t3 and t4.
     const budget = serialized[0]!.length + serialized[1]!.length + 1;
-    // The floor topics' own top turns (the pre-check's old quantity) fit.
+    // The floor topics' own top turns fit the budget individually - what
+    // gets crowded out is their rank-ordered slot behind the long turns.
     expect(serialized[0]!.length + serialized[2]!.length).toBeLessThanOrEqual(budget);
 
     let probe: SessionCoverageInfeasibleError | null = null;
@@ -421,6 +422,43 @@ describe("typed floor-violation infeasibility", () => {
     });
     expect(at.turns.map((t) => t.turn_id)).toEqual(["t1", "t2", "t3"]);
     expect(at.diagnostics.dropped_turn_ids).toEqual(["t4"]);
+  });
+
+  test("astral-plane turns spend code points: a feasible budget is never falsely refused", () => {
+    // Two depth-1 clusters, the long one emoji-heavy: UTF-16 length counts
+    // each astral character twice, while the real selection
+    // (`applyCharBudget`) spends code points. A budget sized to the
+    // code-point requirement through the deepest floor-top rank is
+    // feasible by construction, so the floor guard must accept it - the
+    // UTF-16 rank-prefix arithmetic refuses the very same budget.
+    const emojiText = "\u{1F600}".repeat(200); // 400 UTF-16 units, 200 code points, still inline
+    importSessionRecall(vault, {
+      sessionId: "astral-seg",
+      turns: [
+        turn("t1", "user", emojiText, 1),
+        turn("t2", "assistant", emojiText, 2),
+        turn("t3", "user", "short floor-topic evidence", 3),
+        turn("t4", "assistant", "more short floor-topic evidence", 4),
+      ],
+      summaryGroupSize: 2,
+      createdAt: "2026-07-05T09:00:00.000Z",
+    });
+    const serialized = listSessionRawTurns(vault, "astral-seg").map((t) => JSON.stringify(t));
+    const utf16Requirement = serialized[0]!.length + serialized[1]!.length + serialized[2]!.length;
+    const codePointRequirement =
+      [...serialized[0]!].length + [...serialized[1]!].length + [...serialized[2]!].length;
+    // The UTF-16 arithmetic exceeds the budget the real selection needs.
+    expect(utf16Requirement).toBeGreaterThan(codePointRequirement);
+
+    const coverage = coverageSessionRecall(vault, {
+      sessionId: "astral-seg",
+      charBudget: codePointRequirement,
+    });
+    // Every floor topic keeps its top turn; only the turn ranked behind
+    // the floor is dropped, visibly.
+    expect(coverage.turns.map((t) => t.turn_id)).toEqual(["t1", "t2", "t3"]);
+    expect(coverage.diagnostics.chars_used).toBe(codePointRequirement);
+    expect(coverage.diagnostics.dropped_turn_ids).toEqual(["t4"]);
   });
 
   test("requiredChars is the exact retry bound: at it, no error; one below, the error", () => {
