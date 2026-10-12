@@ -242,7 +242,7 @@ describe("runMemoryBench", () => {
         resume: first.run_id,
         pinnedKnobs: { semantic: { enabled: false }, keywordWeight: 0.6 },
       }),
-    ).rejects.toThrow(/knob pin mismatch/);
+    ).rejects.toThrow(/run identity mismatch/);
   }, 30_000);
 
   test("resume with the same explicit pin reuses the run", async () => {
