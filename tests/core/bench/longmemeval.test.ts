@@ -415,8 +415,9 @@ describe("the longmemeval suite", () => {
     };
     expect(payload.questions).toHaveLength(1);
     // No suite-provided judge input: no question, answer or gold fields.
-    expect("question" in payload.questions[0]).toBe(false);
-    expect("answer" in payload.questions[0]).toBe(false);
-    expect("gold" in payload.questions[0]).toBe(false);
+    const first = payload.questions[0]!;
+    expect("question" in first).toBe(false);
+    expect("answer" in first).toBe(false);
+    expect("gold" in first).toBe(false);
   }, 20_000);
 });

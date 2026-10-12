@@ -347,7 +347,7 @@ describe("the embeddings capability path", () => {
     const receiptOnDisk = JSON.parse(
       readFileSync(join(runsDir, report.run_id, "embeddings.json"), "utf8"),
     ) as Record<string, unknown>;
-    expect(receiptOnDisk).toEqual(receipt);
+    expect(receiptOnDisk).toEqual(receipt as unknown as Record<string, unknown>);
     // The shared cache lives under the runs dir, entries keyed by
     // provider, model, dimension and text hash.
     const cache = JSON.parse(readFileSync(join(runsDir, "embedding-cache.json"), "utf8")) as {

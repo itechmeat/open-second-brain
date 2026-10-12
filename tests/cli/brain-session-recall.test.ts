@@ -165,7 +165,7 @@ test("entity-key seeds the fan-out and match-only flags are refused under covera
     ["--before", "2026-05-21"],
     ["--limit", "5"],
     ["--snippet-chars", "40"],
-  ]) {
+  ] as const) {
     const refused = await runCli([
       "brain",
       "session-grep",
