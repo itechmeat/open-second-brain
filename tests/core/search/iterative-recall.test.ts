@@ -164,7 +164,22 @@ describe("iterative round driver over a seeded vault", () => {
     // Same keyword-only answer, same named degradation, and no loop round.
     expect(on.results.map((r) => r.path)).toEqual(off.results.map((r) => r.path));
     expect(on.warnings.some((w) => w.startsWith("hybrid deadline 1ms exceeded"))).toBe(true);
-    expect(JSON.stringify(on.retrievalTrail)).toBe(JSON.stringify(off.retrievalTrail));
+    // The trail is judged by its degradation vocabulary and the configured
+    // budget, never by bytes: the hybrid-deadline degradation carries
+    // `detail.elapsedMs`, measured wall time, so a byte-compare of two
+    // trails pins scheduler jitter and flakes. Codes and budgetMs are the
+    // deterministic content; `pool`/`retrieved` are pinned by the results
+    // equality above.
+    const degradedOf = (t: typeof on.retrievalTrail): Array<string> =>
+      (t?.degraded ?? []).map((d) => {
+        const budget = (d.detail as { budgetMs?: number } | undefined)?.budgetMs;
+        return budget === undefined ? d.code : `${d.code}:${budget}`;
+      });
+    expect(degradedOf(on.retrievalTrail)).toEqual(degradedOf(off.retrievalTrail));
+    expect(degradedOf(on.retrievalTrail).length).toBeGreaterThan(0);
+    // A deadline exit never mints a pause: the looped answer carries no
+    // decider envelope, so the flag added nothing observable.
+    expect(on.iterative).toBeUndefined();
     expect(pathsMissing(on, COMMON)).toBe(true);
   });
 });
