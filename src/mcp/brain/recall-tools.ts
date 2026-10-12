@@ -1619,7 +1619,7 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         entity_key: {
           type: "string",
           description:
-            "With operation=coverage: seed the topic fan-out from the sessions whose mined records mention this entity (exact key). An entity no imported record mentions is refused by name.",
+            "With operation=coverage: seed the fan-out from sessions whose mined records mention this entity. An entity no record mentions is refused by name.",
         },
         limit: {
           type: "integer",
