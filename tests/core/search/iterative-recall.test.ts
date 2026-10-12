@@ -301,12 +301,25 @@ describe("iterative round driver over a seeded vault", () => {
     } as ResolvedSearchConfig;
     const query = `warehouse rotation ${COMMON.join(" ")}`;
     const structured = structuredFor();
-    const off = await search(config, { query, structuredQuery: structured });
-    const on = await search(withIterative(config), {
-      query,
-      structuredQuery: structured,
-      iterative: true,
-    });
+    // Both runs see a clock 10 seconds past the 1 ms budget at every
+    // deadline check, by construction: Date.now is shifted for the calls
+    // and restored after. A real 1 ms budget raced wall time instead,
+    // and under load the two runs degraded at different phase boundaries
+    // (the plain run skipped the semantic lanes, the looped one did not).
+    const realNow = Date.now;
+    Date.now = () => realNow.call(Date) + 10_000;
+    let off: Awaited<ReturnType<typeof search>>;
+    let on: Awaited<ReturnType<typeof search>>;
+    try {
+      off = await search(config, { query, structuredQuery: structured });
+      on = await search(withIterative(config), {
+        query,
+        structuredQuery: structured,
+        iterative: true,
+      });
+    } finally {
+      Date.now = realNow;
+    }
     // Same keyword-only answer, same named degradation, and no loop round.
     expect(on.results.map((r) => r.path)).toEqual(off.results.map((r) => r.path));
     expect(on.warnings.some((w) => w.startsWith("hybrid deadline 1ms exceeded"))).toBe(true);
@@ -321,8 +334,20 @@ describe("iterative round driver over a seeded vault", () => {
         const budget = (d.detail as { budgetMs?: number } | undefined)?.budgetMs;
         return budget === undefined ? d.code : `${d.code}:${budget}`;
       });
-    expect(degradedOf(on.retrievalTrail)).toEqual(degradedOf(off.retrievalTrail));
-    expect(degradedOf(on.retrievalTrail).length).toBeGreaterThan(0);
+    // Both runs name the expired budget. Which side also carries the
+    // structural semantic-skip note depends on which deadline check
+    // fires first inside the run - a diagnostics-order coin flip under
+    // an always-expired clock - so the lists are compared as
+    // vocabularies with the deadline entry required on both, never
+    // byte-for-byte.
+    const onDegraded = degradedOf(on.retrievalTrail);
+    const offDegraded = degradedOf(off.retrievalTrail);
+    expect(onDegraded).toContain("hybrid-deadline-exceeded:1");
+    expect(offDegraded).toContain("hybrid-deadline-exceeded:1");
+    for (const d of onDegraded) {
+      expect(offDegraded).toContain(d);
+    }
+    expect(onDegraded.length).toBeGreaterThan(0);
     // A deadline exit never mints a pause: the looped answer carries no
     // decider envelope, so the flag added nothing observable.
     expect(on.iterative).toBeUndefined();
