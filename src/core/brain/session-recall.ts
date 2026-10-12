@@ -18,6 +18,7 @@ import {
 import { readLineageLedger } from "./lineage/ledger.ts";
 import type { SessionLineage } from "./lineage/types.ts";
 import { PayloadRegistry, withPayloadStoreLock } from "./payload-registry.ts";
+import { applyCharBudget } from "./recall-budget.ts";
 import {
   BRAIN_SESSION_PAYLOAD_DEFAULTS,
   loadBrainConfigDetailed,
@@ -423,6 +424,225 @@ function lineagePayloadFields(lineage: SessionLineage | undefined): Record<strin
     ...(lineage.parentId !== null ? { parent_session_id: lineage.parentId } : {}),
     compression_depth: lineage.depth,
   };
+}
+
+// ----- Coverage-first selection (recall-quality wave, Lane B / t_2c2a883c) ---
+
+/** Where one detected thread facet came from. */
+export type ThreadFacetOrigin = "mined" | "cluster";
+
+/**
+ * One facet of a conversation thread: a distinct sub-topic the coverage
+ * pass fans out over. A facet carries the in-scope turns that establish
+ * it, and either a text needle (`mined` facets match turn text through
+ * the same keyword machinery as grep) or cluster membership (`cluster`
+ * facets reach their turns directly through the summary node's source
+ * list).
+ */
+export interface ThreadFacet {
+  /** Stable facet id: `cluster:<record id>` or `mined:<family>:<key>`. */
+  readonly key: string;
+  readonly origin: ThreadFacetOrigin;
+  /** Text needle for the keyword pass; `null` for membership facets. */
+  readonly needle: string | null;
+  /** In-scope establishing turns, in chronological order. */
+  readonly turnIds: ReadonlyArray<string>;
+}
+
+export interface SessionCoverageInput {
+  readonly sessionId?: string;
+  /**
+   * Leave out continuity rows flagged `private` and the summary nodes
+   * built from them, exactly as {@link searchSessionRecall} does.
+   */
+  readonly withholdPrivate?: boolean;
+  /**
+   * Total character budget for the selected evidence, measured over the
+   * serialized turns the operation emits. The floor-weighted selection
+   * must fit or the typed infeasibility error is raised (never a silent
+   * drop below the floor).
+   */
+  readonly charBudget: number;
+}
+
+/** One realized fan-out topic, as the diagnostics report it. */
+export interface SessionCoverageTopic {
+  readonly key: string;
+  readonly origin: ThreadFacetOrigin;
+  /** In-scope turns establishing this topic. */
+  readonly turn_count: number;
+}
+
+export interface SessionCoverageDiagnostics {
+  /** Distinct facets detected over the scoped record set. */
+  readonly facets_detected: number;
+  /** Topics the fan-out was budgeted for (the adaptive topic budget). */
+  readonly topics_requested: number;
+  /** Topics actually fanned out (never silently fewer than requested). */
+  readonly topics_realized: number;
+  /** The realized topics, in fan-out order. */
+  readonly topics: ReadonlyArray<SessionCoverageTopic>;
+  /** Characters of serialized evidence the selection kept. */
+  readonly chars_used: number;
+  /** Turns the character budget dropped, in rank order (never silent). */
+  readonly dropped_turn_ids: ReadonlyArray<string>;
+}
+
+export interface SessionCoverageResult {
+  /** Selected raw turns, re-emitted in `compareRecords` chronological order. */
+  readonly turns: ReadonlyArray<ExpandedRawTurn>;
+  readonly diagnostics: SessionCoverageDiagnostics;
+}
+
+/**
+ * Coverage-first selection over a conversation thread
+ * (recall-quality wave, Lane B / t_2c2a883c).
+ *
+ * Retrieve wide, then compress: facets are detected from the thread's
+ * own records (depth-1 summary clusters today, mined entity keys joining
+ * with the topic budget), the pass fans out over every facet, and the
+ * union of matching turns is ranked by relevance, selected under the
+ * caller's character budget through the shared {@link applyCharBudget}
+ * primitive (wrapped, never forked), and re-emitted in
+ * {@link compareRecords} chronological order. Every drop is named in the
+ * diagnostics; nothing degrades silently.
+ */
+export function coverageSessionRecall(
+  vault: string,
+  input: SessionCoverageInput,
+): SessionCoverageResult {
+  if (
+    typeof input.charBudget !== "number" ||
+    !Number.isFinite(input.charBudget) ||
+    input.charBudget <= 0
+  ) {
+    throw new Error("session recall coverage: charBudget must be a positive finite number");
+  }
+  const records = sessionRecallRecords(vault, input.sessionId, input.withholdPrivate);
+  const facets = detectCoverageFacets(records);
+  const topics = facets;
+  const matches = rankTopicMatches(records, topics);
+  const budgeted = applyCharBudget(
+    matches.map((match) => ({ item: match, text: JSON.stringify(expandedRawTurn(match.record)) })),
+    { maxTotalChars: input.charBudget },
+  );
+  const kept = [...budgeted.kept]
+    .map((entry) => entry.item)
+    .sort((left, right) => compareRecords(left.record, right.record));
+  return Object.freeze({
+    turns: Object.freeze(kept.map((match) => expandedRawTurn(match.record))),
+    diagnostics: Object.freeze({
+      facets_detected: facets.length,
+      topics_requested: topics.length,
+      topics_realized: topics.length,
+      topics: Object.freeze(
+        topics.map((facet) =>
+          Object.freeze({ key: facet.key, origin: facet.origin, turn_count: facet.turnIds.length }),
+        ),
+      ),
+      chars_used: budgeted.totalChars,
+      dropped_turn_ids: Object.freeze(budgeted.dropped.map((match) => turnIdOf(match.record))),
+    }),
+  });
+}
+
+/** The `turn_id` payload key of a raw-turn record ("" when absent). */
+function turnIdOf(record: ContinuityRecord): string {
+  return String(record.payload["turn_id"] ?? "");
+}
+
+/**
+ * Depth-1 summary clusters as coverage facets (Task 7 core). A depth-1
+ * node's source turn list partitions the segment's turns, so the cluster
+ * set is the thread's own topic skeleton: one facet per node, holding
+ * the node's turns that exist in scope. A cluster with no in-scope turns
+ * cannot contribute coverage and is not detected as a facet.
+ */
+function detectCoverageFacets(records: ReadonlyArray<ContinuityRecord>): ThreadFacet[] {
+  const order = new Map<string, number>();
+  records.forEach((record, index) => {
+    if (record.kind !== "session_turn") return;
+    const turnId = turnIdOf(record);
+    if (turnId.length > 0 && !order.has(turnId)) order.set(turnId, index);
+  });
+  const facets: ThreadFacet[] = [];
+  for (const record of records) {
+    if (record.kind !== "session_summary_node") continue;
+    if (numberValue(record.payload["depth"]) !== 1) continue;
+    const seen = new Set<string>();
+    const turnIds: string[] = [];
+    for (const turnId of collectTurnIds([record])) {
+      if (!order.has(turnId) || seen.has(turnId)) continue;
+      seen.add(turnId);
+      turnIds.push(turnId);
+    }
+    if (turnIds.length === 0) continue;
+    facets.push({ key: `cluster:${record.id}`, origin: "cluster", needle: null, turnIds });
+  }
+  return facets.sort(
+    (left, right) =>
+      firstTurnIndex(left, order) - firstTurnIndex(right, order) ||
+      left.key.localeCompare(right.key),
+  );
+}
+
+function firstTurnIndex(facet: ThreadFacet, order: ReadonlyMap<string, number>): number {
+  let best = Number.MAX_SAFE_INTEGER;
+  for (const turnId of facet.turnIds) best = Math.min(best, order.get(turnId) ?? best);
+  return best;
+}
+
+/** One turn's accumulation of topic matches: score and the topics that hit it. */
+interface TopicMatch {
+  readonly record: ContinuityRecord;
+  readonly topics: Set<string>;
+  score: number;
+}
+
+/**
+ * The wide pass: per topic, gather the in-scope turns it touches. Mined
+ * facets match turn text through {@link hitFor} (the same keyword
+ * machinery grep uses, so the two cannot drift); membership facets reach
+ * their turns directly. A turn touched by several topics accumulates
+ * their scores, which is what ranks multi-topic turns first.
+ */
+function rankTopicMatches(
+  records: ReadonlyArray<ContinuityRecord>,
+  topics: ReadonlyArray<ThreadFacet>,
+): TopicMatch[] {
+  const turnRecords = records.filter((record) => record.kind === "session_turn");
+  const byTurnId = new Map<string, ContinuityRecord>();
+  for (const record of turnRecords) {
+    const turnId = turnIdOf(record);
+    if (turnId.length > 0 && !byTurnId.has(turnId)) byTurnId.set(turnId, record);
+  }
+  const matches = new Map<string, TopicMatch>();
+  const add = (record: ContinuityRecord, score: number, topicKey: string): void => {
+    const existing = matches.get(record.id);
+    if (existing === undefined) {
+      matches.set(record.id, { record, topics: new Set([topicKey]), score });
+      return;
+    }
+    existing.topics.add(topicKey);
+    existing.score += score;
+  };
+  for (const facet of topics) {
+    if (facet.origin === "mined" && facet.needle !== null) {
+      const needle = facet.needle.toLowerCase();
+      for (const record of turnRecords) {
+        const hit = hitFor(record, needle, 1);
+        if (hit !== null) add(record, hit.score, facet.key);
+      }
+      continue;
+    }
+    for (const turnId of facet.turnIds) {
+      const record = byTurnId.get(turnId);
+      if (record !== undefined) add(record, 1, facet.key);
+    }
+  }
+  return [...matches.values()].sort(
+    (left, right) => right.score - left.score || compareRecords(left.record, right.record),
+  );
 }
 
 /**
