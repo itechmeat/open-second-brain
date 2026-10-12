@@ -148,7 +148,10 @@ test("with the opt-in on, a negative verdict lands as a continuity record", asyn
   expect(JSON.stringify(records[0]!.payload)).not.toContain("reactor coolant");
   expect(typeof records[0]!.payload["prompt_hash"]).toBe("string");
   // A host filesystem path is not vault content and must not replicate.
-  expect(JSON.stringify(records[0]!.payload)).not.toContain(tmp);
+  // Judge the JSON-escaped form: on win32 hosts a leaked path serializes
+  // with doubled backslashes, so the raw tmp string can never match and
+  // the invariant would silently stop being enforced.
+  expect(JSON.stringify(records[0]!.payload)).not.toContain(JSON.stringify(tmp).slice(1, -1));
 });
 
 test("a usable-score call writes no negative record even with the opt-in on", async () => {
