@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { addRecallSource } from "../../src/core/brain/portability/recall-sources.ts";
 import { indexVault } from "../../src/core/search/indexer.ts";
 import { resolveSearchConfig } from "../../src/core/search/index.ts";
+import { INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
 import { buildToolTable, findTool } from "../../src/mcp/tools.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 import { writeMd } from "../helpers/search-fixtures.ts";
@@ -48,6 +49,34 @@ afterEach(() => {
 function searchTool() {
   return findTool(buildToolTable("full"), "brain_search");
 }
+
+test("the iterative round-trip is refused on the cross-vault union by name", async () => {
+  let error: unknown;
+  try {
+    await searchTool().handler(ctx, { query: "chimera", global: true, iterative: true });
+  } catch (e) {
+    error = e;
+  }
+  expect(error).toBeInstanceOf(MCPError);
+  expect((error as MCPError).code).toBe(INVALID_PARAMS);
+  expect((error as MCPError).message).toContain("global");
+  // The commit leg's fields are refused under the same named error, so
+  // a token can never mark a per-origin pause spent through the union.
+  let commitError: unknown;
+  try {
+    await searchTool().handler(ctx, {
+      query: "chimera",
+      global: true,
+      iterative: true,
+      iterative_token: "tok",
+      iterative_payload: { evidence: [1], subQueries: ["chimera"] },
+    });
+  } catch (e) {
+    commitError = e;
+  }
+  expect(commitError).toBeInstanceOf(MCPError);
+  expect((commitError as MCPError).code).toBe(INVALID_PARAMS);
+});
 
 test("global search returns origin-labelled results from both vaults", async () => {
   const result = (await searchTool().handler(ctx, { query: "chimera", global: true })) as {

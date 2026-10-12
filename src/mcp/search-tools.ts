@@ -1097,6 +1097,21 @@ async function toolBrainSearch(
   ) {
     throw new MCPError(INVALID_PARAMS, "argument 'iterative_payload' must be an object");
   }
+  // The iterative round-trip is a single-vault loop: a cross-vault
+  // union cannot carry the pause across origins (each leg mints its own
+  // token, and a commit would mark one spent while the others rebuild
+  // the pause and fail token_mismatch). The combination is refused by
+  // name at the argument layer, so no iterative field ever reaches the
+  // federated legs.
+  if (
+    globalSearch &&
+    (iterative || iterativeToken !== undefined || iterativePayload !== undefined)
+  ) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "argument 'iterative' is not supported with global: true; the iterative recall loop runs on the single-vault path",
+    );
+  }
   const focusSession = coerceStringOptional(args, "focus_session", 128);
   const properties = parsePropertiesArgument(args["properties"]);
   const degreeFilters = parseDegreeArgument(args["degree"]);
