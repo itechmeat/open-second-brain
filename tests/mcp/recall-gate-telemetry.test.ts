@@ -160,3 +160,102 @@ test("a usable-score call writes no negative record even with the opt-in on", as
   });
   expect(negativeRecallRecords()).toHaveLength(0);
 });
+
+// ----- graded surfacing telemetry (t_107a3249, lane C Task 14) ---------------
+
+test("a measured call records key, tier and channel under the same opt-in", async () => {
+  writeFileSync(configPath, `vault: "${vault}"\nrecall_gate_telemetry: "true"\n`);
+  const out = (await tool("brain_recall_gate").handler(ctx(), {
+    prompt: "what did we decide about the index?",
+    scores: [0.9],
+    match_quality: 0.2,
+  })) as Record<string, unknown>;
+  // The graded projection rides the response: the binary retrieve stays
+  // the structural fail-open verdict, the tier is the measured admission.
+  expect(out["retrieve"]).toBe(true);
+  expect(out["key"]).toBe(0.2);
+  expect(out["tier"]).toBe("below_floor");
+  const records = listGateTelemetry(vault);
+  expect(records).toHaveLength(1);
+  expect(records[0]!.payload["key"]).toBe(0.2);
+  expect(records[0]!.payload["tier"]).toBe("below_floor");
+  expect(records[0]!.payload["channel"]).toBe("mcp");
+  // The privacy invariant holds for the graded payload: numbers land, the
+  // prompt never does.
+  expect(JSON.stringify(records[0]!.payload)).not.toContain("what did we decide");
+});
+
+test("an unmeasured call records no key or tier and returns the byte-identical shape", async () => {
+  writeFileSync(configPath, `vault: "${vault}"\nrecall_gate_telemetry: "true"\n`);
+  const out = (await tool("brain_recall_gate").handler(ctx(), {
+    prompt: "what did we decide about the index?",
+  })) as Record<string, unknown>;
+  expect("key" in out).toBe(false);
+  expect("tier" in out).toBe(false);
+  const records = listGateTelemetry(vault);
+  expect(records).toHaveLength(1);
+  expect("key" in records[0]!.payload).toBe(false);
+  expect("tier" in records[0]!.payload).toBe(false);
+  // The transport is known regardless of a measurement.
+  expect(records[0]!.payload["channel"]).toBe("mcp");
+});
+
+test("a boundary quality grades admitted through the mcp channel constant", async () => {
+  writeFileSync(configPath, `vault: "${vault}"\nrecall_gate_telemetry: "true"\n`);
+  await tool("brain_recall_gate").handler(ctx(), {
+    prompt: "what did we decide about the index?",
+    scores: [0.5],
+    match_quality: 0.35,
+  });
+  const records = listGateTelemetry(vault);
+  expect(records[0]!.payload["tier"]).toBe("admitted");
+});
+
+test("a suppressed prompt grades suppressed with a null key, never a measured one", async () => {
+  writeFileSync(configPath, `vault: "${vault}"\nrecall_gate_telemetry: "true"\n`);
+  await tool("brain_recall_gate").handler(ctx(), {
+    prompt: "git status",
+    scores: [0.9],
+    match_quality: 0.9,
+  });
+  const records = listGateTelemetry(vault);
+  expect(records[0]!.payload["tier"]).toBe("suppressed");
+  expect(records[0]!.payload["key"]).toBeNull();
+  expect(records[0]!.payload["decision"]).toBe("skip");
+});
+
+test("gate_summary summarizes counts by tier", async () => {
+  writeFileSync(configPath, `vault: "${vault}"\nrecall_gate_telemetry: "true"\n`);
+  await tool("brain_recall_gate").handler(ctx(), {
+    prompt: "what did we decide about the index?",
+    scores: [0.9],
+    match_quality: 0.2,
+  });
+  await tool("brain_recall_gate").handler(ctx(), {
+    prompt: "what did we decide about the index?",
+    scores: [0.9],
+    match_quality: 0.8,
+  });
+  // Unmeasured: counted in by_reason as always, absent from by_tier.
+  await tool("brain_recall_gate").handler(ctx(), { prompt: "/help" });
+  const summary = (await tool("brain_recall_telemetry").handler(ctx(), {
+    operation: "gate_summary",
+  })) as { total: number; by_reason: Record<string, number>; by_tier: Record<string, number> };
+  expect(summary.total).toBe(3);
+  expect(summary.by_tier).toEqual({ below_floor: 1, admitted: 1 });
+  expect(summary.by_reason["slash_command"]).toBe(1);
+});
+
+test("fail-open: a broken store never breaks the graded response", async () => {
+  writeFileSync(configPath, `vault: "${vault}"\nrecall_gate_telemetry: "true"\n`);
+  mkdirSync(join(vault, "Brain", "log"), { recursive: true });
+  writeFileSync(join(vault, "Brain", "log", "continuity"), "not a directory");
+  const decision = (await tool("brain_recall_gate").handler(ctx(), {
+    prompt: "what did we decide about the index?",
+    scores: [0.9],
+    match_quality: 0.2,
+  })) as Record<string, unknown>;
+  expect(typeof decision["retrieve"]).toBe("boolean");
+  expect(decision["key"]).toBe(0.2);
+  expect(decision["tier"]).toBe("below_floor");
+});

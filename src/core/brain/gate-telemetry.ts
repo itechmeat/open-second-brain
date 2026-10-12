@@ -21,9 +21,11 @@
 
 import { createHash } from "node:crypto";
 
+import { isSurfacingTier, type SurfacingTier } from "../search/surfacing-key.ts";
 import { appendContinuityRecord, listContinuityRecords } from "./continuity/store.ts";
 import { CONTINUITY_TURN_ID_KEY, type ContinuityRecord } from "./continuity/types.ts";
 import type { NegativeRecallVerdict } from "./negative-recall.ts";
+import type { RecallChannel } from "./recall-telemetry.ts";
 
 export interface GateTelemetryInput {
   readonly host: string;
@@ -34,6 +36,18 @@ export interface GateTelemetryInput {
   /** The caller's turn correlation id, recorded under {@link CONTINUITY_TURN_ID_KEY}. */
   readonly turnId?: string;
   readonly createdAt?: string;
+  /**
+   * The graded surfacing key (t_107a3249), recorded only when the call
+   * carried a measured quality - an unmeasured structural verdict is
+   * already described by `decision` and `reason`. Numbers and closed
+   * values only; `key` is null exactly where nothing was measurable.
+   */
+  readonly surfacing?: {
+    readonly key: number | null;
+    readonly tier: SurfacingTier;
+  };
+  /** The transport the decision arrived over, when the surface knows it. */
+  readonly channel?: RecallChannel;
   /**
    * The adequacy verdict and the caller's advisory decision-model
    * probability, recorded only when the call carried `decision_answerable`
@@ -59,6 +73,8 @@ export interface GateTelemetrySummary {
   readonly retrieved: number;
   readonly skipped: number;
   readonly by_reason: Record<string, number>;
+  /** Counts by graded admission tier (t_107a3249); measured calls only. */
+  readonly by_tier: Record<string, number>;
 }
 
 export function hashPrompt(prompt: string): string {
@@ -79,6 +95,10 @@ export function emitGateTelemetry(vault: string, input: GateTelemetryInput): Con
       reason: input.reason,
       prompt_hash: hashPrompt(input.prompt),
       prompt_chars: input.prompt.length,
+      ...(input.channel !== undefined ? { channel: input.channel } : {}),
+      ...(input.surfacing !== undefined
+        ? { key: input.surfacing.key, tier: input.surfacing.tier }
+        : {}),
       ...(input.decisionAnswerable !== undefined
         ? {
             adequacy_level: input.decisionAnswerable.level,
@@ -162,7 +182,7 @@ export function listGateTelemetry(
   return Object.freeze(records);
 }
 
-/** Aggregate decisions by outcome and reason. */
+/** Aggregate decisions by outcome, reason and graded tier. */
 export function summarizeGateTelemetry(
   vault: string,
   filter: GateTelemetryFilter = {},
@@ -170,11 +190,16 @@ export function summarizeGateTelemetry(
   const records = listGateTelemetry(vault, filter);
   let retrieved = 0;
   const byReason: Record<string, number> = {};
+  const byTier: Record<string, number> = {};
   for (const record of records) {
     if (record.payload["decision"] === "retrieve") retrieved += 1;
     const reason = record.payload["reason"];
     if (typeof reason === "string" && reason !== "") {
       byReason[reason] = (byReason[reason] ?? 0) + 1;
+    }
+    const tier = record.payload["tier"];
+    if (isSurfacingTier(tier)) {
+      byTier[tier] = (byTier[tier] ?? 0) + 1;
     }
   }
   return Object.freeze({
@@ -182,5 +207,6 @@ export function summarizeGateTelemetry(
     retrieved,
     skipped: records.length - retrieved,
     by_reason: Object.freeze(byReason),
+    by_tier: Object.freeze(byTier),
   });
 }

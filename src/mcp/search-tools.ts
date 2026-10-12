@@ -23,6 +23,8 @@ import {
   serializeSearchCard,
   serializeIndexStatus,
 } from "../core/search/index.ts";
+import { evaluateGradedSurfacing } from "../core/search/surfacing-gate.ts";
+import { SURFACING_TIERS } from "../core/search/surfacing-key.ts";
 import { normalizeSessionFocus, parseStructuredRecallQueryDocument } from "../core/search/index.ts";
 import type { BrainSearchResult, SearchOutcome } from "../core/search/index.ts";
 import { parseDegreePredicate, type DegreePredicate } from "../core/search/property-filter.ts";
@@ -675,6 +677,13 @@ const RECALL_GATE_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
   properties: {
     retrieve: { type: "boolean" },
     reason: { type: "string" },
+    // Graded surfacing key (t_107a3249): present only when the caller
+    // supplied the scores/match_quality pair. `key` is the measured
+    // match quality, null exactly where nothing was measurable (a
+    // structurally suppressed prompt); `tier` is the closed admission
+    // vocabulary. Absent - never implied - without a measurement.
+    key: {},
+    tier: { type: "string", enum: [...SURFACING_TIERS] },
     adequacy: {
       type: "object",
       required: [
@@ -1322,10 +1331,11 @@ async function toolBrainRecallGate(
   // the gate record so that record can carry the advisory signal below;
   // a refused argument is rethrown only after the record, as before.
   let refused: unknown = null;
+  let attempt: ReturnType<typeof coerceRecallAdequacyInput> | undefined;
   let verdict: ReturnType<typeof assessRecallAdequacy> | undefined;
   let answerable: DecisionAnswerableOutcome | undefined;
   try {
-    const attempt = coerceRecallAdequacyInput("brain_recall_gate", args, RECALL_SCORES_ARG_NAME);
+    attempt = coerceRecallAdequacyInput("brain_recall_gate", args, RECALL_SCORES_ARG_NAME);
     const answerableArg = coerceDecisionAnswerable(
       "brain_recall_gate",
       args,
@@ -1346,6 +1356,21 @@ async function toolBrainRecallGate(
   } catch (err) {
     refused = err;
   }
+  // Graded surfacing key (t_107a3249): the structural decision above
+  // composed with the shared admission calculator over the MEASURED
+  // quality, when the caller supplied the pair. The quality argument is
+  // already validated to a finite [0,1] number by the coercion above, so
+  // this cannot refuse. Response and record gain `key` and `tier` only
+  // then; without a measurement both stay byte-identical.
+  const measured = attempt?.matchQuality;
+  const graded = evaluateGradedSurfacing({
+    prompt,
+    previousPrompt: previousPrompt ?? null,
+    explicit,
+    channel: RECALL_CHANNEL.mcp,
+    ...(measured !== undefined ? { matchQuality: measured } : {}),
+  });
+  const gradedFields = measured !== undefined ? { key: graded.key, tier: graded.tier } : {};
   const answerableVerdict = answerable?.kind === "annotated" ? answerable.verdict : undefined;
   // Gate telemetry (t_65036e02): default off. Routed through the lazy
   // emit kernel (t_5d7aa7c5) - the payload thunk never runs with the
@@ -1359,6 +1384,8 @@ async function toolBrainRecallGate(
       reason: decision.reason,
       ...(sessionId !== undefined ? { sessionId } : {}),
       ...(turnId !== undefined ? { turnId } : {}),
+      channel: RECALL_CHANNEL.mcp,
+      ...(measured !== undefined ? { surfacing: { key: graded.key, tier: graded.tier } } : {}),
       ...(verdict !== undefined && answerableVerdict !== undefined
         ? {
             decisionAnswerable: {
@@ -1371,7 +1398,7 @@ async function toolBrainRecallGate(
     }),
   );
   if (refused !== null) throw refused;
-  if (verdict === undefined) return { ...decision };
+  if (verdict === undefined) return { ...decision, ...gradedFields };
   // signals-that-survive, unit 6: an unmet verdict is stamped onto the
   // cross-query demand log under the bucket key normalizeQueryTerms already
   // computes, so the knowledge-gap loop can aggregate recurrence without a
@@ -1402,6 +1429,7 @@ async function toolBrainRecallGate(
   }
   return {
     ...decision,
+    ...gradedFields,
     adequacy: {
       level: verdict.level,
       action: verdict.action,
