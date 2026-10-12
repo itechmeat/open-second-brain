@@ -24,6 +24,7 @@ import { search } from "../../../src/core/search/search.ts";
 import { SearchError } from "../../../src/core/search/types.ts";
 import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
+import { fakeCredential } from "../../helpers/fake-credentials.ts";
 import type {
   ResolvedSearchConfig,
   StructuredRecallQueryDocument,
@@ -32,6 +33,9 @@ import type {
 let vault: string;
 let dbPath: string;
 let cleanup: () => void;
+
+/** A round token shaped like the ones the loop mints; assembled from parts. */
+const KNOB_OFF_TOKEN = fakeCredential("tok", "-knob-off");
 
 /** Six common-term docs give warehouse/rotation a low IDF; the loop's floor stays honest. */
 async function seed(): Promise<void> {
@@ -221,7 +225,7 @@ describe("iterative round driver over a seeded vault", () => {
         query,
         structuredQuery: structured,
         iterative: true,
-        iterativeToken: "tok-knob-off",
+        iterativeToken: KNOB_OFF_TOKEN,
         iterativePayload: { evidence: [1], subQueries: ["warehouse rotation"] },
       });
     } catch (e) {
