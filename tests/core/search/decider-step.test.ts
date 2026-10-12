@@ -245,6 +245,36 @@ describe("commitDeciderStep", () => {
     }
   });
 
+  test("refuses duplicate evidence ids and selections longer than the pool", () => {
+    // A selection naming one chunk twice pins nothing extra: a cross-item
+    // refusal, mirroring the duplicate sub-query rule.
+    const duplicate = { evidence: [3, 7, 3], subQueries: ["q"] };
+    try {
+      commitDeciderStep(token, duplicate, scope());
+      throw new Error("expected a refusal");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ResponseCheckError);
+      const violations = (error as ResponseCheckError).violations;
+      expect(violations.some((v) => v.code === SEMANTIC_VIOLATION_CODES.crossItem)).toBe(true);
+      expect(
+        violations.some((v) => v.path === "$.evidence[2]" && v.message.includes("index 0")),
+      ).toBe(true);
+    }
+    // The evidence budget is the pool itself: the scope's pool holds
+    // three candidates, so a four-id selection is refused by name before
+    // membership is even checked (the ids are distinct so the registered
+    // duplicate rule lets the payload through to the context rule).
+    const overPool = { evidence: [1, 2, 5, 8], subQueries: ["q"] };
+    try {
+      commitDeciderStep(token, overPool, scope());
+      throw new Error("expected a refusal");
+    } catch (error) {
+      expect(error).toBeInstanceOf(DeciderStepError);
+      expect((error as DeciderStepError).code).toBe("evidence_over_pool");
+      expect((error as DeciderStepError).message).toContain("4 id(s)");
+    }
+  });
+
   test("refuses a token minted for another state and an already-used token", () => {
     const other = makeRoundToken("warehouse rotation chandelier", 4, poolIds);
     try {

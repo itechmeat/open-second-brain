@@ -476,6 +476,18 @@ export function runDeciderRound(input: DeciderRoundInput): DeciderRoundOutcome {
 }
 
 /**
+ * The operator's resolved round cap: the configured value or the default,
+ * clamped to the cap. The one resolution every consumer shares -
+ * `resolveIterativeRequest` runs the loop under it, and the plan-leg cache
+ * key suffix names it (`itv:plan:r<N>`), so raising the cap re-keys cached
+ * plans instead of serving one recorded under the old round count.
+ */
+export function resolveIterativeMaxRounds(config: ResolvedSearchConfig): number {
+  const maxRounds = config.recall.iterativeRecallMaxRounds ?? ITERATIVE_RECALL_MAX_ROUNDS_DEFAULT;
+  return Math.min(maxRounds, ITERATIVE_RECALL_MAX_ROUNDS_CAP);
+}
+
+/**
  * Which leg of the round-trip this request is: the flag alone asks for
  * the plan phase (deterministic rounds, then pause with an envelope when
  * gaps survive); the token plus payload asks for the commit phase
@@ -535,7 +547,7 @@ export function resolveIterativeRequest(
     }
     return null;
   }
-  const maxRounds = config.recall.iterativeRecallMaxRounds ?? ITERATIVE_RECALL_MAX_ROUNDS_DEFAULT;
+  const maxRounds = resolveIterativeMaxRounds(config);
   if (!Number.isInteger(maxRounds) || maxRounds < 1) {
     throw new SearchError(
       "INVALID_INPUT",
@@ -543,7 +555,7 @@ export function resolveIterativeRequest(
     );
   }
   return {
-    maxRounds: Math.min(maxRounds, ITERATIVE_RECALL_MAX_ROUNDS_CAP),
+    maxRounds,
     phase: tokenGiven ? "commit" : "plan",
   };
 }

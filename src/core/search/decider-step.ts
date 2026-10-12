@@ -92,6 +92,8 @@ export const DECIDER_STEP_ERROR_CODES = [
   "token_used",
   /** A selected evidence id does not exist in the round's pool. */
   "unknown_evidence",
+  /** More evidence ids than the round's pool holds candidates. */
+  "evidence_over_pool",
 ] as const;
 
 export type DeciderStepErrorCode = (typeof DECIDER_STEP_ERROR_CODES)[number];
@@ -284,6 +286,24 @@ registerResponseCheck(DECIDER_STEP_SURFACE, (payload) => {
       ),
     );
   }
+  // Duplicate evidence ids, mirroring the sub-query duplicate rule: a
+  // selection that names one chunk twice pins nothing extra and reads as
+  // two votes the pool cannot honor. (The evidence count itself is capped
+  // at the pool size at commit time, where the pool is known - the
+  // payload-only registry cannot see it.)
+  evidence?.forEach((id, index) => {
+    if (typeof id !== "number") return;
+    const firstDuplicate = evidence.indexOf(id);
+    if (firstDuplicate !== index) {
+      violations.push(
+        semanticViolation(
+          SEMANTIC_VIOLATION_CODES.crossItem,
+          `$.evidence[${index}]`,
+          `duplicate evidence id; first seen at index ${firstDuplicate}`,
+        ),
+      );
+    }
+  });
   if (subQueries === null) return violations;
   if (subQueries.length === 0) {
     violations.push(
@@ -413,6 +433,17 @@ export function commitDeciderStep(
     evidence: ReadonlyArray<number>;
     subQueries: ReadonlyArray<string>;
   };
+  // The evidence budget is the pool itself: a selection longer than the
+  // pool of candidates it must come from cannot be honest - every extra
+  // id is either a duplicate in disguise or an id that can only miss.
+  // (Duplicates per se are refused by the registered payload check; the
+  // pool is per-request state only the context rules can see.)
+  if (evidence.length > scope.poolIds.length) {
+    throw new DeciderStepError(
+      "evidence_over_pool",
+      `evidence selects ${evidence.length} id(s) but the round ${scope.round} pool holds ${scope.poolIds.length} candidate(s)`,
+    );
+  }
   const pool = new Set(scope.poolIds);
   const unknown = evidence.filter((id) => !pool.has(id));
   if (unknown.length > 0) {

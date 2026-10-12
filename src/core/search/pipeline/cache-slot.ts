@@ -15,6 +15,7 @@ import { learnedWeightsFingerprint } from "../feedback.ts";
 import { buildCacheKey, getCachedOutcome, putCachedOutcome } from "../query-cache.ts";
 import { reinforceFingerprint } from "../reinforce.ts";
 import { RERANK_SUNSET_SURVEY } from "../rerank/sunset.ts";
+import { resolveIterativeMaxRounds } from "./iterative-recall.ts";
 import type { Store } from "../store.ts";
 import type { SemanticPolicy } from "../semantic-phase.ts";
 import type { TemporalIntent } from "../temporal-intent.ts";
@@ -37,13 +38,24 @@ const MILLISECONDS_PER_SECOND = 1000;
  * knob - so plain rows keep their pre-wave keys byte-identical and only
  * mode-on rows (new by definition) use the extended layout. The plan
  * leg and the commit leg get distinct segments so a plan response can
- * never be served for a commit request or the reverse.
+ * never be served for a commit request or the reverse; the plan segment
+ * also names the resolved round cap, because a plan row records the
+ * round count it ran under and a raised cap must re-key, not replay.
  */
 const ITERATIVE_KEY_PLAN = "itv:plan";
 const ITERATIVE_KEY_COMMIT_PREFIX = "itv:commit:";
 /** Hex chars of the payload digest kept in a commit key; a fingerprint, not an id. */
 const ITERATIVE_PAYLOAD_DIGEST_CHARS = 16;
-/** Key prefix of the single-use round-token registry rows. */
+/**
+ * Key prefix of the single-use round-token registry's mint rows (the
+ * plan-phase record a commit validates against). The registry rides the
+ * query-cache table BY DESIGN - one store, one generation gate - and it
+ * deliberately borrows `search_cache_ttl_seconds` for its row expiry
+ * even when `search_cache_enabled` is off: the knob gates the outcome
+ * rows, not the table, and a token must die exactly when its plan-phase
+ * outcome row dies, so the two legs can never disagree about how long a
+ * plan's claim on a round survives.
+ */
 const ITERATIVE_TOKEN_KEY_PREFIX = "itv-token:";
 /**
  * Key prefix of the claim rows: a commit's atomic single-use marker,
@@ -171,7 +183,11 @@ export function readIterativeTokenRecord(
  * row, so a release (a commit whose round failed) restores the retry
  * state without losing the pause digest the retry revalidates against.
  * False means the token is already claimed in this generation inside
- * its TTL - the call site refuses that commit by name. The registry is
+ * its TTL - the call site refuses that commit by name. The TTL is the
+ * search cache's (`search_cache_ttl_seconds`), borrowed deliberately
+ * even when search caching is off: the registry rides the query-cache
+ * table so one generation gate and one expiry govern both legs, and a
+ * claim never outlives the plan row it answers. The registry is
  * best-effort, and its two honest failure modes are: a failed write
  * costs a deterministic re-run of the same commit on replay (the
  * validator re-checks the token against the state), and the expiry
@@ -219,14 +235,19 @@ export function releaseIterativeToken(store: Store, token: string): void {
 }
 
 /**
- * The suffix for one iterative mode-on request: `itv:plan` for the flag
- * alone, `itv:commit:<token>:<payload digest>` for the commit leg - the
+ * The suffix for one iterative mode-on request: `itv:plan:r<maxRounds>`
+ * for the flag alone - the round cap is part of the key because a cached
+ * plan row carries the recorded round count, so raising the cap must
+ * re-key plans instead of serving one recorded under the old budget -
+ * and `itv:commit:<token>:<payload digest>` for the commit leg - the
  * plan and commit phases are deterministic functions of their inputs
  * (vault, query, token, payload), so caching stays sound per leg.
  */
-function iterativeCacheSuffix(opts: SearchOptions): string {
+function iterativeCacheSuffix(config: ResolvedSearchConfig, opts: SearchOptions): string {
   if (opts.iterative !== true) return "";
-  if (opts.iterativeToken === undefined) return `|${ITERATIVE_KEY_PLAN}`;
+  if (opts.iterativeToken === undefined) {
+    return `|${ITERATIVE_KEY_PLAN}:r${resolveIterativeMaxRounds(config)}`;
+  }
   const payloadDigest = sha256Hex(canonicalJson(opts.iterativePayload ?? null)).slice(
     0,
     ITERATIVE_PAYLOAD_DIGEST_CHARS,
@@ -426,7 +447,7 @@ export function probeQueryCache(input: CacheProbeInput): CacheProbe {
       planHash,
       // The iterative fields join the suffix only when the mode is on,
       // so off-mode keys (and every pre-wave row) stay byte-identical.
-      `${configFingerprint(config)}|lw:${lwFp}|act:${actFp}|tune:${tuneFp}|reinf:${reinfFp}|src:${srcSet}${iterativeModeOn(config, opts) ? iterativeCacheSuffix(opts) : ""}`,
+      `${configFingerprint(config)}|lw:${lwFp}|act:${actFp}|tune:${tuneFp}|reinf:${reinfFp}|src:${srcSet}${iterativeModeOn(config, opts) ? iterativeCacheSuffix(config, opts) : ""}`,
     );
     const hit = getCachedOutcome(store, key, generation, ttlMs, Date.now());
     return { slot: { key, generation, ttlMs }, hit };

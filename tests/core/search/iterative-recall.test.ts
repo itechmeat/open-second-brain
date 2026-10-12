@@ -22,6 +22,7 @@ import { indexVault } from "../../../src/core/search/indexer.ts";
 import { resolveSearchConfig } from "../../../src/core/search/index.ts";
 import { search } from "../../../src/core/search/search.ts";
 import { pauseStateDigest } from "../../../src/core/search/decider-step.ts";
+import { probeQueryCache } from "../../../src/core/search/pipeline/cache-slot.ts";
 import { SearchError } from "../../../src/core/search/types.ts";
 import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
@@ -936,5 +937,52 @@ describe("iterative knob resolution", () => {
         process.env["OPEN_SECOND_BRAIN_SEARCH_ITERATIVE_MAX_ROUNDS"] = savedMaxRounds;
       }
     }
+  });
+
+  test("the plan-leg cache key names the round cap, so a raised cap re-keys plans", async () => {
+    // A cached plan row records the round count it ran under: with the
+    // cap absent from the key, raising `iterativeRecallMaxRounds` served
+    // the cached plan - and its token - under the OLD budget until the
+    // TTL expired. The suffix is `itv:plan:r<cap>`, so the keys must
+    // partition by cap while commit keys stay token-partitioned (the cap
+    // never changes what a committed payload means).
+    await seed();
+    const base = makeConfig({ vault, dbPath, maxHops: 0, mmrLambda: 1, twoPassEnabled: false });
+    const keyFor = async (maxRounds?: number, commitToken?: string): Promise<string> => {
+      const config = withIterative(base, maxRounds);
+      const store = await Store.open(config, { mode: "read", loadVec: false });
+      try {
+        const probe = probeQueryCache({
+          store,
+          config,
+          opts: {
+            query: "warehouse rotation",
+            iterative: true,
+            ...(commitToken !== undefined ? { iterativeToken: commitToken } : {}),
+          } as Parameters<typeof probeQueryCache>[0]["opts"],
+          limit: 10,
+          policy: { explicit: false, wantSemantic: false },
+          sessionFocus: null,
+          tuned: null,
+          planHash: "plan-hash-stable",
+        });
+        if (probe.slot === null) throw new Error("cache probe returned no slot");
+        return probe.slot.key;
+      } finally {
+        await store.close();
+      }
+    };
+    const planDefault = await keyFor();
+    const planRaised = await keyFor(4);
+    expect(planRaised).not.toBe(planDefault);
+    // The cap-lowered key is distinct too, and the commit partition is
+    // indifferent to the cap: one token, one commit key at every cap.
+    const planLowered = await keyFor(1);
+    expect(planLowered).not.toBe(planDefault);
+    expect(planLowered).not.toBe(planRaised);
+    const commitAtDefault = await keyFor(undefined, KNOB_OFF_TOKEN);
+    const commitAtRaised = await keyFor(4, KNOB_OFF_TOKEN);
+    expect(commitAtRaised).toBe(commitAtDefault);
+    expect(commitAtDefault).not.toBe(planDefault);
   });
 });
