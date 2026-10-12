@@ -52,6 +52,7 @@ import {
   ARCHIVE_VERIFICATION,
   isArchiveHash,
   readSourceArchiveEntry,
+  sourceArchiveCitingPages,
 } from "../../core/brain/provenance/source-archive.ts";
 import {
   DANGLING_LINK_DEFINITION,
@@ -252,6 +253,18 @@ async function toolBrainHygiene(
       throw new MCPError(INVALID_PARAMS, "'hash' must be a 64-hex sha-256 digest");
     }
     if (contextReach(ctx) !== TRANSPORT_REACH.local) {
+      return { hash, archive: ARCHIVE_VERIFICATION.missing };
+    }
+    // The owner boundary, the same one the scan applies to its report: a
+    // caller under an enforced owner scope reads pages only through the
+    // per-path view, so an entry whose every citing page is withheld
+    // answers exactly as an absent one. Answering its state or its bytes
+    // would let a scoped agent confirm a guess about evidence it may not
+    // read - the scan withholds those citing pages through the gated view,
+    // and this read would otherwise stand beside it as a confirm-a-guess
+    // oracle (the leak the design cites for refusing digests).
+    const readable = readableAtContextReachOrUndefined(ctx);
+    if (readable !== undefined && !sourceArchiveCitingPages(ctx.vault, hash).some(readable)) {
       return { hash, archive: ARCHIVE_VERIFICATION.missing };
     }
     const entry = readSourceArchiveEntry(ctx.vault, hash);

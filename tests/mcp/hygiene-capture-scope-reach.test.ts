@@ -8,10 +8,19 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
+import { brainConfigPath } from "../../src/core/brain/paths.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { CAPTURE_SCOPE_DETECTOR_ID } from "../../src/core/brain/hygiene/detectors/capture-scope.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
@@ -203,9 +212,28 @@ describe("brain_hygiene archive_get", () => {
   const SOURCE = "Articles/fetchable.md";
   let hash: string;
   let entryPath: string;
+  let summaryPath: string;
 
   const archiveGet = (reachCtx: ServerContext, args: Record<string, unknown>) =>
     hygiene(reachCtx, { mode: "archive_get", ...args }) as Promise<Record<string, unknown>>;
+
+  /** The delivery gate the owner-scope view reads: `fail` enforces the scope. */
+  const setOwnerGate = (mode: string): void => {
+    atomicWriteFileSync(
+      brainConfigPath(vault),
+      `schema_version: 1\nintegrity:\n  owner_scope_delivery: ${mode}\n`,
+    );
+  };
+
+  /** Restamp the citing summary page under another owner. */
+  const restampUnder = (owner: string): void => {
+    const path = join(vault, summaryPath);
+    writeFileSync(
+      path,
+      readFileSync(path, "utf8").replace(/^---\n/, `---\nowner: ${owner}\n`),
+      "utf8",
+    );
+  };
 
   beforeEach(async () => {
     mkdirSync(join(vault, "Articles"), { recursive: true });
@@ -214,9 +242,10 @@ describe("brain_hygiene archive_get", () => {
       source_path: SOURCE,
       summary: "Fetchable.",
       entities: [{ category: "concept", name: "Fetchable" }],
-    })) as { source_archive_hash: string };
+    })) as { source_archive_hash: string; summary_path: string };
     hash = res.source_archive_hash;
     entryPath = join(vault, "Brain", ".archives", `${hash}.txt`);
+    summaryPath = res.summary_path;
   });
 
   test("at local reach a known hash resolves the archived bytes", async () => {
@@ -256,5 +285,42 @@ describe("brain_hygiene archive_get", () => {
     expect(res).toEqual({ hash, archive: "missing" });
     expect(res).not.toHaveProperty("content");
     expect(res).not.toHaveProperty("bytes");
+  });
+
+  test("an owner-scoped caller cannot confirm an entry whose citing page is another owner's", async () => {
+    // The scan withholds another owner's citing page through the gated
+    // view; answering this entry's state or bytes would stand beside that
+    // as a confirm-a-guess oracle. Under an enforced scope the entry whose
+    // every citing page is withheld reads exactly as absent.
+    setOwnerGate("fail");
+    restampUnder("other-agent");
+    const res = await archiveGet(
+      { ...ctx, reach: TRANSPORT_REACH.local, agentName: "me-agent" },
+      { hash },
+    );
+    expect(res).toEqual({ hash, archive: "missing" });
+  });
+
+  test("the entry's own owner still reads the bytes at local reach", async () => {
+    setOwnerGate("fail");
+    restampUnder("other-agent");
+    const res = await archiveGet(
+      { ...ctx, reach: TRANSPORT_REACH.local, agentName: "other-agent" },
+      { hash },
+    );
+    expect(res["archive"]).toBe("verified");
+    expect(res["content"]).toBe("fetchable bytes\n");
+  });
+
+  test("an enforced scope still answers a shared citing page with the bytes", async () => {
+    // The gate narrows only what the page itself withholds: an ownerless
+    // summary page is shared, so the same scoped caller keeps the fetch.
+    setOwnerGate("fail");
+    const res = await archiveGet(
+      { ...ctx, reach: TRANSPORT_REACH.local, agentName: "me-agent" },
+      { hash },
+    );
+    expect(res["archive"]).toBe("verified");
+    expect(res["content"]).toBe("fetchable bytes\n");
   });
 });
