@@ -9,24 +9,29 @@
  * billing rows while the graded key reads zero substring coverage - and
  * a structural non-prompt no calibration should speak up for.
  *
- * Scope note (pr-250 review, M9): the harness drives the decision core
- * directly, so a structural prompt down here is judged on retrieval
- * alone - the suite calibrates the admission floor, it does not exercise
- * `evaluateSurfacingGate`'s short-circuits.
+ * Scope note (pr-250 review, M9): a question that records the prompt it
+ * follows (`previous_prompt`) runs `evaluateSurfacingGate` ahead of the
+ * decision core - exactly as the transports do - and a structural
+ * refusal is persisted as an honest zero-cost abstention. The converter
+ * does not set the field yet, so suite-driven runs still measure floor
+ * calibration only; the direct-fixture tests below pin the gate.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { ContinuityRecord } from "../../../src/core/brain/continuity/types.ts";
+import type { RecallInjectDecision } from "../../../src/core/brain/recall-inject.ts";
+import { parseBenchFixture } from "../../../src/core/bench/fixture.ts";
 import { runMemoryBench } from "../../../src/core/bench/phases.ts";
 import {
   parseReplayFixture,
   sessionTurnsToReplayFixture,
 } from "../../../src/core/bench/replay-fixture.ts";
 import { loadReplayBenchFixture, replayToBenchFixture } from "../../../src/core/bench/replay.ts";
+import { benchResultsDir } from "../../../src/core/bench/run-store.ts";
 import { benchSuite } from "../../../src/cli/brain/verbs/bench.ts";
 
 function sessionTurn(overrides: Partial<ContinuityRecord> & { id: string }): ContinuityRecord {
@@ -56,6 +61,18 @@ afterEach(() => {
   rmSync(runsDir, { recursive: true, force: true });
   rmSync(otherRunsDir, { recursive: true, force: true });
 });
+
+/** The decision the retrieve phase persisted for one question. */
+function persistedDecision(runId: string, questionId: string): RecallInjectDecision {
+  const path = join(benchResultsDir(join(runsDir, runId)), `${questionId}.json`);
+  const raw = JSON.parse(readFileSync(path, "utf8")) as {
+    recall_decision?: RecallInjectDecision;
+  };
+  if (raw.recall_decision === undefined) {
+    throw new Error(`no recall decision persisted for question ${questionId}`);
+  }
+  return raw.recall_decision;
+}
 
 test("the suite is registered with the bench verb and loads the committed sample", () => {
   const registration = benchSuite("surfacing-replay");
@@ -163,6 +180,80 @@ test("a notes-less fixture runs end to end: an empty vault can only miss or abst
   expect(byId.get("a")?.pass).toBe(false);
   expect(report.failure_modes.false_fire_rate).toBe(0);
   expect(report.failure_modes.know_to_ask_failure_rate).toBe(0.5);
+}, 30_000);
+
+test("a replayed duplicate of the previous prompt structurally abstains", async () => {
+  // The prompt matches the vault head-on, so the decision core WOULD
+  // inject it - a false fire under `expect_inject: false`, which is what
+  // makes the refusal observable: the gate must stop it before any
+  // retrieval runs, exactly as the transports do.
+  const fixture = parseBenchFixture({
+    name: "structural-duplicate",
+    notes: [
+      { path: "Brain/_brain.yaml", body: "schema_version: 1\n" },
+      {
+        path: "Brain/notes/billing.md",
+        body: "Priya owns the billing migration. The billing migration finishes before the launch freeze in March.",
+      },
+    ],
+    questions: [
+      {
+        id: "turn-dup",
+        category: "proactive_recall",
+        prompt: "billing migration",
+        expect_inject: false,
+        previous_prompt: "billing migration",
+      },
+    ],
+  });
+  const report = await runMemoryBench({ fixture, runsDir });
+  const q = report.questions.find((entry) => entry.id === "turn-dup")!;
+  expect(q.pass).toBe(true);
+  // An abstention injects nothing, and zero is the honest cost of nothing.
+  expect(q.context_chars).toBe(0);
+  expect(q.injected_tokens).toBe(0);
+  expect(persistedDecision(report.run_id, "turn-dup")).toMatchObject({
+    kind: "abstain",
+    reason: "structural",
+    structuralReason: "duplicate",
+    topScore: 0,
+    matchQuality: null,
+  });
+}, 30_000);
+
+test("a replayed slash command with a recorded previous prompt structurally abstains", async () => {
+  // The vault holds a note the command name alone would retrieve, so a
+  // harness that judged the prompt on retrieval alone would speak up.
+  const fixture = parseBenchFixture({
+    name: "structural-slash",
+    notes: [
+      { path: "Brain/_brain.yaml", body: "schema_version: 1\n" },
+      {
+        path: "Brain/notes/compact.md",
+        body: "Compacting the session context keeps the flat white preference.",
+      },
+    ],
+    questions: [
+      {
+        id: "turn-slash",
+        category: "proactive_recall",
+        prompt: "/compact",
+        expect_inject: false,
+        previous_prompt: "who owns the billing migration",
+      },
+    ],
+  });
+  const report = await runMemoryBench({ fixture, runsDir });
+  const q = report.questions.find((entry) => entry.id === "turn-slash")!;
+  expect(q.pass).toBe(true);
+  expect(q.context_chars).toBe(0);
+  expect(q.injected_tokens).toBe(0);
+  expect(persistedDecision(report.run_id, "turn-slash")).toMatchObject({
+    kind: "abstain",
+    reason: "structural",
+    structuralReason: "slash_command",
+    matchQuality: null,
+  });
 }, 30_000);
 
 test("the calibrated gate posts zero false fires; a permissive zero floor false-fires", async () => {

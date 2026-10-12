@@ -198,6 +198,13 @@ function parseQuestion(raw: unknown, index: number): BenchQuestion {
     ...(nonEmptyString(record["prompt"]) !== undefined
       ? { prompt: nonEmptyString(record["prompt"]) }
       : {}),
+    // Replay glue (surfacing-replay): the prompt this question follows,
+    // consumed by the structural gate the phase pipeline reproduces.
+    // Present only when the fixture carries it, so every fixture without
+    // one parses byte-identically.
+    ...(nonEmptyString(record["previous_prompt"]) !== undefined
+      ? { previous_prompt: nonEmptyString(record["previous_prompt"]) }
+      : {}),
     // `expect_inject` is the one boolean field, and `false` is its most
     // load-bearing value (the anti-gaming half of the fixture), so it is
     // read by type rather than by truthiness.

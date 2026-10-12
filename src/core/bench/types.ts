@@ -110,6 +110,14 @@ export interface BenchQuestion {
   /** proactive_recall: the user prompt the decision core sees. */
   readonly prompt?: string;
   /**
+   * proactive_recall: the previous prompt in the replayed sequence, when
+   * the suite records one. The structural gate (`evaluateSurfacingGate`)
+   * consumes it ahead of the decision core, exactly as the transports
+   * run it; absent means the gate is not reproduced for this question
+   * and it is judged on retrieval alone.
+   */
+  readonly previous_prompt?: string;
+  /**
    * proactive_recall: whether memory SHOULD speak up for this prompt.
    * `false` is the anti-gaming half of the fixture - a prompt the vault
    * has nothing useful to say about, where injecting is the failure.

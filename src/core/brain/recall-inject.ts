@@ -20,6 +20,7 @@
 
 import { deriveRecallHint, type RecallHintInput } from "../search/recall-hint.ts";
 import { searchAcrossVaults } from "../search/cross-vault.ts";
+import type { SurfacingGateReason } from "../search/surfacing-gate.ts";
 import {
   computeSurfacingKey,
   SURFACING_ADMISSION_FLOORS,
@@ -279,7 +280,18 @@ export type RecallAbstainReason =
    */
   | "all_already_injected"
   /** Slices were declared and none of them placed a note in the brief. */
-  | "all_slices_abstained";
+  | "all_slices_abstained"
+  /**
+   * The structural gate (`evaluateSurfacingGate`) refused before any
+   * retrieval ran - the prompt is a verbatim repeat of its predecessor, a
+   * slash command, a shell command, or empty, and the gate's own reason
+   * rides `structuralReason`. `decideRecallInject` itself never returns
+   * this: in production the transports run the gate AHEAD of this core,
+   * and a caller that reproduces that composition (the bench's
+   * proactive-recall arm) persists the refusal as this member, so an
+   * abstention always names the layer that refused it.
+   */
+  | "structural";
 
 /**
  * Why an attempt failed, as a closed vocabulary rather than as prose.
@@ -356,6 +368,13 @@ export type RecallInjectDecision =
   | {
       readonly kind: "abstain";
       readonly reason: RecallAbstainReason;
+      /**
+       * Present only on a `structural` abstain: the gate's own closed
+       * reason (`duplicate`, `slash_command`, `shell_command`, `empty`),
+       * carried beside the carrier member so the abstention says both
+       * which layer refused and why.
+       */
+      readonly structuralReason?: SurfacingGateReason;
       readonly topScore: number;
       /**
        * The quantity the floor was compared against; see the floor's
@@ -1116,6 +1135,12 @@ export function recallInjectTelemetryMetadata(
     return Object.freeze({
       decision: "abstain",
       reason: decision.reason,
+      // The gate's own reason is a closed classification like the abstain
+      // reason itself, so it satisfies the same names-nothing-sensitive
+      // rule; dropping it would leave an unexplainable `structural`.
+      ...(decision.structuralReason !== undefined
+        ? { structural_reason: decision.structuralReason }
+        : {}),
       top_score: decision.topScore,
       match_quality: decision.matchQuality,
       ...decisionModelTelemetry(decision.decisionModel),

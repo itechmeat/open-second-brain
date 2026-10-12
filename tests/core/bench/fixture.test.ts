@@ -89,6 +89,38 @@ describe("parseBenchFixture", () => {
     expect(c).not.toBe(a);
   });
 
+  test("previous_prompt rides a replayed question; absent or non-string stays absent", () => {
+    const carried = parseBenchFixture({
+      ...FIXTURE,
+      questions: [
+        {
+          id: "q1",
+          category: "proactive_recall",
+          prompt: "/compact",
+          expect_inject: false,
+          previous_prompt: "who owns the billing migration",
+        },
+      ],
+    });
+    expect(carried.questions[0]?.previous_prompt).toBe("who owns the billing migration");
+    // The default path stays byte-identical: no key, no field.
+    expect(parseBenchFixture(FIXTURE).questions[0]?.previous_prompt).toBeUndefined();
+    // The allowlist reads it by type: a non-string is not smuggled in.
+    const mistyped = parseBenchFixture({
+      ...FIXTURE,
+      questions: [
+        {
+          id: "q1",
+          category: "proactive_recall",
+          prompt: "/compact",
+          expect_inject: false,
+          previous_prompt: 7,
+        },
+      ],
+    });
+    expect(mistyped.questions[0]?.previous_prompt).toBeUndefined();
+  });
+
   test("loadBenchFixture reads a file and fails fast on broken JSON", () => {
     const path = join(tmp, "fixture.json");
     writeFileSync(path, JSON.stringify(FIXTURE));

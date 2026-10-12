@@ -27,6 +27,7 @@ import {
   type RecallInjectDecision,
 } from "../brain/recall-inject.ts";
 import { resolveSearchConfig, search } from "../search/index.ts";
+import { evaluateSurfacingGate } from "../search/surfacing-gate.ts";
 import {
   BENCH_EMBEDDING_RECEIPT_FILENAME,
   embedBenchVaultIndex,
@@ -351,6 +352,33 @@ async function retrieveQuestion(
     };
   }
   if (question.category === "proactive_recall") {
+    // The structural pre-tier (pr-250 review, M9): the transports run
+    // `evaluateSurfacingGate` ahead of the decision core, so a duplicate,
+    // slash-command, shell-command or empty prompt never reaches
+    // retrieval. The bench reproduces that composition exactly whenever
+    // the fixture records the prompt this question follows: a structural
+    // refusal is persisted as an honest abstention - the gate's own
+    // reason, nothing measured, zero injected cost - and the decision
+    // core never runs for it.
+    const previousPrompt = question.previous_prompt;
+    if (previousPrompt !== undefined && previousPrompt.length > 0) {
+      const gate = evaluateSurfacingGate({ prompt: question.prompt ?? "", previousPrompt });
+      if (!gate.retrieve) {
+        return {
+          id: question.id,
+          latency_ms: Date.now() - startedAt,
+          recall_decision: Object.freeze({
+            kind: "abstain",
+            reason: "structural",
+            structuralReason: gate.reason,
+            topScore: 0,
+            matchQuality: null,
+          }),
+          context_chars: 0,
+          injected_tokens: injectedTokens(""),
+        };
+      }
+    }
     // The shipped decision core, driven directly over the fixture vault.
     // The retriever is a PARAMETER of that function, which is the only
     // reason this is measurable offline at all. The admission floor is a
@@ -577,7 +605,11 @@ function evaluateProactiveRecall(
 
 /** One decision as a diffable one-liner. Classifications only, no prose. */
 function describeDecision(decision: RecallInjectDecision): string {
-  if (decision.kind === "abstain") return `abstain(${decision.reason})`;
+  if (decision.kind === "abstain") {
+    return decision.structuralReason !== undefined
+      ? `abstain(${decision.reason}:${decision.structuralReason})`
+      : `abstain(${decision.reason})`;
+  }
   if (decision.kind === "error") return `error(${decision.fault})`;
   return `inject(${decision.noteCount} notes)`;
 }
