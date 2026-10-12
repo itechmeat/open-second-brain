@@ -70,6 +70,7 @@ import {
   describeSessionRecall,
   expandSessionRecall,
   searchSessionRecall,
+  SessionCoverageEntityUnknownError,
   SessionCoverageInfeasibleError,
 } from "../../core/brain/session-recall.ts";
 import { resolveTimeBounds } from "./time-bounds.ts";
@@ -955,6 +956,12 @@ async function toolBrainSessionGrep(
     // shared `unknown_operation` code, message unchanged.
     throw unknownOperationError("brain_session_grep: operation must be 'match' or 'coverage'");
   }
+  if (args["char_budget"] !== undefined) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_session_grep: char_budget is not applicable to operation 'match'; it sizes the coverage selection",
+    );
+  }
   const limit = coercePositiveInteger("brain_session_grep", "limit", args["limit"]);
   const snippetChars = coercePositiveInteger(
     "brain_session_grep",
@@ -1016,6 +1023,21 @@ function toolBrainSessionGrepCoverage(
       "brain_session_grep: operation 'coverage' selects whole topics; it takes no `query`",
     );
   }
+  for (const inapplicable of [
+    "since",
+    "before",
+    "limit",
+    "snippet_chars",
+    "include_raw",
+    "raw_budget_chars",
+  ] as const) {
+    if (args[inapplicable] !== undefined) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        `brain_session_grep: ${inapplicable} is not applicable to operation 'coverage'; it sizes or filters the match operation`,
+      );
+    }
+  }
   const charBudget = coercePositiveInteger(
     "brain_session_grep",
     "char_budget",
@@ -1028,15 +1050,20 @@ function toolBrainSessionGrepCoverage(
     );
   }
   const sessionId = optionalStringArg("brain_session_grep", args, "session_id");
+  const entityKey = optionalStringArg("brain_session_grep", args, "entity_key");
   let result;
   try {
     result = coverageSessionRecall(ctx.vault, {
       ...withheldAtRemoteReach(ctx),
       ...(sessionId !== undefined ? { sessionId } : {}),
+      ...(entityKey !== undefined ? { entityKey } : {}),
       charBudget,
     });
   } catch (err) {
     if (err instanceof SessionCoverageInfeasibleError) {
+      throw new MCPError(INVALID_PARAMS, err.message);
+    }
+    if (err instanceof SessionCoverageEntityUnknownError) {
       throw new MCPError(INVALID_PARAMS, err.message);
     }
     throw err;
@@ -1576,7 +1603,7 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "string",
           enum: ["match", "coverage"],
           description:
-            "match (default) greps records for `query` (required here). coverage runs coverage-first selection: `query` must be absent and `char_budget` is required.",
+            "match (default) greps records for `query` (required here). coverage runs coverage-first selection: `query` must be absent and `char_budget` is required; `entity_key` optionally seeds the fan-out.",
         },
         query: { type: "string", description: "Search text (operation=match)." },
         session_id: {
@@ -1588,6 +1615,11 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           minimum: 1,
           description:
             "With operation=coverage: total character budget for the selected evidence. A budget that cannot hold the selection is refused, naming the required chars.",
+        },
+        entity_key: {
+          type: "string",
+          description:
+            "With operation=coverage: seed the topic fan-out from the sessions whose mined records mention this entity (exact key). An entity no imported record mentions is refused by name.",
         },
         limit: {
           type: "integer",

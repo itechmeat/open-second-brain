@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { importSessionRecall } from "../../src/core/brain/session-recall.ts";
+import { appendContinuityRecord } from "../../src/core/brain/continuity/store.ts";
 import type { SessionTurn } from "../../src/core/brain/sessions/types.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
@@ -127,6 +128,58 @@ test("brain session-grep coverage operation and describe topics (t_2c2a883c)", a
   ]);
   expect(described.returncode).toBe(0);
   expect(JSON.parse(described.stdout).topic_report.topics_realized).toBe(2);
+});
+
+test("entity-key seeds the fan-out and match-only flags are refused under coverage", async () => {
+  appendContinuityRecord(vault, {
+    kind: "session_entity_mention",
+    createdAt: "2026-05-20T17:00:04.000Z",
+    sourceRefs: [{ id: "session-cli:t1:symbol:ReceiptSearch" }],
+    payload: { family: "symbol", key: "ReceiptSearch", session_ref: "session-cli", turn_id: "t1" },
+  });
+
+  const seeded = await runCli([
+    "brain",
+    "session-grep",
+    "--vault",
+    vault,
+    "--operation",
+    "coverage",
+    "--char-budget",
+    "100000",
+    "--entity-key",
+    "ReceiptSearch",
+    "--json",
+  ]);
+  expect(seeded.returncode).toBe(0);
+  const parsed = JSON.parse(seeded.stdout);
+  // The seeded facet leads the fan-out: the mention's establishing turn
+  // is first; the budget may still realize further topics after it.
+  const turnIds = parsed.turns.map((t: { turn_id: string }) => t.turn_id);
+  expect(turnIds[0]).toBe("t1");
+  expect(turnIds).toContain("t1");
+
+  for (const extra of [
+    ["--query", "receipt"],
+    ["--since", "2026-05-01"],
+    ["--before", "2026-05-21"],
+    ["--limit", "5"],
+    ["--snippet-chars", "40"],
+  ]) {
+    const refused = await runCli([
+      "brain",
+      "session-grep",
+      "--vault",
+      vault,
+      "--operation",
+      "coverage",
+      "--char-budget",
+      "100000",
+      ...extra,
+    ]);
+    expect(refused.returncode).not.toBe(0);
+    expect(`${refused.stderr}${refused.stdout}`).toContain(extra[0]);
+  }
 });
 
 test("coverage without a character budget is refused by name", async () => {

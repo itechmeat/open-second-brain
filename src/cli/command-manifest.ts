@@ -796,7 +796,11 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command(
           "session-grep",
           "Search imported session recall turns and summaries; --operation coverage selects whole-thread coverage",
-          [flag("operation", "string"), flag("char-budget", "string")],
+          [
+            flag("operation", "string"),
+            flag("char-budget", "string"),
+            flag("entity-key", "string"),
+          ],
         ),
         command("session-describe", "Describe an imported session recall DAG", [
           flag("topics", "boolean"),

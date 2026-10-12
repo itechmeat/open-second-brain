@@ -3,6 +3,7 @@ import {
   describeSessionRecall,
   expandSessionRecall,
   searchSessionRecall,
+  SessionCoverageEntityUnknownError,
   SessionCoverageInfeasibleError,
 } from "../../../core/brain/session-recall.ts";
 import { resolveTimeRange } from "../../../core/search/time-range.ts";
@@ -21,6 +22,7 @@ export async function cmdBrainSessionGrep(argv: string[]): Promise<number> {
     before: { type: "string" },
     operation: { type: "string" },
     "char-budget": { type: "string" },
+    "entity-key": { type: "string" },
   });
   const vault = brainVerbContext(flags).vault;
   // Coverage-first selection (t_2c2a883c) rides this verb as an explicit
@@ -73,6 +75,13 @@ function runSessionGrepCoverage(
   vault: string,
   flags: Record<string, string | boolean | string[] | undefined>,
 ): number {
+  for (const inapplicable of ["query", "since", "before", "limit", "snippet-chars"] as const) {
+    if (flags[inapplicable] !== undefined) {
+      throw new CliError(
+        `brain session-grep: --${inapplicable} is not applicable to --operation coverage; it filters the match operation`,
+      );
+    }
+  }
   const charBudget = positiveIntegerOptional(
     flags["char-budget"],
     "brain session-grep",
@@ -81,16 +90,19 @@ function runSessionGrepCoverage(
   if (charBudget === undefined) {
     throw new CliError("brain session-grep: --char-budget is required for --operation coverage");
   }
+  const entityKey = stringOptional(flags["entity-key"]);
   let result;
   try {
     result = coverageSessionRecall(vault, {
       ...(stringOptional(flags["session-id"]) !== undefined
         ? { sessionId: stringOptional(flags["session-id"]) }
         : {}),
+      ...(entityKey !== undefined ? { entityKey } : {}),
       charBudget,
     });
   } catch (exc) {
     if (exc instanceof SessionCoverageInfeasibleError) throw new CliError(exc.message);
+    if (exc instanceof SessionCoverageEntityUnknownError) throw new CliError(exc.message);
     throw exc;
   }
   writeOutput(result, flags["json"] === true);

@@ -1245,7 +1245,7 @@ export const VERB_HELP: Record<string, string> = {
     "  [--json]\n",
   "session-grep":
     "usage: o2b brain session-grep --query <text> [--operation match] [--session-id <id>] [--limit <n>] [--snippet-chars <n>] [--since <t>] [--before <t>] [--vault <path>] [--json]\n" +
-    "       o2b brain session-grep --operation coverage --char-budget <n> [--session-id <id>] [--vault <path>] [--json]\n" +
+    "       o2b brain session-grep --operation coverage --char-budget <n> [--entity-key <key>] [--session-id <id>] [--vault <path>] [--json]\n" +
     "Search imported session recall raw turns and summary nodes. --since and\n" +
     "--before bound results to a time window (ISO date/datetime, today/\n" +
     "yesterday/last week/last month, or <n>h/<n>d/<n>w); --before is inclusive.\n" +

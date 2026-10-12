@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { importSessionRecall } from "../../src/core/brain/session-recall.ts";
+import { appendContinuityRecord } from "../../src/core/brain/continuity/store.ts";
 import type { SessionTurn } from "../../src/core/brain/sessions/types.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
@@ -236,6 +237,58 @@ describe("brain_session_grep coverage operation (t_2c2a883c)", () => {
     })) as { error?: { code: number; message: string } };
     expect(response.error?.code).toBe(-32602);
     expect(response.error?.message).toContain("operation");
+  });
+
+  test("entity_key seeds the fan-out and an unknown key is refused by name", async () => {
+    appendContinuityRecord(vault, {
+      kind: "session_entity_mention",
+      createdAt: "2026-05-20T17:00:03.000Z",
+      sourceRefs: [{ id: "session-mcp:t1:symbol:ReceiptSearch" }],
+      payload: {
+        family: "symbol",
+        key: "ReceiptSearch",
+        session_ref: "session-mcp",
+        turn_id: "t1",
+      },
+    });
+    const server = new MCPServer({ vault, configPath: null });
+    await initialize(server);
+    const call = (args: Record<string, unknown>) =>
+      server.handleRequest({
+        jsonrpc: JSONRPC_VERSION,
+        id: 9,
+        method: "tools/call",
+        params: { name: "brain_session_grep", arguments: args },
+      }) as Promise<{
+        error?: { code: number; message: string };
+        result?: { content: ReadonlyArray<{ type: string; text: string }> };
+      }>;
+
+    const seeded = await call({
+      operation: "coverage",
+      char_budget: 100_000,
+      entity_key: "ReceiptSearch",
+    });
+    const turns = JSON.parse(seeded.result!.content[0]!.text).turns as Array<{ turn_id: string }>;
+    expect(turns.map((turn) => turn.turn_id)).toEqual(["t1", "t2"]);
+
+    const unknown = await call({
+      operation: "coverage",
+      char_budget: 100_000,
+      entity_key: "NoSuchEntity",
+    });
+    expect(unknown.error?.code).toBe(-32602);
+    expect(unknown.error?.message).toContain("NoSuchEntity");
+
+    for (const extra of [
+      { since: "2026-05-01" },
+      { before: "2026-05-21" },
+      { limit: 5 },
+      { snippet_chars: 40 },
+    ]) {
+      const refused = await call({ operation: "coverage", char_budget: 100_000, ...extra });
+      expect(refused.error?.code).toBe(-32602);
+    }
   });
 
   test("coverage without char_budget is refused", async () => {
