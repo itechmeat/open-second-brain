@@ -307,6 +307,31 @@ describe("brain_session_grep coverage operation (t_2c2a883c)", () => {
     expect(response.error?.message).toContain("char_budget");
   });
 
+  test("coverage-only arguments are refused by name under the match operation", async () => {
+    // The mirror of the refusal matrix above: char_budget and entity_key
+    // name the coverage operation's knobs, so the default match operation
+    // refuses them instead of silently ignoring them.
+    const server = new MCPServer({ vault, configPath: null });
+    await initialize(server);
+    const call = (args: Record<string, unknown>) =>
+      server.handleRequest({
+        jsonrpc: JSONRPC_VERSION,
+        id: 9,
+        method: "tools/call",
+        params: { name: "brain_session_grep", arguments: args },
+      }) as Promise<{ error?: { code: number; message: string } }>;
+
+    const budget = await call({ query: "receipt", char_budget: 100_000 });
+    expect(budget.error?.code).toBe(-32602);
+    expect(budget.error?.message).toContain("char_budget is not applicable to operation 'match'");
+
+    const entity = await call({ query: "receipt", entity_key: "ReceiptSearch" });
+    expect(entity.error?.code).toBe(-32602);
+    expect(entity.error?.message).toContain(
+      "entity_key is not applicable to operation 'match'; it seeds the coverage fan-out",
+    );
+  });
+
   test("the typed infeasibility error maps to INVALID_PARAMS", async () => {
     const server = new MCPServer({ vault, configPath: null });
     await initialize(server);

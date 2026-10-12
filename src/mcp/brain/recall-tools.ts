@@ -962,6 +962,12 @@ async function toolBrainSessionGrep(
       "brain_session_grep: char_budget is not applicable to operation 'match'; it sizes the coverage selection",
     );
   }
+  if (args["entity_key"] !== undefined) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_session_grep: entity_key is not applicable to operation 'match'; it seeds the coverage fan-out",
+    );
+  }
   const limit = coercePositiveInteger("brain_session_grep", "limit", args["limit"]);
   const snippetChars = coercePositiveInteger(
     "brain_session_grep",

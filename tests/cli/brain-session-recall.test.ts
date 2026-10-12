@@ -196,6 +196,31 @@ test("coverage without a character budget is refused by name", async () => {
   expect(`${missing.stderr}${missing.stdout}`).toContain("char-budget");
 });
 
+test("coverage-only flags are refused under the match operation", async () => {
+  // The mirror of the refusal matrix above: --char-budget and --entity-key
+  // name the coverage operation's knobs, so the default match operation
+  // refuses them instead of silently ignoring them.
+  for (const extra of [
+    ["--char-budget", "100000"],
+    ["--entity-key", "ReceiptSearch"],
+  ] as const) {
+    const refused = await runCli([
+      "brain",
+      "session-grep",
+      "--vault",
+      vault,
+      "--query",
+      "receipt",
+      ...extra,
+      "--json",
+    ]);
+    expect(refused.returncode).not.toBe(0);
+    expect(`${refused.stderr}${refused.stdout}`).toContain(
+      `${extra[0]} applies to --operation coverage only`,
+    );
+  }
+});
+
 test("a budget below the floor-weighted selection surfaces the typed infeasibility", async () => {
   const infeasible = await runCli([
     "brain",

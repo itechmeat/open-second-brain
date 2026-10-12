@@ -35,6 +35,9 @@ export async function cmdBrainSessionGrep(argv: string[]): Promise<number> {
   if (stringOptional(flags["char-budget"]) !== undefined) {
     throw new CliError("brain session-grep: --char-budget applies to --operation coverage only");
   }
+  if (stringOptional(flags["entity-key"]) !== undefined) {
+    throw new CliError("brain session-grep: --entity-key applies to --operation coverage only");
+  }
   // Conversation-chronology bounds (S1): --since / --before parse through
   // the shared time-range grammar; --before maps onto the inclusive upper
   // edge. Absent bounds leave the search unbounded (byte-identical).
