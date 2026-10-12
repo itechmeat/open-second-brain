@@ -113,7 +113,16 @@ function parseTurn(raw: unknown, where: string, previousText: string | null): Re
   };
 }
 
-/** Parse and validate a raw session-shaped replay fixture. */
+/**
+ * Parse and validate a raw session-shaped replay fixture.
+ *
+ * The suite-qualified name is applied HERE, at the one entry point raw
+ * input flows through, so every downstream consumer (the bench converter,
+ * the loader) reports the same `surfacing-replay-` prefixed name without
+ * each having to remember the prefix - and without a conversion path ever
+ * emitting a bare name that the run store would file under the wrong
+ * suite.
+ */
 export function parseReplayFixture(raw: unknown): ReplayFixture {
   if (raw === null || typeof raw !== "object") {
     throw new ReplayFixtureError("replay fixture must be an object");
@@ -147,12 +156,12 @@ export function parseReplayFixture(raw: unknown): ReplayFixture {
     seen.add(turn.id);
     prompts.push(turn);
   }
-  return {
+  return withSuiteName({
     name,
     ...(typeof r["description"] === "string" ? { description: r["description"] } : {}),
     notes,
     prompts,
-  };
+  });
 }
 
 /** Load a committed replay fixture file, named `surfacing-replay-<name>`. */
@@ -165,7 +174,9 @@ export function loadReplayFixture(path: string): ReplayFixture {
       `replay fixture not readable JSON at ${path}: ${e instanceof Error ? e.message : String(e)}`,
     );
   }
-  return withSuiteName(parseReplayFixture(raw));
+  // `parseReplayFixture` applies the suite-qualified name; loading adds
+  // nothing but the file read.
+  return parseReplayFixture(raw);
 }
 
 /** The suite-qualified fixture name every replay entry point reports. */

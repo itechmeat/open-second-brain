@@ -92,6 +92,18 @@ export interface BenchRunOptions {
   readonly pinnedKnobs?: BenchPinnedKnobs;
   /** Resume an existing run id; validates the fixture hash first. */
   readonly resume?: string;
+  /**
+   * Optional admission floor override for the proactive-recall decisions,
+   * passed to the decision core's `confidenceFloor` option, which routes
+   * through the shared surfacing calculator. Absent keeps the shipped
+   * default (`RECALL_INJECT_CONFIDENCE_FLOOR`). The surfacing-replay
+   * suite sweeps this to measure gate calibration.
+   *
+   * Deliberately NOT part of the run identity: a completed retrieve phase
+   * replays its persisted decisions on resume, so a floor change takes
+   * effect in a fresh run id, never by silently re-deciding a resumed one.
+   */
+  readonly recallFloor?: number;
   /** Optional external judge command (config bench_judge_cmd). */
   readonly judgeCmd?: string;
   readonly now?: Date;
@@ -238,7 +250,7 @@ export async function runMemoryBench(opts: BenchRunOptions): Promise<BenchReport
     // oxlint-disable-next-line no-await-in-loop
     for (const question of opts.fixture.questions) {
       // oxlint-disable-next-line no-await-in-loop
-      const retrieved = await retrieveQuestion(vault, config, question);
+      const retrieved = await retrieveQuestion(vault, config, question, opts.recallFloor);
       writeFileSync(
         join(benchResultsDir(run.runDir), `${question.id}.json`),
         `${JSON.stringify(retrieved, null, 2)}\n`,
@@ -270,6 +282,7 @@ async function retrieveQuestion(
   vault: string,
   config: ReturnType<typeof resolveSearchConfig>,
   question: BenchQuestion,
+  recallFloor?: number,
 ): Promise<RetrievedQuestion> {
   const startedAt = Date.now();
   if (RETRIEVAL_CATEGORIES.has(question.category)) {
@@ -300,10 +313,13 @@ async function retrieveQuestion(
   if (question.category === "proactive_recall") {
     // The shipped decision core, driven directly over the fixture vault.
     // The retriever is a PARAMETER of that function, which is the only
-    // reason this is measurable offline at all.
+    // reason this is measurable offline at all. The admission floor is a
+    // parameter too (t_107a3249): the replay suite sweeps it to measure
+    // gate calibration; absent keeps the shipped default.
     const decision = await decideRecallInject(
       question.prompt ?? "",
       benchRecallRetriever(config, question.top_k ?? RECALL_INJECT_MAX_NOTES),
+      recallFloor === undefined ? {} : { confidenceFloor: recallFloor },
     );
     // An abstain injects nothing, and zero is the honest cost of nothing -
     // not an absent measurement.

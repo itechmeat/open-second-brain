@@ -44,8 +44,8 @@ test("the committed sample loads into an ordered prompt sequence with expectatio
   // Order is the session's order, and each prompt carries the text of the
   // one before it, which is what duplicate detection reads.
   expect(fixture.prompts[0]!.previousText).toBeNull();
-  expect(fixture.prompts[1]!.previousText).toBe("Who owns the billing migration?");
-  expect(fixture.prompts[2]!.text).toBe("Priya asked about the office lease renewal timeline");
+  expect(fixture.prompts[1]!.previousText).toBe("billing migration");
+  expect(fixture.prompts[2]!.text).toBe("billing-migration");
 });
 
 test("the loader is deterministic: the same file parses to an equal fixture twice", () => {

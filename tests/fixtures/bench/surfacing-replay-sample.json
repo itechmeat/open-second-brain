@@ -1,30 +1,34 @@
 {
   "name": "sample",
-  "description": "Tiny committed surfacing-replay session: two prompts memory should speak up about, one weak-match prompt it must stay quiet about, and one structural non-prompt. The abstain turn shares exactly one corpus term (Priya), so the calibrated floor abstains while a permissive zero floor false-fires.",
+  "description": "Tiny committed surfacing-replay session: two prompts memory should speak up about, one weak-match prompt it must stay quiet about, and one structural non-prompt. The weak turn's only term is hyphenated ('billing-migration'), so the keyword lane retrieves the billing rows while the graded key reads zero substring coverage - the calibrated floor abstains and a permissive zero floor false-fires. Note paths stay under Brain/ because that is the tree the shipped indexer walks.",
   "notes": [
     {
-      "path": "notes/launch.md",
+      "path": "Brain/_brain.yaml",
+      "body": "schema_version: 1\n"
+    },
+    {
+      "path": "Brain/notes/launch.md",
       "body": "The Atlas launch checklist is owned by Marco. The billing migration finishes before the launch freeze in March."
     },
     {
-      "path": "notes/pivot.md",
+      "path": "Brain/notes/pivot.md",
       "body": "The pivot review paused the mobile app and moved the team to the data pipeline. Priya owns the billing migration."
     }
   ],
   "turns": [
     {
       "id": "turn-1",
-      "text": "Who owns the billing migration?",
+      "text": "billing migration",
       "expect": "inject"
     },
     {
       "id": "turn-2",
-      "text": "What happened to the mobile app?",
+      "text": "mobile app",
       "expect": "inject"
     },
     {
       "id": "turn-3",
-      "text": "Priya asked about the office lease renewal timeline",
+      "text": "billing-migration",
       "expect": "abstain"
     },
     {

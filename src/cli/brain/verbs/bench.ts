@@ -16,6 +16,7 @@ import { join, resolve } from "node:path";
 import { loadBenchFixture } from "../../../core/bench/fixture.ts";
 import { loadLongMemEvalFixture } from "../../../core/bench/longmemeval.ts";
 import { loadLocomoFixture } from "../../../core/bench/locomo.ts";
+import { loadReplayBenchFixture } from "../../../core/bench/replay.ts";
 import { runMemoryBench } from "../../../core/bench/phases.ts";
 import type { BenchSuiteLoad, BenchSuiteRegistration } from "../../../core/bench/types.ts";
 import { defaultConfigPath, resolveBenchJudgeCmd } from "../../../core/config.ts";
@@ -61,6 +62,15 @@ const BENCH_SUITES = new Map<string, BenchSuiteRegistration>([
     Object.freeze({
       loader: loadLongMemEvalFixture,
       capabilities: Object.freeze({ embeddings: true }),
+    }),
+  ],
+  [
+    "surfacing-replay",
+    Object.freeze({
+      loader: (fixturePath: string): BenchSuiteLoad => ({
+        fixture: loadReplayBenchFixture(fixturePath),
+      }),
+      capabilities: Object.freeze({ embeddings: false }),
     }),
   ],
 ]);
