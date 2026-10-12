@@ -38,16 +38,26 @@ const CHECKPOINT_FILE = "checkpoint.json";
 const RUN_IDENTITY_HEX_CHARS = 16;
 
 /**
- * The run-identity hash: the fixture hash AND the pinned knob record,
- * canonically hashed together. Two runs that differ only in their pin
- * therefore get different run ids, and a resumed run whose pin changed
- * fails the identity guard instead of silently comparing two pipelines.
+ * The run-identity hash: the fixture hash AND the pinned knob record
+ * AND the recall admission floor (null when unset), canonically hashed
+ * together. Two runs that differ only in their pin or floor therefore
+ * get different run ids, and a resumed run whose pin or floor changed
+ * fails the identity guard instead of silently comparing two pipelines
+ * - or worse, deciding the remaining questions under a new floor while
+ * the persisted ones keep the old.
  */
-export function benchRunIdentityHash(fixture: BenchFixture, pinnedKnobs: BenchPinnedKnobs): string {
-  return sha256Hex(canonicalJson({ fixture: fixtureHash(fixture), knobs: pinnedKnobs })).slice(
-    0,
-    RUN_IDENTITY_HEX_CHARS,
-  );
+export function benchRunIdentityHash(
+  fixture: BenchFixture,
+  pinnedKnobs: BenchPinnedKnobs,
+  recallFloor?: number,
+): string {
+  return sha256Hex(
+    canonicalJson({
+      fixture: fixtureHash(fixture),
+      knobs: pinnedKnobs,
+      recall_floor: recallFloor ?? null,
+    }),
+  ).slice(0, RUN_IDENTITY_HEX_CHARS);
 }
 
 /** Disposable fixture vault location inside one run. */
@@ -63,12 +73,12 @@ export function benchResultsDir(runDir: string): string {
 export function createBenchRun(
   runsDir: string,
   fixture: BenchFixture,
-  opts: { now?: Date; pinnedKnobs?: BenchPinnedKnobs } = {},
+  opts: { now?: Date; pinnedKnobs?: BenchPinnedKnobs; recallFloor?: number } = {},
 ): BenchRunHandle {
   const now = opts.now ?? new Date();
   const knobs = opts.pinnedKnobs ?? DEFAULT_BENCH_KNOB_PIN;
   const hash = fixtureHash(fixture);
-  const identity = benchRunIdentityHash(fixture, knobs);
+  const identity = benchRunIdentityHash(fixture, knobs, opts.recallFloor);
   const stamp = now
     .toISOString()
     .replace(/[^0-9]/g, "")
@@ -92,7 +102,11 @@ export function createBenchRun(
 export function loadBenchRun(
   runsDir: string,
   runId: string,
-  opts: { expectFixture?: BenchFixture; pinnedKnobs?: BenchPinnedKnobs } = {},
+  opts: {
+    expectFixture?: BenchFixture;
+    pinnedKnobs?: BenchPinnedKnobs;
+    recallFloor?: number;
+  } = {},
 ): BenchRunHandle {
   const runDir = guardedRunDir(runsDir, runId);
   const path = join(runDir, CHECKPOINT_FILE);
@@ -113,10 +127,10 @@ export function loadBenchRun(
         `bench run ${runId}: checkpoint predates knob pinning - the run identity cannot be verified, restart the run`,
       );
     }
-    const expectedIdentity = benchRunIdentityHash(opts.expectFixture, knobs);
+    const expectedIdentity = benchRunIdentityHash(opts.expectFixture, knobs, opts.recallFloor);
     if (expectedIdentity !== checkpoint.knobs_hash) {
       throw new Error(
-        `bench run ${runId}: knob pin mismatch (checkpoint ${checkpoint.knobs_hash}, current ${expectedIdentity}) - the pinned search knobs changed since this run started`,
+        `bench run ${runId}: run identity mismatch (checkpoint ${checkpoint.knobs_hash}, current ${expectedIdentity}) - the pinned knobs or the recall floor changed since this run started`,
       );
     }
   }

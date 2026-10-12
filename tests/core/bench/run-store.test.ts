@@ -123,7 +123,22 @@ describe("bench run store", () => {
         expectFixture: FIXTURE,
         pinnedKnobs: { semantic: { enabled: false }, keywordWeight: 0.5 },
       }),
-    ).toThrow(/knob pin mismatch/);
+    ).toThrow(/run identity mismatch/);
+  });
+
+  test("a resume whose recall floor changed fails the identity guard", () => {
+    const run = createBenchRun(runsDir, FIXTURE, {
+      now: new Date("2026-06-03T12:00:00Z"),
+      recallFloor: 0.4,
+    });
+    const same = loadBenchRun(runsDir, run.runId, {
+      expectFixture: FIXTURE,
+      recallFloor: 0.4,
+    });
+    expect(same.runId).toBe(run.runId);
+    expect(() =>
+      loadBenchRun(runsDir, run.runId, { expectFixture: FIXTURE, recallFloor: 0.5 }),
+    ).toThrow(/run identity mismatch/);
   });
 
   test("a checkpoint that predates knob pinning fails resume loudly", () => {

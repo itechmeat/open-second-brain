@@ -102,9 +102,10 @@ export interface BenchRunOptions {
    * default (`RECALL_INJECT_CONFIDENCE_FLOOR`). The surfacing-replay
    * suite sweeps this to measure gate calibration.
    *
-   * Deliberately NOT part of the run identity: a completed retrieve phase
-   * replays its persisted decisions on resume, so a floor change takes
-   * effect in a fresh run id, never by silently re-deciding a resumed one.
+   * Part of the run identity: a resumed run whose floor changed fails
+   * the identity guard instead of deciding the remaining questions under
+   * a new floor while the persisted ones keep the old. A floor change
+   * takes effect in a fresh run id.
    */
   readonly recallFloor?: number;
   /** Optional external judge command (config bench_judge_cmd). */
@@ -201,10 +202,15 @@ export async function runMemoryBench(opts: BenchRunOptions): Promise<BenchReport
   const pinnedKnobs = opts.pinnedKnobs ?? DEFAULT_BENCH_KNOB_PIN;
   const run: BenchRunHandle =
     opts.resume !== undefined
-      ? loadBenchRun(opts.runsDir, opts.resume, { expectFixture: opts.fixture, pinnedKnobs })
+      ? loadBenchRun(opts.runsDir, opts.resume, {
+          expectFixture: opts.fixture,
+          pinnedKnobs,
+          ...(opts.recallFloor !== undefined ? { recallFloor: opts.recallFloor } : {}),
+        })
       : createBenchRun(opts.runsDir, opts.fixture, {
           ...(opts.now !== undefined ? { now: opts.now } : {}),
           pinnedKnobs,
+          ...(opts.recallFloor !== undefined ? { recallFloor: opts.recallFloor } : {}),
         });
   let checkpoint = run.checkpoint;
   const vault = benchVaultDir(run.runDir);
