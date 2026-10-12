@@ -17,6 +17,7 @@ import {
   loadLongMemEvalFixture,
   longMemEvalToBenchFixture,
   parseLongMemEvalDataset,
+  scoreLongMemEvalRecall,
 } from "../../../src/core/bench/longmemeval.ts";
 import { runMemoryBench } from "../../../src/core/bench/phases.ts";
 import { BENCH_REPORT_SCHEMA } from "../../../src/core/bench/types.ts";
@@ -152,6 +153,75 @@ describe("longMemEvalToBenchFixture", () => {
   });
 });
 
+describe("scoreLongMemEvalRecall", () => {
+  const QUESTIONS = [
+    {
+      id: "q-both",
+      category: "multi_evidence" as const,
+      query: "q",
+      top_k: 5,
+      expected_paths: ["sessions/a.md", "sessions/b.md"],
+    },
+    {
+      id: "q-missing",
+      category: "single_hop" as const,
+      query: "q",
+      top_k: 5,
+      expected_paths: ["sessions/a.md", "sessions/z.md"],
+    },
+    {
+      id: "q-outside",
+      category: "single_hop" as const,
+      query: "q",
+      top_k: 5,
+      expected_paths: ["sessions/far.md"],
+    },
+  ];
+
+  test("passes a question only when every gold note ranks inside the cutoff", () => {
+    const retrieved = [
+      { id: "q-both", paths: ["sessions/b.md", "sessions/a.md", "sessions/c.md"] },
+      {
+        id: "q-missing",
+        paths: [
+          "sessions/a.md",
+          "sessions/b.md",
+          "sessions/c.md",
+          "sessions/d.md",
+          "sessions/e.md",
+        ],
+      },
+      {
+        id: "q-outside",
+        paths: [
+          "sessions/a.md",
+          "sessions/b.md",
+          "sessions/c.md",
+          "sessions/d.md",
+          "sessions/e.md",
+          "sessions/far.md",
+        ],
+      },
+    ];
+    // q-missing never surfaces sessions/z.md; q-outside's gold note sits
+    // one rank past the strict cutoff. Exactly one question passes.
+    expect(scoreLongMemEvalRecall(QUESTIONS, retrieved)).toEqual({ scored: 3, passed: 1 });
+  });
+
+  test("a question with no persisted result scores as a miss, never a pass", () => {
+    expect(scoreLongMemEvalRecall(QUESTIONS, [])).toEqual({ scored: 3, passed: 0 });
+  });
+
+  test("non-retrieval questions are not scored", () => {
+    const mixed = [
+      ...QUESTIONS,
+      { id: "q-handoff", category: "session_handoff" as const, session_id: "s1" },
+    ];
+    const scored = scoreLongMemEvalRecall(mixed, []);
+    expect(scored.scored).toBe(3);
+  });
+});
+
 describe("the longmemeval suite", () => {
   test("is registered with the embeddings capability", () => {
     const registration = benchSuite("longmemeval");
@@ -196,5 +266,28 @@ describe("the longmemeval suite", () => {
     expect(report.embeddings!.gate).toEqual({ blocked: false, reason: null });
     expect(report.judge.status).toBe("skipped");
     expect(report.quality.passed).toBe(report.quality.total);
+  }, 30_000);
+
+  test("a suite run surfaces the strict recall_all@5 family with the exclusion count", async () => {
+    const { fixture, receipt } = loadLongMemEvalFixture(SAMPLE);
+    const runsDir = mkdtempSync(join(tmpdir(), "o2b-longmemeval-runs-"));
+    dirs.push(runsDir);
+    const report = await runMemoryBench({
+      fixture,
+      runsDir,
+      suite: "longmemeval",
+      suiteReceipt: receipt,
+    });
+    // The sample's three retrieval questions all find their gold
+    // sessions inside the cutoff; one abstention question was excluded.
+    expect(report.longmemeval).toEqual({ recall_all_at_5: 1, abstention_excluded: 1 });
+  }, 30_000);
+
+  test("the report family stays absent without the suite name", async () => {
+    const { fixture } = loadLongMemEvalFixture(SAMPLE);
+    const runsDir = mkdtempSync(join(tmpdir(), "o2b-longmemeval-runs-"));
+    dirs.push(runsDir);
+    const report = await runMemoryBench({ fixture, runsDir });
+    expect(report.longmemeval).toBeUndefined();
   }, 30_000);
 });

@@ -42,6 +42,7 @@ import {
 } from "./failure-modes.ts";
 import { fixtureHash, materializeBenchVault } from "./fixture.ts";
 import { runJudge } from "./judge.ts";
+import { LONGMEMEVAL_SUITE_NAME, scoreLongMemEvalRecall } from "./longmemeval.ts";
 import {
   benchResultsDir,
   benchVaultDir,
@@ -57,11 +58,13 @@ import {
   RETRIEVAL_CATEGORIES,
   type BenchFixture,
   type BenchEmbeddingReceipt,
+  type BenchLongMemEvalFamily,
   type BenchPinnedKnobs,
   type BenchQuestion,
   type BenchQuestionResult,
   type BenchReport,
   type BenchSuiteCapabilities,
+  type BenchSuiteReceipt,
 } from "./types.ts";
 
 /**
@@ -106,6 +109,12 @@ export interface BenchRunOptions {
   readonly recallFloor?: number;
   /** Optional external judge command (config bench_judge_cmd). */
   readonly judgeCmd?: string;
+  /**
+   * The suite loader's conversion receipt, threaded through to the
+   * report family - for LongMemEval, how many abstention questions the
+   * conversion excluded from scoring.
+   */
+  readonly suiteReceipt?: BenchSuiteReceipt;
   readonly now?: Date;
 }
 
@@ -261,16 +270,32 @@ export async function runMemoryBench(opts: BenchRunOptions): Promise<BenchReport
   }
 
   // Phase: evaluate - pure over the persisted results; no vault access.
+  // Each persisted record is read once and shared by the evaluator and
+  // the suite metric families.
+  const retrievedById = new Map(
+    opts.fixture.questions.map((question) => [question.id, readRetrieved(run.runDir, question.id)]),
+  );
   const results = opts.fixture.questions
-    .map((question) => evaluateQuestion(question, readRetrieved(run.runDir, question.id)))
+    .map((question) => evaluateQuestion(question, retrievedById.get(question.id)!))
     .toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   if (!phaseDone(checkpoint, "evaluate")) {
     checkpoint = completeBenchPhase(run.runDir, checkpoint, "evaluate");
   }
 
+  // The LongMemEval suite's named metric family: strict recall_all@5
+  // rolled off the same persisted results the evaluator read.
+  let longmemeval: BenchLongMemEvalFamily | undefined;
+  if (opts.suite === LONGMEMEVAL_SUITE_NAME) {
+    const scored = scoreLongMemEvalRecall(opts.fixture.questions, [...retrievedById.values()]);
+    longmemeval = Object.freeze({
+      recall_all_at_5: scored.scored > 0 ? round3(scored.passed / scored.scored) : 0,
+      abstention_excluded: opts.suiteReceipt?.abstention_excluded ?? 0,
+    });
+  }
+
   // Optional judge (advisory, fail-open), then report.
   const judge = runJudge(opts.judgeCmd, results);
-  const report = buildReport(run, opts.fixture, results, judge, embeddings);
+  const report = buildReport(run, opts.fixture, results, judge, embeddings, longmemeval);
   writeFileSync(join(run.runDir, "report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
   if (!phaseDone(checkpoint, "report")) {
     completeBenchPhase(run.runDir, checkpoint, "report");
@@ -611,6 +636,7 @@ function buildReport(
   results: ReadonlyArray<BenchQuestionResult>,
   judge: ReturnType<typeof runJudge>,
   embeddings?: BenchEmbeddingReceipt,
+  longmemeval?: BenchLongMemEvalFamily,
 ): BenchReport {
   const byCategory: Record<string, { passed: number; total: number }> = {};
   let passed = 0;
@@ -669,6 +695,7 @@ function buildReport(
       source_isolation_violations: isolationTotal,
     }),
     ...(embeddings !== undefined ? { embeddings: Object.freeze({ ...embeddings }) } : {}),
+    ...(longmemeval !== undefined ? { longmemeval } : {}),
     judge: Object.freeze({
       status: judge.status,
       ...(judge.detail !== undefined ? { detail: judge.detail } : {}),

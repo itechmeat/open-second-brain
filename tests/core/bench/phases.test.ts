@@ -128,6 +128,9 @@ describe("runMemoryBench", () => {
     expect(report.context_cost.avg_chars).toBeGreaterThan(0);
     expect(report.context_cost.avg_injected_tokens).toBeGreaterThan(0);
     expect(report.judge.status).toBe("skipped");
+    // No suite is named, so no suite report family may appear: the
+    // default path stays byte-identical.
+    expect(report.longmemeval).toBeUndefined();
     // Stable question order by id for diffability.
     expect(report.questions.map((q) => q.id)).toEqual(report.questions.map((q) => q.id).toSorted());
     // report.json lands in the run directory.

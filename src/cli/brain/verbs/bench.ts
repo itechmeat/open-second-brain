@@ -14,7 +14,7 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { loadBenchFixture } from "../../../core/bench/fixture.ts";
-import { loadLongMemEvalFixture } from "../../../core/bench/longmemeval.ts";
+import { LONGMEMEVAL_SUITE_NAME, loadLongMemEvalFixture } from "../../../core/bench/longmemeval.ts";
 import { loadLocomoFixture } from "../../../core/bench/locomo.ts";
 import { loadReplayBenchFixture } from "../../../core/bench/replay.ts";
 import { runMemoryBench } from "../../../core/bench/phases.ts";
@@ -58,7 +58,7 @@ const BENCH_SUITES = new Map<string, BenchSuiteRegistration>([
     }),
   ],
   [
-    "longmemeval",
+    LONGMEMEVAL_SUITE_NAME,
     Object.freeze({
       loader: loadLongMemEvalFixture,
       capabilities: Object.freeze({ embeddings: true }),
@@ -126,8 +126,10 @@ export async function cmdBrainBench(argv: string[]): Promise<number> {
   }
 
   // One dispatch for every suite: the registry entry owns loading and
-  // declares what the suite may do; the capabilities ride BenchRunOptions.
-  const fixture = registration.loader(fixturePath).fixture;
+  // declares what the suite may do; the capabilities and the loader's
+  // conversion receipt ride BenchRunOptions.
+  const loaded = registration.loader(fixturePath);
+  const fixture = loaded.fixture;
   const runsDir = resolve(
     typeof flags["runs-dir"] === "string" && flags["runs-dir"].trim() !== ""
       ? flags["runs-dir"].trim()
@@ -141,6 +143,7 @@ export async function cmdBrainBench(argv: string[]): Promise<number> {
     runsDir,
     ...(suite !== "" ? { suite } : {}),
     capabilities: registration.capabilities,
+    ...(loaded.receipt !== undefined ? { suiteReceipt: loaded.receipt } : {}),
     ...(resume !== undefined && resume !== "" ? { resume } : {}),
     ...(judgeCmd !== undefined ? { judgeCmd } : {}),
   });
@@ -162,6 +165,12 @@ export async function cmdBrainBench(argv: string[]): Promise<number> {
       `false_fire ${report.failure_modes.false_fire_rate} ` +
       `isolation_violations ${report.failure_modes.source_isolation_violations}\n`,
   );
+  if (report.longmemeval !== undefined) {
+    process.stdout.write(
+      `longmemeval: recall_all@5 ${report.longmemeval.recall_all_at_5} ` +
+        `abstention_excluded ${report.longmemeval.abstention_excluded}\n`,
+    );
+  }
   process.stdout.write(`judge: ${report.judge.status}\n`);
   for (const question of report.questions) {
     process.stdout.write(

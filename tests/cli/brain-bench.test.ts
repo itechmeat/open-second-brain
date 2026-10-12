@@ -185,6 +185,50 @@ describe("bench suite registry", () => {
     expect(stubLoaderCalls).toEqual([]);
   }, 60_000);
 
+  test("the longmemeval suite prints its strict recall_all@5 family", async () => {
+    const out = await runCli(
+      [
+        "brain",
+        "bench",
+        "memory",
+        "--fixture",
+        "longmemeval-sample",
+        "--suite",
+        "longmemeval",
+        "--runs-dir",
+        runsDir,
+      ],
+      {},
+    );
+    expect(out.returncode).toBe(0);
+    // The named metric family rides the CLI output beside the existing
+    // families - never folded into the pass rate.
+    expect(out.stdout).toContain("longmemeval: recall_all@5 1 abstention_excluded 1");
+  }, 60_000);
+
+  test("the longmemeval report family rides the --json report", async () => {
+    const out = await runCli(
+      [
+        "brain",
+        "bench",
+        "memory",
+        "--fixture",
+        "longmemeval-sample",
+        "--suite",
+        "longmemeval",
+        "--runs-dir",
+        runsDir,
+        "--json",
+      ],
+      {},
+    );
+    expect(out.returncode).toBe(0);
+    const report = JSON.parse(out.stdout) as {
+      longmemeval?: { recall_all_at_5: number; abstention_excluded: number };
+    };
+    expect(report.longmemeval).toEqual({ recall_all_at_5: 1, abstention_excluded: 1 });
+  }, 60_000);
+
   test("a duplicate suite registration is refused by name", () => {
     expect(() =>
       registerBenchSuite("locomo", {

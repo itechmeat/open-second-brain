@@ -36,7 +36,15 @@
 import { readFileSync } from "node:fs";
 
 import { parseBenchFixture } from "./fixture.ts";
-import type { BenchCategory, BenchFixture, BenchQuestion } from "./types.ts";
+import {
+  RETRIEVAL_CATEGORIES,
+  type BenchCategory,
+  type BenchFixture,
+  type BenchQuestion,
+} from "./types.ts";
+
+/** The suite's registered name in the bench verb's suite registry. */
+export const LONGMEMEVAL_SUITE_NAME = "longmemeval";
 
 export interface LongMemEvalTurn {
   readonly role: string;
@@ -376,4 +384,42 @@ export function loadLongMemEvalFixture(path: string): LongMemEvalConversion {
     );
   }
   return longMemEvalToBenchFixture(parseLongMemEvalDataset(raw));
+}
+
+/** One persisted retrieval result the strict metric reads. */
+export interface RecallAllRetrieved {
+  readonly id: string;
+  /** Result paths in rank order. */
+  readonly paths?: ReadonlyArray<string>;
+}
+
+export interface RecallAllScore {
+  /** Questions scored: the non-abstention, retrieval-category ones. */
+  readonly scored: number;
+  /** Questions with EVERY gold session note inside the cutoff. */
+  readonly passed: number;
+}
+
+/**
+ * Strict recall_all@{@link LONGMEMEVAL_RECALL_CUTOFF}: the count of
+ * scored questions whose EVERY gold session note ranks inside the
+ * cutoff, over the PERSISTED retrieval results. This is the aggregate
+ * roll-off of the same containment rule `evaluateQuestion` applies per
+ * question - not a second scorer - kept as a named metric because the
+ * field reports recall_all@5, the number the memory field compares.
+ */
+export function scoreLongMemEvalRecall(
+  questions: ReadonlyArray<BenchQuestion>,
+  retrieved: ReadonlyArray<RecallAllRetrieved>,
+): RecallAllScore {
+  const byId = new Map(retrieved.map((result) => [result.id, result]));
+  let scored = 0;
+  let passed = 0;
+  for (const question of questions) {
+    if (!RETRIEVAL_CATEGORIES.has(question.category)) continue;
+    scored += 1;
+    const top = new Set((byId.get(question.id)?.paths ?? []).slice(0, LONGMEMEVAL_RECALL_CUTOFF));
+    if ((question.expected_paths ?? []).every((path) => top.has(path))) passed += 1;
+  }
+  return { scored, passed };
 }

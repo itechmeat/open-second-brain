@@ -224,6 +224,20 @@ export interface BenchEmbeddingReceipt {
   readonly forced?: boolean;
 }
 
+/**
+ * The LongMemEval report family (the MemScore rule: metric families stay
+ * separate and named). The strict recall_all@5 aggregate is never folded
+ * into `quality.pass_rate`, and the abstention exclusion count is
+ * surfaced beside it rather than hidden - a reader can see what the
+ * number does and does not cover.
+ */
+export interface BenchLongMemEvalFamily {
+  /** Share of scored questions with every gold note inside the cutoff. */
+  readonly recall_all_at_5: number;
+  /** Abstention questions the conversion excluded from scoring. */
+  readonly abstention_excluded: number;
+}
+
 export interface BenchQuestionResult {
   readonly id: string;
   readonly category: BenchCategory;
@@ -284,6 +298,12 @@ export interface BenchReport {
    * numbers are never compared across embedding identities.
    */
   readonly embeddings?: BenchEmbeddingReceipt;
+  /**
+   * The LongMemEval suite's named metric family, present only on runs
+   * through the longmemeval suite - so the default (and locomo) report
+   * serializes byte-identically without it.
+   */
+  readonly longmemeval?: BenchLongMemEvalFamily;
   readonly judge: { readonly status: "skipped" | "ran" | "error"; readonly detail?: string };
   readonly questions: ReadonlyArray<BenchQuestionResult>;
 }
