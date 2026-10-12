@@ -745,13 +745,16 @@ function seededFacetsFirst(facets: ReadonlyArray<ThreadFacet>, entityKey: string
 /**
  * The floor-violation guard (t_2c2a883c, design decision 10): after the
  * real {@link applyCharBudget} selection, every floor topic must have
- * realized its minimum - its highest-ranked turn kept. Only the outcome
- * of the actual selection is authoritative: it spends code points (not
- * UTF-16 units) and skips entries a prefix-sum arithmetic would have
- * charged, so a budget the real selection satisfies is never refused,
- * while a floor topic crowded out by higher-ranked turns raises the
- * typed {@link SessionCoverageInfeasibleError} - never a silent
- * zero-evidence topic.
+ * realized its minimum - ANY of its turns kept. A mined facet's top-ranked
+ * turn is usually its largest (the score is 2 + occurrences, so a pasted
+ * log outranks its own topic's short mentions), and a budget the greedy
+ * pass spends on that log while keeping the topic's smaller evidence is a
+ * satisfied floor, not an infeasible one. Only the outcome of the actual
+ * selection is authoritative: it spends code points (not UTF-16 units) and
+ * skips entries a prefix-sum arithmetic would have charged. A floor topic
+ * whose every matching turn was crowded out raises the typed
+ * {@link SessionCoverageInfeasibleError} - never a silent zero-evidence
+ * topic.
  */
 function assertFloorSelectionRealized(
   topics: ReadonlyArray<ThreadFacet>,
@@ -760,15 +763,18 @@ function assertFloorSelectionRealized(
   charBudget: number,
   kept: ReadonlyArray<TopicMatch>,
 ): void {
-  const { topRanks, requiredChars } = floorRequirement(topics, matches, serialized);
-  if (topRanks.length === 0) return;
-  const keptIds = new Set(kept.map((match) => match.record.id));
-  const realized = topRanks.filter((rank) => keptIds.has(matches[rank]!.record.id));
-  if (realized.length === topRanks.length) return;
+  const { requiredTopics, realizedTopics, requiredChars } = floorRequirement(
+    topics,
+    matches,
+    serialized,
+    kept,
+  );
+  if (requiredTopics.length === 0) return;
+  if (realizedTopics.length === requiredTopics.length) return;
   throw new SessionCoverageInfeasibleError({
     topicFloor: TOPIC_BUDGET_FLOOR,
     requestedTopics: topics.length,
-    keptTopics: realized.length,
+    keptTopics: realizedTopics.length,
     requiredChars,
     charBudget,
   });
@@ -776,18 +782,19 @@ function assertFloorSelectionRealized(
 
 interface FloorRequirement {
   /**
-   * Rank index of each floor topic's highest-ranked matching turn.
-   * A floor topic with no matching turn cannot contribute to the floor.
+   * The floor topics that have at least one matching turn - the only ones
+   * that can contribute to the floor.
    */
-  readonly topRanks: ReadonlyArray<number>;
+  readonly requiredTopics: ReadonlyArray<ThreadFacet>;
+  /** The required topics the real selection kept at least one turn of. */
+  readonly realizedTopics: ReadonlyArray<ThreadFacet>;
   /**
-   * Code points the rank-ordered selection consumes through the deepest
-   * floor-top rank - the unit {@link applyCharBudget} spends (not UTF-16
-   * units), so the reported budget that GUARANTEES every floor topic's
-   * top turn is kept is the spender's own unit (every prefix of it fits,
-   * and the floor's own top-turn sum does not - a higher-ranked turn of
-   * another topic can spend the budget before a floor topic's top turn is
-   * ever reached). This is the honest retry bound the floor guard reports.
+   * Code points of the cheapest matching turn per required topic, each
+   * distinct turn charged once - the honest retry bound: the smallest
+   * per-topic evidence the floor asks the selection to hold, in the unit
+   * {@link applyCharBudget} spends. The rank-prefix sum this replaces
+   * compounded every rank up to the deepest floor turn and could name a
+   * bound many times larger than what the floor actually needs.
    */
   readonly requiredChars: number;
 }
@@ -797,27 +804,41 @@ function floorRequirement(
   topics: ReadonlyArray<ThreadFacet>,
   matches: ReadonlyArray<TopicMatch>,
   serialized: ReadonlyArray<string>,
+  kept: ReadonlyArray<TopicMatch>,
 ): FloorRequirement {
-  // Topic key -> rank index of its highest-ranked matching turn.
-  const topRank = new Map<string, number>();
+  const floorTopics = topics.slice(0, Math.min(topics.length, TOPIC_BUDGET_FLOOR));
+  const floorKeys = new Set(floorTopics.map((topic) => topic.key));
+  // Per required topic: whether any of its turns was kept, and its
+  // cheapest matching turn (rank order breaks length ties).
+  const keptIds = new Set(kept.map((match) => match.record.id));
+  const realized = new Set<string>();
+  const cheapest = new Map<string, { turnId: string; chars: number }>();
   matches.forEach((match, index) => {
-    for (const key of match.topics) if (!topRank.has(key)) topRank.set(key, index);
-  });
-  const floorTopics = Math.min(topics.length, TOPIC_BUDGET_FLOOR);
-  const topRanks: number[] = [];
-  for (const topic of topics.slice(0, floorTopics)) {
-    const rank = topRank.get(topic.key);
-    if (rank !== undefined) topRanks.push(rank);
-  }
-  // Priced in code points, the unit the real selection spends.
-  let requiredChars = 0;
-  if (topRanks.length > 0) {
-    const deepest = Math.max(...topRanks);
-    for (let index = 0; index <= deepest; index += 1) {
-      requiredChars += [...serialized[index]!].length;
+    const keptThis = keptIds.has(match.record.id);
+    const chars = [...serialized[index]!].length;
+    for (const key of match.topics) {
+      if (!floorKeys.has(key)) continue;
+      if (keptThis) realized.add(key);
+      const incumbent = cheapest.get(key);
+      if (incumbent === undefined || chars < incumbent.chars) {
+        cheapest.set(key, { turnId: match.record.id, chars });
+      }
     }
+  });
+  const requiredTopics = floorTopics.filter((topic) => cheapest.has(topic.key));
+  const realizedTopics = requiredTopics.filter((topic) => realized.has(topic.key));
+  // The cheapest turn per required topic, each distinct turn charged once:
+  // topics can share their cheapest turn, and charging it twice would
+  // overstate the floor's own requirement.
+  const priced = new Set<string>();
+  let requiredChars = 0;
+  for (const topic of requiredTopics) {
+    const entry = cheapest.get(topic.key)!;
+    if (priced.has(entry.turnId)) continue;
+    priced.add(entry.turnId);
+    requiredChars += entry.chars;
   }
-  return { topRanks, requiredChars };
+  return { requiredTopics, realizedTopics, requiredChars };
 }
 
 /**

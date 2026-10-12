@@ -455,13 +455,60 @@ describe("typed floor-violation infeasibility", () => {
     expect(probe!.message).toContain(`requested topics ${probe!.requestedTopics}`);
   });
 
-  test("a floor topic crowded out by higher-ranked turns raises, never a silent zero-evidence floor", () => {
+  test("a floor topic realizes on any kept turn, not only its top-ranked one", () => {
+    // The mined key's top-ranked turn is a pasted log: the most occurrences
+    // give it the highest score AND the largest body, so the greedy budget
+    // skips it. The topic's small second mention fits - and that is enough
+    // to realize the topic. The guard used to demand the TOP-ranked turn
+    // and refused a budget the real selection satisfied.
+    const logText = `${"SessionStore pinged ".repeat(60)}end of pasted log`;
+    importSessionRecall(vault, {
+      sessionId: "mined-crowd-seg",
+      turns: [
+        turn("t1", "user", logText, 1),
+        turn("t2", "assistant", "SessionStore noted", 2),
+        turn("t3", "user", "unrelated weather chat", 3),
+        turn("t4", "assistant", "more unrelated chat", 4),
+      ],
+      summaryGroupSize: 2,
+      createdAt: "2026-07-07T09:00:00.000Z",
+    });
+    appendContinuityRecord(vault, {
+      kind: "session_entity_mention",
+      createdAt: "2026-07-07T09:00:01.000Z",
+      sourceRefs: [{ id: "mined-crowd-seg:t1:symbol:SessionStore" }],
+      payload: {
+        family: "symbol",
+        key: "SessionStore",
+        session_ref: "mined-crowd-seg",
+        turn_id: "t1",
+      },
+    });
+    const serialized = listSessionRawTurns(vault, "mined-crowd-seg").map((t) => JSON.stringify(t));
+    // The log outranks everything (2 + occurrences) and dwarfs the budget;
+    // the small second mention, plus the second cluster's turns, fit.
+    const budget =
+      [...serialized[1]!].length + [...serialized[2]!].length + [...serialized[3]!].length;
+    expect([...serialized[0]!].length).toBeGreaterThan(budget);
+
+    const coverage = coverageSessionRecall(vault, {
+      sessionId: "mined-crowd-seg",
+      charBudget: budget,
+    });
+    // Every floor topic keeps evidence; the skipped log is named in the
+    // diagnostics, never a refusal.
+    expect(coverage.turns.map((t) => t.turn_id)).toEqual(["t2", "t3", "t4"]);
+    expect(coverage.diagnostics.dropped_turn_ids).toEqual(["t1"]);
+    expect(coverage.diagnostics.topics_realized).toBe(3);
+  });
+
+  test("a floor topic with no budget for any of its turns still raises, priced per cheapest turn", () => {
     // Two depth-1 clusters: {t1, t2} serialized long, {t3, t4} short. The
     // selection is rank-ordered, so the long cluster's turns can spend the
-    // whole budget before the short cluster's top turn is reached - the
-    // floor guard must price that rank-ordered requirement, not the sum
-    // of the floor topics' own top turns, or the short floor topic keeps
-    // zero evidence silently.
+    // whole budget before the short cluster's first turn is reached - and
+    // the short floor topic keeps zero evidence. The typed error stays for
+    // that genuinely impossible budget; requiredChars prices the cheapest
+    // turn per floor topic, the honest retry bound.
     const longText = "x".repeat(2400);
     importSessionRecall(vault, {
       sessionId: "crowd-seg",
@@ -478,9 +525,6 @@ describe("typed floor-violation infeasibility", () => {
     // The budget holds the long cluster's turns exactly plus one char:
     // the greedy rank-order pass keeps t1 and t2 and drops t3 and t4.
     const budget = serialized[0]!.length + serialized[1]!.length + 1;
-    // The floor topics' own top turns fit the budget individually - what
-    // gets crowded out is their rank-ordered slot behind the long turns.
-    expect(serialized[0]!.length + serialized[2]!.length).toBeLessThanOrEqual(budget);
 
     let probe: SessionCoverageInfeasibleError | null = null;
     try {
@@ -490,20 +534,18 @@ describe("typed floor-violation infeasibility", () => {
     }
     expect(probe).not.toBeNull();
     expect(probe).toBeInstanceOf(SessionCoverageInfeasibleError);
-    // requiredChars prices the rank-ordered selection through the deepest
-    // floor-top rank: t1, t2, then the short cluster's top turn t3.
-    expect(probe!.requiredChars).toBe(
-      serialized[0]!.length + serialized[1]!.length + serialized[2]!.length,
-    );
+    // requiredChars prices the cheapest turn per floor topic: one long
+    // turn for the first cluster, t3 for the short one.
+    expect(probe!.requiredChars).toBe([...serialized[0]!].length + [...serialized[2]!].length);
     expect(probe!.charBudget).toBe(budget);
-    // The bound is honest: at it the floor topic keeps its top turn, and
-    // the turn ranked behind it is still dropped, visibly.
+    // The bound is honest: at it the greedy pass keeps one turn per topic
+    // and the turns ranked behind them are still dropped, visibly.
     const at = coverageSessionRecall(vault, {
       sessionId: "crowd-seg",
       charBudget: probe!.requiredChars,
     });
-    expect(at.turns.map((t) => t.turn_id)).toEqual(["t1", "t2", "t3"]);
-    expect(at.diagnostics.dropped_turn_ids).toEqual(["t4"]);
+    expect(at.turns.map((t) => t.turn_id)).toEqual(["t1", "t3"]);
+    expect(at.diagnostics.dropped_turn_ids).toEqual(["t2", "t4"]);
   });
 
   test("astral-plane turns spend code points: a feasible budget is never falsely refused", () => {
@@ -574,13 +616,15 @@ describe("typed floor-violation infeasibility", () => {
       probe = err as SessionCoverageInfeasibleError;
     }
     expect(probe).toBeInstanceOf(SessionCoverageInfeasibleError);
-    expect(probe!.requiredChars).toBe(codePointRequirement);
+    // Cheapest turn per floor topic, priced in code points: one astral
+    // turn for the first cluster, the short t3 for the second.
+    expect(probe!.requiredChars).toBe([...serialized[0]!].length + [...serialized[2]!].length);
     // The bound stays exact: at it the floor holds, one below it fails.
     const at = coverageSessionRecall(vault, {
       sessionId: "astral-floor-seg",
       charBudget: probe!.requiredChars,
     });
-    expect(at.turns.map((t) => t.turn_id)).toEqual(["t1", "t2", "t3"]);
+    expect(at.turns.map((t) => t.turn_id)).toEqual(["t1", "t3"]);
     expect(() =>
       coverageSessionRecall(vault, {
         sessionId: "astral-floor-seg",
@@ -590,47 +634,73 @@ describe("typed floor-violation infeasibility", () => {
   });
 
   test("requiredChars is the exact retry bound: at it, no error; one below, the error", () => {
-    importLineageThread();
+    // Groups of one: every turn is its own floor topic, so the floor's
+    // honest requirement - the cheapest turn of every topic - is the whole
+    // thread, and the rank-ordered selection realizes it exactly at the
+    // bound and drops the last topic one character below it.
+    importSessionRecall(vault, {
+      sessionId: "bound-seg",
+      turns: [
+        turn("t1", "user", "alpha topic evidence", 1),
+        turn("t2", "assistant", "beta topic evidence", 2),
+        turn("t3", "user", "gamma topic evidence", 3),
+        turn("t4", "assistant", "delta topic evidence", 4),
+      ],
+      summaryGroupSize: 1,
+      createdAt: "2026-07-08T09:00:00.000Z",
+    });
     let requiredChars: number;
     try {
-      coverageSessionRecall(vault, { sessionId: "child-seg", charBudget: 1 });
+      coverageSessionRecall(vault, { sessionId: "bound-seg", charBudget: 1 });
       throw new Error("expected the typed infeasibility error");
     } catch (err) {
       requiredChars = (err as SessionCoverageInfeasibleError).requiredChars;
     }
     const at = coverageSessionRecall(vault, {
-      sessionId: "child-seg",
+      sessionId: "bound-seg",
       charBudget: requiredChars,
     });
-    // At the requirement the floor topics are all represented.
+    // At the requirement every floor topic is represented.
     expect(at.diagnostics.topics_realized).toBe(4);
     expect(at.diagnostics.chars_used).toBeLessThanOrEqual(requiredChars);
     expect(() =>
-      coverageSessionRecall(vault, { sessionId: "child-seg", charBudget: requiredChars - 1 }),
+      coverageSessionRecall(vault, { sessionId: "bound-seg", charBudget: requiredChars - 1 }),
     ).toThrow(SessionCoverageInfeasibleError);
   });
 
   test("above the floor, drops land in diagnostics and never throw", () => {
-    importLineageThread();
+    // The long-cluster/short-cluster thread: the floor's honest
+    // requirement is one cheapest turn per topic, so a little above it
+    // the remaining turns are dropped, visibly - every dropped turn is
+    // named, and kept plus dropped still accounts for the whole thread.
+    const longText = "x".repeat(2400);
+    importSessionRecall(vault, {
+      sessionId: "drops-seg",
+      turns: [
+        turn("t1", "user", longText, 1),
+        turn("t2", "assistant", longText, 2),
+        turn("t3", "user", "short floor-topic evidence", 3),
+        turn("t4", "assistant", "more short floor-topic evidence", 4),
+      ],
+      summaryGroupSize: 2,
+      createdAt: "2026-07-04T10:00:00.000Z",
+    });
     let requiredChars: number;
     try {
-      coverageSessionRecall(vault, { sessionId: "child-seg", charBudget: 1 });
+      coverageSessionRecall(vault, { sessionId: "drops-seg", charBudget: 1 });
       throw new Error("expected the typed infeasibility error");
     } catch (err) {
       requiredChars = (err as SessionCoverageInfeasibleError).requiredChars;
     }
-    // A little above the floor-weighted selection, the remaining turns
-    // are dropped, visibly: every dropped turn is named, and kept plus
-    // dropped still accounts for the whole thread.
     const coverage = coverageSessionRecall(vault, {
-      sessionId: "child-seg",
+      sessionId: "drops-seg",
       charBudget: requiredChars + 10,
     });
     expect(coverage.turns.length).toBeGreaterThan(0);
     expect(coverage.diagnostics.dropped_turn_ids.length).toBeGreaterThan(0);
-    expect(coverage.turns.length + coverage.diagnostics.dropped_turn_ids.length).toBe(8);
+    expect(coverage.turns.length + coverage.diagnostics.dropped_turn_ids.length).toBe(4);
     expect(coverage.diagnostics.chars_used).toBeLessThanOrEqual(requiredChars + 10);
-    expect(coverage.diagnostics.topics_realized).toBe(4);
+    expect(coverage.diagnostics.topics_realized).toBe(2);
   });
 });
 
