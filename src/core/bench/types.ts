@@ -67,6 +67,21 @@ export interface BenchFixtureContinuity {
   readonly payload: Readonly<Record<string, unknown>>;
 }
 
+/**
+ * What a suite provides for the official-prompt judge: the question as
+ * the dataset asked it, the reference answer when it states one, and the
+ * gold evidence ids. Rides the judge stdin payload verbatim; it is
+ * NEVER scoring input - `evaluateQuestion` ignores it, and the converter
+ * never sets `expected_text` (that field is ignored for retrieval
+ * categories, so a gold answer pinned there would silently score
+ * nothing).
+ */
+export interface BenchJudgeInput {
+  readonly question: string;
+  readonly answer?: string;
+  readonly gold: ReadonlyArray<string>;
+}
+
 export interface BenchQuestion {
   readonly id: string;
   readonly category: BenchCategory;
@@ -83,6 +98,11 @@ export interface BenchQuestion {
   readonly session_id?: string;
   readonly expected_turns?: number;
   readonly expected_text?: string;
+  /**
+   * Official-prompt judge glue (longmemeval), absent for suites that
+   * provide none - their judge payload stays unchanged.
+   */
+  readonly judge_input?: BenchJudgeInput;
   /** budget / source_isolation: pack item ids that must be delivered. */
   readonly expected_ids?: ReadonlyArray<string>;
   readonly max_tokens?: number;

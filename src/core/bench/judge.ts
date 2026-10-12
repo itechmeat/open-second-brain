@@ -18,7 +18,7 @@
 
 import { runJsonCommandBridge } from "../reliability/command-bridge.ts";
 
-import type { BenchQuestionResult, BenchReport } from "./types.ts";
+import type { BenchJudgeInput, BenchQuestionResult, BenchReport } from "./types.ts";
 
 export interface JudgeOutcome {
   readonly status: BenchReport["judge"]["status"];
@@ -26,11 +26,34 @@ export interface JudgeOutcome {
   readonly verdicts?: Readonly<Record<string, boolean>>;
 }
 
+/**
+ * Evaluate the questions, optionally enriched with the suite's
+ * official-prompt judge input.
+ *
+ * The stdin payload stays `{ questions: [...] }`; a question whose
+ * suite provides {@link BenchJudgeInput} carries three extra fields -
+ * `question`, `answer` (when the dataset states one) and `gold` - and a
+ * question without one keeps the exact pre-existing shape, so payloads
+ * for suites without judge input are unchanged byte for byte.
+ */
 export function runJudge(
   cmd: string | undefined,
   questions: ReadonlyArray<BenchQuestionResult>,
+  judgeInputs?: ReadonlyMap<string, BenchJudgeInput>,
 ): JudgeOutcome {
-  const result = runJsonCommandBridge(cmd, { questions }, { label: "judge command" });
+  const payload = {
+    questions: questions.map((result) => {
+      const input = judgeInputs?.get(result.id);
+      if (input === undefined) return result;
+      return {
+        ...result,
+        question: input.question,
+        ...(input.answer !== undefined ? { answer: input.answer } : {}),
+        gold: [...input.gold],
+      };
+    }),
+  };
+  const result = runJsonCommandBridge(cmd, payload, { label: "judge command" });
   if (result.status === "skipped") return Object.freeze({ status: "skipped" });
   if (result.status === "error") {
     return Object.freeze({ status: "error", detail: result.detail });

@@ -293,8 +293,15 @@ export async function runMemoryBench(opts: BenchRunOptions): Promise<BenchReport
     });
   }
 
-  // Optional judge (advisory, fail-open), then report.
-  const judge = runJudge(opts.judgeCmd, results);
+  // Optional judge (advisory, fail-open), then report. Questions whose
+  // suite provides official-prompt judge input carry it on the stdin
+  // payload; suites without it keep the payload unchanged.
+  const judgeInputs = new Map(
+    opts.fixture.questions.flatMap((question) =>
+      question.judge_input !== undefined ? [[question.id, question.judge_input] as const] : [],
+    ),
+  );
+  const judge = runJudge(opts.judgeCmd, results, judgeInputs);
   const report = buildReport(run, opts.fixture, results, judge, embeddings, longmemeval);
   writeFileSync(join(run.runDir, "report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
   if (!phaseDone(checkpoint, "report")) {

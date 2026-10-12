@@ -19,6 +19,7 @@ import {
   type BenchFixture,
   type BenchFixtureContinuity,
   type BenchFixtureNote,
+  type BenchJudgeInput,
   type BenchQuestion,
   RETRIEVAL_CATEGORIES,
 } from "./types.ts";
@@ -148,6 +149,7 @@ function parseQuestion(raw: unknown, index: number): BenchQuestion {
       `bench fixture: question ${id} has an unknown category (expected one of ${BENCH_CATEGORIES.join(", ")})`,
     );
   }
+  const judgeInput = parseJudgeInput(record["judge_input"]);
   const question: BenchQuestion = Object.freeze({
     id,
     category,
@@ -203,9 +205,37 @@ function parseQuestion(raw: unknown, index: number): BenchQuestion {
     ...(stringArray(record["forbidden_ids"]) !== undefined
       ? { forbidden_ids: stringArray(record["forbidden_ids"]) }
       : {}),
+    // Judge glue (longmemeval): present only when the fixture carries
+    // it, so every default-path fixture parses byte-identically.
+    ...(judgeInput !== undefined ? { judge_input: judgeInput } : {}),
   });
   validateQuestionShape(question);
   return question;
+}
+
+/**
+ * Parse the optional official-prompt judge input. Absent means absent;
+ * present it is validated as a whole - a half-stated input is a named
+ * error, never a silently partial payload.
+ */
+function parseJudgeInput(raw: unknown): BenchJudgeInput | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("bench fixture: judge_input must be an object");
+  }
+  const record = raw as Record<string, unknown>;
+  const question = nonEmptyString(record["question"]);
+  if (question === undefined) throw new Error("bench fixture: judge_input needs a question");
+  const answer = nonEmptyString(record["answer"]);
+  const gold = stringArray(record["gold"]);
+  if (gold === undefined || gold.length === 0) {
+    throw new Error("bench fixture: judge_input needs a non-empty gold array");
+  }
+  return Object.freeze({
+    question,
+    ...(answer !== undefined ? { answer } : {}),
+    gold: Object.freeze([...gold]),
+  });
 }
 
 function validateQuestionShape(question: BenchQuestion): void {

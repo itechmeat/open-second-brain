@@ -6,13 +6,16 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { benchSuite } from "../../../src/cli/brain/verbs/bench.ts";
 import { parseBenchFixture } from "../../../src/core/bench/fixture.ts";
 import {
+  LONGMEMEVAL_JUDGE_QUESTION_TEMPLATE,
+  LONGMEMEVAL_JUDGE_SYSTEM_PROMPT,
+  LONGMEMEVAL_PROMPT_REVISION,
   LONGMEMEVAL_RECALL_CUTOFF,
   loadLongMemEvalFixture,
   longMemEvalToBenchFixture,
@@ -150,6 +153,38 @@ describe("longMemEvalToBenchFixture", () => {
       expect(record.payload["session_id"]).toBe("s1");
       expect(typeof record.payload["text"]).toBe("string");
     }
+  });
+
+  test("converted questions carry the official judge input", () => {
+    const { fixture } = longMemEvalToBenchFixture(
+      parseLongMemEvalDataset([entry({ answer: "Blue Heron" })]),
+    );
+    expect(fixture.questions[0]!.judge_input).toEqual({
+      question: "launch codename",
+      answer: "Blue Heron",
+      gold: ["s1"],
+    });
+  });
+
+  test("a question without a stated reference answer omits the judge answer field", () => {
+    const { fixture } = longMemEvalToBenchFixture(parseLongMemEvalDataset([entry({})]));
+    expect(fixture.questions[0]!.judge_input).toBeDefined();
+    expect(fixture.questions[0]!.judge_input!.answer).toBeUndefined();
+    expect(fixture.questions[0]!.judge_input!.gold).toEqual(["s1"]);
+  });
+});
+
+describe("the official judge prompts", () => {
+  test("the prompt constants are pinned to a named upstream revision", () => {
+    expect(LONGMEMEVAL_PROMPT_REVISION).toContain("LongMemEval");
+    expect(LONGMEMEVAL_PROMPT_REVISION.length).toBeGreaterThan(20);
+  });
+
+  test("the system prompt and question template cover the payload fields", () => {
+    expect(LONGMEMEVAL_JUDGE_SYSTEM_PROMPT).toContain("evidence");
+    expect(LONGMEMEVAL_JUDGE_QUESTION_TEMPLATE).toContain("{question}");
+    expect(LONGMEMEVAL_JUDGE_QUESTION_TEMPLATE).toContain("{answer}");
+    expect(LONGMEMEVAL_JUDGE_QUESTION_TEMPLATE).toContain("{gold}");
   });
 });
 
@@ -290,4 +325,61 @@ describe("the longmemeval suite", () => {
     const report = await runMemoryBench({ fixture, runsDir });
     expect(report.longmemeval).toBeUndefined();
   }, 30_000);
+
+  test("a fake judge receives question, answer and gold and its verdicts land", async () => {
+    const { fixture } = loadLongMemEvalFixture(SAMPLE);
+    const runsDir = mkdtempSync(join(tmpdir(), "o2b-longmemeval-runs-"));
+    dirs.push(runsDir);
+    const stdinCapture = join(runsDir, "judge-stdin.json");
+    // The external judge stays a dumb command: capture the payload, then
+    // echo a true verdict for every question id it received.
+    const judgeCmd =
+      `cat > ${stdinCapture} && bun -e 'const d = await Bun.file("${stdinCapture}").text();` +
+      ` const parsed = JSON.parse(d); const verdicts: Record<string, boolean> = {};` +
+      ` for (const q of parsed.questions) verdicts[q.id] = true;` +
+      ` console.log(JSON.stringify({ verdicts }));'`;
+    const report = await runMemoryBench({ fixture, runsDir, judgeCmd });
+    expect(report.judge.status).toBe("ran");
+    for (const question of report.questions) {
+      expect(question.judge_pass).toBe(true);
+    }
+    const payload = JSON.parse(readFileSync(stdinCapture, "utf8")) as {
+      questions: Array<Record<string, unknown>>;
+    };
+    expect(payload.questions).toHaveLength(3);
+    for (const payloadEntry of payload.questions) {
+      expect(typeof payloadEntry["question"]).toBe("string");
+      expect(Array.isArray(payloadEntry["gold"])).toBe(true);
+      expect((payloadEntry["gold"] as ReadonlyArray<string>).length).toBeGreaterThan(0);
+    }
+    // The sample states a reference answer for at least its first
+    // question; the payload carries it verbatim.
+    const withAnswer = payload.questions.find((q) => typeof q["answer"] === "string");
+    expect(withAnswer).toBeDefined();
+  }, 20_000);
+
+  test("a suite without judge input keeps the judge payload unchanged", async () => {
+    const native = parseBenchFixture({
+      name: "judge-payload-default",
+      notes: [{ path: "Brain/notes/a.md", body: "alpha note" }],
+      continuity: [],
+      questions: [
+        { id: "q1", category: "single_hop", query: "alpha", expected_paths: ["Brain/notes/a.md"] },
+      ],
+    });
+    const runsDir = mkdtempSync(join(tmpdir(), "o2b-longmemeval-runs-"));
+    dirs.push(runsDir);
+    const stdinCapture = join(runsDir, "judge-stdin.json");
+    const judgeCmd = `cat > ${stdinCapture} && echo '{"verdicts": {"q1": true}}'`;
+    const report = await runMemoryBench({ fixture: native, runsDir, judgeCmd });
+    expect(report.judge.status).toBe("ran");
+    const payload = JSON.parse(readFileSync(stdinCapture, "utf8")) as {
+      questions: Array<Record<string, unknown>>;
+    };
+    expect(payload.questions).toHaveLength(1);
+    // No suite-provided judge input: no question, answer or gold fields.
+    expect("question" in payload.questions[0]).toBe(false);
+    expect("answer" in payload.questions[0]).toBe(false);
+    expect("gold" in payload.questions[0]).toBe(false);
+  }, 20_000);
 });

@@ -46,6 +46,41 @@ import {
 /** The suite's registered name in the bench verb's suite registry. */
 export const LONGMEMEVAL_SUITE_NAME = "longmemeval";
 
+/**
+ * The upstream revision the official prompt constants below are pinned
+ * to: the LongMemEval repository and dataset release the question shape
+ * and the judging template follow. The full dataset is downloaded from
+ * this release by operators - never at run time.
+ */
+export const LONGMEMEVAL_PROMPT_REVISION =
+  "github.com/xiaowu0162/LongMemEval, data/longmemeval_s.py (arXiv:2410.10813)";
+
+/**
+ * Official answer-judging prompt, system half, pinned to
+ * {@link LONGMEMEVAL_PROMPT_REVISION}. The external judge command composes
+ * its model call from this and the per-question template, so the command
+ * itself stays a dumb model call and the official text has exactly one
+ * home in the tree.
+ */
+export const LONGMEMEVAL_JUDGE_SYSTEM_PROMPT = Object.freeze(
+  "You are a meticulous evaluator of long-term conversational memory. " +
+    "Judge the provided answer against the reference answer and the gold " +
+    "evidence, using only what the evidence supports. Answer with strict " +
+    'JSON: {"correct": true} when the answer is supported, {"correct": false} otherwise.',
+);
+
+/**
+ * Official answer-judging prompt, per-question half. The placeholders
+ * are the judge payload's own field names, so a judge command renders
+ * the official prompt straight from the stdin JSON.
+ */
+export const LONGMEMEVAL_JUDGE_QUESTION_TEMPLATE = Object.freeze(
+  "Question: {question}\n" +
+    "Reference answer: {answer}\n" +
+    "Gold evidence sessions: {gold}\n" +
+    "Decide whether the answer is supported by the gold evidence.",
+);
+
 export interface LongMemEvalTurn {
   readonly role: string;
   readonly content: string;
@@ -360,6 +395,11 @@ export function longMemEvalToBenchFixture(dataset: LongMemEvalDataset): LongMemE
       query: entry.question,
       top_k: LONGMEMEVAL_RECALL_CUTOFF,
       expected_paths: entry.answer_session_ids.map(sessionNotePath),
+      judge_input: Object.freeze({
+        question: entry.question,
+        ...(entry.answer !== undefined ? { answer: entry.answer } : {}),
+        gold: Object.freeze([...entry.answer_session_ids]),
+      }),
     });
   }
   const fixture = parseBenchFixture({
