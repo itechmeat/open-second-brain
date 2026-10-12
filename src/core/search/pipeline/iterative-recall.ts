@@ -28,9 +28,20 @@
  *      verbatim reuse, of the advisor formula. A round that recovers
  *      nothing stops the loop outright: re-running identical pulls
  *      against an unchanged pool cannot progress.
+ *
+ * When measurable gaps survive those bounds and the clock still runs,
+ * the outcome PAUSES: it carries the caller-executed decider step (the
+ * one model round the card asks for, built by `../../decider-step.ts`)
+ * as a plan-phase envelope plus an opaque single-use round token. A
+ * committed payload drives exactly one further round via
+ * {@link runDeciderRound} - the decider round is additive to the cap,
+ * which bounds the deterministic floor, and it is the call's last
+ * gap-driven round; a declined or absent commit finalizes the loop
+ * honestly instead of blocking it.
  */
 
-import { planSubQueryGroups, type CoverageReport } from "../coverage.ts";
+import { planSubQueryGroups, significantTerms, type CoverageReport } from "../coverage.ts";
+import { buildDeciderStep, commitDeciderStep, type DeciderPause } from "../decider-step.ts";
 import { marginalValueStop } from "../../brain/retrieval-plan.ts";
 import type { PropertyPushdown } from "../property-pushdown.ts";
 import { poolCoverageForRetry, runSubQueryPull } from "./second-pass.ts";
@@ -54,7 +65,8 @@ export type IterativeStopReason =
   | "no_progress"
   | "round_cap"
   | "marginal_value"
-  | "deadline";
+  | "deadline"
+  | "decider_round";
 
 /** One executed round: what it pulled, what it recovered, what it cost. */
 export interface IterativeRoundRecord {
@@ -66,6 +78,8 @@ export interface IterativeRoundRecord {
   readonly elapsedMs: number;
   /** Who authored the sub-queries: the deterministic floor, or the decider. */
   readonly author: "deterministic" | "decider";
+  /** The decider-authored sub-queries, present on decider rounds only. */
+  readonly subQueries?: ReadonlyArray<string>;
 }
 
 export interface IterativeLoopInput {
@@ -103,6 +117,15 @@ export interface IterativeLoopOutcome {
    * was ever measured (an expired clock before the first check).
    */
   readonly lastCoverage: CoverageReport | null;
+  /**
+   * The caller-executed decider step: present exactly when measurable
+   * gaps survived the deterministic budget and the clock still runs, so
+   * the caller may spend ONE further round by committing a payload. A
+   * committed round is additive to the cap - the cap bounds the
+   * deterministic floor, the decider round is the card's one additive
+   * model round per call - and it is the call's LAST gap-driven round.
+   */
+  readonly pause: DeciderPause | null;
 }
 
 /**
@@ -198,12 +221,122 @@ export function runIterativeRecall(input: IterativeLoopInput): IterativeLoopOutc
   }
 
   if (stop === null) stop = "round_cap";
+  // The decider pause: measurable gaps survived the deterministic budget,
+  // the clock still runs, and the pool has candidates to select evidence
+  // from. Any other exit - coverage complete, nothing measurable to fire
+  // at, an expired clock - finalizes without asking the caller for a
+  // model round. buildDeciderStep re-checks the same fire gate the block
+  // above reads, so the two can never drift apart silently.
+  let pause: DeciderPause | null = null;
+  if (
+    stop !== "coverage_complete" &&
+    stop !== "no_sub_query" &&
+    stop !== "deadline" &&
+    !input.isExpired() &&
+    lastCoverage !== null &&
+    planSubQueryGroups(lastCoverage, 1).fire
+  ) {
+    pause = buildDeciderStep({
+      query: input.query,
+      round: input.firstRoundNumber + rounds.length,
+      coverage: lastCoverage,
+      poolIds: Array.from(input.chunkIds),
+    });
+  }
   return Object.freeze({
     keywordHits,
     ids: Array.from(input.chunkIds),
     rounds: Object.freeze(rounds),
     stopReason: stop,
     lastCoverage: lastCoverage === null ? null : lastCoverage,
+    pause,
+  });
+}
+
+export interface DeciderRoundInput {
+  readonly store: Store;
+  readonly query: string;
+  readonly limit: number;
+  readonly pathPrefix: string | undefined;
+  readonly kind?: "page" | "section";
+  readonly pushdown?: PropertyPushdown;
+  readonly timeRange: ResolvedTimeRange | null;
+  readonly validityWindowFor: (path: string) => ValidityWindow | null;
+  /** The pause the plan phase emitted. */
+  readonly pause: DeciderPause;
+  /** The caller's round token and payload, validated before any pull. */
+  readonly token: string;
+  readonly payload: unknown;
+  /** Round tokens already spent, including across resumed calls. */
+  readonly usedTokens: ReadonlySet<string>;
+  readonly keywordHits: KeywordHit[];
+  /** The candidate id set; the round adds to it in place. */
+  readonly chunkIds: Set<number>;
+  readonly priorRounds: ReadonlyArray<IterativeRoundRecord>;
+  /** The loop's clock; injectable so the round record is testable. */
+  readonly nowMs?: () => number;
+}
+
+export interface DeciderRoundOutcome {
+  readonly keywordHits: KeywordHit[];
+  readonly ids: number[];
+  /** The committed round's own record (author "decider"). */
+  readonly round: IterativeRoundRecord;
+  /** Every round of the call: the deterministic rounds plus this one. */
+  readonly rounds: ReadonlyArray<IterativeRoundRecord>;
+  readonly stopReason: IterativeStopReason;
+  /** The spent token, echoed so the caller records its single use. */
+  readonly token: string;
+}
+
+/**
+ * Execute the committed decider round: validate the payload (shape,
+ * registered semantic rules, token single use, evidence in the pool) and
+ * run exactly the pulls its sub-queries name, merging only new
+ * candidates into the pool. The pool grows by nothing else - no
+ * coverage re-proposal runs here; the caller's sub-queries ARE the
+ * round. A refused payload throws before any pull, so a bad commit
+ * never advances the loop.
+ */
+export function runDeciderRound(input: DeciderRoundInput): DeciderRoundOutcome {
+  const now = input.nowMs ?? Date.now;
+  const commit = commitDeciderStep(input.token, input.payload, {
+    query: input.query,
+    round: input.pause.round,
+    poolIds: input.pause.poolIds,
+    usedTokens: input.usedTokens,
+  });
+  const roundStartMs = now();
+  const recovered: KeywordHit[] = [];
+  for (const subQuery of commit.subQueries) {
+    const pull = runSubQueryPull(input.store, significantTerms(subQuery), {
+      limit: input.limit,
+      pathPrefix: input.pathPrefix,
+      ...(input.kind !== undefined ? { kind: input.kind } : {}),
+      ...(input.pushdown !== undefined ? { pushdown: input.pushdown } : {}),
+    });
+    for (const hit of pull.hits) {
+      if (input.chunkIds.has(hit.chunkId)) continue;
+      input.chunkIds.add(hit.chunkId);
+      recovered.push(hit);
+    }
+  }
+  const round: IterativeRoundRecord = Object.freeze({
+    round: input.pause.round,
+    terms: Object.freeze([] as string[]),
+    groups: 0,
+    added: recovered.length,
+    elapsedMs: now() - roundStartMs,
+    author: "decider" as const,
+    subQueries: commit.subQueries,
+  });
+  return Object.freeze({
+    keywordHits: input.keywordHits.concat(...recovered),
+    ids: Array.from(input.chunkIds),
+    round,
+    rounds: Object.freeze([...input.priorRounds, round]),
+    stopReason: "decider_round" as const,
+    token: commit.token,
   });
 }
 
