@@ -21,6 +21,7 @@ import { runFtsQueryDetailed } from "../../../src/core/search/fts.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { resolveSearchConfig } from "../../../src/core/search/index.ts";
 import { search } from "../../../src/core/search/search.ts";
+import { SearchError } from "../../../src/core/search/types.ts";
 import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 import type {
@@ -207,6 +208,27 @@ describe("iterative round driver over a seeded vault", () => {
     expect(
       remotePaths.every((p) => localPaths.includes(p) || p === "Brain/notes/private-chandelier.md"),
     ).toBe(true);
+  });
+
+  test("a fully-formed commit with the knob off is refused by name", async () => {
+    await seed();
+    const config = makeConfig({ vault, dbPath, maxHops: 0, mmrLambda: 1, twoPassEnabled: false });
+    const query = `warehouse rotation ${COMMON.join(" ")}`;
+    const structured = structuredFor();
+    let err: unknown = null;
+    try {
+      await search(config, {
+        query,
+        structuredQuery: structured,
+        iterative: true,
+        iterativeToken: "tok-knob-off",
+        iterativePayload: { evidence: [1], subQueries: ["warehouse rotation"] },
+      });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(SearchError);
+    expect((err as SearchError).message).toContain("disabled by operator config");
   });
 
   test("an expired deadline degrades the looped search exactly like the plain one", async () => {

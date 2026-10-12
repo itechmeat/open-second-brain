@@ -407,7 +407,21 @@ export function resolveIterativeRequest(
   if (tokenGiven && (typeof opts.iterativeToken !== "string" || opts.iterativeToken.length === 0)) {
     throw new SearchError("INVALID_INPUT", "iterativeToken must be a non-empty string");
   }
-  if (config.recall.iterativeRecallEnabled !== true) return null;
+  if (config.recall.iterativeRecallEnabled !== true) {
+    // The knob alone being inert is the designed master-switch: a flagged
+    // plan call runs nothing. A fully-formed commit is different - every
+    // field of a commit is present, so silently running it as a plain
+    // search would drop its marker and spend nothing it named; it is
+    // refused by name instead, so the caller learns the loop is off
+    // rather than reading a plain answer as its commit's outcome.
+    if (tokenGiven) {
+      throw new SearchError(
+        "INVALID_INPUT",
+        "iterative commit refused: the iterative recall loop is disabled by operator config",
+      );
+    }
+    return null;
+  }
   const maxRounds = config.recall.iterativeRecallMaxRounds ?? ITERATIVE_RECALL_MAX_ROUNDS_DEFAULT;
   if (!Number.isInteger(maxRounds) || maxRounds < 1) {
     throw new SearchError(
