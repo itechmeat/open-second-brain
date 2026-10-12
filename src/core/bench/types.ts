@@ -220,7 +220,11 @@ export interface BenchEmbeddingReceipt {
   readonly provider: string;
   /** The model the vectors are stored under. */
   readonly model: string | null;
-  /** Canonical `<provider>:<model>:<dimension>` identity triple. */
+  /**
+   * Canonical embedding identity: the `<provider>:<model>:<dimension>`
+   * triple plus the query/passage prefixes, rendered by
+   * `benchEmbeddingSignature`.
+   */
   readonly signature: string;
   /** Chunks the spend plan found pending when the phase opened. */
   readonly planned: number;
