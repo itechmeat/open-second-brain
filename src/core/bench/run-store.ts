@@ -215,6 +215,12 @@ function guardedRunDir(runsDir: string, runId: string): string {
   if (!/^[A-Za-z0-9._-]+$/.test(runId)) {
     throw new Error(`bench run id contains unsafe characters: ${runId}`);
   }
+  // "." and ".." pass the charset and resolve inside the root: a run id
+  // of dots would write the checkpoint, the report and the vault beside
+  // the shared vector cache instead of into its own directory.
+  if (runId.split(".").every((part) => part === "")) {
+    throw new Error(`bench run id must not be all dots: ${runId}`);
+  }
   const root = resolve(runsDir);
   const dir = resolve(root, runId);
   if (dir !== root && !dir.startsWith(`${root}${sep}`)) {

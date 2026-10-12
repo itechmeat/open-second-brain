@@ -126,6 +126,13 @@ describe("bench run store", () => {
     ).toThrow(/run identity mismatch/);
   });
 
+  test("an all-dots run id is refused", () => {
+    // "." passes the run-id charset and resolves inside the runs dir, so
+    // a resume with it would write the checkpoint beside the shared cache.
+    expect(() => loadBenchRun(runsDir, ".", {})).toThrow(/all dots/);
+    expect(() => loadBenchRun(runsDir, "..", {})).toThrow(/all dots/);
+  });
+
   test("a resume whose recall floor changed fails the identity guard", () => {
     const run = createBenchRun(runsDir, FIXTURE, {
       now: new Date("2026-06-03T12:00:00Z"),
