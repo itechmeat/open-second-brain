@@ -1128,12 +1128,45 @@ export interface SearchOptions {
 }
 
 /**
+ * Why the iterative recall loop stopped; recorded per query on the
+ * outcome's iterative marker (recall-quality wave). Lives on this leaf
+ * beside the marker it projects into, for the same module-graph reason
+ * as the knob bounds above.
+ */
+export type IterativeStopReason =
+  | "coverage_complete"
+  | "no_sub_query"
+  | "no_progress"
+  | "round_cap"
+  | "marginal_value"
+  | "deadline"
+  | "decider_round";
+
+/**
+ * One executed gap-driven round: what it pulled, what it recovered,
+ * what it cost. Deterministic-floor rounds carry the coverage-derived
+ * terms; decider rounds carry their committed sub-queries instead.
+ */
+export interface IterativeRoundRecord {
+  /** 1-based round number; 1 is the initial lanes, so rounds start at 2. */
+  readonly round: number;
+  readonly terms: ReadonlyArray<string>;
+  readonly groups: number;
+  readonly added: number;
+  readonly elapsedMs: number;
+  /** Who authored the sub-queries: the deterministic floor, or the decider. */
+  readonly author: "deterministic" | "decider";
+  /** The decider-authored sub-queries, present on decider rounds only. */
+  readonly subQueries?: ReadonlyArray<string>;
+}
+
+/**
  * The iterative recall round-trip's phase marker (recall-quality wave),
  * present on an outcome ONLY under the opt-in mode - the plan phase that
- * pauses for the caller's decider step, or the commit call's finalized
- * answer. A call that never enters the mode, and a mode-on call the loop
- * finalized within its deterministic budget, carry no marker at all, so
- * the serialized outcome is byte-identical whenever the mode did
+ * pauses for the caller's decider step, or a call whose loop ran at
+ * least one gap-driven round. A call that never enters the mode, and a
+ * mode-on call the loop finalized within zero rounds, carry no marker at
+ * all, so the serialized outcome is byte-identical whenever the mode did
  * nothing.
  */
 export type SearchOutcomeIterative = SearchOutcomeIterativePlan | SearchOutcomeIterativeFinal;
@@ -1151,11 +1184,19 @@ export interface SearchOutcomeIterativePlan {
   readonly poolIds: ReadonlyArray<number>;
   /** The uncovered rare terms the committed sub-queries aim at. */
   readonly gaps: ReadonlyArray<string>;
+  /** Every gap-driven round the loop already ran. */
+  readonly rounds: ReadonlyArray<IterativeRoundRecord>;
+  /** Why the deterministic budget stopped while gaps remain. */
+  readonly stopReason: IterativeStopReason;
 }
 
-/** The commit phase: the caller's payload was validated and executed. */
+/** A call whose loop ran: the committed round-trip leg, or a plain final. */
 export interface SearchOutcomeIterativeFinal {
   readonly phase: "final";
+  /** Every gap-driven round the loop ran, in execution order. */
+  readonly rounds: ReadonlyArray<IterativeRoundRecord>;
+  /** Why the loop stopped. */
+  readonly stopReason: IterativeStopReason;
 }
 
 export interface SearchOutcome {

@@ -50,6 +50,7 @@ import type {
   ResolvedSearchConfig,
   SearchOptions,
   SearchOutcome,
+  SearchOutcomeIterative,
 } from "../types.ts";
 
 const NO_RESULTS: ReadonlyArray<BrainSearchResult> = Object.freeze([]);
@@ -94,6 +95,12 @@ export interface EmptyOutcomeInput {
    * where the probe is skipped.
    */
   readonly corpus: RetrievalCorpusStatement | null;
+  /**
+   * The iterative recall marker (recall-quality wave), projected verbatim
+   * onto the outcome when the opt-in mode ran. Absent - the mode off, or
+   * an inert loop - keeps the outcome byte-identical.
+   */
+  readonly iterative?: SearchOutcomeIterative;
 }
 
 /** The zero-candidate outcome: no pool to rank, filter or attribute. */
@@ -127,6 +134,7 @@ export function emptyOutcome(input: EmptyOutcomeInput): SearchOutcome {
     ...(evidencePack !== undefined ? { evidencePack } : {}),
     ...(input.routedSurface === "summary" ? { surface: input.routedSurface } : {}),
     ...(retrievalTrail !== undefined ? { retrievalTrail } : {}),
+    ...(input.iterative !== undefined ? { iterative: input.iterative } : {}),
   });
 }
 
@@ -184,6 +192,12 @@ export interface OutcomeInput {
    * byte-identical to the pre-change shape.
    */
   readonly relationalReach?: ReadonlyMap<number, RelationalReach>;
+  /**
+   * The iterative recall marker (recall-quality wave), projected verbatim
+   * onto the outcome when the opt-in mode ran. Absent - the mode off, or
+   * an inert loop - keeps the outcome byte-identical to the pre-wave one.
+   */
+  readonly iterative?: SearchOutcomeIterative;
 }
 
 export function buildSearchOutcome(input: OutcomeInput): SearchOutcome {
@@ -265,6 +279,10 @@ export function buildSearchOutcome(input: OutcomeInput): SearchOutcome {
     ...(input.routedSurface === "summary" ? { surface: input.routedSurface } : {}),
     ...input.trustReceipts,
     ...(input.decisionModel !== undefined ? { decisionModel: input.decisionModel } : {}),
+    // The iterative marker is a sibling of `secondPass` (recall-quality
+    // wave): absent whenever the mode did nothing, so every no-marker
+    // outcome serializes exactly as before.
+    ...(input.iterative !== undefined ? { iterative: input.iterative } : {}),
   };
 
   // Progressive disclosure (D3): layer 1. When the caller opts into

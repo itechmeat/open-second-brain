@@ -50,7 +50,12 @@ import { poolCoverageForRetry, runSubQueryPull } from "./second-pass.ts";
 import type { ValidityWindow } from "../validity.ts";
 import type { KeywordHit, Store } from "../store.ts";
 import type { ResolvedTimeRange } from "../time-range.ts";
-import type { ResolvedSearchConfig, SearchOptions } from "../types.ts";
+import type {
+  IterativeRoundRecord,
+  IterativeStopReason,
+  ResolvedSearchConfig,
+  SearchOptions,
+} from "../types.ts";
 import {
   ITERATIVE_RECALL_MAX_ROUNDS_CAP,
   ITERATIVE_RECALL_MAX_ROUNDS_DEFAULT,
@@ -63,29 +68,10 @@ export { ITERATIVE_RECALL_MAX_ROUNDS_CAP, ITERATIVE_RECALL_MAX_ROUNDS_DEFAULT } 
 /** Most sub-query groups one round may spend pulls on. */
 export const ITERATIVE_SUB_QUERY_GROUPS_PER_ROUND = 2;
 
-/** Why the loop stopped; recorded on the outcome's per-round observability. */
-export type IterativeStopReason =
-  | "coverage_complete"
-  | "no_sub_query"
-  | "no_progress"
-  | "round_cap"
-  | "marginal_value"
-  | "deadline"
-  | "decider_round";
-
-/** One executed round: what it pulled, what it recovered, what it cost. */
-export interface IterativeRoundRecord {
-  /** 1-based round number; 1 is the initial lanes, so rounds start at 2. */
-  readonly round: number;
-  readonly terms: ReadonlyArray<string>;
-  readonly groups: number;
-  readonly added: number;
-  readonly elapsedMs: number;
-  /** Who authored the sub-queries: the deterministic floor, or the decider. */
-  readonly author: "deterministic" | "decider";
-  /** The decider-authored sub-queries, present on decider rounds only. */
-  readonly subQueries?: ReadonlyArray<string>;
-}
+// The stop vocabulary and the per-round record live on the leaf config
+// module beside the outcome marker they project into; re-exported here so
+// a driver consumer reads one namespace.
+export type { IterativeRoundRecord, IterativeStopReason } from "../types.ts";
 
 export interface IterativeLoopInput {
   readonly store: Store;
@@ -226,6 +212,22 @@ export function runIterativeRecall(input: IterativeLoopInput): IterativeLoopOutc
   }
 
   if (stop === null) stop = "round_cap";
+  // The loop's last measurement was taken at the TOP of the final round -
+  // before that round's pulls landed. Every decision about the FINAL pool
+  // (the reported coverage, and whether gaps survived for a decider
+  // round) reads a measurement over the pool AS IT IS NOW, so a budget
+  // that just closed its gaps finalizes instead of pausing on stale
+  // gaps. Zero-round loops already hold the final pool's measurement; an
+  // expired clock keeps the last one it took.
+  if (rounds.length > 0 && stop !== "deadline" && !input.isExpired()) {
+    lastCoverage = poolCoverageForRetry({
+      store: input.store,
+      query: input.query,
+      ids: Array.from(input.chunkIds),
+      timeRange: input.timeRange,
+      validityWindowFor: input.validityWindowFor,
+    });
+  }
   // The decider pause: measurable gaps survived the deterministic budget,
   // the clock still runs, and the pool has candidates to select evidence
   // from. Any other exit - coverage complete, nothing measurable to fire

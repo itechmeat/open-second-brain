@@ -550,7 +550,11 @@ export async function search(
           });
           keywordHits = committed.keywordHits;
           idsList = committed.ids;
-          iterativeMarker = { phase: "final" };
+          iterativeMarker = {
+            phase: "final",
+            rounds: committed.rounds,
+            stopReason: committed.stopReason,
+          };
           markIterativeTokenSpent(store, effectiveConfig, committed.token, nowMs);
         } catch (e) {
           if (e instanceof DeciderStepError) {
@@ -569,6 +573,17 @@ export async function search(
           llmStep: loop.pause.llmStep,
           poolIds: loop.pause.poolIds,
           gaps: loop.lastCoverage?.uncoveredRareTerms ?? [],
+          rounds: loop.rounds,
+          stopReason: loop.stopReason,
+        };
+      } else if (loop.rounds.length > 0) {
+        // The loop ran and finalized within the deterministic budget: the
+        // per-round accounting rides the outcome, while an inert loop
+        // (zero rounds) adds nothing and stays byte-identical.
+        iterativeMarker = {
+          phase: "final",
+          rounds: loop.rounds,
+          stopReason: loop.stopReason,
         };
       }
     }
@@ -591,10 +606,9 @@ export async function search(
         routedSurface,
         degraded,
         corpus,
+        ...(iterativeMarker !== null ? { iterative: iterativeMarker } : {}),
       });
-      return served(
-        finalize(iterativeMarker !== null ? { ...outcome, iterative: iterativeMarker } : outcome),
-      );
+      return served(finalize(outcome));
     }
 
     // Two-tier hydration (recall-quality, C5): the pool hydrates
@@ -720,9 +734,6 @@ export async function search(
     );
     const emit =
       postRank.decisionFallback === true || rerankUnavailable ? (o: SearchOutcome) => o : finalize;
-    // The round-trip marker rides OUTSIDE the builder: it is a property of
-    // this request's phase, not of the ranking, and appending it here keeps
-    // every no-marker outcome serialized exactly as before.
     const built = buildSearchOutcome({
       store,
       config: effectiveConfig,
@@ -745,10 +756,12 @@ export async function search(
       ...(postRank.decisionModel?.answerable !== undefined
         ? { decisionModel: { answerable: postRank.decisionModel.answerable } }
         : {}),
+      // The iterative marker is a property of this request's phase, not
+      // of the ranking; the builder projects it verbatim, so every
+      // no-marker outcome serializes exactly as before.
+      ...(iterativeMarker !== null ? { iterative: iterativeMarker } : {}),
     });
-    return served(
-      emit(iterativeMarker !== null ? { ...built, iterative: iterativeMarker } : built),
-    );
+    return served(emit(built));
   } finally {
     await store.close();
   }
