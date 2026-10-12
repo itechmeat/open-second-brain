@@ -42,19 +42,24 @@
 
 import { planSubQueryGroups, significantTerms, type CoverageReport } from "../coverage.ts";
 import { buildDeciderStep, commitDeciderStep, type DeciderPause } from "../decider-step.ts";
-import { marginalValueStop } from "../../brain/retrieval-plan.ts";
+// The stop predicate is a pure leaf, so the pipeline reads the exact
+// advisor formula without dragging the advisor's dependency graph in.
+import { marginalValueStop } from "../../brain/marginal-value-stop.ts";
 import type { PropertyPushdown } from "../property-pushdown.ts";
 import { poolCoverageForRetry, runSubQueryPull } from "./second-pass.ts";
 import type { ValidityWindow } from "../validity.ts";
 import type { KeywordHit, Store } from "../store.ts";
 import type { ResolvedTimeRange } from "../time-range.ts";
 import type { ResolvedSearchConfig, SearchOptions } from "../types.ts";
-import { SearchError } from "../types.ts";
+import {
+  ITERATIVE_RECALL_MAX_ROUNDS_CAP,
+  ITERATIVE_RECALL_MAX_ROUNDS_DEFAULT,
+  SearchError,
+} from "../types.ts";
 
-/** Gap-driven rounds the loop may run when the config names no cap. */
-export const ITERATIVE_RECALL_MAX_ROUNDS_DEFAULT = 2;
-/** Hard ceiling the config resolver clamps the round cap to. */
-export const ITERATIVE_RECALL_MAX_ROUNDS_CAP = 8;
+// The knob bounds live on the leaf config module (see its docblock);
+// re-exported here so a driver consumer reads one namespace.
+export { ITERATIVE_RECALL_MAX_ROUNDS_CAP, ITERATIVE_RECALL_MAX_ROUNDS_DEFAULT } from "../types.ts";
 /** Most sub-query groups one round may spend pulls on. */
 export const ITERATIVE_SUB_QUERY_GROUPS_PER_ROUND = 2;
 
@@ -234,6 +239,7 @@ export function runIterativeRecall(input: IterativeLoopInput): IterativeLoopOutc
     stop !== "deadline" &&
     !input.isExpired() &&
     lastCoverage !== null &&
+    input.chunkIds.size > 0 &&
     planSubQueryGroups(lastCoverage, 1).fire
   ) {
     pause = buildDeciderStep({

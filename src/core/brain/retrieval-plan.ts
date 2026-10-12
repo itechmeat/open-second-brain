@@ -32,6 +32,7 @@ import { packContext, type ContextPackReport } from "./context-pack.ts";
 import { summarizeTokenImpact, type TokenImpactSummary } from "./token-impact.ts";
 import { summarizeMcpRouteLatency, type McpRouteLatencySummary } from "./mcp-route-metrics.ts";
 import { loadSchemaPack } from "./schema-pack.ts";
+import { marginalValueStop, type RetrievalPlanMarginalStop } from "./marginal-value-stop.ts";
 
 // ----- Tunables -------------------------------------------------------------
 
@@ -39,16 +40,16 @@ import { loadSchemaPack } from "./schema-pack.ts";
 export const DEFAULT_PLAN_TOKEN_BUDGET = 2000;
 /** The MCP route whose observed latency drives the reliability read. */
 export const RETRIEVAL_PLAN_ROUTE = "brain_search";
-/**
- * Marginal-value stop: a page is worth including only while its density is at
- * least this fraction of the top page's density. The fraction is the base
- * plus a p95-scaled surcharge, so a slow route demands denser pages.
- */
-export const STOP_BASE_FRACTION = 0.25;
-/** p95 latency (ms) that adds the full {@link STOP_MAX_EXTRA_FRACTION} surcharge. */
-export const STOP_P95_SCALE_MS = 4000;
-/** Cap on the p95-driven surcharge added to {@link STOP_BASE_FRACTION}. */
-export const STOP_MAX_EXTRA_FRACTION = 0.5;
+// The stop predicate is a pure leaf (see ./marginal-value-stop.ts); its
+// tunables, verdict type and function are re-exported here unchanged, so
+// the advisor's public surface and every existing consumer are untouched.
+export {
+  STOP_BASE_FRACTION,
+  STOP_MAX_EXTRA_FRACTION,
+  STOP_P95_SCALE_MS,
+  marginalValueStop,
+  type RetrievalPlanMarginalStop,
+} from "./marginal-value-stop.ts";
 /** Graph-expansion hop suggestions per structural intent. */
 const HOPS_BY_INTENT: Readonly<Record<QueryIntent, number>> = Object.freeze({
   broad: 2,
@@ -87,14 +88,6 @@ export interface RetrievalPlanReliability {
   readonly p95LatencyMs: number | null;
   /** Calibrated token-impact first-pass rate, or null when uncalibrated. */
   readonly firstPassRate: number | null;
-}
-
-export interface RetrievalPlanMarginalStop {
-  /** Include this many leading pages; beyond it marginal value < cost. */
-  readonly stopRank: number;
-  /** Cumulative tokens of the leading pages up to the stop. */
-  readonly stopTokens: number;
-  readonly reason: string;
 }
 
 export interface RetrievalPlanAdvice {
@@ -183,52 +176,6 @@ function reliabilityFrom(
     successRate,
     p95LatencyMs: route ? route.p95_ms : null,
     firstPassRate: impact.modeled_inference_avoidance.calibration.first_pass_rate,
-  });
-}
-
-/**
- * The marginal-value stop over an arbitrary density curve (recall-quality
- * wave extraction). A page — or, for callers other than the advisor, a
- * round, a batch, any unit the caller feeds samples of — is worth its cost
- * while its density is at least `effectiveFraction * topDensity`, where the
- * fraction climbs with the observed latency. At least one sample is always
- * included when any exist. A flat (zero-density) curve keeps everything.
- *
- * Extracted verbatim from the advisor's private stop so other lanes can
- * reuse the exact formula rather than re-tuning their own: the advisor feeds
- * it the context-pack density curve and the route's p95, and
- * {@link buildRetrievalPlan} output is byte-identical to the pre-extraction
- * fixtures by construction. The search-side iterative loop feeds it
- * per-round candidate yields and elapsed time instead — samples, not pages.
- */
-export function marginalValueStop(
-  densityCurve: ReadonlyArray<number>,
-  tokens: ReadonlyArray<number>,
-  p95LatencyMs: number | null,
-): RetrievalPlanMarginalStop {
-  if (densityCurve.length === 0) {
-    return Object.freeze({ stopRank: 0, stopTokens: 0, reason: "no candidates to allocate" });
-  }
-  const top = densityCurve[0]!;
-  const surcharge = Math.min(
-    STOP_MAX_EXTRA_FRACTION,
-    (Math.max(0, p95LatencyMs ?? 0) / STOP_P95_SCALE_MS) * STOP_MAX_EXTRA_FRACTION,
-  );
-  const fraction = STOP_BASE_FRACTION + surcharge;
-  const floor = top * fraction;
-  let stopRank = 0;
-  let stopTokens = 0;
-  for (let i = 0; i < densityCurve.length; i++) {
-    if (densityCurve[i]! < floor && stopRank >= 1) break;
-    stopRank += 1;
-    stopTokens += tokens[i] ?? 0;
-  }
-  return Object.freeze({
-    stopRank,
-    stopTokens,
-    reason:
-      `stop after ${stopRank} page(s): density floor ${floor.toFixed(4)} ` +
-      `(${(fraction * 100).toFixed(0)}% of top) given p95 ${p95LatencyMs ?? 0}ms`,
   });
 }
 

@@ -13,10 +13,6 @@ import {
 } from "../validate.ts";
 import { resolveVaultScope } from "../vault-scope/index.ts";
 import { DEFAULT_HYBRID_DEADLINE_MS } from "./pipeline/request.ts";
-import {
-  ITERATIVE_RECALL_MAX_ROUNDS_CAP,
-  ITERATIVE_RECALL_MAX_ROUNDS_DEFAULT,
-} from "./pipeline/iterative-recall.ts";
 import { resolveIndexPath, SEARCH_DB_CONFIG_KEY, SEARCH_DB_ENV } from "./paths.ts";
 import { buildFtsTokenize } from "./schema.ts";
 import { isFusionMode, DEFAULT_RRF_K } from "./fusion.ts";
@@ -57,6 +53,7 @@ import type {
   ResolvedSearchConfig,
   VaultScopeRules,
 } from "./types.ts";
+import { ITERATIVE_RECALL_MAX_ROUNDS_CAP, ITERATIVE_RECALL_MAX_ROUNDS_DEFAULT } from "./types.ts";
 
 type SearchConfigOverrides = Partial<
   Omit<ResolvedSearchConfig, "scopeRules" | "semantic" | "rerank">

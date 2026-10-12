@@ -47,6 +47,20 @@ export {
 } from "./search-error.ts";
 
 /**
+ * Gap-driven rounds the iterative recall loop (recall-quality wave) may
+ * run when the config names no cap, and the hard ceiling the resolver
+ * clamps an explicit cap to. These live on this module - the leaf every
+ * config consumer already reads - rather than beside the loop driver, so
+ * `resolveSearchConfig` never imports a pipeline module: the resolver is
+ * loaded by nearly every entry point, and dragging the driver's brain
+ * graph behind it flipped a fragile module-init order (the load failure
+ * this move fixed is recorded in the wave report).
+ */
+export const ITERATIVE_RECALL_MAX_ROUNDS_DEFAULT = 2;
+/** Hard ceiling the config resolver clamps the round cap to. */
+export const ITERATIVE_RECALL_MAX_ROUNDS_CAP = 8;
+
+/**
  * Structural query intent (v0.20.0). Derived purely from query shape -
  * quoted phrases, FTS wildcards, wikilinks, entity-token share, token
  * count - never from a natural-language word list. `neutral` trips no
@@ -1544,8 +1558,7 @@ export interface ResolvedRecallConfig {
   /**
    * Round cap for the iterative recall loop: the number of gap-driven
    * rounds it may run per query, regardless of remaining coverage gaps.
-   * Absent reads as the module default
-   * ({@link ./pipeline/iterative-recall.ts}).
+   * Absent reads as {@link ITERATIVE_RECALL_MAX_ROUNDS_DEFAULT}.
    */
   readonly iterativeRecallMaxRounds?: number;
   /**
