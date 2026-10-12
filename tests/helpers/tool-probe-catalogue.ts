@@ -297,7 +297,7 @@ export const REASONS_REACHING_OWNER_CONTENT: ReadonlySet<string> = new Set([REAS
  * test that reads them.
  */
 export const PROBE_ENTRY_COUNT = 101;
-export const PROBE_RECIPE_COUNT = 234;
+export const PROBE_RECIPE_COUNT = 235;
 export const PROBE_TWO_SIDED_COUNT = 32;
 
 /**
@@ -364,7 +364,19 @@ export const UNSCOPED_CONTENT: ReadonlyArray<ProbeEntry> = [
       },
     ],
   },
-  { name: "brain_session_grep", calls: one({ query: QUERY }, REASON.sessionLane) },
+  {
+    name: "brain_session_grep",
+    calls: [
+      { args: { query: QUERY }, reason: REASON.sessionLane },
+      {
+        // The coverage operation (t_2c2a883c): a whole-scope selection over
+        // a fixture with no imported sessions, so it must answer empty
+        // rather than leak or throw.
+        args: { operation: "coverage", char_budget: 100_000 },
+        reason: REASON.sessionLane,
+      },
+    ],
+  },
   { name: "brain_session_expand", calls: one({ id: "sess-probe:0" }, REASON.sessionLane) },
   {
     name: "brain_session_summary",

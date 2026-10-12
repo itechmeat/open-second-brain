@@ -93,3 +93,86 @@ test("brain session-grep/describe/expand query imported recall DAG", async () =>
   expect(expanded.immediate_sources.length).toBeGreaterThan(0);
   expect(expanded.raw_content).toHaveLength(1);
 });
+
+test("brain session-grep coverage operation and describe topics (t_2c2a883c)", async () => {
+  const coverage = await runCli([
+    "brain",
+    "session-grep",
+    "--vault",
+    vault,
+    "--operation",
+    "coverage",
+    "--char-budget",
+    "100000",
+    "--session-id",
+    "session-cli",
+    "--json",
+  ]);
+  expect(coverage.returncode).toBe(0);
+  const parsed = JSON.parse(coverage.stdout);
+  expect(parsed.turns.length).toBe(3);
+  expect(parsed.diagnostics.topics_requested).toBe(12);
+  expect(parsed.diagnostics.topics_realized).toBe(2);
+  expect(parsed.diagnostics.chars_used).toBeGreaterThan(0);
+
+  const described = await runCli([
+    "brain",
+    "session-describe",
+    "--vault",
+    vault,
+    "--session-id",
+    "session-cli",
+    "--topics",
+    "--json",
+  ]);
+  expect(described.returncode).toBe(0);
+  expect(JSON.parse(described.stdout).topic_report.topics_realized).toBe(2);
+});
+
+test("coverage without a character budget is refused by name", async () => {
+  const missing = await runCli([
+    "brain",
+    "session-grep",
+    "--vault",
+    vault,
+    "--operation",
+    "coverage",
+    "--json",
+  ]);
+  expect(missing.returncode).not.toBe(0);
+  expect(`${missing.stderr}${missing.stdout}`).toContain("char-budget");
+});
+
+test("a budget below the floor-weighted selection surfaces the typed infeasibility", async () => {
+  const infeasible = await runCli([
+    "brain",
+    "session-grep",
+    "--vault",
+    vault,
+    "--operation",
+    "coverage",
+    "--char-budget",
+    "1",
+    "--session-id",
+    "session-cli",
+    "--json",
+  ]);
+  expect(infeasible.returncode).not.toBe(0);
+  expect(`${infeasible.stderr}${infeasible.stdout}`).toContain("required chars");
+});
+
+test("an unknown operation value is refused by name", async () => {
+  const unknown = await runCli([
+    "brain",
+    "session-grep",
+    "--vault",
+    vault,
+    "--operation",
+    "widely",
+    "--query",
+    "receipt",
+    "--json",
+  ]);
+  expect(unknown.returncode).not.toBe(0);
+  expect(`${unknown.stderr}${unknown.stdout}`).toContain("operation");
+});

@@ -66,9 +66,11 @@ import {
   resolveTokenImpactLedgerEnabled,
 } from "../../core/config.ts";
 import {
+  coverageSessionRecall,
   describeSessionRecall,
   expandSessionRecall,
   searchSessionRecall,
+  SessionCoverageInfeasibleError,
 } from "../../core/brain/session-recall.ts";
 import { resolveTimeBounds } from "./time-bounds.ts";
 import { aggregateQueryDemand, serializeQueryDemandReport } from "../../core/brain/query-demand.ts";
@@ -943,6 +945,16 @@ async function toolBrainSessionGrep(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
+  // Coverage-first selection (t_2c2a883c) rides this tool as an explicit
+  // operation; omitted (the default) is the historical grep, byte-identical.
+  const operation = args["operation"] ?? "match";
+  if (operation === "coverage") return toolBrainSessionGrepCoverage(ctx, args);
+  if (operation !== "match") {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_session_grep: operation must be 'match' or 'coverage'",
+    );
+  }
   const limit = coercePositiveInteger("brain_session_grep", "limit", args["limit"]);
   const snippetChars = coercePositiveInteger(
     "brain_session_grep",
@@ -985,6 +997,54 @@ async function toolBrainSessionGrep(
 }
 
 /**
+ * The coverage operation of `brain_session_grep` (t_2c2a883c): the
+ * coverage-first thread selection over the lineage-scoped record set,
+ * fanning out under the adaptive topic budget and the caller's
+ * `char_budget`, returning the selected turns chronologically beside the
+ * selection diagnostics. The typed floor-violation infeasibility maps to
+ * INVALID_PARAMS - a budget that cannot hold the floor-weighted
+ * selection is a caller error, named so it can be retried, never a
+ * silent truncation.
+ */
+function toolBrainSessionGrepCoverage(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  if (args["query"] !== undefined) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_session_grep: operation 'coverage' selects whole topics; it takes no `query`",
+    );
+  }
+  const charBudget = coercePositiveInteger(
+    "brain_session_grep",
+    "char_budget",
+    args["char_budget"],
+  );
+  if (charBudget === undefined) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_session_grep: char_budget is required for the coverage operation",
+    );
+  }
+  const sessionId = optionalStringArg("brain_session_grep", args, "session_id");
+  let result;
+  try {
+    result = coverageSessionRecall(ctx.vault, {
+      ...withheldAtRemoteReach(ctx),
+      ...(sessionId !== undefined ? { sessionId } : {}),
+      charBudget,
+    });
+  } catch (err) {
+    if (err instanceof SessionCoverageInfeasibleError) {
+      throw new MCPError(INVALID_PARAMS, err.message);
+    }
+    throw err;
+  }
+  return { ...result };
+}
+
+/**
  * Private continuity rows are session data a remote caller does not get:
  * the recall tools answer about them exactly as about a row that does not
  * exist. A local caller keeps every row.
@@ -1001,6 +1061,7 @@ async function toolBrainSessionDescribe(
     ...describeSessionRecall(ctx.vault, {
       sessionId: requiredStringArg("brain_session_describe", args, "session_id"),
       ...withheldAtRemoteReach(ctx),
+      ...(args["topics"] === true ? { topics: true } : {}),
     }),
   };
 }
@@ -1507,24 +1568,36 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_session_grep",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
-      "Search imported session recall raw turns and summary nodes, optionally bounded to a time window (since/before).",
+      "Search imported session recall raw turns and summary nodes, optionally bounded to a time window (since/before). With operation=coverage, run the coverage-first thread selection instead: facets detected from the thread itself, fanned out under the adaptive topic budget (floor 12, cap 16), selected under char_budget, and returned chronologically with selection diagnostics.",
     inputSchema: {
       type: "object",
       properties: {
-        query: { type: "string", description: "Search text." },
+        operation: {
+          type: "string",
+          enum: ["match", "coverage"],
+          description:
+            "match (default) greps records for `query` (required here). coverage runs the coverage-first thread selection: `query` must be absent and `char_budget` is required.",
+        },
+        query: { type: "string", description: "Search text (operation=match)." },
         session_id: {
           type: "string",
           description: "Optional session id filter.",
         },
+        char_budget: {
+          type: "integer",
+          minimum: 1,
+          description:
+            "With operation=coverage: total character budget for the selected evidence. A budget that cannot hold the floor-weighted selection is refused (INVALID_PARAMS) naming the required chars, never silently truncated.",
+        },
         limit: {
           type: "integer",
           minimum: 1,
-          description: "Maximum hits to return.",
+          description: "Maximum hits to return (operation=match).",
         },
         snippet_chars: {
           type: "integer",
           minimum: 1,
-          description: "Maximum chars per hit snippet.",
+          description: "Maximum chars per hit snippet (operation=match).",
         },
         since: {
           type: "string",
@@ -1548,18 +1621,23 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
             "With include_raw, clip each inlined raw payload to this many chars; protected identity keys always survive.",
         },
       },
-      required: ["query"],
       additionalProperties: false,
     },
     handler: toolBrainSessionGrep,
   },
   {
     name: "brain_session_describe",
-    description: "Describe counts and summary depths for an imported session recall DAG.",
+    description:
+      "Describe counts and summary depths for an imported session recall DAG. With topics, also render the adaptive topic-budget report the coverage operation fans out under.",
     inputSchema: {
       type: "object",
       properties: {
         session_id: { type: "string", description: "Session id to describe." },
+        topics: {
+          type: "boolean",
+          description:
+            "Include the coverage topic report: detected facets, the adaptive topic budget (floor 12, cap 16) and the realized topics. Omitted: byte-identical response.",
+        },
       },
       required: ["session_id"],
       additionalProperties: false,

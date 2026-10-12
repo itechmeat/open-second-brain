@@ -146,11 +146,30 @@ export interface DescribeSessionRecallInput {
    * row, the local behaviour.
    */
   readonly withholdPrivate?: boolean;
+  /**
+   * Include the coverage topic report (t_2c2a883c): the facets the
+   * coverage operation would detect over this session's lineage scope
+   * and the adaptive topic budget they clamp to. Omitted keeps the
+   * result byte-identical to the pre-topic shape.
+   */
+  readonly topics?: boolean;
 }
 
 export interface SessionLineageSegment {
   readonly session_id: string;
   readonly parent_session_id: string | null;
+}
+
+/**
+ * The coverage topic budget over one scope: what
+ * {@link coverageSessionRecall} would fan out over, without running the
+ * selection.
+ */
+export interface SessionCoverageTopicReport {
+  readonly facets_detected: number;
+  readonly topics_requested: number;
+  readonly topics_realized: number;
+  readonly topics: ReadonlyArray<SessionCoverageTopic>;
 }
 
 export interface DescribeSessionRecallResult {
@@ -165,6 +184,11 @@ export interface DescribeSessionRecallResult {
    */
   readonly lineage_root?: string;
   readonly segments?: ReadonlyArray<SessionLineageSegment>;
+  /**
+   * Present only under `topics` (t_2c2a883c): the adaptive topic budget
+   * this session's thread clamps to and the facets it detected.
+   */
+  readonly topic_report?: SessionCoverageTopicReport;
 }
 
 export interface ExpandSessionRecallInput {
@@ -335,7 +359,33 @@ export function describeSessionRecall(
     raw_turns: rawTurns.length,
     summary_nodes: summaries.length,
     depths: Object.freeze(depths),
+    ...(input.topics === true ? { topic_report: coverageTopicReport(vault, records) } : {}),
     ...lineageDescription(vault, records, input.sessionId),
+  });
+}
+
+/**
+ * The adaptive topic budget over one scope's record set, without running
+ * the selection: the facets {@link coverageSessionRecall} would detect
+ * and what they clamp to between the exported floor and cap.
+ */
+function coverageTopicReport(
+  vault: string,
+  records: ReadonlyArray<ContinuityRecord>,
+): SessionCoverageTopicReport {
+  const facets = detectCoverageFacets(vault, records);
+  const { budget, realized } = resolveTopicBudget(facets.length);
+  return Object.freeze({
+    facets_detected: facets.length,
+    topics_requested: budget,
+    topics_realized: realized,
+    topics: Object.freeze(
+      facets
+        .slice(0, budget)
+        .map((facet) =>
+          Object.freeze({ key: facet.key, origin: facet.origin, turn_count: facet.turnIds.length }),
+        ),
+    ),
   });
 }
 

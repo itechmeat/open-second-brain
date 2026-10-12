@@ -793,8 +793,14 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           "Detach dangling session references from observations (dry-run by default)",
           [flag("vault", "string"), flag("apply", "boolean"), flag("confirm", "string")],
         ),
-        command("session-grep", "Search imported session recall turns and summaries"),
-        command("session-describe", "Describe an imported session recall DAG"),
+        command(
+          "session-grep",
+          "Search imported session recall turns and summaries; --operation coverage selects whole-thread coverage",
+          [flag("operation", "string"), flag("char-budget", "string")],
+        ),
+        command("session-describe", "Describe an imported session recall DAG", [
+          flag("topics", "boolean"),
+        ]),
         command("session-expand", "Expand a session recall node to its source turns"),
         command("lint", "Self-healing structural checks; --consolidate --apply writes the fixes", [
           flag("vault", "string"),

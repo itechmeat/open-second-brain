@@ -158,8 +158,10 @@ Brain verbs (observing memory):
   inbox-drain         Classify and route staged captures (dry-run; --apply to route)
   repair-lane         Propose memory-graph edges (dry-run; --apply --confirm to write, holdout-gated)
   orphan-repair       Detach dangling session references from observations (dry-run; --apply --confirm)
-  session-grep        Search imported session recall turns and summaries
-  session-describe    Describe an imported session recall DAG
+  session-grep        Search session recall turns/summaries; --operation coverage
+                      selects whole-thread coverage under --char-budget
+  session-describe    Describe an imported session recall DAG (--topics renders
+                      the adaptive topic-budget report)
   session-expand      Expand a session recall node to source turns
   lint                Self-healing structural checks (--consolidate); --apply to write
   actions             Ranked maintenance action list (dedup + lint + footprint)
@@ -1242,13 +1244,20 @@ export const VERB_HELP: Record<string, string> = {
     "  --workday-start HH:MM --workday-end HH:MM  clip focus blocks to a daily window\n" +
     "  [--json]\n",
   "session-grep":
-    "usage: o2b brain session-grep --query <text> [--session-id <id>] [--limit <n>] [--snippet-chars <n>] [--since <t>] [--before <t>] [--vault <path>] [--json]\n" +
+    "usage: o2b brain session-grep --query <text> [--operation match] [--session-id <id>] [--limit <n>] [--snippet-chars <n>] [--since <t>] [--before <t>] [--vault <path>] [--json]\n" +
+    "       o2b brain session-grep --operation coverage --char-budget <n> [--session-id <id>] [--vault <path>] [--json]\n" +
     "Search imported session recall raw turns and summary nodes. --since and\n" +
     "--before bound results to a time window (ISO date/datetime, today/\n" +
-    "yesterday/last week/last month, or <n>h/<n>d/<n>w); --before is inclusive.\n",
+    "yesterday/last week/last month, or <n>h/<n>d/<n>w); --before is inclusive.\n" +
+    "--operation coverage runs the coverage-first thread selection instead:\n" +
+    "facets detected from the thread, fanned out under the adaptive topic\n" +
+    "budget (floor 12, cap 16), selected under --char-budget, returned\n" +
+    "chronologically with selection diagnostics. A budget that cannot hold\n" +
+    "the floor-weighted selection is refused, never silently truncated.\n",
   "session-describe":
-    "usage: o2b brain session-describe --session-id <id> [--vault <path>] [--json]\n" +
-    "Describe counts and summary depths for an imported session recall DAG.\n",
+    "usage: o2b brain session-describe --session-id <id> [--topics] [--vault <path>] [--json]\n" +
+    "Describe counts and summary depths for an imported session recall DAG.\n" +
+    "--topics adds the adaptive topic-budget report (floor 12, cap 16).\n",
   "session-expand":
     "usage: o2b brain session-expand <record-id> [--raw-limit <n>] [--cursor <offset>] [--vault <path>] [--json]\n" +
     "Expand a raw or summary session recall node to immediate sources and paginated raw turn content.\n",

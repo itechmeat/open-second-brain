@@ -194,3 +194,96 @@ describe("session recall MCP tools", () => {
     expect(response.error !== undefined || response.result?.isError === true).toBe(true);
   });
 });
+
+describe("brain_session_grep coverage operation (t_2c2a883c)", () => {
+  test("coverage runs the thread selection end to end with diagnostics", async () => {
+    const coverage = await callTool("brain_session_grep", {
+      operation: "coverage",
+      char_budget: 100_000,
+      session_id: "session-mcp",
+    });
+    const turns = coverage.turns as Array<{ turn_id: string }>;
+    expect(turns.map((turn) => turn.turn_id)).toEqual(["t1", "t2"]);
+    const diagnostics = coverage.diagnostics as Record<string, unknown>;
+    expect(diagnostics["facets_detected"]).toBe(1);
+    expect(diagnostics["topics_requested"]).toBe(12);
+    expect(diagnostics["topics_realized"]).toBe(1);
+    expect(diagnostics["chars_used"]).toBeGreaterThan(0);
+    expect(diagnostics["dropped_turn_ids"]).toEqual([]);
+  });
+
+  test("operation omitted stays byte-identical: hits only, no coverage fields", async () => {
+    const grep = await callTool("brain_session_grep", {
+      query: "receipt",
+      session_id: "session-mcp",
+    });
+    expect("turns" in grep).toBe(false);
+    expect("diagnostics" in grep).toBe(false);
+    expect(Array.isArray(grep.hits)).toBe(true);
+  });
+
+  test("an unknown operation value is refused by name", async () => {
+    const server = new MCPServer({ vault, configPath: null });
+    await initialize(server);
+    const response = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 9,
+      method: "tools/call",
+      params: {
+        name: "brain_session_grep",
+        arguments: { operation: "widely" },
+      },
+    })) as { error?: { code: number; message: string } };
+    expect(response.error?.code).toBe(-32602);
+    expect(response.error?.message).toContain("operation");
+  });
+
+  test("coverage without char_budget is refused", async () => {
+    const server = new MCPServer({ vault, configPath: null });
+    await initialize(server);
+    const response = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 9,
+      method: "tools/call",
+      params: {
+        name: "brain_session_grep",
+        arguments: { operation: "coverage" },
+      },
+    })) as { error?: { code: number; message: string } };
+    expect(response.error?.code).toBe(-32602);
+    expect(response.error?.message).toContain("char_budget");
+  });
+
+  test("the typed infeasibility error maps to INVALID_PARAMS", async () => {
+    const server = new MCPServer({ vault, configPath: null });
+    await initialize(server);
+    const response = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 9,
+      method: "tools/call",
+      params: {
+        name: "brain_session_grep",
+        arguments: { operation: "coverage", char_budget: 1, session_id: "session-mcp" },
+      },
+    })) as { error?: { code: number; message: string } };
+    expect(response.error?.code).toBe(-32602);
+    expect(response.error?.message).toContain("required chars");
+    expect(response.error?.message).toContain("floor-weighted");
+  });
+
+  test("describe renders the topic report when asked, and only then", async () => {
+    const withTopics = await callTool("brain_session_describe", {
+      session_id: "session-mcp",
+      topics: true,
+    });
+    const report = withTopics.topic_report as Record<string, unknown>;
+    expect(report["facets_detected"]).toBe(1);
+    expect(report["topics_requested"]).toBe(12);
+    expect(report["topics_realized"]).toBe(1);
+
+    const withoutTopics = await callTool("brain_session_describe", {
+      session_id: "session-mcp",
+    });
+    expect("topic_report" in withoutTopics).toBe(false);
+  });
+});

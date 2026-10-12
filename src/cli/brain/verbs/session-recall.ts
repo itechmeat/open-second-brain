@@ -1,7 +1,9 @@
 import {
+  coverageSessionRecall,
   describeSessionRecall,
   expandSessionRecall,
   searchSessionRecall,
+  SessionCoverageInfeasibleError,
 } from "../../../core/brain/session-recall.ts";
 import { resolveTimeRange } from "../../../core/search/time-range.ts";
 import { SearchError } from "../../../core/search/types.ts";
@@ -17,8 +19,20 @@ export async function cmdBrainSessionGrep(argv: string[]): Promise<number> {
     "snippet-chars": { type: "string" },
     since: { type: "string" },
     before: { type: "string" },
+    operation: { type: "string" },
+    "char-budget": { type: "string" },
   });
   const vault = brainVerbContext(flags).vault;
+  // Coverage-first selection (t_2c2a883c) rides this verb as an explicit
+  // operation; omitted is the historical grep, byte-identical.
+  const operation = stringOptional(flags["operation"]) ?? "match";
+  if (operation === "coverage") return runSessionGrepCoverage(vault, flags);
+  if (operation !== "match") {
+    throw new CliError(`brain session-grep: operation must be 'match' or 'coverage'`);
+  }
+  if (stringOptional(flags["char-budget"]) !== undefined) {
+    throw new CliError("brain session-grep: --char-budget applies to --operation coverage only");
+  }
   // Conversation-chronology bounds (S1): --since / --before parse through
   // the shared time-range grammar; --before maps onto the inclusive upper
   // edge. Absent bounds leave the search unbounded (byte-identical).
@@ -50,6 +64,36 @@ export async function cmdBrainSessionGrep(argv: string[]): Promise<number> {
   return 0;
 }
 
+/**
+ * The coverage operation (t_2c2a883c): coverage-first thread selection
+ * under --char-budget, with the typed floor-violation infeasibility
+ * surfaced as the CLI error it is.
+ */
+function runSessionGrepCoverage(vault: string, flags: Record<string, unknown>): number {
+  const charBudget = positiveIntegerOptional(
+    flags["char-budget"],
+    "brain session-grep",
+    "--char-budget",
+  );
+  if (charBudget === undefined) {
+    throw new CliError("brain session-grep: --char-budget is required for --operation coverage");
+  }
+  let result;
+  try {
+    result = coverageSessionRecall(vault, {
+      ...(stringOptional(flags["session-id"]) !== undefined
+        ? { sessionId: stringOptional(flags["session-id"]) }
+        : {}),
+      charBudget,
+    });
+  } catch (exc) {
+    if (exc instanceof SessionCoverageInfeasibleError) throw new CliError(exc.message);
+    throw exc;
+  }
+  writeOutput(result, flags["json"] === true);
+  return 0;
+}
+
 function sessionGrepBounds(
   since: string | undefined,
   before: string | undefined,
@@ -74,10 +118,12 @@ export async function cmdBrainSessionDescribe(argv: string[]): Promise<number> {
     vault: { type: "string" },
     json: { type: "boolean" },
     "session-id": { type: "string" },
+    topics: { type: "boolean" },
   });
   const vault = brainVerbContext(flags).vault;
   const result = describeSessionRecall(vault, {
     sessionId: requiredString(flags["session-id"], "brain session-describe", "--session-id"),
+    ...(flags["topics"] === true ? { topics: true } : {}),
   });
   writeOutput(result, flags["json"] === true);
   return 0;
