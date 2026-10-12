@@ -29,7 +29,7 @@ function sessionTurn(overrides: Partial<ContinuityRecord> & { id: string }): Con
     kind: "session_turn",
     createdAt: "2026-06-01T00:00:00.000Z",
     sourceRefs: [],
-    payload: { text: "a recorded prompt" },
+    payload: { role: "user", text: "a recorded prompt" },
     private: false,
     redacted: false,
     ...overrides,
@@ -118,8 +118,15 @@ test("sessionTurnsToReplayFixture output (always notes-less) converts", () => {
   const replay = sessionTurnsToReplayFixture({
     name: "vault-lane",
     records: [
-      sessionTurn({ id: "t-1", payload: { text: "Who owns the billing migration?" } }),
-      sessionTurn({ id: "t-2", createdAt: "2026-06-01T00:01:00.000Z", payload: { text: "/help" } }),
+      sessionTurn({
+        id: "t-1",
+        payload: { role: "user", text: "Who owns the billing migration?" },
+      }),
+      sessionTurn({
+        id: "t-2",
+        createdAt: "2026-06-01T00:01:00.000Z",
+        payload: { role: "user", text: "/help" },
+      }),
     ],
     expectations: { "t-1": "inject", "t-2": "abstain" },
   });

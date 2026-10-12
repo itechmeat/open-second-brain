@@ -14,6 +14,12 @@
  *     shape, giving regression proof against real sessions without
  *     committing raw prompts into the repository.
  *
+ * Only (1) is wired to the suite's CLI entry this wave:
+ * `--suite surfacing-replay` accepts a committed fixture file, and (2)
+ * ships as the pure conversion (`sessionTurnsToReplayFixture`) with no
+ * flag behind it yet - a recorded-session adapter, not a live vault
+ * reader.
+ *
  * The expected-outcome vocabulary is CLOSED (`inject` | `abstain`): the
  * scorer denominates false fires and silent misses in exactly that
  * boolean, and an expectation the vocabulary cannot name is a named
@@ -190,25 +196,56 @@ export interface SessionTurnsToReplayInput {
   /** `session_turn` records, in any order; the conversion orders them. */
   readonly records: ReadonlyArray<ContinuityRecord>;
   /**
-   * Expected outcome per turn, keyed by record id. Every record needs
-   * one - a turn without a declared expectation is a rejection, because
-   * a defaulted expectation would silently manufacture the score.
+   * Expected outcome per turn, keyed by record id. Every replayed turn
+   * (every `role === "user"` record) needs one - a turn without a
+   * declared expectation is a rejection, because a defaulted expectation
+   * would silently manufacture the score. Assistant turns are not
+   * replayed and declare none.
    */
   readonly expectations: Readonly<Record<string, unknown>>;
 }
 
 /**
+ * The role whose turns are prompts. Only `role === "user"` turns are
+ * replayed: an assistant turn is not something memory is asked to speak
+ * on, and replaying it as a prompt would score a decision nobody makes.
+ */
+const USER_TURN_ROLE = "user";
+
+/**
+ * The conversation instant a turn is ordered by: the turn's
+ * `payload.timestamp` when the record carries one, else the record
+ * `createdAt` - the same precedence the shipped session-recall reader
+ * orders by (`compareRecords`, `src/core/brain/session-recall.ts`).
+ * `createdAt` is import time; one import writes a whole session at once,
+ * so ordering by it alone can name the wrong turn as "the prompt before".
+ */
+function turnInstant(record: ContinuityRecord): string {
+  return String(record.payload["timestamp"] ?? record.createdAt);
+}
+
+/**
  * Convert a vault's `session_turn` records into the committed fixture's
- * shape. Ordering is chronological (createdAt, then id, both stable and
- * recomputable), never the caller's array order.
+ * shape. Two normalizations make the replay follow the conversation
+ * rather than the import:
+ *
+ *  - ORDER is the conversation's: {@link turnInstant} - the turn's
+ *    `payload.timestamp`, falling back to `createdAt` - then record id,
+ *    then the caller's array order, all three stable and recomputable.
+ *  - ROLE: only {@link USER_TURN_ROLE} turns become prompts, so the
+ *    previous-prompt chain (what duplicate detection reads) is a chain
+ *    of user prompts.
+ *
+ * Expectations are required exactly for the turns that are replayed; an
+ * assistant turn declares none and silently drops out of the sequence.
  */
 export function sessionTurnsToReplayFixture(input: SessionTurnsToReplayInput): ReplayFixture {
   const ordered = input.records
     .map((record, index) => ({ record, index }))
     .toSorted(
       (a, b) =>
-        a.record.createdAt.localeCompare(b.record.createdAt) ||
-        (a.record.id < b.record.id ? -1 : a.record.id > b.record.id ? 1 : 0) ||
+        turnInstant(a.record).localeCompare(turnInstant(b.record)) ||
+        a.record.id.localeCompare(b.record.id) ||
         a.index - b.index,
     );
   const prompts: ReplayPrompt[] = [];
@@ -218,6 +255,7 @@ export function sessionTurnsToReplayFixture(input: SessionTurnsToReplayInput): R
         `replay fixture '${input.name}': turn '${record.id}' has kind '${record.kind}', expected session_turn`,
       );
     }
+    if (record.payload["role"] !== USER_TURN_ROLE) continue;
     const rawExpectation = input.expectations[record.id];
     if (!isReplayExpectation(rawExpectation)) {
       throw new ReplayFixtureError(
@@ -241,7 +279,7 @@ export function sessionTurnsToReplayFixture(input: SessionTurnsToReplayInput): R
   }
   if (prompts.length === 0) {
     throw new ReplayFixtureError(
-      `replay fixture '${input.name}': no session_turn records to replay`,
+      `replay fixture '${input.name}': no user session_turn records to replay`,
     );
   }
   return withSuiteName({
