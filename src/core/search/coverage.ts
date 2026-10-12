@@ -253,9 +253,17 @@ export const SUB_QUERY_GROUPS_MAX = 4;
  *
  * `maxGroups` below one is clamped to one (the single merged group), and
  * an unmeasurable coverage yields zero groups for the same reason
- * {@link planTargetedRetry} states above. Pure and deterministic.
+ * {@link planTargetedRetry} states above. A non-finite coverage fails
+ * closed the same way (fire false, no groups): a broken measurement
+ * proposes nothing. Pure and deterministic.
  */
 export function planSubQueryGroups(coverage: CoverageReport, maxGroups: number): SubQueryGroupPlan {
+  // Refuse a non-finite report explicitly rather than let comparison
+  // semantics decide: NaN misses the `<` gate by accident, but -Infinity
+  // passes it and would fire on a measurement that never happened.
+  if (coverage.idfWeightedCoverage !== null && !Number.isFinite(coverage.idfWeightedCoverage)) {
+    return Object.freeze({ fire: false, groups: Object.freeze([]) });
+  }
   const legacy = planTargetedRetry(coverage);
   if (!legacy.fire) return Object.freeze({ fire: false, groups: Object.freeze([]) });
   const idfByTerm = new Map(coverage.terms.map((t) => [t.term, t.idf]));

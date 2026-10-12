@@ -154,6 +154,18 @@ describe("planTargetedRetry (pure decision)", () => {
     expect(plan.groups).toHaveLength(1);
     expect(plan.groups[0]!.terms).toEqual(["mizar", "alcor", "zubrowka"]);
   });
+
+  test("a non-finite coverage fails closed: no fire, no groups", () => {
+    // A broken measurement (a non-finite number where the report contract
+    // says a finite share or null) must not fire the gap signal. NaN
+    // happened to miss the `<` gate on comparison semantics alone, while
+    // -Infinity fired on it; the gate now refuses every non-finite report
+    // explicitly, so failing closed is a stated rule, not an accident.
+    const broken = { ...threeGaps, idfWeightedCoverage: Number.NaN };
+    expect(planSubQueryGroups(broken, 4)).toEqual({ fire: false, groups: [] });
+    const negative = { ...threeGaps, idfWeightedCoverage: Number.NEGATIVE_INFINITY };
+    expect(planSubQueryGroups(negative, 4)).toEqual({ fire: false, groups: [] });
+  });
 });
 
 describe("targeted recall on a partial miss (integration)", () => {
