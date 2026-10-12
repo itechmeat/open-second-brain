@@ -13,10 +13,15 @@
  *
  * Omit-don't-invent governs every half. A sample id with a receipt but
  * no outcome row is "receipt known, outcome unknown": the outcome field
- * is null and no caller may fabricate a verdict for it. A claim
- * timestamped BEFORE its claimed receipt's `created_at` carries an
- * inversion flag instead of being silently joined - a receipt the claim
- * predates cannot have informed it.
+ * is null and no caller may fabricate a verdict for it. The same honesty
+ * extends to "receipt unreadable": a receipt record whose `created_at`
+ * fails the canonical-timestamp check (the continuity reader validates
+ * that stamp on append only, so a hand-edited or foreign-synced shard
+ * can carry one no append would accept) is skipped at index load, and a
+ * claim naming it answers "receipt unknown" instead of failing the whole
+ * read. A claim timestamped BEFORE its claimed receipt's `created_at`
+ * carries an inversion flag instead of being silently joined - a receipt
+ * the claim predates cannot have informed it.
  *
  * The module performs NO vault writes and imports no continuity append
  * path; the claim-attribution census pins that invariant
@@ -36,6 +41,7 @@
 import { listContextPackEvidence } from "../context-pack-evidence.ts";
 import { listContextPackOutcomes } from "../context-pack-outcome.ts";
 import { isContextReceiptTrigger, listContextReceipts } from "../context-receipts.ts";
+import { isCanonicalUtcTimestamp } from "../continuity/store.ts";
 import type { ContinuityRecord } from "../continuity/types.ts";
 
 /** One injected item a claimed receipt accounts for. */
@@ -129,10 +135,19 @@ export interface ClaimProvenanceIndex {
  * Read each provenance ledger once and index it. Newest-wins per key:
  * the list functions answer newest-first, so the FIRST record under a
  * key is the one a filtered lookup returns, and later (older) records
- * under the same key never displace it.
+ * under the same key never displace it. A receipt record whose
+ * `createdAt` is not canonical UTC is UNREADABLE, never merely
+ * uninverting: the continuity reader validates that stamp on append
+ * only, so a hand-edited or foreign-synced shard can carry one no
+ * append would accept. Skipping it here degrades PER CLAIM - the claim
+ * naming it answers "receipt unknown", exactly as an absent id would -
+ * instead of failing the whole events read for every unrelated claim on
+ * the page.
  */
 export function loadClaimProvenanceIndex(vault: string): ClaimProvenanceIndex {
-  const receiptsByReceiptId = newestWinsById(listContextReceipts(vault), (record) => record.id);
+  const receiptsByReceiptId = newestWinsById(listContextReceipts(vault), (record) =>
+    isCanonicalUtcTimestamp(record.createdAt) ? record.id : null,
+  );
   const outcomesBySampleId = newestWinsById(listContextPackOutcomes(vault), (record) =>
     payloadSampleId(record),
   );
@@ -232,11 +247,14 @@ function joinOutcome(
  *
  * @throws when `sampleId` is blank - the same never-coerced discipline
  *   the write boundary applies, so silence can never read as an answer.
- *   A stamp that parses to no instant is refused by name too: both sides
- *   are boundary-validated canonical (the claim store validates the
- *   claim ts; the continuity store validates the receipt's `createdAt`),
- *   so an unparseable stamp means a corrupted ledger, never a caller
- *   mistake to silently report as "not inverted".
+ *   The inversion compare runs on parsed instants, and both sides
+ *   reaching it are validated canonical first: the claim store validates
+ *   the claim ts on read, and this module's index admits only receipt
+ *   records whose `createdAt` passes the canonical-timestamp check (the
+ *   continuity reader validates that stamp on APPEND only, so a
+ *   hand-edited shard could otherwise fail the whole read here). A
+ *   receipt that fails the check is unreadable, and the claim naming it
+ *   answers "receipt unknown" instead of throwing.
  */
 export function resolveClaimProvenanceFromIndex(
   index: ClaimProvenanceIndex,
@@ -302,9 +320,10 @@ export function resolveClaimProvenance(
 /**
  * Parse one side of the inversion compare into its instant, refusing a
  * stamp that has none. Both sides reaching here were validated canonical
- * by their write boundaries, so a parse failure names the side whose
- * ledger is corrupt rather than answering the compare with `NaN`'s
- * silent "false".
+ * before the compare - the claim ts by the claim store's read boundary,
+ * the receipt's `created_at` by the index admission check - so a parse
+ * failure names the side whose ledger is corrupt rather than answering
+ * the compare with `NaN`'s silent "false".
  */
 function stampInstant(side: string, ts: string): number {
   const instant = Date.parse(ts);

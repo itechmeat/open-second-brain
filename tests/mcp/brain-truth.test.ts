@@ -5,7 +5,7 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -15,6 +15,7 @@ import { computeTruthStateWithConflicts } from "../../src/core/brain/truth/confl
 import { upsertEntity } from "../../src/core/brain/entities/registry.ts";
 import { emitContextPackOutcome } from "../../src/core/brain/context-pack-outcome.ts";
 import { emitContextReceipt } from "../../src/core/brain/context-receipts.ts";
+import { continuityLogPath } from "../../src/core/brain/continuity/store.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts";
@@ -1080,6 +1081,64 @@ test("two claims sharing a sample_id carry per-event inversion flags", async () 
   } finally {
     rmSync(b.configHome, { recursive: true, force: true });
   }
+});
+
+test("one receipt with an unparseable createdAt degrades per claim, not per page", async () => {
+  // M4 regression: the continuity reader validates createdAt on append
+  // only, so a hand-edited shard can carry a stamp no append would
+  // accept. The events op must still answer ok with every row - the
+  // sampled claim names an unreadable receipt and renders it unknown,
+  // the unsampled claim renders byte-identically - instead of throwing
+  // a plain internal error for the whole page.
+  writeSourcePage("session.md");
+  const receipt = emitContextReceipt(vault, {
+    options: { host: "mcp", trigger: "context_pack", createdAt: "2026-06-02T09:00:00.000Z" },
+    items: [{ id: "note-alpha", path: "Brain/notes/alpha.md", tokens: 40 }],
+    finalText: "the final answer text",
+  });
+  const shard = continuityLogPath(vault, receipt.createdAt.slice(0, 7));
+  const text = readFileSync(shard, "utf8");
+  writeFileSync(
+    shard,
+    text.replace(
+      JSON.stringify(receipt),
+      JSON.stringify({ ...receipt, createdAt: "2026-06-garbage" }),
+    ),
+  );
+  appendClaimEvent(vault, {
+    ts: "2026-06-02T10:00:00Z",
+    agent: "claude",
+    entity: "Alice Mason",
+    aspect: "employer",
+    value: "Google",
+    source: "[[Brain/notes/session.md]]",
+    sample_id: receipt.id,
+  });
+  appendClaimEvent(vault, {
+    ts: "2026-06-03T10:00:00Z",
+    agent: "claude",
+    entity: "Bob Doe",
+    aspect: "employer",
+    value: "Meta",
+    source: "[[Brain/notes/session.md]]",
+  });
+  const server = new MCPServer({ vault, configPath });
+  await initialize(server);
+  const body = (await call(server, { operation: "events" })) as unknown as {
+    ok: boolean;
+    events: ReadonlyArray<{
+      entity: string;
+      provenance?: ClaimProvenanceRow | null;
+    }>;
+  };
+  expect(body.ok).toBe(true);
+  expect(body.events).toHaveLength(2);
+  const sampled = body.events.find((event) => event.entity === "alice mason")!;
+  expect(sampled.provenance).toBeDefined();
+  // Receipt unreadable: it renders unknown, never a failed read.
+  expect(sampled.provenance!.receipt).toBeNull();
+  const unsampled = body.events.find((event) => event.entity === "bob doe")!;
+  expect("provenance" in unsampled).toBe(false);
 });
 
 // ----- provenance at the caller's reach (answer-trust repair M2/F3) -----

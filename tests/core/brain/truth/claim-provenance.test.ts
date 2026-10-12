@@ -8,7 +8,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -17,7 +17,10 @@ import {
   emitContextReceipt,
   listContextReceipts,
 } from "../../../../src/core/brain/context-receipts.ts";
-import { appendContinuityRecord } from "../../../../src/core/brain/continuity/store.ts";
+import {
+  appendContinuityRecord,
+  continuityLogPath,
+} from "../../../../src/core/brain/continuity/store.ts";
 import type { ContinuityRecord } from "../../../../src/core/brain/continuity/types.ts";
 import {
   resolveClaimProvenanceFromIndex,
@@ -241,6 +244,29 @@ describe("resolveClaimProvenance", () => {
     // write), refused here too so no caller can read silence as an
     // answer.
     expect(() => resolveClaimProvenance(vault, "   ", CLAIM_TS_AFTER)).toThrow(/sample_id/);
+  });
+
+  test("a receipt record with a non-canonical createdAt reads as unknown, not a failed read", () => {
+    // M4 regression: the continuity reader validates `createdAt` on
+    // append only, so a shard synced from another device or edited by
+    // hand can carry a stamp no append would accept. The join degrades
+    // PER CLAIM - the claim naming the unreadable receipt answers
+    // "receipt unknown", exactly as an absent id would - instead of
+    // failing the whole events read for every unrelated claim.
+    const receipt = emitSampleReceipt();
+    const shard = continuityLogPath(vault, receipt.createdAt.slice(0, 7));
+    const text = readFileSync(shard, "utf8");
+    const unreadable = { ...receipt, createdAt: "2026-06-garbage" };
+    writeFileSync(shard, text.replace(JSON.stringify(receipt), JSON.stringify(unreadable)));
+    const provenance = resolveClaimProvenance(vault, receipt.id, CLAIM_TS_AFTER);
+    expect(provenance.receipt).toBeNull();
+    expect(provenance.outcome).toBeNull();
+    expect(provenance.timestamp_inverted).toBe(false);
+    // The indexed path (what the events report takes) degrades the same
+    // way: the unreadable record never enters the index.
+    const index = loadClaimProvenanceIndex(vault);
+    expect(index.receiptsByReceiptId.has(receipt.id)).toBe(false);
+    expect(resolveClaimProvenanceFromIndex(index, receipt.id, CLAIM_TS_AFTER).receipt).toBeNull();
   });
 });
 
