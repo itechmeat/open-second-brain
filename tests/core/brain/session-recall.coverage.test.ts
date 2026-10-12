@@ -350,6 +350,88 @@ describe("entity-thread wiring", () => {
   });
 });
 
+describe("session-qualified turn identity in the coverage path", () => {
+  function importIdenticalIdSessions(): void {
+    // Two independent sessions whose transcripts reuse the SAME turn ids:
+    // SessionTurn.turnId can repeat across sessions, so a bare turn_id is
+    // not a turn identity wherever a multi-session scope can mix them.
+    importSessionRecall(vault, {
+      sessionId: "dup-a",
+      turns: [
+        turn("t1", "user", "call `SessionStore` in session A", 1),
+        turn("t2", "assistant", "receipt ledger notes in session A", 2),
+      ],
+      summaryGroupSize: 2,
+      createdAt: "2026-07-06T09:00:00.000Z",
+    });
+    importSessionRecall(vault, {
+      sessionId: "dup-b",
+      turns: [
+        turn("t1", "user", "the migration plan lands in session B", 61),
+        turn("t2", "assistant", "more migration detail in session B", 62),
+      ],
+      summaryGroupSize: 2,
+      createdAt: "2026-07-06T09:01:00.000Z",
+    });
+  }
+
+  /** One mined-mention ledger row, the shape `mineAndRecordTurn` writes. */
+  function mention(sessionRef: string, turnId: string): void {
+    appendContinuityRecord(vault, {
+      kind: "session_entity_mention",
+      createdAt: "2026-07-06T09:02:00.000Z",
+      sourceRefs: [{ id: `${sessionRef}:${turnId}:symbol:SessionStore` }],
+      payload: { family: "symbol", key: "SessionStore", session_ref: sessionRef, turn_id: turnId },
+    });
+  }
+
+  test("an entity seed resolves per session: a cluster of one dup-id session cannot select the other's turns", () => {
+    importIdenticalIdSessions();
+    mention("dup-a", "t1");
+    mention("dup-b", "t1");
+
+    const coverage = coverageSessionRecall(vault, {
+      entityKey: "SessionStore",
+      charBudget: 1_000_000,
+    });
+
+    // The mined facet counts one establishing turn PER SESSION: the two
+    // (session, turn) pairs are two turns, not one bare id counted once.
+    expect(coverage.diagnostics.topics[0]).toMatchObject({
+      key: "mined:symbol:SessionStore",
+      origin: "mined",
+      turn_count: 2,
+    });
+    // dup-b's turns carry none of the mined needle text, so only its own
+    // cluster facet can surface them: the cluster of dup-b must resolve
+    // to dup-b's turns, never to the same-named turns of dup-a.
+    const texts = coverage.turns.map((t) => t.text);
+    expect(texts.some((text) => text.includes("in session B"))).toBe(true);
+    expect(texts.some((text) => text.includes("in session A"))).toBe(true);
+  });
+
+  test("a mention naming only session A's turn does not satisfy a B-scoped seed", () => {
+    importIdenticalIdSessions();
+    mention("dup-a", "t1");
+    let probe: SessionCoverageEntityUnknownError | null = null;
+    try {
+      coverageSessionRecall(vault, {
+        entityKey: "SessionStore",
+        sessionId: "dup-b",
+        charBudget: 100_000,
+      });
+    } catch (err) {
+      probe = err as SessionCoverageEntityUnknownError;
+    }
+    // dup-b imports turns named t1/t2 too, but the seed's establishing
+    // turn is (dup-a, t1): the bare-id match must not stand in for it.
+    expect(probe).not.toBeNull();
+    expect(probe).toBeInstanceOf(SessionCoverageEntityUnknownError);
+    expect(probe!.reason).toBe("no_imported_turns");
+    expect(probe!.mentionRows).toBe(1);
+  });
+});
+
 describe("typed floor-violation infeasibility", () => {
   test("a budget below the floor-weighted selection raises the typed error, named fields", () => {
     importLineageThread();

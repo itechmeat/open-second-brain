@@ -712,10 +712,16 @@ function assertEntitySeedReachesScope(
   const scopedTurns = new Set<string>();
   for (const record of records) {
     if (record.kind !== "session_turn") continue;
+    const sessionId = sessionIdOf(record.payload);
     const turnId = turnIdOf(record);
-    if (turnId.length > 0) scopedTurns.add(turnId);
+    if (sessionId !== undefined && turnId.length > 0) {
+      scopedTurns.add(qualifiedTurnId(sessionId, turnId));
+    }
   }
-  if (rows.some((row) => scopedTurns.has(row.turn_id))) return;
+  // The pair, not the bare turn id: in a multi-session scope a row for
+  // one session's turn must never be satisfied by another session's
+  // same-named turn.
+  if (rows.some((row) => scopedTurns.has(qualifiedTurnId(row.session_ref, row.turn_id)))) return;
   throw new SessionCoverageEntityUnknownError({
     entityKey,
     reason: "no_imported_turns",
@@ -903,6 +909,18 @@ function turnIdOf(record: ContinuityRecord): string {
 }
 
 /**
+ * Session-qualified turn identity: `SessionTurn.turnId` can repeat across
+ * sessions, and a multi-session scope (entity seeding) mixes lineages, so
+ * a bare `turn_id` is not a turn identity wherever the coverage path
+ * matches mentions, cluster source lists and turn records against each
+ * other. The public output keeps the bare turn ids; this qualifies only
+ * that internal plumbing.
+ */
+function qualifiedTurnId(sessionId: string, turnId: string): string {
+  return `${sessionId}\u0000${turnId}`;
+}
+
+/**
  * The scoped record set's coverage facets: depth-1 summary clusters (the
  * thread's own topic skeleton - a depth-1 node's source turn list
  * partitions the segment's turns) plus the mined entity keys whose
@@ -912,7 +930,9 @@ function turnIdOf(record: ContinuityRecord): string {
  * session outside the scope or a turn the recall DAG never imported,
  * cannot contribute coverage and is not detected as a facet - nothing
  * selectable is dropped silently, and the ledger rows remain for every
- * other reader.
+ * other reader. Turn identity is session-qualified
+ * ({@link qualifiedTurnId}), so {@link detectThreadFacets} orders and
+ * counts turns per session even when the transcripts reuse turn ids.
  */
 function detectCoverageFacets(
   vault: string,
@@ -922,13 +942,21 @@ function detectCoverageFacets(
   const clusters: Array<{ id: string; turnIds: ReadonlyArray<string> }> = [];
   for (const record of records) {
     if (record.kind === "session_turn") {
+      const sessionId = sessionIdOf(record.payload);
       const turnId = turnIdOf(record);
-      if (turnId.length > 0) turns.push(turnId);
+      if (sessionId !== undefined && turnId.length > 0) {
+        turns.push(qualifiedTurnId(sessionId, turnId));
+      }
       continue;
     }
     if (record.kind !== "session_summary_node") continue;
     if (numberValue(record.payload["depth"]) !== 1) continue;
-    clusters.push({ id: record.id, turnIds: collectTurnIds([record]) });
+    const sessionId = sessionIdOf(record.payload);
+    if (sessionId === undefined) continue;
+    clusters.push({
+      id: record.id,
+      turnIds: collectTurnIds([record]).map((turnId) => qualifiedTurnId(sessionId, turnId)),
+    });
   }
   return detectThreadFacets({ turns, mentions: scopedMentions(vault, records), clusters });
 }
@@ -967,7 +995,9 @@ function scopedMentions(
     ) {
       continue;
     }
-    if (scope.has(sessionRef)) mentions.push({ family, key, turnId });
+    if (scope.has(sessionRef)) {
+      mentions.push({ family, key, turnId: qualifiedTurnId(sessionRef, turnId) });
+    }
   }
   return mentions;
 }
@@ -991,10 +1021,17 @@ function rankTopicMatches(
   topics: ReadonlyArray<ThreadFacet>,
 ): TopicMatch[] {
   const turnRecords = records.filter((record) => record.kind === "session_turn");
+  // Membership facets name their turns by the same session-qualified
+  // identity detectCoverageFacets built, so a cluster of one session can
+  // never resolve to another session's same-named turn in a multi-session
+  // scope.
   const byTurnId = new Map<string, ContinuityRecord>();
   for (const record of turnRecords) {
+    const sessionId = sessionIdOf(record.payload);
     const turnId = turnIdOf(record);
-    if (turnId.length > 0 && !byTurnId.has(turnId)) byTurnId.set(turnId, record);
+    if (sessionId === undefined || turnId.length === 0) continue;
+    const key = qualifiedTurnId(sessionId, turnId);
+    if (!byTurnId.has(key)) byTurnId.set(key, record);
   }
   const matches = new Map<string, TopicMatch>();
   const add = (record: ContinuityRecord, score: number, topicKey: string): void => {
