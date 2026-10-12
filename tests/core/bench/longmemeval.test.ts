@@ -56,6 +56,22 @@ function entry(overrides: Record<string, unknown>): Record<string, unknown> {
   };
 }
 
+test("session ids that sanitize to one note path are a named parse error", () => {
+  const dataset = parseLongMemEvalDataset([
+    entry({
+      q_id: "collide",
+      haystack_session_id: ["a/b", "a-b"],
+      haystack_dates: ["2026-01-01", "2026-01-02"],
+      haystack_session: [
+        [{ role: "user", content: "alpha note" }],
+        [{ role: "user", content: "beta note" }],
+      ],
+      answer_session_ids: ["a/b"],
+    }),
+  ]);
+  expect(() => longMemEvalToBenchFixture(dataset)).toThrow(/same note path/);
+});
+
 describe("parseLongMemEvalDataset", () => {
   test("accepts the official bare-array shape and a named wrapper", () => {
     const bare = parseLongMemEvalDataset([entry({})]);

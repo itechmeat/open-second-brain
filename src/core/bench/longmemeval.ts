@@ -47,10 +47,12 @@ import {
 export const LONGMEMEVAL_SUITE_NAME = "longmemeval";
 
 /**
- * The upstream revision the official prompt constants below are pinned
- * to: the LongMemEval repository and dataset release the question shape
- * and the judging template follow. The full dataset is downloaded from
- * this release by operators - never at run time.
+ * The upstream source the official prompt constants below follow: the
+ * LongMemEval repository path and dataset release the question shape
+ * and the judging template were transcribed from. The pin names the
+ * upstream path, not an immutable snapshot - the constant in this tree
+ * is the canonical copy. The full dataset is downloaded from this
+ * release by operators - never at run time.
  */
 export const LONGMEMEVAL_PROMPT_REVISION =
   "github.com/xiaowu0162/LongMemEval, data/longmemeval_s.py (arXiv:2410.10813)";
@@ -72,7 +74,10 @@ export const LONGMEMEVAL_JUDGE_SYSTEM_PROMPT = Object.freeze(
 /**
  * Official answer-judging prompt, per-question half. The placeholders
  * are the judge payload's own field names, so a judge command renders
- * the official prompt straight from the stdin JSON.
+ * the official prompt straight from the stdin JSON. Gold evidence is
+ * carried as the gold sessions' ids (the payload stays bounded); a
+ * judge that wants their conversation text resolves the ids from the
+ * dataset it already has.
  */
 export const LONGMEMEVAL_JUDGE_QUESTION_TEMPLATE = Object.freeze(
   "Question: {question}\n" +
@@ -370,6 +375,21 @@ export function longMemEvalToBenchFixture(dataset: LongMemEvalDataset): LongMemE
     });
   }
   const orderedIds = [...sessions.keys()].toSorted();
+  // Distinct session ids can sanitize to one note path (a/b and a-b);
+  // the evidence of both would silently merge into one note, so the
+  // collision is a named parse error instead.
+  const claimedPaths = new Map<string, string>();
+  for (const id of orderedIds) {
+    const path = sessionNotePath(id);
+    const owner = claimedPaths.get(path);
+    if (owner !== undefined) {
+      throw new LongMemEvalParseError(
+        `LongMemEval dataset: session ids ${JSON.stringify(owner)} and ${JSON.stringify(id)} ` +
+          `sanitize to the same note path ${JSON.stringify(path)}; the evidence of both would merge`,
+      );
+    }
+    claimedPaths.set(path, id);
+  }
   const notes = orderedIds.map((id) => ({
     path: sessionNotePath(id),
     body: sessionNoteBody(id, sessions.get(id)!.turns),
