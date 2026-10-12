@@ -10,7 +10,9 @@ import {
   type RecallResultSet,
   type RecallRetriever,
 } from "../../../src/core/brain/recall-inject.ts";
+import { RECALL_CHANNEL } from "../../../src/core/brain/recall-telemetry.ts";
 import { UNTRUSTED_SOURCE_TAG } from "../../../src/core/brain/untrusted-source.ts";
+import { computeSurfacingKey } from "../../../src/core/search/surfacing-key.ts";
 
 function candidate(overrides: Partial<RecallCandidate> = {}): RecallCandidate {
   return {
@@ -504,5 +506,91 @@ describe("recallInjectNoteKey", () => {
     const a = recallInjectNoteKey({ path: "a.md", startLine: 1, endLine: 2 });
     const b = recallInjectNoteKey({ path: "a.md", startLine: 3, endLine: 4 });
     expect(a).not.toBe(b);
+  });
+});
+
+// ----- shared admission through the surfacing key (t_107a3249, lane C) -------
+
+describe("decideRecallInject grades admission through the shared surfacing key", () => {
+  // The hook channel's transport, and the calculator the gate grades with.
+  const hook = RECALL_CHANNEL.hook;
+
+  /**
+   * A deterministic fixture corpus of measurable qualities, spanning the
+   * tier boundaries the hook's admission ladder is pinned to.
+   */
+  const corpus: ReadonlyArray<number | null> = [
+    null,
+    0,
+    RECALL_INJECT_CONFIDENCE_FLOOR - 0.05,
+    RECALL_INJECT_CONFIDENCE_FLOOR - Number.MIN_VALUE,
+    RECALL_INJECT_CONFIDENCE_FLOOR,
+    RECALL_INJECT_CONFIDENCE_FLOOR + 0.05,
+    1,
+  ];
+
+  async function decideFor(quality: number | null, floor?: number) {
+    // Built directly rather than through `retrieverOf`, whose default
+    // coverage would mask a reported `null`.
+    return decideRecallInject(
+      "receipts",
+      async () => ({ candidates: [candidate()], total: 1, idfWeightedCoverage: quality }),
+      { ...(floor !== undefined ? { confidenceFloor: floor } : {}) },
+    );
+  }
+
+  test("tier-boundary decisions match the shared calculator on the fixture corpus exactly", async () => {
+    for (const quality of corpus) {
+      const admission = computeSurfacingKey({ matchQuality: quality, channel: hook });
+      const decision = await decideFor(quality);
+      expect(decision.kind).toBe(admission.admit ? "inject" : "abstain");
+      if (!admission.admit) {
+        // The abstain reason IS the calculator's tier: one vocabulary, so
+        // the hook and the gate surface the same refusal on both channels.
+        expect(decision).toMatchObject({
+          kind: "abstain",
+          reason: admission.reason,
+          matchQuality: quality,
+        });
+      }
+    }
+  });
+
+  test("a boundary quality admits: the floor abstains strictly below", async () => {
+    const atFloor = await decideFor(RECALL_INJECT_CONFIDENCE_FLOOR);
+    expect(atFloor.kind).toBe("inject");
+    const justBelow = await decideFor(RECALL_INJECT_CONFIDENCE_FLOOR - 0.000001);
+    expect(justBelow).toMatchObject({ kind: "abstain", reason: "below_floor" });
+  });
+
+  test("an unmeasurable report abstains with the vocabulary unchanged", async () => {
+    const decision = await decideFor(null);
+    expect(decision).toMatchObject({
+      kind: "abstain",
+      reason: "unmeasurable_quality",
+      matchQuality: null,
+    });
+  });
+
+  test("the caller-supplied floor rides the calculator's override, not the channel constant", async () => {
+    const mid = 0.5;
+    expect(computeSurfacingKey({ matchQuality: mid, channel: hook, floor: 0.4 }).admit).toBe(true);
+    const decision = await decideFor(mid, 0.4);
+    expect(decision.kind).toBe("inject");
+    const raised = await decideFor(mid, 0.6);
+    expect(raised).toMatchObject({ kind: "abstain", reason: "below_floor", matchQuality: mid });
+  });
+
+  test("a retriever reporting a malformed quality surfaces an explicit error decision", async () => {
+    // The decision core never throws; the calculator's named refusal is
+    // surfaced as a `retriever_failed` error carrying it, never folded
+    // into an abstain or an admit.
+    const decision = await decideFor(Number.NaN);
+    expect(decision.kind).toBe("error");
+    expect(decision).toMatchObject({
+      kind: "error",
+      fault: "retriever_failed",
+      detail: expect.stringContaining("matchQuality must be a finite number in [0,1]"),
+    });
   });
 });

@@ -20,6 +20,12 @@
 
 import { deriveRecallHint, type RecallHintInput } from "../search/recall-hint.ts";
 import { searchAcrossVaults } from "../search/cross-vault.ts";
+import {
+  computeSurfacingKey,
+  SURFACING_ADMISSION_FLOORS,
+  type SurfacingKeyDecision,
+} from "../search/surfacing-key.ts";
+import { RECALL_CHANNEL } from "./recall-telemetry.ts";
 import type { RetrievalDegradationCode } from "../search/retrieval-trail.ts";
 import type { RecallSource } from "./portability/recall-sources.ts";
 import { LOCAL_ORIGIN } from "./portability/origins.ts";
@@ -62,8 +68,13 @@ export const RECALL_INJECT_TIME_BUDGET_MS = 2_500;
  * about a third of what was asked, which sits below
  * `COMPLETENESS_PARTIAL_THRESHOLD` (0.4) - this gate filters noise, it
  * does not demand a complete retrieval.
+ *
+ * Owned by `SURFACING_ADMISSION_FLOORS.hook` (`surfacing-key.ts`), the
+ * shared calculator's hook member, so the gate's diagnostic grading and
+ * this floor cannot drift apart; this export keeps the name and value
+ * every caller and config test pins.
  */
-export const RECALL_INJECT_CONFIDENCE_FLOOR = 0.35;
+export const RECALL_INJECT_CONFIDENCE_FLOOR = SURFACING_ADMISSION_FLOORS.hook;
 
 /** One relevance-matched note, narrowed to exactly what the brief needs. */
 export interface RecallCandidate {
@@ -520,20 +531,31 @@ async function decideOverRetrieval(
   // what the brief's bullets show and what the audit line records - it is
   // simply no longer allowed to decide anything.
   //
+  // Admission is the SHARED calculator (`surfacing-key.ts`), not a
+  // private floor comparison: the gate channel grades the same quality
+  // against the same bound, so a boundary decision is identical on every
+  // channel. The floor override rides the calculator's `floor` parameter.
+  //
   // No quality means no comparison. Abstaining is the explicit choice
-  // this branch makes rather than a fallback: the alternative was the
-  // producer's old `1`, which put every unweighable prompt above every
-  // floor and injected on it.
-  if (matchQuality === null) {
+  // the `unmeasurable_quality` tier makes rather than a fallback: the
+  // alternative was the producer's old `1`, which put every unweighable
+  // prompt above every floor and injected on it.
+  let admission: SurfacingKeyDecision;
+  try {
+    admission = computeSurfacingKey({ matchQuality, channel: RECALL_CHANNEL.hook, floor });
+  } catch (exc) {
+    // A retriever that reports NaN where the contract says a [0,1] number
+    // or `null` has broken its report contract - an explicit error
+    // decision, never a silent admit.
+    return retrievalError(exc);
+  }
+  if (!admission.admit) {
     return Object.freeze({
       kind: "abstain",
-      reason: "unmeasurable_quality",
+      reason: admission.reason,
       topScore,
       matchQuality,
     });
-  }
-  if (matchQuality < floor) {
-    return Object.freeze({ kind: "abstain", reason: "below_floor", topScore, matchQuality });
   }
 
   // Dedupe sits after the floor, which read the unfiltered retrieval, and
@@ -617,8 +639,12 @@ function judgeSlice(spec: RecallSliceSpec, set: RecallResultSet, floor: number):
   const topScore = ranked[0]?.score ?? 0;
   const base = { spec, ranked, total: set.total, topScore, matchQuality };
   if (ranked.length === 0) return { ...base, outcome: "no_matches" };
-  if (matchQuality === null) return { ...base, outcome: "unmeasurable_quality" };
-  if (matchQuality < floor) return { ...base, outcome: "below_floor" };
+  // The same shared admission calculator the single-pool path uses, so a
+  // slice and a whole-pool verdict agree at the tier boundaries. A
+  // malformed quality report here breaks the whole decision, exactly as a
+  // broken retrieval does.
+  const admission = computeSurfacingKey({ matchQuality, channel: RECALL_CHANNEL.hook, floor });
+  if (!admission.admit) return { ...base, outcome: admission.reason };
   return { ...base, outcome: "inject" };
 }
 
