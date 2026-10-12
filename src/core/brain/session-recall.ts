@@ -594,6 +594,15 @@ export function coverageSessionRecall(
     matches.map((match, index) => ({ item: match, text: serialized[index]! })),
     { maxTotalChars: input.charBudget },
   );
+  // Post-budget floor enforcement: verify what the real selection kept,
+  // never what the pre-check predicted about it.
+  assertFloorSelectionRealized(
+    topics,
+    matches,
+    serialized,
+    input.charBudget,
+    budgeted.kept.map((entry) => entry.item),
+  );
   const kept = budgeted.kept
     .map((entry) => entry.item)
     .toSorted((left, right) => compareRecords(left.record, right.record));
@@ -729,13 +738,15 @@ function seededFacetsFirst(facets: ReadonlyArray<ThreadFacet>, entityKey: string
 }
 
 /**
- * The floor-violation guard (t_2c2a883c, design decision 10): the
- * floor-weighted selection - each of the first
+ * The floor-violation guard (t_2c2a883c, design decision 10), pre-check
+ * fast path: the floor-weighted selection - each of the first
  * `min(realized topics, {@link TOPIC_BUDGET_FLOOR})` topics'
- * highest-ranked turn - must fit the character budget. Below it, the
- * typed {@link SessionCoverageInfeasibleError} is raised naming what to
- * retry with; above it, {@link applyCharBudget}'s ordinary drops land in
- * the diagnostics, never silent.
+ * highest-ranked turn - is priced by {@link floorRequirement}, and a
+ * budget below that rank-ordered requirement raises the typed
+ * {@link SessionCoverageInfeasibleError} before any selection work.
+ * {@link assertFloorSelectionRealized} re-checks the outcome of the real
+ * selection, so a floor topic crowded out by higher-ranked turns can
+ * never degrade silently.
  */
 function assertFloorSelectionFits(
   topics: ReadonlyArray<ThreadFacet>,
@@ -743,22 +754,10 @@ function assertFloorSelectionFits(
   serialized: ReadonlyArray<string>,
   charBudget: number,
 ): void {
-  // Topic key -> rank index of its highest-ranked matching turn.
-  const topRank = new Map<string, number>();
-  matches.forEach((match, index) => {
-    for (const key of match.topics) if (!topRank.has(key)) topRank.set(key, index);
-  });
-  const floorTopics = Math.min(topics.length, TOPIC_BUDGET_FLOOR);
-  let requiredChars = 0;
-  let keptTopics = 0;
-  for (const topic of topics.slice(0, floorTopics)) {
-    const rank = topRank.get(topic.key);
-    if (rank === undefined) continue;
-    const chars = serialized[rank]!.length;
-    requiredChars += chars;
-    if (chars <= charBudget) keptTopics += 1;
-  }
+  const { topRanks, requiredChars } = floorRequirement(topics, matches, serialized);
   if (requiredChars <= charBudget) return;
+  let keptTopics = 0;
+  for (const rank of topRanks) if (serialized[rank]!.length <= charBudget) keptTopics += 1;
   throw new SessionCoverageInfeasibleError({
     topicFloor: TOPIC_BUDGET_FLOOR,
     requestedTopics: topics.length,
@@ -766,6 +765,79 @@ function assertFloorSelectionFits(
     requiredChars,
     charBudget,
   });
+}
+
+/**
+ * The floor's post-budget enforcement (t_2c2a883c, design decision 10):
+ * after the real {@link applyCharBudget} selection, every floor topic
+ * must have realized its minimum - its highest-ranked turn kept. The
+ * greedy rank-order pass can crowd a floor topic's top turn out even
+ * when the floor's own chars fit (a higher-ranked turn of another topic
+ * spends the budget first), so the outcome is verified, not assumed: a
+ * crowded-out floor raises the typed {@link SessionCoverageInfeasibleError},
+ * never a silent zero-evidence topic.
+ */
+function assertFloorSelectionRealized(
+  topics: ReadonlyArray<ThreadFacet>,
+  matches: ReadonlyArray<TopicMatch>,
+  serialized: ReadonlyArray<string>,
+  charBudget: number,
+  kept: ReadonlyArray<TopicMatch>,
+): void {
+  const { topRanks, requiredChars } = floorRequirement(topics, matches, serialized);
+  if (topRanks.length === 0) return;
+  const keptIds = new Set(kept.map((match) => match.record.id));
+  const realized = topRanks.filter((rank) => keptIds.has(matches[rank]!.record.id));
+  if (realized.length === topRanks.length) return;
+  throw new SessionCoverageInfeasibleError({
+    topicFloor: TOPIC_BUDGET_FLOOR,
+    requestedTopics: topics.length,
+    keptTopics: realized.length,
+    requiredChars,
+    charBudget,
+  });
+}
+
+interface FloorRequirement {
+  /**
+   * Rank index of each floor topic's highest-ranked matching turn.
+   * A floor topic with no matching turn cannot contribute to the floor.
+   */
+  readonly topRanks: ReadonlyArray<number>;
+  /**
+   * Characters the rank-ordered selection consumes through the deepest
+   * floor-top rank: the budget that GUARANTEES every floor topic's top
+   * turn is kept (every prefix of it fits, and the floor's own top-turn
+   * sum does not - a higher-ranked turn of another topic can spend the
+   * budget before a floor topic's top turn is ever reached). This is the
+   * honest retry bound both floor guards price.
+   */
+  readonly requiredChars: number;
+}
+
+/** The priced requirement both floor guards share (never disagree). */
+function floorRequirement(
+  topics: ReadonlyArray<ThreadFacet>,
+  matches: ReadonlyArray<TopicMatch>,
+  serialized: ReadonlyArray<string>,
+): FloorRequirement {
+  // Topic key -> rank index of its highest-ranked matching turn.
+  const topRank = new Map<string, number>();
+  matches.forEach((match, index) => {
+    for (const key of match.topics) if (!topRank.has(key)) topRank.set(key, index);
+  });
+  const floorTopics = Math.min(topics.length, TOPIC_BUDGET_FLOOR);
+  const topRanks: number[] = [];
+  for (const topic of topics.slice(0, floorTopics)) {
+    const rank = topRank.get(topic.key);
+    if (rank !== undefined) topRanks.push(rank);
+  }
+  let requiredChars = 0;
+  if (topRanks.length > 0) {
+    const deepest = Math.max(...topRanks);
+    for (let index = 0; index <= deepest; index += 1) requiredChars += serialized[index]!.length;
+  }
+  return { topRanks, requiredChars };
 }
 
 /**

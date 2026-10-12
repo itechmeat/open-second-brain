@@ -23,6 +23,7 @@ import type { SessionTurn } from "../../../src/core/brain/sessions/types.ts";
 import {
   coverageSessionRecall,
   importSessionRecall,
+  listSessionRawTurns,
   searchSessionRecall,
   SessionCoverageEntityUnknownError,
   SessionCoverageInfeasibleError,
@@ -370,6 +371,56 @@ describe("typed floor-violation infeasibility", () => {
     expect(probe!.message).toContain(`required chars ${probe!.requiredChars}`);
     expect(probe!.message).toContain(`kept topics ${probe!.keptTopics}`);
     expect(probe!.message).toContain(`requested topics ${probe!.requestedTopics}`);
+  });
+
+  test("a floor topic crowded out by higher-ranked turns raises, never a silent zero-evidence floor", () => {
+    // Two depth-1 clusters: {t1, t2} serialized long, {t3, t4} short. The
+    // selection is rank-ordered, so the long cluster's turns can spend the
+    // whole budget before the short cluster's top turn is reached - the
+    // floor guard must price that rank-ordered requirement, not the sum
+    // of the floor topics' own top turns, or the short floor topic keeps
+    // zero evidence silently.
+    const longText = "x".repeat(2400);
+    importSessionRecall(vault, {
+      sessionId: "crowd-seg",
+      turns: [
+        turn("t1", "user", longText, 1),
+        turn("t2", "assistant", longText, 2),
+        turn("t3", "user", "short floor-topic evidence", 3),
+        turn("t4", "assistant", "more short floor-topic evidence", 4),
+      ],
+      summaryGroupSize: 2,
+      createdAt: "2026-07-04T09:00:00.000Z",
+    });
+    const serialized = listSessionRawTurns(vault, "crowd-seg").map((t) => JSON.stringify(t));
+    // The budget holds the long cluster's turns exactly plus one char:
+    // the greedy rank-order pass keeps t1 and t2 and drops t3 and t4.
+    const budget = serialized[0]!.length + serialized[1]!.length + 1;
+    // The floor topics' own top turns (the pre-check's old quantity) fit.
+    expect(serialized[0]!.length + serialized[2]!.length).toBeLessThanOrEqual(budget);
+
+    let probe: SessionCoverageInfeasibleError | null = null;
+    try {
+      coverageSessionRecall(vault, { sessionId: "crowd-seg", charBudget: budget });
+    } catch (err) {
+      probe = err as SessionCoverageInfeasibleError;
+    }
+    expect(probe).not.toBeNull();
+    expect(probe).toBeInstanceOf(SessionCoverageInfeasibleError);
+    // requiredChars prices the rank-ordered selection through the deepest
+    // floor-top rank: t1, t2, then the short cluster's top turn t3.
+    expect(probe!.requiredChars).toBe(
+      serialized[0]!.length + serialized[1]!.length + serialized[2]!.length,
+    );
+    expect(probe!.charBudget).toBe(budget);
+    // The bound is honest: at it the floor topic keeps its top turn, and
+    // the turn ranked behind it is still dropped, visibly.
+    const at = coverageSessionRecall(vault, {
+      sessionId: "crowd-seg",
+      charBudget: probe!.requiredChars,
+    });
+    expect(at.turns.map((t) => t.turn_id)).toEqual(["t1", "t2", "t3"]);
+    expect(at.diagnostics.dropped_turn_ids).toEqual(["t4"]);
   });
 
   test("requiredChars is the exact retry bound: at it, no error; one below, the error", () => {
