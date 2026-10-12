@@ -266,6 +266,63 @@ describe("iterative round driver over a seeded vault", () => {
     expect(on.iterative).toBeUndefined();
     expect(pathsMissing(on, COMMON)).toBe(true);
   });
+
+  test("a commit whose clock died before the loop block is refused by name", async () => {
+    await seed();
+    const config = {
+      ...makeConfig({ vault, dbPath, maxHops: 0, mmrLambda: 1, twoPassEnabled: false }),
+      hybridDeadlineMs: 5_000,
+    } as ResolvedSearchConfig;
+    const iterative = withIterative(config);
+    // Ghost terms hold the coverage below the completeness threshold, so
+    // the plan leg pauses with a token instead of finishing.
+    const query = `chandelier handoff wyrmshade velkriss`;
+    const structured: StructuredRecallQueryDocument = Object.freeze({
+      intent: null,
+      lex: Object.freeze({
+        include: Object.freeze(["chandelier", "handoff"]) as ReadonlyArray<string>,
+        exclude: Object.freeze([]) as ReadonlyArray<string>,
+      }),
+      vec: Object.freeze(["chandelier handoff"]) as ReadonlyArray<string>,
+      hyde: Object.freeze([]) as ReadonlyArray<string>,
+    });
+    const plan = await search(iterative, { query, structuredQuery: structured, iterative: true });
+    const pause = plan.iterative;
+    if (pause === undefined || pause.phase !== "needs-llm-step") {
+      throw new Error("expected a decider pause");
+    }
+
+    // The request clock cannot be pinned (a frozen Date.now() never
+    // expires the deadline it just minted), so the clock is stepped
+    // instead: the request-resolution read keeps the live instant - the
+    // deadline is created with the full 5 s budget still ahead - and
+    // every later read in the same call reports the budget long spent.
+    // The commit then reaches the block with a dead clock, exactly the
+    // state a slow caller's commit lands in.
+    const realNow = Date.now;
+    const base = realNow();
+    let reads = 0;
+    Date.now = () => (reads++ === 0 ? base : base + 60_000);
+    let err: unknown = null;
+    try {
+      await search(iterative, {
+        query,
+        structuredQuery: structured,
+        iterative: true,
+        iterativeToken: pause.token,
+        iterativePayload: { evidence: [0], subQueries: [query] },
+      });
+    } catch (e) {
+      err = e;
+    } finally {
+      Date.now = realNow;
+    }
+    expect(Date.now).toBe(realNow);
+    // Silence here would return a plain answer the caller would read as
+    // its commit's outcome; the refusal is the named one.
+    expect(err).toBeInstanceOf(SearchError);
+    expect((err as SearchError).message).toContain("no decider round is pending");
+  });
 });
 
 function pathsMissing(
