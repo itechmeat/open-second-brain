@@ -785,6 +785,79 @@ describe("answer-quote-check hook - the enforce trail", () => {
   });
 });
 
+describe("answer-quote-check hook - bounded scanning of hostile text", () => {
+  test("a base64 blob beside a quoted span cannot stall the check", async () => {
+    writeConfig("shadow");
+    writeNote("Brain/notes/restaking.md", "Restaking reuses staked capital.\n");
+    // 3000 characters of base64-shaped text: 75 slash runs and no `.md`
+    // anywhere, so a pointer regex whose repeated class could match the
+    // separator segmented every run 2^(N-1) ways on this failing scan and
+    // stalled the Stop hook past its 10 s timeout (the CodeQL high).
+    const blob = `${"A".repeat(39)}/`.repeat(75);
+    expect(blob.length).toBe(3000);
+    writeTranscript([
+      ccUser("what does the config say?"),
+      ccAssistant(
+        `Config dump ${blob} - per Brain/notes/restaking.md the note claims "secures pooled validators".`,
+      ),
+    ]);
+    const started = Date.now();
+    const run = await runHook();
+    const elapsed = Date.now() - started;
+    expect(run.exit).toBe(0);
+    expect(run.stderr).toBe("");
+    // Generous enough for slow CI, far under the pre-fix stall.
+    expect(elapsed).toBeLessThan(5000);
+    // The check still ran to its verdict: the citation resolved and the
+    // span was reported, not dropped by a scan that returned nothing.
+    const found = annotations(run);
+    expect(found.length).toBe(1);
+    expect(found[0]).toContain("[not-in-note]");
+    expect(found[0]).toContain("secures pooled validators");
+  });
+
+  test("a reground part holding a deep path completes when every phase is off", async () => {
+    writeConfig("off");
+    expect(
+      beginInjectionEpoch(vault, SESSION, {
+        epoch: "startup:1",
+        emittedPaths: [],
+        regroundParts: [`continue reading ${"deep/".repeat(40)}note.md for the rest`],
+        partCeilingChars: 9000,
+      }),
+    ).toBe(true);
+    writeTranscript([ccUser("summarize"), ccAssistant('It "reuses staked capital", clearly.')]);
+    const started = Date.now();
+    const run = await runHook();
+    const elapsed = Date.now() - started;
+    expect(run.exit).toBe(0);
+    expect(run.stderr).toBe("");
+    expect(elapsed).toBeLessThan(5000);
+    expect(annotations(run)).toEqual([]);
+  });
+
+  test("a deep path does not hide a citation that follows it", async () => {
+    writeConfig("shadow");
+    writeNote("Brain/notes/restaking.md", "Restaking reuses staked capital.\n");
+    // No ledger: if the pointer scan missed the real citation behind the
+    // deep path, the span would fall through to the empty pool and read
+    // note-unavailable instead of not-in-note.
+    writeTranscript([
+      ccUser("summarize"),
+      ccAssistant(
+        `Per ${"a/b/".repeat(30)}deep.md, and per Brain/notes/restaking.md, the answer "secures pooled validators" holds.`,
+      ),
+    ]);
+    const run = await runHook();
+    expect(run.exit).toBe(0);
+    expect(run.stderr).toBe("");
+    const found = annotations(run);
+    expect(found.length).toBe(1);
+    expect(found[0]).toContain("[not-in-note]");
+    expect(found[0]).not.toContain("[note-unavailable]");
+  });
+});
+
 describe("answer-quote-check hook - fail-open arms", () => {
   test("an unreadable transcript exits 0 with exactly one stderr audit line", async () => {
     writeConfig("shadow");

@@ -158,11 +158,22 @@ interface CitationMark {
  * way every recall pointer renders it (`Brain/notes/x.md:L3-L9`). Requires
  * at least one directory separator, so a bare word before `.md` is prose,
  * not a pointer.
+ *
+ * The repeated class MUST exclude `/`. A class that can match the
+ * separator itself segments a run of N slashes 2^(N-1) ways, and the scan
+ * a hook feeds it routinely fails (a base64 blob in an answer carries
+ * hundreds of slashes and no `.md`), so the engine walks every
+ * segmentation and the Stop hook stalls past its 10 s timeout - the
+ * CodeQL high on this file. With `/` excluded the scan is linear in the
+ * text; the one reading that changes is `a//b/c.md`, now `b/c.md`.
  */
-const PATH_POINTER_RE = /(?:[^\s:|[\]()#]+\/)+[^\s:|[\]()#]*\.md(?::L(\d+)-L(\d+))?/g;
+const PATH_POINTER_RE = /(?:[^\s:|[\]()#/]+\/)+[^\s:|[\]()#/]*\.md(?::L(\d+)-L(\d+))?/g;
 
-/** A `.md` path token, for scanning ledger member strings that are prose. */
-const PATH_TOKEN_RE = /(?:[^\s:|[\]()#]+\/)+[^\s:|[\]()#]*\.md/g;
+/**
+ * A `.md` path token, for scanning ledger member strings that are prose.
+ * Excludes `/` for the same reason as {@link PATH_POINTER_RE}.
+ */
+const PATH_TOKEN_RE = /(?:[^\s:|[\]()#/]+\/)+[^\s:|[\]()#/]*\.md/g;
 
 // ----- transcript tail -----------------------------------------------------
 
@@ -667,6 +678,10 @@ async function main(): Promise<void> {
     active: resolveAnswerQuoteCheckActive(configPath),
     subagent: resolveAnswerQuoteCheckSubagent(configPath),
   };
+  // Every phase `off` reports nothing and enforces nothing, so the run
+  // pays no ledger read at all: the injection ledgers - whose member
+  // strings are prose that gets path-scanned - stay unopened.
+  if (ANSWER_QUOTE_CHECK_PHASES.every((phase) => modes[phase] === "off")) return;
   const ledgerNotes: Readonly<Record<AnswerQuoteCheckPhase, ReturnType<typeof ledgerCandidates>>> =
     {
       recall: ledgerCandidates(vault, sessionId, "recall", now),
@@ -697,6 +712,9 @@ async function main(): Promise<void> {
   const findings: Array<AnswerQuoteSpanFinding> = [];
   let checked = 0;
   outer: for (const [messageIndex, message] of messages.entries()) {
+    // Before the scans of this message, not only before its spans: the
+    // span and path scans themselves cost the budget they precede.
+    if (Date.now() > deadline) break outer;
     const scan = findQuoteSpans(message);
     if (scan.spans.length === 0) continue;
     const marks = citationMarks(message);
