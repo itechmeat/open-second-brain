@@ -6,7 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -17,6 +17,7 @@ import {
   createBenchRun,
   loadBenchRun,
 } from "../../../src/core/bench/run-store.ts";
+import type { BenchPinnedKnobs } from "../../../src/core/bench/types.ts";
 
 let runsDir: string;
 
@@ -84,5 +85,57 @@ describe("bench run store", () => {
   test("unknown run ids and path-escaping ids are rejected", () => {
     expect(() => loadBenchRun(runsDir, "run-nope")).toThrow();
     expect(() => loadBenchRun(runsDir, "../escape")).toThrow();
+  });
+
+  test("two runs with different knob pins get different run ids", () => {
+    const pinA: BenchPinnedKnobs = { semantic: { enabled: false } };
+    const pinB: BenchPinnedKnobs = { semantic: { enabled: false }, keywordWeight: 0.6 };
+    const now = new Date("2026-06-03T12:00:00Z");
+    const a = createBenchRun(runsDir, FIXTURE, { now, pinnedKnobs: pinA });
+    const b = createBenchRun(runsDir, FIXTURE, { now, pinnedKnobs: pinB });
+    // Same fixture, same second, different pin: the ids must not collide.
+    expect(a.runId).not.toBe(b.runId);
+  });
+
+  test("the checkpoint carries the pinned knobs and the identity hash", () => {
+    const pin: BenchPinnedKnobs = { semantic: { enabled: false }, keywordWeight: 0.6 };
+    const run = createBenchRun(runsDir, FIXTURE, {
+      now: new Date("2026-06-03T12:00:00Z"),
+      pinnedKnobs: pin,
+    });
+    expect(run.checkpoint.pinned_knobs).toEqual(pin);
+    expect(run.checkpoint.knobs_hash).toBeDefined();
+    const reloaded = loadBenchRun(runsDir, run.runId);
+    expect(reloaded.checkpoint.pinned_knobs).toEqual(pin);
+    expect(reloaded.checkpoint.knobs_hash).toBe(run.checkpoint.knobs_hash);
+  });
+
+  test("resume with the same pin passes the guard, a changed pin fails it", () => {
+    const pin: BenchPinnedKnobs = { semantic: { enabled: false } };
+    const run = createBenchRun(runsDir, FIXTURE, {
+      now: new Date("2026-06-03T12:00:00Z"),
+      pinnedKnobs: pin,
+    });
+    const same = loadBenchRun(runsDir, run.runId, { expectFixture: FIXTURE, pinnedKnobs: pin });
+    expect(same.runId).toBe(run.runId);
+    expect(() =>
+      loadBenchRun(runsDir, run.runId, {
+        expectFixture: FIXTURE,
+        pinnedKnobs: { semantic: { enabled: false }, keywordWeight: 0.5 },
+      }),
+    ).toThrow(/knob pin mismatch/);
+  });
+
+  test("a checkpoint that predates knob pinning fails resume loudly", () => {
+    const run = createBenchRun(runsDir, FIXTURE, { now: new Date("2026-06-03T12:00:00Z") });
+    // What an in-flight checkpoint written before knob pinning looks like.
+    const path = join(run.runDir, "checkpoint.json");
+    const legacy = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    delete legacy["pinned_knobs"];
+    delete legacy["knobs_hash"];
+    writeFileSync(path, `${JSON.stringify(legacy, null, 2)}\n`, "utf8");
+    expect(() => loadBenchRun(runsDir, run.runId, { expectFixture: FIXTURE })).toThrow(
+      /predates knob pinning/,
+    );
   });
 });

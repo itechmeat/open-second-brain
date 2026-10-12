@@ -13,7 +13,11 @@ import { join } from "node:path";
 
 import { parseBenchFixture } from "../../../src/core/bench/fixture.ts";
 import { benchSearchConfig, runMemoryBench } from "../../../src/core/bench/phases.ts";
-import { BENCH_REPORT_SCHEMA } from "../../../src/core/bench/types.ts";
+import {
+  BENCH_REPORT_SCHEMA,
+  DEFAULT_BENCH_KNOB_PIN,
+  type BenchPinnedKnobs,
+} from "../../../src/core/bench/types.ts";
 
 let runsDir: string;
 
@@ -189,5 +193,59 @@ describe("runMemoryBench", () => {
     await expect(
       runMemoryBench({ fixture: changed, runsDir, resume: first.run_id }),
     ).rejects.toThrow("hash");
+  }, 30_000);
+
+  test("the default knob pin equals today's hardcoded semantic-off override", () => {
+    expect(DEFAULT_BENCH_KNOB_PIN).toEqual({ semantic: { enabled: false } });
+  });
+
+  test("pinned knobs are applied last and win over env and config", () => {
+    const pin: BenchPinnedKnobs = {
+      keywordWeight: 0.6,
+      semantic: { enabled: false, provider: "local" },
+    };
+    const config = benchSearchConfig(runsDir, pin);
+    expect(config.keywordWeight).toBe(0.6);
+    expect(config.semantic.enabled).toBe(false);
+    expect(config.semantic.provider).toBe("local");
+  });
+
+  test("two runs with different knob pins get different run ids", async () => {
+    const first = await runMemoryBench({
+      fixture: FIXTURE,
+      runsDir,
+      pinnedKnobs: { semantic: { enabled: false }, keywordWeight: 0.6 },
+    });
+    const second = await runMemoryBench({
+      fixture: FIXTURE,
+      runsDir,
+      pinnedKnobs: { semantic: { enabled: false }, keywordWeight: 0.5 },
+    });
+    expect(first.run_id).not.toBe(second.run_id);
+  }, 30_000);
+
+  test("resume with a changed knob pin fails fast on the identity guard", async () => {
+    const first = await runMemoryBench({ fixture: FIXTURE, runsDir });
+    await expect(
+      runMemoryBench({
+        fixture: FIXTURE,
+        runsDir,
+        resume: first.run_id,
+        pinnedKnobs: { semantic: { enabled: false }, keywordWeight: 0.6 },
+      }),
+    ).rejects.toThrow(/knob pin mismatch/);
+  }, 30_000);
+
+  test("resume with the same explicit pin reuses the run", async () => {
+    const pin: BenchPinnedKnobs = { semantic: { enabled: false }, keywordWeight: 0.6 };
+    const first = await runMemoryBench({ fixture: FIXTURE, runsDir, pinnedKnobs: pin });
+    const resumed = await runMemoryBench({
+      fixture: FIXTURE,
+      runsDir,
+      resume: first.run_id,
+      pinnedKnobs: pin,
+    });
+    expect(resumed.run_id).toBe(first.run_id);
+    expect(resumed.quality).toEqual(first.quality);
   }, 30_000);
 });

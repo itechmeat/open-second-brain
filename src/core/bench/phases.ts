@@ -48,8 +48,10 @@ import {
 } from "./run-store.ts";
 import {
   BENCH_REPORT_SCHEMA,
+  DEFAULT_BENCH_KNOB_PIN,
   RETRIEVAL_CATEGORIES,
   type BenchFixture,
+  type BenchPinnedKnobs,
   type BenchQuestion,
   type BenchQuestionResult,
   type BenchReport,
@@ -76,6 +78,12 @@ export interface BenchRunOptions {
    * run's knob pin enables the feature too.
    */
   readonly capabilities?: BenchSuiteCapabilities;
+  /**
+   * Search-configuration knobs pinned for this run, applied last via
+   * `resolveSearchConfig` and folded into the run identity (the
+   * checkpoint hash). Absent means {@link DEFAULT_BENCH_KNOB_PIN}.
+   */
+  readonly pinnedKnobs?: BenchPinnedKnobs;
   /** Resume an existing run id; validates the fixture hash first. */
   readonly resume?: string;
   /** Optional external judge command (config bench_judge_cmd). */
@@ -130,17 +138,52 @@ interface RetrievedQuestion {
  * provider it does not recognise makes this throw. That is a loud, named
  * failure rather than a silently different bench.
  */
-export function benchSearchConfig(vault: string): ReturnType<typeof resolveSearchConfig> {
-  return resolveSearchConfig({ vault, overrides: { semantic: { enabled: false } } });
+/**
+ * The search configuration every phase uses, driven by the run's knob
+ * pin.
+ *
+ * `resolveSearchConfig` still reads `process.env`, and overrides are
+ * applied last and win, so the pin is what makes the harness's network-
+ * freedom an invariant instead of an inherited accident. The default pin
+ * ({@link DEFAULT_BENCH_KNOB_PIN}) is the hardcoded semantic-off override
+ * this function always applied - a named value now, so the default run
+ * identity is deterministic and locomo report numbers stay identical. A
+ * suite that declares the embeddings capability may pin the semantic
+ * lane on (the deterministic local provider keeps the run network-free).
+ *
+ * Exported so the invariant is assertable directly. It has to be: a test
+ * that sets the env vars and compares two reports passes whether or not
+ * the override is there, because reaching the embedding lane also needs
+ * an index built with embeddings, which the default harness does not
+ * build. The resolved config is where the difference is real, so that is
+ * what the test reads.
+ *
+ * One residual, named rather than implied: `resolveSearchConfig` parses
+ * the provider name BEFORE merging overrides, so an env var naming a
+ * provider it does not recognise makes this throw. That is a loud, named
+ * failure rather than a silently different bench.
+ */
+export function benchSearchConfig(
+  vault: string,
+  pinnedKnobs: BenchPinnedKnobs = DEFAULT_BENCH_KNOB_PIN,
+): ReturnType<typeof resolveSearchConfig> {
+  return resolveSearchConfig({ vault, overrides: pinnedKnobs });
 }
 
 export async function runMemoryBench(opts: BenchRunOptions): Promise<BenchReport> {
+  const pinnedKnobs = opts.pinnedKnobs ?? DEFAULT_BENCH_KNOB_PIN;
   const run: BenchRunHandle =
     opts.resume !== undefined
-      ? loadBenchRun(opts.runsDir, opts.resume, { expectFixture: opts.fixture })
-      : createBenchRun(opts.runsDir, opts.fixture, opts.now ? { now: opts.now } : {});
+      ? loadBenchRun(opts.runsDir, opts.resume, { expectFixture: opts.fixture, pinnedKnobs })
+      : createBenchRun(opts.runsDir, opts.fixture, {
+          ...(opts.now !== undefined ? { now: opts.now } : {}),
+          pinnedKnobs,
+        });
   let checkpoint = run.checkpoint;
   const vault = benchVaultDir(run.runDir);
+  // One resolved config for every phase: the pin cannot drift between
+  // the index warmup and the timed retrievals.
+  const config = benchSearchConfig(vault, pinnedKnobs);
 
   // Phase: ingest - materialize the disposable vault.
   if (!phaseDone(checkpoint, "ingest")) {
@@ -151,14 +194,12 @@ export async function runMemoryBench(opts: BenchRunOptions): Promise<BenchReport
   // Phase: index - one warmup search triggers the store self-heal so
   // the FTS index exists before any timed retrieval.
   if (!phaseDone(checkpoint, "index")) {
-    const config = benchSearchConfig(vault);
     await search(config, { query: "warmup", limit: 1, transportReach: BENCH_REACH });
     checkpoint = completeBenchPhase(run.runDir, checkpoint, "index");
   }
 
   // Phase: retrieve - run every question once, persist raw results.
   if (!phaseDone(checkpoint, "retrieve")) {
-    const config = benchSearchConfig(vault);
     mkdirSync(benchResultsDir(run.runDir), { recursive: true });
     // Deliberately sequential: per-question latency_ms must not include
     // contention from sibling searches running on the same store.

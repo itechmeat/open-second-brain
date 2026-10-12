@@ -19,6 +19,12 @@
  * report be read under the wrong rule.
  */
 import type { RecallFailure } from "./failure-modes.ts";
+import type {
+  ResolvedEmbeddingConfig,
+  ResolvedRerankConfig,
+  ResolvedSearchConfig,
+} from "../search/types.ts";
+import type { VaultScopeRules } from "../vault-scope/defaults.ts";
 
 export const BENCH_REPORT_SCHEMA = "o2b.bench.v2";
 
@@ -137,6 +143,31 @@ export interface BenchSuiteRegistration {
   readonly capabilities: BenchSuiteCapabilities;
 }
 
+/**
+ * Search-configuration knobs pinned for one bench run. Shaped exactly
+ * like `resolveSearchConfig`'s overrides - applied last and win - so a
+ * pin can express every search, rerank and embedding knob the resolver
+ * knows. The pin is part of the RUN IDENTITY: it is folded into the
+ * checkpoint hash, so a resumed run that would mix two configurations
+ * fails the guard loudly instead of silently comparing them.
+ */
+export type BenchPinnedKnobs = Partial<
+  Omit<ResolvedSearchConfig, "scopeRules" | "semantic" | "rerank">
+> & {
+  readonly scopeRules?: VaultScopeRules;
+  readonly semantic?: Partial<ResolvedEmbeddingConfig>;
+  readonly rerank?: Partial<ResolvedRerankConfig>;
+};
+
+/**
+ * The default knob pin: the hardcoded semantic-off override the harness
+ * has always applied, made an explicit named value so the default run
+ * identity is deterministic and locomo report numbers stay identical.
+ */
+export const DEFAULT_BENCH_KNOB_PIN: BenchPinnedKnobs = Object.freeze({
+  semantic: Object.freeze({ enabled: false }),
+});
+
 export interface BenchQuestionResult {
   readonly id: string;
   readonly category: BenchCategory;
@@ -197,6 +228,14 @@ export interface BenchCheckpoint {
   readonly run_id: string;
   readonly fixture_name: string;
   readonly fixture_hash: string;
+  /**
+   * The knob pin this run was created under, and the run-identity hash
+   * covering fixture plus pin. Both absent on checkpoints written before
+   * knob pinning existed; resume refuses such a checkpoint loudly rather
+   * than mixing configurations.
+   */
+  readonly pinned_knobs?: BenchPinnedKnobs;
+  readonly knobs_hash?: string;
   readonly created_at: string;
   readonly completed_phases: ReadonlyArray<BenchPhase>;
 }

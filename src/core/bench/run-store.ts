@@ -5,15 +5,26 @@
  * `<runsDir>/<run-id>/checkpoint.json` plus per-question results and
  * the final report. Resume validates the fixture hash before skipping
  * phases - a changed fixture invalidates the checkpoint rather than
- * silently mixing two runs. A path guard refuses run ids that resolve
- * outside the runs directory.
+ * silently mixing two runs. The run identity covers the pinned search
+ * knobs too ({@link benchRunIdentityHash}), so a resumed run whose pin
+ * changed fails the guard loudly; checkpoints written before knob
+ * pinning existed are refused for the same reason. A path guard refuses
+ * run ids that resolve outside the runs directory.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 
+import { canonicalJson, sha256Hex } from "../integrity/digest.ts";
 import { fixtureHash } from "./fixture.ts";
-import { BENCH_PHASES, type BenchCheckpoint, type BenchFixture, type BenchPhase } from "./types.ts";
+import {
+  BENCH_PHASES,
+  DEFAULT_BENCH_KNOB_PIN,
+  type BenchCheckpoint,
+  type BenchFixture,
+  type BenchPhase,
+  type BenchPinnedKnobs,
+} from "./types.ts";
 
 export interface BenchRunHandle {
   readonly runId: string;
@@ -22,6 +33,22 @@ export interface BenchRunHandle {
 }
 
 const CHECKPOINT_FILE = "checkpoint.json";
+
+/** Hex characters kept from the run-identity digest (fixture + knob pin). */
+const RUN_IDENTITY_HEX_CHARS = 16;
+
+/**
+ * The run-identity hash: the fixture hash AND the pinned knob record,
+ * canonically hashed together. Two runs that differ only in their pin
+ * therefore get different run ids, and a resumed run whose pin changed
+ * fails the identity guard instead of silently comparing two pipelines.
+ */
+export function benchRunIdentityHash(fixture: BenchFixture, pinnedKnobs: BenchPinnedKnobs): string {
+  return sha256Hex(canonicalJson({ fixture: fixtureHash(fixture), knobs: pinnedKnobs })).slice(
+    0,
+    RUN_IDENTITY_HEX_CHARS,
+  );
+}
 
 /** Disposable fixture vault location inside one run. */
 export function benchVaultDir(runDir: string): string {
@@ -36,21 +63,25 @@ export function benchResultsDir(runDir: string): string {
 export function createBenchRun(
   runsDir: string,
   fixture: BenchFixture,
-  opts: { now?: Date } = {},
+  opts: { now?: Date; pinnedKnobs?: BenchPinnedKnobs } = {},
 ): BenchRunHandle {
   const now = opts.now ?? new Date();
+  const knobs = opts.pinnedKnobs ?? DEFAULT_BENCH_KNOB_PIN;
   const hash = fixtureHash(fixture);
+  const identity = benchRunIdentityHash(fixture, knobs);
   const stamp = now
     .toISOString()
     .replace(/[^0-9]/g, "")
     .slice(0, 14);
-  const runId = `run-${stamp}-${hash.slice(0, 6)}`;
+  const runId = `run-${stamp}-${identity.slice(0, 6)}`;
   const runDir = guardedRunDir(runsDir, runId);
   mkdirSync(runDir, { recursive: true });
   const checkpoint: BenchCheckpoint = Object.freeze({
     run_id: runId,
     fixture_name: fixture.name,
     fixture_hash: hash,
+    pinned_knobs: knobs,
+    knobs_hash: identity,
     created_at: now.toISOString(),
     completed_phases: Object.freeze([]),
   });
@@ -61,7 +92,7 @@ export function createBenchRun(
 export function loadBenchRun(
   runsDir: string,
   runId: string,
-  opts: { expectFixture?: BenchFixture } = {},
+  opts: { expectFixture?: BenchFixture; pinnedKnobs?: BenchPinnedKnobs } = {},
 ): BenchRunHandle {
   const runDir = guardedRunDir(runsDir, runId);
   const path = join(runDir, CHECKPOINT_FILE);
@@ -74,6 +105,18 @@ export function loadBenchRun(
     if (expected !== checkpoint.fixture_hash) {
       throw new Error(
         `bench run ${runId}: fixture hash mismatch (checkpoint ${checkpoint.fixture_hash}, current ${expected}) - the fixture changed since this run started`,
+      );
+    }
+    const knobs = opts.pinnedKnobs ?? DEFAULT_BENCH_KNOB_PIN;
+    if (checkpoint.knobs_hash === undefined) {
+      throw new Error(
+        `bench run ${runId}: checkpoint predates knob pinning - the run identity cannot be verified, restart the run`,
+      );
+    }
+    const expectedIdentity = benchRunIdentityHash(opts.expectFixture, knobs);
+    if (expectedIdentity !== checkpoint.knobs_hash) {
+      throw new Error(
+        `bench run ${runId}: knob pin mismatch (checkpoint ${checkpoint.knobs_hash}, current ${expectedIdentity}) - the pinned search knobs changed since this run started`,
       );
     }
   }
@@ -113,6 +156,8 @@ function parseCheckpoint(raw: unknown): BenchCheckpoint {
   const hash = record["fixture_hash"];
   const createdAt = record["created_at"];
   const phases = record["completed_phases"];
+  const knobsHash = record["knobs_hash"];
+  const pinnedKnobs = record["pinned_knobs"];
   if (
     typeof runId !== "string" ||
     typeof fixtureName !== "string" ||
@@ -122,6 +167,15 @@ function parseCheckpoint(raw: unknown): BenchCheckpoint {
   ) {
     throw new Error("bench checkpoint: missing required fields");
   }
+  if (knobsHash !== undefined && typeof knobsHash !== "string") {
+    throw new Error("bench checkpoint: knobs_hash must be a string");
+  }
+  if (
+    pinnedKnobs !== undefined &&
+    (pinnedKnobs === null || typeof pinnedKnobs !== "object" || Array.isArray(pinnedKnobs))
+  ) {
+    throw new Error("bench checkpoint: pinned_knobs must be an object");
+  }
   const completed = phases.filter(
     (phase): phase is BenchPhase =>
       typeof phase === "string" && (BENCH_PHASES as ReadonlyArray<string>).includes(phase),
@@ -130,6 +184,13 @@ function parseCheckpoint(raw: unknown): BenchCheckpoint {
     run_id: runId,
     fixture_name: fixtureName,
     fixture_hash: hash,
+    ...(typeof knobsHash === "string" ? { knobs_hash: knobsHash } : {}),
+    ...(pinnedKnobs !== undefined &&
+    pinnedKnobs !== null &&
+    typeof pinnedKnobs === "object" &&
+    !Array.isArray(pinnedKnobs)
+      ? { pinned_knobs: Object.freeze({ ...(pinnedKnobs as BenchPinnedKnobs) }) }
+      : {}),
     created_at: createdAt,
     completed_phases: Object.freeze(completed),
   });
