@@ -228,6 +228,7 @@ test("brain_recall_gate reports skip reasons without affecting explicit brain_se
   });
   expect(extractToolResult(gate)).toEqual({
     retrieve: false,
+    admit: false,
     reason: "shell_command",
   });
 

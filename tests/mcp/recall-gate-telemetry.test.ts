@@ -166,39 +166,70 @@ test("a usable-score call writes no negative record even with the opt-in on", as
 
 // ----- graded surfacing telemetry (t_107a3249, lane C Task 14) ---------------
 
-test("a measured call records key, tier and channel under the same opt-in", async () => {
+test("a measured call grades the verdict: below_floor refuses and records a skip", async () => {
   writeFileSync(configPath, `vault: "${vault}"\nrecall_gate_telemetry: "true"\n`);
   const out = (await tool("brain_recall_gate").handler(ctx(), {
     prompt: "what did we decide about the index?",
     scores: [0.9],
     match_quality: 0.2,
   })) as Record<string, unknown>;
-  // The graded projection rides the response: the binary retrieve stays
-  // the structural fail-open verdict, the tier is the measured admission.
-  expect(out["retrieve"]).toBe(true);
+  // The graded admission decides the binary verdict when a measurement
+  // rides the call: a below-floor quality is a refusal, so `retrieve`
+  // and `admit` agree with the tier instead of contradicting it.
+  expect(out["retrieve"]).toBe(false);
+  expect(out["admit"]).toBe(false);
   expect(out["key"]).toBe(0.2);
   expect(out["tier"]).toBe("below_floor");
   const records = listGateTelemetry(vault);
   expect(records).toHaveLength(1);
+  // The record's decision agrees with the admission: a below-floor call
+  // is a skip, never a retrieved one.
+  expect(records[0]!.payload["decision"]).toBe("skip");
   expect(records[0]!.payload["key"]).toBe(0.2);
   expect(records[0]!.payload["tier"]).toBe("below_floor");
   expect(records[0]!.payload["channel"]).toBe("mcp");
   // The privacy invariant holds for the graded payload: numbers land, the
   // prompt never does.
   expect(JSON.stringify(records[0]!.payload)).not.toContain("what did we decide");
+  // The summary agrees: a below-floor measured call is not counted as
+  // retrieved.
+  const summary = (await tool("brain_recall_telemetry").handler(ctx(), {
+    operation: "gate_summary",
+  })) as { retrieved: number; skipped: number };
+  expect(summary.retrieved).toBe(0);
+  expect(summary.skipped).toBe(1);
 });
 
-test("an unmeasured call records no key or tier and returns the byte-identical shape", async () => {
+test("a measured admitted call retrieves, admits and records a retrieve", async () => {
+  writeFileSync(configPath, `vault: "${vault}"\nrecall_gate_telemetry: "true"\n`);
+  const out = (await tool("brain_recall_gate").handler(ctx(), {
+    prompt: "what did we decide about the index?",
+    scores: [0.9],
+    match_quality: 0.8,
+  })) as Record<string, unknown>;
+  expect(out["retrieve"]).toBe(true);
+  expect(out["admit"]).toBe(true);
+  expect(out["tier"]).toBe("admitted");
+  const records = listGateTelemetry(vault);
+  expect(records[0]!.payload["decision"]).toBe("retrieve");
+});
+
+test("an unmeasured call records no key or tier and keeps the structural verdict", async () => {
   writeFileSync(configPath, `vault: "${vault}"\nrecall_gate_telemetry: "true"\n`);
   const out = (await tool("brain_recall_gate").handler(ctx(), {
     prompt: "what did we decide about the index?",
   })) as Record<string, unknown>;
   expect("key" in out).toBe(false);
   expect("tier" in out).toBe(false);
+  // Without a measurement the structural fail-open stands and `admit`
+  // names it: the binary verdict is the structural one, unchanged.
+  expect(out["retrieve"]).toBe(true);
+  expect(out["admit"]).toBe(true);
   const records = listGateTelemetry(vault);
   expect(records).toHaveLength(1);
   expect("key" in records[0]!.payload).toBe(false);
   expect("tier" in records[0]!.payload).toBe(false);
+  expect(records[0]!.payload["decision"]).toBe("retrieve");
   // The transport is known regardless of a measurement.
   expect(records[0]!.payload["channel"]).toBe("mcp");
 });
@@ -243,10 +274,20 @@ test("gate_summary summarizes counts by tier", async () => {
   await tool("brain_recall_gate").handler(ctx(), { prompt: "/help" });
   const summary = (await tool("brain_recall_telemetry").handler(ctx(), {
     operation: "gate_summary",
-  })) as { total: number; by_reason: Record<string, number>; by_tier: Record<string, number> };
+  })) as {
+    total: number;
+    retrieved: number;
+    skipped: number;
+    by_reason: Record<string, number>;
+    by_tier: Record<string, number>;
+  };
   expect(summary.total).toBe(3);
   expect(summary.by_tier).toEqual({ below_floor: 1, admitted: 1 });
   expect(summary.by_reason["slash_command"]).toBe(1);
+  // The below-floor measured call is a skip under the graded verdict:
+  // only the admitted call counts as retrieved.
+  expect(summary.retrieved).toBe(1);
+  expect(summary.skipped).toBe(2);
 });
 
 test("fail-open: a broken store never breaks the graded response", async () => {
@@ -259,6 +300,7 @@ test("fail-open: a broken store never breaks the graded response", async () => {
     match_quality: 0.2,
   })) as Record<string, unknown>;
   expect(typeof decision["retrieve"]).toBe("boolean");
+  expect(decision["admit"]).toBe(false);
   expect(decision["key"]).toBe(0.2);
   expect(decision["tier"]).toBe("below_floor");
 });

@@ -707,9 +707,13 @@ export const RECALL_GATE_NEGATIVE_STATES: ReadonlyArray<NegativeRecallState> = O
 
 const RECALL_GATE_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
   type: "object",
-  required: ["retrieve", "reason"],
+  required: ["retrieve", "admit", "reason"],
   properties: {
     retrieve: { type: "boolean" },
+    // The admission the verdict stands on, always present: with a
+    // measurement it IS the graded admission (so `retrieve` can never
+    // contradict `tier`); without one it names the structural fail-open.
+    admit: { type: "boolean" },
     reason: { type: "string" },
     // Graded surfacing key (t_107a3249): present only when the caller
     // supplied the scores/match_quality pair. `key` is the measured
@@ -1458,8 +1462,12 @@ async function toolBrainRecallGate(
   // composed with the shared admission calculator over the MEASURED
   // quality, when the caller supplied the pair. The quality argument is
   // already validated to a finite [0,1] number by the coercion above, so
-  // this cannot refuse. Response and record gain `key` and `tier` only
-  // then; without a measurement both stay byte-identical.
+  // this cannot refuse. With a measurement the graded admission IS the
+  // binary verdict - a below-floor quality refuses, it does not ride the
+  // structural fail-open behind the tier's back - and the response carries
+  // both `retrieve` and `admit` so the two can never drift apart again.
+  // Without a measurement the structural fail-open stands unchanged and
+  // `admit` simply names it.
   const measured = attempt?.matchQuality;
   const graded = evaluateGradedSurfacing({
     prompt,
@@ -1468,6 +1476,7 @@ async function toolBrainRecallGate(
     channel: RECALL_CHANNEL.mcp,
     ...(measured !== undefined ? { matchQuality: measured } : {}),
   });
+  const retrieve = measured !== undefined ? graded.admit : decision.retrieve;
   const gradedFields = measured !== undefined ? { key: graded.key, tier: graded.tier } : {};
   const answerableVerdict = answerable?.kind === "annotated" ? answerable.verdict : undefined;
   // Gate telemetry (t_65036e02): default off. Routed through the lazy
@@ -1478,7 +1487,9 @@ async function toolBrainRecallGate(
     emitGateTelemetry(ctx.vault, {
       host: telemetryHost,
       prompt,
-      retrieve: decision.retrieve,
+      // The recorded decision agrees with the admission, so a measured
+      // below-floor call is summarized as a skip, never as retrieved.
+      retrieve,
       reason: decision.reason,
       ...(sessionId !== undefined ? { sessionId } : {}),
       ...(turnId !== undefined ? { turnId } : {}),
@@ -1496,7 +1507,8 @@ async function toolBrainRecallGate(
     }),
   );
   if (refused !== null) throw refused;
-  if (verdict === undefined) return { ...decision, ...gradedFields };
+  if (verdict === undefined)
+    return { retrieve, admit: retrieve, reason: decision.reason, ...gradedFields };
   // signals-that-survive, unit 6: an unmet verdict is stamped onto the
   // cross-query demand log under the bucket key normalizeQueryTerms already
   // computes, so the knowledge-gap loop can aggregate recurrence without a
@@ -1526,7 +1538,9 @@ async function toolBrainRecallGate(
     );
   }
   return {
-    ...decision,
+    retrieve,
+    admit: retrieve,
+    reason: decision.reason,
     ...gradedFields,
     adequacy: {
       level: verdict.level,
@@ -2102,7 +2116,7 @@ export const SEARCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_recall_gate",
     description:
-      "Classify whether an automatic recall attempt should run. Diagnostics only; does not search. Pass `scores` AND `match_quality` TOGETHER for an adequacy verdict — sufficient/proceed, weak/re_recall, insufficient/abstain; either alone is INVALID_PARAMS (see `dependentRequired`).",
+      "Classify whether recall should run. Diagnostics only; does not search. Pass `scores` AND `match_quality` together for an adequacy verdict; either alone is INVALID_PARAMS (see `dependentRequired`). A measurement decides the verdict: below-floor quality answers retrieve false. `admit` echoes it.",
     inputSchema: RECALL_GATE_INPUT_SCHEMA,
     outputSchema: RECALL_GATE_OUTPUT_SCHEMA,
     handler: toolBrainRecallGate,
