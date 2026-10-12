@@ -1296,9 +1296,10 @@ export interface SearchOutcome {
   /**
    * Iterative recall round-trip marker (recall-quality wave). Present
    * only in the opt-in mode: the plan phase when the loop paused with
-   * measurable gaps, the final marker on a call that committed a decider
-   * payload. Absent - never null - otherwise, keeping the outcome
-   * byte-identical whenever the mode did nothing.
+   * measurable gaps, the final marker on a call whose loop ran - the
+   * committed round-trip leg, or a plain finalize (see
+   * {@link SearchOutcomeIterativeFinal}). Absent - never null - otherwise,
+   * keeping the outcome byte-identical whenever the mode did nothing.
    */
   readonly iterative?: SearchOutcomeIterative;
   /**

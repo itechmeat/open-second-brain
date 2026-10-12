@@ -715,7 +715,10 @@ const RECALL_GATE_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
     // supplied the scores/match_quality pair. `key` is the measured
     // match quality, null exactly where nothing was measurable (a
     // structurally suppressed prompt); `tier` is the closed admission
-    // vocabulary. Absent - never implied - without a measurement.
+    // vocabulary. Absent - never implied - without a measurement. The
+    // entry is permissive because the descriptor language declares ONE
+    // `type` per node: `number|null` is not expressible here, so `{}` is
+    // a statement about the language, not an omission.
     key: {},
     tier: { type: "string", enum: [...SURFACING_TIERS] },
     adequacy: {
@@ -1111,7 +1114,7 @@ async function toolBrainSearch(
   ) {
     throw new MCPError(
       INVALID_PARAMS,
-      "argument 'iterative' is not supported with global: true; the iterative recall loop runs on the single-vault path",
+      "iterative recall arguments are not supported with global: true; the loop runs on the single-vault path",
     );
   }
   const focusSession = coerceStringOptional(args, "focus_session", 128);
