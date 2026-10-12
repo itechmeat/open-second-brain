@@ -15,7 +15,7 @@ import { parseBenchFixture } from "../../../src/core/bench/fixture.ts";
 import {
   LONGMEMEVAL_JUDGE_QUESTION_TEMPLATE,
   LONGMEMEVAL_JUDGE_SYSTEM_PROMPT,
-  LONGMEMEVAL_PROMPT_REVISION,
+  LONGMEMEVAL_PROMPT_PROVENANCE,
   LONGMEMEVAL_RECALL_CUTOFF,
   loadLongMemEvalFixture,
   longMemEvalToBenchFixture,
@@ -351,7 +351,7 @@ describe("longMemEvalToBenchFixture", () => {
     expect(() => longMemEvalToBenchFixture(dataset)).toThrow(/appears twice/);
   });
 
-  test("converted questions carry the official judge input", () => {
+  test("converted questions carry the suite judge input", () => {
     const { fixture } = longMemEvalToBenchFixture(
       parseLongMemEvalDataset([entry({ answer: "Blue Heron" })]),
     );
@@ -370,10 +370,13 @@ describe("longMemEvalToBenchFixture", () => {
   });
 });
 
-describe("the official judge prompts", () => {
-  test("the prompt constants are pinned to a named upstream revision", () => {
-    expect(LONGMEMEVAL_PROMPT_REVISION).toContain("LongMemEval");
-    expect(LONGMEMEVAL_PROMPT_REVISION.length).toBeGreaterThan(20);
+describe("the judge prompts", () => {
+  test("the prompt constants state their self-written provenance", () => {
+    expect(LONGMEMEVAL_PROMPT_PROVENANCE).toContain("self-written");
+    expect(LONGMEMEVAL_PROMPT_PROVENANCE).toContain("github.com/xiaowu0162/LongMemEval");
+    expect(LONGMEMEVAL_PROMPT_PROVENANCE).toContain("evaluate_qa.py");
+    // No pretense of an upstream transcription or a revision pin.
+    expect(LONGMEMEVAL_PROMPT_PROVENANCE.toLowerCase()).not.toContain("pinned");
   });
 
   test("the system prompt and question template cover the payload fields", () => {
@@ -381,6 +384,56 @@ describe("the official judge prompts", () => {
     expect(LONGMEMEVAL_JUDGE_QUESTION_TEMPLATE).toContain("{question}");
     expect(LONGMEMEVAL_JUDGE_QUESTION_TEMPLATE).toContain("{answer}");
     expect(LONGMEMEVAL_JUDGE_QUESTION_TEMPLATE).toContain("{gold}");
+  });
+});
+
+describe("date parsing", () => {
+  test("official slash dates derive UTC turn timestamps, not host-local ones", () => {
+    const dataset = parseLongMemEvalDataset([
+      entry({
+        haystack_dates: ["2023/05/20 (Sat) 02:21"],
+        haystack_session: [[{ role: "user", content: "zebra anchor." }]],
+      }),
+    ]);
+    const { fixture } = longMemEvalToBenchFixture(dataset);
+    // Host-local parsing shifts this by the zone offset; UTC pins it.
+    expect(fixture.continuity[0]!.created_at).toBe("2023-05-20T02:21:00.000Z");
+  });
+
+  test("the committed official sample derives UTC turn timestamps", () => {
+    const raw: unknown = JSON.parse(readFileSync(OFFICIAL_SAMPLE, "utf8"));
+    const { fixture } = longMemEvalToBenchFixture(parseLongMemEvalDataset(raw));
+    expect(fixture.continuity[0]!.created_at).toBe("2023-05-01T09:15:00.000Z");
+  });
+
+  test("a naive ISO date-time is read as UTC, not host-local", () => {
+    const dataset = parseLongMemEvalDataset([entry({ haystack_dates: ["2026-03-02T10:00:00"] })]);
+    const { fixture } = longMemEvalToBenchFixture(dataset);
+    expect(fixture.continuity[0]!.created_at).toBe("2026-03-02T10:00:00.000Z");
+  });
+
+  test("a date form only the host zone could interpret is a named error", () => {
+    expect(() => parseLongMemEvalDataset([entry({ haystack_dates: ["May 20, 2023"] })])).toThrow(
+      /valid date/,
+    );
+  });
+});
+
+describe("answer coercion", () => {
+  test("numeric answers are coerced to strings for the judge payload", () => {
+    const dataset = parseLongMemEvalDataset([
+      entry({ answer: 42 }),
+      entry({ q_id: "q2", question_type: "multi-hop", answer: 0 }),
+    ]);
+    const { fixture } = longMemEvalToBenchFixture(dataset);
+    expect(fixture.questions[0]!.judge_input!.answer).toBe("42");
+    expect(fixture.questions[1]!.judge_input!.answer).toBe("0");
+  });
+
+  test("other non-string answer types stay refused", () => {
+    const dataset = parseLongMemEvalDataset([entry({ answer: true })]);
+    const { fixture } = longMemEvalToBenchFixture(dataset);
+    expect(fixture.questions[0]!.judge_input!.answer).toBeUndefined();
   });
 });
 

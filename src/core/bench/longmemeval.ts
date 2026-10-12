@@ -67,20 +67,23 @@ import {
 export const LONGMEMEVAL_SUITE_NAME = "longmemeval";
 
 /**
- * The upstream source the dataset shape follows: the LongMemEval
- * repository. The dataset ships there as JSON (longmemeval_s.json,
- * longmemeval_m.json, longmemeval_oracle.json) and is downloaded by
- * operators - never at run time.
+ * Provenance of the answer-judging prompts below, stated honestly: they
+ * are SELF-WRITTEN in the spirit of the upstream evaluation - its
+ * `evaluate_qa.py` judges a model's response against the reference
+ * answer with per-question-type prompts - but they are NOT a
+ * transcription of the upstream text, and nothing upstream pins their
+ * wording. The dataset itself ships as JSON in the same repository and
+ * is downloaded by operators - never at run time.
  */
-export const LONGMEMEVAL_PROMPT_REVISION =
-  "github.com/xiaowu0162/LongMemEval (arXiv:2410.10813); dataset ships as longmemeval_s.json / longmemeval_m.json / longmemeval_oracle.json";
+export const LONGMEMEVAL_PROMPT_PROVENANCE =
+  "self-written prompts following the evaluate_qa.py approach in github.com/xiaowu0162/LongMemEval (arXiv:2410.10813); not transcribed from upstream - the dataset ships as longmemeval_s.json / longmemeval_m.json / longmemeval_oracle.json";
 
 /**
- * Official answer-judging prompt, system half, pinned to
- * {@link LONGMEMEVAL_PROMPT_REVISION}. The external judge command composes
- * its model call from this and the per-question template, so the command
- * itself stays a dumb model call and the official text has exactly one
- * home in the tree.
+ * Answer-judging prompt, system half (self-written; see
+ * {@link LONGMEMEVAL_PROMPT_PROVENANCE}). The external judge command
+ * composes its model call from this and the per-question template, so
+ * the command itself stays a dumb model call and the prompt text has
+ * exactly one home in the tree.
  */
 export const LONGMEMEVAL_JUDGE_SYSTEM_PROMPT = Object.freeze(
   "You are a meticulous evaluator of long-term conversational memory. " +
@@ -90,12 +93,12 @@ export const LONGMEMEVAL_JUDGE_SYSTEM_PROMPT = Object.freeze(
 );
 
 /**
- * Official answer-judging prompt, per-question half. The placeholders
- * are the judge payload's own field names, so a judge command renders
- * the official prompt straight from the stdin JSON. Gold evidence is
- * carried as the gold sessions' ids (the payload stays bounded); a
- * judge that wants their conversation text resolves the ids from the
- * dataset it already has.
+ * Answer-judging prompt, per-question half (self-written; see
+ * {@link LONGMEMEVAL_PROMPT_PROVENANCE}). The placeholders are the judge
+ * payload's own field names, so a judge command renders the prompt
+ * straight from the stdin JSON. Gold evidence is carried as the gold
+ * sessions' ids (the payload stays bounded); a judge that wants their
+ * conversation text resolves the ids from the dataset it already has.
  */
 export const LONGMEMEVAL_JUDGE_QUESTION_TEMPLATE = Object.freeze(
   "Question: {question}\n" +
@@ -277,6 +280,7 @@ function parseEntry(
   }
   const abstention = isLongMemEvalAbstention({ q_id: qId, question_type: questionType });
   const question = asString(r["question"], `questions[${index}] (${qId}).question`);
+  const answer = answerOf(r["answer"]);
 
   const sessionIds = stringArray(
     readKey(r, "haystack_session_ids", "haystack_session_id"),
@@ -345,7 +349,7 @@ function parseEntry(
     q_id: qId,
     question_type: questionType,
     question,
-    ...(typeof r["answer"] === "string" && r["answer"] !== "" ? { answer: r["answer"] } : {}),
+    ...(answer !== undefined ? { answer } : {}),
     question_date: questionDate,
     haystack_session_id: sessionIds,
     haystack_session: sessionIds.map((_, j) =>
@@ -402,8 +406,55 @@ function asString(value: unknown, field: string): string {
   return value;
 }
 
+/**
+ * Parse a dataset date into epoch milliseconds, deterministically as
+ * UTC. The official dates look like `2023/05/20 (Sat) 02:21`, which
+ * JavaScript would read in the host's local zone - so the slash forms
+ * are rebuilt as UTC by hand. A naive ISO date-time (no offset) is read
+ * as UTC by the same rule, date-only ISO is UTC by spec, and
+ * offset-explicit ISO forms parse as stated. Any other shape returns
+ * NaN - the caller refuses it by name rather than letting the host
+ * zone decide.
+ */
+function parseDatasetDateMs(value: string): number {
+  const trimmed = value.trim();
+  const slash = /^(\d{4})\/(\d{1,2})\/(\d{1,2})(?:\s+\([^()]*\))?(?:\s+(\d{1,2}):(\d{2}))?$/.exec(
+    trimmed,
+  );
+  if (slash !== null) {
+    return Date.UTC(
+      Number(slash[1]),
+      Number(slash[2]) - 1,
+      Number(slash[3]),
+      slash[4] !== undefined ? Number(slash[4]) : 0,
+      slash[5] !== undefined ? Number(slash[5]) : 0,
+    );
+  }
+  const naiveIso = /^(\d{4})-(\d{2})-(\d{2})T(\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/.exec(
+    trimmed,
+  );
+  if (naiveIso !== null) {
+    return Date.UTC(
+      Number(naiveIso[1]),
+      Number(naiveIso[2]) - 1,
+      Number(naiveIso[3]),
+      Number(naiveIso[4]),
+      Number(naiveIso[5]),
+      naiveIso[6] !== undefined ? Number(naiveIso[6]) : 0,
+      naiveIso[7] !== undefined ? Number(naiveIso[7]) : 0,
+    );
+  }
+  if (
+    /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ||
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:?\d{2})$/.test(trimmed)
+  ) {
+    return Date.parse(trimmed);
+  }
+  return Number.NaN;
+}
+
 function asValidDate(value: string, field: string): string {
-  if (Number.isNaN(new Date(value).getTime())) {
+  if (Number.isNaN(parseDatasetDateMs(value))) {
     throw new LongMemEvalParseError(
       `LongMemEval dataset: ${field} must be a valid date, got '${value}'`,
     );
@@ -472,8 +523,20 @@ function sessionNoteBody(
 
 function turnTimestamp(sessionDate: string, turnIndex: number): string {
   return new Date(
-    new Date(sessionDate).getTime() + turnIndex * TURN_TIMESTAMP_STEP_MS,
+    parseDatasetDateMs(sessionDate) + turnIndex * TURN_TIMESTAMP_STEP_MS,
   ).toISOString();
+}
+
+/**
+ * The judge reference answer, as the payload may carry it: strings pass
+ * through; upstream states some counting answers as numbers, so finite
+ * numbers are coerced with String(). Any other non-string type stays
+ * refused - an answer that cannot be a string is dropped, never guessed.
+ */
+function answerOf(value: unknown): string | undefined {
+  if (typeof value === "string" && value !== "") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return undefined;
 }
 
 /**

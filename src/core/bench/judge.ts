@@ -27,14 +27,16 @@ export interface JudgeOutcome {
 }
 
 /**
- * Evaluate the questions, optionally enriched with the suite's
- * official-prompt judge input.
+ * Evaluate the questions, optionally enriched with the suite-provided
+ * judge input.
  *
  * The stdin payload stays `{ questions: [...] }`; a question whose
  * suite provides {@link BenchJudgeInput} carries three extra fields -
  * `question`, `answer` (when the dataset states one) and `gold` - and a
  * question without one keeps the exact pre-existing shape, so payloads
- * for suites without judge input are unchanged byte for byte.
+ * for suites without judge input are unchanged byte for byte. The
+ * suite's prompt constants are self-written (see
+ * `LONGMEMEVAL_PROMPT_PROVENANCE`); nothing upstream pins them.
  */
 export function runJudge(
   cmd: string | undefined,
