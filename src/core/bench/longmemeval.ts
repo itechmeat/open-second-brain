@@ -34,6 +34,16 @@
  *  - Gold session ids join by direct set membership against the entry's
  *    own haystack ids; an unknown id is a named parse error. Ids are
  *    sanitized only when they become note paths.
+ *  - Each entry's evidence is namespaced under its own question's
+ *    subtree (`sessions/<question_id>/...`): LongMemEval scores every
+ *    question against its OWN haystack (~50 sessions), and evidence
+ *    pooled across entries would have every query search the union of
+ *    all haystacks. Residual, stated honestly: the fixture schema has
+ *    no per-question retrieval scope, so the disjoint subtrees keep
+ *    the gold paths per-question but cannot stop the ranker from
+ *    surfacing another scope's notes inside the cutoff - full
+ *    per-question retrieval needs a scope field on the fixture
+ *    question plus a rank-time filter in the retrieve phase.
  *
  * Abstention questions are dropped at conversion time with the exclusion
  * count recorded in the suite receipt - the fixture parser rejects
@@ -48,6 +58,8 @@ import {
   RETRIEVAL_CATEGORIES,
   type BenchCategory,
   type BenchFixture,
+  type BenchFixtureContinuity,
+  type BenchFixtureNote,
   type BenchQuestion,
 } from "./types.ts";
 
@@ -196,10 +208,11 @@ const TURN_TIMESTAMP_STEP_MS = 60_000;
  * array of question entries or a `{ name, questions }` wrapper naming
  * the dataset. Fail-fast with a named {@link LongMemEvalParseError}.
  *
- * Haystack sessions are merged across entries by id: entries share
- * sessions, and the same id must carry the same session everywhere, so a
- * conflicting duplicate is a named error rather than a silently doubled
- * note.
+ * Haystack sessions are merged across entries by id for validation:
+ * entries share sessions, and one id must carry the same TURNS
+ * everywhere - a content mismatch is a named error rather than a
+ * silently doubled note. Dates are assigned per instance upstream, so
+ * a date difference between entries is tolerated (first write wins).
  */
 export function parseLongMemEvalDataset(raw: unknown): LongMemEvalDataset {
   let entriesRaw: ReadonlyArray<unknown>;
@@ -352,7 +365,11 @@ function mergeSession(
 ): void {
   const existing = sessions.get(sessionId);
   if (existing !== undefined) {
-    if (existing.date !== date || JSON.stringify(existing.turns) !== JSON.stringify(turns)) {
+    // Upstream assigns haystack dates PER INSTANCE, so the same session
+    // id can legitimately carry a different date in each entry; the
+    // first write wins. Only a content mismatch means the dataset is
+    // inconsistent - one id whose turns disagree between entries.
+    if (JSON.stringify(existing.turns) !== JSON.stringify(turns)) {
       throw new LongMemEvalParseError(
         `LongMemEval dataset: session '${sessionId}' is inconsistent between entries '${existing.entry}' and '${entryId}'`,
       );
@@ -404,14 +421,53 @@ function stringArray(value: unknown, field: string, nonEmpty: boolean): Readonly
   return Object.freeze([...value]);
 }
 
-/** Vault-relative note path for a session; sanitized only here. */
-function sessionNotePath(sessionId: string): string {
-  const safe = sessionId.replace(/[^A-Za-z0-9_-]/g, "-");
-  return `sessions/${safe}.md`;
+/** Sanitize a dataset id into one safe note-path segment. */
+function sanitizePathSegment(raw: string): string {
+  return raw.replace(/[^A-Za-z0-9_-]/g, "-");
 }
 
-function sessionNoteBody(sessionId: string, turns: ReadonlyArray<LongMemEvalTurn>): string {
-  return `# Session ${sessionId}\n\n` + turns.map((t) => `${t.role}: ${t.content}`).join("\n");
+/**
+ * The path scope of one question's evidence: every note, continuity
+ * record and expected path of an entry lives under
+ * `sessions/<question_id>/`, so one question's haystack never pools
+ * with another's. Two distinct question ids that sanitize to the same
+ * scope would silently merge haystacks, so that is a named error.
+ */
+function questionScope(qId: string, claimed: Map<string, string>): string {
+  const scope = sanitizePathSegment(qId);
+  const owner = claimed.get(scope);
+  if (owner !== undefined) {
+    throw new LongMemEvalParseError(
+      owner === qId
+        ? `LongMemEval dataset: question id '${qId}' appears twice`
+        : `LongMemEval dataset: question ids '${owner}' and '${qId}' sanitize to the same path scope '${scope}'; their haystacks would merge`,
+    );
+  }
+  claimed.set(scope, qId);
+  return scope;
+}
+
+/** Vault-relative note path for a session inside its question's scope. */
+function sessionNotePath(scope: string, sessionId: string): string {
+  return `sessions/${scope}/${sanitizePathSegment(sessionId)}.md`;
+}
+
+/**
+ * Note body for one scoped session copy. The header names the question
+ * scope on purpose: a session shared by several entries materializes
+ * once per scope, and bodies that stayed byte-identical would collide
+ * in the indexer's content-hash skip - only the first scope's copy
+ * would ever index, dangling every other scope's gold path.
+ */
+function sessionNoteBody(
+  scope: string,
+  sessionId: string,
+  turns: ReadonlyArray<LongMemEvalTurn>,
+): string {
+  return (
+    `# Session ${sessionId} (question ${scope})\n\n` +
+    turns.map((t) => `${t.role}: ${t.content}`).join("\n")
+  );
 }
 
 function turnTimestamp(sessionDate: string, turnIndex: number): string {
@@ -422,65 +478,83 @@ function turnTimestamp(sessionDate: string, turnIndex: number): string {
 
 /**
  * Convert a parsed LongMemEval dataset into an OSB {@link BenchFixture}
- * plus its receipt. Sessions become evidence notes and session_turn
- * continuity records; every non-abstention question becomes a retrieval
- * question whose expected_paths point at its gold session notes and
- * whose top_k is the {@link LONGMEMEVAL_RECALL_CUTOFF}. Abstention
- * entries are excluded with the count recorded.
+ * plus its receipt. Each entry's evidence is namespaced under its own
+ * question's subtree - its sessions become evidence notes and
+ * session_turn continuity records at `sessions/<question_id>/...` - and
+ * every non-abstention question becomes a retrieval question whose
+ * expected_paths point at its gold session notes inside that same
+ * subtree and whose top_k is the {@link LONGMEMEVAL_RECALL_CUTOFF}.
+ * Abstention entries are excluded with the count recorded.
+ *
+ * Scoping is what keeps the suite's task like-for-like: LongMemEval
+ * scores every question against ITS OWN haystack (~50 sessions), so
+ * evidence pooled across entries would have every query search the
+ * union of all haystacks. A session shared by several entries is
+ * materialized once per scope - the trade is cross-entry note dedupe
+ * for per-question isolation, which is what the metric scores.
  */
 export function longMemEvalToBenchFixture(dataset: LongMemEvalDataset): LongMemEvalConversion {
-  const sessions = new Map<string, { date: string; turns: ReadonlyArray<LongMemEvalTurn> }>();
-  for (const entry of dataset.entries) {
-    entry.haystack_session_id.forEach((sessionId, j) => {
-      if (!sessions.has(sessionId)) {
-        sessions.set(sessionId, {
-          date: entry.haystack_dates[j]!,
-          turns: entry.haystack_session[j]!,
-        });
-      }
-    });
-  }
-  const orderedIds = [...sessions.keys()].toSorted();
-  // Distinct session ids can sanitize to one note path (a/b and a-b);
-  // the evidence of both would silently merge into one note, so the
-  // collision is a named parse error instead.
-  const claimedPaths = new Map<string, string>();
-  for (const id of orderedIds) {
-    const path = sessionNotePath(id);
-    const owner = claimedPaths.get(path);
-    if (owner !== undefined) {
-      throw new LongMemEvalParseError(
-        `LongMemEval dataset: session ids ${JSON.stringify(owner)} and ${JSON.stringify(id)} ` +
-          `sanitize to the same note path ${JSON.stringify(path)}; the evidence of both would merge`,
-      );
-    }
-    claimedPaths.set(path, id);
-  }
-  const notes = orderedIds.map((id) => ({
-    path: sessionNotePath(id),
-    body: sessionNoteBody(id, sessions.get(id)!.turns),
-  }));
-  const continuity = orderedIds.flatMap((id) => {
-    const session = sessions.get(id)!;
-    return session.turns.map((turn, i) => ({
-      kind: "session_turn" as const,
-      created_at: turnTimestamp(session.date, i),
-      payload: { session_id: id, role: turn.role, text: turn.content },
-    }));
-  });
   let abstentionExcluded = 0;
+  const notes: BenchFixtureNote[] = [];
+  const continuity: BenchFixtureContinuity[] = [];
   const questions: BenchQuestion[] = [];
+  const claimedScopes = new Map<string, string>();
   for (const entry of dataset.entries) {
     if (isLongMemEvalAbstention(entry)) {
       abstentionExcluded += 1;
       continue;
     }
+    const scope = questionScope(entry.q_id, claimedScopes);
+    const scopedPaths = new Map<string, string>();
+    const claimedInScope = new Map<string, string>();
+    entry.haystack_session_id.forEach((sessionId, j) => {
+      if (scopedPaths.has(sessionId)) return;
+      const path = sessionNotePath(scope, sessionId);
+      // Distinct session ids can sanitize to one note path (a/b and
+      // a-b); within one scope the evidence of both would silently
+      // merge into one note, so the collision is a named parse error.
+      const collisionOwner = claimedInScope.get(path);
+      if (collisionOwner !== undefined) {
+        throw new LongMemEvalParseError(
+          `LongMemEval dataset: question '${entry.q_id}' has session ids '${collisionOwner}' and '${sessionId}' ` +
+            `that sanitize to the same note path '${path}'; the evidence of both would merge`,
+        );
+      }
+      claimedInScope.set(path, sessionId);
+      const turns = entry.haystack_session[j]!;
+      const date = entry.haystack_dates[j]!;
+      notes.push({ path, body: sessionNoteBody(scope, sessionId, turns) });
+      turns.forEach((turn, i) => {
+        continuity.push({
+          kind: "session_turn" as const,
+          created_at: turnTimestamp(date, i),
+          payload: {
+            question_id: entry.q_id,
+            session_id: sessionId,
+            role: turn.role,
+            text: turn.content,
+          },
+        });
+      });
+      scopedPaths.set(sessionId, path);
+    });
     questions.push({
       id: entry.q_id,
       category: QUESTION_TYPE_TO_CATEGORY[entry.question_type]!,
       query: entry.question,
       top_k: LONGMEMEVAL_RECALL_CUTOFF,
-      expected_paths: entry.answer_session_ids.map(sessionNotePath),
+      expected_paths: entry.answer_session_ids.map((id) => {
+        const path = scopedPaths.get(id);
+        if (path === undefined) {
+          // The parser guarantees gold ids join the entry's own
+          // haystack; this names the impossible instead of emitting a
+          // dangling path.
+          throw new LongMemEvalParseError(
+            `LongMemEval dataset: question '${entry.q_id}' references unknown session '${id}'`,
+          );
+        }
+        return path;
+      }),
       judge_input: Object.freeze({
         question: entry.question,
         ...(entry.answer !== undefined ? { answer: entry.answer } : {}),
@@ -499,7 +573,7 @@ export function longMemEvalToBenchFixture(dataset: LongMemEvalDataset): LongMemE
   const fixture = parseBenchFixture({
     name: `longmemeval-${dataset.name ?? "suite"}`,
     description:
-      "LongMemEval dataset converted to the OSB bench fixture; abstention questions are excluded from scoring.",
+      "LongMemEval dataset converted to the OSB bench fixture; each question's haystack is scoped under its own subtree and abstention questions are excluded from scoring.",
     notes,
     continuity,
     questions,

@@ -233,6 +233,21 @@ describe("parseLongMemEvalDataset", () => {
     });
     expect(() => parseLongMemEvalDataset([entry({}), other])).toThrow(/session 's1'/);
   });
+
+  test("a shared session id with per-instance dates parses (first date wins)", () => {
+    const dataset = parseLongMemEvalDataset([
+      entry({}),
+      entry({
+        q_id: "q2",
+        question_type: "multi-hop",
+        haystack_dates: ["2026-09-09T10:00:00Z"],
+      }),
+    ]);
+    // Upstream assigns haystack dates per instance: the same session id
+    // carrying a different date in each entry is data, not corruption.
+    expect(dataset.entries).toHaveLength(2);
+    expect(dataset.entries[1]!.haystack_dates).toEqual(["2026-09-09T10:00:00Z"]);
+  });
 });
 
 describe("longMemEvalToBenchFixture", () => {
@@ -249,7 +264,7 @@ describe("longMemEvalToBenchFixture", () => {
   test("gold session ids join directly to the session note paths", () => {
     const dataset = parseLongMemEvalDataset([entry({})]);
     const { fixture } = longMemEvalToBenchFixture(dataset);
-    expect(fixture.questions[0]!.expected_paths).toEqual(["sessions/s1.md"]);
+    expect(fixture.questions[0]!.expected_paths).toEqual(["sessions/q1/s1.md"]);
     expect(fixture.questions[0]!.top_k).toBe(LONGMEMEVAL_RECALL_CUTOFF);
   });
 
@@ -273,13 +288,67 @@ describe("longMemEvalToBenchFixture", () => {
 
   test("sessions become notes and session_turn continuity records", () => {
     const { fixture } = longMemEvalToBenchFixture(parseLongMemEvalDataset([entry({})]));
-    expect(fixture.notes.map((n) => n.path)).toEqual(["sessions/s1.md"]);
+    expect(fixture.notes.map((n) => n.path)).toEqual(["sessions/q1/s1.md"]);
     expect(fixture.continuity).toHaveLength(2);
     for (const record of fixture.continuity) {
       expect(record.kind).toBe("session_turn");
+      expect(record.payload["question_id"]).toBe("q1");
       expect(record.payload["session_id"]).toBe("s1");
       expect(typeof record.payload["text"]).toBe("string");
     }
+  });
+
+  test("each question's evidence is namespaced under its own subtree", () => {
+    // LongMemEval scores every question against ITS OWN haystack, so
+    // pooling all entries into one corpus would have each query search
+    // the union of all haystacks. The converted notes, continuity and
+    // expected_paths of one entry all live under sessions/<q_id>/.
+    const shared = [{ role: "user", content: "shared zebra session about quilting." }];
+    const dataset = parseLongMemEvalDataset([
+      entry({
+        q_id: "qA",
+        haystack_session_id: ["s1", "shared"],
+        haystack_dates: ["2026-03-02T10:00:00Z", "2026-03-02T11:00:00Z"],
+        haystack_session: [[{ role: "user", content: "quokka alpha note." }], shared],
+        answer_session_ids: ["s1"],
+      }),
+      entry({
+        q_id: "qB",
+        question_type: "multi-hop",
+        haystack_session_id: ["shared", "s3"],
+        haystack_dates: ["2026-03-02T11:00:00Z", "2026-03-03T10:00:00Z"],
+        haystack_session: [shared, [{ role: "user", content: "wombat beta note." }]],
+        answer_session_ids: ["s3"],
+      }),
+    ]);
+    const { fixture } = longMemEvalToBenchFixture(dataset);
+    for (const question of fixture.questions) {
+      for (const path of question.expected_paths!) {
+        expect(path.startsWith(`sessions/${question.id}/`)).toBe(true);
+      }
+    }
+    const notePaths = fixture.notes.map((n) => n.path);
+    expect(notePaths).toContain("sessions/qA/s1.md");
+    expect(notePaths).toContain("sessions/qA/shared.md");
+    expect(notePaths).toContain("sessions/qB/s3.md");
+    expect(notePaths).toContain("sessions/qB/shared.md");
+    // A session shared by two entries exists once per scope, and its
+    // continuity records name the question that produced them.
+    const sharedRecords = fixture.continuity.filter((r) => r.payload["session_id"] === "shared");
+    expect(sharedRecords.map((r) => r.payload["question_id"]).sort()).toEqual(["qA", "qB"]);
+  });
+
+  test("distinct question ids that sanitize to one scope are a named error", () => {
+    const dataset = parseLongMemEvalDataset([
+      entry({ q_id: "q/1" }),
+      entry({ q_id: "q-1", question_type: "multi-hop" }),
+    ]);
+    expect(() => longMemEvalToBenchFixture(dataset)).toThrow(/same path scope/);
+  });
+
+  test("a duplicate question id is a named error", () => {
+    const dataset = parseLongMemEvalDataset([entry({}), entry({})]);
+    expect(() => longMemEvalToBenchFixture(dataset)).toThrow(/appears twice/);
   });
 
   test("converted questions carry the official judge input", () => {
@@ -398,6 +467,56 @@ describe("the longmemeval suite", () => {
     expect(fixture.questions).toHaveLength(3);
     expect(receipt.abstention_excluded).toBe(1);
   });
+
+  test("the loader converts the committed official-shape sample with its receipt", () => {
+    const { fixture, receipt } = loadLongMemEvalFixture(OFFICIAL_SAMPLE);
+    expect(fixture.name).toBe("longmemeval-suite");
+    expect(fixture.questions).toHaveLength(2);
+    expect(receipt.abstention_excluded).toBe(1);
+    for (const question of fixture.questions) {
+      expect(question.expected_paths!.every((p) => p.startsWith(`sessions/${question.id}/`))).toBe(
+        true,
+      );
+    }
+  });
+
+  test("the official-shape sample runs end to end with the strict family", async () => {
+    const { fixture, receipt } = loadLongMemEvalFixture(OFFICIAL_SAMPLE);
+    const runsDir = mkdtempSync(join(tmpdir(), "o2b-longmemeval-runs-"));
+    dirs.push(runsDir);
+    const report = await runMemoryBench({
+      fixture,
+      runsDir,
+      suite: "longmemeval",
+      suiteReceipt: receipt,
+      capabilities: { embeddings: true },
+      // The official questions are natural sentences; the deterministic
+      // local provider matches them to their haystack notes, which is
+      // the lane the suite exists for.
+      pinnedKnobs: { semantic: { enabled: true, provider: "local" } },
+    });
+    expect(report.embeddings).toBeDefined();
+    expect(report.quality.passed).toBe(report.quality.total);
+    expect(report.longmemeval).toEqual({ recall_all_at_5: 1, abstention_excluded: 1 });
+  }, 30_000);
+
+  test("the keyword-only default pin matches nothing for natural official questions", async () => {
+    const { fixture, receipt } = loadLongMemEvalFixture(OFFICIAL_SAMPLE);
+    const runsDir = mkdtempSync(join(tmpdir(), "o2b-longmemeval-runs-"));
+    dirs.push(runsDir);
+    const report = await runMemoryBench({
+      fixture,
+      runsDir,
+      suite: "longmemeval",
+      suiteReceipt: receipt,
+    });
+    // The keyword lane requires every query token to hit, so a natural
+    // question scores zero notes - this is why the suite declares the
+    // embeddings capability, and the report says so rather than
+    // manufacturing a passing number.
+    expect(report.longmemeval).toEqual({ recall_all_at_5: 0, abstention_excluded: 1 });
+    expect(report.quality.passed).toBe(0);
+  }, 30_000);
 
   test("running the committed sample produces a green report with the judge skipped", async () => {
     const { fixture } = loadLongMemEvalFixture(SAMPLE);
