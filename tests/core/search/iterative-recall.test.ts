@@ -231,6 +231,68 @@ describe("iterative round driver over a seeded vault", () => {
     expect((err as SearchError).message).toContain("disabled by operator config");
   });
 
+  test("round accounting counts only candidates the reach rule shows the caller", async () => {
+    // The private twin matches the probed sub-query but is withheld at
+    // remote reach: the decider round's `added` must count zero there,
+    // so probing a withheld term returns no recovery signal - while the
+    // same probe at local reach honestly reports the recovery.
+    await seed();
+    writeMd(
+      vault,
+      "Brain/notes/private-chandelier.md",
+      "---\nvisibility: private\n---\n\n# Private chandelier\n\nSealed wing chandelier handoff notes.\n",
+    );
+    await indexVault(makeConfig({ vault, dbPath, maxHops: 0, mmrLambda: 1 }));
+    const config = makeConfig({ vault, dbPath, maxHops: 0, mmrLambda: 1, twoPassEnabled: false });
+    const query = `chandelier handoff wyrmshade velkriss`;
+    const structured = structuredFor();
+    // The token derives from query+round+pool, and both arms plan over
+    // the same vault: a ghost term per arm keeps the two queries - and
+    // so the two tokens - distinct.
+    const run = async (
+      transportReach: (typeof TRANSPORT_REACH)["remote" | "local"],
+      ghost: string,
+    ) => {
+      const armQuery = `${query} ${ghost}`;
+      const planBody = await search(withIterative(config), {
+        query: armQuery,
+        structuredQuery: structured,
+        iterative: true,
+        transportReach,
+      });
+      const plan = planBody.iterative;
+      if (plan === undefined || plan.phase !== "needs-llm-step") {
+        throw new Error(`expected a decider pause at reach ${transportReach}`);
+      }
+      return search(withIterative(config), {
+        query: armQuery,
+        structuredQuery: structured,
+        iterative: true,
+        transportReach,
+        iterativeToken: plan.token,
+        iterativePayload: { evidence: [plan.poolIds[0]!], subQueries: ["sealed wing"] },
+      });
+    };
+
+    const remote = await run(TRANSPORT_REACH.remote, "wyrmshade");
+    const remoteFinal = remote.iterative;
+    if (remoteFinal === undefined || remoteFinal.phase !== "final") {
+      throw new Error("expected a final marker at remote reach");
+    }
+    const deciderRoundRemote = remoteFinal.rounds.at(-1);
+    expect(deciderRoundRemote?.author).toBe("decider");
+    expect(deciderRoundRemote?.added).toBe(0);
+
+    const local = await run(TRANSPORT_REACH.local, "velkriss");
+    const localFinal = local.iterative;
+    if (localFinal === undefined || localFinal.phase !== "final") {
+      throw new Error("expected a final marker at local reach");
+    }
+    const deciderRoundLocal = localFinal.rounds.at(-1);
+    expect(deciderRoundLocal?.author).toBe("decider");
+    expect(deciderRoundLocal?.added).toBeGreaterThan(0);
+  });
+
   test("an expired deadline degrades the looped search exactly like the plain one", async () => {
     await seed();
     const config = {

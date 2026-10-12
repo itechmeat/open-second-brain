@@ -500,6 +500,25 @@ export async function search(
     // model-free; the caller-executed decider round rides this seam too
     // (decider-step.ts). Flag absent, or knob off, this block is never
     // entered and the pipeline is byte-identical.
+    const reachFilterFor = (reach: NonNullable<typeof opts.transportReach>) => {
+      return (ids: ReadonlyArray<number>): ReadonlyArray<number> => {
+        const hydrated = store.hydrateChunks(ids);
+        const indexed = store.indexedVisibilityByPaths([...hydrated.values()].map((c) => c.path));
+        return ids.filter((id) => {
+          const chunk = hydrated.get(id);
+          return (
+            chunk !== undefined &&
+            isPathReadableAtReach(
+              effectiveConfig.vault,
+              chunk.path,
+              reach,
+              frontmatterCache,
+              indexed.get(chunk.path),
+            )
+          );
+        });
+      };
+    };
     let iterativeMarker: SearchOutcomeIterative | null = null;
     if (
       iterativeRequest !== null &&
@@ -532,27 +551,7 @@ export async function search(
         firstRoundNumber: retry.secondPass !== undefined ? 3 : 2,
         isExpired: () => deadlineExpired(deadline),
         ...(opts.transportReach !== undefined && opts.transportReach !== "local"
-          ? {
-              filterReachableIds: (ids: ReadonlyArray<number>) => {
-                const hydrated = store.hydrateChunks(ids);
-                const indexed = store.indexedVisibilityByPaths(
-                  [...hydrated.values()].map((c) => c.path),
-                );
-                return ids.filter((id) => {
-                  const chunk = hydrated.get(id);
-                  return (
-                    chunk !== undefined &&
-                    isPathReadableAtReach(
-                      effectiveConfig.vault,
-                      chunk.path,
-                      opts.transportReach!,
-                      frontmatterCache,
-                      indexed.get(chunk.path),
-                    )
-                  );
-                });
-              },
-            }
+          ? { filterReachableIds: reachFilterFor(opts.transportReach) }
           : {}),
       });
       keywordHits = loop.keywordHits;
@@ -599,6 +598,9 @@ export async function search(
             payload: opts.iterativePayload,
             usedTokens: new Set<string>(),
             priorRounds: loop.rounds,
+            ...(opts.transportReach !== undefined && opts.transportReach !== "local"
+              ? { filterReachableIds: reachFilterFor(opts.transportReach) }
+              : {}),
           });
           keywordHits = committed.keywordHits;
           idsList = committed.ids;

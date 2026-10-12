@@ -88,13 +88,11 @@ export interface IterativeLoopInput {
   /** The candidate id set; each round adds to it in place. */
   readonly chunkIds: Set<number>;
   /**
-   * Judges which pool ids the decider pause may name: the caller's reach
-   * rule applied to the pause pool before the envelope is built, so
-   * pool_ids never names a candidate the boundary would withhold.
-   * Without it the gap between pool_ids and the post-reach trail would
-   * publish how many withheld pages matched - the existence oracle
-   * FilteredPool.preVisibility exists to close. Absent (local reach):
-   * the pool passes through unchanged.
+   * The caller's reach rule over the loop's working set: withheld
+   * candidates never enter the pool, so the round accounting, the
+   * coverage gaps and the decider pause envelope are all post-reach -
+   * the existence and cardinality oracle FilteredPool.preVisibility
+   * exists to close. Absent (local reach): byte-identical.
    */
   readonly filterReachableIds?: (ids: ReadonlyArray<number>) => ReadonlyArray<number>;
   readonly ids: ReadonlyArray<number>;
@@ -199,6 +197,15 @@ export function runIterativeRecall(input: IterativeLoopInput): IterativeLoopOutc
         recovered.push(hit);
       }
     }
+    // The reach rule decides what a round "recovered": at non-local reach
+    // a withheld candidate never enters the pool, the round accounting or
+    // the trail, so the counts a remote caller reads are counts of
+    // candidates it could actually be shown.
+    if (input.filterReachableIds) {
+      const survivors = keepReachable(recovered, input.filterReachableIds, input.chunkIds);
+      recovered.length = 0;
+      recovered.push(...survivors);
+    }
     keywordHits = keywordHits.concat(...recovered);
     const added = recovered.length;
     rounds.push(
@@ -294,6 +301,8 @@ export interface DeciderRoundInput {
   readonly keywordHits: KeywordHit[];
   /** The candidate id set; the round adds to it in place. */
   readonly chunkIds: Set<number>;
+  /** Same rule as the driver's {@link RunIterativeInput.filterReachableIds}. */
+  readonly filterReachableIds?: (ids: ReadonlyArray<number>) => ReadonlyArray<number>;
   readonly priorRounds: ReadonlyArray<IterativeRoundRecord>;
   /** The loop's clock; injectable so the round record is testable. */
   readonly nowMs?: () => number;
@@ -320,6 +329,22 @@ export interface DeciderRoundOutcome {
  * round. A refused payload throws before any pull, so a bad commit
  * never advances the loop.
  */
+/**
+ * Keep only the hits whose chunk the reach rule shows the caller, and
+ * evict the rest from the pool set they were already added to.
+ */
+function keepReachable(
+  recovered: KeywordHit[],
+  filterReachableIds: (ids: ReadonlyArray<number>) => ReadonlyArray<number>,
+  chunkIds: Set<number>,
+): KeywordHit[] {
+  const survivors = new Set(filterReachableIds(recovered.map((hit) => hit.chunkId)));
+  for (const hit of recovered) {
+    if (!survivors.has(hit.chunkId)) chunkIds.delete(hit.chunkId);
+  }
+  return recovered.filter((hit) => survivors.has(hit.chunkId));
+}
+
 export function runDeciderRound(input: DeciderRoundInput): DeciderRoundOutcome {
   const now = input.nowMs ?? Date.now;
   const commit = commitDeciderStep(input.token, input.payload, {
@@ -342,6 +367,11 @@ export function runDeciderRound(input: DeciderRoundInput): DeciderRoundOutcome {
       input.chunkIds.add(hit.chunkId);
       recovered.push(hit);
     }
+  }
+  if (input.filterReachableIds) {
+    const survivors = keepReachable(recovered, input.filterReachableIds, input.chunkIds);
+    recovered.length = 0;
+    recovered.push(...survivors);
   }
   const round: IterativeRoundRecord = Object.freeze({
     round: input.pause.round,
