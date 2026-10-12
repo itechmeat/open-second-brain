@@ -13,6 +13,21 @@
  * count of records that name no session - the key absent, a non-string
  * value, or the empty string.
  *
+ * The census is scoped to the kinds whose writers stamp a session on
+ * EVERY record they write (below). A record of one of those kinds that
+ * names no session is a defect in the write that produced it. The rest
+ * of the ledger is sessionless BY DESIGN and counts nothing: the
+ * telemetry lanes run with no session in scope and stamp the key only
+ * when one exists (`gate-telemetry.ts`, `recall-telemetry.ts`,
+ * `observed-use.ts`, `recent-turns.ts`, `token-impact.ts`,
+ * `context-pack-evidence.ts`, `context-pack-outcome.ts`,
+ * `context-receipts.ts`), `appendContinuitySourceInvalidation` writes
+ * only `{reason}`, and the remaining kinds correlate their session
+ * outside the payload key entirely (source refs, `session_ref`,
+ * `sample_id`). Warning on those would put a permanent finding on every
+ * used vault, so they are excluded by name - the census over the
+ * classification lives in `session-identity-check.test.ts`.
+ *
  * The count is the whole finding. The check carries no `fix` and
  * rewrites nothing: a session no writer stamped cannot be restored from
  * the record, and assigning one would fabricate provenance over
@@ -27,11 +42,10 @@
  */
 
 import { continuityLogDir, listContinuityRecords } from "../continuity/store.ts";
-import type { ContinuityRecord } from "../continuity/types.ts";
+import type { ContinuityRecord, ContinuityRecordKind } from "../continuity/types.ts";
 import { sessionIdOf } from "../session-recall.ts";
 import type { DoctorIssue } from "../types.ts";
 import type { DoctorCheck, DoctorCheckContext, DoctorFindings } from "./check.ts";
-import type { DoctorUncertainEntry } from "./report.ts";
 import { reportSweptFailure, SWEEP_ORIGIN, type SweptPath } from "./unreadable-path.ts";
 
 /** A continuity record names no session where the writers stamped one conditionally. */
@@ -40,6 +54,38 @@ export const SESSION_IDENTITY_CHECK_CODE = "blank-session-identity";
 /** Subsystem name the check's sweeps report an unreadable path under. */
 export const SESSION_IDENTITY_SITE = "brain.doctor.sessionIdentity";
 
+/**
+ * The kinds this census counts: the kinds whose writer carries a
+ * session-scoped payload, stamping `session_id` unconditionally from a
+ * REQUIRED input, so an unnamed session is a defect rather than a lane
+ * running without one:
+ *
+ * - `session_turn` / `session_summary_node` - `session-recall.ts`
+ *   (`importRawTurn` / `appendTurnRow` and the node builder; the session
+ *   id is a required parameter and the payload key is unconditional).
+ * - `session_summary_digest` - `session-summary.ts` (refuses a blank id
+ *   before writing).
+ * - `pre_compact_extract` - `pre-compact-extract.ts` (required
+ *   `sessionId`, stamped into every payload).
+ * - `post_compact_audit` - `post-compact-audit.ts` (required
+ *   `sessionId`, stamped into every payload).
+ * - `decision_model_extract_commit` - `extract-signals-prefilter.ts`
+ *   (stamped from the commit result's required session id).
+ *
+ * The writer-shape census that keeps this list honest over the full
+ * `ContinuityRecordKind` population lives in the check's test file.
+ */
+export const SESSION_IDENTITY_CHECKED_KINDS: ReadonlyArray<ContinuityRecordKind> = Object.freeze([
+  "decision_model_extract_commit",
+  "post_compact_audit",
+  "pre_compact_extract",
+  "session_summary_digest",
+  "session_summary_node",
+  "session_turn",
+]);
+
+const CHECKED_KINDS: ReadonlySet<string> = new Set(SESSION_IDENTITY_CHECKED_KINDS);
+
 /** What the check can no longer claim for a ledger it could not read. */
 const LEDGER_CONSEQUENCE =
   "no record in it had its session identity counted, so a blank-identity count for its kinds is missing from this report";
@@ -47,7 +93,8 @@ const LEDGER_CONSEQUENCE =
 /**
  * The registered check. Count-only and fail-soft: one pass, one issue
  * per affected kind (deterministic kind order), no `fix` field, no
- * payload rewritten.
+ * payload rewritten. Kinds whose writers are sessionless by design
+ * produce no issue at all.
  */
 export const sessionIdentityCheck: DoctorCheck = {
   failSoft: true,
@@ -72,6 +119,7 @@ export const sessionIdentityCheck: DoctorCheck = {
     }
     const counts = new Map<string, number>();
     for (const record of records) {
+      if (!CHECKED_KINDS.has(record.kind)) continue;
       if (sessionIdOf(record.payload) !== undefined) continue;
       counts.set(record.kind, (counts.get(record.kind) ?? 0) + 1);
     }
@@ -85,8 +133,9 @@ export const sessionIdentityCheck: DoctorCheck = {
         path: dir,
         message:
           `${count} ${kind} continuity record(s) name no session ` +
-          "(session_id absent, non-string, or empty); informational count only - " +
-          "reads treat them as unattributed and no payload is rewritten",
+          "(session_id absent, non-string, or empty; this kind's writer stamps one on " +
+          "every record); informational count only - reads treat them as unattributed " +
+          "and no payload is rewritten",
       } satisfies DoctorIssue);
     }
   },
