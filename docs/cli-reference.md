@@ -469,8 +469,8 @@ o2b brain generation-reports  Record/list/summarise opt-in inbound LLM generatio
 o2b brain context-presets     Show/suggest/diff read-only context budget presets (since v0.29.0)
 o2b brain pre-compact-extract Extract decision/commitment/outcome/rule/open-question continuity records from bounded text (since v0.29.0)
 o2b brain post-compact-audit  Audit pinned-anchor survival after a compaction and re-assert drifted anchors (gated by post_compact_survival_audit)
-o2b brain session-grep        Search imported session recall raw turns and summary nodes (since v0.29.0)
-o2b brain session-describe    Count raw turns and deterministic summary depths for one session recall DAG (since v0.29.0)
+o2b brain session-grep        Search imported session recall raw turns and summary nodes; --operation coverage selects whole-thread coverage under --char-budget (since v0.29.0; coverage since v1.82.0)
+o2b brain session-describe    Count raw turns and deterministic summary depths for one session recall DAG; --topics adds the adaptive topic-budget report (since v0.29.0; --topics since v1.82.0)
 o2b brain session-expand      Expand a session recall node to immediate sources and paginated raw turn content (since v0.29.0)
 o2b brain session-summary     write|get|list a session-scoped structured digest (request/decisions/learnings/next_steps) (since v1.11.0)
 o2b brain idea-lineage        Trace how a derived artifact was reached: observation -> synthesis -> conclusion over continuity sourceRefs or belief-evolution (since v1.11.0)
@@ -529,8 +529,8 @@ o2b brain context-presets     show [tight-context|long-context] --json; suggest 
 o2b brain pre-compact-extract --session-id <id> --turn-start <id> --turn-end <id> --text <bounded-text> [--host <name>] [--max-chars <n>] [--json]
 o2b brain post-compact-audit  [--session-id <id>] [--no-reassert] [--force] [--vault <path>] [--json] - reads { session_id, messages } JSON from stdin; gated off by default (post_compact_survival_audit), --force overrides
 o2b brain import-session      <path> --recall [--recall-session-id <id>] [--recall-summary-group-size <n>] [--json]
-o2b brain session-grep        --query <text> [--session-id <id>] [--limit <n>] [--snippet-chars <n>] [--json]
-o2b brain session-describe    --session-id <id> [--json]
+o2b brain session-grep        --query <text> [--session-id <id>] [--limit <n>] [--snippet-chars <n>] [--json]; --operation coverage --char-budget <n> [--entity-key <key>] [--session-id <id>] [--json] - coverage-first thread selection; match-only flags refuse under coverage and --char-budget refuses under match (since v1.82.0)
+o2b brain session-describe    --session-id <id> [--topics] [--json]
 o2b brain session-expand      <record-id> [--raw-limit <n>] [--cursor <offset>] [--json]
 o2b brain handoff             <session-file> [--session-id <id>] [--format auto|claude|codex|hermes] [--json] - write Brain/handoffs/<date>-<scope>.md (since v0.37.0)
 o2b brain hygiene             scan | apply --ids <id,...> [--detectors conflicts,dedup,freshness,usefulness,slug-collisions,tags,capture-scope] [--dry-run] [--json] - hygiene findings pipeline; review findings never execute (since v1.3.0); the default sweep runs every detector except the opt-in ones (since v1.64.0: `slug-collisions` is default-on and reports same-stem groups such as topic.md beside topic-2.md as info findings, `tags` is opt-in and audits inline body tags only - frontmatter tags arrays are out of scope; since v1.67.0 `capture-scope` is default-on and warns, with proposed action review, when a retrievable page of active knowledge cites only sources that are currently url-only; since v1.81.0 the detector also names a cited source whose durable archive entry under Brain/.archives/ is missing or no longer matches the hash stamped on the page)
@@ -568,10 +568,12 @@ Trigger generation, brief delivery, and gate telemetry are pull-based or config-
 
 ```text
 o2b brain continuity          export --format atof|atif [--session <id>] [--month YYYY-MM] [--out <dir>] [--json] - read-only trajectory export of the continuity store; private records dropped, redacted text stays masked
-o2b brain bench               memory --fixture <name|path> [--resume <run-id>] [--runs-dir <dir>] [--json] - memory quality benchmark over a disposable fixture vault; quality, latency, and context cost reported separately; checkpoint/resume by run id; exit 1 on any failed question
+o2b brain bench               memory --fixture <name|path> [--suite <name>] [--resume <run-id>] [--runs-dir <dir>] [--json] - memory quality benchmark over a disposable fixture vault; quality, latency, and context cost reported separately; checkpoint/resume by run id; exit 1 on any failed question. Suites (since v1.82.0): longmemeval (strict recall_all@5 over the LongMemEval dataset shape; committed sample fixture, full dataset operator-supplied, judge glue over bench_judge_cmd) and surfacing-replay (replays a recorded prompt corpus through the shipped decision core and scores know_to_ask / false_fire)
 ```
 
 The benchmark never touches the configured vault - the fixture materializes into `<runs-dir>/<run-id>/vault` (default runs dir `.open-second-brain/bench-runs/`, gitignored). The optional `bench_judge_cmd` config key (env `OPEN_SECOND_BRAIN_BENCH_JUDGE_CMD`) arms an advisory external judge; absent means the judge phase is skipped. The full observability contract (event kinds, gates, correlation ids, payload safety, schema version) lives in `docs/observability.md`.
+
+Since v1.82.0 the verb's suite registry maps a `--suite` name to its loader plus a declared capability set (`{embeddings: boolean}`): omitting `--suite` stays the byte-identical default path, and the semantic lane is reachable only for a suite that declared the embeddings capability (longmemeval does; arming the pin is an API-only move this wave - the CLI exposes no knob or floor flag). The run identity folds the pinned search knobs and the proactive-recall admission floor into the checkpoint hash beside the fixture hash, so a resumed run that would mix configurations fails the identity guard by name instead of comparing two pipelines; in-flight runs started before the change fail the resume guard loudly and restart. `--suite longmemeval` converts the official LongMemEval dataset shape - abstention questions drop at conversion with the count recorded, gold sessions join by direct id membership and an unknown id is a named parse error - and reports the strict `longmemeval: {recall_all_at_5, abstention_excluded}` family beside the untouched quality, latency and context_cost families; the committed sample fixture `tests/fixtures/bench/longmemeval-sample.json` certifies CI and the full dataset is an operator-supplied path (never downloaded at run time). The judge glue reuses `bench_judge_cmd`: when the suite provides them, the stdin payload's questions carry `question`, `answer` and `gold` beside the usual result fields, and the official prompt text ships as module constants pinned to a named upstream revision, so the external command stays a dumb model call; suites without judge input keep the payload byte for byte. `--suite surfacing-replay` replays a recorded prompt corpus (a committed session fixture, or a vault's own session turns converted to the same shape) through the shipped decision core and scores the graded surfacing gate's know_to_ask / false_fire rates under the same denominations the proactive-recall metric uses, so the gate's calibration is a measured number a re-run re-measures.
 
 ### Externalized session payloads (payload registry)
 
@@ -1330,6 +1332,31 @@ entity admission gate - one that fails the structural or lexicon verdicts is
 refused by the registry with its reason, not waved through. `dismiss`
 records the key in the artifact's dismissal set, and future mine runs skip
 it.
+
+### Coverage-first session recall (since v1.82.0)
+
+```text
+o2b brain session-grep        --operation coverage --char-budget <n> [--entity-key <key>] [--session-id <id>] [--json] - coverage-first thread selection: facets from the thread itself, fanned out under the adaptive topic budget, selected under the budget, returned chronologically with diagnostics
+o2b brain session-describe    --session-id <id> --topics [--json] - add the adaptive topic-budget report the coverage operation fans out under
+```
+
+`--operation coverage` replaces the grep's term matching with thread
+coverage over the same lineage-scoped record set. The facets are the
+thread's own - distinct mined entity keys and depth-1 summary clusters -
+and the fan-out runs under the adaptive topic budget
+`clamp(distinct facets, floor 12, cap 16)`: a 40-facet thread caps at 16,
+a 3-facet thread floors at 12 and reports 3 realized topics honestly in
+the diagnostics. The selection is re-emitted in chronological order under
+the required `--char-budget` beside recomputable diagnostics; a budget
+that cannot hold the floor-weighted selection is a typed error naming the
+requested topics, the kept ones and the required characters - a retry
+bound, never a silent truncation. `--entity-key` seeds the fan-out from
+the `session_entity_mention` rows an import already mined - no new mining,
+no new record kind - and an entity no record mentions is refused by name,
+never answered with an empty result. The operations keep their flags to
+themselves: `--query`, `--since`, `--before`, `--limit` and
+`--snippet-chars` refuse under coverage, and `--char-budget` refuses under
+match.
 
 ### Source distillation
 
@@ -2516,6 +2543,54 @@ indexes it, while an unpromoted key judges the live file, and the narrowing
 snapshot is arbitrated by that same live filter. A mixed filter map
 straddles the tiers by design. Absent filters compile byte-identical SQL to
 before this wave.
+
+### Iterative recall (since v1.82.0)
+
+The single self-correcting second pass generalizes into a bounded loop.
+`search_iterative_recall_enabled` (`OPEN_SECOND_BRAIN_SEARCH_ITERATIVE`,
+default off) lets gap-driven rounds run past it: each round re-measures
+pool coverage, emits follow-up sub-queries from the uncovered rare-term
+groups, merges what they recover into the same ranked pool, and stops on
+coverage completeness, a round that recovers nothing, the marginal-value
+stop the retrieval advisor already used, the round cap
+(`search_iterative_recall_max_rounds` /
+`OPEN_SECOND_BRAIN_SEARCH_ITERATIVE_MAX_ROUNDS`, default 2, clamped to 8)
+or the composite deadline. With the knob off the outcome and the
+query-cache keys are byte-identical; the cache suffix that separates
+iterative rows exists only in the opt-in mode.
+
+The deterministic coverage planner is the floor and needs no model. The
+additive decider rounds ride the MCP `brain_search` tool as a plan/commit
+round-trip, with no CLI mirror this wave: a call with `iterative: true`
+whose measurable gaps survive the deterministic budget pauses with
+`iterative.phase: "needs-llm-step"` - the decider envelope, the candidate
+pool ids, the uncovered gaps and an opaque single-use round token - and
+the caller re-invokes with `iterative_token` and `iterative_payload`
+(`{evidence, subQueries}`), validated in full before any pull runs. A
+replayed token refuses `token_used`, a mismatched one `token_mismatch`,
+and a commit with the loop disabled is refused by name instead of reading
+as a plain answer. The round-trip runs on the single-vault path only: any
+iterative field beside `global: true` is refused at the argument layer.
+Every loop that ran at least one round - a committed call, or a plain
+final - answers with an `iterative` marker at `phase: "final"` carrying
+the per-round records and the stop reason; a call the mode did nothing
+for carries no marker at all.
+
+### The graded surfacing key (since v1.82.0)
+
+Recall admission has one shared calculator. The recall gate's
+prompt-structural predicate stays the structural pre-tier with its named
+short-circuits, and admission is graded from absolute match quality - the
+IDF-weighted coverage a search outcome already reports - calibrated per
+transport channel (`mcp`, `cli`, `hook`), each floor an exported module
+constant at the hook's 0.35; the fused composite stays an ordering signal
+and is never a threshold basis. `brain_recall_gate` and the recall-inject
+hook's floor branches consume the same `{key, tier, admit, reason}`
+decision, so a tier boundary answers with the same reason on every
+channel, and the binary `{retrieve, reason}` projection survives
+unchanged for existing callers. Gate telemetry under the existing
+`recall_gate_telemetry` opt-in records the key, the tier and the channel
+on measured decisions, and its summary counts by tier.
 
 ### The reserved visibility token (since v1.54.0)
 

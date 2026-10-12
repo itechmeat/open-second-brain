@@ -378,9 +378,9 @@ flags for a narrower per-process full server.
 | `brain_audit`               | Read-only per-preference mutation trail (create / promote / update / retire / merge) with agent, reason, revision + content-hash before/after. | `pref_id`                                      |
 | `brain_brief`               | Read-only Brain summary for any window: `view: morning \| daily \| weekly \| monthly \| operator \| digest`.                                   | `view`                                         |
 | `brain_analytics`           | Read-only Brain analytics for any lens: `view: timeline \| attention_flows \| belief_evolution \| concept_synthesis \| dedup`. `view=dedup` summarises the persisted exact-hash ingest dedup records into a trend plus a per-source re-ingest ranking; every count is an exact sha-256 drop, never a semantic figure (the semantic detectors nominate merge candidates and never drop). | `view`                                         |
-| `brain_search`              | Read-only vault search with optional structured query lanes, explicit focus hints, time ranges, evidence-pack diagnostics, a selectable recall `profile` (`fast \| balanced \| thorough`), an FTS `match_mode` (`all` \| `any`), and since v1.80.0 a pushed `kind` filter (`page` \| `section`) plus SQL pushdown for the promoted `properties` keys. | `query`                                        |
+| `brain_search`              | Read-only vault search with optional structured query lanes, explicit focus hints, time ranges, evidence-pack diagnostics, a selectable recall `profile` (`fast \| balanced \| thorough`), an FTS `match_mode` (`all` \| `any`), a pushed `kind` filter (`page` \| `section`) plus SQL pushdown for the promoted `properties` keys (since v1.80.0), and since v1.82.0 an opt-in iterative recall loop (`iterative`, `iterative_token`, `iterative_payload`) whose surviving coverage gaps pause with a plan the caller answers. | `query`                                        |
 | `brain_recall_feedback`     | Record explicit up/down recall feedback for one search result; feeds the deterministic learned-weight fold.                                     | `query`, `result_path`, `verdict`              |
-| `brain_recall_gate`         | Read-only classifier for whether an automatic recall attempt should run; returns `retrieve` plus a stable reason. When the caller passes `scores` AND `match_quality` (the `idf_weighted_coverage` a search outcome reports - the two stand or fall together, and an incomplete pair is refused), also attaches an adequacy verdict (`sufficient` \| `weak` \| `insufficient`), a recommended action (`proceed` \| `re_recall` \| `abstain`), and an optional `escalate` flag. The LEVEL is decided by `match_quality` alone; the scores decide only the usable-result count. Thresholds via `recall_adequacy_sufficient` / `recall_adequacy_weak` / `recall_adequacy_min_results`.                              | `prompt`                                       |
+| `brain_recall_gate`         | Read-only classifier for whether an automatic recall attempt should run; returns `retrieve` plus a stable reason. When the caller passes `scores` AND `match_quality` (the `idf_weighted_coverage` a search outcome reports - the two stand or fall together, and an incomplete pair is refused), also attaches an adequacy verdict (`sufficient` \| `weak` \| `insufficient`), a recommended action (`proceed` \| `re_recall` \| `abstain`), and an optional `escalate` flag. The LEVEL is decided by `match_quality` alone; the scores decide only the usable-result count. Thresholds via `recall_adequacy_sufficient` / `recall_adequacy_weak` / `recall_adequacy_min_results`. Since v1.82.0 a measured call also returns the shared graded surfacing key (`key`, `tier`) beside the binary decision.                              | `prompt`                                       |
 | `brain_context_pack`        | Budgeted context slice; pass `lanes: true` to return directives, constraints, and consider lanes. Filtered items include `safety.reasons`. Each item carries a structural `epistemic` status (`observed` \| `derived` \| `hypothesis` \| `plan` \| `unknown`) plus `evidence_refs` derived from existing graph metadata; fields are absent when the status is `unknown`. Takes the same adequacy pair as `brain_recall_gate` under its own spelling, `recall_scores` AND `match_quality`: both or neither, an incomplete pair is refused, and the schema states it as `dependentRequired` keyed on this tool's own scores name. | `max_tokens`                                   |
 | `brain_context_receipts`    | List or show opt-in prompt context receipt continuity records with budgets, hashes, source refs, safety/redaction metadata, and item IDs.      | `operation`                                    |
 | `brain_recall_telemetry`    | List or summarise opt-in recall telemetry records for search, context-pack, and pre-compress calls; since v1.80.0 the `dead_weight` operation reports in-scope pages no recorded recall ever surfaced. | `operation`                                    |
@@ -396,8 +396,8 @@ flags for a narrower per-process full server.
 | `brain_pre_compact_extract` | Extract decision/commitment/outcome/rule/open-question records from bounded text into continuity storage.                                      | `session_id`, `turn_start`, `turn_end`, `text` |
 | `brain_hygiene`             | Memory hygiene: `scan` findings (conflicts, dedup, freshness, usefulness; since v1.64.0 `slug-collisions` is default-on — same-stem allocation residue such as `topic.md` beside `topic-2.md` — and `tags` is opt-in, auditing inline body tags only, never frontmatter tags arrays; since v1.67.0 `capture-scope` is default-on and warns when active knowledge rests only on `url-only` sources; the default is the sweep of every registered detector except the opt-in ones), `apply` selected ids, `refresh` stale pages; since v1.81.0 `archive_get` resolves an ingest summary's `source_archive_hash` to its archived bytes under `Brain/.archives/` (local reach only, and the `capture-scope` scan also names a cited source whose archive entry is missing or mismatched). Resolver command comes from `_brain.yaml` only. When `hygiene_digest_enabled` is on in the machine config, the same default-sweep findings are also pushed at turn end as a one-line digest (Stop hook, once per change), so this pull surface doubles as a push channel. With the optional `dedup` decision-model use in enforce, `scan` dedup findings carry an advisory `decision_model` verdict; `apply` never reads it. | `mode`                                         |
 | `brain_anticipatory_context` | Turn-specific context bundle kept warm by lifecycle hooks, keyed by the session's lineage root; reports `cache_state` warm / stale / miss.   | `session_id`                                   |
-| `brain_session_grep`        | Search imported session recall raw turns and deterministic summary nodes.                                                                      | `query`                                        |
-| `brain_session_describe`    | Describe raw-turn counts and summary depths for one imported session recall DAG.                                                               | `session_id`                                   |
+| `brain_session_grep`        | Search imported session recall raw turns and deterministic summary nodes; since v1.82.0 `operation: "coverage"` runs the coverage-first thread selection under a `char_budget` instead of a grep.                              | `query`                                        |
+| `brain_session_describe`    | Describe raw-turn counts and summary depths for one imported session recall DAG; `topics: true` adds the adaptive topic-budget report the coverage operation fans out under (since v1.82.0).                                   | `session_id`                                   |
 | `brain_session_expand`      | Expand a raw or summary session recall node to immediate sources and paginated raw turn content.                                               | `id`                                           |
 | `brain_sources`             | Read-only dashboard of signals grouped by (agent, source_type) with active/processed and distinct-topic counts.                                | —                                              |
 | `brain_create_note`         | Write an actual vault note file (path + frontmatter + content) atomically inside the vault. Distinct from `brain_note` (log append); refuses traversal, the Brain root, excluded paths, any destination outside the declared write binding, and — by default — clobbering. Opt-in: `if_exists: "skip"` returns `outcome: "skipped"` instead of creating, `strict` validates the document before writing and reports coded violations, and `template` + `template_variables` render the body through a closed two-construct grammar (`{{name}}` substitution; `{{#name}}…{{/name}}` presence sections and list iteration with `{{.}}`). Unknown placeholders are left intact. | `path`                                         |
@@ -539,6 +539,62 @@ cleanup removes the source's orphaned archive entries best-effort, and
 `brain_session_summary` `get` and `list` omit the `session_id` key of a
 digest that has no session instead of answering `""`, matching the
 no-session read rule every continuity reader applies.
+Since v1.82.0 `brain_search` can keep querying after the single
+self-correcting second pass: `iterative: true` opts one query into the
+bounded iterative recall loop, which re-measures pool coverage each round,
+emits follow-up sub-queries from the uncovered rare-term groups, and merges
+what they recover into the same ranked pool, until coverage completes, a
+round stops paying, the round cap or the composite deadline is reached, or
+a round recovers nothing. The loop is inert unless the operator's
+`search_iterative_recall_enabled` knob is on
+(`OPEN_SECOND_BRAIN_SEARCH_ITERATIVE`; the round cap
+`search_iterative_recall_max_rounds` /
+`OPEN_SECOND_BRAIN_SEARCH_ITERATIVE_MAX_ROUNDS` defaults to 2 and clamps
+to 8), and with the knob off the response and the query-cache keys are
+byte-identical - the cache suffix that separates iterative rows exists
+only in the opt-in mode. When measurable gaps survive the deterministic
+budget, the call pauses instead of finishing: the response carries an
+`iterative` marker at `phase: "needs-llm-step"` with the decider envelope
+(`llm_step`), the candidate `pool_ids` the decider selects evidence from,
+the uncovered `gaps`, and an opaque single-use round `token`. The caller
+re-invokes with `iterative_token` plus `iterative_payload`
+(`{evidence: [chunkId, ...], subQueries: [...]}`), which is validated in
+full before any pull runs: unknown chunk ids, oversized or over-limit
+sub-queries, sub-queries carrying no significant terms, a replayed token
+(`token_used`) and a mismatched one (`token_mismatch`) are typed refusals
+surfaced as caller errors, and a fully-formed commit arriving while the
+loop is disabled is refused by name instead of reading as a plain answer.
+The round-trip is a single-vault loop: any `iterative` field combined with
+`global: true` is refused by name at the argument layer, so no iterative
+field ever reaches the federated legs. A committed call, and a plain call
+whose loop ran at least one gap-driven round, answer with the same marker
+at `phase: "final"`, carrying the per-round records (the terms, the group
+count, what was added, the elapsed time, and whether the deterministic
+floor or the decider authored the sub-queries) and the `stop_reason`
+(`coverage_complete`, `no_sub_query`, `no_progress`, `round_cap`,
+`marginal_value`, `deadline`, `decider_round`); a call the mode did
+nothing for carries no marker at all, so the serialized outcome stays
+byte-identical whenever the mode did nothing.
+Since v1.82.0 `brain_session_grep` also answers `operation: "coverage"`:
+the coverage-first thread selection over the same lineage-scoped record
+set. Facets come from the thread itself - distinct mined entity keys and
+depth-1 summary clusters - and fan out under the adaptive topic budget
+`clamp(distinct facets, floor 12, cap 16)`; the selected turns return in
+chronological order under the required `char_budget` beside recomputable
+diagnostics that report the realized topic count honestly. `entity_key`
+optionally seeds the fan-out from the session-entity-mention rows an
+import already mined, and an entity no record mentions is refused by name,
+never answered with an empty result. The operations keep their arguments
+to themselves: `char_budget` under `match`, and `query`, `since`,
+`before`, `limit`, `snippet_chars`, `include_raw` and `raw_budget_chars`
+under `coverage`, are each refused as not applicable. A budget that cannot
+hold the floor-weighted selection is a typed infeasibility mapped to
+`INVALID_PARAMS`, naming the requested topics, the kept ones and the
+required characters - a retry bound, never a silent truncation.
+`brain_session_describe` accepts `topics: true`, which adds the
+`topic_report` the coverage operation fans out under (the detected facets,
+the budget and the realized topics); without it the response is
+byte-identical.
 `brain_context_presets` supports `operation: "show"|"suggest"|"diff"`; and
 `brain_generation_reports` supports `action: "record"|"list"|"summary"` -
 `record` is gated (default off) by a per-call `enable` flag or the
@@ -565,7 +621,15 @@ to its owning vault at the configuration level. `brain_idea_lineage` accepts `id
 `explicit`; `explicit: true` always returns `retrieve: true`. Since
 v1.69.0 it also accepts an optional `turn_id` (a string of at most 512
 characters), recorded on the `gate_telemetry` record when that telemetry
-is on.
+is on. Since v1.82.0 a call that carries the scores and `match_quality`
+pair also returns the shared graded surfacing key beside the binary
+decision: `key` is the measured match quality the admission floor reads
+(null exactly where nothing was measurable, a structurally suppressed
+prompt) and `tier` is the closed admission vocabulary (`explicit`,
+`suppressed`, `admitted`, `below_floor`, `unmeasurable_quality`); without
+a measurement both fields are absent and the response is byte-identical.
+The recall-inject hook's floor branches consume the same calculator, so a
+tier boundary answers with the same reason on every channel.
 
 Optional decision-model `answerable` signal (see
 [decision-models/answerable.md](decision-models/answerable.md)): with rerank
@@ -1221,7 +1285,11 @@ aging inbox signals.
 decision when the `recall_gate_telemetry` config key is `"true"`
 (default off) - decision, stable reason, host, SHA-256 prompt prefix;
 never the raw prompt. `brain_recall_telemetry` gains `gate_list` /
-`gate_summary` operations.
+`gate_summary` operations. Since v1.82.0 a record whose call carried a
+measured quality also carries the graded surfacing key - `key`, `tier`
+and the `channel` the decision arrived over - and `gate_summary` counts
+the measured records by tier; the opt-in-off path records nothing, and no
+new record kind exists.
 
 The MCP server emits one `mcp_route_latency` continuity record per tool
 call when the `mcp_route_metrics_enabled` config key
