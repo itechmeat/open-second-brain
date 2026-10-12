@@ -541,6 +541,63 @@ describe("runIterativeRecall (driver, over an open store)", () => {
     }
   });
 
+  test("a withheld first-pass candidate cannot close a rare term's gap at remote reach", async () => {
+    // The private twin is the corpus's ONLY match for the rare term, and
+    // the first pass ranked it in: the raw pool the loop receives carries
+    // a withheld candidate, so coverage measured over the raw set would
+    // close the term's gap the visible pool never closes - the loop could
+    // end coverage-complete over a term the caller cannot see a single
+    // candidate for. With a reach rule present, the pool is post-reach
+    // from the first measurement on.
+    await seed();
+    writeMd(
+      vault,
+      "Brain/notes/private-wyrmshade.md",
+      "---\nvisibility: private\n---\n\n# Wyrmshade\n\nWyrmshade inventory tag, sealed wing.\n",
+    );
+    await indexVault(makeConfig({ vault, dbPath, maxHops: 0, mmrLambda: 1 }));
+    const config = makeConfig({ vault, dbPath, maxHops: 0, mmrLambda: 1, twoPassEnabled: false });
+    const store = await Store.open(config, { mode: "read", loadVec: false });
+    try {
+      const base = runFtsQueryDetailed(store, "warehouse rotation", { limit: 10 });
+      const withheldIds = runFtsQueryDetailed(store, "wyrmshade", { limit: 10 })
+        .hits.map((hit) => hit.chunkId)
+        .filter(
+          (id) => store.hydrateChunks([id]).get(id)?.path === "Brain/notes/private-wyrmshade.md",
+        );
+      expect(withheldIds.length).toBeGreaterThan(0);
+      const pool = new Set([...base.hits.map((hit) => hit.chunkId), ...withheldIds]);
+      const filterReachableIds = (ids: ReadonlyArray<number>): ReadonlyArray<number> =>
+        ids.filter((id) => !withheldIds.includes(id));
+      const loop = runIterativeRecall({
+        store,
+        query: "warehouse rotation wyrmshade",
+        limit: 10,
+        pathPrefix: undefined,
+        timeRange: null,
+        validityWindowFor: () => null,
+        keywordHits: base.hits,
+        chunkIds: pool,
+        ids: [...pool],
+        maxRounds: 3,
+        firstRoundNumber: 2,
+        isExpired: () => false,
+        nowMs: () => 0,
+        filterReachableIds,
+      });
+      // The rare term has no visible candidate anywhere in the corpus, so
+      // the loop must not claim coverage over it: the stop is honest about
+      // the pool's incompleteness and the term stays a reported gap.
+      expect(loop.stopReason).not.toBe("coverage_complete");
+      expect(loop.lastCoverage?.uncoveredRareTerms).toContain("wyrmshade");
+      // No withheld candidate survives in the pool the loop reports.
+      const poolPaths = [...store.hydrateChunks(loop.ids).values()].map((chunk) => chunk.path);
+      expect(poolPaths).not.toContain("Brain/notes/private-wyrmshade.md");
+    } finally {
+      await store.close();
+    }
+  });
+
   test("a complete pool needs no round and an expired clock never starts one", async () => {
     await seed();
     const config = makeConfig({ vault, dbPath, maxHops: 0, mmrLambda: 1, twoPassEnabled: false });

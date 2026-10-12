@@ -137,6 +137,18 @@ export interface IterativeLoopOutcome {
 export function runIterativeRecall(input: IterativeLoopInput): IterativeLoopOutcome {
   const now = input.nowMs ?? Date.now;
   const startMs = now();
+  // The reach rule bounds the pool BEFORE the first coverage measurement:
+  // the raw candidate set can carry withheld first-pass candidates, and a
+  // withheld candidate covering a rare term would close that term's gap
+  // and could flip the loop to coverage_complete over a term the caller
+  // can never see a candidate for. The per-round keepReachable filtering
+  // below stays - defense in depth at every later addition.
+  if (input.filterReachableIds) {
+    const reachable = new Set(input.filterReachableIds(Array.from(input.chunkIds)));
+    for (const id of Array.from(input.chunkIds)) {
+      if (!reachable.has(id)) input.chunkIds.delete(id);
+    }
+  }
   const rounds: IterativeRoundRecord[] = [];
   const yields: number[] = [];
   const costsMs: number[] = [];
