@@ -6,8 +6,9 @@
  * with measurable coverage gaps remaining, the loop pauses and hands the
  * caller a needs-llm-step envelope (built on the shared
  * {@link NeedsLlmStep} spine) describing the remaining gaps and the
- * candidate pool; the caller answers with a payload selecting core
- * evidence and proposing follow-up sub-queries, and the commit phase
+ * candidate pool; the caller answers with a payload whose evidence
+ * selection binds the answer to the round's candidate pool and whose
+ * follow-up sub-queries drive the round's pulls, and the commit phase
  * validates that answer before the loop advances - the exact two-phase
  * discipline `commitExtractedSignals` established for model-authored
  * payloads: a shape assert, then registered semantic checks, then the
@@ -170,13 +171,14 @@ export function buildDeciderStep(input: DeciderStepInput): DeciderPause {
     prompt:
       `The recall pool for query ${JSON.stringify(input.query)} still misses rare query terms ` +
       `after ${input.round - 1} deterministic retrieval round(s): ${gaps.join(", ")}. ` +
-      `Select the core evidence for this query from the candidate chunk ids [${poolIds.join(",")}] ` +
-      `and propose 1 to ${DECIDER_SUB_QUERIES_MAX} follow-up sub-queries, each at most ` +
+      `Bind this answer to the round's candidate pool by selecting its evidence from the ` +
+      `chunk ids [${poolIds.join(",")}] and propose 1 to ${DECIDER_SUB_QUERIES_MAX} follow-up ` +
+      `sub-queries, each at most ` +
       `${DECIDER_SUB_QUERY_LENGTH_MAX} characters, aimed at exactly the missed terms. ` +
       "Return the payload only; an invalid payload refuses the round.",
     schema_hints: [
       'payload: { "evidence": [chunkId, ...], "subQueries": [subQuery, ...] }',
-      `evidence: 1+ chunk ids chosen from [${poolIds.join(",")}]`,
+      `evidence: 1+ chunk ids chosen from [${poolIds.join(",")}] (binds the answer to this round's pool)`,
       `subQueries: 1 to ${DECIDER_SUB_QUERIES_MAX} strings, each at most ${DECIDER_SUB_QUERY_LENGTH_MAX} characters, unique`,
     ],
     target_path: DECIDER_STEP_RESUME_TARGET,
@@ -286,9 +288,17 @@ export interface DeciderCommitScope {
   readonly usedTokens: ReadonlySet<string>;
 }
 
-/** A validated decider payload: what the next round may spend pulls on. */
+/**
+ * A validated decider payload: the pool binding and the sub-queries the
+ * next round spends its pulls on.
+ */
 export interface DeciderCommit {
+  /**
+   * Pool-validated ids that bind the commit to THIS round's state; the
+   * committed round's pulls read `subQueries` only.
+   */
   readonly evidenceIds: ReadonlyArray<number>;
+  /** The sub-queries the committed round pulls. */
   readonly subQueries: ReadonlyArray<string>;
   /** The spent token, echoed so the caller can record its single use. */
   readonly token: string;
