@@ -425,4 +425,27 @@ describe("the doctor archive section", () => {
     const human = await runCli(["brain", "doctor", "--vault", vault], { env: env() });
     expect(human.stdout).toContain(", 1 uncited");
   });
+
+  test("an unreadable archive store is an uncertain section, not a failed run", async () => {
+    // Platform-neutral refusal: a FILE standing where the store directory
+    // belongs. A chmod cannot deny on Windows.
+    writeFileSync(join(vault, "Brain", ".archives"), "not a directory", "utf8");
+
+    // A completed run, not a throw - and the human surface names the skip.
+    const human = await runCli(["brain", "doctor", "--vault", vault], { env: env() });
+    expect(human.returncode).toBe(0);
+    expect(human.stdout).toContain("[UNSURE] vault-walk-entry-skipped");
+    expect(human.stdout).not.toContain("archives: ");
+
+    // The JSON payload stays parseable, answers the unavailability by name,
+    // and carries the skip in the uncertainty stream.
+    const out = await runCli(["brain", "doctor", "--vault", vault, "--json"], { env: env() });
+    expect(out.returncode).toBe(0);
+    const payload = JSON.parse(out.stdout) as {
+      archives: Record<string, unknown>;
+      uncertain?: ReadonlyArray<{ code: string; path?: string }>;
+    };
+    expect(payload.archives).toEqual({ unavailable: true });
+    expect(payload.uncertain?.some((u) => u.code === "vault-walk-entry-skipped")).toBe(true);
+  });
 });
