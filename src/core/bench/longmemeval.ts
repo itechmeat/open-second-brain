@@ -422,6 +422,14 @@ export function longMemEvalToBenchFixture(dataset: LongMemEvalDataset): LongMemE
       }),
     });
   }
+  if (questions.length === 0) {
+    // A dataset of only abstention entries converts to zero questions,
+    // which parseBenchFixture refuses generically; name the real cause -
+    // the abstention filter, not a missing dataset.
+    throw new LongMemEvalParseError(
+      `LongMemEval dataset: every one of the ${abstentionExcluded} question(s) is an abstention entry and was excluded from scoring; nothing remains to evaluate`,
+    );
+  }
   const fixture = parseBenchFixture({
     name: `longmemeval-${dataset.name ?? "suite"}`,
     description:

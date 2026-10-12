@@ -56,6 +56,13 @@ function entry(overrides: Record<string, unknown>): Record<string, unknown> {
   };
 }
 
+test("an all-abstention dataset names the abstention filter, not a missing dataset", () => {
+  const dataset = parseLongMemEvalDataset([
+    entry({ q_id: "abstain-1", question_type: "abstention" }),
+  ]);
+  expect(() => longMemEvalToBenchFixture(dataset)).toThrow(/abstention/);
+});
+
 test("session ids that sanitize to one note path are a named parse error", () => {
   const dataset = parseLongMemEvalDataset([
     entry({
