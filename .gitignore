@@ -45,3 +45,6 @@ sandbox-vault/
 
 # Personal editor ignore files (ZCode and similar): per-machine, never committed.
 .zcodeignore
+
+# Operator-handed external review scratch: never tracked (security reproductions stay out of the public repository)
+.reviews/
