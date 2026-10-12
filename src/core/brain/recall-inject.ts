@@ -646,8 +646,9 @@ function judgeSlice(spec: RecallSliceSpec, set: RecallResultSet, floor: number):
   if (ranked.length === 0) return { ...base, outcome: "no_matches" };
   // The same shared admission calculator the single-pool path uses, so a
   // slice and a whole-pool verdict agree at the tier boundaries. A
-  // malformed quality report here breaks the whole decision, exactly as a
-  // broken retrieval does.
+  // malformed quality report throws the calculator's named refusal, which
+  // the caller catches into the same explicit error decision a broken
+  // retrieval gets.
   const admission = computeSurfacingKey({ matchQuality, channel: RECALL_CHANNEL.hook, floor });
   if (!admission.admit) return { ...base, outcome: admission.reason };
   return { ...base, outcome: "inject" };
@@ -682,7 +683,16 @@ async function decideSliced(
   } catch (exc) {
     return retrievalError(exc);
   }
-  const verdicts = slices.map((spec, i) => judgeSlice(spec, sets[i]!, caps.floor));
+  let verdicts: ReadonlyArray<SliceVerdict>;
+  try {
+    verdicts = slices.map((spec, i) => judgeSlice(spec, sets[i]!, caps.floor));
+  } catch (exc) {
+    // A slice's coverage report broke the calculator's contract (a
+    // non-finite or out-of-range `idfWeightedCoverage`): the same explicit
+    // error decision a broken or slow retrieval gets, never a throw out of
+    // the exported decision core.
+    return retrievalError(exc);
+  }
   const total = sets.reduce((sum, set) => sum + set.total, 0);
   const groups = verdicts.map((v) =>
     v.outcome === "inject" ? withoutDelivered(v.ranked, options) : [],
