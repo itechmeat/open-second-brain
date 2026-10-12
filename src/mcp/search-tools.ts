@@ -509,6 +509,8 @@ const SEARCH_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
         llm_step: { type: "object" },
         pool_ids: { type: "array", items: { type: "integer" } },
         gaps: { type: "array", items: { type: "string" } },
+        rounds: { type: "array", items: { type: "object" } },
+        stop_reason: { type: "string" },
       },
     },
     // The ranked pool the `limit` sliced these rows from (task F) - how
@@ -1334,7 +1336,11 @@ async function toolBrainSearch(
                   pool_ids: [...outcome.iterative.poolIds],
                   gaps: [...outcome.iterative.gaps],
                 }
-              : { phase: outcome.iterative.phase },
+              : {
+                  phase: outcome.iterative.phase,
+                  rounds: [...outcome.iterative.rounds],
+                  stop_reason: outcome.iterative.stopReason,
+                },
         }),
     // Advisory decision-model answer carried by the rerank request (issue
     // #213, Part 8). Absent unless rerank kind `decision-model` ran with

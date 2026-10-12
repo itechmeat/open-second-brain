@@ -478,9 +478,20 @@ test("brain_search iterative round-trip: plan phase carries the envelope, commit
       },
     };
     const finalBody = extractFullBody(await call(server, "brain_search", commitArgs));
-    const finalPhase = finalBody["iterative"] as { phase: string } | undefined;
+    const finalPhase = finalBody["iterative"] as
+      | {
+          phase: string;
+          rounds?: ReadonlyArray<{ round: number; added: number }>;
+          stop_reason?: string;
+        }
+      | undefined;
     expect(finalPhase).toBeDefined();
     expect(finalPhase!.phase).toBe("final");
+    // The final marker carries the loop's accounting: what each
+    // deterministic round recovered and why the budget stopped.
+    expect(Array.isArray(finalPhase!.rounds)).toBe(true);
+    expect((finalPhase!.rounds ?? []).length).toBeGreaterThan(0);
+    expect(typeof finalPhase!.stop_reason).toBe("string");
     const results = finalBody["results"] as Array<Record<string, unknown>>;
     expect(results.length).toBeGreaterThan(0);
 
