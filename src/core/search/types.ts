@@ -20,6 +20,7 @@ import type { DegradationNotice } from "../integrity/degradation.ts";
 import type { StampMismatch } from "../integrity/stamp.ts";
 import type { ReconciliationOutcome, ReconciliationReport } from "../reconciliation-report.ts";
 import type { VaultPathRule, VaultScopeRules } from "../vault-scope/defaults.ts";
+import type { NeedsLlmStep } from "../brain/llm-step.ts";
 import type { MaintenanceSpendReceipt } from "../brain/maintenance/journal.ts";
 import type { EmbeddingPriceOverride, EmbeddingPriceSource } from "./embeddings/pricing.ts";
 import type { DegreePredicate } from "./property-filter.ts";
@@ -1028,6 +1029,22 @@ export interface SearchOptions {
    */
   readonly iterative?: boolean;
   /**
+   * The round token a plan-phase response minted, submitted on the
+   * commit call of the iterative round-trip (recall-quality wave).
+   * Present only with `iterative: true`; a token without the flag, or a
+   * token without its payload, is a named refusal rather than a
+   * silently ignored argument.
+   */
+  readonly iterativeToken?: string;
+  /**
+   * The caller-executed decider payload ({@link ./decider-step.ts}
+   * shape: selected evidence ids plus follow-up sub-queries), submitted
+   * beside {@link SearchOptions.iterativeToken} on the commit call. The
+   * commit validates it - shape, registered semantic rules, token single
+   * use, evidence in the round's pool - before any pull runs.
+   */
+  readonly iterativePayload?: unknown;
+  /**
    * Access recording (Time-Aware Recall & Activation Suite). When true,
    * the surfaced result paths are recorded as one activation access
    * event AFTER ranking completes - the current query's own ranking is
@@ -1108,6 +1125,37 @@ export interface SearchOptions {
    * returns the heuristic order and is never written to the query cache.
    */
   readonly skipDecisionModelRerank?: boolean;
+}
+
+/**
+ * The iterative recall round-trip's phase marker (recall-quality wave),
+ * present on an outcome ONLY under the opt-in mode - the plan phase that
+ * pauses for the caller's decider step, or the commit call's finalized
+ * answer. A call that never enters the mode, and a mode-on call the loop
+ * finalized within its deterministic budget, carry no marker at all, so
+ * the serialized outcome is byte-identical whenever the mode did
+ * nothing.
+ */
+export type SearchOutcomeIterative = SearchOutcomeIterativePlan | SearchOutcomeIterativeFinal;
+
+/** The plan phase: measurable gaps survived the deterministic budget. */
+export interface SearchOutcomeIterativePlan {
+  readonly phase: "needs-llm-step";
+  /** The round a committed payload will run. */
+  readonly round: number;
+  /** The opaque single-use token the commit call must echo. */
+  readonly token: string;
+  /** The needs-llm-step envelope describing what to answer. */
+  readonly llmStep: NeedsLlmStep;
+  /** The candidate chunk ids the decider selects evidence from. */
+  readonly poolIds: ReadonlyArray<number>;
+  /** The uncovered rare terms the committed sub-queries aim at. */
+  readonly gaps: ReadonlyArray<string>;
+}
+
+/** The commit phase: the caller's payload was validated and executed. */
+export interface SearchOutcomeIterativeFinal {
+  readonly phase: "final";
 }
 
 export interface SearchOutcome {
@@ -1204,6 +1252,14 @@ export interface SearchOutcome {
     /** The uncovered rare terms re-queried by a `"targeted"` retry. */
     readonly targetedTerms?: ReadonlyArray<string>;
   };
+  /**
+   * Iterative recall round-trip marker (recall-quality wave). Present
+   * only in the opt-in mode: the plan phase when the loop paused with
+   * measurable gaps, the final marker on a call that committed a decider
+   * payload. Absent - never null - otherwise, keeping the outcome
+   * byte-identical whenever the mode did nothing.
+   */
+  readonly iterative?: SearchOutcomeIterative;
   /**
    * Normalized-confidence chain-stop (t_23c1b929). Present only when
    * `searchAcrossVaults` ran with `chainStopEnabled` and a completed origin's

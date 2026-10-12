@@ -28,7 +28,7 @@ beforeEach(async () => {
     "---\ntitle: Alpha\n---\n\nThe quick brown fox jumps over the lazy dog.\n",
   );
   ctx = { vault, configPath };
-  const config = resolveSearchConfig({ vault, configPath });
+  const config = resolveSearchConfig({ vault, configPath: ctx.configPath });
   await indexVault(config, {});
 });
 
@@ -52,6 +52,112 @@ describe("brain_search reasons", () => {
       expect(r.reasons.length).toBeGreaterThan(0);
       // keyword-only scratch vault → at least the bm25 layer is present.
       expect(r.reasons.some((x) => x.startsWith("fts5_bm25"))).toBe(true);
+    }
+  });
+});
+
+// ----- Iterative cache-key compatibility (recall-quality wave, lane A) ----
+
+/**
+ * The query-cache key composition is a documented compatibility surface
+ * (cache-slot.ts header): the iterative fields may join ONLY as a
+ * mode-on suffix appended to the config fingerprint, so plain rows keep
+ * their pre-wave keys byte-identical, a plan leg and a commit leg never
+ * collide with each other or with a plain row, and a flag-without-knob
+ * request stays keyed exactly like a plain one. The single-use token
+ * registry rides the same table with its own TTL.
+ */
+describe("brain_search iterative cache keys", () => {
+  const planHash = "plan-hash-stable";
+  const policy = { explicit: false, wantSemantic: false };
+
+  async function keyFor(opts: Record<string, unknown>): Promise<string> {
+    const { Store } = await import("../../src/core/search/store.ts");
+    const { probeQueryCache } = await import("../../src/core/search/pipeline/cache-slot.ts");
+    const config = resolveSearchConfig({ vault, configPath: ctx.configPath });
+    const store = await Store.open(config, { mode: "read", loadVec: false });
+    try {
+      const probe = probeQueryCache({
+        store,
+        config,
+        opts: opts as unknown as Parameters<typeof probeQueryCache>[0]["opts"],
+        limit: 10,
+        policy,
+        sessionFocus: null,
+        tuned: null,
+        planHash,
+      });
+      if (probe.slot === null) throw new Error("cache probe returned no slot");
+      return probe.slot.key;
+    } finally {
+      await store.close();
+    }
+  }
+
+  test("the mode-on suffix partitions plan, commit and plain rows; off-mode keys are unchanged", async () => {
+    // The suffix exists only when the mode is actually on, so this test
+    // runs with the operator's knob on (env-mirrored like its siblings).
+    const saved = process.env["OPEN_SECOND_BRAIN_SEARCH_ITERATIVE"];
+    process.env["OPEN_SECOND_BRAIN_SEARCH_ITERATIVE"] = "true";
+    try {
+      await partitionedKeys();
+    } finally {
+      if (saved === undefined) delete process.env["OPEN_SECOND_BRAIN_SEARCH_ITERATIVE"];
+      else process.env["OPEN_SECOND_BRAIN_SEARCH_ITERATIVE"] = saved;
+    }
+  });
+
+  async function partitionedKeys(): Promise<void> {
+    const base = { query: "quick fox", iterative: false };
+    const plain = await keyFor({ query: "quick fox" });
+    // Flag off and flag-absent key identically: no suffix bytes exist.
+    expect(await keyFor(base)).toBe(plain);
+    const plan = await keyFor({ query: "quick fox", iterative: true });
+    const commit = await keyFor({
+      query: "quick fox",
+      iterative: true,
+      iterativeToken: "drt-3-abc",
+      iterativePayload: { evidence: [1], subQueries: ["q"] },
+    });
+    const commitOtherPayload = await keyFor({
+      query: "quick fox",
+      iterative: true,
+      iterativeToken: "drt-3-abc",
+      iterativePayload: { evidence: [2], subQueries: ["q"] },
+    });
+    // Three disjoint rows: plain, plan, commit - and a different payload
+    // is a different commit key.
+    expect(plan).not.toBe(plain);
+    expect(commit).not.toBe(plain);
+    expect(commit).not.toBe(plan);
+    expect(commitOtherPayload).not.toBe(commit);
+  }
+
+  test("a flag without the operator's knob is keyed exactly like a plain row", async () => {
+    // The default config has the iterative knob OFF, so the mode is inert
+    // end to end: no suffix, the plain key.
+    const plain = await keyFor({ query: "quick fox" });
+    const flagged = await keyFor({ query: "quick fox", iterative: true });
+    expect(flagged).toBe(plain);
+  });
+
+  test("a spent round token is visible across registry reads until the TTL ends", async () => {
+    const { Store } = await import("../../src/core/search/store.ts");
+    const { iterativeTokenSpent, markIterativeTokenSpent } =
+      await import("../../src/core/search/pipeline/cache-slot.ts");
+    const config = resolveSearchConfig({ vault, configPath: ctx.configPath });
+    const store = await Store.open(config, { mode: "read", loadVec: false });
+    try {
+      const now = 1_750_000_000_000;
+      expect(iterativeTokenSpent(store, config, "drt-3-unspent", now)).toBe(false);
+      markIterativeTokenSpent(store, config, "drt-3-unspent", now);
+      expect(iterativeTokenSpent(store, config, "drt-3-unspent", now)).toBe(true);
+      // The marker dies with the TTL: a token whose plan phase expired
+      // cannot be replayed against a live registry row.
+      const ttlMs = config.recall.cacheTtlSeconds * 1000;
+      expect(iterativeTokenSpent(store, config, "drt-3-unspent", now + ttlMs + 1)).toBe(false);
+    } finally {
+      await store.close();
     }
   });
 });

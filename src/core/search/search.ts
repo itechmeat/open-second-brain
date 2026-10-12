@@ -14,7 +14,13 @@
 
 import { assembleRankedResults } from "./pipeline/assemble.ts";
 import { decorateFinalResults } from "./pipeline/attribution.ts";
-import { isCacheEligible, persistCachedOutcome, probeQueryCache } from "./pipeline/cache-slot.ts";
+import {
+  isCacheEligible,
+  iterativeTokenSpent,
+  markIterativeTokenSpent,
+  persistCachedOutcome,
+  probeQueryCache,
+} from "./pipeline/cache-slot.ts";
 import { collectCandidateSignals } from "./pipeline/candidate-signals.ts";
 import { createEventTimeResolver, filterCandidatesInRange } from "./pipeline/event-time.ts";
 import { runKeywordLane } from "./pipeline/keyword-lane.ts";
@@ -33,7 +39,12 @@ import {
   runRelationalArm,
 } from "./pipeline/relational-arm.ts";
 import { resolveSearchRequest } from "./pipeline/request.ts";
-import { resolveIterativeRequest, runIterativeRecall } from "./pipeline/iterative-recall.ts";
+import {
+  resolveIterativeRequest,
+  runDeciderRound,
+  runIterativeRecall,
+} from "./pipeline/iterative-recall.ts";
+import { DeciderStepError } from "./decider-step.ts";
 import { resolveKindFilter } from "./property-pushdown.ts";
 import { noSecondPass, runSecondPassRecall } from "./pipeline/second-pass.ts";
 import { runSemanticLane, type SemanticLaneOutcome } from "./pipeline/semantic-lane.ts";
@@ -48,7 +59,13 @@ import { indexAgeSeconds, maybeFreshenIndex } from "./freshen.ts";
 import { LAST_INDEXED_AT_STATE_KEY } from "./store/state.ts";
 import type { FrontmatterCache } from "./result-filters.ts";
 import { Store } from "./store.ts";
-import type { ResolvedSearchConfig, SearchOptions, SearchOutcome } from "./types.ts";
+import { SearchError } from "./types.ts";
+import type {
+  ResolvedSearchConfig,
+  SearchOptions,
+  SearchOutcome,
+  SearchOutcomeIterative,
+} from "./types.ts";
 
 export { SEARCH_LIMIT_MAX, SEARCH_LIMIT_MIN } from "./pipeline/request.ts";
 
@@ -294,6 +311,22 @@ export async function search(
     // the generic-surface response byte-identical to today.
     const routedSurface = shape.basePlan.surface;
 
+    // Iterative recall request resolution (recall-quality wave): hoisted
+    // ABOVE the cache probe because a commit call must refuse an
+    // already-spent round token before any cached commit response could
+    // be served - the refusal is the single-use contract, and a warm row
+    // must not bypass it.
+    const iterativeRequest = resolveIterativeRequest(opts, effectiveConfig);
+    if (
+      iterativeRequest?.phase === "commit" &&
+      iterativeTokenSpent(store, effectiveConfig, opts.iterativeToken!, nowMs)
+    ) {
+      throw new SearchError(
+        "INVALID_INPUT",
+        `iterative commit refused (token_used): round token ${JSON.stringify(opts.iterativeToken)} was already spent; a round token is single use`,
+      );
+    }
+
     // Persistent query cache (v0.20.0): opt-in. A hit returns the
     // previously computed outcome; generation changes (embedding change or
     // content reindex) and TTL expiry invalidate it. The write-back is
@@ -464,7 +497,7 @@ export async function search(
     // model-free; the caller-executed decider round rides this seam too
     // (decider-step.ts). Flag absent, or knob off, this block is never
     // entered and the pipeline is byte-identical.
-    const iterativeRequest = resolveIterativeRequest(opts, effectiveConfig);
+    let iterativeMarker: SearchOutcomeIterative | null = null;
     if (iterativeRequest !== null && !deadlineExpired(deadline)) {
       const loop = runIterativeRecall({
         store,
@@ -484,6 +517,60 @@ export async function search(
       });
       keywordHits = loop.keywordHits;
       idsList = loop.ids;
+      if (iterativeRequest.phase === "commit") {
+        // The deterministic replay reached a state with no pending round
+        // (the index moved under the caller between the two calls): the
+        // commit is refused rather than executed against a pool its
+        // token never named.
+        if (loop.pause === null) {
+          throw new SearchError(
+            "INVALID_INPUT",
+            "iterative commit refused: no decider round is pending for this query state; run the plan phase again",
+          );
+        }
+        try {
+          // The cross-call single-use registry was checked at entry; the
+          // in-call set is empty because one call commits at most once.
+          const committed = runDeciderRound({
+            store,
+            query,
+            limit,
+            pathPrefix,
+            ...(kind !== undefined ? { kind } : {}),
+            ...(pushdown !== null ? { pushdown } : {}),
+            timeRange,
+            validityWindowFor: eventTime.validityWindowFor,
+            keywordHits,
+            chunkIds: allChunkIds,
+            pause: loop.pause,
+            token: opts.iterativeToken!,
+            payload: opts.iterativePayload,
+            usedTokens: new Set<string>(),
+            priorRounds: loop.rounds,
+          });
+          keywordHits = committed.keywordHits;
+          idsList = committed.ids;
+          iterativeMarker = { phase: "final" };
+          markIterativeTokenSpent(store, effectiveConfig, committed.token, nowMs);
+        } catch (e) {
+          if (e instanceof DeciderStepError) {
+            throw new SearchError(
+              "INVALID_INPUT",
+              `iterative commit refused (${e.code}): ${e.message}`,
+            );
+          }
+          throw e;
+        }
+      } else if (loop.pause !== null) {
+        iterativeMarker = {
+          phase: "needs-llm-step",
+          round: loop.pause.round,
+          token: loop.pause.token,
+          llmStep: loop.pause.llmStep,
+          poolIds: loop.pause.poolIds,
+          gaps: loop.lastCoverage?.uncoveredRareTerms ?? [],
+        };
+      }
     }
 
     if (idsList.length === 0) {
@@ -495,19 +582,18 @@ export async function search(
         degraded,
         opts.transportReach,
       );
+      const outcome = emptyOutcome({
+        store,
+        opts,
+        query,
+        pathPrefix,
+        warnings,
+        routedSurface,
+        degraded,
+        corpus,
+      });
       return served(
-        finalize(
-          emptyOutcome({
-            store,
-            opts,
-            query,
-            pathPrefix,
-            warnings,
-            routedSurface,
-            degraded,
-            corpus,
-          }),
-        ),
+        finalize(iterativeMarker !== null ? { ...outcome, iterative: iterativeMarker } : outcome),
       );
     }
 
@@ -634,32 +720,34 @@ export async function search(
     );
     const emit =
       postRank.decisionFallback === true || rerankUnavailable ? (o: SearchOutcome) => o : finalize;
+    // The round-trip marker rides OUTSIDE the builder: it is a property of
+    // this request's phase, not of the ranking, and appending it here keeps
+    // every no-marker outcome serialized exactly as before.
+    const built = buildSearchOutcome({
+      store,
+      config: effectiveConfig,
+      opts,
+      query,
+      pathPrefix,
+      results,
+      warnings,
+      secondPass: retry.secondPass,
+      routedSurface,
+      trustReceipts: postRank.trustReceipts,
+      frontmatterCache,
+      poolSize,
+      degraded,
+      corpus,
+      // The arm's reach-gated paths ride into the outcome builder so
+      // the retrieval trail renders them; empty (arm off) projects to
+      // no trail entry at all.
+      ...(relational.reachByChunk.size > 0 ? { relationalReach: relational.reachByChunk } : {}),
+      ...(postRank.decisionModel?.answerable !== undefined
+        ? { decisionModel: { answerable: postRank.decisionModel.answerable } }
+        : {}),
+    });
     return served(
-      emit(
-        buildSearchOutcome({
-          store,
-          config: effectiveConfig,
-          opts,
-          query,
-          pathPrefix,
-          results,
-          warnings,
-          secondPass: retry.secondPass,
-          routedSurface,
-          trustReceipts: postRank.trustReceipts,
-          frontmatterCache,
-          poolSize,
-          degraded,
-          corpus,
-          // The arm's reach-gated paths ride into the outcome builder so
-          // the retrieval trail renders them; empty (arm off) projects to
-          // no trail entry at all.
-          ...(relational.reachByChunk.size > 0 ? { relationalReach: relational.reachByChunk } : {}),
-          ...(postRank.decisionModel?.answerable !== undefined
-            ? { decisionModel: { answerable: postRank.decisionModel.answerable } }
-            : {}),
-        }),
-      ),
+      emit(iterativeMarker !== null ? { ...built, iterative: iterativeMarker } : built),
     );
   } finally {
     await store.close();

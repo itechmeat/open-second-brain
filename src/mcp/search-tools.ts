@@ -331,6 +331,22 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
       description:
         "Optional project-scope filter; pages with no project always match, project-tagged pages only this project. Absent = no project filtering.",
     },
+    iterative: {
+      type: "boolean",
+      description:
+        "Opt in to the bounded iterative recall loop (default false): the deterministic gap-driven rounds run past the single second pass, and when measurable gaps survive them the response pauses with a needs-llm-step plan (envelope + single-use round token); resubmit the token with iterative_payload to execute the decider round. Inert unless the operator's search_iterative_recall_enabled knob is on.",
+    },
+    iterative_token: {
+      type: "string",
+      maxLength: 128,
+      description:
+        "The round token from a plan-phase response, submitted on the commit call beside iterative_payload. Requires iterative: true; single use - a replayed token is refused by name.",
+    },
+    iterative_payload: {
+      type: "object",
+      description:
+        "The decider payload answering a plan-phase envelope: { evidence: [chunkId, ...], subQueries: [string, ...] } - evidence ids chosen from the plan's pool, 1-4 unique sub-queries of at most 200 characters. Requires iterative_token; validated before any pull runs.",
+    },
   },
   required: ["query"],
   additionalProperties: false,
@@ -479,6 +495,22 @@ const SEARCH_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
       },
     },
     warnings: { type: "array", items: { type: "string" } },
+    // Iterative recall round-trip marker (recall-quality wave). Present
+    // only on an opt-in iterative call: the plan phase (needs-llm-step)
+    // or the commit call's final marker. Declared deliberately for the
+    // same reason every envelope here is declared.
+    iterative: {
+      type: "object",
+      required: ["phase"],
+      properties: {
+        phase: { type: "string" },
+        round: { type: "integer" },
+        token: { type: "string" },
+        llm_step: { type: "object" },
+        pool_ids: { type: "array", items: { type: "integer" } },
+        gaps: { type: "array", items: { type: "string" } },
+      },
+    },
     // The ranked pool the `limit` sliced these rows from (task F) - how
     // many candidates were ranked, not how many came back. The descriptor
     // grammar carries no prose, so the meaning is documented here, in
@@ -1049,6 +1081,22 @@ async function toolBrainSearch(
           pathPrefix: focusPathPrefix ?? null,
         })
       : undefined;
+  // Iterative round-trip args (recall-quality wave). The flag is the
+  // per-query opt-in; token and payload are the commit leg's fields. Any
+  // present value of the wrong shape is refused with a named argument
+  // error rather than silently ignored - the kernel cannot tell an
+  // intended commit from a typo'd one.
+  const iterative = coerceBoolOptional(args, "iterative") ?? false;
+  const iterativeToken = coerceStringOptional(args, "iterative_token", 128);
+  const iterativePayload = args["iterative_payload"];
+  if (
+    iterativePayload !== undefined &&
+    (typeof iterativePayload !== "object" ||
+      iterativePayload === null ||
+      Array.isArray(iterativePayload))
+  ) {
+    throw new MCPError(INVALID_PARAMS, "argument 'iterative_payload' must be an object");
+  }
   const focusSession = coerceStringOptional(args, "focus_session", 128);
   const properties = parsePropertiesArgument(args["properties"]);
   const degreeFilters = parseDegreeArgument(args["degree"]);
@@ -1119,6 +1167,9 @@ async function toolBrainSearch(
     // surface opts in by default; record_access=false suppresses it,
     // and cross-vault union never records (results span foreign vaults).
     ...(recordAccess && !globalSearch ? { recordAccess: true } : {}),
+    ...(iterative ? { iterative: true } : {}),
+    ...(iterativeToken !== undefined ? { iterativeToken } : {}),
+    ...(iterativePayload !== undefined ? { iterativePayload } : {}),
   };
   try {
     // Cross-vault union (t_72a22658): explicit per-call opt-in.
@@ -1251,6 +1302,25 @@ async function toolBrainSearch(
       trustGateEnabled: config.recall.retrievalTrustGateEnabled,
     }),
     ...(telemetryRecord ? { telemetry_id: telemetryRecord.id } : {}),
+    // Iterative round-trip marker: the plan phase carries the decider
+    // envelope and its token; a committed call carries the final marker.
+    // Absent - never null - on every other response, so the default
+    // shape stays byte-identical.
+    ...(outcome.iterative === undefined
+      ? {}
+      : {
+          iterative:
+            outcome.iterative.phase === "needs-llm-step"
+              ? {
+                  phase: outcome.iterative.phase,
+                  round: outcome.iterative.round,
+                  token: outcome.iterative.token,
+                  llm_step: outcome.iterative.llmStep,
+                  pool_ids: [...outcome.iterative.poolIds],
+                  gaps: [...outcome.iterative.gaps],
+                }
+              : { phase: outcome.iterative.phase },
+        }),
     // Advisory decision-model answer carried by the rerank request (issue
     // #213, Part 8). Absent unless rerank kind `decision-model` ran with
     // the `answerable` use on and a valid answer arrived.

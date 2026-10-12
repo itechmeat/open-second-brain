@@ -8,6 +8,7 @@
  */
 
 import { canonicalSourceSetKey } from "../../scope-key.ts";
+import { sha256Hex, canonicalJson } from "../../integrity/digest.ts";
 import { activationStateFingerprint } from "../activation/store.ts";
 import { effectiveInputWindowTokens, queryPrefixSentByProvider } from "../embeddings/presets.ts";
 import { learnedWeightsFingerprint } from "../feedback.ts";
@@ -27,6 +28,88 @@ import type {
 } from "../types.ts";
 
 const MILLISECONDS_PER_SECOND = 1000;
+
+/**
+ * Cache-key suffix segments for the iterative recall round-trip
+ * (recall-quality wave). Appended to the config fingerprint ONLY when
+ * the iterative mode is actually on - the request flag AND the operator
+ * knob - so plain rows keep their pre-wave keys byte-identical and only
+ * mode-on rows (new by definition) use the extended layout. The plan
+ * leg and the commit leg get distinct segments so a plan response can
+ * never be served for a commit request or the reverse.
+ */
+const ITERATIVE_KEY_PLAN = "itv:plan";
+const ITERATIVE_KEY_COMMIT_PREFIX = "itv:commit:";
+/** Hex chars of the payload digest kept in a commit key; a fingerprint, not an id. */
+const ITERATIVE_PAYLOAD_DIGEST_CHARS = 16;
+/** Key prefix of the single-use round-token registry rows. */
+const ITERATIVE_TOKEN_KEY_PREFIX = "itv-token:";
+
+/**
+ * The suffix for one iterative mode-on request: `itv:plan` for the flag
+ * alone, `itv:commit:<token>:<payload digest>` for the commit leg - the
+ * plan and commit phases are deterministic functions of their inputs
+ * (vault, query, token, payload), so caching stays sound per leg.
+ */
+function iterativeCacheSuffix(opts: SearchOptions): string {
+  if (opts.iterative !== true) return "";
+  if (opts.iterativeToken === undefined) return `|${ITERATIVE_KEY_PLAN}`;
+  const payloadDigest = sha256Hex(canonicalJson(opts.iterativePayload ?? null)).slice(
+    0,
+    ITERATIVE_PAYLOAD_DIGEST_CHARS,
+  );
+  return `|${ITERATIVE_KEY_COMMIT_PREFIX}${opts.iterativeToken}:${payloadDigest}`;
+}
+
+function iterativeModeOn(config: ResolvedSearchConfig, opts: SearchOptions): boolean {
+  return opts.iterative === true && config.recall.iterativeRecallEnabled === true;
+}
+
+/**
+ * Whether the single-use round token has a spent marker in the query
+ * cache. The registry rides the same table the outcome rows use - one
+ * store, one generation gate, one TTL - so a token dies when its
+ * plan-phase row dies, and a replayed commit is refused before any
+ * cached commit response could be served.
+ */
+export function iterativeTokenSpent(
+  store: Store,
+  config: ResolvedSearchConfig,
+  token: string,
+  nowMs: number = Date.now(),
+): boolean {
+  const row = store.queryCacheGet(`${ITERATIVE_TOKEN_KEY_PREFIX}${token}`);
+  if (row === null) return false;
+  if (row.generation !== store.corpusGeneration()) return false;
+  return nowMs - row.createdAt <= config.recall.cacheTtlSeconds * MILLISECONDS_PER_SECOND;
+}
+
+/**
+ * Mark a round token spent after its commit executed. Best-effort, like
+ * every write on this table: a marker that failed to land costs a
+ * deterministic re-run of the same commit on replay (the validator
+ * re-checks the token against the state), never a wrong answer.
+ */
+export function markIterativeTokenSpent(
+  store: Store,
+  config: ResolvedSearchConfig,
+  token: string,
+  nowMs: number = Date.now(),
+): void {
+  try {
+    const generation = store.corpusGeneration();
+    const ttlMs = config.recall.cacheTtlSeconds * MILLISECONDS_PER_SECOND;
+    store.queryCacheSweep(generation, nowMs - ttlMs);
+    store.queryCachePut(
+      `${ITERATIVE_TOKEN_KEY_PREFIX}${token}`,
+      generation,
+      JSON.stringify({ spent: true }),
+      nowMs,
+    );
+  } catch {
+    // Marker persistence is best-effort; never fail a committed search on it.
+  }
+}
 
 /**
  * What a decision-model rerank passage carries. Part of the decision-model
@@ -214,7 +297,9 @@ export function probeQueryCache(input: CacheProbeInput): CacheProbe {
     const key = buildCacheKey(
       keyOpts,
       planHash,
-      `${configFingerprint(config)}|lw:${lwFp}|act:${actFp}|tune:${tuneFp}|reinf:${reinfFp}|src:${srcSet}`,
+      // The iterative fields join the suffix only when the mode is on,
+      // so off-mode keys (and every pre-wave row) stay byte-identical.
+      `${configFingerprint(config)}|lw:${lwFp}|act:${actFp}|tune:${tuneFp}|reinf:${reinfFp}|src:${srcSet}${iterativeModeOn(config, opts) ? iterativeCacheSuffix(opts) : ""}`,
     );
     const hit = getCachedOutcome(store, key, generation, ttlMs, Date.now());
     return { slot: { key, generation, ttlMs }, hit };

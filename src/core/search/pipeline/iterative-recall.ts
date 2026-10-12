@@ -347,17 +347,50 @@ export function runDeciderRound(input: DeciderRoundInput): DeciderRoundOutcome {
 }
 
 /**
+ * Which leg of the round-trip this request is: the flag alone asks for
+ * the plan phase (deterministic rounds, then pause with an envelope when
+ * gaps survive); the token plus payload asks for the commit phase
+ * (validate, then run the committed round).
+ */
+export type IterativePhase = "plan" | "commit";
+
+/**
  * Resolve the caller's iterative request fields. The request flag is the
  * per-query opt-in; the resolved knob is the operator's master switch, so
  * a flag without the knob is inert (byte-identical), not an error. Any
  * stray iterative-only field without the flag is a named refusal rather
- * than a silently ignored argument.
+ * than a silently ignored argument, and so is a half-specified commit
+ * (a token without its payload, a payload without a token, or a
+ * blank token) - a request the caller thinks is one thing but the
+ * kernel would execute as another is exactly the silent fallback this
+ * pipeline refuses to guess at.
  */
 export function resolveIterativeRequest(
-  opts: Pick<SearchOptions, "iterative">,
+  opts: Pick<SearchOptions, "iterative" | "iterativeToken" | "iterativePayload">,
   config: ResolvedSearchConfig,
-): { readonly maxRounds: number } | null {
-  if (opts.iterative !== true) return null;
+): { readonly maxRounds: number; readonly phase: IterativePhase } | null {
+  const tokenGiven = opts.iterativeToken !== undefined;
+  const payloadGiven = opts.iterativePayload !== undefined;
+  if (opts.iterative !== true) {
+    if (tokenGiven || payloadGiven) {
+      throw new SearchError(
+        "INVALID_INPUT",
+        "iterativeToken/iterativePayload require iterative: true; a commit without the flag is refused rather than ignored",
+      );
+    }
+    return null;
+  }
+  if (tokenGiven !== payloadGiven) {
+    throw new SearchError(
+      "INVALID_INPUT",
+      tokenGiven
+        ? "iterativeToken requires iterativePayload: a commit is token plus payload"
+        : "iterativePayload requires iterativeToken: a commit is token plus payload",
+    );
+  }
+  if (tokenGiven && (typeof opts.iterativeToken !== "string" || opts.iterativeToken.length === 0)) {
+    throw new SearchError("INVALID_INPUT", "iterativeToken must be a non-empty string");
+  }
   if (config.recall.iterativeRecallEnabled !== true) return null;
   const maxRounds = config.recall.iterativeRecallMaxRounds ?? ITERATIVE_RECALL_MAX_ROUNDS_DEFAULT;
   if (!Number.isInteger(maxRounds) || maxRounds < 1) {
@@ -366,5 +399,8 @@ export function resolveIterativeRequest(
       `iterativeRecallMaxRounds must be an integer >= 1, got ${String(maxRounds)}`,
     );
   }
-  return { maxRounds: Math.min(maxRounds, ITERATIVE_RECALL_MAX_ROUNDS_CAP) };
+  return {
+    maxRounds: Math.min(maxRounds, ITERATIVE_RECALL_MAX_ROUNDS_CAP),
+    phase: tokenGiven ? "commit" : "plan",
+  };
 }
