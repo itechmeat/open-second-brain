@@ -1,3 +1,11 @@
+import { RECALL_CHANNEL, type RecallChannel } from "../brain/recall-telemetry.ts";
+import {
+  assertMeasuredQuality,
+  computeSurfacingKey,
+  SURFACING_TIER,
+  type SurfacingTier,
+} from "./surfacing-key.ts";
+
 export type SurfacingGateReason =
   | "explicit"
   | "duplicate"
@@ -10,11 +18,43 @@ export interface SurfacingGateInput {
   readonly prompt: string;
   readonly previousPrompt?: string | null;
   readonly explicit?: boolean;
+  /**
+   * The transport asking, as {@link RecallChannel}. The STRUCTURAL
+   * decision above is channel-independent by construction and never reads
+   * this; only {@link evaluateGradedSurfacing} reads it, to calibrate the
+   * measured admission. Absent means the gate's own production channel.
+   */
+  readonly channel?: RecallChannel;
+  /**
+   * The retrieval's absolute match quality (`RecallResultSet.idfWeightedCoverage`
+   * or the adequacy pair's `match_quality`), when a measurement exists.
+   * Only {@link evaluateGradedSurfacing} reads this: the structural gate
+   * fails open on prompt structure alone and never sees retrieval state.
+   * Absent = no measurement was offered; `null` = a measured report that
+   * nothing was measurable.
+   */
+  readonly matchQuality?: number | null;
 }
 
 export interface SurfacingGateDecision {
   readonly retrieve: boolean;
   readonly reason: SurfacingGateReason;
+}
+
+/** The gate's production channel, assumed when a caller sends none. */
+export const SURFACING_GATE_DEFAULT_CHANNEL = RECALL_CHANNEL.mcp;
+
+/**
+ * The graded decision: the structural verdict composed with the shared
+ * admission key (`surfacing-key.ts`), one shape `{ key, tier, admit,
+ * reason }` for every consumer. `reason` is the gate's own vocabulary on
+ * the structural outcomes and the tier vocabulary on the measured ones.
+ */
+export interface GradedSurfacingDecision {
+  readonly key: number | null;
+  readonly tier: SurfacingTier;
+  readonly admit: boolean;
+  readonly reason: SurfacingGateReason | SurfacingTier;
 }
 
 const SHELL_COMMANDS = new Set([
@@ -95,4 +135,51 @@ export function evaluateSurfacingGate(input: SurfacingGateInput): SurfacingGateD
     return Object.freeze({ retrieve: false, reason: "shell_command" });
   }
   return Object.freeze({ retrieve: true, reason: "default_retrieve" });
+}
+
+/**
+ * The graded projection: the structural short-circuits first, then the
+ * shared channel-calibrated admission key over the measured quality.
+ *
+ * Tiering: an explicit request admits (`explicit`); a structural
+ * suppression refuses (`suppressed`, structural reason preserved) and is
+ * never ranked, so its key stays null; otherwise the measured quality
+ * decides (`admitted` | `below_floor` | `unmeasurable_quality`). With no
+ * measurement offered at all, the structural projection's fail-open
+ * stands and `reason` records `default_retrieve` so a default admission
+ * is never mistaken for a measured one. The binary
+ * {@link SurfacingGateDecision} projects out of this shape: `admit` is
+ * `retrieve`, `reason` is the same field.
+ */
+export function evaluateGradedSurfacing(input: SurfacingGateInput): GradedSurfacingDecision {
+  const structural = evaluateSurfacingGate(input);
+  if (structural.reason === "explicit") {
+    const key = input.matchQuality === undefined ? null : assertMeasuredQuality(input.matchQuality);
+    return Object.freeze({
+      key,
+      tier: SURFACING_TIER.explicit,
+      admit: true,
+      reason: "explicit",
+    });
+  }
+  if (structural.reason !== "default_retrieve") {
+    return Object.freeze({
+      key: null,
+      tier: SURFACING_TIER.suppressed,
+      admit: false,
+      reason: structural.reason,
+    });
+  }
+  if (input.matchQuality === undefined) {
+    return Object.freeze({
+      key: null,
+      tier: SURFACING_TIER.admitted,
+      admit: true,
+      reason: "default_retrieve",
+    });
+  }
+  return computeSurfacingKey({
+    matchQuality: input.matchQuality,
+    channel: input.channel ?? SURFACING_GATE_DEFAULT_CHANNEL,
+  });
 }
