@@ -197,14 +197,6 @@ export async function embedBenchVaultIndex(opts: {
   const store = await Store.open(config, { mode: "write" });
   try {
     const plan = planEmbeddingSpend(store, config);
-    if (plan.gate.blocked) {
-      throw new BenchEmbeddingError(
-        `bench embedding spend gate refused (${plan.gate.reason}): estimated ` +
-          `${formatEstimatedUsd(plan.estimatedUsd)} for ${plan.pending.length} chunk(s) exceeds ` +
-          `${COST_GATE_KEY} ${formatEstimatedUsd(config.semantic.costGateUsd)} - the bench never ` +
-          `bypasses the spend plan`,
-      );
-    }
     const cache = loadVectorCache(runsDir);
     const prefixes = {
       query: config.semantic.queryPrefix ?? "",
@@ -224,6 +216,30 @@ export async function embedBenchVaultIndex(opts: {
         hits.push({ chunkId: item.chunkId, key, vector: cached });
       } else {
         misses.push({ chunkId: item.chunkId, content: item.content, key });
+      }
+    }
+    // The spend gate prices the misses census, the chunks this arm would
+    // actually embed: an arm the shared cache serves whole makes zero
+    // provider contact, and gating it on the full census would refuse
+    // exactly the runs the cache exists for. With misses, the verdict
+    // over the misses subset is the honest one - the phase's own gate
+    // re-checks the same census at write time.
+    if (misses.length > 0) {
+      const missesPlan = priceSpendPlan(
+        misses.map((m) => {
+          const pending = plan.pending.find((p) => p.chunkId === m.chunkId);
+          if (pending === undefined) throw new BenchEmbeddingError("census split lost a chunk");
+          return pending;
+        }),
+        config,
+      );
+      if (missesPlan.gate.blocked) {
+        throw new BenchEmbeddingError(
+          `bench embedding spend gate refused (${missesPlan.gate.reason}): estimated ` +
+            `${formatEstimatedUsd(missesPlan.estimatedUsd)} for ${missesPlan.pending.length} chunk(s) exceeds ` +
+            `${COST_GATE_KEY} ${formatEstimatedUsd(config.semantic.costGateUsd)} - the bench never ` +
+            `bypasses the spend plan`,
+        );
       }
     }
     // Cache hits carry an earlier arm's exact bytes: same signature, so
