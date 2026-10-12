@@ -20,6 +20,7 @@ import type { SessionLineage } from "./lineage/types.ts";
 import { PayloadRegistry, withPayloadStoreLock } from "./payload-registry.ts";
 import { applyCharBudget } from "./recall-budget.ts";
 import {
+  TOPIC_BUDGET_FLOOR,
   detectThreadFacets,
   resolveTopicBudget,
   type ThreadFacet,
@@ -510,13 +511,15 @@ export function coverageSessionRecall(
   const { budget } = resolveTopicBudget(facets.length);
   const topics = facets.slice(0, budget);
   const matches = rankTopicMatches(records, topics);
+  const serialized = matches.map((match) => JSON.stringify(expandedRawTurn(match.record)));
+  assertFloorSelectionFits(topics, matches, serialized, input.charBudget);
   const budgeted = applyCharBudget(
-    matches.map((match) => ({ item: match, text: JSON.stringify(expandedRawTurn(match.record)) })),
+    matches.map((match, index) => ({ item: match, text: serialized[index]! })),
     { maxTotalChars: input.charBudget },
   );
-  const kept = [...budgeted.kept]
+  const kept = budgeted.kept
     .map((entry) => entry.item)
-    .sort((left, right) => compareRecords(left.record, right.record));
+    .toSorted((left, right) => compareRecords(left.record, right.record));
   return Object.freeze({
     turns: Object.freeze(kept.map((match) => expandedRawTurn(match.record))),
     diagnostics: Object.freeze({
@@ -532,6 +535,83 @@ export function coverageSessionRecall(
       dropped_turn_ids: Object.freeze(budgeted.dropped.map((match) => turnIdOf(match.record))),
     }),
   });
+}
+
+/**
+ * The floor-violation guard (t_2c2a883c, design decision 10): the
+ * floor-weighted selection - each of the first
+ * `min(realized topics, {@link TOPIC_BUDGET_FLOOR})` topics'
+ * highest-ranked turn - must fit the character budget. Below it, the
+ * typed {@link SessionCoverageInfeasibleError} is raised naming what to
+ * retry with; above it, {@link applyCharBudget}'s ordinary drops land in
+ * the diagnostics, never silent.
+ */
+function assertFloorSelectionFits(
+  topics: ReadonlyArray<ThreadFacet>,
+  matches: ReadonlyArray<TopicMatch>,
+  serialized: ReadonlyArray<string>,
+  charBudget: number,
+): void {
+  // Topic key -> rank index of its highest-ranked matching turn.
+  const topRank = new Map<string, number>();
+  matches.forEach((match, index) => {
+    for (const key of match.topics) if (!topRank.has(key)) topRank.set(key, index);
+  });
+  const floorTopics = Math.min(topics.length, TOPIC_BUDGET_FLOOR);
+  let requiredChars = 0;
+  let keptTopics = 0;
+  for (const topic of topics.slice(0, floorTopics)) {
+    const rank = topRank.get(topic.key);
+    if (rank === undefined) continue;
+    const chars = serialized[rank]!.length;
+    requiredChars += chars;
+    if (chars <= charBudget) keptTopics += 1;
+  }
+  if (requiredChars <= charBudget) return;
+  throw new SessionCoverageInfeasibleError({
+    topicFloor: TOPIC_BUDGET_FLOOR,
+    requestedTopics: topics.length,
+    keptTopics,
+    requiredChars,
+    charBudget,
+  });
+}
+
+/**
+ * The floor of the adaptive topic budget cannot be honored within the
+ * caller's character budget (t_2c2a883c). Carries the recomputable
+ * diagnostics so the caller can retry with a larger budget: which floor
+ * was violated, the topics requested and representable, and the
+ * characters the floor-weighted selection needs. Over MCP this maps to
+ * INVALID_PARAMS.
+ */
+export class SessionCoverageInfeasibleError extends Error {
+  readonly topicFloor: number;
+  readonly requestedTopics: number;
+  readonly keptTopics: number;
+  readonly requiredChars: number;
+  readonly charBudget: number;
+
+  constructor(details: {
+    topicFloor: number;
+    requestedTopics: number;
+    keptTopics: number;
+    requiredChars: number;
+    charBudget: number;
+  }) {
+    super(
+      `session recall coverage: character budget ${details.charBudget} cannot hold the ` +
+        `floor-weighted selection of floor ${details.topicFloor} - requested topics ` +
+        `${details.requestedTopics}, kept topics ${details.keptTopics}, required chars ` +
+        `${details.requiredChars}; retry with a larger charBudget`,
+    );
+    this.name = "SessionCoverageInfeasibleError";
+    this.topicFloor = details.topicFloor;
+    this.requestedTopics = details.requestedTopics;
+    this.keptTopics = details.keptTopics;
+    this.requiredChars = details.requiredChars;
+    this.charBudget = details.charBudget;
+  }
 }
 
 /** The `turn_id` payload key of a raw-turn record ("" when absent). */
@@ -653,7 +733,7 @@ function rankTopicMatches(
       if (record !== undefined) add(record, 1, facet.key);
     }
   }
-  return [...matches.values()].sort(
+  return [...matches.values()].toSorted(
     (left, right) => right.score - left.score || compareRecords(left.record, right.record),
   );
 }

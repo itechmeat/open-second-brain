@@ -24,6 +24,7 @@ import {
   coverageSessionRecall,
   importSessionRecall,
   searchSessionRecall,
+  SessionCoverageInfeasibleError,
 } from "../../../src/core/brain/session-recall.ts";
 
 let vault: string;
@@ -237,6 +238,74 @@ describe("mined-key facets", () => {
       charBudget: 100_000,
     });
     expect(coverage.diagnostics.topics.filter((topic) => topic.origin === "mined")).toEqual([]);
+  });
+});
+
+describe("typed floor-violation infeasibility", () => {
+  test("a budget below the floor-weighted selection raises the typed error, named fields", () => {
+    importLineageThread();
+    let probe: SessionCoverageInfeasibleError | null = null;
+    try {
+      coverageSessionRecall(vault, { sessionId: "child-seg", charBudget: 1 });
+    } catch (err) {
+      probe = err as SessionCoverageInfeasibleError;
+    }
+    expect(probe).not.toBeNull();
+    expect(probe).toBeInstanceOf(SessionCoverageInfeasibleError);
+    expect(probe!.name).toBe("SessionCoverageInfeasibleError");
+    expect(probe!.topicFloor).toBe(12);
+    // Four realized topics; the floor target is all four (min(4, 12)).
+    expect(probe!.requestedTopics).toBe(4);
+    expect(probe!.keptTopics).toBe(0);
+    expect(probe!.requiredChars).toBeGreaterThan(1);
+    // The message names requested topics, kept topics and required chars.
+    expect(probe!.message).toContain(`required chars ${probe!.requiredChars}`);
+    expect(probe!.message).toContain(`kept topics ${probe!.keptTopics}`);
+    expect(probe!.message).toContain(`requested topics ${probe!.requestedTopics}`);
+  });
+
+  test("requiredChars is the exact retry bound: at it, no error; one below, the error", () => {
+    importLineageThread();
+    let requiredChars: number;
+    try {
+      coverageSessionRecall(vault, { sessionId: "child-seg", charBudget: 1 });
+      throw new Error("expected the typed infeasibility error");
+    } catch (err) {
+      requiredChars = (err as SessionCoverageInfeasibleError).requiredChars;
+    }
+    const at = coverageSessionRecall(vault, {
+      sessionId: "child-seg",
+      charBudget: requiredChars,
+    });
+    // At the requirement the floor topics are all represented.
+    expect(at.diagnostics.topics_realized).toBe(4);
+    expect(at.diagnostics.chars_used).toBeLessThanOrEqual(requiredChars);
+    expect(() =>
+      coverageSessionRecall(vault, { sessionId: "child-seg", charBudget: requiredChars - 1 }),
+    ).toThrow(SessionCoverageInfeasibleError);
+  });
+
+  test("above the floor, drops land in diagnostics and never throw", () => {
+    importLineageThread();
+    let requiredChars: number;
+    try {
+      coverageSessionRecall(vault, { sessionId: "child-seg", charBudget: 1 });
+      throw new Error("expected the typed infeasibility error");
+    } catch (err) {
+      requiredChars = (err as SessionCoverageInfeasibleError).requiredChars;
+    }
+    // A little above the floor-weighted selection, the remaining turns
+    // are dropped, visibly: every dropped turn is named, and kept plus
+    // dropped still accounts for the whole thread.
+    const coverage = coverageSessionRecall(vault, {
+      sessionId: "child-seg",
+      charBudget: requiredChars + 10,
+    });
+    expect(coverage.turns.length).toBeGreaterThan(0);
+    expect(coverage.diagnostics.dropped_turn_ids.length).toBeGreaterThan(0);
+    expect(coverage.turns.length + coverage.diagnostics.dropped_turn_ids.length).toBe(8);
+    expect(coverage.diagnostics.chars_used).toBeLessThanOrEqual(requiredChars + 10);
+    expect(coverage.diagnostics.topics_realized).toBe(4);
   });
 });
 

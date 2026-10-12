@@ -130,7 +130,7 @@ export function detectThreadFacets(input: ThreadFacetInput): ReadonlyArray<Threa
     if (turnIds.length === 0) continue;
     facets.push({ key: `cluster:${cluster.id}`, origin: "cluster", needle: null, turnIds });
   }
-  return facets.sort(
+  return facets.toSorted(
     (left, right) =>
       firstTurnIndex(left, order) - firstTurnIndex(right, order) ||
       left.key.localeCompare(right.key),
