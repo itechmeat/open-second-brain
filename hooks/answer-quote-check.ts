@@ -201,9 +201,14 @@ function readWindow(fd: number, start: number, length: number): Buffer {
 function readTail(path: string): { readonly text: string; readonly cutStart: boolean } {
   const fd = openSync(path, "r");
   try {
-    const size = fstatSync(fd).size;
-    const start = Math.max(0, size - ANSWER_QUOTE_TAIL_BYTES);
-    return { text: readWindow(fd, start, size - start).toString("utf8"), cutStart: start > 0 };
+    const stat = fstatSync(fd);
+    // POSIX refuses to open a directory; Windows opens it and reports size
+    // 0, which would read as an empty transcript - silence where every
+    // platform must see one audit line. Name the failure identically
+    // everywhere instead: only a regular file is a transcript.
+    if (!stat.isFile()) throw new Error(`transcript is not a regular file: ${path}`);
+    const start = Math.max(0, stat.size - ANSWER_QUOTE_TAIL_BYTES);
+    return { text: readWindow(fd, start, stat.size - start).toString("utf8"), cutStart: start > 0 };
   } finally {
     closeSync(fd);
   }
