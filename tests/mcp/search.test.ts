@@ -428,6 +428,8 @@ interface IterativePlan {
   llm_step: { status: string; step: string; prompt: string; schema_hints: string[] };
   pool_ids: number[];
   gaps: string[];
+  rounds?: ReadonlyArray<{ round: number; added: number }>;
+  stop_reason?: string;
 }
 
 /**
@@ -465,6 +467,13 @@ test("brain_search iterative round-trip: plan phase carries the envelope, commit
     expect(plan!.pool_ids.length).toBeGreaterThan(0);
     expect(plan!.gaps.length).toBeGreaterThan(0);
     expect(typeof plan!.llm_step.prompt).toBe("string");
+    // The plan marker carries the deterministic loop's accounting too:
+    // what the rounds before the pause recovered and why the budget
+    // stopped while gaps remain - both fields the type carries and the
+    // output schema declares for this marker.
+    expect(Array.isArray(plan!.rounds)).toBe(true);
+    expect((plan!.rounds ?? []).length).toBeGreaterThan(0);
+    expect(typeof plan!.stop_reason).toBe("string");
 
     // Phase two: the token plus the committed payload finalizes.
     const commitArgs = {

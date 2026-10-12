@@ -1335,6 +1335,10 @@ async function toolBrainSearch(
                   llm_step: outcome.iterative.llmStep,
                   pool_ids: [...outcome.iterative.poolIds],
                   gaps: [...outcome.iterative.gaps],
+                  // The deterministic loop's accounting before the pause,
+                  // projected the same way the final marker does it.
+                  rounds: [...outcome.iterative.rounds],
+                  stop_reason: outcome.iterative.stopReason,
                 }
               : {
                   phase: outcome.iterative.phase,
