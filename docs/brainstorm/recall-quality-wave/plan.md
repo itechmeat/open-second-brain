@@ -45,7 +45,7 @@ A lane whose upstream has not landed yet starts by writing its failing tests aga
 ### Task 19: LongMemEval parser and converter (lane D)
 - **Files**: `src/core/bench/longmemeval.ts` (new), `tests/fixtures/bench/longmemeval-sample.json` (new), `tests/core/bench/longmemeval.test.ts` (new)
 - **Acceptance**: a passing test covers named parse errors, abstention questions excluded with the count recorded, direct gold-session-id join with unknown-id rejection, a converted fixture that round-trips `parseBenchFixture`, no reliance on `expected_text` for retrieval scoring, and an end-to-end `runMemoryBench` over the committed sample (the `tests/core/bench/locomo.test.ts` pattern).
-- **Depends on**: Task 18
+- **Depends on**: Tasks 18, 20
 
 ### Task 20: Knob pinning into run identity (lane D, contract commit 2)
 - **Files**: `src/core/bench/phases.ts`, `src/core/bench/types.ts`, `src/core/bench/run-store.ts`, `tests/core/bench/phases.test.ts`, `tests/core/bench/run-store.test.ts`

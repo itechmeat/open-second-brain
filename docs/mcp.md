@@ -575,6 +575,7 @@ floor or the decider authored the sub-queries) and the `stop_reason`
 `marginal_value`, `deadline`, `decider_round`); a call the mode did
 nothing for carries no marker at all, so the serialized outcome stays
 byte-identical whenever the mode did nothing.
+
 Since v1.82.0 `brain_session_grep` also answers `operation: "coverage"`:
 the coverage-first thread selection over the same lineage-scoped record
 set. Facets come from the thread itself - distinct mined entity keys and
