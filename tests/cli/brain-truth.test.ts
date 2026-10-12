@@ -621,6 +621,66 @@ test("truth state refuses a blank --sample-id as a usage error, writing nothing"
   expect(readClaimEvents(vault).events).toHaveLength(0);
 });
 
+test("truth state refuses an over-long or control-character --sample-id, naming the limit", async () => {
+  // L2.1 regression: the stated boundary's shape check - at most 256
+  // characters, no control characters - surfaces as the same usage-error
+  // class as the blank-id refusal, on the CLI path too.
+  seedCliRegistry();
+  for (const bad of ["r".repeat(300), "rcpt\u0000-1", "rcpt\u0007-1"]) {
+    const res = await runCli(
+      stateArgs(vault, [
+        "--subject",
+        "Alice Mason",
+        "--relation",
+        "extends",
+        "--object",
+        "Atlas",
+        "--text",
+        "Alice Mason said the Atlas extension plan is ready for review today.",
+        "--source",
+        "[[Brain/notes/session.md]]",
+        "--sample-id",
+        bad,
+      ]),
+    );
+    expect(res.returncode).toBe(2);
+    expect(res.stderr).toMatch(
+      /sample_id must be a non-empty string of at most 256 characters without control characters/,
+    );
+  }
+  expect(readClaimEvents(vault).events).toHaveLength(0);
+});
+
+test("truth state --sample-id threads a padded id trimmed, matching the stored form", async () => {
+  // L2.2 regression: both paths apply the same trim, so the threaded id
+  // and the stored id are identical whatever padding the caller sent.
+  seedCliRegistry();
+  const res = await runCli(
+    stateArgs(vault, [
+      "--subject",
+      "Alice Mason",
+      "--relation",
+      "extends",
+      "--object",
+      "Atlas",
+      "--text",
+      "Alice Mason said the Atlas extension plan is ready for review today.",
+      "--source",
+      "[[Brain/notes/session.md]]",
+      "--sample-id",
+      "  rcpt-2026-0601-abcd  ",
+    ]),
+  );
+  expect(res.returncode).toBe(0);
+  const row = (JSON.parse(res.stdout) as unknown as StateBody).committed[0] as Record<
+    string,
+    unknown
+  >;
+  expect(row["sample_id"]).toBe("rcpt-2026-0601-abcd");
+  const [stored] = readClaimEvents(vault).events;
+  expect(stored!.sample_id).toBe("rcpt-2026-0601-abcd");
+});
+
 test("truth events hydrates provenance for a claim carrying a sample id", async () => {
   seedCliRegistry();
   writeCliSourcePage("session.md");

@@ -481,6 +481,40 @@ describe("claim sample_id (presence-gated, schema v1)", () => {
     expect(readClaimEvents(vault).events).toHaveLength(0);
   });
 
+  test("a sample_id over the 256-character cap refuses the append by name", () => {
+    // L2.1 regression: the id is copied onto every claim stated against
+    // the sample, so an unbounded one multiplied one call's payload
+    // across the ledger. The refusal names the limit.
+    expect(() => append({ sample_id: "r".repeat(300) })).toThrow(
+      /sample_id must be a non-empty string of at most 256 characters/,
+    );
+    // Exactly at the cap is acceptable.
+    expect(append({ sample_id: "r".repeat(256) }).event.sample_id).toHaveLength(256);
+    expect(readClaimEvents(vault).events).toHaveLength(1);
+  });
+
+  test("a sample_id carrying a control character refuses the append by name", () => {
+    // Non-whitespace control characters (NUL, bell, DEL) refuse by name;
+    // whitespace controls are removed by the same trim both paths apply,
+    // so they never reach this check.
+    expect(() => append({ sample_id: "rcpt\u0000-1" })).toThrow(
+      /sample_id must be a non-empty string of at most 256 characters without control characters/,
+    );
+    expect(() => append({ sample_id: "rcpt\u0007-1" })).toThrow(/without control characters/);
+    expect(() => append({ sample_id: "rcpt-1\u007F" })).toThrow(/without control characters/);
+    expect(readClaimEvents(vault).events).toHaveLength(0);
+  });
+
+  test("a whitespace-padded sample_id is stored trimmed, matching what the stated path threads", () => {
+    // L2.2 regression: the store applies the SAME trim as the stated
+    // boundary, so a padded id threads and stores identically on both
+    // paths and the provenance join resolves what was threaded.
+    const written = append({ sample_id: "  rcpt-2026-0601-abcd  " });
+    expect(written.event.sample_id).toBe("rcpt-2026-0601-abcd");
+    const row = JSON.parse(readFileSync(written.path, "utf8")) as Record<string, unknown>;
+    expect(row["sample_id"]).toBe("rcpt-2026-0601-abcd");
+  });
+
   test("the reader passes a stored sample_id through verbatim, whatever it spells", () => {
     // The id is opaque: the reader validates it is a non-empty string and
     // otherwise keeps the caller's exact bytes.

@@ -65,6 +65,29 @@ import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 /** Default cap on retained claim events (explicit sweep only). */
 export const CLAIM_EVENT_MAX_COUNT = 10000;
 
+/**
+ * Cap on a caller-supplied `sample_id` (answer-trust review L2.1): the
+ * id is copied onto every claim stated against the sample, so an
+ * unbounded one could multiply one call's payload across the whole
+ * ledger.
+ */
+export const SAMPLE_ID_MAX_LENGTH = 256;
+
+/** Control characters (C0 plus DEL) an opaque sample id may not carry. */
+const SAMPLE_ID_CONTROL_CHARS_RE = /[\u0000-\u001F\u007F]/;
+
+/**
+ * Whether a TRIMMED `sample_id` is acceptable at the write boundary:
+ * non-empty, at most {@link SAMPLE_ID_MAX_LENGTH} characters, and free
+ * of control characters. Shared by the store append and the stated
+ * boundary so both surfaces refuse identically.
+ */
+export function isValidClaimSampleId(value: string): boolean {
+  return (
+    value !== "" && value.length <= SAMPLE_ID_MAX_LENGTH && !SAMPLE_ID_CONTROL_CHARS_RE.test(value)
+  );
+}
+
 // Same canonical UTC shape the log writer emits; see ISO_UTC_TS_RE in
 // log-jsonl.ts for why this stays strict.
 export const ISO_UTC_TS_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
@@ -217,11 +240,13 @@ export interface AppendClaimInput {
   /**
    * Presence-gated attribution id (schema v1): the caller-supplied
    * recall/context-pack quality-sample id this claim was stated against.
-   * Opaque - stored verbatim, never normalized, never logged beside
-   * answer or source text. A present-but-blank value refuses the append
-   * by name (a blank id means nothing and is not coerced to absent);
-   * an absent one serializes nothing, byte-identical to the
-   * pre-attribution ledger.
+   * Opaque - stored TRIMMED (the same normalization the stated-claims
+   * path applies, so a threaded id and its stored form always match),
+   * never otherwise normalized, never logged beside answer or source
+   * text. A present-but-blank, over-long or control-character-bearing
+   * value refuses the append by name (a blank id means nothing and is
+   * not coerced to absent); an absent one serializes nothing,
+   * byte-identical to the pre-attribution ledger.
    */
   readonly sample_id?: string;
   readonly source: string;
@@ -315,13 +340,17 @@ export function appendClaimEvent(
   if (input.extractor !== undefined && input.extractor !== "agent_stated") {
     throw new Error(`claim extractor must be agent_stated: ${JSON.stringify(input.extractor)}`);
   }
-  // Sample id (answer-trust, task B1): presence-gated, opaque. A
-  // present-but-blank value refuses the append by name - the same
-  // never-coerced discipline the other identity fields follow - while a
-  // present value is stored verbatim and an absent one serializes
-  // nothing.
-  if (input.sample_id !== undefined && input.sample_id.trim() === "") {
-    throw new Error("claim sample_id must be a non-empty string");
+  // Sample id (answer-trust, task B1): presence-gated, opaque, stored
+  // TRIMMED - the same normalization the stated path applies - so a
+  // threaded id and its stored form always match and the provenance join
+  // resolves what was threaded. A present-but-blank, over-long or
+  // control-character-bearing value refuses the append by name, naming
+  // the cap (review L2.1); an absent one serializes nothing.
+  const sampleId = input.sample_id === undefined ? undefined : input.sample_id.trim();
+  if (sampleId !== undefined && !isValidClaimSampleId(sampleId)) {
+    throw new Error(
+      `claim sample_id must be a non-empty string of at most ${SAMPLE_ID_MAX_LENGTH} characters without control characters`,
+    );
   }
 
   const event: ClaimEvent = Object.freeze({
@@ -337,7 +366,7 @@ export function appendClaimEvent(
     ...(resolved.validUntil !== undefined ? { validUntil: resolved.validUntil } : {}),
     source: input.source.trim(),
     ...(input.extractor !== undefined ? { extractor: input.extractor } : {}),
-    ...(input.sample_id !== undefined ? { sample_id: input.sample_id } : {}),
+    ...(sampleId !== undefined ? { sample_id: sampleId } : {}),
   });
 
   mkdirSync(truthDir(vault), { recursive: true });

@@ -71,9 +71,10 @@ export interface ClaimEvent {
    * Presence-gated attribution id (schema v1): the caller-supplied
    * recall/context-pack quality-sample id this claim was stated against
    * (a context-receipt id or an opaque request hash). Opaque and frozen
-   * verbatim at write; the claim-to-outcome join resolves it at read
-   * time (`claim-provenance.ts`). Absent on every line written before
-   * the field existed, and omitted - never invented - when the caller
+   * trimmed at write (the store-level trim the stated path threads);
+   * the claim-to-outcome join resolves it at read time
+   * (`claim-provenance.ts`). Absent on every line written before the
+   * field existed, and omitted - never invented - when the caller
    * supplies none. Annotation only: the id never changes which pairs
    * contest, and it is never logged beside answer or source text.
    */

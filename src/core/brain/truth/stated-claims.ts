@@ -36,7 +36,12 @@ import { anchorEntityForms, type AtomicEntityLike } from "../atomic-facts.ts";
 import { normalizeEntityName, type EntityLexiconHandle } from "../entities/canonical.ts";
 import { resolveEntityLexicon } from "../entities/lexicon.ts";
 import type { AppendClaimInput, AppendClaimResult } from "./store.ts";
-import { appendClaimEvent, ISO_UTC_TS_RE } from "./store.ts";
+import {
+  appendClaimEvent,
+  ISO_UTC_TS_RE,
+  isValidClaimSampleId,
+  SAMPLE_ID_MAX_LENGTH,
+} from "./store.ts";
 import type { ClaimExtractor } from "./types.ts";
 
 /** How this release tags agent-stated claims. */
@@ -62,10 +67,12 @@ export interface StatedClaimsPayload {
   /**
    * Optional attribution id (answer-trust, task B2): the recall/
    * context-pack quality-sample id these claims were stated against.
-   * Trimmed and required non-empty when present - a blank value is a
-   * named refusal, never coerced to absent - and threaded verbatim onto
-   * every committed event as `sample_id`. Opaque: treated as an opaque
-   * token end to end and never logged beside answer or source text.
+   * Trimmed and shape-checked when present - non-empty, at most 256
+   * characters, no control characters; anything else is a named
+   * refusal, never coerced to absent - and threaded trimmed onto every
+   * committed event as `sample_id` (the store stores the same trimmed
+   * form). Opaque: treated as an opaque token end to end and never
+   * logged beside answer or source text.
    */
   readonly sampleId?: string;
 }
@@ -197,13 +204,17 @@ export function appendStatedClaims(
     );
   }
   // Sample id (answer-trust, task B2): presence-gated, part of the
-  // whole-call promise. The value is trimmed and must be non-empty when
-  // present - a blank id is a named refusal, never coerced to absent -
-  // so the refusal fires HERE, before the first write, like the agent
-  // and ts checks above.
+  // whole-call promise. The value is trimmed and must pass the same
+  // shape check the store append applies - non-empty, at most 256
+  // characters, no control characters (review L2.1) - so an unacceptable
+  // id refuses HERE, before the first write, through the typed refusal
+  // channel like the agent and ts checks above, never coerced to absent
+  // and never surfacing mid-loop as the store's plain error.
   const sampleId = payload.sampleId === undefined ? undefined : payload.sampleId.trim();
-  if (payload.sampleId !== undefined && sampleId === "") {
-    throw new StatedClaimsRefusal("stated claims: sample_id must be a non-empty string");
+  if (sampleId !== undefined && !isValidClaimSampleId(sampleId)) {
+    throw new StatedClaimsRefusal(
+      `stated claims: sample_id must be a non-empty string of at most ${SAMPLE_ID_MAX_LENGTH} characters without control characters`,
+    );
   }
 
   const entities = opts.entities ?? [];

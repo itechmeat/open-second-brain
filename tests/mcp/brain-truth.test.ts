@@ -892,6 +892,30 @@ test("state refuses a blank sample_id through the named refusal, before any writ
   expect(readClaimEvents(vault).events).toHaveLength(0);
 });
 
+test("state refuses an over-long or control-character sample_id, naming the limit", async () => {
+  // L2.1 regression: the same shape check the core boundaries apply -
+  // at most 256 characters, no control characters - mapped to the same
+  // invalid-params failure class as the blank-id refusal.
+  seedRegistry();
+  const server = new MCPServer({ vault, configPath });
+  await initialize(server);
+  for (const bad of ["r".repeat(300), "rcpt\u0000-1", "rcpt\u0007-1"]) {
+    const raw = await callRaw(server, {
+      operation: "state",
+      claims: [{ subject: "Alice Mason", relation: "extends", object: "Project Atlas" }],
+      text: "Alice Mason said the Atlas extension plan refines Project Atlas scope.",
+      source: "[[Brain/notes/session.md]]",
+      sample_id: bad,
+    });
+    expect(raw.error).toBeDefined();
+    expect(raw.error!.code).toBe(-32602);
+    expect(raw.error!.message).toMatch(
+      /sample_id must be a non-empty string of at most 256 characters without control characters/,
+    );
+  }
+  expect(readClaimEvents(vault).events).toHaveLength(0);
+});
+
 test("events hydrate provenance for claims carrying a sample_id", async () => {
   seedRegistry();
   writeSourcePage("session.md");

@@ -315,6 +315,31 @@ describe("payload sampleId (answer-trust, task B2)", () => {
     expect(readClaimEvents(vault).events).toHaveLength(0);
   });
 
+  test("a sampleId over the 256-character cap refuses the whole payload, naming the limit", () => {
+    // L2.1 regression: the same shape check the store append applies,
+    // fired HERE so an unacceptable id refuses before the first write
+    // instead of surfacing mid-loop.
+    expect(() =>
+      withDeviceId("", () =>
+        appendStatedClaims(vault, { ...PAYLOAD, sampleId: "r".repeat(300), claims: [claim()] }),
+      ),
+    ).toThrow(/sample_id must be a non-empty string of at most 256 characters/);
+    // Exactly at the cap threads.
+    const atCap = withDeviceId("", () =>
+      appendStatedClaims(vault, { ...PAYLOAD, sampleId: "r".repeat(256), claims: [claim()] }),
+    );
+    expect(atCap.committed[0]!.event.sample_id).toHaveLength(256);
+  });
+
+  test("a sampleId carrying a control character refuses the whole payload", () => {
+    expect(() =>
+      withDeviceId("", () =>
+        appendStatedClaims(vault, { ...PAYLOAD, sampleId: "rcpt\u0000-1", claims: [claim()] }),
+      ),
+    ).toThrow(/without control characters/);
+    expect(readClaimEvents(vault).events).toHaveLength(0);
+  });
+
   test("an absent sampleId leaves the committed events byte-identical to today", () => {
     const outcome = withDeviceId("", () =>
       appendStatedClaims(vault, { ...PAYLOAD, claims: [claim()] }),
