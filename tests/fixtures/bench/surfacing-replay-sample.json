@@ -1,0 +1,36 @@
+{
+  "name": "sample",
+  "description": "Tiny committed surfacing-replay session: two prompts memory should speak up about, one weak-match prompt it must stay quiet about, and one structural non-prompt. The abstain turn shares exactly one corpus term (Priya), so the calibrated floor abstains while a permissive zero floor false-fires.",
+  "notes": [
+    {
+      "path": "notes/launch.md",
+      "body": "The Atlas launch checklist is owned by Marco. The billing migration finishes before the launch freeze in March."
+    },
+    {
+      "path": "notes/pivot.md",
+      "body": "The pivot review paused the mobile app and moved the team to the data pipeline. Priya owns the billing migration."
+    }
+  ],
+  "turns": [
+    {
+      "id": "turn-1",
+      "text": "Who owns the billing migration?",
+      "expect": "inject"
+    },
+    {
+      "id": "turn-2",
+      "text": "What happened to the mobile app?",
+      "expect": "inject"
+    },
+    {
+      "id": "turn-3",
+      "text": "Priya asked about the office lease renewal timeline",
+      "expect": "abstain"
+    },
+    {
+      "id": "turn-4",
+      "text": "/help",
+      "expect": "abstain"
+    }
+  ]
+}
