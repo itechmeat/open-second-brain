@@ -489,6 +489,17 @@ function lineagePayloadFields(lineage: SessionLineage | undefined): Record<strin
 export interface SessionCoverageInput {
   readonly sessionId?: string;
   /**
+   * Seed the coverage call from a mined entity key (t_2c2a883c, design
+   * decision 13, read-side only): the key resolves through its existing
+   * `session_entity_mention` rows ({@link resolveEntityMentionRows}) to
+   * the sessions that name it, the selection runs over their lineage
+   * scopes, and the key's own facets lead the fan-out. A key with no
+   * rows - or whose establishing turns no imported record carries -
+   * raises the typed {@link SessionCoverageEntityUnknownError}, never an
+   * empty silent result.
+   */
+  readonly entityKey?: string;
+  /**
    * Leave out continuity rows flagged `private` and the summary nodes
    * built from them, exactly as {@link searchSessionRecall} does.
    */
@@ -544,6 +555,13 @@ export interface SessionCoverageResult {
  * shared {@link applyCharBudget} primitive (wrapped, never forked), and
  * re-emitted in {@link compareRecords} chronological order. Every drop
  * is named in the diagnostics; nothing degrades silently.
+ *
+ * An `entityKey` seed (t_2c2a883c design decision 13) resolves read-side
+ * through its `session_entity_mention` rows: absent `sessionId`, the
+ * scope is the union of the mentioned sessions' lineage scopes, and the
+ * key's own facets lead the fan-out so the topic budget cannot cut the
+ * facet the call was seeded for. A seed that cannot reach an imported
+ * establishing turn raises {@link SessionCoverageEntityUnknownError}.
  */
 export function coverageSessionRecall(
   vault: string,
@@ -556,10 +574,19 @@ export function coverageSessionRecall(
   ) {
     throw new Error("session recall coverage: charBudget must be a positive finite number");
   }
-  const records = sessionRecallRecords(vault, input.sessionId, input.withholdPrivate);
+  const seed =
+    input.entityKey !== undefined ? resolveEntityMentionRows(vault, input.entityKey) : undefined;
+  const records =
+    seed === undefined
+      ? sessionRecallRecords(vault, input.sessionId, input.withholdPrivate)
+      : entitySeededRecords(vault, input, seed);
+  assertEntitySeedReachesScope(input.entityKey, seed, records);
   const facets = detectCoverageFacets(vault, records);
   const { budget } = resolveTopicBudget(facets.length);
-  const topics = facets.slice(0, budget);
+  const topics =
+    seed === undefined
+      ? facets.slice(0, budget)
+      : seededFacetsFirst(facets, input.entityKey!).slice(0, budget);
   const matches = rankTopicMatches(records, topics);
   const serialized = matches.map((match) => JSON.stringify(expandedRawTurn(match.record)));
   assertFloorSelectionFits(topics, matches, serialized, input.charBudget);
@@ -585,6 +612,120 @@ export function coverageSessionRecall(
       dropped_turn_ids: Object.freeze(budgeted.dropped.map((match) => turnIdOf(match.record))),
     }),
   });
+}
+
+/**
+ * One resolved `session_entity_mention` row: the payload spine the
+ * ledger writes per (family, key, session), provenance-grade and already
+ * on disk - the entity-thread dimension reads it, never re-mines it.
+ */
+export interface SessionEntityMentionRow {
+  readonly family: string;
+  readonly key: string;
+  readonly session_ref: string;
+  readonly turn_id: string;
+}
+
+/**
+ * Resolve a mined entity key to its `session_entity_mention` rows
+ * (t_2c2a883c design decision 13, read-side only): every ledger row
+ * whose payload names the key, private rows withheld. A key no row
+ * names raises the typed {@link SessionCoverageEntityUnknownError} -
+ * resolution never answers an unknown key with an empty silent list.
+ */
+export function resolveEntityMentionRows(
+  vault: string,
+  entityKey: string,
+): ReadonlyArray<SessionEntityMentionRow> {
+  const rows: SessionEntityMentionRow[] = [];
+  for (const record of listContinuityRecords(vault, { kind: "session_entity_mention" })) {
+    if (record.private) continue;
+    const family = record.payload["family"];
+    const key = record.payload["key"];
+    const sessionRef = record.payload["session_ref"];
+    const turnId = record.payload["turn_id"];
+    if (
+      typeof family !== "string" ||
+      typeof key !== "string" ||
+      typeof sessionRef !== "string" ||
+      typeof turnId !== "string"
+    ) {
+      continue;
+    }
+    if (key === entityKey) rows.push({ family, key, session_ref: sessionRef, turn_id: turnId });
+  }
+  if (rows.length === 0) {
+    throw new SessionCoverageEntityUnknownError({
+      entityKey,
+      reason: "no_mention_rows",
+      mentionRows: 0,
+    });
+  }
+  return rows;
+}
+
+/**
+ * The record set an entity-seeded coverage call selects over: an
+ * explicit `sessionId` keeps its own lineage scope (the seed must hold
+ * inside it - see {@link assertEntitySeedReachesScope}); otherwise the
+ * union of the mentioned sessions' lineage scopes, deduped by record id
+ * (lineage links overlap across sessions).
+ */
+function entitySeededRecords(
+  vault: string,
+  input: SessionCoverageInput,
+  rows: ReadonlyArray<SessionEntityMentionRow>,
+): ContinuityRecord[] {
+  if (input.sessionId !== undefined) {
+    return sessionRecallRecords(vault, input.sessionId, input.withholdPrivate);
+  }
+  const deduped = new Map<string, ContinuityRecord>();
+  for (const sessionRef of new Set(rows.map((row) => row.session_ref))) {
+    for (const record of sessionRecallRecords(vault, sessionRef, input.withholdPrivate)) {
+      if (!deduped.has(record.id)) deduped.set(record.id, record);
+    }
+  }
+  return [...deduped.values()];
+}
+
+/**
+ * An entity seed must reach imported evidence: at least one establishing
+ * turn of the key has to be a raw turn of the scoped record set. A key
+ * whose rows all name sessions or turns the recall DAG never imported
+ * raises the typed {@link SessionCoverageEntityUnknownError} - never a
+ * silently generic result over an empty scope.
+ */
+function assertEntitySeedReachesScope(
+  entityKey: string | undefined,
+  rows: ReadonlyArray<SessionEntityMentionRow> | undefined,
+  records: ReadonlyArray<ContinuityRecord>,
+): void {
+  if (entityKey === undefined || rows === undefined) return;
+  const scopedTurns = new Set<string>();
+  for (const record of records) {
+    if (record.kind !== "session_turn") continue;
+    const turnId = turnIdOf(record);
+    if (turnId.length > 0) scopedTurns.add(turnId);
+  }
+  if (rows.some((row) => scopedTurns.has(row.turn_id))) return;
+  throw new SessionCoverageEntityUnknownError({
+    entityKey,
+    reason: "no_imported_turns",
+    mentionRows: rows.length,
+  });
+}
+
+/**
+ * Fan-out order for an entity-seeded call: the key's own mined facets
+ * lead (stable otherwise), so the adaptive budget's cut can never drop
+ * the facet the call was seeded for. The establishing-turn guard above
+ * has already proven at least one such facet exists.
+ */
+function seededFacetsFirst(facets: ReadonlyArray<ThreadFacet>, entityKey: string): ThreadFacet[] {
+  const pinned = facets.filter((facet) => facet.origin === "mined" && facet.needle === entityKey);
+  if (pinned.length === 0) return [...facets];
+  const pinnedKeys = new Set(pinned);
+  return [...pinned, ...facets.filter((facet) => !pinnedKeys.has(facet))];
 }
 
 /**
@@ -628,6 +769,20 @@ function assertFloorSelectionFits(
 }
 
 /**
+ * The typed error family of the coverage operation (t_2c2a883c): every
+ * refusal the selection can produce - a budget below the floor-weighted
+ * selection, an entity seed with no reachable evidence - is a named
+ * subclass of this one, so callers (and the MCP INVALID_PARAMS mapping)
+ * can catch the family without catching unrelated failures.
+ */
+export class SessionCoverageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SessionCoverageError";
+  }
+}
+
+/**
  * The floor of the adaptive topic budget cannot be honored within the
  * caller's character budget (t_2c2a883c). Carries the recomputable
  * diagnostics so the caller can retry with a larger budget: which floor
@@ -635,7 +790,7 @@ function assertFloorSelectionFits(
  * characters the floor-weighted selection needs. Over MCP this maps to
  * INVALID_PARAMS.
  */
-export class SessionCoverageInfeasibleError extends Error {
+export class SessionCoverageInfeasibleError extends SessionCoverageError {
   readonly topicFloor: number;
   readonly requestedTopics: number;
   readonly keptTopics: number;
@@ -664,6 +819,42 @@ export class SessionCoverageInfeasibleError extends Error {
   }
 }
 
+/** Why an entity key could not seed a coverage call. */
+export type SessionCoverageEntitySeedFailure = "no_mention_rows" | "no_imported_turns";
+
+/**
+ * An entity key cannot seed a coverage call with evidence (t_2c2a883c
+ * design decision 13): no `session_entity_mention` row names the key, or
+ * every row that does names a session or turn the recall DAG never
+ * imported. Carries the key, the failure reason and the resolved row
+ * count so the caller can retry with a key the ledger actually holds -
+ * never an empty silent result. Same typed family as the infeasibility
+ * error; over MCP both map to INVALID_PARAMS.
+ */
+export class SessionCoverageEntityUnknownError extends SessionCoverageError {
+  readonly entityKey: string;
+  readonly reason: SessionCoverageEntitySeedFailure;
+  readonly mentionRows: number;
+
+  constructor(details: {
+    entityKey: string;
+    reason: SessionCoverageEntitySeedFailure;
+    mentionRows: number;
+  }) {
+    super(
+      details.reason === "no_mention_rows"
+        ? `session recall coverage: no session_entity_mention row names the entity key ${details.entityKey}`
+        : `session recall coverage: no imported turn establishes the entity key ` +
+            `${details.entityKey} (${details.mentionRows} mention row(s) name it, none joins ` +
+            `the recall DAG scope)`,
+    );
+    this.name = "SessionCoverageEntityUnknownError";
+    this.entityKey = details.entityKey;
+    this.reason = details.reason;
+    this.mentionRows = details.mentionRows;
+  }
+}
+
 /** The `turn_id` payload key of a raw-turn record ("" when absent). */
 function turnIdOf(record: ContinuityRecord): string {
   return String(record.payload["turn_id"] ?? "");
@@ -684,7 +875,7 @@ function turnIdOf(record: ContinuityRecord): string {
 function detectCoverageFacets(
   vault: string,
   records: ReadonlyArray<ContinuityRecord>,
-): ThreadFacet[] {
+): ReadonlyArray<ThreadFacet> {
   const turns: string[] = [];
   const clusters: Array<{ id: string; turnIds: ReadonlyArray<string> }> = [];
   for (const record of records) {

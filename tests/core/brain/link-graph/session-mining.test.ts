@@ -22,8 +22,15 @@ import {
   fakeCredential,
 } from "../../../helpers/fake-credentials.ts";
 import { extractFacts } from "../../../../src/core/brain/fact-extract.ts";
-import { continuityLogDir } from "../../../../src/core/brain/continuity/store.ts";
+import {
+  appendContinuityRecord,
+  continuityLogDir,
+} from "../../../../src/core/brain/continuity/store.ts";
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
+import {
+  SessionCoverageEntityUnknownError,
+  resolveEntityMentionRows,
+} from "../../../../src/core/brain/session-recall.ts";
 import {
   MAX_MINED_KEYS_PER_SESSION,
   MINED_KEY_MAX_LENGTH,
@@ -531,5 +538,76 @@ describe("the per-session key cap", () => {
     });
     expect(other.extracted).toBe(1);
     expect(other.capOverflow).toBe(0);
+  });
+});
+
+describe("resolveEntityMentionRows (read-side entity wiring, t_2c2a883c)", () => {
+  let vault: string;
+
+  beforeEach(() => {
+    vault = mkdtempSync(join(tmpdir(), "o2b-entity-rows-"));
+    bootstrapBrain(vault);
+  });
+
+  afterEach(() => {
+    rmSync(vault, { recursive: true, force: true });
+  });
+
+  function row(sessionRef: string, turnId: string, key = "SessionStore", family = "symbol"): void {
+    appendContinuityRecord(vault, {
+      kind: SESSION_ENTITY_MENTION_KIND,
+      createdAt: "2026-06-13T12:00:00.000Z",
+      sourceRefs: [{ id: `${sessionRef}:${turnId}:${family}:${key}` }],
+      payload: { family, key, session_ref: sessionRef, turn_id: turnId },
+    });
+  }
+
+  test("an entity key resolves to its mention rows across sessions and families", () => {
+    row("s1.jsonl", "t1");
+    row("s2.jsonl", "t7");
+    row("s2.jsonl", "t9", "SessionStore", "path");
+
+    const rows = resolveEntityMentionRows(vault, "SessionStore");
+    expect(rows.map((r) => [r.session_ref, r.turn_id, r.family])).toEqual([
+      ["s1.jsonl", "t1", "symbol"],
+      ["s2.jsonl", "t7", "symbol"],
+      ["s2.jsonl", "t9", "path"],
+    ]);
+  });
+
+  test("keys are case-preserving and private or malformed rows never resolve", () => {
+    row("s1.jsonl", "t1");
+    row("s1.jsonl", "t2", "sessionstore");
+    appendContinuityRecord(vault, {
+      kind: SESSION_ENTITY_MENTION_KIND,
+      createdAt: "2026-06-13T12:00:00.000Z",
+      sourceRefs: [{ id: "s1.jsonl:t3:symbol:SessionStore" }],
+      private: true,
+      payload: { family: "symbol", key: "SessionStore", session_ref: "s1.jsonl", turn_id: "t3" },
+    });
+    appendContinuityRecord(vault, {
+      kind: SESSION_ENTITY_MENTION_KIND,
+      createdAt: "2026-06-13T12:00:00.000Z",
+      sourceRefs: [{ id: "s1.jsonl:t4:symbol:SessionStore" }],
+      payload: { family: "symbol", session_ref: "s1.jsonl", turn_id: "t4" },
+    });
+
+    const rows = resolveEntityMentionRows(vault, "SessionStore");
+    expect(rows.map((r) => r.turn_id)).toEqual(["t1"]);
+    expect(() => resolveEntityMentionRows(vault, "sessionstore")).not.toThrow();
+  });
+
+  test("an unknown key raises the typed coverage error, never an empty silent result", () => {
+    let probe: SessionCoverageEntityUnknownError | null = null;
+    try {
+      resolveEntityMentionRows(vault, "NoSuchKey");
+    } catch (err) {
+      probe = err as SessionCoverageEntityUnknownError;
+    }
+    expect(probe).not.toBeNull();
+    expect(probe).toBeInstanceOf(SessionCoverageEntityUnknownError);
+    expect(probe!.entityKey).toBe("NoSuchKey");
+    expect(probe!.reason).toBe("no_mention_rows");
+    expect(probe!.message).toContain("NoSuchKey");
   });
 });

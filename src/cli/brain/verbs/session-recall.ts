@@ -69,7 +69,10 @@ export async function cmdBrainSessionGrep(argv: string[]): Promise<number> {
  * under --char-budget, with the typed floor-violation infeasibility
  * surfaced as the CLI error it is.
  */
-function runSessionGrepCoverage(vault: string, flags: Record<string, unknown>): number {
+function runSessionGrepCoverage(
+  vault: string,
+  flags: Record<string, string | boolean | string[] | undefined>,
+): number {
   const charBudget = positiveIntegerOptional(
     flags["char-budget"],
     "brain session-grep",

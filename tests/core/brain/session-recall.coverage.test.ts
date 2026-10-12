@@ -24,6 +24,7 @@ import {
   coverageSessionRecall,
   importSessionRecall,
   searchSessionRecall,
+  SessionCoverageEntityUnknownError,
   SessionCoverageInfeasibleError,
 } from "../../../src/core/brain/session-recall.ts";
 
@@ -238,6 +239,113 @@ describe("mined-key facets", () => {
       charBudget: 100_000,
     });
     expect(coverage.diagnostics.topics.filter((topic) => topic.origin === "mined")).toEqual([]);
+  });
+});
+
+describe("entity-thread wiring", () => {
+  function importTwoSessions(): void {
+    importSessionRecall(vault, {
+      sessionId: "seg-a",
+      turns: [
+        turn("a1", "user", "call `SessionStore` for the receipts flow", 1),
+        turn("a2", "assistant", "SessionStore keeps the receipt ledger", 2),
+        turn("a3", "user", "unrelated turn about weather", 3),
+      ],
+      summaryGroupSize: 2,
+      createdAt: "2026-07-03T09:00:00.000Z",
+    });
+    importSessionRecall(vault, {
+      sessionId: "seg-b",
+      turns: [
+        turn("b1", "user", "migrate `SessionStore` behind the flag", 31),
+        turn("b2", "assistant", "done; SessionStore is feature-flagged", 32),
+      ],
+      summaryGroupSize: 2,
+      createdAt: "2026-07-03T09:02:00.000Z",
+    });
+  }
+
+  /** One mined-mention ledger row, the shape `mineAndRecordTurn` writes. */
+  function mention(sessionRef: string, turnId: string, key = "SessionStore"): void {
+    appendContinuityRecord(vault, {
+      kind: "session_entity_mention",
+      createdAt: "2026-07-03T09:00:01.000Z",
+      sourceRefs: [{ id: `${sessionRef}:${turnId}:symbol:${key}` }],
+      payload: { family: "symbol", key, session_ref: sessionRef, turn_id: turnId },
+    });
+  }
+
+  test("a coverage call seeded by an entity key returns the turns that establish it, chronologically", () => {
+    importTwoSessions();
+    mention("seg-a", "a1");
+    mention("seg-b", "b1");
+
+    const coverage = coverageSessionRecall(vault, {
+      entityKey: "SessionStore",
+      charBudget: 1_000_000,
+    });
+
+    const ids = coverage.turns.map((t) => t.turn_id);
+    // The establishing turns of BOTH mentioned sessions are in the
+    // selection, in `compareRecords` chronological order across them.
+    expect(ids).toContain("a1");
+    expect(ids).toContain("b1");
+    expect(ids.indexOf("a1")).toBeLessThan(ids.indexOf("b1"));
+    // The seeded key leads the fan-out, so the topic budget can never
+    // cut the facet the call was seeded for.
+    expect(coverage.diagnostics.topics[0]).toMatchObject({
+      key: "mined:symbol:SessionStore",
+      origin: "mined",
+    });
+    // The scope is the mentioned sessions' record set, so the diagnostics
+    // stay recomputable from it.
+    expect(coverage.diagnostics.facets_detected).toBeGreaterThan(0);
+    expect(coverage.diagnostics.topics_requested).toBeGreaterThanOrEqual(
+      coverage.diagnostics.topics_realized,
+    );
+  });
+
+  test("an unknown entity key raises the typed error, never an empty silent result", () => {
+    importTwoSessions();
+    let probe: SessionCoverageEntityUnknownError | null = null;
+    try {
+      coverageSessionRecall(vault, { entityKey: "NoSuchKey", charBudget: 100_000 });
+    } catch (err) {
+      probe = err as SessionCoverageEntityUnknownError;
+    }
+    expect(probe).not.toBeNull();
+    expect(probe).toBeInstanceOf(SessionCoverageEntityUnknownError);
+    expect(probe!.name).toBe("SessionCoverageEntityUnknownError");
+    expect(probe!.entityKey).toBe("NoSuchKey");
+    expect(probe!.reason).toBe("no_mention_rows");
+    expect(probe!.message).toContain("NoSuchKey");
+  });
+
+  test("a key whose establishing turns the recall DAG never imported raises the same family", () => {
+    importTwoSessions();
+    mention("seg-never-imported", "x1");
+    let probe: SessionCoverageEntityUnknownError | null = null;
+    try {
+      coverageSessionRecall(vault, { entityKey: "SessionStore", charBudget: 100_000 });
+    } catch (err) {
+      probe = err as SessionCoverageEntityUnknownError;
+    }
+    expect(probe).not.toBeNull();
+    expect(probe!.reason).toBe("no_imported_turns");
+    expect(probe!.mentionRows).toBe(1);
+    expect(probe!.message).toContain("SessionStore");
+  });
+
+  test("a seed that names turns outside the requested session scope raises, not silently widens", () => {
+    importTwoSessions();
+    mention("seg-a", "a1");
+    expect(() =>
+      coverageSessionRecall(vault, {
+        entityKey: "SessionStore",
+        sessionId: "seg-b",
+        charBudget: 100_000,
+      }),
+    ).toThrow(SessionCoverageEntityUnknownError);
   });
 });
 
