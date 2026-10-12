@@ -14,9 +14,10 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { loadBenchFixture } from "../../../core/bench/fixture.ts";
+import { loadLongMemEvalFixture } from "../../../core/bench/longmemeval.ts";
 import { loadLocomoFixture } from "../../../core/bench/locomo.ts";
 import { runMemoryBench } from "../../../core/bench/phases.ts";
-import type { BenchFixture, BenchSuiteRegistration } from "../../../core/bench/types.ts";
+import type { BenchSuiteLoad, BenchSuiteRegistration } from "../../../core/bench/types.ts";
 import { defaultConfigPath, resolveBenchJudgeCmd } from "../../../core/config.ts";
 import { fail, parse } from "../helpers.ts";
 
@@ -35,7 +36,7 @@ const SUITE_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
  * preserve.
  */
 const DEFAULT_SUITE_REGISTRATION: BenchSuiteRegistration = Object.freeze({
-  loader: (fixturePath: string): BenchFixture => loadBenchFixture(fixturePath),
+  loader: (fixturePath: string): BenchSuiteLoad => ({ fixture: loadBenchFixture(fixturePath) }),
   capabilities: Object.freeze({ embeddings: false }),
 });
 
@@ -49,8 +50,17 @@ const BENCH_SUITES = new Map<string, BenchSuiteRegistration>([
   [
     "locomo",
     Object.freeze({
-      loader: (fixturePath: string): BenchFixture => loadLocomoFixture(fixturePath),
+      loader: (fixturePath: string): BenchSuiteLoad => ({
+        fixture: loadLocomoFixture(fixturePath),
+      }),
       capabilities: Object.freeze({ embeddings: false }),
+    }),
+  ],
+  [
+    "longmemeval",
+    Object.freeze({
+      loader: loadLongMemEvalFixture,
+      capabilities: Object.freeze({ embeddings: true }),
     }),
   ],
 ]);
@@ -107,7 +117,7 @@ export async function cmdBrainBench(argv: string[]): Promise<number> {
 
   // One dispatch for every suite: the registry entry owns loading and
   // declares what the suite may do; the capabilities ride BenchRunOptions.
-  const fixture = registration.loader(fixturePath);
+  const fixture = registration.loader(fixturePath).fixture;
   const runsDir = resolve(
     typeof flags["runs-dir"] === "string" && flags["runs-dir"].trim() !== ""
       ? flags["runs-dir"].trim()

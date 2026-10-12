@@ -133,13 +133,29 @@ export interface BenchSuiteCapabilities {
 }
 
 /**
+ * What a suite loader returns: the converted fixture plus a typed
+ * receipt of what conversion decided (for LongMemEval, how many
+ * abstention questions it dropped).
+ */
+export interface BenchSuiteLoad {
+  readonly fixture: BenchFixture;
+  readonly receipt?: BenchSuiteReceipt;
+}
+
+/** Suite-level conversion receipt, surfaced through the report family. */
+export interface BenchSuiteReceipt {
+  /** LongMemEval-style abstention questions dropped at conversion time. */
+  readonly abstention_excluded?: number;
+}
+
+/**
  * One registered suite: how a dataset file becomes a {@link BenchFixture}
  * and what the suite may do inside a run. Suites register through the
  * registry map in the bench verb - an appendable registration point, not
  * a hard-coded branch chain.
  */
 export interface BenchSuiteRegistration {
-  readonly loader: (fixturePath: string) => BenchFixture;
+  readonly loader: (fixturePath: string) => BenchSuiteLoad;
   readonly capabilities: BenchSuiteCapabilities;
 }
 

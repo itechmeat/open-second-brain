@@ -1,0 +1,99 @@
+{
+  "name": "sample",
+  "questions": [
+    {
+      "q_id": "lm-q1",
+      "question_type": "single-hop",
+      "question": "launch codename",
+      "answer": "Blue Heron",
+      "haystack_session_id": ["sess-alpha", "sess-beta"],
+      "haystack_dates": ["2026-03-02T10:00:00Z", "2026-03-03T10:00:00Z"],
+      "haystack_session": [
+        [
+          {
+            "role": "user",
+            "content": "We picked Blue Heron as the launch codename for the spring release."
+          },
+          { "role": "assistant", "content": "Noted: the launch codename is Blue Heron." }
+        ],
+        [
+          {
+            "role": "user",
+            "content": "The retro meeting moved to Thursday, and the demo script is due Wednesday."
+          },
+          {
+            "role": "assistant",
+            "content": "Got it: retro on Thursday, demo script due Wednesday, and the Blue Heron launch is on the agenda."
+          }
+        ]
+      ],
+      "answer_session_ids": ["sess-alpha"]
+    },
+    {
+      "q_id": "lm-q2",
+      "question_type": "multi-hop",
+      "question": "heron",
+      "answer": "Blue Heron",
+      "haystack_session_id": ["sess-alpha", "sess-beta"],
+      "haystack_dates": ["2026-03-02T10:00:00Z", "2026-03-03T10:00:00Z"],
+      "haystack_session": [
+        [
+          {
+            "role": "user",
+            "content": "We picked Blue Heron as the launch codename for the spring release."
+          },
+          { "role": "assistant", "content": "Noted: the launch codename is Blue Heron." }
+        ],
+        [
+          {
+            "role": "user",
+            "content": "The retro meeting moved to Thursday, and the demo script is due Wednesday."
+          },
+          {
+            "role": "assistant",
+            "content": "Got it: retro on Thursday, demo script due Wednesday, and the Blue Heron launch is on the agenda."
+          }
+        ]
+      ],
+      "answer_session_ids": ["sess-alpha", "sess-beta"]
+    },
+    {
+      "q_id": "lm-q3",
+      "question_type": "temporal-reasoning",
+      "question": "retro thursday",
+      "answer": "Thursday",
+      "haystack_session_id": ["sess-beta"],
+      "haystack_dates": ["2026-03-03T10:00:00Z"],
+      "haystack_session": [
+        [
+          {
+            "role": "user",
+            "content": "The retro meeting moved to Thursday, and the demo script is due Wednesday."
+          },
+          {
+            "role": "assistant",
+            "content": "Got it: retro on Thursday, demo script due Wednesday, and the Blue Heron launch is on the agenda."
+          }
+        ]
+      ],
+      "answer_session_ids": ["sess-beta"]
+    },
+    {
+      "q_id": "lm-q4",
+      "question_type": "abstention",
+      "question": "what color is the accountant's car",
+      "haystack_session_id": ["sess-alpha"],
+      "haystack_dates": ["2026-03-02T10:00:00Z"],
+      "haystack_session": [
+        [
+          {
+            "role": "user",
+            "content": "We picked Blue Heron as the launch codename for the spring release."
+          },
+          { "role": "assistant", "content": "Noted: the launch codename is Blue Heron." }
+        ]
+      ],
+      "answer_session_ids": []
+    }
+  ]
+}

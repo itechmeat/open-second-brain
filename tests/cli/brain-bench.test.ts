@@ -111,7 +111,7 @@ describe("bench suite registry", () => {
   registerBenchSuite(STUB_SUITE, {
     loader: (fixturePath: string) => {
       stubLoaderCalls.push(fixturePath);
-      return STUB_FIXTURE;
+      return { fixture: STUB_FIXTURE };
     },
     capabilities: { embeddings: false },
   });
@@ -188,7 +188,7 @@ describe("bench suite registry", () => {
   test("a duplicate suite registration is refused by name", () => {
     expect(() =>
       registerBenchSuite("locomo", {
-        loader: () => STUB_FIXTURE,
+        loader: () => ({ fixture: STUB_FIXTURE }),
         capabilities: { embeddings: false },
       }),
     ).toThrow(/already registered/);
