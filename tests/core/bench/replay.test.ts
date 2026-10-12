@@ -8,6 +8,11 @@
  * about - its only term is hyphenated, so the keyword lane retrieves the
  * billing rows while the graded key reads zero substring coverage - and
  * a structural non-prompt no calibration should speak up for.
+ *
+ * Scope note (pr-250 review, M9): the harness drives the decision core
+ * directly, so a structural prompt down here is judged on retrieval
+ * alone - the suite calibrates the admission floor, it does not exercise
+ * `evaluateSurfacingGate`'s short-circuits.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";

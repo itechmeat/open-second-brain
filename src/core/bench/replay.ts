@@ -10,12 +10,20 @@
  * `false_fire`, and the two rates share one denominator so an
  * always-inject gate can never hide.
  *
- * This is the suite that makes the surfacing gate SCOREABLE: the gate's
- * structural half fails open by design, but the graded admission key
- * (`surfacing-key.ts`) is a measured bound, and sweeping it - the
- * shipped calibration against a permissive one, via the run's
- * `recallFloor` - is what measures whether the bound discriminates. See
- * `failure-modes.ts` for the caveat this closes.
+ * Scope, stated plainly: this is a FLOOR-CALIBRATION suite. It drives
+ * the shipped decision core directly, so the bound it measures is the
+ * graded admission key (`surfacing-key.ts`) - sweeping the shipped
+ * calibration against a permissive one, via the run's `recallFloor`, is
+ * what shows whether that bound discriminates. The gate's STRUCTURAL
+ * short-circuits (`duplicate`, `slash_command`, `shell_command`,
+ * `empty`) are NOT exercised: in production the transports run
+ * `evaluateSurfacingGate` ahead of the decision core, and this harness
+ * does not reproduce that composition - a replayed `/compact` prompt is
+ * judged on retrieval alone. Closing that gap needs an additive
+ * previous-prompt field on the bench question plus a gate step in the
+ * phase pipeline's proactive-recall arm (pr-250 review, M9); until that
+ * lands, read the rates as floor calibration only. See
+ * `failure-modes.ts` for what the scorer denominates.
  *
  * Rides the suite registry and the existing phase pipeline unchanged:
  * conversion is a pure ReplayFixture -> BenchFixture whose questions are
