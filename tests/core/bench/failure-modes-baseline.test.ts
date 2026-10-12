@@ -45,11 +45,13 @@ import { join } from "node:path";
 
 import { loadBenchFixture } from "../../../src/core/bench/fixture.ts";
 import { runMemoryBench } from "../../../src/core/bench/phases.ts";
+import { loadReplayBenchFixture } from "../../../src/core/bench/replay.ts";
 import type { BenchReport } from "../../../src/core/bench/types.ts";
 
 const FIXTURE_DIR = join("tests", "fixtures", "bench");
 const FIXTURE_PATH = join(FIXTURE_DIR, "failure-modes.json");
 const BASELINE_PATH = join(FIXTURE_DIR, "failure-modes.baseline.json");
+const FAILURE_MODES_SOURCE = join("src", "core", "bench", "failure-modes.ts");
 
 let runsDir: string;
 
@@ -98,5 +100,39 @@ describe("failure-mode baseline", () => {
     };
     expect(baseline.fixture_hash).toMatch(/^[0-9a-f]{16}$/);
     expect(baseline.schema).toBe("o2b.bench.v2");
+  });
+
+  test("the graded gate is scoreable: the replay corpus bounds its false-fire rate", async () => {
+    // The structural half of the gate fails open by design; the graded
+    // admission key is the bound, and the replay corpus is its measurement
+    // instrument. Three assertions make the bound MEANINGFUL rather than
+    // vacuous: the calibrated gate speaks on the corpus at all (an
+    // always-abstain gate would also post zero false fires), it never
+    // false-fires on it, and the same corpus catches a permissive gate -
+    // the floor 0 arm shows the corpus can tell an always-inject strategy
+    // apart, so the calibrated zero is a measured bound, not silence.
+    const fixture = loadReplayBenchFixture(join(FIXTURE_DIR, "surfacing-replay-sample.json"));
+    const calibrated = await runMemoryBench({ fixture, runsDir });
+    expect(calibrated.context_cost.avg_injected_tokens).toBeGreaterThan(0);
+    expect(calibrated.failure_modes.false_fire_rate).toBe(0);
+    const permissive = await runMemoryBench({
+      fixture,
+      runsDir: join(runsDir, "permissive"),
+      recallFloor: 0,
+    });
+    expect(permissive.failure_modes.false_fire_rate).toBeGreaterThan(0);
+  }, 60_000);
+
+  test("the failure-modes docblock describes the graded gate, not an unscoreable one", () => {
+    // The retired claim - that the gate's false-fire rate is ~1 by
+    // construction and scoring it would be theatre - described the
+    // structural predicate alone. Admission now rides the graded surfacing
+    // key, and the replay suite measures it; the docblock that understates
+    // what ships invites the next reader to re-derive the caveat.
+    const source = readFileSync(FAILURE_MODES_SOURCE, "utf8");
+    expect(source).not.toContain("would be theatre");
+    expect(source).not.toContain("NOT THE GATE");
+    // It names the instrument that replaced the caveat.
+    expect(source).toMatch(/surfacing-replay/);
   });
 });

@@ -24,16 +24,25 @@
  * injects `Brain/active.md` wholesale every session - so there is nothing
  * there to score.
  *
- * Second, THE PRESSURE IS ON THE FLOOR, NOT THE GATE.
- * `evaluateSurfacingGate` (`src/core/search/surfacing-gate.ts`) fails open
- * by design: every non-empty, non-duplicate, non-slash, non-shell prompt
- * retrieves, so its false-fire rate is ~1 by construction and scoring it
- * would be theatre. The only
- * discriminating bound in the decision core is
- * `RECALL_INJECT_CONFIDENCE_FLOOR`, so that is where the anti-gaming term
- * bites: {@link scoreProactiveRecall} counts a false fire exactly as
- * heavily as a silent miss, which is what makes a strategy that always
- * injects score strictly worse than one that abstains correctly.
+ * Second, THE GATE IS SCOREABLE, AND THE BOUND IS THE GRADED KEY. The
+ * structural predicate (`evaluateSurfacingGate`,
+ * `src/core/search/surfacing-gate.ts`) still fails open by design - every
+ * non-empty, non-duplicate, non-slash, non-shell prompt retrieves - so a
+ * rate computed over THAT predicate alone would read ~1 by construction.
+ * Admission does not ride that predicate: it rides the shared graded
+ * surfacing key (`src/core/search/surfacing-key.ts`), channel-calibrated
+ * absolute match quality (`idfWeightedCoverage`) compared against the
+ * floor, which is a measured bound rather than a structural tautology.
+ * The surfacing-replay suite (`src/core/bench/replay.ts`, `--suite
+ * surfacing-replay`) is the instrument that scores it: it replays a
+ * recorded prompt corpus through the shipped decision core and posts the
+ * gate's false-fire and know-to-ask rates under the same
+ * {@link scoreProactiveRecall} denominations, so the calibration is a
+ * measured number that a re-run of the suite re-measures. The anti-gaming
+ * term still bites: {@link scoreProactiveRecall} counts a false fire
+ * exactly as heavily as a silent miss, which is what makes a strategy
+ * that always injects score strictly worse than one that abstains
+ * correctly.
  *
  * A measured caveat that used to belong with the number, kept because it
  * is what the floor's current shape is a response to: through the shipped
