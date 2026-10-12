@@ -224,7 +224,11 @@ describe("blank-session-identity skips the sessionless-by-design kinds", () => {
     expect(sessionlessKinds.length).toBeGreaterThan(10);
     for (const kind of sessionlessKinds) {
       if (kind === "source_invalidation") continue; // writer-level case above
-      appendContinuityRecord(vault, { kind, createdAt: "2026-06-01T00:00:00.000Z", payload: {} });
+      appendContinuityRecord(vault, {
+        kind: kind as AppendContinuityRecordInput["kind"],
+        createdAt: "2026-06-01T00:00:00.000Z",
+        payload: {},
+      });
     }
 
     const { issues } = findings();
@@ -406,8 +410,8 @@ function declaredKinds(): ReadonlyArray<string> {
 
 /** The census tables, checked for internal consistency once per run. */
 function classification(): {
-  readonly checkedKinds: ReadonlyArray<string>;
-  readonly sessionlessKinds: ReadonlyArray<string>;
+  readonly checkedKinds: ReadonlyArray<ContinuityRecordKind>;
+  readonly sessionlessKinds: ReadonlyArray<ContinuityRecordKind>;
 } {
   const checked = KIND_WRITERS.filter((row) => row.sessionScoped).map((row) => row.kind);
   const sessionless = KIND_WRITERS.filter((row) => !row.sessionScoped).map((row) => row.kind);
