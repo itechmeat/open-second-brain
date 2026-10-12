@@ -578,6 +578,10 @@ describe("capped subagent delivered-id ledger", () => {
 });
 
 describe("subagent delivered-evidence paths", () => {
+  /** The delivered note paths of one ledger read, sorted, truncation dropped. */
+  const evidencePathsOf = (entries: ReturnType<typeof readSubagentDeliveredPaths>): string[] =>
+    entries.map((entry) => (typeof entry === "string" ? entry : entry.path)).toSorted();
+
   test("records and reads back paths beside the ids, deduplicated", () => {
     expect(
       recordSubagentDeliveredId(vault, SESSION, AGENT, [
@@ -591,22 +595,42 @@ describe("subagent delivered-evidence paths", () => {
         "Brain/lessons.md",
       ]),
     ).toBe(true);
-    expect(readSubagentDeliveredPaths(vault, SESSION)).toEqual(
-      new Set(["Brain/standing-rules.md", "Brain/active.md", "Brain/lessons.md"]),
-    );
+    expect(evidencePathsOf(readSubagentDeliveredPaths(vault, SESSION))).toEqual([
+      "Brain/active.md",
+      "Brain/lessons.md",
+      "Brain/standing-rules.md",
+    ]);
     expect(readSubagentDeliveredIds(vault, SESSION)).toEqual(new Set([AGENT, "agent-bbbb"]));
+  });
+
+  test("a truncated delivery keeps its flag, and a whole-note row never widens it back", () => {
+    expect(
+      recordSubagentDeliveredId(vault, SESSION, AGENT, [
+        { path: "Brain/standing-rules.md", truncated: true },
+      ]),
+    ).toBe(true);
+    const truncated = readSubagentDeliveredPaths(vault, SESSION);
+    expect(truncated).toEqual([{ path: "Brain/standing-rules.md", truncated: true }]);
+    expect(recordSubagentDeliveredId(vault, SESSION, AGENT, ["Brain/standing-rules.md"])).toBe(
+      true,
+    );
+    expect(readSubagentDeliveredPaths(vault, SESSION)).toEqual([
+      { path: "Brain/standing-rules.md", truncated: true },
+    ]);
   });
 
   test("a record without paths reads as an empty path set - the legacy row shape", () => {
     expect(recordSubagentDeliveredId(vault, SESSION, AGENT)).toBe(true);
     expect(readSubagentDeliveredIds(vault, SESSION)).toEqual(new Set([AGENT]));
-    expect(readSubagentDeliveredPaths(vault, SESSION)).toEqual(new Set());
+    expect(readSubagentDeliveredPaths(vault, SESSION)).toEqual([]);
   });
 
   test("a re-delivery without paths keeps the paths an earlier delivery merged", () => {
     expect(recordSubagentDeliveredId(vault, SESSION, AGENT, ["Brain/active.md"])).toBe(true);
     expect(recordSubagentDeliveredId(vault, SESSION, AGENT)).toBe(true);
-    expect(readSubagentDeliveredPaths(vault, SESSION)).toEqual(new Set(["Brain/active.md"]));
+    expect(evidencePathsOf(readSubagentDeliveredPaths(vault, SESSION))).toEqual([
+      "Brain/active.md",
+    ]);
   });
 
   test("keeps only the most recent paths past the cap", () => {
@@ -617,9 +641,11 @@ describe("subagent delivered-evidence paths", () => {
     );
     expect(recordSubagentDeliveredId(vault, SESSION, AGENT, all)).toBe(true);
     const paths = readSubagentDeliveredPaths(vault, SESSION);
-    expect(paths.size).toBe(SUBAGENT_PATHS_MAX);
-    expect(paths.has("Brain/notes/n0000.md")).toBe(false);
-    expect(paths.has(`Brain/notes/n${String(total - 1).padStart(4, "0")}.md`)).toBe(true);
+    expect(paths.length).toBe(SUBAGENT_PATHS_MAX);
+    expect(evidencePathsOf(paths)).not.toContain("Brain/notes/n0000.md");
+    expect(evidencePathsOf(paths)).toContain(
+      `Brain/notes/n${String(total - 1).padStart(4, "0")}.md`,
+    );
   });
 
   test("the carrier records the note paths its payload was built from", async () => {
@@ -629,9 +655,11 @@ describe("subagent delivered-evidence paths", () => {
     const delivering = await runHook(subagentStartPayload({ agentId: AGENT }));
     expect(delivering.exit).toBe(0);
     expect(deliveredContext(delivering.stdout).additionalContext).not.toBe("");
-    expect(readSubagentDeliveredPaths(vault, SESSION)).toEqual(
-      new Set(["Brain/standing-rules.md", "Brain/active.md", "Brain/lessons.md"]),
-    );
+    expect(evidencePathsOf(readSubagentDeliveredPaths(vault, SESSION))).toEqual([
+      "Brain/active.md",
+      "Brain/lessons.md",
+      "Brain/standing-rules.md",
+    ]);
   });
 
   test.skipIf(CHMOD_CANNOT_DENY)(
@@ -649,7 +677,9 @@ describe("subagent delivered-evidence paths", () => {
       } finally {
         chmodSync(path, 0o644);
       }
-      expect(readSubagentDeliveredPaths(vault, SESSION)).toEqual(new Set(["Brain/active.md"]));
+      expect(evidencePathsOf(readSubagentDeliveredPaths(vault, SESSION))).toEqual([
+        "Brain/active.md",
+      ]);
     },
   );
 
@@ -657,8 +687,16 @@ describe("subagent delivered-evidence paths", () => {
     writeRules("Always run the test suite before committing.");
     const delivering = await runHook(subagentStartPayload({ agentId: AGENT }));
     expect(delivering.exit).toBe(0);
-    expect(readSubagentDeliveredPaths(vault, SESSION)).toEqual(
-      new Set(["Brain/standing-rules.md"]),
-    );
+    expect(evidencePathsOf(readSubagentDeliveredPaths(vault, SESSION))).toEqual([
+      "Brain/standing-rules.md",
+    ]);
+  });
+
+  test("a standing body over its cap records the path truncated", async () => {
+    writeRules(`${"Always run the test suite before committing. ".repeat(400)}`);
+    const delivering = await runHook(subagentStartPayload({ agentId: AGENT }));
+    expect(delivering.exit).toBe(0);
+    const entries = readSubagentDeliveredPaths(vault, SESSION);
+    expect(entries).toEqual([{ path: "Brain/standing-rules.md", truncated: true }]);
   });
 });

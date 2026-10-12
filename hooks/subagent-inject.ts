@@ -91,6 +91,7 @@ import {
   isRealSessionId,
   readSubagentDeliveredIds,
   recordSubagentDeliveredId,
+  type SubagentEvidencePath,
 } from "./lib/injection-ledger.ts";
 import { renderStandingBlock } from "./lib/standing-block.ts";
 import {
@@ -162,8 +163,13 @@ function subagentInjectOutput(event: CarrierEvent, block: string): SubagentInjec
  */
 interface CarrierPayload {
   readonly block: string;
-  /** Vault-relative note paths whose content the payload carries. */
-  readonly evidencePaths: ReadonlyArray<string>;
+  /**
+   * Vault-relative note paths whose content the payload carries. A
+   * truncated delivery - the payload carries only the note's prefix -
+   * records `{ path, truncated: true }`, so the quote check judges
+   * spans against the delivered prefix, never the whole file.
+   */
+  readonly evidencePaths: ReadonlyArray<SubagentEvidencePath>;
 }
 
 /**
@@ -171,13 +177,19 @@ interface CarrierPayload {
  * block. An absent or empty file renders no block at all, and a read
  * that FAILED renders the explicit failure block - the payload then
  * carries a notice ABOUT the file, not the file's content, so neither
- * case is delivered evidence.
+ * case is delivered evidence. A read that hit the character cap
+ * delivered a prefix: the entry is marked truncated so a quote of the
+ * undelivered tail reads `source-truncated`, never silence.
  */
-function standingEvidencePaths(vault: string, maxChars: number): ReadonlyArray<string> {
+function standingEvidencePaths(
+  vault: string,
+  maxChars: number,
+): ReadonlyArray<SubagentEvidencePath> {
   try {
-    return readStandingRules(vault, { maxChars }) === null
-      ? []
-      : [posix.join(BRAIN_ROOT_REL, BRAIN_STANDING_RULES_FILE)];
+    const rules = readStandingRules(vault, { maxChars });
+    if (rules === null) return [];
+    const path = posix.join(BRAIN_ROOT_REL, BRAIN_STANDING_RULES_FILE);
+    return rules.truncated ? [{ path, truncated: true }] : [path];
   } catch {
     return [];
   }

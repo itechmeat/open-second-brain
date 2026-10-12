@@ -74,6 +74,19 @@ function stringList(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === "string");
 }
 
+/** Read one ledger key's raw array field; empty when absent or expired. */
+function readRawList(
+  vault: string,
+  sessionId: string,
+  key: string,
+  field: string,
+  nowMs: number,
+): unknown[] {
+  const stamp = readHookStamp(vault, sessionId, key, nowMs);
+  const value = stamp?.data?.[field];
+  return Array.isArray(value) ? value : [];
+}
+
 /** Read one ledger key's string-array field as a set; empty when absent or expired. */
 function readStringSet(
   vault: string,
@@ -137,23 +150,53 @@ export function readSubagentDeliveredIds(
 /**
  * Vault-relative note paths the delivered carrier payloads were built from
  * this session (answer-trust wave): the evidence a sub-agent turn can be
- * quoted against. Rows recorded before the paths field existed - and
- * deliveries whose payload carried no note content - read as an empty
- * set, so an old ledger row is silence for the quote check, never an
- * error.
+ * quoted against. A truncated delivery - the payload carried only a
+ * prefix of the note - records `{ path, truncated: true }`, because the
+ * evidence is the prefix, not the file; a plain string names a whole-note
+ * delivery. Rows recorded before the paths field existed - and deliveries
+ * whose payload carried no note content - read as an empty list, so an
+ * old ledger row is silence for the quote check, never an error.
  */
+export type SubagentEvidencePath = string | { readonly path: string; readonly truncated: boolean };
+
+function evidencePathEntry(value: unknown): SubagentEvidencePath | null {
+  if (typeof value === "string" && value.length > 0) return value;
+  if (typeof value === "object" && value !== null && "path" in value) {
+    const record = value as { path: unknown; truncated?: unknown };
+    if (typeof record.path === "string" && record.path.length > 0) {
+      return { path: record.path, truncated: record.truncated === true };
+    }
+  }
+  return null;
+}
+
 export function readSubagentDeliveredPaths(
   vault: string,
   sessionId: string,
   nowMs: number = Date.now(),
-): ReadonlySet<string> {
-  return readStringSet(vault, sessionId, LEDGER_KEY_SUBAGENT_INJECT, "paths", nowMs);
+): ReadonlyArray<SubagentEvidencePath> {
+  const raw = readRawList(vault, sessionId, LEDGER_KEY_SUBAGENT_INJECT, "paths", nowMs);
+  const byPath = new Map<string, SubagentEvidencePath>();
+  for (const item of raw) {
+    const entry = evidencePathEntry(item);
+    if (entry === null) continue;
+    const path = typeof entry === "string" ? entry : entry.path;
+    const prior = byPath.get(path);
+    // Truncation is sticky: once a delivery named a clipped prefix of a
+    // note, later whole-string rows cannot widen the evidence back.
+    if (prior === undefined) {
+      byPath.set(path, entry);
+    } else if (typeof entry === "object" && entry.truncated) {
+      byPath.set(path, entry);
+    }
+  }
+  return [...byPath.values()];
 }
 
 /**
  * Merge `agentId` - and the `evidencePaths` the delivered payload was
  * built from, when the carrier names any - into the session's delivered
- * record and refresh its expiry. Paths are a second set beside the ids
+ * record and refresh its expiry. Paths are a second list beside the ids
  * and merge the same way: a re-delivery without paths keeps what earlier
  * deliveries merged, so evidence already handed to this session's
  * sub-agents stays named. An expired record is dropped rather than
@@ -165,7 +208,7 @@ export function recordSubagentDeliveredId(
   vault: string,
   sessionId: string,
   agentId: string,
-  evidencePaths: ReadonlyArray<string> = [],
+  evidencePaths: ReadonlyArray<SubagentEvidencePath> = [],
   nowMs: number = Date.now(),
 ): boolean {
   const outcome = updateHookState(
@@ -175,8 +218,24 @@ export function recordSubagentDeliveredId(
       const prior = liveData(state[LEDGER_KEY_SUBAGENT_INJECT], now);
       const mergedIds = new Set([...stringList(prior?.["ids"]), agentId]);
       const allIds = [...mergedIds];
-      const mergedPaths = new Set([...stringList(prior?.["paths"]), ...evidencePaths]);
-      const allPaths = [...mergedPaths];
+      // Path-keyed merge; a truncated entry (the payload carried only a
+      // prefix) is sticky over a plain whole-note row of the same path.
+      const merged = new Map<string, SubagentEvidencePath>();
+      for (const item of [
+        ...(Array.isArray(prior?.["paths"]) ? prior["paths"] : []),
+        ...evidencePaths,
+      ]) {
+        const entry = evidencePathEntry(item);
+        if (entry === null) continue;
+        const path = typeof entry === "string" ? entry : entry.path;
+        const priorEntry = merged.get(path);
+        if (priorEntry === undefined) {
+          merged.set(path, entry);
+        } else if (typeof entry === "object" && entry.truncated) {
+          merged.set(path, entry);
+        }
+      }
+      const allPaths = [...merged.values()];
       state[LEDGER_KEY_SUBAGENT_INJECT] = {
         expiresAt: now + LEDGER_TTL_MS,
         data: {
