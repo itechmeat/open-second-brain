@@ -80,6 +80,13 @@ export interface BenchJudgeInput {
   readonly question: string;
   readonly answer?: string;
   readonly gold: ReadonlyArray<string>;
+  /**
+   * The retrieved evidence the run actually injected, path plus a
+   * bounded text excerpt in rank order, so a judge can evaluate an
+   * answer against what the system showed rather than the whole vault.
+   * Present when the run records retrieved texts for a judged question.
+   */
+  readonly evidence?: ReadonlyArray<{ readonly path: string; readonly text: string }>;
 }
 
 export interface BenchQuestion {

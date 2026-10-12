@@ -707,6 +707,16 @@ describe("the longmemeval suite", () => {
       questions: Array<Record<string, unknown>>;
     };
     expect(payload.questions).toHaveLength(3);
+    // Judged questions carry the evidence the run actually injected, so
+    // the judge can evaluate against what the system showed.
+    const withEvidence = payload.questions.find(
+      (q) => Array.isArray(q["evidence"]) && (q["evidence"] as unknown[]).length > 0,
+    );
+    expect(withEvidence).toBeDefined();
+    for (const entry of withEvidence!["evidence"] as Array<Record<string, unknown>>) {
+      expect(typeof entry["path"]).toBe("string");
+      expect(typeof entry["text"]).toBe("string");
+    }
     for (const payloadEntry of payload.questions) {
       expect(typeof payloadEntry["question"]).toBe("string");
       expect(Array.isArray(payloadEntry["gold"])).toBe(true);

@@ -199,6 +199,9 @@ export function benchSearchConfig(
   return resolveSearchConfig({ vault, overrides: pinnedKnobs });
 }
 
+/** Char budget per evidence excerpt a judged question carries. */
+const JUDGE_EVIDENCE_EXCERPT_CHARS = 800;
+
 export async function runMemoryBench(opts: BenchRunOptions): Promise<BenchReport> {
   // Refused BEFORE any run state exists (pr-250 review, L9): the floor
   // routes into the shared surfacing calculator, whose own contract
@@ -321,10 +324,26 @@ export async function runMemoryBench(opts: BenchRunOptions): Promise<BenchReport
   // Optional judge (advisory, fail-open), then report. Questions whose
   // suite provides official-prompt judge input carry it on the stdin
   // payload; suites without it keep the payload unchanged.
+  // Judged questions carry the retrieved evidence (path plus a bounded
+  // excerpt, in rank order) beside the reference answer, so a judge can
+  // evaluate against what the system actually showed.
+  const bodiesByPath = new Map(opts.fixture.notes.map((n) => [n.path, n.body]));
+  const excerpt = (body: string): string =>
+    body.length > JUDGE_EVIDENCE_EXCERPT_CHARS
+      ? `${body.slice(0, JUDGE_EVIDENCE_EXCERPT_CHARS)}...`
+      : body;
   const judgeInputs = new Map(
-    opts.fixture.questions.flatMap((question) =>
-      question.judge_input !== undefined ? [[question.id, question.judge_input] as const] : [],
-    ),
+    opts.fixture.questions.flatMap((question) => {
+      if (question.judge_input === undefined) return [];
+      const retrieved = retrievedById.get(question.id);
+      const evidence = (retrieved?.paths ?? []).flatMap((path) => {
+        const body = bodiesByPath.get(path);
+        return body === undefined ? [] : [{ path, text: excerpt(body) }];
+      });
+      const input =
+        evidence.length > 0 ? { ...question.judge_input, evidence } : question.judge_input;
+      return [[question.id, input] as const];
+    }),
   );
   const judge = runJudge(opts.judgeCmd, results, judgeInputs);
   const report = buildReport(run, opts.fixture, results, judge, embeddings, longmemeval);

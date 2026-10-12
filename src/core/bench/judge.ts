@@ -52,6 +52,9 @@ export function runJudge(
         question: input.question,
         ...(input.answer !== undefined ? { answer: input.answer } : {}),
         gold: [...input.gold],
+        ...(input.evidence !== undefined
+          ? { evidence: input.evidence.map((e) => ({ path: e.path, text: e.text })) }
+          : {}),
       };
     }),
   };

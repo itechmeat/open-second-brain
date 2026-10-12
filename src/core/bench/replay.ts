@@ -16,14 +16,11 @@
  * calibration against a permissive one, via the run's `recallFloor`, is
  * what shows whether that bound discriminates. The gate's STRUCTURAL
  * short-circuits (`duplicate`, `slash_command`, `shell_command`,
- * `empty`) are NOT exercised: in production the transports run
- * `evaluateSurfacingGate` ahead of the decision core, and this harness
- * does not reproduce that composition - a replayed `/compact` prompt is
- * judged on retrieval alone. Closing that gap needs an additive
- * previous-prompt field on the bench question plus a gate step in the
- * phase pipeline's proactive-recall arm (pr-250 review, M9); until that
- * lands, read the rates as floor calibration only. See
- * `failure-modes.ts` for what the scorer denominates.
+ * `empty`) are exercised for recorded prompts: conversion carries each
+ * prompt's recorded previous prompt as `previous_prompt`, and the
+ * proactive-recall arm runs `evaluateSurfacingGate` ahead of the
+ * decision core, exactly as the transports do. See `failure-modes.ts`
+ * for what the scorer denominates.
  *
  * Rides the suite registry and the existing phase pipeline unchanged:
  * conversion is a pure ReplayFixture -> BenchFixture whose questions are
@@ -45,7 +42,9 @@ import { loadReplayFixture, type ReplayFixture } from "./replay-fixture.ts";
  * Empty notes survive conversion, matching the loader's own stance: a
  * recorded session with no ingested notes has nothing to materialize, so
  * its fixture carries the questions alone and the run judges them
- * against an empty vault.
+ * against an empty vault. Each question carries the recorded previous
+ * prompt as `previous_prompt`, so the run's structural gate sees the
+ * same context the live hook saw.
  */
 export function replayToBenchFixture(replay: ReplayFixture): BenchFixture {
   const questions: BenchQuestion[] = replay.prompts.map((prompt) => ({
@@ -53,6 +52,7 @@ export function replayToBenchFixture(replay: ReplayFixture): BenchFixture {
     category: "proactive_recall",
     prompt: prompt.text,
     expect_inject: prompt.expectInject,
+    ...(prompt.previousText !== null ? { previous_prompt: prompt.previousText } : {}),
   }));
   // Validate through the canonical parser so a converted fixture is
   // guaranteed to be exactly what runMemoryBench accepts. The empty-notes

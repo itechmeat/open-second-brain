@@ -90,6 +90,23 @@ test("the suite is registered with the bench verb and loads the committed sample
   expect(byId.get("turn-3")?.prompt).toBe("billing-migration");
 });
 
+test("conversion carries the recorded previous prompt as previous_prompt", () => {
+  const replay = parseReplayFixture({
+    name: "prev-prompt",
+    notes: [{ path: "notes/a.md", body: "Atlas launch checklist" }],
+    turns: [
+      { id: "a", text: "Who owns the billing migration?", expect: "inject" },
+      { id: "b", text: "/help", expect: "abstain" },
+    ],
+  });
+  const fixture = replayToBenchFixture(replay);
+  // The first recorded prompt has no predecessor; the second carries the
+  // first prompt's text, so the run's structural gate sees the duplicate
+  // and slash-command contexts the live hook saw.
+  expect("previous_prompt" in fixture.questions[0]!).toBe(false);
+  expect(fixture.questions[1]!.previous_prompt).toBe("Who owns the billing migration?");
+});
+
 test("conversion round-trips the loader's shape through the canonical parser", () => {
   const replay = parseReplayFixture({
     name: "roundtrip",
