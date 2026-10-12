@@ -29,7 +29,12 @@
  * finalizes the loop honestly instead of blocking it.
  */
 
-import { SUB_QUERY_GROUPS_MAX, planSubQueryGroups, type CoverageReport } from "./coverage.ts";
+import {
+  SUB_QUERY_GROUPS_MAX,
+  planSubQueryGroups,
+  significantTerms,
+  type CoverageReport,
+} from "./coverage.ts";
 import { NEEDS_LLM_STEP, buildNeedsLlmStep, type NeedsLlmStep } from "../brain/llm-step.ts";
 import { assertResponseShape, type ShapeDescriptor } from "../brain/response-shape.ts";
 import {
@@ -244,6 +249,15 @@ registerResponseCheck(DECIDER_STEP_SURFACE, (payload) => {
           SEMANTIC_VIOLATION_CODES.threshold,
           `$.subQueries[${index}]`,
           `sub-query must be at most ${DECIDER_SUB_QUERY_LENGTH_MAX} characters; got ${subQuery.length}`,
+        ),
+      );
+    }
+    if (significantTerms(subQuery).length === 0) {
+      violations.push(
+        semanticViolation(
+          SEMANTIC_VIOLATION_CODES.threshold,
+          `$.subQueries[${index}]`,
+          "sub-query carries no significant terms, so it can never drive a retrieval pull",
         ),
       );
     }

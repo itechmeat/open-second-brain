@@ -545,6 +545,19 @@ test("a malformed decider payload is a caller error (-32602), never an internal 
     expect(overLimit?.error?.code).toBe(-32602);
     expect(overLimit?.error?.data?.code).toBe("INVALID_INPUT");
 
+    // A sub-query of pure punctuation passes shape but carries no
+    // significant terms; the registered check refuses it as the same
+    // caller-error class.
+    const punctuationOnly = (await call(server, "brain_search", {
+      query: iterativeQuery(),
+      limit: 5,
+      iterative: true,
+      iterative_token: plan!.token,
+      iterative_payload: { evidence: [plan!.pool_ids[0]], subQueries: ["---"] },
+    })) as any;
+    expect(punctuationOnly?.error?.code).toBe(-32602);
+    expect(punctuationOnly?.error?.data?.code).toBe("INVALID_INPUT");
+
     // Neither refusal spent the token: the valid commit still goes through.
     const finalBody = extractFullBody(
       await call(server, "brain_search", {

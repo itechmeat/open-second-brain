@@ -168,6 +168,18 @@ describe("commitDeciderStep", () => {
     ]) {
       expect(() => commitDeciderStep(token, empty, scope())).toThrow(ResponseCheckError);
     }
+    // A sub-query whose words are all punctuation carries no
+    // significant terms and can never drive a retrieval pull: the
+    // validators refuse it before the round spends anything on it.
+    const punctuationOnly = { evidence: [3], subQueries: ["---"] };
+    try {
+      commitDeciderStep(token, punctuationOnly, scope());
+      throw new Error("expected a refusal");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ResponseCheckError);
+      const violations = (error as ResponseCheckError).violations;
+      expect(violations.some((v) => v.code === SEMANTIC_VIOLATION_CODES.threshold)).toBe(true);
+    }
     // Duplicate sub-queries are a cross-item refusal.
     const duplicate = { evidence: [3], subQueries: ["chandelier", "chandelier"] };
     try {
