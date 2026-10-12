@@ -186,6 +186,11 @@ export async function embedBenchVaultIndex(opts: {
   // the only provider contact in the whole run.
   await indexVault(config);
   const model = storedEmbeddingModel(config);
+  if (model === null) {
+    throw new BenchEmbeddingError(
+      "bench embedding: no embedding model is stored on the index; the capability path needs an indexed model to key vectors",
+    );
+  }
   const provider = makeProvider(config.semantic);
   const signature = benchEmbeddingSignature(
     config.semantic.provider,

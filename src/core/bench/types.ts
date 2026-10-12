@@ -273,6 +273,12 @@ export interface BenchQuestionResult {
   readonly recall_failure?: RecallFailure;
   /** source_isolation: forbidden ids the pack actually delivered. */
   readonly isolation_violations?: number;
+  /**
+   * The external judge's verdict for this question, present only when a
+   * judge ran and answered for it; deterministic evaluation stays
+   * canonical either way.
+   */
+  readonly judge_pass?: boolean;
 }
 
 export interface BenchReport {

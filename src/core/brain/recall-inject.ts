@@ -332,8 +332,13 @@ export type RecallInjectDecision =
       readonly brief: string;
       readonly noteCount: number;
       readonly topScore: number;
-      /** The quantity the floor was compared against; see the floor's docblock. */
-      readonly matchQuality: number;
+      /**
+       * The quantity the floor was compared against; see the floor's
+       * docblock. Null on an inject admitted without a comparable
+       * measurement (an explicit request or an unmeasurable report):
+       * the graded admission carried it as a null key.
+       */
+      readonly matchQuality: number | null;
       /**
        * Exactly the notes rendered into {@link brief}, in brief order:
        * after the char-budget fit and after the decision-model filter. The
