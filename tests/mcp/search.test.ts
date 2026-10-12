@@ -499,6 +499,75 @@ test("brain_search iterative round-trip: plan phase carries the envelope, commit
   }
 });
 
+test("a malformed decider payload is a caller error (-32602), never an internal error", async () => {
+  savedEnv["OPEN_SECOND_BRAIN_SEARCH_ITERATIVE"] =
+    process.env["OPEN_SECOND_BRAIN_SEARCH_ITERATIVE"];
+  process.env["OPEN_SECOND_BRAIN_SEARCH_ITERATIVE"] = "true";
+  seedIterativeVault();
+  const cfg = resolveSearchConfig({ vault, configPath });
+  try {
+    await indexVault(cfg);
+    const server = makeServer();
+    await initialize(server);
+    const planResp = extractFullBody(
+      await call(server, "brain_search", { query: iterativeQuery(), limit: 5, iterative: true }),
+    );
+    const plan = planResp["iterative"] as IterativePlan | undefined;
+    expect(plan).toBeDefined();
+
+    // The most likely caller mistake - a payload missing its `subQueries`
+    // half - is a shape refusal. It must surface as the caller-error code
+    // with the typed INVALID_INPUT token, never as -32603 with prose.
+    const malformed = (await call(server, "brain_search", {
+      query: iterativeQuery(),
+      limit: 5,
+      iterative: true,
+      iterative_token: plan!.token,
+      iterative_payload: { evidence: [plan!.pool_ids[0]] },
+    })) as any;
+    expect(malformed?.error?.code).toBe(-32602);
+    expect(malformed?.error?.data?.code).toBe("INVALID_INPUT");
+    expect(malformed?.error?.message ?? "").toContain("shape");
+
+    // A payload that passes shape but breaks a registered semantic rule
+    // (five sub-queries against a budget of four) is the same class of
+    // caller error.
+    const overLimit = (await call(server, "brain_search", {
+      query: iterativeQuery(),
+      limit: 5,
+      iterative: true,
+      iterative_token: plan!.token,
+      iterative_payload: {
+        evidence: [plan!.pool_ids[0]],
+        subQueries: ["a", "b", "c", "d", "e"],
+      },
+    })) as any;
+    expect(overLimit?.error?.code).toBe(-32602);
+    expect(overLimit?.error?.data?.code).toBe("INVALID_INPUT");
+
+    // Neither refusal spent the token: the valid commit still goes through.
+    const finalBody = extractFullBody(
+      await call(server, "brain_search", {
+        query: iterativeQuery(),
+        limit: 5,
+        iterative: true,
+        iterative_token: plan!.token,
+        iterative_payload: { evidence: [plan!.pool_ids[0]], subQueries: ["relic01 relic02"] },
+      }),
+    );
+    const finalPhase = finalBody["iterative"] as { phase: string } | undefined;
+    expect(finalPhase).toBeDefined();
+    expect(finalPhase!.phase).toBe("final");
+  } finally {
+    if (savedEnv["OPEN_SECOND_BRAIN_SEARCH_ITERATIVE"] === undefined) {
+      delete process.env["OPEN_SECOND_BRAIN_SEARCH_ITERATIVE"];
+    } else {
+      process.env["OPEN_SECOND_BRAIN_SEARCH_ITERATIVE"] =
+        savedEnv["OPEN_SECOND_BRAIN_SEARCH_ITERATIVE"];
+    }
+  }
+});
+
 test("brain_search with the knob on but the flag omitted is byte-identical to the knob off", async () => {
   writeMd("notes/plain.md", "# Plain\n\nthe quarterly ledger reconciliation runbook\n");
   await indexVault(resolveSearchConfig({ vault, configPath }));

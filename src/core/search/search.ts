@@ -45,6 +45,8 @@ import {
   runIterativeRecall,
 } from "./pipeline/iterative-recall.ts";
 import { DeciderStepError } from "./decider-step.ts";
+import { ResponseCheckError } from "../brain/response-checks.ts";
+import { ResponseShapeError } from "../brain/response-shape.ts";
 import { resolveKindFilter } from "./property-pushdown.ts";
 import { noSecondPass, runSecondPassRecall } from "./pipeline/second-pass.ts";
 import { runSemanticLane, type SemanticLaneOutcome } from "./pipeline/semantic-lane.ts";
@@ -562,6 +564,15 @@ export async function search(
               "INVALID_INPUT",
               `iterative commit refused (${e.code}): ${e.message}`,
             );
+          }
+          // A payload the validators refused (shape, or a registered
+          // semantic rule) is the caller's mistake, named by the same
+          // INVALID_INPUT the decider refusals carry: left raw it would
+          // escape classification and surface over MCP as an internal
+          // error instead of invalid_params. The refusal happens before
+          // any pull, so nothing about the round moved.
+          if (e instanceof ResponseShapeError || e instanceof ResponseCheckError) {
+            throw new SearchError("INVALID_INPUT", `iterative commit refused: ${e.message}`);
           }
           throw e;
         }
