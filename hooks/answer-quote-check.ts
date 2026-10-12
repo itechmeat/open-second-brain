@@ -430,6 +430,111 @@ export function evidenceFor(
 // ----- the injection ledger's candidate notes ------------------------------
 
 /**
+ * One candidate note view the ledger offers as evidence: the note path,
+ * the lines the injection named when it delivered only a range, the
+ * phase whose ledger offered it, and whether the injection delivered
+ * that note truncated (a clipped body is evidence of the delivered
+ * prefix only).
+ */
+interface LedgerCandidate {
+  readonly path: string;
+  readonly startLine?: number;
+  readonly endLine?: number;
+  readonly phase: AnswerQuoteCheckPhase;
+  readonly truncated?: boolean;
+}
+
+/** Answer order for candidate views: by path, then by named range. */
+function compareCandidates(
+  a: { readonly path: string; readonly startLine?: number; readonly endLine?: number },
+  b: { readonly path: string; readonly startLine?: number; readonly endLine?: number },
+): number {
+  if (a.path !== b.path) return a.path < b.path ? -1 : 1;
+  return (a.startLine ?? 0) - (b.startLine ?? 0) || (a.endLine ?? 0) - (b.endLine ?? 0);
+}
+
+/** The dedup key of one candidate view: the path, plus any range it names. */
+function candidateKey(candidate: LedgerCandidate): string {
+  return candidate.startLine === undefined || candidate.endLine === undefined
+    ? candidate.path
+    : `${candidate.path}\0${candidate.startLine}-${candidate.endLine}`;
+}
+
+/**
+ * One merged candidate in the turn's evidence pool: the note view plus
+ * every phase whose ledger offered it. The phases are the finding's
+ * attribution - a miss is reported only when a phase that offered the
+ * deciding evidence is itself running, and enforced only when one of
+ * those phases enforces.
+ */
+interface MergedCandidate {
+  readonly path: string;
+  readonly startLine?: number;
+  readonly endLine?: number;
+  readonly truncated?: boolean;
+  readonly phases: ReadonlyArray<AnswerQuoteCheckPhase>;
+}
+
+/**
+ * Merge candidate view groups, per note path: a whole-file view wins over
+ * that path's line ranges (the whole note reached context through one of
+ * the groups), and identical ranges collapse - but several DISTINCT
+ * ranges of one note all stand, each its own evidence. Collapsing them to
+ * one range (or to the path) would check a correct quote of an earlier
+ * range against only the latest one and report a miss the turn's
+ * evidence actually refutes. A merged view carries the union of the
+ * offering phases and the union of their truncation flags. Sorted by
+ * path, then range.
+ */
+function mergeCandidateViews(
+  groups: ReadonlyArray<ReadonlyArray<LedgerCandidate>>,
+): ReadonlyArray<MergedCandidate> {
+  const whole = new Map<string, Set<AnswerQuoteCheckPhase>>();
+  const wholeTruncated = new Set<string>();
+  const ranges = new Map<
+    string,
+    { candidate: LedgerCandidate; phases: Set<AnswerQuoteCheckPhase> }
+  >();
+  for (const group of groups) {
+    for (const candidate of group) {
+      if (candidate.startLine === undefined || candidate.endLine === undefined) {
+        const phases = whole.get(candidate.path) ?? new Set<AnswerQuoteCheckPhase>();
+        phases.add(candidate.phase);
+        whole.set(candidate.path, phases);
+        if (candidate.truncated === true) wholeTruncated.add(candidate.path);
+      } else {
+        const key = candidateKey(candidate);
+        const entry = ranges.get(key);
+        if (entry === undefined) {
+          ranges.set(key, { candidate, phases: new Set([candidate.phase]) });
+        } else {
+          entry.phases.add(candidate.phase);
+          if (candidate.truncated === true)
+            entry.candidate = { ...entry.candidate, truncated: true };
+        }
+      }
+    }
+  }
+  const mergedRanges = [...ranges.values()]
+    .filter(({ candidate }) => !whole.has(candidate.path))
+    .map(({ candidate, phases }) => ({
+      path: candidate.path,
+      ...(candidate.startLine !== undefined ? { startLine: candidate.startLine } : {}),
+      ...(candidate.endLine !== undefined ? { endLine: candidate.endLine } : {}),
+      ...(candidate.truncated === true ? { truncated: true } : {}),
+      phases: [...phases],
+    }));
+  const mergedWhole = [...whole.entries()]
+    .toSorted(([a], [b]) => (a < b ? -1 : 1))
+    .map(([path, phases]) => ({
+      path,
+      ...(wholeTruncated.has(path) ? { truncated: true } : {}),
+      phases: [...phases],
+    }));
+  return [...mergedRanges, ...mergedWhole].toSorted(compareCandidates);
+}
+
+/**
  * Note path + line range one recall ledger key names. Recall keys render
  * `<origin>:<vault-relative path>#L<start>-L<end>` (`recallInjectNoteKey`),
  * where the origin is a search-origin label
@@ -481,44 +586,51 @@ function ledgerCandidates(
   sessionId: string | null,
   phase: AnswerQuoteCheckPhase,
   nowMs: number,
-): ReadonlyArray<{
-  readonly path: string;
-  readonly startLine?: number;
-  readonly endLine?: number;
-}> {
+): ReadonlyArray<LedgerCandidate> {
   if (sessionId === null) return [];
-  const candidates = new Map<string, { startLine?: number; endLine?: number }>();
+  // Several DISTINCT line ranges of one note all stand: each names the
+  // part of the note that actually reached context, and collapsing them
+  // to the last range would check a correct quote of an earlier range
+  // against the wrong lines. Whole-file views (no range) are deduped by
+  // path; the merge across phases applies the whole-wins-over-ranges
+  // rule (mergeCandidateViews).
+  const seen = new Set<string>();
+  const candidates: LedgerCandidate[] = [];
+  const add = (candidate: Omit<LedgerCandidate, "phase">): void => {
+    const key = candidateKey({ ...candidate, phase });
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push({ ...candidate, phase });
+  };
   if (phase === "recall") {
     for (const key of readRecallInjected(vault, sessionId, nowMs)) {
       const parsed = recallKeyCandidate(key);
       if (parsed === null) continue;
-      candidates.set(parsed.path, { startLine: parsed.startLine, endLine: parsed.endLine });
+      add({ path: parsed.path, startLine: parsed.startLine, endLine: parsed.endLine });
     }
   }
   if (phase === "active") {
     for (const path of readActiveEmittedPaths(vault, sessionId, nowMs)) {
-      candidates.set(path, {});
+      add({ path });
     }
     const parts = readHookStamp(vault, sessionId, LEDGER_KEY_REGROUND, nowMs)?.data?.["parts"];
     if (Array.isArray(parts)) {
       for (const part of parts) {
         if (typeof part !== "string") continue;
-        for (const path of pathTokens(part)) candidates.set(path, {});
+        for (const path of pathTokens(part)) add({ path });
       }
     }
   }
   if (phase === "subagent") {
-    for (const path of readSubagentDeliveredPaths(vault, sessionId, nowMs)) {
-      candidates.set(path, {});
+    for (const delivered of readSubagentDeliveredPaths(vault, sessionId, nowMs)) {
+      add(
+        typeof delivered === "string"
+          ? { path: delivered }
+          : { path: delivered.path, truncated: delivered.truncated },
+      );
     }
   }
-  return [...candidates.entries()]
-    .toSorted((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
-    .map(([path, range]) => ({
-      path,
-      ...(range.startLine !== undefined ? { startLine: range.startLine } : {}),
-      ...(range.endLine !== undefined ? { endLine: range.endLine } : {}),
-    }));
+  return candidates.toSorted(compareCandidates);
 }
 
 // ----- the check ------------------------------------------------------------
@@ -532,17 +644,20 @@ interface SpanOutcome {
    * answer text, and the annotation's line structure is the hook's voice.
    */
   readonly preview: string;
+  /**
+   * The phases of the candidates that decided this outcome - the verdict
+   * source when the span verified, every candidate checked when it did
+   * not. A finding is reported only when a running phase is among them,
+   * and enforced only when one of those running phases enforces.
+   */
+  readonly decidingPhases: ReadonlyArray<AnswerQuoteCheckPhase>;
 }
 
 /** One span's verdict under the resolved evidence, inside the budget. */
 function checkSpan(
   span: QuotedSpan,
   marks: ReadonlyArray<CitationMark>,
-  candidates: ReadonlyArray<{
-    readonly path: string;
-    readonly startLine?: number;
-    readonly endLine?: number;
-  }>,
+  candidates: ReadonlyArray<MergedCandidate>,
   vault: string,
   deadline: number,
 ): SpanOutcome {
@@ -556,21 +671,27 @@ function checkSpan(
       spans: [span.inner],
       evidence: evidenceFor(vault, mark),
     });
-    return { verdict: outcomes[0]!.verdict, preview: outcomes[0]!.span };
+    return {
+      verdict: outcomes[0]!.verdict,
+      preview: outcomes[0]!.span,
+      decidingPhases: [],
+    };
   }
   if (candidates.length === 0) {
     return {
       verdict: mergeAnswerQuoteVerdicts([]),
       preview: previewAnswerQuoteSpan(span.inner),
+      decidingPhases: [],
     };
   }
   const verdicts: AnswerQuoteVerdict[] = [];
+  const decidingPhases: AnswerQuoteCheckPhase[] = [];
   let preview = previewAnswerQuoteSpan(span.inner);
   for (const candidate of candidates) {
     if (Date.now() > deadline) {
       // Budget spent with unread candidates left: the check did not
       // finish, so it never reports a readable-miss verdict.
-      return { verdict: ANSWER_QUOTE_VERDICT.noteUnavailable, preview };
+      return { verdict: ANSWER_QUOTE_VERDICT.noteUnavailable, preview, decidingPhases };
     }
     const mark: CitationMark = {
       at: -1,
@@ -578,16 +699,26 @@ function checkSpan(
       ...(candidate.startLine !== undefined ? { startLine: candidate.startLine } : {}),
       ...(candidate.endLine !== undefined ? { endLine: candidate.endLine } : {}),
     };
+    let evidence = evidenceFor(vault, mark);
+    // The injection delivered only a prefix of this note: evidence is the
+    // delivered prefix, whatever the file holds today. A miss under
+    // clipped evidence is `source-truncated`, never a readable miss - a
+    // truncated source never acquits a span, and never convicts one the
+    // delivered text cannot judge.
+    if (candidate.truncated === true && evidence.kind === "text") {
+      evidence = { ...evidence, truncated: true };
+    }
     const { outcomes } = checkAnswerQuotes({
       spans: [span.inner],
-      evidence: evidenceFor(vault, mark),
+      evidence,
     });
     const verdict = outcomes[0]!.verdict;
     preview = outcomes[0]!.span;
     verdicts.push(verdict);
+    for (const phase of candidate.phases) decidingPhases.push(phase);
     if (verdict === ANSWER_QUOTE_VERDICT.verified) break;
   }
-  return { verdict: mergeAnswerQuoteVerdicts(verdicts), preview };
+  return { verdict: mergeAnswerQuoteVerdicts(verdicts), preview, decidingPhases };
 }
 
 /**
@@ -693,9 +824,13 @@ async function main(): Promise<void> {
       active: ledgerCandidates(vault, sessionId, "active", now),
       subagent: ledgerCandidates(vault, sessionId, "subagent", now),
     };
-  // A phase runs only when its injection is enabled AND its mode is more
-  // than `off`; the injection gate of recall is the recall-inject flag,
-  // active and subagent gate on a live ledger of their own.
+  // A phase contributes evidence when its injection happened (recall's
+  // gate is the recall-inject flag; active and subagent have a live
+  // ledger of their own); its MODE decides only whether a finding the
+  // phase's evidence decided is reported - and enforced. Building the
+  // pool from every injected ledger keeps a phase switched to `off` from
+  // turning its delivered notes into false `[not-in-note]` findings for
+  // spans another phase still checks.
   const gates: Readonly<Record<AnswerQuoteCheckPhase, boolean>> = {
     recall: resolveRecallInjectEnabled(),
     active: ledgerNotes.active.length > 0,
@@ -705,17 +840,14 @@ async function main(): Promise<void> {
     (phase) => gates[phase] && modes[phase] !== "off",
   );
   if (running.length === 0) return;
-  const candidateByPath = new Map<string, { path: string; startLine?: number; endLine?: number }>();
-  for (const phase of running) {
-    for (const candidate of ledgerNotes[phase]) candidateByPath.set(candidate.path, candidate);
-  }
-  const candidates = [...candidateByPath.values()].toSorted((a, b) =>
-    a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
+  const candidates = mergeCandidateViews(
+    ANSWER_QUOTE_CHECK_PHASES.filter((phase) => gates[phase]).map((phase) => ledgerNotes[phase]),
   );
 
   const messages = lastAssistantMessages(transcriptPath);
   const findings: Array<AnswerQuoteSpanFinding> = [];
   let checked = 0;
+  let enforceable = 0;
   outer: for (const [messageIndex, message] of messages.entries()) {
     // Before the scans of this message, not only before its spans: the
     // span and path scans themselves cost the budget they precede.
@@ -734,6 +866,17 @@ async function main(): Promise<void> {
       };
       const outcome = checkSpan(quoted, marks, candidates, vault, deadline);
       if (outcome.verdict !== ANSWER_QUOTE_VERDICT.verified) {
+        // Attribution: the phases whose candidates decided this miss. A
+        // miss decided only by a phase switched to `off` is not this
+        // turn's report - the operator disabled that phase's findings,
+        // and its delivered notes are still evidence for the phases
+        // that remain on. A span with an explicit citation mark (or no
+        // candidate at all) is not ledger-attributable: every running
+        // phase's check covers it, exactly as before the attribution.
+        const deciding = outcome.decidingPhases.length > 0 ? outcome.decidingPhases : running;
+        const contributing = deciding.filter((phase) => modes[phase] !== "off");
+        if (contributing.length === 0) continue;
+        if (contributing.some((phase) => modes[phase] === "enforce")) enforceable++;
         findings.push({ span: outcome.preview, verdict: outcome.verdict });
       }
     }
@@ -741,12 +884,12 @@ async function main(): Promise<void> {
   const unique = dedupeFindings(findings);
   if (unique.length === 0) return;
 
-  const enforce = running.some((phase) => modes[phase] === "enforce");
-  if (enforce) {
+  if (enforceable > 0) {
     // Exactly one Brain-log event per turn, best-effort: a failed append
     // names itself on the audit line and the annotation still goes out.
     // The findings ride the same capped, flattened lines the annotation
-    // renders; the counter states the true total.
+    // renders; the counter states the true total of the enforceable
+    // findings - the ones a running `enforce` phase's evidence decided.
     try {
       appendLogEvent(vault, {
         timestamp: isoSecond(new Date()),
@@ -759,7 +902,7 @@ async function main(): Promise<void> {
           hook: "answer-quote-check",
           phases: running.join(","),
           checked: String(checked),
-          unverified: String(unique.length),
+          unverified: String(enforceable),
           findings: listedFindings(unique).map((finding) =>
             findingLine(finding.span, finding.verdict),
           ),

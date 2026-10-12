@@ -75,6 +75,16 @@ function writeNote(rel: string, body: string): string {
   return path;
 }
 
+/** Lines of the vault's Brain-log JSONL sidecars naming the quote-check hook. */
+function hookEnforceLines(): ReadonlyArray<string> {
+  const logDir = join(vault, "Brain", "log");
+  if (!existsSync(logDir)) return [];
+  return readdirSync(logDir)
+    .filter((name) => name.endsWith(".jsonl"))
+    .flatMap((name) => readFileSync(join(logDir, name), "utf8").split(/\r?\n/))
+    .filter((line) => line.includes("answer-quote-check"));
+}
+
 /** `quote_check` config for the hook's vault, plus any extra YAML keys. */
 function writeConfig(mode: string): void {
   writeConfigFor({ recall: mode, active: mode, subagent: mode });
@@ -485,6 +495,83 @@ describe("answer-quote-check hook - ledger membership", () => {
     const run = await runHook();
     expect(run.exit).toBe(0);
     expect(annotations(run)).toEqual([]);
+  });
+
+  test("two injected ranges of one note both verify their own quotes", async () => {
+    writeConfig("shadow");
+    writeNote(
+      "Brain/notes/restaking.md",
+      "Restaking reuses staked capital.\nFiller line two.\nFiller line three.\nA validator secures services.\nFiller line five.\nFiller line six.\nSlashers protect the network.\n",
+    );
+    expect(
+      recordRecallInjected(vault, SESSION, [
+        "local:Brain/notes/restaking.md#L1-L1",
+        "local:Brain/notes/restaking.md#L7-L7",
+      ]),
+    ).toBe(true);
+    writeTranscript([
+      ccUser("summarize"),
+      ccAssistant(
+        'The notes say "Restaking reuses staked capital." and also "Slashers protect the network."',
+      ),
+    ]);
+    const run = await runHook();
+    expect(run.exit).toBe(0);
+    // Both ranges stand as evidence: a quote of the FIRST range must not
+    // be judged against only the LAST one (the collapse defect).
+    expect(annotations(run)).toEqual([]);
+  });
+
+  test("a phase switched off never reports false misses from its notes", async () => {
+    writeConfigFor({ recall: "off", active: "off", subagent: "enforce" });
+    writeNote("Brain/notes/restaking.md", "Restaking reuses staked capital.\n");
+    expect(recordRecallInjected(vault, SESSION, ["local:Brain/notes/restaking.md#L1-L1"])).toBe(
+      true,
+    );
+    writeTranscript([
+      ccUser("summarize"),
+      ccAssistant(
+        'The context showed "Restaking reuses staked capital.", unrelated to "wholly absent material".',
+      ),
+    ]);
+    const run = await runHook();
+    expect(run.exit).toBe(0);
+    // The correct quote verifies silently against the recall note - the
+    // evidence pool spans every injected ledger, so `off` cannot turn a
+    // delivered note into a false `[not-in-note]` finding. The absent
+    // span was decided by recall's candidate too, and recall is off: its
+    // finding is not this turn's report either.
+    expect(annotations(run)).toEqual([]);
+    expect(hookEnforceLines().length).toBe(0);
+  });
+
+  test("an enforcing phase reports only the misses its own evidence decided", async () => {
+    writeConfigFor({ recall: "off", active: "off", subagent: "enforce" });
+    writeNote("Brain/notes/restaking.md", "Restaking reuses staked capital.\n");
+    writeNote("Brain/notes/subagent-brief.md", "Scoped rules travel with the task.\n");
+    expect(recordRecallInjected(vault, SESSION, ["local:Brain/notes/restaking.md#L1-L1"])).toBe(
+      true,
+    );
+    expect(
+      recordSubagentDeliveredId(vault, SESSION, "agent-bbbb", ["Brain/notes/subagent-brief.md"]),
+    ).toBe(true);
+    writeTranscript([
+      ccUser("summarize"),
+      ccAssistant('Notes say "Scoped rules travel with the task." and "wholly absent material".'),
+    ]);
+    const run = await runHook();
+    expect(run.exit).toBe(0);
+    // The recall note's quote verifies silently (recall's candidate is
+    // evidence even with recall off); the absent span is decided by the
+    // subagent candidate, whose phase enforces - one finding, one event.
+    // The merged verdict reads `source-truncated` because the recall
+    // candidate is a one-line range: partial evidence never yields a
+    // readable miss, and the ladder prefers the truncation verdict.
+    const found = annotations(run);
+    expect(found.length).toBe(1);
+    expect(found[0]).toContain("[source-truncated]");
+    expect(found[0]).toContain("wholly absent material");
+    expect(hookEnforceLines().length).toBe(1);
   });
 
   test("an uncited span absent from every injected note is not-in-note", async () => {
