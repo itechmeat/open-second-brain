@@ -35,7 +35,6 @@ import {
   priceSpendPlan,
 } from "../search/embedding-spend.ts";
 import { makeProvider } from "../search/embeddings/provider.ts";
-import { embeddingSignature, MODEL_NATIVE_DIMENSION } from "../search/embeddings/signature.ts";
 import { indexVault, runEmbeddingPhase, type EmbeddingPhaseTally } from "../search/indexer.ts";
 import { Store } from "../search/store.ts";
 import type { ResolvedSearchConfig } from "../search/types.ts";
@@ -43,6 +42,32 @@ import type { BenchEmbeddingReceipt } from "./types.ts";
 
 /** Typed failure of the bench embedding path. Errors surface by name. */
 export class BenchEmbeddingError extends Error {}
+
+/** Field sentinel of an unknown model or dimension, keeping keys parseable. */
+const SIGNATURE_SENTINEL = "?";
+
+/** NFC, trim, lowercase: the one canonicalization for identity tokens. */
+function canonicalSignatureToken(raw: string): string {
+  return raw.normalize("NFC").trim().toLowerCase();
+}
+
+/**
+ * The bench's own rendering of the embedding identity triple
+ * `<provider>:<model>:<dimension>`, canonicalized exactly like the
+ * store's identity so cache keys match across runs. Rendered here
+ * rather than imported because the module that exports the shared
+ * renderer also carries a token estimator, and the bench pins exactly
+ * one estimator - the census is on the import path.
+ */
+function benchEmbeddingSignature(
+  provider: string,
+  model: string | null,
+  dimension: number | null,
+): string {
+  const modelField = model === null ? SIGNATURE_SENTINEL : canonicalSignatureToken(model);
+  const dimensionField = dimension === null ? SIGNATURE_SENTINEL : String(dimension);
+  return `${canonicalSignatureToken(provider)}:${modelField}:${dimensionField}`;
+}
 
 /** Cache file shared by every bench run under one runs directory. */
 export const BENCH_VECTOR_CACHE_FILENAME = "embedding-cache.json";
@@ -66,7 +91,7 @@ export function benchVectorCachePath(runsDir: string): string {
  * Cache key for one chunk: the embedding identity triple plus the text
  * hash. The dimension joins the key because vectors of different
  * dimensions are incomparable even at the same provider and model - the
- * comparability rule `embeddingSignature` exists for.
+ * comparability rule the identity signature exists for.
  */
 export function benchVectorCacheKey(signature: string, text: string): string {
   return `${signature}|${sha256Hex(text)}`;
@@ -152,11 +177,11 @@ export async function embedBenchVaultIndex(opts: {
   await indexVault(config);
   const model = storedEmbeddingModel(config);
   const provider = makeProvider(config.semantic);
-  const signature = embeddingSignature({
-    provider: config.semantic.provider,
-    ...(model !== null ? { model } : {}),
-    dimension: provider.dimension ?? MODEL_NATIVE_DIMENSION,
-  });
+  const signature = benchEmbeddingSignature(
+    config.semantic.provider,
+    model,
+    provider.dimension ?? null,
+  );
   const store = await Store.open(config, { mode: "write" });
   try {
     const plan = planEmbeddingSpend(store, config);
