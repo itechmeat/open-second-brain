@@ -11,7 +11,11 @@
 
 import { test, expect, beforeEach, afterEach, describe } from "bun:test";
 
-import { buildCoverageReport, planTargetedRetry } from "../../../src/core/search/coverage.ts";
+import {
+  buildCoverageReport,
+  planSubQueryGroups,
+  planTargetedRetry,
+} from "../../../src/core/search/coverage.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { search } from "../../../src/core/search/search.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
@@ -70,6 +74,85 @@ describe("planTargetedRetry (pure decision)", () => {
     ]);
     expect(cov.idfWeightedCoverage).toBe(0);
     expect(planTargetedRetry(cov).terms).toEqual(["fennel", "warehouse"]);
+  });
+
+  // ----- k-group generalization (recall-quality wave, lane A) ---------------
+
+  /**
+   * Three uncovered rare terms in query order with distinct IDF weights:
+   * alcor is the most significant (df 1 of 1000), then zubrowka (df 5),
+   * then mizar (df 10) - all within the 2% rare share of 20 documents.
+   */
+  const threeGaps = report(["mizar", "alcor", "zubrowka"], [], 1000, [
+    ["mizar", 10],
+    ["alcor", 1],
+    ["zubrowka", 5],
+  ]);
+
+  test("emits one singleton group per uncovered rare term, ordered by significance", () => {
+    const plan = planSubQueryGroups(threeGaps, 3);
+    expect(plan.fire).toBe(true);
+    expect(plan.groups).toHaveLength(3);
+    // Most significant term first.
+    expect(plan.groups[0]!.terms).toEqual(["alcor"]);
+    expect(plan.groups[1]!.terms).toEqual(["zubrowka"]);
+    expect(plan.groups[2]!.terms).toEqual(["mizar"]);
+    // Significance descends across the ordered groups.
+    expect(plan.groups[0]!.significance).toBeGreaterThan(plan.groups[1]!.significance);
+    expect(plan.groups[1]!.significance).toBeGreaterThan(plan.groups[2]!.significance);
+  });
+
+  test("caps at k groups: the top term earns a singleton, the residual merges in query order", () => {
+    const plan = planSubQueryGroups(threeGaps, 2);
+    expect(plan.groups).toHaveLength(2);
+    // The dedicated singleton goes to the highest-IDF term; the residual
+    // keeps the historical merged-group shape (query order).
+    expect(plan.groups.map((g) => g.terms)).toEqual([["mizar", "zubrowka"], ["alcor"]]);
+    // Groups are ordered by significance: the merged pair outweighs the
+    // singleton here (idf(10) + idf(5) > idf(1)).
+    expect(plan.groups[0]!.significance).toBeGreaterThan(plan.groups[1]!.significance);
+  });
+
+  test("a single group reproduces the frozen round-two shape byte-identically", () => {
+    // The k=1 projection IS today's targeted retry: one merged group, all
+    // uncovered rare terms in query order, same fire gate.
+    const single = planSubQueryGroups(threeGaps, 1);
+    expect(single.fire).toBe(true);
+    expect(single.groups).toHaveLength(1);
+    expect(single.groups[0]!.terms).toEqual(["mizar", "alcor", "zubrowka"]);
+    const legacy = planTargetedRetry(threeGaps);
+    expect(legacy.fire).toBe(true);
+    expect(legacy.terms).toEqual(single.groups[0]!.terms);
+    // Frozen fixture: the historical decision on the documented partial
+    // miss, unchanged by the generalization.
+    const chandelier = report(
+      ["warehouse", "rotation", "chandelier"],
+      ["warehouse", "rotation"],
+      6,
+      [
+        ["warehouse", 4],
+        ["rotation", 4],
+        ["chandelier", 1],
+      ],
+    );
+    expect(planTargetedRetry(chandelier)).toEqual({ fire: true, terms: ["chandelier"] });
+    expect(planSubQueryGroups(chandelier, 3).groups[0]!.terms).toEqual(["chandelier"]);
+  });
+
+  test("zero groups when the coverage is complete", () => {
+    const cov = report(["alpha", "beta"], ["alpha", "beta"], 10, [
+      ["alpha", 3],
+      ["beta", 3],
+    ]);
+    const plan = planSubQueryGroups(cov, 4);
+    expect(plan.fire).toBe(false);
+    expect(plan.groups).toEqual([]);
+  });
+
+  test("a maxGroups below one is clamped to the single merged group", () => {
+    const plan = planSubQueryGroups(threeGaps, 0);
+    expect(plan.groups).toHaveLength(1);
+    expect(plan.groups[0]!.terms).toEqual(["mizar", "alcor", "zubrowka"]);
   });
 });
 

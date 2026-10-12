@@ -221,6 +221,97 @@ export function planTargetedRetry(coverage: CoverageReport): TargetedRetryPlan {
 }
 
 /**
+ * One follow-up sub-query: the terms to fetch in a single pull, and the
+ * group's significance (the summed IDF of its terms) — the ordering key
+ * that decides which gaps are worth a dedicated pull first.
+ */
+export interface SubQueryGroup {
+  readonly terms: ReadonlyArray<string>;
+  readonly significance: number;
+}
+
+/** The k-group generalized gap signal's verdict. `groups` is empty iff `fire` is false. */
+export interface SubQueryGroupPlan {
+  readonly fire: boolean;
+  readonly groups: ReadonlyArray<SubQueryGroup>;
+}
+
+/** Most sub-query groups one gap-proposal round may emit. */
+export const SUB_QUERY_GROUPS_MAX = 4;
+
+/**
+ * The k-group generalization of {@link planTargetedRetry} (recall-quality
+ * wave): the same fire gate — measurable coverage below the completeness
+ * threshold with rare significant terms still uncovered — but the gaps
+ * become up to `maxGroups` follow-up sub-queries instead of one merged
+ * term list. The most significant uncovered term (highest IDF, query
+ * order breaking ties) earns a dedicated singleton group; any residual
+ * terms merge into one final group in query order, which is exactly the
+ * shape the round-two retry has always fetched. Groups are returned
+ * ordered by significance, descending, so a caller that can afford fewer
+ * pulls drops the tail, never the head.
+ *
+ * `maxGroups` below one is clamped to one (the single merged group), and
+ * an unmeasurable coverage yields zero groups for the same reason
+ * {@link planTargetedRetry} states above. Pure and deterministic.
+ */
+export function planSubQueryGroups(coverage: CoverageReport, maxGroups: number): SubQueryGroupPlan {
+  const legacy = planTargetedRetry(coverage);
+  if (!legacy.fire) return Object.freeze({ fire: false, groups: Object.freeze([]) });
+  const idfByTerm = new Map(coverage.terms.map((t) => [t.term, t.idf]));
+  const uncovered = coverage.uncoveredRareTerms;
+  const bounded = Math.max(1, Math.floor(maxGroups));
+  // Query order preserved: `uncoveredRareTerms` follows the query's term
+  // order, and the stable sort below only re-orders groups, never members.
+  const ranked = uncovered
+    .map((term, index) => ({ term, idf: idfByTerm.get(term) ?? 0, index }))
+    .toSorted((a, b) => (a.idf !== b.idf ? b.idf - a.idf : a.index - b.index));
+  const groups: SubQueryGroup[] =
+    bounded === 1
+      ? // The historical round-two shape byte-identically: ONE merged
+        // group carrying every uncovered rare term in query order.
+        [residualGroup(uncovered, uncovered, idfByTerm)]
+      : uncovered.length <= bounded
+        ? ranked.map((entry) => ({
+            terms: Object.freeze([entry.term]),
+            significance: entry.idf,
+          }))
+        : [
+            ...ranked.slice(0, bounded - 1).map((entry) => ({
+              terms: Object.freeze([entry.term]),
+              significance: entry.idf,
+            })),
+            residualGroup(
+              uncovered,
+              ranked.slice(bounded - 1).map((entry) => entry.term),
+              idfByTerm,
+            ),
+          ];
+  groups.sort(
+    (a, b) =>
+      b.significance - a.significance || rankOf(a.terms[0]!, ranked) - rankOf(b.terms[0]!, ranked),
+  );
+  return Object.freeze({ fire: true, groups: Object.freeze(groups) });
+}
+
+/** Summed-IDF group over the residual terms, kept in query order. */
+function residualGroup(
+  queryOrder: ReadonlyArray<string>,
+  residual: ReadonlyArray<string>,
+  idfByTerm: ReadonlyMap<string, number>,
+): SubQueryGroup {
+  const residualSet = new Set(residual);
+  const terms = queryOrder.filter((term) => residualSet.has(term));
+  let significance = 0;
+  for (const term of terms) significance += idfByTerm.get(term) ?? 0;
+  return { terms: Object.freeze(terms), significance };
+}
+
+function rankOf(term: string, ranked: ReadonlyArray<{ term: string }>): number {
+  return ranked.findIndex((entry) => entry.term === term);
+}
+
+/**
  * The report, and the one condition under which there is no number.
  *
  * `idfWeightedCoverage` is a SHARE of the query's IDF mass, so it exists

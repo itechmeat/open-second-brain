@@ -21,6 +21,7 @@ import { test, expect, describe, beforeAll, afterAll } from "bun:test";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { search } from "../../../src/core/search/search.ts";
 import { decideRecallInject } from "../../../src/core/brain/recall-inject.ts";
+import { buildCoverageReport, planSubQueryGroups } from "../../../src/core/search/coverage.ts";
 import { createTempVault, writeMd, makeConfig } from "../../helpers/search-fixtures.ts";
 
 const { vault, dbPath, cleanup } = createTempVault("coverage-unmeasurable");
@@ -101,5 +102,25 @@ describe("unmeasurable match quality", () => {
     // The score was high, and it decided nothing - which is the whole
     // point of the floor reading quality instead.
     expect(decision.topScore).toBe(0.99);
+  });
+
+  test("the k-group planner yields zero groups for an unmeasurable coverage", () => {
+    // A corpus with no documents gives every term idf ln(1) = 0, so there
+    // is no IDF mass to take a share of and the coverage is null - the one
+    // state where the gap signal must stay silent, because there is no
+    // measurement naming what the sub-queries should aim at.
+    const unmeasurable = buildCoverageReport({
+      significantTerms: ["fennel", "warehouse"],
+      coveredTerms: new Set(),
+      documentCount: 0,
+      dfByTerm: new Map([
+        ["fennel", 0],
+        ["warehouse", 0],
+      ]),
+    });
+    expect(unmeasurable.idfWeightedCoverage).toBeNull();
+    const plan = planSubQueryGroups(unmeasurable, 4);
+    expect(plan.fire).toBe(false);
+    expect(plan.groups).toEqual([]);
   });
 });

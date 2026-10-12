@@ -4,6 +4,13 @@
  * query - a zero-candidate pool gets a broadened OR retry (t_ef92dfdc),
  * a partially-covered pool gets a targeted retry on the specifically
  * uncovered rare terms (t_8eb5ca32). Both are deterministic and LLM-free.
+ *
+ * The gap-proposal half of the targeted retry is shared with the
+ * iterative recall loop's rounds 3..N: the coverage over the surviving
+ * pool ({@link poolCoverageForRetry}) and the FTS pull that turns one
+ * group of terms into candidate hits ({@link runSubQueryPull}) are the
+ * one gap-signal path both callers read, so the retry and the loop can
+ * never disagree about where the gaps are or how a pull is scoped.
  */
 
 import {
@@ -14,6 +21,7 @@ import {
 import { coverageOverChunks } from "../evidence-verification.ts";
 import type { PropertyPushdown } from "../property-pushdown.ts";
 import { runFtsQueryDetailed } from "../fts.ts";
+import type { SafeKeywordOutcome } from "../fts.ts";
 import { semanticPoolSize } from "../semantic-phase.ts";
 import { eventTimeInRange, type ValidityWindow } from "../validity.ts";
 import type { KeywordHit, Store } from "../store.ts";
@@ -71,6 +79,59 @@ export function runSecondPassRecall(input: SecondPassInput): SecondPassOutcome {
 }
 
 /**
+ * Coverage over the pool that will actually survive ranking: for a
+ * time-scoped query, out-of-range candidates are excluded first, so a
+ * rare term is not marked "covered" only because an out-of-range chunk
+ * matched it (which would wrongly suppress a retry while the final
+ * in-range result set still misses that term). Shared by the round-two
+ * targeted retry and the iterative loop's rounds.
+ */
+export function poolCoverageForRetry(input: {
+  readonly store: Store;
+  readonly query: string;
+  readonly ids: ReadonlyArray<number>;
+  readonly timeRange: ResolvedTimeRange | null;
+  readonly validityWindowFor: (path: string) => ValidityWindow | null;
+}) {
+  let coverageIds = input.ids;
+  if (input.timeRange !== null) {
+    const hydratedForCoverage = input.store.hydrateChunks(input.ids);
+    coverageIds = input.ids.filter((chunkId) => {
+      const chunk = hydratedForCoverage.get(chunkId);
+      if (chunk === undefined) return false;
+      return eventTimeInRange(input.validityWindowFor(chunk.path), chunk.mtime, input.timeRange);
+    });
+  }
+  return coverageOverChunks(input.store, input.query, coverageIds);
+}
+
+/**
+ * One follow-up pull: fetch the candidates a group of gap terms recovers,
+ * scoped exactly like a first-pass lane (pool width, path prefix, chunk
+ * kind, property pushdown). The first term is the FTS base and the rest
+ * OR onto it, which is the merge discipline the round-two retry
+ * established. Shared by the targeted retry and the iterative loop.
+ */
+export function runSubQueryPull(
+  store: Store,
+  terms: ReadonlyArray<string>,
+  scope: {
+    readonly limit: number;
+    readonly pathPrefix: string | undefined;
+    readonly kind?: "page" | "section";
+    readonly pushdown?: PropertyPushdown;
+  },
+): SafeKeywordOutcome {
+  return runFtsQueryDetailed(store, terms[0]!, {
+    expandedTerms: terms.slice(1),
+    limit: semanticPoolSize(scope.limit),
+    pathPrefix: scope.pathPrefix ?? null,
+    ...(scope.kind !== undefined ? { kind: scope.kind } : {}),
+    ...(scope.pushdown !== undefined ? { pushdown: scope.pushdown } : {}),
+  });
+}
+
+/**
  * A zero-candidate first pass in evidence-pack mode means the implicit-AND
  * keyword match was too strict - the classic abstention dead end. Instead
  * of returning empty, run EXACTLY ONE broadened retry that keeps the first
@@ -120,28 +181,19 @@ function runBroadenedRetry(input: SecondPassInput): SecondPassOutcome {
  * left uncovered after the retry.
  */
 function runTargetedRetry(input: SecondPassInput): SecondPassOutcome {
-  const { store, query, limit, pathPrefix, timeRange, chunkIds, ids } = input;
-  // Judge coverage over the pool that will actually survive ranking:
-  // for a time-scoped query, exclude out-of-range candidates first, so
-  // a rare term is not marked "covered" only because an out-of-range
-  // chunk matched it (which would wrongly suppress the retry while the
-  // final in-range result set still misses that term).
-  let coverageIds = ids;
-  if (timeRange !== null) {
-    const hydratedForCoverage = store.hydrateChunks(ids);
-    coverageIds = ids.filter((chunkId) => {
-      const chunk = hydratedForCoverage.get(chunkId);
-      if (chunk === undefined) return false;
-      return eventTimeInRange(input.validityWindowFor(chunk.path), chunk.mtime, timeRange);
-    });
-  }
-  const poolCoverage = coverageOverChunks(store, query, coverageIds);
+  const { store, limit, pathPrefix, timeRange, chunkIds, ids } = input;
+  const poolCoverage = poolCoverageForRetry({
+    store,
+    query: input.query,
+    ids,
+    timeRange,
+    validityWindowFor: input.validityWindowFor,
+  });
   const retryPlan = planTargetedRetry(poolCoverage);
   if (!retryPlan.fire) return noSecondPass(input);
-  const targeted = runFtsQueryDetailed(store, retryPlan.terms[0]!, {
-    expandedTerms: retryPlan.terms.slice(1),
-    limit: semanticPoolSize(limit),
-    pathPrefix: pathPrefix ?? null,
+  const targeted = runSubQueryPull(store, retryPlan.terms, {
+    limit,
+    pathPrefix,
     ...(input.kind !== undefined ? { kind: input.kind } : {}),
     ...(input.pushdown !== undefined ? { pushdown: input.pushdown } : {}),
   });
