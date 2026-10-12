@@ -6,6 +6,7 @@ import {
   SessionCoverageEntityUnknownError,
   SessionCoverageInfeasibleError,
 } from "../../../core/brain/session-recall.ts";
+import { MINED_KEY_MAX_LENGTH } from "../../../core/brain/link-graph/session-mining.ts";
 import { resolveTimeRange } from "../../../core/search/time-range.ts";
 import { SearchError } from "../../../core/search/types.ts";
 import { CliError, brainVerbContext, parse } from "../helpers.ts";
@@ -93,7 +94,16 @@ function runSessionGrepCoverage(
   if (charBudget === undefined) {
     throw new CliError("brain session-grep: --char-budget is required for --operation coverage");
   }
+  // The miner's own cap, for parity with the MCP tool: mined keys run to
+  // MINED_KEY_MAX_LENGTH, so a 129-200 character URL or path key can seed
+  // coverage here, and a longer one is refused by name instead of being
+  // silently unmatchable against every mined row.
   const entityKey = stringOptional(flags["entity-key"]);
+  if (entityKey !== undefined && entityKey.length > MINED_KEY_MAX_LENGTH) {
+    throw new CliError(
+      `brain session-grep: --entity-key must be at most ${MINED_KEY_MAX_LENGTH} characters`,
+    );
+  }
   let result;
   try {
     result = coverageSessionRecall(vault, {

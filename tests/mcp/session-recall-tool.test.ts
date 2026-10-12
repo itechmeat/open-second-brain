@@ -291,6 +291,39 @@ describe("brain_session_grep coverage operation (t_2c2a883c)", () => {
     }
   });
 
+  test("entity_key accepts the mined-key length (200) and refuses longer", async () => {
+    // Mined keys run to MINED_KEY_MAX_LENGTH = 200; a 129-200 character
+    // URL or path key must be able to seed coverage over MCP, so the cap
+    // matches the miner's, not the old 128.
+    const server = new MCPServer({ vault, configPath: null });
+    await initialize(server);
+    const call = (args: Record<string, unknown>) =>
+      server.handleRequest({
+        jsonrpc: JSONRPC_VERSION,
+        id: 9,
+        method: "tools/call",
+        params: { name: "brain_session_grep", arguments: args },
+      }) as Promise<{ error?: { code: number; message: string } }>;
+
+    const tooLong = await call({
+      operation: "coverage",
+      char_budget: 1000,
+      entity_key: "K".repeat(201),
+    });
+    expect(tooLong.error?.code).toBe(-32602);
+    expect(tooLong.error?.message).toContain("at most 200 characters");
+
+    const atCap = await call({
+      operation: "coverage",
+      char_budget: 1000,
+      entity_key: "K".repeat(200),
+    });
+    // A 200-character key is a legal mined key: the refusal is about the
+    // unknown key, never about its length.
+    expect(atCap.error?.code).toBe(-32602);
+    expect(atCap.error?.message).toContain("no session_entity_mention row names");
+  });
+
   test("coverage without char_budget is refused", async () => {
     const server = new MCPServer({ vault, configPath: null });
     await initialize(server);

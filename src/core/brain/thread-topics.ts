@@ -133,8 +133,18 @@ export function detectThreadFacets(input: ThreadFacetInput): ReadonlyArray<Threa
   return facets.toSorted(
     (left, right) =>
       firstTurnIndex(left, order) - firstTurnIndex(right, order) ||
-      left.key.localeCompare(right.key),
+      compareCodeUnits(left.key, right.key),
   );
+}
+
+/**
+ * Code-unit string order: the same order on every host, where
+ * `localeCompare` varies with the host locale and would make the facet
+ * tie-break - and with it what survives the topic budget - depend on
+ * where the process runs.
+ */
+function compareCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function firstTurnIndex(facet: ThreadFacet, order: ReadonlyMap<string, number>): number {

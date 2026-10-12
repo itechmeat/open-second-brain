@@ -580,7 +580,7 @@ export function coverageSessionRecall(
     seed === undefined
       ? sessionRecallRecords(vault, input.sessionId, input.withholdPrivate)
       : entitySeededRecords(vault, input, seed);
-  assertEntitySeedReachesScope(input.entityKey, seed, records);
+  assertEntitySeedReachesScope(input.entityKey, seed, records, input.withholdPrivate === true);
   const facets = detectCoverageFacets(vault, records);
   const { budget } = resolveTopicBudget(facets.length);
   const topics =
@@ -677,7 +677,10 @@ export function resolveEntityMentionRows(
  * explicit `sessionId` keeps its own lineage scope (the seed must hold
  * inside it - see {@link assertEntitySeedReachesScope}); otherwise the
  * union of the mentioned sessions' lineage scopes, deduped by record id
- * (lineage links overlap across sessions).
+ * (lineage links overlap across sessions) and re-sorted into the shared
+ * {@link compareRecords} order - concatenating per session would let the
+ * mention rows' order decide facet order, and with it which facets
+ * survive the topic budget.
  */
 function entitySeededRecords(
   vault: string,
@@ -693,7 +696,7 @@ function entitySeededRecords(
       if (!deduped.has(record.id)) deduped.set(record.id, record);
     }
   }
-  return [...deduped.values()];
+  return [...deduped.values()].sort(compareRecords);
 }
 
 /**
@@ -701,12 +704,16 @@ function entitySeededRecords(
  * turn of the key has to be a raw turn of the scoped record set. A key
  * whose rows all name sessions or turns the recall DAG never imported
  * raises the typed {@link SessionCoverageEntityUnknownError} - never a
- * silently generic result over an empty scope.
+ * silently generic result over an empty scope. At remote reach
+ * (`withholdPrivate`) the refusal uses the no-rows wording for both
+ * reasons: which keys still have mention rows behind the withheld turns
+ * is itself withheld.
  */
 function assertEntitySeedReachesScope(
   entityKey: string | undefined,
   rows: ReadonlyArray<SessionEntityMentionRow> | undefined,
   records: ReadonlyArray<ContinuityRecord>,
+  withholdPrivate: boolean,
 ): void {
   if (entityKey === undefined || rows === undefined) return;
   const scopedTurns = new Set<string>();
@@ -726,6 +733,7 @@ function assertEntitySeedReachesScope(
     entityKey,
     reason: "no_imported_turns",
     mentionRows: rows.length,
+    ...(withholdPrivate ? { withholdPrivate: true } : {}),
   });
 }
 
@@ -903,6 +911,12 @@ export type SessionCoverageEntitySeedFailure = "no_mention_rows" | "no_imported_
  * count so the caller can retry with a key the ledger actually holds -
  * never an empty silent result. Same typed family as the infeasibility
  * error; over MCP both map to INVALID_PARAMS.
+ *
+ * With `withholdPrivate` (remote reach) both reasons answer with the
+ * no-rows MESSAGE: whether mention rows still exist for a key whose
+ * turns are withheld is itself withheld, and two distinguishable
+ * refusals would leak exactly that. The typed `reason` stays truthful
+ * for local diagnostics.
  */
 export class SessionCoverageEntityUnknownError extends SessionCoverageError {
   readonly entityKey: string;
@@ -913,9 +927,10 @@ export class SessionCoverageEntityUnknownError extends SessionCoverageError {
     entityKey: string;
     reason: SessionCoverageEntitySeedFailure;
     mentionRows: number;
+    withholdPrivate?: boolean;
   }) {
     super(
-      details.reason === "no_mention_rows"
+      details.withholdPrivate === true || details.reason === "no_mention_rows"
         ? `session recall coverage: no session_entity_mention row names the entity key ${details.entityKey}`
         : `session recall coverage: no imported turn establishes the entity key ` +
             `${details.entityKey} (${details.mentionRows} mention row(s) name it, none joins ` +
@@ -1510,10 +1525,20 @@ function recordInTimeRange(
   return true;
 }
 
+/**
+ * Code-unit string order: the same order on every host, where
+ * `localeCompare` varies with the host locale and would make record and
+ * facet order - and with it what survives a budget cut - depend on where
+ * the process runs.
+ */
+function compareCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 function compareRecords(left: ContinuityRecord, right: ContinuityRecord): number {
   const leftTimestamp = String(left.payload["timestamp"] ?? left.createdAt);
   const rightTimestamp = String(right.payload["timestamp"] ?? right.createdAt);
-  return leftTimestamp.localeCompare(rightTimestamp) || left.id.localeCompare(right.id);
+  return compareCodeUnits(leftTimestamp, rightTimestamp) || compareCodeUnits(left.id, right.id);
 }
 
 function numberValue(value: unknown): number | null {

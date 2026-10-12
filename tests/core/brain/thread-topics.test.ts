@@ -98,6 +98,20 @@ describe("facet detection", () => {
     expect(facets.map((f) => f.key)).toEqual(["cluster:node-early", "mined:symbol:LateKey"]);
   });
 
+  test("facet ties break by code unit, not locale collation", () => {
+    // "B" precedes "a" by code unit; a locale-aware collation would put
+    // "a" first, making the facet order host-dependent.
+    const facets = detectThreadFacets({
+      turns: ["t1"],
+      mentions: [
+        { family: "symbol", key: "a", turnId: "t1" },
+        { family: "symbol", key: "B", turnId: "t1" },
+      ],
+      clusters: [],
+    });
+    expect(facets.map((f) => f.key)).toEqual(["mined:symbol:B", "mined:symbol:a"]);
+  });
+
   test("a facet with no in-scope establishing turn is not detected", () => {
     const facets = detectThreadFacets({
       turns: TURNS,

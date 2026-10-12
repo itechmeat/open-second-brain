@@ -49,7 +49,12 @@ export interface GateTelemetryInput {
     readonly key: number | null;
     readonly tier: SurfacingTier;
   };
-  /** The transport the decision arrived over, when the surface knows it. */
+  /**
+   * The transport the decision arrived over, recorded only on MEASURED
+   * decisions: the channel calibrates the measured admission, and an
+   * unmeasured structural verdict is already described by `decision` and
+   * `reason`.
+   */
   readonly channel?: RecallChannel;
   /**
    * The adequacy verdict and the caller's advisory decision-model

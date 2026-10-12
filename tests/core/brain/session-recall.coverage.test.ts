@@ -348,6 +348,87 @@ describe("entity-thread wiring", () => {
       }),
     ).toThrow(SessionCoverageEntityUnknownError);
   });
+
+  test("at remote reach both seed refusals share one message: withheld existence is withheld", () => {
+    importTwoSessions();
+    // A key whose ONLY establishing turn is a private row: the mention row
+    // exists and is not itself private, the turn is withheld at remote
+    // reach - the exact case where the old pair of distinct refusal
+    // messages told a remote caller that rows exist for a withheld key.
+    appendContinuityRecord(vault, {
+      kind: "session_turn",
+      createdAt: "2026-07-09T09:00:00.000Z",
+      sourceRefs: [],
+      private: true,
+      payload: {
+        session_id: "seg-a",
+        turn_id: "p1",
+        timestamp: "2026-07-03T09:00:30.000Z",
+        role: "user",
+        text: "SecretKey gossip inside a private region",
+      },
+    });
+    appendContinuityRecord(vault, {
+      kind: "session_entity_mention",
+      createdAt: "2026-07-09T09:00:01.000Z",
+      sourceRefs: [{ id: "seg-a:p1:symbol:SecretKey" }],
+      payload: { family: "symbol", key: "SecretKey", session_ref: "seg-a", turn_id: "p1" },
+    });
+
+    const refusalOf = (entityKey: string): string => {
+      try {
+        coverageSessionRecall(vault, { entityKey, charBudget: 100_000, withholdPrivate: true });
+      } catch (err) {
+        return (err as SessionCoverageEntityUnknownError).message;
+      }
+      return "";
+    };
+    // Both withheld refusals answer with the no-rows wording: whether
+    // mention rows exist for a withheld key is itself withheld.
+    expect(refusalOf("SecretKey")).toBe(
+      "session recall coverage: no session_entity_mention row names the entity key SecretKey",
+    );
+    expect(refusalOf("SecretKey")).not.toContain("mention row(s)");
+    // The local caller keeps the distinguishing diagnostics.
+    expect(() =>
+      coverageSessionRecall(vault, { entityKey: "NoSuchKey", charBudget: 100_000 }),
+    ).toThrow(/no session_entity_mention row names/);
+    // And locally the private turn still establishes its key.
+    const local = coverageSessionRecall(vault, { entityKey: "SecretKey", charBudget: 100_000 });
+    expect(local.turns.map((t) => t.turn_id)).toContain("p1");
+  });
+
+  test("a multi-session seed selects in chronological order, not mention-row order", () => {
+    importTwoSessions();
+    // The ledger holds seg-b's row first: the deduplicated scope must not
+    // inherit that order, or facet order - and therefore which facets
+    // survive the topic budget - follows mention-row order.
+    mention("seg-b", "b1");
+    mention("seg-a", "a1");
+
+    const coverage = coverageSessionRecall(vault, {
+      entityKey: "SessionStore",
+      charBudget: 1_000_000,
+    });
+    // The mined seed still leads the fan-out; the CLUSTER facets follow in
+    // scope order: the chronologically earlier session's first cluster
+    // first, whatever order the mention rows hold.
+    expect(coverage.diagnostics.topics[0]!.origin).toBe("mined");
+    const aNode = listContinuityRecords(vault)
+      .filter(
+        (record) =>
+          record.kind === "session_summary_node" &&
+          record.payload["depth"] === 1 &&
+          record.payload["session_id"] === "seg-a" &&
+          Array.isArray(record.payload["source_record_ids"]) &&
+          (record.payload["source_record_ids"] as unknown[]).length === 2,
+      )
+      .map((record) => record.id)[0]!;
+    const clusterKeys = coverage.diagnostics.topics
+      .map((topic) => topic.key)
+      .filter((key) => key.startsWith("cluster:"));
+    expect(clusterKeys[0]).toBe(`cluster:${aNode}`);
+  });
 });
 
 describe("session-qualified turn identity in the coverage path", () => {

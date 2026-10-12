@@ -196,6 +196,44 @@ test("coverage without a character budget is refused by name", async () => {
   expect(`${missing.stderr}${missing.stdout}`).toContain("char-budget");
 });
 
+test("--entity-key accepts the mined-key length (200) and refuses longer", async () => {
+  // Mined keys run to MINED_KEY_MAX_LENGTH = 200, so the CLI cap matches
+  // the miner's - parity with the MCP tool, where a longer key is refused.
+  const tooLong = await runCli([
+    "brain",
+    "session-grep",
+    "--vault",
+    vault,
+    "--operation",
+    "coverage",
+    "--char-budget",
+    "100000",
+    "--entity-key",
+    "K".repeat(201),
+    "--json",
+  ]);
+  expect(tooLong.returncode).not.toBe(0);
+  expect(`${tooLong.stderr}${tooLong.stdout}`).toContain("at most 200 characters");
+
+  const atCap = await runCli([
+    "brain",
+    "session-grep",
+    "--vault",
+    vault,
+    "--operation",
+    "coverage",
+    "--char-budget",
+    "100000",
+    "--entity-key",
+    "K".repeat(200),
+    "--json",
+  ]);
+  // A 200-character key is a legal mined key: the refusal is about the
+  // unknown key, never about its length.
+  expect(atCap.returncode).not.toBe(0);
+  expect(`${atCap.stderr}${atCap.stdout}`).toContain("no session_entity_mention row names");
+});
+
 test("coverage-only flags are refused under the match operation", async () => {
   // The mirror of the refusal matrix above: --char-budget and --entity-key
   // name the coverage operation's knobs, so the default match operation

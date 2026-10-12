@@ -1493,7 +1493,10 @@ async function toolBrainRecallGate(
       reason: decision.reason,
       ...(sessionId !== undefined ? { sessionId } : {}),
       ...(turnId !== undefined ? { turnId } : {}),
-      channel: RECALL_CHANNEL.mcp,
+      // The transport rides measured decisions only: it calibrates the
+      // measured admission, and an unmeasured structural verdict is
+      // already described by decision and reason.
+      ...(measured !== undefined ? { channel: RECALL_CHANNEL.mcp } : {}),
       ...(measured !== undefined ? { surfacing: { key: graded.key, tier: graded.tier } } : {}),
       ...(verdict !== undefined && answerableVerdict !== undefined
         ? {

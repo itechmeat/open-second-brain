@@ -73,6 +73,7 @@ import {
   SessionCoverageEntityUnknownError,
   SessionCoverageInfeasibleError,
 } from "../../core/brain/session-recall.ts";
+import { MINED_KEY_MAX_LENGTH } from "../../core/brain/link-graph/session-mining.ts";
 import { resolveTimeBounds } from "./time-bounds.ts";
 import { aggregateQueryDemand, serializeQueryDemandReport } from "../../core/brain/query-demand.ts";
 import { buildRetrievalPlan, serializeRetrievalPlan } from "../../core/brain/retrieval-plan.ts";
@@ -1056,7 +1057,14 @@ function toolBrainSessionGrepCoverage(
     );
   }
   const sessionId = optionalStringArg("brain_session_grep", args, "session_id");
-  const entityKey = optionalStringArg("brain_session_grep", args, "entity_key", 128);
+  // The miner's own cap: mined keys run to MINED_KEY_MAX_LENGTH, so a
+  // 129-200 character URL or path key must be able to seed coverage here.
+  const entityKey = optionalStringArg(
+    "brain_session_grep",
+    args,
+    "entity_key",
+    MINED_KEY_MAX_LENGTH,
+  );
   let result;
   try {
     result = coverageSessionRecall(ctx.vault, {

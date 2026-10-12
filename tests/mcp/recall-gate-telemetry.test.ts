@@ -230,8 +230,9 @@ test("an unmeasured call records no key or tier and keeps the structural verdict
   expect("key" in records[0]!.payload).toBe(false);
   expect("tier" in records[0]!.payload).toBe(false);
   expect(records[0]!.payload["decision"]).toBe("retrieve");
-  // The transport is known regardless of a measurement.
-  expect(records[0]!.payload["channel"]).toBe("mcp");
+  // The transport is recorded only on measured decisions: an unmeasured
+  // structural verdict is already described by decision and reason.
+  expect("channel" in records[0]!.payload).toBe(false);
 });
 
 test("a boundary quality grades admitted through the mcp channel constant", async () => {
