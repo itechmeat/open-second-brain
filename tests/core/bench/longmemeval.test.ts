@@ -11,7 +11,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { benchSuite } from "../../../src/cli/brain/verbs/bench.ts";
-import { parseBenchFixture } from "../../../src/core/bench/fixture.ts";
+import { embedBenchVaultIndex } from "../../../src/core/bench/embedding-cache.ts";
+import { parseBenchFixture, materializeBenchVault } from "../../../src/core/bench/fixture.ts";
 import {
   LONGMEMEVAL_JUDGE_QUESTION_TEMPLATE,
   LONGMEMEVAL_JUDGE_SYSTEM_PROMPT,
@@ -22,8 +23,8 @@ import {
   parseLongMemEvalDataset,
   scoreLongMemEvalRecall,
 } from "../../../src/core/bench/longmemeval.ts";
-import { runMemoryBench } from "../../../src/core/bench/phases.ts";
-import { BENCH_REPORT_SCHEMA } from "../../../src/core/bench/types.ts";
+import { benchSearchConfig, runMemoryBench } from "../../../src/core/bench/phases.ts";
+import { BENCH_REPORT_SCHEMA, type BenchPinnedKnobs } from "../../../src/core/bench/types.ts";
 
 const SAMPLE = join("tests", "fixtures", "bench", "longmemeval-sample.json");
 const OFFICIAL_SAMPLE = join("tests", "fixtures", "bench", "longmemeval-official-sample.json");
@@ -600,6 +601,34 @@ describe("the longmemeval suite", () => {
     expect(report.embeddings!.gate).toEqual({ blocked: false, reason: null });
     expect(report.judge.status).toBe("skipped");
     expect(report.quality.passed).toBe(report.quality.total);
+  }, 30_000);
+
+  test("a second identical vault is served by the shared vector cache", async () => {
+    const { fixture } = loadLongMemEvalFixture(SAMPLE);
+    const runsDir = mkdtempSync(join(tmpdir(), "o2b-longmemeval-runs-"));
+    dirs.push(runsDir);
+    // Two disposable vaults, same content, one shared runs-dir cache:
+    // the first arm pays the full census through the misses path, the
+    // second is served whole - the cache-hit contract the pending
+    // lookup exists for.
+    const vaultA = mkdtempSync(join(tmpdir(), "o2b-longmemeval-vault-"));
+    const vaultB = mkdtempSync(join(tmpdir(), "o2b-longmemeval-vault-"));
+    dirs.push(vaultA, vaultB);
+    materializeBenchVault(fixture, vaultA);
+    materializeBenchVault(fixture, vaultB);
+    const pin: BenchPinnedKnobs = { semantic: { enabled: true, provider: "local" } };
+    const first = await embedBenchVaultIndex({
+      config: benchSearchConfig(vaultA, pin),
+      runsDir,
+    });
+    expect(first.cache_hits).toBe(0);
+    expect(first.cache_misses).toBeGreaterThan(0);
+    const second = await embedBenchVaultIndex({
+      config: benchSearchConfig(vaultB, pin),
+      runsDir,
+    });
+    expect(second.cache_hits).toBe(first.cache_misses);
+    expect(second.cache_misses).toBe(0);
   }, 30_000);
 
   test("a suite run surfaces the strict recall_all@5 family with the exclusion count", async () => {

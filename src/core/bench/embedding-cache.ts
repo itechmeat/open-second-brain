@@ -19,6 +19,14 @@
  * named refusal before any provider contact. The bench never passes
  * `forceCost` and never bypasses the plan.
  *
+ * Scale bound, stated honestly: this backend is one JSON file of float
+ * arrays, read fully into memory and rewritten atomically per run, with
+ * the pending census looked up through a Map keyed by chunk id. That
+ * serves bench runs up to roughly 10^4 chunks. LongMemEval at `_s`
+ * scale is about 10^5 chunks - past what one in-memory JSON file should
+ * hold; a suite that size needs a different cache (one file per key, or
+ * SQLite), not this one.
+ *
  * Deterministic and network-free under the deterministic local provider
  * the CI pin selects; a real provider is an operator lane through the
  * same explicit capability-plus-pin gate.
@@ -240,11 +248,14 @@ export async function embedBenchVaultIndex(opts: {
     // provider contact, and gating it on the full census would refuse
     // exactly the runs the cache exists for. With misses, the verdict
     // over the misses subset is the honest one - the phase's own gate
-    // re-checks the same census at write time.
+    // re-checks the same census at write time. Pending entries are
+    // keyed by chunk id once, so pricing the misses stays linear in the
+    // census rather than a scan per miss.
     if (misses.length > 0) {
+      const pendingByChunkId = new Map(plan.pending.map((p) => [p.chunkId, p]));
       const missesPlan = priceSpendPlan(
         misses.map((m) => {
-          const pending = plan.pending.find((p) => p.chunkId === m.chunkId);
+          const pending = pendingByChunkId.get(m.chunkId);
           if (pending === undefined) throw new BenchEmbeddingError("census split lost a chunk");
           return pending;
         }),
