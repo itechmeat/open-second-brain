@@ -1050,7 +1050,7 @@ function toolBrainSessionGrepCoverage(
     );
   }
   const sessionId = optionalStringArg("brain_session_grep", args, "session_id");
-  const entityKey = optionalStringArg("brain_session_grep", args, "entity_key");
+  const entityKey = optionalStringArg("brain_session_grep", args, "entity_key", 128);
   let result;
   try {
     result = coverageSessionRecall(ctx.vault, {

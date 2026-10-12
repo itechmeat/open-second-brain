@@ -253,13 +253,18 @@ export function optionalStringArg(
   tool: string,
   args: Record<string, unknown>,
   key: string,
+  maxLength?: number,
 ): string | undefined {
   const raw = args[key];
   if (raw === undefined || raw === null) return undefined;
   if (typeof raw !== "string" || raw.trim().length === 0) {
     throw new MCPError(INVALID_PARAMS, `${tool}: ${key} must be a non-empty string`);
   }
-  return raw.trim();
+  const value = raw.trim();
+  if (maxLength !== undefined && value.length > maxLength) {
+    throw new MCPError(INVALID_PARAMS, `${tool}: ${key} must be at most ${maxLength} characters`);
+  }
+  return value;
 }
 
 export function requiredStringArg(
