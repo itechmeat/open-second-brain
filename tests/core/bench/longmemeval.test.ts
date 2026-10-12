@@ -6,7 +6,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -326,6 +326,31 @@ describe("the longmemeval suite", () => {
     expect(report.longmemeval).toBeUndefined();
   }, 30_000);
 
+  // The judge command runs under the platform shell (sh on POSIX,
+  // cmd.exe on Windows), so the fake judge avoids shell operators
+  // entirely: the test writes a script and passes both paths as
+  // quoted, forward-slashed arguments.
+  function writeFakeJudgeScript(runsDir: string): string {
+    const script = join(runsDir, "fake-judge.mjs");
+    writeFileSync(
+      script,
+      [
+        'import { writeFileSync } from "node:fs";',
+        "const chunks = [];",
+        "for await (const chunk of Bun.stdin.stream()) chunks.push(chunk);",
+        'const text = Buffer.concat(chunks).toString("utf8");',
+        "writeFileSync(process.argv[2], text);",
+        "const parsed = JSON.parse(text);",
+        "const verdicts = {};",
+        "for (const q of parsed.questions) verdicts[q.id] = true;",
+        "console.log(JSON.stringify({ verdicts }));",
+        "",
+      ].join("\n"),
+    );
+    return script;
+  }
+  const shellSafe = (path: string) => `"${path.replaceAll("\\", "/")}"`;
+
   test("a fake judge receives question, answer and gold and its verdicts land", async () => {
     const { fixture } = loadLongMemEvalFixture(SAMPLE);
     const runsDir = mkdtempSync(join(tmpdir(), "o2b-longmemeval-runs-"));
@@ -333,11 +358,7 @@ describe("the longmemeval suite", () => {
     const stdinCapture = join(runsDir, "judge-stdin.json");
     // The external judge stays a dumb command: capture the payload, then
     // echo a true verdict for every question id it received.
-    const judgeCmd =
-      `cat > ${stdinCapture} && bun -e 'const d = await Bun.file("${stdinCapture}").text();` +
-      ` const parsed = JSON.parse(d); const verdicts: Record<string, boolean> = {};` +
-      ` for (const q of parsed.questions) verdicts[q.id] = true;` +
-      ` console.log(JSON.stringify({ verdicts }));'`;
+    const judgeCmd = `bun ${shellSafe(writeFakeJudgeScript(runsDir))} ${shellSafe(stdinCapture)}`;
     const report = await runMemoryBench({ fixture, runsDir, judgeCmd });
     expect(report.judge.status).toBe("ran");
     for (const question of report.questions) {
@@ -370,7 +391,7 @@ describe("the longmemeval suite", () => {
     const runsDir = mkdtempSync(join(tmpdir(), "o2b-longmemeval-runs-"));
     dirs.push(runsDir);
     const stdinCapture = join(runsDir, "judge-stdin.json");
-    const judgeCmd = `cat > ${stdinCapture} && echo '{"verdicts": {"q1": true}}'`;
+    const judgeCmd = `bun ${shellSafe(writeFakeJudgeScript(runsDir))} ${shellSafe(stdinCapture)}`;
     const report = await runMemoryBench({ fixture: native, runsDir, judgeCmd });
     expect(report.judge.status).toBe("ran");
     const payload = JSON.parse(readFileSync(stdinCapture, "utf8")) as {
