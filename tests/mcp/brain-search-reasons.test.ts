@@ -145,23 +145,51 @@ describe("brain_search iterative cache keys", () => {
     expect(flagged).toBe(plain);
   });
 
-  test("a spent round token is visible across registry reads until the TTL ends", async () => {
+  test("a minted round token validates, claims once, and releases back to retryable", async () => {
     const { Store } = await import("../../src/core/search/store.ts");
-    const { claimIterativeToken, iterativeTokenSpent } =
-      await import("../../src/core/search/pipeline/cache-slot.ts");
+    const {
+      claimIterativeToken,
+      iterativeTokenSpent,
+      mintIterativeToken,
+      readIterativeTokenRecord,
+      releaseIterativeToken,
+    } = await import("../../src/core/search/pipeline/cache-slot.ts");
     const config = resolveSearchConfig({ vault, configPath: ctx.configPath });
     const store = await Store.open(config, { mode: "read", loadVec: false });
     try {
       const now = 1_750_000_000_000;
-      expect(iterativeTokenSpent(store, config, "drt-3-unspent", now)).toBe(false);
-      // The claim is insert-once: the second racing commit's claim loses.
-      expect(claimIterativeToken(store, config, "drt-3-unspent", now)).toBe(true);
-      expect(claimIterativeToken(store, config, "drt-3-unspent", now)).toBe(false);
-      expect(iterativeTokenSpent(store, config, "drt-3-unspent", now)).toBe(true);
-      // The marker dies with the TTL: a token whose plan phase expired
-      // cannot be replayed against a live registry row.
+      // A nonce-mint-shaped token, assembled from parts (never a literal).
+      const token = fakeCredential("drt-3-", "5f1e", "2d3c4b5a69788796a5b4");
+      expect(iterativeTokenSpent(store, config, token, now)).toBe(false);
+      expect(readIterativeTokenRecord(store, config, token, now)).toBeNull();
+      // The plan phase files the pause digest under the nonce token; the
+      // commit reads the row back and validates its replayed state
+      // against it before claiming.
+      expect(mintIterativeToken(store, config, token, "pausedigest-01", now)).toBe(true);
+      expect(readIterativeTokenRecord(store, config, token, now)).toEqual({
+        pauseDigest: "pausedigest-01",
+      });
+      expect(iterativeTokenSpent(store, config, token, now)).toBe(false);
+      // The claim is insert-once: the second racing commit's claim loses,
+      // and the spent marker outrides the mint row it sits beside.
+      expect(claimIterativeToken(store, config, token, now)).toBe(true);
+      expect(claimIterativeToken(store, config, token, now)).toBe(false);
+      expect(iterativeTokenSpent(store, config, token, now)).toBe(true);
+      expect(readIterativeTokenRecord(store, config, token, now)).toEqual({
+        pauseDigest: "pausedigest-01",
+      });
+      // A failed round releases its own claim: the token reads unspent
+      // and its mint row (the retry's validation source) survives.
+      releaseIterativeToken(store, token);
+      expect(iterativeTokenSpent(store, config, token, now)).toBe(false);
+      expect(readIterativeTokenRecord(store, config, token, now)).toEqual({
+        pauseDigest: "pausedigest-01",
+      });
+      // Every registry row dies with the TTL: a token whose plan phase
+      // expired can be neither validated nor replayed.
       const ttlMs = config.recall.cacheTtlSeconds * 1000;
-      expect(iterativeTokenSpent(store, config, "drt-3-unspent", now + ttlMs + 1)).toBe(false);
+      expect(iterativeTokenSpent(store, config, token, now + ttlMs + 1)).toBe(false);
+      expect(readIterativeTokenRecord(store, config, token, now + ttlMs + 1)).toBeNull();
     } finally {
       await store.close();
     }

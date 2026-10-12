@@ -297,6 +297,52 @@ describe("iterative round driver over a seeded vault", () => {
     expect(deciderRoundLocal?.added).toBeGreaterThan(0);
   });
 
+  test("a second plan call mints a fresh token after one commit spent the first", async () => {
+    // The round token must name THIS plan call, not the query's pool: a
+    // deterministic token hands every later plan for the same query the
+    // already-spent marker, locking the caller (and any other agent asking
+    // the same question) out of its decider round until the TTL expires.
+    // With the cache on the stale plan row would keep serving the dead
+    // token, so the second plan runs against a warm cache row on purpose.
+    await seed();
+    const config = makeConfig({
+      vault,
+      dbPath,
+      maxHops: 0,
+      mmrLambda: 1,
+      twoPassEnabled: false,
+      cacheEnabled: true,
+    });
+    const iterative = withIterative(config);
+    const query = `warehouse rotation ${COMMON.join(" ")} wyrmshade velkriss`;
+    const structured = structuredFor();
+    const planArgs = { query, structuredQuery: structured, iterative: true, limit: 5 };
+    const commitArgs = (token: string, evidence: number) => ({
+      ...planArgs,
+      iterativeToken: token,
+      iterativePayload: { evidence: [evidence], subQueries: ["chandelier handoff"] },
+    });
+    const pauseOf = (outcome: Awaited<ReturnType<typeof search>>) => {
+      const marker = outcome.iterative;
+      if (marker === undefined || marker.phase !== "needs-llm-step") {
+        throw new Error("expected a decider pause");
+      }
+      return marker;
+    };
+
+    const pause1 = pauseOf(await search(iterative, planArgs));
+    const spent1 = await search(iterative, commitArgs(pause1.token, pause1.poolIds[0]!));
+    expect(spent1.iterative?.phase).toBe("final");
+
+    // The second plan for the SAME query over the SAME pool must carry a
+    // token the first commit never touched.
+    const pause2 = pauseOf(await search(iterative, planArgs));
+    expect(pause2.token).not.toBe(pause1.token);
+    expect(pause2.token).toMatch(/^drt-\d+-[0-9a-f]+$/);
+    const spent2 = await search(iterative, commitArgs(pause2.token, pause2.poolIds[0]!));
+    expect(spent2.iterative?.phase).toBe("final");
+  });
+
   test("an expired deadline degrades the looped search exactly like the plain one", async () => {
     await seed();
     const config = {

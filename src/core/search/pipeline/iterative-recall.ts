@@ -105,6 +105,19 @@ export interface IterativeLoopInput {
   readonly isExpired: () => boolean;
   /** The loop's clock; injectable so the stop verdict is testable. */
   readonly nowMs?: () => number;
+  /**
+   * Plan-phase mint hook, handed to the decider pause when one is built
+   * (see {@link buildDeciderStep}): register the pause state under a
+   * nonce token and return it, or return null to fall back to the
+   * deterministic token. Absent on a commit leg's replay - the replay
+   * rebuilds the pause only to validate the caller's token against it,
+   * and must not file a registry row for a state the caller never
+   * received.
+   */
+  readonly mintRoundToken?: (input: {
+    readonly round: number;
+    readonly pauseDigest: string;
+  }) => string | null;
 }
 
 export interface IterativeLoopOutcome {
@@ -284,6 +297,15 @@ export function runIterativeRecall(input: IterativeLoopInput): IterativeLoopOutc
       round: input.firstRoundNumber + rounds.length,
       coverage: lastCoverage,
       poolIds: reachablePoolIds,
+      ...(input.mintRoundToken !== undefined
+        ? {
+            mintRoundToken: (mint) =>
+              input.mintRoundToken?.({
+                round: input.firstRoundNumber + rounds.length,
+                pauseDigest: mint.pauseDigest,
+              }) ?? null,
+          }
+        : {}),
     });
   }
   return Object.freeze({
@@ -312,6 +334,13 @@ export interface DeciderRoundInput {
   readonly payload: unknown;
   /** Round tokens already spent, including across resumed calls. */
   readonly usedTokens: ReadonlySet<string>;
+  /**
+   * The pause digest the registry stored for the submitted token, read by
+   * the caller from the token's mint row (see
+   * {@link DeciderCommitScope.mintedPauseDigest}). Undefined when no row
+   * stands behind the token.
+   */
+  readonly mintedPauseDigest?: string;
   readonly keywordHits: KeywordHit[];
   /** The candidate id set; the round adds to it in place. */
   readonly chunkIds: Set<number>;
@@ -366,6 +395,9 @@ export function runDeciderRound(input: DeciderRoundInput): DeciderRoundOutcome {
     round: input.pause.round,
     poolIds: input.pause.poolIds,
     usedTokens: input.usedTokens,
+    ...(input.mintedPauseDigest !== undefined
+      ? { mintedPauseDigest: input.mintedPauseDigest }
+      : {}),
   });
   const roundStartMs = now();
   const recovered: KeywordHit[] = [];

@@ -19,6 +19,8 @@ import {
   buildDeciderStep,
   commitDeciderStep,
   makeRoundToken,
+  nonceRoundToken,
+  pauseStateDigest,
 } from "../../../src/core/search/decider-step.ts";
 import type { CoverageReport } from "../../../src/core/search/coverage.ts";
 import { NEEDS_LLM_STEP } from "../../../src/core/brain/llm-step.ts";
@@ -110,6 +112,46 @@ describe("buildDeciderStep", () => {
     expect(() =>
       buildDeciderStep({ query: "q", round: 2, coverage: gappedCoverage(), poolIds: [] }),
     ).toThrow(DeciderStepError);
+  });
+
+  test("mints through the registry hook and falls back to the deterministic token", () => {
+    const poolIds = [3, 7, 11];
+    const mints: Array<{ round: number; pauseDigest: string }> = [];
+    const nonceToken = nonceRoundToken(3, "5f1e2d3c4b5a69788796a5b4");
+    const pause = buildDeciderStep({
+      query: "warehouse rotation chandelier",
+      round: 3,
+      coverage: gappedCoverage(),
+      poolIds,
+      mintRoundToken: ({ round, pauseDigest }) => {
+        mints.push({ round, pauseDigest });
+        return nonceToken;
+      },
+    });
+    // The pause hands out the registry-backed nonce token, and the hook
+    // saw the exact pause digest a commit recomputes over this state.
+    expect(pause.token).toBe(nonceToken);
+    expect(mints).toEqual([
+      { round: 3, pauseDigest: pauseStateDigest("warehouse rotation chandelier", 3, poolIds) },
+    ]);
+    // A mint that could not land (null) falls back to the deterministic
+    // digest token, keeping the loop alive without a registry row.
+    const fallback = buildDeciderStep({
+      query: "warehouse rotation chandelier",
+      round: 3,
+      coverage: gappedCoverage(),
+      poolIds,
+      mintRoundToken: () => null,
+    });
+    expect(fallback.token).toBe(makeRoundToken("warehouse rotation chandelier", 3, poolIds));
+    // No hook at all (a commit leg's replay) stays deterministic too.
+    const replay = buildDeciderStep({
+      query: "warehouse rotation chandelier",
+      round: 3,
+      coverage: gappedCoverage(),
+      poolIds,
+    });
+    expect(replay.token).toBe(makeRoundToken("warehouse rotation chandelier", 3, poolIds));
   });
 });
 
@@ -216,6 +258,43 @@ describe("commitDeciderStep", () => {
       throw new Error("expected a refusal");
     } catch (error) {
       expect((error as DeciderStepError).code).toBe("token_used");
+    }
+  });
+
+  test("accepts a registry-minted nonce token whose stored digest matches this state", () => {
+    // The plan phase minted a nonce token for this exact state: the
+    // commit validates the replayed state against the stored digest
+    // instead of re-deriving a token.
+    const nonceToken = nonceRoundToken(3, "aa1e2d3c4b5a69788796a5b4");
+    const stateDigest = pauseStateDigest("warehouse rotation chandelier", 3, poolIds);
+    const commit = commitDeciderStep(nonceToken, payload, {
+      ...scope(),
+      mintedPauseDigest: stateDigest,
+    });
+    expect(commit.token).toBe(nonceToken);
+    expect(commit.evidenceIds).toEqual([3, 7]);
+  });
+
+  test("refuses a nonce token whose stored digest names another round or pool", () => {
+    const nonceToken = nonceRoundToken(3, "bb1e2d3c4b5a69788796a5b4");
+    // The row was minted for a replay that landed elsewhere: genuine
+    // divergence, refused by name.
+    try {
+      commitDeciderStep(nonceToken, payload, {
+        ...scope(),
+        mintedPauseDigest: pauseStateDigest("warehouse rotation chandelier", 4, poolIds),
+      });
+      throw new Error("expected a refusal");
+    } catch (error) {
+      expect((error as DeciderStepError).code).toBe("token_mismatch");
+    }
+    // And a nonce token with no registry row behind it at all (expired,
+    // swept, or never minted) cannot self-validate.
+    try {
+      commitDeciderStep(nonceToken, payload, scope());
+      throw new Error("expected a refusal");
+    } catch (error) {
+      expect((error as DeciderStepError).code).toBe("token_mismatch");
     }
   });
 });

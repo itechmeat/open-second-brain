@@ -44,6 +44,159 @@ const ITERATIVE_KEY_COMMIT_PREFIX = "itv:commit:";
 const ITERATIVE_PAYLOAD_DIGEST_CHARS = 16;
 /** Key prefix of the single-use round-token registry rows. */
 const ITERATIVE_TOKEN_KEY_PREFIX = "itv-token:";
+/**
+ * Key prefix of the claim rows: a commit's atomic single-use marker,
+ * kept apart from the mint row so a failed round's release can restore
+ * the retry state (the mint row - and the pause digest the retry
+ * validates against - survives the release).
+ */
+const ITERATIVE_CLAIM_KEY_PREFIX = "itv-claim:";
+
+/**
+ * What a plan-phase mint persisted under the token's registry row: the
+ * digest of the pause state (query, round, pool) the token was minted
+ * over. A commit recomputes the digest over its replayed state and
+ * refuses unless the two agree, so a replay that landed somewhere else
+ * never runs the caller's round.
+ */
+export interface IterativeTokenRecord {
+  readonly pauseDigest: string;
+}
+
+/**
+ * Whether the single-use round token has a spent claim in the query
+ * cache. The registry rides the same table the outcome rows use - one
+ * store, one generation gate, one TTL - so a token dies when its
+ * plan-phase row dies, and a replayed commit is refused before any
+ * cached commit response could be served. Only the claim row means
+ * spent: a fresh mint row is a live, commitable token.
+ */
+export function iterativeTokenSpent(
+  store: Store,
+  config: ResolvedSearchConfig,
+  token: string,
+  nowMs: number = Date.now(),
+): boolean {
+  const row = store.queryCacheGet(`${ITERATIVE_CLAIM_KEY_PREFIX}${token}`);
+  if (row === null) return false;
+  if (row.generation !== store.corpusGeneration()) return false;
+  return nowMs - row.createdAt <= config.recall.cacheTtlSeconds * MILLISECONDS_PER_SECOND;
+}
+
+/**
+ * Register a plan-phase mint: file the pause digest under the nonce
+ * token so the commit can validate its replayed state against the row.
+ * Insert-once - the token is fresh randomness, so a conflict means a
+ * colliding mint, refused here. False (and a failed write) tells the
+ * plan phase to fall back to the deterministic token: the registry is
+ * best-effort, and a plan whose registry row never landed hands out the
+ * self-verifying digest token instead of failing the search.
+ */
+export function mintIterativeToken(
+  store: Store,
+  config: ResolvedSearchConfig,
+  token: string,
+  pauseDigest: string,
+  nowMs: number = Date.now(),
+): boolean {
+  try {
+    const generation = store.corpusGeneration();
+    const ttlMs = config.recall.cacheTtlSeconds * MILLISECONDS_PER_SECOND;
+    store.queryCacheSweep(generation, nowMs - ttlMs);
+    return store.queryCachePutIfAbsent(
+      `${ITERATIVE_TOKEN_KEY_PREFIX}${token}`,
+      generation,
+      JSON.stringify({ state: "minted", pauseDigest }),
+      nowMs,
+    );
+  } catch {
+    // Registry persistence is best-effort; the plan falls back instead.
+    return false;
+  }
+}
+
+/**
+ * Read the pause digest a fresh plan-phase mint stored for this token.
+ * Null when no row stands behind the token - never minted, expired with
+ * its TTL, aged out by a corpus generation change, or written under a
+ * payload this binary cannot read - which sends the commit down the
+ * deterministic re-derivation check. Best-effort by the same contract
+ * as the mint: a registry read failure reads as no row.
+ */
+export function readIterativeTokenRecord(
+  store: Store,
+  config: ResolvedSearchConfig,
+  token: string,
+  nowMs: number = Date.now(),
+): IterativeTokenRecord | null {
+  try {
+    const row = store.queryCacheGet(`${ITERATIVE_TOKEN_KEY_PREFIX}${token}`);
+    if (row === null) return null;
+    if (row.generation !== store.corpusGeneration()) return null;
+    if (nowMs - row.createdAt > config.recall.cacheTtlSeconds * MILLISECONDS_PER_SECOND) {
+      return null;
+    }
+    const parsed = JSON.parse(row.payload) as { state?: string; pauseDigest?: unknown };
+    if (parsed.state !== "minted" || typeof parsed.pauseDigest !== "string") return null;
+    return { pauseDigest: parsed.pauseDigest };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Claim a round token as spent in one atomic insert: the claim, not a
+ * later check, arbitrates single use, so two commits racing on the same
+ * token cannot both pass. The claim row is keyed apart from the mint
+ * row, so a release (a commit whose round failed) restores the retry
+ * state without losing the pause digest the retry revalidates against.
+ * False means the token is already claimed in this generation inside
+ * its TTL - the call site refuses that commit by name. The registry is
+ * best-effort, and its two honest failure modes are: a failed write
+ * costs a deterministic re-run of the same commit on replay (the
+ * validator re-checks the token against the state), and the expiry
+ * sliver - the claim row ages out before the commit response row - lets
+ * a replay serve the live commit row without re-validation. Both are
+ * bounded: the commit is retrieval-only and deterministic, never a
+ * wrong answer.
+ */
+export function claimIterativeToken(
+  store: Store,
+  config: ResolvedSearchConfig,
+  token: string,
+  nowMs: number = Date.now(),
+): boolean {
+  try {
+    const generation = store.corpusGeneration();
+    const ttlMs = config.recall.cacheTtlSeconds * MILLISECONDS_PER_SECOND;
+    store.queryCacheSweep(generation, nowMs - ttlMs);
+    return store.queryCachePutIfAbsent(
+      `${ITERATIVE_CLAIM_KEY_PREFIX}${token}`,
+      generation,
+      JSON.stringify({ state: "spent" }),
+      nowMs,
+    );
+  } catch {
+    // Registry persistence is best-effort; never fail a committed search on it.
+    return true;
+  }
+}
+
+/**
+ * Release a claim this call made and can no longer honor: a commit whose
+ * round failed keeps the retry semantics the post-execution mark had -
+ * the caller may re-commit the same token (its mint row, and the pause
+ * digest the retry validates against, are untouched) - while racing
+ * commits stay mutually exclusive, because a release only ever removes
+ * the claim row the failing call itself wrote.
+ */
+export function releaseIterativeToken(store: Store, token: string): void {
+  try {
+    store.queryCacheDelete(`${ITERATIVE_CLAIM_KEY_PREFIX}${token}`);
+  } catch {
+    // Release is best-effort; a stuck claim costs a fresh plan phase.
+  }
+}
 
 /**
  * The suffix for one iterative mode-on request: `itv:plan` for the flag
@@ -63,76 +216,6 @@ function iterativeCacheSuffix(opts: SearchOptions): string {
 
 function iterativeModeOn(config: ResolvedSearchConfig, opts: SearchOptions): boolean {
   return opts.iterative === true && config.recall.iterativeRecallEnabled === true;
-}
-
-/**
- * Whether the single-use round token has a spent marker in the query
- * cache. The registry rides the same table the outcome rows use - one
- * store, one generation gate, one TTL - so a token dies when its
- * plan-phase row dies, and a replayed commit is refused before any
- * cached commit response could be served.
- */
-export function iterativeTokenSpent(
-  store: Store,
-  config: ResolvedSearchConfig,
-  token: string,
-  nowMs: number = Date.now(),
-): boolean {
-  const row = store.queryCacheGet(`${ITERATIVE_TOKEN_KEY_PREFIX}${token}`);
-  if (row === null) return false;
-  if (row.generation !== store.corpusGeneration()) return false;
-  return nowMs - row.createdAt <= config.recall.cacheTtlSeconds * MILLISECONDS_PER_SECOND;
-}
-
-/**
- * Claim a round token as spent in one atomic insert: the claim, not a
- * later check, arbitrates single use, so two commits racing on the same
- * token cannot both pass (the plain check-then-put let the second
- * overwrite the first's marker). False means the token is already
- * claimed in this generation inside its TTL - the call site refuses
- * that commit by name. The registry is best-effort, and its two honest
- * failure modes are: a failed write costs a deterministic re-run of the
- * same commit on replay (the validator re-checks the token against the
- * state), and the expiry sliver - the claim row ages out before the
- * commit response row - lets a replay serve the live commit row without
- * re-validation. Both are bounded: the commit is retrieval-only and
- * deterministic, never a wrong answer.
- */
-export function claimIterativeToken(
-  store: Store,
-  config: ResolvedSearchConfig,
-  token: string,
-  nowMs: number = Date.now(),
-): boolean {
-  try {
-    const generation = store.corpusGeneration();
-    const ttlMs = config.recall.cacheTtlSeconds * MILLISECONDS_PER_SECOND;
-    store.queryCacheSweep(generation, nowMs - ttlMs);
-    return store.queryCachePutIfAbsent(
-      `${ITERATIVE_TOKEN_KEY_PREFIX}${token}`,
-      generation,
-      JSON.stringify({ spent: true }),
-      nowMs,
-    );
-  } catch {
-    // Registry persistence is best-effort; never fail a committed search on it.
-    return true;
-  }
-}
-
-/**
- * Release a claim this call made and can no longer honor: a commit whose
- * round failed keeps the retry semantics the post-execution mark had -
- * the caller may re-commit the same token - while racing commits stay
- * mutually exclusive, because a release only ever removes the row the
- * failing call itself claimed.
- */
-export function releaseIterativeToken(store: Store, token: string): void {
-  try {
-    store.queryCacheDelete(`${ITERATIVE_TOKEN_KEY_PREFIX}${token}`);
-  } catch {
-    // Release is best-effort; a stuck claim costs a fresh plan phase.
-  }
 }
 
 /**

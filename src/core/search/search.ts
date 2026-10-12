@@ -17,6 +17,8 @@ import { decorateFinalResults } from "./pipeline/attribution.ts";
 import {
   isCacheEligible,
   iterativeTokenSpent,
+  mintIterativeToken,
+  readIterativeTokenRecord,
   claimIterativeToken,
   releaseIterativeToken,
   persistCachedOutcome,
@@ -45,7 +47,7 @@ import {
   runDeciderRound,
   runIterativeRecall,
 } from "./pipeline/iterative-recall.ts";
-import { DeciderStepError } from "./decider-step.ts";
+import { DeciderStepError, nonceRoundToken, randomRoundNonce } from "./decider-step.ts";
 import { ResponseCheckError } from "../brain/response-checks.ts";
 import { ResponseShapeError } from "../brain/response-shape.ts";
 import { resolveKindFilter } from "./property-pushdown.ts";
@@ -346,7 +348,23 @@ export async function search(
           planHash: shape.basePlan.planHash,
         })
       : CACHE_BYPASSED;
-    if (cache.hit !== null) return served(cache.hit);
+    if (cache.hit !== null) {
+      // A cached PLAN row carries the round token its plan call minted.
+      // When that token was already spent by a commit, the row is stale
+      // for purpose - serving it would hand the caller a dead token and
+      // lock the retry out until the TTL - so the hit is discarded and
+      // the plan recomputes (and mints fresh). Every other hit serves as
+      // usual; a commit row never carries a token, and the entry refusal
+      // above already arbitrates replays.
+      const cachedMarker = cache.hit.iterative;
+      const cachedToken = cachedMarker?.phase === "needs-llm-step" ? cachedMarker.token : undefined;
+      if (
+        cachedToken === undefined ||
+        !iterativeTokenSpent(store, effectiveConfig, cachedToken, nowMs)
+      ) {
+        return served(cache.hit);
+      }
+    }
     // A deadline-degraded answer is keyword-only under a key that promises
     // the hybrid one: serve it, but never cache it. A spend-gated one is
     // the same, and the key carries no gate or price either, so a cached
@@ -535,6 +553,31 @@ export async function search(
       );
     }
     if (iterativeRequest !== null && !deadlineExpired(deadline)) {
+      // The plan phase mints the round token through the registry: a
+      // nonce token registered with the pause state's digest, so "spent"
+      // means "this plan call" and a second plan for the same query
+      // mints a fresh token instead of handing out the already-claimed
+      // one. When the registry cannot take the write, the mint reports
+      // null and the pause falls back to the deterministic digest token
+      // - best-effort by contract, so the loop still works with the
+      // cache table unavailable (the fallback validates by re-derivation
+      // at commit time instead). The commit leg's replay never mints: it
+      // rebuilds the pause only to validate the caller's token against.
+      const mintRoundToken =
+        iterativeRequest.phase === "plan"
+          ? ({
+              round,
+              pauseDigest,
+            }: {
+              readonly round: number;
+              readonly pauseDigest: string;
+            }): string | null => {
+              const token = nonceRoundToken(round, randomRoundNonce());
+              return mintIterativeToken(store, effectiveConfig, token, pauseDigest, nowMs)
+                ? token
+                : null;
+            }
+          : undefined;
       const loop = runIterativeRecall({
         store,
         query,
@@ -550,6 +593,7 @@ export async function search(
         maxRounds: iterativeRequest.maxRounds,
         firstRoundNumber: retry.secondPass !== undefined ? 3 : 2,
         isExpired: () => deadlineExpired(deadline),
+        ...(mintRoundToken !== undefined ? { mintRoundToken } : {}),
         ...(opts.transportReach !== undefined && opts.transportReach !== "local"
           ? { filterReachableIds: reachFilterFor(opts.transportReach) }
           : {}),
@@ -557,6 +601,18 @@ export async function search(
       keywordHits = loop.keywordHits;
       idsList = loop.ids;
       if (iterativeRequest.phase === "commit") {
+        // The pause digest the plan's mint stored for this token: the
+        // validator compares it against the replayed state's digest, so
+        // a commit whose replay landed on another round or pool is
+        // refused as token_mismatch even though the token itself was
+        // minted honestly. Null (deterministic fallback token, or a row
+        // that aged out) downgrades to re-derivation alone.
+        const mintedPauseDigest = readIterativeTokenRecord(
+          store,
+          effectiveConfig,
+          opts.iterativeToken!,
+          nowMs,
+        )?.pauseDigest;
         // The deterministic replay reached a state with no pending round
         // (the index moved under the caller between the two calls): the
         // commit is refused rather than executed against a pool its
@@ -597,6 +653,7 @@ export async function search(
             token: opts.iterativeToken!,
             payload: opts.iterativePayload,
             usedTokens: new Set<string>(),
+            ...(mintedPauseDigest !== undefined ? { mintedPauseDigest } : {}),
             priorRounds: loop.rounds,
             ...(opts.transportReach !== undefined && opts.transportReach !== "local"
               ? { filterReachableIds: reachFilterFor(opts.transportReach) }

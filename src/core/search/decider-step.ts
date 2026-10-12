@@ -17,9 +17,13 @@
  * Three context rules live here rather than in the response-check
  * registry because they read per-request state the registry's
  * payload-only contract cannot see:
- *   - the round token must be the one minted for THIS query, round and
- *     pool ({@link makeRoundToken});
- *   - the token must not have been spent already (single use);
+ *   - the round token must be one minted for THIS query, round and pool:
+ *     either the plan's registry-backed nonce mint (the stored pause
+ *     digest must match the replayed state) or the deterministic
+ *     fallback mint ({@link makeRoundToken});
+ *   - the token must not have been spent already (single use - a nonce
+ *     token is spent by its own plan call's commit; the deterministic
+ *     fallback is spent per pool, the pre-nonce semantics);
  *   - every selected evidence id must exist in the round's pool.
  * Each refusal is named from {@link DeciderStepError} codes, so callers
  * route on `code`, never on prose.
@@ -46,6 +50,7 @@ import {
   type SemanticViolation,
 } from "../brain/response-checks.ts";
 import { sha256Hex } from "../integrity/digest.ts";
+import { randomBytes } from "node:crypto";
 
 /** Surface name the envelope's payload is validated under. */
 export const DECIDER_STEP_SURFACE = "iterative_recall_decider";
@@ -106,19 +111,58 @@ export class DeciderStepError extends Error {
 }
 
 /**
- * The opaque single-use round token: a digest of the query, the round
- * number and the pool it was minted over. Deterministic by design - the
- * resumed call recomputes the same deterministic pipeline, reaches the
- * same pool, and re-derives the same expected token, so validation never
- * needs loop state to survive between the two calls.
+ * The round token. Two mints exist:
+ *
+ *   - the nonce mint ({@link nonceRoundToken} via a {@link buildDeciderStep}
+ *     mint hook): the plan phase draws fresh randomness, registers the
+ *     pause state under the token in the single-use registry
+ *     (`pipeline/cache-slot.ts`), and hands the nonce token out. The token
+ *     names THIS plan call, so a second plan for the same query mints a
+ *     fresh, unspent token, and "spent" means "this plan call".
+ *   - the deterministic mint ({@link makeRoundToken}): the digest of the
+ *     query, the round number and the pool. It is the fallback a plan
+ *     falls back to when the registry write fails (best-effort by
+ *     contract - the loop still works when the cache table is
+ *     unavailable), and it is what a commit re-derives when no registry
+ *     row stands behind the submitted token.
+ *
+ * Either way the token is opaque to callers and never secret.
  */
 export function makeRoundToken(
   query: string,
   round: number,
   poolIds: ReadonlyArray<number>,
 ): string {
+  return `${ROUND_TOKEN_PREFIX}-${round}-${pauseStateDigest(query, round, poolIds).slice(0, ROUND_TOKEN_DIGEST_CHARS)}`;
+}
+
+/**
+ * The pause-state digest a plan mint registers under its nonce token: the
+ * same material the deterministic token digests, kept whole. A commit
+ * recomputes it over the replayed state and the registry row must agree,
+ * so a replay that landed on another round or pool is refused as
+ * `token_mismatch` even though the token itself was minted honestly.
+ */
+export function pauseStateDigest(
+  query: string,
+  round: number,
+  poolIds: ReadonlyArray<number>,
+): string {
   const material = `${query}\u0000${round}\u0000${[...poolIds].toSorted((a, b) => a - b).join(",")}`;
-  return `${ROUND_TOKEN_PREFIX}-${round}-${sha256Hex(material).slice(0, ROUND_TOKEN_DIGEST_CHARS)}`;
+  return sha256Hex(material);
+}
+
+/** Hex chars of fresh randomness in a nonce round token (96 bits). */
+const ROUND_TOKEN_NONCE_HEX_CHARS = 24;
+
+/** Assemble the nonce mint: round-stamped, opaque, registry-backed. */
+export function nonceRoundToken(round: number, nonceHex: string): string {
+  return `${ROUND_TOKEN_PREFIX}-${round}-${nonceHex}`;
+}
+
+/** Fresh nonce hex for one plan-phase mint. */
+export function randomRoundNonce(): string {
+  return randomBytes(ROUND_TOKEN_NONCE_HEX_CHARS / 2).toString("hex");
 }
 
 /** The pause the loop hands its caller: the envelope plus its token. */
@@ -140,6 +184,18 @@ export interface DeciderStepInput {
   readonly coverage: CoverageReport;
   /** The pool's candidate chunk ids (any order; emitted sorted). */
   readonly poolIds: ReadonlyArray<number>;
+  /**
+   * Plan-phase mint hook: register the pause state in the single-use
+   * registry and return the nonce token to hand out, or null when the
+   * registry could not take the write. Null (and the hook's absence)
+   * falls back to the deterministic token, so a plan never fails because
+   * the registry table is unavailable - the fallback is best-effort by
+   * contract and documented at the call site that supplies the hook.
+   */
+  readonly mintRoundToken?: (input: {
+    readonly round: number;
+    readonly pauseDigest: string;
+  }) => string | null;
 }
 
 /**
@@ -149,7 +205,9 @@ export interface DeciderStepInput {
  * deterministic floor reads, so the model is asked exactly when a
  * gap-proposal round could pay and never on a complete or unmeasurable
  * pool - and with `empty_pool` when there are no candidates to select
- * evidence from. Pure.
+ * evidence from. Pure except for the optional mint hook, whose registry
+ * write is the plan phase's own business; without a hook (or when it
+ * returns null) the pause carries the deterministic fallback token.
  */
 export function buildDeciderStep(input: DeciderStepInput): DeciderPause {
   if (!planSubQueryGroups(input.coverage, 1).fire) {
@@ -166,6 +224,8 @@ export function buildDeciderStep(input: DeciderStepInput): DeciderPause {
     );
   }
   const gaps = input.coverage.uncoveredRareTerms;
+  const pauseDigest = pauseStateDigest(input.query, input.round, poolIds);
+  const minted = input.mintRoundToken?.({ round: input.round, pauseDigest }) ?? null;
   const llmStep = buildNeedsLlmStep({
     step: DECIDER_STEP_NAME,
     prompt:
@@ -185,7 +245,7 @@ export function buildDeciderStep(input: DeciderStepInput): DeciderPause {
   });
   return Object.freeze({
     round: input.round,
-    token: makeRoundToken(input.query, input.round, poolIds),
+    token: minted ?? makeRoundToken(input.query, input.round, poolIds),
     llmStep,
     poolIds: Object.freeze(poolIds),
   });
@@ -286,6 +346,16 @@ export interface DeciderCommitScope {
   readonly poolIds: ReadonlyArray<number>;
   /** Round tokens already spent; a token here refuses as `token_used`. */
   readonly usedTokens: ReadonlySet<string>;
+  /**
+   * The pause-state digest the registry stored when the plan phase minted
+   * the submitted token, read by the caller from the token's registry row.
+   * Present only for a nonce mint: the commit recomputes the digest over
+   * the replayed state and refuses as `token_mismatch` unless the two
+   * agree, so a replay that landed on another round or pool never runs.
+   * Absent (deterministic fallback token, or no registry row) the token
+   * validates by re-derivation alone.
+   */
+  readonly mintedPauseDigest?: string;
 }
 
 /**
@@ -318,12 +388,19 @@ export function commitDeciderStep(
   assertResponseShape(DECIDER_STEP_SURFACE, DECIDER_STEP_SHAPE, payload);
   assertResponseCheck(DECIDER_STEP_SURFACE, payload);
 
-  const expected = makeRoundToken(scope.query, scope.round, scope.poolIds);
-  if (token !== expected) {
-    throw new DeciderStepError(
-      "token_mismatch",
-      `round token was not minted for query ${JSON.stringify(scope.query)} round ${scope.round}: got ${JSON.stringify(token)}, expected a ${ROUND_TOKEN_PREFIX}-prefixed token for this state`,
-    );
+  const deterministic = makeRoundToken(scope.query, scope.round, scope.poolIds);
+  if (token !== deterministic) {
+    // Not the fallback mint: the token must be a nonce mint whose
+    // registry row stored exactly this state's pause digest. A digest
+    // mismatch means the replayed commit reached a different round or
+    // pool than the plan call that handed the token out - genuine
+    // divergence, refused by name.
+    if (scope.mintedPauseDigest !== pauseStateDigest(scope.query, scope.round, scope.poolIds)) {
+      throw new DeciderStepError(
+        "token_mismatch",
+        `round token was not minted for query ${JSON.stringify(scope.query)} round ${scope.round}: got ${JSON.stringify(token)}, expected a ${ROUND_TOKEN_PREFIX}-prefixed token minted for this state`,
+      );
+    }
   }
   if (scope.usedTokens.has(token)) {
     throw new DeciderStepError(
