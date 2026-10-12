@@ -20,6 +20,7 @@ import type { SemanticPolicy } from "../semantic-phase.ts";
 import type { TemporalIntent } from "../temporal-intent.ts";
 import type { ResolvedTimeRange } from "../time-range.ts";
 import type {
+  IterativeStopReason,
   ResolvedSearchConfig,
   SearchOptions,
   SearchOutcome,
@@ -55,12 +56,18 @@ const ITERATIVE_CLAIM_KEY_PREFIX = "itv-claim:";
 /**
  * What a plan-phase mint persisted under the token's registry row: the
  * digest of the pause state (query, round, pool) the token was minted
- * over. A commit recomputes the digest over its replayed state and
- * refuses unless the two agree, so a replay that landed somewhere else
- * never runs the caller's round.
+ * over, plus the deterministic round count (and stop) the plan leg ran.
+ * A commit recomputes the digest over its replayed state and refuses
+ * unless the two agree, and it replays EXACTLY the recorded round count -
+ * the replay's own marginal-value verdict and deadline read wall-clock
+ * time and would retire rounds the plan ran, landing on a different
+ * pause. `rounds`/`stopReason` are optional so a row written by a
+ * just-deployed predecessor (no recording yet) still validates by digest.
  */
 export interface IterativeTokenRecord {
   readonly pauseDigest: string;
+  readonly rounds?: number;
+  readonly stopReason?: IterativeStopReason;
 }
 
 /**
@@ -84,19 +91,21 @@ export function iterativeTokenSpent(
 }
 
 /**
- * Register a plan-phase mint: file the pause digest under the nonce
- * token so the commit can validate its replayed state against the row.
- * Insert-once - the token is fresh randomness, so a conflict means a
- * colliding mint, refused here. False (and a failed write) tells the
- * plan phase to fall back to the deterministic token: the registry is
- * best-effort, and a plan whose registry row never landed hands out the
- * self-verifying digest token instead of failing the search.
+ * Register a plan-phase mint: file the pause digest and the recorded
+ * deterministic round count under the nonce token so the commit can
+ * validate its replayed state against the row and replay exactly that
+ * many rounds. Insert-once - the token is fresh randomness, so a
+ * conflict means a colliding mint, refused here. False (and a failed
+ * write) tells the plan phase to fall back to the deterministic token:
+ * the registry is best-effort, and a plan whose registry row never
+ * landed hands out the self-verifying digest token instead of failing
+ * the search.
  */
 export function mintIterativeToken(
   store: Store,
   config: ResolvedSearchConfig,
   token: string,
-  pauseDigest: string,
+  record: IterativeTokenRecord,
   nowMs: number = Date.now(),
 ): boolean {
   try {
@@ -106,7 +115,7 @@ export function mintIterativeToken(
     return store.queryCachePutIfAbsent(
       `${ITERATIVE_TOKEN_KEY_PREFIX}${token}`,
       generation,
-      JSON.stringify({ state: "minted", pauseDigest }),
+      JSON.stringify({ state: "minted", ...record }),
       nowMs,
     );
   } catch {
@@ -116,12 +125,12 @@ export function mintIterativeToken(
 }
 
 /**
- * Read the pause digest a fresh plan-phase mint stored for this token.
- * Null when no row stands behind the token - never minted, expired with
- * its TTL, aged out by a corpus generation change, or written under a
- * payload this binary cannot read - which sends the commit down the
- * deterministic re-derivation check. Best-effort by the same contract
- * as the mint: a registry read failure reads as no row.
+ * Read what a fresh plan-phase mint stored for this token. Null when no
+ * row stands behind the token - never minted, expired with its TTL, aged
+ * out by a corpus generation change, or written under a payload this
+ * binary cannot read - which sends the commit down the deterministic
+ * re-derivation check. Best-effort by the same contract as the mint: a
+ * registry read failure reads as no row.
  */
 export function readIterativeTokenRecord(
   store: Store,
@@ -136,9 +145,20 @@ export function readIterativeTokenRecord(
     if (nowMs - row.createdAt > config.recall.cacheTtlSeconds * MILLISECONDS_PER_SECOND) {
       return null;
     }
-    const parsed = JSON.parse(row.payload) as { state?: string; pauseDigest?: unknown };
+    const parsed = JSON.parse(row.payload) as {
+      state?: string;
+      pauseDigest?: unknown;
+      rounds?: unknown;
+      stopReason?: unknown;
+    };
     if (parsed.state !== "minted" || typeof parsed.pauseDigest !== "string") return null;
-    return { pauseDigest: parsed.pauseDigest };
+    return {
+      pauseDigest: parsed.pauseDigest,
+      ...(typeof parsed.rounds === "number" ? { rounds: parsed.rounds } : {}),
+      ...(typeof parsed.stopReason === "string"
+        ? { stopReason: parsed.stopReason as IterativeStopReason }
+        : {}),
+    };
   } catch {
     return null;
   }

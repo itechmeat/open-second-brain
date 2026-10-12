@@ -66,6 +66,7 @@ import { isPathReadableAtReach, type FrontmatterCache } from "./result-filters.t
 import { Store } from "./store.ts";
 import { SearchError } from "./types.ts";
 import type {
+  IterativeStopReason,
   ResolvedSearchConfig,
   SearchOptions,
   SearchOutcome,
@@ -568,16 +569,38 @@ export async function search(
           ? ({
               round,
               pauseDigest,
+              deterministicRounds,
+              stopReason,
             }: {
               readonly round: number;
               readonly pauseDigest: string;
+              readonly deterministicRounds: number;
+              readonly stopReason: IterativeStopReason;
             }): string | null => {
               const token = nonceRoundToken(round, randomRoundNonce());
-              return mintIterativeToken(store, effectiveConfig, token, pauseDigest, nowMs)
+              // The row is the commit leg's replay brief: the digest to
+              // validate the replayed state against, and the deterministic
+              // round count the replay must run regardless of its own
+              // clock.
+              return mintIterativeToken(
+                store,
+                effectiveConfig,
+                token,
+                { pauseDigest, rounds: deterministicRounds, stopReason },
+                nowMs,
+              )
                 ? token
                 : null;
             }
           : undefined;
+      // The commit leg reads the plan's mint row before the replay: the
+      // digest for the validator, and the recorded round count the replay
+      // must run. Null (deterministic fallback token, or a row that aged
+      // out) downgrades to re-derivation and the live-clock replay.
+      const tokenRecord =
+        iterativeRequest.phase === "commit"
+          ? readIterativeTokenRecord(store, effectiveConfig, opts.iterativeToken!, nowMs)
+          : null;
       const loop = runIterativeRecall({
         store,
         query,
@@ -594,6 +617,7 @@ export async function search(
         firstRoundNumber: retry.secondPass !== undefined ? 3 : 2,
         isExpired: () => deadlineExpired(deadline),
         ...(mintRoundToken !== undefined ? { mintRoundToken } : {}),
+        ...(tokenRecord?.rounds !== undefined ? { replayRounds: tokenRecord.rounds } : {}),
         ...(opts.transportReach !== undefined && opts.transportReach !== "local"
           ? { filterReachableIds: reachFilterFor(opts.transportReach) }
           : {}),
@@ -605,14 +629,9 @@ export async function search(
         // validator compares it against the replayed state's digest, so
         // a commit whose replay landed on another round or pool is
         // refused as token_mismatch even though the token itself was
-        // minted honestly. Null (deterministic fallback token, or a row
-        // that aged out) downgrades to re-derivation alone.
-        const mintedPauseDigest = readIterativeTokenRecord(
-          store,
-          effectiveConfig,
-          opts.iterativeToken!,
-          nowMs,
-        )?.pauseDigest;
+        // minted honestly. Undefined (deterministic fallback token, or a
+        // row that aged out) downgrades to re-derivation alone.
+        const mintedPauseDigest = tokenRecord?.pauseDigest;
         // The deterministic replay reached a state with no pending round
         // (the index moved under the caller between the two calls): the
         // commit is refused rather than executed against a pool its

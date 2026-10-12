@@ -21,6 +21,7 @@ import { runFtsQueryDetailed } from "../../../src/core/search/fts.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { resolveSearchConfig } from "../../../src/core/search/index.ts";
 import { search } from "../../../src/core/search/search.ts";
+import { pauseStateDigest } from "../../../src/core/search/decider-step.ts";
 import { SearchError } from "../../../src/core/search/types.ts";
 import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
@@ -343,6 +344,66 @@ describe("iterative round driver over a seeded vault", () => {
     expect(spent2.iterative?.phase).toBe("final");
   });
 
+  test("a commit replays the plan's recorded rounds even when its own clock runs slow", async () => {
+    // The commit leg re-runs the deterministic rounds and expects to
+    // arrive at the pause the plan recorded. The marginal-value stop is
+    // fed elapsed time, so a replay on a loaded host retires a round the
+    // plan itself ran and lands on a different state - the commit then
+    // fails against a plan the caller answered honestly. With the plan's
+    // recorded round count in the token's registry row, the replay runs
+    // exactly that many rounds and skips its own clock's verdicts.
+    for (let i = 1; i <= 6; i++) {
+      writeMd(
+        vault,
+        `Brain/notes/wh${i}.md`,
+        `# WH${i}\n\nWarehouse rotation schedule, bay ${i}.\n`,
+      );
+    }
+    for (let i = 1; i <= 80; i++) {
+      const term = `relic${String(i).padStart(2, "0")}`;
+      writeMd(vault, `Brain/notes/${term}.md`, `# ${term}\n\n${term} provenance record.\n`);
+    }
+    await indexVault(makeConfig({ vault, dbPath, maxHops: 0, mmrLambda: 1 }));
+    const config = makeConfig({ vault, dbPath, maxHops: 0, mmrLambda: 1, twoPassEnabled: false });
+    const iterative = withIterative(config, 3);
+    const ghosts = Array.from({ length: 30 }, (_, i) => `wyrm${String(i + 1).padStart(2, "0")}`);
+    const query = `warehouse rotation ${Array.from({ length: 80 }, (_, i) => `relic${String(i + 1).padStart(2, "0")}`).join(" ")} ${ghosts.join(" ")}`;
+    const structured = structuredFor();
+    const plan = await search(iterative, { query, structuredQuery: structured, iterative: true });
+    const pause = plan.iterative;
+    if (pause === undefined || pause.phase !== "needs-llm-step") {
+      throw new Error("expected a decider pause");
+    }
+    expect(pause.rounds.length).toBeGreaterThanOrEqual(2);
+
+    // The replay's clock: every read a second and a half after the one
+    // before, so the stop's elapsed term inflates until a slower replay
+    // would retire the last partial round the plan ran.
+    const realNow = Date.now;
+    let ticks = 0;
+    Date.now = () => realNow.call(Date) + 1500 * ++ticks;
+    let commit: Awaited<ReturnType<typeof search>>;
+    try {
+      commit = await search(iterative, {
+        query,
+        structuredQuery: structured,
+        iterative: true,
+        iterativeToken: pause.token,
+        iterativePayload: { evidence: [pause.poolIds[0]], subQueries: ["relic01 relic02"] },
+      });
+    } finally {
+      Date.now = realNow;
+    }
+    expect(Date.now).toBe(realNow);
+    const final = commit.iterative;
+    if (final === undefined || final.phase !== "final") {
+      throw new Error(`expected a final marker, got ${pause.phase}`);
+    }
+    const deciderRound = final.rounds.at(-1);
+    expect(deciderRound?.author).toBe("decider");
+    expect(deciderRound?.round).toBe(pause.round);
+  });
+
   test("an expired deadline degrades the looped search exactly like the plain one", async () => {
     await seed();
     const config = {
@@ -483,6 +544,31 @@ describe("runIterativeRecall (driver, over an open store)", () => {
   const wideQuery = () =>
     `warehouse rotation ${Array.from({ length: 60 }, (_, i) => `relic${String(i + 1).padStart(2, "0")}`).join(" ")} ${GHOSTS.join(" ")}`;
 
+  /**
+   * 80 recoverable relic docs plus 30 query-only ghost terms: round 2
+   * saturates the pull width (50), round 3 recovers a partial yield (30)
+   * that sits between the fast floor (0.25 of the top yield) and the
+   * slow floor (up to 0.75), and round 4 recovers nothing - the exact
+   * yield curve a slower replay's marginal-value stop retires early.
+   */
+  async function seedDivergence(): Promise<void> {
+    for (let i = 1; i <= 6; i++) {
+      writeMd(
+        vault,
+        `Brain/notes/wh${i}.md`,
+        `# WH${i}\n\nWarehouse rotation schedule, bay ${i}.\n`,
+      );
+    }
+    for (let i = 1; i <= 80; i++) {
+      const term = `relic${String(i).padStart(2, "0")}`;
+      writeMd(vault, `Brain/notes/${term}.md`, `# ${term}\n\n${term} provenance record.\n`);
+    }
+    await indexVault(makeConfig({ vault, dbPath, maxHops: 0, mmrLambda: 1 }));
+  }
+
+  const divergenceQuery = () =>
+    `warehouse rotation ${Array.from({ length: 80 }, (_, i) => `relic${String(i + 1).padStart(2, "0")}`).join(" ")} ${Array.from({ length: 30 }, (_, i) => `wyrm${String(i + 1).padStart(2, "0")}`).join(" ")}`;
+
   test("respects the round cap and merges each round's pulls into one pool", async () => {
     await seedWide();
     const config = makeConfig({ vault, dbPath, maxHops: 0, mmrLambda: 1, twoPassEnabled: false });
@@ -559,6 +645,59 @@ describe("runIterativeRecall (driver, over an open store)", () => {
       expect(loop.rounds).toHaveLength(2);
       expect(loop.lastCoverage).not.toBeNull();
       expect(loop.lastCoverage!.uncoveredRareTerms.length).toBeGreaterThan(0);
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("a recorded replay runs the plan's rounds regardless of its own clock", async () => {
+    await seedDivergence();
+    const config = makeConfig({ vault, dbPath, maxHops: 0, mmrLambda: 1, twoPassEnabled: false });
+    const store = await Store.open(config, { mode: "read", loadVec: false });
+    try {
+      const query = divergenceQuery();
+      const base = runFtsQueryDetailed(store, "warehouse rotation", { limit: 10 });
+      const input = () => ({
+        store,
+        query,
+        limit: 10,
+        pathPrefix: undefined,
+        timeRange: null,
+        validityWindowFor: () => null,
+        keywordHits: base.hits,
+        chunkIds: new Set(base.hits.map((h) => h.chunkId)),
+        ids: base.hits.map((h) => h.chunkId),
+        maxRounds: 3,
+        firstRoundNumber: 2,
+        isExpired: () => false,
+      });
+      // The plan leg on a fast host: saturate, partial, zero-yield - the
+      // third round ran even though its yield was zero, and the pause
+      // was minted over THAT state.
+      const plan = runIterativeRecall({ ...input(), nowMs: () => 0 });
+      expect(plan.rounds.map((r) => r.added)).toEqual([50, 30, 0]);
+      expect(plan.stopReason).toBe("no_progress");
+      expect(plan.pause).not.toBeNull();
+      // The commit leg's replay on a slow host: its own marginal-value
+      // verdict, fed the inflated elapsed term, would retire the third
+      // round and arrive a round early. With the plan's recorded count
+      // in the replay brief, it runs exactly that many rounds, skips its
+      // own stop predicates, and lands on the pause state the registry
+      // row digests.
+      let ticks = 0;
+      const replay = runIterativeRecall({
+        ...input(),
+        replayRounds: plan.rounds.length,
+        nowMs: () => 1500 * ++ticks,
+      });
+      expect(replay.rounds.map((r) => r.added)).toEqual([50, 30, 0]);
+      expect(replay.stopReason).toBe(plan.stopReason);
+      expect(replay.pause?.round).toBe(plan.pause?.round);
+      expect(pauseStateDigest(query, replay.pause!.round, replay.pause!.poolIds)).toBe(
+        pauseStateDigest(query, plan.pause!.round, plan.pause!.poolIds),
+      );
+      // And the pool itself is the plan's, byte for byte.
+      expect(replay.ids).toEqual(plan.ids);
     } finally {
       await store.close();
     }

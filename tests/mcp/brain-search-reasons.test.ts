@@ -162,12 +162,23 @@ describe("brain_search iterative cache keys", () => {
       const token = fakeCredential("drt-3-", "5f1e", "2d3c4b5a69788796a5b4");
       expect(iterativeTokenSpent(store, config, token, now)).toBe(false);
       expect(readIterativeTokenRecord(store, config, token, now)).toBeNull();
-      // The plan phase files the pause digest under the nonce token; the
-      // commit reads the row back and validates its replayed state
-      // against it before claiming.
-      expect(mintIterativeToken(store, config, token, "pausedigest-01", now)).toBe(true);
+      // The plan phase files the pause digest and the recorded round
+      // count under the nonce token; the commit reads the row back and
+      // validates its replayed state against the digest, then replays
+      // exactly the recorded rounds.
+      expect(
+        mintIterativeToken(
+          store,
+          config,
+          token,
+          { pauseDigest: "pausedigest-01", rounds: 2, stopReason: "round_cap" },
+          now,
+        ),
+      ).toBe(true);
       expect(readIterativeTokenRecord(store, config, token, now)).toEqual({
         pauseDigest: "pausedigest-01",
+        rounds: 2,
+        stopReason: "round_cap",
       });
       expect(iterativeTokenSpent(store, config, token, now)).toBe(false);
       // The claim is insert-once: the second racing commit's claim loses,
@@ -177,6 +188,8 @@ describe("brain_search iterative cache keys", () => {
       expect(iterativeTokenSpent(store, config, token, now)).toBe(true);
       expect(readIterativeTokenRecord(store, config, token, now)).toEqual({
         pauseDigest: "pausedigest-01",
+        rounds: 2,
+        stopReason: "round_cap",
       });
       // A failed round releases its own claim: the token reads unspent
       // and its mint row (the retry's validation source) survives.
@@ -184,6 +197,8 @@ describe("brain_search iterative cache keys", () => {
       expect(iterativeTokenSpent(store, config, token, now)).toBe(false);
       expect(readIterativeTokenRecord(store, config, token, now)).toEqual({
         pauseDigest: "pausedigest-01",
+        rounds: 2,
+        stopReason: "round_cap",
       });
       // Every registry row dies with the TTL: a token whose plan phase
       // expired can be neither validated nor replayed.

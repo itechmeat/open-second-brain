@@ -109,7 +109,9 @@ export interface IterativeLoopInput {
    * Plan-phase mint hook, handed to the decider pause when one is built
    * (see {@link buildDeciderStep}): register the pause state under a
    * nonce token and return it, or return null to fall back to the
-   * deterministic token. Absent on a commit leg's replay - the replay
+   * deterministic token. The input carries the executed round count and
+   * stop reason beside the digest, so the row is a complete replay brief
+   * for the commit leg. Absent on a commit leg's replay - the replay
    * rebuilds the pause only to validate the caller's token against it,
    * and must not file a registry row for a state the caller never
    * received.
@@ -117,7 +119,21 @@ export interface IterativeLoopInput {
   readonly mintRoundToken?: (input: {
     readonly round: number;
     readonly pauseDigest: string;
+    readonly deterministicRounds: number;
+    readonly stopReason: IterativeStopReason;
   }) => string | null;
+  /**
+   * Replay brief for the commit leg: the plan's recorded deterministic
+   * round count. The loop then runs EXACTLY that many rounds and skips
+   * the two wall-clock stop inputs - the composite-deadline checks and
+   * the marginal-value verdict (whose latency term is elapsed time) -
+   * because a slower replay would otherwise retire rounds the plan ran
+   * and arrive at a different pause than the one the caller answered.
+   * The deterministic sub-queries are recomputed as usual; only the
+   * clock-dependent stops are silenced. Undefined on a plan leg: every
+   * stop, the deadline included, is live.
+   */
+  readonly replayRounds?: number;
 }
 
 export interface IterativeLoopOutcome {
@@ -150,6 +166,12 @@ export interface IterativeLoopOutcome {
 export function runIterativeRecall(input: IterativeLoopInput): IterativeLoopOutcome {
   const now = input.nowMs ?? Date.now;
   const startMs = now();
+  // The replay brief (see IterativeLoopInput.replayRounds): a replay
+  // runs the recorded count and answers to no clock of its own - the
+  // digest check at commit time, not the stopwatch, decides whether it
+  // landed where the plan did.
+  const replaying = input.replayRounds !== undefined;
+  const targetRounds = replaying ? input.replayRounds! : input.maxRounds;
   // The reach rule bounds the pool BEFORE the first coverage measurement:
   // the raw candidate set can carry withheld first-pass candidates, and a
   // withheld candidate covering a rare term would close that term's gap
@@ -169,8 +191,8 @@ export function runIterativeRecall(input: IterativeLoopInput): IterativeLoopOutc
   let stop: IterativeStopReason | null = null;
   let lastCoverage: CoverageReport | null = null;
 
-  while (rounds.length < input.maxRounds) {
-    if (input.isExpired()) {
+  while (rounds.length < targetRounds) {
+    if (!replaying && input.isExpired()) {
       stop = "deadline";
       break;
     }
@@ -198,8 +220,10 @@ export function runIterativeRecall(input: IterativeLoopInput): IterativeLoopOutc
     // The marginal-value stop is retrospective: it certifies the rounds
     // already run, so the loop discovers a round was not worth it by
     // doing it - the cap bounds the discovery cost, the same trade the
-    // advisor makes when it cuts a curve it has already priced.
-    if (rounds.length > 0) {
+    // advisor makes when it cuts a curve it has already priced. Its
+    // latency term is wall-clock elapsed, so a replay (which must arrive
+    // at the plan's pause, not at its own watch's verdict) skips it.
+    if (rounds.length > 0 && !replaying) {
       const verdict = marginalValueStop(yields, costsMs, now() - startMs);
       if (verdict.stopRank < rounds.length) {
         stop = "marginal_value";
@@ -262,8 +286,10 @@ export function runIterativeRecall(input: IterativeLoopInput): IterativeLoopOutc
   // round) reads a measurement over the pool AS IT IS NOW, so a budget
   // that just closed its gaps finalizes instead of pausing on stale
   // gaps. Zero-round loops already hold the final pool's measurement; an
-  // expired clock keeps the last one it took.
-  if (rounds.length > 0 && stop !== "deadline" && !input.isExpired()) {
+  // expired clock keeps the last one it took; a replay re-measures
+  // whatever its own clock is doing, because the state it must reach is
+  // the plan's, not its watch's.
+  if (rounds.length > 0 && (replaying || (stop !== "deadline" && !input.isExpired()))) {
     lastCoverage = poolCoverageForRetry({
       store: input.store,
       query: input.query,
@@ -277,7 +303,9 @@ export function runIterativeRecall(input: IterativeLoopInput): IterativeLoopOutc
   // from. Any other exit - coverage complete, nothing measurable to fire
   // at, an expired clock - finalizes without asking the caller for a
   // model round. buildDeciderStep re-checks the same fire gate the block
-  // above reads, so the two can never drift apart silently.
+  // above reads, so the two can never drift apart silently. A replay is
+  // clock-blind here too: its state is the plan's by construction, and
+  // the plan already decided the clock was alive when it minted.
   let pause: DeciderPause | null = null;
   const reachablePoolIds = input.filterReachableIds
     ? input.filterReachableIds(Array.from(input.chunkIds))
@@ -286,7 +314,7 @@ export function runIterativeRecall(input: IterativeLoopInput): IterativeLoopOutc
     stop !== "coverage_complete" &&
     stop !== "no_sub_query" &&
     stop !== "deadline" &&
-    !input.isExpired() &&
+    (replaying || !input.isExpired()) &&
     lastCoverage !== null &&
     input.chunkIds.size > 0 &&
     reachablePoolIds.length > 0 &&
@@ -303,6 +331,8 @@ export function runIterativeRecall(input: IterativeLoopInput): IterativeLoopOutc
               input.mintRoundToken?.({
                 round: input.firstRoundNumber + rounds.length,
                 pauseDigest: mint.pauseDigest,
+                deterministicRounds: rounds.length,
+                stopReason: stop!,
               }) ?? null,
           }
         : {}),
