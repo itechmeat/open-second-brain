@@ -404,6 +404,73 @@ describe("iterative round driver over a seeded vault", () => {
     expect(deciderRound?.round).toBe(pause.round);
   });
 
+  test("a committed evidence id that would fall outside the limit reaches the results", async () => {
+    // The decider's evidence selection was validated and then discarded:
+    // the ranking never saw it, and a core-evidence chunk could fall out
+    // of the top `limit`. The committed evidence ids must matter twice -
+    // carried on the final marker, and given a deterministic preference
+    // strong enough that one which would rank outside the limit window
+    // still lands in the final results. The structured query excludes a
+    // term (an ordinary caller shape), which widens the ranked pool past
+    // the limit the way every filtered real call is - without it the
+    // rank cap IS the limit and nothing outside the window ever reaches
+    // the window cut to be pinned into it.
+    await seed();
+    const config = makeConfig({ vault, dbPath, maxHops: 0, mmrLambda: 1, twoPassEnabled: false });
+    const iterative = withIterative(config);
+    const query = `warehouse rotation ${COMMON.join(" ")} wyrmshade velkriss`;
+    const structured: StructuredRecallQueryDocument = Object.freeze({
+      intent: null,
+      lex: Object.freeze({
+        include: Object.freeze(["warehouse", "rotation"]) as ReadonlyArray<string>,
+        exclude: Object.freeze(["sealedwing"]) as ReadonlyArray<string>,
+      }),
+      vec: Object.freeze(["warehouse rotation"]) as ReadonlyArray<string>,
+      hyde: Object.freeze([]) as ReadonlyArray<string>,
+    });
+    // limit 1: the plan's own window is the single top-ranked row, so
+    // every OTHER pool id is evidence that would fall outside the limit.
+    const plan = await search(iterative, {
+      query,
+      structuredQuery: structured,
+      iterative: true,
+      limit: 1,
+    });
+    const pause = plan.iterative;
+    if (pause === undefined || pause.phase !== "needs-llm-step") {
+      throw new Error("expected a decider pause");
+    }
+    const store = await Store.open(config, { mode: "read", loadVec: false });
+    let evidenceId: number;
+    let evidencePath: string;
+    try {
+      const hydrated = await store.hydrateChunks([...pause.poolIds]);
+      const topPath = plan.results[0]?.path;
+      const outside = [...hydrated.entries()].find(([, chunk]) => chunk.path !== topPath);
+      if (outside === undefined) throw new Error("expected a pool id outside the plan window");
+      evidenceId = outside[0];
+      evidencePath = outside[1].path;
+    } finally {
+      await store.close();
+    }
+    const commit = await search(iterative, {
+      query,
+      structuredQuery: structured,
+      iterative: true,
+      limit: 1,
+      iterativeToken: pause.token,
+      iterativePayload: { evidence: [evidenceId], subQueries: ["chandelier handoff"] },
+    });
+    const final = commit.iterative;
+    if (final === undefined || final.phase !== "final") {
+      throw new Error("expected a final marker");
+    }
+    // The marker carries the pinned set ...
+    expect(final.evidenceIds).toEqual([evidenceId]);
+    // ... and the pinned id is IN the limit window, not ranked out of it.
+    expect(commit.results.map((r) => r.path)).toEqual([evidencePath]);
+  });
+
   test("an expired deadline degrades the looped search exactly like the plain one", async () => {
     await seed();
     const config = {

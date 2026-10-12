@@ -389,6 +389,12 @@ export interface DeciderRoundOutcome {
   /** Every round of the call: the deterministic rounds plus this one. */
   readonly rounds: ReadonlyArray<IterativeRoundRecord>;
   readonly stopReason: IterativeStopReason;
+  /**
+   * The pool-validated evidence ids the commit pinned: carried out so the
+   * caller's selection can reach the final ranking instead of being
+   * validated and discarded.
+   */
+  readonly evidenceIds: ReadonlyArray<number>;
   /** The spent token, echoed so the caller records its single use. */
   readonly token: string;
 }
@@ -464,6 +470,7 @@ export function runDeciderRound(input: DeciderRoundInput): DeciderRoundOutcome {
     round,
     rounds: Object.freeze([...input.priorRounds, round]),
     stopReason: "decider_round" as const,
+    evidenceIds: commit.evidenceIds,
     token: commit.token,
   });
 }

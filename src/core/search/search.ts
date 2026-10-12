@@ -65,6 +65,7 @@ import { LAST_INDEXED_AT_STATE_KEY } from "./store/state.ts";
 import { isPathReadableAtReach, type FrontmatterCache } from "./result-filters.ts";
 import { Store } from "./store.ts";
 import { SearchError } from "./types.ts";
+import type { BrainSearchResult } from "./search-result.ts";
 import type {
   IterativeStopReason,
   ResolvedSearchConfig,
@@ -76,6 +77,32 @@ import type {
 export { SEARCH_LIMIT_MAX, SEARCH_LIMIT_MIN } from "./pipeline/request.ts";
 
 const CACHE_BYPASSED: CacheProbe = { slot: null, hit: null };
+
+/**
+ * The committed decider evidence's preference over the final window
+ * (recall-quality wave, M3): the ranked prefix keeps its head, and the
+ * pinned ids that ranked OUTSIDE the `limit` window displace the window's
+ * tail - so a core-evidence chunk the ranking would have dropped still
+ * reaches the answer, while every pinned id that never survived ranking
+ * (a gate exclusion, a reach withdrawal) is silently not pinned: the
+ * preference only ever promotes candidates the ranked pool actually
+ * holds, in ranked order. Deterministic, and a no-op whenever the ranked
+ * pool already covers the evidence.
+ */
+function pinCommittedEvidence(
+  ranked: ReadonlyArray<BrainSearchResult>,
+  limit: number,
+  evidenceIds: ReadonlyArray<number>,
+): ReadonlyArray<BrainSearchResult> {
+  const window = ranked.slice(0, limit);
+  if (evidenceIds.length === 0 || window.length === 0) return window;
+  const inWindow = new Set(window.map((row) => row.chunkId));
+  const pinned = new Set(evidenceIds);
+  const missing = ranked.filter((row) => pinned.has(row.chunkId) && !inWindow.has(row.chunkId));
+  if (missing.length === 0) return window;
+  const keep = Math.max(0, limit - missing.length);
+  return [...window.slice(0, keep), ...missing].slice(0, limit);
+}
 
 /** Lead of the warning that names an abandoned lane's late, non-abort failure. */
 const ABANDONED_LANE_FAILURE_PREFIX = "hybrid deadline: an abandoned lane failed after the answer:";
@@ -539,6 +566,10 @@ export async function search(
       };
     };
     let iterativeMarker: SearchOutcomeIterative | null = null;
+    // The committed decider evidence (recall-quality wave, M3): carried
+    // out of the commit so the final window can prefer it and the marker
+    // can name it. Empty on every other leg.
+    let committedEvidenceIds: ReadonlyArray<number> = [];
     if (
       iterativeRequest !== null &&
       iterativeRequest.phase === "commit" &&
@@ -680,10 +711,12 @@ export async function search(
           });
           keywordHits = committed.keywordHits;
           idsList = committed.ids;
+          committedEvidenceIds = committed.evidenceIds;
           iterativeMarker = {
             phase: "final",
             rounds: committed.rounds,
             stopReason: committed.stopReason,
+            evidenceIds: committed.evidenceIds,
           };
         } catch (e) {
           if (claimed) releaseIterativeToken(store, opts.iterativeToken!);
@@ -843,7 +876,7 @@ export async function search(
 
     const results = decorateFinalResults({
       store,
-      results: postRank.results.slice(0, limit),
+      results: pinCommittedEvidence(postRank.results, limit, committedEvidenceIds),
       structured: shape.structured,
       activeLearned,
       canonicalMatchByChunk: signals.canonicalMatchByChunk,

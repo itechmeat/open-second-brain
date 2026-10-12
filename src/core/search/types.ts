@@ -1197,6 +1197,15 @@ export interface SearchOutcomeIterativeFinal {
   readonly rounds: ReadonlyArray<IterativeRoundRecord>;
   /** Why the loop stopped. */
   readonly stopReason: IterativeStopReason;
+  /**
+   * The pool-validated evidence ids the caller's committed decider
+   * payload pinned as core evidence, present on the committed leg only.
+   * The final window gives them a deterministic preference (a committed
+   * id that would rank outside the `limit` still lands in the results),
+   * so the decider's selection reaches the answer instead of being
+   * validated and discarded.
+   */
+  readonly evidenceIds?: ReadonlyArray<number>;
 }
 
 export interface SearchOutcome {
