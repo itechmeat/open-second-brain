@@ -90,10 +90,13 @@ export function iterativeTokenSpent(
  * token cannot both pass (the plain check-then-put let the second
  * overwrite the first's marker). False means the token is already
  * claimed in this generation inside its TTL - the call site refuses
- * that commit by name. A registry write that failed lands on the
- * documented best-effort trade: it costs a deterministic re-run of the
+ * that commit by name. The registry is best-effort, and its two honest
+ * failure modes are: a failed write costs a deterministic re-run of the
  * same commit on replay (the validator re-checks the token against the
- * state), never a wrong answer.
+ * state), and the expiry sliver - the claim row ages out before the
+ * commit response row - lets a replay serve the live commit row without
+ * re-validation. Both are bounded: the commit is retrieval-only and
+ * deterministic, never a wrong answer.
  */
 export function claimIterativeToken(
   store: Store,
