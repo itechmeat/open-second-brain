@@ -282,10 +282,11 @@ export function resolveClaimProvenanceFromIndex(
     receiptRecord = null;
   }
   const outcomeRecord = index.outcomesBySampleId.get(sampleId) ?? null;
+  // The evidence row joins on the same sample id: the outcome record was
+  // indexed under the id its payload posts against, so re-reading that
+  // payload here could only ever return the id already in hand.
   const outcomeEvidence =
-    outcomeRecord === null
-      ? undefined
-      : index.evidenceBySampleId.get(payloadSampleId(outcomeRecord) ?? sampleId);
+    outcomeRecord === null ? undefined : index.evidenceBySampleId.get(sampleId);
   return Object.freeze({
     sample_id: sampleId,
     ...(receiptRecord !== null
