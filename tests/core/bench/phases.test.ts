@@ -16,6 +16,7 @@ import {
   benchVectorCacheKey,
 } from "../../../src/core/bench/embedding-cache.ts";
 import { parseBenchFixture } from "../../../src/core/bench/fixture.ts";
+import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
 import { benchSearchConfig, runMemoryBench } from "../../../src/core/bench/phases.ts";
 import {
   BENCH_REPORT_SCHEMA,
@@ -309,7 +310,7 @@ describe("the embeddings capability path", () => {
         provider: "openai-compat",
         baseUrl: "http://127.0.0.1:9",
         model: "bench-unpriced-model",
-        apiKey: "bench-test-key",
+        apiKey: FAKE_PROVIDER_KEY,
         costGateUsd: 1,
       },
     };
