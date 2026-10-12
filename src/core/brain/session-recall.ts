@@ -20,6 +20,13 @@ import type { SessionLineage } from "./lineage/types.ts";
 import { PayloadRegistry, withPayloadStoreLock } from "./payload-registry.ts";
 import { applyCharBudget } from "./recall-budget.ts";
 import {
+  detectThreadFacets,
+  resolveTopicBudget,
+  type ThreadFacet,
+  type ThreadFacetMention,
+  type ThreadFacetOrigin,
+} from "./thread-topics.ts";
+import {
   BRAIN_SESSION_PAYLOAD_DEFAULTS,
   loadBrainConfigDetailed,
   resolveSessionPayloadPolicy,
@@ -428,27 +435,6 @@ function lineagePayloadFields(lineage: SessionLineage | undefined): Record<strin
 
 // ----- Coverage-first selection (recall-quality wave, Lane B / t_2c2a883c) ---
 
-/** Where one detected thread facet came from. */
-export type ThreadFacetOrigin = "mined" | "cluster";
-
-/**
- * One facet of a conversation thread: a distinct sub-topic the coverage
- * pass fans out over. A facet carries the in-scope turns that establish
- * it, and either a text needle (`mined` facets match turn text through
- * the same keyword machinery as grep) or cluster membership (`cluster`
- * facets reach their turns directly through the summary node's source
- * list).
- */
-export interface ThreadFacet {
-  /** Stable facet id: `cluster:<record id>` or `mined:<family>:<key>`. */
-  readonly key: string;
-  readonly origin: ThreadFacetOrigin;
-  /** Text needle for the keyword pass; `null` for membership facets. */
-  readonly needle: string | null;
-  /** In-scope establishing turns, in chronological order. */
-  readonly turnIds: ReadonlyArray<string>;
-}
-
 export interface SessionCoverageInput {
   readonly sessionId?: string;
   /**
@@ -499,13 +485,14 @@ export interface SessionCoverageResult {
  * (recall-quality wave, Lane B / t_2c2a883c).
  *
  * Retrieve wide, then compress: facets are detected from the thread's
- * own records (depth-1 summary clusters today, mined entity keys joining
- * with the topic budget), the pass fans out over every facet, and the
- * union of matching turns is ranked by relevance, selected under the
- * caller's character budget through the shared {@link applyCharBudget}
- * primitive (wrapped, never forked), and re-emitted in
- * {@link compareRecords} chronological order. Every drop is named in the
- * diagnostics; nothing degrades silently.
+ * own records (depth-1 summary clusters and mined entity keys, through
+ * {@link detectThreadFacets}), the pass fans out over the adaptive topic
+ * budget ({@link resolveTopicBudget}: clamp of the facet count between
+ * the exported floor and cap), and the union of matching turns is ranked
+ * by relevance, selected under the caller's character budget through the
+ * shared {@link applyCharBudget} primitive (wrapped, never forked), and
+ * re-emitted in {@link compareRecords} chronological order. Every drop
+ * is named in the diagnostics; nothing degrades silently.
  */
 export function coverageSessionRecall(
   vault: string,
@@ -519,8 +506,9 @@ export function coverageSessionRecall(
     throw new Error("session recall coverage: charBudget must be a positive finite number");
   }
   const records = sessionRecallRecords(vault, input.sessionId, input.withholdPrivate);
-  const facets = detectCoverageFacets(records);
-  const topics = facets;
+  const facets = detectCoverageFacets(vault, records);
+  const { budget } = resolveTopicBudget(facets.length);
+  const topics = facets.slice(0, budget);
   const matches = rankTopicMatches(records, topics);
   const budgeted = applyCharBudget(
     matches.map((match) => ({ item: match, text: JSON.stringify(expandedRawTurn(match.record)) })),
@@ -533,7 +521,7 @@ export function coverageSessionRecall(
     turns: Object.freeze(kept.map((match) => expandedRawTurn(match.record))),
     diagnostics: Object.freeze({
       facets_detected: facets.length,
-      topics_requested: topics.length,
+      topics_requested: budget,
       topics_realized: topics.length,
       topics: Object.freeze(
         topics.map((facet) =>
@@ -552,44 +540,69 @@ function turnIdOf(record: ContinuityRecord): string {
 }
 
 /**
- * Depth-1 summary clusters as coverage facets (Task 7 core). A depth-1
- * node's source turn list partitions the segment's turns, so the cluster
- * set is the thread's own topic skeleton: one facet per node, holding
- * the node's turns that exist in scope. A cluster with no in-scope turns
- * cannot contribute coverage and is not detected as a facet.
+ * The scoped record set's coverage facets: depth-1 summary clusters (the
+ * thread's own topic skeleton - a depth-1 node's source turn list
+ * partitions the segment's turns) plus the mined entity keys whose
+ * mention rows name a session of the scope. Detection itself is the pure
+ * {@link detectThreadFacets}; this is the record-set projection into its
+ * input. A cluster with no in-scope turns, and a mention naming a
+ * session outside the scope or a turn the recall DAG never imported,
+ * cannot contribute coverage and is not detected as a facet - nothing
+ * selectable is dropped silently, and the ledger rows remain for every
+ * other reader.
  */
-function detectCoverageFacets(records: ReadonlyArray<ContinuityRecord>): ThreadFacet[] {
-  const order = new Map<string, number>();
-  records.forEach((record, index) => {
-    if (record.kind !== "session_turn") return;
-    const turnId = turnIdOf(record);
-    if (turnId.length > 0 && !order.has(turnId)) order.set(turnId, index);
-  });
-  const facets: ThreadFacet[] = [];
+function detectCoverageFacets(
+  vault: string,
+  records: ReadonlyArray<ContinuityRecord>,
+): ThreadFacet[] {
+  const turns: string[] = [];
+  const clusters: Array<{ id: string; turnIds: ReadonlyArray<string> }> = [];
   for (const record of records) {
+    if (record.kind === "session_turn") {
+      const turnId = turnIdOf(record);
+      if (turnId.length > 0) turns.push(turnId);
+      continue;
+    }
     if (record.kind !== "session_summary_node") continue;
     if (numberValue(record.payload["depth"]) !== 1) continue;
-    const seen = new Set<string>();
-    const turnIds: string[] = [];
-    for (const turnId of collectTurnIds([record])) {
-      if (!order.has(turnId) || seen.has(turnId)) continue;
-      seen.add(turnId);
-      turnIds.push(turnId);
-    }
-    if (turnIds.length === 0) continue;
-    facets.push({ key: `cluster:${record.id}`, origin: "cluster", needle: null, turnIds });
+    clusters.push({ id: record.id, turnIds: collectTurnIds([record]) });
   }
-  return facets.sort(
-    (left, right) =>
-      firstTurnIndex(left, order) - firstTurnIndex(right, order) ||
-      left.key.localeCompare(right.key),
-  );
+  return detectThreadFacets({ turns, mentions: scopedMentions(vault, records), clusters });
 }
 
-function firstTurnIndex(facet: ThreadFacet, order: ReadonlyMap<string, number>): number {
-  let best = Number.MAX_SAFE_INTEGER;
-  for (const turnId of facet.turnIds) best = Math.min(best, order.get(turnId) ?? best);
-  return best;
+/**
+ * The vault's mined-mention rows that name a session of the scope: the
+ * payload spine ({@link ThreadFacetMention}) of every
+ * `session_entity_mention` record whose `session_ref` joins the scope.
+ * The ledger keys provenance by the same portable session identity the
+ * recall DAG uses, so the join is direct.
+ */
+function scopedMentions(
+  vault: string,
+  records: ReadonlyArray<ContinuityRecord>,
+): ReadonlyArray<ThreadFacetMention> {
+  const scope = new Set<string>();
+  for (const record of records) {
+    const sid = sessionIdOf(record.payload);
+    if (sid !== undefined) scope.add(sid);
+  }
+  const mentions: ThreadFacetMention[] = [];
+  for (const record of listContinuityRecords(vault, { kind: "session_entity_mention" })) {
+    const family = record.payload["family"];
+    const key = record.payload["key"];
+    const sessionRef = record.payload["session_ref"];
+    const turnId = record.payload["turn_id"];
+    if (
+      typeof family !== "string" ||
+      typeof key !== "string" ||
+      typeof sessionRef !== "string" ||
+      typeof turnId !== "string"
+    ) {
+      continue;
+    }
+    if (scope.has(sessionRef)) mentions.push({ family, key, turnId });
+  }
+  return mentions;
 }
 
 /** One turn's accumulation of topic matches: score and the topics that hit it. */

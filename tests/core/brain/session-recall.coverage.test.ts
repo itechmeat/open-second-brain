@@ -15,7 +15,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { listContinuityRecords } from "../../../src/core/brain/continuity/store.ts";
+import {
+  appendContinuityRecord,
+  listContinuityRecords,
+} from "../../../src/core/brain/continuity/store.ts";
 import type { SessionTurn } from "../../../src/core/brain/sessions/types.ts";
 import {
   coverageSessionRecall,
@@ -112,9 +115,9 @@ describe("coverage-first selection core", () => {
       depthOneIds.map((id) => `cluster:${id}`).toSorted(),
     );
     expect(diagnostics.topics.every((topic) => topic.turn_count === 2)).toBe(true);
-    // The clamped budget is not part of this task yet: the fan-out spans
-    // every detected facet.
-    expect(diagnostics.topics_requested).toBe(4);
+    // The adaptive topic budget: four facets floor at 12, and the
+    // diagnostics report the four realized topics honestly.
+    expect(diagnostics.topics_requested).toBe(12);
   });
 
   test("coverage across the lineage boundary reaches the root segment from the child id", () => {
@@ -149,6 +152,91 @@ describe("coverage-first selection core", () => {
     expect(() => coverageSessionRecall(vault, { sessionId: "root-seg", charBudget: 0 })).toThrow(
       /charBudget/,
     );
+  });
+});
+
+describe("adaptive topic budget over coverage", () => {
+  function importFacetThread(facets: number): void {
+    importSessionRecall(vault, {
+      sessionId: "facet-seg",
+      turns: Array.from({ length: facets }, (_, index) =>
+        turn(`t${index + 1}`, "user", `topic ${index + 1} distinct material`, index + 1),
+      ),
+      summaryGroupSize: 1,
+      createdAt: "2026-07-02T09:00:00.000Z",
+    });
+  }
+
+  test("a 40-facet thread caps the budget at 16", () => {
+    importFacetThread(40);
+    const coverage = coverageSessionRecall(vault, {
+      sessionId: "facet-seg",
+      charBudget: 1_000_000,
+    });
+    expect(coverage.diagnostics.facets_detected).toBe(40);
+    expect(coverage.diagnostics.topics_requested).toBe(16);
+    expect(coverage.diagnostics.topics_realized).toBe(16);
+    // Groups of one: each realized cluster establishes exactly one turn,
+    // so the capped fan-out reaches the first 16 turns of the thread.
+    expect(coverage.turns).toHaveLength(16);
+  });
+
+  test("a 3-facet thread floors at 12 and reports 3 realized topics honestly", () => {
+    importFacetThread(3);
+    const coverage = coverageSessionRecall(vault, { sessionId: "facet-seg", charBudget: 100_000 });
+    expect(coverage.diagnostics.topics_requested).toBe(12);
+    expect(coverage.diagnostics.topics_realized).toBe(3);
+    expect(coverage.diagnostics.topics).toHaveLength(3);
+    expect(coverage.turns.map((t) => t.turn_id)).toEqual(["t1", "t2", "t3"]);
+  });
+
+  test("coverage is deterministic across repeated calls", () => {
+    importLineageThread();
+    const first = coverageSessionRecall(vault, { sessionId: "child-seg", charBudget: 100_000 });
+    const second = coverageSessionRecall(vault, { sessionId: "child-seg", charBudget: 100_000 });
+    expect(JSON.parse(JSON.stringify(first))).toEqual(JSON.parse(JSON.stringify(second)));
+  });
+});
+
+describe("mined-key facets", () => {
+  function importMinedThread(): void {
+    importSessionRecall(vault, {
+      sessionId: "mined-seg",
+      turns: [
+        turn("t1", "user", "call `SessionStore` for the receipts flow", 1),
+        turn("t2", "assistant", "SessionStore keeps the receipt ledger", 2),
+        turn("t3", "user", "unrelated turn about weather", 3),
+      ],
+      summaryGroupSize: 2,
+      createdAt: "2026-07-03T09:00:00.000Z",
+    });
+    // The mined-mention ledger row the session miner would have written
+    // for t1 (one record per family/key/session).
+    appendContinuityRecord(vault, {
+      kind: "session_entity_mention",
+      createdAt: "2026-07-03T09:00:01.000Z",
+      sourceRefs: [{ id: "mined-seg:t1:symbol:SessionStore" }],
+      payload: { family: "symbol", key: "SessionStore", session_ref: "mined-seg", turn_id: "t1" },
+    });
+  }
+
+  test("mined keys join the fan-out and match every turn that carries them", () => {
+    importMinedThread();
+    const coverage = coverageSessionRecall(vault, { sessionId: "mined-seg", charBudget: 100_000 });
+    const mined = coverage.diagnostics.topics.find((topic) => topic.origin === "mined");
+    expect(mined).toMatchObject({ key: "mined:symbol:SessionStore", turn_count: 1 });
+    // The wide pass matches every in-scope turn carrying the key, not
+    // only the establishing turn: t2 mentions it too and is returned.
+    expect(coverage.turns.map((t) => t.turn_id)).toEqual(["t1", "t2", "t3"]);
+  });
+
+  test("a mention scoped outside the requested session contributes no facet", () => {
+    importMinedThread();
+    const coverage = coverageSessionRecall(vault, {
+      sessionId: "other-seg",
+      charBudget: 100_000,
+    });
+    expect(coverage.diagnostics.topics.filter((topic) => topic.origin === "mined")).toEqual([]);
   });
 });
 
