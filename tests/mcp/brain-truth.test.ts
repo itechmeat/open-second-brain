@@ -831,7 +831,7 @@ interface ClaimProvenanceRow {
   } | null;
   readonly outcome: {
     readonly id: string;
-    readonly first_pass_success: boolean;
+    readonly first_pass_success: boolean | null;
     readonly evidence_verdict?: string;
   } | null;
   readonly timestamp_inverted: boolean;

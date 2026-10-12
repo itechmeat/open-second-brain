@@ -239,6 +239,23 @@ describe("resolveClaimProvenance", () => {
     expect(provenance.outcome!.evidence_verdict).toBe("unclaimed");
   });
 
+  test("an outcome row without a first-pass verdict renders unknown, never false", () => {
+    // L2.3 regression: the `=== true` coercion turned a MISSING verdict
+    // into `false`, inventing a failed first pass for a row that carried
+    // none. The outcome writer validates the boolean, but the reader
+    // meets whatever the ledger holds, so unknown renders as null.
+    const receipt = emitSampleReceipt();
+    appendContinuityRecord(vault, {
+      kind: "context_pack_outcome",
+      createdAt: "2026-06-03T09:00:00.000Z",
+      sourceRefs: [],
+      payload: { sample_id: receipt.id },
+    });
+    const provenance = resolveClaimProvenance(vault, receipt.id, CLAIM_TS_AFTER);
+    expect(provenance.outcome).not.toBeNull();
+    expect(provenance.outcome!.first_pass_success).toBeNull();
+  });
+
   test("a blank sample id refuses by name", () => {
     // Unreachable through the ledger (the store refuses blank ids at
     // write), refused here too so no caller can read silence as an

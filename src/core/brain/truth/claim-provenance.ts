@@ -70,7 +70,12 @@ export interface ClaimProvenanceReceipt {
 export interface ClaimProvenanceOutcome {
   readonly id: string;
   readonly created_at: string;
-  readonly first_pass_success: boolean;
+  /**
+   * The row's own first-pass verdict. Null when the row carries no
+   * boolean - a hand-edited or forward-compat row renders unknown,
+   * never a coerced "failed".
+   */
+  readonly first_pass_success: boolean | null;
   /** The evidence row's verdict for this sample, when that row exists. */
   readonly evidence_verdict?: string;
 }
@@ -229,10 +234,14 @@ function joinOutcome(
   // sample id; absent when no evidence row exists - never inferred from
   // the outcome row.
   const evidenceVerdict = evidence?.payload["verdict"];
+  // Omit-don't-invent: a row without its own boolean renders unknown -
+  // null - never a coerced "false" inventing a failed verdict for a row
+  // that said nothing (review L2.3).
+  const firstPassSuccess = record.payload["first_pass_success"];
   return Object.freeze({
     id: record.id,
     created_at: record.createdAt,
-    first_pass_success: record.payload["first_pass_success"] === true,
+    first_pass_success: typeof firstPassSuccess === "boolean" ? firstPassSuccess : null,
     ...(typeof evidenceVerdict === "string" ? { evidence_verdict: evidenceVerdict } : {}),
   });
 }
