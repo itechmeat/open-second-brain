@@ -15,7 +15,13 @@ import { mkdirSync, mkdtempSync, rmSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
-import { buildRetrievalPlan } from "../../../src/core/brain/retrieval-plan.ts";
+import {
+  buildRetrievalPlan,
+  marginalValueStop,
+  STOP_BASE_FRACTION,
+  STOP_MAX_EXTRA_FRACTION,
+  STOP_P95_SCALE_MS,
+} from "../../../src/core/brain/retrieval-plan.ts";
 import type { ContextPackItem, ContextPackReport } from "../../../src/core/brain/context-pack.ts";
 import type { TokenImpactSummary } from "../../../src/core/brain/token-impact.ts";
 import type { McpRouteLatencySummary } from "../../../src/core/brain/mcp-route-metrics.ts";
@@ -152,6 +158,59 @@ test("marginal-value stop tightens as p95 latency rises", () => {
   expect(costly.marginalStop.stopRank).toBe(1);
   expect(costly.marginalStop.stopTokens).toBe(100);
   expect(costly.marginalStop.stopRank).toBeLessThanOrEqual(cheap.marginalStop.stopRank);
+});
+
+// ----- the extracted marginal-value stop predicate (recall-quality wave) -----
+
+/**
+ * Synthetic search-pool curve, deliberately NOT a context pack: per-round
+ * recovered-candidate counts as densities, per-round elapsed milliseconds as
+ * the cost column. The predicate must read any density/latency curve the
+ * same way it reads the advisor's pack curve.
+ */
+const POOL_DENSITIES = [10, 4, 1];
+const POOL_COSTS_MS = [120, 90, 60];
+
+test("the extracted predicate follows the advisor formula over a pool curve", () => {
+  // Base fraction only: floor = 10 * 0.25 = 2.5, so the second round (4) is
+  // worth its cost and the third (1) is not.
+  expect(STOP_BASE_FRACTION).toBe(0.25);
+  const cheap = marginalValueStop(POOL_DENSITIES, POOL_COSTS_MS, 0);
+  expect(cheap.stopRank).toBe(2);
+  expect(cheap.stopTokens).toBe(POOL_COSTS_MS[0]! + POOL_COSTS_MS[1]!);
+  // p95 at the scale point adds the full surcharge: fraction 0.75, floor 7.5.
+  expect(STOP_P95_SCALE_MS).toBe(4000);
+  expect(STOP_MAX_EXTRA_FRACTION).toBe(0.5);
+  const atScale = marginalValueStop(POOL_DENSITIES, POOL_COSTS_MS, STOP_P95_SCALE_MS);
+  expect(atScale.stopRank).toBe(1);
+  expect(atScale.stopTokens).toBe(POOL_COSTS_MS[0]!);
+  // Past the scale point the surcharge is capped, not compounded.
+  const pastScale = marginalValueStop(POOL_DENSITIES, POOL_COSTS_MS, STOP_P95_SCALE_MS * 10);
+  expect(pastScale.stopRank).toBe(1);
+  // Between the floor and the scale point the surcharge rises linearly:
+  // p95 2000 → fraction 0.5 → floor 5 → the second round (4) misses it.
+  const mid = marginalValueStop(POOL_DENSITIES, POOL_COSTS_MS, STOP_P95_SCALE_MS / 2);
+  expect(mid.stopRank).toBe(1);
+});
+
+test("the extracted predicate always keeps the first sample", () => {
+  const steep = marginalValueStop([10, 0], [5, 5], 0);
+  expect(steep.stopRank).toBe(1);
+  expect(steep.stopTokens).toBe(5);
+  expect(marginalValueStop([], [], 0)).toEqual({
+    stopRank: 0,
+    stopTokens: 0,
+    reason: "no candidates to allocate",
+  });
+});
+
+test("the extracted predicate reads a null latency as no surcharge", () => {
+  expect(marginalValueStop([10, 4], [1, 1], null).stopRank).toBe(2);
+});
+
+test("the advisor's own stop is the predicate over the pack curve", () => {
+  const plan = planWith("staging deploys", 250);
+  expect(plan.marginalStop).toEqual(marginalValueStop([0.5, 0.3, 0.1], [100, 100, 100], 250));
 });
 
 test("no route data yields null reliability without throwing", () => {

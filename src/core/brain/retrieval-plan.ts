@@ -187,12 +187,21 @@ function reliabilityFrom(
 }
 
 /**
- * The marginal-value stop over the density curve. A page is worth its tokens
+ * The marginal-value stop over an arbitrary density curve (recall-quality
+ * wave extraction). A page — or, for callers other than the advisor, a
+ * round, a batch, any unit the caller feeds samples of — is worth its cost
  * while its density is at least `effectiveFraction * topDensity`, where the
- * fraction climbs with p95 latency. At least one page is always included when
- * any exist. A flat (zero-density) curve keeps the whole allocation.
+ * fraction climbs with the observed latency. At least one sample is always
+ * included when any exist. A flat (zero-density) curve keeps everything.
+ *
+ * Extracted verbatim from the advisor's private stop so other lanes can
+ * reuse the exact formula rather than re-tuning their own: the advisor feeds
+ * it the context-pack density curve and the route's p95, and
+ * {@link buildRetrievalPlan} output is byte-identical to the pre-extraction
+ * fixtures by construction. The search-side iterative loop feeds it
+ * per-round candidate yields and elapsed time instead — samples, not pages.
  */
-function marginalStop(
+export function marginalValueStop(
   densityCurve: ReadonlyArray<number>,
   tokens: ReadonlyArray<number>,
   p95LatencyMs: number | null,
@@ -260,7 +269,7 @@ export function buildRetrievalPlan(
     }),
     graphExpansion: graphExpansionFor(queryPlan.intent),
     reliability,
-    marginalStop: marginalStop(densityCurve, tokens, reliability.p95LatencyMs),
+    marginalStop: marginalValueStop(densityCurve, tokens, reliability.p95LatencyMs),
   });
 }
 
