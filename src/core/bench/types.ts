@@ -19,6 +19,7 @@
  * report be read under the wrong rule.
  */
 import type { RecallFailure } from "./failure-modes.ts";
+import type { EmbeddingGateVerdict } from "../search/embedding-spend.ts";
 import type {
   ResolvedEmbeddingConfig,
   ResolvedRerankConfig,
@@ -184,6 +185,45 @@ export const DEFAULT_BENCH_KNOB_PIN: BenchPinnedKnobs = Object.freeze({
   semantic: Object.freeze({ enabled: false }),
 });
 
+/**
+ * The embedding spend receipt a capability-declaring suite surfaces.
+ *
+ * It records the ONE spend plan the suite's index phase computed through
+ * the apply-gated path (`planEmbeddingSpend`, the indexer's own gate) and
+ * how the shared vector cache split it: `cache_hits` vectors came off the
+ * runs-dir cache with zero provider contact, `cache_misses` were embedded
+ * through the indexer's embedding phase - which re-prices and re-gates
+ * that census itself, so the verdict acted on is never a caller's. A
+ * blocked gate is a named refusal, never a silent bypass.
+ */
+export interface BenchEmbeddingReceipt {
+  readonly provider: string;
+  /** The model the vectors are stored under. */
+  readonly model: string | null;
+  /** Canonical `<provider>:<model>:<dimension>` identity triple. */
+  readonly signature: string;
+  /** Chunks the spend plan found pending when the phase opened. */
+  readonly planned: number;
+  /** Pending chunks served from the shared cache (no provider contact). */
+  readonly cache_hits: number;
+  /** Pending chunks embedded through the apply-gated embedding phase. */
+  readonly cache_misses: number;
+  /** Tokens the full pending census estimated. */
+  readonly tokens: number;
+  /** Estimated spend of the full pending census; null when unpriced. */
+  readonly estimated_usd: number | null;
+  /** Who stated the price the estimate used. */
+  readonly price_source: string;
+  /** The plan's own gate verdict, verbatim. */
+  readonly gate: EmbeddingGateVerdict;
+  /**
+   * True only when the embedding phase's receipt records a forced pass
+   * over a gate that would have refused. The bench itself never forces;
+   * the field exists so a receipt can never hide a bypass.
+   */
+  readonly forced?: boolean;
+}
+
 export interface BenchQuestionResult {
   readonly id: string;
   readonly category: BenchCategory;
@@ -236,6 +276,14 @@ export interface BenchReport {
     readonly false_fire_rate: number;
     readonly source_isolation_violations: number;
   };
+  /**
+   * The embedding spend receipt, present only when the run's suite
+   * declares the embeddings capability AND the knob pin enables the
+   * semantic lane - so the default (and locomo) report serializes
+   * byte-identically without it. Carries the provider+model signature so
+   * numbers are never compared across embedding identities.
+   */
+  readonly embeddings?: BenchEmbeddingReceipt;
   readonly judge: { readonly status: "skipped" | "ran" | "error"; readonly detail?: string };
   readonly questions: ReadonlyArray<BenchQuestionResult>;
 }

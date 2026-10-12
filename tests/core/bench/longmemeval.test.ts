@@ -180,4 +180,21 @@ describe("the longmemeval suite", () => {
     expect(report.quality.passed).toBe(report.quality.total);
     expect(report.quality.total).toBe(3);
   }, 30_000);
+
+  test("the suite runs the embeddings capability path end to end", async () => {
+    const { fixture } = loadLongMemEvalFixture(SAMPLE);
+    const runsDir = mkdtempSync(join(tmpdir(), "o2b-longmemeval-runs-"));
+    dirs.push(runsDir);
+    const report = await runMemoryBench({
+      fixture,
+      runsDir,
+      capabilities: { embeddings: true },
+      pinnedKnobs: { semantic: { enabled: true, provider: "local" } },
+    });
+    expect(report.embeddings).toBeDefined();
+    expect(report.embeddings!.provider).toBe("local");
+    expect(report.embeddings!.gate).toEqual({ blocked: false, reason: null });
+    expect(report.judge.status).toBe("skipped");
+    expect(report.quality.passed).toBe(report.quality.total);
+  }, 30_000);
 });

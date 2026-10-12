@@ -28,6 +28,11 @@ import {
 } from "../brain/recall-inject.ts";
 import { resolveSearchConfig, search } from "../search/index.ts";
 import {
+  BENCH_EMBEDDING_RECEIPT_FILENAME,
+  embedBenchVaultIndex,
+  readBenchEmbeddingReceipt,
+} from "./embedding-cache.ts";
+import {
   benchRecallRetriever,
   classifyRecallDecision,
   injectedTokens,
@@ -51,6 +56,7 @@ import {
   DEFAULT_BENCH_KNOB_PIN,
   RETRIEVAL_CATEGORIES,
   type BenchFixture,
+  type BenchEmbeddingReceipt,
   type BenchPinnedKnobs,
   type BenchQuestion,
   type BenchQuestionResult,
@@ -184,6 +190,17 @@ export async function runMemoryBench(opts: BenchRunOptions): Promise<BenchReport
   // One resolved config for every phase: the pin cannot drift between
   // the index warmup and the timed retrievals.
   const config = benchSearchConfig(vault, pinnedKnobs);
+  // The capability gate: the semantic lane is reachable only when the
+  // run's suite declared the embeddings capability, so a pin can never
+  // silently arm a lane the suite never asked for.
+  if (config.semantic.enabled && opts.capabilities?.embeddings !== true) {
+    throw new Error(
+      "bench run pins the semantic lane on without the embeddings capability - declare { embeddings: true } for the suite or keep the semantic lane pinned off",
+    );
+  }
+  // Present when this invocation ran the embedding index phase; read
+  // back from the run artifact on a resumed run.
+  let embeddings: BenchEmbeddingReceipt | undefined;
 
   // Phase: ingest - materialize the disposable vault.
   if (!phaseDone(checkpoint, "ingest")) {
@@ -192,10 +209,25 @@ export async function runMemoryBench(opts: BenchRunOptions): Promise<BenchReport
   }
 
   // Phase: index - one warmup search triggers the store self-heal so
-  // the FTS index exists before any timed retrieval.
+  // the FTS index exists before any timed retrieval. A suite that both
+  // declares the embeddings capability and pins the semantic lane on
+  // builds real vectors instead, through the apply-gated indexer path
+  // and the shared runs-dir vector cache.
   if (!phaseDone(checkpoint, "index")) {
-    await search(config, { query: "warmup", limit: 1, transportReach: BENCH_REACH });
+    if (config.semantic.enabled) {
+      embeddings = await embedBenchVaultIndex({ config, runsDir: opts.runsDir });
+      writeFileSync(
+        join(run.runDir, BENCH_EMBEDDING_RECEIPT_FILENAME),
+        `${JSON.stringify(embeddings, null, 2)}\n`,
+        "utf8",
+      );
+    } else {
+      await search(config, { query: "warmup", limit: 1, transportReach: BENCH_REACH });
+    }
     checkpoint = completeBenchPhase(run.runDir, checkpoint, "index");
+  }
+  if (embeddings === undefined && config.semantic.enabled) {
+    embeddings = readBenchEmbeddingReceipt(run.runDir);
   }
 
   // Phase: retrieve - run every question once, persist raw results.
@@ -226,7 +258,7 @@ export async function runMemoryBench(opts: BenchRunOptions): Promise<BenchReport
 
   // Optional judge (advisory, fail-open), then report.
   const judge = runJudge(opts.judgeCmd, results);
-  const report = buildReport(run, opts.fixture, results, judge);
+  const report = buildReport(run, opts.fixture, results, judge, embeddings);
   writeFileSync(join(run.runDir, "report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
   if (!phaseDone(checkpoint, "report")) {
     completeBenchPhase(run.runDir, checkpoint, "report");
@@ -562,6 +594,7 @@ function buildReport(
   fixture: BenchFixture,
   results: ReadonlyArray<BenchQuestionResult>,
   judge: ReturnType<typeof runJudge>,
+  embeddings?: BenchEmbeddingReceipt,
 ): BenchReport {
   const byCategory: Record<string, { passed: number; total: number }> = {};
   let passed = 0;
@@ -619,6 +652,7 @@ function buildReport(
       false_fire_rate: proactive.false_fire_rate,
       source_isolation_violations: isolationTotal,
     }),
+    ...(embeddings !== undefined ? { embeddings: Object.freeze({ ...embeddings }) } : {}),
     judge: Object.freeze({
       status: judge.status,
       ...(judge.detail !== undefined ? { detail: judge.detail } : {}),
