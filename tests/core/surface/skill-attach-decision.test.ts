@@ -12,7 +12,11 @@ import {
   appendContinuityRecord,
   listContinuityRecords,
 } from "../../../src/core/brain/continuity/store.ts";
-import { joinSkillInvocationsToOffers } from "../../../src/core/brain/skill-usage.ts";
+import {
+  deriveSkillUsage,
+  joinSkillInvocationsToOffers,
+  skillUsageWeights,
+} from "../../../src/core/brain/skill-usage.ts";
 import {
   DecisionProviderError,
   DECISION_MODEL_USES,
@@ -565,4 +569,103 @@ test("the skill_invoked join and the report work over enforced offers", async ()
   expect(report.bm25.offer_hit_rate).toBe(
     baseline().items.some((i) => i.name === "release-notes") ? 1 : 0,
   );
+});
+
+// --- usage-ordered coherence (t_5d1ec8a8): one map across both modes ---
+
+/** release-cut invoked through 2026-06-03; changelog-writer once, in 2020. */
+function writeDailyUsageRecords(): void {
+  for (let i = 1; i <= 5; i++) {
+    appendContinuityRecord(vault, {
+      kind: "skill_invoked",
+      createdAt: new Date(Date.parse("2026-06-03T10:00:00Z") - i * 3_600_000).toISOString(),
+      sourceRefs: [{ id: `sess:release-cut:${i}` }],
+      payload: { skill: "release-cut", agent: "claude", tool: "get_skill" },
+    });
+  }
+  appendContinuityRecord(vault, {
+    kind: "skill_invoked",
+    createdAt: "2020-01-01T00:00:00Z",
+    sourceRefs: [{ id: "sess:changelog-writer:1" }],
+    payload: { skill: "changelog-writer", agent: "claude", tool: "get_skill" },
+  });
+}
+
+function pinnedUsageMap(): Map<string, number> {
+  // nowMs is pinned with the records: the decay weights - and every offer
+  // id derived through them - are a function of exactly these inputs.
+  return skillUsageWeights(
+    deriveSkillUsage(vault, { nowMs: Date.parse("2026-06-04T00:00:00Z") }),
+    new Set(skills.map((s) => s.name)),
+  );
+}
+
+test("one usage map drives the baseline, the shadow record and the fallback", async () => {
+  writeDailyUsageRecords();
+  const usageWeight = pinnedUsageMap();
+  const plain = buildSkillAttachment({ query: QUERY, skills });
+  const deterministic = buildSkillAttachment({ query: QUERY, skills, usageWeight });
+  // Daily use reorders the near-tie: the lexically cooler release-cut
+  // (5.67 vs 8.06 here) overtakes the offer under its 1.5x ceiling.
+  expect(deterministic.items.map((i) => i.name)).not.toEqual(plain.items.map((i) => i.name));
+  expect(deterministic.items[0]!.name).toBe("release-cut");
+
+  // Shadow: the returned block is the usage-ordered baseline and the final
+  // stage record reports exactly what deterministic mode would have offered.
+  const shadowProvider = new ScriptedProvider(
+    preferring("release-notes", { "release-notes": 0.9 }),
+  );
+  const shadow = await buildSkillAttachmentWithDecision({
+    query: QUERY,
+    skills,
+    usageWeight,
+    config: config("shadow"),
+    provider: shadowProvider,
+  });
+  const { decisionModel: shadowField, ...shadowAttachment } = shadow;
+  expect(JSON.stringify(shadowAttachment)).toBe(JSON.stringify(deterministic));
+  expect(shadowField).toEqual({ mode: "shadow", applied: false, model: "fake-model-1.2" });
+  const shadowRecord = skillRecords().find((r) => r.payload["final"] === true)!;
+  expect(shadowRecord.payload["deterministic_offered"]).toEqual(
+    deterministic.items.map((i) => i.name),
+  );
+  expect(shadowRecord.payload["deterministic_offer_id"]).toBe(deterministic.offerId);
+
+  // Enforce with a degrade: the fallback offer is the same usage-ordered
+  // baseline, byte for byte.
+  const degradedProvider = new ScriptedProvider(
+    preferring("release-notes", {}),
+    new Map([[0, "http_529" as DecisionDegradeReason]]),
+  );
+  const degraded = await buildSkillAttachmentWithDecision({
+    query: QUERY,
+    skills,
+    usageWeight,
+    config: config("enforce"),
+    provider: degradedProvider,
+  });
+  const { decisionModel, ...attachment } = degraded;
+  expect(attachment).toEqual(deterministic);
+  expect(decisionModel).toMatchObject({ applied: false, degraded: "http_529" });
+});
+
+test("an empty usage map leaves the decision path byte-identical to no map", async () => {
+  const without = new ScriptedProvider(preferring("release-notes", { "release-notes": 0.9 }));
+  const plain = await buildSkillAttachmentWithDecision({
+    query: QUERY,
+    skills,
+    config: config("shadow"),
+    provider: without,
+  });
+  const inertProvider = new ScriptedProvider(preferring("release-notes", { "release-notes": 0.9 }));
+  const inert = await buildSkillAttachmentWithDecision({
+    query: QUERY,
+    skills,
+    usageWeight: new Map(),
+    config: config("shadow"),
+    provider: inertProvider,
+  });
+  const { decisionModel: _plainField, ...plainAttachment } = plain;
+  const { decisionModel: _inertField, ...inertAttachment } = inert;
+  expect(JSON.stringify(inertAttachment)).toBe(JSON.stringify(plainAttachment));
 });

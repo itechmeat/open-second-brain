@@ -9,6 +9,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { appendContinuityRecord } from "../../src/core/brain/continuity/store.ts";
 import {
   listDecisionModelCalls,
   resetDecisionSpendCache,
@@ -61,8 +62,9 @@ afterEach(async () => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
-function writeConfig(uses: string | null, enabled = true): void {
+function writeConfig(uses: string | null, enabled = true, usage = false): void {
   const lines = [`vault: "${vault}"`, `skill_auto_attach: "true"`];
+  if (usage) lines.push(`skills_attach_usage_ordering: "true"`);
   if (uses !== null) {
     lines.push(
       `decision_model_enabled: "${enabled}"`,
@@ -175,4 +177,78 @@ test("enforce: a server failure returns today's result with the degrade reason",
   const { decision_model: field, ...rest } = result;
   expect(JSON.stringify(rest)).toBe(JSON.stringify(plain));
   expect(field).toEqual({ mode: "enforce", applied: false, degraded: "http_529" });
+});
+
+// --- usage-ordered offers (t_5d1ec8a8) through the decision path ---
+
+/** release-cut invoked daily; changelog-writer once, years ago. */
+function writeUsageRecords(): void {
+  for (let i = 1; i <= 5; i++) {
+    appendContinuityRecord(vault, {
+      kind: "skill_invoked",
+      createdAt: new Date(Date.now() - i * 60_000).toISOString(),
+      sourceRefs: [{ id: `sess:release-cut:${i}` }],
+      payload: { skill: "release-cut", agent: "claude", tool: "get_skill" },
+    });
+  }
+  appendContinuityRecord(vault, {
+    kind: "skill_invoked",
+    createdAt: "2020-01-01T00:00:00Z",
+    sourceRefs: [{ id: "sess:changelog-writer:1" }],
+    payload: { skill: "changelog-writer", agent: "claude", tool: "get_skill" },
+  });
+}
+
+function skillsRecords(): Array<Record<string, unknown>> {
+  return listDecisionModelCalls(vault).filter(
+    (r) => r.payload["use"] === "skills",
+  ) as unknown as Array<Record<string, unknown>>;
+}
+
+test("ordering flag off: usage records change nothing end to end (off proof)", async () => {
+  writeUsageRecords();
+  writeConfig(null);
+  const withRecords = await attach();
+  rmSync(vault, { recursive: true, force: true });
+  mkdirSync(vault, { recursive: true });
+  const withoutRecords = await attach();
+  expect(JSON.stringify(withRecords)).toBe(JSON.stringify(withoutRecords));
+  expect(server.requests).toHaveLength(0);
+});
+
+test("ordering flag on: shadow stays the usage-ordered deterministic offer", async () => {
+  writeUsageRecords();
+  writeConfig(null, true, true);
+  const plain = await attach();
+  const plainSkills = plain["skills"] as Array<{ name: string }>;
+  // The daily skill overtakes: changelog-writer leads lexically (6.80 vs
+  // 5.98 here), release-cut leads once its 1.5x usage ceiling applies.
+  expect(plainSkills[0]!.name).toBe("release-cut");
+  writeConfig(null);
+  const lexical = await attach();
+  expect((lexical["skills"] as Array<{ name: string }>)[0]!.name).toBe("changelog-writer");
+  expect(JSON.stringify(lexical)).not.toBe(JSON.stringify(plain));
+  writeConfig("skills:shadow", true, true);
+  server.setReply(reply);
+  const shadow = await attach();
+  const { decision_model: field, ...rest } = shadow;
+  expect(JSON.stringify(rest)).toBe(JSON.stringify(plain));
+  expect(field).toEqual({ mode: "shadow", applied: false, model: "fake-model-1.0" });
+  const final = skillsRecords().find((r) => r.payload["final"] === true)!;
+  expect(final.payload["deterministic_offered"]).toEqual(plainSkills.map((s) => s.name));
+  expect(final.payload["deterministic_offer_id"]).toBe(plain["offer_id"]);
+});
+
+test("ordering flag on with an empty vault: inert end to end", async () => {
+  writeConfig(null);
+  const off = await attach();
+  writeConfig(null, true, true);
+  const on = await attach();
+  expect(JSON.stringify(on)).toBe(JSON.stringify(off));
+  writeConfig("skills:shadow", true, true);
+  server.setReply(reply);
+  const shadow = await attach();
+  const { decision_model: field, ...rest } = shadow;
+  expect(JSON.stringify(rest)).toBe(JSON.stringify(off));
+  expect(field).toEqual({ mode: "shadow", applied: false, model: "fake-model-1.0" });
 });
