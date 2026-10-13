@@ -59,6 +59,7 @@ import {
   LONGMEMEVAL_ABSTENTION_TYPE,
   sampleLongMemEvalEntries,
 } from "./longmemeval-sample.ts";
+import type { LongMemEvalSampleStratum } from "./longmemeval-sample.ts";
 import type { BenchSuiteLoadOptions } from "./types.ts";
 import {
   RETRIEVAL_CATEGORIES,
@@ -145,6 +146,17 @@ export interface LongMemEvalDataset {
 export interface LongMemEvalReceipt {
   /** Abstention questions dropped at conversion time. */
   readonly abstention_excluded: number;
+  /**
+   * Seeded-sampling bookkeeping, present only when the loader sampled:
+   * the population it chose from, the questions it selected, and the
+   * per-stratum breakdown. Mirrors the abstention precedent - a
+   * whole-dataset run carries no sample fields rather than a
+   * manufactured 0 - and surfaces through the suite receipt the run
+   * reports ({@link BenchSuiteReceipt}).
+   */
+  readonly sample_population?: number;
+  readonly sample_selected?: number;
+  readonly sample_strata?: ReadonlyArray<LongMemEvalSampleStratum>;
 }
 
 export interface LongMemEvalConversion {
