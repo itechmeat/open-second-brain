@@ -2299,6 +2299,7 @@ __export(exports_config, {
   resolveSharedNamespace: () => resolveSharedNamespace,
   resolveSkillAutoAttach: () => resolveSkillAutoAttach,
   resolveSkillsAttachTriggers: () => resolveSkillsAttachTriggers,
+  resolveSkillsAttachUsageOrdering: () => resolveSkillsAttachUsageOrdering,
   resolveSkillsDir: () => resolveSkillsDir,
   resolveTelegramBotToken: () => resolveTelegramBotToken,
   resolveTelegramCaptureAllowlist: () => resolveTelegramCaptureAllowlist,
@@ -2605,6 +2606,9 @@ function resolveSkillsAttachTriggers(configPath) {
 }
 function resolveSkillAutoAttach(configPath) {
   return resolveConfigFlag("OPEN_SECOND_BRAIN_SKILL_AUTO_ATTACH", "skill_auto_attach", configPath);
+}
+function resolveSkillsAttachUsageOrdering(configPath) {
+  return resolveConfigFlag("OPEN_SECOND_BRAIN_SKILLS_ATTACH_USAGE_ORDERING", "skills_attach_usage_ordering", configPath);
 }
 function resolveSearchFocusContextPack(configPath) {
   return resolveConfigFlag("OPEN_SECOND_BRAIN_SEARCH_FOCUS_CONTEXT_PACK", "search_focus_context_pack", configPath);
