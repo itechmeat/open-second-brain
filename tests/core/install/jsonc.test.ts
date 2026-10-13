@@ -51,7 +51,7 @@ const COMMENTED_CONFIG_WITH_FULL = `// opencode configuration
         ],
         "enabled": true
       }
-    },
+    }
   },
 }
 `;
@@ -79,7 +79,7 @@ const COMMENTED_CONFIG_WITH_BOTH = `// opencode configuration
         ],
         "enabled": true
       }
-    },
+    }
   },
 }
 `;
@@ -99,7 +99,7 @@ const COMMENTED_CONFIG_WITH_WRITER = `// opencode configuration
         ],
         "enabled": true
       }
-    },
+    }
   },
 }
 `;
@@ -119,7 +119,7 @@ const REPLACED_FULL_CONFIG = `// opencode configuration
         ],
         "enabled": false
       }
-    },
+    }
   },
 }
 `;
@@ -131,7 +131,7 @@ const EMPTY_SERVERS_CONFIG = `// opencode configuration
   "mcp": {
     "other": { "type": "remote" },
     "servers": {
-    },
+    }
   },
 }
 `;
@@ -166,6 +166,24 @@ describe("parseJsoncObject", () => {
         expect((e as Error).name).toBe("JsoncEditError");
       }
     }
+  });
+
+  test("punctuation in a value position raises instead of parsing as null", () => {
+    // A missing value is malformed input, not a null: reading `{"a": ,}`
+    // as `{"a": null}` would let apply proceed on a file no JSON parser
+    // accepts. Each reviewed repro, plus the array and mid-object forms.
+    for (const text of ['{"a": ,}', '{"a": :, "b": 1}', "[,]", '{"a": 1, "b": }', "[1, , 2]"]) {
+      try {
+        parseJsoncObject(text);
+        throw new Error(`expected JsoncEditError for ${JSON.stringify(text)}`);
+      } catch (e) {
+        expect(e).toBeInstanceOf(JsoncEditError);
+        expect((e as Error).name).toBe("JsoncEditError");
+      }
+    }
+    // The legal trailing-comma neighbors still parse.
+    expect(parseJsoncObject('{"a": 1,}')).toEqual({ a: 1 });
+    expect(parseJsoncObject('{"a": [1,]}')).toEqual({ a: [1] });
   });
 
   test("duplicate keys raise the named error mentioning the key", () => {
@@ -295,6 +313,65 @@ describe("setJsoncEntry", () => {
     expect(setJsoncEntry('{ "mcp": {} }', ["mcp"], "k", { a: 1 })).toBe(
       '{ "mcp": {"k": {"a":1}} }',
     );
+  });
+
+  test("a single-line object with a trailing comma does not gain a doubled comma", () => {
+    const grown = setJsoncEntry('{ "a": 1, }', [], "b", 2);
+    expect(parseJsoncObject(grown)).toEqual({ a: 1, b: 2 });
+  });
+
+  test("an inserted entry does not take over the last entry's line comment", () => {
+    const text = `{
+  "a": {"x": 1} // keep me with a
+}
+`;
+    const result = setJsoncEntry(text, [], "osb", { enabled: true });
+    // The separator lands at the old value end, before the comment, and
+    // the comment keeps annotating a's line - not the inserted entry.
+    expect(result).toContain('"a": {"x": 1}, // keep me with a\n');
+    const commentLine = result.split("\n").find((line) => line.includes("// keep me with a"));
+    expect(commentLine).toContain('"a"');
+    expect(commentLine).not.toContain('"osb"');
+    expect(parseJsoncObject(result)).toEqual({ a: { x: 1 }, osb: { enabled: true } });
+  });
+
+  test("install then uninstall restores a commented trailing-comma line byte for byte", () => {
+    const text = `{
+  "a": 1, // note a
+}
+`;
+    const grown = setJsoncEntry(text, [], "osb", { enabled: true });
+    expect(parseJsoncObject(grown)).toEqual({ a: 1, osb: { enabled: true } });
+    // The inserted entry opens the line after a's, past the comma and
+    // the comment.
+    expect(grown).toContain('"a": 1, // note a\n  "osb": {');
+    expect(removeJsoncEntry(grown, [], "osb")).toBe(text);
+  });
+
+  test("an insert never lands inside a block comment that runs past the value's line", () => {
+    const text = `{
+  "a": 1 /* note
+  more note */
+}
+`;
+    const result = setJsoncEntry(text, [], "b", 2);
+    expect(parseJsoncObject(result)).toEqual({ a: 1, b: 2 });
+    expect(result).toContain("/* note\n  more note */");
+  });
+
+  test("a leading block comment does not shrink the indent unit", () => {
+    const text = `/*
+ * my config
+ */
+{
+  "a": 1
+}
+`;
+    const result = setJsoncEntry(text, [], "b", { k: 1 });
+    // Two-space steps: the unit comes from the `"a": 1` line, which
+    // starts with a token - not from the comment star's column.
+    expect(result).toContain('  "b": {\n    "k": 1\n  }');
+    expect(parseJsoncObject(result)).toEqual({ a: 1, b: { k: 1 } });
   });
 
   test("replacing a single-line entry keeps it single-line, so re-sets stay byte-stable", () => {
@@ -453,6 +530,37 @@ describe("removeJsoncEntry", () => {
     const result = removeJsoncEntry(text, [], "b");
     expect(result).toContain("// about b,\n");
     expect(parseJsoncObject(result)).toEqual({ a: 1 });
+  });
+
+  test("a CRLF trailing-comma document removes its last entry byte-exactly", () => {
+    // \r is horizontal whitespace in the separator scans: a walk-back
+    // that stopped at the carriage return would miss the comma and
+    // strand a trailing comma instead of restoring the bytes.
+    const text = '{\r\n  "a": 1,\r\n  "osb": 2\r\n}\r\n';
+    expect(removeJsoncEntry(text, [], "osb")).toBe('{\r\n  "a": 1\r\n}\r\n');
+  });
+
+  test("a CRLF comma-first document survives removing either entry", () => {
+    const text = '{\r\n  "a": 1\r\n  , "osb": 2\r\n}\r\n';
+    const withoutFirst = removeJsoncEntry(text, [], "a");
+    expect(parseJsoncObject(withoutFirst)).toEqual({ osb: 2 });
+    const withoutLast = removeJsoncEntry(text, [], "osb");
+    expect(parseJsoncObject(withoutLast)).toEqual({ a: 1 });
+    expect(withoutLast).toBe('{\r\n  "a": 1\r\n}\r\n');
+  });
+
+  test("a comma-first separator hiding behind the entry's line comment is consumed", () => {
+    // Removing a first entry that carries a line comment must also take
+    // the next entry's leading comma with it, or the remainder is `{ // c
+    // , "b": 2 }` - JSONC no parser accepts.
+    const text = `{
+  "osb": 1 // note on osb
+  , "b": 2
+}
+`;
+    const result = removeJsoncEntry(text, [], "osb");
+    expect(parseJsoncObject(result)).toEqual({ b: 2 });
+    expect(result).toContain('"b": 2');
   });
 
   test("a number literal longer than 64 characters parses instead of false-refusing", () => {

@@ -261,8 +261,16 @@ function takePunct(reader: TokenReader, char: string): Token {
 function parseValue(reader: TokenReader): Node {
   const token = peek(reader);
   if (token === null) throw new JsoncEditError("expected a value, found end of document");
-  if (token.kind === "punct" && token.text === "{") return parseObject(reader);
-  if (token.kind === "punct" && token.text === "[") return parseArray(reader);
+  if (token.kind === "punct") {
+    // A value position accepts only the two container openings. Any
+    // other punctuation - the `:` or `,` of a half-edited document
+    // (`{"a": ,}`, `[,]`) - is malformed input, not a null: reading it
+    // as one would let apply proceed on a file no JSON parser accepts.
+    if (token.text !== "{" && token.text !== "[") {
+      throw new JsoncEditError(`expected a value, found "${token.text}" at offset ${token.start}`);
+    }
+    return token.text === "{" ? parseObject(reader) : parseArray(reader);
+  }
   take(reader);
   if (token.kind === "string") {
     return { kind: "leaf", start: token.start, end: token.end, value: token.text };
@@ -391,11 +399,31 @@ function isSpaceOrTab(c: string): boolean {
   return c === " " || c === "\t";
 }
 
-/** Width of the first space-indented line, the unit `json-merge` detects too; 2 as fallback. */
+/**
+ * Horizontal whitespace a separator scan may cross: a CRLF file's
+ * carriage returns sit between a separator comma and the entry that
+ * follows it, so a walk-back that stopped at `\r` would miss the comma
+ * entirely.
+ */
+function isHorizontalWs(c: string): boolean {
+  return c === " " || c === "\t" || c === "\r";
+}
+
+/** Characters that can begin a JSON token; anything else opens a comment. */
+const TOKEN_START = /["{}[],:0-9tfn-]/;
+
+/**
+ * Width of the first space-indented line that starts with a token, the
+ * unit `json-merge` detects too; 2 as fallback. A line whose first
+ * non-space byte opens a comment carries the author's prose layout, not
+ * the file's indentation step - a leading block comment must not shrink
+ * the unit to its own star's column.
+ */
 function indentUnit(text: string): number {
   for (const line of text.split("\n")) {
-    const match = /^( +)\S/.exec(line);
-    if (match !== null) return match[1]!.length;
+    const match = /^( +)(.)/.exec(line);
+    if (match === null) continue;
+    if (TOKEN_START.test(match[2]!)) return match[1]!.length;
   }
   return DEFAULT_INDENT_UNIT;
 }
@@ -427,9 +455,58 @@ function renderValue(value: unknown, unit: number, keyIndent: string): string {
 // ----- Entry insertion, replacement and removal ---------------------------------
 
 /**
+ * Where the last entry's line ends, and whether a separator comma sits
+ * on it. The splice point for a new entry is past that line's newline,
+ * so the entry's own trailing line comment stays annotating the entry
+ * instead of moving to the inserted one. A block comment that starts on
+ * the value's line and runs past its newline pushes the line end past
+ * its close, so the new entry never lands inside the comment - and the
+ * scan never crosses the object's closing brace. Comments never
+ * tokenize, so a comma reached outside them is code by construction.
+ */
+function trailingLineOf(
+  text: string,
+  valueEnd: number,
+  closeBrace: number,
+): { lineEnd: number; separator: boolean } {
+  const firstNewline = text.indexOf("\n", valueEnd);
+  let lineEnd = firstNewline === -1 ? text.length : firstNewline;
+  let separator = false;
+  let i = valueEnd;
+  while (i < lineEnd) {
+    const c = text[i]!;
+    if (isWhitespace(c)) {
+      i += 1;
+      continue;
+    }
+    if (c === "/" && text[i + 1] === "/") break; // the rest of the line is comment content
+    if (c === "/" && text[i + 1] === "*") {
+      const close = text.indexOf("*/", i + 2);
+      const commentEnd = close === -1 ? Math.min(closeBrace, text.length) : close + 2;
+      if (commentEnd > lineEnd) {
+        const nl = text.indexOf("\n", commentEnd);
+        lineEnd = Math.min(nl === -1 ? text.length : nl, closeBrace);
+      }
+      i = Math.min(commentEnd, text.length);
+      continue;
+    }
+    if (c === ",") {
+      separator = true;
+      i += 1;
+      continue;
+    }
+    break; // a code byte that is neither separator nor comment cannot follow a parsed value
+  }
+  return { lineEnd, separator };
+}
+
+/**
  * Splice one new entry at the end of `obj`. A single-line object stays
  * single-line (compact value); a multi-line object fills at its
- * neighbors' indentation.
+ * neighbors' indentation. The new entry opens the line after the last
+ * entry's own line: a separator comma is added at the old value end
+ * only when the last entry does not already carry one, and any comment
+ * sharing that line keeps its place.
  */
 function insertEntry(text: string, obj: ObjectNode, key: string, value: unknown): string {
   const keyText = JSON.stringify(key);
@@ -453,15 +530,24 @@ function insertEntry(text: string, obj: ObjectNode, key: string, value: unknown)
   if (!between.includes("\n")) {
     const rendered = JSON.stringify(value);
     if (rendered === undefined) throw new JsoncEditError("value is not JSON-serializable");
+    // A separator comma straight after the value (single-line
+    // trailing-comma style) is not doubled: the entry slots in behind it.
+    let i = last.valueEnd;
+    while (i < text.length && isSpaceOrTab(text[i]!)) i += 1;
+    if (text[i] === ",") {
+      return splice(text, i + 1, i + 1, " " + keyText + ": " + rendered);
+    }
     return splice(text, last.valueEnd, last.valueEnd, ", " + keyText + ": " + rendered);
   }
+  const { lineEnd, separator } = trailingLineOf(text, last.valueEnd, obj.closeBrace);
   const keyIndent = lineIndent(text, last.keyStart);
-  return splice(
-    text,
-    last.valueEnd,
-    last.valueEnd,
-    ",\n" + keyIndent + keyText + ": " + renderValue(value, indentUnit(text), keyIndent),
-  );
+  const entry = keyIndent + keyText + ": " + renderValue(value, indentUnit(text), keyIndent);
+  // head keeps the value's line - separator and comment included - with
+  // a comma added at the old value end only when there is none; the new
+  // entry opens the following line, ahead of the untouched tail.
+  const head =
+    text.slice(0, last.valueEnd) + (separator ? "" : ",") + text.slice(last.valueEnd, lineEnd);
+  return head + "\n" + entry + text.slice(lineEnd);
 }
 
 /**
@@ -504,18 +590,37 @@ function removeEntry(text: string, tokens: ReadonlyArray<Token>, entry: ObjectEn
   let trailingComma = false;
   // The separator may sit at the head of a FOLLOWING line (comma-first
   // style), so the forward scan crosses newlines the way the walk-back
-  // below does. It stops at the first non-whitespace byte, so a comma it
-  // reaches is code - a comment's opening "/" would have stopped the
-  // scan first - and the token check confirms it.
+  // below does, and it steps over comment ranges: a trailing `// note`
+  // sharing the entry's line hides the next line's leading comma, and a
+  // comma reached past a comment is code - the comment's own bytes are
+  // skipped by range, never scanned. Consuming that comma is what keeps
+  // a comma-first document parseable once the entry (and its comment)
+  // are gone.
   let j = end;
-  while (j < text.length && isWhitespace(text[j]!)) j += 1;
-  if (text[j] === "," && isCommaTokenAt(tokens, j)) {
-    end = j + 1;
-    trailingComma = true;
+  for (;;) {
+    while (j < text.length && isWhitespace(text[j]!)) j += 1;
+    if (text[j] === "," && isCommaTokenAt(tokens, j)) {
+      end = j + 1;
+      trailingComma = true;
+      break;
+    }
+    if (text[j] === "/" && text[j + 1] === "/") {
+      const nl = text.indexOf("\n", j);
+      if (nl === -1) break;
+      j = nl + 1;
+      continue;
+    }
+    if (text[j] === "/" && text[j + 1] === "*") {
+      const close = text.indexOf("*/", j + 2);
+      if (close === -1) break;
+      j = close + 2;
+      continue;
+    }
+    break;
   }
   if (!trailingComma) {
     let k = start;
-    while (k > 0 && isSpaceOrTab(text[k - 1]!)) k -= 1;
+    while (k > 0 && isHorizontalWs(text[k - 1]!)) k -= 1;
     if (k > 0 && text[k - 1] === ",") {
       start = k - 1;
     } else if (k > 0 && text[k - 1] === "\n") {
@@ -529,7 +634,7 @@ function removeEntry(text: string, tokens: ReadonlyArray<Token>, entry: ObjectEn
       // may be consumed, so the operator's bytes stay exactly as they
       // were.
       let m = k - 1;
-      while (m > 0 && isSpaceOrTab(text[m - 1]!)) m -= 1;
+      while (m > 0 && isHorizontalWs(text[m - 1]!)) m -= 1;
       if (m > 0 && text[m - 1] === "," && isCommaTokenAt(tokens, m - 1)) start = m - 1;
     }
   }
@@ -538,7 +643,7 @@ function removeEntry(text: string, tokens: ReadonlyArray<Token>, entry: ObjectEn
   const lineEnd = newline === -1 ? text.length : newline;
   const prefix = text.slice(lineStart, start);
   const suffix = text.slice(end, lineEnd);
-  const aloneOnLine = [...prefix, ...suffix].every(isSpaceOrTab);
+  const aloneOnLine = [...prefix, ...suffix].every(isHorizontalWs);
   // Collapse the whole line(s) the entry occupies, its terminating
   // newline included, so no hole is left - the prefix already ends with
   // the previous line's newline.
