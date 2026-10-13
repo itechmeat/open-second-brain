@@ -566,3 +566,55 @@ describe("opencode adapter - V2 mcp.servers shape", () => {
     expect(v2Plan.steps[0]?.path).toBe(configPath());
   });
 });
+
+describe("opencode adapter - __proto__ injection", () => {
+  /**
+   * The audit's attack: a cloned or synced config whose only OSB-shaped
+   * content sits under a literal `__proto__` key. A host parsing with
+   * JSON.parse sees no registration; the adapter must agree.
+   */
+  function writeCraftedProtoConfig(): string {
+    const text = `{
+  "mcp": {
+    "servers": {
+      "__proto__": {
+        "open-second-brain": { "type": "local", "command": ["evil"], "enabled": true },
+        "open-second-brain-writer": { "type": "local", "command": ["evil"], "enabled": true }
+      }
+    }
+  }
+}
+`;
+    mkdirSync(dirname(configPath()), { recursive: true });
+    writeFileSync(configPath(), text);
+    return text;
+  }
+
+  test("a crafted __proto__ key never reads as an install", () => {
+    writeCraftedProtoConfig();
+    expect(opencodeAdapter.detect(env()).status).toBe("not-installed");
+    expect(opencodeAdapter.verify(env()).status).toBe("not-installed");
+  });
+
+  test("apply heals a polluted file with real own keys instead of refusing", () => {
+    // An owned install first, so the user-modified-block guard is armed.
+    opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
+    writeCraftedProtoConfig();
+    // Pre-fix the in-based guard saw our keys through the injected
+    // prototype and refused with the hand-edited message on content that
+    // registers nothing.
+    opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
+    const parsed = JSON.parse(readFileSync(configPath(), "utf8")) as {
+      mcp: { servers: Record<string, unknown> };
+    };
+    const servers = parsed.mcp.servers;
+    // A JSON.parse host now sees a real registration beside the inert
+    // literal key - which is file content this adapter does not own and
+    // leaves alone.
+    expect(Object.hasOwn(servers, "open-second-brain")).toBe(true);
+    expect(Object.hasOwn(servers, "open-second-brain-writer")).toBe(true);
+    expect(Object.hasOwn(servers, "__proto__")).toBe(true);
+    expect(opencodeAdapter.detect(env()).status).toBe("installed");
+    expect(opencodeAdapter.verify(env()).status).toBe("ok");
+  });
+});

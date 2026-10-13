@@ -193,7 +193,12 @@ function routesThroughEditor(state: ConfigState): boolean {
 }
 
 function hasOsbKeyIn(block: Record<string, unknown> | null): boolean {
-  return block !== null && (OSB_KEY_FULL in block || OSB_KEY_WRITER in block);
+  // Own-property checks: whether the file carries our keys is a question
+  // about the block itself, and an `in` test would read a prototype
+  // chain a crafted document could have forged.
+  return (
+    block !== null && (Object.hasOwn(block, OSB_KEY_FULL) || Object.hasOwn(block, OSB_KEY_WRITER))
+  );
 }
 
 /** Our keys under either shape: a shape change on an install we own is still a modification of it. */
@@ -211,7 +216,7 @@ function canonicalUnderShape(
 ): boolean {
   const block = blockAtPath(parsed, shapePath);
   if (block === null) return false;
-  if (!(OSB_KEY_FULL in block) || !(OSB_KEY_WRITER in block)) return false;
+  if (!Object.hasOwn(block, OSB_KEY_FULL) || !Object.hasOwn(block, OSB_KEY_WRITER)) return false;
   return (
     deepJsonEquals(block[OSB_KEY_FULL], serializeOpencodeEntry(payload.full)) &&
     deepJsonEquals(block[OSB_KEY_WRITER], serializeOpencodeEntry(payload.writer))
@@ -384,8 +389,8 @@ function verifyViaEditor(env: InstallEnv): VerifyResult {
       fix_hint: FIX_HINT,
     };
   }
-  const hasFull = OSB_KEY_FULL in block;
-  const hasWriter = OSB_KEY_WRITER in block;
+  const hasFull = Object.hasOwn(block, OSB_KEY_FULL);
+  const hasWriter = Object.hasOwn(block, OSB_KEY_WRITER);
   if (!hasFull || !hasWriter) {
     return {
       target: "opencode",
@@ -519,8 +524,8 @@ function detectViaEditor(env: InstallEnv, state: ConfigState): DetectResult {
       notes: [`${shapeKey} is not a JSON object`],
     };
   }
-  const hasFull = OSB_KEY_FULL in block;
-  const hasWriter = OSB_KEY_WRITER in block;
+  const hasFull = Object.hasOwn(block, OSB_KEY_FULL);
+  const hasWriter = Object.hasOwn(block, OSB_KEY_WRITER);
   if (!hasFull && !hasWriter) {
     return { target: "opencode", status: "not-installed", configPath: path, notes: [] };
   }

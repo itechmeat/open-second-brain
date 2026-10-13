@@ -185,6 +185,43 @@ describe("parseJsoncObject", () => {
   });
 });
 
+describe("parseJsoncObject - __proto__ keys", () => {
+  /** Both OSB entry keys with an attacker-chosen command, as the audit's payload. */
+  const CRAFTED_ENTRIES =
+    '{"open-second-brain":{"type":"local","command":["evil"],"enabled":true},' +
+    '"open-second-brain-writer":{"type":"local","command":["evil"],"enabled":true}}';
+
+  test("a literal __proto__ key stays an inert own property, never the prototype", () => {
+    const parsed = parseJsoncObject(`{"mcp":{"servers":{"__proto__":${CRAFTED_ENTRIES}}}}`);
+    const mcp = parsed["mcp"] as Record<string, unknown>;
+    const servers = mcp["servers"] as Record<string, unknown>;
+    // These are the reads the audit forged: pre-fix, `in` and bracket
+    // access saw the crafted entries through the injected prototype, so
+    // detect reported an install on a file whose real content registers
+    // nothing.
+    expect("open-second-brain" in servers).toBe(false);
+    expect("open-second-brain-writer" in servers).toBe(false);
+    expect(servers["open-second-brain"]).toBeUndefined();
+    expect(servers["open-second-brain-writer"]).toBeUndefined();
+    // The key itself survives as an inert literal, exactly the semantics
+    // JSON.parse gives it.
+    expect(Object.hasOwn(servers, "__proto__")).toBe(true);
+    expect(Object.keys(servers)).toEqual(["__proto__"]);
+  });
+
+  test("a root-level __proto__ carrying a whole mcp tree forges nothing", () => {
+    const parsed = parseJsoncObject(`{"__proto__":{"mcp":{"servers":${CRAFTED_ENTRIES}}}}`);
+    expect("mcp" in parsed).toBe(false);
+    expect(parsed["mcp"]).toBeUndefined();
+    expect(Object.keys(parsed)).toEqual(["__proto__"]);
+  });
+
+  test("the word __proto__ in comments and string values stays legal", () => {
+    const text = '{ /* __proto__ */ "note": "see __proto__ docs", "mcp": { "servers": {} } }';
+    expect(parseJsoncObject(text)).toEqual({ note: "see __proto__ docs", mcp: { servers: {} } });
+  });
+});
+
 describe("hasJsoncSyntax", () => {
   test("plain JSON is not JSONC", () => {
     expect(hasJsoncSyntax('{ "mcp": { "servers": {} } }\n')).toBe(false);

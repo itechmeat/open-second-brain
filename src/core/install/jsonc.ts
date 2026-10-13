@@ -23,6 +23,11 @@
  *   - Malformed input, duplicate keys (anywhere - an ambiguous document
  *     is refused, not interpreted) and a non-object root raise the named
  *     `JsoncEditError`. No partial text is ever emitted.
+ *   - Object keys materialize as own properties: a literal `__proto__`
+ *     key is data, never the parsed object's prototype - the same
+ *     literal-key semantics JSON.parse gives it. Assigning through the
+ *     inherited accessor would let a crafted config forge membership
+ *     and bracket reads for every downstream `in`-based check.
  *   - Inserted values must be JSON-serializable; comments cannot be
  *     authored through this editor - it exists to PRESERVE operator
  *     comments, not to write them.
@@ -595,10 +600,25 @@ export function parseJsoncObject(text: string): Record<string, unknown> {
  * value case so the object-root contract of `parseJsoncObject` is
  * satisfied by construction - the root is statically an ObjectNode, so
  * the record needs no cast and no runtime re-check.
+ *
+ * Each key is written as its own data property. The plain assignment
+ * `out[key] = ...` routes a key named `__proto__` through the inherited
+ * accessor and makes the crafted value the accumulator's prototype -
+ * prototype injection. `defineProperty` keeps every key, that one
+ * included, a real own property: the parse result matches what
+ * JSON.parse hands out for the same document, and no downstream read
+ * can see keys the file does not carry.
  */
 function toPlainObject(node: ObjectNode): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  for (const entry of node.order) out[entry.key] = toPlainValue(entry.value);
+  for (const entry of node.order) {
+    Object.defineProperty(out, entry.key, {
+      value: toPlainValue(entry.value),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
   return out;
 }
 
