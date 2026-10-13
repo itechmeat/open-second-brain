@@ -149,6 +149,59 @@ export function deriveSkillUsage(vault: string, opts: { nowMs?: number } = {}): 
 }
 
 /**
+ * Join derived usage rows onto the discovered skill names, for ranking.
+ *
+ * The usage store keys on the raw invocation string (`payload["skill"]`),
+ * which is runtime-dependent: an MCP `get_skill` name equals the discovered
+ * `SkillEntry.name` byte for byte, while a Claude Code `Skill` command
+ * arrives plugin-qualified (`open-second-brain:codegraph-partner`) and never
+ * equals it. The join rule, deterministic and vocabulary-free:
+ *
+ *   - a usage key that IS a known name joins exactly, and an exact join
+ *     always wins over an inferred one;
+ *   - any other key joins the longest suffix after a colon that is a known
+ *     name (for `a:b:c`, `b:c` before `c`);
+ *   - a key matching nothing is dropped - unknown is unknown, never
+ *     guessed onto a nearest-looking name;
+ *   - when several rows join the same known name, the higher weight wins,
+ *     so the result never depends on row order.
+ *
+ * Pure: the inputs are not mutated and the values are the decay weights
+ * unchanged, so an empty usage list yields an empty map.
+ */
+export function skillUsageWeights(
+  usage: ReadonlyArray<SkillUsage>,
+  knownNames: ReadonlySet<string>,
+): ReadonlyMap<string, number> {
+  const weights = new Map<string, number>();
+  // Exact joins settle first so an inferred spelling can never outrank one.
+  const exact = new Set<string>();
+  for (const row of usage) {
+    if (!knownNames.has(row.skill)) continue;
+    exact.add(row.skill);
+    if ((weights.get(row.skill) ?? 0) < row.weight) weights.set(row.skill, row.weight);
+  }
+  for (const row of usage) {
+    if (knownNames.has(row.skill)) continue;
+    const suffix = suffixKnownName(row.skill, knownNames);
+    if (suffix === null || exact.has(suffix)) continue;
+    if ((weights.get(suffix) ?? 0) < row.weight) weights.set(suffix, row.weight);
+  }
+  return weights;
+}
+
+/** Longest suffix of `key` after a colon that is a known name, or null. */
+function suffixKnownName(key: string, knownNames: ReadonlySet<string>): string | null {
+  for (let i = key.indexOf(":"); i !== -1; i = key.indexOf(":", i + 1)) {
+    // Suffixes shrink as the colon index advances, so the first hit is the
+    // longest match.
+    const suffix = key.slice(i + 1);
+    if (knownNames.has(suffix)) return suffix;
+  }
+  return null;
+}
+
+/**
  * Join invocations back to the offers that produced them.
  *
  * The join key is the offer id an invocation cited - the acting agent's
