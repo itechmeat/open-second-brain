@@ -204,15 +204,19 @@ export function sampleLongMemEvalEntries<E extends LongMemEvalSampleEntry>(
   const effectiveCap = Math.min(opts.cap, total);
 
   // Largest-remainder apportionment: integer quotas first, then the
-  // surplus seats go to the largest fractional remainders, ties to the
-  // lexicographically first stratum. With the cap clamped to the
-  // population every quota is at most its stratum's size, so a surplus
-  // seat never overflows a stratum.
+  // surplus seats go to the largest remainders, compared as INTEGER
+  // remainders ((cap*pop) mod total). Two mathematically equal
+  // fractional remainders can differ as doubles (total 6, cap 2: pop 1
+  // computes 0.3333333333333333, pop 4 computes 0.33333333333333326),
+  // which would silently defeat the documented tie-break. Exact integer
+  // ties break to the lexicographically first stratum. With the cap
+  // clamped to the population every quota is at most its stratum's
+  // size, so a surplus seat never overflows a stratum.
   const base = populationByStratum.map((pop) => Math.floor((effectiveCap * pop) / total));
   const remainderOrder = stratumNames
     .map((name, i) => ({
       name,
-      remainder: (effectiveCap * populationByStratum[i]!) / total - base[i]!,
+      remainder: (effectiveCap * populationByStratum[i]!) % total,
     }))
     .toSorted((a, b) =>
       a.remainder !== b.remainder ? b.remainder - a.remainder : a.name < b.name ? -1 : 1,

@@ -112,6 +112,33 @@ test("remainder ties break by stratum name ascending", () => {
   ]);
 });
 
+test("mathematically equal remainders tie exactly, so the name tie-break applies", () => {
+  // The reviewer's case (pr-251 L1): total 6, cap 2. The fractional
+  // remainder of pop 4 is 8/6 - 1 and of pop 1 is 2/6 - 0; both are
+  // mathematically 1/3, but as doubles they differ (pop 1 computes
+  // 0.3333333333333333, pop 4 computes 0.33333333333333326), so a float
+  // comparison hands the surplus seat to beta and the documented name
+  // tie-break never applies. The remainders are compared as integers
+  // ((cap*pop) mod total): all three strata tie at 2 and the seat goes
+  // to the lexicographically first stratum, whose quota (4/3) leaves it
+  // one seat short of its population.
+  const entries = [
+    sampleEntry("a-1", "alpha"),
+    sampleEntry("a-2", "alpha"),
+    sampleEntry("a-3", "alpha"),
+    sampleEntry("a-4", "alpha"),
+    sampleEntry("b-1", "beta"),
+    sampleEntry("c-1", "gamma"),
+  ];
+  const { receipt } = sampleLongMemEvalEntries(entries, { seed: "seed-1", cap: 2 });
+  expect(receipt.strata).toEqual([
+    { question_type: "alpha", population: 4, selected: 2 },
+    { question_type: "beta", population: 1, selected: 0 },
+    { question_type: "gamma", population: 1, selected: 0 },
+  ]);
+  expect(receipt.selected).toBe(2);
+});
+
 test("the same seed and cap select the same subset on every call", () => {
   const entries = population();
   const first = sampleLongMemEvalEntries(entries, { seed: "run-9", cap: 4 });
