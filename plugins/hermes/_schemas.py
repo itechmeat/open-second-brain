@@ -458,10 +458,10 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = ({'name': 'brain_feedback',
                  'required': ['query'],
                  'additionalProperties': False}},
  {'name': 'brain_recall_gate',
-  'description': 'Classify whether an automatic recall attempt should run. Diagnostics only; does '
-                 'not search. Pass `scores` AND `match_quality` TOGETHER for an adequacy verdict — '
-                 'sufficient/proceed, weak/re_recall, insufficient/abstain; either alone is '
-                 'INVALID_PARAMS (see `dependentRequired`).',
+  'description': 'Classify whether recall should run. Diagnostics only; does not search. Pass '
+                 '`scores` AND `match_quality` together for an adequacy verdict; either alone is '
+                 'INVALID_PARAMS (see `dependentRequired`). A measurement decides the verdict: '
+                 'below-floor quality answers retrieve false. `admit` echoes it.',
   'inputSchema': {'type': 'object',
                   'properties': {'prompt': {'type': 'string',
                                             'minLength': 1,
