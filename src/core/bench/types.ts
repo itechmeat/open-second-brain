@@ -327,6 +327,19 @@ export interface BenchLongMemEvalFamily {
    * to before.
    */
   readonly sample_selected?: number;
+  /**
+   * Population the run's seeded sampler chose from, taken from the
+   * run's conversion receipt. Present only when the run sampled, under
+   * the same spread-omission as `sample_selected`.
+   */
+  readonly sample_population?: number;
+  /**
+   * Per-stratum population/selected breakdown of the run's seeded
+   * sample, taken from the run's conversion receipt. Present only when
+   * the run sampled, under the same spread-omission as
+   * `sample_selected`.
+   */
+  readonly sample_strata?: ReadonlyArray<LongMemEvalSampleStratum>;
 }
 
 export interface BenchQuestionResult {

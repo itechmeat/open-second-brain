@@ -345,8 +345,20 @@ export async function runMemoryBench(opts: BenchRunOptions): Promise<BenchReport
     longmemeval = Object.freeze({
       recall_all_at_5: scored.scored > 0 ? round3(scored.passed / scored.scored) : 0,
       abstention_excluded: opts.suiteReceipt?.abstention_excluded ?? null,
+      // The sampled bookkeeping rides the named family when the run
+      // sampled - population, selected count and the per-stratum
+      // breakdown - so a reader can see what the run's numbers cover
+      // without opening the checkpoint. Spread-omitted otherwise: a
+      // whole-dataset (or receipt-less) report serializes
+      // byte-identically to before.
+      ...(opts.suiteReceipt?.sample_population !== undefined
+        ? { sample_population: opts.suiteReceipt.sample_population }
+        : {}),
       ...(opts.suiteReceipt?.sample_selected !== undefined
         ? { sample_selected: opts.suiteReceipt.sample_selected }
+        : {}),
+      ...(opts.suiteReceipt?.sample_strata !== undefined
+        ? { sample_strata: opts.suiteReceipt.sample_strata }
         : {}),
     });
   }

@@ -833,12 +833,58 @@ describe("seeded sampling", () => {
       suiteReceipt: receipt,
     });
     expect(report.quality.total).toBe(3);
-    // The sampled count rides the named family only when a run sampled;
-    // the abstention count keeps its receipt-or-null contract.
+    // The sampled bookkeeping - selected count, population and the
+    // per-stratum breakdown - rides the named family, so the report
+    // shows what the run's numbers cover. Frozen worked example: six
+    // one-per-type survivors at cap 3 give every stratum quota 0.5, and
+    // the three surplus seats go to the lexicographically first strata.
     expect(report.longmemeval).toEqual({
       recall_all_at_5: 1,
       abstention_excluded: 1,
+      sample_population: 6,
       sample_selected: 3,
+      sample_strata: [
+        { question_type: "knowledge-update", population: 1, selected: 1 },
+        { question_type: "multi-hop", population: 1, selected: 1 },
+        { question_type: "multi-session", population: 1, selected: 1 },
+        { question_type: "single-hop", population: 1, selected: 0 },
+        { question_type: "single-session-user", population: 1, selected: 0 },
+        { question_type: "temporal-reasoning", population: 1, selected: 0 },
+      ],
     });
+    // And the family in the persisted report.json carries the same
+    // fields - the receipt is visible where an operator actually reads it.
+    const persisted = JSON.parse(
+      readFileSync(join(runsDir, report.run_id, "report.json"), "utf8"),
+    ) as { longmemeval: Record<string, unknown> };
+    const persistedFamily = persisted.longmemeval!;
+    expect(Object.keys(persistedFamily).toSorted()).toEqual([
+      "abstention_excluded",
+      "recall_all_at_5",
+      "sample_population",
+      "sample_selected",
+      "sample_strata",
+    ]);
+    expect(persistedFamily["sample_population"]).toBe(6);
+    expect(persistedFamily["sample_selected"]).toBe(3);
+    expect(persistedFamily["sample_strata"]).toEqual(report.longmemeval!.sample_strata);
+  }, 20_000);
+
+  test("a whole-dataset run's family carries no sample fields", async () => {
+    const datasetPath = writeSyntheticDataset();
+    const { fixture, receipt } = loadLongMemEvalFixture(datasetPath);
+    const runsDir = mkdtempSync(join(tmpdir(), "o2b-longmemeval-runs-"));
+    dirs.push(runsDir);
+    const report = await runMemoryBench({
+      fixture,
+      runsDir,
+      suite: "longmemeval",
+      suiteReceipt: receipt,
+    });
+    // Spread-omission, not manufactured zeros: the unsampled report's
+    // family names exactly the strict fields and nothing else. The key
+    // set is the pin, not the score.
+    expect(Object.keys(report.longmemeval!)).toEqual(["recall_all_at_5", "abstention_excluded"]);
+    expect(report.longmemeval!.abstention_excluded).toBe(1);
   }, 20_000);
 });
