@@ -1431,7 +1431,9 @@ export const VERB_HELP: Record<string, string> = {
     "mine [--repo K]  surface decision-shaped commits as draft ADR\n" +
     "candidate notes under Brain/decisions/candidates/ (skip-existing).",
   bench:
-    "usage: o2b brain bench memory --fixture <name|path> [--resume <run-id>] [--runs-dir <dir>] [--json]\n" +
+    "usage: o2b brain bench memory --fixture <name|path> [--suite <name>]\n" +
+    "       [--pin <json>] [--recall-floor <n>] [--sample-seed <value>]\n" +
+    "       [--sample-cap <n>] [--resume <run-id>] [--runs-dir <dir>] [--json]\n" +
     "Memory quality benchmark over a disposable fixture vault under the\n" +
     "runs directory (never the configured vault). Reports quality,\n" +
     "latency, and context cost separately; checkpoint/resume by run id;\n" +

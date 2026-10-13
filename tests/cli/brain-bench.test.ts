@@ -10,6 +10,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { VERB_HELP } from "../../src/cli/brain/help-text.ts";
 import {
   benchSuite,
   benchSuiteNames,
@@ -707,4 +708,37 @@ describe("bench sampling flags", () => {
     ) as { sample?: unknown };
     expect(checkpoint.sample).toEqual({ seed: "seed-1", cap: 2 });
   }, 60_000);
+});
+
+/**
+ * The help prose's usage block (CodeRabbit, pr-251): it mirrors the
+ * verb's USAGE constant - the usage line plus its 7-space continuation
+ * lines - so a flag the verb accepts is listed there too, and the line
+ * cannot drift back to a subset of the accepted flags.
+ */
+describe("bench help text", () => {
+  test("the usage block lists every flag the verb accepts", () => {
+    const usageBlock = (VERB_HELP["bench"] ?? "")
+      .split("\n")
+      .filter((line) => line.startsWith("usage:") || line.startsWith("       "))
+      .join("\n");
+    for (const flag of [
+      "--fixture",
+      "--suite",
+      "--pin",
+      "--recall-floor",
+      "--sample-seed",
+      "--sample-cap",
+      "--resume",
+      "--runs-dir",
+      "--json",
+    ]) {
+      expect(usageBlock).toContain(flag);
+    }
+    // The sample flags sit in the usage block itself, not only in the
+    // prose below it; the block wraps, so adjacency is checked over the
+    // continuation lines flattened back into one line.
+    const flattened = usageBlock.replaceAll("\n       ", " ");
+    expect(flattened).toContain("[--sample-seed <value>] [--sample-cap <n>]");
+  });
 });
