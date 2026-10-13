@@ -158,6 +158,59 @@ test("a pool the cap really did cut still names the code and the cap", async () 
 
 // ─── a degraded lane names its code ──────────────────────────────────────────
 
+test("a session cap that drops rows names them beside the floor's drops", async () => {
+  // Four hot notes in one source session, two weak notes in another: a
+  // floor between the clusters removes the weak session, and the cap
+  // bounds the crowded one - both codes ride the same trail.
+  const v = createTempVault("trail-session-cap");
+  cleanups.push(v.cleanup);
+  for (let i = 0; i < 4; i += 1) {
+    writeMd(
+      v.vault,
+      `a-${i}.md`,
+      "---\ntitle: Hot\nsession_ref: sess-a\n---\n\n# Hot\n\n" +
+        `fox fox fox fox the quick brown fox jumps over note ${i}.\n`,
+    );
+  }
+  for (const b of ["b-0", "b-1"]) {
+    writeMd(
+      v.vault,
+      `${b}.md`,
+      "---\ntitle: Weak\nsession_ref: sess-b\n---\n\n# Weak\n\n" +
+        `A note mostly about cats, with one fox mention (${b}).\n`,
+    );
+  }
+  const cfg = makeConfig({ vault: v.vault, dbPath: v.dbPath, maxHops: 0, mmrLambda: 1 });
+  const cappedCfg = Object.freeze({
+    ...cfg,
+    recall: Object.freeze({ ...cfg.recall, poolMaxPerSession: 1 }),
+  });
+  await indexVault(cappedCfg, {});
+
+  // The score probe runs with the cap OFF: it measures the raw clusters
+  // the floor needs, before any session bound applies.
+  const unfiltered = await search(cfg, { query: "fox", limit: 10 });
+  const hotScores = unfiltered.results.filter((r) => r.path.startsWith("a-")).map((r) => r.score);
+  const weakScores = unfiltered.results.filter((r) => r.path.startsWith("b-")).map((r) => r.score);
+  expect(hotScores.length).toBe(4);
+  expect(weakScores.length).toBe(2);
+  // The floor sits between the clusters: every weak note falls, every
+  // hot note stays - then the cap bounds the hot session to one row.
+  const floor = (Math.min(...hotScores) + Math.max(...weakScores)) / 2;
+
+  const out = await search(cappedCfg, { query: "fox", limit: 10, threshold: floor });
+
+  const capped = out.retrievalTrail?.degraded.find(
+    (d) => d.code === RETRIEVAL_DEGRADATION.sourceSessionCappedRows,
+  );
+  expect(capped?.detail).toEqual({ dropped: 3, cap: 1 });
+  const floored = out.retrievalTrail?.degraded.find(
+    (d) => d.code === RETRIEVAL_DEGRADATION.relevanceFloorDroppedRows,
+  );
+  expect(floored?.detail).toEqual({ dropped: 2 });
+  expect(out.results.map((r) => r.path)).toEqual(["a-0.md"]);
+});
+
 test("a trigram lane fault names its code beside the sentence it already pushed", async () => {
   const { vault, dbPath } = await indexedVault("trail-trigram");
   const cfg = makeConfig({

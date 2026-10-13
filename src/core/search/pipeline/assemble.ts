@@ -18,6 +18,7 @@ import { rankResults } from "../ranker.ts";
 import { applyExactStateBarrier, type FrontmatterCache } from "../result-filters.ts";
 import { semanticPoolSize } from "../semantic-phase.ts";
 import { applyTemporalBridge } from "../temporal-bridge.ts";
+import { applySessionPoolCap } from "./session-pool-cap.ts";
 import { applyPoolFilters, resolvePoolFilters, type FilterContext } from "./pool-filters.ts";
 import { RETRIEVAL_DEGRADATION, noteDegradation } from "../retrieval-trail.ts";
 import type { RetrievalDegradationSink } from "../retrieval-trail.ts";
@@ -48,6 +49,9 @@ const DUPLICATE_KEY_SEPARATOR = ":";
 /** Traversal is off at zero hops; MMR is off at a lambda of 1. */
 const NO_TRAVERSAL_HOPS = 0;
 const MMR_OFF_LAMBDA = 1;
+
+/** The per-source-session pool cap is off at zero rows per session. */
+const POOL_CAP_OFF = 0;
 
 /**
  * One row past the cap: enough to SEE truncation, never enough to change
@@ -113,6 +117,8 @@ interface Assembly {
   readonly mergedAway: number;
   /** Ranked rows the caller's relevance floor removed. */
   readonly floorDropped: number;
+  /** Ranked rows the per-source-session cap dropped. */
+  readonly sessionCapped: number;
 }
 
 /** The location record a merged-away duplicate leaves on its survivor. */
@@ -244,10 +250,16 @@ export function assembleRankedResults(input: AssemblyInput): ReadonlyArray<Brain
     );
   const maxHops = opts.maxHops ?? config.recall.maxHops;
   const traversalActive = maxHops > NO_TRAVERSAL_HOPS;
+  // Per-source-session pool cap (t_bb6ce095): on at a positive cap. It
+  // joins the widening because a cap over an UNwidened pool merely
+  // truncates sooner - the ranked rows it needs to spread the window
+  // across sessions would sit below a rankLimit equal to `limit`.
+  const poolCap = opts.poolMaxPerSession ?? config.recall.poolMaxPerSession ?? POOL_CAP_OFF;
+  const capActive = poolCap > POOL_CAP_OFF;
   const baseRankLimit =
     filters.canDropRows || hasStructuredExclusions ? semanticPoolSize(limit) : limit;
   const rankLimit =
-    mmrActive || traversalActive || crossEncoderActive
+    mmrActive || traversalActive || crossEncoderActive || capActive
       ? Math.max(
           baseRankLimit,
           limit * POOL_LIMIT_MULTIPLIER,
@@ -336,6 +348,22 @@ export function assembleRankedResults(input: AssemblyInput): ReadonlyArray<Brain
       floorDropped = ranked.length - qualified.length;
       ranked = qualified;
     }
+    // Per-source-session pool cap (t_bb6ce095): bound one source import
+    // session's share of the pool BEFORE the diversity rerank, so MMR
+    // diversifies across sessions instead of inside one, and before the
+    // relevance rerank for the same reason. Identity rides the same
+    // frontmatter cache the pool filters use; a vault with no session
+    // identity passes through uncapped. No-op when the cap is off.
+    let sessionCapped = 0;
+    if (capActive) {
+      const capped = applySessionPoolCap(ranked, {
+        vault: config.vault,
+        capPerSession: poolCap,
+        frontmatterCache: input.frontmatterCache,
+      });
+      ranked = capped.results;
+      sessionCapped = capped.dropped;
+    }
     // Diversity rerank (v0.13.0). No-op when lambda >= 1 or < 2 results.
     if (mmrActive) {
       ranked = mmrRerank(ranked, { lambda: mmrLambda });
@@ -351,6 +379,7 @@ export function assembleRankedResults(input: AssemblyInput): ReadonlyArray<Brain
       capHit,
       mergedAway: merge.mergedAway,
       floorDropped,
+      sessionCapped,
     };
   };
 
@@ -391,7 +420,7 @@ export function assembleRankedResults(input: AssemblyInput): ReadonlyArray<Brain
       effectiveCap = wideCap;
     }
   }
-  noteAssemblyNarrowings(input.degraded, assembled, effectiveCap);
+  noteAssemblyNarrowings(input.degraded, assembled, effectiveCap, poolCap);
   return assembled.visible;
 }
 
@@ -405,6 +434,7 @@ function noteAssemblyNarrowings(
   sink: RetrievalDegradationSink,
   assembled: Assembly,
   cap: number,
+  poolCap: number,
 ): void {
   if (assembled.capHit) {
     noteDegradation(sink, RETRIEVAL_DEGRADATION.rankCapTruncatedPool, { cap });
@@ -412,6 +442,12 @@ function noteAssemblyNarrowings(
   if (assembled.floorDropped > 0) {
     noteDegradation(sink, RETRIEVAL_DEGRADATION.relevanceFloorDroppedRows, {
       dropped: assembled.floorDropped,
+    });
+  }
+  if (assembled.sessionCapped > 0) {
+    noteDegradation(sink, RETRIEVAL_DEGRADATION.sourceSessionCappedRows, {
+      dropped: assembled.sessionCapped,
+      cap: poolCap,
     });
   }
   // `preVisibility` is the row count before the visibility, ownership and

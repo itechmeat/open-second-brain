@@ -182,6 +182,14 @@ export const RETRIEVAL_DEGRADATION = Object.freeze({
    */
   relevanceFloorDroppedRows: "relevance-floor-dropped-rows",
   /**
+   * The per-source-session pool cap (t_bb6ce095) dropped ranked rows
+   * whose source import session was already represented at the cap.
+   * `detail.dropped` counts them against `detail.cap`, the per-session
+   * cap in force. The name says SOURCE session - the import a note came
+   * from - so the code never reads as the caller's session focus.
+   */
+  sourceSessionCappedRows: "source-session-capped-rows",
+  /**
    * Visibility, ownership or session/project scope dropped ranked rows.
    * `detail.dropped` counts them against `detail.before`, so a scope that
    * removed every hit is distinguishable from an exhausted corpus.
@@ -225,6 +233,7 @@ export const RETRIEVAL_DEGRADATION_CODES: ReadonlyArray<RetrievalDegradationCode
   RETRIEVAL_DEGRADATION.rerankProviderUnavailable,
   RETRIEVAL_DEGRADATION.rerankModelSunset,
   RETRIEVAL_DEGRADATION.relevanceFloorDroppedRows,
+  RETRIEVAL_DEGRADATION.sourceSessionCappedRows,
   RETRIEVAL_DEGRADATION.scopeFiltersDroppedRows,
   RETRIEVAL_DEGRADATION.crossVaultOriginFailed,
   RETRIEVAL_DEGRADATION.crossVaultChainStopped,
@@ -440,6 +449,8 @@ export function describeRetrievalDegradation(code: RetrievalDegradationCode): st
       return "the configured rerank model is past its announced shutdown date, so no rerank request was made and this answer keeps the heuristic order";
     case RETRIEVAL_DEGRADATION.relevanceFloorDroppedRows:
       return "the requested relevance floor dropped every ranked row it judged, so matches below it are not in this answer";
+    case RETRIEVAL_DEGRADATION.sourceSessionCappedRows:
+      return "the per-source-session pool cap dropped rows whose source import session already filled its share, so this answer draws on more sessions";
     case RETRIEVAL_DEGRADATION.scopeFiltersDroppedRows:
       return "visibility, ownership or session scope dropped ranked rows, so this answer is narrower than the match set";
     case RETRIEVAL_DEGRADATION.crossVaultOriginFailed:
