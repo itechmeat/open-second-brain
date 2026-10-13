@@ -157,6 +157,28 @@ test("distinct frontmatter-less notes are distinct path groups", () => {
   expect(out.dropped).toBe(0);
 });
 
+test("a session value that begins with the path prefix stays in its own key space", () => {
+  const v = seedVault();
+  // The session value is literally the fallback key of another note: the
+  // two kinds must never fuse regardless of the value, or this session's
+  // quota would be spent on the unrelated note's chunks.
+  writeMd(v, "trap.md", '---\ntitle: T\nsession_ref: "path:plain-1.md"\n---\n\nbody\n');
+  const firstChunk = res("plain-1.md", 0.8);
+  const input = [res("trap.md", 0.9), firstChunk, res("plain-1.md", 0.7)];
+
+  const out = applySessionPoolCap(input, {
+    vault: v,
+    capPerSession: 1,
+    frontmatterCache: new Map(),
+  });
+
+  // `trap` is its own session group; the two plain-1 chunks are the
+  // note's own path group - so the second chunk drops, not both.
+  expect(out.results.map((r) => r.path)).toEqual(["trap.md", "plain-1.md"]);
+  expect(out.results[1]).toBe(firstChunk);
+  expect(out.dropped).toBe(1);
+});
+
 test("an unreadable file's rows group by its path too", () => {
   const v = seedVault();
   // `ghost.md` is not on disk, so its frontmatter read is unreadable -

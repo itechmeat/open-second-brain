@@ -464,12 +464,15 @@ export function assembleRankedResults(input: AssemblyInput): ReadonlyArray<Brain
       // first pass observed. `widestGroupRows` rows of one group fit in
       // the width just judged; a window of `limit` rows is refillable
       // from the groups the cap did not exhaust only if they are
-      // reachable, so rank `limit * (widestGroupRows + 1)` - wide enough
-      // that the heaviest group's observed occupancy cannot crowd the
-      // window out a second time when the corpus holds the rows. One
-      // pass only: a corpus that really holds nothing outside the heavy
-      // group still answers short, and the trail names the final pass's
-      // numbers honestly rather than retrying.
+      // reachable, so rank `limit * (widestGroupRows + 1)` - one more
+      // pass, at a width that covers the heavy group's occupancy as the
+      // first pass's mix observed it. Best-effort, not a guarantee: the
+      // second pass admits deeper rows, so a heavier-than-observed
+      // occupancy (rank skewed hard toward the heavy group) can crowd
+      // the window again and answer short even though the corpus holds
+      // outside rows - and a corpus that holds nothing outside the heavy
+      // group always does. The trail names the final pass's numbers
+      // honestly rather than retrying.
       sessionUnderfilled ? limit * (assembled.widestGroupRows + 1) : 0,
     );
     if (wideCap > rankLimit) {

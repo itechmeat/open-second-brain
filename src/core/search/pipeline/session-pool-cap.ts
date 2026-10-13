@@ -12,8 +12,10 @@
  * bodies) and the several chunks of one long note - so grouping by
  * frontmatter alone capped nothing there, byte for byte. All chunks of
  * one note share a path, so the fallback groups exactly that note. The
- * two key kinds are namespaced apart (`path:` prefix) so a frontmatter
- * session value can never collide with a note path. An unreadable file
+ * three key kinds are namespaced apart (`ref:`, `id:` and `path:`
+ * prefixes), so no two kinds can collide regardless of the value: even a
+ * session value that itself begins with `path:` stays in the session key
+ * space and cannot fuse with the note it names. An unreadable file
  * falls back to its path too: the path is a real identity even when the
  * frontmatter behind it cannot be read, and the chunks of one unreadable
  * note are one group for the same reason.
@@ -37,10 +39,14 @@ const SESSION_REF_KEY = "session_ref";
 /** Frontmatter key naming the source session (handoff notes). */
 const SESSION_ID_KEY = "session_id";
 /**
- * Namespace of the path-fallback group key, so a frontmatter session
- * value can never collide with a note path: the two kinds name different
- * things, and one map holds both.
+ * Namespaces of the three group-key kinds. One map holds all of them, and
+ * the disjoint prefixes make cross-kind collisions impossible by
+ * construction: whatever a session value says - including a value that
+ * itself begins with one of these prefixes - it lands in its own key
+ * space and cannot fuse with another kind's group.
  */
+const REF_GROUP_PREFIX = "ref:";
+const ID_GROUP_PREFIX = "id:";
 const PATH_GROUP_PREFIX = "path:";
 
 /** The cap result: surviving rows in ranked order, plus the drop count. */
@@ -79,9 +85,12 @@ export interface SessionPoolCapOptions {
  * value turned the cap on with a fractional comparison (`seen >= 1.5`
  * kept two rows), NaN silently read as off, and a negative as
  * drop-every-identified-row. A malformed value is refused by name,
- * through the same INVALID_INPUT error path the config refusal uses,
- * before the pipeline runs. `0` stays legal: it is the documented
- * per-query off switch.
+ * through the same INVALID_INPUT error path the config refusal uses.
+ * The refusal fires at the assemble stage's read site, before any
+ * ranking, cap grouping or result assembly runs and before anything is
+ * written - but after the lane fetch and hydration a refused query has
+ * already paid. `0` stays legal: it is the documented per-query off
+ * switch.
  */
 export function resolveSessionPoolCap(value: number): number {
   if (!Number.isFinite(value)) {
@@ -111,9 +120,9 @@ export function resolveSessionPoolCap(value: number): number {
 function sessionKey(vault: string, r: BrainSearchResult, cache: FrontmatterCache): string {
   const { meta } = readCachedFrontmatterEntry(cache, vault, r.path);
   const ref = meta[SESSION_REF_KEY];
-  if (typeof ref === "string" && ref !== "") return ref;
+  if (typeof ref === "string" && ref !== "") return `${REF_GROUP_PREFIX}${ref}`;
   const id = meta[SESSION_ID_KEY];
-  if (typeof id === "string" && id !== "") return id;
+  if (typeof id === "string" && id !== "") return `${ID_GROUP_PREFIX}${id}`;
   return `${PATH_GROUP_PREFIX}${r.path}`;
 }
 
