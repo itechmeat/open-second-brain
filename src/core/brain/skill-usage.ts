@@ -229,8 +229,8 @@ const RANKING_MIN_WEIGHT = 0.02;
  *
  * Same join rule, purity contract and order-independence as
  * {@link skillUsageWeights} (several rows on one name: the strongest
- * normalised weight wins); no clock read and no I/O - `nowMs` is
- * injectable, so a pinned input always yields the same map.
+ * normalised weight wins); no I/O, and the clock enters only through the
+ * `nowMs` option, so a pinned input always yields the same map.
  */
 export function skillUsageRankingWeights(
   usage: ReadonlyArray<SkillUsage>,
