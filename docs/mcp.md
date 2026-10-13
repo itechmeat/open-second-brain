@@ -1230,11 +1230,20 @@ unchanged unless an operator opts in:
   (`OPEN_SECOND_BRAIN_SKILLS_ATTACH_USAGE_ORDERING`), when `"true"` or
   `"1"`, reorders the survivors of the discriminating-term floor by a
   bounded composite of lexical score and observed invocation usage,
-  `score * (1 + 0.5 * weight)`, with `weight` the usage store's decay
-  value in (0, 1]: a skill an agent invokes daily can rise over a
-  slightly hotter one-off, but never by more than half again its own
-  lexical score, so a wide relevance gap stays decisive and the floor is
-  never crossed by weight. Equal composites resolve by name ascending,
+  `score * (1 + 0.5 * weight)`, with `weight` a ranking weight in (0, 1]
+  built so frequency stays visible among recently used skills: the
+  skill's recency decay (the same 30-day half-life curve the usage
+  report shows, measured from its last dated invocation) times
+  `log(1 + count) / log(1 + maxCount)`, where `count` is the skill's
+  deduplicated invocation count and `maxCount` the largest count among
+  the usage rows that join a discovered skill. A skill invoked hundreds
+  of times this week therefore outranks one invoked once yesterday,
+  where the usage report's decay value saturates at 1 for both and the
+  name tie-break would decide; when every joined count is 1 the ratio is
+  1 everywhere and the ordering is recency alone. A skill still never
+  rises by more than half again its own lexical score, so a wide
+  relevance gap stays decisive and the floor is never crossed by weight.
+  Equal composites resolve by name ascending,
   and the returned `score` stays the untouched lexical score. Usage
   joins onto the discovered skills by name, deterministically and
   without a word list: a `skill_invoked` record whose skill string
@@ -1244,11 +1253,18 @@ unchanged unless an operator opts in:
   skill, and a key matching nothing is dropped - unknown is never
   guessed onto a nearest-looking name. Private records never count: the
   continuity read drops `private` rows the same way every reader does.
-  With the flag off - or on, in a vault with no usage records - the
+  The count is also unscoped: every `skill_invoked` record counts,
+  whichever agent or owner produced it, so at a remote or shared reach
+  the ordering reflects other owners' activity, not only yours. With
+  the flag off - or on, in a vault with no usage records - the
   offer is byte-identical to the lexical order. The cost of opting in
-  is one whole-continuity-store read per attach call (the same read
-  `o2b brain skill-proposals usage` already prices); a bounded trailing
-  window is a documented follow-up, not shipped.
+  is one whole-continuity-store read per attach call - a scan of every
+  `skill_invoked` record, so it grows with the invocation history (the
+  same read `o2b brain skill-proposals usage` already prices); it is
+  not memoized, because the append-only store exposes no cheap signal a
+  cache could invalidate on, and a stale ordering would be worse than a
+  slow one. A bounded trailing window is a documented follow-up, not
+  shipped.
 
 ## Workspace Insight Suite tools (since v0.38.0)
 
