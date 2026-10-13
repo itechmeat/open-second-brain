@@ -47,6 +47,33 @@ instruction files such as `CLAUDE.md`/`AGENTS.md`, installed
 `.claude/skills/`) and warns with the exact replacement for any stale
 reference it finds (`removed-tool-reference`).
 
+## Upgrading to 1.83.0
+
+Nothing below needs a migration step. Every new surface in this release
+- the per-source-session search pool cap, the usage-ordered skill
+offers, the seeded LongMemEval sampling flags - ships default off and
+is byte-identical when off, so an existing install behaves exactly as
+before until an operator opts in. The one exception is written here
+rather than left to be discovered at the terminal.
+
+**The first `o2b install --check --target opencode` after the host
+writes an `mcp.servers` object reports `drift`, and the first re-apply
+is refused.** OpenCode V2 hosts read the native `mcp.servers` config
+shape, and the opencode adapter now registers there when that object
+exists instead of always writing the legacy top-level `mcp` key. An
+install that never sees an `mcp.servers` object is unaffected - the
+legacy shape stays byte for byte what earlier releases wrote. When the
+host (or the operator) adds the object to a config this integration
+previously owned, verification - which works by re-construction - no
+longer reproduces what is on disk, so the check drifts once; and the
+first apply after that is refused by the hand-edited-file guard rather
+than silently overwriting a file something else just changed. **Fix:**
+`o2b install --target opencode --apply --force` (or `o2b update
+--force`). The forced re-apply registers the two servers under
+`mcp.servers` and removes the shadowed legacy copies of its own two
+keys from the top-level block; user-authored config is never touched.
+Details in [`install/opencode.md`](../install/opencode.md#config-shape-since-v1830).
+
 ## Upgrading to 1.76.0
 
 No step is required. Searches and session starts now keep the search

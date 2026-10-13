@@ -1231,7 +1231,17 @@ semantic_weight·cosine + link_boost + recency_boost + entity_boost)`
   documents scored `parent·hop_decay^hop` (bounded by `search_max_hops`
   / `search_max_expansion_per_hit`); then MMR reranks the pool with a
   deterministic token-set similarity so near-duplicates do not crowd
-  the top (`search_mmr_lambda`, `1` disables). Header-anchored chunking
+  the top (`search_mmr_lambda`, `1` disables). An opt-in cap on the
+  pool keeps one source import session from filling that window before
+  the diversity rerank sees it (`search_pool_max_per_session`, default
+  `0` - off; since v1.83.0): rows carry a session identity from
+  `session_ref` (imported signal notes) or `session_id` (handoff
+  notes) frontmatter, rows without one pass through uncapped, and the
+  cap widens the pool rather than truncating it, so MMR spreads the
+  window across sessions instead of inside one. The cap is final after
+  that single widened pass - an under-filled window is not retried -
+  and a vault without session frontmatter is byte-identical with the
+  knob on or off. Header-anchored chunking
   indexes each chunk's heading breadcrumb in a dedicated FTS column
   (weighted below content) so a mid-document chunk keeps its topical
   anchor. Entity and heading layers populate on the next reindex.

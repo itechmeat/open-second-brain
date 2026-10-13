@@ -1207,8 +1207,8 @@ anywhere in its derivation. A single-skill corpus carries no
 discrimination at all, so the floor abstains there rather than dropping
 the only candidate.
 
-Two optional config keys (each with a matching environment variable)
-tune the surface; both are off/unset by default, so behaviour is
+Three optional config keys (each with a matching environment variable)
+tune the surface; each is off/unset by default, so behaviour is
 unchanged unless an operator opts in:
 
 - `skills_dir` (`OPEN_SECOND_BRAIN_SKILLS_DIR`) overrides the skill
@@ -1226,6 +1226,29 @@ unchanged unless an operator opts in:
   (`triggers: [research, lookup]`); the scorer also emits overlapping
   bigrams for runs of Han characters, so a spaceless CJK query can match a
   trigger keyword.
+- `skills_attach_usage_ordering`
+  (`OPEN_SECOND_BRAIN_SKILLS_ATTACH_USAGE_ORDERING`), when `"true"` or
+  `"1"`, reorders the survivors of the discriminating-term floor by a
+  bounded composite of lexical score and observed invocation usage,
+  `score * (1 + 0.5 * weight)`, with `weight` the usage store's decay
+  value in (0, 1]: a skill an agent invokes daily can rise over a
+  slightly hotter one-off, but never by more than half again its own
+  lexical score, so a wide relevance gap stays decisive and the floor is
+  never crossed by weight. Equal composites resolve by name ascending,
+  and the returned `score` stays the untouched lexical score. Usage
+  joins onto the discovered skills by name, deterministically and
+  without a word list: a `skill_invoked` record whose skill string
+  equals a discovered name joins exactly, a plugin-qualified invocation
+  (`vendor:name`, the shape the Claude Code `Skill` tool records) joins
+  through the longest suffix after a colon that names a discovered
+  skill, and a key matching nothing is dropped - unknown is never
+  guessed onto a nearest-looking name. Private records never count: the
+  continuity read drops `private` rows the same way every reader does.
+  With the flag off - or on, in a vault with no usage records - the
+  offer is byte-identical to the lexical order. The cost of opting in
+  is one whole-continuity-store read per attach call (the same read
+  `o2b brain skill-proposals usage` already prices); a bounded trailing
+  window is a documented follow-up, not shipped.
 
 ## Workspace Insight Suite tools (since v0.38.0)
 

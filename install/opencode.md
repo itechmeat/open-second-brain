@@ -4,11 +4,17 @@
 in one pass:
 
 1. **MCP servers** - merges the two Open Second Brain servers
-   (`open-second-brain`, `open-second-brain-writer`) into
-   `${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json` under the
-   `mcp` key, using opencode's entry schema
-   (`{"type": "local", "command": [...], "environment": {...},
-   "enabled": true}`). User-authored entries are preserved.
+   (`open-second-brain`, `open-second-brain-writer`) into the opencode
+   config (`${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json`,
+   or `opencode.jsonc` when that is the only config file present),
+   using opencode's entry schema (`{"type": "local", "command": [...],
+   "environment": {...}, "enabled": true}`). User-authored entries are
+   preserved. Since v1.83.0 the entry lands under the native V2
+   `mcp.servers` key when the config already carries that object;
+   everything else keeps the legacy top-level `mcp` key (see
+   [Config shape](#config-shape-since-v1830)). A `.jsonc` config is edited
+   through a comment-preserving editor, so operator comments survive
+   byte for byte.
 2. **Plugin** - copies the bundled Open Second Brain plugin into
    `${XDG_CONFIG_HOME:-$HOME/.config}/opencode/plugins/open-second-brain.ts`.
    opencode auto-loads it at startup.
@@ -39,6 +45,41 @@ name that does not fit the `<vendor>-<host>-agent` shape is prefixed with
 shared multi-device vault, per device - rather than logged under the shared
 identity. `apply` stamps this on `VAULT_AGENT_NAME` in `opencode.json`; no
 manual step is needed.
+
+## Config shape (since v1.83.0)
+
+OpenCode V2 hosts read the native `mcp.servers` shape and `.jsonc`
+config files, and the adapter writes both without disturbing what is
+already there. Which shape an install targets is a property of the
+on-disk file, not of the host version: a config that carries an
+`mcp.servers` object is written at the native path, and every other
+config keeps the legacy top-level `mcp` key this integration has always
+written. Apply and verify resolve the shape through the same rule, so a
+fresh install never reports drift against itself.
+
+- **File choice.** When only `opencode.jsonc` exists it is the config
+  path, and edits preserve its comments and formatting byte for byte
+  outside the changed entry (the editor splices at token offsets rather
+  than re-serializing the file). When both files exist, or neither, the
+  behavior is unchanged: `opencode.json` wins, and a fresh install
+  still creates it - both host generations read it.
+- **Legacy is never shadowed.** An existing healthy top-level
+  registration is not migrated when `mcp.servers` appears: V2 hosts
+  keep reading a legacy declaration, so migration would churn every
+  install for zero benefit.
+- **Uninstall is shape-aware.** The install manifest records the key
+  each write actually used (`mcp.<name>` or `mcp.servers.<name>`), and
+  uninstall removes exactly those keys - never user-authored entries -
+  under either shape.
+- **One-time drift on a shape change.** When an `mcp.servers` object
+  appears in a config the adapter previously owned at the top level
+  (typically the host writing its own object during an upgrade), the
+  first `o2b install --check --target opencode` reports drift once, and
+  the first re-apply is refused through the hand-edited-file guard.
+  **Fix:** `o2b install --target opencode --apply --force` (or
+  `o2b update --force`). That re-apply registers the servers at the
+  native path and cleans the shadowed legacy copies of its own two keys
+  from the top-level block; user keys are never touched.
 
 ## What the plugin does
 

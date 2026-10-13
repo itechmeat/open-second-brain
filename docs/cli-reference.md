@@ -568,12 +568,12 @@ Trigger generation, brief delivery, and gate telemetry are pull-based or config-
 
 ```text
 o2b brain continuity          export --format atof|atif [--session <id>] [--month YYYY-MM] [--out <dir>] [--json] - read-only trajectory export of the continuity store; private records dropped, redacted text stays masked
-o2b brain bench               memory --fixture <name|path> [--suite <name>] [--resume <run-id>] [--runs-dir <dir>] [--json] - memory quality benchmark over a disposable fixture vault; quality, latency, and context cost reported separately; checkpoint/resume by run id; exit 1 on any failed question. Suites (since v1.82.0): longmemeval (strict recall_all@5 over the LongMemEval dataset shape; committed sample fixture, full dataset operator-supplied, judge glue over bench_judge_cmd) and surfacing-replay (replays a recorded prompt corpus through the shipped decision core and scores know_to_ask / false_fire)
+o2b brain bench               memory --fixture <name|path> [--suite <name>] [--sample-seed <value>] [--sample-cap <n>] [--resume <run-id>] [--runs-dir <dir>] [--json] - memory quality benchmark over a disposable fixture vault; quality, latency, and context cost reported separately; checkpoint/resume by run id; exit 1 on any failed question. Suites (since v1.82.0): longmemeval (strict recall_all@5 over the LongMemEval dataset shape; committed sample fixture, full dataset operator-supplied, judge glue over bench_judge_cmd) and surfacing-replay (replays a recorded prompt corpus through the shipped decision core and scores know_to_ask / false_fire). Sampling (since v1.83.0): --sample-seed plus --sample-cap run a seeded, question-type-proportional subset of the dataset instead of the whole fixture; longmemeval is the only suite that declares the capability
 ```
 
 The benchmark never touches the configured vault - the fixture materializes into `<runs-dir>/<run-id>/vault` (default runs dir `.open-second-brain/bench-runs/`, gitignored). The optional `bench_judge_cmd` config key (env `OPEN_SECOND_BRAIN_BENCH_JUDGE_CMD`) arms an advisory external judge; absent means the judge phase is skipped. The full observability contract (event kinds, gates, correlation ids, payload safety, schema version) lives in `docs/observability.md`.
 
-Since v1.82.0 the verb's suite registry maps a `--suite` name to its loader plus a declared capability set (`{embeddings: boolean}`): omitting `--suite` stays the byte-identical default path, and the semantic lane is reachable only for a suite that declared the embeddings capability (longmemeval does; arming the pin is an API-only move this wave - the CLI exposes no knob or floor flag). The run identity folds the pinned search knobs and the proactive-recall admission floor into the checkpoint hash beside the fixture hash, so a resumed run that would mix configurations fails the identity guard by name instead of comparing two pipelines; in-flight runs started before the change fail the resume guard loudly and restart. `--suite longmemeval` converts the official LongMemEval dataset shape - abstention questions drop at conversion with the count recorded, gold sessions join by direct id membership and an unknown id is a named parse error - and reports the strict `longmemeval: {recall_all_at_5, abstention_excluded}` family beside the untouched quality, latency and context_cost families; the committed sample fixture `tests/fixtures/bench/longmemeval-sample.json` certifies CI and the full dataset is an operator-supplied path (never downloaded at run time). The judge glue reuses `bench_judge_cmd`: when the suite provides them, the stdin payload's questions carry `question`, `answer` and `gold` beside the usual result fields, and the official prompt text ships as module constants pinned to a named upstream revision, so the external command stays a dumb model call; suites without judge input keep the payload byte for byte. `--suite surfacing-replay` replays a recorded prompt corpus (a committed session fixture, or a vault's own session turns converted to the same shape) through the shipped decision core and scores the graded surfacing gate's know_to_ask / false_fire rates under the same denominations the proactive-recall metric uses, so the gate's calibration is a measured number a re-run re-measures.
+Since v1.82.0 the verb's suite registry maps a `--suite` name to its loader plus a declared capability set (`{embeddings: boolean}`, plus `sampling` since v1.83.0): omitting `--suite` stays the byte-identical default path, and the semantic lane is reachable only for a suite that declared the embeddings capability (longmemeval does; arming the pin is an API-only move this wave - the CLI exposes no knob or floor flag). The run identity folds the pinned search knobs and the proactive-recall admission floor into the checkpoint hash beside the fixture hash, so a resumed run that would mix configurations fails the identity guard by name instead of comparing two pipelines; in-flight runs started before the change fail the resume guard loudly and restart. Since v1.83.0 `--sample-seed <value>` plus `--sample-cap <n>` (longmemeval only - the only suite that declares the sampling capability) run a seeded, question-type-proportional subset of the dataset instead of the whole fixture: the two flags are refused apart, a non-positive or non-integer cap is refused naming the value, and a suite whose registration lacks the capability is refused naming the suite, so the flags can never be silently ignored. Sampling selects before conversion - abstention questions are excluded first (their count still lands in `abstention_excluded`), the survivors are stratified by the dataset's own `question_type` values, each stratum contributes its population-proportional share of the cap by largest-remainder apportionment (fractional ties by stratum name), and the draw is a seeded shuffle over entries sorted by question id, so dataset file order cannot change the subset and the same seed and cap always select the same questions. The receipt reports `sample_population`, `sample_selected` and the per-stratum `sample_strata` beside the abstention count, the report line gains `sample_selected N` only on a sampled run, and the seed and cap fold into the run identity: run ids without sampling are unchanged, and a resumed run whose sampling options changed fails the identity guard by name. `--suite longmemeval` converts the official LongMemEval dataset shape - abstention questions drop at conversion with the count recorded, gold sessions join by direct id membership and an unknown id is a named parse error - and reports the strict `longmemeval: {recall_all_at_5, abstention_excluded}` family beside the untouched quality, latency and context_cost families; the committed sample fixture `tests/fixtures/bench/longmemeval-sample.json` certifies CI and the full dataset is an operator-supplied path (never downloaded at run time). The judge glue reuses `bench_judge_cmd`: when the suite provides them, the stdin payload's questions carry `question`, `answer` and `gold` beside the usual result fields, and the official prompt text ships as module constants pinned to a named upstream revision, so the external command stays a dumb model call; suites without judge input keep the payload byte for byte. `--suite surfacing-replay` replays a recorded prompt corpus (a committed session fixture, or a vault's own session turns converted to the same shape) through the shipped decision core and scores the graded surfacing gate's know_to_ask / false_fire rates under the same denominations the proactive-recall metric uses, so the gate's calibration is a measured number a re-run re-measures.
 
 ### Externalized session payloads (payload registry)
 
@@ -2124,6 +2124,7 @@ so there is no separate lane field that could drift from it:
 | `rerank-provider-unavailable` | the configured cross-encoder reranker (remote endpoint or local model) could not answer, so the answer keeps the heuristic order; `detail.category` is one of `auth`, `quota`, `gone`, `rejected`, `transient`, `timeout`, `network`, `malformed`, `unclassified` |
 | `rerank-model-sunset` | the configured rerank model's announced decommission date has passed, so no rerank request was sent and the answer keeps the heuristic order |
 | `relevance-floor-dropped-rows` | the relevance floor dropped ranked rows; `detail.dropped` counts them |
+| `source-session-capped-rows` | the per-source-session pool cap (`search_pool_max_per_session`, since v1.83.0) dropped ranked rows whose source import session already held its cap of rows; `detail.dropped` counts them against `detail.cap` |
 | `scope-filters-dropped-rows` | visibility, ownership, or session / project scope dropped ranked rows; `detail.dropped` against `detail.before` |
 | `cross-vault-origin-failed` | a cross-vault origin could not be searched; `detail.origin` is the origin label |
 | `cross-vault-chain-stopped` | an origin answered confidently and the remaining origins were deliberately not searched; `detail.skipped` counts them |
@@ -2389,6 +2390,7 @@ layer config-tunable and bounded:
 | `search_max_hops`              | `OPEN_SECOND_BRAIN_SEARCH_MAX_HOPS`              | `1`     | Link-graph traversal depth during recall; `0` disables            |
 | `search_hop_decay`             | `OPEN_SECOND_BRAIN_SEARCH_HOP_DECAY`             | `0.5`   | Per-hop score multiplier for traversal-surfaced docs              |
 | `search_max_expansion_per_hit` | `OPEN_SECOND_BRAIN_SEARCH_MAX_EXPANSION_PER_HIT` | `3`     | Cap on outbound links followed per node                           |
+| `search_pool_max_per_session`  | `OPEN_SECOND_BRAIN_SEARCH_POOL_MAX_PER_SESSION`  | `0`     | Cap on candidate-pool rows per source import session; `0` off     |
 
 Recall and ranking quality (v0.20.0), each tunable and bounded:
 
@@ -2591,6 +2593,35 @@ channel, and the binary `{retrieve, reason}` projection survives
 unchanged for existing callers. Gate telemetry under the existing
 `recall_gate_telemetry` opt-in records the key, the tier and the channel
 on measured decisions, and its summary counts by tier.
+
+### The per-source-session pool cap (since v1.83.0)
+
+One long imported session can otherwise fill the whole reranker-facing
+candidate window with near-duplicate chunks, leaving the diversity
+rerank nothing to spread across. The opt-in knob
+`search_pool_max_per_session` (`OPEN_SECOND_BRAIN_SEARCH_POOL_MAX_PER_SESSION`,
+default `0` - off) bounds how many rows one source import session may
+contribute to that pool: a row's identity is a non-empty `session_ref`
+frontmatter value on an imported signal note, else a non-empty
+`session_id` on a handoff note, read through the same frontmatter cache
+the pool filters already use. Rows without session identity - ordinary
+vault notes, and rows whose frontmatter is unreadable - pass through
+uncapped, so a vault without imported sessions is untouched by
+construction: at `0`, and in a no-identity vault at any value, results
+and query-cache keys are byte-identical and no frontmatter reads are
+added. A per-query override (`poolMaxPerSession`, alongside
+`mmrLambda`) rides the same plumbing, and a `--pin` on `brain bench
+memory` accepts the knob by name (`{"recall":{"poolMaxPerSession":N}}`).
+
+When the cap is active it sits after the relevance floor and before the
+MMR diversity rerank, and it widens the candidate pool the way MMR and
+traversal already do, so the cap spreads the window instead of merely
+truncating it sooner. The cap is final after that one widened pass: an
+under-filled window is not retried and the backfill trigger is
+deliberately unchanged, so the cap can never cause a second assemble.
+Drops carry a `source-session-capped-rows` entry in the retrieval
+trail's `degraded` list (see "The retrieval trail"), with `detail.dropped`
+against `detail.cap`.
 
 ### The reserved visibility token (since v1.54.0)
 
