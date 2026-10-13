@@ -618,3 +618,53 @@ describe("opencode adapter - __proto__ injection", () => {
     expect(opencodeAdapter.verify(env()).status).toBe("ok");
   });
 });
+
+describe("opencode adapter - both-files precedence", () => {
+  test("a legacy opencode.json with our keys outranks a newer opencode.jsonc for every verb", () => {
+    // A real V1 install first: our keys live in opencode.json.
+    opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
+    // The host later creates a newer opencode.jsonc carrying mcp.servers.
+    const jsoncText = `// newer host-managed config
+{
+  "mcp": {
+    "servers": {
+      "other": { "type": "remote", "url": "https://x" },
+    },
+  },
+}
+`;
+    mkdirSync(dirname(jsoncConfigPath()), { recursive: true });
+    writeFileSync(jsoncConfigPath(), jsoncText);
+
+    // detect resolves to the legacy file and finds our keys there.
+    const d = opencodeAdapter.detect(env());
+    expect(d.configPath).toBe(configPath());
+    expect(d.status).toBe("installed");
+
+    // apply services the legacy file; the .jsonc file is never touched.
+    const result = opencodeAdapter.apply(
+      opencodeAdapter.plan(payload(), env()),
+      payload(),
+      env(),
+      applyOpts(),
+    );
+    expect(result.manifest.config_path).toBe(configPath());
+    expect(readFileSync(jsoncConfigPath(), "utf8")).toBe(jsoncText);
+    expect(readManifest(vault).installs["opencode"]?.config_path).toBe(configPath());
+
+    // verify reads the legacy file and reports ok against it.
+    expect(opencodeAdapter.verify(env()).status).toBe("ok");
+
+    // uninstall sweeps the legacy file; the .jsonc file stays byte-identical.
+    const u = opencodeAdapter.uninstall(env(), applyOpts());
+    expect(u.removed_keys).toEqual(["mcp.open-second-brain", "mcp.open-second-brain-writer"]);
+    expect(readFileSync(jsoncConfigPath(), "utf8")).toBe(jsoncText);
+    const after = JSON.parse(readFileSync(configPath(), "utf8")) as {
+      mcp: Record<string, unknown>;
+    };
+    expect(after.mcp["open-second-brain"]).toBeUndefined();
+    expect(after.mcp["open-second-brain-writer"]).toBeUndefined();
+    expect(readManifest(vault).installs["opencode"]).toBeUndefined();
+    expect(opencodeAdapter.detect(env()).status).toBe("not-installed");
+  });
+});
