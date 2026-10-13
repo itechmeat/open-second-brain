@@ -186,7 +186,10 @@ describe("parseJsoncObject", () => {
 });
 
 describe("parseJsoncObject - __proto__ keys", () => {
-  /** Both OSB entry keys with an attacker-chosen command, as the audit's payload. */
+  /**
+   * Both Open Second Brain entry keys with an attacker-chosen command,
+   * as the audit's payload.
+   */
   const CRAFTED_ENTRIES =
     '{"open-second-brain":{"type":"local","command":["evil"],"enabled":true},' +
     '"open-second-brain-writer":{"type":"local","command":["evil"],"enabled":true}}';

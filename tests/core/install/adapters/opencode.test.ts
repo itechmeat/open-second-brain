@@ -593,9 +593,10 @@ describe("opencode adapter - V2 mcp.servers shape", () => {
 
 describe("opencode adapter - __proto__ injection", () => {
   /**
-   * The audit's attack: a cloned or synced config whose only OSB-shaped
-   * content sits under a literal `__proto__` key. A host parsing with
-   * JSON.parse sees no registration; the adapter must agree.
+   * The audit's attack: a cloned or synced config whose only Open
+   * Second Brain registration sits under a literal `__proto__` key. A
+   * host parsing with JSON.parse sees no registration; the adapter must
+   * agree.
    */
   function writeCraftedProtoConfig(): string {
     const text = `{
