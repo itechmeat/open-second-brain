@@ -2607,10 +2607,13 @@ frontmatter value on an imported signal note, else a non-empty
 the pool filters already use. Rows without session identity - ordinary
 vault notes, and rows whose frontmatter is unreadable - pass through
 uncapped, so a vault without imported sessions is untouched by
-construction: at `0`, and in a no-identity vault at any value, results
-and query-cache keys are byte-identical and no frontmatter reads are
-added. A per-query override (`poolMaxPerSession`, alongside
-`mmrLambda`) rides the same plumbing, and a `--pin` on `brain bench
+construction: off (`0` or absent), results and query-cache keys are
+byte-identical and no frontmatter reads are added; with the knob on, the
+resolved value folds into the search fingerprint so cached rows can
+never go stale, while in a no-identity vault the results alone stay
+byte-identical at any value. A per-query override (`poolMaxPerSession`,
+alongside `mmrLambda`) rides the same plumbing, and a `--pin` on `brain
+bench
 memory` accepts the knob by name (`{"recall":{"poolMaxPerSession":N}}`).
 
 When the cap is active it sits after the relevance floor and before the
