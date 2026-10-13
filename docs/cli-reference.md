@@ -2616,9 +2616,10 @@ memory` accepts the knob by name (`{"recall":{"poolMaxPerSession":N}}`).
 When the cap is active it sits after the relevance floor and before the
 MMR diversity rerank, and it widens the candidate pool the way MMR and
 traversal already do, so the cap spreads the window instead of merely
-truncating it sooner. The cap is final after that one widened pass: an
-under-filled window is not retried and the backfill trigger is
-deliberately unchanged, so the cap can never cause a second assemble.
+truncating it sooner. The backfill trigger is deliberately unchanged:
+the cap never adds a reason for the second assemble pass, and when
+that pass runs for its own pre-existing reasons the cap is re-applied
+over the wider pool, with the retrieval trail reporting the final pass.
 Drops carry a `source-session-capped-rows` entry in the retrieval
 trail's `degraded` list (see "The retrieval trail"), with `detail.dropped`
 against `detail.cap`.

@@ -1238,10 +1238,10 @@ semantic_weight·cosine + link_boost + recency_boost + entity_boost)`
   `session_ref` (imported signal notes) or `session_id` (handoff
   notes) frontmatter, rows without one pass through uncapped, and the
   cap widens the pool rather than truncating it, so MMR spreads the
-  window across sessions instead of inside one. The cap is final after
-  that single widened pass - an under-filled window is not retried -
-  and a vault without session frontmatter is byte-identical with the
-  knob on or off. Header-anchored chunking
+  window across sessions instead of inside one. The cap never extends
+  the backfill trigger - an under-filled window gains no new retry
+  because of it - and a vault without session frontmatter is
+  byte-identical with the knob on or off. Header-anchored chunking
   indexes each chunk's heading breadcrumb in a dedicated FTS column
   (weighted below content) so a mid-document chunk keeps its topical
   anchor. Entity and heading layers populate on the next reindex.
