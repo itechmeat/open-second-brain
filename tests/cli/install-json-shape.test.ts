@@ -60,6 +60,12 @@ afterEach(() => {
 function envBase() {
   return {
     HOME: home,
+    // The adapter checks XDG_CONFIG_HOME first, so a developer shell or a
+    // CI runner that exports it would otherwise redirect every config
+    // path out of the temp HOME. Pin it inside the sandbox instead of
+    // deleting it: an inherited value could also point the general
+    // config resolution at real user state.
+    XDG_CONFIG_HOME: join(home, ".config"),
     OPEN_SECOND_BRAIN_CONFIG: configPath,
     VAULT_DIR: vault,
     VAULT_AGENT_NAME: "claude-vps",
