@@ -257,6 +257,20 @@ describe("setJsoncEntry", () => {
     );
   });
 
+  test("replacing a single-line entry keeps it single-line, so re-sets stay byte-stable", () => {
+    // Compact form is JSON.stringify's own, the form this editor writes.
+    const text = `{
+  "mcp": {
+    "servers": {"open-second-brain": {"enabled":true}}
+  }
+}
+`;
+    const once = setJsoncEntry(text, ["mcp", "servers"], "open-second-brain", { enabled: true });
+    expect(once).toBe(text);
+    const twice = setJsoncEntry(once, ["mcp", "servers"], "open-second-brain", { enabled: true });
+    expect(twice).toBe(text);
+  });
+
   test("a comment-free canonical file re-set with the same entry is byte-identical", () => {
     const canonical =
       JSON.stringify({ mcp: { servers: { "open-second-brain": FULL_ENTRY } } }, null, 2) + "\n";
