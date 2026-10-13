@@ -162,6 +162,17 @@ test("a cap at or above the population selects everyone", () => {
     expect(selected).toHaveLength(12);
     expect(receipt.selected).toBe(12);
     expect(receipt.population).toBe(12);
+    // The clamped cap lands in the receipt too: every stratum reports
+    // exactly its own population - never the raw apportionment of an
+    // unclamped cap, which at cap 50 would report 17 selected in a
+    // stratum of 4 - and the per-stratum selections sum to the
+    // population.
+    expect(receipt.strata).toEqual([
+      { question_type: "type-a", population: 4, selected: 4 },
+      { question_type: "type-b", population: 4, selected: 4 },
+      { question_type: "type-c", population: 4, selected: 4 },
+    ]);
+    expect(receipt.strata.reduce((sum, stratum) => sum + stratum.selected, 0)).toBe(12);
   }
 });
 
