@@ -455,7 +455,10 @@ test("the resolved field is absent at the off default and present when positive"
   expect(Object.keys(off)).not.toContain("poolMaxPerSession");
 
   writeFileSync(configPath, `vault: "${tmp}"\nsearch_pool_max_per_session: "3"\n`);
-  const on = resolveSearchConfig({ vault: tmp, configPath }).recall as Record<string, unknown>;
+  const on = resolveSearchConfig({ vault: tmp, configPath }).recall as unknown as Record<
+    string,
+    unknown
+  >;
   expect(on["poolMaxPerSession"]).toBe(3);
 });
 
