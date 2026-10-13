@@ -26,6 +26,7 @@ import type {
   ResolvedSearchConfig,
 } from "../search/types.ts";
 import type { VaultScopeRules } from "../vault-scope/defaults.ts";
+import type { LongMemEvalSampleStratum } from "./longmemeval-sample.ts";
 
 export const BENCH_REPORT_SCHEMA = "o2b.bench.v2";
 
@@ -212,6 +213,16 @@ export interface BenchSuiteLoad {
 export interface BenchSuiteReceipt {
   /** LongMemEval-style abstention questions dropped at conversion time. */
   readonly abstention_excluded?: number;
+  /**
+   * Seeded-sampling bookkeeping, present only when the loader sampled:
+   * the population it chose from, the questions it selected, and the
+   * per-stratum breakdown. Mirrors the abstention precedent - a
+   * whole-dataset run carries no sample fields rather than a
+   * manufactured 0.
+   */
+  readonly sample_population?: number;
+  readonly sample_selected?: number;
+  readonly sample_strata?: ReadonlyArray<LongMemEvalSampleStratum>;
 }
 
 /**
@@ -309,6 +320,13 @@ export interface BenchLongMemEvalFamily {
    * receipt - the count is then unknown, never a manufactured 0.
    */
   readonly abstention_excluded: number | null;
+  /**
+   * Questions the run's seeded sampler selected, taken from the run's
+   * conversion receipt. Present only when the run sampled, so a
+   * whole-dataset (or receipt-less) report serializes byte-identically
+   * to before.
+   */
+  readonly sample_selected?: number;
 }
 
 export interface BenchQuestionResult {

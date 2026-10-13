@@ -55,6 +55,12 @@ import { readFileSync } from "node:fs";
 
 import { parseBenchFixture } from "./fixture.ts";
 import {
+  isLongMemEvalAbstention,
+  LONGMEMEVAL_ABSTENTION_TYPE,
+  sampleLongMemEvalEntries,
+} from "./longmemeval-sample.ts";
+import type { BenchSuiteLoadOptions } from "./types.ts";
+import {
   RETRIEVAL_CATEGORIES,
   type BenchCategory,
   type BenchFixture,
@@ -148,26 +154,13 @@ export interface LongMemEvalConversion {
 
 class LongMemEvalParseError extends Error {}
 
-/** The explicit legacy-shape question type whose entries measure abstention. */
-export const LONGMEMEVAL_ABSTENTION_TYPE = "abstention";
-
-/** Suffix the official dataset puts on abstention question ids. */
-const OFFICIAL_ABSTENTION_SUFFIX = "_abs";
-
 /**
- * True when an entry measures abstention and is excluded from scoring.
- * The official dataset marks abstention by a `question_id` ending in
- * `_abs`; the legacy sample shape uses the explicit `abstention`
- * question type. Both paths stay live.
+ * The abstention rule lives in the sampler module, whose exclusion of
+ * abstention entries must precede selection and which must stay a leaf
+ * (this adapter imports it); re-exported here so the suite's public
+ * API is unchanged.
  */
-export function isLongMemEvalAbstention(
-  entry: Pick<LongMemEvalEntry, "q_id" | "question_type">,
-): boolean {
-  return (
-    entry.question_type === LONGMEMEVAL_ABSTENTION_TYPE ||
-    entry.q_id.endsWith(OFFICIAL_ABSTENTION_SUFFIX)
-  );
-}
+export { isLongMemEvalAbstention, LONGMEMEVAL_ABSTENTION_TYPE };
 
 /**
  * The recall cutoff the suite scores at: a question passes retrieval
@@ -644,8 +637,28 @@ export function longMemEvalToBenchFixture(dataset: LongMemEvalDataset): LongMemE
   return { fixture, receipt: { abstention_excluded: abstentionExcluded } };
 }
 
-/** Load a LongMemEval dataset file and convert it to a suite load. */
-export function loadLongMemEvalFixture(path: string): LongMemEvalConversion {
+/**
+ * Load a LongMemEval dataset file and convert it to a suite load.
+ *
+ * The second parameter is OPTIONAL and carries the run's sampling
+ * request: with one, abstention entries are excluded first, the seeded
+ * sampler selects a type-proportional subset of the survivors, and only
+ * the selected entries convert - sampling happens PRE-conversion, so
+ * notes and continuity records materialize just for the questions a run
+ * will score. Without one, the conversion is byte-identical to the
+ * shipped whole-dataset loader.
+ *
+ * The receipt mirrors the abstention precedent: on a sampled run it
+ * carries the sample population, the selected count and the per-stratum
+ * breakdown beside the abstention count, which stays the SAMPLER's
+ * count - the exclusion happened before selection, so the conversion of
+ * the selected entries would otherwise read 0 and hide the dataset's
+ * abstention questions from the report.
+ */
+export function loadLongMemEvalFixture(
+  path: string,
+  options?: BenchSuiteLoadOptions,
+): LongMemEvalConversion {
   let raw: unknown;
   try {
     raw = JSON.parse(readFileSync(path, "utf8"));
@@ -654,7 +667,22 @@ export function loadLongMemEvalFixture(path: string): LongMemEvalConversion {
       `LongMemEval dataset not readable JSON at ${path}: ${e instanceof Error ? e.message : String(e)}`,
     );
   }
-  return longMemEvalToBenchFixture(parseLongMemEvalDataset(raw));
+  const dataset = parseLongMemEvalDataset(raw);
+  if (options?.sample === undefined) return longMemEvalToBenchFixture(dataset);
+  const sample = sampleLongMemEvalEntries(dataset.entries, options.sample);
+  const converted = longMemEvalToBenchFixture({
+    ...(dataset.name !== undefined ? { name: dataset.name } : {}),
+    entries: sample.entries,
+  });
+  return {
+    fixture: converted.fixture,
+    receipt: {
+      abstention_excluded: sample.receipt.abstention_excluded,
+      sample_population: sample.receipt.population,
+      sample_selected: sample.receipt.selected,
+      sample_strata: sample.receipt.strata,
+    },
+  };
 }
 
 /** One persisted retrieval result the strict metric reads. */

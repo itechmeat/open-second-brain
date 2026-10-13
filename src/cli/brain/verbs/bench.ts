@@ -22,7 +22,6 @@ import type {
   BenchPinnedKnobs,
   BenchSampleRequest,
   BenchSuiteLoad,
-  BenchSuiteLoadOptions,
   BenchSuiteRegistration,
 } from "../../../core/bench/types.ts";
 import { defaultConfigPath, resolveBenchJudgeCmd } from "../../../core/config.ts";
@@ -68,19 +67,7 @@ const BENCH_SUITES = new Map<string, BenchSuiteRegistration>([
   [
     LONGMEMEVAL_SUITE_NAME,
     Object.freeze({
-      loader: (fixturePath: string, options?: BenchSuiteLoadOptions): BenchSuiteLoad => {
-        // The sampling contract lands with this wave's verb flags; the
-        // loader implementation lands with the sampler wiring
-        // (t_4501c662). Until it does, a sampling request is refused by
-        // name - never silently ignored, which would run the whole
-        // dataset under flags that promised a subset.
-        if (options?.sample !== undefined) {
-          throw new Error(
-            "bench suite 'longmemeval' received a sampling request but its loader does not implement sampling yet; the request is refused rather than silently ignored",
-          );
-        }
-        return loadLongMemEvalFixture(fixturePath);
-      },
+      loader: loadLongMemEvalFixture,
       capabilities: Object.freeze({ embeddings: true, sampling: true }),
     }),
   ],
@@ -449,7 +436,13 @@ export async function cmdBrainBench(argv: string[]): Promise<number> {
   if (report.longmemeval !== undefined) {
     process.stdout.write(
       `longmemeval: recall_all@5 ${report.longmemeval.recall_all_at_5} ` +
-        `abstention_excluded ${report.longmemeval.abstention_excluded}\n`,
+        `abstention_excluded ${report.longmemeval.abstention_excluded}` +
+        // Present only on a sampled run, so the whole-dataset line is
+        // byte-identical to before.
+        (report.longmemeval.sample_selected !== undefined
+          ? ` sample_selected ${report.longmemeval.sample_selected}`
+          : "") +
+        "\n",
     );
   }
   process.stdout.write(`judge: ${report.judge.status}\n`);

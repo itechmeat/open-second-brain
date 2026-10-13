@@ -311,13 +311,18 @@ export async function runMemoryBench(opts: BenchRunOptions): Promise<BenchReport
   // The LongMemEval suite's named metric family: strict recall_all@5
   // rolled off the same persisted results the evaluator read. The
   // exclusion count comes only from a real conversion receipt - without
-  // one it reports null, never a manufactured 0.
+  // one it reports null, never a manufactured 0. The sampled count
+  // rides along only when the run sampled, so a whole-dataset report
+  // serializes byte-identically to before.
   let longmemeval: BenchLongMemEvalFamily | undefined;
   if (opts.suite === LONGMEMEVAL_SUITE_NAME) {
     const scored = scoreLongMemEvalRecall(opts.fixture.questions, [...retrievedById.values()]);
     longmemeval = Object.freeze({
       recall_all_at_5: scored.scored > 0 ? round3(scored.passed / scored.scored) : 0,
       abstention_excluded: opts.suiteReceipt?.abstention_excluded ?? null,
+      ...(opts.suiteReceipt?.sample_selected !== undefined
+        ? { sample_selected: opts.suiteReceipt.sample_selected }
+        : {}),
     });
   }
 

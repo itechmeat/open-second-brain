@@ -665,4 +665,31 @@ describe("bench sampling flags", () => {
       { path: join("tests", "fixtures", "bench", "core-recall.json"), options: {} },
     ]);
   }, 60_000);
+
+  test("the longmemeval suite samples through the flags and prints the sampled count", async () => {
+    // The committed sample carries 3 eligible questions across 3 types;
+    // a cap of 2 selects 2, and the CLI line reports the sampled count
+    // beside the strict family.
+    const out = await runCli(
+      [
+        "brain",
+        "bench",
+        "memory",
+        "--fixture",
+        "longmemeval-sample",
+        "--suite",
+        "longmemeval",
+        "--sample-seed",
+        "seed-1",
+        "--sample-cap",
+        "2",
+        "--runs-dir",
+        runsDir,
+      ],
+      {},
+    );
+    expect(out.returncode).toBe(0);
+    expect(out.stdout).toContain("sample_selected 2");
+    expect(out.stdout).toContain("longmemeval: recall_all@5");
+  }, 60_000);
 });
