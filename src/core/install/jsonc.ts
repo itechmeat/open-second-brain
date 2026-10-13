@@ -587,15 +587,25 @@ export function hasJsoncSyntax(text: string): boolean {
  */
 export function parseJsoncObject(text: string): Record<string, unknown> {
   const { body } = stripBom(text);
-  return toPlain(parseRoot(scan(body)));
+  return toPlainObject(parseRoot(scan(body)));
 }
 
-function toPlain(node: Node): unknown {
-  if (node.kind === "leaf") return node.value;
-  if (node.kind === "array") return node.elements.map(toPlain);
+/**
+ * An object node's entries as a plain record. Split from the general
+ * value case so the object-root contract of `parseJsoncObject` is
+ * satisfied by construction - the root is statically an ObjectNode, so
+ * the record needs no cast and no runtime re-check.
+ */
+function toPlainObject(node: ObjectNode): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  for (const entry of node.order) out[entry.key] = toPlain(entry.value);
+  for (const entry of node.order) out[entry.key] = toPlainValue(entry.value);
   return out;
+}
+
+function toPlainValue(node: Node): unknown {
+  if (node.kind === "leaf") return node.value;
+  if (node.kind === "array") return node.elements.map(toPlainValue);
+  return toPlainObject(node);
 }
 
 /**

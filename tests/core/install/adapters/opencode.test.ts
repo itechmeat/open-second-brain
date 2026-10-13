@@ -92,6 +92,23 @@ function writeJson(path: string, value: unknown) {
   writeFileSync(path, JSON.stringify(value, null, 2) + "\n");
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * The `key` member of `value` as a record, or a named failure naming
+ * both - the narrow a `parseJsoncObject` result needs before its JSONC
+ * members (typed `unknown`) can be asserted on.
+ */
+function recordAt(value: unknown, key: string): Record<string, unknown> {
+  const member = isRecord(value) ? value[key] : undefined;
+  if (!isRecord(member)) {
+    throw new Error(`expected "${key}" to be a JSON object, received ${JSON.stringify(member)}`);
+  }
+  return member;
+}
+
 describe("opencode adapter - config path", () => {
   test("default path is ~/.config/opencode/opencode.json", () => {
     const r = opencodeAdapter.detect(env());
@@ -445,8 +462,9 @@ describe("opencode adapter - V2 mcp.servers shape", () => {
     // The untouched comment-carrying lines are byte-identical; only the
     // spliced entry is new.
     const parsed = parseJsoncObject(after);
-    expect(parsed.mcp.servers["open-second-brain"].type).toBe("local");
-    expect(parsed.mcp.servers.other).toEqual({ type: "remote", url: "https://x" });
+    const servers = recordAt(recordAt(parsed, "mcp"), "servers");
+    expect(recordAt(servers, "open-second-brain").type).toBe("local");
+    expect(servers.other).toEqual({ type: "remote", url: "https://x" });
     expect(opencodeAdapter.verify(env()).status).toBe("ok");
     expect(text).toContain('"other": { "type": "remote", "url": "https://x" },\n');
     expect(after).toContain('"other": { "type": "remote", "url": "https://x" },\n');
@@ -469,8 +487,9 @@ describe("opencode adapter - V2 mcp.servers shape", () => {
     expect(after).toContain("// inline note");
     const parsed = parseJsoncObject(after);
     expect(parsed.theme).toBe("dark");
-    expect(parsed.mcp["open-second-brain"].type).toBe("local");
-    expect(parsed.mcp.servers).toBeUndefined();
+    const mcp = recordAt(parsed, "mcp");
+    expect(recordAt(mcp, "open-second-brain").type).toBe("local");
+    expect(mcp.servers).toBeUndefined();
     expect(opencodeAdapter.verify(env()).status).toBe("ok");
   });
 
@@ -503,7 +522,7 @@ describe("opencode adapter - V2 mcp.servers shape", () => {
     const parsed = JSON.parse(readFileSync(configPath(), "utf8"));
     parsed.mcp.servers = {};
     writeFileSync(configPath(), JSON.stringify(parsed, null, 2) + "\n");
-    const future = new Date(Date.parse(env().now) + 60_000);
+    const future = new Date(env().now.getTime() + 60_000);
     utimesSync(configPath(), future, future);
 
     // Nothing migrates without an operator re-apply.
