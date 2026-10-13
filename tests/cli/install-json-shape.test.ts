@@ -24,9 +24,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { INSTALL_JSON_SCHEMA_VERSION } from "../../src/cli/install/render.ts";
 import { runCli as baseRunCli, type RunCliOptions, type RunResult } from "../helpers/run-cli.ts";
@@ -174,6 +174,25 @@ describe("every install --json payload names its fields", () => {
       const targets = payload["targets"] as ReadonlyArray<unknown>;
       expect(targets.length).toBeGreaterThan(0);
       for (const row of targets) expect(keys(row)).toBe("details,fix_hint,status,target");
+    },
+    CLI_TIMEOUT_MS,
+  );
+});
+
+describe("the opencode V2 config shape in the apply payload", () => {
+  test(
+    "apply to an existing mcp.servers config records the nested owned keys",
+    async () => {
+      const opencodeConfig = join(home, ".config", "opencode", "opencode.json");
+      mkdirSync(dirname(opencodeConfig), { recursive: true });
+      writeFileSync(opencodeConfig, JSON.stringify({ mcp: { servers: {} } }, null, 2) + "\n");
+      const payload = await payloadOf(["install", "--target", "opencode", "--apply", "--json"]);
+      const manifest = payload["manifest"] as Record<string, unknown>;
+      expect(manifest["config_path"]).toBe(opencodeConfig);
+      expect(manifest["owned_keys"]).toEqual([
+        "mcp.servers.open-second-brain",
+        "mcp.servers.open-second-brain-writer",
+      ]);
     },
     CLI_TIMEOUT_MS,
   );

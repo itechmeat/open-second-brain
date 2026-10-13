@@ -455,14 +455,20 @@ function insertEntry(text: string, obj: ObjectNode, key: string, value: unknown)
   );
 }
 
-/** Splice over exactly the existing entry's value range, leaving the key and its line untouched. */
+/**
+ * Splice over exactly the existing entry's value range, leaving the key
+ * and its line untouched. A value that occupies a single line is
+ * replaced compactly: re-placing a compact entry with a pretty-printed
+ * one would make every no-op re-apply rewrite bytes.
+ */
 function replaceEntry(text: string, entry: ObjectEntry, value: unknown): string {
-  return splice(
-    text,
-    entry.valueStart,
-    entry.valueEnd,
-    renderValue(value, indentUnit(text), lineIndent(text, entry.keyStart)),
-  );
+  const rendered = text.slice(entry.valueStart, entry.valueEnd).includes("\n")
+    ? renderValue(value, indentUnit(text), lineIndent(text, entry.keyStart))
+    : JSON.stringify(value);
+  if (rendered === undefined) {
+    throw new JsoncEditError("value is not JSON-serializable");
+  }
+  return splice(text, entry.valueStart, entry.valueEnd, rendered);
 }
 
 /**

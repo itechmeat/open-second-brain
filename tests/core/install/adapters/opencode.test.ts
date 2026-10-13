@@ -11,7 +11,15 @@
  */
 
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import {
+  mkdtempSync,
+  rmSync,
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  existsSync,
+  utimesSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { Writable } from "node:stream";
@@ -24,6 +32,8 @@ import {
   launcherCommand,
 } from "../../../../src/core/install/payload.ts";
 import { readManifest } from "../../../../src/core/install/manifest.ts";
+import { InstallError } from "../../../../src/core/install/types.ts";
+import { JsoncEditError, parseJsoncObject } from "../../../../src/core/install/jsonc.ts";
 
 let vault: string;
 let home: string;
@@ -326,5 +336,214 @@ describe("opencode adapter - plan completeness", () => {
     writeJson(legacyPath(), { mcpServers: {} });
     const withLegacy = opencodeAdapter.plan(payload(), env());
     expect(withLegacy.steps.some((s) => s.path === legacyPath())).toBe(true);
+  });
+});
+
+function jsoncConfigPath() {
+  return join(home, ".config", "opencode", "opencode.jsonc");
+}
+
+/** A JSONC V2 fixture: header comment, inline comment, trailing comma. */
+function writeJsoncV2Fixture(): string {
+  const text = `// opencode configuration - operator notes survive
+{
+  "theme": "dark", // inline note
+  "mcp": {
+    "servers": {
+      "other": { "type": "remote", "url": "https://x" },
+    },
+  },
+}
+`;
+  mkdirSync(dirname(jsoncConfigPath()), { recursive: true });
+  writeFileSync(jsoncConfigPath(), text);
+  return text;
+}
+
+describe("opencode adapter - V2 mcp.servers shape", () => {
+  test("a config carrying an mcp.servers object applies to mcp.servers and records nested owned_keys", () => {
+    writeJson(configPath(), { mcp: { servers: { other: { type: "remote", url: "https://x" } } } });
+    opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
+    const parsed = JSON.parse(readFileSync(configPath(), "utf8"));
+    expect(parsed.mcp.servers["open-second-brain"].type).toBe("local");
+    expect(parsed.mcp.servers["open-second-brain"].environment.VAULT_AGENT_NAME).toBe(
+      "opencode-dev-agent",
+    );
+    expect(parsed.mcp.servers["open-second-brain-writer"].enabled).toBe(true);
+    expect(parsed.mcp.servers.other).toEqual({ type: "remote", url: "https://x" });
+    // No shadowing copy under the legacy top-level key.
+    expect(parsed.mcp["open-second-brain"]).toBeUndefined();
+    expect(readManifest(vault).installs["opencode"]?.owned_keys).toEqual([
+      "mcp.servers.open-second-brain",
+      "mcp.servers.open-second-brain-writer",
+    ]);
+  });
+
+  test("a fresh V2 install verifies clean against itself and detects as installed", () => {
+    writeJson(configPath(), { mcp: { servers: {} } });
+    opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
+    expect(opencodeAdapter.verify(env()).status).toBe("ok");
+    expect(opencodeAdapter.detect(env()).status).toBe("installed");
+    expect(opencodeAdapter.detect(env()).notes.join(" ")).toContain("mcp.servers");
+  });
+
+  test("V2 re-apply is idempotent and executes no steps", () => {
+    writeJson(configPath(), { mcp: { servers: {} } });
+    opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
+    const before = readFileSync(configPath(), "utf8");
+    const second = opencodeAdapter.apply(
+      opencodeAdapter.plan(payload(), env()),
+      payload(),
+      env(),
+      applyOpts(),
+    );
+    expect(second.steps_executed).toBe(0);
+    expect(readFileSync(configPath(), "utf8")).toBe(before);
+  });
+
+  test("V2 uninstall removes exactly the nested keys and keeps user keys", () => {
+    writeJson(configPath(), { mcp: { servers: { other: { type: "remote", url: "https://x" } } } });
+    opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
+    const r = opencodeAdapter.uninstall(env(), applyOpts());
+    const parsed = JSON.parse(readFileSync(configPath(), "utf8"));
+    expect(parsed.mcp.servers["open-second-brain"]).toBeUndefined();
+    expect(parsed.mcp.servers["open-second-brain-writer"]).toBeUndefined();
+    expect(parsed.mcp.servers.other).toEqual({ type: "remote", url: "https://x" });
+    expect(r.removed_keys).toEqual([
+      "mcp.servers.open-second-brain",
+      "mcp.servers.open-second-brain-writer",
+    ]);
+    expect(readManifest(vault).installs["opencode"]).toBeUndefined();
+  });
+
+  test("a V1-shaped config is byte-identical through apply: json-merge serialization, top-level mcp (off proof)", () => {
+    writeJson(configPath(), {
+      $schema: "https://opencode.ai/config.json",
+      mcp: { other: { type: "remote", url: "https://x" } },
+    });
+    const before = readFileSync(configPath(), "utf8");
+    opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
+    const after = readFileSync(configPath(), "utf8");
+    // The json-merge contract: whole-root re-serialization at the detected indent.
+    expect(after).toBe(JSON.stringify(JSON.parse(after), null, 2) + "\n");
+    const parsed = JSON.parse(after);
+    expect(parsed.mcp["open-second-brain"].type).toBe("local");
+    expect(parsed.mcp.servers).toBeUndefined();
+    expect(parsed["$schema"]).toBe("https://opencode.ai/config.json");
+    // The plan preview keeps today's wording for the V1 route.
+    expect(opencodeAdapter.plan(payload(), env()).steps[0]?.preview).toContain("into mcp at ");
+    expect(before).not.toBe(after);
+  });
+
+  test("when only opencode.jsonc exists it is the resolved path and comments survive apply byte-for-byte", () => {
+    const text = writeJsoncV2Fixture();
+    expect(opencodeAdapter.detect(env()).configPath).toBe(jsoncConfigPath());
+    opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
+    const after = readFileSync(jsoncConfigPath(), "utf8");
+    expect(after.startsWith("// opencode configuration - operator notes survive\n")).toBe(true);
+    expect(after).toContain('"theme": "dark", // inline note\n');
+    // The untouched comment-carrying lines are byte-identical; only the
+    // spliced entry is new.
+    const parsed = parseJsoncObject(after);
+    expect(parsed.mcp.servers["open-second-brain"].type).toBe("local");
+    expect(parsed.mcp.servers.other).toEqual({ type: "remote", url: "https://x" });
+    expect(opencodeAdapter.verify(env()).status).toBe("ok");
+    expect(text).toContain('"other": { "type": "remote", "url": "https://x" },\n');
+    expect(after).toContain('"other": { "type": "remote", "url": "https://x" },\n');
+  });
+
+  test("a .jsonc file with a V1 shape gets top-level mcp with comments preserved", () => {
+    const text = `// operator notes survive here too
+{
+  "theme": "dark", // inline note
+}
+`;
+    mkdirSync(dirname(jsoncConfigPath()), { recursive: true });
+    writeFileSync(jsoncConfigPath(), text);
+    opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
+    const after = readFileSync(jsoncConfigPath(), "utf8");
+    expect(after.startsWith("// operator notes survive here too\n")).toBe(true);
+    // The comment bytes survive; a comment sitting between the last
+    // entry and the closing brace ends up trailing the splice point,
+    // still inside the object it documents.
+    expect(after).toContain("// inline note");
+    const parsed = parseJsoncObject(after);
+    expect(parsed.theme).toBe("dark");
+    expect(parsed.mcp["open-second-brain"].type).toBe("local");
+    expect(parsed.mcp.servers).toBeUndefined();
+    expect(opencodeAdapter.verify(env()).status).toBe("ok");
+  });
+
+  test("duplicate top-level keys refuse apply naming the file, without a partial write", () => {
+    const dup = `// ambiguous config
+{
+  "theme": "dark",
+  "theme": "light",
+}
+`;
+    mkdirSync(dirname(jsoncConfigPath()), { recursive: true });
+    writeFileSync(jsoncConfigPath(), dup);
+    let thrown: unknown;
+    try {
+      opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(JsoncEditError);
+    expect((thrown as Error).message).toContain(jsoncConfigPath());
+    expect((thrown as Error).name).toBe("JsoncEditError");
+    expect(readFileSync(jsoncConfigPath(), "utf8")).toBe(dup);
+  });
+
+  test("an mcp.servers appearance is not migrated until re-apply, and the first re-apply refuses through the guard", () => {
+    // A healthy V1 install first.
+    opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
+    // The host upgrades to the native shape: mcp.servers appears, the
+    // file is touched after the manifest's applied_at.
+    const parsed = JSON.parse(readFileSync(configPath(), "utf8"));
+    parsed.mcp.servers = {};
+    writeFileSync(configPath(), JSON.stringify(parsed, null, 2) + "\n");
+    const future = new Date(Date.parse(env().now) + 60_000);
+    utimesSync(configPath(), future, future);
+
+    // Nothing migrates without an operator re-apply.
+    const before = JSON.parse(readFileSync(configPath(), "utf8"));
+    expect(before.mcp["open-second-brain"]).toBeDefined();
+    expect(before.mcp.servers["open-second-brain"]).toBeUndefined();
+
+    // verify reports the one-time drift: the native shape lacks our entries.
+    expect(opencodeAdapter.verify(env()).status).toBe("drift");
+
+    // The first re-apply refuses through the user-modified-block guard.
+    let thrown: unknown;
+    try {
+      opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(InstallError);
+    expect((thrown as InstallError).kind).toBe("user-modified-block");
+    expect((thrown as Error).message).toContain("hand-edited");
+
+    // The operator's forced re-apply lands the native entries and removes
+    // our shadowed legacy copies.
+    opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), {
+      ...applyOpts(),
+      force: true,
+    });
+    const after = JSON.parse(readFileSync(configPath(), "utf8"));
+    expect(after.mcp.servers["open-second-brain"].type).toBe("local");
+    expect(after.mcp["open-second-brain"]).toBeUndefined();
+    expect(after.mcp["open-second-brain-writer"]).toBeUndefined();
+    expect(opencodeAdapter.verify(env()).status).toBe("ok");
+  });
+
+  test("the plan names the resolved shape before any write", () => {
+    // No config: today's fresh-install wording.
+    expect(opencodeAdapter.plan(payload(), env()).steps[0]?.preview).toContain("into mcp at ");
+    writeJson(configPath(), { mcp: { servers: {} } });
+    const v2Plan = opencodeAdapter.plan(payload(), env());
+    expect(v2Plan.steps[0]?.preview).toContain("into mcp.servers at ");
+    expect(v2Plan.steps[0]?.path).toBe(configPath());
   });
 });

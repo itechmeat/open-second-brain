@@ -717,6 +717,21 @@ describe("o2b bootstrap when the adapter apply fails after a mint (opencode)", (
     return join(opencodeHome, "opencode", "opencode.json");
   }
 
+  test("bootstrap --target opencode lands in an existing V2 mcp.servers config", async () => {
+    mkdirSync(join(opencodeHome, "opencode"), { recursive: true });
+    writeFileSync(opencodeConfigPath(), JSON.stringify({ mcp: { servers: {} } }, null, 2) + "\n");
+    const r = await runCli(
+      bootstrapArgs(["--target", "opencode", "--agent", OPENCODE_AGENT, "--token"]),
+      { env: { XDG_CONFIG_HOME: opencodeHome } },
+    );
+    expect(r.returncode).toBe(0);
+    const parsed = JSON.parse(readFileSync(opencodeConfigPath(), "utf8"));
+    expect(parsed.mcp.servers["open-second-brain"]).toBeDefined();
+    expect(parsed.mcp.servers["open-second-brain-writer"]).toBeDefined();
+    // No shadowing copy under the legacy top-level key.
+    expect(parsed.mcp["open-second-brain"]).toBeUndefined();
+  }, 20000);
+
   test("a rotate into a hand-edited config still shows the material exactly once and names the retry path", async () => {
     mkdirSync(opencodeHome, { recursive: true });
     const env = { XDG_CONFIG_HOME: opencodeHome };
