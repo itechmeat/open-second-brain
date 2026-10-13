@@ -6,7 +6,9 @@
  * MCP servers live in `opencode.json` (global copy under
  * `${XDG_CONFIG_HOME:-$HOME/.config}/opencode/`) beneath the `mcp` key,
  * each entry shaped `{type: "local", command: [bin, ...args],
- * environment?, enabled}`.
+ * environment?, enabled}`. The V2 docs replace the `enabled` field with
+ * `disabled`, so an entry written at the native `mcp.servers` shape
+ * carries `disabled: false` and never `enabled`.
  *
  * V2 hosts read the native `mcp.servers` shape and `.jsonc` config
  * files. The choice is a property of the on-disk file, not of the
@@ -102,10 +104,11 @@ function legacyConfigPath(env: InstallEnv): string {
 }
 
 /**
- * Canonical `McpServerEntry` → opencode `mcp` entry. opencode takes the
- * full argv as one `command` array and calls the env map `environment`;
- * `enabled: true` is explicit so an operator toggling the server off
- * shows up as drift instead of silently staying off after re-apply.
+ * Canonical `McpServerEntry` → opencode `mcp` entry, V1 shape. opencode
+ * takes the full argv as one `command` array and calls the env map
+ * `environment`; `enabled: true` is explicit so an operator toggling the
+ * server off shows up as drift instead of silently staying off after
+ * re-apply.
  */
 export function serializeOpencodeEntry(entry: McpServerEntry): Record<string, unknown> {
   return {
@@ -114,6 +117,27 @@ export function serializeOpencodeEntry(entry: McpServerEntry): Record<string, un
     ...(entry.env && Object.keys(entry.env).length > 0 ? { environment: { ...entry.env } } : {}),
     enabled: true,
   };
+}
+
+/**
+ * The same entry at the native V2 shape. The V2 field list replaces V1's
+ * `enabled` with `disabled` ("Use `disabled`, not an `enabled` field"),
+ * so a V2 entry never carries `enabled`; `disabled: false` is written
+ * explicitly so an operator toggling the server off shows up as drift
+ * instead of silently staying off after re-apply.
+ */
+export function serializeOpencodeEntryV2(entry: McpServerEntry): Record<string, unknown> {
+  return {
+    type: "local",
+    command: [entry.command, ...entry.args],
+    ...(entry.env && Object.keys(entry.env).length > 0 ? { environment: { ...entry.env } } : {}),
+    disabled: false,
+  };
+}
+
+/** The entry serializer the resolved config shape takes. */
+function serializerFor(v2: boolean): (entry: McpServerEntry) => Record<string, unknown> {
+  return v2 ? serializeOpencodeEntryV2 : serializeOpencodeEntry;
 }
 
 /**
@@ -163,10 +187,30 @@ function resolveConfigState(env: InstallEnv): ConfigState {
   };
 }
 
-/** Upstream's precedence: a native `mcp.servers` object wins, everything else targets top-level `mcp`. */
+/** Whether a value looks like a server entry: an object naming a type, a command or a url. */
+function looksLikeServerEntry(value: unknown): boolean {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    Object.hasOwn(record, "type") ||
+    Object.hasOwn(record, "command") ||
+    Object.hasOwn(record, "url")
+  );
+}
+
+/**
+ * Whether `mcp.servers` is the native V2 map of servers, and not a
+ * legacy user server that happens to be named `servers`. The honest
+ * minimal test: the native shape maps NAMES to entries, so a block that
+ * is itself an entry - `type`, `command` or `url` sitting directly on
+ * it - is that user's server, and the file keeps the legacy shape. An
+ * empty block is the native shape before any server is declared.
+ */
 function shapeIsV2(parsed: Record<string, unknown> | null): boolean {
   if (parsed === null) return false;
-  return blockAtPath(parsed, V2_SHAPE_PATH) !== null;
+  const servers = blockAtPath(parsed, V2_SHAPE_PATH);
+  if (servers === null) return false;
+  return !looksLikeServerEntry(servers);
 }
 
 /** Walk a dotted shape path through parsed objects; null when any segment is missing or not an object. */
@@ -236,10 +280,11 @@ function canonicalUnderShape(
 ): boolean {
   const block = blockAtPath(parsed, shapePath);
   if (block === null) return false;
+  const serialize = serializerFor(shapePath === V2_SHAPE_PATH);
   if (!Object.hasOwn(block, OSB_KEY_FULL) || !Object.hasOwn(block, OSB_KEY_WRITER)) return false;
   return (
-    deepJsonEquals(block[OSB_KEY_FULL], serializeOpencodeEntry(payload.full)) &&
-    deepJsonEquals(block[OSB_KEY_WRITER], serializeOpencodeEntry(payload.writer))
+    deepJsonEquals(block[OSB_KEY_FULL], serialize(payload.full)) &&
+    deepJsonEquals(block[OSB_KEY_WRITER], serialize(payload.writer))
   );
 }
 
@@ -328,10 +373,11 @@ function applyViaEditor(
     }
   }
   const shapePath = state.v2 ? V2_SHAPE_PATH : V1_SHAPE_PATH;
+  const serialize = serializerFor(state.v2);
   let next = state.raw;
   try {
-    next = setJsoncEntry(next, shapePath, OSB_KEY_FULL, serializeOpencodeEntry(payload.full));
-    next = setJsoncEntry(next, shapePath, OSB_KEY_WRITER, serializeOpencodeEntry(payload.writer));
+    next = setJsoncEntry(next, shapePath, OSB_KEY_FULL, serialize(payload.full));
+    next = setJsoncEntry(next, shapePath, OSB_KEY_WRITER, serialize(payload.writer));
     if (state.v2) {
       // Our own shadowed copies under the legacy top-level key would
       // outlive the write; they are ours to clean, user keys stay.
@@ -399,6 +445,7 @@ function verifyViaEditor(env: InstallEnv): VerifyResult {
     };
   }
   const v2 = shapeIsV2(parsed);
+  const serialize = serializerFor(v2);
   const shapeKey = (v2 ? V2_SHAPE_PATH : V1_SHAPE_PATH).join(".");
   const block = blockAtPath(parsed, v2 ? V2_SHAPE_PATH : V1_SHAPE_PATH);
   if (block === null) {
@@ -423,8 +470,8 @@ function verifyViaEditor(env: InstallEnv): VerifyResult {
   }
   const expected = expectedPayloadForOpencode(env);
   if (
-    !deepJsonEquals(block[OSB_KEY_FULL], serializeOpencodeEntry(expected.full)) ||
-    !deepJsonEquals(block[OSB_KEY_WRITER], serializeOpencodeEntry(expected.writer))
+    !deepJsonEquals(block[OSB_KEY_FULL], serialize(expected.full)) ||
+    !deepJsonEquals(block[OSB_KEY_WRITER], serialize(expected.writer))
   ) {
     return {
       target: "opencode",
@@ -432,6 +479,28 @@ function verifyViaEditor(env: InstallEnv): VerifyResult {
       details: [`${path}: OSB keys differ from canonical payload`],
       fix_hint: FIX_HINT,
     };
+  }
+  // Apply treats our leftover copies under the legacy top-level key as
+  // non-canonical in a V2 file (the guard refuses to count them clean,
+  // and re-apply removes them), so verify must not call the same state
+  // ok: the file an operator would get from re-apply is not the file on
+  // disk.
+  if (v2) {
+    const legacy = blockAtPath(parsed, V1_SHAPE_PATH);
+    const shadowed =
+      legacy === null
+        ? []
+        : [OSB_KEY_FULL, OSB_KEY_WRITER].filter((key) => Object.hasOwn(legacy, key));
+    if (shadowed.length > 0) {
+      return {
+        target: "opencode",
+        status: "drift",
+        details: [
+          `${path}: legacy top-level copies of ${shadowed.join(", ")} remain beside the native mcp.servers entries`,
+        ],
+        fix_hint: FIX_HINT,
+      };
+    }
   }
   // The same host-probe composition the shared body applies: the file
   // was compared and matches, so a refuting probe reads as a host that
@@ -646,6 +715,9 @@ const base = createJsonMcpAdapter({
   label: "opencode",
   topLevelKey: "mcp",
   resolveConfigPath: configPath,
+  // The shared body serves only the plain-JSON V1 route (the editor
+  // route owns every JSONC or V2-shaped file), so the V1 entry shape is
+  // the right serialization here.
   serializeEntry: serializeOpencodeEntry,
   runtimeIdentity: true,
   postNotes: ["Restart opencode to load the new MCP servers and the Open Second Brain plugin."],

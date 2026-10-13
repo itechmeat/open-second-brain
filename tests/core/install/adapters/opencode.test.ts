@@ -5,8 +5,10 @@
  * `${XDG_CONFIG_HOME:-~/.config}/opencode/opencode.json`, `mcp` key,
  * entries shaped `{type: "local", command: [bin, ...args],
  * environment?, enabled: true}` (verified against opencode.ai/docs
- * 2026-06-10). Earlier Open Second Brain releases wrote
- * `~/.config/opencode/mcp.json` with an `mcpServers` key - a file
+ * 2026-06-10). At the native V2 `mcp.servers` shape the entry instead
+ * carries `disabled: false` - the V2 field list replaces `enabled` with
+ * `disabled` - and never `enabled`. Earlier Open Second Brain releases
+ * wrote `~/.config/opencode/mcp.json` with an `mcpServers` key - a file
  * opencode never reads; apply migrates our keys out of it.
  */
 
@@ -386,7 +388,12 @@ describe("opencode adapter - V2 mcp.servers shape", () => {
     expect(parsed.mcp.servers["open-second-brain"].environment.VAULT_AGENT_NAME).toBe(
       "opencode-dev-agent",
     );
-    expect(parsed.mcp.servers["open-second-brain-writer"].enabled).toBe(true);
+    // The V2 field list replaces `enabled` with `disabled`: the native
+    // entry carries `disabled: false` and never an `enabled` field.
+    expect(parsed.mcp.servers["open-second-brain"].disabled).toBe(false);
+    expect(parsed.mcp.servers["open-second-brain"].enabled).toBeUndefined();
+    expect(parsed.mcp.servers["open-second-brain-writer"].disabled).toBe(false);
+    expect(parsed.mcp.servers["open-second-brain-writer"].enabled).toBeUndefined();
     expect(parsed.mcp.servers.other).toEqual({ type: "remote", url: "https://x" });
     // No shadowing copy under the legacy top-level key.
     expect(parsed.mcp["open-second-brain"]).toBeUndefined();
@@ -394,6 +401,41 @@ describe("opencode adapter - V2 mcp.servers shape", () => {
       "mcp.servers.open-second-brain",
       "mcp.servers.open-second-brain-writer",
     ]);
+  });
+
+  test("a V1 config whose user server is named servers keeps the legacy shape", () => {
+    // `mcp.servers` holding a server ENTRY (the type/command fields on
+    // the block itself) is a user's server, not the native map of them.
+    writeJson(configPath(), {
+      mcp: { servers: { type: "local", command: ["other-agent", "mcp"], enabled: true } },
+    });
+    opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
+    const parsed = JSON.parse(readFileSync(configPath(), "utf8"));
+    // The user's entry is untouched and ours land at the top level.
+    expect(parsed.mcp.servers.type).toBe("local");
+    expect(parsed.mcp.servers["open-second-brain"]).toBeUndefined();
+    expect(parsed.mcp["open-second-brain"].type).toBe("local");
+    expect(parsed.mcp["open-second-brain"].enabled).toBe(true);
+    expect(readManifest(vault).installs["opencode"]?.owned_keys).toEqual([
+      "mcp.open-second-brain",
+      "mcp.open-second-brain-writer",
+    ]);
+  });
+
+  test("verify reports shadowed legacy copies in a V2 file as drift", () => {
+    writeJson(configPath(), { mcp: { servers: {} } });
+    opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
+    expect(opencodeAdapter.verify(env()).status).toBe("ok");
+    // A stale legacy copy of ours reappears beside the native entries
+    // (an old sync tool, say): apply would remove it as non-canonical,
+    // so verify must not call the same state ok.
+    const parsed = JSON.parse(readFileSync(configPath(), "utf8"));
+    parsed.mcp["open-second-brain"] = { type: "local", command: ["o2b", "mcp"], enabled: true };
+    writeFileSync(configPath(), JSON.stringify(parsed, null, 2) + "\n");
+    const v = opencodeAdapter.verify(env());
+    expect(v.status).toBe("drift");
+    expect(v.details.join(" ")).toContain("legacy");
+    expect(v.details.join(" ")).toContain("open-second-brain");
   });
 
   test("a fresh V2 install verifies clean against itself and detects as installed", () => {
