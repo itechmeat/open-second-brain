@@ -411,6 +411,7 @@ export async function cmdBrainBench(argv: string[]): Promise<number> {
     capabilities: registration.capabilities,
     ...(pinnedKnobs !== null ? { pinnedKnobs } : {}),
     ...(recallFloor !== undefined ? { recallFloor } : {}),
+    ...(sample !== undefined ? { sample } : {}),
     ...(loaded.receipt !== undefined ? { suiteReceipt: loaded.receipt } : {}),
     ...(resume !== undefined && resume !== "" ? { resume } : {}),
     ...(judgeCmd !== undefined ? { judgeCmd } : {}),

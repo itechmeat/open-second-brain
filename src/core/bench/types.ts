@@ -417,6 +417,14 @@ export interface BenchCheckpoint {
    */
   readonly pinned_knobs?: BenchPinnedKnobs;
   readonly knobs_hash?: string;
+  /**
+   * The seeded sampling request this run was created under, present only
+   * on a sampled run. The run-identity hash covers it, so a resumed run
+   * under different sampling options fails the guard; the field itself
+   * is spread-omitted on unsampled runs, keeping those checkpoints
+   * byte-identical to before.
+   */
+  readonly sample?: BenchSampleRequest;
   readonly created_at: string;
   readonly completed_phases: ReadonlyArray<BenchPhase>;
 }

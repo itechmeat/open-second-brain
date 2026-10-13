@@ -666,10 +666,11 @@ describe("bench sampling flags", () => {
     ]);
   }, 60_000);
 
-  test("the longmemeval suite samples through the flags and prints the sampled count", async () => {
+  test("the longmemeval suite samples through the flags and pins the run identity", async () => {
     // The committed sample carries 3 eligible questions across 3 types;
-    // a cap of 2 selects 2, and the CLI line reports the sampled count
-    // beside the strict family.
+    // a cap of 2 selects 2, the CLI line reports the sampled count, and
+    // the run checkpoint carries the sampling request - so a resumed run
+    // under different sampling options fails the identity guard.
     const out = await runCli(
       [
         "brain",
@@ -689,7 +690,13 @@ describe("bench sampling flags", () => {
       {},
     );
     expect(out.returncode).toBe(0);
-    expect(out.stdout).toContain("sample_selected 2");
     expect(out.stdout).toContain("longmemeval: recall_all@5");
+    expect(out.stdout).toContain("sample_selected 2");
+    const runId = /^bench \S+ run (\S+)$/m.exec(out.stdout)?.[1];
+    expect(runId).toBeDefined();
+    const checkpoint = JSON.parse(
+      readFileSync(join(runsDir, runId!, "checkpoint.json"), "utf8"),
+    ) as { sample?: unknown };
+    expect(checkpoint.sample).toEqual({ seed: "seed-1", cap: 2 });
   }, 60_000);
 });

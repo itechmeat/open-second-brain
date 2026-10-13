@@ -6,10 +6,11 @@
  * the final report. Resume validates the fixture hash before skipping
  * phases - a changed fixture invalidates the checkpoint rather than
  * silently mixing two runs. The run identity covers the pinned search
- * knobs too ({@link benchRunIdentityHash}), so a resumed run whose pin
- * changed fails the guard loudly; checkpoints written before knob
- * pinning existed are refused for the same reason. A path guard refuses
- * run ids that resolve outside the runs directory.
+ * knobs, the recall admission floor and the seeded sampling request
+ * ({@link benchRunIdentityHash}), so a resumed run whose pin, floor or
+ * sampling options changed fails the guard loudly; checkpoints written
+ * before knob pinning existed are refused for the same reason. A path
+ * guard refuses run ids that resolve outside the runs directory.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -24,6 +25,7 @@ import {
   type BenchFixture,
   type BenchPhase,
   type BenchPinnedKnobs,
+  type BenchSampleRequest,
 } from "./types.ts";
 
 export interface BenchRunHandle {
@@ -39,23 +41,30 @@ const RUN_IDENTITY_HEX_CHARS = 16;
 
 /**
  * The run-identity hash: the fixture hash AND the pinned knob record
- * AND the recall admission floor (null when unset), canonically hashed
- * together. Two runs that differ only in their pin or floor therefore
- * get different run ids, and a resumed run whose pin or floor changed
- * fails the identity guard instead of silently comparing two pipelines
- * - or worse, deciding the remaining questions under a new floor while
- * the persisted ones keep the old.
+ * AND the recall admission floor (null when unset) AND the seeded
+ * sampling request (spread in only when set), canonically hashed
+ * together. Two runs that differ only in their pin, floor or sampling
+ * options therefore get different run ids - even when the sampled
+ * fixture would be identical, because the options are what the run was
+ * asked to do - and a resumed run whose pin, floor or sampling options
+ * changed fails the identity guard instead of silently comparing two
+ * pipelines - or worse, deciding the remaining questions under new
+ * options while the persisted ones keep the old. The sampling half is
+ * spread-omitted, so a no-sampling record is byte-identical to the
+ * shipped one and every pre-change run id stays stable.
  */
 export function benchRunIdentityHash(
   fixture: BenchFixture,
   pinnedKnobs: BenchPinnedKnobs,
   recallFloor?: number,
+  sample?: BenchSampleRequest,
 ): string {
   return sha256Hex(
     canonicalJson({
       fixture: fixtureHash(fixture),
       knobs: pinnedKnobs,
       recall_floor: recallFloor ?? null,
+      ...(sample !== undefined ? { sample } : {}),
     }),
   ).slice(0, RUN_IDENTITY_HEX_CHARS);
 }
@@ -73,12 +82,17 @@ export function benchResultsDir(runDir: string): string {
 export function createBenchRun(
   runsDir: string,
   fixture: BenchFixture,
-  opts: { now?: Date; pinnedKnobs?: BenchPinnedKnobs; recallFloor?: number } = {},
+  opts: {
+    now?: Date;
+    pinnedKnobs?: BenchPinnedKnobs;
+    recallFloor?: number;
+    sample?: BenchSampleRequest;
+  } = {},
 ): BenchRunHandle {
   const now = opts.now ?? new Date();
   const knobs = opts.pinnedKnobs ?? DEFAULT_BENCH_KNOB_PIN;
   const hash = fixtureHash(fixture);
-  const identity = benchRunIdentityHash(fixture, knobs, opts.recallFloor);
+  const identity = benchRunIdentityHash(fixture, knobs, opts.recallFloor, opts.sample);
   const stamp = now
     .toISOString()
     .replace(/[^0-9]/g, "")
@@ -92,6 +106,7 @@ export function createBenchRun(
     fixture_hash: hash,
     pinned_knobs: knobs,
     knobs_hash: identity,
+    ...(opts.sample !== undefined ? { sample: opts.sample } : {}),
     created_at: now.toISOString(),
     completed_phases: Object.freeze([]),
   });
@@ -106,6 +121,7 @@ export function loadBenchRun(
     expectFixture?: BenchFixture;
     pinnedKnobs?: BenchPinnedKnobs;
     recallFloor?: number;
+    sample?: BenchSampleRequest;
   } = {},
 ): BenchRunHandle {
   const runDir = guardedRunDir(runsDir, runId);
@@ -127,10 +143,15 @@ export function loadBenchRun(
         `bench run ${runId}: checkpoint predates knob pinning - the run identity cannot be verified, restart the run`,
       );
     }
-    const expectedIdentity = benchRunIdentityHash(opts.expectFixture, knobs, opts.recallFloor);
+    const expectedIdentity = benchRunIdentityHash(
+      opts.expectFixture,
+      knobs,
+      opts.recallFloor,
+      opts.sample,
+    );
     if (expectedIdentity !== checkpoint.knobs_hash) {
       throw new Error(
-        `bench run ${runId}: run identity mismatch (checkpoint ${checkpoint.knobs_hash}, current ${expectedIdentity}) - the pinned knobs or the recall floor changed since this run started`,
+        `bench run ${runId}: run identity mismatch (checkpoint ${checkpoint.knobs_hash}, current ${expectedIdentity}) - the pinned knobs, the recall floor or the sampling options changed since this run started`,
       );
     }
   }
@@ -172,6 +193,7 @@ function parseCheckpoint(raw: unknown): BenchCheckpoint {
   const phases = record["completed_phases"];
   const knobsHash = record["knobs_hash"];
   const pinnedKnobs = record["pinned_knobs"];
+  const sample = record["sample"];
   if (
     typeof runId !== "string" ||
     typeof fixtureName !== "string" ||
@@ -190,6 +212,12 @@ function parseCheckpoint(raw: unknown): BenchCheckpoint {
   ) {
     throw new Error("bench checkpoint: pinned_knobs must be an object");
   }
+  if (
+    sample !== undefined &&
+    (sample === null || typeof sample !== "object" || Array.isArray(sample))
+  ) {
+    throw new Error("bench checkpoint: sample must be an object");
+  }
   const completed = phases.filter(
     (phase): phase is BenchPhase =>
       typeof phase === "string" && (BENCH_PHASES as ReadonlyArray<string>).includes(phase),
@@ -204,6 +232,12 @@ function parseCheckpoint(raw: unknown): BenchCheckpoint {
     typeof pinnedKnobs === "object" &&
     !Array.isArray(pinnedKnobs)
       ? { pinned_knobs: Object.freeze({ ...(pinnedKnobs as BenchPinnedKnobs) }) }
+      : {}),
+    ...(sample !== undefined &&
+    sample !== null &&
+    typeof sample === "object" &&
+    !Array.isArray(sample)
+      ? { sample: Object.freeze({ ...(sample as BenchSampleRequest) }) }
       : {}),
     created_at: createdAt,
     completed_phases: Object.freeze(completed),

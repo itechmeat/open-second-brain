@@ -12,12 +12,13 @@ import { join } from "node:path";
 
 import { parseBenchFixture } from "../../../src/core/bench/fixture.ts";
 import {
+  benchRunIdentityHash,
   benchVaultDir,
   completeBenchPhase,
   createBenchRun,
   loadBenchRun,
 } from "../../../src/core/bench/run-store.ts";
-import type { BenchPinnedKnobs } from "../../../src/core/bench/types.ts";
+import { DEFAULT_BENCH_KNOB_PIN, type BenchPinnedKnobs } from "../../../src/core/bench/types.ts";
 
 let runsDir: string;
 
@@ -158,6 +159,93 @@ describe("bench run store", () => {
     writeFileSync(path, `${JSON.stringify(legacy, null, 2)}\n`, "utf8");
     expect(() => loadBenchRun(runsDir, run.runId, { expectFixture: FIXTURE })).toThrow(
       /predates knob pinning/,
+    );
+  });
+});
+
+/**
+ * The sampling fold in the run identity (wiring-shipped-seams wave,
+ * t_4501c662): the canonical record spreads `sample` in ONLY when
+ * sampling is set - so a no-sampling run's identity equals the shipped
+ * one byte for byte - and any sampling-option change is a different run
+ * that the resume guard refuses to mix.
+ */
+describe("the sampling fold in the run identity", () => {
+  /** The identity hash values computed before the fold existed. */
+  const FROZEN_NO_SAMPLE_IDENTITY = "d3fbe6ad99439a0e";
+  const FROZEN_FLOOR_IDENTITY = "7b9b430af41eb4a1";
+
+  test("a no-sampling run's identity hash is byte-stable with the shipped fold", () => {
+    expect(benchRunIdentityHash(FIXTURE, DEFAULT_BENCH_KNOB_PIN)).toBe(FROZEN_NO_SAMPLE_IDENTITY);
+    expect(benchRunIdentityHash(FIXTURE, DEFAULT_BENCH_KNOB_PIN, 0.4)).toBe(FROZEN_FLOOR_IDENTITY);
+  });
+
+  test("a sampled run's identity hash differs, and differs by seed and by cap", () => {
+    const base = { seed: "seed-1", cap: 1 };
+    expect(benchRunIdentityHash(FIXTURE, DEFAULT_BENCH_KNOB_PIN, undefined, base)).not.toBe(
+      FROZEN_NO_SAMPLE_IDENTITY,
+    );
+    expect(
+      benchRunIdentityHash(FIXTURE, DEFAULT_BENCH_KNOB_PIN, undefined, {
+        ...base,
+        seed: "seed-2",
+      }),
+    ).not.toBe(benchRunIdentityHash(FIXTURE, DEFAULT_BENCH_KNOB_PIN, undefined, base));
+    expect(
+      benchRunIdentityHash(FIXTURE, DEFAULT_BENCH_KNOB_PIN, undefined, { ...base, cap: 2 }),
+    ).not.toBe(benchRunIdentityHash(FIXTURE, DEFAULT_BENCH_KNOB_PIN, undefined, base));
+  });
+
+  test("two runs differing only in the seed, or only in the cap, get different run ids", () => {
+    const now = new Date("2026-06-03T12:00:00Z");
+    const base = { seed: "seed-1", cap: 1 };
+    // Both caps sit at the one-question fixture's population, so the
+    // materialized fixture is identical - the OPTIONS alone must split
+    // the run ids.
+    const a = createBenchRun(runsDir, FIXTURE, { now, sample: base });
+    const b = createBenchRun(runsDir, FIXTURE, { now, sample: { ...base, seed: "seed-2" } });
+    const c = createBenchRun(runsDir, FIXTURE, { now, sample: { ...base, cap: 2 } });
+    expect(a.runId).not.toBe(b.runId);
+    expect(a.runId).not.toBe(c.runId);
+    // Same options, same id.
+    expect(createBenchRun(runsDir, FIXTURE, { now, sample: base }).runId).toBe(a.runId);
+  });
+
+  test("the checkpoint carries the sampling request", () => {
+    const run = createBenchRun(runsDir, FIXTURE, {
+      now: new Date("2026-06-03T12:00:00Z"),
+      sample: { seed: "seed-1", cap: 3 },
+    });
+    expect(run.checkpoint.sample).toEqual({ seed: "seed-1", cap: 3 });
+    const reloaded = loadBenchRun(runsDir, run.runId);
+    expect(reloaded.checkpoint.sample).toEqual({ seed: "seed-1", cap: 3 });
+  });
+
+  test("a resume whose sampling options changed fails the identity guard", () => {
+    const run = createBenchRun(runsDir, FIXTURE, {
+      now: new Date("2026-06-03T12:00:00Z"),
+      sample: { seed: "seed-1", cap: 2 },
+    });
+    const same = loadBenchRun(runsDir, run.runId, {
+      expectFixture: FIXTURE,
+      sample: { seed: "seed-1", cap: 2 },
+    });
+    expect(same.runId).toBe(run.runId);
+    expect(() =>
+      loadBenchRun(runsDir, run.runId, {
+        expectFixture: FIXTURE,
+        sample: { seed: "seed-1", cap: 3 },
+      }),
+    ).toThrow(/run identity mismatch/);
+    expect(() =>
+      loadBenchRun(runsDir, run.runId, {
+        expectFixture: FIXTURE,
+        sample: { seed: "seed-2", cap: 2 },
+      }),
+    ).toThrow(/run identity mismatch/);
+    // A no-sampling resume against a sampled run mismatches too.
+    expect(() => loadBenchRun(runsDir, run.runId, { expectFixture: FIXTURE })).toThrow(
+      /run identity mismatch/,
     );
   });
 });

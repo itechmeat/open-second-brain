@@ -64,6 +64,7 @@ import {
   type BenchQuestion,
   type BenchQuestionResult,
   type BenchReport,
+  type BenchSampleRequest,
   type BenchSuiteCapabilities,
   type BenchSuiteReceipt,
 } from "./types.ts";
@@ -117,6 +118,15 @@ export interface BenchRunOptions {
    * conversion excluded from scoring.
    */
   readonly suiteReceipt?: BenchSuiteReceipt;
+  /**
+   * The seeded sampling request the run's fixture was loaded under.
+   * The CLI samples at load time, so this folds into the run identity
+   * (a resumed run whose sampling options changed fails the guard, even
+   * when a cap at or above the population would make the sampled
+   * fixtures identical) and is refused up front when malformed - it
+   * drives no phase of its own.
+   */
+  readonly sample?: BenchSampleRequest;
   readonly now?: Date;
 }
 
@@ -219,6 +229,19 @@ export async function runMemoryBench(opts: BenchRunOptions): Promise<BenchReport
       `bench run refused: recallFloor ${opts.recallFloor} is outside [0, 1]; the admission floor must be a finite number in the unit interval`,
     );
   }
+  // Refused BEFORE any run state exists, on the same principle: the
+  // sampling options are part of the run identity, so a malformed one
+  // must not buy a full run under an identity that could never resume.
+  if (opts.sample !== undefined) {
+    if (!Number.isInteger(opts.sample.cap) || opts.sample.cap <= 0) {
+      throw new Error(
+        `bench run refused: sample cap ${opts.sample.cap} is not a positive integer; the sampling cap bounds the selected questions`,
+      );
+    }
+    if (opts.sample.seed.trim() === "") {
+      throw new Error("bench run refused: sample seed must be a non-empty string");
+    }
+  }
   const pinnedKnobs = opts.pinnedKnobs ?? DEFAULT_BENCH_KNOB_PIN;
   const run: BenchRunHandle =
     opts.resume !== undefined
@@ -226,11 +249,13 @@ export async function runMemoryBench(opts: BenchRunOptions): Promise<BenchReport
           expectFixture: opts.fixture,
           pinnedKnobs,
           ...(opts.recallFloor !== undefined ? { recallFloor: opts.recallFloor } : {}),
+          ...(opts.sample !== undefined ? { sample: opts.sample } : {}),
         })
       : createBenchRun(opts.runsDir, opts.fixture, {
           ...(opts.now !== undefined ? { now: opts.now } : {}),
           pinnedKnobs,
           ...(opts.recallFloor !== undefined ? { recallFloor: opts.recallFloor } : {}),
+          ...(opts.sample !== undefined ? { sample: opts.sample } : {}),
         });
   let checkpoint = run.checkpoint;
   const vault = benchVaultDir(run.runDir);

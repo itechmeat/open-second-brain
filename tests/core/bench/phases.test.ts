@@ -278,6 +278,70 @@ describe("runMemoryBench", () => {
       runMemoryBench({ fixture: FIXTURE, runsDir, recallFloor: 1 }),
     ).resolves.toBeDefined();
   }, 60_000);
+
+  test("an invalid sampling request is refused by name before any run state exists", async () => {
+    // The sampling options are part of the run identity, so a malformed
+    // one is refused up front rather than after a full run pays for a
+    // configuration that never existed.
+    for (const sample of [
+      { seed: "seed-1", cap: 0 },
+      { seed: "seed-1", cap: -2 },
+      { seed: "seed-1", cap: 1.5 },
+      { seed: "", cap: 2 },
+      { seed: "   ", cap: 2 },
+    ]) {
+      await expect(runMemoryBench({ fixture: FIXTURE, runsDir, sample })).rejects.toThrow(
+        /bench run refused/,
+      );
+    }
+    expect(readdirSync(runsDir)).toHaveLength(0);
+  }, 30_000);
+
+  test("sampling options fold into the run identity end to end", async () => {
+    // Cap 5 sits above the five-question fixture's population, so both
+    // runs would materialize the identical fixture - the OPTIONS alone
+    // must split the run ids.
+    const first = await runMemoryBench({
+      fixture: FIXTURE,
+      runsDir,
+      sample: { seed: "seed-1", cap: 5 },
+    });
+    const second = await runMemoryBench({
+      fixture: FIXTURE,
+      runsDir,
+      sample: { seed: "seed-2", cap: 5 },
+    });
+    expect(first.run_id).not.toBe(second.run_id);
+    // Resuming with the same sampling options reuses the run.
+    const resumed = await runMemoryBench({
+      fixture: FIXTURE,
+      runsDir,
+      resume: first.run_id,
+      sample: { seed: "seed-1", cap: 5 },
+    });
+    expect(resumed.run_id).toBe(first.run_id);
+    expect(readdirSync(runsDir)).toHaveLength(2);
+  }, 30_000);
+
+  test("resume with changed sampling options fails fast on the identity guard", async () => {
+    const first = await runMemoryBench({
+      fixture: FIXTURE,
+      runsDir,
+      sample: { seed: "seed-1", cap: 5 },
+    });
+    await expect(
+      runMemoryBench({
+        fixture: FIXTURE,
+        runsDir,
+        resume: first.run_id,
+        sample: { seed: "seed-1", cap: 3 },
+      }),
+    ).rejects.toThrow(/run identity mismatch/);
+    // And so does resuming a sampled run with no sampling options.
+    await expect(
+      runMemoryBench({ fixture: FIXTURE, runsDir, resume: first.run_id }),
+    ).rejects.toThrow(/run identity mismatch/);
+  }, 30_000);
 });
 
 describe("the embeddings capability path", () => {
