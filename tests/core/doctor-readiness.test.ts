@@ -540,6 +540,78 @@ describe("probeRegisteredCommands", () => {
     expect(v.detail).toContain(launcher);
   });
 
+  test("the opencode V2 mcp.servers shape is extracted and probed like a top-level entry", async () => {
+    writeConfig("");
+    const launcher = join(tmp, "bin", "o2b");
+    mkdirSync(dirname(launcher), { recursive: true });
+    writeFileSync(launcher, "");
+    const config = join(home, ".config", "opencode", "opencode.json");
+    mkdirSync(dirname(config), { recursive: true });
+    writeFileSync(
+      config,
+      JSON.stringify({
+        theme: "dark",
+        mcp: {
+          servers: {
+            "open-second-brain": {
+              type: "local",
+              command: [launcher, "mcp", "--vault", tmp],
+              enabled: true,
+            },
+          },
+        },
+      }),
+    );
+    writeManifestEntries({ opencode: manifestEntry("opencode", config) });
+    const v = await probeRegisteredCommands(installedRuntimeOpts());
+    expect(v.status).toBe(READINESS_STATUS.pass);
+    expect(v.detail).toContain("opencode");
+    expect(v.detail).toContain(launcher);
+  });
+
+  test("an opencode.jsonc config with comments is extracted and probed", async () => {
+    writeConfig("");
+    const launcher = join(tmp, "bin", "o2b");
+    mkdirSync(dirname(launcher), { recursive: true });
+    writeFileSync(launcher, "");
+    const config = join(home, ".config", "opencode", "opencode.jsonc");
+    mkdirSync(dirname(config), { recursive: true });
+    writeFileSync(
+      config,
+      `// opencode configuration - operator notes survive\n` +
+        JSON.stringify(
+          {
+            theme: "dark",
+            mcp: {
+              servers: {
+                "open-second-brain": { type: "local", command: [launcher, "mcp"], enabled: true },
+              },
+            },
+          },
+          null,
+          2,
+        ) +
+        "\n",
+    );
+    writeManifestEntries({ opencode: manifestEntry("opencode", config) });
+    const v = await probeRegisteredCommands(installedRuntimeOpts());
+    expect(v.status).toBe(READINESS_STATUS.pass);
+    expect(v.detail).toContain("opencode");
+    expect(v.detail).toContain(launcher);
+  });
+
+  test("a JSON config with neither registration shape is still skipped with the current wording", async () => {
+    writeConfig("");
+    const config = join(home, ".config", "opencode", "opencode.json");
+    mkdirSync(dirname(config), { recursive: true });
+    writeFileSync(config, JSON.stringify({ theme: "dark" }));
+    writeManifestEntries({ opencode: manifestEntry("opencode", config) });
+    const v = await probeRegisteredCommands(installedRuntimeOpts());
+    expect(v.status).toBe(READINESS_STATUS.skipped);
+    expect(v.detail).toContain("no Open Second Brain command entry found");
+    expect(v.detail).toContain(config);
+  });
+
   test("the grok/codex TOML shape is extracted and a missing runner script fails", async () => {
     writeConfig("");
     const bun = join(tmp, "bin", "bun");

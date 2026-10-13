@@ -96,6 +96,7 @@ import {
   type CommandProbeOutcome,
 } from "./install/command-probe.ts";
 import { OSB_KEY_FULL, OSB_KEY_WRITER } from "./install/json-merge.ts";
+import { parseJsoncObject } from "./install/jsonc.ts";
 import { readManifest } from "./install/manifest.ts";
 import { buildPayload } from "./install/payload.ts";
 import { defaultRegistry } from "./install/registry.ts";
@@ -636,9 +637,12 @@ function flattenReason(message: string): string {
 /**
  * Top-level JSON objects an Open Second Brain MCP registration may live under: the
  * json-merge default (`mcpServers` - cursor, kiro, gemini-cli and the
- * generic printout) and opencode's `mcp`.
+ * generic printout), opencode's legacy `mcp`, and opencode V2's native
+ * `mcp.servers` - the one dotted key, resolved through nested objects,
+ * so a healthy V2 install is probed instead of reported as having no
+ * entry.
  */
-const JSON_MCP_TOP_LEVEL_KEYS: ReadonlyArray<string> = ["mcpServers", "mcp"];
+const JSON_MCP_TOP_LEVEL_KEYS: ReadonlyArray<string> = ["mcpServers", "mcp", "mcp.servers"];
 
 /** The Open Second Brain entry names, as JSON keys and as `[mcp_servers.<name>]` tables. */
 const OSB_ENTRY_KEYS: ReadonlySet<string> = new Set([OSB_KEY_FULL, OSB_KEY_WRITER]);
@@ -700,7 +704,8 @@ function statusForProbeOutcome(outcome: CommandProbeOutcome): ReadinessStatus {
 /**
  * What is registered, and does it still resolve? Reads the install
  * manifest, re-reads every recorded client config, extracts the Open Second Brain
- * `command`/`args` the install wrote (JSON `mcpServers`/`mcp` keys, or the
+ * `command`/`args` the install wrote (JSON `mcpServers`, opencode's legacy
+ * `mcp`, opencode V2's nested `mcp.servers`, or the
  * `[mcp_servers.*]` TOML tables grok and codex write), and probes each
  * command word via `command-probe.ts`.
  *
@@ -880,10 +885,23 @@ function extractRegisteredCommands(raw: string): CommandExtraction {
   return extractFromTomlConfig(raw);
 }
 
+/** Walk a (possibly dotted) key path through parsed JSON objects; null when any hop is missing or not an object. */
+function resolveJsonKeyPath(root: Record<string, unknown>, dottedKey: string): unknown {
+  let current: unknown = root;
+  for (const segment of dottedKey.split(".")) {
+    if (current === null || typeof current !== "object" || Array.isArray(current)) return null;
+    current = (current as Record<string, unknown>)[segment] ?? null;
+  }
+  return current;
+}
+
 /**
  * Read the Open Second Brain entries out of a JSON client config. Returns `null` when
  * the text is not JSON at all, so the TOML reader gets its turn - grok
  * and codex record the very same Open Second Brain names as `[mcp_servers.*]` tables.
+ * A JSONC config (opencode V2's `.jsonc`, comments and trailing commas)
+ * parses through the vendored editor; text neither reader accepts is
+ * not JSON.
  */
 function extractFromJsonConfig(raw: string): CommandExtraction | null {
   // Editors may save a BOM at the head; JSON.parse refuses it (the same
@@ -893,7 +911,11 @@ function extractFromJsonConfig(raw: string): CommandExtraction | null {
   try {
     parsed = JSON.parse(stripped);
   } catch {
-    return null;
+    try {
+      parsed = parseJsoncObject(raw);
+    } catch {
+      return null;
+    }
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     return { kind: "none" };
@@ -902,7 +924,7 @@ function extractFromJsonConfig(raw: string): CommandExtraction | null {
   const entries: RegisteredCommandEntry[] = [];
   const malformed: string[] = [];
   for (const topKey of JSON_MCP_TOP_LEVEL_KEYS) {
-    const block = root[topKey];
+    const block = resolveJsonKeyPath(root, topKey);
     if (block === null || typeof block !== "object" || Array.isArray(block)) continue;
     for (const [key, value] of Object.entries(block as Record<string, unknown>)) {
       if (!OSB_ENTRY_KEYS.has(key)) continue;
