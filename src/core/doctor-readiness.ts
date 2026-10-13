@@ -101,6 +101,7 @@ import { readManifest } from "./install/manifest.ts";
 import { buildPayload } from "./install/payload.ts";
 import { defaultRegistry } from "./install/registry.ts";
 import { registerAllAdapters } from "./install/adapters/all.ts";
+import { looksLikeServerEntry } from "./install/adapters/opencode.ts";
 import {
   AGENT_INSTRUCTION_FILES,
   WRITEBACK_CONTRACT_FINDING,
@@ -927,11 +928,19 @@ function extractFromJsonConfig(raw: string): CommandExtraction | null {
   // legacy top-level copies would otherwise have the same entry name
   // scanned twice, and a stale legacy copy reported as a broken command
   // beside its healthy native twin. The native block is scanned alone
-  // when it is present; the legacy keys are scanned (entry names
-  // deduped, first block wins) only when it is absent.
+  // when it is present AND is the native map - the same judgment the
+  // opencode adapter's `shapeIsV2` makes (its `looksLikeServerEntry`,
+  // shared here so both readers resolve one file to one shape): a block
+  // carrying type/command/url directly on it is a legacy user server
+  // that happens to be named `servers`, the file keeps the legacy shape,
+  // and the legacy keys are scanned (entry names deduped, first block
+  // wins) instead.
   const native = resolveJsonKeyPath(root, "mcp.servers");
   const scanKeys =
-    native !== null && typeof native === "object" && !Array.isArray(native)
+    native !== null &&
+    typeof native === "object" &&
+    !Array.isArray(native) &&
+    !looksLikeServerEntry(native)
       ? ["mcp.servers"]
       : JSON_MCP_TOP_LEVEL_KEYS.filter((topKey) => topKey !== "mcp.servers");
   const seen = new Set<string>();

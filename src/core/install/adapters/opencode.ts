@@ -187,8 +187,14 @@ function resolveConfigState(env: InstallEnv): ConfigState {
   };
 }
 
-/** Whether a value looks like a server entry: an object naming a type, a command or a url. */
-function looksLikeServerEntry(value: unknown): boolean {
+/**
+ * Whether a value looks like a server entry: an object naming a type, a
+ * command or a url. Exported so the doctor's registered-commands probe
+ * asks this module's shape question instead of its own: the probe scans
+ * `mcp.servers` alone only when this predicate calls the block the
+ * native map, so one file resolves to one shape in both readers.
+ */
+export function looksLikeServerEntry(value: unknown): boolean {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
   return (

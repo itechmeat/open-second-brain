@@ -609,6 +609,43 @@ describe("probeRegisteredCommands", () => {
     expect(v.detail).not.toContain("gone-o2b");
   });
 
+  test("a legacy user server named `servers` keeps the top-level shape and probes as installed", async () => {
+    writeConfig("");
+    const launcher = join(tmp, "bin", "o2b");
+    mkdirSync(dirname(launcher), { recursive: true });
+    writeFileSync(launcher, "");
+    const config = join(home, ".config", "opencode", "opencode.json");
+    mkdirSync(dirname(config), { recursive: true });
+    writeFileSync(
+      config,
+      JSON.stringify({
+        mcp: {
+          "open-second-brain": {
+            type: "local",
+            command: [launcher, "mcp", "--vault", tmp],
+            enabled: true,
+          },
+          "open-second-brain-writer": {
+            type: "local",
+            command: [launcher, "mcp", "--writer-only", "--vault", tmp],
+            enabled: true,
+          },
+          // A legacy user's OWN server that happens to be named `servers`:
+          // type/command sit directly on the block, so the adapter's shape
+          // predicate resolves the file as the V1 top-level shape, not the
+          // native V2 map. The doctor must read the same shape and scan
+          // the top-level keys, or it grades this healthy install as
+          // nothing-to-probe.
+          servers: { type: "local", command: ["uvx", "some-user-server"] },
+        },
+      }),
+    );
+    writeManifestEntries({ opencode: manifestEntry("opencode", config) });
+    const v = await probeRegisteredCommands(installedRuntimeOpts());
+    expect(v.status).toBe(READINESS_STATUS.pass);
+    expect(v.detail).toContain(launcher);
+  });
+
   test("an opencode.jsonc config with comments is extracted and probed", async () => {
     writeConfig("");
     const launcher = join(tmp, "bin", "o2b");
