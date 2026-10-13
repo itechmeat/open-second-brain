@@ -397,4 +397,68 @@ describe("removeJsoncEntry", () => {
     expect(result.startsWith("\uFEFF")).toBe(true);
     expect(result.slice(1)).toBe(COMMENTED_CONFIG_WITH_WRITER);
   });
+
+  test("a comma-first document survives removing its comma-free entry", () => {
+    // The separator sits at the head of the FOLLOWING line - valid JSONC.
+    // The removal must consume that following comma, or the collapse of
+    // the entry's line strands it at the head of the object.
+    const text = `{
+  "a": 1
+  , "b": 2
+}
+`;
+    const result = removeJsoncEntry(text, [], "a");
+    expect(parseJsoncObject(result)).toEqual({ b: 2 });
+    // Bytes outside the splice survive: "b"'s line keeps its shape.
+    expect(result).toContain('"b": 2\n}\n');
+  });
+
+  test("a comma-first document survives removing its last entry byte-exactly", () => {
+    const text = `{
+  "a": 1
+  , "b": 2
+}
+`;
+    expect(removeJsoncEntry(text, [], "b")).toBe(`{
+  "a": 1
+}
+`);
+  });
+
+  test("inserting into a comma-first document keeps it parseable", () => {
+    const text = `{
+  "a": 1
+  , "b": 2
+}
+`;
+    const grown = setJsoncEntry(text, [], "c", 3);
+    expect(parseJsoncObject(grown)).toEqual({ a: 1, b: 2, c: 3 });
+    // The comma-first bytes survive the splice elsewhere; the new entry
+    // carries its own separator.
+    expect(grown).toContain('  , "b": 2,\n');
+  });
+
+  test("a trailing comma on a comment line above the entry is never eaten", () => {
+    // The walk-back must treat that comma as comment content, not a
+    // separator: every byte of an operator comment is kept exactly.
+    const text = `{
+  "a": 1,
+  // about b,
+  "b": 2
+}
+`;
+    const result = removeJsoncEntry(text, [], "b");
+    expect(result).toContain("// about b,\n");
+    expect(parseJsoncObject(result)).toEqual({ a: 1 });
+  });
+
+  test("a number literal longer than 64 characters parses instead of false-refusing", () => {
+    const digits65 =
+      "12345678901234567890123456789012345678901234567890123456789012345678901234567";
+    const text = `{\n  "big": ${digits65},\n  "small": 1\n}\n`;
+    expect(parseJsoncObject(text)).toEqual({ big: Number(digits65), small: 1 });
+    // The editor route too: scanning the literal must not split it into
+    // two tokens and refuse the whole document.
+    expect(setJsoncEntry(text, [], "flag", true)).toContain('"flag": true');
+  });
 });

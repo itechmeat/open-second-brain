@@ -153,7 +153,11 @@ function scan(body: string): Lex {
       continue;
     }
     if (c === "-" || (c >= "0" && c <= "9")) {
-      const match = NUMBER_RE.exec(body.slice(i, i + 64));
+      // The full remaining body, not a window: the anchored regex stops
+      // at the literal's own end, and a window shorter than a (valid,
+      // exotic) literal would split it into two number tokens and
+      // false-refuse the document as malformed.
+      const match = NUMBER_RE.exec(body.slice(i));
       if (match === null) {
         error = `invalid number at offset ${i}`;
         break;
@@ -477,17 +481,35 @@ function replaceEntry(text: string, entry: ObjectEntry, value: unknown): string 
 }
 
 /**
+ * Whether the tokenizer emitted a comma at exactly `offset`. Comment
+ * bytes never tokenize, so this is what separates a separator comma from
+ * a `,` that merely closes an operator comment line.
+ */
+function isCommaTokenAt(tokens: ReadonlyArray<Token>, offset: number): boolean {
+  for (const token of tokens) {
+    if (token.start === offset) return token.kind === "punct" && token.text === ",";
+    if (token.start > offset) return false;
+  }
+  return false;
+}
+
+/**
  * Splice out one entry, commas included, without touching a comment that
  * shares the line. When the entry is alone on its line(s) the whole line
  * collapses so no hole is left behind.
  */
-function removeEntry(text: string, entry: ObjectEntry): string {
+function removeEntry(text: string, tokens: ReadonlyArray<Token>, entry: ObjectEntry): string {
   let start = entry.keyStart;
   let end = entry.valueEnd;
   let trailingComma = false;
+  // The separator may sit at the head of a FOLLOWING line (comma-first
+  // style), so the forward scan crosses newlines the way the walk-back
+  // below does. It stops at the first non-whitespace byte, so a comma it
+  // reaches is code - a comment's opening "/" would have stopped the
+  // scan first - and the token check confirms it.
   let j = end;
-  while (j < text.length && isSpaceOrTab(text[j]!)) j += 1;
-  if (text[j] === ",") {
+  while (j < text.length && isWhitespace(text[j]!)) j += 1;
+  if (text[j] === "," && isCommaTokenAt(tokens, j)) {
     end = j + 1;
     trailingComma = true;
   }
@@ -502,9 +524,13 @@ function removeEntry(text: string, entry: ObjectEntry): string {
       // original bytes when the removed entry was last in its object.
       // A comment between the comma and the entry stops the walk-back,
       // and the leftover trailing comma stays - valid JSONC either way.
+      // A comma that is the last byte of a COMMENT line is comment
+      // content, not a separator: only a comma the tokenizer emitted
+      // may be consumed, so the operator's bytes stay exactly as they
+      // were.
       let m = k - 1;
       while (m > 0 && isSpaceOrTab(text[m - 1]!)) m -= 1;
-      if (m > 0 && text[m - 1] === ",") start = m - 1;
+      if (m > 0 && text[m - 1] === "," && isCommaTokenAt(tokens, m - 1)) start = m - 1;
     }
   }
   const lineStart = start > 0 ? text.lastIndexOf("\n", start - 1) + 1 : 0;
@@ -558,6 +584,7 @@ function setInObject(
 
 function removeFromObject(
   text: string,
+  tokens: ReadonlyArray<Token>,
   root: ObjectNode,
   path: ReadonlyArray<string>,
   key: string,
@@ -569,7 +596,7 @@ function removeFromObject(
     current = entry.value;
   }
   const entry = current.entries.get(key);
-  return entry === undefined ? text : removeEntry(text, entry);
+  return entry === undefined ? text : removeEntry(text, tokens, entry);
 }
 
 // ----- Public surface -----------------------------------------------------------
@@ -651,6 +678,7 @@ export function setJsoncEntry(
  */
 export function removeJsoncEntry(text: string, path: ReadonlyArray<string>, key: string): string {
   const { body, hadBom } = stripBom(text);
-  const next = removeFromObject(body, parseRoot(scan(body)), path, key);
+  const lex = scan(body);
+  const next = removeFromObject(body, lex.tokens, parseRoot(lex), path, key);
   return restoreBom(next, hadBom);
 }
