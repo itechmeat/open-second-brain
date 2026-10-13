@@ -20,7 +20,9 @@ import { loadReplayBenchFixture } from "../../../core/bench/replay.ts";
 import { runMemoryBench } from "../../../core/bench/phases.ts";
 import type {
   BenchPinnedKnobs,
+  BenchSampleRequest,
   BenchSuiteLoad,
+  BenchSuiteLoadOptions,
   BenchSuiteRegistration,
 } from "../../../core/bench/types.ts";
 import { defaultConfigPath, resolveBenchJudgeCmd } from "../../../core/config.ts";
@@ -28,7 +30,8 @@ import { CliError, fail, parse } from "../helpers.ts";
 
 const USAGE =
   "usage: o2b brain bench memory --fixture <name|path> [--suite <name>] [--pin <json>] " +
-  "[--recall-floor <n>] [--resume <run-id>] [--runs-dir <dir>] [--json]";
+  "[--recall-floor <n>] [--sample-seed <value>] [--sample-cap <n>] " +
+  "[--resume <run-id>] [--runs-dir <dir>] [--json]";
 
 const DEFAULT_RUNS_DIR = join(".open-second-brain", "bench-runs");
 const REPO_FIXTURE_DIR = join("tests", "fixtures", "bench");
@@ -65,8 +68,20 @@ const BENCH_SUITES = new Map<string, BenchSuiteRegistration>([
   [
     LONGMEMEVAL_SUITE_NAME,
     Object.freeze({
-      loader: loadLongMemEvalFixture,
-      capabilities: Object.freeze({ embeddings: true }),
+      loader: (fixturePath: string, options?: BenchSuiteLoadOptions): BenchSuiteLoad => {
+        // The sampling contract lands with this wave's verb flags; the
+        // loader implementation lands with the sampler wiring
+        // (t_4501c662). Until it does, a sampling request is refused by
+        // name - never silently ignored, which would run the whole
+        // dataset under flags that promised a subset.
+        if (options?.sample !== undefined) {
+          throw new Error(
+            "bench suite 'longmemeval' received a sampling request but its loader does not implement sampling yet; the request is refused rather than silently ignored",
+          );
+        }
+        return loadLongMemEvalFixture(fixturePath);
+      },
+      capabilities: Object.freeze({ embeddings: true, sampling: true }),
     }),
   ],
   [
@@ -287,6 +302,37 @@ export function parseRecallFloorFlag(raw: string | undefined): number | undefine
   return value;
 }
 
+/**
+ * Parse the `--sample-seed` value: absent keeps the whole-dataset load;
+ * present it must be a non-empty string and pairs with `--sample-cap`.
+ * The seed is opaque - the sampler hashes it, so any string works and
+ * none is ever interpolated into a run id.
+ */
+export function parseSampleSeedFlag(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  const value = raw.trim();
+  if (value === "") {
+    throw new CliError(
+      `brain bench memory: --sample-seed must be a non-empty string, got '${raw}'`,
+    );
+  }
+  return value;
+}
+
+/**
+ * Parse the `--sample-cap` value: absent keeps the whole-dataset load;
+ * present it must be a positive integer - the bound on selected
+ * questions - and pairs with `--sample-seed`.
+ */
+export function parseSampleCapFlag(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const value = Number(raw);
+  if (raw.trim() === "" || !Number.isInteger(value) || value <= 0) {
+    throw new CliError(`brain bench memory: --sample-cap must be a positive integer, got '${raw}'`);
+  }
+  return value;
+}
+
 export async function cmdBrainBench(argv: string[]): Promise<number> {
   if (argv[0] !== "memory") return fail(USAGE);
   const { flags } = parse(argv.slice(1), {
@@ -294,6 +340,8 @@ export async function cmdBrainBench(argv: string[]): Promise<number> {
     suite: { type: "string" },
     pin: { type: "string" },
     "recall-floor": { type: "string" },
+    "sample-seed": { type: "string" },
+    "sample-cap": { type: "string" },
     resume: { type: "string" },
     "runs-dir": { type: "string" },
     json: { type: "boolean" },
@@ -318,10 +366,39 @@ export async function cmdBrainBench(argv: string[]): Promise<number> {
     );
   }
 
+  // Sampling flags are LOADER options: validated (pair, values,
+  // capability) before the registry dispatch, so a refused request never
+  // reaches a loader and a sampling-capable loader receives
+  // `BenchSuiteLoadOptions { sample }`.
+  const sampleSeed = parseSampleSeedFlag(
+    typeof flags["sample-seed"] === "string" ? flags["sample-seed"] : undefined,
+  );
+  const sampleCap = parseSampleCapFlag(
+    typeof flags["sample-cap"] === "string" ? flags["sample-cap"] : undefined,
+  );
+  if ((sampleSeed === undefined) !== (sampleCap === undefined)) {
+    const loneFlag = sampleSeed !== undefined ? "--sample-seed" : "--sample-cap";
+    return fail(
+      "brain bench memory: --sample-seed and --sample-cap must be given together " +
+        `(sampling takes a seed and a cap; got only ${loneFlag})`,
+    );
+  }
+  const sample: BenchSampleRequest | undefined =
+    sampleSeed !== undefined && sampleCap !== undefined
+      ? { seed: sampleSeed, cap: sampleCap }
+      : undefined;
+  if (sample !== undefined && registration.capabilities.sampling !== true) {
+    return fail(
+      "brain bench memory: --sample-seed/--sample-cap need a suite that declares the " +
+        "sampling capability; " +
+        (suite === "" ? "no --suite was given" : `suite '${suite}' does not declare it`),
+    );
+  }
+
   // One dispatch for every suite: the registry entry owns loading and
   // declares what the suite may do; the capabilities and the loader's
   // conversion receipt ride BenchRunOptions.
-  const loaded = registration.loader(fixturePath);
+  const loaded = registration.loader(fixturePath, sample === undefined ? {} : { sample });
   const fixture = loaded.fixture;
   const runsDir = resolve(
     typeof flags["runs-dir"] === "string" && flags["runs-dir"].trim() !== ""

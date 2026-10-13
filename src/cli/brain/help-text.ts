@@ -1436,5 +1436,10 @@ export const VERB_HELP: Record<string, string> = {
     "runs directory (never the configured vault). Reports quality,\n" +
     "latency, and context cost separately; checkpoint/resume by run id;\n" +
     "bench_judge_cmd arms the optional external judge. Exit 1 on any\n" +
-    "failed question.\n",
+    "failed question.\n" +
+    "--sample-seed V --sample-cap N  with a sampling-capable suite\n" +
+    "(longmemeval): run a seeded, question-type-proportional subset of\n" +
+    "the dataset instead of the whole fixture. Both flags are required\n" +
+    "together and fold into the run identity, so a resumed run whose\n" +
+    "sampling options changed fails the identity guard.\n",
 };

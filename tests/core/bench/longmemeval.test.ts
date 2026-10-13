@@ -508,10 +508,10 @@ describe("scoreLongMemEvalRecall", () => {
 });
 
 describe("the longmemeval suite", () => {
-  test("is registered with the embeddings capability", () => {
+  test("is registered with the embeddings and sampling capabilities", () => {
     const registration = benchSuite("longmemeval");
     expect(registration).toBeDefined();
-    expect(registration!.capabilities).toEqual({ embeddings: true });
+    expect(registration!.capabilities).toEqual({ embeddings: true, sampling: true });
     expect(typeof registration!.loader).toBe("function");
   });
 

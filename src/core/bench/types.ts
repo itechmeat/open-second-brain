@@ -166,6 +166,36 @@ export interface BenchSuiteCapabilities {
    * semantic lane.
    */
   readonly embeddings: boolean;
+  /**
+   * Whether the suite's loader accepts a seeded sampling request
+   * ({@link BenchSuiteLoadOptions.sample}). Absent means false: the
+   * sampling flags are refused for such a suite, naming it. Declared
+   * here, honored by the loader - a capability declaration alone is
+   * inert, exactly like {@link BenchSuiteCapabilities.embeddings}.
+   */
+  readonly sampling?: boolean;
+}
+
+/**
+ * A seeded sampling request for one suite load: select a deterministic,
+ * question-type-proportional subset of the dataset instead of running
+ * it whole. The seed is an opaque string (hashed, never interpolated
+ * into run ids); the cap is a positive integer bounding the selected
+ * questions. Part of the run identity: a resumed run whose sampling
+ * options changed fails the identity guard.
+ */
+export interface BenchSampleRequest {
+  readonly seed: string;
+  readonly cap: number;
+}
+
+/**
+ * Options the bench verb passes to a suite loader as its second,
+ * OPTIONAL parameter - a suite registered before an option existed
+ * keeps its one-parameter loader and simply never sees the request.
+ */
+export interface BenchSuiteLoadOptions {
+  readonly sample?: BenchSampleRequest;
 }
 
 /**
@@ -191,7 +221,7 @@ export interface BenchSuiteReceipt {
  * a hard-coded branch chain.
  */
 export interface BenchSuiteRegistration {
-  readonly loader: (fixturePath: string) => BenchSuiteLoad;
+  readonly loader: (fixturePath: string, options?: BenchSuiteLoadOptions) => BenchSuiteLoad;
   readonly capabilities: BenchSuiteCapabilities;
 }
 
