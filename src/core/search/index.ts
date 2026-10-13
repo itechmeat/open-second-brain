@@ -293,6 +293,9 @@ const DEFAULTS = {
   trigramPrefilterEnabled: false,
   trigramPrefilterMinChunks: 5000,
   trigramPrefilterMaxSelectivity: 0.5,
+  // Per-source-session pool cap (t_bb6ce095): off at 0, which never runs
+  // the phase and adds no frontmatter reads.
+  poolMaxPerSession: 0,
   rerankTopK: 20,
   rerankMinScore: 0,
 };
@@ -664,6 +667,14 @@ function validateResolvedConfig(config: ResolvedSearchConfig, extraBodySource: s
   // switch, not a misconfiguration (t_bdc24171).
   if (config.hybridDeadlineMs !== undefined) {
     validateIntegerRange(config.hybridDeadlineMs, "search_hybrid_deadline_ms", {
+      min: 0,
+    });
+  }
+  // Per-source-session pool cap (t_bb6ce095): optional (absent reads as
+  // the off value 0), and never negative - a negative cap would drop
+  // every identified row, which is a misconfiguration, not an off switch.
+  if (config.recall.poolMaxPerSession !== undefined) {
+    validateIntegerRange(config.recall.poolMaxPerSession, "search_pool_max_per_session", {
       min: 0,
     });
   }
@@ -1354,6 +1365,19 @@ export function resolveSearchConfig(opts: {
     "search_pool_multiplier",
     { min: 1, max: 10 },
   );
+  // Per-source-session pool cap (t_bb6ce095). No parse-time range: the
+  // integer-range line in `validateResolvedConfig` owns the refusal, the
+  // same way a programmatic override is judged there.
+  const poolMaxPerSession = parseInteger(
+    envOrConfig(
+      env,
+      config,
+      "OPEN_SECOND_BRAIN_SEARCH_POOL_MAX_PER_SESSION",
+      "search_pool_max_per_session",
+    ),
+    DEFAULTS.poolMaxPerSession,
+    "search_pool_max_per_session",
+  );
   const selfTuningEnabled = parseBool(
     envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_SELF_TUNING", "search_self_tuning_enabled"),
     false,
@@ -1465,6 +1489,11 @@ export function resolveSearchConfig(opts: {
     trigramPrefilterEnabled,
     trigramPrefilterMinChunks,
     trigramPrefilterMaxSelectivity,
+    // Only the off value stays absent, so exact-shape assertions on the
+    // resolved config keep holding - the relationalRerankPin pattern. A
+    // negative value is spread through so `validateResolvedConfig` owns
+    // its refusal, exactly as it judges a programmatic override.
+    ...(poolMaxPerSession !== DEFAULTS.poolMaxPerSession ? { poolMaxPerSession } : {}),
   });
 
   const freshen: ResolvedFreshenConfig = Object.freeze({

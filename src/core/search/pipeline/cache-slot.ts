@@ -274,8 +274,12 @@ const FINGERPRINT_OFF = "off";
  * semantic toggle, recall tunables) invalidates cached rows alongside the
  * corpus generation. Cache-only knobs (enable/TTL) are excluded - they do
  * not change result content.
+ *
+ * Exported for the config tests, which pin that every results-affecting
+ * knob re-keys the fingerprint: a knob missing here serves stale cached
+ * rows.
  */
-function configFingerprint(config: ResolvedSearchConfig): string {
+export function configFingerprint(config: ResolvedSearchConfig): string {
   const r = config.recall;
   return JSON.stringify({
     kw: config.keywordWeight,
@@ -340,6 +344,11 @@ function configFingerprint(config: ResolvedSearchConfig): string {
     tri: r.trigramPrefilterEnabled,
     triMin: r.trigramPrefilterMinChunks,
     triSel: r.trigramPrefilterMaxSelectivity,
+    // The per-source-session pool cap (t_bb6ce095) changes which rows
+    // survive the assembled pool, so a knob change must invalidate cached
+    // rows. Present only when the cap is on (the resolved field is
+    // spread-omitted at 0), so every off key is unchanged.
+    ...(r.poolMaxPerSession !== undefined ? { poolCap: r.poolMaxPerSession } : {}),
     // The query embed is fitted to the effective input window with the
     // instruction prefix the provider sends counted in, so either one
     // changes the text embedded (and whether it was cut): a declared or

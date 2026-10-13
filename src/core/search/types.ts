@@ -923,6 +923,12 @@ export interface SearchOptions {
    */
   readonly maxHops?: number;
   /**
+   * Per-query per-source-session pool cap override (t_bb6ce095). Absent
+   * uses the resolved config default; `0` is the documented off value and
+   * forces the cap off for this query.
+   */
+  readonly poolMaxPerSession?: number;
+  /**
    * Requested content-visibility scope (v3 / typed graph semantics).
    * Pages with no `visibility:` frontmatter are always returned;
    * a page that declares visibility values is returned only when this
@@ -1721,6 +1727,17 @@ export interface ResolvedRecallConfig {
    * construct this shape literally) reads as false.
    */
   readonly metadataBoostGateEnabled?: boolean;
+  /**
+   * Per-source-session pool cap (t_bb6ce095), resolved from
+   * `search_pool_max_per_session`. The maximum rows ONE source import
+   * session (`session_ref`, else `session_id` frontmatter) may
+   * contribute to the reranker-facing candidate pool, applied after the
+   * relevance floor and before the diversity rerank. 0 is off: the phase
+   * never runs and no frontmatter reads are added, so results are
+   * byte-identical. Absent (configs written before the knob construct
+   * this shape literally) reads as 0.
+   */
+  readonly poolMaxPerSession?: number;
 }
 
 /** What freshen-on-read does; see `src/core/search/freshen.ts`. */

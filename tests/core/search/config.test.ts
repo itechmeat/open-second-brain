@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveSearchConfig } from "../../../src/core/search/index.ts";
 import { SearchError } from "../../../src/core/search/types.ts";
+import type { SearchOptions } from "../../../src/core/search/types.ts";
+import { configFingerprint } from "../../../src/core/search/pipeline/cache-slot.ts";
+import { buildCacheKey } from "../../../src/core/search/query-cache.ts";
 
 let tmp: string;
 let configPath: string;
@@ -39,6 +42,7 @@ const ENV_KEYS = [
   "OPEN_SECOND_BRAIN_SEARCH_RESUME_REINDEX",
   "OPEN_SECOND_BRAIN_SEARCH_CHAIN_STOP",
   "OPEN_SECOND_BRAIN_SEARCH_CHAIN_STOP_SCORE",
+  "OPEN_SECOND_BRAIN_SEARCH_POOL_MAX_PER_SESSION",
 ];
 
 beforeEach(() => {
@@ -413,4 +417,67 @@ test("grace of 0 disables the await window", () => {
   writeFileSync(configPath, `vault: "${tmp}"\nsearch_shutdown_grace_seconds: 0\n`);
   const cfg = resolveSearchConfig({ vault: tmp, configPath });
   expect(cfg.shutdownGraceMs).toBe(0);
+});
+
+// ── Per-source-session pool cap (t_bb6ce095) ─────────────────────────────────
+
+test("the per-session pool cap defaults off and resolves from config and env", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\n`);
+  expect(resolveSearchConfig({ vault: tmp, configPath }).recall.poolMaxPerSession).toBeUndefined();
+
+  writeFileSync(configPath, `vault: "${tmp}"\nsearch_pool_max_per_session: "4"\n`);
+  expect(resolveSearchConfig({ vault: tmp, configPath }).recall.poolMaxPerSession).toBe(4);
+
+  process.env["OPEN_SECOND_BRAIN_SEARCH_POOL_MAX_PER_SESSION"] = "2";
+  expect(resolveSearchConfig({ vault: tmp, configPath }).recall.poolMaxPerSession).toBe(2);
+});
+
+test("a negative per-session pool cap is refused by the resolved-config validation", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\nsearch_pool_max_per_session: "-1"\n`);
+  expect(() => resolveSearchConfig({ vault: tmp, configPath })).toThrow(
+    /search_pool_max_per_session/,
+  );
+});
+
+test("a non-integer per-session pool cap is refused", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\nsearch_pool_max_per_session: "2.5"\n`);
+  expect(() => resolveSearchConfig({ vault: tmp, configPath })).toThrow(
+    /search_pool_max_per_session/,
+  );
+});
+
+test("the resolved field is absent at the off default and present when positive", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\n`);
+  const off = resolveSearchConfig({ vault: tmp, configPath }).recall;
+  // Spread-omitted at 0: exact-shape assertions on the resolved config
+  // keep holding, exactly like the other opt-in recall fields.
+  expect(Object.keys(off)).not.toContain("poolMaxPerSession");
+
+  writeFileSync(configPath, `vault: "${tmp}"\nsearch_pool_max_per_session: "3"\n`);
+  const on = resolveSearchConfig({ vault: tmp, configPath }).recall as Record<string, unknown>;
+  expect(on["poolMaxPerSession"]).toBe(3);
+});
+
+test("a pool-cap change re-keys the config fingerprint and the per-query cache key", () => {
+  writeFileSync(configPath, `vault: "${tmp}"\n`);
+  const off = resolveSearchConfig({ vault: tmp, configPath });
+  writeFileSync(configPath, `vault: "${tmp}"\nsearch_pool_max_per_session: "2"\n`);
+  const on = resolveSearchConfig({ vault: tmp, configPath });
+
+  // A results-affecting knob must invalidate cached rows: the fingerprint
+  // string differs, so a cached row computed under the old knob value can
+  // never be served under the new one.
+  expect(configFingerprint(on)).not.toBe(configFingerprint(off));
+
+  // The per-query override partitions the cache the same way; dropped
+  // when absent, so a query that does not set it keys byte-identically
+  // to a pre-knob row.
+  const base: SearchOptions = { query: "alpha" };
+  expect(buildCacheKey({ ...base, poolMaxPerSession: 2 }, "p", "fp")).not.toBe(
+    buildCacheKey(base, "p", "fp"),
+  );
+  // An explicit per-query 0 is a forced off, not the config default.
+  expect(buildCacheKey({ ...base, poolMaxPerSession: 0 }, "p", "fp")).not.toBe(
+    buildCacheKey(base, "p", "fp"),
+  );
 });

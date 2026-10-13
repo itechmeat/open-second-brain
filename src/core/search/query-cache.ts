@@ -161,6 +161,12 @@ export function buildCacheKey(
     // promoted properties need no separate input - they are part of
     // `properties`, already canonicalized above.
     kind: opts.kind ?? undefined,
+    // Per-source-session pool cap override (t_bb6ce095) partitions the
+    // cache: an explicit `0` forces the cap off for this query, which
+    // differs from the config default. Dropped when absent, so a query
+    // that does not touch the knob keys byte-identically to a pre-knob
+    // row.
+    poolMaxPerSession: opts.poolMaxPerSession ?? undefined,
     structuredQuery: canonicalStructuredQuery(opts),
     sessionFocus: canonicalSessionFocus(opts),
     plan: planHash,
