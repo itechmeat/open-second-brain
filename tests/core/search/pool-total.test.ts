@@ -323,6 +323,51 @@ test("the cap's drops do not extend the backfill trigger", async () => {
   }
 });
 
+test("a pre-existing backfill under the cap notes the final pass's drops exactly once", async () => {
+  // The harder shape the once-per-answer contract claims: the backfill
+  // fires for its OWN pre-existing reason (default-scope visibility drops
+  // the private half of the session, leaving the window under-filled),
+  // the cap is re-applied over the wider 50-row pool, and the trail
+  // reports THAT pass's numbers - not the first pass's. Forty notes in
+  // one session, half `visibility: private`, cap 2, limit 3: the first
+  // (30-wide) pass drops 28 to the cap, the second (50-wide) pass ranks
+  // all 40 and drops 38 - so `dropped: 38` is itself the witness that
+  // the window grew and the answer came from the final pass.
+  const v = createTempVault("pool-cap-backfill");
+  try {
+    for (let i = 0; i < 40; i += 1) {
+      const visibility = i % 2 === 1 ? "visibility: private\n" : "";
+      writeMd(
+        v.vault,
+        `solo-${i}.md`,
+        `---\ntitle: Solo ${i}\n${visibility}session_ref: sess-a\n---\n\n# Solo ${i}\n\n` +
+          `The widget calibration routine number ${i}.\n`,
+      );
+    }
+    const cold = withRecall(
+      makeConfig({ vault: v.vault, dbPath: v.dbPath, maxHops: 0, mmrLambda: 1 }),
+      { recencyAmplitude: 0, poolMultiplier: 20, poolMaxPerSession: 2 },
+    );
+    await indexVault(cold, {});
+
+    const out = await search(cold, { query: CROWDED_QUERY, limit: LIMIT });
+
+    // The cap's own drops narrowed the answer (one public row survived),
+    // and the note names the FINAL pass: 38 dropped over the 50-wide
+    // pool, never the first pass's 28.
+    expect(out.results.map((r) => r.path)).toEqual(["solo-0.md"]);
+    const entry = degradationOf(out, RETRIEVAL_DEGRADATION.sourceSessionCappedRows);
+    expect(entry?.detail).toEqual({ dropped: 38, cap: 2 });
+    // Once per answer, even when the assemble closure ran twice.
+    const capNotes = out.retrievalTrail?.degraded.filter(
+      (d) => d.code === RETRIEVAL_DEGRADATION.sourceSessionCappedRows,
+    );
+    expect(capNotes).toHaveLength(1);
+  } finally {
+    v.cleanup();
+  }
+});
+
 test("the cap on joins the widening so a cross-encoder query keeps its topK pool", async () => {
   // Thirty rows of one session ranked ahead of ten of another. With the
   // cap active and the cross-encoder asking for a 40-wide pool, the
