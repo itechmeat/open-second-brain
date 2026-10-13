@@ -696,7 +696,10 @@ describe("bench sampling flags", () => {
     );
     expect(out.returncode).toBe(0);
     expect(out.stdout).toContain("longmemeval: recall_all@5");
-    expect(out.stdout).toContain("sample_selected 2");
+    // The sampled text line shows the covered share: the population the
+    // sampler chose from beside the selected count (pr-251 L3). The
+    // whole-dataset line carries neither field.
+    expect(out.stdout).toContain("sample_population 3 sample_selected 2");
     const runId = /^bench \S+ run (\S+)$/m.exec(out.stdout)?.[1];
     expect(runId).toBeDefined();
     const checkpoint = JSON.parse(

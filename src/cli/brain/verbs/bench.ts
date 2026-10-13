@@ -442,9 +442,12 @@ export async function cmdBrainBench(argv: string[]): Promise<number> {
       `longmemeval: recall_all@5 ${report.longmemeval.recall_all_at_5} ` +
         `abstention_excluded ${report.longmemeval.abstention_excluded}` +
         // Present only on a sampled run, so the whole-dataset line is
-        // byte-identical to before.
+        // byte-identical to before. The population rides beside the
+        // selected count, so the line shows the share of the dataset
+        // the run covers (both fields are written together by the one
+        // spread site that emits the sampled family).
         (report.longmemeval.sample_selected !== undefined
-          ? ` sample_selected ${report.longmemeval.sample_selected}`
+          ? ` sample_population ${report.longmemeval.sample_population} sample_selected ${report.longmemeval.sample_selected}`
           : "") +
         "\n",
     );
