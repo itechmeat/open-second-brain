@@ -811,6 +811,23 @@ export function resolveSkillAutoAttach(configPath?: string): boolean {
 }
 
 /**
+ * Skill-attach usage-ordering gate (Agent Surface Suite, t_5d1ec8a8).
+ * Default OFF: skills_attach ranks purely by the lexical scorer unless
+ * `skills_attach_usage_ordering: "true"` (or the matching env override),
+ * so the default offer ordering stays byte-identical. When on, observed
+ * `skill_invoked` usage reorders lexical near-ties under the bounded
+ * composite in `surface/skill-attach.ts`; the continuity read still only
+ * happens when the auto-attach gate above is on too.
+ */
+export function resolveSkillsAttachUsageOrdering(configPath?: string): boolean {
+  return resolveConfigFlag(
+    "OPEN_SECOND_BRAIN_SKILLS_ATTACH_USAGE_ORDERING",
+    "skills_attach_usage_ordering",
+    configPath,
+  );
+}
+
+/**
  * Context-pack focus wiring gate (Agent Surface Suite, t_5b478e47).
  * Default OFF: brain_context_pack ignores the active search focus
  * unless `search_focus_context_pack: "true"`, keeping the default

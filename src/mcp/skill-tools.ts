@@ -15,6 +15,7 @@ import {
   resolveSkillAutoAttach,
   resolveSkillsDir,
   resolveSkillsAttachTriggers,
+  resolveSkillsAttachUsageOrdering,
   resolveTokenImpactLedgerEnabled,
 } from "../core/config.ts";
 import {
@@ -22,6 +23,7 @@ import {
   resolveDecisionModelConfig,
   type ResolvedDecisionModelConfig,
 } from "../core/decision-model/config.ts";
+import { deriveSkillUsage, skillUsageWeights } from "../core/brain/skill-usage.ts";
 import { buildSkillAttachment, type SkillAttachment } from "../core/surface/skill-attach.ts";
 import {
   buildSkillAttachmentWithDecision,
@@ -172,15 +174,29 @@ function toolSkillsAttach(
   }
   const includeTriggers = resolveSkillsAttachTriggers(ctx.configPath ?? undefined);
   const skills = discoverSkills(rootsFor(ctx));
-  const decisionConfig = skillsDecisionConfig(ctx);
-  if (decisionConfig === null) {
-    return attachResult(buildSkillAttachment({ query, skills, maxSkills, includeTriggers }));
-  }
-  return buildSkillAttachmentWithDecision({
+  // Usage-ordered offers (t_5d1ec8a8), default off: with the ordering knob
+  // on, the whole continuity store is read exactly once per attach call and
+  // the same weight map feeds both build paths, so the deterministic and
+  // decision-model offers stay coherent. Off, the vault is never read here.
+  const usageWeight = resolveSkillsAttachUsageOrdering(ctx.configPath ?? undefined)
+    ? skillUsageWeights(
+        deriveSkillUsage(ctx.vault, { nowMs: Date.now() }),
+        new Set(skills.map((s) => s.name)),
+      )
+    : undefined;
+  const attachmentOpts = {
     query,
     skills,
     maxSkills,
     includeTriggers,
+    ...(usageWeight !== undefined ? { usageWeight } : {}),
+  };
+  const decisionConfig = skillsDecisionConfig(ctx);
+  if (decisionConfig === null) {
+    return attachResult(buildSkillAttachment(attachmentOpts));
+  }
+  return buildSkillAttachmentWithDecision({
+    ...attachmentOpts,
     config: decisionConfig,
     tokenImpact: resolveTokenImpactLedgerEnabled(ctx.configPath ?? undefined),
   }).then((attachment) => attachResult(attachment, attachment.decisionModel));
@@ -228,7 +244,7 @@ export const SKILL_TOOLS: ReadonlyArray<ToolDefinition> = [
   {
     name: "skills_attach",
     description:
-      "Score skills against the current turn text; returns a char-budgeted block of relevant summaries and the offer_id to cite on get_skill (null when none was offered). A candidate matching only terms most of the corpus carries is dropped, not offered. enabled:false unless skill_auto_attach is set.",
+      "Score skills against the current turn text; returns a char-budgeted block of relevant summaries and the offer_id to cite on get_skill (null when none was offered). A candidate matching only terms most of the corpus carries is dropped, not offered. With skills_attach_usage_ordering on, observed invocation usage reorders lexical near-ties. enabled:false unless skill_auto_attach is set.",
     inputSchema: {
       type: "object",
       properties: {
