@@ -2124,7 +2124,7 @@ so there is no separate lane field that could drift from it:
 | `rerank-provider-unavailable` | the configured cross-encoder reranker (remote endpoint or local model) could not answer, so the answer keeps the heuristic order; `detail.category` is one of `auth`, `quota`, `gone`, `rejected`, `transient`, `timeout`, `network`, `malformed`, `unclassified` |
 | `rerank-model-sunset` | the configured rerank model's announced decommission date has passed, so no rerank request was sent and the answer keeps the heuristic order |
 | `relevance-floor-dropped-rows` | the relevance floor dropped ranked rows; `detail.dropped` counts them |
-| `source-session-capped-rows` | the per-source-session pool cap (`search_pool_max_per_session`, since v1.83.0) dropped ranked rows whose source import session already held its cap of rows; `detail.dropped` counts them against `detail.cap` |
+| `source-session-capped-rows` | the per-source-session pool cap (`search_pool_max_per_session`, since v1.83.0) dropped ranked rows whose source import session already held its share of the pool; when that left the window under-filled, the pool was re-widened once before this answer was cut; `detail.dropped` counts them against `detail.cap` |
 | `scope-filters-dropped-rows` | visibility, ownership, or session / project scope dropped ranked rows; `detail.dropped` against `detail.before` |
 | `cross-vault-origin-failed` | a cross-vault origin could not be searched; `detail.origin` is the origin label |
 | `cross-vault-chain-stopped` | an origin answered confidently and the remaining origins were deliberately not searched; `detail.skipped` counts them |
@@ -2390,7 +2390,7 @@ layer config-tunable and bounded:
 | `search_max_hops`              | `OPEN_SECOND_BRAIN_SEARCH_MAX_HOPS`              | `1`     | Link-graph traversal depth during recall; `0` disables            |
 | `search_hop_decay`             | `OPEN_SECOND_BRAIN_SEARCH_HOP_DECAY`             | `0.5`   | Per-hop score multiplier for traversal-surfaced docs              |
 | `search_max_expansion_per_hit` | `OPEN_SECOND_BRAIN_SEARCH_MAX_EXPANSION_PER_HIT` | `3`     | Cap on outbound links followed per node                           |
-| `search_pool_max_per_session`  | `OPEN_SECOND_BRAIN_SEARCH_POOL_MAX_PER_SESSION`  | `0`     | Cap on candidate-pool rows per source import session; `0` off     |
+| `search_pool_max_per_session`  | `OPEN_SECOND_BRAIN_SEARCH_POOL_MAX_PER_SESSION`  | `0`     | Cap on candidate-pool rows per source import session (else per note path); `0` off; a value at or above the query's pool width behaves as off |
 
 Recall and ranking quality (v0.20.0), each tunable and bounded:
 
@@ -2600,32 +2600,45 @@ One long imported session can otherwise fill the whole reranker-facing
 candidate window with near-duplicate chunks, leaving the diversity
 rerank nothing to spread across. The opt-in knob
 `search_pool_max_per_session` (`OPEN_SECOND_BRAIN_SEARCH_POOL_MAX_PER_SESSION`,
-default `0` - off) bounds how many rows one source import session may
-contribute to that pool: a row's identity is a non-empty `session_ref`
-frontmatter value on an imported signal note, else a non-empty
-`session_id` on a handoff note, read through the same frontmatter cache
-the pool filters already use. Rows without session identity - ordinary
-vault notes, and rows whose frontmatter is unreadable - pass through
-uncapped, so a vault without imported sessions is untouched by
-construction: off (`0` or absent), results and query-cache keys are
-byte-identical and no frontmatter reads are added; with the knob on, the
-resolved value folds into the search fingerprint so cached rows can
-never go stale, while in a no-identity vault the results alone stay
-byte-identical at any value. A per-query override (`poolMaxPerSession`,
-alongside `mmrLambda`) rides the same plumbing, and a `--pin` on `brain
-bench
-memory` accepts the knob by name (`{"recall":{"poolMaxPerSession":N}}`).
+default `0` - off) bounds how many rows one group may contribute to the
+filtered candidate pool the caller's window is cut from: a row's group
+is a non-empty `session_ref` frontmatter value on an imported signal
+note, else a non-empty `session_id` on a handoff note, else - when the
+note names neither - the row's own path, so all chunks of one note form
+one group. The path fallback is what makes the common sources of
+crowding capbable at all: bench session notes (the LongMemEval and
+LoCoMo converters write plain bodies) and multi-chunk single notes carry
+no session frontmatter, and an unreadable file falls back to its path
+for the same reason. Identity is read through the same frontmatter cache
+the pool filters already use. Off (`0` or absent), results and
+query-cache keys are byte-identical and no frontmatter reads are added;
+with the knob on, the resolved value folds into the search fingerprint
+so cached rows can never go stale. A per-query override
+(`poolMaxPerSession`, alongside `mmrLambda`) rides the same plumbing and
+is validated like the config key - a fractional, negative or non-finite
+override is refused by name before the pipeline runs, and `0` forces the
+cap off for that query - and a `--pin` on `brain bench memory` accepts
+the knob by name (`{"recall":{"poolMaxPerSession":N}}`).
 
-When the cap is active it sits after the relevance floor and before the
-MMR diversity rerank, and it widens the candidate pool the way MMR and
-traversal already do, so the cap spreads the window instead of merely
-truncating it sooner. The backfill trigger is deliberately unchanged:
-the cap never adds a reason for the second assemble pass, and when
-that pass runs for its own pre-existing reasons the cap is re-applied
-over the wider pool, with the retrieval trail reporting the final pass.
-Drops carry a `source-session-capped-rows` entry in the retrieval
-trail's `degraded` list (see "The retrieval trail"), with `detail.dropped`
-against `detail.cap`.
+When the cap is active it runs after the caller's own filters (status,
+property, degree, reach, visibility, ownership, session/project scope),
+so only filter-passing rows consume a group's quota and the cap can
+never surface a row those filters would withhold; and it widens the
+candidate pool the way MMR and traversal already do, so the cap spreads
+the window instead of merely truncating it sooner. A value at or above
+the pool width the query resolves cannot drop a row and is treated as
+off - the phase never runs - while the value still folds into the
+fingerprint, so a change around that boundary can never serve a stale
+cached row. When the cap's drops leave the window under-filled (and the
+rank cap actually truncated the pool), one additional assemble pass runs
+at a wider pool - wide enough to outrun the heaviest group the first
+pass observed (`limit * (widestGroup + 1)`, beside the existing backfill
+width) - so the window refills from the groups the cap did not exhaust
+when the corpus holds the rows; a corpus that holds nothing outside the
+heavy group still answers short, and the trail names the final pass's
+numbers. Drops carry a `source-session-capped-rows` entry in the
+retrieval trail's `degraded` list (see "The retrieval trail"), with
+`detail.dropped` against `detail.cap`.
 
 ### The reserved visibility token (since v1.54.0)
 
