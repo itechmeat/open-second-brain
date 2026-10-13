@@ -182,7 +182,9 @@ test("the cap on spreads the window across sessions and names its drop", async (
     expect(on.results.length).toBe(LIMIT);
     // Two crowded-session rows keep the top slots; the rest of the window
     // reaches other sessions.
-    expect(on.results[0]?.path).toBe("a-0.md");
+    // The crowd's best-ranked survivor leads whichever a- note the index
+    // ranked first - directory order must not decide the assertion.
+    expect(on.results[0]?.path.startsWith("a-")).toBe(true);
     expect(on.results.some((r) => !r.path.startsWith("a-"))).toBe(true);
     const entry = degradationOf(on, RETRIEVAL_DEGRADATION.sourceSessionCappedRows);
     expect(entry?.detail).toEqual({ dropped: 4, cap: 2 });
@@ -203,7 +205,7 @@ test("the per-query override alone activates the cap without a config value", as
     });
 
     expect(overridden.results.length).toBe(LIMIT);
-    expect(overridden.results[0]?.path).toBe("a-0.md");
+    expect(overridden.results[0]?.path.startsWith("a-")).toBe(true);
     expect(overridden.results.some((r) => !r.path.startsWith("a-"))).toBe(true);
     const entry = degradationOf(overridden, RETRIEVAL_DEGRADATION.sourceSessionCappedRows);
     expect(entry?.detail).toEqual({ dropped: 4, cap: 2 });
