@@ -8,13 +8,15 @@ in one pass:
    config (`${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json`,
    or `opencode.jsonc` when that is the only config file present),
    using opencode's entry schema (`{"type": "local", "command": [...],
-   "environment": {...}, "enabled": true}`). User-authored entries are
-   preserved. Since v1.83.0 the entry lands under the native V2
-   `mcp.servers` key when the config already carries that object;
-   everything else keeps the legacy top-level `mcp` key (see
-   [Config shape](#config-shape-since-v1830)). A `.jsonc` config is edited
-   through a comment-preserving editor, so operator comments survive
-   byte for byte.
+   "environment": {...}, "enabled": true}`; at the native V2
+   `mcp.servers` shape the entry instead carries `"disabled": false`,
+   since V2 replaces the `enabled` field with `disabled`).
+   User-authored entries are preserved. Since v1.83.0 the entry lands
+   under the native V2 `mcp.servers` key when the config already
+   carries that object; everything else keeps the legacy top-level
+   `mcp` key (see [Config shape](#config-shape-since-v1830)). A
+   `.jsonc` config is edited through a comment-preserving editor, so
+   operator comments survive byte for byte.
 2. **Plugin** - copies the bundled Open Second Brain plugin into
    `${XDG_CONFIG_HOME:-$HOME/.config}/opencode/plugins/open-second-brain.ts`.
    opencode auto-loads it at startup.
@@ -62,7 +64,12 @@ fresh install never reports drift against itself.
   outside the changed entry (the editor splices at token offsets rather
   than re-serializing the file). When both files exist, or neither, the
   behavior is unchanged: `opencode.json` wins, and a fresh install
-  still creates it - both host generations read it.
+  still creates it - both host generations read it. With both files on
+  disk, Open Second Brain services `opencode.json` alone and leaves
+  `opencode.jsonc` untouched. Upstream does not document whether V2
+  merges the two files or still reads the legacy top-level `mcp` key,
+  so the install resolves the shape from the `.json` file alone and
+  assumes that file is the one the host reads.
 - **Legacy is never shadowed.** An existing healthy top-level
   registration is not migrated when `mcp.servers` appears: V2 hosts
   keep reading a legacy declaration, so migration would churn every
