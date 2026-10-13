@@ -211,6 +211,7 @@ const BENCH_PIN_NESTED_KEYS: Readonly<Record<string, ReadonlyArray<string>>> = {
     "iterativeRecallEnabled",
     "iterativeRecallMaxRounds",
     "poolMultiplier",
+    "poolMaxPerSession",
     "selfTuningEnabled",
     "chainStopEnabled",
     "chainStopScore",

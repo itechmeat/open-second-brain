@@ -7,6 +7,7 @@ import { SearchError } from "../../../src/core/search/types.ts";
 import type { SearchOptions } from "../../../src/core/search/types.ts";
 import { configFingerprint } from "../../../src/core/search/pipeline/cache-slot.ts";
 import { buildCacheKey } from "../../../src/core/search/query-cache.ts";
+import { parseBenchPinnedKnobs } from "../../../src/cli/brain/verbs/bench.ts";
 
 let tmp: string;
 let configPath: string;
@@ -479,5 +480,18 @@ test("a pool-cap change re-keys the config fingerprint and the per-query cache k
   // An explicit per-query 0 is a forced off, not the config default.
   expect(buildCacheKey({ ...base, poolMaxPerSession: 0 }, "p", "fp")).not.toBe(
     buildCacheKey(base, "p", "fp"),
+  );
+});
+
+test("the bench pin accepts the pool-cap knob name in a recall pin", () => {
+  // The measured-decision-note harness pins recall knobs by name, so the
+  // new knob must join the pin's known recall keys or every pin naming
+  // it is refused.
+  const pin = parseBenchPinnedKnobs('{"recall":{"poolMaxPerSession":2}}');
+  expect(pin.recall?.poolMaxPerSession).toBe(2);
+
+  // A name outside the list is still refused, by name.
+  expect(() => parseBenchPinnedKnobs('{"recall":{"poolCapNonsense":2}}')).toThrow(
+    /poolCapNonsense.*not a known knob/,
   );
 });
