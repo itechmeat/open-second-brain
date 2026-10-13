@@ -1739,7 +1739,7 @@ export interface ResolvedRecallConfig {
    * from. A row's group is its source import session (`session_ref`,
    * else `session_id` frontmatter) or, when the note names neither, its
    * own path - all chunks of one note form one group, which is what
-   * makes frontmatter-less bench session notes capbable. The cap runs
+   * makes frontmatter-less bench session notes capable. The cap runs
    * after the caller's own filters, so only filter-passing rows consume
    * a quota, and it is removal-only: it never surfaces a row those
    * filters would withhold. 0 is off: the phase never runs and no

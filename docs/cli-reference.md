@@ -2606,7 +2606,7 @@ is a non-empty `session_ref` frontmatter value on an imported signal
 note, else a non-empty `session_id` on a handoff note, else - when the
 note names neither - the row's own path, so all chunks of one note form
 one group. The path fallback is what makes the common sources of
-crowding capbable at all: bench session notes (the LongMemEval and
+crowding capable at all: bench session notes (the LongMemEval and
 LoCoMo converters write plain bodies) and multi-chunk single notes carry
 no session frontmatter, and an unreadable file falls back to its path
 for the same reason. Identity is read through the same frontmatter cache
