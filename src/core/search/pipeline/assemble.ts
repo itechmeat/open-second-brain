@@ -18,7 +18,7 @@ import { rankResults } from "../ranker.ts";
 import { applyExactStateBarrier, type FrontmatterCache } from "../result-filters.ts";
 import { semanticPoolSize } from "../semantic-phase.ts";
 import { applyTemporalBridge } from "../temporal-bridge.ts";
-import { applySessionPoolCap } from "./session-pool-cap.ts";
+import { applySessionPoolCap, resolveSessionPoolCap } from "./session-pool-cap.ts";
 import { applyPoolFilters, resolvePoolFilters, type FilterContext } from "./pool-filters.ts";
 import { RETRIEVAL_DEGRADATION, noteDegradation } from "../retrieval-trail.ts";
 import type { RetrievalDegradationSink } from "../retrieval-trail.ts";
@@ -110,6 +110,14 @@ export interface AssemblyInput {
 interface Assembly {
   readonly preVisibility: number;
   readonly prePoolFilters: number;
+  /**
+   * Rows that survived the caller's own filters, BEFORE the session cap
+   * ran over them. The backfill's visibility signal and the trail's
+   * scope-drop count both read this pre-cap count: the cap is not a
+   * caller scope, and lumping its drops in here would report the cap as
+   * one.
+   */
+  readonly filterVisible: number;
   readonly visible: ReadonlyArray<BrainSearchResult>;
   /** Whether the cap truncated the pool, as opposed to the pool running out. */
   readonly capHit: boolean;
@@ -117,8 +125,10 @@ interface Assembly {
   readonly mergedAway: number;
   /** Ranked rows the caller's relevance floor removed. */
   readonly floorDropped: number;
-  /** Ranked rows the per-source-session cap dropped. */
+  /** Filter-passing rows the per-source-session cap dropped. */
   readonly sessionCapped: number;
+  /** The widest group the cap judged this pass, for the re-widen width. */
+  readonly widestGroupRows: number;
 }
 
 /** The location record a merged-away duplicate leaves on its survivor. */
@@ -250,16 +260,20 @@ export function assembleRankedResults(input: AssemblyInput): ReadonlyArray<Brain
     );
   const maxHops = opts.maxHops ?? config.recall.maxHops;
   const traversalActive = maxHops > NO_TRAVERSAL_HOPS;
-  // Per-source-session pool cap (t_bb6ce095): on at a positive cap. It
-  // joins the widening because a cap over an UNwidened pool merely
-  // truncates sooner - the ranked rows it needs to spread the window
-  // across sessions would sit below a rankLimit equal to `limit`.
-  const poolCap = opts.poolMaxPerSession ?? config.recall.poolMaxPerSession ?? POOL_CAP_OFF;
-  const capActive = poolCap > POOL_CAP_OFF;
+  // Per-source-session pool cap (t_bb6ce095): on at a positive cap. The
+  // value in force is validated at this read site (review CR) - the
+  // per-query override used to bypass the config validation, so 1.5
+  // turned the cap on with a fractional comparison and NaN read as off.
+  const poolCap = resolveSessionPoolCap(
+    opts.poolMaxPerSession ?? config.recall.poolMaxPerSession ?? POOL_CAP_OFF,
+  );
+  const capConfigured = poolCap > POOL_CAP_OFF;
   const baseRankLimit =
     filters.canDropRows || hasStructuredExclusions ? semanticPoolSize(limit) : limit;
-  const rankLimit =
-    mmrActive || traversalActive || crossEncoderActive || capActive
+  // The pool width the other recall phases need, judged as if the cap
+  // were off.
+  const rankLimitWithoutCap =
+    mmrActive || traversalActive || crossEncoderActive
       ? Math.max(
           baseRankLimit,
           limit * POOL_LIMIT_MULTIPLIER,
@@ -267,9 +281,25 @@ export function assembleRankedResults(input: AssemblyInput): ReadonlyArray<Brain
           crossEncoderActive ? config.rerank.topK : 0,
         )
       : baseRankLimit;
+  // When the cap is on it joins the widening, because a cap over an
+  // UNwidened pool merely truncates sooner - the ranked rows it needs to
+  // spread the window across sessions would sit below a rankLimit equal
+  // to `limit`.
+  const capWideRankLimit = capConfigured
+    ? Math.max(rankLimitWithoutCap, limit * POOL_LIMIT_MULTIPLIER, POOL_MIN_WIDTH)
+    : rankLimitWithoutCap;
+  // Review L4: a cap at or above the pool width it would judge cannot
+  // drop a row from that pool - acting on it would read frontmatter for
+  // every row to remove nothing. It is treated as off: the phase never
+  // runs, and the pool keeps the width the other phases chose. The
+  // configured value still folds into the config fingerprint and the
+  // per-query cache key, so a change around this boundary can never
+  // serve a stale cached row.
+  const capActive = capConfigured && poolCap < capWideRankLimit;
+  const rankLimit = capActive ? capWideRankLimit : rankLimitWithoutCap;
 
-  // Rank → traverse → diversify → property filter → visibility scope,
-  // for a given candidate cap. Returns the pre-visibility count, the
+  // Rank → traverse → diversify → the caller's filters → the session
+  // cap, for a given candidate cap. Returns the pre-visibility count, the
   // post-visibility list, and whether the cap was actually hit (so the
   // caller can tell "the pool ran out" from "the cap truncated more").
   const assemble = (rankCap: number): Assembly => {
@@ -348,22 +378,6 @@ export function assembleRankedResults(input: AssemblyInput): ReadonlyArray<Brain
       floorDropped = ranked.length - qualified.length;
       ranked = qualified;
     }
-    // Per-source-session pool cap (t_bb6ce095): bound one source import
-    // session's share of the pool BEFORE the diversity rerank, so MMR
-    // diversifies across sessions instead of inside one, and before the
-    // relevance rerank for the same reason. Identity rides the same
-    // frontmatter cache the pool filters use; a vault with no session
-    // identity passes through uncapped. No-op when the cap is off.
-    let sessionCapped = 0;
-    if (capActive) {
-      const capped = applySessionPoolCap(ranked, {
-        vault: config.vault,
-        capPerSession: poolCap,
-        frontmatterCache: input.frontmatterCache,
-      });
-      ranked = capped.results;
-      sessionCapped = capped.dropped;
-    }
     // Diversity rerank (v0.13.0). No-op when lambda >= 1 or < 2 results.
     if (mmrActive) {
       ranked = mmrRerank(ranked, { lambda: mmrLambda });
@@ -374,12 +388,39 @@ export function assembleRankedResults(input: AssemblyInput): ReadonlyArray<Brain
     if (rerankActive) {
       ranked = rerankByRelevance(ranked).slice();
     }
+    // The caller's own filters (status, property, degree, reach,
+    // visibility, ownership, session/project scope) run BEFORE the cap
+    // (review M4): only a row the filters admit consumes its group's
+    // quota, so a session whose first rows fail a requested filter is not
+    // erased from the answer by its own failing rows, and a query scoped
+    // to one session still gets up to `cap` rows from it. The cap is
+    // removal-only over the already-filtered pool, so the security
+    // property the filters own holds by construction: it can never
+    // surface a row they would withhold. No-op when the cap is off.
+    const filtered = applyPoolFilters(ranked, filters, filterContext);
+    let sessionCapped = 0;
+    let widestGroupRows = 0;
+    let visible = filtered.visible;
+    if (capActive) {
+      const capped = applySessionPoolCap(filtered.visible, {
+        vault: config.vault,
+        capPerSession: poolCap,
+        frontmatterCache: input.frontmatterCache,
+      });
+      visible = capped.results;
+      sessionCapped = capped.dropped;
+      widestGroupRows = capped.widestGroupRows;
+    }
     return {
-      ...applyPoolFilters(ranked, filters, filterContext),
+      preVisibility: filtered.preVisibility,
+      prePoolFilters: filtered.prePoolFilters,
+      filterVisible: filtered.visible.length,
+      visible,
       capHit,
       mergedAway: merge.mergedAway,
       floorDropped,
       sessionCapped,
+      widestGroupRows,
     };
   };
 
@@ -388,7 +429,7 @@ export function assembleRankedResults(input: AssemblyInput): ReadonlyArray<Brain
   // the answer.
   let effectiveCap = rankLimit;
   let assembled = assemble(rankLimit);
-  // Two phases can leave fewer than `limit` rows out of a pool that was
+  // Three phases can leave fewer than `limit` rows out of a pool that was
   // capped at `limit`, while more qualifying matches sit deeper in the
   // candidate list:
   //
@@ -396,24 +437,40 @@ export function assembleRankedResults(input: AssemblyInput): ReadonlyArray<Brain
   //    above) drops tagged pages, and the reserved-token rule drops pages
   //    reserved against this caller's reach; untagged vaults never drop a
   //    row, so this never fires for them,
-  //  - the exact-duplicate merge folds byte-identical passages away.
+  //  - the exact-duplicate merge folds byte-identical passages away,
+  //  - the per-source-session cap dropped filter-passing rows (review
+  //    M3): the capped pool can hold fewer than `limit` rows even though
+  //    the corpus holds more.
   //
-  // In either case, and only when the narrow cap was actually hit (as
-  // opposed to the candidate list simply running out), re-assemble once
-  // at the wider cap from the same in-memory candidates - no extra DB
-  // fetch. A pool with no dropped and no merged rows never re-assembles,
-  // so its results stay byte-identical.
+  // In any of these cases, and only when the narrow cap was actually hit
+  // (as opposed to the candidate list simply running out - without a
+  // truncation there is nothing deeper to admit), re-assemble ONCE at the
+  // wider cap from the same in-memory candidates - no extra DB fetch. A
+  // pool with no dropped and no merged rows never re-assembles, so its
+  // results stay byte-identical.
   const visibilityDropped =
-    !filters.canDropRows && assembled.visible.length < assembled.prePoolFilters;
+    !filters.canDropRows && assembled.filterVisible < assembled.prePoolFilters;
+  const sessionUnderfilled = assembled.sessionCapped > 0;
   if (
     assembled.visible.length < limit &&
     assembled.capHit &&
-    (visibilityDropped || assembled.mergedAway > 0)
+    (visibilityDropped || assembled.mergedAway > 0 || sessionUnderfilled)
   ) {
     const wideCap = Math.max(
       semanticPoolSize(limit),
       limit * POOL_LIMIT_MULTIPLIER,
       POOL_MIN_WIDTH,
+      // The re-widen contract (review M3): outrun the heaviest group the
+      // first pass observed. `widestGroupRows` rows of one group fit in
+      // the width just judged; a window of `limit` rows is refillable
+      // from the groups the cap did not exhaust only if they are
+      // reachable, so rank `limit * (widestGroupRows + 1)` - wide enough
+      // that the heaviest group's observed occupancy cannot crowd the
+      // window out a second time when the corpus holds the rows. One
+      // pass only: a corpus that really holds nothing outside the heavy
+      // group still answers short, and the trail names the final pass's
+      // numbers honestly rather than retrying.
+      sessionUnderfilled ? limit * (assembled.widestGroupRows + 1) : 0,
     );
     if (wideCap > rankLimit) {
       assembled = assemble(wideCap);
@@ -455,8 +512,11 @@ function noteAssemblyNarrowings(
   // rule is already counted out of it. The difference is the answer to
   // "did a scope remove my results", which nothing could ask before; the
   // reach rule is not one of those scopes, and its drop count is withheld
-  // rather than published (see `pipeline/pool-filters.ts`).
-  const scoped = assembled.preVisibility - assembled.visible.length;
+  // rather than published (see `pipeline/pool-filters.ts`). The comparison
+  // reads the PRE-CAP filtered count (`filterVisible`), never `visible`:
+  // the session cap is not a caller scope, its drops carry their own code
+  // above, and counting them here would report the cap as a scope.
+  const scoped = assembled.preVisibility - assembled.filterVisible;
   if (scoped > 0) {
     noteDegradation(sink, RETRIEVAL_DEGRADATION.scopeFiltersDroppedRows, {
       dropped: scoped,

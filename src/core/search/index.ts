@@ -673,6 +673,11 @@ function validateResolvedConfig(config: ResolvedSearchConfig, extraBodySource: s
   // Per-source-session pool cap (t_bb6ce095): optional (absent reads as
   // the off value 0), and never negative - a negative cap would drop
   // every identified row, which is a misconfiguration, not an off switch.
+  // No upper bound here by design (review L4): a value at or above the
+  // pool width the query resolves cannot drop a row from that pool, and
+  // the assembly treats it as off - the phase never runs - while the
+  // resolved value still folds into the search fingerprint, so a change
+  // around that boundary can never serve a stale cached row.
   if (config.recall.poolMaxPerSession !== undefined) {
     validateIntegerRange(config.recall.poolMaxPerSession, "search_pool_max_per_session", {
       min: 0,
@@ -1366,8 +1371,10 @@ export function resolveSearchConfig(opts: {
     { min: 1, max: 10 },
   );
   // Per-source-session pool cap (t_bb6ce095). No parse-time range: the
-  // integer-range line in `validateResolvedConfig` owns the refusal, the
-  // same way a programmatic override is judged there.
+  // integer-range line in `validateResolvedConfig` owns the refusal of
+  // config values, and a per-query override is judged by the same rules
+  // (finite, integer, >= 0) at the assembly's read site
+  // (`resolveSessionPoolCap`).
   const poolMaxPerSession = parseInteger(
     envOrConfig(
       env,

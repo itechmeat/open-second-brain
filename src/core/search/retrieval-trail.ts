@@ -183,10 +183,14 @@ export const RETRIEVAL_DEGRADATION = Object.freeze({
   relevanceFloorDroppedRows: "relevance-floor-dropped-rows",
   /**
    * The per-source-session pool cap (t_bb6ce095) dropped ranked rows
-   * whose source import session was already represented at the cap.
-   * `detail.dropped` counts them against `detail.cap`, the per-session
-   * cap in force. The name says SOURCE session - the import a note came
-   * from - so the code never reads as the caller's session focus.
+   * whose source import session was already represented at the cap. The
+   * cap runs after the caller's own filters, so only filter-passing rows
+   * consume a session's quota, and it is removal-only: it can never
+   * surface a row those filters would withhold. `detail.dropped` counts
+   * them against `detail.cap`, the per-session cap in force - the FINAL
+   * pass's numbers, because an under-filled window earns one re-widen.
+   * The name says SOURCE session - the import a note came from - so the
+   * code never reads as the caller's session focus.
    */
   sourceSessionCappedRows: "source-session-capped-rows",
   /**
@@ -450,7 +454,7 @@ export function describeRetrievalDegradation(code: RetrievalDegradationCode): st
     case RETRIEVAL_DEGRADATION.relevanceFloorDroppedRows:
       return "the requested relevance floor dropped every ranked row it judged, so matches below it are not in this answer";
     case RETRIEVAL_DEGRADATION.sourceSessionCappedRows:
-      return "the per-source-session pool cap dropped rows whose source import session already filled its share, so this answer draws on more sessions";
+      return "the per-source-session pool cap dropped ranked rows whose source import session already held its share of the pool; when that left the window under-filled, the pool was re-widened once before this answer was cut";
     case RETRIEVAL_DEGRADATION.scopeFiltersDroppedRows:
       return "visibility, ownership or session scope dropped ranked rows, so this answer is narrower than the match set";
     case RETRIEVAL_DEGRADATION.crossVaultOriginFailed:

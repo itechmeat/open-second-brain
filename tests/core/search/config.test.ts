@@ -484,6 +484,17 @@ test("a pool-cap change re-keys the config fingerprint and the per-query cache k
   expect(buildCacheKey({ ...base, poolMaxPerSession: 0 }, "p", "fp")).not.toBe(
     buildCacheKey(base, "p", "fp"),
   );
+
+  // The review-L4 boundary does NOT mute the folds: a value at or above
+  // the query's resolved pool width behaves as off (it cannot drop a row
+  // from that pool), but the value still keys both caches, so a change
+  // around that boundary can never serve a stale cached row.
+  writeFileSync(configPath, `vault: "${tmp}"\nsearch_pool_max_per_session: "10000"\n`);
+  const huge = resolveSearchConfig({ vault: tmp, configPath });
+  expect(configFingerprint(huge)).not.toBe(configFingerprint(off));
+  expect(buildCacheKey({ ...base, poolMaxPerSession: 10_000 }, "p", "fp")).not.toBe(
+    buildCacheKey(base, "p", "fp"),
+  );
 });
 
 test("the bench pin accepts the pool-cap knob name in a recall pin", () => {

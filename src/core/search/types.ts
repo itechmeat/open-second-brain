@@ -925,7 +925,12 @@ export interface SearchOptions {
   /**
    * Per-query per-source-session pool cap override (t_bb6ce095). Absent
    * uses the resolved config default; `0` is the documented off value and
-   * forces the cap off for this query.
+   * forces the cap off for this query. Validated like the config key: a
+   * fractional, negative or non-finite override is refused by name
+   * (INVALID_INPUT) before the pipeline runs. A value at or above the
+   * pool width the query resolves cannot drop a row and behaves as off,
+   * while still keying the query cache - crossing that boundary can
+   * never serve a stale cached row.
    */
   readonly poolMaxPerSession?: number;
   /**
@@ -1729,13 +1734,21 @@ export interface ResolvedRecallConfig {
   readonly metadataBoostGateEnabled?: boolean;
   /**
    * Per-source-session pool cap (t_bb6ce095), resolved from
-   * `search_pool_max_per_session`. The maximum rows ONE source import
-   * session (`session_ref`, else `session_id` frontmatter) may
-   * contribute to the reranker-facing candidate pool, applied after the
-   * relevance floor and before the diversity rerank. 0 is off: the phase
-   * never runs and no frontmatter reads are added, so results are
-   * byte-identical. Absent (configs written before the knob construct
-   * this shape literally) reads as 0.
+   * `search_pool_max_per_session`. The maximum rows ONE group may
+   * contribute to the filtered candidate pool the caller's window is cut
+   * from. A row's group is its source import session (`session_ref`,
+   * else `session_id` frontmatter) or, when the note names neither, its
+   * own path - all chunks of one note form one group, which is what
+   * makes frontmatter-less bench session notes capbable. The cap runs
+   * after the caller's own filters, so only filter-passing rows consume
+   * a quota, and it is removal-only: it never surfaces a row those
+   * filters would withhold. 0 is off: the phase never runs and no
+   * frontmatter reads are added, so results are byte-identical. A value
+   * at or above the pool width the query resolves cannot drop a row and
+   * is treated as off, while still folding into the search fingerprint -
+   * crossing that boundary can never serve a stale cached row. Absent
+   * (configs written before the knob construct this shape literally)
+   * reads as 0.
    */
   readonly poolMaxPerSession?: number;
 }
