@@ -1,21 +1,26 @@
 /**
  * The per-source-session pool cap (t_bb6ce095): a pure phase over ranked
- * rows that bounds how many rows one SOURCE import session may
- * contribute to the pool the diversity rerank and the caller's window
- * draw from.
+ * rows that bounds how many rows one group may contribute to the
+ * filtered pool the caller's window is cut from.
  *
- * "Source session" is the import that produced a note, never the
- * caller's conversation: imported signal notes carry `session_ref`
- * frontmatter and handoff notes carry `session_id`. Identity is read
- * through the per-call frontmatter cache the assemble stage already
- * builds, so the cap adds no new read shape to the pipeline. Rows
- * without identity and rows whose file could not be read pass through
- * uncapped, mirroring the `duplicateKey` null handling.
+ * A row's group key is its SOURCE import session when the note states
+ * one - `session_ref` frontmatter on imported signal notes, `session_id`
+ * on handoff notes - and the row's own PATH otherwise. The fallback is
+ * the review fix (M2): the crowding the cap was built to measure comes
+ * from material that carries no session frontmatter at all (bench
+ * session notes, and the several chunks of one long note), so grouping
+ * by frontmatter alone capped nothing there. Identity is read through
+ * the per-call frontmatter cache the assemble stage already builds, so
+ * the cap adds no new read shape to the pipeline.
  */
 
 import { afterEach, expect, test } from "bun:test";
 
-import { applySessionPoolCap } from "../../../src/core/search/pipeline/session-pool-cap.ts";
+import {
+  applySessionPoolCap,
+  resolveSessionPoolCap,
+} from "../../../src/core/search/pipeline/session-pool-cap.ts";
+import { SearchError } from "../../../src/core/search/types.ts";
 import { type FrontmatterCache } from "../../../src/core/search/result-filters.ts";
 import type { BrainSearchResult } from "../../../src/core/search/types.ts";
 import { createTempVault, writeMd } from "../../helpers/search-fixtures.ts";
@@ -119,11 +124,14 @@ test("session_ref wins over session_id when a row carries both", () => {
   expect(out.dropped).toBe(1);
 });
 
-test("no-identity rows and unreadable files pass through uncapped", () => {
+test("rows without frontmatter identity group by path, so chunks of one note share a group", () => {
   const v = seedVault();
-  // `ghost.md` is not on disk, so its frontmatter read is unreadable -
-  // the cap knows nothing about it and must not guess an identity.
-  const input = [res("plain-1.md", 0.9), res("plain-2.md", 0.8), res("ghost.md", 0.7)];
+  // Two chunks of one frontmatter-less note (distinct chunk ids, one
+  // path) beside a chunk of another: the path fallback is the group, so
+  // the cap keeps one chunk per note.
+  const first = res("plain-1.md", 0.9);
+  const third = res("plain-2.md", 0.7);
+  const input = [first, res("plain-1.md", 0.8), third];
 
   const out = applySessionPoolCap(input, {
     vault: v,
@@ -131,16 +139,49 @@ test("no-identity rows and unreadable files pass through uncapped", () => {
     frontmatterCache: new Map(),
   });
 
-  expect(out.results.map((r) => r.path)).toEqual(["plain-1.md", "plain-2.md", "ghost.md"]);
+  expect(out.results).toEqual([first, third]);
+  expect(out.dropped).toBe(1);
+});
+
+test("distinct frontmatter-less notes are distinct path groups", () => {
+  const v = seedVault();
+  const input = [res("plain-1.md", 0.9), res("plain-2.md", 0.8), res("plain-3.md", 0.7)];
+
+  const out = applySessionPoolCap(input, {
+    vault: v,
+    capPerSession: 1,
+    frontmatterCache: new Map(),
+  });
+
+  expect(out.results.map((r) => r.path)).toEqual(["plain-1.md", "plain-2.md", "plain-3.md"]);
   expect(out.dropped).toBe(0);
 });
 
-test("an empty or non-string frontmatter value counts as absent identity", () => {
+test("an unreadable file's rows group by its path too", () => {
   const v = seedVault();
-  // The empty-identity rows sit BESIDE capped rows: accepting `""` as a
-  // session key would group the two empty-ref rows and drop the second
-  // at cap 1, so the passthrough asserted below is a real claim - the
-  // empty rows survive past the cap only because they name no session.
+  // `ghost.md` is not on disk, so its frontmatter read is unreadable -
+  // but the path is still a real identity, and the two ghost chunks are
+  // one group for the same reason chunks of one readable note are.
+  const first = res("ghost.md", 0.9);
+  const third = res("plain-1.md", 0.7);
+  const input = [first, res("ghost.md", 0.8), third];
+
+  const out = applySessionPoolCap(input, {
+    vault: v,
+    capPerSession: 1,
+    frontmatterCache: new Map(),
+  });
+
+  expect(out.results).toEqual([first, third]);
+  expect(out.dropped).toBe(1);
+});
+
+test("an empty or non-string frontmatter value falls back to the path group", () => {
+  const v = seedVault();
+  // The empty-identity rows sit BESIDE capped rows: each names no
+  // session, so each is its own path group and survives past the cap -
+  // while the real sess-a rows are capped to one. A non-string value is
+  // absent identity the same way.
   const input = [
     res("empty-ref.md", 0.9),
     res("empty-ref-2.md", 0.85),
@@ -155,8 +196,6 @@ test("an empty or non-string frontmatter value counts as absent identity", () =>
     frontmatterCache: new Map(),
   });
 
-  // Both empty-string rows survive while the real sess-a rows are
-  // capped to one, and a non-string value is absent identity too.
   expect(out.results.map((r) => r.path)).toEqual([
     "empty-ref.md",
     "empty-ref-2.md",
@@ -184,6 +223,39 @@ test("the drop count sums across sessions", () => {
 
   expect(out.results.map((r) => r.path)).toEqual(["a-1.md", "b-1.md"]);
   expect(out.dropped).toBe(3);
+});
+
+test("the widest group's occupancy is reported for the re-widen contract", () => {
+  const v = seedVault();
+  // Three rows in one session beside a lone path-grouped row: the width
+  // the M3 re-widen needs is computed from the heaviest group the pass
+  // observed, dropped-from or not.
+  const out = applySessionPoolCap(
+    [res("a-1.md", 0.9), res("a-2.md", 0.8), res("a-3.md", 0.7), res("plain-1.md", 0.6)],
+    { vault: v, capPerSession: 2, frontmatterCache: new Map() },
+  );
+  expect(out.widestGroupRows).toBe(3);
+
+  const uncrowded = applySessionPoolCap([res("a-1.md", 0.9), res("b-1.md", 0.8)], {
+    vault: v,
+    capPerSession: 2,
+    frontmatterCache: new Map(),
+  });
+  expect(uncrowded.widestGroupRows).toBe(1);
+});
+
+test("a fractional, negative or non-finite cap value is refused by name", () => {
+  // The per-query override used to bypass the config validation, so 1.5
+  // turned the cap on with a fractional comparison and NaN read as off.
+  // The same named refusal the config key gets, at the read site.
+  expect(() => resolveSessionPoolCap(1.5)).toThrow(SearchError);
+  expect(() => resolveSessionPoolCap(1.5)).toThrow(/poolMaxPerSession/);
+  expect(() => resolveSessionPoolCap(-1)).toThrow(/poolMaxPerSession.*>= 0/);
+  expect(() => resolveSessionPoolCap(Number.NaN)).toThrow(/poolMaxPerSession.*finite/);
+  expect(() => resolveSessionPoolCap(Number.POSITIVE_INFINITY)).toThrow(/poolMaxPerSession/);
+  // The off value and a positive integer stay legal.
+  expect(resolveSessionPoolCap(0)).toBe(0);
+  expect(resolveSessionPoolCap(2)).toBe(2);
 });
 
 test("the phase is pure: same inputs, same outputs, reads only through the cache", () => {
