@@ -493,6 +493,30 @@ describe("opencode adapter - V2 mcp.servers shape", () => {
     expect(opencodeAdapter.verify(env()).status).toBe("ok");
   });
 
+  test("a commented JSONC config with no mcp key detects as not-installed, like plain JSON", () => {
+    // An operator's hand-written config that merely carries comments: no
+    // mcp key at all. Base detect maps the absent key to not-installed;
+    // the editor route must agree, or `o2b update` - which skips only
+    // not-installed targets - would perform a full install into an
+    // opencode that was never installed.
+    mkdirSync(dirname(jsoncConfigPath()), { recursive: true });
+    writeFileSync(jsoncConfigPath(), `// my notes\n{\n  "theme": "dark"\n}\n`);
+    const d = opencodeAdapter.detect(env());
+    expect(d.status).toBe("not-installed");
+    expect(d.notes).toEqual([]);
+    // The plain-JSON twin of the same content agrees, so the verdict
+    // splits on key presence, not on the file's syntax.
+    writeJson(configPath(), { theme: "dark" });
+    expect(opencodeAdapter.detect(env()).status).toBe("not-installed");
+    rmSync(configPath());
+    // A PRESENT-but-non-object mcp block is still drift: the file carries
+    // something where our registration belongs.
+    writeFileSync(jsoncConfigPath(), `// my notes\n{\n  "theme": "dark",\n  "mcp": "enabled"\n}\n`);
+    const drift = opencodeAdapter.detect(env());
+    expect(drift.status).toBe("drift");
+    expect(drift.notes.join(" ")).toContain("mcp is not a JSON object");
+  });
+
   test("duplicate top-level keys refuse apply naming the file, without a partial write", () => {
     const dup = `// ambiguous config
 {

@@ -184,6 +184,26 @@ function blockAtPath(
 }
 
 /**
+ * Whether the shape path's FIRST missing segment makes it absent, as
+ * opposed to present but not an object. Detect reads this distinction
+ * the way the shared body's `readMcpBlock` does: a config that simply
+ * does not carry the key has never heard of us (not-installed), while a
+ * key holding the wrong shape is a modification of our registration
+ * site (drift). `blockAtPath` deliberately collapses the two, so this is
+ * the second half of its answer.
+ */
+function blockIsAbsent(parsed: Record<string, unknown>, shapePath: ReadonlyArray<string>): boolean {
+  let current: unknown = parsed;
+  for (const segment of shapePath) {
+    if (current === null || typeof current !== "object" || Array.isArray(current)) return false;
+    const next = (current as Record<string, unknown>)[segment];
+    if (next === undefined) return true;
+    current = next;
+  }
+  return false;
+}
+
+/**
  * The editor route owns every write whose file carries JSONC syntax or
  * whose shape is the native V2 key. Plain JSON at the V1 shape keeps
  * the shared json-merge body byte-for-byte.
@@ -514,9 +534,19 @@ function detectViaEditor(env: InstallEnv, state: ConfigState): DetectResult {
       notes: ["config file is not parseable as JSON or JSONC"],
     };
   }
-  const shapeKey = (state.v2 ? V2_SHAPE_PATH : V1_SHAPE_PATH).join(".");
-  const block = blockAtPath(state.parsed, state.v2 ? V2_SHAPE_PATH : V1_SHAPE_PATH);
+  const shapePath = state.v2 ? V2_SHAPE_PATH : V1_SHAPE_PATH;
+  const shapeKey = shapePath.join(".");
+  const block = blockAtPath(state.parsed, shapePath);
   if (block === null) {
+    // An ABSENT key is a config that has never heard of us - the same
+    // verdict base.detect reaches for identical plain-JSON content
+    // (readMcpBlock's `?? {}`). Reporting drift here would make
+    // `o2b update`, which skips only not-installed targets, perform a
+    // full install into an opencode that was never installed. Only a
+    // PRESENT-but-non-object block is drift.
+    if (blockIsAbsent(state.parsed, shapePath)) {
+      return { target: "opencode", status: "not-installed", configPath: path, notes: [] };
+    }
     return {
       target: "opencode",
       status: "drift",
