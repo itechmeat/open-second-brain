@@ -158,6 +158,19 @@ test("a different seed selects a different subset at the same cap", () => {
   expect(otherSeed.entries.map((e) => e.q_id)).not.toEqual(bySeed.entries.map((e) => e.q_id));
 });
 
+test("the seed is normalized once, in the sampler: padded input selects the bare subset", () => {
+  // pr-251 L2: the CLI used to trim --sample-seed while the API path
+  // hashed the seed as given, so the same input produced different
+  // subsets depending on the surface. The sampler trims before hashing
+  // - the one normalization point - so padded and bare input select the
+  // identical subset.
+  const entries = population();
+  const bare = sampleLongMemEvalEntries(entries, { seed: "seed-1", cap: 4 });
+  const padded = sampleLongMemEvalEntries(entries, { seed: "  seed-1\t", cap: 4 });
+  expect(padded.entries.map((e) => e.q_id)).toEqual(bare.entries.map((e) => e.q_id));
+  expect(padded.receipt).toEqual(bare.receipt);
+});
+
 test("a different cap selects a different subset at the same seed", () => {
   const entries = population();
   const byCap = sampleLongMemEvalEntries(entries, { seed: "run-9", cap: 4 });

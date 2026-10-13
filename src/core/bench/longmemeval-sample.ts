@@ -15,8 +15,13 @@
  * selection is a pure function of (entries, seed, cap). Entries are
  * sorted by question id before the PRNG is touched, so dataset file
  * order cannot change the subset; the PRNG is a mulberry32 stream keyed
- * by the sha256 of the seed string. The same options always select the
- * same subset; a different seed or cap selects a different one.
+ * by the sha256 of the TRIMMED seed string. The seed is normalized in
+ * exactly one place - HERE, before the digest - so the same input
+ * selects the same subset whatever surface (CLI or API) passed it:
+ * callers may refuse a blank seed early to name their own surface, but
+ * must not trim or otherwise transform the value. The same options
+ * always select the same subset; a different seed or cap selects a
+ * different one.
  *
  * The abstention rule lives here rather than in longmemeval.ts because
  * abstention exclusion must happen BEFORE selection, and this module
@@ -163,7 +168,13 @@ export function sampleLongMemEvalEntries<E extends LongMemEvalSampleEntry>(
       `LongMemEval sample cap must be a positive integer, got ${opts.cap}`,
     );
   }
-  if (opts.seed.trim() === "") {
+  // The seed is normalized in exactly one place - here, before the
+  // digest: it is trimmed, so the CLI (which passes the operator's
+  // value through untransformed) and the API path hash the same value
+  // for the same input. The raw value is echoed in the error so an
+  // operator sees what they actually typed.
+  const seed = opts.seed.trim();
+  if (seed === "") {
     throw new LongMemEvalSampleError(
       `LongMemEval sample seed must be a non-empty string, got '${opts.seed}'`,
     );
@@ -232,8 +243,9 @@ export function sampleLongMemEvalEntries<E extends LongMemEvalSampleEntry>(
   }
 
   // Every stratum is shuffled in name order, so the PRNG stream's draw
-  // count depends only on the populations - never on the cap.
-  const random = mulberry32(prngState(opts.seed));
+  // count depends only on the populations - never on the cap. The PRNG
+  // is keyed by the trimmed seed (the one normalization point above).
+  const random = mulberry32(prngState(seed));
   const selected: E[] = [];
   for (const name of stratumNames) {
     const pool = shuffled(byStratum.get(name)!, random);

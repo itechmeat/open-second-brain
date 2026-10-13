@@ -294,17 +294,20 @@ export function parseRecallFloorFlag(raw: string | undefined): number | undefine
  * Parse the `--sample-seed` value: absent keeps the whole-dataset load;
  * present it must be a non-empty string and pairs with `--sample-cap`.
  * The seed is opaque - the sampler hashes it, so any string works and
- * none is ever interpolated into a run id.
+ * none is ever interpolated into a run id. The value is passed through
+ * UNTRIMMED on purpose: the sampler trims the seed in one place before
+ * hashing, so the CLI and the API path hash the same value for the same
+ * input. This surface only refuses a blank value by name, before any
+ * run state is created.
  */
 export function parseSampleSeedFlag(raw: string | undefined): string | undefined {
   if (raw === undefined) return undefined;
-  const value = raw.trim();
-  if (value === "") {
+  if (raw.trim() === "") {
     throw new CliError(
       `brain bench memory: --sample-seed must be a non-empty string, got '${raw}'`,
     );
   }
-  return value;
+  return raw;
 }
 
 /**

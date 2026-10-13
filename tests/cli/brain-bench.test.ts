@@ -486,6 +486,11 @@ describe("bench sampling flags", () => {
   test("the sampling flag validators refuse garbage by name", () => {
     expect(parseSampleSeedFlag(undefined)).toBeUndefined();
     expect(parseSampleSeedFlag("run-42")).toBe("run-42");
+    // pr-251 L2: the parser validates but does not transform - the
+    // sampler trims the seed in one place before hashing, so the CLI and
+    // the API path hash the same value for the same input, and a padded
+    // seed reaches the loader verbatim.
+    expect(parseSampleSeedFlag("  seed-1  ")).toBe("  seed-1  ");
     expect(() => parseSampleSeedFlag("   ")).toThrow(/--sample-seed/);
     expect(parseSampleCapFlag(undefined)).toBeUndefined();
     expect(parseSampleCapFlag("12")).toBe(12);
