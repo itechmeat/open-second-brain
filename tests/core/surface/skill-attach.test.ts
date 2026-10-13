@@ -146,7 +146,7 @@ test("the returned score stays the lexical score", () => {
     10,
   );
   const plainByName = new Map(plain.map((i) => [i.name, i.score]));
-  for (const item of ordered) expect(item.score).toBe(plainByName.get(item.name));
+  for (const item of ordered) expect(plainByName.get(item.name)).toBe(item.score);
 });
 
 test("equal composites resolve by name ascending", () => {

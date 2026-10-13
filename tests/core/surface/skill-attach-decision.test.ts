@@ -591,7 +591,7 @@ function writeDailyUsageRecords(): void {
   });
 }
 
-function pinnedUsageMap(): Map<string, number> {
+function pinnedUsageMap(): ReadonlyMap<string, number> {
   // nowMs is pinned with the records: the decay weights - and every offer
   // id derived through them - are a function of exactly these inputs.
   return skillUsageWeights(

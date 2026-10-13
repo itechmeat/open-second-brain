@@ -199,10 +199,8 @@ function writeUsageRecords(): void {
   });
 }
 
-function skillsRecords(): Array<Record<string, unknown>> {
-  return listDecisionModelCalls(vault).filter(
-    (r) => r.payload["use"] === "skills",
-  ) as unknown as Array<Record<string, unknown>>;
+function skillsRecords() {
+  return listDecisionModelCalls(vault).filter((r) => r.payload["use"] === "skills");
 }
 
 test("ordering flag off: usage records change nothing end to end (off proof)", async () => {
