@@ -155,12 +155,16 @@ test("the cap off returns today's crowded order byte-for-byte", async () => {
     // The off path is the pre-knob pipeline: an explicit 0 answers with
     // the default's exact bytes.
     expect(JSON.stringify(explicitOff)).toBe(JSON.stringify(off));
-    // And that behavior is the crowding the cap exists to relieve: every
-    // window slot went to one source session.
-    expect(off.results.map((r) => r.path)).toEqual(
-      off.results.map((r) => r.path).filter((p) => p.startsWith("a-")),
-    );
-    expect(off.results.length).toBe(LIMIT);
+    // Frozen pre-change expectation, so the proof is anchored outside
+    // this build: a regression that shifts BOTH arms of the A/B above
+    // identically now goes red. Order and trail identity are pinned -
+    // never score magnitudes. The crowded session takes every window
+    // slot, and the only narrowing the off answer names is the pre-knob
+    // rank-cap truncation, never a session-cap note.
+    expect(off.results.map((r) => r.path)).toEqual(["a-0.md", "a-1.md", "a-2.md"]);
+    expect(off.retrievalTrail?.degraded).toEqual([
+      { code: RETRIEVAL_DEGRADATION.rankCapTruncatedPool, detail: { cap: LIMIT } },
+    ]);
   } finally {
     v.cleanup();
   }
@@ -186,6 +190,87 @@ test("the cap on spreads the window across sessions and names its drop", async (
   }
 });
 
+test("the per-query override alone activates the cap without a config value", async () => {
+  const v = await indexedCrowdedVault();
+  try {
+    // `cold` carries no poolMaxPerSession at all: the whole cap comes
+    // from the per-query SearchOptions field.
+    const overridden = await search(v.cold, {
+      query: CROWDED_QUERY,
+      limit: LIMIT,
+      poolMaxPerSession: 2,
+    });
+
+    expect(overridden.results.length).toBe(LIMIT);
+    expect(overridden.results[0]?.path).toBe("a-0.md");
+    expect(overridden.results.some((r) => !r.path.startsWith("a-"))).toBe(true);
+    const entry = degradationOf(overridden, RETRIEVAL_DEGRADATION.sourceSessionCappedRows);
+    expect(entry?.detail).toEqual({ dropped: 4, cap: 2 });
+    // The same query without the override stays uncapped - the override,
+    // not the fixture, is what capped the answer. (The uncapped run
+    // still carries the pre-existing rank-cap note; the session-cap
+    // note is the one that must be absent.)
+    const plain = await search(v.cold, { query: CROWDED_QUERY, limit: LIMIT });
+    expect(degradationOf(plain, RETRIEVAL_DEGRADATION.sourceSessionCappedRows)).toBeUndefined();
+    expect(JSON.stringify(plain)).not.toBe(JSON.stringify(overridden));
+  } finally {
+    v.cleanup();
+  }
+});
+
+test("the per-query override wins over the config value when both are set", async () => {
+  const v = await indexedCrowdedVault();
+  try {
+    // Tighter than the config: 2 crowded rows survive under config cap
+    // 2, but the query's own cap 1 keeps only the first.
+    const tighter = await search(withRecall(v.cold, { poolMaxPerSession: 2 }), {
+      query: CROWDED_QUERY,
+      limit: LIMIT,
+      poolMaxPerSession: 1,
+    });
+    expect(tighter.results.map((r) => r.path)).toEqual(["a-0.md", "b.md", "c.md"]);
+    expect(degradationOf(tighter, RETRIEVAL_DEGRADATION.sourceSessionCappedRows)?.detail).toEqual({
+      dropped: 5,
+      cap: 1,
+    });
+
+    // Looser than the config: config cap 1 would keep one crowded row,
+    // but the query's own cap 3 keeps three.
+    const looser = await search(withRecall(v.cold, { poolMaxPerSession: 1 }), {
+      query: CROWDED_QUERY,
+      limit: LIMIT,
+      poolMaxPerSession: 3,
+    });
+    expect(looser.results.map((r) => r.path)).toEqual(["a-0.md", "a-1.md", "a-2.md"]);
+    expect(degradationOf(looser, RETRIEVAL_DEGRADATION.sourceSessionCappedRows)?.detail).toEqual({
+      dropped: 3,
+      cap: 3,
+    });
+  } finally {
+    v.cleanup();
+  }
+});
+
+test("an explicit per-query 0 forces the cap off over a config cap", async () => {
+  const v = await indexedCrowdedVault();
+  try {
+    const forcedOff = await search(withRecall(v.cold, { poolMaxPerSession: 2 }), {
+      query: CROWDED_QUERY,
+      limit: LIMIT,
+      poolMaxPerSession: 0,
+    });
+    const off = await search(v.cold, { query: CROWDED_QUERY, limit: LIMIT });
+
+    // The documented forced-off value: the config knob cannot reach past
+    // a per-query 0, and the answer is the default-off run's exact bytes
+    // (rank-cap trail and all - the session-cap note never appears).
+    expect(JSON.stringify(forcedOff)).toBe(JSON.stringify(off));
+    expect(degradationOf(forcedOff, RETRIEVAL_DEGRADATION.sourceSessionCappedRows)).toBeUndefined();
+  } finally {
+    v.cleanup();
+  }
+});
+
 test("a vault with no session identity ranks identically with the cap on", async () => {
   // The module fixture holds ordinary notes only - no session_ref, no
   // session_id - so the cap is on but has nothing to group.
@@ -200,12 +285,13 @@ test("a vault with no session identity ranks identically with the cap on", async
   expect(on.retrievalTrail).toBeUndefined();
 });
 
-test("the cap is final: one wide pass, never a second assemble on its drops", async () => {
+test("the cap's drops do not extend the backfill trigger", async () => {
   // Forty matching notes in ONE session: the window cannot fill (cap 2,
-  // limit 3), which is exactly where a wrong backfill trigger would fire
-  // a second, wider assemble. `dropped` pins the pass width: 30 rows were
-  // ranked (the widened rankLimit), 2 survived, 28 were dropped - a
-  // second pass at the 50-wide backfill cap would report 48.
+  // limit 3), and the cap's own drops are not one of the backfill's
+  // pre-existing triggers (visibility drops, exact-duplicate merges) -
+  // so exactly one wide pass runs. `dropped` pins the pass width: 30
+  // rows were ranked (the widened rankLimit), 2 survived, 28 were
+  // dropped - a second pass at the 50-wide backfill cap would report 48.
   const v = createTempVault("pool-cap-final");
   try {
     for (let i = 0; i < 40; i += 1) {

@@ -61,6 +61,7 @@ function seedVault(): string {
   // An empty string and a non-string are both ABSENT identity: only a
   // non-empty string names a session.
   writeMd(vault, "empty-ref.md", '---\ntitle: E\nsession_ref: ""\n---\n\nbody\n');
+  writeMd(vault, "empty-ref-2.md", '---\ntitle: E2\nsession_ref: ""\n---\n\nbody\n');
   writeMd(vault, "numeric-ref.md", "---\ntitle: N\nsession_ref: 42\n---\n\nbody\n");
   return vault;
 }
@@ -136,7 +137,17 @@ test("no-identity rows and unreadable files pass through uncapped", () => {
 
 test("an empty or non-string frontmatter value counts as absent identity", () => {
   const v = seedVault();
-  const input = [res("empty-ref.md", 0.9), res("numeric-ref.md", 0.8)];
+  // The empty-identity rows sit BESIDE capped rows: accepting `""` as a
+  // session key would group the two empty-ref rows and drop the second
+  // at cap 1, so the passthrough asserted below is a real claim - the
+  // empty rows survive past the cap only because they name no session.
+  const input = [
+    res("empty-ref.md", 0.9),
+    res("empty-ref-2.md", 0.85),
+    res("a-1.md", 0.8),
+    res("a-2.md", 0.7),
+    res("numeric-ref.md", 0.6),
+  ];
 
   const out = applySessionPoolCap(input, {
     vault: v,
@@ -144,8 +155,15 @@ test("an empty or non-string frontmatter value counts as absent identity", () =>
     frontmatterCache: new Map(),
   });
 
-  expect(out.results.map((r) => r.path)).toEqual(["empty-ref.md", "numeric-ref.md"]);
-  expect(out.dropped).toBe(0);
+  // Both empty-string rows survive while the real sess-a rows are
+  // capped to one, and a non-string value is absent identity too.
+  expect(out.results.map((r) => r.path)).toEqual([
+    "empty-ref.md",
+    "empty-ref-2.md",
+    "a-1.md",
+    "numeric-ref.md",
+  ]);
+  expect(out.dropped).toBe(1);
 });
 
 test("the drop count sums across sessions", () => {
