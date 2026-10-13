@@ -438,6 +438,42 @@ describe("opencode adapter - V2 mcp.servers shape", () => {
     expect(v.details.join(" ")).toContain("open-second-brain");
   });
 
+  test("detect reports a V2 file whose only copies are shadowed legacy ones as drift", () => {
+    // A V1 install first, then the host's own upgrade adds a native
+    // mcp.servers block: our keys are now registered at a site the
+    // resolved shape does not read. That is an owned install at the
+    // wrong place, not an absent one - verify calls the same state
+    // drift, and a not-installed verdict here would make `o2b update`,
+    // which skips only not-installed targets, skip the repair.
+    writeJson(configPath(), { mcp: {} });
+    opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
+    const parsed = JSON.parse(readFileSync(configPath(), "utf8"));
+    parsed.mcp.servers = { other: { type: "remote", url: "https://x" } };
+    writeFileSync(configPath(), JSON.stringify(parsed, null, 2) + "\n");
+    const d = opencodeAdapter.detect(env());
+    expect(d.status).toBe("drift");
+    expect(d.notes.join(" ")).toContain("mcp");
+    expect(d.notes.join(" ")).toContain("mcp.servers");
+    // verify agrees the same file is drifted.
+    expect(opencodeAdapter.verify(env()).status).toBe("drift");
+    // `o2b update` no longer skips the target (drift, not
+    // not-installed): the repair is the documented forced re-apply, the
+    // guard naming the hand-edit first.
+    let thrown: unknown;
+    try {
+      opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(InstallError);
+    expect((thrown as InstallError).kind).toBe("user-modified-block");
+    opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), {
+      ...applyOpts(),
+      force: true,
+    });
+    expect(opencodeAdapter.detect(env()).status).toBe("installed");
+  });
+
   test("a fresh V2 install verifies clean against itself and detects as installed", () => {
     writeJson(configPath(), { mcp: { servers: {} } });
     opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());

@@ -626,6 +626,22 @@ function detectViaEditor(env: InstallEnv, state: ConfigState): DetectResult {
   const hasFull = Object.hasOwn(block, OSB_KEY_FULL);
   const hasWriter = Object.hasOwn(block, OSB_KEY_WRITER);
   if (!hasFull && !hasWriter) {
+    // Our keys under the OTHER shape are an owned install at a site the
+    // resolved shape does not read, not an absent one: verify names that
+    // state drift, re-apply removes the shadowed copies, and a
+    // not-installed verdict here would make `o2b update`, which skips
+    // only not-installed targets, skip the repair. Neither block
+    // holding our keys stays the "never heard of us" verdict.
+    if (hasOsbKeyAnywhere(state.parsed)) {
+      return {
+        target: "opencode",
+        status: "drift",
+        configPath: path,
+        notes: [
+          `our keys sit under ${(state.v2 ? V1_SHAPE_PATH : V2_SHAPE_PATH).join(".")}; ${shapeKey} lacks them`,
+        ],
+      };
+    }
     return { target: "opencode", status: "not-installed", configPath: path, notes: [] };
   }
   if (hasFull && hasWriter) {
