@@ -68,7 +68,10 @@ export interface BuildSkillAttachmentOptions {
   readonly includeTriggers?: boolean;
   /**
    * Observed usage weight per discovered skill name, from
-   * `skillUsageWeights` (`../brain/skill-usage.ts`). When set and
+   * `skillUsageRankingWeights` (`../brain/skill-usage.ts`) - the ranking
+   * weight, which normalises frequency against the largest joined count
+   * and so does not saturate the way the decay weight `deriveSkillUsage`
+   * reports does. When set and
    * non-empty, candidates near the top are reordered by
    * {@link SKILL_USAGE_ORDERING_MAX_BOOST}-bounded composite instead of
    * raw lexical score. Absent or empty keeps the scorer's order

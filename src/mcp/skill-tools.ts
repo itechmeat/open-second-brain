@@ -23,7 +23,7 @@ import {
   resolveDecisionModelConfig,
   type ResolvedDecisionModelConfig,
 } from "../core/decision-model/config.ts";
-import { deriveSkillUsage, skillUsageWeights } from "../core/brain/skill-usage.ts";
+import { deriveSkillUsage, skillUsageRankingWeights } from "../core/brain/skill-usage.ts";
 import { buildSkillAttachment, type SkillAttachment } from "../core/surface/skill-attach.ts";
 import {
   buildSkillAttachmentWithDecision,
@@ -178,10 +178,17 @@ function toolSkillsAttach(
   // on, the whole continuity store is read exactly once per attach call and
   // the same weight map feeds both build paths, so the deterministic and
   // decision-model offers stay coherent. Off, the vault is never read here.
+  // The map is the ranking weight (skillUsageRankingWeights), not the decay
+  // weight deriveSkillUsage reports: that one clamps at 1, so among recently
+  // used skills frequency was invisible and the name tie-break decided. One
+  // pinned clock feeds both derivations, so the counts and the recency half
+  // of the weight never disagree about what "now" is.
+  const nowMs = Date.now();
   const usageWeight = resolveSkillsAttachUsageOrdering(ctx.configPath ?? undefined)
-    ? skillUsageWeights(
-        deriveSkillUsage(ctx.vault, { nowMs: Date.now() }),
+    ? skillUsageRankingWeights(
+        deriveSkillUsage(ctx.vault, { nowMs }),
         new Set(skills.map((s) => s.name)),
+        { nowMs },
       )
     : undefined;
   const attachmentOpts = {

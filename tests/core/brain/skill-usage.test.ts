@@ -3,9 +3,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { appendContinuityRecord } from "../../../src/core/brain/continuity/store.ts";
+import {
+  appendContinuityRecord,
+  appendContinuityRecords,
+} from "../../../src/core/brain/continuity/store.ts";
 import {
   deriveSkillUsage,
+  skillUsageRankingWeights,
   skillUsageWeights,
   type SkillUsage,
 } from "../../../src/core/brain/skill-usage.ts";
@@ -133,5 +137,114 @@ test("the join is deterministic across repeated calls", () => {
   const names = new Set(["codegraph-partner", "schema-author"]);
   const a = skillUsageWeights(rows, names);
   const b = skillUsageWeights(rows, names);
+  expect([...a.entries()]).toEqual([...b.entries()]);
+});
+
+// --- skillUsageRankingWeights (M5): a ranking weight that does not saturate ---
+//
+// The decay weight `SkillUsage.weight` carries is capped at 1, so among
+// RECENTLY used skills frequency is invisible: a skill invoked 300 times
+// this week and one invoked once yesterday both clamp to 1 and the name
+// tie-break decides. The ranking builder normalises the count against the
+// largest joined count so frequency separates them again.
+
+const RANKING_NOW = Date.parse("2026-06-04T00:00:00Z");
+
+/** `count` invocations of one skill, hourly, ending at `latestAt`. */
+function invokeMany(skill: string, count: number, latestAt: string): void {
+  const latest = Date.parse(latestAt);
+  appendContinuityRecords(
+    vault,
+    Array.from({ length: count }, (_, i) => ({
+      kind: "skill_invoked" as const,
+      createdAt: new Date(latest - i * 3_600_000).toISOString(),
+      sourceRefs: [{ id: `sess:${skill}:${i}` }],
+      payload: { skill, agent: "claude", tool: "get_skill" },
+    })),
+  );
+}
+
+function rankingRow(skill: string, count: number, lastInvokedAtMs: number | null): SkillUsage {
+  return {
+    skill,
+    invocationCount: count,
+    offerAttributedCount: 0,
+    lastInvokedAtMs,
+    weight: 1,
+  };
+}
+
+test("the plain decay weights tie a 300-fold and a once-invoked skill, both recent (the saturation defect)", () => {
+  invokeMany("release-heavy", 300, "2026-06-03T23:00:00Z");
+  invokeMany("release-once", 1, "2026-06-03T20:00:00Z");
+  const usage = deriveSkillUsage(vault, { nowMs: RANKING_NOW });
+  const weights = skillUsageWeights(usage, new Set(["release-heavy", "release-once"]));
+  // Both clamp to the cap: this tie is exactly what the ranking builder exists
+  // to break, pinned so a future change to the decay contract shows up here.
+  expect(weights.get("release-heavy")).toBe(1);
+  expect(weights.get("release-once")).toBe(1);
+});
+
+test("the ranking weight ranks the frequently invoked skill first, both recent", () => {
+  invokeMany("release-heavy", 300, "2026-06-03T23:00:00Z");
+  invokeMany("release-once", 1, "2026-06-03T20:00:00Z");
+  const usage = deriveSkillUsage(vault, { nowMs: RANKING_NOW });
+  const map = skillUsageRankingWeights(usage, new Set(["release-heavy", "release-once"]), {
+    nowMs: RANKING_NOW,
+  });
+  expect(map.get("release-heavy")).toBeGreaterThan(map.get("release-once")!);
+  // Bounds: weights stay in (0, 1].
+  expect(map.get("release-once")).toBeGreaterThan(0);
+  expect(map.get("release-heavy")).toBeLessThanOrEqual(1);
+});
+
+test("maxCount is taken over the joined rows, so an unjoined heavy row does not shrink the rest", () => {
+  const rows = [
+    rankingRow("vendor:ghost-heavy", 1000, RANKING_NOW - 60_000), // joins nothing
+    rankingRow("recent-a", 1, null),
+    rankingRow("recent-b", 1, null),
+  ];
+  const map = skillUsageRankingWeights(rows, new Set(["recent-a", "recent-b"]), {
+    nowMs: RANKING_NOW,
+  });
+  // Every joined count is 1, so the ratio is 1 everywhere: undated rows carry
+  // full recency (the same convention the decay curve applies) and are not
+  // scaled down by the 1000-fold row that matched no known name.
+  expect(map.get("recent-a")).toBe(1);
+  expect(map.get("recent-b")).toBe(1);
+});
+
+test("a plugin-qualified frequent invocation outranks a once-used exact join", () => {
+  const rows = [
+    rankingRow("vendor:release-heavy", 300, RANKING_NOW - 60_000),
+    rankingRow("release-once", 1, RANKING_NOW - 60_000),
+  ];
+  const map = skillUsageRankingWeights(rows, new Set(["release-heavy", "release-once"]), {
+    nowMs: RANKING_NOW,
+  });
+  expect(map.get("release-heavy")).toBeGreaterThan(map.get("release-once")!);
+});
+
+test("an ancient invocation floors at the same minimum as the decay curve", () => {
+  const rows = [rankingRow("legacy", 1, Date.parse("1990-01-01T00:00:00Z"))];
+  const map = skillUsageRankingWeights(rows, new Set(["legacy"]), { nowMs: RANKING_NOW });
+  expect(map.get("legacy")).toBe(0.02);
+});
+
+test("an empty usage list yields an empty ranking map", () => {
+  expect(skillUsageRankingWeights([], new Set(["codegraph-partner"])).size).toBe(0);
+  expect(
+    skillUsageRankingWeights([usageRow("ghost", 1)], new Set(["codegraph-partner"])).size,
+  ).toBe(0);
+});
+
+test("the ranking join is deterministic across repeated calls", () => {
+  const rows = [
+    rankingRow("vendor:release-heavy", 300, RANKING_NOW - 60_000),
+    rankingRow("release-once", 1, RANKING_NOW - 3_600_000),
+  ];
+  const names = new Set(["release-heavy", "release-once"]);
+  const a = skillUsageRankingWeights(rows, names, { nowMs: RANKING_NOW });
+  const b = skillUsageRankingWeights(rows, names, { nowMs: RANKING_NOW });
   expect([...a.entries()]).toEqual([...b.entries()]);
 });

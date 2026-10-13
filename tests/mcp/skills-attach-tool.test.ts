@@ -3,7 +3,10 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { appendContinuityRecord } from "../../src/core/brain/continuity/store.ts";
+import {
+  appendContinuityRecord,
+  appendContinuityRecords,
+} from "../../src/core/brain/continuity/store.ts";
 import * as skillUsage from "../../src/core/brain/skill-usage.ts";
 import { resolveSkillsAttachUsageOrdering } from "../../src/core/config.ts";
 import { computeSkillOfferId } from "../../src/core/surface/skill-offer.ts";
@@ -185,6 +188,32 @@ test("with the flag on and an empty vault the offer is byte-identical to off", a
   flagConfig(true);
   const on = (await attach().handler(ctx, { query: RELEASE_QUERY })) as object;
   expect(JSON.stringify(on)).toBe(JSON.stringify(off));
+});
+
+test("among recently used skills, the frequently invoked one outranks the once-used one", async () => {
+  // Identical descriptors, so the lexical scores are equal and only the usage
+  // weight can separate the two; "release-alpha" sorts before "release-daily",
+  // so the saturated-weight tie-break the ranking builder replaces would have
+  // offered the once-used skill first.
+  writeSkill("release-alpha", "Cut a software release: bump the version, tag and publish.");
+  writeSkill("release-daily", "Cut a software release: bump the version, tag and publish.");
+  writeSkill("helper-one", "Tending the garden plants weekly.");
+  writeSkill("helper-two", "Author schema vocabulary packs.");
+  appendContinuityRecords(
+    ctx.vault,
+    Array.from({ length: 300 }, (_, i) => ({
+      kind: "skill_invoked" as const,
+      createdAt: new Date(Date.now() - (i + 1) * 60_000).toISOString(),
+      sourceRefs: [{ id: `sess:release-daily:${i}` }],
+      payload: { skill: "release-daily", agent: "claude", tool: "get_skill" },
+    })),
+  );
+  invoke("release-alpha", 1, new Date(Date.now() - 86_400_000).toISOString());
+  flagConfig(true);
+  const result = (await attach().handler(ctx, { query: RELEASE_QUERY })) as {
+    skills: Array<{ name: string }>;
+  };
+  expect(result.skills.map((s) => s.name)).toEqual(["release-daily", "release-alpha"]);
 });
 
 test("deriveSkillUsage runs exactly once per attach call when on, never when off", async () => {

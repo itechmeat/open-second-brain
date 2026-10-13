@@ -15,7 +15,7 @@ import {
 import {
   deriveSkillUsage,
   joinSkillInvocationsToOffers,
-  skillUsageWeights,
+  skillUsageRankingWeights,
 } from "../../../src/core/brain/skill-usage.ts";
 import {
   DecisionProviderError,
@@ -592,11 +592,14 @@ function writeDailyUsageRecords(): void {
 }
 
 function pinnedUsageMap(): ReadonlyMap<string, number> {
-  // nowMs is pinned with the records: the decay weights - and every offer
-  // id derived through them - are a function of exactly these inputs.
-  return skillUsageWeights(
+  // nowMs is pinned with the records: the ranking weights - and every offer
+  // id derived through them - are a function of exactly these inputs. The
+  // builder is the one the attach tool wires, so this fixture exercises the
+  // shipped weight, not the decay weight deriveSkillUsage reports.
+  return skillUsageRankingWeights(
     deriveSkillUsage(vault, { nowMs: Date.parse("2026-06-04T00:00:00Z") }),
     new Set(skills.map((s) => s.name)),
+    { nowMs: Date.parse("2026-06-04T00:00:00Z") },
   );
 }
 

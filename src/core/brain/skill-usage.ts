@@ -21,6 +21,7 @@
 
 import { loadNormalizedContinuityRecords } from "./continuity/read-model.ts";
 import { decayWeight } from "./continuity/usage-signal.ts";
+import { clamp01 } from "../math.ts";
 import { readSkillOfferId } from "../surface/skill-offer.ts";
 
 export interface SkillUsage {
@@ -174,20 +175,131 @@ export function skillUsageWeights(
   knownNames: ReadonlySet<string>,
 ): ReadonlyMap<string, number> {
   const weights = new Map<string, number>();
-  // Exact joins settle first so an inferred spelling can never outrank one.
+  for (const [name, rows] of joinUsageRows(usage, knownNames)) {
+    for (const row of rows) {
+      if ((weights.get(name) ?? 0) < row.weight) weights.set(name, row.weight);
+    }
+  }
+  return weights;
+}
+
+/**
+ * Tunables for {@link skillUsageRankingWeights}. The defaults mirror the
+ * shared decay curve's (`decayWeight`, `./continuity/usage-signal.ts`):
+ * the recency half of the ranking weight is the same curve, so the only
+ * thing the ranking builder changes is how frequency enters.
+ */
+export interface SkillUsageRankingOptions {
+  /** Injected clock, epoch ms. Default `Date.now()`. */
+  readonly nowMs?: number;
+  /** Exponential half-life of the recency decay, in days. Default 30. */
+  readonly halfLifeDays?: number;
+  /** Lower clamp so a weight never reads as zero. Default 0.02. */
+  readonly minWeight?: number;
+}
+
+const DAY_MS = 86_400_000;
+const RANKING_HALF_LIFE_DAYS = 30;
+const RANKING_MIN_WEIGHT = 0.02;
+
+/**
+ * Join usage rows onto the discovered names with a ranking weight that does
+ * not saturate (the t_5d1ec8a8 follow-up to review finding M5).
+ *
+ * Why not {@link skillUsageWeights}: its values are the decay weights, and
+ * that weight is frequency multiplied into an age decay and then CLAMPED at
+ * 1 - a skill invoked once within the last few days and one invoked three
+ * hundred times this week both clamp, tie, and let the name tie-break
+ * decide, so among recently used skills the ordering sees recency only.
+ * This builder keeps the clamp out of the frequency term:
+ *
+ *   weight = recency(row) * log1p(count) / log1p(maxCount)
+ *
+ * where `recency(row)` is the shared curve's age half - `0.5 ** (ageDays /
+ * halfLifeDays)` measured from the row's last dated invocation, or 1 when
+ * the row carries no date at all (the same creation-baseline convention the
+ * decay curve applies) - and `maxCount` is the largest invocation count
+ * among the rows that JOIN a known name, so an unjoined heavy row can never
+ * shrink the joined ones. The ratio is 1 for the most-invoked joined row
+ * and falls off logarithmically below it; when every joined count is 1 it
+ * is 1 everywhere and the map is pure recency, so normalisation only
+ * separates, never inverts. The result is clamped to
+ * `[minWeight, 1]` - bounded like the decay weight, but the cap is now
+ * reachable only at full recency, not at one recent invocation.
+ *
+ * Same join rule, purity contract and order-independence as
+ * {@link skillUsageWeights} (several rows on one name: the strongest
+ * normalised weight wins); no clock read and no I/O - `nowMs` is
+ * injectable, so a pinned input always yields the same map.
+ */
+export function skillUsageRankingWeights(
+  usage: ReadonlyArray<SkillUsage>,
+  knownNames: ReadonlySet<string>,
+  opts: SkillUsageRankingOptions = {},
+): ReadonlyMap<string, number> {
+  const weights = new Map<string, number>();
+  const joined = joinUsageRows(usage, knownNames);
+  if (joined.size === 0) return weights;
+  const nowMs = opts.nowMs ?? Date.now();
+  const halfLifeMs = Math.max(1, (opts.halfLifeDays ?? RANKING_HALF_LIFE_DAYS) * DAY_MS);
+  const minWeight = clamp01(opts.minWeight ?? RANKING_MIN_WEIGHT);
+  let maxCount = 1;
+  for (const rows of joined.values()) {
+    for (const row of rows) maxCount = Math.max(maxCount, row.invocationCount);
+  }
+  const maxLog = Math.log1p(maxCount);
+  for (const [name, rows] of joined) {
+    let best = 0;
+    for (const row of rows) {
+      const frequency = Math.log1p(Math.max(0, row.invocationCount)) / maxLog;
+      best = Math.max(best, recencyFactor(row, nowMs, halfLifeMs) * frequency);
+    }
+    weights.set(name, Math.min(1, Math.max(minWeight, best)));
+  }
+  return weights;
+}
+
+/**
+ * The age half of the shared decay curve for one usage row. Kept beside the
+ * join rather than read back off `SkillUsage.weight` because that export is
+ * the saturated value - the clamp this builder exists to bypass is baked
+ * into it, and the frequency term is not invertible through a clamp.
+ */
+function recencyFactor(row: SkillUsage, nowMs: number, halfLifeMs: number): number {
+  if (row.lastInvokedAtMs === null) return 1;
+  const ageMs = Math.max(0, nowMs - row.lastInvokedAtMs);
+  return Math.pow(0.5, ageMs / halfLifeMs);
+}
+
+/**
+ * Group usage rows by the known name each joins, exact joins before
+ * inferred ones. The shared join rule behind both weight builders; rows
+ * keep their input order inside a group, and a name with an exact join
+ * never receives a suffix row, so neither builder's result can depend on
+ * row order (their per-name reduction is a max).
+ */
+function joinUsageRows(
+  usage: ReadonlyArray<SkillUsage>,
+  knownNames: ReadonlySet<string>,
+): ReadonlyMap<string, ReadonlyArray<SkillUsage>> {
   const exact = new Set<string>();
+  const joined = new Map<string, SkillUsage[]>();
   for (const row of usage) {
     if (!knownNames.has(row.skill)) continue;
     exact.add(row.skill);
-    if ((weights.get(row.skill) ?? 0) < row.weight) weights.set(row.skill, row.weight);
+    const group = joined.get(row.skill);
+    if (group === undefined) joined.set(row.skill, [row]);
+    else group.push(row);
   }
   for (const row of usage) {
     if (knownNames.has(row.skill)) continue;
     const suffix = suffixKnownName(row.skill, knownNames);
     if (suffix === null || exact.has(suffix)) continue;
-    if ((weights.get(suffix) ?? 0) < row.weight) weights.set(suffix, row.weight);
+    const group = joined.get(suffix);
+    if (group === undefined) joined.set(suffix, [row]);
+    else group.push(row);
   }
-  return weights;
+  return joined;
 }
 
 /** Longest suffix of `key` after a colon that is a known name, or null. */
