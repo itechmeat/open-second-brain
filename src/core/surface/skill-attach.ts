@@ -4,9 +4,16 @@
  * Deterministic per-turn skill relevance: score discovered skills
  * against the current turn text with the shared lexical scorer and
  * render a small Markdown block of the top matches. No LLM in the
- * loop; the same query and skill set always produce the same block.
- * The char budget drops whole trailing entries - a half-rendered
- * skill line would read as a different skill.
+ * loop; the same query, skill set and usage input always produce the
+ * same block. The char budget drops whole trailing entries - a
+ * half-rendered skill line would read as a different skill.
+ *
+ * Ranking is the scorer's by default. When the caller supplies a usage
+ * weight map (t_5d1ec8a8), candidates near the top are reordered by a
+ * bounded composite of lexical score and observed invocation weight
+ * (see {@link SKILL_USAGE_ORDERING_MAX_BOOST}); with the input absent
+ * the output is byte-identical to the scorer's order, so existing
+ * callers are untouched.
  *
  * Two properties were added in t_ccb05134:
  *
@@ -59,6 +66,16 @@ export interface BuildSkillAttachmentOptions {
    * false (name 3x + description 1x only).
    */
   readonly includeTriggers?: boolean;
+  /**
+   * Observed usage weight per discovered skill name, from
+   * `skillUsageWeights` (`../brain/skill-usage.ts`). When set and
+   * non-empty, candidates near the top are reordered by
+   * {@link SKILL_USAGE_ORDERING_MAX_BOOST}-bounded composite instead of
+   * raw lexical score. Absent or empty keeps the scorer's order
+   * (default off); the `score` field of every item stays the lexical
+   * score either way, and the floor is never crossable by weight.
+   */
+  readonly usageWeight?: ReadonlyMap<string, number>;
 }
 
 export const DEFAULT_MAX_SKILLS = 3;
@@ -95,6 +112,20 @@ const OFFER_LINE_BUDGET =
 export const DISCRIMINATING_TERM_CORPUS_SHARE = 0.5;
 
 /**
+ * Largest multiplicative gain a usage weight may add to a candidate's
+ * lexical score when the attach ordering runs with a usage map
+ * (t_5d1ec8a8): the composite is
+ * `score * (1 + SKILL_USAGE_ORDERING_MAX_BOOST * weight)` with weights in
+ * (0, 1], so a candidate rises by at most half again its own lexical
+ * score. Relevance stays primary - a wide lexical gap is never closed by
+ * usage, only the near-ties the scorer cannot see break toward the skill
+ * an agent actually invokes. The floor applies before the composite, so
+ * no weight resurrects a non-discriminating candidate; the reported
+ * `score` stays the untouched lexical score.
+ */
+export const SKILL_USAGE_ORDERING_MAX_BOOST = 0.5;
+
+/**
  * Whether at least one term this candidate matched separates it from the
  * rest of the corpus.
  */
@@ -117,15 +148,41 @@ function emptyAttachment(): SkillAttachment {
  * shortlist from the same ranking and never adds anything outside it.
  */
 export function rankSkillCandidates(
-  opts: Pick<BuildSkillAttachmentOptions, "query" | "skills" | "includeTriggers">,
+  opts: Pick<BuildSkillAttachmentOptions, "query" | "skills" | "includeTriggers" | "usageWeight">,
   limit: number,
 ): SkillAttachItem[] {
   const byName = new Map(opts.skills.map((s) => [s.name, s]));
   const descriptors = skillDescriptors(opts.skills, opts.includeTriggers);
-  const ranked = scoreDescriptors(opts.query, descriptors)
-    // The floor filters, it never reorders: ranking stays the scorer's.
-    .filter((scored) => hasDiscriminatingMatch(scored, descriptors.length))
-    .slice(0, limit);
+  const surviving = scoreDescriptors(opts.query, descriptors)
+    // The floor filters, it never reorders, and no usage weight crosses it:
+    // a candidate dropped here stays dropped. Without a usage map ranking
+    // stays the scorer's; with one, the bounded composite below reorders
+    // the survivors.
+    .filter((scored) => hasDiscriminatingMatch(scored, descriptors.length));
+  const usageWeight = opts.usageWeight;
+  const ranked =
+    usageWeight === undefined
+      ? surviving.slice(0, limit)
+      : surviving
+          .map((scored) => ({
+            scored,
+            // Missing name means no observed invocation: weight 0, which
+            // leaves the composite at the lexical score.
+            composite:
+              scored.score *
+              (1 + SKILL_USAGE_ORDERING_MAX_BOOST * (usageWeight.get(scored.descriptor.name) ?? 0)),
+          }))
+          .toSorted(
+            (a, b) =>
+              b.composite - a.composite ||
+              (a.scored.descriptor.name < b.scored.descriptor.name
+                ? -1
+                : a.scored.descriptor.name > b.scored.descriptor.name
+                  ? 1
+                  : 0),
+          )
+          .slice(0, limit)
+          .map((entry) => entry.scored);
   const items: SkillAttachItem[] = [];
   for (const { descriptor, score } of ranked) {
     const skill = byName.get(descriptor.name);
