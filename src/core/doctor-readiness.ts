@@ -923,11 +923,24 @@ function extractFromJsonConfig(raw: string): CommandExtraction | null {
   const root = parsed as Record<string, unknown>;
   const entries: RegisteredCommandEntry[] = [];
   const malformed: string[] = [];
-  for (const topKey of JSON_MCP_TOP_LEVEL_KEYS) {
+  // The resolved shape's key owns the probe: a V2 file that still holds
+  // legacy top-level copies would otherwise have the same entry name
+  // scanned twice, and a stale legacy copy reported as a broken command
+  // beside its healthy native twin. The native block is scanned alone
+  // when it is present; the legacy keys are scanned (entry names
+  // deduped, first block wins) only when it is absent.
+  const native = resolveJsonKeyPath(root, "mcp.servers");
+  const scanKeys =
+    native !== null && typeof native === "object" && !Array.isArray(native)
+      ? ["mcp.servers"]
+      : JSON_MCP_TOP_LEVEL_KEYS.filter((topKey) => topKey !== "mcp.servers");
+  const seen = new Set<string>();
+  for (const topKey of scanKeys) {
     const block = resolveJsonKeyPath(root, topKey);
     if (block === null || typeof block !== "object" || Array.isArray(block)) continue;
     for (const [key, value] of Object.entries(block as Record<string, unknown>)) {
-      if (!OSB_ENTRY_KEYS.has(key)) continue;
+      if (!OSB_ENTRY_KEYS.has(key) || seen.has(key)) continue;
+      seen.add(key);
       const normalized = normalizeOnDiskEntry(value);
       if (normalized === null) malformed.push(`${topKey}.${key}`);
       else entries.push({ key, ...normalized });

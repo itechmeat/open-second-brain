@@ -569,6 +569,46 @@ describe("probeRegisteredCommands", () => {
     expect(v.detail).toContain(launcher);
   });
 
+  test("a V2 config with shadowed legacy copies probes the native entries only", async () => {
+    writeConfig("");
+    const launcher = join(tmp, "bin", "o2b");
+    mkdirSync(dirname(launcher), { recursive: true });
+    writeFileSync(launcher, "");
+    const config = join(home, ".config", "opencode", "opencode.json");
+    mkdirSync(dirname(config), { recursive: true });
+    writeFileSync(
+      config,
+      JSON.stringify({
+        mcp: {
+          // A stale legacy copy of the same entry, beside the native
+          // block: scanning both keys probed the same name twice and
+          // reported the stale command as broken.
+          "open-second-brain": {
+            type: "local",
+            command: [join(tmp, "bin", "gone-o2b"), "mcp"],
+          },
+          servers: {
+            "open-second-brain": {
+              type: "local",
+              command: [launcher, "mcp", "--vault", tmp],
+              enabled: true,
+            },
+            "open-second-brain-writer": {
+              type: "local",
+              command: [launcher, "mcp", "--writer-only", "--vault", tmp],
+              enabled: true,
+            },
+          },
+        },
+      }),
+    );
+    writeManifestEntries({ opencode: manifestEntry("opencode", config) });
+    const v = await probeRegisteredCommands(installedRuntimeOpts());
+    expect(v.status).toBe(READINESS_STATUS.pass);
+    expect(v.detail).toContain(launcher);
+    expect(v.detail).not.toContain("gone-o2b");
+  });
+
   test("an opencode.jsonc config with comments is extracted and probed", async () => {
     writeConfig("");
     const launcher = join(tmp, "bin", "o2b");
