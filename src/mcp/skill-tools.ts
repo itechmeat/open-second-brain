@@ -244,7 +244,7 @@ export const SKILL_TOOLS: ReadonlyArray<ToolDefinition> = [
   {
     name: "skills_attach",
     description:
-      "Score skills against the current turn text; returns a char-budgeted block of relevant summaries and the offer_id to cite on get_skill (null when none was offered). A candidate matching only terms most of the corpus carries is dropped, not offered. With skills_attach_usage_ordering on, observed invocation usage reorders lexical near-ties. enabled:false unless skill_auto_attach is set.",
+      "Score skills against the turn text; returns a char-budgeted block of relevant summaries and the offer_id to cite on get_skill (null when none). Candidates without a discriminating term are dropped. Usage-ordered when skills_attach_usage_ordering is on. enabled:false unless skill_auto_attach is set.",
     inputSchema: {
       type: "object",
       properties: {
