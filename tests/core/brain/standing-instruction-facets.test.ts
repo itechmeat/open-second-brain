@@ -20,19 +20,29 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
-import { attentionFlowsDir, brainDirs } from "../../../src/core/brain/paths.ts";
+import {
+  attentionFlowsDir,
+  brainDirs,
+  brainScopedRulePath,
+  brainStandingRulesPath,
+} from "../../../src/core/brain/paths.ts";
 import { writeFrontmatterAtomic } from "../../../src/core/vault.ts";
 import { moveToRetired, writePreference } from "../../../src/core/brain/preference.ts";
 import { parseSignal, writeSignal } from "../../../src/core/brain/signal.ts";
 import { importSession } from "../../../src/core/brain/sessions/import.ts";
 import { BRAIN_RETIRED_REASON } from "../../../src/core/brain/types.ts";
-import { evaluateAttentionFlow } from "../../../src/core/brain/attention-flows.ts";
+import {
+  buildAttentionContextBlock,
+  evaluateAttentionFlow,
+  renderAttentionFlow,
+} from "../../../src/core/brain/attention-flows.ts";
+import { changedPaths, digestVaultFiles, digestVaultTree } from "../../helpers/vault-digest.ts";
 
 const CLAUDE = resolve("tests/fixtures/sessions/claude-minimal.jsonl");
 const NOW = new Date("2026-06-01T00:00:00Z");
@@ -257,5 +267,95 @@ describe("standing-instruction facets: provenance annotation", () => {
       "pref-quiet (testing)",
     ]);
     expect(section.facets).toEqual([]);
+  });
+});
+
+describe("standing-instruction facets: lane invariants", () => {
+  /** Preference ids named by a section's items, annotations and scopes stripped. */
+  function itemIds(section: ReturnType<typeof standingSection>): string[] {
+    return section.items.map((item) => stripAnnotation(item).split(" (")[0]!);
+  }
+
+  test("the whole lane performs zero writes on a fully populated vault", async () => {
+    const ref = await importFixtureSignal();
+    const lifecycleId = writeLifecycleSignal();
+    // The operator-authored layers the lane must never touch, plus the
+    // preference populations it reads.
+    writeFileSync(brainStandingRulesPath(vault), "# Standing rules\n\nnever force push\n", "utf8");
+    mkdirSync(join(brainScopedRulePath(vault, "project", "release"), ".."), { recursive: true });
+    writeFileSync(
+      brainScopedRulePath(vault, "project", "release"),
+      "# Scoped rule\n\ntag before merge\n",
+      "utf8",
+    );
+    writeConfirmed("imported", "testing", [`[[${ref.id}]]`]);
+    writeConfirmed("lifecycle", "testing", [`[[${lifecycleId}]]`]);
+    writeConfirmed("secret", "testing", ["[[sig-2026-05-01-missing]]"], "alice");
+    writeConfirmed("quiet", "testing", []);
+    writeStandingFlow(["testing"]);
+
+    // Warm-up: the one-time lazy default-flow bootstrap is pre-existing
+    // behavior outside this lane; settle it BEFORE the guarded window.
+    evaluateAttentionFlow(vault, "loops");
+
+    const beforeFiles = digestVaultFiles(vault);
+    const before = digestVaultTree(vault);
+    evaluateAttentionFlow(vault, "loops");
+    evaluateAttentionFlow(vault, "loops", { standingInstructionFacets: true });
+    renderAttentionFlow(vault, "loops");
+    buildAttentionContextBlock(vault, ["loops"]);
+    // The per-file digests cover every byte of every file and every
+    // path name, so a created, deleted, or edited file anywhere under
+    // the vault fails this assertion - including the standing rules,
+    // the scoped rule, and any preference file.
+    expect(changedPaths(beforeFiles, digestVaultFiles(vault))).toEqual([]);
+    expect(digestVaultTree(vault)).toBe(before);
+  });
+
+  test("facet output never includes a preference the caller could not already see", async () => {
+    const ref = await importFixtureSignal();
+    const bareId = writeBareSignal();
+    writeConfirmed("imported", "testing", [`[[${ref.id}]]`]);
+    writeConfirmed("secret", "testing", [`[[${ref.id}]]`], "alice");
+    writeConfirmed("bare", "testing", [`[[${bareId}]]`]);
+    writeConfirmed("doomed", "testing", [`[[${ref.id}]]`]);
+    moveToRetired(
+      vault,
+      join(brainDirs(vault).preferences, "pref-doomed.md"),
+      BRAIN_RETIRED_REASON.rebutted,
+      { now: NOW, retired_by: "test" },
+    );
+    writeStandingFlow(["testing"]);
+
+    const off = itemIds(standingSection(evaluateAttentionFlow(vault, "loops")));
+    const on = standingSection(
+      evaluateAttentionFlow(vault, "loops", { standingInstructionFacets: true }),
+    );
+    // The retired preference is in neither; every facet names a
+    // preference the unset lane already delivered.
+    const visible = new Set(off);
+    expect(off).toEqual(["pref-bare", "pref-imported", "pref-secret"]);
+    for (const facet of on.facets!) {
+      expect(visible.has(facet.preferenceId)).toBe(true);
+    }
+    expect(on.facets!.map((f) => f.preferenceId)).toEqual(["pref-imported", "pref-secret"]);
+  });
+
+  test("the resolved count is honest in a mixed population", async () => {
+    const ref = await importFixtureSignal();
+    const bareId = writeBareSignal();
+    writeConfirmed("imported", "testing", [`[[${ref.id}]]`]);
+    writeConfirmed("bare", "testing", [`[[${bareId}]]`]);
+    writeConfirmed("quiet", "testing", []);
+    writeStandingFlow(["testing"]);
+
+    const section = standingSection(
+      evaluateAttentionFlow(vault, "loops", { standingInstructionFacets: true }),
+    );
+    // Exactly the preferences whose join resolved, and not one more:
+    // three surfaced items, one facet, the rest reported unresolved.
+    expect(itemIds(section)).toEqual(["pref-bare", "pref-imported", "pref-quiet"]);
+    expect(section.facets!.length).toBe(1);
+    expect(section.facets!.map((f) => f.preferenceId)).toEqual(["pref-imported"]);
   });
 });
