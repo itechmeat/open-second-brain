@@ -27,6 +27,7 @@ import {
   type RecallInjectDecision,
 } from "../brain/recall-inject.ts";
 import { resolveSearchConfig, search } from "../search/index.ts";
+import type { SearchLaneTiming } from "../search/index.ts";
 import { evaluateSurfacingGate } from "../search/surfacing-gate.ts";
 import {
   BENCH_EMBEDDING_RECEIPT_FILENAME,
@@ -134,6 +135,11 @@ export interface BenchRunOptions {
 interface RetrievedQuestion {
   readonly id: string;
   readonly latency_ms: number;
+  /**
+   * Overlapped lane milliseconds (recall-lane-latency), present only when
+   * the semantic lane attempted the embed for this question.
+   */
+  readonly overlapped_ms?: number;
   /** Result paths in rank order (retrieval categories). */
   readonly paths?: ReadonlyArray<string>;
   /** Normalized turn texts (session_handoff). */
@@ -404,14 +410,23 @@ async function retrieveQuestion(
 ): Promise<RetrievedQuestion> {
   const startedAt = Date.now();
   if (RETRIEVAL_CATEGORIES.has(question.category)) {
+    // Overlapped lane accounting (recall-lane-latency): the per-call sink
+    // rides this question's search and the figure is persisted only when
+    // the semantic lane attempted the embed, so a keyword-only suite
+    // keeps its report bytes.
+    let laneTiming: SearchLaneTiming | undefined;
     const outcome = await search(config, {
       query: question.query ?? "",
       limit: question.top_k ?? 5,
       transportReach: BENCH_REACH,
+      laneTiming: (timing) => {
+        laneTiming = timing;
+      },
     });
     return {
       id: question.id,
       latency_ms: Date.now() - startedAt,
+      ...(laneTiming?.attempted === true ? { overlapped_ms: laneTiming.overlappedMs } : {}),
       paths: outcome.results.map((result) => result.path),
     };
   }
@@ -578,6 +593,7 @@ function evaluateQuestion(
     id: question.id,
     category: question.category,
     latency_ms: retrieved.latency_ms,
+    ...(retrieved.overlapped_ms !== undefined ? { overlapped_ms: retrieved.overlapped_ms } : {}),
     ...(retrieved.context_chars !== undefined ? { context_chars: retrieved.context_chars } : {}),
     ...(retrieved.injected_tokens !== undefined
       ? { injected_tokens: retrieved.injected_tokens }
@@ -773,6 +789,12 @@ function buildReport(
     }
   }
   const latencies = results.map((result) => result.latency_ms);
+  // The latency family's overlap figure (recall-lane-latency): averaged
+  // over the questions that attempted the semantic lane, present only
+  // when at least one did - a keyword-only report keeps its bytes.
+  const overlappedMsValues = results
+    .map((result) => result.overlapped_ms)
+    .filter((value): value is number => value !== undefined);
   const avgChars = mean(results.map((result) => result.context_chars));
   // The suite's ONE token number, from the ONE estimator. The inline
   // `ceil(avg_chars / 4)` that stood here was a sixth formula in a repo
@@ -808,6 +830,13 @@ function buildReport(
           ? Math.round(latencies.reduce((sum, value) => sum + value, 0) / latencies.length)
           : 0,
       max: latencies.length > 0 ? Math.max(...latencies) : 0,
+      ...(overlappedMsValues.length > 0
+        ? {
+            overlapped_ms: Math.round(
+              overlappedMsValues.reduce((sum, value) => sum + value, 0) / overlappedMsValues.length,
+            ),
+          }
+        : {}),
     }),
     context_cost: Object.freeze({
       avg_chars: avgChars,

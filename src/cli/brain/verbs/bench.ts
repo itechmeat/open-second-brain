@@ -35,6 +35,13 @@ const USAGE =
 const DEFAULT_RUNS_DIR = join(".open-second-brain", "bench-runs");
 const REPO_FIXTURE_DIR = join("tests", "fixtures", "bench");
 
+/**
+ * The overlapped-lane human line (recall-lane-latency), printed only when
+ * the aggregate latency family carries the figure - a keyword-only run
+ * keeps its stdout byte-identical.
+ */
+const OVERLAPPED_LINE_PREFIX = "overlapped_ms";
+
 /** A suite name must be safe to echo into errors, reports and run ids. */
 const SUITE_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
 
@@ -429,6 +436,9 @@ export async function cmdBrainBench(argv: string[]): Promise<number> {
     `quality: ${report.quality.passed}/${report.quality.total} (pass rate ${report.quality.pass_rate})\n`,
   );
   process.stdout.write(`latency_ms: avg ${report.latency_ms.avg} max ${report.latency_ms.max}\n`);
+  if (report.latency_ms.overlapped_ms !== undefined) {
+    process.stdout.write(`${OVERLAPPED_LINE_PREFIX}: avg ${report.latency_ms.overlapped_ms}\n`);
+  }
   process.stdout.write(
     `context_cost: avg_chars ${report.context_cost.avg_chars} avg_injected_tokens ${report.context_cost.avg_injected_tokens}\n`,
   );

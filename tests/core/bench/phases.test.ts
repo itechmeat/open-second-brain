@@ -507,4 +507,32 @@ describe("the embeddings capability path", () => {
     writeFileSync(cachePath, `${JSON.stringify({ entries: {} }, null, 2)}\n`, "utf8");
     await expect(run()).rejects.toThrow(/schema 'undefined'/);
   }, 30_000);
+
+  test("the latency family reports overlapped_ms when questions attempted the semantic lane", async () => {
+    const report = await runMemoryBench({
+      fixture: SEMANTIC_FIXTURE,
+      runsDir,
+      capabilities: CAPABILITIES,
+      pinnedKnobs: SEMANTIC_PIN,
+    });
+    expect(report.quality.passed).toBe(report.quality.total);
+    const semanticQuestions = report.questions.filter((q) => q.category === "single_hop");
+    expect(semanticQuestions.length).toBeGreaterThan(0);
+    for (const question of semanticQuestions) {
+      expect(question.overlapped_ms).toBeGreaterThanOrEqual(0);
+      expect(Number.isInteger(question.overlapped_ms)).toBe(true);
+    }
+    expect(report.latency_ms.overlapped_ms).toBeGreaterThanOrEqual(0);
+  }, 30_000);
+
+  test("a keyword-only run adds no overlapped_ms keys to the report", async () => {
+    const report = await runMemoryBench({ fixture: FIXTURE, runsDir });
+    // No question attempted the semantic lane, so no question carries the
+    // figure - the latency block keeps exactly the keys it always had.
+    expect(report.questions.every((q) => q.overlapped_ms === undefined)).toBe(true);
+    expect(JSON.parse(JSON.stringify(report.latency_ms))).toEqual(
+      expect.objectContaining({ avg: expect.any(Number), max: expect.any(Number) }),
+    );
+    expect(Object.keys(report.latency_ms).toSorted()).toEqual(["avg", "max"]);
+  }, 30_000);
 });

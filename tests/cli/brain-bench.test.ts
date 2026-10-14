@@ -742,3 +742,65 @@ describe("bench help text", () => {
     expect(flattened).toContain("[--sample-seed <value>] [--sample-cap <n>]");
   });
 });
+
+/**
+ * The overlapped_ms human line (recall-lane-latency): printed only when
+ * the aggregate latency family carries the figure - a keyword-only run
+ * (the default pin) keeps its stdout byte-identical, and a lane-on run
+ * through an embeddings-capable suite prints it.
+ */
+describe("bench overlapped_ms human line", () => {
+  const OVERLAP_SUITE = "overlap-stub";
+  const OVERLAP_FIXTURE = parseBenchFixture({
+    name: "overlap-stub",
+    notes: [
+      {
+        path: "Brain/notes/rust.md",
+        body: "# Rust\n\nThe systems team standardized on Rust for the new ingest service.\n",
+      },
+    ],
+    questions: [
+      {
+        id: "q-rust",
+        category: "single_hop",
+        query: "systems language for the ingest service",
+        expected_paths: ["Brain/notes/rust.md"],
+      },
+    ],
+  });
+
+  registerBenchSuite(OVERLAP_SUITE, {
+    loader: () => ({ fixture: OVERLAP_FIXTURE }),
+    capabilities: { embeddings: true },
+  });
+
+  test("the overlapped_ms line prints only when the aggregate carries it", async () => {
+    // Keyword-only default run: no line, byte-identical stdout.
+    const plain = await runCli(
+      ["brain", "bench", "memory", "--fixture", "core-recall", "--runs-dir", runsDir],
+      {},
+    );
+    expect(plain.returncode).toBe(0);
+    expect(plain.stdout).not.toContain("overlapped_ms");
+
+    // Lane-on run through the embeddings-capable suite: the line prints.
+    const laneOn = await runCli(
+      [
+        "brain",
+        "bench",
+        "memory",
+        "--fixture",
+        "core-recall",
+        "--suite",
+        OVERLAP_SUITE,
+        "--runs-dir",
+        join(runsDir, "lane-on"),
+        "--pin",
+        JSON.stringify({ semantic: { enabled: true, provider: "local" } }),
+      ],
+      {},
+    );
+    expect(laneOn.returncode).toBe(0);
+    expect(laneOn.stdout).toMatch(/overlapped_ms: avg \d+/);
+  }, 60_000);
+});

@@ -349,6 +349,13 @@ export interface BenchQuestionResult {
   /** One-line reason when pass is false. */
   readonly failure?: string;
   readonly latency_ms: number;
+  /**
+   * Overlapped lane milliseconds (recall-lane-latency): how much of this
+   * question's embed round trip the keyword lanes hid, present only when
+   * the semantic lane attempted the embed - a keyword-only run adds no
+   * key, keeping its report bytes identical.
+   */
+  readonly overlapped_ms?: number;
   /** Characters of context this question injected, when it injected any. */
   readonly context_chars?: number;
   /** {@link estimateTokens} over the same string `context_chars` measured. */
@@ -377,7 +384,17 @@ export interface BenchReport {
     readonly pass_rate: number;
     readonly by_category: Readonly<Record<string, { passed: number; total: number }>>;
   };
-  readonly latency_ms: { readonly avg: number; readonly max: number };
+  readonly latency_ms: {
+    readonly avg: number;
+    readonly max: number;
+    /**
+     * Mean overlapped lane milliseconds (recall-lane-latency) over the
+     * questions that attempted the semantic lane. Present only when at
+     * least one did, so the default (keyword-only) report serializes
+     * byte-identically without it.
+     */
+    readonly overlapped_ms?: number;
+  };
   /**
    * Cost, kept apart from quality on purpose (the MemScore lesson stated
    * at the top of this file). `avg_injected_tokens` is the fourth
