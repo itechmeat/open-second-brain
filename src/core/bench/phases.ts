@@ -79,6 +79,12 @@ import {
  * a smaller vault than the one under test.
  */
 const BENCH_REACH = TRANSPORT_REACH.local;
+/**
+ * The standing-instruction facet category (recall-lane-latency). It is
+ * the ONE category the headline quality family excludes: its rate stays
+ * the named line of its own in `by_category`.
+ */
+const STANDING_INSTRUCTION_CATEGORY = "standing_instruction";
 
 export interface BenchRunOptions {
   readonly fixture: BenchFixture;
@@ -512,7 +518,7 @@ async function retrieveQuestion(
       injected_tokens: injectedTokens(brief),
     };
   }
-  if (question.category === "standing_instruction") {
+  if (question.category === STANDING_INSTRUCTION_CATEGORY) {
     return retrieveStandingInstruction(vault, question, startedAt, pinnedKnobs);
   }
   if (question.category === "write_fidelity") {
@@ -722,7 +728,7 @@ function evaluateQuestion(
     }
     return Object.freeze({ ...base, pass: true });
   }
-  if (question.category === "standing_instruction") {
+  if (question.category === STANDING_INSTRUCTION_CATEGORY) {
     return evaluateStandingInstruction(question, retrieved, base);
   }
   // budget
@@ -891,12 +897,20 @@ function buildReport(
 ): BenchReport {
   const byCategory: Record<string, { passed: number; total: number }> = {};
   let passed = 0;
+  let total = 0;
   for (const result of results) {
     const bucket = (byCategory[result.category] ??= { passed: 0, total: 0 });
     bucket.total += 1;
     if (result.pass) {
       bucket.passed += 1;
-      passed += 1;
+    }
+    // The standing_instruction category never folds into the headline
+    // (recall-lane-latency): its rate stays the named line of its own in
+    // `by_category`, so adding facet questions to a fixture cannot shift
+    // the headline pass rate a baseline compares.
+    if (result.category !== STANDING_INSTRUCTION_CATEGORY) {
+      total += 1;
+      if (result.pass) passed += 1;
     }
   }
   const latencies = results.map((result) => result.latency_ms);
@@ -929,8 +943,8 @@ function buildReport(
     created_at: run.checkpoint.created_at,
     quality: Object.freeze({
       passed,
-      total: results.length,
-      pass_rate: results.length > 0 ? round3(passed / results.length) : 0,
+      total,
+      pass_rate: total > 0 ? round3(passed / total) : 0,
       by_category: Object.freeze(
         Object.fromEntries(Object.entries(byCategory).toSorted(([a], [b]) => (a < b ? -1 : 1))),
       ),

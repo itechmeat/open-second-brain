@@ -20,6 +20,7 @@ import { loadReplayBenchFixture } from "../../../core/bench/replay.ts";
 import { runMemoryBench } from "../../../core/bench/phases.ts";
 import type {
   BenchPinnedKnobs,
+  BenchReport,
   BenchSampleRequest,
   BenchSuiteLoad,
   BenchSuiteRegistration,
@@ -46,13 +47,29 @@ const OVERLAPPED_LINE_PREFIX = "overlapped_ms";
  * The standing-instruction human line (recall-lane-latency), printed only
  * when the report's quality buckets carry the category - a run without
  * standing_instruction questions keeps its stdout byte-identical. The
- * category rates stay a named line of their own, never a fold into the
- * overall pass rate.
+ * headline passed/total/pass_rate excludes the category (buildReport), so
+ * the category rates stay this named line of their own, never a fold into
+ * the overall pass rate.
  */
 const STANDING_INSTRUCTION_LINE_PREFIX = "standing_instruction";
 
 /** A suite name must be safe to echo into errors, reports and run ids. */
 const SUITE_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
+
+/**
+ * The run's all-pass gate. The headline excludes the standing_instruction
+ * category (its rate is the named line of its own, never a fold into the
+ * overall pass rate), so the gate reads the category's own bucket beside
+ * the headline: a failing facet question still exits nonzero, while a
+ * passing one never shifts the headline rate a baseline compares.
+ */
+function runAllPass(report: BenchReport): boolean {
+  const standing = report.quality.by_category["standing_instruction"];
+  return (
+    report.quality.passed === report.quality.total &&
+    (standing === undefined || standing.passed === standing.total)
+  );
+}
 
 /**
  * The path with no `--suite`: a native fixture loads directly. Not a
@@ -442,7 +459,7 @@ export async function cmdBrainBench(argv: string[]): Promise<number> {
 
   if (flags["json"] === true) {
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-    return report.quality.passed === report.quality.total ? 0 : 1;
+    return runAllPass(report) ? 0 : 1;
   }
   process.stdout.write(`bench ${report.fixture} run ${report.run_id}\n`);
   process.stdout.write(
@@ -488,7 +505,7 @@ export async function cmdBrainBench(argv: string[]): Promise<number> {
       `  ${question.pass ? "PASS" : "FAIL"}  ${question.id} (${question.category})${question.failure ? ` - ${question.failure}` : ""}\n`,
     );
   }
-  return report.quality.passed === report.quality.total ? 0 : 1;
+  return runAllPass(report) ? 0 : 1;
 }
 
 function resolveFixturePath(flag: string): string | null {

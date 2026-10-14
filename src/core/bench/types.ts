@@ -398,9 +398,19 @@ export interface BenchReport {
   readonly fixture_hash: string;
   readonly created_at: string;
   readonly quality: {
+    /**
+     * Headline pass count over every category EXCEPT
+     * `standing_instruction` (recall-lane-latency): the facet lane's
+     * rate stays the named line of its own in `by_category`, so adding
+     * facet questions to a fixture never shifts the headline a baseline
+     * compares.
+     */
     readonly passed: number;
+    /** Question count behind {@link BenchReport.quality.passed}, same exclusion. */
     readonly total: number;
+    /** `passed / total` at report precision; `0` when nothing counts. */
     readonly pass_rate: number;
+    /** Per-category passed/total, every category including the excluded one. */
     readonly by_category: Readonly<Record<string, { passed: number; total: number }>>;
   };
   readonly latency_ms: {

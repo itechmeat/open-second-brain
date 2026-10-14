@@ -123,30 +123,7 @@ function signalMd(slug: string, topic: string, principle: string, sessionRef: st
 function standingFixture(): BenchFixture {
   return parseBenchFixture({
     name: "standing-instruction-bench",
-    notes: [
-      { path: "Brain/attention/flows/open-loops.md", body: FLOW_MD },
-      {
-        path: "Brain/preferences/pref-tabs.md",
-        body: preferenceMd("tabs", "tabs", "Use tabs for indentation", "sig-bench-turn"),
-      },
-      {
-        path: "Brain/preferences/pref-commits.md",
-        body: preferenceMd("commits", "commits", "Prefer small commits", "sig-bench-bare"),
-      },
-      {
-        path: "Brain/inbox/sig-bench-turn.md",
-        body: signalMd(
-          "sig-bench-turn",
-          "tabs",
-          "use tabs for indentation",
-          "bench-session.json#turn-2",
-        ),
-      },
-      {
-        path: "Brain/inbox/sig-bench-bare.md",
-        body: signalMd("sig-bench-bare", "commits", "prefer small commits", "session:conv-9"),
-      },
-    ],
+    notes: STANDING_NOTES,
     continuity: [],
     questions: [
       {
@@ -162,6 +139,75 @@ function standingFixture(): BenchFixture {
       {
         // The auto-extract shape resolves to no origin, so its facet is
         // honestly absent and the expectation fails by name.
+        id: "q-standing-unresolved",
+        category: "standing_instruction",
+        expected_ids: ["pref:pref-commits"],
+      },
+    ],
+  });
+}
+
+/** The standing category's fixture vault files, shared with the mixed fixture. */
+const STANDING_NOTES: BenchFixture["notes"] = [
+  {
+    path: "Brain/attention/flows/open-loops.md",
+    body: FLOW_MD,
+  },
+  {
+    path: "Brain/preferences/pref-tabs.md",
+    body: preferenceMd("tabs", "tabs", "Use tabs for indentation", "sig-bench-turn"),
+  },
+  {
+    path: "Brain/preferences/pref-commits.md",
+    body: preferenceMd("commits", "commits", "Prefer small commits", "sig-bench-bare"),
+  },
+  {
+    path: "Brain/inbox/sig-bench-turn.md",
+    body: signalMd(
+      "sig-bench-turn",
+      "tabs",
+      "use tabs for indentation",
+      "bench-session.json#turn-2",
+    ),
+  },
+  {
+    path: "Brain/inbox/sig-bench-bare.md",
+    body: signalMd("sig-bench-bare", "commits", "prefer small commits", "session:conv-9"),
+  },
+];
+
+/**
+ * A retrieval question alongside the facet category: the control that
+ * proves the headline counts the retrieval question alone.
+ */
+function mixedFixture(): BenchFixture {
+  return parseBenchFixture({
+    name: "standing-headline-mixed",
+    notes: [
+      {
+        path: "Brain/notes/coffee.md",
+        body: "# Coffee\n\nThe coffee preference is a flat white every morning.\n",
+      },
+      ...STANDING_NOTES,
+    ],
+    continuity: [],
+    questions: [
+      {
+        id: "q-coffee",
+        category: "single_hop",
+        query: "coffee preference",
+        top_k: 5,
+        expected_paths: ["Brain/notes/coffee.md"],
+      },
+      {
+        id: "q-standing",
+        category: "standing_instruction",
+        // A deliberately wrong origin: the question fails, and the
+        // headline must not move because of it.
+        expected_ids: ["pref:pref-tabs"],
+        expected_text: "earliest cited turn nowhere.json#turn-9]",
+      },
+      {
         id: "q-standing-unresolved",
         category: "standing_instruction",
         expected_ids: ["pref:pref-commits"],
@@ -243,6 +289,22 @@ describe("bench standing_instruction category", () => {
   test("the default knob pin serializes byte-for-byte unchanged", () => {
     expect(JSON.stringify(DEFAULT_BENCH_KNOB_PIN)).toBe('{"semantic":{"enabled":false}}');
   });
+
+  test("standing_instruction questions never shift the headline pass rate", async () => {
+    const report = await runMemoryBench({ fixture: mixedFixture(), runsDir });
+    // The retrieval question alone is the headline: both facet questions
+    // fail, yet passed/total/pass_rate count only q-coffee. Adding facet
+    // questions to a fixture cannot move the rate a baseline compares.
+    expect(report.quality.passed).toBe(1);
+    expect(report.quality.total).toBe(1);
+    expect(report.quality.pass_rate).toBe(1);
+    // The category keeps its failures where they belong: its own named
+    // bucket, which the human line prints.
+    expect(report.quality.by_category["single_hop"]).toEqual({ passed: 1, total: 1 });
+    expect(report.quality.by_category["standing_instruction"]).toEqual({ passed: 0, total: 2 });
+    const failing = report.questions.find((question) => question.id === "q-standing")!;
+    expect(failing.pass).toBe(false);
+  }, 30_000);
 
   test("a pin of false runs the lane off and the facet expectations fail by name", async () => {
     const laneOffPin: BenchPinnedKnobs = {
