@@ -475,7 +475,7 @@ export async function cmdBrainBench(argv: string[]): Promise<number> {
     const standing = report.quality.by_category["standing_instruction"];
     process.stdout.write(
       `${STANDING_INSTRUCTION_LINE_PREFIX}: ${standing.passed}/${standing.total} ` +
-        `(pass rate ${Math.round((standing.passed / standing.total) * 1000) / 1000})\n`,
+        `(pass rate ${round3(standing.passed / standing.total)})\n`,
     );
   }
   process.stdout.write(`judge: ${report.judge.status}\n`);
@@ -492,4 +492,13 @@ function resolveFixturePath(flag: string): string | null {
   const repoLocal = join(REPO_FIXTURE_DIR, `${flag}.json`);
   if (existsSync(repoLocal)) return repoLocal;
   return null;
+}
+
+/**
+ * Round to three decimals, the same figure the core bench reports carry
+ * (`round3` in core/bench/phases.ts); the human standing_instruction line
+ * prints the category rate at the same precision as the overall pass rate.
+ */
+function round3(value: number): number {
+  return Math.round(value * 1000) / 1000;
 }
