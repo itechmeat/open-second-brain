@@ -55,6 +55,15 @@ beforeEach(async () => {
     join(vault, "notes", "bar.md"),
     "---\ntitle: Bar\n---\n\n# Bar\n\nA different note about cats and turtles.\n",
   );
+  // A real body of notes keeps the synchronous FTS lane comfortably above
+  // the wall-clock resolution, so a positive-overlap pin cannot flake on a
+  // same-millisecond keyword interval.
+  for (let i = 0; i < 60; i++) {
+    writeFileSync(
+      join(vault, "notes", `filler-${i}.md`),
+      `---\ntitle: Filler ${i}\n---\n\n# Filler ${i}\n\nNote ${i} about herons, sleds, compasses and other words the query never uses.\n`,
+    );
+  }
   configPath = join(configHome, "config.yaml");
   writeFileSync(
     configPath,
@@ -99,7 +108,11 @@ describe("o2b search --explain: overlapped lane timing", () => {
       overlapped_ms?: number;
       semantic_attempted?: boolean;
     };
-    expect(payload.overlapped_ms).toBeGreaterThanOrEqual(0);
+    // Strictly positive: the embed round trip is delayed 150 ms while the
+    // FTS lane over the filler corpus runs to completion underneath it, so
+    // a flattened-to-zero regression (swapped min/max, stamps on the wrong
+    // side of the await) must fail here, not slip through as >= 0.
+    expect(payload.overlapped_ms).toBeGreaterThan(0);
     expect(Number.isInteger(payload.overlapped_ms)).toBe(true);
     expect(payload.semantic_attempted).toBe(true);
 

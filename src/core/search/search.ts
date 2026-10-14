@@ -587,7 +587,6 @@ export async function search(
       ...(pushdown !== null ? { pushdown } : {}),
       matchMode: request.matchMode,
     });
-    const keywordEndMs = clock();
     keywordHits = keywordLane.hits;
     for (const w of keywordLane.warnings) warnings.push(w);
     for (const d of keywordLane.degraded) degraded.push(d);
@@ -596,6 +595,9 @@ export async function search(
       effectiveConfig,
       keywordLane.plan,
     );
+    // The hidden window the join waits through includes the weights
+    // resolution, so the keyword interval ends here, not at the lane return.
+    const keywordEndMs = clock();
 
     // The join, where the serial await stood: the keyword lanes ran to
     // completion above while the embed round trip was outstanding. Their
@@ -603,8 +605,9 @@ export async function search(
     // keyword-before-semantic order the serial pipeline emitted.
     const semanticLane = await semanticLaneJoin.join();
     // One sink call at the join, on both deadline arms: the intervals and
-    // their intersection, zero whenever the lane never attempted the
-    // embed (keyword-only, or a pre-flight refusal left no stamps).
+    // their intersection, zero whenever no embed interval was stamped
+    // (keyword-only, or a pre-flight refusal left no stamps). An embed
+    // that ran and was discarded still reports its real interval.
     if (laneTimingSink !== undefined) {
       const embedStartMs = embedTiming.embedStartMs;
       const embedEndMs = embedTiming.embedEndMs;
@@ -614,7 +617,7 @@ export async function search(
         keywordStartMs,
         keywordEndMs,
         overlappedMs:
-          semanticLane.attempted && embedStartMs !== undefined && embedEndMs !== undefined
+          embedStartMs !== undefined && embedEndMs !== undefined
             ? Math.max(
                 0,
                 Math.min(embedEndMs, keywordEndMs) - Math.max(embedStartMs, keywordStartMs),

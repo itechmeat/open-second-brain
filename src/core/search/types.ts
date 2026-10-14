@@ -865,8 +865,8 @@ export interface EvidencePack {
  * Per-call lane timing (recall-lane-latency): when the embed round trip
  * ran relative to the keyword lanes, and how much of it they hid - the
  * intersection of the two intervals, `max(0, min(embedEnd, keywordEnd) -
- * max(embedStart, keywordStart))`, zero whenever the lane never attempted
- * the embed.
+ * max(embedStart, keywordStart))`, zero whenever no embed interval was
+ * stamped.
  *
  * This record rides a per-call sink and NEVER lands on
  * {@link SearchOutcome}: the query cache persists whole outcomes, so an
@@ -880,11 +880,11 @@ export interface SearchLaneTiming {
   readonly embedEndMs?: number;
   /** Absolute `Date.now()` stamp taken when the keyword lanes started. */
   readonly keywordStartMs: number;
-  /** Absolute `Date.now()` stamp taken when the keyword lanes completed. */
+  /** Absolute `Date.now()` stamp taken when the keyword lanes and the weights resolution completed. */
   readonly keywordEndMs: number;
-  /** The overlapped milliseconds, an integer >= 0; 0 when the embed never ran. */
+  /** The overlapped milliseconds, an integer >= 0; 0 when no embed interval was stamped. */
   readonly overlappedMs: number;
-  /** Whether the semantic lane attempted the embed. */
+  /** Whether the semantic lane delivered a result (an embed that ran and was discarded reports false). */
   readonly attempted: boolean;
 }
 
