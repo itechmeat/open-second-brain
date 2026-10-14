@@ -130,6 +130,11 @@ describe("brain_context_pack packing_policy declaration", () => {
     expect(declared.enum).toEqual([...PACKING_POLICIES]);
     expect(declared.description).toContain("facts_first");
     expect(declared.description).toContain("retired_first");
+    // The description does not sell `facts_first` as the omitted default:
+    // it states the up-front reserved charge and the one-lane refusal the
+    // omitted call does not make (external review M4).
+    expect(declared.description).toContain("Neither is the omitted default");
+    expect(declared.description).toContain("one lane has no candidate");
     expect(declared.description!.endsWith(".")).toBe(true);
     expect(schema.additionalProperties).toBe(false);
     expect(schema.dependentRequired!["packing_policy"]).toEqual(["query"]);

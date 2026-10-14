@@ -183,12 +183,16 @@ export function applyCharBudget<T>(
  * is false ACROSS surfaces - pages and the facts-side brief are
  * budgeted by two separate surfaces with separate caps - so this
  * vocabulary names the claim order over the populations that DO share
- * one budget. `facts_first` is the default member and matches the
- * delivery order the two surfaces already observe today: the
- * distilled facts side is capped first and the pages get what is left.
- * `retired_first` hands the first claim to the retired pages lane, so a
- * retired page keeps its budget share even when facts-side
- * demand would have exhausted the remainder.
+ * one budget. Neither member is the omitted default: the omitted pack
+ * interleaves both populations by tier, while a named policy orders whole
+ * lanes, reserves the attention charge up front instead of drawing it
+ * last, and - through the pack-level application of the policy - refuses
+ * a vault where one lane holds no candidate in reach, a call the omitted
+ * pack succeeds on. `facts_first` claims for the distilled facts lane
+ * first and the retired pages fill the exact remainder. `retired_first`
+ * hands the first claim to the retired pages lane, so a retired page
+ * keeps its budget share even when facts-side demand would have
+ * exhausted the remainder.
  */
 export const PACKING_POLICIES = Object.freeze(["facts_first", "retired_first"] as const);
 

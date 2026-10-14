@@ -1115,7 +1115,7 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "string",
           enum: [...PACKING_POLICIES],
           description:
-            "Which lane claims the token budget first: `facts_first` (the distilled preference layer) or `retired_first` (the retired preference pages). Requires `query`.",
+            "Which lane claims the token budget first: `facts_first` (the distilled preference layer) or `retired_first` (the retired preference pages). Neither is the omitted default: a named policy reserves the attention charge up front and refuses a vault where one lane has no candidate in reach (INVALID_PARAMS naming the lane and the member). Requires `query`.",
         },
         focus_session: {
           type: "string",

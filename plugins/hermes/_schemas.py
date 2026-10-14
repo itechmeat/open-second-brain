@@ -571,6 +571,19 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = ({'name': 'brain_feedback',
                                                                     'or `retired_first` '
                                                                     '(the retired '
                                                                     'preference pages). '
+                                                                    'Neither is the '
+                                                                    'omitted default: a '
+                                                                    'named policy '
+                                                                    'reserves the '
+                                                                    'attention charge '
+                                                                    'up front and '
+                                                                    'refuses a vault '
+                                                                    'where one lane has '
+                                                                    'no candidate in '
+                                                                    'reach '
+                                                                    '(INVALID_PARAMS '
+                                                                    'naming the lane '
+                                                                    'and the member). '
                                                                     'Requires `query`.'},
                                   'focus_session': {'type': 'string',
                                                     'minLength': 1,
