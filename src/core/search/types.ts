@@ -884,7 +884,13 @@ export interface SearchLaneTiming {
   readonly keywordEndMs: number;
   /** The overlapped milliseconds, an integer >= 0; 0 when no embed interval was stamped. */
   readonly overlappedMs: number;
-  /** Whether the semantic lane delivered a result (an embed that ran and was discarded reports false). */
+  /**
+   * Whether the semantic lane delivered a result to the join. An embed
+   * that never ran or failed before the join reports false; an embed the
+   * deadline's post-join void then discarded can still report true - the
+   * sink is read at the join, and the void past it is the deadline's,
+   * not this flag's.
+   */
   readonly attempted: boolean;
 }
 
