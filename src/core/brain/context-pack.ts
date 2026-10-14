@@ -149,19 +149,37 @@ export class ContextPackSemanticRelevanceMissingError extends Error {
 }
 
 /**
- * A named packing policy was asked for against a pack where one of its
- * two lanes has no candidate in reach. Packing by the named order would
- * silently do nothing, so the call fails by name - the lane and the
- * policy member are both in the message - and fails before the receipt
- * and telemetry are written, so a refused pack leaves no record of a
+ * A named packing policy was asked for against a pack where it cannot
+ * run: one of its two lanes has no candidate in reach, or the budget is
+ * zero and neither lane can ever draw. Packing by the named order would
+ * silently do nothing, so the call fails by name - the policy member and
+ * every empty lane are in the message - and fails before the receipt and
+ * telemetry are written, so a refused pack leaves no record of a
  * delivery.
  */
 export class ContextPackPackingLaneEmptyError extends Error {
-  constructor(policy: PackingPolicy, emptyLane: RecallBudgetLaneName) {
-    super(
-      `context pack: packing_policy ${policy} needs both lanes; the ${emptyLane} lane is empty`,
-    );
+  private constructor(message: string) {
+    super(message);
     this.name = "ContextPackPackingLaneEmptyError";
+  }
+
+  /** The partition's refusal: the named policy cannot see both lanes. */
+  static emptyLanes(policy: PackingPolicy, emptyLanes: ReadonlyArray<RecallBudgetLaneName>) {
+    const named =
+      emptyLanes.length === 1
+        ? `the ${emptyLanes[0]} lane is empty`
+        : `the ${emptyLanes[0]} and ${emptyLanes[1]} lanes are empty`;
+    return new ContextPackPackingLaneEmptyError(
+      `context pack: packing_policy ${policy} needs both lanes; ${named}`,
+    );
+  }
+
+  /** The short-circuit's refusal: a zero budget offers neither lane anything. */
+  static zeroBudget(policy: PackingPolicy) {
+    return new ContextPackPackingLaneEmptyError(
+      `context pack: packing_policy ${policy} needs a positive token budget; ` +
+        `neither lane can draw on zero tokens`,
+    );
   }
 }
 
@@ -332,7 +350,8 @@ export interface ContextPackOptions {
    * losing lane fills the exact remainder and the total never grows.
    * Omitted runs the unified comparator pack byte-identical to every
    * release before this one - no partition, no `packing` accounting.
-   * With the option set, a lane with no candidate in reach is refused
+   * With the option set, a lane with no candidate in reach - and a zero
+   * budget, which offers neither lane anything to draw - is refused
    * by name ({@link ContextPackPackingLaneEmptyError}), never a silent
    * no-op, and the synthesized attention block stays a reserved charge
    * neither lane draws. See {@link PACKING_POLICIES}.
@@ -669,19 +688,14 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
   const startedAtMs = Date.now();
   const semanticRelevance = semanticRelevanceFor(opts);
   if (!Number.isFinite(opts.maxTokens) || opts.maxTokens <= 0) {
-    // The zero-budget short-circuit reads no vault: when a policy was
-    // named its accounting still rides the one funnel, zeroed, because
-    // neither lane was ever offered a budget to hold.
-    const packing =
-      opts.packingPolicy !== undefined
-        ? {
-            packing: Object.freeze({
-              policy: opts.packingPolicy,
-              pages: Object.freeze({ allocation: 0, spent: 0, candidates: 0, items: 0 }),
-              facts: Object.freeze({ allocation: 0, spent: 0, candidates: 0, items: 0 }),
-            }),
-          }
-        : {};
+    // The zero-budget short-circuit reads no vault: neither lane was ever
+    // offered a budget to hold. A NAMED policy gets the same by-name
+    // refusal the partition gives an empty lane - a zeroed accounting
+    // object would answer a policy the caller asked for with a delivery
+    // that never happened.
+    if (opts.packingPolicy !== undefined) {
+      throw ContextPackPackingLaneEmptyError.zeroBudget(opts.packingPolicy);
+    }
     return finalizeContextPackReport(
       vault,
       opts,
@@ -691,7 +705,6 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
         items: Object.freeze([]),
         skipped: Object.freeze([]),
         ...withOptionalLanes(opts, []),
-        ...packing,
       },
       startedAtMs,
     );
@@ -878,12 +891,14 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
     const pagesFiltered = applyLaneQuery(pagesCandidates);
     // A policy against an empty lane would silently do nothing; refuse
     // by name, before any receipt or telemetry exists to record a
-    // delivery that never happened.
-    if (factsFiltered.length === 0 || pagesFiltered.length === 0) {
-      throw new ContextPackPackingLaneEmptyError(
-        policy,
-        factsFiltered.length === 0 ? "facts" : "pages",
-      );
+    // delivery that never happened. Both empty lanes are named when both
+    // are empty - the refusal states what it observed, not the first miss.
+    const emptyLanes = [
+      ...(factsFiltered.length === 0 ? (["facts"] as const) : []),
+      ...(pagesFiltered.length === 0 ? (["pages"] as const) : []),
+    ];
+    if (emptyLanes.length > 0) {
+      throw ContextPackPackingLaneEmptyError.emptyLanes(policy, emptyLanes);
     }
     // The synthesized attention block is a reserved charge against the
     // same total, prepared before the allocation so neither lane can

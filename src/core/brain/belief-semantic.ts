@@ -148,11 +148,20 @@ export interface BeliefSemanticDeps {
  * refusal decided over the beliefs it keeps), so both read the same.
  */
 export function discloseSpentQuery(e: SearchError, spent: BeliefSemanticQueryReport): SearchError {
-  return new SearchError(
-    e.code,
-    `${e.message} (the query embed was still spent: model ${spent.model}, ` +
-      `price source ${spent.priceSource}, ${spent.queryTokens} query token(s), ` +
-      `${formatEstimatedUsd(spent.estimatedUsd)})`,
+  return new SearchError(e.code, `${e.message} ${spentQueryDisclosure(spent)}`);
+}
+
+/**
+ * The one spend-disclosure sentence, shared by every refusal that lands
+ * after the query embed was paid: the pack's lane-empty INVALID_PARAMS
+ * reads the same wording the loader's SearchError refusals carry, so a
+ * caller cannot learn the spend from one surface and not the other.
+ */
+export function spentQueryDisclosure(spent: BeliefSemanticQueryReport): string {
+  return (
+    `(the query embed was still spent: model ${spent.model}, ` +
+    `price source ${spent.priceSource}, ${spent.queryTokens} query token(s), ` +
+    `${formatEstimatedUsd(spent.estimatedUsd)})`
   );
 }
 

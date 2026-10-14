@@ -13,34 +13,35 @@ change: the 18 hidden MCP alias tools left over from the token-diet
 consolidation are removed. They were already absent from `tools/list`;
 since 1.0.0 calling one through `tools/call` answers an INVALID_PARAMS
 tombstone naming the replacement instead of executing. Everything else
+
 - CLI verbs, config keys, on-disk formats, the search schema ladder -
-is unchanged and now formally frozen under the stability policy
-([`docs/stability.md`](stability.md)).
+  is unchanged and now formally frozen under the stability policy
+  ([`docs/stability.md`](stability.md)).
 
 Migrate by switching each removed name to its consolidated tool with
 the matching `view` argument; every other parameter keeps its old name
 and meaning:
 
-| Removed tool | Replacement |
-| --- | --- |
-| `brain_digest` | `brain_brief` with `view: "digest"` |
-| `brain_daily_brief` | `brain_brief` with `view: "daily"` |
-| `brain_morning_brief` | `brain_brief` with `view: "morning"` |
-| `brain_weekly_synthesis` | `brain_brief` with `view: "weekly"` |
-| `brain_monthly_review` | `brain_brief` with `view: "monthly"` |
-| `brain_operator_summary` | `brain_brief` with `view: "operator"` |
-| `brain_timeline` | `brain_analytics` with `view: "timeline"` |
-| `brain_attention_flows` | `brain_analytics` with `view: "attention_flows"` |
-| `brain_belief_evolution` | `brain_analytics` with `view: "belief_evolution"` |
+| Removed tool              | Replacement                                        |
+| ------------------------- | -------------------------------------------------- |
+| `brain_digest`            | `brain_brief` with `view: "digest"`                |
+| `brain_daily_brief`       | `brain_brief` with `view: "daily"`                 |
+| `brain_morning_brief`     | `brain_brief` with `view: "morning"`               |
+| `brain_weekly_synthesis`  | `brain_brief` with `view: "weekly"`                |
+| `brain_monthly_review`    | `brain_brief` with `view: "monthly"`               |
+| `brain_operator_summary`  | `brain_brief` with `view: "operator"`              |
+| `brain_timeline`          | `brain_analytics` with `view: "timeline"`          |
+| `brain_attention_flows`   | `brain_analytics` with `view: "attention_flows"`   |
+| `brain_belief_evolution`  | `brain_analytics` with `view: "belief_evolution"`  |
 | `brain_concept_synthesis` | `brain_analytics` with `view: "concept_synthesis"` |
-| `get_active_schema_pack` | `schema_inspect` with `view: "active_pack"` |
-| `list_schema_packs` | `schema_inspect` with `view: "packs"` |
-| `schema_stats` | `schema_inspect` with `view: "stats"` |
-| `schema_lint` | `schema_inspect` with `view: "lint"` |
-| `schema_graph` | `schema_inspect` with `view: "graph"` |
-| `schema_explain_type` | `schema_inspect` with `view: "explain_type"` |
-| `schema_review_orphans` | `schema_inspect` with `view: "orphans"` |
-| `reload_schema_pack` | `schema_inspect` with `view: "active_pack"` |
+| `get_active_schema_pack`  | `schema_inspect` with `view: "active_pack"`        |
+| `list_schema_packs`       | `schema_inspect` with `view: "packs"`              |
+| `schema_stats`            | `schema_inspect` with `view: "stats"`              |
+| `schema_lint`             | `schema_inspect` with `view: "lint"`               |
+| `schema_graph`            | `schema_inspect` with `view: "graph"`              |
+| `schema_explain_type`     | `schema_inspect` with `view: "explain_type"`       |
+| `schema_review_orphans`   | `schema_inspect` with `view: "orphans"`            |
+| `reload_schema_pack`      | `schema_inspect` with `view: "active_pack"`        |
 
 `o2b brain doctor` scans your vault-side surfaces (Brain notes, root
 instruction files such as `CLAUDE.md`/`AGENTS.md`, installed
@@ -57,7 +58,6 @@ surfaces are additive options: `search --explain` reports `overlapped_ms`
 (how much of the embed round trip the keyword lanes hid) only while the
 flag is on, and the bench latency family reports the same figure only for
 runs whose questions attempted the semantic lane.
-
 
 **`brain_context_pack` accepts `packing_policy`, strictly opt-in.** The new
 MCP argument lets a caller name which candidate population claims the pack's
@@ -81,14 +81,16 @@ No preference is admitted that the plain lane would not already deliver,
 and the lane performs zero writes. The new `standing_instruction` bench
 category exists to measure that join; runs without such questions
 produce byte-identical reports and output.
+
 ## Upgrading to 1.83.0
 
 Nothing below needs a migration step. Every new surface in this release
+
 - the per-source-session search pool cap, the usage-ordered skill
-offers, the seeded LongMemEval sampling flags - ships default off and
-is byte-identical when off, so an existing install behaves exactly as
-before until an operator opts in. The one exception is written here
-rather than left to be discovered at the terminal.
+  offers, the seeded LongMemEval sampling flags - ships default off and
+  is byte-identical when off, so an existing install behaves exactly as
+  before until an operator opts in. The one exception is written here
+  rather than left to be discovered at the terminal.
 
 **The first `o2b install --check --target opencode` after the host
 writes an `mcp.servers` object reports `drift`, and the first re-apply
@@ -719,8 +721,8 @@ the LAN, a tailnet address) needs the per-endpoint opt-out in the operator
 config or environment:
 
 ```yaml
-embedding_allow_insecure_http: true        # OPEN_SECOND_BRAIN_EMBEDDING_ALLOW_INSECURE_HTTP
-search_rerank_allow_insecure_http: true    # OPEN_SECOND_BRAIN_SEARCH_RERANK_ALLOW_INSECURE_HTTP
+embedding_allow_insecure_http: true # OPEN_SECOND_BRAIN_EMBEDDING_ALLOW_INSECURE_HTTP
+search_rerank_allow_insecure_http: true # OPEN_SECOND_BRAIN_SEARCH_RERANK_ALLOW_INSECURE_HTTP
 ```
 
 Both default to false, apply only to a base URL from the config or the
@@ -909,12 +911,12 @@ values; a vault that contains none produces the same document.
 configured, the payload carried a single `mirror` string. It now carries
 `mirror` plus an optional `mirror_reason`, and the vocabulary changed:
 
-| 1.48.0 | 1.49.0 |
-| --- | --- |
-| `mirror: "ok"` | unchanged |
-| `mirror: "failed"` for an I/O failure | unchanged, plus `mirror_reason` |
-| `mirror: "failed"` for a self-mirror | `mirror: "misconfigured"` plus `mirror_reason` |
-| `mirror: "off"` | the key is absent entirely |
+| 1.48.0                                | 1.49.0                                         |
+| ------------------------------------- | ---------------------------------------------- |
+| `mirror: "ok"`                        | unchanged                                      |
+| `mirror: "failed"` for an I/O failure | unchanged, plus `mirror_reason`                |
+| `mirror: "failed"` for a self-mirror  | `mirror: "misconfigured"` plus `mirror_reason` |
+| `mirror: "off"`                       | the key is absent entirely                     |
 
 A self-mirror - `shared_namespace` resolving to the origin vault - is
 decided before any I/O and is repaired by editing one config key, while
@@ -1031,7 +1033,7 @@ explicit use; auto-migration just reuses their logic.
 ## Why updates used to break (and no longer do)
 
 `hooks/hooks.json` previously invoked the bare `o2b-hook` launcher through a
-`~/.local/bin` symlink that `o2b install-cli` pinned to a *versioned* cache
+`~/.local/bin` symlink that `o2b install-cli` pinned to a _versioned_ cache
 directory. When Claude Code rotated that directory on update, the symlink
 dangled, the launcher resolved an old checkout, and it `exit 2`-ed — the one
 hook exit code that blocks the agent. Every prompt was rejected until the user

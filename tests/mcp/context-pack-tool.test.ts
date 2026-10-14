@@ -722,6 +722,29 @@ describe("brain_context_pack tool — semantic query mode", () => {
     },
   );
 
+  test.skipIf(!VEC_LOADABLE)(
+    "a lane-empty refusal in semantic mode discloses the spent query embed",
+    async () => {
+      writeLocalSemanticConfig();
+      writeBelief("pref-deploy", "never ship on friday");
+      await indexBeliefs(true);
+      const server = new MCPServer({ vault, configPath });
+      await initialize(server);
+      // The retired directory holds no page, so the partition refuses
+      // whichever order was named - after the query embed was paid.
+      const r = await callPackRpc(server, {
+        ...SEMANTIC_ARGS,
+        packing_policy: "facts_first",
+      });
+      expect(readRpcErrorCode(r)).toBe("invalid_params");
+      const message = r.error!.message;
+      expect(message).toContain("packing_policy facts_first needs both lanes");
+      // The one ungated spend is named in the refusal, not dropped from it.
+      expect(message).toContain("the query embed was still spent");
+      expect(message).toContain(LOCAL_EMBEDDING_MODEL);
+    },
+  );
+
   test("a disabled tier surfaces EMBEDDING_DISABLED on the wire", async () => {
     writeBelief("pref-brevity", "keep answers short and brief");
     const server = new MCPServer({ vault, configPath });

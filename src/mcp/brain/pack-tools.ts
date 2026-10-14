@@ -21,6 +21,7 @@ import { SearchError } from "../../core/search/search-error.ts";
 import {
   discloseSpentQuery,
   loadBeliefSemanticRelevance,
+  spentQueryDisclosure,
   type BeliefSemanticRelevance,
 } from "../../core/brain/belief-semantic.ts";
 import { readActiveSessionFocus } from "../../core/search/session-focus.ts";
@@ -403,7 +404,14 @@ async function toolBrainContextPack(
     // refuses by name; on the wire it is INVALID_PARAMS carrying that
     // same named message, never an internal error and never a no-op.
     if (e instanceof ContextPackPackingLaneEmptyError) {
-      throw new MCPError(INVALID_PARAMS, e.message);
+      // The spend disclosure rides the refusal too: in semantic mode the
+      // query embed was paid before the lanes were judged, and a refusal
+      // that hides that spend under-discloses exactly when the caller
+      // gets nothing back for it.
+      throw new MCPError(
+        INVALID_PARAMS,
+        semantic !== null ? `${e.message} ${spentQueryDisclosure(semantic.report)}` : e.message,
+      );
     }
     throw e;
   }

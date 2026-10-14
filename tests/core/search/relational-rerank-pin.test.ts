@@ -23,6 +23,7 @@ import { applyRelationalRerankPin } from "../../../src/core/search/pipeline/rela
 import { resolveSearchConfig } from "../../../src/core/search/index.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { search } from "../../../src/core/search/search.ts";
+import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 import type { BrainSearchResult } from "../../../src/core/search/search-result.ts";
 import {
@@ -215,7 +216,7 @@ function rerankEnabled() {
     enabled: true,
     baseUrl: server.url,
     model: "rerank-1",
-    apiKey: "secret",
+    apiKey: FAKE_PROVIDER_KEY,
     topK: 10,
   } as const;
 }

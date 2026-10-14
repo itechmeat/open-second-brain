@@ -27,6 +27,7 @@ import {
   type FakeRequest,
   type FakeResponseSpec,
 } from "../../helpers/fake-http.ts";
+import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 
 let vault: string;
@@ -81,7 +82,7 @@ function rerankEnabled() {
     enabled: true,
     baseUrl: server.url,
     model: "rerank-1",
-    apiKey: "secret",
+    apiKey: FAKE_PROVIDER_KEY,
     topK: 10,
   } as const;
 }

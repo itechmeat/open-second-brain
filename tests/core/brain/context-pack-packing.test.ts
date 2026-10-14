@@ -287,18 +287,31 @@ describe("context pack packing policy", () => {
     );
   });
 
-  test("the zero-budget early return agrees with the funnel", () => {
+  test("a named policy on a zero budget is refused by name, not answered with zeroed accounting", () => {
     writeMixedVault();
-    const r = packContext(vault, { maxTokens: 0, packingPolicy: "facts_first" });
+    // A zeroed `packing` object would answer a policy the caller named
+    // with a delivery that never happened - the same silent no-op the
+    // empty-lane refusal exists for.
+    expect(() => packContext(vault, { maxTokens: 0, packingPolicy: "facts_first" })).toThrow(
+      ContextPackPackingLaneEmptyError,
+    );
+    expect(() => packContext(vault, { maxTokens: 0, packingPolicy: "facts_first" })).toThrow(
+      /facts_first needs a positive token budget/,
+    );
+    // The refusal runs before the funnel: no delivery record exists.
+    expect(listContextReceipts(vault)).toHaveLength(0);
+    // Without the policy the zero-budget short-circuit is unchanged.
+    const r = packContext(vault, { maxTokens: 0 });
     expect(r.items).toEqual([]);
-    expect(r.skipped).toEqual([]);
     expect(r.tokensUsed).toBe(0);
-    const packing = packingOf(r);
-    expect(packing.policy).toBe("facts_first");
-    expect(packing.facts.allocation).toBe(0);
-    expect(packing.pages.allocation).toBe(0);
-    expect(packing.facts.spent).toBe(0);
-    expect(packing.pages.spent).toBe(0);
+    expect("packing" in r).toBe(false);
+  });
+
+  test("the refusal names both lanes when both are empty", () => {
+    // An empty vault: neither population has a candidate in reach.
+    expect(() => packContext(vault, { maxTokens: 10_000, packingPolicy: "facts_first" })).toThrow(
+      /the facts and pages lanes are empty/,
+    );
   });
 
   test("the char-budget path agrees with the funnel", () => {
