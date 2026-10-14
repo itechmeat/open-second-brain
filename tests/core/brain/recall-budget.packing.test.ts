@@ -11,8 +11,8 @@
  *
  *   1. `PACKING_POLICIES` is a frozen two-member tuple and
  *      `isPackingPolicy` narrows exactly like the queryMode guard.
- *   2. `query_first` lets the pages lane claim the shared budget before
- *      the facts lane fills the remainder; `facts_first` claims
+ *   2. `retired_first` lets the pages lane claim the shared budget
+ *      before the facts lane fills the remainder; `facts_first` claims
  *      facts-side first (the delivery order the two surfaces already
  *      observe today).
  *   3. A single populated lane is an identity pass: the whole claimable
@@ -38,8 +38,8 @@ import {
 const page = (item: string, tokens: number): RecallBudgetEntry<string> => ({ item, tokens });
 
 describe("PACKING_POLICIES vocabulary", () => {
-  test("the tuple is frozen and ordered facts_first then query_first", () => {
-    expect([...PACKING_POLICIES]).toEqual(["facts_first", "query_first"]);
+  test("the tuple is frozen and ordered facts_first then retired_first", () => {
+    expect([...PACKING_POLICIES]).toEqual(["facts_first", "retired_first"]);
     expect(Object.isFrozen(PACKING_POLICIES)).toBe(true);
   });
 
@@ -63,14 +63,14 @@ describe("PACKING_POLICIES vocabulary", () => {
 });
 
 describe("allocateRecallBudget", () => {
-  test("query_first lets the pages lane claim before the facts lane fills the remainder", () => {
+  test("retired_first lets the pages lane claim before the facts lane fills the remainder", () => {
     // Total 10: pages demand 7, facts demand 6. Pages claim first and fit
     // whole; facts keep only what the 3-token remainder holds.
     const r = allocateRecallBudget<string, string>(
       10,
       [page("p1", 4), page("p2", 3)],
       [page("f1", 4), page("f2", 2)],
-      "query_first",
+      "retired_first",
     );
     expect(r.pages.allocation).toBe(7);
     expect(r.pages.kept).toEqual(["p1", "p2"]);
@@ -102,10 +102,10 @@ describe("allocateRecallBudget", () => {
   test("the policy decides the winner over the same demand", () => {
     const pages = [page("p-big", 8)];
     const facts = [page("f-big", 8)];
-    const queryFirst = allocateRecallBudget(10, pages, facts, "query_first");
+    const retiredFirst = allocateRecallBudget(10, pages, facts, "retired_first");
     const factsFirst = allocateRecallBudget(10, pages, facts, "facts_first");
-    expect(queryFirst.pages.kept).toEqual(["p-big"]);
-    expect(queryFirst.facts.dropped).toEqual(["f-big"]);
+    expect(retiredFirst.pages.kept).toEqual(["p-big"]);
+    expect(retiredFirst.facts.dropped).toEqual(["f-big"]);
     expect(factsFirst.facts.kept).toEqual(["f-big"]);
     expect(factsFirst.pages.dropped).toEqual(["p-big"]);
   });
@@ -159,7 +159,7 @@ describe("allocateRecallBudget", () => {
       10,
       [page("p1", 9)],
       [page("f1", 5), page("f2", 1)],
-      "query_first",
+      "retired_first",
     );
     expect(r.pages.spent).toBe(9);
     expect(r.facts.allocation).toBe(1);
@@ -173,7 +173,7 @@ describe("allocateRecallBudget", () => {
       20,
       [page("p1", 5), page("p2", 9)],
       [page("f1", 4), page("f2", 4)],
-      "query_first",
+      "retired_first",
       6,
     );
     expect(r.reservedTokens).toBe(6);
@@ -191,7 +191,7 @@ describe("allocateRecallBudget", () => {
       5,
       [page("p1", 1)],
       [page("f1", 1)],
-      "query_first",
+      "retired_first",
       7,
     );
     expect(r.pages.allocation).toBe(0);
@@ -207,7 +207,7 @@ describe("allocateRecallBudget", () => {
       4,
       [page("huge", 100), page("small", 2)],
       [page("f1", 1)],
-      "query_first",
+      "retired_first",
     );
     expect(r.pages.dropped).toEqual(["huge"]);
     expect(r.pages.kept).toEqual(["small"]);
@@ -219,7 +219,7 @@ describe("allocateRecallBudget", () => {
       6,
       [page("a", 4), page("big", 5), page("c", 2)],
       [page("f1", 0)],
-      "query_first",
+      "retired_first",
     );
     expect(r.pages.kept).toEqual(["a", "c"]);
     expect(r.pages.dropped).toEqual(["big"]);
@@ -230,7 +230,7 @@ describe("allocateRecallBudget", () => {
       6,
       [page("nan", Number.NaN), page("neg", -3), page("ok", 2)],
       [],
-      "query_first",
+      "retired_first",
     );
     expect(r.pages.dropped).toEqual(["nan", "neg"]);
     expect(r.pages.kept).toEqual(["ok"]);
@@ -242,7 +242,7 @@ describe("allocateRecallBudget", () => {
       2,
       [page("p1", 2), page("free", 0)],
       [],
-      "query_first",
+      "retired_first",
     );
     expect(r.pages.kept).toEqual(["p1", "free"]);
     expect(r.pages.spent).toBe(2);
@@ -254,7 +254,7 @@ describe("allocateRecallBudget", () => {
         total,
         [page("p1", 1)],
         [page("f1", 1)],
-        "query_first",
+        "retired_first",
         1,
       );
       expect(r.pages.allocation).toBe(0);
@@ -268,8 +268,8 @@ describe("allocateRecallBudget", () => {
   test("the allocation is deterministic and frozen for identical inputs", () => {
     const pages = [page("p1", 3), page("p2", 3)];
     const facts = [page("f1", 2)];
-    const a = allocateRecallBudget(8, pages, facts, "query_first", 1);
-    const b = allocateRecallBudget(8, pages, facts, "query_first", 1);
+    const a = allocateRecallBudget(8, pages, facts, "retired_first", 1);
+    const b = allocateRecallBudget(8, pages, facts, "retired_first", 1);
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
     expect(Object.isFrozen(a)).toBe(true);
     expect(Object.isFrozen(a.pages)).toBe(true);

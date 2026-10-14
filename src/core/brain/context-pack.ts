@@ -359,9 +359,9 @@ export interface ContextPackOptions {
    * populations are in reach - the preference-derived candidates (the
    * facts lane, the distilled layer) and the page candidates from the
    * retired directory (the pages lane). `facts_first` claims facts-side
-   * first, `query_first` hands the first claim to the pages lane; the
-   * losing lane fills the exact remainder and the total never grows.
-   * Omitted runs the unified comparator pack byte-identical to every
+   * first, `retired_first` hands the first claim to the retired pages
+   * lane; the losing lane fills the exact remainder and the total never
+   * grows. Omitted runs the unified comparator pack byte-identical to every
    * release before this one - no partition, no `packing` accounting.
    * With the option set, a lane with no candidate in reach, a zero
    * budget, or a reserved attention charge that consumes the whole
@@ -988,7 +988,7 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
       attention?.tokens ?? 0,
     );
     const claimOrder: ReadonlyArray<RecallBudgetLaneName> =
-      policy === "query_first" ? ["pages", "facts"] : ["facts", "pages"];
+      policy === "retired_first" ? ["pages", "facts"] : ["facts", "pages"];
     // Lane overflow is an `over-budget` skip exactly like the unified
     // loop's; the policy adds no skip reason of its own.
     const tokensById = new Map<string, number>();

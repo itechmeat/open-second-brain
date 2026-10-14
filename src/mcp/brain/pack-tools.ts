@@ -1115,7 +1115,7 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "string",
           enum: [...PACKING_POLICIES],
           description:
-            "Which lane claims the token budget first: `facts_first` (the distilled preference layer) or `query_first` (the pages lane). Requires `query`.",
+            "Which lane claims the token budget first: `facts_first` (the distilled preference layer) or `retired_first` (the retired preference pages). Requires `query`.",
         },
         focus_session: {
           type: "string",

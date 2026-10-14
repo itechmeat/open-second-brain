@@ -129,7 +129,7 @@ describe("brain_context_pack packing_policy declaration", () => {
     expect(declared.type).toBe("string");
     expect(declared.enum).toEqual([...PACKING_POLICIES]);
     expect(declared.description).toContain("facts_first");
-    expect(declared.description).toContain("query_first");
+    expect(declared.description).toContain("retired_first");
     expect(declared.description!.endsWith(".")).toBe(true);
     expect(schema.additionalProperties).toBe(false);
     expect(schema.dependentRequired!["packing_policy"]).toEqual(["query"]);
@@ -175,7 +175,7 @@ describe("brain_context_pack packing_policy refusals", () => {
       const r = await callPackRaw(server, {
         max_tokens: 10_000,
         query,
-        packing_policy: "query_first",
+        packing_policy: "retired_first",
       });
       expect(r.error?.code).toBe(-32602);
       expect(r.error!.message).toContain("packing_policy");

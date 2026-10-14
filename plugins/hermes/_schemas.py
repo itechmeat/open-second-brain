@@ -561,15 +561,16 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = ({'name': 'brain_feedback',
                                                                 'query once.'},
                                   'packing_policy': {'type': 'string',
                                                      'enum': ['facts_first',
-                                                              'query_first'],
+                                                              'retired_first'],
                                                      'description': 'Which lane claims '
                                                                     'the token budget '
                                                                     'first: '
                                                                     '`facts_first` (the '
                                                                     'distilled '
                                                                     'preference layer) '
-                                                                    'or `query_first` '
-                                                                    '(the pages lane). '
+                                                                    'or `retired_first` '
+                                                                    '(the retired '
+                                                                    'preference pages). '
                                                                     'Requires `query`.'},
                                   'focus_session': {'type': 'string',
                                                     'minLength': 1,

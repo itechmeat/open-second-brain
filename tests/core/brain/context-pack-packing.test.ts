@@ -6,7 +6,8 @@
  * candidates (the retired directory) share the single `maxTokens`
  * budget. A caller that names a `packingPolicy` decides which lane
  * claims that budget first: `facts_first` (the distilled preference
- * layer) or `query_first` (the pages lane). Every claim here:
+ * layer) or `retired_first` (the pages lane, the retired preferences).
+ * Every claim here:
  *
  *   1. An ABSENT `packingPolicy` is byte-identical to the unified
  *      comparator pack - no partition runs, no `packing` key exists,
@@ -159,15 +160,15 @@ describe("context pack packing policy", () => {
     expect(packing.facts.spent + packing.pages.spent).toBe(r.tokensUsed);
   });
 
-  test("query_first hands the first claim to the pages lane", () => {
+  test("retired_first hands the first claim to the retired pages lane", () => {
     writeMixedVault();
     const unified = packContext(vault, { maxTokens: 10_000 });
     const retTokens = tokensOf(unified, "ret-old");
-    const r = packContext(vault, { maxTokens: retTokens, packingPolicy: "query_first" });
+    const r = packContext(vault, { maxTokens: retTokens, packingPolicy: "retired_first" });
     expect(r.items.map((i) => i.id)).toEqual(["ret-old"]);
     expect(r.skipped.map((s) => s.reason)).toEqual(["over-budget", "over-budget"]);
     const packing = packingOf(r);
-    expect(packing.policy).toBe("query_first");
+    expect(packing.policy).toBe("retired_first");
     expect(packing.pages.allocation).toBe(retTokens);
     expect(packing.pages.spent).toBe(retTokens);
     expect(packing.facts.allocation).toBe(0);
@@ -284,7 +285,7 @@ describe("context pack packing policy", () => {
 
   test("the refusal names the empty lane whichever lane it is", () => {
     writeRetired("old", { tier: "core", created_at: "2026-01-01T00:00:00Z" });
-    expect(() => packContext(vault, { maxTokens: 10_000, packingPolicy: "query_first" })).toThrow(
+    expect(() => packContext(vault, { maxTokens: 10_000, packingPolicy: "retired_first" })).toThrow(
       /facts lane is empty/,
     );
   });
@@ -443,7 +444,7 @@ describe("context pack packing policy", () => {
     writeMixedVault();
     const named = packContext(vault, {
       maxTokens: 10_000,
-      packingPolicy: "query_first",
+      packingPolicy: "retired_first",
       telemetry: { host: "packing-test", channel: RECALL_CHANNEL.cli },
     });
     expect(named.telemetryId).toStartWith("ctn_");
@@ -451,7 +452,7 @@ describe("context pack packing policy", () => {
     expect(records).toHaveLength(1);
     const metadata = records[0]!.payload["metadata"] as Record<string, unknown>;
     // A member of the frozen vocabulary, never a free-form string.
-    expect(metadata["packing_policy"]).toBe("query_first");
+    expect(metadata["packing_policy"]).toBe("retired_first");
     expect(isPackingPolicy(metadata["packing_policy"])).toBe(true);
   });
 

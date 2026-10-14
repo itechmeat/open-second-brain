@@ -62,7 +62,7 @@ runs whose questions attempted the semantic lane.
 **`brain_context_pack` accepts `packing_policy`, strictly opt-in.** The new
 MCP argument lets a caller name which candidate population claims the pack's
 existing `max_tokens` budget first - the preference-derived pages
-(`facts_first`) or the retired pages (`query_first`) - and a policy against a
+(`facts_first`) or the retired pages (`retired_first`) - and a policy against a
 vault where one lane holds no candidate is refused by name. Omitted, it
 changes no bytes of any response, receipt, telemetry record or prompt-prefix
 metric; named, the response gains a `packing` accounting object and the

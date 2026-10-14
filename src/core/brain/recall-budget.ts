@@ -186,11 +186,11 @@ export function applyCharBudget<T>(
  * one budget. `facts_first` is the default member and matches the
  * delivery order the two surfaces already observe today: the
  * distilled facts side is capped first and the pages get what is left.
- * `query_first` hands the first claim to the pages lane, so a
- * query-relevant page keeps its budget share even when facts-side
+ * `retired_first` hands the first claim to the retired pages lane, so a
+ * retired page keeps its budget share even when facts-side
  * demand would have exhausted the remainder.
  */
-export const PACKING_POLICIES = Object.freeze(["facts_first", "query_first"] as const);
+export const PACKING_POLICIES = Object.freeze(["facts_first", "retired_first"] as const);
 
 export type PackingPolicy = (typeof PACKING_POLICIES)[number];
 
@@ -323,7 +323,7 @@ export function allocateRecallBudget<TPage, TFacts>(
   // second lane is handed the precise remainder and the books always
   // balance against the total. The second lane holds its whole window
   // even when it under-uses it.
-  if (policy === "query_first") {
+  if (policy === "retired_first") {
     const pages = claimLane("pages", pagesLane, claimable);
     const facts = withHeldWindow(
       claimLane("facts", factsLane, claimable - pages.spent),
