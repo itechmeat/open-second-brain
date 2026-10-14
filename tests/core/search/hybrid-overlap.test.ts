@@ -124,7 +124,7 @@ test("a keyword-step throw with no deadline leaves no unhandled rejection", asyn
   }
 });
 
-test("an already-expired deadline starts nothing and serves the fallback", async () => {
+test("an already-expired deadline starts nothing and fires at the join, after the keyword lanes", async () => {
   let started = false;
   const { deadline, warnings } = realDeadline(Date.now() - 1);
   const lane = startSemanticLane({
@@ -136,8 +136,79 @@ test("an already-expired deadline starts nothing and serves the fallback", async
     fallback: () => "fallback",
   });
   expect(started).toBe(false);
-  expect(warnings.some((w) => w.includes("hybrid deadline"))).toBe(true);
+  // The fire waits for the join: at the start site the keyword lanes have
+  // not run, so no degrade decision exists yet.
+  expect(warnings).toEqual([]);
   expect(await lane.join()).toBe("fallback");
+  expect(warnings.some((w) => w.includes("hybrid deadline"))).toBe(true);
+});
+
+test("a join-time fire reads the keyword pool the lanes populated, not the empty initializer", async () => {
+  const pool: number[] = [];
+  const warnings: string[] = [];
+  const degraded: string[] = [];
+  const budgetMs = 60_000;
+  const deadline = createCompositeDeadline({
+    budgetMs,
+    startMs: Date.now() - budgetMs - 1,
+    clock: () => Date.now(),
+    warnings,
+    degraded,
+    wantSemantic: true,
+    keywordHitCount: () => pool.length,
+  });
+  if (deadline === null) throw new Error("a named budget must build a deadline");
+  const lane = startSemanticLane({
+    start: () => Promise.resolve("lane"),
+    deadline,
+    fallback: () => "fallback",
+  });
+  // The synchronous keyword lanes run here and populate the pool, exactly
+  // as the serial pipeline's snapshot point assumed.
+  pool.push(2);
+  expect(await lane.join()).toBe("fallback");
+  expect(warnings.some((w) => w.includes("hybrid deadline"))).toBe(true);
+  // The umbrella fires: the degrade decision saw the real pool, not the
+  // empty initializer a start-site fire would have read.
+  expect(warnings).toContain("hybrid_degraded: semantic lane unavailable, served keyword-only");
+});
+
+test("a lane that fails after a join-time fire is named, not defused", async () => {
+  const gate = Promise.withResolvers<string>();
+  const warnings: string[] = [];
+  const degraded: string[] = [];
+  let now = Date.now();
+  const deadline = createCompositeDeadline({
+    budgetMs: 60_000,
+    startMs: now - 30_000,
+    clock: () => now,
+    warnings,
+    degraded,
+    wantSemantic: true,
+    keywordHitCount: () => 1,
+  });
+  if (deadline === null) throw new Error("a named budget must build a deadline");
+  const lane = startSemanticLane({
+    start: () => gate.promise,
+    deadline,
+    fallback: () => "fallback",
+  });
+  // The clock expires while the keyword lanes run, before the join: the
+  // join's never-start arm fires the deadline and serves the fallback.
+  now += 31_000;
+  expect(await lane.join()).toBe("fallback");
+  expect(deadline.hasFired()).toBe(true);
+  // The lane then rejects with a non-abort failure. The race never armed,
+  // so the at-start handler is still the deadline's ear for this lane.
+  gate.reject(new Error("embed exploded after the join-time fire"));
+  await Bun.sleep(20);
+  expect(
+    warnings.some((w) =>
+      w.startsWith(
+        "hybrid deadline: an abandoned lane failed after the answer: Error: embed exploded after the join-time fire",
+      ),
+    ),
+  ).toBe(true);
 });
 
 test("a joined lane that loses the race serves the fallback and names a late failure", async () => {

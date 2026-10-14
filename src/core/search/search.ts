@@ -250,6 +250,7 @@ async function awaitWithinDeadline<T>(
   start: () => Promise<T>,
   deadline: LaneDeadline,
   fallback: () => T,
+  hooks?: { readonly onRaceArmed?: () => void },
 ): Promise<T> {
   const remainingMs = deadline.expiresAt - deadline.clock();
   if (remainingMs <= 0) {
@@ -263,6 +264,9 @@ async function awaitWithinDeadline<T>(
   void work.catch((error: unknown) => {
     if (abandoned) deadline.noteAbandonedFailure(error);
   });
+  // From here the race owns the lane's rejection: a join seam that also
+  // attached a handler at start time defuses it (never a double note).
+  hooks?.onRaceArmed?.();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadlineWon = new Promise<T>((resolve) => {
     timer = setTimeout(() => {
@@ -293,18 +297,24 @@ function emptySemanticLane(): SemanticLaneOutcome {
  * Two rules travel with the seam:
  *
  *   - The never-start rule moves to the start site: a clock that has
- *     already run out starts no embed at all, notes the expiry, and
- *     serves the fallback at the join - the same rule
- *     {@link awaitWithinDeadline} applies to a lane it starts itself.
+ *     already run out starts no embed at all. The FIRE waits for the
+ *     join: at the start site the keyword lanes have not run, and a fire
+ *     there would snapshot the empty keyword pool into the degrade
+ *     decision, losing the umbrella sentence the serial contract emits.
+ *     The join's never-start arm (inside {@link awaitWithinDeadline})
+ *     runs after the keyword lanes merged, so the same rule fires there
+ *     against the real pool - the snapshot point the serial pipeline had.
  *   - The rejection handler attaches at START, not at join. Between the
  *     two stand the synchronous keyword lanes, and a throw there unwinds
  *     the call with the embed still in flight. With a deadline the
  *     stranded lane's failure is the deadline's to name; without one the
  *     keyword step's own error is what the caller sees, and the handler
  *     only keeps the stranded rejection from crashing the process. Once
- *     joined, the race inside {@link awaitWithinDeadline} owns the
- *     rejection (rethrow before the fire, note after it) and this
- *     handler defuses only.
+ *     the race inside {@link awaitWithinDeadline} arms its own catch it
+ *     owns the rejection (rethrow before the fire, note after it) and
+ *     this handler defuses - but only then: a failure landing in the
+ *     start-to-join window, including after a join-time fire, stays the
+ *     deadline's to name.
  */
 export interface SemanticLaneJoin<T> {
   /** Resolve the lane: its outcome, the fallback, or the lane's own error. */
@@ -320,21 +330,39 @@ export function startSemanticLane<T>(input: {
   readonly fallback: () => T;
 }): SemanticLaneJoin<T> {
   if (input.deadline !== null && input.deadline.expiresAt - input.deadline.clock() <= 0) {
-    input.deadline.fire();
-    const served = input.fallback();
-    return { join: () => Promise.resolve(served) };
+    // Never start the embed - but never fire here either: the keyword
+    // lanes have not run, and the degrade decision must read the pool
+    // they populated. Leave the fire to the join's never-start arm.
+    return {
+      join: () =>
+        awaitWithinDeadline(
+          () => {
+            throw new Error(
+              "the semantic lane never started: the hybrid deadline had already expired",
+            );
+          },
+          input.deadline,
+          input.fallback,
+        ),
+    };
   }
   const work = input.start();
-  let joined = false;
+  let raced = false;
   void work.catch((error: unknown) => {
-    if (joined || input.deadline === null) return;
+    if (raced || input.deadline === null) return;
     input.deadline.noteAbandonedFailure(error);
   });
   return {
     join: async (): Promise<T> => {
-      joined = true;
-      if (input.deadline === null) return await work;
-      return await awaitWithinDeadline(() => work, input.deadline, input.fallback);
+      if (input.deadline === null) {
+        raced = true;
+        return await work;
+      }
+      return await awaitWithinDeadline(() => work, input.deadline, input.fallback, {
+        onRaceArmed: () => {
+          raced = true;
+        },
+      });
     },
   };
 }
